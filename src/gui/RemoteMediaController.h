@@ -1,4 +1,5 @@
 #pragma once
+#include <QVector>
 // no-port-check: NereusSDR-original. Remote daemon R3 receive display wiring.
 //
 // Modification history (NereusSDR):
@@ -242,6 +243,9 @@ public:
     /// is not called again for this slice; the last sink's release asks the
     /// Core to stop the stream. GUI thread only.
     void releaseReceiverAudio(int sliceId, IReceiverPcmSink* sink);
+    bool remoteIqNegotiated() const;
+    void requestRawIq(int sliceId);
+    void releaseRawIq(int sliceId);
     /// R-R3-43: each wanted receiver stream's measured health, by slice id.
     QHash<int, RemoteAudioReceiverTelemetry> receiverAudioTelemetry() const;
     /// R-R3-45: this Core can send the headphones mix on its own stream:
@@ -434,6 +438,9 @@ public:
     quint64 duplicateAudioDropped() const;
 
 signals:
+    void rawIqBlock(int sliceId, int sampleRateHz, const QVector<float>& samples);
+    void rawIqRate(int sliceId, int sampleRateHz);
+    void rawIqUnavailable(int sliceId, const QString& reason);
     void recoveryRequested(quint32 expectedEpoch, const QString& reason);
     void errorOccurred(const QString& reason);
     void displayFrameReceived(quint32 endpointId);
@@ -465,6 +472,10 @@ private:
     void refreshBudgetSubscriptions();
     // Parity Task 32: the monitor-audio request and its answer.
     void requestMonitorAudio();
+    void sendIqRequest(int sliceId, bool enabled);
+    void receiveIqContext(const QJsonObject& payload);
+    void receiveIqFrame(const QByteArray& message);
+    void failIqStream(int sliceId, const QString& reason);
     void receiveMonitorAudioContext(const QJsonObject& payload);
     /// Parity Task 18 (B3.5): a widget in `keepHistory` is taking the
     /// display of another slice on the same receiver, so its drawn

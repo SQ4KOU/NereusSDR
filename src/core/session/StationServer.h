@@ -919,6 +919,10 @@ public:
     /// The share a media session would have with the PureSignal display
     /// charged to it (ruling 9.3 item 4), for its subscription's admission.
     std::optional<DisplayBudgetLimits> displayBudgetLimitsAsPs3Subscriber(quint64 epoch) const;
+    /// Prospective share after this session asks for additional raw-I/Q
+    /// bytes. Admission reads it before the stream starts sending.
+    std::optional<DisplayBudgetLimits> displayBudgetLimitsWithAdditionalDemand(
+        quint64 epoch, quint64 applicationBytesPerSecond) const;
     /// Why a media session's share is short (ruling 9.3a): its own reason,
     /// before the mapping for a device without sessionHolder.
     DisplayBudgetReason displayBudgetShareReason(quint64 epoch) const;
@@ -1061,6 +1065,8 @@ public:
     // and was told it, so its media start may declare it.
     int txMonitorAudioVersion() const;
     bool txMonitorAudioAvailable(quint64 epoch) const;
+    int remoteIqVersion() const;
+    bool remoteIqAvailable(quint64 epoch) const;
     // R-IOS-26 / R-R3-49 (iPhone plan Task 22, parity Task 20):
     // stationFreedvVersion. 1 with recordStreamVersion 1 and the Core's own
     // FreeDV Reporter: the freedvStations stream, the FreeDV Reporter
@@ -1987,7 +1993,8 @@ private:
     /// `ps3Subscriber` the PureSignal display is charged to that session
     /// whether or not it is subscribed now.
     QList<QPair<SessionTransport*, DisplayBudgetShare>> splitDisplayBudget(
-        std::optional<quint64> ps3Subscriber) const;
+        std::optional<quint64> ps3Subscriber,
+        std::optional<QPair<quint64, quint64>> additionalDemand = std::nullopt) const;
     /// What a session's capabilities say of the budget, to publish a
     /// change once.
     QByteArray budgetEntriesFor(SessionTransport* transport) const;

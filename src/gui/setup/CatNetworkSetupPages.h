@@ -137,6 +137,7 @@ private:
     QPointer<class NereusSDR::RadioModel> m_radioModelRef;
     QLabel* m_stationLine{nullptr};
     void refreshStationLine();
+    void refreshIqStreamGroup();
     void reloadSwitchFromSettings();
     QGroupBox* m_coreGroup{nullptr};
     QLabel* m_coreBind{nullptr};

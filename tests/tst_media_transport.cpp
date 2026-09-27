@@ -21,6 +21,7 @@
 
 #include "core/session/media/LibDataChannelMediaTransport.h"
 #include "core/session/media/PcmAudioCodec.h"
+#include "core/session/media/RemoteIqCodec.h"
 
 #include <QElapsedTimer>
 #include <QPointer>
@@ -283,6 +284,7 @@ private slots:
     void micLineCarriesTheAnswerersMicrophoneAlone();
     void micLineCarriesLosslessWhenOffered();
     void micSsrcPreconditionsRefuseSilently();
+    void dedicatedIqChannelPreservesOrder();
 
 private:
     static void wireExchange(LibDataChannelMediaTransport& offerer,
@@ -336,6 +338,50 @@ void TestMediaTransport::startPair(LibDataChannelMediaTransport& offerer,
     QTRY_COMPARE_WITH_TIMEOUT(answerReady.count(), 1, 10000);
     QVERIFY(offerer.isReady());
     QVERIFY(answerer.isReady());
+}
+
+void TestMediaTransport::dedicatedIqChannelPreservesOrder()
+{
+    LibDataChannelMediaTransport offerer;
+    LibDataChannelMediaTransport answerer;
+    wire(offerer, answerer);
+    IMediaTransport::StartOptions offered{IMediaTransport::Role::Offerer, kTestAudioSsrc};
+    IMediaTransport::StartOptions answered{IMediaTransport::Role::Answerer, kTestAudioSsrc};
+    offered.iqChannel = true;
+    answered.iqChannel = true;
+    QSignalSpy offeredReady(&offerer, &IMediaTransport::ready);
+    QSignalSpy answeredReady(&answerer, &IMediaTransport::ready);
+    QSignalSpy received(&answerer, &IMediaTransport::iqReceived);
+    QSignalSpy iqErrors(&answerer, &IMediaTransport::iqErrorOccurred);
+    QVERIFY(answerer.start(answered));
+    QVERIFY(offerer.start(offered));
+    QTRY_COMPARE_WITH_TIMEOUT(offeredReady.size(), 1, 10000);
+    QTRY_COMPARE_WITH_TIMEOUT(answeredReady.size(), 1, 10000);
+    for (quint32 sequence = 0; sequence < 128; ++sequence) {
+        const auto frame = RemoteIqCodec::encode(1, 9, sequence,
+                                                  {float(sequence), -float(sequence)});
+        QVERIFY(frame);
+        QElapsedTimer deadline;
+        deadline.start();
+        while (offerer.iqBusy() && deadline.elapsed() < 1000) { QTest::qWait(1); }
+        QVERIFY(!offerer.iqBusy());
+        const auto result = offerer.submitIq(*frame);
+        QVERIFY(result == IMediaTransport::DisplaySendResult::Sent
+                || result == IMediaTransport::DisplaySendResult::Queued);
+        // The receiver deliberately holds at most eight callbacks. Drain
+        // each accepted message before offering the next; a separate queue
+        // overflow case proves its failure signal.
+        QTRY_COMPARE_WITH_TIMEOUT(received.size(), int(sequence) + 1, 5000);
+    }
+    QCOMPARE(iqErrors.size(), 0);
+    for (int index = 0; index < received.size(); ++index) {
+        const auto decoded = RemoteIqCodec::decode(received.at(index).at(0).toByteArray());
+        QVERIFY(decoded);
+        QCOMPARE(decoded->sequence, quint32(index));
+        QCOMPARE(decoded->generation, 9u);
+    }
+    offerer.stop();
+    answerer.stop();
 }
 
 QByteArray TestMediaTransport::rtpPacket(quint16 sequence, qsizetype size,

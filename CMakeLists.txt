@@ -1180,6 +1180,7 @@ set(CORE_SOURCES
     src/core/session/media/DaemonAudioSender.cpp
     # R-R3-23: the audio-context wire codec Core and GUI share (minor 7 and 8).
     src/core/session/media/RemoteAudioContext.cpp
+    src/core/session/media/RemoteIqCodec.cpp
     # R-R3-01/08: the spectrum-context wire codec Core and GUI share (minor 8 and 9).
     src/core/session/media/RemoteSpectrumContext.cpp
     src/core/session/media/AudioJitterBuffer.cpp

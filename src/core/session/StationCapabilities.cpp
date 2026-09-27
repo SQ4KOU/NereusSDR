@@ -257,6 +257,7 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
             // iPhone app plan Task 39: the `txState` object, with it.
             updates.append(intEntry("txStateVersion", txStateVersion));
         }
+        updates.append(intEntry("remoteIqVersion", remoteIqVersion));
     }
     return updates;
 }
@@ -459,7 +460,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                    || u.name == "controlSwitchVersion"
                    || u.name == "sessionHolderVersion"
                    || u.name == "remoteTxVersion"
-                   || u.name == "txStateVersion") {
+                   || u.name == "txStateVersion"
+                   || u.name == "remoteIqVersion") {
             // R-R3-47 / R-R3-22 / R-R3-48: sent in the same block as the
             // four above.
             caps.radioIdentityEntries = true;
@@ -512,6 +514,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                     caps.controlChannelVersion = version;
                 } else if (u.name == "txMonitorAudioVersion") {
                     caps.txMonitorAudioVersion = version;
+                } else if (u.name == "remoteIqVersion") {
+                    caps.remoteIqVersion = version;
                 } else if (u.name == "stationFreedvVersion") {
                     caps.stationFreedvVersion = version;
                 } else if (u.name == "mediaReplaceVersion") {

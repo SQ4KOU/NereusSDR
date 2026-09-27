@@ -148,6 +148,9 @@ public:
         // answerer takes one only when it was started with it (an answerer
         // from before refuses an unknown channel).
         bool txChannel = false;
+        // Task 23: dedicated reliable ordered raw-I/Q channel, negotiated
+        // only when the window declared remoteIqVersion 1.
+        bool iqChannel = false;
         // iPhone app plan Task 27 (R-IOS-16): set for a connection that came
         // through the remote access service. Its one STUN server goes in at
         // once; automatic gathering is off, and gathering starts with the
@@ -177,6 +180,7 @@ public:
     static constexpr qsizetype kMaxCandidateBytes = 4 * 1024;
     static constexpr qsizetype kMaxCandidateMidBytes = 256;
     static constexpr qsizetype kMaxDisplayMessageBytes = 64 * 1024;
+    static constexpr qsizetype kMaxIqMessageBytes = 24 + 1024 * 8;
     static constexpr qsizetype kMaxRawRtpBytes = 940;
     static constexpr qsizetype kMinRawRtpBytes = 12;
     static constexpr int kMaxRemoteCandidates = 64;
@@ -261,6 +265,12 @@ public:
     /// True while the library still holds a display message it took, so a
     /// new one would be Busy. displayWritable() follows when it clears.
     virtual bool displayBusy() const { return false; }
+    virtual DisplaySendResult submitIq(const QByteArray& message)
+    {
+        Q_UNUSED(message);
+        return DisplaySendResult::Refused;
+    }
+    virtual bool iqBusy() const { return false; }
     virtual bool sendRtp(const QByteArray& packet) = 0;
     /// Task 36: one RTP packet on the microphone line, which only an
     /// answerer started with micAudioSsrc sends on. False without that
@@ -324,6 +334,8 @@ signals:
     /// through the remote access service sends the end of candidates.
     void gatheringComplete();
     void displayReceived(const QByteArray& message);
+    void iqReceived(const QByteArray& message);
+    void iqErrorOccurred(const QString& reason);
     void rtpReceived(const QByteArray& packet);
     /// Task 36: an RTP packet that arrived on the microphone line. Never
     /// also reported by rtpReceived().

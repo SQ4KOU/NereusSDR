@@ -1339,8 +1339,8 @@ void TciServer::hookGlobalBroadcasts()
     // sendIQSampleRate + the IF limits update.  NereusSDR fires
     // RadioModel::wireSampleRateChanged with a double.
     connect(m_model, &RadioModel::wireSampleRateChanged, this,
-            [this](double rateHz) {
-                const int rateInt = static_cast<int>(rateHz);
+            [this](double) {
+                const int rateInt = publishedIqRate();
                 m_protocol->enqueueLocalBroadcast(
                     QStringLiteral("iq_samplerate:%1;").arg(rateInt));
                 // sendIFLimits follows in Thetis (TCIServer.cs:2535-2536
@@ -1631,6 +1631,7 @@ bool TciServer::start(const QHostAddress& bindAddress, quint16 port)
     // to hookGlobalBroadcasts (MOX, TUN, MON, AF volume, sample rate, etc.).
     hookSliceBroadcasts();
     hookGlobalBroadcasts();
+    refreshRemoteIqDemand();
 
     return true;
 }
@@ -1724,9 +1725,17 @@ void TciServer::stop()
     }
     m_clients.clear();
 
+    for (int rx = 0; rx < kMaxTciRxSlices; ++rx) {
+        if (m_remoteIqRequested[rx]) {
+            m_remoteIqRequested[rx] = false;
+            if (m_remoteIq.release) { m_remoteIq.release(rx); }
+        }
+    }
+
     // R-R3-42: no app listens any more; release the Core's receivers.
     for (int rx = 0; rx < kMaxTciRxSlices; ++rx) {
         updateRemoteReceiverDemand(rx);
+        updateRemoteIqDemand(rx);
     }
 
     // Closed now, so the port is free at once and no connection arrives;
@@ -1897,7 +1906,10 @@ void TciServer::onNewConnection()
         // the connect path).
         if (m_protocol) {
             const QStringList burst = m_protocol->buildInitBurst();
-            for (const QString& line : burst) {
+            for (QString line : burst) {
+                if (line.startsWith(QLatin1String("iq_samplerate:"))) {
+                    line = QStringLiteral("iq_samplerate:%1;").arg(publishedIqRate());
+                }
                 session->sendQueue.push(TciSendQueue::Priority::Control, line);
             }
         }
@@ -1951,6 +1963,7 @@ void TciServer::onClientDisconnected()
     // R-R3-42: the last app listening to a Core receiver releases it.
     for (int rx = 0; rx < kMaxTciRxSlices; ++rx) {
         updateRemoteReceiverDemand(rx);
+        updateRemoteIqDemand(rx);
     }
 }
 
@@ -2485,6 +2498,75 @@ void TciServer::setRemoteReceiverAudio(RemoteReceiverAudio source)
     }
 }
 
+void TciServer::setRemoteIqSource(RemoteIqSource source)
+{
+    for (int rx = 0; rx < kMaxTciRxSlices; ++rx) {
+        if (m_remoteIqRequested[rx]) {
+            m_remoteIqRequested[rx] = false;
+            if (m_remoteIq.release) { m_remoteIq.release(rx); }
+        }
+    }
+    m_remoteIq = std::move(source);
+    refreshRemoteIqDemand();
+}
+
+void TciServer::refreshRemoteIqDemand()
+{
+    for (int rx = 0; rx < kMaxTciRxSlices; ++rx) { updateRemoteIqDemand(rx); }
+}
+
+void TciServer::updateRemoteIqDemand(int rx)
+{
+    if (!m_remoteWindow || rx < 0 || rx >= kMaxTciRxSlices) { return; }
+    const bool always = AppSettings::instance()
+        .value(QStringLiteral("TciAlwaysStreamIq"), QStringLiteral("False")).toString()
+        == QStringLiteral("True");
+    bool wanted = isRunning() && always;
+    for (auto it = m_clients.cbegin(); it != m_clients.cend() && !wanted; ++it) {
+        wanted = it.value()->iqStreamEnabled.contains(rx);
+    }
+    if (wanted && !m_remoteIqRequested[rx]) {
+        if (!m_remoteIq.available || !m_remoteIq.available() || !m_remoteIq.request) { return; }
+        m_remoteIqRequested[rx] = true;
+        m_remoteIq.request(rx);
+    } else if (!wanted && m_remoteIqRequested[rx]) {
+        m_remoteIqRequested[rx] = false;
+        m_remoteIqRate[rx] = 0;
+        if (m_remoteIq.release) { m_remoteIq.release(rx); }
+    }
+}
+
+void TciServer::receiveRemoteIq(int receiver, int sampleRate,
+                                const QVector<float>& samples)
+{
+    if (!m_remoteWindow || receiver < 0 || receiver >= kMaxTciRxSlices
+        || !m_remoteIqRequested[receiver] || !isRunning()) { return; }
+    setRemoteIqRate(receiver, sampleRate);
+    sendIqToSubscribers(receiver, sampleRate, samples);
+}
+
+void TciServer::setRemoteIqRate(int receiver, int sampleRate)
+{
+    if (!m_remoteWindow || receiver < 0 || receiver >= kMaxTciRxSlices
+        || sampleRate < 48000 || sampleRate > 384000
+        || m_remoteIqRate[receiver] == sampleRate) { return; }
+    m_remoteIqRate[receiver] = sampleRate;
+    m_protocol->enqueueLocalBroadcast(
+        QStringLiteral("iq_samplerate:%1;").arg(
+            *std::max_element(m_remoteIqRate.begin(), m_remoteIqRate.end())));
+}
+
+void TciServer::remoteIqUnavailable(int receiver, const QString& reason)
+{
+    if (!m_remoteWindow || receiver < 0 || receiver >= kMaxTciRxSlices) { return; }
+    m_remoteIqRate[receiver] = 0;
+    for (auto it = m_clients.cbegin(); it != m_clients.cend(); ++it) {
+        if (it.value()->iqStreamEnabled.contains(receiver)) {
+            raiseOperatorNotice(it.value()->peer, reason);
+        }
+    }
+}
+
 bool TciServer::remoteReceiverRequested(int rx) const
 {
     return rx >= 0 && rx < kMaxTciRxSlices && m_remoteRequested[rx];
@@ -2859,13 +2941,16 @@ void TciServer::onTextMessageReceived(const QString& msg)
             bool ok = false;
             const int rx = trimmed.mid(kIqStart.size()).trimmed().toInt(&ok);
             if (m_remoteWindow) {
-                // R-R3-42: raw I/Q is not offered from a remote window. No
-                // subscription and no echo; the operator hears why.
                 if (ok && rx >= 0 && rx <= 1) {
-                    qCInfo(lcTci) << "TciServer: iq_start refused in a remote window, peer"
-                                  << session->peer;
-                    raiseOperatorNotice(session->peer,
-                                        QString::fromLatin1(kRemoteIqRefusedReason));
+                    if (!m_remoteIq.available || !m_remoteIq.available()) {
+                        raiseOperatorNotice(session->peer,
+                                            QString::fromLatin1(kRemoteIqRefusedReason));
+                    } else {
+                        session->iqStreamEnabled.insert(rx);
+                        updateRemoteIqDemand(rx);
+                        session->sendQueue.push(TciSendQueue::Priority::Control,
+                                                QStringLiteral("iq_start:%1;").arg(rx));
+                    }
                 }
             } else if (ok && rx >= 0 && rx <= 1) {
                 if (!session->iqStreamEnabled.contains(rx)) {
@@ -2894,6 +2979,7 @@ void TciServer::onTextMessageReceived(const QString& msg)
                 // from m_iqStreamEnabled.
                 session->sendQueue.push(TciSendQueue::Priority::Control,
                     QStringLiteral("iq_stop:%1;").arg(rx));
+                updateRemoteIqDemand(rx);
             }
         }
 
@@ -3279,6 +3365,13 @@ void TciServer::onTextMessageReceived(const QString& msg)
     // sendTextMessage directly. The drain timer pumps frames from the queue
     // in priority order. Coalescing (Thetis m_outboundCoalescedFrames at
     // TCIServer.cs:769-774 [v2.10.3.13]) lands in Phase 15.
+    const QString trimmedIq = msg.trimmed();
+    if ((trimmedIq == QLatin1String("iq_samplerate;")
+        || trimmedIq.startsWith(QLatin1String("iq_samplerate:")))) {
+        session->sendQueue.push(TciSendQueue::Priority::Control,
+                                QStringLiteral("iq_samplerate:%1;").arg(publishedIqRate()));
+        return;
+    }
     const QString response = m_protocol->handleCommand(msg);
 
     // Task 7 follow-up (R-R3-49): the trx keyed nothing and holds no TCI
@@ -3731,9 +3824,9 @@ void TciServer::sendTxChronoFrame(QWebSocket* client)
 // floats), NOT per-channel.  Bug-for-bug parity with Thetis which passes
 // complexSamples * 2 at cs:5434 [v2.10.3.13].
 //
-// RadioModel emits rawIqData only for RX1 (slice 0) in the current
-// single-receiver architecture; Phase 3F multi-pan will add per-receiver
-// variants.  This slot therefore treats all incoming data as receiver=0.
+// RadioModel's tagged tap provides the stream index. Every local slice bound
+// to that stream receives its own TCI receiver number and actual hardware
+// rate, without resampling.
 
 void TciServer::onRawIqDataReceived(int streamIndex, const QVector<float>& interleavedIQ)
 {
@@ -3745,6 +3838,25 @@ void TciServer::onRawIqDataReceived(int streamIndex, const QVector<float>& inter
             sendIqToSubscribers(slice->sliceIndex(), sampleRate, interleavedIQ);
         }
     }
+}
+
+int TciServer::publishedIqRate() const
+{
+    if (m_remoteWindow) {
+        return *std::max_element(m_remoteIqRate.begin(), m_remoteIqRate.end());
+    }
+    int rate = 0;
+    if (!m_model) { return rate; }
+    for (const SliceModel* slice : m_model->slices()) {
+        if (!slice || slice->sliceIndex() > 1) { continue; }
+        const int stream = slice->streamIndex();
+        if (stream < 0 || !m_model->streamActive(stream)) { continue; }
+        const int accepted = m_model->streamSampleRateHz(stream);
+        if (accepted >= 48000 && accepted <= 384000) {
+            rate = std::max(rate, accepted);
+        }
+    }
+    return rate;
 }
 
 void TciServer::sendIqToSubscribers(int receiver, int sampleRate,
@@ -3791,10 +3903,6 @@ void TciServer::sendIqToSubscribers(int receiver, int sampleRate,
     const int complexSamples = outBuf.size() / 2;
     const int lengthField    = complexSamples * 2;  // total floats in the IQ frame
 
-    // IQ sample rate: 192000 Hz is the typical HPSDR DDC rate and the default
-    // Thetis negotiates via iq_samplerate:.  Phase 3F multi-pan will pass the
-    // actual per-receiver rate here.  For now, match the Thetis Phase 11 default
-    // of 192000 from TciProtocol.cpp:265 [v2.10.3.13 port].
     for (auto it = m_clients.cbegin(); it != m_clients.cend(); ++it) {
         QWebSocket* ws     = it.key();
         const auto& session = it.value();

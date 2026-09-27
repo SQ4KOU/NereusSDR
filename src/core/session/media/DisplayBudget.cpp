@@ -7,6 +7,7 @@
 // =================================================================
 
 #include "core/session/media/DisplayBudget.h"
+#include "core/session/media/IMediaTransport.h"
 
 #include <algorithm>
 #include <limits>
@@ -236,6 +237,7 @@ void DisplayBudgetPacer::accrue(qint64 nowNs)
     refill(m_globalBytes, elapsedNs);
     refill(m_spectrumBytes, elapsedNs);
     refill(m_ps3Bytes, elapsedNs);
+    refill(m_iqBytes, elapsedNs);
     refill(m_spectrumSamples, elapsedNs);
     m_lastNs = nowNs;
 }
@@ -253,6 +255,7 @@ bool DisplayBudgetPacer::beginSession(quint64 epoch, DisplayBudgetLimits limits,
     m_active = true;
     m_spectrumActive = false;
     m_ps3Active = false;
+    m_iqActive = false;
     m_spectrumCharge = {};
     m_globalBytes = {kMaximumDisplayMessageBytes, limits.applicationBytesPerSecond, 0,
                      kMaximumDisplayMessageBytes};
@@ -267,6 +270,8 @@ bool DisplayBudgetPacer::beginSession(quint64 epoch, DisplayBudgetLimits limits,
     const quint64 ps3FrameBytes = ps3DisplayCharge().applicationBytesPerSecond
         * static_cast<quint64>(kPs3DisplayPollIntervalNs) / kNanosecondsPerSecond;
     m_ps3Bytes = {ps3FrameBytes, 0, 0, ps3FrameBytes};
+    m_iqBytes = {3 * IMediaTransport::kMaxIqMessageBytes, 0, 0,
+                 3 * IMediaTransport::kMaxIqMessageBytes};
     m_spectrumSamples = {kMaximumSpectrumDisplayFrameSampleUnits, 0, 0,
                          kMaximumSpectrumDisplayFrameSampleUnits};
     return true;
@@ -277,10 +282,11 @@ void DisplayBudgetPacer::endSession()
     m_active = false;
     m_spectrumActive = false;
     m_ps3Active = false;
+    m_iqActive = false;
 }
 
 bool DisplayBudgetPacer::update(DisplayBudgetLimits limits, DisplayBudgetCharge spectrumCharge,
-                                bool ps3Enabled, qint64 nowNs)
+                                bool ps3Enabled, qint64 nowNs, quint64 iqBytesPerSecond)
 {
     if (!m_active || !limits.isValid() || nowNs < 0
         || (!zeroCharge(spectrumCharge) && !validSpectrumCharge(spectrumCharge))) {
@@ -300,6 +306,7 @@ bool DisplayBudgetPacer::update(DisplayBudgetLimits limits, DisplayBudgetCharge 
     m_spectrumCharge = spectrumCharge;
     m_spectrumActive = !zeroCharge(spectrumCharge);
     m_ps3Active = ps3Enabled;
+    m_iqActive = iqBytesPerSecond != 0;
     m_globalBytes.rate = limits.applicationBytesPerSecond;
     // R-R3-37 (final review, the ceiling run): spectrum is paced to the
     // budget, less what PureSignal's display holds, not to the charge the
@@ -310,12 +317,30 @@ bool DisplayBudgetPacer::update(DisplayBudgetLimits limits, DisplayBudgetCharge 
     // The budget still holds: every class stays within the limits, and the
     // endpoints' own cadence keeps each to its admitted frame rate.
     const quint64 ps3Reserve = m_ps3Active ? ps3Charge.applicationBytesPerSecond : 0;
-    const quint64 spectrumByteRoom = limits.applicationBytesPerSecond > ps3Reserve
-        ? limits.applicationBytesPerSecond - ps3Reserve : 0;
+    const quint64 reserved = ps3Reserve + iqBytesPerSecond;
+    const quint64 spectrumByteRoom = limits.applicationBytesPerSecond > reserved
+        ? limits.applicationBytesPerSecond - reserved : 0;
     m_spectrumBytes.rate = m_spectrumActive
         ? std::max(spectrumCharge.applicationBytesPerSecond, spectrumByteRoom) : 0;
     m_spectrumSamples.rate = m_spectrumActive ? limits.spectrumSampleUnitsPerSecond : 0;
     m_ps3Bytes.rate = m_ps3Active ? ps3Charge.applicationBytesPerSecond : 0;
+    m_iqBytes.rate = iqBytesPerSecond;
+    return true;
+}
+
+bool DisplayBudgetPacer::canSpendIq(quint64 bytes, qint64 nowNs)
+{
+    if (!m_active || !m_iqActive || nowNs < 0 || bytes == 0
+        || bytes > IMediaTransport::kMaxIqMessageBytes) { return false; }
+    accrue(nowNs);
+    return bytes <= m_globalBytes.credit && bytes <= m_iqBytes.credit;
+}
+
+bool DisplayBudgetPacer::spendIq(quint64 bytes, qint64 nowNs)
+{
+    if (!canSpendIq(bytes, nowNs)) { return false; }
+    m_globalBytes.credit -= bytes;
+    m_iqBytes.credit -= bytes;
     return true;
 }
 

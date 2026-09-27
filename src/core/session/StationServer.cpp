@@ -6837,7 +6837,8 @@ int StationServer::displayBudgetSharingCount() const
 }
 
 QList<QPair<SessionTransport*, DisplayBudgetShare>> StationServer::splitDisplayBudget(
-    std::optional<quint64> ps3Subscriber) const
+    std::optional<quint64> ps3Subscriber,
+    std::optional<QPair<quint64, quint64>> additionalDemand) const
 {
     // iPhone app Task 76 (ruling 9.3): every media session the total
     // reaches shares it, in admission order.
@@ -6880,6 +6881,11 @@ QList<QPair<SessionTransport*, DisplayBudgetShare>> StationServer::splitDisplayB
         } else {
             device.request = {m_displayBudget->applicationBytesPerSecond,
                               m_displayBudget->spectrumSampleUnitsPerSecond, 0};
+        }
+        if (additionalDemand && additionalDemand->first == epoch) {
+            device.request.applicationBytesPerSecond = std::min(
+                kDisplayBudgetJsonSafePositiveLimit,
+                device.request.applicationBytesPerSecond + additionalDemand->second);
         }
         device.previous = peer.budgetShare;
         device.previousReason = peer.budgetShareReason;
@@ -6961,6 +6967,21 @@ std::optional<DisplayBudgetLimits> StationServer::displayBudgetLimitsAsPs3Subscr
         if (sharing == transport) {
             return share.limits;
         }
+    }
+    return displayBudgetLimits(epoch);
+}
+
+std::optional<DisplayBudgetLimits> StationServer::displayBudgetLimitsWithAdditionalDemand(
+    quint64 epoch, quint64 applicationBytesPerSecond) const
+{
+    SessionTransport* transport = mediaSessionFor(epoch);
+    std::optional<quint64> subscriber;
+    if (m_radioModel && m_radioModel->pureSignalFacade()->remoteAmpViewSubscribed()) {
+        subscriber = m_ps3SubscriberEpoch != 0 ? m_ps3SubscriberEpoch : mediaSessionEpoch();
+    }
+    for (const auto& [sharing, share] :
+         splitDisplayBudget(subscriber, qMakePair(epoch, applicationBytesPerSecond))) {
+        if (sharing == transport) { return share.limits; }
     }
     return displayBudgetLimits(epoch);
 }
@@ -7619,6 +7640,20 @@ bool StationServer::txMonitorAudioAvailable(quint64 epoch) const
         && txMonitorAudioVersion() >= 1;
 }
 
+int StationServer::remoteIqVersion() const
+{
+    return m_mediaEnabled && m_radioModel && m_radioModel->role() != RadioModel::Role::Remote
+        ? 1 : 0;
+}
+
+bool StationServer::remoteIqAvailable(quint64 epoch) const
+{
+    const auto it = m_peers.constFind(mediaSessionFor(epoch));
+    return mediaAvailable(epoch) && it != m_peers.cend()
+        && it->agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && remoteIqVersion() >= 1;
+}
+
 bool StationServer::txDisplayAvailable(quint64 epoch) const
 {
     // Advertised in the minor-11 capabilities block only, so only a peer
@@ -7959,6 +7994,7 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             // the device that holds transmit, with media, appended after
             // controlChannelVersion.
             caps.txMonitorAudioVersion = media ? txMonitorAudioVersion() : 0;
+            caps.remoteIqVersion = media ? remoteIqVersion() : 0;
             // R-IOS-26 / R-R3-49 (iPhone plan Task 22, parity Task 20): the
             // Core's FreeDV Reporter, appended after txMonitorAudioVersion.
             caps.stationFreedvVersion = stationFreedvVersion();

@@ -125,9 +125,9 @@ public:
     // RxChannel and no I/Q tap; receive audio for TCI receiver N is the
     // Core's slice N, asked for through RemoteReceiverAudio while at least
     // one app listens to it and released when the last one stops. Transmit
-    // (trx) and raw I/Q (iq_start) are refused: nothing reaches MOX or the
-    // TX audio path, and the reason goes to operatorNotice(), never onto
-    // the TCI wire.
+    // (trx) has its own forwarded policy. Raw I/Q is offered only when the
+    // connected Core advertises remoteIqVersion 1; older Cores are refused
+    // with an operator notice, never text on the TCI wire.
     bool isRemoteWindow() const { return m_remoteWindow; }
 
     // How a remote window reaches the Core's receiver streams. MainWindow
@@ -144,6 +144,16 @@ public:
     // through it first, and receivers apps still listen to are asked for
     // again through the new one.
     void setRemoteReceiverAudio(RemoteReceiverAudio source);
+    struct RemoteIqSource {
+        std::function<bool()> available;
+        std::function<void(int sliceId)> request;
+        std::function<void(int sliceId)> release;
+    };
+    void setRemoteIqSource(RemoteIqSource source);
+    void refreshRemoteIqDemand();
+    void receiveRemoteIq(int receiver, int sampleRate, const QVector<float>& samples);
+    void setRemoteIqRate(int receiver, int sampleRate);
+    void remoteIqUnavailable(int receiver, const QString& reason);
 
     // ── iPhone app plan Task 35: a remote window's TCI transmit ────────────
     //
@@ -197,7 +207,7 @@ public:
     static constexpr const char* kRemoteTransmitRefusedReason =
         "Apps cannot transmit through TCI from a remote window yet.";
     static constexpr const char* kRemoteIqRefusedReason =
-        "Apps cannot get the raw receiver signal (I/Q) through TCI from a remote window.";
+        "This Core does not send raw I/Q to this window. Updating the Core may help.";
 
     // ── R-R3-48 / R-R3-25: the Core's station TCI server ────────────────────
     //
@@ -450,6 +460,7 @@ private slots:
     void onRawIqDataReceived(int streamIndex, const QVector<float>& interleavedIQ);
     void sendIqToSubscribers(int receiver, int sampleRate,
                              const QVector<float>& interleavedIQ);
+    int publishedIqRate() const;
 
     // Destroys all RESAMPLEF instances for the given session and clears the map.
     // Called from onClientDisconnected and stop().
@@ -796,6 +807,10 @@ private:
     // ── R-R3-42: remote window state (GUI thread only) ──────────────────────
     bool m_remoteWindow{false};
     RemoteReceiverAudio m_remoteAudio;
+    RemoteIqSource m_remoteIq;
+    std::array<bool, kMaxTciRxSlices> m_remoteIqRequested{};
+    std::array<int, kMaxTciRxSlices> m_remoteIqRate{};
+    void updateRemoteIqDemand(int receiver);
     // A request is held with the Core for this receiver.
     std::array<bool, kMaxTciRxSlices> m_remoteRequested{};
     // The Core cannot send this receiver's audio (an older Core); set from

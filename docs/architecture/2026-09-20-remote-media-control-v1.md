@@ -1114,3 +1114,52 @@ The audio enable/context lifecycle, playback buffering and adaptive session
 budget are still being implemented. Their acceptance remains open in the
 [R3 plan](2026-09-20-remote-daemon-r3-plan.md); this document does not claim
 live hardware or internet traversal acceptance.
+
+## Remote TCI raw I/Q (Task 23, minor 11)
+
+A Core with media enabled advertises `remoteIqVersion=1` in its minor-11
+capabilities. A window that saw it adds `remoteIqVersion:1` to media `start`;
+other versions and undeclared requests are refused. The peer opens a separate
+DTLS-secured, reliable ordered SCTP channel labelled `iq`. It is not the
+loss-tolerant display channel, and its byte/receive limits do not share that
+channel's application queue. A window with an older Core disables its TCI I/Q
+options and tells the operator why when a TCI app requests `iq_start`.
+
+The exact request is `op,connectionId,sliceId,revision,enabled` with
+`op="iq-stream"`. Revision is a nonzero increasing uint32 for each slice in
+this connection. The Core answers the latest request with exactly
+`op,connectionId,sliceId,revision,enabled,generation,sampleRateHz,reason`, with
+`op="iq-stream-context"`. Generation is nonzero and advances on a new source,
+rate or binding, as well as peer replacement. A disabled context has
+`sampleRateHz=0`; its plain `reason` is empty for a requested stop or explains
+a refusal. The window accepts a frame only for an enabled context's slice and
+generation and the next sequence; gaps stop that stream. Slice N is the Core's
+slice N, whose current stream index supplies raw samples. Each context reports
+the accepted hardware rate (48,000-384,000 complex pairs/s); rates above
+384,000 are refused, with no resampling or falsely labelled output.
+
+Each `iq` message is exactly 24 bytes of little-endian header plus its
+samples: ASCII `NSIQ`, schema byte 1, zero flags and reserved bytes, then
+uint32 slice ID, generation, sequence and pair count, followed by `count`
+interleaved float32 I,Q pairs. Count is 1-1024; nonfinite samples, any extra
+or missing byte, other flags/version, and a zero generation are invalid.
+Sequence starts at zero and rises by one for each message. The source callback
+writes into a fixed 128 KiB, single-producer/single-consumer ring; the Core
+main-thread media timer assembles full 1024-pair messages and sends them.
+The callback holds shared lifetime state, touches no controller object and
+never waits. On retirement it sees a stopped flag; the old ring and its
+in-flight callback remain valid until the callback returns. Overflow stops
+the context with a reason rather than dropping samples unnoticed.
+
+The per-slice application-byte reservation is `8*r + 24*ceil(r/1024)` bytes/s
+at hardware rate `r`; the 24-byte final partial-frame allowance is kept in
+the sender's bounded burst. A device's PureSignal reservation remains first;
+raw I/Q is taken from its residual display share before its pans. The Core
+charges every attempted IQ send to the global application-byte pacer, and the
+window replans pans by reducing frame rates before pixels, retaining at least
+one frame/s for visible pans. If IQ plus that floor does not fit, the Core
+refuses with `The link to the Core is too busy to send raw I/Q for this
+receiver.` The Core permits one pending application frame and one library
+buffered frame at most; sustained 250 ms backpressure or ingress overflow
+stops the generation with a reason. This work does not move the remote TCI
+receive-audio resampler; its UI-thread cost remains a separate design item.

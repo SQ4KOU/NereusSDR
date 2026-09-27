@@ -52,6 +52,7 @@ namespace NereusSDR {
 namespace {
 
 constexpr char kDisplayLabel[] = "display";
+constexpr char kIqLabel[] = "iq";
 // Task 37: the transmit keepalive's channel.
 constexpr char kTxLabel[] = "tx";
 constexpr char kAudioMid[] = "audio";
@@ -66,6 +67,9 @@ constexpr std::size_t kMaxPendingEvents = 128;
 // delta chain and cost a keyframe wait); the byte cap still bounds it.
 constexpr std::size_t kMaxPendingDisplayMessages = 32;
 constexpr std::size_t kMaxPendingDisplayBytes = 256 * 1024;
+constexpr std::size_t kMaxPendingIqMessages = 8;
+constexpr std::size_t kMaxPendingIqBytes =
+    kMaxPendingIqMessages * IMediaTransport::kMaxIqMessageBytes;
 // R-R3-43: every declared audio stream keeps the 256 ms of lossless cushion
 // the one main stream had: 64 packets at 250 packets/s.
 static_assert(IMediaTransport::kReceivedRtpPacketsPerStream * 1000
@@ -86,6 +90,7 @@ struct CallbackEvent {
         Error,
         DisplayError,
         DisplayWritable,
+        IqError,
         PeerClosed,
         PeerFailed,
         // Task 37: a message on the "tx" channel (in `first`).
@@ -120,6 +125,10 @@ struct CallbackBridge {
     std::deque<CallbackEvent> events;
     std::deque<rtc::binary> displayMessages;
     std::size_t displayBytes = 0;
+    std::deque<rtc::binary> iqMessages;
+    std::size_t iqBytes = 0;
+    bool iqFailed = false;
+    bool iqFailureReported = false;
     std::deque<PendingRtpPacket> rtpPackets;
     // R-R3-43: kReceivedRtpPacketsPerStream for each declared audio stream.
     std::size_t rtpPacketCapacity =
@@ -141,6 +150,9 @@ struct CallbackBridge {
     bool txChannelWanted = false;
     bool txChannelAssigned = false;
     std::shared_ptr<rtc::DataChannel> txChannel;
+    bool iqChannelWanted = false;
+    bool iqChannelAssigned = false;
+    std::shared_ptr<rtc::DataChannel> iqChannel;
     // Task 37 test seam: drop everything that arrives.
     bool receiveSeveredForTest = false;
     std::atomic<quint64> receivedDisplayPayloadBytes{0};
@@ -284,6 +296,40 @@ void queueTx(const std::weak_ptr<CallbackBridge>& weak, rtc::binary data)
     bridge->events.push_back({CallbackEvent::Kind::TxMessage,
                               std::string(reinterpret_cast<const char*>(data.data()), data.size()),
                               {}});
+}
+
+void queueIq(const std::weak_ptr<CallbackBridge>& weak, rtc::binary data)
+{
+    const auto bridge = weak.lock();
+    if (!bridge) { return; }
+    std::lock_guard lock(bridge->mutex);
+    if (bridge->cancelled || bridge->receiveSeveredForTest || bridge->iqFailed) { return; }
+    if (data.empty() || data.size() > static_cast<std::size_t>(IMediaTransport::kMaxIqMessageBytes)
+        || bridge->iqMessages.size() >= kMaxPendingIqMessages
+        || bridge->iqBytes + data.size() > kMaxPendingIqBytes) {
+        bridge->iqMessages.clear();
+        bridge->iqBytes = 0;
+        bridge->iqFailed = true;
+        return;
+    }
+    bridge->iqBytes += data.size();
+    bridge->iqMessages.push_back(std::move(data));
+}
+
+void bindIqChannel(const std::shared_ptr<rtc::DataChannel>& channel,
+                   const std::weak_ptr<CallbackBridge>& weak)
+{
+    channel->onError([weak](std::string reason) {
+        queueEvent(weak, CallbackEvent::Kind::IqError, std::move(reason));
+    });
+    channel->onClosed([weak] {
+        queueEvent(weak, CallbackEvent::Kind::IqError, "raw I/Q channel closed");
+    });
+    channel->onMessage(
+        [weak](rtc::binary data) { queueIq(weak, std::move(data)); },
+        [weak](std::string) {
+            queueEvent(weak, CallbackEvent::Kind::IqError, "text raw I/Q message rejected");
+        });
 }
 
 void bindTxChannel(const std::shared_ptr<rtc::DataChannel>& channel,
@@ -470,6 +516,7 @@ struct LibDataChannelMediaTransport::Private {
     std::shared_ptr<CallbackBridge> bridge;
     std::shared_ptr<rtc::PeerConnection> peer;
     std::shared_ptr<rtc::DataChannel> display;
+    std::shared_ptr<rtc::DataChannel> iq;
     // Task 37: the "tx" channel, null without one.
     std::shared_ptr<rtc::DataChannel> tx;
     std::shared_ptr<rtc::Track> audio;
@@ -538,6 +585,7 @@ bool LibDataChannelMediaTransport::start(const StartOptions& options)
     d->bridge = std::make_shared<CallbackBridge>();
     d->bridge->micSsrc = options.micAudioSsrc;
     d->bridge->txChannelWanted = options.txChannel;
+    d->bridge->iqChannelWanted = options.iqChannel;
     // Task 36: the microphone line's packets share the queue with one more
     // stream's worth of room.
     d->bridge->rtpPacketCapacity =
@@ -621,6 +669,28 @@ bool LibDataChannelMediaTransport::start(const StartOptions& options)
         });
         d->peer->onDataChannel([weak](std::shared_ptr<rtc::DataChannel> channel) {
             const rtc::Reliability reliability = channel->reliability();
+            if (channel->label() == kIqLabel) {
+                const auto bridge = weak.lock();
+                bool take = false;
+                if (bridge && !reliability.unordered && !reliability.maxRetransmits
+                    && !reliability.maxPacketLifeTime) {
+                    std::lock_guard lock(bridge->mutex);
+                    take = !bridge->cancelled && bridge->iqChannelWanted
+                        && !bridge->iqChannelAssigned;
+                    if (take) {
+                        bridge->iqChannelAssigned = true;
+                        bridge->iqChannel = channel;
+                    }
+                }
+                if (!take) {
+                    channel->close();
+                    queueEvent(weak, CallbackEvent::Kind::IqError,
+                               "unexpected raw I/Q data channel rejected");
+                    return;
+                }
+                bindIqChannel(channel, weak);
+                return;
+            }
             // Task 37: the "tx" channel, taken only by a side started with
             // it, unordered and never retransmitted.
             if (channel->label() == kTxLabel) {
@@ -736,6 +806,11 @@ bool LibDataChannelMediaTransport::start(const StartOptions& options)
             init.reliability.maxRetransmits = 0;
             d->display = d->peer->createDataChannel(kDisplayLabel, init);
             bindDataChannel(d->display, weak);
+            if (options.iqChannel) {
+                rtc::DataChannelInit iqInit;
+                d->iq = d->peer->createDataChannel(kIqLabel, iqInit);
+                bindIqChannel(d->iq, weak);
+            }
             // Task 37: the keepalive's own channel, only when asked.
             if (options.txChannel) {
                 d->tx = d->peer->createDataChannel(kTxLabel, init);
@@ -910,6 +985,7 @@ void LibDataChannelMediaTransport::stopInternal(bool notify)
     d->drainTimer->stop();
 
     std::shared_ptr<rtc::DataChannel> pendingDisplay;
+    std::shared_ptr<rtc::DataChannel> pendingIq;
     std::shared_ptr<rtc::DataChannel> pendingTx;
     std::shared_ptr<rtc::Track> pendingAudio;
     std::shared_ptr<rtc::Track> pendingMic;
@@ -920,8 +996,11 @@ void LibDataChannelMediaTransport::stopInternal(bool notify)
         d->bridge->events.clear();
         d->bridge->displayMessages.clear();
         d->bridge->displayBytes = 0;
+        d->bridge->iqMessages.clear();
+        d->bridge->iqBytes = 0;
         d->bridge->rtpPackets.clear();
         pendingDisplay = std::move(d->bridge->dataChannel);
+        pendingIq = std::move(d->bridge->iqChannel);
         pendingTx = std::move(d->bridge->txChannel);
         pendingAudio = std::move(d->bridge->track);
         pendingMic = std::move(d->bridge->micTrack);
@@ -935,6 +1014,10 @@ void LibDataChannelMediaTransport::stopInternal(bool notify)
         pendingDisplay->resetCallbacks();
         pendingDisplay->close();
     }
+    if (pendingIq && pendingIq != d->iq) {
+        pendingIq->resetCallbacks();
+        pendingIq->close();
+    }
     if (pendingAudio && pendingAudio != d->audio) {
         pendingAudio->resetCallbacks();
         pendingAudio->close();
@@ -947,6 +1030,10 @@ void LibDataChannelMediaTransport::stopInternal(bool notify)
     if (d->display) {
         d->display->resetCallbacks();
         d->display->close();
+    }
+    if (d->iq) {
+        d->iq->resetCallbacks();
+        d->iq->close();
     }
     if (d->tx) {
         d->tx->resetCallbacks();
@@ -966,6 +1053,7 @@ void LibDataChannelMediaTransport::stopInternal(bool notify)
     }
 
     d->display.reset();
+    d->iq.reset();
     d->tx.reset();
     d->audio.reset();
     d->micAudio.reset();
@@ -1118,6 +1206,29 @@ bool LibDataChannelMediaTransport::displayBusy() const
     return d->ready && d->display && d->display->bufferedAmount() != 0;
 }
 
+IMediaTransport::DisplaySendResult
+LibDataChannelMediaTransport::submitIq(const QByteArray& message)
+{
+    if (!d->ready || !d->iq || !d->iq->isOpen() || message.isEmpty()
+        || message.size() > kMaxIqMessageBytes) {
+        return DisplaySendResult::Refused;
+    }
+    if (d->iq->bufferedAmount() != 0) { return DisplaySendResult::Busy; }
+    try {
+        return d->iq->send(reinterpret_cast<const rtc::byte*>(message.constData()),
+                           static_cast<std::size_t>(message.size()))
+            ? DisplaySendResult::Sent : DisplaySendResult::Queued;
+    } catch (const std::exception& error) {
+        emit iqErrorOccurred(QString::fromUtf8(error.what()));
+        return DisplaySendResult::Refused;
+    }
+}
+
+bool LibDataChannelMediaTransport::iqBusy() const
+{
+    return d->iq && d->iq->bufferedAmount() != 0;
+}
+
 bool LibDataChannelMediaTransport::sendRtp(const QByteArray& packet)
 {
     if (!d->ready || !d->audio || packet.size() < kMinRawRtpBytes
@@ -1266,10 +1377,13 @@ void LibDataChannelMediaTransport::drainCallbacks()
 
     std::deque<CallbackEvent> events;
     std::deque<rtc::binary> displayMessages;
+    std::deque<rtc::binary> iqMessages;
     std::deque<PendingRtpPacket> rtpPackets;
     std::chrono::steady_clock::duration maxRtpCallbackGap {};
     std::size_t droppedRtpPackets = 0;
+    bool reportIqOverflow = false;
     std::shared_ptr<rtc::DataChannel> incomingDisplay;
+    std::shared_ptr<rtc::DataChannel> incomingIq;
     std::shared_ptr<rtc::DataChannel> incomingTx;
     std::shared_ptr<rtc::Track> incomingAudio;
     std::shared_ptr<rtc::Track> incomingMic;
@@ -1281,12 +1395,17 @@ void LibDataChannelMediaTransport::drainCallbacks()
         events.swap(bridge->events);
         displayMessages.swap(bridge->displayMessages);
         bridge->displayBytes = 0;
+        iqMessages.swap(bridge->iqMessages);
+        bridge->iqBytes = 0;
+        reportIqOverflow = bridge->iqFailed && !bridge->iqFailureReported;
+        if (reportIqOverflow) { bridge->iqFailureReported = true; }
         rtpPackets.swap(bridge->rtpPackets);
         maxRtpCallbackGap = bridge->maxRtpCallbackGap;
         bridge->maxRtpCallbackGap = {};
         droppedRtpPackets = bridge->droppedRtpPackets;
         bridge->droppedRtpPackets = 0;
         incomingDisplay = std::move(bridge->dataChannel);
+        incomingIq = std::move(bridge->iqChannel);
         incomingTx = std::move(bridge->txChannel);
         incomingAudio = std::move(bridge->track);
         incomingMic = std::move(bridge->micTrack);
@@ -1295,12 +1414,19 @@ void LibDataChannelMediaTransport::drainCallbacks()
     if (!isCurrentGeneration()) {
         return;
     }
+    if (reportIqOverflow) {
+        emit iqErrorOccurred(QStringLiteral("raw I/Q receive queue overflow"));
+        if (!isCurrentGeneration()) { return; }
+    }
     if (!d->tx && incomingTx) {
         d->tx = std::move(incomingTx);
     }
 
     if (!d->display && incomingDisplay) {
         d->display = std::move(incomingDisplay);
+    }
+    if (!d->iq && incomingIq) {
+        d->iq = std::move(incomingIq);
     }
     if (!d->audio && incomingAudio) {
         d->audio = std::move(incomingAudio);
@@ -1337,6 +1463,9 @@ void LibDataChannelMediaTransport::drainCallbacks()
         case CallbackEvent::Kind::DisplayWritable:
             emit displayWritable();
             break;
+        case CallbackEvent::Kind::IqError:
+            emit iqErrorOccurred(QString::fromStdString(event.first));
+            break;
         case CallbackEvent::Kind::PeerFailed:
             // Terminal peer connectivity is a recovery decision for the
             // authenticated session owner.  Keep it typed: generic media
@@ -1371,6 +1500,10 @@ void LibDataChannelMediaTransport::drainCallbacks()
         if (!isCurrentGeneration()) {
             return;
         }
+    }
+    for (const rtc::binary& message : iqMessages) {
+        emit iqReceived(toByteArray(message));
+        if (!isCurrentGeneration()) { return; }
     }
     if (!rtpPackets.empty()) {
         const auto drainedAt = std::chrono::steady_clock::now();

@@ -235,6 +235,31 @@ private slots:
         QCOMPARE(quality(*longPeriodAllocation, QStringLiteral("long-period")).framesPerLine,
                  3'933);
     }
+
+    void rawIqKeepsVisiblePanFloorAndReducesFpsBeforePixels()
+    {
+        const QList<RemoteDisplayIntent> intents{
+            pan(QStringLiteral("background"), 1024, 30),
+            pan(QStringLiteral("active"), 1024, 30, true),
+        };
+        const auto once = spectrumDisplayCost(1024, 1, false)->charge;
+        const DisplayBudgetLimits cap{2 * once.applicationBytesPerSecond,
+                                      2 * once.spectrumSampleUnitsPerSecond, 1};
+        const auto allocation = allocateRemoteDisplay(cap, intents, false, nullptr, true);
+        QVERIFY(allocation);
+        for (const auto& item : allocation->pans) {
+            QVERIFY(!item.suspended);
+            QCOMPARE(item.fps, 1);
+            QCOMPARE(item.pixels, 1024);
+        }
+        const auto floor = spectrumDisplayCost(1, 1, false)->charge;
+        QString error;
+        QVERIFY(!allocateRemoteDisplay(
+            {2 * floor.applicationBytesPerSecond - 1,
+             2 * floor.spectrumSampleUnitsPerSecond, 1},
+            intents, false, &error, true));
+        QVERIFY(error.contains(QStringLiteral("one frame per second")));
+    }
 };
 
 QTEST_GUILESS_MAIN(TestRemoteDisplayAllocator)

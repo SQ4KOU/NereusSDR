@@ -375,10 +375,12 @@ struct MediaCore {
 
     // Starts `app`'s media and makes its transport (the next one made)
     // ready.
-    MediaFake* startMedia(LoopbackTransport* app)
+    MediaFake* startMedia(LoopbackTransport* app, bool iq = false)
     {
         const qsizetype before = transports.size();
-        sendMedia(app, mediaStart());
+        QJsonObject start = mediaStart();
+        if (iq) { start.insert(QStringLiteral("remoteIqVersion"), 1); }
+        sendMedia(app, start);
         if (!QTest::qWaitFor([this, before]() { return transports.size() > before; }, 5000)) {
             return nullptr;
         }
@@ -2942,6 +2944,55 @@ private slots:
     }
 
     // ── Task 76: media and capacity per device ─────────────────────────
+
+    void rawIqNearSharedLimitConvergesAfterBudgetCut()
+    {
+        // Each 192 kHz stream charges 1,540,512 bytes/s. Both fit inside
+        // 3.2 MB/s, while a cut to 2.9 MB/s can sustain only one.
+        MediaCore m(DisplayBudgetLimits{3'200'000, 100'000, 1});
+        m.signInBoth();
+        const int sliceA = m.sliceOf(m.epochOf(0));
+        const int sliceB = m.sliceOf(m.epochOf(1));
+        QVERIFY(sliceA >= 0 && sliceB >= 0 && sliceA != sliceB);
+        QVERIFY(m.startMedia(m.appA, true));
+        QVERIFY(m.startMedia(m.appB, true));
+        const auto request = [](int slice) {
+            return QJsonObject{{QStringLiteral("op"), QStringLiteral("iq-stream")},
+                {QStringLiteral("connectionId"), QLatin1String(kMediaConnection)},
+                {QStringLiteral("sliceId"), slice},
+                {QStringLiteral("revision"), 1},
+                {QStringLiteral("enabled"), true}};
+        };
+        sendMedia(m.appA, request(sliceA));
+        sendMedia(m.appB, request(sliceB));
+        QTRY_VERIFY(!mediaOps(m.appA, QStringLiteral("iq-stream-context")).isEmpty()
+                    && mediaOps(m.appA, QStringLiteral("iq-stream-context")).last()
+                           .value(QStringLiteral("enabled")).toBool());
+        QTRY_VERIFY(!mediaOps(m.appB, QStringLiteral("iq-stream-context")).isEmpty()
+                    && mediaOps(m.appB, QStringLiteral("iq-stream-context")).last()
+                           .value(QStringLiteral("enabled")).toBool());
+
+        QVERIFY(m.core.server->setDisplayBudgetLimits({2'900'000, 100'000, 2}));
+        QTRY_VERIFY(([&] {
+            const auto a = mediaOps(m.appA, QStringLiteral("iq-stream-context"));
+            const auto b = mediaOps(m.appB, QStringLiteral("iq-stream-context"));
+            return !a.isEmpty() && !b.isEmpty()
+                && (a.last().value(QStringLiteral("enabled")).toBool()
+                    != b.last().value(QStringLiteral("enabled")).toBool());
+        })());
+        const int settledA = mediaOps(m.appA, QStringLiteral("iq-stream-context")).size();
+        const int settledB = mediaOps(m.appB, QStringLiteral("iq-stream-context")).size();
+        QTest::qWait(100);
+        QCOMPARE(mediaOps(m.appA, QStringLiteral("iq-stream-context")).size(), settledA);
+        QCOMPARE(mediaOps(m.appB, QStringLiteral("iq-stream-context")).size(), settledB);
+        QVERIFY(settledA + settledB <= 6);
+
+        QVERIFY(m.core.server->setDisplayBudgetLimits({3'200'000, 100'000, 3}));
+        QTRY_VERIFY(mediaOps(m.appA, QStringLiteral("iq-stream-context")).last()
+                        .value(QStringLiteral("enabled")).toBool()
+                    && mediaOps(m.appB, QStringLiteral("iq-stream-context")).last()
+                        .value(QStringLiteral("enabled")).toBool());
+    }
 
     // Each device's capabilities carry its own share of the Core's display
     // budget, its own generation and its own reason: sharedConnection

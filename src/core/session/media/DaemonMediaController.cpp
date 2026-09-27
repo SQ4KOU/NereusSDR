@@ -64,6 +64,7 @@
 // =================================================================
 
 #include "core/session/media/DaemonMediaController.h"
+#include "core/session/media/RemoteIqCodec.h"
 #include "core/session/media/RemoteSpectrumContext.h"
 
 #include "core/FFTEngine.h"
@@ -612,8 +613,16 @@ DaemonMediaController::DaemonMediaController(StationServer* server,
             this, &DaemonMediaController::onControl);
     connect(m_server, &StationServer::displayBudgetChanged,
             this, [this] {
+        ++m_iqBudgetChangeRevision;
         beginDisplayBudgetIfNeeded();
         refreshDisplayBudgetPacer();
+        if (!m_iqStreams.empty() && !m_iqBudgetRecheckScheduled) {
+            m_iqBudgetRecheckScheduled = true;
+            QTimer::singleShot(0, this, [this] {
+                m_iqBudgetRecheckScheduled = false;
+                reconcileIqBudget();
+            });
+        }
         // A Core-busy reason starting or ending changes how every source's
         // transforms advance.
         if (m_transformsFollowFrameRate != coreBusyLimitsSources()) {
@@ -1009,6 +1018,8 @@ DisplayBudgetCharge DaemonMediaController::displayDemand() const
         Q_UNUSED(unused);
         charges.append(demand);
     }
+    const quint64 iq = iqBytesPerSecond();
+    if (iq != 0) { charges.append({iq, 0, 0}); }
     return sumDisplayCharges(charges).value_or(DisplayBudgetCharge{});
 }
 
@@ -1079,7 +1090,8 @@ DisplayBudgetCharge DaemonMediaController::acceptedDisplayCharge() const
 {
     const bool ps3Enabled = ps3DisplayHere();
     return sumDisplayCharges({currentSpectrumCharge(),
-                              ps3Enabled ? ps3DisplayCharge() : DisplayBudgetCharge{}})
+                              ps3Enabled ? ps3DisplayCharge() : DisplayBudgetCharge{},
+                              DisplayBudgetCharge{iqBytesPerSecond(), 0, 0}})
         .value_or(DisplayBudgetCharge{});
 }
 
@@ -1126,7 +1138,8 @@ bool DaemonMediaController::spectrumAdmissionFits(
     }
     const bool ps3Enabled = ps3DisplayHere();
     const auto combined = sumDisplayCharges(
-        {*spectrum, ps3Enabled ? ps3DisplayCharge() : DisplayBudgetCharge{}});
+        {*spectrum, ps3Enabled ? ps3DisplayCharge() : DisplayBudgetCharge{},
+         DisplayBudgetCharge{iqBytesPerSecond(), 0, 0}});
     return combined && displayChargeFits(*limits, *combined);
 }
 
@@ -1155,7 +1168,7 @@ void DaemonMediaController::refreshDisplayBudgetPacer()
     }
     const bool ps3Enabled = ps3DisplayHere();
     if (!m_displayPacer.update(*limits, currentSpectrumCharge(), ps3Enabled,
-                               displayNowNs())) {
+                               displayNowNs(), iqBytesPerSecond())) {
         qCWarning(lcDaemonMedia) << "refused invalid display pacer state update";
     }
 }
@@ -1480,6 +1493,7 @@ void DaemonMediaController::onRadioConnectionStateChanged(ConnectionState state)
             reconcileReceiverAudio(sliceId);
         }
     }
+    reconcileWantedIq();
     // R-R3-45: the headphones mix resumes with the radio, when it can run.
     if (m_headphones.revision != 0 && m_headphones.desiredEnabled && headphonesMixNeeded()) {
         reconcileHeadphonesAudio();
@@ -1512,6 +1526,7 @@ void DaemonMediaController::onControl(const QJsonObject& control, quint64 epoch)
     }
     if (op == QLatin1String("audio")) { handleAudio(control); return; }
     if (op == QLatin1String("receiver-audio")) { handleReceiverAudio(control); return; }
+    if (op == QLatin1String("iq-stream")) { handleIqStream(control); return; }
     if (op == QLatin1String("headphones-audio")) { handleHeadphonesAudio(control); return; }
     // Parity Task 32: only from a peer that declared it at start.
     if (op == QLatin1String("monitor-audio")) { handleMonitorAudio(control); return; }
@@ -1597,6 +1612,16 @@ bool DaemonMediaController::handleStart(const QJsonObject& control)
             return false;
         }
     }
+    const bool declaresIq = control.contains(QStringLiteral("remoteIqVersion"));
+    if (declaresIq) {
+        legacyShape.remove(QStringLiteral("remoteIqVersion"));
+        quint32 version = 0;
+        if (!m_server || !m_server->remoteIqAvailable(m_epoch)
+            || !exactUnsigned(control.value(QStringLiteral("remoteIqVersion")),
+                              version, /*nonzero=*/true) || version != 1) {
+            return false;
+        }
+    }
     // Parity Task 28 (R-R3-49, A11): txDisplayVersion, from a peer the Core
     // told txDisplayVersion 1 (minor 11, media on, a TX analyzer); only then
     // does a subscribe carry the transmit window and a context `transmit`,
@@ -1658,13 +1683,14 @@ bool DaemonMediaController::handleStart(const QJsonObject& control)
                                        : std::nullopt);
     if (!peer->start(IMediaTransport::Role::Offerer, connectionId,
                      m_audioTargetBitrate, offerLossless, declaresReceiverAudio,
-                     declaresHeadphonesMix, declaresRemoteTx)) {
+                     declaresHeadphonesMix, declaresRemoteTx, declaresIq)) {
         m_displayDiagnosticsTimer.stop();
         m_peer.reset();
         sendRejected(connectionId, 0, 0, QStringLiteral("The Core could not start audio and display."));
         return false;
     }
     m_receiverAudioNegotiated = declaresReceiverAudio;
+    m_iqNegotiated = declaresIq;
     m_headphonesMixNegotiated = declaresHeadphonesMix;
     // Parity Task 32: MON goes nowhere until the peer asks for a route.
     m_txMonitorNegotiated = declaresTxMonitor;
@@ -1760,6 +1786,7 @@ void DaemonMediaController::wireCurrentPeer(MediaPeer* peer, const QString& conn
                 if (m_peer.get() != peer || m_epoch != peerEpoch) { return; }
                 reconcileReceiverAudio(sliceId);
             }
+            reconcileWantedIq();
             // R-R3-45: and the headphones mix, on its own.
             if (m_peer.get() != peer || m_epoch != peerEpoch) { return; }
             if (m_headphones.revision != 0) {
@@ -1927,7 +1954,7 @@ bool DaemonMediaController::handleReplace(const QJsonObject& control)
     peer->setIceConfiguration(m_server->sessionIceConfiguration(m_epoch));
     if (!peer->start(IMediaTransport::Role::Offerer, connectionId, m_audioTargetBitrate,
                      m_startOfferedLossless, m_receiverAudioNegotiated,
-                     m_headphonesMixNegotiated, m_startMicLine)) {
+                     m_headphonesMixNegotiated, m_startMicLine, m_iqNegotiated)) {
         peer->disconnect(this);
         m_replacement.release()->deleteLater();
         sendRejected(connectionId, 0, 0,
@@ -2018,6 +2045,7 @@ void DaemonMediaController::finishReplacement()
     sendControl({{QStringLiteral("op"), QStringLiteral("replace")},
                  {QStringLiteral("connectionId"), connectionId},
                  {QStringLiteral("replaces"), replaces}});
+    reconcileWantedIq();
     qCInfo(lcDaemonMedia) << "media moved to its new connection";
 }
 
@@ -2932,6 +2960,228 @@ bool DaemonMediaController::handleReceiverAudio(const QJsonObject& control)
     it->second.requestedProfile = *profile;
     reconcileReceiverAudio(sliceId);
     return true;
+}
+
+quint64 DaemonMediaController::iqBytesPerSecond() const
+{
+    quint64 bytes = 0;
+    for (const auto& [sliceId, stream] : m_iqStreams) {
+        Q_UNUSED(sliceId);
+        if (stream.sending) { bytes += stream.bytesPerSecond; }
+    }
+    return bytes;
+}
+
+bool DaemonMediaController::handleIqStream(const QJsonObject& control)
+{
+    if (!m_iqNegotiated || !m_peer) { return false; }
+    int sliceId = -1;
+    quint32 revision = 0;
+    if (!exactKeys(control, {"op", "connectionId", "sliceId", "revision", "enabled"})
+        || !canonicalConnectionId(control.value(QStringLiteral("connectionId")))
+        || control.value(QStringLiteral("connectionId")).toString() != m_peer->connectionId()
+        || !exactInt(control.value(QStringLiteral("sliceId")), 0,
+                     std::numeric_limits<int>::max(), sliceId)
+        || !exactUnsigned(control.value(QStringLiteral("revision")), revision, true)
+        || !control.value(QStringLiteral("enabled")).isBool()) { return false; }
+    const bool enabled = control.value(QStringLiteral("enabled")).toBool();
+    auto it = m_iqStreams.find(sliceId);
+    if (it == m_iqStreams.end()) {
+        if (!m_radioModel || !m_radioModel->sliceById(sliceId) || !ownsSlice(sliceId)) {
+            IqStream absent;
+            absent.revision = revision;
+            absent.generation = ++m_nextIqGeneration;
+            if (absent.generation == 0) { absent.generation = ++m_nextIqGeneration; }
+            sendIqContext(sliceId, absent,
+                          enabled ? QStringLiteral("This receiver is not available to this device.")
+                                  : QString());
+            return true;
+        }
+        it = m_iqStreams.emplace(sliceId, IqStream{}).first;
+    } else if (staleOrEqualRevision(revision, it->second.revision)) {
+        return false;
+    }
+    it->second.revision = revision;
+    it->second.desired = enabled;
+    reconcileIqStream(sliceId);
+    return true;
+}
+
+void DaemonMediaController::stopIqStream(IqStream& stream)
+{
+    if (stream.ingress) {
+        stream.ingress->stopped.store(true, std::memory_order_release);
+    }
+    QObject::disconnect(stream.tap);
+    stream.tap = {};
+    stream.ingress.reset();
+    stream.pending.clear();
+    stream.pendingDebited = false;
+    stream.blockedAtNs = -1;
+    stream.sending = false;
+    stream.budgetRefused = false;
+    stream.lastBudgetRefusalRevision = 0;
+    stream.bytesPerSecond = 0;
+    stream.sampleRate = 0;
+    stream.generation = ++m_nextIqGeneration;
+    if (stream.generation == 0) { stream.generation = ++m_nextIqGeneration; }
+}
+
+void DaemonMediaController::sendIqContext(int sliceId, const IqStream& stream,
+                                          const QString& reason)
+{
+    if (!m_peer) { return; }
+    sendControl({{QStringLiteral("op"), QStringLiteral("iq-stream-context")},
+                 {QStringLiteral("connectionId"), m_peer->connectionId()},
+                 {QStringLiteral("sliceId"), sliceId},
+                 {QStringLiteral("revision"), qint64(stream.revision)},
+                 {QStringLiteral("enabled"), stream.sending},
+                 {QStringLiteral("generation"), qint64(stream.generation)},
+                 {QStringLiteral("sampleRateHz"), stream.sampleRate},
+                 {QStringLiteral("reason"), reason}});
+}
+
+void DaemonMediaController::reconcileIqStream(int sliceId)
+{
+    auto it = m_iqStreams.find(sliceId);
+    if (it == m_iqStreams.end()) { return; }
+    IqStream& stream = it->second;
+    stopIqStream(stream);
+    stream.sequence = 0;
+    const SliceModel* slice = m_radioModel ? m_radioModel->sliceById(sliceId) : nullptr;
+    stream.streamIndex = slice ? slice->streamIndex() : -1;
+    stream.sampleRate = stream.streamIndex >= 0 && m_radioModel
+        ? m_radioModel->streamSampleRateHz(stream.streamIndex) : 0;
+    QString reason;
+    bool budgetRefused = false;
+    if (!stream.desired) {
+        reason.clear();
+    } else if (!slice || !ownsSlice(sliceId) || stream.streamIndex < 0
+               || !m_radioModel->streamActive(stream.streamIndex)) {
+        reason = QStringLiteral("This receiver is not available on the Core.");
+    } else if (stream.sampleRate < 48000 || stream.sampleRate > 384000) {
+        reason = QStringLiteral("This receiver's hardware I/Q rate is unsupported (48-384 kHz).");
+    } else if (!m_peer || !m_peer->isReady()) {
+        reason = QStringLiteral("The media connection is not ready for raw I/Q.");
+    } else {
+        const quint64 charge = quint64(stream.sampleRate) * 8
+            + quint64((stream.sampleRate + 1023) / 1024) * 24;
+        QList<DisplayBudgetCharge> floor{
+            ps3DisplayHere() ? ps3DisplayCharge() : DisplayBudgetCharge{},
+            DisplayBudgetCharge{iqBytesPerSecond() + charge, 0, 0}};
+        for (const auto& [endpointId, endpoint] : m_endpoints) {
+            Q_UNUSED(endpointId);
+            if (const auto cost = spectrumDisplayCost(1, 1, endpoint.request.extendedView)) {
+                floor.append(cost->charge);
+            }
+        }
+        const auto limits = m_server
+            ? m_server->displayBudgetLimitsWithAdditionalDemand(m_epoch, charge)
+            : std::nullopt;
+        const auto minimum = sumDisplayCharges(floor);
+        if (!limits || !minimum || !displayChargeFits(*limits, *minimum)) {
+            reason = QStringLiteral("The link to the Core is too busy to send raw I/Q for this receiver.");
+            budgetRefused = true;
+        } else {
+            stream.bytesPerSecond = charge;
+            stream.ingress = std::make_shared<RemoteIqIngress>();
+            const std::shared_ptr<RemoteIqIngress> ingress = stream.ingress;
+            const int source = stream.streamIndex;
+            stream.tap = connect(m_radioModel, &RadioModel::rawIqDataForStream,
+                                 this, [ingress, source](int arrived,
+                                                        const QVector<float>& samples) {
+                if (arrived == source) { ingress->push(samples); }
+            }, Qt::DirectConnection);
+            stream.sending = true;
+            if (!m_sendTimer.isActive()) { m_sendTimer.start(); }
+        }
+    }
+    stream.budgetRefused = budgetRefused;
+    if (!stream.sending) { stream.sampleRate = 0; }
+    const QPointer<DaemonMediaController> self(this);
+    const quint64 epoch = m_epoch;
+    MediaPeer* const peer = m_peer.get();
+    sendIqContext(sliceId, stream, reason);
+    if (!self || epoch != m_epoch || peer != m_peer.get()) { return; }
+    refreshDisplayBudgetPacer();
+    if (m_server) { m_server->publishDisplayBudgetCapabilities(); }
+    if (!self || epoch != m_epoch || peer != m_peer.get()) { return; }
+    if (budgetRefused) {
+        const auto found = m_iqStreams.find(sliceId);
+        if (found != m_iqStreams.end()) {
+            found->second.lastBudgetRefusalRevision = m_iqBudgetChangeRevision;
+        }
+    }
+}
+
+void DaemonMediaController::reconcileWantedIq()
+{
+    QList<int> wanted;
+    for (const auto& [sliceId, stream] : m_iqStreams) {
+        if (stream.desired) { wanted.append(sliceId); }
+    }
+    const QPointer<DaemonMediaController> self(this);
+    const quint64 epoch = m_epoch;
+    MediaPeer* const peer = m_peer.get();
+    for (int sliceId : wanted) {
+        if (!self || epoch != m_epoch || peer != m_peer.get()) { return; }
+        const auto found = m_iqStreams.find(sliceId);
+        if (found != m_iqStreams.end() && found->second.desired) {
+            reconcileIqStream(sliceId);
+        }
+    }
+}
+
+bool DaemonMediaController::iqFitsCurrentShare() const
+{
+    const auto limits = m_server ? m_server->displayBudgetLimits(m_epoch) : std::nullopt;
+    if (!limits) { return false; }
+    QList<DisplayBudgetCharge> floor{
+        ps3DisplayHere() ? ps3DisplayCharge() : DisplayBudgetCharge{},
+        DisplayBudgetCharge{iqBytesPerSecond(), 0, 0}};
+    for (const auto& [endpointId, endpoint] : m_endpoints) {
+        Q_UNUSED(endpointId);
+        const auto cost = spectrumDisplayCost(1, 1, endpoint.request.extendedView);
+        if (!cost) { return false; }
+        floor.append(cost->charge);
+    }
+    const auto total = sumDisplayCharges(floor);
+    return total && displayChargeFits(*limits, *total);
+}
+
+void DaemonMediaController::reconcileIqBudget()
+{
+    if (!m_iqNegotiated || !m_peer || !m_peer->isReady()) { return; }
+    QList<int> wanted;
+    for (const auto& [sliceId, stream] : m_iqStreams) {
+        if (stream.desired) { wanted.append(sliceId); }
+    }
+    const QPointer<DaemonMediaController> self(this);
+    const quint64 epoch = m_epoch;
+    MediaPeer* const peer = m_peer.get();
+    for (int sliceId : wanted) {
+        if (!self || epoch != m_epoch || peer != m_peer.get()) { return; }
+        const auto found = m_iqStreams.find(sliceId);
+        if (found == m_iqStreams.end() || !found->second.desired) { continue; }
+        if (found->second.sending && !iqFitsCurrentShare()) {
+            stopIqStream(found->second);
+            found->second.budgetRefused = true;
+            sendIqContext(sliceId, found->second,
+                          QStringLiteral("The link to the Core is too busy to send raw I/Q for this receiver."));
+            if (!self || epoch != m_epoch || peer != m_peer.get()) { return; }
+            refreshDisplayBudgetPacer();
+            if (m_server) { m_server->publishDisplayBudgetCapabilities(); }
+            if (!self || epoch != m_epoch || peer != m_peer.get()) { return; }
+            const auto current = m_iqStreams.find(sliceId);
+            if (current != m_iqStreams.end() && current->second.budgetRefused) {
+                current->second.lastBudgetRefusalRevision = m_iqBudgetChangeRevision;
+            }
+        } else if (!found->second.sending && found->second.budgetRefused
+                   && found->second.lastBudgetRefusalRevision
+                       != m_iqBudgetChangeRevision) {
+            reconcileIqStream(sliceId);
+        }
+    }
 }
 
 void DaemonMediaController::reconcileReceiverAudio(int sliceId)
@@ -4191,13 +4441,102 @@ void DaemonMediaController::onSendTick()
         m_ps3CurrentAttempted = false;
     }
     const qint64 nowNs = displayNowNs();
+    const bool sentPs3 = trySendPs3(peer, epoch, nowNs);
+    for (int attempt = 0; attempt < 16; ++attempt) {
+        if (!trySendIq(peer, epoch, nowNs)) { break; }
+    }
+    if (sentPs3) { return; }
     if (m_lastDisplayAttemptWasPs3) {
         if (trySendSpectrum(peer, epoch, nowNs)) { return; }
-        trySendPs3(peer, epoch, nowNs);
     } else {
-        if (trySendPs3(peer, epoch, nowNs)) { return; }
         trySendSpectrum(peer, epoch, nowNs);
     }
+}
+
+bool DaemonMediaController::trySendIq(MediaPeer* peer, quint64 epoch, qint64 nowNs)
+{
+    if (!m_iqNegotiated || !peer || !peer->isReady()) { return false; }
+    const auto fail = [this, peer, epoch](int sliceId, IqStream& stream,
+                                          const QString& reason, bool budgetRefused = false) {
+        stopIqStream(stream);
+        stream.budgetRefused = budgetRefused;
+        const QPointer<DaemonMediaController> self(this);
+        sendIqContext(sliceId, stream, reason);
+        if (!self || m_peer.get() != peer || m_epoch != epoch) { return; }
+        refreshDisplayBudgetPacer();
+        if (m_server) { m_server->publishDisplayBudgetCapabilities(); }
+        if (!self || m_peer.get() != peer || m_epoch != epoch) { return; }
+        if (budgetRefused) {
+            const auto found = m_iqStreams.find(sliceId);
+            if (found != m_iqStreams.end() && found->second.budgetRefused) {
+                found->second.lastBudgetRefusalRevision = m_iqBudgetChangeRevision;
+            }
+        }
+    };
+    for (auto& [sliceId, stream] : m_iqStreams) {
+        if (!stream.sending || !stream.ingress) { continue; }
+        if (!iqFitsCurrentShare()) {
+            fail(sliceId, stream,
+                 QStringLiteral("The link to the Core is too busy to send raw I/Q for this receiver."),
+                 true);
+            return false;
+        }
+        if (stream.ingress->failed.load(std::memory_order_acquire)) {
+            fail(sliceId, stream, QStringLiteral("Raw I/Q capture overflowed on the Core."));
+            return false;
+        }
+        if (stream.pending.isEmpty()) {
+            const auto samples = stream.ingress->pop();
+            if (!samples) { continue; }
+            const auto encoded = RemoteIqCodec::encode(
+                static_cast<quint32>(sliceId), stream.generation, stream.sequence, *samples);
+            if (!encoded) {
+                fail(sliceId, stream, QStringLiteral("Invalid raw I/Q samples from the Core."));
+                return false;
+            }
+            stream.pending = *encoded;
+        }
+        if (peer->iqBusy()) {
+            if (stream.blockedAtNs < 0) { stream.blockedAtNs = nowNs; }
+            if (nowNs - stream.blockedAtNs >= 250'000'000LL) {
+                fail(sliceId, stream,
+                     QStringLiteral("Raw I/Q stopped because the media link stalled."));
+            }
+            return false;
+        }
+        if (!stream.pendingDebited && displayPacingRequired()
+            && (!m_displayPacerInitialized
+                || !m_displayPacer.spendIq(quint64(stream.pending.size()), nowNs))) {
+            if (stream.blockedAtNs < 0) { stream.blockedAtNs = nowNs; }
+            if (nowNs - stream.blockedAtNs >= 250'000'000LL) {
+                fail(sliceId, stream,
+                     QStringLiteral("Raw I/Q stopped because the display share was exhausted."));
+            }
+            return false;
+        }
+        if (displayPacingRequired()) { stream.pendingDebited = true; }
+        const QPointer<DaemonMediaController> self(this);
+        const auto result = peer->submitIq(stream.pending);
+        if (!self || m_peer.get() != peer || m_epoch != epoch) { return false; }
+        if (result == IMediaTransport::DisplaySendResult::Busy) {
+            if (stream.blockedAtNs < 0) { stream.blockedAtNs = nowNs; }
+            if (nowNs - stream.blockedAtNs >= 250'000'000LL) {
+                fail(sliceId, stream,
+                     QStringLiteral("Raw I/Q stopped because the media link stalled."));
+            }
+            return false;
+        }
+        if (result == IMediaTransport::DisplaySendResult::Refused) {
+            fail(sliceId, stream, QStringLiteral("The raw I/Q media channel refused a frame."));
+            return false;
+        }
+        stream.pending.clear();
+        stream.pendingDebited = false;
+        stream.blockedAtNs = -1;
+        ++stream.sequence;
+        return true;
+    }
+    return false;
 }
 
 // ---- Parity Task 28 (R-R3-49, A11): the transmit display --------------------
@@ -4904,6 +5243,22 @@ bool DaemonMediaController::reconcileSource(const MediaSourceKey& key)
 
 void DaemonMediaController::onStreamGeometryChanged(int streamIndex, double, int)
 {
+    QList<int> changedIq;
+    for (const auto& [sliceId, iq] : m_iqStreams) {
+        const SliceModel* slice = m_radioModel ? m_radioModel->sliceById(sliceId) : nullptr;
+        if (iq.desired && (iq.streamIndex == streamIndex
+            || (slice && slice->streamIndex() == streamIndex))
+            && (!slice || iq.streamIndex != slice->streamIndex()
+                || iq.sampleRate != m_radioModel->streamSampleRateHz(streamIndex))) {
+            changedIq.append(sliceId);
+        }
+    }
+    const quint64 iqEpoch = m_epoch;
+    const QPointer<DaemonMediaController> iqSelf(this);
+    for (int sliceId : changedIq) {
+        if (!iqSelf || iqEpoch != m_epoch) { return; }
+        reconcileIqStream(sliceId);
+    }
     MediaPeer* const peer = m_peer.get();
     const quint64 epoch = m_epoch;
     // Task 76: this device's own pans on the stream; the engines they share
@@ -4975,6 +5330,21 @@ void DaemonMediaController::onStreamGeometryChanged(int streamIndex, double, int
 
 void DaemonMediaController::onStreamBindingsChanged(int streamIndex, const QVector<int>&)
 {
+    QList<int> changedIq;
+    for (const auto& [sliceId, iq] : m_iqStreams) {
+        const SliceModel* slice = m_radioModel ? m_radioModel->sliceById(sliceId) : nullptr;
+        if (iq.desired && (iq.streamIndex == streamIndex
+            || (slice && slice->streamIndex() == streamIndex))
+            && (!slice || iq.streamIndex != slice->streamIndex())) {
+            changedIq.append(sliceId);
+        }
+    }
+    const quint64 iqEpoch = m_epoch;
+    const QPointer<DaemonMediaController> iqSelf(this);
+    for (int sliceId : changedIq) {
+        if (!iqSelf || iqEpoch != m_epoch) { return; }
+        reconcileIqStream(sliceId);
+    }
     MediaPeer* const peer = m_peer.get();
     const quint64 epoch = m_epoch;
     for (quint32 endpointId : endpointIds()) {
@@ -4997,6 +5367,15 @@ void DaemonMediaController::onStreamBindingsChanged(int streamIndex, const QVect
 
 void DaemonMediaController::onSliceRemoved(int sliceId)
 {
+    if (auto iq = m_iqStreams.find(sliceId); iq != m_iqStreams.end()) {
+        stopIqStream(iq->second);
+        iq->second.desired = false;
+        const QPointer<DaemonMediaController> self(this);
+        sendIqContext(sliceId, iq->second, QStringLiteral("This receiver was removed."));
+        if (!self) { return; }
+        refreshDisplayBudgetPacer();
+        if (m_server) { m_server->publishDisplayBudgetCapabilities(); }
+    }
     // R-R3-43: the slice's receiver stream retires with its reason, and its
     // stream id goes free. The revision stays, so a stale request stays
     // refused.
@@ -5308,6 +5687,12 @@ void DaemonMediaController::clearSession()
     // R-R3-43: every receiver stream's sender and slice tap go with the
     // session; there is no GUI left to tell.
     resetReceiverAudioSession();
+    for (auto& [sliceId, stream] : m_iqStreams) {
+        Q_UNUSED(sliceId);
+        stopIqStream(stream);
+    }
+    m_iqStreams.clear();
+    m_iqNegotiated = false;
     // R-R3-45: and the headphones mix's.
     resetHeadphonesAudioSession();
     // Task 36: and the microphone line; the ring goes out of use with it.
@@ -5364,6 +5749,18 @@ void DaemonMediaController::clearProduction()
     m_refusedDemand.clear();
     if (m_refusedDemandTimer) {
         m_refusedDemandTimer->stop();
+    }
+    QList<int> activeIq;
+    for (const auto& [sliceId, stream] : m_iqStreams) {
+        if (stream.sending) { activeIq.append(sliceId); }
+    }
+    const QPointer<DaemonMediaController> iqSelf(this);
+    for (int sliceId : activeIq) {
+        if (!iqSelf) { return; }
+        const auto found = m_iqStreams.find(sliceId);
+        if (found == m_iqStreams.end() || !found->second.sending) { continue; }
+        stopIqStream(found->second);
+        sendIqContext(sliceId, found->second, QStringLiteral("The Core radio is offline."));
     }
     m_sendTimer.stop();
     m_ps3CurrentChunks.clear();

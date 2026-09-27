@@ -42,6 +42,6 @@ struct RemoteDisplayAllocation {
 
 std::optional<RemoteDisplayAllocation> allocateRemoteDisplay(
     const DisplayBudgetLimits& limits, const QList<RemoteDisplayIntent>& intents,
-    bool ps3Enabled, QString* error = nullptr);
+    bool ps3Enabled, QString* error = nullptr, bool iqActive = false);
 
 } // namespace NereusSDR
