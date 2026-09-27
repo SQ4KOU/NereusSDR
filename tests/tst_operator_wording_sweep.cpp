@@ -9,6 +9,11 @@
 // Wire reasons themselves are never touched: the table's left column is the
 // Core's and this computer's text byte for byte. User text calls the
 // NereusSDR computer "the Core", never "the station" (R-R3-21, 2026-09-24).
+// 2026-09-27 (R-IOS-06, R-IOS-27): NnrControls' model and position items and
+// units moved to ControlRanges.h (the table the Core's catalogue sends), so
+// its floor drops to 55 and the noise-reduction table's labels, units and
+// items are checked here instead. J.J. Boyd (KG4VCF), AI-assisted via
+// Anthropic Claude Code.
 
 #include <QtTest/QtTest>
 
@@ -29,6 +34,7 @@
 #include "OperatorWording.h"
 #include "PanStatusSamples.h"
 #include "core/AppSettings.h"
+#include "core/ControlRanges.h"
 #include "core/WdspTypes.h"
 #include "core/dsp/NnrSettings.h"
 #include "core/safety/BandPlanGuard.h"
@@ -654,7 +660,7 @@ private slots:
             {"src/gui/RemoteConnectionController.cpp", 20},
             {"src/gui/RemoteTelemetryController.cpp", 40},
             {"src/gui/RemoteDiagnosticsDialog.cpp", 40},
-            {"src/gui/widgets/NnrControls.cpp", 60},
+            {"src/gui/widgets/NnrControls.cpp", 55},
             {"src/gui/setup/FourO3APage.cpp", 30},
             {"src/gui/PsForm.cpp", 80},
         };
@@ -672,6 +678,28 @@ private slots:
                                              OperatorWording::internalTermIn(text))));
             }
         }
+
+        // The noise-reduction controls' labels, units and items, which
+        // NnrControls, the VFO flag's popups and the catalogue read.
+        int nrTexts = 0;
+        for (const ControlRanges::NrSlotControls& slot : ControlRanges::kNoiseReductionSlots) {
+            for (std::size_t i = 0; i < slot.count; ++i) {
+                const ControlRanges::NrControl& control = slot.controls[i];
+                QStringList texts{QString::fromUtf8(control.label),
+                                  QString::fromUtf8(control.suffix)};
+                for (std::size_t o = 0; o < control.optionCount; ++o) {
+                    texts.append(QString::fromUtf8(control.options[o].label));
+                }
+                for (const QString& text : texts) {
+                    if (text.trimmed().isEmpty()) {
+                        continue;
+                    }
+                    QVERIFY2(OperatorWording::isPlain(text), qPrintable(text));
+                    ++nrTexts;
+                }
+            }
+        }
+        QVERIFY2(nrTexts >= 60, qPrintable(QString::number(nrTexts)));
 
         const QString mainWindow = joinedSource(sourcePath("src/gui/MainWindow.cpp"));
         static const QRegularExpression remote(

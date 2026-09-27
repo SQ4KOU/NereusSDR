@@ -48,6 +48,13 @@
 //               MacNRFilter's own DEF_* values (Aggressiveness 4, Bias
 //               1.2) as a new slice does. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-27: NR2, NR3, NR4, DFNR and NNR's controls moved here from
+//               VfoWidget, NnrControls, NnrSettings and SliceModel (values
+//               unchanged; Thetis cites restamped against v2.10.3.15, and
+//               NereusSDR's own values marked where they differ), with the
+//               slot table the catalogue's `noiseReduction` key reads
+//               (R-IOS-06, R-IOS-27). J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <array>
