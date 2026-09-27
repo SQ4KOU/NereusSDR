@@ -103,6 +103,10 @@
 //               and stop move into RadioModel's TxDisplayFeed. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-27: R-R3-49: the config file's sample_rate_hz is a starting
+//               value only; a rate already saved for the radio wins at start
+//               (applyConfigToSettings). J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/daemon/DaemonApp.h"
@@ -1228,23 +1232,43 @@ void DaemonApp::applyConfigToSettings(const DaemonConfig& cfg,
 {
     auto& settings = AppSettings::instance();
 
+    // The config file's sample_rate_hz is a starting value only (operator
+    // ruling 2026-09-27, R-R3-49). It seeds the radio's rate when nothing
+    // is saved for that radio yet; once a rate is saved (chosen from any
+    // window, or an earlier seed from this file) the saved rate wins
+    // across restarts and installs. Writing it on every start threw away
+    // the rate the operator picked from a window each time the Core
+    // restarted.
+    //
     // sampleRateExplicit, not sampleRateHz > 0: the field always holds a
     // usable rate (validate() rejects <= 0), so it cannot express "the
-    // operator did not ask". Writing unconditionally would stamp the
-    // struct default over a rate already persisted for this radio every
-    // time nereusd ran without a config file. Same reasoning as the
-    // audioDevice branch below.
+    // operator did not ask". Seeding on the struct default would stamp a
+    // rate onto a radio the config file never mentioned. Same reasoning as
+    // the audioDevice branch below.
     if (!mac.isEmpty() && cfg.sampleRateExplicit && cfg.sampleRateHz > 0) {
-        // resolveSampleRate() (SampleRateCatalog.cpp) reads exactly this
-        // key at connect time and validates it against the board's
-        // allowed-rate list, falling back to the board default with a
-        // warning when the value is not supported. That is the behaviour
-        // nereusd.conf.sample documents for this key ("must be a rate the
-        // connected board actually supports"), so the daemon gets it by
-        // using the same path the GUI does rather than by re-deriving it.
-        settings.setHardwareValue(mac,
-                                  QStringLiteral("radioInfo/sampleRate"),
-                                  cfg.sampleRateHz);
+        const QString rateKey = QStringLiteral("radioInfo/sampleRate");
+        // A saved value that is not a positive rate counts as nothing
+        // saved: resolveSampleRate() treats it as missing too.
+        const int saved = settings.hardwareValue(mac, rateKey).toInt();
+        if (saved > 0) {
+            qCInfo(lcApp).noquote()
+                << QStringLiteral("DaemonApp: using the saved sample rate %1 for this "
+                                  "radio (the config file's %2 is only a starting value)")
+                       .arg(saved)
+                       .arg(cfg.sampleRateHz);
+        } else {
+            // resolveSampleRate() (SampleRateCatalog.cpp) reads exactly
+            // this key at connect time and validates it against the
+            // board's allowed-rate list, falling back to the board default
+            // with a warning when the value is not supported. The seed
+            // goes through that same path as a saved rate does, so the
+            // daemon and the GUI never disagree about what is valid.
+            settings.setHardwareValue(mac, rateKey, cfg.sampleRateHz);
+            qCInfo(lcApp).noquote()
+                << QStringLiteral("DaemonApp: seeded the sample rate from the config "
+                                  "file: %1")
+                       .arg(cfg.sampleRateHz);
+        }
     }
 
     // Only written when set. An empty audio_device must not stamp an
