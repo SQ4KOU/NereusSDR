@@ -48,6 +48,12 @@
 //                                    R-IOS-03, R-IOS-13): txSliceMarked and
 //                                    setTxMarkAllowed (ruling 5.4a). AI-
 //                                    assisted via Anthropic Claude Code.
+//   2026-09-27  J.J. Boyd / KG4VCF  NR1's defaults are Thetis's NR
+//                                    spinbox defaults as its Setup applies
+//                                    them (gain 100e-6, leak 100e-3), read
+//                                    from ControlRanges.h (R-IOS-06,
+//                                    R-IOS-27). AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 //=================================================================
@@ -149,6 +155,7 @@
 // project-level Thetis LICENSE applies.
 
 #include "Band.h"
+#include "core/ControlRanges.h"
 #include "core/NbFamily.h"
 #include "core/SampleRateCatalog.h"
 #include "core/WdspTypes.h"
@@ -1563,13 +1570,15 @@ private:
     void setNnrLastError(const QString& error);
 
 
-    // NR1 — from RxChannel::Nr1Tuning defaults (Task 8 commit 8747ae4),
-    // which in turn match Thetis radio.cs:673-699 [v2.10.3.13].
-    int    m_nr1Taps    = 64;           // radio.cs:674   nr_taps = 64
-    int    m_nr1Delay   = 16;           // radio.cs:675   nr_delay = 16
-    double m_nr1Gain    = 16e-4;        // radio.cs:677   nr_gain = 16e-4 (WDSP-domain)
-    double m_nr1Leakage = 10e-7;        // radio.cs:679   nr_leak = 10e-7 (WDSP-domain)
-    NereusSDR::NrPosition m_nr1Position = NereusSDR::NrPosition::PostAgc;  // setup.cs:8723
+    // NR1: Thetis's NR spinbox defaults as Thetis hands them to
+    // SetRXAANRVals (taps 64, delay 16, gain 100 x 1e-6, leak 100 x 1e-3;
+    // see ControlRanges.h). Gain and leak are WDSP-domain values.
+    int    m_nr1Taps    = static_cast<int>(ControlRanges::kNr1Taps.defaultValue);
+    int    m_nr1Delay   = static_cast<int>(ControlRanges::kNr1Delay.defaultValue);
+    double m_nr1Gain    = ControlRanges::kNr1Gain.defaultValue;
+    double m_nr1Leakage = ControlRanges::kNr1Leak.defaultValue;
+    NereusSDR::NrPosition m_nr1Position =
+        static_cast<NereusSDR::NrPosition>(ControlRanges::kNrPositionDefault);
 
     // NR2 — from RxChannel::Nr2Tuning defaults (Task 8 commit 8747ae4),
     // matching Thetis radio.cs:2062-2213, setup.cs:34711-34748 [v2.10.3.13].

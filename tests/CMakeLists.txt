@@ -2191,6 +2191,11 @@ nereus_add_test(tst_dfnr_availability EXTRA_LABELS gui)
 # window; BNR in no build), and choosing them is refused.
 nereus_add_test(tst_mnr_bnr_availability EXTRA_LABELS gui)
 
+# R-IOS-06, R-IOS-27: the VFO flag's NR1 and MNR quick controls and the
+# Setup NR1 tab against their sources (Thetis's NR spinboxes and their
+# SetRXAANRVals conversion; MacNRFilter's DEF_* values for MNR's Reset).
+nereus_add_test(tst_nr_quick_controls EXTRA_LABELS gui)
+
 # D14, R-R3-49: every NereusSDR TX meter maps to the WDSP txaMeterType index
 # Thetis reads for it (wdspTxaMeterIndex); the expected indices are written
 # by hand from the compiled third_party/wdsp/src/TXA.h.

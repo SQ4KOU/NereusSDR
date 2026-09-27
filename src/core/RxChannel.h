@@ -53,6 +53,10 @@
 //                 resampleFilterResponse, so a Core can send its bins.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //                 Code. NereusSDR-original.
+//   2026-09-27 - Nr1Tuning's defaults are Thetis's NR spinbox defaults as
+//                 its Setup applies them (gain 100e-6, leak 100e-3), read
+//                 from ControlRanges.h (R-IOS-06, R-IOS-27). J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -233,6 +237,7 @@ warren@wpratt.com
 
 */
 
+#include "ControlRanges.h"
 #include "NbFamily.h"
 #include "WdspTypes.h"
 #include "dsp/ChannelConfig.h"
@@ -502,23 +507,20 @@ public:
     // WDSP NR stage.  Defaults match Thetis radio.cs / RXA.c byte-for-byte.
 
     // NR1 — LMS Adaptive Noise Reduction (Thetis: WDSP anr.c, Warren Pratt NR0V)
-    // Gain/leakage stored in UI units; NereusSDR setters apply the same
-    // scaling Thetis setup.cs:8545-8550 applies before the WDSP call:
-    //   WDSP gain    = 1e-6 * gainUiValue   (Thetis udLMSNRgain  → SetRXAANRVals)
-    //   WDSP leakage = 1e-3 * leakUiValue   (Thetis udLMSNRLeak  → SetRXAANRVals)
-    // Defaults match the radio.cs private field initialisers:
-    //   nr_gain  = 16e-4  →  gainUiValue = 1600.0  (nr_gain / 1e-6)   — unused, see below
-    // *** The struct stores raw WDSP-domain values, NOT UI units, so
-    //     the setAnrGain / setAnrLeakage setters accept raw values and pass
-    //     them straight to WDSP.  The UI layer is responsible for the /1e6
-    //     and /1e3 conversions before calling these setters. ***
-    // From Thetis radio.cs:673-699 [v2.10.3.13]
+    // The struct stores raw WDSP-domain values, NOT UI units, so the
+    // setAnrGain / setAnrLeakage setters pass them straight to WDSP. The UI
+    // layer applies Thetis's conversion first (gain = 1e-6 x the Gain
+    // control, leak = 1e-3 x the Leak control; ControlRanges.h, from
+    // setup.cs:8573-8586 [v2.10.3.15]).
+    // Defaults are Thetis's NR spinbox defaults so converted (taps 64,
+    // delay 16, gain 100e-6, leak 100e-3): Thetis's Setup applies them over
+    // radio.cs's field initialisers (16e-4, 10e-7) when it loads.
     struct Nr1Tuning {
-        int        taps     = 64;       // radio.cs:674   nr_taps = 64
-        int        delay    = 16;       // radio.cs:675   nr_delay = 16
-        double     gain     = 16e-4;    // radio.cs:677   nr_gain = 16e-4
-        double     leakage  = 10e-7;    // radio.cs:679   nr_leak = 10e-7
-        NrPosition position = NrPosition::PostAgc;  // setup.cs:8723
+        int        taps     = static_cast<int>(ControlRanges::kNr1Taps.defaultValue);
+        int        delay    = static_cast<int>(ControlRanges::kNr1Delay.defaultValue);
+        double     gain     = ControlRanges::kNr1Gain.defaultValue;
+        double     leakage  = ControlRanges::kNr1Leak.defaultValue;
+        NrPosition position = static_cast<NrPosition>(ControlRanges::kNrPositionDefault);
     };
 
     // NR2 — EMNR (Enhanced Multiband NR, Warren Pratt NR0V)

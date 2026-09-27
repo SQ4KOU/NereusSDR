@@ -46,6 +46,12 @@
 //                 and MNR tabs read RadioModel::nrCannotRunReason (the one
 //                 source, DspAssetService) and follow its signals.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-27 - R-IOS-06, R-IOS-27: the NR1 tab reads ControlRanges.h,
+//                 its ranges and defaults corrected to Thetis's NR
+//                 spinboxes (taps 1-1024, delay 1-1023, gain and leak
+//                 1-1000, defaults 64 / 16 / 100 / 100) with Thetis's
+//                 tooltips. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 
 //=================================================================
@@ -750,39 +756,28 @@ NrAnfSetupPage::NrAnfSetupPage(RadioModel* model, QWidget* parent)
         Q_UNUSED(tabPage)
         QVBoxLayout* grpLay = makeGroup(tabLay, "NR1 (LMS)");
 
-        // Taps — udDSPNRTaps: 16-1024, default 64
-        // From Thetis setup.designer.cs — udDSPNRTaps.ToolTip [v2.10.3.13]
-        auto [taps, tapsVal] = addSliderRow(grpLay, "Taps", 16, 1024,
-            slice ? slice->nr1Taps() : 64,
-            tr("LMS filter length (number of taps). Longer = more suppression, "
-               "more latency. Range 16-1024."));
-
-        // Delay — udDSPNRDelay: 1-256, default 16
-        auto [delay, delayVal] = addSliderRow(grpLay, "Delay", 1, 256,
-            slice ? slice->nr1Delay() : 16,
-            tr("LMS adaptive delay in samples. Separates desired signal "
-               "from correlated noise."));
-
-        // Gain — tbDSPNRGain: UI range 0-999 → WDSP domain = UI × 1e-6
-        // From Thetis setup.cs NR1 gain rescaling [v2.10.3.13].
-        // Reverse-scale from WDSP domain: WDSP_val = UI / 1e6 → UI = WDSP_val × 1e6
-        // Clamped to 999 (slider max) — WDSP default 16e-4 = 1600 overflows range.
-        const int gainDefault = slice
-            ? std::min(999, static_cast<int>(slice->nr1Gain() * 1e6))
-            : 999;
-        auto [gain, gainVal] = addSliderRow(grpLay, "Gain", 0, 999,
-            gainDefault,
-            tr("LMS adaptation rate (gain). UI units × 1e-6 = WDSP domain value. "
-               "Default 999 (clamped from 16e-4 WDSP)."));
-
-        // Leakage — tbDSPNRLeak: UI range 0-999 → WDSP domain = UI × 1e-3
-        // From Thetis setup.cs NR1 leakage rescaling [v2.10.3.13].
-        // Reverse-scale: WDSP_val = UI / 1e3 → UI = WDSP_val × 1e3
-        // Default slice value is 10e-7; scaled UI = 10e-7 × 1e3 ≈ 0
-        auto [leak, leakVal] = addSliderRow(grpLay, "Leak", 0, 999,
-            slice ? static_cast<int>(slice->nr1Leakage() * 1e3) : 0,
-            tr("LMS leakage factor. UI units × 1e-3 = WDSP domain value. "
-               "Default 0 (= 10e-7 WDSP)."));
+        // Taps, Delay, Gain and Leak: Thetis's NR spinboxes (ranges,
+        // defaults and the gain x 1e-6 / leak x 1e-3 conversion) from
+        // ControlRanges.h, the table the VFO flag's NR1 quick controls read.
+        // Tooltips from Thetis setup.designer.cs:43440-43551 [v2.10.3.15].
+        using namespace ControlRanges;
+        const auto nr1Row = [&](const NrControl& control, double current,
+                                const QString& tooltip) {
+            return addSliderRow(grpLay, QString::fromUtf8(control.label),
+                                static_cast<int>(control.min), static_cast<int>(control.max),
+                                nrSliderFromValue(control, current), tooltip);
+        };
+        auto [taps, tapsVal] = nr1Row(kNr1Taps, slice ? slice->nr1Taps() : kNr1Taps.defaultValue,
+            tr("Determines the length of the NR computed filter."));
+        auto [delay, delayVal] = nr1Row(kNr1Delay,
+            slice ? slice->nr1Delay() : kNr1Delay.defaultValue,
+            tr("Determines how far back you look in the signal before you begin to "
+               "compute a coherent signal enhancement filter."));
+        auto [gain, gainVal] = nr1Row(kNr1Gain, slice ? slice->nr1Gain() : kNr1Gain.defaultValue,
+            tr("Determines the adaptation rate of the filter."));
+        auto [leak, leakVal] = nr1Row(kNr1Leak,
+            slice ? slice->nr1Leakage() : kNr1Leak.defaultValue,
+            tr("Determines the adaptation rate of the filter."));
 
         // Position radio
         auto [preRdo, postRdo] = addPositionRow(grpLay);
@@ -802,14 +797,14 @@ NrAnfSetupPage::NrAnfSetupPage(RadioModel* model, QWidget* parent)
 
             connect(gain, &QSlider::valueChanged,
                     slice, [slice](int v) {
-                // UI × 1e-6 → WDSP domain (matching VfoWidget Task 8 scaling).
-                slice->setNr1Gain(static_cast<double>(v) * 1e-6);
+                // Slider x 1e-6 to the WDSP domain, as Thetis converts it.
+                slice->setNr1Gain(ControlRanges::nrValueFromSlider(ControlRanges::kNr1Gain, v));
             });
 
             connect(leak, &QSlider::valueChanged,
                     slice, [slice](int v) {
-                // UI × 1e-3 → WDSP domain (matching VfoWidget Task 8 scaling).
-                slice->setNr1Leakage(static_cast<double>(v) * 1e-3);
+                // Slider x 1e-3 to the WDSP domain, as Thetis converts it.
+                slice->setNr1Leakage(ControlRanges::nrValueFromSlider(ControlRanges::kNr1Leak, v));
             });
 
             connect(preRdo, &QRadioButton::toggled, slice, [slice](bool checked) {
@@ -828,10 +823,11 @@ NrAnfSetupPage::NrAnfSetupPage(RadioModel* model, QWidget* parent)
             });
             connect(slice, &SliceModel::nr1GainChanged, gain, [gain](double v) {
                 QSignalBlocker b(gain);
-                gain->setValue(std::min(999, static_cast<int>(v * 1e6)));
+                gain->setValue(ControlRanges::nrSliderFromValue(ControlRanges::kNr1Gain, v));
             });
             connect(slice, &SliceModel::nr1LeakageChanged, leak, [leak](double v) {
-                QSignalBlocker b(leak); leak->setValue(static_cast<int>(v * 1e3));
+                QSignalBlocker b(leak);
+                leak->setValue(ControlRanges::nrSliderFromValue(ControlRanges::kNr1Leak, v));
             });
             connect(slice, &SliceModel::nr1PositionChanged, preRdo,
                     [preRdo, postRdo](NrPosition p) {

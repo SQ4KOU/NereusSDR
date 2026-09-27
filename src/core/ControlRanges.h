@@ -39,9 +39,16 @@
 //               Thetis cites restamped against v2.10.3.15 (R-IOS-18,
 //               R-IOS-27, R-IOS-06, R-R3-08). J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-27: The noise-reduction controls start here with NR1, its
+//               ranges and defaults corrected to Thetis's NR spinboxes and
+//               their SetRXAANRVals conversion (R-IOS-06, R-IOS-27). J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include <array>
+#include <cmath>
+#include <cstddef>
 #include <cstdint>
 
 namespace NereusSDR::ControlRanges {
@@ -342,6 +349,133 @@ inline constexpr int kDisplayWaterfallAveragingDefault = 0;
 inline constexpr const char* kDisplayWaterfallAvgTimeKey = "DisplayWaterfallAverageTimeMs";
 inline constexpr const char* kDisplayWaterfallAvgTimeLabel = "WF Avg Time";
 inline constexpr int kDisplayWaterfallAvgTimeDefaultMs = 120;
+
+// ── Noise reduction ───────────────────────────────────────────────────────
+//
+// The VFO flag's noise-reduction quick controls (right-click on an NR
+// button) and the Setup > DSP > NR/ANF tabs that share their ranges. Each
+// control names the SliceModel property it writes, the popup's label and
+// how the control maps to the property:
+//
+//   slider  min, max, step are slider units; the property's value is
+//           slider x scale; the readout beside it is slider / divide to
+//           `decimals` places, then `suffix`. `defaultValue` is a new
+//           slice's value in the property's own units; `reset` is the
+//           slider value the popup's Reset button restores (kNrNoReset
+//           when the popup offers none of its own).
+//   switch  on or off; `defaultValue` is 1 for on.
+//   choice  one of `options` (each id the property's enum value);
+//           `defaultValue` is the default id.
+
+enum class NrControlKind { Slider, Switch, Choice };
+
+/// One item of a noise-reduction choice: `id` is the property's value.
+struct NrChoiceItem {
+    int id;
+    const char* label;
+};
+
+/// The Reset value of a control whose popup has no Reset of its own.
+inline constexpr int kNrNoReset = -2147483647 - 1;
+
+/// One noise-reduction control, as the quick controls draw it.
+struct NrControl {
+    NrControlKind kind;
+    const char* property;
+    const char* label;
+    double min;
+    double max;
+    double step;
+    double scale;
+    int divide;
+    int decimals;
+    const char* suffix;
+    double defaultValue;
+    int reset;
+    const NrChoiceItem* options;
+    std::size_t optionCount;
+};
+
+constexpr NrControl nrSlider(const char* property, const char* label, double min, double max,
+                             double step, double scale, int divide, int decimals,
+                             const char* suffix, double defaultValue,
+                             int reset = kNrNoReset) noexcept
+{
+    return NrControl{NrControlKind::Slider, property, label, min, max, step, scale, divide,
+                     decimals, suffix, defaultValue, reset, nullptr, 0};
+}
+
+constexpr NrControl nrSwitch(const char* property, const char* label, bool defaultOn) noexcept
+{
+    return NrControl{NrControlKind::Switch, property, label, 0, 1, 1, 1, 1, 0, "",
+                     defaultOn ? 1.0 : 0.0, kNrNoReset, nullptr, 0};
+}
+
+template <std::size_t N>
+constexpr NrControl nrChoice(const char* property, const char* label,
+                             const std::array<NrChoiceItem, N>& options, int defaultId) noexcept
+{
+    return NrControl{NrControlKind::Choice, property, label, 0, 0, 1, 1, 1, 0, "",
+                     double(defaultId), kNrNoReset, options.data(), N};
+}
+
+/// The slider position that shows `value` (property units).
+inline int nrSliderFromValue(const NrControl& control, double value) noexcept
+{
+    return static_cast<int>(std::lround(value / control.scale));
+}
+
+/// The property value slider position `position` writes.
+inline double nrValueFromSlider(const NrControl& control, int position) noexcept
+{
+    return double(position) * control.scale;
+}
+
+// Pre-AGC or Post-AGC (NrPosition's values), the NR1, NR3 and NNR position
+// choice, Post-AGC by default. Thetis's NR starts Post-AGC:
+// From Thetis Project Files/Source/Console/radio.cs:1626 [v2.10.3.15]
+//   private int rx_anr_position = 1;
+inline constexpr std::array<NrChoiceItem, 2> kNrPositions{{
+    {0, "Pre-AGC"},
+    {1, "Post-AGC"},
+}};
+inline constexpr int kNrPositionDefault = 1;
+
+// NR1 (WDSP ANR). Thetis's NR spinboxes, in their own units:
+// From Thetis Project Files/Source/Console/setup.designer.cs:43418-43557 [v2.10.3.15]
+//   this.udLMSNRLeak.Maximum = 1000;   this.udLMSNRLeak.Minimum = 1;   Value = 100
+//   this.udLMSNRgain.Maximum = 1000;   this.udLMSNRgain.Minimum = 1;   Value = 100
+//   this.udLMSNRdelay.Maximum = 1023;  this.udLMSNRdelay.Minimum = 1;  Value = 16
+//   this.udLMSNRtaps.Maximum = 1024;   this.udLMSNRtaps.Minimum = 1;   Value = 64
+//   (each Increment = 1)
+// and what Thetis hands WDSP for them (SetRXAANRVals takes the gain and
+// leak as they are, third_party/wdsp/src/anr.c: two_mu = gain, gamma =
+// leakage):
+// From Thetis Project Files/Source/Console/setup.cs:8573-8586 [v2.10.3.15]
+//   console.radio.GetDSPRX(0, 0).SetNRVals(
+//       (int)udLMSNRtaps.Value,
+//       (int)udLMSNRdelay.Value,
+//       1e-6 * (double)udLMSNRgain.Value,
+//       1e-3 * (double)udLMSNRLeak.Value);
+// Thetis runs that handler from ForceAllEvents when Setup loads
+// (setup.cs:2419 [v2.10.3.15]), so the spinbox defaults replace radio.cs's
+// field initialisers (nr_gain = 16e-4, nr_leak = 10e-7, radio.cs:679-681
+// [v2.10.3.15]) before anything runs.
+inline constexpr double kNr1GainScale = 1e-6;
+inline constexpr double kNr1LeakScale = 1e-3;
+inline constexpr NrControl kNr1Taps =
+    nrSlider("nr1Taps", "Taps", 1, 1024, 1, 1, 1, 0, "", 64);
+inline constexpr NrControl kNr1Delay =
+    nrSlider("nr1Delay", "Delay", 1, 1023, 1, 1, 1, 0, "", 16);
+inline constexpr NrControl kNr1Gain =
+    nrSlider("nr1Gain", "Gain", 1, 1000, 1, kNr1GainScale, 1, 0, "", 100 * kNr1GainScale);
+inline constexpr NrControl kNr1Leak =
+    nrSlider("nr1Leakage", "Leak", 1, 1000, 1, kNr1LeakScale, 1, 0, "", 100 * kNr1LeakScale);
+inline constexpr NrControl kNr1Position =
+    nrChoice("nr1Position", "Position", kNrPositions, kNrPositionDefault);
+inline constexpr std::array<NrControl, 5> kNr1Controls{
+    kNr1Taps, kNr1Delay, kNr1Gain, kNr1Leak, kNr1Position,
+};
 
 // ── Slice colours ─────────────────────────────────────────────────────────
 

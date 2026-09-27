@@ -98,6 +98,11 @@
 //   2026-09-26 : iPhone app plan Task 78 (R-IOS-02, R-IOS-30):
 //                 setInUseByRadio (ruling 8.11). J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-27 : NR1's quick controls read ControlRanges.h, their ranges
+//                 and defaults corrected to Thetis's NR spinboxes (taps
+//                 1-1024, delay 1-1023, gain and leak 1-1000, defaults
+//                 64 / 16 / 100 / 100; R-IOS-06, R-IOS-27). J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -393,6 +398,43 @@ QString rxBypassToolTip()
     return QStringLiteral(
         "RX Bypass on TX: routes the receive path through the bypass relay "
         "while transmitting.");
+}
+
+// A noise-reduction slider's readout: slider / divide to its places, then
+// its suffix (ControlRanges::NrControl).
+QString nrReadout(const ControlRanges::NrControl& control, int position)
+{
+    return QString::number(double(position) / control.divide, 'f', control.decimals)
+        + QString::fromUtf8(control.suffix);
+}
+
+// One noise-reduction slider in `popup`, drawn from its ControlRanges entry:
+// positioned at `current` (property units), writing slider x scale, its
+// Reset (when the entry has one) restoring the entry's reset position.
+void addNrSlider(DspParamPopup* popup, const ControlRanges::NrControl& control,
+                 double current, std::function<void(double)> write,
+                 const QString& tooltip = QString())
+{
+    const ControlRanges::NrControl entry = control;
+    popup->addSlider(QString::fromUtf8(entry.label), static_cast<int>(entry.min),
+                     static_cast<int>(entry.max),
+                     ControlRanges::nrSliderFromValue(entry, current),
+                     [entry](int v) { return nrReadout(entry, v); },
+                     [entry, write = std::move(write)](int v) {
+                         write(ControlRanges::nrValueFromSlider(entry, v));
+                     },
+                     tooltip,
+                     entry.reset == ControlRanges::kNrNoReset ? INT_MIN : entry.reset);
+}
+
+// A noise-reduction choice's labels, in its order.
+QStringList nrOptionLabels(const ControlRanges::NrControl& control)
+{
+    QStringList labels;
+    for (std::size_t i = 0; i < control.optionCount; ++i) {
+        labels.append(QString::fromUtf8(control.options[i].label));
+    }
+    return labels;
 }
 } // namespace
 
@@ -3730,27 +3772,19 @@ void VfoWidget::showNr1Popup(const QPoint& globalPos)
     if (!m_slice) { return; }
     auto* p = new DspParamPopup(this);
 
-    // NR1 (ANR — Adaptive LMS).
-    // From Thetis setup.cs udDSPNR1Taps/udDSPNR1Delay/udDSPNR1Gain/udDSPNR1Leak ranges
-    // [v2.10.3.13].  Gain/Leakage stored as WDSP-domain values; sliders use UI units.
-    p->addSlider(QStringLiteral("Taps"), 16, 128, m_slice->nr1Taps(),
-                 [](int v) { return QString::number(v); },
-                 [this](int v) { if (m_slice) m_slice->setNr1Taps(v); });
-    p->addSlider(QStringLiteral("Delay"), 1, 256, m_slice->nr1Delay(),
-                 [](int v) { return QString::number(v); },
-                 [this](int v) { if (m_slice) m_slice->setNr1Delay(v); });
-    // Gain: UI units = WDSP value / 1e-6. Slider range 0-999 = 0.0-0.000999 WDSP.
-    const int uiGain = static_cast<int>(m_slice->nr1Gain() / 1e-6);
-    p->addSlider(QStringLiteral("Gain"), 0, 999, uiGain,
-                 [](int v) { return QString::number(v); },
-                 [this](int v) { if (m_slice) m_slice->setNr1Gain(v * 1e-6); });
-    // Leakage: UI units = WDSP value / 1e-3. Slider range 0-999 = 0.0-0.999e-3 WDSP.
-    const int uiLeak = static_cast<int>(m_slice->nr1Leakage() / 1e-3);
-    p->addSlider(QStringLiteral("Leak"), 0, 999, uiLeak,
-                 [](int v) { return QString::number(v); },
-                 [this](int v) { if (m_slice) m_slice->setNr1Leakage(v * 1e-3); });
-    p->addRadioGroup(QStringLiteral("Position"),
-                     {QStringLiteral("Pre-AGC"), QStringLiteral("Post-AGC")},
+    // NR1 (ANR — Adaptive LMS). Thetis's NR spinbox ranges and defaults and
+    // its SetRXAANRVals conversion (gain x 1e-6, leak x 1e-3), from
+    // ControlRanges.h. Gain and leak are stored in the WDSP domain.
+    using namespace ControlRanges;
+    addNrSlider(p, kNr1Taps, m_slice->nr1Taps(),
+                [this](double v) { if (m_slice) m_slice->setNr1Taps(static_cast<int>(std::lround(v))); });
+    addNrSlider(p, kNr1Delay, m_slice->nr1Delay(),
+                [this](double v) { if (m_slice) m_slice->setNr1Delay(static_cast<int>(std::lround(v))); });
+    addNrSlider(p, kNr1Gain, m_slice->nr1Gain(),
+                [this](double v) { if (m_slice) m_slice->setNr1Gain(v); });
+    addNrSlider(p, kNr1Leak, m_slice->nr1Leakage(),
+                [this](double v) { if (m_slice) m_slice->setNr1Leakage(v); });
+    p->addRadioGroup(QString::fromUtf8(kNr1Position.label), nrOptionLabels(kNr1Position),
                      static_cast<int>(m_slice->nr1Position()),
                      [this](int v) {
                          if (m_slice) m_slice->setNr1Position(static_cast<NereusSDR::NrPosition>(v));
