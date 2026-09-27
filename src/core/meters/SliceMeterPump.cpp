@@ -211,6 +211,11 @@ void SliceMeterPump::poll()
     // From Thetis console.cs:21040 [v2.10.3.13] -- RXOffset = RXPreampOffset
     // + RXCalibrationOffset. Same cumulative cal term MeterPoller.cpp's
     // poll()/pollSMeter() apply, read once per tick here too.
+    // RXCalibrationOffset, which RXOffset sums, ends its rx2 6 m gain
+    // branch on this line (that branch is not ported: rxMeterOffsetDb()
+    // applies the meter cal only, see its comment in RadioModel.h):
+    //   console.cs:21035 [v2.10.3.13]
+    //   HardwareSpecific.Model == HPSDRModel.ANAN_G2_1K || HardwareSpecific.Model == HPSDRModel.REDPITAYA) //DH1KLM
     const double rxOffsetDb = m_radioModel->rxMeterOffsetDb();
 
     // MaxBin is a single global reading (FFTEngine display channel 0 --
