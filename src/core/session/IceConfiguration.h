@@ -202,6 +202,17 @@ public:
                                     std::function<void(const HostFamilies&)> done,
                                     int timeoutMs = kHostLookupTimeoutMs);
 
+    /// These settings with no relay server of this end's own: the same
+    /// STUN server, the far end's relay candidates still accepted where the
+    /// relay is allowed. For media whose control connection found a path
+    /// without the relay (the Task 28 safety review's Important 4).
+    IceConfiguration withoutOwnRelay() const
+    {
+        IceConfiguration copy = *this;
+        copy.m_relays.clear();
+        return copy;
+    }
+
     std::optional<IceServerAddress> stunServer() const { return m_stun; }
     QList<IceRelayServer> relayServers() const { return m_relays; }
     bool relayAllowed() const { return m_relayAllowed; }

@@ -5477,9 +5477,15 @@ is made and how messages travel on it (`DataChannelTransport`,
   rendezvous; the session never passes through it.
 - The media connection (section 11) of such a session is a second peer
   connection, negotiated in `media.control` exactly as section 11 says, with
-  the same ICE settings as the control connection: the same STUN server and
-  the same relay credentials, each end allocating on its chosen relay host,
-  and candidates of every type. The desktop allows its connection stage
+  the control connection's ICE settings: the same STUN server, candidates
+  of every type, and the relay only where the control connection needed
+  it. An end whose control connection's selected pair goes through a relay
+  (either end's relay candidate, or the far end's relay learned as
+  peer-reflexive) allocates on its chosen relay host for media too; an end
+  whose control path is direct gathers no relay candidate for media, so a
+  direct session holds one relay allocation at each end (its control
+  connection's), not two. Each end still accepts the far end's relay
+  candidates when the relay is allowed. The desktop allows its connection stage
   23.5 s more for the gathering (`RemoteMediaController`). A session over a
   WebSocket keeps host candidates only.
 - When a connection ends, each end gives each of its relay allocations back

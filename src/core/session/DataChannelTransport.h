@@ -216,6 +216,29 @@ public:
     std::optional<MediaIcePath> selectedPath() const;
     /// The ICE settings it was started with, the relay included once known.
     std::optional<IceConfiguration> iceConfiguration() const { return m_options.ice; }
+    /// The ICE settings the session's media connection uses (the Task 28
+    /// safety review's Important 4): the same STUN server, and this end's
+    /// relay only when this connection's selected path goes through a
+    /// relay, so a direct session takes no relay allocation for its media.
+    /// The relay is kept while no path is selected. None without
+    /// Options::ice (not through the service).
+    std::optional<IceConfiguration> mediaIceConfiguration() const
+    {
+        return mediaIceFor(m_options.ice, selectedPath());
+    }
+    /// mediaIceConfiguration()'s rule, apart from any connection.
+    static std::optional<IceConfiguration> mediaIceFor(
+        const std::optional<IceConfiguration>& control,
+        const std::optional<MediaIcePath>& controlPath)
+    {
+        if (!control) {
+            return std::nullopt;
+        }
+        if (controlPath && !controlPath->relayed()) {
+            return control->withoutOwnRelay();
+        }
+        return control;
+    }
     Role role() const { return m_options.role; }
 
     // ---- SessionTransport ----

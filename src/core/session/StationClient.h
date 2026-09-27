@@ -583,9 +583,11 @@ public:
     /// is retried like any other, through the service again.
     void connectThroughService(const QList<QUrl>& servers, const QString& stationRendezvousId,
                                const QByteArray& stationIdentityFingerprint);
-    /// The ICE settings of the session's connection when it came through
-    /// the service (its media uses the same STUN server and relay); none
-    /// for a WebSocket session.
+    /// The ICE settings of the session's media when the session came
+    /// through the service: the control connection's STUN server, and its
+    /// relay only when the control connection's path is relayed
+    /// (DataChannelTransport::mediaIceConfiguration()); none for a
+    /// WebSocket session.
     std::optional<IceConfiguration> sessionIceConfiguration() const;
     /// Test seam: the service attempt's bound
     /// (RendezvousDialer::kDialDeadlineMs).

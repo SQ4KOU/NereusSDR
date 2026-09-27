@@ -959,7 +959,7 @@ void StationClient::dialThroughService()
 std::optional<IceConfiguration> StationClient::sessionIceConfiguration() const
 {
     const auto* transport = qobject_cast<const DataChannelTransport*>(m_transport);
-    return transport != nullptr ? transport->iceConfiguration() : std::nullopt;
+    return transport != nullptr ? transport->mediaIceConfiguration() : std::nullopt;
 }
 
 void StationClient::setCachedAddressOpenTimeoutMs(int ms)

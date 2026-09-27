@@ -52,6 +52,7 @@
 #include "core/security/DeviceStore.h"
 #include "core/security/StationIdentity.h"
 #include "core/session/DataChannelTransport.h"
+#include "core/session/RendezvousWire.h"
 #include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
 #include "core/settings/SettingsProxy.h"
@@ -515,6 +516,57 @@ private slots:
         QVERIFY(core.server->hasAuthenticatedSession());
         window.disconnectFromStation(QStringLiteral("test done"));
         QTRY_VERIFY_WITH_TIMEOUT(!core.server->hasAuthenticatedSession(), 10000);
+    }
+
+    // Task 28 fix wave (review Important 4): media keeps this end's relay
+    // only when the control connection's path is relayed.
+    void mediaUsesTheRelayOnlyWhenTheControlPathIsRelayed()
+    {
+        IceConfiguration control = IceConfiguration::throughRendezvous(
+            {QStringLiteral("stun:192.0.2.1:3478")}, true, AddressFamilies{true, false},
+            HostFamilies{});
+        RendezvousWire::Turn turn;
+        turn.urls = {QStringLiteral("turn:192.0.2.1:3478?transport=udp")};
+        turn.username = QStringLiteral("1790000000:abcdefghijklmnopqrstuvwxyz");
+        turn.password = QStringLiteral("secret");
+        QCOMPARE(control.setRelay(turn, 1), 1);
+
+        const auto path = [](const QString& local, const QString& remote) {
+            MediaIcePath p;
+            p.localType = local;
+            p.remoteType = remote;
+            p.localAddress = QStringLiteral("198.51.100.2");
+            p.remoteAddress = QStringLiteral("203.0.113.9");
+            p.remotePort = 50000;
+            return std::optional<MediaIcePath>(p);
+        };
+        // Direct (host or server-reflexive): no relay of this end's own.
+        for (const auto& direct : {path(QStringLiteral("host"), QStringLiteral("host")),
+                                   path(QStringLiteral("srflx"), QStringLiteral("prflx"))}) {
+            const std::optional<IceConfiguration> media =
+                DataChannelTransport::mediaIceFor(control, direct);
+            QVERIFY(media.has_value());
+            QCOMPARE(media->relayServers().size(), 0);
+            QCOMPARE(media->stunServer(), control.stunServer());
+            QVERIFY(media->relayAllowed());
+            QVERIFY(media->relayKnown());
+        }
+        // Relayed at either end, or through the far end's relay: kept.
+        std::optional<MediaIcePath> viaFarRelay = path(QStringLiteral("srflx"), QStringLiteral("prflx"));
+        viaFarRelay->farEndRelays.append(qMakePair(QStringLiteral("203.0.113.9"), quint16(50000)));
+        for (const auto& relayed : {path(QStringLiteral("relay"), QStringLiteral("host")),
+                                    path(QStringLiteral("host"), QStringLiteral("relay")),
+                                    viaFarRelay}) {
+            const std::optional<IceConfiguration> media =
+                DataChannelTransport::mediaIceFor(control, relayed);
+            QVERIFY(media.has_value());
+            QCOMPARE(media->relayServers(), control.relayServers());
+        }
+        // No path yet: kept. Not through the service: none.
+        QCOMPARE(DataChannelTransport::mediaIceFor(control, std::nullopt)->relayServers().size(), 1);
+        QVERIFY(!DataChannelTransport::mediaIceFor(std::nullopt, path(QStringLiteral("host"),
+                                                                     QStringLiteral("host")))
+                     .has_value());
     }
 
     // ── A session over the channel ─────────────────────────────────────

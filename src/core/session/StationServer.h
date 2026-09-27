@@ -843,9 +843,11 @@ public:
     bool mediaAvailable() const;
     bool mediaAvailable(quint64 epoch) const;
     /// iPhone app plan Task 28 (R-IOS-16): the ICE settings of the session
-    /// `epoch`'s connection when it came through the remote access service
-    /// (a DataChannelTransport): its media connection uses the same STUN
-    /// server and relay. None for a WebSocket session.
+    /// `epoch`'s media when the session came through the remote access
+    /// service (a DataChannelTransport): the control connection's STUN
+    /// server, and its relay only when the control connection's path is
+    /// relayed (DataChannelTransport::mediaIceConfiguration(), the safety
+    /// review's Important 4). None for a WebSocket session.
     std::optional<IceConfiguration> sessionIceConfiguration(quint64 epoch) const;
     bool remoteWidebandAvailable() const;
     bool remoteWidebandAvailable(quint64 epoch) const;

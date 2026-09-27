@@ -2469,12 +2469,20 @@ private slots:
         const StationConnectionAttempt attempt = window.connectionAttempt();
         QCOMPARE(attempt.tries.size(), 1);
         QCOMPARE(attempt.tries.at(0).outcome, StationConnectionAttempt::Outcome::Connected);
+        // Media's settings: the control connection found a path on this
+        // computer without the relay, so media takes no relay allocation at
+        // either end (the Task 28 fix wave, Important 4); both control
+        // allocations were made (ALLOCATED 2 below).
         const std::optional<IceConfiguration> ice = window.sessionIceConfiguration();
         QVERIFY(ice.has_value());
         QVERIFY(ice->relayKnown());
-        QCOMPARE(ice->relayServers().size(), 1);
+        QVERIFY(ice->relayAllowed());
+        QVERIFY(ice->stunServer().has_value());
+        QCOMPARE(ice->relayServers().size(), 0);
         const quint64 epoch = core.server->mediaSessionEpoch();
-        QVERIFY(core.server->sessionIceConfiguration(epoch).has_value());
+        const std::optional<IceConfiguration> coreIce = core.server->sessionIceConfiguration(epoch);
+        QVERIFY(coreIce.has_value());
+        QCOMPARE(coreIce->relayServers().size(), 0);
         QTRY_VERIFY_WITH_TIMEOUT(service.turnOutput().contains(QLatin1String("ALLOCATED 2")),
                                  10000);
 

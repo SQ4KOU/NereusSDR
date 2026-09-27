@@ -6792,7 +6792,7 @@ bool StationServer::mediaAvailable() const
 std::optional<IceConfiguration> StationServer::sessionIceConfiguration(quint64 epoch) const
 {
     const auto* transport = qobject_cast<const DataChannelTransport*>(mediaSessionFor(epoch));
-    return transport != nullptr ? transport->iceConfiguration() : std::nullopt;
+    return transport != nullptr ? transport->mediaIceConfiguration() : std::nullopt;
 }
 
 bool StationServer::mediaAvailable(quint64 epoch) const

@@ -1557,8 +1557,9 @@ bool DaemonMediaController::handleStart(const QJsonObject& control)
     });
     const bool offerLossless = declaresAudioProfile && m_audioLosslessAllowed;
     // iPhone app plan Task 28 (R-IOS-16): a session through the remote
-    // access service makes its media connection with the same ICE settings
-    // (STUN server and relay) as its control connection.
+    // access service makes its media connection with its control
+    // connection's STUN server, and its relay only when the control path
+    // is relayed (the fix wave, Important 4).
     peer->setIceConfiguration(m_server ? m_server->sessionIceConfiguration(m_epoch)
                                        : std::nullopt);
     if (!peer->start(IMediaTransport::Role::Offerer, connectionId,
