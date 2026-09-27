@@ -322,13 +322,12 @@ inline constexpr int kDisplayAvgTimeMaxMs = 9999;
 inline constexpr int kDisplayAvgTimeStepMs = 10;
 inline constexpr int kDisplaySpectrumAvgTimeDefaultMs = 30;
 
-// Decimation. NereusSDR-native range 1 to 32 (FFTEngine::setDecimation and
-// the Core's request check); Thetis's udDisplayDecimation spans 1 to 16 and
-// starts at 1 (setup.designer.cs:33834-33853 [v2.10.3.15]). The desktop
+// Decimation matches Thetis by JJ's 2026-09-27 ruling: 1 to 16, step 1,
+// starting at 1 (setup.designer.cs:33828-33853 [v2.10.3.15]). The desktop
 // keeps no setting for it: each window's engines hold it.
 inline constexpr const char* kDisplayDecimationLabel = "Decimation";
 inline constexpr int kDisplayDecimationMin = 1;
-inline constexpr int kDisplayDecimationMax = 32;
+inline constexpr int kDisplayDecimationMax = 16;
 inline constexpr int kDisplayDecimationStep = 1;
 inline constexpr int kDisplayDecimationDefault = 1;
 

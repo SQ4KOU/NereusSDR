@@ -32,6 +32,11 @@
 //                                    Anthropic Claude Code.
 // =================================================================
 
+// Modification history (NereusSDR):
+// 2026-09-27: Use the approved shared decimation bounds.
+// J.J. Boyd (KG4VCF), AI-assisted implementation via OpenAI Codex.
+
+#include "core/ControlRanges.h"
 #include "core/spectrum/FftEnginePool.h"
 
 #include "core/audio/RealtimeAudioPriority.h"
@@ -113,7 +118,8 @@ void FftEnginePool::setConfigForNewStreams(const FftPoolConfig& cfg)
 
 void FftEnginePool::setDecimation(int factor)
 {
-    if (factor < 1 || factor > 32) { return; }
+    if (factor < ControlRanges::kDisplayDecimationMin
+        || factor > ControlRanges::kDisplayDecimationMax) { return; }
     m_decimation = factor;
     for (FFTEngine* engine : std::as_const(m_engines)) {
         if (engine) {

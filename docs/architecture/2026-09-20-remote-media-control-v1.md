@@ -247,7 +247,7 @@ window change unsubscribes all old-window endpoints before requesting any
 replacement, so shared sources can adopt the new window.
 
 Capability `spectrumGrantVersion=2` (parity Task 17, R-R3-01) adds one
-optional field, `decimation`: a whole number 1 to 32, the desktop's Setup >
+optional field, `decimation`: a whole number 1 to 16, the desktop's Setup >
 Display > Rendering > Decimation. The endpoint's engine passes only every
 Nth I/Q pair to its FFT (`FFTEngine::setDecimation`), as a local window's
 engine does. It follows the FFT size's sharing rule: a request sets its

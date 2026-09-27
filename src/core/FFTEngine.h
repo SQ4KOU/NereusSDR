@@ -285,8 +285,8 @@ private:
     std::atomic<int>    m_targetFps{30};
     std::atomic<bool>   m_transformsFollowFrameRate{false};
     // Thetis's udDisplayDecimation (setup.designer.cs:33732 [v2.10.3.13])
-    // spans 1..16 (setup.designer.cs:33834 [v2.10.3.15]); NereusSDR extends
-    // it to 1..32 as its own range. 1 = no decimation (pass every sample).
+    // spans 1..16 (setup.designer.cs:33834 [v2.10.3.15]); NereusSDR now uses
+    // that shared range too. 1 = no decimation (pass every sample).
     std::atomic<int>    m_decimation{1};
 
     // Internal state (only accessed on worker thread)

@@ -36,7 +36,7 @@ struct DaemonSpectrumSourceConfig {
     /// frame rate it changes how far the window moves, not what a bin
     /// represents.
     bool transformsFollowFrameRate{false};
-    /// Parity Task 17 (R-R3-01): the engine's input decimation, 1 to 32
+    /// Parity Task 17 (R-R3-01): the engine's input decimation, 1 to 16
     /// (FFTEngine::setDecimation, Setup > Display > Rendering > Decimation):
     /// only every Nth I/Q pair reaches the FFT. A change renews the input
     /// history, as the FFT size does.

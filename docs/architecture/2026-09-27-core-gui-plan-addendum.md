@@ -404,7 +404,9 @@ control tops out at 16, so NereusSDR's range is wider than the source it was por
 - Ruling: JJ approved on 2026-09-27: "Match Thetis: 1–16 (recommended)".
 - Status: implementation in `codex/display-decimation-parity`; the UI, catalogue, local FFT
   engines and Core media request validation share the same bounds. Boundary regression
-  first failed because 17 was accepted. Verification in progress.
+  first failed because 17 was accepted. Signed implementation `87f59425b` passed five focused
+  tests including link conformance in 45.43 s; the integrated trunk passed the same
+  five targets in 41.99 s. Generated protocol tables and diff checks pass.
 - Plan: R-IOS-06, R-IOS-27 (catalogue ranges task).
 
 ### G-02: Several noise-reduction ranges and new-slice defaults differ from Thetis
@@ -440,8 +442,10 @@ colours for the same signal.
   rows arrive calibrated from the Core), so local and remote differ; fixing it moves every
   operator's receive colours."
 - Ruling: JJ approved on 2026-09-27: "Apply calibration in both windows (recommended)".
-- Status: queued for implementation; local receive waterfall will apply the same calibration
-  as the remote path. The colour shift is explicitly approved.
+- Status: signed implementation `f7af7860f` applies local receive calibration once before
+  colours, threshold tracking and 3D history. Six focused tests passed in 7.83 s, including
+  positive/negative offsets and remote/TX no-double-calibration checks. Integration is pending.
+  The colour shift is explicitly approved.
 - Plan: parity Task 31 (A11, R-R3-49).
 
 ## Continuation findings and verification, 2026-09-27
@@ -470,6 +474,9 @@ colours for the same signal.
   Evidence includes source/speaker timer delays and receiver worker wake gaps up to 201.5 ms.
   These are open findings, not waived tests. Separate independently paced source/device
   measurement is needed to distinguish harness starvation from receiver scheduling.
+  Signed diagnostics `944311ba` are integrated as `2ebb270`: they capture source lateness,
+  device/worker wake gaps and first excess concealment without a later finite-source timeout
+  hiding it. The exact integrated case passed in 4.098 s; this does not close the load finding.
   Pairing's original slow phase and
   the 25.81 ms transmit timer gap (25 ms bound) remain unresolved. A standalone passing run
   does not close either finding. Suggested next investigation: phase measurements for pairing
@@ -492,7 +499,9 @@ colours for the same signal.
 - Status: signed implementation `50fcf932` built and verified in trunk: lifetime, rendezvous
   and provenance checks passed 4/4 in 67.90 s. Phone both-end interop passed all seven tests
   plus three release repeats with a staged copy of the verified helper. No updated Core has
-  yet been installed on a radio host. An earlier build was found to have skipped vendor patches despite
+  yet been installed on a radio host. Signed trunk `c2b00a54` has a built Rock package
+  that passes the isolated 15-second startup check; Linux full-suite verification is running.
+  An earlier build was found to have skipped vendor patches despite
   a successful tool exit. That evidence was withdrawn. The patch helper now rejects skipped
   application and materialized hashes are checked. No build from that earlier run was deployed.
 - Plan: R5 remote access; phone relay cleanup and replacement.
@@ -511,6 +520,28 @@ colours for the same signal.
   working tree (2/2, 25.35 s). Only Core code is included; the phone's final-frame receive
   change remains phone-owned.
 - Plan: R-IOS-08; pairing interoperability.
+
+### G-36: Late packets from a retired media peer bypass duplicate filtering
+
+- Evidence: R5 load testing reproduced a duplicate packet after replacement. The overlap
+  filter can become inactive immediately at promotion while the old peer remains alive for
+  two seconds. A second replacement can also overwrite the retiring peer owner.
+- Ruling: correctness repair within JJ's approved R5 replacement work; no watchdog or test
+  tolerance change. Preserve the current connection while retirement completes.
+- Status: keep filtering until the retired peer stops, defer another replacement and retry
+  the desired path afterward. Deterministic regression and loaded verification in progress.
+- Plan: R5 media replacement and recovery.
+
+### G-37: Local TCI I/Q labels every receiver as stream zero at 192 kHz
+
+- Evidence: the raw I/Q audit found the local TCI producer used only untagged stream zero
+  and a fixed 192 kHz rate despite the radio's actual binding and sample rate.
+- Ruling: existing local/remote parity requirement applies in both directions. Preserve
+  samples without resampling and report the actual supported receiver rate.
+- Status: signed local correction `4da887a0` maps receiver to its stream and current rate,
+  with focused nonzero-receiver/rate-change/refusal checks. Remote I/Q remains under
+  implementation and is not advertised as available yet.
+- Plan: remote-window parity TCI raw I/Q.
 
 ## How this addendum is kept
 

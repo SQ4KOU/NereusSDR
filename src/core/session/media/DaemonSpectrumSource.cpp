@@ -4,6 +4,11 @@
 // no-port-check: NereusSDR-original. See DaemonSpectrumSource.h.
 // =================================================================
 
+// Modification history (NereusSDR):
+// 2026-09-27: Use the approved shared decimation bounds.
+// J.J. Boyd (KG4VCF), AI-assisted implementation via OpenAI Codex.
+
+#include "core/ControlRanges.h"
 #include "core/session/media/DaemonSpectrumSource.h"
 
 #include "core/FFTEngine.h"
@@ -345,7 +350,8 @@ bool DaemonSpectrumSource::isValidConfig(
         || config.fft.windowType >= static_cast<int>(WindowFunction::Count)
         || !std::isfinite(config.fft.hzPerBinTarget)
         || config.fft.hzPerBinTarget < 0.0
-        || config.decimation < 1 || config.decimation > 32) {
+        || config.decimation < ControlRanges::kDisplayDecimationMin
+        || config.decimation > ControlRanges::kDisplayDecimationMax) {
         return false;
     }
     if (config.maxPendingIqFloats <= 0 || (config.maxPendingIqFloats % 2) != 0) {

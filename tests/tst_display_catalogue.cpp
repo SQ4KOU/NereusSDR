@@ -192,7 +192,7 @@ private slots:
         QCOMPARE(page.m_averagingTimeSpin->singleStep(), 10);
         QCOMPARE(formLabel(page.m_averagingTimeSpin), QStringLiteral("Spectrum Avg Time"));
         QCOMPARE(page.m_decimationSpin->minimum(), 1);
-        QCOMPARE(page.m_decimationSpin->maximum(), 32);
+        QCOMPARE(page.m_decimationSpin->maximum(), 16);
         QCOMPARE(page.m_decimationSpin->value(), 1);
         QCOMPARE(formLabel(page.m_decimationSpin), QStringLiteral("Decimation"));
         QCOMPARE(groupTitle(page.m_decimationSpin), QStringLiteral("Rendering"));
