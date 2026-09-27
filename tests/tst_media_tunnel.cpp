@@ -418,6 +418,13 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(h.client.transmitState()->keyed()
                                      && h.client.transmitState()->tuning(), 5000);
         source.stop(); // half-duplex RX silence, while display remains active
+        // A tunnel selected after TX began must still shorten the control
+        // heartbeat. Reset the selection to model that path-settling edge.
+        h.client.setMediaTunnelInUse(false);
+        QCOMPARE(h.client.effectiveHeartbeatIntervalMs(),
+                 StationClient::kDefaultHeartbeatIntervalMs);
+        QTRY_COMPARE_WITH_TIMEOUT(h.client.effectiveHeartbeatIntervalMs(),
+                                  StationClient::kRelayedHeartbeatIntervalMs, 1500);
         QTest::qWait(RemoteMediaController::kMediaStallMs + 600);
         QCOMPARE(recovery.size(), 0);
         QCOMPARE(remoteMedia.mediaConnectionId(), mediaId);
@@ -438,16 +445,20 @@ private slots:
             QCOMPARE(recovery.size(), 0);
             QCOMPARE(remoteMedia.mediaConnectionId(), mediaId);
         } else {
-            // Normal state notifications while idle must not postpone an
-            // already armed RX stall clock. The Core sends time counters.
+            // Unrelated stateChanged notifications while idle must not
+            // postpone an already armed RX stall clock.
+            QSignalSpy unrelatedUpdates(h.client.transmitState(),
+                                        &TransmitState::stateChanged);
             QTimer unrelated;
             unrelated.setInterval(100);
             int counter = 0;
             QObject::connect(&unrelated, &QTimer::timeout, &unrelated, [&] {
-                h.client.transmitState()->applyStationValue("keyedForSeconds", ++counter);
+                const int sliceId = (++counter & 1) ? h.sliceB : h.sliceA;
+                h.client.transmitState()->applyStationValue("txSliceId", sliceId);
             });
             unrelated.start();
             QTRY_VERIFY_WITH_TIMEOUT(!recovery.isEmpty(), 6000);
+            QVERIFY(unrelatedUpdates.size() >= 10);
             QVERIFY2(rxSilence.elapsed() >= RemoteMediaController::kMediaStallMs
                          && rxSilence.elapsed() <= 5000,
                      qPrintable(QString::number(rxSilence.elapsed())));

@@ -1187,11 +1187,6 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
         if (!d->client || !d->peer || !wanted || !d->lastAudio.isValid()) {
             return;
         }
-        // The Core stops RX audio for the TX-bound slice while keyed. Only
-        // its negotiated txState can establish that this silence is expected.
-        // Keep the media connection and display alive; the independent TX
-        // keepalive watchdog continues to enforce its own deadline.
-        if (d->coreTransmitting()) { return; }
         // The tunnel counts only once ICE settled on it (a host pair on an
         // open network is not a slow path); the control heartbeat follows.
         const std::optional<MediaIcePath> path = d->peer->selectedPath();
@@ -1200,6 +1195,12 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
         const int rank = d->client->pathRank();
         const bool slowPath = rank == PathRacer::ServiceRelayed || rank == PathRacer::Floor
             || viaTunnel;
+        // The Core stops RX audio for the TX-bound slice while keyed. Only
+        // its negotiated txState can establish that this silence is expected.
+        // Keep the media connection and display alive; the independent TX
+        // keepalive watchdog continues to enforce its own deadline. Path
+        // tracking above must continue even during TX.
+        if (d->coreTransmitting()) { return; }
         if (slowPath && d->lastAudio.elapsed() > kMediaStallMs) {
             qCInfo(lcRemoteMedia) << "No audio from the Core for" << d->lastAudio.elapsed()
                                   << "ms on a relayed path; starting audio and display again";
