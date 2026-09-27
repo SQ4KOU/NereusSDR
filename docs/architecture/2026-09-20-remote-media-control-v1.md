@@ -519,9 +519,10 @@ frame bytes and sample units, and the endpoint's own cadence, so a lowered
 share (a lower `fps` asked) lowers the transmit frame rate as it does the
 receive one.
 
-**txState.** A Core at `txDisplayVersion` 1 also sends `highSwr` and
-`swrWindBackLatched` on the `txState` object (station link section 18.8),
-for the transmitting pan's high-SWR border.
+**txState.** `highSwr` and `swrWindBackLatched` came with this version on
+the `txState` object (station link section 18.8), for the transmitting
+pan's high-SWR border. They do not depend on it: every Core that sends
+`txState` sends them, whatever its `txDisplayVersion`.
 
 `DaemonMediaController` (`reconcileTransmitDisplay`,
 `trySendTransmitFrame`) is the Core's code; `tst_remote_tx_display` and

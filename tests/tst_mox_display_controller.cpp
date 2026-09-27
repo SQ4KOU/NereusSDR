@@ -977,6 +977,30 @@ private slots:
         }
         QCOMPARE(calls.count(QStringLiteral("refreshTransmitView")), 2);
     }
+    void coreWithoutTransmitDisplayStillSendsTheHighSwrState()
+    {
+        // The link document (section 18.8): txState carries highSwr and
+        // swrWindBackLatched from any Core that sends txState, whatever its
+        // txDisplayVersion. A Core with no transmit display still shows the
+        // border on the transmitting pan.
+        RemoteWindow window(/*withAnalyzer=*/false);
+        QVERIFY(window.connect());
+        QCOMPARE(window.client->capabilities().txDisplayVersion, 0);
+        QVERIFY(window.client->capabilities().txStateVersion >= 1);
+        SpectrumWidget* two = window.pan(QStringLiteral("two"));
+        window.key(true);
+        QTRY_VERIFY(window.controller->isKeyed());
+        window.station.swrProt().setEnabled(true);
+        window.station.swrProt().setWindBackEnabled(true);
+        for (int sample = 0; sample < 50 && !window.station.swrProt().highSwr(); ++sample) {
+            window.station.swrProt().ingest(50.0f, 30.0f, /*tuneActive=*/false);
+        }
+        QVERIFY(window.station.swrProt().highSwr());
+        QTRY_VERIFY_WITH_TIMEOUT(window.client->transmitState()->highSwr(), 5000);
+        QTRY_VERIFY(two->isHighSwrOverlayActive());
+        window.key(false);
+        QTRY_VERIFY(!window.controller->isKeyed());
+    }
 };
 
 QTEST_MAIN(TstMoxDisplayController)

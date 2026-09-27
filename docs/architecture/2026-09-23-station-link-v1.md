@@ -1149,9 +1149,10 @@ When a feature is off, its version is 0:
   carries `transmit`, and while the Core is keyed each of its displays on
   the pan hosting the transmitting slice shows the transmit analyzer's
   display instead of the receiver's (the media document's "Transmit
-  display"). With it `txState` also carries `highSwr` and
-  `swrWindBackLatched` (section 18.8). A window that does not declare it
-  gets today's wire: no `transmit`, and receive frames while keyed.
+  display"). A window that does not declare it gets today's wire: no
+  `transmit`, and receive frames while keyed. (`txState`'s `highSwr` and
+  `swrWindBackLatched`, section 18.8, came with this version but do not
+  depend on it: every Core that sends `txState` sends them.)
 
 - `sessionHolderVersion`: sent only at agreed minor 11, last, and only to
   a peer whose hello declared `sessionHolder` 1 with `deviceAuth` 1; any
@@ -5295,8 +5296,9 @@ two-tone use no microphone and are never stopped by it.
 iPhone app plan Task 39 (D14, R-IOS-13, R-IOS-21; spec section 5.5 items 5
 and 8). The `txState` object (`TransmitState`, `txStateVersion` 1; 2 adds
 the holder of transmit and `keyedForSeconds`, appended after `stopSerial`,
-and `stopEpoch` after them; a Core at `txDisplayVersion` 1 also sends
-`highSwr` and `swrWindBackLatched`, appended after `stopEpoch`) goes to
+and `stopEpoch` after them, then `highSwr` and `swrWindBackLatched`,
+added with `txDisplayVersion` 1 and sent by every Core whatever its
+`txDisplayVersion`, as `stopEpoch` is) goes to
 a peer at minor 11 whose hello declared `remoteTx` 1, in its snapshot after
 `connectedDevices`, and as deltas. Every property is `outbound`; a write
 is refused as any outbound property's is.
@@ -5324,7 +5326,7 @@ is refused as any outbound property's is.
 | `holderAway` | The holder's link dropped and it keeps transmit, unkeyed, for its 3 minutes |
 | `holderTransferring` | Every key is refused while it is true: transmit is changing hands, or a dropped holder's key is being stopped ("Transmit is changing hands."), or, with no holder, the radio did not confirm it stopped transmitting after a transfer ("The radio did not confirm it stopped transmitting.") until MOX reads off |
 | `keyedForSeconds` | How long the key now on has been on, in whole seconds on the Core's clock when this is sent (ruling 10.3); 0 while unkeyed. It supersedes `keyedSinceMs`, which a Core still sends |
-| `highSwr` | The Core's high-SWR protection has tripped (parity Task 28, sent from a Core at `txDisplayVersion` 1, appended after `stopEpoch`): what the Core's own window hands its transmitting pan's high-SWR border |
+| `highSwr` | The Core's high-SWR protection has tripped (parity Task 28, appended after `stopEpoch`; sent by every Core that sends `txState`, whatever its `txDisplayVersion`): what the Core's own window hands its transmitting pan's high-SWR border |
 | `swrWindBackLatched` | The protection's drive fold-back has latched; the border shows fold-back while this and `highSwr` are both true |
 
 **When it is sent.** While keyed the Core reads the meters ten times a
