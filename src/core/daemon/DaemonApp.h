@@ -111,6 +111,10 @@
 //   2026-09-26: Parity Task 21 (R-IOS-18): StationRadios, the radio switch
 //               and the connected rescan. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-27: R-R3-49: the config file's sample_rate_hz is a starting
+//               value only; a rate already saved for the radio wins at start
+//               (applyConfigToSettings). J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/RadioDiscovery.h"       // RadioInfo, RadioDiscovery, HPSDRHW
@@ -394,8 +398,10 @@ private:
     // Seeds the AppSettings keys the shared connect path reads, so that
     // config-file values actually take effect, from `cfg`:
     //
-    //   sample_rate_hz -> hardware/<mac>/radioInfo/sampleRate
-    //   audio_device   -> audio/Speakers/DeviceName
+    //   sample_rate_hz -> hardware/<mac>/radioInfo/sampleRate, only when
+    //                     that radio has no saved rate (a starting value;
+    //                     a saved rate wins, R-R3-49)
+    //   audio_device   -> audio/Speakers/DeviceName, every start
     //
     // Seeding the settings store rather than passing values down through
     // new parameters is deliberate. Both keys already have a single
@@ -406,8 +412,9 @@ private:
     // AudioEngine::ensureSpeakersOpen() resolves an empty device name to
     // the platform default. A config file that bypassed those would be
     // able to ask for a rate the board cannot do. This way the daemon
-    // and the GUI take the identical path, and the config file simply
-    // decides what the persisted value is on this start.
+    // and the GUI take the identical path. For the rate the config file
+    // only fills an empty slot; for the audio device it decides the
+    // persisted value on this start.
     //
     // Requires a resolved `mac`, which is why it is called after
     // identity selection and before RadioModel::connectToRadio(): with

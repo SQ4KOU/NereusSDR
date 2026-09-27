@@ -6,6 +6,9 @@
 // Phase 3F Sub-Epic I Tasks 5-6: stream pool + slice binding.
 // Phase 3F Sub-Epic I Task 7b: per-stream DDC assignment + routing.
 // Phase 3F Sub-Epic I closeout, defect F1: bindings reach a late worker.
+// 2026-09-27: R-R3-49: a Protocol 2 slice comes back at the rate saved for
+// its band after a restart, and a rate change saves it. J.J. Boyd (KG4VCF),
+// with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 #include <QtTest/QtTest>
 #include <QRegularExpression>
@@ -16,7 +19,9 @@
 #include <memory>
 #include <numbers>
 #include <vector>
+#include "core/AppSettings.h"
 #include "core/DdcAssignment.h"
+#include "core/RadioDiscovery.h"
 #include "core/P1RadioConnection.h"
 #include "core/ReceiverManager.h"
 #include "core/RxChannel.h"
@@ -111,8 +116,46 @@ double settledPeakFromATone(RxChannel* rx, int rateHz,
 
 } // namespace
 
+namespace {
+
+QString savedRateKey(int sliceId)
+{
+    return QStringLiteral("Slice%1/Band20m/SampleRate").arg(sliceId);
+}
+
+// The codec is declared first so it outlives the model that points at it.
+struct RestartedP2 {
+    P2CodecSaturn codec;
+    RadioModel model;
+    WdspEngine* engine {nullptr};
+    int id {-1};
+};
+
+} // namespace
+
 class TestStreamPoolBinding : public QObject {
     Q_OBJECT
+private:
+    static void restartOnP2(RestartedP2& r, int savedRateHz)
+    {
+        r.model.setHpsdrModelForTest(HPSDRModel::ANAN_G2);
+        r.model.receiverManager()->setP2Codec(&r.codec);
+        r.engine = r.model.wdspEngine();
+        r.engine->m_initialized = true;   // friend access (NEREUS_BUILD_TESTS)
+        r.model.configureStreamPool(4, 4, 192000);
+        for (int st = 0; st < 4; ++st) {
+            r.model.receiverManager()->createReceiver();
+        }
+        r.model.openRxChannelPool(4, bufferSizeForRate(192000), 192000);
+        r.id = r.model.addSlice();
+        r.model.sliceById(r.id)->setFrequency(14200000.0);
+        QVERIFY(r.model.waitForReceiveLaneForTest());
+        AppSettings::instance().remove(savedRateKey(r.id));
+        if (savedRateHz > 0) {
+            AppSettings::instance().setValue(savedRateKey(r.id), savedRateHz);
+        }
+    }
+
 private slots:
     void pool_sizes_to_the_sku()
     {
@@ -1825,6 +1868,103 @@ private slots:
                  "slice B, already at the new rate, is silent after the change");
         QVERIFY2(settledPeakFromATone(rxA, 384000) > 0.0,
                  "slice A, re-rated, is silent after the change");
+    }
+
+    // ── R-R3-49: a Protocol 2 slice's saved rate survives a restart ─────
+    //
+    // A window's rate change on Protocol 2 is per DDC and is recorded only
+    // as the slice's per-band SampleRate. connectToRadio opens every stream
+    // at the radio-wide rate and binds the slices there; it then reads each
+    // slice's saved rate (savedSliceSampleRates, before the bind) and puts
+    // it back (applySavedSliceSampleRates). This stands up the same state a
+    // restart leaves: a P2 codec, WDSP channels, a slice bound at 192 kHz
+    // with 768 kHz saved for its band.
+    void a_p2_slice_comes_back_at_its_saved_rate()
+    {
+        RestartedP2 r;
+        restartOnP2(r, 768000);
+        const auto forget = qScopeGuard([&r] { AppSettings::instance().remove(savedRateKey(r.id)); });
+        SliceModel* slice = r.model.sliceById(r.id);
+        const int stream = slice->streamIndex();
+        QVERIFY(stream >= 0);
+        QCOMPARE(r.model.streamSampleRateHzForTest(stream), 192000);
+
+        const QHash<int, int> saved = r.model.savedSliceSampleRates();
+        QCOMPARE(saved.value(r.id), 768000);
+        r.model.applySavedSliceSampleRates(saved, ProtocolVersion::Protocol2);
+        QVERIFY(r.model.waitForReceiveLaneForTest());
+
+        QCOMPARE(r.model.streamSampleRateHzForTest(slice->streamIndex()), 768000);
+        QCOMPARE(slice->sampleRateHz(), 768000);
+        // The WDSP channel, through the live-apply path.
+        RxChannel* channel = r.engine->rxChannel(r.id);
+        QVERIFY(channel);
+        QCOMPARE(channel->sampleRate(), 768000);
+        QCOMPARE(channel->bufferSize(), bufferSizeForRate(768000));
+        // The wire: the DDC assignment carries it for the slice's DDC.
+        const std::optional<DdcAssignment> assignment = r.model.computeDdcAssignment();
+        QVERIFY(assignment.has_value());
+        QVERIFY(slice->ddcIndex() >= 0);
+        QCOMPARE(assignment->rate[static_cast<size_t>(slice->ddcIndex())], 768000);
+    }
+
+    void a_band_with_no_saved_rate_stays_at_the_connect_rate()
+    {
+        RestartedP2 r;
+        restartOnP2(r, 0);
+        SliceModel* slice = r.model.sliceById(r.id);
+        const QHash<int, int> saved = r.model.savedSliceSampleRates();
+        QVERIFY(!saved.contains(r.id));
+        r.model.applySavedSliceSampleRates(saved, ProtocolVersion::Protocol2);
+        QVERIFY(r.model.waitForReceiveLaneForTest());
+        QCOMPARE(r.model.streamSampleRateHzForTest(slice->streamIndex()), 192000);
+        QCOMPARE(r.engine->rxChannel(r.id)->sampleRate(), 192000);
+    }
+
+    void an_unsupported_saved_rate_stays_at_the_connect_rate()
+    {
+        RestartedP2 r;
+        restartOnP2(r, 200000);   // not a rate any board runs
+        const auto forget = qScopeGuard([&r] { AppSettings::instance().remove(savedRateKey(r.id)); });
+        SliceModel* slice = r.model.sliceById(r.id);
+        QSignalSpy rejected(&r.model, &RadioModel::sliceRetuneRejected);
+        QTest::ignoreMessage(QtWarningMsg, QRegularExpression(
+            QStringLiteral("saved sample rate 200000 is not supported by this radio")));
+        r.model.applySavedSliceSampleRates(r.model.savedSliceSampleRates(),
+                                          ProtocolVersion::Protocol2);
+        QVERIFY(r.model.waitForReceiveLaneForTest());
+        QCOMPARE(r.model.streamSampleRateHzForTest(slice->streamIndex()), 192000);
+        QCOMPARE(r.engine->rxChannel(r.id)->sampleRate(), 192000);
+        QCOMPARE(rejected.count(), 0);
+    }
+
+    // Protocol 1 has one rate for the whole radio, from the radio-wide key;
+    // a slice's per-band rate does not move it at connect.
+    void protocol_1_keeps_the_radio_wide_rate()
+    {
+        RestartedP2 r;
+        restartOnP2(r, 768000);
+        const auto forget = qScopeGuard([&r] { AppSettings::instance().remove(savedRateKey(r.id)); });
+        SliceModel* slice = r.model.sliceById(r.id);
+        r.model.applySavedSliceSampleRates(r.model.savedSliceSampleRates(),
+                                          ProtocolVersion::Protocol1);
+        QVERIFY(r.model.waitForReceiveLaneForTest());
+        QCOMPARE(r.model.streamSampleRateHzForTest(slice->streamIndex()), 192000);
+    }
+
+    // A rate change is saved for the slice's band, so there is something to
+    // come back to: before this nothing saved it unless some other slice
+    // setting changed too.
+    void a_rate_change_saves_the_slices_band_rate()
+    {
+        RestartedP2 r;
+        restartOnP2(r, 0);
+        const auto forget = qScopeGuard([&r] { AppSettings::instance().remove(savedRateKey(r.id)); });
+        r.model.requestSliceSampleRate(r.id, 768000);
+        QVERIFY(r.model.waitForReceiveLaneForTest());
+        QCOMPARE(r.model.sliceById(r.id)->sampleRateHz(), 768000);
+        r.model.flushPendingSettingsSave();
+        QCOMPARE(r.model.sliceById(r.id)->savedSampleRateHz(Band::Band20m), 768000);
     }
 };
 

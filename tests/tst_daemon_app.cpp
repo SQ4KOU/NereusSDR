@@ -59,6 +59,10 @@
 //               owner (iPhone app plan Task 73, R-IOS-02), by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-27: the config file's sample_rate_hz is a starting value only;
+//               a rate already saved for the radio wins at start (R-R3-49),
+//               by J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 
 #include <QtTest/QtTest>
 
@@ -72,8 +76,11 @@
 #include <utility>
 
 #include "core/AudioEngine.h"
+#include "core/BoardCapabilities.h"
 #include "core/HpsdrModel.h"
 #include "core/MoxController.h"
+#include "core/RadioDiscovery.h"
+#include "core/SampleRateCatalog.h"
 #include "core/StepAttenuatorController.h"
 #include "core/StepAttenuatorFacade.h"
 #define private public
@@ -134,6 +141,93 @@ DaemonConfig listenerConfig()
 class TstDaemonApp : public QObject {
     Q_OBJECT
 private slots:
+    // R-R3-49: the config file's sample_rate_hz is a starting value only.
+    // It seeds hardware/<mac>/radioInfo/sampleRate when the radio has no
+    // saved rate; a saved rate (from any window, or an earlier seed) wins.
+    void configRateDoesNotOverrideASavedRate()
+    {
+        const QString mac = QStringLiteral("aa:bb:cc:dd:49:01");
+        const QString key = QStringLiteral("radioInfo/sampleRate");
+        AppSettings& settings = AppSettings::instance();
+        const auto forget = qScopeGuard([&settings, mac] {
+            settings.clearHardwareValues(mac);
+            settings.save();
+        });
+        settings.setHardwareValue(mac, key, 768000);
+        DaemonConfig cfg = testCoreConfig();
+        cfg.sampleRateHz = 192000;
+        cfg.sampleRateExplicit = true;
+        QTest::ignoreMessage(QtInfoMsg, QRegularExpression(QStringLiteral(
+            "using the saved sample rate 768000 for this radio \\(the config "
+            "file's 192000 is only a starting value\\)")));
+        DaemonApp app;
+        app.applyConfigToSettings(cfg, mac);
+        QCOMPARE(settings.hardwareValue(mac, key).toInt(), 768000);
+    }
+
+    void configRateSeedsWhenNoRateIsSaved()
+    {
+        const QString mac = QStringLiteral("aa:bb:cc:dd:49:02");
+        const QString key = QStringLiteral("radioInfo/sampleRate");
+        AppSettings& settings = AppSettings::instance();
+        settings.clearHardwareValues(mac);
+        const auto forget = qScopeGuard([&settings, mac] {
+            settings.clearHardwareValues(mac);
+            settings.save();
+        });
+        DaemonConfig cfg = testCoreConfig();
+        cfg.sampleRateHz = 192000;
+        cfg.sampleRateExplicit = true;
+        QTest::ignoreMessage(QtInfoMsg, QRegularExpression(QStringLiteral(
+            "seeded the sample rate from the config file: 192000")));
+        DaemonApp app;
+        app.applyConfigToSettings(cfg, mac);
+        QCOMPARE(settings.hardwareValue(mac, key).toInt(), 192000);
+    }
+
+    void noConfigRateLeavesTheSavedRate()
+    {
+        const QString mac = QStringLiteral("aa:bb:cc:dd:49:03");
+        const QString key = QStringLiteral("radioInfo/sampleRate");
+        AppSettings& settings = AppSettings::instance();
+        const auto forget = qScopeGuard([&settings, mac] {
+            settings.clearHardwareValues(mac);
+            settings.save();
+        });
+        settings.setHardwareValue(mac, key, 384000);
+        const DaemonConfig cfg = testCoreConfig();
+        QVERIFY(!cfg.sampleRateExplicit);
+        DaemonApp app;
+        app.applyConfigToSettings(cfg, mac);
+        QCOMPARE(settings.hardwareValue(mac, key).toInt(), 384000);
+    }
+
+    // A saved rate the board cannot run still falls back to the board
+    // default at connect (resolveSampleRate), as it did before; the config
+    // file does not paper over it.
+    void anUnsupportedSavedRateStillFallsBack()
+    {
+        const QString mac = QStringLiteral("aa:bb:cc:dd:49:04");
+        const QString key = QStringLiteral("radioInfo/sampleRate");
+        AppSettings& settings = AppSettings::instance();
+        const auto forget = qScopeGuard([&settings, mac] {
+            settings.clearHardwareValues(mac);
+            settings.save();
+        });
+        settings.setHardwareValue(mac, key, 1536000);
+        DaemonConfig cfg = testCoreConfig();
+        cfg.sampleRateHz = 96000;
+        cfg.sampleRateExplicit = true;
+        QTest::ignoreMessage(QtInfoMsg, QRegularExpression(QStringLiteral(
+            "using the saved sample rate 1536000")));
+        DaemonApp app;
+        app.applyConfigToSettings(cfg, mac);
+        const BoardCapabilities& caps = BoardCapsTable::forModel(HPSDRModel::HERMESLITE);
+        QTest::ignoreMessage(QtWarningMsg, QRegularExpression(QStringLiteral(".*")));
+        QCOMPARE(resolveSampleRate(settings, mac, ProtocolVersion::Protocol1, caps,
+                                   HPSDRModel::HERMESLITE),
+                 192000);
+    }
     // R-R3-44: nereusd publishes no VAX device on the Core host, receive
     // or transmit. Its engine refuses them before anything connects (the
     // engine-level proof that start() then opens none is in

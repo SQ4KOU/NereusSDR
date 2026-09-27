@@ -336,6 +336,11 @@
 //                transmit slice while keyed and come back at the unkey, as
 //                Thetis's UIMOXChangedTrue / False do. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-27 - R-R3-49: on Protocol 2 each slice comes back at the rate
+//                saved for its band at connect (savedSliceSampleRates,
+//                applySavedSliceSampleRates), and a rate change saves it.
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1867,6 +1872,25 @@ public:
     /// on. SliceModel also holds no RadioModel handle by design, and the
     /// rate is a stream-wide transaction rather than a slice property.
     void applyRestoredSampleRate(SliceModel* slice);
+
+    /// R-R3-49: each slice's saved per-band sample rate for the band it is
+    /// on (SliceModel::savedSampleRateHz), keyed by slice id; slices with
+    /// none saved are left out. connectToRadio reads it before it binds the
+    /// slices, because a bind makes a slice adopt its stream's rate and a
+    /// later save would then write that over the saved one.
+    QHash<int, int> savedSliceSampleRates() const;
+
+    /// R-R3-49: Protocol 2 only. Puts each bound slice's saved rate from
+    /// `saved` on its DDC through requestSliceSampleRate, the same path a
+    /// window's rate change takes (allocator, WDSP channel rate, DDC
+    /// assignment). A rate the board does not allow for `proto` is logged and
+    /// skipped, leaving the slice at the connect rate, as resolveSampleRate
+    /// does for the radio-wide key. Protocol 1 carries one rate for the whole
+    /// radio, so it keeps the radio-wide key and this does nothing.
+    /// connectToRadio calls it once WDSP is up and the connection and codec
+    /// exist.
+    void applySavedSliceSampleRates(const QHash<int, int>& saved,
+                                    NereusSDR::ProtocolVersion proto);
 
     /// True when one sample rate covers the whole radio rather than one DDC.
     ///

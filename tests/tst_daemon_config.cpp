@@ -42,6 +42,9 @@
 // 2026-09-23: listenAddressFor() pins remote_bind "::" as dual stack, and
 // the shipped sample may no longer pin sample_rate_hz, by J.J. Boyd
 // (KG4VCF), with AI-assisted implementation via Anthropic Claude Code.
+// 2026-09-27: comments follow sample_rate_hz becoming a starting value only
+// (R-R3-49), by J.J. Boyd (KG4VCF), with AI-assisted implementation via
+// Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -128,13 +131,14 @@ private slots:
 
     // sampleRateHz always holds a usable rate (validate() rejects <= 0), so
     // it cannot itself express "the operator did not ask for one".
-    // DaemonApp::applyConfigToSettings writes the rate into the per-MAC
-    // AppSettings key the shared connect path reads, which is persisted
-    // state the GUI reads back on its next launch. Without a separate
-    // "was it asked for" flag, a bare `nereusd` with no config file (a
-    // non-fatal case: server_main warns and continues with defaults) would
-    // stamp the 192000 struct default over a rate the operator had already
-    // persisted for that radio. Pinned in both directions.
+    // DaemonApp::applyConfigToSettings seeds the rate into the per-MAC
+    // AppSettings key the shared connect path reads, when that radio has
+    // no saved rate, which is persisted state the GUI reads back on its
+    // next launch. Without a separate "was it asked for" flag, a bare
+    // `nereusd` with no config file (a non-fatal case: server_main warns
+    // and continues with defaults) would seed the 192000 struct default
+    // into a radio the config file never mentioned. Pinned in both
+    // directions.
     void sampleRateExplicitOnlyWhenTheKeyIsPresent()
     {
         QTemporaryFile absent;
@@ -938,10 +942,11 @@ private slots:
         QVERIFY(c.validate(&err));
     }
 
-    // A Core installed from the shipped sample must come back at the rate
-    // the operator last chose for the radio. An active sample_rate_hz line
-    // is written over that saved rate at every start
-    // (DaemonApp::applyConfigToSettings), so the sample may only document it.
+    // A Core installed from the shipped sample must leave a new radio's
+    // starting rate to the board default and the operator. An active
+    // sample_rate_hz line would seed every new radio at that rate
+    // (DaemonApp::applyConfigToSettings; a saved rate still wins, R-R3-49),
+    // so the sample only documents it.
     void shippedSampleLeavesTheSampleRateToTheOperator()
     {
         QString err;
@@ -949,8 +954,8 @@ private slots:
             QStringLiteral(NEREUS_SOURCE_DIR "/packaging/nereusd.conf.sample"), &err);
         QVERIFY2(err.isEmpty(), qPrintable(err));
         QVERIFY2(!c.sampleRateExplicit,
-                 "packaging/nereusd.conf.sample sets sample_rate_hz, which pins that "
-                 "rate over the operator's saved choice on every start");
+                 "packaging/nereusd.conf.sample sets sample_rate_hz, which seeds that "
+                 "rate into every new radio");
         QVERIFY(c.validate(&err));
     }
 

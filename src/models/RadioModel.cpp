@@ -515,6 +515,11 @@
 //                transmit slice while keyed and come back at the unkey, as
 //                Thetis's UIMOXChangedTrue / False do. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-27 - R-R3-49: on Protocol 2 each slice comes back at the rate
+//                saved for its band at connect (savedSliceSampleRates,
+//                applySavedSliceSampleRates), and a rate change saves it.
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -9488,6 +9493,65 @@ void RadioModel::applyRestoredSampleRate(SliceModel* slice)
     requestSliceSampleRate(slice->sliceIndex(), restored);
 }
 
+// R-R3-49. NereusSDR-original: per-slice per-band rates are a Phase 3F
+// concept; Thetis carries one rate for the whole radio.
+QHash<int, int> RadioModel::savedSliceSampleRates() const
+{
+    QHash<int, int> saved;
+    for (const SliceModel* slice : std::as_const(m_slices)) {
+        if (slice == nullptr) {
+            continue;
+        }
+        const int rate = slice->savedSampleRateHz(slice->band());
+        if (rate > 0) {
+            saved.insert(slice->sliceIndex(), rate);
+        }
+    }
+    return saved;
+}
+
+void RadioModel::applySavedSliceSampleRates(const QHash<int, int>& saved,
+                                            NereusSDR::ProtocolVersion proto)
+{
+    // Protocol 1: one rate for the whole radio, from the radio-wide key
+    // (resolveSampleRate at connect). Nothing per slice to put back.
+    if (proto != NereusSDR::ProtocolVersion::Protocol2 || m_role != Role::Local
+        || saved.isEmpty()) {
+        return;
+    }
+    const std::vector<int> allowed = NereusSDR::allowedSampleRates(
+        proto, boardCapabilities(), m_hardwareProfile.model);
+    const QList<SliceModel*> slices = m_slices;
+    for (SliceModel* slice : slices) {
+        if (slice == nullptr) {
+            continue;
+        }
+        const auto it = saved.constFind(slice->sliceIndex());
+        if (it == saved.cend()) {
+            continue;
+        }
+        const int rate = it.value();
+        const int stream = slice->streamIndex();
+        if (stream < 0) {
+            continue;
+        }
+        if (std::find(allowed.cbegin(), allowed.cend(), rate) == allowed.cend()) {
+            qCWarning(lcConnection) << "Slice" << slice->sliceIndex()
+                                    << "saved sample rate" << rate
+                                    << "is not supported by this radio; staying at"
+                                    << m_streamAllocator.streamSampleRateHz(stream);
+            continue;
+        }
+        if (m_streamAllocator.streamSampleRateHz(stream) == rate) {
+            continue;
+        }
+        qCInfo(lcConnection) << "Slice" << slice->sliceIndex()
+                             << "comes back at its saved sample rate" << rate
+                             << "for" << bandLabel(slice->band());
+        requestSliceSampleRate(slice->sliceIndex(), rate);
+    }
+}
+
 bool RadioModel::requestStreamCtunPinned(int sliceId, bool pinned)
 {
     if (m_role == Role::Remote) {
@@ -9954,6 +10018,11 @@ void RadioModel::commitStreamSampleRateChange(
         slice->setStreamEpoch(streamEpoch(planned.placement.streamIndex));
         slice->setShiftOffsetHz(planned.placement.shiftOffsetHz);
         slice->setSampleRateHz(planned.resolvedRateHz);
+        // R-R3-49: save the slice's per-band rate. On Protocol 2 it is the
+        // only record of a window's rate change, and connect puts it back
+        // (applySavedSliceSampleRates); nothing else saved it until some
+        // other slice setting happened to change.
+        scheduleSettingsSave(slice);
 
         // Composed, not the bare placement offset: a slice re-placed by a
         // rate change may be sitting on RIT or a DIG click-tune offset, and
@@ -13609,6 +13678,11 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
         }
     }
 
+    // R-R3-49: read each slice's saved per-band rate before the bind below
+    // makes it adopt the connect rate (applied once WDSP is up, further
+    // down, by applySavedSliceSampleRates).
+    const QHash<int, int> savedSliceRates = savedSliceSampleRates();
+
     // Slice A is created earlier in this function, before the pool is sized,
     // so its addSlice-time bind was a no-op against an empty allocator. On a
     // reconnect, teardownConnection released EVERY slice's binding, so this
@@ -15096,6 +15170,12 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
         }
     }
     completeReceiveLayoutStartup();
+
+    // R-R3-49: on Protocol 2 each slice comes back at the rate saved for its
+    // band. WDSP is up (its channels take the new rate) and the codec exists
+    // (the DDC assignment carries it); the assignment is queued ahead of the
+    // connection's start below. Protocol 1 keeps the radio-wide rate.
+    applySavedSliceSampleRates(savedSliceRates, info.protocol);
 
     // Start thread — init() will be called on the worker thread
     connect(m_connThread, &QThread::started, m_connection, &RadioConnection::init);
