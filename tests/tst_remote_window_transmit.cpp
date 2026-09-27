@@ -44,6 +44,13 @@
 //               and TUNE wait while another device holds. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: Task 77 fix wave, M2: the holder line for the radio. J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  iPhone app plan Task 78 (R-IOS-02): a
+//                                    paired window can take transmit, and
+//                                    the holder line says how. AI-assisted
+//                                    via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -293,7 +300,7 @@ private slots:
             }
         }
         QVERIFY(declared);
-        QCOMPARE(h.client.capabilities().remoteTxVersion, 1);
+        QCOMPARE(h.client.capabilities().remoteTxVersion, 2);  // Task 77: 2
         QTRY_VERIFY(h.client.capabilities().txPermitted);
         QVERIFY(h.client.remoteTransmitAvailable());
         QVERIFY(h.remote.remoteTransmitRouted());
@@ -312,7 +319,7 @@ private slots:
         h.server.setRemoteTransmitAllowed(false);
         h.connectSession();
         QTRY_VERIFY(h.client.isHandshakeComplete());
-        QCOMPARE(h.client.capabilities().remoteTxVersion, 1);
+        QCOMPARE(h.client.capabilities().remoteTxVersion, 2);  // Task 77: 2
         QVERIFY(!h.client.capabilities().txPermitted);
         QCOMPARE(h.client.capabilities().txRefusalCode, QStringLiteral("stationReceiveOnly"));
         QCOMPARE(h.client.capabilities().txRefusalReason,
@@ -753,6 +760,14 @@ private slots:
         QTest::qWait(500);
         QCOMPARE(remoteMedia.micPacketsSent(), quint64(0));
 
+        // iPhone app plan Task 77 (ruling 8.4): arming VOX needs holding
+        // transmit. This window takes it with a press of its MOX (a
+        // person's key on unheld transmit takes it), then arms VOX.
+        h.remote.setMoxFromButton(true);
+        QTRY_VERIFY(h.station.moxController()->isMox());
+        h.remote.setMoxFromButton(false);
+        QTRY_VERIFY(!h.station.moxController()->isMox());
+        QTRY_COMPARE(h.client.transmitHolderText(), QStringLiteral("This computer holds transmit."));
         window.vox->click();
         QTRY_VERIFY(h.station.transmitModel().voxEnabled());
         QTRY_VERIFY(remoteMedia.micUplinkRunning());
@@ -1075,10 +1090,15 @@ private slots:
         h.station.moxController()->onMicPttFromRadio(true);
         QTRY_VERIFY(h.station.moxController()->isMox());
         QTRY_COMPARE(h.client.transmitHolderText(),
-                     QStringLiteral("Radio holds transmit. MOX and TUNE here wait until it lets go."));
+                     QStringLiteral("The radio has the transmitter. Take it from this window to "
+                                    "transmit."));
         h.station.moxController()->onMicPttFromRadio(false);
         QTRY_VERIFY(!h.station.moxController()->isMox());
-        QTRY_COMPARE(h.client.transmitHolderText(), QString());
+        // Task 77 (ruling 8.1): the radio keeps transmit after its press.
+        QTest::qWait(100);
+        QCOMPARE(h.client.transmitHolderText(),
+                 QStringLiteral("The radio has the transmitter. Take it from this window to "
+                                    "transmit."));
         h.client.disconnectFromStation(QStringLiteral("test complete"));
     }
 
@@ -1096,13 +1116,16 @@ private slots:
         // As the Core would send them (no later delta arrives in between).
         tx->applyStationValue("holderDeviceId", QStringLiteral("another"));
         tx->applyStationValue("holderName", QStringLiteral("Grant's iPhone"));
+        // Task 78: a window that shares the Core as a device (signed in
+        // with its own key) can take transmit, and says how.
+        QTRY_VERIFY(h.client.transmitTakeAvailable());
         QCOMPARE(h.client.transmitHolderText(),
-                 QStringLiteral("Grant's iPhone holds transmit. MOX and TUNE here wait until it "
-                                "lets go."));
+                 QStringLiteral("Grant's iPhone holds transmit. Take transmit to use MOX and "
+                                "TUNE here."));
         tx->applyStationValue("holderAway", true);
         QCOMPARE(h.client.transmitHolderText(),
-                 QStringLiteral("Grant's iPhone holds transmit and is away. MOX and TUNE here "
-                                "wait until it lets go."));
+                 QStringLiteral("Grant's iPhone holds transmit and is away. Take transmit to use "
+                                "MOX and TUNE here."));
         tx->applyStationValue("holderTransferring", true);
         QCOMPARE(h.client.transmitHolderText(), QStringLiteral("Transmit is changing hands."));
         // Fix wave 2: a transfer that ended with MOX still on leaves nobody
@@ -1113,6 +1136,8 @@ private slots:
         // The device's name is the operator's own word, set aside here.
         for (const QString& text : {QStringLiteral("Another device holds transmit and is away. MOX "
                                                    "and TUNE here wait until it lets go."),
+                                    QStringLiteral("Another device holds transmit and is away. Take "
+                                                   "transmit to use MOX and TUNE here."),
                                     QStringLiteral("Transmit is changing hands."),
                                     QStringLiteral("The radio did not confirm it stopped transmitting."),
                                     QStringLiteral("This computer holds transmit.")}) {

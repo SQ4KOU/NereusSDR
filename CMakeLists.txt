@@ -1250,6 +1250,10 @@ set(CORE_SOURCES
     # iPhone app Task 73 (R-IOS-02): the read-only marker another device sees
     # for a slice that is not its own, one per slice.
     src/core/session/SliceMarker.cpp
+    # iPhone app plan Task 78 (R-IOS-02, R-IOS-30): a remote window's copy of
+    # who else is on the Core, their slices, and the Core's questions and
+    # notices for it.
+    src/core/session/RemoteDevicesState.cpp
     # R2 Task 9: the slice-lifecycle half of the mirror. StateMirror forwards
     # property deltas for objects it already knows about; ObjectRegistry is
     # what tells a remote peer a slice appeared or vanished at all, by
@@ -1331,6 +1335,7 @@ set(CORE_SOURCES
     src/core/session/StationOpeningGate.cpp
     src/core/session/StationReceivers.cpp
     src/core/session/StationSharedSettings.cpp
+    src/core/session/StationTransmitTake.cpp
     src/core/session/ReceiverPlanner.cpp
     src/core/session/ConfirmStep.cpp
     src/core/session/StationLanAnnouncement.cpp
@@ -1490,6 +1495,15 @@ set(GUI_SOURCES
     src/gui/RemoteTransmitForwarder.cpp
     # R-R3-44: a remote window's VAX channels, fed by receiver streams.
     src/gui/RemoteVaxRouter.cpp
+    # iPhone app plan Task 78 (R-IOS-02, R-IOS-07, R-IOS-30): the remote
+    # window's screens for several devices on one Core.
+    src/gui/multidevice/DeviceWords.cpp
+    src/gui/multidevice/TakeTransmitDialog.cpp
+    src/gui/multidevice/ConfirmChangeDialog.cpp
+    src/gui/multidevice/TakeReceiverDialog.cpp
+    src/gui/multidevice/NoticeCard.cpp
+    src/gui/multidevice/ConnectedDevicesList.cpp
+    src/gui/multidevice/MultiDeviceController.cpp
     src/gui/RemoteAudioStatus.cpp
     src/gui/RemoteDisplayAllocator.cpp
     src/gui/PanStatusText.cpp

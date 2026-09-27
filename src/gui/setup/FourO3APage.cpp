@@ -44,6 +44,10 @@
 //                 from the amp's reported state and waits while the radio
 //                 is on the air. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-26 -- iPhone app plan Task 77 fix round 3 (R-IOS-02, R-IOS-03,
+//                 R-IOS-13): that Operate also waits while the Core's
+//                 Tuner Genius tunes, and a faulted amp is offered Standby.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "FourO3APage.h"
@@ -160,6 +164,9 @@ FourO3APage::FourO3APage(RadioModel* model, QWidget* parent)
             // R-R3-49 (parity Task 9): Operate waits while the radio is on
             // the air.
             connect(m_model, &RadioModel::coreOnAirChanged,
+                    this, &FourO3APage::refreshRemotePgxlTab);
+            // Task 77 fix round 3: and while the Core's tuner tunes.
+            connect(m_model, &RadioModel::pgxlSwitchWaitChanged,
                     this, &FourO3APage::refreshRemotePgxlTab);
             connect(m_model, &RadioModel::stationLinkStateChanged, this, [this] {
                 loadRemotePgxlSettings();
@@ -605,14 +612,21 @@ void FourO3APage::refreshRemotePgxlTab()
     // R-R3-49 (parity Task 9): Operate reads the action the amp's reported
     // state allows (Standby while it operates, Operate otherwise), and is
     // offered by a Core at version 4 connected to the amp, off the air.
+    // Task 77 fix round 3: it also waits while the Core's tuner tunes (the
+    // Core refuses it during its own cycle's standby wait too), and a
+    // faulted amp is offered Standby.
     const bool operateOffered = link && link->pgxlFullControlAvailable();
     const bool onAir = m_model->isCoreOnAir();
-    m_remotePgxlOperate->setText(amp->operate() ? tr("Standby") : tr("Operate"));
-    m_remotePgxlOperate->setEnabled(operateOffered && connected && !onAir);
+    const bool tuning = m_model->pgxlSwitchWaitsForTuner();
+    const bool faulted = amp->state() == AmplifierModel::State::Fault;
+    m_remotePgxlOperate->setText(amp->operate() || faulted ? tr("Standby") : tr("Operate"));
+    m_remotePgxlOperate->setEnabled(operateOffered && connected && !onAir && !tuning);
     m_remotePgxlOperate->setToolTip(!operateOffered
         ? OperatorReasonText::forDisplay(AmplifierModel::receiveOnlyOperateReason())
         : onAir ? RadioModel::onAirReason()
+        : tuning ? RadioModel::tunerTuningReason()
         : !connected ? tr("The Core is not connected to the Power Genius.")
+        : faulted ? tr("The amplifier reports a fault. Put it in standby.")
         : amp->operate() ? tr("Put the Power Genius in standby.")
                          : tr("Put the Power Genius in operate."));
 }
@@ -621,12 +635,16 @@ void FourO3APage::onRemotePgxlOperateClicked()
 {
     if (!m_model || !m_remotePgxlTab) { return; }
     auto* link = m_model->stationLink();
-    if (!link || !link->pgxlFullControlAvailable() || m_model->isCoreOnAir()) {
+    if (!link || !link->pgxlFullControlAvailable() || m_model->isCoreOnAir()
+        || m_model->pgxlSwitchWaitsForTuner()) {   // Task 77 fix round 3
         refreshRemotePgxlTab();
         return;
     }
-    // The button follows the amp's report, not the click.
-    const auto outcome = link->requestPgxlOperate(!m_model->amplifierModel()->operate());
+    // The button follows the amp's report, not the click. Task 77 fix round
+    // 3: a faulted amp is sent standby.
+    const AmplifierModel* amp = m_model->amplifierModel();
+    const bool faulted = amp->state() == AmplifierModel::State::Fault;
+    const auto outcome = link->requestPgxlOperate(!amp->operate() && !faulted);
     m_remotePgxlResult->setText(outcome.sent ? QString()
                                              : OperatorReasonText::forDisplay(outcome.reason));
 }

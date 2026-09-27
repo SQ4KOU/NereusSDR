@@ -66,6 +66,15 @@ PanadapterApplet::PanadapterApplet(const QString& panId, QWidget* parent)
         QStringLiteral("QLabel { color: %1; background: transparent; }")
             .arg(QLatin1String(Style::kTextSecondary)));
     m_noSliceHint->hide();
+    // Task 78: the empty pan's offer of a take, under the hint.
+    m_takeReceiverButton = new QPushButton(QStringLiteral("Take a receiver"), this);
+    m_takeReceiverButton->setObjectName(QStringLiteral("PanTakeReceiverButton"));
+    m_takeReceiverButton->setToolTip(
+        QStringLiteral("Ask the Core for a receiver here. It shows which receivers "
+                       "other devices use, and you choose one to take."));
+    m_takeReceiverButton->hide();
+    connect(m_takeReceiverButton, &QPushButton::clicked, this,
+            [this]() { emit addSliceRequested(m_panId); });
 
     // Phase 3F: clicking anywhere in this pan makes it the active pan.
     //
@@ -89,6 +98,8 @@ PanadapterApplet::PanadapterApplet(const QString& panId, QWidget* parent)
 
     connect(m_statusOverlay, &SpectrumStatusOverlay::txBadgeClicked, this,
             [this]() { emit txBadgeClicked(m_panId); });
+    connect(m_statusOverlay, &SpectrumStatusOverlay::takeTransmitClicked, this,
+            [this]() { emit takeTransmitRequested(m_panId); });
     connect(m_statusOverlay, &SpectrumStatusOverlay::wideBadgeClicked, this,
             [this]() { emit wideBadgeClicked(m_panId); });
     connect(m_statusOverlay, &SpectrumStatusOverlay::chainTagClicked, this,
@@ -123,6 +134,27 @@ void PanadapterApplet::removeSlice(int sliceIndex)
     refreshNoSliceHint();
 }
 
+QString PanadapterApplet::takeReceiverHintText()
+{
+    return QStringLiteral("Another device took the receiver this window was using. Take a "
+                          "receiver to listen here again.");
+}
+
+void PanadapterApplet::setTakeReceiverOffered(bool offered)
+{
+    if (m_takeReceiverOffered == offered) { return; }
+    m_takeReceiverOffered = offered;
+    refreshNoSliceHint();
+}
+
+void PanadapterApplet::setTakeTransmitOffered(bool offered, const QString& holderName,
+                                              bool holderOnAir)
+{
+    m_statusOverlay->setTakeTransmitOffered(offered, holderName, holderOnAir);
+    // The strip is sized from its pills; place it again for the new one.
+    repositionStatusOverlay();
+}
+
 QString PanadapterApplet::noSliceHintText()
 {
     return QStringLiteral("No slice here yet. Add one with +RX.");
@@ -144,10 +176,21 @@ void PanadapterApplet::refreshNoSliceHint()
 {
     if (!m_noSliceHint) { return; }
     const bool show = m_noSliceHintAllowed && m_associatedSlices.isEmpty();
+    const bool offerTake = show && m_takeReceiverOffered;
+    m_noSliceHint->setText(offerTake ? takeReceiverHintText() : noSliceHintText());
     m_noSliceHint->setVisible(show);
     if (show) {
-        m_noSliceHint->setGeometry(rect().adjusted(16, 0, -16, 0));
+        m_noSliceHint->setGeometry(rect().adjusted(16, 0, -16, offerTake ? -40 : 0));
         m_noSliceHint->raise();
+    }
+    if (m_takeReceiverButton) {
+        m_takeReceiverButton->setVisible(offerTake);
+        if (offerTake) {
+            const QSize hint = m_takeReceiverButton->sizeHint();
+            m_takeReceiverButton->setGeometry((width() - hint.width()) / 2,
+                                              height() / 2 + 16, hint.width(), hint.height());
+            m_takeReceiverButton->raise();
+        }
     }
 }
 

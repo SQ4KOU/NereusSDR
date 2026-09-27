@@ -74,6 +74,13 @@
 // local window's "Set amp to TCI mode" waits on the air; a local click
 // refused as the radio unkeys shows the remote window's reason. J.J. Boyd
 // (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-26: iPhone app plan Task 77 fix round 3 (R-IOS-02, R-IOS-03,
+// R-IOS-13): the Power Genius's OPERATE waits while the Tuner Genius tunes
+// in both windows, and a faulted amp is sent standby. J.J. Boyd (KG4VCF),
+// AI-assisted via Anthropic Claude Code.
+// 2026-09-26: iPhone app plan Task 77 fix round 4: an amp whose operate=1
+// is unconfirmed is sent standby from both local buttons. J.J. Boyd
+// (KG4VCF), AI-assisted via Anthropic Claude Code.
 
 #include <QtTest>
 
@@ -611,6 +618,7 @@ private slots:
     void pageThatOutlivesItsModelSendsNothing();
     void localWindowAmpAndTunerSwitchesWaitOnTheAir();
     void localClickRefusedAsTheRadioUnkeysSaysWhy();
+    void ampOperateWaitsForTheTunerAndAFaultedAmpGoesToStandby();
 };
 
 void RemotePeripheralsTest::remoteParentPageExposesOnlyStationBackedControls()
@@ -4321,7 +4329,9 @@ void RemotePeripheralsTest::localPowerGeniusTabOperatesThisComputersAmp()
     // Operate: the applet's line; the button follows the amp's report.
     operate->click();
     QVERIFY(amp.waitFor(QStringLiteral("operate=1")) >= 0);
-    QCOMPARE(operate->text(), QStringLiteral("Operate"));
+    // Task 77 fix round 4 (Minor 3): until the amp reports operate, the tab
+    // offers Standby (the way out of an amp that never gets there).
+    QTRY_COMPARE(operate->text(), QStringLiteral("Standby"));
     amp.send(QStringLiteral("S0|status state=OPERATE"));
     QTRY_COMPARE(operate->text(), QStringLiteral("Standby"));
     QVERIFY(OperatorWording::isPlain(operate->toolTip()));
@@ -4764,10 +4774,15 @@ void RemotePeripheralsTest::localWindowAmpAndTunerSwitchesWaitOnTheAir()
         QTRY_VERIFY(applet.relayBarForTesting(relay)->isScrollEnabled());
     }
     QVERIFY(applet.operateButtonForTesting()->isEnabled());
+    // Task 77 fix round 2: TUNE (it switches the Power Genius to standby
+    // first) follows the same on-air rule as OPERATE and ANT.
+    QVERIFY(applet.tuneButtonForTesting()->isEnabled());
     MoxController* const coreMox = station.moxController();
     coreMox->setMoxCheck({});
     coreMox->setMox(true);
     QTRY_VERIFY(station.isCoreOnAir());
+    QTRY_VERIFY(!applet.tuneButtonForTesting()->isEnabled());
+    QCOMPARE(applet.tuneButtonForTesting()->toolTip(), onAir);
     for (int relay = 0; relay < 3; ++relay) {
         QTRY_VERIFY(!applet.relayBarForTesting(relay)->isScrollEnabled());
         QCOMPARE(applet.relayBarForTesting(relay)->toolTip(), onAir);
@@ -4803,6 +4818,8 @@ void RemotePeripheralsTest::localWindowAmpAndTunerSwitchesWaitOnTheAir()
         QVERIFY(applet.relayBarForTesting(relay)->toolTip().isEmpty());
     }
     QVERIFY(applet.operateButtonForTesting()->isEnabled());
+    QTRY_VERIFY(applet.tuneButtonForTesting()->isEnabled());
+    QVERIFY(applet.tuneButtonForTesting()->toolTip().isEmpty());
     mark = tuner.commands.size();
     wheel(applet.relayBarForTesting(0), 120);
     QVERIFY(tuner.waitFor(QStringLiteral("tune relay=0 move=1"), mark) >= 0);
@@ -4911,6 +4928,148 @@ void RemotePeripheralsTest::localClickRefusedAsTheRadioUnkeysSaysWhy()
     QCOMPARE(rfKitOperate.count(), 1);
     QCOMPARE(refused.count(), 8);
     local.pgxlConnection()->disconnect();
+}
+
+// iPhone app plan Task 77 fix round 3 (R-IOS-02, R-IOS-03, R-IOS-13): the
+// Power Genius's OPERATE and STANDBY wait while the Tuner Genius tunes, in
+// a local window (the applet, its 4O3A tab, a press that gets through
+// anyway refused with the words) and in a remote window (the Core's tuner,
+// and the Core refusing a request sent anyway); an amp in FAULT is sent
+// standby from both local buttons.
+void RemotePeripheralsTest::ampOperateWaitsForTheTunerAndAFaultedAmpGoesToStandby()
+{
+    const QString tuning = RadioModel::tunerTuningReason();
+    QVERIFY(OperatorWording::isPlain(tuning));
+    {
+        AppSettings::instance().clear();
+        FakeGenius amp;
+        QVERIFY(amp.listen());
+        RadioModel local;
+        AmpApplet applet(&local);
+        PgxlAdvancedPage tab(&local);
+        QSignalSpy toggles(&applet, &AmpApplet::operateToggled);
+        QSignalSpy refused(&local, &RadioModel::accessoryRequestRefused);
+        const auto operateLines = [&amp] {
+            return amp.commands.filter(QRegularExpression(QStringLiteral("^operate")));
+        };
+        local.pgxlConnection()->connectToPgxl(QStringLiteral("127.0.0.1"), amp.port());
+        QVERIFY(amp.accept());
+        amp.send(QStringLiteral("V3.8.9"));
+        QTRY_VERIFY(local.pgxlConnection()->isConnected());
+        amp.send(QStringLiteral("S0|status state=STANDBY"));
+        QPushButton* tabOperate = tab.operateButtonForTesting();
+        QTRY_VERIFY(tabOperate->isEnabled());
+        QVERIFY(applet.operateButtonEnabledForTesting());
+        QTRY_COMPARE(applet.operateButtonTextForTesting(), QStringLiteral("STANDBY"));
+        QPushButton* ampButton = nullptr;
+        for (QPushButton* b : applet.findChildren<QPushButton*>()) {
+            if (b->text() == QStringLiteral("STANDBY")) { ampButton = b; }
+        }
+        QVERIFY(ampButton);
+
+        // The tuner reports its sweep: both wait, saying why.
+        local.tgxlConnection()->injectLineForTesting(QStringLiteral("V1.2.17"));
+        local.tgxlConnection()->injectLineForTesting(QStringLiteral("S0|state tuning=1"));
+        QTRY_VERIFY(local.pgxlSwitchWaitsForTuner());
+        QTRY_VERIFY(!applet.operateButtonEnabledForTesting());
+        QCOMPARE(applet.operateButtonToolTipForTesting(), tuning);
+        QVERIFY(!tabOperate->isEnabled());
+        QCOMPARE(tabOperate->toolTip(), tuning);
+        // A press that gets through anyway: refused with the words.
+        for (QPushButton* button : {ampButton, tabOperate}) {
+            button->setEnabled(true);
+            button->click();
+            QCOMPARE(refused.count(), 1);
+            QCOMPARE(refused.last().at(1).toString(), tuning);
+            refused.clear();
+        }
+        QCOMPARE(toggles.count(), 0);
+        QTest::qWait(50);
+        QVERIFY(operateLines().isEmpty());
+        local.tgxlConnection()->injectLineForTesting(QStringLiteral("S0|state tuning=0"));
+        QTRY_VERIFY(applet.operateButtonEnabledForTesting());
+        QTRY_VERIFY(tabOperate->isEnabled());
+
+        // A fault: the applet's button reads STANDBY and sends standby;
+        // the tab offers Standby and sends operate=0.
+        amp.send(QStringLiteral("S0|status state=FAULT"));
+        QTRY_COMPARE(local.amplifierModel()->state(), AmplifierModel::State::Fault);
+        QCOMPARE(applet.operateButtonTextForTesting(), QStringLiteral("STANDBY"));
+        QVERIFY(OperatorWording::isPlain(applet.operateButtonToolTipForTesting()));
+        QVERIFY(!applet.operateButtonToolTipForTesting().isEmpty());
+        applet.clickOperateForTesting();
+        QCOMPARE(toggles.count(), 1);
+        QCOMPARE(toggles.last().at(0).toBool(), false);
+        QTRY_COMPARE(tabOperate->text(), QStringLiteral("Standby"));
+        QVERIFY(OperatorWording::isPlain(tabOperate->toolTip()));
+        tabOperate->click();
+        QVERIFY(amp.waitFor(QStringLiteral("operate=0")) >= 0);
+        QCOMPARE(operateLines(), QStringList{QStringLiteral("operate=0")});
+        amp.send(QStringLiteral("S0|status state=STANDBY"));
+        QTRY_VERIFY(!local.ampChangingOver());
+
+        // Round 4 (Minor 3): an amp that took operate=1 and keeps reporting
+        // standby: both buttons now send standby, which the next STANDBY
+        // report confirms, ending the wait.
+        QTRY_COMPARE(tabOperate->text(), QStringLiteral("Operate"));
+        tabOperate->click();
+        QVERIFY(amp.waitFor(QStringLiteral("operate=1")) >= 0);
+        QVERIFY(local.ampOperateUnconfirmed());
+        amp.send(QStringLiteral("S0|status state=STANDBY"));
+        QTRY_COMPARE(tabOperate->text(), QStringLiteral("Standby"));
+        QVERIFY(OperatorWording::isPlain(tabOperate->toolTip()));
+        const int togglesBefore = toggles.count();
+        applet.clickOperateForTesting();
+        QCOMPARE(toggles.count(), togglesBefore + 1);
+        QCOMPARE(toggles.last().at(0).toBool(), false);
+        tabOperate->click();
+        QTRY_COMPARE(operateLines().size(), 3);
+        QCOMPARE(operateLines().last(), QStringLiteral("operate=0"));
+        amp.send(QStringLiteral("S0|status state=STANDBY"));
+        QTRY_VERIFY(!local.ampChangingOver());
+        QTRY_COMPARE(tabOperate->text(), QStringLiteral("Operate"));
+    }
+
+    // A remote window: the Core's tuner sweeping greys OPERATE with the
+    // words, and a request sent anyway is refused by the Core with them.
+    AppSettings::instance().clear();
+    CoreAndWindow cw;
+    RadioModel& station = cw.station;
+    RadioModel& window = cw.window;
+    station.smartSdrListener()->setListenEndpointForTesting(QHostAddress::LocalHost, 0);
+    station.setPeripheralValue(QStringLiteral("FourO3A_Enabled"), QStringLiteral("True"));
+    FakeGenius amp;
+    QVERIFY(amp.listen());
+    AmpApplet applet(&window);
+    FourO3APage page(&window);
+    auto* tabOperate = page.findChild<QPushButton*>(QStringLiteral("remotePgxlOperateButton"));
+    QVERIFY(tabOperate);
+    QSignalSpy refused(&window, &RadioModel::accessoryRequestRefused);
+    cw.connect(this);
+    QTRY_VERIFY(cw.client.pgxlFullControlAvailable());
+    window.reportStationLinkStateChanged();
+    QVERIFY(admitCoreAmp(station, amp));
+    amp.send(QStringLiteral("S0|status state=STANDBY"));
+    QTRY_VERIFY(applet.operateButtonEnabledForTesting());
+    station.tunerModel()->applyStationValue(QByteArrayLiteral("isTuning"), true);
+    QTRY_VERIFY(window.tunerModel()->isTuning());
+    QTRY_VERIFY(!applet.operateButtonEnabledForTesting());
+    QCOMPARE(applet.operateButtonToolTipForTesting(), tuning);
+    QTRY_VERIFY(!tabOperate->isEnabled());
+    QCOMPARE(tabOperate->toolTip(), tuning);
+    QVERIFY(cw.client.requestPgxlOperate(true).sent);
+    QTRY_COMPARE(refused.count(), 1);
+    QCOMPARE(refused.last().at(0).toString(), QStringLiteral("pgxl"));
+    QCOMPARE(refused.last().at(1).toString(), tuning);
+    QTest::qWait(100);
+    QVERIFY(amp.commands.filter(QRegularExpression(QStringLiteral("^operate"))).isEmpty());
+    station.tunerModel()->applyStationValue(QByteArrayLiteral("isTuning"), false);
+    QTRY_VERIFY(applet.operateButtonEnabledForTesting());
+    QTRY_VERIFY(tabOperate->isEnabled());
+    // A fault: the remote tab offers Standby.
+    amp.send(QStringLiteral("S0|status state=FAULT"));
+    QTRY_COMPARE(tabOperate->text(), QStringLiteral("Standby"));
+    QVERIFY(OperatorWording::isPlain(tabOperate->toolTip()));
 }
 
 QTEST_MAIN(RemotePeripheralsTest)

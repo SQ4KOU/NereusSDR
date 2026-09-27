@@ -41,8 +41,14 @@
 // admitted, anyone else's refused otherDeviceHolds naming the holder.
 // Unheld: a program's key is refused programNeedsTransmit; any other key
 // makes its device the holder (the station device with source RadioPtt for
-// the radio's own PTT) and is admitted (D63; the station device's own keys
-// until Task 77, which turns a press against another holder into a take).
+// the radio's own PTT) and is admitted (D63).
+//
+// ---- Taking (Task 77, rulings 8.4, 8.6, 8.7, 8.9) ----
+// askTake answers whether a device may take transmit now: at once, asked,
+// already its own, or refused; the take is transferTo(). The radio's own
+// PTT against another holder takes without a question (the Core runs the
+// transfer from its keying gate). The station device keeps transmit after
+// its key ends, as any holder does, until a device takes it.
 //
 // Everything that reaches the radio or the clock is injected (Hooks), so
 // the rules are tested with fake ones.
@@ -62,6 +68,10 @@
 //               take whose key never starts is released). J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: iPhone app plan Task 77 (R-IOS-02, R-IOS-03): askTake;
+//               releaseStationTake removed (the take replaces it). J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 #pragma once
 
@@ -162,6 +172,34 @@ public:
     /// when it would be admitted (a question only: nothing changes).
     TxRefusal keyRefusalFor(const QByteArray& deviceId, bool program = false) const;
 
+    // ---- Taking transmit (Task 77; rulings 8.4, 8.6, 8.7) ----
+
+    enum class TakeVerdict {
+        /// Take now: transmit is unheld, or the device was shown the holder
+        /// it would take from (ruling 8.7).
+        AtOnce,
+        /// The requester already holds transmit: nothing to take.
+        AlreadyHeld,
+        /// Another device holds transmit: ask the requester's operator.
+        Ask,
+        /// Refused: a transfer is running, or the radio did not confirm it
+        /// stopped.
+        Refuse,
+    };
+    struct TakeAnswer {
+        TakeVerdict verdict{TakeVerdict::Refuse};
+        TxRefusal refusal;
+    };
+    /// Whether `requester` may take transmit now (a question only). With
+    /// `shownEpoch` (the holderEpoch the device showed its operator) and
+    /// `shownKeyed` (whether it showed the holder on the air), a take from
+    /// another holder is at once while the epoch still names that holder
+    /// and the holder is not on the air unless it was shown so; otherwise
+    /// it is asked. Taking never keys (ruling 8.6); the take itself is
+    /// transferTo().
+    TakeAnswer askTake(const QByteArray& requester, std::optional<quint64> shownEpoch = std::nullopt,
+                       std::optional<bool> shownKeyed = std::nullopt) const;
+
     // ---- The transfer and the holder's comings and goings ----
 
     /// Ruling 8.2: from the holder now to `next` (nullopt: to nobody).
@@ -180,13 +218,6 @@ public:
     void holderDropped(const QByteArray& deviceId, const QString& reason);
     /// The same device signed in again within its 180 s.
     void holderReturned(const QByteArray& deviceId);
-
-    /// Fix wave I1 (until Task 77): the station device's take ends with its
-    /// key. When the station device holds transmit, unkeyed, with MOX off
-    /// and nothing fenced, transmit becomes unheld at once (a transfer to
-    /// nobody with nothing to unkey). VOX the station armed itself stays
-    /// armed: its next VOX key takes transmit again. Nothing otherwise.
-    void releaseStationTake();
 
     /// Fix wave 2, Important 2: a take on unheld transmit whose key has not
     /// started yet (askKey took; setKeyed(true) has not followed).

@@ -24,6 +24,9 @@
 //               and TUNE wait while another device holds. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: iPhone app plan Task 77 (R-IOS-02, R-IOS-03, R-IOS-13):
+//               setTunerTune. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/RemoteTransmitClient.h"
@@ -223,6 +226,19 @@ void RemoteTransmitClient::release(quint32 epoch)
 void RemoteTransmitClient::setTune(bool on)
 {
     const quint32 id = send(QByteArrayLiteral("tx.tune"), {boolArgument("on", on)}, Kind::Tune);
+    m_tuneAsked = on && id != 0;
+    if (id == 0 && on) {
+        emit refused(QString::fromLatin1(kNoLinkReason), QString(), QString());
+    }
+    refreshKeepalive();
+}
+
+void RemoteTransmitClient::setTunerTune(bool on)
+{
+    // Answered as TUNE is (Kind::Tune): its carrier keeps this window's
+    // keepalives going while it waits for the amplifier and while it is on.
+    const quint32 id =
+        send(QByteArrayLiteral("tx.tunerTune"), {boolArgument("on", on)}, Kind::Tune);
     m_tuneAsked = on && id != 0;
     if (id == 0 && on) {
         emit refused(QString::fromLatin1(kNoLinkReason), QString(), QString());

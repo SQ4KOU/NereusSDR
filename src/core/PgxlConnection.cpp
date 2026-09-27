@@ -30,6 +30,13 @@
 //   2026-09-24  J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code
 //                 (R-R3-47, R-R3-22): replyReceived for every answer of a
 //                 connected amp (the Core's device settings).
+//   2026-09-26  J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code
+//                 (iPhone app plan Task 77 fix round 2): operateCommanded.
+//   2026-09-26  J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code
+//                 (Task 77 fix round 3): operateCommanded carries its seq.
+//   2026-09-26  J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code
+//                 (Task 77 fix round 4): replyRefused, a reply whose code
+//                 reads and is not zero.
 // =================================================================
 #include "PgxlConnection.h"
 #include "AppSettings.h"
@@ -561,6 +568,10 @@ quint32 PgxlConnection::writeProtocolCommand(const QString& cmd)
     ++m_framesOut;
     m_bytesOut += quint64(line.size());
     emit testFrameWrittenForTesting(line.trimmed());  // test seam
+    // iPhone app plan Task 77 fix round 2: the amp starts changing over.
+    if (cmd == QLatin1String("operate=1") || cmd == QLatin1String("operate=0")) {
+        emit operateCommanded(cmd == QLatin1String("operate=1"), seq);
+    }
     return seq;
 }
 
@@ -1082,6 +1093,14 @@ void PgxlConnection::processLine(const QString& line, quint64 attemptGeneration)
                 emit replyReceived(rseq, hexOk && hexCode == 0, body);
                 if (!self || (!offlineTest && !socketAttemptIsCurrent(attemptGeneration))) {
                     return;
+                }
+                // Task 77 fix round 4: a refusal only when the code reads
+                // and is not zero (an unreadable code refuses nothing).
+                if (hexOk && hexCode != 0) {
+                    emit replyRefused(rseq);
+                    if (!self || (!offlineTest && !socketAttemptIsCurrent(attemptGeneration))) {
+                        return;
+                    }
                 }
             }
 

@@ -13,9 +13,13 @@
 //   2026-09-26  J.J. Boyd / KG4VCF  Created (parity Task 21, R-IOS-18,
 //                                    R-R3-38, R-R3-49). AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  iPhone app plan Task 78 (R-IOS-07,
+//                                    R-IOS-02): the Connected now list.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "gui/setup/ThisCorePage.h"
+#include "gui/multidevice/ConnectedDevicesList.h"
 
 #include "core/HardwareProfile.h"
 #include "core/HpsdrModel.h"
@@ -112,6 +116,18 @@ ThisCorePage::ThisCorePage(RadioModel* model, QWidget* parent)
         }
         send("station.setRadioModel", selectedMac(), m_modelCombo->itemData(index).toInt());
     });
+
+    // iPhone app plan Task 78 (R-IOS-07; the several-devices design, section
+    // 12 item 8): who is connected to the Core now, then the paired
+    // devices, from the Core's connectedDevices and devices objects.
+    QGroupBox* connectedSection = addSection(tr("Connected now"));
+    auto* connectedLayout = qobject_cast<QVBoxLayout*>(connectedSection->layout());
+    if (connectedLayout == nullptr) {
+        connectedLayout = new QVBoxLayout(connectedSection);
+    }
+    m_connectedList = new ConnectedDevicesList(connectedSection);
+    m_connectedList->setDevices(m_radioModel ? m_radioModel->stationDevices() : nullptr);
+    connectedLayout->addWidget(m_connectedList);
 
     if (m_radioModel != nullptr) {
         connect(m_radioModel, &RadioModel::stationRadiosChanged, this,

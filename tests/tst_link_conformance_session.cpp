@@ -52,6 +52,9 @@
 //   transmitReady    iPhone app plan Task 35: the static radio's MOX walk
 //                    runs with no delays and the radio's own microphone
 //                    carries the audio, so a key can key it (false)
+//   unkeyWalkMs      iPhone app plan Task 77: with transmitReady, the MOX
+//                    walk back to receive takes this many real milliseconds
+//                    (0 to 5000), so a transfer is seen running (absent: 0)
 //   microphoneLine   fix wave C1: with transmitReady, every device's media
 //                    carries a microphone line whose buffer is full at
 //                    once, so a voice key keys (false: no device has the
@@ -86,6 +89,13 @@
 // way (tst_link_conformance_session and
 // tst_link_conformance_session_connectable), so neither entry carries the
 // other's time against its limit.
+//
+// NEREUS_LINK_REALTIME picks the fixtures that run a real-time MOX walk
+// (stationSetup.unkeyWalkMs above 0) the same way: "only" runs just those,
+// "skip" runs everything but them. Their ctest entry,
+// tst_link_conformance_session_realtime, carries the realtime label, so a
+// busy machine's `-LE realtime` run leaves them out (Task 77 fix wave, M4);
+// the other two entries skip them.
 //
 //   cmake --build build --target tst_link_conformance_session
 //   QT_QPA_PLATFORM=offscreen ctest --test-dir build \
@@ -198,6 +208,14 @@
 //   2026-09-26: Transmit group fix wave C1: stationSetup microphoneLine.
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-26: iPhone app plan Task 77 (R-IOS-02, R-IOS-03, R-IOS-13):
+//               stationSetup unkeyWalkMs; a verb with only optional arguments
+//               may be sent with none. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
+//   2026-09-26: Task 77 fix wave, M4: NEREUS_LINK_REALTIME for the real-time
+//               fixtures' own ctest entry (labelled realtime). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 //   2026-09-26  J.J. Boyd / KG4VCF  Parity Task 19 (R-IOS-25):
 //                                    recordStreamVersion and the record
 //                                    streams. AI-assisted via Anthropic
@@ -268,6 +286,7 @@ const QStringList kSetupKeys{
     QStringLiteral("maxSlices"),       QStringLiteral("alexRxAntennas"),
     QStringLiteral("lanScanWindowMs"), QStringLiteral("remoteTransmit"),
     QStringLiteral("transmitReady"),   QStringLiteral("microphoneLine"),
+    QStringLiteral("unkeyWalkMs"),
     QStringLiteral("stationRadios"),
 };
 
@@ -277,6 +296,19 @@ enum class ConnectableSelection { All, Only, Skip };
 ConnectableSelection connectableSelection()
 {
     const QByteArray value = qgetenv("NEREUS_LINK_CONNECTABLE");
+    if (value == "only") {
+        return ConnectableSelection::Only;
+    }
+    if (value == "skip") {
+        return ConnectableSelection::Skip;
+    }
+    return ConnectableSelection::All;
+}
+
+// NEREUS_LINK_REALTIME (see the file comment).
+ConnectableSelection realtimeSelection()
+{
+    const QByteArray value = qgetenv("NEREUS_LINK_REALTIME");
     if (value == "only") {
         return ConnectableSelection::Only;
     }
@@ -517,6 +549,20 @@ QString buildStation(const QJsonObject& setup, Station* station, quint16 major)
         StationServer* server = station->server.get();
         station->model->txTimeOutTimer()->setClock(
             [server]() { return server->deviceSessions()->now(); });
+    }
+    // iPhone app plan Task 77: with transmitReady, the MOX walk from
+    // transmit back to receive takes this long in real time, so a transfer
+    // that unkeys a holder is still running when the next message arrives.
+    const QJsonValue unkeyWalk = setup.value(QStringLiteral("unkeyWalkMs"));
+    if (!unkeyWalk.isUndefined()) {
+        const double ms = unkeyWalk.toDouble(-1.0);
+        if (!unkeyWalk.isDouble() || ms < 0.0 || ms > 5000.0
+            || ms != static_cast<double>(static_cast<int>(ms)) || !transmitReady.toBool(false)) {
+            return QStringLiteral("stationSetup.unkeyWalkMs must be a whole number from 0 to "
+                                  "5000, with transmitReady");
+        }
+        const int walk = static_cast<int>(ms);
+        station->model->moxController()->setTimerIntervals(0, walk, 0, walk, walk, 0);
     }
     // Fix wave C1: a voice key needs the device's microphone line, which
     // travels on media, not on this session. microphoneLine stands for a
@@ -828,7 +874,14 @@ QStringList appConformanceProblems(const QString& id, const QJsonObject& fixture
                     fits = want.value(QStringLiteral("optional")).toBool();
                 }
             }
-            fits = fits && next == args.size() && (args.isEmpty() == declared.isEmpty());
+            // iPhone app plan Task 77: a verb whose arguments are all
+            // optional (tx.take) may be sent with none.
+            bool allOptional = !declared.isEmpty();
+            for (const QJsonValue& d : declared) {
+                allOptional = allOptional && d.toObject().value(QStringLiteral("optional")).toBool();
+            }
+            fits = fits && next == args.size()
+                && (args.isEmpty() == declared.isEmpty() || (args.isEmpty() && allOptional));
             if (!fits) {
                 fail(index, QStringLiteral("%1's arguments are not the ones it takes").arg(verb));
             }
@@ -964,6 +1017,10 @@ void TstLinkConformanceSession::init()
         && qstrcmp(QTest::currentTestFunction(), "sessionFixtures") != 0) {
         QSKIP("NEREUS_LINK_CONNECTABLE=only runs the connectable fixtures alone");
     }
+    if (realtimeSelection() == ConnectableSelection::Only
+        && qstrcmp(QTest::currentTestFunction(), "sessionFixtures") != 0) {
+        QSKIP("NEREUS_LINK_REALTIME=only runs the real-time fixtures alone");
+    }
 }
 
 void TstLinkConformanceSession::cleanupTestCase()
@@ -1019,14 +1076,21 @@ void TstLinkConformanceSession::sessionFixtures_data()
         LinkFixtures::entries(m_manifest, QStringLiteral("session"));
     QVERIFY(!entries.isEmpty());
     const ConnectableSelection selection = connectableSelection();
+    const ConnectableSelection realtime = realtimeSelection();
     // Once per link major the suite covers (manifest linkMajors).
     for (const quint16 major : LinkFixtures::linkMajors(m_manifest)) {
         for (const LinkFixtures::Entry& entry : entries) {
-            const bool connectable = fixture(entry.id).value(QStringLiteral("stationSetup"))
-                                         .toObject().value(QStringLiteral("radio")).toString()
-                == QStringLiteral("connectable");
+            const QJsonObject setup =
+                fixture(entry.id).value(QStringLiteral("stationSetup")).toObject();
+            const bool connectable =
+                setup.value(QStringLiteral("radio")).toString() == QStringLiteral("connectable");
             if ((selection == ConnectableSelection::Only && !connectable)
                 || (selection == ConnectableSelection::Skip && connectable)) {
+                continue;
+            }
+            const bool walksInRealTime = setup.value(QStringLiteral("unkeyWalkMs")).toDouble(0.0) > 0.0;
+            if ((realtime == ConnectableSelection::Only && !walksInRealTime)
+                || (realtime == ConnectableSelection::Skip && walksInRealTime)) {
                 continue;
             }
             QTest::newRow(qPrintable(QStringLiteral("%1 link %2").arg(entry.id).arg(major)))

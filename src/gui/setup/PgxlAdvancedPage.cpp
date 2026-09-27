@@ -58,6 +58,15 @@
 //                                    Operate or Standby from the amp's
 //                                    report. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  iPhone app plan Task 77 fix round 3
+//                                    (R-IOS-02, R-IOS-03, R-IOS-13):
+//                                    Operate waits while a Tuner Genius
+//                                    cycle runs; a faulted amp is offered
+//                                    Standby. AI-assisted via Anthropic
+//                                    Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Task 77 fix round 4: Standby while
+//                                    operate=1 is unconfirmed. AI-assisted
+//                                    via Anthropic Claude Code.
 // =================================================================
 
 #include "PgxlAdvancedPage.h"
@@ -276,6 +285,9 @@ PgxlAdvancedPage::PgxlAdvancedPage(RadioModel* model, QWidget* parent)
         // Group B fix wave (M5): and whether the radio is on the air.
         connect(m_model, &RadioModel::coreOnAirChanged,
                 this, &PgxlAdvancedPage::updateOperateButton);
+        // Task 77 fix round 3: and whether a Tuner Genius cycle runs.
+        connect(m_model, &RadioModel::pgxlSwitchWaitChanged,
+                this, &PgxlAdvancedPage::updateOperateButton);
     }
 
     connect(m_diagnostics, &ConnectionDiagnostics::changed,
@@ -304,11 +316,21 @@ void PgxlAdvancedPage::updateOperateButton()
     const AmplifierModel* amp = m_model ? m_model->amplifierModel() : nullptr;
     const bool connected = pgxl && pgxl->isConnected();
     const bool operating = amp && amp->operate();
+    // Task 77 fix round 3: a faulted amp is offered Standby (operate=0),
+    // which ends a changeover the fault left waiting; and the button waits
+    // while a Tuner Genius cycle runs.
+    // Round 4: and while operate=1 is unconfirmed, Standby too.
+    const bool unconfirmed = m_model && m_model->ampOperateUnconfirmed();
+    const bool faulted = (amp && amp->state() == AmplifierModel::State::Fault) || unconfirmed;
     const bool onAir = m_model && m_model->isCoreOnAir();
-    m_operateBtn->setText(operating ? tr("Standby") : tr("Operate"));
-    m_operateBtn->setEnabled(connected && !onAir);
+    const bool tuning = m_model && m_model->pgxlSwitchWaitsForTuner();
+    m_operateBtn->setText(operating || faulted ? tr("Standby") : tr("Operate"));
+    m_operateBtn->setEnabled(connected && !onAir && !tuning);
     m_operateBtn->setToolTip(!connected ? tr("The Power Genius is not connected.")
                              : onAir ? RadioModel::onAirReason()
+                             : tuning ? RadioModel::tunerTuningReason()
+                             : unconfirmed ? tr("The amplifier has not reported operate yet. Put it in standby.")
+                             : faulted ? tr("The amplifier reports a fault. Put it in standby.")
                              : operating ? tr("Put the Power Genius in standby.")
                                          : tr("Put the Power Genius in operate."));
 }
@@ -323,7 +345,14 @@ void PgxlAdvancedPage::onOperateClicked()
     }
     // Group B fix wave (M5): refused on the air, by the Core's own rule.
     // Parity mini-round (ruling c): with the remote window's reason.
-    if (m_model->refuseLocalAccessorySwitchOnAir(QStringLiteral("pgxl"))) {
+    // Task 77 fix round 3: and while a Tuner Genius cycle runs.
+    // Task 77 fix round 3: a faulted amp goes to standby. Round 4: so does
+    // one whose operate=1 is unconfirmed.
+    const bool faulted = amp->state() == AmplifierModel::State::Fault
+        || m_model->ampOperateUnconfirmed();
+    const bool wantOperate = !amp->operate() && !faulted;
+    if (m_model->refuseLocalAccessorySwitchOnAir(QStringLiteral("pgxl"),
+                                                 /*standbyRequested=*/!wantOperate)) {
         updateOperateButton();
         return;
     }
@@ -333,8 +362,8 @@ void PgxlAdvancedPage::onOperateClicked()
     // command for OPERATE is `operate=1` (key=value), not bare `operate`.
     // PGXL rejected `operate` / `standby` with error 50000016 every click.
     // The button follows the amp's report, not the click.
-    pgxl->sendCommand(amp->operate() ? QStringLiteral("operate=0")
-                                     : QStringLiteral("operate=1"));
+    pgxl->sendCommand(wantOperate ? QStringLiteral("operate=1")
+                                  : QStringLiteral("operate=0"));
 }
 
 PgxlAdvancedPage::~PgxlAdvancedPage() = default;

@@ -54,11 +54,15 @@
 //   2026-09-25: iPhone app plan Task 34 (R-IOS-02): holdsTransmit and state
 //               "transmitting" (setTransmitProvider). J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: iPhone app plan Task 77 (R-IOS-02, R-IOS-03, R-IOS-13):
+//               transmittingOn. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
 #include <QHash>
 #include <QJsonArray>
+#include <QJsonObject>
 #include <QObject>
 #include <QString>
 
@@ -103,6 +107,9 @@ public:
         bool keyed{false};
         /// On the Core's monotonic clock (the registry's), while keyed.
         qint64 keyedSinceMs{0};
+        /// Task 77: the holder's transmit slice, {sliceId, letter, band,
+        /// mode}, while it is on the air; empty otherwise.
+        QJsonObject transmittingOn;
     };
     using TransmitProvider = std::function<TransmitState()>;
     void setTransmitProvider(TransmitProvider provider);

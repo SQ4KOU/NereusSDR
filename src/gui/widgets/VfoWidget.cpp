@@ -95,6 +95,9 @@
 //                 RadioModel::nrAvailabilityChanged, so an older Core that
 //                 does not say shows DFNR and MNR disabled with the reason.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26 : iPhone app plan Task 78 (R-IOS-02, R-IOS-30):
+//                 setInUseByRadio (ruling 8.11). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -2407,6 +2410,11 @@ void VfoWidget::setStepHz(int hz)
 // Phase 3F Sub-Epic C Task 9: emit handoff request to MainWindow for forwarding.
 void VfoWidget::onTxBadgeClicked()
 {
+    // Task 78: the radio's own transmission is not this window's to move.
+    if (m_inUseByRadio) {
+        m_txBadge->setChecked(false);
+        return;
+    }
     if (!m_transmitPermitted) { return; }
     emit txHandoffRequested(m_sliceIndex);
 }
@@ -2426,7 +2434,39 @@ void VfoWidget::setSliceIndex(int index)
 
 void VfoWidget::setTxSlice(bool isTx)
 {
-    m_txBadge->setChecked(isTx);
+    m_txBadge->setChecked(isTx && !m_inUseByRadio);
+}
+
+bool VfoWidget::txSliceShown() const
+{
+    return m_txBadge && m_txBadge->isChecked();
+}
+
+QString VfoWidget::inUseByRadioText()
+{
+    return QStringLiteral("The radio is transmitting on this frequency.");
+}
+
+void VfoWidget::setInUseByRadio(bool inUse)
+{
+    if (m_inUseByRadio == inUse) { return; }
+    m_inUseByRadio = inUse;
+    m_txBadge->setProperty("inUseByRadio", inUse);
+    if (inUse) {
+        m_txBadge->setChecked(false);
+        m_txBadge->setStyleSheet(
+            QStringLiteral("QPushButton { background: #3a2a10; border: 1px solid #d09020;"
+                           "border-radius: 3px; color: #ffc040; font-size: 10px; font-weight: bold; }"));
+        m_txBadge->setToolTip(inUseByRadioText());
+        m_txBadge->setAccessibleDescription(inUseByRadioText());
+    } else {
+        m_txBadge->setStyleSheet(
+            QStringLiteral("QPushButton { background: #1a2a3a; border: 1px solid #304050;"
+                           "border-radius: 3px; color: #6888a0; font-size: 10px; font-weight: bold; }"
+                           "QPushButton:checked { background: #6a3030; border-color: #ff4444; color: #ff8080; }"));
+        m_txBadge->setToolTip(QStringLiteral("Indicates this slice is the TX slice"));
+        m_txBadge->setAccessibleDescription(QString());
+    }
 }
 
 void VfoWidget::setAntennaList(const QStringList& ants)

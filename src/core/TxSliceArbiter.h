@@ -16,12 +16,21 @@
 //              included, so the new slice's frequency never reaches the
 //              radio before MOX off. J.J. Boyd (KG4VCF), AI-assisted via
 //              Anthropic Claude Code.
+//   2026-09-26 iPhone app plan Task 77 (R-IOS-02; the several-devices
+//              design, rulings 8.10 to 8.13): an owner lookup beside the
+//              slice list; requestHandoff for a requester's own slices;
+//              bindForHolder; the first bind among the holder's slices;
+//              the freeze while the station device is keyed. J.J. Boyd
+//              (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 #pragma once
 
+#include <QByteArray>
 #include <QObject>
 #include <QString>
 #include <QVector>
+
+#include <functional>
 
 namespace NereusSDR {
 
@@ -70,6 +79,32 @@ public:
     /// Inject the slice list owner (RadioModel) so arbiter can flip txSlice
     /// flags on SliceModel instances.
     void setSliceList(QVector<SliceModel*>* slices);
+
+    /// iPhone app plan Task 77 (ruling 8.13): who owns a slice (its
+    /// subject: the owner, or the device it is held for) and each owner's
+    /// active slice, beside the slice list (RadioModel sets both from its
+    /// SliceOwnership); and who holds transmit (empty while unheld).
+    using OwnerLookup = std::function<QByteArray(int sliceId)>;
+    using ActiveLookup = std::function<int(const QByteArray& owner)>;
+    using HolderLookup = std::function<QByteArray()>;
+    void setOwnerLookup(OwnerLookup owner, ActiveLookup active);
+    void setHolderLookup(HolderLookup holder) { m_holder = std::move(holder); }
+    /// Ruling 8.11: true while the station device is keyed; the flag then
+    /// never moves (the Core's session server sets it).
+    using FrozenLookup = std::function<bool()>;
+    void setFrozen(FrozenLookup frozen) { m_frozen = std::move(frozen); }
+    bool isFrozen() const { return m_frozen && m_frozen(); }
+
+    /// Ruling 8.10: tx.setTxSlice from `requester`, for its own slices only.
+    /// Refused (false, handoffBlocked) for a slice another owner has, and
+    /// while frozen.
+    bool requestHandoff(int sliceId, const QByteArray& requester);
+    /// Ruling 8.10: a transfer assigned `holder`: the flag moves to its
+    /// chosen transmit slice (`preferredSliceId`) if it still exists and
+    /// is the holder's, otherwise to the holder's active slice. Nothing
+    /// when the holder owns no slice, or while frozen. True when the flag
+    /// is on one of the holder's slices afterwards.
+    bool bindForHolder(const QByteArray& holder, int preferredSliceId);
 
     /// Remote-daemon R2 Task 5: set by RadioModel at construction wiring
     /// time (RadioModel::role() == Role::Remote), next to the
@@ -143,6 +178,10 @@ private:
     bool                      m_remote {false};    // Remote-daemon R2 Task 5
     UnkeyGate*                m_unkeyGate {nullptr};   // Task 34
     int                       m_pendingHandoffId {-1}; // Task 34: waiting for the gate
+    OwnerLookup               m_owner;                 // Task 77
+    ActiveLookup              m_active;                // Task 77
+    HolderLookup              m_holder;                // Task 77
+    FrozenLookup              m_frozen;                // Task 77, ruling 8.11
 };
 
 } // namespace NereusSDR

@@ -358,7 +358,9 @@ void TstRemotePureSignalArming::twoToneStaysWithRemoteTransmit()
     QCOMPARE(facade->lastActionError(), kNotYet);
     const SessionMessage reply = s.invoke("ps3.twoTone");
     QVERIFY(!reply.accepted);
-    QCOMPARE(reply.reason, kNotYet);
+    // iPhone app plan Task 77 (ruling 8.3): the two-tone test is a key; on
+    // this receive-only Core the transmit gate refuses it.
+    QCOMPARE(reply.reason, QStringLiteral("This Core is set to receive only."));
     QVERIFY(s.coreStayedOffTheAir());
 }
 

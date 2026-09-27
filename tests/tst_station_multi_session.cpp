@@ -122,6 +122,35 @@
 //               take whose key never starts is released). J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: iPhone app plan Task 77 (R-IOS-02, R-IOS-03): taking
+//               transmit (tx.take and its question, Take it back, a take
+//               during grace, the radio's PTT on edges), TX on the holder's
+//               slice only, the transmitter's settings, transmittingOn, and
+//               the Tuner Genius autotune. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: Task 77 fix wave: the radio's PTT against TUNE, an
+//               autotune and VOX (I1); a taker gone during its take (I2);
+//               the amplifier never switched under RF (I3, I4); tx.take
+//               copies (M6). J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
+//   2026-09-26: Task 77 fix round 2: with a TX channel on the Core, no
+//               key's RF starts before the amplifier reports the state it
+//               was sent to, and the amplifier is never switched around a
+//               key; tx.tunerTune refused while the device's own start is
+//               pending; the device's tx.key refused under its autotune
+//               carrier; a second PTT press during a take keys nothing.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
+//   2026-09-26: Task 77 fix round 3: a device's key and a device's
+//               two-tone started while the amplifier changes over are held
+//               and stopped without RF, the device told in the stop's
+//               words; a fresh key goes out once the amplifier reports.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
+//   2026-09-26: Task 77 fix round 4: a device's tunerTune that ends
+//               without keying for the amplifier's sake tells the device
+//               why (notice tuneEnded). J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -135,8 +164,15 @@
 #include "core/session/media/DisplayLoadGovernor.h"
 #include "core/session/media/IMediaTransport.h"
 #include "core/session/media/SpectrumEndpoint.h"
+#include "core/PgxlConnection.h"
+#include "core/TgxlConnection.h"
 #include "core/TwoToneController.h"
+#include "core/TxChannel.h"
 #include "core/TxInterlockPolicy.h"
+#include "core/WdspEngine.h"
+#include "core/session/RemoteKeying.h"
+
+#include <atomic>
 #include "models/Band.h"
 
 namespace {
@@ -351,6 +387,74 @@ struct MediaCore {
         return transport;
     }
 };
+
+} // namespace
+
+namespace {
+
+// Fix round 2: the Core's model with a TX channel wired as the connect
+// path wires it (no WDSP channel: its RF gate is what is observed), and
+// every operate command the amplifier gets, with whether RF could flow
+// and whether the test held a PTT down when it went.
+struct CoreTx {
+    RadioModel* model;
+    TxChannel tx{WdspEngine::kTxChannelId};
+    std::atomic<int> opens{0};
+    explicit CoreTx(RadioModel* m)
+        : model(m)
+    {
+        model->injectTxChannelForTest(&tx);
+        model->wireTxChannelKeyingForTest();
+        tx.setRfGateObserverForTest([this](bool open) {
+            if (open) {
+                ++opens;
+            }
+        });
+    }
+    ~CoreTx()
+    {
+        tx.setRfGateObserverForTest({});
+        model->injectTxChannelForTest(nullptr);
+    }
+};
+struct AmpLog {
+    struct Sent {
+        QString command;
+        bool rf{false};
+        bool pttDown{false};
+    };
+    QList<Sent> sent;
+    bool pttDown{false};
+    int count(const QString& command) const
+    {
+        int n = 0;
+        for (const Sent& s : sent) {
+            n += s.command == command ? 1 : 0;
+        }
+        return n;
+    }
+    bool noneUnderAKey() const
+    {
+        for (const Sent& s : sent) {
+            if (s.rf || s.pttDown) {
+                return false;
+            }
+        }
+        return true;
+    }
+};
+void logAmp(PgxlConnection* pgxl, MoxController* mox, AmpLog* log)
+{
+    QObject::connect(pgxl, &PgxlConnection::testFrameWrittenForTesting, pgxl,
+            [log, mox](const QString& frame) {
+                const QString command = frame.mid(frame.indexOf(QLatin1Char('|')) + 1);
+                if (command.startsWith(QLatin1String("operate="))) {
+                    log->sent.append({command,
+                                      mox->isMox() || mox->state() != MoxState::Rx,
+                                      log->pttDown});
+                }
+            });
+}
 
 } // namespace
 
@@ -918,7 +1022,8 @@ private slots:
         QVERIFY(caps.size() >= 2);
         QCOMPARE(capability(app->received(), QStringLiteral("txPermitted")).value_or(-1), 0);
         QTRY_VERIFY(txPermitted(app));
-        QCOMPARE(latestCapabilityIf(app->received(), QStringLiteral("remoteTxVersion"))->toInt(), 1);
+        // Task 77: remoteTxVersion 2 (tx.take and tx.tunerTune).
+        QCOMPARE(latestCapabilityIf(app->received(), QStringLiteral("remoteTxVersion"))->toInt(), 2);
         int completeAt = -1;
         int resendAt = -1;
         for (int i = 0; i < app->received().size(); ++i) {
@@ -1187,12 +1292,27 @@ private slots:
                  TxRefusals::otherDeviceHolds(QStringLiteral("Radio")));
         mox->onMicPttFromRadio(false);
         QTRY_COMPARE(mox->state(), MoxState::Rx);
-        // Fix wave I1: until Task 77 turns a press against another holder
-        // into a take, the radio's take ends with its key: nobody holds
-        // transmit afterwards, and the device may transmit again.
+        // Task 77 (ruling 8.1): the radio keeps transmit, unkeyed, after its
+        // press; the device takes it (asked: "Radio" holds it) and keys.
         TransmitHolder* holder = core.server->transmitHolder();
-        QTRY_COMPARE(holder->state(), TransmitHolder::State::Unheld);
-        QVERIFY(!holder->holder().has_value());
+        QVERIFY(holder->isHeldBy(QByteArray(KeyerIdentity::kStationDeviceId)));
+        QVERIFY(!holder->holder()->keyed);
+        QVERIFY(!txPermitted(appA));
+        const QJsonObject ask = core.invoke(appA, "tx.take", {});
+        QCOMPARE(ask.value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("Waiting for you to confirm."));
+        const QJsonObject question = firstOfType(appA->received(), QStringLiteral("confirm.request"));
+        QCOMPARE(question.value(QStringLiteral("kind")).toString(), QStringLiteral("takeTransmit"));
+        const QJsonObject shown = question.value(QStringLiteral("holder")).toObject();
+        QCOMPARE(shown.value(QStringLiteral("name")).toString(), QStringLiteral("Radio"));
+        QCOMPARE(shown.value(QStringLiteral("source")).toString(), QStringLiteral("radioPtt"));
+        QCOMPARE(shown.value(QStringLiteral("state")).toString(), QStringLiteral("listening"));
+        const QJsonObject took = core.invoke(
+            appA, "confirm.proceed",
+            {int64("id", question.value(QStringLiteral("id")).toInteger()), int64("choice", -1)});
+        QVERIFY2(took.value(QStringLiteral("accepted")).toBool(),
+                 qPrintable(took.value(QStringLiteral("reason")).toString()));
+        QVERIFY(holder->isHeldBy(a.key.fingerprint()));
         QTRY_VERIFY(txPermitted(appA));
         mox->setMox(true, keyerFor(a));
         QTRY_COMPARE(mox->state(), MoxState::Tx);
@@ -1273,6 +1393,8 @@ private slots:
         core.pair(a);
         LoopbackTransport* appA = core.signIn(a, kTransmitter);
         QVERIFY(admitted(appA));
+        // Task 77 (ruling 8.4): arming VOX needs holding transmit first.
+        QVERIFY(core.invoke(appA, "tx.take", {}).value(QStringLiteral("accepted")).toBool());
         appA->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
             "transmit", {MirrorUpdate{0, "voxEnabled", MirrorWireKind::Bool, QVariant(true)}}, 910)));
         QTRY_VERIFY(!propertyResult(appA, 910).isEmpty());
@@ -1434,7 +1556,7 @@ private slots:
 
     // Fix wave I1: the station's own VOX, armed at the Core, stays armed
     // when its take ends with its key.
-    void theStationsOwnVoxStaysArmedWhenItsTakeEnds()
+    void theStationsOwnVoxStaysArmedAfterItsKeyEnds()
     {
         Core core;
         allowTransmit(core);
@@ -1447,7 +1569,10 @@ private slots:
         QVERIFY(holder->isHeldBy(QByteArray(KeyerIdentity::kStationDeviceId)));
         mox->onVoxActive(false);
         QTRY_COMPARE(mox->state(), MoxState::Rx);
-        QTRY_COMPARE(holder->state(), TransmitHolder::State::Unheld);
+        // Task 77 (ruling 8.1): the station keeps transmit after its key;
+        // the VOX it armed itself stays armed.
+        QVERIFY(holder->isHeldBy(QByteArray(KeyerIdentity::kStationDeviceId)));
+        QVERIFY(!holder->holder()->keyed);
         QVERIFY(tx.voxEnabled());
         tx.setVoxEnabled(false);
     }
@@ -2101,7 +2226,10 @@ private slots:
         QCOMPARE(markerB("band").toInt(), static_cast<int>(hers->band()));
         QCOMPARE(markerB("streamIndex").toInt(), hers->streamIndex());
         QCOMPARE(markerB("psPaused").toBool(true), hers->psPaused());
-        QCOMPARE(markerB("txSlice").toBool(), hers->isTxSlice());
+        // Ruling 5.4a (Task 77): TX marks a slice only while its owner holds
+        // transmit; nobody holds it here, whatever the arbiter binds.
+        QVERIFY(hers->isTxSlice());
+        QCOMPARE(markerB("txSlice").toBool(true), false);
 
         // A: B's marker, its schema first, and never B's slice.
         QTRY_VERIFY(holds(appA, QStringLiteral("marker:1")));
@@ -3677,6 +3805,1263 @@ private slots:
 
     // Telemetry reaches every session that negotiated it, each on its own
     // sequence.
+    // ── iPhone app plan Task 77 (R-IOS-02, R-IOS-03): taking transmit ─────
+
+    // Refusals first: a take while a transfer runs is refused, and the old
+    // holder's key during the transfer is refused (transfer-refuses-keys).
+    void aTakeFromAKeyedHolderIsAskedRedUnkeysFirstAndTellsIt()
+    {
+        Core core;
+        allowTransmit(core);
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a, kTransmitter);
+        LoopbackTransport* appB = core.signIn(b, kTransmitter);
+        QVERIFY(admitted(appA) && admitted(appB));
+        MoxController* mox = core.model->moxController();
+        TransmitHolder* holder = core.server->transmitHolder();
+        QVERIFY(core.invoke(appA, "tx.key", {utf8("trigger", QStringLiteral("screen"))})
+                    .value(QStringLiteral("accepted")).toBool());
+        QTRY_COMPARE(mox->state(), MoxState::Tx);
+
+        // B's take is asked, red: the holder is on the air.
+        const QJsonObject asked = core.invoke(appB, "tx.take", {});
+        QVERIFY(!asked.value(QStringLiteral("accepted")).toBool(true));
+        QCOMPARE(asked.value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("Waiting for you to confirm."));
+        QTRY_VERIFY(!ofType(appB->received(), QStringLiteral("confirm.request")).isEmpty());
+        const QJsonObject question = ofType(appB->received(), QStringLiteral("confirm.request")).last();
+        QCOMPARE(question.value(QStringLiteral("kind")).toString(), QStringLiteral("takeTransmit"));
+        QCOMPARE(question.value(QStringLiteral("affected")).toArray().size(), 0);
+        const QJsonObject shown = question.value(QStringLiteral("holder")).toObject();
+        QCOMPARE(shown.value(QStringLiteral("deviceId")).toString(), a.id());
+        QCOMPARE(shown.value(QStringLiteral("name")).toString(), QStringLiteral("iPhone"));
+        QCOMPARE(shown.value(QStringLiteral("state")).toString(), QStringLiteral("transmitting"));
+        QCOMPARE(shown.value(QStringLiteral("keyed")).toBool(), true);
+        QCOMPARE(shown.value(QStringLiteral("source")).toString(), QStringLiteral("device"));
+        QVERIFY(mox->isMox());   // asking changes nothing
+        QVERIFY(holder->isHeldBy(a.key.fingerprint()));
+
+        // Proceed: A is unkeyed through the gate before B holds, unkeyed.
+        QSignalSpy states(holder, &TransmitHolder::changed);
+        const QJsonObject took = core.invoke(
+            appB, "confirm.proceed",
+            {int64("id", question.value(QStringLiteral("id")).toInteger()), int64("choice", -1)});
+        QVERIFY2(took.value(QStringLiteral("accepted")).toBool(),
+                 qPrintable(took.value(QStringLiteral("reason")).toString()));
+        QVERIFY(!mox->isMox());
+        QVERIFY(holder->isHeldBy(b.key.fingerprint()));
+        QVERIFY(!holder->holder()->keyed);
+        const QJsonArray values = took.value(QStringLiteral("values")).toArray();
+        QVERIFY(!values.isEmpty());
+        QCOMPARE(values.first().toObject().value(QStringLiteral("name")).toString(),
+                 QStringLiteral("holderEpoch"));
+        QCOMPARE(values.first().toObject().value(QStringLiteral("value")).toInteger(),
+                 qint64(holder->epoch()));
+
+        // A is told, with Take it back; every device's txState names B;
+        // the stop is recorded as taken over.
+        QTRY_VERIFY(!ofType(appA->received(), QStringLiteral("notice")).isEmpty());
+        const QJsonObject notice = ofType(appA->received(), QStringLiteral("notice")).last();
+        QCOMPARE(notice.value(QStringLiteral("kind")).toString(), QStringLiteral("transmitTaken"));
+        QCOMPARE(notice.value(QStringLiteral("takeBack")).toBool(), true);
+        QCOMPARE(notice.value(QStringLiteral("byName")).toString(), QStringLiteral("iPad"));
+        QCOMPARE(notice.value(QStringLiteral("byDeviceId")).toString(), b.id());
+        QCOMPARE(notice.value(QStringLiteral("bySource")).toString(), QStringLiteral("device"));
+        QCOMPARE(notice.value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("iPad took transmit."));
+        QVERIFY(OperatorWording::isPlain(notice.value(QStringLiteral("reason")).toString()));
+        for (LoopbackTransport* app : {appA, appB}) {
+            QTRY_COMPARE(latest(app->received(), QStringLiteral("txState"),
+                                QStringLiteral("holderDeviceId")).toString(),
+                         b.id());
+        }
+        QTRY_COMPARE(latest(appA->received(), QStringLiteral("txState"),
+                            QStringLiteral("stopReason")).toString(),
+                     QStringLiteral("takenOver"));
+        const QJsonObject refused =
+            core.invoke(appA, "tx.key", {utf8("trigger", QStringLiteral("screen"))});
+        QCOMPARE(refused.value(QStringLiteral("reason")).toString(),
+                 TxRefusals::otherDeviceHolds(QStringLiteral("iPad")).text);
+
+        // Take it back: tx.take with its usual confirmation (B unkeyed:
+        // asked without red), then A holds again.
+        const QJsonObject back = core.invoke(
+            appA, "notice.takeBack", {int64("id", notice.value(QStringLiteral("id")).toInteger())});
+        QCOMPARE(back.value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("Waiting for you to confirm."));
+        QTRY_VERIFY(!ofType(appA->received(), QStringLiteral("confirm.request")).isEmpty());
+        const QJsonObject again = ofType(appA->received(), QStringLiteral("confirm.request")).last();
+        QCOMPARE(again.value(QStringLiteral("kind")).toString(), QStringLiteral("takeTransmit"));
+        QCOMPARE(again.value(QStringLiteral("holder")).toObject().value(QStringLiteral("state"))
+                     .toString(),
+                 QStringLiteral("listening"));
+        const QJsonObject backDone = core.invoke(
+            appA, "confirm.proceed",
+            {int64("id", again.value(QStringLiteral("id")).toInteger()), int64("choice", -1)});
+        QVERIFY2(backDone.value(QStringLiteral("accepted")).toBool(),
+                 qPrintable(backDone.value(QStringLiteral("reason")).toString()));
+        QVERIFY(holder->isHeldBy(a.key.fingerprint()));
+        // A notice is taken back at most once.
+        const QJsonObject twice = core.invoke(
+            appA, "notice.takeBack", {int64("id", notice.value(QStringLiteral("id")).toInteger())});
+        QVERIFY(!twice.value(QStringLiteral("accepted")).toBool(true));
+    }
+
+    // Ruling 8.7: asked on the device first. tx.take {holderEpoch,
+    // shownKeyed} takes at once only while the holder shown still holds and
+    // is not on the air unless it was shown so; a proceed after the holder
+    // keyed since it was asked is asked again, red.
+    void aTakeShownOnTheDeviceIsAtOnceOnlyWhileWhatItShowedStillHolds()
+    {
+        Core core;
+        allowTransmit(core);
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a, kTransmitter);
+        LoopbackTransport* appB = core.signIn(b, kTransmitter);
+        QVERIFY(admitted(appA) && admitted(appB));
+        TransmitHolder* holder = core.server->transmitHolder();
+        MoxController* mox = core.model->moxController();
+
+        // Unheld: A's take is at once, and never keys.
+        const QJsonObject mine = core.invoke(appA, "tx.take", {});
+        QVERIFY(mine.value(QStringLiteral("accepted")).toBool());
+        QVERIFY(holder->isHeldBy(a.key.fingerprint()));
+        QVERIFY(!mox->isMox());
+        // Its own again changes nothing.
+        QVERIFY(core.invoke(appA, "tx.take", {}).value(QStringLiteral("accepted")).toBool());
+        const qint64 epoch = qint64(holder->epoch());
+        QTRY_COMPARE(latest(appB->received(), QStringLiteral("txState"),
+                            QStringLiteral("holderEpoch")).toInteger(),
+                     epoch);
+        const MirrorUpdate shownUnkeyed{0, "shownKeyed", MirrorWireKind::Bool, QVariant(false)};
+
+        // A keyed since B showed it unkeyed: asked (red).
+        QVERIFY(core.invoke(appA, "tx.key", {utf8("trigger", QStringLiteral("screen"))})
+                    .value(QStringLiteral("accepted")).toBool());
+        QTRY_COMPARE(mox->state(), MoxState::Tx);
+        const QJsonObject stale =
+            core.invoke(appB, "tx.take", {int64("holderEpoch", epoch), shownUnkeyed});
+        QCOMPARE(stale.value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("Waiting for you to confirm."));
+        QTRY_VERIFY(!ofType(appB->received(), QStringLiteral("confirm.request")).isEmpty());
+        QVERIFY(holder->isHeldBy(a.key.fingerprint()));
+        QVERIFY(mox->isMox());
+        QVERIFY(core.invoke(appB, "confirm.cancel",
+                            {int64("id", ofType(appB->received(), QStringLiteral("confirm.request"))
+                                             .last().value(QStringLiteral("id")).toInteger())})
+                    .value(QStringLiteral("accepted")).toBool());
+
+        // A unkeyed again: B's take as shown is at once.
+        QVERIFY(core.invoke(appA, "tx.unkey", {int64("epoch", 4294967295LL)})
+                    .value(QStringLiteral("accepted")).toBool());
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        const QJsonObject atOnce =
+            core.invoke(appB, "tx.take", {int64("holderEpoch", epoch), shownUnkeyed});
+        QVERIFY2(atOnce.value(QStringLiteral("accepted")).toBool(),
+                 qPrintable(atOnce.value(QStringLiteral("reason")).toString()));
+        QVERIFY(holder->isHeldBy(b.key.fingerprint()));
+
+        // A proceed after the holder keyed since it was asked: asked again.
+        const QJsonObject ask = core.invoke(appA, "tx.take", {});
+        QCOMPARE(ask.value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("Waiting for you to confirm."));
+        QTRY_VERIFY(!ofType(appA->received(), QStringLiteral("confirm.request")).isEmpty());
+        const qsizetype before = ofType(appA->received(), QStringLiteral("confirm.request")).size();
+        const QJsonObject first = ofType(appA->received(), QStringLiteral("confirm.request")).last();
+        QCOMPARE(first.value(QStringLiteral("holder")).toObject().value(QStringLiteral("keyed"))
+                     .toBool(true),
+                 false);
+        QVERIFY(core.invoke(appB, "tx.key", {utf8("trigger", QStringLiteral("screen"))})
+                    .value(QStringLiteral("accepted")).toBool());
+        QTRY_COMPARE(mox->state(), MoxState::Tx);
+        const QJsonObject proceed = core.invoke(
+            appA, "confirm.proceed",
+            {int64("id", first.value(QStringLiteral("id")).toInteger()), int64("choice", -1)});
+        QCOMPARE(proceed.value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("Waiting for you to confirm."));
+        QTRY_COMPARE(ofType(appA->received(), QStringLiteral("confirm.request")).size(), before + 1);
+        const QJsonObject red = ofType(appA->received(), QStringLiteral("confirm.request")).last();
+        QCOMPARE(red.value(QStringLiteral("holder")).toObject().value(QStringLiteral("keyed")).toBool(),
+                 true);
+        QVERIFY(holder->isHeldBy(b.key.fingerprint()));
+        QVERIFY(mox->isMox());
+        mox->setMox(false, keyerFor(b));
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+    }
+
+    // Settled detail S4: a take during the holder's grace is asked without
+    // red, naming the away device; it does not get transmit back, and its
+    // transmitTaken notice, with Take it back, arrives after its
+    // snapshot.complete.
+    void aTakeDuringGraceIsAskedWithoutRedAndTheNoticeWaitsForTheReturn()
+    {
+        Core core;
+        allowTransmit(core);
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a, kTransmitter);
+        LoopbackTransport* appB = core.signIn(b, kTransmitter);
+        QVERIFY(admitted(appA) && admitted(appB));
+        TransmitHolder* holder = core.server->transmitHolder();
+        QVERIFY(core.invoke(appA, "tx.take", {}).value(QStringLiteral("accepted")).toBool());
+        appA->closeLink(QStringLiteral("lost"));
+        QTRY_VERIFY(holder->holder().has_value() && holder->holder()->away);
+        core.now += 40000;
+        const QJsonObject asked = core.invoke(appB, "tx.take", {});
+        QCOMPARE(asked.value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("Waiting for you to confirm."));
+        QTRY_VERIFY(!ofType(appB->received(), QStringLiteral("confirm.request")).isEmpty());
+        const QJsonObject question = ofType(appB->received(), QStringLiteral("confirm.request")).last();
+        const QJsonObject shown = question.value(QStringLiteral("holder")).toObject();
+        QCOMPARE(shown.value(QStringLiteral("state")).toString(), QStringLiteral("away"));
+        QCOMPARE(shown.value(QStringLiteral("keyed")).toBool(true), false);
+        QCOMPARE(shown.value(QStringLiteral("awayForSeconds")).toInteger(), 40);
+        const QJsonObject took = core.invoke(
+            appB, "confirm.proceed",
+            {int64("id", question.value(QStringLiteral("id")).toInteger()), int64("choice", -1)});
+        QVERIFY2(took.value(QStringLiteral("accepted")).toBool(),
+                 qPrintable(took.value(QStringLiteral("reason")).toString()));
+        QVERIFY(holder->isHeldBy(b.key.fingerprint()));
+
+        // A comes back within its 3 minutes: no transmit, and its notice
+        // after snapshot.complete.
+        core.now += 20000;
+        LoopbackTransport* back = core.signIn(a, kTransmitter);
+        QVERIFY(admitted(back));
+        QVERIFY(holder->isHeldBy(b.key.fingerprint()));
+        QTRY_VERIFY(!ofType(back->received(), QStringLiteral("notice")).isEmpty());
+        int completeAt = -1;
+        int noticeAt = -1;
+        for (int i = 0; i < back->received().size(); ++i) {
+            const QJsonObject o = QJsonDocument::fromJson(back->received().at(i)).object();
+            const QString type = o.value(QStringLiteral("type")).toString();
+            if (type == QStringLiteral("snapshot.complete") && completeAt < 0) {
+                completeAt = i;
+            }
+            if (type == QStringLiteral("notice")
+                && o.value(QStringLiteral("kind")).toString() == QStringLiteral("transmitTaken")) {
+                noticeAt = i;
+                QCOMPARE(o.value(QStringLiteral("takeBack")).toBool(), true);
+                QCOMPARE(o.value(QStringLiteral("byName")).toString(), QStringLiteral("iPad"));
+                QCOMPARE(o.value(QStringLiteral("secondsAgo")).toInteger(), 20);
+            }
+        }
+        QVERIFY(completeAt >= 0);
+        QVERIFY(noticeAt > completeAt);
+        QTRY_COMPARE(latest(back->received(), QStringLiteral("txState"),
+                            QStringLiteral("holderDeviceId")).toString(),
+                     b.id());
+    }
+
+    // Rulings 8.8 and 8.9 (D52 as D58 amended it): the radio's own PTT
+    // pressed while a device holds transmit and is keyed takes it without a
+    // question: the device is unkeyed first and told, every device names
+    // "Radio" with source radioPtt, and the press keys only after the
+    // change. The device takes transmit back while the mic is still held;
+    // the held mic does not take it again, and releasing it does not unkey
+    // the device.
+    void theRadiosPttTakesFromAKeyedDeviceAndAHeldMicNeverTakesItBack()
+    {
+        Core core;
+        allowTransmit(core);
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a, kTransmitter);
+        LoopbackTransport* appB = core.signIn(b, kTransmitter);
+        QVERIFY(admitted(appA) && admitted(appB));
+        MoxController* mox = core.model->moxController();
+        TransmitHolder* holder = core.server->transmitHolder();
+        QVERIFY(core.invoke(appA, "tx.key", {utf8("trigger", QStringLiteral("screen"))})
+                    .value(QStringLiteral("accepted")).toBool());
+        QTRY_COMPARE(mox->state(), MoxState::Tx);
+        QCOMPARE(mox->currentKeyer().deviceId, a.key.fingerprint());
+        const int txSlice = core.model->txBoundSlice()->sliceIndex();
+
+        QSignalSpy refused(mox, &MoxController::moxRefused);
+        mox->onMicPttFromRadio(true);
+        // The station keys only after the transfer: A's key ends first.
+        QTRY_VERIFY(holder->isHeldBy(QByteArray(KeyerIdentity::kStationDeviceId)));
+        QTRY_VERIFY(mox->isMox() && mox->currentKeyer().isStation());
+        QCOMPARE(mox->pttMode(), PttMode::Mic);
+        QCOMPARE(refused.count(), 0);
+        QCOMPARE(holder->holder()->source, TransmitHolder::Source::RadioPtt);
+        for (LoopbackTransport* app : {appA, appB}) {
+            QTRY_COMPARE(latest(app->received(), QStringLiteral("txState"),
+                                QStringLiteral("holderName")).toString(),
+                         QStringLiteral("Radio"));
+            QCOMPARE(latest(app->received(), QStringLiteral("txState"),
+                            QStringLiteral("holderSource")).toString(),
+                     QStringLiteral("radioPtt"));
+        }
+        QTRY_VERIFY(!ofType(appA->received(), QStringLiteral("notice")).isEmpty());
+        const QJsonObject notice = ofType(appA->received(), QStringLiteral("notice")).last();
+        QCOMPARE(notice.value(QStringLiteral("kind")).toString(), QStringLiteral("transmitTaken"));
+        QCOMPARE(notice.value(QStringLiteral("byName")).toString(), QStringLiteral("Radio"));
+        QCOMPARE(notice.value(QStringLiteral("bySource")).toString(), QStringLiteral("radioPtt"));
+        QCOMPARE(notice.value(QStringLiteral("byKind")).toString(), QStringLiteral("station"));
+        // Ruling 5.4a: the frozen slice's owner sees no TX on it.
+        QTRY_COMPARE(latest(appA->received(), QStringLiteral("slice:%1").arg(txSlice),
+                            QStringLiteral("txSlice")).toBool(true),
+                     false);
+        // Ruling 8.11: its retune waits for the press.
+        appA->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
+            QByteArray("slice:") + QByteArray::number(txSlice),
+            {f64("frequency", 14250000.0)}, 7701)));
+        QTRY_VERIFY(!propertyResult(appA, 7701).isEmpty());
+        const QJsonObject retune =
+            propertyResult(appA, 7701).value(QStringLiteral("results")).toArray().first().toObject();
+        QCOMPARE(retune.value(QStringLiteral("accepted")).toBool(true), false);
+        QCOMPARE(retune.value(QStringLiteral("reason")).toString(),
+                 TxRefusals::holderOnAir(QStringLiteral("Radio"), true).text);
+
+        // A takes transmit back while the mic is still held (red: the radio
+        // is on the air).
+        const QJsonObject asked = core.invoke(appA, "tx.take", {});
+        QCOMPARE(asked.value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("Waiting for you to confirm."));
+        QTRY_VERIFY(!ofType(appA->received(), QStringLiteral("confirm.request")).isEmpty());
+        const QJsonObject question = ofType(appA->received(), QStringLiteral("confirm.request")).last();
+        QCOMPARE(question.value(QStringLiteral("holder")).toObject().value(QStringLiteral("state"))
+                     .toString(),
+                 QStringLiteral("transmitting"));
+        const QJsonObject took = core.invoke(
+            appA, "confirm.proceed",
+            {int64("id", question.value(QStringLiteral("id")).toInteger()), int64("choice", -1)});
+        QVERIFY2(took.value(QStringLiteral("accepted")).toBool(),
+                 qPrintable(took.value(QStringLiteral("reason")).toString()));
+        QVERIFY(holder->isHeldBy(a.key.fingerprint()));
+        // The held mic, on every status frame, never takes it again.
+        for (int frame = 0; frame < 10; ++frame) {
+            mox->onMicPttFromRadio(true);
+            QTest::qWait(5);
+        }
+        QVERIFY(holder->isHeldBy(a.key.fingerprint()));
+        QVERIFY(!mox->isMox());
+        // A keys; releasing the mic does not unkey it.
+        QVERIFY(core.invoke(appA, "tx.key", {utf8("trigger", QStringLiteral("screen"))})
+                    .value(QStringLiteral("accepted")).toBool());
+        QTRY_COMPARE(mox->state(), MoxState::Tx);
+        mox->onMicPttFromRadio(false);
+        QTest::qWait(20);
+        QVERIFY(mox->isMox());
+        QCOMPARE(mox->currentKeyer().deviceId, a.key.fingerprint());
+        // The next press takes it again.
+        mox->onMicPttFromRadio(true);
+        QTRY_VERIFY(holder->isHeldBy(QByteArray(KeyerIdentity::kStationDeviceId)));
+        mox->onMicPttFromRadio(false);
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+    }
+
+    // Ruling 5.4a: TX marks a slice, on `slice:` and on `marker:`, only
+    // while it is the transmit slice and its owner holds transmit; a change
+    // of holder sends the changed values. Ruling 8.10: the new holder's
+    // transmit slice is its own.
+    void txMarksOnlyTheHoldersOwnTransmitSlice()
+    {
+        Core core;
+        allowTransmit(core);
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a, kTransmitter);
+        LoopbackTransport* appB = core.signIn(b, kTransmitter);
+        QVERIFY(admitted(appA) && admitted(appB));
+        const SliceOwnership* ownership = core.model->sliceOwnership();
+        const QList<int> aSlices = ownership->ownedBy(a.key.fingerprint());
+        const QList<int> bSlices = ownership->ownedBy(b.key.fingerprint());
+        QVERIFY(!aSlices.isEmpty() && !bSlices.isEmpty());
+        const QString aKey = QStringLiteral("slice:%1").arg(aSlices.first());
+        const QString bKey = QStringLiteral("slice:%1").arg(bSlices.first());
+        const QString aMarker = QStringLiteral("marker:%1").arg(aSlices.first());
+        const QString bMarker = QStringLiteral("marker:%1").arg(bSlices.first());
+
+        QVERIFY(core.invoke(appA, "tx.take", {}).value(QStringLiteral("accepted")).toBool());
+        QCOMPARE(core.model->txBoundSlice()->sliceIndex(), aSlices.first());
+        QTRY_COMPARE(latest(appA->received(), aKey, QStringLiteral("txSlice")).toBool(), true);
+        QTRY_COMPARE(latest(appB->received(), aMarker, QStringLiteral("txSlice")).toBool(), true);
+        QCOMPARE(latest(appB->received(), bKey, QStringLiteral("txSlice")).toBool(true), false);
+
+        // B takes: the flag moves to B's own slice, and each view hears the
+        // changed marks.
+        const QJsonObject asked = core.invoke(appB, "tx.take", {});
+        QTRY_VERIFY(!ofType(appB->received(), QStringLiteral("confirm.request")).isEmpty());
+        const QJsonObject question = ofType(appB->received(), QStringLiteral("confirm.request")).last();
+        QVERIFY(core.invoke(appB, "confirm.proceed",
+                            {int64("id", question.value(QStringLiteral("id")).toInteger()),
+                             int64("choice", -1)})
+                    .value(QStringLiteral("accepted")).toBool());
+        QTRY_COMPARE(core.model->txBoundSlice()->sliceIndex(), bSlices.first());
+        QTRY_COMPARE(latest(appB->received(), bKey, QStringLiteral("txSlice")).toBool(), true);
+        QTRY_COMPARE(latest(appA->received(), bMarker, QStringLiteral("txSlice")).toBool(), true);
+        QTRY_COMPARE(latest(appA->received(), aKey, QStringLiteral("txSlice")).toBool(true), false);
+        QTRY_COMPARE(latest(appB->received(), aMarker, QStringLiteral("txSlice")).toBool(true),
+                     false);
+
+        // tx.setTxSlice names only the holder's own slices.
+        const QJsonObject other =
+            core.invoke(appB, "tx.setTxSlice", {int64("sliceId", aSlices.first())});
+        QVERIFY(!other.value(QStringLiteral("accepted")).toBool(true));
+        QCOMPARE(core.model->txBoundSlice()->sliceIndex(), bSlices.first());
+        Q_UNUSED(asked);
+    }
+
+    // Ruling 7.7: the transmitter's own settings are the holder's while
+    // transmit is held; with it unheld any device may change them. Arming
+    // VOX needs holding transmit (ruling 8.4).
+    void theTransmittersSettingsAreTheHoldersAndVoxNeedsTransmit()
+    {
+        Core core;
+        allowTransmit(core);
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a, kTransmitter);
+        LoopbackTransport* appB = core.signIn(b, kTransmitter);
+        QVERIFY(admitted(appA) && admitted(appB));
+        const QJsonValue gain = latest(appB->received(), QStringLiteral("transmit"),
+                                       QStringLiteral("micGain"));
+        QVERIFY(!gain.isUndefined());
+        const auto writeGain = [&](LoopbackTransport* app, double value, quint32 writeId) {
+            app->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
+                "transmit", {f64("micGain", value)}, writeId)));
+            const bool answered =
+                QTest::qWaitFor([&]() { return !propertyResult(app, writeId).isEmpty(); }, 5000);
+            Q_UNUSED(answered);
+            return propertyResult(app, writeId).value(QStringLiteral("results")).toArray()
+                .first().toObject();
+        };
+        const auto armVox = [&](LoopbackTransport* app, quint32 writeId) {
+            app->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
+                "transmit", {MirrorUpdate{0, "voxEnabled", MirrorWireKind::Bool, QVariant(true)}},
+                writeId)));
+            const bool answered =
+                QTest::qWaitFor([&]() { return !propertyResult(app, writeId).isEmpty(); }, 5000);
+            Q_UNUSED(answered);
+            return propertyResult(app, writeId).value(QStringLiteral("results")).toArray()
+                .first().toObject();
+        };
+
+        // Unheld: a setting goes; arming VOX waits for a take.
+        QVERIFY(writeGain(appB, 0.5, 7801).value(QStringLiteral("accepted")).toBool());
+        const QJsonObject voxUnheld = armVox(appB, 7802);
+        QCOMPARE(voxUnheld.value(QStringLiteral("accepted")).toBool(true), false);
+        QCOMPARE(voxUnheld.value(QStringLiteral("reason")).toString(), TxRefusals::notHolder().text);
+        QVERIFY(!core.model->transmitModel().voxEnabled());
+
+        // A holds: B's setting and B's VOX are refused naming A.
+        QVERIFY(core.invoke(appA, "tx.take", {}).value(QStringLiteral("accepted")).toBool());
+        const QJsonObject held = writeGain(appB, 0.75, 7803);
+        QCOMPARE(held.value(QStringLiteral("accepted")).toBool(true), false);
+        QCOMPARE(held.value(QStringLiteral("reason")).toString(),
+                 TxRefusals::otherDeviceHolds(QStringLiteral("iPhone")).text);
+        QCOMPARE(armVox(appB, 7804).value(QStringLiteral("reason")).toString(),
+                 TxRefusals::otherDeviceHolds(QStringLiteral("iPhone")).text);
+        const QJsonObject profile =
+            core.invoke(appB, "txProfile.select", {utf8("name", QStringLiteral("Default"))});
+        QCOMPARE(profile.value(QStringLiteral("reason")).toString(),
+                 TxRefusals::otherDeviceHolds(QStringLiteral("iPhone")).text);
+        // The holder's own write goes; its VOX is past the holder's rule
+        // (with no microphone line here, it meets that refusal instead).
+        const QJsonObject own = writeGain(appA, 0.25, 7805);
+        QVERIFY2(own.value(QStringLiteral("accepted")).toBool(),
+                 qPrintable(own.value(QStringLiteral("reason")).toString()));
+        QCOMPARE(armVox(appA, 7806).value(QStringLiteral("reason")).toString(),
+                 TxRefusals::micNotConnected().text);
+    }
+
+    // connectedDevices.transmittingOn: the holder's transmit slice while it
+    // is on the air.
+    void connectedDevicesNamesTheSliceTheHolderTransmitsOn()
+    {
+        Core core;
+        allowTransmit(core);
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a, kTransmitter);
+        LoopbackTransport* appB = core.signIn(b, kTransmitter);
+        QVERIFY(admitted(appA) && admitted(appB));
+        MoxController* mox = core.model->moxController();
+        QVERIFY(core.invoke(appA, "tx.key", {utf8("trigger", QStringLiteral("screen"))})
+                    .value(QStringLiteral("accepted")).toBool());
+        QTRY_COMPARE(mox->state(), MoxState::Tx);
+        const SliceModel* slice = core.model->txBoundSlice();
+        QVERIFY(waitForList(appB, [&](const QJsonArray& list) {
+            const QJsonObject on = entryFor(list, a.id()).value(QStringLiteral("transmittingOn")).toObject();
+            return on.value(QStringLiteral("sliceId")).toInt(-1) == slice->sliceIndex()
+                && on.value(QStringLiteral("letter")).toString()
+                       == QString(QChar(QLatin1Char('A').unicode() + slice->sliceIndex()))
+                && on.value(QStringLiteral("band")).toInt() == static_cast<int>(slice->band())
+                && on.value(QStringLiteral("mode")).toInt() == static_cast<int>(slice->dspMode());
+        }));
+        QVERIFY(!entryFor(connectedList(appB), b.id()).contains(QStringLiteral("transmittingOn")));
+        mox->setMox(false, keyerFor(a));
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        QVERIFY(waitForList(appB, [&](const QJsonArray& list) {
+            return !entryFor(list, a.id()).contains(QStringLiteral("transmittingOn"));
+        }));
+    }
+
+    // Carrier actions take transmit first (rulings 7.7, 8.3): ps3.twoTone
+    // from another device while transmit is held is refused naming the
+    // holder, and nothing keys.
+    void aPureSignalTwoToneFromAnotherDeviceIsRefused()
+    {
+        Core core;
+        allowTransmit(core);
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a, kTransmitter);
+        LoopbackTransport* appB = core.signIn(b, kTransmitter);
+        QVERIFY(admitted(appA) && admitted(appB));
+        QVERIFY(core.invoke(appA, "tx.take", {}).value(QStringLiteral("accepted")).toBool());
+        const QJsonObject twoTone = core.invoke(
+            appB, "ps3.twoTone", {MirrorUpdate{0, "enabled", MirrorWireKind::Bool, QVariant(true)}});
+        QVERIFY(!twoTone.value(QStringLiteral("accepted")).toBool(true));
+        QCOMPARE(twoTone.value(QStringLiteral("reason")).toString(),
+                 TxRefusals::otherDeviceHolds(QStringLiteral("iPhone")).text);
+        QVERIFY(!core.model->moxController()->isMox());
+        QVERIFY(core.server->transmitHolder()->isHeldBy(a.key.fingerprint()));
+    }
+
+    // The controller's addition: a remote Tuner Genius autotune
+    // (tx.tunerTune) is a key under the holder rules, keyed as the device
+    // (so the watchdog watches it), and ends when the device cancels it.
+    void aTunerAutotuneIsAKeyUnderTheHolderRules()
+    {
+        Core core;
+        allowTransmit(core);
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a, kTransmitter);
+        LoopbackTransport* appB = core.signIn(b, kTransmitter);
+        QVERIFY(admitted(appA) && admitted(appB));
+        MoxController* mox = core.model->moxController();
+        TransmitHolder* holder = core.server->transmitHolder();
+        const MirrorUpdate on{0, "on", MirrorWireKind::Bool, QVariant(true)};
+        const MirrorUpdate off{0, "on", MirrorWireKind::Bool, QVariant(false)};
+
+        // No tuner: refused in plain words, nothing taken.
+        const QJsonObject none = core.invoke(appA, "tx.tunerTune", {on});
+        QCOMPARE(none.value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("No Tuner Genius is connected to the Core."));
+        QCOMPARE(holder->state(), TransmitHolder::State::Unheld);
+
+        core.model->tgxlConnection()->injectLineForTesting(QStringLiteral("V1.2.17"));
+        QVERIFY(core.model->tgxlConnection()->isConnected());
+        const QJsonObject started = core.invoke(appA, "tx.tunerTune", {on});
+        QVERIFY2(started.value(QStringLiteral("accepted")).toBool(),
+                 qPrintable(started.value(QStringLiteral("reason")).toString()));
+        QVERIFY(holder->isHeldBy(a.key.fingerprint()));
+        // The carrier keys as A (no amplifier: at once, through the gate).
+        QTRY_VERIFY(mox->isMox());
+        QCOMPARE(mox->currentKeyer().deviceId, a.key.fingerprint());
+        QVERIFY(core.model->isTune());
+        QTRY_COMPARE(core.model->keyedBy().deviceId, a.key.fingerprint());
+        QCOMPARE(QByteArray(core.model->keyedBy().trigger), QByteArray("tune"));
+
+        // Another device's is refused naming A; so is its stop.
+        const QJsonObject other = core.invoke(appB, "tx.tunerTune", {on});
+        QCOMPARE(other.value(QStringLiteral("reason")).toString(),
+                 TxRefusals::otherDeviceHolds(QStringLiteral("iPhone")).text);
+        const QJsonObject stop = core.invoke(appB, "tx.tunerTune", {off});
+        QCOMPARE(stop.value(QStringLiteral("reason")).toString(),
+                 TxRefusals::otherDeviceHoldsStop(QStringLiteral("iPhone")).text);
+        QVERIFY(mox->isMox());
+
+        // A cancels: the carrier drops and the cycle ends.
+        QVERIFY(core.invoke(appA, "tx.tunerTune", {off}).value(QStringLiteral("accepted")).toBool());
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        QVERIFY(!core.model->isTgxlAutotuneInProgress());
+        QVERIFY(holder->isHeldBy(a.key.fingerprint()));
+    }
+
+    // ── Task 77 fix wave ──────────────────────────────────────────────────
+
+    // I1 (ruling 8.9): the radio's PTT takes transmit from a device on TUNE,
+    // on its Tuner Genius autotune, or talking on VOX, as from its tx.key:
+    // the device is unkeyed first, then the press keys, only if still down.
+    void theRadiosPttTakesFromADeviceOnTuneAutotuneOrVox()
+    {
+        enum class Key { Tune, TunerTune, Vox };
+        for (const Key kind : {Key::Tune, Key::TunerTune, Key::Vox}) {
+            Core core;
+            allowTransmit(core);
+            Device a;
+            core.pair(a);
+            LoopbackTransport* appA = core.signIn(a, kTransmitter);
+            QVERIFY(admitted(appA));
+            MoxController* mox = core.model->moxController();
+            TransmitHolder* holder = core.server->transmitHolder();
+            const MirrorUpdate on{0, "on", MirrorWireKind::Bool, QVariant(true)};
+            switch (kind) {
+            case Key::Tune:
+                QVERIFY(core.invoke(appA, "tx.tune", {on}).value(QStringLiteral("accepted")).toBool());
+                QTRY_VERIFY(core.model->isTune() && mox->isMox());
+                QCOMPARE(mox->currentKeyer().deviceId, a.key.fingerprint());
+                break;
+            case Key::TunerTune:
+                core.model->tgxlConnection()->injectLineForTesting(QStringLiteral("V1.2.17"));
+                QVERIFY(core.invoke(appA, "tx.tunerTune", {on}).value(QStringLiteral("accepted")).toBool());
+                QTRY_VERIFY(core.model->isTune() && mox->isMox());
+                QVERIFY(core.model->isTgxlAutotuneInProgress());
+                QCOMPARE(mox->currentKeyer().deviceId, a.key.fingerprint());
+                break;
+            case Key::Vox:
+                QVERIFY(core.invoke(appA, "tx.take", {}).value(QStringLiteral("accepted")).toBool());
+                core.model->transmitModel().setVoxEnabled(true);
+                mox->onVoxActive(true);   // VOX keys: the holder's key (ruling 8.4)
+                QTRY_COMPARE(mox->state(), MoxState::Tx);
+                QVERIFY(mox->currentKeyer().isStation());
+                QTRY_VERIFY(holder->holder()->keyed);
+                break;
+            }
+            QVERIFY(holder->isHeldBy(a.key.fingerprint()));
+
+            mox->onMicPttFromRadio(true);
+            QTRY_VERIFY2(holder->isHeldBy(QByteArray(KeyerIdentity::kStationDeviceId)),
+                         "the press took transmit");
+            QTRY_VERIFY(mox->isMox() && mox->currentKeyer().isStation());
+            QCOMPARE(mox->pttMode(), PttMode::Mic);
+            QVERIFY(!core.model->isTune());
+            QVERIFY(!core.model->isTgxlAutotuneInProgress());
+            QVERIFY(!core.model->transmitModel().voxEnabled());
+            QCOMPARE(holder->holder()->source, TransmitHolder::Source::RadioPtt);
+            if (kind == Key::Vox) {
+                mox->onVoxActive(false);
+            }
+            mox->onMicPttFromRadio(false);
+            QTRY_COMPARE(mox->state(), MoxState::Rx);
+        }
+    }
+
+    // I2 (ruling 8.15, S4): a taker whose session ends during its own take
+    // is never left holding as if it were here: dropped, it holds transmit
+    // away with its 180 s running; gone for good, it releases transmit.
+    void aTakerWhoseSessionEndsDuringItsTakeIsHeldAwayOrReleased()
+    {
+        for (const bool leaves : {false, true}) {
+            Core core;
+            allowTransmit(core);
+            Device a;
+            Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+            core.pair(a);
+            core.pair(b);
+            LoopbackTransport* appA = core.signIn(a, kTransmitter);
+            LoopbackTransport* appB = core.signIn(b, kTransmitter);
+            QVERIFY(admitted(appA) && admitted(appB));
+            MoxController* mox = core.model->moxController();
+            TransmitHolder* holder = core.server->transmitHolder();
+            // The walk back to receive takes real time, so the take runs
+            // while B's session ends.
+            mox->setTimerIntervals(0, 300, 0, 300, 300, 0);
+            QVERIFY(core.invoke(appA, "tx.key", {utf8("trigger", QStringLiteral("screen"))})
+                        .value(QStringLiteral("accepted")).toBool());
+            QTRY_COMPARE(mox->state(), MoxState::Tx);
+            const QJsonObject asked = core.invoke(appB, "tx.take", {});
+            QCOMPARE(asked.value(QStringLiteral("reason")).toString(),
+                     QStringLiteral("Waiting for you to confirm."));
+            QTRY_VERIFY(!ofType(appB->received(), QStringLiteral("confirm.request")).isEmpty());
+            const QJsonObject question =
+                ofType(appB->received(), QStringLiteral("confirm.request")).last();
+            appB->sendText(SessionMessages::encode(SessionMessages::commandInvoke(
+                "confirm.proceed",
+                9001,
+                {int64("id", question.value(QStringLiteral("id")).toInteger()),
+                 int64("choice", -1)})));
+            QTRY_COMPARE(holder->state(), TransmitHolder::State::Transferring);
+            if (leaves) {
+                appB->sendText(SessionMessages::encode(
+                    SessionMessages::commandInvoke("session.leave", 9002, {})));
+            } else {
+                appB->closeLink(QStringLiteral("lost"));
+            }
+            QTRY_COMPARE(mox->state(), MoxState::Rx);
+            QTRY_VERIFY(holder->state() != TransmitHolder::State::Transferring);
+            if (leaves) {
+                QTRY_COMPARE(holder->state(), TransmitHolder::State::Unheld);
+                QTRY_VERIFY(txPermitted(appA));
+            } else {
+                QVERIFY(holder->isHeldBy(b.key.fingerprint()));
+                QVERIFY(holder->holder()->away);
+                QTRY_COMPARE(latest(appA->received(), QStringLiteral("txState"),
+                                    QStringLiteral("holderAway")).toBool(),
+                             true);
+                core.now += DeviceSessionRegistry::kGraceMs + 1;
+                core.sessions().expireAway();
+                QTRY_COMPARE(holder->state(), TransmitHolder::State::Unheld);
+            }
+        }
+    }
+
+    // I3, fix round 2: a Tuner Genius autotune is refused while the radio
+    // is on the air (the amplifier would be switched under RF). While a
+    // device's cycle waits for the amplifier, its own key, TUNE and
+    // two-tone are refused; VOX keying meanwhile holds its RF until the
+    // amplifier reports standby (no RF into an amplifier changing over),
+    // the cycle ends without keying, and the amplifier goes back to
+    // operate only once nothing is keyed and no PTT is down.
+    void voxDuringAnAutotuneWaitStartsNoRfBeforeTheAmplifiersStandby()
+    {
+        Core core;
+        allowTransmit(core);
+        Device a;
+        core.pair(a);
+        LoopbackTransport* appA = core.signIn(a, kTransmitter);
+        QVERIFY(admitted(appA));
+        CoreTx txr(core.model.get());
+        MoxController* mox = core.model->moxController();
+        const MirrorUpdate on{0, "on", MirrorWireKind::Bool, QVariant(true)};
+        core.model->tgxlConnection()->injectLineForTesting(QStringLiteral("V1.2.17"));
+        PgxlConnection* pgxl = core.model->pgxlConnection();
+        pgxl->injectLineForTesting(QStringLiteral("V3.8.9"));
+        pgxl->injectLineForTesting(QStringLiteral("R1|0|state=OPERATE"));
+        AmpLog amp;
+        logAmp(pgxl, mox, &amp);
+
+        // On the air with its own voice key: refused, nothing switched.
+        const QJsonObject keyed =
+            core.invoke(appA, "tx.key", {utf8("trigger", QStringLiteral("screen"))});
+        QVERIFY(keyed.value(QStringLiteral("accepted")).toBool());
+        QTRY_COMPARE(mox->state(), MoxState::Tx);
+        const QJsonObject onAir = core.invoke(appA, "tx.tunerTune", {on});
+        QVERIFY(!onAir.value(QStringLiteral("accepted")).toBool(true));
+        QCOMPARE(onAir.value(QStringLiteral("reason")).toString(), TxRefusals::radioOnAir().text);
+        QVERIFY(!core.model->isTgxlAutotuneInProgress());
+        QCOMPARE(amp.sent.size(), 0);
+        QVERIFY(!core.model->isTune());
+        QVERIFY(core.invoke(appA, "tx.unkey", {int64("epoch", core.model->keyedBy().epoch)})
+                    .value(QStringLiteral("accepted")).toBool());
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+
+        // Off the air: the cycle starts and waits for the amplifier.
+        QVERIFY(core.invoke(appA, "tx.tunerTune", {on}).value(QStringLiteral("accepted")).toBool());
+        QCOMPARE(amp.count(QStringLiteral("operate=0")), 1);
+        QVERIFY(core.model->isTgxlAutotuneInProgress());
+        QVERIFY(!mox->isMox());
+        // Its own key, TUNE and two-tone are refused while it waits.
+        for (const QByteArray& verb : {QByteArray("tx.key"), QByteArray("tx.tune"),
+                                       QByteArray("tx.twoTone")}) {
+            const QJsonObject refused = verb == "tx.key"
+                ? core.invoke(appA, verb, {utf8("trigger", QStringLiteral("screen"))})
+                : core.invoke(appA, verb, {on});
+            QVERIFY2(!refused.value(QStringLiteral("accepted")).toBool(true), verb.constData());
+            QCOMPARE(refused.value(QStringLiteral("reason")).toString(),
+                     QStringLiteral("The tuner is already tuning."));
+        }
+        QVERIFY(!mox->isMox());
+        QVERIFY(core.model->isTgxlAutotuneInProgress());
+
+        // VOX keys (the holder's) during the wait: MOX comes on, its RF
+        // does not, until the amplifier reports standby.
+        txr.opens = 0;   // the voice key's own RF, above, is done
+        core.model->transmitModel().setVoxEnabled(true);
+        amp.pttDown = true;
+        mox->onVoxActive(true);
+        QTRY_COMPARE(mox->state(), MoxState::Tx);
+        QTest::qWait(200);
+        QCOMPARE(txr.opens.load(), 0);
+        QVERIFY(!txr.tx.isRfGateOpen());
+        pgxl->injectLineForTesting(QStringLiteral("S0|status state=STANDBY"));
+        // The cycle ends without keying the tune carrier; VOX goes out
+        // barefoot now the amplifier is in standby.
+        QTRY_VERIFY(!core.model->isTgxlAutotuneInProgress());
+        QTRY_VERIFY(txr.tx.isRfGateOpen());
+        QVERIFY(!core.model->isTune());
+        QVERIFY(mox->isMox());
+        QCOMPARE(amp.count(QStringLiteral("operate=1")), 0);
+        // The amplifier goes back once MOX reads receive and VOX is down.
+        amp.pttDown = false;
+        mox->onVoxActive(false);
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        QTRY_COMPARE(amp.count(QStringLiteral("operate=1")), 1);
+        QVERIFY(amp.noneUnderAKey());
+        core.model->transmitModel().setVoxEnabled(false);
+    }
+
+    // I4, fix round 2: the radio's PTT during a device's autotune that
+    // waits for the amplifier ends the cycle before the transfer. With the
+    // amplifier's operate=0 still unconfirmed nothing more is sent to it
+    // (one command in flight, never around the key); the station's key
+    // starts no RF until the amplifier reports standby, goes out barefoot,
+    // and the amplifier returns to operate only once the PTT is released.
+    void theRadiosPttDuringADevicesAutotuneWaitStartsNoRfBeforeTheStandby()
+    {
+        Core core;
+        allowTransmit(core);
+        Device a;
+        core.pair(a);
+        LoopbackTransport* appA = core.signIn(a, kTransmitter);
+        QVERIFY(admitted(appA));
+        CoreTx txr(core.model.get());
+        MoxController* mox = core.model->moxController();
+        TransmitHolder* holder = core.server->transmitHolder();
+        const MirrorUpdate on{0, "on", MirrorWireKind::Bool, QVariant(true)};
+        core.model->tgxlConnection()->injectLineForTesting(QStringLiteral("V1.2.17"));
+        PgxlConnection* pgxl = core.model->pgxlConnection();
+        pgxl->injectLineForTesting(QStringLiteral("V3.8.9"));
+        pgxl->injectLineForTesting(QStringLiteral("R1|0|state=OPERATE"));
+        AmpLog amp;
+        logAmp(pgxl, mox, &amp);
+        QVERIFY(core.invoke(appA, "tx.tunerTune", {on}).value(QStringLiteral("accepted")).toBool());
+        QVERIFY(core.model->isTgxlAutotuneInProgress());
+        QCOMPARE(amp.count(QStringLiteral("operate=0")), 1);
+        QVERIFY(!mox->isMox());
+
+        amp.pttDown = true;
+        mox->onMicPttFromRadio(true);
+        QTRY_VERIFY(holder->isHeldBy(QByteArray(KeyerIdentity::kStationDeviceId)));
+        QVERIFY(!core.model->isTgxlAutotuneInProgress());
+        QTRY_VERIFY(mox->isMox() && mox->currentKeyer().isStation());
+        QTest::qWait(200);
+        QCOMPARE(amp.count(QStringLiteral("operate=1")), 0);
+        QCOMPARE(txr.opens.load(), 0);
+        // The standby arrives: the station's RF starts, barefoot.
+        pgxl->injectLineForTesting(QStringLiteral("S0|status state=STANDBY"));
+        QTRY_VERIFY(txr.tx.isRfGateOpen());
+        QVERIFY(!core.model->isTune());
+        QVERIFY(mox->isMox() && mox->currentKeyer().isStation());
+        QTest::qWait(200);
+        QCOMPARE(amp.count(QStringLiteral("operate=1")), 0);
+        amp.pttDown = false;
+        mox->onMicPttFromRadio(false);
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        QTRY_COMPARE(amp.count(QStringLiteral("operate=1")), 1);
+        QVERIFY(amp.noneUnderAKey());
+    }
+
+    // Fix round 2, Important 1: tx.tunerTune is refused while the device's
+    // own start is on its way to keying (its key waiting for its
+    // microphone, its two-tone settling), with the on-air words; nothing
+    // reaches the amplifier and the pending start is not overwritten.
+    void aTunerTuneIsRefusedWhileTheDevicesOwnStartIsPending()
+    {
+        Core core;
+        allowTransmit(core);
+        Device a;
+        core.pair(a);
+        LoopbackTransport* appA = core.signIn(a, kTransmitter);
+        QVERIFY(admitted(appA));
+        CoreTx txr(core.model.get());
+        MoxController* mox = core.model->moxController();
+        const MirrorUpdate on{0, "on", MirrorWireKind::Bool, QVariant(true)};
+        const MirrorUpdate off{0, "on", MirrorWireKind::Bool, QVariant(false)};
+        core.model->tgxlConnection()->injectLineForTesting(QStringLiteral("V1.2.17"));
+        PgxlConnection* pgxl = core.model->pgxlConnection();
+        pgxl->injectLineForTesting(QStringLiteral("V3.8.9"));
+        pgxl->injectLineForTesting(QStringLiteral("R1|0|state=OPERATE"));
+        AmpLog amp;
+        logAmp(pgxl, mox, &amp);
+
+        // A voice key waiting for the device's microphone line.
+        SliceModel* slice = core.model->activeSlice();
+        QVERIFY(slice);
+        const DSPMode modeBefore = slice->dspMode();
+        slice->setDspMode(DSPMode::USB);
+        RemoteKeying::MicUplink uplink;
+        uplink.carriesMic = [](const QByteArray&) { return true; };
+        uplink.prime = [](const QByteArray&, std::function<void(bool)>) {};   // never fills
+        uplink.endPriming = [](const QByteArray&) {};
+        core.server->remoteKeying()->setMicUplink(uplink);
+        const quint32 keyId = core.nextCommandId++;
+        appA->sendText(SessionMessages::encode(SessionMessages::commandInvoke(
+            "tx.key", keyId, {utf8("trigger", QStringLiteral("screen"))})));
+        QTest::qWait(100);
+        QVERIFY(!mox->isMox());
+        const QJsonObject waiting = core.invoke(appA, "tx.tunerTune", {on});
+        QVERIFY(!waiting.value(QStringLiteral("accepted")).toBool(true));
+        QCOMPARE(waiting.value(QStringLiteral("reason")).toString(), TxRefusals::radioOnAir().text);
+        QVERIFY(!core.model->isTgxlAutotuneInProgress());
+        QCOMPARE(amp.sent.size(), 0);
+        // Released before it keyed: it never keys.
+        QVERIFY(core.invoke(appA, "tx.unkey", {int64("epoch", 0)}).contains(QStringLiteral("id")));
+        core.server->remoteKeying()->setMicUplink({});
+        slice->setDspMode(modeBefore);
+
+        // Its two-tone settling after its TUNE is turned off.
+        TwoToneController* tt = core.model->twoToneController();
+        QVERIFY(tt);
+        tt->setTxChannel(&txr.tx);
+        tt->setPowerOn(true);
+        tt->setSettleDelaysMs(0, 800);
+        QVERIFY(core.invoke(appA, "tx.tune", {on}).value(QStringLiteral("accepted")).toBool());
+        QTRY_VERIFY(core.model->isTune() && mox->isMox());
+        const QJsonObject twoTone = core.invoke(appA, "tx.twoTone", {on});
+        QVERIFY2(twoTone.value(QStringLiteral("accepted")).toBool(),
+                 qPrintable(twoTone.value(QStringLiteral("reason")).toString()));
+        QTRY_VERIFY(!core.model->isTune() && mox->state() == MoxState::Rx && !mox->isMox());
+        QVERIFY(tt->isActivationInFlight());
+        const QJsonObject settling = core.invoke(appA, "tx.tunerTune", {on});
+        QVERIFY(!settling.value(QStringLiteral("accepted")).toBool(true));
+        QCOMPARE(settling.value(QStringLiteral("reason")).toString(), TxRefusals::radioOnAir().text);
+        QVERIFY(!core.model->isTgxlAutotuneInProgress());
+        QCOMPARE(amp.sent.size(), 0);
+        // The two-tone keys after its settle, then ends.
+        QTRY_VERIFY(mox->isMox() && tt->isActive());
+        QCOMPARE(mox->currentKeyer().deviceId, a.key.fingerprint());
+        QVERIFY(core.invoke(appA, "tx.twoTone", {off}).value(QStringLiteral("accepted")).toBool());
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        tt->setTxChannel(nullptr);
+    }
+
+    // Fix round 3 (minor D): a device's key and a device's two-tone started
+    // while the amplifier changes over wait at the RF-flow gate; still
+    // waiting 1.5 s after the command, each is stopped with its RF never
+    // started, and the device is told in the stop's words. Once the
+    // amplifier reports, the device's fresh key goes out.
+    void aDevicesKeyAndTwoToneHeldForTheAmplifierAreStoppedWithoutRf()
+    {
+        Core core;
+        allowTransmit(core);
+        Device a;
+        core.pair(a);
+        LoopbackTransport* appA = core.signIn(a, kTransmitter);
+        QVERIFY(admitted(appA));
+        CoreTx txr(core.model.get());
+        MoxController* mox = core.model->moxController();
+        const MirrorUpdate on{0, "on", MirrorWireKind::Bool, QVariant(true)};
+        PgxlConnection* pgxl = core.model->pgxlConnection();
+        pgxl->injectLineForTesting(QStringLiteral("V3.8.9"));
+        pgxl->injectLineForTesting(QStringLiteral("R1|0|state=OPERATE"));
+        const QString words = RadioModel::ampNotSwitchedText();
+        QVERIFY(OperatorWording::isPlain(words));
+        // Barefoot transmit with the amplifier in standby is this test's
+        // subject; an interlock left set by an earlier test would refuse it.
+        core.model->txInterlockPolicy()->setMode(TxInterlockPolicy::Disabled);
+
+        // The device's key while the amplifier goes to standby.
+        pgxl->sendCommand(QStringLiteral("operate=0"));
+        const QJsonObject held =
+            core.invoke(appA, "tx.key", {utf8("trigger", QStringLiteral("screen"))});
+        QVERIFY2(held.value(QStringLiteral("accepted")).toBool(),
+                 qPrintable(held.value(QStringLiteral("reason")).toString()));
+        QTRY_VERIFY(mox->isMox());
+        QTRY_VERIFY_WITH_TIMEOUT(!mox->isMox(), 4000);
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        QCOMPARE(txr.opens.load(), 0);
+        QTRY_COMPARE(latest(appA->received(), QStringLiteral("txState"),
+                            QStringLiteral("stopText")).toString(),
+                     words);
+
+        // A late report; the device's fresh key goes out.
+        pgxl->injectLineForTesting(QStringLiteral("S0|status state=STANDBY"));
+        QVERIFY(!core.model->ampChangingOver());
+        const QJsonObject fresh =
+            core.invoke(appA, "tx.key", {utf8("trigger", QStringLiteral("screen"))});
+        QVERIFY2(fresh.value(QStringLiteral("accepted")).toBool(),
+                 qPrintable(fresh.value(QStringLiteral("reason")).toString()));
+        QTRY_VERIFY(txr.tx.isRfGateOpen());
+        QCOMPARE(txr.opens.load(), 1);
+        QVERIFY(core.invoke(appA, "tx.unkey", {int64("epoch", core.model->keyedBy().epoch)})
+                    .value(QStringLiteral("accepted")).toBool());
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+
+        // The device's two-tone while the amplifier goes to operate.
+        TwoToneController* tt = core.model->twoToneController();
+        QVERIFY(tt);
+        tt->setTxChannel(&txr.tx);
+        tt->setPowerOn(true);
+        tt->setSettleDelaysMs(0, 0);
+        pgxl->sendCommand(QStringLiteral("operate=1"));
+        const QJsonObject twoTone = core.invoke(appA, "tx.twoTone", {on});
+        QVERIFY2(twoTone.value(QStringLiteral("accepted")).toBool(),
+                 qPrintable(twoTone.value(QStringLiteral("reason")).toString()));
+        QTRY_VERIFY(mox->isMox() && tt->isActive());
+        QTest::qWait(200);
+        QCOMPARE(txr.opens.load(), 1);
+        QTRY_VERIFY_WITH_TIMEOUT(!tt->isActive() && !mox->isMox(), 4000);
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        QCOMPARE(txr.opens.load(), 1);
+        QVERIFY(core.model->lastTransmitStopReason().code
+                == QByteArray(RadioModel::kAmpNotSwitchedStopCode));
+        QTRY_COMPARE(latest(appA->received(), QStringLiteral("txState"),
+                            QStringLiteral("stopText")).toString(),
+                     words);
+        tt->setTxChannel(nullptr);
+    }
+
+    // Fix round 4 (Important 2): a device's tx.tunerTune, answered
+    // accepted, that ends without keying because of the amplifier tells
+    // that device why: a notice tuneEnded with the words, no `by` keys, no
+    // Take it back. Both endings: the amplifier put back in operate during
+    // the standby wait, and no standby within 1.5 s.
+    void aDevicesTunerTuneEndedUnkeyedIsToldWhy()
+    {
+        Core core;
+        allowTransmit(core);
+        Device a;
+        core.pair(a);
+        LoopbackTransport* appA = core.signIn(a, kTransmitter);
+        QVERIFY(admitted(appA));
+        CoreTx txr(core.model.get());
+        MoxController* mox = core.model->moxController();
+        const MirrorUpdate on{0, "on", MirrorWireKind::Bool, QVariant(true)};
+        core.model->tgxlConnection()->injectLineForTesting(QStringLiteral("V1.2.17"));
+        PgxlConnection* pgxl = core.model->pgxlConnection();
+        pgxl->injectLineForTesting(QStringLiteral("V3.8.9"));
+        pgxl->injectLineForTesting(QStringLiteral("R1|0|state=OPERATE"));
+        const QString words = RadioModel::ampNotStandbyForTuneText();
+        QVERIFY(OperatorWording::isPlain(words));
+        const auto tuneEnded = [appA]() {
+            QList<QJsonObject> found;
+            for (const QJsonObject& n : ofType(appA->received(), QStringLiteral("notice"))) {
+                if (n.value(QStringLiteral("kind")).toString() == QStringLiteral("tuneEnded")) {
+                    found.append(n);
+                }
+            }
+            return found;
+        };
+
+        // 1. Put back in operate during the wait (the standby came first).
+        QVERIFY(core.invoke(appA, "tx.tunerTune", {on}).value(QStringLiteral("accepted")).toBool());
+        QVERIFY(core.model->isTgxlAutotuneInProgress());
+        pgxl->sendCommand(QStringLiteral("operate=1"));
+        pgxl->injectLineForTesting(QStringLiteral("S0|status state=STANDBY"));
+        QTRY_VERIFY(!core.model->isTgxlAutotuneInProgress());
+        QVERIFY(!mox->isMox());
+        QCOMPARE(txr.opens.load(), 0);
+        QTRY_COMPARE(tuneEnded().size(), 1);
+        const QJsonObject first = tuneEnded().first();
+        QCOMPARE(first.value(QStringLiteral("reason")).toString(), words);
+        QCOMPARE(first.value(QStringLiteral("takeBack")).toBool(true), false);
+        QVERIFY(!first.contains(QStringLiteral("byDeviceId")));
+        pgxl->injectLineForTesting(QStringLiteral("S0|status state=OPERATE"));
+        QTRY_VERIFY(!core.model->ampChangingOver());
+
+        // 2. No standby within 1.5 s.
+        QVERIFY(core.invoke(appA, "tx.tunerTune", {on}).value(QStringLiteral("accepted")).toBool());
+        QVERIFY(core.model->isTgxlAutotuneInProgress());
+        QTRY_VERIFY_WITH_TIMEOUT(!core.model->isTgxlAutotuneInProgress(), 4000);
+        QVERIFY(!mox->isMox());
+        QCOMPARE(txr.opens.load(), 0);
+        QTRY_COMPARE(tuneEnded().size(), 2);
+        QCOMPARE(tuneEnded().last().value(QStringLiteral("reason")).toString(), words);
+        pgxl->injectLineForTesting(QStringLiteral("S0|status state=STANDBY"));
+    }
+
+    // Fix round 2 (the re-review's out-of-scope item, now in): the device's
+    // own tx.key or two-tone while its autotune carrier is up is refused
+    // with the tuning words; the tune carrier stays while the tuner sweeps.
+    void theDevicesOwnKeyUnderItsAutotuneCarrierIsRefused()
+    {
+        Core core;
+        allowTransmit(core);
+        Device a;
+        core.pair(a);
+        LoopbackTransport* appA = core.signIn(a, kTransmitter);
+        QVERIFY(admitted(appA));
+        MoxController* mox = core.model->moxController();
+        const MirrorUpdate on{0, "on", MirrorWireKind::Bool, QVariant(true)};
+        const MirrorUpdate off{0, "on", MirrorWireKind::Bool, QVariant(false)};
+        core.model->tgxlConnection()->injectLineForTesting(QStringLiteral("V1.2.17"));
+        const QJsonObject started = core.invoke(appA, "tx.tunerTune", {on});
+        QVERIFY(started.value(QStringLiteral("accepted")).toBool());
+        QTRY_VERIFY(core.model->isTune() && mox->isMox());
+        QCOMPARE(mox->currentKeyer().deviceId, a.key.fingerprint());
+        const quint32 tuneEpoch = core.model->keyedBy().epoch;
+        for (const QByteArray& verb : {QByteArray("tx.key"), QByteArray("tx.twoTone")}) {
+            const QJsonObject refused = verb == "tx.key"
+                ? core.invoke(appA, verb, {utf8("trigger", QStringLiteral("screen"))})
+                : core.invoke(appA, verb, {on});
+            QVERIFY2(!refused.value(QStringLiteral("accepted")).toBool(true), verb.constData());
+            QCOMPARE(refused.value(QStringLiteral("reason")).toString(),
+                     QStringLiteral("The tuner is already tuning."));
+        }
+        QVERIFY(core.model->isTune() && mox->isMox());
+        QVERIFY(core.model->isTgxlAutotuneInProgress());
+        QCOMPARE(core.model->keyedBy().epoch, tuneEpoch);
+        QVERIFY(core.invoke(appA, "tx.tunerTune", {off}).value(QStringLiteral("accepted")).toBool());
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+    }
+
+    // Fix round 2 (the re-review's out-of-scope item, now in): a second
+    // press of the radio's PTT while its first press's take runs is told
+    // "Transmit is changing hands. Try again in a moment." and, as the
+    // words say, keys nothing once the take ends; a fresh press keys.
+    void aSecondRadioPttPressDuringATakeKeysNothingAfterIt()
+    {
+        Core core;
+        allowTransmit(core);
+        Device a;
+        core.pair(a);
+        LoopbackTransport* appA = core.signIn(a, kTransmitter);
+        QVERIFY(admitted(appA));
+        MoxController* mox = core.model->moxController();
+        TransmitHolder* holder = core.server->transmitHolder();
+        const MirrorUpdate on{0, "on", MirrorWireKind::Bool, QVariant(true)};
+        QVERIFY(core.invoke(appA, "tx.tune", {on}).value(QStringLiteral("accepted")).toBool());
+        QTRY_VERIFY(core.model->isTune() && mox->isMox());
+        // The walk back to receive takes real time, so the take runs while
+        // the press is released and pressed again.
+        mox->setTimerIntervals(0, 300, 0, 300, 300, 0);
+        QSignalSpy refusals(mox, &MoxController::moxRefused);
+        mox->onMicPttFromRadio(true);
+        QTRY_COMPARE(holder->state(), TransmitHolder::State::Transferring);
+        mox->onMicPttFromRadio(false);
+        mox->onMicPttFromRadio(true);
+        QTRY_VERIFY(!refusals.isEmpty());
+        QCOMPARE(refusals.last().at(0).value<TxRefusal>().text, TxRefusals::changingHands().text);
+        QTRY_VERIFY(holder->isHeldBy(QByteArray(KeyerIdentity::kStationDeviceId)));
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        QTest::qWait(400);
+        QVERIFY(!mox->isMox());
+        mox->onMicPttFromRadio(false);
+        mox->onMicPttFromRadio(true);
+        QTRY_VERIFY(mox->isMox() && mox->currentKeyer().isStation());
+        mox->onMicPttFromRadio(false);
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+    }
+
+    // M6: tx.take copies (the same command id) get the first one's answer;
+    // a copy never asks again or takes a second time.
+    void aTxTakeCopyGetsTheSameAnswerAndNeverTakesTwice()
+    {
+        Core core;
+        allowTransmit(core);
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a, kTransmitter);
+        LoopbackTransport* appB = core.signIn(b, kTransmitter);
+        QVERIFY(admitted(appA) && admitted(appB));
+        MoxController* mox = core.model->moxController();
+        TransmitHolder* holder = core.server->transmitHolder();
+        const auto resultsFor = [](LoopbackTransport* app, qint64 id) {
+            QList<QJsonObject> out;
+            for (const QJsonObject& o : ofType(app->received(), QStringLiteral("command.result"))) {
+                if (o.value(QStringLiteral("id")).toInteger() == id) {
+                    out.append(o);
+                }
+            }
+            return out;
+        };
+        const auto sendTake = [](LoopbackTransport* app, quint32 id,
+                                 const QList<MirrorUpdate>& arguments) {
+            app->sendText(SessionMessages::encode(
+                SessionMessages::commandInvoke("tx.take", id, arguments)));
+        };
+
+        // A holds, unkeyed: B's take is asked once, whatever its copies.
+        QVERIFY(core.invoke(appA, "tx.take", {}).value(QStringLiteral("accepted")).toBool());
+        sendTake(appB, 8101, {});
+        sendTake(appB, 8101, {});
+        QTRY_COMPARE(resultsFor(appB, 8101).size(), 2);
+        for (const QJsonObject& r : resultsFor(appB, 8101)) {
+            QCOMPARE(r.value(QStringLiteral("reason")).toString(),
+                     QStringLiteral("Waiting for you to confirm."));
+        }
+        QTest::qWait(20);
+        QCOMPARE(ofType(appB->received(), QStringLiteral("confirm.request")).size(), 1);
+        core.invoke(appB, "confirm.cancel",
+                    {int64("id", ofType(appB->received(), QStringLiteral("confirm.request"))
+                                     .last().value(QStringLiteral("id")).toInteger())});
+
+        // A keyed, shown keyed on B: the take runs while its copy arrives;
+        // the id's one answer (accepted) comes when the take ends, and there
+        // is one transfer.
+        mox->setTimerIntervals(0, 300, 0, 300, 300, 0);
+        QVERIFY(core.invoke(appA, "tx.key", {utf8("trigger", QStringLiteral("screen"))})
+                    .value(QStringLiteral("accepted")).toBool());
+        QTRY_COMPARE(mox->state(), MoxState::Tx);
+        QTRY_VERIFY(holder->holder()->keyed);
+        const QList<MirrorUpdate> shown{
+            int64("holderEpoch", static_cast<qint64>(holder->epoch())),
+            MirrorUpdate{0, "shownKeyed", MirrorWireKind::Bool, QVariant(true)}};
+        const quint64 before = holder->epoch();
+        sendTake(appB, 8102, shown);
+        QTRY_COMPARE(holder->state(), TransmitHolder::State::Transferring);
+        sendTake(appB, 8102, shown);
+        QTRY_VERIFY(holder->isHeldBy(b.key.fingerprint()));
+        QTRY_COMPARE(resultsFor(appB, 8102).size(), 1);
+        QTest::qWait(20);
+        QCOMPARE(resultsFor(appB, 8102).size(), 1);
+        const QJsonObject answer = resultsFor(appB, 8102).first();
+        QVERIFY2(answer.value(QStringLiteral("accepted")).toBool(),
+                 qPrintable(answer.value(QStringLiteral("reason")).toString()));
+        QCOMPARE(answer.value(QStringLiteral("values")).toArray().first().toObject()
+                     .value(QStringLiteral("value")).toInteger(),
+                 qint64(before + 1));
+        QCOMPARE(holder->epoch(), before + 1);
+        // A later copy: the same answer, still no second take.
+        sendTake(appB, 8102, shown);
+        QTRY_COMPARE(resultsFor(appB, 8102).size(), 2);
+        QCOMPARE(resultsFor(appB, 8102).last(), answer);
+        QCOMPARE(holder->epoch(), before + 1);
+        QVERIFY(holder->isHeldBy(b.key.fingerprint()));
+    }
+
+    // Ruling 8.9a (D64): a hosting desktop's MOX, while another device
+    // holds transmit, is refused naming the holder and takes only through
+    // tx.take's rules (asked, or at once with what it showed); with
+    // transmit unheld it takes and keys at once.
+    void aHostingDesktopsMoxAsksWhileAnotherDeviceHolds()
+    {
+        Core core;
+        allowTransmit(core);
+        core.server->setStationDeviceWords(QStringLiteral("Shack Mac mini"), QStringLiteral("Shack"));
+        Device a;
+        core.pair(a);
+        LoopbackTransport* appA = core.signIn(a, kTransmitter);
+        QVERIFY(admitted(appA));
+        MoxController* mox = core.model->moxController();
+        TransmitHolder* holder = core.server->transmitHolder();
+        QVERIFY(core.invoke(appA, "tx.take", {}).value(QStringLiteral("accepted")).toBool());
+        QSignalSpy refused(mox, &MoxController::moxRefused);
+        mox->setMox(true);
+        QVERIFY(!mox->isMox());
+        QCOMPARE(refused.count(), 1);
+        QCOMPARE(refused.first().first().value<TxRefusal>(),
+                 TxRefusals::otherDeviceHolds(QStringLiteral("iPhone")));
+        QVERIFY(holder->isHeldBy(a.key.fingerprint()));
+        QCOMPARE(core.server->takeTransmitForStation(std::nullopt, std::nullopt),
+                 TransmitHolder::TakeVerdict::Ask);
+        QVERIFY(holder->isHeldBy(a.key.fingerprint()));
+        bool taken = false;
+        QCOMPARE(core.server->takeTransmitForStation(holder->epoch(), false,
+                                                     [&taken](bool ok) { taken = ok; }),
+                 TransmitHolder::TakeVerdict::AtOnce);
+        QTRY_VERIFY(taken);
+        QVERIFY(holder->isHeldBy(QByteArray(KeyerIdentity::kStationDeviceId)));
+        QCOMPARE(holder->holder()->name, QStringLiteral("Shack Mac mini"));
+        QCOMPARE(holder->holder()->source, TransmitHolder::Source::Device);
+        QTRY_VERIFY(!ofType(appA->received(), QStringLiteral("notice")).isEmpty());
+        QCOMPARE(ofType(appA->received(), QStringLiteral("notice")).last()
+                     .value(QStringLiteral("byName")).toString(),
+                 QStringLiteral("Shack Mac mini"));
+        mox->setMox(true);
+        QTRY_COMPARE(mox->state(), MoxState::Tx);
+        mox->setMox(false);
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+
+        // Unheld (a fresh Core): the desktop's MOX takes and keys at once.
+        Core fresh;
+        allowTransmit(fresh);
+        fresh.server->setStationDeviceWords(QStringLiteral("Shack Mac mini"), QStringLiteral("Shack"));
+        fresh.model->moxController()->setMox(true);
+        QTRY_COMPARE(fresh.model->moxController()->state(), MoxState::Tx);
+        QVERIFY(fresh.server->transmitHolder()->isHeldBy(QByteArray(KeyerIdentity::kStationDeviceId)));
+        fresh.model->moxController()->setMox(false);
+        QTRY_COMPARE(fresh.model->moxController()->state(), MoxState::Rx);
+    }
+
     void telemetryReachesEverySessionThatNegotiatedIt()
     {
         MediaCore m;

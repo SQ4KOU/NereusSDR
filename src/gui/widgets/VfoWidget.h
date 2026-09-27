@@ -42,6 +42,10 @@
 //                 in a remote window), disabled with the plain reason and
 //                 never hidden (updateNrAvailability), by J.J. Boyd
 //                 (KG4VCF), with Anthropic Claude Code assistance.
+//   2026-09-26 : iPhone app plan Task 78 (R-IOS-02, R-IOS-30): a slice the
+//                 radio's own PTT transmits on shows as in use by the
+//                 radio. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 
 //=================================================================
@@ -384,6 +388,14 @@ public:
     void setStepHz(int hz);
     void setSliceIndex(int index);
     void setTxSlice(bool isTx);
+    /// iPhone app plan Task 78 (the several-devices design, ruling 8.11):
+    /// the radio's own PTT is transmitting on this slice (the Core's
+    /// txState keyed, holderSource radioPtt, txSliceId this slice). The TX
+    /// badge shows it in amber, says so, and asks nothing on a click.
+    void setInUseByRadio(bool inUse);
+    bool inUseByRadio() const { return m_inUseByRadio; }
+    static QString inUseByRadioText();
+    bool txSliceShown() const;
     void setAntennaList(const QStringList& ants);
     void setSmeter(double dbm);
 
@@ -782,6 +794,7 @@ private:
     QPushButton* m_txAntBtn{nullptr};
     QLabel*      m_filterWidthLbl{nullptr};
     QPushButton* m_txBadge{nullptr};
+    bool m_inUseByRadio{false};
     QLabel*      m_splitBadge{nullptr};
     QLabel*      m_sliceBadge{nullptr};
     QStringList  m_antennaList{QStringLiteral("ANT1"), QStringLiteral("ANT2"), QStringLiteral("ANT3")};

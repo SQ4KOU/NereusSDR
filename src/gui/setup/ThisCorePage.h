@@ -28,6 +28,9 @@
 //   2026-09-26  J.J. Boyd / KG4VCF  Created (parity Task 21, R-IOS-18,
 //                                    R-R3-38, R-R3-49). AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  iPhone app plan Task 78 (R-IOS-07,
+//                                    R-IOS-02): connectedList().
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "gui/SetupPage.h"
@@ -39,6 +42,7 @@ class QTreeWidget;
 
 namespace NereusSDR {
 
+class ConnectedDevicesList;
 class RadioModel;
 
 class ThisCorePage : public SetupPage {
@@ -66,6 +70,8 @@ public:
     QComboBox* modelCombo() const { return m_modelCombo; }
     QPushButton* forgetButton() const { return m_forgetButton; }
     QLabel* statusLabel() const { return m_status; }
+    /// Task 78: who is connected to the Core now.
+    ConnectedDevicesList* connectedList() const { return m_connectedList; }
 
 private:
     void rebuildList();
@@ -81,6 +87,7 @@ private:
     QComboBox* m_modelCombo = nullptr;
     QPushButton* m_forgetButton = nullptr;
     QLabel* m_status = nullptr;
+    ConnectedDevicesList* m_connectedList = nullptr;
     bool m_stationAvailable = true;
     QString m_stationReason;
     bool m_fillingModels = false;

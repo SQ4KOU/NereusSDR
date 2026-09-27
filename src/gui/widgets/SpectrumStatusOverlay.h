@@ -28,6 +28,9 @@
 //                                    form of its short line that fits,
 //                                    never an elided one (R-R3-37).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  iPhone app plan Task 78 (R-IOS-02,
+//                R-IOS-30): the TX pill offers Take transmit while another
+//                device holds it. AI-assisted via Anthropic Claude Code.
 // =================================================================
 #pragma once
 
@@ -73,6 +76,16 @@ public:
 
     void setTxBound(bool tx);
     bool txBound() const { return m_txBound; }
+
+    /// iPhone app plan Task 78 (the several-devices design, section 12
+    /// item 2): another device (or the radio's own PTT) holds transmit and
+    /// this window can take it. While this pan's slice is not the TX
+    /// slice, the TX pill reads TAKE TX (outlined red while `holderOnAir`)
+    /// and a click emits takeTransmitClicked instead of txBadgeClicked.
+    void setTakeTransmitOffered(bool offered, const QString& holderName, bool holderOnAir);
+    bool takeTransmitOffered() const { return m_takeOffered && !m_txBound; }
+    /// The pill's hover sentence while it offers a take, else empty.
+    QString takeTransmitToolTip() const;
 
     /// Light (or clear) the WIDE pill. `reason` is the operator-facing
     /// sentence naming the cause of the bypass; it becomes this overlay's
@@ -137,6 +150,8 @@ public:
 
 signals:
     void txBadgeClicked();
+    /// Task 78: the TAKE TX pill was clicked.
+    void takeTransmitClicked();
     void wideBadgeClicked();
     void chainTagClicked(int chainIdx);
 
@@ -164,6 +179,10 @@ private:
     QString  m_mode {QStringLiteral("USB")};
     int      m_chainIndex {0};
     bool     m_txBound {false};
+    bool     m_takeOffered {false};
+    QString  m_takeHolderName;
+    bool     m_takeHolderOnAir {false};
+    bool     txPillLit() const { return m_txBound || m_takeOffered; }
     bool     m_wideBpf {false};
     QString  m_wideReason;
     bool     m_diversityActive {false};

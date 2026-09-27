@@ -15,6 +15,9 @@
 //               holder and state "transmitting" while it is on the air
 //               (setTransmitProvider). J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-26: iPhone app plan Task 77 (R-IOS-02, R-IOS-03, R-IOS-13):
+//               transmittingOn. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/ConnectedDevicesFacade.h"
@@ -228,6 +231,10 @@ QString ConnectedDevicesFacade::render(bool withDurations) const
             {QStringLiteral("listeningOn"),
              m_listening ? m_listening(entry.deviceId) : QJsonArray{}},
         };
+        // Task 77: the slice it transmits on, while it is on the air.
+        if (holds && keyed && !away && !transmit.transmittingOn.isEmpty()) {
+            o.insert(QStringLiteral("transmittingOn"), transmit.transmittingOn);
+        }
         if (withDurations) {
             o.insert(QStringLiteral("lastActivitySeconds"),
                      wholeSeconds(now - entry.reportedActivityMs));

@@ -43,7 +43,7 @@
         {"from": "station", "message": {"accepted": false, "affected": ["pureSignal"], "id": "$ref:invoke33", "reason": "PureSignal is unavailable until the radio is ready.", "type": "command.result", "values": [{"kind": "utf8", "name": "phase", "ordinal": 0, "value": "failed"}], "verb": "ps3.applyCurrent"}},
         {"advanceMs": 50},
         {"from": "client", "role": "behaviour", "message": {"type": "command.invoke", "verb": "ps3.twoTone", "id": "$int:invoke40:1:4294967295", "args": [{"ordinal": 0, "name": "enabled", "kind": "bool", "value": true}]}},
-        {"from": "station", "message": {"accepted": false, "affected": [], "id": "$ref:invoke40", "reason": "PureSignal cannot be run from a remote window yet.", "type": "command.result", "verb": "ps3.twoTone"}},
+        {"from": "station", "message": {"accepted": false, "affected": [], "id": "$ref:invoke40", "reason": "This Core is set to receive only.", "type": "command.result", "values": [{"kind": "utf8", "name": "refusalCode", "ordinal": 0, "value": "stationReceiveOnly"}, {"kind": "utf8", "name": "refusalFix", "ordinal": 0, "value": ""}], "verb": "ps3.twoTone"}},
         {"advanceMs": 50},
         {"from": "client", "role": "behaviour", "message": {"type": "command.invoke", "verb": "ps3.restoreCorrection", "id": "$int:invoke53:1:4294967295", "args": [{"ordinal": 0, "name": "assetId", "kind": "utf8", "value": "conformance"}]}},
         {"from": "station", "message": {"accepted": true, "affected": [], "id": "$ref:invoke53", "reason": "", "type": "command.result", "values": [{"kind": "utf8", "name": "phase", "ordinal": 0, "value": "accepted"}], "verb": "ps3.restoreCorrection"}},

@@ -154,6 +154,29 @@
 //               take whose key never starts is released). J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: iPhone app plan Task 77 (R-IOS-02, R-IOS-03, R-IOS-13): the
+//               radio's mic press edge while another device's key is on asks
+//               the gate (a take); holdOffHeldMic; programKeyRefusal. J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
+//   2026-09-26: iPhone app plan Task 77 fix wave, I1 (ruling 8.9): the
+//               mic's press edge asks the gate whenever another device
+//               holds transmit (setOtherDeviceHolds), whatever its key
+//               (TUNE, two-tone, a tuner autotune, VOX). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
+//   2026-09-26: iPhone app plan Task 77 fix round 2 (R-IOS-02, R-IOS-03,
+//               R-IOS-13): anyPttSourceHeld and pttSourcesReleased (the
+//               amplifier's owed switch waits for every PTT source); the
+//               radio's mic keys after a take only while the press that
+//               took is still down (a second press during the take is
+//               refused and keys nothing later). J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: iPhone app plan Task 77 fix round 3 (R-IOS-02, R-IOS-03,
+//               R-IOS-13): a CAT or TCI release that never keyed, and a
+//               refused CAT or TCI level, report pttSourcesReleased. J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis state-machine
@@ -346,6 +369,11 @@ void MoxController::setKeyingGate(KeyingGateFn gate)
     m_keyingGate = std::move(gate);
 }
 
+void MoxController::setOtherDeviceHolds(OtherDeviceHoldsFn probe)
+{
+    m_otherDeviceHolds = std::move(probe);
+}
+
 void MoxController::setMox(bool on, const KeyerIdentity& keyer)
 {
     if (!on) {
@@ -410,6 +438,14 @@ void MoxController::onTakeFinished(const KeyerIdentity& keyer, bool took)
                                                     : 0;
     if (bit == 0 || !isLevelHeld(bit)) {
         return;
+    }
+    if (bit == kRefusedMic) {
+        // Task 77 fix round 2: the mic that is down now is the press that
+        // took, not a later one refused while the take ran.
+        if (!m_micTakePressDown) {
+            return;
+        }
+        m_micTakePressDown = false;
     }
     clearHeldBits(bit);
     pollPtt();
@@ -1216,6 +1252,11 @@ void MoxController::tryPollKey(PttMode mode, quint8 refusedBit)
     if (m_keyingGate && refusalBeforeTheGate().isEmpty()) {
         const KeyerIdentity keyer = KeyerIdentity::station(mode);
         const KeyingAnswer answer = m_keyingGate(mode, keyer);
+        if (answer.verdict == KeyingVerdict::Take && mode == PttMode::Mic) {
+            // Task 77 fix round 2: this press took; it keys when the take
+            // ends if it is still down (onTakeFinished).
+            m_micTakePressDown = true;
+        }
         if (answer.verdict != KeyingVerdict::Admit) {
             if (answer.verdict == KeyingVerdict::Refuse) {
                 reportRefusal(answer.refusal.text, answer.refusal,
@@ -1231,6 +1272,8 @@ void MoxController::tryPollKey(PttMode mode, quint8 refusedBit)
                 } else if (refusedBit == kRefusedTci) {
                     m_tciPtt = false;
                 }
+                // Task 77 fix round 3: a dropped level is a release too.
+                reportIfSourcesReleased();
             }
             return;
         }
@@ -1278,6 +1321,16 @@ void MoxController::clearHeldBits(quint8 bits)
 {
     m_refusedHeld &= static_cast<quint8>(~bits);
     m_notQueuedHeld &= static_cast<quint8>(~bits);
+    reportIfSourcesReleased();
+}
+
+void MoxController::reportIfSourcesReleased()
+{
+    // iPhone app plan Task 77 fix round 2: every release path clears its
+    // held bits, so this is where the last release is seen.
+    if (!anyPttSourceHeld()) {
+        emit pttSourcesReleased();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1492,6 +1545,8 @@ void MoxController::clearPttSources()
     m_tciPtt = false;
     m_refusedHeld = 0;
     m_notQueuedHeld = 0;
+    m_micTakePressDown = false;
+    reportIfSourcesReleased();
 }
 
 // ---------------------------------------------------------------------------
@@ -2312,11 +2367,78 @@ void MoxController::onMicPttFromRadio(bool pressed)
     // PTTMode.MIC from receive (console.cs:25526-25541), a release unkeys
     // only in PTTMode.MIC (console.cs:25589-25595), and neither does
     // anything during a manual key. Receiver and transmit gaps plan, Task 7.
+    const bool pressEdge = pressed && !m_micPtt;
     m_micPtt = pressed;
     if (!pressed) {
+        m_micTakePressDown = false;   // Task 77 fix round 2
         clearHeldBits(kRefusedMic);   // M3 and R-R3-36: a new press
     }
+    // iPhone app plan Task 77 (rulings 8.8, 8.9): while another device
+    // holds transmit, whatever its key (tx.key, TUNE, two-tone, a Tuner
+    // Genius autotune, VOX), its press edge asks the gate here: PollPTT
+    // never reaches the mic then (a station source never rides another
+    // keyer's key, and a manual key skips the whole pass). A press takes
+    // transmit, the transfer unkeying that device first. The press keys
+    // nothing now; it is held off until the take ends (onTakeFinished) or
+    // it is released, so a press that took nothing never keys later
+    // without a fresh one.
+    // Fix wave I1: asked on the holder (TransmitHolder's state), not on
+    // who is keyed. TX inhibit, the PA trip and receive only still take
+    // nothing (fix wave M1). A holder on the air is taken from even when
+    // the band plan or the interlock would refuse the station's own key
+    // (ruling 8.9: the press stops the device first; PollPTT retries the
+    // station's key after the take); an unkeyed holder is taken from only
+    // when nothing before the gate refuses, as in tryPollKey.
+    const bool otherDeviceHolds = m_otherDeviceHolds
+                                      ? m_otherDeviceHolds()
+                                      : (m_mox && !m_currentKeyer.isStation() && !m_manualKey);
+    const bool onAir = m_mox || m_manualKey || m_state != MoxState::Rx;
+    if (pressEdge && otherDeviceHolds && m_keyingGate
+        && (onAir || refusalBeforeTheGate().isEmpty())) {
+        if (transmitBlocked()) {
+            const TxRefusal blocked = transmitBlockRefusal();
+            reportRefusal(blocked.text, blocked, /*quiet=*/false);
+        } else {
+            const KeyingAnswer answer =
+                m_keyingGate(PttMode::Mic, KeyerIdentity::station(PttMode::Mic));
+            if (answer.verdict == KeyingVerdict::Refuse) {
+                reportRefusal(answer.refusal.text, answer.refusal, /*quiet=*/false);
+            }
+            // Task 77 fix round 2: only the press that took keys once the
+            // take ends; one refused while a take runs ("Transmit is
+            // changing hands. Try again in a moment.") keys nothing later.
+            m_micTakePressDown = answer.verdict == KeyingVerdict::Take;
+        }
+        if (m_micPtt) {
+            m_refusedHeld |= kRefusedMic;
+            m_notQueuedHeld |= kRefusedMic;
+        }
+        return;
+    }
     pollPtt();
+}
+
+TxRefusal MoxController::programKeyRefusal(const KeyerIdentity& keyer) const
+{
+    if (!m_keyingGate || !keyer.program) {
+        return {};
+    }
+    const KeyingAnswer answer = m_keyingGate(keyer.source, keyer);
+    if (answer.verdict == KeyingVerdict::Admit) {
+        return {};
+    }
+    return answer.refusal.isEmpty() ? TxRefusals::changingHands() : answer.refusal;
+}
+
+void MoxController::holdOffHeldMic()
+{
+    // iPhone app plan Task 77 (ruling 8.9): a PTT still held after another
+    // device takes transmit back does not take it again; the next press
+    // does. Held off until released (clearHeldBits on the release).
+    if (m_micPtt) {
+        m_refusedHeld |= kRefusedMic;
+        m_notQueuedHeld |= kRefusedMic;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2354,6 +2476,11 @@ void MoxController::onCatPtt(bool pressed)
     }
     m_catPtt = pressed;
     pollPtt();
+    if (!pressed) {
+        // Task 77 fix round 3: clearHeldBits ran with the level still set,
+        // so a release that never keyed is reported here.
+        reportIfSourcesReleased();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2470,6 +2597,10 @@ void MoxController::onTciPtt(bool pressed)
     }
     m_tciPtt = pressed;
     pollPtt();
+    if (!pressed) {
+        // Task 77 fix round 3: as onCatPtt.
+        reportIfSourcesReleased();
+    }
 }
 
 } // namespace NereusSDR

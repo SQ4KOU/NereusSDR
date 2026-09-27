@@ -47,6 +47,7 @@
 //               Code.
 // =================================================================
 
+#include "core/safety/TransmitHolder.h"
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
 #include "core/MoxController.h"
@@ -372,6 +373,13 @@ private slots:
         QTRY_VERIFY(h.client.capabilities().txPermitted);
         QSignalSpy completed(&h.client, &StationClient::propertyWriteCompleted);
 
+        // iPhone app plan Task 77 (ruling 8.4): arming VOX needs holding
+        // transmit; the window takes it first (on unheld transmit).
+        {
+            TransmitHolder::KeyRequest take;
+            take.deviceId = h.windowKey->fingerprint();
+            QCOMPARE(h.server.transmitHolder()->askKey(take).verdict, KeyingVerdict::Admit);
+        }
         h.remote.transmitModel().setVoxEnabled(true);
         QTRY_VERIFY(!completed.isEmpty());
         bool refusedWithReason = false;
@@ -411,6 +419,13 @@ private slots:
         QTRY_VERIFY(h.client.capabilities().txPermitted);
         QSignalSpy tripped(h.server.txWatchdog(), &RemoteTxWatchdog::tripped);
 
+        // iPhone app plan Task 77 (ruling 8.4): arming VOX needs holding
+        // transmit; the window takes it first (on unheld transmit).
+        {
+            TransmitHolder::KeyRequest take;
+            take.deviceId = h.windowKey->fingerprint();
+            QCOMPARE(h.server.transmitHolder()->askKey(take).verdict, KeyingVerdict::Admit);
+        }
         h.remote.transmitModel().setVoxEnabled(true);
         QTRY_VERIFY(h.station.transmitModel().voxEnabled());
         QTRY_COMPARE(h.station.remoteVoxDevice(), h.windowKey->fingerprint());

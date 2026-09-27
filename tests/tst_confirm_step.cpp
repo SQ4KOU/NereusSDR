@@ -67,6 +67,10 @@
 //               whoever holds transmit, and the OC pin actions are taken on
 //               it. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //               Code.
+//   2026-09-26: Task 77 fix wave: a chooser's txSlice is the TX mark (M1);
+//               the radio's PTT's frozen transmit receiver is not takeable
+//               (M5). J.J. Boyd (KG4VCF), with AI-assisted implementation
+//               via Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -2165,6 +2169,88 @@ private slots:
         QCOMPARE(offAir.value(QStringLiteral("takeable")).toBool(false), true);
     }
 
+    // Task 77 fix wave, M5 (rulings 6.8 and 8.9): after the radio's PTT
+    // takes transmit from a keyed device, it keys on the frozen transmit
+    // slice, whose receiver is not takeable while the radio is on the air.
+    void theRadioPttsFrozenTransmitReceiverIsNotTakeable()
+    {
+        Shared s(2, 5, kTransmitter);
+        allowTransmit(s.core);
+        s.core.model->sliceById(1)->setDspMode(DSPMode::USB);
+        s.core.model->sliceById(1)->setFrequency(14200000.0);
+        const int bReceiver = streamOf(s.core, 1);
+        QVERIFY(bReceiver >= 0 && bReceiver != s.receiver());
+        QVERIFY(s.core.model->txSliceArbiter()->requestHandoff(1));
+        MoxController* mox = s.core.model->moxController();
+        mox->setMox(true, keyerFor(s.b));
+        QTRY_COMPARE(mox->state(), MoxState::Tx);
+        mox->onMicPttFromRadio(true);
+        QTRY_VERIFY(s.core.server->transmitHolder()->isHeldBy(
+            QByteArray(KeyerIdentity::kStationDeviceId)));
+        QTRY_VERIFY(mox->isMox() && mox->currentKeyer().isStation());
+        QCOMPARE(s.core.model->txBoundSlice()->sliceIndex(), 1);
+
+        const QJsonObject refused = s.core.invoke(
+            s.appA, "addSliceOnPan", {utf8("panId", QStringLiteral("pan-a2"))});
+        QVERIFY(!refused.value(QStringLiteral("accepted")).toBool(true));
+        const QJsonObject ask = waitForLast(s.appA, QStringLiteral("confirm.request"), 0);
+        QJsonObject found;
+        for (const QJsonValue& v : ask.value(QStringLiteral("choices")).toArray()) {
+            if (v.toObject().value(QStringLiteral("streamIndex")).toInt() == bReceiver) {
+                found = v.toObject();
+            }
+        }
+        QVERIFY(!found.isEmpty());
+        QCOMPARE(found.value(QStringLiteral("takeable")).toBool(true), false);
+        QCOMPARE(found.value(QStringLiteral("why")).toString(), kRadioOnAir);
+        s.core.invoke(s.appA, "confirm.cancel",
+                      {int64("id", ask.value(QStringLiteral("id")).toInteger())});
+        mox->onMicPttFromRadio(false);
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+    }
+
+    // Task 77 fix wave, M1 (ruling 5.4a): a take chooser's txSlice is the TX
+    // mark, as on slice: and marker:: with transmit unheld no slice shows
+    // it, the bound transmit slice included; once its owner holds transmit
+    // it does.
+    void aChoosersTxSliceIsTheTxMark()
+    {
+        Shared s(2, 5, kTransmitter);
+        allowTransmit(s.core);
+        s.core.model->sliceById(1)->setDspMode(DSPMode::USB);
+        s.core.model->sliceById(1)->setFrequency(14200000.0);
+        const int bReceiver = streamOf(s.core, 1);
+        QVERIFY(bReceiver >= 0 && bReceiver != s.receiver());
+        QVERIFY(s.core.model->txSliceArbiter()->requestHandoff(1));
+        QVERIFY(s.core.model->sliceById(1)->isTxSlice());
+        const auto txSliceShown = [&](int before) {
+            const QJsonObject refused = s.core.invoke(
+                s.appA, "addSliceOnPan", {utf8("panId", QStringLiteral("pan-a2"))});
+            std::optional<bool> shown;
+            if (refused.value(QStringLiteral("accepted")).toBool(true)) {
+                return shown;
+            }
+            const QJsonObject ask =
+                waitForLast(s.appA, QStringLiteral("confirm.request"), before);
+            for (const QJsonValue& v : ask.value(QStringLiteral("choices")).toArray()) {
+                for (const QJsonValue& slice :
+                     v.toObject().value(QStringLiteral("slices")).toArray()) {
+                    if (slice.toObject().value(QStringLiteral("sliceId")).toInt() == 1) {
+                        shown = slice.toObject().value(QStringLiteral("txSlice")).toBool();
+                    }
+                }
+            }
+            s.core.invoke(s.appA, "confirm.cancel",
+                          {int64("id", ask.value(QStringLiteral("id")).toInteger())});
+            return shown;
+        };
+        QCOMPARE(txSliceShown(0), std::optional<bool>(false));
+        QVERIFY(s.core.invoke(s.appB, "tx.take", {}).value(QStringLiteral("accepted")).toBool());
+        QTRY_VERIFY(s.core.model->sliceById(1)->txSliceMarked());
+        QCOMPARE(txSliceShown(countOf(s.appA, QStringLiteral("confirm.request"))),
+                 std::optional<bool>(true));
+    }
+
     // The transmitter's own Core settings (Receive Only, External TX
     // Inhibit) disturb the holder of transmit: another device's change is
     // asked while the holder is unkeyed, refused with the on-air words while
@@ -2376,7 +2462,10 @@ private slots:
 
         mox->onMicPttFromRadio(false);
         QTRY_COMPARE(mox->state(), MoxState::Rx);
-        QTRY_VERIFY(!s.core.server->transmitHolder()->holder().has_value());
+        // Task 77 (ruling 8.1): the radio keeps transmit, unkeyed; the
+        // freeze ends with the press.
+        QTRY_VERIFY(s.core.server->transmitHolder()->holder().has_value()
+                    && !s.core.server->transmitHolder()->holder()->keyed);
         r = s.core.invoke(s.appB, "requestStreamCentre",
                           {int64("sliceId", 1), f64("centreHz", 7120000.0)});
         QVERIFY2(r.value(QStringLiteral("accepted")).toBool(false),

@@ -29,6 +29,9 @@
 //   2026-09-26: Transmit group fix wave: M4 remoteMicNotReady. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: iPhone app plan Task 77 fix wave, I3: radioOnAir. J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 #pragma once
 
@@ -127,6 +130,11 @@ TxRefusal stopNotConfirmed();
 /// PTT, or the Core's own keys): "The radio is on the air. Try again when
 /// it stops."
 TxRefusal holderOnAir(const QString& holderShortName, bool radioPtt);
+/// iPhone app plan Task 77 fix wave, I3 (code holderOnAir, no fix): a
+/// Tuner Genius autotune asked for while the radio is on the air, by the
+/// asking device's own key too: "The radio is on the air. Try again when it
+/// stops."
+TxRefusal radioOnAir();
 /// The holder's verb while transmit is unheld.
 TxRefusal notHolder();
 /// Task 35 (ruling 8.5): tx.unkey, or a TUNE or two-tone stop, from a device

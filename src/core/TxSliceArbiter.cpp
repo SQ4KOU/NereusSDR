@@ -9,6 +9,12 @@
 //   2026-09-25 iPhone app plan Task 34 (R-IOS-03): the handoff while keyed
 //              waits for the unkey gate. J.J. Boyd (KG4VCF), AI-assisted via
 //              Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  iPhone app plan Task 77 (R-IOS-02,
+//                                    R-IOS-03, R-IOS-13): owner lookup,
+//                                    requestHandoff for a requester,
+//                                    bindForHolder, the first bind among the
+//                                    holder's slices, the freeze. AI-assisted
+//                                    via Anthropic Claude Code.
 // =================================================================
 #include "core/TxSliceArbiter.h"
 #include "models/SliceModel.h"
@@ -28,6 +34,44 @@ void TxSliceArbiter::setMoxController(MoxController* mox) { m_mox = mox; }
 // on wiring order. Callers hand over the list, finish wiring, then call
 // syncToSliceList() (RadioModel does it from addSlice / removeSlice).
 void TxSliceArbiter::setSliceList(QVector<SliceModel*>* slices) { m_slices = slices; }
+
+void TxSliceArbiter::setOwnerLookup(OwnerLookup owner, ActiveLookup active)
+{
+    m_owner = std::move(owner);
+    m_active = std::move(active);
+}
+
+bool TxSliceArbiter::requestHandoff(int sliceId, const QByteArray& requester)
+{
+    // iPhone app plan Task 77 (ruling 8.10): the holder's verb, for its own
+    // slices. A slice another owner has is refused before anything moves.
+    if (m_owner && m_owner(sliceId) != requester) {
+        emit handoffBlocked(sliceId, QStringLiteral("That slice is another device's."));
+        return false;
+    }
+    return requestHandoff(sliceId);
+}
+
+bool TxSliceArbiter::bindForHolder(const QByteArray& holder, int preferredSliceId)
+{
+    if (m_remote || !m_slices || holder.isEmpty() || !m_owner || isFrozen()) {
+        return false;
+    }
+    int target = -1;
+    if (preferredSliceId >= 0 && sliceWithId(preferredSliceId) != nullptr
+        && m_owner(preferredSliceId) == holder) {
+        target = preferredSliceId;
+    } else if (m_active) {
+        const int active = m_active(holder);
+        if (active >= 0 && sliceWithId(active) != nullptr && m_owner(active) == holder) {
+            target = active;
+        }
+    }
+    if (target < 0) {
+        return false;
+    }
+    return requestHandoff(target);
+}
 
 SliceModel* TxSliceArbiter::txBoundSlice() const
 {
@@ -125,6 +169,18 @@ void TxSliceArbiter::syncToSliceList()
     // exist post-restore (e.g. operator deleted it last session), default to
     // Slice A."
     SliceModel* slice = txBoundSlice();
+    // iPhone app plan Task 77 (ruling 8.13): with a holder that owns
+    // slices, the first bind is among them: the restored id when it is
+    // one of them, otherwise the holder's active slice.
+    const QByteArray holder = m_holder ? m_holder() : QByteArray();
+    if (!holder.isEmpty() && m_owner) {
+        if (slice == nullptr || m_owner(slice->sliceIndex()) != holder) {
+            const int active = m_active ? m_active(holder) : -1;
+            if (SliceModel* own = sliceWithId(active); own && m_owner(active) == holder) {
+                slice = own;
+            }
+        }
+    }
     if (!slice) {
         for (SliceModel* candidate : *m_slices) {
             if (candidate) {
@@ -177,6 +233,13 @@ bool TxSliceArbiter::requestHandoff(int sliceId)
     }
     if (!target) {
         emit handoffBlocked(sliceId, QStringLiteral("Slice ID not found"));
+        return false;
+    }
+
+    // iPhone app plan Task 77 (ruling 8.11): the flag never moves while
+    // the station device is keyed; the freeze ends with the press.
+    if (!target->isTxSlice() && isFrozen()) {
+        emit handoffBlocked(sliceId, QStringLiteral("The radio is on the air."));
         return false;
     }
 

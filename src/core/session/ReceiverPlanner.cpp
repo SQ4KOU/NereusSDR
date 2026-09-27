@@ -11,6 +11,9 @@
 //   2026-09-25: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), iPhone app plan Task 74 (R-IOS-02, R-IOS-30),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: Task 77 fix wave, M1: the choosers' txSlice is the TX mark
+//               (ruling 5.4a), as on slice: and marker:. J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/ReceiverPlanner.h"
@@ -281,7 +284,7 @@ QJsonArray ReceiverPlanner::receiverChoicesJson(const QList<Choice>& choices) co
                 {QStringLiteral("frequencyHz"), slice->frequency()},
                 {QStringLiteral("mode"), static_cast<int>(slice->dspMode())},
                 {QStringLiteral("band"), static_cast<int>(slice->band())},
-                {QStringLiteral("txSlice"), slice->isTxSlice()},
+                {QStringLiteral("txSlice"), slice->txSliceMarked()},
             });
             if (info.known && !seen.contains(subject)) {
                 seen.append(subject);
@@ -334,7 +337,7 @@ QJsonArray ReceiverPlanner::sliceChoicesJson(const QList<Choice>& choices) const
             {QStringLiteral("frequencyHz"), slice->frequency()},
             {QStringLiteral("mode"), static_cast<int>(slice->dspMode())},
             {QStringLiteral("band"), static_cast<int>(slice->band())},
-            {QStringLiteral("txSlice"), slice->isTxSlice()},
+            {QStringLiteral("txSlice"), slice->txSliceMarked()},
             {QStringLiteral("streamIndex"), slice->streamIndex()},
             {QStringLiteral("adc"), m_model.adcForStream(slice->streamIndex())},
             {QStringLiteral("takeable"), c.takeable},

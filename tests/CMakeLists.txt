@@ -3637,6 +3637,14 @@ target_compile_definitions(tst_radio_model_mox_hardware_flip PRIVATE NEREUS_BUIL
 nereus_add_test(tst_radio_model_stop_all_tx)
 target_compile_definitions(tst_radio_model_stop_all_tx PRIVATE NEREUS_BUILD_TESTS)
 
+# iPhone app plan Task 77 fix round 2 (R-IOS-02, R-IOS-03, R-IOS-13): the
+# Power Genius changeover. A key's RF waits at the RF-flow gate from any
+# operate command until the amplifier reports that state (stopped after
+# 1.5 s); no Power Genius, nothing changes; the Core's own autotune is
+# refused on the air and its restore waits for every PTT source.
+nereus_add_test(tst_amp_changeover_gate)
+target_compile_definitions(tst_amp_changeover_gate PRIVATE NEREUS_BUILD_TESTS)
+
 # ── iPhone app plan Task 38 (R-IOS-04, D29): the transmit time-out ─────────
 # TxTimeOutTimer (Thetis TimeOutTimerManager) with an injected clock and
 # pinger: the MOX time-out from the rising edge, the ping time-out, the
@@ -7679,6 +7687,14 @@ nereus_add_test(tst_on_air_refusals
 nereus_add_test(tst_station_multi_session
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)
+# iPhone app plan Task 78 (R-IOS-02, R-IOS-07, R-IOS-30): the desktop
+# remote window's screens for several devices on one Core, driven against a
+# real Core over a loopback link with a second device; offscreen renders of
+# every state (NEREUS_TASK78_SHOTS keeps them). No radio, no RF.
+nereus_add_test(tst_multi_device_screens
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+target_compile_definitions(tst_multi_device_screens PRIVATE NEREUS_BUILD_TESTS)
 # iPhone app plan Task 35 (R-IOS-13): keying from a remote device (tx.key,
 # tx.unkey, tx.tune, tx.twoTone): every refusal, holder and gate rule, the
 # keying epoch and its copies, the reconnect, and keyedBy.
@@ -7983,6 +7999,43 @@ if(TEST tst_link_conformance_session)
         "NEREUS_LINK_CONNECTABLE=skip")
     set_property(TEST tst_link_conformance_session_connectable APPEND PROPERTY ENVIRONMENT
         "NEREUS_LINK_CONNECTABLE=only")
+    # iPhone app plan Task 77 fix wave, M4: the fixtures whose MOX walk runs
+    # in real time (stationSetup.unkeyWalkMs, transfer-refuses-keys) run as
+    # a third entry of the same binary, NEREUS_LINK_REALTIME=only, labelled
+    # realtime so a busy machine's `-LE realtime` run leaves them out; the
+    # other two entries skip them.
+    add_test(NAME tst_link_conformance_session_realtime COMMAND tst_link_conformance_session)
+    set(_lcs_rt_labels ${_lcs_labels})
+    list(APPEND _lcs_rt_labels "realtime")
+    list(REMOVE_DUPLICATES _lcs_rt_labels)
+    set_tests_properties(tst_link_conformance_session_realtime PROPERTIES
+        LABELS "${_lcs_rt_labels}"
+        TIMEOUT ${_lcs_timeout})
+    set_property(GLOBAL APPEND PROPERTY NEREUS_TEST_LABEL_NAMES "realtime")
+    set_property(GLOBAL APPEND PROPERTY NEREUS_TESTS_LABEL_realtime tst_link_conformance_session)
+    if(_lcs_env_mod)
+        set_property(TEST tst_link_conformance_session_realtime
+            PROPERTY ENVIRONMENT_MODIFICATION ${_lcs_env_mod})
+    endif()
+    if(NEREUS_TESTS_OFFSCREEN AND CMAKE_VERSION VERSION_LESS 3.22)
+        set_property(TEST tst_link_conformance_session_realtime APPEND PROPERTY ENVIRONMENT
+            "QT_QPA_PLATFORM=offscreen")
+    endif()
+    if(NOT WIN32)
+        set(_lcs_rt_home "${CMAKE_CURRENT_BINARY_DIR}/test-home/tst_link_conformance_session_realtime")
+        file(MAKE_DIRECTORY "${_lcs_rt_home}")
+        set_property(TEST tst_link_conformance_session_realtime APPEND PROPERTY ENVIRONMENT
+            "HOME=${_lcs_rt_home}")
+        if(APPLE)
+            set_property(TEST tst_link_conformance_session_realtime APPEND PROPERTY ENVIRONMENT
+                "CFFIXED_USER_HOME=${_lcs_rt_home}")
+        endif()
+    endif()
+    foreach(_lcs_entry tst_link_conformance_session tst_link_conformance_session_connectable)
+        set_property(TEST ${_lcs_entry} APPEND PROPERTY ENVIRONMENT "NEREUS_LINK_REALTIME=skip")
+    endforeach()
+    set_property(TEST tst_link_conformance_session_realtime APPEND PROPERTY ENVIRONMENT
+        "NEREUS_LINK_REALTIME=only")
 endif()
 nereus_add_test(tst_link_conformance_media
     LinkFixtures.cpp

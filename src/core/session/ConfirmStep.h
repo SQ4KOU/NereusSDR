@@ -45,6 +45,10 @@
 //   2026-09-25: iPhone app plan Task 75 (R-IOS-30): the settings write,
 //               the target and its value, expiry. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: iPhone app plan Task 77 (R-IOS-02, R-IOS-03, R-IOS-13): the
+//               takeTransmit question's holder epoch and keyed state. J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -77,7 +81,8 @@ public:
     struct Question {
         qint64 id = 0;
         QByteArray device;
-        /// panMove, takeReceiver, takeSlice or sharedSetting.
+        /// panMove, takeReceiver, takeSlice, sharedSetting or (Task 77)
+        /// takeTransmit.
         QString kind;
         Held held = Held::Command;
         SessionMessage original;
@@ -114,6 +119,10 @@ public:
         /// written object, a `sliceId` argument, the slices in `moving`).
         /// Each must still be the requester's at proceed.
         QList<int> namedSlices;
+        /// takeTransmit (Task 77, ruling 8.7): the holder epoch and whether
+        /// the holder was on the air when asked.
+        quint64 holderEpoch = 0;
+        bool holderKeyed = false;
     };
 
     struct Notice {

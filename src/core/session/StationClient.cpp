@@ -240,6 +240,20 @@
 //               (StationConnectionAttempt) for the connection messages. J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: iPhone app plan Task 77 (R-IOS-02, R-IOS-03, R-IOS-13):
+//               tgxlAutotuneAvailable, holdsTransmitHere, otherHolderReason.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
+//   2026-09-26: Task 77 fix wave, M2: the holder line for the radio says
+//               how to get transmit back. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: iPhone app plan Task 78 (R-IOS-02, R-IOS-07, R-IOS-30):
+//               sessionHolder 1 on a key sign-in; RemoteDevicesState fed
+//               from connectedDevices, devices, markers, confirm.request and
+//               notice; tx.take, the questions' answers, Take it back and
+//               session.leave; a held change's "Waiting for you to confirm."
+//               is not shown as a refusal. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 //   2026-09-26 - Parity Task 21 (R-IOS-18): the Core's `stationRadios`
 //                stream subscribed and applied; the station radio verbs,
 //                their refusals shown on This Core. J.J. Boyd (KG4VCF),
@@ -255,6 +269,7 @@
 
 #include "core/AppSettings.h"
 #include "core/FaultLog.h"
+#include "core/safety/TxRefusal.h"
 #include "core/security/ClientDeviceIdentity.h"
 #include "core/security/DeviceAuthenticator.h"
 #include "core/security/StationIdentity.h"
@@ -264,6 +279,7 @@
 #include "core/session/SessionEndReasons.h"
 #include "core/session/SessionTransport.h"
 #include "core/session/TransmitStateFacade.h"
+#include "core/session/RemoteDevicesState.h"
 #include "core/settings/SettingsProxy.h"
 #include "models/AmplifierModel.h"
 #include "models/NotchModel.h"
@@ -546,6 +562,10 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
                             m_supportedMajors.end());
     // iPhone app plan Task 39: the Core's transmit state, unbound (a mirror).
     m_transmitState = new TransmitState(this);
+    // iPhone app plan Task 78: who else is on the Core.
+    m_remoteDevices = new RemoteDevicesState(this);
+    connect(m_transmitState, &TransmitState::holderChanged, this,
+            &StationClient::transmitTakeAvailabilityChanged);
     m_localSettingsSchema = readLocalSettingsSchemaVersion();
     if (m_localSettingsSchema == 0) {
         // The observable trace of CoreInit::initialize() not having run
@@ -573,6 +593,7 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
     // never consults the link at all.
     if (radioModel != nullptr) {
         radioModel->attachStation(this);
+        radioModel->setStationDevices(m_remoteDevices);
     }
 
     // iPhone app plan, desktop remote transmit (R-IOS-13, R-R3-42): this
@@ -1458,6 +1479,12 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
     m_authenticated = false;
     m_signedInWithDeviceKey = false;
     m_enrolledDeviceKey = false;
+    // Task 78: who else was on the Core was this session's.
+    m_declaredSessionHolder = false;
+    m_remoteDevices->clear();
+    if (m_radioModel) {
+        m_radioModel->setStationMayCloseLastSlice(false);
+    }
     m_forwardLocalChanges = false;
     m_propertyWriteIds.clear();
     // Desktop remote transmit: the Core unkeys this device when the link
@@ -1978,6 +2005,13 @@ void StationClient::onTransportText(const QByteArray& wire)
             m_radioChangeReason.clear();
             emit handshakeComplete();
         }
+        // iPhone app plan Task 78: sharing the Core as a device is known
+        // once the handshake completes.
+        if (!m_radioModel.isNull()) {
+            m_radioModel->setStationMayCloseLastSlice(sessionHolderAvailable());
+        }
+        m_remoteDevices->setSelfDeviceId(thisDeviceWireId());
+        emit transmitTakeAvailabilityChanged();
         emit stateSnapshotApplied();
         break;
     }
@@ -1992,6 +2026,18 @@ void StationClient::onTransportText(const QByteArray& wire)
         break;
     case SessionMessageKind::SettingsValue:
         handleSettingsValue(message);
+        break;
+    // iPhone app plan Task 78: the Core's question and its notices, sent
+    // only to a device with sessionHolderVersion 1.
+    case SessionMessageKind::ConfirmRequest:
+        if (m_declaredSessionHolder) {
+            m_remoteDevices->setQuestion(message.prompt, message.reason);
+        }
+        break;
+    case SessionMessageKind::Notice:
+        if (m_declaredSessionHolder) {
+            m_remoteDevices->addNotice(message.prompt, message.reason);
+        }
         break;
     case SessionMessageKind::SettingsReject:
         handleSettingsReject(message);
@@ -2198,9 +2244,18 @@ bool StationClient::signIn(const SessionMessage& hello)
                           QString::fromLatin1(SessionEndCode::kIdentityChanged));
             return false;
         }
+        // iPhone app plan Task 78 (the several-devices design, ruling
+        // 10.1): signed in with its own key, this window knows its device
+        // id as the Core sends it, so it shares the Core as a device: it
+        // is asked before a change reaches another device, told what
+        // another device did, and may take transmit.
+        QHash<QByteArray, int> features = m_declaredFeatures;
+        if (m_declaresSessionHolder) {
+            features.insert(QByteArrayLiteral("sessionHolder"), 1);
+        }
+        m_declaredSessionHolder = m_declaresSessionHolder;
         send(SessionMessages::hello(m_agreedMajor, kSessionProtocolMinor, m_localSettingsSchema,
-                                    peerNameForThisProcess(), m_supportedMajors,
-                                    m_declaredFeatures));
+                                    peerNameForThisProcess(), m_supportedMajors, features));
         send(SessionMessages::authRequest(
             QString(), deviceBlockFor(*m_deviceIdentity, m_deviceName, m_deviceShortName,
                                       challenge, certificate, stationSpki)));
@@ -2232,9 +2287,18 @@ bool StationClient::signIn(const SessionMessage& hello)
                                        << "signing in with the token alone.";
         }
     }
+    // A token sign-in does not know the id the Core numbers it by, so it
+    // does not share the Core as a device (Task 78). A window test's
+    // bench link says it does (setTokenSessionHolderForTest).
+    QHash<QByteArray, int> features = m_declaredFeatures;
+    m_declaredSessionHolder = false;
+    if (!m_tokenSessionHolderIdForTest.isEmpty() && m_declaresSessionHolder
+        && features.contains(QByteArrayLiteral("deviceAuth"))) {
+        features.insert(QByteArrayLiteral("sessionHolder"), 1);
+        m_declaredSessionHolder = true;
+    }
     send(SessionMessages::hello(m_agreedMajor, kSessionProtocolMinor, m_localSettingsSchema,
-                                peerNameForThisProcess(), m_supportedMajors,
-                                m_declaredFeatures));
+                                peerNameForThisProcess(), m_supportedMajors, features));
     send(m_enrollingIdentity.isEmpty() ? SessionMessages::authRequest(m_token)
                                        : SessionMessages::authRequest(m_token, block));
     // The pairing token, even when this sign-in enrols the key: the Core
@@ -2324,6 +2388,14 @@ void StationClient::handleCapabilities(const SessionMessage& message)
     }
     m_capabilities = incoming;
     refreshRemoteTransmit();
+    // iPhone app plan Task 78: a device that shares the Core accepts the
+    // Core closing its last slice (a take), and shows an empty band that
+    // offers a take (the several-devices design, section 12).
+    if (!m_radioModel.isNull()) {
+        m_radioModel->setStationMayCloseLastSlice(sessionHolderAvailable());
+    }
+    m_remoteDevices->setSelfDeviceId(thisDeviceWireId());
+    emit transmitTakeAvailabilityChanged();
 
     if (m_capabilities.effectiveMaxSlices < m_capabilities.boardMaxSlices) {
         qCInfo(lcStationClient)
@@ -2739,7 +2811,8 @@ void StationClient::handleSettingsReject(const SessionMessage& message)
         // R-R3-46 (parity Task 6): a refused PA write settles on the Core's.
         m_radioModel->scheduleRemotePaReload(QString::fromUtf8(message.objectKey));
     }
-    if (!message.reason.isEmpty() && m_radioModel) {
+    // Task 78: a write held for a question is not a refusal to show.
+    if (!message.reason.isEmpty() && m_radioModel && !isAwaitingConfirmation(message.reason)) {
         m_radioModel->reportStationSliceCommandRejected(message.reason);
     }
 }
@@ -2976,6 +3049,14 @@ void StationClient::reconcileSlicesAgainstStation()
 
 void StationClient::handleObjectCreate(const SessionMessage& message)
 {
+    // iPhone app plan Task 78: who else is on the Core and their slices,
+    // plain state for the window's screens; no model object stands for
+    // them here.
+    if (RemoteDevicesState::holdsKey(message.objectKey)) {
+        m_pendingStationSchemas.remove(message.className);
+        m_remoteDevices->applyObject(message.objectKey, message.updates);
+        return;
+    }
     QObject* target = resolveOrCreate(message.objectKey, message.className);
     if (target == nullptr) {
         return;
@@ -2995,6 +3076,10 @@ void StationClient::handleObjectCreate(const SessionMessage& message)
 
 void StationClient::handleObjectDestroy(const SessionMessage& message)
 {
+    if (RemoteDevicesState::holdsKey(message.objectKey)) {
+        m_remoteDevices->destroyObject(message.objectKey);
+        return;
+    }
     const int sliceId = idFromKey(message.objectKey, kSliceKeyPrefix);
     m_objects.remove(message.objectKey);
     m_propertyWriteIds.remove(message.objectKey);
@@ -3011,6 +3096,10 @@ void StationClient::handleObjectDestroy(const SessionMessage& message)
 
 void StationClient::handleDelta(const SessionMessage& message)
 {
+    if (RemoteDevicesState::holdsKey(message.objectKey)) {
+        m_remoteDevices->applyObject(message.objectKey, message.updates);
+        return;
+    }
     QObject* target = m_objects.value(message.objectKey).data();
     if (target == nullptr) {
         // Once per object per session: a newer Core's object this client
@@ -4491,6 +4580,29 @@ void StationClient::handleCommandResult(const SessionMessage& message)
     if (message.commandVerb == "tx.keepalive") {
         return;
     }
+    // iPhone app plan Task 78 (the several-devices design, section 7.3): a
+    // change held for a question is answered "Waiting for you to confirm."
+    // with `phase` `needsConfirmation`; the question follows. It is not a
+    // refusal to show, so it takes none of the refusal routes below.
+    bool awaiting = false;
+    for (const MirrorUpdate& value : message.updates) {
+        if (value.name == "phase"
+            && value.value.toString() == QStringLiteral("needsConfirmation")) {
+            awaiting = !message.accepted;
+        }
+    }
+    if (message.commandVerb == "tx.take" || message.commandVerb == "confirm.proceed"
+        || message.commandVerb == "confirm.cancel" || message.commandVerb == "notice.takeBack"
+        || message.commandVerb == "session.leave") {
+        m_pendingCommands.remove(message.commandId);
+        emit deviceCommandFinished(message.commandVerb, message.commandId, message.accepted,
+                                   message.reason, awaiting);
+        return;
+    }
+    if (awaiting) {
+        m_pendingCommands.remove(message.commandId);
+        return;
+    }
     // Parity Task 19: the window's own record subscriptions (sent after
     // each snapshot); their answer is only logged above, and a batch
     // follows an accepted one.
@@ -4834,6 +4946,14 @@ bool StationClient::tgxlDeviceSettingsAvailable() const
 }
 
 // R-R3-49 / R-R3-47: the Tuner Genius's antenna, operate and bypass.
+bool StationClient::tgxlAutotuneAvailable() const
+{
+    // iPhone app plan Task 77: tx.tunerTune, remoteTxVersion 2.
+    return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.remoteTxVersion >= 2 && m_remoteTransmit != nullptr
+        && m_remoteTransmit->available();
+}
+
 bool StationClient::tgxlControlAvailable() const
 {
     return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
@@ -5090,6 +5210,9 @@ QObject* StationClient::mirroredObject(const QByteArray& objectKey) const
 
 QString StationClient::thisDeviceWireId() const
 {
+    if (!m_tokenSessionHolderIdForTest.isEmpty() && !m_signedInWithDeviceKey) {
+        return m_tokenSessionHolderIdForTest;
+    }
     return m_deviceIdentity ? StationIdentity::toBase64Url(m_deviceIdentity->fingerprint())
                             : QString();
 }
@@ -5116,8 +5239,26 @@ QString StationClient::transmitHolderText() const
     if (!self.isEmpty() && tx.holderDeviceId() == self) {
         return QStringLiteral("This computer holds transmit.");
     }
+    // Task 77 fix wave, M2 (ruling 8.1): the radio keeps transmit after its
+    // own PTT until a device takes it; it never lets go. Task 78: this
+    // window takes it with Take transmit.
+    if (tx.holderSource() == QStringLiteral("radioPtt")
+        || tx.holderKind() == QStringLiteral("station")) {
+        return QStringLiteral("The radio has the transmitter. Take it from this window to "
+                              "transmit.");
+    }
     const QString name = tx.holderName().isEmpty() ? QStringLiteral("Another device")
                                                    : tx.holderName();
+    // Task 78: a window that can take transmit says how.
+    if (transmitTakeAvailable()) {
+        return tx.holderAway()
+                   ? QStringLiteral("%1 holds transmit and is away. Take transmit to use MOX "
+                                    "and TUNE here.")
+                         .arg(name)
+                   : QStringLiteral("%1 holds transmit. Take transmit to use MOX and TUNE "
+                                    "here.")
+                         .arg(name);
+    }
     // Fix wave 2: the name and why this window's MOX and TUNE are refused
     // until the holder lets go (until taking transmit is built, Task 77).
     return tx.holderAway()
@@ -5126,6 +5267,126 @@ QString StationClient::transmitHolderText() const
                      .arg(name)
                : QStringLiteral("%1 holds transmit. MOX and TUNE here wait until it lets go.")
                      .arg(name);
+}
+
+bool StationClient::knowsTransmitHolder() const
+{
+    // A receive-only Core has no device holding transmit: its transmit
+    // settings stay this window's to change off the air (R-R3-49), whoever
+    // its own keys named.
+    return m_transmitState != nullptr && isHandshakeComplete()
+        && capabilities().txStateVersion >= 2 && remoteTransmitAvailable()
+        && capabilities().txRefusalCode != QString::fromLatin1(TxRefusals::kStationReceiveOnly);
+}
+
+bool StationClient::holdsTransmitHere() const
+{
+    if (!knowsTransmitHolder()) {
+        return false;
+    }
+    const QString self = thisDeviceWireId();
+    return !self.isEmpty() && m_transmitState->holderDeviceId() == self;
+}
+
+QString StationClient::otherHolderReason() const
+{
+    if (!knowsTransmitHolder() || m_transmitState->holderDeviceId().isEmpty()
+        || holdsTransmitHere()) {
+        return {};
+    }
+    const QString name = m_transmitState->holderName().isEmpty()
+        ? QStringLiteral("Another device")
+        : m_transmitState->holderName();
+    return TxRefusals::otherDeviceHolds(name).text;
+}
+
+// ── iPhone app plan Task 78: several devices on one Core ───────────────────
+
+bool StationClient::sessionHolderAvailable() const
+{
+    return m_declaredSessionHolder && isHandshakeComplete()
+        && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.sessionHolderVersion >= 1;
+}
+
+bool StationClient::transmitTakeAvailable() const
+{
+    // The link document, section 18.9: tx.take needs sessionHolderVersion 1
+    // and came with remoteTxVersion 2; a Core that does not take this
+    // window's keys has nothing to take.
+    return sessionHolderAvailable() && remoteTransmitAvailable()
+        && m_capabilities.remoteTxVersion >= 2 && knowsTransmitHolder();
+}
+
+bool StationClient::transmitHeldElsewhere() const
+{
+    return transmitTakeAvailable() && !m_transmitState->holderDeviceId().isEmpty()
+        && !holdsTransmitHere();
+}
+
+quint32 StationClient::requestTakeTransmit(bool shown, qint64 holderEpoch, bool shownKeyed)
+{
+    if (!transmitTakeAvailable()) {
+        return 0;
+    }
+    QList<MirrorUpdate> args;
+    if (shown) {
+        args.append(MirrorUpdate{0, QByteArrayLiteral("holderEpoch"), MirrorWireKind::Int64,
+                                 QVariant(holderEpoch)});
+        args.append(MirrorUpdate{0, QByteArrayLiteral("shownKeyed"), MirrorWireKind::Bool,
+                                 QVariant(shownKeyed)});
+    }
+    return invokeCommand(QByteArrayLiteral("tx.take"), args);
+}
+
+quint32 StationClient::proceedQuestion(qint64 id, qint64 choice)
+{
+    if (!sessionHolderAvailable()) {
+        return 0;
+    }
+    m_remoteDevices->closeQuestion(id);
+    return invokeCommand(
+        QByteArrayLiteral("confirm.proceed"),
+        {MirrorUpdate{0, QByteArrayLiteral("id"), MirrorWireKind::Int64, QVariant(id)},
+         MirrorUpdate{0, QByteArrayLiteral("choice"), MirrorWireKind::Int64, QVariant(choice)}});
+}
+
+quint32 StationClient::cancelQuestion(qint64 id)
+{
+    if (!sessionHolderAvailable()) {
+        m_remoteDevices->closeQuestion(id);
+        return 0;
+    }
+    m_remoteDevices->closeQuestion(id);
+    return invokeCommand(
+        QByteArrayLiteral("confirm.cancel"),
+        {MirrorUpdate{0, QByteArrayLiteral("id"), MirrorWireKind::Int64, QVariant(id)}});
+}
+
+quint32 StationClient::takeBackNotice(qint64 id)
+{
+    m_remoteDevices->dismissNotice(id);
+    if (!sessionHolderAvailable()) {
+        return 0;
+    }
+    return invokeCommand(
+        QByteArrayLiteral("notice.takeBack"),
+        {MirrorUpdate{0, QByteArrayLiteral("id"), MirrorWireKind::Int64, QVariant(id)}});
+}
+
+void StationClient::leaveSession()
+{
+    if (!sessionHolderAvailable()) {
+        return;
+    }
+    invokeCommand(QByteArrayLiteral("session.leave"), {});
+}
+
+bool StationClient::isAwaitingConfirmation(const QString& reason)
+{
+    // The one reason the Core gives a held change (the several-devices
+    // design, section 7.3; the link document, section 7.5).
+    return reason == QStringLiteral("Waiting for you to confirm.");
 }
 
 // ── iPhone app plan Task 27: the attempt record ────────────────────────────

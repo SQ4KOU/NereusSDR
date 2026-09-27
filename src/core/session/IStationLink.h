@@ -146,6 +146,10 @@
 //                                    (bandSelectVersion 1) for a named
 //                                    slice. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  iPhone app plan Task 77 (R-IOS-02,
+//                                    R-IOS-03, R-IOS-13):
+//                                    tgxlAutotuneAvailable. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QString>
@@ -360,6 +364,10 @@ public:
     /// window. Acceptance means the command left for the tuner; the tuner's
     /// report comes back on the mirrored `tuner` object. The Core refuses
     /// each while the radio is on the air.
+    /// iPhone app plan Task 77 (remoteTxVersion 2): the Core runs its Tuner
+    /// Genius autotune for this window (tx.tunerTune), keyed as this
+    /// device under the holder rules; requested through remoteTransmit().
+    virtual bool tgxlAutotuneAvailable() const { return false; }
     virtual bool tgxlControlAvailable() const { return false; }
     virtual CommandOutcome requestTgxlAntenna(int)
     { return { false, tgxlControlUnavailableReason() }; }

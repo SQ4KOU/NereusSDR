@@ -141,6 +141,21 @@
 //                                    the freeze and on-air refusals' new
 //                                    forwards. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Task 77 fix wave, I3: the tuner's
+//                                    on-air refusal forward. AI-assisted
+//                                    via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Task 77 fix round 2: the autotune's
+//                                    own refusals (beginTgxlAutotune) are
+//                                    scanned and forwarded. AI-assisted
+//                                    via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Task 77 fix round 3: pgxlSwitchRefusal
+//                                    and tunerTuningReason scanned and
+//                                    forwarded. AI-assisted via Anthropic
+//                                    Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Task 77 fix round 4:
+//                                    ampStillSwitchingReason scanned and
+//                                    forwarded. AI-assisted via Anthropic
+//                                    Claude Code.
 //   2026-09-26  J.J. Boyd / KG4VCF  Parity Task 19 (R-IOS-25):
 //                                    SpotSourceHost's refusals scanned and
 //                                    its readOnlyReason forwarded. AI-assisted
@@ -763,6 +778,18 @@ const QList<ReasonSource>& reasonSources()
         // refusals, confirm.request and notice reasons, and the chooser's
         // `why`. Device names inserted are the operator's own words (ruling
         // 4.3); slice letters, counts and bands are plain.
+        // iPhone app plan Task 77: taking transmit's refusals and the
+        // transmitTaken notice's words. The taker's name is the operator's
+        // own words or "Radio" (ruling 4.3, ruling 8.1).
+        {"src/core/session/StationTransmitTake.cpp", {}, {}, 2,
+         {QStringLiteral("takerName")},
+         {// This file's own constant and reason function, scanned here;
+          // the refusals are TxRefusal.cpp's (scanned there).
+          QStringLiteral("QString::fromLatin1(kWaitingReason)"),
+          QStringLiteral("takenReason(takerName)"), QStringLiteral("refusal.text"),
+          // The session's own transmit gate (StationTxGate, TxRefusal.cpp's
+          // words).
+          QStringLiteral("sessionTransmitRefusal(transport)")}},
         {"src/core/session/StationReceivers.cpp", {}, {}, 12,
          {QStringLiteral("anchorName"), QStringLiteral("names"), QStringLiteral("takerName"),
           QStringLiteral("name, letterWords"), QStringLiteral("number"),
@@ -877,6 +904,9 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("m_transmitAccess.onAir(m_requester)"),
           // Fix wave M2: a release refused (TxRefusal.cpp's words).
           QStringLiteral("m_transmitAccess.release(m_requester)"),
+          // iPhone app plan Task 77 (ruling 7.7): the transmitter's
+          // settings held by the holder (TxRefusal.cpp's words).
+          QStringLiteral("m_transmitAccess.transmitter(m_requester)"),
           QStringLiteral("m_transmitAccess.txSlice(m_requester)"),
           // Parity mini-round: its TX antenna refusal (setAlexTxAntenna),
           // scanned below.
@@ -990,7 +1020,10 @@ const QList<ReasonSource>& reasonSources()
          {QStringLiteral("defaultRxOnlyReason"), QStringLiteral("transmitBlockReason"),
           QStringLiteral("transmitBlockRefusal"),
           // Fix wave 2: the interlock's refusal, TxRefusal.cpp's words.
-          QStringLiteral("interlockRefusal")}, {}, 3, {},
+          QStringLiteral("interlockRefusal"),
+          // iPhone app plan Task 77: the keying gate's refusal of a
+          // program's key, TxRefusal.cpp's words.
+          QStringLiteral("programKeyRefusal")}, {}, 3, {},
          // The reason setRxOnly was given (RadioModel::rxOnlyReason, scanned),
          // and TxRefusal.cpp's refusals (scanned there).
          {QStringLiteral("m_rxOnlyReason"), QStringLiteral("TxRefusals::stationReceiveOnly()")}},
@@ -998,10 +1031,31 @@ const QList<ReasonSource>& reasonSources()
          // The reason setRxOnly was given (RadioModel::rxOnlyReason, scanned).
          {QStringLiteral("m_rxOnlyReason")}},
         {"src/models/RadioModel.cpp",
-         {QStringLiteral("rxOnlyForcedReason"), QStringLiteral("rxOnlyReason")}, {}, 1, {},
+         {QStringLiteral("rxOnlyForcedReason"), QStringLiteral("rxOnlyReason"),
+          // iPhone app plan Task 77: a device's Tuner Genius autotune.
+          QStringLiteral("startTgxlAutotuneFor"),
+          // Task 77 fix round 2: the cycle's own refusals, which
+          // startTgxlAutotuneFor passes on to the device.
+          QStringLiteral("beginTgxlAutotune")}, {}, 1, {},
          // Both scanned here and in MoxController.cpp.
          {QStringLiteral("m_rxOnlyForced ? rxOnlyForcedReason() : "
-                         "MoxController::defaultRxOnlyReason()")}},
+                         "MoxController::defaultRxOnlyReason()"),
+          // Task 77: the transmit block's words (MoxController's
+          // transmitBlockReason, scanned there).
+          QStringLiteral("transmitBlockReasonAlongside(QString())"),
+          // startTgxlAutotuneFor's refusal: its own literals (scanned
+          // here) or the transmit block's words above.
+          QStringLiteral("refusal"),
+          // Task 77 fix wave, I3: the on-air refusal's words
+          // (TxRefusal.cpp, scanned there).
+          QStringLiteral("TxRefusals::radioOnAir().text"),
+          // Task 77 fix round 2: beginTgxlAutotune's refusal (its own
+          // literals and the words above, all scanned here), passed on by
+          // startTgxlAutotuneFor.
+          QStringLiteral("notStarted"), QStringLiteral("busy"),
+          // beginTgxlAutotune's transmit block, with its own literal
+          // alongside (both scanned: MoxController.cpp and here).
+          QStringLiteral("transmitBlockReasonAlongside(remoteReason)")}},
         // A receiver count, and a frequency in MHz.
         {"src/core/SliceStreamAllocator.cpp", {}, {}, 4,
          {QStringLiteral("count"),
@@ -1123,6 +1177,11 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("stationTgxlControlAllowed"),
           // R-R3-49 (parity Task 1): the Core's one on-the-air refusal.
           QStringLiteral("onAirReason"), QStringLiteral("stationOnAirRefusal"),
+          // iPhone app plan Task 77 fix round 3: the Power Genius also
+          // waits while the Tuner Genius tunes.
+          QStringLiteral("tunerTuningReason"), QStringLiteral("pgxlSwitchRefusal"),
+          // Round 4: and while the amplifier is still switching.
+          QStringLiteral("ampStillSwitchingReason"),
           QStringLiteral("setTgxlAntennaForStation"), QStringLiteral("setTgxlOperateForStation"),
           QStringLiteral("setTgxlBypassForStation"),
           // R-R3-49 (parity Task 8): the relay nudge, the Core's LAN scan and
@@ -1201,6 +1260,10 @@ const QList<ReasonSource>& reasonSources()
           // R-R3-49 (parity Task 1): onAirReason, a function of this file
           // scanned here.
           QStringLiteral("onAirReason()"),
+          // Task 77 fix round 3: tunerTuningReason, likewise.
+          QStringLiteral("tunerTuningReason()"),
+          // Round 4: ampStillSwitchingReason, likewise.
+          QStringLiteral("ampStillSwitchingReason()"),
           // R-R3-49 (parity Task 2): TransmitModel::settingRangeRefusal,
           // scanned below.
           QStringLiteral("range"),

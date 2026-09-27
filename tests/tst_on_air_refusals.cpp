@@ -32,6 +32,10 @@
 //               accessory addresses go ahead; a hosting desktop's key is
 //               named after the desktop. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: iPhone app plan Task 77 (R-IOS-02, R-IOS-03, R-IOS-13): the
+//               radio's PTT takes transmit; the station keeps it after its
+//               key. J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -357,7 +361,10 @@ private slots:
 
         mox->setMox(false);
         QTRY_COMPARE(mox->state(), MoxState::Rx);
-        QTRY_VERIFY(!core.server->transmitHolder()->holder().has_value());
+        // Task 77 (ruling 8.1): the Core keeps transmit, unkeyed, after its
+        // own key ends; off the air the change goes ahead.
+        QTRY_VERIFY(core.server->transmitHolder()->holder().has_value()
+                    && !core.server->transmitHolder()->holder()->keyed);
         const QJsonObject after = write(bSlice, utf8("txAntenna", QStringLiteral("ANT2")));
         QVERIFY2(after.value(QStringLiteral("accepted")).toBool(false),
                  qPrintable(after.value(QStringLiteral("reason")).toString()));
@@ -404,12 +411,26 @@ private slots:
                  QStringLiteral("Shack is on the air. Try again when they stop."));
         mox->setMox(false);
         QTRY_COMPARE(mox->state(), MoxState::Rx);
-        // The radio's own PTT is still "Radio".
+        // Task 77 (ruling 8.1): a press of the radio's own PTT while the
+        // station device already holds transmit is a key, not a take: the
+        // names and the source stay the desktop's.
         mox->onMicPttFromRadio(true);
         QTRY_COMPARE(mox->state(), MoxState::Tx);
-        QCOMPARE(core.server->transmitHolder()->holder()->name, QStringLiteral("Radio"));
+        QCOMPARE(core.server->transmitHolder()->holder()->name, QStringLiteral("Shack Mac mini"));
+        QCOMPARE(core.server->transmitHolder()->holder()->source, TransmitHolder::Source::Device);
         mox->onMicPttFromRadio(false);
         QTRY_COMPARE(mox->state(), MoxState::Rx);
+        // On unheld transmit it is "Radio", source radioPtt.
+        Core fresh;
+        allowTransmit(fresh);
+        fresh.server->setStationDeviceWords(QStringLiteral("Shack Mac mini"), QStringLiteral("Shack"));
+        fresh.model->moxController()->onMicPttFromRadio(true);
+        QTRY_COMPARE(fresh.model->moxController()->state(), MoxState::Tx);
+        QCOMPARE(fresh.server->transmitHolder()->holder()->name, QStringLiteral("Radio"));
+        QCOMPARE(fresh.server->transmitHolder()->holder()->source,
+                 TransmitHolder::Source::RadioPtt);
+        fresh.model->moxController()->onMicPttFromRadio(false);
+        QTRY_COMPARE(fresh.model->moxController()->state(), MoxState::Rx);
     }
 
     // The controller's ruling (as in Thetis, for the operator who is
@@ -508,10 +529,10 @@ private slots:
                  qPrintable(after.value(QStringLiteral("reason")).toString()));
     }
 
-    // The station's own PTT is refused while any device holds transmit,
-    // keyed or not, present or away (Task 34's rule until Task 77 turns
-    // the press into a take), and keys nothing.
-    void theRadiosPttIsRefusedWhileADeviceHoldsTransmit()
+    // Task 77 (rulings 8.8, 8.9): the radio's own PTT takes transmit from a
+    // device that holds it, unkeyed, present or away, without a question;
+    // the press then keys as the station device.
+    void theRadiosPttTakesTransmitFromADeviceThatHoldsIt()
     {
         Core core;
         allowTransmit(core);
@@ -526,18 +547,32 @@ private slots:
         MoxController* mox = core.model->moxController();
         QSignalSpy refused(mox, &MoxController::moxRefused);
         mox->onMicPttFromRadio(true);
-        QVERIFY(!mox->isMox());
-        QCOMPARE(refused.count(), 1);
-        QCOMPARE(refused.first().first().value<TxRefusal>(),
-                 TxRefusals::otherDeviceHolds(QStringLiteral("Grant's iPhone")));
+        QTRY_VERIFY(mox->isMox());
+        QCOMPARE(refused.count(), 0);
+        QVERIFY(holder->isHeldBy(QByteArray(KeyerIdentity::kStationDeviceId)));
+        QCOMPARE(holder->holder()->source, TransmitHolder::Source::RadioPtt);
         mox->onMicPttFromRadio(false);
-        // Away: still refused.
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        QVERIFY(holder->isHeldBy(QByteArray(KeyerIdentity::kStationDeviceId)));
+
+        // Away: A takes it back, then drops; the press still takes.
+        const QJsonObject back = core.invoke(appA, "tx.take", {});
+        QCOMPARE(back.value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("Waiting for you to confirm."));
+        const QJsonObject asked = firstOfType(appA->received(), QStringLiteral("confirm.request"));
+        const QJsonObject proceed = core.invoke(
+            appA, "confirm.proceed",
+            {int64("id", asked.value(QStringLiteral("id")).toInteger()), int64("choice", -1)});
+        QVERIFY2(proceed.value(QStringLiteral("accepted")).toBool(),
+                 qPrintable(proceed.value(QStringLiteral("reason")).toString()));
+        QVERIFY(holder->isHeldBy(a.key.fingerprint()));
         appA->closeLink(QStringLiteral("lost"));
         QTRY_VERIFY(holder->holder().has_value() && holder->holder()->away);
         mox->onMicPttFromRadio(true);
-        QVERIFY(!mox->isMox());
-        QVERIFY(holder->isHeldBy(a.key.fingerprint()));
+        QTRY_VERIFY(mox->isMox());
+        QVERIFY(holder->isHeldBy(QByteArray(KeyerIdentity::kStationDeviceId)));
         mox->onMicPttFromRadio(false);
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
     }
 };
 

@@ -298,7 +298,7 @@
         {
             "kind": "i64",
             "name": "remoteTxVersion",
-            "value": 1
+            "value": 2
         },
         {
             "kind": "utf8",
@@ -1160,6 +1160,37 @@
             "capabilityVersion": 1,
             "minMinor": 11,
             "verb": "tx.keepalive"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "holderEpoch",
+                    "optional": true
+                },
+                {
+                    "kind": "bool",
+                    "name": "shownKeyed",
+                    "optional": true
+                }
+            ],
+            "capability": "remoteTxVersion",
+            "capabilityVersion": 2,
+            "minMinor": 11,
+            "verb": "tx.take"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "bool",
+                    "name": "on",
+                    "optional": false
+                }
+            ],
+            "capability": "remoteTxVersion",
+            "capabilityVersion": 2,
+            "minMinor": 11,
+            "verb": "tx.tunerTune"
         },
         {
             "arguments": [
@@ -2570,7 +2601,8 @@
                 "choices",
                 "forCommandId",
                 "forSettingsKey",
-                "forWriteId"
+                "forWriteId",
+                "holder"
             ],
             "required": [
                 "affected",
@@ -2588,6 +2620,7 @@
                 "forCommandId": "number",
                 "forSettingsKey": "string",
                 "forWriteId": "number",
+                "holder": "object",
                 "id": "number",
                 "kind": "string",
                 "reason": "string",

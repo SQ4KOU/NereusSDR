@@ -75,6 +75,10 @@
 //   2026-09-26  J.J. Boyd / KG4VCF  Remote-window parity Task 14 (R-R3-32):
 //                                    stationTelemetryVersion 5, the HL2 link.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  iPhone app plan Task 77 (R-IOS-02,
+//                                    R-IOS-03, R-IOS-13): the takeTransmit
+//                                    holder in the confirm.request sample. AI-
+//                                    assisted via Anthropic Claude Code.
 //   2026-09-26  J.J. Boyd / KG4VCF  Remote-window parity Task 19 (R-IOS-25):
 //                                    the record.batch sample.
 //                                    AI-assisted via Anthropic Claude Code.
@@ -297,6 +301,8 @@ std::optional<SessionMessage> sampleMessage(SessionMessageKind kind)
         prompt.forCommandId = 2;
         prompt.forWriteId = 3;
         prompt.forSettingsKey = QStringLiteral("StationCallsign");
+        // iPhone app plan Task 77: takeTransmit's holder entry.
+        prompt.holder = QJsonObject{{QStringLiteral("name"), QStringLiteral("iPhone")}};
         return SessionMessages::confirmRequest(prompt, QStringLiteral("asked"));
     }
     case SessionMessageKind::Notice: {

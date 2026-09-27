@@ -936,6 +936,13 @@ void TestTxWorkerRemoteRing::voxFromTheDevicesMicrophoneIsTheDevices()
     QVERIFY(!model->remoteMicInUse());
     QVERIFY(model->remoteVoxDevice().isEmpty());
     model->transmitModel().setVoxEnabled(false);
+    // iPhone app plan Task 77 (ruling 8.4): arming VOX needs holding
+    // transmit, so the device takes it first (a take on unheld transmit).
+    {
+        TransmitHolder::KeyRequest take;
+        take.deviceId = station.deviceId();
+        QCOMPARE(station.core.server->transmitHolder()->askKey(take).verdict, KeyingVerdict::Admit);
+    }
     // Armed from the device (its write), it listens to that device's line.
     station.app->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
         QByteArrayLiteral("transmit"),

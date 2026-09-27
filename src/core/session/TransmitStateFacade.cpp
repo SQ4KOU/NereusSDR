@@ -24,6 +24,14 @@
 //               and TUNE wait while another device holds. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: iPhone app plan Task 77 fix round 2: a key stopped because
+//               the Power Genius did not finish switching is a station stop
+//               in those words. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
+//   2026-09-26: iPhone app plan Task 77 fix round 4: a key stopped because
+//               the Power Genius went to operate by itself is a station stop
+//               in those words. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/TransmitStateFacade.h"
@@ -118,7 +126,23 @@ void TransmitState::bind(RadioModel* model)
     // Task 38: the time-out raises its reason just after its StopAllTx.
     connect(model, &RadioModel::transmitStopReasonRaised, this,
             [this](const QByteArray& code, int limitSeconds) {
-                if (code != kStopTimeOut || m_model.isNull()) {
+                if (m_model.isNull()) {
+                    return;
+                }
+                // iPhone app plan Task 77 fix round 2: a key stopped because
+                // the Power Genius never reported the state it was sent to
+                // (its RF never started): a station stop, in those words.
+                if (code == RadioModel::kAmpNotSwitchedStopCode) {
+                    recordStop(kStopStation, RadioModel::ampNotSwitchedText());
+                    return;
+                }
+                // Task 77 fix round 4: the amplifier went to operate by
+                // itself under the key: a station stop, in those words.
+                if (code == RadioModel::kAmpOperatedUnderKeyStopCode) {
+                    recordStop(kStopStation, RadioModel::ampOperatedUnderKeyText());
+                    return;
+                }
+                if (code != kStopTimeOut) {
                     return;
                 }
                 const QByteArray which = m_model->lastTransmitStopReason().which;

@@ -46,6 +46,14 @@
 //                 coreDiagnosticsText for Copy diagnostics. J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code.
+//   2026-09-26  iPhone app plan Task 77 fix round 3 (R-IOS-02, R-IOS-03,
+//                 R-IOS-13): OPERATE waits (disabled, with the reason) while
+//                 a Tuner Genius cycle runs, in both windows; a faulted
+//                 amp's click puts it in standby. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-09-26  iPhone app plan Task 77 fix round 4: while operate=1 is
+//                 unconfirmed the click sends standby. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "AmpApplet.h"
@@ -178,22 +186,33 @@ AmpApplet::AmpApplet(RadioModel* model, QWidget* parent)
         // Toggle: if currently in OPERATE state -> request standby, else -> request operate.
         // From AetherSDR src/gui/AmpApplet.cpp:70-72 [@0cd4559]
         bool isOp = (m_operateBtn->text() == QStringLiteral("OPERATE"));
+        // iPhone app plan Task 77 fix round 3: a faulted amp's button reads
+        // STANDBY, and its click puts it in standby (operate=0), which ends
+        // a changeover the fault left waiting; operate=1 would not.
+        // Round 4: likewise while this computer's operate=1 is unconfirmed
+        // (the amp took it and keeps reporting standby).
+        const bool unconfirmed = !isRemoteWindow() && m_model && m_model->ampOperateUnconfirmed();
+        const bool wantOperate = (ampFaulted() || unconfirmed) ? false : !isOp;
         // R-R3-49 (parity Task 9): a remote window asks the Core, whose amp
         // switches; the button follows the amp's report, not the click.
         if (isRemoteWindow()) {
-            if (remoteOperateControl() && !m_model->isCoreOnAir()) {
-                m_model->stationLink()->requestPgxlOperate(!isOp);
+            // Task 77 fix round 3: not while the Core's tuner tunes either.
+            if (remoteOperateControl() && !m_model->isCoreOnAir()
+                && !m_model->pgxlSwitchWaitsForTuner()) {
+                m_model->stationLink()->requestPgxlOperate(wantOperate);
             }
             return;
         }
         // Group B fix wave (M5, the operator's ruling 2026-09-25): this
         // computer's amp waits on the air too, by the Core's own rule.
         // Parity mini-round (ruling c): a click refused there says why.
-        if (m_model && m_model->refuseLocalAccessorySwitchOnAir(QStringLiteral("pgxl"))) {
+        // Task 77 fix round 3: and while a Tuner Genius cycle runs.
+        if (m_model && m_model->refuseLocalAccessorySwitchOnAir(QStringLiteral("pgxl"),
+                                                                 /*standbyRequested=*/!wantOperate)) {
             updateOperateButton();
             return;
         }
-        emit operateToggled(!isOp);
+        emit operateToggled(wantOperate);
     });
     telRow->addWidget(m_operateBtn, 1);
 
@@ -254,6 +273,14 @@ AmpApplet::AmpApplet(RadioModel* model, QWidget* parent)
         // Group B fix wave (M5): both windows wait on the air.
         connect(m_model, &RadioModel::coreOnAirChanged,
                 this, &AmpApplet::updateOperateButton);
+        // Task 77 fix round 3: and while a Tuner Genius cycle runs; a
+        // faulted amp's tooltip says what the click does.
+        connect(m_model, &RadioModel::pgxlSwitchWaitChanged,
+                this, &AmpApplet::updateOperateButton);
+        if (m_amp) {
+            connect(m_amp, &AmplifierModel::statusChanged,
+                    this, &AmpApplet::updateOperateButton);
+        }
         syncFromAmplifier();
         updateStationState();
     }
@@ -263,6 +290,17 @@ AmpApplet::AmpApplet(RadioModel* model, QWidget* parent)
     // connects: the amplifier sits at the station. R-R3-49 (parity Task 9):
     // a Core at remotePgxlControlVersion 4 switches its own amp instead.
     updateOperateButton();
+}
+
+bool AmpApplet::ampFaulted() const
+{
+    return m_amp && m_amp->state() == AmplifierModel::State::Fault;
+}
+
+QString AmpApplet::faultedTip() const
+{
+    return ampFaulted() ? tr("The amplifier reports a fault. Click to put it in standby.")
+                        : QString();
 }
 
 bool AmpApplet::remoteOperateControl() const
@@ -281,9 +319,13 @@ void AmpApplet::updateOperateButton()
         // Group B fix wave (M5, the operator's ruling 2026-09-25): a local
         // window's OPERATE waits while the radio is on the air, with the
         // remote window's reason; otherwise it is as before.
+        // Task 77 fix round 3: and while a Tuner Genius cycle runs.
         const bool onAir = m_model && m_model->isCoreOnAir();
-        m_operateBtn->setEnabled(!onAir);
-        m_operateBtn->setToolTip(onAir ? RadioModel::onAirReason() : QString());
+        const bool tuning = m_model && m_model->pgxlSwitchWaitsForTuner();
+        m_operateBtn->setEnabled(!onAir && !tuning);
+        m_operateBtn->setToolTip(onAir    ? RadioModel::onAirReason()
+                                 : tuning ? RadioModel::tunerTuningReason()
+                                          : faultedTip());
         return;
     }
     if (!remoteOperateControl()) {
@@ -293,12 +335,16 @@ void AmpApplet::updateOperateButton()
     }
     // It keys nothing, so a receive-only Core takes it; it waits while the
     // radio is on the air and needs the Core connected to the amp.
+    // Task 77 fix round 3: and while the Core's tuner tunes (the Core
+    // also refuses the click during its cycle's standby wait).
     const bool onAir = m_model->isCoreOnAir();
+    const bool tuning = m_model->pgxlSwitchWaitsForTuner();
     const bool connected = m_amp
         && m_amp->connectionPhase() == TunerModel::ConnectionPhase::Connected;
-    m_operateBtn->setEnabled(!onAir && connected);
+    m_operateBtn->setEnabled(!onAir && !tuning && connected);
     m_operateBtn->setToolTip(onAir ? RadioModel::onAirReason()
-                             : connected ? QString()
+                             : tuning ? RadioModel::tunerTuningReason()
+                             : connected ? faultedTip()
                                          : tr("The Core is not connected to the Power Genius."));
 }
 

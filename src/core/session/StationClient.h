@@ -324,6 +324,17 @@
 //               (StationConnectionAttempt) for the connection messages. J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: iPhone app plan Task 77 (R-IOS-02, R-IOS-03, R-IOS-13):
+//               tgxlAutotuneAvailable, holdsTransmitHere, otherHolderReason.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
+//   2026-09-26: iPhone app plan Task 78 (R-IOS-02, R-IOS-07, R-IOS-30): a
+//               window signed in with its own key declares sessionHolder 1;
+//               connectedDevices, devices, markers, confirm.request and
+//               notice kept in RemoteDevicesState; tx.take, confirm.proceed,
+//               confirm.cancel, notice.takeBack and session.leave. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QAbstractSocket>
@@ -358,6 +369,7 @@ namespace NereusSDR {
 class ClientDeviceIdentity;
 class RadioModel;
 class SessionTransport;
+class RemoteDevicesState;
 class SettingsProxy;
 class TransmitState;
 
@@ -732,6 +744,7 @@ public:
     bool pgxlDeviceSettingsAvailable() const override;
     bool tgxlDeviceSettingsAvailable() const override;
     bool tgxlControlAvailable() const override;
+    bool tgxlAutotuneAvailable() const override;
     bool tgxlOperateAppliesWhole() const override;
     bool tgxlFullControlAvailable() const override;
     bool pgxlFullControlAvailable() const override;
@@ -769,6 +782,59 @@ public:
     /// confirm it stopped transmitting."), or empty while nobody does or
     /// the Core does not say (txStateVersion 2).
     QString transmitHolderText() const;
+    /// iPhone app plan Task 77 (ruling 7.7): while another device holds
+    /// transmit, the transmitter's settings are its own: "<holder> has the
+    /// transmitter.", as the Core refuses a change. Empty while this window
+    /// holds transmit, nobody does, or the Core does not say.
+    QString otherHolderReason() const;
+    /// Task 77 (ruling 8.4): whether this window holds transmit on the Core
+    /// (false while nobody does, or the Core does not say).
+    bool holdsTransmitHere() const;
+    /// Task 77: whether the holder's rules reach this window: the Core
+    /// names who holds transmit (txStateVersion 2) and takes remote keys
+    /// (not receive-only).
+    bool knowsTransmitHolder() const;
+
+    // ── iPhone app plan Task 78: several devices on one Core ────────────
+    /// What the Core says about the other devices (never null).
+    RemoteDevicesState* remoteDevices() const { return m_remoteDevices; }
+    /// The Core treats this window as a device that shares it: it signed
+    /// in with this computer's own key, declared sessionHolder 1, and the
+    /// Core answered sessionHolderVersion 1 at minor 11.
+    bool sessionHolderAvailable() const;
+    /// tx.take may be sent: sessionHolderAvailable() and remoteTxVersion 2
+    /// on a Core that takes this window's keys.
+    bool transmitTakeAvailable() const;
+    /// Another device (or the radio's own PTT) holds transmit and this
+    /// window could take it: transmitTakeAvailable() and a holder that is
+    /// not this window.
+    bool transmitHeldElsewhere() const;
+    /// `tx.take`: with `shown`, the holder epoch and on-air state the
+    /// operator was shown before confirming (ruling 8.7), so the Core takes
+    /// at once when nothing changed. Returns the command id, 0 when it
+    /// could not be sent.
+    quint32 requestTakeTransmit(bool shown, qint64 holderEpoch, bool shownKeyed);
+    /// `confirm.proceed {id, choice}` (-1 for a question with no choices).
+    quint32 proceedQuestion(qint64 id, qint64 choice);
+    /// `confirm.cancel {id}`.
+    quint32 cancelQuestion(qint64 id);
+    /// `notice.takeBack {id}`; the card goes either way.
+    quint32 takeBackNotice(qint64 id);
+    /// `session.leave`, when the Core offers it: the operator is done with
+    /// the Core here (Disconnect, or quitting). Sent before the link
+    /// closes; nothing waits for its answer.
+    void leaveSession();
+    /// The reason a held change carries while its question is asked.
+    static bool isAwaitingConfirmation(const QString& reason);
+#ifdef NEREUS_BUILD_TESTS
+    /// Test seam: a bench link signs in with the token, which never declares
+    /// sessionHolder; a window test says it does, and names the id the Core
+    /// numbered the token window with.
+    void setTokenSessionHolderForTest(const QString& wireId)
+    { m_tokenSessionHolderIdForTest = wireId; }
+    /// Test seam: an older window, which never declares sessionHolder.
+    void setDeclaresSessionHolder(bool declares) { m_declaresSessionHolder = declares; }
+#endif
     int coreStationTciStored() const override;
     /// Test seam: whether the Core counts as on this computer (a session
     /// started without a dial has no address to judge by).
@@ -1051,6 +1117,14 @@ public:
     int handshakeDeadlineMs() const { return m_handshakeDeadlineMs; }
 
 signals:
+    /// iPhone app plan Task 78: a several-devices verb was answered
+    /// (tx.take, confirm.proceed, confirm.cancel, notice.takeBack).
+    /// `awaitingConfirmation` when the Core asked a question instead (it
+    /// follows as a confirm.request).
+    void deviceCommandFinished(const QByteArray& verb, quint32 commandId, bool accepted,
+                               const QString& reason, bool awaitingConfirmation);
+    /// The holder's rules or this window's ability to take transmit changed.
+    void transmitTakeAvailabilityChanged();
     /// Fix wave M6: voxArmedHere() changed.
     void voxArmedHereChanged(bool armed);
     void displayBudgetChanged();
@@ -1254,6 +1328,11 @@ private:
     bool m_handshakeComplete = false;
     bool m_authenticated = false;
     bool m_signedInWithDeviceKey = false;
+    /// Task 78: this session's hello declared sessionHolder 1.
+    bool m_declaredSessionHolder = false;
+    bool m_declaresSessionHolder = true;
+    QString m_tokenSessionHolderIdForTest;
+    RemoteDevicesState* m_remoteDevices = nullptr;
     QString m_radioChangeReason;
     int m_deviceKeySignInForTest = -1;
     bool m_enrolledDeviceKey = false;

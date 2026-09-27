@@ -55,6 +55,9 @@
 //               and TUNE wait while another device holds. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: iPhone app plan Task 77 (R-IOS-02, R-IOS-03, R-IOS-13): the
+//               radio keeps transmit after its press. J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -802,7 +805,8 @@ private slots:
     }
 
     // The radio's own PTT holds transmit as "Radio", source radioPtt, and
-    // (fix wave I1) lets go when the press ends.
+    // (Task 77, ruling 8.1) keeps it, unkeyed, when the press ends, until a
+    // device takes it.
     void theRadiosPttIsNamedRadioWithItsSource()
     {
         Pair p;
@@ -817,8 +821,10 @@ private slots:
         QCOMPARE(p.state().holderDeviceId(), QStringLiteral("station"));
         mox->onMicPttFromRadio(false);
         QTRY_VERIFY(!mox->isMox());
-        QTRY_COMPARE(p.state().holderDeviceId(), QString());
-        QCOMPARE(p.state().holderSource(), QString());
+        QTRY_VERIFY(!p.state().keyed());
+        QCOMPARE(p.state().holderDeviceId(), QStringLiteral("station"));
+        QCOMPARE(p.state().holderName(), QStringLiteral("Radio"));
+        QCOMPARE(p.state().holderSource(), QStringLiteral("radioPtt"));
     }
 
     // A window's copy takes the holder as the Core sends it.

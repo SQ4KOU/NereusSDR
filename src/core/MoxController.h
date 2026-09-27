@@ -210,6 +210,24 @@
 //               take whose key never starts is released). J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: iPhone app plan Task 77 (R-IOS-02, R-IOS-03, R-IOS-13):
+//               holdOffHeldMic and programKeyRefusal; the radio's mic press
+//               while another device's key is on asks the keying gate (a
+//               take). J.J. Boyd (KG4VCF), with AI-assisted implementation
+//               via Anthropic Claude Code.
+//   2026-09-26: iPhone app plan Task 77 fix wave, I1 (ruling 8.9): the
+//               mic's press edge asks the gate whenever another device
+//               holds transmit (setOtherDeviceHolds), whatever its key
+//               (TUNE, two-tone, a tuner autotune, VOX). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
+//   2026-09-26: iPhone app plan Task 77 fix round 2 (R-IOS-02, R-IOS-03,
+//               R-IOS-13): anyPttSourceHeld and pttSourcesReleased (the
+//               amplifier's owed switch waits for every PTT source); the
+//               radio's mic keys after a take only while the press that
+//               took is still down (a second press during the take is
+//               refused and keys nothing later). J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis state-machine
@@ -397,6 +415,14 @@ public:
     // audio lock when the trx keyed nothing (Task 7 follow-up, item 5).
     bool     isTciPttHeld()  const noexcept { return m_tciPtt; }
 
+    // iPhone app plan Task 77 fix round 2: a PTT source (mic, CAT, TCI, or
+    // VOX triggering) is down now, keyed or held off. The Core never
+    // switches the Power Genius while one is: a key may be about to start.
+    bool     anyPttSourceHeld() const noexcept
+    {
+        return m_micPtt || m_catPtt || m_voxPtt || m_tciPtt;
+    }
+
     // ── K.2: MOX pre-check callback ──────────────────────────────────────────
     //
     // setMoxCheck: install a BandPlanGuard check callback for setMox(true).
@@ -444,6 +470,15 @@ public:
     using KeyingGateFn = std::function<KeyingAnswer(PttMode source, const KeyerIdentity& keyer)>;
     void setKeyingGate(KeyingGateFn gate);
     bool hasKeyingGate() const noexcept { return static_cast<bool>(m_keyingGate); }
+    /// iPhone app plan Task 77 fix wave, I1 (ruling 8.9): whether a device
+    /// other than the station device holds transmit now (TransmitHolder's
+    /// state), whatever its key: tx.key, TUNE, two-tone, a Tuner Genius
+    /// autotune or VOX. While it does, every press edge of the radio's own
+    /// PTT asks the gate (a take), and a press that takes nothing is held
+    /// off until it is released. Without it, the press edge asks only
+    /// while another keyer's key is on.
+    using OtherDeviceHoldsFn = std::function<bool()>;
+    void setOtherDeviceHolds(OtherDeviceHoldsFn probe);
 
     // The keyer of the key now on (station() while unkeyed).
     const KeyerIdentity& currentKeyer() const noexcept { return m_currentKeyer; }
@@ -456,6 +491,15 @@ public:
     // through the gate. A station PTT source is still down when its level
     // is; a remote keyer's press is its caller's to send again.
     void onTakeFinished(const KeyerIdentity& keyer, bool took);
+    /// iPhone app plan Task 77 (ruling 8.9): the radio's mic, if held now,
+    /// takes and keys nothing more until it is released; the Core calls
+    /// this when transmit is taken from the station device.
+    void holdOffHeldMic();
+    /// iPhone app plan Task 77 (ruling 8.14): the keying gate's refusal
+    /// for a program's key from `keyer` (TCI, CAT), asked as a question
+    /// (a program's key never takes transmit, so asking changes nothing);
+    /// empty when the gate would admit it or there is no gate.
+    TxRefusal programKeyRefusal(const KeyerIdentity& keyer) const;
 
     // A station key that starts more than MOX (TUNE, two-tone) asks the gate
     // before it changes anything, so a refused start never releases or rides
@@ -1094,6 +1138,11 @@ signals:
     // refusal is quiet.
     void moxRefused(const NereusSDR::TxRefusal& refusal);
 
+    // iPhone app plan Task 77 fix round 2: a PTT source was released and
+    // none is down now (anyPttSourceHeld() false). RadioModel retries an
+    // amplifier switch it owes.
+    void pttSourcesReleased();
+
     // ── Phase signals (Codex P1) ──────────────────────────────────────────────
     //
     // Subscribers attach HERE, not to individual low-level setters.
@@ -1544,6 +1593,13 @@ private:
     bool     isHeldOff(quint8 bit) const noexcept { return (m_notQueuedHeld & bit) != 0; }
     bool     isLevelHeld(quint8 bit) const noexcept;
     void     clearHeldBits(quint8 bits);
+    // Task 77 fix round 2: emits pttSourcesReleased when none is down.
+    void     reportIfSourcesReleased();
+    // Task 77 fix round 2 (ruling 8.9): the radio's mic press that took
+    // transmit is still down; cleared on its release. onTakeFinished keys
+    // the mic only while it is set, so a later press made during the take
+    // (refused "changing hands") keys nothing once the take ends.
+    bool     m_micTakePressDown{false};
     // Task 7 follow-up, N3: TX inhibit or a PA trip drops the CAT and TCI
     // levels (an app's request is not held across the block).
     void     dropAppLevelsUnderBlock();
@@ -1601,6 +1657,7 @@ private:
     // iPhone app plan Task 34: the keying gate, who the key now on is for,
     // and the keyer a gate-admitted setMox(true) keys for.
     KeyingGateFn  m_keyingGate;
+    OtherDeviceHoldsFn m_otherDeviceHolds;
     KeyerIdentity m_currentKeyer{KeyerIdentity::station(PttMode::None)};
     KeyerIdentity m_admittedKeyer{KeyerIdentity::station(PttMode::None)};
     // Task 35: setTune(true, keyer) in progress, and for whom.
