@@ -92,6 +92,9 @@
 //                into the trunk after txDisplayVersion and
 //                displayClockVersion). J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-27 - R-IOS-13 / R-R3-49 (parity Task 32): txMonitorAudioVersion,
+//                after controlChannelVersion. J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationCapabilities.h"
@@ -220,6 +223,9 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
         // R-IOS-16 (Task 28 fix wave): the control session through the
         // remote access service.
         updates.append(intEntry("controlChannelVersion", controlChannelVersion));
+        // R-IOS-13 / R-R3-49 (parity Task 32): the transmit monitor to the
+        // device that holds transmit.
+        updates.append(intEntry("txMonitorAudioVersion", txMonitorAudioVersion));
         // iPhone app Task 71: several devices at once, last, and only for
         // a peer that declared the feature.
         if (sessionHolderEntry) {
@@ -432,6 +438,7 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                    || u.name == "txDisplayVersion"
                    || u.name == "displayClockVersion"
                    || u.name == "controlChannelVersion"
+                   || u.name == "txMonitorAudioVersion"
                    || u.name == "sessionHolderVersion"
                    || u.name == "remoteTxVersion"
                    || u.name == "txStateVersion") {
@@ -485,6 +492,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                     caps.displayClockVersion = version;
                 } else if (u.name == "controlChannelVersion") {
                     caps.controlChannelVersion = version;
+                } else if (u.name == "txMonitorAudioVersion") {
+                    caps.txMonitorAudioVersion = version;
                 } else {
                     caps.bandSelectVersion = version;
                 }

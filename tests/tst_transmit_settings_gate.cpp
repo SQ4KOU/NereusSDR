@@ -251,6 +251,9 @@ void TstTransmitSettingsGate::olderCoreOffersNoTransmitSettings()
     // parity Task 28's txDisplayVersion, R-R3-21's displayClockVersion and
     // the Task 28 fix wave's controlChannelVersion; a Core from before them
     // sends none.
+    // Then parity Task 32's txMonitorAudioVersion.
+    QCOMPARE(updates.last().name, QByteArrayLiteral("txMonitorAudioVersion"));
+    updates.removeLast();
     QCOMPARE(updates.last().name, QByteArrayLiteral("controlChannelVersion"));
     updates.removeLast();
     QCOMPARE(updates.last().name, QByteArrayLiteral("displayClockVersion"));

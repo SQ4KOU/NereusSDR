@@ -565,6 +565,11 @@
 //   2026-09-27: Parity Task 31 (A11, R-R3-49): txDisplayVersion 3; a media
 //               peer that declares 3 may add `duplex` to its subscribes.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-27: Parity Task 32 (R-IOS-13, R-R3-49): txMonitorAudioVersion
+//               1, after controlChannelVersion; while a remote device holds
+//               transmit the Core's own outputs leave MON out (JJ's MON
+//               ruling of 2026-09-26). J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -626,6 +631,7 @@
 #include "core/IoBoardHl2Facade.h"
 #include <QScopeGuard>
 #include "models/BandPlanManager.h"
+#include "core/AudioEngine.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
@@ -2427,6 +2433,12 @@ StationServer::~StationServer()
         m_radioModel->moxController()->setOtherDeviceHolds({});
         // Task 77 fix round 2: the amplifier's pending-key probe asks it too.
         m_radioModel->setAmpKeyPendingProbe({});
+    }
+    // Parity Task 32: MON back on the Core's own outputs, as without a
+    // station server.
+    if (m_radioModel && m_radioModel->role() == RadioModel::Role::Local
+        && m_radioModel->audioEngine() != nullptr) {
+        m_radioModel->audioEngine()->setTxMonitorLocal(true);
     }
     // Task 77: the arbiter's freeze asks this object too.
     if (m_radioModel && m_radioModel->txSliceArbiter() != nullptr
@@ -6052,6 +6064,16 @@ void StationServer::remoteMicStarved(const QByteArray& deviceId, bool starved)
 void StationServer::onTransmitHolderChanged()
 {
     const std::optional<TransmitHolder::Holder> holder = m_transmitHolder->holder();
+    // Parity Task 32 (JJ's MON ruling, 2026-09-26): while a remote device
+    // holds transmit, its MON plays only on that device, so the Core's own
+    // outputs leave it out; the station device (a hosting window, or the
+    // radio's own PTT) hears it here as before.
+    if (m_radioModel && m_radioModel->role() == RadioModel::Role::Local
+        && m_radioModel->audioEngine() != nullptr) {
+        const bool remoteHolder = holder && holder->source == TransmitHolder::Source::Device
+            && holder->deviceId != KeyerIdentity::kStationDeviceId;
+        m_radioModel->audioEngine()->setTxMonitorLocal(!remoteHolder);
+    }
     if (m_radioModel && m_radioModel->role() == RadioModel::Role::Local) {
         // Ruling 5.11: the holder's active slice is the station-level one.
         const QByteArray id = holder && m_transmitHolder->state() == TransmitHolder::State::Held
@@ -7282,6 +7304,24 @@ int StationServer::txDisplayVersion() const
     return m_mediaEnabled && m_radioModel && m_radioModel->txDisplayFeed() != nullptr ? 3 : 0;
 }
 
+int StationServer::txMonitorAudioVersion() const
+{
+    // R-IOS-13 / R-R3-49 (parity Task 32): MON travels in a device's own
+    // media audio and comes from the Core's own transmitter.
+    return m_mediaEnabled && m_radioModel && m_radioModel->role() != RadioModel::Role::Remote
+        ? 1
+        : 0;
+}
+
+bool StationServer::txMonitorAudioAvailable(quint64 epoch) const
+{
+    // As txDisplayAvailable: told only to a peer that agreed minor 11.
+    const auto it = m_peers.constFind(mediaSessionFor(epoch));
+    return mediaAvailable(epoch) && it != m_peers.cend()
+        && it->agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && txMonitorAudioVersion() >= 1;
+}
+
 bool StationServer::txDisplayAvailable(quint64 epoch) const
 {
     // Advertised in the minor-11 capabilities block only, so only a peer
@@ -7582,6 +7622,10 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             // session over a data channel through the remote access
             // service, which needs the bound certificate.
             caps.controlChannelVersion = controlChannelVersion();
+            // R-IOS-13 / R-R3-49 (parity Task 32): the transmit monitor to
+            // the device that holds transmit, with media, appended after
+            // controlChannelVersion.
+            caps.txMonitorAudioVersion = media ? txMonitorAudioVersion() : 0;
             // iPhone app Task 71 (ruling 10.1): several devices at once, for
             // a peer that declared sessionHolder with deviceAuth; any other
             // peer is sent no entry, so its capabilities are today's.

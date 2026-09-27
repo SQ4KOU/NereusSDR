@@ -141,6 +141,8 @@
 //   2026-09-26 - R-IOS-16 (iPhone app plan Task 28 fix wave):
 //                controlChannelVersion. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-27 - R-IOS-13 / R-R3-49 (parity Task 32): txMonitorAudioVersion.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -347,6 +349,17 @@ struct StationCapabilities {
     /// identity key): connecting from anywhere is shown disabled with a
     /// reason.
     int controlChannelVersion = 0;
+    /// R-IOS-13 / R-R3-49 (remote-window parity Task 32): 1 means the Core
+    /// sends the transmit monitor (MON) to the device that holds transmit,
+    /// in its own media audio, while its radio is on the air and MON is on:
+    /// a media peer that declares txMonitorAudioVersion in its start may
+    /// send monitor-audio (route speakers, headphones or none) and is
+    /// answered with monitor-audio-context (the media document's "Transmit
+    /// monitor (monitor-audio)"). Sent in the same minor-11 block, after
+    /// controlChannelVersion; 1 whenever media is on with the Core's own
+    /// radio model, 0 otherwise. 0 (an older Core): a window shows its MON
+    /// output pair disabled with a reason.
+    int txMonitorAudioVersion = 0;
     /// iPhone app Task 71 (R-IOS-02; the several-devices design, ruling
     /// 10.1): 1 means the Core admits up to four devices at once, sends the
     /// `connectedDevices` object and takes session.leave. Sent last in the

@@ -2,6 +2,11 @@
 // src/core/session/media/RemoteAudioContext.cpp  (NereusSDR)
 // =================================================================
 // no-port-check: NereusSDR-original.  See RemoteAudioContext.h.
+//
+// Modification history (NereusSDR):
+//   2026-09-27: Remote-window parity Task 32 (R-IOS-13, R-R3-49): the
+//               monitor-audio request and monitor-audio-context codec. J.J.
+//               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/media/RemoteAudioContext.h"
@@ -470,6 +475,90 @@ std::optional<RemoteAudioContextMessage> decodeHeadphonesAudioContext(const QJso
 {
     return decodeContext(payload, /*detailNegotiated=*/true, /*profileNegotiated=*/true,
                          ContextKind::Headphones);
+}
+
+// ---- Transmit monitor (remote-window parity Task 32) ----
+
+QString txMonitorRouteToWire(TxMonitorRoute route)
+{
+    switch (route) {
+    case TxMonitorRoute::None:
+        return QStringLiteral("none");
+    case TxMonitorRoute::Speakers:
+        return QStringLiteral("speakers");
+    case TxMonitorRoute::Headphones:
+        return QStringLiteral("headphones");
+    }
+    return {};
+}
+
+std::optional<TxMonitorRoute> txMonitorRouteFromWire(const QJsonValue& value)
+{
+    if (!value.isString()) {
+        return std::nullopt;
+    }
+    const QString text = value.toString();
+    for (const TxMonitorRoute route :
+         {TxMonitorRoute::None, TxMonitorRoute::Speakers, TxMonitorRoute::Headphones}) {
+        if (text == txMonitorRouteToWire(route)) {
+            return route;
+        }
+    }
+    return std::nullopt;
+}
+
+namespace {
+
+QJsonObject encodeMonitorAudio(const QString& op, const MonitorAudioMessage& message)
+{
+    return QJsonObject{{QStringLiteral("op"), op},
+                       {QStringLiteral("connectionId"), message.connectionId},
+                       {QStringLiteral("revision"), static_cast<double>(message.revision)},
+                       {QStringLiteral("route"), txMonitorRouteToWire(message.route)}};
+}
+
+std::optional<MonitorAudioMessage> decodeMonitorAudio(const QString& op,
+                                                      const QJsonObject& payload)
+{
+    constexpr qsizetype kMonitorAudioKeys = 4;
+    double revision = 0.0;
+    const QJsonValue connectionId = payload.value(QStringLiteral("connectionId"));
+    const std::optional<TxMonitorRoute> route =
+        txMonitorRouteFromWire(payload.value(QStringLiteral("route")));
+    if (payload.size() != kMonitorAudioKeys
+        || payload.value(QStringLiteral("op")).toString() != op
+        || !connectionId.isString() || connectionId.toString().isEmpty()
+        || !integral(payload.value(QStringLiteral("revision")), 1.0, kMaxU32, revision)
+        || !route) {
+        return std::nullopt;
+    }
+    MonitorAudioMessage message;
+    message.connectionId = connectionId.toString();
+    message.revision = static_cast<quint32>(revision);
+    message.route = *route;
+    return message;
+}
+
+} // namespace
+
+QJsonObject encodeMonitorAudioRequest(const MonitorAudioMessage& message)
+{
+    return encodeMonitorAudio(QStringLiteral("monitor-audio"), message);
+}
+
+QJsonObject encodeMonitorAudioContext(const MonitorAudioMessage& message)
+{
+    return encodeMonitorAudio(QStringLiteral("monitor-audio-context"), message);
+}
+
+std::optional<MonitorAudioMessage> decodeMonitorAudioRequest(const QJsonObject& payload)
+{
+    return decodeMonitorAudio(QStringLiteral("monitor-audio"), payload);
+}
+
+std::optional<MonitorAudioMessage> decodeMonitorAudioContext(const QJsonObject& payload)
+{
+    return decodeMonitorAudio(QStringLiteral("monitor-audio-context"), payload);
 }
 
 } // namespace NereusSDR

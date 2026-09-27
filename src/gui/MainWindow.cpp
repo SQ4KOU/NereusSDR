@@ -321,6 +321,12 @@
 //                blanking rule and a remote window's subscriptions; the TX
 //                Display Cal Offset reaches every pan. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-27 - Parity Task 32 (R-IOS-13, R-R3-49): a remote window sends
+//                its MON output choice (audio/TxMonitor/Output) to the Core
+//                at start and on every change; its MON output pair is shown
+//                disabled with the reason on a Core that does not send the
+//                transmit monitor. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -1828,6 +1834,21 @@ void MainWindow::ensureRemoteSession()
                 this, &MainWindow::applyDisplayDuplex);
         applyDisplayDuplex();
         m_remoteMedia->setDisplayDuplex(m_moxDisplay->displayDuplex());
+        // Parity Task 32 (R-IOS-13, R-R3-49): this computer's MON output
+        // choice is where the Core sends MON while this window holds
+        // transmit: pushed now and on every change.
+        if (AudioEngine* devices = m_radioModel->localAudioDevices()) {
+            const auto routeFor = [](TxMonitorOutput output) {
+                return output == TxMonitorOutput::Headphones ? TxMonitorRoute::Headphones
+                                                             : TxMonitorRoute::Speakers;
+            };
+            m_remoteMedia->setTxMonitorRoute(routeFor(devices->txMonitorOutput()));
+            RemoteMediaController* const media = m_remoteMedia;
+            connect(devices, &AudioEngine::txMonitorOutputChanged, media,
+                    [media, routeFor](TxMonitorOutput output) {
+                media->setTxMonitorRoute(routeFor(output));
+            });
+        }
         m_remoteTelemetry = new RemoteTelemetryController(
             m_stationClient, m_remoteMedia, this);
         // R-R3-32 (parity Task 6): the Core's PA readings reach this
@@ -11995,6 +12016,11 @@ void MainWindow::applyRemoteRoleGating()
         m_txApplet->setVoxPermitted(voxLine, voxReason);
         m_txApplet->setTransmitSettingsPermitted(settingsPermitted, settingsReason);
         m_txApplet->setTransmitChainSettingsPermitted(chainPermitted, chainReason);
+        // Parity Task 32: the MON output pair needs a Core that sends MON.
+        m_txApplet->setMonitorOutputPermitted(
+            m_stationClient == nullptr
+                || m_stationClient->capabilities().txMonitorAudioVersion >= 1,
+            TxApplet::monitorOutputUnavailableReason());
         m_txApplet->setTxProfilePermitted(profilePermitted, profileReason);
         m_txApplet->setTxProcessingPermitted(processingPermitted, processingReason);
         // R-R3-49 (group A fix wave, M3): the RF Power slider's per-band

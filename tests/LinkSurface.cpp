@@ -85,6 +85,11 @@
 //   2026-09-26: iPhone app plan Task 28 (R-IOS-16): the
 //               controlChannelChunkBytes limit. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-27  J.J. Boyd / KG4VCF  Remote-window parity Task 32 (R-IOS-13,
+//                                    R-R3-49): the start's
+//                                    txMonitorAudioVersion, monitor-audio
+//                                    and monitor-audio-context. AI-assisted
+//                                    via Anthropic Claude Code.
 // =================================================================
 
 #include "LinkSurface.h"
@@ -921,6 +926,8 @@ QJsonObject guiToCoreOps()
         {QStringLiteral("headphonesMixVersion"), {QStringLiteral("headphonesMixVersion")}},
         // iPhone app plan Task 36: the microphone line.
         {QStringLiteral("remoteTxVersion"), {QStringLiteral("remoteTxVersion")}},
+        // Remote-window parity Task 32: the transmit monitor.
+        {QStringLiteral("txMonitorAudioVersion"), {QStringLiteral("txMonitorAudioVersion")}},
     }));
     // MediaPeer.cpp acceptControl: hasExactKeys for description / candidate.
     ops.insert(QStringLiteral("description"),
@@ -993,6 +1000,10 @@ QJsonObject guiToCoreOps()
                declaredOp(QStringLiteral("headphonesMixVersion"),
                           peer + QStringList{QStringLiteral("revision"), QStringLiteral("enabled"),
                                              QStringLiteral("profile")}));
+    // DaemonMediaController.cpp handleMonitorAudio (parity Task 32).
+    ops.insert(QStringLiteral("monitor-audio"),
+               declaredOp(QStringLiteral("txMonitorAudioVersion"),
+                          peer + QStringList{QStringLiteral("revision"), QStringLiteral("route")}));
     ops.insert(QStringLiteral("clock-probe"),
                declaredOp(QStringLiteral("audioClockVersion"),
                           peer + QStringList{QStringLiteral("id"), QStringLiteral("t0")}));
@@ -1153,6 +1164,10 @@ QJsonObject coreToGuiOps()
     ops.insert(QStringLiteral("audio-context"), audioContextShapes());
     ops.insert(QStringLiteral("receiver-audio-context"), receiverAudioContextShapes());
     ops.insert(QStringLiteral("headphones-audio-context"), headphonesAudioContextShapes());
+    // DaemonMediaController.cpp handleMonitorAudio's answer (parity Task 32).
+    ops.insert(QStringLiteral("monitor-audio-context"),
+               declaredOp(QStringLiteral("txMonitorAudioVersion"),
+                          peer + QStringList{QStringLiteral("revision"), QStringLiteral("route")}));
     // DaemonMediaController.cpp handleClockProbe's reply.
     ops.insert(QStringLiteral("clock-echo"),
                declaredOp(QStringLiteral("audioClockVersion"),

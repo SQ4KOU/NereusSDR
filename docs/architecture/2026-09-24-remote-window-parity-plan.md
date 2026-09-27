@@ -2024,12 +2024,16 @@ at `SetAAudioMixVol` 0.5).
   (`txState`'s `holderDeviceId` is this session's device), it adds the TX monitor, at
   `monitorVolume`, to this device's main stream (`speakers`) or its headphones stream
   (`headphones`, when it declared `headphonesMixVersion`, else its main stream); `none` sends
-  it nowhere. No other device's stream carries it.
+  it nowhere. No other device's stream carries it. While a remote device holds transmit the
+  Core's own speakers and headphones leave MON out, so it plays only on that device; while the
+  station device holds it (a window hosting the Core) the Core's outputs play it as today (the
+  operator's MON ruling of 2026-09-26).
 - The desktop sends its MON output choice (`audio/TxMonitor/Output`) as `route`; the phone's
   rule (MON in headphones only) is its own (see "Plan text to change").
 - User-visible string: "This Core does not send the transmit monitor. Updating the Core may
   help." (MON SPEAKERS/PHONES in a remote window below version 1; MON itself still turns on the
-  Core's monitor, Task 2).
+  Core's monitor tap, Task 2, so the holder's stream carries it, but the Core's own output of it
+  is quiet while the holder is a remote device, by the operator's MON ruling).
 
 **Acceptance:**
 - With MON on and a test tone through the Core's TX chain, the keyed holder's main stream
@@ -2038,7 +2042,9 @@ at `SetAAudioMixVol` 0.5).
 - A second device on the Core, not holding transmit, receives no monitor audio.
 - A peer that did not declare the capability gets today's wire (fixture).
 - Un-keying ends the monitor audio within one audio frame.
-- A local window's MON is unchanged.
+- A local window's MON is unchanged, and a local window at the Core that holds transmit still
+  hears it locally; with a remote holder the Core's own output of MON is silent while the
+  holder's stream carries it.
 
 **Verification:** tests first (holder only, route, levels). Named tests, the media runner,
 surface, wording. Bench (pending): matrix row 25.
