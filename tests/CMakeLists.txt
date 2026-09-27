@@ -7576,15 +7576,17 @@ if(DEFINED libjuice_SOURCE_DIR AND EXISTS "${libjuice_SOURCE_DIR}/src/agent.c")
     set_tests_properties(libjuice_patch_paths PROPERTIES LABELS "session" TIMEOUT 120)
 endif()
 # R-R3-49: libdatachannel's remote description change
-# (cmake/patches/libdatachannel-keep-remote-description-first.cpp) still
-# applies to the pinned source, both library targets compile it, and it
-# opens with the pinned file's own licence notice. Configures a small
+# (cmake/patches/libdatachannel-keep-remote-description-first.cpp) and its
+# DTLS MTU change (cmake/patches/libdatachannel-set-dtls-mtu-before-incoming.cpp)
+# still apply to the pinned source, both library targets compile them, and
+# each opens with its pinned file's own licence notice. Configures a small
 # project only; nothing is built or fetched.
 if(DEFINED libdatachannel_SOURCE_DIR AND EXISTS "${libdatachannel_SOURCE_DIR}/src/peerconnection.cpp")
     add_test(NAME libdatachannel_patch_applies
         COMMAND ${CMAKE_COMMAND}
             -DREPO=${CMAKE_SOURCE_DIR}
             -DPC_CPP=${libdatachannel_SOURCE_DIR}/src/peerconnection.cpp
+            -DDTLS_CPP=${libdatachannel_SOURCE_DIR}/src/impl/dtlstransport.cpp
             -DWORK=${CMAKE_CURRENT_BINARY_DIR}/libdatachannel-patch
             -P ${CMAKE_SOURCE_DIR}/tests/scripts/check-libdatachannel-patch.cmake)
     set_tests_properties(libdatachannel_patch_applies PROPERTIES LABELS "session" TIMEOUT 120)
@@ -8841,7 +8843,9 @@ nereus_add_test(tst_media_replace fakes/LoopbackTransport.cpp REALTIME)
 nereus_add_test(tst_path_racer fakes/LoopbackTransport.cpp EXTRA_LABELS session)
 target_compile_definitions(tst_path_racer PRIVATE
     NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
-set_tests_properties(tst_path_racer PROPERTIES TIMEOUT 400)
+if(TEST tst_path_racer)
+    set_tests_properties(tst_path_racer PROPERTIES TIMEOUT 400)
+endif()
 # iPhone app plan Task 29 step 2b (R-IOS-16, R-IOS-08; the rendezvous
 # document, section 12.8): the Core's relay-leg runner over the relay
 # fixtures in rendezvous/conformance/v1/relay/, and the leg's own rules.
@@ -8855,7 +8859,9 @@ target_compile_definitions(tst_relay_leg PRIVATE
 nereus_add_test(tst_relay_session fakes/LoopbackTransport.cpp EXTRA_LABELS session)
 target_compile_definitions(tst_relay_session PRIVATE
     NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
-set_tests_properties(tst_relay_session PROPERTIES TIMEOUT 400)
+if(TEST tst_relay_session)
+    set_tests_properties(tst_relay_session PROPERTIES TIMEOUT 400)
+endif()
 
 # --------------------------------------------------------------------------
 # Aggregate "all_tests" target  (2026-05-26 KG4VCF dev-loop fix, from PR #291)
@@ -8897,3 +8903,11 @@ if(_label_names)
     endforeach()
     message(STATUS "NereusSDR: per-label test targets: ${_label_names}")
 endif()
+
+# ── R-R3-49: the audio thread reads a published view of the slices ───────────
+# rxBlockReady used to walk RadioModel's slice list on the DSP thread while
+# the main thread removed a slice from it and deleted the SliceModel. The
+# stress case adds and removes slices while a feeder thread delivers blocks
+# for every id; run it under the ThreadSanitizer build to see a race.
+nereus_add_test(tst_slice_audio_view_race)
+target_compile_definitions(tst_slice_audio_view_race PRIVATE NEREUS_BUILD_TESTS)
