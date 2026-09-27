@@ -363,6 +363,53 @@ function(nereus_add_test name)
     endforeach()
 endfunction()
 
+# nereus_split_test(<name> ENV <variable> GROUPS <group>...) runs one test
+# binary as several ctest entries (R-R3-49 load round): <name>_<group> for
+# each group, the same binary with <variable>=<group>, and <name> itself
+# with <variable>=rest. The test's main() picks its functions through
+# tests/TestFunctionGroups.h. Use it for a test whose cases add up near its
+# limit, so no entry carries another's time. Each entry takes the test's
+# labels, limit, RUN_SERIAL, PROCESSORS and environment, with a home of its
+# own. Call it after every set_tests_properties() on <name>; a test sharded
+# away is left alone.
+function(nereus_split_test name)
+    cmake_parse_arguments(_st "" "ENV" "GROUPS" ${ARGN})
+    if(NOT TEST ${name})
+        return()
+    endif()
+    foreach(_prop LABELS TIMEOUT RUN_SERIAL PROCESSORS ENVIRONMENT_MODIFICATION ENVIRONMENT)
+        get_test_property(${name} ${_prop} _st_${_prop})
+    endforeach()
+    # The test's home is its own; each entry gets another.
+    set(_st_env "")
+    foreach(_entry IN LISTS _st_ENVIRONMENT)
+        if(NOT _entry MATCHES "^(HOME|CFFIXED_USER_HOME)=")
+            list(APPEND _st_env "${_entry}")
+        endif()
+    endforeach()
+    foreach(_group IN LISTS _st_GROUPS)
+        set(_entry_name ${name}_${_group})
+        add_test(NAME ${_entry_name} COMMAND ${name})
+        foreach(_prop LABELS TIMEOUT RUN_SERIAL PROCESSORS ENVIRONMENT_MODIFICATION)
+            if(_st_${_prop})
+                set_property(TEST ${_entry_name} PROPERTY ${_prop} "${_st_${_prop}}")
+            endif()
+        endforeach()
+        set(_entry_env ${_st_env})
+        list(APPEND _entry_env "${_st_ENV}=${_group}")
+        if(_st_ENVIRONMENT MATCHES "(^|;)HOME=")
+            set(_entry_home "${CMAKE_CURRENT_BINARY_DIR}/test-home/${_entry_name}")
+            file(MAKE_DIRECTORY "${_entry_home}")
+            list(APPEND _entry_env "HOME=${_entry_home}")
+            if(_st_ENVIRONMENT MATCHES "(^|;)CFFIXED_USER_HOME=")
+                list(APPEND _entry_env "CFFIXED_USER_HOME=${_entry_home}")
+            endif()
+        endif()
+        set_property(TEST ${_entry_name} PROPERTY ENVIRONMENT "${_entry_env}")
+    endforeach()
+    set_property(TEST ${name} APPEND PROPERTY ENVIRONMENT "${_st_ENV}=rest")
+endfunction()
+
 # ── Pre-existing tests from main (smoke + 3G-9 meter suite) ────────────────
 nereus_add_test(tst_setup_helpers)
 nereus_add_test(tst_smoke)
@@ -1005,6 +1052,10 @@ nereus_add_test(tst_alex2_filters_tab)
 target_compile_definitions(tst_p2_regression_freeze PRIVATE
     NEREUS_BUILD_TESTS
     NEREUS_TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/data")
+
+# R-R3-49 load round: P1FakeRadio streams while the thread that made it is
+# busy (it runs on a thread of its own).
+nereus_add_test(tst_p1_fake_radio fakes/P1FakeRadio.cpp)
 
 # P1 loopback integration test — uses P1FakeRadio from tests/fakes/
 nereus_add_test(tst_p1_loopback_connection fakes/P1FakeRadio.cpp)
@@ -7491,6 +7542,15 @@ target_compile_definitions(tst_setup_controls_connected PRIVATE NEREUS_BUILD_TES
 # windows, saved values kept, a saved Voice Rec/Play control kept.
 nereus_add_test(tst_unbuilt_features)
 target_compile_definitions(tst_unbuilt_features PRIVATE NEREUS_BUILD_TESTS)
+# R-R3-49 load round: 24 s quiet, up to 87 s loaded, and past the 120 s
+# limit in a suite run at load 50 to 110. markingOneFeatureBuiltShowsItsSurfacesOnly
+# (a window per listed feature, about two thirds of the time) runs its rows
+# as tst_unbuilt_features_each1 to _each3, every third feature each, the
+# rest as tst_unbuilt_features (the test's main()).
+if(TEST tst_unbuilt_features)
+    nereus_split_test(tst_unbuilt_features ENV NEREUS_UNBUILT_FEATURES_GROUP
+        GROUPS each1 each2 each3)
+endif()
 # R3 unfinished controls, Task 3 (R-R3-49, R-R3-21): the container function
 # and band buttons act on the container's own slice; the ones with nothing
 # behind them are hidden through the unbuilt list.
@@ -8380,11 +8440,18 @@ nereus_add_test(tst_remote_audio_receiver REALTIME)
 # asserts the speaker never ran short once playing. The worker keeps two
 # 10 ms blocks queued, so that is a real-time guarantee: a loaded -j4 Linux
 # run starved the 192 kHz row for one 1 ms callback (1461 dry frames against
-# 1269) while it passed every run alone. About 35 s. RUN_SERIAL (as for
+# 1269) while it passed every run alone. RUN_SERIAL (as for
 # tst_receiver_dsp_load_frames, R-R3-40): ctest never runs it beside another
 # test that would take the worker's processor away.
+# R-R3-49 load round: the whole run is about 118 s of wall-clock playback
+# (measured 2026-09-27, 117.6 s at load 130 to 260, and about the same on a
+# quiet machine), against the 120 s limit; the two Wi-Fi stall rows are 35 s
+# each. They run as tst_remote_audio_receiver_wifi (about 70 s), the rest as
+# tst_remote_audio_receiver (about 48 s).
 if(TEST tst_remote_audio_receiver)
     set_tests_properties(tst_remote_audio_receiver PROPERTIES RUN_SERIAL TRUE)
+    nereus_split_test(tst_remote_audio_receiver
+        ENV NEREUS_REMOTE_AUDIO_RECEIVER_GROUP GROUPS wifi)
 endif()
 # REALTIME: its lossless case measures the stream's rate over a wall-clock
 # window, and its delay cases compare the measured delay with the heard one

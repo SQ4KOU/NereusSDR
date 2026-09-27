@@ -60,6 +60,11 @@
 //               cached address tests expect every address's line. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-27: R-R3-49 load round: the Task 28 session case waits for
+//               both ends' control paths to settle on the direct pair
+//               before it checks that media takes no relay. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -2620,6 +2625,21 @@ private slots:
         // computer without the relay, so media takes no relay allocation at
         // either end (the Task 28 fix wave, Important 4); both control
         // allocations were made (ALLOCATED 2 below).
+        // R-R3-49 load round: ICE can nominate the relay pair first and move
+        // to the direct pair once its check succeeds (as
+        // aDirectPathIsPreferredOverTheRelay waits for); on a loaded
+        // computer the session opened on the relay in 2 of about 90 runs,
+        // and the relay kept for media then was the rule working. Wait for
+        // each end's control path to be the direct one the rule is about.
+        const auto* windowChannel = qobject_cast<const DataChannelTransport*>(window.transport());
+        const auto* coreChannel = core.server->findChild<DataChannelTransport*>();
+        QVERIFY(windowChannel != nullptr);
+        QVERIFY(coreChannel != nullptr);
+        QTRY_VERIFY_WITH_TIMEOUT(windowChannel->selectedPath().has_value()
+                                     && !windowChannel->selectedPath()->relayed()
+                                     && coreChannel->selectedPath().has_value()
+                                     && !coreChannel->selectedPath()->relayed(),
+                                 15000);
         const std::optional<IceConfiguration> ice = window.sessionIceConfiguration();
         QVERIFY(ice.has_value());
         QVERIFY(ice->relayKnown());

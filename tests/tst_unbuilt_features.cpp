@@ -62,6 +62,10 @@
 //                                    Alex-1 TX filter options and HL2 TX
 //                                    timings. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-27  J.J. Boyd / KG4VCF  R-R3-49 load round: one row per
+//                                    feature for marking one built, and
+//                                    four ctest entries (main()).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -99,6 +103,7 @@
 #include <memory>
 
 #include "OperatorWording.h"
+#include "TestFunctionGroups.h"
 #include "core/AppSettings.h"
 #include "core/BuildIdentity.h"
 #include "core/RadioDiscovery.h"
@@ -895,12 +900,24 @@ private slots:
     }
 
     // Marking one feature built brings every one of its surfaces back and
-    // no other feature's.
+    // no other feature's. One row per listed feature (R-R3-49 load round):
+    // main() spreads the rows over ctest entries from the same list.
+    void markingOneFeatureBuiltShowsItsSurfacesOnly_data()
+    {
+        QTest::addColumn<int>("index");
+        const QList<UnbuiltFeatures::Entry>& list = UnbuiltFeatures::all();
+        for (int i = 0; i < list.size(); ++i) {
+            QTest::newRow(qPrintable(list.at(i).key)) << i;
+        }
+    }
+
     void markingOneFeatureBuiltShowsItsSurfacesOnly()
     {
+        QFETCH(int, index);
+        const UnbuiltFeatures::Entry& entry = UnbuiltFeatures::all().at(index);
         const QMap<F, QList<Surface>> map = surfaces();
         GuiSessionCoordinator sessions;
-        for (const UnbuiltFeatures::Entry& entry : UnbuiltFeatures::all()) {
+        {
             UnbuiltFeatures::resetForTest();
             UnbuiltFeatures::setBuiltForTest(entry.feature, true);
             Hosts hosts(sessions, false);
@@ -1404,5 +1421,33 @@ private slots:
     }
 };
 
-QTEST_MAIN(TstUnbuiltFeatures)
+int main(int argc, char** argv)
+{
+    QApplication app(argc, argv);
+    app.setAttribute(Qt::AA_Use96Dpi, true);
+    TstUnbuiltFeatures test;
+    QTEST_SET_MAIN_SOURCE_PATH
+    // R-R3-49 load round: 24 s quiet, up to 87 s at load 80 to 110 beside
+    // two more of itself, and past the 120 s limit in a suite run at load
+    // 50 to 110. Two thirds of it is markingOneFeatureBuiltShowsItsSurfacesOnly,
+    // a fresh window and its Setup pages for each listed feature (115 s
+    // alone at load 64 to 177). Its rows, one per feature and built here
+    // from the list its _data function reads, run as three ctest entries,
+    // tst_unbuilt_features_each1 to _each3, every third feature each; the
+    // rest as tst_unbuilt_features (tests/CMakeLists.txt).
+    constexpr int kEachEntries = 3;
+    QList<NereusSDR::TestFunctionGroups::Group> groups;
+    for (int k = 0; k < kEachEntries; ++k) {
+        groups.append({QStringLiteral("each%1").arg(k + 1), {}});
+    }
+    const QList<NereusSDR::UnbuiltFeatures::Entry>& list = NereusSDR::UnbuiltFeatures::all();
+    for (int i = 0; i < list.size(); ++i) {
+        groups[i % kEachEntries].entries.append(
+            QStringLiteral("markingOneFeatureBuiltShowsItsSurfacesOnly:") + list.at(i).key);
+    }
+    const std::optional<QStringList> arguments = NereusSDR::TestFunctionGroups::arguments(
+        test.metaObject(), app.arguments(), "NEREUS_UNBUILT_FEATURES_GROUP", groups);
+    return arguments ? QTest::qExec(&test, *arguments) : 1;
+}
+
 #include "tst_unbuilt_features.moc"

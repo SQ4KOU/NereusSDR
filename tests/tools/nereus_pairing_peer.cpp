@@ -39,12 +39,15 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-27: Optional startup phase timings for load-failure diagnosis.
+//               J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 //   2026-09-24: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
 // =================================================================
 
 #include <QCoreApplication>
+#include <QElapsedTimer>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLoggingCategory>
@@ -130,6 +133,16 @@ private:
 int main(int argc, char* argv[])
 {
     QCoreApplication app(argc, argv);
+    QElapsedTimer startup;
+    startup.start();
+    const auto markStartup = [&](const char* phase) {
+        if (qEnvironmentVariableIsSet("NEREUS_PAIRING_STARTUP_TIMINGS")) {
+            std::fprintf(stderr, "pairing-startup %s %lld ms\n", phase,
+                         static_cast<long long>(startup.elapsed()));
+            std::fflush(stderr);
+        }
+    };
+    markStartup("main");
     // Warnings only: the Core's informational lines would be noise here.
     QLoggingCategory::setFilterRules(QStringLiteral("*.debug=false\n*.info=false"));
 
@@ -149,11 +162,15 @@ int main(int argc, char* argv[])
     }
     const QString security = scratch.filePath(QStringLiteral("core"));
     AppSettings settings(scratch.filePath(QStringLiteral("NereusSDR.settings")));
+    markStartup("before-model");
     RadioModel model;
+    markStartup("after-model");
     // The first-run banner goes to standard output on the run that makes the
     // identity key; make it first so that output carries only lines.
     StationIdentity::loadOrCreate(security);
+    markStartup("after-identity");
     StationServer server(&model, settings, security);
+    markStartup("after-server");
     server.setHeartbeatIntervalMs(0);
     server.setPairingLanClickAllowed(!lanDeny);
 
@@ -175,6 +192,7 @@ int main(int argc, char* argv[])
         pairedBefore = 1;
     }
 
+    markStartup("before-ready");
     QString pin = server.certificateFingerprint();
     pin.remove(QLatin1Char(':'));
     writeLine(QJsonDocument(QJsonObject{

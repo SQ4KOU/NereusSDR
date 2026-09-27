@@ -55,6 +55,9 @@
 //               lasts, as the smaller buffer plays everything in order.
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-27: R-R3-49 load round: the presses that set up transmit go
+//               through pressMoxUntilKeyed(). J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -166,6 +169,42 @@ void attachMicrophone(Test::RemoteAudioSessionHarness& h, float amplitude)
     auto bus = std::make_unique<PacedMicrophone>(amplitude, 1000.0);
     bus->open(fmt);
     h.remote.audioEngine()->setTxInputBusForTest(std::move(bus));
+}
+
+// A press of this window's MOX that keys the Core, for a case whose
+// subject comes after it. The Core answers a voice key once the device's
+// microphone line has filled its buffer and refuses it when that takes
+// more than 250 ms (station link document, section 18.3), and the window
+// starts its microphone only with the key: the whole start had to fit in
+// 250 ms. R-R3-49 load round: on a loaded computer it did not, and the
+// Core refused aProgramThroughTheWindowsTciKeysTheCore's setup press (1 of
+// 24 runs at load 91; at load 82 to 130 the key was answered 52 to 133 ms
+// after it was sent). The refusal tells the operator to wait a moment and
+// try again, so after exactly that refusal the press is made again, up to
+// kMaxPresses; any other refusal, or no answer, fails.
+constexpr int kMaxPresses = 5;
+bool pressMoxUntilKeyed(Test::RemoteAudioSessionHarness& h)
+{
+    QSignalSpy refused(h.client.remoteTransmit(), &RemoteTransmitClient::refused);
+    for (int press = 0; press < kMaxPresses; ++press) {
+        h.remote.setMoxFromButton(true);
+        if (!QTest::qWaitFor([&] { return h.station.moxController()->isMox() || !refused.isEmpty(); },
+                             5000)) {
+            return false;
+        }
+        if (h.station.moxController()->isMox()) {
+            return true;
+        }
+        const QList<QVariant> refusal = refused.takeFirst();
+        if (refusal.at(0).toString() != TxRefusals::remoteMicNotReady().text) {
+            qWarning("the press was refused: %s", qPrintable(refusal.at(0).toString()));
+            return false;
+        }
+        if (!QTest::qWaitFor([&] { return !h.remote.moxController()->isMox(); }, 5000)) {
+            return false;
+        }
+    }
+    return false;
 }
 
 // The command.invoke messages of `verb` the Core received, in order.
@@ -767,8 +806,7 @@ private slots:
         // iPhone app plan Task 77 (ruling 8.4): arming VOX needs holding
         // transmit. This window takes it with a press of its MOX (a
         // person's key on unheld transmit takes it), then arms VOX.
-        h.remote.setMoxFromButton(true);
-        QTRY_VERIFY(h.station.moxController()->isMox());
+        QVERIFY(pressMoxUntilKeyed(h));
         h.remote.setMoxFromButton(false);
         QTRY_VERIFY(!h.station.moxController()->isMox());
         QTRY_COMPARE(h.client.transmitHolderText(), QStringLiteral("This computer holds transmit."));
@@ -821,8 +859,7 @@ private slots:
         QTRY_VERIFY(h.client.capabilities().txPermitted);
 
         // This window takes transmit with a press, and lets go.
-        h.remote.setMoxFromButton(true);
-        QTRY_VERIFY_WITH_TIMEOUT(h.station.moxController()->isMox(), 5000);
+        QVERIFY(pressMoxUntilKeyed(h));
         h.remote.setMoxFromButton(false);
         QTRY_VERIFY(!h.station.moxController()->isMox());
         QVERIFY(h.server.transmitHolder()->isHeldBy(h.windowKey->fingerprint()));
@@ -957,8 +994,7 @@ private slots:
                      qPrintable(QString::number(binding)));
         }
 
-        h.remote.setMoxFromButton(true);
-        QTRY_VERIFY_WITH_TIMEOUT(h.station.moxController()->isMox(), 5000);
+        QVERIFY(pressMoxUntilKeyed(h));
         QTRY_VERIFY(state->keyed());
         QTRY_COMPARE(state->forwardPowerWatts(), 50.0);
         QTRY_COMPARE(state->alcDb(), -3.0);
@@ -998,8 +1034,7 @@ private slots:
         QTRY_VERIFY(h.client.capabilities().txPermitted);
         TransmitState* state = h.client.transmitState();
 
-        h.remote.setMoxFromButton(true);
-        QTRY_VERIFY_WITH_TIMEOUT(h.station.moxController()->isMox(), 5000);
+        QVERIFY(pressMoxUntilKeyed(h));
         QTRY_COMPARE(state->timeOutRemainingSeconds(), 30);
         timeOutNow = 30'000;
         h.station.txTimeOutTimer()->tick();
@@ -1080,8 +1115,7 @@ private slots:
         };
         QCOMPARE(show(), QString());
         // This window keys: it holds transmit.
-        h.remote.setMoxFromButton(true);
-        QTRY_VERIFY(h.station.moxController()->isMox());
+        QVERIFY(pressMoxUntilKeyed(h));
         QTRY_COMPARE(show(), QStringLiteral("This computer holds transmit."));
         h.remote.setMoxFromButton(false);
         QTRY_VERIFY(!h.station.moxController()->isMox());

@@ -25,6 +25,10 @@
 //               one part for each behavioural check the display-sync review
 //               set for the merge. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-09-27: R-R3-49 load round: sharedWindowChangeAndRadioReconnectResumeBothPanes
+//               takes its reference trace once the trace holds across new
+//               frames, not at the first frame. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 #include <QTest>
 #include <QApplication>
 #include <QMetaMethod>
@@ -2089,7 +2093,36 @@ private slots:
                     && std::abs(levels.second - (referenceDbm.second + offset)) < 1.0f;
             }, 5000);
         };
-        const auto baseTraceDbm = traceLevels();
+        // R-R3-49 load round: the first frames of a new stream come from a
+        // part-filled FFT with the Core's averaging still rising, so a trace
+        // read at the first frame can sit 3.5 dB under the steady one. A
+        // loaded run took that as its reference (6 of 53 at load 50 to 90)
+        // and then waited for a level the steady trace never reaches. The
+        // reference is the trace once it holds across newly arrived frames
+        // (a waterfall row is pushed only for a frame that arrived).
+        const auto steadyTrace = [&](QPair<float, float>& steady) {
+            QPair<float, float> previous = traceLevels();
+            quint64 previousRows = first->spectrumWidget()->remoteRowsPushedForTest();
+            return QTest::qWaitFor([&] {
+                QMetaObject::invokeMethod(&station, "rawIqDataForStream", Qt::DirectConnection,
+                    Q_ARG(int, stream), Q_ARG(QVector<float>, iq));
+                const quint64 rows = first->spectrumWidget()->remoteRowsPushedForTest();
+                if (rows < previousRows + 2) {
+                    return false;
+                }
+                const auto levels = traceLevels();
+                const bool held = std::abs(levels.first - previous.first) < 0.1f
+                    && std::abs(levels.second - previous.second) < 0.1f;
+                previous = levels;
+                previousRows = rows;
+                if (held) {
+                    steady = levels;
+                }
+                return held;
+            }, 5000);
+        };
+        QPair<float, float> baseTraceDbm;
+        QVERIFY(steadyTrace(baseTraceDbm));
         const double baseOffsetDb = station.rxMeterOffsetDb();
         stationAttenuator.setAttenuation(10);
         QVERIFY(feedAndAwaitOffset(station.rxMeterOffsetDb() - baseOffsetDb, baseTraceDbm));

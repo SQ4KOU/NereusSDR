@@ -43,7 +43,7 @@ numbers for what should be the same control.
   NR4 Rescale/SNR threshold ranges, and new-slice Smoothing/Whitening/algorithm defaults.
   Preserve saved operator choices; this is not a settings reset.
 - Status: NR1 corrected and built (commit `d6d96eaa`, in trunk); NR2/NR4 implementation
-  verified on `codex/nr-thetis-parity`, awaiting trunk integration. New control/default/save
+  merged into trunk as signed `edfd220bb` (implementation `b9bedc3c5`). New control/default/save
   regressions, catalogue checks and both session transports pass. Existing saved choices
   remain intact; catalogue fixtures advertise the same ranges as the controls.
 - Plan: R-IOS-06, R-IOS-27.
@@ -443,6 +443,69 @@ Thetis only enables ADC0 on every board; NereusSDR offers two ADCs on boards tha
   checkpoint bench item was added: on the G2, zoom slice B's pan (the second ADC) out past its
   receiver's bandwidth and check the wide edges fill in.
 - Plan: needs an ID (raised in the gaps review; not a plan task on its own).
+
+## Continuation findings and verification, 2026-09-27
+
+### G-32: Slice publication and incoming DTLS records could race initialization
+
+- Evidence: the resumed half-merge published an atomic slice audio view and applied the
+  DTLS MTU before incoming records. Signed trunk merge `29ce3594f` contains both fixes.
+- Ruling: JJ explicitly requested finishing this merge and its required verification.
+- Status: application and all test targets built; focused checks passed. The full baseline
+  completed in two recorded segments (865 entries, then the 83 interrupted/unstarted entries).
+  Combined result: 944/948 passed. The four findings below remain tracked independently.
+- Plan: R-R3-49; Core station prerequisites for phone media.
+
+### G-33: Load exposes test setup races and unresolved timing failures
+
+- Evidence: the baseline failed the control heartbeat setup, fake-radio meter startup,
+  pairing helper startup and transmit event-loop gap checks. The heartbeat test enabled its
+  100 ms deadline before the handshake completed. The fake radio stopped producing during
+  synchronous DSP initialization. The latter now runs on its own thread; neither production
+  watchdog was weakened. Pairing startup now reports phase timings without exposing wire data.
+- Ruling: JJ: "A test that fails only under load is a finding: bring JJ its cause and a
+  suggested fix." The earlier instruction also rejects merely extending the audio-clock limit.
+- Status: integrated load-fix build passed; focused run passed 14/16 entries in 307.21 s.
+  Both remote-audio entries failed (14 failing rows total) at observed load up to about 140.
+  Evidence includes source/speaker timer delays and receiver worker wake gaps up to 201.5 ms.
+  These are open findings, not waived tests. Separate independently paced source/device
+  measurement is needed to distinguish harness starvation from receiver scheduling.
+  Pairing's original slow phase and
+  the 25.81 ms transmit timer gap (25 ms bound) remain unresolved. A standalone passing run
+  does not close either finding. Suggested next investigation: phase measurements for pairing
+  and a same-load unkeyed timer baseline plus key-call timing for transmit.
+- Audio-clock evidence: unchanged simulated-hour coverage passed in 177.19 s in the baseline
+  remainder. A separate measured run used about 105 CPU seconds; about 98 were in production
+  audio push/resampling. Test tone generation used about 4 seconds. Existing limits retained.
+- Plan: R-R3-49; load-failure work.
+
+### G-34: Relay cleanup must retain the actual ICE socket and its local route
+
+- Evidence: PeerConnection close returns before asynchronous ICE teardown; a fixed delay
+  cannot prove that an old agent stopped using its local route. Shared phone patches retain
+  the TURN agent through bounded release processing and any outstanding resolver. Core adds
+  an optional lifetime owner, released only after actual agent destruction, then releases the
+  route on its Qt thread. Overlapping media uses distinct UUID routes and a bounded count.
+- Ruling: implementation under JJ's explicit authorization to finish R5 and Core phone
+  prerequisites. No new operator behavior ruling is inferred. Existing identity checks and
+  the transmit watchdog remain required.
+- Status: source and negative provenance checks pass; actual patched Core rebuild and runtime
+  verification in progress. An earlier build was found to have skipped vendor patches despite
+  a successful tool exit. That evidence was withdrawn. The patch helper now rejects skipped
+  application and materialized hashes are checked. No build from that earlier run was deployed.
+- Plan: R5 remote access; phone relay cleanup and replacement.
+
+### G-35: Pairing confirmation can be deleted before the socket drains
+
+- Evidence: phone finding `46f01fca` identified a Core connection deleted immediately after
+  sending pair.confirm. A Core regression reproduces premature deletion with queued output,
+  including server destruction. The original proposed hunk also needed to register the closed
+  handler before calling close, since a transport can signal closure synchronously.
+- Ruling: ordinary correctness fix within JJ's authorized Core station work; no change to
+  pairing trust, permissions, or timing policy is proposed.
+- Status: root implementation in `codex/pairing-confirm-drain`, verification in progress.
+  Only Core code is included; the phone's final-frame receive change remains phone-owned.
+- Plan: R-IOS-08; pairing interoperability.
 
 ## How this addendum is kept
 
