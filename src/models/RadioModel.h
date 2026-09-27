@@ -3220,6 +3220,18 @@ public:
     // R-R3-46: 0 on a Remote model; the Core's readings and spectrum frames
     // already carry the Core's offset.
     double rxMeterOffsetDb() const;
+    // Parity Task 31 (A11): the preamp half of rxMeterOffsetDb(), Thetis
+    // RXPreampOffset(1) (console.cs:21029-21037 [v2.10.3.15]); the rest is
+    // the receive calibration. 0 on a Remote model.
+    double rxPreampOffsetDb() const;
+    // Parity Task 31 (A11): the display's calibration while keyed, Thetis
+    // RX1Offset (display.cs:4820-4850 [v2.10.3.15]) for the transmitting
+    // receiver: the TX Display Cal Offset, plus with display duplex on the
+    // receive calibration (rxMeterOffsetDb() less the preamp) and the TX
+    // attenuator offset (StepAttenuatorController::txAttenuatorOffsetDb).
+    // The Core calibrates a remote window's frames with it. 0 on a Remote
+    // model.
+    double keyedDisplayOffsetDb(bool displayDuplex) const;
 
 signals:
     void stationLinkStateChanged();

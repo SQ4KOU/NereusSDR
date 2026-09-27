@@ -3088,6 +3088,11 @@ void DaemonMediaController::onSourceFrame(const DaemonSpectrumFrame& sharedFrame
     MediaPeer* const peer = m_peer.get();
     const quint64 epoch = m_epoch;
     const QList<quint32> ids = endpointIds();
+    // Parity Task 31 (A11): keyed with display duplex on, the transmitting
+    // pan's receive trace takes Thetis's keyed calibration (RX1Offset,
+    // display.cs:4820-4850 [v2.10.3.15]) in place of the receive one.
+    const bool keyedNow = m_txDisplayNegotiated && !m_txFeed.isNull() && m_txFeed->isKeyed();
+    const double duplexOffsetDb = keyedNow ? m_radioModel->keyedDisplayOffsetDb(true) : 0.0;
 
     for (quint32 endpointId : ids) {
         auto it = m_endpoints.find(endpointId);
@@ -3101,7 +3106,10 @@ void DaemonMediaController::onSourceFrame(const DaemonSpectrumFrame& sharedFrame
         if (entry.txViewer) {
             continue;
         }
-        entry.stationOffsetDb = stationOffsetDb;
+        entry.stationOffsetDb = keyedNow && entry.duplex && endpointOnTransmitPan(entry)
+                                    && std::isfinite(duplexOffsetDb)
+            ? duplexOffsetDb
+            : stationOffsetDb;
         entry.latestInput = frame;
         const auto wideband = widebandContext(entry);
         if (!wideband) {
@@ -3770,6 +3778,12 @@ bool DaemonMediaController::endpointDuplex(quint32 endpointId) const
     return it != m_endpoints.end() && it->second.duplex;
 }
 
+double DaemonMediaController::endpointDisplayOffsetDb(quint32 endpointId) const
+{
+    const auto it = m_endpoints.find(endpointId);
+    return it != m_endpoints.end() ? it->second.stationOffsetDb : 0.0;
+}
+
 void DaemonMediaController::refreshDeviceDisplayDuplex()
 {
     if (!m_radioModel) {
@@ -3979,12 +3993,28 @@ void DaemonMediaController::onTransmitPlane(const QVector<float>& dbm, bool wate
         return;
     }
     const qint64 nowNs = displayNowNs();
+    // Parity Task 31 (A11): the transmit display's calibration, Thetis
+    // tx_display_cal_offset (RX1Offset keyed with display duplex off,
+    // display.cs:4829-4832 [v2.10.3.15]; Setup > Calibration's TX Display
+    // Cal Offset, setup.cs:14364 [v2.10.3.15]). A remote pan adds none of
+    // its own, so the Core adds it here, as it adds the receive one.
+    const float txCalDb = m_radioModel
+        ? static_cast<float>(m_radioModel->keyedDisplayOffsetDb(false)) : 0.0f;
+    QVector<float> calibrated;
+    const QVector<float>* source = &dbm;
+    if (std::isfinite(txCalDb) && txCalDb != 0.0f) {
+        calibrated = dbm;
+        for (float& value : calibrated) {
+            value += txCalDb;
+        }
+        source = &calibrated;
+    }
     for (auto& [endpointId, entry] : m_endpoints) {
         Q_UNUSED(endpointId);
         if (!entry.txViewer || !entry.txContextSent) {
             continue;
         }
-        QVector<float> plane = reduceTransmitPlane(dbm, entry.txCodec.traceSamples,
+        QVector<float> plane = reduceTransmitPlane(*source, entry.txCodec.traceSamples,
                                                    entry.txCodec.minDbm);
         if (plane.isEmpty()) {
             continue;

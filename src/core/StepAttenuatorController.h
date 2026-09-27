@@ -33,6 +33,10 @@
 //   2026-09-25: R-R3-49 (group A fix wave, M6): ATT on TX, its value and
 //                 Force ATT schedule the Core's debounced save.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-27: A11 / R-R3-49 (parity Task 31): txAttenuatorOffsetDb(),
+//                 Thetis Display.TXAttenuatorOffset, set with every TX step
+//                 attenuation this controller applies. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -349,6 +353,17 @@ public:
     void setAttOnTxValue(int dB);
     int  attOnTxValue() const;
 
+    /// Parity Task 31 (A11): Thetis Display.TXAttenuatorOffset
+    /// (display.cs:1365-1370 [v2.10.3.15]): the TX step attenuation last
+    /// applied to the radio, set beside each NetworkIO.SetTxAttenData call
+    /// (console.cs:10613-10622, 19078-19088, 29619 and 29706-29710
+    /// [v2.10.3.15], each //[2.10.3.6]MW0LGE att_fixes): the value when ATT
+    /// on TX is on, 0 when it is off or at the unkey. The display adds it to
+    /// the receive trace while keyed with display duplex on (RX1Offset,
+    /// display.cs:4836). Unchanged on the HPSDR board, whose transmit path
+    /// switches the preamp instead, as Thetis's is.
+    int txAttenuatorOffsetDb() const noexcept { return m_txAttOffsetDb; }
+
     // shouldForce31Db predicate.
     //
     // Returns true ⟺ the TX attenuator must be forced to 31 dB.
@@ -450,6 +465,8 @@ signals:
     void autoAttHoldChanged(int ms);
     void attenuationRangeChanged(int minDb, int maxDb);
     void rx1PreampChanged(bool on);
+    // Parity Task 31: txAttenuatorOffsetDb() changed.
+    void txAttenuatorOffsetChanged(int dB);
 
     // Emitted at the end of loadSettings(): every setting may have changed
     // without its own signal (loadSettings stays silent so local widgets
@@ -567,6 +584,9 @@ private:
     // ATT-on-TX master enable. From Thetis console.cs:19041 [v2.10.3.13]
     //   private bool m_bATTonTX = true;
     bool m_attOnTxEnabled{true};
+    // Parity Task 31: Display.TXAttenuatorOffset (setTxAttenuatorOffset).
+    int m_txAttOffsetDb{0};
+    void setTxAttenuatorOffset(int dB);
 
     // Force-31-dB when PS-A off. From Thetis console.cs:29285 [v2.10.3.13]
     //   private bool _forceATTwhenPSAoff = true; //MW0LGE [2.9.0.7] added

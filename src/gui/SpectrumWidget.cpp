@@ -2852,20 +2852,28 @@ void SpectrumWidget::pushTxWaterfallRow(int receiverId,
                                         const QVector<float>& binsDbm)
 {
     Q_UNUSED(receiverId);
+    pushWaterfallRow(txWaterfallRow(binsDbm));
+}
+
+QVector<float> SpectrumWidget::txWaterfallRow(const QVector<float>& binsDbm) const
+{
     if (binsDbm.isEmpty()) {
-        pushWaterfallRow(binsDbm);
-        return;
+        return binsDbm;
     }
     auto [firstBin, lastBin] = visibleBinRange(binsDbm.size());
     if (lastBin < firstBin) {
-        pushWaterfallRow(binsDbm);
-        return;
+        return binsDbm;
     }
+    // Parity Task 31 (A11): Thetis's waterfall takes the same offset as the
+    // trace (display.cs:6588-6601 [v2.10.3.15], //MW0LGE [2.9.0.7],
+    // `max = data[i] + fOffset` with fOffset = RX1Offset): keyed, the TX
+    // Display Cal Offset. A remote pan's rows carry the Core's already.
+    const float offset = displayCalOffsetDb();
     QVector<float> visible(lastBin - firstBin + 1);
     for (int k = firstBin; k <= lastBin; ++k) {
-        visible[k - firstBin] = binsDbm[k];
+        visible[k - firstBin] = binsDbm[k] + offset;
     }
-    pushWaterfallRow(visible);
+    return visible;
 }
 
 // ---- 3DSS stacked-trace mode ----
@@ -5332,23 +5340,47 @@ float SpectrumWidget::normalizeShiftDb() const
 //     ...
 //     else fOffset = rx1_display_cal_offset;
 //     if (!local_mox) fOffset += rx1_preamp_offset;
-// Keyed with DUP on, the trace is the receiver's: its receive calibration
-// (m_dbmCalOffset here, which carries the preamp offset as NereusSDR folds
-// it in; a remote pan's frames carry the Core's already, so 0) plus the
-// transmit display calibration plus the transmit attenuator offset.
-// Otherwise the receive rule as before: keyed with DUP off NereusSDR has
-// always drawn its transmit display with the same offset, and Task 31
-// leaves that path as Task 29 left it.
+// Thetis's spectrum trace takes it at display.cs:5113 [v2.10.3.15]
+// (fOffset = rx == 1 ? RX1Offset : RX2Offset). Here local_mox is the MOX
+// overlay on the transmitting pan. m_dbmCalOffset is the receive
+// rx1_display_cal_offset + rx1_preamp_offset (RadioModel::rxMeterOffsetDb,
+// console.cs:21080-21083 [v2.10.3.15] RXOffset); m_rxPreampOffsetDb its
+// preamp half, so keyed with DUP on the receive calibration alone is added,
+// as Thetis adds it. The _tx_on_vfob branch has no pan of its own here: the
+// pan hosting the transmit slice is the one keyed.
+// A remote pan's frames, receive and transmit, carry the Core's calibration
+// already (DaemonMediaController, RadioModel::keyedDisplayOffsetDb), so it
+// adds none.
 float SpectrumWidget::displayCalOffsetDb() const
 {
-    // Remote frames already carry the station's antenna calibration. The
-    // client preference remains a local-display adjustment only.
-    // From Thetis display.cs:1372 Display.RX1DisplayCalOffset.
-    const float receiveOffset = m_remoteSpectrum ? 0.0f : m_dbmCalOffset;
-    if (m_moxOverlay && m_displayDuplex) {
-        return m_txDisplayCalOffsetDb + receiveOffset + m_txAttOffsetDb;
+    if (m_remoteSpectrum) {
+        return 0.0f;
     }
-    return receiveOffset;
+    if (!m_moxOverlay) {
+        // From Thetis display.cs:1372 Display.RX1DisplayCalOffset.
+        return m_dbmCalOffset;
+    }
+    float offset = m_txDisplayCalOffsetDb;
+    if (m_displayDuplex) {
+        offset += m_dbmCalOffset - m_rxPreampOffsetDb;
+        offset += m_txAttOffsetDb;
+    }
+    return offset;
+}
+
+void SpectrumWidget::setRxPreampOffsetDb(float db)
+{
+    // From Thetis console.cs:12310 [v2.10.3.15] (UpdateRX1DisplayOffsets):
+    //   Display.RX1PreampOffset = RXPreampOffset(1);
+    if (qFuzzyCompare(1.0f + m_rxPreampOffsetDb, 1.0f + db)) {
+        return;
+    }
+    m_rxPreampOffsetDb = db;
+    if (m_moxOverlay && m_displayDuplex) {
+        m_hasNewSpectrum = true;
+        markOverlayDirty();
+        update();
+    }
 }
 
 void SpectrumWidget::setTxDisplayCalOffsetDb(float db)
@@ -5359,7 +5391,7 @@ void SpectrumWidget::setTxDisplayCalOffsetDb(float db)
         return;
     }
     m_txDisplayCalOffsetDb = db;
-    if (m_moxOverlay && m_displayDuplex) {
+    if (m_moxOverlay) {
         m_hasNewSpectrum = true;
         markOverlayDirty();
         update();
@@ -7227,8 +7259,9 @@ void SpectrumWidget::setDisplayDuplex(bool on)
 // Upstream tags preserved: //MW0LGE (from cited upstream lines) [v2.10.3.15]
 //   if (!local_mox) fOffset += rx1_preamp_offset;
 // The RX cal offset is only added in RX mode; during TX, the TX path uses
-// its own calibration. NereusSDR models this by storing the TX ATT offset
-// and applying it as an additional shift in paintEvent when m_moxOverlay.
+// its own calibration. Parity Task 31: the TX ATT offset is added keyed
+// with DUP on (displayCalOffsetDb); MainWindow feeds it from
+// StepAttenuatorController::txAttenuatorOffsetDb.
 void SpectrumWidget::setTxAttenuatorOffsetDb(float offsetDb)
 {
     if (m_txAttOffsetDb == offsetDb) {
@@ -7236,7 +7269,10 @@ void SpectrumWidget::setTxAttenuatorOffsetDb(float offsetDb)
     }
     m_txAttOffsetDb = offsetDb;
     if (m_moxOverlay) {
+        // Parity Task 31: the keyed trace moves with it (DUP on).
+        m_hasNewSpectrum = true;
         markOverlayDirty();  // only repaints while TX is active
+        update();
     }
 }
 

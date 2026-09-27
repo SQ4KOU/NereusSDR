@@ -1179,8 +1179,11 @@ When a feature is off, its version is 0:
   not a viewer of the transmit display, keeps its receive frames and is
   sent contexts with `transmit` false, and the device's DUP decides whether
   the Core turns noise blanking off while that device's key is down (the
-  media document's "Transmit display", "Display duplex (version 3)"). No
-  message is added. A window on a Core that sends 0, 1, 2 or no entry shows
+  media document's "Transmit display", "Display duplex (version 3)"). With
+  it the Core calibrates what it sends while keyed as Thetis's RX1Offset
+  does (the TX Display Cal Offset on transmit frames; on a `duplex`
+  endpoint's receive frames also the receive calibration without its
+  preamp and the transmit attenuator applied). No message is added. A window on a Core that sends 0, 1, 2 or no entry shows
   its DUP controls (View > Display duplex (DUP) and the container DUP
   button) disabled with "This Core does not show the receiver while
   transmitting for this app. Updating the Core may help." and its

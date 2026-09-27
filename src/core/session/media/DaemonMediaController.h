@@ -342,6 +342,10 @@ public:
     /// DUP on (empty for none).
     bool endpointDuplex(quint32 endpointId) const;
     QByteArray displayDuplexDevice() const { return m_duplexDevice; }
+    /// The calibration the endpoint's last receive frame was given
+    /// (RadioModel::rxMeterOffsetDb, or keyedDisplayOffsetDb(true) for a
+    /// `duplex` endpoint on the transmitting pan while keyed).
+    double endpointDisplayOffsetDb(quint32 endpointId) const;
 
     RemoteMicReceiver* micReceiver() const { return m_micReceiver.get(); }
     /// Task 36: the keying's view of the line (RemoteKeying::setMicUplink;

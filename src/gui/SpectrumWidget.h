@@ -1186,10 +1186,16 @@ public:
     /// bins and frames, under the transmit grid and waterfall levels.
     bool showsTransmitView() const noexcept { return m_moxOverlay && !m_displayDuplex; }
     /// The transmit display calibration (Setup > Calibration's TX Display
-    /// Cal Offset), which Thetis adds to the receive trace while keyed with
-    /// DUP on (display.cs:4820-4850 [v2.10.3.15], RX1Offset).
+    /// Cal Offset), Thetis tx_display_cal_offset: the keyed trace's
+    /// calibration, DUP on or off (display.cs:4820-4850 [v2.10.3.15],
+    /// RX1Offset).
     float txDisplayCalOffsetDb() const noexcept { return m_txDisplayCalOffsetDb; }
     void setTxDisplayCalOffsetDb(float db);
+    /// The preamp half of the receive calibration (setDbmCalOffset carries
+    /// both), Thetis Display.RX1PreampOffset; keyed with DUP on the trace
+    /// adds the receive calibration without it.
+    float rxPreampOffsetDb() const noexcept { return m_rxPreampOffsetDb; }
+    void setRxPreampOffsetDb(float db);
     /// The calibration the trace is drawn with now (see displayCalOffsetDb
     /// in the .cpp for the rule).
     float displayCalOffsetDb() const;
@@ -2311,6 +2317,9 @@ private:
     // setMoxOverlay's span half: park the receive view and load the
     // transmit span, or give the receive view back (parity Task 31 moved
     // them out so a DUP change while keyed makes the same swap).
+    // pushTxWaterfallRow's row: the visible bins, calibrated as the trace
+    // (parity Task 31).
+    QVector<float> txWaterfallRow(const QVector<float>& binsDbm) const;
     void loadTransmitSpan();
     void restoreReceiveSpan();
     // Parity Task 31: a DUP change while keyed resets the blob maxima and
@@ -3277,6 +3286,8 @@ private:
     bool m_txSpanLoaded{false};
     // Thetis tx_display_cal_offset (display.cs:1413 [v2.10.3.15]).
     float m_txDisplayCalOffsetDb{0.0f};
+    // Thetis rx1_preamp_offset (RadioModel::rxPreampOffsetDb).
+    float m_rxPreampOffsetDb{0.0f};
     // Allocated in the constructor (init list) so the include stays in
     // the .cpp.  std::unique_ptr would require pulling ImdOverlay.h into
     // the header.  Raw pointer with QObject parenting is the established

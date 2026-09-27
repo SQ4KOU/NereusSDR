@@ -48,6 +48,7 @@
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
 #include "core/MoxController.h"
+#include "core/StepAttenuatorController.h"
 #include "core/TxAnalyzer.h"
 #include "core/TxDisplayFeed.h"
 #include "core/WdspTypes.h"
@@ -372,41 +373,104 @@ private slots:
 
     // ── The calibration rule (test first) ──────────────────────────────────
 
-    void keyedWithDuplexTheReceiveTraceTakesTheTransmitCalibration()
+    // Thetis RX1Offset: receiving, the receive calibration with its preamp;
+    // keyed with DUP off, the TX Display Cal Offset alone; keyed with DUP
+    // on, that plus the receive calibration without the preamp plus the TX
+    // attenuator offset.
+    void keyedTheTraceTakesThetisTransmitCalibration()
     {
         SpectrumWidget sw;
-        sw.setDbmCalOffset(-12.5f);          // the receive calibration
+        sw.setDbmCalOffset(-12.5f);          // RXOffset: preamp + calibration
+        sw.setRxPreampOffsetDb(4.5f);        // its preamp half
         sw.setTxDisplayCalOffsetDb(3.0f);    // TX Display Cal Offset
-        sw.setTxAttenuatorOffsetDb(7.0f);    // the transmit attenuator
-        // Receiving: the receive calibration, DUP or not.
+        sw.setTxAttenuatorOffsetDb(7.0f);    // the TX attenuator applied
         QCOMPARE(sw.displayCalOffsetDb(), -12.5f);
         sw.setDisplayDuplex(true);
         QCOMPARE(sw.displayCalOffsetDb(), -12.5f);
-        // Keyed with DUP on: 3 + (-12.5) + 7.
+        // Keyed with DUP on: 3 + (-12.5 - 4.5) + 7.
         sw.setMoxOverlay(true);
-        QCOMPARE(sw.displayCalOffsetDb(), -2.5f);
-        // The trace is drawn with it: -60 dBm keyed with DUP on sits where
-        // -50 does keyed with DUP off (10 dB apart), on the same grid.
+        QCOMPARE(sw.displayCalOffsetDb(), -7.0f);
         const QRect rect(0, 0, 400, 300);
         const float withDuplex = sw.dbmToYf(-60.0f, rect);
-        // Keyed with DUP off: the transmit display, as Task 29 left it.
+        // The TX attenuator moves the DUP trace.
+        sw.setTxAttenuatorOffsetDb(12.0f);
+        QCOMPARE(sw.displayCalOffsetDb(), -2.0f);
+        QCOMPARE(sw.dbmToYf(-65.0f, rect), withDuplex);
+        // Keyed with DUP off: the TX Display Cal Offset alone.
         sw.setDisplayDuplex(false);
-        QCOMPARE(sw.displayCalOffsetDb(), -12.5f);
-        QCOMPARE(sw.dbmToYf(-50.0f, rect), withDuplex);
+        QCOMPARE(sw.displayCalOffsetDb(), 3.0f);
+        sw.setTxDisplayCalOffsetDb(-1.5f);
+        QCOMPARE(sw.displayCalOffsetDb(), -1.5f);
+        // The transmit waterfall row takes it too (display.cs:6588-6601).
+        const QVector<float> row = sw.txWaterfallRow(QVector<float>(64, -40.0f));
+        QVERIFY(!row.isEmpty());
+        QCOMPARE(row.first(), -41.5f);
         sw.setMoxOverlay(false);
         QCOMPARE(sw.displayCalOffsetDb(), -12.5f);
 
-        // A remote pan: the Core's frames carry its receive calibration,
-        // so keyed with DUP on only the transmit two are added.
+        // A remote pan's frames carry the Core's calibration, receive and
+        // transmit: it adds none, keyed or not.
         SpectrumWidget remote;
         remote.m_remoteSpectrum = true;
         remote.setDbmCalOffset(-12.5f);
         remote.setTxDisplayCalOffsetDb(3.0f);
         remote.setTxAttenuatorOffsetDb(7.0f);
         QCOMPARE(remote.displayCalOffsetDb(), 0.0f);
-        remote.setDisplayDuplex(true);
         remote.setMoxOverlay(true);
-        QCOMPARE(remote.displayCalOffsetDb(), 10.0f);
+        QCOMPARE(remote.displayCalOffsetDb(), 0.0f);
+        remote.setDisplayDuplex(true);
+        QCOMPARE(remote.displayCalOffsetDb(), 0.0f);
+    }
+
+    // RadioModel::keyedDisplayOffsetDb, what the Core gives a remote pan's
+    // frames: the TX Display Cal Offset; with DUP the receive calibration
+    // without its preamp and the TX attenuator applied.
+    void theCoresKeyedOffsetIsThetisRx1Offset()
+    {
+        LocalWindow window;
+        StepAttenuatorController att;
+        window.radio.setStepAttController(&att);
+        window.radio.calibrationControllerMutable().setTxDisplayOffsetDb(2.5);
+        const double receiveCal = window.radio.rxMeterOffsetDb()
+            - window.radio.rxPreampOffsetDb();
+        QCOMPARE(window.radio.keyedDisplayOffsetDb(false), 2.5);
+        QCOMPARE(window.radio.keyedDisplayOffsetDb(true), 2.5 + receiveCal);
+        att.setAttOnTxEnabled(true);
+        att.setAttOnTxValue(9);
+        QCOMPARE(att.txAttenuatorOffsetDb(), 9);
+        QCOMPARE(window.radio.keyedDisplayOffsetDb(true), 2.5 + receiveCal + 9.0);
+        QCOMPARE(window.radio.keyedDisplayOffsetDb(false), 2.5);
+        window.radio.setStepAttController(nullptr);
+    }
+
+    // Thetis sets Display.TXAttenuatorOffset beside every SetTxAttenData:
+    // the value applied with ATT on TX on, 0 with it off and at the unkey.
+    void theTxAttenuatorOffsetFollowsWhatIsApplied()
+    {
+        StepAttenuatorController att;
+        QSignalSpy changed(&att, &StepAttenuatorController::txAttenuatorOffsetChanged);
+        att.setAttOnTxEnabled(true);
+        att.setForceAttWhenPsOff(false);
+        att.setAttOnTxValue(12);
+        QCOMPARE(att.txAttenuatorOffsetDb(), 12);
+        QCOMPARE(changed.count(), 1);
+        att.onMoxHardwareFlipped(true);
+        QCOMPARE(att.txAttenuatorOffsetDb(), 12);
+        att.onMoxHardwareFlipped(false);
+        QCOMPARE(att.txAttenuatorOffsetDb(), 0);
+        // Forced to 31 (PS off with Force ATT, or CW): the display follows.
+        att.setForceAttWhenPsOff(true);
+        att.setPsActive(false);
+        att.onMoxHardwareFlipped(true);
+        QCOMPARE(att.txAttenuatorOffsetDb(), 31);
+        att.onMoxHardwareFlipped(false);
+        // ATT on TX off: 0 at the key.
+        att.setAttOnTxEnabled(false);
+        att.onMoxHardwareFlipped(true);
+        QCOMPARE(att.txAttenuatorOffsetDb(), 0);
+        att.onMoxHardwareFlipped(false);
+        att.setAttOnTxValue(20);
+        QCOMPARE(att.txAttenuatorOffsetDb(), 0);
     }
 
     void theTxFilterSitsAtTheVfoAgainstTheReceiveSpan()

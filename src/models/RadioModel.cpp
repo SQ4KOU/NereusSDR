@@ -7613,6 +7613,14 @@ double RadioModel::rxMeterOffsetDb() const
         ? static_cast<float>(userOverride)
         : factoryDefault;
 
+    return rxPreampOffsetDb() + static_cast<double>(meterCalOffset);
+}
+
+double RadioModel::rxPreampOffsetDb() const
+{
+    if (m_role == Role::Remote) {
+        return 0.0;
+    }
     // RXPreampOffset branch: step-att enabled vs preamp mode.  Both paths
     // require the StepAttenuatorController; if absent (no radio yet) the
     // chain reduces to the cal_offset alone.  From Thetis console.cs:20991:
@@ -7634,7 +7642,36 @@ double RadioModel::rxMeterOffsetDb() const
         }
     }
 
-    return static_cast<double>(preampOffset + meterCalOffset);
+    return static_cast<double>(preampOffset);
+}
+
+double RadioModel::keyedDisplayOffsetDb(bool displayDuplex) const
+{
+    if (m_role == Role::Remote) {
+        return 0.0;
+    }
+    // From Thetis display.cs:4829-4838 [v2.10.3.15] (RX1Offset):
+    //     if (local_mox)
+    //     {
+    //         fOffset = tx_display_cal_offset;
+    //         if (displayduplex)
+    //         {
+    //             fOffset += rx1_display_cal_offset; //[2.10.1.0] MW0LGE fix issue #137
+    //             fOffset += tx_attenuator_offset; //[2.10.3.6]MW0LGE att_fix // change fixes #482
+    //         }
+    //     }
+    //     ...
+    //     if (!local_mox) fOffset += rx1_preamp_offset;
+    // rx1_display_cal_offset is RXCalibrationOffset(1) (console.cs:12311
+    // [v2.10.3.15]): rxMeterOffsetDb() without its preamp half.
+    double offset = m_calController.txDisplayOffsetDb();
+    if (displayDuplex) {
+        offset += rxMeterOffsetDb() - rxPreampOffsetDb();
+        if (m_stepAttController) {
+            offset += static_cast<double>(m_stepAttController->txAttenuatorOffsetDb());
+        }
+    }
+    return offset;
 }
 
 // ── Phase 3F Sub-Epic I: DDC stream pool ────────────────────────────────────

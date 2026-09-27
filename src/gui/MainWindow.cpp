@@ -3732,13 +3732,20 @@ void MainWindow::ensureOverlayPanels()
         wireSpectrumSliceControls(sw, panId);
         wireWidebandExtensionForTest(sw, m_radioModel, m_panStack, panId);
 
-        // Parity Task 31 (A11): the transmit display calibration, which the
-        // trace adds while keyed with DUP on (SpectrumWidget::
-        // displayCalOffsetDb; Thetis display.cs:4820-4850 [v2.10.3.15],
-        // RX1Offset). Setup > Calibration's TX Display Cal Offset.
+        // Parity Task 31 (A11): the keyed trace's calibration
+        // (SpectrumWidget::displayCalOffsetDb; Thetis display.cs:4820-4850
+        // [v2.10.3.15], RX1Offset): Setup > Calibration's TX Display Cal
+        // Offset, and for display duplex the preamp half of the receive
+        // calibration and the TX attenuator offset (applyKeyedDisplayOffsets
+        // keeps every pan current).
         {
             const CalibrationController& cal = m_radioModel->calibrationController();
             sw->setTxDisplayCalOffsetDb(static_cast<float>(cal.txDisplayOffsetDb()));
+            sw->setRxPreampOffsetDb(static_cast<float>(m_radioModel->rxPreampOffsetDb()));
+            if (m_stepAttController) {
+                sw->setTxAttenuatorOffsetDb(
+                    static_cast<float>(m_stepAttController->txAttenuatorOffsetDb()));
+            }
             const QPointer<SpectrumWidget> guard(sw);
             connect(&cal, &CalibrationController::changed, sw, [this, guard]() {
                 if (!guard.isNull() && m_radioModel) {
@@ -5442,6 +5449,25 @@ void MainWindow::buildUI()
     // --- Phase 3G-13: Step attenuator + ADC overload ---
     m_stepAttController = new StepAttenuatorController(this);
     m_radioModel->setStepAttController(m_stepAttController);
+    // Parity Task 31 (A11): Thetis Display.TXAttenuatorOffset and
+    // Display.RX1PreampOffset reach every pan (the keyed trace with display
+    // duplex adds the first and leaves out the second, RX1Offset).
+    {
+        const auto pushKeyedOffsets = [this]() {
+            if (!m_panStack || !m_radioModel || !m_stepAttController) { return; }
+            for (PanadapterApplet* applet : m_panStack->allApplets()) {
+                SpectrumWidget* pan = applet ? applet->spectrumWidget() : nullptr;
+                if (!pan) { continue; }
+                pan->setTxAttenuatorOffsetDb(
+                    static_cast<float>(m_stepAttController->txAttenuatorOffsetDb()));
+                pan->setRxPreampOffsetDb(static_cast<float>(m_radioModel->rxPreampOffsetDb()));
+            }
+        };
+        connect(m_stepAttController, &StepAttenuatorController::txAttenuatorOffsetChanged,
+                this, pushKeyedOffsets);
+        connect(m_radioModel, &RadioModel::rxMeterOffsetChanged, this, pushKeyedOffsets);
+        pushKeyedOffsets();
+    }
     // R-R3-46 / R-R3-11: each band remembers its attenuator and preamp with
     // a local radio, as through the Core: the controller follows slice A's
     // receive band (Thetis rx1_band) and the transmit slice's band and mode

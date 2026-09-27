@@ -568,16 +568,28 @@ unkey they come back if that device's DUP is still on, as Thetis's
 counts. A `duplex` change touches no radio setting when it arrives, so it is
 taken on and off the air.
 
+**Keyed calibration.** The Core calibrates what it sends while keyed as
+Thetis calibrates the transmitting receiver's display (RX1Offset,
+`display.cs:4820-4850 [v2.10.3.15]`), so a window adds no calibration of its
+own to a remote pan: transmit frames get the TX Display Cal Offset
+(`tx_display_cal_offset`, Setup > Calibration, the Core's
+`hardware/<mac>/cal/txDisplayOffset`, `setup.cs:14364 [v2.10.3.15]`) added to
+the analyzer's values before they are quantised; a `duplex` endpoint's
+receive frames on the transmitting pan get that offset plus the receive
+calibration without its preamp half (Thetis `RXCalibrationOffset(1)`) plus
+the transmit attenuator applied (Thetis `Display.TXAttenuatorOffset`, set
+beside every `SetTxAttenData`, `console.cs:10613-10622 [v2.10.3.15]`) in
+place of the receive calibration with its preamp. Every other frame keeps the
+receive calibration (`RadioModel::rxMeterOffsetDb`), as before.
+
 Everything else a window does with DUP is its own drawing: keyed with DUP on
 its transmitting pan keeps the receive span and bins under the red border,
 the transmit grid and the transmit waterfall levels (`display.cs:1782-1790`
 and `6420-6427 [v2.10.3.15]` read `localMox` only); the TX filter overlay sits
 at the VFO against the receive span with no XIT (`display.cs:4564-4594`,
-`console.cs:22144 [v2.10.3.15]`); the trace adds the transmit display
-calibration and the transmit attenuator offset to the receive calibration
-(`display.cs:4820-4850 [v2.10.3.15]`, RX1Offset); a DUP change while keyed
-resets the blob maxima and the active peak hold (`display.cs:514-521
-[v2.10.3.15]`). On a Core that sends 0, 1, 2 or no entry the window shows
+`console.cs:22144 [v2.10.3.15]`); a window running its own DSP applies the
+same keyed calibration itself; a DUP change while keyed resets the blob
+maxima and the active peak hold (`display.cs:514-521 [v2.10.3.15]`). On a Core that sends 0, 1, 2 or no entry the window shows
 its DUP controls disabled with "This Core does not show the receiver while
 transmitting for this app. Updating the Core may help." and its pan behaves
 as DUP off.

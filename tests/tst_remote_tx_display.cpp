@@ -365,6 +365,7 @@ private slots:
     void txStateCarriesTheHighSwrState();
     void aDuplexEndpointKeepsTheReceiverWhileKeyed();
     void duplexIsReadOnlyFromAVersionThreePeer();
+    void theCoreCalibratesTheKeyedDisplayAsThetis();
 };
 
 void TstRemoteTxDisplay::initTestCase()
@@ -1085,10 +1086,25 @@ void TstRemoteTxDisplay::aDuplexEndpointKeepsTheReceiverWhileKeyed()
     }());
     QVERIFY(h.controller->endpointDuplex(1));
 
+    // Receiving: the receive calibration.
+    h.radio.calibrationControllerMutable().setTxDisplayOffsetDb(4.0);
+    QTRY_VERIFY([&] {
+        h.feedSlice(h.sliceId);
+        return h.controller->endpointDisplayOffsetDb(1) == h.radio.rxMeterOffsetDb();
+    }());
+
     QVERIFY(h.key(true));
     QTRY_VERIFY(h.feed()->isKeyed());
     QTest::qWait(100);
     QVERIFY(!h.controller->transmitDisplayActive(1));
+    // Keyed with DUP on: Thetis RX1Offset, the TX Display Cal Offset plus the
+    // receive calibration without its preamp plus the TX attenuator.
+    QTRY_VERIFY([&] {
+        h.feedSlice(h.sliceId);
+        return h.controller->endpointDisplayOffsetDb(1) == h.radio.keyedDisplayOffsetDb(true);
+    }());
+    QCOMPARE(h.radio.keyedDisplayOffsetDb(true),
+             4.0 + h.radio.rxMeterOffsetDb() - h.radio.rxPreampOffsetDb());
     QVERIFY(!isTransmit(lastContext(controls, 1)));
     QCOMPARE(h.feed()->viewerCount(), 0);
     // Receive frames keep coming at the receive context's generation.
@@ -1165,6 +1181,57 @@ void TstRemoteTxDisplay::duplexIsReadOnlyFromAVersionThreePeer()
         QVERIFY(h.controller->endpointDuplex(4));
         h.finish();
     }
+}
+
+// Parity Task 31 (A11): a remote pan adds no calibration of its own, so the
+// Core gives the transmit display Thetis's keyed calibration with display
+// duplex off, tx_display_cal_offset (display.cs:4829-4832 [v2.10.3.15]).
+void TstRemoteTxDisplay::theCoreCalibratesTheKeyedDisplayAsThetis()
+{
+    Harness h;
+    h.slice()->setPanKey(QStringLiteral("pan-a"));
+    h.radio.calibrationControllerMutable().setTxDisplayOffsetDb(10.0);
+    h.establishSession();
+    QTRY_COMPARE(h.client.capabilities().txDisplayVersion, 3);
+    QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+    h.startReadyPeer(/*declare=*/true);
+    const double centre = h.radio.streamCentreHz(h.slice()->streamIndex());
+    QVERIFY(h.send(withTxWindow(subscription(1, 1, h.sliceId, centre))));
+    QTRY_VERIFY([&] {
+        h.feedSlice(h.sliceId);
+        return lastContext(controls, 1).has_value();
+    }());
+    QVERIFY(h.key(true));
+    QTRY_VERIFY(isTransmit(lastContext(controls, 1)));
+    const quint32 txGeneration = static_cast<quint32>(
+        lastContext(controls, 1)->value(QStringLiteral("contextGeneration")).toInteger());
+    const QVector<float> trace = ramp(128, -70.0f, 0.5f);
+    const QVector<float> waterfall = ramp(128, -60.0f, 0.2f);
+    QTRY_VERIFY([&] {
+        h.emitPlanes(trace, waterfall);
+        return framesFor(h.mediaTransport->displays, 1, txGeneration) >= 2;
+    }());
+    DisplayCodecDecoder decoder;
+    bool decodedOne = false;
+    const float step = float((kTxMaxDbm - kTxMinDbm) / 255.0);
+    for (const QByteArray& packet : h.mediaTransport->displays) {
+        if (!packet.startsWith("NSDC") || packetEndpoint(packet) != 1
+            || packetGeneration(packet) != txGeneration) {
+            continue;
+        }
+        const DisplayCodecDecodeResult result = decoder.decode(packet);
+        QCOMPARE(result.disposition, DisplayCodecDisposition::Accepted);
+        for (int i = 0; i < 128; ++i) {
+            QVERIFY(std::abs(result.frame.traceDbm.at(i) - (trace.at(i) + 10.0f)) <= step);
+            QVERIFY(std::abs(result.frame.waterfallDbm.at(i) - (waterfall.at(i) + 10.0f))
+                    <= step);
+        }
+        decodedOne = true;
+    }
+    QVERIFY(decodedOne);
+    QVERIFY(h.key(false));
+    QTRY_VERIFY(!h.feed()->isKeyed());
+    h.finish();
 }
 
 QTEST_MAIN(TstRemoteTxDisplay)
