@@ -65,8 +65,8 @@ public:
     /// window tries the store's current list, not the one this window was
     /// made with. Returns nullopt when it has none to say (the Core is not
     /// a saved one); the options' own list is used then.
-    using CachedAddressSource = std::function<std::optional<QStringList>()>;
-    void setCachedAddressSource(CachedAddressSource source);
+    using CurrentOptionsSource = std::function<std::optional<RemoteStationOptions>()>;
+    void setCurrentOptionsSource(CurrentOptionsSource source);
 public slots:
     void connectToStation();
     void disconnectFromStation();
@@ -93,7 +93,7 @@ private:
     quint32 m_pendingMediaRecoveryEpoch = 0;
     int m_retryAttempt = 0;
     int m_retryDelayMs = 0;
-    CachedAddressSource m_cachedAddressSource;
+    CurrentOptionsSource m_currentOptionsSource;
 };
 
 // A small modeless view of the configured Core. Full station selection and

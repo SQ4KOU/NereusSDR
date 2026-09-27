@@ -279,6 +279,7 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
         if (settingsHygieneVersion > 0) {
             updates.append(intEntry("settingsHygieneVersion", settingsHygieneVersion));
         }
+        updates.append(intEntry("remoteIqVersion", remoteIqVersion));
     }
     return updates;
 }
@@ -486,7 +487,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                    || u.name == "sessionHolderVersion"
                    || u.name == "remoteTxVersion"
                    || u.name == "txStateVersion"
-                   || u.name == "txReadingsVersion") {
+                   || u.name == "txReadingsVersion"
+                   || u.name == "remoteIqVersion") {
             // R-R3-47 / R-R3-22 / R-R3-48: sent in the same block as the
             // four above.
             caps.radioIdentityEntries = true;
@@ -543,6 +545,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                     caps.controlChannelVersion = version;
                 } else if (u.name == "txMonitorAudioVersion") {
                     caps.txMonitorAudioVersion = version;
+                } else if (u.name == "remoteIqVersion") {
+                    caps.remoteIqVersion = version;
                 } else if (u.name == "stationFreedvVersion") {
                     caps.stationFreedvVersion = version;
                 } else if (u.name == "mediaReplaceVersion") {

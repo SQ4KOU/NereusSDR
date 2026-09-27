@@ -134,18 +134,22 @@ bool displayChargeFits(const DisplayBudgetLimits&, const DisplayBudgetCharge&);
 
 /// Session-scoped, fixed-burst token accounting for actual display sends.
 /// It deliberately has no transport outcome: callers debit immediately before
-/// every nonempty attempt, because a failed transport can already own bytes.
+/// a new nonempty message can enter the transport, because a failed transport
+/// can already own bytes. A Busy retry of the same pending I/Q message keeps
+/// its first debit until that message is accepted or the stream ends.
 class DisplayBudgetPacer {
 public:
     bool beginSession(quint64 epoch, DisplayBudgetLimits limits, qint64 nowNs);
     void endSession();
     bool update(DisplayBudgetLimits limits, DisplayBudgetCharge spectrumCharge,
-                bool ps3Enabled, qint64 nowNs);
+                bool ps3Enabled, qint64 nowNs, quint64 iqBytesPerSecond = 0);
 
     bool canSpendSpectrum(quint64 bytes, quint64 samples, qint64 nowNs);
     bool spendSpectrum(quint64 bytes, quint64 samples, qint64 nowNs);
     bool canSpendPs3(quint64 bytes, qint64 nowNs);
     bool spendPs3(quint64 bytes, qint64 nowNs);
+    bool canSpendIq(quint64 bytes, qint64 nowNs);
+    bool spendIq(quint64 bytes, qint64 nowNs);
 
 private:
     struct Bucket {
@@ -166,11 +170,13 @@ private:
     bool m_active = false;
     bool m_spectrumActive = false;
     bool m_ps3Active = false;
+    bool m_iqActive = false;
     DisplayBudgetLimits m_limits;
     DisplayBudgetCharge m_spectrumCharge;
     Bucket m_globalBytes;
     Bucket m_spectrumBytes;
     Bucket m_ps3Bytes;
+    Bucket m_iqBytes;
     Bucket m_spectrumSamples;
 };
 

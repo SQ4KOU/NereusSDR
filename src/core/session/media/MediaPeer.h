@@ -86,7 +86,8 @@ public:
                bool offerLosslessAudio = false,
                bool receiverAudioStreams = false,
                bool headphonesMixStream = false,
-               bool micLine = false);
+               bool micLine = false,
+               bool iqChannel = false);
     void stop();
 
     /// iPhone app plan Task 28 (R-IOS-16): for a session whose control
@@ -105,6 +106,8 @@ public:
     bool acceptControl(const QJsonObject& control);
     bool sendDisplay(const QByteArray& message);
     IMediaTransport::DisplaySendResult submitDisplay(const QByteArray& message);
+    IMediaTransport::DisplaySendResult submitIq(const QByteArray& message);
+    bool iqBusy() const;
     bool displayBusy() const;
     bool sendRtp(const QByteArray& packet);
     /// Task 36: one packet on the microphone line (the answerer's), whose
@@ -181,6 +184,8 @@ public:
 signals:
     void controlReady(const QJsonObject& control);
     void displayReceived(const QByteArray& message);
+    void iqReceived(const QByteArray& message);
+    void iqErrorOccurred(const QString& reason);
     void rtpReceived(const QByteArray& packet);
     /// Task 36: a packet on the microphone line carrying micAudioSsrc().
     void micRtpReceived(const QByteArray& packet);

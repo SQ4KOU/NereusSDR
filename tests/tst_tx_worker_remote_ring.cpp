@@ -228,6 +228,9 @@ public:
     bool acceptDescription(const QString&, const QString&) override { return true; }
     bool acceptCandidate(const QString&, const QString&) override { return true; }
     bool sendDisplay(const QByteArray&) override { return started; }
+    DisplaySendResult submitIq(const QByteArray&) override
+    { return stallIq ? DisplaySendResult::Busy : DisplaySendResult::Sent; }
+    bool iqBusy() const override { return stallIq; }
     bool sendRtp(const QByteArray&) override { return started; }
     bool isReady() const override { return started && readyState; }
     void becomeReady()
@@ -245,15 +248,18 @@ public:
     StartOptions options{Role::Offerer, 0};
     bool started{false};
     bool readyState{false};
+    bool stallIq{false};
 };
 
-QString mediaStart(bool remoteTx, const QString& connectionId = QLatin1String(kConnectionId))
+QString mediaStart(bool remoteTx, const QString& connectionId = QLatin1String(kConnectionId),
+                   bool iq = false)
 {
     QJsonObject payload{{QStringLiteral("op"), QStringLiteral("start")},
                         {QStringLiteral("connectionId"), connectionId}};
     if (remoteTx) {
         payload.insert(QStringLiteral("remoteTxVersion"), 1);
     }
+    if (iq) { payload.insert(QStringLiteral("remoteIqVersion"), 1); }
     return QString::fromUtf8(QJsonDocument(QJsonObject{
         {QStringLiteral("type"), QStringLiteral("media.control")},
         {QStringLiteral("payload"), payload}}).toJson(QJsonDocument::Compact));
@@ -314,9 +320,9 @@ struct Station {
 
     QByteArray deviceId() const { return device.key.fingerprint(); }
 
-    bool startMedia(bool remoteTx)
+    bool startMedia(bool remoteTx, bool iq = false)
     {
-        app->sendText(mediaStart(remoteTx).toUtf8());
+        app->sendText(mediaStart(remoteTx, QLatin1String(kConnectionId), iq).toUtf8());
         if (!QTest::qWaitFor([this] { return !transport.isNull(); }, 5000)) {
             return false;
         }
@@ -437,6 +443,7 @@ private slots:
     void onlyTheKeyedDevicesLineFeedsTheTransmitter();
     void anotherDevicesTeardownLeavesTheHoldersLine();
     void eachTxChannelKeepaliveCountsForItsOwnDevice();
+    void stalledIqDoesNotDelayTxWatchdog();
     void aMediaRestartKeepsTheHoldersSource();
     void releasedWhileWaitingItNeverKeys();
     void aLineLostMidKeyLeavesSilenceNotTheStationsMicrophone();
@@ -934,6 +941,68 @@ void TestTxWorkerRemoteRing::eachTxChannelKeepaliveCountsForItsOwnDevice()
     QVERIFY(!mox->isMox());
     // Within the watchdog's deadline on the Core's clock (400 ms, plus a
     // step of this loop and the timer's own).
+    QVERIFY2(moved <= 600, qPrintable(QString::number(moved)));
+}
+
+void TestTxWorkerRemoteRing::stalledIqDoesNotDelayTxWatchdog()
+{
+    Station station;
+    station.core.model->configureStreamPool(5, 5, 192000);
+    const QJsonObject added = station.core.invoke(
+        station.app, "addSlice", {utf8("initialPanId", QString())});
+    QVERIFY(added.value(QStringLiteral("accepted")).toBool());
+    const SliceModel* slice = nullptr;
+    for (const SliceModel* candidate : station.core.model->slices()) {
+        if (candidate->streamIndex() >= 0
+            && station.core.server->mediaSessionOwnsSlice(
+                station.core.server->mediaSessionEpoch(), candidate->sliceIndex())) {
+            slice = candidate;
+            break;
+        }
+    }
+    QVERIFY(slice);
+    QVERIFY(station.core.server->setDisplayBudgetLimits({10'000'000, 10'000'000, 1}));
+    QVERIFY(station.startMedia(true, true));
+    QVERIFY(station.transport->options.iqChannel);
+    SessionMessage request;
+    request.kind = SessionMessageKind::MediaControl;
+    request.mediaPayload = {{QStringLiteral("op"), QStringLiteral("iq-stream")},
+        {QStringLiteral("connectionId"), QLatin1String(kConnectionId)},
+        {QStringLiteral("sliceId"), slice->sliceIndex()},
+        {QStringLiteral("revision"), 1},
+        {QStringLiteral("enabled"), true}};
+    station.app->sendText(SessionMessages::encode(request));
+    QTRY_VERIFY(([&] {
+        for (const QJsonObject& wire : ofType(station.app->received(),
+                                              QStringLiteral("media.control"))) {
+            const QJsonObject context = wire.value(QStringLiteral("payload")).toObject();
+            if (context.value(QStringLiteral("op")) == QLatin1String("iq-stream-context")
+                && context.value(QStringLiteral("enabled")).toBool()) { return true; }
+        }
+        return false;
+    })());
+    station.transport->stallIq = true;
+    station.core.model->rawIqDataForStream(slice->streamIndex(), QVector<float>(2048, 0.25f));
+
+    sendCommand(station.app, "tx.key", 3841, {utf8("trigger", QStringLiteral("screen"))});
+    for (int i = 0; i < 6 && !station.core.model->moxController()->isMox(); ++i) {
+        station.sendMic();
+        QTest::qWait(5);
+    }
+    QTRY_VERIFY(station.core.model->moxController()->isMox());
+    QVERIFY(resultFor(station.app, 3841).value(QStringLiteral("accepted")).toBool());
+    qint64 moved = 0;
+    QElapsedTimer since;
+    since.start();
+    while (station.core.model->moxController()->isMox() && since.elapsed() < 3000) {
+        // No TX keepalive. The I/Q sender is wedged while microphone audio
+        // continues, so only the watchdog may end this key.
+        station.sendMic();
+        QTest::qWait(50);
+        station.core.now += 50;
+        moved += 50;
+    }
+    QVERIFY(!station.core.model->moxController()->isMox());
     QVERIFY2(moved <= 600, qPrintable(QString::number(moved)));
 }
 

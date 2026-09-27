@@ -359,6 +359,8 @@ void CatTciServerPage::setRadioModel(NereusSDR::RadioModel* model)
                 this, &CatTciServerPage::refreshStationLine);
         connect(model, &NereusSDR::RadioModel::coreOnAirChanged,
                 this, &CatTciServerPage::refreshCoreGroup);
+        connect(model, &NereusSDR::RadioModel::infoChanged,
+                this, &CatTciServerPage::refreshIqStreamGroup);
         if (auto* station = model->stationTciModel()) {
             connect(station, &NereusSDR::StationTciModel::stateChanged,
                     this, &CatTciServerPage::refreshStationLine);
@@ -366,6 +368,29 @@ void CatTciServerPage::setRadioModel(NereusSDR::RadioModel* model)
     }
     refreshStationLine();
     refreshCoreGroup();
+    refreshIqStreamGroup();
+}
+
+void CatTciServerPage::refreshIqStreamGroup()
+{
+    if (!m_iqSwapCheck || !m_alwaysStreamIqCheck) { return; }
+    const bool unavailable = m_radioModelRef
+        && m_radioModelRef->role() == NereusSDR::RadioModel::Role::Remote
+        && m_radioModelRef->stationRemoteIqVersion() < 1;
+    const QString reason = tr("The connected Core does not support remote TCI IQ streaming.");
+    m_iqSwapCheck->setEnabled(!unavailable);
+    m_alwaysStreamIqCheck->setEnabled(!unavailable);
+    if (unavailable) {
+        m_iqSwapCheck->setToolTip(reason);
+        m_alwaysStreamIqCheck->setToolTip(reason);
+    } else {
+        m_iqSwapCheck->setToolTip(
+            tr("Swap the I and Q samples in the TCI IQ data stream. "
+               "Enabled by default for compatibility with most TCI IQ consumers."));
+        m_alwaysStreamIqCheck->setToolTip(
+            tr("Stream IQ data to all connected TCI clients continuously, even if no client "
+               "has explicitly subscribed to the IQ stream. Increases CPU and network load."));
+    }
 }
 
 void CatTciServerPage::refreshStationLine()
@@ -629,13 +654,15 @@ void CatTciServerPage::buildIqStreamGroup()
     m_alwaysStreamIqCheck->setChecked(
         s.value(QStringLiteral("TciAlwaysStreamIq"), QStringLiteral("False")).toString()
         == QStringLiteral("True"));
-    connect(m_alwaysStreamIqCheck, &QCheckBox::toggled, this, [](bool on) {
+    connect(m_alwaysStreamIqCheck, &QCheckBox::toggled, this, [this](bool on) {
         AppSettings::instance().setValue(QStringLiteral("TciAlwaysStreamIq"),
                                           on ? QStringLiteral("True") : QStringLiteral("False"));
+        if (m_tciServerRef) { m_tciServerRef->refreshRemoteIqDemand(); }
     });
     form->addRow(QString(), m_alwaysStreamIqCheck);
 
     contentLayout()->addWidget(group);
+    refreshIqStreamGroup();
 }
 
 // ---------------------------------------------------------------------------

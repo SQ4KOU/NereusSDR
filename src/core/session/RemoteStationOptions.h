@@ -44,6 +44,7 @@
 // =================================================================
 
 #include <QByteArray>
+#include <QDateTime>
 #include <QString>
 #include <QStringList>
 
@@ -93,6 +94,19 @@ struct RemoteStationOptions {
     /// kUpdateCoreForServiceReason to one that sent 0
     /// (serviceConnectRefusal()).
     int controlChannelVersion = -1;
+    // Wall-clock time of the last authenticated ordinary-session snapshot
+    // that reported version 0. Missing or invalid time makes 0 unknown.
+    qint64 negativeControlObservedMs = -1;
+    static constexpr qint64 kNegativeControlLifetimeMs = 5 * 60 * 1000;
+    int effectiveControlChannelVersion(qint64 nowMs) const
+    {
+        if (controlChannelVersion != 0) { return controlChannelVersion; }
+        if (negativeControlObservedMs < 0 || negativeControlObservedMs > nowMs
+            || nowMs - negativeControlObservedMs >= kNegativeControlLifetimeMs) {
+            return -1;
+        }
+        return 0;
+    }
     static constexpr const char* kUpdateCoreForServiceReason =
         "Update the Core to reach it from anywhere.";
     /// Why connecting through the remote access service is not offered for
@@ -101,12 +115,12 @@ struct RemoteStationOptions {
     /// one whose last session declared no control channel, or (Task 29 fix
     /// wave, review Minor 4) one whose service name (rendezvousId, learned
     /// at a sign-in) this computer does not know yet.
-    QString serviceConnectRefusal() const
+    QString serviceConnectRefusal(qint64 nowMs = QDateTime::currentMSecsSinceEpoch()) const
     {
         if (identityFingerprint.isEmpty()) {
             return QStringLiteral("Pair with the Core to reach it from anywhere.");
         }
-        if (controlChannelVersion == 0) {
+        if (effectiveControlChannelVersion(nowMs) == 0) {
             return QString::fromLatin1(kUpdateCoreForServiceReason);
         }
         if (rendezvousId.isEmpty()) {

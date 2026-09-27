@@ -522,6 +522,24 @@ private slots:
         QVERIFY(!pacer.update(cap, {1, 1, kDisplaySenderMessagesPerSecond - 29},
                               true, 2'000'000'000));
     }
+
+    void rawIqDebitsGlobalBytesWithFixedBurst()
+    {
+        constexpr quint64 iqRate = 192000ULL * 8 + 24ULL * ((192000 + 1023) / 1024);
+        const DisplayBudgetLimits cap = limits(iqRate, 1);
+        DisplayBudgetPacer pacer;
+        QVERIFY(pacer.beginSession(15, cap, 0));
+        QVERIFY(pacer.update(cap, {}, false, 0, iqRate));
+        constexpr quint64 frame = 24 + 1024 * 8;
+        QVERIFY(pacer.spendIq(frame, 0));
+        QVERIFY(pacer.spendIq(frame, 0));
+        QVERIFY(pacer.spendIq(frame, 0));
+        QVERIFY(!pacer.canSpendIq(frame, 0));
+        QVERIFY(pacer.update(cap, {}, false, 0, iqRate));
+        QVERIFY(!pacer.canSpendIq(frame, 0));
+        QVERIFY(pacer.spendIq(frame, 1'000'000'000));
+        QVERIFY(!pacer.canSpendSpectrum(1, 1, 1'000'000'000));
+    }
 };
 
 QTEST_APPLESS_MAIN(TestDisplayBudget)

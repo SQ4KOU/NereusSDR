@@ -9,6 +9,7 @@
 #include "gui/StyleConstants.h"
 #include "models/RadioModel.h"
 #include <QComboBox>
+#include <QDateTime>
 #include <QDialogButtonBox>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -67,9 +68,14 @@ RemoteConnectionController::RemoteConnectionController(
             if (m_client->capabilities().relayAllowedEntry) {
                 m_options.relayAllowed = m_client->capabilities().relayAllowed ? 1 : 0;
             }
-            m_options.controlChannelVersion = m_client->capabilities().controlChannelVersion;
         }
         emit changed();
+    });
+    connect(client, &StationClient::stateSnapshotApplied, this, [this] {
+        if (!m_client || !m_client->isHandshakeComplete()) { return; }
+        m_options.controlChannelVersion = m_client->capabilities().controlChannelVersion;
+        m_options.negativeControlObservedMs = m_options.controlChannelVersion == 0
+            ? QDateTime::currentMSecsSinceEpoch() : -1;
     });
     connect(client, &StationClient::sessionEnded, this, [this](const QString&) {
         m_pendingMediaRecoveryEpoch = 0;
@@ -298,9 +304,13 @@ void RemoteConnectionController::connectToStation()
     // iPhone app plan Task 27: where the Core was last reached, first. The
     // store's current list (fix wave): the one this window was made with is
     // stale once a connection here has remembered an address.
-    if (m_cachedAddressSource) {
-        if (const std::optional<QStringList> current = m_cachedAddressSource()) {
-            m_options.cachedAddresses = *current;
+    if (m_currentOptionsSource) {
+        if (const std::optional<RemoteStationOptions> current = m_currentOptionsSource()) {
+            m_options.cachedAddresses = current->cachedAddresses;
+            m_options.rendezvousId = current->rendezvousId;
+            m_options.relayAllowed = current->relayAllowed;
+            m_options.controlChannelVersion = current->controlChannelVersion;
+            m_options.negativeControlObservedMs = current->negativeControlObservedMs;
         }
     }
     QList<QUrl> cached;
@@ -317,7 +327,20 @@ void RemoteConnectionController::connectToStation()
         route.servers = RendezvousClient::serverUrls(remoteAccessServerEntries());
         route.rendezvousId = m_options.rendezvousId;
         route.relayAllowed = m_options.relayAllowed != 0;
-        route.controlChannelVersion = m_options.controlChannelVersion;
+        route.controlChannelVersion = m_options.effectiveControlChannelVersion(
+            QDateTime::currentMSecsSinceEpoch());
+        const QPointer<RemoteConnectionController> self(this);
+        const RemoteStationOptions fallback = m_options;
+        route.currentControlChannelVersion = [self, fallback] {
+            if (self && self->m_currentOptionsSource) {
+                if (const auto current = self->m_currentOptionsSource()) {
+                    return current->effectiveControlChannelVersion(
+                        QDateTime::currentMSecsSinceEpoch());
+                }
+            }
+            const RemoteStationOptions& options = self ? self->m_options : fallback;
+            return options.effectiveControlChannelVersion(QDateTime::currentMSecsSinceEpoch());
+        };
     }
     m_client->setServiceRoute(route);
     m_client->connectToStation(QUrl(m_options.url), m_options.token,
@@ -326,9 +349,9 @@ void RemoteConnectionController::connectToStation()
     emit changed();
 }
 
-void RemoteConnectionController::setCachedAddressSource(CachedAddressSource source)
+void RemoteConnectionController::setCurrentOptionsSource(CurrentOptionsSource source)
 {
-    m_cachedAddressSource = std::move(source);
+    m_currentOptionsSource = std::move(source);
 }
 
 void RemoteConnectionController::disconnectFromStation()

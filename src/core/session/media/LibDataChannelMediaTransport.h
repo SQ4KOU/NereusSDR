@@ -86,6 +86,8 @@ public:
 
     bool sendDisplay(const QByteArray& message) override;
     DisplaySendResult submitDisplay(const QByteArray& message) override;
+    DisplaySendResult submitIq(const QByteArray& message) override;
+    bool iqBusy() const override;
     bool displayBusy() const override;
     bool sendRtp(const QByteArray& packet) override;
     bool sendMicRtp(const QByteArray& packet) override;

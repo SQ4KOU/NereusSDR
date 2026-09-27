@@ -77,14 +77,14 @@ bool fits(const DisplayBudgetLimits& limits, const QList<MutableQuality>& qualit
 }
 
 bool lowerFps(const DisplayBudgetLimits& limits, QList<MutableQuality>& qualities,
-              const QList<int>& indexes, bool ps3Enabled)
+              const QList<int>& indexes, bool ps3Enabled, int minimumFps = kUsefulFps)
 {
     bool changed = true;
     while (changed) {
         changed = false;
         for (int index : indexes) {
             MutableQuality& quality = qualities[index];
-            const int floor = std::min(quality.intent->fps, kUsefulFps);
+            const int floor = std::min(quality.intent->fps, minimumFps);
             if (quality.suspended || quality.fps <= floor) {
                 continue;
             }
@@ -99,14 +99,14 @@ bool lowerFps(const DisplayBudgetLimits& limits, QList<MutableQuality>& qualitie
 }
 
 bool lowerPixels(const DisplayBudgetLimits& limits, QList<MutableQuality>& qualities,
-                 const QList<int>& indexes, bool ps3Enabled)
+                 const QList<int>& indexes, bool ps3Enabled, int minimumPixels = kUsefulPixels)
 {
     bool changed = true;
     while (changed) {
         changed = false;
         for (int index : indexes) {
             MutableQuality& quality = qualities[index];
-            const int floor = std::min(quality.intent->pixels, kUsefulPixels);
+            const int floor = std::min(quality.intent->pixels, minimumPixels);
             if (quality.suspended || quality.pixels <= floor) {
                 continue;
             }
@@ -129,8 +129,15 @@ bool lowerPixels(const DisplayBudgetLimits& limits, QList<MutableQuality>& quali
 // save none.
 bool reduceToFit(const DisplayBudgetLimits& limits, QList<MutableQuality>& qualities,
                  const QList<int>& backgrounds, const QList<int>& actives,
-                 bool ps3Enabled)
+                 bool ps3Enabled, bool iqActive)
 {
+    if (iqActive) {
+        return fits(limits, qualities, ps3Enabled)
+            || lowerFps(limits, qualities, backgrounds, ps3Enabled, 1)
+            || lowerFps(limits, qualities, actives, ps3Enabled, 1)
+            || lowerPixels(limits, qualities, backgrounds, ps3Enabled, 1)
+            || lowerPixels(limits, qualities, actives, ps3Enabled, 1);
+    }
     return fits(limits, qualities, ps3Enabled)
         || lowerFps(limits, qualities, backgrounds, ps3Enabled)
         || lowerPixels(limits, qualities, backgrounds, ps3Enabled)
@@ -164,7 +171,7 @@ RemoteDisplayAllocation makeAllocation(const QList<MutableQuality>& qualities,
 
 std::optional<RemoteDisplayAllocation> allocateRemoteDisplay(
     const DisplayBudgetLimits& limits, const QList<RemoteDisplayIntent>& intents,
-    bool ps3Enabled, QString* error)
+    bool ps3Enabled, QString* error, bool iqActive)
 {
     if (error) {
         error->clear();
@@ -224,8 +231,11 @@ std::optional<RemoteDisplayAllocation> allocateRemoteDisplay(
             }
         }
 
-        if (reduceToFit(limits, qualities, backgrounds, actives, ps3Enabled)) {
+        if (reduceToFit(limits, qualities, backgrounds, actives, ps3Enabled, iqActive)) {
             return makeAllocation(qualities, ps3Enabled);
+        }
+        if (iqActive) {
+            return fail(QStringLiteral("The display share cannot keep visible pans at one frame per second with raw I/Q."));
         }
 
         int suspendIndex = -1;

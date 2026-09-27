@@ -797,6 +797,7 @@ public:
     /// identity change, after the profile is set and after the connection
     /// state, as a local connect emits it after Connected.
     void applyStationCapabilities(const NereusSDR::StationCapabilities& caps);
+    int stationRemoteIqVersion() const { return m_stationRemoteIqVersion; }
 
     /// Drive the connection lifecycle from the session directly. Task 18
     /// uses it for the close side (a preempted or refused session goes back
@@ -6492,6 +6493,7 @@ private:
     // never sets or reads either, so local direct mode is untouched.
     int m_stationMaxSlices{0};
     int m_stationUserDdcCount{0};
+    int m_stationRemoteIqVersion{0};
 
     // Phase 3Q sub-PR-3: uptime tracking for NetworkDiagnosticsDialog.
     // Set to current time on Connected transition, cleared (default-constructed)

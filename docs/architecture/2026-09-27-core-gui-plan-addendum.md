@@ -529,9 +529,12 @@ colours for the same signal.
   and a fixed 192 kHz rate despite the radio's actual binding and sample rate.
 - Ruling: existing local/remote parity requirement applies in both directions. Preserve
   samples without resampling and report the actual supported receiver rate.
-- Status: signed local correction `4da887a0` maps receiver to its stream and current rate,
-  with focused nonzero-receiver/rate-change/refusal checks. Remote I/Q remains under
-  implementation and is not advertised as available yet.
+- Status: local `4da887a0` and remote `67d53723` plus lifetime correction `8b10acaa`
+  are integrated. Receiver identity/rate, bounded ordered transport, budget admission,
+  one-debit backpressure and reentrant peer retirement pass integrated focused tests.
+  The 60-second sequence and TX-watchdog checks use simulated time; they are not
+  physical-radio or wall-clock load acceptance. Remote TCI audio resampling remains
+  a separate unfinished threading item.
 - Plan: remote-window parity TCI raw I/Q.
 
 ### G-38: Settings reset labels and remote hygiene commands disagree with behavior
@@ -656,9 +659,12 @@ colours for the same signal.
   same-identity code pairing invalidates the negative observation. Existing
   identity/certificate checks, single authenticated race winner, bounded
   deadlines and retries, and `relayAllowed` remain in force.
-- Status: OPEN for Core and desktop implementation and the exact shared link
-  document update. The phone is implementing its corresponding cache. This
-  lead contract does not assert a separate JJ ruling on the five-minute value.
+- Status: desktop implementation `59edfcfa` and shared link documentation `31536085`
+  are integrated. Store, selector, GUI controller, remote controls and path-race suites
+  pass on the integrated tree. No identity checks were weakened. Authenticated-zero
+  end-to-end recording remains a fixture coverage limit: current bound Core fixtures
+  advertise 1. Phone implementation and real automatic-recovery acceptance remain
+  open. This lead contract does not assert a separate JJ ruling on the five-minute value.
 - Plan: automatic direct/manual/rendezvous recovery.
 
 ### G-45: Full-suite build omitted the slice audio race executable
@@ -688,6 +694,24 @@ colours for the same signal.
   stream geometry, dBm reduction, lifetime and remote grant requirements. The
   temporary hidden classification is not completion of this feature.
 - Plan: remote-window parity container meters and filter display.
+
+### G-47: Expected transmit silence falsely restarts relay media
+
+- Evidence: the desktop RemoteMediaController diagnoses a relayed audio stall after
+  three seconds without RTP while speakers are wanted. The Core intentionally gates
+  the TX-bound receive stream during MOX/TUNE, so legitimate silence triggers media
+  teardown. The seeded synthetic TUNE run decoded audio before keying, then lost its
+  receiver during TUNE even though the Core sent audio again after unkeying. The
+  fixture did not connect the recovery signal, explaining why it stayed stopped.
+- Ruling: JJ requires load failures to be diagnosed and fixed. The lead's correction
+  keeps the existing receive-stall deadline but excludes authenticated keyed/tuning/
+  transmit-tail states; a true return to receive starts a fresh interval if real RTP
+  previously armed it. Unrelated state updates must not extend that interval.
+- Status: OPEN, isolated implementation and fake-only regressions in progress. The
+  independent 400 ms transmit watchdog and earlier false-unkey finding stay unchanged.
+  The phone controller checked that its current code has no equivalent audio-only
+  stall timer and recorded this requirement for its upcoming relay implementation.
+- Plan: R5 media recovery and load verification.
 
 ## How this addendum is kept
 

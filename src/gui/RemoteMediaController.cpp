@@ -99,6 +99,7 @@
 #include "core/session/media/AudioJitterBuffer.h"
 #include "gui/RemoteDisplayPresenter.h"
 #include "core/session/media/DisplayBudget.h"
+#include "core/session/media/RemoteIqCodec.h"
 #include "core/session/media/RemoteSpectrumContext.h"
 #include "core/session/media/SpectrumEndpoint.h"
 #include "core/session/media/WidebandDisplayContext.h"
@@ -999,6 +1000,17 @@ struct RemoteMediaController::Private {
     // connection, so a slice id's revision only ever grows, even when a new
     // slice reuses the id; a new connection starts afresh.
     QHash<int, quint32> receiverRevisions;
+    struct IqStream {
+        bool wanted = false;
+        bool enabled = false;
+        quint32 revision = 0;
+        quint32 generation = 0;
+        quint32 nextSequence = 0;
+        int sampleRate = 0;
+    };
+    std::map<int, IqStream> iqStreams;
+    bool iqNegotiated = false;
+    quint64 iqBytesPerSecond = 0;
     // R-R3-43: the receiver stream ids this media connection declared.
     QList<quint32> receiverSsrcs;
     // R-R3-45: the headphones mix, played on this computer's headphones
@@ -1795,6 +1807,12 @@ bool RemoteMediaController::receiverAudioNegotiated() const
     return audioProfileNegotiated() && d->client->capabilities().receiverAudioVersion >= 1;
 }
 
+bool RemoteMediaController::remoteIqNegotiated() const
+{
+    return d->client && d->client->mediaAvailable()
+        && d->client->capabilities().remoteIqVersion >= 1;
+}
+
 QHash<int, RemoteAudioReceiverTelemetry> RemoteMediaController::receiverAudioTelemetry() const
 {
     QHash<int, RemoteAudioReceiverTelemetry> telemetry;
@@ -2531,6 +2549,16 @@ void RemoteMediaController::stop()
     // R-R3-43: receiver streams stop with the media connection. Their
     // sinks stay registered and are asked for again on the next one.
     d->receiverRevisions.clear();
+    for (auto& [sliceId, stream] : d->iqStreams) {
+        Q_UNUSED(sliceId);
+        stream.enabled = false;
+        stream.revision = 0;
+        stream.generation = 0;
+        stream.nextSequence = 0;
+        stream.sampleRate = 0;
+    }
+    d->iqBytesPerSecond = 0;
+    d->iqNegotiated = false;
     d->receiverSsrcs.clear();
     // R-R3-45: the headphones mix stops with the media connection and is
     // asked for again on the next one. A headphones device that failed
@@ -2756,7 +2784,8 @@ bool RemoteMediaController::replaceConnection()
     const bool ok = peer->start(IMediaTransport::Role::Answerer, id,
                                 IMediaTransport::kDefaultAudioTargetBitrate,
                                 /*offerLosslessAudio=*/false, receiverAudioNegotiated(),
-                                headphonesMixNegotiated(), micLineNegotiated());
+                                headphonesMixNegotiated(), micLineNegotiated(),
+                                d->iqNegotiated);
     if (!ok || !started) {
         dropReplacement(QStringLiteral("the new connection could not start"));
         // Re-review: a connection that cannot start is tried again only a
@@ -2839,6 +2868,9 @@ void RemoteMediaController::promoteReplacement()
     d->connectionId = d->replacementId;
     d->replacementId.clear();
     connectPeer(next, d->epoch);
+    for (const auto& [sliceId, stream] : d->iqStreams) {
+        if (stream.wanted) { sendIqRequest(sliceId, true); }
+    }
     // The old connection sends nothing new now; the new one's lead eases.
     d->dual->oldPathDone(d->dualClock.elapsed());
     qCInfo(lcRemoteMedia).noquote()
@@ -2985,6 +3017,21 @@ void RemoteMediaController::connectPeer(MediaPeer* peer, quint32 epoch)
         reportDisplayDrops();
         receiveDisplay(packet);
     });
+    connect(peer, &MediaPeer::iqReceived, this, [this, current](const QByteArray& packet) {
+        if (current()) { receiveIqFrame(packet); }
+    });
+    connect(peer, &MediaPeer::iqErrorOccurred, this, [this, current](const QString& reason) {
+        if (!current()) { return; }
+        QList<int> affected;
+        for (const auto& [sliceId, stream] : d->iqStreams) {
+            if (stream.enabled) { affected.append(sliceId); }
+        }
+        const QPointer<RemoteMediaController> self(this);
+        for (int sliceId : affected) {
+            if (!self || !current()) { return; }
+            failIqStream(sliceId, reason);
+        }
+    });
     connect(peer, &MediaPeer::rtpReceived, this, [this, current, peer](const QByteArray& packet) {
         if (current()) { routeRtp(packet, peer); }
     });
@@ -3011,6 +3058,10 @@ void RemoteMediaController::connectPeer(MediaPeer* peer, quint32 epoch)
             if (!self || !current()) { return; }
             // R-R3-43: each receiver stream an app wants, after the mix.
             requestWantedReceiverAudio();
+            if (!self || !current()) { return; }
+            for (const auto& [sliceId, stream] : d->iqStreams) {
+                if (stream.wanted) { sendIqRequest(sliceId, true); }
+            }
             if (!self || !current()) { return; }
             // R-R3-45: and the headphones mix, when headphones are here.
             requestHeadphonesAudio();
@@ -3133,6 +3184,7 @@ void RemoteMediaController::start()
     // R-R3-45: likewise the headphones mix's stream id.
     // Task 36: likewise the microphone line.
     const bool micLine = micLineNegotiated();
+    d->iqNegotiated = remoteIqNegotiated();
     // iPhone app plan Task 28 (R-IOS-16): a session through the remote
     // access service makes its media connection with the same ICE settings
     // as its control connection. Task 29 step 2b: a direct WebSocket
@@ -3147,7 +3199,7 @@ void RemoteMediaController::start()
     const bool started = peer->start(IMediaTransport::Role::Answerer, d->connectionId,
                                      IMediaTransport::kDefaultAudioTargetBitrate,
                                      /*offerLosslessAudio=*/false, receiverAudioNegotiated(),
-                                     headphonesMixNegotiated(), micLine);
+                                     headphonesMixNegotiated(), micLine, d->iqNegotiated);
     if (!self) { return; }
     d->startingPeer = false;
     d->receiverSsrcs = started && startedPeer ? startedPeer->receiverAudioSsrcs() : QList<quint32>{};
@@ -3197,6 +3249,9 @@ void RemoteMediaController::start()
     // R-R3-43: likewise receiver audio, only to a Core that offers it.
     if (receiverAudioNegotiated()) {
         startControl.insert(QStringLiteral("receiverAudioVersion"), 1);
+    }
+    if (d->iqNegotiated) {
+        startControl.insert(QStringLiteral("remoteIqVersion"), 1);
     }
     // R-R3-45: likewise the headphones mix, only to a Core that offers it.
     if (headphonesMixNegotiated()) {
@@ -3849,14 +3904,20 @@ void RemoteMediaController::refreshBudgetSubscriptions()
         d->wantedCharge = wanted;
         d->wantedIntents = intents;
     }
-    const bool askWanted = d->askingWanted && !retainedPs3ExceedsCap;
+    const bool askWanted = d->askingWanted && !retainedPs3ExceedsCap
+        && d->iqBytesPerSecond == 0;
     // While asking, plan without the share: every pan at its wanted quality.
     // The Core admits or refuses each against the share it gives this
     // device with the new request.
-    const DisplayBudgetLimits planLimits = askWanted
+    DisplayBudgetLimits planLimits = askWanted
         ? DisplayBudgetLimits{kDisplayBudgetJsonSafePositiveLimit,
                               kDisplayBudgetJsonSafePositiveLimit, limits->generation}
         : *limits;
+    if (d->iqBytesPerSecond != 0) {
+        planLimits.applicationBytesPerSecond =
+            planLimits.applicationBytesPerSecond > d->iqBytesPerSecond
+                ? planLimits.applicationBytesPerSecond - d->iqBytesPerSecond : 1;
+    }
     const QString cacheIdentity = allocationIdentity(
         planLimits, intents, targetPs3, retainedPs3ExceedsCap);
     if (d->allocationCacheIdentity != cacheIdentity) {
@@ -3875,7 +3936,8 @@ void RemoteMediaController::refreshBudgetSubscriptions()
             d->cachedAllocation = paused;
         } else {
             d->cachedAllocation = allocateRemoteDisplay(
-                planLimits, intents, targetPs3, &d->cachedAllocationError);
+                planLimits, intents, targetPs3, &d->cachedAllocationError,
+                d->iqBytesPerSecond != 0);
             if (!d->cachedAllocation) {
                 qCInfo(lcRemoteMedia).noquote() << "Remote display allocation failed:"
                                                 << d->cachedAllocationError;
@@ -4446,6 +4508,148 @@ void RemoteMediaController::requestReceiverAudio(int sliceId, IReceiverPcmSink* 
     refreshAudioStatus();
 }
 
+void RemoteMediaController::requestRawIq(int sliceId)
+{
+    if (sliceId < 0 || sliceId > 1) { return; }
+    auto& stream = d->iqStreams[sliceId];
+    if (stream.wanted) { return; }
+    stream.wanted = true;
+    if (!remoteIqNegotiated()) {
+        emit rawIqUnavailable(sliceId,
+            QStringLiteral("This Core does not send raw I/Q to this window. Updating the Core may help."));
+        return;
+    }
+    sendIqRequest(sliceId, true);
+}
+
+void RemoteMediaController::releaseRawIq(int sliceId)
+{
+    const auto found = d->iqStreams.find(sliceId);
+    if (found == d->iqStreams.end() || !found->second.wanted) { return; }
+    found->second.wanted = false;
+    found->second.enabled = false;
+    found->second.sampleRate = 0;
+    sendIqRequest(sliceId, false);
+    d->iqBytesPerSecond = 0;
+    for (const auto& [unused, stream] : d->iqStreams) {
+        Q_UNUSED(unused);
+        if (stream.enabled) {
+            d->iqBytesPerSecond += quint64(stream.sampleRate) * 8
+                + quint64((stream.sampleRate + 1023) / 1024) * 24;
+        }
+    }
+    refreshSubscriptions();
+}
+
+void RemoteMediaController::sendIqRequest(int sliceId, bool enabled)
+{
+    if (!d->iqNegotiated || !d->peer || !d->peer->isReady()) { return; }
+    auto& stream = d->iqStreams[sliceId];
+    ++stream.revision;
+    if (stream.revision == 0) { ++stream.revision; }
+    send({{QStringLiteral("op"), QStringLiteral("iq-stream")},
+          {QStringLiteral("sliceId"), sliceId},
+          {QStringLiteral("revision"), qint64(stream.revision)},
+          {QStringLiteral("enabled"), enabled}});
+}
+
+void RemoteMediaController::receiveIqContext(const QJsonObject& payload)
+{
+    QStringList keys = payload.keys();
+    keys.sort();
+    if (keys != QStringList{QStringLiteral("connectionId"), QStringLiteral("enabled"),
+                            QStringLiteral("generation"), QStringLiteral("op"),
+                            QStringLiteral("reason"), QStringLiteral("revision"),
+                            QStringLiteral("sampleRateHz"), QStringLiteral("sliceId")}
+        || !payload.value(QStringLiteral("enabled")).isBool()
+        || !payload.value(QStringLiteral("reason")).isString()) { return; }
+    quint32 revision = 0, generation = 0;
+    double rawSlice = 0;
+    if (!number(payload, "sliceId", 0, 1, rawSlice, true)
+        || !uint32(payload, "revision", revision)
+        || !uint32(payload, "generation", generation)) { return; }
+    const int slice = int(rawSlice);
+    double rawRate = 0;
+    if (!number(payload, "sampleRateHz", 0, 384000, rawRate, true)) { return; }
+    const auto found = d->iqStreams.find(slice);
+    if (found == d->iqStreams.end() || found->second.revision != revision
+        || !isNewerGeneration(generation, found->second.generation)) { return; }
+    auto& stream = found->second;
+    const bool enabled = payload.value(QStringLiteral("enabled")).toBool();
+    const int rate = int(rawRate);
+    if (enabled && (!stream.wanted || rate < 48000
+                    || !payload.value(QStringLiteral("reason")).toString().isEmpty())) { return; }
+    if (!enabled && rate != 0) { return; }
+    stream.generation = generation;
+    stream.enabled = enabled;
+    stream.nextSequence = 0;
+    stream.sampleRate = enabled ? rate : 0;
+    d->iqBytesPerSecond = 0;
+    for (const auto& [unused, current] : d->iqStreams) {
+        Q_UNUSED(unused);
+        if (current.enabled) {
+            d->iqBytesPerSecond += quint64(current.sampleRate) * 8
+                + quint64((current.sampleRate + 1023) / 1024) * 24;
+        }
+    }
+    if (enabled) {
+        emit rawIqRate(slice, rate);
+    } else if (stream.wanted && !payload.value(QStringLiteral("reason")).toString().isEmpty()) {
+        emit rawIqUnavailable(slice,
+                              payload.value(QStringLiteral("reason")).toString());
+    }
+    refreshSubscriptions();
+}
+
+void RemoteMediaController::receiveIqFrame(const QByteArray& message)
+{
+    const auto frame = RemoteIqCodec::decode(message);
+    if (!frame) {
+        QList<int> affected;
+        for (const auto& [sliceId, stream] : d->iqStreams) {
+            if (stream.enabled) { affected.append(sliceId); }
+        }
+        const QPointer<RemoteMediaController> self(this);
+        for (int sliceId : affected) {
+            if (!self) { return; }
+            failIqStream(sliceId, QStringLiteral("Malformed raw I/Q media frame."));
+        }
+        return;
+    }
+    const auto found = d->iqStreams.find(int(frame->sliceId));
+    if (found == d->iqStreams.end() || !found->second.enabled
+        || found->second.generation != frame->generation) { return; }
+    auto& stream = found->second;
+    if (frame->sequence != stream.nextSequence) {
+        failIqStream(int(frame->sliceId),
+                     QStringLiteral("Raw I/Q media sequence lost a frame."));
+        return;
+    }
+    ++stream.nextSequence;
+    emit rawIqBlock(int(frame->sliceId), stream.sampleRate, frame->samples);
+}
+
+void RemoteMediaController::failIqStream(int sliceId, const QString& reason)
+{
+    const auto found = d->iqStreams.find(sliceId);
+    if (found == d->iqStreams.end() || !found->second.enabled) { return; }
+    found->second.enabled = false;
+    found->second.sampleRate = 0;
+    d->iqBytesPerSecond = 0;
+    for (const auto& [unused, stream] : d->iqStreams) {
+        Q_UNUSED(unused);
+        if (stream.enabled) {
+            d->iqBytesPerSecond += quint64(stream.sampleRate) * 8
+                + quint64((stream.sampleRate + 1023) / 1024) * 24;
+        }
+    }
+    const QPointer<RemoteMediaController> self(this);
+    emit rawIqUnavailable(sliceId, reason);
+    if (!self) { return; }
+    sendIqRequest(sliceId, false);
+    if (self) { refreshSubscriptions(); }
+}
+
 void RemoteMediaController::releaseReceiverAudio(int sliceId, IReceiverPcmSink* sink)
 {
     const auto found = d->receiverStreams.find(sliceId);
@@ -4965,6 +5169,10 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
     }
     if (op == QLatin1String("receiver-audio-context")) {
         if (receiverAudioNegotiated()) { receiveReceiverAudioContext(payload); }
+        return;
+    }
+    if (op == QLatin1String("iq-stream-context")) {
+        if (d->iqNegotiated) { receiveIqContext(payload); }
         return;
     }
     if (op == QLatin1String("description") || op == QLatin1String("candidate")) {

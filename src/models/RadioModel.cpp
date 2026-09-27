@@ -7259,6 +7259,8 @@ void RadioModel::applyStationCapabilities(const NereusSDR::StationCapabilities& 
 
     m_stationMaxSlices = caps.effectiveMaxSlices > 0 ? caps.effectiveMaxSlices : 1;
     m_stationUserDdcCount = caps.userDdcCount;
+    const bool remoteIqMoved = m_stationRemoteIqVersion != caps.remoteIqVersion;
+    m_stationRemoteIqVersion = caps.remoteIqVersion;
     // R-R3-49 (parity Task 16): whether the Core sends its filter curve,
     // and (trunk merge) whether it says which noise reduction it runs.
     setStationDspInfoVersion(caps.dspInfoVersion);
@@ -7268,7 +7270,7 @@ void RadioModel::applyStationCapabilities(const NereusSDR::StationCapabilities& 
     setStationTxReadingsVersion(caps.txReadingsVersion);
     setStationDspAssetVersion(caps.dspAssetVersion);
 
-    if (infoMoved) {
+    if (infoMoved || remoteIqMoved) {
         emit infoChanged();
     }
 

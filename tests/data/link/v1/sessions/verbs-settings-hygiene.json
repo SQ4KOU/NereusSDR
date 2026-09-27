@@ -461,6 +461,12 @@
                         "name": "settingsHygieneVersion",
                         "ordinal": 0,
                         "value": 1
+                    },
+                    {
+                        "kind": "i64",
+                        "name": "remoteIqVersion",
+                        "ordinal": 0,
+                        "value": 0
                     }
                 ],
                 "type": "capabilities"

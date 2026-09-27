@@ -168,7 +168,8 @@ MediaPeer::~MediaPeer()
 
 bool MediaPeer::start(IMediaTransport::Role role, const QString& connectionId,
                       int audioTargetBitrate, bool offerLosslessAudio,
-                      bool receiverAudioStreams, bool headphonesMixStream, bool micLine)
+                      bool receiverAudioStreams, bool headphonesMixStream, bool micLine,
+                      bool iqChannel)
 {
     d->startRefusal = StartRefusal::None;
     if (d->started || !isCanonicalConnectionId(connectionId)) {
@@ -287,6 +288,17 @@ bool MediaPeer::start(IMediaTransport::Role role, const QString& connectionId,
                 }
                 emit self->displayReceived(message);
             });
+    connect(transport, &IMediaTransport::iqReceived, this,
+            [self, isCurrentGeneration](const QByteArray& message) {
+                if (isCurrentGeneration() && !message.isEmpty()
+                    && message.size() <= IMediaTransport::kMaxIqMessageBytes) {
+                    emit self->iqReceived(message);
+                }
+            });
+    connect(transport, &IMediaTransport::iqErrorOccurred, this,
+            [self, isCurrentGeneration](const QString& reason) {
+                if (isCurrentGeneration()) { emit self->iqErrorOccurred(reason); }
+            });
     connect(transport, &IMediaTransport::rtpReceived, this,
             [self, isCurrentGeneration](const QByteArray& packet) {
                 if (!isCurrentGeneration()) {
@@ -381,6 +393,7 @@ bool MediaPeer::start(IMediaTransport::Role role, const QString& connectionId,
     options.headphonesAudioSsrc = d->headphonesAudioSsrc;
     options.micAudioSsrc = d->micAudioSsrc;
     options.txChannel = d->micAudioSsrc != 0;
+    options.iqChannel = iqChannel;
     options.ice = d->ice;
     const bool backendStarted = transport->start(options);
     if (!self) {
@@ -563,6 +576,20 @@ IMediaTransport::DisplaySendResult MediaPeer::submitDisplay(const QByteArray& me
         return IMediaTransport::DisplaySendResult::Refused;
     }
     return d->transport->submitDisplay(message);
+}
+
+IMediaTransport::DisplaySendResult MediaPeer::submitIq(const QByteArray& message)
+{
+    if (!d->started || !d->transport || message.isEmpty()
+        || message.size() > IMediaTransport::kMaxIqMessageBytes) {
+        return IMediaTransport::DisplaySendResult::Refused;
+    }
+    return d->transport->submitIq(message);
+}
+
+bool MediaPeer::iqBusy() const
+{
+    return d->started && d->transport && d->transport->iqBusy();
 }
 
 bool MediaPeer::displayBusy() const

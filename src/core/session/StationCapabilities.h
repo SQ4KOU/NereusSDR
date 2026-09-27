@@ -376,6 +376,9 @@ struct StationCapabilities {
     /// radio model, 0 otherwise. 0 (an older Core): a window shows its MON
     /// output pair disabled with a reason.
     int txMonitorAudioVersion = 0;
+    /// Task 23: one dedicated ordered raw-I/Q media stream for a window's
+    /// TCI apps, only after the media start declares this version.
+    int remoteIqVersion = 0;
     /// R-IOS-26 / R-R3-49 (iPhone app plan Task 22, remote-window parity
     /// Task 20): 1 means the Core runs FreeDV Reporter itself, registered
     /// with its own callsign, grid square and message and listing its own

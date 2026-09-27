@@ -503,6 +503,7 @@ QJsonArray captureCapabilities()
     // iPhone app plan Task 34: sent to a peer that declared remoteTx.
     caps.remoteTxEntry = true;
     caps.settingsHygieneVersion = 1;
+    caps.remoteIqVersion = 1;
 
     // The values come from a live station with every feature a Core can
     // switch on: media, telemetry, an enforced display budget with its
@@ -934,6 +935,7 @@ QJsonObject guiToCoreOps()
     ops.insert(QStringLiteral("start"), declaredOp(kMedia, peer, {
         {QStringLiteral("audioProfileVersion"), {QStringLiteral("audioProfileVersion")}},
         {QStringLiteral("receiverAudioVersion"), {QStringLiteral("receiverAudioVersion")}},
+        {QStringLiteral("remoteIqVersion"), {QStringLiteral("remoteIqVersion")}},
         {QStringLiteral("headphonesMixVersion"), {QStringLiteral("headphonesMixVersion")}},
         // iPhone app plan Task 36: the microphone line.
         {QStringLiteral("remoteTxVersion"), {QStringLiteral("remoteTxVersion")}},
@@ -1007,6 +1009,10 @@ QJsonObject guiToCoreOps()
                                                         QStringLiteral("audioProfileVersion")}}}));
     // DaemonMediaController.cpp handleReceiverAudio / handleHeadphonesAudio /
     // handleClockProbe.
+    ops.insert(QStringLiteral("iq-stream"),
+               declaredOp(QStringLiteral("remoteIqVersion"),
+                          peer + QStringList{QStringLiteral("sliceId"), QStringLiteral("revision"),
+                                             QStringLiteral("enabled")}));
     ops.insert(QStringLiteral("receiver-audio"),
                declaredOp(QStringLiteral("receiverAudioVersion"),
                           peer + QStringList{QStringLiteral("sliceId"), QStringLiteral("revision"),
@@ -1180,6 +1186,11 @@ QJsonObject coreToGuiOps()
                                                      QStringLiteral("revision"),
                                                      QStringLiteral("contextGeneration"),
                                                      QStringLiteral("floorDbm")}));
+    ops.insert(QStringLiteral("iq-stream-context"),
+               declaredOp(QStringLiteral("remoteIqVersion"),
+                          peer + QStringList{QStringLiteral("sliceId"), QStringLiteral("revision"),
+                                             QStringLiteral("enabled"), QStringLiteral("generation"),
+                                             QStringLiteral("sampleRateHz"), QStringLiteral("reason")}));
     ops.insert(QStringLiteral("audio-context"), audioContextShapes());
     ops.insert(QStringLiteral("receiver-audio-context"), receiverAudioContextShapes());
     ops.insert(QStringLiteral("headphones-audio-context"), headphonesAudioContextShapes());

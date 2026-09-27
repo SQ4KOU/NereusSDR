@@ -1971,6 +1971,25 @@ void MainWindow::ensureRemoteSession()
             source.unavailableReason =
                 QString::fromLatin1(RemoteMediaController::kReceiverAudioUnavailableReason);
             m_tciServer->setRemoteReceiverAudio(std::move(source));
+            TciServer::RemoteIqSource iq;
+            iq.available = [media] { return media && media->remoteIqNegotiated(); };
+            iq.request = [media](int sliceId) {
+                if (media) { media->requestRawIq(sliceId); }
+            };
+            iq.release = [media](int sliceId) {
+                if (media) { media->releaseRawIq(sliceId); }
+            };
+            m_tciServer->setRemoteIqSource(std::move(iq));
+            connect(m_remoteMedia, &RemoteMediaController::rawIqBlock,
+                    m_tciServer, &TciServer::receiveRemoteIq);
+            connect(m_remoteMedia, &RemoteMediaController::rawIqRate,
+                    m_tciServer, &TciServer::setRemoteIqRate);
+            connect(m_remoteMedia, &RemoteMediaController::rawIqUnavailable,
+                    m_tciServer, &TciServer::remoteIqUnavailable);
+            connect(m_stationClient, &StationClient::handshakeComplete,
+                    m_tciServer, &TciServer::refreshRemoteIqDemand);
+            connect(m_stationClient, &StationClient::stateSnapshotApplied,
+                    m_tciServer, &TciServer::refreshRemoteIqDemand);
         }
 #endif
         // R-R3-44: VAX in a remote window. This computer's VAX outputs open

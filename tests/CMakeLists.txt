@@ -8380,6 +8380,7 @@ nereus_add_test(tst_session_link_loss
 # REALTIME (2026-09-24 checkpoint follow-up): each case does a real encrypted
 # loopback handshake inside a fixed 10 s wait, which misses at load 20-30.
 nereus_add_test(tst_media_transport REALTIME)
+nereus_add_test(tst_remote_iq_codec)
 
 # iPhone app plan Task 36 (R-IOS-13): the microphone uplink at the Core: the
 # feed's 60 ms target and 120 ms maximum, a tone through 1 % loss, a sender

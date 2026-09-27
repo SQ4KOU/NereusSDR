@@ -1,4 +1,5 @@
 #pragma once
+#include "core/session/media/RemoteIqIngress.h"
 // =================================================================
 // src/core/session/media/DaemonMediaController.h  (NereusSDR)
 // =================================================================
@@ -421,6 +422,23 @@ private:
         bool sending{false};
         std::unique_ptr<DaemonAudioSender> sender;
     };
+    struct IqStream {
+        quint32 revision = 0;
+        quint32 generation = 0;
+        quint32 sequence = 0;
+        bool desired = false;
+        bool sending = false;
+        int streamIndex = -1;
+        int sampleRate = 0;
+        quint64 bytesPerSecond = 0;
+        std::shared_ptr<RemoteIqIngress> ingress;
+        QMetaObject::Connection tap;
+        QByteArray pending;
+        bool pendingDebited = false;
+        qint64 blockedAtNs = -1;
+        bool budgetRefused = false;
+        quint64 lastBudgetRefusalRevision = 0;
+    };
     /// R-R3-45: the headphones mix for a GUI that declared
     /// headphonesMixVersion: its latest request and, while it runs, the
     /// sender capturing AudioEngine's headphones-mix tap. The RTP timeline
@@ -489,6 +507,15 @@ private:
     /// in its start; anything else is ignored. Answered with a
     /// receiver-audio-context; never touches the main audio context.
     bool handleReceiverAudio(const QJsonObject& control);
+    bool handleIqStream(const QJsonObject& control);
+    void reconcileIqStream(int sliceId);
+    void reconcileWantedIq();
+    void reconcileIqBudget();
+    bool iqFitsCurrentShare() const;
+    void stopIqStream(IqStream& stream);
+    void sendIqContext(int sliceId, const IqStream& stream, const QString& reason);
+    bool trySendIq(MediaPeer* peer, quint64 epoch, qint64 nowNs);
+    quint64 iqBytesPerSecond() const;
     /// R-R3-45: {op:"headphones-audio", connectionId, revision, enabled,
     /// profile}, only from a GUI that declared headphonesMixVersion in its
     /// start; anything else is ignored. Answered with a
@@ -730,6 +757,11 @@ private:
     /// before it closed: which reason the app is told.
     bool m_peerLost{false};
     std::map<int, ReceiverAudioStream> m_receiverStreams;
+    bool m_iqNegotiated{false};
+    std::map<int, IqStream> m_iqStreams;
+    quint32 m_nextIqGeneration{0};
+    quint64 m_iqBudgetChangeRevision{0};
+    bool m_iqBudgetRecheckScheduled{false};
     /// Per receiver stream id: the slice holding it (-1 free) and the next
     /// RTP sequence and timestamp, so each id's timeline continues across
     /// contexts as the main stream's does.
