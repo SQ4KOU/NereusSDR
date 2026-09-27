@@ -217,6 +217,10 @@
 //   2026-09-27: iPhone app plan Task 29 (R-IOS-16): session.pathTicket in
 //               the verb table (controlSwitchVersion 1). J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-27: remote-window parity Task 22 / iPhone app plan Task 25
+//               (R-R3-49, R-IOS-18, supportBundleVersion 1): support.collect
+//               and support.setLogCategories. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -225,6 +229,7 @@
 
 #include "core/SliceOwnership.h"
 #include "core/SpotSourceHost.h"
+#include "core/LogCategories.h"
 #include "core/station/StationRadios.h"
 #include "core/session/ObjectRegistry.h"
 #include "core/dsp/DspAssetService.h"
@@ -450,6 +455,9 @@ QString notRepresentableReason()
 //   session.pathTicket     controlSwitchVersion 1 (StationServer answers it,
 //                          link section 21.2; StationClient asks it only to
 //                          move its session)
+//   support.collect,
+//   support.setLogCategories supportBundleVersion 1 (the bundle is written
+//                          on a worker thread; its answer comes later)
 //
 // tst_link_surface_manifest keeps this table and the routing in step: a
 // source scan of dispatch() and of each prefix family's handler, and a
@@ -662,6 +670,11 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
         {"freedv.sendQsy", {arg("callsign", kUtf8), arg("frequencyHz", kInt)},
          "stationFreedvVersion", 1, kRadioIdentitySessionProtocolMinor},
         {"freedv.setHidden", {arg("on", kBool)}, "stationFreedvVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
+        // The Core's support bundle and logging categories (R-R3-49,
+        // R-IOS-18, parity Task 22, iPhone plan Task 25).
+        {"support.collect", {}, "supportBundleVersion", 1, kRadioIdentitySessionProtocolMinor},
+        {"support.setLogCategories", {arg("categories", kUtf8)}, "supportBundleVersion", 1,
          kRadioIdentitySessionProtocolMinor},
         // Neural noise reduction.
         {"nnr.setDiagnostics",
@@ -1049,6 +1062,9 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
     } else if (invoke.commandVerb == "freedv.setMessage" || invoke.commandVerb == "freedv.sendQsy"
                || invoke.commandVerb == "freedv.setHidden") {
         handleFreedv(invoke);
+    } else if (invoke.commandVerb == "support.collect"
+               || invoke.commandVerb == "support.setLogCategories") {
+        handleSupport(invoke);
     } else if (invoke.commandVerb == "nnr.setDiagnostics" || invoke.commandVerb == "nnr.resetTuning"
                || invoke.commandVerb == "nnr.tryAgain") {
         handleNnrAction(invoke);
@@ -3262,6 +3278,71 @@ void SessionCommandDispatcher::handleFilterResponse(const SessionMessage& invoke
          {0, "stepHz", MirrorWireKind::Float64, response.stepHz},
          {0, "magnitudesDbJson", MirrorWireKind::Utf8,
           RadioModel::filterResponseToJson(response.magnitudesDb)}}));
+}
+
+// R-R3-49 / R-IOS-18 (remote-window parity Task 22, the iPhone app plan's
+// Task 25, supportBundleVersion 1). support.collect answers with `bundle`,
+// the Core's support bundle (SupportBundle::buildCoreBundle: a ZIP of at
+// most 2 MiB, secrets removed) in base64; the bundle is written on a worker
+// thread and the answer follows on a later turn, so the radio never waits
+// for it. support.setLogCategories turns on exactly the listed categories
+// (ids this Core does not keep are ignored) and radio's logCategories
+// follows. A window at the Core does both while the radio is on the air,
+// so neither waits for it here.
+void SessionCommandDispatcher::handleSupport(const SessionMessage& invoke)
+{
+    if (invoke.commandVerb == "support.setLogCategories") {
+        QVariant categories;
+        if (!hasExactlyArguments(invoke.arguments, {"categories"})
+            || !findArgument(invoke.arguments, "categories", &categories)
+            || categories.typeId() != QMetaType::QString) {
+            emitResult(invoke.commandVerb, invoke.commandId, false,
+                       QStringLiteral("The Core could not read this request."), {});
+            return;
+        }
+        QStringList ids;
+        for (const QString& id : categories.toString().split(QLatin1Char(','))) {
+            if (!id.trimmed().isEmpty()) {
+                ids.append(id.trimmed());
+            }
+        }
+        LogManager::instance().setEnabledList(ids);
+        emitResult(invoke.commandVerb, invoke.commandId, true, QString(), {});
+        return;
+    }
+    if (!invoke.arguments.isEmpty()) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The Core could not read this request."), {});
+        return;
+    }
+    if (m_supportBundleRunning) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The Core is already making a support bundle. Try again in a "
+                                  "moment."),
+                   {});
+        return;
+    }
+    SupportBundle::Inputs inputs = m_supportInputs
+        ? m_supportInputs()
+        : SupportBundle::gatherInputs(m_radioModel.data());
+    m_supportBundleRunning = true;
+    const QByteArray verb = invoke.commandVerb;
+    const quint32 commandId = invoke.commandId;
+    // The answer comes on a later turn: it goes to the session that asked.
+    const QString owner = m_sessionOwner;
+    SupportBundle::buildCoreBundleAsync(this, std::move(inputs),
+                                        [this, verb, commandId, owner](QByteArray bundle) {
+        m_supportBundleRunning = false;
+        if (bundle.isEmpty()) {
+            emitResultAs(owner, SessionMessages::commandResult(
+                verb, commandId, false,
+                QStringLiteral("The Core could not make its support bundle."), {}));
+            return;
+        }
+        emitResultAs(owner, SessionMessages::commandResult(
+            verb, commandId, true, QString(), {},
+            {{0, "bundle", MirrorWireKind::Utf8, QString::fromLatin1(bundle.toBase64())}}));
+    });
 }
 
 // R-IOS-25 / R-R3-49 (parity Task 19, recordStreamVersion 1): a record

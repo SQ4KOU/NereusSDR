@@ -7891,6 +7891,21 @@ nereus_add_test(tst_freedv_reporter_station
     fakes/RemoteWindowHarness.cpp
     EXTRA_LABELS session)
 target_compile_definitions(tst_freedv_reporter_station PRIVATE NEREUS_BUILD_TESTS)
+# Remote-window parity Task 22 / iPhone plan Task 25 (R-R3-49, R-IOS-18,
+# B6.4): the support bundle's ZIP, its 2 MiB cap and its secrets scan, and a
+# window's bundle with the Core's under core/. Temporary files only.
+nereus_add_test(tst_support_bundle EXTRA_LABELS session)
+# Remote-window parity Task 22 (R-R3-49): the log sink no logging thread
+# waits on, a stuck writer included. Temporary files only.
+nereus_add_test(tst_log_sink EXTRA_LABELS core)
+# Remote-window parity Task 22 (R-R3-49, B6.4, B6.6): the Core's log,
+# logging categories and bundle in a remote window over the loopback, the
+# Support dialog and Setup > Diagnostics > Logs. No RF, no audio device.
+nereus_add_test(tst_remote_core_log
+    fakes/LoopbackTransport.cpp
+    fakes/RemoteWindowHarness.cpp
+    EXTRA_LABELS session)
+target_compile_definitions(tst_remote_core_log PRIVATE NEREUS_BUILD_TESTS)
 # Parity Task 21 (R-IOS-18, R-R3-38): the Core's choice of radio (the
 # order, the requests, the on-air rule, DaemonApp's wait, switch and saved
 # choice). Discovery is the test's own list; nothing connects.

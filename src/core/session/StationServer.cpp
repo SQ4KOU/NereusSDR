@@ -582,6 +582,14 @@
 //               controlSwitchVersion and relayAllowed; media after a move
 //               keeps the service's STUN server. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-27: remote-window parity Task 22 / iPhone app plan Task 25
+//               (R-R3-49, R-IOS-18): supportBundleVersion 1, the `coreLog`
+//               record stream from the log sink, and what support.collect's
+//               bundle is made from (the newest telemetry, nereusd's
+//               configuration file). J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
+//   2026-09-27: bounded support collection and Core-log credential redaction
+//               refined with OpenAI Codex assistance.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -595,6 +603,11 @@
 #include "core/DxccColorProvider.h"
 #include "core/HardwareProfile.h"
 #include "core/SpotSourceHost.h"
+#include "core/LogSink.h"
+#include "core/SupportBundle.h"
+#include "core/session/IStationLink.h"
+#include "core/session/StationTelemetry.h"
+#include <QDateTime>
 #include "core/station/StationRadios.h"
 #include "core/WdspEngine.h"
 #include "core/dsp/NnrSettings.h"
@@ -854,6 +867,10 @@ bool isSpotSourcesMessage(const SessionMessage& message)
 // streams" section): the newest 500 spots, the last 200 console lines.
 constexpr int kSpotsStreamCapacity = 500;
 constexpr int kSpotConsoleCapacity = 200;
+// Parity Task 22 (R-R3-49): the Core's log keeps its newest 200 lines (a
+// window's backlog), read from the log sink every 250 ms while followed.
+constexpr int kCoreLogCapacity = 200;
+constexpr int kCoreLogPullMs = 250;
 // Parity Task 21: the radios a Core can list.
 constexpr int kStationRadiosCapacity = 64;
 // iPhone plan Task 22 / parity Task 20: the FreeDV Reporter stations a Core
@@ -1874,6 +1891,8 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     // Parity Task 19 (R-IOS-25): the record streams follow the Core's spots
     // and its spot sources' consoles from here on.
     setUpRecordStreams();
+    // Parity Task 22 (R-R3-49): and the Core's log.
+    setUpCoreLogStream();
 
     connect(m_devicesFacade.get(), &StationDevicesFacade::tokenRetired, this, [this]() {
         endAuthenticatedPeers([](const Peer& peer) { return peer.signedInWithToken; },
@@ -2012,6 +2031,26 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
         handleRecordsCommand(m_dispatchingTransport, invoke);
         m_resultSentInDispatch = true;
         return true;
+    });
+    // Parity Task 22 / the iPhone app plan's Task 25 (R-R3-49, R-IOS-18):
+    // what the Core's support bundle is made from, read here on the main
+    // thread (the bundle itself is written on a worker thread).
+    m_dispatcher->setSupportInputs([this]() {
+        SupportBundle::Inputs inputs = SupportBundle::gatherInputs(m_radioModel.data());
+        inputs.daemonConfigPath = m_supportConfigPath;
+        if (m_tokens != nullptr && !m_tokens->token().isEmpty()) {
+            inputs.knownSecrets.append(m_tokens->token());
+        }
+        if (m_pairingWindow != nullptr && !m_pairingWindow->currentCode().isEmpty()) {
+            inputs.knownSecrets.append(m_pairingWindow->currentCode());
+        }
+        if (!m_lastTelemetry.isEmpty()) {
+            inputs.telemetry = QJsonObject{
+                {QStringLiteral("ageMs"),
+                 static_cast<double>(QDateTime::currentMSecsSinceEpoch() - m_lastTelemetryAtMs)},
+                {QStringLiteral("snapshot"), m_lastTelemetry}};
+        }
+        return inputs;
     });
     // iPhone app Task 74 (R-IOS-30): confirm.proceed, confirm.cancel and
     // notice.takeBack are answered by the confirm step.
@@ -7052,6 +7091,11 @@ bool StationServer::sendTelemetry(const StationTelemetrySnapshot& snapshot,
         // (stationTelemetryVersion 5, minor 11).
         message.telemetry.radio.clearHl2Link();
     }
+    // Parity Task 22: the newest measurement, for the support bundle.
+    if (const std::optional<QJsonObject> encoded = StationTelemetryCodec::encode(snapshot)) {
+        m_lastTelemetry = *encoded;
+        m_lastTelemetryAtMs = QDateTime::currentMSecsSinceEpoch();
+    }
     const QByteArray wire = SessionMessages::encode(message);
     if (wire.isEmpty()) { return false; }
     transport->sendText(wire);
@@ -7352,6 +7396,13 @@ int StationServer::stationFreedvVersion() const
             && m_radioModel->freeDvStationModel() != nullptr
         ? 1
         : 0;
+}
+
+int StationServer::supportBundleVersion() const
+{
+    // R-R3-49 / R-IOS-18 (parity Task 22, iPhone plan Task 25): every Core
+    // with a radio model makes its bundle and shares its log.
+    return m_radioModel.isNull() ? 0 : 1;
 }
 
 int StationServer::mediaReplaceVersion() const
@@ -7912,6 +7963,10 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             caps.mediaReplaceVersion = media ? mediaReplaceVersion() : 0;
             caps.controlSwitchVersion = controlSwitchVersion();
             caps.relayAllowed = m_relayAllowed;
+            // R-R3-49 / R-IOS-18 (parity Task 22, iPhone plan Task 25): the
+            // support bundle, the Core's log and its logging categories,
+            // appended after relayAllowed.
+            caps.supportBundleVersion = supportBundleVersion();
             // iPhone app Task 71 (ruling 10.1): several devices at once, for
             // a peer that declared sessionHolder with deviceAuth; any other
             // peer is sent no entry, so its capabilities are today's.
@@ -8166,10 +8221,6 @@ void StationServer::handleRecordsCommand(SessionTransport* transport, const Sess
         answer(false, QStringLiteral("Update this app to see the Core's spots."));
         return;
     }
-    if (recordStreamVersion() < 1) {
-        answer(false, QStringLiteral("This Core does not send its spots or console lines."));
-        return;
-    }
     const bool subscribe = message.commandVerb == "records.subscribe";
     const QSet<QByteArray> expected = subscribe ? QSet<QByteArray>{"stream", "backlog"}
                                                 : QSet<QByteArray>{"stream"};
@@ -8192,10 +8243,23 @@ void StationServer::handleRecordsCommand(SessionTransport* transport, const Sess
         answer(false, QStringLiteral("The Core could not read this request."));
         return;
     }
+    // Parity Task 22: the Core's log comes with supportBundleVersion; every
+    // other stream with recordStreamVersion.
+    const bool coreLog = streamName == QLatin1String("coreLog");
+    if (coreLog ? supportBundleVersion() < 1 : recordStreamVersion() < 1) {
+        answer(false, coreLog
+                   ? IStationLink::supportBundleUnavailableReason()
+                   : QStringLiteral("This Core does not send its spots or console lines."));
+        return;
+    }
     const auto it = m_recordStreams.find(streamName);
     if (it == m_recordStreams.end()) {
         answer(false, QStringLiteral("The Core does not keep that list."));
         return;
+    }
+    if (coreLog) {
+        // The newest lines first, then a pull while anyone follows it.
+        pullCoreLog();
     }
     if (!subscribe) {
         it->second->unsubscribe(transport);
@@ -8208,6 +8272,94 @@ void StationServer::handleRecordsCommand(SessionTransport* transport, const Sess
     const RecordBatch first = it->second->subscribe(transport, wanted);
     answer(true, QString());
     send(transport, SessionMessages::recordBatch(first));
+    if (coreLog && m_coreLogTimer != nullptr && !m_coreLogTimer->isActive()) {
+        m_coreLogTimer->start();
+    }
+}
+
+// ── Parity Task 22 (R-R3-49): the Core's log ─────────────────────────────
+
+void StationServer::setUpCoreLogStream()
+{
+    if (supportBundleVersion() < 1) {
+        return;
+    }
+    if (m_recordFlushTimer == nullptr) {
+        m_recordFlushTimer = new QTimer(this);
+        m_recordFlushTimer->setSingleShot(true);
+        m_recordFlushTimer->setInterval(kDefaultDeltaFlushMs);
+        connect(m_recordFlushTimer, &QTimer::timeout, this, &StationServer::flushRecordStreams);
+    }
+    const QString name = QStringLiteral("coreLog");
+    m_recordStreams.emplace(name, std::make_unique<RecordStream>(name, kCoreLogCapacity));
+    // Lines start where the log is now: the backlog is read at the first
+    // subscribe.
+    m_coreLogTimer = new QTimer(this);
+    m_coreLogTimer->setInterval(kCoreLogPullMs);
+    connect(m_coreLogTimer, &QTimer::timeout, this, [this]() {
+        const auto it = m_recordStreams.find(QStringLiteral("coreLog"));
+        if (it == m_recordStreams.end() || it->second->subscriberCount() == 0) {
+            m_coreLogTimer->stop();
+            return;
+        }
+        pullCoreLog();
+    });
+}
+
+void StationServer::pullCoreLog()
+{
+    const auto it = m_recordStreams.find(QStringLiteral("coreLog"));
+    if (it == m_recordStreams.end()) {
+        return;
+    }
+    // The sink's newest lines (already free of addresses), each once, with
+    // the same secret removal the support bundle applies.
+    const QList<LogSinkLine> lines = LogSink::instance().linesSince(m_coreLogSequence);
+    if (lines.isEmpty()) {
+        return;
+    }
+    const int from = std::max(0, static_cast<int>(lines.size()) - kCoreLogCapacity);
+    QStringList knownSecrets;
+    if (m_tokens != nullptr && !m_tokens->token().isEmpty()) {
+        knownSecrets.append(m_tokens->token());
+    }
+    if (m_pairingWindow != nullptr && !m_pairingWindow->currentCode().isEmpty()) {
+        knownSecrets.append(m_pairingWindow->currentCode());
+    }
+    // If a bounded backlog begins inside a PEM block, its first END marker
+    // arrives without BEGIN. Withhold the preceding lines too.
+    bool inPrivateKey = m_coreLogInPrivateKey;
+    if (!inPrivateKey) {
+        for (int i = from; i < lines.size(); ++i) {
+            const QString& text = lines.at(i).text;
+            if (text.contains(QLatin1String("-----BEGIN "))
+                && text.contains(QLatin1String("PRIVATE KEY-----"))) { break; }
+            if (text.contains(QLatin1String("-----END "))
+                && text.contains(QLatin1String("PRIVATE KEY-----"))) {
+                inPrivateKey = true;
+                break;
+            }
+        }
+    }
+    for (int i = from; i < lines.size(); ++i) {
+        const QString& text = lines.at(i).text;
+        if (text.contains(QLatin1String("-----BEGIN "))
+            && text.contains(QLatin1String("PRIVATE KEY-----"))) {
+            inPrivateKey = true;
+        }
+        const QString clean = inPrivateKey
+            ? QStringLiteral("[REDACTED PRIVATE KEY]")
+            : SupportBundle::sanitizeText(text, knownSecrets);
+        if (text.contains(QLatin1String("-----END "))
+            && text.contains(QLatin1String("PRIVATE KEY-----"))) {
+            inPrivateKey = false;
+        }
+        it->second->upsert(QString::number(lines.at(i).sequence),
+                           QJsonObject{{QStringLiteral("line"), clean}});
+    }
+    m_coreLogInPrivateKey = inPrivateKey;
+    m_coreLogSequence = lines.last().sequence;
+    scheduleRecordFlush();
 }
 
 } // namespace NereusSDR

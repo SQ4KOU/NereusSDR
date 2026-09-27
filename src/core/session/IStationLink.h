@@ -541,6 +541,24 @@ public:
     virtual CommandOutcome requestFreedv(const QByteArray& /*verb*/, const QVariantMap& /*args*/)
     { return { false, stationFreedvUnavailableReason() }; }
 
+    // Remote-window parity Task 22 / the iPhone app plan's Task 25 (R-R3-49,
+    // R-IOS-18, supportBundleVersion 1): the Core's support bundle, its log
+    // and its logging categories. requestSupportBundle sends
+    // support.collect (the answer arrives as
+    // RadioModel::reportStationSupportBundle); requestLogCategories sends
+    // support.setLogCategories with the whole list to turn on;
+    // requestCoreLog subscribes to (true) or leaves (false) the `coreLog`
+    // record stream, and subscribes again after each new session while it
+    // is wanted.
+    static QString supportBundleUnavailableReason()
+    { return QStringLiteral("This Core does not share its log or support bundle with this app. Updating the Core may help."); }
+    virtual bool supportBundleAvailable() const { return false; }
+    virtual CommandOutcome requestSupportBundle()
+    { return { false, supportBundleUnavailableReason() }; }
+    virtual CommandOutcome requestLogCategories(const QString& /*categories*/)
+    { return { false, supportBundleUnavailableReason() }; }
+    virtual void requestCoreLog(bool /*follow*/) {}
+
     // R-R3-46 / R-R3-21 (radioHardwareVersion 4): the filter policy dialog
     // in a remote window. Whether the Core takes a filter policy change from
     // this app now, why not in plain words, and the request itself (chain

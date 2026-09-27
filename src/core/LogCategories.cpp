@@ -109,6 +109,39 @@ void LogManager::setAllEnabled(bool on)
     }
 }
 
+QString LogManager::enabledList() const
+{
+    QStringList ids;
+    for (const auto& cat : m_categories) {
+        if (cat.enabled) {
+            ids.append(cat.id);
+        }
+    }
+    return ids.join(QLatin1Char(','));
+}
+
+void LogManager::setEnabledList(const QStringList& ids)
+{
+    QStringList changedIds;
+    for (auto& cat : m_categories) {
+        const bool on = ids.contains(cat.id);
+        if (cat.enabled != on) {
+            cat.enabled = on;
+            changedIds.append(cat.id);
+        }
+    }
+    if (changedIds.isEmpty()) {
+        return;
+    }
+    applyFilterRules();
+    saveSettings();
+    for (const auto& cat : m_categories) {
+        if (changedIds.contains(cat.id)) {
+            emit categoryChanged(cat.id, cat.enabled);
+        }
+    }
+}
+
 void LogManager::applyFilterRules()
 {
     QStringList rules;

@@ -1822,8 +1822,10 @@ void SetupDialog::buildTree()
                  [this] { return new SettingsValidationPage(m_model); });
     registerPage(diagnostics, "Export / Import", SetupScope::ThisComputer,
                  [this] { return new ExportImportConfigPage(m_model); });
+    // Remote-window parity Task 22 (R-R3-49): in a remote window the page
+    // also shows the Core's recent log.
     registerPage(diagnostics, "Logs", SetupScope::ThisComputer,
-                 [] { return new LogsPage; });
+                 [this] { return new LogsPage(m_model); });
     if (UnbuiltFeatures::isBuilt(UnbuiltFeature::SignalGenerator)) {
         registerPage(diagnostics, "Signal Generator", SetupScope::Core,
                      [] { return new DiagSignalGeneratorPage; });

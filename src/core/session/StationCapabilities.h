@@ -149,6 +149,9 @@
 //   2026-09-27 - R-IOS-16 (iPhone app plan Task 29): mediaReplaceVersion,
 //                controlSwitchVersion and relayAllowed. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-27 - R-R3-49 / R-IOS-18 (remote-window parity Task 22, iPhone
+//                app plan Task 25): supportBundleVersion. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -400,6 +403,13 @@ struct StationCapabilities {
     /// none: relayAllowedEntry false, and the relay is tried.
     bool relayAllowedEntry = false;
     bool relayAllowed = true;
+    /// Remote-window parity Task 22 / iPhone app plan Task 25 (R-R3-49,
+    /// R-IOS-18): 1 means the Core takes support.collect and
+    /// support.setLogCategories, sends the `coreLog` record stream and
+    /// `radio`'s `logCategories`. Sent in the same block, after
+    /// relayAllowed. 0 (an older Core): a window shows its Core-side
+    /// support controls disabled with the reason.
+    int supportBundleVersion = 0;
     /// iPhone app Task 71 (R-IOS-02; the several-devices design, ruling
     /// 10.1): 1 means the Core admits up to four devices at once, sends the
     /// `connectedDevices` object and takes session.leave. Sent last in the

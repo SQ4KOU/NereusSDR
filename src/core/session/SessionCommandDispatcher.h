@@ -182,6 +182,12 @@
 //                                    tx.tunerTune; TransmitAccess::take and
 //                                    ::transmitter. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-27  J.J. Boyd / KG4VCF  R-R3-49 / R-IOS-18 (remote-window
+//                                    parity Task 22, iPhone plan Task 25):
+//                                    support.collect (the bundle made on a
+//                                    worker thread) and
+//                                    support.setLogCategories.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -195,6 +201,7 @@
 #include <optional>
 #include <utility>
 
+#include "core/SupportBundle.h"
 #include "core/session/RemoteKeying.h"
 #include "core/session/SessionMessages.h"
 #include "core/session/StationDevicesFacade.h"
@@ -395,6 +402,12 @@ public:
     /// station.selectRadio, station.rescanRadios, station.setRadioModel and
     /// station.forgetRadio verbs.
     void setStationRadios(StationRadios* radios);
+    /// Parity Task 22 / the iPhone app plan's Task 25 (R-R3-49, R-IOS-18):
+    /// what support.collect's bundle is made from, read on the main thread
+    /// (the station server adds its telemetry and nereusd's configuration
+    /// file). Without one the dispatcher reads the model alone.
+    using SupportInputs = std::function<SupportBundle::Inputs()>;
+    void setSupportInputs(SupportInputs inputs) { m_supportInputs = std::move(inputs); }
 
     static const QList<CommandVerbSpec>& verbSpecs();
 
@@ -531,7 +544,12 @@ private:
     SliceAccess m_sliceAccess;
     ConfirmAnswer m_confirmAnswer;
     RecordAccess m_recordAccess;
+    SupportInputs m_supportInputs;
+    // Parity Task 22: one bundle is made at a time.
+    bool m_supportBundleRunning = false;
     QPointer<StationRadios> m_stationRadios;
+    // Parity Task 22: support.collect and support.setLogCategories.
+    void handleSupport(const NereusSDR::SessionMessage& invoke);
     void handleStationRadios(const NereusSDR::SessionMessage& invoke);
     void handleRecords(const NereusSDR::SessionMessage& invoke);
     void handleSpotSources(const NereusSDR::SessionMessage& invoke);

@@ -63,6 +63,9 @@
 //   2026-09-27: R-R3-49: sample_rate_hz is a starting value only. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic Claude
 //               Code.
+//   2026-09-27: R-R3-49 (remote-window parity Task 22): sourcePath, for the
+//               Core's support bundle. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QHostAddress>
@@ -87,6 +90,10 @@ namespace NereusSDR {
 // LogManager makes), set from the systemd unit, which needs no field
 // here and no code at all.
 struct DaemonConfig {
+    // Remote-window parity Task 22 (R-R3-49): the file these values came
+    // from (fromFile's path), carried with secrets removed in the Core's
+    // support bundle. Empty for defaults().
+    QString sourcePath;
     QString radioMac;                          // empty = a radio chosen from
                                                 // an app, else the one radio
                                                 // in sight, else wait

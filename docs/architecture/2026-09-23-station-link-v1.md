@@ -849,6 +849,7 @@ change shows as surface drift and as a change to this table.
 | `stationFreedvVersion` | 1 |
 | `mediaReplaceVersion` | 1 |
 | `controlSwitchVersion` | 1 |
+| `supportBundleVersion` | 1 |
 | `sessionHolderVersion` | 1 |
 | `remoteTxVersion` | 2 |
 | `txStateVersion` | 2 |
@@ -1285,6 +1286,24 @@ When a feature is off, its version is 0:
   setting's default). A device records it with the paired Core at each
   sign-in, leaves the relay out of its races while it is false, and says
   so in its attempt record (section 21.1).
+- `supportBundleVersion` (remote-window parity Task 22 and the iPhone app
+  plan's Task 25, R-R3-49, R-IOS-18): sent only at agreed minor 11, after
+  `relayAllowed` in the minor-11 block (`sessionHolderVersion` and the
+  remote transmit entries follow it), and 1 on every Core with a radio
+  model. At 1 the Core takes `support.collect` (its support bundle) and
+  `support.setLogCategories` (section 9.1), sends the `coreLog` record
+  stream (section 7.7) and `radio`'s `logCategories` (section 7.1). A
+  window's Tools > Support Bundle... then carries the Core's bundle beside
+  this computer's, its logging checkboxes turn the Core's categories on
+  and off, and Setup > Diagnostics > Logs shows the Core's recent log
+  above this computer's. On a Core that sends 0 or no entry a window shows
+  those checkboxes disabled and the Core's log in their place with "This
+  Core does not share its log or support bundle with this app. Updating
+  the Core may help.", and its bundle carries `core/unavailable.txt` with
+  that reason. Neither verb reaches the radio, so each is answered on and
+  off the air, as a window at the Core does both while keyed; the Core
+  writes the bundle on a worker thread and logs through a queue no
+  logging thread waits on, so neither can stall the radio.
 
 - `sessionHolderVersion`: sent only at agreed minor 11, last, and only to
   a peer whose hello declared `sessionHolder` 1 with `deviceAuth` 1; any
@@ -1501,12 +1520,13 @@ older window sees only the values it was built for.
 | 64 | `mediaReplaceVersion` | `i64` |
 | 65 | `controlSwitchVersion` | `i64` |
 | 66 | `relayAllowed` | `bool` |
-| 67 | `sessionHolderVersion` | `i64` |
-| 68 | `remoteTxVersion` | `i64` |
-| 69 | `txRefusalCode` | `utf8` |
-| 70 | `txRefusalReason` | `utf8` |
-| 71 | `txRefusalFix` | `utf8` |
-| 72 | `txStateVersion` | `i64` |
+| 67 | `supportBundleVersion` | `i64` |
+| 68 | `sessionHolderVersion` | `i64` |
+| 69 | `remoteTxVersion` | `i64` |
+| 70 | `txRefusalCode` | `utf8` |
+| 71 | `txRefusalReason` | `utf8` |
+| 72 | `txRefusalFix` | `utf8` |
+| 73 | `txStateVersion` | `i64` |
 
 <!-- /surface -->
 
@@ -1721,7 +1741,7 @@ An enum property lists the values its domain allows.
 | 8 | `hardwarePeakOverride` | `f64` | bidirectional |  |
 | 9 | `lastLoadError` | `utf8` | outbound |  |
 
-**RadioModel** (26 properties)
+**RadioModel** (27 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -1751,6 +1771,7 @@ An enum property lists the values its domain allows.
 | 23 | `bandOutputsKeyed` | `bool` | outbound |  |
 | 24 | `dspOptionsLastApplyMs` | `i64` | outbound |  |
 | 25 | `stationRadioWaiting` | `utf8` | outbound |  |
+| 26 | `logCategories` | `utf8` | outbound |  |
 
 **RfKitModel** (30 properties)
 
@@ -2441,6 +2462,15 @@ Notes on the keys:
   radio. A Core that does not choose its own radio always sends it empty;
   a window that does not know it ignores it, and clears its copy when the
   session ends.
+- **`radio`'s `logCategories`** (remote-window parity Task 22;
+  `supportBundleVersion` 1). Outbound, no WRITE, `utf8`: the ids of the
+  Core's logging categories that are on (the Support dialog's list, for
+  example `nereus.discovery,nereus.connection`), joined by commas in the
+  dialog's order, empty when none is. It follows every change, made at the
+  Core or with `support.setLogCategories`. A window's Support dialog shows
+  it on its logging checkboxes; the window's own logging is its own and
+  never follows it. A window that does not know it ignores it, and clears
+  its copy when the session ends.
 - **`transmit` at `transmitSettingsVersion` 2.** Each property carries its
   setter's type: `tunePower` (i64, the fixed tune power Setup uses, 0 to
   100 W, 0 to 99 on a Hermes Lite 2), `voxThresholdDb` (i64, -80 to 0 dB),
@@ -3270,6 +3300,7 @@ keeps:
 | `spots` | 500 | One spot the Core holds (its SpotModel: the station sources' spots, and FreeDV Reporter's once the Core runs it), `id` its index: `timeUtc` (string, ISO 8601 UTC), `frequencyHz` (number, whole Hz), `call`, `mode`, `source` (the source's label: `Cluster`, `RBN`, `POTA`, `PSK`, `FreeDV`), `spotter`, `comment` (strings), `band` (number, the Band as the catalogue's `bands` numbers it, 13 for GEN), `dxccColour` (string, `#rrggbb`, empty when the Core does not colour it) and `dxccPriority` (number: 4 a new DXCC entity, 3 a new band, 2 a new mode, 1 worked before, 0 not known or colouring off) |
 | `spotConsole:<source>` | 200 | One console line of a station source (`dxCluster`, `rbn`, `pota`, `pskReporter`, and with `stationFreedvVersion` 1 `freedvReporter`), `id` a rising number: `line` (string). A command typed from any device shows as `> <command>` |
 | `freedvStations` | 1000 | With `stationFreedvVersion` 1: one station FreeDV Reporter lists, as the Core hears it, `id` its FreeDV Reporter session id: the FreeDV Reporter dialog's 14 columns, `callsign`, `gridSquare` (strings), `distanceKm` and `headingDeg` (numbers, from the Core's own grid square; 0 with `headingCardinal` empty while either grid square is not known), `headingCardinal` (string, `N` to `NNW`), `version` (string), `frequencyHz` (number, whole Hz, 0 not known), `txMode` (string), `status` (string: `Active`, `TX` or `RX Only`), `userMessage` (string), `lastTxUtc` (string, ISO 8601 UTC, empty when never), `lastRxCallsign`, `lastRxMode` (strings), `snrDb` (number, -99 not known) and `lastUpdateUtc` (string, ISO 8601 UTC, empty when not known); then `transmitting` (boolean), `receivingFrom` (string: whom its latest receive report heard, the last callsign it named, while that report stands; empty once a frequency change clears it), `messageChangedAtMs` (number, the Core's clock in ms since the epoch when `userMessage` last changed, 0 never) and `lastRxUtc` (string, ISO 8601 UTC, when its latest receive report came, empty when none stands). The list starts again (a reset) each time the Core's connection to FreeDV Reporter connects or ends |
+| `coreLog` | 200 | With `supportBundleVersion` 1: one line of the Core's log as its log file has it (`[HH:mm:ss.zzz] INF: text`, addresses already shortened), `id` its number in the Core's log (rising): `line` (string). Keys, tokens and pairing codes are removed as the support bundle removes them. The Core reads its log every 250 ms while a peer follows the stream, and only then; its first backlog is the newest lines at the first subscribe |
 | `stationRadios` | 64 | With `stationRadiosVersion` 1: one radio the Core can see, the Core's radio first, `id` its MAC in upper case: `id` and `mac` (strings, the same), `name` (string, as the radio reports itself), `model` (number, the `hpsdrModel` the Core runs it as: its saved override, else its board's), `address` (string, its IP address, empty when not known), `protocol` (number, 1 or 2) and `inUse` (boolean, true for the Core's radio). The list is what the Core's last scan found, with the Core's radio; a radio stays listed after it drops off until a scan misses it |
 
 A peer asks with `records.subscribe {stream, backlog}` (section 9.1); the
@@ -3308,6 +3339,12 @@ lifetimes of the Core's Spot Hub settings, and drops them when the session
 ends. A reset of a console stream (each subscribe's backlog) replaces that
 console in the Spot Hub rather than adding to it, so a reconnect never
 repeats the backlog; a `spots` reset replaces only the Core's spots.
+
+A window subscribes to `coreLog` (backlog 200) only while its Support
+dialog or its Setup > Diagnostics > Logs page is showing, again on every
+reconnect while one is, and leaves it when the last one closes: the
+Core's debug categories can write thousands of lines a second. Refresh
+subscribes again, which reads the backlog again as a reset.
 
 ## 8. The settings proxy
 
@@ -3691,6 +3728,8 @@ refused.
 | `freedv.setMessage` | `text` utf8 | `stationFreedvVersion` | 1 | 11 |
 | `freedv.sendQsy` | `callsign` utf8, `frequencyHz` i64 | `stationFreedvVersion` | 1 | 11 |
 | `freedv.setHidden` | `on` bool | `stationFreedvVersion` | 1 | 11 |
+| `support.collect` | none | `supportBundleVersion` | 1 | 11 |
+| `support.setLogCategories` | `categories` utf8 | `supportBundleVersion` | 1 | 11 |
 | `nnr.setDiagnostics` | `sliceId` i64, `testMode` i64, `outputMode` i64 | `nnrVersion` | 1 | 5 |
 | `nnr.resetTuning` | `sliceId` i64 | `nnrVersion` | 1 | 5 |
 | `nnr.tryAgain` | `sliceId` i64 | `nnrVersion` | 1 | 11 |
@@ -3909,6 +3948,42 @@ These command groups need a sentence beyond the table:
   Reporter now." and "The Core could not read this request.". A window
   shows a refusal on its FreeDV tab and, while it is open, beside the
   FreeDV Reporter dialog.
+- **The Core's support bundle and logging** (remote-window parity Task 22
+  and the iPhone app plan's Task 25, `supportBundleVersion` 1).
+  `support.collect` (no arguments) asks for the Core's support bundle. The
+  Core reads what it needs and writes the bundle on a worker thread, so the
+  answer comes on a later turn, to the session that asked; one bundle is
+  made at a time. An accepted result carries the value `bundle` (utf8): a
+  ZIP archive in base64, at most 2 MiB before base64
+  (`SupportBundle::kMaxCoreBundleBytes`), holding `system-info.json` (the
+  Core's versions), `radio-info.json` (the Core's radio: model, firmware,
+  protocol, the MAC and IP address shortened to their last part),
+  `enabled-categories.txt`, `telemetry.json` (the newest telemetry the Core
+  measured and its age in ms, or a note that it has none), `settings.xml`
+  (the Core's settings with only reviewed nonsecret values), `nereusd.conf`
+  (when the Core runs from one, with only reviewed nonsecret values),
+  `collection-limits.json` (input caps and omissions), and
+  the Core's newest logs (`nereussdr.log`, then `nereussdr-1.log` and
+  `nereussdr-2.log`, each as much of its newest end as fits in the 2 MiB).
+  Credential-store and private-key files are never included. Unknown and
+  freeform settings values are redacted, as are unreviewed daemon settings.
+  Logs remove the Core's known live token and pairing code, multiline PEM
+  private keys, lines naming credentials, and recognizable key or code
+  patterns. An unknown secret in otherwise innocent text cannot be inferred
+  by a sanitizer. Each log contributes at most its newest 8 MiB of input;
+  settings and daemon config input are each capped at 1 MiB. ZIP decoding
+  also limits path names, entry count and expanded bytes.
+  `support.setLogCategories` (`categories` utf8, the ids of the
+  categories to turn on joined by commas; empty turns every one off) turns
+  on exactly those of the Core's logging categories and every other one
+  off, ignores an id the Core does not keep, saves the choice on the Core,
+  and `radio`'s `logCategories` follows. Neither reaches the radio, so
+  each is answered on and off the air; neither is on the several-devices
+  list (section 7.6). Refusals: "The Core is already making a support
+  bundle. Try again in a moment.", "The Core could not make its support
+  bundle." and "The Core could not read this request.". A window shows a
+  refusal in its Support dialog; a bundle it could not get is written
+  with the reason in `core/unavailable.txt`.
 - **The filter graph's curve** (parity Task 16, `dspInfoVersion` 1).
   `dsp.filterResponse` asks the Core for the high-resolution filter graph's
   curve for the receiver of `sliceId`, computed from that receiver's
@@ -5217,7 +5292,7 @@ same on every machine.
 | `settings-write` | A station-scoped write echoed with its origin; an operator-local write rejected; a removal sent as `settings.value` with no entry; on the receive-only Core, a DSP > Options TX key and a PA forward-power table key (`paCalibration/calPoint1`, version 6) taken off the air, an OC transmit pin (`oc/tx/20m/pin3`), an OC pin action (`oc/actions/pin1/action`) and TX Display Cal (`cal/txDisplayOffset`) taken off the air (version 8), and a transmit hardware key refused |
 | `unknown-verb` | `command.result` refused, "The Core does not know this request. Updating the Core may help."; the connection stays up |
 | `unknown-kind` | `session.end` "The Core could not read a message from this app.", `retryable` false, `code` `protocolError` |
-| `verbs-*` | Each verb in `commands`, grouped by the capability that gates it, invoked with its own arguments (for `setPgxlHardware`, one of its three optional ones) and, where it takes any, with one argument renamed (and nothing else changed: the same values and kinds); the two get different answers, so each shows the station read the arguments (a PureSignal action with arguments it does not take is refused "The Core could not read this PureSignal request." before the transmit gate is asked); `verbs-ps3` (which requires `psAlgorithmVersion` 3) invokes the PureSignal verbs whose answers do not depend on arming (`ps3.off`, `ps3.twoTone` off and `ps3.saveCorrection`), and `verbs-ps3-arming` (which also requires `transmitSettingsVersion` 7) invokes `ps3.twoTone` with `enabled` true, a key (section 18.6) refused on that receive-only Core "This Core is set to receive only." (`refusalCode` `stationReceiveOnly`), and the arming verbs (`ps3.single`, `ps3.automatic`, `ps3.applyCurrent`, `ps3.restoreCorrection`), taken and then failing on the static station, which has no PureSignal running ("PureSignal is unavailable until the radio is ready."); `nnr.applyModelSelection` names the revision `dspAssets` gave in the snapshot; `verbs-tgxl-control` (which requires `remoteTgxlControlVersion` 2) invokes the antenna, operate and bypass switches, and `verbs-tgxl-relays` (which requires `remoteTgxlControlVersion` 4) matches `scanTgxlLan`'s `devicesJson` as any text, since a real Tuner Genius on the test computer's network may answer, and its accepted `setTgxlAddress` is followed by the `tuner` delta carrying the saved address, then a blank host, saved and shown as blank, and the address again; `verbs-pgxl-control` (which requires `remotePgxlControlVersion` 4) does the same for `scanPgxlLan` and `setPgxlAddress` (the `amplifier` delta, and the blank host), and its `setPgxlOperate` is refused on the static station, which has no amp connected ("The Core is not connected to the Power Genius."); `verbs-rfkit` (which requires `remoteRfKitControlVersion` 2) connects, disconnects and switches the RF-Kit, and `verbs-rfkit-control` (which requires `remoteRfKitControlVersion` 4) invokes `setRfKitOperate`, `setRfKitAntenna` and `setRfKitTciMode`, refused on the static station with no amp admitted ("The Core is not connected to the RF-Kit amplifier."), and its accepted `setRfKitAddress` is followed by the `rfkit` delta carrying the saved address, then the blank host and the address again; `verbs-tx-antenna` (which requires `radioHardwareVersion` 6) invokes `setAlexTxAntenna` with a band's current antenna (taken, no delta) and with `band` renamed; `verbs-io-board` (which requires `radioHardwareVersion` 7) invokes `requestIoBoardI2c` and `setIoBoardOutput`, each refused on the static station, which has no radio connection to reach the I2C bus through ("The radio is not connected, so its I2C bus cannot be reached."), and each with one argument renamed; `verbs-dsp-info` (which requires `dspInfoVersion` 1) invokes `dsp.filterResponse` with `highResolution` false (taken, `stepHz` 0 and an empty `magnitudesDbJson`), with `highResolution` true (refused on the static station, which runs no receiver channel: "The Core's receiver for this slice is not running.") and with one argument renamed; `verbs-records` (which requires `recordStreamVersion` 1) subscribes to `spots` with a backlog (taken, then the `record.batch` reset, empty on the static station), to a stream the Core does not keep (refused "The Core does not keep that list."), and with one argument renamed, then unsubscribes right and wrong; `verbs-station-radios` (which requires `stationRadiosVersion` 1, on a station set up with `stationRadios`: its static radio and a second "Bench G2" in sight, signed in as a paired device, since the Core refuses these verbs to a pairing-token sign-in) subscribes to `stationRadios`, sets the second radio's model (taken, then the record's upsert), refuses forgetting the Core's radio, rescans, refuses a radio it cannot see and takes the second radio, each with one argument renamed where it takes any; `station-radio-confirm` chooses the second radio with another device listening, is asked (`confirm.request`, `change` "Radio"), proceeds, and the other device is told (`notice`); `verbs-spots` (which requires `recordStreamVersion` 1) invokes `spots.connect` for the DX cluster with no callsign saved (refused "Enter your callsign in Spot Hub first."), `spots.disconnect` for POTA (taken: it is not running), `spots.sendCommand` to a cluster that is not connected (refused "The DX cluster is not connected."), each with one argument renamed, and `spots.clearAll` (taken; no station source is ever dialled). A version's new verbs go in a fixture of their own, so an app at the older version still runs the older file |
+| `verbs-*` | Each verb in `commands`, grouped by the capability that gates it, invoked with its own arguments (for `setPgxlHardware`, one of its three optional ones) and, where it takes any, with one argument renamed (and nothing else changed: the same values and kinds); the two get different answers, so each shows the station read the arguments (a PureSignal action with arguments it does not take is refused "The Core could not read this PureSignal request." before the transmit gate is asked); `verbs-ps3` (which requires `psAlgorithmVersion` 3) invokes the PureSignal verbs whose answers do not depend on arming (`ps3.off`, `ps3.twoTone` off and `ps3.saveCorrection`), and `verbs-ps3-arming` (which also requires `transmitSettingsVersion` 7) invokes `ps3.twoTone` with `enabled` true, a key (section 18.6) refused on that receive-only Core "This Core is set to receive only." (`refusalCode` `stationReceiveOnly`), and the arming verbs (`ps3.single`, `ps3.automatic`, `ps3.applyCurrent`, `ps3.restoreCorrection`), taken and then failing on the static station, which has no PureSignal running ("PureSignal is unavailable until the radio is ready."); `nnr.applyModelSelection` names the revision `dspAssets` gave in the snapshot; `verbs-tgxl-control` (which requires `remoteTgxlControlVersion` 2) invokes the antenna, operate and bypass switches, and `verbs-tgxl-relays` (which requires `remoteTgxlControlVersion` 4) matches `scanTgxlLan`'s `devicesJson` as any text, since a real Tuner Genius on the test computer's network may answer, and its accepted `setTgxlAddress` is followed by the `tuner` delta carrying the saved address, then a blank host, saved and shown as blank, and the address again; `verbs-pgxl-control` (which requires `remotePgxlControlVersion` 4) does the same for `scanPgxlLan` and `setPgxlAddress` (the `amplifier` delta, and the blank host), and its `setPgxlOperate` is refused on the static station, which has no amp connected ("The Core is not connected to the Power Genius."); `verbs-rfkit` (which requires `remoteRfKitControlVersion` 2) connects, disconnects and switches the RF-Kit, and `verbs-rfkit-control` (which requires `remoteRfKitControlVersion` 4) invokes `setRfKitOperate`, `setRfKitAntenna` and `setRfKitTciMode`, refused on the static station with no amp admitted ("The Core is not connected to the RF-Kit amplifier."), and its accepted `setRfKitAddress` is followed by the `rfkit` delta carrying the saved address, then the blank host and the address again; `verbs-tx-antenna` (which requires `radioHardwareVersion` 6) invokes `setAlexTxAntenna` with a band's current antenna (taken, no delta) and with `band` renamed; `verbs-io-board` (which requires `radioHardwareVersion` 7) invokes `requestIoBoardI2c` and `setIoBoardOutput`, each refused on the static station, which has no radio connection to reach the I2C bus through ("The radio is not connected, so its I2C bus cannot be reached."), and each with one argument renamed; `verbs-dsp-info` (which requires `dspInfoVersion` 1) invokes `dsp.filterResponse` with `highResolution` false (taken, `stepHz` 0 and an empty `magnitudesDbJson`), with `highResolution` true (refused on the static station, which runs no receiver channel: "The Core's receiver for this slice is not running.") and with one argument renamed; `verbs-records` (which requires `recordStreamVersion` 1) subscribes to `spots` with a backlog (taken, then the `record.batch` reset, empty on the static station), to a stream the Core does not keep (refused "The Core does not keep that list."), and with one argument renamed, then unsubscribes right and wrong; `verbs-station-radios` (which requires `stationRadiosVersion` 1, on a station set up with `stationRadios`: its static radio and a second "Bench G2" in sight, signed in as a paired device, since the Core refuses these verbs to a pairing-token sign-in) subscribes to `stationRadios`, sets the second radio's model (taken, then the record's upsert), refuses forgetting the Core's radio, rescans, refuses a radio it cannot see and takes the second radio, each with one argument renamed where it takes any; `station-radio-confirm` chooses the second radio with another device listening, is asked (`confirm.request`, `change` "Radio"), proceeds, and the other device is told (`notice`); `verbs-spots` (which requires `recordStreamVersion` 1) invokes `spots.connect` for the DX cluster with no callsign saved (refused "Enter your callsign in Spot Hub first."), `spots.disconnect` for POTA (taken: it is not running), `spots.sendCommand` to a cluster that is not connected (refused "The DX cluster is not connected."), each with one argument renamed, and `spots.clearAll` (taken; no station source is ever dialled); `verbs-support` (which requires `supportBundleVersion` 1) invokes `support.collect` (taken, its `bundle` matched as any text) and with an argument it does not take (refused "The Core could not read this request."), `support.setLogCategories` with one category and then with none (each taken, then the `radio` delta carrying `logCategories`) and with its argument renamed, and subscribes to `coreLog` with a backlog of 0 (taken, then an empty reset) and unsubscribes. A version's new verbs go in a fixture of their own, so an app at the older version still runs the older file |
 
 `tst_link_conformance_session` also checks that every verb in the
 `commands` table is invoked both ways by some fixture, and that the two

@@ -22,6 +22,11 @@
 //               Claude Code. Extracted from src/main.cpp (settings load,
 //               one-shot migrations, LogManager restore, file-logging
 //               install) so nereusd can run the identical startup sequence.
+//   2026-09-27: R-R3-49 (remote-window parity Task 22): the message handler
+//               only offers each line to LogSink, whose writer thread writes
+//               the file and stderr, so no logging thread waits on the log.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #pragma once

@@ -39,6 +39,7 @@ DaemonConfig DaemonConfig::defaults()
 DaemonConfig DaemonConfig::fromFile(const QString& path, QString* errorOut)
 {
     DaemonConfig cfg = defaults();
+    cfg.sourcePath = path;
 
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
