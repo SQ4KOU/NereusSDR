@@ -344,6 +344,9 @@
 //               stationFreedvAvailable() and requestFreedv(). J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-27: iPhone app plan Task 29 (R-IOS-16): the path race and moving
+//               the session (link section 21). J.J. Boyd (KG4VCF), AI-
+//               assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QAbstractSocket>
@@ -369,6 +372,8 @@
 #include "core/session/StateMirror.h"
 #include "core/session/StationCapabilities.h"
 #include "core/session/SessionTransport.h"
+#include "core/session/PathRacer.h"
+#include "core/session/IceConfiguration.h"
 
 QT_BEGIN_NAMESPACE
 class QTimer;
@@ -381,6 +386,7 @@ class IceConfiguration;
 class RadioModel;
 class RendezvousDialer;
 class SessionTransport;
+class SwitchableTransport;
 class RemoteDevicesState;
 class SettingsProxy;
 class TransmitState;
@@ -399,7 +405,9 @@ struct StationConnectionAttempt {
     /// this computer). Direct: any other address. Relay: through the remote
     /// access service's relay (the control session across NAT, plan Task
     /// 28, records it).
-    enum class Path { ThisNetwork, Direct, Relay };
+    /// Service (iPhone app plan Task 29): through the internet service,
+    /// before the connection shows whether it went through the relay.
+    enum class Path { ThisNetwork, Direct, Relay, Service };
     enum class Outcome {
         Trying,
         Connected,
@@ -407,6 +415,11 @@ struct StationConnectionAttempt {
         TimedOut,     ///< it did not answer in time
         NotThisCore,  ///< another computer answered there
         Failed,       ///< it answered, and the attempt ended there
+        // iPhone app plan Task 29 (link section 21.1): the race.
+        AnotherPathFirst, ///< another path reached the Core first
+        RelayOff,         ///< the Core has the relay turned off
+        CoreTooOld,       ///< the Core does not answer through the service
+        MovedOn,          ///< connected, then the session moved to a better path
     };
     struct Try {
         Path path = Path::Direct;
@@ -605,6 +618,52 @@ public:
     /// (DataChannelTransport::mediaIceConfiguration()); none for a
     /// WebSocket session.
     std::optional<IceConfiguration> sessionIceConfiguration() const;
+
+    /// iPhone app plan Task 29 (R-IOS-16; link section 21): where the
+    /// paired Core can be reached through the internet service: the
+    /// servers (RendezvousClient::serverUrls), the Core's rendezvous id,
+    /// and what its last session said (relayAllowed; controlChannelVersion,
+    /// -1 when none is recorded). With a usable route, connectToStation()
+    /// for a paired Core races the service beside the Core's addresses.
+    struct ServiceRoute {
+        QList<QUrl> servers;
+        QString rendezvousId;
+        bool relayAllowed = true;
+        int controlChannelVersion = -1;
+    };
+    void setServiceRoute(const ServiceRoute& route) { m_serviceRoute = route; }
+    ServiceRoute serviceRoute() const { return m_serviceRoute; }
+    /// The paired Core's hello proves it: its identity key is the one
+    /// `expectedIdentity` fingerprints and its certificate binding verifies
+    /// for `certSha256`, the certificate that connection presented (link
+    /// section 3.4). `rendezvousId`, when given, receives the Core's
+    /// rendezvous id (the rendezvous document, section 4.2).
+    static bool helloProvesPairedCore(const SessionMessage& hello, const QByteArray& certSha256,
+                                      const QByteArray& expectedIdentity,
+                                      QString* rendezvousId = nullptr);
+    /// The rendezvous id of the Core this session signed in to (from its
+    /// identity key), empty for one without an identity. What a window
+    /// saves with the paired Core so it can reach it through the service.
+    QString stationRendezvousId() const { return m_stationRendezvousId; }
+    /// The rank of the path the session runs on (PathRacer::Rank), or -1
+    /// when it did not come from a race.
+    int pathRank() const { return m_pathRank; }
+    /// Moves of this session to a better path (link section 21.2).
+    int pathSwitches() const { return m_pathSwitches; }
+    /// Test seams: the upgrade schedule (PathRacer::kUpgradeRetryMs; the
+    /// last repeats), and the rendezvous rung's deadlines in a race.
+    void setUpgradeScheduleForTest(const QList<int>& delaysMs) { m_upgradeScheduleMs = delaysMs; }
+    void setServiceRungDeadlinesForTest(int dialMs, int answerMs)
+    {
+        m_serviceDialDeadlineMs = dialMs;
+        m_serviceAnswerDeadlineMs = answerMs;
+    }
+    /// Test seam (link section 21.2): moves the session to `next`, a
+    /// connection on which the Core's hello was already read, as an
+    /// upgrade does: a ticket on the session, this window's hello and
+    /// path.join on `next`, then the barrier. `rank` is pathRank() once
+    /// moved. False when the session cannot move now (canMovePathNow()).
+    bool moveSessionForTest(SessionTransport* next, int rank);
     /// Test seam: the service attempt's bound
     /// (RendezvousDialer::kDialDeadlineMs).
     void setServiceDialDeadlineMs(int ms) { m_serviceDialDeadlineMs = ms; }
@@ -700,7 +759,8 @@ public:
     /// its radio is offline. Used by the operator's Connect/Disconnect actions.
     bool isConnectionActive() const
     {
-        return m_sessionActive || isReconnectPending() || m_serviceDialing;
+        return m_sessionActive || isReconnectPending() || m_serviceDialing
+            || (m_racer && m_racer->running());
     }
 
     /// R-R3-38: the last end that will not fix itself (a takeover, a
@@ -929,11 +989,15 @@ public:
     QList<QByteArray> mirroredObjectKeys() const;
     QObject* mirroredObject(const QByteArray& objectKey) const;
 
+    /// iPhone app plan Task 29: the transport beneath the session, which a
+    /// move keeps (m_transport). transport() is the connection it carries
+    /// now.
+    SwitchableTransport* sessionTransport() const;
     /// The transport currently carrying this session, or null. Non-owning,
     /// for tests and diagnostics, matching StationServer's own subsystem
     /// accessors. A caller must not hold this across an event-loop turn:
     /// attachTransport() releases and deletes a superseded one.
-    SessionTransport* transport() const { return m_transport; }
+    SessionTransport* transport() const;
 
     /// True when this attach either owes no certificate comparison (the
     /// non-TLS transport seam, or an explicit unpinned bench run) or has
@@ -1220,6 +1284,11 @@ signals:
     /// that class.
     void reconnectScheduled(int attemptNumber, int delayMs);
 
+    /// iPhone app plan Task 29 (link section 21.2): the session moved to a
+    /// better path (pathRank()), without ending. A window with media moves
+    /// its media too (the media `replace`).
+    void pathChanged();
+
     /// iPhone app Task 18 (R-IOS-08): a token sign-in enrolled this
     /// computer's device key with the Core whose identity has this
     /// fingerprint (32 bytes). From now on this client trusts that Core by
@@ -1243,6 +1312,26 @@ private:
     /// and each retry).
     void dialThroughService();
     void stopServiceDial();
+    /// iPhone app plan Task 29 (link section 21.1): a paired Core's race,
+    /// its winner, its failure and its record.
+    void startRace();
+    void stopRace();
+    void adoptRaceWinner(const PathRacer::Ready& ready);
+    void onRaceFailed(const QString& reason);
+    void syncAttemptFromRace(const PathRacer* racer);
+    /// Link section 21.3: looking for a better path, and moving to it.
+    void scheduleUpgrade(bool advance);
+    void startUpgradeRace();
+    /// Task 29 fix wave (review Minor 7): a session through the service
+    /// takes its rank from the pair its connection settled on now (the
+    /// agent may nominate a relayed pair first and a direct one later).
+    void refreshPathRank();
+    void beginUpgrade(PathRacer::Ready ready);
+    void abandonUpgrade(const QString& why, bool reschedule);
+    void onPathTicket(const SessionMessage& result);
+    void onPathSwitched();
+    bool canMovePathNow() const;
+    PathRacer* newRacer(bool upgrade);
     void dialStation(const QUrl& url, const QString& token,
                      const QString& expectedFingerprint, bool allowUnpinned,
                      const QByteArray& stationIdentityFingerprint);
@@ -1543,6 +1632,27 @@ private:
     QString m_serviceStationId;
     QPointer<RendezvousDialer> m_serviceDialer;
     int m_serviceDialDeadlineMs = 0;
+    // iPhone app plan Task 29.
+    ServiceRoute m_serviceRoute;
+    int m_serviceAnswerDeadlineMs = 0;
+    bool m_raceMode = false;
+    QPointer<PathRacer> m_racer;
+    QPointer<PathRacer> m_upgradeRacer;
+    QUrl m_raceWinnerUrl;
+    int m_raceWinnerLine = -1;
+    QList<PathRacer::Line> m_raceLines;
+    int m_pathRank = -1;
+    int m_pathSwitches = 0;
+    QString m_stationRendezvousId;
+    QTimer* m_upgradeTimer = nullptr;
+    int m_upgradeAttempt = 0;
+    QList<int> m_upgradeScheduleMs;
+    std::optional<PathRacer::Ready> m_upgrade;
+    quint32 m_pathTicketCommandId = 0;
+    QTimer* m_upgradeDeadline = nullptr;
+    /// The ICE settings of the connection through the service this session
+    /// left, so its media keeps the service's STUN server (link 21.3).
+    std::optional<IceConfiguration> m_serviceIce;
     bool m_serviceDialing = false;
     int m_dialIndex = 0;
     QString m_planToken;

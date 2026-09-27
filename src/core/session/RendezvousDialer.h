@@ -41,6 +41,12 @@
 //               connection that ends after the Core's answer leaves the
 //               attempt to its deadline. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-27: iPhone app plan Task 29 (R-IOS-16): an attempt without the
+//               relay (an upgrade, a Core with the relay off), and a Core
+//               that never answers its introduction ends after
+//               kAnswerDeadlineMs in plain words (link section 21.1). J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/IceConfiguration.h"
@@ -73,6 +79,23 @@ public:
     /// kConnectDeadlineMs).
     static constexpr int kDialDeadlineMs = 10000 + 2 * IceConfiguration::kHostLookupTimeoutMs
                                            + IceConfiguration::kConnectDeadlineMs;
+    /// iPhone app plan Task 29 (link section 21.1): how long after its
+    /// introduce this computer waits for the Core's answer. A Core answers
+    /// once its STUN names are resolved (IceConfiguration::
+    /// kHostLookupTimeoutMs at most) and the service relays it at once, so
+    /// a Core silent this long does not answer introductions at all (one
+    /// older than controlChannelVersion). NereusSDR's own bound: the lookup
+    /// and 7 s for the service's round trips.
+    static constexpr int kAnswerDeadlineMs = IceConfiguration::kHostLookupTimeoutMs + 7000;
+    /// The words for that Core (link section 21.1).
+    static constexpr const char* kCoreTooOldReason =
+        "This Core can't be reached through the internet service. Updating the Core may help.";
+    /// Task 29 fix wave (review Minor 5): the words when the Core's last
+    /// session said it answers through the service (controlChannelVersion
+    /// 1), so it is slow or offline, not too old.
+    static constexpr const char* kCoreDidNotAnswerReason =
+        "The Core did not answer through the internet service. Check that it is on and "
+        "online.";
 
     explicit RendezvousDialer(QObject* parent = nullptr);
     ~RendezvousDialer() override;
@@ -89,6 +112,27 @@ public:
 
     /// Test seam: the attempt's bound.
     void setDialDeadlineMs(int ms) { m_deadlineMs = ms; }
+    /// Test seam: kAnswerDeadlineMs.
+    void setAnswerDeadlineMs(int ms) { m_answerDeadlineMs = ms; }
+    /// iPhone app plan Task 29: false gathers no relay candidate and
+    /// accepts none of the Core's (an upgrade, which looks for a path
+    /// without the relay; a Core with the relay turned off). Default true.
+    /// Before dial().
+    void setAllowRelay(bool allow) { m_allowRelay = allow; }
+    /// Task 29 fix wave (review Minor 5): the Core's last session declared
+    /// controlChannelVersion 1, so a Core that does not answer is not too
+    /// old. Before dial().
+    void setCoreAnswersIntroductions(bool answers) { m_coreAnswersIntroductions = answers; }
+    /// The attempt ended because the Core never answered its introduction
+    /// (kCoreTooOldReason, or kCoreDidNotAnswerReason for a Core known to
+    /// answer).
+    bool coreDidNotAnswer() const { return m_coreDidNotAnswer; }
+    /// It never answered and nothing says it can: probably an older Core.
+    bool coreTooOld() const { return m_coreDidNotAnswer && !m_coreAnswersIntroductions; }
+    /// The Core answered with relay credentials.
+    bool relayOffered() const { return m_relayOffered; }
+    /// The Core's answer arrived.
+    bool answered() const { return m_answered; }
 
     /// The ICE settings of the connection, the relay included once known.
     std::optional<IceConfiguration> iceConfiguration() const { return m_ice; }
@@ -115,6 +159,12 @@ private:
     QString m_stationId;
     std::optional<IceConfiguration> m_ice;
     int m_deadlineMs = kDialDeadlineMs;
+    int m_answerDeadlineMs = kAnswerDeadlineMs;
+    QTimer* m_answerDeadline = nullptr;
+    bool m_allowRelay = true;
+    bool m_coreDidNotAnswer = false;
+    bool m_coreAnswersIntroductions = false;
+    bool m_relayOffered = false;
     bool m_started = false;
     bool m_done = false;
     bool m_answered = false;

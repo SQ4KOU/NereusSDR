@@ -1,5 +1,7 @@
 // no-port-check: NereusSDR-original. R3 Core session presentation and actions.
 #include "RemoteConnectionController.h"
+#include "core/AppSettings.h"
+#include "core/session/RendezvousClient.h"
 #include "core/session/StationClient.h"
 #include "gui/OperatorReasonText.h"
 #include "gui/RemoteAudioStatus.h"
@@ -18,6 +20,33 @@
 #include <utility>
 
 namespace NereusSDR {
+
+namespace {
+
+// iPhone app plan Task 29 (R-IOS-16): the remote access service's servers
+// this computer uses (RendezvousClient::serverUrls entries): AppSettings
+// RemoteAccessServers, comma separated, or when unset the default a Core's
+// rendezvous_servers has (RendezvousClient::kDefaultServer).
+QStringList remoteAccessServerEntries()
+{
+    const QString saved = AppSettings::instance()
+                              .value(QStringLiteral("RemoteAccessServers"), QString())
+                              .toString()
+                              .trimmed();
+    if (saved.isEmpty()) {
+        return {QString::fromLatin1(RendezvousClient::kDefaultServer)};
+    }
+    QStringList entries;
+    for (const QString& entry : saved.split(QLatin1Char(','), Qt::SkipEmptyParts)) {
+        if (!entry.trimmed().isEmpty()) {
+            entries.append(entry.trimmed());
+        }
+    }
+    return entries;
+}
+
+} // namespace
+
 RemoteConnectionController::RemoteConnectionController(
     StationClient* client, RadioModel* model, RemoteStationOptions options, QObject* parent)
     : QObject(parent), m_client(client), m_model(model), m_options(std::move(options))
@@ -28,6 +57,18 @@ RemoteConnectionController::RemoteConnectionController(
         m_operatorDisconnected = false;
         m_pendingMediaRecoveryEpoch = 0;
         m_retryAttempt = 0;
+        // iPhone app plan Task 29: what this sign-in told of reaching the
+        // Core through the internet service, for this window's next
+        // connect (the saved Core records it too).
+        if (m_client) {
+            if (!m_client->stationRendezvousId().isEmpty()) {
+                m_options.rendezvousId = m_client->stationRendezvousId();
+            }
+            if (m_client->capabilities().relayAllowedEntry) {
+                m_options.relayAllowed = m_client->capabilities().relayAllowed ? 1 : 0;
+            }
+            m_options.controlChannelVersion = m_client->capabilities().controlChannelVersion;
+        }
         emit changed();
     });
     connect(client, &StationClient::sessionEnded, this, [this](const QString&) {
@@ -267,6 +308,18 @@ void RemoteConnectionController::connectToStation()
         cached.append(QUrl(address));
     }
     m_client->setCachedAddresses(cached);
+    // iPhone app plan Task 29 (R-IOS-16; link section 21.1): a paired Core
+    // is raced through the internet service beside its addresses, unless
+    // the operator turned that off for it.
+    StationClient::ServiceRoute route;
+    if (!m_options.identityFingerprint.isEmpty() && m_options.reachFromAnywhere
+        && !m_options.rendezvousId.isEmpty()) {
+        route.servers = RendezvousClient::serverUrls(remoteAccessServerEntries());
+        route.rendezvousId = m_options.rendezvousId;
+        route.relayAllowed = m_options.relayAllowed != 0;
+        route.controlChannelVersion = m_options.controlChannelVersion;
+    }
+    m_client->setServiceRoute(route);
     m_client->connectToStation(QUrl(m_options.url), m_options.token,
                                m_options.fingerprint, m_options.allowUnpinned,
                                m_options.identityFingerprint);

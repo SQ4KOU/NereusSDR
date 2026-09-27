@@ -37,6 +37,10 @@
 //                                    (R-IOS-16): the Core's recorded
 //                                    controlChannelVersion. AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-27: iPhone app plan Task 29 (R-IOS-16): the Core's rendezvous
+//               id, its relay setting as last told, and the operator's
+//               choice to reach it through the internet service. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -94,7 +98,9 @@ struct RemoteStationOptions {
     /// Why connecting through the remote access service is not offered for
     /// this Core, in plain words, or empty when it is: a Core this
     /// computer has not paired with (it is introduced by its identity key),
-    /// or one whose last session declared no control channel.
+    /// one whose last session declared no control channel, or (Task 29 fix
+    /// wave, review Minor 4) one whose service name (rendezvousId, learned
+    /// at a sign-in) this computer does not know yet.
     QString serviceConnectRefusal() const
     {
         if (identityFingerprint.isEmpty()) {
@@ -103,8 +109,24 @@ struct RemoteStationOptions {
         if (controlChannelVersion == 0) {
             return QString::fromLatin1(kUpdateCoreForServiceReason);
         }
+        if (rendezvousId.isEmpty()) {
+            return QString::fromLatin1(kSignInOnceForServiceReason);
+        }
         return QString();
     }
+    static constexpr const char* kSignInOnceForServiceReason =
+        "Connect to the Core once to reach it from anywhere.";
+
+    /// iPhone app plan Task 29 (R-IOS-16; the link document, section 21):
+    /// the Core's rendezvous id (learned from its hello at a sign-in), what
+    /// its last session said of the relay (`relayAllowed`: -1 not recorded,
+    /// 0 turned off, 1 allowed), and whether the operator lets this
+    /// computer reach it through the internet service beside its
+    /// addresses (on by default). With all three, a connect races the
+    /// service with the addresses.
+    QString rendezvousId;
+    int relayAllowed = -1;
+    bool reachFromAnywhere = true;
 
     /// True when this process should run as a remote client.
     bool isRemote() const { return !url.isEmpty(); }

@@ -138,6 +138,9 @@
 //   2026-09-25: iPhone app Task 71 (R-IOS-02):
 //               SessionEndCode::kSameDevice. J.J. Boyd (KG4VCF), with AI-
 //               assisted implementation via Anthropic Claude Code.
+//   2026-09-27: iPhone app plan Task 29 (R-IOS-16): path.join and
+//               path.switch. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 //   2026-09-25: iPhone app Task 74 (R-IOS-30): confirm.request and notice
 //               (SessionPrompt). J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
@@ -215,6 +218,14 @@ enum class SessionMessageKind {
     // -> peer, only to a peer that subscribed with records.subscribe
     // (recordStreamVersion 1). Upserts and removes for one stream.
     RecordBatch,
+    // iPhone app plan Task 29 (R-IOS-16; the link document, section 21.2):
+    // moving a session to another connection (controlSwitchVersion 1).
+    // path.join: device -> Core on the new connection, after its hello and
+    // in place of auth.request, carrying the ticket session.pathTicket
+    // gave. path.switch: both ways on the old connection, the last message
+    // each end sends there.
+    PathJoin,
+    PathSwitch,
 };
 
 /// The session protocol's own semantic version, advertised by BOTH ends in
@@ -289,6 +300,10 @@ inline constexpr qsizetype kMaxMediaControlBytes = 128 * 1024;
 // session the other has already given up on for long.
 inline constexpr int kStationHandshakeDeadlineMs = 30000;
 inline constexpr qsizetype kMaxStationTelemetryBytes = 16 * 1024;
+// iPhone app plan Task 29 (R-IOS-16): the longest ticket path.join may
+// carry. A Core's own tickets are 43 characters (32 bytes, base64url);
+// the bound keeps a hostile one from being compared at any length.
+inline constexpr qsizetype kMaxPathTicketChars = 128;
 
 // iPhone app Task 12 (R-IOS-08): the machine-readable end codes an
 // auth.result refusal or a session.end may carry in `code` (the link
@@ -612,6 +627,12 @@ struct SessionMessage {
     /// `device`; absent decodes as nullopt.
     std::optional<SessionDeviceBlock> device;
 
+    // ── iPhone app plan Task 29: PathJoin only ──────────────────────────
+
+    /// The ticket session.pathTicket gave (base64url of 32 bytes). A
+    /// secret like the token: NEVER logged.
+    QString pathTicket;
+
     // ── iPhone app Task 12: AuthResult and SessionEnd only ──────────────
 
     /// A SessionEndCode token, on the wire as `code` when not empty. A
@@ -817,6 +838,13 @@ public:
     /// Parity Task 19 (R-IOS-25): Core to peer, one stream's upserts and
     /// removes, or its reset.
     static SessionMessage recordBatch(const NereusSDR::RecordBatch& batch);
+    /// iPhone app plan Task 29 (R-IOS-16): device to Core on a new
+    /// connection, in place of auth.request (the link document, section
+    /// 21.2).
+    static SessionMessage pathJoin(const QString& ticket);
+    /// iPhone app plan Task 29: both ways on the old connection, the last
+    /// message an end sends there.
+    static SessionMessage pathSwitch();
 
     static SessionMessage settingsReject(const QString& key, bool hasRestoredValue,
                                          const QString& restoredValue,

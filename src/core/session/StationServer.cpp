@@ -576,12 +576,19 @@
 //               freedvStations stream (the newest 1000 stations) and its
 //               console as spotConsole:freedvReporter. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-09-27: iPhone app plan Task 29 (R-IOS-16): every session on a
+//               SwitchableTransport; session.pathTicket and path.join move a
+//               session to another connection; mediaReplaceVersion,
+//               controlSwitchVersion and relayAllowed; media after a move
+//               keeps the service's STUN server. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
 
 #include "core/TxSliceArbiter.h"
 #include "core/session/DataChannelTransport.h"
+#include "core/session/SwitchableTransport.h"
 
 #include "core/AppSettings.h"
 #include "core/BoardCapabilities.h"
@@ -2648,14 +2655,14 @@ QSslConfiguration StationServer::tlsConfiguration() const
 
 quint16 StationServer::peerAgreedMajor(SessionTransport* peer) const
 {
-    const auto it = m_peers.constFind(peer);
+    const auto it = m_peers.constFind(peerKey(peer));
     return it != m_peers.constEnd() ? it->agreedMajor : quint16(0);
 }
 
 bool StationServer::peerDeclares(SessionTransport* peer, const QByteArray& feature,
                                  int minVersion) const
 {
-    const auto it = m_peers.constFind(peer);
+    const auto it = m_peers.constFind(peerKey(peer));
     if (it == m_peers.constEnd() || !it->features.contains(feature)) {
         return false;
     }
@@ -2969,13 +2976,15 @@ void StationServer::acceptPairingMailbox(SessionTransport* transport)
 }
 
 void StationServer::acceptIntroducedTransport(SessionTransport* transport,
-                                              const QString& introductionId)
+                                              const QString& introductionId,
+                                              const QByteArray& deviceId)
 {
-    adoptTransport(transport, /*mailbox=*/false, /*introduced=*/true, introductionId);
+    adoptTransport(transport, /*mailbox=*/false, /*introduced=*/true, introductionId, deviceId);
 }
 
 void StationServer::adoptTransport(SessionTransport* transport, bool mailbox, bool introduced,
-                                   const QString& introductionId)
+                                   const QString& introductionId,
+                                   const QByteArray& introducedDeviceId)
 {
     if (transport == nullptr) {
         return;
@@ -3042,6 +3051,19 @@ void StationServer::adoptTransport(SessionTransport* transport, bool mailbox, bo
         }
     }
 
+    // iPhone app plan Task 29 (R-IOS-16; link section 21.2): every
+    // session runs on a SwitchableTransport, which can move it to another
+    // connection without ending it. A mailbox carries pairing alone and
+    // never moves.
+    if (!mailbox) {
+        auto* switchable = new SwitchableTransport(
+            transport, SwitchableTransport::Side::Station, kMaxIncomingMessageBytes, this);
+        if (m_pathSwitchDeadlineMs > 0) {
+            switchable->setSwitchDeadlineMsForTest(m_pathSwitchDeadlineMs);
+        }
+        transport = switchable;
+    }
+
     Peer peer;
     peer.transport = transport;
     peer.description = transport->peerDescription();
@@ -3081,6 +3103,7 @@ void StationServer::adoptTransport(SessionTransport* transport, bool mailbox, bo
     peer.helloReceived = mailbox;
     peer.introduced = introduced;
     peer.introductionId = introductionId;
+    peer.introducedDeviceId = introducedDeviceId;
 
     m_peers.insert(transport, peer);
 
@@ -3464,6 +3487,16 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
     case SessionMessageKind::AuthRequest:
         handleAuthRequest(transport, message);
         return;
+    // iPhone app plan Task 29 (link section 21.2): a new connection joins
+    // a session in place of signing in.
+    case SessionMessageKind::PathJoin:
+        handlePathJoin(transport, message);
+        return;
+    case SessionMessageKind::PathSwitch:
+        // The barrier is the SwitchableTransport's; one that reaches here
+        // came outside a move and changes nothing.
+        qCInfo(lcStation) << "Ignoring a path.switch outside a move from" << it->description;
+        return;
     // iPhone app Task 14: pairing runs in place of a sign-in.
     case SessionMessageKind::PairStart:
         handlePairStart(transport, message);
@@ -3503,6 +3536,13 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
 
     switch (message.kind) {
     case SessionMessageKind::CommandInvoke:
+        // iPhone app plan Task 29 (link section 21.2): the ticket that lets
+        // a new connection join this session; the Core's own, never the
+        // dispatcher's.
+        if (message.commandVerb == "session.pathTicket") {
+            handlePathTicket(transport, message);
+            break;
+        }
         // iPhone app Task 71 (ruling 10.1): session.leave came with
         // sessionHolderVersion 1; from any other peer it is a verb this
         // Core does not route, answered in the same words.
@@ -5972,7 +6012,7 @@ TxRefusal StationServer::txRefusalOf(const StationCapabilities& caps)
 
 TxDecision StationServer::txDecisionFor(SessionTransport* transport) const
 {
-    return m_txGate.decide(peerInfoFor(transport));
+    return m_txGate.decide(peerInfoFor(peerKey(transport)));
 }
 
 void StationServer::publishTxPermitted()
@@ -7025,8 +7065,22 @@ bool StationServer::mediaAvailable() const
 
 std::optional<IceConfiguration> StationServer::sessionIceConfiguration(quint64 epoch) const
 {
-    const auto* transport = qobject_cast<const DataChannelTransport*>(mediaSessionFor(epoch));
-    return transport != nullptr ? transport->mediaIceConfiguration() : std::nullopt;
+    SessionTransport* session = mediaSessionFor(epoch);
+    SessionTransport* carrying = session;
+    if (const auto* switchable = qobject_cast<const SwitchableTransport*>(session)) {
+        carrying = switchable->inner();
+    }
+    if (const auto* transport = qobject_cast<const DataChannelTransport*>(carrying)) {
+        return transport->mediaIceConfiguration();
+    }
+    // iPhone app plan Task 29 (link section 21.3): a session that came
+    // through the service and moved to a direct connection keeps the
+    // service's STUN server for its media, and no relay of its own.
+    const auto it = m_peers.constFind(session);
+    if (it != m_peers.cend() && it->serviceIce) {
+        return it->serviceIce->withoutOwnRelay();
+    }
+    return std::nullopt;
 }
 
 bool StationServer::mediaAvailable(quint64 epoch) const
@@ -7300,6 +7354,204 @@ int StationServer::stationFreedvVersion() const
         : 0;
 }
 
+int StationServer::mediaReplaceVersion() const
+{
+    // iPhone app plan Task 29 (R-IOS-16): the media `replace` operation,
+    // whenever media is on.
+    return m_mediaEnabled ? 1 : 0;
+}
+
+bool StationServer::mediaReplaceAvailable(quint64 epoch) const
+{
+    // Advertised in the minor-11 capabilities block only, as
+    // txDisplayAvailable() is.
+    const auto it = m_peers.constFind(mediaSessionFor(epoch));
+    return mediaAvailable(epoch) && it != m_peers.cend()
+        && it->agreedMinor >= kRadioIdentitySessionProtocolMinor && mediaReplaceVersion() >= 1;
+}
+
+int StationServer::controlSwitchVersion() const
+{
+    // iPhone app plan Task 29: every Core of this build moves a session.
+    return 1;
+}
+
+SessionTransport* StationServer::peerKey(SessionTransport* transport) const
+{
+    if (transport == nullptr) {
+        return nullptr;
+    }
+    if (m_peers.contains(transport)) {
+        return transport;
+    }
+    for (auto it = m_peers.cbegin(); it != m_peers.cend(); ++it) {
+        const auto* switchable = qobject_cast<const SwitchableTransport*>(it.key());
+        if (switchable != nullptr && switchable->inner() == transport) {
+            return it.key();
+        }
+    }
+    return nullptr;
+}
+
+bool StationServer::radioIdleForPathChange() const
+{
+    // Link section 21.2: not while the radio is keyed, nor while MOX's
+    // delay timers run on the way into or out of transmit.
+    const MoxController* mox = m_radioModel ? m_radioModel->moxController() : nullptr;
+    return mox == nullptr || mox->state() == MoxState::Rx;
+}
+
+void StationServer::handlePathTicket(SessionTransport* transport, const SessionMessage& message)
+{
+    const auto it = m_peers.find(transport);
+    if (it == m_peers.end()) {
+        return;
+    }
+    // A verb of the minor-11 block, for an admitted session.
+    if (it->agreedMinor < kRadioIdentitySessionProtocolMinor || it->sessionDeviceId.isEmpty()
+        || controlSwitchVersion() < 1) {
+        send(transport, SessionMessages::commandResult(
+            message.commandVerb, message.commandId, false,
+            QStringLiteral("The Core does not know this request. Updating the Core may help."),
+            {}));
+        return;
+    }
+    // Review Minor 12: no arguments, as session.leave takes none.
+    if (!message.arguments.isEmpty()) {
+        send(transport, SessionMessages::commandResult(
+            message.commandVerb, message.commandId, false,
+            QStringLiteral("The request to move this connection was not understood."), {}));
+        return;
+    }
+    if (!radioIdleForPathChange()) {
+        send(transport, SessionMessages::commandResult(
+            message.commandVerb, message.commandId, false,
+            QStringLiteral("Not while the radio is transmitting."), {}));
+        return;
+    }
+    // A new ticket replaces the session's last. 32 bytes from the
+    // operating system's generator (DeviceAuthenticator::newChallenge).
+    it->pathTicket = m_deviceAuth->newChallenge();
+    it->pathTicketDeadline = QDeadlineTimer(m_pathTicketLifetimeMs);
+    send(transport, SessionMessages::commandResult(
+        message.commandVerb, message.commandId, true, QString(), {},
+        {{0, "ticket", MirrorWireKind::Utf8, StationIdentity::toBase64Url(it->pathTicket)},
+         {1, "expiresInMs", MirrorWireKind::Int64, qlonglong(m_pathTicketLifetimeMs)}}));
+}
+
+void StationServer::handlePathJoin(SessionTransport* transport, const SessionMessage& message)
+{
+    auto joining = m_peers.find(transport);
+    if (joining == m_peers.end()) {
+        return;
+    }
+    const QString refusal = QStringLiteral("The Core did not move the connection here.");
+    const auto refuse = [this, transport, &refusal](const char* why) {
+        // Never the ticket: only why, for the log.
+        qCInfo(lcStation) << "Refused a connection joining a session:" << why;
+        dropPeer(transport, refusal, true, /*retryable=*/false,
+                 QString::fromLatin1(SessionEndCode::kProtocolError));
+    };
+    if (joining->authenticated || !joining->helloReceived || joining->agreedMajor == 0
+        || joining->mailboxPairing || joining->pairing) {
+        refuse("out of turn");
+        return;
+    }
+    bool ticketOk = false;
+    const QByteArray ticket = StationIdentity::fromBase64Url(message.pathTicket, &ticketOk);
+    // The session the ticket names, compared in constant time across every
+    // live ticket, and consumed whether the join is let in or not.
+    SessionTransport* sessionKey = nullptr;
+    for (auto it = m_peers.begin(); it != m_peers.end(); ++it) {
+        if (it->pathTicket.isEmpty()) {
+            continue;
+        }
+        const bool expired = it->pathTicketDeadline.hasExpired();
+        bool same = ticketOk && ticket.size() == it->pathTicket.size();
+        if (same) {
+            // Constant time over the ticket's bytes, as TokenStore compares
+            // the token.
+            quint8 difference = 0;
+            for (qsizetype i = 0; i < ticket.size(); ++i) {
+                difference |= static_cast<quint8>(ticket.at(i) ^ it->pathTicket.at(i));
+            }
+            same = difference == 0;
+        }
+        if (expired) {
+            it->pathTicket.clear();
+        }
+        if (same && !expired) {
+            sessionKey = it.key();
+            it->pathTicket.clear();
+        }
+    }
+    joining = m_peers.find(transport);
+    auto session = m_peers.find(sessionKey);
+    if (sessionKey == nullptr || session == m_peers.end() || sessionKey == transport) {
+        refuse("no live ticket");
+        return;
+    }
+    if (!session->authenticated || session->sessionDeviceId.isEmpty()
+        || !session->snapshotComplete) {
+        refuse("that connection is not signed in");
+        return;
+    }
+    if (joining->agreedMajor != session->agreedMajor
+        || joining->agreedMinor != session->agreedMinor) {
+        refuse("another link version");
+        return;
+    }
+    // Link section 21.2: a connection through the service joins only a
+    // session signed in with a paired device's own key, and only the
+    // introduced device's.
+    // Review Minor 15: an introduced connection with no device id named
+    // (never in production: the rendezvous verified one) joins nothing.
+    if (joining->introduced
+        && (session->deviceId.isEmpty() || session->signedInWithToken
+            || joining->introducedDeviceId.isEmpty()
+            || joining->introducedDeviceId != session->deviceId)) {
+        refuse("not the introduced device's connection");
+        return;
+    }
+    if (!radioIdleForPathChange()) {
+        refuse("the radio is transmitting");
+        return;
+    }
+    auto* joiningSwitchable = qobject_cast<SwitchableTransport*>(transport);
+    auto* sessionSwitchable = qobject_cast<SwitchableTransport*>(sessionKey);
+    if (joiningSwitchable == nullptr || sessionSwitchable == nullptr
+        || sessionSwitchable->switching()) {
+        refuse("that connection cannot move now");
+        return;
+    }
+    // Remember the service's ICE settings before the connection that
+    // carries them goes (link section 21.3).
+    if (const auto* channel = qobject_cast<const DataChannelTransport*>(sessionSwitchable->inner())) {
+        session->serviceIce = channel->iceConfiguration();
+    }
+    // The joining connection stops being a peer of its own: its connect
+    // deadline (the wrapper's child) goes with the wrapper, and the
+    // connection itself becomes the session's.
+    SessionTransport* connection = joiningSwitchable->takeInner();
+    disconnect(joiningSwitchable, nullptr, this, nullptr);
+    m_peers.erase(joining);
+    joiningSwitchable->deleteLater();
+    if (connection == nullptr || !sessionSwitchable->beginStationSwitch(connection)) {
+        if (connection != nullptr) {
+            connection->closeLink(refusal);
+            connection->deleteLater();
+        }
+        qCWarning(lcStation) << "A session could not move to its new connection";
+        return;
+    }
+    session = m_peers.find(sessionKey);
+    if (session != m_peers.end()) {
+        session->description = sessionKey->peerDescription();
+    }
+    ++m_sessionsMoved;
+    qCInfo(lcStation) << "Moved a session to" << sessionKey->peerDescription();
+}
+
 int StationServer::controlChannelVersion() const
 {
     // R-IOS-16 (Task 28 fix wave, Important 5): a Core answers an
@@ -7473,7 +7725,7 @@ int StationServer::transmitSettingsVersion() const
 bool StationServer::pureSignalArmingOffered(SessionTransport* transport) const
 {
     // R-R3-49 (parity Task 7): offered transmitSettingsVersion 7.
-    return transmitSettingsOffered(transport) && transmitSettingsVersion() >= 7;
+    return transmitSettingsOffered(peerKey(transport)) && transmitSettingsVersion() >= 7;
 }
 
 int StationServer::tgxlControlVersion() const
@@ -7655,6 +7907,11 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             // R-IOS-26 / R-R3-49 (iPhone plan Task 22, parity Task 20): the
             // Core's FreeDV Reporter, appended after txMonitorAudioVersion.
             caps.stationFreedvVersion = stationFreedvVersion();
+            // iPhone app plan Task 29 (R-IOS-16): moving media and the
+            // session, and the relay's permission.
+            caps.mediaReplaceVersion = media ? mediaReplaceVersion() : 0;
+            caps.controlSwitchVersion = controlSwitchVersion();
+            caps.relayAllowed = m_relayAllowed;
             // iPhone app Task 71 (ruling 10.1): several devices at once, for
             // a peer that declared sessionHolder with deviceAuth; any other
             // peer is sent no entry, so its capabilities are today's.

@@ -675,6 +675,12 @@ private slots:
         QCOMPARE(options.serviceConnectRefusal(),
                  QStringLiteral("Pair with the Core to reach it from anywhere."));
         options.identityFingerprint = someIdentity();
+        // Task 29 fix wave (Minor 4): not before the Core's service name is
+        // known from a sign-in.
+        QCOMPARE(options.serviceConnectRefusal(),
+                 QStringLiteral("Connect to the Core once to reach it from anywhere."));
+        QVERIFY(NereusSDR::OperatorWording::isPlain(options.serviceConnectRefusal()));
+        options.rendezvousId = QStringLiteral("abcdefghijklmnopqrstuvwxyz");
         QVERIFY(options.serviceConnectRefusal().isEmpty());  // nothing recorded yet
         options.controlChannelVersion = 1;
         QVERIFY(options.serviceConnectRefusal().isEmpty());
@@ -682,6 +688,62 @@ private slots:
         QCOMPARE(options.serviceConnectRefusal(),
                  QStringLiteral("Update the Core to reach it from anywhere."));
         QVERIFY(NereusSDR::OperatorWording::isPlain(options.serviceConnectRefusal()));
+    }
+
+    // iPhone app plan Task 29 (R-IOS-16): the Core's rendezvous id and
+    // relay setting are kept with it once a sign-in told them, the
+    // operator's choice to reach it through the service only when it is
+    // off; each round-trips and a bad value is refused.
+    void theServiceRouteIsRecordedWithTheCore()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("settings.xml"));
+        AppSettings settings(path);
+        CoreTargetStore store(settings);
+        QVERIFY(store.load());
+        SavedCoreTarget paired = makeTarget(QStringLiteral("paired"), QString());
+        paired.connection.fingerprint.clear();
+        paired.connection.identityFingerprint = someIdentity();
+        QVERIFY(store.upsert(paired));
+        QVERIFY(store.target(QStringLiteral("paired"))->connection.rendezvousId.isEmpty());
+        QCOMPARE(store.target(QStringLiteral("paired"))->connection.relayAllowed, -1);
+        QVERIFY(store.target(QStringLiteral("paired"))->connection.reachFromAnywhere);
+        const QString record = settings.value(QLatin1String(kTargetKey)).toString();
+        QVERIFY(!record.contains(QLatin1String("rendezvousId")));
+        QVERIFY(!record.contains(QLatin1String("relayAllowed")));
+        QVERIFY(!record.contains(QLatin1String("reachFromAnywhere")));
+
+        const QString id = QStringLiteral("abcdefghijklmnopqrstuvwxyz");
+        QVERIFY(store.rememberServiceRoute(QStringLiteral("paired"), id, 0));
+        // Not a rendezvous id: ignored, the recorded one kept.
+        QVERIFY(store.rememberServiceRoute(QStringLiteral("paired"), QStringLiteral("nope"), -1));
+        SavedCoreTarget off = *store.target(QStringLiteral("paired"));
+        off.connection.reachFromAnywhere = false;
+        QVERIFY(store.upsert(off));
+        AppSettings reloadedSettings(path);
+        reloadedSettings.load();
+        CoreTargetStore reloaded(reloadedSettings);
+        QVERIFY(reloaded.load());
+        const RemoteStationOptions options = reloaded.target(QStringLiteral("paired"))->connection;
+        QCOMPARE(options.rendezvousId, id);
+        QCOMPARE(options.relayAllowed, 0);
+        QVERIFY(!options.reachFromAnywhere);
+        QVERIFY(!store.rememberServiceRoute(QStringLiteral("nobody"), id, 1));
+
+        QString error;
+        for (const auto& [key, bad] :
+             {std::pair{QStringLiteral("rendezvousId"), QJsonValue(QStringLiteral("short"))},
+              std::pair{QStringLiteral("rendezvousId"), QJsonValue(7)},
+              std::pair{QStringLiteral("relayAllowed"), QJsonValue(1)},
+              std::pair{QStringLiteral("reachFromAnywhere"), QJsonValue(QStringLiteral("no"))}}) {
+            QJsonObject badRecord = jsonTarget(QStringLiteral("one"),
+                                                StationIdentity::toBase64Url(someIdentity()));
+            badRecord.insert(key, bad);
+            settings.setValue(QLatin1String(kTargetKey),
+                              documentFor(QJsonArray{badRecord}, QStringLiteral("one")));
+            QVERIFY2(!store.load(&error), qPrintable(key));
+        }
     }
 };
 

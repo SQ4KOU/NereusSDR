@@ -660,6 +660,23 @@ void GuiConnectionController::rememberAuthenticatedRadio()
         target = m_store.target(target->id);
         if (!target) { return; }
     }
+    // iPhone app plan Task 29 (R-IOS-16; link section 21.1): the Core's
+    // rendezvous id and whether it allows the relay, so the next connect
+    // races the internet service beside its addresses.
+    if (!target->connection.identityFingerprint.isEmpty()
+        && (target->connection.rendezvousId != client->stationRendezvousId()
+            || (caps.relayAllowedEntry
+                && target->connection.relayAllowed != (caps.relayAllowed ? 1 : 0)))) {
+        QString error;
+        if (!m_store.rememberServiceRoute(target->id, client->stationRendezvousId(),
+                                          caps.relayAllowedEntry ? (caps.relayAllowed ? 1 : 0)
+                                                                 : -1,
+                                          &error)) {
+            m_selector->setNotice(error);
+        }
+        target = m_store.target(target->id);
+        if (!target) { return; }
+    }
     if (!caps.radioConnected || caps.macAddress.isEmpty()) { return; }
     if (target->lastRadioName == caps.stationName && target->lastRadioMac == caps.macAddress) { return; }
     target->lastRadioName = caps.stationName;

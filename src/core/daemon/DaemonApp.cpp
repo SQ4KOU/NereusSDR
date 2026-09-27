@@ -107,6 +107,9 @@
 //               value only; a rate already saved for the radio wins at start
 //               (applyConfigToSettings). J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-27: iPhone app plan Task 29 (R-IOS-16): the server told
+//               nereusd.conf's `relay` (relayAllowed). J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/daemon/DaemonApp.h"
@@ -805,6 +808,9 @@ void DaemonApp::startRendezvous(const DaemonConfig& cfg)
     if (!m_stationServer) {
         return;
     }
+    // iPhone app plan Task 29 (R-IOS-16): devices are told whether this
+    // Core allows the relay (capability relayAllowed, link section 21.1).
+    m_stationServer->setRelayAllowed(cfg.relayAllowed);
     const QList<QUrl> servers = RendezvousClient::serverUrls(cfg.rendezvousServers);
     if (servers.isEmpty()) {
         qCInfo(lcApp) << "DaemonApp: no remote access service configured "

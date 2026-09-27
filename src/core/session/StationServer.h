@@ -406,6 +406,10 @@
 //   2026-09-27: iPhone plan Task 22 / parity Task 20 (R-IOS-26):
 //               stationFreedvVersion(). J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-27: iPhone app plan Task 29 (R-IOS-16): SwitchableTransport
+//               under every session, session.pathTicket and path.join, the
+//               Task 29 capabilities. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/IceConfiguration.h"
@@ -418,6 +422,7 @@
 #include <QPair>
 #include <QObject>
 #include <QPointer>
+#include <QDeadlineTimer>
 #include <QSslConfiguration>
 #include <QString>
 
@@ -740,7 +745,12 @@ public:
     /// service can replay an introduction (the rendezvous document's
     /// "not device authentication"). `introductionId` is the service's id
     /// for it, handed to the sign-in limits.
-    void acceptIntroducedTransport(SessionTransport* transport, const QString& introductionId);
+    /// iPhone app plan Task 29: `deviceId`, when given, is the paired
+    /// device the service introduced (RendezvousIntroduction::deviceId),
+    /// the only device whose session such a connection may join (link
+    /// section 21.2).
+    void acceptIntroducedTransport(SessionTransport* transport, const QString& introductionId,
+                                   const QByteArray& deviceId = QByteArray());
 
     /// Parent design section 4.5's EFFECTIVE slice limit: what this daemon
     /// can sustain, which on the Pi 4 floor may be fewer than the radio
@@ -1057,6 +1067,32 @@ public:
     // console and state in spotSources, and the freedv.* verbs; 0
     // otherwise.
     int stationFreedvVersion() const;
+    // iPhone app plan Task 29 (R-IOS-16; link section 21): mediaReplaceVersion
+    // 1 whenever media is on (the media `replace` operation);
+    // controlSwitchVersion 1 always (session.pathTicket, path.join and
+    // moving a session to another connection).
+    int mediaReplaceVersion() const;
+    int controlSwitchVersion() const;
+    /// iPhone app plan Task 29: the session with media `epoch` agreed
+    /// minor 11 and was told mediaReplaceVersion 1, so it may send
+    /// `replace`.
+    bool mediaReplaceAvailable(quint64 epoch) const;
+    /// iPhone app plan Task 29: whether this Core allows the relay
+    /// (nereusd.conf `relay`), told to every device as `relayAllowed`.
+    /// Default true, the setting's default; DaemonApp sets it.
+    void setRelayAllowed(bool allowed) { m_relayAllowed = allowed; }
+    bool relayAllowed() const { return m_relayAllowed; }
+    /// iPhone app plan Task 29 (link section 21.2): how long a ticket from
+    /// session.pathTicket stays good.
+    static constexpr int kPathTicketLifetimeMs = 10000;
+    /// Test seam: the ticket lifetime in use.
+    void setPathTicketLifetimeMsForTest(int ms) { m_pathTicketLifetimeMs = ms; }
+    /// Test seam: the station's move deadline for connections accepted from
+    /// now on (SwitchableTransport::kSwitchDeadlineMs).
+    void setPathSwitchDeadlineMsForTest(int ms) { m_pathSwitchDeadlineMs = ms; }
+    /// iPhone app plan Task 29: sessions moved to another connection since
+    /// this server started (for a test and the log).
+    int sessionsMoved() const { return m_sessionsMoved; }
     /// Parity Task 21: the Core's radios (nereusd's DaemonApp owns it).
     void setStationRadios(StationRadios* radios);
     /// For a test: the stream by name (spots, spotConsole:<source>), or
@@ -1256,6 +1292,18 @@ private:
         /// The service's id for that introduction (DeviceAuthRequest's
         /// `introduction`, which the sign-in limits key on).
         QString introductionId;
+        /// iPhone app plan Task 29: the paired device the service
+        /// introduced (its id, as deviceId below), or empty.
+        QByteArray introducedDeviceId;
+        /// iPhone app plan Task 29 (link section 21.2): this session's
+        /// ticket from session.pathTicket (32 bytes; never logged) and
+        /// when it stops being good. Empty with none.
+        QByteArray pathTicket;
+        QDeadlineTimer pathTicketDeadline;
+        /// iPhone app plan Task 29 (link section 21.3): the ICE settings
+        /// of the connection through the service this session left, so its
+        /// media keeps the service's STUN server after a move.
+        std::optional<IceConfiguration> serviceIce;
         bool authenticated = false;
         quint16 agreedMinor = 0;
         /// iPhone app Task 4: the major the peer's hello chose (0 until
@@ -1378,7 +1426,19 @@ private:
     /// acceptIntroducedTransport(): `mailbox` skips the hello and admits
     /// pair.* only; `introduced` marks a connection the service introduced.
     void adoptTransport(SessionTransport* transport, bool mailbox,
-                        bool introduced = false, const QString& introductionId = QString());
+                        bool introduced = false, const QString& introductionId = QString(),
+                        const QByteArray& introducedDeviceId = QByteArray());
+    /// iPhone app plan Task 29 (link section 21.2): session.pathTicket from
+    /// an admitted session, and path.join on a new connection.
+    void handlePathTicket(SessionTransport* transport, const SessionMessage& message);
+    void handlePathJoin(SessionTransport* transport, const SessionMessage& message);
+    /// The radio is idle (MoxController in Rx: not keyed, no MOX delay
+    /// timer running), so a session or its media may move.
+    bool radioIdleForPathChange() const;
+    /// The key of `transport`'s entry in m_peers: itself, or the session
+    /// transport that carries it (a caller holding the connection it
+    /// handed to acceptTransport()). Null when neither is known.
+    SessionTransport* peerKey(SessionTransport* transport) const;
     /// iPhone app Task 71: after an accepted sign-in, asks the registry
     /// who is let in (ruling 4.4) and ends the device's own older
     /// connection (sameDevice), admits, or turns a full Core's newcomer
@@ -1987,6 +2047,11 @@ private:
     QTimer* m_deltaFlushTimer = nullptr;
 
     int m_authDeadlineMs = kDefaultAuthDeadlineMs;
+    // iPhone app plan Task 29.
+    bool m_relayAllowed = true;
+    int m_pathTicketLifetimeMs = kPathTicketLifetimeMs;
+    int m_pathSwitchDeadlineMs = 0;
+    int m_sessionsMoved = 0;
     int m_heartbeatIntervalMs = kDefaultHeartbeatIntervalMs;
     bool m_tokenSessionsMayChangeRadioForTest = false;
     int m_maxMissedPongs = kDefaultMaxMissedPongs;

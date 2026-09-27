@@ -64,6 +64,12 @@ public:
     /// (RemoteStationOptions::serviceConnectRefusal()).
     bool rememberControlChannelVersion(const QString& id, int version,
                                        QString* error = nullptr);
+    /// iPhone app plan Task 29 (R-IOS-16): the saved Core `id`'s rendezvous
+    /// id (from its hello; ignored when not one) and its relay setting as
+    /// its last session told it (-1 leaves the recorded one), which a
+    /// connect uses to race the internet service beside the addresses.
+    bool rememberServiceRoute(const QString& id, const QString& rendezvousId, int relayAllowed,
+                              QString* error = nullptr);
     bool select(const QString& id, QString* error = nullptr);
 
     static QString createId();

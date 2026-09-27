@@ -98,6 +98,10 @@
 //   2026-09-27 - R-IOS-26 / R-R3-49 (iPhone plan Task 22, parity Task 20):
 //                stationFreedvVersion, after txMonitorAudioVersion. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-27 - R-IOS-16 (iPhone app plan Task 29): mediaReplaceVersion,
+//                controlSwitchVersion and relayAllowed, after
+//                stationFreedvVersion. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationCapabilities.h"
@@ -232,6 +236,11 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
         // R-IOS-26 / R-R3-49 (iPhone plan Task 22, parity Task 20): the
         // Core's FreeDV Reporter.
         updates.append(intEntry("stationFreedvVersion", stationFreedvVersion));
+        // iPhone app plan Task 29 (R-IOS-16): moving media and the session
+        // to a better path, and whether the Core allows the relay.
+        updates.append(intEntry("mediaReplaceVersion", mediaReplaceVersion));
+        updates.append(intEntry("controlSwitchVersion", controlSwitchVersion));
+        updates.append(boolEntry("relayAllowed", relayAllowed));
         // iPhone app Task 71: several devices at once, last, and only for
         // a peer that declared the feature.
         if (sessionHolderEntry) {
@@ -446,6 +455,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                    || u.name == "controlChannelVersion"
                    || u.name == "txMonitorAudioVersion"
                    || u.name == "stationFreedvVersion"
+                   || u.name == "mediaReplaceVersion"
+                   || u.name == "controlSwitchVersion"
                    || u.name == "sessionHolderVersion"
                    || u.name == "remoteTxVersion"
                    || u.name == "txStateVersion") {
@@ -503,10 +514,22 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                     caps.txMonitorAudioVersion = version;
                 } else if (u.name == "stationFreedvVersion") {
                     caps.stationFreedvVersion = version;
+                } else if (u.name == "mediaReplaceVersion") {
+                    caps.mediaReplaceVersion = version;
+                } else if (u.name == "controlSwitchVersion") {
+                    caps.controlSwitchVersion = version;
                 } else {
                     caps.bandSelectVersion = version;
                 }
             }
+        } else if (u.name == "relayAllowed") {
+            // iPhone app plan Task 29: anything but a bool reads as allowed,
+            // the setting's default.
+            caps.radioIdentityEntries = true;
+            caps.relayAllowedEntry = true;
+            caps.relayAllowed = !(u.kind == MirrorWireKind::Bool
+                                  && u.value.typeId() == QMetaType::Bool
+                                  && !u.value.toBool());
         } else if (u.name == "txRefusalCode" || u.name == "txRefusalReason"
                    || u.name == "txRefusalFix") {
             // Desktop remote transmit: text only; anything else reads empty.

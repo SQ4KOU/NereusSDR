@@ -7549,7 +7549,9 @@ target_compile_definitions(tst_data_channel_transport PRIVATE
 # sandbox: it reaches a service in another network namespace, which a
 # test-mode RendezvousClient refuses to contact.
 add_executable(nereus_rendezvous_peer EXCLUDE_FROM_ALL tools/nereus_rendezvous_peer.cpp)
-target_link_libraries(nereus_rendezvous_peer PRIVATE NereusCore)
+# Task 29 fix wave: the desktop's own media controller (session
+# --follow-media-ms) lives in the GUI library.
+target_link_libraries(nereus_rendezvous_peer PRIVATE NereusSDRLib)
 set_target_properties(nereus_rendezvous_peer PROPERTIES AUTOMOC ON)
 # iPhone app plan Task 29 Step 1 (R-IOS-16): the relay floor measurement's
 # probe (tests/scripts/floor-measurement.sh), with the prototypes of options
@@ -8813,6 +8815,35 @@ nereus_add_test(tst_remote_hl2_io
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)
 target_compile_definitions(tst_remote_hl2_io PRIVATE NEREUS_BUILD_TESTS)
+
+# iPhone app plan Task 29 (R-IOS-16, R-IOS-08; the link document, section
+# 21.2): a session moves to another connection make-before-break, beneath
+# the session, with the path.switch barrier, no sign-in and no snapshot; a
+# bad or spent ticket ends only the new connection; nothing moves while the
+# Core is on the air. In-process links only.
+nereus_add_test(tst_session_transport_switch
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+# iPhone app plan Task 29 (R-IOS-16; the remote media control document,
+# "Replacing the media connection"): media moves to a new peer with no gap
+# and no repeat: the Core sends on both peers across the overlap and hands
+# over, the window merges the two paths (DualPathAudio), and end to end
+# over the real DTLS/SRTP session. The end-to-end case measures real-time
+# audio, so the test is REALTIME.
+nereus_add_test(tst_media_replace fakes/LoopbackTransport.cpp REALTIME)
+# iPhone app plan Task 29 (R-IOS-16, R-IOS-08; the link document, section
+# 21.1): the path race. Rungs of its own; then a window and a Core on this
+# computer with the remote access service (the real Python service and the
+# fake STUN/TURN server, loopback only): the direct path wins when open,
+# the service's when not, the session moves to the address once it opens,
+# the relay a Core turned off is not raced, and an older Core is told in
+# plain words.
+nereus_add_test(tst_path_racer fakes/LoopbackTransport.cpp EXTRA_LABELS session)
+target_compile_definitions(tst_path_racer PRIVATE
+    NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+if(TEST tst_path_racer)
+    set_tests_properties(tst_path_racer PROPERTIES TIMEOUT 400)
+endif()
 
 # --------------------------------------------------------------------------
 # Aggregate "all_tests" target  (2026-05-26 KG4VCF dev-loop fix, from PR #291)

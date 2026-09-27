@@ -11,6 +11,10 @@
 //   2026-09-26: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-27: iPhone app plan Task 29 fix wave (R-IOS-16): relay.grant
+//               (section 12.1), from the service to a station and a client.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/RendezvousWire.h"
@@ -62,6 +66,7 @@ constexpr KindName kKindNames[] = {
     {Kind::MailboxClose, "mailbox.close"},
     {Kind::MailboxClosed, "mailbox.closed"},
     {Kind::Error, "error"},
+    {Kind::RelayGrant, "relay.grant"},
 };
 
 Kind kindFromName(const QString& name)
@@ -92,11 +97,13 @@ bool directionCarries(Direction direction, Kind kind)
                || kind == Kind::Candidate || kind == Kind::IntroductionEnd
                || kind == Kind::Nameplate || kind == Kind::NameplateReleased
                || kind == Kind::MailboxOpened || kind == Kind::Mailbox
-               || kind == Kind::MailboxClosed || kind == Kind::Error;
+               || kind == Kind::MailboxClosed || kind == Kind::Error
+               || kind == Kind::RelayGrant;
     case Direction::ServiceToClient:
         return kind == Kind::Hello || kind == Kind::Answer || kind == Kind::Candidate
                || kind == Kind::IntroductionEnd || kind == Kind::MailboxOpened
-               || kind == Kind::Mailbox || kind == Kind::MailboxClosed || kind == Kind::Error;
+               || kind == Kind::Mailbox || kind == Kind::MailboxClosed || kind == Kind::Error
+               || kind == Kind::RelayGrant;
     }
     return false;
 }
@@ -104,6 +111,33 @@ bool directionCarries(Direction direction, Kind kind)
 qsizetype utf8Bytes(const QString& text)
 {
     return text.toUtf8().size();
+}
+
+// Section 5.2's `relayUrl`: printable ASCII, starting `wss://`.
+bool isRelayUrl(const QString& text)
+{
+    if (!text.startsWith(QLatin1String("wss://"))) {
+        return false;
+    }
+    for (const QChar c : text) {
+        if (c.unicode() < 0x21 || c.unicode() > 0x7E) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Section 5.2's `relayToken`: `A-Z a-z 0-9 - _` only.
+bool isRelayToken(const QString& text)
+{
+    for (const QChar c : text) {
+        const ushort u = c.unicode();
+        if (!((u >= 'A' && u <= 'Z') || (u >= 'a' && u <= 'z') || (u >= '0' && u <= '9')
+              || u == '-' || u == '_')) {
+            return false;
+        }
+    }
+    return true;
 }
 
 // ── Field kinds (section 5.2), reading ──────────────────────────────────
@@ -242,6 +276,29 @@ public:
         return true;
     }
 
+    // Section 5.2's `relayUrl`: printable ASCII (0x21 to 0x7E), starting
+    // `wss://`.
+    bool relayUrl(const char* key, QString* out)
+    {
+        QString text;
+        if (!string(key, 1, kMaxRelayUrlBytes, &text) || !isRelayUrl(text)) {
+            return fail(key, "not a wss:// address");
+        }
+        *out = text;
+        return true;
+    }
+
+    // Section 5.2's `relayToken`: the base64url alphabet only, no padding.
+    bool relayToken(const char* key, QString* out)
+    {
+        QString text;
+        if (!string(key, 1, kMaxRelayTokenBytes, &text) || !isRelayToken(text)) {
+            return fail(key, "not a relay token");
+        }
+        *out = text;
+        return true;
+    }
+
     // `turn`: null, or an object of its four keys (any other key ignored).
     bool turn(const char* key, std::optional<Turn>* out)
     {
@@ -346,6 +403,16 @@ bool readFields(Direction direction, Kind kind, const QJsonObject& object, Messa
             return false;
         }
         out->retryAfterMs = number;
+        return true;
+    case Kind::RelayGrant:
+        if (toStation && !r.binary("from", kIntroBytes, &out->intro)) {
+            return false;
+        }
+        if (!r.relayUrl("url", &out->relayUrl) || !r.relayToken("token", &out->relayToken)
+            || !r.whole("expires", 0, kMaxTurnExpires, &number)) {
+            return false;
+        }
+        out->relayExpires = number;
         return true;
     case Kind::NameplateClaim:
     case Kind::NameplateRelease:
@@ -563,6 +630,23 @@ QByteArray encode(Direction direction, const Message& message)
             object.insert(QStringLiteral("answer"), message.sdp);
             object.insert(QStringLiteral("turn"), turn);
         }
+        break;
+    case Kind::RelayGrant:
+        if (!fits(message.relayUrl, 1, kMaxRelayUrlBytes) || !isRelayUrl(message.relayUrl)
+            || !fits(message.relayToken, 1, kMaxRelayTokenBytes)
+            || !isRelayToken(message.relayToken) || message.relayExpires < 0
+            || message.relayExpires > kMaxTurnExpires) {
+            return {};
+        }
+        if (direction == Direction::ServiceToStation) {
+            if (message.intro.size() != kIntroBytes) {
+                return {};
+            }
+            object.insert(QStringLiteral("from"), b64(message.intro));
+        }
+        object.insert(QStringLiteral("url"), message.relayUrl);
+        object.insert(QStringLiteral("token"), message.relayToken);
+        object.insert(QStringLiteral("expires"), static_cast<double>(message.relayExpires));
         break;
     case Kind::Credentials: {
         bool ok = false;

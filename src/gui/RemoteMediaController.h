@@ -57,6 +57,10 @@
 //               and sent this window's MON output as monitor-audio, on
 //               change and on each media connection. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-09-27: iPhone app plan Task 29 (R-IOS-16): replaceConnection() and,
+//               in its fix wave, a replacement kept pending until it can
+//               start. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//               Code.
 
 #include "core/session/media/DisplayBudget.h"
 #include "core/session/media/DisplayCodec.h"
@@ -403,6 +407,31 @@ public slots:
     /// The client's `txState` (`holderEpoch`, `holderAway`, fix wave I4)
     /// calls it whenever the Core's holder changes.
     void setTransmitHolder(quint64 holderEpoch, bool holderAway);
+    /// iPhone app plan Task 29 (R-IOS-16; the remote media control
+    /// document, "Replacing the media connection"): asks the Core for a new
+    /// media connection beside the current one, which takes over without a
+    /// gap once audio runs on both. What the session calls when it moved to
+    /// a better path (StationClient::pathChanged). False when it cannot now:
+    /// no ready media, a Core without mediaReplaceVersion, one already
+    /// under way, or this window keyed, VOX armed or the Core on the air.
+    bool replaceConnection();
+
+public:
+    /// iPhone app plan Task 29 fix wave (review Important 1): media follows
+    /// every move of the session. A move marks a replacement pending; it
+    /// starts as soon as it can (the media connection ready, unkeyed, VOX
+    /// disarmed, the Core back on receive), retried every
+    /// kReplaceRetryMs while pending, and again after the Core refused one
+    /// while it was transmitting (at most kMaxReplaceRearms times a move).
+    static constexpr int kReplaceRetryMs = 500;
+    static constexpr int kMaxReplaceRearms = 3;
+    bool replacePending() const;
+    /// iPhone app plan Task 29: the media connection's id now, and whether
+    /// a replacement is under way (for the window's diagnostics and tests).
+    QString mediaConnectionId() const;
+    bool replacingConnection() const;
+    /// Copies of audio packets dropped while two connections carried them.
+    quint64 duplicateAudioDropped() const;
 
 signals:
     void recoveryRequested(quint32 expectedEpoch, const QString& reason);
@@ -496,5 +525,16 @@ private:
     void sendMicAudio(std::vector<float>& pending);
     void receiveClockEcho(const QJsonObject& payload, qint64 receivedNs);
     bool send(QJsonObject payload);
+    // iPhone app plan Task 29: a peer's callbacks as the current peer, one
+    // audio packet from any peer to its stream, and the replacement's end.
+    void connectPeer(MediaPeer* peer, quint32 epoch);
+    void routeRtp(const QByteArray& packet, const MediaPeer* from);
+    void deliverRtp(const QByteArray& packet);
+    void receiveReplacementControl(const QJsonObject& payload);
+    void promoteReplacement();
+    void dropReplacement(const QString& why);
+    void markReplacePending();
+    void tryPendingReplace();
+    void retireOldPeer();
 };
 } // namespace NereusSDR

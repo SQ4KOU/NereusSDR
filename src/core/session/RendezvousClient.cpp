@@ -18,6 +18,10 @@
 //   2026-09-27: Task 28 tail (R-IOS-16): setPingIntervalMs(). J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-27: iPhone app plan Task 29 fix wave (R-IOS-16): relay.grant
+//               (section 12.1), from the service to a station and a client.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/RendezvousClient.h"
@@ -384,6 +388,8 @@ void RendezvousClient::resetConnection()
     m_mailboxOpen = false;
     m_liveIntroductions.clear();
     m_answered.clear();
+    m_relayGrants.clear();
+    m_clientRelayGrant.reset();
     m_helloNonce.clear();
     if (m_socket) {
         QWebSocket* socket = m_socket;
@@ -693,6 +699,23 @@ void RendezvousClient::handle(const RendezvousWire::Message& message)
         emit credentialsReceived(message.intro, message.turn.has_value(),
                                  message.turn.value_or(RendezvousWire::Turn{}));
         return;
+    case Kind::RelayGrant: {
+        // Task 29 fix wave (rendezvous section 12.1): kept for the relay
+        // leg; the token is never logged.
+        RendezvousWire::RelayGrant grant{message.relayUrl, message.relayToken,
+                                         message.relayExpires};
+        if (m_role == Role::Station) {
+            if (!m_answered.contains(message.intro)) {
+                return;
+            }
+            m_relayGrants.insert(message.intro, grant);
+            emit relayGrantReceived(message.intro);
+        } else if (m_introductionLive) {
+            m_clientRelayGrant = grant;
+            emit relayGrantReceived(QByteArray());
+        }
+        return;
+    }
     case Kind::Answer:
         if (m_role != Role::Client || !m_introductionLive) {
             return;
@@ -717,6 +740,7 @@ void RendezvousClient::handle(const RendezvousWire::Message& message)
                 return;
             }
             m_answered.remove(message.intro);
+            m_relayGrants.remove(message.intro);
             emit introductionEnded(message.intro, message.code);
         } else if (m_introductionLive) {
             m_introductionLive = false;
@@ -767,12 +791,26 @@ void RendezvousClient::handle(const RendezvousWire::Message& message)
     }
 }
 
+std::optional<RendezvousWire::RelayGrant> RendezvousClient::relayGrant(
+    const QByteArray& introductionId) const
+{
+    if (m_role == Role::Client) {
+        return m_clientRelayGrant;
+    }
+    const auto it = m_relayGrants.constFind(introductionId);
+    if (it == m_relayGrants.cend()) {
+        return std::nullopt;
+    }
+    return it.value();
+}
+
 bool RendezvousClient::retireIntroduction(const QByteArray& introductionId)
 {
     if (m_role != Role::Station || !m_liveIntroductions.remove(introductionId)) {
         return false;
     }
     m_answered.remove(introductionId);
+    m_relayGrants.remove(introductionId);
     m_retiredIntroductions.append(introductionId);
     while (m_retiredIntroductions.size() > kMaxLiveIntroductions * 4) {
         m_retiredIntroductions.removeFirst();
@@ -864,6 +902,7 @@ void RendezvousClient::sendPending()
         introduce.sdp = m_offer;
         if (send(introduce)) {
             m_introductionLive = true;
+            m_clientRelayGrant.reset();
         } else {
             m_pending = Pending::None;
             emit unreachable(QStringLiteral("This computer could not ask the Core for a "

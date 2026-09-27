@@ -66,6 +66,12 @@
 //               sends it, and monitor-audio carries this window's MON output
 //               on change and when media is ready. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-09-27: iPhone app plan Task 29 (R-IOS-16): media `replace` with
+//               dual receive (DualPathAudio, RtpDuplicateFilter) when the
+//               session moves; its fix wave follows every move, retrying a
+//               pending replacement until the media connection is ready and
+//               the radio is on receive. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 
 #include "gui/RemoteMediaController.h"
 #include "core/AppSettings.h"
@@ -77,6 +83,9 @@
 #include "core/session/media/RemoteAudioReceiver.h"
 #include "core/session/media/RemoteAudioRestartBackoff.h"
 #include "core/session/media/RemoteMicReceiver.h"
+#include "core/session/media/DaemonMediaController.h"
+#include "core/session/media/DualPathAudio.h"
+#include "core/session/IceConfiguration.h"
 #include "core/ClarityController.h"
 #include "core/ControlRanges.h"
 #include "core/FFTEngine.h"
@@ -787,6 +796,30 @@ struct RemoteMediaController::Private {
     QSet<QString> transmittingPans;
     QSet<QString> transmitDisplayMissingPans;
     QPointer<MediaPeer> peer;
+    // iPhone app plan Task 29 (R-IOS-16): a replacement media connection
+    // under way (its id), the old one still draining after it took over,
+    // their bounds, and dual receive: every peer's SSRC to the stream's own
+    // (the SSRCs this media session started with, main, receivers 0 to 3
+    // and headphones), and each audio packet taken once while two
+    // connections carry it.
+    QPointer<MediaPeer> replacement;
+    QString replacementId;
+    QPointer<MediaPeer> retiring;
+    QTimer* replaceDeadline = nullptr;
+    QTimer* retireTimer = nullptr;
+    // Task 29 fix wave (Important 1): a move not yet followed by media.
+    bool replacePending = false;
+    int replaceRearms = 0;
+    QTimer* replaceRetry = nullptr;
+    std::unique_ptr<DualPathAudio> dual;
+    QPointer<MediaPeer> dualNew;
+    QTimer* dualTimer = nullptr;
+    QElapsedTimer dualClock;
+    quint64 duplicatesDropped = 0;
+    quint64 dualFromOld = 0;
+    quint64 dualFromNew = 0;
+    QHash<quint32, quint32> toLogical;
+    QList<quint32> logicalSsrcs;
     MediaPeer::TransportFactory factory;
     QTimer* timer = nullptr;
     QElapsedTimer clock;
@@ -1117,6 +1150,38 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
         ? descriptionDeadlineMs : kMediaDescriptionDeadlineMs;
     d->connectDeadlineMs = connectDeadlineMs > 0
         ? connectDeadlineMs : kMediaConnectDeadlineMs;
+    // iPhone app plan Task 29: a replacement that never becomes ready is
+    // dropped; the old connection's packets still in flight are taken for
+    // a while after the new one took over.
+    d->replaceDeadline = new QTimer(this);
+    d->replaceDeadline->setSingleShot(true);
+    connect(d->replaceDeadline, &QTimer::timeout, this, [this] {
+        dropReplacement(QStringLiteral("the new audio and display connection did not open"));
+    });
+    // Task 29 fix wave (Important 1): a pending replacement is tried until
+    // it can start.
+    d->replaceRetry = new QTimer(this);
+    d->replaceRetry->setInterval(kReplaceRetryMs);
+    connect(d->replaceRetry, &QTimer::timeout, this, &RemoteMediaController::tryPendingReplace);
+    d->retireTimer = new QTimer(this);
+    d->retireTimer->setSingleShot(true);
+    connect(d->retireTimer, &QTimer::timeout, this, &RemoteMediaController::retireOldPeer);
+    // The two connections' audio merged across a replacement
+    // (DualPathAudio), handed on as each packet falls due.
+    d->dual = std::make_unique<DualPathAudio>([this](const QByteArray& packet) {
+        deliverRtp(packet);
+    });
+    d->dualClock.start();
+    d->dualTimer = new QTimer(this);
+    d->dualTimer->setInterval(5);
+    d->dualTimer->setTimerType(Qt::PreciseTimer);
+    connect(d->dualTimer, &QTimer::timeout, this, [this] {
+        d->dual->tick(d->dualClock.elapsed());
+        if (!d->dual->active()) {
+            d->duplicatesDropped += d->dual->duplicatesDropped();
+            d->dualTimer->stop();
+        }
+    });
     d->establishTimer = new QTimer(this);
     d->establishTimer->setObjectName(QStringLiteral("remoteMediaEstablishTimer"));
     d->establishTimer->setSingleShot(true);
@@ -1413,6 +1478,9 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
     });
     connect(client, &StationClient::mediaControlReceived,
             this, &RemoteMediaController::receiveControl);
+    // iPhone app plan Task 29: the session moved to a better path; media
+    // follows it.
+    connect(client, &StationClient::pathChanged, this, &RemoteMediaController::markReplacePending);
     connect(client, &StationClient::streamCtunPinFinished, this,
         [this](int sliceId, quint64 epoch, bool pinned, bool accepted) {
             if (!d->model) { return; }
@@ -2350,6 +2418,27 @@ void RemoteMediaController::refreshAudioStatus()
 
 void RemoteMediaController::stop()
 {
+    // iPhone app plan Task 29: a replacement under way and a peer still
+    // draining go with the media session.
+    d->replaceDeadline->stop();
+    d->retireTimer->stop();
+    d->replacePending = false;
+    d->replaceRearms = 0;
+    d->replaceRetry->stop();
+    for (QPointer<MediaPeer>* slot : {&d->replacement, &d->retiring}) {
+        if (MediaPeer* other = slot->data()) {
+            *slot = nullptr;
+            disconnect(other, nullptr, this, nullptr);
+            other->stop();
+            other->deleteLater();
+        }
+    }
+    d->replacementId.clear();
+    d->dual->newPathGone();
+    d->dualTimer->stop();
+    d->dualNew = nullptr;
+    d->toLogical.clear();
+    d->logicalSsrcs.clear();
     d->establishTimer->stop();
     d->awaitingDescription = false;
     // Task 36: the microphone line goes with the media connection; the
@@ -2518,25 +2607,273 @@ void RemoteMediaController::settleWithoutRetry(quint32 expectedEpoch, const QStr
     emit errorOccurred(reason);
 }
 
-void RemoteMediaController::start()
+// ── iPhone app plan Task 29 (R-IOS-16): replacing the media connection ─────
+//
+// The remote media control document, "Replacing the media connection". A
+// session that moved to a better path asks for a new media connection
+// beside the current one; audio then arrives on both (each stream's packets
+// taken once, by RTP timestamp) until the Core says the new one took over,
+// and the old one's packets still in flight are taken for a while after.
+
+namespace {
+
+// A peer's audio SSRCs in stream order: main, receiver 0 to 3, headphones.
+QList<quint32> audioSsrcsOf(const MediaPeer* peer)
 {
-    // stop() reports the retired audio status, and a listener may retire
-    // this controller in turn.
+    QList<quint32> ssrcs;
+    if (peer == nullptr) {
+        return ssrcs;
+    }
+    ssrcs.append(peer->audioSsrc());
+    const QList<quint32> receivers = peer->receiverAudioSsrcs();
+    for (int i = 0; i < IMediaTransport::kMaxReceiverAudioStreams; ++i) {
+        ssrcs.append(receivers.value(i, 0));
+    }
+    ssrcs.append(peer->headphonesAudioSsrc());
+    return ssrcs;
+}
+
+} // namespace
+
+QString RemoteMediaController::mediaConnectionId() const
+{
+    return d->connectionId;
+}
+
+bool RemoteMediaController::replacingConnection() const
+{
+    return !d->replacement.isNull();
+}
+
+quint64 RemoteMediaController::duplicateAudioDropped() const
+{
+    return d->duplicatesDropped + (d->dual->active() ? d->dual->duplicatesDropped() : 0);
+}
+
+bool RemoteMediaController::replaceConnection()
+{
+    if (!d->client || !d->client->mediaAvailable() || !d->peer || !d->peer->isReady()
+        || d->replacement || d->epoch != d->client->sessionEpoch()
+        || d->client->capabilities().mediaReplaceVersion < 1 || d->logicalSsrcs.isEmpty()) {
+        return false;
+    }
+    // Not while this window is keyed or has VOX armed, nor while the Core is
+    // on the air (the Core refuses then too).
+    if (RemoteTransmitClient* tx = d->client->remoteTransmit();
+        tx != nullptr && tx->keepaliveRunning()) {
+        return false;
+    }
+    if (d->model && d->model->isTransmitting()) {
+        return false;
+    }
+    const QString id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    auto* peer = new MediaPeer(this, d->factory);
+    d->replacement = peer;
+    d->replacementId = id;
+    const quint32 epoch = d->epoch;
+    const auto current = [this, peer, epoch] {
+        return d->replacement == peer && d->client && d->client->mediaAvailable()
+            && d->client->sessionEpoch() == epoch;
+    };
+    // The replacement's own description and candidates go under its own
+    // id (send() would name the current connection).
+    connect(peer, &MediaPeer::controlReady, this, [this, current](const QJsonObject& payload) {
+        if (current() && d->client) { d->client->sendMediaControl(payload, d->epoch); }
+    });
+    connect(peer, &MediaPeer::displayReceived, this, [this, current](const QByteArray& packet) {
+        if (!current()) { return; }
+        reportDisplayDrops();
+        receiveDisplay(packet);
+    });
+    connect(peer, &MediaPeer::rtpReceived, this, [this, current, peer](const QByteArray& packet) {
+        if (current()) { routeRtp(packet, peer); }
+    });
+    connect(peer, &MediaPeer::ready, this, [this, current] {
+        if (current()) {
+            d->replaceDeadline->stop();
+            qCInfo(lcRemoteMedia) << "The new audio and display connection is open";
+        }
+    });
+    connect(peer, &MediaPeer::connectionFailed, this, [this, current](const QString& reason) {
+        if (current()) { dropReplacement(reason); }
+    });
+    connect(peer, &MediaPeer::closed, this, [this, current] {
+        if (current()) { dropReplacement(QStringLiteral("the new connection closed")); }
+    });
+    connect(peer, &MediaPeer::errorOccurred, this, [this, current](const QString& reason) {
+        if (current()) { dropReplacement(reason); }
+    });
+    peer->setIceConfiguration(d->client->sessionIceConfiguration());
+    const QPointer<MediaPeer> started(peer);
+    const bool ok = peer->start(IMediaTransport::Role::Answerer, id,
+                                IMediaTransport::kDefaultAudioTargetBitrate,
+                                /*offerLosslessAudio=*/false, receiverAudioNegotiated(),
+                                headphonesMixNegotiated(), micLineNegotiated());
+    if (!ok || !started) {
+        dropReplacement(QStringLiteral("the new connection could not start"));
+        return false;
+    }
+    // The new peer's streams are the streams this session started with.
+    const QList<quint32> theirs = audioSsrcsOf(peer);
+    for (qsizetype i = 0; i < theirs.size() && i < d->logicalSsrcs.size(); ++i) {
+        if (theirs.at(i) != 0 && d->logicalSsrcs.at(i) != 0) {
+            d->toLogical.insert(theirs.at(i), d->logicalSsrcs.at(i));
+        }
+    }
+    d->dualNew = peer;
+    d->dualFromNew = 0;
+    d->dualFromOld = 0;
+    d->dual->start(d->dualClock.elapsed());
+    d->dualTimer->start();
+    d->replaceDeadline->start(d->descriptionDeadlineMs + IceConfiguration::kConnectDeadlineMs);
+    qCInfo(lcRemoteMedia) << "Moving audio and display to a new connection";
     const QPointer<RemoteMediaController> self(this);
-    stop();
-    if (!self) { return; }
-    if (!d->client || !d->client->mediaAvailable()) {
+    d->client->sendMediaControl({{QStringLiteral("op"), QStringLiteral("replace")},
+                                 {QStringLiteral("connectionId"), id},
+                                 {QStringLiteral("replaces"), d->connectionId}},
+                                d->epoch);
+    return self && d->replacement == peer;
+}
+
+void RemoteMediaController::receiveReplacementControl(const QJsonObject& payload)
+{
+    const QString op = payload.value(QStringLiteral("op")).toString();
+    if (op == QLatin1String("description") || op == QLatin1String("candidate")) {
+        d->replacement->acceptControl(payload);
         return;
     }
-    d->recoveryRequested = false;
-    d->epoch = d->client->sessionEpoch();
-    d->desiredPs3 = d->model && d->model->pureSignalFacade()
-        && d->model->pureSignalFacade()->ampViewSubscribed();
-    d->accountedPs3 = d->client->remotePs3DisplaySubscribed();
-    d->connectionId = QUuid::createUuid().toString(QUuid::WithoutBraces);
-    auto* peer = new MediaPeer(this, d->factory);
-    d->peer = peer;
-    const quint32 epoch = d->epoch;
+    // The Core did not move media, or dropped the new connection: the
+    // current connection carries on.
+    if (op == QLatin1String("rejected") && payload.value(QStringLiteral("endpointId")).toDouble() == 0
+        && payload.value(QStringLiteral("reason")).isString()) {
+        dropReplacement(payload.value(QStringLiteral("reason")).toString().left(512));
+        // Task 29 fix wave (Important 1): a Core that went on the air just
+        // as the replacement arrived refused it; try again once it is back
+        // on receive, a few times at most.
+        if (d->replaceRearms < kMaxReplaceRearms) {
+            ++d->replaceRearms;
+            d->replacePending = true;
+            d->replaceRetry->start();
+        }
+        return;
+    }
+    if (op == QLatin1String("replace")
+        && payload.value(QStringLiteral("replaces")) == d->connectionId && payload.size() == 3) {
+        promoteReplacement();
+    }
+}
+
+void RemoteMediaController::promoteReplacement()
+{
+    d->replaceDeadline->stop();
+    MediaPeer* const next = d->replacement;
+    MediaPeer* const old = d->peer;
+    if (next == nullptr || old == nullptr) {
+        return;
+    }
+    // The old connection's packets still in flight are taken for a while.
+    disconnect(old, nullptr, this, nullptr);
+    connect(old, &MediaPeer::rtpReceived, this, [this, old](const QByteArray& packet) {
+        if (d->retiring == old) { routeRtp(packet, old); }
+    });
+    connect(old, &MediaPeer::displayReceived, this, [this, old](const QByteArray& packet) {
+        if (d->retiring == old) { receiveDisplay(packet); }
+    });
+    d->retiring = old;
+    d->retireTimer->start(DaemonMediaController::kReplaceDrainMs);
+    disconnect(next, nullptr, this, nullptr);
+    d->replacement = nullptr;
+    d->peer = next;
+    d->connectionId = d->replacementId;
+    d->replacementId.clear();
+    connectPeer(next, d->epoch);
+    // The old connection sends nothing new now; the new one's lead eases.
+    d->dual->oldPathDone(d->dualClock.elapsed());
+    qCInfo(lcRemoteMedia).noquote()
+        << QStringLiteral("Audio and display moved to the new connection (audio packets on "
+                          "both: %1 on the old, %2 on the new, copies dropped %3, the new "
+                          "one %4 ms ahead)")
+               .arg(d->dualFromOld).arg(d->dualFromNew)
+               .arg(d->dual->duplicatesDropped()).arg(d->dual->leadMs());
+    noteMicLine();
+}
+
+void RemoteMediaController::retireOldPeer()
+{
+    d->retireTimer->stop();
+    if (MediaPeer* old = d->retiring.data()) {
+        d->retiring = nullptr;
+        disconnect(old, nullptr, this, nullptr);
+        old->stop();
+        old->deleteLater();
+    }
+}
+
+bool RemoteMediaController::replacePending() const
+{
+    return d->replacePending;
+}
+
+void RemoteMediaController::markReplacePending()
+{
+    d->replacePending = true;
+    d->replaceRearms = 0;
+    tryPendingReplace();
+}
+
+void RemoteMediaController::tryPendingReplace()
+{
+    if (!d->replacePending) {
+        d->replaceRetry->stop();
+        return;
+    }
+    // Media that has gone, or a Core that cannot replace it: nothing to
+    // follow.
+    if (!d->client || !d->client->mediaAvailable()
+        || d->client->capabilities().mediaReplaceVersion < 1) {
+        d->replacePending = false;
+        d->replaceRetry->stop();
+        return;
+    }
+    // One under way: the next move is followed once it finishes.
+    if (d->replacement) {
+        d->replaceRetry->start();
+        return;
+    }
+    if (replaceConnection()) {
+        d->replacePending = false;
+        d->replaceRetry->stop();
+        return;
+    }
+    // Not yet (media not ready, keyed, VOX armed, on the air): again soon.
+    d->replaceRetry->start();
+}
+
+void RemoteMediaController::dropReplacement(const QString& why)
+{
+    d->replaceDeadline->stop();
+    MediaPeer* const peer = d->replacement;
+    if (peer == nullptr) {
+        return;
+    }
+    d->replacement = nullptr;
+    d->replacementId.clear();
+    for (const quint32 ssrc : audioSsrcsOf(peer)) {
+        d->toLogical.remove(ssrc);
+    }
+    disconnect(peer, nullptr, this, nullptr);
+    peer->stop();
+    peer->deleteLater();
+    d->duplicatesDropped += d->dual->duplicatesDropped();
+    d->dual->newPathGone();
+    d->dualTimer->stop();
+    d->dualNew = nullptr;
+    qCInfo(lcRemoteMedia).noquote()
+        << QStringLiteral("Audio and display stay on their connection: %1").arg(why.left(256));
+}
+
+void RemoteMediaController::connectPeer(MediaPeer* peer, quint32 epoch)
+{
     const auto current = [this, peer, epoch] {
         return d->peer == peer && d->client && d->client->mediaAvailable()
             && d->client->sessionEpoch() == epoch;
@@ -2544,40 +2881,14 @@ void RemoteMediaController::start()
     connect(peer, &MediaPeer::controlReady, this, [this, current](const QJsonObject& payload) {
         if (current()) { send(payload); }
     });
-    d->displayDropsReported = 0;
-    d->displayDropsReportedAtMs = 0;
     connect(peer, &MediaPeer::displayReceived, this, [this, current](const QByteArray& packet) {
         if (!current()) { return; }
         // Rendering can end this session; report drops for it first.
         reportDisplayDrops();
         receiveDisplay(packet);
     });
-    connect(peer, &MediaPeer::rtpReceived, this, [this, current](const QByteArray& packet) {
-        if (!current()) { return; }
-        // R-R3-43: split by stream id before the speakers' gate, so a
-        // receiver stream reaches its consumers while the speakers are
-        // muted. A receiver stream nobody plays now (stopping, restarting)
-        // is dropped; everything else goes to the speakers' receiver as
-        // before.
-        if ((!d->receiverSsrcs.isEmpty() || d->headphonesSsrc != 0) && packet.size() >= 12) {
-            const quint32 ssrc = qFromBigEndian<quint32>(packet.constData() + 8);
-            // R-R3-45: the headphones mix goes to its own receiver, whatever
-            // the speakers do; while that receiver is stopped it is dropped.
-            if (d->headphonesSsrc != 0 && ssrc == d->headphonesSsrc) {
-                if (d->headphones->isRunning()) { d->headphones->submit(packet); }
-                return;
-            }
-            if (d->receiverSsrcs.contains(ssrc)) {
-                for (auto& [sliceId, stream] : d->receiverStreams) {
-                    if (stream.ssrc == ssrc) {
-                        stream.receiver->submit(packet);
-                        break;
-                    }
-                }
-                return;
-            }
-        }
-        if (d->audioEnabled) { d->audio->submit(packet); }
+    connect(peer, &MediaPeer::rtpReceived, this, [this, current, peer](const QByteArray& packet) {
+        if (current()) { routeRtp(packet, peer); }
     });
     connect(peer, &MediaPeer::ready, this, [this, current, epoch] {
         if (current()) {
@@ -2586,6 +2897,11 @@ void RemoteMediaController::start()
             d->establishTimer->stop();
             d->client->noteMediaEstablished(epoch);
             noteMicLine();
+            // Task 29 fix wave (Important 1): a move that came before media
+            // was ready is followed now (after this handler's requests).
+            if (d->replacePending) {
+                QTimer::singleShot(0, this, &RemoteMediaController::tryPendingReplace);
+            }
             if (!d->client->remoteDisplayBudgetLimits()) {
                 qCDebug(lcRemoteMedia)
                     << "Core supplied no aggregate display limits; using per-display subscriptions";
@@ -2631,6 +2947,81 @@ void RemoteMediaController::start()
     // The transport reports a display-channel error only as a display
     // error; this computer handles it as it handles any media error.
     connect(peer, &MediaPeer::displayErrorOccurred, this, onPeerError);
+}
+
+void RemoteMediaController::routeRtp(const QByteArray& arrived, const MediaPeer* from)
+{
+    // iPhone app plan Task 29: every peer's packets as the streams this
+    // media session started with (their own SSRCs), and while two
+    // connections carry them, merged (DualPathAudio): each packet once, on
+    // the old connection's schedule.
+    QByteArray packet = arrived;
+    if (!d->toLogical.isEmpty() && packet.size() >= 12) {
+        const quint32 ssrc = qFromBigEndian<quint32>(packet.constData() + 8);
+        const auto it = d->toLogical.constFind(ssrc);
+        if (it != d->toLogical.cend()) {
+            qToBigEndian<quint32>(it.value(), packet.data() + 8);
+        }
+    }
+    if (d->dual->active()) {
+        const bool fromNew = from != nullptr && from == d->dualNew.data();
+        ++(fromNew ? d->dualFromNew : d->dualFromOld);
+        d->dual->submit(packet, fromNew, d->dualClock.elapsed());
+        return;
+    }
+    deliverRtp(packet);
+}
+
+void RemoteMediaController::deliverRtp(const QByteArray& packet)
+{
+    // R-R3-43: split by stream id before the speakers' gate, so a
+    // receiver stream reaches its consumers while the speakers are
+    // muted. A receiver stream nobody plays now (stopping, restarting)
+    // is dropped; everything else goes to the speakers' receiver as
+    // before.
+    if ((!d->receiverSsrcs.isEmpty() || d->headphonesSsrc != 0) && packet.size() >= 12) {
+        const quint32 ssrc = qFromBigEndian<quint32>(packet.constData() + 8);
+        // R-R3-45: the headphones mix goes to its own receiver, whatever
+        // the speakers do; while that receiver is stopped it is dropped.
+        if (d->headphonesSsrc != 0 && ssrc == d->headphonesSsrc) {
+            if (d->headphones->isRunning()) { d->headphones->submit(packet); }
+            return;
+        }
+        if (d->receiverSsrcs.contains(ssrc)) {
+            for (auto& [sliceId, stream] : d->receiverStreams) {
+                if (stream.ssrc == ssrc) {
+                    stream.receiver->submit(packet);
+                    break;
+                }
+            }
+            return;
+        }
+    }
+    if (d->audioEnabled) { d->audio->submit(packet); }
+}
+
+void RemoteMediaController::start()
+{
+    // stop() reports the retired audio status, and a listener may retire
+    // this controller in turn.
+    const QPointer<RemoteMediaController> self(this);
+    stop();
+    if (!self) { return; }
+    if (!d->client || !d->client->mediaAvailable()) {
+        return;
+    }
+    d->recoveryRequested = false;
+    d->epoch = d->client->sessionEpoch();
+    d->desiredPs3 = d->model && d->model->pureSignalFacade()
+        && d->model->pureSignalFacade()->ampViewSubscribed();
+    d->accountedPs3 = d->client->remotePs3DisplaySubscribed();
+    d->connectionId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    auto* peer = new MediaPeer(this, d->factory);
+    d->peer = peer;
+    const quint32 epoch = d->epoch;
+    d->displayDropsReported = 0;
+    d->displayDropsReportedAtMs = 0;
+    connectPeer(peer, epoch);
     d->startingPeer = true;
     d->startRefusal.clear();
     const QPointer<MediaPeer> startedPeer(peer);
@@ -2651,6 +3042,8 @@ void RemoteMediaController::start()
     d->startingPeer = false;
     d->receiverSsrcs = started && startedPeer ? startedPeer->receiverAudioSsrcs() : QList<quint32>{};
     d->headphonesSsrc = started && startedPeer ? startedPeer->headphonesAudioSsrc() : 0;
+    // Task 29: the streams' own SSRCs, which a replacement's map onto.
+    d->logicalSsrcs = started && startedPeer ? audioSsrcsOf(startedPeer) : QList<quint32>{};
     const QString startError = std::exchange(d->startRefusal, QString());
     if (!started) {
         // R-R3-28, amended 2026-09-23: a refusal is never a silent stop, and
@@ -4362,8 +4755,30 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
 {
     // R-R3-35: a clock echo's arrival time (t3), read before anything else.
     const qint64 receivedNs = d->audio->nowNs();
-    if (!d->client || !d->client->mediaAvailable() || epoch != d->epoch
-        || !d->peer || payload.value(QStringLiteral("connectionId")) != d->connectionId) { return; }
+    if (!d->client || !d->client->mediaAvailable() || epoch != d->epoch || !d->peer) { return; }
+    // iPhone app plan Task 29: the replacement's own operations, and the
+    // Core's word that it took over.
+    if (d->replacement && !d->replacementId.isEmpty()
+        && payload.value(QStringLiteral("connectionId")) == d->replacementId) {
+        receiveReplacementControl(payload);
+        return;
+    }
+    if (payload.value(QStringLiteral("connectionId")) != d->connectionId) { return; }
+    // Task 29: a context naming a replacement peer's SSRC names the
+    // stream's own.
+    QJsonObject normalised;
+    if (!d->toLogical.isEmpty() && payload.value(QStringLiteral("ssrc")).isDouble()) {
+        const auto ssrc = static_cast<quint32>(payload.value(QStringLiteral("ssrc")).toDouble());
+        const auto it = d->toLogical.constFind(ssrc);
+        if (it != d->toLogical.cend()) {
+            normalised = payload;
+            normalised.insert(QStringLiteral("ssrc"), static_cast<qint64>(it.value()));
+        }
+    }
+    if (!normalised.isEmpty()) {
+        receiveControl(normalised, epoch);
+        return;
+    }
     const QString op = payload.value(QStringLiteral("op")).toString();
     if (op == QLatin1String("allocation-result")) {
         receiveAllocationResult(payload);
@@ -4381,7 +4796,7 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
                                      d->audioProfileRequested);
         if (!context || context->revision != d->audioRevision
             || !isNewerGeneration(context->generation, d->audioGeneration)
-            || context->ssrc != d->peer->audioSsrc()) { return; }
+            || context->ssrc != d->logicalSsrcs.value(0, d->peer->audioSsrc())) { return; }
         d->audioGeneration = context->generation;
         d->acceptedAudioContext = context;
         // R-R3-35: the Core's capture of the previous context no longer

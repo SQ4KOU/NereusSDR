@@ -47,6 +47,25 @@
 //        "localAddress","remoteAddress","ms","reason"} and
 //       exits 0 when the session was established, 1 otherwise.
 //
+// Plan Task 29 (R-IOS-16; the link document, section 21):
+//   core ... [--listen PORT] [--media]
+//       --listen: the Core's WebSocket on every address at PORT, for the
+//       direct path. --media: media on (a DaemonMediaController), a tone in
+//       the Core's audio and synthetic I/Q in its display source, so a
+//       session's media carries real Opus audio and real display frames.
+//   session ... [--direct URL] [--upgrade-schedule-ms "A,B"]
+//               [--wait-upgrade-ms T] [--media-ms M]
+//       --direct: the race (StationClient::connectToStation for a paired
+//       Core) with URL and the service at once, instead of the service
+//       alone. Prints {"event":"connected",...} as soon as the session is
+//       up. --wait-upgrade-ms: then waits up to T for the session to move
+//       to a better path (--upgrade-schedule-ms sets the looks).
+//       --media-ms: then runs media for M ms (a MediaPeer answering the
+//       Core's offer, audio on, one display) and counts what decoded. The
+//       last line adds "rank", "path", "attempt", "moved", "rankAfter",
+//       "handshakes", "switches", and with media "audioPackets",
+//       "audioDecoded", "displayMessages", "displayDecoded".
+//
 // --ca adds a certificate authority the harness made at run time, so the
 // service's TLS (a test certificate for its test name) verifies. Nothing
 // secret is printed; keys stay in DIR.
@@ -66,10 +85,21 @@
 //               session modes, a whole session over an introduced control
 //               connection. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //               Claude Code.
+//   2026-09-27: iPhone app plan Task 29 (R-IOS-16): the race, a move to a
+//               better path, and real media through the service (core
+//               --listen and --media; session --direct, --wait-upgrade-ms
+//               and --media-ms). J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
+//   2026-09-27: iPhone app plan Task 29 fix wave (R-IOS-16, review
+//               Important 1): session --follow-media-ms, the desktop's own
+//               media (RemoteMediaController) played into a paced bus, to
+//               show media following a relay-to-direct move with no gap.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QCoreApplication>
 #include <QElapsedTimer>
+#include <QUuid>
 #include <QFile>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -78,10 +108,14 @@
 #include <QTextStream>
 #include <QTimer>
 
+#include <cmath>
 #include <cstdio>
 #include <memory>
 
 #include "core/AppSettings.h"
+#include "core/AudioEngine.h"
+#include "core/ConnectionState.h"
+#include "core/HpsdrModel.h"
 #include "core/security/ClientDeviceIdentity.h"
 #include "core/security/DeviceStore.h"
 #include "core/security/StationIdentity.h"
@@ -92,8 +126,15 @@
 #include "core/session/StationClient.h"
 #include "core/session/StationRendezvous.h"
 #include "core/session/StationServer.h"
+#include "core/session/media/DaemonMediaController.h"
+#include "core/session/media/DisplayCodec.h"
 #include "core/session/media/LibDataChannelMediaTransport.h"
+#include "core/session/media/MediaPeer.h"
+#include "core/session/media/OpusAudioCodec.h"
+#include "models/SliceModel.h"
 #include "core/settings/SettingsProxy.h"
+#include "gui/RemoteMediaController.h"
+#include "../fakes/PacedAudioBus.h"
 #include "models/RadioModel.h"
 
 #include "StunLookupGate.h"
@@ -416,8 +457,182 @@ int runCore(const QStringList& args)
         std::fputs("core: the remote access service could not be used\n", stderr);
         return 2;
     }
+    // Plan Task 29: the direct path, and real media.
+    server->setRelayAllowed(relayAllowed);
+    const QString listen = option(args, QStringLiteral("--listen"));
+    if (!listen.isEmpty()
+        && !server->listen(QHostAddress::Any, static_cast<quint16>(listen.toUInt()))) {
+        std::fputs("core: could not listen\n", stderr);
+        return 2;
+    }
+    if (args.contains(QStringLiteral("--media"))) {
+        model->setBoardForTest(HPSDRHW::Saturn);
+        model->configureStreamPool(/*userDdcCount=*/5, /*maxSlices=*/5,
+                                   /*defaultRateHz=*/192000);
+        model->setConnectionStateForTest(ConnectionState::Connected);
+        const int slice = model->addSlice();
+        AudioEngine* engine = model->audioEngine();
+        engine->setSliceStreaming(slice, true);
+        server->setMediaEnabled(true);
+        new DaemonMediaController(server, model, QCoreApplication::instance());
+        // A 700 Hz tone in the Core's audio, 480 frames every 10 ms.
+        auto* tone = new QTimer(QCoreApplication::instance());
+        tone->setTimerType(Qt::PreciseTimer);
+        auto frames = std::make_shared<qint64>(0);
+        QObject::connect(tone, &QTimer::timeout, engine, [engine, slice, frames] {
+            constexpr int kFrames = 480;
+            QVector<float> block(kFrames * 2);
+            for (int frame = 0; frame < kFrames; ++frame) {
+                const double time = static_cast<double>(*frames + frame) / 48000.0;
+                const float value = static_cast<float>(0.25 * std::sin(2.0 * M_PI * 700.0 * time));
+                block[frame * 2] = block[frame * 2 + 1] = value;
+            }
+            *frames += kFrames;
+            engine->rxBlockReady(slice, block.constData(), kFrames);
+        });
+        tone->start(10);
+        // Synthetic I/Q for the display, through RadioModel's own tap.
+        auto* iq = new QTimer(QCoreApplication::instance());
+        QObject::connect(iq, &QTimer::timeout, model, [model, slice] {
+            const SliceModel* s = model->sliceById(slice);
+            if (s == nullptr || s->streamIndex() < 0) {
+                return;
+            }
+            QVector<float> samples;
+            samples.reserve(1026 * 2);
+            for (int n = 0; n < 1026; ++n) {
+                const double phase = 2.0 * M_PI * 0.125 * n;
+                samples.append(static_cast<float>(std::cos(phase)));
+                samples.append(static_cast<float>(std::sin(phase)));
+            }
+            QMetaObject::invokeMethod(model, "rawIqDataForStream", Qt::DirectConnection,
+                                      Q_ARG(int, s->streamIndex()),
+                                      Q_ARG(QVector<float>, samples));
+        });
+        iq->start(5);
+    }
     return QCoreApplication::exec();
 }
+
+// Plan Task 29: the path the session runs on, in the harness's words.
+QString pathName(int rank)
+{
+    switch (rank) {
+    case PathRacer::ThisNetwork: return QStringLiteral("thisNetwork");
+    case PathRacer::Direct: return QStringLiteral("direct");
+    case PathRacer::ServiceDirect: return QStringLiteral("service");
+    case PathRacer::ServiceRelayed: return QStringLiteral("relay");
+    default: return QStringLiteral("none");
+    }
+}
+
+// Plan Task 29: real media over a session, counting what decodes: a
+// MediaPeer answering the Core's offer, audio on, one display endpoint.
+class MediaCounter : public QObject {
+public:
+    MediaCounter(StationClient* window, RadioModel* model, QObject* parent)
+        : QObject(parent), m_window(window), m_model(model)
+    {
+        m_connectionId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        m_peer = new MediaPeer(this);
+        QObject::connect(m_peer, &MediaPeer::controlReady, this, [this](const QJsonObject& c) {
+            m_window->sendMediaControl(c, m_window->sessionEpoch());
+        });
+        QObject::connect(m_window, &StationClient::mediaControlReceived, this,
+                         [this](const QJsonObject& payload, quint32) { receive(payload); });
+        QObject::connect(m_peer, &MediaPeer::ready, this, [this] { onReady(); });
+        QObject::connect(m_peer, &MediaPeer::rtpReceived, this, [this](const QByteArray& packet) {
+            ++audioPackets;
+            if (m_audioSsrc != 0
+                && m_decoder.decodeRtp(packet, m_audioSsrc).status
+                    == OpusAudioCodecStatus::Accepted) {
+                ++audioDecoded;
+            }
+        });
+        QObject::connect(m_peer, &MediaPeer::displayReceived, this,
+                         [this](const QByteArray& packet) {
+            ++displayMessages;
+            if (packet.startsWith("NSDC")
+                && m_display.decode(packet).disposition == DisplayCodecDisposition::Accepted) {
+                ++displayDecoded;
+            }
+        });
+    }
+
+    bool start()
+    {
+        m_peer->setIceConfiguration(m_window->sessionIceConfiguration());
+        if (!m_peer->start(IMediaTransport::Role::Answerer, m_connectionId)) {
+            return false;
+        }
+        return m_window->sendMediaControl({{QStringLiteral("op"), QStringLiteral("start")},
+                                           {QStringLiteral("connectionId"), m_connectionId}},
+                                          m_window->sessionEpoch());
+    }
+
+    quint64 audioPackets = 0;
+    quint64 audioDecoded = 0;
+    quint64 displayMessages = 0;
+    quint64 displayDecoded = 0;
+
+private:
+    void receive(const QJsonObject& payload)
+    {
+        if (payload.value(QStringLiteral("connectionId")).toString() != m_connectionId) {
+            return;
+        }
+        const QString op = payload.value(QStringLiteral("op")).toString();
+        if (op == QLatin1String("description") || op == QLatin1String("candidate")) {
+            m_peer->acceptControl(payload);
+        } else if (op == QLatin1String("audio-context")
+                   && payload.value(QStringLiteral("enabled")).toBool()) {
+            m_audioSsrc = static_cast<quint32>(payload.value(QStringLiteral("ssrc")).toDouble());
+        }
+    }
+
+    void onReady()
+    {
+        const auto send = [this](QJsonObject control) {
+            control.insert(QStringLiteral("connectionId"), m_connectionId);
+            m_window->sendMediaControl(control, m_window->sessionEpoch());
+        };
+        send({{QStringLiteral("op"), QStringLiteral("audio")},
+              {QStringLiteral("revision"), 1},
+              {QStringLiteral("enabled"), true}});
+        const QList<SliceModel*> slices = m_model->slices();
+        if (slices.isEmpty()) {
+            return;
+        }
+        const QJsonObject plane{{QStringLiteral("detector"), 0},
+                                {QStringLiteral("averageMode"), -1},
+                                {QStringLiteral("averageAlpha"), 0.0}};
+        send({{QStringLiteral("op"), QStringLiteral("subscribe")},
+              {QStringLiteral("endpointId"), 1},
+              {QStringLiteral("revision"), 1},
+              {QStringLiteral("sliceId"), slices.first()->sliceIndex()},
+              {QStringLiteral("tier"), QStringLiteral("wide")},
+              {QStringLiteral("fftSize"), 1024},
+              {QStringLiteral("windowType"), 0},
+              {QStringLiteral("centreHz"), slices.first()->frequency()},
+              {QStringLiteral("spanHz"), 48000.0},
+              {QStringLiteral("pixels"), 128},
+              {QStringLiteral("fps"), 30},
+              {QStringLiteral("framesPerLine"), 1},
+              {QStringLiteral("trace"), plane},
+              {QStringLiteral("waterfall"), plane},
+              {QStringLiteral("minDbm"), -180.0},
+              {QStringLiteral("maxDbm"), 0.0},
+              {QStringLiteral("wideSpanFactor"), 0.0}});
+    }
+
+    StationClient* m_window;
+    RadioModel* m_model;
+    MediaPeer* m_peer = nullptr;
+    QString m_connectionId;
+    quint32 m_audioSsrc = 0;
+    OpusAudioDecoder m_decoder;
+    DisplayCodecDecoder m_display;
+};
 
 // Plan Task 28: a desktop reaching the Core through the service.
 int runSession(const QStringList& args)
@@ -446,12 +661,106 @@ int runSession(const QStringList& args)
     // One attempt: a failure is reported, not retried.
     window->setReconnectBackoffUnitMs(3600 * 1000);
     auto done = std::make_shared<bool>(false);
-    const auto finish = [window, &clock, done](bool connected, const QString& reason) {
+    // Plan Task 29: the race, a move, media.
+    const QString direct = option(args, QStringLiteral("--direct"));
+    const int waitUpgradeMs = option(args, QStringLiteral("--wait-upgrade-ms"), QStringLiteral("0")).toInt();
+    const int mediaMs = option(args, QStringLiteral("--media-ms"), QStringLiteral("0")).toInt();
+    const QString schedule = option(args, QStringLiteral("--upgrade-schedule-ms"));
+    if (!schedule.isEmpty()) {
+        QList<int> delays;
+        for (const QString& part : schedule.split(QLatin1Char(','), Qt::SkipEmptyParts)) {
+            delays.append(part.toInt());
+        }
+        window->setUpgradeScheduleForTest(delays);
+    }
+    auto handshakes = std::make_shared<int>(0);
+    auto rankBefore = std::make_shared<int>(-1);
+    auto moved = std::make_shared<bool>(false);
+    auto media = std::make_shared<QPointer<MediaCounter>>();
+    // Task 29 fix wave: the desktop's own media, played into a paced bus,
+    // and every media connection id it used.
+    const int followMs = option(args, QStringLiteral("--follow-media-ms"), QStringLiteral("0")).toInt();
+    PacedAudioBus* bus = nullptr;
+    QPointer<RemoteMediaController> follower;
+    auto followIds = std::make_shared<QStringList>();
+    if (followMs > 0) {
+        auto owned = std::make_unique<PacedAudioBus>();
+        bus = owned.get();
+        model->audioEngine()->setSpeakersBusForTest(std::move(owned));
+        follower = new RemoteMediaController(window, model, nullptr, window);
+        auto* render = new QTimer(window);
+        render->setInterval(10);
+        render->setTimerType(Qt::PreciseTimer);
+        QObject::connect(render, &QTimer::timeout, window, [bus] { bus->render(480); });
+        render->start();
+        auto* watch = new QTimer(window);
+        watch->setInterval(20);
+        QObject::connect(watch, &QTimer::timeout, window, [follower, followIds] {
+            if (follower) {
+                const QString id = follower->mediaConnectionId();
+                if (!id.isEmpty() && !followIds->contains(id)) {
+                    followIds->append(id);
+                }
+            }
+        });
+        watch->start();
+    }
+    const auto finish = [window, &clock, done, handshakes, rankBefore, moved, media, bus,
+                         follower, followIds](bool connected, const QString& reason) {
         if (*done) {
             return;
         }
         *done = true;
         QJsonObject result;
+        result.insert(QStringLiteral("rank"), *rankBefore >= 0 ? *rankBefore : window->pathRank());
+        result.insert(QStringLiteral("path"),
+                      pathName(*rankBefore >= 0 ? *rankBefore : window->pathRank()));
+        result.insert(QStringLiteral("attempt"), window->connectionAttempt().summary());
+        result.insert(QStringLiteral("moved"), *moved);
+        result.insert(QStringLiteral("rankAfter"), window->pathRank());
+        result.insert(QStringLiteral("handshakes"), *handshakes);
+        result.insert(QStringLiteral("switches"), window->pathSwitches());
+        if (*media) {
+            result.insert(QStringLiteral("audioPackets"), static_cast<double>((*media)->audioPackets));
+            result.insert(QStringLiteral("audioDecoded"), static_cast<double>((*media)->audioDecoded));
+            result.insert(QStringLiteral("displayMessages"),
+                          static_cast<double>((*media)->displayMessages));
+            result.insert(QStringLiteral("displayDecoded"),
+                          static_cast<double>((*media)->displayDecoded));
+        }
+        if (bus != nullptr) {
+            // From the first tone heard, the longest silent run in 10 ms
+            // blocks, and how long was heard.
+            const QVector<float>& heard = bus->heard;
+            int first = -1;
+            int run = 0;
+            int longest = 0;
+            for (int frame = 0; (frame + 480) * 2 <= heard.size(); frame += 480) {
+                double energy = 0.0;
+                for (int i = 0; i < 480; ++i) {
+                    const double l = heard.at((frame + i) * 2);
+                    energy += l * l;
+                }
+                const bool silent = energy / 480.0 < 1e-6;
+                if (first < 0) {
+                    if (!silent) {
+                        first = frame;
+                    }
+                    continue;
+                }
+                run = silent ? run + 1 : 0;
+                longest = std::max(longest, run);
+            }
+            result.insert(QStringLiteral("mediaConnections"), static_cast<int>(followIds->size()));
+            result.insert(QStringLiteral("heardMs"),
+                          first < 0 ? 0.0 : static_cast<double>((heard.size() / 2 - first) / 48));
+            result.insert(QStringLiteral("longestSilentMs"), longest * 10);
+            if (follower) {
+                result.insert(QStringLiteral("duplicatesDropped"),
+                              static_cast<double>(follower->duplicateAudioDropped()));
+                result.insert(QStringLiteral("replacePending"), follower->replacePending());
+            }
+        }
         result.insert(QStringLiteral("relayed"), false);
         if (const auto* transport = qobject_cast<const DataChannelTransport*>(window->transport())) {
             if (const auto path = transport->selectedPath()) {
@@ -473,17 +782,71 @@ int runSession(const QStringList& args)
         QTimer::singleShot(1500, QCoreApplication::instance(),
                            [connected] { QCoreApplication::exit(connected ? 0 : 1); });
     };
-    QObject::connect(window, &StationClient::handshakeComplete, window, [finish] {
-        finish(true, QString());
+    QObject::connect(window, &StationClient::handshakeComplete, window,
+                     [window, model, finish, handshakes, rankBefore, moved, media, waitUpgradeMs,
+                      mediaMs, followMs] {
+        ++*handshakes;
+        if (*handshakes > 1) {
+            return;
+        }
+        *rankBefore = window->pathRank();
+        if (waitUpgradeMs <= 0 && mediaMs <= 0) {
+            finish(true, QString());
+            return;
+        }
+        // Tell the harness the session is up, then carry on.
+        printLine({{QStringLiteral("event"), QStringLiteral("connected")},
+                   {QStringLiteral("rank"), window->pathRank()},
+                   {QStringLiteral("path"), pathName(window->pathRank())}});
+        if (waitUpgradeMs > 0) {
+            QObject::connect(window, &StationClient::pathChanged, window, [window, finish, moved,
+                                                                           mediaMs, followMs] {
+                *moved = true;
+                printLine({{QStringLiteral("event"), QStringLiteral("moved")},
+                           {QStringLiteral("rank"), window->pathRank()}});
+                if (followMs > 0) {
+                    // Listen on after the move: media follows it.
+                    QTimer::singleShot(followMs, window, [finish] { finish(true, QString()); });
+                } else if (mediaMs <= 0) {
+                    finish(true, QString());
+                }
+            });
+            QTimer::singleShot(waitUpgradeMs, window, [finish, mediaMs, moved, followMs] {
+                if (mediaMs <= 0 && (followMs <= 0 || !*moved)) {
+                    finish(true, QString());
+                }
+            });
+        }
+        if (mediaMs > 0) {
+            *media = new MediaCounter(window, model, window);
+            if (!(*media)->start()) {
+                finish(true, QStringLiteral("Media could not start."));
+                return;
+            }
+            QTimer::singleShot(mediaMs + std::max(0, waitUpgradeMs), window,
+                               [finish] { finish(true, QString()); });
+        }
     });
     QObject::connect(window, &StationClient::sessionEnded, window,
                      [finish](const QString& reason) { finish(false, reason); });
     QTimer::singleShot(timeoutMs, window, [finish] {
         finish(false, QStringLiteral("No session in time."));
     });
-    window->connectThroughService(
-        RendezvousClient::serverUrls({option(args, QStringLiteral("--server"))}), core.value(0),
-        fingerprint);
+    const QList<QUrl> servers =
+        RendezvousClient::serverUrls({option(args, QStringLiteral("--server"))});
+    if (direct.isEmpty()) {
+        window->connectThroughService(servers, core.value(0), fingerprint);
+    } else {
+        // Plan Task 29: the race, the Core's address and the service at
+        // once.
+        StationClient::ServiceRoute route;
+        route.servers = servers;
+        route.rendezvousId = core.value(0);
+        route.relayAllowed = true;
+        route.controlChannelVersion = 1;
+        window->setServiceRoute(route);
+        window->connectToStation(QUrl(direct), QString(), QString(), false, fingerprint);
+    }
     return QCoreApplication::exec();
 }
 

@@ -70,6 +70,10 @@
 //   2026-09-26: Task 27 follow-up (new Minor 1): no default families, and
 //               both relay hosts for a one-family end that cannot tell.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-27: iPhone app plan Task 29 (R-IOS-16): CandidateSource, the
+//               seam where another source of the far end's candidates
+//               joins one connection's ICE (link section 21.5). J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/RendezvousWire.h"
@@ -81,6 +85,7 @@
 #include <QStringList>
 
 #include <functional>
+#include <memory>
 #include <optional>
 
 QT_BEGIN_NAMESPACE
@@ -213,6 +218,32 @@ public:
         return copy;
     }
 
+    /// iPhone app plan Task 29 (R-IOS-16; link section 21.5): another
+    /// source of the far end's candidates, which the ICE agent races with
+    /// every other inside one connection at the priority each candidate
+    /// line carries. The floor, once it is chosen, may be one (a relay's
+    /// loopback address given as a low-priority remote candidate); none is
+    /// built in this version. A source starts when the connection gathers
+    /// and hands each candidate (`candidate:...`, as the far end's) to
+    /// `add` on the connection's thread; stop() ends it and it calls `add`
+    /// no more.
+    class CandidateSource {
+    public:
+        virtual ~CandidateSource() = default;
+        virtual void start(std::function<void(const QString& candidate)> add) = 0;
+        virtual void stop() = 0;
+    };
+    void addCandidateSource(std::shared_ptr<CandidateSource> source)
+    {
+        if (source) {
+            m_candidateSources.append(std::move(source));
+        }
+    }
+    QList<std::shared_ptr<CandidateSource>> candidateSources() const
+    {
+        return m_candidateSources;
+    }
+
     std::optional<IceServerAddress> stunServer() const { return m_stun; }
     QList<IceRelayServer> relayServers() const { return m_relays; }
     bool relayAllowed() const { return m_relayAllowed; }
@@ -244,6 +275,7 @@ private:
     QList<IceRelayServer> m_relays;
     bool m_relayAllowed = true;
     bool m_relayKnown = false;
+    QList<std::shared_ptr<CandidateSource>> m_candidateSources;
 };
 
 } // namespace NereusSDR

@@ -272,6 +272,10 @@
 //                subscribed with stationFreedvVersion 1, and the freedv.*
 //                verbs. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                Claude Code.
+//   2026-09-27: iPhone app plan Task 29 (R-IOS-16): the path race, moving
+//               the session to a better path (session.pathTicket,
+//               path.join), the attempt record's service path. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -291,6 +295,7 @@
 #include "core/session/RendezvousWire.h"
 #include "core/session/SessionEndReasons.h"
 #include "core/session/SessionTransport.h"
+#include "core/session/SwitchableTransport.h"
 #include "core/session/TransmitStateFacade.h"
 #include "core/session/RemoteDevicesState.h"
 #include "core/settings/SettingsProxy.h"
@@ -749,6 +754,20 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
 
     // iPhone app plan Task 27: an address that is not the last to try gets
     // kCachedAddressOpenTimeoutMs to open before the next one is tried.
+    // iPhone app plan Task 29 (link section 21.3): looking for a better
+    // path, and the bound on moving to one.
+    m_upgradeScheduleMs = QList<int>(PathRacer::kUpgradeRetryMs.cbegin(),
+                                     PathRacer::kUpgradeRetryMs.cend());
+    m_upgradeTimer = new QTimer(this);
+    m_upgradeTimer->setSingleShot(true);
+    connect(m_upgradeTimer, &QTimer::timeout, this, &StationClient::startUpgradeRace);
+    m_upgradeDeadline = new QTimer(this);
+    m_upgradeDeadline->setSingleShot(true);
+    m_upgradeDeadline->setInterval(SwitchableTransport::kSwitchDeadlineMs);
+    connect(m_upgradeDeadline, &QTimer::timeout, this, [this] {
+        abandonUpgrade(QStringLiteral("the Core did not give a ticket in time"), true);
+    });
+
     m_openTimer = new QTimer(this);
     m_openTimer->setSingleShot(true);
     m_openTimer->setInterval(kCachedAddressOpenTimeoutMs);
@@ -868,6 +887,21 @@ void StationClient::connectToStation(const QUrl& url, const QString& token,
     }
     m_dialPlan.append(url);
     m_planToken = token;
+    // iPhone app plan Task 29 (R-IOS-16; link section 21.1): a paired Core
+    // is raced: every address at once (IPv6 first), and the internet
+    // service beside them. A Core trusted by its pin keeps the addresses
+    // one after another.
+    if (!stationIdentityFingerprint.isEmpty() && !allowUnpinned) {
+        m_raceMode = true;
+        m_lastUrl = url;
+        m_lastFingerprint = expectedFingerprint;
+        m_lastAllowUnpinned = false;
+        m_stationIdentity = stationIdentityFingerprint;
+        m_pinRequired = false;
+        startRace();
+        return;
+    }
+    m_raceMode = false;
     startDialPlan();
     dialStation(m_dialPlan.first(), token, expectedFingerprint, allowUnpinned,
                 stationIdentityFingerprint);
@@ -898,6 +932,8 @@ void StationClient::connectThroughService(const QList<QUrl>& servers,
         return;
     }
     m_reconnectAttempts = 0;
+    stopRace();
+    m_raceMode = false;
     m_dialPlan.clear();
     m_lastUrl.clear();
     m_planToken.clear();
@@ -956,6 +992,8 @@ void StationClient::dialThroughService()
         }
         qCInfo(lcStationClient) << "Connected to the Core through the remote access service"
                                 << (path && path->relayed() ? "(relayed)" : "(direct)");
+        m_pathRank = path && path->relayed() ? PathRacer::ServiceRelayed
+                                             : PathRacer::ServiceDirect;
         // Trusted by the identity key alone: the hello's binding is checked
         // against the certificate the Core presented in DTLS before
         // anything is sent (handleHello()).
@@ -984,8 +1022,28 @@ void StationClient::dialThroughService()
 
 std::optional<IceConfiguration> StationClient::sessionIceConfiguration() const
 {
-    const auto* transport = qobject_cast<const DataChannelTransport*>(m_transport);
-    return transport != nullptr ? transport->mediaIceConfiguration() : std::nullopt;
+    const auto* transport = qobject_cast<const DataChannelTransport*>(this->transport());
+    if (transport != nullptr) {
+        return transport->mediaIceConfiguration();
+    }
+    // iPhone app plan Task 29 (link section 21.3): a session that came
+    // through the service and moved to a direct connection keeps the
+    // service's STUN server for its media, with no relay of its own.
+    return m_serviceIce ? std::optional<IceConfiguration>(m_serviceIce->withoutOwnRelay())
+                        : std::nullopt;
+}
+
+SwitchableTransport* StationClient::sessionTransport() const
+{
+    return qobject_cast<SwitchableTransport*>(m_transport);
+}
+
+SessionTransport* StationClient::transport() const
+{
+    if (const auto* switchable = qobject_cast<const SwitchableTransport*>(m_transport)) {
+        return switchable->inner();
+    }
+    return m_transport;
 }
 
 void StationClient::setCachedAddressOpenTimeoutMs(int ms)
@@ -1122,7 +1180,7 @@ void StationClient::dialStation(const QUrl& url, const QString& token,
                 // two lambdas are connected to the QWebSocket, not the
                 // SessionTransport wrapping it, so attachTransport()'s
                 // disconnect(stale, ...) release does not reach them.
-                if (transportGuard.isNull() || transportGuard.data() != m_transport) {
+                if (transportGuard.isNull() || transportGuard.data() != this->transport()) {
                     return;
                 }
                 if (pinned.isEmpty() && allowUnpinned) {
@@ -1172,7 +1230,7 @@ void StationClient::dialStation(const QUrl& url, const QString& token,
     // m_pinSatisfied at the one place it is actually sent, so the ordering
     // does not have to be relied upon.
     connect(socket, &QWebSocket::connected, this, [this, transportGuard]() {
-        if (transportGuard.isNull() || transportGuard.data() != m_transport) {
+        if (transportGuard.isNull() || transportGuard.data() != this->transport()) {
             return;
         }
         // iPhone app plan Task 27: this address answered.
@@ -1183,7 +1241,7 @@ void StationClient::dialStation(const QUrl& url, const QString& token,
 
     connect(socket, &QWebSocket::errorOccurred, this,
             [this, socket, transportGuard, host = url.host()](QAbstractSocket::SocketError error) {
-                if (transportGuard.isNull() || transportGuard.data() != m_transport) {
+                if (transportGuard.isNull() || transportGuard.data() != this->transport()) {
                     return;
                 }
                 // First error wins -- see dialStation()'s clear above. The
@@ -1255,7 +1313,7 @@ bool StationClient::ensurePinSatisfied()
         return true;
     }
 
-    auto* wsTransport = qobject_cast<WebSocketTransport*>(m_transport);
+    auto* wsTransport = qobject_cast<WebSocketTransport*>(transport());
     QWebSocket* socket = wsTransport != nullptr ? wsTransport->socket() : nullptr;
     // iPhone app Task 18: read through the transport, which is where the
     // device sign-in reads the same certificate (a WebSocketTransport
@@ -1410,9 +1468,19 @@ void StationClient::attachTransport(SessionTransport* transport, const QString& 
     // session that is already re-establishing.
     m_reconnectTimer->stop();
 
+    // iPhone app plan Task 29 (link section 21.2): every session runs on a
+    // SwitchableTransport, which can move it to a better path without
+    // ending it.
+    if (qobject_cast<SwitchableTransport*>(transport) == nullptr) {
+        transport = new SwitchableTransport(transport, SwitchableTransport::Side::Client,
+                                            kMaxIncomingMessageBytes, this);
+    }
     transport->setParent(this);
     m_transport = transport;
     m_token = token;
+    m_pathSwitches = 0;
+    m_serviceIce.reset();
+    m_stationRendezvousId.clear();
     // R-R3-38: a new link starts with no end recorded, so the report never
     // describes an older one.
     m_lastEndReport = StationEndReport{};
@@ -1519,6 +1587,8 @@ void StationClient::disconnectFromStation(const QString& reason, bool attemptRec
     }
     // Task 28: an attempt through the service still making its connection.
     stopServiceDial();
+    // Task 29: a race, or a look for a better path, still running.
+    stopRace();
 
     // endSession FIRST, closeLink second. A transport can deliver its
     // closed() signal synchronously (the in-process one does, and nothing
@@ -1592,6 +1662,17 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
         return;  // already reported for this attach
     }
     m_sessionActive = false;
+    // iPhone app plan Task 29: a look for a better path belongs to the
+    // session that ended.
+    m_upgradeTimer->stop();
+    abandonUpgrade(QString(), /*reschedule=*/false);
+    if (m_upgradeRacer) {
+        PathRacer* racer = m_upgradeRacer;
+        m_upgradeRacer = nullptr;
+        racer->disconnect(this);
+        racer->cancel();
+        racer->deleteLater();
+    }
     // iPhone app plan Task 27: an address still being tried ended here (the
     // connect deadline, a refusal, the operator).
     m_openTimer->stop();
@@ -1852,7 +1933,7 @@ void StationClient::onHandshakeDeadline()
     // session first and then closes the link, and a QWebSocket still in its
     // TLS or upgrade phase does not close on a close() request. Abort it so
     // Core sees the connection go and can retire whatever it built for it.
-    const QPointer<SessionTransport> transport(m_transport);
+    const QPointer<SessionTransport> transport(this->transport());
     disconnectFromStation(reason, /*attemptReconnect=*/true);
     if (auto* ws = qobject_cast<WebSocketTransport*>(transport.data())) {
         if (QWebSocket* socket = ws->socket();
@@ -1944,6 +2025,11 @@ void StationClient::scheduleReconnect()
 
 void StationClient::onReconnectTimeout()
 {
+    // Task 29: a paired Core is raced again.
+    if (m_raceMode && m_lastUrl.isValid()) {
+        startRace();
+        return;
+    }
     // Task 28: a session through the service is retried through it.
     if (!m_serviceServers.isEmpty()) {
         startDialPlan();
@@ -2144,14 +2230,55 @@ void StationClient::onTransportText(const QByteArray& wire)
             // iPhone app plan Task 27: where the Core was reached, tried
             // first next time.
             m_openTimer->stop();
-            if (m_lastUrl.isValid()) {
+            if (m_raceMode) {
+                // Task 29: where the race reached the Core, a direct
+                // address, is the one to try first next time; a session
+                // through the service leaves the list as it is.
+                if (m_raceWinnerUrl.isValid()) {
+                    m_connectedUrl = m_raceWinnerUrl;
+                    m_cachedAddresses.removeAll(m_raceWinnerUrl);
+                    m_cachedAddresses.prepend(m_raceWinnerUrl);
+                }
+            } else if (m_lastUrl.isValid()) {
                 m_connectedUrl = m_lastUrl;
                 m_cachedAddresses.removeAll(m_lastUrl);
                 m_cachedAddresses.prepend(m_lastUrl);
             }
             recordOutcome(StationConnectionAttempt::Outcome::Connected);
             m_radioChangeReason.clear();
+            // Task 29 (link section 21.1): the winner reached
+            // snapshot.complete; every other rung stops, and one better
+            // than the winner, if ready, is moved to at once (21.3).
+            std::optional<PathRacer::Ready> standby;
+            if (m_racer) {
+                standby = m_racer->takeStandby();
+                m_racer->finish();
+                syncAttemptFromRace(m_racer);
+                m_racer->disconnect(this);
+                m_racer->deleteLater();
+                m_racer = nullptr;
+            }
+            // Review Minor 7: the rank from the pair the connection
+            // settled on; a standby no better than that is let go.
+            refreshPathRank();
+            if (standby && standby->rank >= m_pathRank) {
+                if (standby->transport) {
+                    standby->transport->closeLink(QStringLiteral("not needed"));
+                    standby->transport->deleteLater();
+                }
+                standby.reset();
+            }
+            m_upgradeAttempt = 0;
+            const QPointer<StationClient> self(this);
             emit handshakeComplete();
+            if (!self) {
+                return;
+            }
+            if (standby && standby->transport) {
+                beginUpgrade(*standby);
+            } else {
+                scheduleUpgrade(/*advance=*/false);
+            }
         }
         // iPhone app plan Task 78: sharing the Core as a device is known
         // once the handshake completes.
@@ -2378,6 +2505,10 @@ bool StationClient::signIn(const SessionMessage& hello)
         if (!verifyStationIdentity(hello, m_stationIdentity, &stationSpki, &certificate)) {
             return false;
         }
+        // iPhone app plan Task 29 (link section 21.1): the Core's
+        // rendezvous id, which a window saves to reach it through the
+        // service.
+        m_stationRendezvousId = RendezvousWire::rendezvousId(stationSpki);
         if (!keyUsable) {
             refuseStation(QStringLiteral("This computer's own key could not be read, so it "
                                          "cannot sign in to the Core it paired with."),
@@ -4768,6 +4899,14 @@ void StationClient::handleCommandResult(const SessionMessage& message)
     if (message.commandVerb == "tx.keepalive") {
         return;
     }
+    // iPhone app plan Task 29 (link section 21.2): the ticket this window
+    // asked for to move the session. Never logged beyond the outcome.
+    if (message.commandVerb == "session.pathTicket") {
+        if (message.commandId == m_pathTicketCommandId && m_pathTicketCommandId != 0) {
+            onPathTicket(message);
+        }
+        return;
+    }
     // iPhone app plan Task 78 (the several-devices design, section 7.3): a
     // change held for a question is answered "Waiting for you to confirm."
     // with `phase` `needsConfirmation`; the question follows. It is not a
@@ -5578,6 +5717,507 @@ bool StationClient::isAwaitingConfirmation(const QString& reason)
     return reason == QStringLiteral("Waiting for you to confirm.");
 }
 
+// ── iPhone app plan Task 29: the race and moving to a better path ─────────
+//
+// The link document, section 21. A paired Core is raced: every address the
+// window has for it, and the internet service, at once (PathRacer). The
+// first path whose hello proves the Core wins and the session signs in
+// there; once it has reached snapshot.complete a better path, if one is
+// ready or found later, takes the session over (SwitchableTransport),
+// without a sign-in or a snapshot.
+
+bool StationClient::helloProvesPairedCore(const SessionMessage& hello,
+                                          const QByteArray& certSha256,
+                                          const QByteArray& expectedIdentity,
+                                          QString* rendezvousId)
+{
+    if (hello.kind != SessionMessageKind::Hello || expectedIdentity.isEmpty()) {
+        return false;
+    }
+    const QByteArray spki = stationSpkiOf(hello);
+    if (spki.isEmpty() || StationIdentity::fingerprintOf(spki) != expectedIdentity) {
+        return false;
+    }
+    if (!bindingHolds(spki, hello.stationIdentity->certBinding, certSha256)) {
+        return false;
+    }
+    if (rendezvousId != nullptr) {
+        *rendezvousId = RendezvousWire::rendezvousId(spki);
+    }
+    return true;
+}
+
+PathRacer* StationClient::newRacer(bool upgrade)
+{
+    auto* racer = new PathRacer(this);
+    const QByteArray identity = m_stationIdentity;
+    racer->setVetter([identity](const SessionMessage& hello, SessionTransport* transport) {
+        return transport != nullptr
+            && helloProvesPairedCore(hello, transport->peerCertificateSha256(), identity);
+    });
+    // Review Minor 8: an upgrade knows its bar before any address is
+    // listed, so none that cannot beat it is dialled.
+    if (upgrade) {
+        racer->setBetterThan(m_pathRank);
+    }
+    racer->addDirectUrls(m_dialPlan, kMaxIncomingMessageBytes);
+    const ServiceRoute& route = m_serviceRoute;
+    const bool routeUsable = !route.servers.isEmpty()
+        && RendezvousWire::isRendezvousId(route.rendezvousId) && m_deviceIdentity
+        && m_deviceIdentity->isValid();
+    const QString serviceHost = route.servers.isEmpty() ? QString() : route.servers.first().host();
+    if (routeUsable && route.controlChannelVersion == 0) {
+        // Link section 21.1: a Core whose last session declared no control
+        // channel does not answer through the service; not started.
+        if (!upgrade) {
+            racer->addNote(PathRacer::PathKind::Service, serviceHost,
+                           PathRacer::Outcome::CoreTooOld,
+                           QString::fromLatin1(RendezvousDialer::kCoreTooOldReason));
+        }
+    } else if (routeUsable && (!upgrade || m_pathRank > PathRacer::ServiceDirect)) {
+        // An upgrade looks for a path without the relay (link 21.3).
+        const bool allowRelay = !upgrade && route.relayAllowed;
+        auto* rung = new RendezvousPathRung(route.servers, route.rendezvousId, m_deviceIdentity,
+                                            allowRelay);
+        if (m_serviceDialDeadlineMs > 0) {
+            rung->setDialDeadlineMs(m_serviceDialDeadlineMs);
+        }
+        if (m_serviceAnswerDeadlineMs > 0) {
+            rung->setAnswerDeadlineMs(m_serviceAnswerDeadlineMs);
+        }
+        // Review Minor 5: a Core whose last session declared the control
+        // channel is slow or offline when it does not answer, not old.
+        rung->setCoreAnswersIntroductions(route.controlChannelVersion >= 1);
+        racer->addRung(rung);
+        if (!upgrade && !route.relayAllowed) {
+            racer->addNote(PathRacer::PathKind::Relay, serviceHost,
+                           PathRacer::Outcome::RelayOff,
+                           QStringLiteral("The Core has the relay turned off."));
+        }
+    }
+    return racer;
+}
+
+void StationClient::startRace()
+{
+    stopRace();
+    m_lastError.clear();
+    startDialPlan();
+    m_raceWinnerUrl.clear();
+    m_raceWinnerLine = -1;
+    m_raceLines.clear();
+    m_pathRank = -1;
+    PathRacer* racer = newRacer(/*upgrade=*/false);
+    m_racer = racer;
+    connect(racer, &PathRacer::linesChanged, this, [this, racer] {
+        if (m_racer == racer) {
+            syncAttemptFromRace(racer);
+        }
+    });
+    connect(racer, &PathRacer::won, this, [this, racer](const PathRacer::Ready& ready) {
+        if (m_racer == racer) {
+            adoptRaceWinner(ready);
+        }
+    });
+    connect(racer, &PathRacer::failed, this, [this, racer](const QString& reason) {
+        if (m_racer == racer) {
+            onRaceFailed(reason);
+        }
+    });
+    qCInfo(lcStationClient) << "Racing every path to the Core";
+    racer->start();
+    emit connectionActivityChanged();
+}
+
+void StationClient::stopRace()
+{
+    if (m_racer) {
+        PathRacer* racer = m_racer;
+        m_racer = nullptr;
+        racer->disconnect(this);
+        racer->cancel();
+        racer->deleteLater();
+    }
+    if (m_upgradeRacer) {
+        PathRacer* racer = m_upgradeRacer;
+        m_upgradeRacer = nullptr;
+        racer->disconnect(this);
+        racer->cancel();
+        racer->deleteLater();
+    }
+    m_upgradeTimer->stop();
+    abandonUpgrade(QString(), /*reschedule=*/false);
+}
+
+void StationClient::syncAttemptFromRace(const PathRacer* racer)
+{
+    if (racer == nullptr) {
+        return;
+    }
+    const QList<PathRacer::Line> lines = racer->lines();
+    m_raceLines = lines;
+    QList<StationConnectionAttempt::Try> tries;
+    for (int i = 0; i < lines.size(); ++i) {
+        const PathRacer::Line& line = lines.at(i);
+        StationConnectionAttempt::Try attempt;
+        switch (line.kind) {
+        case PathRacer::PathKind::ThisNetwork:
+            attempt.path = StationConnectionAttempt::Path::ThisNetwork;
+            break;
+        case PathRacer::PathKind::Direct:
+            attempt.path = StationConnectionAttempt::Path::Direct;
+            break;
+        case PathRacer::PathKind::Service:
+            attempt.path = StationConnectionAttempt::Path::Service;
+            break;
+        case PathRacer::PathKind::Relay:
+            attempt.path = StationConnectionAttempt::Path::Relay;
+            break;
+        }
+        attempt.address = line.address;
+        using O = StationConnectionAttempt::Outcome;
+        switch (line.outcome) {
+        case PathRacer::Outcome::Trying: attempt.outcome = O::Trying; break;
+        case PathRacer::Outcome::Ready:
+            attempt.outcome = i == m_raceWinnerLine && m_handshakeComplete ? O::Connected
+                                                                             : O::Trying;
+            break;
+        case PathRacer::Outcome::NoAnswer: attempt.outcome = O::NoAnswer; break;
+        case PathRacer::Outcome::TimedOut: attempt.outcome = O::TimedOut; break;
+        case PathRacer::Outcome::NotThisCore: attempt.outcome = O::NotThisCore; break;
+        case PathRacer::Outcome::Failed: attempt.outcome = O::Failed; break;
+        case PathRacer::Outcome::Stopped: attempt.outcome = O::AnotherPathFirst; break;
+        case PathRacer::Outcome::RelayOff: attempt.outcome = O::RelayOff; break;
+        case PathRacer::Outcome::CoreTooOld: attempt.outcome = O::CoreTooOld; break;
+        }
+        tries.append(attempt);
+    }
+    m_attempt.tries = tries;
+    emit connectionAttemptChanged();
+}
+
+void StationClient::adoptRaceWinner(const PathRacer::Ready& ready)
+{
+    if (ready.transport.isNull()) {
+        return;
+    }
+    // The winner's line, for the record at snapshot.complete.
+    for (int i = 0; i < m_raceLines.size(); ++i) {
+        if (m_raceLines.at(i).outcome == PathRacer::Outcome::Ready
+            && m_raceLines.at(i).address == ready.address) {
+            m_raceWinnerLine = i;
+        }
+    }
+    m_raceWinnerUrl = ready.url;
+    m_pathRank = ready.rank;
+    m_pinRequired = false;
+    m_transportOpened = true;
+    SessionTransport* transport = ready.transport;
+    attachTransport(transport, m_planToken);
+    qCInfo(lcStationClient) << "Signing in to the Core at" << ready.address;
+    // The Core's hello, which the race read to vet this path: the session
+    // reads it first, as if it had just arrived.
+    const QPointer<StationClient> self(this);
+    onTransportText(ready.hello);
+    if (self && m_racer) {
+        syncAttemptFromRace(m_racer);
+    }
+}
+
+void StationClient::onRaceFailed(const QString& reason)
+{
+    PathRacer* racer = m_racer;
+    if (racer != nullptr) {
+        syncAttemptFromRace(racer);
+        m_racer = nullptr;
+        racer->disconnect(this);
+        racer->deleteLater();
+    }
+    m_lastError = reason;
+    qCInfo(lcStationClient) << "No path reached the Core";
+    // As a failed first connect: reported, then retried (link 12.4).
+    emit sessionEnded(reason);
+    scheduleReconnect();
+    emit connectionActivityChanged();
+}
+
+bool StationClient::canMovePathNow() const
+{
+    if (!m_handshakeComplete || m_capabilities.controlSwitchVersion < 1
+        || sessionTransport() == nullptr || sessionTransport()->switching()) {
+        return false;
+    }
+    // Link section 21.2: not while this window is keyed or has VOX armed,
+    // nor while the Core is on the air (the Core also refuses while MOX's
+    // delay timers run).
+    if (m_remoteTransmit != nullptr && m_remoteTransmit->keepaliveRunning()) {
+        return false;
+    }
+    if (!m_radioModel.isNull() && m_radioModel->isTransmitting()) {
+        return false;
+    }
+    return true;
+}
+
+bool StationClient::moveSessionForTest(SessionTransport* next, int rank)
+{
+    if (next == nullptr || !canMovePathNow() || m_upgrade) {
+        return false;
+    }
+    PathRacer::Ready ready;
+    ready.transport = next;
+    ready.rank = rank;
+    ready.kind = PathRacer::PathKind::Direct;
+    ready.address = next->peerDescription();
+    beginUpgrade(ready);
+    return true;
+}
+
+void StationClient::scheduleUpgrade(bool advance)
+{
+    m_upgradeTimer->stop();
+    if (!m_raceMode || m_pathRank <= PathRacer::ThisNetwork || !m_handshakeComplete
+        || m_capabilities.controlSwitchVersion < 1 || m_upgradeScheduleMs.isEmpty()) {
+        return;
+    }
+    if (advance) {
+        ++m_upgradeAttempt;
+    }
+    const int index = std::min(m_upgradeAttempt, static_cast<int>(m_upgradeScheduleMs.size()) - 1);
+    m_upgradeTimer->start(m_upgradeScheduleMs.at(index));
+}
+
+void StationClient::refreshPathRank()
+{
+    if (m_pathRank != PathRacer::ServiceRelayed && m_pathRank != PathRacer::ServiceDirect) {
+        return;
+    }
+    const auto* channel = qobject_cast<const DataChannelTransport*>(transport());
+    const std::optional<MediaIcePath> path =
+        channel != nullptr ? channel->selectedPath() : std::nullopt;
+    if (!path) {
+        return;
+    }
+    const int rank = path->relayed() ? PathRacer::ServiceRelayed : PathRacer::ServiceDirect;
+    if (rank == m_pathRank) {
+        return;
+    }
+    qCInfo(lcStationClient) << "The connection through the service settled on"
+                            << (path->relayed() ? "the relay" : "a direct pair");
+    m_pathRank = rank;
+    // The record names the path the session runs on.
+    for (StationConnectionAttempt::Try& attempt : m_attempt.tries) {
+        if (attempt.outcome == StationConnectionAttempt::Outcome::Connected
+            && (attempt.path == StationConnectionAttempt::Path::Relay
+                || attempt.path == StationConnectionAttempt::Path::Service)) {
+            attempt.path = path->relayed() ? StationConnectionAttempt::Path::Relay
+                                           : StationConnectionAttempt::Path::Service;
+        }
+    }
+    emit connectionAttemptChanged();
+}
+
+void StationClient::startUpgradeRace()
+{
+    if (m_upgradeRacer || m_upgrade) {
+        return;
+    }
+    // Review Minor 7: look only for what beats the path in use now.
+    refreshPathRank();
+    if (m_pathRank <= PathRacer::ThisNetwork) {
+        return;
+    }
+    if (!canMovePathNow()) {
+        // Link 21.3: the schedule waits for the unkey (and for a move
+        // already under way); look again at the first step's interval.
+        if (m_handshakeComplete && m_pathRank > PathRacer::ThisNetwork) {
+            m_upgradeTimer->start(m_upgradeScheduleMs.value(0, 5000));
+        }
+        return;
+    }
+    PathRacer* racer = newRacer(/*upgrade=*/true);
+    m_upgradeRacer = racer;
+    connect(racer, &PathRacer::won, this, [this, racer](const PathRacer::Ready& ready) {
+        if (m_upgradeRacer != racer) {
+            if (ready.transport) {
+                ready.transport->closeLink(QStringLiteral("not needed"));
+                ready.transport->deleteLater();
+            }
+            return;
+        }
+        m_upgradeRacer = nullptr;
+        racer->finish();
+        racer->disconnect(this);
+        racer->deleteLater();
+        beginUpgrade(ready);
+    });
+    connect(racer, &PathRacer::failed, this, [this, racer](const QString&) {
+        if (m_upgradeRacer != racer) {
+            return;
+        }
+        m_upgradeRacer = nullptr;
+        racer->disconnect(this);
+        racer->deleteLater();
+        scheduleUpgrade(/*advance=*/true);
+    });
+    qCInfo(lcStationClient) << "Looking for a better path to the Core";
+    racer->start();
+}
+
+void StationClient::beginUpgrade(PathRacer::Ready ready)
+{
+    if (ready.transport.isNull()) {
+        scheduleUpgrade(/*advance=*/true);
+        return;
+    }
+    if (!canMovePathNow() || m_upgrade) {
+        ready.transport->closeLink(QStringLiteral("not now"));
+        ready.transport->deleteLater();
+        scheduleUpgrade(/*advance=*/false);
+        return;
+    }
+    ready.transport->setParent(this);
+    // The Core may close the new connection at its connect deadline, or on
+    // a refused join; either gives the move up.
+    connect(ready.transport, &SessionTransport::closed, this, [this, transport = ready.transport] {
+        if (m_upgrade && m_upgrade->transport == transport && m_pathTicketCommandId != 0) {
+            abandonUpgrade(QStringLiteral("the new connection closed"), true);
+        }
+    });
+    m_upgrade = ready;
+    m_pathTicketCommandId = invokeCommand(QByteArrayLiteral("session.pathTicket"), {});
+    if (m_pathTicketCommandId == 0) {
+        abandonUpgrade(QStringLiteral("no session to move"), false);
+        return;
+    }
+    m_upgradeDeadline->start();
+    qCInfo(lcStationClient) << "Moving the session to" << ready.address;
+}
+
+void StationClient::abandonUpgrade(const QString& why, bool reschedule)
+{
+    m_upgradeDeadline->stop();
+    m_pathTicketCommandId = 0;
+    if (!m_upgrade) {
+        return;
+    }
+    const PathRacer::Ready upgrade = *m_upgrade;
+    m_upgrade.reset();
+    if (upgrade.transport) {
+        upgrade.transport->disconnect(this);
+        upgrade.transport->closeLink(QStringLiteral("move given up"));
+        upgrade.transport->deleteLater();
+    }
+    if (!why.isEmpty()) {
+        qCInfo(lcStationClient) << "Not moving the session:" << why;
+    }
+    if (reschedule) {
+        scheduleUpgrade(/*advance=*/true);
+    }
+}
+
+void StationClient::onPathTicket(const SessionMessage& result)
+{
+    m_upgradeDeadline->stop();
+    m_pathTicketCommandId = 0;
+    if (!m_upgrade || m_upgrade->transport.isNull()) {
+        abandonUpgrade(QStringLiteral("the new connection is gone"), true);
+        return;
+    }
+    QString ticket;
+    for (const MirrorUpdate& value : result.updates) {
+        if (value.name == "ticket" && value.kind == MirrorWireKind::Utf8) {
+            ticket = value.value.toString();
+        }
+    }
+    SwitchableTransport* switchable = sessionTransport();
+    if (!result.accepted || ticket.isEmpty() || switchable == nullptr || !canMovePathNow()) {
+        // Review Minor 14: a refusal for now (the radio on the air, here
+        // or at the Core) is not a failed look: the schedule stays on its
+        // current step.
+        abandonUpgrade(result.accepted ? QStringLiteral("this connection cannot move now")
+                                       : result.reason,
+                       /*reschedule=*/false);
+        scheduleUpgrade(/*advance=*/false);
+        return;
+    }
+    const PathRacer::Ready upgrade = *m_upgrade;
+    m_upgrade.reset();
+    SessionTransport* next = upgrade.transport;
+    next->disconnect(this);
+    // Link section 21.2 step 3: this window's hello on the new connection,
+    // as at a sign-in, then path.join in place of auth.request.
+    QHash<QByteArray, int> features = m_declaredFeatures;
+    if (m_declaredSessionHolder) {
+        features.insert(QByteArrayLiteral("sessionHolder"), 1);
+    }
+    next->sendText(SessionMessages::encode(
+        SessionMessages::hello(m_agreedMajor, kSessionProtocolMinor, m_localSettingsSchema,
+                               peerNameForThisProcess(), m_supportedMajors, features)));
+    next->sendText(SessionMessages::encode(SessionMessages::pathJoin(ticket)));
+    // The ICE settings of the connection through the service this session
+    // may be leaving, for its media afterwards (link 21.3).
+    const auto* leaving = qobject_cast<const DataChannelTransport*>(transport());
+    const std::optional<IceConfiguration> leavingIce =
+        leaving != nullptr ? leaving->iceConfiguration() : std::nullopt;
+    const int rank = upgrade.rank;
+    const QUrl url = upgrade.url;
+    const QString address = upgrade.address;
+    const PathRacer::PathKind kind = upgrade.kind;
+    connect(switchable, &SwitchableTransport::switched, this,
+            [this, switchable, rank, url, address, kind, leavingIce] {
+        disconnect(switchable, &SwitchableTransport::switched, this, nullptr);
+        disconnect(switchable, &SwitchableTransport::switchFailed, this, nullptr);
+        if (leavingIce && !m_serviceIce) {
+            m_serviceIce = leavingIce;
+        }
+        m_pathRank = rank;
+        ++m_pathSwitches;
+        if (url.isValid()) {
+            m_connectedUrl = url;
+            m_cachedAddresses.removeAll(url);
+            m_cachedAddresses.prepend(url);
+        }
+        // The record: the path left, and the one the session runs on now.
+        for (StationConnectionAttempt::Try& attempt : m_attempt.tries) {
+            if (attempt.outcome == StationConnectionAttempt::Outcome::Connected) {
+                attempt.outcome = StationConnectionAttempt::Outcome::MovedOn;
+            }
+        }
+        StationConnectionAttempt::Try moved;
+        moved.path = kind == PathRacer::PathKind::ThisNetwork
+            ? StationConnectionAttempt::Path::ThisNetwork
+            : kind == PathRacer::PathKind::Direct ? StationConnectionAttempt::Path::Direct
+            : kind == PathRacer::PathKind::Relay  ? StationConnectionAttempt::Path::Relay
+                                                  : StationConnectionAttempt::Path::Service;
+        moved.address = address;
+        moved.outcome = StationConnectionAttempt::Outcome::Connected;
+        m_attempt.tries.append(moved);
+        qCInfo(lcStationClient) << "The session moved to" << address << "rank" << rank;
+        m_upgradeAttempt = 0;
+        const QPointer<StationClient> self(this);
+        emit connectionAttemptChanged();
+        emit pathChanged();
+        if (self) {
+            scheduleUpgrade(/*advance=*/false);
+        }
+    });
+    connect(switchable, &SwitchableTransport::switchFailed, this,
+            [this, switchable](const QString& why) {
+        disconnect(switchable, &SwitchableTransport::switched, this, nullptr);
+        disconnect(switchable, &SwitchableTransport::switchFailed, this, nullptr);
+        qCInfo(lcStationClient) << "The session stayed where it was:" << why;
+        scheduleUpgrade(/*advance=*/true);
+    });
+    if (!switchable->beginClientSwitch(next)) {
+        disconnect(switchable, &SwitchableTransport::switched, this, nullptr);
+        disconnect(switchable, &SwitchableTransport::switchFailed, this, nullptr);
+        next->closeLink(QStringLiteral("move given up"));
+        next->deleteLater();
+        scheduleUpgrade(/*advance=*/true);
+    }
+}
+
 // ── iPhone app plan Task 27: the attempt record ────────────────────────────
 
 bool StationConnectionAttempt::connected() const
@@ -5599,6 +6239,8 @@ QString StationConnectionAttempt::pathText(Path path)
         return QStringLiteral("direct");
     case Path::Relay:
         return QStringLiteral("relay");
+    case Path::Service:
+        return QStringLiteral("through the internet service");
     }
     return {};
 }
@@ -5618,6 +6260,15 @@ QString StationConnectionAttempt::outcomeText(Outcome outcome)
         return QStringLiteral("another computer answered");
     case Outcome::Failed:
         return QStringLiteral("did not connect");
+    case Outcome::AnotherPathFirst:
+        return QStringLiteral("another path connected first");
+    case Outcome::RelayOff:
+        return QStringLiteral("the Core has the relay turned off");
+    case Outcome::CoreTooOld:
+        return QStringLiteral("this Core can't be reached through the internet service; "
+                              "updating the Core may help");
+    case Outcome::MovedOn:
+        return QStringLiteral("connected, then moved to a better path");
     }
     return {};
 }

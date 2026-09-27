@@ -41,6 +41,10 @@
 //   2026-09-26  J.J. Boyd / KG4VCF  Parity Task 19 (R-IOS-25): record.batch
 //                                    placed as a station kind. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-27  J.J. Boyd / KG4VCF  iPhone app plan Task 29 (R-IOS-16):
+//                                    path.join and path.switch from the
+//                                    client, path.switch from the station.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -74,6 +78,8 @@ const QStringList& clientKinds()
         // step 3 fails).
         QStringLiteral("pair.start"), QStringLiteral("pair.spake"),
         QStringLiteral("pair.confirm"), QStringLiteral("pair.fail"),
+        // iPhone app plan Task 29: moving a session to another connection.
+        QStringLiteral("path.join"), QStringLiteral("path.switch"),
     };
     return kinds;
 }
@@ -96,6 +102,8 @@ const QStringList& stationKinds()
         QStringLiteral("confirm.request"), QStringLiteral("notice"),
         // Parity Task 19: a record stream's changes.
         QStringLiteral("record.batch"),
+        // iPhone app plan Task 29: the barrier of a move.
+        QStringLiteral("path.switch"),
     };
     return kinds;
 }

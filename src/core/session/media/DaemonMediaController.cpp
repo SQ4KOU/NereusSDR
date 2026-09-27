@@ -58,6 +58,9 @@
 //               path's added latency (mean, max), the send ring's fill
 //               (mean, max) and the silence shed. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-27: iPhone app plan Task 29 (R-IOS-16): media `replace`: a
+//               second peer, audio sent on both, handed over on a keyframe.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/media/DaemonMediaController.h"
@@ -69,6 +72,7 @@
 #include "core/TxSliceArbiter.h"
 #include "core/WdspEngine.h"
 #include "core/safety/TransmitHolder.h"
+#include "core/session/IceConfiguration.h"
 #include "core/session/RemoteKeying.h"
 #include "core/session/StationServer.h"
 #include "core/session/media/DaemonAudioSender.h"
@@ -85,6 +89,7 @@
 #include <QJsonArray>
 #include <QJsonValue>
 #include <QLoggingCategory>
+#include <QtEndian>
 #include <QUuid>
 #include <QVarLengthArray>
 
@@ -112,6 +117,24 @@ constexpr int kDisplayDiagnosticsLogIntervalMs = 10'000;
 // Distinct media error texts logged per media peer; later display-channel
 // errors are still counted in displayTransportErrors.
 constexpr qsizetype kMaxLoggedTransportErrorKinds = 16;
+
+// iPhone app plan Task 29: `packet` with its SSRC (bytes 8 to 11) replaced
+// through `rewrite`; untouched when its SSRC is not there or it is too short
+// to be RTP.
+QByteArray rewriteRtpSsrc(const QByteArray& packet, const QHash<quint32, quint32>& rewrite)
+{
+    if (rewrite.isEmpty() || packet.size() < 12) {
+        return packet;
+    }
+    const quint32 ssrc = qFromBigEndian<quint32>(packet.constData() + 8);
+    const auto it = rewrite.constFind(ssrc);
+    if (it == rewrite.cend()) {
+        return packet;
+    }
+    QByteArray out = packet;
+    qToBigEndian<quint32>(it.value(), out.data() + 8);
+    return out;
+}
 
 bool exactKeys(const QJsonObject& object, std::initializer_list<const char*> keys)
 {
@@ -559,6 +582,24 @@ DaemonMediaController::DaemonMediaController(StationServer* server,
     m_displayDiagnosticsTimer.setInterval(kDisplayDiagnosticsLogIntervalMs);
     connect(&m_displayDiagnosticsTimer, &QTimer::timeout, this, [this] {
         logDisplayDiagnostics(false);
+    });
+    // iPhone app plan Task 29: a replacement's overlap, its connect bound,
+    // and the old peer's drain.
+    m_replaceOverlapTimer.setSingleShot(true);
+    connect(&m_replaceOverlapTimer, &QTimer::timeout, this,
+            &DaemonMediaController::finishReplacement);
+    m_replaceConnectTimer.setSingleShot(true);
+    connect(&m_replaceConnectTimer, &QTimer::timeout, this, [this] {
+        failReplacement(QString::fromLatin1(kMediaPeerClosedReason));
+    });
+    m_retireDrainTimer.setSingleShot(true);
+    connect(&m_retireDrainTimer, &QTimer::timeout, this, [this] {
+        if (m_retiring) {
+            MediaPeer* const peer = m_retiring.release();
+            peer->disconnect(this);
+            peer->stop();
+            peer->deleteLater();
+        }
     });
     if (!m_server || !m_radioModel) {
         return;
@@ -1456,6 +1497,8 @@ void DaemonMediaController::onControl(const QJsonObject& control, quint64 epoch)
     const QString op = control.value(QStringLiteral("op")).toString();
     if (op == QLatin1String("clock-probe")) { handleClockProbe(control, receivedNs); return; }
     if (op == QLatin1String("start")) { handleStart(control); return; }
+    // iPhone app plan Task 29: a new peer beside the current one.
+    if (op == QLatin1String("replace")) { handleReplace(control); return; }
     if (op == QLatin1String("subscribe")) { handleSubscribe(control); return; }
     if (op == QLatin1String("unsubscribe")) { handleUnsubscribe(control); return; }
     if (op == QLatin1String("keyframe")) { handleKeyframe(control); return; }
@@ -1597,11 +1640,55 @@ bool DaemonMediaController::handleStart(const QJsonObject& control)
     }
     m_peer = std::make_unique<MediaPeer>(this, m_peerFactory);
     MediaPeer* const peer = m_peer.get();
-    const quint64 peerEpoch = m_epoch;
     m_displayDiagnostics = {};
     m_displayDiagnosticsLogged = {};
     m_loggedTransportErrorKinds.clear();
     m_displayDiagnosticsTimer.start();
+    // Task 29: a new start is a new timeline of SSRCs; no earlier peer's
+    // stamp needs rewriting.
+    m_sendSsrcRewrite.clear();
+    m_micSsrcRewrite.clear();
+    wireCurrentPeer(peer, connectionId);
+    const bool offerLossless = declaresAudioProfile && m_audioLosslessAllowed;
+    // iPhone app plan Task 28 (R-IOS-16): a session through the remote
+    // access service makes its media connection with its control
+    // connection's STUN server, and its relay only when the control path
+    // is relayed (the fix wave, Important 4).
+    peer->setIceConfiguration(m_server ? m_server->sessionIceConfiguration(m_epoch)
+                                       : std::nullopt);
+    if (!peer->start(IMediaTransport::Role::Offerer, connectionId,
+                     m_audioTargetBitrate, offerLossless, declaresReceiverAudio,
+                     declaresHeadphonesMix, declaresRemoteTx)) {
+        m_displayDiagnosticsTimer.stop();
+        m_peer.reset();
+        sendRejected(connectionId, 0, 0, QStringLiteral("The Core could not start audio and display."));
+        return false;
+    }
+    m_receiverAudioNegotiated = declaresReceiverAudio;
+    m_headphonesMixNegotiated = declaresHeadphonesMix;
+    // Parity Task 32: MON goes nowhere until the peer asks for a route.
+    m_txMonitorNegotiated = declaresTxMonitor;
+    m_monitorRevision = 0;
+    m_monitorRoute = TxMonitorRoute::None;
+    refreshTxMonitor();
+    m_txDisplayNegotiated = declaresTxDisplay;
+    // Task 29: what a replacement of this peer keeps.
+    m_startOfferedLossless = offerLossless;
+    m_startMicLine = declaresRemoteTx;
+    // Parity Task 31: 3 and above may add `duplex` to a subscribe.
+    m_txDisplayDeclared = declaredTxDisplay;
+    if (declaresTxDisplay) {
+        wireTxDisplayFeed();
+    }
+    if (declaresRemoteTx) {
+        startMicLine(peer);
+    }
+    return true;
+}
+
+void DaemonMediaController::wireCurrentPeer(MediaPeer* peer, const QString& connectionId)
+{
+    const quint64 peerEpoch = m_epoch;
     connect(peer, &MediaPeer::errorOccurred, this,
             [this, peer, peerEpoch](const QString& message) {
         if (m_peer.get() == peer && m_epoch == peerEpoch) {
@@ -1694,45 +1781,285 @@ bool DaemonMediaController::handleStart(const QJsonObject& control)
             m_server->txChannelMessage(peerEpoch, message);
         }
     });
-    // Task 36: the microphone line's packets go to its receiver.
+    // Task 36: the microphone line's packets go to its receiver. Task 29:
+    // after a replacement they carry this peer's SSRC, which the receiver
+    // started before it takes as its own.
     connect(peer, &MediaPeer::micRtpReceived, this,
             [this, peer, peerEpoch](const QByteArray& packet) {
         if (m_peer.get() == peer && m_epoch == peerEpoch && m_micReceiver) {
-            m_micReceiver->submit(packet);
+            m_micReceiver->submit(rewriteRtpSsrc(packet, m_micSsrcRewrite));
         }
     });
-    const bool offerLossless = declaresAudioProfile && m_audioLosslessAllowed;
-    // iPhone app plan Task 28 (R-IOS-16): a session through the remote
-    // access service makes its media connection with its control
-    // connection's STUN server, and its relay only when the control path
-    // is relayed (the fix wave, Important 4).
-    peer->setIceConfiguration(m_server ? m_server->sessionIceConfiguration(m_epoch)
-                                       : std::nullopt);
-    if (!peer->start(IMediaTransport::Role::Offerer, connectionId,
-                     m_audioTargetBitrate, offerLossless, declaresReceiverAudio,
-                     declaresHeadphonesMix, declaresRemoteTx)) {
-        m_displayDiagnosticsTimer.stop();
-        m_peer.reset();
-        sendRejected(connectionId, 0, 0, QStringLiteral("The Core could not start audio and display."));
+}
+
+// ---- iPhone app plan Task 29 (R-IOS-16): replacing the media connection ----
+//
+// The media document, "Replacing the media connection". A GUI whose control
+// session moved to a better path asks for a new peer beside the current
+// one. Once it is ready every audio packet goes out on both, with the same
+// sequence number and timestamp and each peer's own SSRC, so the app hears
+// no gap and drops the copies by timestamp; kReplaceOverlapMs later the new
+// peer takes over (displays next, each on a keyframe), the Core says so
+// with `replace`, and the old peer drains microphone packets and "tx"
+// keepalives for kReplaceDrainMs before it closes. Nothing here keys, and
+// no replacement starts or finishes while the radio is keyed or MOX's
+// delay timers run.
+
+QList<quint32> DaemonMediaController::audioSsrcsOf(const MediaPeer* peer)
+{
+    QList<quint32> ssrcs;
+    if (peer == nullptr) {
+        return ssrcs;
+    }
+    ssrcs.append(peer->audioSsrc());
+    const QList<quint32> receivers = peer->receiverAudioSsrcs();
+    for (int i = 0; i < IMediaTransport::kMaxReceiverAudioStreams; ++i) {
+        ssrcs.append(receivers.value(i, 0));
+    }
+    ssrcs.append(peer->headphonesAudioSsrc());
+    return ssrcs;
+}
+
+bool DaemonMediaController::radioIdleForReplace() const
+{
+    const MoxController* mox = m_radioModel ? m_radioModel->moxController() : nullptr;
+    return mox == nullptr || mox->state() == MoxState::Rx;
+}
+
+bool DaemonMediaController::sendAudioRtp(MediaPeer* peer, const QByteArray& packet)
+{
+    // A sender started before a replacement stamps the peer it started
+    // with; the current peer sends and accepts only its own SSRCs.
+    const QByteArray current = rewriteRtpSsrc(packet, m_sendSsrcRewrite);
+    const bool accepted = peer->sendRtp(current);
+    if (m_replacement && m_replacementReady && peer == m_peer.get() && current.size() >= 12) {
+        const QList<quint32> from = audioSsrcsOf(peer);
+        const QList<quint32> to = audioSsrcsOf(m_replacement.get());
+        const quint32 ssrc = qFromBigEndian<quint32>(current.constData() + 8);
+        const qsizetype index = ssrc != 0 ? from.indexOf(ssrc) : -1;
+        if (index >= 0 && to.value(index) != 0) {
+            m_replacement->sendRtp(rewriteRtpSsrc(current, {{ssrc, to.value(index)}}));
+        }
+    }
+    return accepted;
+}
+
+bool DaemonMediaController::handleReplace(const QJsonObject& control)
+{
+    if (!m_server || !m_server->mediaReplaceAvailable(m_epoch)
+        || !exactKeys(control, {"op", "connectionId", "replaces"})
+        || !canonicalConnectionId(control.value(QStringLiteral("connectionId")))
+        || !canonicalConnectionId(control.value(QStringLiteral("replaces")))) {
         return false;
     }
-    m_receiverAudioNegotiated = declaresReceiverAudio;
-    m_headphonesMixNegotiated = declaresHeadphonesMix;
-    // Parity Task 32: MON goes nowhere until the peer asks for a route.
-    m_txMonitorNegotiated = declaresTxMonitor;
-    m_monitorRevision = 0;
-    m_monitorRoute = TxMonitorRoute::None;
-    refreshTxMonitor();
-    m_txDisplayNegotiated = declaresTxDisplay;
-    // Parity Task 31: 3 and above may add `duplex` to a subscribe.
-    m_txDisplayDeclared = declaredTxDisplay;
-    if (declaresTxDisplay) {
-        wireTxDisplayFeed();
+    const QString connectionId = control.value(QStringLiteral("connectionId")).toString();
+    const QString replaces = control.value(QStringLiteral("replaces")).toString();
+    const auto refuse = [this, &connectionId](const QString& reason) {
+        sendRejected(connectionId, 0, 0, reason);
+        return false;
+    };
+    if (!m_peer || m_peer->connectionId() != replaces || connectionId == replaces
+        || !m_peer->isReady() || m_replacement) {
+        return refuse(QStringLiteral(
+            "The Core did not move audio and display: that connection is not the current one."));
     }
-    if (declaresRemoteTx) {
-        startMicLine(peer);
+    if (!radioIdleForReplace()) {
+        return refuse(QStringLiteral(
+            "The Core did not move audio and display: the radio is transmitting."));
     }
+    // The old peer still draining from an earlier replacement goes now.
+    if (m_retiring) {
+        m_retireDrainTimer.stop();
+        MediaPeer* retiring = m_retiring.release();
+        retiring->disconnect(this);
+        retiring->stop();
+        retiring->deleteLater();
+    }
+    m_replacement = std::make_unique<MediaPeer>(this, m_peerFactory);
+    m_replacementId = connectionId;
+    MediaPeer* const peer = m_replacement.get();
+    const quint64 peerEpoch = m_epoch;
+    m_replacementReady = false;
+    const auto current = [this, peer, peerEpoch] {
+        return m_replacement.get() == peer && m_epoch == peerEpoch;
+    };
+    connect(peer, &MediaPeer::controlReady, this, [this, current](const QJsonObject& outbound) {
+        if (current()) {
+            sendControl(outbound);
+        }
+    });
+    connect(peer, &MediaPeer::ready, this, [this, current] {
+        if (current()) {
+            onReplacementReady();
+        }
+    });
+    connect(peer, &MediaPeer::connectionFailed, this, [this, current](const QString& message) {
+        if (current()) {
+            qCInfo(lcDaemonMedia).noquote()
+                << QStringLiteral("replacement media connection failed: %1").arg(message.left(256));
+            failReplacement(QString::fromLatin1(kMediaPeerLostReason));
+        }
+    });
+    connect(peer, &MediaPeer::closed, this, [this, current] {
+        if (current()) {
+            failReplacement(QString::fromLatin1(kMediaPeerClosedReason));
+        }
+    });
+    connect(peer, &MediaPeer::errorOccurred, this, [this, current](const QString& message) {
+        if (current()) {
+            qCInfo(lcDaemonMedia).noquote()
+                << QStringLiteral("replacement media error: %1").arg(message.left(256));
+            failReplacement(QString::fromLatin1(kMediaPeerLostReason));
+        }
+    });
+    // Microphone packets and "tx" keepalives are taken from the new peer as
+    // soon as it carries them.
+    connect(peer, &MediaPeer::txReceived, this, [this, current, peerEpoch](const QByteArray& message) {
+        if (current() && m_server) {
+            m_server->txChannelMessage(peerEpoch, message);
+        }
+    });
+    connect(peer, &MediaPeer::micRtpReceived, this, [this, current](const QByteArray& packet) {
+        if (current() && m_micReceiver) {
+            m_micReceiver->submit(rewriteRtpSsrc(packet, m_micSsrcRewrite));
+        }
+    });
+    peer->setIceConfiguration(m_server->sessionIceConfiguration(m_epoch));
+    if (!peer->start(IMediaTransport::Role::Offerer, connectionId, m_audioTargetBitrate,
+                     m_startOfferedLossless, m_receiverAudioNegotiated,
+                     m_headphonesMixNegotiated, m_startMicLine)) {
+        peer->disconnect(this);
+        m_replacement.release()->deleteLater();
+        sendRejected(connectionId, 0, 0,
+                     QStringLiteral("The Core could not start audio and display."));
+        return false;
+    }
+    m_replaceConnectTimer.start(IceConfiguration::kConnectDeadlineMs);
+    qCInfo(lcDaemonMedia) << "media replacement started";
     return true;
+}
+
+void DaemonMediaController::onReplacementReady()
+{
+    m_replaceConnectTimer.stop();
+    m_replacementReady = true;
+    // The new peer's microphone packets reach the receiver as its own.
+    if (m_micReceiver && m_replacement && m_replacement->micAudioSsrc() != 0) {
+        m_micSsrcRewrite.insert(m_replacement->micAudioSsrc(), m_micReceiver->ssrc());
+    }
+    m_replaceOverlapTimer.start(kReplaceOverlapMs);
+    qCInfo(lcDaemonMedia) << "media replacement ready; audio on both connections";
+}
+
+void DaemonMediaController::finishReplacement()
+{
+    if (!m_replacement || !m_replacementReady || !m_peer) {
+        return;
+    }
+    // Nothing moves while the radio is on the air: both peers keep
+    // carrying until it is idle.
+    if (!radioIdleForReplace()) {
+        m_replaceOverlapTimer.start(kReplaceOverlapMs);
+        return;
+    }
+    const QString replaces = m_peer->connectionId();
+    // Every packet a sender stamps from now on goes to the new peer under
+    // its own SSRC: the earlier peers' stamps, and the retiring peer's.
+    const QList<quint32> from = audioSsrcsOf(m_peer.get());
+    const QList<quint32> to = audioSsrcsOf(m_replacement.get());
+    QHash<quint32, quint32> rewrite;
+    for (auto it = m_sendSsrcRewrite.cbegin(); it != m_sendSsrcRewrite.cend(); ++it) {
+        const qsizetype index = from.indexOf(it.value());
+        if (index >= 0 && to.value(index) != 0) {
+            rewrite.insert(it.key(), to.value(index));
+        }
+    }
+    for (qsizetype i = 0; i < from.size(); ++i) {
+        if (from.at(i) != 0 && to.value(i) != 0) {
+            rewrite.insert(from.at(i), to.value(i));
+        }
+    }
+    m_sendSsrcRewrite = rewrite;
+    // The old peer stops sending; its microphone packets and keepalives are
+    // still taken while it drains.
+    std::unique_ptr<MediaPeer> old = std::move(m_peer);
+    old->disconnect(this);
+    MediaPeer* const oldPeer = old.get();
+    const quint64 peerEpoch = m_epoch;
+    connect(oldPeer, &MediaPeer::txReceived, this, [this, oldPeer, peerEpoch](const QByteArray& message) {
+        if (m_retiring.get() == oldPeer && m_epoch == peerEpoch && m_server) {
+            m_server->txChannelMessage(peerEpoch, message);
+        }
+    });
+    connect(oldPeer, &MediaPeer::micRtpReceived, this, [this, oldPeer, peerEpoch](const QByteArray& packet) {
+        if (m_retiring.get() == oldPeer && m_epoch == peerEpoch && m_micReceiver) {
+            m_micReceiver->submit(rewriteRtpSsrc(packet, m_micSsrcRewrite));
+        }
+    });
+    m_retiring = std::move(old);
+    m_retireDrainTimer.start(kReplaceDrainMs);
+
+    m_replaceOverlapTimer.stop();
+    m_replacement->disconnect(this);
+    m_peer = std::move(m_replacement);
+    m_replacementId.clear();
+    m_replacementReady = false;
+    MediaPeer* const peer = m_peer.get();
+    const QString connectionId = peer->connectionId();
+    wireCurrentPeer(peer, connectionId);
+    // Displays go on over the new peer, each starting on a keyframe.
+    for (auto& [endpointId, entry] : m_endpoints) {
+        Q_UNUSED(endpointId);
+        entry.forceKeyframe = true;
+    }
+    m_displayDiagnostics = {};
+    m_displayDiagnosticsLogged = {};
+    m_loggedTransportErrorKinds.clear();
+    sendControl({{QStringLiteral("op"), QStringLiteral("replace")},
+                 {QStringLiteral("connectionId"), connectionId},
+                 {QStringLiteral("replaces"), replaces}});
+    qCInfo(lcDaemonMedia) << "media moved to its new connection";
+}
+
+void DaemonMediaController::failReplacement(const QString& reason)
+{
+    m_replaceConnectTimer.stop();
+    m_replaceOverlapTimer.stop();
+    if (!m_replacement) {
+        return;
+    }
+    // The id it started with: a peer that closed has cleared its own.
+    const QString connectionId = std::exchange(m_replacementId, QString());
+    MediaPeer* const peer = m_replacement.release();
+    m_replacementReady = false;
+    if (m_micReceiver) {
+        m_micSsrcRewrite.remove(peer->micAudioSsrc());
+    }
+    peer->disconnect(this);
+    peer->stop();
+    peer->deleteLater();
+    qCInfo(lcDaemonMedia) << "media replacement dropped; the current connection carries on";
+    // The id the replacement started with (its own may be cleared by now).
+    if (!connectionId.isEmpty()) {
+        sendRejected(connectionId, 0, 0, reason);
+    }
+}
+
+void DaemonMediaController::clearReplacement()
+{
+    m_replaceConnectTimer.stop();
+    m_replaceOverlapTimer.stop();
+    m_retireDrainTimer.stop();
+    m_replacementReady = false;
+    m_replacementId.clear();
+    for (std::unique_ptr<MediaPeer>* slot : {&m_replacement, &m_retiring}) {
+        if (*slot) {
+            MediaPeer* const peer = slot->release();
+            peer->disconnect(this);
+            peer->stop();
+            peer->deleteLater();
+        }
+    }
 }
 
 // ---- iPhone app plan Task 36 (R-IOS-13): the microphone line ---------------
@@ -1951,6 +2278,12 @@ RemoteKeying::MicUplink DaemonMediaController::micUplink()
 
 bool DaemonMediaController::acceptPeerControl(const QJsonObject& control)
 {
+    // iPhone app plan Task 29: a replacement's own description and
+    // candidates, under its new connection id.
+    if (m_replacement && canonicalConnectionId(control.value(QStringLiteral("connectionId")))
+        && control.value(QStringLiteral("connectionId")).toString() == m_replacementId) {
+        return m_replacement->acceptControl(control);
+    }
     if (!m_peer || !canonicalConnectionId(control.value(QStringLiteral("connectionId")))
         || control.value(QStringLiteral("connectionId")).toString() != m_peer->connectionId()
         || !m_peer->acceptControl(control)) {
@@ -2764,7 +3097,7 @@ void DaemonMediaController::onReceiverAudioPacket(int sliceId, DaemonAudioSender
         || !m_peer->isReady() || !m_receiverAudioNegotiated) {
         return;
     }
-    m_peer->sendRtp(packet);
+    sendAudioRtp(m_peer.get(), packet);
 }
 
 void DaemonMediaController::retireReceiverSender(ReceiverAudioStream& stream)
@@ -3105,7 +3438,7 @@ void DaemonMediaController::onHeadphonesAudioPacket(DaemonAudioSender* sender,
         || m_epoch == 0 || !m_peer || !m_peer->isReady() || !m_headphonesMixNegotiated) {
         return;
     }
-    m_peer->sendRtp(packet);
+    sendAudioRtp(m_peer.get(), packet);
 }
 
 void DaemonMediaController::resetHeadphonesAudioSession()
@@ -4756,7 +5089,7 @@ void DaemonMediaController::reconcileAudio()
                         ++m_audioDiagnostics.sendInFlight;
                     }
                     const QPointer<DaemonMediaController> self(this);
-                    const bool accepted = peer->sendRtp(packet);
+                    const bool accepted = sendAudioRtp(peer, packet);
                     // The transport can synchronously retire or replace this
                     // session. Resolve only into the context that initiated
                     // this send, never a replacement that appeared mid-call.
@@ -4979,6 +5312,10 @@ void DaemonMediaController::clearSession()
     resetHeadphonesAudioSession();
     // Task 36: and the microphone line; the ring goes out of use with it.
     stopMicLine();
+    // Task 29: a replacement under way, and a peer still draining.
+    clearReplacement();
+    m_sendSsrcRewrite.clear();
+    m_micSsrcRewrite.clear();
     if (m_peer) {
         logDisplayDiagnostics(true);
     }
