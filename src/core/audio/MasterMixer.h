@@ -60,6 +60,13 @@
 //                 the same per-slice gain, pan, mute, route and up-slew.
 //                 NereusSDR-original. Authored by J.J. Boyd (KG4VCF), with
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-27 -- Remote-window parity Task 32 (R-IOS-13, R-R3-49): the
+//                 transmit monitor to the device that holds transmit. An
+//                 owner output may take the slots outside the slice mask
+//                 (the transmit monitor) into its speakers or headphones
+//                 sum, and the local sums may leave them out. NereusSDR-
+//                 original. J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 // --- From aamix.c ---
@@ -297,17 +304,30 @@ public:
     // sums. A null buffer is not written; an owner with no bit set is
     // skipped whole. Owner sums never hold up or change the local drain:
     // the barrier, the cursors and the ramps are the local drain's.
+    //
+    // Remote-window parity Task 32: `monitor` says where the slots outside
+    // 0..31 (the transmit monitor's) go for this owner: nowhere (the
+    // default), its speakers sum or its headphones sum, at the slot's own
+    // gain whichever local sum the slot's route builds it into. An owner
+    // with no slice bit but a monitor route is not skipped.
+    enum class OwnerMonitor : std::uint8_t { None, Speakers, Headphones };
     struct OwnerOutput {
         std::uint32_t sliceMask{0};
         float* speakers{nullptr};
         float* headphones{nullptr};
+        OwnerMonitor monitor{OwnerMonitor::None};
     };
     // As the two-sum tryDrain, except that speakersOut and headphonesOut
     // carry only the slices `localMask` names (slot ids outside 0..31, the
-    // transmit monitor's, always), and each of `owners` (ownerCount of
-    // them, may be null when 0) gets its own sums.
+    // transmit monitor's, while `localOutOfMask`, the default), and each of
+    // `owners` (ownerCount of them, may be null when 0) gets its own sums.
+    // With `onlyWithoutMembers` it drains only while no slice is a barrier
+    // member (only the transmit monitor is queued), and returns 0 otherwise:
+    // a member's own call drains the period, so a second drain never hands
+    // the outputs two blocks in one period (Task 32, the MOX-gated slice).
     int tryDrain(float* speakersOut, float* headphonesOut, int maxFrames,
-                 std::uint32_t localMask, OwnerOutput* owners, int ownerCount);
+                 std::uint32_t localMask, OwnerOutput* owners, int ownerCount,
+                 bool localOutOfMask = true, bool onlyWithoutMembers = false);
 
     // Test seam: ramp length in frames (default kDefaultRampFrames).
     void setRampFrames(int frames);

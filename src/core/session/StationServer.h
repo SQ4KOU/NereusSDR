@@ -400,6 +400,9 @@
 //               and privateKeyPemPath(), for the control connection through
 //               the remote access service. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-27: Parity Task 32 (R-IOS-13, R-R3-49): txMonitorAudioVersion()
+//               and txMonitorAudioAvailable(). J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/IceConfiguration.h"
@@ -1038,6 +1041,13 @@ public:
     // access service with the control session over a data channel (link
     // section 20); 0 otherwise.
     int controlChannelVersion() const;
+    // R-IOS-13 / R-R3-49 (parity Task 32): txMonitorAudioVersion. 1 while
+    // media is on with the Core's own radio model: the transmit monitor
+    // goes to the device that holds transmit (monitor-audio); 0 otherwise.
+    // txMonitorAudioAvailable(epoch): that session's peer agreed minor 11
+    // and was told it, so its media start may declare it.
+    int txMonitorAudioVersion() const;
+    bool txMonitorAudioAvailable(quint64 epoch) const;
     /// Parity Task 21: the Core's radios (nereusd's DaemonApp owns it).
     void setStationRadios(StationRadios* radios);
     /// For a test: the stream by name (spots, spotConsole:<source>), or

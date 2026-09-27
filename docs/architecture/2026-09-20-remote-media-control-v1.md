@@ -764,6 +764,67 @@ The new reason string `no-headphones-receiver` occurs only in
 carrying it is malformed. A GUI shows reasons through `OperatorReasonText`
 in plain words, never as the wire string.
 
+## Transmit monitor (monitor-audio)
+
+Capability `txMonitorAudioVersion=1` (R-IOS-13, R-R3-49; remote-window
+parity Task 32) negotiates it; the session protocol minor is unchanged. The
+Core advertises version 1 in the minor-11 capabilities block whenever media
+is on and it runs its own radio model (0 without media). A GUI that sees it
+may add `txMonitorAudioVersion` (a whole number of at least 1) to its
+`start`; a malformed value, or the key from a peer the Core did not tell,
+starts no peer. Only then does the Core honour a `monitor-audio` request. A
+GUI that did not declare it gets exactly the wire it gets today, and no
+transmit monitor.
+
+The transmit monitor (MON) is the transmitter's own audio as it goes on the
+air, at MON's level (`monitorVolume`, 0.5 by default: Thetis mixes the
+transmitter's stream into its output at 0.5 while MON is on, `audio.cs:407-424`
+and `console.cs:29040-29066` [v2.10.3.15]). On a Core it is carried in the
+media audio of the one device that holds transmit (`txState`'s holder),
+while MON is on and the radio is on the air; no other device's stream
+carries it. While a remote device holds transmit the Core's own speakers and
+headphones leave MON out, so MON plays only on that device; while the
+station device holds it (a window hosting the Core, or the radio's own PTT)
+the Core's own outputs play it as before (the operator's ruling of
+2026-09-26).
+
+GUI-to-Core `monitor-audio` has exactly these fields:
+
+| Field | Meaning |
+| --- | --- |
+| `op`, `connectionId` | As every operation; the current peer's ID |
+| `revision` | Nonzero uint32; for the whole media connection it only goes up (serial-number order, as `audio`) |
+| `route` | `speakers`: the main stream; `headphones`: the headphones stream; `none`: nowhere |
+
+The Core ignores a request with any other key, a wrong or retired
+`connectionId`, a malformed field, a route it does not know, or a revision
+at or below its last accepted one. It answers each accepted request with one
+`monitor-audio-context`:
+
+| Field | Meaning |
+| --- | --- |
+| `op` | `monitor-audio-context` |
+| `connectionId`, `revision` | The current peer's ID; the request's revision |
+| `route` | The route as applied: `headphones` becomes `speakers` for a GUI whose start did not declare `headphonesMixVersion`, whose main stream then carries MON |
+
+`monitor-audio` is taken on and off the air: it only chooses which of the
+device's own streams carries MON, and reaches neither the radio nor any
+device. The route stands for the media connection; the holder, MON and the
+air decide whether MON is in it. The headphones stream runs while MON is
+routed there for the holder with MON on, as it does for a receiver routed
+to the headphones (its context's `no-headphones-receiver` then does not
+apply). No context is sent when the holder, MON or the air change. When the
+session or the media connection ends the route is forgotten, and the next
+connection asks again.
+
+The desktop sends its MON output choice beside the MON button (SPEAKERS or
+PHONES, `audio/TxMonitor/Output`) as `route`, at each media connection and
+on every change. With a Core below version 1 its MON output pair is shown
+disabled with "This Core does not send the transmit monitor. Updating the
+Core may help."; MON itself still turns the Core's monitor on. The phone's
+rule is its own: `headphones` while its output is headphones and `none`
+otherwise.
+
 ## Microphone line (iPhone app plan Task 36)
 
 Capability `remoteTxVersion=1` (R-IOS-13), which the Core sends only to a

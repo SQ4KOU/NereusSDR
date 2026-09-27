@@ -163,6 +163,14 @@
 //                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code. One
 //                 mix per owner from the one drain (owner mixes with their
 //                 own taps), and a local output mask. NereusSDR-original.
+//   2026-09-27: Remote-window parity Task 32 (R-IOS-13, R-R3-49) by J.J.
+//                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code. An
+//                 owner mix may carry the transmit monitor (its speakers or
+//                 headphones sum), and the local outputs may leave it out
+//                 while a remote device holds transmit. The MOX-gated
+//                 slice's block drains the mix too (drainMixes, split out
+//                 of rxBlockReady unchanged), so MON is heard when that is
+//                 the only slice. NereusSDR-original.
 // =================================================================
 
 #include "AudioEngine.h"
@@ -1774,6 +1782,7 @@ int AudioEngine::acquireOwnerMix()
         OwnerMixSlot& slot = m_ownerMixes[static_cast<size_t>(k)];
         if (!slot.taken.load(std::memory_order_acquire)) {
             slot.sliceMask.store(0, std::memory_order_release);
+            slot.monitor.store(0, std::memory_order_release);
             slot.taken.store(true, std::memory_order_release);
             return k;
         }
@@ -1795,7 +1804,25 @@ void AudioEngine::releaseOwnerMix(int slot)
     owner.headphones.tap.store(nullptr, std::memory_order_seq_cst);
     owner.headphones.admissionClosed.store(false, std::memory_order_seq_cst);
     owner.sliceMask.store(0, std::memory_order_release);
+    owner.monitor.store(0, std::memory_order_release);
     owner.taken.store(false, std::memory_order_release);
+}
+
+void AudioEngine::setOwnerMixMonitor(int slot, MasterMixer::OwnerMonitor monitor)
+{
+    if (!validOwnerMixSlot(slot)) {
+        return;
+    }
+    m_ownerMixes[static_cast<size_t>(slot)].monitor.store(static_cast<int>(monitor),
+                                                          std::memory_order_release);
+}
+
+MasterMixer::OwnerMonitor AudioEngine::ownerMixMonitor(int slot) const
+{
+    return validOwnerMixSlot(slot)
+        ? static_cast<MasterMixer::OwnerMonitor>(
+              m_ownerMixes[static_cast<size_t>(slot)].monitor.load(std::memory_order_acquire))
+        : MasterMixer::OwnerMonitor::None;
 }
 
 void AudioEngine::setOwnerMixSliceMask(int slot, quint32 mask)
@@ -2110,6 +2137,19 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
         // R-R3-43: a receiver tap hears nothing either, but is told how
         // many frames were withheld so its positions keep real time.
         skipSliceTaps(sliceId, frames);
+        // Remote-window parity Task 32: nothing of this slice is queued,
+        // but while no other slice is a barrier member its call drains the
+        // mix, so MON (the transmit monitor, an opportunistic slot that
+        // never holds the barrier) is heard when this is the only slice.
+        // Without it a one-slice station drained nothing for the whole
+        // transmission and MON was silent, here and in the holder's own
+        // audio. With another slice playing, that slice's call drains the
+        // period as before, so no period gets two blocks. Thetis's mixer
+        // runs on the transmitter's stream alone while RX1 is out of the
+        // mix:
+        // From Thetis audio.cs:407-424 [v2.10.3.15] (Audio.MON, which calls
+        // SetAAudioMixWhat for the transmitter's stream).
+        drainMixes(frames, /*monitorOnly=*/true);
         return;  // silenced — TX-bound slice's RX audio gated during MOX
     }
 
@@ -2248,6 +2288,14 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
         }
     }
 
+    drainMixes(frames);
+}
+
+// Remote-window parity Task 32: the drain, the taps and the output pushes,
+// split out of rxBlockReady unchanged so the MOX-gated slice's own call
+// runs them too. Called only from rxBlockReady, inside its mix region.
+void AudioEngine::drainMixes(int frames, bool monitorOnly)
+{
     // Flush synchronously on the DSP thread. thread_local scratch so the
     // per-block vector reuse costs zero allocation after the first block
     // per thread. Channel count = 2 is intentionally hard-coded here:
@@ -2295,11 +2343,18 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
         owner.sliceMask = slot.sliceMask.load(std::memory_order_acquire);
         owner.speakers = m_ownerSpeakersScratch[static_cast<size_t>(k)].data();
         owner.headphones = m_ownerHeadphonesScratch[static_cast<size_t>(k)].data();
+        // Remote-window parity Task 32: the transmit monitor, when this
+        // owner's device holds transmit (DaemonMediaController sets it).
+        owner.monitor = static_cast<MasterMixer::OwnerMonitor>(
+            slot.monitor.load(std::memory_order_acquire));
         ++ownerCount;
     }
+    // Task 32 (JJ's MON ruling): MON stays off this computer's outputs, and
+    // the master taps, while a remote device holds transmit.
     const int mixed = m_masterMix.tryDrain(
         mix.data(), hpMix.data(), drainFrames,
-        m_localOutputSliceMask.load(std::memory_order_acquire), owners.data(), ownerCount);
+        m_localOutputSliceMask.load(std::memory_order_acquire), owners.data(), ownerCount,
+        m_txMonitorLocal.load(std::memory_order_acquire), monitorOnly);
 
     // Drain the anti-VOX reference in the same call stack, so both mixes are
     // paced by their own barrier over the same period.
@@ -2326,7 +2381,9 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
     // [v2.10.3.15]).
     // R-R3-45 fix wave: an engine member sized off this thread, as `mix`.
     std::vector<float>& avMix = m_avMixScratch;
-    const int avFrames = m_antiVoxMix.tryDrain(avMix.data(), drainFrames);
+    // Task 32: the MOX-gated slice's monitor-only call leaves the anti-VOX
+    // reference to the members' own calls (MON is never in it).
+    const int avFrames = monitorOnly ? 0 : m_antiVoxMix.tryDrain(avMix.data(), drainFrames);
     if (avFrames > 0) {
         // DirectConnection only: avMix is the engine's scratch and the next
         // block overwrites it. See the signal's contract in AudioEngine.h.
@@ -2503,8 +2560,7 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
         // the push specifically to keep that drop window short and
         // bounded; we no longer trace mutex misses since the bench
         // confirmed the contention is rare enough to be inaudible.
-    }
-}
+    }}
 
 bool AudioEngine::isPcMicSelected() const noexcept
 {

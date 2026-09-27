@@ -130,6 +130,10 @@
 //   2026-09-26  J.J. Boyd / KG4VCF  iPhone app plan Task 78 (R-IOS-02,
 //                R-IOS-30): a Take transmit button under the holder line.
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-27  J.J. Boyd / KG4VCF  Remote-window parity Task 32 (R-IOS-13,
+//                R-R3-49): setMonitorOutputPermitted, the MON output pair
+//                in a remote window on a Core that does not send the
+//                transmit monitor. AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -2571,16 +2575,50 @@ void TxApplet::setTransmitChainSettingsPermitted(bool permitted,
     const QString reason = unavailableReason.isEmpty()
         ? IStationLink::transmitSettingsUnavailableReason()
         : unavailableReason;
+    m_transmitChainSettingsReason = reason;
     for (QWidget* control : {static_cast<QWidget*>(m_tunePwrSlider),
                              static_cast<QWidget*>(m_voxSlider),
                              static_cast<QWidget*>(m_voxDlySlider),
                              static_cast<QWidget*>(m_monBtn),
                              static_cast<QWidget*>(m_monitorVolumeSlider),
-                             static_cast<QWidget*>(m_monSpeakersBtn),
-                             static_cast<QWidget*>(m_monHeadphonesBtn),
                              static_cast<QWidget*>(m_levBtn),
                              static_cast<QWidget*>(m_eqBtn),
                              static_cast<QWidget*>(m_cfcBtn)}) {
+        gateTransmitControl(control, permitted, reason);
+    }
+    // Parity Task 32: the MON output pair also needs a Core that sends MON.
+    applyMonitorOutputGate();
+}
+
+// Remote-window parity Task 32 (R-IOS-13, R-R3-49): where MON plays is this
+// computer's choice, sent to the Core, which carries MON in this window's
+// own audio while it holds transmit. A Core that does not send MON has
+// nothing to route, so the pair is shown disabled with the reason; MON
+// itself still turns the Core's monitor on.
+void TxApplet::setMonitorOutputPermitted(bool permitted, const QString& unavailableReason)
+{
+    m_monitorOutputPermitted = permitted;
+    m_monitorOutputReason = unavailableReason.isEmpty() ? monitorOutputUnavailableReason()
+                                                        : unavailableReason;
+    applyMonitorOutputGate();
+}
+
+QString TxApplet::monitorOutputUnavailableReason()
+{
+    return QStringLiteral(
+        "This Core does not send the transmit monitor. Updating the Core may help.");
+}
+
+void TxApplet::applyMonitorOutputGate()
+{
+    const bool permitted = m_transmitChainSettingsPermitted && m_monitorOutputPermitted;
+    const QString reason = !m_transmitChainSettingsPermitted
+        ? (m_transmitChainSettingsReason.isEmpty()
+               ? IStationLink::transmitSettingsUnavailableReason()
+               : m_transmitChainSettingsReason)
+        : m_monitorOutputReason;
+    for (QWidget* control : {static_cast<QWidget*>(m_monSpeakersBtn),
+                             static_cast<QWidget*>(m_monHeadphonesBtn)}) {
         gateTransmitControl(control, permitted, reason);
     }
 }

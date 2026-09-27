@@ -121,6 +121,10 @@
 //   2026-09-26  J.J. Boyd / KG4VCF  iPhone app plan Task 78 (R-IOS-02,
 //                R-IOS-30): a Take transmit button under the holder line.
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-27  J.J. Boyd / KG4VCF  Remote-window parity Task 32 (R-IOS-13,
+//                R-R3-49): setMonitorOutputPermitted, the MON output pair
+//                in a remote window on a Core that does not send the
+//                transmit monitor. AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -347,6 +351,14 @@ public slots:
     // (transmitSettingsVersion 3), live while its radio is off the air.
     void setTxProfilePermitted(bool permitted,
                                const QString& unavailableReason = QString());
+    // Remote-window parity Task 32 (R-IOS-13, R-R3-49): the MON output pair
+    // (SPEAKERS / PHONES) in a remote window. MainWindow supplies false with
+    // monitorOutputUnavailableReason() on a Core below txMonitorAudioVersion
+    // 1, where this computer's choice would reach nothing; on top of
+    // setTransmitChainSettingsPermitted. MON itself stays on that gate.
+    void setMonitorOutputPermitted(bool permitted,
+                                   const QString& unavailableReason = QString());
+    static QString monitorOutputUnavailableReason();
     // R-R3-49 (group A fix wave, M3): whether an RF Power move also writes
     // the per-band power and the tune drive source (powerByBandJson and
     // tuneDrivePowerSource on the link), which a Core takes from
@@ -629,6 +641,10 @@ private:
     bool m_transmitPermitted{true};
     bool m_transmitSettingsPermitted{true};
     bool m_transmitChainSettingsPermitted{true};
+    QString m_transmitChainSettingsReason;
+    bool m_monitorOutputPermitted{true};  // R-R3-49 (parity Task 32)
+    QString m_monitorOutputReason;
+    void applyMonitorOutputGate();
     bool m_txProfilePermitted{true};
     bool m_txProcessingPermitted{true};   // R-R3-49 (parity Task 4)
     bool m_powerByBandPermitted{true};    // R-R3-49 (group A fix wave, M3)

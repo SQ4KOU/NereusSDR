@@ -47,6 +47,13 @@
 //               DUP reaches RadioModel, which turns noise blanking off
 //               while keyed as Thetis does. J.J. Boyd (KG4VCF), AI-assisted
 //               via Anthropic Claude Code.
+//   2026-09-27: Parity Task 32 (R-IOS-13, R-R3-49): the transmit monitor to
+//               the device that holds transmit. handleMonitorAudio answers
+//               monitor-audio with monitor-audio-context; refreshTxMonitor
+//               puts MON in this device's owner mix (its main stream, or its
+//               headphones stream, which then runs) while the device holds
+//               transmit and MON is on. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/media/DaemonMediaController.h"
@@ -673,6 +680,13 @@ DaemonMediaController::DaemonMediaController(StationServer* server,
         connect(m_server->transmitHolder(), &TransmitHolder::changed, this,
                 &DaemonMediaController::refreshMicVoxArmed);
     }
+    // Parity Task 32: MON follows the holder and the MON button.
+    if (m_server->transmitHolder() != nullptr) {
+        connect(m_server->transmitHolder(), &TransmitHolder::changed, this,
+                &DaemonMediaController::refreshTxMonitor);
+    }
+    connect(&m_radioModel->transmitModel(), &TransmitModel::monEnabledChanged, this,
+            [this](bool) { refreshTxMonitor(); });
     connect(m_radioModel, &RadioModel::keyedByChanged, this,
             &DaemonMediaController::refreshMicWatching);
     connect(m_radioModel, &RadioModel::remoteMicInUseChanged, this,
@@ -1275,6 +1289,8 @@ void DaemonMediaController::acquireOwnerMix()
         return;
     }
     refreshOwnerMixMask();
+    // Parity Task 32: and the transmit monitor, if this device has one.
+    refreshTxMonitor();
 }
 
 void DaemonMediaController::releaseOwnerMix()
@@ -1420,7 +1436,7 @@ void DaemonMediaController::onRadioConnectionStateChanged(ConnectionState state)
         }
     }
     // R-R3-45: the headphones mix resumes with the radio, when it can run.
-    if (m_headphones.revision != 0 && m_headphones.desiredEnabled && anySliceOnHeadphones()) {
+    if (m_headphones.revision != 0 && m_headphones.desiredEnabled && headphonesMixNeeded()) {
         reconcileHeadphonesAudio();
     }
 }
@@ -1450,6 +1466,8 @@ void DaemonMediaController::onControl(const QJsonObject& control, quint64 epoch)
     if (op == QLatin1String("audio")) { handleAudio(control); return; }
     if (op == QLatin1String("receiver-audio")) { handleReceiverAudio(control); return; }
     if (op == QLatin1String("headphones-audio")) { handleHeadphonesAudio(control); return; }
+    // Parity Task 32: only from a peer that declared it at start.
+    if (op == QLatin1String("monitor-audio")) { handleMonitorAudio(control); return; }
     acceptPeerControl(control);
 }
 
@@ -1501,6 +1519,20 @@ bool DaemonMediaController::handleStart(const QJsonObject& control)
             || !exactUnsigned(control.value(QStringLiteral("headphonesMixVersion")),
                               headphonesMixVersion, /*nonzero=*/true)
             || headphonesMixVersion < 1) {
+            return false;
+        }
+    }
+    // Parity Task 32 (R-IOS-13, R-R3-49): txMonitorAudioVersion, from a
+    // peer the Core told it (minor 11, media on); only then is a
+    // monitor-audio request honoured.
+    const bool declaresTxMonitor = control.contains(QStringLiteral("txMonitorAudioVersion"));
+    if (declaresTxMonitor) {
+        legacyShape.remove(QStringLiteral("txMonitorAudioVersion"));
+        quint32 txMonitorAudioVersion = 0;
+        if (!m_server || !m_server->txMonitorAudioAvailable(m_epoch)
+            || !exactUnsigned(control.value(QStringLiteral("txMonitorAudioVersion")),
+                              txMonitorAudioVersion, /*nonzero=*/true)
+            || txMonitorAudioVersion < 1) {
             return false;
         }
     }
@@ -1682,6 +1714,11 @@ bool DaemonMediaController::handleStart(const QJsonObject& control)
     }
     m_receiverAudioNegotiated = declaresReceiverAudio;
     m_headphonesMixNegotiated = declaresHeadphonesMix;
+    // Parity Task 32: MON goes nowhere until the peer asks for a route.
+    m_txMonitorNegotiated = declaresTxMonitor;
+    m_monitorRevision = 0;
+    m_monitorRoute = TxMonitorRoute::None;
+    refreshTxMonitor();
     m_txDisplayNegotiated = declaresTxDisplay;
     // Parity Task 31: 3 and above may add `duplex` to a subscribe.
     m_txDisplayDeclared = declaredTxDisplay;
@@ -2783,6 +2820,94 @@ bool DaemonMediaController::handleHeadphonesAudio(const QJsonObject& control)
     return true;
 }
 
+// ---- Parity Task 32 (R-IOS-13, R-R3-49): the transmit monitor ----
+//
+// Thetis mixes the transmitter's stream into its one audio output at a fixed
+// 0.5 while MON is on, and chkMON_CheckedChanged sets it:
+// From Thetis audio.cs:407-424 [v2.10.3.15] (Audio.MON's setter):
+//   cmaster.SetAAudioMixVol((void*)0, 0, WDSP.id(1, 0), 0.5);
+//   cmaster.SetAAudioMixWhat((void*)0, 0, WDSP.id(1, 0), value);
+// From Thetis console.cs:29040-29066 [v2.10.3.15] (chkMON_CheckedChanged):
+//   Audio.MON = chkMON.Checked;
+// NereusSDR's slot gain is the MON level (TransmitModel::monitorVolume,
+// default 0.5 from that literal). On a Core the device that holds transmit
+// hears it in its own mix, as a desktop hears it on its own output.
+
+bool DaemonMediaController::handleMonitorAudio(const QJsonObject& control)
+{
+    if (!m_txMonitorNegotiated || !m_peer) {
+        return false;
+    }
+    const std::optional<MonitorAudioMessage> request = decodeMonitorAudioRequest(control);
+    if (!request || !canonicalConnectionId(control.value(QStringLiteral("connectionId")))
+        || request->connectionId != m_peer->connectionId()
+        || (m_monitorRevision != 0 && staleOrEqualRevision(request->revision, m_monitorRevision))) {
+        return false;
+    }
+    m_monitorRevision = request->revision;
+    m_monitorRoute = request->route;
+    const QPointer<DaemonMediaController> self(this);
+    MonitorAudioMessage context;
+    context.connectionId = m_peer->connectionId();
+    context.revision = m_monitorRevision;
+    context.route = appliedMonitorRoute();
+    sendControl(encodeMonitorAudioContext(context));
+    // Sending can end the session (its control link closing).
+    if (!self || !m_peer) {
+        return true;
+    }
+    refreshTxMonitor();
+    return true;
+}
+
+TxMonitorRoute DaemonMediaController::appliedMonitorRoute() const
+{
+    // The brief's rule: headphones is this device's headphones stream when
+    // it declared the headphones mix, else its main stream.
+    if (m_monitorRoute == TxMonitorRoute::Headphones && !m_headphonesMixNegotiated) {
+        return TxMonitorRoute::Speakers;
+    }
+    return m_monitorRoute;
+}
+
+void DaemonMediaController::refreshTxMonitor()
+{
+    TxMonitorRoute route = TxMonitorRoute::None;
+    if (m_txMonitorNegotiated && m_monitorRevision != 0 && m_peer && m_epoch != 0 && m_server
+        && m_radioModel && m_radioModel->transmitModel().monEnabled()) {
+        // Only the device that holds transmit (txState's holder) hears it;
+        // the tap itself carries audio only while the radio is keyed.
+        const TransmitHolder* holder = m_server->transmitHolder();
+        const std::optional<TransmitHolder::Holder> held =
+            holder != nullptr ? holder->holder() : std::nullopt;
+        const QByteArray device = m_server->mediaSessionDevice(m_epoch);
+        if (held && held->source == TransmitHolder::Source::Device && !device.isEmpty()
+            && held->deviceId == device) {
+            route = appliedMonitorRoute();
+        }
+    }
+    const bool headphonesChanged = (route == TxMonitorRoute::Headphones)
+        != (m_monitorApplied == TxMonitorRoute::Headphones);
+    m_monitorApplied = route;
+    if (m_ownerMix >= 0 && m_radioModel && m_radioModel->audioEngine() != nullptr) {
+        const MasterMixer::OwnerMonitor monitor = route == TxMonitorRoute::Speakers
+            ? MasterMixer::OwnerMonitor::Speakers
+            : route == TxMonitorRoute::Headphones ? MasterMixer::OwnerMonitor::Headphones
+                                                   : MasterMixer::OwnerMonitor::None;
+        m_radioModel->audioEngine()->setOwnerMixMonitor(m_ownerMix, monitor);
+    }
+    // MON onto or off the headphones starts or stops that mix, as the first
+    // receiver onto them or the last one off does.
+    if (headphonesChanged) {
+        onOutputRoutesChanged();
+    }
+}
+
+bool DaemonMediaController::headphonesMixNeeded() const
+{
+    return anySliceOnHeadphones() || m_monitorApplied == TxMonitorRoute::Headphones;
+}
+
 bool DaemonMediaController::anySliceOnHeadphones() const
 {
     if (!m_radioModel) {
@@ -2813,7 +2938,8 @@ void DaemonMediaController::onOutputRoutesChanged()
     // Only the first receiver onto the headphones starts the mix and only
     // the last one off stops it; the mix itself follows every route change
     // in AudioEngine without a new context.
-    const bool routed = anySliceOnHeadphones();
+    // Parity Task 32: MON routed to the headphones needs the mix too.
+    const bool routed = headphonesMixNeeded();
     if (routed == m_headphonesRouted) {
         return;
     }
@@ -2828,7 +2954,7 @@ void DaemonMediaController::reconcileHeadphonesAudio()
     // Only the headphones capture restarts; the main stream and every
     // receiver stream carry on untouched.
     stopHeadphonesAudioCapture();
-    m_headphonesRouted = anySliceOnHeadphones();
+    m_headphonesRouted = headphonesMixNeeded();
     const std::optional<RemoteAudioOffReason> blockedBy = headphonesBlockedBy();
     const AdmittedAudioProfile admitted = admitProfile(m_headphones.requestedProfile);
     m_headphones.activeProfile = admitted.active;
@@ -2879,7 +3005,8 @@ std::optional<RemoteAudioOffReason> DaemonMediaController::headphonesBlockedBy()
     if (!m_headphones.desiredEnabled) {
         return RemoteAudioOffReason::ClientDisabled;
     }
-    if (!anySliceOnHeadphones()) {
+    // Parity Task 32: or MON on its way there.
+    if (!headphonesMixNeeded()) {
         return RemoteAudioOffReason::NoHeadphonesReceiver;
     }
     if (!m_radioModel || !m_radioModel->isConnected()) {
@@ -4799,6 +4926,16 @@ void DaemonMediaController::clearSession()
     // reclaims a retired peer if the controller dies before deferred deletion.
     // Sender remains owned by this controller; stop its timer/capture while
     // the current peer is still identifiable, then retire the peer.
+    // Parity Task 32: MON leaves this device's mix with its peer; the next
+    // peer declares its own.
+    m_txMonitorNegotiated = false;
+    m_monitorRevision = 0;
+    m_monitorRoute = TxMonitorRoute::None;
+    m_monitorApplied = TxMonitorRoute::None;
+    if (m_ownerMix >= 0 && m_radioModel && m_radioModel->audioEngine() != nullptr) {
+        m_radioModel->audioEngine()->setOwnerMixMonitor(m_ownerMix,
+                                                       MasterMixer::OwnerMonitor::None);
+    }
     resetAudioSession();
     // R-R3-43: every receiver stream's sender and slice tap go with the
     // session; there is no GUI left to tell.

@@ -843,6 +843,7 @@ change shows as surface drift and as a change to this table.
 | `txDisplayVersion` | 0 |
 | `displayClockVersion` | 1 |
 | `controlChannelVersion` | 1 |
+| `txMonitorAudioVersion` | 1 |
 | `sessionHolderVersion` | 1 |
 | `remoteTxVersion` | 2 |
 | `txStateVersion` | 2 |
@@ -1200,8 +1201,9 @@ When a feature is off, its version is 0:
   entries added later move the position of those after them.
 - `controlChannelVersion` (the iPhone app plan's Task 28 fix wave,
   R-IOS-16): sent only at agreed minor 11, after `displayClockVersion` in
-  the minor-11 block (`sessionHolderVersion` and the remote transmit
-  entries follow it), and 1 on a Core with a bound certificate (section
+  the minor-11 block (`txMonitorAudioVersion`, then `sessionHolderVersion`
+  and the remote transmit entries follow it), and 1 on a Core with a bound
+  certificate (section
   3.4). At 1 the Core answers an introduction through the rendezvous with
   this link over a data channel (section 20). A device records the value
   with the paired Core at each sign-in and offers connecting from anywhere
@@ -1213,6 +1215,26 @@ When a feature is off, its version is 0:
   version). A device that has had no session with the Core yet (one that
   paired through a mailbox) has no value recorded and tries; its first
   session records it.
+- `txMonitorAudioVersion` (remote-window parity Task 32, R-IOS-13,
+  R-R3-49): sent only at agreed minor 11, after `controlChannelVersion` in
+  the minor-11 block (`sessionHolderVersion` and the remote transmit
+  entries follow it), and 1 while media is on and the Core runs its own
+  radio model; 0 otherwise. At 1 a window may add `txMonitorAudioVersion`
+  to its media `start` and then send `monitor-audio` with the route it
+  wants for the transmit monitor (`speakers`, its main stream;
+  `headphones`, its headphones stream, or its main stream when it did not
+  declare `headphonesMixVersion`; or `none`), answered by one
+  `monitor-audio-context` naming the route as applied (the media
+  document's "Transmit monitor (monitor-audio)"). While the radio is on
+  the air, MON is on and that window's device holds transmit (`txState`'s
+  holder), the Core adds MON at `monitorVolume` to that stream; no other
+  device's stream carries it, and while a remote device holds transmit the
+  Core's own outputs leave MON out. `monitor-audio` is taken on and off the
+  air: it reaches neither the radio nor any device. A window that does not
+  declare it gets today's wire and no monitor. A window on a Core that
+  sends 0 or no entry shows its MON output pair (SPEAKERS, PHONES) disabled
+  with "This Core does not send the transmit monitor. Updating the Core
+  may help."; MON itself still turns the Core's monitor on.
 
 - `sessionHolderVersion`: sent only at agreed minor 11, last, and only to
   a peer whose hello declared `sessionHolder` 1 with `deviceAuth` 1; any
@@ -1424,12 +1446,13 @@ older window sees only the values it was built for.
 | 59 | `txDisplayVersion` | `i64` |
 | 60 | `displayClockVersion` | `i64` |
 | 61 | `controlChannelVersion` | `i64` |
-| 62 | `sessionHolderVersion` | `i64` |
-| 63 | `remoteTxVersion` | `i64` |
-| 64 | `txRefusalCode` | `utf8` |
-| 65 | `txRefusalReason` | `utf8` |
-| 66 | `txRefusalFix` | `utf8` |
-| 67 | `txStateVersion` | `i64` |
+| 62 | `txMonitorAudioVersion` | `i64` |
+| 63 | `sessionHolderVersion` | `i64` |
+| 64 | `remoteTxVersion` | `i64` |
+| 65 | `txRefusalCode` | `utf8` |
+| 66 | `txRefusalReason` | `utf8` |
+| 67 | `txRefusalFix` | `utf8` |
+| 68 | `txStateVersion` | `i64` |
 
 <!-- /surface -->
 
@@ -4051,8 +4074,9 @@ slices, each with its own gain, pan, mute and route; the Core's own output
 plays only the station device's slices. A device that leaves ends its own
 media and no other's. Telemetry (`station.metrics.v1`) goes to every
 session that negotiated it, each on its own sequence. **Transmit joins
-here:** the transmit holder's mix carries the transmit monitor once remote
-transmit exists (Task 36). The `subscribe` fields that
+here:** the transmit holder's mix carries the transmit monitor
+(`txMonitorAudioVersion`, remote-window parity Task 32; the media
+document's "Transmit monitor (monitor-audio)"). The `subscribe` fields that
 come with `displayExtrasVersion` (`peakBlobs`, `activePeakHold`,
 `noiseFloor`, `waterfallLevels`, `normalize`, `calibrationOffsetDb`,
 `averageTimeMs`, `waterfallAverageTimeMs`), their ranges and what the Core sends for them are
@@ -4074,8 +4098,9 @@ Client to station:
 | `description` | `remoteMediaVersion` | `connectionId`, `op`, `sdp`, `type` | none | none |
 | `headphones-audio` | `headphonesMixVersion` | `connectionId`, `enabled`, `op`, `profile`, `revision` | none | none |
 | `keyframe` | `remoteMediaVersion` | `connectionId`, `contextGeneration`, `endpointId`, `op` | none | none |
+| `monitor-audio` | `txMonitorAudioVersion` | `connectionId`, `op`, `revision`, `route` | none | none |
 | `receiver-audio` | `receiverAudioVersion` | `connectionId`, `enabled`, `op`, `profile`, `revision`, `sliceId` | none | none |
-| `start` | `remoteMediaVersion` | `connectionId`, `op` | `audioProfileVersion` with audioProfileVersion; `headphonesMixVersion` with headphonesMixVersion; `receiverAudioVersion` with receiverAudioVersion; `remoteTxVersion` with remoteTxVersion | none |
+| `start` | `remoteMediaVersion` | `connectionId`, `op` | `audioProfileVersion` with audioProfileVersion; `headphonesMixVersion` with headphonesMixVersion; `receiverAudioVersion` with receiverAudioVersion; `remoteTxVersion` with remoteTxVersion; `txMonitorAudioVersion` with txMonitorAudioVersion | none |
 | `subscribe` | `remoteMediaVersion` | `centreHz`, `connectionId`, `endpointId`, `fftSize`, `fps`, `framesPerLine`, `maxDbm`, `minDbm`, `op`, `pixels`, `revision`, `sliceId`, `spanHz`, `tier`, `trace`, `waterfall`, `wideSpanFactor`, `windowType` | `activePeakHold` with displayExtrasVersion; `averageTimeMs` with displayExtrasVersion; `calibrationOffsetDb` with displayExtrasVersion; `decimation` with spectrumGrantVersion; `extendedView` with remoteWidebandDisplayVersion; `noiseFloor` with displayExtrasVersion; `normalize` with displayExtrasVersion; `peakBlobs` with displayExtrasVersion; `waterfallAverageTimeMs` with displayExtrasVersion; `waterfallLevels` with displayExtrasVersion | `activePeakHold`: {enabled, fallDbPerSec, holdMs}; `noiseFloor`: {enabled, shiftDb}; `peakBlobs`: {count, fallDbPerSec, holdMs, insideOnly}; `trace`: {averageAlpha, averageMode, detector}; `waterfall`: {averageAlpha, averageMode, detector}; `waterfallLevels`: {highDbm, lowDbm, mode, offsetDb} |
 | `unsubscribe` | `remoteMediaVersion` | `connectionId`, `endpointId`, `op` | `revision` with remoteDisplayBudgetVersion | none |
 
@@ -4090,6 +4115,7 @@ Station to client:
 | `context` | `remoteMediaVersion` | `centreHz`, `connectionId`, `contextGeneration`, `endpointId`, `fps`, `framesPerLine`, `maxDbm`, `minDbm`, `op`, `revision`, `sampleRateHz`, `sourceCentreHz`, `sourceStream`, `spanHz`, `traceSamples`, `waterfallSamples`, `wideCentreHz`, `wideSamples`, `wideSpanHz` | `grantedFftSize` with spectrumGrantVersion; `grantedPixels` with spectrumGrantVersion; `grantedTier` with spectrumGrantVersion; `limit` with spectrumGrantVersion; `requestedPixels` with spectrumGrantVersion; `wideband` with remoteWidebandDisplayVersion | `wideband`: {active, adcRateHz, available, filterChainIndex, geometryRateBasis, highHz, levelReference, lowHz, physicalAdcIndex, sourceGeneration, version} or {active, available, version} |
 | `description` | `remoteMediaVersion` | `connectionId`, `op`, `sdp`, `type` | none | none |
 | `headphones-audio-context` | `headphonesMixVersion` | `connectionId`, `enabled`, `firstSequence`, `firstTimestamp`, `generation`, `op`, `profile`, `revision`, `ssrc` | `encoder` with enabled=true; `profileRefusal` with profile=opus, profileRefused; `reason` with enabled=false | `encoder`: {audioBandwidthHz, channels, codec, frameSamples, sampleRate, targetBitrate} or {bitsPerSample, channels, codec, frameSamples, payloadType, sampleRate} |
+| `monitor-audio-context` | `txMonitorAudioVersion` | `connectionId`, `op`, `revision`, `route` | none | none |
 | `noise-floor` | `remoteMediaVersion` | `connectionId`, `contextGeneration`, `endpointId`, `floorDbm`, `op`, `revision` | none | none |
 | `receiver-audio-context` | `receiverAudioVersion` | `connectionId`, `enabled`, `firstSequence`, `firstTimestamp`, `generation`, `op`, `profile`, `revision`, `sliceId`, `ssrc` | `encoder` with enabled=true; `profileRefusal` with profile=opus, profileRefused; `reason` with enabled=false | `encoder`: {audioBandwidthHz, channels, codec, frameSamples, sampleRate, targetBitrate} or {bitsPerSample, channels, codec, frameSamples, payloadType, sampleRate} |
 | `rejected` | `remoteMediaVersion` | `connectionId`, `endpointId`, `op`, `reason`, `revision` | none | none |

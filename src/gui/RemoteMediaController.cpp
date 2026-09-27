@@ -61,6 +61,11 @@
 //               start declares txDisplayVersion 3 to a Core that sends 3, and
 //               the subscribes carry `duplex` true while DUP is on. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-27: parity Task 32 (R-IOS-13, R-R3-49): the transmit monitor; the
+//               media start declares txMonitorAudioVersion 1 to a Core that
+//               sends it, and monitor-audio carries this window's MON output
+//               on change and when media is ready. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 
 #include "gui/RemoteMediaController.h"
 #include "core/AppSettings.h"
@@ -961,6 +966,13 @@ struct RemoteMediaController::Private {
     std::unique_ptr<RemoteAudioReceiver> headphones;
     quint32 headphonesSsrc = 0;               // declared by this connection
     std::optional<RemoteAudioContextMessage> headphonesContext;
+    // Parity Task 32: the transmit monitor's route, this window's choice
+    // (kept across connections), and per media connection whether the start
+    // declared it, the last request's revision and the Core's answer.
+    TxMonitorRoute txMonitorRoute = TxMonitorRoute::Speakers;
+    bool txMonitorNegotiated = false;
+    quint32 monitorRevision = 0;
+    std::optional<MonitorAudioMessage> monitorContext;
     quint32 headphonesRevision = 0;           // last request sent
     quint32 headphonesGeneration = 0;         // newest accepted context
     bool headphonesRequested = false;         // last request asked for it
@@ -1596,6 +1608,50 @@ std::optional<SpectrumContextMessage> RemoteMediaController::heldTransmitContext
         }
     }
     return std::nullopt;
+}
+
+// ── Parity Task 32 (R-IOS-13, R-R3-49): the transmit monitor ───────────────
+
+bool RemoteMediaController::txMonitorAudioNegotiated() const
+{
+    return d->txMonitorNegotiated;
+}
+
+void RemoteMediaController::setTxMonitorRoute(TxMonitorRoute route)
+{
+    if (d->txMonitorRoute == route) {
+        return;
+    }
+    d->txMonitorRoute = route;
+    requestMonitorAudio();
+}
+
+TxMonitorRoute RemoteMediaController::txMonitorRoute() const
+{
+    return d->txMonitorRoute;
+}
+
+std::optional<MonitorAudioMessage> RemoteMediaController::acceptedMonitorContext() const
+{
+    return d->monitorContext;
+}
+
+void RemoteMediaController::requestMonitorAudio()
+{
+    if (!d->peer || !d->peer->isReady() || !d->txMonitorNegotiated) { return; }
+    ++d->monitorRevision;
+    if (!d->monitorRevision) { ++d->monitorRevision; }
+    send(QJsonObject{{QStringLiteral("op"), QStringLiteral("monitor-audio")},
+                     {QStringLiteral("revision"), double(d->monitorRevision)},
+                     {QStringLiteral("route"), txMonitorRouteToWire(d->txMonitorRoute)}});
+}
+
+void RemoteMediaController::receiveMonitorAudioContext(const QJsonObject& payload)
+{
+    const std::optional<MonitorAudioMessage> context = decodeMonitorAudioContext(payload);
+    if (!context || context->revision != d->monitorRevision
+        || context->connectionId != d->connectionId) { return; }
+    d->monitorContext = context;
 }
 
 bool RemoteMediaController::txDisplayNegotiated() const
@@ -2351,6 +2407,10 @@ void RemoteMediaController::stop()
     d->headphonesGeneration = 0;
     d->headphonesRequested = false;
     d->headphonesRetryPending = false;
+    // Parity Task 32: the monitor route is asked for again on the next one.
+    d->txMonitorNegotiated = false;
+    d->monitorRevision = 0;
+    d->monitorContext.reset();
     QList<int> interrupted;
     for (auto& [sliceId, stream] : d->receiverStreams) {
         stream.receiver->stop();
@@ -2540,6 +2600,10 @@ void RemoteMediaController::start()
             if (!self || !current()) { return; }
             // R-R3-45: and the headphones mix, when headphones are here.
             requestHeadphonesAudio();
+            if (!self || !current()) { return; }
+            // Parity Task 32: and where MON goes while this window holds
+            // transmit.
+            requestMonitorAudio();
         }
     });
     connect(peer, &MediaPeer::connectionFailed, this,
@@ -2645,6 +2709,12 @@ void RemoteMediaController::start()
     if (d->txDisplayNegotiated) {
         startControl.insert(QStringLiteral("txDisplayVersion"),
                             d->displayDuplexNegotiated ? 3 : 1);
+    }
+    // Parity Task 32 (R-IOS-13, R-R3-49): likewise the transmit monitor,
+    // only to a Core that sends it.
+    d->txMonitorNegotiated = d->client && d->client->capabilities().txMonitorAudioVersion >= 1;
+    if (d->txMonitorNegotiated) {
+        startControl.insert(QStringLiteral("txMonitorAudioVersion"), 1);
     }
     // Task 36: likewise the microphone line, only to a Core that takes it.
     if (micLine) {
@@ -4348,6 +4418,11 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
         refreshAudioStatus();
         if (!self) { return; }
         emit audioContextAccepted();
+        return;
+    }
+    if (op == QLatin1String("monitor-audio-context")) {
+        // Parity Task 32: only from a Core this connection declared it to.
+        if (d->txMonitorNegotiated) { receiveMonitorAudioContext(payload); }
         return;
     }
     if (op == QLatin1String("headphones-audio-context")) {

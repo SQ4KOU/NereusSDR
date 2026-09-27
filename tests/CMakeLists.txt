@@ -8438,6 +8438,18 @@ nereus_add_test(tst_remote_tx_display_settings
     EXTRA_LABELS session)
 target_compile_definitions(tst_remote_tx_display_settings PRIVATE NEREUS_BUILD_TESTS)
 
+# Remote-window parity Task 32 (R-IOS-13, R-R3-49): the transmit monitor
+# goes to the device that holds transmit. The owner mixes with fake devices
+# and recording taps (route, level, another device, the Core's own outputs
+# quiet while a remote device holds, the unkey), and the session over the
+# loopback control link (the capability, monitor-audio and its answer, the
+# wrong shapes, an older peer, the holder rule). No radio is keyed, no sound
+# device is opened.
+nereus_add_test(tst_remote_tx_monitor
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+target_compile_definitions(tst_remote_tx_monitor PRIVATE NEREUS_BUILD_TESTS)
+
 # Remote Daemon R2: the GUI's slice controls reach the daemon.
 #
 # Task 11 built the command verbs, task 18 built the session that could

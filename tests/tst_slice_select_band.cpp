@@ -280,15 +280,17 @@ void TstSliceSelectBand::theCapabilityIsLastInTheMinor11Block()
     // Then parity Task 21's stationRadiosVersion.
     // Then parity Task 28's txDisplayVersion, R-R3-21's displayClockVersion and
     // the Task 28 fix wave's controlChannelVersion.
-    QCOMPARE(updates.at(updates.size() - 9).name, QByteArrayLiteral("transmitSettingsVersion"));
-    QCOMPARE(updates.at(updates.size() - 8).name, QByteArrayLiteral("bandSelectVersion"));
-    QCOMPARE(updates.at(updates.size() - 7).name, QByteArrayLiteral("meterReadingsVersion"));
-    QCOMPARE(updates.at(updates.size() - 6).name, QByteArrayLiteral("dspInfoVersion"));
-    QCOMPARE(updates.at(updates.size() - 5).name, QByteArrayLiteral("recordStreamVersion"));
-    QCOMPARE(updates.at(updates.size() - 4).name, QByteArrayLiteral("stationRadiosVersion"));
-    QCOMPARE(updates.at(updates.size() - 3).name, QByteArrayLiteral("txDisplayVersion"));
-    QCOMPARE(updates.at(updates.size() - 2).name, QByteArrayLiteral("displayClockVersion"));
-    QCOMPARE(updates.last().name, QByteArrayLiteral("controlChannelVersion"));
+    QCOMPARE(updates.at(updates.size() - 10).name, QByteArrayLiteral("transmitSettingsVersion"));
+    QCOMPARE(updates.at(updates.size() - 9).name, QByteArrayLiteral("bandSelectVersion"));
+    QCOMPARE(updates.at(updates.size() - 8).name, QByteArrayLiteral("meterReadingsVersion"));
+    QCOMPARE(updates.at(updates.size() - 7).name, QByteArrayLiteral("dspInfoVersion"));
+    QCOMPARE(updates.at(updates.size() - 6).name, QByteArrayLiteral("recordStreamVersion"));
+    QCOMPARE(updates.at(updates.size() - 5).name, QByteArrayLiteral("stationRadiosVersion"));
+    QCOMPARE(updates.at(updates.size() - 4).name, QByteArrayLiteral("txDisplayVersion"));
+    QCOMPARE(updates.at(updates.size() - 3).name, QByteArrayLiteral("displayClockVersion"));
+    QCOMPARE(updates.at(updates.size() - 2).name, QByteArrayLiteral("controlChannelVersion"));
+    // Then parity Task 32's txMonitorAudioVersion.
+    QCOMPARE(updates.last().name, QByteArrayLiteral("txMonitorAudioVersion"));
     QCOMPARE(StationCapabilities::fromUpdates(updates).bandSelectVersion, 1);
     QCOMPARE(StationCapabilities::fromUpdates(updates).transmitSettingsVersion, 6);
 
