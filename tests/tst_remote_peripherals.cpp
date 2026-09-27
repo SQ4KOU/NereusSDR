@@ -1597,8 +1597,22 @@ void RemotePeripheralsTest::receiveOnlyCoreRefusesTunerAndAmpOperation()
     }
     QCOMPARE(tunerRefusals, 3);
     QVERIFY(OperatorWording::isPlain(AmplifierModel::receiveOnlyOperateReason()));
-    QCOMPARE(tunerFrames.count(), 0);
-    QCOMPARE(ampFrames.count(), 0);
+    // R-R3-49: the Core's own 1 Hz status poll (TgxlConnection::pollStatus)
+    // is not the window reaching the tuner. On a busy computer this case
+    // ran past its first second and the poll failed it; it is waited for
+    // here, so every run has one, and every frame but that poll counts.
+    const auto framesButThePoll = [](const QSignalSpy& frames) {
+        int count = 0;
+        for (const QList<QVariant>& frame : frames) {
+            if (!frame.at(0).toString().endsWith(QLatin1String("|status"))) {
+                ++count;
+            }
+        }
+        return count;
+    };
+    QTRY_VERIFY_WITH_TIMEOUT(framesButThePoll(tunerFrames) < tunerFrames.count(), 5000);
+    QCOMPARE(framesButThePoll(tunerFrames), 0);
+    QCOMPARE(framesButThePoll(ampFrames), 0);
     QCOMPARE(station.tunerModel()->isOperate(), operateBefore);
     QCOMPARE(station.tunerModel()->isBypass(), bypassBefore);
     QCOMPARE(station.tunerModel()->antennaA(), antennaBefore);
