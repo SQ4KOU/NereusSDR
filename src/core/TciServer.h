@@ -332,6 +332,8 @@ public:
     // production code goes through the Qt::DirectConnection signal at
     // RadioModel::rawIqData → TciServer::onRawIqDataReceived.
     void injectRawIqForTest(const QVector<float>& interleavedIQ);
+    void injectRawIqForTest(int receiver, int sampleRate,
+                            const QVector<float>& interleavedIQ);
 
     // Phase 18 Task 18.1: count of sessions currently subscribed to IQ
     // stream for the given receiver index.  Exposed for test assertions.
@@ -445,7 +447,9 @@ private slots:
     // Applies IQSwap, then broadcasts IQ frames to subscribed clients.
     // From Thetis TCIServer.cs:5397-5435 [v2.10.3.13] — wantsIQStream +
     // PublishIQSamples.
-    void onRawIqDataReceived(const QVector<float>& interleavedIQ);
+    void onRawIqDataReceived(int streamIndex, const QVector<float>& interleavedIQ);
+    void sendIqToSubscribers(int receiver, int sampleRate,
+                             const QVector<float>& interleavedIQ);
 
     // Destroys all RESAMPLEF instances for the given session and clears the map.
     // Called from onClientDisconnected and stop().

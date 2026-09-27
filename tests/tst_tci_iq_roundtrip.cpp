@@ -35,6 +35,7 @@ private slots:
     void iq_swap_flag_swaps_i_q_pairs();
     void always_stream_iq_overrides_subscription();
     void remote_window_refuses_iq_start();
+    void receiver_and_rate_are_reported();
 };
 
 // ── iq_start_subscribes_then_frames_arrive() ─────────────────────────────────
@@ -319,6 +320,47 @@ void TestTciIqRoundtrip::remote_window_refuses_iq_start()
     QTest::qWait(100);
     QCOMPARE(binary.count(), 0);
 
+    client.close();
+    server.stop();
+}
+
+void TestTciIqRoundtrip::receiver_and_rate_are_reported()
+{
+    AppSettings::instance().setValue(QStringLiteral("TciAlwaysStreamIq"), QStringLiteral("False"));
+    TciServer server(nullptr);
+    QVERIFY(server.start(0));
+    QWebSocket client;
+    QSignalSpy connected(&client, &QWebSocket::connected);
+    QSignalSpy binary(&client, &QWebSocket::binaryMessageReceived);
+    client.open(QUrl(QStringLiteral("ws://127.0.0.1:%1").arg(server.port())));
+    QVERIFY(connected.wait(2000));
+    client.sendTextMessage(QStringLiteral("iq_start:1;"));
+    QTRY_COMPARE_WITH_TIMEOUT(server.activeIqSubscriberCount(1), 1, 3000);
+    const QVector<float> samples(32, 0.25f);
+    server.injectRawIqForTest(0, 96000, samples);
+    QTest::qWait(50);
+    QCOMPARE(binary.size(), 0);
+    server.injectRawIqForTest(1, 384000, samples);
+    QTRY_COMPARE_WITH_TIMEOUT(binary.size(), 1, 3000);
+    const QByteArray frame = binary.at(0).at(0).toByteArray();
+    const auto word = [&frame](int offset) {
+        return quint32(quint8(frame.at(offset)))
+            | (quint32(quint8(frame.at(offset + 1))) << 8)
+            | (quint32(quint8(frame.at(offset + 2))) << 16)
+            | (quint32(quint8(frame.at(offset + 3))) << 24);
+    };
+    QCOMPARE(word(0), 1u);
+    QCOMPARE(word(4), 384000u);
+    server.injectRawIqForTest(1, 768000, samples);
+    QTest::qWait(50);
+    QCOMPARE(binary.size(), 1);
+    server.injectRawIqForTest(1, 96000, samples);
+    QTRY_COMPARE_WITH_TIMEOUT(binary.size(), 2, 3000);
+    QCOMPARE(word(4), 384000u);
+    const QByteArray changed = binary.at(1).at(0).toByteArray();
+    const auto* bytes = reinterpret_cast<const quint8*>(changed.constData() + 4);
+    QCOMPARE(quint32(bytes[0]) | (quint32(bytes[1]) << 8)
+                 | (quint32(bytes[2]) << 16) | (quint32(bytes[3]) << 24), 96000u);
     client.close();
     server.stop();
 }

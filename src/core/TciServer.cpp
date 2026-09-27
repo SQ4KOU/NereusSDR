@@ -635,7 +635,7 @@ void TciServer::hookAudioAndIqTaps()
     //
     // Idempotency guard: m_iqTapConnected — reset in stop(), set here.
     if (!m_iqTapConnected) {
-        connect(m_model, &RadioModel::rawIqData,
+        connect(m_model, &RadioModel::rawIqDataForStream,
                 this, &TciServer::onRawIqDataReceived,
                 Qt::QueuedConnection);
         m_iqTapConnected = true;
@@ -3735,14 +3735,25 @@ void TciServer::sendTxChronoFrame(QWebSocket* client)
 // single-receiver architecture; Phase 3F multi-pan will add per-receiver
 // variants.  This slot therefore treats all incoming data as receiver=0.
 
-void TciServer::onRawIqDataReceived(const QVector<float>& interleavedIQ)
+void TciServer::onRawIqDataReceived(int streamIndex, const QVector<float>& interleavedIQ)
+{
+    if (!m_model || streamIndex < 0) { return; }
+    const int sampleRate = m_model->streamSampleRateHz(streamIndex);
+    if (sampleRate < 48000 || sampleRate > 384000) { return; }
+    for (SliceModel* slice : m_model->slices()) {
+        if (slice && slice->streamIndex() == streamIndex && slice->sliceIndex() <= 1) {
+            sendIqToSubscribers(slice->sliceIndex(), sampleRate, interleavedIQ);
+        }
+    }
+}
+
+void TciServer::sendIqToSubscribers(int receiver, int sampleRate,
+                                    const QVector<float>& interleavedIQ)
 {
     if (m_clients.isEmpty()) { return; }
-    if (interleavedIQ.isEmpty()) { return; }
-
-    // Phase 18: RadioModel::rawIqData fires only for RX1 (slice 0).
-    // Phase 3F will add per-receiver variants.
-    constexpr int kReceiver = 0;  // From design doc Phase 18 §Note
+    if (interleavedIQ.isEmpty() || (interleavedIQ.size() & 1) != 0
+        || receiver < 0 || receiver > 1 || sampleRate < 48000
+        || sampleRate > 384000) { return; }
 
     // Read per-call so AppSettings changes take effect immediately.
     auto& settings = AppSettings::instance();
@@ -3784,8 +3795,6 @@ void TciServer::onRawIqDataReceived(const QVector<float>& interleavedIQ)
     // Thetis negotiates via iq_samplerate:.  Phase 3F multi-pan will pass the
     // actual per-receiver rate here.  For now, match the Thetis Phase 11 default
     // of 192000 from TciProtocol.cpp:265 [v2.10.3.13 port].
-    constexpr int iqSampleRate = 192000;
-
     for (auto it = m_clients.cbegin(); it != m_clients.cend(); ++it) {
         QWebSocket* ws     = it.key();
         const auto& session = it.value();
@@ -3793,7 +3802,7 @@ void TciServer::onRawIqDataReceived(const QVector<float>& interleavedIQ)
         // wantsIQStream(kReceiver) — From Thetis TCIServer.cs:5397-5404 [v2.10.3.13]:
         //   if (AlwaysStreamIQ) return true;
         //   return m_iqStreamEnabled.Contains(receiver);
-        const bool wants = alwaysStream || session->iqStreamEnabled.contains(kReceiver);
+        const bool wants = alwaysStream || session->iqStreamEnabled.contains(receiver);
         if (!wants) { continue; }
 
         // Encode and send.  Always FLOAT32, always 2 channels for IQ.
@@ -3801,8 +3810,8 @@ void TciServer::onRawIqDataReceived(const QVector<float>& interleavedIQ)
         // buildStreamPayload(receiver, sampleRate, FLOAT32, complexSamples*2,
         //                    IQ_STREAM, 2, encoded).
         const QByteArray frame = TciBinaryFrame::buildStreamPayload(
-            kReceiver,
-            iqSampleRate,
+            receiver,
+            sampleRate,
             static_cast<int>(TciSampleType::Float32),
             lengthField,
             static_cast<int>(TciStreamType::IqStream),
@@ -3825,7 +3834,13 @@ void TciServer::onRawIqDataReceived(const QVector<float>& interleavedIQ)
 
 void TciServer::injectRawIqForTest(const QVector<float>& interleavedIQ)
 {
-    onRawIqDataReceived(interleavedIQ);
+    sendIqToSubscribers(0, 192000, interleavedIQ);
+}
+
+void TciServer::injectRawIqForTest(int receiver, int sampleRate,
+                                   const QVector<float>& interleavedIQ)
+{
+    sendIqToSubscribers(receiver, sampleRate, interleavedIQ);
 }
 
 // ── activeIqSubscriberCount() ─────────────────────────────────────────────────
