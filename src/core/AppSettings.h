@@ -15,6 +15,11 @@
 //   2026-09-23 - R-R3-21: migrateRenamedKeys() one-shot rename for keys
 //                 whose writer and reader disagreed (WsjtxSpotLifetime).
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-27 - Schema v9 (R-IOS-06, R-IOS-27): each slice's saved NR1
+//                 values brought into Thetis's NR spinbox ranges once (old
+//                 defaults to the new ones, out-of-range values clamped).
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -693,6 +698,8 @@ public:
     //   - Removes DisplayReverseWaterfallScroll (W5 removed in Task 2.8)
     //   - v7 (R-R3-49): resets NetworkWatchdogEnabled once
     //   - v8 (R-R3-49): drops TciRateLimitMsgsPerSec (old msg/s unit) once
+    //   - v9 (R-IOS-06, R-IOS-27): each slice's saved NR1 values into
+    //     Thetis's NR spinbox ranges once (old defaults to new, clamps)
     //   - Sets SettingsSchemaVersion=currentVersion
     void ensureSettingsAtVersion(int currentVersion);
 

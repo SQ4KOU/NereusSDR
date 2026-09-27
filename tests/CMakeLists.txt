@@ -2191,6 +2191,11 @@ nereus_add_test(tst_dfnr_availability EXTRA_LABELS gui)
 # window; BNR in no build), and choosing them is refused.
 nereus_add_test(tst_mnr_bnr_availability EXTRA_LABELS gui)
 
+# R-IOS-06, R-IOS-27: the VFO flag's NR1 and MNR quick controls and the
+# Setup NR1 tab against their sources (Thetis's NR spinboxes and their
+# SetRXAANRVals conversion; MacNRFilter's DEF_* values for MNR's Reset).
+nereus_add_test(tst_nr_quick_controls EXTRA_LABELS gui)
+
 # D14, R-R3-49: every NereusSDR TX meter maps to the WDSP txaMeterType index
 # Thetis reads for it (wdspTxaMeterIndex); the expected indices are written
 # by hand from the compiled third_party/wdsp/src/TXA.h.
@@ -6636,6 +6641,11 @@ nereus_add_test(tst_settings_schema_v7_migration)
 # now TciRateLimitMs). Source: NereusSDR-original (no Thetis upstream).
 nereus_add_test(tst_settings_schema_v8_migration)
 
+# R-IOS-06, R-IOS-27: SettingsSchemaVersion v8 -> v9 brings each slice's
+# saved NR1 values into Thetis's NR spinbox ranges once (old defaults to the
+# new ones, out-of-range values clamped, in-range values kept).
+nereus_add_test(tst_settings_schema_v9_migration)
+
 # Phase 3F Sub-Epic B Task 1: SliceConfig + DdcAssignment shared structs.
 # 2 tests: slice_config_struct_has_required_fields,
 #          ddc_assignment_struct_has_required_fields.
@@ -7830,6 +7840,11 @@ target_compile_definitions(tst_this_core_page PRIVATE NEREUS_BUILD_TESTS)
 # for the G2 and the HL2, and the page unchanged by reading the shared
 # table (R-IOS-18, R-IOS-27, R-R3-08).
 nereus_add_test(tst_display_catalogue EXTRA_LABELS session)
+# R-IOS-06, R-IOS-27: the catalogue's board.transmit, board.rx1Preamp,
+# board.relays and noiseReduction against the desktop's own widgets (TX
+# applet, Power page, antenna popup, the VFO flag's NR popups,
+# NnrControls) on the G2 and the HL2.
+nereus_add_test(tst_catalogue_ranges EXTRA_LABELS session)
 # iPhone app Task 19 (R-IOS-06): the Core's catalogue; the G2 and HL2
 # catalogue fixtures against the desktop's own values, the revision, a
 # preset change reaching a client over the in-process loopback, the size.

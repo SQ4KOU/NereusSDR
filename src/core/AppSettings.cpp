@@ -21,6 +21,11 @@
 //   2026-09-25 - Receiver and transmit gaps plan, Task 16: the N2ADR
 //                 filter migration covers the HL2 receive-only kit.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-27 - Schema v9 (R-IOS-06, R-IOS-27): each slice's saved NR1
+//                 values brought into Thetis's NR spinbox ranges once (old
+//                 defaults to the new ones, out-of-range values clamped).
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -71,6 +76,7 @@
 
 #include "AppSettings.h"
 
+#include "core/ControlRanges.h"
 #include "core/settings/ISettingsBackend.h"
 
 #include <QDateTime>
@@ -84,6 +90,9 @@
 #include <QXmlStreamReader>
 #include <QXmlStreamWriter>
 #include <QDebug>
+
+#include <algorithm>
+#include <cmath>
 
 namespace NereusSDR {
 
@@ -1636,6 +1645,71 @@ void AppSettings::ensureSettingsAtVersion(int currentVersion)
         qDebug() << "Migrating settings to schema v8 (TCI rate limit in ms)";
         remove(QStringLiteral("TciRateLimitMsgsPerSec"));
         qDebug() << "Settings migration to schema v8 complete";
+    }
+
+    // v8 -> v9 migration (R-IOS-06, R-IOS-27). NR1's ranges and defaults
+    // became Thetis's NR spinboxes (ControlRanges.h: taps 1-1024, delay
+    // 1-1023, gain 1-1000 x 1e-6, leak 1-1000 x 1e-3, defaults 64 / 16 /
+    // 100 / 100). Every slice saved its NR1 values, so without this a saved
+    // value outside the new range would run while the popup's slider showed
+    // it pinned at an end. Once, per slice (Slice<N>/Nr1*):
+    //   - a gain or leak exactly equal to the old default (16e-4, 10e-7,
+    //     radio.cs's initialisers, never chosen by an operator) becomes the
+    //     new default;
+    //   - a value outside the range is clamped into it and written back;
+    //   - a value inside the range stays as the operator set it.
+    if (storedVersion < 9 && currentVersion >= 9) {
+        qDebug() << "Migrating settings to schema v9 (NR1 ranges)";
+        using namespace ControlRanges;
+        struct Nr1Key {
+            const char* suffix;
+            const NrControl* control;
+            double oldDefault;  // NaN where the default did not change
+            bool whole;
+        };
+        const double none = std::nan("");
+        const Nr1Key keys[] = {
+            {"Nr1Taps", &kNr1Taps, none, true},
+            {"Nr1Delay", &kNr1Delay, none, true},
+            {"Nr1Gain", &kNr1Gain, 16e-4, false},
+            {"Nr1Leakage", &kNr1Leak, 10e-7, false},
+        };
+        static const QRegularExpression sliceKey(
+            QStringLiteral("^Slice\\d+/(Nr1Taps|Nr1Delay|Nr1Gain|Nr1Leakage)$"));
+        for (const QString& key : allKeys()) {
+            const QRegularExpressionMatch match = sliceKey.match(key);
+            if (!match.hasMatch()) {
+                continue;
+            }
+            for (const Nr1Key& entry : keys) {
+                if (match.captured(1) != QLatin1String(entry.suffix)) {
+                    continue;
+                }
+                bool ok = false;
+                const double saved = value(key).toString().toDouble(&ok);
+                const double low = entry.control->min * entry.control->scale;
+                const double high = entry.control->max * entry.control->scale;
+                double next = saved;
+                if (!ok || !std::isfinite(saved)) {
+                    next = entry.control->defaultValue;
+                } else if (!std::isnan(entry.oldDefault) && saved == entry.oldDefault) {
+                    next = entry.control->defaultValue;
+                } else {
+                    next = std::clamp(saved, low, high);
+                }
+                if (ok && next == saved) {
+                    break;
+                }
+                if (entry.whole) {
+                    setValue(key, static_cast<int>(std::lround(next)));
+                } else {
+                    setValue(key, next);
+                }
+                qDebug() << "Settings v9:" << key << "from" << saved << "to" << next;
+                break;
+            }
+        }
+        qDebug() << "Settings migration to schema v9 complete";
     }
 
     setValue(versionKey, QString::number(currentVersion));

@@ -130,6 +130,15 @@
 //   2026-09-26  J.J. Boyd / KG4VCF  iPhone app plan Task 78 (R-IOS-02,
 //                R-IOS-30): a Take transmit button under the holder line.
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-27  J.J. Boyd / KG4VCF  the RF Power and Tune labels read
+//                rfPowerShownFor / tunePowerShownFor (HpsdrModel.h), which
+//                the Core's catalogue reads too (R-IOS-06, R-IOS-27). The
+//                labels are unchanged. AI-assisted via Anthropic Claude
+//                Code.
+//   2026-09-27  J.J. Boyd / KG4VCF  the HL2 RF Power and Tune labels
+//                snap and round a value between steps as mi0bot's
+//                UpdateDriveLabel and UpdateTuneLabel do (R-IOS-06,
+//                R-IOS-27). AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -2056,15 +2065,12 @@ void TxApplet::updatePowerSliderLabels()
     const int        rfVal  = m_rfPowerSlider->value();
     const int        tunVal = m_tunePwrSlider->value();
 
-    if (model == HPSDRModel::HERMESLITE) {
-        const float rfDb  = (std::round(rfVal  / 6.0f) / 2.0f) - 7.5f;
-        const float tunDb = (tunVal / 3.0f - 33.0f) / 2.0f;
-        m_rfPowerValue->setText(QString::number(rfDb,  'f', 1));
-        m_tunePwrValue->setText(QString::number(tunDb, 'f', 1));
-    } else {
-        m_rfPowerValue->setText(QString::number(rfVal));
-        m_tunePwrValue->setText(QString::number(tunVal));
-    }
+    // The shown values come from HpsdrModel.h (rfPowerShownFor,
+    // tuneSliderShownFor: mi0bot's UpdateDriveLabel and UpdateTuneLabel),
+    // which the Core's catalogue reads too.
+    const int decimals = powerSliderShownDecimalsFor(model);
+    m_rfPowerValue->setText(QString::number(rfPowerShownFor(model, rfVal), 'f', decimals));
+    m_tunePwrValue->setText(QString::number(tuneSliderShownFor(model, tunVal), 'f', decimals));
 }
 
 // Canonical TX band — derived from the active slice's frequency (which

@@ -4,11 +4,16 @@
 // J.J. Boyd (KG4VCF), with Anthropic Claude Code assistance. Later the same
 // day: one "try again" per model pick; the notice colour from
 // StyleConstants.
+// 2026-09-27: the model items, ranges, steps, places and units read from
+// ControlRanges.h, the table the Core's catalogue sends (R-IOS-06,
+// R-IOS-27); the values are unchanged. J.J. Boyd (KG4VCF), with Anthropic
+// Claude Code assistance.
 
 #include "NnrControls.h"
 
 #include "core/AppSettings.h"
 #include "core/ConnectionState.h"
+#include "core/ControlRanges.h"
 #include "core/WdspTypes.h"
 #include "gui/OperatorReasonText.h"
 #include "gui/StyleConstants.h"
@@ -63,6 +68,15 @@ QDoubleSpinBox* makeDouble(const char* objectName, double minimum, double maximu
     return spin;
 }
 
+// A spinbox drawn from its ControlRanges entry (NNR's values are in their
+// properties' own units).
+QDoubleSpinBox* makeDouble(const char* objectName, const ControlRanges::NrControl& control,
+                           const QString& help, QWidget* parent)
+{
+    return makeDouble(objectName, control.min, control.max, control.step, control.decimals,
+                      QString::fromUtf8(control.suffix), help, parent);
+}
+
 QString yesNo(bool value)
 {
     return value ? QStringLiteral("yes") : QStringLiteral("no");
@@ -105,8 +119,9 @@ void NnrControls::buildUi(Presentation presentation)
 
     m_model = new QComboBox(quick);
     m_model->setObjectName(QStringLiteral("nnrModelCombo"));
-    m_model->addItem(tr("Standard"), 0);
-    m_model->addItem(tr("Premium"), 1);
+    for (const ControlRanges::NrChoiceItem& item : ControlRanges::kNnrModels) {
+        m_model->addItem(tr(item.label), item.id);
+    }
     m_model->setToolTip(tr("Select the neural model. The preference remains editable offline; "
                            "a connected radio may reject a model that is not installed."));
     quickForm->addRow(tr("Model"), m_model);
@@ -135,10 +150,11 @@ void NnrControls::buildUi(Presentation presentation)
     suppressionRow->setContentsMargins(0, 0, 0, 0);
     m_maskFloorSlider = new QSlider(Qt::Horizontal, suppression);
     m_maskFloorSlider->setObjectName(QStringLiteral("nnrMaskFloorSlider"));
-    m_maskFloorSlider->setRange(-500, -100);
+    m_maskFloorSlider->setRange(
+        qRound(ControlRanges::kNnrMaskFloor.min * ControlRanges::kNnrMaskFloorSliderPerDb),
+        qRound(ControlRanges::kNnrMaskFloor.max * ControlRanges::kNnrMaskFloorSliderPerDb));
     m_maskFloorSlider->setSingleStep(1);
-    m_maskFloor = makeDouble("nnrMaskFloorSpin", -50.0, -10.0, 0.01, 2,
-                             tr(" dB"),
+    m_maskFloor = makeDouble("nnrMaskFloorSpin", ControlRanges::kNnrMaskFloor,
                              tr("More-negative values permit stronger suppression. Higher values retain "
                                 "more of the original signal and noise."),
                              suppression);
@@ -164,30 +180,32 @@ void NnrControls::buildUi(Presentation presentation)
 
     m_position = new QComboBox(advancedGroup);
     m_position->setObjectName(QStringLiteral("nnrPositionCombo"));
-    m_position->addItem(tr("Pre-AGC"), static_cast<int>(NrPosition::PreAgc));
-    m_position->addItem(tr("Post-AGC"), static_cast<int>(NrPosition::PostAgc));
+    for (std::size_t i = 0; i < ControlRanges::kNnrPosition.optionCount; ++i) {
+        const ControlRanges::NrChoiceItem& item = ControlRanges::kNnrPosition.options[i];
+        m_position->addItem(tr(item.label), item.id);
+    }
     m_position->setToolTip(tr("Choose whether NNR runs before or after automatic gain control."));
     advanced->addRow(tr("Position"), m_position);
 
     m_alpha = makeDouble(
-        "nnrAlphaSpin", 0.0, 4.0, 0.01, 2, {},
+        "nnrAlphaSpin", ControlRanges::kNnrAlpha,
         tr("Shapes deep-filter gains below the alpha knee. A value of 1 leaves "
            "those gains unchanged; values above 1 deepen them, while values "
            "below 1 lift them."),
         advancedGroup);
-    m_alphaKnee = makeDouble("nnrAlphaKneeSpin", 0.0, 40.0, 0.1, 1, tr(" dB"),
+    m_alphaKnee = makeDouble("nnrAlphaKneeSpin", ControlRanges::kNnrAlphaKnee,
                              tr("Gain threshold below which Alpha reshapes the "
                                 "deep-filter response."),
                              advancedGroup);
-    m_tau = makeDouble("nnrTauSpin", 0.05, 30.0, 0.05, 2, tr(" s"),
+    m_tau = makeDouble("nnrTauSpin", ControlRanges::kNnrTau,
                        tr("Time constant for input-power normalization before "
                           "the neural network."),
                        advancedGroup);
-    m_maxGain = makeDouble("nnrMaxGainSpin", 0.0, 24.0, 0.1, 1, tr(" dB"),
+    m_maxGain = makeDouble("nnrMaxGainSpin", ControlRanges::kNnrMaxGain,
                            tr("Maximum gain the neural stage may add."), advancedGroup);
-    m_attack = makeDouble("nnrAttackSpin", 0.0, 500.0, 0.1, 1, tr(" ms"),
+    m_attack = makeDouble("nnrAttackSpin", ControlRanges::kNnrAttack,
                           tr("How quickly suppression engages. Zero uses the model response."), advancedGroup);
-    m_release = makeDouble("nnrReleaseSpin", 0.0, 500.0, 0.1, 1, tr(" ms"),
+    m_release = makeDouble("nnrReleaseSpin", ControlRanges::kNnrRelease,
                            tr("How quickly suppression relaxes. Zero uses the model response."), advancedGroup);
     advanced->addRow(tr("Alpha"), m_alpha);
     advanced->addRow(tr("Alpha knee"), m_alphaKnee);
@@ -325,7 +343,7 @@ void NnrControls::buildUi(Presentation presentation)
     });
     connect(m_maskFloorSlider, &QSlider::valueChanged, this, [this](int value) {
         if (m_slice) {
-            m_slice->setNnrMaskFloorDb(value / 10.0);
+            m_slice->setNnrMaskFloorDb(double(value) / ControlRanges::kNnrMaskFloorSliderPerDb);
         }
         refresh();
     });
@@ -455,7 +473,8 @@ void NnrControls::refresh()
     setDouble(m_maskFloor, m_slice->nnrMaskFloorDb());
     {
         QSignalBlocker blocker(m_maskFloorSlider);
-        m_maskFloorSlider->setValue(qRound(m_slice->nnrMaskFloorDb() * 10.0));
+        m_maskFloorSlider->setValue(
+            qRound(m_slice->nnrMaskFloorDb() * ControlRanges::kNnrMaskFloorSliderPerDb));
     }
     setComboData(m_position, static_cast<int>(m_slice->nnrPosition()));
     setDouble(m_alpha, m_slice->nnrAlpha());

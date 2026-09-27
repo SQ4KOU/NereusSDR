@@ -48,6 +48,14 @@
 //                                    R-IOS-03, R-IOS-13): txSliceMarked and
 //                                    setTxMarkAllowed (ruling 5.4a). AI-
 //                                    assisted via Anthropic Claude Code.
+//   2026-09-27  J.J. Boyd / KG4VCF  NR1's defaults are Thetis's NR
+//                                    spinbox defaults as its Setup applies
+//                                    them (gain 100e-6, leak 100e-3), read
+//                                    from ControlRanges.h (R-IOS-06,
+//                                    R-IOS-27). AI-assisted via Anthropic
+//                                    Claude Code. MNR's defaults read from
+//                                    there too, and NR2, NR3, NR4 and
+//                                    DFNR's (values unchanged).
 // =================================================================
 
 //=================================================================
@@ -149,6 +157,7 @@
 // project-level Thetis LICENSE applies.
 
 #include "Band.h"
+#include "core/ControlRanges.h"
 #include "core/NbFamily.h"
 #include "core/SampleRateCatalog.h"
 #include "core/WdspTypes.h"
@@ -1563,55 +1572,62 @@ private:
     void setNnrLastError(const QString& error);
 
 
-    // NR1 — from RxChannel::Nr1Tuning defaults (Task 8 commit 8747ae4),
-    // which in turn match Thetis radio.cs:673-699 [v2.10.3.13].
-    int    m_nr1Taps    = 64;           // radio.cs:674   nr_taps = 64
-    int    m_nr1Delay   = 16;           // radio.cs:675   nr_delay = 16
-    double m_nr1Gain    = 16e-4;        // radio.cs:677   nr_gain = 16e-4 (WDSP-domain)
-    double m_nr1Leakage = 10e-7;        // radio.cs:679   nr_leak = 10e-7 (WDSP-domain)
-    NereusSDR::NrPosition m_nr1Position = NereusSDR::NrPosition::PostAgc;  // setup.cs:8723
+    // NR1: Thetis's NR spinbox defaults as Thetis hands them to
+    // SetRXAANRVals (taps 64, delay 16, gain 100 x 1e-6, leak 100 x 1e-3;
+    // see ControlRanges.h). Gain and leak are WDSP-domain values.
+    int    m_nr1Taps    = static_cast<int>(ControlRanges::kNr1Taps.defaultValue);
+    int    m_nr1Delay   = static_cast<int>(ControlRanges::kNr1Delay.defaultValue);
+    double m_nr1Gain    = ControlRanges::kNr1Gain.defaultValue;
+    double m_nr1Leakage = ControlRanges::kNr1Leak.defaultValue;
+    NereusSDR::NrPosition m_nr1Position =
+        static_cast<NereusSDR::NrPosition>(ControlRanges::kNrPositionDefault);
 
     // NR2 — from RxChannel::Nr2Tuning defaults (Task 8 commit 8747ae4),
     // matching Thetis radio.cs:2062-2213, setup.cs:34711-34748 [v2.10.3.13].
-    NereusSDR::EmnrGainMethod m_nr2GainMethod = NereusSDR::EmnrGainMethod::Gamma;  // setup.cs:17359-17468
-    NereusSDR::EmnrNpeMethod  m_nr2NpeMethod  = NereusSDR::EmnrNpeMethod::Osms;    // setup.cs:17374-17404
+    NereusSDR::EmnrGainMethod m_nr2GainMethod = static_cast<NereusSDR::EmnrGainMethod>(
+        ControlRanges::kNr2GainMethod.defaultValue);   // Gamma
+    NereusSDR::EmnrNpeMethod  m_nr2NpeMethod  = static_cast<NereusSDR::EmnrNpeMethod>(
+        ControlRanges::kNr2NpeMethod.defaultValue);    // OSMS
     double m_nr2TrainT1 = -0.5;         // EMNR zetaThresh default (unsigned domain)
     double m_nr2TrainT2 = 0.20;         // EMNR t2 default
-    bool   m_nr2AeFilter = true;        // radio.cs:2103  rx_nr2_ae_run = 1
+    bool   m_nr2AeFilter = ControlRanges::kNr2AeFilter.defaultValue != 0.0;  // rx_nr2_ae_run = 1
     NereusSDR::NrPosition m_nr2Position = NereusSDR::NrPosition::PostAgc;    // radio.cs:2237
-    bool   m_nr2Post2Run    = false;    // radio.cs:2122  default off
+    bool   m_nr2Post2Run    = ControlRanges::kNr2Post2Run.defaultValue != 0.0;  // default off
     double m_nr2Post2Level  = 15.0;    // radio.cs:2139  rx_nr2_ae_post2_nlevel = 15.0
-    double m_nr2Post2Factor = 15.0;    // radio.cs:2158  rx_nr2_ae_post2_factor = 15.0
-    double m_nr2Post2Rate   = 5.0;     // radio.cs:2177  rx_nr2_ae_post2_rate = 5.0
+    double m_nr2Post2Factor = ControlRanges::kNr2Post2Factor.defaultValue;  // 15.0
+    double m_nr2Post2Rate   = ControlRanges::kNr2Post2Rate.defaultValue;    // 5.0
     int    m_nr2Post2Taper  = 12;      // radio.cs:2196  rx_nr2_ae_post2_taper = 12
 
     // NR3 — from RxChannel::Nr3Tuning defaults (Task 8 commit 8747ae4),
     // matching Thetis radio.cs:2257-2311, setup.cs:35460-35462 [v2.10.3.13].
-    NereusSDR::NrPosition m_nr3Position = NereusSDR::NrPosition::PostAgc;  // radio.cs:2275
-    bool   m_nr3UseDefaultGain = true;  // setup.cs:35460  RXANR3FixedGain default
+    NereusSDR::NrPosition m_nr3Position =
+        static_cast<NereusSDR::NrPosition>(ControlRanges::kNr3Position.defaultValue);  // Post-AGC
+    bool   m_nr3UseDefaultGain = ControlRanges::kNr3UseDefaultGain.defaultValue != 0.0;  // fixed gain
 
-    // NR4 — from RxChannel::Nr4Tuning defaults (Task 8 commit 8747ae4),
-    // matching Thetis radio.cs:2312-2355, setup.cs:34511-34527 [v2.10.3.13].
-    double m_nr4Reduction  = 10.0;     // setup.cs default
-    double m_nr4Smoothing  = 65.0;     // setup.cs default
-    double m_nr4Whitening  = 2.0;      // setup.cs default
-    double m_nr4Rescale    = 2.0;      // setup.cs default
-    double m_nr4PostThresh = -10.0;    // setup.cs default
-    NereusSDR::SbnrAlgo m_nr4Algo = NereusSDR::SbnrAlgo::Algo2;  // setup.cs:34511-34527
+    // NR4: from ControlRanges.h, which says where these differ from
+    // Thetis's (Smoothing, Whitening and Algo do).
+    double m_nr4Reduction  = ControlRanges::kNr4Reduction.defaultValue;   // 10
+    double m_nr4Smoothing  = ControlRanges::kNr4Smoothing.defaultValue;   // 65
+    double m_nr4Whitening  = ControlRanges::kNr4Whitening.defaultValue;   // 2
+    double m_nr4Rescale    = ControlRanges::kNr4Rescale.defaultValue;     // 2
+    double m_nr4PostThresh = ControlRanges::kNr4PostThresh.defaultValue;  // -10
+    NereusSDR::SbnrAlgo m_nr4Algo =
+        static_cast<NereusSDR::SbnrAlgo>(ControlRanges::kNr4Algo.defaultValue);  // Algo 2
 
     // DFNR — AetherSDR DeepFilterFilter defaults [@0cd4559] (post-WDSP, not
     // in Thetis). m_attenLimit{100.0f}, m_postFilterBeta{0.0f} verbatim.
-    double m_dfnrAttenLimit     = 100.0;
-    double m_dfnrPostFilterBeta = 0.0;
+    double m_dfnrAttenLimit     = ControlRanges::kDfnrAttenLimit.defaultValue;      // 100
+    double m_dfnrPostFilterBeta = ControlRanges::kDfnrPostFilterBeta.defaultValue;  // 0
 
     // BNR + MNR — AetherSDR filter defaults (post-WDSP, not in Thetis).
     double m_bnrStrength = 1.0;
-    double m_mnrStrength = 1.0;
-    double m_mnrOversub  = 4.0;    // MacNRFilter::DEF_OVER;   range 0.01-1000 at filter
-    double m_mnrFloor    = 0.05;   // MacNRFilter::DEF_FLOOR;  range 0.0-2.0 at filter
-    double m_mnrAlpha    = 0.92;   // MacNRFilter::DEF_ALPHA;  range 0.0-1.0
-    double m_mnrBias     = 1.2;    // MacNRFilter::DEF_BIAS;   range 0.0-10.0
-    double m_mnrGsmooth  = 0.70;   // MacNRFilter::DEF_GSMOOTH; range 0.0-1.0
+    // MNR: MacNRFilter's DEF_* values, from ControlRanges.h.
+    double m_mnrStrength = ControlRanges::kMnrStrengthDefault;
+    double m_mnrOversub  = ControlRanges::kMnrOversubDefault;  // range 0.01-1000 at filter
+    double m_mnrFloor    = ControlRanges::kMnrFloorDefault;    // range 0.0-2.0 at filter
+    double m_mnrAlpha    = ControlRanges::kMnrAlphaDefault;    // range 0.0-1.0
+    double m_mnrBias     = ControlRanges::kMnrBiasDefault;     // range 0.0-10.0
+    double m_mnrGsmooth  = ControlRanges::kMnrGsmoothDefault;  // range 0.0-1.0
 
     bool   m_snbEnabled{false};       // Neutral default — feature off at start
     bool   m_anfEnabled{false};       // Neutral default, feature off at start

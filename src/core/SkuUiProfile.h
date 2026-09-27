@@ -10,6 +10,11 @@
 //   2026-04-22 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-09-27 - rxOutOnTxPresent: the one gate for the RX bypass relay's
+//                 controls (the VFO flag's BYPS, the antenna popup's "RX
+//                 out on TX", the catalogue's board.relays; R-IOS-06,
+//                 R-IOS-27). NereusSDR-original. J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -68,6 +73,7 @@
 
 #pragma once
 
+#include "BoardCapabilities.h"
 #include "HpsdrModel.h"
 
 #include <QString>
@@ -96,5 +102,14 @@ struct SkuUiProfile {
 };
 
 SkuUiProfile skuUiProfileFor(HPSDRModel sku);
+
+/// Whether the radio offers RX out on TX (the RX bypass relay): the board
+/// has the relay and the product offers the control. The VFO flag's BYPS
+/// button, the antenna popup's "RX out on TX" and the catalogue's
+/// board.relays.rxOutOnTx all follow it.
+inline bool rxOutOnTxPresent(const BoardCapabilities& caps, const SkuUiProfile& sku) noexcept
+{
+    return caps.hasRxBypassRelay && sku.hasRxOutOnTx;
+}
 
 }  // namespace NereusSDR

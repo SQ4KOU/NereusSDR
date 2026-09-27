@@ -10,17 +10,18 @@
 //
 //   json      one JSON document with exactly these top-level keys:
 //             modes, filterPresets, tuneSteps, agc, receive, meters,
-//             display, board, bandPlans, bands, palettes, sliceColours,
-//             tools, radioItems, audio.
+//             display, noiseReduction, board, bandPlans, bands, palettes,
+//             sliceColours, tools, radioItems, audio.
 //             The link document's Catalogue section gives its full shape.
 //   revision  moves by one each time `json` changes (serial-number
 //             arithmetic, as the devices object's).
 //
 // Everything in it is read where the desktop reads it: the modes and the
 // Core's filter presets (FilterPresetStore), the tune-step list
-// (SliceModel's), the AGC, receive and gauge ranges and Setup > Display's
-// controls (ControlRanges.h), the board
-// (BoardCapabilities, SkuUiProfile, SampleRateCatalog, paMaxWattsFor), the
+// (SliceModel's), the AGC, receive and gauge ranges, Setup > Display's
+// controls and the noise-reduction quick controls (ControlRanges.h), the
+// board (BoardCapabilities, SkuUiProfile, SampleRateCatalog, paMaxWattsFor
+// and the transmit ranges' HpsdrModel.h helpers), the
 // band plans (BandPlanManager), the waterfall palettes
 // (core/spectrum/WaterfallPalettes) and the slice colours. It is the same
 // for every device connected to the Core; nothing in it is per device.
@@ -45,6 +46,10 @@
 //   2026-09-27: the `display` key (Setup > Display's controls; R-IOS-18,
 //               R-IOS-27, R-R3-08). J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-27: board.transmit, board.rx1Preamp, board.relays and the
+//               `noiseReduction` key (R-IOS-06, R-IOS-27). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/BoardCapabilities.h"
