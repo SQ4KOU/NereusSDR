@@ -143,14 +143,41 @@ What the bench re-check needs (the operator's, on the G2 in a local window):
 1. Current build, LSB, TX filter 100 to 2900 Hz, TUNE at low power into a
    dummy load. Setup > Display > TX Display: FFT size 32768, Window
    Blackman-Harris 4T, Panadapter detector Peak, averaging None. Note the
-   values actually set there if they differ.
+   values actually set there if they differ. Record the build's SHA (the
+   window title's build name, or `git rev-parse --short HEAD` of the tree it
+   was built from). The 2026-08-05 reading and the analyzer block size fix
+   (`f8cff594`, `TxAnalyzer::setBlockSize`) carry the same date, and a
+   `bf_sz` that does not match the siphon's push size feeds the analyzer
+   exactly this kind of gapped input, so a reading without its SHA cannot
+   say which side of that fix it was taken on.
 2. Launch with `QT_LOGGING_RULES="nereus.dsp.debug=true"` and keep the
    `TxAnalyzer SetAnalyzer` line from the key-up; it should match the
    arguments above with `win=1`.
-3. Read the peak and the level 66 Hz either side. If the skirt is gone, row 15
-   closes. If it is still there, note the peak level too (-0.1 dB expected;
-   near -9 dB means the tone is not continuous at the analyzer), and take the
+3. Read the peak and the level 66 Hz either side, and record the tone's peak
+   level every time, skirt or not (-0.1 dB expected; near -9 dB means the
+   tone is not continuous at the analyzer). If the skirt is gone, row 15
+   closes with the SHA and the peak level. If it is still there, take the
    A/B screenshot against Thetis on the same radio, frequency and TUNE power.
+
+Two things about the build under test that bear on the reading:
+
+- **The up-slew stage sits between the tone and the display.** In the TX
+  chain (`third_party/wdsp/src/TXA.c:575-578`) the order is `xgen` (gen1,
+  the TUNE tone), then `xuslew`, then the ALC meter, then `xsiphon`, which
+  feeds the analyzer. A channel state restart or flush during TUNE re-runs
+  the up-slew ramp and would show at the analyzer as periodic ramps on the
+  tone: gaps of exactly the kind the -9.3 dB peak suggests. If the skirt is
+  still there, a debug hook worth adding for the bench is a log line (on
+  the `nereus.dsp` category) wherever the TX channel's state is restarted
+  or flushed while TUNE is on; one or more per FFT frame names the cause.
+- **The first key's SetAnalyzer now runs earlier on the transmit lane.**
+  Since parity Task 28, `TxDisplayFeed` starts the analyzer from
+  `MoxController::moxStateChanged`, which `onRfDelayElapsed` emits before
+  `moxChanged`; the first key's deferred SetAnalyzer (the FFTW plan) is
+  therefore posted on the transmit lane ahead of the work `moxChanged`
+  handlers post on the same edge. `nereusd` already behaved this way. It is
+  not a change to the transmit chain, but a first-key hitch or a
+  first-frame oddity on the display belongs with this note.
 
 Not yet ruled out, in the order worth trying:
 
@@ -164,6 +191,7 @@ Not yet ruled out, in the order worth trying:
    against 2048-sample pushes, which is not an integer number of blocks.
    Thetis computes overlap the same way, so this is a weak suspect, but it
    has not been positively excluded.
+4. The up-slew debug hook above, when the peak reads near -9 dB.
 
 ---
 
