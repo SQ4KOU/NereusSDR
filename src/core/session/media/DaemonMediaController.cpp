@@ -1878,7 +1878,8 @@ QString DaemonMediaController::unkeyStatsLine(const QByteArray& deviceId,
             }
             line << "; shed " << ms(feed.shedFrames + feed.shedForRingFrames) << " ms ("
                  << ms(feed.shedForRingFrames) << " ms for the ring), inserted "
-                 << ms(feed.insertedFrames) << " ms, target grew " << feed.grows << " times";
+                 << ms(feed.insertedFrames) << " ms, target grew " << feed.grows
+                 << " times, held for DEXP " << feed.heldBlocks << " blocks";
         } else {
             line << "no feed";
         }

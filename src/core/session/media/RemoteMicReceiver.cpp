@@ -374,6 +374,7 @@ void RemoteMicFeed::publishOver()
     m_statsShedForRing.store(m_overShedForRing, std::memory_order_relaxed);
     m_statsInserted.store(m_overInserted, std::memory_order_relaxed);
     m_statsGrows.store(m_overGrows, std::memory_order_relaxed);
+    m_statsHeld.store(m_overHeld, std::memory_order_relaxed);
 }
 
 void RemoteMicFeed::endBlock()
@@ -390,7 +391,8 @@ void RemoteMicFeed::endBlock()
     publishOver();
 }
 
-RemoteMicFeed::Pull RemoteMicFeed::pullBlock(float* dst, int frames, double downstreamQueuedMs)
+RemoteMicFeed::Pull RemoteMicFeed::pullBlock(float* dst, int frames, double downstreamQueuedMs,
+                                             bool holdSplices)
 {
     const quint64 change = m_change.load(std::memory_order_acquire);
     if (change != m_seenChange) {
@@ -441,6 +443,7 @@ RemoteMicFeed::Pull RemoteMicFeed::pullBlock(float* dst, int frames, double down
             m_overShedForRing = 0;
             m_overInserted = 0;
             m_overGrows = 0;
+            m_overHeld = 0;
             publishOver();
         }
         m_statsStarted.store(false, std::memory_order_relaxed);
@@ -495,9 +498,19 @@ RemoteMicFeed::Pull RemoteMicFeed::pullBlock(float* dst, int frames, double down
     m_overAddedSumMs += addedMs;
     m_overAddedMaxMs = std::max(m_overAddedMaxMs, addedMs);
 
+    // DEXP counts its hold, decay and VOX turn-off in the samples it
+    // processes (Thetis wdsp/dexp.c:142-144, 312-381 [v2.10.3.15]), and
+    // WDSP has no call to move those counts; so while one runs nothing is
+    // spliced and DEXP sees the pause as it was spoken.
+    if (holdSplices) {
+        ++m_overHeld;
+    }
+    const bool mayShed = !holdSplices;
+
     // Excess past the send ring: shed a silent block and skip this pump
     // block, so TX DSP never runs on it and the ring drains by one block.
-    if (downstreamQueuedMs >= 0.0 && m_ringShedBudget >= kPumpBlock && canSplice()) {
+    if (mayShed && downstreamQueuedMs >= 0.0 && m_ringShedBudget >= kPumpBlock
+        && canSplice()) {
         dropBlock();
         m_ringShedBudget -= kPumpBlock;
         m_overShedForRing += kPumpBlock;
@@ -509,7 +522,7 @@ RemoteMicFeed::Pull RemoteMicFeed::pullBlock(float* dst, int frames, double down
     // At most one splice (a silent block shed, or one inserted) a block.
     bool spliced = false;
     while (m_matcherFill < kPumpBlock) {
-        if (!spliced && m_insertBudget >= kPumpBlock && canSplice()) {
+        if (mayShed && !spliced && m_insertBudget >= kPumpBlock && canSplice()) {
             std::fill(m_stereoScratch.begin(), m_stereoScratch.end(), 0.0f);
             m_matcher->push(m_stereoScratch.data(), kPumpBlock);
             m_insertBudget -= kPumpBlock;
@@ -518,7 +531,7 @@ RemoteMicFeed::Pull RemoteMicFeed::pullBlock(float* dst, int frames, double down
             spliced = true;
         } else if (m_bufferCount < kPumpBlock) {
             break;
-        } else if (!spliced && m_shedBudget >= kPumpBlock && canSplice()) {
+        } else if (mayShed && !spliced && m_shedBudget >= kPumpBlock && canSplice()) {
             dropBlock();
             m_shedBudget -= kPumpBlock;
             m_overShed += kPumpBlock;
@@ -578,6 +591,7 @@ RemoteMicFeed::Stats RemoteMicFeed::stats() const
     stats.shedForRingFrames = m_statsShedForRing.load(std::memory_order_relaxed);
     stats.insertedFrames = m_statsInserted.load(std::memory_order_relaxed);
     stats.grows = m_statsGrows.load(std::memory_order_relaxed);
+    stats.heldBlocks = m_statsHeld.load(std::memory_order_relaxed);
     return stats;
 }
 

@@ -515,6 +515,11 @@
 //                transmit slice while keyed and come back at the unkey, as
 //                Thetis's UIMOXChangedTrue / False do. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-27 — R-IOS-13: every key applies the TX-bound slice's DSP >
+//                Options to the TX channel before the hardware flip
+//                (applyTxDspOptionsBeforeKey on txAboutToBegin), so no key
+//                path transmits at the channel's open sizes. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1866,6 +1871,15 @@ RadioModel::RadioModel(Role role, QObject* parent)
     // is gone before this key's own hardwareFlipped(true) is queued.
     connect(m_moxController, &MoxController::txAboutToBegin,
             this, [this]() { m_transmitStopHold = false; });
+
+    // R-IOS-13 (2026-09-27): every key (MOX, TUNE, a remote key, VOX,
+    // two-tone) goes through txAboutToBegin before the hardware flip and
+    // the TX channel's start, so the TX-bound slice's DSP > Options apply
+    // here. Without it the channel keeps its open sizes (dsp 2048) until
+    // the slice's mode first changes: 65.6 ms through TX DSP instead of
+    // 16.1 ms (tst_tx_latency_dsp).
+    connect(m_moxController, &MoxController::txAboutToBegin,
+            this, &RadioModel::applyTxDspOptionsBeforeKey);
 
     // Task 33: the receiver comes back after ptt_out_delay, not with the
     // hardware flip (Thetis console.cs:29678-29680 [v2.10.3.15]).
@@ -23494,6 +23508,28 @@ qint64 RadioModel::setActiveRxCountLive(int newCount)
 //
 // NereusSDR-original infrastructure — no Thetis source ported here.
 // ---------------------------------------------------------------------------
+void RadioModel::applyTxDspOptionsBeforeKey()
+{
+    if (m_txChannel == nullptr) {
+        return;
+    }
+    const SliceModel* const slice = txBoundSlice();
+    if (slice == nullptr) {
+        return;
+    }
+    const DSPMode mode = slice->dspMode();
+    // The same apply a mode change makes (TxChannel::onModeChanged): a
+    // no-op once the sizes and type match; with the transmit lane its
+    // WDSP calls queue ahead of the channel's start.
+    const qint64 elapsed = m_txChannel->onModeChanged(mode);
+    if (elapsed > 0) {
+        emit dspChangeMeasured(elapsed);
+    }
+    if (m_txKeyDspOptionsObserverForTest) {
+        m_txKeyDspOptionsObserverForTest(mode);
+    }
+}
+
 void RadioModel::rebuildDspOptionsForMode(DSPMode forMode)
 {
     if (!m_wdspEngine || !m_wdspEngine->isInitialized()) {

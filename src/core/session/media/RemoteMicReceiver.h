@@ -187,7 +187,9 @@ bool opusPacketCarriesFec(const QByteArray& payload);
 /// block (pullBlock returns Shed), so TX DSP never runs on it and the ring
 /// drains by one block. A deficit is filled the same way, with a silent
 /// block inserted. The I/Q the radio sends stays continuous: nothing is
-/// ever cut after TX DSP.
+/// ever cut after TX DSP. Nothing is spliced while DEXP's own timing runs
+/// (its hold, decay or VOX turn-off), which it counts in the samples it
+/// processes, so shedding never moves the VOX hang or the expander.
 class RemoteMicFeed {
 public:
     RemoteMicFeed();
@@ -223,8 +225,11 @@ public:
     /// Called on every pump block. `frames` must be
     /// RemoteMicConfig::kPumpBlockFrames. `downstreamQueuedMs` is what the
     /// radio's send ring holds now (RadioConnection::txIqQueuedMs), or
-    /// negative when unknown (then Shed is never returned).
-    Pull pullBlock(float* dst, int frames, double downstreamQueuedMs);
+    /// negative when unknown (then Shed is never returned). While
+    /// `holdSplices` is true (DEXP's hold, decay or VOX turn-off is
+    /// counting, TxChannel::dexpTimingRunning) nothing is shed or inserted.
+    Pull pullBlock(float* dst, int frames, double downstreamQueuedMs,
+                   bool holdSplices = false);
     /// pullBlock without a send ring: true while in use.
     bool pull(float* dst, int frames)
     {
@@ -267,11 +272,13 @@ public:
         double ringMeanMs{-1.0};
         double ringMaxMs{-1.0};
         /// Silence shed from the buffer, shed for the send ring (blocks the
-        /// pump skipped), and inserted, in frames; margin growths.
+        /// pump skipped), and inserted, in frames; margin growths; pump
+        /// blocks in which DEXP's timing held every splice back.
         quint64 shedFrames{0};
         quint64 shedForRingFrames{0};
         quint64 insertedFrames{0};
         int grows{0};
+        int heldBlocks{0};
     };
     Stats stats() const;
 
@@ -327,6 +334,7 @@ private:
     std::atomic<quint64> m_statsShedForRing{0};
     std::atomic<quint64> m_statsInserted{0};
     std::atomic<int> m_statsGrows{0};
+    std::atomic<int> m_statsHeld{0};
 
     // Pump.
     std::unique_ptr<RemoteAudioRateMatcher> m_matcher;
@@ -375,6 +383,7 @@ private:
     quint64 m_overShedForRing{0};
     quint64 m_overInserted{0};
     int m_overGrows{0};
+    int m_overHeld{0};
     std::vector<float> m_monoScratch;
     std::vector<float> m_stereoScratch;
 };

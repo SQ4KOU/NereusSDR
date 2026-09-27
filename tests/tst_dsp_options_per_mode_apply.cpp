@@ -158,7 +158,8 @@ private slots:
     {
         AppSettings::instance().setValue("DspOptionsBufferSizePhoneRx", "4096");
         AppSettings::instance().setValue("DspOptionsFilterSizePhoneRx", "4096");
-        AppSettings::instance().setValue("DspOptionsFilterTypePhoneRx", "Low Latency");
+        // R-IOS-13: a channel opens linear phase (WDSP create_nbp mp 0).
+        AppSettings::instance().setValue("DspOptionsFilterTypePhoneRx", "Linear Phase");
 
         RxChannel ch(kTestChannel, kTestBufSize, kTestRate);
 
@@ -175,7 +176,7 @@ private slots:
     {
         AppSettings::instance().setValue("DspOptionsBufferSizeCwRx",  "4096");
         AppSettings::instance().setValue("DspOptionsFilterSizeCwRx",  "4096");
-        AppSettings::instance().setValue("DspOptionsFilterTypeCwRx",  "Low Latency");
+        AppSettings::instance().setValue("DspOptionsFilterTypeCwRx",  "Linear Phase");
 
         RxChannel ch(kTestChannel, kTestBufSize, kTestRate);
         WdspEngine engine;
@@ -191,7 +192,7 @@ private slots:
     {
         AppSettings::instance().setValue("DspOptionsBufferSizeDigRx", "4096");
         AppSettings::instance().setValue("DspOptionsFilterSizeDigRx", "4096");
-        AppSettings::instance().setValue("DspOptionsFilterTypeDigRx", "Low Latency");
+        AppSettings::instance().setValue("DspOptionsFilterTypeDigRx", "Linear Phase");
 
         RxChannel ch(kTestChannel, kTestBufSize, kTestRate);
         WdspEngine engine;
@@ -206,7 +207,7 @@ private slots:
     {
         AppSettings::instance().setValue("DspOptionsBufferSizeFmRx",  "4096");
         AppSettings::instance().setValue("DspOptionsFilterSizeFmRx",  "4096");
-        AppSettings::instance().setValue("DspOptionsFilterTypeFmRx",  "Low Latency");
+        AppSettings::instance().setValue("DspOptionsFilterTypeFmRx",  "Linear Phase");
 
         RxChannel ch(kTestChannel, kTestBufSize, kTestRate);
         WdspEngine engine;
@@ -224,7 +225,7 @@ private slots:
         // differs from channel state.
         AppSettings::instance().setValue("DspOptionsFilterSizePhoneRx",  "8192");
         AppSettings::instance().setValue("DspOptionsBufferSizePhoneRx",  "4096");
-        AppSettings::instance().setValue("DspOptionsFilterTypePhoneRx",  "Low Latency");
+        AppSettings::instance().setValue("DspOptionsFilterTypePhoneRx",  "Linear Phase");
 
         RxChannel ch(kTestChannel, kTestBufSize, kTestRate);
         WdspEngine engine;
@@ -234,20 +235,21 @@ private slots:
         QCOMPARE(ch.onModeChanged(DSPMode::USB), qint64(-1));
     }
 
-    // Changing filter type from Low Latency (0) to Linear Phase (1)
-    // triggers a rebuild attempt.
+    // Changing filter type from the channel's opening Linear Phase (1) to
+    // Low Latency (0) triggers a rebuild attempt (R-IOS-13: the cache
+    // starts where WDSP opens the channel, linear phase).
     void rx_changed_filter_type_triggers_rebuild_attempt()
     {
         AppSettings::instance().setValue("DspOptionsBufferSizePhoneRx",  "4096");
         AppSettings::instance().setValue("DspOptionsFilterSizePhoneRx",  "4096");
-        // "Linear Phase" maps to filterType=1; m_filterType default is 0.
-        AppSettings::instance().setValue("DspOptionsFilterTypePhoneRx",  "Linear Phase");
+        // "Low Latency" maps to filterType=0; m_filterType starts at 1.
+        AppSettings::instance().setValue("DspOptionsFilterTypePhoneRx",  "Low Latency");
 
         RxChannel ch(kTestChannel, kTestBufSize, kTestRate);
         WdspEngine engine;
         ch.setWdspEngine(&engine);
 
-        // filterType 1 != 0 → channel-in-map check fires → -1.
+        // filterType 0 != 1 → channel-in-map check fires → -1.
         QCOMPARE(ch.onModeChanged(DSPMode::USB), qint64(-1));
     }
 
@@ -262,22 +264,23 @@ private slots:
         QCOMPARE(r, qint64(0));
     }
 
-    // TxChannel: filter size matching kTxDspBufferSize (2048) + Low Latency (0)
-    // → no rebuild (idempotent guard fires).
+    // TxChannel: filter size matching kTxDspBufferSize (2048) + Linear
+    // Phase (1) → no rebuild (idempotent guard fires).
     // m_txDspBlockSize / m_txFilterSize initialise to
-    // WdspEngine::kTxDspBufferSize = 2048; m_txFilterType to 0
-    // (LowLatency).  Schema-v5 reads `Tx`-suffixed keys.
+    // WdspEngine::kTxDspBufferSize = 2048; m_txFilterType to 1 (Linear
+    // Phase, where WDSP opens the channel; R-IOS-13).  Schema-v5 reads
+    // `Tx`-suffixed keys.
     void tx_same_settings_returns_zero()
     {
         AppSettings::instance().setValue("DspOptionsBufferSizePhoneTx", "2048");
         AppSettings::instance().setValue("DspOptionsFilterSizePhoneTx", "2048");
-        AppSettings::instance().setValue("DspOptionsFilterTypePhoneTx", "Low Latency");
+        AppSettings::instance().setValue("DspOptionsFilterTypePhoneTx", "Linear Phase");
 
         TxChannel tx(97, 64, 64);
         WdspEngine engine;
         tx.setWdspEngine(&engine);
 
-        // bufSize 2048 == 2048, filterSize 2048 == 2048, filterType 0 == 0
+        // bufSize 2048 == 2048, filterSize 2048 == 2048, filterType 1 == 1
         // → no rebuild → 0.
         QCOMPARE(tx.onModeChanged(DSPMode::USB), qint64(0));
     }

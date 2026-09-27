@@ -372,8 +372,13 @@ warren@wpratt.com
 //                 [v2.10.3.15]); the ten-band overload calls it with no Q.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-27 — R-IOS-13: txIqQueuedMs(), the connection's send ring fill
-//                 for the remote microphone's buffer. J.J. Boyd (KG4VCF),
-//                 AI-assisted via Anthropic Claude Code.
+//                 for the remote microphone's buffer; dexpTimingRunning(),
+//                 so the buffer never splices while DEXP's hold, decay or
+//                 VOX turn-off counts (dexp.c [v2.10.3.15]); the filter
+//                 type sends Thetis's MP (Low Latency = minimum phase,
+//                 enums.cs:404-408, radio.cs:2659 [v2.10.3.15]; it was
+//                 inverted). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #include "TxChannel.h"  // brings in WdspTypes.h (DSPMode)
@@ -1123,6 +1128,33 @@ void TxChannel::pumpDexp(const double* interleavedIn)
     // exercise path matches between configs (the DEXP module isn't there
     // to consume it, but the memcpy itself stays exercised).
     std::memcpy(m_dexpBuffer, interleavedIn, m_dexpBufferSizeDoubles * sizeof(double));
+#endif
+}
+
+bool TxChannel::dexpTimingRunning() const
+{
+#ifdef NEREUS_BUILD_TESTS
+    if (m_dexpTimingForTest.has_value()) {
+        return *m_dexpTimingForTest;
+    }
+#endif
+#ifdef HAVE_WDSP
+    if (m_channelId < 0 || m_channelId >= MAX_CHANNELS || pdexp[m_channelId] == nullptr) {
+        return false;
+    }
+    const DEXP a = pdexp[m_channelId];
+    if (!a->run_dexp && !a->run_vox) {
+        return false;
+    }
+    // From Thetis wdsp/dexp.c [v2.10.3.15]: the state machine's first state
+    // is DEXP_LOW (enum _dexpstate, :256-263, value 0). HOLD counts
+    // a->count = a->nhold samples (:357, 367; nhold = thold * rate at :142),
+    // DECAY counts ndecay (:373-377), and back in LOW the VOX turn-off waits
+    // for vox_count samples (:333-342; audelay * rate at :144).
+    constexpr int kDexpLow = 0;
+    return a->state != kDexpLow || (a->run_vox && a->vox_count > 0);
+#else
+    return false;
 #endif
 }
 
@@ -5333,7 +5365,7 @@ void TxChannel::applyState(const TxChannelState& s)
 // ---------------------------------------------------------------------------
 //
 // Wraps the WDSP entry points that Thetis calls from its DSPTX property
-// setters at radio.cs:2628-2662 [v2.10.3.13]:
+// setters at radio.cs:2630-2662 [v2.10.3.15]:
 //
 //   public int FilterSize {
 //       set {
@@ -5358,7 +5390,7 @@ void TxChannel::applyState(const TxChannelState& s)
 //       }
 //   }
 //
-// TXASetNC and TXASetMP at third_party/wdsp/src/TXA.c:909-928 [v2.10.3.13]
+// TXASetNC and TXASetMP at Thetis wdsp/TXA.c:910-927 [v2.10.3.15]
 // internally quiesce the channel via SetChannelState(channel, 0, 1) — the
 // cm_main flushflag handshake at channel.c:259-297 [v2.10.3.13] — reconfigure
 // every dependent subsystem, then restore the prior run state.  Safe to call
@@ -5425,6 +5457,35 @@ void TxChannel::setTxFilterSizeSamples(int nc)
 #endif
 }
 
+#ifdef NEREUS_BUILD_TESTS
+// R-IOS-13: RxChannel::bandpassMinimumPhaseForTest's read of rxa[] (no
+// getter in the WDSP API); this file already includes WDSP's headers.
+int wdspRxBandpassMinimumPhaseForTest(int channelId)
+{
+#ifdef HAVE_WDSP
+    if (channelId < 0 || channelId >= MAX_CHANNELS || rxa[channelId].nbp0.p == nullptr) {
+        return -1;
+    }
+    return rxa[channelId].nbp0.p->mp;
+#else
+    Q_UNUSED(channelId);
+    return -1;
+#endif
+}
+
+int TxChannel::bandpassMinimumPhaseForTest() const
+{
+#ifdef HAVE_WDSP
+    if (m_channelId < 0 || m_channelId >= MAX_CHANNELS || txa[m_channelId].bp0.p == nullptr) {
+        return -1;
+    }
+    return txa[m_channelId].bp0.p->mp;
+#else
+    return -1;
+#endif
+}
+#endif
+
 void TxChannel::setTxFilterTypeLinearPhase(bool linearPhase)
 {
     const int newType = linearPhase ? 1 : 0;
@@ -5433,11 +5494,17 @@ void TxChannel::setTxFilterTypeLinearPhase(bool linearPhase)
     }
     m_txFilterType = newType;
 #ifdef HAVE_WDSP
-    // From Thetis radio.cs:2647 [v2.10.3.13] DSPTX.FilterType setter:
+    // From Thetis radio.cs:2659 [v2.10.3.15] DSPTX.FilterType setter:
     //   WDSP.TXASetMP(WDSP.id(thread, 0), Convert.ToBoolean(value));
-    // C# Convert.ToBoolean((int)DSPFilterType) maps Low_Latency=0 → false,
-    // Linear_Phase=1 → true.  We pass the already-translated 0/1.
-    runOrdered([this, newType]() { TXASetMP(m_channelId, newType); });
+    // with enums.cs:404-408 [v2.10.3.15]
+    //   public enum DSPFilterType { Linear_Phase = 0, Low_Latency = 1, }
+    // so Convert.ToBoolean maps Low_Latency to true (minimum phase, MP 1)
+    // and Linear_Phase to false (MP 0). m_txFilterType counts the other
+    // way (0 = Low Latency), so the MP flag is its inverse. R-IOS-13
+    // (2026-09-27): this used to send m_txFilterType itself, so "Low
+    // Latency" ran linear phase (35.6 ms through TX DSP instead of 16.1).
+    const int minimumPhase = linearPhase ? 0 : 1;
+    runOrdered([this, minimumPhase]() { TXASetMP(m_channelId, minimumPhase); });
 #endif
 }
 

@@ -538,14 +538,17 @@ void TxWorkerThread::dispatchOneBlock()
     // of the microphone (Shed): this pump block is then skipped whole, so
     // TX DSP never runs on it and the ring drains by one block. Nothing is
     // cut from the I/Q after TX DSP. The RADE path never sheds (its modem
-    // keeps its own timing).
+    // keeps its own timing), and nothing is spliced while DEXP's hold,
+    // decay or VOX turn-off counts (TxChannel::dexpTimingRunning): DEXP
+    // counts them in the samples it processes, which runs on this thread.
     RemoteMicFeed* const remoteFeed = m_remoteMicFeed.load(std::memory_order_acquire);
     const bool radePath = m_currentTxPath.load(std::memory_order_acquire) == TxPath::Rade;
     const RemoteMicFeed::Pull remotePull = remoteFeed != nullptr
         ? remoteFeed->pullBlock(m_remoteMicBuf.data(), kBlockFrames,
                                 radePath || m_txChannel->isTciAudioActive()
                                     ? -1.0
-                                    : m_txChannel->txIqQueuedMs())
+                                    : m_txChannel->txIqQueuedMs(),
+                                m_txChannel->dexpTimingRunning())
         : RemoteMicFeed::Pull::NotInUse;
     if (remotePull == RemoteMicFeed::Pull::Shed) {
         return;

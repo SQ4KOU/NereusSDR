@@ -146,7 +146,8 @@ struct FeedRun {
 };
 
 FeedRun runFeed(RemoteMicFeed& feed, int packets, const std::function<double(int k)>& arrivalMs,
-                const std::function<void(qint64 block, const RemoteMicFeed&)>& onBlock = {})
+                const std::function<void(qint64 block, const RemoteMicFeed&)>& onBlock = {},
+                const std::function<bool(qint64 block)>& holdSplices = {})
 {
     FeedRun run;
     constexpr int kFrames = RemoteMicConfig::kOpusFrameSamples;
@@ -166,7 +167,7 @@ FeedRun runFeed(RemoteMicFeed& feed, int packets, const std::function<double(int
             feed.write(packet.data(), kFrames);
             ++next;
         }
-        feed.pull(out.data(), kBlock);
+        feed.pullBlock(out.data(), kBlock, -1.0, holdSplices ? holdSplices(b) : false);
         run.played.insert(run.played.end(), out.begin(), out.end());
         run.fillAfterBlock.push_back(feed.stats().fillFrames);
         if (onBlock) {
@@ -232,6 +233,7 @@ private slots:
     void steadyPacketsHoldTheSmallestTargetWithoutUnderrun();
     void jitterGrowsTheTargetAndASteadyLinkEasesItBack();
     void aStallsExcessIsShedInSilenceNeverUnderTheVoice();
+    void nothingIsSplicedWhileDexpTimingRuns();
 };
 
 void TestRemoteMicReceiver::theLineKeepsTheTransmitNumbers()
@@ -967,6 +969,49 @@ void TestRemoteMicReceiver::aStallsExcessIsShedInSilenceNeverUnderTheVoice()
              qPrintable(QString::number(largestStep(run.played, 0))));
 }
 
+
+// R-IOS-13: while DEXP's own timing runs (its hold, decay or VOX turn-off,
+// which it counts in the samples it processes), the buffer splices
+// nothing, so the pause DEXP sees is the one spoken; the excess waits and
+// goes in the first pause after DEXP's timing ends.
+void TestRemoteMicReceiver::nothingIsSplicedWhileDexpTimingRuns()
+{
+    const auto arrival = [](int k) {
+        return k >= 70 && k <= 79 ? 20.0 * 80 + 0.4 : 0.4 + 20.0 * k;
+    };
+    // Held for the whole run: the stall's excess stays, nothing is shed.
+    {
+        RemoteMicFeed feed;
+        feed.setInUse(true);
+        const FeedRun run = runFeed(feed, 750, arrival, {}, [](qint64) { return true; });
+        QCOMPARE(run.stats.shedFrames, quint64(0));
+        QCOMPARE(run.stats.insertedFrames, quint64(0));
+        QVERIFY(run.stats.heldBlocks > 10'000);
+        QVERIFY(run.fillAfterBlock[run.fillAfterBlock.size() - 20] > 150 * 48);
+    }
+    // Held until 4 s: nothing shed before, the excess shed after.
+    {
+        RemoteMicFeed feed;
+        feed.setInUse(true);
+        constexpr qint64 kReleaseBlock = 3000;   // 4 s
+        quint64 shedAtRelease = 0;
+        const FeedRun run = runFeed(feed, 750, arrival,
+            [&shedAtRelease](qint64 block, const RemoteMicFeed& f) {
+                if (block == kReleaseBlock) {
+                    shedAtRelease = f.stats().shedFrames;
+                }
+            },
+            [](qint64 block) { return block < kReleaseBlock; });
+        QCOMPARE(shedAtRelease, quint64(0));
+        QVERIFY(run.stats.shedFrames >= 150 * 48);
+        const std::vector<std::pair<qint64, qint64>> words = playedWords(run.played);
+        for (size_t w = 1; w + 1 < words.size(); ++w) {
+            const qint64 length = words[w].second - words[w].first + 1;
+            QVERIFY2(std::abs(length - kWordFrames) <= 24,
+                     qPrintable(QStringLiteral("word %1: %2").arg(w).arg(length)));
+        }
+    }
+}
 
 QTEST_GUILESS_MAIN(TestRemoteMicReceiver)
 #include "tst_remote_mic_receiver.moc"

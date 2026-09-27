@@ -425,6 +425,7 @@ private slots:
     void radePathTakesTheRing();
     void toneFromTheLineReachesTheTxChannelAtItsLevel();
     void aStandingSendRingIsShedOnlyInSilenceBySkippingPumpBlocks();
+    void nothingIsShedWhileDexpTimingRuns();
 
     // ---- The Core -------------------------------------------------------------
 
@@ -611,6 +612,48 @@ void TestTxWorkerRemoteRing::aStandingSendRingIsShedOnlyInSilenceBySkippingPumpB
             QCOMPARE(stats.shedForRingFrames, quint64(skippedInPause) * kBlock);
         }
     }
+}
+
+// R-IOS-13: while DEXP's hold, decay or VOX turn-off counts
+// (TxChannel::dexpTimingRunning), the pump skips no block and the feed
+// splices nothing, so VOX and the expander keep their timing; once it ends
+// the standing ring is shed in the next silence.
+void TestTxWorkerRemoteRing::nothingIsShedWhileDexpTimingRuns()
+{
+    Pump pump;
+    pump.connection.queuedMs = 20.0;
+    pump.feed.setInUse(true);
+    pump.channel.setDexpTimingRunningForTest(true);
+    quint32 seed = 11U;
+    int skipped = 0;
+    int skippedAfter = 0;
+    std::vector<double> previous;
+    for (int b = 0; b < 3000; ++b) {
+        if (b == 1500) {
+            pump.channel.setDexpTimingRunningForTest(false);
+        }
+        if (b % 15 == 0) {
+            // A word for the first 300 ms of every 1 s, then silence.
+            const qint64 start = static_cast<qint64>(b / 15) * 960;
+            std::vector<float> frame = tone(start, 960, 0.3f);
+            if ((b / 15) % 50 >= 15) {
+                for (float& x : frame) {
+                    seed = seed * 1664525U + 1013904223U;
+                    x = 1.0e-4f * (static_cast<float>(seed >> 8) / 8388608.0f - 1.0f);
+                }
+            }
+            QVERIFY(pump.feed.write(frame.data(), 960));
+        }
+        pump.block();
+        const std::vector<double> now = lastI(pump.channel);
+        if (!previous.empty() && now == previous && rms(now) > 0.0) {
+            ++(b < 1500 ? skipped : skippedAfter);
+        }
+        previous = now;
+    }
+    QCOMPARE(skipped, 0);
+    QVERIFY2(skippedAfter >= 10, qPrintable(QString::number(skippedAfter)));
+    QVERIFY(pump.feed.stats().heldBlocks >= 1400);
 }
 
 // Older peers get no microphone line; a start with remoteTxVersion gets it,

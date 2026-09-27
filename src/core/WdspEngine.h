@@ -48,6 +48,9 @@
 //   2026-09-26 : Task 27 (R-R3-49) by J.J. Boyd (KG4VCF): test-only
 //                 friendship for the transmit analyzer skirt test.
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-27 : R-IOS-13 by J.J. Boyd (KG4VCF): test-only friendship for
+//                 the transmit path's DSP latency and key-path tests. AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 /*  cmaster.cs
@@ -189,6 +192,9 @@ class TestStopTransmitNow;
 class TstConfirmStep;
 // Task 27: the transmit analyzer skirt test opens a real TX channel.
 class TestTxAnalyzerSkirt;
+// R-IOS-13: the transmit path's DSP latency test.
+class TestTxLatencyDsp;
+class TestTxKeyDspOptions;
 #endif
 
 namespace NereusSDR {
@@ -1056,6 +1062,9 @@ private:
     friend class ::TstConfirmStep;
     // Task 27: same friendship for the transmit analyzer skirt test.
     friend class ::TestTxAnalyzerSkirt;
+    // R-IOS-13: the filter type and DEXP timing test on real channels.
+    friend class ::TestTxLatencyDsp;
+    friend class ::TestTxKeyDspOptions;
 #endif
 };
 
