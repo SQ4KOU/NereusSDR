@@ -33,6 +33,9 @@ private slots:
     void australia6m_outOfBand_returnsFalse();
     void spain20m_inBand_returnsTrue();
     void spain6m_outOfBand_returnsFalse();
+    void countryRanges_data();
+    void countryRanges();
+    void unsupportedRegion_failsClosed();
 };
 
 void TestBandPlanGuard::us60m_validChannelCenter_returnsTrue()
@@ -224,6 +227,59 @@ void TestBandPlanGuard::spain6m_outOfBand_returnsFalse()
     // (clsBandStackManager.cs:1464 [v2.10.3.13])
     BandPlanGuard guard;
     QVERIFY(!guard.isValidTxFreq(Region::Spain, 52'500'000, DSPMode::USB, false));
+}
+
+void TestBandPlanGuard::countryRanges_data()
+{
+    // Independent boundary samples from GetBandFrequencyDataForRegion,
+    // clsBandStackManager.cs:1334-1730 [v2.10.3.15 @3759d096]. The sample
+    // for each country differs from the former US fallback (or Region1's
+    // former Europe alias), including regions with identical source tables.
+    QTest::addColumn<int>("region");
+    QTest::addColumn<qint64>("sampleHz");
+    QTest::addColumn<bool>("permitted");
+    QTest::newRow("US") << int(Region::UnitedStates) << qint64(7'300'000) << true;
+    QTest::newRow("India") << int(Region::India) << qint64(5'000'001) << true;
+    QTest::newRow("Spain") << int(Region::Spain) << qint64(7'200'001) << false;
+    QTest::newRow("Europe") << int(Region::Europe) << qint64(7'200'001) << false;
+    QTest::newRow("Israel") << int(Region::Israel) << qint64(5'000'001) << true;
+    QTest::newRow("UK") << int(Region::UnitedKingdom) << qint64(7'299'999) << false;
+    QTest::newRow("Italy Plus") << int(Region::Italy) << qint64(5'987'500) << true;
+    QTest::newRow("Japan") << int(Region::Japan) << qint64(3'999'999) << false;
+    QTest::newRow("Australia") << int(Region::Australia) << qint64(3'999'999) << false;
+    QTest::newRow("Norway") << int(Region::Norway) << qint64(5'499'999) << false;
+    QTest::newRow("Denmark") << int(Region::Denmark) << qint64(5'499'999) << false;
+    QTest::newRow("Latvia") << int(Region::Latvia) << qint64(6'000'000) << true;
+    QTest::newRow("Slovakia") << int(Region::Slovakia) << qint64(6'000'000) << true;
+    QTest::newRow("Bulgaria") << int(Region::Bulgaria) << qint64(6'000'000) << true;
+    QTest::newRow("Greece") << int(Region::Greece) << qint64(5'099'999) << true;
+    QTest::newRow("Hungary") << int(Region::Hungary) << qint64(6'999'999) << true;
+    QTest::newRow("Netherlands") << int(Region::Netherlands) << qint64(5'500'001) << true;
+    QTest::newRow("France") << int(Region::France) << qint64(6'000'000) << true;
+    QTest::newRow("Russia") << int(Region::Russia) << qint64(7'200'001) << false;
+    QTest::newRow("Sweden") << int(Region::Sweden) << qint64(5'620'000) << true;
+    QTest::newRow("Germany") << int(Region::Germany) << qint64(5'499'999) << false;
+    QTest::newRow("Region 1") << int(Region::Region1) << qint64(5'351'499) << false;
+    QTest::newRow("Region 2") << int(Region::Region2) << qint64(5'351'499) << false;
+    QTest::newRow("Region 3") << int(Region::Region3) << qint64(5'351'499) << false;
+}
+
+void TestBandPlanGuard::countryRanges()
+{
+    QFETCH(int, region);
+    QFETCH(qint64, sampleHz);
+    QFETCH(bool, permitted);
+    BandPlanGuard guard;
+    const auto selected = static_cast<Region>(region);
+    QCOMPARE(guard.isValidTxFreq(selected, sampleHz, DSPMode::USB, false), permitted);
+    QVERIFY(guard.isValidTxFreq(selected, 14'200'000, DSPMode::USB, false));
+}
+
+void TestBandPlanGuard::unsupportedRegion_failsClosed()
+{
+    BandPlanGuard guard;
+    QVERIFY(!guard.isValidTxFreq(static_cast<Region>(255), 14'200'000,
+                                 DSPMode::USB, false));
 }
 
 QTEST_GUILESS_MAIN(TestBandPlanGuard)

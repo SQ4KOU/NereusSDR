@@ -23,6 +23,9 @@
 //   2026-09-25: iPhone app plan Task 34 (R-IOS-13), by J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code:
 //                MoxCheckResult::refusalCode. NereusSDR-original.
+//   2026-09-27: Updated the TX gate range documentation and region
+//                selection for Thetis v2.10.3.15 @3759d096 with AI
+//                assistance via OpenAI Codex.
 // =================================================================
 
 // --- From console.cs ---
@@ -167,8 +170,7 @@ enum class Region : std::uint8_t {
 ///   console.cs:29401-29432 (_preventTXonDifferentBandToRXband + US 60m mode restriction)
 /// All from Thetis [v2.10.3.13].
 ///
-/// Pure data + pure functions. No Qt parent, no signals. Inert until
-/// 3M-1a wires the first MOX byte — at which point RadioModel calls
+/// Pure data + pure functions. No Qt parent or signals. RadioModel calls
 /// these predicates before setting TX.
 class BandPlanGuard
 {

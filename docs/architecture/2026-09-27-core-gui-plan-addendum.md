@@ -603,7 +603,7 @@ colours for the same signal.
   `ExtendedTxAllowed` and cross-band values are OperatorLocal in `SettingsScope`; the
   Core gate currently uses false constants instead of those values. A stale saved
   Extended=true activation and split RX/TX band policy need a source-based safety review.
-  `BandPlanGuard::bandRangesFor` still has TODOs for most country tables and falls back
+  `BandPlanGuard::bandRangesFor` had TODOs for most country tables and fell back
   to US ranges; a stale comment calling the guard inert is false because MOX already
   invokes it. Thetis `Console.cs` 6780-6812 also checks non-CW transmit filter edges
   through `CheckValidTXFreq`, while Nereus's sole band-plan guard call passes carrier
@@ -612,9 +612,11 @@ colours for the same signal.
 - Ruling: existing parity work authorizes making these controls functional, but the
   precise safety policy and settings ownership migration remain OPEN. Do not import
   an operator-local value into the Core gate without that ruling.
-- Status: source audit pending. Region activation needs complete Thetis-derived supported
-  country range tables as well as a correctly owned setting and Core gate; enabling the
-  combo alone would be unsafe. Thetis's current `Init60mChannels` has only UK, US and
+- Status: country ranges from signed `7ffcc419` are integrated: all 24 supported
+  regions and 264 HF ranges independently match Thetis. Integrated app/Core build and
+  both band-plan and TX-frequency suites pass (1.11 s). Unknown enum values fail closed.
+  Region activation still needs Core-owned validated settings and the filter-edge gate;
+  enabling the combo alone would be unsafe. Thetis's current `Init60mChannels` has only UK, US and
   default cases, so missing extra country-channel arrays are not established; Nereus's
   explicit UK/Japan channelization is a native exception. The isolated parity lane is only
   disabling misleading interim UI and recording this gap. Ganymede and DisableHFPA remain
