@@ -6641,6 +6641,11 @@ nereus_add_test(tst_settings_schema_v7_migration)
 # now TciRateLimitMs). Source: NereusSDR-original (no Thetis upstream).
 nereus_add_test(tst_settings_schema_v8_migration)
 
+# R-IOS-06, R-IOS-27: SettingsSchemaVersion v8 -> v9 brings each slice's
+# saved NR1 values into Thetis's NR spinbox ranges once (old defaults to the
+# new ones, out-of-range values clamped, in-range values kept).
+nereus_add_test(tst_settings_schema_v9_migration)
+
 # Phase 3F Sub-Epic B Task 1: SliceConfig + DdcAssignment shared structs.
 # 2 tests: slice_config_struct_has_required_fields,
 #          ddc_assignment_struct_has_required_fields.

@@ -174,9 +174,11 @@ bool initialize(const QString& profile)
     // per-channel combos; v6 (Phase 3F) is additive only: new per-slice
     // per-band keys populate lazily on first write; v7 (R-R3-49) resets
     // NetworkWatchdogEnabled once, since it was saved while nothing read it;
-    // v8 (R-R3-49) drops the TCI rate limit saved in messages per second.
+    // v8 (R-R3-49) drops the TCI rate limit saved in messages per second;
+    // v9 (R-IOS-06, R-IOS-27) brings each slice's saved NR1 values into
+    // Thetis's NR spinbox ranges.
     // See AppSettings::ensureSettingsAtVersion for the upstream Thetis cites.
-    AppSettings::instance().ensureSettingsAtVersion(8);
+    AppSettings::instance().ensureSettingsAtVersion(9);
 
     // Restore logging category toggles from settings
     LogManager::instance().loadSettings();
