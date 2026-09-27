@@ -219,6 +219,9 @@ public:
                 QWebSocket* socket = m_server.nextPendingConnection();
                 socket->setParent(this);
                 hostHeaders.append(QString::fromLatin1(socket->request().rawHeader("Host")));
+                // How many of this player's earlier connections were still
+                // open when this one arrived.
+                openAtArrival.append(int(m_inbox.size() - m_closed.size()));
                 auto* queue = new QStringList;
                 m_inbox.insert(socket, queue);
                 QObject::connect(socket, &QWebSocket::textMessageReceived, this,
@@ -272,6 +275,9 @@ public:
 
     /// The Host header of each connection's opening request.
     QStringList hostHeaders;
+    /// For each connection, how many earlier ones were still open (the
+    /// peer had not closed them) when it arrived.
+    QList<int> openAtArrival;
 
     quint16 port() const { return m_server.serverPort(); }
 
@@ -1478,6 +1484,60 @@ private slots:
         QVERIFY(!core.isRegistered());
         QWebSocket* second = player.waitForConnection();
         QVERIFY(second != nullptr);
+        core.stop();
+    }
+
+    // Task 28 fix wave (the reconnect seen on the live service): whatever
+    // makes the Core reconnect (the service closing its connection, a
+    // registration that never finishes, a Core that stopped hearing its
+    // pongs), it closes the connection it had before it opens the next, so
+    // the service never sees two of the Core's connections at once from the
+    // Core's side. ("registered again; closing the older connection" on the
+    // service then means the older one's close never reached it.)
+    void theCoreClosesItsConnectionBeforeItOpensTheNext()
+    {
+        ServicePlayer player;
+        auto coreKey = makeKey();
+        RendezvousClient core;
+        core.setServers({player.url()});
+        core.setHelloTimeoutMs(300);
+        core.setReconnectDelaysMs({50});
+        QSignalSpy registered(&core, &RendezvousClient::registered);
+        core.registerStation(coreKey->spki(),
+                             [coreKey](const QByteArray& m) { return coreKey->sign(m); },
+                             [](const QByteArray&) { return QByteArray(); });
+        const QString id = Wire::rendezvousId(coreKey->spki());
+        const auto registerOn = [&](QWebSocket* socket) {
+            socket->sendTextMessage(compact(QJsonObject{{"type", "hello"}, {"version", 1},
+                                             {"nonce", b64(randomBytes(32))},
+                                             {"stun", QJsonArray()}}));
+            QVERIFY(player.waitForMessage(socket).has_value());
+            socket->sendTextMessage(compact(QJsonObject{{"type", "challenge"},
+                                                        {"nonce", b64(randomBytes(32))}}));
+            QVERIFY(player.waitForMessage(socket).has_value());
+            socket->sendTextMessage(compact(QJsonObject{{"type", "registered"}, {"id", id}}));
+        };
+        // Registered, then the service closes the connection.
+        QWebSocket* first = player.waitForConnection();
+        QVERIFY(first != nullptr);
+        registerOn(first);
+        QTRY_COMPARE(registered.size(), 1);
+        first->close();
+        // Registered again, then the service never finishes the next
+        // registration: the Core leaves at its registration timeout.
+        QWebSocket* second = player.waitForConnection();
+        QVERIFY(second != nullptr);
+        second->sendTextMessage(compact(QJsonObject{{"type", "hello"}, {"version", 1},
+                                         {"nonce", b64(randomBytes(32))},
+                                         {"stun", QJsonArray()}}));
+        QVERIFY(player.waitForMessage(second).has_value());  // register; nothing follows
+        QWebSocket* third = player.waitForConnection(5000);
+        QVERIFY(third != nullptr);
+        registerOn(third);
+        QTRY_COMPARE(registered.size(), 2);
+        // Each new connection arrived with none of the Core's older ones
+        // open.
+        QCOMPARE(player.openAtArrival, QList<int>({0, 0, 0}));
         core.stop();
     }
 
