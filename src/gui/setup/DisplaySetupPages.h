@@ -17,6 +17,10 @@
 //                 remote window does not have the Core's settings.
 //                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code.
+//   2026-09-27 - R-R3-49 / R-R3-21 / A12 (parity Task 30): TX Display's
+//                 nine analyzer controls show and write the Core's keys in a
+//                 remote window, disabled below txDisplayVersion 2. J.J.
+//                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -330,8 +334,37 @@ public:
     // so they are disabled while the Core's settings are unavailable.
     void setStationSettingsAvailable(bool available, const QString& reason) override;
 
+    // R-R3-49 / A12 (parity Task 30): the nine analyzer controls' reason in
+    // a remote window whose Core is below txDisplayVersion 2.
+    static QString coreDoesNotApplyReason();
+
+    // Test access: the nine analyzer controls in Thetis's order (FFT size,
+    // window, pan detector, pan averaging, pan time, normalize, WF
+    // detector, WF averaging, WF time), the two FFT readouts, and the
+    // window's own waterfall Low Level.
+    QList<QWidget*> txAnalyzerControlsForTest() const;
+    QLabel* txFftSizeReadoutForTest() const { return m_txFftSizeReadout; }
+    QLabel* txBinWidthReadoutForTest() const { return m_txBinWidthLabel; }
+    QSpinBox* txWfLowLevelForTest() const { return m_txWfLowLevelSpin; }
+
 private:
     void buildUI();
+
+    // R-R3-49 / R-R3-21 / R-R3-10 (parity Task 30): in a remote window the
+    // nine analyzer controls show the Core's keys (AppSettings, through
+    // the window's settings proxy) and write them there; the Core applies
+    // each to its analyzer. The other groups stay this window's own.
+    bool remoteWindow();
+    void wireCoreTxAnalyzerControls();
+    void showCoreTxAnalyzerSettings();
+    void writeCoreTxAnalyzerSetting(const char* key, const QString& value);
+    void showTxFftReadouts(int fftSize, double binWidthHz);
+    // Enables the nine as the page's state allows: the pan detector's
+    // gate on Normalize, the Core's settings being here, and (remote) the
+    // Core applying them.
+    void refreshTxAnalyzerGate();
+    bool    m_stationAvailable{true};
+    QString m_stationReason;
 
     // Group 4: Waterfall Amplitude Scale (functional in 3M-5b).
     // From Thetis grpTXWFAmpScale [setup.designer.cs:36246 v2.10.3.13+501e3f51].

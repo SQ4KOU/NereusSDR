@@ -76,6 +76,11 @@
 //                 setView() sets the window and the pixel count with one
 //                 SetAnalyzer; setAnalyzerCount() counts them for tests.
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-27 : Parity Task 30 (R-R3-49, R-R3-21, A12) by J.J. Boyd
+//                 (KG4VCF): reloadSetting(), a window's write of one of the
+//                 nine keys applied to the Core's analyzer at once; the key
+//                 names and defaults as constants. AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -345,6 +350,48 @@ public:
     // tests/tst_tx_analyzer_settings.cpp `setAnalyzer_called_on_each_setter`.
     int analyzerConfigCount() const noexcept { return m_analyzerConfigCount; }
 
+    // ── Remote-window parity Task 30 (R-R3-49, R-R3-21, A12) ─────────────
+    // The nine settings keys above, as loadSettings/saveSettings name
+    // them, and the value each takes when unset (the member defaults
+    // below, whose cites are there).
+    static constexpr const char* kFftSizeKey       = "DisplayTxFftSize";
+    static constexpr const char* kWindowTypeKey    = "DisplayTxWindowType";
+    static constexpr const char* kPanDetectorKey   = "DisplayTxPanDetector";
+    static constexpr const char* kPanAveragingKey  = "DisplayTxPanAveraging";
+    static constexpr const char* kPanAvTimeMsKey   = "DisplayTxPanAvTimeMs";
+    static constexpr const char* kPanNormalizeKey  = "DisplayTxPanNormalize";
+    static constexpr const char* kWfDetectorKey    = "DisplayTxWfDetector";
+    static constexpr const char* kWfAveragingKey   = "DisplayTxWfAveraging";
+    static constexpr const char* kWfAvTimeMsKey    = "DisplayTxWfAvTimeMs";
+    static constexpr int  kDefaultFftSize      = 32768;
+    static constexpr int  kDefaultWindowType   = 4;
+    static constexpr int  kDefaultPanDetector  = 0;
+    static constexpr int  kDefaultPanAveraging = 0;
+    static constexpr int  kDefaultPanAvTimeMs  = 30;
+    static constexpr bool kDefaultPanNormalize = false;
+    static constexpr int  kDefaultWfDetector   = 0;
+    static constexpr int  kDefaultWfAveraging  = 0;
+    static constexpr int  kDefaultWfAvTimeMs   = 120;
+
+    /// True for exactly the nine keys above.
+    static bool isSettingsKey(const QString& key);
+
+    /// The FFT size slider's position (0..6) for an FFT size: the first
+    /// position whose 4096 * 2^position reaches `fftSize`, 6 above that.
+    /// The rule the TX Display page has always used to show a size.
+    static int fftSizeSliderPositionFor(int fftSize) noexcept;
+
+    /// A Core applies a window's settings.write (or removal) of one of the
+    /// nine keys: reads `key` from AppSettings and applies it through the
+    /// setter the local TX Display page calls, at once, keyed or not, as
+    /// Thetis's TX Display handlers do (setup.cs:18146-18210). An unset key
+    /// takes its default; a value the setter would not hold (not a number,
+    /// out of range, an FFT size that is not a slider position) applies
+    /// what the setter makes of it and is written back as that value. Only
+    /// `key` is written: the other eight stay as they are. Any other key
+    /// is ignored.
+    void reloadSetting(const QString& key);
+
 signals:
     /// FFT bins ready (in dBm) for the spectrum trace plane (pixout=0).
     /// Compatible signature with FFTEngine::fftReady so
@@ -375,6 +422,10 @@ private:
 
     void loadSettings();
     void saveSettings();
+    // Task 30: set while reloadSetting applies a key, so the setter's
+    // saveSettings does not write all nine keys back (reloadSetting writes
+    // back only its own key, and only when the setter changed its value).
+    bool m_reloadingSetting{false};
 
     const int m_dispId;
     int m_numPixels{2048};   // matches typical SpectrumWidget width
@@ -383,7 +434,7 @@ private:
     // spec table said 4096 (Thetis slider position 0); that was a spec
     // error caught at bench.  Slider Maximum = 6 → max FFT = 262144 which
     // matches the m_size passed to XCreateAnalyzer (TxAnalyzer.cpp).
-    int m_fftSize{32768};
+    int m_fftSize{kDefaultFftSize};
     double m_sampleRate{96000.0};   // matches WdspEngine::kTxDspSampleRate
 
     // Display window around the carrier, in Hz, from
@@ -409,28 +460,28 @@ private:
     // From Thetis specHPSDR.cs:134 [v2.10.3.13+501e3f51] — window_type
     // default = 4 (Hamming).  3M-5d reverts the 3M-5b NereusSDR
     // BH4 (= 1) divergence per controller decision 2026-05-10.
-    int m_windowType{4};
+    int m_windowType{kDefaultWindowType};
 
     // From Thetis specHPSDR.cs:301, :382 [v2.10.3.13+501e3f51] — det_type
     // and av_mode defaults are 0 (Peak / None).
-    int m_panDetector{0};
-    int m_panAveraging{0};
+    int m_panDetector{kDefaultPanDetector};
+    int m_panAveraging{kDefaultPanAveraging};
 
     // From Thetis setup.designer.cs:36753 [v2.10.3.13+501e3f51] —
     // udTXDisplayAVGTime.Value = 30.  Spec table at master plan §Phase 3
     // says 120 for both; source-read overrides — Thetis pan default is 30.
-    int m_panAvTimeMs{30};
+    int m_panAvTimeMs{kDefaultPanAvTimeMs};
 
     // From Thetis specHPSDR.cs:324 [v2.10.3.13+501e3f51] — norm_oneHz_pan
     // default = false.
-    bool m_panNormalize{false};
+    bool m_panNormalize{kDefaultPanNormalize};
 
-    int m_wfDetector{0};
-    int m_wfAveraging{0};
+    int m_wfDetector{kDefaultWfDetector};
+    int m_wfAveraging{kDefaultWfAveraging};
 
     // From Thetis setup.designer.cs:36493 [v2.10.3.13+501e3f51] —
     // udTXDisplayAVTime.Value = 120.
-    int m_wfAvTimeMs{120};
+    int m_wfAvTimeMs{kDefaultWfAvTimeMs};
 
     // 3M-5d: bump from 1 to 2 so pan + wf detector/averaging diverge.
     // From Thetis specHPSDR.cs:471 [v2.10.3.13+501e3f51] — _pixel_out

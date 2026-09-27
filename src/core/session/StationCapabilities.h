@@ -321,7 +321,11 @@ struct StationCapabilities {
     /// txDisplayVersion in its start (the media document's "Transmit
     /// display"), and txState carries highSwr and swrWindBackLatched. Sent in
     /// the same minor-11 block, after stationRadiosVersion. 0 without media
-    /// or on a station with no TX analyzer.
+    /// or on a station with no TX analyzer. 2 (remote-window parity Task
+    /// 30, A12) adds: a window's write or removal of one of Setup > Display
+    /// > TX Display's nine analyzer keys reaches the Core's TX analyzer at
+    /// once, on and off the air; below 2 a window shows those nine controls
+    /// disabled.
     int txDisplayVersion = 0;
     /// R-R3-21 / R-R3-08: 1 means the Core stamps every display frame's
     /// producerTimestamp and its clock-echo times (t1, t2, capturedNs) from

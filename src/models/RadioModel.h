@@ -324,6 +324,12 @@
 //                and stops the TX analyzer on the MOX edge and holds its
 //                view for every viewer. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-27 - Parity Task 30 (R-R3-49, R-R3-21, A12):
+//                applyRemoteTxDisplaySetting, a window's Setup > Display >
+//                TX Display analyzer setting applied to the Core's TX
+//                analyzer at once; stationTxDisplayVersion, the Core's
+//                txDisplayVersion as a remote window last heard it. J.J.
+//                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -937,6 +943,13 @@ public:
     // window's accepted change (StationServer); the local page sets the
     // pump itself. False for any other key or with no pump.
     bool applyMeterSetting(const QString& key, const QVariant& value);
+    // R-R3-49 / R-R3-21 (remote-window parity Task 30): one of Setup >
+    // Display > TX Display's nine analyzer keys (TxAnalyzer::isSettingsKey)
+    // reaches this model's TX analyzer at once, keyed or not, through the
+    // setter the local page calls (TxAnalyzer::reloadSetting). The Core
+    // calls it for a window's accepted write or removal (StationServer).
+    // Any other key, or no analyzer, does nothing.
+    void applyRemoteTxDisplaySetting(const QString& key);
     static bool isSwrProtectionSettingKey(const QString& key);
 
     // Task 13: External TX Inhibit (Setup > Transmit > Power, grpExtTXInhibit)
@@ -1270,6 +1283,12 @@ public:
     // The Core's dspInfoVersion as a remote window last heard it (0 on a
     // local model, or before the Core says).
     int stationDspInfoVersion() const { return m_stationDspInfoVersion; }
+    // Remote-window parity Task 30: the Core's txDisplayVersion as a remote
+    // window last heard it (0 on a local model, or before the Core says).
+    // At 2 the Core applies Setup > Display > TX Display's analyzer
+    // settings from this window.
+    int stationTxDisplayVersion() const { return m_stationTxDisplayVersion; }
+    void setStationTxDisplayVersion(int version);
     // How long the last DSP Options apply took (dspChangeMeasured), in ms;
     // the Core's in a remote window. 0 before any.
     qint64 dspOptionsLastApplyMs() const;
@@ -4819,6 +4838,8 @@ signals:
     // Remote-window parity Task 16: stationDspInfoVersion() changed (the
     // filter curve's availability follows it).
     void stationDspInfoVersionChanged();
+    // Remote-window parity Task 30: stationTxDisplayVersion() changed.
+    void stationTxDisplayVersionChanged();
     // nrCannotRunReason may have changed for a reason DspAssetService's own
     // signals do not carry: whether the Core says (stationDspAssetVersion).
     void nrAvailabilityChanged();
@@ -7117,6 +7138,8 @@ private:
     // dspAssetVersion as a remote window last heard them; the last DSP
     // Options apply time; the filter curve.
     int m_stationDspInfoVersion{0};
+    // Remote-window parity Task 30: the Core's txDisplayVersion.
+    int m_stationTxDisplayVersion{0};
     int m_stationDspAssetVersion{0};
     qint64 m_dspOptionsLastApplyMs{0};
     bool m_stationRadioChangeUnderway{false};

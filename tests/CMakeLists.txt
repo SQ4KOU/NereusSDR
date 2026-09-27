@@ -8418,6 +8418,17 @@ nereus_add_test(tst_remote_tx_display
 nereus_add_test(tst_mox_display_controller
     fakes/LoopbackTransport.cpp)
 
+# Remote-window parity Task 30 (A12, R-R3-49, R-R3-21, R-R3-10): Setup >
+# Display > TX Display from a remote window. The Core applies a window's
+# write of the nine TX analyzer keys to its TxAnalyzer at once, keyed or
+# not and on a receive-only Core (txDisplayVersion 2); the page shows and
+# writes the Core's keys, disabled below version 2; a local window keeps its
+# own analyzer. Loopback and a test TxChannel only, no RF, no audio device.
+nereus_add_test(tst_remote_tx_display_settings
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+target_compile_definitions(tst_remote_tx_display_settings PRIVATE NEREUS_BUILD_TESTS)
+
 # Remote Daemon R2: the GUI's slice controls reach the daemon.
 #
 # Task 11 built the command verbs, task 18 built the session that could
