@@ -276,8 +276,13 @@
 //               the session to a better path (session.pathTicket,
 //               path.join), the attempt record's service path. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-27: iPhone app plan Task 29 step 2b (R-IOS-16, R-IOS-08): the
+//               web relay's leg (RelayLeg) and its per-connection candidate
+//               sources; the computer's own proxy settings (SystemProxy).
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
+#include "core/session/SystemProxy.h"
 #include "core/session/StationClient.h"
 
 #include "core/AppSettings.h"
@@ -986,14 +991,17 @@ void StationClient::dialThroughService()
         m_serviceDialing = false;
         dialer->deleteLater();
         const std::optional<MediaIcePath> path = transport->selectedPath();
-        if (path && path->relayed() && !m_attempt.tries.isEmpty()) {
-            m_attempt.tries.last().path = StationConnectionAttempt::Path::Relay;
+        if (path && (path->relayed() || path->viaLoopbackShim()) && !m_attempt.tries.isEmpty()) {
+            m_attempt.tries.last().path = path->viaLoopbackShim()
+                ? StationConnectionAttempt::Path::WebRelay
+                : StationConnectionAttempt::Path::Relay;
             emit connectionAttemptChanged();
         }
         qCInfo(lcStationClient) << "Connected to the Core through the remote access service"
-                                << (path && path->relayed() ? "(relayed)" : "(direct)");
-        m_pathRank = path && path->relayed() ? PathRacer::ServiceRelayed
-                                             : PathRacer::ServiceDirect;
+                                << (path && path->viaLoopbackShim() ? "(web relay)"
+                                    : path && path->relayed()       ? "(relayed)"
+                                                                    : "(direct)");
+        m_pathRank = PathRacer::rankForPath(path);
         // Trusted by the identity key alone: the hello's binding is checked
         // against the certificate the Core presented in DTLS before
         // anything is sent (handleHello()).
@@ -1290,6 +1298,10 @@ void StationClient::dialStation(const QUrl& url, const QString& token,
     } else {
         m_openTimer->stop();
     }
+    // Task 29 step 2b (options survey B.5): the computer's own proxy
+    // settings (SystemProxy), for a network that reaches out only through
+    // one. The Core's identity check at its hello is unchanged.
+    socket->setProxy(SystemProxy::forUrl(url));
     socket->open(url);
 }
 
@@ -5873,6 +5885,9 @@ void StationClient::syncAttemptFromRace(const PathRacer* racer)
         case PathRacer::PathKind::Relay:
             attempt.path = StationConnectionAttempt::Path::Relay;
             break;
+        case PathRacer::PathKind::WebRelay:
+            attempt.path = StationConnectionAttempt::Path::WebRelay;
+            break;
         }
         attempt.address = line.address;
         using O = StationConnectionAttempt::Outcome;
@@ -5889,6 +5904,10 @@ void StationClient::syncAttemptFromRace(const PathRacer* racer)
         case PathRacer::Outcome::Stopped: attempt.outcome = O::AnotherPathFirst; break;
         case PathRacer::Outcome::RelayOff: attempt.outcome = O::RelayOff; break;
         case PathRacer::Outcome::CoreTooOld: attempt.outcome = O::CoreTooOld; break;
+        case PathRacer::Outcome::WebRelayEnded:
+            attempt.outcome = O::WebRelayEnded;
+            attempt.reason = line.reason;
+            break;
         }
         tries.append(attempt);
     }
@@ -5989,7 +6008,8 @@ void StationClient::scheduleUpgrade(bool advance)
 
 void StationClient::refreshPathRank()
 {
-    if (m_pathRank != PathRacer::ServiceRelayed && m_pathRank != PathRacer::ServiceDirect) {
+    if (m_pathRank != PathRacer::ServiceRelayed && m_pathRank != PathRacer::ServiceDirect
+        && m_pathRank != PathRacer::Floor) {
         return;
     }
     const auto* channel = qobject_cast<const DataChannelTransport*>(transport());
@@ -5998,20 +6018,23 @@ void StationClient::refreshPathRank()
     if (!path) {
         return;
     }
-    const int rank = path->relayed() ? PathRacer::ServiceRelayed : PathRacer::ServiceDirect;
+    const int rank = PathRacer::rankForPath(path);
     if (rank == m_pathRank) {
         return;
     }
-    qCInfo(lcStationClient) << "The connection through the service settled on"
-                            << (path->relayed() ? "the relay" : "a direct pair");
+    qCInfo(lcStationClient) << "The connection through the service settled on rank" << rank;
     m_pathRank = rank;
     // The record names the path the session runs on.
+    const StationConnectionAttempt::Path now = rank == PathRacer::Floor
+        ? StationConnectionAttempt::Path::WebRelay
+        : rank == PathRacer::ServiceRelayed ? StationConnectionAttempt::Path::Relay
+                                            : StationConnectionAttempt::Path::Service;
     for (StationConnectionAttempt::Try& attempt : m_attempt.tries) {
         if (attempt.outcome == StationConnectionAttempt::Outcome::Connected
             && (attempt.path == StationConnectionAttempt::Path::Relay
-                || attempt.path == StationConnectionAttempt::Path::Service)) {
-            attempt.path = path->relayed() ? StationConnectionAttempt::Path::Relay
-                                           : StationConnectionAttempt::Path::Service;
+                || attempt.path == StationConnectionAttempt::Path::Service
+                || attempt.path == StationConnectionAttempt::Path::WebRelay)) {
+            attempt.path = now;
         }
     }
     emit connectionAttemptChanged();
@@ -6193,6 +6216,7 @@ void StationClient::onPathTicket(const SessionMessage& result)
             ? StationConnectionAttempt::Path::ThisNetwork
             : kind == PathRacer::PathKind::Direct ? StationConnectionAttempt::Path::Direct
             : kind == PathRacer::PathKind::Relay  ? StationConnectionAttempt::Path::Relay
+            : kind == PathRacer::PathKind::WebRelay ? StationConnectionAttempt::Path::WebRelay
                                                   : StationConnectionAttempt::Path::Service;
         moved.address = address;
         moved.outcome = StationConnectionAttempt::Outcome::Connected;
@@ -6245,6 +6269,8 @@ QString StationConnectionAttempt::pathText(Path path)
         return QStringLiteral("relay");
     case Path::Service:
         return QStringLiteral("through the internet service");
+    case Path::WebRelay:
+        return QStringLiteral("web relay");
     }
     return {};
 }
@@ -6273,6 +6299,8 @@ QString StationConnectionAttempt::outcomeText(Outcome outcome)
                               "updating the Core may help");
     case Outcome::MovedOn:
         return QStringLiteral("connected, then moved to a better path");
+    case Outcome::WebRelayEnded:
+        return QStringLiteral("the web relay ended the connection");
     }
     return {};
 }
@@ -6284,9 +6312,15 @@ QString StationConnectionAttempt::summary() const
     }
     QStringList parts;
     for (const Try& attempt : tries) {
+        // Step 2b: a line with words of its own (the web relay's, section
+        // 12.4 of the rendezvous document) says them, without the end stop.
+        QString words = attempt.reason;
+        if (words.endsWith(QLatin1Char('.'))) {
+            words.chop(1);
+        }
         parts.append(QStringLiteral("%1 (%2): %3")
                          .arg(pathText(attempt.path), attempt.address,
-                              outcomeText(attempt.outcome)));
+                              words.isEmpty() ? outcomeText(attempt.outcome) : words));
     }
     return QStringLiteral("Tried ") + parts.join(QStringLiteral("; ")) + QLatin1Char('.');
 }

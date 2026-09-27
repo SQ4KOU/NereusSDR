@@ -23,6 +23,10 @@
 //   2026-09-27: iPhone app plan Task 29 (R-IOS-16): the answer deadline and
 //               plain words for an older Core, a dial without the relay.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-27: iPhone app plan Task 29 step 2b (R-IOS-16, R-IOS-08): the
+//               web relay's leg (RelayLeg) and its per-connection candidate
+//               sources; the computer's own proxy settings (SystemProxy).
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/RendezvousDialer.h"
@@ -30,6 +34,7 @@
 #include "core/security/ClientDeviceIdentity.h"
 #include "core/session/DataChannelTransport.h"
 #include "core/session/RendezvousClient.h"
+#include "core/session/RelayLeg.h"
 #include "core/session/StationClient.h"
 
 #include <QLoggingCategory>
@@ -107,6 +112,23 @@ void RendezvousDialer::dial(const QList<QUrl>& servers, const QString& stationId
                 m_ice = IceConfiguration::throughRendezvous(
                     m_client->stunUrls(), m_allowRelay,
                     IceConfiguration::localAddressFamilies(), families);
+                // Task 29 step 2b (rendezvous section 12): the web relay's
+                // leg, when the relay is allowed; it opens when the grant
+                // comes, and its lanes join this connection's ICE and,
+                // later, the session's media.
+                if (m_allowRelay) {
+                    m_leg = RelayLeg::create();
+                    if (m_leg) {
+                        m_ice->setCandidateSourceFactory(RelayLeg::factoryFor(m_leg),
+                                                         /*needsRelay=*/true);
+                        connect(m_leg.get(), &RelayLeg::ended, this,
+                                [this](const QString& code, const QString& words) {
+                            m_legEndCode = code;
+                            m_legEndWords = words;
+                            emit webRelayEnded(code, words);
+                        });
+                    }
+                }
                 startOffer();
             });
     });
@@ -114,8 +136,14 @@ void RendezvousDialer::dial(const QList<QUrl>& servers, const QString& stationId
             [this](const QString& reason) { fail(reason); });
     // Re-review: a relay grant means the Core allowed the relay (rendezvous
     // section 12.1), whatever the answer's `turn` says.
-    connect(m_client, &RendezvousClient::relayGrantReceived, this,
-            [this](const QByteArray&) { m_relayGranted = true; });
+    connect(m_client, &RendezvousClient::relayGrantReceived, this, [this](const QByteArray&) {
+        m_relayGranted = true;
+        // Task 29 step 2b: the leg opens at once (section 12.1).
+        const std::optional<RendezvousWire::RelayGrant> grant = m_client->relayGrant();
+        if (m_leg && grant) {
+            m_leg->open(QUrl(grant->url), grant->token);
+        }
+    });
     connect(m_client, &RendezvousClient::answerReceived, this,
             [this](const QString& sdp, bool offered, const RendezvousWire::Turn& turn) {
         if (m_done || !m_transport || m_answered) {

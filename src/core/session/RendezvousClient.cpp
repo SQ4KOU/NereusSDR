@@ -22,8 +22,13 @@
 //               (section 12.1), from the service to a station and a client.
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-27: iPhone app plan Task 29 step 2b (R-IOS-16, R-IOS-08): the
+//               web relay's leg (RelayLeg) and its per-connection candidate
+//               sources; the computer's own proxy settings (SystemProxy).
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
+#include "core/session/SystemProxy.h"
 #include "core/session/RendezvousClient.h"
 
 #include "core/security/StationIdentity.h"
@@ -471,6 +476,9 @@ void RendezvousClient::connectTo(int serverIndex)
     m_helloTimer->start(m_helloTimeoutMs);
     qCInfo(lcRendezvous) << "Connecting to the remote access service"
                          << m_servers.at(serverIndex).host();
+    // Task 29 step 2b (options survey B.5): the computer's own proxy
+    // settings, for a network that reaches the web through one.
+    socket->setProxy(SystemProxy::forUrl(m_servers.at(serverIndex)));
     socket->open(m_servers.at(serverIndex));
 }
 

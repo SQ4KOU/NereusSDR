@@ -24,6 +24,10 @@
 //               for selectedPath(). J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
 //
+//   2026-09-27: iPhone app plan Task 29 step 2b (R-IOS-16, R-IOS-08): the
+//               web relay's leg (RelayLeg) and its per-connection candidate
+//               sources; the computer's own proxy settings (SystemProxy).
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/media/LibDataChannelMediaTransport.h"
@@ -498,6 +502,12 @@ struct LibDataChannelMediaTransport::Private {
     int acceptedCandidates = 0;
     /// The far end's relay candidates, address and port (selectedPath()).
     QList<QPair<QString, quint16>> farEndRelays;
+    // Task 29 step 2b: this connection's own candidate source on the media
+    // lane (the web relay's leg, or the direct link's tunnel).
+    std::shared_ptr<IceConfiguration::CandidateSource> candidateSource;
+    // Its candidates before the remote description (an offerer gathers
+    // first): the agent takes remote candidates only after it.
+    QStringList pendingSourceCandidates;
     std::chrono::steady_clock::time_point lastRtpTimingWarning;
 };
 
@@ -840,6 +850,22 @@ void LibDataChannelMediaTransport::gatherIfReady()
     } catch (const std::exception& error) {
         emit errorOccurred(QString::fromUtf8(error.what()));
     }
+    // Task 29 step 2b (the step 2a review's Minor 10): the media agent gets
+    // its own source on the media lane too.
+    d->candidateSource = d->ice->makeCandidateSource(IceConfiguration::kMediaLane);
+    if (d->candidateSource) {
+        const QPointer<LibDataChannelMediaTransport> self(this);
+        d->candidateSource->start([self](const QString& candidate) {
+            if (!self) {
+                return;
+            }
+            if (!self->d->remoteDescriptionAccepted) {
+                self->d->pendingSourceCandidates.append(candidate);
+                return;
+            }
+            self->acceptCandidate(candidate, QString());
+        });
+    }
 }
 
 std::optional<MediaIcePath> LibDataChannelMediaTransport::selectedPath() const
@@ -903,6 +929,11 @@ void LibDataChannelMediaTransport::stopInternal(bool notify)
     d->remoteDescribesMicLossless = false;
     d->acceptedCandidates = 0;
     d->farEndRelays.clear();
+    if (d->candidateSource) {
+        d->candidateSource->stop();
+        d->candidateSource.reset();
+    }
+    d->pendingSourceCandidates.clear();
     d->ice.reset();
     d->gatherRequested = false;
     d->gatheringStarted = false;
@@ -1013,6 +1044,9 @@ bool LibDataChannelMediaTransport::acceptDescription(const QString& sdp,
         if (d->role == Role::Answerer) {
             d->peer->setLocalDescription(rtc::Description::Type::Answer);
             gatherIfReady();
+        }
+        for (const QString& candidate : std::exchange(d->pendingSourceCandidates, {})) {
+            acceptCandidate(candidate, QString());
         }
         return true;
     } catch (const std::exception& error) {

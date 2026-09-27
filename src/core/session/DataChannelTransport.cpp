@@ -21,6 +21,10 @@
 //               other candidate sources start with gathering and stop with
 //               the connection. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-27: iPhone app plan Task 29 step 2b (R-IOS-16, R-IOS-08): the
+//               web relay's leg (RelayLeg) and its per-connection candidate
+//               sources; the computer's own proxy settings (SystemProxy).
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/DataChannelTransport.h"
@@ -538,6 +542,9 @@ bool DataChannelTransport::acceptDescription(const QString& sdp, const QString& 
             m_bridge->peer->setLocalDescription(rtc::Description::Type::Answer);
             gatherIfReady();
         }
+        for (const QString& candidate : std::exchange(m_pendingSourceCandidates, {})) {
+            acceptCandidate(candidate);
+        }
         return true;
     } catch (const std::exception& error) {
         qCWarning(lcControlChannel) << "A control connection description was refused:"
@@ -616,16 +623,23 @@ void DataChannelTransport::gatherIfReady()
     } catch (const std::exception& error) {
         qCWarning(lcControlChannel) << "Gathering failed:" << error.what();
     }
-    // iPhone app plan Task 29 (link section 21.5): any other source of the
-    // far end's candidates joins this connection's ICE now. None is built
-    // in this version; the floor may be one.
-    const QPointer<DataChannelTransport> self(this);
-    for (const std::shared_ptr<IceConfiguration::CandidateSource>& source :
-         m_options.ice->candidateSources()) {
-        source->start([self](const QString& candidate) {
-            if (self) {
-                self->acceptCandidate(candidate);
+    // iPhone app plan Task 29 (link section 21.5), step 2b: this
+    // connection's own source on the control lane (the web relay's leg)
+    // joins its ICE now, unless the relay is not allowed.
+    m_candidateSource = m_options.ice->makeCandidateSource(IceConfiguration::kControlLane);
+    if (m_candidateSource) {
+        const QPointer<DataChannelTransport> self(this);
+        m_candidateSource->start([self](const QString& candidate) {
+            if (!self) {
+                return;
             }
+            // Before the remote description the agent takes no remote
+            // candidate: held until it comes.
+            if (!self->m_remoteDescriptionAccepted) {
+                self->m_pendingSourceCandidates.append(candidate);
+                return;
+            }
+            self->acceptCandidate(candidate);
         });
     }
 }
@@ -1088,13 +1102,12 @@ void DataChannelTransport::stopPeer(bool linger)
     if (!m_bridge) {
         return;
     }
-    // Task 29: the other candidate sources stop with the connection.
-    if (m_options.ice) {
-        for (const std::shared_ptr<IceConfiguration::CandidateSource>& source :
-             m_options.ice->candidateSources()) {
-            source->stop();
-        }
+    // Task 29: its candidate source stops with the connection.
+    if (m_candidateSource) {
+        m_candidateSource->stop();
+        m_candidateSource.reset();
     }
+    m_pendingSourceCandidates.clear();
     std::shared_ptr<rtc::PeerConnection> peer;
     std::shared_ptr<rtc::DataChannel> channel;
     {

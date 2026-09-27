@@ -8842,6 +8842,20 @@ nereus_add_test(tst_path_racer fakes/LoopbackTransport.cpp EXTRA_LABELS session)
 target_compile_definitions(tst_path_racer PRIVATE
     NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 set_tests_properties(tst_path_racer PROPERTIES TIMEOUT 400)
+# iPhone app plan Task 29 step 2b (R-IOS-16, R-IOS-08; the rendezvous
+# document, section 12.8): the Core's relay-leg runner over the relay
+# fixtures in rendezvous/conformance/v1/relay/, and the leg's own rules.
+# Loopback only.
+nereus_add_test(tst_relay_leg EXTRA_LABELS session)
+target_compile_definitions(tst_relay_leg PRIVATE
+    NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+# A whole session over the web relay on this computer: the local
+# rendezvous service minting grants, a stand-in relay pairing the legs
+# (rendezvous section 12), the Core and a window. Loopback only.
+nereus_add_test(tst_relay_session fakes/LoopbackTransport.cpp EXTRA_LABELS session)
+target_compile_definitions(tst_relay_session PRIVATE
+    NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+set_tests_properties(tst_relay_session PROPERTIES TIMEOUT 400)
 
 # --------------------------------------------------------------------------
 # Aggregate "all_tests" target  (2026-05-26 KG4VCF dev-loop fix, from PR #291)

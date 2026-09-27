@@ -13,6 +13,10 @@
 //   2026-09-26: Task 27 follow-up (new Minor 1): both relay hosts for a
 //               one-family end that cannot tell. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-09-27: iPhone app plan Task 29 step 2b (R-IOS-16, R-IOS-08): the
+//               web relay's leg (RelayLeg) and its per-connection candidate
+//               sources; the computer's own proxy settings (SystemProxy).
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/IceConfiguration.h"
@@ -366,9 +370,21 @@ void IceConfiguration::resolveHostFamilies(const QStringList& names, QObject* co
     }
 }
 
+namespace {
+bool g_onlyLoopbackShim = false;
+} // namespace
+
+void IceConfiguration::setOnlyLoopbackShimCandidatesForTest(bool only)
+{
+    g_onlyLoopbackShim = only;
+}
+
 bool IceConfiguration::acceptsRemoteCandidate(const QString& candidate) const
 {
     if (!RendezvousWire::isCandidate(candidate) || candidate.isEmpty()) {
+        return false;
+    }
+    if (g_onlyLoopbackShim && !candidate.contains(QLatin1String(" 127.0.0.1 "))) {
         return false;
     }
     return m_relayAllowed || candidateType(candidate) != QLatin1String("relay");

@@ -347,6 +347,10 @@
 //   2026-09-27: iPhone app plan Task 29 (R-IOS-16): the path race and moving
 //               the session (link section 21). J.J. Boyd (KG4VCF), AI-
 //               assisted via Anthropic Claude Code.
+//   2026-09-27: iPhone app plan Task 29 step 2b (R-IOS-16, R-IOS-08): the
+//               web relay's leg (RelayLeg) and its per-connection candidate
+//               sources; the computer's own proxy settings (SystemProxy).
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QAbstractSocket>
@@ -407,7 +411,9 @@ struct StationConnectionAttempt {
     /// 28, records it).
     /// Service (iPhone app plan Task 29): through the internet service,
     /// before the connection shows whether it went through the relay.
-    enum class Path { ThisNetwork, Direct, Relay, Service };
+    /// WebRelay (step 2b): through the web relay on the service's name
+    /// (the rendezvous document, section 12).
+    enum class Path { ThisNetwork, Direct, Relay, Service, WebRelay };
     enum class Outcome {
         Trying,
         Connected,
@@ -420,12 +426,17 @@ struct StationConnectionAttempt {
         RelayOff,         ///< the Core has the relay turned off
         CoreTooOld,       ///< the Core does not answer through the service
         MovedOn,          ///< connected, then the session moved to a better path
+        // Step 2b: the web relay ended the leg; Try::reason holds its words.
+        WebRelayEnded,
     };
     struct Try {
         Path path = Path::Direct;
         /// host:port as the operator would type it.
         QString address;
         Outcome outcome = Outcome::Trying;
+        /// Step 2b: the words to show for this line in place of the
+        /// outcome's (the web relay's end, section 12.4), when set.
+        QString reason;
     };
 
     QDateTime started;

@@ -22,6 +22,10 @@
 //               remote at a relay candidate's address the far end sent.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //
+//   2026-09-27: iPhone app plan Task 29 step 2b (R-IOS-16, R-IOS-08): the
+//               web relay's leg (RelayLeg) and its per-connection candidate
+//               sources; the computer's own proxy settings (SystemProxy).
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/IceConfiguration.h"
@@ -61,6 +65,14 @@ struct MediaIcePath {
             return true;
         }
         return remotePort != 0 && farEndRelays.contains(qMakePair(remoteAddress, remotePort));
+    }
+    /// Task 29 step 2b: through this end's own loopback shim (the web
+    /// relay's leg, RelayLeg, or the direct link's media tunnel): the
+    /// remote is on this computer's loopback. No real peer is ever there.
+    bool viaLoopbackShim() const
+    {
+        return remoteAddress.startsWith(QLatin1String("127.")) || remoteAddress == QLatin1String("::1")
+            || remoteAddress == QLatin1String("::ffff:127.0.0.1");
     }
 };
 

@@ -1440,6 +1440,8 @@ list(APPEND CORE_SOURCES
     # duplicate filter.
     src/core/session/SwitchableTransport.cpp
     src/core/session/PathRacer.cpp
+    src/core/session/RelayLeg.cpp
+    src/core/session/SystemProxy.cpp
     src/core/session/media/RtpDuplicateFilter.cpp
     src/core/session/media/DualPathAudio.cpp
 )

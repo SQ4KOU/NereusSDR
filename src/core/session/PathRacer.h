@@ -41,6 +41,10 @@
 //   2026-09-27: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-27: iPhone app plan Task 29 step 2b (R-IOS-16, R-IOS-08): the
+//               web relay's leg (RelayLeg) and its per-connection candidate
+//               sources; the computer's own proxy settings (SystemProxy).
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionMessages.h"
@@ -57,6 +61,8 @@
 #include <functional>
 #include <memory>
 #include <optional>
+
+#include "core/session/media/IMediaTransport.h"
 
 QT_BEGIN_NAMESPACE
 class QTimer;
@@ -80,10 +86,11 @@ enum class PathOutcome {
     Stopped,      ///< another path connected first
     RelayOff,     ///< the Core has the relay turned off
     CoreTooOld,   ///< the Core does not answer through the internet service
+    WebRelayEnded, ///< step 2b: the web relay ended the leg (the line's reason says why)
 };
 
 /// Which kind of path a rung is, for the attempt record (PathRacer::PathKind).
-enum class PathKind { ThisNetwork, Direct, Service, Relay };
+enum class PathKind { ThisNetwork, Direct, Service, Relay, WebRelay };
 
 /// One way to reach the Core (PathRacer::Rung). A rung makes one connection
 /// at most and reports it with opened() (handing the transport over,
@@ -105,10 +112,11 @@ public:
 signals:
     void opened(NereusSDR::SessionTransport* transport);
     void ended(NereusSDR::PathOutcome outcome, const QString& reason);
-    /// Task 29 fix wave (review Minor 6): something the attempt record
-    /// should say about the relay (the Core answered with the relay turned
-    /// off), as its own line.
-    void relayNoted(NereusSDR::PathOutcome outcome, const QString& reason);
+    /// Task 29 fix wave (review Minor 6), step 2b: something the attempt
+    /// record should say as its own line: the Core answered with the relay
+    /// turned off (kind Relay), or the web relay ended the leg (kind
+    /// WebRelay). Each kind and outcome is recorded once.
+    void noted(NereusSDR::PathKind kind, NereusSDR::PathOutcome outcome, const QString& reason);
 };
 
 class PathRacer : public QObject {
@@ -216,6 +224,11 @@ public:
 
     /// The rank a connection to `url` has (ThisNetwork or Direct).
     static int rankFor(const QUrl& url);
+    /// Step 2b: the rank of a connection through the service from the pair
+    /// it settled on: Floor through the web relay's loopback shim,
+    /// ServiceRelayed through TURN, ServiceDirect otherwise (and while no
+    /// pair is known).
+    static int rankForPath(const std::optional<MediaIcePath>& path);
 
     /// Test seam: each rung's address and how long after start() it
     /// starts (names resolved so far included).

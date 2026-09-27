@@ -65,6 +65,10 @@
 //               Anthropic Claude Code.
 //   2026-09-27: setLibraryLogForTest() (R-R3-49). J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-27: iPhone app plan Task 29 step 2b (R-IOS-16, R-IOS-08): the
+//               web relay's leg (RelayLeg) and its per-connection candidate
+//               sources; the computer's own proxy settings (SystemProxy).
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/IceConfiguration.h"
@@ -75,6 +79,7 @@
 #include <QElapsedTimer>
 #include <QList>
 #include <QString>
+#include <QStringList>
 
 #include <functional>
 #include <memory>
@@ -243,7 +248,9 @@ public:
         if (!control) {
             return std::nullopt;
         }
-        if (controlPath && !controlPath->relayed()) {
+        // Task 29 step 2b: over the web relay the session's media may need
+        // TURN too (and keeps the relay's leg, which every copy carries).
+        if (controlPath && !controlPath->relayed() && !controlPath->viaLoopbackShim()) {
             return control->withoutOwnRelay();
         }
         return control;
@@ -359,6 +366,9 @@ private:
     QList<IceRelayServer> m_relays;
     int m_acceptedCandidates = 0;
     QList<QPair<QString, quint16>> m_farEndRelays;
+    /// Step 2b: this connection's own candidate source on the control lane.
+    std::shared_ptr<IceConfiguration::CandidateSource> m_candidateSource;
+    QStringList m_pendingSourceCandidates;
     quint32 m_nextPingId = 1;
     SessionTransportTelemetry m_telemetry;
     QElapsedTimer m_pongAge;
