@@ -43,6 +43,8 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-27: Diagnose helper startup failures without changing deadlines.
+//               J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 //   2026-09-24: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
@@ -68,6 +70,8 @@
 #include <QJsonObject>
 #include <QMutex>
 #include <QProcess>
+#include <QProcessEnvironment>
+#include <QElapsedTimer>
 #include <QScopeGuard>
 #include <QSemaphore>
 #include <QThread>
@@ -189,12 +193,33 @@ class ProcessLink : public Link {
 public:
     bool start(const QStringList& arguments)
     {
+        QElapsedTimer startup;
+        startup.start();
+        auto environment = QProcessEnvironment::systemEnvironment();
+        environment.insert(QStringLiteral("NEREUS_PAIRING_STARTUP_TIMINGS"), QStringLiteral("1"));
+        m_process.setProcessEnvironment(environment);
         m_process.start(QStringLiteral(NEREUS_PAIRING_PEER), arguments);
         if (!m_process.waitForStarted(10000)) {
+            qWarning() << "Pairing helper failed to start after" << startup.elapsed()
+                       << "ms:" << m_process.errorString();
             return false;
         }
         m_ready = readLine();
-        return m_ready.value(QStringLiteral("type")).toString() == QLatin1String("peer.ready");
+        const bool ready = m_ready.value(QStringLiteral("type")).toString()
+            == QLatin1String("peer.ready");
+        if (!ready) {
+            qWarning() << "Pairing helper did not report ready after" << startup.elapsed()
+                       << "ms; process state" << m_process.state()
+                       << "error" << m_process.errorString();
+            // Print only our numeric phase markers, never the pairing wire or secrets.
+            const auto stderrLines = m_process.readAllStandardError().split('\n');
+            for (const QByteArray& line : stderrLines) {
+                if (line.startsWith("pairing-startup ")) {
+                    qWarning().noquote() << QString::fromUtf8(line);
+                }
+            }
+        }
+        return ready;
     }
     QJsonObject ready() const { return m_ready; }
     QJsonObject done() const { return m_done; }
