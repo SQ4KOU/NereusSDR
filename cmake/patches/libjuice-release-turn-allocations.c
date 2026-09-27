@@ -1,4 +1,16 @@
+/**
+ * Copyright (c) 2020 Paul-Louis Ageneau
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+
 /*
+ * The notice above is libjuice src/agent.c's own (MPL-2.0 Exhibit A): this
+ * change becomes part of that covered file, so under MPL-2.0 section 3.1 it
+ * is available under MPL-2.0, not under NereusSDR's GPLv3.
+ *
  * NereusSDR change to libjuice 3c40a354 src/agent.c (MPL-2.0), inserted by
  * cmake/NereusRemoteMedia.cmake into a copy of agent.c in the build tree;
  * the fetched source is not modified. iPhone app plan Task 28 (R-IOS-16),

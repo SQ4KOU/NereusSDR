@@ -24,7 +24,7 @@ directory alongside NereusSDR's own `LICENSE`.
 | zlib v1.3.1 (Windows builds) | compression for stored equaliser settings | Zlib | `zlib.txt` | `zlib.txt` |
 | libASPL v3.1.2 (macOS audio driver) | the NereusSDR VAX audio driver installed by the macOS package | MIT | `libaspl.txt` | `libaspl.txt` |
 | libdatachannel 0.24.5 | direct DTLS/SCTP and SRTP media transport | MPL-2.0 | `libdatachannel.txt`, `libdatachannel-notices.txt` | `MPLv2.txt` |
-| libjuice | direct ICE backend for libdatachannel | MPL-2.0 | `libjuice.txt`, `libjuice-notices.txt` | `MPLv2.txt` |
+| libjuice | direct ICE backend for libdatachannel; `src/agent.c` carries a NereusSDR change (MPL-2.0, `cmake/patches/libjuice-release-turn-allocations.c`) | MPL-2.0 | `libjuice.txt`, `libjuice-notices.txt` | `MPLv2.txt` |
 | plog | libdatachannel logging dependency | MIT | `plog.txt` | `plog.txt` |
 | usrsctp | SCTP implementation for libdatachannel | BSD-3-Clause | `usrsctp.txt`, `usrsctp-notices.txt` | `usrsctp.txt` |
 | libsrtp | SRTP implementation for libdatachannel | BSD-3-Clause | `libsrtp.txt`, `libsrtp-notices.txt` | `libsrtp.txt` |
@@ -62,7 +62,7 @@ directory, or when a text file here is named by no row.
 | PortAudio | FetchContent `portaudio` | v19.7.0 | desktop packages and the Core | `portaudio.txt`, `portaudio-notices.txt` |
 | zlib | FetchContent `zlib` on Windows; the system library elsewhere | v1.3.1 on Windows | Windows packages | `zlib.txt` |
 | libdatachannel | FetchContent `nereus_libdatachannel` | v0.24.5 | desktop packages and the Core | `libdatachannel.txt`, `libdatachannel-notices.txt` |
-| libjuice | FetchContent `nereus_libjuice` | 3c40a3545b6b1b62c7adee7f8f2bd58aa290afd6 | desktop packages and the Core | `libjuice.txt`, `libjuice-notices.txt` |
+| libjuice | FetchContent `nereus_libjuice`, `src/agent.c` compiled with the NereusSDR change in `cmake/patches/libjuice-release-turn-allocations.c` | 3c40a3545b6b1b62c7adee7f8f2bd58aa290afd6 | desktop packages and the Core | `libjuice.txt`, `libjuice-notices.txt` |
 | plog | FetchContent `nereus_plog` | 94899e0b926ac1b0f4750bfbd495167b4a6ae9ef | desktop packages and the Core | `plog.txt` |
 | usrsctp | FetchContent `nereus_usrsctp` | fec583d54493f879d2ae44a743423bf8a04371ab | desktop packages and the Core | `usrsctp.txt`, `usrsctp-notices.txt` |
 | libsrtp | FetchContent `nereus_libsrtp` | 24b3bf8f19b6f5ab4cd2bcceb4f4064efca86fd5 | desktop packages and the Core | `libsrtp.txt`, `libsrtp-notices.txt` |
@@ -188,6 +188,11 @@ the §6(b) fallback.
   `SOURCE-OFFER.txt` §3).
 - libdatachannel and libjuice: MPL-2.0 covered files, without an applied
   Exhibit B incompatible-secondary-license notice in the pinned sources.
+  libjuice carries one NereusSDR change: `src/agent.c` is compiled with
+  `cmake/patches/libjuice-release-turn-allocations.c` inserted (each TURN
+  allocation given back when an ICE agent ends). The change is part of that
+  covered file and is licensed under MPL-2.0 (section 3.1), with agent.c's
+  notice at its top; `libjuice.txt` describes it.
 - plog, usrsctp and libsrtp: permissive MIT or BSD dependencies whose full
   notices are reproduced here.
 - OpenSSL 3: Apache-2.0, compatible with this GPLv3 combined work.

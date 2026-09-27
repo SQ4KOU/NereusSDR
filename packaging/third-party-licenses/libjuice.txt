@@ -16,5 +16,8 @@ gives each TURN allocation back with a Refresh of LIFETIME 0 (RFC 8656
 section 7.2). The change is the source file
 cmake/patches/libjuice-release-turn-allocations.c in the NereusSDR source,
 which cmake/NereusRemoteMedia.cmake inserts into a copy of agent.c in the
-build tree (nereus_patch_libjuice_turn_release); that source is available
-under the same terms as the rest of NereusSDR's (SOURCE-OFFER.txt).
+build tree (nereus_patch_libjuice_turn_release). Because it becomes part
+of a covered file, the change is licensed under the Mozilla Public License
+2.0, like the rest of agent.c, and carries agent.c's MPL-2.0 notice at the
+top of the file; it is not under NereusSDR's GPLv3. Its source is offered
+with NereusSDR's (SOURCE-OFFER.txt).
