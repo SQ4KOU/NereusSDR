@@ -40,9 +40,7 @@
 #include <QCryptographicHash>
 
 #include <QDir>
-#include <QDir>
 #include <QFile>
-#include <QStringList>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -228,60 +226,6 @@ std::optional<qint64> capability(const QList<QByteArray>& received, const QStrin
     return std::nullopt;
 }
 
-// R-R3-49: every Core's StationServer makes its TLS certificate on first
-// start (CertificateStore, an RSA key), and that key generation was most of
-// the processor time tst_station_multi_session spends: 98 cases, 42 s at
-// rest and past its 120 s limit at load 50. The first Core in a process
-// makes it as before; later Cores in the same process are given a copy
-// before they start and load it. Made at run time, kept in a temporary
-// directory for the process's life, never stored in the tree.
-inline QString sharedTlsIdentityDir()
-{
-    static QTemporaryDir dir;
-    return dir.isValid() ? dir.path() : QString();
-}
-
-inline const QStringList& tlsIdentityFiles()
-{
-    static const QStringList files{QStringLiteral("tls-cert.pem"), QStringLiteral("tls-key.pem")};
-    return files;
-}
-
-inline void reuseTlsIdentity(const QString& securityDir)
-{
-    const QDir cache(sharedTlsIdentityDir());
-    for (const QString& name : tlsIdentityFiles()) {
-        if (!cache.exists(name)) {
-            return;
-        }
-    }
-    for (const QString& name : tlsIdentityFiles()) {
-        const QString to = QDir(securityDir).filePath(name);
-        QFile::remove(to);
-        QFile::copy(cache.filePath(name), to);
-        QFile::setPermissions(to, QFileDevice::ReadOwner | QFileDevice::WriteOwner);
-    }
-}
-
-inline void keepTlsIdentity(const QString& securityDir)
-{
-    const QString cache = sharedTlsIdentityDir();
-    if (cache.isEmpty()) {
-        return;
-    }
-    for (const QString& name : tlsIdentityFiles()) {
-        if (QFile::exists(QDir(cache).filePath(name))
-            || !QFile::exists(QDir(securityDir).filePath(name))) {
-            return;
-        }
-    }
-    for (const QString& name : tlsIdentityFiles()) {
-        const QString to = QDir(cache).filePath(name);
-        QFile::copy(QDir(securityDir).filePath(name), to);
-        QFile::setPermissions(to, QFileDevice::ReadOwner | QFileDevice::WriteOwner);
-    }
-}
-
 // One Core over the loopback, in scratch directories, with an injected
 // monotonic clock for its sessions.
 struct Core {
@@ -310,9 +254,9 @@ struct Core {
         const QString dir = upgradedWithToken
                                 ? NereusSDR::Test::seedUpgradedCoreToken(securityDir.path())
                                 : NereusSDR::Test::seedCoreIdentity(securityDir.path());
-        reuseTlsIdentity(dir);
-        server = std::make_unique<StationServer>(model.get(), *settings, dir);
-        keepTlsIdentity(dir);
+        // R-R3-49: one TLS certificate per test process (UpgradedCoreToken.h).
+        server = std::make_unique<StationServer>(model.get(), *settings,
+                                                 NereusSDR::Test::withSharedTlsIdentity(dir));
         server->setHeartbeatIntervalMs(0);
         server->deviceSessions()->setClock([this]() { return now; });
     }
