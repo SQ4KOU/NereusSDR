@@ -7,6 +7,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-27: Match NR2/NR4 controls and defaults to Thetis v2.10.3.15.
+//               J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+//               (R-IOS-06, R-IOS-27).
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
@@ -753,6 +756,14 @@ NrAnfSetupPage::NrAnfSetupPage(RadioModel* model, QWidget* parent)
         return {preRdo, postRdo};
     };
 
+    const auto nrDoubleRow = [&](QVBoxLayout* layout, const ControlRanges::NrControl& control,
+                                  double value, const QString& tooltip = QString()) {
+        return addDoubleSliderRow(layout, QString::fromUtf8(control.label),
+            control.min * control.scale, control.max * control.scale, value,
+            control.step * control.scale, control.decimals, tooltip,
+            QString::fromUtf8(control.suffix));
+    };
+
     // ── NR1 tab ───────────────────────────────────────────────────────────────
     // From Thetis setup.designer.cs NR1 (ANR) group [v2.10.3.13].
     {
@@ -927,15 +938,13 @@ NrAnfSetupPage::NrAnfSetupPage(RadioModel* model, QWidget* parent)
             0.0, 100.0, slice ? slice->nr2Post2Level() : 15.0,
             1.0, 0);
 
-        // Factor — udDSPEMNRPost2Factor: 0-100 step 1, default 15.0
-        auto [ppFactor, ppFactorVal, ppFactorScale] = addDoubleSliderRow(ppGrp, "Factor",
-            0.0, 100.0, slice ? slice->nr2Post2Factor() : 15.0,
-            1.0, 0);
-
-        // Rate — udDSPEMNRPost2Rate: 0-100 step 0.1, default 5.0
-        auto [ppRate, ppRateVal, ppRateScale] = addDoubleSliderRow(ppGrp, "Rate",
-            0.0, 100.0, slice ? slice->nr2Post2Rate() : 5.0,
-            0.1, 1);
+        // From Thetis setup.designer.cs:43019-43158 [v2.10.3.15]:
+        // Factor and Rate both span 0..100 in 0.1 steps.
+        using namespace ControlRanges;
+        auto [ppFactor, ppFactorVal, ppFactorScale] = nrDoubleRow(ppGrp, kNr2Post2Factor,
+            slice ? slice->nr2Post2Factor() : kNr2Post2Factor.defaultValue);
+        auto [ppRate, ppRateVal, ppRateScale] = nrDoubleRow(ppGrp, kNr2Post2Rate,
+            slice ? slice->nr2Post2Rate() : kNr2Post2Rate.defaultValue);
 
         // Taper — udDSPEMNRPost2Taper (integer): 0-100, default 12
         auto [ppTaper, ppTaperVal] = addSliderRow(ppGrp, "Taper", 0, 100,
@@ -1119,45 +1128,24 @@ NrAnfSetupPage::NrAnfSetupPage(RadioModel* model, QWidget* parent)
 
         QVBoxLayout* grpLay = makeGroup(tabLay, "NR4 (SpecBleach)");
 
-        // Reduction — udDSPSBNRreduction: 0-20 step 0.1, default 10.0
-        // Tooltip source: Thetis setup.cs udDSPSBNRreduction [v2.10.3.13]
-        auto [reduction, reductionVal, reductionScale] = addDoubleSliderRow(grpLay, "Reduction",
-            0.0, 20.0, slice ? slice->nr4Reduction() : 10.0,
-            0.1, 1,
-            tr("Spectral reduction amount in dB. Range 0-20, step 0.1."),
-            " dB");
-
-        // Smoothing — udDSPSBNRsmooth: 0-100 step 1, default 65.0
-        // Tooltip source: Thetis setup.cs udDSPSBNRsmooth [v2.10.3.13]
-        auto [smoothing, smoothingVal, smoothingScale] = addDoubleSliderRow(grpLay, "Smoothing",
-            0.0, 100.0, slice ? slice->nr4Smoothing() : 65.0,
-            1.0, 0,
-            tr("Spectral smoothing factor. Range 0-100."),
-            " %");
-
-        // Whitening — udDSPSBNRwhiten: 0-100 step 1, default 2.0
-        // Tooltip source: Thetis setup.cs udDSPSBNRwhiten [v2.10.3.13]
-        auto [whitening, whiteningVal, whiteningScale] = addDoubleSliderRow(grpLay, "Whitening",
-            0.0, 100.0, slice ? slice->nr4Whitening() : 2.0,
-            1.0, 0,
-            tr("Spectral whitening factor. Range 0-100."),
-            " %");
-
-        // Rescale — udDSPSBNRrescale: 0-12 step 0.1, default 2.0
-        // Tooltip source: Thetis setup.cs udDSPSBNRrescale [v2.10.3.13]
-        auto [rescale, rescaleVal, rescaleScale] = addDoubleSliderRow(grpLay, "Rescale",
-            0.0, 12.0, slice ? slice->nr4Rescale() : 2.0,
-            0.1, 1,
-            tr("Output rescale factor. Range 0-12, step 0.1."),
-            " dB");
-
-        // SNR Threshold — udDSPSBNRsnrthresh: -10..10 step 0.5, default -10.0
-        // Tooltip source: Thetis setup.cs udDSPSBNRsnrthresh [v2.10.3.13]
-        auto [snrThresh, snrThreshVal, snrThreshScale] = addDoubleSliderRow(grpLay, "SNR Thresh",
-            -10.0, 10.0, slice ? slice->nr4PostThresh() : -10.0,
-            0.5, 1,
-            tr("Post-processing SNR threshold. Range -10 to +10 dB, step 0.5."),
-            " dB");
+        // From Thetis setup.designer.cs:42186-42412 [v2.10.3.15].
+        // Use the popup/catalogue's ranges, increments and defaults.
+        using namespace ControlRanges;
+        auto [reduction, reductionVal, reductionScale] = nrDoubleRow(grpLay, kNr4Reduction,
+            slice ? slice->nr4Reduction() : kNr4Reduction.defaultValue,
+            tr("Spectral reduction amount in dB. Range 0-20, step 1."));
+        auto [smoothing, smoothingVal, smoothingScale] = nrDoubleRow(grpLay, kNr4Smoothing,
+            slice ? slice->nr4Smoothing() : kNr4Smoothing.defaultValue,
+            tr("Spectral smoothing factor. Range 0-100."));
+        auto [whitening, whiteningVal, whiteningScale] = nrDoubleRow(grpLay, kNr4Whitening,
+            slice ? slice->nr4Whitening() : kNr4Whitening.defaultValue,
+            tr("Spectral whitening factor. Range 0-100."));
+        auto [rescale, rescaleVal, rescaleScale] = nrDoubleRow(grpLay, kNr4Rescale,
+            slice ? slice->nr4Rescale() : kNr4Rescale.defaultValue,
+            tr("Output rescale factor. Range 0-12, step 1."));
+        auto [snrThresh, snrThreshVal, snrThreshScale] = nrDoubleRow(grpLay, kNr4PostThresh,
+            slice ? slice->nr4PostThresh() : kNr4PostThresh.defaultValue,
+            tr("Post-processing SNR threshold. Range -10 to +10 dB, step 1."));
 
         // Algorithm radio — rdoSBNR1/2/3 [v2.10.3.13]
         const QString rdoStyle =
@@ -1176,7 +1164,8 @@ NrAnfSetupPage::NrAnfSetupPage(RadioModel* model, QWidget* parent)
         algo3->setStyleSheet(rdoStyle);
 
         {
-            const int algoIdx = slice ? static_cast<int>(slice->nr4Algo()) : 1; // Algo2 default
+            const int algoIdx = slice ? static_cast<int>(slice->nr4Algo())
+                                      : static_cast<int>(kNr4Algo.defaultValue); // Algo 1
             if (algoIdx == 0) { algo1->setChecked(true); }
             else if (algoIdx == 2) { algo3->setChecked(true); }
             else { algo2->setChecked(true); }

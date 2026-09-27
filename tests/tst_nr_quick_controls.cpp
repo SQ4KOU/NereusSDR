@@ -24,6 +24,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-27: Match NR2/NR4 controls and defaults to Thetis v2.10.3.15.
+//               J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+//               (R-IOS-06, R-IOS-27).
 //   2026-09-27: original test for NereusSDR by J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code
 //               (R-IOS-06, R-IOS-27).
@@ -36,12 +39,14 @@
 #include <QLayout>
 #include <QMap>
 #include <QPushButton>
+#include <QRadioButton>
 #include <QSlider>
 #include <QTabWidget>
 
 #include <cmath>
 
 #include "core/WdspTypes.h"
+#include "core/AppSettings.h"
 #include "gui/setup/DspSetupPages.h"
 #include "gui/widgets/DspParamPopup.h"
 #include "gui/widgets/VfoWidget.h"
@@ -226,6 +231,105 @@ private slots:
         sliders.at(3)->setValue(20);
         QVERIFY(std::abs(slice->nr1Gain() - 300e-6) < 1e-12);
         QVERIFY(std::abs(slice->nr1Leakage() - 20e-3) < 1e-12);
+    }
+
+    // Catch a popup clipping Thetis's valid fractional values above 30.
+    void nr2PopupWritesTheFullThetisRange()
+    {
+        RadioModel model;
+        model.addSlice();
+        auto* slice = model.activeSlice();
+        QVERIFY(slice);
+        VfoWidget vfo;
+        vfo.setRadioModel(&model);
+        vfo.setSlice(slice);
+        auto* popup = openPopup(vfo, QStringLiteral("NR2"));
+        QVERIFY(popup);
+        const auto sliders = popupSliders(*popup);
+        for (const auto& label : {QStringLiteral("Factor"), QStringLiteral("Rate")}) {
+            auto* slider = sliders.value(label);
+            QVERIFY(slider);
+            QCOMPARE(slider->minimum(), 0);
+            QCOMPARE(slider->maximum(), 1000);
+            slider->setValue(753);
+            QCOMPARE(readoutOf(*popup, slider), QStringLiteral("75.3"));
+        }
+        QVERIFY(std::abs(slice->nr2Post2Factor() - 75.3) < 1e-9);
+        QVERIFY(std::abs(slice->nr2Post2Rate() - 75.3) < 1e-9);
+    }
+
+    // The new defaults affect only missing settings, not a saved choice.
+    void nr4DefaultsAndSavedChoices()
+    {
+        auto& settings = AppSettings::instance();
+        settings.clear();
+        SliceModel fresh;
+        QCOMPARE(fresh.nr4Smoothing(), 0.0);
+        QCOMPARE(fresh.nr4Whitening(), 0.0);
+        QCOMPARE(static_cast<int>(fresh.nr4Algo()), 0);
+        fresh.setNr4Smoothing(65.0);
+        fresh.setNr4Whitening(2.0);
+        fresh.setNr4Algo(static_cast<SbnrAlgo>(1));
+        fresh.setNr2Post2Factor(75.3);
+        fresh.saveToSettings(Band::Band20m);
+        SliceModel restored;
+        restored.restoreFromSettings(Band::Band20m);
+        QCOMPARE(restored.nr4Smoothing(), 65.0);
+        QCOMPARE(restored.nr4Whitening(), 2.0);
+        QCOMPARE(static_cast<int>(restored.nr4Algo()), 1);
+        QCOMPARE(restored.nr2Post2Factor(), 75.3);
+        settings.clear();
+    }
+
+    // Positive SNR thresholds must be usable, and Rescale stops at 12.
+    void nr4PopupUsesThetisLimits()
+    {
+        RadioModel model;
+        model.addSlice();
+        auto* slice = model.activeSlice();
+        QVERIFY(slice);
+        VfoWidget vfo;
+        vfo.setRadioModel(&model);
+        vfo.setSlice(slice);
+        auto* popup = openPopup(vfo, QStringLiteral("NR4"));
+        QVERIFY(popup);
+        const auto sliders = popupSliders(*popup);
+        auto* rescale = sliders.value(QStringLiteral("Rescale"));
+        auto* threshold = sliders.value(QStringLiteral("SNRthresh"));
+        QVERIFY(rescale);
+        QVERIFY(threshold);
+        rescale->setValue(20);
+        threshold->setValue(10);
+        QCOMPARE(slice->nr4Rescale(), 12.0);
+        QCOMPARE(slice->nr4PostThresh(), 10.0);
+        threshold->setValue(-30);
+        QCOMPARE(slice->nr4PostThresh(), -10.0);
+    }
+
+    void nr4SetupWithoutASliceUsesThetisDefaults()
+    {
+        RadioModel model;
+        NrAnfSetupPage page(&model);
+        auto* tabs = page.findChild<QTabWidget*>();
+        QVERIFY(tabs);
+        QWidget* nr4 = nullptr;
+        for (int i = 0; i < tabs->count(); ++i) {
+            if (tabs->tabText(i) == QStringLiteral("NR4")) {
+                nr4 = tabs->widget(i);
+            }
+        }
+        QVERIFY(nr4);
+        const auto sliders = nr4->findChildren<QSlider*>();
+        QCOMPARE(sliders.size(), 5);
+        QCOMPARE(sliders.at(1)->value(), 0);
+        QCOMPARE(sliders.at(2)->value(), 0);
+        bool firstSelected = false;
+        for (auto* button : nr4->findChildren<QRadioButton*>()) {
+            if (button->text() == QStringLiteral("Algo 1")) {
+                firstSelected = button->isChecked();
+            }
+        }
+        QVERIFY(firstSelected);
     }
 
     // MNR's Reset restores a new slice's values: MacNRFilter's DEF_*

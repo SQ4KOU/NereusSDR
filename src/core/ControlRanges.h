@@ -19,6 +19,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-27: Match NR2/NR4 controls and defaults to Thetis v2.10.3.15.
+//               J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+//               (R-IOS-06, R-IOS-27).
 //   2026-09-24: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code. Moved from VfoWidget, RxApplet, SMeterWidget,
@@ -523,10 +526,10 @@ inline constexpr std::array<NrControl, 5> kNr1Controls{
 //   rx_nr2_gain_method = 2;  rx_nr2_npe_method = 0;  rx_nr2_ae_run = 1;
 //   rx_nr2_ae_post2_run = 0;  rx_nr2_ae_post2_factor = 15.0;
 //   rx_nr2_ae_post2_rate = 5.0;
-// The popup's Factor and Rate sliders span 0 to 30 in whole steps,
-// NereusSDR's own range: Thetis's nudNR2PostProc_factor_rx1 spans 0 to 100
-// and nudNR2PostProc_rate_rx1 0 to 100.0, each in steps of 0.1
-// (setup.designer.cs:43019-43158 [v2.10.3.15]).
+// Factor and Rate match Thetis's nudNR2PostProc_factor_rx1 and
+// nudNR2PostProc_rate_rx1: 0 to 100 in steps of 0.1. Integer slider
+// positions are tenths; property values remain unscaled.
+// From Thetis setup.designer.cs:43019-43158 [v2.10.3.15].
 inline constexpr std::array<NrChoiceItem, 4> kNr2GainMethods{{
     {0, "Linear"},
     {1, "Log"},
@@ -545,9 +548,9 @@ inline constexpr NrControl kNr2NpeMethod =
 inline constexpr NrControl kNr2AeFilter = nrSwitch("nr2AeFilter", "AE Filter", true);
 inline constexpr NrControl kNr2Post2Run = nrSwitch("nr2Post2Run", "Noise post proc", false);
 inline constexpr NrControl kNr2Post2Factor =
-    nrSlider("nr2Post2Factor", "Factor", 0, 30, 1, 1, 1, 0, "", 15.0);
+    nrSlider("nr2Post2Factor", "Factor", 0, 1000, 1, 0.1, 10, 1, "", 15.0);
 inline constexpr NrControl kNr2Post2Rate =
-    nrSlider("nr2Post2Rate", "Rate", 0, 30, 1, 1, 1, 0, "", 5.0);
+    nrSlider("nr2Post2Rate", "Rate", 0, 1000, 1, 0.1, 10, 1, "", 5.0);
 inline constexpr std::array<NrControl, 6> kNr2Controls{
     kNr2GainMethod, kNr2NpeMethod, kNr2AeFilter, kNr2Post2Run, kNr2Post2Factor, kNr2Post2Rate,
 };
@@ -571,28 +574,27 @@ inline constexpr std::array<NrControl, 2> kNr3Controls{
 // From Thetis Project Files/Source/Console/setup.designer.cs:42131-42386 [v2.10.3.15]
 //   "Reduction", "Smoothing", "Whitening", "Rescale", "SNRthresh",
 //   "Algo 1", "Algo 2", "Algo 3"
-// The popup's ranges and a new slice's values are NereusSDR's where they
-// differ from Thetis's spinboxes (setup.designer.cs:42186-42412
-// [v2.10.3.15]): Thetis's Rescale spans 0 to 12 (the popup 0 to 20), its
-// SNRthresh -10 to +10 (the popup -30 to 0), its Smoothing and Whitening
-// start at 0 (a new slice at 65 and 2), and Algo 1 starts checked (a new
-// slice at Algo 2). Reduction (0 to 20, 10) and SNRthresh's -10 match.
+// Ranges, increments and new-slice defaults match the spinboxes:
+// From Thetis setup.designer.cs:42186-42412 [v2.10.3.15]
+//   Rescale 0..12, SNRthresh -10..10, Smoothing/Whitening default 0,
+//   Reduction default 10, Rescale default 2, SNRthresh default -10;
+//   all increments 1 with one decimal place. Algo 1 is checked at 42154.
 inline constexpr std::array<NrChoiceItem, 3> kNr4Algos{{
     {0, "Algo 1"},
     {1, "Algo 2"},
     {2, "Algo 3"},
 }};
 inline constexpr NrControl kNr4Reduction =
-    nrSlider("nr4Reduction", "Reduction", 0, 20, 1, 1, 1, 0, " dB", 10.0);
+    nrSlider("nr4Reduction", "Reduction", 0, 20, 1, 1, 1, 1, " dB", 10.0);
 inline constexpr NrControl kNr4Smoothing =
-    nrSlider("nr4Smoothing", "Smoothing", 0, 100, 1, 1, 1, 0, "%", 65.0);
+    nrSlider("nr4Smoothing", "Smoothing", 0, 100, 1, 1, 1, 1, "%", 0.0);
 inline constexpr NrControl kNr4Whitening =
-    nrSlider("nr4Whitening", "Whitening", 0, 100, 1, 1, 1, 0, "%", 2.0);
+    nrSlider("nr4Whitening", "Whitening", 0, 100, 1, 1, 1, 1, "%", 0.0);
 inline constexpr NrControl kNr4Rescale =
-    nrSlider("nr4Rescale", "Rescale", 0, 20, 1, 1, 1, 0, " dB", 2.0);
+    nrSlider("nr4Rescale", "Rescale", 0, 12, 1, 1, 1, 1, " dB", 2.0);
 inline constexpr NrControl kNr4PostThresh =
-    nrSlider("nr4PostThresh", "SNRthresh", -30, 0, 1, 1, 1, 0, " dB", -10.0);
-inline constexpr NrControl kNr4Algo = nrChoice("nr4Algo", "Algo", kNr4Algos, 1);
+    nrSlider("nr4PostThresh", "SNRthresh", -10, 10, 1, 1, 1, 1, " dB", -10.0);
+inline constexpr NrControl kNr4Algo = nrChoice("nr4Algo", "Algo", kNr4Algos, 0);
 inline constexpr std::array<NrControl, 6> kNr4Controls{
     kNr4Reduction, kNr4Smoothing, kNr4Whitening, kNr4Rescale, kNr4PostThresh, kNr4Algo,
 };

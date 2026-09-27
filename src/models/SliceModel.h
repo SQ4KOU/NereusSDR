@@ -11,6 +11,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-27: Match NR2/NR4 controls and defaults to Thetis v2.10.3.15.
+//               J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+//               (R-IOS-06, R-IOS-27).
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
@@ -1614,15 +1617,14 @@ private:
         static_cast<NereusSDR::NrPosition>(ControlRanges::kNr3Position.defaultValue);  // Post-AGC
     bool   m_nr3UseDefaultGain = ControlRanges::kNr3UseDefaultGain.defaultValue != 0.0;  // fixed gain
 
-    // NR4: from ControlRanges.h, which says where these differ from
-    // Thetis's (Smoothing, Whitening and Algo do).
+    // NR4: Thetis defaults from ControlRanges.h; saved settings override these.
     double m_nr4Reduction  = ControlRanges::kNr4Reduction.defaultValue;   // 10
-    double m_nr4Smoothing  = ControlRanges::kNr4Smoothing.defaultValue;   // 65
-    double m_nr4Whitening  = ControlRanges::kNr4Whitening.defaultValue;   // 2
+    double m_nr4Smoothing  = ControlRanges::kNr4Smoothing.defaultValue;   // 0
+    double m_nr4Whitening  = ControlRanges::kNr4Whitening.defaultValue;   // 0
     double m_nr4Rescale    = ControlRanges::kNr4Rescale.defaultValue;     // 2
     double m_nr4PostThresh = ControlRanges::kNr4PostThresh.defaultValue;  // -10
     NereusSDR::SbnrAlgo m_nr4Algo =
-        static_cast<NereusSDR::SbnrAlgo>(ControlRanges::kNr4Algo.defaultValue);  // Algo 2
+        static_cast<NereusSDR::SbnrAlgo>(ControlRanges::kNr4Algo.defaultValue);  // Algo 1
 
     // DFNR — AetherSDR DeepFilterFilter defaults [@0cd4559] (post-WDSP, not
     // in Thetis). m_attenLimit{100.0f}, m_postFilterBeta{0.0f} verbatim.

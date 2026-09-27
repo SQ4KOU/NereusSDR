@@ -38,10 +38,14 @@ numbers for what should be the same control.
   v2.10.3.15 (NR2 Factor/Rate 0-30 vs 0-100; NR4 Rescale 0-20 vs 0-12; NR4 SNRthresh -30..0 vs
   -10..+10; new-slice NR4 Smoothing 65/Whitening 2/Algo 2 vs 0/0/Algo 1). Recommend correcting
   to Thetis, as NR1 was."
-- Ruling: OPEN. Recommendation: correct to Thetis's ranges and defaults, the same way NR1 was
-  corrected in this task (commit `d6d96eaa`, "Correct NR1's ranges and defaults to Thetis's NR
-  spinboxes").
-- Status: NR1 corrected and built (commit `d6d96eaa`, in trunk); NR2/NR4 still open.
+- Ruling: JJ approved matching Thetis on 2026-09-27 in the Core/GUI Codex continuation:
+  "Match Thetis (recommended)". Match the NR2 Factor/Rate range and fractional steps,
+  NR4 Rescale/SNR threshold ranges, and new-slice Smoothing/Whitening/algorithm defaults.
+  Preserve saved operator choices; this is not a settings reset.
+- Status: NR1 corrected and built (commit `d6d96eaa`, in trunk); NR2/NR4 implementation
+  verified on `codex/nr-thetis-parity`, awaiting trunk integration. New control/default/save
+  regressions, catalogue checks and both session transports pass. Existing saved choices
+  remain intact; catalogue fixtures advertise the same ranges as the controls.
 - Plan: R-IOS-06, R-IOS-27.
 
 ### G-03: A local window's receive waterfall never takes the display calibration
