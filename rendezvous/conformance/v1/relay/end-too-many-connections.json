@@ -1,0 +1,31 @@
+{
+  "runs": [
+    "relay",
+    "core",
+    "app"
+  ],
+  "relaySetup": {
+    "connectionsPerAddress": 1
+  },
+  "steps": [
+    {
+      "connect": "core",
+      "address": "198.51.100.9"
+    },
+    {
+      "connect": "core2",
+      "address": "198.51.100.9"
+    },
+    {
+      "to": "core2",
+      "binary": [
+        "83",
+        "746f6f4d616e79436f6e6e656374696f6e73"
+      ]
+    },
+    {
+      "expectClosed": "core2",
+      "code": 1000
+    }
+  ]
+}

@@ -225,8 +225,9 @@ def test_the_running_relay_writes_nothing_and_logs_no_secret(tmp_path):
     )
     session = os.urandom(relaygrant.SESSION_BYTES)
     expires = int(time.time()) + 120
-    core_token = relaygrant.mint(secret.encode(), relaygrant.LEG_CORE, session, expires)
-    device_token = relaygrant.mint(secret.encode(), relaygrant.LEG_DEVICE, session, expires)
+    station = relaygrant.station_of(secret.encode(), "diskdiskdiskdiskdiskdiskdi")
+    core_token = relaygrant.mint(secret.encode(), relaygrant.LEG_CORE, session, station, expires)
+    device_token = relaygrant.mint(secret.encode(), relaygrant.LEG_DEVICE, session, station, expires)
     marker = b"RELAY-PAYLOAD-MARKER"
 
     async def drive():

@@ -10,8 +10,9 @@ import struct
 
 from nereus_rendezvous.clock import ManualClock
 from nereus_relay import transport as relay_transport
-from nereus_relay.relay import TAG_JOIN, TAG_MEDIA, TAG_PEER, DropOldestQueue, Leg, Relay
-from relay_helpers import WALL, grant_pair, join, live_relay, make_relay_config, recv, settle
+from nereus_relay.relay import TAG_CONTROL, TAG_JOIN, TAG_MEDIA, TAG_PEER, DropOldestQueue, Leg, Relay
+from nereus_rendezvous import relaygrant
+from relay_helpers import SECRET, WALL, grant_pair, join, live_relay, make_relay_config, recv, settle
 
 
 def test_drop_oldest_queue_keeps_the_newest_within_both_caps():
@@ -51,6 +52,7 @@ def test_a_slow_reader_never_grows_memory_and_loses_the_oldest_first():
             device, _ = await join(uri, device_token)
             core_leg = next(leg for leg in relay.legs if leg.side == 1)
             ws_transport = core_leg.transport.ws.transport
+            queue = core_leg.session.queues[(1, TAG_MEDIA)]
             peak_buffer = 0
             for n in range(total):
                 await device.send(bytes([TAG_MEDIA]) + struct.pack(">I", n) + bytes(995))
@@ -59,7 +61,6 @@ def test_a_slow_reader_never_grows_memory_and_loses_the_oldest_first():
                     peak_buffer = max(peak_buffer, ws_transport.get_write_buffer_size())
             await settle(relay, 2 + total)
             peak_buffer = max(peak_buffer, ws_transport.get_write_buffer_size())
-            queue = core_leg.queue
             assert queue.peak_bytes <= 24576 and len(queue) <= 64
             assert queue.dropped > 0
             assert peak_buffer <= relay_transport.WRITE_LIMIT_BYTES + 2 * 1024
@@ -141,6 +142,97 @@ class _NullTransport:
         raise StopAsyncIteration
 
 
+def _paired(**overrides):
+    """A relay on a manual clock with two joined legs whose transports never
+    finish a send, driven through the relay's own frame handling."""
+    clock = ManualClock(WALL)
+    relay = Relay(make_relay_config(**overrides), clock)
+    core = Leg(relay, _NullTransport(), "198.51.100.1")
+    device = Leg(relay, _NullTransport(), "198.51.100.2")
+    core_token, device_token, _ = grant_pair()
+    for leg, token in ((core, core_token), (device, device_token)):
+        relay.accept(leg)
+        relay.on_frame(leg, bytes([TAG_JOIN]) + token.encode())
+    assert core.joined and device.joined and core.session is device.session
+    core.control.clear()
+    device.control.clear()
+    return relay, clock, core, device
+
+
+def _drain(leg):
+    out = []
+    while True:
+        frame = leg._next_data()
+        if frame is None:
+            return out
+        out.append(frame)
+
+
+def test_lanes_a_control_flood_neither_evicts_nor_holds_back_media():
+    """Section 12.5, two lanes: 200 control datagrams sent into a leg that is
+    not being written to fill and churn the control queue only; every media
+    datagram sent among them is still queued, and the writer takes the
+    lanes in turn, so the media ones come out among the first."""
+
+    async def go():
+        relay, clock, core, device = _paired(rate_bytes_per_second=10 ** 9)
+        media = []
+        for n in range(200):
+            relay.on_frame(device, bytes([TAG_CONTROL]) + struct.pack(">I", n) + bytes(100))
+            if n % 40 == 0:
+                frame = bytes([TAG_MEDIA]) + struct.pack(">I", n)
+                media.append(frame)
+                relay.on_frame(device, frame)
+        session = core.session
+        assert session.queues[(1, TAG_CONTROL)].dropped > 0
+        assert session.queues[(1, TAG_MEDIA)].dropped == 0
+        out = _drain(core)
+        tags = [f[0] for f in out]
+        assert [f for f in out if f[0] == TAG_MEDIA] == media
+        # Taken in turn: the five media datagrams are within the first ten.
+        assert tags[:10].count(TAG_MEDIA) == len(media)
+        # The control lane kept its newest.
+        control = [struct.unpack(">I", f[1:5])[0] for f in out if f[0] == TAG_CONTROL]
+        assert control == list(range(200 - len(control), 200))
+
+    asyncio.run(go())
+
+
+def test_lanes_each_tag_has_its_own_cap_each_way_and_a_rejoin_keeps_them():
+    async def go():
+        relay, clock, core, device = _paired(queue_frames=1000, queue_bytes=10 ** 6)
+        big = 1500
+        per_second = 80000 // (big + 1)
+        for tag in (TAG_CONTROL, TAG_MEDIA):
+            for _ in range(100):
+                relay.on_frame(device, bytes([tag]) + bytes(big))
+            relay.on_frame(core, bytes([tag]) + bytes(big))
+        session = core.session
+        assert len(session.queues[(1, TAG_CONTROL)]) == per_second
+        assert len(session.queues[(1, TAG_MEDIA)]) == per_second
+        # The other direction spent nothing of the device's budget.
+        assert len(session.queues[(2, TAG_CONTROL)]) == 1 and len(session.queues[(2, TAG_MEDIA)]) == 1
+        assert session.dropped_rate == 2 * (100 - per_second)
+        # The device's connection is replaced by a new one: both of its
+        # buckets are still spent.
+        token = relaygrant.mint(SECRET, relaygrant.LEG_DEVICE, session.sid, session.station, session.expires)
+        again = Leg(relay, _NullTransport(), "198.51.100.3")
+        relay.accept(again)
+        relay.on_frame(again, bytes([TAG_JOIN]) + token.encode())
+        assert again.joined and again.session is session
+        before = session.dropped_rate
+        for tag in (TAG_CONTROL, TAG_MEDIA):
+            relay.on_frame(again, bytes([tag]) + bytes(big))
+        assert session.dropped_rate == before + 2
+        clock.advance(1000)
+        for tag in (TAG_CONTROL, TAG_MEDIA):
+            relay.on_frame(again, bytes([tag]) + bytes(big))
+        assert session.dropped_rate == before + 2
+        relay.end_session(session, "idle")
+
+    asyncio.run(go())
+
+
 MARKER = b"NEREUS-RELAY-PLAINTEXT-MARKER"
 # A DTLS 1.2 application-data record header, then the marker, as a peer
 # would carry it inside ciphertext; STUN and RTP first bytes too.
@@ -160,19 +252,9 @@ def test_the_relay_reads_only_the_tag_and_the_length(caplog):
     caplog.set_level(logging.DEBUG)
 
     async def go():
-        clock = ManualClock(WALL)
-        relay = Relay(make_relay_config(queue_frames=1000, queue_bytes=10 ** 6, rate_bytes_per_second=10 ** 9), clock)
-        core = Leg(relay, _NullTransport(), "198.51.100.1")
-        device = Leg(relay, _NullTransport(), "198.51.100.2")
-        core_token, device_token, _ = grant_pair()
-        for leg, token in ((core, core_token), (device, device_token)):
-            relay.accept(leg)
-            relay.on_frame(leg, bytes([TAG_JOIN]) + token.encode())
-        assert core.joined and device.joined and core.session is device.session
-        core.control.clear()
-        device.control.clear()
+        relay, clock, core, device = _paired(queue_frames=1000, queue_bytes=10 ** 6, rate_bytes_per_second=10 ** 9)
         sent = []
-        for tag in (1, 2, 0x7F):
+        for tag in (1, 2):
             for datagram in DATAGRAMS:
                 frame = _Opaque(bytes([tag]) + datagram)
                 sent.append(frame)
@@ -180,10 +262,13 @@ def test_the_relay_reads_only_the_tag_and_the_length(caplog):
                 relay.on_frame(device, frame)
                 assert _Opaque.touched == [], _Opaque.touched
         queued = []
-        while len(core.queue):
-            queued.append(core.queue.pop())
+        while True:
+            frame = core._next_data()
+            if frame is None:
+                break
+            queued.append(frame)
         assert len(queued) == len(sent)
-        assert all(a is b for a, b in zip(queued, sent))
+        assert {id(f) for f in queued} == {id(f) for f in sent}
         relay.end_session(core.session, "idle")
 
     asyncio.run(go())
@@ -212,3 +297,64 @@ def test_marked_datagrams_cross_the_real_relay_byte_for_byte(caplog):
     for record in caplog.records:
         if record.name.startswith("nereus"):
             assert MARKER.decode() not in record.getMessage()
+
+
+def test_a_send_stuck_for_send_stall_ms_closes_the_leg_with_one_timer():
+    """Section 12.5: one message waiting 10 s to be written closes the leg
+    (1008) and its place waits for a rejoin. The check is one lazily armed
+    timer, not a timer made and cancelled for every datagram."""
+
+    async def go():
+        relay, clock, core, device = _paired(rate_bytes_per_second=10 ** 9)
+        armed = []
+        real_call_later = clock.call_later
+
+        def counting(delay, callback):
+            armed.append(delay)
+            return real_call_later(delay, callback)
+
+        clock.call_later = counting
+        core.writer = asyncio.ensure_future(core.write_loop())
+        for n in range(50):
+            relay.on_frame(device, bytes([TAG_MEDIA, n]))
+        await asyncio.sleep(0.01)
+        assert core.sending_since is not None
+        assert armed.count(relay.config.send_stall_ms) == 1
+        clock.advance(9999)
+        assert not core.aborted
+        clock.advance(1)
+        await asyncio.sleep(0.01)
+        assert core.aborted and core.session is None
+        session = device.session
+        assert session.legs[1] is None and session.away[1] is not None
+        relay.end_session(session, "idle")
+
+    asyncio.run(go())
+
+
+def test_idleness_is_checked_lazily():
+    """A busy session costs one idle timer an idle period, not one a
+    datagram, and still ends 30 s after its last datagram."""
+
+    async def go():
+        relay, clock, core, device = _paired(rate_bytes_per_second=10 ** 9, queue_frames=10 ** 4, queue_bytes=10 ** 7)
+        armed = []
+        real_call_later = clock.call_later
+
+        def counting(delay, callback):
+            armed.append(delay)
+            return real_call_later(delay, callback)
+
+        clock.call_later = counting
+        session = core.session
+        for n in range(1000):
+            relay.on_frame(device, bytes([TAG_MEDIA, n % 256]))
+            clock.advance(50)
+        assert len(armed) <= 3, armed
+        assert session.last_activity_ms == clock.now_ms() - 50
+        clock.advance(29999 - 50)
+        assert not session.ended
+        clock.advance(1)
+        assert session.ended
+
+    asyncio.run(go())

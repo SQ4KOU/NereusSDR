@@ -247,6 +247,8 @@ set -euo pipefail
 check() { [[ "$(stat -c '%U:%G %a' "$1")" == "$2" ]] || { echo "$1: $(stat -c '%U:%G %a' "$1"), want $2" >&2; exit 1; }; }
 check /etc/nereus-rendezvous/turn-secret "root:root 600"
 check /etc/nereus-rendezvous/relay-secret "root:root 600"
+check /etc/sysctl.d/60-nereus-rendezvous.conf "root:root 644"
+cmp -s /etc/sysctl.d/60-nereus-rendezvous.conf /repo/rendezvous/deploy/sysctl.conf
 check /etc/nereus-rendezvous/relay.conf "root:root 644"
 check /etc/systemd/system/nereus-relay.service "root:root 644"
 check /etc/systemd/system/nereus-relay.service.d/memory.conf "root:root 644"
@@ -309,7 +311,7 @@ sed 's|^relay_secret_file = .*|relay_secret_file = /etc/nereus-rendezvous/relay-
 PYTHONPATH=/repo/rendezvous/server PYTHONDONTWRITEBYTECODE=1 python3 -c \
     'from nereus_relay import config; c = config.load("/tmp/relay.conf"); assert c.slots == 16 and c.listen == [("127.0.0.1", 8711), ("::1", 8711)], c'
 EOS
-pass "relay secret (root 600, 64 hex characters, not the TURN secret and nowhere in coturn's configuration); relay.conf (loopback 8711, 16 slots, the credential path); the relay's unit and its MemoryMax 64M; the service's relay_url and relay_secret_file"
+pass "relay secret (root 600, 64 hex characters, not the TURN secret and nowhere in coturn's configuration); the sysctl file (tcp_notsent_lowat, root 644); relay.conf (loopback 8711, 16 slots, the credential path); the relay's unit and its MemoryMax 64M; the service's relay_url and relay_secret_file"
 pass "secret (root 600, 64 hex characters), coturn configuration (root:turnserver 640, total-quota 10, bps-capacity 800000, user-quota 8), service configuration (STUN and TURN URLs the same, in the same order, as the service's defaults and the sample: rv4 first), units, data-use report and code directory; the deploy account nereusrv with exactly the given key; the rv Caddyfile, validated; Caddy's drop-in with GOMEMLIMIT 384MiB and the service's MemoryMax 268M from 1024 MiB"
 
 # The data-use report as installed, run once the way its unit runs it.
@@ -608,6 +610,39 @@ out="$(rerun)" || { printf '%s\n' "$out" >&2; fail "a run after the failed insta
 pass "where systemd runs: a Caddyfile change reloads Caddy (the dry run says so) and restarts nothing; a failing systemctl enable and a symlinked data-use.conf each stop the script with a message; a failed install after coturn was unpacked still disables coturn"
 
 pass "where systemd runs: a second run leaves Caddy, coturn, the service and the WebSocket relay running; --dry-run --rotate-secret says it would make new TURN and relay secrets and restart coturn, the service and the relay (dropping live relays); --rotate-secret restarts all three with a new relay secret; one backup of /etc/turnserver.conf remains, root 600"
+
+# Code in /opt from before the WebSocket relay: setup refuses, in a dry run
+# too, and changes nothing, until deploy.sh has put the new code there.
+sx <<'EOS'
+set -euo pipefail
+mv /opt/nereus-rendezvous/nereus_relay /run/nereus_relay.new
+mv /opt/nereus-rendezvous/nereus_rendezvous/relaygrant.py /run/relaygrant.py.new
+sha256sum /etc/nereus-rendezvous/rendezvous.conf /etc/systemd/system/nereus-rendezvous.service > /run/stale.sum
+EOS
+for args in "--dry-run" ""; do
+    # shellcheck disable=SC2086
+    out="$(rerun $args)" && { printf '%s\n' "$out" >&2; fail "setup-server.sh ${args} ran with code from before the relay"; }
+    grep -q "is from before the WebSocket relay: run rendezvous/deploy.sh first" <<<"$out" \
+        && ! sed -n '/--- systemctl calls/,$p' <<<"$out" | grep -Eq '^(start|restart|reload|enable)' \
+        || { printf '%s\n' "$out" >&2; fail "setup-server.sh ${args} with old code did not stop with its message"; }
+done
+sx <<'EOS' || fail "setup-server.sh changed files while refusing old code"
+set -euo pipefail
+sha256sum --quiet -c /run/stale.sum
+mv /run/nereus_relay.new /opt/nereus-rendezvous/nereus_relay
+mv /run/relaygrant.py.new /opt/nereus-rendezvous/nereus_rendezvous/relaygrant.py
+EOS
+out="$(rerun --dry-run)" || { printf '%s\n' "$out" >&2; fail "a dry run with the new code back failed"; }
+# Before the relay secret exists (a server set up before the relay), the dry
+# run still checks both configurations, with a stand-in secret.
+sx <<<'mv /etc/nereus-rendezvous/relay-secret /run/relay-secret.aside'
+out="$(rerun --dry-run)" || { printf '%s\n' "$out" >&2; fail "a dry run without the relay secret failed"; }
+sx <<<'mv /run/relay-secret.aside /etc/nereus-rendezvous/relay-secret'
+grep -q 'would make /etc/nereus-rendezvous/relay-secret' <<<"$out" \
+    && grep -q 'rendezvous.conf: accepted by the service.s own reader (a stand-in for a secret not made yet)' <<<"$out" \
+    && grep -q 'relay.conf: accepted by the relay.s own reader (a stand-in for a secret not made yet)' <<<"$out" \
+    || { printf '%s\n' "$out" >&2; fail "the dry run without the relay secret did not check the configurations"; }
+pass "where systemd runs: code in /opt from before the WebSocket relay stops setup-server.sh (the dry run too) with 'run rendezvous/deploy.sh first', starting and changing nothing; without the relay secret yet, the dry run still checks both configurations with the programs' own readers and a stand-in secret"
 
 # Back to no systemd for the rest: the check starts coturn itself.
 sx <<'EOS'

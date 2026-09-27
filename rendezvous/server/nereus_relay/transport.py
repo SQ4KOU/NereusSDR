@@ -65,7 +65,10 @@ def serve_kwargs(relay: Relay) -> dict:
         write_limit=WRITE_LIMIT_BYTES,
         ping_interval=config.ping_interval_seconds or None,
         ping_timeout=config.ping_timeout_seconds or None,
-        close_timeout=5,
+        # A closing leg holds its place per address until it has closed
+        # (section 12.5), so a peer that never answers the close is dropped
+        # after 2 s.
+        close_timeout=2,
         compression=None,
         server_header=None,
         process_request=rv_transport._process_request,

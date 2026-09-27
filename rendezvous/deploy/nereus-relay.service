@@ -66,9 +66,13 @@ RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 MemorySwapMax=0
 OOMScoreAdjust=700
 TasksMax=32
-# One descriptor per connection: the default 16 slots (32 legs) and 64
-# pending connections, the listening sockets and a margin, well under
-# systemd's default of 1024.
+# One descriptor per connection: the default 16 slots (32 legs), 64
+# waiting connections, connections still closing after a refusal or an END
+# (each counted per address until it has closed, at most 2 s), the
+# listening sockets and a wide margin. Set outright rather than left to
+# systemd's default, so a burst of refused connections meets this bound and
+# not the process's other limits.
+LimitNOFILE=4096
 
 # --- Sandboxing ---------------------------------------------------------
 NoNewPrivileges=yes

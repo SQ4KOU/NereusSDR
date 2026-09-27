@@ -6,11 +6,16 @@ mints one grant per introduction a station accepts with the relay allowed,
 one token for each end; the relay (nereus_relay) checks a token with the
 same secret and nothing else, so the two processes share no state.
 
+    station = HMAC-SHA256(secret, "NereusSDR relay station v1\\n" || station
+              id)[0..8]
     payload = version (1 byte, 1) || leg (1 byte: 1 the Core, 2 the device)
-              || session (16 random bytes) || expires (4 bytes, big-endian,
-              Unix seconds)
+              || session (16 random bytes) || station (8 bytes)
+              || expires (4 bytes, big-endian, Unix seconds)
     mac     = HMAC-SHA256(secret, "NereusSDR relay grant v1\\n" || payload)
-    token   = base64url(payload || mac), no padding: 54 bytes, 72 characters
+    token   = base64url(payload || mac), no padding: 62 bytes, 83 characters
+
+`station` is opaque: the relay counts live sessions per station with it
+(section 12.5) without learning the station's id.
 
 Only hashlib, hmac and base64 are used, so the relay imports this module
 without the cryptography package.
@@ -29,11 +34,13 @@ LEG_CORE = 1
 LEG_DEVICE = 2
 LEGS = (LEG_CORE, LEG_DEVICE)
 SESSION_BYTES = 16
-PAYLOAD_BYTES = 2 + SESSION_BYTES + 4
+STATION_BYTES = 8
+PAYLOAD_BYTES = 2 + SESSION_BYTES + STATION_BYTES + 4
 MAC_BYTES = 32
 TOKEN_BYTES = PAYLOAD_BYTES + MAC_BYTES
-TOKEN_CHARS = 72
+TOKEN_CHARS = 83
 PREFIX = b"NereusSDR relay grant v1\n"
+STATION_PREFIX = b"NereusSDR relay station v1\n"
 EXPIRES_MAX = 4294967295
 
 _ALPHABET = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
@@ -42,6 +49,7 @@ _ALPHABET = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz01234
 class Grant(NamedTuple):
     leg: int
     session: bytes
+    station: bytes
     expires: int
 
 
@@ -65,18 +73,28 @@ def from_b64url(text: str) -> Optional[bytes]:
     return data
 
 
-def payload_of(leg: int, session: bytes, expires: int) -> bytes:
-    if leg not in LEGS or len(session) != SESSION_BYTES or not 0 <= expires <= EXPIRES_MAX:
+def station_of(secret: bytes, station_id: str) -> bytes:
+    """The opaque per-station value a grant carries."""
+    return hmac.new(bytes(secret), STATION_PREFIX + station_id.encode("ascii"), hashlib.sha256).digest()[:STATION_BYTES]
+
+
+def payload_of(leg: int, session: bytes, station: bytes, expires: int) -> bytes:
+    if (
+        leg not in LEGS
+        or len(session) != SESSION_BYTES
+        or len(station) != STATION_BYTES
+        or not 0 <= expires <= EXPIRES_MAX
+    ):
         raise ValueError("not a relay grant")
-    return bytes([VERSION, leg]) + bytes(session) + struct.pack(">I", expires)
+    return bytes([VERSION, leg]) + bytes(session) + bytes(station) + struct.pack(">I", expires)
 
 
 def mac_of(secret: bytes, payload: bytes) -> bytes:
     return hmac.new(bytes(secret), PREFIX + payload, hashlib.sha256).digest()
 
 
-def mint(secret: bytes, leg: int, session: bytes, expires: int) -> str:
-    payload = payload_of(leg, session, expires)
+def mint(secret: bytes, leg: int, session: bytes, station: bytes, expires: int) -> str:
+    payload = payload_of(leg, session, station, expires)
     return to_b64url(payload + mac_of(secret, payload))
 
 
@@ -94,5 +112,6 @@ def verify(secret: bytes, token: str) -> Optional[Grant]:
         return None
     if payload[0] != VERSION or payload[1] not in LEGS:
         return None
-    (expires,) = struct.unpack(">I", payload[2 + SESSION_BYTES :])
-    return Grant(payload[1], payload[2 : 2 + SESSION_BYTES], expires)
+    at = 2 + SESSION_BYTES
+    (expires,) = struct.unpack(">I", payload[at + STATION_BYTES :])
+    return Grant(payload[1], payload[2:at], payload[at : at + STATION_BYTES], expires)

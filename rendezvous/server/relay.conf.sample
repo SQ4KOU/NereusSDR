@@ -23,10 +23,14 @@ log_level = info
 [limits]
 # Sessions (one Core leg and one device leg each) at once.
 slots = 16
+# Sessions at once for any one Core (the grant carries an opaque value per
+# Core), as coturn's user-quota of 8 relays is about two sessions.
+sessions_per_station = 2
 # Connections per address group (an IPv4 address, or an IPv6 /56), joined
-# or not.
+# or not, counted until each has closed (refused ones included).
 connections_per_address = 8
-# Connections that have not joined yet, in total.
+# Connections that have not joined yet, in total. When a new one comes and
+# they are all taken, the one waiting longest is ended (full) to make room.
 max_pending = 64
 # A connection must send its join within this long.
 join_timeout_ms = 10000
@@ -34,11 +38,12 @@ join_timeout_ms = 10000
 rejoin_ms = 30000
 # A session whose two legs forward nothing for this long ends.
 idle_timeout_ms = 30000
-# Each way, per session: the bytes a second one leg may send to the other
-# (coturn's max-bps). Frames over it are dropped.
+# Each way, per session and per lane (control and media each have their
+# own): the bytes a second one leg may send to the other (coturn's
+# max-bps). Frames over it are dropped.
 rate_bytes_per_second = 80000
-# Each leg's send queue. A frame that would pass either cap drops the
-# oldest waiting frames first.
+# Each lane's send queue towards each leg. A frame that would pass either
+# cap drops that lane's oldest waiting frames first.
 queue_frames = 64
 queue_bytes = 24576
 # A leg whose writer spends longer than this on one frame is closed (1008).

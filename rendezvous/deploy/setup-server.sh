@@ -76,7 +76,8 @@
 #   7. Write /etc/caddy/Caddyfile from Caddyfile here, after caddy validate.
 #   8. Install the units and drop-ins (the service and the WebSocket relay
 #      with their memory ceilings, coturn's, Caddy's, the data-use report
-#      and its timer) and make /opt/nereus-rendezvous for deploy.sh.
+#      and its timer), the kernel setting of sysctl.conf, and make
+#      /opt/nereus-rendezvous for deploy.sh.
 #   9. Enable Caddy, coturn, the service, the WebSocket relay and the timer;
 #      start what is stopped, reload Caddy after a Caddyfile change, and
 #      restart only what had a unit or configuration change (a coturn
@@ -113,6 +114,7 @@ readonly USE_SERVICE_DEST="/etc/systemd/system/nereus-data-use.service"
 readonly USE_TIMER_DEST="/etc/systemd/system/nereus-data-use.timer"
 readonly USE_SCRIPT_DEST="/usr/local/libexec/nereus-rendezvous/data-use"
 readonly USE_CONF="${ETC_DIR}/data-use.conf"
+readonly SYSCTL_DEST="/etc/sysctl.d/60-nereus-rendezvous.conf"
 readonly CREDENTIAL_PATH="/run/credentials/${UNIT_NAME}/turn-secret"
 readonly RELAY_CREDENTIAL_PATH="/run/credentials/${UNIT_NAME}/relay-secret"
 readonly RELAY_OWN_CREDENTIAL_PATH="/run/credentials/${RELAY_UNIT_NAME}/relay-secret"
@@ -226,6 +228,7 @@ readonly repo_caddyfile="${script_dir}/Caddyfile"
 readonly repo_use_service="${script_dir}/nereus-data-use.service"
 readonly repo_use_timer="${script_dir}/nereus-data-use.timer"
 readonly repo_use_script="${script_dir}/data-use.py"
+readonly repo_sysctl="${script_dir}/sysctl.conf"
 
 rv_host="${RV_HOST:-rv.nereussdr.com}"
 relay_host4="${RV_RELAY_HOST4:-rv4.nereussdr.com}"
@@ -453,7 +456,7 @@ fi
 command -v python3 >/dev/null 2>&1 || die "python3 is not installed (it is on every Ubuntu server image)"
 command -v runuser >/dev/null 2>&1 || die "runuser (util-linux) is not installed"
 for f in "$repo_turnserver_conf" "$repo_unit" "$repo_relay_unit" "$repo_dropin" "$repo_caddy_dropin" "$repo_caddyfile" \
-        "$repo_use_service" "$repo_use_timer" "$repo_use_script"; do
+        "$repo_use_service" "$repo_use_timer" "$repo_use_script" "$repo_sysctl"; do
     [[ -f "$f" && -r "$f" ]] || die "missing ${f}; run this from a whole copy of rendezvous/deploy/"
 done
 (( dry_run )) && note "dry run: nothing is changed"
@@ -497,6 +500,15 @@ is_public_address "$public4" 4 || die "${public4} is not a public IPv4 address; 
 [[ -n "$public6" ]] || die "no public IPv6 address found; set RV_PUBLIC_IPV6 (the relay needs both families)"
 is_public_address "$public6" 6 || die "${public6} is not a public IPv6 address; set RV_PUBLIC_IPV6"
 note "public addresses: IPv4 ${public4}, IPv6 ${public6} (they stay on this server)"
+
+# Code in /opt from before the WebSocket relay: this script would install
+# the relay's unit and a rendezvous.conf that code cannot read, and restart
+# the service onto it. The code goes first (rendezvous/README.md,
+# "Updating"); refused in a dry run too.
+if [[ -f "${CODE_DIR}/nereus_rendezvous/__main__.py" ]] \
+        && ! [[ -f "${CODE_DIR}/nereus_rendezvous/relaygrant.py" && -f "${CODE_DIR}/nereus_relay/__main__.py" ]]; then
+    die "the code in ${CODE_DIR} is from before the WebSocket relay: run rendezvous/deploy.sh first, then this script again. Nothing was changed."
+fi
 
 # Sizing (rendezvous/README.md, "Limits"): the relay is sized by slots.
 # total-quota is the number of allocations at once. coturn reserves max-bps
@@ -833,16 +845,33 @@ log "6/10 ${SERVICE_CONF} and ${RELAY_CONF}"
     printf 'relay_url = wss://%s/v1/relay\n' "$rv_host"
     printf 'relay_secret_file = %s\n' "$RELAY_CREDENTIAL_PATH"
 } > "${work_dir}/rendezvous.conf"
+# The configurations are checked with the programs' own readers, the
+# secrets taken from where they are now rather than where systemd will put
+# them. A secret not made yet (a dry run before the first real one) is
+# stood in for by a random one in the work directory, so the dry run
+# catches what the real run would.
+check_secret() {
+    # $1: the real secret file; $2: a name for the stand-in. Prints the file to read.
+    if [[ -s "$1" ]]; then
+        printf '%s\n' "$1"
+    else
+        python3 -c 'import secrets; print(secrets.token_hex(32))' > "${work_dir}/$2"
+        printf '%s\n' "${work_dir}/$2"
+    fi
+}
 if [[ -f "${CODE_DIR}/nereus_rendezvous/config.py" ]]; then
-    # Check it with the service's own reader, the secret taken from where
-    # it is now rather than where systemd will put it.
-    sed -e "s|^turn_secret_file = .*|turn_secret_file = ${SECRET_FILE}|" \
-        -e "s|^relay_secret_file = .*|relay_secret_file = ${RELAY_SECRET_FILE}|" \
+    turn_check="$(check_secret "$SECRET_FILE" turn-secret.standin)"
+    relay_check="$(check_secret "$RELAY_SECRET_FILE" relay-secret.standin)"
+    sed -e "s|^turn_secret_file = .*|turn_secret_file = ${turn_check}|" \
+        -e "s|^relay_secret_file = .*|relay_secret_file = ${relay_check}|" \
         "${work_dir}/rendezvous.conf" > "${work_dir}/check.conf"
-    if [[ -s "$SECRET_FILE" && -s "$RELAY_SECRET_FILE" ]] && ! PYTHONPATH="$CODE_DIR" PYTHONDONTWRITEBYTECODE=1 python3 -c \
+    if ! PYTHONPATH="$CODE_DIR" PYTHONDONTWRITEBYTECODE=1 python3 -c \
             'import sys; from nereus_rendezvous import config; config.load(sys.argv[1])' "${work_dir}/check.conf"; then
         die "the service refuses the configuration above; ${SERVICE_CONF} was left unchanged"
     fi
+    standin=""
+    [[ -s "$SECRET_FILE" && -s "$RELAY_SECRET_FILE" ]] || standin=" (a stand-in for a secret not made yet)"
+    note "${SERVICE_CONF}: accepted by the service's own reader${standin}"
 fi
 result="$(install_file "${work_dir}/rendezvous.conf" "$SERVICE_CONF" 644 root:root)"
 if [[ "$result" == changed ]]; then
@@ -862,12 +891,16 @@ note "${SERVICE_CONF}${would}: ${result}"
     printf '# RV_WS_RELAY_SLOTS.\n'
     printf 'slots = %s\n' "$ws_relay_slots"
 } > "${work_dir}/relay.conf"
-if [[ -f "${CODE_DIR}/nereus_relay/config.py" && -s "$RELAY_SECRET_FILE" ]]; then
-    sed "s|^relay_secret_file = .*|relay_secret_file = ${RELAY_SECRET_FILE}|" "${work_dir}/relay.conf" > "${work_dir}/relay-check.conf"
+if [[ -f "${CODE_DIR}/nereus_relay/config.py" ]]; then
+    relay_check="$(check_secret "$RELAY_SECRET_FILE" relay-secret.standin)"
+    sed "s|^relay_secret_file = .*|relay_secret_file = ${relay_check}|" "${work_dir}/relay.conf" > "${work_dir}/relay-check.conf"
     if ! PYTHONPATH="$CODE_DIR" PYTHONDONTWRITEBYTECODE=1 python3 -c \
             'import sys; from nereus_relay import config; config.load(sys.argv[1])' "${work_dir}/relay-check.conf"; then
         die "the WebSocket relay refuses the configuration above; ${RELAY_CONF} was left unchanged"
     fi
+    standin=""
+    [[ -s "$RELAY_SECRET_FILE" ]] || standin=" (a stand-in for a secret not made yet)"
+    note "${RELAY_CONF}: accepted by the relay's own reader${standin}"
 fi
 result="$(install_file "${work_dir}/relay.conf" "$RELAY_CONF" 644 root:root)"
 if [[ "$result" == changed ]]; then
@@ -951,6 +984,20 @@ place "$repo_use_service" "$USE_SERVICE_DEST" 644 units_changed
 place "$repo_use_timer" "$USE_TIMER_DEST" 644 units_changed
 place "$repo_use_script" "$USE_SCRIPT_DEST" 755
 place "${work_dir}/data-use.conf" "$USE_CONF" 644
+# The kernel setting of deploy/sysctl.conf (tcp_notsent_lowat, rendezvous
+# document section 12.5), applied now as well as at every boot. To undo it,
+# the lines at the end of the file.
+sysctl_changed=0
+place "$repo_sysctl" "$SYSCTL_DEST" 644 sysctl_changed
+if (( sysctl_changed )) && ! (( dry_run )); then
+    if (( have_systemd )) && sysctl -q --load "$SYSCTL_DEST" 2>/dev/null; then
+        note "${SYSCTL_DEST}: applied"
+    else
+        note "${SYSCTL_DEST}: could not be applied now (no systemd, or /proc/sys is read-only here); it applies at the next boot"
+    fi
+elif (( sysctl_changed )); then
+    note "${SYSCTL_DEST} would be applied at once (sysctl --load)"
+fi
 if (( dry_run )); then
     if [[ -d "$CODE_DIR" ]]; then note "${CODE_DIR} present"; else note "would make ${CODE_DIR} for ${deploy_user}"; fi
 else

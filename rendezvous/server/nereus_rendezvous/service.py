@@ -532,22 +532,26 @@ class Service:
             "offered" if relay else "not offered",
             "offered" if grant_session is not None else "not offered",
         )
+        tokens: Dict[int, str] = {}
+        grant_expires = 0
+        if grant_session is not None:
+            # One expiry for the whole grant, so both ends get the same value.
+            secret = self.config.relay_secret
+            assert secret is not None
+            grant_expires = self.clock.wall_seconds() + self.config.relay_ttl_seconds
+            station = relaygrant.station_of(secret, intro.station_id)
+            for leg in relaygrant.LEGS:
+                tokens[leg] = relaygrant.mint(secret, leg, grant_session, station, grant_expires)
         intro.client.send(protocol.message("answer", "client", answer=msg["answer"], turn=relay))
         if grant_session is not None:
-            intro.client.send(self._relay_grant("client", relaygrant.LEG_DEVICE, grant_session))
+            intro.client.send(self._relay_grant("client", tokens[relaygrant.LEG_DEVICE], grant_expires))
         if msg["turn"]:
             conn.send(protocol.message("credentials", "station", **{"from": intro.iid, "turn": relay}))
         if grant_session is not None:
-            conn.send(self._relay_grant("station", relaygrant.LEG_CORE, grant_session, intro.iid))
+            conn.send(self._relay_grant("station", tokens[relaygrant.LEG_CORE], grant_expires, intro.iid))
 
-    def _relay_grant(self, receiver: str, leg: int, session: bytes, iid: Optional[str] = None) -> Dict[str, Any]:
-        assert self.config.relay_secret is not None
-        expires = self.clock.wall_seconds() + self.config.relay_ttl_seconds
-        fields: Dict[str, Any] = {
-            "url": self.config.relay_url,
-            "token": relaygrant.mint(self.config.relay_secret, leg, session, expires),
-            "expires": expires,
-        }
+    def _relay_grant(self, receiver: str, token: str, expires: int, iid: Optional[str] = None) -> Dict[str, Any]:
+        fields: Dict[str, Any] = {"url": self.config.relay_url, "token": token, "expires": expires}
         if iid is not None:
             fields["from"] = iid
         return protocol.message("relay.grant", receiver, **fields)

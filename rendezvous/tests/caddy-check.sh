@@ -27,6 +27,9 @@
 #      Core leg and a device leg of one grant join, datagrams up to the
 #      1500-byte cap cross both ways unchanged, the relay counts legs by
 #      the client's own address, and a plain request there gets 426.
+#   8. A Core leg reading slowly through Caddy: where its datagrams wait,
+#      with net.ipv4.tcp_notsent_lowat as deploy/sysctl.conf sets it
+#      (NOTSENT_LOWAT=off measures without it).
 #
 # Certificates come from Caddy's own local authority, switched on for the
 # test only (local_certs in a copy of the Caddyfile); the real file is
@@ -81,7 +84,15 @@ EOF
 echo "# $(docker run --rm "$image" caddy version)"
 
 docker network create --ipv6 --subnet "$v4_net" --subnet "$v6_net" "$net" >/dev/null
-docker run -d --name "$server" --network "$net" --ip "$server_v4" --ip6 "$server_v6" \
+# The server's sysctl as setup-server.sh installs it (deploy/sysctl.conf),
+# or NOTSENT_LOWAT=off to measure without it.
+sysctl_args=()
+if [[ "${NOTSENT_LOWAT:-}" != off ]]; then
+    lowat_setting="$(sed -n 's/^net.ipv4.tcp_notsent_lowat = \([0-9]*\)$/\1/p' "${repo}/rendezvous/deploy/sysctl.conf")"
+    [[ -n "$lowat_setting" ]] || fail "rendezvous/deploy/sysctl.conf sets no net.ipv4.tcp_notsent_lowat"
+    sysctl_args=(--sysctl "net.ipv4.tcp_notsent_lowat=${lowat_setting}")
+fi
+docker run -d --name "$server" --network "$net" --ip "$server_v4" --ip6 "$server_v6" ${sysctl_args[@]+"${sysctl_args[@]}"} \
     -v "${repo}:/repo:ro" "$image" sleep infinity >/dev/null
 
 # 1. The real file, unchanged, and the test copy with local certificates
@@ -283,6 +294,22 @@ if docker exec "$server" grep -Eq "$(cat "${work}/relay-secret")|198\.51\.100\.3
     fail "the relay's log holds its secret or an address"
 fi
 pass "wss://rv.nereussdr.com/v1/relay reaches the WebSocket relay through Caddy: a Core leg and a device leg of one grant join (ready, peer present), datagrams of 1 to 1500 bytes with both stream tags cross both ways unchanged, a third connection from the same client is refused whatever X-Forwarded-For it claims (tooManyConnections), a plain request gets 426, and the relay's log holds no secret or address"
+
+# 8. Where delay builds up behind the relay's queue: a Core leg reading
+# slowly through Caddy, measured (rendezvous document section 12.5).
+slow_out="$(docker exec "$client_a" python3 /repo/rendezvous/tests/caddy_probe.py slowreader \
+    wss://rv.nereussdr.com/v1/relay --cacert /tmp/ca.crt --secret-file /tmp/relay-secret)"
+lowat="$(docker exec "$server" cat /proc/sys/net/ipv4/tcp_notsent_lowat)"
+printf '%s\n' "$slow_out" | sed "s/^/# slow reader (tcp_notsent_lowat ${lowat}): /"
+python3 - "$slow_out" <<'PY' || fail "the slow reader through Caddy"
+import json, sys
+r = json.loads(sys.argv[1])
+assert r["inOrder"], r
+# The relay dropped datagrams for the slow reader (its queue drops its
+# oldest), so the delay stops growing instead of growing without bound.
+assert r["droppedAmongWhatWasRead"] > 0, r
+PY
+pass "a Core leg reading a quarter of what is sent through Caddy (tcp_notsent_lowat ${lowat}): the relay drops its oldest datagrams, and how old they are when read levels off (the ages above, for section 12.5)"
 
 # 6. HTTP/3 stays off.
 udp="$(docker exec -i "$server" python3 - <<'PY'

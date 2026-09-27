@@ -1,0 +1,99 @@
+{
+  "relayFrameVersions": [
+    1
+  ],
+  "fixtures": [
+    {
+      "id": "join-and-forward",
+      "file": "join-and-forward.json"
+    },
+    {
+      "id": "unknown-data-tag",
+      "file": "unknown-data-tag.json"
+    },
+    {
+      "id": "data-behind-join",
+      "file": "data-behind-join.json"
+    },
+    {
+      "id": "data-before-peer-dropped",
+      "file": "data-before-peer-dropped.json"
+    },
+    {
+      "id": "rejoin",
+      "file": "rejoin.json"
+    },
+    {
+      "id": "replaced",
+      "file": "replaced.json"
+    },
+    {
+      "id": "peer-gone-never-joined",
+      "file": "peer-gone-never-joined.json"
+    },
+    {
+      "id": "peer-gone-after-leaving",
+      "file": "peer-gone-after-leaving.json"
+    },
+    {
+      "id": "idle",
+      "file": "idle.json"
+    },
+    {
+      "id": "end-bad-token",
+      "file": "end-bad-token.json"
+    },
+    {
+      "id": "end-expired",
+      "file": "end-expired.json"
+    },
+    {
+      "id": "end-ended",
+      "file": "end-ended.json"
+    },
+    {
+      "id": "end-full",
+      "file": "end-full.json"
+    },
+    {
+      "id": "end-too-many-connections",
+      "file": "end-too-many-connections.json"
+    },
+    {
+      "id": "end-too-many-sessions",
+      "file": "end-too-many-sessions.json"
+    },
+    {
+      "id": "end-timeout",
+      "file": "end-timeout.json"
+    },
+    {
+      "id": "end-shutting-down",
+      "file": "end-shutting-down.json"
+    },
+    {
+      "id": "refuse-text",
+      "file": "refuse-text.json"
+    },
+    {
+      "id": "refuse-first-not-join",
+      "file": "refuse-first-not-join.json"
+    },
+    {
+      "id": "refuse-zero-tag",
+      "file": "refuse-zero-tag.json"
+    },
+    {
+      "id": "refuse-empty-payload",
+      "file": "refuse-empty-payload.json"
+    },
+    {
+      "id": "refuse-join-twice",
+      "file": "refuse-join-twice.json"
+    },
+    {
+      "id": "refuse-oversize",
+      "file": "refuse-oversize.json"
+    }
+  ]
+}

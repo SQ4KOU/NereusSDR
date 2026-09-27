@@ -143,6 +143,7 @@ def test_relay_grant():
     invalid one is refused by the relay's check."""
     vectors = load_fixture(CRYPTO["relay-grant"])
     assert bytes.fromhex(vectors["prefixHex"]) == relaygrant.PREFIX
+    assert bytes.fromhex(vectors["stationPrefixHex"]) == relaygrant.STATION_PREFIX
     for case in vectors["cases"]:
         secret = case["secret"].encode("utf-8")
         got = relaygrant.verify(secret, case["token"])
@@ -150,13 +151,16 @@ def test_relay_grant():
             assert got is None, case["name"]
             continue
         session = bytes.fromhex(case["sessionHex"])
-        assert relaygrant.mint(secret, case["leg"], session, case["expires"]) == case["token"], case["name"]
-        assert got == relaygrant.Grant(case["leg"], session, case["expires"]), case["name"]
+        station = bytes.fromhex(case["stationHex"])
+        independent = hmac.new(secret, relaygrant.STATION_PREFIX + case["stationId"].encode(), hashlib.sha256).digest()[:8]
+        assert relaygrant.station_of(secret, case["stationId"]) == station == independent, case["name"]
+        assert relaygrant.mint(secret, case["leg"], session, station, case["expires"]) == case["token"], case["name"]
+        assert got == relaygrant.Grant(case["leg"], session, station, case["expires"]), case["name"]
         raw = base64.urlsafe_b64decode(case["token"] + "=" * (-len(case["token"]) % 4))
-        payload = bytes([1, case["leg"]]) + session + case["expires"].to_bytes(4, "big")
-        assert raw[:22] == payload
-        assert raw[22:] == hmac.new(secret, relaygrant.PREFIX + payload, hashlib.sha256).digest()
-        assert len(case["token"]) == 72
+        payload = bytes([1, case["leg"]]) + session + station + case["expires"].to_bytes(4, "big")
+        assert raw[:30] == payload
+        assert raw[30:] == hmac.new(secret, relaygrant.PREFIX + payload, hashlib.sha256).digest()
+        assert len(case["token"]) == 83
 
 
 @pytest.mark.parametrize("text", ["", "A" * 26, "a" * 25, "a" * 27, "abcdefghijklmnopqrstuvwxy1", "abcdefghijklmnopqrstuvwxy8"])

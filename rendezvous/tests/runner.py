@@ -248,10 +248,11 @@ class Runner:
         if kind == "relayToken":
             # A core or app runner plays the service here; the service's
             # runner only ever matches this placeholder.
-            leg, session_name = self._relay_parts(parts, template)
+            leg, session_name, k = self._relay_parts(parts, template)
             session = self.records.setdefault("relaySession:" + session_name, os.urandom(relaygrant.SESSION_BYTES))
             expires = self.clock.wall_seconds() + self.config.relay_ttl_seconds
-            return relaygrant.mint(self.relay_secret, leg, session, expires)
+            station = relaygrant.station_of(self.relay_secret, self.station_id(k))
+            return relaygrant.mint(self.relay_secret, leg, session, station, expires)
         if kind == "candidate":
             self.candidates += 1
             n = self.candidates
@@ -262,9 +263,9 @@ class Runner:
 
     @staticmethod
     def _relay_parts(parts: List[str], template: str) -> Any:
-        if len(parts) != 2 or parts[0] not in RELAY_LEGS or not parts[1]:
-            raise FixtureFailure(f"{template}: write $relayToken:<core|device>:<session>")
-        return RELAY_LEGS[parts[0]], parts[1]
+        if len(parts) != 3 or parts[0] not in RELAY_LEGS or not parts[1] or not parts[2]:
+            raise FixtureFailure(f"{template}: write $relayToken:<core|device>:<session>:<station key>")
+        return RELAY_LEGS[parts[0]], parts[1], parts[2]
 
     def _nonce(self, name: str, template: str) -> bytes:
         if name not in self.records:
@@ -376,18 +377,22 @@ class Runner:
             self.records[name] = actual
             return
         if kind == "relayToken":
-            leg, session_name = self._relay_parts(parts, template)
+            leg, session_name, k = self._relay_parts(parts, template)
             # Section 12.2, recomputed here with hmac directly rather than
             # with the service's code.
             raw = identity.b64url_of_length(actual, relaygrant.TOKEN_BYTES)
-            need(raw is not None, "base64url of 54 bytes")
+            need(raw is not None, "base64url of 62 bytes")
             payload, mac = raw[: relaygrant.PAYLOAD_BYTES], raw[relaygrant.PAYLOAD_BYTES :]
             want = hmac.new(self.relay_secret, b"NereusSDR relay grant v1\n" + payload, hashlib.sha256).digest()
             need(hmac.compare_digest(mac, want), "HMAC-SHA256 of the payload under the relay secret")
             need(payload[0] == 1, "version 1")
             need(payload[1] == leg, f"the {parts[0]} leg")
             expires = self.clock.wall_seconds() + self.config.relay_ttl_seconds
-            need(int.from_bytes(payload[18:22], "big") == expires, f"expiring at {expires}")
+            station = hmac.new(
+                self.relay_secret, b"NereusSDR relay station v1\n" + self.station_id(k).encode(), hashlib.sha256
+            ).digest()[:8]
+            need(payload[18:26] == station, f"station key {k}'s value")
+            need(int.from_bytes(payload[26:30], "big") == expires, f"expiring at {expires}")
             session = payload[2:18]
             key = "relaySession:" + session_name
             if key in self.records:

@@ -14,6 +14,7 @@ from nereus_relay import relay as relay_module
 from nereus_relay.relay import TAG_CONTROL, TAG_JOIN, TAG_MEDIA, TAG_PEER, TAG_READY
 from relay_helpers import (
     SECRET,
+    STATION_A,
     WALL,
     connect,
     expect_close,
@@ -36,18 +37,24 @@ def test_two_legs_pair_and_forward_both_ways_unchanged():
             device, ready = await join(uri, device_token, "203.0.113.9")
             assert ready == bytes([TAG_READY, 1, 1])
             assert await recv(core) == bytes([TAG_PEER, 1])
-            # Both stream tags, a reserved data tag, and every byte value.
+            # Both stream tags, and every byte value.
             frames = [
                 bytes([TAG_CONTROL]) + bytes(range(256)),
                 bytes([TAG_MEDIA]) + b"\x16\xfe\xfd" + bytes(1497),
-                bytes([0x05, 0x00]),
-                bytes([0x7F]) + b"\x80\x01rtp",
             ]
             for frame in frames:
                 await device.send(frame)
                 assert await recv(core) == frame
                 await core.send(frame)
                 assert await recv(device) == frame
+            # A reserved data tag is dropped and counted, not forwarded, and
+            # the leg stays.
+            await device.send(bytes([0x05, 0x00]))
+            await device.send(bytes([0x7F]) + b"\x80\x01rtp")
+            await device.send(bytes([TAG_MEDIA, 9]))
+            assert await recv(core) == bytes([TAG_MEDIA, 9])
+            session = next(iter(relay.sessions.values()))
+            assert session.dropped_unknown == 2
             assert len(relay.sessions) == 1
 
     asyncio.run(go())
@@ -128,7 +135,7 @@ def test_bad_tokens_are_refused(first):
         async with live_relay() as (relay, clock, uri):
             core_token, _, session = grant_pair()
             payloads = {
-                "otherSecret": relaygrant.mint(b"not the relay's secret", 1, session, WALL + 120).encode(),
+                "otherSecret": relaygrant.mint(b"not the relay's secret", 1, session, STATION_A, WALL + 120).encode(),
                 "flippedBit": (core_token[:-1] + ("A" if core_token[-1] != "A" else "B")).encode(),
                 "garbage": b"hello",
                 "empty": b"",
@@ -306,9 +313,12 @@ def test_slots_bound_sessions_but_never_a_rejoin():
     asyncio.run(go())
 
 
-def test_connections_per_address_and_pending_caps():
+def test_connections_per_address_count_until_closed():
+    """Every connection counts for its address group from its arrival until
+    it has closed, refused ones too (section 12.5)."""
+
     async def go():
-        async with live_relay(connections_per_address=2, max_pending=5) as (relay, clock, uri):
+        async with live_relay(connections_per_address=2) as (relay, clock, uri):
             a1 = await connect(uri, "198.51.100.5")
             a2 = await connect(uri, "198.51.100.5")
             a3 = await connect(uri, "198.51.100.5")
@@ -318,18 +328,83 @@ def test_connections_per_address_and_pending_caps():
             b2 = await connect(uri, "2001:db8:1:1::2")
             b3 = await connect(uri, "2001:db8:1:2::3")
             await expect_end(b3, "tooManyConnections")
-            # Five pending in all: the next is refused wherever it comes from.
-            c1 = await connect(uri, "203.0.113.1")
-            c2 = await connect(uri, "203.0.113.2")
-            await expect_end(c2, "full")
-            # A joined leg no longer counts as pending.
+            # A joined leg still counts for its group.
             core_token, _, _ = grant_pair()
             await a1.send(bytes([TAG_JOIN]) + core_token.encode())
             assert (await recv(a1))[0] == TAG_READY
-            c3 = await connect(uri, "203.0.113.2")
-            await expect_nothing(c3)
-            for ws in (a2, b1, b2, c1, c3):
+            a4 = await connect(uri, "198.51.100.5")
+            await expect_end(a4, "tooManyConnections")
+            # Once one has closed, its place is free again.
+            await a2.close()
+            for _ in range(100):
+                if relay.per_group.get("198.51.100.5") == 1:
+                    break
+                await asyncio.sleep(0.01)
+            a5 = await connect(uri, "198.51.100.5")
+            await expect_nothing(a5)
+            for ws in (a1, a5, b1, b2):
                 await ws.close()
+
+    asyncio.run(go())
+
+
+def test_the_oldest_waiting_connection_makes_room():
+    """When every waiting place is taken, the connection waiting longest is
+    ended (full) and the new one admitted, so a few networks holding
+    connections open cannot shut every join out (section 12.5)."""
+
+    async def go():
+        async with live_relay(max_pending=3) as (relay, clock, uri):
+            w1 = await connect(uri, "203.0.113.1")
+            w2 = await connect(uri, "203.0.113.2")
+            w3 = await connect(uri, "203.0.113.3")
+            await asyncio.sleep(0.05)
+            assert relay.pending == 3
+            joiner = await connect(uri, "203.0.113.4")
+            await expect_end(w1, "full")
+            core_token, _, _ = grant_pair()
+            await joiner.send(bytes([TAG_JOIN]) + core_token.encode())
+            assert (await recv(joiner))[0] == TAG_READY
+            assert relay.pending == 2
+            await expect_nothing(w2)
+            for ws in (w2, w3, joiner):
+                await ws.close()
+
+    asyncio.run(go())
+
+
+def test_sessions_per_station_are_capped():
+    """Anyone can get grants for a station they register themselves, so the
+    relay caps live sessions per station value (2 by default): a third for
+    one station is refused, another station's is not, and a rejoin into a
+    live session never is."""
+
+    async def go():
+        async with live_relay() as (relay, clock, uri):
+            from relay_helpers import STATION_A, STATION_B
+
+            legs = []
+            tokens = []
+            for _ in range(2):
+                core_token, device_token, _ = grant_pair(station=STATION_A)
+                tokens.append(device_token)
+                ws, _ = await join(uri, core_token)
+                legs.append(ws)
+            third, _, _ = grant_pair(station=STATION_A)
+            ws = await connect(uri)
+            await ws.send(bytes([TAG_JOIN]) + third.encode())
+            await expect_end(ws, "tooManySessions")
+            other, _, _ = grant_pair(station=STATION_B)
+            ws, ready = await join(uri, other)
+            assert ready[0] == TAG_READY
+            device, ready = await join(uri, tokens[0])
+            assert ready == bytes([TAG_READY, 1, 1])
+            # A session that ends frees its place for the station.
+            clock.advance(30000)
+            ws = await connect(uri)
+            await ws.send(bytes([TAG_JOIN]) + third.encode())
+            assert (await recv(ws))[0] == TAG_READY
+            assert relay.per_station.get(STATION_A) == 1
 
     asyncio.run(go())
 

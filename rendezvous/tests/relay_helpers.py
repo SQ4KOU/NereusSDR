@@ -28,6 +28,8 @@ from websockets.exceptions import ConnectionClosed
 
 WALL = 1800000000
 SECRET = b"relay-test-secret-made-for-these-tests"
+STATION_A = relaygrant.station_of(SECRET, "a" * 26)
+STATION_B = relaygrant.station_of(SECRET, "b" * 26)
 
 
 def make_relay_config(**overrides: Any) -> Config:
@@ -52,12 +54,17 @@ async def live_relay(**overrides: Any) -> AsyncIterator[Tuple[Relay, ManualClock
         await relay_transport.stop([server], relay, grace_s=0.05, timeout_s=5)
 
 
-def grant_pair(expires: int = WALL + 120, session: Optional[bytes] = None) -> Tuple[str, str, bytes]:
-    """(core token, device token, session) of one grant."""
+def grant_pair(
+    expires: int = WALL + 120, session: Optional[bytes] = None, station: Optional[bytes] = None
+) -> Tuple[str, str, bytes]:
+    """(core token, device token, session) of one grant. Each grant is for a
+    station of its own unless one is named, so the per-station cap stays
+    out of the way of tests about other things."""
     session = session or os.urandom(relaygrant.SESSION_BYTES)
+    station = station or os.urandom(relaygrant.STATION_BYTES)
     return (
-        relaygrant.mint(SECRET, relaygrant.LEG_CORE, session, expires),
-        relaygrant.mint(SECRET, relaygrant.LEG_DEVICE, session, expires),
+        relaygrant.mint(SECRET, relaygrant.LEG_CORE, session, station, expires),
+        relaygrant.mint(SECRET, relaygrant.LEG_DEVICE, session, station, expires),
         session,
     )
 

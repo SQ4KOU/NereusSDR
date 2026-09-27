@@ -28,6 +28,18 @@ containers, on Ubuntu's python3 and python3-websockets.
       relay's secret) join through Caddy, datagrams of every size up to the
       cap cross both ways, then N more connections are opened from this
       client and the first frame each gets within 1 s is reported.
+
+  slowreader URL --cacert F --secret-file F [--seconds S] [--send-rate N]
+      [--read-rate N] [--rcvbuf B]
+      Where delay builds up behind the relay's queue (rendezvous document
+      section 12.5): the device leg sends N media datagrams a second, each
+      carrying a sequence number and the time it was sent, for S seconds;
+      the Core leg, a blocking socket with a small receive buffer and no
+      library buffering in front of it, reads only N a second.
+      Reports how old the datagrams are when read, early and late, and how
+      many were lost on the way. A queue that drops its oldest keeps the age
+      flat; buffering behind it lets the age grow for as long as the
+      sender outruns the reader.
 """
 
 from __future__ import annotations
@@ -242,7 +254,7 @@ async def relay(args) -> int:
 
     async def leg(side, claimed):
         ws = await _connect(args.url, ssl=context, max_size=None, **{_HEADERS: {"X-Forwarded-For": claimed}})
-        await ws.send(b"\x80" + relaygrant.mint(secret, side, session, expires).encode())
+        await ws.send(b"\x80" + relaygrant.mint(secret, side, session, relaygrant.station_of(secret, "caddycheckcaddycheckcaddyc"), expires).encode())
         return ws, await asyncio.wait_for(ws.recv(), 5)
 
     core, result["coreReady"] = await leg(relaygrant.LEG_CORE, "203.0.113.1")
@@ -274,6 +286,133 @@ async def relay(args) -> int:
     return 0
 
 
+class _SlowLeg:
+    """A WebSocket leg that reads its socket only as fast as it is asked to:
+    a blocking socket (TLS or not) with a small receive buffer, reading one
+    frame at a time with no library buffering in front of it."""
+
+    def __init__(self, url: str, cacert: str, rcvbuf: int, claimed: str) -> None:
+        from urllib.parse import urlsplit
+
+        parts = urlsplit(url)
+        host, port = parts.hostname, parts.port or (443 if parts.scheme == "wss" else 80)
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, rcvbuf)
+        sock.connect((host, port))
+        if parts.scheme == "wss":
+            context = ssl.create_default_context(cafile=cacert)
+            context.set_alpn_protocols(["http/1.1"])
+            sock = context.wrap_socket(sock, server_hostname=host)
+        self.sock = sock
+        key = base64.b64encode(os.urandom(16)).decode()
+        sock.sendall((
+            "GET %s HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+            "Sec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\nX-Forwarded-For: %s\r\n\r\n"
+            % (parts.path or "/", host, key, claimed)
+        ).encode("ascii"))
+        head = b""
+        while b"\r\n\r\n" not in head:
+            head += sock.recv(1)
+        assert b" 101 " in head.split(b"\r\n", 1)[0], head
+
+    def _exactly(self, n: int) -> bytes:
+        out = b""
+        while len(out) < n:
+            chunk = self.sock.recv(n - len(out))
+            if not chunk:
+                raise EOFError
+            out += chunk
+        return out
+
+    def send(self, payload: bytes) -> None:
+        mask = os.urandom(4)
+        n = len(payload)
+        head = bytes([0x82]) + (bytes([0x80 | n]) if n < 126 else bytes([0x80 | 126]) + struct.pack(">H", n))
+        self.sock.sendall(head + mask + bytes(b ^ mask[i % 4] for i, b in enumerate(payload)))
+
+    def recv(self) -> bytes:
+        first, second = self._exactly(2)
+        n = second & 0x7F
+        if n == 126:
+            (n,) = struct.unpack(">H", self._exactly(2))
+        elif n == 127:
+            (n,) = struct.unpack(">Q", self._exactly(8))
+        payload = self._exactly(n)
+        if first & 0x0F == 0x9:  # a ping: answer it, and read on
+            self.sock.sendall(bytes([0x8A, 0x80 | len(payload)]) + b"\0\0\0\0" + payload)
+            return self.recv()
+        return payload
+
+
+async def slowreader(args) -> int:
+    import time
+
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "server"))
+    from nereus_rendezvous import relaygrant
+
+    context = ssl.create_default_context(cafile=args.cacert) if args.url.startswith("wss:") else None
+    secret = open(args.secret_file, "rb").read().rstrip(b"\r\n")
+    session = os.urandom(relaygrant.SESSION_BYTES)
+    station = relaygrant.station_of(secret, "slowreaderslowreaderslowre")
+    expires = int(time.time()) + 120
+    loop = asyncio.get_running_loop()
+
+    core = _SlowLeg(args.url, args.cacert, args.rcvbuf, "203.0.113.1")
+    core.send(b"\x80" + relaygrant.mint(secret, relaygrant.LEG_CORE, session, station, expires).encode())
+    assert core.recv()[0] == 0x81
+    kwargs = {_HEADERS: {"X-Forwarded-For": "203.0.113.2"}, "max_size": None}
+    if context is not None:
+        kwargs["ssl"] = context
+    device = await _connect(args.url, **kwargs)
+    await device.send(b"\x80" + relaygrant.mint(secret, relaygrant.LEG_DEVICE, session, station, expires).encode())
+    await asyncio.wait_for(device.recv(), 5)
+    assert core.recv() == b"\x82\x01"
+    total = int(args.seconds * args.send_rate)
+    start = time.monotonic()
+
+    async def send():
+        for n in range(total):
+            due = start + n / args.send_rate
+            await asyncio.sleep(max(0.0, due - time.monotonic()))
+            await device.send(b"\x02" + struct.pack(">Id", n, time.monotonic()) + bytes(987))
+
+    def read():
+        got = []
+        core.sock.settimeout(2.0)
+        next_read = time.monotonic()
+        while time.monotonic() < start + args.seconds + 5:
+            next_read += 1.0 / args.read_rate
+            time.sleep(max(0.0, next_read - time.monotonic()))
+            try:
+                frame = core.recv()
+            except (socket.timeout, EOFError, OSError):
+                break
+            now = time.monotonic()
+            n, sent_at = struct.unpack(">Id", frame[1:13])
+            got.append((now - start, n, now - sent_at))
+        return got
+
+    reader = loop.run_in_executor(None, read)
+    await send()
+    got = await reader
+    early = [a for t, _, a in got if t < 5]
+    late = [a for t, _, a in got if args.seconds - 5 <= t < args.seconds]
+    seqs = [n for _, n, _ in got]
+    print(json.dumps({
+        "sent": total,
+        "read": len(got),
+        "inOrder": seqs == sorted(seqs),
+        "droppedAmongWhatWasRead": (seqs[-1] - seqs[0] + 1 - len(seqs)) if seqs else None,
+        "ageEarlyMaxS": round(max(early), 3) if early else None,
+        "ageLateMaxS": round(max(late), 3) if late else None,
+        "ageByFiveSeconds": [round(max([a for t, _, a in got if k <= t < k + 5] or [0]), 3)
+                             for k in range(0, int(args.seconds), 5)],
+    }), flush=True)
+    await device.close()
+    core.sock.close()
+    return 0
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="caddy_probe")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -295,7 +434,17 @@ def main(argv=None) -> int:
     w.add_argument("--cacert", required=True)
     w.add_argument("--secret-file", required=True)
     w.add_argument("--extra", type=int, default=0)
+    sr = sub.add_parser("slowreader")
+    sr.add_argument("url")
+    sr.add_argument("--cacert", required=True)
+    sr.add_argument("--secret-file", required=True)
+    sr.add_argument("--seconds", type=float, default=20)
+    sr.add_argument("--send-rate", type=float, default=75)
+    sr.add_argument("--read-rate", type=float, default=20)
+    sr.add_argument("--rcvbuf", type=int, default=16384)
     args = parser.parse_args(argv)
+    if args.command == "slowreader":
+        return asyncio.run(slowreader(args))
     if args.command == "relay":
         return asyncio.run(relay(args))
     if args.command == "raw":

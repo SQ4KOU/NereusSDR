@@ -31,6 +31,7 @@ class Config:
     log_level: str = "info"
     # [limits]
     slots: int = 16
+    sessions_per_station: int = 2
     connections_per_address: int = 8
     max_pending: int = 64
     join_timeout_ms: int = 10000
@@ -51,6 +52,7 @@ _SECTIONS = {
     "relay": ["listen", "trusted_proxies", "relay_secret_file", "log_level"],
     "limits": [
         "slots",
+        "sessions_per_station",
         "connections_per_address",
         "max_pending",
         "join_timeout_ms",

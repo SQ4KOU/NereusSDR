@@ -208,8 +208,10 @@ bash /root/rendezvous/deploy/setup-server.sh
   `/etc/caddy/Caddyfile` (the `Caddyfile` here with your `RV_HOST`, after
   `caddy validate`);
 - installs the service's and the WebSocket relay's units and the drop-ins
-  for coturn and Caddy, with memory limits (see "Memory"), and the data-use
-  report;
+  for coturn and Caddy, with memory limits (see "Memory"), the data-use
+  report, and one kernel setting for the whole host
+  (`/etc/sysctl.d/60-nereus-rendezvous.conf`, from `deploy/sysctl.conf`,
+  which says what it does and how to undo it), applied at once;
 - enables and starts Caddy, coturn and the report (and the service and the
   WebSocket relay once their code is there), and checks that coturn holds
   exactly UDP 3478 and 443 and no TCP port, Caddy no UDP port, and the
@@ -333,10 +335,12 @@ at once.
 The WebSocket relay is sized by its own slots: `RV_WS_RELAY_SLOTS` (16 by
 default) is how many sessions (a Core and a device, one connection each)
 it carries at once, about as many as coturn's 128 slots carry relayed at
-both ends. Each session may send 80000 bytes a second each way, coturn's
-`max-bps`; each connection may send one datagram of up to 1500 bytes at a
-time, and a connection that falls behind loses its oldest datagrams rather
-than piling them up. A session with nothing to carry for 30 s ends, and so
+both ends, and at most 2 for any one Core (as coturn's 8 relays per Core
+are about two sessions). A session carries control and media in two lanes,
+each allowed 80000 bytes a second each way (coturn's `max-bps`), so a burst
+of one never slows the other; each connection sends one datagram of up to
+1500 bytes at a time, and a connection that falls behind loses its oldest
+datagrams rather than piling them up. A session with nothing to carry for 30 s ends, and so
 does one whose other end has been gone 30 s. The rest (connections per
 network, waiting connections) is in `server/relay.conf.sample`, with the
 reasons in the rendezvous document, section 12.5. Python on one vCPU
@@ -355,7 +359,7 @@ about 86 MiB and Caddy about 270 MiB, measured.
 
 The WebSocket relay's MemoryMax comes from its slots instead: 32 MiB and
 2 MiB a slot, 64 MiB at 16 slots, out of the 15% headroom. Measured, it
-holds about 30 MiB with every one of its 16 sessions stalled at once.
+holds about 34 MiB with every one of its 16 sessions stalled at once.
 
 If memory runs short, the kernel ends the WebSocket relay first, then the
 service (they have the higher OOM scores), which also frees the connections
@@ -439,13 +443,18 @@ file.
 
 ## Updating
 
-Pull NereusSDR, then `rendezvous/deploy.sh` and `systemctl restart
-nereus-rendezvous nereus-relay` for the service and the WebSocket relay. For configuration changes, copy the
-tree again the same way as step 3 (remove the old copy first, or it nests),
-with the same settings as step 4 (`RV_DEPLOY_KEY` may be left out once the
-account exists):
+Pull NereusSDR. Publish the code first, then copy the tree again the same
+way as step 3 (remove the old copy first, or it nests) and run
+`setup-server.sh` with the same settings as step 4 (`RV_DEPLOY_KEY` may be
+left out once the account exists). The code goes first because
+`setup-server.sh` installs units and configuration for the code it finds
+in `/opt/nereus-rendezvous`: on a server set up before the WebSocket relay,
+it refuses to go on (in a dry run too) until `deploy.sh` has put the relay's
+code there, and then installs the relay's unit, starts it, and restarts the
+service onto its new configuration.
 
 ```sh
+rendezvous/deploy.sh
 ssh root@rv.example.org rm -rf /root/rendezvous
 scp -r rendezvous root@rv.example.org:/root/rendezvous
 ssh root@rv.example.org bash /root/rendezvous/deploy/setup-server.sh --dry-run
@@ -454,6 +463,9 @@ ssh root@rv.example.org bash /root/rendezvous/deploy/setup-server.sh
 
 The dry run says whether Caddy would be reloaded or restarted and whether
 coturn, the service or the WebSocket relay would be restarted.
+`setup-server.sh` restarts only what had a file of its own change; when only
+the code changed, restart the two by hand:
+`systemctl restart nereus-rendezvous nereus-relay`.
 
 ## The checks
 
@@ -472,8 +484,8 @@ a real server:
 - `rendezvous/tests/caddy-check.sh`: `deploy/Caddyfile`: `caddy validate`,
   a WebSocket through Caddy to the service by host name with each client's
   own address, Apple's exact opening request, the plain answer, what an
-  HTTP/2 client gets, the WebSocket relay at `/v1/relay` through Caddy,
-  and no UDP port.
+  HTTP/2 client gets, the WebSocket relay at `/v1/relay` through Caddy
+  (and how old a slow reader's datagrams get), and no UDP port.
 - `rendezvous/tests/memory-check.sh`: the service and Caddy loaded with 2000
   registered Cores and 256 clients, then with unfinished messages and Cores
   that stop reading, measured (the numbers in section 9.1).

@@ -13,10 +13,14 @@ Nothing here writes to disk. Everything lives in memory; a restart forgets
 every session, and a leg whose grant has not yet expired simply joins
 again.
 
-Each leg has its own bounded send queue that drops its oldest frame when a
-new one would not fit, and its own writer task, so a leg that reads slowly
-loses its oldest datagrams (which SCTP sees as loss) instead of growing
-memory or holding up the other leg.
+Traffic runs in two lanes, one per stream tag (1 control, 2 media): each
+lane has its own rate cap each way and, towards each leg, its own bounded
+queue that drops its oldest frame when a new one would not fit. A leg's
+writer takes the lanes in turn, so a burst in one lane never spends the
+other's budget, evicts its datagrams or holds them back (section 12.5).
+Lanes, caps and queues belong to the session, so a leg that joins again
+keeps them. A leg that reads slowly loses its oldest datagrams (which SCTP
+sees as loss) instead of growing memory or holding up the other leg.
 """
 
 from __future__ import annotations
@@ -25,7 +29,7 @@ import asyncio
 import collections
 import datetime
 import logging
-from typing import Any, Deque, Dict, Optional, Set
+from typing import Any, Deque, Dict, Optional, Set, Tuple
 
 from nereus_rendezvous import relaygrant
 from nereus_rendezvous.clock import RealClock, TimerHandle
@@ -38,6 +42,9 @@ log = logging.getLogger("nereus_relay")
 # Section 12.3: the frame's first byte.
 TAG_CONTROL = 0x01
 TAG_MEDIA = 0x02
+# The lanes the relay carries. A data tag from 3 to 0x7F is reserved: the
+# relay drops it (and counts it) rather than forwarding it (section 12.3).
+LANES = (TAG_CONTROL, TAG_MEDIA)
 DATA_TAG_MAX = 0x7F
 TAG_JOIN = 0x80
 TAG_READY = 0x81
@@ -58,6 +65,7 @@ END_CODES = (
     "ended",
     "full",
     "tooManyConnections",
+    "tooManySessions",
     "replaced",
     "peerGone",
     "idle",
@@ -189,29 +197,48 @@ class _Close:
 
 
 class Session:
-    def __init__(self, sid: bytes, expires: int, now_ms: int, rate: int) -> None:
+    def __init__(self, sid: bytes, station: bytes, expires: int, now_ms: int, config: Config) -> None:
         self.sid = sid
+        self.station = station
         self.expires = expires
         self.started_ms = now_ms
-        # The rate cap each way, kept by the session rather than the
-        # connection, so a leg that joins again does not start a fresh
-        # bucket.
-        self.buckets: Dict[int, TokenBucket] = {side: TokenBucket(rate, now_ms) for side in relaygrant.LEGS}
+        # Section 12.5: a rate cap for each (sending side, lane) and a queue
+        # for each (receiving side, lane), kept by the session so a leg that
+        # joins again keeps them.
+        self.buckets: Dict[Tuple[int, int], TokenBucket] = {
+            (side, lane): TokenBucket(config.rate_bytes_per_second, now_ms)
+            for side in relaygrant.LEGS
+            for lane in LANES
+        }
+        self.queues: Dict[Tuple[int, int], DropOldestQueue] = {
+            (side, lane): DropOldestQueue(config.queue_frames, config.queue_bytes)
+            for side in relaygrant.LEGS
+            for lane in LANES
+        }
         self.legs: Dict[int, Optional["Leg"]] = {relaygrant.LEG_CORE: None, relaygrant.LEG_DEVICE: None}
         # A side that has not joined yet, or has left, has this long to come
-        # (back); the idle timer runs only while both legs are present.
+        # (back); idleness counts only while both legs are present.
         self.away: Dict[int, Optional[TimerHandle]] = {relaygrant.LEG_CORE: None, relaygrant.LEG_DEVICE: None}
         self.idle: Optional[TimerHandle] = None
+        self.last_activity_ms = now_ms
         self.forwarded_bytes = 0
         self.forwarded_frames = 0
         self.dropped_rate = 0
         self.dropped_queue = 0
         self.dropped_no_peer = 0
+        self.dropped_unknown = 0
         self.ended = False
+
+    def clear_side(self, side: int) -> None:
+        for lane in LANES:
+            self.queues[(side, lane)].clear()
+
+    def queued(self, side: int) -> bool:
+        return any(len(self.queues[(side, lane)]) for lane in LANES)
 
 
 class Leg:
-    """One WebSocket connection to the relay: pending until it joins, then
+    """One WebSocket connection to the relay: waiting until it joins, then
     one side of a session."""
 
     def __init__(self, relay: "Relay", transport: Any, address: str) -> None:
@@ -222,14 +249,16 @@ class Leg:
         self.side = 0
         self.joined = False
         self.counted = False
-        self.pending = False
         self.control: Deque[Any] = collections.deque()
-        self.queue = DropOldestQueue(relay.config.queue_frames, relay.config.queue_bytes)
+        self.next_lane = 0
         self.wake = asyncio.Event()
         self.closing = False
         self.aborted = False
         self.writer: Optional["asyncio.Future[None]"] = None
         self.timer: Optional[TimerHandle] = None
+        # When the send under way started, and the one timer that checks it
+        # (armed lazily, section 12.5).
+        self.sending_since: Optional[int] = None
         self.stall_timer: Optional[TimerHandle] = None
 
     def send_control(self, frame: bytes) -> None:
@@ -238,21 +267,13 @@ class Leg:
         self.control.append(frame)
         self.wake.set()
 
-    def send_data(self, frame: Any) -> int:
-        """Queue a datagram for this leg; returns how many older ones were
-        dropped to make room."""
-        dropped = self.queue.push(frame)
-        self.wake.set()
-        return dropped
-
     def end(self, code: str, close_code: int = CLOSE_NORMAL) -> None:
-        """Send END with its code, then close. Whatever data waits is
-        dropped: it is no use to a leg that is going."""
+        """Send END with its code, then close. Whatever data waits for this
+        connection is no use to it any more."""
         if self.closing:
             return
         self.control.append(bytes([TAG_END]) + code.encode("ascii"))
         self.closing = True
-        self.queue.clear()
         self.control.append(_Close(close_code))
         self.wake.set()
         self.relay.detach(self)
@@ -270,7 +291,6 @@ class Leg:
             return
         self.aborted = True
         self.closing = True
-        self.queue.clear()
         self.control.clear()
         if self.writer is not None:
             self.writer.cancel()
@@ -283,31 +303,57 @@ class Leg:
         except Exception:  # noqa: BLE001 - the peer is gone either way
             return
 
+    def _check_stall(self) -> None:
+        self.stall_timer = None
+        started = self.sending_since
+        if started is None:
+            return
+        stall = self.relay.config.send_stall_ms
+        waited = self.relay.clock.now_ms() - started
+        if waited >= stall:
+            self.stopped_reading()
+            return
+        self.stall_timer = self.relay.clock.call_later(stall - waited, self._check_stall)
+
+    def _next_data(self) -> Optional[Any]:
+        """The next datagram for this leg, the lanes taken in turn."""
+        session = self.session
+        if session is None or self.closing or session.legs.get(self.side) is not self:
+            return None
+        for i in range(len(LANES)):
+            lane = LANES[(self.next_lane + i) % len(LANES)]
+            frame = session.queues[(self.side, lane)].pop()
+            if frame is not None:
+                self.next_lane = (self.next_lane + i + 1) % len(LANES)
+                return frame
+        return None
+
     async def write_loop(self) -> None:
         try:
             while True:
                 if self.control:
                     item = self.control.popleft()
-                elif not self.closing and len(self.queue):
-                    item = self.queue.pop()
                 else:
-                    self.wake.clear()
-                    await self.wake.wait()
-                    continue
+                    item = self._next_data()
+                    if item is None:
+                        self.wake.clear()
+                        await self.wake.wait()
+                        continue
                 if isinstance(item, _Close):
                     await self.transport.close(item.code)
                     return
-                self.stall_timer = self.relay.clock.call_later(self.relay.config.send_stall_ms, self.stopped_reading)
+                self.sending_since = self.relay.clock.now_ms()
+                if self.stall_timer is None:
+                    self.stall_timer = self.relay.clock.call_later(self.relay.config.send_stall_ms, self._check_stall)
                 await self.transport.send(item)
-                self.stall_timer.cancel()
-                self.stall_timer = None
+                self.sending_since = None
         except Exception:  # noqa: BLE001 - the peer went away; the reader cleans up
             return
         finally:
+            self.sending_since = None
             if self.stall_timer is not None:
                 self.stall_timer.cancel()
                 self.stall_timer = None
-            self.queue.clear()
 
 
 class Relay:
@@ -318,15 +364,30 @@ class Relay:
         self.config = config
         self.clock = clock or RealClock()
         self.legs: Set[Leg] = set()
-        self.pending = 0
+        # Connections that have not joined and are not closing, oldest
+        # first; the oldest makes room when a new one comes and they are
+        # at max_pending (section 12.5).
+        self.waiting: "collections.OrderedDict[Leg, None]" = collections.OrderedDict()
+        # Every connection per address group, from its arrival until its
+        # handler has finished, refused and closing ones included.
         self.per_group: Dict[str, int] = {}
         self.sessions: Dict[bytes, Session] = {}
+        # Live sessions per station value (section 12.5).
+        self.per_station: Dict[bytes, int] = {}
         # Sessions that have ended, until their grant's expiry: a token of
         # an ended session never opens a new one (section 12.4).
         self.spent: Dict[bytes, int] = {}
         self.data_use = DataUse(self.clock.wall_seconds())
+        # Counters the conformance runner reads to know the relay has caught
+        # up with what it sent; nothing else uses them.
         self.frames_handled = 0
+        self.accepted = 0
+        self.finished = 0
         self._day_timer: Optional[TimerHandle] = None
+
+    @property
+    def pending(self) -> int:
+        return len(self.waiting)
 
     # ----------------------------------------------------------- lifecycle
 
@@ -367,47 +428,54 @@ class Relay:
             if not writer.done():
                 writer.cancel()
                 await asyncio.wait({writer})
-            leg.queue.clear()
+            self._uncount(leg)
+            self.finished += 1
 
     def accept(self, leg: Leg) -> None:
-        if self.pending >= self.config.max_pending:
-            leg.end("full")
-            return
-        if self.per_group.get(leg.group, 0) >= self.config.connections_per_address:
+        # Counted from now until its handler ends, refused or not, so a
+        # refused connection still closing holds its place (section 12.5).
+        self.accepted += 1
+        before = self.per_group.get(leg.group, 0)
+        leg.counted = True
+        self.per_group[leg.group] = before + 1
+        self.legs.add(leg)
+        if before >= self.config.connections_per_address:
             leg.end("tooManyConnections")
             return
-        leg.counted = True
-        leg.pending = True
-        self.pending += 1
-        self.per_group[leg.group] = self.per_group.get(leg.group, 0) + 1
-        self.legs.add(leg)
+        while len(self.waiting) >= self.config.max_pending:
+            oldest = next(iter(self.waiting))
+            oldest.end("full")
+        self.waiting[leg] = None
         leg.timer = self.clock.call_later(self.config.join_timeout_ms, lambda: leg.end("timeout"))
+
+    def _uncount(self, leg: Leg) -> None:
+        if not leg.counted:
+            return
+        leg.counted = False
+        left = self.per_group.get(leg.group, 1) - 1
+        if left > 0:
+            self.per_group[leg.group] = left
+        else:
+            self.per_group.pop(leg.group, None)
 
     def shutdown(self) -> None:
         for leg in list(self.legs):
             leg.end("shuttingDown", close_code=CLOSE_GOING_AWAY)
 
     def detach(self, leg: Leg) -> None:
-        """Forget a connection. A joined leg leaves its session's place
-        open for a rejoin (section 12.4). Safe to call more than once."""
+        """Forget a connection's part in the relay. A joined leg leaves its
+        session's place open for a rejoin (section 12.4). Safe to call more
+        than once. Its count per address group lasts until its handler
+        ends (_uncount)."""
         leg.cancel_timer()
-        if leg in self.legs:
-            self.legs.discard(leg)
-        if leg.pending:
-            leg.pending = False
-            self.pending -= 1
-        if leg.counted:
-            leg.counted = False
-            left = self.per_group.get(leg.group, 1) - 1
-            if left > 0:
-                self.per_group[leg.group] = left
-            else:
-                self.per_group.pop(leg.group, None)
+        self.legs.discard(leg)
+        self.waiting.pop(leg, None)
         session = leg.session
         leg.session = None
         if session is None or session.ended or session.legs.get(leg.side) is not leg:
             return
         session.legs[leg.side] = None
+        session.clear_side(leg.side)
         log.info("relay session %s: %s leg left", short_session(session.sid), LEG_NAMES[leg.side])
         self._stop_idle(session)
         self._start_away(session, leg.side)
@@ -432,27 +500,33 @@ class Relay:
         if tag == 0 or tag > DATA_TAG_MAX or len(frame) < 2:
             leg.end("protocolError")
             return
-        self._forward(leg, frame)
+        self._forward(leg, tag, frame)
 
-    def _forward(self, leg: Leg, frame: Any) -> None:
+    def _forward(self, leg: Leg, tag: int, frame: Any) -> None:
         """The whole of what the relay does with a datagram: it has read the
         tag (above) and takes the length; the frame goes on as it came."""
         session = leg.session
         if session is None:
             return
+        if tag not in LANES:
+            session.dropped_unknown += 1
+            return
         size = len(frame)
-        other = session.legs[other_side(leg.side)]
+        other_s = other_side(leg.side)
+        other = session.legs[other_s]
         if other is None or other.closing:
             session.dropped_no_peer += 1
             return
-        if not session.buckets[leg.side].allow(size, self.clock.now_ms()):
+        now = self.clock.now_ms()
+        if not session.buckets[(leg.side, tag)].allow(size, now):
             session.dropped_rate += 1
             return
-        session.dropped_queue += other.send_data(frame)
+        session.dropped_queue += session.queues[(other_s, tag)].push(frame)
+        other.wake.set()
         session.forwarded_bytes += size
         session.forwarded_frames += 1
         self.data_use.add(size)
-        self._touch(session)
+        session.last_activity_ms = now
 
     # ----------------------------------------------------------- joining
 
@@ -478,8 +552,12 @@ class Relay:
             if len(self.sessions) >= self.config.slots:
                 leg.end("full")
                 return
-            session = Session(grant.session, grant.expires, self.clock.now_ms(), self.config.rate_bytes_per_second)
+            if self.per_station.get(grant.station, 0) >= self.config.sessions_per_station:
+                leg.end("tooManySessions")
+                return
+            session = Session(grant.session, grant.station, grant.expires, self.clock.now_ms(), self.config)
             self.sessions[grant.session] = session
+            self.per_station[grant.station] = self.per_station.get(grant.station, 0) + 1
             self.data_use.session()
             log.info("relay session %s opened", short_session(session.sid))
             for side in relaygrant.LEGS:
@@ -493,9 +571,7 @@ class Relay:
             previous.end("replaced")
             log.info("relay session %s: %s leg replaced", short_session(session.sid), LEG_NAMES[side])
         leg.cancel_timer()
-        if leg.pending:
-            leg.pending = False
-            self.pending -= 1
+        self.waiting.pop(leg, None)
         leg.joined = True
         leg.session = session
         leg.side = side
@@ -507,18 +583,34 @@ class Relay:
         other = session.legs[other_side(side)]
         log.info("relay session %s: %s leg joined", short_session(session.sid), LEG_NAMES[side])
         leg.send_control(bytes([TAG_READY, FRAME_VERSION, 1 if other is not None else 0]))
+        if session.queued(side):
+            leg.wake.set()
         if other is not None:
             other.send_control(bytes([TAG_PEER, 1]))
-            self._touch(session)
+            session.last_activity_ms = self.clock.now_ms()
+            self._arm_idle(session)
 
     # ----------------------------------------------------------- timers
 
-    def _touch(self, session: Session) -> None:
-        """Both legs present and something happened: the idle timer starts
-        again."""
-        self._stop_idle(session)
-        if all(session.legs[s] is not None for s in relaygrant.LEGS):
-            session.idle = self.clock.call_later(self.config.idle_timeout_ms, lambda: self.end_session(session, "idle"))
+    def _arm_idle(self, session: Session) -> None:
+        """One timer for idleness, checked lazily: when it fires it looks at
+        the last activity and sets itself again for what remains, so a busy
+        session costs one timer an idle period, not one a datagram."""
+        if session.idle is not None or session.ended:
+            return
+        if not all(session.legs[s] is not None for s in relaygrant.LEGS):
+            return
+        remaining = session.last_activity_ms + self.config.idle_timeout_ms - self.clock.now_ms()
+        session.idle = self.clock.call_later(max(0, remaining), lambda: self._check_idle(session))
+
+    def _check_idle(self, session: Session) -> None:
+        session.idle = None
+        if session.ended or not all(session.legs[s] is not None for s in relaygrant.LEGS):
+            return
+        if self.clock.now_ms() - session.last_activity_ms >= self.config.idle_timeout_ms:
+            self.end_session(session, "idle")
+            return
+        self._arm_idle(session)
 
     def _stop_idle(self, session: Session) -> None:
         if session.idle is not None:
@@ -544,13 +636,19 @@ class Relay:
             if timer is not None:
                 timer.cancel()
                 session.away[side] = None
+            session.clear_side(side)
         if self.sessions.get(session.sid) is session:
             del self.sessions[session.sid]
+            left = self.per_station.get(session.station, 1) - 1
+            if left > 0:
+                self.per_station[session.station] = left
+            else:
+                self.per_station.pop(session.station, None)
         self.spent[session.sid] = session.expires
         seconds = (self.clock.now_ms() - session.started_ms) // 1000
         log.info(
             "relay session %s ended (%s) after %d s: %d frames, %.2f MB forwarded; dropped %d over the rate, "
-            "%d from full queues, %d with no peer",
+            "%d from full queues, %d with no peer, %d with a tag it does not carry",
             short_session(session.sid),
             code,
             seconds,
@@ -559,6 +657,7 @@ class Relay:
             session.dropped_rate,
             session.dropped_queue,
             session.dropped_no_peer,
+            session.dropped_unknown,
         )
         for side in relaygrant.LEGS:
             leg = session.legs[side]
@@ -566,4 +665,3 @@ class Relay:
             if leg is not None:
                 leg.session = None
                 leg.end(code)
-

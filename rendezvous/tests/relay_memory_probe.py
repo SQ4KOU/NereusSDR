@@ -16,8 +16,9 @@ each on top of the one before:
   pending    MAX_PENDING connections that have not joined (the default 64)
   sessions   SLOTS sessions, both legs joined, idle (the default 16)
   stalled    every leg stops reading while its peer sends 1500-byte
-             datagrams as fast as it can for FLOOD_S seconds, so every
-             leg's queue, library buffer and socket buffers are full
+             datagrams in both lanes as fast as it can for FLOOD_S seconds,
+             so every lane's queue, library buffer and socket buffers are
+             full
 
 It checks nothing; the numbers go into the rendezvous document.
 """
@@ -60,12 +61,13 @@ def free_port() -> int:
 
 
 async def flood(ws, seconds: float) -> int:
-    frame = b"\x02" + bytes(1500)
+    # Both lanes (control and media), so every queue of every leg fills.
+    frames = (b"\x01" + bytes(1500), b"\x02" + bytes(1500))
     sent = 0
     end = time.monotonic() + seconds
     while time.monotonic() < end:
         try:
-            await asyncio.wait_for(ws.send(frame), 0.5)
+            await asyncio.wait_for(ws.send(frames[sent % 2]), 0.5)
         except asyncio.TimeoutError:
             # The relay stopped reading this leg: its peer's queue is full
             # and this leg's inbound buffers are too.
@@ -96,7 +98,7 @@ async def probe(port: int, pid: int, secret: bytes) -> None:
         pair = []
         for leg, address in ((relaygrant.LEG_CORE, f"10.2.0.{n + 1}"), (relaygrant.LEG_DEVICE, f"10.3.0.{n + 1}")):
             ws = await connect(uri, address, max_queue=1)
-            await ws.send(b"\x80" + relaygrant.mint(secret, leg, session, expires).encode())
+            await ws.send(b"\x80" + relaygrant.mint(secret, leg, session, relaygrant.station_of(secret, "probe%021d" % n), expires).encode())
             assert (await asyncio.wait_for(ws.recv(), 5))[0] == 0x81
             pair.append(ws)
         legs.append(pair)

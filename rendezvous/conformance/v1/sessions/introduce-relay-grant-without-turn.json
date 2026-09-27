@@ -123,7 +123,7 @@
       "message": {
         "type": "relay.grant",
         "url": "wss://rv.conformance.invalid/v1/relay",
-        "token": "$relayToken:device:s",
+        "token": "$relayToken:device:s:a",
         "expires": 1800000120
       }
     },
@@ -143,7 +143,7 @@
         "type": "relay.grant",
         "from": "$ref:intro",
         "url": "wss://rv.conformance.invalid/v1/relay",
-        "token": "$relayToken:core:s",
+        "token": "$relayToken:core:s:a",
         "expires": 1800000120
       }
     }
