@@ -2,7 +2,8 @@
 
 The rendezvous lets NereusSDR (the desktop's remote window and the iPhone app)
 reach a Core it cannot address directly, and carries pairing when the two are
-not on one network. It has two parts, and a server running it has both:
+not on one network. It has three parts, and a server running it has all
+three:
 
 - **The service** (`server/`): a small Python program that introduces clients
   to Cores over a WebSocket at `wss://rv.<your domain>/`, hands out relay
@@ -11,20 +12,31 @@ not on one network. It has two parts, and a server running it has both:
   Caddy sits in front of it for TLS.
 - **The relay**: coturn, Ubuntu's own package, on UDP 3478 and UDP 443. It
   carries a session only when the two ends cannot reach each other directly.
+- **The WebSocket relay** (`server/nereus_relay/`): a second small Python
+  program, the last resort for a network that passes only web traffic. It
+  carries the same session's datagrams over a WebSocket at
+  `wss://rv.<your domain>/v1/relay`, behind the same Caddy, and runs as a
+  process of its own so relay traffic never slows the service. It admits
+  only the two ends of an introduction the Core accepted (the rendezvous
+  document, section 12).
 
 NereusSDR uses `rv.nereussdr.com`, on a server of its own. Anyone can run
 their own; this file is the whole recipe. Every default in the scripts is
 nereussdr.com's, and each one is a setting.
 
-- `server/`: the service. `rendezvous.conf.sample` lists every setting.
+- `server/`: the service and the WebSocket relay. `rendezvous.conf.sample`
+  and `relay.conf.sample` list every setting.
 - `deploy/`: `setup-server.sh` (prepares a server; safe to run again),
-  `Caddyfile` (Caddy's configuration for the service), `turnserver.conf`
-  (coturn's configuration), `nereus-rendezvous.service` (the service's
-  systemd unit), `coturn-override.conf` and `caddy-override.conf` (drop-ins
+  `Caddyfile` (Caddy's configuration for the service and the WebSocket
+  relay), `turnserver.conf` (coturn's configuration),
+  `nereus-rendezvous.service` and `nereus-relay.service` (the service's and
+  the WebSocket relay's systemd units), `coturn-override.conf` and
+  `caddy-override.conf` (drop-ins
   for the packaged coturn and Caddy units), and the data-use report
   (`data-use.py`, `nereus-data-use.service` and `nereus-data-use.timer`;
   see "Data use").
-- `deploy.sh`: publishes the service's code to the server.
+- `deploy.sh`: publishes the service's and the WebSocket relay's code to the
+  server.
 - `conformance/`: the vectors the service, the Core and the app all run.
 - `tests/`: the service's tests (`python3 -m pytest rendezvous/tests -q`) and
   the Docker checks (below).
@@ -35,13 +47,15 @@ nereussdr.com's, and each one is a setting.
 | --- | --- | --- |
 | Caddy (TLS, the WebSocket's front) | TCP 80 and 443 | the internet |
 | The service | TCP 8710 on 127.0.0.1 and ::1 | Caddy only |
+| The WebSocket relay | TCP 8711 on 127.0.0.1 and ::1 | Caddy only (`/v1/relay`) |
 | coturn (STUN and TURN) | UDP 3478 and 443, on the public IPv4 and IPv6 | the internet |
 | coturn's relays | UDP 61000 to 65535, same addresses | the internet |
 
 coturn uses no TCP port at all, and Caddy none of UDP: Caddy's HTTP/3 (which
 would take UDP 443) is switched off. The relay range sits above Linux's
 ephemeral ports (32768 to 60999), so a relay never collides with another
-program's outgoing connection.
+program's outgoing connection. The WebSocket relay opens no port of its
+own to the internet: it rides Caddy's TCP 443 under the same name.
 
 ## Self-hosting
 
@@ -91,8 +105,9 @@ ufw enable
 ```
 
 (With a cloud provider's firewall instead, open the same ports there, for
-both IPv4 and IPv6.) Nothing else needs to be reachable: the service listens
-on loopback only. `setup-server.sh` never changes the firewall.
+both IPv4 and IPv6.) Nothing else needs to be reachable: the service and the
+WebSocket relay listen on loopback only. `setup-server.sh` never changes the
+firewall.
 
 ### fail2ban for SSH
 
@@ -164,8 +179,9 @@ export RV_DEPLOY_KEY='ssh-ed25519 AAAA...your key... you@computer'
 `setup-server.sh` finds the rest itself; set `RV_PUBLIC_IPV4` and
 `RV_PUBLIC_IPV6` if it picks the wrong public addresses,
 `RV_DATA_USE_INTERFACE` to count data use on another interface than the
-default route's, and `RV_MEMORY_MB` to size the memory limits for another
-amount than the server reports. Every value that belongs to one server is
+default route's, `RV_MEMORY_MB` to size the memory limits for another
+amount than the server reports, and `RV_WS_RELAY_SLOTS` for how many
+WebSocket relay sessions run at once (16 by default; see "Limits"). Every value that belongs to one server is
 one of these settings, so the same files move to another server unchanged.
 
 ### 5. Set up the server
@@ -186,15 +202,18 @@ bash /root/rendezvous/deploy/setup-server.sh
   without letting any package start a service; coturn stays disabled until
   its configuration is in place, also when the install fails;
 - makes the deploy account with exactly the given key, the TURN secret
-  (root only, in `/etc/nereus-rendezvous/turn-secret`), and writes
-  `/etc/turnserver.conf`, `/etc/nereus-rendezvous/rendezvous.conf` and
+  and the relay secret (root only, in `/etc/nereus-rendezvous/turn-secret`
+  and `relay-secret`), and writes `/etc/turnserver.conf`,
+  `/etc/nereus-rendezvous/rendezvous.conf`, `relay.conf` and
   `/etc/caddy/Caddyfile` (the `Caddyfile` here with your `RV_HOST`, after
   `caddy validate`);
-- installs the service's unit and the drop-ins for coturn and Caddy, with
-  memory limits worked out from the server's memory (see "Memory"), and the
-  data-use report;
-- enables and starts Caddy, coturn and the report, and checks that coturn
-  holds exactly UDP 3478 and 443 and no TCP port, and Caddy no UDP port.
+- installs the service's and the WebSocket relay's units and the drop-ins
+  for coturn and Caddy, with memory limits (see "Memory"), and the data-use
+  report;
+- enables and starts Caddy, coturn and the report (and the service and the
+  WebSocket relay once their code is there), and checks that coturn holds
+  exactly UDP 3478 and 443 and no TCP port, Caddy no UDP port, and the
+  service and the WebSocket relay loopback only.
 
 Run again, it reloads Caddy after a Caddyfile change (open connections are
 kept) and restarts a service only when one of its files changed (a coturn
@@ -214,11 +233,12 @@ NEREUS_RV_TARGET=nereusrv@rv.example.org:/opt/nereus-rendezvous/ rendezvous/depl
 NEREUS_RV_TARGET=nereusrv@rv.example.org:/opt/nereus-rendezvous/ rendezvous/deploy.sh
 ```
 
-Then, as root on the server, start it (and after every later deploy):
+Then, as root on the server, start the service and the WebSocket relay
+(and after every later deploy):
 
 <!-- check: service -->
 ```sh
-systemctl restart nereus-rendezvous
+systemctl restart nereus-rendezvous nereus-relay
 ```
 
 ### 7. Check it
@@ -227,17 +247,20 @@ From anywhere:
 
 ```sh
 curl -sS https://rv.example.org/            # "This address is the NereusSDR connection service..." (426)
+curl -sS https://rv.example.org/v1/relay    # the same text, from the WebSocket relay (426)
 turnutils_stunclient -p 3478 rv4.example.org   # your address, over IPv4
 turnutils_stunclient -p 443 rv6.example.org    # the same over IPv6
 ```
 
-On the server: `systemctl status caddy coturn nereus-rendezvous`, and
-`ss -lntup` shows coturn on UDP 3478 and 443 only, the service on
-127.0.0.1:8710 and [::1]:8710, and Caddy on TCP 80 and 443.
+On the server: `systemctl status caddy coturn nereus-rendezvous
+nereus-relay`, and `ss -lntup` shows coturn on UDP 3478 and 443 only, the
+service on 127.0.0.1:8710 and [::1]:8710, the WebSocket relay on
+127.0.0.1:8711 and [::1]:8711, and Caddy on TCP 80 and 443.
 
 Then point NereusSDR at `rv.example.org` in its remote access settings.
 
-Every request to `rv.example.org` goes to the service, which upgrades a
+Every request to `rv.example.org` goes to the service, except `/v1/relay`
+and what is under it, which goes to the WebSocket relay; each upgrades a
 WebSocket and answers anything else with `426`, a short text and `Upgrade:
 websocket`. No matcher picks WebSockets out in Caddy, because Caddy compares
 header values exactly and Apple's WebSocket client sends `Upgrade:
@@ -264,8 +287,10 @@ but it needs care, which is why nereussdr.com gives it a server of its own:
 - **Leave the website's Caddy to the website.** Run `setup-server.sh` with
   `RV_MANAGE_CADDY=no`: it then neither installs Caddy nor touches its
   configuration or unit. Add the `(rv_headers)` snippet and the site block
-  from `deploy/Caddyfile` to the website's Caddyfile yourself, with your
-  host name, validate it, and reload Caddy. Consider the same drop-in
+  from `deploy/Caddyfile` (both its `handle` blocks: `/v1/relay*` to the
+  WebSocket relay, the rest to the service) to the website's Caddyfile
+  yourself, with your host name, validate it, and reload Caddy. Relay
+  legs are connections the website's Caddy holds too. Consider the same drop-in
   (`deploy/caddy-override.conf`: restart on failure, a lower OOM score, a
   GOMEMLIMIT) for the website's Caddy, since the website depends on it too.
 - **The deploy account.** `setup-server.sh` makes its own (`nereusrv`),
@@ -305,6 +330,19 @@ The service's own limits (connections, rates, sizes) are in
 document, section 9: up to 2000 registered Cores and 256 other connections
 at once.
 
+The WebSocket relay is sized by its own slots: `RV_WS_RELAY_SLOTS` (16 by
+default) is how many sessions (a Core and a device, one connection each)
+it carries at once, about as many as coturn's 128 slots carry relayed at
+both ends. Each session may send 80000 bytes a second each way, coturn's
+`max-bps`; each connection may send one datagram of up to 1500 bytes at a
+time, and a connection that falls behind loses its oldest datagrams rather
+than piling them up. A session with nothing to carry for 30 s ends, and so
+does one whose other end has been gone 30 s. The rest (connections per
+network, waiting connections) is in `server/relay.conf.sample`, with the
+reasons in the rendezvous document, section 12.5. Python on one vCPU
+carries these 16 comfortably by the prototype's figures; measuring the real
+server is still to come.
+
 ## Memory
 
 `setup-server.sh` works the memory limits out from the server's memory
@@ -315,9 +353,14 @@ rest and the service's MemoryMax 35% of it, leaving 15% as headroom. On a
 855 and 598. With 2000 idle Cores and a full client pool the service holds
 about 86 MiB and Caddy about 270 MiB, measured.
 
-If memory runs short, the kernel ends the service first (it has the higher
-OOM score), which also frees the connections Caddy holds for it; systemd
-starts it again at once and the Cores register again. Caddy restarts on its
+The WebSocket relay's MemoryMax comes from its slots instead: 32 MiB and
+2 MiB a slot, 64 MiB at 16 slots, out of the 15% headroom. Measured, it
+holds about 30 MiB with every one of its 16 sessions stalled at once.
+
+If memory runs short, the kernel ends the WebSocket relay first, then the
+service (they have the higher OOM scores), which also frees the connections
+Caddy holds for them; systemd starts each again at once, the Cores register
+again and relay connections join again. Caddy restarts on its
 own after any failure. The rendezvous document, section 9.1, has the
 measurements and the arithmetic at 1 GB and 2 GB.
 
@@ -345,32 +388,46 @@ counted (the line says when it started counting); and the month is UTC's,
 which may not be the provider's billing month. It changes nothing on the
 server and needs no package beyond Python.
 
+The WebSocket relay also counts what it carries itself: a journal line at
+the end of each session (how long it ran, how much it forwarded, and how
+many datagrams it dropped over the rate, from a full queue or with no one
+at the other end), and one a day with the day's total
+(`journalctl -u nereus-relay | grep 'data use'`). Those bytes are part of
+the server's total above as well.
+
 
 ## Rotating the secret
 
-The service and coturn share one secret. To replace it (for example if the
-file may have been read by someone else):
+The service and coturn share one secret, and the service and the WebSocket
+relay another. To replace both (for example if a file may have been read by
+someone else):
 
 ```sh
 bash /root/rendezvous/deploy/setup-server.sh --rotate-secret
 ```
 
-It writes a new secret and restarts coturn and the service (`--dry-run
---rotate-secret` says so first). The restart drops the relays in use;
-NereusSDR makes new ones with new credentials. Registered Cores reconnect by
-themselves. The one backup it keeps of `/etc/turnserver.conf` holds the
+It writes new secrets and restarts coturn, the service and the WebSocket
+relay (`--dry-run --rotate-secret` says so first). The restart drops the
+relays in use; NereusSDR makes new ones with new credentials and grants.
+Registered Cores reconnect by themselves. The one backup it keeps of `/etc/turnserver.conf` holds the
 previous secret, readable by root alone, until the next change.
 
 ## What the logs contain
 
-Both log to the systemd journal only (`journalctl -u nereus-rendezvous`,
-`journalctl -u coturn`); neither writes a log file.
+All three log to the systemd journal only (`journalctl -u nereus-rendezvous`,
+`journalctl -u nereus-relay`, `journalctl -u coturn`); none writes a log
+file.
 
 - **The service** logs events (a Core registered or left, an introduction and
   how it ended, a pairing code's number claimed or released, a mailbox opened
   or closed, an error code) with at most the first six characters of an id.
   Never an address, a whole id, a label, the secret, a credential, an offer
   or answer, a candidate, a pairing message or a pairing code's number.
+- **The WebSocket relay** logs a session opening and ending (with its
+  counts, as in "Data use"), each end joining, leaving or being replaced,
+  and the day's data use, with at most the first six characters of a
+  session's id. Never an address, a whole session id, a grant's token, the
+  secret, or anything it carries.
 - **coturn** at its default level logs its start-up, and two kinds of line
   about clients: a refused credential, naming the username (which is an
   expiry time and a Core's whole id, never a device or a person), and a
@@ -383,7 +440,7 @@ Both log to the systemd journal only (`journalctl -u nereus-rendezvous`,
 ## Updating
 
 Pull NereusSDR, then `rendezvous/deploy.sh` and `systemctl restart
-nereus-rendezvous` for the service. For configuration changes, copy the
+nereus-rendezvous nereus-relay` for the service and the WebSocket relay. For configuration changes, copy the
 tree again the same way as step 3 (remove the old copy first, or it nests),
 with the same settings as step 4 (`RV_DEPLOY_KEY` may be left out once the
 account exists):
@@ -396,7 +453,7 @@ ssh root@rv.example.org bash /root/rendezvous/deploy/setup-server.sh
 ```
 
 The dry run says whether Caddy would be reloaded or restarted and whether
-coturn or the service would be restarted.
+coturn, the service or the WebSocket relay would be restarted.
 
 ## The checks
 
@@ -409,14 +466,19 @@ a real server:
   starts it: its ports, STUN, allocations on both ports in both families
   with `turnutils_uclient`, refused credentials, every blocked destination,
   the quotas, credentials minted by the running service, what happens to a
-  relay whose credential expires, and its logs.
+  relay whose credential expires, and its logs; and the relay grants the
+  running service mints, joined on the WebSocket relay as setup configured
+  it.
 - `rendezvous/tests/caddy-check.sh`: `deploy/Caddyfile`: `caddy validate`,
   a WebSocket through Caddy to the service by host name with each client's
   own address, Apple's exact opening request, the plain answer, what an
-  HTTP/2 client gets, and no UDP port.
+  HTTP/2 client gets, the WebSocket relay at `/v1/relay` through Caddy,
+  and no UDP port.
 - `rendezvous/tests/memory-check.sh`: the service and Caddy loaded with 2000
   registered Cores and 256 clients, then with unfinished messages and Cores
   that stop reading, measured (the numbers in section 9.1).
+  `rendezvous/tests/relay_memory_probe.py` measures the WebSocket relay the
+  same way, with every session stalled (section 12.5).
 - `rendezvous/tests/readme-check.sh`: a fresh container set up by following
-  this file (the blocks marked for it), then used as both the service and
-  the relay.
+  this file (the blocks marked for it), then used as the service, the
+  relay and the WebSocket relay.

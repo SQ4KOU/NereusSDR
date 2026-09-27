@@ -1,0 +1,11 @@
+{
+  "from": "server",
+  "to": "station",
+  "wire": {
+    "type": "relay.grant",
+    "url": "wss://rv.nereussdr.com/v1/relay",
+    "token": "AQEAAQIDBAUGBwgJCgsMDQ4Pa0nSeLeZVPTsf7JprNk5ro7W2RbefXVjuGF4oLw32rpnxYp_",
+    "expires": 1800000120
+  },
+  "decodes": false
+}

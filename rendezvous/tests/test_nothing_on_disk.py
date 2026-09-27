@@ -186,8 +186,100 @@ FORBIDDEN_IMPORTS = {"sqlite3", "shelve", "pickle", "dbm", "tempfile", "shutil"}
 FORBIDDEN_ATTRS = {"write_text", "write_bytes", "makedirs", "mkdir", "FileHandler", "RotatingFileHandler", "dump"}
 
 
+def test_the_running_relay_writes_nothing_and_logs_no_secret(tmp_path):
+    """The relay (rendezvous document section 12.6), as its own process as
+    systemd runs it: after a session with data both ways, a rejoin and a
+    stop, the sandbox is still empty and its log holds no token, secret,
+    whole session id, address or payload."""
+    from nereus_rendezvous import relaygrant
+    from relay_helpers import connect, recv
+
+    sandbox = tmp_path / "sandbox"
+    (sandbox / "home").mkdir(parents=True)
+    (sandbox / "tmp").mkdir()
+    etc = tmp_path / "etc"
+    etc.mkdir()
+    secret = os.urandom(24).hex()
+    (etc / "relay-secret").write_text(secret + "\n")
+    port = _free_port()
+    (etc / "relay.conf").write_text(
+        "[relay]\n"
+        f"listen = 127.0.0.1:{port}\n"
+        f"relay_secret_file = {etc / 'relay-secret'}\n"
+        "log_level = debug\n"
+    )
+    before_etc = _tree(etc)
+    env = dict(os.environ)
+    env.update(
+        HOME=str(sandbox / "home"),
+        TMPDIR=str(sandbox / "tmp"),
+        PYTHONPATH=os.pathsep.join([str(SERVER)] + [p for p in sys.path if p and Path(p).is_dir()]),
+        PYTHONDONTWRITEBYTECODE="1",
+    )
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "nereus_relay", "--config", str(etc / "relay.conf")],
+        cwd=str(sandbox),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    session = os.urandom(relaygrant.SESSION_BYTES)
+    expires = int(time.time()) + 120
+    core_token = relaygrant.mint(secret.encode(), relaygrant.LEG_CORE, session, expires)
+    device_token = relaygrant.mint(secret.encode(), relaygrant.LEG_DEVICE, session, expires)
+    marker = b"RELAY-PAYLOAD-MARKER"
+
+    async def drive():
+        uri = f"ws://127.0.0.1:{port}/v1/relay"
+        core = await connect(uri, "198.51.100.88")
+        await core.send(b"\x80" + core_token.encode())
+        assert (await recv(core))[0] == 0x81
+        device = await connect(uri, "2001:db8:88::1")
+        await device.send(b"\x80" + device_token.encode())
+        assert (await recv(device)) == b"\x81\x01\x01"
+        assert (await recv(core)) == b"\x82\x01"
+        await device.send(b"\x02" + marker)
+        assert (await recv(core)) == b"\x02" + marker
+        await device.close()
+        assert (await recv(core)) == b"\x82\x00"
+        device = await connect(uri, "2001:db8:88::1")
+        await device.send(b"\x80" + device_token.encode())
+        assert (await recv(device)) == b"\x81\x01\x01"
+        await core.send(b"\x01" + marker)
+        assert (await recv(core)) == b"\x82\x01"
+        assert (await recv(device)) == b"\x01" + marker
+
+    try:
+        deadline = time.time() + 10
+        while True:
+            try:
+                with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+                    break
+            except OSError:
+                if time.time() > deadline or proc.poll() is not None:
+                    proc.kill()
+                    out, err = proc.communicate()
+                    raise AssertionError("the relay did not start: " + (out + err).decode(errors="replace"))
+                time.sleep(0.05)
+        asyncio.run(drive())
+    finally:
+        proc.send_signal(signal.SIGTERM)
+        out, err = proc.communicate(timeout=15)
+    assert proc.returncode == 0, err.decode(errors="replace")
+    assert [p for p in sandbox.rglob("*") if not p.is_dir()] == []
+    assert list((sandbox / "home").iterdir()) == [] and list((sandbox / "tmp").iterdir()) == []
+    assert _tree(etc) == before_etc
+    log = (out + err).decode("utf-8", errors="replace")
+    assert "relay session" in log and "relay data use" in log
+    whole = relaygrant.to_b64url(session)
+    assert whole[:6] in log
+    for value in (secret, core_token, device_token, whole, marker.decode(), "198.51.100.88", "2001:db8:88", "127.0.0.1"):
+        assert value not in log, f"the log holds a value it must not: {value[:12]}"
+
+
 def test_the_source_opens_no_file_for_writing():
-    for path in sorted((SERVER / "nereus_rendezvous").glob("*.py")):
+    paths = sorted((SERVER / "nereus_rendezvous").glob("*.py")) + sorted((SERVER / "nereus_relay").glob("*.py"))
+    for path in paths:
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):

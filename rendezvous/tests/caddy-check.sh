@@ -22,6 +22,11 @@
 #   5. What an HTTP/2 client gets: a plain GET, and whether Caddy offers
 #      WebSockets over HTTP/2 (RFC 8441) and what one gets.
 #   6. Caddy holds no UDP port (HTTP/3 stays off: UDP 443 is coturn's).
+#   7. wss://rv.nereussdr.com/v1/relay reaches the WebSocket relay
+#      (nereus-relay on loopback 8711; rendezvous document section 12): a
+#      Core leg and a device leg of one grant join, datagrams up to the
+#      1500-byte cap cross both ways unchanged, the relay counts legs by
+#      the client's own address, and a plain request there gets 426.
 #
 # Certificates come from Caddy's own local authority, switched on for the
 # test only (local_certs in a copy of the Caddyfile); the real file is
@@ -118,6 +123,32 @@ cat /run/rv/log >&2
 exit 1
 EOS
 pass "the service listens on 127.0.0.1:8710 and [::1]:8710"
+
+# The WebSocket relay, as nobody, on loopback, with two connections allowed
+# per address for step 7.
+docker exec -i "$server" bash -s <<'EOS'
+set -euo pipefail
+python3 -c 'import secrets; print(secrets.token_hex(32))' > /run/rv/relay-secret
+chown nobody /run/rv/relay-secret && chmod 600 /run/rv/relay-secret
+cp /run/rv/relay-secret /run/rv/relay-secret.probe && chmod 644 /run/rv/relay-secret.probe
+cat > /run/rv/relay.conf <<'CONF'
+[relay]
+listen = 127.0.0.1:8711 [::1]:8711
+relay_secret_file = /run/rv/relay-secret
+[limits]
+connections_per_address = 2
+CONF
+cd / && PYTHONPATH=/repo/rendezvous/server PYTHONDONTWRITEBYTECODE=1 \
+    setsid runuser -u nobody -- python3 -m nereus_relay --config /run/rv/relay.conf \
+    > /run/rv/relay.log 2>&1 < /dev/null &
+for _ in $(seq 50); do
+    grep -q "listening on 2 addresses" /run/rv/relay.log 2>/dev/null && exit 0
+    sleep 0.2
+done
+cat /run/rv/relay.log >&2
+exit 1
+EOS
+pass "the WebSocket relay listens on 127.0.0.1:8711 and [::1]:8711"
 
 caddy_run() {
     # $1: start or reload; $2: the config.
@@ -229,6 +260,29 @@ else:
 PY
 )" || fail "the HTTP/2 probe: ${h2}"
 pass "HTTP/2: a plain GET gets 426; ${h2_summary}"
+
+# 7. The WebSocket relay through Caddy.
+docker cp "${server}:/run/rv/relay-secret.probe" "${work}/relay-secret"
+docker cp "${work}/relay-secret" "${client_a}:/tmp/relay-secret"
+relay_out="$(docker exec "$client_a" python3 /repo/rendezvous/tests/caddy_probe.py relay wss://rv.nereussdr.com/v1/relay \
+    --cacert /tmp/ca.crt --secret-file /tmp/relay-secret --extra 1)"
+printf '%s\n' "$relay_out" | sed 's/^/# relay: /'
+python3 - "$relay_out" <<'PY' || fail "the relay through Caddy did not behave as expected"
+import json, sys
+r = json.loads(sys.argv[1])
+assert r["coreReady"] == "810100" and r["deviceReady"] == "810101" and r["corePeer"] == "8201", r
+assert r["crossed"] == 16, r
+# Both legs came from this client, whatever X-Forwarded-For each claimed:
+# a third connection from it is over the cap of two.
+assert r["extra"] == ["tooManyConnections"], r
+PY
+docker exec "$client_a" curl -sS --http1.1 --cacert /tmp/ca.crt -o /tmp/relay-body -D /tmp/relay-head \
+    https://rv.nereussdr.com/v1/relay
+docker exec "$client_a" cat /tmp/relay-head | tr -d '\r' | grep -Eq '^HTTP/1.1 426' || fail "a plain request to /v1/relay did not get 426"
+if docker exec "$server" grep -Eq "$(cat "${work}/relay-secret")|198\.51\.100\.30|203\.0\.113" /run/rv/relay.log; then
+    fail "the relay's log holds its secret or an address"
+fi
+pass "wss://rv.nereussdr.com/v1/relay reaches the WebSocket relay through Caddy: a Core leg and a device leg of one grant join (ready, peer present), datagrams of 1 to 1500 bytes with both stream tags cross both ways unchanged, a third connection from the same client is refused whatever X-Forwarded-For it claims (tooManyConnections), a plain request gets 426, and the relay's log holds no secret or address"
 
 # 6. HTTP/3 stays off.
 udp="$(docker exec -i "$server" python3 - <<'PY'

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
 # setup-server.sh: prepare a dedicated server for the NereusSDR rendezvous
-# service, its relay (coturn) and the Caddy in front of the service.
+# service, its relays (coturn, and the WebSocket relay nereus-relay) and the
+# Caddy in front of the service and the WebSocket relay.
 #
 # Run it as root on the server itself, from a copy of rendezvous/deploy/
 # (it reads its sibling files). It is idempotent: every step looks at the
@@ -16,8 +17,8 @@
 #   --no-start       install and configure, but start, stop or enable no
 #                    service (the default on a host not booted with systemd,
 #                    such as the containers of the checks in rendezvous/tests/)
-#   --rotate-secret  make a new TURN secret (see rendezvous/README.md,
-#                    "Rotating the secret")
+#   --rotate-secret  make a new TURN secret and a new relay secret (see
+#                    rendezvous/README.md, "Rotating the secret")
 #
 # Settings, as environment variables (defaults are nereussdr.com's). Every
 # value that belongs to one server is here, never in the files beside this
@@ -28,6 +29,8 @@
 #   RV_PUBLIC_IPV4           the server's public IPv4      found on the host
 #   RV_PUBLIC_IPV6           the server's public IPv6      found on the host
 #   RV_RELAY_SLOTS           relays at once (total-quota)  128
+#   RV_WS_RELAY_SLOTS        WebSocket relay sessions at   16
+#                            once (nereus-relay's slots)
 #   RV_TRANSFER_GB_PER_MONTH the data-use report's         1000
 #                            threshold, GB a month (it
 #                            caps nothing)
@@ -65,18 +68,20 @@
 #      without letting a package start a service, and leave coturn disabled
 #      until step 9 (also when the install fails).
 #   3. Make the deploy account, with exactly the given SSH key.
-#   4. Make the TURN secret (root only) once, and coturn's DTLS key pair.
+#   4. Make the TURN secret and the relay secret (root only) once, and
+#      coturn's DTLS key pair.
 #   5. Write /etc/turnserver.conf: turnserver.conf from this directory plus
 #      the lines only this server knows (secret, addresses, sizing).
-#   6. Write /etc/nereus-rendezvous/rendezvous.conf.
+#   6. Write /etc/nereus-rendezvous/rendezvous.conf and relay.conf.
 #   7. Write /etc/caddy/Caddyfile from Caddyfile here, after caddy validate.
-#   8. Install the units and drop-ins (the service and its memory ceiling,
-#      coturn's, Caddy's, the data-use report and its timer) and make
-#      /opt/nereus-rendezvous for deploy.sh.
-#   9. Enable Caddy, coturn, the service and the timer; start what is
-#      stopped, reload Caddy after a Caddyfile change, and restart only what
-#      had a unit or configuration change (a coturn restart drops every live
-#      relay); check exactly which ports each one holds.
+#   8. Install the units and drop-ins (the service and the WebSocket relay
+#      with their memory ceilings, coturn's, Caddy's, the data-use report
+#      and its timer) and make /opt/nereus-rendezvous for deploy.sh.
+#   9. Enable Caddy, coturn, the service, the WebSocket relay and the timer;
+#      start what is stopped, reload Caddy after a Caddyfile change, and
+#      restart only what had a unit or configuration change (a coturn
+#      restart drops every live relay, a WebSocket relay restart makes every
+#      leg join again); check exactly which ports each one holds.
 #  10. Print a summary.
 #
 # It never changes the firewall (the README lists the rules) or the SSH
@@ -87,16 +92,21 @@ umask 022
 
 readonly ETC_DIR="/etc/nereus-rendezvous"
 readonly SECRET_FILE="${ETC_DIR}/turn-secret"
+readonly RELAY_SECRET_FILE="${ETC_DIR}/relay-secret"
 readonly COTURN_DIR="${ETC_DIR}/coturn"
 readonly DTLS_CERT="${COTURN_DIR}/cert.pem"
 readonly DTLS_KEY="${COTURN_DIR}/key.pem"
 readonly SERVICE_CONF="${ETC_DIR}/rendezvous.conf"
+readonly RELAY_CONF="${ETC_DIR}/relay.conf"
 readonly TURNSERVER_CONF="/etc/turnserver.conf"
 readonly CADDYFILE_DEST="/etc/caddy/Caddyfile"
 readonly CODE_DIR="/opt/nereus-rendezvous"
 readonly UNIT_NAME="nereus-rendezvous.service"
 readonly UNIT_DEST="/etc/systemd/system/${UNIT_NAME}"
 readonly MEMORY_DROPIN_DEST="/etc/systemd/system/${UNIT_NAME}.d/memory.conf"
+readonly RELAY_UNIT_NAME="nereus-relay.service"
+readonly RELAY_UNIT_DEST="/etc/systemd/system/${RELAY_UNIT_NAME}"
+readonly RELAY_MEMORY_DROPIN_DEST="/etc/systemd/system/${RELAY_UNIT_NAME}.d/memory.conf"
 readonly DROPIN_DEST="/etc/systemd/system/coturn.service.d/nereus.conf"
 readonly CADDY_DROPIN_DEST="/etc/systemd/system/caddy.service.d/nereus.conf"
 readonly USE_SERVICE_DEST="/etc/systemd/system/nereus-data-use.service"
@@ -104,7 +114,10 @@ readonly USE_TIMER_DEST="/etc/systemd/system/nereus-data-use.timer"
 readonly USE_SCRIPT_DEST="/usr/local/libexec/nereus-rendezvous/data-use"
 readonly USE_CONF="${ETC_DIR}/data-use.conf"
 readonly CREDENTIAL_PATH="/run/credentials/${UNIT_NAME}/turn-secret"
+readonly RELAY_CREDENTIAL_PATH="/run/credentials/${UNIT_NAME}/relay-secret"
+readonly RELAY_OWN_CREDENTIAL_PATH="/run/credentials/${RELAY_UNIT_NAME}/relay-secret"
 readonly SERVICE_PORT=8710
+readonly WS_RELAY_PORT=8711
 readonly RELAY_PORTS=(3478 443)
 readonly PACKAGES=(coturn python3 python3-websockets python3-cryptography rsync)
 # The site address in the repository's Caddyfile, replaced by RV_HOST.
@@ -124,6 +137,11 @@ readonly CADDY_SOURCES="/etc/apt/sources.list.d/caddy-stable.list"
 # about 32 sessions relayed at one end or 16 at both (rendezvous document
 # section 8). The one number to change for the relay's size.
 readonly DEFAULT_RELAY_SLOTS=128
+# How many WebSocket relay sessions (one Core leg and one device leg each)
+# nereus-relay serves at once: its slots. 16 matches coturn's 128 slots,
+# about 16 sessions relayed at both ends, and what one vCPU carries in
+# Python (rendezvous document section 12.5).
+readonly DEFAULT_WS_RELAY_SLOTS=16
 # The data-use report's threshold, in GB (10^9 bytes) a month: a warning
 # line in the journal once the server has sent more than this in the
 # calendar month. It caps nothing.
@@ -140,6 +158,13 @@ readonly MEMORY_RESERVE_MB=256
 readonly CADDY_SHARE_PERCENT=50
 readonly SERVICE_SHARE_PERCENT=35
 readonly MEMORY_MIN_MB=768
+# The WebSocket relay's ceiling (MemoryMax) comes from its slots, not the
+# server's memory: 32 MiB for Python and the idle relay, and 2 MiB a slot,
+# about four times what a session with both legs stalled was seen to hold
+# (rendezvous document section 12.5). 64 MiB at the default 16 slots, taken
+# from the 15% headroom above.
+readonly WS_RELAY_MEMORY_BASE_MB=32
+readonly WS_RELAY_MEMORY_PER_SLOT_MB=2
 
 # Keys only this script writes into /etc/turnserver.conf. turnserver.conf
 # in the repository must not set any of them.
@@ -194,6 +219,7 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly script_dir
 readonly repo_turnserver_conf="${script_dir}/turnserver.conf"
 readonly repo_unit="${script_dir}/${UNIT_NAME}"
+readonly repo_relay_unit="${script_dir}/${RELAY_UNIT_NAME}"
 readonly repo_dropin="${script_dir}/coturn-override.conf"
 readonly repo_caddy_dropin="${script_dir}/caddy-override.conf"
 readonly repo_caddyfile="${script_dir}/Caddyfile"
@@ -205,6 +231,7 @@ rv_host="${RV_HOST:-rv.nereussdr.com}"
 relay_host4="${RV_RELAY_HOST4:-rv4.nereussdr.com}"
 relay_host6="${RV_RELAY_HOST6:-rv6.nereussdr.com}"
 relay_slots="${RV_RELAY_SLOTS:-$DEFAULT_RELAY_SLOTS}"
+ws_relay_slots="${RV_WS_RELAY_SLOTS:-$DEFAULT_WS_RELAY_SLOTS}"
 transfer_gb="${RV_TRANSFER_GB_PER_MONTH:-$DEFAULT_TRANSFER_GB_PER_MONTH}"
 deploy_user="${RV_DEPLOY_USER:-nereusrv}"
 deploy_key="${RV_DEPLOY_KEY:-}"
@@ -425,7 +452,7 @@ if [[ "$os_id" != "ubuntu" ]]; then
 fi
 command -v python3 >/dev/null 2>&1 || die "python3 is not installed (it is on every Ubuntu server image)"
 command -v runuser >/dev/null 2>&1 || die "runuser (util-linux) is not installed"
-for f in "$repo_turnserver_conf" "$repo_unit" "$repo_dropin" "$repo_caddy_dropin" "$repo_caddyfile" \
+for f in "$repo_turnserver_conf" "$repo_unit" "$repo_relay_unit" "$repo_dropin" "$repo_caddy_dropin" "$repo_caddyfile" \
         "$repo_use_service" "$repo_use_timer" "$repo_use_script"; do
     [[ -f "$f" && -r "$f" ]] || die "missing ${f}; run this from a whole copy of rendezvous/deploy/"
 done
@@ -449,6 +476,7 @@ for name in "$rv_host" "$relay_host4" "$relay_host6"; do
     [[ "$name" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] || die "not a host name: ${name}"
 done
 [[ "$relay_slots" =~ ^[1-9][0-9]*$ ]] || die "RV_RELAY_SLOTS must be a whole number, at least 1 (got ${relay_slots})"
+[[ "$ws_relay_slots" =~ ^[1-9][0-9]*$ ]] || die "RV_WS_RELAY_SLOTS must be a whole number, at least 1 (got ${ws_relay_slots})"
 [[ "$transfer_gb" =~ ^[1-9][0-9]*$ ]] || die "RV_TRANSFER_GB_PER_MONTH must be a whole number of GB (got ${transfer_gb})"
 [[ "$manage_caddy" == yes || "$manage_caddy" == no ]] || die "RV_MANAGE_CADDY must be yes or no (got ${manage_caddy})"
 [[ "$deploy_user" =~ ^[a-z_][a-z0-9_-]*$ ]] || die "not an account name: ${deploy_user}"
@@ -490,7 +518,9 @@ memory_mb="${RV_MEMORY_MB:-$(awk '/^MemTotal:/ { print int($2 / 1024) }' /proc/m
 (( memory_mb >= MEMORY_MIN_MB )) || die "${memory_mb} MiB of memory is too little; the rendezvous needs at least ${MEMORY_MIN_MB} (rendezvous document section 9.1)"
 caddy_limit_mb=$(( (memory_mb - MEMORY_RESERVE_MB) * CADDY_SHARE_PERCENT / 100 ))
 service_limit_mb=$(( (memory_mb - MEMORY_RESERVE_MB) * SERVICE_SHARE_PERCENT / 100 ))
+ws_relay_limit_mb=$(( WS_RELAY_MEMORY_BASE_MB + ws_relay_slots * WS_RELAY_MEMORY_PER_SLOT_MB ))
 note "memory: ${memory_mb} MiB; ${MEMORY_RESERVE_MB} kept for the system and coturn; Caddy GOMEMLIMIT ${caddy_limit_mb} MiB; the service MemoryMax ${service_limit_mb} MiB"
+note "WebSocket relay: ${ws_relay_slots} sessions at once, 80000 bytes/s each way per session, MemoryMax ${ws_relay_limit_mb} MiB"
 
 data_use_iface="${RV_DATA_USE_INTERFACE:-$(default_interface)}"
 [[ -n "$data_use_iface" ]] || die "no default route found for the data-use report; set RV_DATA_USE_INTERFACE"
@@ -636,12 +666,13 @@ EOF
 fi
 
 # ---------------------------------------------------------------------------
-log "4/10 TURN secret and coturn's DTLS key pair"
+log "4/10 TURN secret, relay secret and coturn's DTLS key pair"
 
 # What changes, for step 9: coturn and the service are restarted only when
 # one of their own files changed.
 coturn_changed=0
 service_changed=0
+relay_changed=0
 units_changed=0
 if (( dry_run )); then
     if [[ -s "$SECRET_FILE" && "$rotate" -eq 0 ]]; then
@@ -652,6 +683,15 @@ if (( dry_run )); then
     else
         note "would make ${SECRET_FILE}"
         coturn_changed=1 service_changed=1
+    fi
+    if [[ -s "$RELAY_SECRET_FILE" && "$rotate" -eq 0 ]]; then
+        note "relay secret present"
+    elif [[ -s "$RELAY_SECRET_FILE" ]]; then
+        note "would make a new relay secret in ${RELAY_SECRET_FILE} (--rotate-secret)"
+        service_changed=1 relay_changed=1
+    else
+        note "would make ${RELAY_SECRET_FILE}"
+        service_changed=1 relay_changed=1
     fi
     if [[ -s "$DTLS_CERT" && -s "$DTLS_KEY" ]]; then
         note "key pair present"
@@ -678,6 +718,22 @@ else
     fi
     chown root:root "$SECRET_FILE"
     chmod 600 "$SECRET_FILE"
+    if [[ -s "$RELAY_SECRET_FILE" && "$rotate" -eq 0 ]]; then
+        note "relay secret present; left as it is"
+    else
+        # The same form as the TURN secret, and a different value: the
+        # service signs relay grants with it and nereus-relay checks them
+        # (rendezvous document section 12.2). Nothing else reads it.
+        staged="$(mktemp "${ETC_DIR}/.relay-secret.XXXXXX")"
+        tmp_paths+=("$staged")
+        chmod 600 "$staged"
+        python3 -c 'import secrets; print(secrets.token_hex(32))' > "$staged"
+        mv -f -- "$staged" "$RELAY_SECRET_FILE"
+        note "made a new relay secret in ${RELAY_SECRET_FILE} (root only)"
+        service_changed=1 relay_changed=1
+    fi
+    chown root:root "$RELAY_SECRET_FILE"
+    chmod 600 "$RELAY_SECRET_FILE"
     if [[ -s "$DTLS_CERT" && -s "$DTLS_KEY" ]]; then
         note "key pair present; left as it is"
     else
@@ -751,7 +807,7 @@ fi
 note "${TURNSERVER_CONF}${would}: ${result}"
 
 # ---------------------------------------------------------------------------
-log "6/10 ${SERVICE_CONF}"
+log "6/10 ${SERVICE_CONF} and ${RELAY_CONF}"
 
 {
     printf '# The NereusSDR rendezvous service on this server. Written by\n'
@@ -771,14 +827,19 @@ log "6/10 ${SERVICE_CONF}"
         done
     done
     printf '\n'
-    printf '# systemd hands the secret over here (LoadCredential=).\n'
+    printf '# systemd hands the secrets over here (LoadCredential=).\n'
     printf 'turn_secret_file = %s\n' "$CREDENTIAL_PATH"
+    printf '# The WebSocket relay behind the same name (Caddy, /v1/relay).\n'
+    printf 'relay_url = wss://%s/v1/relay\n' "$rv_host"
+    printf 'relay_secret_file = %s\n' "$RELAY_CREDENTIAL_PATH"
 } > "${work_dir}/rendezvous.conf"
 if [[ -f "${CODE_DIR}/nereus_rendezvous/config.py" ]]; then
     # Check it with the service's own reader, the secret taken from where
     # it is now rather than where systemd will put it.
-    sed "s|^turn_secret_file = .*|turn_secret_file = ${SECRET_FILE}|" "${work_dir}/rendezvous.conf" > "${work_dir}/check.conf"
-    if [[ -s "$SECRET_FILE" ]] && ! PYTHONPATH="$CODE_DIR" PYTHONDONTWRITEBYTECODE=1 python3 -c \
+    sed -e "s|^turn_secret_file = .*|turn_secret_file = ${SECRET_FILE}|" \
+        -e "s|^relay_secret_file = .*|relay_secret_file = ${RELAY_SECRET_FILE}|" \
+        "${work_dir}/rendezvous.conf" > "${work_dir}/check.conf"
+    if [[ -s "$SECRET_FILE" && -s "$RELAY_SECRET_FILE" ]] && ! PYTHONPATH="$CODE_DIR" PYTHONDONTWRITEBYTECODE=1 python3 -c \
             'import sys; from nereus_rendezvous import config; config.load(sys.argv[1])' "${work_dir}/check.conf"; then
         die "the service refuses the configuration above; ${SERVICE_CONF} was left unchanged"
     fi
@@ -788,6 +849,31 @@ if [[ "$result" == changed ]]; then
     service_changed=1
 fi
 note "${SERVICE_CONF}${would}: ${result}"
+{
+    printf '# The NereusSDR WebSocket relay on this server. Written by\n'
+    printf '# rendezvous/deploy/setup-server.sh; every key not here has the\n'
+    printf "# default in rendezvous/server/relay.conf.sample.\n\n"
+    printf '[relay]\n'
+    printf 'listen = 127.0.0.1:%s [::1]:%s\n' "$WS_RELAY_PORT" "$WS_RELAY_PORT"
+    printf 'trusted_proxies = 127.0.0.1 ::1\n'
+    printf '# systemd hands the secret over here (LoadCredential=).\n'
+    printf 'relay_secret_file = %s\n' "$RELAY_OWN_CREDENTIAL_PATH"
+    printf '\n[limits]\n'
+    printf '# RV_WS_RELAY_SLOTS.\n'
+    printf 'slots = %s\n' "$ws_relay_slots"
+} > "${work_dir}/relay.conf"
+if [[ -f "${CODE_DIR}/nereus_relay/config.py" && -s "$RELAY_SECRET_FILE" ]]; then
+    sed "s|^relay_secret_file = .*|relay_secret_file = ${RELAY_SECRET_FILE}|" "${work_dir}/relay.conf" > "${work_dir}/relay-check.conf"
+    if ! PYTHONPATH="$CODE_DIR" PYTHONDONTWRITEBYTECODE=1 python3 -c \
+            'import sys; from nereus_relay import config; config.load(sys.argv[1])' "${work_dir}/relay-check.conf"; then
+        die "the WebSocket relay refuses the configuration above; ${RELAY_CONF} was left unchanged"
+    fi
+fi
+result="$(install_file "${work_dir}/relay.conf" "$RELAY_CONF" 644 root:root)"
+if [[ "$result" == changed ]]; then
+    relay_changed=1
+fi
+note "${RELAY_CONF}${would}: ${result}"
 
 # ---------------------------------------------------------------------------
 log "7/10 ${CADDYFILE_DEST}"
@@ -826,10 +912,16 @@ printf 'RV_DATA_USE_INTERFACE=%s\nRV_TRANSFER_GB_PER_MONTH=%s\n' "$data_use_ifac
     printf '# (%s MiB; the formula is in the script and the rendezvous document,\n' "$memory_mb"
     printf '# section 9.1).\n[Service]\nMemoryMax=%sM\n' "$service_limit_mb"
 } > "${work_dir}/memory.conf"
+{
+    printf '# Written by rendezvous/deploy/setup-server.sh from the WebSocket relay'"'"'s\n'
+    printf '# slots (%s; %s MiB and %s MiB a slot, as the script and the rendezvous\n' \
+        "$ws_relay_slots" "$WS_RELAY_MEMORY_BASE_MB" "$WS_RELAY_MEMORY_PER_SLOT_MB"
+    printf '# document, section 12.5, explain).\n[Service]\nMemoryMax=%sM\n' "$ws_relay_limit_mb"
+} > "${work_dir}/relay-memory.conf"
 sed "s|@GOMEMLIMIT@|${caddy_limit_mb}MiB|" "$repo_caddy_dropin" > "${work_dir}/caddy-override.conf"
 if ! (( dry_run )); then
     install -d -m 0755 -o root -g root "$(dirname "$DROPIN_DEST")" "$(dirname "$MEMORY_DROPIN_DEST")" \
-        "$(dirname "$USE_SCRIPT_DEST")"
+        "$(dirname "$RELAY_MEMORY_DROPIN_DEST")" "$(dirname "$USE_SCRIPT_DEST")"
     if [[ "$manage_caddy" == yes ]]; then
         install -d -m 0755 -o root -g root "$(dirname "$CADDY_DROPIN_DEST")"
     fi
@@ -849,6 +941,8 @@ place() {
 units_changed=0
 place "$repo_unit" "$UNIT_DEST" 644 service_changed units_changed
 place "${work_dir}/memory.conf" "$MEMORY_DROPIN_DEST" 644 service_changed units_changed
+place "$repo_relay_unit" "$RELAY_UNIT_DEST" 644 relay_changed units_changed
+place "${work_dir}/relay-memory.conf" "$RELAY_MEMORY_DROPIN_DEST" 644 relay_changed units_changed
 place "$repo_dropin" "$DROPIN_DEST" 644 coturn_changed units_changed
 if [[ "$manage_caddy" == yes ]]; then
     place "${work_dir}/caddy-override.conf" "$CADDY_DROPIN_DEST" 644 caddy_changed units_changed
@@ -894,6 +988,7 @@ apply_plan() {
 }
 coturn_plan="$(plan_for coturn "$coturn_changed")"
 service_plan="$(plan_for "$UNIT_NAME" "$service_changed")"
+relay_plan="$(plan_for "$RELAY_UNIT_NAME" "$relay_changed")"
 caddy_plan=keep
 if [[ "$manage_caddy" == yes ]]; then
     caddy_plan="$(plan_for caddy "$caddy_changed")"
@@ -906,6 +1001,10 @@ fi
 code_present=0
 if [[ -f "${CODE_DIR}/nereus_rendezvous/__main__.py" ]]; then
     code_present=1
+fi
+relay_code_present=0
+if [[ -f "${CODE_DIR}/nereus_relay/__main__.py" ]]; then
+    relay_code_present=1
 fi
 if (( dry_run )); then
     if [[ "$manage_caddy" == yes ]]; then
@@ -928,6 +1027,13 @@ if (( dry_run )); then
             keep) note "${UNIT_NAME} would be left running (none of its files changed)" ;;
         esac
     fi
+    if (( relay_code_present )); then
+        case "$relay_plan" in
+            restart) note "${RELAY_UNIT_NAME} would be restarted (its files changed); every relay leg joins again" ;;
+            start) note "${RELAY_UNIT_NAME} would be started" ;;
+            keep) note "${RELAY_UNIT_NAME} would be left running (none of its files changed)" ;;
+        esac
+    fi
     note "dry run: no service is started, stopped or enabled"
 elif (( no_start )); then
     note "--no-start: no service is started, stopped or enabled"
@@ -938,7 +1044,7 @@ else
     if [[ "$manage_caddy" == yes ]]; then
         enable_units caddy
     fi
-    enable_units coturn "$UNIT_NAME" nereus-data-use.timer
+    enable_units coturn "$UNIT_NAME" "$RELAY_UNIT_NAME" nereus-data-use.timer
     if [[ "$manage_caddy" == yes ]]; then
         apply_plan caddy "$caddy_plan"
     fi
@@ -948,15 +1054,21 @@ else
     else
         note "${CODE_DIR} holds no code yet: run rendezvous/deploy.sh, then: systemctl restart ${UNIT_NAME}"
     fi
+    if (( relay_code_present )); then
+        apply_plan "$RELAY_UNIT_NAME" "$relay_plan"
+    else
+        note "${CODE_DIR} holds no relay code yet: run rendezvous/deploy.sh, then: systemctl restart ${RELAY_UNIT_NAME}"
+    fi
     systemctl start nereus-data-use.timer || die "nereus-data-use.timer did not start"
     note "nereus-data-use.timer is active (a journal line a day: journalctl -u nereus-data-use)"
 fi
 
 if ! (( dry_run || no_start )); then
     # coturn: UDP 3478 and 443 on the two public addresses, and no TCP port.
-    # The service: TCP 8710 on loopback only. Caddy: no UDP (HTTP/3 off).
-    held="$(socket_holders 3478 443 "$SERVICE_PORT")"
-    note "sockets on UDP 3478, UDP 443 and TCP ${SERVICE_PORT}:"
+    # The service: TCP 8710, and the WebSocket relay TCP 8711, on loopback
+    # only. Caddy: no UDP (HTTP/3 off).
+    held="$(socket_holders 3478 443 "$SERVICE_PORT" "$WS_RELAY_PORT")"
+    note "sockets on UDP 3478, UDP 443, TCP ${SERVICE_PORT} and TCP ${WS_RELAY_PORT}:"
     printf '%s\n' "$held" | sed 's/^/      /'
     every="$(socket_holders)"
     if [[ -n "$(awk '$1 == "tcp" && $5 == "turnserver"' <<<"$every")" ]]; then
@@ -971,9 +1083,11 @@ if ! (( dry_run || no_start )); then
                 || die "coturn does not hold UDP ${port} on ${addr}"
         done
     done
-    if [[ -n "$(awk -v p="$SERVICE_PORT" '$1 == "tcp" && $2 == p && $3 != "127.0.0.1" && $3 != "::1"' <<<"$held")" ]]; then
-        die "something listens on TCP ${SERVICE_PORT} beyond loopback"
-    fi
+    for port in "$SERVICE_PORT" "$WS_RELAY_PORT"; do
+        if [[ -n "$(awk -v p="$port" '$1 == "tcp" && $2 == p && $3 != "127.0.0.1" && $3 != "::1"' <<<"$held")" ]]; then
+            die "something listens on TCP ${port} beyond loopback"
+        fi
+    done
     note "coturn holds UDP 3478 and 443 on both addresses and no TCP port; Caddy holds no UDP port"
 fi
 
@@ -988,13 +1102,14 @@ if ! (( dry_run )); then
     fi
 fi
 note "service name:  ${rv_host} (Caddy forwards it to 127.0.0.1:${SERVICE_PORT} and [::1]:${SERVICE_PORT})"
+note "ws relay:      wss://${rv_host}/v1/relay (Caddy forwards it to 127.0.0.1:${WS_RELAY_PORT} and [::1]:${WS_RELAY_PORT}); ${ws_relay_slots} sessions, MemoryMax ${ws_relay_limit_mb} MiB"
 note "relay names:   ${relay_host4} (A ${public4}), ${relay_host6} (AAAA ${public6})"
 note "relay ports:   UDP 3478 and 443; relays on UDP 61000 to 65535"
 note "relay size:    ${total_quota} slots, ${user_quota} per station id, bps-capacity ${bps_capacity} bytes/s"
 note "memory:        Caddy GOMEMLIMIT ${caddy_limit_mb} MiB, the service MemoryMax ${service_limit_mb} MiB (of ${memory_mb})"
 note "data use:      ${data_use_iface}, report threshold ${transfer_gb} GB a month"
 note "deploy:        ${deploy_user} writes ${CODE_DIR}"
-note "secret:        ${SECRET_FILE} (root only; never printed)"
+note "secrets:       ${SECRET_FILE} and ${RELAY_SECRET_FILE} (root only; never printed)"
 note ""
 note "Caddy obtains the certificate for ${rv_host} from Let's Encrypt once its A and"
 note "AAAA records point at this server and TCP 80 and 443 are open."

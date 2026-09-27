@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #
-# deploy.sh: publish the rendezvous service's code to its server with rsync.
+# deploy.sh: publish the rendezvous service's and the WebSocket relay's code
+# to their server with rsync.
 #
 # Usage:
 #   rendezvous/deploy.sh             publish the code
@@ -16,13 +17,13 @@
 # the code from there). Point NEREUS_RV_TARGET at a local directory to try it
 # without the server.
 #
-# It publishes rendezvous/server/nereus_rendezvous/ and the sample
-# configuration, nothing else: no tests, no secret, no configuration of the
-# server's own (setup-server.sh writes that). rsync runs with --delete, so
-# the destination ends up with exactly those files. It never runs
-# setup-server.sh and never restarts anything: the deploy account has no
-# root. After a publish, restart the service as root (the script prints the
-# command).
+# It publishes rendezvous/server/nereus_rendezvous/, nereus_relay/ and the
+# two sample configurations, nothing else: no tests, no secret, no
+# configuration of the server's own (setup-server.sh writes that). rsync
+# runs with --delete, so the destination ends up with exactly those files.
+# It never runs setup-server.sh and never restarts anything: the deploy
+# account has no root. After a publish, restart the service and the relay
+# as root (the script prints the command).
 #
 # As in website/deploy.sh, the rsync options are limited to ones that both
 # GNU rsync 3.x and macOS's openrsync support, and the files are sent from a
@@ -31,7 +32,8 @@
 set -euo pipefail
 
 readonly default_target="nereus-rv:/opt/nereus-rendezvous/"
-readonly required=(__init__.py __main__.py clock.py config.py identity.py limits.py protocol.py service.py transport.py turn.py)
+readonly required=(__init__.py __main__.py clock.py config.py identity.py limits.py protocol.py relaygrant.py service.py transport.py turn.py)
+readonly relay_required=(__init__.py __main__.py config.py relay.py transport.py)
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly script_dir
@@ -44,8 +46,9 @@ usage() {
     cat <<'EOF'
 Usage: rendezvous/deploy.sh [--dry-run]
 
-Publishes rendezvous/server/ (the service's code and sample configuration)
-with rsync to $NEREUS_RV_TARGET (default: nereus-rv:/opt/nereus-rendezvous/).
+Publishes rendezvous/server/ (the service's and the WebSocket relay's code
+and sample configurations) with rsync to $NEREUS_RV_TARGET (default:
+nereus-rv:/opt/nereus-rendezvous/).
 
   --dry-run   show what would change on the target; change nothing
 EOF
@@ -73,20 +76,28 @@ command -v python3 >/dev/null 2>&1 || die "python3 not found"
 for name in "${required[@]}"; do
     [[ -f "${src_dir}/nereus_rendezvous/${name}" ]] || die "missing ${src_dir}/nereus_rendezvous/${name}; refusing to deploy"
 done
+[[ -d "${src_dir}/nereus_relay" ]] || die "source directory not found: ${src_dir}/nereus_relay"
+for name in "${relay_required[@]}"; do
+    [[ -f "${src_dir}/nereus_relay/${name}" ]] || die "missing ${src_dir}/nereus_relay/${name}; refusing to deploy"
+done
 [[ -f "${src_dir}/rendezvous.conf.sample" ]] || die "missing ${src_dir}/rendezvous.conf.sample; refusing to deploy"
+[[ -f "${src_dir}/relay.conf.sample" ]] || die "missing ${src_dir}/relay.conf.sample; refusing to deploy"
 # Every module must at least parse (no bytecode is written).
-python3 - "${src_dir}/nereus_rendezvous" <<'PY' || die "a module does not parse; refusing to deploy"
+python3 - "${src_dir}/nereus_rendezvous" "${src_dir}/nereus_relay" <<'PY' || die "a module does not parse; refusing to deploy"
 import ast, pathlib, sys
-for path in sorted(pathlib.Path(sys.argv[1]).glob("*.py")):
-    ast.parse(path.read_text(encoding="utf-8"), str(path))
+for directory in sys.argv[1:]:
+    for path in sorted(pathlib.Path(directory).glob("*.py")):
+        ast.parse(path.read_text(encoding="utf-8"), str(path))
 PY
 
 staging="$(mktemp -d "${TMPDIR:-/tmp}/nereus-rv-deploy.XXXXXX")"
 trap 'rm -rf -- "$staging"' EXIT
-mkdir -p "${staging}/nereus_rendezvous"
-rsync -r -t --exclude='__pycache__' --exclude='*.pyc' --exclude='.DS_Store' \
-    "${src_dir}/nereus_rendezvous/" "${staging}/nereus_rendezvous/"
-cp -p "${src_dir}/rendezvous.conf.sample" "${staging}/"
+for package in nereus_rendezvous nereus_relay; do
+    mkdir -p "${staging}/${package}"
+    rsync -r -t --exclude='__pycache__' --exclude='*.pyc' --exclude='.DS_Store' \
+        "${src_dir}/${package}/" "${staging}/${package}/"
+done
+cp -p "${src_dir}/rendezvous.conf.sample" "${src_dir}/relay.conf.sample" "${staging}/"
 chmod -R a+rX "$staging"
 file_count="$(find "$staging" -type f | wc -l)"
 file_count="${file_count//[[:space:]]/}"
@@ -114,6 +125,7 @@ if (( dry_run )); then
 fi
 
 echo
-echo "Published. The service runs the new code once restarted, as root on the server:"
-echo "  systemctl restart nereus-rendezvous"
-echo "(Registered Cores reconnect on their own; a pairing in progress starts again.)"
+echo "Published. The service and the relay run the new code once restarted, as root on the server:"
+echo "  systemctl restart nereus-rendezvous nereus-relay"
+echo "(Registered Cores reconnect on their own; a pairing in progress starts again;"
+echo "relay legs join again with their grants.)"

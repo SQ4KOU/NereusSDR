@@ -21,6 +21,13 @@ containers, on Ubuntu's python3 and python3-websockets.
       HTTP/2 (RFC 8441, SETTINGS_ENABLE_CONNECT_PROTOCOL), the status of a
       plain GET, and, when offered, the status of an extended CONNECT for a
       WebSocket and whether the service's hello came back on it.
+
+  relay URL --cacert F --secret-file F [--extra N]
+      The WebSocket relay behind the same name (rendezvous document section
+      12): a Core leg and a device leg of one grant (minted here with the
+      relay's secret) join through Caddy, datagrams of every size up to the
+      cap cross both ways, then N more connections are opened from this
+      client and the first frame each gets within 1 s is reported.
 """
 
 from __future__ import annotations
@@ -223,6 +230,50 @@ def h2(args) -> int:
     return 0
 
 
+async def relay(args) -> int:
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "server"))
+    from nereus_rendezvous import relaygrant
+
+    context = ssl.create_default_context(cafile=args.cacert)
+    secret = open(args.secret_file, "rb").read().rstrip(b"\r\n")
+    session = os.urandom(relaygrant.SESSION_BYTES)
+    expires = int(__import__("time").time()) + 120
+    result = {}
+
+    async def leg(side, claimed):
+        ws = await _connect(args.url, ssl=context, max_size=None, **{_HEADERS: {"X-Forwarded-For": claimed}})
+        await ws.send(b"\x80" + relaygrant.mint(secret, side, session, expires).encode())
+        return ws, await asyncio.wait_for(ws.recv(), 5)
+
+    core, result["coreReady"] = await leg(relaygrant.LEG_CORE, "203.0.113.1")
+    device, result["deviceReady"] = await leg(relaygrant.LEG_DEVICE, "203.0.113.2")
+    result["corePeer"] = await asyncio.wait_for(core.recv(), 5)
+    crossed = 0
+    for size in (1, 100, 1200, 1500):
+        for tag in (1, 2):
+            frame = bytes([tag]) + os.urandom(size)
+            await device.send(frame)
+            crossed += await asyncio.wait_for(core.recv(), 5) == frame
+            await core.send(frame)
+            crossed += await asyncio.wait_for(device.recv(), 5) == frame
+    result["crossed"] = crossed
+    result["extra"] = []
+    extra = []
+    for n in range(args.extra):
+        ws = await _connect(args.url, ssl=context, **{_HEADERS: {"X-Forwarded-For": "203.0.113.%d" % (n + 10)}})
+        extra.append(ws)
+        try:
+            first = await asyncio.wait_for(ws.recv(), 1)
+            result["extra"].append(first[1:].decode() if first[:1] == b"\x83" else first.hex())
+        except asyncio.TimeoutError:
+            result["extra"].append(None)
+    for ws in [core, device] + extra:
+        await ws.close()
+    result = {k: (v.hex() if isinstance(v, bytes) else v) for k, v in result.items()}
+    print(json.dumps(result), flush=True)
+    return 0
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="caddy_probe")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -239,7 +290,14 @@ def main(argv=None) -> int:
     h = sub.add_parser("h2")
     h.add_argument("host")
     h.add_argument("--cacert", required=True)
+    w = sub.add_parser("relay")
+    w.add_argument("url")
+    w.add_argument("--cacert", required=True)
+    w.add_argument("--secret-file", required=True)
+    w.add_argument("--extra", type=int, default=0)
     args = parser.parse_args(argv)
+    if args.command == "relay":
+        return asyncio.run(relay(args))
     if args.command == "raw":
         return raw(args)
     if args.command == "h2":

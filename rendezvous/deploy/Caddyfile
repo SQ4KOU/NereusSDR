@@ -4,10 +4,12 @@
 # which runs caddy validate on it first and writes the service's host name
 # (RV_HOST) in place of rv.nereussdr.com below. Caddy terminates TLS for the
 # service, with a certificate from Let's Encrypt that it obtains and renews
-# by itself once DNS points the name at the server, and forwards every
-# request to the service, which listens on loopback only (127.0.0.1 and
-# ::1, port 8710). The relay (coturn, UDP 3478 and 443) does not pass
-# through Caddy.
+# by itself once DNS points the name at the server. It forwards
+# /v1/relay and everything under it to the WebSocket relay (nereus-relay,
+# loopback port 8711; rendezvous document section 12) and every other
+# request to the service (loopback port 8710). Both listen on loopback only
+# (127.0.0.1 and ::1). The TURN relay (coturn, UDP 3478 and 443) does not
+# pass through Caddy.
 #
 # No ACME email is set on purpose: Caddy obtains certificates without one,
 # and no personal address belongs in the repository.
@@ -43,24 +45,40 @@
 rv.nereussdr.com {
 	import rv_headers
 
-	# Every request goes to the service, WebSocket or not, and the service
-	# decides: it upgrades a WebSocket and answers anything else with 426,
-	# a short plain text and "Upgrade: websocket". No matcher here picks
-	# out WebSockets, because Caddy's header matcher compares values
+	# Every request goes to the relay or the service, WebSocket or not, and
+	# it decides: it upgrades a WebSocket and answers anything else with
+	# 426, a short plain text and "Upgrade: websocket". No matcher here
+	# picks out WebSockets, because Caddy's header matcher compares values
 	# exactly: Apple's Network.framework sends "Upgrade: WebSocket", which
 	# "header Upgrade websocket" does not match (rendezvous/tests/
 	# caddy-check.sh shows both forms upgrading).
-	reverse_proxy 127.0.0.1:8710 [::1]:8710 {
-		lb_policy first
-		# Exactly one address: the client's as Caddy sees it. The service
-		# believes the last address in X-Forwarded-For only from a
-		# loopback peer (rendezvous document section 9.1), so whatever a
-		# client sends in its own header never counts.
-		header_up X-Forwarded-For {remote_host}
-		# A Caddy reload (setup-server.sh runs one after a Caddyfile
-		# change) keeps open WebSockets for up to 5 minutes instead of
-		# cutting every registered Core off at once.
-		stream_close_delay 5m
+	#
+	# The relay has a process of its own (nereus-relay), so relay traffic
+	# never starves registrations nor takes the service's memory ceiling
+	# (rendezvous document sections 9.1 and 12.5).
+	handle /v1/relay* {
+		reverse_proxy 127.0.0.1:8711 [::1]:8711 {
+			lb_policy first
+			# As for the service, below: the client's own address only.
+			header_up X-Forwarded-For {remote_host}
+			# A reload keeps open relay legs for up to 5 minutes too.
+			stream_close_delay 5m
+		}
+	}
+
+	handle {
+		reverse_proxy 127.0.0.1:8710 [::1]:8710 {
+			lb_policy first
+			# Exactly one address: the client's as Caddy sees it. The
+			# service believes the last address in X-Forwarded-For only
+			# from a loopback peer (rendezvous document section 9.1), so
+			# whatever a client sends in its own header never counts.
+			header_up X-Forwarded-For {remote_host}
+			# A Caddy reload (setup-server.sh runs one after a Caddyfile
+			# change) keeps open WebSockets for up to 5 minutes instead of
+			# cutting every registered Core off at once.
+			stream_close_delay 5m
+		}
 	}
 
 	# The service's 426 carries "Upgrade: websocket" and "Connection:

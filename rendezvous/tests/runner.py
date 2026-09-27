@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional
 
 from cryptography.hazmat.primitives.asymmetric import ec
 
-from nereus_rendezvous import identity, protocol, transport
+from nereus_rendezvous import identity, protocol, relaygrant, transport
 from nereus_rendezvous.clock import ManualClock
 from nereus_rendezvous.config import Config
 from nereus_rendezvous.service import Service
@@ -45,6 +45,8 @@ FIXTURE_TURN = [
     "turn:rv4.conformance.invalid:3478?transport=udp",
     "turn:rv6.conformance.invalid:3478?transport=udp",
 ]
+FIXTURE_RELAY_URL = "wss://rv.conformance.invalid/v1/relay"
+RELAY_LEGS = {"core": relaygrant.LEG_CORE, "device": relaygrant.LEG_DEVICE}
 RECV_TIMEOUT_S = 5.0
 SILENCE_S = 0.1
 
@@ -52,6 +54,8 @@ _SETUP_KEYS = {
     "stunUrls": "stun_urls",
     "turnUrls": "turn_urls",
     "turnTtlSeconds": "turn_ttl_seconds",
+    "relayUrl": "relay_url",
+    "relayTtlSeconds": "relay_ttl_seconds",
     "introductionsPerAddressPerMinute": "introductions_per_address_per_minute",
     "introductionsPerStationPerMinute": "introductions_per_station_per_minute",
     "mailboxOpensPerAddressPerMinute": "mailbox_opens_per_address_per_minute",
@@ -68,7 +72,7 @@ _SETUP_KEYS = {
 }
 
 _PLACEHOLDER = re.compile(
-    r"\A\$(any|string|int|capture|ref|b64|key|device|register|introduce|turn|sdp|candidate)(?::(.*))?\Z"
+    r"\A\$(any|string|int|capture|ref|b64|key|device|register|introduce|turn|sdp|candidate|relayToken)(?::(.*))?\Z"
 )
 
 
@@ -108,11 +112,12 @@ async def ws_connect(uri: str, address: str) -> Any:
     return await _ws_connect(uri, **kwargs)
 
 
-def make_config(setup: Dict[str, Any], secret: bytes) -> Config:
+def make_config(setup: Dict[str, Any], secret: bytes, relay_secret: Optional[bytes] = None) -> Config:
     config = Config()
     config.stun_urls = list(FIXTURE_STUN)
     config.turn_urls = list(FIXTURE_TURN)
     config.turn_secret = secret
+    config.relay_url = FIXTURE_RELAY_URL
     config.ping_interval_seconds = 0
     config.ping_timeout_seconds = 0
     for key, value in setup.items():
@@ -120,6 +125,12 @@ def make_config(setup: Dict[str, Any], secret: bytes) -> Config:
             if not isinstance(value, bool):
                 raise FixtureFailure("serverSetup.turn must be true or false")
             config.turn_secret = secret if value else None
+        elif key == "relay":
+            # Section 10.4: a relay secret is configured (the runner makes
+            # one at run time), so accepted introductions get relay grants.
+            if not isinstance(value, bool):
+                raise FixtureFailure("serverSetup.relay must be true or false")
+            config.relay_secret = (relay_secret or os.urandom(32).hex().encode("ascii")) if value else None
         elif key == "wallClock":
             continue
         elif key in _SETUP_KEYS:
@@ -139,8 +150,9 @@ class Runner:
             raise FixtureFailure(f"{name}: unknown top-level keys {sorted(extra)}")
         self.setup = fixture.get("serverSetup", {})
         self.secret = os.urandom(32).hex().encode("ascii")
+        self.relay_secret = os.urandom(32).hex().encode("ascii")
         self.clock = ManualClock(self.setup.get("wallClock", DEFAULT_WALL_CLOCK))
-        self.config = make_config(self.setup, self.secret)
+        self.config = make_config(self.setup, self.secret, self.relay_secret)
         self.service = Service(self.config, self.clock)
         self.conns: Dict[str, Any] = {}
         self.keys: Dict[str, ec.EllipticCurvePrivateKey] = {}
@@ -233,6 +245,13 @@ class Runner:
             value = sdp_text(parts[0])
             self.records[parts[1]] = value
             return value
+        if kind == "relayToken":
+            # A core or app runner plays the service here; the service's
+            # runner only ever matches this placeholder.
+            leg, session_name = self._relay_parts(parts, template)
+            session = self.records.setdefault("relaySession:" + session_name, os.urandom(relaygrant.SESSION_BYTES))
+            expires = self.clock.wall_seconds() + self.config.relay_ttl_seconds
+            return relaygrant.mint(self.relay_secret, leg, session, expires)
         if kind == "candidate":
             self.candidates += 1
             n = self.candidates
@@ -240,6 +259,12 @@ class Runner:
             self.records[parts[0]] = value
             return value
         raise FixtureFailure(f"{template} cannot be filled in a connection's message")
+
+    @staticmethod
+    def _relay_parts(parts: List[str], template: str) -> Any:
+        if len(parts) != 2 or parts[0] not in RELAY_LEGS or not parts[1]:
+            raise FixtureFailure(f"{template}: write $relayToken:<core|device>:<session>")
+        return RELAY_LEGS[parts[0]], parts[1]
 
     def _nonce(self, name: str, template: str) -> bytes:
         if name not in self.records:
@@ -349,6 +374,29 @@ class Runner:
             need(actual["password"] == base64.b64encode(digest).decode("ascii"), "HMAC-SHA1 of the username")
             need(actual["urls"] == list(self.config.turn_urls), "the configured TURN URLs")
             self.records[name] = actual
+            return
+        if kind == "relayToken":
+            leg, session_name = self._relay_parts(parts, template)
+            # Section 12.2, recomputed here with hmac directly rather than
+            # with the service's code.
+            raw = identity.b64url_of_length(actual, relaygrant.TOKEN_BYTES)
+            need(raw is not None, "base64url of 54 bytes")
+            payload, mac = raw[: relaygrant.PAYLOAD_BYTES], raw[relaygrant.PAYLOAD_BYTES :]
+            want = hmac.new(self.relay_secret, b"NereusSDR relay grant v1\n" + payload, hashlib.sha256).digest()
+            need(hmac.compare_digest(mac, want), "HMAC-SHA256 of the payload under the relay secret")
+            need(payload[0] == 1, "version 1")
+            need(payload[1] == leg, f"the {parts[0]} leg")
+            expires = self.clock.wall_seconds() + self.config.relay_ttl_seconds
+            need(int.from_bytes(payload[18:22], "big") == expires, f"expiring at {expires}")
+            session = payload[2:18]
+            key = "relaySession:" + session_name
+            if key in self.records:
+                need(self.records[key] == session, f"the session recorded as {session_name}")
+            else:
+                # A new name is a new session: no other name holds it.
+                others = [v for k, v in self.records.items() if k.startswith("relaySession:")]
+                need(session not in others, f"a session of its own ({session_name})")
+                self.records[key] = session
             return
         raise FixtureFailure(f"{path}: unknown placeholder {template}")
 

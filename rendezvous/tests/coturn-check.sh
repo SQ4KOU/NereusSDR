@@ -23,12 +23,14 @@
 #   - setup-server.sh where systemd runs (a stand-in systemctl that starts
 #     the units' programs): a TCP 443 holder is allowed, a UDP 443 or 3478
 #     holder refused; coturn is disabled right after it is installed;
-#     step 9 starts Caddy, coturn and the service, then leaves them alone,
+#     step 9 starts Caddy, coturn, the service and the WebSocket relay,
+#     then leaves them alone,
 #     reloads Caddy after a Caddyfile change and restarts only after a unit
 #     or configuration change, and checks the ports each one holds; a
 #     failing systemctl enable and a failing file install stop it with a
 #     message; the TURN secret's backups; the deploy account and its key;
-#     the Caddyfile, Caddy's drop-in and the memory limits;
+#     the Caddyfile, Caddy's drop-in and the memory limits; the relay
+#     secret, relay.conf, the relay's unit and its memory ceiling;
 #   - coturn holds UDP 3478 and 443 on both addresses and no TCP port;
 #   - STUN answers on both ports in both families, without credentials;
 #   - turnutils_uclient: a valid allocation relays on both ports in both
@@ -38,7 +40,10 @@
 #   - no anonymous, wrongly signed or TCP relay allocation, no TCP listener;
 #   - the per-user and total quotas (the relay's slots at a small test
 #     value, 10);
-#   - credentials minted by the running service verify with coturn;
+#   - credentials minted by the running service verify with coturn, and the
+#     relay grants it mints admit both legs on the running WebSocket relay
+#     (each run from setup's configuration, secrets via the credential
+#     paths);
 #   - what coturn does when an allocation is refreshed after its credential
 #     expired (the rendezvous document, section 8), with the real nonce
 #     lifetime and with a short one;
@@ -241,6 +246,10 @@ sx <<'EOS' || fail "files, owners or modes are not as expected"
 set -euo pipefail
 check() { [[ "$(stat -c '%U:%G %a' "$1")" == "$2" ]] || { echo "$1: $(stat -c '%U:%G %a' "$1"), want $2" >&2; exit 1; }; }
 check /etc/nereus-rendezvous/turn-secret "root:root 600"
+check /etc/nereus-rendezvous/relay-secret "root:root 600"
+check /etc/nereus-rendezvous/relay.conf "root:root 644"
+check /etc/systemd/system/nereus-relay.service "root:root 644"
+check /etc/systemd/system/nereus-relay.service.d/memory.conf "root:root 644"
 check /etc/turnserver.conf "root:turnserver 640"
 check /etc/nereus-rendezvous/coturn/key.pem "root:turnserver 640"
 check /etc/nereus-rendezvous/rendezvous.conf "root:root 644"
@@ -261,6 +270,16 @@ caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1
 # RV_MEMORY_MB=1024: (1024 - 256) x 50% and x 35%.
 grep -qx 'Environment=GOMEMLIMIT=384MiB' /etc/systemd/system/caddy.service.d/nereus.conf
 grep -qx 'MemoryMax=268M' /etc/systemd/system/nereus-rendezvous.service.d/memory.conf
+# The WebSocket relay: 32 MiB and 2 MiB for each of its 16 default slots.
+grep -qx 'MemoryMax=64M' /etc/systemd/system/nereus-relay.service.d/memory.conf
+[[ "$(wc -c < /etc/nereus-rendezvous/relay-secret)" -eq 65 ]]
+! cmp -s /etc/nereus-rendezvous/relay-secret /etc/nereus-rendezvous/turn-secret
+! grep -q "$(cat /etc/nereus-rendezvous/relay-secret)" /etc/turnserver.conf
+grep -qx 'relay_secret_file = /run/credentials/nereus-rendezvous.service/relay-secret' /etc/nereus-rendezvous/rendezvous.conf
+grep -qx 'relay_url = wss://rv.nereussdr.com/v1/relay' /etc/nereus-rendezvous/rendezvous.conf
+grep -qx 'relay_secret_file = /run/credentials/nereus-relay.service/relay-secret' /etc/nereus-rendezvous/relay.conf
+grep -qx 'listen = 127.0.0.1:8711 \[::1\]:8711' /etc/nereus-rendezvous/relay.conf
+grep -qx 'slots = 16' /etc/nereus-rendezvous/relay.conf
 grep -Eqx 'RV_DATA_USE_INTERFACE=eth[0-9]+' /etc/nereus-rendezvous/data-use.conf
 grep -qx 'RV_TRANSFER_GB_PER_MONTH=1000' /etc/nereus-rendezvous/data-use.conf
 grep -qx 'total-quota=10' /etc/turnserver.conf
@@ -271,7 +290,8 @@ grep -qx "static-auth-secret=$(cat /etc/nereus-rendezvous/turn-secret)" /etc/tur
 grep -qx 'turn_secret_file = /run/credentials/nereus-rendezvous.service/turn-secret' /etc/nereus-rendezvous/rendezvous.conf
 # The URLs setup writes are the service's built-in defaults and the
 # sample's, in the same order (IPv4 first; rendezvous document section 8).
-sed 's|^turn_secret_file = .*|turn_secret_file =|' /etc/nereus-rendezvous/rendezvous.conf > /tmp/urls.conf
+sed -e 's|^turn_secret_file = .*|turn_secret_file =|' -e 's|^relay_secret_file = .*|relay_secret_file =|' \
+    /etc/nereus-rendezvous/rendezvous.conf > /tmp/urls.conf
 PYTHONPATH=/repo/rendezvous/server PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
 from nereus_rendezvous import config
 written = config.load("/tmp/urls.conf")
@@ -280,8 +300,16 @@ defaults = config.Config()
 for name in ("stun_urls", "turn_urls"):
     assert getattr(written, name) == getattr(defaults, name) == getattr(sample, name), name
 assert written.stun_urls[0].startswith("stun:rv4.") and written.turn_urls[0].startswith("turn:rv4."), written
+assert written.relay_url == defaults.relay_url == sample.relay_url, written.relay_url
 PY
+# The relay's configuration as setup wrote it loads with the relay's own
+# reader, the secret taken from where it is now.
+sed 's|^relay_secret_file = .*|relay_secret_file = /etc/nereus-rendezvous/relay-secret|' \
+    /etc/nereus-rendezvous/relay.conf > /tmp/relay.conf
+PYTHONPATH=/repo/rendezvous/server PYTHONDONTWRITEBYTECODE=1 python3 -c \
+    'from nereus_relay import config; c = config.load("/tmp/relay.conf"); assert c.slots == 16 and c.listen == [("127.0.0.1", 8711), ("::1", 8711)], c'
 EOS
+pass "relay secret (root 600, 64 hex characters, not the TURN secret and nowhere in coturn's configuration); relay.conf (loopback 8711, 16 slots, the credential path); the relay's unit and its MemoryMax 64M; the service's relay_url and relay_secret_file"
 pass "secret (root 600, 64 hex characters), coturn configuration (root:turnserver 640, total-quota 10, bps-capacity 800000, user-quota 8), service configuration (STUN and TURN URLs the same, in the same order, as the service's defaults and the sample: rv4 first), units, data-use report and code directory; the deploy account nereusrv with exactly the given key; the rv Caddyfile, validated; Caddy's drop-in with GOMEMLIMIT 384MiB and the service's MemoryMax 268M from 1024 MiB"
 
 # The data-use report as installed, run once the way its unit runs it.
@@ -321,6 +349,7 @@ unit_of() {
         coturn | coturn.service) echo coturn ;;
         caddy | caddy.service) echo caddy ;;
         nereus-rendezvous | nereus-rendezvous.service) echo service ;;
+        nereus-relay | nereus-relay.service) echo relay ;;
         *) echo other ;;
     esac
 }
@@ -335,6 +364,7 @@ active() {
         coturn) [[ -n "$(running turnserver turnserver)" ]] ;;
         caddy) [[ -n "$(running caddy caddy)" ]] ;;
         service) [[ -n "$(running python3 nereus_rendezvous)" ]] ;;
+        relay) [[ -n "$(running python3 nereus_relay)" ]] ;;
         *) [[ -e "/run/standin-active-$1" ]] ;;
     esac
 }
@@ -344,6 +374,7 @@ stop() {
         coturn) for pid in $(running turnserver turnserver); do kill "$pid"; done ;;
         caddy) for pid in $(running caddy caddy); do kill "$pid"; done ;;
         service) for pid in $(running python3 nereus_rendezvous); do kill "$pid"; done ;;
+        relay) for pid in $(running python3 nereus_relay); do kill "$pid"; done ;;
         *) rm -f "/run/standin-active-$1" ;;
     esac
     sleep 1
@@ -366,18 +397,22 @@ start() {
                 --bounding-set=-all,+net_bind_service env HOME=/var/lib/caddy \
                 caddy run --config /run/Caddyfile.test --adapter caddyfile </dev/null >/run/caddy.log 2>&1 &
             for _ in $(seq 50); do (exec 3<>/dev/tcp/127.0.0.1/443) 2>/dev/null && break; sleep 0.2; done ;;
-        service)
-            unit=/etc/systemd/system/nereus-rendezvous.service
-            install -d -m 0755 /run/credentials/nereus-rendezvous.service
-            install -m 0400 -o nobody "$(sed -n 's/^LoadCredential=turn-secret://p' "$unit")" \
-                /run/credentials/nereus-rendezvous.service/turn-secret
+        service | relay)
+            name="nereus-rendezvous"
+            [[ "$(unit_of "$1")" == relay ]] && name="nereus-relay"
+            unit="/etc/systemd/system/${name}.service"
+            # Every LoadCredential= line, as systemd would hand it over.
+            install -d -m 0755 "/run/credentials/${name}.service"
+            while IFS=: read -r cred src; do
+                install -m 0400 -o nobody "$src" "/run/credentials/${name}.service/${cred}"
+            done < <(sed -n 's/^LoadCredential=//p' "$unit")
             envs=()
             while IFS= read -r line; do envs+=("$line"); done < <(sed -n 's/^Environment=//p' "$unit")
             exec_start="$(sed -n 's/^ExecStart=//p' "$unit")"
             # shellcheck disable=SC2086
             setsid env "${envs[@]}" setpriv --reuid=nobody --regid=nogroup --clear-groups $exec_start \
-                </dev/null >>/run/nereus-rendezvous.log 2>&1 &
-            for _ in $(seq 50); do active nereus-rendezvous && break; sleep 0.2; done
+                </dev/null >>"/run/${name}.log" 2>&1 &
+            for _ in $(seq 50); do active "$name" && break; sleep 0.2; done
             sleep 1 ;;
         *) touch "/run/standin-active-$1" ;;
     esac
@@ -404,8 +439,8 @@ case "$cmd" in
 esac
 SH
 chmod 755 /usr/local/sbin/systemctl
-# The service's code, where deploy.sh would put it.
-cp -R /repo/rendezvous/server/nereus_rendezvous /opt/nereus-rendezvous/
+# The service's and the relay's code, where deploy.sh would put it.
+cp -R /repo/rendezvous/server/nereus_rendezvous /repo/rendezvous/server/nereus_relay /opt/nereus-rendezvous/
 chown -R nereusrv:nereusrv /opt/nereus-rendezvous
 EOS
 
@@ -466,16 +501,18 @@ out = """${out}"""
 calls = out.split("--- systemctl calls\n", 1)[1].splitlines()
 assert "disable --now coturn" in calls, calls
 first_disable = calls.index("disable --now coturn")
-enable = calls.index("enable coturn nereus-rendezvous.service nereus-data-use.timer")
+enable = calls.index("enable coturn nereus-rendezvous.service nereus-relay.service nereus-data-use.timer")
 assert first_disable < enable, calls
 assert "enable caddy" in calls, calls
-for unit in ("caddy", "coturn", "nereus-rendezvous.service", "nereus-data-use.timer"):
+for unit in ("caddy", "coturn", "nereus-rendezvous.service", "nereus-relay.service", "nereus-data-use.timer"):
     assert "start " + unit in calls, (unit, calls)
 assert not any(c.startswith(("restart", "reload")) for c in calls), calls
 assert "coturn is disabled until its configuration is in place" in out
 assert "coturn holds UDP 3478 and 443 on both addresses and no TCP port; Caddy holds no UDP port" in out
+held = [line.split() for line in out.splitlines() if line.strip().startswith("tcp 8711 ")]
+assert {h[2] for h in held} == {"127.0.0.1", "::1"}, held
 PY
-pass "where systemd runs: coturn is disabled right after its install, then step 9 enables and starts Caddy, coturn, the service and the timer, and finds coturn on exactly UDP 3478 and 443 on both addresses and no TCP port, and Caddy on no UDP port"
+pass "where systemd runs: coturn is disabled right after its install, then step 9 enables and starts Caddy, coturn, the service, the WebSocket relay and the timer, and finds coturn on exactly UDP 3478 and 443 on both addresses and no TCP port, Caddy on no UDP port, and the relay on TCP 8711 on loopback only"
 
 rerun() {
     # $@: extra arguments. Prints the output and the systemctl calls.
@@ -494,6 +531,7 @@ out="$(rerun)" || { printf '%s\n' "$out" >&2; fail "a second run where systemd r
 grep -q 'caddy is running and none of its files changed: left as it is' <<<"$out" \
     && grep -q 'coturn is running and none of its files changed: left as it is' <<<"$out" \
     && grep -q 'nereus-rendezvous.service is running and none of its files changed: left as it is' <<<"$out" \
+    && grep -q 'nereus-relay.service is running and none of its files changed: left as it is' <<<"$out" \
     && ! sed -n '/--- systemctl calls/,$p' <<<"$out" | grep -Eq '^(restart|reload)' \
     && grep -q 'coturn holds UDP 3478 and 443 on both addresses' <<<"$out" \
     || { printf '%s\n' "$out" >&2; fail "a second run restarted something"; }
@@ -501,15 +539,20 @@ out="$(rerun --dry-run --rotate-secret)" || { printf '%s\n' "$out" >&2; fail "--
 grep -q 'would make a new secret in /etc/nereus-rendezvous/turn-secret (--rotate-secret)' <<<"$out" \
     && grep -q 'coturn would be restarted (its files changed); a restart drops every live relay' <<<"$out" \
     && grep -q 'nereus-rendezvous.service would be restarted' <<<"$out" \
+    && grep -q 'would make a new relay secret in /etc/nereus-rendezvous/relay-secret (--rotate-secret)' <<<"$out" \
+    && grep -q 'nereus-relay.service would be restarted (its files changed); every relay leg joins again' <<<"$out" \
     || { printf '%s\n' "$out" >&2; fail "--dry-run --rotate-secret did not say what it would do"; }
 out="$(rerun --dry-run)" || { printf '%s\n' "$out" >&2; fail "--dry-run failed"; }
 grep -q 'coturn would be left running (none of its files changed)' <<<"$out" \
     || { printf '%s\n' "$out" >&2; fail "a plain dry run did not say coturn would be left running"; }
 before="$(sx <<<'cat /etc/nereus-rendezvous/turn-secret')"
+relay_before="$(sx <<<'cat /etc/nereus-rendezvous/relay-secret')"
 out="$(rerun --rotate-secret)" || { printf '%s\n' "$out" >&2; fail "--rotate-secret failed"; }
 sed -n '/--- systemctl calls/,$p' <<<"$out" | grep -qx 'restart coturn' \
     && sed -n '/--- systemctl calls/,$p' <<<"$out" | grep -qx 'restart nereus-rendezvous.service' \
-    || { printf '%s\n' "$out" >&2; fail "--rotate-secret did not restart coturn and the service"; }
+    && sed -n '/--- systemctl calls/,$p' <<<"$out" | grep -qx 'restart nereus-relay.service' \
+    || { printf '%s\n' "$out" >&2; fail "--rotate-secret did not restart coturn, the service and the relay"; }
+[[ "$(sx <<<'cat /etc/nereus-rendezvous/relay-secret')" != "$relay_before" ]] || fail "--rotate-secret kept the relay secret"
 sx "$before" <<'EOS' || fail "the secret's backups are not as expected"
 set -euo pipefail
 [[ "$(cat /etc/nereus-rendezvous/turn-secret)" != "$1" ]]
@@ -564,13 +607,14 @@ grep -qx 'exit 1' <<<"$out" && grep -qx 'disable --now coturn' <<<"$out" && ! gr
 out="$(rerun)" || { printf '%s\n' "$out" >&2; fail "a run after the failed install failed"; }
 pass "where systemd runs: a Caddyfile change reloads Caddy (the dry run says so) and restarts nothing; a failing systemctl enable and a symlinked data-use.conf each stop the script with a message; a failed install after coturn was unpacked still disables coturn"
 
-pass "where systemd runs: a second run leaves Caddy, coturn and the service running; --dry-run --rotate-secret says it would make a new secret and restart both (dropping live relays); --rotate-secret restarts both; one backup of /etc/turnserver.conf remains, root 600"
+pass "where systemd runs: a second run leaves Caddy, coturn, the service and the WebSocket relay running; --dry-run --rotate-secret says it would make new TURN and relay secrets and restart coturn, the service and the relay (dropping live relays); --rotate-secret restarts all three with a new relay secret; one backup of /etc/turnserver.conf remains, root 600"
 
 # Back to no systemd for the rest: the check starts coturn itself.
 sx <<'EOS'
 set -euo pipefail
-systemctl stop caddy coturn nereus-rendezvous.service
-rm -rf /run/systemd/system /usr/local/sbin/systemctl /run/credentials /opt/nereus-rendezvous/nereus_rendezvous
+systemctl stop caddy coturn nereus-rendezvous.service nereus-relay.service
+rm -rf /run/systemd/system /usr/local/sbin/systemctl /run/credentials /opt/nereus-rendezvous/nereus_rendezvous \
+    /opt/nereus-rendezvous/nereus_relay
 EOS
 
 # --------------------------------------------------------------- coturn
@@ -821,13 +865,22 @@ sx <<'EOS'
 set -euo pipefail
 # LoadCredential=, by hand: systemd would copy the secret here for the
 # service alone.
-install -d -m 0755 /run/credentials/nereus-rendezvous.service
+install -d -m 0755 /run/credentials/nereus-rendezvous.service /run/credentials/nereus-relay.service
 install -m 0400 -o nobody /etc/nereus-rendezvous/turn-secret /run/credentials/nereus-rendezvous.service/turn-secret
+install -m 0400 -o nobody /etc/nereus-rendezvous/relay-secret /run/credentials/nereus-rendezvous.service/relay-secret
+install -m 0400 -o nobody /etc/nereus-rendezvous/relay-secret /run/credentials/nereus-relay.service/relay-secret
 cd / && PYTHONPATH=/repo/rendezvous/server PYTHONDONTWRITEBYTECODE=1 \
     setsid runuser -u nobody -- python3 -m nereus_rendezvous --config /etc/nereus-rendezvous/rendezvous.conf \
     </dev/null >/run/rv.log 2>&1 &
-for _ in $(seq 50); do grep -q 'listening on 2 addresses, relay on' /run/rv.log && exit 0; sleep 0.2; done
-cat /run/rv.log >&2
+cd / && PYTHONPATH=/repo/rendezvous/server PYTHONDONTWRITEBYTECODE=1 \
+    setsid runuser -u nobody -- python3 -m nereus_relay --config /etc/nereus-rendezvous/relay.conf \
+    </dev/null >/run/relay.log 2>&1 &
+for _ in $(seq 50); do
+    grep -q 'listening on 2 addresses, relay on, relay grants on' /run/rv.log \
+        && grep -q 'listening on 2 addresses, 16 slots' /run/relay.log && exit 0
+    sleep 0.2
+done
+cat /run/rv.log /run/relay.log >&2
 exit 1
 EOS
 minted="$(sx <<'EOS'
@@ -845,8 +898,23 @@ async def go():
     intro = await recv_json(st)
     await st.send(protocol.encode({"type": "answer", "to": intro["from"], "answer": "v=0\r\n", "turn": True}))
     answer = await recv_json(cl)
+    device_grant = await recv_json(cl)
     credentials = await recv_json(st)
+    core_grant = await recv_json(st)
     assert answer["turn"] == credentials["turn"]
+    # The relay grants: the token of each end joined on the running relay.
+    from relay_helpers import connect, recv
+    assert device_grant["url"] == core_grant["url"] == "wss://rv.nereussdr.com/v1/relay"
+    relay_uri = "ws://127.0.0.1:8711/v1/relay"
+    core = await connect(relay_uri, "198.51.100.7")
+    await core.send(b"\x80" + core_grant["token"].encode())
+    assert await recv(core) == b"\x81\x01\x00"
+    device = await connect(relay_uri, "198.51.100.8")
+    await device.send(b"\x80" + device_grant["token"].encode())
+    assert await recv(device) == b"\x81\x01\x01"
+    assert await recv(core) == b"\x82\x01"
+    await device.send(b"\x02datagram")
+    assert await recv(core) == b"\x02datagram"
     print(json.dumps(answer["turn"]))
 asyncio.run(go())
 PY
@@ -860,7 +928,7 @@ out="$(probe allocate "$s4" 443 --username "$user" --password "$password" --peer
 grep -q '"relayed": true' <<<"$out" || fail "coturn did not accept the service's credentials: ${out}"
 out="$(probe allocate "$s6" 3478 --username "$user" --password "$password" --peer "[${p6}]:3480")"
 grep -q '"relayed": true' <<<"$out" || fail "coturn did not accept the service's credentials over IPv6: ${out}"
-pass "credentials minted by the running service (setup's configuration, secret via the credentials path) allocate and relay on coturn"
+pass "credentials minted by the running service (setup's configuration, secret via the credentials path) allocate and relay on coturn; the relay grants it minted join both legs on the WebSocket relay run from setup's relay.conf, which forwards between them"
 
 # --------------------------------------------------- refresh after expiry
 expiry="$(probe expiry "$s4" 3478 --secret-file /tmp/turn-secret --id expiryexpiryexpiryexpiryex \

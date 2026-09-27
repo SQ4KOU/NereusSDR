@@ -35,9 +35,10 @@ async def run(config_path: str) -> int:
     servers = [await transport.start(service, host, port) for host, port in config.listen]
     log = logging.getLogger("nereus_rendezvous")
     log.info(
-        "listening on %d addresses, relay %s",
+        "listening on %d addresses, relay %s, relay grants %s",
         len(servers),
         "on" if config.turn_secret else "off",
+        "on" if config.relay_secret else "off",
     )
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()

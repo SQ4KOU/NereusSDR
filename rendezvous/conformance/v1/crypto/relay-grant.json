@@ -1,0 +1,105 @@
+{
+  "description": "Relay grant tokens (rendezvous document section 12.2): payload = version (1) || leg (1 the Core, 2 the device) || session (16 bytes) || expires (4 bytes big-endian, Unix seconds); mac = HMAC-SHA256(secret, \"NereusSDR relay grant v1\\n\" || payload); token = base64url(payload || mac), no padding. The secret is the UTF-8 bytes given. These secrets exist only for these vectors. Every token here was computed with openssl dgst -sha256 -hmac, not with the service's code. The Core and the apps treat a token as opaque text; only the service and the relay read these vectors.",
+  "prefixHex": "4e65726575735344522072656c6179206772616e742076310a",
+  "cases": [
+    {
+      "name": "core",
+      "secret": "conformance-relay-secret-not-for-use",
+      "leg": 1,
+      "sessionHex": "000102030405060708090a0b0c0d0e0f",
+      "expires": 1800000120,
+      "token": "AQEAAQIDBAUGBwgJCgsMDQ4Pa0nSeLeZVPTsf7JprNk5ro7W2RbefXVjuGF4oLw32rpnxYp_",
+      "valid": true
+    },
+    {
+      "name": "device",
+      "secret": "conformance-relay-secret-not-for-use",
+      "leg": 2,
+      "sessionHex": "000102030405060708090a0b0c0d0e0f",
+      "expires": 1800000120,
+      "token": "AQIAAQIDBAUGBwgJCgsMDQ4Pa0nSeAwE1uFC1R3Bxr04lnp67YB5V--6jN3OtXfPigQ95Mu7",
+      "valid": true
+    },
+    {
+      "name": "anotherSecret",
+      "secret": "another relay test secret, not for use",
+      "leg": 2,
+      "sessionHex": "ffeeddccbbaa99887766554433221100",
+      "expires": 1700000000,
+      "token": "AQL_7t3Mu6qZiHdmVUQzIhEAZVPxAKx64h1bVeLGnXg2YRT0TvtIcY6hL-SJ-ZUZZegZYU_D",
+      "valid": true
+    },
+    {
+      "name": "shortSecretExpiresZero",
+      "secret": "s",
+      "leg": 1,
+      "sessionHex": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+      "expires": 0,
+      "token": "AQFaWlpaWlpaWlpaWlpaWlpaAAAAAGu2Dpk-ck45R0VmC-ZeA2ynMhPGBzSbDo3we8RIWQH6",
+      "valid": true
+    },
+    {
+      "name": "flippedBit",
+      "secret": "conformance-relay-secret-not-for-use",
+      "token": "AQEAAQIDBAUGBwgJCgsMDQ4Pa0nSeLeZVPTsf7JprNk5ro7W2RbefXVjuGF4oLw32rpnxYp-",
+      "valid": false,
+      "why": "the last bit of the MAC flipped"
+    },
+    {
+      "name": "otherSecret",
+      "secret": "not the secret that minted it",
+      "token": "AQEAAQIDBAUGBwgJCgsMDQ4Pa0nSeLeZVPTsf7JprNk5ro7W2RbefXVjuGF4oLw32rpnxYp_",
+      "valid": false,
+      "why": "minted with another secret"
+    },
+    {
+      "name": "version2",
+      "secret": "conformance-relay-secret-not-for-use",
+      "token": "AgEAAQIDBAUGBwgJCgsMDQ4Pa0nSeEd2IbNPYmfCrSi2PQuF0jllMw64M48t0id9YwXhcKEG",
+      "valid": false,
+      "why": "version byte 2, with a MAC that verifies"
+    },
+    {
+      "name": "leg3",
+      "secret": "conformance-relay-secret-not-for-use",
+      "token": "AQMAAQIDBAUGBwgJCgsMDQ4Pa0nSeGL37weSyfdA9pisUFaS0mkSKCEEVPc8flAddaqgH9Nz",
+      "valid": false,
+      "why": "leg byte 3, with a MAC that verifies"
+    },
+    {
+      "name": "leg0",
+      "secret": "conformance-relay-secret-not-for-use",
+      "token": "AQAAAQIDBAUGBwgJCgsMDQ4Pa0nSeBAkfDJ3sZgUp7_NtFykW2frWH0mmUIlQGwvn0oRkqV0",
+      "valid": false,
+      "why": "leg byte 0, with a MAC that verifies"
+    },
+    {
+      "name": "short",
+      "secret": "conformance-relay-secret-not-for-use",
+      "token": "AQEAAQIDBAUGBwgJCgsMDQ4Pa0nSeLeZVPTsf7JprNk5ro7W2RbefXVjuGF4oLw32rpnxYp",
+      "valid": false,
+      "why": "71 characters"
+    },
+    {
+      "name": "padded",
+      "secret": "conformance-relay-secret-not-for-use",
+      "token": "AQEAAQIDBAUGBwgJCgsMDQ4Pa0nSeLeZVPTsf7JprNk5ro7W2RbefXVjuGF4oLw32rpnxYp_=",
+      "valid": false,
+      "why": "base64url with padding"
+    },
+    {
+      "name": "standardAlphabet",
+      "secret": "conformance-relay-secret-not-for-use",
+      "token": "AQIAAQIDBAUGBwgJCgsMDQ4Pa0nSeAwE1uFC1R3Bxr04lnp67YB5V++6jN3OtXfPigQ95Mu7",
+      "valid": false,
+      "why": "standard base64, not base64url"
+    },
+    {
+      "name": "empty",
+      "secret": "conformance-relay-secret-not-for-use",
+      "token": "",
+      "valid": false,
+      "why": "empty"
+    }
+  ]
+}

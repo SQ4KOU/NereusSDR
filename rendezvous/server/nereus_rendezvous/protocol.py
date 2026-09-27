@@ -40,9 +40,14 @@ NAMEPLATE_MIN = 1
 NAMEPLATE_MAX = 999999
 RETRY_MAX_MS = 2147483647
 EXPIRES_MAX = 4294967295
+# Section 12.1: a relay grant's URL and token.
+MAX_RELAY_URL_BYTES = 512
+MAX_RELAY_TOKEN_BYTES = 512
+RELAY_URL_PREFIX = "wss://"
 VERSION_MAX = 65535
 
 _CODE_PATTERN = re.compile(r"\A[A-Za-z]{1,64}\Z")
+_TOKEN_ALPHABET = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
 
 # Field kinds. Each is a tuple whose first element names the kind.
 RID = ("rid",)
@@ -50,6 +55,8 @@ BOOL = ("bool",)
 CODE = ("code",)
 URLS = ("urls",)
 TURN_OR_NULL = ("turn",)
+RELAY_URL = ("relayUrl",)
+RELAY_TOKEN = ("relayToken",)
 
 
 def B64(n: int) -> Tuple[str, int]:
@@ -116,6 +123,8 @@ TO_STATION: Dict[str, List[Tuple[str, tuple]]] = {
         ("nonce", NONCE),
     ],
     "credentials": [("from", INTRO_ID), ("turn", TURN_OR_NULL)],
+    # Section 12.1: after credentials, when the service holds a relay secret.
+    "relay.grant": [("from", INTRO_ID), ("url", RELAY_URL), ("token", RELAY_TOKEN), ("expires", INT(0, EXPIRES_MAX))],
     "candidate": [("from", INTRO_ID), ("candidate", CANDIDATE)],
     "introduction.end": [("from", INTRO_ID), ("code", CODE)],
     "nameplate": [("nameplate", NAMEPLATE)],
@@ -129,6 +138,8 @@ TO_STATION: Dict[str, List[Tuple[str, tuple]]] = {
 TO_CLIENT: Dict[str, List[Tuple[str, tuple]]] = {
     "hello": _HELLO,
     "answer": [("answer", SDP), ("turn", TURN_OR_NULL)],
+    # Section 12.1: after answer, when the service holds a relay secret.
+    "relay.grant": [("url", RELAY_URL), ("token", RELAY_TOKEN), ("expires", INT(0, EXPIRES_MAX))],
     "candidate": [("candidate", CANDIDATE)],
     "introduction.end": [("code", CODE)],
     "mailbox.opened": [("nameplate", NAMEPLATE)],
@@ -202,6 +213,14 @@ def _check(key: str, value: Any, kind: tuple) -> None:
             raise DecodeError(f"{key}: not a list of at most {MAX_URLS} URLs")
         for url in value:
             _check(key, url, UTF8(1, MAX_URL_BYTES))
+    elif name == "relayUrl":
+        _check(key, value, UTF8(1, MAX_RELAY_URL_BYTES))
+        if not value.startswith(RELAY_URL_PREFIX) or not all(0x21 <= ord(c) <= 0x7E for c in value):
+            raise DecodeError(f"{key}: not a wss URL")
+    elif name == "relayToken":
+        _check(key, value, UTF8(1, MAX_RELAY_TOKEN_BYTES))
+        if not all(c in _TOKEN_ALPHABET for c in value):
+            raise DecodeError(f"{key}: not base64url characters")
     elif name == "turn":
         if value is None:
             return

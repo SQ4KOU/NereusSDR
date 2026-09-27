@@ -1,0 +1,50 @@
+# NereusSDR WebSocket relay configuration (INI), for python3 -m nereus_relay.
+# Every key but relay_secret_file is optional; the values shown are the
+# defaults. The wire is docs/architecture/2026-09-23-rendezvous-v1.md;
+# section 12 explains the relay and each limit.
+
+[relay]
+# Loopback only: Caddy terminates TLS and forwards wss://<host>/v1/relay
+# here. IPv6 addresses go in brackets.
+listen = 127.0.0.1:8711 [::1]:8711
+
+# Peers whose X-Forwarded-For is believed (the last address in it is the
+# client's). Anything else counts as the client itself.
+trusted_proxies = 127.0.0.1 ::1
+
+# The file holding the relay secret, and nothing else: the same file the
+# rendezvous service's relay_secret_file names. Under systemd,
+# LoadCredential= hands it over. Never put the secret itself in this file.
+relay_secret_file =
+
+# debug, info, warning or error. Logs go to standard error only.
+log_level = info
+
+[limits]
+# Sessions (one Core leg and one device leg each) at once.
+slots = 16
+# Connections per address group (an IPv4 address, or an IPv6 /56), joined
+# or not.
+connections_per_address = 8
+# Connections that have not joined yet, in total.
+max_pending = 64
+# A connection must send its join within this long.
+join_timeout_ms = 10000
+# A leg that has not joined yet, or has left, may (re)join this long.
+rejoin_ms = 30000
+# A session whose two legs forward nothing for this long ends.
+idle_timeout_ms = 30000
+# Each way, per session: the bytes a second one leg may send to the other
+# (coturn's max-bps). Frames over it are dropped.
+rate_bytes_per_second = 80000
+# Each leg's send queue. A frame that would pass either cap drops the
+# oldest waiting frames first.
+queue_frames = 64
+queue_bytes = 24576
+# A leg whose writer spends longer than this on one frame is closed (1008).
+send_stall_ms = 10000
+ping_interval_seconds = 20
+ping_timeout_seconds = 20
+# The kernel's receive and send buffer for each connection (SO_RCVBUF and
+# SO_SNDBUF), in bytes; Linux doubles the value. 0 leaves the kernel's sizing.
+socket_buffer_bytes = 16384

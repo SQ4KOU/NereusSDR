@@ -38,7 +38,9 @@ The rendezvous introduces; it never carries a session. It does four things:
    direct or through the relay, never through the rendezvous.
 3. **Relay credentials.** When a station accepts an introduction and allows
    the relay, the service mints short-lived TURN credentials for coturn and
-   gives the same ones to both ends (section 8).
+   gives the same ones to both ends (section 8), and at the same moment a
+   relay grant for the WebSocket relay, one token for each end (section
+   12).
 4. **Pairing mailboxes.** A station claims a nameplate (the number in its
    pairing code) and a client opens the mailbox on it; the two exchange the
    link's `pair.*` messages as opaque text (section 6.5).
@@ -55,7 +57,8 @@ fingerprints of the DTLS certificates in the offers and answers it carries
 
 - One WebSocket per connection, over TLS on TCP 443: `wss://rv.nereussdr.com/`
   (a self-hosted server has its own host name). The path is `/`; the service
-  ignores it. On the NereusSDR server the server's own Caddy terminates TLS and
+  ignores it. On the NereusSDR server, `/v1/relay` and every path under it
+  reach the WebSocket relay instead (section 12), never the service. On the NereusSDR server the server's own Caddy terminates TLS and
   forwards the WebSocket to the service on loopback by host name; the service
   itself never listens on a public address.
 - **What a client sends to open it.** The opening handshake is RFC 6455's,
@@ -321,6 +324,9 @@ client that carry keys of no kind listed here, and they decode (section
 | `retry` | a whole number from 0 to 2147483647: milliseconds to wait before trying again; 0 means no advice |
 | `urls` | an array of 0 to 8 strings, each 1 to 512 bytes: STUN or TURN URLs (RFC 7064, RFC 7065) |
 | `turn` | `null`, or an object with these keys: `username` (a string of 1 to 512 bytes), `password` (a string of 1 to 128 bytes), `expires` (a whole number from 0 to 4294967295, Unix seconds) and `urls` (`urls`); section 8. The service sends exactly these; a receiver ignores any other key in it (section 5.1) |
+| `relayUrl` | a string of 1 to 512 bytes of printable ASCII (0x21 to 0x7E), starting `wss://`: where the WebSocket relay is (section 12.1) |
+| `relayToken` | a string of 1 to 512 bytes of the base64url alphabet (`A-Z a-z 0-9 - _`), no padding: a relay grant's token, opaque to a station and a client (section 12.2; version 1 tokens are 72 characters) |
+| `expires` | a whole number from 0 to 4294967295: Unix seconds |
 
 ### 5.3 The kinds
 
@@ -356,6 +362,7 @@ client that carry keys of no kind listed here, and they decode (section
 | `registered` | `id` (`rid`) | after a valid `prove` |
 | `introduction` | `from` (`intro`), `device` (`device`), `deviceSignature` (`sig`), `offer` (`sdp`), `nonce` (`nonce`) | a client introduced itself to this id |
 | `credentials` | `from` (`intro`), `turn` (`turn`) | after the station's `answer` with `turn` true |
+| `relay.grant` | `from` (`intro`), `url` (`relayUrl`), `token` (`relayToken`), `expires` (`expires`) | just after `credentials`, when the service holds a relay secret (section 12.1) |
 | `candidate` | `from` (`intro`), `candidate` (`candidate`) | the client sent one |
 | `introduction.end` | `from` (`intro`), `code` (`code`): `clientLeft` or `expired` | the introduction ended |
 | `nameplate` | `nameplate` (`nameplate`) | after `nameplate.claim` |
@@ -371,6 +378,7 @@ client that carry keys of no kind listed here, and they decode (section
 | --- | --- | --- |
 | `hello` | `version` (`version`), `nonce` (`nonce`), `stun` (`urls`) | first, on every connection |
 | `answer` | `answer` (`sdp`), `turn` (`turn`) | the station answered |
+| `relay.grant` | `url` (`relayUrl`), `token` (`relayToken`), `expires` (`expires`) | just after `answer`, when the station's `answer` had `turn` true and the service holds a relay secret (section 12.1) |
 | `candidate` | `candidate` (`candidate`) | the station sent one |
 | `introduction.end` | `code` (`code`): `stationLeft` or `expired` | the introduction ended |
 | `mailbox.opened` | `nameplate` (`nameplate`) | after `mailbox.open` |
@@ -437,7 +445,9 @@ client  -> service:  {"type":"introduce","id":<rid>,"device":<device>,"deviceSig
 service -> station:  {"type":"introduction","from":<intro>,"device":...,"deviceSignature":...,"offer":...,"nonce":<the client connection's hello nonce>}
 station -> service:  {"type":"answer","to":<intro>,"answer":<sdp>,"turn":true|false}
 service -> client:   {"type":"answer","answer":<sdp>,"turn":<turn object>|null}
+service -> client:   {"type":"relay.grant","url":<url>,"token":<device token>,"expires":<n>}   (turn true and a relay secret; section 12.1)
 service -> station:  {"type":"credentials","from":<intro>,"turn":<the same turn object>|null}   (only when turn was true)
+service -> station:  {"type":"relay.grant","from":<intro>,"url":<url>,"token":<Core token>,"expires":<n>}   (as above)
 either  -> service -> other:  candidates, then the end of candidates
 ```
 
@@ -463,6 +473,10 @@ either  -> service -> other:  candidates, then the end of candidates
   service has no relay configured it sends `turn` null in both, so a station
   that asked always gets its `credentials` reply. With `turn` false the
   client's `turn` is null, nothing is minted and no `credentials` is sent.
+  The same `turn` true, and only it, also has the service mint a relay
+  grant for the WebSocket relay when it holds a relay secret: a
+  `relay.grant` to the client just after its `answer` and one to the station
+  just after its `credentials` (section 12.1).
 - **Candidates.** Each end trickles its ICE candidates through the service,
   one `candidate` message per candidate, in section 5.2's form (starting
   `candidate:`, never `a=candidate:`), forwarded untouched. The
@@ -625,7 +639,9 @@ password = base64(HMAC-SHA1(secret, username)) standard base64, with padding
   configuration (UTF-8); the service reads the same bytes from its secret
   file, without the trailing line end.
 - The credentials are valid for 24 hours and are minted only when a station
-  accepts an introduction with `turn` true (section 6.3). The same object
+  accepts an introduction with `turn` true (section 6.3). The WebSocket
+  relay's grant is minted at the same moment, under the same condition, with
+  its own secret (section 12). The same object
   goes to both ends, so the client and the station allocate with the same
   username. The username carries the station id so coturn's quotas and
   logs group by station, never by device.
@@ -758,7 +774,8 @@ of the same id (section 6.2) does not count the older one.
 | Kernel buffers per connection | 16384 bytes each way (`socket_buffer_bytes`) | the receive and send buffers (SO_RCVBUF, SO_SNDBUF) of every connection, set by the service on its own sockets, so the kernel memory a connection can hold is bounded without changing any host setting; Linux doubles the value, so each connection holds at most 64 KiB in the kernel. Caddy is the only peer, on loopback, where such buffers cost no speed. 0 leaves the kernel's own sizing, which can grow each buffer to megabytes |
 
 **Sizing the totals.** The rendezvous runs on a server of its own: the
-service, coturn and a Caddy in front of the service, nothing else. Its
+service, coturn, the WebSocket relay (section 12) and a Caddy in front of
+the service and the WebSocket relay, nothing else. Its
 memory is a setup input (`RV_MEMORY_MB`, by default what the kernel
 reports), and `rendezvous/deploy/setup-server.sh` works the limits out
 from it with one formula, in one place:
@@ -768,7 +785,8 @@ reserve        = 256 MiB                       the system and coturn
 Caddy          GOMEMLIMIT = (memory - 256) x 50%   a soft limit: Go collects
                                                garbage harder near it
 the service    MemoryMax  = (memory - 256) x 35%   the kernel ends it past this
-headroom       = the other 15%
+headroom       = the other 15%, out of which
+the WebSocket relay  MemoryMax = 32 MiB + 2 MiB x its slots   (64 MiB at 16)
 ```
 
 | Server | memory the kernel reports | Caddy GOMEMLIMIT | the service MemoryMax |
@@ -822,11 +840,29 @@ attack (about 256 + 598 + 430 = 1284 MiB) leaves about 680 MiB of the 1967.
 A 2 GB server rides out a peer filling both pools with at most a
 restart of the service near the very end.
 
-**What protects the rest.** The service's unit
-(`rendezvous/deploy/nereus-rendezvous.service`) has `OOMScoreAdjust=500`
-and Caddy's drop-in (`rendezvous/deploy/caddy-override.conf`) `-100`, so if
-the whole host runs short the kernel ends the service first, which also
-frees every connection Caddy holds for it; Caddy's drop-in adds
+**The WebSocket relay beside them.** The relay is a process of its own
+(section 12) so relay traffic can never starve registrations or take the
+service's ceiling. Its ceiling comes from its slots, not the server's
+memory, and out of the 15% headroom: 32 MiB for Python and the idle relay
+plus 2 MiB a slot, 64 MiB at the default 16 slots. Measured with every one
+of those 16 sessions stalled (both legs of each full, section 12.5), it
+held 30.2 MiB, plus at most 64 KiB of kernel buffers for each of its 96
+connections at the caps (64 waiting to join and 32 joined; 6 MiB): about
+36 MiB, well under 64. At 2 GB the ceilings
+together are 256 (reserve) + 855 (Caddy) + 598 (the service) + 64 (the
+relay) = 1773 MiB of about 1967, and under the attack above about 256 +
+598 + 430 + 64 = 1348, leaving about 620. At 1 GB they are 256 + 352 + 246
++ 64 = 918 of about 961, the relay taking 64 of the 105 MiB of headroom.
+Each relay leg is also a connection Caddy holds (section 12.5), at most 96
+more beside the service's 2256.
+
+**What protects the rest.** The WebSocket relay's unit
+(`rendezvous/deploy/nereus-relay.service`) has `OOMScoreAdjust=700`, the
+service's (`rendezvous/deploy/nereus-rendezvous.service`) `500` and Caddy's
+drop-in (`rendezvous/deploy/caddy-override.conf`) `-100`, so if the whole
+host runs short the kernel ends the relay first and then the service,
+which also frees every connection Caddy holds for them (relay legs join
+again with their grants, section 12.4); Caddy's drop-in adds
 `Restart=on-failure` with `RestartSec=2`, so a Caddy that is ended anyway
 comes back at once. The service's unit raises its open-file limit to 8192
 (`LimitNOFILE`): one descriptor per connection, and systemd's default of
@@ -869,7 +905,8 @@ heartbeat.
 
 ### 9.3 Storage
 
-The service keeps everything in memory. It writes nothing to disk: no
+The service keeps everything in memory, and so does the WebSocket relay
+(section 12.6). The service writes nothing to disk: no
 station, id, key, address, introduction, nameplate or mailbox, no cache and
 no log file. A restart forgets every registration, and stations register
 again on their next connection (a station reconnects with its usual
@@ -888,7 +925,8 @@ It never holds a whole id, an address, a label, the TURN secret, a minted
 username or password, an SDP, a candidate, a mailbox body, a nonce, a
 signature, a public key or a nameplate number (the number is part of a
 pairing code). The websockets library's own log records, which can carry
-addresses, are switched off.
+addresses, are switched off. The WebSocket relay's log follows the same
+rules (section 12.6).
 
 ## 10. Conformance
 
@@ -929,6 +967,7 @@ fixtures) is made at run time.
 | `register-proof.json` | `key` (`fixed`, `publicKey`, `id`), `nonce`, `transcriptHex`, and `cases`: `{"name","publicKey","signature","valid"}` | `id` is the id of `publicKey`, the transcript of `nonce` is `transcriptHex`, and a case is valid exactly when its key is a canonical P-256 key and its signature (strict base64url, 64 bytes, raw) verifies over it: the signature and its high-s twin (`s` replaced by n - `s`, section 4.1) are; another nonce, a flipped bit, another key, a DER signature, padding, a short signature, three bad keys, `r` of 0, `r` of n and `s` of n are not |
 | `introduce-signature.json` | `device` (`fixed`, `publicKey`, `id`), `stationId`, `nonce`, `transcriptHex`, and `cases`: `{"name","signature","valid"}` | the transcript of `stationId` and `nonce` is `transcriptHex`, `id` is the fingerprint of `publicKey`, and a case verifies with the device's key exactly when it is valid: the signature and its high-s twin are; another nonce, another station, the nonce's text, a flipped bit, another device, `r` of 0, `r` of n and `s` of n are not |
 | `turn-credentials.json` | `cases`: `{"secret","expires","stationId","username","password"}` | the username and password from section 8 |
+| `relay-grant.json` | `prefixHex` and `cases`: `{"name","secret","leg","sessionHex","expires","token","valid":true}` or `{"name","secret","token","valid":false,"why"}` | for the service and the relay only (a station and a client treat a token as opaque): each valid token is what section 12.2 gives for its secret, leg, session and expiry, and each invalid one (a flipped bit, another secret, version 2, legs 3 and 0 with MACs that verify, 71 characters, padding, the standard alphabet, empty) is refused. The tokens were computed with `openssl dgst -sha256 -hmac`, not with the service's code |
 
 ### 10.3 Control fixtures
 
@@ -951,12 +990,14 @@ station or client to the running service, which must answer `error`
 same for `"client"`.
 
 The fixtures cover every kind in each direction it travels (section 5.3):
-eight from a station, five from a client, thirteen to a station and eight to
+eight from a station, five from a client, fourteen to a station and nine to
 a client, with both ends of candidates, relay and no relay, and codes a
 receiver does not know, and one message to a station
 (`server-station-introduction-extra-keys`) and one to a client
 (`server-client-answer-extra-keys`, also with an extra key in its `turn`)
-carrying keys no kind lists, which decode. The refusals: an `id` in capitals and one of 25
+carrying keys no kind lists, which decode, and a `relay.grant` to a client
+with a key no kind lists (`server-client-relay-grant-extra-keys`). The
+refusals: an `id` in capitals and one of 25
 characters; a padded key, a key that is a number, a `register` without
 `publicKey`; a 63-byte signature; `turn` as a string; an empty `answer`; an
 `answer`, an `offer` and a `body` over 65536 bytes (one counted in
@@ -970,7 +1011,10 @@ an `introduce` without `offer`; nameplates 0, 1000000, `"7"`, `7.5` and
 a `type` that is a number; and, for a client or station decoder, a `turn`
 that is a string or lacks `password`, a `hello` `version` that is a string,
 an `introduction` without `nonce`, a negative `retryAfterMs`, a
-`credentials` sent to a client and an unknown kind.
+`credentials` sent to a client and an unknown kind; a `relay.grant` whose
+token is a number or padded, whose URL is `https:` or missing, one to a
+station without `from` or with `expires` as a string, and a `relay.grant`
+sent to the service by a station and by a client.
 
 The 128 KiB transport cap is enforced before decoding, so no fixture holds
 it; `test_control.py` checks it against the running service, and
@@ -1050,11 +1094,16 @@ absent keys have these defaults:
 | `turnUrls` | `["turn:rv4.conformance.invalid:3478?transport=udp","turn:rv6.conformance.invalid:3478?transport=udp"]` |
 | `turn` | `true`: a TURN secret is configured (the runner makes one at run time); `false`: none |
 | `turnTtlSeconds` | 86400 |
+| `relay` | `false`: no relay secret, so no `relay.grant`; `true`: a relay secret is configured (the runner makes one at run time, apart from the TURN secret) |
+| `relayUrl` | `"wss://rv.conformance.invalid/v1/relay"` |
+| `relayTtlSeconds` | 120 |
 | `wallClock` | 1800000000: the Unix time when the fixture starts; it moves only with `advanceMs` |
 | `introductionsPerAddressPerMinute`, `introductionsPerStationPerMinute`, `mailboxOpensPerAddressPerMinute`, `candidatesPerSide`, `mailboxMessagesPerSide`, `connectionsPerAddress`, `stationsPerAddress`, `maxConnections`, `maxStations`, `handshakeTimeoutMs`, `idleTimeoutMs`, `introductionLifetimeMs`, `mailboxLifetimeMs` | section 9.1 |
 
-A core or app runner reads `stunUrls`, `turnUrls`, `turnTtlSeconds` and
-`wallClock` to fill the service's messages, and ignores the rest.
+A core or app runner reads `stunUrls`, `turnUrls`, `turnTtlSeconds`,
+`relayUrl`, `relayTtlSeconds` and `wallClock` to fill the service's
+messages, and ignores the rest. Every fixture written before section 12
+leaves `relay` at its default, so its wire is exactly what it was.
 
 **`pairedDevices`** names the devices (as in `"$device:<d>:id"`) the Core
 has paired before the fixture starts. The core runner makes their keys at
@@ -1081,6 +1130,7 @@ them, without sending anything.
 | `"$sdp:offer:<name>"`, `"$sdp:answer:<name>"` | the text of `sdp/offer.sdp` or `sdp/answer.sdp`; recorded | a non-empty string; recorded |
 | `"$candidate:<name>"` | a host candidate of the runner's own, in section 5.2's form; recorded | a string that decodes as a `candidate` (section 5.2); recorded |
 | `"$turn:<k>:<name>"` | credentials minted as section 8 with the runner's own secret, for station key `<k>`, expiring at `wallClock` plus the seconds advanced plus `turnTtlSeconds`, with `turnUrls`; recorded | exactly that object: the username is `<expires>:<id of k>`, the password the HMAC-SHA1 of it under the secret the runner gave the service (computed by the runner, not the service), `urls` the configured list; recorded |
+| `"$relayToken:<leg>:<session>"` | a token minted as section 12.2 with the runner's own relay secret, for `<leg>` (`core` or `device`), in the session recorded as `<session>` (16 random bytes the first time the name is used), expiring at `wallClock` plus the seconds advanced plus `relayTtlSeconds` | strict base64url of 54 bytes whose MAC verifies under the relay secret the runner gave the service (computed by the runner with HMAC-SHA256 directly), version 1, that leg, that expiry, and the session recorded as `<session>`; a name used for the first time records it and must hold a session no other name holds, so two introductions never share one |
 
 Keys and devices are named by short names (`a`, `b`, `d`, `e`) and made at
 run time, never written in a fixture; a key name and a device name live in
@@ -1147,6 +1197,11 @@ send (a nameplate number, a mailbox body), as in link section 16.3.
 | `connections-per-address`, `connections-per-ipv6-prefix` | service | the per-address-group cap (1 here) answered with `tooManyConnections` instead of `hello`; two addresses in one IPv6 /64, and two /64s in one /56, counted as one group, another /56 not; an IPv4-mapped address counted as its IPv4 address |
 | `connection-pools` | service | a connection counts in the connection pool until it registers: the per-group cap (1) and the total (2) refuse others while the station is starting, and once it is registered a client from its address, and one more elsewhere, are admitted |
 | `stations-per-address`, `stations-in-total` | service | the station pool's per-group cap (1 here, across one IPv6 /56) and its total (1 here): `tooManyConnections` or `overloaded` instead of `registered`, the close; a station on another /56 is registered, and a registration replacing the one that holds the slot is not refused |
+| `introduce-relay-grant` | service, core, app | with a relay secret: an answer with `turn` true gives the client its `answer` and then a `relay.grant` with the device token, and the station its `credentials` and then a `relay.grant` naming the introduction, with the Core token of the same session, both with the configured URL and expiring 120 s on |
+| `introduce-relay-grant-without-turn` | service | a relay secret and no TURN secret: `turn` null to both, and the grants all the same |
+| `introduce-relay-grant-direct` | service, app | with a relay secret, an answer with `turn` false: no grant and no `credentials` |
+| `introduce-relay-grant-unaccepted` | service, core | with a relay secret, an introduction the Core does not accept (a device it has not paired): no answer, so no grant to anyone |
+| `introduce-relay-grant-per-introduction` | service | two introductions to one station, 5 s apart: two sessions, each grant expiring 120 s after its own answer |
 
 ### 10.5 Running the service's runner
 
@@ -1160,7 +1215,10 @@ also what CI installs (the `rendezvous` job). The service runs on websockets
 10.4 (Ubuntu 24.04, the legacy asyncio implementation) and on websockets 13
 and later (the new one); `rendezvous/server/nereus_rendezvous/transport.py`
 isolates the difference. The runner also alters one fixture in memory and
-checks that the failure names the step and field that differ.
+checks that the failure names the step and field that differ. The same run
+holds the WebSocket relay to section 12 (`test_relay.py`,
+`test_relay_queues.py`, `test_relay_grant.py`, and the relay's process in
+`test_nothing_on_disk.py`).
 
 ## 11. Changing the rendezvous
 
@@ -1183,3 +1241,317 @@ checks that the failure names the step and field that differ.
 - **Nothing on disk, nothing sensitive in the log** (section 9) is part of
   the wire's contract, not an implementation detail: a self-hoster relies
   on it.
+
+## 12. The WebSocket relay
+
+The last way to reach a Core, for a network that passes only web traffic:
+TCP 443, perhaps through a proxy, and nothing on UDP. Each end opens one
+WebSocket to the relay, a process of its own behind the service's name at
+`wss://rv.nereussdr.com/v1/relay`, and the relay carries the datagrams of
+the session's ICE connections between them. It is a datagram pipe, not a
+byte stream: each message carries exactly one ICE, DTLS, SCTP or SRTP
+datagram, so every reliable and every secure layer stays end to end, and a
+leg that breaks and joins again costs only the datagrams sent meanwhile
+(the relay's end of a session is named by its grant, never by an address).
+The relay sees ciphertext, timing, sizes and the two ends' addresses, what
+coturn sees (pairing design section 5.2).
+
+Only the service's and the relay's side is here. How an end offers the
+relay to its ICE agent (the relay's loopback address as a low-priority
+candidate in the same agent) belongs to the Core's and the apps' work
+(iPhone app plan Task 29).
+
+### 12.1 The grant
+
+A relay grant is minted when, and only when, a station accepts an
+introduction with the relay allowed: its `answer` with `turn` true (section
+6.3), the moment TURN credentials are minted (section 8), when the service
+holds a relay secret (`relay_secret_file`). `turn` true means "the relay is
+allowed" (`relay = allow` on the Core) for both relays. So there is no
+grant for an introduction the station never answers (a device it has not
+paired or has revoked, a signature that does not verify), none for an
+answer with `turn` false, and at most one per introduction (a second
+`answer` is `unknownIntroduction`).
+
+```
+service -> client:   {"type":"answer","answer":<sdp>,"turn":<turn object>|null}
+service -> client:   {"type":"relay.grant","url":"wss://rv.nereussdr.com/v1/relay","token":<the device's token>,"expires":<n>}
+service -> station:  {"type":"credentials","from":<intro>,"turn":<turn object>|null}
+service -> station:  {"type":"relay.grant","from":<intro>,"url":"wss://rv.nereussdr.com/v1/relay","token":<the Core's token>,"expires":<n>}
+```
+
+- `url` is where the relay is (`relay_url`; on the NereusSDR server
+  `wss://<RV_HOST>/v1/relay`, the service's own name). Both ends get the
+  same `url` and `expires`, and different tokens: each its own end's
+  (section 12.2), both naming one session made for this introduction.
+- `expires` is the Unix time until which the token can open its session,
+  120 s after the answer by default (`relay_ttl_seconds`, the introduction
+  lifetime). A session already open outlives it (section 12.4).
+- **When an end opens its leg.** At once, on receiving its `relay.grant`,
+  without waiting for candidate gathering or anything else of the
+  introduction: that is what takes back the relay's cold-start gap
+  (the design's "opened at the introduction": the introduction accepted,
+  since nobody has a grant before the Core accepts). An end that never
+  needs the relay closes its leg once its session runs another way, or
+  lets the relay end it as idle (section 12.4).
+- An end treats `token` as opaque text: it sends it only to the relay at
+  `url`, never logs it, and never puts it in the URL (a proxy may log the
+  URL). A station and a client check it only as section 5.2's
+  `relayToken`.
+- **What an older end does.** `relay.grant` is a kind that version 1 ends
+  do not know, so they log it and ignore it (sections 5.1 and 5.3), and
+  nothing else in the exchange changes: the `answer` and `credentials`
+  before it are byte for byte what they were. A service without a relay
+  secret sends no `relay.grant` at all, so its wire is exactly version 1's.
+  `hello` `version` stays 1: this is the service adding a kind to what it
+  sends, which section 11 allows without asking which version a peer
+  speaks, and a station or client never sends anything new to the service.
+  An end simply uses the relay when a grant comes, and not otherwise. An
+  older Core ignoring the grant leaves a newer client's leg alone in its
+  session, which ends 30 s later (`peerGone`).
+- **Why a kind of its own**, not a key in `answer` and `credentials`: the
+  `answer` to a client already carries up to 131072 bytes of the station's
+  answer and the `turn` object, 167 bytes under section 2's bound of 132096
+  at the caps, with no room for a grant; and the grant's fixtures stand
+  apart from the credentials' (section 10).
+
+### 12.2 The token
+
+```
+payload = version (1 byte: 1) || leg (1 byte: 1 the Core, 2 the device)
+          || session (16 bytes) || expires (4 bytes, big-endian Unix seconds)
+mac     = HMAC-SHA256(relay secret, "NereusSDR relay grant v1\n" || payload)
+token   = base64url(payload || mac), no padding: 54 bytes, 72 characters
+```
+
+- The prefix is the 24 ASCII bytes `NereusSDR relay grant v1` and one line
+  feed (0x0A): hex `4e65726575735344522072656c6179206772616e742076310a`.
+- `session` is 16 bytes from the operating system's random generator, new
+  for every grant. The two tokens of a grant differ only in `leg` and the
+  MAC.
+- The relay secret is its own secret, never the TURN secret (the service
+  refuses to start when they are equal; coturn's configuration holds the
+  TURN secret in plain text, and nobody who reads it may mint grants). On
+  the NereusSDR server it is 32 random bytes written as 64 hex characters
+  in `/etc/nereus-rendezvous/relay-secret` (root only), made by
+  `setup-server.sh` and handed to the service and the relay by systemd
+  (`LoadCredential=`); the bytes are the file's text without its line end.
+- **What the MAC binds.** The session, so the legs of one introduction
+  pair only with each other and a token of one introduction is useless for
+  another; the leg, so the relay knows the Core's leg from the device's by
+  the token alone, whatever the connection claims, and two device legs
+  never pair; and the expiry, which no end can extend.
+- **How the relay checks a grant: the MAC, not a socket to the service.**
+  The relay verifies a token with the secret alone, so the two processes
+  share no state and no socket: the relay keeps admitting legs while the
+  service restarts, and the reverse. Every rule that needs state (who is in
+  a session, whether a session has ended, section 12.4) is the relay's own,
+  since it sees every join. A local socket would add a request and a
+  dependency on the service for every join and serve no rule. The cost of a
+  stateless token is that a relay restart forgets which sessions ended; the
+  tokens of such a session can open it again until they expire (section
+  12.4), for the same two ends, which is harmless.
+- The token names no station, no device and no address. The relay learns
+  none of them from it.
+
+`crypto/relay-grant.json` has valid and invalid tokens (section 10.2).
+
+### 12.3 Frames
+
+- One WebSocket per leg, over TLS on TCP 443, at the grant's `url`, opened
+  as section 2 says (HTTP/1.1, Apple's `Upgrade: WebSocket` works, no
+  WebSockets over HTTP/2). The query is ignored. A plain request there gets
+  `426` with a short text, as the service's does.
+- Every message is one **binary** WebSocket message: its first byte is the
+  **tag**, the rest the **payload**. The WebSocket message's own length is
+  the length; there is no length field inside. A message is at most
+  **1501 bytes** (the tag and 1500 bytes); a longer one closes the leg with
+  1009 before it is read. A text message is a protocol error.
+- **Tags:**
+
+| Tag | Direction | Payload | Meaning |
+| --- | --- | --- | --- |
+| `0x00` | never | | not a tag: a protocol error |
+| `0x01` | leg to relay to the other leg | one datagram, 1 to 1500 bytes | the control connection's ICE agent (the station link's control peer) |
+| `0x02` | leg to relay to the other leg | one datagram, 1 to 1500 bytes | the media connection's ICE agent (the link's media peer) |
+| `0x03` to `0x7F` | leg to relay to the other leg | one datagram, 1 to 1500 bytes | data tags kept for later streams: the relay forwards them as it does 1 and 2; an end drops (and counts) a datagram whose tag it does not know |
+| `0x80` JOIN | leg to relay | the token, as ASCII | the first message on a leg, within 10 s of opening it |
+| `0x81` READY | relay to leg | 2 bytes: the frame version (1), then 1 when the other leg is present or 0 | the join was accepted |
+| `0x82` PEER | relay to leg | 1 byte: 1 the other leg joined (or joined again), 0 it left and its place is held (section 12.4) | |
+| `0x83` END | relay to leg | 1 to 64 ASCII letters: the code (section 12.4) | the leg is ended; the close follows at once (1000, or 1001 for `shuttingDown`) |
+| `0x84` to `0xFF` | relay to leg | | kept for later relay messages: an end ignores one it does not know |
+
+- A leg's JOIN when joined, a data message with no payload, a tag of `0x00`,
+  and any tag from `0x80` up that a leg sends other than a first JOIN, are
+  protocol errors (END `protocolError`).
+- **What the relay reads of a datagram: its tag and its length, and
+  nothing else.** It forwards the message as it came, tag included, to the
+  other leg. It never reads, changes or keeps the payload beyond the leg's
+  queue (section 12.5). `test_relay_queues.py` holds it to this with
+  datagrams shaped like DTLS records, STUN and RTP that carry a known
+  marker: the relay touches only their first byte and their length, queues
+  the very object it received, and no log line holds the marker.
+- Examples, in hex: a JOIN is `80` followed by the 72 characters of the
+  token (73 bytes); READY with the other leg already there `81 01 01`;
+  PEER, the other leg left, `82 00`; END for an idle session
+  `83 69 64 6c 65` ("idle"); a DTLS 1.2 application-data record for the
+  media connection `02 17 fe fd ...`.
+
+**One leg per end, both connections on it (the stream tag).** A session
+runs two ICE connections, control and media, at each end. One leg per end
+carries both, a tag telling them apart, rather than two WebSockets per end:
+half the TLS connections and half the joins after a reset, and one grant
+per session. The tag does not reach the ICE and DTLS demultiplexing at the
+ends. Each end keeps one loopback UDP socket per ICE agent: a datagram read
+from the control agent's socket goes out with tag 1 and one from the media
+agent's with tag 2, and an arriving message's tag picks the socket its
+payload is written to, so each agent receives exactly the bytes the other
+end's agent sent. RFC 7983's demultiplexing by first byte (0 to 3 STUN, 20
+to 63 DTLS, 128 to 191 RTP and RTCP) happens inside each agent on those
+untagged datagrams, as it would over UDP. A tag is needed because both
+agents send STUN and DTLS, so a datagram's first byte cannot say which
+agent it belongs to; the ICE username fragment could, but only in STUN
+messages and only by parsing them, which the relay must not do. One byte
+is enough: two streams now and 125 more tags kept. Confirming this with
+both agents on one leg, through libjuice and on iOS, is the ends' part
+(the design marks the sharing as inferred until then); on the relay's side
+the tests show both tags forwarded independently and unchanged.
+
+### 12.4 Joining, rejoining and ending
+
+- **Joining.** The relay checks the token (section 12.2): not a token this
+  secret minted, `badToken`. Then:
+  - its session is open: the leg takes its place, whatever the expiry. An
+    older connection still in that place is ended with `replaced` (after a
+    reset the relay may not yet have seen the old TCP connection die; the
+    newest connection wins);
+  - its session is not open: `ended` when the session has ended (section
+    below), `expired` when `expires` has passed, `full` when every slot is
+    taken, and otherwise the session opens and the leg is its first.
+  The leg gets READY; the other leg, when present, gets PEER 1.
+- **Rejoining.** When a leg's connection ends (the peer closed, the network
+  broke, or its writer blocked for 10 s on one message, which the relay
+  closes with 1008), its place is held for **30 s**: the other leg gets
+  PEER 0, and datagrams for the missing leg are dropped, not queued. A new
+  connection joining with the same token within 30 s takes the place back
+  (READY, and PEER 1 to the other). A side that has not joined yet has the
+  same 30 s from the session's opening. When the 30 s pass, the leg that is
+  there gets END `peerGone` and the session ends.
+- **Idle.** With both legs present, a session that forwards nothing for
+  **30 s** ends (`idle` to both). ICE's consent checks (RFC 7675, about
+  every 5 s) keep a session ICE is using alive; a session ICE did not
+  choose goes quiet and frees its slot.
+- **Once ended.** A session's tokens never open it again while they are
+  unexpired (`ended`); after that `expired` answers them. The relay keeps
+  this in memory; after a relay restart, a leg whose grant has not expired
+  joins again and opens its session afresh, and after the expiry the ends
+  need a new introduction.
+- WebSocket pings every 20 s, closing a connection whose pong is 20 s late
+  (section 9.2).
+
+| END code | Close | When | What the end does |
+| --- | --- | --- | --- |
+| `protocolError` | 1000 | a text message, a first message that is not a JOIN, a bad tag or an empty datagram (section 12.3) | nothing more with this leg; the software is at fault |
+| `timeout` | 1000 | no JOIN within 10 s of opening | may join again with the same grant |
+| `badToken` | 1000 | the token is not one the relay's secret minted | does not use this grant again |
+| `expired` | 1000 | the session is not open and the grant's `expires` has passed | needs a new introduction |
+| `ended` | 1000 | the grant's session has ended | does not use this grant again |
+| `full` | 1000 | every slot taken, or too many connections waiting to join | may try again shortly |
+| `tooManyConnections` | 1000 | the per-address-group cap on connections | may try again shortly |
+| `replaced` | 1000 | a newer connection joined as this leg | does nothing: the newer one is its own |
+| `peerGone` | 1000 | the other leg did not join, or come back, within 30 s | the session is over |
+| `idle` | 1000 | nothing forwarded for 30 s with both legs present | the session is over |
+| `shuttingDown` | 1001 | the relay is stopping | joins again with the same grant while it is unexpired |
+
+A leg is also closed with 1009 and no END for a message over 1501 bytes,
+and with 1008 and no END when one of its messages has waited 10 s to be
+written (it would not read an END either). An end treats an END code it
+does not know as the session being over.
+
+### 12.5 Limits
+
+Every value is configurable (`relay.conf`, `[limits]`); these are the
+defaults. The message size is the wire's, not a setting.
+
+| Limit | Default | Why |
+| --- | --- | --- |
+| Sessions at once (`slots`) | 16 (`RV_WS_RELAY_SLOTS`) | about as many as coturn's 128 slots carry relayed at both ends (section 8), and what one vCPU carries in Python: the prototype measured 0.027 to 0.042 CPU seconds a second per session, so 16 take about 0.4 to 0.7 of a vCPU before Caddy's TLS (inferred; to be measured on the server). `full` beyond it; a rejoin never needs a slot |
+| Rate, per session, each way | 80000 bytes a second (`rate_bytes_per_second`), a bucket holding one second's worth | coturn's `max-bps` (section 8), above the largest session shape. What passes it is dropped (and counted), never delayed |
+| Message | 1501 bytes: a tag and 1500 | one datagram; the ends' ICE, DTLS and SCTP stay under it |
+| Send queue per leg | 64 messages or 24576 bytes (`queue_frames`, `queue_bytes`), the oldest dropped first | about 0.3 s at the rate cap: a leg that falls behind loses its oldest datagrams, which SCTP sees as loss and congestion control answers, instead of a delay that grows without bound. Each leg has its own queue and writer, so a leg that reads slowly never holds up the other |
+| Write buffer past the queue | 8192 bytes (the websockets library's `write_limit`) | kept small because what has left the queue can no longer be dropped |
+| One message's send | 10 s (`send_stall_ms`) | a leg that stops reading is closed (1008) and its place waits for a rejoin |
+| Connections per address group | 8 (`connections_per_address`), joined or not | a household with a few Cores and phones; groups as section 9.1 |
+| Connections not yet joined, in total | 64 (`max_pending`) | a join takes one round trip; `full` beyond it |
+| Join | 10 s (`join_timeout_ms`) | `timeout` |
+| Rejoin, and the first join of the other side | 30 s (`rejoin_ms`) | a reset's reconnect is three round trips and a TLS handshake; ICE's consent freshness allows 30 s |
+| Idle | 30 s (`idle_timeout_ms`) | frees the slot of a session ICE did not choose |
+| WebSocket ping and timeout | 20 s and 20 s | as the service (section 9.2) |
+| Kernel buffers per connection | 16384 bytes each way (`socket_buffer_bytes`) | as the service (section 9.1): at most 64 KiB a connection in the kernel |
+
+**TCP_NODELAY on every leg.** The relay sets TCP_NODELAY on every
+connection it accepts (asyncio also sets it on its TCP transports; the
+relay does not depend on that), so each datagram goes out at once. Caddy,
+between the relay and each end, is Go, whose TCP connections have
+TCP_NODELAY on by default. The ends set it on their own legs, and keep a
+bounded, drop-oldest queue of their own as well: the relay's queues cannot
+help with what an end buffers.
+
+**Memory.** Measured with `rendezvous/tests/relay_memory_probe.py` in an
+`ubuntu:24.04` container with Ubuntu's `python3-websockets` 10.4 on Python
+3.12, the relay run as its own process as its unit runs it; resident
+memory, each step on top of the one before:
+
+| | 16 slots, 64 waiting (the defaults) | 128 slots, 256 waiting |
+| --- | --- | --- |
+| at start | 28.0 MiB | 28.0 MiB |
+| with every waiting connection open | 28.8 MiB | 32.4 MiB |
+| with every session open, idle | 29.1 MiB | 34.5 MiB |
+| with every leg stalled, its peer sending as fast as it can for 5 s | 30.2 MiB | 75.0 MiB |
+
+A stalled leg holds up to about 160 KiB in the relay (the 128-slot run,
+where Python was busy enough that every leg's buffers filled), plus at most
+64 KiB of kernel buffers per connection. At the defaults that is at most
+about 30 MiB and 96 x 64 KiB (6 MiB), under the unit's MemoryMax of 32 MiB
++ 2 MiB x 16 = 64 MiB, which `setup-server.sh` writes in the drop-in
+`nereus-relay.service.d/memory.conf`. Section 9.1 has the arithmetic beside
+the service and Caddy. `test_relay_queues.py` shows the queue never passing
+its caps however long a reader stalls (3000 datagrams sent into a leg that
+stopped reading: the queue at most 24576 bytes, the library's buffer at
+its limit, and the reader, once back, getting what was sent less exactly
+what the queue dropped, in order, ending with the newest).
+
+### 12.6 Storage, logs and data use
+
+- The relay keeps everything in memory and writes nothing to disk, as the
+  service (section 9.3). It reads only its configuration and its secret, at
+  start. `test_nothing_on_disk.py` runs it as its own process with an empty
+  working directory, `HOME` and `TMPDIR` through a session, a rejoin and a
+  stop, and checks all three are still empty.
+- It logs to standard error only (the journal): a session opening and
+  ending (with its counts), a leg joining, leaving or being replaced, and
+  the data use below, with at most the first six characters of a session's
+  id (its base64url). Never a whole session id, a token, the secret, an
+  address, or anything a leg sends. The websockets library's records are
+  switched off, as for the service.
+- **Data use.** When a session ends the relay logs how long it ran, the
+  frames and bytes it forwarded, and the datagrams it dropped over the rate,
+  from full queues and with no one at the other end. Once an hour it checks
+  whether the UTC day has changed and, when it has, logs the finished day's
+  total and sessions and the total since it started (and the day so far
+  when it stops). The server's data-use report (`rendezvous/README.md`,
+  "Data use") counts these bytes too, with everything else the server
+  sends.
+
+### 12.7 Deploying it
+
+On the NereusSDR server `setup-server.sh` makes the relay secret, writes
+`/etc/nereus-rendezvous/relay.conf` (loopback port 8711, the slots, the
+credential path) and the service's `relay_url` and `relay_secret_file`,
+installs `nereus-relay.service` and its memory drop-in, and enables and
+starts it; Caddy's `handle /v1/relay*` sends the relay's path to
+127.0.0.1:8711 and [::1]:8711 and everything else to the service, as
+before. No new port opens: the relay rides TCP 443 under the service's name
+(`rendezvous/README.md`). `rendezvous/tests/caddy-check.sh`,
+`coturn-check.sh` and `readme-check.sh` exercise it through Caddy and as
+the setup script installs it.
