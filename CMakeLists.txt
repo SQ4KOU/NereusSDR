@@ -1434,6 +1434,14 @@ list(APPEND CORE_SOURCES
     # channel, for a connection the service introduced.
     src/core/session/DataChannelTransport.cpp
     src/core/session/RendezvousDialer.cpp
+    # iPhone app plan Task 29 (R-IOS-16): moving a session to a better
+    # path (the link document, section 21): the switchable transport under
+    # each session, the path race and its rungs, and the media replace's
+    # duplicate filter.
+    src/core/session/SwitchableTransport.cpp
+    src/core/session/PathRacer.cpp
+    src/core/session/media/RtpDuplicateFilter.cpp
+    src/core/session/media/DualPathAudio.cpp
 )
 
 # CoreAudioHalBus — macOS-only IAudioBus implementation bridging to the

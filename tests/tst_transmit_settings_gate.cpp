@@ -251,6 +251,14 @@ void TstTransmitSettingsGate::olderCoreOffersNoTransmitSettings()
     // parity Task 28's txDisplayVersion, R-R3-21's displayClockVersion and
     // the Task 28 fix wave's controlChannelVersion; a Core from before them
     // sends none.
+    // iPhone app plan Task 29: mediaReplaceVersion, controlSwitchVersion and
+    // relayAllowed after it.
+    QCOMPARE(updates.last().name, QByteArrayLiteral("relayAllowed"));
+    updates.removeLast();
+    QCOMPARE(updates.last().name, QByteArrayLiteral("controlSwitchVersion"));
+    updates.removeLast();
+    QCOMPARE(updates.last().name, QByteArrayLiteral("mediaReplaceVersion"));
+    updates.removeLast();
     QCOMPARE(updates.last().name, QByteArrayLiteral("controlChannelVersion"));
     updates.removeLast();
     QCOMPARE(updates.last().name, QByteArrayLiteral("displayClockVersion"));

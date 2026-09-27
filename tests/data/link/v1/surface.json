@@ -307,6 +307,21 @@
         },
         {
             "kind": "i64",
+            "name": "mediaReplaceVersion",
+            "value": 1
+        },
+        {
+            "kind": "i64",
+            "name": "controlSwitchVersion",
+            "value": 1
+        },
+        {
+            "kind": "bool",
+            "name": "relayAllowed",
+            "value": true
+        },
+        {
+            "kind": "i64",
             "name": "sessionHolderVersion",
             "value": 1
         },
@@ -1913,6 +1928,14 @@
             "capabilityVersion": 1,
             "minMinor": 11,
             "verb": "notice.takeBack"
+        },
+        {
+            "arguments": [
+            ],
+            "capability": "controlSwitchVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "session.pathTicket"
         }
     ],
     "limits": {
@@ -2009,10 +2032,60 @@
             "unit": "bytes",
             "value": 131072
         },
+        "mediaReplaceDrainMs": {
+            "source": "DaemonMediaController::kReplaceDrainMs",
+            "unit": "ms",
+            "value": 2000
+        },
+        "mediaReplaceOverlapMs": {
+            "source": "DaemonMediaController::kReplaceOverlapMs",
+            "unit": "ms",
+            "value": 1000
+        },
         "missedPongs": {
             "source": "StationServer::kDefaultMaxMissedPongs",
             "unit": "count",
             "value": 2
+        },
+        "pathOldCloseMs": {
+            "source": "SwitchableTransport::kOldCloseMs",
+            "unit": "ms",
+            "value": 5000
+        },
+        "pathSwitchDeadlineMs": {
+            "source": "SwitchableTransport::kSwitchDeadlineMs",
+            "unit": "ms",
+            "value": 10000
+        },
+        "pathTicketLifetimeMs": {
+            "source": "StationServer::kPathTicketLifetimeMs",
+            "unit": "ms",
+            "value": 10000
+        },
+        "pathTicketMaxChars": {
+            "source": "kMaxPathTicketChars",
+            "unit": "characters",
+            "value": 128
+        },
+        "pathUpgradeRetryMs": {
+            "source": "PathRacer::kUpgradeRetryMs",
+            "unit": "ms",
+            "value": [
+                5000,
+                30000,
+                120000,
+                300000
+            ]
+        },
+        "raceIpv4DelayMs": {
+            "source": "PathRacer::kIpv4DelayMs",
+            "unit": "ms",
+            "value": 250
+        },
+        "serviceAnswerDeadlineMs": {
+            "source": "RendezvousDialer::kAnswerDeadlineMs",
+            "unit": "ms",
+            "value": 10000
         },
         "shortNameMaxBytes": {
             "source": "DeviceStore::kMaxShortNameBytes",
@@ -2312,6 +2385,14 @@
                     "reason",
                     "revision"
                 ]
+            },
+            "replace": {
+                "capability": "mediaReplaceVersion",
+                "fields": [
+                    "connectionId",
+                    "op",
+                    "replaces"
+                ]
             }
         },
         "guiToCore": {
@@ -2393,6 +2474,14 @@
                     "profile",
                     "revision",
                     "sliceId"
+                ]
+            },
+            "replace": {
+                "capability": "mediaReplaceVersion",
+                "fields": [
+                    "connectionId",
+                    "op",
+                    "replaces"
                 ]
             },
             "start": {
@@ -2828,6 +2917,28 @@
             "types": {
                 "device": "object",
                 "mode": "string",
+                "type": "string"
+            }
+        },
+        "path.join": {
+            "optional": [
+            ],
+            "required": [
+                "ticket",
+                "type"
+            ],
+            "types": {
+                "ticket": "string",
+                "type": "string"
+            }
+        },
+        "path.switch": {
+            "optional": [
+            ],
+            "required": [
+                "type"
+            ],
+            "types": {
                 "type": "string"
             }
         },

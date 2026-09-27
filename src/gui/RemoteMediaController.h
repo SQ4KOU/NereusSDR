@@ -386,6 +386,22 @@ public slots:
     /// The client's `txState` (`holderEpoch`, `holderAway`, fix wave I4)
     /// calls it whenever the Core's holder changes.
     void setTransmitHolder(quint64 holderEpoch, bool holderAway);
+    /// iPhone app plan Task 29 (R-IOS-16; the remote media control
+    /// document, "Replacing the media connection"): asks the Core for a new
+    /// media connection beside the current one, which takes over without a
+    /// gap once audio runs on both. What the session calls when it moved to
+    /// a better path (StationClient::pathChanged). False when it cannot now:
+    /// no ready media, a Core without mediaReplaceVersion, one already
+    /// under way, or this window keyed, VOX armed or the Core on the air.
+    bool replaceConnection();
+
+public:
+    /// iPhone app plan Task 29: the media connection's id now, and whether
+    /// a replacement is under way (for the window's diagnostics and tests).
+    QString mediaConnectionId() const;
+    bool replacingConnection() const;
+    /// Copies of audio packets dropped while two connections carried them.
+    quint64 duplicateAudioDropped() const;
 
 signals:
     void recoveryRequested(quint32 expectedEpoch, const QString& reason);
@@ -476,5 +492,14 @@ private:
     void sendMicAudio(std::vector<float>& pending);
     void receiveClockEcho(const QJsonObject& payload, qint64 receivedNs);
     bool send(QJsonObject payload);
+    // iPhone app plan Task 29: a peer's callbacks as the current peer, one
+    // audio packet from any peer to its stream, and the replacement's end.
+    void connectPeer(MediaPeer* peer, quint32 epoch);
+    void routeRtp(const QByteArray& packet, const MediaPeer* from);
+    void deliverRtp(const QByteArray& packet);
+    void receiveReplacementControl(const QJsonObject& payload);
+    void promoteReplacement();
+    void dropReplacement(const QString& why);
+    void retireOldPeer();
 };
 } // namespace NereusSDR

@@ -13,6 +13,11 @@
 //   2026-09-26: iPhone app plan Task 28 (R-IOS-16): introductions answered
 //               with a control connection. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-27: iPhone app plan Task 29 (R-IOS-16): the introduced device
+//               passed to the session; with relay = deny the relay is
+//               settled (none) before gathering, so the session's media
+//               gathers too. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationRendezvous.h"
@@ -37,6 +42,9 @@ namespace NereusSDR {
 // the ICE settings that grow as the credentials arrive.
 struct StationRendezvous::Answer {
     QByteArray id;
+    /// iPhone app plan Task 29: the paired device introduced, whose
+    /// session alone this connection may join (link section 21.2).
+    QByteArray deviceId;
     DataChannelTransport* transport = nullptr;  // parented to the StationRendezvous
     IceConfiguration ice;
     QTimer* credentialsTimer = nullptr;
@@ -218,6 +226,7 @@ void StationRendezvous::answerIntroduction(const RendezvousIntroduction& introdu
     auto owned = std::make_unique<Answer>();
     Answer* answer = owned.get();
     answer->id = id;
+    answer->deviceId = introduction.deviceId;
     answer->ice = IceConfiguration::throughRendezvous(m_client->stunUrls(),
                                                       m_client->relayAllowed(),
                                                       IceConfiguration::localAddressFamilies(),
@@ -241,7 +250,11 @@ void StationRendezvous::answerIntroduction(const RendezvousIntroduction& introdu
             return;
         }
         if (!current->ice.relayAllowed()) {
-            // relay = deny: no credentials follow; gather now.
+            // relay = deny: no credentials follow; gather now. Task 29: the
+            // relay is settled (none), so the session's media connection,
+            // which starts from these settings, gathers too rather than
+            // waiting for credentials that never come.
+            current->ice.setRelay(std::nullopt, 1);
             current->gathering = true;
             current->transport->gatherCandidates(current->ice);
         } else {
@@ -312,7 +325,8 @@ void StationRendezvous::finishAnswer(const QByteArray& id, bool opened)
         // marked as the service's: it never pairs, signs in by key only and
         // shares one source's handshake cap (StationServer.h,
         // acceptIntroducedTransport()).
-        m_server->acceptIntroducedTransport(transport, StationIdentity::toBase64Url(id));
+        m_server->acceptIntroducedTransport(transport, StationIdentity::toBase64Url(id),
+                                            answer->deviceId);
         return;
     }
     transport->closeLink(QStringLiteral("not connected"));

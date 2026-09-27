@@ -209,6 +209,9 @@
 //                                    stationRadiosVersion 1): the station
 //                                    radio verbs.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-27: iPhone app plan Task 29 (R-IOS-16): session.pathTicket in
+//               the verb table (controlSwitchVersion 1). J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -437,6 +440,9 @@ QString notRepresentableReason()
 //                          declares deviceAuth (the `devices` object)
 //   pairing.open,
 //   pairing.close          pairingVersion 1, to the same peers
+//   session.pathTicket     controlSwitchVersion 1 (StationServer answers it,
+//                          link section 21.2; StationClient asks it only to
+//                          move its session)
 //
 // tst_link_surface_manifest keeps this table and the routing in step: a
 // source scan of dispatch() and of each prefix family's handler, and a
@@ -721,6 +727,11 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
          kRadioIdentitySessionProtocolMinor},
         {"notice.takeBack", {{"id", MirrorWireKind::Int64, false}}, "sessionHolderVersion", 1,
          kRadioIdentitySessionProtocolMinor},
+        // Moving a session to another connection (iPhone app plan Task 29,
+        // R-IOS-16; the link document, section 21.2). StationServer answers
+        // it itself; the dispatcher never routes it.
+        {"session.pathTicket", {}, "controlSwitchVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
     };
     return specs;
 }
@@ -810,6 +821,15 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
     // iPhone app Task 71: nor does leaving the Core.
     if (invoke.commandVerb == "session.leave") {
         handleSessionLeave(invoke);
+        return;
+    }
+    // iPhone app plan Task 29: StationServer answers session.pathTicket for
+    // a signed-in session before the dispatcher sees it (link section
+    // 21.2). Reaching here, there is no session whose connection could
+    // move.
+    if (invoke.commandVerb == "session.pathTicket") {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The Core could not move this connection."), {});
         return;
     }
     // iPhone app Task 74: an answer to the Core's question, or Take it

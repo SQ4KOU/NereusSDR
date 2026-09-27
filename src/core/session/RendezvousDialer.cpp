@@ -55,6 +55,18 @@ RendezvousDialer::RendezvousDialer(QObject* parent)
                                       "not open in time";
         fail(QString::fromLatin1(kNotReached));
     });
+    // iPhone app plan Task 29 (link section 21.1): a Core that has not
+    // answered its introduction by now never will.
+    m_answerDeadline = new QTimer(this);
+    m_answerDeadline->setSingleShot(true);
+    connect(m_answerDeadline, &QTimer::timeout, this, [this] {
+        if (m_answered) {
+            return;
+        }
+        qCInfo(lcRendezvousDialer) << "The Core did not answer its introduction";
+        m_coreDidNotAnswer = true;
+        fail(QString::fromLatin1(kCoreTooOldReason));
+    });
 }
 
 RendezvousDialer::~RendezvousDialer()
@@ -86,9 +98,11 @@ void RendezvousDialer::dial(const QList<QUrl>& servers, const QString& stationId
                 if (m_done || m_transport) {
                     return;
                 }
+                // Task 29: without the relay, this end gathers none and
+                // takes none of the Core's relay candidates.
                 m_ice = IceConfiguration::throughRendezvous(
-                    m_client->stunUrls(), true, IceConfiguration::localAddressFamilies(),
-                    families);
+                    m_client->stunUrls(), m_allowRelay,
+                    IceConfiguration::localAddressFamilies(), families);
                 startOffer();
             });
     });
@@ -100,6 +114,8 @@ void RendezvousDialer::dial(const QList<QUrl>& servers, const QString& stationId
             return;
         }
         m_answered = true;
+        m_answerDeadline->stop();
+        m_relayOffered = offered;
         if (!m_transport->acceptDescription(sdp, QStringLiteral("answer"))) {
             qCInfo(lcRendezvousDialer) << "The Core's answer could not be used";
             fail(QString::fromLatin1(kNotReached));
@@ -185,6 +201,9 @@ void RendezvousDialer::startOffer()
         m_client->introduce(m_stationId, device->publicKeySpki(),
                             [device](const QByteArray& message) { return device->sign(message); },
                             sdp);
+        if (!m_answered && m_answerDeadlineMs > 0) {
+            m_answerDeadline->start(m_answerDeadlineMs);
+        }
     });
     connect(transport, &DataChannelTransport::localCandidate, this,
             [this](const QString& candidate) {
@@ -232,6 +251,7 @@ void RendezvousDialer::fail(const QString& reason)
     }
     m_done = true;
     m_deadline->stop();
+    m_answerDeadline->stop();
     if (m_transport) {
         m_transport->disconnect(this);
         m_transport->closeLink(QStringLiteral("not connected"));
@@ -251,6 +271,7 @@ void RendezvousDialer::cancel()
     }
     m_done = true;
     m_deadline->stop();
+    m_answerDeadline->stop();
     if (m_transport) {
         m_transport->disconnect(this);
         m_transport->closeLink(QStringLiteral("cancelled"));

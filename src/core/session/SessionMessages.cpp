@@ -332,6 +332,21 @@ SessionMessage SessionMessages::recordBatch(const RecordBatch& batch)
     return m;
 }
 
+SessionMessage SessionMessages::pathJoin(const QString& ticket)
+{
+    SessionMessage m;
+    m.kind = SessionMessageKind::PathJoin;
+    m.pathTicket = ticket;
+    return m;
+}
+
+SessionMessage SessionMessages::pathSwitch()
+{
+    SessionMessage m;
+    m.kind = SessionMessageKind::PathSwitch;
+    return m;
+}
+
 SessionMessage SessionMessages::propertyWrite(const QByteArray& objectKey,
                                               const QList<MirrorUpdate>& updates,
                                               quint32 writeId)
@@ -464,6 +479,9 @@ constexpr KindName kKindNames[] = {
     { SessionMessageKind::Notice, "notice" },
     // Parity Task 19 (R-IOS-25): a record stream's changes.
     { SessionMessageKind::RecordBatch, "record.batch" },
+    // iPhone app plan Task 29 (R-IOS-16): moving a session.
+    { SessionMessageKind::PathJoin, "path.join" },
+    { SessionMessageKind::PathSwitch, "path.switch" },
 };
 
 struct WireKindName {
@@ -539,6 +557,8 @@ QList<SessionMessageKind> SessionMessages::allKinds()
         SessionMessageKind::ConfirmRequest,
         SessionMessageKind::Notice,
         SessionMessageKind::RecordBatch,
+        SessionMessageKind::PathJoin,
+        SessionMessageKind::PathSwitch,
     };
 }
 
@@ -1101,6 +1121,12 @@ QByteArray SessionMessages::encode(const SessionMessage& message)
         o.insert(QStringLiteral("removes"), QJsonArray::fromStringList(b.removes));
         break;
     }
+    // iPhone app plan Task 29 (R-IOS-16): the link's section 21.2.
+    case SessionMessageKind::PathJoin:
+        o.insert(QStringLiteral("ticket"), message.pathTicket);
+        break;
+    case SessionMessageKind::PathSwitch:
+        break;
     case SessionMessageKind::SettingsWrite:
     case SessionMessageKind::SettingsValue:
     case SessionMessageKind::SettingsRemove:
@@ -1409,6 +1435,15 @@ bool SessionMessages::decode(const QByteArray& wire, SessionMessage* out)
             if (!r.isString() || r.toString().isEmpty()) {
                 return false;
             }
+        }
+    }
+    // iPhone app plan Task 29: path.join carries its ticket, a non-empty
+    // string of at most kMaxPathTicketChars.
+    if (kind == SessionMessageKind::PathJoin) {
+        const QJsonValue ticket = o.value(QStringLiteral("ticket"));
+        if (!ticket.isString() || ticket.toString().isEmpty()
+            || ticket.toString().size() > kMaxPathTicketChars) {
+            return false;
         }
     }
     // Task 11: CommandInvoke and CommandResult share "verb" and "id";
@@ -1751,6 +1786,11 @@ bool SessionMessages::decode(const QByteArray& wire, SessionMessage* out)
         }
         break;
     }
+    case SessionMessageKind::PathJoin:
+        message.pathTicket = o.value(QStringLiteral("ticket")).toString();
+        break;
+    case SessionMessageKind::PathSwitch:
+        break;
     case SessionMessageKind::RecordBatch: {
         RecordBatch& b = message.recordBatch;
         b.stream = o.value(QStringLiteral("stream")).toString();

@@ -54,6 +54,12 @@
 //               service connection; the Task 27 ICE tests answer
 //               introductions themselves. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-27: iPhone app plan Task 29: LocalService, Core and their
+//               helpers moved to RendezvousTestHarness.h, shared with
+//               tst_path_racer; a paired Core's addresses are raced, so the
+//               cached address tests expect every address's line. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -113,6 +119,7 @@
 #include "models/RadioModel.h"
 
 #include "OperatorWording.h"
+#include "RendezvousTestHarness.h"
 #include "fakes/UpgradedCoreToken.h"
 
 #include <openssl/evp.h>
@@ -122,6 +129,9 @@
 
 using namespace NereusSDR;
 namespace Wire = NereusSDR::RendezvousWire;
+// Task 29: the service on this computer and a Core, shared with
+// tst_path_racer.
+using namespace NereusSDR::Test::Rendezvous;
 
 namespace {
 
@@ -136,24 +146,6 @@ QJsonObject readJson(const QString& path)
     return QJsonDocument::fromJson(file.readAll()).object();
 }
 
-QString readText(const QString& path)
-{
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly)) {
-        return {};
-    }
-    return QString::fromUtf8(file.readAll());
-}
-
-QByteArray randomBytes(int count)
-{
-    QByteArray bytes(count, Qt::Uninitialized);
-    for (int index = 0; index < count; ++index) {
-        bytes[index] = static_cast<char>(QRandomGenerator::system()->bounded(256));
-    }
-    return bytes;
-}
-
 QString b64(const QByteArray& bytes)
 {
     return StationIdentity::toBase64Url(bytes);
@@ -163,15 +155,6 @@ QByteArray unb64(const QString& text)
 {
     return StationIdentity::fromBase64Url(text);
 }
-
-// A P-256 key made at run time in a directory of its own.
-struct TestKey {
-    QTemporaryDir dir;
-    StationIdentity identity = StationIdentity::loadOrCreate(dir.path());
-
-    QByteArray spki() const { return identity.publicKeySpki(); }
-    QByteArray sign(const QByteArray& message) const { return identity.sign(message); }
-};
 
 std::shared_ptr<TestKey> makeKey()
 {
@@ -183,28 +166,6 @@ QString turnPassword(const QByteArray& secret, const QString& username)
     return QString::fromLatin1(
         QMessageAuthenticationCode::hash(username.toUtf8(), secret, QCryptographicHash::Sha1)
             .toBase64());
-}
-
-// The Python the service runs on, with this user's own packages: ctest
-// gives every test a home of its own (tests/CMakeLists.txt), and Python
-// finds a user's packages under the home directory, so the service is
-// started with the account's real one.
-QProcessEnvironment pythonEnvironment()
-{
-    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
-#ifdef Q_OS_UNIX
-    if (const passwd* account = getpwuid(getuid()); account != nullptr && account->pw_dir != nullptr) {
-        env.insert(QStringLiteral("HOME"), QString::fromLocal8Bit(account->pw_dir));
-    }
-#endif
-    return env;
-}
-
-quint16 freeTcpPort()
-{
-    QTcpServer probe;
-    probe.listen(QHostAddress::LocalHost, 0);
-    return probe.serverPort();
 }
 
 // ── The service played by a runner (section 10.4) ──────────────────────
@@ -838,169 +799,6 @@ QJsonObject restricted(const QJsonObject& object, const QStringList& keys)
 
 // ── The Python service and the STUN and TURN fake, on this computer ────
 
-class LocalService {
-public:
-    /// `stun`: the service's hello names the fake's STUN server. `relay`:
-    /// the service mints relay credentials for the fake's TURN server.
-    explicit LocalService(bool stun = true, bool relay = true) : m_stun(stun), m_relay(relay) {}
-
-    /// The fake relay refuses every allocation with 486 (Allocation Quota
-    /// Reached), as a full relay does. Before start().
-    void setRelayFull(bool full) { m_relayFull = full; }
-
-    ~LocalService() { stop(); stopTurn(); }
-
-    bool start()
-    {
-        if ((m_stun || m_relay) && !startTurn()) {
-            return false;
-        }
-        m_port = freeTcpPort();
-        QFile secret(m_dir.filePath(QStringLiteral("turn-secret")));
-        if (!secret.open(QIODevice::WriteOnly)) {
-            return false;
-        }
-        secret.write(m_secret);
-        secret.close();
-        QFile config(m_dir.filePath(QStringLiteral("rendezvous.conf")));
-        if (!config.open(QIODevice::WriteOnly)) {
-            return false;
-        }
-        const QString stun = m_stun ? QStringLiteral("stun:127.0.0.1:%1").arg(m_turnPort)
-                                    : QString();
-        const QString turn = m_relay
-            ? QStringLiteral("turn:127.0.0.1:%1?transport=udp").arg(m_turnPort)
-            : QString();
-        config.write(QStringLiteral("[rendezvous]\n"
-                                    "listen = 127.0.0.1:%1\n"
-                                    "stun_urls = %2\n"
-                                    "turn_urls = %3\n"
-                                    "turn_secret_file = %4\n"
-                                    "log_level = info\n")
-                         .arg(m_port)
-                         .arg(stun, turn,
-                              m_relay ? secret.fileName() : QString())
-                         .toUtf8());
-        config.close();
-        return launch();
-    }
-
-    // Starts the service again on the same port, as after a restart.
-    bool launch()
-    {
-        m_process = std::make_unique<QProcess>();
-        QProcessEnvironment env = pythonEnvironment();
-        env.insert(QStringLiteral("PYTHONPATH"),
-                   QStringLiteral(NEREUS_SOURCE_DIR "/rendezvous/server"));
-        m_process->setProcessEnvironment(env);
-        m_process->setWorkingDirectory(m_dir.path());
-        m_process->start(QStringLiteral("python3"),
-                         {QStringLiteral("-m"), QStringLiteral("nereus_rendezvous"),
-                          QStringLiteral("--config"),
-                          m_dir.filePath(QStringLiteral("rendezvous.conf"))});
-        if (!m_process->waitForStarted(10000)) {
-            return false;
-        }
-        QDeadlineTimer deadline(15000);
-        while (!deadline.hasExpired()) {
-            QTcpSocket probe;
-            probe.connectToHost(QHostAddress::LocalHost, m_port);
-            if (probe.waitForConnected(200)) {
-                return true;
-            }
-            QTest::qWait(50);
-        }
-        return false;
-    }
-
-    void stop()
-    {
-        if (m_process) {
-            m_log += QString::fromUtf8(m_process->readAllStandardError());
-            m_process->terminate();
-            if (!m_process->waitForFinished(5000)) {
-                m_process->kill();
-                m_process->waitForFinished(2000);
-            }
-            m_log += QString::fromUtf8(m_process->readAllStandardError());
-            m_process.reset();
-        }
-    }
-
-    QString log()
-    {
-        if (m_process) {
-            m_log += QString::fromUtf8(m_process->readAllStandardError());
-        }
-        return m_log;
-    }
-
-    QString turnOutput()
-    {
-        if (m_turn) {
-            m_turnLog += QString::fromUtf8(m_turn->readAllStandardOutput());
-        }
-        return m_turnLog;
-    }
-
-    QUrl url() const { return QUrl(QStringLiteral("ws://127.0.0.1:%1/").arg(m_port)); }
-    quint16 port() const { return m_port; }
-
-private:
-    bool startTurn()
-    {
-        QFile secret(m_dir.filePath(QStringLiteral("turn-secret")));
-        if (!secret.open(QIODevice::WriteOnly)) {
-            return false;
-        }
-        secret.write(m_secret);
-        secret.close();
-        const QString portFile = m_dir.filePath(QStringLiteral("turn-port"));
-        m_turn = std::make_unique<QProcess>();
-        m_turn->setProcessEnvironment(pythonEnvironment());
-        QStringList arguments{QStringLiteral(NEREUS_SOURCE_DIR "/tests/tools/fake_turn_server.py"),
-                              QStringLiteral("--secret-file"), secret.fileName(),
-                              QStringLiteral("--port-file"), portFile};
-        if (m_relayFull) {
-            arguments.append(QStringLiteral("--quota-full"));
-        }
-        m_turn->start(QStringLiteral("python3"), arguments);
-        if (!m_turn->waitForStarted(10000)) {
-            return false;
-        }
-        QDeadlineTimer deadline(10000);
-        while (!QFile::exists(portFile) && !deadline.hasExpired()) {
-            QTest::qWait(20);
-        }
-        m_turnPort = static_cast<quint16>(readText(portFile).toInt());
-        return m_turnPort != 0;
-    }
-
-    void stopTurn()
-    {
-        if (m_turn) {
-            m_turn->terminate();
-            if (!m_turn->waitForFinished(3000)) {
-                m_turn->kill();
-                m_turn->waitForFinished(2000);
-            }
-            m_turn.reset();
-        }
-    }
-
-    bool m_stun = true;
-    bool m_relay = true;
-    bool m_relayFull = false;
-    QTemporaryDir m_dir;
-    QByteArray m_secret = randomBytes(24).toHex();
-    quint16 m_port = 0;
-    quint16 m_turnPort = 0;
-    std::unique_ptr<QProcess> m_process;
-    std::unique_ptr<QProcess> m_turn;
-    QString m_log;
-    QString m_turnLog;
-};
-
 // A relay between the ends and the service that records every message
 // both ways, so a test can see what the service was given.
 class RecordingRelay : public QObject {
@@ -1058,65 +856,6 @@ private:
     QUrl m_service;
     QWebSocketServer m_server;
     QList<QStringList*> m_backlogs;
-};
-
-// One Core with its StationServer, as the pairing tests stand it up.
-struct Core {
-    QTemporaryDir settingsDir;
-    QTemporaryDir securityDir;
-    std::unique_ptr<AppSettings> settings;
-    std::unique_ptr<RadioModel> model;
-    std::unique_ptr<StationServer> server;
-
-    // `upgraded`: a Core from before paired devices, which still signs a
-    // window in by its token (a new Core has none). `tokenLike` names
-    // another upgraded Core's security directory whose token this one
-    // shares, so a test can show the token was never sent to it.
-    explicit Core(bool upgraded = false, const QString& tokenLike = QString())
-    {
-        settings = std::make_unique<AppSettings>(
-            settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
-        settings->setValue(QStringLiteral("StationCallsign"), QStringLiteral("KG4VCF"));
-        model = std::make_unique<RadioModel>();
-        const QString security = NereusSDR::Test::seedCoreIdentity(securityDir.path());
-        if (!tokenLike.isEmpty()) {
-            QFile::copy(QDir(tokenLike).filePath(QStringLiteral("station-token")),
-                        QDir(security).filePath(QStringLiteral("station-token")));
-        }
-        if (upgraded) {
-            NereusSDR::Test::seedUpgradedCoreToken(security);
-        }
-        server = std::make_unique<StationServer>(model.get(), *settings, security);
-        server->setHeartbeatIntervalMs(0);
-    }
-
-    ~Core() { server.reset(); }
-
-    // This computer, paired as a device the way a pairing leaves it.
-    bool pairComputer(const ClientDeviceIdentity& key)
-    {
-        PairedDevice device;
-        device.id = key.fingerprint();
-        device.publicKeySpki = key.publicKeySpki();
-        device.name = QStringLiteral("Shack MacBook");
-        device.kind = QStringLiteral("computer");
-        return server->deviceStore()->add(device);
-    }
-
-    QUrl url() const
-    {
-        return QUrl(QStringLiteral("wss://127.0.0.1:%1").arg(server->serverPort()));
-    }
-
-    bool pair(const TestKey& key, const QString& name = QStringLiteral("Test phone"))
-    {
-        PairedDevice device;
-        device.id = StationIdentity::fingerprintOf(key.spki());
-        device.publicKeySpki = key.spki();
-        device.name = name;
-        device.kind = QStringLiteral("phone");
-        return server->deviceStore()->add(device);
-    }
 };
 
 // Both ends of one connection through the service: the client's offer and
@@ -2477,14 +2216,20 @@ private slots:
                                 core.server->stationIdentity().fingerprint());
         QTRY_VERIFY_WITH_TIMEOUT(window.isHandshakeComplete(), 20000);
         QCOMPARE(window.connectedUrl(), core.url());
+        // Task 29 (the link document, section 21.1): a paired Core's
+        // addresses are raced, so the saved one is tried too, beside the
+        // cached one, and its line says what it met.
         const StationConnectionAttempt attempt = window.connectionAttempt();
-        QCOMPARE(attempt.tries.size(), 1);
+        QCOMPARE(attempt.tries.size(), 2);
         QCOMPARE(attempt.tries.at(0).path, StationConnectionAttempt::Path::ThisNetwork);
         QCOMPARE(attempt.tries.at(0).outcome, StationConnectionAttempt::Outcome::Connected);
+        QVERIFY(attempt.tries.at(1).outcome == StationConnectionAttempt::Outcome::NoAnswer
+                || attempt.tries.at(1).outcome
+                    == StationConnectionAttempt::Outcome::AnotherPathFirst);
         QVERIFY(attempt.connected());
-        QCOMPARE(attempt.summary(),
-                 QStringLiteral("Tried this network (127.0.0.1:%1): connected.")
-                     .arg(core.server->serverPort()));
+        QVERIFY(attempt.summary().startsWith(
+            QStringLiteral("Tried this network (127.0.0.1:%1): connected; ")
+                .arg(core.server->serverPort())));
         window.disconnectFromStation(QStringLiteral("test done"));
     }
 
@@ -2527,9 +2272,11 @@ private slots:
         window.disconnectFromStation(QStringLiteral("test done"));
     }
 
-    // A cached address that takes the connection and then never opens
-    // gives way after the short open time.
-    void aCachedAddressThatNeverOpensGivesWay()
+    // A cached address that takes the connection and then never opens does
+    // not hold a paired Core's race up (Task 29: the addresses are raced,
+    // not tried one after another): the Core's own address wins, and the
+    // silent one is recorded as not needed.
+    void aCachedAddressThatNeverOpensDoesNotHoldTheRace()
     {
         if (!QSslSocket::supportsSsl()) {
             QSKIP("No TLS backend");
@@ -2549,18 +2296,15 @@ private slots:
         window.setDeviceIdentity(key, QStringLiteral("Shack MacBook"));
         window.setCachedAddresses({QUrl(QStringLiteral("wss://127.0.0.1:%1").arg(silent.serverPort()))});
         QCOMPARE(window.cachedAddressOpenTimeoutMs(), StationClient::kCachedAddressOpenTimeoutMs);
-        // The open time shortened through the injectable value, as the
-        // handshake deadline tests do; nothing here waits the real 4 s.
-        window.setCachedAddressOpenTimeoutMs(250);
-        QElapsedTimer clock;
-        clock.start();
+        // The race waits for no open time (that bound is the serial plan's,
+        // for a Core trusted by its pin).
+        window.setCachedAddressOpenTimeoutMs(60000);
         window.connectToStation(core.url(), QString(), QString(), false,
                                 core.server->stationIdentity().fingerprint());
         QTRY_VERIFY_WITH_TIMEOUT(window.isHandshakeComplete(), 20000);
-        QVERIFY(clock.elapsed() >= 250 - 50);
         const StationConnectionAttempt attempt = window.connectionAttempt();
         QCOMPARE(attempt.tries.size(), 2);
-        QCOMPARE(attempt.tries.at(0).outcome, StationConnectionAttempt::Outcome::TimedOut);
+        QCOMPARE(attempt.tries.at(0).outcome, StationConnectionAttempt::Outcome::AnotherPathFirst);
         QCOMPARE(attempt.tries.at(1).outcome, StationConnectionAttempt::Outcome::Connected);
         window.disconnectFromStation(QStringLiteral("test done"));
     }
@@ -2824,6 +2568,42 @@ private slots:
         // once rather than held for their lifetime.
         QTRY_VERIFY_WITH_TIMEOUT(service.turnOutput().contains(QLatin1String("RELEASED 2")),
                                  15000);
+    }
+
+    // Task 29 (R-IOS-16): a Core with `relay = deny` settles its relay
+    // (none) when it gathers, so the session's media connection, which
+    // starts from the same settings, gathers too. Before, the settings
+    // stayed waiting for relay credentials that never come and media never
+    // connected (found by the traversal harness's session-media).
+    void aRelayDeniedCoresMediaSettingsAreSettled()
+    {
+        LocalService service;
+        QVERIFY(service.start());
+        Core core;
+        QTemporaryDir keyDir;
+        auto key = std::make_shared<const ClientDeviceIdentity>(
+            ClientDeviceIdentity::loadOrCreate(keyDir.path()));
+        QVERIFY(core.pairComputer(*key));
+        StationRendezvous rendezvous(core.server.get(), {service.url()}, /*relayAllowed=*/false);
+        QSignalSpy registered(rendezvous.client(), &RendezvousClient::registered);
+        QVERIFY(rendezvous.start());
+        QTRY_COMPARE_WITH_TIMEOUT(registered.size(), 1, 10000);
+
+        RadioModel remote(RadioModel::Role::Remote);
+        SettingsProxy proxy;
+        StationClient window(&remote, &proxy);
+        window.setDeviceIdentity(key, QStringLiteral("Shack MacBook"));
+        window.connectThroughService({service.url()}, rendezvous.client()->stationId(),
+                                     core.server->stationIdentity().fingerprint());
+        QTRY_VERIFY_WITH_TIMEOUT(window.isHandshakeComplete(), 60000);
+        const quint64 epoch = core.server->mediaSessionEpoch();
+        const std::optional<IceConfiguration> coreIce = core.server->sessionIceConfiguration(epoch);
+        QVERIFY(coreIce.has_value());
+        QVERIFY(coreIce->relayKnown());
+        QVERIFY(!coreIce->relayAllowed());
+        QCOMPARE(coreIce->relayServers().size(), 0);
+        window.disconnectFromStation(QStringLiteral("test done"));
+        QTRY_VERIFY_WITH_TIMEOUT(!core.server->hasAuthenticatedSession(), 10000);
     }
 
     // Task 28 tail (R-IOS-16), what a device sees while the Core registers

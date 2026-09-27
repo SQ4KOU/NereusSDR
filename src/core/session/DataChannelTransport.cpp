@@ -15,6 +15,10 @@
 //               queues bounded by bytes, the close waits for the channel's
 //               close (Minors 3 and 7). J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-27: iPhone app plan Task 29 (R-IOS-16): the ICE settings'
+//               other candidate sources start with gathering and stop with
+//               the connection. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/DataChannelTransport.h"
@@ -27,6 +31,7 @@
 #include <QLoggingCategory>
 #include <QMetaMethod>
 #include <QMetaObject>
+#include <QPointer>
 #include <QTimer>
 #include <QtEndian>
 
@@ -608,6 +613,18 @@ void DataChannelTransport::gatherIfReady()
     } catch (const std::exception& error) {
         qCWarning(lcControlChannel) << "Gathering failed:" << error.what();
     }
+    // iPhone app plan Task 29 (link section 21.5): any other source of the
+    // far end's candidates joins this connection's ICE now. None is built
+    // in this version; the floor may be one.
+    const QPointer<DataChannelTransport> self(this);
+    for (const std::shared_ptr<IceConfiguration::CandidateSource>& source :
+         m_options.ice->candidateSources()) {
+        source->start([self](const QString& candidate) {
+            if (self) {
+                self->acceptCandidate(candidate);
+            }
+        });
+    }
 }
 
 std::optional<MediaIcePath> DataChannelTransport::selectedPath() const
@@ -1037,6 +1054,13 @@ void DataChannelTransport::stopPeer(bool linger)
 {
     if (!m_bridge) {
         return;
+    }
+    // Task 29: the other candidate sources stop with the connection.
+    if (m_options.ice) {
+        for (const std::shared_ptr<IceConfiguration::CandidateSource>& source :
+             m_options.ice->candidateSources()) {
+            source->stop();
+        }
     }
     std::shared_ptr<rtc::PeerConnection> peer;
     std::shared_ptr<rtc::DataChannel> channel;

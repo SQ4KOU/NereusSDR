@@ -801,6 +801,9 @@ void DaemonApp::startRendezvous(const DaemonConfig& cfg)
     if (!m_stationServer) {
         return;
     }
+    // iPhone app plan Task 29 (R-IOS-16): devices are told whether this
+    // Core allows the relay (capability relayAllowed, link section 21.1).
+    m_stationServer->setRelayAllowed(cfg.relayAllowed);
     const QList<QUrl> servers = RendezvousClient::serverUrls(cfg.rendezvousServers);
     if (servers.isEmpty()) {
         qCInfo(lcApp) << "DaemonApp: no remote access service configured "

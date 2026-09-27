@@ -142,6 +142,82 @@ bundle and the lip-sync group (`a=group:BUNDLE audio mic 0`,
 `a=group:LS audio mic`). The Core's queue of received RTP holds 64 more
 packets for it.
 
+
+## Replacing the media connection (replace)
+
+iPhone app plan Task 29 (R-IOS-16; the pairing design, section 5.4;
+capability `mediaReplaceVersion` 1, which a Core sends whenever media is
+on). A GUI moves its media to a new peer connection without a gap: a new
+peer is made beside the current one, audio arrives on both for a moment,
+and the old one retires. It is how media follows a control session that
+moved to a better path (the link document, section 21.3).
+
+| Direction | Exact payload fields beyond `op` and `connectionId` |
+| --- | --- |
+| GUI to Core | `replaces`: the current peer's `connectionId` |
+| Core to GUI | `replaces`: the peer that retired |
+
+`connectionId` is the new peer's, a new canonical UUID. The new peer takes
+everything the current one negotiated in its `start` (the audio profile,
+receiver streams, headphones mix, microphone line and transmit display);
+`replace` carries none of `start`'s version keys.
+
+1. The GUI sends `replace` once its current peer is ready. The Core refuses
+   with the whole-peer `rejected` (`endpointId` 0, `revision` 0) for the
+   new `connectionId`, and the current peer carries on, when `replaces` is
+   not its current peer's id, the new id is the current one, the current
+   peer is not ready, a replacement is already under way, or the radio is
+   transmitting or switching between receive and transmit (`MoxController`
+   not idle): "The Core did not move audio and display: {reason}.", where
+   the reason is "the radio is transmitting" for the last and "that
+   connection is not the current one" for the others.
+2. The Core makes the new peer as offerer, with the ICE settings of the
+   session's control connection now (the link document, section 20), and
+   trickles its `description` and `candidate` operations under the new
+   `connectionId`; the GUI answers under it. Everything keeps running on
+   the current peer meanwhile.
+3. Once the new peer is ready, the Core sends each audio stream on both
+   peers: every packet goes on each with the same RTP sequence number and
+   timestamp, and each peer's own SSRCs (derived from its own
+   `connectionId`, as above). Display and the "tx" data channel stay on the
+   current peer; microphone packets and "tx" messages are taken from
+   either.
+4. `DaemonMediaController::kReplaceOverlapMs` (1000 ms) after the new peer
+   was ready, the Core stops sending on the old peer, moves its displays to
+   the new one (each display's next frame there a keyframe), and sends
+   `replace` with the new `connectionId` and `replaces` the old. It keeps
+   taking microphone packets and "tx" messages on the old peer for
+   `kReplaceDrainMs` (2000 ms), then closes it; nothing more is sent for
+   the old `connectionId` (no `rejected`).
+5. From that `replace` on, every operation carries the new `connectionId`,
+   and the GUI sends its microphone and "tx" messages on the new peer.
+   Audio contexts already running keep their SSRCs: the GUI takes the new
+   peer's packets for each stream as that stream's (receiver stream `n`'s
+   for receiver `n`, and so on). A context the Core sends later names the
+   new peer's SSRC, as for any peer.
+
+**Dual receive.** From step 3 the GUI receives each stream on both peers.
+It keeps one queue per stream, drops a packet whose RTP timestamp it has
+already taken for that stream (`RtpDuplicateFilter`, the last 64
+timestamps per stream), and plays the rest in timestamp order, so a packet
+lost on one path and carried on the other is heard once and none twice.
+Display frames are taken from both peers until the `replace` from the Core;
+a display's frames on the new peer start with a keyframe.
+
+**When it fails.** A new peer that fails or closes before step 4, or is not
+ready within `IceConfiguration::kConnectDeadlineMs`, is dropped with the
+whole-peer `rejected` for its `connectionId` ("The Core lost the audio and
+display connection." or "The audio and display connection to the Core
+closed."), and the current peer carries on. A current peer that fails
+during a replacement ends the replacement too: the Core drops both, as it
+drops a peer today, and the GUI starts media again.
+
+**Transmit.** A replacement never keys and does not start while the radio
+is transmitting or MOX's delay timers run. A key pressed during one goes
+through: the Core keeps taking "tx" keepalives and microphone packets on
+both peers until the old one closes, so the watchdog's 400 ms deadline
+sees no gap the move made.
+
 ## Display subscriptions
 
 GUI-to-Core `subscribe` has these exact additional fields:

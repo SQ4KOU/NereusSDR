@@ -120,6 +120,9 @@
 #include "core/dsp/DspAssetService.h"
 #include "core/security/DeviceStore.h"
 #include "core/session/DataChannelTransport.h"
+#include "core/session/PathRacer.h"
+#include "core/session/RendezvousDialer.h"
+#include "core/session/SwitchableTransport.h"
 #include "core/session/MirrorEnumDomain.h"
 #include "core/session/MirrorPolicy.h"
 #include "core/session/MirrorSchema.h"
@@ -139,6 +142,7 @@
 #include "core/session/StationLanAnnouncement.h"
 #include "core/session/StationServer.h"
 #include "core/session/StationTelemetry.h"
+#include "core/session/media/DaemonMediaController.h"
 #include "core/session/media/DisplayBudget.h"
 #include "core/session/media/OpusAudioCodec.h"
 #include "core/session/media/PcmAudioCodec.h"
@@ -334,6 +338,11 @@ std::optional<SessionMessage> sampleMessage(SessionMessageKind kind)
         batch.removes = {QStringLiteral("2")};
         return SessionMessages::recordBatch(batch);
     }
+    // iPhone app plan Task 29: moving a session to another connection.
+    case SessionMessageKind::PathJoin:
+        return SessionMessages::pathJoin(QStringLiteral("ticket"));
+    case SessionMessageKind::PathSwitch:
+        return SessionMessages::pathSwitch();
     }
     return std::nullopt;
 }
@@ -996,6 +1005,10 @@ QJsonObject guiToCoreOps()
     ops.insert(QStringLiteral("clock-probe"),
                declaredOp(QStringLiteral("audioClockVersion"),
                           peer + QStringList{QStringLiteral("id"), QStringLiteral("t0")}));
+    // iPhone app plan Task 29: DaemonMediaController.cpp handleReplace.
+    ops.insert(QStringLiteral("replace"),
+               declaredOp(QStringLiteral("mediaReplaceVersion"),
+                          peer + QStringList{QStringLiteral("replaces")}));
     return ops;
 }
 
@@ -1161,6 +1174,10 @@ QJsonObject coreToGuiOps()
                                              QStringLiteral("generation"),
                                              QStringLiteral("rtpTimestamp"),
                                              QStringLiteral("capturedNs")}));
+    // iPhone app plan Task 29: DaemonMediaController.cpp finishReplacement.
+    ops.insert(QStringLiteral("replace"),
+               declaredOp(QStringLiteral("mediaReplaceVersion"),
+                          peer + QStringList{QStringLiteral("replaces")}));
     return ops;
 }
 
@@ -1281,6 +1298,39 @@ QJsonObject captureLimits()
                         QStringLiteral("frames per second"),
                         QStringLiteral("DaemonMediaController.cpp handleSubscribe literal 1; "
                                        "kMaximumSpectrumDisplayFramesPerSecond")));
+    // iPhone app plan Task 29 (R-IOS-16; the link document, section 21):
+    // the race, moving a session, and replacing its media.
+    limits.insert(QStringLiteral("raceIpv4DelayMs"),
+                  limit(PathRacer::kIpv4DelayMs, QStringLiteral("ms"),
+                        QStringLiteral("PathRacer::kIpv4DelayMs")));
+    QJsonArray upgrades;
+    for (const int delay : PathRacer::kUpgradeRetryMs) {
+        upgrades.append(delay);
+    }
+    limits.insert(QStringLiteral("pathUpgradeRetryMs"),
+                  limit(upgrades, QStringLiteral("ms"),
+                        QStringLiteral("PathRacer::kUpgradeRetryMs")));
+    limits.insert(QStringLiteral("serviceAnswerDeadlineMs"),
+                  limit(RendezvousDialer::kAnswerDeadlineMs, QStringLiteral("ms"),
+                        QStringLiteral("RendezvousDialer::kAnswerDeadlineMs")));
+    limits.insert(QStringLiteral("pathTicketLifetimeMs"),
+                  limit(StationServer::kPathTicketLifetimeMs, QStringLiteral("ms"),
+                        QStringLiteral("StationServer::kPathTicketLifetimeMs")));
+    limits.insert(QStringLiteral("pathTicketMaxChars"),
+                  limit(static_cast<qint64>(kMaxPathTicketChars), QStringLiteral("characters"),
+                        QStringLiteral("kMaxPathTicketChars")));
+    limits.insert(QStringLiteral("pathSwitchDeadlineMs"),
+                  limit(SwitchableTransport::kSwitchDeadlineMs, QStringLiteral("ms"),
+                        QStringLiteral("SwitchableTransport::kSwitchDeadlineMs")));
+    limits.insert(QStringLiteral("pathOldCloseMs"),
+                  limit(SwitchableTransport::kOldCloseMs, QStringLiteral("ms"),
+                        QStringLiteral("SwitchableTransport::kOldCloseMs")));
+    limits.insert(QStringLiteral("mediaReplaceOverlapMs"),
+                  limit(DaemonMediaController::kReplaceOverlapMs, QStringLiteral("ms"),
+                        QStringLiteral("DaemonMediaController::kReplaceOverlapMs")));
+    limits.insert(QStringLiteral("mediaReplaceDrainMs"),
+                  limit(DaemonMediaController::kReplaceDrainMs, QStringLiteral("ms"),
+                        QStringLiteral("DaemonMediaController::kReplaceDrainMs")));
     return limits;
 }
 

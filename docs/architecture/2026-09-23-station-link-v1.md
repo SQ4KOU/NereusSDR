@@ -520,6 +520,8 @@ writes.
 | `pair.fail` | `reason` (string), `retryAfterMs` (number), `type` (string) | none |
 | `pair.spake` | `data` (string), `step` (number), `type` (string) | none |
 | `pair.start` | `device` (object), `mode` (string), `type` (string) | none |
+| `path.join` | `ticket` (string), `type` (string) | none |
+| `path.switch` | `type` (string) | none |
 | `property.result` | `key` (string), `results` (array), `type` (string), `writeId` (number) | none |
 | `property.write` | `key` (string), `properties` (array), `type` (string) | `writeId` (number) |
 | `record.batch` | `generation` (number), `removes` (array), `reset` (boolean), `stream` (string), `type` (string), `upserts` (array) | none |
@@ -843,6 +845,8 @@ change shows as surface drift and as a change to this table.
 | `txDisplayVersion` | 0 |
 | `displayClockVersion` | 1 |
 | `controlChannelVersion` | 1 |
+| `mediaReplaceVersion` | 1 |
+| `controlSwitchVersion` | 1 |
 | `sessionHolderVersion` | 1 |
 | `remoteTxVersion` | 2 |
 | `txStateVersion` | 2 |
@@ -1213,6 +1217,24 @@ When a feature is off, its version is 0:
   version). A device that has had no session with the Core yet (one that
   paired through a mailbox) has no value recorded and tries; its first
   session records it.
+- `mediaReplaceVersion` (the iPhone app plan's Task 29, R-IOS-16): sent
+  only at agreed minor 11, after `controlChannelVersion`, and 1 whenever
+  media is on. At 1 the Core takes the media `replace` operation (the
+  remote media control document, "Replacing the media connection"). On a
+  Core that sends 0 or no entry a device keeps its media connection when
+  its session moves (section 21.2), and starts media again only if that
+  connection fails.
+- `controlSwitchVersion` (Task 29, R-IOS-16): sent only at agreed minor
+  11, after `mediaReplaceVersion`, and 1 on every Core that has it. At 1
+  the Core takes `session.pathTicket` and `path.join` and moves a session
+  to another connection (section 21.2). On a Core that sends 0 or no entry
+  a device keeps its session on the path the race chose until it ends.
+- `relayAllowed` (Task 29, R-IOS-16): a `bool`, sent only at agreed minor
+  11, after `controlSwitchVersion`: false when `nereusd.conf` has `relay =
+  deny`, true otherwise (a Core with no rendezvous says true, the
+  setting's default). A device records it with the paired Core at each
+  sign-in, leaves the relay out of its races while it is false, and says
+  so in its attempt record (section 21.1).
 
 - `sessionHolderVersion`: sent only at agreed minor 11, last, and only to
   a peer whose hello declared `sessionHolder` 1 with `deviceAuth` 1; any
@@ -1424,12 +1446,15 @@ older window sees only the values it was built for.
 | 59 | `txDisplayVersion` | `i64` |
 | 60 | `displayClockVersion` | `i64` |
 | 61 | `controlChannelVersion` | `i64` |
-| 62 | `sessionHolderVersion` | `i64` |
-| 63 | `remoteTxVersion` | `i64` |
-| 64 | `txRefusalCode` | `utf8` |
-| 65 | `txRefusalReason` | `utf8` |
-| 66 | `txRefusalFix` | `utf8` |
-| 67 | `txStateVersion` | `i64` |
+| 62 | `mediaReplaceVersion` | `i64` |
+| 63 | `controlSwitchVersion` | `i64` |
+| 64 | `relayAllowed` | `bool` |
+| 65 | `sessionHolderVersion` | `i64` |
+| 66 | `remoteTxVersion` | `i64` |
+| 67 | `txRefusalCode` | `utf8` |
+| 68 | `txRefusalReason` | `utf8` |
+| 69 | `txRefusalFix` | `utf8` |
+| 70 | `txStateVersion` | `i64` |
 
 <!-- /surface -->
 
@@ -3629,6 +3654,7 @@ refused.
 | `confirm.proceed` | `id` i64, `choice` i64 | `sessionHolderVersion` | 1 | 11 |
 | `confirm.cancel` | `id` i64 | `sessionHolderVersion` | 1 | 11 |
 | `notice.takeBack` | `id` i64 | `sessionHolderVersion` | 1 | 11 |
+| `session.pathTicket` | none | `controlSwitchVersion` | 1 | 11 |
 
 <!-- /surface -->
 
@@ -4154,6 +4180,7 @@ Client to station:
 | `headphones-audio` | `headphonesMixVersion` | `connectionId`, `enabled`, `op`, `profile`, `revision` | none | none |
 | `keyframe` | `remoteMediaVersion` | `connectionId`, `contextGeneration`, `endpointId`, `op` | none | none |
 | `receiver-audio` | `receiverAudioVersion` | `connectionId`, `enabled`, `op`, `profile`, `revision`, `sliceId` | none | none |
+| `replace` | `mediaReplaceVersion` | `connectionId`, `op`, `replaces` | none | none |
 | `start` | `remoteMediaVersion` | `connectionId`, `op` | `audioProfileVersion` with audioProfileVersion; `headphonesMixVersion` with headphonesMixVersion; `receiverAudioVersion` with receiverAudioVersion; `remoteTxVersion` with remoteTxVersion | none |
 | `subscribe` | `remoteMediaVersion` | `centreHz`, `connectionId`, `endpointId`, `fftSize`, `fps`, `framesPerLine`, `maxDbm`, `minDbm`, `op`, `pixels`, `revision`, `sliceId`, `spanHz`, `tier`, `trace`, `waterfall`, `wideSpanFactor`, `windowType` | `activePeakHold` with displayExtrasVersion; `averageTimeMs` with displayExtrasVersion; `calibrationOffsetDb` with displayExtrasVersion; `decimation` with spectrumGrantVersion; `extendedView` with remoteWidebandDisplayVersion; `noiseFloor` with displayExtrasVersion; `normalize` with displayExtrasVersion; `peakBlobs` with displayExtrasVersion; `waterfallAverageTimeMs` with displayExtrasVersion; `waterfallLevels` with displayExtrasVersion | `activePeakHold`: {enabled, fallDbPerSec, holdMs}; `noiseFloor`: {enabled, shiftDb}; `peakBlobs`: {count, fallDbPerSec, holdMs, insideOnly}; `trace`: {averageAlpha, averageMode, detector}; `waterfall`: {averageAlpha, averageMode, detector}; `waterfallLevels`: {highDbm, lowDbm, mode, offsetDb} |
 | `unsubscribe` | `remoteMediaVersion` | `connectionId`, `endpointId`, `op` | `revision` with remoteDisplayBudgetVersion | none |
@@ -4172,6 +4199,7 @@ Station to client:
 | `noise-floor` | `remoteMediaVersion` | `connectionId`, `contextGeneration`, `endpointId`, `floorDbm`, `op`, `revision` | none | none |
 | `receiver-audio-context` | `receiverAudioVersion` | `connectionId`, `enabled`, `firstSequence`, `firstTimestamp`, `generation`, `op`, `profile`, `revision`, `sliceId`, `ssrc` | `encoder` with enabled=true; `profileRefusal` with profile=opus, profileRefused; `reason` with enabled=false | `encoder`: {audioBandwidthHz, channels, codec, frameSamples, sampleRate, targetBitrate} or {bitsPerSample, channels, codec, frameSamples, payloadType, sampleRate} |
 | `rejected` | `remoteMediaVersion` | `connectionId`, `endpointId`, `op`, `reason`, `revision` | none | none |
+| `replace` | `mediaReplaceVersion` | `connectionId`, `op`, `replaces` | none | none |
 
 <!-- /surface -->
 
@@ -4586,7 +4614,16 @@ maximum also equals `kMaximumSpectrumDisplayFramesPerSecond` in
 | `maxHandshakesPerAddress` | 2 | count | StationServer::kMaxHandshakesPerAddress |
 | `maxPeers` | 24 | count | StationServer::kMaxConcurrentPeers |
 | `mediaControlBytes` | 131072 | bytes | kMaxMediaControlBytes |
+| `mediaReplaceDrainMs` | 2000 | ms | DaemonMediaController::kReplaceDrainMs |
+| `mediaReplaceOverlapMs` | 1000 | ms | DaemonMediaController::kReplaceOverlapMs |
 | `missedPongs` | 2 | count | StationServer::kDefaultMaxMissedPongs |
+| `pathOldCloseMs` | 5000 | ms | SwitchableTransport::kOldCloseMs |
+| `pathSwitchDeadlineMs` | 10000 | ms | SwitchableTransport::kSwitchDeadlineMs |
+| `pathTicketLifetimeMs` | 10000 | ms | StationServer::kPathTicketLifetimeMs |
+| `pathTicketMaxChars` | 128 | characters | kMaxPathTicketChars |
+| `pathUpgradeRetryMs` | 5000, 30000, 120000, 300000 | ms | PathRacer::kUpgradeRetryMs |
+| `raceIpv4DelayMs` | 250 | ms | PathRacer::kIpv4DelayMs |
+| `serviceAnswerDeadlineMs` | 10000 | ms | RendezvousDialer::kAnswerDeadlineMs |
 | `shortNameMaxBytes` | 32 | bytes | DeviceStore::kMaxShortNameBytes |
 | `stationInboundMessageBytes` | 1048576 | bytes | StationServer::kMaxIncomingMessageBytes |
 | `telemetryBytes` | 16384 | bytes | kMaxStationTelemetryBytes |
@@ -4742,12 +4779,13 @@ runs, and the station messages that follow refer to them only through
 Each end decodes `wire`; when `decodes` is true it encodes the result
 again and the two JSON objects compare equal after parsing, key order
 ignored. The fixtures cover every message kind in each direction it
-travels: eleven from the client (`hello`, `auth.request`, `command.invoke`,
+travels: thirteen from the client (`hello`, `auth.request`, `command.invoke`,
 `media.control`, `property.write`, `settings.write`, `settings.remove`,
-and `pair.start`, `pair.spake`, `pair.confirm`, `pair.fail`) and
-twenty-two from the station (the sixteen before pairing, `pair.accept`,
-`pair.spake`, `pair.confirm`, `pair.fail`, and `confirm.request` and
-`notice`, section 7.5), with a `delta` carrying `"nan"` and `"-inf"`
+`pair.start`, `pair.spake`, `pair.confirm`, `pair.fail`, and `path.join`
+and `path.switch`, section 21.2) and
+twenty-three from the station (the sixteen before pairing, `pair.accept`,
+`pair.spake`, `pair.confirm`, `pair.fail`, `confirm.request` and
+`notice`, section 7.5, and `path.switch`), with a `delta` carrying `"nan"` and `"-inf"`
 (section 4.2). The client's `hello` has two fixtures: an older app's,
 without `majors` or `features`, and one declaring both; `auth.request` has
 three: a token, a device sign-in with its `device` block (section 3.5), and
@@ -4767,8 +4805,9 @@ a `hello` declaring a feature version that is not a whole number, a
 lacks `signature`, one whose `shortName` is not a string, a `session.end` with an empty `code`, a `pair.start`
 whose `mode` is neither `lan` nor `code`, a `pair.spake` step outside 0 to
 3, a `pair.fail` whose `retryAfterMs` is not a whole number, a `notice`
-whose `takeBack` is not a boolean, and an
-unknown `type`. The pairing fixtures carry placeholders for keys, shares
+whose `takeBack` is not a boolean, a `path.join` whose `ticket` is not a
+string, is empty or is longer than 128 characters (`kMaxPathTicketChars`),
+and an unknown `type`. The pairing fixtures carry placeholders for keys, shares
 and boxes; the live exchange is proved by `nereus_pairing_peer` (section
 3.6).
 
@@ -5066,6 +5105,8 @@ same on every machine.
 | `antenna-kept` | An ANAN-G2 with ANT2 on 40 m and ANT3 on 80 m (`alexRxAntennas`); the other device's slice listens on the ADC on another receiver; this device tunes from 20 m to 40 m: the tuning goes ahead and this device is told `antennaKept`, "The antenna stays on ANT1 while Tablet B listens on it.", no `by` keys; the other device leaves, its slice closes, and this device's next crossing (to 80 m) switches the antenna (its slice's `rxAntenna` becomes ANT3), with no notice. Runs on the station alone |
 | `verbs-session-leave` | `session.leave` with an argument is refused, "The request to leave the Core was not understood."; without, it is accepted and the station closes the connection with no `session.end`. Runs on the station alone |
 | `heartbeat-answered`, `heartbeat-missed` | The heartbeat, above |
+| `path-ticket` | A signed-in session asks `session.pathTicket` and is given a `ticket` (`utf8`, any text) and `expiresInMs` 10000 (section 21.2; `controlSwitchVersion` 1) |
+| `path-join-unknown-ticket` | A new connection's `hello` followed by `path.join` with a ticket no session holds gets `session.end` "The Core did not move the connection here.", `code` `protocolError`, `retryable` false, then the close. A move itself needs two connections, which a fixture does not script; `tst_session_transport_switch` holds the station and the desktop to it |
 | `connect-deadline` | No `auth.request` within 30000 ms: `session.end` "This app did not finish connecting to the Core in time.", `retryable` true |
 | `property-write` | A write and its `property.result` and side-effect `delta`; a refused outbound property and an unknown one; a write without a `writeId` answered by `delta`; a write to a slice's signal strength refused as outbound; on the receive-only Core, a `transmit` write of `power` taken off the air and a write of `mox` and `voxEnabled` refused with the receive-only reason; at `transmitSettingsVersion` 2, a write of `cpdrLevelDb` taken, and `micGainDb` and `monitorVolume` out of range refused with their ranges beside a write of the outbound `tunePowerForTxBand`; at `transmitSettingsVersion` 3, a write of `micBoost` and `lineInBoost` taken, and `lineInBoost` out of range refused with its range beside a write of the outbound `activeTxProfile`; at `transmitSettingsVersion` 4, a write of `txEqBandsJson`, `txEqUseLegacy` and `txLevelerDecay` taken, and a nine-value `txEqBandsJson`, a `cfcCompressionJson` with a value out of range and `txAlcDecay` out of range each refused whole with its range |
 | `settings-write` | A station-scoped write echoed with its origin; an operator-local write rejected; a removal sent as `settings.value` with no entry; on the receive-only Core, a DSP > Options TX key and a PA forward-power table key (`paCalibration/calPoint1`, version 6) taken off the air, an OC transmit pin (`oc/tx/20m/pin3`), an OC pin action (`oc/actions/pin1/action`) and TX Display Cal (`cal/txDisplayOffset`) taken off the air (version 8), and a transmit hardware key refused |
@@ -6017,3 +6058,212 @@ section 4) and the service could replay one:
 
 The framing fixtures (`framing/`, section 16.1) hold both ends to the
 chunking and the heartbeat bytes; section 16.5 names the station's runners.
+
+## 21. Paths
+
+iPhone app plan Task 29 (R-IOS-16, R-IOS-08; the pairing design, section
+5.4; the remote design, section 12.1). A device paired with a Core has
+several ways to reach it: straight to an address it has for the Core (the
+Core's WebSocket, section 2), and through the rendezvous (section 19) over
+the connection it introduces (section 20), whose ICE finds a path on its
+own: between the two ends' addresses, through the addresses the STUN server
+reflects, or through the relay (TURN over UDP). A device tries these
+together, uses whichever reaches the Core first, and moves the session to a
+better path when one opens later, without ending it. This section says how
+(`PathRacer`, `SwitchableTransport`, the `path.*` messages and the media
+`replace` operation). Nothing here applies to a Core trusted by its pin and
+its token (section 3.2): a device connects to such a Core at its addresses
+one after another, as before.
+
+### 21.1 The race
+
+A device connecting to a paired Core starts every path it has at once, each
+a **rung** (`PathRacer::Rung`):
+
+| Rank | Rung | Starts |
+| --- | --- | --- |
+| 0 | the Core's WebSocket at an address on one of this device's own networks (a loopback address, one inside the subnet of one of its running interfaces, or a name ending `.local`) | at once for an IPv6 address; 250 ms later for an IPv4 address when the device has an IPv6 address to try (`PathRacer::kIpv4DelayMs`) |
+| 1 | the Core's WebSocket at any other address | the same |
+| 2 | the rendezvous, its connection's selected pair not relayed | at once |
+| 3 | the rendezvous, its selected pair relayed | (the same rung as 2; its rank is known when the connection opens) |
+| 4 | the floor: the relay over TCP 443 (reserved, section 21.6) | not yet built |
+
+The addresses are the ones the device keeps for the Core (where it last
+reached it, most recent first, section 14's announcements, and the address
+the operator gave), each host name resolved first, its IPv6 addresses tried
+at once and its IPv4 addresses 250 ms later. The rendezvous rung needs the
+Core's rendezvous id, which a device derives from the Core's identity key
+(the rendezvous document, section 4.2), so a device learns it from the
+Core's `hello` at its first sign-in or from pairing.
+
+A rung is **ready** when the Core's `hello` on it shows the identity key
+this device paired with and its certificate binding verifies for the
+certificate that connection presented (section 3.4; over the rendezvous the
+DTLS certificate, section 20). A rung whose `hello` shows another key ends
+as "another computer answered" and the others go on. The first rung to be
+ready wins: the device signs in on it (section 3.5) and the session runs
+there. A rung that becomes ready while the winner is signing in, and whose
+rank is better, is kept for an upgrade (section 21.3) once the session
+reaches `snapshot.complete`; every other rung stops then. A device never
+signs in twice in one race, so the same-device rule (section 12.4,
+`sameDevice`) never ends the winner.
+
+A direct rung has the Core's connect deadline (section 12.2, 30 s) to be
+ready; the rendezvous rung has `RendezvousDialer::kDialDeadlineMs`. When
+every rung has ended without a winner the attempt fails, and the device
+retries with the backoff of section 12.4 and races again.
+
+**An older Core.** A Core that registers with the rendezvous but answers no
+introduction (one without `controlChannelVersion`, section 6.3) leaves the
+rendezvous rung waiting. A device stops waiting for the Core's `answer`
+`RendezvousDialer::kAnswerDeadlineMs` (10 s) after its `introduce` and ends
+that rung with "This Core can't be reached through the internet service.
+Updating the Core may help." A device that recorded `controlChannelVersion`
+0 for the Core does not start the rung, and says the same.
+
+**The relay.** A Core with `relay = deny` in `nereusd.conf` answers every
+introduction with `turn` false (the rendezvous document, section 6.3), so
+no relay credentials are minted and neither end uses a relay candidate; the
+floor (section 21.6) needs the same permission. A Core says which it has in
+its capabilities (`relayAllowed`, section 6.3); a device records it with
+the paired Core and, while it says false, leaves the relay out of every
+race and says why.
+
+**The attempt record.** The device keeps one line per rung
+(`StationConnectionAttempt`): the path (this network, direct, through the
+internet service, relay), the address or the service's host, and how it
+ended: connected, no answer, no answer in time, another computer answered,
+did not connect, another path connected first, the Core has the relay
+turned off, or the Core can't be reached through the internet service. It
+is for the connection messages; nothing of it goes on the wire.
+
+### 21.2 Moving the session to another connection
+
+`controlSwitchVersion` 1 (section 6.3). A session moves from its
+connection (the **old** one) to another (the **new** one) without ending:
+no `session.end`, no sign-in, no `snapshot.complete` and nothing replayed.
+Messages keep their order in each direction across the move. Only the
+device starts a move, and only to a connection of a better rank than the
+one the session runs on (section 21.1).
+
+1. The device opens the new connection and waits for the Core's `hello`
+   there, which must show the paired identity key with a binding that
+   verifies for the new connection's certificate (section 3.4). It sends
+   nothing on the new connection yet.
+2. On the old connection it invokes `session.pathTicket` (no arguments).
+   The Core answers with `values` `ticket` (`utf8`: 32 random bytes,
+   base64url without padding, 43 characters) and `expiresInMs` (`i64`,
+   10000, `StationServer::kPathTicketLifetimeMs`). A ticket belongs to the
+   session that asked, is good once, and is gone after 10 s or when the
+   session asks again. The Core refuses (`accepted` false) while the radio
+   is transmitting or switching between receive and transmit (`MoxController`
+   not idle: keyed, or MOX's delay timers running), with "Not while the
+   radio is transmitting.", and a device does not ask while it is keyed or
+   has VOX armed.
+3. On the new connection the device sends its `hello` (section 5.1) and
+   then, in place of `auth.request`, `path.join` with the ticket. The
+   ticket is a secret like the token: it travels only inside a connection
+   the Core's identity was verified on, and is never logged.
+4. The Core checks the join: the ticket is live; the new connection agreed
+   the same major and minor as the session; it is not a pairing or a
+   mailbox; the radio is not transmitting (as in step 2); and when the new
+   connection came through the rendezvous (section 20), the session signed
+   in with a paired device's own key. Any failure ends the new connection
+   alone with `session.end` (`retryable` false, code `protocolError`,
+   "The Core did not move the connection here.") and consumes the
+   ticket; the session goes on over the old connection. On success nothing
+   is sent on the new connection yet.
+5. The Core sends `path.switch` on the old connection, the last message it
+   sends there, and from then sends the session's messages on the new one.
+6. The device, when `path.switch` arrives on the old connection, sends its
+   own `path.switch` there, the last message it sends there, and from then
+   sends on the new connection.
+7. Each end reads the old connection up to the other's `path.switch`, then
+   the new one. What arrives on the new connection before that is held, in
+   order (at most 4 times the end's inbound cap, section 12.3; past it the
+   session ends). When the device's `path.switch` reaches it, the Core
+   closes the old connection, with no `session.end`; the device closes its
+   end once the Core has, or after 5 s.
+
+The heartbeat (section 12.1) runs on the connection the end sends on; a
+pong on either connection counts. The new connection's connect deadline
+(section 12.2) stops when it joins.
+
+**When something fails.** A device that has sent `path.join` and gets no
+`path.switch` on the old connection within 10 s
+(`SwitchableTransport::kSwitchDeadlineMs`) closes the new connection and
+stays on the old one. An old connection that closes before the other end's
+`path.switch` counts as that `path.switch`: the end reads the new
+connection from then on. A new connection that closes after the move
+ends the session as a lost link does (section 12.4, retryable). An end that
+has sent `path.switch` and hears nothing more on the old connection within
+10 s closes it. A `path.switch` outside a move, or a `path.join` from a
+device whose Core did not advertise `controlSwitchVersion`, is a message
+out of turn: `path.switch` is ignored, and `path.join` ends that connection
+as step 4 says.
+
+**Transmit.** A move never keys. It does not start while the radio is
+transmitting or MOX's delay timers run (steps 2 and 4). A key pressed while
+a move is under way goes through: the device's `tx.keepalive` messages
+(section 18.7) keep their order across the move like every other message,
+so the gap the watchdog sees is at most the difference between the two
+connections' delays, and its 400 ms deadline (`RemoteTxWatchdog::
+kLinkLossDeadlineMs`) is unchanged. A path that dies while keyed is caught
+by that deadline on every path, as before (section 18.7).
+
+### 21.3 Upgrading
+
+While a session runs on a rung worse than rank 0, a device looks for a
+better one: at once with a rung the race kept (section 21.1), then 5 s,
+30 s and 2 minutes after the session reached `snapshot.complete`, and every
+5 minutes after that (`PathRacer::kUpgradeRetryMs`), racing only the rungs
+of a better rank than the current one. Through the rendezvous an upgrade
+looks for a path that is not relayed: the device gathers no relay candidate
+and accepts none of the Core's for it (the Core may still allocate one, as
+for any introduction). The first rung ready moves the session (section
+21.2). Nothing is tried while the device is keyed or has VOX armed; the
+schedule waits for the unkey.
+
+After a move the media connection (section 11) moves too, when the Core
+advertises `mediaReplaceVersion` 1: the device asks for a new media
+connection with the media `replace` operation (the remote media control
+document, "Replacing the media connection"). A session whose control came
+through the rendezvous keeps the rendezvous's STUN server for its media
+after a move, and takes a relay for media only while its control
+connection's path is relayed (section 20), so media over a direct control
+connection holds no relay allocation.
+
+### 21.4 Relay allocations
+
+Through the relay each connection allocates on one relay host at each end
+that needs the relay (`IceConfiguration::setRelay`, one host chosen by
+address family), so a session relayed at both ends holds 2 allocations at
+each end: its control connection's and its media connection's, 4 of the
+Core's relay quota of 8 (the rendezvous document, section 8). A second
+device relayed at both ends fits (8); a third device's connection is
+refused an allocation (TURN `486`) and gathers without the relay at that
+end, so it connects only where a path without the relay exists. An
+upgrade's connection through the rendezvous asks for no relay at the
+device; the Core's answer may allocate one for its end until the old
+connection closes. Carrying control and media on one connection would halve
+this; it changes section 20's offer and is not part of this version.
+
+### 21.5 The rungs in code
+
+`PathRacer` takes its rungs as `PathRacer::Rung` objects: `start()`, a
+`rank()`, and signals for the transport once it opened and for its end. The
+direct rung (`DirectPathRung`) wraps the Core's WebSocket at one address and
+the rendezvous rung (`RendezvousPathRung`) the `RendezvousDialer`. A rung
+added later joins the race with its rank and changes nothing else. ICE's
+own candidates are the other seam: `IceConfiguration` takes extra candidate
+sources (`IceConfiguration::CandidateSource`), each a low-priority remote
+candidate the ICE agent races with the others inside one connection.
+
+### 21.6 The floor (reserved)
+
+A network that passes only TCP 443 blocks every rung above. The floor that
+reaches the Core from such a network is chosen separately (the relay floor
+measurement, `2026-09-23-relay-floor-measurement.md`) and joins either as
+rank 4, a rung of its own, or as a candidate source inside the rendezvous
+connection's ICE. Until it is built, a device on such a network does not
+reach the Core, and its attempt record says what each rung met.

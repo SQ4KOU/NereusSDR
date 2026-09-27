@@ -92,6 +92,10 @@
 //                into the trunk after txDisplayVersion and
 //                displayClockVersion). J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-27 - R-IOS-16 (iPhone app plan Task 29): mediaReplaceVersion,
+//                controlSwitchVersion and relayAllowed, after
+//                controlChannelVersion. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationCapabilities.h"
@@ -220,6 +224,11 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
         // R-IOS-16 (Task 28 fix wave): the control session through the
         // remote access service.
         updates.append(intEntry("controlChannelVersion", controlChannelVersion));
+        // iPhone app plan Task 29 (R-IOS-16): moving media and the session
+        // to a better path, and whether the Core allows the relay.
+        updates.append(intEntry("mediaReplaceVersion", mediaReplaceVersion));
+        updates.append(intEntry("controlSwitchVersion", controlSwitchVersion));
+        updates.append(boolEntry("relayAllowed", relayAllowed));
         // iPhone app Task 71: several devices at once, last, and only for
         // a peer that declared the feature.
         if (sessionHolderEntry) {
@@ -432,6 +441,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                    || u.name == "txDisplayVersion"
                    || u.name == "displayClockVersion"
                    || u.name == "controlChannelVersion"
+                   || u.name == "mediaReplaceVersion"
+                   || u.name == "controlSwitchVersion"
                    || u.name == "sessionHolderVersion"
                    || u.name == "remoteTxVersion"
                    || u.name == "txStateVersion") {
@@ -485,10 +496,22 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                     caps.displayClockVersion = version;
                 } else if (u.name == "controlChannelVersion") {
                     caps.controlChannelVersion = version;
+                } else if (u.name == "mediaReplaceVersion") {
+                    caps.mediaReplaceVersion = version;
+                } else if (u.name == "controlSwitchVersion") {
+                    caps.controlSwitchVersion = version;
                 } else {
                     caps.bandSelectVersion = version;
                 }
             }
+        } else if (u.name == "relayAllowed") {
+            // iPhone app plan Task 29: anything but a bool reads as allowed,
+            // the setting's default.
+            caps.radioIdentityEntries = true;
+            caps.relayAllowedEntry = true;
+            caps.relayAllowed = !(u.kind == MirrorWireKind::Bool
+                                  && u.value.typeId() == QMetaType::Bool
+                                  && !u.value.toBool());
         } else if (u.name == "txRefusalCode" || u.name == "txRefusalReason"
                    || u.name == "txRefusalFix") {
             // Desktop remote transmit: text only; anything else reads empty.

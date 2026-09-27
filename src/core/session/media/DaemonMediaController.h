@@ -6,6 +6,11 @@
 // coordination; it contains neither GUI nor radio control policy.
 //
 // Modification history (NereusSDR):
+//   2026-09-27: iPhone app plan Task 29 (R-IOS-16): the media `replace`
+//               operation: a second peer beside the current one, audio on
+//               both across the move, displays on a keyframe, the old one
+//               retired. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 //   2026-09-27: at each unkey, one info line with the microphone line's
 //               statistics and the transmit I/Q send path's counters
 //               (R-IOS-13, R-R3-42). J.J. Boyd (KG4VCF), AI-assisted via
@@ -65,6 +70,7 @@
 #include "core/session/RemoteKeying.h"
 
 #include <QElapsedTimer>
+#include <QHash>
 #include <QJsonObject>
 #include <QMap>
 #include <QPointer>
@@ -175,6 +181,18 @@ QString daemonDisplayDiagnosticsLine(const DaemonDisplayDiagnostics& diagnostics
 class DaemonMediaController final : public QObject {
     Q_OBJECT
 public:
+    /// iPhone app plan Task 29 (R-IOS-16; the remote media control
+    /// document, "Replacing the media connection"): after a replacement
+    /// peer is ready, how long every audio stream goes out on both peers
+    /// before the old one stops sending. NereusSDR's own bound: long enough
+    /// for the app's new peer to be carrying audio (its DTLS done a round
+    /// trip after the Core's) over any path's delay, short enough that the
+    /// doubled audio costs little.
+    static constexpr int kReplaceOverlapMs = 1000;
+    /// How long the old peer still takes microphone packets and "tx"
+    /// messages after that, for what the app sent it before it heard the
+    /// replacement was done (at least one trip over the slower path).
+    static constexpr int kReplaceDrainMs = 2000;
     /// Monotonic nanoseconds, never negative. Besides display pacing it is
     /// the Core's audio clock (R-R3-35): clock-echo times and the capture
     /// times of audio blocks, which the DSP thread reads, so an injected
@@ -487,6 +505,27 @@ private:
     // microphone statistics and the transmit I/Q send path's counters.
     void logUnkeyStats();
     bool acceptPeerControl(const QJsonObject& control);
+    // iPhone app plan Task 29 (R-IOS-16; the media document, "Replacing
+    // the media connection"): a new peer beside the current one, both
+    // carrying audio for kReplaceOverlapMs, then the new one takes over.
+    bool handleReplace(const QJsonObject& control);
+    void onReplacementReady();
+    void finishReplacement();
+    void failReplacement(const QString& reason);
+    /// Drops a replacement under way and a retired peer still draining.
+    void clearReplacement();
+    /// Wires `peer` as the current peer (handleStart's callbacks).
+    void wireCurrentPeer(MediaPeer* peer, const QString& connectionId);
+    /// One audio packet (any stream) to the current peer, with its SSRC as
+    /// that peer's, and during a replacement to the new peer too with the
+    /// same sequence number and timestamp and the new peer's SSRC. What the
+    /// current peer accepted.
+    bool sendAudioRtp(MediaPeer* peer, const QByteArray& packet);
+    /// A peer's audio SSRCs in stream order: main, receiver 0 to 3,
+    /// headphones.
+    static QList<quint32> audioSsrcsOf(const MediaPeer* peer);
+    /// The radio is idle (MoxController in Rx).
+    bool radioIdleForReplace() const;
 
     void clearSession();
     /// Drops the media peer while the session stays (the Core dropped it,
@@ -599,6 +638,23 @@ private:
     MediaPeer::TransportFactory m_peerFactory;
     MonotonicClock m_monotonicClock;
     std::unique_ptr<MediaPeer> m_peer;
+    // iPhone app plan Task 29: a replacement peer under way, whether it is
+    // ready, the old peer draining after it took over, and the SSRC maps
+    // (a packet stamped with an earlier peer's SSRC, as a sender started
+    // before a replacement stamps it, to the current peer's; a microphone
+    // packet from a newer peer to the receiver's).
+    std::unique_ptr<MediaPeer> m_replacement;
+    QString m_replacementId;
+    bool m_replacementReady{false};
+    std::unique_ptr<MediaPeer> m_retiring;
+    QTimer m_replaceOverlapTimer;
+    QTimer m_replaceConnectTimer;
+    QTimer m_retireDrainTimer;
+    QHash<quint32, quint32> m_sendSsrcRewrite;
+    QHash<quint32, quint32> m_micSsrcRewrite;
+    // What the current peer's start negotiated, which a replacement keeps.
+    bool m_startOfferedLossless{false};
+    bool m_startMicLine{false};
     std::unique_ptr<DaemonAudioSender> m_audioSender;
     int m_audioTargetBitrate{OpusAudioCodecConfig{}.bitrate};
     // R-R3-23 lossless audio, per media peer. The GUI declares it understands

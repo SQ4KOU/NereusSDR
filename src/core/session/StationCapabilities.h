@@ -141,6 +141,9 @@
 //   2026-09-26 - R-IOS-16 (iPhone app plan Task 28 fix wave):
 //                controlChannelVersion. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-27 - R-IOS-16 (iPhone app plan Task 29): mediaReplaceVersion,
+//                controlSwitchVersion and relayAllowed. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -347,6 +350,26 @@ struct StationCapabilities {
     /// identity key): connecting from anywhere is shown disabled with a
     /// reason.
     int controlChannelVersion = 0;
+    /// iPhone app plan Task 29 (R-IOS-16; link section 21.3): 1 means the
+    /// Core takes the media `replace` operation (the remote media control
+    /// document, "Replacing the media connection"). Sent in the same
+    /// minor-11 block, after controlChannelVersion; 1 whenever media is on.
+    /// 0 (an older Core, or media off): a device keeps its media connection
+    /// when its session moves.
+    int mediaReplaceVersion = 0;
+    /// iPhone app plan Task 29 (link section 21.2): 1 means the Core takes
+    /// session.pathTicket and path.join and moves a session to another
+    /// connection without ending it. Sent in the same block, after
+    /// mediaReplaceVersion. 0: a device keeps its session on the path its
+    /// race chose.
+    int controlSwitchVersion = 0;
+    /// iPhone app plan Task 29 (link section 21.1): false when the Core's
+    /// nereusd.conf has `relay = deny`, true otherwise. Sent in the same
+    /// block, after controlSwitchVersion. A device records it and leaves
+    /// the relay out of its races while it is false. An older Core sends
+    /// none: relayAllowedEntry false, and the relay is tried.
+    bool relayAllowedEntry = false;
+    bool relayAllowed = true;
     /// iPhone app Task 71 (R-IOS-02; the several-devices design, ruling
     /// 10.1): 1 means the Core admits up to four devices at once, sends the
     /// `connectedDevices` object and takes session.leave. Sent last in the

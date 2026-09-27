@@ -280,15 +280,20 @@ void TstSliceSelectBand::theCapabilityIsLastInTheMinor11Block()
     // Then parity Task 21's stationRadiosVersion.
     // Then parity Task 28's txDisplayVersion, R-R3-21's displayClockVersion and
     // the Task 28 fix wave's controlChannelVersion.
-    QCOMPARE(updates.at(updates.size() - 9).name, QByteArrayLiteral("transmitSettingsVersion"));
-    QCOMPARE(updates.at(updates.size() - 8).name, QByteArrayLiteral("bandSelectVersion"));
-    QCOMPARE(updates.at(updates.size() - 7).name, QByteArrayLiteral("meterReadingsVersion"));
-    QCOMPARE(updates.at(updates.size() - 6).name, QByteArrayLiteral("dspInfoVersion"));
-    QCOMPARE(updates.at(updates.size() - 5).name, QByteArrayLiteral("recordStreamVersion"));
-    QCOMPARE(updates.at(updates.size() - 4).name, QByteArrayLiteral("stationRadiosVersion"));
-    QCOMPARE(updates.at(updates.size() - 3).name, QByteArrayLiteral("txDisplayVersion"));
-    QCOMPARE(updates.at(updates.size() - 2).name, QByteArrayLiteral("displayClockVersion"));
-    QCOMPARE(updates.last().name, QByteArrayLiteral("controlChannelVersion"));
+    QCOMPARE(updates.at(updates.size() - 12).name, QByteArrayLiteral("transmitSettingsVersion"));
+    QCOMPARE(updates.at(updates.size() - 11).name, QByteArrayLiteral("bandSelectVersion"));
+    QCOMPARE(updates.at(updates.size() - 10).name, QByteArrayLiteral("meterReadingsVersion"));
+    QCOMPARE(updates.at(updates.size() - 9).name, QByteArrayLiteral("dspInfoVersion"));
+    QCOMPARE(updates.at(updates.size() - 8).name, QByteArrayLiteral("recordStreamVersion"));
+    QCOMPARE(updates.at(updates.size() - 7).name, QByteArrayLiteral("stationRadiosVersion"));
+    QCOMPARE(updates.at(updates.size() - 6).name, QByteArrayLiteral("txDisplayVersion"));
+    QCOMPARE(updates.at(updates.size() - 5).name, QByteArrayLiteral("displayClockVersion"));
+    QCOMPARE(updates.at(updates.size() - 4).name, QByteArrayLiteral("controlChannelVersion"));
+    // iPhone app plan Task 29: then mediaReplaceVersion, controlSwitchVersion
+    // and relayAllowed.
+    QCOMPARE(updates.at(updates.size() - 3).name, QByteArrayLiteral("mediaReplaceVersion"));
+    QCOMPARE(updates.at(updates.size() - 2).name, QByteArrayLiteral("controlSwitchVersion"));
+    QCOMPARE(updates.last().name, QByteArrayLiteral("relayAllowed"));
     QCOMPARE(StationCapabilities::fromUpdates(updates).bandSelectVersion, 1);
     QCOMPARE(StationCapabilities::fromUpdates(updates).transmitSettingsVersion, 6);
 
