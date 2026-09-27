@@ -1053,12 +1053,17 @@ private slots:
         QCOMPARE(StationControlSocket::packagedHomes(),
                  (QStringList{QStringLiteral("/var/lib/nereusd"),
                               QStringLiteral("/var/lib/private/nereusd")}));
-        // The packaged place mirrors AppSettings::resolveConfigDir(): under
-        // this command's own HOME it is the same path, listed once.
+        // The packaged service uses HOME/.config. The command uses Qt's
+        // config location, which may differ in test mode or with XDG_CONFIG_HOME.
         const DaemonConfig config = DaemonConfig::defaults();
+        const QString home = QString::fromLocal8Bit(qgetenv("HOME"));
+        const QString own = StationControlSocket::socketPathFor(config, QStringLiteral("daemon"));
+        const QString packaged = QDir::cleanPath(QDir(home).filePath(
+            QStringLiteral(".config/NereusSDR/profiles/daemon/nereusd-control")));
+        QStringList expected{own};
+        if (packaged != own) { expected.append(packaged); }
         QCOMPARE(StationControlSocket::candidatePathsFor(config, QStringLiteral("daemon"),
-                                                         {QString::fromLocal8Bit(qgetenv("HOME"))}),
-                 QStringList{StationControlSocket::socketPathFor(config, QStringLiteral("daemon"))});
+                                                         {home, home}), expected);
 #else
         QVERIFY(StationControlSocket::packagedHomes().isEmpty());
 #endif

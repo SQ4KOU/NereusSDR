@@ -433,12 +433,14 @@ private slots:
 
         // The status message.
         windowHost->sendFreedvMessage(QStringLiteral("QRV 14.236"));
-        QTRY_VERIFY(std::any_of(fake.eventsNamed(QStringLiteral("message_update")).cbegin(),
-                                fake.eventsNamed(QStringLiteral("message_update")).cend(),
+        QTRY_VERIFY(([&] {
+            const auto events = fake.eventsNamed(QStringLiteral("message_update"));
+            return std::any_of(events.cbegin(), events.cend(),
                                 [](const QJsonArray& e) {
             return e.at(1).toObject().value(QStringLiteral("message")).toString()
                 == QStringLiteral("QRV 14.236");
-        }));
+            });
+        }()));
 
         // A QSY request goes to the named station, by its session.
         windowHost->requestFreedvQsy(QStringLiteral("k6aq"), 14236000);
@@ -520,11 +522,13 @@ private slots:
         QVERIFY(!core->freeDvReporter()->isHiddenFromView());
         QCOMPARE(core->freedvWantedFrequencyHzForTest(), quint64(7177000));
         QTRY_VERIFY(!fake.eventsNamed(QStringLiteral("show_self")).isEmpty());
-        QTRY_VERIFY(std::any_of(fake.eventsNamed(QStringLiteral("freq_change")).cbegin(),
-                                fake.eventsNamed(QStringLiteral("freq_change")).cend(),
+        QTRY_VERIFY(([&] {
+            const auto events = fake.eventsNamed(QStringLiteral("freq_change"));
+            return std::any_of(events.cbegin(), events.cend(),
                                 [](const QJsonArray& e) {
             return e.at(1).toObject().value(QStringLiteral("freq")).toInteger() == 7177000;
-        }));
+            });
+        }()));
 
         // "Hide my station" wins over RADE, and lets go again.
         QString reason;

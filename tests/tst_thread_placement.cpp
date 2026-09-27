@@ -1053,6 +1053,8 @@ private slots:
         bool readBack = false;
         bool reniced = false;
         int niceRead = 0;
+        int niceRequested = 0;
+        bool initialNiceRead = false;
         std::thread helper([&]() {
             const qint64 tid = api->currentThreadId();
             moved = api->setAffinity(tid, {allowed.last()});
@@ -1060,33 +1062,41 @@ private slots:
             CPU_ZERO(&now);
             readBack = sched_getaffinity(0, sizeof(now), &now) == 0
                 && CPU_COUNT(&now) == 1 && CPU_ISSET(allowed.last(), &now);
-            // Raising the nice value needs no privilege.
-            reniced = api->setNice(tid, 5);
+            // Inherit the runner's nice level; never require permission to
+            // raise priority when the suite itself runs at nice 10.
+            errno = 0;
+            const int inheritedNice = getpriority(PRIO_PROCESS, static_cast<id_t>(tid));
+            initialNiceRead = errno == 0;
+            niceRequested = std::min(19, inheritedNice + 1);
+            reniced = initialNiceRead && api->setNice(tid, niceRequested);
             errno = 0;
             niceRead = getpriority(PRIO_PROCESS, static_cast<id_t>(tid));
         });
         helper.join();
         QVERIFY(moved);
         QVERIFY(readBack);
+        QVERIFY(initialNiceRead);
         QVERIFY(reniced);
-        QCOMPARE(niceRead, 5);
+        QCOMPARE(niceRead, niceRequested);
 
         // The startup probe puts the thread's own level back either way.
         int niceBefore = 99;
         int niceAfter = 98;
         bool permitted = false;
+        bool probeReadOk = false;
         std::thread prober([&]() {
             const auto tid = static_cast<id_t>(::syscall(SYS_gettid));
-            ::setpriority(PRIO_PROCESS, tid, 3);
             errno = 0;
             niceBefore = getpriority(PRIO_PROCESS, tid);
+            probeReadOk = errno == 0;
             permitted = canRaiseCurrentThreadPriority(kDspNice);
             errno = 0;
             niceAfter = getpriority(PRIO_PROCESS, tid);
+            probeReadOk = probeReadOk && errno == 0;
         });
         prober.join();
-        QCOMPARE(niceBefore, 3);
-        QCOMPARE(niceAfter, 3);
+        QVERIFY(probeReadOk);
+        QCOMPARE(niceAfter, niceBefore);
         Q_UNUSED(permitted);
 #endif
     }
