@@ -81,6 +81,8 @@
 #include "core/StepAttenuatorFacade.h"
 #include "core/session/ConfirmStep.h"
 #include "core/safety/TransmitHolder.h"
+#include "models/RfKitModel.h"
+#include "models/TunerModel.h"
 
 namespace {
 
@@ -1672,6 +1674,106 @@ private slots:
             4304)));
         QTRY_VERIFY(!propertyResult(s.appA, 4304).isEmpty());
         QCOMPARE(countOf(s.appA, QStringLiteral("confirm.request")), beforeBlock);
+    }
+
+    // R-IOS-30 / R-R3-49: the tuner reports its antenna 0-based (antA=0 is
+    // ANT 1, TunerModel::antennaA and the mirror's antennaA carry it as
+    // sent) while setTgxlAntenna's port is 1-based (activate ant=N). The
+    // question names both in the operator's numbering, a tap on the antenna
+    // already in use asks nothing, and a tap on any other antenna asks.
+    void theTunerAntennaQuestionNumbersAntennasAsTheButtonsDo()
+    {
+        SharedAdc s;
+        QVERIFY(admitted(s.appB));
+        s.core.model->enableStationAccessoryIdentity();
+        TunerModel* tuner = s.core.model->tunerModel();
+        QVERIFY(tuner != nullptr);
+        tuner->applyStatus({{QStringLiteral("antA"), QStringLiteral("1")}});   // ANT 2
+        QCOMPARE(tuner->antennaA(), 1);
+        const auto tap = [&](int port) {
+            const int before = countOf(s.appA, QStringLiteral("confirm.request"));
+            const QJsonObject answer =
+                s.core.invoke(s.appA, "setTgxlAntenna", {int64("port", port)});
+            Q_UNUSED(answer);
+            return countOf(s.appA, QStringLiteral("confirm.request")) > before
+                ? waitForLast(s.appA, QStringLiteral("confirm.request"), before)
+                : QJsonObject();
+        };
+
+        // Another antenna: asked, in the buttons' numbers.
+        const QJsonObject up = tap(3);
+        QVERIFY(!up.isEmpty());
+        const QJsonObject change = up.value(QStringLiteral("change")).toObject();
+        QCOMPARE(change.value(QStringLiteral("label")).toString(), QStringLiteral("Tuner antenna"));
+        QCOMPARE(change.value(QStringLiteral("from")).toString(), QStringLiteral("ANT2"));
+        QCOMPARE(change.value(QStringLiteral("to")).toString(), QStringLiteral("ANT3"));
+
+        // The antenna already in use: nothing changes, nothing is asked.
+        QVERIFY(tap(2).isEmpty());
+
+        // The antenna whose button number equals the raw report (ANT 1
+        // while antA=1): a real change, so it asks.
+        const QJsonObject down = tap(1);
+        QVERIFY(!down.isEmpty());
+        QCOMPARE(down.value(QStringLiteral("change")).toObject()
+                     .value(QStringLiteral("from")).toString(),
+                 QStringLiteral("ANT2"));
+        QCOMPARE(down.value(QStringLiteral("change")).toObject()
+                     .value(QStringLiteral("to")).toString(),
+                 QStringLiteral("ANT1"));
+    }
+
+    // R-IOS-30 / R-R3-49: the RF-Kit amp numbers its antennas from 1 on
+    // both sides (activeAntennaNumber and setRfKitAntenna's port, 0 for
+    // none), but it numbers its external antennas from 1 as well; a tap on
+    // internal ANT 2 while external antenna 2 is active is a change and
+    // asks, and the question does not call the external antenna ANT2.
+    void theRfKitAntennaQuestionNumbersAntennasAsTheButtonsDo()
+    {
+        SharedAdc s;
+        QVERIFY(admitted(s.appB));
+        s.core.model->enableStationAccessoryIdentity();
+        RfKitModel* rfKit = s.core.model->rfKitModel();
+        QVERIFY(rfKit != nullptr);
+        const auto active = [&](RfKitAntenna::Type type, int number) {
+            RfKitAntenna a;
+            a.type = type;
+            a.number = number;
+            a.state = RfKitAntenna::State::Active;
+            rfKit->applyActiveAntenna(a);
+        };
+        const auto tap = [&](int port) {
+            const int before = countOf(s.appA, QStringLiteral("confirm.request"));
+            const QJsonObject answer =
+                s.core.invoke(s.appA, "setRfKitAntenna", {int64("port", port)});
+            Q_UNUSED(answer);
+            return countOf(s.appA, QStringLiteral("confirm.request")) > before
+                ? waitForLast(s.appA, QStringLiteral("confirm.request"), before)
+                    .value(QStringLiteral("change")).toObject()
+                : QJsonObject();
+        };
+
+        active(RfKitAntenna::Type::Internal, 2);
+        const QJsonObject up = tap(3);
+        QCOMPARE(up.value(QStringLiteral("label")).toString(), QStringLiteral("RF-Kit antenna"));
+        QCOMPARE(up.value(QStringLiteral("from")).toString(), QStringLiteral("ANT2"));
+        QCOMPARE(up.value(QStringLiteral("to")).toString(), QStringLiteral("ANT3"));
+        QVERIFY(tap(2).isEmpty());
+        const QJsonObject down = tap(1);
+        QCOMPARE(down.value(QStringLiteral("from")).toString(), QStringLiteral("ANT2"));
+        QCOMPARE(down.value(QStringLiteral("to")).toString(), QStringLiteral("ANT1"));
+
+        // External antenna 2 in use: internal ANT 2 is a change.
+        active(RfKitAntenna::Type::External, 2);
+        const QJsonObject fromExternal = tap(2);
+        QVERIFY(!fromExternal.isEmpty());
+        QCOMPARE(fromExternal.value(QStringLiteral("from")).toString(),
+                 QStringLiteral("External antenna 2"));
+        QCOMPARE(fromExternal.value(QStringLiteral("to")).toString(), QStringLiteral("ANT2"));
+
+        // No antenna reported yet: asked, from None.
+        active(RfKitAntenna::Type::Internal, 0);
+        QCOMPARE(tap(1).value(QStringLiteral("from")).toString(), QStringLiteral("None"));
     }
 
     void aNotchInsideAnotherDevicesPassbandAsksOneOutsideDoesNot()
