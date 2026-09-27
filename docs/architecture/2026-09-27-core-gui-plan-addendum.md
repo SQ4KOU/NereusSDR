@@ -707,11 +707,31 @@ colours for the same signal.
   keeps the existing receive-stall deadline but excludes authenticated keyed/tuning/
   transmit-tail states; a true return to receive starts a fresh interval if real RTP
   previously armed it. Unrelated state updates must not extend that interval.
-- Status: OPEN, isolated implementation and fake-only regressions in progress. The
-  independent 400 ms transmit watchdog and earlier false-unkey finding stay unchanged.
-  The phone controller checked that its current code has no equivalent audio-only
-  stall timer and recorded this requirement for its upcoming relay implementation.
+- Status: built in signed lane commits `fa5e9f46` and `5aa1b55c`, integrated with
+  fresh media-tunnel, remote-controller and TX-watchdog suites passing 3/3 (65.41 s).
+  Synthetic TUNE coverage proves media/display survival, continued tunnel heartbeat
+  tracking, audio resumption and genuine post-unkey stall recovery despite unrelated
+  state updates. The independent 400 ms transmit watchdog and earlier false-unkey
+  finding stay unchanged. The phone controller has no equivalent audio-only stall
+  timer and recorded this requirement for its upcoming relay implementation.
 - Plan: R5 media recovery and load verification.
+
+### G-48: Linux fixtures assume the developer machine's environment
+
+- Evidence: checkpoint verification exposed an absolute nice-level request that
+  requires privilege when the runner is already at nice 10; a socket-path test
+  conflating Qt's isolated config directory with the packaged service directory;
+  and FreeDV checks passing iterators from distinct temporary event lists. The
+  path-racer fixture also assumes a 192.168.1 subnet and an unanswered localhost
+  connection survives until asynchronous name resolution completes.
+- Ruling: JJ requires failures under real load to be explained and fixed. These
+  test-fixture corrections preserve production behavior and existing deadlines.
+- Status: signed `710c2970` repairs the first three causes. Fresh macOS tests pass
+  3/3; an isolated Linux checkpoint plus the exact patch also passes 3/3. The
+  path-racer fixture repair remains in progress. Earlier Linux environment repairs
+  supplied a non-loopback internal interface for ICE and existing offline Python
+  service dependencies. Phase-specific passes are not a green current-branch suite.
+- Plan: cross-platform verification for the whole Core/GUI PR.
 
 ## How this addendum is kept
 

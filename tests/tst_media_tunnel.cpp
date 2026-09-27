@@ -37,6 +37,7 @@
 #include "core/session/IceConfiguration.h"
 #include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
+#include "core/session/TransmitStateFacade.h"
 #include "core/session/media/DaemonMediaController.h"
 #include "fakes/RemoteAudioSessionHarness.h"
 #include "fakes/LoopbackTransport.h"
@@ -338,6 +339,130 @@ private slots:
         const qint64 audioResumeMs = silence.elapsed();
         qInfo("Tunnel recovery decoded audio after %lld ms and displayed a frame after %lld ms",
               static_cast<long long>(audioResumeMs), static_cast<long long>(displayResumeMs));
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    void tuneSilenceDoesNotDiscardTheTunnel_data()
+    {
+        QTest::addColumn<bool>("resumeAudio");
+        QTest::newRow("rx-audio-resumes") << true;
+        QTest::newRow("rx-audio-still-missing") << false;
+    }
+
+    void tuneSilenceDoesNotDiscardTheTunnel()
+    {
+        QFETCH(bool, resumeAudio);
+        IceConfiguration::setOnlyLoopbackShimCandidatesForTest(true);
+        Test::RemoteAudioSessionHarness h;
+        const int stream = h.station.sliceById(h.sliceA)->streamIndex();
+        QVERIFY(stream >= 0);
+        PanadapterStack stack;
+        auto* pan = stack.addPanadapter(QStringLiteral("tune"));
+        pan->setActiveSliceIndex(h.sliceA);
+        pan->spectrumWidget()->setDisplayWindowPreservingHistory(
+            h.station.streamCentreHz(stream), 48000);
+        stack.resize(600, 400);
+        stack.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&stack));
+        RemoteMediaController remoteMedia(&h.client, &h.remote, &stack);
+        DaemonMediaController daemonMedia(&h.server, &h.station);
+        QSignalSpy recovery(&remoteMedia, &RemoteMediaController::recoveryRequested);
+        QSignalSpy frames(&remoteMedia, &RemoteMediaController::displayFrameReceived);
+        QTimer source;
+        source.setInterval(10);
+        QObject::connect(&source, &QTimer::timeout, &source, [&h] { h.feedMixedTone(); });
+        QVector<float> iq(2048);
+        for (int i = 0; i < iq.size(); i += 2) {
+            iq[i] = 0.01f * std::cos(double(i) * 0.17);
+            iq[i + 1] = 0.01f * std::sin(double(i) * 0.17);
+        }
+        QTimer display;
+        display.setInterval(20);
+        QObject::connect(&display, &QTimer::timeout, &display, [&h, stream, &iq] {
+            QMetaObject::invokeMethod(&h.station, "rawIqDataForStream", Qt::DirectConnection,
+                                      Q_ARG(int, stream), Q_ARG(QVector<float>, iq));
+        });
+        QTimer speaker;
+        speaker.setInterval(10);
+        QObject::connect(&speaker, &QTimer::timeout, &speaker, [&h] { h.remoteBus->render(480); });
+        source.start();
+        display.start();
+        speaker.start();
+        h.connectSession();
+        QVERIFY(h.client.capabilities().txStateVersion >= 1);
+        QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.audioStatus().state
+                                     == RemoteAudioStatus::State::Playing, 20000);
+        QTRY_VERIFY_WITH_TIMEOUT(!frames.isEmpty(), 10000);
+        const QString mediaId = remoteMedia.mediaConnectionId();
+        QVERIFY(!mediaId.isEmpty());
+        const auto heardTone = [&h](int firstFrame) {
+            const auto& heard = h.remoteBus->heard;
+            for (int frame = firstFrame; (frame + 480) * 2 <= heard.size(); frame += 480) {
+                double energy = 0.0;
+                for (int i = 0; i < 480; ++i) {
+                    const double sample = heard.at((frame + i) * 2);
+                    energy += sample * sample;
+                }
+                if (energy / 480.0 >= 1e-6) { return true; }
+            }
+            return false;
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(heardTone(0), 5000);
+
+        h.station.moxController()->setMoxCheck({}); // fake Core, no radio
+        h.station.moxController()->setTimerIntervals(0, 0, 0, 0, 0, 0);
+        // The fake Core has no physical transmitter. Drive its existing
+        // MOX/TUNE state machine and mirrored transmit model directly.
+        h.station.transmitModel().setTune(true);
+        h.station.moxController()->setTune(true);
+        QTRY_VERIFY_WITH_TIMEOUT(h.client.transmitState()->keyed()
+                                     && h.client.transmitState()->tuning(), 5000);
+        source.stop(); // half-duplex RX silence, while display remains active
+        // A tunnel selected after TX began must still shorten the control
+        // heartbeat. Reset the selection to model that path-settling edge.
+        h.client.setMediaTunnelInUse(false);
+        QCOMPARE(h.client.effectiveHeartbeatIntervalMs(),
+                 StationClient::kDefaultHeartbeatIntervalMs);
+        QTRY_COMPARE_WITH_TIMEOUT(h.client.effectiveHeartbeatIntervalMs(),
+                                  StationClient::kRelayedHeartbeatIntervalMs, 1500);
+        QTest::qWait(RemoteMediaController::kMediaStallMs + 600);
+        QCOMPARE(recovery.size(), 0);
+        QCOMPARE(remoteMedia.mediaConnectionId(), mediaId);
+
+        h.station.moxController()->setTune(false);
+        h.station.transmitModel().setTune(false);
+        QTRY_VERIFY_WITH_TIMEOUT(!h.client.transmitState()->keyed()
+                                     && !h.client.transmitState()->tuning()
+                                     && !h.client.transmitState()->txEnding(), 5000);
+        QElapsedTimer rxSilence;
+        rxSilence.start();
+        const int framesBeforeRx = frames.size();
+        if (resumeAudio) {
+            const int audioStart = h.remoteBus->heard.size() / 2;
+            source.start();
+            QTRY_VERIFY_WITH_TIMEOUT(heardTone(audioStart), 5000);
+            QTRY_VERIFY_WITH_TIMEOUT(frames.size() > framesBeforeRx, 5000);
+            QCOMPARE(recovery.size(), 0);
+            QCOMPARE(remoteMedia.mediaConnectionId(), mediaId);
+        } else {
+            // Unrelated stateChanged notifications while idle must not
+            // postpone an already armed RX stall clock.
+            QSignalSpy unrelatedUpdates(h.client.transmitState(),
+                                        &TransmitState::stateChanged);
+            QTimer unrelated;
+            unrelated.setInterval(100);
+            int counter = 0;
+            QObject::connect(&unrelated, &QTimer::timeout, &unrelated, [&] {
+                const int sliceId = (++counter & 1) ? h.sliceB : h.sliceA;
+                h.client.transmitState()->applyStationValue("txSliceId", sliceId);
+            });
+            unrelated.start();
+            QTRY_VERIFY_WITH_TIMEOUT(!recovery.isEmpty(), 6000);
+            QVERIFY(unrelatedUpdates.size() >= 10);
+            QVERIFY2(rxSilence.elapsed() >= RemoteMediaController::kMediaStallMs
+                         && rxSilence.elapsed() <= 5000,
+                     qPrintable(QString::number(rxSilence.elapsed())));
+        }
         h.client.disconnectFromStation(QStringLiteral("test complete"));
     }
 
