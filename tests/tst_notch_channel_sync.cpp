@@ -138,6 +138,13 @@ private slots:
         n.centerHz = 14074000.0;
         n.widthHz  = 250.0;
         n.active   = true;
+        // addNotch() calls WDSP on the caller's thread (the product only
+        // calls it from a receive-lane job, addNotchReconciled). The
+        // setters above are still queued on the lane: calling it now ran
+        // RXANBPAddNotch on this thread while RXANBPSetNotchesRun ran on
+        // the lane, both rebuilding and freeing nbp0's impulse (a double
+        // free under ThreadSanitizer, R-R3-49). Let the lane finish first.
+        QVERIFY(laneIdle(model));
         QVERIFY(ch->addNotch(0, n));
         QVERIFY(laneIdle(model));
         QCOMPARE(ch->notchCount(), 1);
