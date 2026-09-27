@@ -53,6 +53,7 @@ mw0lge@grange-lane.co.uk
 //============================================================================================//
 
 #include "BaseItemEditor.h"
+#include "gui/UnbuiltFeatures.h"
 
 #include "../../meters/MeterItem.h"
 #include "../../meters/MeterPoller.h"
@@ -285,6 +286,10 @@ void BaseItemEditor::populateBindingCombo()
     };
     m_comboBinding->addItem(QStringLiteral("(none)"), -1);
     for (const auto& b : kBindings) {
+        if (b.id == MeterBinding::PbSnr
+            && !UnbuiltFeatures::isBuilt(UnbuiltFeature::PbSnr)) {
+            continue;
+        }
         m_comboBinding->addItem(QString::fromLatin1(b.label), b.id);
     }
 }

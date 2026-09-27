@@ -128,6 +128,9 @@
 #include "gui/meters/OtherButtonItem.h"
 #include "gui/meters/MeterWidget.h"
 #include "gui/meters/MeterItem.h"
+#include "gui/meters/MeterPoller.h"
+#include "gui/meters/FilterDisplayItem.h"
+#include "gui/meters/ClickBoxItem.h"
 #include "gui/meters/VoiceRecordPlayItem.h"
 #include "gui/widgets/VfoWidget.h"
 #include "models/Band.h"
@@ -406,6 +409,11 @@ public:
             m_meter = new MeterWidget();
             m_meter->addItem(new TextItem());
             m_meter->addItem(new VoiceRecordPlayItem());
+            m_meter->addItem(new FilterDisplayItem());
+            m_meter->addItem(new ClickBoxItem());
+            auto* pbSnr = new BarItem();
+            pbSnr->setBindingId(MeterBinding::PbSnr);
+            m_meter->addItem(pbSnr);
             m_container->setContent(m_meter);
             m_containerDialog = std::make_unique<ContainerSettingsDialog>(m_container.get());
             for (QPushButton* button : m_containerDialog->findChildren<QPushButton*>()) {
@@ -800,6 +808,59 @@ QMap<F, QList<Surface>> surfaces()
                named(QStringLiteral("hl2TxBufferLatency"))),
         onPage(QStringLiteral("Hardware Config"), QStringLiteral("PTT hang"),
                named(QStringLiteral("hl2PttHang")))};
+    map[F::GanymedeTrip] = {status(QStringLiteral("paStatusBadge"))};
+    map[F::DisableHfPa] = {onPage(QStringLiteral("Power"), QStringLiteral("HF PA control"),
+                                 named(QStringLiteral("grpHfPaControl")))};
+    map[F::PbSnr] = {Surface{QStringLiteral("container PB SNR render"), Host::Container,
+                            [](Hosts& h) {
+                                for (const MeterItem* item : h.containerMeter()->items()) {
+                                    if (item->bindingId() == MeterBinding::PbSnr) {
+                                        return h.containerMeter()->shouldRender(item);
+                                    }
+                                }
+                                return false;
+                            }}};
+    map[F::ContainerFilterDisplay] = {
+        Surface{QStringLiteral("container Filter Display render"), Host::Container,
+                [](Hosts& h) {
+                    for (const MeterItem* item : h.containerMeter()->items()) {
+                        if (qobject_cast<const FilterDisplayItem*>(item)) {
+                            return h.containerMeter()->shouldRender(item);
+                        }
+                    }
+                    return false;
+                }},
+        Surface{QStringLiteral("container Filter Display Add"), Host::Container,
+                [](Hosts& h) { return actionShown(h.containerDialog(), QStringLiteral("Filter Display")); }}};
+    map[F::ContainerClickBox] = {
+        Surface{QStringLiteral("container Click Box render"), Host::Container,
+                [](Hosts& h) {
+                    for (const MeterItem* item : h.containerMeter()->items()) {
+                        if (qobject_cast<const ClickBoxItem*>(item)) {
+                            return h.containerMeter()->shouldRender(item);
+                        }
+                    }
+                    return false;
+                }},
+        Surface{QStringLiteral("container Click Box Add"), Host::Container,
+                [](Hosts& h) { return actionShown(h.containerDialog(), QStringLiteral("Click Box")); }}};
+    map[F::AudioBitDepth] = {onPage(QStringLiteral("Devices"), QStringLiteral("bit depth"),
+                                   text(QStringLiteral("Bit depth:")))};
+    map[F::AudioAutoMatch] = {onPage(QStringLiteral("Devices"), QStringLiteral("auto match"),
+                                    text(QStringLiteral("Auto-match")))};
+    map[F::AudioMonitorTxInput] = {onPage(QStringLiteral("Devices"), QStringLiteral("monitor TX input"),
+                                         text(QStringLiteral("Monitor TX input during transmit")))};
+    map[F::AudioToneCheck] = {onPage(QStringLiteral("Devices"), QStringLiteral("tone check"),
+                                    text(QStringLiteral("Enable tone check (A-440 Hz burst on PTT)")))};
+    map[F::WaterfallLowColor] = {onPage(QStringLiteral("Colors & Theme"), QStringLiteral("low color"),
+                                      text(QStringLiteral("Low Level Color:")))};
+    map[F::MultimeterAveraging] = {onPage(QStringLiteral("Multimeter"), QStringLiteral("averaging"),
+                                         text(QStringLiteral("Averaging window:")))};
+    map[F::TxGridScale] = {onPage(QStringLiteral("TX Display"), QStringLiteral("grid scale"),
+                                 [](QWidget* p) { return groupShown(p, QStringLiteral("TX Grid Scale")); })};
+    map[F::CrossBandSplitGuard] = {
+        onPage(QStringLiteral("Options"), QStringLiteral("VFO-B split guard"),
+               named(QStringLiteral("chkPreventTXonDifferentBandToRX")))};
     return map;
 }
 

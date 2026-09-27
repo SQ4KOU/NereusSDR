@@ -43,6 +43,7 @@
 #include "core/BoardCapabilities.h"
 #include "core/HermesLiteBandwidthMonitor.h"
 #include "core/SettingsHygiene.h"
+#include "core/session/IStationLink.h"
 #include "models/RadioModel.h"
 #include "gui/SupportDialog.h"
 #include "gui/UnbuiltFeatures.h"
@@ -181,7 +182,7 @@ void SettingsValidationPage::buildUI()
     btnRow->addStretch();
     layout->addLayout(btnRow);
 
-    connect(m_refreshBtn, &QPushButton::clicked, this, &SettingsValidationPage::refresh);
+    connect(m_refreshBtn, &QPushButton::clicked, this, &SettingsValidationPage::onRevalidateClicked);
     connect(m_resetBtn,   &QPushButton::clicked, this, &SettingsValidationPage::onResetClicked);
     connect(m_forgetBtn,  &QPushButton::clicked, this, &SettingsValidationPage::onForgetClicked);
 
@@ -193,6 +194,11 @@ void SettingsValidationPage::refresh()
     m_issueList->clear();
     if (m_model == nullptr) {
         m_issueList->addItem(QStringLiteral("(no model)"));
+        return;
+    }
+    const QString unavailable = m_model->settingsHygiene().remoteUnavailableReason();
+    if (!unavailable.isEmpty()) {
+        m_issueList->addItem(unavailable);
         return;
     }
     const auto issues = m_model->settingsHygiene().issues();
@@ -210,39 +216,77 @@ void SettingsValidationPage::refresh()
     }
 }
 
+void SettingsValidationPage::onRevalidateClicked()
+{
+    if (!m_model) { return; }
+    const QString mac = m_model->currentRadioMac();
+    if (mac.isEmpty()) { return; }
+    if (m_model->ownsLocalDsp()) {
+        m_model->settingsHygiene().validate(mac, m_model->boardCapabilities());
+    } else if (IStationLink* link = m_model->stationLink()) {
+        const auto result = link->requestSettingsHygiene("station.validateSettings", mac);
+        if (!result.sent) {
+            m_model->settingsHygiene().setRemoteUnavailable(result.reason);
+        }
+    }
+}
+
 void SettingsValidationPage::setStationSettingsAvailable(bool available, const QString& reason)
 {
     m_stationSettingsAvailable = available;
-    gateStationControls({m_resetBtn, m_forgetBtn}, available, reason);
+    const IStationLink* link = m_model ? m_model->stationLink() : nullptr;
+    const bool hygiene = !m_model || m_model->ownsLocalDsp()
+        || (link && link->settingsHygieneAvailable());
+    const QString unavailable = hygiene ? reason : IStationLink::settingsHygieneUnavailableReason();
+    gateStationControls({m_refreshBtn}, available && hygiene, unavailable);
+    const bool paired = !m_model || m_model->ownsLocalDsp()
+        || (link && link->signedInWithDeviceKey());
+    gateStationControls({m_forgetBtn}, available && hygiene && paired,
+        !hygiene ? unavailable : paired ? reason
+            : QStringLiteral("Pair this computer with the Core to forget its radio settings."));
+    const bool localReset = !m_model || m_model->ownsLocalDsp();
+    gateStationControls({m_resetBtn}, available && localReset,
+        localReset ? reason : QStringLiteral("Reset to defaults is not available on this Core."));
 }
 
 void SettingsValidationPage::onResetClicked()
 {
     if (m_model == nullptr) { return; }
+    const QString mac = m_model->currentRadioMac();
     const auto reply = QMessageBox::question(
         this, QStringLiteral("Reset Settings"),
         QStringLiteral("Reset all per-board settings to defaults for this radio?"),
         QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
     // The Core's settings can go away while the question is open; Yes then
     // changes nothing (R3 Setup fix wave, final review M2).
-    if (reply == QMessageBox::Yes && m_stationSettingsAvailable) {
-        m_model->settingsHygiene().resetSettingsToDefaults(
-            QString{}, m_model->boardCapabilities());
-        refresh();
+    if (reply == QMessageBox::Yes && m_stationSettingsAvailable && !mac.isEmpty()
+        && mac == m_model->currentRadioMac()) {
+        if (m_model->ownsLocalDsp()) {
+            QString reason;
+            if (m_model->stationOnAirRefusal(&reason)) { return; }
+            m_model->settingsHygiene().resetSettingsToDefaults(mac, m_model->boardCapabilities());
+        }
     }
 }
 
 void SettingsValidationPage::onForgetClicked()
 {
     if (m_model == nullptr) { return; }
+    const QString mac = m_model->currentRadioMac();
     const auto reply = QMessageBox::question(
         this, QStringLiteral("Forget Radio"),
         QStringLiteral("Forget all settings for this radio?"),
         QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
     // See onResetClicked(): re-checked after the question returns.
-    if (reply == QMessageBox::Yes && m_stationSettingsAvailable) {
-        m_model->settingsHygiene().forgetRadio(QString{});
-        refresh();
+    if (reply == QMessageBox::Yes && m_stationSettingsAvailable && !mac.isEmpty()
+        && mac == m_model->currentRadioMac()) {
+        if (m_model->ownsLocalDsp()) {
+            QString reason;
+            if (m_model->stationOnAirRefusal(&reason)) { return; }
+            m_model->settingsHygiene().forgetRadio(mac);
+        } else if (IStationLink* link = m_model->stationLink(); link && link->settingsHygieneAvailable()) {
+            link->requestSettingsHygiene("station.forgetSettings", mac);
+        }
     }
 }
 

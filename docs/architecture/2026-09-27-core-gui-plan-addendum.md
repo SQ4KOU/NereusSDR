@@ -541,9 +541,10 @@ colours for the same signal.
   refuses the current radio, so it cannot implement remote hygiene parity.
 - Ruling: OPEN for reset semantics. JJ has been asked whether Reset should reset all
   saved settings for the radio or retain repair behavior under a clearer label.
-- Status: the approved remote diagnostics work is adding separate capability-gated hygiene
-  operations, with Core-owned MAC validation and paired-device/on-air gates for mutations.
-  Reset behavior awaits the answer; independent diagnostics/preferences work continues.
+- Status: capability-gated validate/forget hygiene operations from `ce40a2c` are
+  integrated, with Core-owned MAC validation and paired-device/on-air mutation gates.
+  Reset remains disabled remotely pending the ruling. Integrated app/Core build and
+  20 focused tests passed (79.27 s), including setup, hygiene and link conformance.
 - Plan: remote-window parity Setup diagnostics and preferences.
 
 ### G-39: Restrictive-network relay stress test falsely unkeys simulated TUNE
@@ -631,9 +632,9 @@ colours for the same signal.
   at line 29486.
 - Ruling: the existing source-faithful transmit guard objective authorizes this narrow
   fix, without a broader Extended/cross-band policy change.
-- Status: the isolated parity lane produced signed narrow fix `d83b4e88c` (parent
-  `ce40a2c`), reviewed with fake-only tests; it awaits integration after this R5 handback.
-  Do not duplicate it during R5 integration.
+- Status: signed fix `d83b4e88c` is integrated: the guard uses the actual TX carrier
+  including enabled XIT for both frequency and band. The integrated transmit-frequency
+  test passed in the 20-test setup integration run; no physical transmission was used.
 - Plan: transmit guard parity and safety.
 
 ### G-44: Saved legacy control-channel result can permanently suppress recovery

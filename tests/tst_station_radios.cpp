@@ -45,6 +45,7 @@
 #include "core/RadioDiscovery.h"
 #include "core/session/SessionCommandDispatcher.h"
 #include "core/session/SessionMessages.h"
+#include "core/session/SettingsHygieneWire.h"
 #include "core/station/StationRadios.h"
 #include "models/RadioModel.h"
 #define private public
@@ -96,6 +97,53 @@ class TstStationRadios : public QObject {
     Q_OBJECT
 
 private slots:
+    void settingsHygieneUsesOnlyTheCurrentCoreMacAndRefusesOnAirMutation()
+    {
+        auto& settings = AppSettings::instance();
+        RadioModel core;
+        core.setBoardForTest(HPSDRHW::Hermes);
+        core.setLastRadioInfoForTest(radio(kHl2, HPSDRHW::Hermes, QStringLiteral("Hermes")));
+        core.setConnectionStateForTest(ConnectionState::Connected);
+        settings.setValue(QStringLiteral("hardware/%1/sAtt").arg(kHl2), 99);
+        settings.setValue(QStringLiteral("hardware/%1/sAtt").arg(kG2), 99);
+        SessionCommandDispatcher dispatcher(&core);
+        QList<SessionMessage> results;
+        connect(&dispatcher, &SessionCommandDispatcher::commandResultReady, this,
+                [&results](const SessionMessage& m) { results.append(m); });
+
+        dispatcher.dispatch(invoke("station.validateSettings", 1, {macArg(kG2)}));
+        QCOMPARE(results.size(), 1);
+        QVERIFY(!results.takeFirst().accepted);
+        QCOMPARE(settings.value(QStringLiteral("hardware/%1/sAtt").arg(kG2)).toInt(), 99);
+        dispatcher.dispatch(invoke("station.validateSettings", 2, {macArg(kHl2)}));
+        QCOMPARE(results.size(), 1);
+        QVERIFY(results.first().accepted);
+        const auto issues = SettingsHygieneWire::decode(results.takeFirst().updates);
+        QVERIFY(issues);
+        QCOMPARE(issues->mac, kHl2);
+        QVERIFY(!issues->issues.isEmpty());
+
+        MoxController* mox = core.moxController();
+        QVERIFY(mox);
+        mox->setMoxCheck({});
+        mox->setMox(true);
+        QVERIFY(mox->isMox());
+        dispatcher.dispatch(invoke("station.forgetSettings", 3, {macArg(kHl2)}));
+        QCOMPARE(results.size(), 1);
+        QVERIFY(!results.takeFirst().accepted);
+        QCOMPARE(settings.value(QStringLiteral("hardware/%1/sAtt").arg(kHl2)).toInt(), 99);
+        mox->setMox(false);
+        QTRY_VERIFY(!core.stationOnAirRefusal(nullptr));
+
+        dispatcher.dispatch(invoke("station.forgetSettings", 4, {macArg(kG2)}));
+        QVERIFY(!results.takeFirst().accepted);
+        dispatcher.dispatch(invoke("station.forgetSettings", 5, {macArg(kHl2)}));
+        QCOMPARE(results.size(), 1);
+        QVERIFY(results.takeFirst().accepted);
+        QVERIFY(!settings.contains(QStringLiteral("hardware/%1/sAtt").arg(kHl2)));
+        QCOMPARE(settings.value(QStringLiteral("hardware/%1/sAtt").arg(kG2)).toInt(), 99);
+    }
+
     void initTestCase()
     {
         AppSettings::setProfileOverride(

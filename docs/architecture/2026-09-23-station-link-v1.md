@@ -867,6 +867,7 @@ change shows as surface drift and as a change to this table.
 | `txReadingsVersion` | 1 |
 | `mediaTunnelVersion` | 1 |
 | `mediaRelayRoutingVersion` | 1 |
+| `settingsHygieneVersion` | 1 |
 
 <!-- /surface -->
 
@@ -1171,6 +1172,24 @@ When a feature is off, its version is 0:
   no entry a window shows This Core's Change radio disabled with "This
   Core does not let this app change its radio. Updating the Core may
   help.".
+- `settingsHygieneVersion` (remote-window parity Task 24): optional trailing
+  minor-11 capability, 1 when the Core owns a local radio model. At 1 the
+  Core takes `station.validateSettings` and `station.forgetSettings`, each
+  with the connected radio's canonical
+  upper-case colon-separated `mac`. Validation reads the Core's settings
+  and board capabilities. Forget requires a paired-device key
+  sign-in and is refused while the station is on the air. Both reject
+  a stale or different MAC at execution. This is separate from
+  `station.forgetRadio`, which changes saved-radio membership.
+  A successful result carries exactly two typed `values`: `mac` (utf8) and
+  `issuesJson` (utf8), a compact array of at most 32 issues with string
+  `severity` (`info`, `warning` or `critical`), `key`, `summary`, `detail`
+  and `fixActionId`. The JSON is at most 64 KiB, with fields bounded to
+  256, 256, 1024 and 64 UTF-8 bytes respectively. A malformed response
+  is unavailable rather than a valid empty issue list. A window built
+  against an older Core disables these controls with a plain reason.
+  Remote Reset to Defaults remains disabled until its operator-facing
+  behavior is settled; version 1 does not accept a reset command.
 - `txDisplayVersion` (remote-window parity Task 28, A11): sent only at
   agreed minor 11, after `stationRadiosVersion` in the minor-11 block
   (`displayClockVersion`, `controlChannelVersion`, then
@@ -1588,6 +1607,7 @@ older window sees only the values it was built for.
 | 74 | `txReadingsVersion` | `i64` |
 | 75 | `mediaTunnelVersion` | `i64` |
 | 76 | `mediaRelayRoutingVersion` | `i64` |
+| 77 | `settingsHygieneVersion` | `i64` |
 
 <!-- /surface -->
 
@@ -3820,6 +3840,8 @@ refused.
 | `station.rescanRadios` | none | `stationRadiosVersion` | 1 | 11 |
 | `station.setRadioModel` | `mac` utf8, `model` i64 | `stationRadiosVersion` | 1 | 11 |
 | `station.forgetRadio` | `mac` utf8 | `stationRadiosVersion` | 1 | 11 |
+| `station.validateSettings` | `mac` utf8 | `settingsHygieneVersion` | 1 | 11 |
+| `station.forgetSettings` | `mac` utf8 | `settingsHygieneVersion` | 1 | 11 |
 | `freedv.setMessage` | `text` utf8 | `stationFreedvVersion` | 1 | 11 |
 | `freedv.sendQsy` | `callsign` utf8, `frequencyHz` i64 | `stationFreedvVersion` | 1 | 11 |
 | `freedv.setHidden` | `on` bool | `stationFreedvVersion` | 1 | 11 |

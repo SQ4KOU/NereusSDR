@@ -12,6 +12,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-27 - The MOX band-plan check uses the XIT-shifted TX carrier,
+//                 matching the TX chain and Thetis console.cs:29440-29486.
+//                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
@@ -16515,9 +16518,12 @@ void RadioModel::installBandPlanMoxCheck()
             return {false, QStringLiteral("No TX-bound slice")};
         }
 
-        const auto freqHz = static_cast<std::int64_t>(slice->frequency());
+        // Thetis console.cs:29440-29450 [v2.10.3.15] adds XIT to the TX
+        // carrier before CheckValidTXFreq at :29486. Use the same carrier
+        // already sent to the TX chain, including XIT, for the safety gate.
+        const auto freqHz = static_cast<std::int64_t>(txFrequencyForSlice(slice));
         const DSPMode mode = slice->dspMode();
-        const Band txBand = bandFromFrequency(slice->frequency());
+        const Band txBand = bandFromFrequency(static_cast<double>(freqHz));
 
         const safety::BandPlanGuard::MoxCheckResult bandPlanResult =
             m_bandPlan.checkMoxAllowed(region, freqHz, mode,

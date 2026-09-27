@@ -40,6 +40,9 @@ struct SavedCoreTarget {
     RemoteStationOptions connection;
     QString lastRadioName;
     QString lastRadioMac;
+    // This computer's launch preference for this saved Core. Older records
+    // retain their former connect-at-launch behavior.
+    bool autoConnect{true};
 };
 
 class CoreTargetStore {

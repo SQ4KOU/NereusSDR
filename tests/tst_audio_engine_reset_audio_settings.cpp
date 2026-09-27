@@ -89,6 +89,7 @@ private slots:
     void emitsAudioSettingsReset();
     // R-R3-45: the MON output choice goes with the rest.
     void putsTheMonitorBackOnTheSpeakers();
+    void operatorLocalResetPreservesCoreAudioSettingsAndRebuildsOutputs();
 
 private:
     int m_opened{0};   // fake devices made by the engines under test
@@ -350,6 +351,24 @@ void TstAudioEngineResetAudioSettings::putsTheMonitorBackOnTheSpeakers()
     QCOMPARE(radio.audioEngine()->txMonitorOutput(), TxMonitorOutput::Speakers);
     QCOMPARE(spy.count(), 1);
     QVERIFY(!s.contains(QStringLiteral("audio/TxMonitor/Output")));
+}
+
+void TstAudioEngineResetAudioSettings::operatorLocalResetPreservesCoreAudioSettingsAndRebuildsOutputs()
+{
+    auto& s = AppSettings::instance();
+    s.setValue(QStringLiteral("audio/DspRate"), QStringLiteral("96000"));
+    s.setValue(QStringLiteral("audio/Speakers/DeviceName"), QStringLiteral("old-device"));
+    RadioModel radio;
+    AudioEngine* engine = radio.audioEngine();
+    useFakeDevices(engine, &m_opened);
+    engine->setTxMonitorOutput(TxMonitorOutput::Headphones);
+    QSignalSpy vax(engine, &AudioEngine::vaxConfigChanged);
+    engine->resetAudioSettings(true);
+    QCOMPARE(s.value(QStringLiteral("audio/DspRate")).toString(), QStringLiteral("96000"));
+    QVERIFY(!s.contains(QStringLiteral("audio/Speakers/DeviceName")));
+    QCOMPARE(engine->txMonitorOutput(), TxMonitorOutput::Speakers);
+    QCOMPARE(vax.count(), 4);
+    QVERIFY(m_opened >= 5);
 }
 
 QTEST_MAIN(TstAudioEngineResetAudioSettings)

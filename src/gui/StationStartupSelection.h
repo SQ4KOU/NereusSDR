@@ -34,4 +34,9 @@ struct StationStartupSelection {
 std::optional<StationStartupSelection> resolveStationStartup(
     const StationStartupRequest&, const CoreTargetStore&, QString* error = nullptr);
 
+// A saved Core's opt-out applies only to implicit startup. Explicit CLI
+// selection and local-radio startup remain direct operator requests.
+bool shouldStartStationConnection(const StationStartupRequest&,
+                                  const StationStartupSelection&, const CoreTargetStore&);
+
 } // namespace NereusSDR

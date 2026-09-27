@@ -7,6 +7,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-27 - Task 25: retire the obsolete split-band checkbox and show
+//                 enforced, disabled TX policy values pending Core policy.
+//                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
@@ -107,6 +110,7 @@
 //============================================================================================//
 
 #include "GeneralOptionsPage.h"
+#include "gui/UnbuiltFeatures.h"
 #include "gui/StyleConstants.h"
 #include "models/RadioModel.h"
 #include "core/AppSettings.h"
@@ -116,6 +120,7 @@
 #include "core/StepAttenuatorFacade.h"
 #include "core/session/IStationLink.h"
 #include "core/settings/SettingsProxy.h"
+#include "core/safety/BandPlanGuard.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -243,6 +248,11 @@ void GeneralOptionsPage::setStationSettingsAvailable(bool available, const QStri
     setReceiveOnlyLocked(false, QString());
     gateStationControls({m_comboFRSRegion, m_chkNetworkWDT, m_chkGeneralRXOnly},
                         available, reason);
+    // Region is persisted but the Core TX gate still reads BandPlanRegion.
+    // Keep this control visible with its own reason until those keys are
+    // reconciled; a station-settings refresh must not enable an inert edit.
+    m_comboFRSRegion->setEnabled(false);
+    m_comboFRSRegion->setToolTip(tr("Region selection is not available for transmit on this Core."));
     syncReceiveOnly();
     // iPhone app plan Task 38: so is every transmit time-out. A Core older
     // than the time-out stores these settings and ignores them, so a window
@@ -419,13 +429,16 @@ void GeneralOptionsPage::buildHardwareConfigGroup()
     });
     // From Thetis setup.designer.cs:8113 [v2.10.3.13]
     m_comboFRSRegion->setToolTip(QStringLiteral("Select Region for your location"));
+    m_comboFRSRegion->setEnabled(false);
+    m_comboFRSRegion->setToolTip(tr("Region selection is not available for transmit on this Core."));
 
-    // Restore persisted value; default "United States"
+    // Display the policy the TX gate actually reads, not the legacy Region
+    // text (which remains saved but cannot influence transmit).
     auto& s = AppSettings::instance();
-    const QString savedRegion = s.value(QStringLiteral("Region"),
-                                        QStringLiteral("United States")).toString();
-    const int regionIdx = m_comboFRSRegion->findText(savedRegion);
-    m_comboFRSRegion->setCurrentIndex(regionIdx >= 0 ? regionIdx : m_comboFRSRegion->findText(QStringLiteral("United States")));
+    const int usRegion = static_cast<int>(safety::Region::UnitedStates);
+    const int regionIdx = s.value(QStringLiteral("BandPlanRegion"), usRegion).toInt();
+    m_comboFRSRegion->setCurrentIndex(regionIdx >= 0 && regionIdx < m_comboFRSRegion->count()
+                                          ? regionIdx : usRegion);
 
     connect(m_comboFRSRegion, &QComboBox::currentTextChanged, this, [](const QString& text) {
         AppSettings::instance().setValue(QStringLiteral("Region"), text);
@@ -441,8 +454,11 @@ void GeneralOptionsPage::buildHardwareConfigGroup()
     m_chkExtended = new QCheckBox(tr("Extended"), group);
     m_chkExtended->setObjectName(QStringLiteral("chkExtended"));
     m_chkExtended->setToolTip(QStringLiteral("Enable extended TX (out of band)"));
-    m_chkExtended->setChecked(
-        s.value(QStringLiteral("ExtendedTxAllowed"), QStringLiteral("False")).toString() == QStringLiteral("True"));
+    m_chkExtended->setEnabled(false);
+    m_chkExtended->setToolTip(tr("Extended transmit is not available on this Core."));
+    // The current Core gate passes extended=false. A stale saved true must
+    // not appear effective or be silently activated by a future migration.
+    m_chkExtended->setChecked(false);
     connect(m_chkExtended, &QCheckBox::toggled, this, [](bool on) {
         AppSettings::instance().setValue(QStringLiteral("ExtendedTxAllowed"),
                                           on ? QStringLiteral("True") : QStringLiteral("False"));
@@ -455,6 +471,7 @@ void GeneralOptionsPage::buildHardwareConfigGroup()
         tr("Changing this setting will reset your band stack entries"), group);
     m_lblWarningRegionExtended->setObjectName(QStringLiteral("lblWarningRegionExtended"));
     m_lblWarningRegionExtended->setStyleSheet(QStringLiteral("color: red; font-weight: bold;"));
+    m_lblWarningRegionExtended->hide();
     m_lblWarningRegionExtended->setWordWrap(true);
     vbox->addWidget(m_lblWarningRegionExtended);
 
@@ -609,6 +626,8 @@ void GeneralOptionsPage::buildOptionsGroup()
                                           on ? QStringLiteral("True") : QStringLiteral("False"));
     });
     vbox->addWidget(m_chkPreventTXonDifferentBandToRX);
+    UnbuiltFeatures::hideUnlessBuilt(m_chkPreventTXonDifferentBandToRX,
+                                    UnbuiltFeature::CrossBandSplitGuard);
 
     // ── Phase 3M-4 Task 11: PureSignal Info Bar checkboxes ─────────────────
     //
@@ -1316,6 +1335,23 @@ void GeneralOptionsPage::syncFromModel()
     m_cmbAutoAttRx1Mode->setEnabled(autoOn);
     m_chkAutoAttUndoRx1->setEnabled(autoOn);
     m_spnAutoAttHoldRx1->setEnabled(autoOn && m_chkAutoAttUndoRx1->isChecked());
+}
+
+void GeneralOptionsPage::reloadFeedbackPreferences()
+{
+    const auto& settings = AppSettings::instance();
+    if (m_chkHideFeedback) {
+        QSignalBlocker block(m_chkHideFeedback);
+        m_chkHideFeedback->setChecked(
+            settings.value(QStringLiteral("HideFeedbackLevel"), QStringLiteral("False"))
+                .toString() == QStringLiteral("True"));
+    }
+    if (m_chkSwapRedBlue) {
+        QSignalBlocker block(m_chkSwapRedBlue);
+        m_chkSwapRedBlue->setChecked(
+            settings.value(QStringLiteral("InvertRedBluePsa"), QStringLiteral("False"))
+                .toString() == QStringLiteral("True"));
+    }
 }
 
 // ---------------------------------------------------------------------------

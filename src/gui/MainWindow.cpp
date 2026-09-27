@@ -14,6 +14,9 @@
 //   2026-09-27 - J.J. Boyd (KG4VCF). Parity Task 23 control UI: the TCI
 //                 status and log identify the Core and this window.
 //                 AI-assisted implementation via OpenAI Codex.
+//   2026-09-27 - Task 25: hide the PA-trip slot until its Andromeda/Ganymede
+//                 CAT producer is ported. J.J. Boyd (KG4VCF), AI-assisted
+//                 via OpenAI Codex.
 //   2026-09-24 - J.J. Boyd (KG4VCF). R-R3-49 / R-R3-21: menu items and
 //                 status bar items whose feature is not built yet are
 //                 hidden through UnbuiltFeatures (local and remote
@@ -9248,6 +9251,9 @@ void MainWindow::buildStatusBar()
         if (PureSignal* ps = m_radioModel->pureSignal()) {
             ps->setInvertRedBlue(inverted);
         }
+        for (SetupDialog* dialog : findChildren<SetupDialog*>()) {
+            dialog->reloadFeedbackPreferences();
+        }
     });
     connect(m_psaIndicator, &PsaIndicatorWidget::hideFeedbackToggleRequested, this, [this]() {
         auto& settings = AppSettings::instance();
@@ -9256,6 +9262,9 @@ void MainWindow::buildStatusBar()
         m_psaIndicator->setHideFeedback(hidden);
         if (PureSignal* ps = m_radioModel->pureSignal()) {
             ps->setHideFeedback(hidden);
+        }
+        for (SetupDialog* dialog : findChildren<SetupDialog*>()) {
+            dialog->reloadFeedbackPreferences();
         }
     });
     connect(m_radioModel->pureSignalSettings(), &PureSignalSettings::autoCalEnabledChanged,
@@ -9711,6 +9720,10 @@ void MainWindow::buildStatusBar()
     };
 
     addSlot(m_paStatusBadge);
+    // The trip input is specific to an unported Andromeda/Ganymede CAT
+    // producer. Hide the whole reserved slot until that hardware path exists.
+    UnbuiltFeatures::hideUnlessBuilt(m_paStatusBadge->parentWidget(),
+                                    UnbuiltFeature::GanymedeTrip);
     // The alarm gets a slot sized to its own content, not to its
     // neighbours. PA and TX stay narrow and learnable by position.
     addSlot(m_adcOvlBadge, kOverloadSlotWidthPx);
@@ -10781,6 +10794,12 @@ void MainWindow::wireSetupDialog(SetupDialog* dialog)
     // Task 3.6: CPU meter rate live-apply.
     connect(dialog, &SetupDialog::cpuMeterRateChanged,
             this,   &MainWindow::setCpuTimerIntervalHz);
+    connect(dialog, &SetupDialog::hideFeedbackLevelChanged, this, [this](bool hidden) {
+        if (m_psaIndicator) { m_psaIndicator->setHideFeedback(hidden); }
+    });
+    connect(dialog, &SetupDialog::invertRedBluePsaChanged, this, [this](bool inverted) {
+        if (m_psaIndicator) { m_psaIndicator->setInvertRedBlue(inverted); }
+    });
     // Task 3.6: ANAN-8000DLE volts/amps live-apply.
     connect(dialog, &SetupDialog::anan8000DleVoltsAmpsChanged,
             this,   &MainWindow::setVoltsAmpsVisible);

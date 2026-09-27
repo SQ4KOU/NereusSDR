@@ -7,6 +7,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-27 - Task 25: keep unbound filter/click-box and producerless
+//                 PB SNR items saved but not rendered. J.J. Boyd (KG4VCF),
+//                 AI-assisted via OpenAI Codex.
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
@@ -68,6 +71,7 @@ mw0lge@grange-lane.co.uk
 #include "MeterItem.h"
 #include "core/LogCategories.h"
 #include "gui/UnbuiltFeatures.h"
+#include "MeterPoller.h"
 
 // All item types for deserializeItems() registry
 #include "SpacerItem.h"
@@ -670,6 +674,15 @@ bool MeterWidget::itemFeatureBuilt(const MeterItem* item)
 {
     if (qobject_cast<const VoiceRecordPlayItem*>(item) != nullptr) {
         return UnbuiltFeatures::isBuilt(UnbuiltFeature::Voice);
+    }
+    if (qobject_cast<const FilterDisplayItem*>(item) != nullptr) {
+        return UnbuiltFeatures::isBuilt(UnbuiltFeature::ContainerFilterDisplay);
+    }
+    if (qobject_cast<const ClickBoxItem*>(item) != nullptr) {
+        return UnbuiltFeatures::isBuilt(UnbuiltFeature::ContainerClickBox);
+    }
+    if (item->bindingId() == MeterBinding::PbSnr) {
+        return UnbuiltFeatures::isBuilt(UnbuiltFeature::PbSnr);
     }
     return true;
 }

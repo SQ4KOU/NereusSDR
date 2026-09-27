@@ -89,6 +89,7 @@
 //============================================================================================//
 
 #include "DisplaySetupPages.h"
+#include "gui/UnbuiltFeatures.h"
 #include "SetupHelpers.h"
 #include "gui/SpectrumWidget.h"
 #include "gui/StyleConstants.h"
@@ -2946,10 +2947,12 @@ void TxDisplayPage::buildUI()
     // Group 5: TX Grid Scale (3M-5e)
     // From Thetis grpTXSpectrumGrid on tpDisplayTransmit
     // [setup.designer.cs:36239 v2.10.3.13+501e3f51].
-    contentLayout()->addWidget(makePlaceholderGroup(
+    auto* txGridScale = makePlaceholderGroup(
         QStringLiteral("TX Grid Scale"),
         QStringLiteral("Max + Min + Step + Display Grid + Fill + Label Align (wired in 3M-5e)"),
-        this));
+        this);
+    contentLayout()->addWidget(txGridScale);
+    UnbuiltFeatures::hideUnlessBuilt(txGridScale, UnbuiltFeature::TxGridScale);
 
     contentLayout()->addStretch();
 

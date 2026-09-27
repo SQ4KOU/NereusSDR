@@ -1337,6 +1337,7 @@ set(CORE_SOURCES
     # handshake entry point.
     src/core/session/SessionTransport.cpp
     src/core/session/StationCapabilities.cpp
+    src/core/session/SettingsHygieneWire.cpp
     src/core/session/StationServer.cpp
     src/core/session/StationOpeningGate.cpp
     src/core/session/StationReceivers.cpp

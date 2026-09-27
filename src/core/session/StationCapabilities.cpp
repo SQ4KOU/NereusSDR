@@ -276,6 +276,9 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
         // follow every previously emitted minor-11 field.
         updates.append(intEntry("mediaTunnelVersion", mediaTunnelVersion));
         updates.append(intEntry("mediaRelayRoutingVersion", mediaRelayRoutingVersion));
+        if (settingsHygieneVersion > 0) {
+            updates.append(intEntry("settingsHygieneVersion", settingsHygieneVersion));
+        }
     }
     return updates;
 }
@@ -469,6 +472,7 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                    || u.name == "dspInfoVersion"
                    || u.name == "recordStreamVersion"
                    || u.name == "stationRadiosVersion"
+                   || u.name == "settingsHygieneVersion"
                    || u.name == "txDisplayVersion"
                    || u.name == "displayClockVersion"
                    || u.name == "controlChannelVersion"
@@ -529,6 +533,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                     caps.recordStreamVersion = version;
                 } else if (u.name == "stationRadiosVersion") {
                     caps.stationRadiosVersion = version;
+                } else if (u.name == "settingsHygieneVersion") {
+                    caps.settingsHygieneVersion = version;
                 } else if (u.name == "txDisplayVersion") {
                     caps.txDisplayVersion = version;
                 } else if (u.name == "displayClockVersion") {

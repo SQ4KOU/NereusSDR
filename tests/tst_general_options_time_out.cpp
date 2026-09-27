@@ -292,7 +292,7 @@ private slots:
             QCOMPARE(group->toolTip(), GeneralOptionsPage::timeOutNeedsNewerCoreText());
             QVERIFY(GeneralOptionsPage::timeOutNeedsNewerCoreText().contains(
                 QStringLiteral("Update the Core")));
-            QVERIFY(region->isEnabled());   // only the time-out waits for a newer Core
+            QVERIFY(!region->isEnabled());  // TX region mapping still awaits the Core policy
 
             // Disconnected: the page's own reason, not the older Core's.
             const QString reason = QStringLiteral("Connect to the Core to change this.");

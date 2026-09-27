@@ -971,7 +971,9 @@ public:
     // slice/<N>/VaxChannel and tx/OwnerSlot. Then rebuilds buses from
     // seeded defaults and emits the config-changed signal cascade so
     // subscribed UIs refresh.
-    void resetAudioSettings();
+    // In a remote window, clear this computer's audio choices only; the
+    // Core's DSP settings are outside this engine's ownership.
+    void resetAudioSettings(bool operatorLocalOnly = false);
 
     float vaxRxGain(int channel) const;
     bool  vaxMuted(int channel) const;

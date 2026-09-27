@@ -181,6 +181,8 @@ void ColorsThemePage::buildUI()
     connect(m_wfLowColorBtn, &ColorSwatchButton::colorChanged,
             this, [](const QColor&) { /* stored via AppSettings on save */ });
     wfForm->addRow(QStringLiteral("Low Level Color:"), m_wfLowColorBtn);
+    UnbuiltFeatures::hideRowUnlessBuilt(m_wfLowColorBtn,
+                                       UnbuiltFeature::WaterfallLowColor, wfForm);
 
     contentLayout()->addWidget(wfGroup);
 
