@@ -2999,21 +2999,27 @@ app detects each by its presence, as it does `board`'s `transmit`,
 units, as the desktop's control ranges it (the TX applet's RF Power and Tune
 sliders, Setup > Transmit > Power's fixed tune spinbox, the Phone/CW
 applet's mic level). The three power keys add `shown: {min, max, decimals,
-unit, rounding}`: what the control shows at `min` and at `max`, linear in
-between (`shown.min + (value - min) x (shown.max - shown.min) / (max -
-min)`), to `decimals` places, `unit` `""`, `W` or `dB`. `rounding` is
-`halfEven` where the control first takes a value between its steps to the
-nearest step, a half to the even step (`value = min + step x
-roundHalfEven((value - min) / step)`), and `none` where it shows every value
-on the line. RF Power is `halfEven` (on a Hermes Lite 2 a drive of 3 shows
--7.5 dB and 87 shows -0.5 dB, as mi0bot's label does); the tune keys are
-`none`. The PA profile changes none of it.
+unit, rounding, endSnap}`: what the control shows at `min` and at `max`,
+linear in between (`shown.min + (value - min) x (shown.max - shown.min) /
+(max - min)`), to `decimals` places, `unit` `""`, `W` or `dB`. Before that,
+a value between the steps is taken to a step as the desktop does: first
+`endSnap` (`{below, above}` or `null`) makes a value below `below` the
+control's `min` and one above `above` its `max`; then `rounding` takes it to
+a step, `halfEven` the nearest step with a half to the even step (`min +
+step x roundHalfEven((value - min) / step)`), `down` the step at or below
+it (`min + step x floor((value - min) / step)`), `none` no step. On a Hermes
+Lite 2 these are mi0bot's readouts: RF Power `halfEven` with `endSnap` 4
+and 87 (a drive of 3 shows -7.5 dB, 87 shows -0.5 dB), Tune `halfEven`
+with `endSnap` 3 and 96 (2 shows -16.5 dB, 97 shows 0.0), and the fixed
+tune spinbox `down` (C#'s integer division: 5 shows -16.0 dB); elsewhere RF
+Power is `halfEven` and the tune keys `none`, all without `endSnap`.
+The PA profile changes none of it.
 
 | Key | Property | ANAN-G2 | Hermes Lite 2 |
 | --- | --- | --- | --- |
 | `power` | `power` | 0 to 100 step 1, shown as the number | 0 to 90 step 6, shown -7.5 to 0 dB, 1 place, a drive between steps at the nearest step |
-| `tunePowerForTxBand` | `tunePowerForTxBand` (verb `setTunePowerForTxBand`) | 0 to 100 step 1, shown as the number | 0 to 99 step 3, shown -16.5 to 0 dB, 1 place |
-| `tunePower` | `tunePower` | 0 to 100 step 1, shown 0 to 100 W | 0 to 99 step 3, shown -16.5 to 0 dB, 1 place |
+| `tunePowerForTxBand` | `tunePowerForTxBand` (verb `setTunePowerForTxBand`) | 0 to 100 step 1, shown as the number | 0 to 99 step 3, shown -16.5 to 0 dB, 1 place, a value between steps at the nearest step |
+| `tunePower` | `tunePower` | 0 to 100 step 1, shown 0 to 100 W | 0 to 99 step 3, shown -16.5 to 0 dB, 1 place, a value between steps at the step below |
 | `micGainDb` | `micGainDb` | -40 to +10 dB step 1 | -40 to +10 dB step 1 |
 
 The Core accepts what the desktop accepts: `power` has no range check (the

@@ -135,6 +135,10 @@
 //                the Core's catalogue reads too (R-IOS-06, R-IOS-27). The
 //                labels are unchanged. AI-assisted via Anthropic Claude
 //                Code.
+//   2026-09-27  J.J. Boyd / KG4VCF  the HL2 RF Power and Tune labels
+//                snap and round a value between steps as mi0bot's
+//                UpdateDriveLabel and UpdateTuneLabel do (R-IOS-06,
+//                R-IOS-27). AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -2062,10 +2066,11 @@ void TxApplet::updatePowerSliderLabels()
     const int        tunVal = m_tunePwrSlider->value();
 
     // The shown values come from HpsdrModel.h (rfPowerShownFor,
-    // tunePowerShownFor), which the Core's catalogue reads too.
+    // tuneSliderShownFor: mi0bot's UpdateDriveLabel and UpdateTuneLabel),
+    // which the Core's catalogue reads too.
     const int decimals = powerSliderShownDecimalsFor(model);
     m_rfPowerValue->setText(QString::number(rfPowerShownFor(model, rfVal), 'f', decimals));
-    m_tunePwrValue->setText(QString::number(tunePowerShownFor(model, tunVal), 'f', decimals));
+    m_tunePwrValue->setText(QString::number(tuneSliderShownFor(model, tunVal), 'f', decimals));
 }
 
 // Canonical TX band — derived from the active slice's frequency (which

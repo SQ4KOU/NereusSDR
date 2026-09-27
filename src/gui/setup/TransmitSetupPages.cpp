@@ -194,6 +194,8 @@
 //               with their mi0bot cites), which the Core's catalogue reads
 //               too (R-IOS-06, R-IOS-27). J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//               The HL2 display now takes mi0bot's integer division, so
+//               a stored value between steps shows as mi0bot shows it.
 // =================================================================
 #include "TransmitSetupPages.h"
 #include "gui/StyleConstants.h"
@@ -806,7 +808,8 @@ void PowerPage::applyHpsdrModel(HPSDRModel m)
 double PowerPage::tunePowerDisplayFromStored(int stored)
 {
     // HpsdrModel.h's tunePowerShownFor (mi0bot setup.cs:5307
-    // [v2.10.3.13-beta2]), which the Core's catalogue reads too.
+    // [v2.10.3.13-beta2], with C#'s integer division), which the Core's
+    // catalogue reads too.
     const HPSDRModel sku = model() ? model()->transmitModel().hpsdrModel() : HPSDRModel::FIRST;
     return tunePowerShownFor(sku, stored);
 }

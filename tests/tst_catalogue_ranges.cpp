@@ -32,6 +32,10 @@
 //               between the steps (mi0bot's HL2 drive snap). J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-27: shown.endSnap and `down`; the tune label and the Power
+//               page's spinbox at every value (mi0bot's HL2 tune readouts).
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -93,7 +97,8 @@ QJsonObject range(double min, double max, double step)
 
 QJsonObject rangeShown(double min, double max, double step, double shownMin, double shownMax,
                        int decimals, const QString& unit,
-                       const QString& rounding = QStringLiteral("none"))
+                       const QString& rounding = QStringLiteral("none"),
+                       const QJsonValue& endSnap = QJsonValue(QJsonValue::Null))
 {
     QJsonObject out = range(min, max, step);
     out.insert(QStringLiteral("shown"),
@@ -101,8 +106,14 @@ QJsonObject rangeShown(double min, double max, double step, double shownMin, dou
                            {QStringLiteral("max"), shownMax},
                            {QStringLiteral("decimals"), decimals},
                            {QStringLiteral("unit"), unit},
-                           {QStringLiteral("rounding"), rounding}});
+                           {QStringLiteral("rounding"), rounding},
+                           {QStringLiteral("endSnap"), endSnap}});
     return out;
+}
+
+QJsonObject ends(int below, int above)
+{
+    return QJsonObject{{QStringLiteral("below"), below}, {QStringLiteral("above"), above}};
 }
 
 // A half to the even whole number, as the catalogue's `halfEven` says.
@@ -116,24 +127,43 @@ double roundHalfEven(double x)
     return std::fmod(down, 2.0) == 0.0 ? down : down + 1.0;
 }
 
-// What the control shows at `value`, by the catalogue's rule: with
-// shown.rounding `halfEven` a value between steps is first taken to the
-// nearest step (a half to the even step); then linear from shown.min at
-// `min` to shown.max at `max`, to `decimals` places.
-QString shownByTheCatalogue(const QJsonObject& control, int value)
+// What the control shows at `value`, by the catalogue's rule: a value
+// below shown.endSnap.below shows as `min` and one above shown.endSnap.above
+// as `max`; then shown.rounding takes a value between steps to a step
+// (`halfEven`: the nearest, a half to the even step; `down`: the step at or
+// below it; `none`: no step); then linear from shown.min at `min` to
+// shown.max at `max`, to `decimals` places.
+double shownValueByTheCatalogue(const QJsonObject& control, int value)
 {
     const double min = control.value(QStringLiteral("min")).toDouble();
     const double max = control.value(QStringLiteral("max")).toDouble();
     const double step = control.value(QStringLiteral("step")).toDouble();
     const QJsonObject shown = control.value(QStringLiteral("shown")).toObject();
     double v = value;
-    if (shown.value(QStringLiteral("rounding")).toString() == QStringLiteral("halfEven")) {
-        v = min + step * roundHalfEven((value - min) / step);
+    const QJsonValue ends = shown.value(QStringLiteral("endSnap"));
+    if (ends.isObject()) {
+        if (v < ends.toObject().value(QStringLiteral("below")).toDouble()) {
+            v = min;
+        } else if (v > ends.toObject().value(QStringLiteral("above")).toDouble()) {
+            v = max;
+        }
+    }
+    const QString rounding = shown.value(QStringLiteral("rounding")).toString();
+    if (rounding == QStringLiteral("halfEven")) {
+        v = min + step * roundHalfEven((v - min) / step);
+    } else if (rounding == QStringLiteral("down")) {
+        v = min + step * std::floor((v - min) / step);
     }
     const double lo = shown.value(QStringLiteral("min")).toDouble();
     const double hi = shown.value(QStringLiteral("max")).toDouble();
-    const double at = lo + (v - min) * (hi - lo) / (max - min);
-    return QString::number(at, 'f', shown.value(QStringLiteral("decimals")).toInt());
+    return lo + (v - min) * (hi - lo) / (max - min);
+}
+
+QString shownByTheCatalogue(const QJsonObject& control, int value)
+{
+    return QString::number(shownValueByTheCatalogue(control, value), 'f',
+                           control.value(QStringLiteral("shown")).toObject()
+                               .value(QStringLiteral("decimals")).toInt());
 }
 
 // A popup's rows: sliders by label (label, slider, readout), and the texts
@@ -318,11 +348,16 @@ private slots:
         // step, a half to the even one; console.cs:29245-29264).
         QCOMPARE(hl2.value(QStringLiteral("power")).toObject(),
                  rangeShown(0, 90, 6, -7.5, 0, 1, QStringLiteral("dB"),
-                            QStringLiteral("halfEven")));
+                            QStringLiteral("halfEven"), ends(4, 87)));
+        // The tune label snaps and rounds as mi0bot's UpdateTuneLabel
+        // (console.cs:47470-47481); the fixed tune spinbox takes C#'s
+        // integer division (setup.cs:5307), the step at or below.
         QCOMPARE(hl2.value(QStringLiteral("tunePowerForTxBand")).toObject(),
-                 rangeShown(0, 99, 3, -16.5, 0, 1, QStringLiteral("dB")));
+                 rangeShown(0, 99, 3, -16.5, 0, 1, QStringLiteral("dB"),
+                            QStringLiteral("halfEven"), ends(3, 96)));
         QCOMPARE(hl2.value(QStringLiteral("tunePower")).toObject(),
-                 rangeShown(0, 99, 3, -16.5, 0, 1, QStringLiteral("dB")));
+                 rangeShown(0, 99, 3, -16.5, 0, 1, QStringLiteral("dB"),
+                            QStringLiteral("down")));
         QCOMPARE(hl2.value(QStringLiteral("micGainDb")).toObject(), range(-40, 10, 1));
 
         // The mic range is the board's; only the Unknown board is wider.
@@ -407,6 +442,18 @@ private slots:
         QCOMPARE(spin->maximum(), shown.value(QStringLiteral("max")).toDouble());
         QCOMPARE(spin->decimals(), shown.value(QStringLiteral("decimals")).toInt());
         QCOMPARE(spin->suffix().trimmed(), shown.value(QStringLiteral("unit")).toString());
+
+        // Every stored value, between the steps too, shows as the catalogue
+        // says.
+        QStringList got;
+        QStringList want;
+        for (int v = tunePower.value(QStringLiteral("min")).toInt();
+             v <= tunePower.value(QStringLiteral("max")).toInt(); ++v) {
+            radio.transmitModel().setTunePower(v);
+            got << QStringLiteral("%1:%2").arg(v).arg(spin->value(), 0, 'f', spin->decimals());
+            want << QStringLiteral("%1:%2").arg(v).arg(shownByTheCatalogue(tunePower, v));
+        }
+        QCOMPARE(got.join(QLatin1Char(' ')), want.join(QLatin1Char(' ')));
 
         spin->setValue(spin->maximum());
         QCOMPARE(radio.transmitModel().tunePower(), tunePower.value(QStringLiteral("max")).toInt());

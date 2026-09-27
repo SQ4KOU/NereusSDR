@@ -42,6 +42,9 @@
 //   2026-09-27: board.transmit's `shown.rounding` (RF Power halfEven, the
 //               HL2 drive snap). J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-27: `shown.endSnap`, and the tune keys' rounding from mi0bot's
+//               HL2 tune readouts (PowerShownRule). J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationCatalog.h"
@@ -479,21 +482,25 @@ QJsonObject noiseReductionObject()
 // units, as the TX applet, the Phone/CW applet and Setup > Transmit >
 // Power range them (HpsdrModel.h, caps.micGainMinDb/MaxDb). The power
 // controls add `shown`: what the control shows at its two ends, linear in
-// between, to `decimals` places in `unit`; RF Power's `rounding` is
-// `halfEven` (rfPowerShownFor takes a drive between the slider's steps to
-// the nearest step, a half to the even one, as mi0bot's HL2 label does).
+// between, to `decimals` places in `unit`, after `endSnap` and `rounding`
+// take a value between steps to a step as mi0bot's HL2 readouts do.
 
-// `rounding` is `halfEven` where the control takes a value between its
-// steps to the nearest step (a half to the even step) before showing it,
-// `none` where it shows every value on the line.
+// `rounding` and `endSnap` say how the control takes a value between its
+// steps before showing it (HpsdrModel.h's PowerShownRule).
 QJsonObject shownObject(double min, double max, int decimals, const QString& unit,
-                        const QString& rounding)
+                        const PowerShownRule& rule)
 {
-    return QJsonObject{{QStringLiteral("min"), min},
-                       {QStringLiteral("max"), max},
-                       {QStringLiteral("decimals"), decimals},
-                       {QStringLiteral("unit"), unit},
-                       {QStringLiteral("rounding"), rounding}};
+    return QJsonObject{
+        {QStringLiteral("min"), min},
+        {QStringLiteral("max"), max},
+        {QStringLiteral("decimals"), decimals},
+        {QStringLiteral("unit"), unit},
+        {QStringLiteral("rounding"), QString::fromLatin1(rule.rounding)},
+        {QStringLiteral("endSnap"),
+         rule.hasEndSnap ? QJsonValue(QJsonObject{{QStringLiteral("below"), rule.below},
+                                                  {QStringLiteral("above"), rule.above}})
+                         : QJsonValue(QJsonValue::Null)},
+    };
 }
 
 QJsonObject transmitObject(const StationCatalog::Inputs& inputs)
@@ -505,12 +512,12 @@ QJsonObject transmitObject(const StationCatalog::Inputs& inputs)
     QJsonObject power = rangeObject(0, rfPowerSliderMaxFor(m), rfPowerSliderStepFor(m));
     power.insert(QStringLiteral("shown"),
                  shownObject(rfPowerShownFor(m, 0), rfPowerShownFor(m, rfPowerSliderMaxFor(m)),
-                             decimals, sliderUnit, QStringLiteral("halfEven")));
+                             decimals, sliderUnit, rfPowerShownRuleFor(m)));
 
     QJsonObject tune = rangeObject(0, tuneSliderMaxFor(m), tuneSliderStepFor(m));
     tune.insert(QStringLiteral("shown"),
-                shownObject(tunePowerShownFor(m, 0), tunePowerShownFor(m, tuneSliderMaxFor(m)),
-                            decimals, sliderUnit, QStringLiteral("none")));
+                shownObject(tuneSliderShownFor(m, 0), tuneSliderShownFor(m, tuneSliderMaxFor(m)),
+                            decimals, sliderUnit, tuneSliderShownRuleFor(m)));
 
     // Setup's fixed tune spinbox: its shown range and step, and the stored
     // values they write.
@@ -524,7 +531,7 @@ QJsonObject transmitObject(const StationCatalog::Inputs& inputs)
     fixedTune.insert(QStringLiteral("shown"),
                      shownObject(shownMin, shownMax, fixedTuneSpinboxDecimalsFor(m),
                                  QString::fromLatin1(fixedTuneSpinboxSuffixFor(m)).trimmed(),
-                                 QStringLiteral("none")));
+                                 tunePowerShownRuleFor(m)));
 
     return QJsonObject{
         {QStringLiteral("power"), power},

@@ -29,6 +29,12 @@
 //                 half to even), so an in-between drive shows as mi0bot
 //                 shows it. J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-27 - The HL2 tune readouts as mi0bot shows them:
+//                 tuneSliderShownFor (UpdateTuneLabel's end snap and
+//                 Math.Round) for the TX applet, tunePowerShownFor with C#'s
+//                 integer division for the fixed tune spinbox, and the
+//                 PowerShownRule the catalogue sends. J.J. Boyd (KG4VCF),
+//                 with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 /*  enums.cs
@@ -460,17 +466,77 @@ inline double rfPowerShownFor(HPSDRModel m, int drive) noexcept {
     return static_cast<double>(drive);
 }
 
-// Tune (the `tunePowerForTxBand` and `tunePower` properties, stored
-// 0..tuneSliderMaxFor): the HL2 shows -16.5..0 dB, other SKUs the stored
-// value (W on the Power page's fixed tune spinbox).
+// Tune slider (the `tunePowerForTxBand` property, 0..tuneSliderMaxFor): the
+// HL2 shows -16.5..0 dB, a value near the ends snapped and the rest rounded
+// to its step as mi0bot's label does; other SKUs the bare value.
+// From mi0bot-Thetis console.cs:47470-47481 [v2.10.3.13-beta2]
+//   if (HardwareSpecific.Model == HPSDRModel.HERMESLITE)
+//   {
+//       if (3 > drv)
+//       {
+//           drv = 0;
+//       }
+//       else if (96 < drv)
+//       {
+//           drv = 99;
+//       }
+//
+//       sValue = ((Math.Round(drv / 3.0) / 2) - 16.5).ToString() + "dB";
+inline double tuneSliderShownFor(HPSDRModel m, int value) noexcept {
+    if (m == HPSDRModel::HERMESLITE) {
+        int drv = value;
+        if (3 > drv) {
+            drv = 0;
+        } else if (96 < drv) {
+            drv = 99;
+        }
+        return (csharpMathRound(drv / 3.0) / 2.0) - 16.5;
+    }
+    return static_cast<double>(value);
+}
+
+// Fixed tune power (the `tunePower` property, stored 0..tuneSliderMaxFor),
+// as Setup > Transmit > Power's spinbox shows it: the HL2 -16.5..0 dB,
+// with C#'s integer division (value/3 on an int drops the remainder),
+// other SKUs the stored value in W.
 // From mi0bot-Thetis setup.cs:5305-5307 [v2.10.3.13-beta2]
 //   if (HPSDRModel.HERMESLITE == HardwareSpecific.Model)
 //       udTXTunePower.Value = (decimal)(value/3 - 33)/2;    // MI0BOT: Now only has a -16.5 to 0 range in HL2 for Tune power
 inline double tunePowerShownFor(HPSDRModel m, int stored) noexcept {
     if (m == HPSDRModel::HERMESLITE) {
-        return (static_cast<double>(stored) / 3.0 - 33.0) / 2.0;
+        return static_cast<double>(stored / 3 - 33) / 2.0;
     }
     return static_cast<double>(stored);
+}
+
+// How each power control takes a value between its steps before showing
+// it, for the Core's catalogue (board.transmit's `shown`): `endSnap` (a
+// value below `below` shows as the slider's minimum, one above `above` as
+// its maximum), then `rounding`: "halfEven" (the nearest step, a half to
+// the even step: C#'s Math.Round), "down" (the step at or below: C#'s
+// integer division) or "none". These restate rfPowerShownFor,
+// tuneSliderShownFor and tunePowerShownFor above; tst_catalogue_ranges
+// holds them against the widgets at every value.
+struct PowerShownRule {
+    const char* rounding;
+    bool hasEndSnap;
+    int below;
+    int above;
+};
+
+constexpr PowerShownRule rfPowerShownRuleFor(HPSDRModel m) noexcept {
+    return (m == HPSDRModel::HERMESLITE) ? PowerShownRule{"halfEven", true, 4, 87}
+                                         : PowerShownRule{"halfEven", false, 0, 0};
+}
+
+constexpr PowerShownRule tuneSliderShownRuleFor(HPSDRModel m) noexcept {
+    return (m == HPSDRModel::HERMESLITE) ? PowerShownRule{"halfEven", true, 3, 96}
+                                         : PowerShownRule{"none", false, 0, 0};
+}
+
+constexpr PowerShownRule tunePowerShownRuleFor(HPSDRModel m) noexcept {
+    return (m == HPSDRModel::HERMESLITE) ? PowerShownRule{"down", false, 0, 0}
+                                         : PowerShownRule{"none", false, 0, 0};
 }
 
 // The stored tune power a shown value writes (the fixed tune spinbox).
