@@ -38,6 +38,10 @@
 //   2026-09-25  J.J. Boyd / KG4VCF  iPhone app plan Task 37: setSevered, a
 //                                    path that goes dead without closing.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-27  J.J. Boyd / KG4VCF  iPhone app plan Task 29 fix wave:
+//                                    setDropsOutgoing(), one direction
+//                                    dead. AI-assisted via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include <QByteArray>
@@ -89,6 +93,10 @@ public:
     /// at it. Neither end sees a close. Default false.
     void setSevered(bool severed) { m_severed = severed; }
     bool severed() const { return m_severed; }
+    /// Task 29 fix wave: while true, the text this end sends is lost and
+    /// what the far end sends still arrives (one direction dead). Default
+    /// false.
+    void setDropsOutgoing(bool drops) { m_dropsOutgoing = drops; }
 
     /// Every wire message this end has received, in arrival order.
     QList<QByteArray> received() const { return m_received; }
@@ -110,6 +118,7 @@ private:
     bool m_open = true;
     bool m_answersPings = true;
     bool m_severed = false;
+    bool m_dropsOutgoing = false;
     int m_pingsSeen = 0;
     QString m_closeReason;
     QString m_peerAddress;

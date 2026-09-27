@@ -605,6 +605,54 @@ private slots:
         QTRY_COMPARE(mox->state(), MoxState::Rx);
     }
 
+    // Task 29 fix wave (review Important 2): MOX released but its unkey
+    // delay still running (MOX off, the state not yet receive): the ticket
+    // and a join with a ticket taken earlier are both refused, and the
+    // window does not start a move; once back on receive, it moves.
+    void theTicketAndTheJoinWaitForTheUnkeyDelay()
+    {
+        Session s;
+        QVERIFY(s.signIn());
+        MoxController* mox = makeKeyable(s);
+        const QString ticket = requestTicket(s);
+        QVERIFY(!ticket.isEmpty());
+        QVERIFY(s.openB());
+        mox->setMox(true);
+        QTRY_VERIFY(mox->state() != MoxState::Rx);
+        QTRY_VERIFY(mox->isMox());
+        mox->setTimerIntervals(3000, 3000, 3000, 3000, 3000, 3000);
+        mox->setMox(false);
+        QTRY_VERIFY(!mox->isMox());
+        QVERIFY(mox->state() != MoxState::Rx);
+
+        QString refusal;
+        QObject::connect(s.clientA, &SessionTransport::textReceived,
+                         [&refusal](const QByteArray& wire) {
+            SessionMessage message;
+            if (SessionMessages::decode(wire, &message)
+                && message.kind == SessionMessageKind::CommandResult
+                && message.commandVerb == "session.pathTicket" && !message.accepted) {
+                refusal = message.reason;
+            }
+        });
+        s.client->invokeCommand(QByteArrayLiteral("session.pathTicket"), {});
+        QTRY_COMPARE(refusal, QStringLiteral("Not while the radio is transmitting."));
+        sendJoin(s.clientB, ticket);
+        QTRY_VERIFY(!s.clientB->isOpen());
+        QCOMPARE(s.server->sessionsMoved(), 0);
+        QVERIFY(mox->state() != MoxState::Rx);
+        QVERIFY(s.client->isHandshakeComplete());
+
+        // Back on receive: a new connection and a new ticket move it.
+        QTRY_COMPARE_WITH_TIMEOUT(mox->state(), MoxState::Rx, 20000);
+        QTRY_VERIFY(!s.remote.isTransmitting());
+        QVERIFY(s.openB());
+        QSignalSpy moved(s.client.get(), &StationClient::pathChanged);
+        QVERIFY(s.client->moveSessionForTest(s.clientB, PathRacer::ThisNetwork));
+        QTRY_COMPARE(moved.size(), 1);
+        QCOMPARE(s.server->sessionsMoved(), 1);
+    }
+
     // A ticket runs out: one presented after its lifetime is refused.
     void aTicketRunsOut()
     {

@@ -59,6 +59,11 @@ SwitchableTransport::SwitchableTransport(SessionTransport* inner, Side side,
 
 SwitchableTransport::~SwitchableTransport() = default;
 
+void SwitchableTransport::setSwitchDeadlineMsForTest(int ms)
+{
+    m_deadline->setInterval(ms);
+}
+
 void SwitchableTransport::attach(SessionTransport* transport)
 {
     transport->setParent(this);

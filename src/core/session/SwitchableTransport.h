@@ -132,6 +132,9 @@ public:
     QByteArray peerCertificateSha256() const override;
     std::optional<SessionTransportTelemetry> telemetry() const override;
 
+    /// Test seam: the move's deadline (kSwitchDeadlineMs).
+    void setSwitchDeadlineMsForTest(int ms);
+
     /// True when `wire` is exactly a path.switch message.
     static bool isPathSwitch(const QByteArray& wire);
 

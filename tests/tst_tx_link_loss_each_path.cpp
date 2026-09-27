@@ -45,6 +45,12 @@
 //               media open a fake microphone line. J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude
 //               Code.
+//   2026-09-27: iPhone app plan Task 29 fix wave (R-IOS-16, review
+//               Important 2): a key taken after the Core accepted a move's
+//               join and before its barrier rides across the move with its
+//               keepalives in order and the watchdog quiet; a move and its
+//               station deadline never key and never drop a held key.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/safety/TransmitHolder.h"
@@ -54,6 +60,7 @@
 #include "core/IAudioBus.h"
 #include "core/safety/RemoteTxWatchdog.h"
 #include "core/safety/StarvationPolicy.h"
+#include "core/session/PathRacer.h"
 #include "core/session/RemoteTransmitClient.h"
 #include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
@@ -70,6 +77,7 @@
 
 #include <QElapsedTimer>
 #include <QFile>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QPointer>
 #include <QSignalSpy>
@@ -181,6 +189,86 @@ Trip tripOf(const QSignalSpy& spy)
 }
 
 constexpr qint64 kBoundMs = 500;
+
+// Task 29 fix wave: the tx.keepalive sequences a link carried to the Core,
+// in the order it read them.
+QList<qint64> keepaliveSequences(const QList<QByteArray>& wires)
+{
+    QList<qint64> out;
+    for (const QByteArray& wire : wires) {
+        const QJsonObject o = QJsonDocument::fromJson(wire).object();
+        if (o.value(QStringLiteral("type")).toString() != QLatin1String("command.invoke")
+            || o.value(QStringLiteral("verb")).toString() != QLatin1String("tx.keepalive")) {
+            continue;
+        }
+        for (const QJsonValue& arg : o.value(QStringLiteral("args")).toArray()) {
+            if (arg.toObject().value(QStringLiteral("name")).toString()
+                == QLatin1String("sequence")) {
+                out.append(arg.toObject().value(QStringLiteral("value")).toInteger());
+            }
+        }
+    }
+    return out;
+}
+
+bool strictlyRising(const QList<qint64>& values)
+{
+    for (qsizetype i = 1; i < values.size(); ++i) {
+        if (values.at(i) <= values.at(i - 1)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Task 29 fix wave: a second connection to the harness's Core, its hello
+// read (what a race hands over), and a key taken from the window the
+// moment the Core reads the move's path.join, before the Core answers
+// with its barrier. `severOld` also drops what the Core sends on the old
+// connection from then on (what the window sends there still arrives), so
+// its barrier never reaches the window.
+struct MoveWhileKeying {
+    Test::LoopbackTransport* stationB = nullptr;
+    Test::LoopbackTransport* clientB = nullptr;
+    bool keyed = false;
+    // What the Core read on each connection (the old one is gone after the
+    // move, so it is recorded as it arrives).
+    QList<QByteArray> readOnOld;
+    QList<QByteArray> readOnNew;
+
+    bool open(Test::RemoteAudioSessionHarness& h, bool severOld)
+    {
+        stationB = new Test::LoopbackTransport(QStringLiteral("station B"));
+        clientB = new Test::LoopbackTransport(QStringLiteral("client B"));
+        stationB->linkTo(clientB);
+        QObject::connect(h.stationLink, &SessionTransport::textReceived, stationB,
+                         [this](const QByteArray& wire) { readOnOld.append(wire); });
+        QObject::connect(stationB, &SessionTransport::textReceived, stationB,
+                         [this](const QByteArray& wire) { readOnNew.append(wire); });
+        // Connected before the Core's own handler (acceptTransport), so it
+        // runs first on the join.
+        QObject::connect(stationB, &SessionTransport::textReceived, stationB,
+                         [this, &h, severOld](const QByteArray& wire) {
+            if (keyed || !wire.contains("path.join")) {
+                return;
+            }
+            keyed = true;
+            if (severOld) {
+                h.stationLink->setDropsOutgoing(true);
+            }
+            QMetaObject::invokeMethod(
+                &h.remote, [&h] { h.remote.setMoxFromButton(true); }, Qt::QueuedConnection);
+        });
+        QList<QByteArray> hello;
+        const QMetaObject::Connection watch = QObject::connect(
+            clientB, &SessionTransport::textReceived, clientB,
+            [&hello](const QByteArray& wire) { hello.append(wire); });
+        h.server.acceptTransport(stationB);
+        const bool arrived = QTest::qWaitFor([&hello] { return !hello.isEmpty(); }, 5000);
+        QObject::disconnect(watch);
+        return arrived;
+    }
+};
 const QString kStopSentence =
     QStringLiteral("The link to Shack MacBook went quiet, so the Core stopped transmitting.");
 
@@ -502,6 +590,120 @@ private slots:
             h.remote.setMoxFromButton(false);
             QTRY_VERIFY(!h.station.moxController()->isMox());
         }
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // ---- A move of the session (Task 29 fix wave, review Important 2) ----
+
+    // A key the window takes after the Core accepted the join and before
+    // its barrier: the Core takes it on the old connection, the move
+    // finishes, the keepalives go on the new one in order, and the watchdog
+    // never trips while the key is held; nothing keys but the window's
+    // press, and the release unkeys.
+    void aKeyDuringAMoveRidesAcrossIt()
+    {
+        Test::RemoteAudioSessionHarness h;
+        h.pairWindow = true;
+        h.makeTransmitReady();
+        h.openFakeMicrophoneLine();
+        h.connectSession();
+        QTRY_VERIFY(h.client.capabilities().txPermitted);
+        QSignalSpy tripped(h.server.txWatchdog(), &RemoteTxWatchdog::tripped);
+        QSignalSpy moved(&h.client, &StationClient::pathChanged);
+        QVERIFY(!h.station.moxController()->isMox());
+
+        MoveWhileKeying move;
+        QVERIFY(move.open(h, /*severOld=*/false));
+        QVERIFY(h.client.moveSessionForTest(move.clientB, PathRacer::ThisNetwork));
+        QTRY_COMPARE_WITH_TIMEOUT(moved.size(), 1, 5000);
+        QVERIFY(move.keyed);
+        QTRY_VERIFY_WITH_TIMEOUT(h.station.moxController()->isMox(), 5000);
+        QCOMPARE(h.server.sessionsMoved(), 1);
+
+        // Two seconds keyed on the new connection: its keepalives hold it.
+        QTest::qWait(2000);
+        QVERIFY(h.station.moxController()->isMox());
+        QCOMPARE(tripped.count(), 0);
+        const QList<qint64> onOld = keepaliveSequences(move.readOnOld);
+        const QList<qint64> onNew = keepaliveSequences(move.readOnNew);
+        QVERIFY2(onNew.size() >= 15, qPrintable(QString::number(onNew.size())));
+        QVERIFY(strictlyRising(onOld));
+        QVERIFY(strictlyRising(onNew));
+        if (!onOld.isEmpty()) {
+            QVERIFY(onOld.last() < onNew.first());
+        }
+
+        h.remote.setMoxFromButton(false);
+        QTRY_VERIFY_WITH_TIMEOUT(!h.station.moxController()->isMox(), 5000);
+        QCOMPARE(tripped.count(), 0);
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // The Core's barrier is lost on the old connection, so the window
+    // never answers it: the station's move deadline reads the new
+    // connection, closes the old, the window carries on over the new one,
+    // and a key taken meanwhile is neither dropped nor made by the move:
+    // its keepalives reach the Core on the new connection before the
+    // watchdog's 400 ms.
+    void theStationsMoveDeadlineNeverDropsAHeldKey()
+    {
+        Test::RemoteAudioSessionHarness h;
+        h.pairWindow = true;
+        h.makeTransmitReady();
+        h.openFakeMicrophoneLine();
+        h.server.setPathSwitchDeadlineMsForTest(1500);
+        h.connectSession();
+        QTRY_VERIFY(h.client.capabilities().txPermitted);
+        QSignalSpy tripped(h.server.txWatchdog(), &RemoteTxWatchdog::tripped);
+        QSignalSpy moved(&h.client, &StationClient::pathChanged);
+
+        MoveWhileKeying move;
+        QVERIFY(move.open(h, /*severOld=*/true));
+        QVERIFY(h.client.moveSessionForTest(move.clientB, PathRacer::ThisNetwork));
+        QTRY_VERIFY_WITH_TIMEOUT(move.keyed, 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(h.station.moxController()->isMox(), 5000);
+        // The station's deadline, then the window over the new connection.
+        QTRY_COMPARE_WITH_TIMEOUT(moved.size(), 1, 5000);
+        QTest::qWait(1500);
+        QVERIFY(h.station.moxController()->isMox());
+        QCOMPARE(tripped.count(), 0);
+        const QList<qint64> onNew = keepaliveSequences(move.readOnNew);
+        QVERIFY2(onNew.size() >= 10, qPrintable(QString::number(onNew.size())));
+        QVERIFY(strictlyRising(onNew));
+
+        h.remote.setMoxFromButton(false);
+        QTRY_VERIFY_WITH_TIMEOUT(!h.station.moxController()->isMox(), 5000);
+        QCOMPARE(tripped.count(), 0);
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // A move with nothing keyed never keys: the Core's MOX stays off
+    // throughout, and the watchdog watches nobody.
+    void aMoveNeverKeys()
+    {
+        Test::RemoteAudioSessionHarness h;
+        h.pairWindow = true;
+        h.makeTransmitReady();
+        h.openFakeMicrophoneLine();
+        h.connectSession();
+        QTRY_VERIFY(h.client.capabilities().txPermitted);
+        QSignalSpy moxChanges(h.station.moxController(), &MoxController::stateChanged);
+        QSignalSpy moved(&h.client, &StationClient::pathChanged);
+        auto* stationB = new Test::LoopbackTransport(QStringLiteral("station B"));
+        auto* clientB = new Test::LoopbackTransport(QStringLiteral("client B"));
+        stationB->linkTo(clientB);
+        QList<QByteArray> hello;
+        QObject::connect(clientB, &SessionTransport::textReceived, clientB,
+                         [&hello](const QByteArray& wire) { hello.append(wire); });
+        h.server.acceptTransport(stationB);
+        QTRY_VERIFY(!hello.isEmpty());
+        QObject::disconnect(clientB, &SessionTransport::textReceived, nullptr, nullptr);
+        QVERIFY(h.client.moveSessionForTest(clientB, PathRacer::ThisNetwork));
+        QTRY_COMPARE_WITH_TIMEOUT(moved.size(), 1, 5000);
+        QTest::qWait(500);
+        QCOMPARE(moxChanges.count(), 0);
+        QVERIFY(!h.station.moxController()->isMox());
+        QVERIFY(!h.server.txWatchdog()->isWatchingAny());
         h.client.disconnectFromStation(QStringLiteral("test complete"));
     }
 };

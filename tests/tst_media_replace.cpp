@@ -412,6 +412,42 @@ private slots:
         QTRY_COMPARE(mox->state(), MoxState::Rx);
     }
 
+    // Task 29 fix wave (review Important 2): MOX released but its unkey
+    // delay still running (MOX off, the state not yet receive): a
+    // replacement is refused as while keyed.
+    void noReplacementDuringTheUnkeyDelay()
+    {
+        CoreHarness h;
+        QVERIFY(h.establishWithAudio());
+        MoxController* mox = h.radio.moxController();
+        mox->setTimerIntervals(0, 0, 0, 0, 0, 0);
+        h.radio.transmitModel().setMicSourceLocked(false);
+        h.radio.transmitModel().setMicSource(MicSource::Radio);
+        if (SliceModel* slice = h.radio.sliceById(h.slice)) {
+            slice->setDspMode(DSPMode::USB);
+            slice->setFrequency(14200000.0);
+        }
+        h.server.setRemoteTransmitAllowed(true);
+        mox->setMox(true);
+        QTRY_VERIFY(mox->state() != MoxState::Rx);
+        QTRY_VERIFY(mox->isMox());
+        mox->setTimerIntervals(3000, 3000, 3000, 3000, 3000, 3000);
+        mox->setMox(false);
+        QTRY_VERIFY(!mox->isMox());
+        QVERIFY(mox->state() != MoxState::Rx);
+        QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+        h.client.sendMediaControl(replaceControl(QLatin1String(kSecond), QLatin1String(kFirst)),
+                                  h.client.sessionEpoch());
+        QTRY_COMPARE(controlsNamed(controls, QStringLiteral("rejected")).size(), 1);
+        QCOMPARE(controlsNamed(controls, QStringLiteral("rejected")).first()
+                     .value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("The Core did not move audio and display: the radio is "
+                                "transmitting."));
+        QCOMPARE(h.transports.size(), 1);
+        QVERIFY(mox->state() != MoxState::Rx);
+        QTRY_COMPARE_WITH_TIMEOUT(mox->state(), MoxState::Rx, 20000);
+    }
+
     // A new peer that closes before it takes over is dropped with the
     // whole-peer refusal for its own id; the current peer carries on.
     void aNewPeerThatClosesLeavesTheCurrentOne()

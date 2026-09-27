@@ -3056,8 +3056,12 @@ void StationServer::adoptTransport(SessionTransport* transport, bool mailbox, bo
     // connection without ending it. A mailbox carries pairing alone and
     // never moves.
     if (!mailbox) {
-        transport = new SwitchableTransport(transport, SwitchableTransport::Side::Station,
-                                            kMaxIncomingMessageBytes, this);
+        auto* switchable = new SwitchableTransport(
+            transport, SwitchableTransport::Side::Station, kMaxIncomingMessageBytes, this);
+        if (m_pathSwitchDeadlineMs > 0) {
+            switchable->setSwitchDeadlineMsForTest(m_pathSwitchDeadlineMs);
+        }
+        transport = switchable;
     }
 
     Peer peer;

@@ -1087,6 +1087,9 @@ public:
     static constexpr int kPathTicketLifetimeMs = 10000;
     /// Test seam: the ticket lifetime in use.
     void setPathTicketLifetimeMsForTest(int ms) { m_pathTicketLifetimeMs = ms; }
+    /// Test seam: the station's move deadline for connections accepted from
+    /// now on (SwitchableTransport::kSwitchDeadlineMs).
+    void setPathSwitchDeadlineMsForTest(int ms) { m_pathSwitchDeadlineMs = ms; }
     /// iPhone app plan Task 29: sessions moved to another connection since
     /// this server started (for a test and the log).
     int sessionsMoved() const { return m_sessionsMoved; }
@@ -2047,6 +2050,7 @@ private:
     // iPhone app plan Task 29.
     bool m_relayAllowed = true;
     int m_pathTicketLifetimeMs = kPathTicketLifetimeMs;
+    int m_pathSwitchDeadlineMs = 0;
     int m_sessionsMoved = 0;
     int m_heartbeatIntervalMs = kDefaultHeartbeatIntervalMs;
     bool m_tokenSessionsMayChangeRadioForTest = false;

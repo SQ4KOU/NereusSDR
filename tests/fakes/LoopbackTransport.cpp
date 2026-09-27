@@ -28,7 +28,7 @@ void LoopbackTransport::linkTo(LoopbackTransport* peer)
 
 void LoopbackTransport::sendText(const QByteArray& wire)
 {
-    if (!m_open || m_peer.isNull() || m_severed) {
+    if (!m_open || m_peer.isNull() || m_severed || m_dropsOutgoing) {
         return;
     }
     // Queued, not direct. A real socket never delivers inside the send

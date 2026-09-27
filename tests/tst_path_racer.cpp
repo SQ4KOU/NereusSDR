@@ -49,6 +49,12 @@
 #include "core/security/ClientDeviceIdentity.h"
 #include "core/security/StationIdentity.h"
 #include "core/session/PathRacer.h"
+#include "core/HpsdrModel.h"
+#include "core/ConnectionState.h"
+#include "models/TransmitModel.h"
+#include "models/SliceModel.h"
+#include "core/session/RemoteTransmitClient.h"
+#include "core/MoxController.h"
 #include "core/session/RendezvousDialer.h"
 #include "core/session/SessionMessages.h"
 #include "core/session/StationClient.h"
@@ -437,6 +443,71 @@ private slots:
         QCOMPARE(authenticated.size(), 1);
         QCOMPARE(window.client->connectedUrl(),
                  QUrl(QStringLiteral("wss://127.0.0.1:%1").arg(port)));
+        window.client->disconnectFromStation(QStringLiteral("test done"));
+    }
+
+    // Task 29 fix wave (review Important 2): the window's upgrade
+    // schedule waits while this window has VOX armed (its keepalives run)
+    // and while the Core is on the air, and moves once both are over.
+    void anUpgradeWaitsWhileKeyedOrVoxArmed()
+    {
+        LocalService service;
+        QVERIFY(service.start());
+        Core core;
+        const quint16 port = closedPort();
+        StationRendezvous rendezvous(core.server.get(), {service.url()}, /*relayAllowed=*/true);
+        QSignalSpy registered(rendezvous.client(), &RendezvousClient::registered);
+        QVERIFY(rendezvous.start());
+        QTRY_COMPARE_WITH_TIMEOUT(registered.size(), 1, 10000);
+        Window window(core);
+        window.route(service, rendezvous.client()->stationId());
+        window.client->setUpgradeScheduleForTest({300});
+        QSignalSpy moved(window.client.get(), &StationClient::pathChanged);
+        window.client->connectToStation(
+            QUrl(QStringLiteral("wss://127.0.0.1:%1").arg(port)), QString(), QString(), false,
+            identityOf(core));
+        QTRY_VERIFY_WITH_TIMEOUT(window.client->isHandshakeComplete(), 60000);
+        QVERIFY(window.client->pathRank() > int(PathRacer::ThisNetwork));
+
+        // VOX armed at this window: its keepalives run, and no look starts.
+        RemoteTransmitClient* transmit = window.client->remoteTransmit();
+        QVERIFY(transmit != nullptr);
+        transmit->setAvailable(true);
+        transmit->setVoxArmed(true);
+        QVERIFY(transmit->keepaliveRunning());
+        QVERIFY(core.server->listen(QHostAddress::LocalHost, port));
+        QTest::qWait(1500);
+        QCOMPARE(moved.size(), 0);
+
+        // VOX off, the Core keyed on its own: still no look.
+        core.model->setBoardForTest(HPSDRHW::HermesLite);
+        core.model->setConnectionStateForTest(ConnectionState::Connected);
+        MoxController* mox = core.model->moxController();
+        mox->setTimerIntervals(0, 0, 0, 0, 0, 0);
+        core.model->transmitModel().setMicSourceLocked(false);
+        core.model->transmitModel().setMicSource(MicSource::Radio);
+        if (core.model->slices().isEmpty()) {
+            core.model->addSlice();
+        }
+        if (SliceModel* slice = core.model->slices().value(0)) {
+            slice->setDspMode(DSPMode::USB);
+            slice->setFrequency(14200000.0);
+        }
+        core.server->setRemoteTransmitAllowed(true);
+        mox->setMox(true);
+        QTRY_VERIFY(mox->state() != MoxState::Rx);
+        QTRY_VERIFY_WITH_TIMEOUT(window.remote.isTransmitting(), 5000);
+        transmit->setVoxArmed(false);
+        QVERIFY(!transmit->keepaliveRunning());
+        QTest::qWait(1500);
+        QCOMPARE(moved.size(), 0);
+        QCOMPARE(core.server->sessionsMoved(), 0);
+
+        // Back on receive: the schedule resumes and the session moves.
+        mox->setMox(false);
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        QTRY_COMPARE_WITH_TIMEOUT(moved.size(), 1, 30000);
+        QCOMPARE(window.client->pathRank(), int(PathRacer::ThisNetwork));
         window.client->disconnectFromStation(QStringLiteral("test done"));
     }
 
