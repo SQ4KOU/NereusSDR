@@ -171,6 +171,12 @@
 //                 slice's block drains the mix too (drainMixes, split out
 //                 of rxBlockReady unchanged), so MON is heard when that is
 //                 the only slice. NereusSDR-original.
+//   2026-09-27: R-R3-49 by J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code. rxBlockReady reads the slice's mute, route
+//                 and VAX channel from setSliceAudioView's per-id atomic
+//                 word instead of RadioModel::sliceById (a use-after-free
+//                 when a slice was removed while audio ran).
+//                 NereusSDR-original.
 // =================================================================
 
 #include "AudioEngine.h"
@@ -406,6 +412,48 @@ AudioEngine::~AudioEngine()
 void AudioEngine::setRadioModel(RadioModel* radio)
 {
     m_radio = radio;
+}
+
+// R-R3-49: one 32-bit word per slice id, so a block reads a slice's whole
+// view in one lock-free load and never sees half of one publish.
+namespace {
+constexpr quint32 kViewPresent = 1u << 0;
+constexpr quint32 kViewMuted = 1u << 1;
+constexpr quint32 kViewHeadphones = 1u << 2;
+constexpr int kViewVaxShift = 3;
+constexpr quint32 kViewVaxMask = 0x7u;
+static_assert(std::atomic<quint32>::is_always_lock_free,
+              "the audio thread reads the slice view without a lock");
+}  // namespace
+
+void AudioEngine::setSliceAudioView(int sliceId, const SliceAudioView& view) noexcept
+{
+    if (sliceId < 0 || sliceId >= kMaxSliceAudioViews) {
+        return;
+    }
+    quint32 word = 0;
+    if (view.present) {
+        const int vax = (view.vaxChannel >= 1 && view.vaxChannel <= 4) ? view.vaxChannel : 0;
+        word = kViewPresent | (view.muted ? kViewMuted : 0u)
+            | (view.headphones ? kViewHeadphones : 0u)
+            | (static_cast<quint32>(vax) << kViewVaxShift);
+    }
+    m_sliceAudioViews[static_cast<size_t>(sliceId)].store(word, std::memory_order_release);
+}
+
+AudioEngine::SliceAudioView AudioEngine::sliceAudioView(int sliceId) const noexcept
+{
+    SliceAudioView view;
+    if (sliceId < 0 || sliceId >= kMaxSliceAudioViews) {
+        return view;
+    }
+    const quint32 word =
+        m_sliceAudioViews[static_cast<size_t>(sliceId)].load(std::memory_order_acquire);
+    view.present = (word & kViewPresent) != 0;
+    view.muted = (word & kViewMuted) != 0;
+    view.headphones = (word & kViewHeadphones) != 0;
+    view.vaxChannel = static_cast<int>((word >> kViewVaxShift) & kViewVaxMask);
+    return view;
 }
 
 #if defined(Q_OS_LINUX)
@@ -2098,8 +2146,14 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
     // the alias is intentionally not introduced here (design-decision D5,
     // plan §Sub-Phase 4 Task 4.1). A formal rename (if chosen) happens in
     // Sub-Phase 9 alongside per-slice volume / pan control surfaces.
-    SliceModel* slice = m_radio->sliceById(sliceId);
-    if (slice == nullptr) {
+    //
+    // R-R3-49: read from the view RadioModel publishes, not from the slice
+    // list. sliceById() walked m_slices here while the main thread took a
+    // slice out of it and deleted the SliceModel (ThreadSanitizer: a
+    // use-after-free on this thread whenever a slice was removed while
+    // audio ran).
+    const SliceAudioView slice = sliceAudioView(sliceId);
+    if (!slice.present) {
         return;
     }
 
@@ -2164,9 +2218,8 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
     //
     // R-R3-45: the route rides in the same way (VAX design 6.2): the mixer
     // builds this slice into the speakers sum or the headphones sum.
-    const bool toHeadphones =
-        slice->outputRoute() == SliceModel::OutputRoute::Headphones;
-    m_masterMix.accumulate(sliceId, samples, frames, slice->muted(),
+    const bool toHeadphones = slice.headphones;
+    m_masterMix.accumulate(sliceId, samples, frames, slice.muted,
                            toHeadphones);
 
     // Anti-VOX hears exactly what the speakers hear. From Thetis
@@ -2191,7 +2244,7 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
     // the reference is drained speakers-only (tryDrain(out, n)), so a
     // headphones slice is queued, keeps its barrier place, and adds
     // nothing, since its audio is not in the room either.
-    m_antiVoxMix.accumulate(sliceId, samples, frames, slice->muted(),
+    m_antiVoxMix.accumulate(sliceId, samples, frames, slice.muted,
                             toHeadphones);
 
     // VAX tap receives raw demodulated audio — pre-MasterMixer gain/pan,
@@ -2217,7 +2270,7 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
     // several devices); another device's slice is heard on that device.
     const bool vaxCarried = sliceId < 0 || sliceId >= 32
         || ((m_vaxSliceMask.load(std::memory_order_acquire) >> sliceId) & 1u) != 0;
-    const int vaxCh = vaxCarried ? slice->vaxChannel() : 0;
+    const int vaxCh = vaxCarried ? slice.vaxChannel : 0;
     const bool vaxValid = vaxCh >= 1 && vaxCh <= 4;
     float vaxGain = 1.0f;
     if (vaxValid) {

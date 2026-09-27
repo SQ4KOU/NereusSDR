@@ -535,6 +535,11 @@
 //                (applyTxDspOptionsBeforeKey on txAboutToBegin), so no key
 //                path transmits at the channel's open sizes. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-27 - R-R3-49: publishSliceAudioView() hands AudioEngine each
+//                slice's mute, output route and VAX channel on every add,
+//                remove, layout restore and change, so the audio thread
+//                never walks m_slices. NereusSDR-original. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -10579,6 +10584,29 @@ bool RadioModel::bindSliceToStream(SliceModel* slice, double frequencyHz,
 
 // --- Slice Management ---
 
+// R-R3-49: see the declaration. The audio thread's only view of the slices.
+void RadioModel::publishSliceAudioView()
+{
+    if (m_audioEngine == nullptr) {
+        return;
+    }
+    std::array<AudioEngine::SliceAudioView, AudioEngine::kMaxSliceAudioViews> views{};
+    for (const SliceModel* s : m_slices) {
+        const int id = s != nullptr ? s->sliceIndex() : -1;
+        if (id < 0 || id >= AudioEngine::kMaxSliceAudioViews) {
+            continue;
+        }
+        AudioEngine::SliceAudioView& v = views[static_cast<size_t>(id)];
+        v.present = true;
+        v.muted = s->muted();
+        v.headphones = s->outputRoute() == SliceModel::OutputRoute::Headphones;
+        v.vaxChannel = s->vaxChannel();
+    }
+    for (int id = 0; id < AudioEngine::kMaxSliceAudioViews; ++id) {
+        m_audioEngine->setSliceAudioView(id, views[static_cast<size_t>(id)]);
+    }
+}
+
 // Phase 3F Sub-Epic I closeout, defect C3.
 //
 // Was sliceAt(index), resolving positionally with m_slices.at(index). Every
@@ -10959,6 +10987,13 @@ int RadioModel::addSliceImpl(int requestedId, const QString& initialPanId,
         return -1;
     }
     m_slices.append(slice);
+    // R-R3-49: rxBlockReady reads this slice through the published view
+    // from here on, and follows its mute, route and VAX channel.
+    connect(slice, &SliceModel::mutedChanged, this, [this](bool) { publishSliceAudioView(); });
+    connect(slice, &SliceModel::outputRouteChanged, this,
+            [this](SliceModel::OutputRoute) { publishSliceAudioView(); });
+    connect(slice, &SliceModel::vaxChannelChanged, this, [this](int) { publishSliceAudioView(); });
+    publishSliceAudioView();
 
     // ── The transmitter needs a home the moment one exists ───────────────
     //
@@ -11075,6 +11110,7 @@ int RadioModel::addSliceImpl(int requestedId, const QString& initialPanId,
         // allocator's reason for this first-bind case, so the operator has
         // been told why; this only has to undo the half-built slice.
         m_slices.removeAll(slice);
+        publishSliceAudioView();
         if (m_txSliceArbiter) {
             // The syncToSliceList above may have handed TX to this slice.
             // Re-run against the list it is no longer in.
@@ -11526,6 +11562,9 @@ void RadioModel::removeSliceImpl(int sliceId, bool persist)
         m_sliceOwnership->beginRemove(sliceId);
     }
     SliceModel* slice = m_slices.takeAt(position);
+    // R-R3-49: the audio thread stops seeing this slice before it is
+    // deleted; it never held a pointer to it.
+    publishSliceAudioView();
     // R-R3-40: a slice created later with this ID must not inherit this
     // one's load snapshot or measure from its baseline.
     m_dspLoadSampler.forget(sliceId);
@@ -19543,6 +19582,8 @@ bool RadioModel::hydrateReceiveLayout(const QString& radioMac,
         }
     }
     m_slices = restored;
+    // R-R3-49: the restore set its slices with their signals blocked.
+    publishSliceAudioView();
     m_receiveLayoutHydratedIds.clear();
     for (const ReceiveSliceState& state : layout.slices) {
         m_receiveLayoutHydratedIds.insert(state.id);

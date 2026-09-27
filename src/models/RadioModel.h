@@ -344,6 +344,11 @@
 //   2026-09-27 - iPhone plan Task 22 / parity Task 20 (R-IOS-26):
 //                clearStationFreedv(). NereusSDR-original. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-27 - R-R3-49: publishSliceAudioView() hands AudioEngine each
+//                slice's mute, output route and VAX channel on every add,
+//                remove, layout restore and change, so the audio thread
+//                never walks m_slices. NereusSDR-original. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -3603,6 +3608,8 @@ public:
     // R-R3-39: waits until every job on the receive lane has run and then
     // delivers the answers they queued for this thread. False on timeout.
     bool waitForReceiveLaneForTest(int timeoutMs = 600000);
+    // R-R3-49: republishes every slice's audio view (publishSliceAudioView).
+    void publishSliceAudioViewForTest() { publishSliceAudioView(); }
     // R-R3-39: the same for the transmit lane.
     bool waitForTransmitLaneForTest(int timeoutMs = 600000);
     // R-R3-39: wires MoxController's txReady and txaFlushed to an injected TX
@@ -5855,6 +5862,13 @@ private:
     /// has always done and remains its only behaviour; any other value is
     /// used verbatim, and checking it for collision first is the caller's
     /// job (addSliceWithStationId does).
+    // R-R3-49: hands AudioEngine what rxBlockReady needs of each slice (its
+    // mute, output route and VAX channel), one atomic word per slice id,
+    // and marks every other id absent. Main thread. Called on every add,
+    // remove and layout restore and on each slice's mute / route / VAX
+    // change, so the audio thread never walks m_slices or touches a
+    // SliceModel the main thread may be deleting.
+    void publishSliceAudioView();
     int addSliceImpl(int requestedId, const QString& initialPanId,
                      const ReceiveSliceState* restoreSeed = nullptr,
                      bool bindRestored = false);

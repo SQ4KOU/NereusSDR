@@ -170,6 +170,12 @@
 //                 off this computer's own outputs. The MOX-gated slice's
 //                 own block now drains the mix (drainMixes), so MON is
 //                 heard with one slice. NereusSDR-original.
+//   2026-09-27: R-R3-49 slice audio view by J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code. rxBlockReady reads
+//                 a slice's mute, output route and VAX channel from one
+//                 atomic word per slice id that RadioModel publishes on the
+//                 main thread (setSliceAudioView), never from the slice list
+//                 or a SliceModel. NereusSDR-original.
 // =================================================================
 
 #include "AudioDeviceConfig.h"
@@ -304,11 +310,32 @@ public:
     void simulateUnderrun();
     void simulatePersistentUnderrun();
 
-    // Non-owning back-pointer so rxBlockReady can look up the active
-    // SliceModel to read mute / VAX-channel state. Null is safe (unit
-    // tests that construct AudioEngine without a RadioModel): rxBlockReady
-    // becomes a no-op.
+    // Non-owning back-pointer. rxBlockReady reads a slice's mute / route /
+    // VAX-channel state from setSliceAudioView (R-R3-49), not through this
+    // pointer; it uses it only for the AF-gain lookup and as the "is there
+    // a radio" gate. Null is safe (unit tests that construct AudioEngine
+    // without a RadioModel): rxBlockReady becomes a no-op.
     void setRadioModel(RadioModel* radio);
+
+    // R-R3-49: what rxBlockReady knows about a slice. The audio thread
+    // never walks RadioModel's slice list or touches a SliceModel: the
+    // main thread removes and deletes slices while blocks flow. RadioModel
+    // publishes this view for every slice id on each add, remove, layout
+    // restore and mute / route / VAX change; rxBlockReady reads one atomic
+    // word per block. A slice id with no published view (or outside
+    // [0, kMaxSliceAudioViews)) is not a slice, and its block is dropped,
+    // as sliceById() returning null used to drop it.
+    struct SliceAudioView {
+        bool present{false};
+        bool muted{false};
+        bool headphones{false};
+        int vaxChannel{0};  // 0 = off, 1..4 = VAX N
+    };
+    static constexpr int kMaxSliceAudioViews = 32;  // the VAX slice mask's width
+    // Main thread only. Ids outside the range are ignored.
+    void setSliceAudioView(int sliceId, const SliceAudioView& view) noexcept;
+    // Any thread: one acquire load.
+    SliceAudioView sliceAudioView(int sliceId) const noexcept;
 
     // Legacy start/stop retained for the single-entry-point symmetry the
     // rest of the codebase expects. Speakers bus is opened lazily the
@@ -1127,6 +1154,11 @@ private:
     IAudioBus* txInputSource() const noexcept;
 
     RadioModel* m_radio{nullptr};
+
+    // R-R3-49: setSliceAudioView's packed words, one per slice id. Written
+    // on the main thread, read on the audio thread; lock-free, and they
+    // live as long as the engine, so no block can outlive them.
+    std::array<std::atomic<quint32>, kMaxSliceAudioViews> m_sliceAudioViews{};
 
     // Sub-Phase 12 Task 12.2 — live-reconfig safety mutex for the speakers
     // bus. setSpeakersConfig() acquires this during tear-down + rebuild.
