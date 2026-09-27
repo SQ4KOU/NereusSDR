@@ -18,11 +18,27 @@
 // other. settled() says whether both ends have handled everything the other
 // sent, which the runner waits for wherever it waits for the event loop.
 //
+// The Offerer's candidates reach the Answerer only once the Offerer has
+// taken the answer. libdatachannel (v0.24.5) sets the remote description
+// on the ICE agent first (peerconnection.cpp:257, setRemoteDescription)
+// and keeps it for the DTLS fingerprint check only afterwards
+// (impl/peerconnection.cpp:1160, processRemoteDescription); a handshake
+// that reaches the check in between fails it (impl/peerconnection.cpp:446,
+// "DTLS alert: unknown CA"). With the Answerer already checking the
+// Offerer's candidates, a busy computer that paused this thread inside
+// the Offerer's acceptDescription() let ICE and DTLS finish in that gap,
+// and the channel never opened. Held, no candidate pair exists until the
+// answer is kept: the Answerer's own candidates are still queued on this
+// thread, and the Answerer has none of the Offerer's.
+//
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-09-26: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-27: the Offerer's candidates wait for its answer (R-R3-49).
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include <QCoreApplication>
@@ -30,6 +46,10 @@
 #include <QObject>
 #include <QPointer>
 #include <QString>
+#include <QStringList>
+
+#include <memory>
+#include <utility>
 
 #include "core/session/DataChannelTransport.h"
 #include "LoopbackTransport.h"
@@ -47,12 +67,29 @@ inline bool startDataChannelPair(DataChannelTransport* offerer, DataChannelTrans
                      [answerer](const QString& sdp, const QString& type) {
         answerer->acceptDescription(sdp, type);
     });
+    // The Offerer's candidates, held until it has the answer.
+    struct Held {
+        bool answered = false;
+        QStringList candidates;
+    };
+    const auto held = std::make_shared<Held>();
     QObject::connect(answerer, &DataChannelTransport::localDescription, offerer,
-                     [offerer](const QString& sdp, const QString& type) {
+                     [offerer, answerer, held](const QString& sdp, const QString& type) {
         offerer->acceptDescription(sdp, type);
+        held->answered = true;
+        const QStringList waiting = std::exchange(held->candidates, {});
+        for (const QString& candidate : waiting) {
+            answerer->acceptCandidate(candidate);
+        }
     });
     QObject::connect(offerer, &DataChannelTransport::localCandidate, answerer,
-                     [answerer](const QString& candidate) { answerer->acceptCandidate(candidate); });
+                     [answerer, held](const QString& candidate) {
+        if (held->answered) {
+            answerer->acceptCandidate(candidate);
+        } else {
+            held->candidates.append(candidate);
+        }
+    });
     QObject::connect(answerer, &DataChannelTransport::localCandidate, offerer,
                      [offerer](const QString& candidate) { offerer->acceptCandidate(candidate); });
     DataChannelTransport::Options answer;
