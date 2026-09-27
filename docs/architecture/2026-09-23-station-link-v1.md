@@ -1171,7 +1171,20 @@ When a feature is off, its version is 0:
   settings from this app. Updating the Core may help.", and keeps the
   page's other groups (the TX waterfall levels, palette, low colour and
   gradient, the TX grid), which are its own. A media `start` still
-  declares 1: the transmit display itself did not change.
+  declares 1: the transmit display itself did not change. Version 3
+  (remote-window parity Task 31, A11) is sent under the same condition and
+  adds display duplex (DUP): a window whose Core sends 3 declares 3 in its
+  media `start`, and then its `subscribe` may carry `duplex` (boolean,
+  absent false); while the Core is keyed an endpoint with `duplex` true is
+  not a viewer of the transmit display, keeps its receive frames and is
+  sent contexts with `transmit` false, and the device's DUP decides whether
+  the Core turns noise blanking off while that device's key is down (the
+  media document's "Transmit display", "Display duplex (version 3)"). No
+  message is added. A window on a Core that sends 0, 1, 2 or no entry shows
+  its DUP controls (View > Display duplex (DUP) and the container DUP
+  button) disabled with "This Core does not show the receiver while
+  transmitting for this app. Updating the Core may help." and its
+  transmitting pan behaves as DUP off.
 - `displayClockVersion` (R-R3-21, R-R3-08): sent only at agreed minor 11,
   after `txDisplayVersion`, and 1 whenever media is on. At 1 every
   display frame's `producerTimestamp` and the `clock-echo`'s `t1`, `t2` and

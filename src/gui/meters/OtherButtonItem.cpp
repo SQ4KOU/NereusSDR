@@ -14,6 +14,10 @@
 //                 NereusSDR feature hidden through UnbuiltFeatures, lit and
 //                 available state per button id. J.J. Boyd (KG4VCF), with
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-27 - A11 / R-R3-49 (parity Task 31): the DUP button is built
+//                 (display duplex), no longer hidden with the status bar's
+//                 FDX. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -161,8 +165,6 @@ std::optional<UnbuiltFeature> OtherButtonItem::unbuiltFeatureFor(ButtonId id)
     // AVG is built after R4 with the display work.
     case ButtonId::Avg:
         return UnbuiltFeature::DisplayAveraging;
-    case ButtonId::Dup:
-        return UnbuiltFeature::Fdx;             // full duplex
     case ButtonId::Play:
     case ButtonId::Rec:
         return UnbuiltFeature::Voice;           // the voice keyer

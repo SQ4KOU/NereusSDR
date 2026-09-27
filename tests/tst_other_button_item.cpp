@@ -34,6 +34,11 @@
 //                                    the PA trip, and is a manual key. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-09-27  J.J. Boyd / KG4VCF  Parity Task 31: DUP is built (display
+//                                    duplex) and acts on the window's
+//                                    setting through the dispatcher's
+//                                    hooks. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -78,11 +83,11 @@ constexpr int kSliceC = 3;
 const QList<Id> kConnected = {
     Id::Power, Id::Mon, Id::Tun, Id::Mox, Id::TwoTon, Id::PsA,
     Id::Anf, Id::Snb, Id::Mnf, Id::PeakHold, Id::Ctun,
-    Id::Vac1, Id::Vac2, Id::Mute, Id::Bin,
+    Id::Vac1, Id::Vac2, Id::Mute, Id::Bin, Id::Dup,
 };
 
 const QList<Id> kHidden = {
-    Id::Rx2, Id::SubRx, Id::PanSwap, Id::Dup, Id::Play, Id::Rec, Id::Xpa, Id::Avg,
+    Id::Rx2, Id::SubRx, Id::PanSwap, Id::Play, Id::Rec, Id::Xpa, Id::Avg,
     Id::Spectrum, Id::Panadapter, Id::Scope, Id::Scope2, Id::Phase, Id::Waterfall,
     Id::Histogram, Id::Panafall, Id::Panascope, Id::Spectrascope, Id::DisplayOff,
 };
@@ -232,10 +237,48 @@ private slots:
 
     void aHiddenButtonComesBackWhenItsFeatureIsBuilt()
     {
-        UnbuiltFeatures::setBuiltForTest(UnbuiltFeature::Fdx, true);
+        UnbuiltFeatures::setBuiltForTest(UnbuiltFeature::Voice, true);
+        OtherButtonItem item;
+        QVERIFY(item.isButtonShown(Id::Play));
+        QVERIFY(item.isButtonShown(Id::Rec));
+        QVERIFY(!item.isButtonShown(Id::Xpa));
+    }
+
+    // Parity Task 31 (A11): DUP is built (display duplex); the status bar's
+    // FDX (full duplex) is not, and building it shows no container button.
+    void theDupButtonIsTheWindowsDisplayDuplex()
+    {
         OtherButtonItem item;
         QVERIFY(item.isButtonShown(Id::Dup));
-        QVERIFY(!item.isButtonShown(Id::Play));
+        QVERIFY(!OtherButtonItem::unbuiltFeatureFor(Id::Dup).has_value());
+        QVERIFY(!UnbuiltFeatures::isBuilt(UnbuiltFeature::Fdx));
+
+        Fixture f;
+        bool duplex = false;
+        QString reason;
+        ContainerButtonDispatcher::Hooks hooks;
+        hooks.displayDuplexOn = [&duplex] { return duplex; };
+        hooks.setDisplayDuplex = [&duplex](bool on) { duplex = on; };
+        hooks.displayDuplexReason = [&reason] { return reason; };
+        ContainerButtonDispatcher dispatcher(&f.model, std::move(hooks));
+        QVERIFY(dispatcher.click(Id::Dup, kSliceA).isEmpty());
+        QVERIFY(duplex);
+        dispatcher.apply(&item, kSliceA);
+        QVERIFY(item.buttonState(Id::Dup));
+        QVERIFY(item.isButtonAvailable(Id::Dup));
+        QVERIFY(dispatcher.click(Id::Dup, kSliceA).isEmpty());
+        QVERIFY(!duplex);
+        // A Core below txDisplayVersion 3: unavailable with its reason, and
+        // a click changes nothing.
+        reason = QStringLiteral("This Core does not show the receiver while transmitting for "
+                                "this app. Updating the Core may help.");
+        dispatcher.apply(&item, kSliceA);
+        QVERIFY(!item.isButtonAvailable(Id::Dup));
+        QCOMPARE(dispatcher.click(Id::Dup, kSliceA), reason);
+        QVERIFY(!duplex);
+        QVERIFY(OperatorWording::isPlain(reason));
+        // With no hooks (the default fixture) it says it does nothing.
+        QVERIFY(!f.dispatcher->stateOf(Id::Dup, kSliceA).available);
     }
 
     // Fix wave I1: the macro buttons, AVG and the two-receiver layout

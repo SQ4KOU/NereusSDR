@@ -325,7 +325,10 @@ struct StationCapabilities {
     /// 30, A12) adds: a window's write or removal of one of Setup > Display
     /// > TX Display's nine analyzer keys reaches the Core's TX analyzer at
     /// once, on and off the air; below 2 a window shows those nine controls
-    /// disabled.
+    /// disabled. 3 (remote-window parity Task 31, A11) adds: a peer that
+    /// declares 3 in its start may add `duplex` (display duplex) to a
+    /// subscribe, and that display keeps the receiver while keyed; below 3
+    /// a window shows its DUP controls disabled.
     int txDisplayVersion = 0;
     /// R-R3-21 / R-R3-08: 1 means the Core stamps every display frame's
     /// producerTimestamp and its clock-echo times (t1, t2, capturedNs) from

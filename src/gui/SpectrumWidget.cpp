@@ -53,6 +53,14 @@
 //                 more than two wait) with the RF window they were captured
 //                 at, instead of one pending row. AI-assisted via Anthropic
 //                 Claude Code.
+//   2026-09-27 J.J. Boyd / KG4VCF - A11 / R-R3-49 (parity Task 31): display
+//                 duplex (DUP), off by default as Thetis. Keyed with it on,
+//                 the pan keeps the receive span and bins under the transmit
+//                 grid and waterfall levels, the TX filter sits against the
+//                 receive span without XIT, the receive trace takes the
+//                 transmit calibration (RX1Offset), and a change while keyed
+//                 swaps the view and resets the blob maxima and active peaks.
+//                 AI-assisted via Anthropic Claude Code.
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
@@ -1107,8 +1115,8 @@ void SpectrumWidget::saveSettings()
     // is enough. Found by Codex on PR #317, alongside the grid half of it
     // that this branch had already fixed and this line had been left out of.
     writeFloat(QStringLiteral("DisplayBandwidth"),                        // Phase 3G-12
-               static_cast<float>(m_moxOverlay ? m_rxViewBandwidthHz
-                                               : m_bandwidthHz));
+               static_cast<float>(m_txSpanLoaded ? m_rxViewBandwidthHz
+                                                 : m_bandwidthHz));
     writeInt(QStringLiteral("DisplayWfColorGain"), m_wfColorGain);
     writeInt(QStringLiteral("DisplayWfBlackLevel"), m_wfBlackLevel);
     writeFloat(QStringLiteral("DisplayWfHighLevel"), m_wfHighThreshold);
@@ -1209,7 +1217,7 @@ void SpectrumWidget::saveSettings()
     s.setValue(settingsKey(QStringLiteral("DisplayTxGridDynamicRange"), m_panIndex),
                QString::number(m_moxOverlay ? m_dynamicRange : m_txDynamicRange));
     s.setValue(settingsKey(QStringLiteral("DisplayTxViewBandwidth"), m_panIndex),
-               QString::number(m_moxOverlay ? m_bandwidthHz : m_txViewBandwidthHz));
+               QString::number(m_txSpanLoaded ? m_bandwidthHz : m_txViewBandwidthHz));
     s.setValue(QStringLiteral("BandPlanFontSize"),
                QString::number(m_bandPlanFontSize));
     writeInt(QStringLiteral("DisplayFreqLabelAlign"), static_cast<int>(m_freqLabelAlign));
@@ -1570,7 +1578,7 @@ QVector<float> SpectrumWidget::reprojectedToView(const QVector<float>& pixelsDbm
 bool SpectrumWidget::presentRemoteTraceCaptured(const QVector<float>& traceDbm,
                                                 double centreHz, double spanHz)
 {
-    if (!m_remoteSpectrum || m_moxOverlay || traceDbm.isEmpty() || spanHz <= 0.0
+    if (!m_remoteSpectrum || showsTransmitView() || traceDbm.isEmpty() || spanHz <= 0.0
         || !std::all_of(traceDbm.cbegin(), traceDbm.cend(),
                         [](float value) { return std::isfinite(value); })) {
         return false;
@@ -1587,7 +1595,7 @@ void SpectrumWidget::refreshRemoteTraceProjection()
     // R-R3-21: a tune, zoom or pan drag never blanks the trace. The last
     // trace the Core sent is drawn at the frequency it was captured at until
     // a frame of the new window presents, which runs an audio delay behind.
-    if (!m_remoteSpectrum || m_moxOverlay || m_remoteTraceCaptured.isEmpty()) {
+    if (!m_remoteSpectrum || showsTransmitView() || m_remoteTraceCaptured.isEmpty()) {
         return;
     }
     const bool sameWindow = qFuzzyCompare(m_remoteTraceCentreHz, m_centerHz)
@@ -5279,7 +5287,8 @@ std::pair<int, int> SpectrumWidget::visibleBinRange(int binCount) const
     // During MOX the bins come from the 96 kHz TX analyzer centered on the
     // transmit carrier. Feed that stream geometry into the same core reducer
     // calculation used for receive frames.
-    const bool useTx = m_moxOverlay
+    // Parity Task 31: keyed with DUP on the bins are the receiver's.
+    const bool useTx = showsTransmitView()
                     && m_txSampleRateHz > 0.0
                     && m_txCenterHz != 0.0;
     cfg.streamCentreHz = useTx ? m_txCenterHz : m_ddcCenterHz;
@@ -5307,13 +5316,59 @@ float SpectrumWidget::normalizeShiftDb() const
     return NereusSDR::normalizeShiftDb(m_dispNormalize, binWidthHz());
 }
 
-int SpectrumWidget::dbmToY(float dbm, const QRect& r) const
+// Parity Task 31 (A11, R-R3-49): the calibration the trace is drawn with.
+// From Thetis display.cs:4820-4850 [v2.10.3.15] (RX1Offset):
+//     bool local_mox = localMox(1);
+//     bool displayduplex = isRxDuplex(1);
+//     if (local_mox)
+//     {
+//         fOffset = tx_display_cal_offset;
+//         if (displayduplex)
+//         {
+//             fOffset += rx1_display_cal_offset; //[2.10.1.0] MW0LGE fix issue #137
+//             fOffset += tx_attenuator_offset; //[2.10.3.6]MW0LGE att_fix // change fixes #482
+//         }
+//     }
+//     ...
+//     else fOffset = rx1_display_cal_offset;
+//     if (!local_mox) fOffset += rx1_preamp_offset;
+// Keyed with DUP on, the trace is the receiver's: its receive calibration
+// (m_dbmCalOffset here, which carries the preamp offset as NereusSDR folds
+// it in; a remote pan's frames carry the Core's already, so 0) plus the
+// transmit display calibration plus the transmit attenuator offset.
+// Otherwise the receive rule as before: keyed with DUP off NereusSDR has
+// always drawn its transmit display with the same offset, and Task 31
+// leaves that path as Task 29 left it.
+float SpectrumWidget::displayCalOffsetDb() const
 {
     // Remote frames already carry the station's antenna calibration. The
     // client preference remains a local-display adjustment only.
     // From Thetis display.cs:1372 Display.RX1DisplayCalOffset.
-    const float displayOffset = m_remoteSpectrum ? 0.0f : m_dbmCalOffset;
-    const float calibrated = dbm + displayOffset + normalizeShiftDb();
+    const float receiveOffset = m_remoteSpectrum ? 0.0f : m_dbmCalOffset;
+    if (m_moxOverlay && m_displayDuplex) {
+        return m_txDisplayCalOffsetDb + receiveOffset + m_txAttOffsetDb;
+    }
+    return receiveOffset;
+}
+
+void SpectrumWidget::setTxDisplayCalOffsetDb(float db)
+{
+    // From Thetis setup.cs:14364 [v2.10.3.15] udTXDisplayCalOffset_ValueChanged
+    // -> Display.TXDisplayCalOffset.
+    if (qFuzzyCompare(1.0f + m_txDisplayCalOffsetDb, 1.0f + db)) {
+        return;
+    }
+    m_txDisplayCalOffsetDb = db;
+    if (m_moxOverlay && m_displayDuplex) {
+        m_hasNewSpectrum = true;
+        markOverlayDirty();
+        update();
+    }
+}
+
+int SpectrumWidget::dbmToY(float dbm, const QRect& r) const
+{
+    const float calibrated = dbm + displayCalOffsetDb() + normalizeShiftDb();
     float bottom = m_refLevel - m_dynamicRange;
     float frac = (calibrated - bottom) / m_dynamicRange;
     frac = qBound(0.0f, frac, 1.0f);
@@ -5328,8 +5383,7 @@ int SpectrumWidget::dbmToY(float dbm, const QRect& r) const
 
 float SpectrumWidget::dbmToYf(float dbm, const QRect& r) const
 {
-    const float displayOffset = m_remoteSpectrum ? 0.0f : m_dbmCalOffset;
-    const float calibrated = dbm + displayOffset + normalizeShiftDb();
+    const float calibrated = dbm + displayCalOffsetDb() + normalizeShiftDb();
     float bottom = m_refLevel - m_dynamicRange;
     float frac = (calibrated - bottom) / m_dynamicRange;
     frac = qBound(0.0f, frac, 1.0f);
@@ -6970,28 +7024,31 @@ void SpectrumWidget::setMoxOverlay(bool isTx)
     // Doing it here rather than in MainWindow means the widget can never be
     // caught holding the wrong grid: there is exactly one place the swap
     // happens and it is the same flag every renderer already branches on.
+    // Parity Task 31: the grid swaps whatever DUP says (Thetis's
+    // SpectrumGridMaxMoxModified reads localMox only, display.cs:1782-1790
+    // [v2.10.3.15]); the span swaps only for the transmit view. With DUP on
+    // the display keeps the receive Low and High (getFilterXPositions,
+    // display.cs:4564-4594 [v2.10.3.15]; getLowHighForRXn,
+    // console.cs:22069-22150 [v2.10.3.15]).
+    const bool spanWasLoaded = m_txSpanLoaded;
     if (isTx) {
         m_rxRefLevel        = m_refLevel;
         m_rxDynamicRange    = m_dynamicRange;
-        m_rxViewCenterHz    = m_centerHz;
-        m_rxViewBandwidthHz = m_bandwidthHz;
         m_refLevel          = m_txRefLevel;
         m_dynamicRange      = m_txDynamicRange;
-        // Centre is re-aimed at the carrier by the caller; the SPAN is what
-        // carries over, so a zoom made last transmission survives.
-        if (m_txViewBandwidthHz > 0.0) { m_bandwidthHz = m_txViewBandwidthHz; }
+        if (!m_displayDuplex) {
+            loadTransmitSpan();
+        }
     } else {
         m_txRefLevel        = m_refLevel;
         m_txDynamicRange    = m_dynamicRange;
-        m_txViewCenterHz    = m_centerHz;
-        m_txViewBandwidthHz = m_bandwidthHz;
         m_refLevel          = m_rxRefLevel;
         m_dynamicRange      = m_rxDynamicRange;
-        if (m_rxViewBandwidthHz > 0.0) {
-            m_centerHz    = m_rxViewCenterHz;
-            m_bandwidthHz = m_rxViewBandwidthHz;
+        if (m_txSpanLoaded) {
+            restoreReceiveSpan();
         }
     }
+    const bool axisMoved = spanWasLoaded != m_txSpanLoaded;
     // Deliberately NO scheduleSettingsSave() here.
     //
     // onNoiseFloorChanged moves the live receive grid at 500 ms cadence and
@@ -7008,7 +7065,9 @@ void SpectrumWidget::setMoxOverlay(bool isTx)
     // where both grids get written.
 
     m_moxOverlay = isTx;
-    if (m_remoteSpectrum) {
+    // Parity Task 31: keyed with DUP on the axis stays the receiver's, and
+    // so does its trace.
+    if (m_remoteSpectrum && axisMoved) {
         // Either edge on a remote pan: the last trace built belongs to the
         // other axis (the receive trace at the rise, the transmit display at
         // the fall). Retire it, and the vertices built from it, so nothing
@@ -7091,18 +7150,76 @@ void SpectrumWidget::setShowIMDMeasurements(bool on)
     update();
 }
 
+void SpectrumWidget::loadTransmitSpan()
+{
+    // Park the receive view; the centre is re-aimed at the carrier by the
+    // caller, and the SPAN is what carries over, so a zoom made last
+    // transmission survives.
+    m_rxViewCenterHz    = m_centerHz;
+    m_rxViewBandwidthHz = m_bandwidthHz;
+    if (m_txViewBandwidthHz > 0.0) { m_bandwidthHz = m_txViewBandwidthHz; }
+    m_txSpanLoaded = true;
+}
+
+void SpectrumWidget::restoreReceiveSpan()
+{
+    m_txViewCenterHz    = m_centerHz;
+    m_txViewBandwidthHz = m_bandwidthHz;
+    if (m_rxViewBandwidthHz > 0.0) {
+        m_centerHz    = m_rxViewCenterHz;
+        m_bandwidthHz = m_rxViewBandwidthHz;
+    }
+    m_txSpanLoaded = false;
+}
+
+void SpectrumWidget::resetPeaksForDuplexChange()
+{
+    // From Thetis display.cs:514-521 [v2.10.3.15] (Display.DisplayDuplex):
+    //     if (_mox && value != display_duplex)
+    //     {
+    //         // just incase dup is changed whilst tx'ing
+    //         ResetBlobMaximums(1, true);
+    //         ResetBlobMaximums(2, true);
+    //         ResetSpectrumPeaks(1);
+    //         ResetSpectrumPeaks(2);
+    //     }
+    // Blob maxima: PeakBlobDetector; spectrum peaks: the active peak hold
+    // trace (Thetis m_rx1_spectrumPeaks). One pan here, one receiver there.
+    m_peakBlobs.clearMaximums();
+    m_activePeakHold.clear();
+}
+
 void SpectrumWidget::setDisplayDuplex(bool on)
 {
-    // From Thetis console.cs:15363-15369 [v2.10.3.13]:
+    // From Thetis console.cs:15390-15395 [v2.10.3.15]:
     //   private bool _display_duplex = false;
     //   public bool DisplayDuplex { get; set; }
-    // NereusSDR defaults this to true since the panadapter stays live
-    // during MOX (see SpectrumWidget header note).  Setter is provided for
-    // a potential future Setup checkbox.
+    // Parity Task 31: false by default, as Thetis. MoxDisplayController sets
+    // it on the transmitting pan; while keyed a change swaps the pan between
+    // the transmit view and the receiver's (the controller moves the source
+    // and the bins, this the span), and resets the peaks.
     if (m_displayDuplex == on) {
         return;
     }
     m_displayDuplex = on;
+    if (m_moxOverlay) {
+        resetPeaksForDuplexChange();
+        const bool spanWasLoaded = m_txSpanLoaded;
+        if (on && m_txSpanLoaded) {
+            restoreReceiveSpan();
+        } else if (!on && !m_txSpanLoaded) {
+            loadTransmitSpan();
+        }
+        if (m_remoteSpectrum && spanWasLoaded != m_txSpanLoaded) {
+            // As at the rise and the fall: the last trace belongs to the
+            // other axis.
+            m_renderedPixels.clear();
+            m_undentedPixels.clear();
+            m_visibleBinCount = 0;
+            m_hasNewSpectrum = true;
+        }
+    }
+    markOverlayDirty();
     update();
 }
 
@@ -7785,6 +7902,15 @@ void SpectrumWidget::showSpotClusterPopup(const SpotCluster& cluster, const QPoi
 // Source: NereusSDR-original rendering.  IQ-space mapping per
 //   deskhpsdr/transmitter.c:2136-2186 [@120188f].
 // ---------------------------------------------------------------------------
+double SpectrumWidget::txFilterXitHz() const
+{
+    // Parity Task 31: no XIT keyed with DUP on (drawTxFilterOverlay).
+    if (m_moxOverlay && m_displayDuplex) {
+        return 0.0;
+    }
+    return static_cast<double>(m_txVfoOffsetHz);
+}
+
 void SpectrumWidget::drawTxFilterOverlay(QPainter& p, const QRect& specRect)
 {
     if (m_vfoHz <= 0.0) {
@@ -7796,7 +7922,12 @@ void SpectrumWidget::drawTxFilterOverlay(QPainter& p, const QRect& specRect)
     // m_txVfoOffsetHz tracks the active XIT offset so the overlay centers
     // on the actual TX frequency rather than the RX VFO.  Zero when XIT is
     // disabled or the slice has no XIT.
-    const double txCenter = m_vfoHz + static_cast<double>(m_txVfoOffsetHz);
+    // Parity Task 31: keyed with DUP on the filter sits against the receive
+    // span at the VFO, XIT left out, as Thetis's getFilterXPositions
+    // (display.cs:4564-4594 [v2.10.3.15]) draws tx_filter_low/high from the
+    // receive Low/High and freq_diff, and getLowHighForRXn adds XIT only
+    // "when not in display duplex mode" (console.cs:22144 [v2.10.3.15]).
+    const double txCenter = m_vfoHz + txFilterXitHz();
     const double absLow  = txCenter + static_cast<double>(iqLow);
     const double absHigh = txCenter + static_cast<double>(iqHigh);
 
@@ -8022,8 +8153,9 @@ void SpectrumWidget::drawTxFilterWaterfallColumn(QPainter& p, const QRect& wfRec
     auto [iqLow, iqHigh] = txAudioToIq(m_txFilterLow, m_txFilterHigh, m_txMode);
 
     // m_txVfoOffsetHz tracks active XIT offset — same rationale as in
-    // drawTxFilterOverlay (panadapter side); kept in lockstep.
-    const double txCenter = m_vfoHz + static_cast<double>(m_txVfoOffsetHz);
+    // drawTxFilterOverlay (panadapter side); kept in lockstep (parity Task
+    // 31's DUP rule included).
+    const double txCenter = m_vfoHz + txFilterXitHz();
     const double absLow  = txCenter + static_cast<double>(iqLow);
     const double absHigh = txCenter + static_cast<double>(iqHigh);
 
@@ -9566,7 +9698,7 @@ void SpectrumWidget::requestTune(double hz)
 
 void SpectrumWidget::notifyTxViewWindow()
 {
-    if (!m_moxOverlay || m_bandwidthHz <= 0.0) { return; }
+    if (!showsTransmitView() || m_bandwidthHz <= 0.0) { return; }
     emit txViewWindowChanged(m_centerHz, m_bandwidthHz);
 }
 
@@ -11182,7 +11314,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
         const float yTop = 1.0f;
 
         const float fa = m_fillAlpha;
-        const float cal = m_remoteSpectrum ? 0.0f : m_dbmCalOffset;
+        const float cal = displayCalOffsetDb();
 
         // Flat-mode colour picked from m_fillColor.
         const float flatR = m_fillColor.redF();

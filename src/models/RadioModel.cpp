@@ -509,6 +509,12 @@
 //                analyzer at once; stationTxDisplayVersion, the Core's
 //                txDisplayVersion as a remote window last heard it. J.J.
 //                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-27 - Parity Task 31 (A11, R-R3-49): display duplex and noise
+//                blanking. With DUP on at the key (this window's, or on a
+//                Core the transmit holder's), NB and NB2 go off on the
+//                transmit slice while keyed and come back at the unkey, as
+//                Thetis's UIMOXChangedTrue / False do. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1653,6 +1659,40 @@ RadioModel::RadioModel(Role role, QObject* parent)
                 m_txTimeOut, &TxTimeOutTimer::onMox);
         connect(m_txTimeOut, &TxTimeOutTimer::timedOut,
                 this, &RadioModel::onTxTimeOut);
+    }
+
+    // Parity Task 31 (A11, R-R3-49): noise blanking while keyed with display
+    // duplex on. From Thetis console.cs:29176-29213 [v2.10.3.15]:
+    //     private void UIMOXChangedTrue()
+    //     {
+    //         _nb_CheckState = chkNB.CheckState; // save current state of NB
+    //         if (_display_duplex) chkNB.CheckState = CheckState.Unchecked; // turn off NB/NB2 while transmitting with DUP enabled
+    //     ...
+    //     private void UIMOXChangedFalse()
+    //     {
+    //         if (_display_duplex) chkNB.CheckState = _nb_CheckState; // restore saved state of NB
+    // Thetis calls them at the end of the MOX change (console.cs:29721-29722
+    // [v2.10.3.15]), just before MoxChangeHandlers; moxChanged is that
+    // point here. chkNB is RX1's tri-state NB / NB2 box; here, the transmit
+    // slice's NbMode (Unchecked = Off). The state is saved at every key, and
+    // each edge reads DUP as it stands then, as Thetis does.
+    if (m_role == Role::Local) {
+        connect(m_moxController, &MoxController::moxChanged, this,
+                [this](int, bool oldMox, bool newMox) {
+            if (newMox && !oldMox) {
+                SliceModel* slice = txBoundSlice();
+                m_nbSavedSlice = slice;
+                m_nbSavedMode = slice != nullptr ? slice->nbMode() : NbMode::Off;
+                if (slice != nullptr && transmitDisplayDuplex()) {
+                    slice->setNbMode(NbMode::Off);
+                }
+            } else if (!newMox && oldMox) {
+                if (!m_nbSavedSlice.isNull() && transmitDisplayDuplex()) {
+                    m_nbSavedSlice->setNbMode(m_nbSavedMode);
+                }
+                m_nbSavedSlice.clear();
+            }
+        });
     }
 
     // R-R3-36: record whether the key-up now committing is Tune or
@@ -12469,6 +12509,38 @@ void RadioModel::setTransmitHolder(const QByteArray& holder)
     applyActiveSlices();
     // Fix wave C2: VOX follows the holder (remoteVoxDevice).
     updateRemoteMicSource();
+}
+
+// Parity Task 31 (A11, R-R3-49): display duplex, for noise blanking while
+// keyed (the moxChanged lambda in the constructor).
+void RadioModel::setLocalDisplayDuplex(bool on)
+{
+    if (m_role != Role::Local) {
+        return;
+    }
+    m_localDisplayDuplex = on;
+}
+
+void RadioModel::setDeviceDisplayDuplex(const QByteArray& deviceId, bool on)
+{
+    if (m_role != Role::Local || deviceId.isEmpty()) {
+        return;
+    }
+    if (on) {
+        m_deviceDisplayDuplex.insert(deviceId);
+    } else {
+        m_deviceDisplayDuplex.remove(deviceId);
+    }
+}
+
+bool RadioModel::transmitDisplayDuplex() const
+{
+    const QByteArray holder = m_sliceOwnership != nullptr ? m_sliceOwnership->transmitHolder()
+                                                          : QByteArray();
+    if (!holder.isEmpty() && holder != QByteArray(KeyerIdentity::kStationDeviceId)) {
+        return m_deviceDisplayDuplex.contains(holder);
+    }
+    return m_localDisplayDuplex;
 }
 
 // iPhone app plan Task 35 (R-IOS-13): who is keyed, and the keying epoch.

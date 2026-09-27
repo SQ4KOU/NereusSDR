@@ -8,6 +8,9 @@
 //   4. setMoxOverlay is idempotent (same-value calls don't crash).
 //   5. setTxAttenuatorOffsetDb stores value.
 //   6. setTxFilterVisible stores state.
+//   7. Parity Task 31: display duplex is off by default; keyed with it on
+//      the transmit grid loads but the receive span stays (and is what a
+//      keyed save writes); turned off while keyed it loads the transmit span.
 //
 // No pixel-diff — visual verification is deferred until the GPU-path render
 // loop is unit-testable.  State accessors confirm the slot set the field.
@@ -36,6 +39,7 @@ private slots:
     void keyed_save_leaves_the_receive_bandwidth_alone();
     void txGrid_load_accepts_what_the_drag_can_produce();
     void tx_low_colour_is_used_below_the_floor();
+    void duplex_keeps_the_receive_span_under_the_transmit_grid();
 };
 
 // 1. Fresh widget has MOX overlay off
@@ -297,6 +301,37 @@ void TestSpectrumWidgetMoxOverlay::tx_low_colour_is_used_below_the_floor()
     // And a bin above the floor still comes from the gradient.
     QVERIFY2(w.dbmToRgbForTest(-20.0f) != qRgb(17, 34, 51),
              "the low colour swallowed a bin above the floor");
+}
+
+// 7. Parity Task 31 (A11): display duplex.
+void TestSpectrumWidgetMoxOverlay::duplex_keeps_the_receive_span_under_the_transmit_grid()
+{
+    auto& s = AppSettings::instance();
+    SpectrumWidget w;
+    QVERIFY(!w.displayDuplex());   // Thetis _display_duplex = false
+    w.setPanIndex(0);
+    w.setFrequencyRange(14200000.0, 192000.0);
+    w.setDisplayDuplex(true);
+    w.setMoxOverlay(true);
+    QVERIFY(w.isMoxOverlayActive());
+    QVERIFY(!w.showsTransmitView());
+    QCOMPARE(w.bandwidth(), 192000.0);
+    QCOMPARE(w.centerFrequency(), 14200000.0);
+    // A zoom while keyed with DUP on is the receive view's, and saved as it.
+    w.setFrequencyRange(14200000.0, 96000.0);
+    w.saveSettingsForTest();
+    QCOMPARE(s.value(QStringLiteral("DisplayBandwidth"), QString()).toString().toFloat(),
+             96000.0f);
+    // DUP off while keyed: the transmit span loads; on again: the receive
+    // span comes back.
+    w.setDisplayDuplex(false);
+    QVERIFY(w.showsTransmitView());
+    QVERIFY(w.bandwidth() != 96000.0);
+    w.setDisplayDuplex(true);
+    QCOMPARE(w.bandwidth(), 96000.0);
+    w.setMoxOverlay(false);
+    QCOMPARE(w.bandwidth(), 96000.0);
+    QVERIFY(!w.isMoxOverlayActive());
 }
 
 QTEST_MAIN(TestSpectrumWidgetMoxOverlay)

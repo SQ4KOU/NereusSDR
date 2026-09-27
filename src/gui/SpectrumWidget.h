@@ -59,6 +59,13 @@
 //   2026-09-26 : a remote waterfall row queue (R-R3-21, R-R3-08): rows wait
 //                 for the ticker with the RF window they were captured at.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-27 : Parity Task 31 (A11, R-R3-49): display duplex (DUP) off by
+//                 default as Thetis; with it on while keyed the pan keeps the
+//                 receive span and bins under the transmit grid and levels,
+//                 the TX filter sits against the receive span without XIT,
+//                 the receive trace takes the transmit calibration, and a
+//                 change while keyed swaps the view and resets the peaks.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  enums.cs
@@ -1168,9 +1175,24 @@ public:
     /// frequencies, so the pan stays blank with its status line.
     bool drawsSpectrumTrace() const noexcept
     {
-        return !m_renderedPixels.isEmpty() || (m_visibleBinCount > 0 && !m_moxOverlay);
+        return !m_renderedPixels.isEmpty() || (m_visibleBinCount > 0 && !showsTransmitView());
     }
     float txAttenuatorOffsetDb() const noexcept { return m_txAttOffsetDb; }
+    /// Parity Task 31 (A11): display duplex (DUP). Off by default, as
+    /// Thetis's _display_duplex (console.cs:15390-15395 [v2.10.3.15]).
+    bool displayDuplex() const noexcept { return m_displayDuplex; }
+    /// Whether the pan shows the transmit display: keyed (the MOX overlay)
+    /// with DUP off. Keyed with DUP on the pan keeps the receiver's span,
+    /// bins and frames, under the transmit grid and waterfall levels.
+    bool showsTransmitView() const noexcept { return m_moxOverlay && !m_displayDuplex; }
+    /// The transmit display calibration (Setup > Calibration's TX Display
+    /// Cal Offset), which Thetis adds to the receive trace while keyed with
+    /// DUP on (display.cs:4820-4850 [v2.10.3.15], RX1Offset).
+    float txDisplayCalOffsetDb() const noexcept { return m_txDisplayCalOffsetDb; }
+    void setTxDisplayCalOffsetDb(float db);
+    /// The calibration the trace is drawn with now (see displayCalOffsetDb
+    /// in the .cpp for the rule).
+    float displayCalOffsetDb() const;
     bool txFilterVisible() const noexcept { return m_txFilterVisible; }
 
 public slots:
@@ -1206,11 +1228,11 @@ public slots:
     //   setShowIMDMeasurements(bool)   <- PureSignal::show2ToneMeasurementsChanged
     //                                      (mirrors Thetis Display.ShowIMDMeasurments,
     //                                      display.cs:304-311 [v2.10.3.13])
-    //   setDisplayDuplex(bool)         <- console.cs:15363-15369 [v2.10.3.13]
-    //                                      DisplayDuplex; defaults to true in
-    //                                      NereusSDR (panadapter stays live
-    //                                      during MOX, equivalent to Thetis
-    //                                      duplex mode).
+    //   setDisplayDuplex(bool)         <- console.cs:15390-15395 [v2.10.3.15]
+    //                                      DisplayDuplex, false by default as
+    //                                      Thetis (parity Task 31); set on the
+    //                                      transmitting pan by
+    //                                      MoxDisplayController.
     //
     // setShowIMDMeasurements(false) calls ImdOverlay::reset() to clear EMA
     // state, mirroring the Thetis display.cs:5680 [v2.10.3.13] behaviour:
@@ -2283,6 +2305,17 @@ private:
     //   Called when m_showTxFilterOnRxWaterfall && m_moxOverlay.
     // Per deskhpsdr/transmitter.c:2136-2186 [@120188f] for IQ-space mapping.
     void drawTxFilterOverlay(QPainter& p, const QRect& specRect);
+    // The XIT the TX filter overlay adds to the VFO: none while keyed with
+    // DUP on (parity Task 31).
+    double txFilterXitHz() const;
+    // setMoxOverlay's span half: park the receive view and load the
+    // transmit span, or give the receive view back (parity Task 31 moved
+    // them out so a DUP change while keyed makes the same swap).
+    void loadTransmitSpan();
+    void restoreReceiveSpan();
+    // Parity Task 31: a DUP change while keyed resets the blob maxima and
+    // the active peak hold (Thetis display.cs:514-521 [v2.10.3.15]).
+    void resetPeaksForDuplexChange();
     void drawTxFilterWaterfallColumn(QPainter& p, const QRect& wfRect);
 
     // ---- Two-tone IMD overlay (Phase 3M-4 Task 12) ----
@@ -3234,12 +3267,16 @@ private:
     // flags below are true.
     bool m_testingIMD{false};            // Display.TestingIMD mirror
     bool m_showIMDMeasurements{false};   // Display.ShowIMDMeasurments mirror
-    // displayduplex defaults to true in NereusSDR — the panadapter stays
-    // live during MOX (the trace switches from RX to TX feedback), which
-    // is the equivalent of Thetis's "duplex" mode where DisplayDuplex=true
-    // routes feedback DDC streams to the RX1 panadapter window.  Wire
-    // setDisplayDuplex(false) only if a Setup checkbox is added later.
-    bool m_displayDuplex{true};
+    // Parity Task 31 (A11): display duplex, false by default as Thetis's
+    // _display_duplex (console.cs:15390-15395 [v2.10.3.15]). With it on
+    // while keyed the pan keeps the receiver (showsTransmitView() false).
+    bool m_displayDuplex{false};
+    // Whether setMoxOverlay loaded the transmit span (the rise with DUP
+    // off, or DUP turned off while keyed), so the fall or DUP turned on
+    // gives the receive span back.
+    bool m_txSpanLoaded{false};
+    // Thetis tx_display_cal_offset (display.cs:1413 [v2.10.3.15]).
+    float m_txDisplayCalOffsetDb{0.0f};
     // Allocated in the constructor (init list) so the include stays in
     // the .cpp.  std::unique_ptr would require pulling ImdOverlay.h into
     // the header.  Raw pointer with QObject parenting is the established

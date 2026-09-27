@@ -25,6 +25,10 @@
 //                 while keyed; remote view changes reach the analyzer at
 //                 most once per coalescing period. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-27 : Parity Task 31 (A11, R-R3-49): txDisplayVersion 3; a
+//                 `duplex` endpoint keeps the receiver while keyed, and the
+//                 field is read only from a peer that declared 3. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -283,19 +287,19 @@ struct Harness {
         QTRY_VERIFY(server.mediaAvailable() && client.mediaAvailable());
     }
 
-    bool start(bool declare)
+    bool start(bool declare, int version = 1)
     {
         QJsonObject start{{QStringLiteral("op"), QStringLiteral("start")},
                           {QStringLiteral("connectionId"), QLatin1String(kConnectionId)}};
         if (declare) {
-            start.insert(QStringLiteral("txDisplayVersion"), 1);
+            start.insert(QStringLiteral("txDisplayVersion"), version);
         }
         return client.sendMediaControl(start, client.sessionEpoch());
     }
 
-    void startReadyPeer(bool declare)
+    void startReadyPeer(bool declare, int version = 1)
     {
-        QVERIFY(start(declare));
+        QVERIFY(start(declare, version));
         QTRY_VERIFY(mediaTransport);
         mediaTransport->becomeReady();
     }
@@ -359,6 +363,8 @@ private slots:
     void aSliceMovingWhileKeyedLeavesTheRisePanTransmitting();
     void remoteViewChangesWhileKeyedAreCoalesced();
     void txStateCarriesTheHighSwrState();
+    void aDuplexEndpointKeepsTheReceiverWhileKeyed();
+    void duplexIsReadOnlyFromAVersionThreePeer();
 };
 
 void TstRemoteTxDisplay::initTestCase()
@@ -379,8 +385,8 @@ void TstRemoteTxDisplay::capabilityFollowsTheAnalyzerAndTheMinor()
     {
         Harness h;
         h.establishSession();
-        QTRY_COMPARE(h.client.capabilities().txDisplayVersion, 2);
-        QCOMPARE(h.server.txDisplayVersion(), 2);
+        QTRY_COMPARE(h.client.capabilities().txDisplayVersion, 3);
+        QCOMPARE(h.server.txDisplayVersion(), 3);
         h.finish();
     }
     {
@@ -475,7 +481,7 @@ void TstRemoteTxDisplay::riseSendsTheTransmitDisplayAndFallResumesReceive()
     h.slice()->setPanKey(QStringLiteral("pan-a"));
     h.spare()->setPanKey(QStringLiteral("pan-b"));
     h.establishSession();
-    QTRY_COMPARE(h.client.capabilities().txDisplayVersion, 2);
+    QTRY_COMPARE(h.client.capabilities().txDisplayVersion, 3);
     QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
     h.startReadyPeer(/*declare=*/true);
     QVERIFY(h.controller->txDisplayNegotiated());
@@ -598,7 +604,7 @@ void TstRemoteTxDisplay::xitWhileKeyedRenewsTheContext()
 {
     Harness h;
     h.establishSession();
-    QTRY_COMPARE(h.client.capabilities().txDisplayVersion, 2);
+    QTRY_COMPARE(h.client.capabilities().txDisplayVersion, 3);
     QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
     h.startReadyPeer(true);
     const double centre = h.radio.streamCentreHz(h.slice()->streamIndex());
@@ -647,7 +653,7 @@ void TstRemoteTxDisplay::severalViewersShareTheGoverningView()
 {
     Harness h;
     h.establishSession();
-    QTRY_COMPARE(h.client.capabilities().txDisplayVersion, 2);
+    QTRY_COMPARE(h.client.capabilities().txDisplayVersion, 3);
     QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
     h.startReadyPeer(true);
     const double centre = h.radio.streamCentreHz(h.slice()->streamIndex());
@@ -691,7 +697,7 @@ void TstRemoteTxDisplay::aSubscribeWhileKeyedMovesTheView()
 {
     Harness h;
     h.establishSession();
-    QTRY_COMPARE(h.client.capabilities().txDisplayVersion, 2);
+    QTRY_COMPARE(h.client.capabilities().txDisplayVersion, 3);
     QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
     h.startReadyPeer(true);
     const double centre = h.radio.streamCentreHz(h.slice()->streamIndex());
@@ -732,7 +738,7 @@ void TstRemoteTxDisplay::olderPeerKeepsTodaysWire()
 {
     Harness h;
     h.establishSession();
-    QTRY_COMPARE(h.client.capabilities().txDisplayVersion, 2);
+    QTRY_COMPARE(h.client.capabilities().txDisplayVersion, 3);
     QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
     h.startReadyPeer(/*declare=*/false);
     QVERIFY(!h.controller->txDisplayNegotiated());
@@ -780,7 +786,7 @@ void TstRemoteTxDisplay::transmitWindowIsReadLikeTheReceiveWindow()
 {
     Harness h;
     h.establishSession();
-    QTRY_COMPARE(h.client.capabilities().txDisplayVersion, 2);
+    QTRY_COMPARE(h.client.capabilities().txDisplayVersion, 3);
     QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
     h.startReadyPeer(true);
     const double centre = h.radio.streamCentreHz(h.slice()->streamIndex());
@@ -847,7 +853,7 @@ void TstRemoteTxDisplay::budgetPacesTransmitFramesLikeReceiveFrames()
                                         cost.charge.spectrumSampleUnitsPerSecond, 3});
     QTest::failOnWarning(QRegularExpression(QStringLiteral("exceeded admitted display cost")));
     h.establishSession();
-    QTRY_COMPARE(h.client.capabilities().txDisplayVersion, 2);
+    QTRY_COMPARE(h.client.capabilities().txDisplayVersion, 3);
     QVERIFY(h.server.displayBudgetAvailable());
     QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
     h.startReadyPeer(true);
@@ -895,7 +901,7 @@ void TstRemoteTxDisplay::aSliceMovingWhileKeyedLeavesTheRisePanTransmitting()
     h.slice()->setPanKey(QStringLiteral("pan-a"));
     h.spare()->setPanKey(QStringLiteral("pan-b"));
     h.establishSession();
-    QTRY_COMPARE(h.client.capabilities().txDisplayVersion, 2);
+    QTRY_COMPARE(h.client.capabilities().txDisplayVersion, 3);
     QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
     h.startReadyPeer(true);
     const double centre = h.radio.streamCentreHz(h.slice()->streamIndex());
@@ -1054,6 +1060,111 @@ void TstRemoteTxDisplay::txStateCarriesTheHighSwrState()
     QVERIFY(highSwr > meta->indexOfProperty("stopEpoch"));
     QCOMPARE(latched, highSwr + 1);
     state.unbind();
+}
+
+// Parity Task 31 (A11, R-R3-49): txDisplayVersion 3. An endpoint whose
+// subscribe carries `duplex` true is no viewer while keyed: it keeps its
+// receive frames and its contexts say `transmit` false (Thetis DisplayThread,
+// console.cs:24281-24338 [v2.10.3.15], `if (bLocalMox && !_display_duplex)`).
+// A subscribe while keyed swaps it at once, both ways.
+void TstRemoteTxDisplay::aDuplexEndpointKeepsTheReceiverWhileKeyed()
+{
+    Harness h;
+    h.slice()->setPanKey(QStringLiteral("pan-a"));
+    h.establishSession();
+    QTRY_COMPARE(h.client.capabilities().txDisplayVersion, 3);
+    QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+    h.startReadyPeer(/*declare=*/true, /*version=*/3);
+    const double centre = h.radio.streamCentreHz(h.slice()->streamIndex());
+    QJsonObject duplex = withTxWindow(subscription(1, 1, h.sliceId, centre));
+    duplex.insert(QStringLiteral("duplex"), true);
+    QVERIFY(h.send(duplex));
+    QTRY_VERIFY([&] {
+        h.feedSlice(h.sliceId);
+        return lastContext(controls, 1).has_value();
+    }());
+    QVERIFY(h.controller->endpointDuplex(1));
+
+    QVERIFY(h.key(true));
+    QTRY_VERIFY(h.feed()->isKeyed());
+    QTest::qWait(100);
+    QVERIFY(!h.controller->transmitDisplayActive(1));
+    QVERIFY(!isTransmit(lastContext(controls, 1)));
+    QCOMPARE(h.feed()->viewerCount(), 0);
+    // Receive frames keep coming at the receive context's generation.
+    const quint32 receiveGeneration = static_cast<quint32>(
+        lastContext(controls, 1)->value(QStringLiteral("contextGeneration")).toInteger());
+    const int before = framesFor(h.mediaTransport->displays, 1, receiveGeneration);
+    QTRY_VERIFY([&] {
+        h.feedSlice(h.sliceId);
+        return framesFor(h.mediaTransport->displays, 1, receiveGeneration) > before + 2;
+    }());
+
+    // DUP off while keyed: the transmit display at once.
+    QVERIFY(h.send(withTxWindow(subscription(1, 2, h.sliceId, centre))));
+    QTRY_VERIFY(isTransmit(lastContext(controls, 1)));
+    QVERIFY(h.controller->transmitDisplayActive(1));
+    QVERIFY(!h.controller->endpointDuplex(1));
+    // And on again: back to the receiver.
+    duplex.insert(QStringLiteral("revision"), 3);
+    QVERIFY(h.send(duplex));
+    QTRY_VERIFY(!h.controller->transmitDisplayActive(1));
+    QTRY_VERIFY([&] {
+        h.feedSlice(h.sliceId);
+        return lastContext(controls, 1)
+            && !isTransmit(lastContext(controls, 1));
+    }());
+    QCOMPARE(h.feed()->viewerCount(), 0);
+    QVERIFY(h.key(false));
+    QTRY_VERIFY(!h.feed()->isKeyed());
+    h.finish();
+}
+
+// `duplex` is read only from a peer whose start declared 3, and only as a
+// boolean: otherwise it is a subscribe of another shape, ignored without the
+// display budget as any other shape is (the transmit window's one-edge case).
+// `false` is the same as absent.
+void TstRemoteTxDisplay::duplexIsReadOnlyFromAVersionThreePeer()
+{
+    {
+        Harness h;
+        h.establishSession();
+        QTRY_COMPARE(h.client.capabilities().txDisplayVersion, 3);
+        h.startReadyPeer(/*declare=*/true, /*version=*/1);
+        const double centre = h.radio.streamCentreHz(h.slice()->streamIndex());
+        QJsonObject duplex = withTxWindow(subscription(1, 1, h.sliceId, centre));
+        duplex.insert(QStringLiteral("duplex"), true);
+        QVERIFY(h.send(duplex));
+        QTest::qWait(150);
+        QCOMPARE(h.controller->activeEndpointCount(), 0);
+        // The same request without it is taken.
+        QVERIFY(h.send(withTxWindow(subscription(2, 1, h.sliceId, centre))));
+        QTRY_COMPARE(h.controller->activeEndpointCount(), 1);
+        h.finish();
+    }
+    {
+        Harness h;
+        h.establishSession();
+        QTRY_COMPARE(h.client.capabilities().txDisplayVersion, 3);
+        h.startReadyPeer(/*declare=*/true, /*version=*/3);
+        const double centre = h.radio.streamCentreHz(h.slice()->streamIndex());
+        QJsonObject wrong = withTxWindow(subscription(2, 1, h.sliceId, centre));
+        wrong.insert(QStringLiteral("duplex"), 1);
+        QVERIFY(h.send(wrong));
+        QTest::qWait(150);
+        QCOMPARE(h.controller->activeEndpointCount(), 0);
+        QJsonObject off = withTxWindow(subscription(3, 1, h.sliceId, centre));
+        off.insert(QStringLiteral("duplex"), false);
+        QVERIFY(h.send(off));
+        QTRY_COMPARE(h.controller->activeEndpointCount(), 1);
+        QVERIFY(!h.controller->endpointDuplex(3));
+        QJsonObject on = withTxWindow(subscription(4, 1, h.sliceId, centre));
+        on.insert(QStringLiteral("duplex"), true);
+        QVERIFY(h.send(on));
+        QTRY_COMPARE(h.controller->activeEndpointCount(), 2);
+        QVERIFY(h.controller->endpointDuplex(4));
+        h.finish();
+    }
 }
 
 QTEST_MAIN(TstRemoteTxDisplay)

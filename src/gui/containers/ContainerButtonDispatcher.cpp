@@ -41,6 +41,11 @@
 //                                    (I3); both reasons in a remote window
 //                                    (M6). AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-27  J.J. Boyd / KG4VCF  A11 / R-R3-49 (parity Task 31): DUP
+//                                    (display duplex), the window's
+//                                    DisplayDuplex setting through its
+//                                    hooks. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include "gui/containers/ContainerButtonDispatcher.h"
@@ -74,7 +79,7 @@ using Id = ContainerButtonDispatcher::Id;
 constexpr Id kConnected[] = {
     Id::Power, Id::Mon, Id::Tun, Id::Mox, Id::TwoTon, Id::PsA,
     Id::Anf, Id::Snb, Id::Mnf, Id::PeakHold, Id::Ctun,
-    Id::Vac1, Id::Vac2, Id::Mute, Id::Bin,
+    Id::Vac1, Id::Vac2, Id::Mute, Id::Bin, Id::Dup,
 };
 
 int vaxChannelOf(Id id)
@@ -268,6 +273,24 @@ ContainerButtonDispatcher::stateOf(Id id, int rxSource) const
         }
         break;
     }
+    case Id::Dup: {
+        // Parity Task 31 (A11): display duplex, the window's DisplayDuplex
+        // (View > Display duplex (DUP) is the same setting). Thetis's
+        // container DUP button toggles chkRX2SR, "chkRX2SR is the DUPlex
+        // button" (console.cs:37555-37575 [v2.10.3.15];
+        // ucOtherButtonsOptionsGrid.cs:540 [v2.10.3.15], "Duplex mode, view
+        // the tx rx"). Not a transmit setting: it changes what this window
+        // shows, so it works on and off the air.
+        st.on = m_hooks.displayDuplexOn && m_hooks.displayDuplexOn();
+        const QString reason = m_hooks.displayDuplexReason ? m_hooks.displayDuplexReason()
+                                                           : QString();
+        if (!m_hooks.setDisplayDuplex) {
+            unavailable(QStringLiteral("This button does nothing yet."));
+        } else if (!reason.isEmpty()) {
+            unavailable(reason);
+        }
+        break;
+    }
     case Id::Vac1:
     case Id::Vac2:
         if (!m_hooks.vaxDevices) {
@@ -335,6 +358,9 @@ QString ContainerButtonDispatcher::click(Id id, int rxSource)
         break;
     case Id::Mute:
         sliceFor(rxSource)->setMuted(turnOn);
+        break;
+    case Id::Dup:
+        m_hooks.setDisplayDuplex(turnOn);
         break;
     case Id::Bin:
         sliceFor(rxSource)->setBinauralEnabled(turnOn);

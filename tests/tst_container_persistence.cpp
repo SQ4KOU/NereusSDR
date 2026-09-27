@@ -449,7 +449,9 @@ private slots:
             QCOMPARE(item->visibleBits(), 0xFFFFFFFFu);
             QVERIFY(item->isButtonShown(OtherButtonItem::ButtonId::Anf));
             QVERIFY(item->isButtonShown(OtherButtonItem::ButtonId::Vac1));
-            for (auto id : {OtherButtonItem::ButtonId::Rx2, OtherButtonItem::ButtonId::Dup,
+            // Parity Task 31: DUP is built (display duplex).
+            QVERIFY(item->isButtonShown(OtherButtonItem::ButtonId::Dup));
+            for (auto id : {OtherButtonItem::ButtonId::Rx2,
                             OtherButtonItem::ButtonId::Play, OtherButtonItem::ButtonId::Rec,
                             OtherButtonItem::ButtonId::Xpa, OtherButtonItem::ButtonId::Avg,
                             OtherButtonItem::ButtonId::Waterfall,

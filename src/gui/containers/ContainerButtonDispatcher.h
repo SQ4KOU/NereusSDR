@@ -42,6 +42,9 @@
 //                                    the transmit settings gate in a
 //                                    remote window (the Core's monEnabled).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-27  J.J. Boyd / KG4VCF  A11 / R-R3-49 (parity Task 31): the
+//                                    DUP hooks (display duplex).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -92,6 +95,12 @@ public:
         std::function<SpectrumWidget*(SliceModel*)> spectrumFor;
         // This computer's VAX outputs (VAX 1, VAX 2). May be null.
         AudioEngine* vaxDevices{nullptr};
+        // Parity Task 31 (A11): DUP, the window's DisplayDuplex setting:
+        // whether it is on, the click, and why it cannot change (a remote
+        // window on a Core below txDisplayVersion 3), empty when it can.
+        std::function<bool()> displayDuplexOn;
+        std::function<void(bool)> setDisplayDuplex;
+        std::function<QString()> displayDuplexReason;
     };
 
     struct State {

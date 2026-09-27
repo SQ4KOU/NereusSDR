@@ -44,6 +44,12 @@
 //               slice or binding that moves while keyed cannot move the
 //               transmit display to another pan. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-27: Parity Task 31 (A11, R-R3-49): display duplex. A peer that
+//               declared txDisplayVersion 3 may add `duplex` to a
+//               subscribe; such an endpoint is no viewer of the transmit
+//               display and keeps its receive frames while keyed, and its
+//               device's DUP reaches RadioModel for noise blanking. J.J.
+//               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/NoiseFloorEstimator.h"
@@ -331,6 +337,11 @@ public:
     /// transmit display now (a viewer of RadioModel's TxDisplayFeed).
     bool txDisplayNegotiated() const noexcept { return m_txDisplayNegotiated; }
     bool transmitDisplayActive(quint32 endpointId) const;
+    /// Parity Task 31 (A11): whether an endpoint's subscribe carried
+    /// `duplex` true, and the device this controller told RadioModel has
+    /// DUP on (empty for none).
+    bool endpointDuplex(quint32 endpointId) const;
+    QByteArray displayDuplexDevice() const { return m_duplexDevice; }
 
     RemoteMicReceiver* micReceiver() const { return m_micReceiver.get(); }
     /// Task 36: the keying's view of the line (RemoteKeying::setMicUplink;
@@ -456,6 +467,9 @@ private:
     /// Records the transmit slice's pan at the rise (keyed true) and
     /// forgets it at the fall.
     void recordTransmitPan(bool keyed);
+    // Parity Task 31: this session's device's DUP (any endpoint subscribed
+    // with `duplex` true) to RadioModel::setDeviceDisplayDuplex.
+    void refreshDeviceDisplayDuplex();
     std::optional<QJsonObject> transmitContextFor(const EndpointEntry& entry) const;
     void onTransmitPlane(const QVector<float>& dbm, bool waterfall);
     bool trySendTransmitFrame(quint32 endpointId, MediaPeer* peer, quint64 epoch,
@@ -598,6 +612,10 @@ private:
     bool m_receiverAudioNegotiated{false};
     // Parity Task 28: this session's start declared txDisplayVersion.
     bool m_txDisplayNegotiated{false};
+    // Parity Task 31: the version it declared (3 and above: `duplex`), and
+    // the device whose DUP this controller last told RadioModel is on.
+    quint32 m_txDisplayDeclared{0};
+    QByteArray m_duplexDevice;
     QPointer<TxDisplayFeed> m_txFeed;
     QMetaObject::Connection m_txArbiterConnection;
     /// The transmitting pan, recorded at the keyed rise and used until the

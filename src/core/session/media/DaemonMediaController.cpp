@@ -40,6 +40,13 @@
 //               statistics and the transmit I/Q send path's counters
 //               (R-IOS-13, R-R3-42). J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-09-27: Parity Task 31 (A11, R-R3-49): display duplex. An endpoint
+//               whose subscribe carries `duplex` true (a peer that declared
+//               txDisplayVersion 3) is no viewer while keyed and keeps its
+//               receive frames, its contexts `transmit` false; its device's
+//               DUP reaches RadioModel, which turns noise blanking off
+//               while keyed as Thetis does. J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/media/DaemonMediaController.h"
@@ -398,6 +405,9 @@ struct DaemonMediaController::EndpointEntry {
     // sent (without its generation, to tell when a new one is due), and the
     // analyzer's newest planes waiting to go.
     std::optional<std::pair<float, float>> txWindow;
+    // Parity Task 31: the subscribe's `duplex` (txDisplayVersion 3): while
+    // keyed this endpoint keeps the receiver.
+    bool duplex{false};
     std::unique_ptr<TxViewerLease> txViewer;
     QJsonObject txSentShape;
     bool txContextSent{false};
@@ -683,6 +693,10 @@ DaemonMediaController::DaemonMediaController(StationServer* server,
 DaemonMediaController::~DaemonMediaController()
 {
     if (m_radioModel) {
+        // Parity Task 31: this device's DUP goes with its media.
+        if (!m_duplexDevice.isEmpty()) {
+            m_radioModel->setDeviceDisplayDuplex(m_duplexDevice, false);
+        }
         m_radioModel->pureSignalFacade()->disconnect(this);
         if (m_radioModel->sliceOwnership()) {
             m_radioModel->sliceOwnership()->disconnect(this);
@@ -1509,6 +1523,7 @@ bool DaemonMediaController::handleStart(const QJsonObject& control)
     // does a subscribe carry the transmit window and a context `transmit`,
     // and only then does the transmitting pan get the transmit display.
     const bool declaresTxDisplay = control.contains(QStringLiteral("txDisplayVersion"));
+    quint32 declaredTxDisplay = 0;
     if (declaresTxDisplay) {
         legacyShape.remove(QStringLiteral("txDisplayVersion"));
         quint32 txDisplayVersion = 0;
@@ -1518,6 +1533,7 @@ bool DaemonMediaController::handleStart(const QJsonObject& control)
             || txDisplayVersion < 1) {
             return false;
         }
+        declaredTxDisplay = txDisplayVersion;
     }
     if (!exactKeys(legacyShape, {"op", "connectionId"})
         || !canonicalConnectionId(control.value(QStringLiteral("connectionId")))) {
@@ -1667,6 +1683,8 @@ bool DaemonMediaController::handleStart(const QJsonObject& control)
     m_receiverAudioNegotiated = declaresReceiverAudio;
     m_headphonesMixNegotiated = declaresHeadphonesMix;
     m_txDisplayNegotiated = declaresTxDisplay;
+    // Parity Task 31: 3 and above may add `duplex` to a subscribe.
+    m_txDisplayDeclared = declaredTxDisplay;
     if (declaresTxDisplay) {
         wireTxDisplayFeed();
     }
@@ -1904,8 +1922,16 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
         legacyShape.remove(QStringLiteral("txMinDbm"));
         legacyShape.remove(QStringLiteral("txMaxDbm"));
     }
+    // Parity Task 31 (R-R3-49, A11): `duplex`, a boolean, only from a peer
+    // whose start declared txDisplayVersion 3 or more.
+    const bool duplexPresent = control.contains(QStringLiteral("duplex"));
+    if (duplexPresent) {
+        legacyShape.remove(QStringLiteral("duplex"));
+    }
     DisplayExtrasRequest extrasRequest;
-    if ((txWindowPresent && (!m_txDisplayNegotiated
+    if ((duplexPresent && (!m_txDisplayNegotiated || m_txDisplayDeclared < 3
+                           || !control.value(QStringLiteral("duplex")).isBool()))
+        || (txWindowPresent && (!m_txDisplayNegotiated
                              || !control.contains(QStringLiteral("txMinDbm"))
                              || !control.contains(QStringLiteral("txMaxDbm"))))
         || (widebandNegotiated && (!m_server || !m_server->remoteWidebandAvailable(m_epoch)
@@ -2198,6 +2224,7 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
     if (txWindowPresent) {
         entry.txWindow = std::pair{static_cast<float>(txMinDbm), static_cast<float>(txMaxDbm)};
     }
+    entry.duplex = duplexPresent && control.value(QStringLiteral("duplex")).toBool();
     if (!extrasRequest.empty()) {
         entry.extras = std::make_unique<DisplayExtrasProcessor>(extrasRequest);
     }
@@ -2228,7 +2255,7 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
     // Parity Task 28: an endpoint showing the transmit display keeps its
     // place among the viewers, and its new request moves its view (a pan or
     // zoom on the transmitting pan moves the analyzer when it governs).
-    if (replaced.has_value() && replaced->txViewer) {
+    if (replaced.has_value() && replaced->txViewer && !m_endpoints.at(endpointId).duplex) {
         EndpointEntry& current = m_endpoints.at(endpointId);
         current.txViewer = std::move(replaced->txViewer);
         current.endpoint.reset();
@@ -2245,6 +2272,7 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
     }
     forgetNonliveOperation(endpointId);
     refreshDisplayBudgetPacer();
+    refreshDeviceDisplayDuplex();
     if (revisioned) {
         sendAllocationResult(m_peer->connectionId(), endpointId, revision, true, {});
     }
@@ -3736,6 +3764,34 @@ void DaemonMediaController::recordTransmitPan(bool keyed)
     m_txRiseSliceId = tx->sliceIndex();
 }
 
+bool DaemonMediaController::endpointDuplex(quint32 endpointId) const
+{
+    const auto it = m_endpoints.find(endpointId);
+    return it != m_endpoints.end() && it->second.duplex;
+}
+
+void DaemonMediaController::refreshDeviceDisplayDuplex()
+{
+    if (!m_radioModel) {
+        return;
+    }
+    bool duplex = false;
+    for (const auto& [unused, entry] : m_endpoints) {
+        Q_UNUSED(unused);
+        duplex = duplex || entry.duplex;
+    }
+    const QByteArray device = duplex && m_server ? m_server->mediaSessionDevice(m_epoch)
+                                                 : QByteArray();
+    if (!m_duplexDevice.isEmpty() && m_duplexDevice != device) {
+        m_radioModel->setDeviceDisplayDuplex(m_duplexDevice, false);
+        m_duplexDevice.clear();
+    }
+    if (!device.isEmpty() && m_duplexDevice != device) {
+        m_radioModel->setDeviceDisplayDuplex(device, true);
+        m_duplexDevice = device;
+    }
+}
+
 bool DaemonMediaController::endpointOnTransmitPan(const EndpointEntry& entry) const
 {
     if (!m_radioModel || !m_txRiseRecorded) {
@@ -3827,7 +3883,10 @@ void DaemonMediaController::reconcileTransmitDisplay()
         auto it = m_endpoints.find(endpointId);
         if (it == m_endpoints.end()) { continue; }
         EndpointEntry& entry = it->second;
-        const bool wanted = keyed && endpointOnTransmitPan(entry);
+        // Parity Task 31: an endpoint subscribed with `duplex` keeps the
+        // receiver while keyed (Thetis DisplayThread, console.cs:24281-24338
+        // [v2.10.3.15]: `if (bLocalMox && !_display_duplex)`).
+        const bool wanted = keyed && !entry.duplex && endpointOnTransmitPan(entry);
         if (wanted && !entry.txViewer) {
             // The rise, for this endpoint: no receive frame from now until
             // the fall. It views the transmit display centred on the carrier
@@ -4120,6 +4179,7 @@ void DaemonMediaController::removeEndpoint(quint32 endpointId, bool retainOperat
     releaseSourceIfUnused(key);
     rebalanceSourceAfterDeparture(key);
     refreshDisplayBudgetPacer();
+    refreshDeviceDisplayDuplex();
 }
 
 void DaemonMediaController::rebalanceSourceAfterDeparture(const MediaSourceKey& key)
@@ -4789,6 +4849,7 @@ void DaemonMediaController::clearProduction()
     }
     m_endpoints.clear();
     m_roundRobinCursor = 0;
+    refreshDeviceDisplayDuplex();
     // An engine nobody else watches stops; one another device still
     // watches keeps running for it, sized to its own pans.
     for (const MediaSourceKey& key : keys) {
