@@ -42,6 +42,9 @@
 //               write moves the Core's plan (D79; R-IOS-11, R-R3-49).
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-27: the `display` key (R-IOS-18, R-IOS-27, R-R3-08). J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -86,6 +89,7 @@ namespace {
 const QSet<QString> kTopLevelKeys{
     QStringLiteral("modes"),       QStringLiteral("filterPresets"), QStringLiteral("tuneSteps"),
     QStringLiteral("agc"),         QStringLiteral("receive"),       QStringLiteral("meters"),
+    QStringLiteral("display"),
     QStringLiteral("board"),       QStringLiteral("bands"),
     QStringLiteral("bandPlans"),   QStringLiteral("palettes"),      QStringLiteral("sliceColours"),
     QStringLiteral("tools"),       QStringLiteral("radioItems"),    QStringLiteral("audio"),
@@ -312,6 +316,32 @@ void checkDesktopValues(const QJsonObject& catalog, HPSDRModel model, ProtocolVe
     QCOMPARE(kAmsqThreshMaxDb, 0);
     QCOMPARE(kFmsqThreshMinDb, -160);
     QCOMPARE(kFmsqThreshMaxDb, 0);
+
+    // Display: Setup > Display's controls from ControlRanges.h, in the
+    // pages' order (tst_display_catalogue holds each against the page).
+    const QJsonObject display = catalog.value(QStringLiteral("display")).toObject();
+    QStringList displayKeys;
+    for (const QJsonValue& value : display.value(QStringLiteral("controls")).toArray()) {
+        displayKeys.append(value.toObject().value(QStringLiteral("settingsKey")).toString());
+    }
+    QCOMPARE(displayKeys,
+             (QStringList{QString::fromLatin1(kDisplayFftSizeKey),
+                          QString::fromLatin1(kDisplayFftWindowKey),
+                          QString::fromLatin1(kDisplayHzPerBinTargetKey),
+                          QString::fromLatin1(kDisplaySpectrumFpsKey),
+                          QString::fromLatin1(kDisplaySpectrumDetectorKey),
+                          QString::fromLatin1(kDisplaySpectrumAveragingKey),
+                          QString::fromLatin1(kDisplaySpectrumAvgTimeKey),
+                          QString(), // Decimation: no desktop setting
+                          QString::fromLatin1(kDisplayWaterfallDetectorKey),
+                          QString::fromLatin1(kDisplayWaterfallAveragingKey),
+                          QString::fromLatin1(kDisplayWaterfallAvgTimeKey)}));
+    QCOMPARE(display.value(QStringLiteral("fftPlan")).toObject(),
+             (QJsonObject{{QStringLiteral("minFftSize"), kDisplayFftPlanMinSize},
+                          {QStringLiteral("maxFftSize"), kDisplayFftPlanMaxSize}}));
+    // Thetis's FFT size slider, 4096 x 2^0..6 (setup.cs:16189 [v2.10.3.15]).
+    QCOMPARE(displayFftSizeAt(0), 4096);
+    QCOMPARE(displayFftSizeAt(kDisplayFftSizePositionMax), 262144);
 
     // Meters: the S-meter's scale and the three transmit gauges.
     const QJsonObject meters = catalog.value(QStringLiteral("meters")).toObject();

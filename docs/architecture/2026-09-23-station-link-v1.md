@@ -2913,8 +2913,8 @@ transmitter disturbs nobody and applies at once, and `state` is never
 
 The `catalog` object's `json` is one JSON object (RFC 8259, UTF-8,
 compact) holding the values the Core owns and an app shows: the modes, the
-Core's filter presets, the tune steps, the AGC, receive and gauge ranges, the
-radio's capabilities, the band buttons, the band plans, the waterfall
+Core's filter presets, the tune steps, the AGC, receive and gauge ranges,
+Setup > Display's controls, the radio's capabilities, the band buttons, the band plans, the waterfall
 palettes, the slice colours and the Core's tools (`StationCatalog`, spec section 4.10). An app
 draws its controls from it and carries no table of its own, so a Hermes
 Lite 2 and an ANAN-G2 each get their own. It is the same for every device
@@ -2933,7 +2933,7 @@ moves it by one, so the three settings of one preset move it once. The new
 value reaches a connected client as a `delta` (section 7.2).
 
 **Size.** At most 256 KiB of `json` for the largest radio
-(`StationCatalog::kMaxJsonBytes`); today's are about 61 KiB, most of it the
+(`StationCatalog::kMaxJsonBytes`); today's are about 65 KiB, most of it the
 band plans and their spots.
 
 **Units and forms.** A key names its unit (`Hz`, `Db`, `Dbm`, `W`);
@@ -2942,7 +2942,8 @@ Colours are `#RRGGBB`, upper case. Labels are the desktop's own words,
 shown as sent. A key an app does not know is ignored; an app given an
 empty `json` (the stand-in of section 16.3) has no catalogue yet.
 
-The object has exactly these fourteen keys:
+The object has exactly these fifteen keys (a Core from before `display`
+sends fourteen; an app detects `display` by its presence):
 
 | Key | Holds |
 | --- | --- |
@@ -2952,6 +2953,7 @@ The object has exactly these fourteen keys:
 | `agc` | `{modes: [{id, label}], thresholdDb: {min, max, step}}`: the AGC modes an operator picks (`id` the slice's `agcMode`: `Off`, `Long`, `Slow`, `Med`, `Fast`), and AGC-T's range for `agcThreshold`. The Modes tab's AGC section shows no other range; a later one arrives as another `{min, max, step}` key named after the setting it bounds |
 | `receive` | `{afGain, ssqlThresh, amsqThresh, fmsqThresh}`, each `{min, max, step}` for the slice setting of that name, as the desktop's own control holds it: `afGain` 0 to 100 in the AF slider's units, `ssqlThresh` 0 to 100 in the SQL slider's units, `amsqThresh` and `fmsqThresh` -160 to 0 dB; every step 1 |
 | `meters` | The gauges an app draws (below) |
+| `display` | Setup > Display's FFT, rendering and waterfall controls (below) |
 | `board` | The radio (below) |
 | `bands` | `[{id, label}]`: the desktop's per-pan BAND grid, in its order (160, 80, 60, 40, 30, 20, 17, 15, 12, 10, 6, WWV); `id` is the band as `slice.selectBand` takes it (0 for 160 m to 10 for 6 m, 12 for WWV) and `label` is the button's text. The desktop draws its grid from the same table, so the two cannot differ |
 | `bandPlans` | `[{id, name, default, active, segments: [{lowHz, highHz, label, licence, lowestClass, colour}], spots: [{hz, label}]}]`: every bundled plan, `id` its file's name (`arrl-us`), `default` true on ARRL (US) alone, `active` true on the Core's own plan alone (the plan settings `BandPlanName` names; a Core from before `active` sends none, and an app then reads `BandPlanName`); `spots` are the plan's marked frequencies, as its file lists them, `hz` the frequency in whole hertz and `label` the file's text (the desktop's strip draws each as a dot, without its label); `licence` lists the licence classes (`E,G`), empty for a beacon or no transmit; `lowestClass` is the lowest class the segment allows, as the desktop's band-plan strip names it after the label (`PHONE General`): `Tech` when `licence` holds T, else `General` when it holds G, `Extra` when it is exactly `E`, and empty otherwise |
@@ -2985,6 +2987,72 @@ The object has exactly these fourteen keys:
 | `pureSignal` | Whether it has PureSignal |
 | `paRatingW` | Its PA rating in watts |
 | `micJack` | Whether it has a microphone input of its own |
+
+`display`: `{controls, binWidth, fftPlan}`, the desktop's Spectrum Defaults
+and Waterfall Defaults controls from the one table the desktop page reads
+(`ControlRanges.h`), so the two cannot differ. It is the same on every radio.
+
+`controls` is a list, in the pages' order, of `{settingsKey, scope,
+subscribe, page, group, label, kind, default}` and, by `kind`, either
+`options: [{value, label}]` or `min`, `max`, `step`, `unit`, `decimals`:
+
+- `settingsKey`: the desktop's settings key for pan 0 (`null` for
+  Decimation, which the desktop keeps in its engines, not its settings).
+- `scope`: `station` for the Core's own settings (`DisplayFftSize`,
+  `DisplayFftWindow`, `DisplayHzPerBinTarget`, `DisplaySpectrumFps`), which
+  a device reads and writes with `settings.write` (section 8); `device` for
+  each device's own value, which it keeps per pan and sends in its spectrum
+  subscription.
+- `subscribe`: the spectrum subscription field the value reaches (remote
+  media control v1): `fftSize` (by the rule below), `windowType`, `fps`,
+  `trace.detector`, `trace.averageMode`, `waterfall.detector`,
+  `waterfall.averageMode`, `averageTimeMs` and `waterfallAverageTimeMs`
+  (display extras v1, `displayExtrasVersion`), and `decimation`
+  (`spectrumGrantVersion` 2).
+- `page` and `group`: the desktop page and group box it sits in
+  (`Spectrum Defaults` / `Fast Fourier Transform` or `Rendering`;
+  `Waterfall Defaults` / `Display`); `label` is the control's own text.
+- `kind`: `choice` (a list; `value` is what is stored and sent), or
+  `slider` (a range). A slider with `options` steps through them in order:
+  the FFT Size slider's seven sizes, 4096 to 262144, each a power of two.
+- `default`: the value the desktop applies when nothing is stored.
+- The Hz/bin Target adds `offValue` 0 and `offLabel` `Off`: the control
+  shows Off at 0.
+
+| Control | Key | Scope | Kind and range | Default |
+| --- | --- | --- | --- | --- |
+| Size | `DisplayFftSize` | station | slider over 4096, 8192, ..., 262144 | 4096 |
+| Window | `DisplayFftWindow` | station | Rectangular, Blackman-Harris 4T, Hann, Flat-Top, Hamming, Kaiser, Blackman-Harris 7T (0 to 6) | 1 |
+| Hz/bin Target | `DisplayHzPerBinTarget` | station | 0 to 200 step 0.5, 2 places, `Hz/bin`, 0 is Off | 0 |
+| FPS | `DisplaySpectrumFps` | station | 10 to 60 step 1, `fps` | 30 |
+| Spectrum Detector | `DisplaySpectrumDetector` | device | Peak, Rosenfell, Average, Sample, RMS (0 to 4) | 0 |
+| Spectrum Averaging | `DisplaySpectrumAveraging` | device | None, Recursive, Time Window, Log Recursive (0 to 3) | 3 |
+| Spectrum Avg Time | `DisplaySpectrumAverageTimeMs` | device | 10 to 9999 step 10, `ms` | 30 |
+| Decimation | none | device | 1 to 32 step 1 | 1 |
+| WF Detector | `DisplayWaterfallDetector` | device | Peak, Rosenfell, Average, Sample (0 to 3) | 0 |
+| WF Averaging | `DisplayWaterfallAveraging` | device | None, Recursive, Time Window, Log Recursive (0 to 3) | 0 |
+| WF Avg Time | `DisplayWaterfallAverageTimeMs` | device | 10 to 9999 step 10, `ms` | 120 |
+
+`binWidth` is `{label, decimals}`, the readout beside the FFT size: `Bin
+Width (Hz)`, the pan's sample rate over its FFT size, to 3 places (the
+rate is one of the board's `sampleRates`, so an ANAN-G2 and a Hermes Lite
+2 read different widths for one size; the rule is the same).
+
+`fftPlan` is `{minFftSize, maxFftSize}` (1024 and 262144), the sizes a pan
+asks for, as a desktop remote window asks (its `plannedFftSize`). With
+`round(x)` the smallest power of two from `minFftSize` up that is at least
+`x`, and no more than `maxFftSize`:
+
+    wanted = sampleRateHz x pixels / spanHz
+    if DisplayHzPerBinTarget > 0: wanted = max(wanted, sampleRateHz / DisplayHzPerBinTarget)
+    fftSize = max(round(DisplayFftSize), round(wanted))
+
+and the subscription's `tier` is `fine` when `fftSize` is above
+`round(DisplayFftSize)`, else `wide`. So the Size slider is the floor, and a
+Hz/bin target holds the bin width at or below the target at any zoom
+(`pixels` and `spanHz` are the subscription's own). The width the pan gets
+is the sample rate over the size the Core grants (its spectrum context's
+`grantedFftSize`), which may be less than asked.
 
 `offered` is the Core's: an item is listed as offered once the desktop has
 built it (CWX, Memory Manager, CAT Control and Transverters are not yet),
@@ -4832,7 +4900,7 @@ same on every machine.
 | `devices-not-offered` | A window at minor 11 that declares no features receives no `devices` object, and `station.rename` is refused "Update this app to manage this Core's paired devices." Runs on the station alone |
 | `devices-pairing` | On the same Core as `devices`, `pairing.open` and `pairing.close` each with a renamed argument are refused; `pairing.open` is accepted with `values` `code` as `"$string"`, and the object's next `delta` has `pairingWindowOpen` true and `pairingCode` `"$string"`; `pairing.close` is accepted and the next `delta` has them false and `""`. Runs on the station alone |
 | `devices-retire-token-refused`, `devices-retire-token` | On an upgraded Core, a token connection that declares `deviceAuth` receives the object with `tokenActive` true; `station.retireToken` is refused with no device paired, and with one paired it is accepted and the connection ends: `session.end` `pairingRequired`, `retryable` false. Run on the station alone |
-| `catalog-anan-g2`, `catalog-hermes-lite-2` | The connect sequence to `snapshot.complete` on the static radio as an ANAN-G2 and as a Hermes Lite 2: the capabilities in full, and the `catalog` object with its `json` in full and `revision` 1 (section 7.4). The two differ exactly where the radios do: the board's model, name, attenuator (0 to 31 against -28 to 31), sample rates (six against four), antennas (three plus three receive-only against one plus none), PA rating and microphone input, and the RF power gauge its rating scales. On a Core that has not changed its plan, ARRL (US) is both `default` and `active`, and every plan carries its file's `spots` |
+| `catalog-anan-g2`, `catalog-hermes-lite-2` | The connect sequence to `snapshot.complete` on the static radio as an ANAN-G2 and as a Hermes Lite 2: the capabilities in full, and the `catalog` object with its `json` in full and `revision` 1 (section 7.4). The two differ exactly where the radios do: the board's model, name, attenuator (0 to 31 against -28 to 31), sample rates (six against four), antennas (three plus three receive-only against one plus none), PA rating and microphone input, and the RF power gauge its rating scales; `display` is the same on both. On a Core that has not changed its plan, ARRL (US) is both `default` and `active`, and every plan carries its file's `spots` |
 | `settings-band-plan` | Two devices on a new Core: the fixture's device writes `BandPlanName` "IARU Region 1", and both devices get `settings.value` for it, then one catalogue `delta` each (`revision` 2) whose `json` marks `iaru-region1` alone `active` (`default` stays on ARRL (US)); a write of a plan the Core does not have gets `settings.reject` with the Core's value "IARU Region 1" and "This Core does not have that band plan.", to the writer alone; a `settings.remove` reaches both devices as an absent value, and the next `delta` (`revision` 3) marks ARRL (US) `active` again. The writing device's two deltas carry the catalogue's `json` in full; the other device's carry `active` and `default` for each plan and `"$any"` for the rest |
 | `connection-limit` | With twenty-four other connections still connecting, the station sends no `hello`: `session.end` "The Core already has as many connections as it allows. Try again shortly.", `retryable` true, then the close |
 | `lockout` | After five wrong tokens from other clients, the right token is refused as rate limited, `retryable` true |

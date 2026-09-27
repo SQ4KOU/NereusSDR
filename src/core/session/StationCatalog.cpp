@@ -27,6 +27,11 @@
 //               BandPlanManager::activePlanName()) and `spots` (D79;
 //               R-IOS-11, R-R3-49). J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-27: the `display` key, Setup > Display's FFT, Rendering and
+//               waterfall controls from ControlRanges.h, the table the
+//               desktop page reads (R-IOS-18, R-IOS-27, R-IOS-06,
+//               R-R3-08). J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationCatalog.h"
@@ -187,6 +192,160 @@ QJsonObject receiveObject()
          rangeObject(kAmsqThreshMinDb, kAmsqThreshMaxDb, kAmsqThreshStepDb)},
         {QStringLiteral("fmsqThresh"),
          rangeObject(kFmsqThreshMinDb, kFmsqThreshMaxDb, kFmsqThreshStepDb)},
+    };
+}
+
+// ── display ─────────────────────────────────────────────────────────────
+//
+// Setup > Display's Spectrum Defaults and Waterfall Defaults controls, from
+// the table the desktop page reads (ControlRanges.h). Each entry names the
+// desktop's settings key, where its value lives (`station`: a Core setting
+// a device writes with settings.write; `device`: each device's own, sent
+// in its spectrum subscription), the subscription field it reaches, and
+// the control as the desktop draws it. The same on every radio: the bin
+// width the FFT size gives is the pan's sample rate over the size, and the
+// rates are the board's (`board.sampleRates`).
+
+QJsonArray displayChoices(const ControlRanges::DisplayChoiceItem* items, std::size_t count)
+{
+    QJsonArray options;
+    for (std::size_t i = 0; i < count; ++i) {
+        options.append(QJsonObject{{QStringLiteral("value"), items[i].value},
+                                   {QStringLiteral("label"), QString::fromLatin1(items[i].label)}});
+    }
+    return options;
+}
+
+template <std::size_t N>
+QJsonArray displayChoices(const std::array<ControlRanges::DisplayChoiceItem, N>& items)
+{
+    return displayChoices(items.data(), items.size());
+}
+
+QJsonValue keyOrNull(const char* key)
+{
+    return key != nullptr ? QJsonValue(QString::fromLatin1(key)) : QJsonValue(QJsonValue::Null);
+}
+
+QJsonObject displayControl(const char* settingsKey, const char* scope, const char* subscribe,
+                           const char* page, const char* group, const char* label,
+                           const char* kind)
+{
+    return QJsonObject{
+        {QStringLiteral("settingsKey"), keyOrNull(settingsKey)},
+        {QStringLiteral("scope"), QString::fromLatin1(scope)},
+        {QStringLiteral("subscribe"), QString::fromLatin1(subscribe)},
+        {QStringLiteral("page"), QString::fromLatin1(page)},
+        {QStringLiteral("group"), QString::fromLatin1(group)},
+        {QStringLiteral("label"), QString::fromLatin1(label)},
+        {QStringLiteral("kind"), QString::fromLatin1(kind)},
+    };
+}
+
+QJsonObject displayChoice(QJsonObject control, const QJsonArray& options, int defaultValue)
+{
+    control.insert(QStringLiteral("options"), options);
+    control.insert(QStringLiteral("default"), defaultValue);
+    return control;
+}
+
+QJsonObject displaySlider(QJsonObject control, double min, double max, double step,
+                          const char* unit, int decimals, double defaultValue)
+{
+    control.insert(QStringLiteral("min"), min);
+    control.insert(QStringLiteral("max"), max);
+    control.insert(QStringLiteral("step"), step);
+    control.insert(QStringLiteral("unit"), QString::fromLatin1(unit));
+    control.insert(QStringLiteral("decimals"), decimals);
+    control.insert(QStringLiteral("default"), defaultValue);
+    return control;
+}
+
+QJsonObject displayObject()
+{
+    using namespace ControlRanges;
+    const char* const spectrum = kDisplaySpectrumPageTitle;
+    const char* const waterfall = kDisplayWaterfallPageTitle;
+    const char* const fft = kDisplayFftGroupTitle;
+    const char* const rendering = kDisplayRenderingGroupTitle;
+    const char* const wfGroup = kDisplayWaterfallGroupTitle;
+
+    // The FFT size slider steps through its seven sizes in order.
+    QJsonArray fftSizes;
+    for (int position = 0; position <= kDisplayFftSizePositionMax; ++position) {
+        const int size = displayFftSizeAt(position);
+        fftSizes.append(QJsonObject{{QStringLiteral("value"), size},
+                                    {QStringLiteral("label"), QString::number(size)}});
+    }
+    QJsonObject fftSize = displayControl(kDisplayFftSizeKey, "station", "fftSize", spectrum, fft,
+                                         kDisplayFftSizeLabel, "slider");
+    fftSize.insert(QStringLiteral("options"), fftSizes);
+    fftSize.insert(QStringLiteral("default"), kDisplayFftSizeDefault);
+
+    QJsonObject hzPerBin = displaySlider(
+        displayControl(kDisplayHzPerBinTargetKey, "station", "fftSize", spectrum, fft,
+                       kDisplayHzPerBinTargetLabel, "slider"),
+        kDisplayHzPerBinTargetMin, kDisplayHzPerBinTargetMax, kDisplayHzPerBinTargetStep,
+        kDisplayHzPerBinTargetUnit, kDisplayHzPerBinTargetDecimals,
+        kDisplayHzPerBinTargetDefault);
+    hzPerBin.insert(QStringLiteral("offValue"), kDisplayHzPerBinTargetMin);
+    hzPerBin.insert(QStringLiteral("offLabel"),
+                    QString::fromLatin1(kDisplayHzPerBinTargetOffLabel));
+
+    const QJsonArray controls{
+        fftSize,
+        displayChoice(displayControl(kDisplayFftWindowKey, "station", "windowType", spectrum,
+                                     fft, kDisplayFftWindowLabel, "choice"),
+                      displayChoices(kDisplayFftWindows), kDisplayFftWindowDefault),
+        hzPerBin,
+        displaySlider(displayControl(kDisplaySpectrumFpsKey, "station", "fps", spectrum,
+                                     rendering, kDisplaySpectrumFpsLabel, "slider"),
+                      kDisplaySpectrumFpsMin, kDisplaySpectrumFpsMax, kDisplaySpectrumFpsStep,
+                      kDisplaySpectrumFpsUnit, 0, kDisplaySpectrumFpsDefault),
+        displayChoice(displayControl(kDisplaySpectrumDetectorKey, "device", "trace.detector",
+                                     spectrum, rendering, kDisplaySpectrumDetectorLabel,
+                                     "choice"),
+                      displayChoices(kDisplaySpectrumDetectors), kDisplaySpectrumDetectorDefault),
+        displayChoice(displayControl(kDisplaySpectrumAveragingKey, "device",
+                                     "trace.averageMode", spectrum, rendering,
+                                     kDisplaySpectrumAveragingLabel, "choice"),
+                      displayChoices(kDisplayAveragingModes), kDisplaySpectrumAveragingDefault),
+        displaySlider(displayControl(kDisplaySpectrumAvgTimeKey, "device", "averageTimeMs",
+                                     spectrum, rendering, kDisplaySpectrumAvgTimeLabel,
+                                     "slider"),
+                      kDisplayAvgTimeMinMs, kDisplayAvgTimeMaxMs, kDisplayAvgTimeStepMs, "ms", 0,
+                      kDisplaySpectrumAvgTimeDefaultMs),
+        displaySlider(displayControl(nullptr, "device", "decimation", spectrum, rendering,
+                                     kDisplayDecimationLabel, "slider"),
+                      kDisplayDecimationMin, kDisplayDecimationMax, kDisplayDecimationStep, "", 0,
+                      kDisplayDecimationDefault),
+        displayChoice(displayControl(kDisplayWaterfallDetectorKey, "device",
+                                     "waterfall.detector", waterfall, wfGroup,
+                                     kDisplayWaterfallDetectorLabel, "choice"),
+                      displayChoices(kDisplayWaterfallDetectors),
+                      kDisplayWaterfallDetectorDefault),
+        displayChoice(displayControl(kDisplayWaterfallAveragingKey, "device",
+                                     "waterfall.averageMode", waterfall, wfGroup,
+                                     kDisplayWaterfallAveragingLabel, "choice"),
+                      displayChoices(kDisplayAveragingModes), kDisplayWaterfallAveragingDefault),
+        displaySlider(displayControl(kDisplayWaterfallAvgTimeKey, "device",
+                                     "waterfallAverageTimeMs", waterfall, wfGroup,
+                                     kDisplayWaterfallAvgTimeLabel, "slider"),
+                      kDisplayAvgTimeMinMs, kDisplayAvgTimeMaxMs, kDisplayAvgTimeStepMs, "ms", 0,
+                      kDisplayWaterfallAvgTimeDefaultMs),
+    };
+
+    // The readout beside the FFT size, and the sizes a pan asks for
+    // (RemoteMediaController's plannedFftSize): see the link document's
+    // section 7.4 for the rule.
+    return QJsonObject{
+        {QStringLiteral("controls"), controls},
+        {QStringLiteral("binWidth"),
+         QJsonObject{{QStringLiteral("label"), QString::fromLatin1(kDisplayBinWidthLabel)},
+                     {QStringLiteral("decimals"), kDisplayBinWidthDecimals}}},
+        {QStringLiteral("fftPlan"),
+         QJsonObject{{QStringLiteral("minFftSize"), kDisplayFftPlanMinSize},
+                     {QStringLiteral("maxFftSize"), kDisplayFftPlanMaxSize}}},
     };
 }
 
@@ -487,6 +646,7 @@ QJsonObject StationCatalog::build(const Inputs& inputs)
         {QStringLiteral("agc"), agcObject()},
         {QStringLiteral("receive"), receiveObject()},
         {QStringLiteral("meters"), metersObject(inputs)},
+        {QStringLiteral("display"), displayObject()},
         {QStringLiteral("board"), boardObject(inputs)},
         {QStringLiteral("bandPlans"), bandPlansArray(inputs)},
         {QStringLiteral("bands"), bandsArray()},

@@ -28,6 +28,11 @@
 //   2026-09-26 - R-R3-01 (parity Task 17 follow-up): Rendering >
 //                 Decimation applies to every pan's engine. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-27 - R-IOS-18 / R-IOS-27 / R-R3-08: the FFT, Rendering and
+//                waterfall Display controls' keys, labels, items, ranges
+//                and defaults are read from core/ControlRanges.h, the
+//                table the Core's catalogue sends an app. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -85,6 +90,7 @@
 #include "core/spectrum/WaterfallPalettes.h"
 #include "core/ClarityController.h"
 #include "core/AppSettings.h"
+#include "core/ControlRanges.h"
 #include "core/TxAnalyzer.h"
 #include "models/Band.h"
 #include "models/PanadapterModel.h"
@@ -144,7 +150,7 @@ QGroupBox* makePlaceholderGroup(const QString& title, const QString& phText, QWi
 // ---------------------------------------------------------------------------
 
 SpectrumDefaultsPage::SpectrumDefaultsPage(RadioModel* model, QWidget* parent)
-    : SetupPage(QStringLiteral("Spectrum Defaults"), model, parent)
+    : SetupPage(QString::fromLatin1(ControlRanges::kDisplaySpectrumPageTitle), model, parent)
 {
     buildUI();
     loadFromRenderer();
@@ -162,7 +168,7 @@ void SpectrumDefaultsPage::pushFps(int fps)
         sw->setDisplayFps(fps);
     }
     AppSettings::instance().setValue(
-        QStringLiteral("DisplaySpectrumFps"), QString::number(fps));
+        QLatin1String(ControlRanges::kDisplaySpectrumFpsKey), QString::number(fps));
     // Defensive: explicitly mirror to the spin readout.  makeSliderRow
     // wires a bidirectional slider<->spin connect that should already do
     // this, but JJ reported the spin readout sticking at 30 even when the
@@ -196,25 +202,27 @@ void SpectrumDefaultsPage::loadStationSpectrumSettings()
     // The station keys (SettingsScope: DisplayFftSize, DisplayFftWindow,
     // DisplayHzPerBinTarget, DisplaySpectrumFps) hold the Core's values in a
     // remote window; this window's own FFT engine is idle there.
+    using namespace ControlRanges;
     auto& settings = AppSettings::instance();
-    const int fftSize = settings.value(QStringLiteral("DisplayFftSize"),
-                                       QStringLiteral("4096")).toString().toInt();
-    int sliderVal = 0;
-    for (int n = fftSize / 4096; n > 1 && sliderVal < 6; n >>= 1) { ++sliderVal; }
-    const int window = qBound(0, settings.value(QStringLiteral("DisplayFftWindow"),
-                                  QString::number(int(WindowFunction::BlackmanHarris4)))
+    const int fftSize = settings.value(QLatin1String(kDisplayFftSizeKey),
+                                       QString::number(kDisplayFftSizeDefault)).toString().toInt();
+    const int sliderVal = displayFftSizePosition(fftSize);
+    const int window = qBound(0, settings.value(QLatin1String(kDisplayFftWindowKey),
+                                  QString::number(kDisplayFftWindowDefault))
                                   .toString().toInt(), int(WindowFunction::Count) - 1);
-    const double hzPerBin = settings.value(QStringLiteral("DisplayHzPerBinTarget"),
-                                           QStringLiteral("0")).toString().toDouble();
-    const int fps = qBound(1, settings.value(QStringLiteral("DisplaySpectrumFps"),
-                                  QStringLiteral("30")).toString().toInt(), 60);
+    const double hzPerBin = settings.value(QLatin1String(kDisplayHzPerBinTargetKey),
+                                           QString::number(kDisplayHzPerBinTargetDefault))
+                                .toString().toDouble();
+    const int fps = qBound(1, settings.value(QLatin1String(kDisplaySpectrumFpsKey),
+                                  QString::number(kDisplaySpectrumFpsDefault))
+                                  .toString().toInt(), 60);
     {
         QSignalBlocker b1(m_fftSizeSlider);
         QSignalBlocker b2(m_windowCombo);
         QSignalBlocker b3(m_hzPerBinTargetSpin);
         QSignalBlocker b4(m_fpSlider);
         QSignalBlocker b5(m_fpSpin);
-        m_fftSizeSlider->setValue(qBound(0, sliderVal, 6));
+        m_fftSizeSlider->setValue(qBound(0, sliderVal, kDisplayFftSizePositionMax));
         m_windowCombo->setCurrentIndex(window);
         m_hzPerBinTargetSpin->setValue(std::isfinite(hzPerBin) ? hzPerBin : 0.0);
         m_fpSlider->setValue(fps);
@@ -231,8 +239,9 @@ void SpectrumDefaultsPage::refreshGrantedReadouts()
     auto* sw = model() ? model()->spectrumWidget() : nullptr;
     const int granted = sw ? sw->remoteGrantedFftSize() : 0;
     const int size = granted > 0 ? granted
-        : AppSettings::instance().value(QStringLiteral("DisplayFftSize"),
-                                        QStringLiteral("4096")).toString().toInt();
+        : AppSettings::instance().value(QLatin1String(ControlRanges::kDisplayFftSizeKey),
+                                        QString::number(ControlRanges::kDisplayFftSizeDefault))
+              .toString().toInt();
     if (m_fftSizeReadout) {
         m_fftSizeReadout->setText(QString::number(size));
     }
@@ -272,12 +281,8 @@ void SpectrumDefaultsPage::loadFromRenderer()
     //   FFTSize = 4096 * Math.Pow(2, Math.Floor(slider.Value))
     // Inverse: slider = log2(FFTSize / 4096), clamped to [0, 6].
     const int fs = fe->fftSize();
-    int sliderVal = 0;
-    if (fs > 4096) {
-        int n = fs / 4096;
-        while (n > 1 && sliderVal < 6) { n >>= 1; ++sliderVal; }
-    }
-    sliderVal = qBound(0, sliderVal, 6);
+    const int sliderVal = qBound(0, ControlRanges::displayFftSizePosition(fs),
+                                 ControlRanges::kDisplayFftSizePositionMax);
     m_fftSizeSlider->setValue(sliderVal);
     if (m_fftSizeReadout) {
         m_fftSizeReadout->setText(QString::number(fs));
@@ -289,7 +294,8 @@ void SpectrumDefaultsPage::loadFromRenderer()
         const double sampleRate = fe->sampleRate();
         const double bw = (fs > 0) ? sampleRate / fs : 0.0;
         m_binWidthLabel->setText(
-            bw > 0.0 ? QString::number(bw, 'f', 3) : QStringLiteral("0.000"));
+            bw > 0.0 ? QString::number(bw, 'f', ControlRanges::kDisplayBinWidthDecimals)
+                     : QStringLiteral("0.000"));
     }
 
     // FFT window -- enum value matches combo index 1:1 (both follow WDSP
@@ -495,7 +501,7 @@ void SpectrumDefaultsPage::buildUI()
     // express the 4-cell "prefix + value + prefix + value" pattern Thetis
     // uses for the bin-width / FFT-size readout row.
     auto* fftGroup = new QGroupBox(
-        QStringLiteral("Fast Fourier Transform"), this);
+        QString::fromLatin1(ControlRanges::kDisplayFftGroupTitle), this);
     auto* fftGrid = new QGridLayout(fftGroup);
     fftGrid->setSpacing(6);
     fftGrid->setColumnStretch(0, 0);
@@ -520,7 +526,7 @@ void SpectrumDefaultsPage::buildUI()
     // Row 0: centered "Size" header label.  Mirrors Thetis labelTS139
     // ("Size") at (118, 13) [v2.10.3.13] -- centered horizontally over
     // the slider's middle.
-    auto* sizeHeader = new QLabel(QStringLiteral("Size"), fftGroup);
+    auto* sizeHeader = new QLabel(QLatin1String(ControlRanges::kDisplayFftSizeLabel), fftGroup);
     sizeHeader->setAlignment(Qt::AlignHCenter);
     fftGrid->addWidget(sizeHeader, 0, 1, 1, 2);  // span cols 1-2 (centered)
 
@@ -537,12 +543,14 @@ void SpectrumDefaultsPage::buildUI()
     // (Maximum=6, Value=5, no tick marks).  Mapping per setup.cs:16148:
     //   FFTSize = 4096 * Math.Pow(2, Math.Floor(slider.Value))
     // i.e. slider 0..6 -> {4096, 8192, 16384, 32768, 65536, 131072, 262144}.
+    // The range, the positions' sizes and the start come from
+    // ControlRanges.h (the catalogue's `display` table).
     m_fftSizeSlider = new QSlider(Qt::Horizontal, fftGroup);
-    m_fftSizeSlider->setRange(0, 6);
+    m_fftSizeSlider->setRange(0, ControlRanges::kDisplayFftSizePositionMax);
     m_fftSizeSlider->setSingleStep(1);
     m_fftSizeSlider->setPageStep(1);
     m_fftSizeSlider->setTickPosition(QSlider::NoTicks);
-    m_fftSizeSlider->setValue(5);
+    m_fftSizeSlider->setValue(ControlRanges::kDisplayFftSizeSliderInitial);
     m_fftSizeSlider->setToolTip(QStringLiteral(
         "FFT size used for spectrum analysis. Range 4096 to 262144 in "
         "powers of two. Larger = finer frequency resolution and a smaller "
@@ -559,7 +567,7 @@ void SpectrumDefaultsPage::buildUI()
     // ("Bin Width (Hz)") at (6, 79) + lblDisplayBinWidth at (87, 79)
     // [v2.10.3.13].
     auto* binWidthPrefix =
-        new QLabel(QStringLiteral("Bin Width (Hz)"), fftGroup);
+        new QLabel(QLatin1String(ControlRanges::kDisplayBinWidthLabel), fftGroup);
     m_binWidthLabel = new QLabel(QStringLiteral("0.000"), fftGroup);
     m_binWidthLabel->setMinimumWidth(54);
     m_binWidthLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
@@ -584,21 +592,17 @@ void SpectrumDefaultsPage::buildUI()
 
     // Row 3: "Window" prefix + combo.  Thetis labelTS147 ("Window") at
     // (6, 101) + comboDispWinType at (83, 101) [v2.10.3.13].
-    auto* windowPrefix = new QLabel(QStringLiteral("Window"), fftGroup);
+    auto* windowPrefix = new QLabel(QLatin1String(ControlRanges::kDisplayFftWindowLabel), fftGroup);
     m_windowCombo = new QComboBox(fftGroup);
     // 7 items, ordering verbatim per Thetis comboDispWinType.Items at
     // setup.designer.cs:34966-34973 [v2.10.3.13].  Combo index maps 1:1
     // to WindowFunction enum integer (both follow WDSP analyzer.c case
     // ordering, so no remap needed).
-    m_windowCombo->addItems({
-        QStringLiteral("Rectangular"),         // WindowFunction::Rectangular     (0)
-        QStringLiteral("Blackman-Harris 4T"),  // WindowFunction::BlackmanHarris4 (1)
-        QStringLiteral("Hann"),                // WindowFunction::Hann            (2)
-        QStringLiteral("Flat-Top"),            // WindowFunction::FlatTop         (3)
-        QStringLiteral("Hamming"),             // WindowFunction::Hamming         (4)
-        QStringLiteral("Kaiser"),              // WindowFunction::Kaiser          (5)
-        QStringLiteral("Blackman-Harris 7T")   // WindowFunction::BlackmanHarris7 (6)
-    });
+    // The items (ControlRanges::kDisplayFftWindows) are in Thetis's order,
+    // each at its WindowFunction's index.
+    for (const ControlRanges::DisplayChoiceItem& item : ControlRanges::kDisplayFftWindows) {
+        m_windowCombo->addItem(QLatin1String(item.label));
+    }
     m_windowCombo->setToolTip(QStringLiteral(
         "FFT window function. Rectangular has the narrowest main lobe but "
         "the worst sidelobes. Blackman-Harris (4T or 7T) gives strong "
@@ -613,13 +617,17 @@ void SpectrumDefaultsPage::buildUI()
     // varies).  > 0 = lock Hz/bin at the given value regardless of zoom
     // (useful for hunting narrow CW/digital signals where you want the
     // same frequency resolution at any zoom).
-    auto* hzPerBinPrefix = new QLabel(QStringLiteral("Hz/bin Target"), fftGroup);
+    auto* hzPerBinPrefix = new QLabel(QLatin1String(ControlRanges::kDisplayHzPerBinTargetLabel),
+                                      fftGroup);
     m_hzPerBinTargetSpin = new QDoubleSpinBox(fftGroup);
-    m_hzPerBinTargetSpin->setRange(0.0, 200.0);
-    m_hzPerBinTargetSpin->setSingleStep(0.5);
-    m_hzPerBinTargetSpin->setDecimals(2);
-    m_hzPerBinTargetSpin->setSpecialValueText(QStringLiteral("Off"));
-    m_hzPerBinTargetSpin->setSuffix(QStringLiteral(" Hz/bin"));
+    m_hzPerBinTargetSpin->setRange(ControlRanges::kDisplayHzPerBinTargetMin,
+                                   ControlRanges::kDisplayHzPerBinTargetMax);
+    m_hzPerBinTargetSpin->setSingleStep(ControlRanges::kDisplayHzPerBinTargetStep);
+    m_hzPerBinTargetSpin->setDecimals(ControlRanges::kDisplayHzPerBinTargetDecimals);
+    m_hzPerBinTargetSpin->setSpecialValueText(
+        QLatin1String(ControlRanges::kDisplayHzPerBinTargetOffLabel));
+    m_hzPerBinTargetSpin->setSuffix(
+        QStringLiteral(" ") + QString::fromLatin1(ControlRanges::kDisplayHzPerBinTargetUnit));
     m_hzPerBinTargetSpin->setToolTip(QStringLiteral(
         "Auto-zoom override: target a constant Hz/bin regardless of zoom. "
         "Set to 0 (\"Off\") to use the default bins-in-window behaviour "
@@ -634,7 +642,7 @@ void SpectrumDefaultsPage::buildUI()
             fe->setHzPerBinTarget(v);
         }
         AppSettings::instance().setValue(
-            QStringLiteral("DisplayHzPerBinTarget"),
+            QLatin1String(ControlRanges::kDisplayHzPerBinTargetKey),
             QString::number(v));
         // Trigger immediate replan so the new policy applies without
         // waiting for the next zoom action.
@@ -651,8 +659,8 @@ void SpectrumDefaultsPage::buildUI()
     // notes; everything else ported).
     connect(m_fftSizeSlider, &QSlider::valueChanged,
             this, [this](int v) {
-        v = qBound(0, v, 6);
-        const int newSize = 4096 << v;
+        v = qBound(0, v, ControlRanges::kDisplayFftSizePositionMax);
+        const int newSize = ControlRanges::displayFftSizeAt(v);
 
         // Size readout (mirrors lblRX1FFT_size update at setup.cs:16153
         // [v2.10.3.13]).
@@ -678,7 +686,7 @@ void SpectrumDefaultsPage::buildUI()
             // but never wrote to AppSettings, so launch always reverted
             // to the FFTEngine ctor default (typically 4096).
             AppSettings::instance().setValue(
-                QStringLiteral("DisplayFftSize"),
+                QLatin1String(ControlRanges::kDisplayFftSizeKey),
                 QString::number(newSize));
         }
 
@@ -688,7 +696,7 @@ void SpectrumDefaultsPage::buildUI()
             const double sampleRate = fe->sampleRate();
             const double bw = (newSize > 0) ? sampleRate / newSize : 0.0;
             m_binWidthLabel->setText(
-                bw > 0.0 ? QString::number(bw, 'f', 3)
+                bw > 0.0 ? QString::number(bw, 'f', ControlRanges::kDisplayBinWidthDecimals)
                          : QStringLiteral("0.000"));
         }
 
@@ -734,26 +742,31 @@ void SpectrumDefaultsPage::buildUI()
         // never wrote to AppSettings, so launch always reverted to the
         // FFTEngine ctor default.
         AppSettings::instance().setValue(
-            QStringLiteral("DisplayFftWindow"),
+            QLatin1String(ControlRanges::kDisplayFftWindowKey),
             QString::number(clamped));
     });
 
     contentLayout()->addWidget(fftGroup);
 
     // --- Section: Rendering ---
-    auto* renderGroup = new QGroupBox(QStringLiteral("Rendering"), this);
+    auto* renderGroup = new QGroupBox(QString::fromLatin1(ControlRanges::kDisplayRenderingGroupTitle), this);
     auto* renderForm  = new QFormLayout(renderGroup);
     renderForm->setSpacing(6);
 
     {
-        auto row = makeSliderRow(10, 60, 30, QStringLiteral(" fps"), renderGroup);
+        auto row = makeSliderRow(ControlRanges::kDisplaySpectrumFpsMin,
+                                 ControlRanges::kDisplaySpectrumFpsMax,
+                                 ControlRanges::kDisplaySpectrumFpsDefault,
+                                 QStringLiteral(" ") + QString::fromLatin1(ControlRanges::kDisplaySpectrumFpsUnit),
+                                 renderGroup);
         m_fpSlider = row.slider;
         m_fpSpin   = row.spin;
         // Thetis: setup.designer.cs:33856 (udDisplayFPS) — Thetis original: "Frames Per Second (approximate)" (placeholder); rewritten
         m_fpSlider->setToolTip(QStringLiteral("Spectrum/waterfall redraw rate. Higher = smoother animation at cost of CPU."));
         row.spin->setToolTip(QStringLiteral("Spectrum/waterfall redraw rate. Higher = smoother animation at cost of CPU."));
         connect(m_fpSlider, &QSlider::valueChanged, this, [this](int v) { pushFps(v); });
-        renderForm->addRow(QStringLiteral("FPS:"), row.container);
+        renderForm->addRow(QString::fromLatin1(ControlRanges::kDisplaySpectrumFpsLabel)
+                               + QLatin1Char(':'), row.container);
     }
 
     // Legacy "Averaging" combo (None / Weighted / Logarithmic / Time Window)
@@ -768,14 +781,11 @@ void SpectrumDefaultsPage::buildUI()
     // Ported from Thetis comboDispPanDetector [v2.10.3.13]
     // (setup.designer.cs:34876): Peak / Rosenfell / Average / Sample / RMS.
     // RX1 scope dropped — pan-agnostic per design Section 1B.
+    // Items from ControlRanges::kDisplaySpectrumDetectors.
     m_spectrumDetectorCombo = new QComboBox(renderGroup);
-    m_spectrumDetectorCombo->addItems({
-        QStringLiteral("Peak"),
-        QStringLiteral("Rosenfell"),
-        QStringLiteral("Average"),
-        QStringLiteral("Sample"),
-        QStringLiteral("RMS")
-    });
+    for (const ControlRanges::DisplayChoiceItem& item : ControlRanges::kDisplaySpectrumDetectors) {
+        m_spectrumDetectorCombo->addItem(QLatin1String(item.label));
+    }
     // Thetis: setup.designer.cs:34876 (comboDispPanDetector) [v2.10.3.13] — no upstream tooltip; rewritten
     m_spectrumDetectorCombo->setToolTip(QStringLiteral(
         "Spectrum bin-reduction policy. Peak takes the maximum bin in each display pixel. "
@@ -787,17 +797,16 @@ void SpectrumDefaultsPage::buildUI()
             w->setSpectrumDetector(static_cast<SpectrumDetector>(i));
         }
     });
-    renderForm->addRow(QStringLiteral("Spectrum Detector:"), m_spectrumDetectorCombo);
+    renderForm->addRow(QString::fromLatin1(ControlRanges::kDisplaySpectrumDetectorLabel)
+                           + QLatin1Char(':'), m_spectrumDetectorCombo);
 
     // Ported from Thetis comboDispPanAveraging [v2.10.3.13]
     // (setup.designer.cs:34835): None / Recursive / Time Window / Log Recursive.
+    // Items from ControlRanges::kDisplayAveragingModes.
     m_spectrumAveragingCombo = new QComboBox(renderGroup);
-    m_spectrumAveragingCombo->addItems({
-        QStringLiteral("None"),
-        QStringLiteral("Recursive"),
-        QStringLiteral("Time Window"),
-        QStringLiteral("Log Recursive")
-    });
+    for (const ControlRanges::DisplayChoiceItem& item : ControlRanges::kDisplayAveragingModes) {
+        m_spectrumAveragingCombo->addItem(QLatin1String(item.label));
+    }
     // Thetis: setup.designer.cs:34835 (comboDispPanAveraging) [v2.10.3.13] — no upstream tooltip; rewritten
     m_spectrumAveragingCombo->setToolTip(QStringLiteral(
         "Spectrum frame-averaging mode. None shows raw FFT output per frame. "
@@ -810,7 +819,8 @@ void SpectrumDefaultsPage::buildUI()
             w->setSpectrumAveraging(static_cast<SpectrumAveraging>(i));
         }
     });
-    renderForm->addRow(QStringLiteral("Spectrum Averaging:"), m_spectrumAveragingCombo);
+    renderForm->addRow(QString::fromLatin1(ControlRanges::kDisplaySpectrumAveragingLabel)
+                           + QLatin1Char(':'), m_spectrumAveragingCombo);
 
     // Spectrum (panadapter) averaging time constant.
     // From Thetis udDisplayAVGTime [v2.10.3.13] (setup.designer.cs:34902).
@@ -818,11 +828,13 @@ void SpectrumDefaultsPage::buildUI()
     // the lower bound was bumped to 10 ms to keep the UI step coherent).
     // Spec widget computes α = exp(-1/(fps×τ)) internally; no hand-rolled
     // ms→alpha math here.
+    // Range, step and default from ControlRanges.h.
     m_averagingTimeSpin = new QSpinBox(renderGroup);
-    m_averagingTimeSpin->setRange(10, 9999);
-    m_averagingTimeSpin->setSingleStep(10);
+    m_averagingTimeSpin->setRange(ControlRanges::kDisplayAvgTimeMinMs,
+                                  ControlRanges::kDisplayAvgTimeMaxMs);
+    m_averagingTimeSpin->setSingleStep(ControlRanges::kDisplayAvgTimeStepMs);
     m_averagingTimeSpin->setSuffix(QStringLiteral(" ms"));
-    m_averagingTimeSpin->setValue(30);
+    m_averagingTimeSpin->setValue(ControlRanges::kDisplaySpectrumAvgTimeDefaultMs);
     m_averagingTimeSpin->setToolTip(QStringLiteral(
         "Spectrum averaging time constant. Larger = heavier smoothing, "
         "slower response. Translates to a frame-by-frame alpha via "
@@ -833,11 +845,14 @@ void SpectrumDefaultsPage::buildUI()
             w->setSpectrumAverageTimeMs(ms);
         }
     });
-    renderForm->addRow(QStringLiteral("Spectrum Avg Time:"), m_averagingTimeSpin);
+    renderForm->addRow(QString::fromLatin1(ControlRanges::kDisplaySpectrumAvgTimeLabel)
+                           + QLatin1Char(':'), m_averagingTimeSpin);
 
     m_decimationSpin = new QSpinBox(renderGroup);
-    m_decimationSpin->setRange(1, 32);
-    m_decimationSpin->setValue(1);
+    m_decimationSpin->setRange(ControlRanges::kDisplayDecimationMin,
+                               ControlRanges::kDisplayDecimationMax);
+    m_decimationSpin->setSingleStep(ControlRanges::kDisplayDecimationStep);
+    m_decimationSpin->setValue(ControlRanges::kDisplayDecimationDefault);
     // Thetis: setup.designer.cs:33732 (udDisplayDecimation) [v2.10.3.13]
     // Thetis original: "Display decimation. Higher the number, the lower the resolution."
     m_decimationSpin->setToolTip(QStringLiteral("Display decimation. Higher the number, the lower the resolution."));
@@ -853,7 +868,8 @@ void SpectrumDefaultsPage::buildUI()
             model()->fftEngine()->setDecimation(v);
         }
     });
-    renderForm->addRow(QStringLiteral("Decimation:"), m_decimationSpin);
+    renderForm->addRow(QString::fromLatin1(ControlRanges::kDisplayDecimationLabel)
+                           + QLatin1Char(':'), m_decimationSpin);
 
     m_fillToggle = new QCheckBox(QStringLiteral("Fill under trace"), renderGroup);
     // Thetis: setup.designer.cs:33749 (chkDisplayPanFill)
@@ -1409,7 +1425,7 @@ void SpectrumDefaultsPage::buildUI()
 // ---------------------------------------------------------------------------
 
 WaterfallDefaultsPage::WaterfallDefaultsPage(RadioModel* model, QWidget* parent)
-    : SetupPage(QStringLiteral("Waterfall Defaults"), model, parent)
+    : SetupPage(QString::fromLatin1(ControlRanges::kDisplayWaterfallPageTitle), model, parent)
 {
     buildUI();
     loadFromRenderer();
@@ -1685,7 +1701,7 @@ void WaterfallDefaultsPage::buildUI()
     contentLayout()->addWidget(nfAgcGroup);
 
     // --- Section: Display ---
-    auto* dispGroup = new QGroupBox(QStringLiteral("Display"), this);
+    auto* dispGroup = new QGroupBox(QString::fromLatin1(ControlRanges::kDisplayWaterfallGroupTitle), this);
     auto* dispForm  = new QFormLayout(dispGroup);
     dispForm->setSpacing(6);
 
@@ -1775,13 +1791,11 @@ void WaterfallDefaultsPage::buildUI()
     // (setup.designer.cs:34461): Peak / Rosenfell / Average / Sample.
     // Note: WF detector has 4 items (no RMS); Pan detector has 5 (with RMS).
     // RX1 scope dropped — pan-agnostic per design Section 1B.
+    // Items from ControlRanges::kDisplayWaterfallDetectors.
     m_waterfallDetectorCombo = new QComboBox(dispGroup);
-    m_waterfallDetectorCombo->addItems({
-        QStringLiteral("Peak"),
-        QStringLiteral("Rosenfell"),
-        QStringLiteral("Average"),
-        QStringLiteral("Sample")
-    });
+    for (const ControlRanges::DisplayChoiceItem& item : ControlRanges::kDisplayWaterfallDetectors) {
+        m_waterfallDetectorCombo->addItem(QLatin1String(item.label));
+    }
     // Thetis: setup.designer.cs:34461 (comboDispWFDetector) [v2.10.3.13] — no upstream tooltip; rewritten
     m_waterfallDetectorCombo->setToolTip(QStringLiteral(
         "Waterfall bin-reduction policy. Peak takes the maximum bin per pixel. "
@@ -1793,17 +1807,16 @@ void WaterfallDefaultsPage::buildUI()
             w->setWaterfallDetector(static_cast<SpectrumDetector>(i));
         }
     });
-    dispForm->addRow(QStringLiteral("WF Detector:"), m_waterfallDetectorCombo);
+    dispForm->addRow(QString::fromLatin1(ControlRanges::kDisplayWaterfallDetectorLabel)
+                         + QLatin1Char(':'), m_waterfallDetectorCombo);
 
     // Ported from Thetis comboDispWFAveraging [v2.10.3.13]
     // (setup.designer.cs:34436): None / Recursive / Time Window / Log Recursive.
+    // Items from ControlRanges::kDisplayAveragingModes.
     m_waterfallAveragingCombo = new QComboBox(dispGroup);
-    m_waterfallAveragingCombo->addItems({
-        QStringLiteral("None"),
-        QStringLiteral("Recursive"),
-        QStringLiteral("Time Window"),
-        QStringLiteral("Log Recursive")
-    });
+    for (const ControlRanges::DisplayChoiceItem& item : ControlRanges::kDisplayAveragingModes) {
+        m_waterfallAveragingCombo->addItem(QLatin1String(item.label));
+    }
     // Thetis: setup.designer.cs:34436 (comboDispWFAveraging) [v2.10.3.13] — no upstream tooltip; rewritten
     m_waterfallAveragingCombo->setToolTip(QStringLiteral(
         "Waterfall frame-averaging mode. None shows raw FFT output per row. "
@@ -1816,16 +1829,19 @@ void WaterfallDefaultsPage::buildUI()
             w->setWaterfallAveraging(static_cast<SpectrumAveraging>(i));
         }
     });
-    dispForm->addRow(QStringLiteral("WF Averaging:"), m_waterfallAveragingCombo);
+    dispForm->addRow(QString::fromLatin1(ControlRanges::kDisplayWaterfallAveragingLabel)
+                         + QLatin1Char(':'), m_waterfallAveragingCombo);
 
     // Waterfall averaging time constant — independent from spectrum.
     // From Thetis udDisplayAVTimeWF [v2.10.3.13] (setup.designer.cs:2086).
     // Default 120 ms matches Thetis. Range 10..9999 ms.
+    // Range, step and default from ControlRanges.h.
     m_waterfallAvgTimeSpin = new QSpinBox(dispGroup);
-    m_waterfallAvgTimeSpin->setRange(10, 9999);
-    m_waterfallAvgTimeSpin->setSingleStep(10);
+    m_waterfallAvgTimeSpin->setRange(ControlRanges::kDisplayAvgTimeMinMs,
+                                     ControlRanges::kDisplayAvgTimeMaxMs);
+    m_waterfallAvgTimeSpin->setSingleStep(ControlRanges::kDisplayAvgTimeStepMs);
     m_waterfallAvgTimeSpin->setSuffix(QStringLiteral(" ms"));
-    m_waterfallAvgTimeSpin->setValue(120);
+    m_waterfallAvgTimeSpin->setValue(ControlRanges::kDisplayWaterfallAvgTimeDefaultMs);
     m_waterfallAvgTimeSpin->setToolTip(QStringLiteral(
         "Waterfall averaging time constant. Independent from the spectrum "
         "averaging time. Larger = heavier smoothing. Translates to a "
@@ -1836,7 +1852,8 @@ void WaterfallDefaultsPage::buildUI()
             w->setWaterfallAverageTimeMs(ms);
         }
     });
-    dispForm->addRow(QStringLiteral("WF Avg Time:"), m_waterfallAvgTimeSpin);
+    dispForm->addRow(QString::fromLatin1(ControlRanges::kDisplayWaterfallAvgTimeLabel)
+                         + QLatin1Char(':'), m_waterfallAvgTimeSpin);
 
     contentLayout()->addWidget(dispGroup);
 
