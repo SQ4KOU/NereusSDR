@@ -54,6 +54,21 @@
 #                      session's reliable channel still carries the whole
 #                      connect sequence
 #
+# and, plan Task 29 Step 2a, the path race and moving a session (the Core
+# also listens on its own address, forwarded at its router when the
+# scenario says so), and real media:
+#
+#   race-direct        the Core's port forwarded: the session ends on the
+#                      direct connection
+#   race-service       no forward: the service's path without the relay
+#   upgrade            starts through the relay; the forward opens while it
+#                      runs and the session moves to the direct connection,
+#                      signed in once
+#   session-media      audio and display decoded through the service
+#   session-media-relayed
+#                      the same through the relay; all four allocations
+#                      (control and media at each end) given back
+#
 # Every secret (the TURN secret, the TLS key, both ends' keys) is made at
 # run time in a temporary directory and removed with it. It never touches
 # the live server: every name is under harness.test and every address is a
@@ -93,6 +108,9 @@
 #               for a full run; the NAT routers drop unsolicited packets to
 #               their own WAN address, as a home router does); netem-loss
 #               asks for a connection, not an echo; the session-* scenarios.
+#               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+#   2026-09-27: iPhone app plan Task 29 Step 2a (R-IOS-16): race-direct,
+#               race-service, upgrade, session-media, session-media-relayed.
 #               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 # =================================================================
 
@@ -511,12 +529,15 @@ field() { python3 -c "import json,sys; print(json.loads(sys.argv[1]).get(sys.arg
 
 # Plan Task 28: a Core as nereusd runs it, answering introductions with a
 # control connection, the desktop paired.
+# start_core RELAY [ARGS...]: Task 29 passes --listen PORT (the Core's own
+# address, for the race) and --media (real audio and display).
 start_core() {
     local relay="$1"
+    shift
     rm -f "$WORK/core-id"
     ip netns exec h-sta "$PEER" core --dir "$WORK/core" --server "$SERVER" \
         --paired "$DESKTOP_KEY" --relay "$relay" --id-file "$WORK/core-id" \
-        --ca "$WORK/ca.pem" >"$WORK/core.log" 2>&1 &
+        --ca "$WORK/ca.pem" "$@" >"$WORK/core.log" 2>&1 &
     CORE_PID=$!
     PIDS+=("$CORE_PID")
     for _ in $(seq 1 100); do
@@ -533,12 +554,15 @@ stop_core() {
     wait "$CORE_PID" 2>/dev/null || true
 }
 
-# run_session NS: prints the desktop's JSON result line.
+# run_session NS [ARGS...]: prints the desktop's JSON result line. Task 29
+# passes --direct URL (race the Core's address against the service),
+# --upgrade-schedule-ms, --wait-upgrade-ms and --media-ms.
 run_session() {
     local ns="$1"
+    shift
     in_ns "$ns" "$PEER" session --dir "$WORK/desktop-key" --server "$SERVER" \
         --core "$WORK/core-id" --timeout-ms 120000 \
-        --ca "$WORK/ca.pem" 2>>"$WORK/session.log" | tail -n 1 || true
+        --ca "$WORK/ca.pem" "$@" 2>>"$WORK/session.log" | tail -n 1 || true
 }
 
 FAILED=0
@@ -578,6 +602,68 @@ check_session() {
         return
     fi
     say "PASS $name: $result"
+}
+
+# check_path NAME RESULT WANT_RANK WANT_MOVED: Task 29, the session ran and
+# ended on the path of rank WANT_RANK (0 this network, 1 direct, 2 the
+# service without the relay, 3 the relay); WANT_MOVED True, False or any.
+check_path() {
+    local name="$1" result="$2" want_rank="$3" want_moved="$4"
+    local connected rank moved
+    connected="$(field "$result" connected 2>/dev/null || echo None)"
+    rank="$(field "$result" rankAfter 2>/dev/null || echo None)"
+    moved="$(field "$result" moved 2>/dev/null || echo None)"
+    if [[ "$connected" != "True" || "$rank" != "$want_rank" ]]; then
+        say "FAIL $name: connected=$connected rankAfter=$rank, expected rank $want_rank: $result"
+        FAILED=1
+        return
+    fi
+    if [[ "$want_moved" != "any" && "$moved" != "$want_moved" ]]; then
+        say "FAIL $name: moved=$moved, expected $want_moved: $result"
+        FAILED=1
+        return
+    fi
+    say "PASS $name: $result"
+}
+
+# check_media NAME RESULT: Task 29, real audio and display decoded.
+check_media() {
+    local name="$1" result="$2"
+    if python3 -c "
+import json, sys
+r = json.loads(sys.argv[1])
+ok = r.get('connected') and r.get('audioDecoded', 0) > 0 and r.get('displayDecoded', 0) > 0
+sys.exit(0 if ok else 1)" "$result" 2>/dev/null; then
+        say "PASS $name: $result"
+    else
+        say "FAIL $name: no audio or no display decoded: $result"
+        FAILED=1
+    fi
+}
+
+# The Core's own listener, for the race: TCP 47910 at the Core's router
+# forwarded to the Core, as a person forwards a port at home.
+CORE_PORT=47910
+CORE_URL="wss://198.51.100.10:$CORE_PORT"
+forward_core() {
+    in_ns nats nft add chain ip nat pre "{ type nat hook prerouting priority -100; }"
+    in_ns nats nft add rule ip nat pre iifname "wan" tcp dport "$CORE_PORT" \
+        dnat to "10.2.0.2:$CORE_PORT"
+    in_ns nats nft add rule inet filter forward ct status dnat accept
+}
+
+# No UDP between the two routers' public addresses: the service's path is
+# the relay.
+block_direct_udp() {
+    in_ns inet nft -f - <<EOF
+table inet filter {
+    chain forward {
+        type filter hook forward priority 0;
+        ip saddr 198.51.100.6 ip daddr 198.51.100.10 meta l4proto udp drop
+        ip saddr 198.51.100.10 ip daddr 198.51.100.6 meta l4proto udp drop
+    }
+}
+EOF
 }
 
 reset_rules() {
@@ -812,6 +898,79 @@ if scenario session-loss; then
     done
     start_core allow
     check_session session-loss "$(run_session cli)" any
+    stop_core
+fi
+
+# ── Plan Task 29 Step 2a: the race, moving, media ───────────────────
+
+# race-direct: the Core's port forwarded and the service reachable; the
+# desktop races both and ends on the direct connection (it may start on
+# the service and move once the session is up).
+if scenario race-direct; then
+    reset_rules
+    forward_core
+    start_core deny --listen "$CORE_PORT"
+    check_path race-direct "$(run_session cli --direct "$CORE_URL" --wait-upgrade-ms 8000)" 1 any
+    stop_core
+fi
+
+# race-service: the Core's address does not answer (no forward); the
+# service's path without the relay wins, and nothing better turns up.
+if scenario race-service; then
+    reset_rules
+    start_core deny --listen "$CORE_PORT"
+    check_path race-service "$(run_session cli --direct "$CORE_URL" \
+        --upgrade-schedule-ms 2000 --wait-upgrade-ms 6000)" 2 False
+    stop_core
+fi
+
+# upgrade: the session starts through the relay (no forward, no UDP between
+# the routers); the forward is opened while it runs, and the next look
+# moves the session to the direct connection with nothing signed in again.
+if scenario upgrade; then
+    reset_rules
+    block_direct_udp
+    start_core allow --listen "$CORE_PORT"
+    ( sleep 12; forward_core ) &
+    OPEN_PID=$!
+    result="$(run_session cli --direct "$CORE_URL" \
+        --upgrade-schedule-ms 15000,5000,5000 --wait-upgrade-ms 40000)"
+    wait "$OPEN_PID" 2>/dev/null || true
+    check_path upgrade "$result" 1 True
+    handshakes="$(field "$result" handshakes 2>/dev/null || echo None)"
+    if [[ "$handshakes" != "1" ]]; then
+        say "FAIL upgrade: signed in $handshakes times, expected once"
+        FAILED=1
+    fi
+    stop_core
+fi
+
+# session-media: audio and display through the service, the relay denied.
+if scenario session-media; then
+    reset_rules
+    start_core deny --media
+    check_media session-media "$(run_session cli --media-ms 5000)"
+    stop_core
+fi
+
+# session-media-relayed: audio and display through the relay; each end
+# holds two allocations (control and media) and gives all four back.
+if scenario session-media-relayed; then
+    reset_rules
+    block_direct_udp
+    start_core allow --media
+    released_before="$(grep -c "lifetime=0" "$WORK/coturn.log" 2>/dev/null || true)"
+    result="$(run_session cli --media-ms 5000)"
+    check_media session-media-relayed "$result"
+    sleep 3
+    released_after="$(grep -c "lifetime=0" "$WORK/coturn.log" 2>/dev/null || true)"
+    released=$(( ${released_after:-0} - ${released_before:-0} ))
+    if (( released >= 4 )); then
+        say "PASS session-media-relayed: allocations given back ($released)"
+    else
+        say "FAIL session-media-relayed: allocations given back: $released, expected 4"
+        FAILED=1
+    fi
     stop_core
 fi
 
