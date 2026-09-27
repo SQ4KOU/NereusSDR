@@ -30,6 +30,9 @@
 //   2026-09-26: Transmit group fix wave C1: openFakeMicrophoneLines
 //               (allowTransmit). J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-27: one TLS identity per test process (R-R3-49). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -251,7 +254,9 @@ struct Core {
         const QString dir = upgradedWithToken
                                 ? NereusSDR::Test::seedUpgradedCoreToken(securityDir.path())
                                 : NereusSDR::Test::seedCoreIdentity(securityDir.path());
-        server = std::make_unique<StationServer>(model.get(), *settings, dir);
+        // R-R3-49: one TLS certificate per test process (UpgradedCoreToken.h).
+        server = std::make_unique<StationServer>(model.get(), *settings,
+                                                 NereusSDR::Test::withSharedTlsIdentity(dir));
         server->setHeartbeatIntervalMs(0);
         server->deviceSessions()->setClock([this]() { return now; });
     }

@@ -333,6 +333,13 @@ struct RemoteAudioSessionHarness {
         }
         server.acceptTransport(station);
         QTRY_VERIFY(server.mediaAvailable());
+        // R-R3-49: the Core's side is ready once it has sent
+        // snapshot.complete; this window's is once it has read it, and with
+        // it the capabilities every *Negotiated() reads. The two are one
+        // queued delivery apart, and a wait that stops between them (its
+        // slice of the event loop ran out on a busy computer) left
+        // receiverAudioNegotiated() false.
+        QTRY_VERIFY(client.isHandshakeComplete());
         if (helloMinor) {
             QCOMPARE(station->rewrittenHellos, 1);
             QCOMPARE(clientEnd->rewrittenHellos, 1);

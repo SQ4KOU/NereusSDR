@@ -231,11 +231,15 @@ function(nereus_add_test name)
     # step gets the shared FFTW wisdom cache (nereus_test_fftw_wisdom above).
     # Found by the names that start WDSP that way, in the test's own source
     # or an extra source file it names (fakes/ConnectableRadioModel.cpp).
+    # R-R3-49 flaky-test round: a test that opens WDSP channels itself
+    # (OpenChannel) plans the same way, and did so from nothing:
+    # tst_wdsp_channel_shutdown spent 104 s of its 120 s in its first case
+    # under load, tst_receiver_dsp_load_frames 31 s at rest in initTestCase.
     if(TARGET nereus_test_fftw_wisdom)
         set(_wisdom_scan "${_extra_sources}")
         file(READ "${CMAKE_CURRENT_SOURCE_DIR}/${name}.cpp" _wisdom_text)
         string(APPEND _wisdom_scan "${_wisdom_text}")
-        if(_wisdom_scan MATCHES "setSynchronousInitForTest|m_synchronousWdspForTest|m_initialized = true|ConnectableRadioModel")
+        if(_wisdom_scan MATCHES "setSynchronousInitForTest|m_synchronousWdspForTest|m_initialized = true|ConnectableRadioModel|OpenChannel\\(")
             target_sources(${name} PRIVATE $<TARGET_OBJECTS:nereus_test_fftw_wisdom>)
         endif()
     endif()
@@ -7532,6 +7536,20 @@ if(DEFINED libjuice_SOURCE_DIR AND EXISTS "${libjuice_SOURCE_DIR}/src/agent.c")
             -DWORK=${CMAKE_CURRENT_BINARY_DIR}/libjuice-patch-paths
             -P ${CMAKE_SOURCE_DIR}/tests/scripts/check-libjuice-patch-paths.cmake)
     set_tests_properties(libjuice_patch_paths PROPERTIES LABELS "session" TIMEOUT 120)
+endif()
+# R-R3-49: libdatachannel's remote description change
+# (cmake/patches/libdatachannel-keep-remote-description-first.cpp) still
+# applies to the pinned source, both library targets compile it, and it
+# opens with the pinned file's own licence notice. Configures a small
+# project only; nothing is built or fetched.
+if(DEFINED libdatachannel_SOURCE_DIR AND EXISTS "${libdatachannel_SOURCE_DIR}/src/peerconnection.cpp")
+    add_test(NAME libdatachannel_patch_applies
+        COMMAND ${CMAKE_COMMAND}
+            -DREPO=${CMAKE_SOURCE_DIR}
+            -DPC_CPP=${libdatachannel_SOURCE_DIR}/src/peerconnection.cpp
+            -DWORK=${CMAKE_CURRENT_BINARY_DIR}/libdatachannel-patch
+            -P ${CMAKE_SOURCE_DIR}/tests/scripts/check-libdatachannel-patch.cmake)
+    set_tests_properties(libdatachannel_patch_applies PROPERTIES LABELS "session" TIMEOUT 120)
 endif()
 # The traversal harness (tests/scripts/traversal-harness.sh): Linux network
 # namespaces with nftables NATs (endpoint-independent, port-randomising at

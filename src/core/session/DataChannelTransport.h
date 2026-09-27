@@ -63,6 +63,8 @@
 //               by bytes, the close waits for the channel's close.
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-27: setLibraryLogForTest() (R-R3-49). J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/IceConfiguration.h"
@@ -74,6 +76,7 @@
 #include <QList>
 #include <QString>
 
+#include <functional>
 #include <memory>
 #include <optional>
 
@@ -293,6 +296,14 @@ public:
     /// as given, to show what the far end does with frames a conforming
     /// sender never makes.
     bool sendRawFrameForTest(const QByteArray& frame);
+
+    /// Test seam (R-R3-49): each line libdatachannel and libjuice log, at
+    /// every level, goes to `sink` with the logging thread's id, on
+    /// that thread, until the sink is set empty (logging off, as it is by
+    /// default). Process-wide. The sink must not block or call into the
+    /// library: the library holds its log lock while it runs.
+    static void setLibraryLogForTest(
+        std::function<void(quintptr thread, const QString& line)> sink);
 
 signals:
     /// This end's description, for the far end (through the service: the

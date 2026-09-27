@@ -1610,10 +1610,28 @@ private slots:
         // Keyed: the flag moves only once the unkey is confirmed.
         mox->setMox(true, keyerFor(a));
         QTRY_COMPARE(mox->state(), MoxState::Tx);
+        // R-R3-49: read as the answer reaches A. Read after invoke()
+        // returned, a busy computer's longer wait had let the unkey walk
+        // (its timers at 0 ms) finish first, and "not yet" read the moved
+        // flag.
+        const quint32 answerId = core.nextCommandId;
+        int boundAtAnswer = -1;
+        bool moxAtAnswer = true;
+        const QMetaObject::Connection atAnswer = connect(
+            appA, &SessionTransport::textReceived, this, [&](const QByteArray& wire) {
+                SessionMessage message;
+                if (SessionMessages::decode(wire, &message)
+                    && message.kind == SessionMessageKind::CommandResult
+                    && message.commandId == answerId) {
+                    boundAtAnswer = arbiter->txBoundSliceId();
+                    moxAtAnswer = mox->isMox();
+                }
+            });
         r = core.invoke(appA, "tx.setTxSlice", {int64("sliceId", first)});
+        disconnect(atAnswer);
         QVERIFY(r.value(QStringLiteral("accepted")).toBool());
-        QVERIFY(!mox->isMox());
-        QCOMPARE(arbiter->txBoundSliceId(), second);   // not yet
+        QVERIFY(!moxAtAnswer);
+        QCOMPARE(boundAtAnswer, second);   // not yet
         QTRY_COMPARE(arbiter->txBoundSliceId(), first);
         QCOMPARE(mox->state(), MoxState::Rx);
 

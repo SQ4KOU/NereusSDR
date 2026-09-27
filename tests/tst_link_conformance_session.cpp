@@ -1042,6 +1042,7 @@ private slots:
     void jsonStringsMatchTheirShape();
     void theVirtualClockKeepsALongTimersDueAsRealTimePasses();
     void theVirtualClockAloneFiresTheStationsTimers();
+    void theVirtualClockTimesAStartByVirtualTimeOnly();
 
 private:
     QString run(const QString& id, const QJsonObject& fixture,
@@ -1942,11 +1943,10 @@ void TstLinkConformanceSession::theVirtualClockKeepsALongTimersDueAsRealTimePass
     LinkVirtualClock clock(&root, [] { QCoreApplication::processEvents(); });
     clock.scan();
     QVERIFY(clock.advance(1000).isEmpty());
-    // Real time, well past the clock's restart slack and well inside the
-    // time the report stays above the interval.
+    // Real time, well inside the time the report stays above the interval.
     QElapsedTimer passing;
     passing.start();
-    while (passing.elapsed() < 3 * LinkVirtualClock::kRestartSlackMs) {
+    while (passing.elapsed() < 60) {
         QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
     }
     QVERIFY2(timer->remainingTime() > kIntervalMs,
@@ -2002,6 +2002,54 @@ void TstLinkConformanceSession::theVirtualClockAloneFiresTheStationsTimers()
     // Outside a hold its real expiry still fires it.
     flush->start(kFlushMs);
     QVERIFY(QTest::qWaitFor([&fired] { return fired.count() == 2; }, 5000));
+}
+
+// R-R3-49: session-tx-keepalive over a data channel failed under load
+// (step 55: the watchdog's linkLost came where the time-out's 179 was
+// due). The clock took a timer's due time from its real remaining time, so
+// the meter pump, first seen a millisecond after its start, polled at
+// 999 ms instead of 1000 ms, before the time-out read 179, and the
+// watchdog's stop at 1051 ms came first. A start is timed by virtual time
+// only: real time before the clock looks, a restart before the real
+// remaining time has grown, and a repeating timer's real expiries outside
+// a hold all leave its due time where virtual time puts it.
+void TstLinkConformanceSession::theVirtualClockTimesAStartByVirtualTimeOnly()
+{
+    constexpr int kPumpMs = 100;
+    constexpr int kWatchMs = 401;
+    QObject root;
+    auto* pump = new QTimer(&root);
+    pump->setTimerType(Qt::PreciseTimer);
+    pump->setInterval(kPumpMs);
+    auto* watch = new QTimer(&root);
+    watch->setSingleShot(true);
+    watch->setTimerType(Qt::PreciseTimer);
+    LinkVirtualClock clock(&root, [] { QCoreApplication::processEvents(); });
+
+    // Started, then real time passes (as a busy machine takes it) before
+    // the clock first looks.
+    pump->start();
+    QTest::qWait(30);
+    clock.scan();
+    QCOMPARE(clock.dueForTest(pump), qint64(kPumpMs));
+
+    // Restarted at once, its real remaining time no higher than before.
+    watch->start(kWatchMs);
+    clock.scan();
+    QVERIFY(clock.advance(50).isEmpty());
+    watch->start(kWatchMs);
+    clock.scan();
+    QCOMPARE(clock.dueForTest(watch), qint64(50 + kWatchMs));
+
+    // The repeating timer's real expiries outside a hold fire it in real
+    // time, and leave its virtual phase alone.
+    QSignalSpy polled(pump, &QTimer::timeout);
+    QVERIFY(QTest::qWaitFor([&polled] { return polled.count() >= 2; }, 5000));
+    clock.scan();
+    QCOMPARE(clock.dueForTest(pump), qint64(kPumpMs));
+    QVERIFY(clock.advance(kPumpMs * 10 - 50).isEmpty());
+    QCOMPARE(clock.dueForTest(pump), qint64(kPumpMs * 11));
+    QCOMPARE(clock.dueForTest(watch), -1);
 }
 
 QTEST_MAIN(TstLinkConformanceSession)

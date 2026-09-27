@@ -211,6 +211,11 @@ void establishStreaming(TransitionHarness& h)
     h.client->startSession(clientLink, h.server->token());
     h.server->acceptTransport(stationLink);
     QTRY_VERIFY(h.server->mediaAvailable());
+    // R-R3-49: the Core is ready once it has sent snapshot.complete, this
+    // client once it has read it (a queued delivery later), and
+    // sendMediaControl() needs the client's side; on a busy computer the
+    // wait above stopped between the two.
+    QTRY_VERIFY(h.client->mediaAvailable());
     QVERIFY(h.client->sendMediaControl({
         {QStringLiteral("op"), QStringLiteral("start")},
         {QStringLiteral("connectionId"), QLatin1String(kConnectionId)}},
