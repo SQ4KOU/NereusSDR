@@ -6,10 +6,10 @@
 # service, with a certificate from Let's Encrypt that it obtains and renews
 # by itself once DNS points the name at the server. It forwards
 # /v1/relay and everything under it to the WebSocket relay (nereus-relay,
-# loopback port 8711; rendezvous document section 12) and every other
-# request to the service (loopback port 8710). Both listen on loopback only
-# (127.0.0.1 and ::1). The TURN relay (coturn, UDP 3478 and 443) does not
-# pass through Caddy.
+# on its Unix socket /run/nereus-relay/relay.sock, which Caddy's group may
+# open; rendezvous document section 12) and every other request to the
+# service (loopback port 8710 on 127.0.0.1 and ::1). The TURN relay
+# (coturn, UDP 3478 and 443) does not pass through Caddy.
 #
 # No ACME email is set on purpose: Caddy obtains certificates without one,
 # and no personal address belongs in the repository.
@@ -55,11 +55,14 @@ rv.nereussdr.com {
 	#
 	# The relay has a process of its own (nereus-relay), so relay traffic
 	# never starves registrations nor takes the service's memory ceiling
-	# (rendezvous document sections 9.1 and 12.5).
+	# (rendezvous document sections 9.1 and 12.5). It is reached over a
+	# Unix socket, whose buffer is the relay's own, so what waits between
+	# the relay and Caddy is what the relay allows (section 12.5).
 	handle /v1/relay* {
-		reverse_proxy 127.0.0.1:8711 [::1]:8711 {
-			lb_policy first
-			# As for the service, below: the client's own address only.
+		reverse_proxy unix//run/nereus-relay/relay.sock {
+			# The client's own address only, as for the service below. A
+			# Unix socket has no peer address, so the relay takes this
+			# one and refuses a request without it.
 			header_up X-Forwarded-For {remote_host}
 			# A reload keeps open relay legs for up to 5 minutes too.
 			stream_close_delay 5m

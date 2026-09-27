@@ -10,9 +10,7 @@ from __future__ import annotations
 import configparser
 import dataclasses
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
-
-from nereus_rendezvous.config import parse_listen
+from typing import Optional
 
 # Section 12.3: one relay message is a tag byte and at most 1500 bytes.
 MAX_MESSAGE_BYTES = 1501
@@ -25,8 +23,12 @@ class ConfigError(Exception):
 @dataclass
 class Config:
     # [relay]
-    listen: List[Tuple[str, int]] = field(default_factory=lambda: [("127.0.0.1", 8711), ("::1", 8711)])
-    trusted_proxies: List[str] = field(default_factory=lambda: ["127.0.0.1", "::1"])
+    # A Unix stream socket, Caddy its only peer (section 12.5): its buffers
+    # are the relay's own, and the file's mode and group decide who may
+    # connect. An empty group leaves the file's group as it is.
+    socket: str = "/run/nereus-relay/relay.sock"
+    socket_mode: int = 0o660
+    socket_group: str = "caddy"
     relay_secret_file: str = ""
     log_level: str = "info"
     # [limits]
@@ -49,7 +51,7 @@ class Config:
 
 
 _SECTIONS = {
-    "relay": ["listen", "trusted_proxies", "relay_secret_file", "log_level"],
+    "relay": ["socket", "socket_mode", "socket_group", "relay_secret_file", "log_level"],
     "limits": [
         "slots",
         "sessions_per_station",
@@ -99,20 +101,22 @@ def check(config: Config) -> None:
         raise ConfigError(f"queue_bytes: at least {MAX_MESSAGE_BYTES}")
     if config.rate_bytes_per_second < MAX_MESSAGE_BYTES:
         raise ConfigError(f"rate_bytes_per_second: at least {MAX_MESSAGE_BYTES}")
+    if not config.socket.startswith("/") or len(config.socket.encode("utf-8")) > 100:
+        raise ConfigError("socket: an absolute path of at most 100 bytes")
+    if not isinstance(config.socket_mode, int) or not 0 <= config.socket_mode <= 0o777:
+        raise ConfigError("socket_mode: an octal mode such as 0660")
     if config.log_level.upper() not in ("DEBUG", "INFO", "WARNING", "ERROR"):
         raise ConfigError("log_level: debug, info, warning or error")
 
 
 def apply(config: Config, key: str, value: str) -> None:
     fields = {f.name: f for f in dataclasses.fields(Config)}
-    if key == "listen":
+    if key == "socket_mode":
         try:
-            config.listen = parse_listen(value)
-        except Exception as exc:  # noqa: BLE001 - the service's own ConfigError
-            raise ConfigError(str(exc)) from exc
-    elif key == "trusted_proxies":
-        config.trusted_proxies = value.split()
-    elif key in ("relay_secret_file", "log_level"):
+            config.socket_mode = int(value.strip(), 8)
+        except ValueError as exc:
+            raise ConfigError("socket_mode: an octal mode such as 0660") from exc
+    elif key in ("socket", "socket_group", "relay_secret_file", "log_level"):
         setattr(config, key, value.strip())
     elif key in fields:
         try:

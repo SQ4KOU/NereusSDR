@@ -54,12 +54,6 @@ def rss_kib(pid: int) -> int:
     raise RuntimeError("no VmRSS")
 
 
-def free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
 async def flood(ws, seconds: float) -> int:
     # Both lanes (control and media), so every queue of every leg fills.
     frames = (b"\x01" + bytes(1500), b"\x02" + bytes(1500))
@@ -78,8 +72,8 @@ async def flood(ws, seconds: float) -> int:
     return sent
 
 
-async def probe(port: int, pid: int, secret: bytes) -> None:
-    uri = f"ws://127.0.0.1:{port}/v1/relay"
+async def probe(sock_path: str, pid: int, secret: bytes) -> None:
+    uri = "unix:" + sock_path
 
     def report(step: str, extra: str = "") -> None:
         print(f"{step:10s} relay VmRSS {rss_kib(pid) / 1024:7.1f} MiB {extra}", flush=True)
@@ -113,10 +107,11 @@ def main() -> int:
     work = Path(tempfile.mkdtemp())
     secret = os.urandom(24).hex().encode()
     (work / "relay-secret").write_bytes(secret + b"\n")
-    port = free_port()
+    sock_path = str(work / "relay.sock")
     (work / "relay.conf").write_text(
         "[relay]\n"
-        f"listen = 127.0.0.1:{port}\n"
+        f"socket = {sock_path}\n"
+        "socket_group =\n"
         f"relay_secret_file = {work / 'relay-secret'}\n"
         "log_level = warning\n"
         "[limits]\n"
@@ -132,14 +127,15 @@ def main() -> int:
         deadline = time.time() + 10
         while True:
             try:
-                with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe_sock:
+                    probe_sock.connect(sock_path)
                     break
             except OSError:
                 if time.time() > deadline:
                     raise
                 time.sleep(0.05)
         print(f"# python {sys.version.split()[0]}, slots {SLOTS}, max_pending {MAX_PENDING}, flood {FLOOD_S} s")
-        asyncio.run(probe(port, proc.pid, secret))
+        asyncio.run(probe(sock_path, proc.pid, secret))
     finally:
         proc.terminate()
         proc.wait(timeout=20)

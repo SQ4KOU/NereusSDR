@@ -1547,7 +1547,7 @@ defaults. The message size is the wire's, not a setting.
 | Rejoin, and the first join of the other side | 30 s (`rejoin_ms`) | a reset's reconnect is three round trips and a TLS handshake; ICE's consent freshness allows 30 s |
 | Idle | 30 s (`idle_timeout_ms`) | frees the slot of a session ICE did not choose |
 | WebSocket ping and timeout | 20 s and 20 s | as the service (section 9.2) |
-| Kernel buffers per connection | 16384 bytes each way (`socket_buffer_bytes`) | as the service (section 9.1): at most 64 KiB a connection in the kernel |
+| Kernel buffers per connection | 16384 bytes each way (`socket_buffer_bytes`) | set on every connection the relay accepts on its Unix socket; the send buffer is what the hop to Caddy can hold (above), and at most 64 KiB a connection sits in the kernel |
 | Descriptors | 4096 (`LimitNOFILE` in the unit) | the connections above with a wide margin |
 
 The idle and send checks are one lazily armed timer each: a session keeps
@@ -1556,37 +1556,51 @@ itself again for what remains; a leg arms its send check when a send starts
 and none is armed. A busy session costs one timer an idle period, not one a
 datagram.
 
-**TCP_NODELAY on every leg.** The relay sets TCP_NODELAY on every
-connection it accepts (asyncio also sets it on its TCP transports; the
-relay does not depend on that), so each datagram goes out at once. Caddy,
-between the relay and each end, is Go, whose TCP connections have
-TCP_NODELAY on by default. The ends set it on their own legs, and keep a
+**The hop from Caddy to the relay is a Unix socket.** The relay listens on
+`/run/nereus-relay/relay.sock` (`socket` in `relay.conf`), a Unix stream
+socket of mode 0660 and group `caddy`, so Caddy's account may connect and
+no other; it has no IP port. There is no peer address on a Unix socket, so
+the relay takes the client's from the last `X-Forwarded-For` value, which
+Caddy sets (`header_up X-Forwarded-For {remote_host}`), and answers a
+request without one, or with one that is not an address, `400`. On Linux
+what waits in a Unix stream is charged to its sender's send buffer, so the
+relay's own SO_SNDBUF on each connection it accepts (`socket_buffer_bytes`,
+16384) is what the hop towards Caddy can hold: about 15 KB, measured in
+`ubuntu:24.04` by writing 1001-byte messages into a Unix stream nobody
+reads until it would block (15015 bytes; 93093 with the kernel's default
+buffers). Over
+loopback TCP the same hop was Caddy's receive buffer, which the relay could
+not size (about 80 KB in the measurement below).
+
+**No Nagle anywhere.** A Unix socket sends at once. Caddy, between the
+relay's socket and each end, is Go, whose TCP connections have TCP_NODELAY
+on by default. The ends set it on their own legs, and keep a
 bounded, drop-oldest queue of their own as well: the relay's queues cannot
 help with what an end buffers.
 
 **What waits after the relay's queues.** Between the relay and a slow
-reader sit the library's write buffer, the loopback connection to Caddy,
-Caddy, and Caddy's TLS connection to the end, and none of them drops.
-Measured by `rendezvous/tests/caddy-check.sh`: a device leg sending 75
+reader sit the library's write buffer, the Unix socket to Caddy, Caddy, and
+Caddy's TLS connection to the end, and none of them drops. Measured by
+`rendezvous/tests/caddy-check.sh` (step 8): a device leg sending 75
 datagrams of 1000 bytes a second for 20 s to a Core leg that reads only 20
 a second, through a blocking socket with a 16 KiB receive buffer:
 
-| | how old the datagrams were when read, the largest in each 5 s | where bytes waited at 14 s |
+| | how old the datagrams were when read, the largest in each 5 s | where bytes waited |
 | --- | --- | --- |
 | straight to the relay, no Caddy | 3.3, 3.0, 3.1, 3.1 s | |
-| through Caddy | 3.7, 7.3, 11.0, 12.2 s | Caddy's socket to the end 39 KB; Caddy's loopback socket from the relay 77 KB unread |
-| through Caddy, `net.ipv4.tcp_notsent_lowat` 16384 | 3.6, 7.3, 10.0, 11.2 s | Caddy's socket to the end 13 KB; Caddy's loopback socket from the relay 82 KB unread |
+| through Caddy, the hop over loopback TCP 8711 | 3.7, 7.3, 11.0, 12.2 s | Caddy's socket to the end 39 KB; Caddy's receive buffer from the relay 77 KB |
+| as above, `net.ipv4.tcp_notsent_lowat` 16384 (the relay's commit `31107991`) | 3.6, 7.3, 10.4, 11.9 s | Caddy's socket to the end 13 KB; Caddy's receive buffer from the relay 82 KB |
+| through Caddy, the hop over the Unix socket, `tcp_notsent_lowat` 16384 (this document) | 3.2, 4.5, 5.0, 4.5 s | the relay's own send buffer on the Unix socket, about 15 KB |
 
 In every case the relay dropped datagrams for the reader (its queues work)
-and the delay levelled off, but through Caddy at about 200 KB of buffering
-rather than about 60 KB. `setup-server.sh` sets
+and the delay levelled off: at about 12 s with the hop over loopback TCP,
+and at about 4.5 to 5 s over the Unix socket, 1.5 s above reading the
+relay directly, which is what Caddy's own TLS connection to the reader
+still holds. `setup-server.sh` sets
 `net.ipv4.tcp_notsent_lowat = 16384` for the whole host
 (`rendezvous/deploy/sysctl.conf`, with the line that undoes it), which
-takes most of what waited in Caddy's socket towards the end. What waits in
-Caddy's loopback socket from the relay is the kernel's receive buffer,
-which the relay cannot size and Caddy has no setting for; carrying that
-hop over a Unix socket, whose buffer is the relay's own, would remove it,
-and is not done here.
+takes most of what waited in Caddy's socket towards the end, and the Unix
+socket takes what waited between the relay and Caddy.
 
 **Memory.** Measured with `rendezvous/tests/relay_memory_probe.py` in an
 `ubuntu:24.04` container with Ubuntu's `python3-websockets` 10.4 on Python
@@ -1641,12 +1655,17 @@ through a rejoin.
 ### 12.7 Deploying it
 
 On the NereusSDR server `setup-server.sh` makes the relay secret, writes
-`/etc/nereus-rendezvous/relay.conf` (loopback port 8711, the slots, the
-credential path) and the service's `relay_url` and `relay_secret_file`,
+`/etc/nereus-rendezvous/relay.conf` (the Unix socket
+`/run/nereus-relay/relay.sock` with mode 0660 and group `caddy`, the slots,
+the credential path) and the service's `relay_url` and `relay_secret_file`,
 installs `nereus-relay.service`, its memory drop-in and the kernel setting
 of `sysctl.conf`, and enables and starts the relay; Caddy's
-`handle /v1/relay*` sends the relay's path to 127.0.0.1:8711 and
-[::1]:8711 and everything else to the service, as before. No new port
+`handle /v1/relay*` sends the relay's path to that socket
+(`reverse_proxy unix//run/nereus-relay/relay.sock`) and everything else to
+the service, as before. The relay's unit makes `/run/nereus-relay`
+(`RuntimeDirectory=`) and gives the relay the group `caddy`
+(`SupplementaryGroups=`), so it may give its socket that group; the unit
+opens no IP socket (`RestrictAddressFamilies=AF_UNIX`). No new port
 opens: the relay rides TCP 443 under the service's name
 (`rendezvous/README.md`). On a server already running the service, the new
 code goes first (`rendezvous/deploy.sh`), then `setup-server.sh`, which

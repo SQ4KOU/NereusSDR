@@ -20,7 +20,7 @@ from nereus_rendezvous import relaygrant
 from nereus_rendezvous.clock import ManualClock
 from nereus_relay import transport as relay_transport
 from nereus_relay.relay import Relay
-from relay_helpers import SECRET, connect, make_relay_config
+from relay_helpers import SECRET, connect, make_relay_config, short_directory
 
 RELAY_FIXTURES = Path(__file__).resolve().parent.parent / "conformance" / "v1" / "relay"
 DEFAULT_ADDRESS = "192.0.2.1"
@@ -169,9 +169,10 @@ class RelayRunner:
             await asyncio.sleep(0)
 
     async def run(self) -> None:
-        server = await relay_transport.start(self.relay, "127.0.0.1", 0)
-        port = server.sockets[0].getsockname()[1]
-        self.uri = f"ws://127.0.0.1:{port}/v1/relay"
+        directory = short_directory()
+        self.relay.config.socket = os.path.join(directory, "relay.sock")
+        server = await relay_transport.start(self.relay)
+        self.uri = "unix:" + self.relay.config.socket
         try:
             for index, step in enumerate(self.fixture["steps"]):
                 try:
@@ -185,6 +186,7 @@ class RelayRunner:
                 except Exception:  # noqa: BLE001
                     pass
             await relay_transport.stop([server], self.relay, grace_s=0, timeout_s=5)
+            os.rmdir(directory)
 
     async def step(self, step: Dict[str, Any]) -> None:
         if "connect" in step:

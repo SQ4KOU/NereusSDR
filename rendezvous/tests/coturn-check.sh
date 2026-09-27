@@ -280,7 +280,11 @@ grep -qx 'MemoryMax=64M' /etc/systemd/system/nereus-relay.service.d/memory.conf
 grep -qx 'relay_secret_file = /run/credentials/nereus-rendezvous.service/relay-secret' /etc/nereus-rendezvous/rendezvous.conf
 grep -qx 'relay_url = wss://rv.nereussdr.com/v1/relay' /etc/nereus-rendezvous/rendezvous.conf
 grep -qx 'relay_secret_file = /run/credentials/nereus-relay.service/relay-secret' /etc/nereus-rendezvous/relay.conf
-grep -qx 'listen = 127.0.0.1:8711 \[::1\]:8711' /etc/nereus-rendezvous/relay.conf
+grep -qx 'socket = /run/nereus-relay/relay.sock' /etc/nereus-rendezvous/relay.conf
+grep -qx 'socket_mode = 0660' /etc/nereus-rendezvous/relay.conf
+grep -qx 'socket_group = caddy' /etc/nereus-rendezvous/relay.conf
+grep -qx 'SupplementaryGroups=caddy' /etc/systemd/system/nereus-relay.service
+grep -qx 'RuntimeDirectory=nereus-relay' /etc/systemd/system/nereus-relay.service
 grep -qx 'slots = 16' /etc/nereus-rendezvous/relay.conf
 grep -Eqx 'RV_DATA_USE_INTERFACE=eth[0-9]+' /etc/nereus-rendezvous/data-use.conf
 grep -qx 'RV_TRANSFER_GB_PER_MONTH=1000' /etc/nereus-rendezvous/data-use.conf
@@ -309,9 +313,9 @@ PY
 sed 's|^relay_secret_file = .*|relay_secret_file = /etc/nereus-rendezvous/relay-secret|' \
     /etc/nereus-rendezvous/relay.conf > /tmp/relay.conf
 PYTHONPATH=/repo/rendezvous/server PYTHONDONTWRITEBYTECODE=1 python3 -c \
-    'from nereus_relay import config; c = config.load("/tmp/relay.conf"); assert c.slots == 16 and c.listen == [("127.0.0.1", 8711), ("::1", 8711)], c'
+    'from nereus_relay import config; c = config.load("/tmp/relay.conf"); assert c.slots == 16 and (c.socket, c.socket_mode, c.socket_group) == ("/run/nereus-relay/relay.sock", 0o660, "caddy"), c'
 EOS
-pass "relay secret (root 600, 64 hex characters, not the TURN secret and nowhere in coturn's configuration); the sysctl file (tcp_notsent_lowat, root 644); relay.conf (loopback 8711, 16 slots, the credential path); the relay's unit and its MemoryMax 64M; the service's relay_url and relay_secret_file"
+pass "relay secret (root 600, 64 hex characters, not the TURN secret and nowhere in coturn's configuration); the sysctl file (tcp_notsent_lowat, root 644); relay.conf (the Unix socket /run/nereus-relay/relay.sock, mode 0660, group caddy, 16 slots, the credential path); the relay's unit and its MemoryMax 64M; the service's relay_url and relay_secret_file"
 pass "secret (root 600, 64 hex characters), coturn configuration (root:turnserver 640, total-quota 10, bps-capacity 800000, user-quota 8), service configuration (STUN and TURN URLs the same, in the same order, as the service's defaults and the sample: rv4 first), units, data-use report and code directory; the deploy account nereusrv with exactly the given key; the rv Caddyfile, validated; Caddy's drop-in with GOMEMLIMIT 384MiB and the service's MemoryMax 268M from 1024 MiB"
 
 # The data-use report as installed, run once the way its unit runs it.
@@ -411,8 +415,18 @@ start() {
             envs=()
             while IFS= read -r line; do envs+=("$line"); done < <(sed -n 's/^Environment=//p' "$unit")
             exec_start="$(sed -n 's/^ExecStart=//p' "$unit")"
+            # RuntimeDirectory= and SupplementaryGroups=, as systemd would.
+            groups_arg=--clear-groups
+            runtime="$(sed -n 's/^RuntimeDirectory=//p' "$unit")"
+            if [[ -n "$runtime" ]]; then
+                install -d -o nobody -m "$(sed -n 's/^RuntimeDirectoryMode=//p' "$unit")" "/run/${runtime}"
+            fi
+            extra="$(sed -n 's/^SupplementaryGroups=//p' "$unit")"
+            if [[ -n "$extra" ]]; then
+                groups_arg="--groups=${extra// /,}"
+            fi
             # shellcheck disable=SC2086
-            setsid env "${envs[@]}" setpriv --reuid=nobody --regid=nogroup --clear-groups $exec_start \
+            setsid env "${envs[@]}" setpriv --reuid=nobody --regid=nogroup "$groups_arg" $exec_start \
                 </dev/null >>"/run/${name}.log" 2>&1 &
             for _ in $(seq 50); do active "$name" && break; sleep 0.2; done
             sleep 1 ;;
@@ -511,10 +525,9 @@ for unit in ("caddy", "coturn", "nereus-rendezvous.service", "nereus-relay.servi
 assert not any(c.startswith(("restart", "reload")) for c in calls), calls
 assert "coturn is disabled until its configuration is in place" in out
 assert "coturn holds UDP 3478 and 443 on both addresses and no TCP port; Caddy holds no UDP port" in out
-held = [line.split() for line in out.splitlines() if line.strip().startswith("tcp 8711 ")]
-assert {h[2] for h in held} == {"127.0.0.1", "::1"}, held
+assert "the WebSocket relay listens on /run/nereus-relay/relay.sock (socket, mode 0660, group caddy) and on no IP port" in out
 PY
-pass "where systemd runs: coturn is disabled right after its install, then step 9 enables and starts Caddy, coturn, the service, the WebSocket relay and the timer, and finds coturn on exactly UDP 3478 and 443 on both addresses and no TCP port, Caddy on no UDP port, and the relay on TCP 8711 on loopback only"
+pass "where systemd runs: coturn is disabled right after its install, then step 9 enables and starts Caddy, coturn, the service, the WebSocket relay and the timer, and finds coturn on exactly UDP 3478 and 443 on both addresses and no TCP port, Caddy on no UDP port, and the relay on its Unix socket (mode 0660, group caddy) and no IP port"
 
 rerun() {
     # $@: extra arguments. Prints the output and the systemctl calls.
@@ -907,12 +920,14 @@ install -m 0400 -o nobody /etc/nereus-rendezvous/relay-secret /run/credentials/n
 cd / && PYTHONPATH=/repo/rendezvous/server PYTHONDONTWRITEBYTECODE=1 \
     setsid runuser -u nobody -- python3 -m nereus_rendezvous --config /etc/nereus-rendezvous/rendezvous.conf \
     </dev/null >/run/rv.log 2>&1 &
+install -d -o nobody -m 0755 /run/nereus-relay
 cd / && PYTHONPATH=/repo/rendezvous/server PYTHONDONTWRITEBYTECODE=1 \
-    setsid runuser -u nobody -- python3 -m nereus_relay --config /etc/nereus-rendezvous/relay.conf \
+    setsid setpriv --reuid=nobody --regid=nogroup --groups=caddy \
+    python3 -m nereus_relay --config /etc/nereus-rendezvous/relay.conf \
     </dev/null >/run/relay.log 2>&1 &
 for _ in $(seq 50); do
     grep -q 'listening on 2 addresses, relay on, relay grants on' /run/rv.log \
-        && grep -q 'listening on 2 addresses, 16 slots' /run/relay.log && exit 0
+        && grep -q 'listening on its Unix socket, 16 slots' /run/relay.log && exit 0
     sleep 0.2
 done
 cat /run/rv.log /run/relay.log >&2
@@ -940,7 +955,7 @@ async def go():
     # The relay grants: the token of each end joined on the running relay.
     from relay_helpers import connect, recv
     assert device_grant["url"] == core_grant["url"] == "wss://rv.nereussdr.com/v1/relay"
-    relay_uri = "ws://127.0.0.1:8711/v1/relay"
+    relay_uri = "unix:/run/nereus-relay/relay.sock"
     core = await connect(relay_uri, "198.51.100.7")
     await core.send(b"\x80" + core_grant["token"].encode())
     assert await recv(core) == b"\x81\x01\x00"

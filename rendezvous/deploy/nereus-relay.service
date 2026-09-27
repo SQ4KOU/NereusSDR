@@ -9,8 +9,9 @@
 #
 # The relay is a process of its own, apart from the rendezvous service, so
 # relay traffic can never starve registrations or take the service's memory
-# ceiling (section 9.1). Caddy sends wss://<host>/v1/relay* here and
-# everything else to the service.
+# ceiling (section 9.1). Caddy sends wss://<host>/v1/relay* here, over the
+# Unix socket /run/nereus-relay/relay.sock, and everything else to the
+# service.
 
 [Unit]
 Description=NereusSDR WebSocket relay
@@ -38,19 +39,24 @@ TimeoutStopSec=20
 # service reads the same file through its own LoadCredential= line.
 LoadCredential=relay-secret:/etc/nereus-rendezvous/relay-secret
 
-# --- Identity -----------------------------------------------------------
-# A transient account made for each run; the relay owns no files.
+# --- Identity and the socket -----------------------------------------------
+# A transient account made for each run; the relay owns no files but its
+# socket. systemd makes /run/nereus-relay (0755, the account's) at start and
+# removes it at stop; relay.conf puts the socket there with mode 0660 and
+# group caddy, which the relay may set because it is given that group
+# below: Caddy (user caddy) may connect, and no other account.
 DynamicUser=yes
 User=nereus-relay
 Group=nereus-relay
+SupplementaryGroups=caddy
+RuntimeDirectory=nereus-relay
+RuntimeDirectoryMode=0755
 
 # --- Network ------------------------------------------------------------
-# The relay listens on loopback only (127.0.0.1 and ::1, port 8711 by
-# default); Caddy on the same host is its only peer. It makes no outgoing
-# connection, so nothing else is allowed.
+# The relay listens on its Unix socket only; Caddy on the same host is its
+# only peer. It opens no IP socket at all.
 IPAddressDeny=any
-IPAddressAllow=localhost
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictAddressFamilies=AF_UNIX
 
 # --- Memory and files -----------------------------------------------------
 # The ceiling (MemoryMax) comes from the relay's slots, in the drop-in
