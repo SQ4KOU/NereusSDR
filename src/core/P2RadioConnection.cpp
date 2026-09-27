@@ -6,6 +6,7 @@
 //   Project Files/Source/ChannelMaster/network.c, original licence from Thetis source is included below
 //   Project Files/Source/ChannelMaster/network.h, original licence from Thetis source is included below
 //   Project Files/Source/ChannelMaster/netInterface.c, original licence from Thetis source is included below
+//   Project Files/Source/ChannelMaster/obbuffs.c, original licence from Thetis source is included below
 //   Project Files/Source/Console/console.cs, original licence from Thetis source is included below
 //   Project Files/Source/Console/setup.cs, original licence from Thetis source is included below
 //
@@ -73,6 +74,13 @@
 //   2026-09-25 - Receiver and transmit gaps plan, Task 13: high-priority status ReadBufp[55] (datagram byte 59)
 //                 reported as the user digital inputs (network.c:756 [v2.10.3.15]). J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-27 - R-IOS-13, R-R3-42: the transmit I/Q send path moves off the connection thread's
+//                 fixed 4-frames-per-5-ms timer to a send thread of its own, after Thetis ob_main
+//                 (obbuffs.c:153-170 [v2.10.3.15]), paced by the radio's transmit buffer estimated
+//                 from elapsed time (deskhpsdr new_protocol.c:2243-2272 [@f3d857c]; buffer size from
+//                 n1gp-Anvelina_PROIII Tx1_IQ_fifo.vhd:106 [@8e86a61]). The ring grows to 341 ms and a
+//                 full ring is counted and logged. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 
 /*
@@ -137,6 +145,34 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  *
  */
+
+// --- From obbuffs.c ---
+
+/*  obbuffs.c
+
+This file is part of a program that implements a Software-Defined Radio.
+
+Copyright (C) 2014 Warren Pratt, NR0V
+
+This program is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software
+Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
+The author can be reached by email at  
+
+warren@wpratt.com
+
+*/
 
 //=================================================================
 // console.cs
@@ -241,12 +277,24 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #include "OcMatrix.h"
 #include "CalibrationController.h"
 #include "PerfMonitor.h"
+#include "audio/RealtimeAudioPriority.h"
 #include "audio/TxMicSource.h"
 #include "codec/AlexFilterMap.h"
 #include "codec/P2CodecHermes.h"
 #include "codec/P2CodecOrionMkII.h"
 #include "codec/P2CodecSaturn.h"
 #include "models/Band.h"
+#include "platform/ThreadPlacement.h"
+
+#ifdef Q_OS_WIN
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
+#else
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#endif
 
 #include <QNetworkDatagram>
 #include <QThread>
@@ -255,8 +303,10 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
 #include <algorithm>
 #include <bit>
+#include <cerrno>
 #include <chrono>
 #include <limits>
+#include <thread>
 
 namespace NereusSDR {
 
@@ -368,6 +418,8 @@ P2RadioConnection::~P2RadioConnection()
     if (m_running) {
         disconnect();
     }
+    // The send thread uses this object and its socket's descriptor.
+    stopTxIqSender();
     // Workers may retain the shared atomic after QObject destruction. Always
     // invalidate their last observation, including never-started/already-
     // stopped connections for which disconnect() did not run here.
@@ -419,149 +471,10 @@ void P2RadioConnection::init()
     m_reconnectTimer->setSingleShot(true);
     connect(m_reconnectTimer, &QTimer::timeout, this, &P2RadioConnection::onReconnectTimeout);
 
-    // TX I/Q stream — radio expects continuous TX data on port 1029 even in
-    // RX-only mode.  When the TX I/Q ring (m_txIqRing) has samples, they are
-    // drained into the frame; when empty, zeros (silence) are sent.
-    //
-    // At 192 kHz TX rate: each 240-sample frame represents 240/192000 = 1.25 ms.
-    // With a 5 ms timer tick, we need to send 4 frames per tick to match the
-    // producer rate (238 samples/5 ms ≈ 190 kHz ≈ 4 × 240 samples drained).
-    //
-    // Bench fix round 3 (Issue C): previous code sent only 1 frame per 5 ms tick
-    // (= 240 samples / 5 ms = 48 kHz drain rate), so the ring would saturate
-    // immediately when the producer pushes 952 samples per 5 ms at 192 kHz.
-    // Fix: drain kTxFramesPerTick frames per tick.
-    //
-    // From pcap: ~800 packets/sec at 192 kHz / 240 spp.
-    // Cite: deskhpsdr/src/new_protocol.c:1929-1935 [@120188f]
-    //   "Ideally, a TX IQ buffer with 240 sample is sent every 1250 usecs."
-    //
-    // From Thetis netInterface.c:1513 [v2.10.3.13] — tx sampling_rate = 192.
-    // kTxFramesPerTick = 192000 Hz × 0.005 s / 240 spp = 4 frames per 5 ms tick.
-    static constexpr int kTxSamplesPerSec = 192000;
-    static constexpr int kTxSamplesPerFrame = 240;
-    static constexpr int kTxTimerIntervalMs = 5;
-    static constexpr int kTxFramesPerTick =
-        (kTxSamplesPerSec * kTxTimerIntervalMs / 1000 + kTxSamplesPerFrame - 1)
-        / kTxSamplesPerFrame;   // = ceil(960 / 240) = 4
-    m_txIqTimer = new QTimer(this);
-    m_txIqTimer->setInterval(kTxTimerIntervalMs);
-    // Qt::PreciseTimer (CFRunLoop / NSTimer with millisecond precision)
-    // instead of the default Qt::CoarseTimer.  CoarseTimer on macOS is
-    // documented as ±5% of interval to allow timer coalescing for power
-    // savings -- in practice it fires at ~4.9 ms instead of 5.0 ms,
-    // which makes the consumer pull at ~195.8 kHz while the WDSP
-    // producer outputs at exactly 192 kHz.  That ~2% deficit was the
-    // root cause of the bench-observed "digital jitter" on TX audio
-    // 2026-05-26 (75712 zero-padded sample-pairs in a 15-20 s TX).
-    // The heartbeat timer at line 472 already uses PreciseTimer;
-    // align the TX I/Q drain with the same precision.
-    m_txIqTimer->setTimerType(Qt::PreciseTimer);
-    connect(m_txIqTimer, &QTimer::timeout, this, [this]() {
-        if (!m_running || !m_socket) {
-            return;
-        }
-
-        // Drain kTxFramesPerTick (4) frames per 5 ms tick at 192 kHz.
-        // Each frame: 4-byte BE sequence number + 240 samples × 6 bytes = 1444 bytes.
-        // Cite: deskhpsdr/src/new_protocol.h:37 [@120188f]
-        //   #define TX_IQ_FROM_HOST_PORT 1029
-        // Cite: deskhpsdr/src/new_protocol.c:1945-1948 [@120188f]
-        //   iqbuffer[0..3] = tx_iq_sequence BE bytes; tx_iq_sequence++;
-        //
-        // IMPORTANT: keep the inner drain loop in sync with txIqFrameForTest() in
-        // P2RadioConnection.h.  The test seam mirrors this byte-packing path
-        // exactly so wire-byte snapshot tests stay authoritative.  If you
-        // change the encoding here (gain, clip bounds, byte order, layout),
-        // update the helper to match — there is no shared composer function
-        // (E.5 fixup convention).
-        static constexpr int kTxPktLen = 4 + 240 * 6;
-
-        // Float → int24 converter.  Shared across all frames in this tick.
-        // Cite: deskhpsdr/src/new_protocol.c:2795 [@120188f]
-        //   void new_protocol_iq_samples(int isample, int qsample)
-        auto toInt24 = [](float v) -> int {
-            const float scaled = v * 8388607.0f;
-            if (scaled >= 8388607.0f)  { return  8388607; }
-            if (scaled <= -8388607.0f) { return -8388607; }
-            return static_cast<int>(scaled);
-        };
-
-        for (int frame = 0; frame < kTxFramesPerTick; ++frame) {
-            char buf[kTxPktLen];
-            memset(buf, 0, sizeof(buf));
-            writeBE32(buf, 0, m_seqTxIq++);
-
-            // Drain up to 240 samples from the ring into the payload, or send
-            // zeros if the ring is empty (silence — matches deskhpsdr underrun).
-            // Cite: deskhpsdr/src/new_protocol.c:1950-1956, 2811-2816 [@120188f]
-            //   memcpy(&iqbuffer[4], &TXIQRINGBUF[txiq_outptr], 1440);
-            int underrunSamples = 0;
-            for (int s = 0; s < 240; ++s) {
-                int i24 = 0;
-                int q24 = 0;
-                // acquire: makes audio-thread byte writes (published via release
-                // fetch_add on m_txIqRingCount) visible before we read m_txIqRing.
-                if (m_txIqRingCount.load(std::memory_order_acquire) >= 2) {
-                    int rp = m_txIqRingRead.load(std::memory_order_relaxed);
-                    const float fI = m_txIqRing[rp];
-                    rp = (rp + 1) % kTxIqRingCapacityFloats;
-                    const float fQ = m_txIqRing[rp];
-                    rp = (rp + 1) % kTxIqRingCapacityFloats;
-                    // relaxed: single writer on this side; acquire on m_txIqRingCount
-                    // above already provides the required ordering fence.
-                    m_txIqRingRead.store(rp, std::memory_order_relaxed);
-                    // relaxed: audio thread observes this via acquire on m_txIqRingCount.
-                    m_txIqRingCount.fetch_sub(2, std::memory_order_relaxed);
-
-                    i24 = toInt24(fI);
-                    q24 = toInt24(fQ);
-                } else {
-                    // Ring-empty: zero-pad this sample (deskhpsdr-faithful).
-                    // Count it so the perf overlay surfaces underrun-driven
-                    // "digital jitter" before the operator hears about it.
-                    ++underrunSamples;
-                }
-                // Pack 3-byte BE I, then 3-byte BE Q.
-                // Cast via quint32 to guarantee arithmetic right-shift semantics
-                // on the high bytes; the sign bit is already represented in two's
-                // complement by the int → quint32 reinterpretation.
-                // Cite: deskhpsdr/src/new_protocol.c:2811-2816 [@120188f]
-                const int offset = 4 + s * 6;
-                const quint32 ui = static_cast<quint32>(i24);
-                const quint32 uq = static_cast<quint32>(q24);
-                buf[offset + 0] = static_cast<char>((ui >> 16) & 0xFF);
-                buf[offset + 1] = static_cast<char>((ui >>  8) & 0xFF);
-                buf[offset + 2] = static_cast<char>( ui        & 0xFF);
-                buf[offset + 3] = static_cast<char>((uq >> 16) & 0xFF);
-                buf[offset + 4] = static_cast<char>((uq >>  8) & 0xFF);
-                buf[offset + 5] = static_cast<char>( uq        & 0xFF);
-            }
-
-            // Only count holes while MOX is engaged.  When not transmitting,
-            // the radio receives our TX I/Q packets on port 1029 and discards
-            // them (RX is the active state), so zero-padded drains while idle
-            // are expected and not the bug we're chasing.  Counting only
-            // during MOX makes the metric directly answer "how much silence
-            // leaked into my transmission".
-            if (underrunSamples > 0 && m_mox) {
-                PerfMonitor::instance().incTxIqUnderrun(underrunSamples);
-            }
-
-            QByteArray pkt(buf, sizeof(buf));
-            // 3M-1a (2026-04-27): TX I/Q port is base + 5 (= 1029), NOT
-            // base + 4 (= 1028; that's the RX-audio port).  Verified by
-            // pcap: NereusSDR was sending all 240-sample TX I/Q packets
-            // to port 1028 the whole time, which the radio routes to its
-            // RX-audio sink and discards — exciter saw zero TX samples,
-            // PA stayed silent, no carrier on the SO-239.
-            // Source: Thetis network.c:1388 [v2.10.3.13]:
-            //   sendPacket(..., prn->base_outbound_port + 5);// 1029);
-            // Source: deskhpsdr/src/new_protocol.h:37 [@120188f]:
-            //   #define TX_IQ_FROM_HOST_PORT 1029
-            m_socket->writeDatagram(pkt, m_radioInfo.address, m_baseOutboundPort + 5);
-        }
-    });
+    // TX I/Q stream: the radio expects continuous TX data on port 1029 even
+    // in RX-only mode. R-IOS-13, R-R3-42: a send thread of its own now
+    // carries it (startTxIqSender, from SendStart); see the TxIqPacer
+    // comment in the header for how it paces.
 
     // 3M-1a (2026-04-27): periodic protocol heartbeat at 100 ms.  The radio
     // expects high-priority packets at this cadence to keep TX state fresh
@@ -833,7 +746,10 @@ void P2RadioConnection::connectToRadio(const RadioInfo& info)
     // "weak signals" concern was an artifact of the unwired producer (silence stream
     // made the carrier appear low-energy on the radio).  Confirmed correct after
     // E.6 + E.7 + e6e48bd landed.
-    m_txIqTimer->start();
+    // R-IOS-13, R-R3-42: the send thread, after Thetis ob_main
+    // (obbuffs.c:153-170 [v2.10.3.15]); started once the socket has sent
+    // (and so is bound) so its descriptor is final.
+    startTxIqSender();
     // 3M-1a (2026-04-27): protocol heartbeat — high-pri every 100 ms, etc.
     m_p2HeartbeatCycle = 0;
     m_p2HeartbeatTimer->start();
@@ -868,9 +784,7 @@ void P2RadioConnection::disconnect()
     if (m_keepAliveTimer) {
         m_keepAliveTimer->stop();
     }
-    if (m_txIqTimer) {
-        m_txIqTimer->stop();
-    }
+    stopTxIqSender();
     if (m_p2HeartbeatTimer) {
         m_p2HeartbeatTimer->stop();
     }
@@ -1256,13 +1170,14 @@ void P2RadioConnection::setMox(bool enabled)
     }
     // On MOX engage, arm the TX I/Q ring pre-prime flag.  The next sendTxIq
     // (which runs on the TX worker thread) will push a 20 ms cushion of
-    // zero samples ahead of its real first-block data, giving the 5 ms
-    // QTimer drain consumer ~4 ticks of headroom before the producer needs
-    // to keep pace.  Closes the 2% zero-padded TX gap observed on the
+    // zero samples ahead of its real first-block data, giving the send
+    // thread a cushion before the producer needs to keep pace.  Closes the 2% zero-padded TX gap observed on the
     // bench 2026-05-26.  Single-writer safety: only sendTxIq mutates the
     // ring; the flag is the cross-thread handshake.
     if (enabled) {
         m_txIqPrimePending.store(true, std::memory_order_release);
+        // R-IOS-13, R-R3-42: the send path's counters run per key.
+        resetTxSendStats();
     }
     m_mox = enabled;
     if (!enabled) {
@@ -1813,9 +1728,11 @@ void P2RadioConnection::discardWidebandFrames()
 //
 // Accepts n interleaved float32 I/Q pairs [I0,Q0, I1,Q1, ...] from the WDSP
 // TX channel output.  Pushes each float into the SPSC ring m_txIqRing.
-// If the ring is full, excess samples are dropped (matches deskhpsdr overflow).
+// If the ring is full, the excess is lost: counted, and logged at most once a
+// second (R-IOS-13, R-R3-42). The ring holds 341 ms, so only a stall longer
+// than that reaches it.
 //
-// The m_txIqTimer lambda (connection thread) drains pairs per frame.
+// The send thread (serviceTxIqSend) drains pairs per frame.
 //
 // No HL2 CWX LSB-clear workaround needed for P2: the workaround applies to
 // P1 old_protocol only (deskhpsdr/src/old_protocol.c:2441-2453 [@120188f]).
@@ -1826,9 +1743,9 @@ void P2RadioConnection::sendTxIq(const float* iq, int n)
     if (n <= 0 || iq == nullptr) { return; }
 
     // First call after MOX engage: push 20 ms of zero-sample cushion into
-    // the ring BEFORE the real first-block I/Q.  Sized so the 5 ms QTimer
-    // consumer has ~4 ticks of headroom while the producer settles into
-    // its 192 kHz steady-state cadence.  Safe to write here because
+    // the ring BEFORE the real first-block I/Q.  It gives the send thread
+    // a cushion while the producer settles into its 192 kHz steady-state
+    // cadence (see the header).  Safe to write here because
     // sendTxIq is the single writer to m_txIqRingWrite / m_txIqRingCount;
     // setMox(true) on the connection thread merely sets the flag.  See
     // m_txIqPrimePending declaration in the header for the full rationale.
@@ -1837,10 +1754,10 @@ void P2RadioConnection::sendTxIq(const float* iq, int n)
         // Clamp the cushion to whatever the ring can actually take.
         // Every other write in this function checks the count first;
         // this one used to add all 7680 floats unconditionally, so any
-        // residue left by a fast MOX off/on cycle (the 5 ms drain timer
+        // residue left by a fast MOX off/on cycle (the send thread
         // normally keeps the ring at ~0, but nothing guarantees it)
         // would push m_txIqRingCount past kTxIqRingCapacityFloats and
-        // hand the drain timer a count for samples the producer had
+        // hand the send thread a count for samples the producer had
         // already overwritten -- garbled I/Q on the air.  Review of
         // PR #291.
         const int used = m_txIqRingCount.load(std::memory_order_acquire);
@@ -1868,10 +1785,9 @@ void P2RadioConnection::sendTxIq(const float* iq, int n)
 
     int pushedPairs = 0;
     for (int k = 0; k < n * 2; k += 2) {
-        // acquire: see the latest fetch_sub from the connection thread so we
+        // acquire: see the latest fetch_sub from the send thread so we
         // don't overfill after a drain.  Pair count: each sample = 2 floats.
         if (m_txIqRingCount.load(std::memory_order_acquire) >= kTxIqRingCapacityFloats - 1) {
-            qCDebug(lcConnection) << "P2 TX I/Q ring buffer overflow — dropping samples";
             break;
         }
 
@@ -1888,6 +1804,28 @@ void P2RadioConnection::sendTxIq(const float* iq, int n)
         m_txIqRingCount.fetch_add(2, std::memory_order_release);
         ++pushedPairs;
     }
+    // R-IOS-13, R-R3-42: the deepest the ring got this key, and what a full
+    // ring refused. A full ring is the only loss on this path: counted, and
+    // a warning at most once a second (never one line per block).
+    const int depthPairs = m_txIqRingCount.load(std::memory_order_acquire) / 2;
+    if (depthPairs > m_txIqMaxRingPairs.load(std::memory_order_relaxed)) {
+        m_txIqMaxRingPairs.store(depthPairs, std::memory_order_relaxed);
+    }
+    if (pushedPairs < n) {
+        const quint64 lost = static_cast<quint64>(n - pushedPairs);
+        const quint64 total =
+            m_txIqOverflowSamples.fetch_add(lost, std::memory_order_relaxed) + lost;
+        const qint64 nowNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        if (nowNs - m_txIqOverflowLogNs >= 1'000'000'000LL) {
+            qCWarning(lcConnection).noquote()
+                << QStringLiteral("P2 transmit I/Q buffer full (%1 ms queued): %2 samples lost since the last report")
+                       .arg(depthPairs * 1000 / 192000)
+                       .arg(total - m_txIqOverflowLogged);
+            m_txIqOverflowLogNs = nowNs;
+            m_txIqOverflowLogged = total;
+        }
+    }
     if (pushedPairs > 0 && m_mox) {
         // Producer-side rate telemetry.  Compared against the 192 kHz
         // P2 wire rate in the perf overlay, this tells us whether the
@@ -1895,6 +1833,438 @@ void P2RadioConnection::sendTxIq(const float* iq, int n)
         // m_mox so the metric reflects only TX-engaged samples.
         PerfMonitor::instance().incTxIqProduced(pushedPairs);
     }
+}
+
+// ---------------------------------------------------------------------------
+// R-IOS-13, R-R3-42: the transmit I/Q send thread.
+//
+// Thetis sends P2 transmit I/Q from ob_main (obbuffs.c:153-170 [v2.10.3.15]):
+//
+//   void ob_main (void *pargs)
+//   {
+//       HANDLE hTask = AvSetMmThreadCharacteristics(TEXT("Pro Audio"), &taskIndex);
+//       if (hTask != 0) AvSetMmThreadPriority(hTask, 2);
+//       else SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+//       ...
+//       while (_InterlockedAnd (&a->run, 1))
+//       {
+//           WaitForSingleObject(a->Sem_BuffReady,INFINITE);
+//           ...
+//           obdata (id, a->out);
+//           sendOutbound(id, a->out);
+//       }
+//   }
+//
+// sendOutbound (network.c:1250-1274 [v2.10.3.15]) converts each double to a
+// 24-bit big-endian integer and sends the 240-sample frame to
+// base_outbound_port + 5 (1029) through WriteUDPFrame (network.c:1377-1391
+// [v2.10.3.15]).
+//
+// NereusSDR keeps Thetis's thread and priority but paces by the radio's
+// buffer (see TxIqPacer in the header): our producer pushes 256-sample blocks
+// from a pump the radio's mic packets pace, and a connection-thread stall
+// holds those packets back, so sending "as each frame fills" would burst a
+// stall's worth into a radio that holds 21.3 ms and drop the rest there.
+// ---------------------------------------------------------------------------
+
+double P2RadioConnection::TxIqPacer::advance(qint64 nowNs, qint64* gapNs)
+{
+    // From deskhpsdr new_protocol.c:2251-2259 [@f3d857c]:
+    //   now = ts.tv_sec + 1.0E-9 * ts.tv_nsec;
+    //   FIFO -= (now - last) * 192000.0;
+    //   last = now;
+    //   if (FIFO < 0.0) {
+    //     //
+    //     // normally this occurs at the RX-TX transition
+    //     //
+    //     FIFO = 0.0;
+    //   }
+    qint64 gap = 0;
+    if (lastNs >= 0 && nowNs > lastNs) {
+        gap = nowNs - lastNs;
+        estimate -= static_cast<double>(gap) * kSamplesPerNs;
+    }
+    if (lastNs < 0 || nowNs > lastNs) {
+        lastNs = nowNs;
+    }
+    if (gapNs != nullptr) {
+        *gapNs = gap;
+    }
+    double dry = 0.0;
+    if (estimate < 0.0) {
+        dry = -estimate;
+        estimate = 0.0;
+    }
+    return dry;
+}
+
+int P2RadioConnection::composeTxIqFrame(char* buf)
+{
+    // Frame: 4-byte BE sequence number + 240 samples x 6 bytes = 1444 bytes.
+    // Cite: deskhpsdr/src/new_protocol.c:1945-1948 [@120188f]
+    //   iqbuffer[0..3] = tx_iq_sequence BE bytes; tx_iq_sequence++;
+    // The txIqFrameForTest seam calls this same composer, so the wire-byte
+    // snapshot tests cover the production encoding.
+    memset(buf, 0, kTxIqFrameBytes);
+    writeBE32(buf, 0, m_seqTxIq++);
+
+    // Float -> int24, clamped to +/-8388607.
+    // Cite: deskhpsdr/src/new_protocol.c:2795 [@120188f]
+    //   void new_protocol_iq_samples(int isample, int qsample)
+    auto toInt24 = [](float v) -> int {
+        const float scaled = v * 8388607.0f;
+        if (scaled >= 8388607.0f)  { return  8388607; }
+        if (scaled <= -8388607.0f) { return -8388607; }
+        return static_cast<int>(scaled);
+    };
+
+    // Drain up to 240 samples from the ring into the payload, or zeros once
+    // the ring is empty (silence, matches deskhpsdr underrun).
+    // Cite: deskhpsdr/src/new_protocol.c:1950-1956, 2811-2816 [@120188f]
+    //   memcpy(&iqbuffer[4], &TXIQRINGBUF[txiq_outptr], 1440);
+    int underrunSamples = 0;
+    for (int s = 0; s < 240; ++s) {
+        int i24 = 0;
+        int q24 = 0;
+        // acquire: makes producer float writes (published via release
+        // fetch_add on m_txIqRingCount) visible before we read m_txIqRing.
+        if (m_txIqRingCount.load(std::memory_order_acquire) >= 2) {
+            int rp = m_txIqRingRead.load(std::memory_order_relaxed);
+            const float fI = m_txIqRing[rp];
+            rp = (rp + 1) % kTxIqRingCapacityFloats;
+            const float fQ = m_txIqRing[rp];
+            rp = (rp + 1) % kTxIqRingCapacityFloats;
+            // relaxed: single consumer; the acquire above is the fence.
+            m_txIqRingRead.store(rp, std::memory_order_relaxed);
+            // relaxed: the producer observes this via its acquire load.
+            m_txIqRingCount.fetch_sub(2, std::memory_order_relaxed);
+            i24 = toInt24(fI);
+            q24 = toInt24(fQ);
+        } else {
+            ++underrunSamples;
+        }
+        // Pack 3-byte BE I, then 3-byte BE Q (two's complement via quint32).
+        // Cite: deskhpsdr/src/new_protocol.c:2811-2816 [@120188f]
+        const int offset = 4 + s * 6;
+        const quint32 ui = static_cast<quint32>(i24);
+        const quint32 uq = static_cast<quint32>(q24);
+        buf[offset + 0] = static_cast<char>((ui >> 16) & 0xFF);
+        buf[offset + 1] = static_cast<char>((ui >>  8) & 0xFF);
+        buf[offset + 2] = static_cast<char>( ui        & 0xFF);
+        buf[offset + 3] = static_cast<char>((uq >> 16) & 0xFF);
+        buf[offset + 4] = static_cast<char>((uq >>  8) & 0xFF);
+        buf[offset + 5] = static_cast<char>( uq        & 0xFF);
+    }
+    return underrunSamples;
+}
+
+int P2RadioConnection::serviceTxIqSend(qint64 nowNs, TxIqFrameSink sink, void* ctx)
+{
+    const bool keyed = m_mox.load();
+    qint64 gapNs = 0;
+    const double dry = m_txIqPacer.advance(nowNs, &gapNs);
+    if (keyed) {
+        if (gapNs > TxIqPacer::kLateWakeNs) {
+            m_txIqLateWakes.fetch_add(1, std::memory_order_relaxed);
+        }
+        // Past the first frame of the key: the radio's buffer ran out
+        // between two passes (a stall of this thread longer than the lead).
+        if (dry >= TxIqPacer::kSamplesPerFrame
+            && m_txIqFramesSent.load(std::memory_order_relaxed) > 0) {
+            m_txIqRadioRanDry.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+
+    // Frames already out this key: the first pass of a key refills the
+    // radio from the cushion, which is no catch-up.
+    const quint64 sentBefore = m_txIqFramesSent.load(std::memory_order_relaxed);
+    int sent = 0;
+    // A frame the socket refused last time goes first, unchanged (its
+    // sequence number is already on it).
+    if (m_txIqPending) {
+        const TxIqSinkResult r = sink(ctx, m_txIqPendingFrame, kTxIqFrameBytes);
+        if (r == TxIqSinkResult::Retry) {
+            m_txIqSendErrors.fetch_add(1, std::memory_order_relaxed);
+            return 0;
+        }
+        m_txIqPending = false;
+        m_txIqPacer.frameSent();
+        if (r == TxIqSinkResult::Sent) {
+            ++sent;
+        } else {
+            m_txIqSendErrors.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+
+    while (m_txIqPacer.roomForFrame()) {
+        const int ringPairs = m_txIqRingCount.load(std::memory_order_acquire) / 2;
+        // Less than a frame queued: wait for the producer unless the radio
+        // is about to run dry, then send what there is and silence.
+        if (ringPairs < TxIqPacer::kSamplesPerFrame && !m_txIqPacer.belowLowWater()) {
+            break;
+        }
+        const int underrunSamples = composeTxIqFrame(m_txIqPendingFrame);
+        // Only count holes while MOX is engaged: unkeyed, the radio
+        // discards our TX I/Q, so a silent frame then is expected.
+        if (underrunSamples > 0 && keyed) {
+            PerfMonitor::instance().incTxIqUnderrun(underrunSamples);
+            m_txIqZeroPadded.fetch_add(static_cast<quint64>(underrunSamples),
+                                       std::memory_order_relaxed);
+        }
+        const TxIqSinkResult r = sink(ctx, m_txIqPendingFrame, kTxIqFrameBytes);
+        if (r == TxIqSinkResult::Retry) {
+            m_txIqPending = true;
+            m_txIqSendErrors.fetch_add(1, std::memory_order_relaxed);
+            break;
+        }
+        // A frame that failed for good still takes its time slot, so the
+        // pacing holds and a dead socket does not spin this thread.
+        m_txIqPacer.frameSent();
+        if (r == TxIqSinkResult::Sent) {
+            ++sent;
+        } else {
+            m_txIqSendErrors.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+    if (sent > 0) {
+        m_txIqFramesSent.fetch_add(static_cast<quint64>(sent), std::memory_order_relaxed);
+    }
+    // A normal pass sends 1-2 frames (one 5 ms tick's worth is 4); more is a
+    // refill after this thread or the producer fell behind.
+    if (keyed && sent > 4 && sentBefore > 0) {
+        m_txIqCatchUpBursts.fetch_add(1, std::memory_order_relaxed);
+    }
+    return sent;
+}
+
+namespace {
+
+// The native send on the connection socket's descriptor (the same source
+// port as every other packet to the radio, as Thetis's single listenSock).
+// The kernel serialises datagrams on one socket, so this thread and the
+// connection thread may send on it at once. QUdpSocket binds
+// QHostAddress::Any as a dual-stack IPv6 socket, so the destination is
+// written in the socket's own family (an IPv4-mapped address on IPv6).
+struct TxIqNativeDest {
+    qintptr fd{-1};
+    sockaddr_storage addr{};
+    int addrLen{0};
+    int lastError{0};
+};
+
+bool fillTxIqNativeDest(TxIqNativeDest* d, qintptr fd, quint32 ipv4, quint16 port)
+{
+    d->fd = fd;
+    sockaddr_storage local{};
+#ifdef Q_OS_WIN
+    int localLen = static_cast<int>(sizeof(local));
+    if (::getsockname(static_cast<SOCKET>(fd), reinterpret_cast<sockaddr*>(&local), &localLen) != 0) {
+        return false;
+    }
+#else
+    socklen_t localLen = sizeof(local);
+    if (::getsockname(static_cast<int>(fd), reinterpret_cast<sockaddr*>(&local), &localLen) != 0) {
+        return false;
+    }
+#endif
+    if (local.ss_family == AF_INET6) {
+        auto* a6 = reinterpret_cast<sockaddr_in6*>(&d->addr);
+        a6->sin6_family = AF_INET6;
+        a6->sin6_port = htons(port);
+        // ::ffff:a.b.c.d
+        unsigned char* b = reinterpret_cast<unsigned char*>(&a6->sin6_addr);
+        b[10] = 0xff;
+        b[11] = 0xff;
+        b[12] = static_cast<unsigned char>((ipv4 >> 24) & 0xff);
+        b[13] = static_cast<unsigned char>((ipv4 >> 16) & 0xff);
+        b[14] = static_cast<unsigned char>((ipv4 >> 8) & 0xff);
+        b[15] = static_cast<unsigned char>(ipv4 & 0xff);
+        d->addrLen = static_cast<int>(sizeof(sockaddr_in6));
+        return true;
+    }
+    if (local.ss_family == AF_INET) {
+        auto* a4 = reinterpret_cast<sockaddr_in*>(&d->addr);
+        a4->sin_family = AF_INET;
+        a4->sin_port = htons(port);
+        a4->sin_addr.s_addr = htonl(ipv4);
+        d->addrLen = static_cast<int>(sizeof(sockaddr_in));
+        return true;
+    }
+    return false;
+}
+
+P2RadioConnection::TxIqSinkResult sendTxIqNative(void* ctx, const char* frame, int len)
+{
+    using Result = P2RadioConnection::TxIqSinkResult;
+    auto* d = static_cast<TxIqNativeDest*>(ctx);
+#ifdef Q_OS_WIN
+    const int rc = ::sendto(static_cast<SOCKET>(d->fd), frame, len, 0,
+                            reinterpret_cast<const sockaddr*>(&d->addr), d->addrLen);
+    if (rc == len) {
+        return Result::Sent;
+    }
+    const int err = WSAGetLastError();
+    d->lastError = err;
+    // A full send buffer: keep the frame and try again next pass.
+    return (err == WSAEWOULDBLOCK || err == WSAENOBUFS) ? Result::Retry : Result::Failed;
+#else
+    const ssize_t rc = ::sendto(static_cast<int>(d->fd), frame, static_cast<size_t>(len), 0,
+                                reinterpret_cast<const sockaddr*>(&d->addr),
+                                static_cast<socklen_t>(d->addrLen));
+    if (rc == len) {
+        return Result::Sent;
+    }
+    const int err = errno;
+    d->lastError = err;
+    return (err == EAGAIN || err == EWOULDBLOCK || err == ENOBUFS || err == EINTR)
+        ? Result::Retry : Result::Failed;
+#endif
+}
+
+} // namespace
+
+void P2RadioConnection::startTxIqSender()
+{
+    stopTxIqSender();
+    if (!m_socket || m_radioInfo.address.isNull()) {
+        return;
+    }
+    bool ipv4Ok = false;
+    const quint32 ipv4 = m_radioInfo.address.toIPv4Address(&ipv4Ok);
+    const qintptr fd = m_socket->socketDescriptor();
+    if (!ipv4Ok || fd < 0) {
+        qCWarning(lcConnection) << "P2: no socket for the transmit I/Q stream; it is not sent";
+        return;
+    }
+    m_txIqSocketFd = fd;
+    m_txIqDestIpv4 = ipv4;
+    // 3M-1a (2026-04-27): TX I/Q port is base + 5 (= 1029), NOT base + 4
+    // (= 1028; that's the RX-audio port).
+    // Source: Thetis network.c:1388 [v2.10.3.13]:
+    //   sendPacket(..., prn->base_outbound_port + 5);// 1029);
+    // Source: deskhpsdr/src/new_protocol.h:37 [@120188f]:
+    //   #define TX_IQ_FROM_HOST_PORT 1029
+    m_txIqDestPort = static_cast<quint16>(m_baseOutboundPort + 5);
+    m_txIqPacer = TxIqPacer{};
+    m_txIqPending = false;
+    m_txIqSenderRun.store(true, std::memory_order_release);
+    m_txIqSender.reset(QThread::create([this]() { txIqSenderMain(); }));
+    m_txIqSender->setObjectName(QStringLiteral("P2TxIqSender"));
+    m_txIqSender->start();
+}
+
+void P2RadioConnection::stopTxIqSender()
+{
+    m_txIqSenderRun.store(false, std::memory_order_release);
+    if (m_txIqSender) {
+        m_txIqSender->wait();
+        m_txIqSender.reset();
+    }
+    m_txIqPending = false;
+}
+
+void P2RadioConnection::txIqSenderMain()
+{
+    // Priority as the TX pump has it (TxWorkerThread::run): in nereusd on
+    // Linux thread placement gives this thread a core and raised priority
+    // while transmitting (R-R3-41); elsewhere it runs at audio priority, as
+    // Thetis's ob_main runs at "Pro Audio" (obbuffs.c:155-158 [v2.10.3.15]).
+    const bool placed = ThreadPlacement::managesThreadPriority();
+    AudioPriorityToken* prio = nullptr;
+    if (placed) {
+        ThreadPlacement::instance().registerCurrentThread(ThreadRole::TxIqSender);
+    } else {
+        prio = elevateAudioThreadPriority();
+    }
+
+    TxIqNativeDest dest;
+    if (!fillTxIqNativeDest(&dest, m_txIqSocketFd, m_txIqDestIpv4, m_txIqDestPort)) {
+        qCWarning(lcConnection) << "P2: the transmit I/Q socket has no usable address; the stream is not sent";
+    }
+    quint64 errorsLogged = 0;
+    qint64 errorLogNs = 0;
+
+#ifdef Q_OS_WIN
+    // A 1 ms wait needs a high-resolution timer on Windows (a plain Sleep(1)
+    // can last a whole 15.6 ms scheduler tick, longer than the lead).
+#ifdef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
+    HANDLE timer = CreateWaitableTimerExW(nullptr, nullptr,
+                                          CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+                                          TIMER_ALL_ACCESS);
+#else
+    HANDLE timer = nullptr;  // SDK without it: Sleep(1) below
+#endif
+    if (timer == nullptr) {
+        qCWarning(lcConnection) << "P2: no high-resolution timer; the transmit I/Q"
+                                   " send thread falls back to Sleep(1)";
+    }
+#endif
+    while (m_txIqSenderRun.load(std::memory_order_acquire)) {
+        const qint64 nowNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        serviceTxIqSend(nowNs, &sendTxIqNative, &dest);
+        // A socket that refuses the stream: a warning at most once a second.
+        const quint64 errors = m_txIqSendErrors.load(std::memory_order_relaxed);
+        if (errors > errorsLogged && nowNs - errorLogNs >= 1'000'000'000LL) {
+            qCWarning(lcConnection) << "P2: transmit I/Q send failed" << (errors - errorsLogged)
+                                    << "times; last error" << dest.lastError;
+            errorsLogged = errors;
+            errorLogNs = nowNs;
+        } else if (errors < errorsLogged) {
+            errorsLogged = errors;  // reset at a key
+        }
+        // One pass a millisecond: a frame is 1.25 ms, the lead 15 ms.
+#ifdef Q_OS_WIN
+        if (timer != nullptr) {
+            LARGE_INTEGER due;
+            due.QuadPart = -10000;  // 1 ms, relative, in 100 ns units
+            if (SetWaitableTimer(timer, &due, 0, nullptr, nullptr, FALSE)) {
+                WaitForSingleObject(timer, INFINITE);
+                continue;
+            }
+        }
+        Sleep(1);
+#else
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+#endif
+    }
+#ifdef Q_OS_WIN
+    if (timer != nullptr) {
+        CloseHandle(timer);
+    }
+#endif
+
+    leaveAudioThreadPriority(prio);
+    if (placed) {
+        ThreadPlacement::instance().deregisterCurrentThread();
+    }
+}
+
+void P2RadioConnection::resetTxSendStats()
+{
+    m_txIqFramesSent.store(0, std::memory_order_relaxed);
+    m_txIqZeroPadded.store(0, std::memory_order_relaxed);
+    m_txIqLateWakes.store(0, std::memory_order_relaxed);
+    m_txIqCatchUpBursts.store(0, std::memory_order_relaxed);
+    m_txIqRadioRanDry.store(0, std::memory_order_relaxed);
+    m_txIqOverflowSamples.store(0, std::memory_order_relaxed);
+    m_txIqSendErrors.store(0, std::memory_order_relaxed);
+    m_txIqMaxRingPairs.store(0, std::memory_order_relaxed);
+}
+
+RadioConnection::TxSendStats P2RadioConnection::txSendStats() const
+{
+    TxSendStats st;
+    st.valid = true;
+    st.framesSent = m_txIqFramesSent.load(std::memory_order_relaxed);
+    st.zeroPaddedSamples = m_txIqZeroPadded.load(std::memory_order_relaxed);
+    st.lateWakes = m_txIqLateWakes.load(std::memory_order_relaxed);
+    st.catchUpBursts = m_txIqCatchUpBursts.load(std::memory_order_relaxed);
+    st.radioRanDry = m_txIqRadioRanDry.load(std::memory_order_relaxed);
+    st.overflowSamples = m_txIqOverflowSamples.load(std::memory_order_relaxed);
+    st.sendErrors = m_txIqSendErrors.load(std::memory_order_relaxed);
+    st.maxRingMs = m_txIqMaxRingPairs.load(std::memory_order_relaxed) * 1000 / 192000;
+    return st;
 }
 
 // ---------------------------------------------------------------------------
@@ -2707,7 +3077,7 @@ void P2RadioConnection::stopForEstablishedSilence()
     m_establishedSilenceDeadline = QDeadlineTimer();
 
     if (m_keepAliveTimer) { m_keepAliveTimer->stop(); }
-    if (m_txIqTimer) { m_txIqTimer->stop(); }
+    stopTxIqSender();
     if (m_p2HeartbeatTimer) { m_p2HeartbeatTimer->stop(); }
     if (m_connectWatchdog) { m_connectWatchdog->stop(); }
     if (m_establishedSilenceTimer) { m_establishedSilenceTimer->stop(); }
@@ -3805,7 +4175,7 @@ void P2RadioConnection::onConnectTimeout()
     m_establishedSilenceGeneration = 0;
     m_establishedSilenceDeadline = QDeadlineTimer();
     if (m_keepAliveTimer) { m_keepAliveTimer->stop(); }
-    if (m_txIqTimer) { m_txIqTimer->stop(); }
+    stopTxIqSender();
     if (m_p2HeartbeatTimer) { m_p2HeartbeatTimer->stop(); }
     if (m_reconnectTimer) { m_reconnectTimer->stop(); }
     if (m_establishedSilenceTimer) { m_establishedSilenceTimer->stop(); }

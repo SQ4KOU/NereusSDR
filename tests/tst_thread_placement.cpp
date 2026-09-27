@@ -6,6 +6,10 @@
 // pure plan against sysfs trees laid out under a temporary root, the
 // registry against a recording fake of the system calls, and a Linux-only
 // smoke test of the real calls. Nothing reads the build machine's /sys.
+//
+// Modification history (NereusSDR):
+//   2026-09-27: the transmit I/Q sender role (R-IOS-13, R-R3-42). J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -926,6 +930,27 @@ private slots:
         const PlacementPlan back = planThreadPlacement(rk, demand({0}, true));
         QCOMPARE(back.cpuFor(ThreadRole::RxWorker, 0), 4);
         QCOMPARE(back.cpuFor(ThreadRole::DspThread), 5);
+    }
+
+    void transmitIqSenderTakesTheCoreAfterThePump()
+    {
+        // R-IOS-13, R-R3-42: the P2 transmit I/Q send thread is a role of
+        // its own, after the transmit pump. Keyed on the Rock with one
+        // slice it gets the last fast core; with more receive channels
+        // busy there is none left and it shares cores 0-3.
+        SysfsFixture f;
+        layOutRk3588s(f);
+        const CpuTopology rk = f.read();
+        PlacementDemand keyed = demand({}, true, true, true);
+        keyed.txIqSender = true;
+        const PlacementPlan one = planThreadPlacement(rk, keyed);
+        QCOMPARE(one.cpuFor(ThreadRole::TxWorkerThread), 6);
+        QCOMPARE(one.cpuFor(ThreadRole::TxIqSender), 7);
+        PlacementDemand busy = demand({1, 2}, true, true, true);
+        busy.txIqSender = true;
+        const PlacementPlan three = planThreadPlacement(rk, busy);
+        QCOMPARE(three.cpuFor(ThreadRole::TxIqSender), -1);
+        QCOMPARE(three.housekeeping, (QList<int>{0, 1, 2, 3}));
     }
 
     void refusalsAreWarnedOnce()

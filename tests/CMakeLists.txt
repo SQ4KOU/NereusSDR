@@ -2752,6 +2752,17 @@ target_compile_definitions(tst_p1_watchdog_wire PRIVATE NEREUS_BUILD_TESTS)
 nereus_add_test(tst_p2_tx_iq_wire)
 target_compile_definitions(tst_p2_tx_iq_wire PRIVATE NEREUS_BUILD_TESTS)
 
+# R-IOS-13, R-R3-42: the P2 transmit I/Q send path never drops a sample on a
+# transient stall (the Rock, 2026-09-26). Simulated time: a steady run at
+# 800 frames a second, connection-thread, send-thread and combined stalls of
+# 50, 100 and 200 ms, the unkeyed silence stream, a refused frame retried.
+nereus_add_test(tst_p2_tx_iq_send)
+target_compile_definitions(tst_p2_tx_iq_send PRIVATE NEREUS_BUILD_TESTS)
+# The same send thread for real, against a loopback receiver on the wall
+# clock (REALTIME: run it alone on a loaded machine).
+nereus_add_test(tst_p2_tx_iq_send_realtime REALTIME)
+target_compile_definitions(tst_p2_tx_iq_send_realtime PRIVATE NEREUS_BUILD_TESTS)
+
 # ── Phase 3M-1a Task E.7: P2 MOX wire byte (byte 4 bit 1 = 0x02) ─────────────
 # 10 tests verify:
 #   1-5. Legacy path (no codec): default=0, setMox(true)→1, setMox(false)→0,
