@@ -65,6 +65,10 @@
 //                 n1gp-Anvelina_PROIII Tx1_IQ_fifo.vhd:106 [@8e86a61]). The ring grows to 341 ms and a
 //                 full ring is counted and logged. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code.
+//   2026-09-27 - R-IOS-13: txIqQueuedMs() reads the send ring's fill for the remote microphone's
+//                 buffer, which sheds a standing excess only in silence; the key-on cushion is the
+//                 radio's target lead plus one frame (16.25 ms, was 20 ms), so no standing 5 ms
+//                 stays in the ring. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -336,6 +340,7 @@ public slots:
 public:
     // R-IOS-13, R-R3-42: the send path's counters since the last key.
     TxSendStats txSendStats() const override;
+    double txIqQueuedMs() const override;
 
     // What a transmit I/Q frame sink did with a frame: sent it; refused it
     // for now (a full socket buffer: keep it and retry next pass); or failed
@@ -727,9 +732,11 @@ private:
     // TX I/Q ring pre-prime flag.  setMox(true) sets it on the connection
     // thread; sendTxIq consumes it on the TX worker thread (single-writer
     // invariant preserved -- only the worker mutates the ring write index
-    // and count).  When consumed, sendTxIq pushes a 20 ms cushion of
-    // zero samples (3840 sample-pairs = 7680 floats) into the ring
-    // BEFORE the real first-block samples.  Bench evidence 2026-05-26:
+    // and count).  When consumed, sendTxIq pushes a cushion of zero
+    // samples into the ring BEFORE the real first-block samples: 20 ms
+    // until R-IOS-13 (2026-09-27), now the radio's target lead plus one
+    // frame (3120 sample-pairs, 16.25 ms), so nothing past what the radio
+    // takes stands in the ring as added latency.  Bench evidence 2026-05-26:
     // without this cushion, ~2% of a 10 s SSB TX gets zero-padded on the
     // wire -- listeners hear it as "digital jitter".
     //

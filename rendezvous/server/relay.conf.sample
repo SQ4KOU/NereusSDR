@@ -4,13 +4,15 @@
 # section 12 explains the relay and each limit.
 
 [relay]
-# Loopback only: Caddy terminates TLS and forwards wss://<host>/v1/relay
-# here. IPv6 addresses go in brackets.
-listen = 127.0.0.1:8711 [::1]:8711
-
-# Peers whose X-Forwarded-For is believed (the last address in it is the
-# client's). Anything else counts as the client itself.
-trusted_proxies = 127.0.0.1 ::1
+# A Unix stream socket: Caddy terminates TLS and forwards
+# wss://<host>/v1/relay here (reverse_proxy unix//<socket>). Its mode and
+# group decide who may connect: Caddy's group and nobody else. The client's
+# address is the last in X-Forwarded-For, which Caddy sets; a request
+# without one is refused. Under systemd, RuntimeDirectory=nereus-relay makes
+# the directory.
+socket = /run/nereus-relay/relay.sock
+socket_mode = 0660
+socket_group = caddy
 
 # The file holding the relay secret, and nothing else: the same file the
 # rendezvous service's relay_secret_file names. Under systemd,
@@ -51,5 +53,7 @@ send_stall_ms = 10000
 ping_interval_seconds = 20
 ping_timeout_seconds = 20
 # The kernel's receive and send buffer for each connection (SO_RCVBUF and
-# SO_SNDBUF), in bytes; Linux doubles the value. 0 leaves the kernel's sizing.
+# SO_SNDBUF), in bytes; Linux doubles the value. On the Unix socket the send
+# buffer is what the hop to Caddy can hold (section 12.5). 0 leaves the
+# kernel's sizing, which holds several times more.
 socket_buffer_bytes = 16384

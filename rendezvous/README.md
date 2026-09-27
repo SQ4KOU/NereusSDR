@@ -47,7 +47,7 @@ nereussdr.com's, and each one is a setting.
 | --- | --- | --- |
 | Caddy (TLS, the WebSocket's front) | TCP 80 and 443 | the internet |
 | The service | TCP 8710 on 127.0.0.1 and ::1 | Caddy only |
-| The WebSocket relay | TCP 8711 on 127.0.0.1 and ::1 | Caddy only (`/v1/relay`) |
+| The WebSocket relay | the Unix socket `/run/nereus-relay/relay.sock` (mode 0660, group `caddy`) | Caddy only (`/v1/relay`) |
 | coturn (STUN and TURN) | UDP 3478 and 443, on the public IPv4 and IPv6 | the internet |
 | coturn's relays | UDP 61000 to 65535, same addresses | the internet |
 
@@ -106,7 +106,7 @@ ufw enable
 
 (With a cloud provider's firewall instead, open the same ports there, for
 both IPv4 and IPv6.) Nothing else needs to be reachable: the service and the
-WebSocket relay listen on loopback only. `setup-server.sh` never changes the
+WebSocket relay listen on loopback and on a Unix socket only. `setup-server.sh` never changes the
 firewall.
 
 ### fail2ban for SSH
@@ -215,12 +215,17 @@ bash /root/rendezvous/deploy/setup-server.sh
 - enables and starts Caddy, coturn and the report (and the service and the
   WebSocket relay once their code is there), and checks that coturn holds
   exactly UDP 3478 and 443 and no TCP port, Caddy no UDP port, and the
-  service and the WebSocket relay loopback only.
+  service loopback only, and the WebSocket relay on its Unix socket with
+  mode 0660 and group `caddy` and on no IP port.
 
 Run again, it reloads Caddy after a Caddyfile change (open connections are
 kept) and restarts a service only when one of its files changed (a coturn
-restart drops every relay in use); the dry run says which it would do. It
-refuses to go on while another program holds UDP 3478 or 443.
+restart drops every relay in use); the dry run says which it would do. A
+run with `--no-start` starts nothing and keeps the reloads and restarts its
+changes call for in `/etc/nereus-rendezvous/pending-actions` (root only);
+the next run without it carries them out and the dry run lists them, so a
+check with `--no-start` before the real run loses none. It refuses to go on
+while another program holds UDP 3478 or 443.
 
 ### 6. The service's code
 
@@ -256,8 +261,9 @@ turnutils_stunclient -p 443 rv6.example.org    # the same over IPv6
 
 On the server: `systemctl status caddy coturn nereus-rendezvous
 nereus-relay`, and `ss -lntup` shows coturn on UDP 3478 and 443 only, the
-service on 127.0.0.1:8710 and [::1]:8710, the WebSocket relay on
-127.0.0.1:8711 and [::1]:8711, and Caddy on TCP 80 and 443.
+service on 127.0.0.1:8710 and [::1]:8710, and Caddy on TCP 80 and 443; the
+WebSocket relay holds no port, and `ls -l /run/nereus-relay/relay.sock`
+shows its socket as `srw-rw----` with group `caddy`.
 
 Then point NereusSDR at `rv.example.org` in its remote access settings.
 
@@ -292,7 +298,9 @@ but it needs care, which is why nereussdr.com gives it a server of its own:
   from `deploy/Caddyfile` (both its `handle` blocks: `/v1/relay*` to the
   WebSocket relay, the rest to the service) to the website's Caddyfile
   yourself, with your host name, validate it, and reload Caddy. Relay
-  legs are connections the website's Caddy holds too. Consider the same drop-in
+  legs are connections the website's Caddy holds too. The relay's socket
+  is opened by the group `caddy` (the account Caddy's own package runs
+  as); a Caddy run under another account needs that account in the group. Consider the same drop-in
   (`deploy/caddy-override.conf`: restart on failure, a lower OOM score, a
   GOMEMLIMIT) for the website's Caddy, since the website depends on it too.
 - **The deploy account.** `setup-server.sh` makes its own (`nereusrv`),

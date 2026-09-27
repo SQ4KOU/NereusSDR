@@ -57,6 +57,11 @@
 //                 its Setup applies them (gain 100e-6, leak 100e-3), read
 //                 from ControlRanges.h (R-IOS-06, R-IOS-27). J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-27 — R-IOS-13: the filter type sends Thetis's MP (Low Latency
+//                 = minimum phase, enums.cs:404-408, radio.cs:571
+//                 [v2.10.3.15]; it was inverted); the type cache starts at
+//                 Linear Phase, where WDSP opens the channel. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -987,9 +992,10 @@ public:
     // ── In-place filter resize / filter type change ─────────────────────────
     //
     // Wraps the WDSP entry points that Thetis calls from its DSPRX property
-    // setters at radio.cs:540 / 559 [v2.10.3.13]:
+    // setters at radio.cs:542 / 561 [v2.10.3.15]:
     //   FilterSize → WDSP.RXASetNC
-    //   FilterType → WDSP.RXASetMP
+    //   FilterType → WDSP.RXASetMP (Low Latency = minimum phase, MP 1:
+    //   enums.cs:404-408, radio.cs:571 [v2.10.3.15])
     //
     // These are SAFE to call from the main thread while the audio worker is
     // alive — RXASetNC/RXASetMP internally quiesce via SetChannelState's
@@ -1038,6 +1044,10 @@ public:
     bool isActive() const { return m_active.load(); }
 
 #ifdef NEREUS_BUILD_TESTS
+    // R-IOS-13 (2026-09-27): WDSP's minimum-phase flag on the channel's
+    // notched bandpass (rxa[].nbp0.p->mp, what RXASetMP sets first), or -1
+    // when the channel is not open.
+    int bandpassMinimumPhaseForTest() const;
     // Test-only: true while a no-drain stop is waiting for WDSP to report it
     // done (m_pendingStop). Lets a test see processIq's feed finish the stop
     // rather than the restart's finishPendingStop fallback.
@@ -1483,7 +1493,12 @@ private:
     // dsp_size argument to OpenChannel).  WDSP fircore.size is set there
     // and stays in sync with m_dspBlockSize through setDspBufferSizeSamples.
     int m_filterSize{4096};
-    int m_filterType{0};      // 0 = LowLatency, 1 = LinearPhase
+    // 0 = LowLatency, 1 = LinearPhase. R-IOS-13: starts at LinearPhase,
+    // the state WDSP opens the channel in (RXA.c create_nbp mp 0), so the
+    // first apply of "Low Latency" reaches RXASetMP. (Thetis's cache starts
+    // at Low_Latency, radio.cs:559 [v2.10.3.15], and its first apply is
+    // forced.)
+    int m_filterType{1};
     int m_dspBlockSize{4096}; // matches createRxChannel dsp_size
 };
 

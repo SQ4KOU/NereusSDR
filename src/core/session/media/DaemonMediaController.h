@@ -63,6 +63,7 @@
 // =================================================================
 
 #include "core/NoiseFloorEstimator.h"
+#include "core/RadioConnection.h"
 #include "core/session/media/DaemonAudioSender.h"
 #include "core/session/media/DaemonSpectrumSource.h"
 #include "core/session/media/DisplayBudget.h"
@@ -375,6 +376,12 @@ public:
     double endpointDisplayOffsetDb(quint32 endpointId) const;
 
     RemoteMicReceiver* micReceiver() const { return m_micReceiver.get(); }
+    /// R-IOS-13, R-R3-42: the text of the line logged at each unkey (log
+    /// only, never shown to a device). `feed` is null when the Core has no
+    /// remote microphone feed.
+    static QString unkeyStatsLine(const QByteArray& deviceId, const RemoteMicReceiver::Stats& rx,
+                                  const RemoteMicFeed::Stats* feed,
+                                  const RadioConnection::TxSendStats& send);
     /// Task 36: the keying's view of the line (RemoteKeying::setMicUplink;
     /// a controller on its own installs it on the Core's RemoteKeying, and
     /// DaemonMediaHub installs one that routes by device, fix wave C2).

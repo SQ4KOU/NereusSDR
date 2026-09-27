@@ -530,6 +530,11 @@
 //                SpotSourceHost); a remote window applies the Core's
 //                freedvStations stream. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-27 — R-IOS-13: every key applies the TX-bound slice's DSP >
+//                Options to the TX channel before the hardware flip
+//                (applyTxDspOptionsBeforeKey on txAboutToBegin), so no key
+//                path transmits at the channel's open sizes. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1202,12 +1207,24 @@ RadioModel::RadioModel(Role role, QObject* parent)
     // rnnr.c's RNNRloadModel (it swaps the model under every NR3 instance);
     // DspAssetService only calls this with a file that passed its trial load.
     // A remote window never loads a model: its service ignores the loader.
-    m_dspAssets->setNr3ModelLoader([](const QString& path) {
-        qCInfo(lcDsp) << "NR3: loading rnnoise model from" << path;
+    // R-R3-49: on the receive lane, like every other receive-side WDSP call
+    // (R-R3-39). RNNRloadModel walks rnnr.c's global list of NR3 instances,
+    // which create_rnnr grows (and reallocates) as the lane opens channels;
+    // run from the event loop at a connect, it read that list while the
+    // lane replaced it (ThreadSanitizer, tst_receive_layout_native).
+    m_dspAssets->setNr3ModelLoader([this](const QString& path) {
+        auto load = [path]() {
+            qCInfo(lcDsp) << "NR3: loading rnnoise model from" << path;
 #ifdef HAVE_WDSP
-        const QByteArray encoded = QFile::encodeName(path);
-        RNNRloadModel(encoded.constData());
+            const QByteArray encoded = QFile::encodeName(path);
+            RNNRloadModel(encoded.constData());
 #endif
+        };
+        if (m_rxLane) {
+            m_rxLane->post(std::move(load));
+        } else {
+            load();
+        }
     });
     // Follow-up item 1 (R-R3-21): whenever the Core finds it has no usable
     // NR3 model (at start, at a connect's load, or after a model choice),
@@ -1881,6 +1898,15 @@ RadioModel::RadioModel(Role role, QObject* parent)
     // is gone before this key's own hardwareFlipped(true) is queued.
     connect(m_moxController, &MoxController::txAboutToBegin,
             this, [this]() { m_transmitStopHold = false; });
+
+    // R-IOS-13 (2026-09-27): every key (MOX, TUNE, a remote key, VOX,
+    // two-tone) goes through txAboutToBegin before the hardware flip and
+    // the TX channel's start, so the TX-bound slice's DSP > Options apply
+    // here. Without it the channel keeps its open sizes (dsp 2048) until
+    // the slice's mode first changes: 65.6 ms through TX DSP instead of
+    // 16.1 ms (tst_tx_latency_dsp).
+    connect(m_moxController, &MoxController::txAboutToBegin,
+            this, &RadioModel::applyTxDspOptionsBeforeKey);
 
     // Task 33: the receiver comes back after ptt_out_delay, not with the
     // hardware flip (Thetis console.cs:29678-29680 [v2.10.3.15]).
@@ -23627,6 +23653,28 @@ qint64 RadioModel::setActiveRxCountLive(int newCount)
 //
 // NereusSDR-original infrastructure — no Thetis source ported here.
 // ---------------------------------------------------------------------------
+void RadioModel::applyTxDspOptionsBeforeKey()
+{
+    if (m_txChannel == nullptr) {
+        return;
+    }
+    const SliceModel* const slice = txBoundSlice();
+    if (slice == nullptr) {
+        return;
+    }
+    const DSPMode mode = slice->dspMode();
+    // The same apply a mode change makes (TxChannel::onModeChanged): a
+    // no-op once the sizes and type match; with the transmit lane its
+    // WDSP calls queue ahead of the channel's start.
+    const qint64 elapsed = m_txChannel->onModeChanged(mode);
+    if (elapsed > 0) {
+        emit dspChangeMeasured(elapsed);
+    }
+    if (m_txKeyDspOptionsObserverForTest) {
+        m_txKeyDspOptionsObserverForTest(mode);
+    }
+}
+
 void RadioModel::rebuildDspOptionsForMode(DSPMode forMode)
 {
     if (!m_wdspEngine || !m_wdspEngine->isInitialized()) {

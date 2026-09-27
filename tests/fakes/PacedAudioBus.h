@@ -4,6 +4,7 @@
 #include <QVector>
 #include <chrono>
 #include <algorithm>
+#include <atomic>
 #include <condition_variable>
 #include <deque>
 #include <functional>
@@ -43,7 +44,7 @@ public:
             firstPushDueFrame = dueFramesLocked();
         }
         queue.insert(queue.end(), samples, samples + count);
-        peakQueued = qMax(peakQueued, int(queue.size()) / channels);
+        peakQueued.store(std::max(peakQueued.load(), int(queue.size()) / channels));
         return bytes;
     }
     qint64 pull(char*, qint64) override { return 0; }
@@ -171,8 +172,10 @@ public:
     QString backendName() const override { return QStringLiteral("PacedTest"); }
     NereusSDR::AudioFormat negotiatedFormat() const override { return format; }
     QVector<float> heard;
-    int flushes = 0;
-    int peakQueued = 0;
+    // R-R3-49: written by the playback worker's push()/flush() under the
+    // bus lock and read unlocked by the test's own thread, so atomic.
+    std::atomic<int> flushes{0};
+    std::atomic<int> peakQueued{0};
     int callbackFrames = 480;
     // R-R3-35: what this bus reports as its device latency (none: unknown).
     std::optional<qint64> deviceLatencyNs;

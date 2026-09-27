@@ -31,6 +31,7 @@
 #include "core/session/media/PcmAudioCodec.h"
 #include "core/session/media/RemoteAudioContext.h"
 #include "core/session/media/RemoteSpectrumContext.h"
+#include "core/session/media/RemoteMicReceiver.h"
 #include "core/settings/SettingsProxy.h"
 #include "gui/RemoteDisplayAllocator.h"
 #include "fakes/LoopbackTransport.h"
@@ -587,6 +588,8 @@ private slots:
     }
 
     void authenticatedControlProducesContextThenDecodedDisplayAndUnsubscribes();
+    // R-IOS-13, R-R3-42 (2026-09-27).
+    void unkeyLineCarriesTheMicrophonePathsLatency();
     void extendedPermissionFirstCaptureAndSharedEndpointLifetimes();
     void widebandSourceReplacementAndSessionRetirement();
     void olderPeerKeepsLegacyContextAndCannotAcquireWideband();
@@ -4380,6 +4383,50 @@ void TstDaemonMediaController::receiverStreamRetiresOnSliceRadioAndSessionEnd()
     QTRY_COMPARE(h.controller.activeReceiverAudioStreamCount(), 0);
     QCOMPARE(engine->sliceAudioTapCount(), 0);
     QTRY_COMPARE(h.controller.findChildren<DaemonAudioSender*>().size(), 0);
+}
+
+// R-IOS-13, R-R3-42 (2026-09-27): the line logged at each unkey carries the
+// microphone path's added latency (mean, max), the send ring's fill (mean,
+// max) and the silence shed, besides the counters it always had.
+void TstDaemonMediaController::unkeyLineCarriesTheMicrophonePathsLatency()
+{
+    RemoteMicReceiver::Stats rx;
+    rx.concealedPackets = 2;
+    RemoteMicFeed::Stats feed;
+    feed.fillFrames = 960;
+    feed.targetFrames = 1440;
+    feed.addedMeanMs = 22.46;
+    feed.addedMaxMs = 222.8;
+    feed.ringMeanMs = 2.42;
+    feed.ringMaxMs = 200.0;
+    feed.shedFrames = 384;
+    feed.shedForRingFrames = 9024;
+    feed.insertedFrames = 0;
+    feed.grows = 1;
+    feed.heldBlocks = 42;
+    RadioConnection::TxSendStats send;
+    send.valid = true;
+    send.framesSent = 9600;
+    const QString line = DaemonMediaController::unkeyStatsLine("phone-1", rx, &feed, send);
+    QVERIFY2(line.contains(QStringLiteral("target 30 ms")), qPrintable(line));
+    QVERIFY2(line.contains(QStringLiteral("added latency mean 22.5 ms, max 222.8 ms")),
+             qPrintable(line));
+    QVERIFY2(line.contains(QStringLiteral("send ring mean 2.4 ms, max 200.0 ms")),
+             qPrintable(line));
+    QVERIFY2(line.contains(QStringLiteral("shed 196.0 ms (188.0 ms for the ring), inserted 0.0 ms")),
+             qPrintable(line));
+    QVERIFY2(line.contains(QStringLiteral("target grew 1 times, held for DEXP 42 blocks")),
+             qPrintable(line));
+    QVERIFY2(line.contains(QStringLiteral("packets concealed 2")), qPrintable(line));
+    QVERIFY2(line.contains(QStringLiteral("frames 9600")), qPrintable(line));
+
+    // A path whose connection does not report its ring says so.
+    feed.ringMeanMs = -1.0;
+    feed.ringMaxMs = -1.0;
+    QVERIFY(DaemonMediaController::unkeyStatsLine("phone-1", rx, &feed, send)
+                .contains(QStringLiteral("send ring unknown")));
+    QVERIFY(DaemonMediaController::unkeyStatsLine("phone-1", rx, nullptr, send)
+                .contains(QStringLiteral("microphone no feed")));
 }
 
 QTEST_MAIN(TstDaemonMediaController)

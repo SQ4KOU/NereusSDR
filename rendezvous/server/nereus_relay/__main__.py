@@ -28,9 +28,9 @@ async def run(config_path: str) -> int:
     config = load(config_path)
     configure_logging(config.log_level)
     relay = Relay(config)
-    servers = [await transport.start(relay, host, port) for host, port in config.listen]
+    servers = [await transport.start(relay)]
     log = logging.getLogger("nereus_relay")
-    log.info("listening on %d addresses, %d slots", len(servers), config.slots)
+    log.info("listening on its Unix socket, %d slots", config.slots)
     relay.start_day_timer()
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()

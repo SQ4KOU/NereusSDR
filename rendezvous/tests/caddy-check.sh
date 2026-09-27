@@ -6,8 +6,9 @@
 # same source rendezvous/deploy/setup-server.sh installs from), with the
 # service behind Caddy as on the rendezvous server:
 #
-#   1. caddy validate passes on the real rendezvous/deploy/Caddyfile, and on
-#      the test copy with local certificates.
+#   1. caddy validate passes on the real rendezvous/deploy/Caddyfile, with
+#      no warning (it is as caddy fmt writes it, and has no header_up Caddy
+#      calls unnecessary), and on the test copy with local certificates.
 #   2. A WebSocket to rv.nereussdr.com upgrades and reaches the service by
 #      host name. Written byte for byte, both the usual request (Upgrade:
 #      websocket, Host without a port) and Apple's Network.framework's
@@ -23,13 +24,18 @@
 #      WebSockets over HTTP/2 (RFC 8441) and what one gets.
 #   6. Caddy holds no UDP port (HTTP/3 stays off: UDP 443 is coturn's).
 #   7. wss://rv.nereussdr.com/v1/relay reaches the WebSocket relay
-#      (nereus-relay on loopback 8711; rendezvous document section 12): a
+#      (nereus-relay on its Unix socket, which only Caddy's group may
+#      open; rendezvous document section 12): a
 #      Core leg and a device leg of one grant join, datagrams up to the
 #      1500-byte cap cross both ways unchanged, the relay counts legs by
 #      the client's own address, and a plain request there gets 426.
 #   8. A Core leg reading slowly through Caddy: where its datagrams wait,
 #      with net.ipv4.tcp_notsent_lowat as deploy/sysctl.conf sets it
 #      (NOTSENT_LOWAT=off measures without it).
+#   9. What reaches each upstream in X-Forwarded-For: with the service and
+#      the relay swapped for a program that echoes the header, exactly one
+#      entry, the client's own address, over IPv4 and IPv6, at / and at
+#      /v1/relay, whatever X-Forwarded-For the client sent.
 #
 # Certificates come from Caddy's own local authority, switched on for the
 # test only (local_certs in a copy of the Caddyfile); the real file is
@@ -101,13 +107,17 @@ docker run -d --name "$server" --network "$net" --ip "$server_v4" --ip6 "$server
 out="$(docker exec "$server" caddy validate --config /repo/rendezvous/deploy/Caddyfile --adapter caddyfile 2>&1)" \
     || { printf '%s\n' "$out" >&2; fail "caddy validate refused rendezvous/deploy/Caddyfile"; }
 grep -q 'Valid configuration' <<<"$out" || { printf '%s\n' "$out" >&2; fail "no 'Valid configuration' from caddy validate"; }
+if grep -q '"level":"warn"' <<<"$out"; then
+    printf '%s\n' "$out" >&2
+    fail "caddy validate warns about rendezvous/deploy/Caddyfile (above)"
+fi
 docker exec -i "$server" bash -s <<'EOS' || fail "the test copy with local certificates does not validate"
 set -euo pipefail
 awk 'BEGIN { done = 0 } { print } !done && $0 == "{" { print "\tlocal_certs"; print "\tskip_install_trust"; done = 1 }' \
     /repo/rendezvous/deploy/Caddyfile > /tmp/rv.Caddyfile
 caddy validate --config /tmp/rv.Caddyfile --adapter caddyfile >/dev/null 2>&1
 EOS
-pass "caddy validate rendezvous/deploy/Caddyfile: Valid configuration (and the test copy with local certificates)"
+pass "caddy validate rendezvous/deploy/Caddyfile: Valid configuration, no warning (and the test copy with local certificates)"
 
 # The service, as the unprivileged nobody, on loopback as in production,
 # with two connections allowed per address for step 4.
@@ -135,8 +145,9 @@ exit 1
 EOS
 pass "the service listens on 127.0.0.1:8710 and [::1]:8710"
 
-# The WebSocket relay, as nobody, on loopback, with two connections allowed
-# per address for step 7.
+# The WebSocket relay, as nobody with the caddy group, on its Unix socket
+# as relay.conf on the server has it, with two connections allowed per
+# address for step 7.
 docker exec -i "$server" bash -s <<'EOS'
 set -euo pipefail
 python3 -c 'import secrets; print(secrets.token_hex(32))' > /run/rv/relay-secret
@@ -144,22 +155,40 @@ chown nobody /run/rv/relay-secret && chmod 600 /run/rv/relay-secret
 cp /run/rv/relay-secret /run/rv/relay-secret.probe && chmod 644 /run/rv/relay-secret.probe
 cat > /run/rv/relay.conf <<'CONF'
 [relay]
-listen = 127.0.0.1:8711 [::1]:8711
+socket = /run/nereus-relay/relay.sock
+socket_mode = 0660
+socket_group = caddy
 relay_secret_file = /run/rv/relay-secret
 [limits]
 connections_per_address = 2
 CONF
+install -d -o nobody -m 0755 /run/nereus-relay
 cd / && PYTHONPATH=/repo/rendezvous/server PYTHONDONTWRITEBYTECODE=1 \
-    setsid runuser -u nobody -- python3 -m nereus_relay --config /run/rv/relay.conf \
+    setsid setpriv --reuid=nobody --regid=nogroup --groups=caddy python3 -m nereus_relay --config /run/rv/relay.conf \
     > /run/rv/relay.log 2>&1 < /dev/null &
 for _ in $(seq 50); do
-    grep -q "listening on 2 addresses" /run/rv/relay.log 2>/dev/null && exit 0
+    grep -q "listening on its Unix socket" /run/rv/relay.log 2>/dev/null && exit 0
     sleep 0.2
 done
 cat /run/rv/relay.log >&2
 exit 1
 EOS
-pass "the WebSocket relay listens on 127.0.0.1:8711 and [::1]:8711"
+docker exec -i "$server" bash -s <<'EOS' || fail "the relay's socket is not as relay.conf has it, or someone outside Caddy's group can open it"
+set -euo pipefail
+[[ "$(stat -c '%F %a %U %G' /run/nereus-relay/relay.sock)" == "socket 660 nobody caddy" ]]
+open_as() {
+    runuser -u "$1" -- python3 -c 'import socket, sys
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+try:
+    s.connect("/run/nereus-relay/relay.sock")
+except PermissionError:
+    sys.exit(3)'
+}
+open_as caddy
+status=0; open_as daemon || status=$?
+[[ "$status" -eq 3 ]]
+EOS
+pass "the WebSocket relay listens on its Unix socket /run/nereus-relay/relay.sock (socket 660, group caddy): the caddy account may open it, another account may not"
 
 caddy_run() {
     # $1: start or reload; $2: the config.
@@ -333,5 +362,62 @@ PY
 )"
 [[ -z "$udp" ]] || fail "caddy holds a UDP socket: ${udp}"
 pass "caddy holds no UDP socket, so HTTP/3 is off"
+
+# 9. X-Forwarded-For as each upstream receives it. The service and the
+# relay trust only its last entry; Caddy must send exactly one, the
+# client's own address, whatever the client sent. A program that echoes
+# every X-Forwarded-For header it gets takes the service's loopback port
+# and the relay's Unix socket.
+docker exec -i "$server" bash -s <<'EOS' || fail "the X-Forwarded-For echo did not start"
+set -euo pipefail
+pkill -f 'python3 -m nereus_rendezvous' || true
+pkill -f 'python3 -m nereus_relay' || true
+for _ in $(seq 50); do
+    pgrep -f 'python3 -m nereus_re' >/dev/null || break
+    sleep 0.2
+done
+rm -f /run/nereus-relay/relay.sock
+cat > /run/rv/xff-echo.py <<'ECHO'
+import asyncio, json, os
+SOCK = "/run/nereus-relay/relay.sock"
+async def answer(reader, writer):
+    head = (await reader.readuntil(b"\r\n\r\n")).decode("latin-1").split("\r\n")[1:]
+    xff = [l.split(":", 1)[1].strip() for l in head if l.lower().startswith("x-forwarded-for:")]
+    body = json.dumps({"xff": xff}).encode()
+    writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\n"
+                 b"Connection: close\r\n\r\n%s" % (len(body), body))
+    await writer.drain()
+    writer.close()
+async def main():
+    tcp = await asyncio.start_server(answer, "127.0.0.1", 8710)
+    unix = await asyncio.start_unix_server(answer, SOCK)
+    os.chmod(SOCK, 0o666)
+    print("ready", flush=True)
+    async with tcp, unix:
+        await asyncio.Event().wait()
+asyncio.run(main())
+ECHO
+cd / && setsid python3 /run/rv/xff-echo.py > /run/rv/xff-echo.log 2>&1 < /dev/null &
+for _ in $(seq 50); do
+    grep -q ready /run/rv/xff-echo.log 2>/dev/null && exit 0
+    sleep 0.2
+done
+cat /run/rv/xff-echo.log >&2
+exit 1
+EOS
+for pair in "${client_a} 198.51.100.30" "${client_c} 2001:db8:c0::32"; do
+    read -r client want <<<"$pair"
+    for path in / /v1/relay; do
+        got="$(docker exec "$client" curl -sS --http1.1 --cacert /tmp/ca.crt \
+            -H 'X-Forwarded-For: 203.0.113.7, 203.0.113.8' "https://rv.nereussdr.com${path}")"
+        printf '# X-Forwarded-For from %s at %s: %s\n' "$want" "$path" "$got"
+        python3 - "$got" "$want" <<'PY' || fail "X-Forwarded-For at ${path} from ${want} is not exactly the client's address: ${got}"
+import json, sys
+got, want = json.loads(sys.argv[1]), sys.argv[2]
+assert got["xff"] == [want], got
+PY
+    done
+done
+pass "X-Forwarded-For reaches the service's port and the relay's socket as exactly one entry, the client's own address (IPv4 and IPv6), although each client sent two entries of its own"
 
 echo "caddy-check: all ${passed} checks passed"

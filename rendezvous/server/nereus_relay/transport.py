@@ -1,15 +1,26 @@
 # no-port-check: NereusSDR-original.
 """The relay's WebSocket glue, on the rendezvous service's (which isolates
 the two websockets APIs, 10.4 on Ubuntu 24.04 and 13 and later): the same
-listening sockets, kernel buffers, client address and 426 answer, with the
-relay's own message size and queue, and TCP_NODELAY on every leg.
+kernel buffer setting and 426 answer, with the relay's own listening
+socket, message size, queue and client address.
+
+The relay listens on a Unix stream socket, Caddy its only peer (rendezvous
+document section 12.5). On Linux what waits in a Unix stream is charged to
+its sender's send buffer, so with the relay's own SO_SNDBUF on every
+accepted connection the hop from the relay to Caddy holds what the relay
+allows and no more. There is no peer address on a Unix socket: the client's
+address is the last one in X-Forwarded-For, which Caddy sets, and a request
+without one is refused.
 """
 
 from __future__ import annotations
 
+import grp
+import http
 import logging
+import os
 import socket
-from typing import Any, List
+from typing import Any, List, Optional
 
 from nereus_rendezvous import transport as rv_transport
 
@@ -41,20 +52,33 @@ class LegTransport:
         return self.ws.__aiter__()
 
 
-def set_nodelay(ws: Any) -> bool:
-    """TCP_NODELAY on the leg's socket, so each datagram goes out at once
-    rather than waiting to be coalesced (section 12.5). asyncio sets it on
-    its TCP transports already; it is set again here so the rule never
-    depends on that. Returns whether it is on."""
-    transport = getattr(ws, "transport", None)
-    sock = transport.get_extra_info("socket") if transport is not None else None
-    if sock is None:
-        return False
-    try:
-        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        return bool(sock.getsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY))
-    except OSError:
-        return False
+def forwarded_address(headers: Any) -> Optional[str]:
+    """The last address in X-Forwarded-For, the one Caddy added, or None."""
+    values = list(headers.get_all("X-Forwarded-For")) if headers is not None and hasattr(headers, "get_all") else []
+    if not values:
+        return None
+    return rv_transport._parse_ip(values[-1].split(",")[-1])
+
+
+_NO_ADDRESS_TEXT = "This address takes relay connections through the NereusSDR server only.\n"
+
+if rv_transport.NEW_API:
+
+    async def _process_request(connection: Any, request: Any) -> Any:
+        if forwarded_address(request.headers) is None:
+            return connection.respond(http.HTTPStatus.BAD_REQUEST, _NO_ADDRESS_TEXT)
+        return await rv_transport._process_request(connection, request)
+
+else:
+
+    async def _process_request(path: str, request_headers: Any) -> Any:  # type: ignore[misc]
+        if forwarded_address(request_headers) is None:
+            return (
+                http.HTTPStatus.BAD_REQUEST,
+                [("Content-Type", "text/plain; charset=utf-8"), ("Connection", "close")],
+                _NO_ADDRESS_TEXT.encode("utf-8"),
+            )
+        return await rv_transport._process_request(path, request_headers)
 
 
 def serve_kwargs(relay: Relay) -> dict:
@@ -71,21 +95,50 @@ def serve_kwargs(relay: Relay) -> dict:
         close_timeout=2,
         compression=None,
         server_header=None,
-        process_request=rv_transport._process_request,
+        process_request=_process_request,
     )
     if rv_transport.NEW_API:
         kwargs["open_timeout"] = config.join_timeout_ms / 1000.0
     return kwargs
 
 
-async def start(relay: Relay, host: str, port: int) -> Any:
+def unix_listening_socket(path: str, mode: int, group: str, buffer_bytes: int) -> socket.socket:
+    """The listening Unix socket at `path`, with its buffers set before it
+    listens, then the file's mode and group (who may connect). A socket file
+    left behind by an earlier run is replaced."""
+    try:
+        if os.path.exists(path) and not os.path.isdir(path):
+            os.unlink(path)
+    except OSError:
+        pass
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        if buffer_bytes:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, buffer_bytes)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, buffer_bytes)
+        sock.bind(path)
+        if group:
+            os.chown(path, -1, grp.getgrnam(group).gr_gid)
+        os.chmod(path, mode)
+        sock.setblocking(False)
+    except (OSError, KeyError):
+        sock.close()
+        raise
+    return sock
+
+
+async def start(relay: Relay) -> Any:
+    """Listen on the relay's Unix socket; returns the server."""
+
     async def handler(ws: Any) -> None:
+        # Set again on the accepted connection: its send buffer is what the
+        # hop to Caddy can hold (section 12.5).
         rv_transport.set_buffers(ws, relay.config.socket_buffer_bytes)
-        set_nodelay(ws)
-        address = rv_transport.client_address(ws, relay.config.trusted_proxies)
+        address = forwarded_address(rv_transport._request_headers(ws)) or ""
         await relay.run_connection(LegTransport(ws), address)
 
-    sock = rv_transport.listening_socket(host, port, relay.config.socket_buffer_bytes)
+    config = relay.config
+    sock = unix_listening_socket(config.socket, config.socket_mode, config.socket_group, config.socket_buffer_bytes)
     return await rv_transport._serve(
         handler,
         sock=sock,
@@ -98,3 +151,7 @@ async def stop(servers: List[Any], relay: Relay, grace_s: float = 0.5, timeout_s
     """Stop listening, end every leg with shuttingDown, and wait for them to
     close (the order the rendezvous service's stop explains)."""
     await rv_transport.stop(servers, relay, grace_s=grace_s, timeout_s=timeout_s)
+    try:
+        os.unlink(relay.config.socket)
+    except OSError:
+        pass

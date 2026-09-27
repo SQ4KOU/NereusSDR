@@ -294,11 +294,19 @@ class _SlowLeg:
     def __init__(self, url: str, cacert: str, rcvbuf: int, claimed: str) -> None:
         from urllib.parse import urlsplit
 
-        parts = urlsplit(url)
-        host, port = parts.hostname, parts.port or (443 if parts.scheme == "wss" else 80)
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, rcvbuf)
-        sock.connect((host, port))
+        if url.startswith("unix:"):
+            # The relay's own socket, as Caddy reaches it.
+            parts = urlsplit("ws://localhost/v1/relay")
+            host = "localhost"
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, rcvbuf)
+            sock.connect(url[len("unix:"):])
+        else:
+            parts = urlsplit(url)
+            host, port = parts.hostname, parts.port or (443 if parts.scheme == "wss" else 80)
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, rcvbuf)
+            sock.connect((host, port))
         if parts.scheme == "wss":
             context = ssl.create_default_context(cafile=cacert)
             context.set_alpn_protocols(["http/1.1"])

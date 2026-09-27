@@ -81,6 +81,10 @@
 //                 n1gp-Anvelina_PROIII Tx1_IQ_fifo.vhd:106 [@8e86a61]). The ring grows to 341 ms and a
 //                 full ring is counted and logged. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code.
+//   2026-09-27 - R-IOS-13: txIqQueuedMs() reads the send ring's fill for the remote microphone's
+//                 buffer, which sheds a standing excess only in silence; the key-on cushion is the
+//                 radio's target lead plus one frame (16.25 ms, was 20 ms), so no standing 5 ms
+//                 stays in the ring. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -1742,15 +1746,22 @@ void P2RadioConnection::sendTxIq(const float* iq, int n)
 {
     if (n <= 0 || iq == nullptr) { return; }
 
-    // First call after MOX engage: push 20 ms of zero-sample cushion into
-    // the ring BEFORE the real first-block I/Q.  It gives the send thread
-    // a cushion while the producer settles into its 192 kHz steady-state
-    // cadence (see the header).  Safe to write here because
+    // First call after MOX engage: push a zero-sample cushion into the
+    // ring BEFORE the real first-block I/Q.  It gives the send thread a
+    // cushion while the producer settles into its 192 kHz steady-state
+    // cadence (see the header).  R-IOS-13 (2026-09-27): the cushion is the
+    // radio's target lead plus one frame (16.25 ms), not 20 ms: the send
+    // thread moves the lead into the radio at once, and anything past it
+    // would stand in the ring for the whole over as added latency (the
+    // 20 ms cushion left 5 ms there, measured in tst_tx_mic_latency).
+    // Safe to write here because
     // sendTxIq is the single writer to m_txIqRingWrite / m_txIqRingCount;
     // setMox(true) on the connection thread merely sets the flag.  See
     // m_txIqPrimePending declaration in the header for the full rationale.
     if (m_txIqPrimePending.exchange(false, std::memory_order_acq_rel)) {
-        constexpr int kPrimeFloats = 7680;  // 3840 sample-pairs = 20 ms at 192 kHz
+        // 3120 sample-pairs = 16.25 ms at 192 kHz.
+        constexpr int kPrimeFloats =
+            2 * (TxIqPacer::kTargetLeadSamples + TxIqPacer::kSamplesPerFrame);
         // Clamp the cushion to whatever the ring can actually take.
         // Every other write in this function checks the count first;
         // this one used to add all 7680 floats unconditionally, so any
@@ -2265,6 +2276,13 @@ RadioConnection::TxSendStats P2RadioConnection::txSendStats() const
     st.sendErrors = m_txIqSendErrors.load(std::memory_order_relaxed);
     st.maxRingMs = m_txIqMaxRingPairs.load(std::memory_order_relaxed) * 1000 / 192000;
     return st;
+}
+
+double P2RadioConnection::txIqQueuedMs() const
+{
+    // R-IOS-13: the ring counts floats, two per I/Q pair at 192 kHz.
+    return static_cast<double>(m_txIqRingCount.load(std::memory_order_acquire)) / 2.0 * 1000.0
+        / 192000.0;
 }
 
 // ---------------------------------------------------------------------------

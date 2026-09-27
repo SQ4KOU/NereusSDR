@@ -349,6 +349,14 @@ warren@wpratt.com
 //                 EQ profile and globals, the CFC profile and scalars, the
 //                 phase rotator, CESSB, leveler and ALC. NereusSDR-original.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-27 — R-IOS-13: txIqQueuedMs(), the connection's send ring fill
+//                 for the remote microphone's buffer; dexpTimingRunning(),
+//                 so the buffer never splices while DEXP's hold, decay or
+//                 VOX turn-off counts (dexp.c [v2.10.3.15]); the filter
+//                 type sends Thetis's MP (Low Latency = minimum phase,
+//                 enums.cs:404-408, radio.cs:2659 [v2.10.3.15]; it was
+//                 inverted). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #pragma once
@@ -753,6 +761,10 @@ public:
     //
     // Must be called before setRunning(true) to get samples on the wire.
     void setConnection(RadioConnection* conn);
+    /// R-IOS-13: what the connection's transmit I/Q send ring holds now, in
+    /// ms (RadioConnection::txIqQueuedMs); negative without a connection or
+    /// when it does not know. Called on the transmit pump.
+    double txIqQueuedMs() const;
 
     // Attach or detach the mic router used as fexchange2 input source.
     // Non-owning; the caller (RadioModel) owns the unique_ptr.
@@ -2140,9 +2152,10 @@ public:
     // ── In-place filter resize / filter type change ─────────────────────────
     //
     // Wraps the WDSP entry points that Thetis calls from its DSPTX property
-    // setters at radio.cs:2628 / 2647 [v2.10.3.13]:
+    // setters at radio.cs:2630 / 2649 [v2.10.3.15]:
     //   FilterSize → WDSP.TXASetNC
-    //   FilterType → WDSP.TXASetMP
+    //   FilterType → WDSP.TXASetMP (Low Latency = minimum phase, MP 1:
+    //   enums.cs:404-408, radio.cs:2659 [v2.10.3.15])
     //
     // These are SAFE to call from the main thread while the TxWorkerThread
     // is running — TXASetNC/TXASetMP internally quiesce via SetChannelState's
@@ -2432,6 +2445,11 @@ public:
     static void setPSTxIdx(int txid, int idx);
 
 #ifdef NEREUS_BUILD_TESTS
+    // R-IOS-13 (2026-09-27): WDSP's minimum-phase flag on the TX bandpass
+    // (txa[].bp0.p->mp, what TXASetMP sets first), or -1 when the channel
+    // is not open.
+    int bandpassMinimumPhaseForTest() const;
+
     // ── Test seam (Phase 3M-1b D.1, updated for 3M-1c E.1 push model) ─────
     //
     // Synchronously drive one fexchange2 cycle by pushing the given mic
@@ -2717,6 +2735,23 @@ public slots:
     /// From Thetis wdsp/cmaster.c:388 [v2.10.3.13] — `xdexp (tx)`.
     /// From Thetis wdsp/dexp.c:266-396 [v2.10.3.13] — xdexp impl.
     void pumpDexp(const double* interleavedIn);
+
+    /// R-IOS-13 (2026-09-27): whether DEXP's own timing is running now: the
+    /// expander or VOX is on and DEXP is past its low state (attack, open,
+    /// hold, decay) or VOX's turn-off countdown is still counting. DEXP
+    /// counts these times in the samples it processes (Thetis wdsp/dexp.c
+    /// :142-144, 312-381 [v2.10.3.15]), so the remote microphone buffer
+    /// splices nothing while this is true: a shed or inserted block would
+    /// move the hold, the hang or the VOX drop. False without DEXP. Read on
+    /// the transmit pump's thread, which is the thread that runs xdexp.
+    bool dexpTimingRunning() const;
+#ifdef NEREUS_BUILD_TESTS
+    /// Test-only: force dexpTimingRunning() (nullopt: read DEXP again).
+    void setDexpTimingRunningForTest(std::optional<bool> running)
+    {
+        m_dexpTimingForTest = running;
+    }
+#endif
 
 signals:
     // ── Per-profile TX filter applied (Plan 4 D8) ────────────────────────────
@@ -3433,7 +3468,15 @@ private:
     // (RadioModel: createTxChannel(1, 64, ...)).
     // From WdspEngine.h kTxDspBufferSize = 2048 [NereusSDR-original].
     int m_txFilterSize{2048};
-    int m_txFilterType{0};   // 0 = LowLatency, 1 = LinearPhase
+#ifdef NEREUS_BUILD_TESTS
+    std::optional<bool> m_dexpTimingForTest;
+#endif
+    // 0 = LowLatency, 1 = LinearPhase. R-IOS-13: starts at LinearPhase,
+    // the state WDSP opens the channel in (TXA.c create_bandpass mp 0), so
+    // the first apply of "Low Latency" reaches TXASetMP. (Thetis's cache
+    // starts at Low_Latency, radio.cs:2647 [v2.10.3.15], and its first
+    // apply is forced.)
+    int m_txFilterType{1};
     // m_txDspBlockSize defaults to WdspEngine::kTxDspBufferSize (2048,
     // deskhpsdr-derived) — matches the dsp_size argument
     // WdspEngine::createTxChannel passes to OpenChannel (createTxChannel

@@ -201,10 +201,14 @@ def test_the_running_relay_writes_nothing_and_logs_no_secret(tmp_path):
     etc.mkdir()
     secret = os.urandom(24).hex()
     (etc / "relay-secret").write_text(secret + "\n")
-    port = _free_port()
+    from relay_helpers import short_directory
+
+    run = Path(short_directory())
+    sock_path = str(run / "relay.sock")
     (etc / "relay.conf").write_text(
         "[relay]\n"
-        f"listen = 127.0.0.1:{port}\n"
+        f"socket = {sock_path}\n"
+        "socket_group =\n"
         f"relay_secret_file = {etc / 'relay-secret'}\n"
         "log_level = debug\n"
     )
@@ -231,7 +235,7 @@ def test_the_running_relay_writes_nothing_and_logs_no_secret(tmp_path):
     marker = b"RELAY-PAYLOAD-MARKER"
 
     async def drive():
-        uri = f"ws://127.0.0.1:{port}/v1/relay"
+        uri = "unix:" + sock_path
         core = await connect(uri, "198.51.100.88")
         await core.send(b"\x80" + core_token.encode())
         assert (await recv(core))[0] == 0x81
@@ -254,7 +258,8 @@ def test_the_running_relay_writes_nothing_and_logs_no_secret(tmp_path):
         deadline = time.time() + 10
         while True:
             try:
-                with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+                    probe.connect(sock_path)
                     break
             except OSError:
                 if time.time() > deadline or proc.poll() is not None:
@@ -270,6 +275,9 @@ def test_the_running_relay_writes_nothing_and_logs_no_secret(tmp_path):
     assert [p for p in sandbox.rglob("*") if not p.is_dir()] == []
     assert list((sandbox / "home").iterdir()) == [] and list((sandbox / "tmp").iterdir()) == []
     assert _tree(etc) == before_etc
+    # The socket file goes with the relay; systemd's RuntimeDirectory= holds it.
+    assert list(run.iterdir()) == []
+    run.rmdir()
     log = (out + err).decode("utf-8", errors="replace")
     assert "relay session" in log and "relay data use" in log
     whole = relaygrant.to_b64url(session)
