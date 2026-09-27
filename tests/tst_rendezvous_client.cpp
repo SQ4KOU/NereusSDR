@@ -1268,22 +1268,16 @@ private:
     std::unique_ptr<LibDataChannelMediaTransport> m_answerer;
 };
 
+// Task 28 tail (R-IOS-16): whether this computer has IPv6 the product would
+// use, by the product's own rule (IceConfiguration::localAddressFamilies():
+// global unicast, 2000::/3). A unique local address (fc00::/7, as ZeroTier
+// or a VPN puts on a utun interface) or a link-local one reaches no server,
+// so the product never chooses IPv6 for it, and neither may this test's
+// precondition: counting one made the test run, and fail, on a computer
+// whose only IPv6 was a unique local address.
 bool hasUsableIpv6()
 {
-    for (const QNetworkInterface& interface : QNetworkInterface::allInterfaces()) {
-        if (!(interface.flags() & QNetworkInterface::IsUp)
-            || (interface.flags() & QNetworkInterface::IsLoopBack)) {
-            continue;
-        }
-        for (const QNetworkAddressEntry& entry : interface.addressEntries()) {
-            const QHostAddress address = entry.ip();
-            if (address.protocol() == QAbstractSocket::IPv6Protocol && !address.isLinkLocal()
-                && !address.isLoopback()) {
-                return true;
-            }
-        }
-    }
-    return false;
+    return IceConfiguration::localAddressFamilies().ipv6;
 }
 
 // A certificate for 127.0.0.1 (in its subjectAltName) and its key, made at
@@ -2414,7 +2408,8 @@ private slots:
     void ipv6IsPreferredWhenBothEndsHaveIt()
     {
         if (!hasUsableIpv6()) {
-            QSKIP("This computer has no IPv6 address beyond link-local and loopback.");
+            QSKIP("This computer has no global IPv6 address (a unique local, link-local or "
+                  "loopback one reaches no server).");
         }
         LocalService service;
         QVERIFY(service.start());
