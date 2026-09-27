@@ -49,6 +49,11 @@
 //                 resampleFilterResponse, so a Core can send its bins.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //                 Code. NereusSDR-original.
+//   2026-09-27 — R-IOS-13: the filter type sends Thetis's MP (Low Latency
+//                 = minimum phase, enums.cs:404-408, radio.cs:571
+//                 [v2.10.3.15]; it was inverted); the type cache starts at
+//                 Linear Phase, where WDSP opens the channel. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -3378,7 +3383,7 @@ void RxChannel::applyState(const RxChannelState& s)
 // ---------------------------------------------------------------------------
 //
 // These two setters wrap the WDSP entry points that Thetis calls from its
-// DSPRX property setters at radio.cs:540-574 [v2.10.3.13]:
+// DSPRX property setters at radio.cs:542-574 [v2.10.3.15]:
 //
 //   public int FilterSize {
 //       set {
@@ -3403,7 +3408,7 @@ void RxChannel::applyState(const RxChannelState& s)
 //       }
 //   }
 //
-// RXASetNC and RXASetMP at third_party/wdsp/src/RXA.c:1040-1056 [v2.10.3.13]
+// RXASetNC and RXASetMP at Thetis wdsp/RXA.c:1043-1066 [v2.10.3.15]
 // internally quiesce the channel via SetChannelState(channel, 0, 1) — the
 // cm_main flushflag handshake at channel.c:259-297 [v2.10.3.13] — reconfigure
 // every dependent subsystem, then restore the prior run state.  Safe to call
@@ -3489,12 +3494,16 @@ void RxChannel::setFilterTypeLinearPhase(bool linearPhase)
     }
     m_filterType = newType;
 #ifdef HAVE_WDSP
-    // From Thetis radio.cs:559 [v2.10.3.13] DSPRX.FilterType setter:
+    // From Thetis radio.cs:571 [v2.10.3.15] DSPRX.FilterType setter:
     //   WDSP.RXASetMP(WDSP.id(thread, subrx), Convert.ToBoolean(value));
-    // C# Convert.ToBoolean((int)DSPFilterType) maps Low_Latency=0 → false,
-    // Linear_Phase=1 → true.  We pass the already-translated 0/1.
+    // with enums.cs:404-408 [v2.10.3.15]
+    //   public enum DSPFilterType { Linear_Phase = 0, Low_Latency = 1, }
+    // so Low_Latency sends minimum phase (MP 1) and Linear_Phase MP 0.
+    // m_filterType counts the other way (0 = Low Latency), so the MP flag
+    // is its inverse (R-IOS-13, 2026-09-27: it used to be sent as is).
     // R-R3-39: on the receive lane, in order with the sizes.
-    runOrdered([this, newType]() { RXASetMP(m_channelId, newType); });
+    const int minimumPhase = linearPhase ? 0 : 1;
+    runOrdered([this, minimumPhase]() { RXASetMP(m_channelId, minimumPhase); });
 #endif
 }
 
@@ -3810,5 +3819,15 @@ QVector<float> RxChannel::resampleFilterResponse(const QVector<double>& binMagni
 
     return result;
 }
+
+#ifdef NEREUS_BUILD_TESTS
+// R-IOS-13: rxa[] is read in TxChannel.cpp, the one file that includes
+// WDSP's internal headers (their min/max macros break this file).
+int wdspRxBandpassMinimumPhaseForTest(int channelId);
+int RxChannel::bandpassMinimumPhaseForTest() const
+{
+    return wdspRxBandpassMinimumPhaseForTest(m_channelId);
+}
+#endif
 
 } // namespace NereusSDR

@@ -14,7 +14,7 @@
 //
 //   The Core: a media start carrying remoteTxVersion gets the microphone
 //   line (a start without it, and a peer the Core never told remoteTx, get
-//   none); a tx.key in a voice mode keys once the buffer holds 60 ms and is
+//   none); a tx.key in a voice mode keys once the buffer holds 30 ms and is
 //   refused micNotReady when no audio comes within 250 ms; TUNE keys at
 //   once; the ring is in use only while the device is keyed (or its key
 //   waits) or has VOX armed, and at unkey the operator's source returns
@@ -52,6 +52,10 @@
 //               and TUNE wait while another device holds. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-27: R-IOS-13, R-R3-42: a standing send ring is shed only in
+//               silence, by the pump skipping whole blocks; the key waits
+//               for the smaller 30 ms target. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -119,7 +123,11 @@ public:
     void setMicPTTDisabled(bool) override {}
     void setMicXlr(bool) override {}
     void sendTxIq(const float*, int) override { sent.fetch_add(1); }
+    // R-IOS-13: what the send ring holds, as the remote microphone's
+    // buffer reads it (negative: unknown).
+    double txIqQueuedMs() const override { return queuedMs; }
     std::atomic<int> sent{0};
+    double queuedMs{-1.0};
 };
 
 std::vector<float> tone(qint64 start, int frames, float amplitude, double hz = 1000.0)
@@ -416,6 +424,8 @@ private slots:
     void ringFillingIsSilenceNeverALocalSource();
     void radePathTakesTheRing();
     void toneFromTheLineReachesTheTxChannelAtItsLevel();
+    void aStandingSendRingIsShedOnlyInSilenceBySkippingPumpBlocks();
+    void nothingIsShedWhileDexpTimingRuns();
 
     // ---- The Core -------------------------------------------------------------
 
@@ -552,6 +562,100 @@ void TestTxWorkerRemoteRing::toneFromTheLineReachesTheTxChannelAtItsLevel()
     QCOMPARE(pump.feed.stats().underflows, 0);
 }
 
+// R-IOS-13 (2026-09-27): with 20 ms standing in the radio's send ring, the
+// remote microphone's buffer sheds it in silence: the pump skips whole
+// blocks (TX DSP never runs on them), one a silent 64-frame block of the
+// microphone. Under a word nothing is skipped, and the RADE path never
+// skips.
+void TestTxWorkerRemoteRing::aStandingSendRingIsShedOnlyInSilenceBySkippingPumpBlocks()
+{
+    for (const bool rade : {false, true}) {
+        Pump pump;
+        if (rade) {
+            pump.worker.setCurrentTxPath(TxWorkerThread::TxPath::Rade);
+        }
+        pump.connection.queuedMs = 20.0;
+        pump.feed.setInUse(true);
+        // 1 s of a word, then 1 s of a -80 dBFS noise floor, 20 ms packets.
+        quint32 seed = 7U;
+        int skippedInWord = 0;
+        int skippedInPause = 0;
+        std::vector<double> previous;
+        for (int b = 0; b < 1500; ++b) {
+            if (b % 15 == 0) {
+                const qint64 start = static_cast<qint64>(b / 15) * 960;
+                std::vector<float> frame = tone(start, 960, 0.3f);
+                if (b >= 750) {
+                    for (float& x : frame) {
+                        seed = seed * 1664525U + 1013904223U;
+                        x = 1.0e-4f * (static_cast<float>(seed >> 8) / 8388608.0f - 1.0f);
+                    }
+                }
+                QVERIFY(pump.feed.write(frame.data(), 960));
+            }
+            pump.block();
+            const std::vector<double> now = lastI(pump.channel);
+            // A skipped block leaves the TX channel's input as it was: the
+            // block played before it, voice or silence.
+            if (!previous.empty() && now == previous && rms(now) > 0.0) {
+                ++(rms(now) >= 0.01 ? skippedInWord : skippedInPause);
+            }
+            previous = now;
+        }
+        const RemoteMicFeed::Stats stats = pump.feed.stats();
+        if (rade) {
+            QCOMPARE(skippedInPause, 0);
+            QCOMPARE(stats.shedForRingFrames, quint64(0));
+        } else {
+            QCOMPARE(skippedInWord, 0);
+            QVERIFY2(skippedInPause >= 10, qPrintable(QString::number(skippedInPause)));
+            QCOMPARE(stats.shedForRingFrames, quint64(skippedInPause) * kBlock);
+        }
+    }
+}
+
+// R-IOS-13: while DEXP's hold, decay or VOX turn-off counts
+// (TxChannel::dexpTimingRunning), the pump skips no block and the feed
+// splices nothing, so VOX and the expander keep their timing; once it ends
+// the standing ring is shed in the next silence.
+void TestTxWorkerRemoteRing::nothingIsShedWhileDexpTimingRuns()
+{
+    Pump pump;
+    pump.connection.queuedMs = 20.0;
+    pump.feed.setInUse(true);
+    pump.channel.setDexpTimingRunningForTest(true);
+    quint32 seed = 11U;
+    int skipped = 0;
+    int skippedAfter = 0;
+    std::vector<double> previous;
+    for (int b = 0; b < 3000; ++b) {
+        if (b == 1500) {
+            pump.channel.setDexpTimingRunningForTest(false);
+        }
+        if (b % 15 == 0) {
+            // A word for the first 300 ms of every 1 s, then silence.
+            const qint64 start = static_cast<qint64>(b / 15) * 960;
+            std::vector<float> frame = tone(start, 960, 0.3f);
+            if ((b / 15) % 50 >= 15) {
+                for (float& x : frame) {
+                    seed = seed * 1664525U + 1013904223U;
+                    x = 1.0e-4f * (static_cast<float>(seed >> 8) / 8388608.0f - 1.0f);
+                }
+            }
+            QVERIFY(pump.feed.write(frame.data(), 960));
+        }
+        pump.block();
+        const std::vector<double> now = lastI(pump.channel);
+        if (!previous.empty() && now == previous && rms(now) > 0.0) {
+            ++(b < 1500 ? skipped : skippedAfter);
+        }
+        previous = now;
+    }
+    QCOMPARE(skipped, 0);
+    QVERIFY2(skippedAfter >= 10, qPrintable(QString::number(skippedAfter)));
+    QVERIFY(pump.feed.stats().heldBlocks >= 1400);
+}
+
 // Older peers get no microphone line; a start with remoteTxVersion gets it,
 // and only from a peer the Core told remoteTx.
 void TestTxWorkerRemoteRing::micLineOnlyForAStartThatAsks()
@@ -600,13 +704,13 @@ void TestTxWorkerRemoteRing::keyWaitsForTheBufferThenKeys()
     QTRY_VERIFY(station.core.model->remoteMicInUse());
     QVERIFY(!mox->isMox());
     QVERIFY(resultFor(station.app, 3601).isEmpty());
-    // Two packets (40 ms): still waiting.
-    station.sendMic();
+    // One packet (20 ms): still waiting (R-IOS-13, 2026-09-27: the target
+    // is 30 ms, one packet plus a 10 ms margin).
     station.sendMic();
     QTest::qWait(20);
     QVERIFY(!mox->isMox());
     QVERIFY(resultFor(station.app, 3601).isEmpty());
-    // The third reaches 60 ms: the key keys.
+    // The second reaches 40 ms, past the 30 ms target: the key keys.
     station.sendMic();
     QTRY_VERIFY(!resultFor(station.app, 3601).isEmpty());
     const QJsonObject result = resultFor(station.app, 3601);

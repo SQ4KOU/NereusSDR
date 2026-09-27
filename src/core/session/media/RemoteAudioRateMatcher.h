@@ -38,6 +38,11 @@
 //                 pump matches a remote microphone to the radio's clock
 //                 without allocating per block. The WDSP calls are the
 //                 same xrmatchIN / xrmatchOUT boundary.
+//   2026-09-27: J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code. R-IOS-13: forceRatio(), IVAC's forceIVACvar
+//                 (ivac.c:39, 723-741) on this matcher, so the transmit
+//                 microphone's own buffer sets the ratio and rmatch's
+//                 half-full ring target no longer sets the delay.
 // =================================================================
 //
 // === Verbatim Thetis Project Files/Source/ChannelMaster/ivac.c header ===
@@ -204,6 +209,11 @@ public:
     /// partially consumed native 64-frame output block.
     bool canTakeWithoutUnderflow() const;
     void reset();
+    /// R-IOS-13: WDSP forceRMatchVar. While forced, rmatch resamples at
+    /// `ratio` (output frames per input frame) and its own control, which
+    /// holds the ring half full, is ignored. Kept across configure() and
+    /// reset(). Unforced (the default), rmatch runs its own control.
+    void forceRatio(bool force, double ratio);
 
     /// getRMatchDiags() projection: underflows, overflows, var, and ringsize,
     /// plus getControlFlag() as controlActive.
@@ -226,6 +236,8 @@ private:
     int m_inputCarryFrames = 0;
     int m_outputCarryOffsetFrames = 0;
     int m_outputCarryFrames = 0;
+    bool m_force = false;
+    double m_forcedRatio = 1.0;
 };
 
 } // namespace NereusSDR

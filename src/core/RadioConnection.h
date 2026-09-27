@@ -593,6 +593,10 @@ public:
         int maxRingMs{0};               ///< deepest the ring got, in ms
     };
     virtual TxSendStats txSendStats() const { return {}; }
+    /// R-IOS-13 (2026-09-27): what the transmit I/Q send ring holds now,
+    /// in ms of the radio's time; negative when this connection does not
+    /// know. Any thread; lock-free.
+    virtual double txIqQueuedMs() const { return -1.0; }
 
 public slots:
 

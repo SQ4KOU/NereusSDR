@@ -52,7 +52,8 @@
 // ---- Keying on a filled buffer (Task 36) ----
 // For a device whose media carries a microphone line, a tx.key in a mode
 // that transmits the microphone (every mode but CWL and CWU) waits for the
-// line's buffer to reach its 60 ms target and then keys; if it has not
+// line's buffer to reach its target (30 ms on a steady link; R-IOS-13
+// 2026-09-27) and then keys; if it has not
 // within 250 ms it is refused micNotReady. The holder's own refusals come
 // first, at once. Copies of the key, and a new-id key from the same device,
 // wait with it and get its answer; a tx.unkey from the device while it

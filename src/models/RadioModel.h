@@ -3484,6 +3484,13 @@ public:
     {
         m_dspOptionsTxApplyObserverForTest = std::move(observer);
     }
+    // R-IOS-13 test-only: observe each key's TX DSP options apply
+    // (applyTxDspOptionsBeforeKey), with the TX-bound slice's mode, called
+    // after the TxChannel apply.
+    void setTxKeyDspOptionsObserverForTest(std::function<void(DSPMode)> observer)
+    {
+        m_txKeyDspOptionsObserverForTest = std::move(observer);
+    }
 
     // Phase 3Q Sub-PR-4 D.3: Hover tooltip for the TitleBar ConnectionSegment.
     // Returns a multi-line string with radio name, uptime, IP, MAC, protocol,
@@ -5317,6 +5324,7 @@ private:
     // DspOptions<Setting><Mode>Tx write, and the test observer.
     QSet<QString> m_pendingDspOptionsTxGroups;
     std::function<void(DSPMode)> m_dspOptionsTxApplyObserverForTest;
+    std::function<void(DSPMode)> m_txKeyDspOptionsObserverForTest;
     // Group B fix wave: the test observer of PureSignal hearing the unkey
     // on the main thread (wireTxChannelKeying).
     // Group A follow-up (group B fix wave): the parametric TX EQ's pushes,
@@ -5552,6 +5560,12 @@ public:
     // (Thetis seeds at mode-change only; we additionally re-seed at
     // MOX-engage so prior TUN-state desync cannot starve SSB MOX).
     void pushTxModeAndBandpass();
+    // R-IOS-13 (2026-09-27): apply the TX-bound slice's DSP > Options (TX
+    // buffer, filter size and type) to the TX channel. Runs at every key
+    // (MoxController::txAboutToBegin, before the hardware flip and the TX
+    // channel's start), so no key path transmits at the channel's open
+    // sizes; a no-op when they are applied already.
+    void applyTxDspOptionsBeforeKey();
     void installBandPlanMoxCheck();
     bool receiveOnlyTxOperationsBlocked() const;
 

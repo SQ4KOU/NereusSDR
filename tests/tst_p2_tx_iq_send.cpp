@@ -154,13 +154,15 @@ private slots:
     void ring_holdsTwoHundredMsStallWithCushion()
     {
         P2RadioConnection conn;
-        conn.setMox(true);  // arms the 20 ms cushion
+        conn.setMox(true);  // arms the key-on cushion
         std::vector<float> iq(kBlock * 2, 0.1f);
         const int blocks = (192000 / 5 + kBlock - 1) / kBlock;  // 200 ms
         for (int b = 0; b < blocks; ++b) {
             conn.sendTxIq(iq.data(), kBlock);
         }
-        QCOMPARE(conn.txIqRingCountForTest() / 2, 3840 + blocks * kBlock);
+        // R-IOS-13 (2026-09-27): the cushion is the target lead plus one
+        // frame, 3120 pairs.
+        QCOMPARE(conn.txIqRingCountForTest() / 2, kTargetLead + 240 + blocks * kBlock);
         QCOMPARE(conn.txSendStats().overflowSamples, quint64(0));
     }
 

@@ -10,6 +10,10 @@
 // =================================================================
 //
 // Modification history (NereusSDR):
+//   2026-09-27 - R-IOS-13, R-R3-42 by J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code. The remote microphone ring is
+//                 pulled with the send ring's fill; a block it sheds for
+//                 the ring (silence only) skips the whole pump block.
 //   2026-09-25 - iPhone app plan Task 36 (R-IOS-13) by J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code. The remote
 //                 microphone ring: pulled on every block, its own branch
@@ -525,12 +529,31 @@ void TxWorkerThread::dispatchOneBlock()
     // transmits (holds transmit and is keyed, has VOX armed, or its key is
     // waiting for the buffer to fill) the feed is in use and fills
     // m_remoteMicBuf with its rate-matched audio (silence until its buffer
-    // first reaches the 60 ms target). Out of use it drops whatever
+    // first reaches its target). Out of use it drops whatever
     // arrived and returns false, and the operator's configured source
     // applies below. The feed does no codec work and never waits here.
+    //
+    // R-IOS-13 (2026-09-27): the feed also sees what the radio's send ring
+    // holds, and sheds a standing excess there by dropping a silent block
+    // of the microphone (Shed): this pump block is then skipped whole, so
+    // TX DSP never runs on it and the ring drains by one block. Nothing is
+    // cut from the I/Q after TX DSP. The RADE path never sheds (its modem
+    // keeps its own timing), and nothing is spliced while DEXP's hold,
+    // decay or VOX turn-off counts (TxChannel::dexpTimingRunning): DEXP
+    // counts them in the samples it processes, which runs on this thread.
     RemoteMicFeed* const remoteFeed = m_remoteMicFeed.load(std::memory_order_acquire);
-    const bool remoteMicInUse =
-        remoteFeed != nullptr && remoteFeed->pull(m_remoteMicBuf.data(), kBlockFrames);
+    const bool radePath = m_currentTxPath.load(std::memory_order_acquire) == TxPath::Rade;
+    const RemoteMicFeed::Pull remotePull = remoteFeed != nullptr
+        ? remoteFeed->pullBlock(m_remoteMicBuf.data(), kBlockFrames,
+                                radePath || m_txChannel->isTciAudioActive()
+                                    ? -1.0
+                                    : m_txChannel->txIqQueuedMs(),
+                                m_txChannel->dexpTimingRunning())
+        : RemoteMicFeed::Pull::NotInUse;
+    if (remotePull == RemoteMicFeed::Pull::Shed) {
+        return;
+    }
+    const bool remoteMicInUse = remotePull == RemoteMicFeed::Pull::Audio;
 
     // ── Phase 3J-1 bench fix (2026-05-10): TCI audio source override ───────
     //

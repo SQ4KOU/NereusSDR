@@ -22,6 +22,12 @@
 //   2026-09-25: original test for NereusSDR by J.J. Boyd (KG4VCF), iPhone
 //               app plan Task 36 (R-IOS-13), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-27: R-IOS-13, R-R3-42: the small adaptive buffer. Its numbers,
+//               the first loss teaching it, steady packets holding the
+//               smallest target, jitter growing it and a steady link easing
+//               it back, and a stall's excess shed only in silence. J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/media/MediaPeer.h"
@@ -36,6 +42,7 @@
 #include <algorithm>
 #include <cmath>
 #include <functional>
+#include <limits>
 #include <map>
 #include <numbers>
 #include <vector>
@@ -104,6 +111,103 @@ QByteArray l16Packet(float value, quint16 sequence, quint32 timestamp)
     return PcmAudioPacketiser{}.encode(stereo, sequence, timestamp, kMicSsrc).packet;
 }
 
+// ---- R-IOS-13 (2026-09-27): the buffer on simulated time ----
+
+// Speech-like microphone audio: 300 ms of a 1 kHz tone at 0.3 (a word),
+// then 200 ms of a -70 dBFS noise floor (a pause), repeating. Sample n is
+// the same whenever it is asked for, so what the pump plays can be checked
+// against it.
+constexpr qint64 kWordFrames = 14'400;
+// The most a settled smallest buffer holds after a block: one packet plus
+// the 10 ms margin plus the 3 ms reserve it leaves alone.
+constexpr int kSmallestSettled =
+    RemoteMicConfig::kTargetDepthFrames + RemoteMicConfig::kReserveMs * 48;
+constexpr qint64 kCycleFrames = 24'000;
+float speechSample(qint64 n)
+{
+    const qint64 inCycle = n % kCycleFrames;
+    if (inCycle < kWordFrames) {
+        return 0.3f * static_cast<float>(
+            std::sin(2.0 * std::numbers::pi * 1000.0 * static_cast<double>(n) / 48000.0));
+    }
+    quint32 h = static_cast<quint32>(n) * 2654435761U;
+    h ^= h >> 15;
+    h *= 2246822519U;
+    h ^= h >> 13;
+    return 3.0e-4f * (static_cast<float>(h & 0xffffU) / 32768.0f - 1.0f);
+}
+
+// The pump takes a block every 4/3 ms of radio time; packet k of 20 ms
+// arrives at arrivalMs(k) (the sender's clock, plus whatever the link did).
+struct FeedRun {
+    std::vector<float> played;
+    std::vector<int> fillAfterBlock;       // stats().fillFrames after each block
+    RemoteMicFeed::Stats stats;
+};
+
+FeedRun runFeed(RemoteMicFeed& feed, int packets, const std::function<double(int k)>& arrivalMs,
+                const std::function<void(qint64 block, const RemoteMicFeed&)>& onBlock = {},
+                const std::function<bool(qint64 block)>& holdSplices = {})
+{
+    FeedRun run;
+    constexpr int kFrames = RemoteMicConfig::kOpusFrameSamples;
+    std::vector<float> packet(kFrames);
+    std::vector<float> out(kBlock);
+    int next = 0;
+    // Until the last packet has had its 20 ms: the tests look at the buffer
+    // while packets come, not at it running dry after the last one.
+    const qint64 blocks = static_cast<qint64>(packets) * (kFrames / kBlock);
+    for (qint64 b = 0; b < blocks; ++b) {
+        const double nowMs = static_cast<double>(b) * kBlock * 1000.0 / 48000.0;
+        while (next < packets && arrivalMs(next) <= nowMs) {
+            for (int i = 0; i < kFrames; ++i) {
+                packet[static_cast<size_t>(i)] =
+                    speechSample(static_cast<qint64>(next) * kFrames + i);
+            }
+            feed.write(packet.data(), kFrames);
+            ++next;
+        }
+        feed.pullBlock(out.data(), kBlock, -1.0, holdSplices ? holdSplices(b) : false);
+        run.played.insert(run.played.end(), out.begin(), out.end());
+        run.fillAfterBlock.push_back(feed.stats().fillFrames);
+        if (onBlock) {
+            onBlock(b, feed);
+        }
+    }
+    run.stats = feed.stats();
+    return run;
+}
+
+// The words the pump played: [first loud sample, last loud sample] of each
+// run of |x| > 0.05 whose gaps are shorter than 2 ms.
+std::vector<std::pair<qint64, qint64>> playedWords(const std::vector<float>& audio)
+{
+    std::vector<std::pair<qint64, qint64>> words;
+    qint64 last = -1'000'000;
+    for (qint64 i = 0; i < static_cast<qint64>(audio.size()); ++i) {
+        if (std::abs(audio[static_cast<size_t>(i)]) <= 0.05f) {
+            continue;
+        }
+        if (i - last > 96) {
+            words.push_back({i, i});
+        }
+        words.back().second = i;
+        last = i;
+    }
+    return words;
+}
+
+// The largest step between neighbouring samples from `from` on: a 1 kHz
+// tone at 0.3 steps by at most 0.04; a splice under it by up to 0.6.
+double largestStep(const std::vector<float>& audio, size_t from)
+{
+    double largest = 0.0;
+    for (size_t i = std::max<size_t>(from, 1); i < audio.size(); ++i) {
+        largest = std::max(largest, static_cast<double>(std::abs(audio[i] - audio[i - 1])));
+    }
+    return largest;
+}
+
 } // namespace
 
 class TestRemoteMicReceiver : public QObject {
@@ -125,16 +229,25 @@ private slots:
     void keyWaitIsAnsweredOnceTheBufferFills();
     void keyWaitIsRefusedAfter250msWithoutAudio();
     void starvationIsSignalledOnlyWhileWatched();
+    // R-IOS-13 (2026-09-27): the small adaptive buffer.
+    void steadyPacketsHoldTheSmallestTargetWithoutUnderrun();
+    void jitterGrowsTheTargetAndASteadyLinkEasesItBack();
+    void aStallsExcessIsShedInSilenceNeverUnderTheVoice();
+    void nothingIsSplicedWhileDexpTimingRuns();
 };
 
 void TestRemoteMicReceiver::theLineKeepsTheTransmitNumbers()
 {
-    QCOMPARE(RemoteMicConfig::kTargetDepthMs, 60);
+    // R-IOS-13 (2026-09-27): the smallest target is one 20 ms packet plus
+    // a 10 ms margin; the ceiling stays 120 ms.
+    QCOMPARE(RemoteMicConfig::kTargetDepthMs, 30);
+    QCOMPARE(RemoteMicConfig::kMinMarginMs, 10);
     QCOMPARE(RemoteMicConfig::kMaxDepthMs, 120);
     QCOMPARE(RemoteMicConfig::kStarvationMs, 250);
     QCOMPARE(RemoteMicConfig::kReadyDeadlineMs, 250);
-    QCOMPARE(RemoteMicConfig::kTargetDepthFrames, 2880);
+    QCOMPARE(RemoteMicConfig::kTargetDepthFrames, 1440);
     QCOMPARE(RemoteMicConfig::kMaxDepthFrames, 5760);
+    QCOMPARE(RemoteMicFeed().targetFrames(), 1440);
     QCOMPARE(RemoteMicConfig::kOpusFrameSamples, 960);
     QCOMPARE(RemoteMicConfig::kOpusPayloadType, 111);
     QCOMPARE(RemoteMicConfig::kOpusBitrate, 24000);
@@ -178,16 +291,14 @@ void TestRemoteMicReceiver::feedGivesSilenceUntilTheTargetThenAudio()
 
     feed.setInUse(true);
     std::vector<float> audio(RemoteMicConfig::kOpusFrameSamples, 0.5f);
-    // 40 ms: below the 60 ms target, the pump hears silence.
-    QVERIFY(feed.write(audio.data(), 960));
+    // 20 ms: below the 30 ms target, the pump hears silence.
     QVERIFY(feed.write(audio.data(), 960));
     QVERIFY(feed.pull(out.data(), kBlock));
     QCOMPARE(rms(out.data(), kBlock), 0.0);
     QVERIFY(!feed.stats().started);
-    // 80 ms written: the target is reached and the audio starts.
+    // 40 ms written: the target is reached and the audio starts.
     QVERIFY(feed.write(audio.data(), 960));
-    QVERIFY(feed.write(audio.data(), 960));
-    QCOMPARE(feed.framesSinceInUse(), qint64(3840));
+    QCOMPARE(feed.framesSinceInUse(), qint64(1920));
     bool heard = false;
     for (int i = 0; i < 30 && !heard; ++i) {
         QVERIFY(feed.pull(out.data(), kBlock));
@@ -337,8 +448,8 @@ void TestRemoteMicReceiver::toneCrossesAtItsLevelWithinTheBuffersLatency()
     QVERIFY2(run.firstBlockHeard >= 0, "the tone never reached the pump");
     QCOMPARE(run.feed.underflows, 0);
     QCOMPARE(run.feed.overflows, 0);
-    // Within the buffer's latency: the pump starts once it holds 60 ms
-    // (three 20 ms packets after the first), plus the codec's own delay.
+    // Within the buffer's latency: the pump starts once it holds its 30 ms
+    // target (two 20 ms packets), plus the codec's own delay.
     const double latencyMs =
         run.firstBlockHeard * 1000.0 * kBlock / RemoteMicConfig::kSampleRate;
     QVERIFY2(latencyMs <= RemoteMicConfig::kTargetDepthMs + 30.0,
@@ -382,20 +493,42 @@ void TestRemoteMicReceiver::onePercentLossLeavesNoGapOver10ms()
     QCOMPARE(run.receiver.recoveredPackets, quint64(run.lost));
     QCOMPARE(run.receiver.concealedPackets, quint64(0));
     QCOMPARE(run.receiver.framesWritten, quint64(kPackets) * RemoteMicConfig::kOpusFrameSamples);
-    QCOMPARE(run.feed.underflows, 0);
+    // R-IOS-13 (2026-09-27): the buffer starts at its smallest target, 10
+    // ms past one packet, and a packet rebuilt from the next one's FEC
+    // comes 20 ms late. The first loss is the measurement: the buffer may
+    // run dry once and grows by what it measured; no later loss reaches it.
+    QVERIFY2(run.feed.underflows <= 1, qPrintable(QString::number(run.feed.underflows)));
+    QVERIFY(run.feed.marginFrames >= 20 * RemoteMicConfig::kFramesPerMs);
     QCOMPARE(run.firstBlockHeard, reference.firstBlockHeard);
     QCOMPARE(run.heard.size(), reference.heard.size());
 
     // Where the stream without loss has the tone, the lossy one keeps it
-    // within 6 dB; a stretch that does not is a gap.
+    // within 6 dB; a stretch that does not is a gap. Measured once the
+    // buffer has learned the link, 200 packets (4 s) after the first loss,
+    // and with the lossy stream moved back by the delay the buffer grew by
+    // (found by matching the two streams' 1 ms envelopes).
     constexpr int kWindow = RemoteMicConfig::kSampleRate / 1000;
     const double toneRms = kAmplitude / std::sqrt(2.0);
     int gap = 0;
     int longest = 0;
-    const size_t settled = static_cast<size_t>(run.firstBlockHeard + 200) * kBlock;
-    for (size_t start = settled; start + kWindow <= run.heard.size(); start += kWindow) {
+    const size_t settled = static_cast<size_t>(run.firstBlockHeard + 211 * 15) * kBlock;
+    size_t shift = 0;
+    double bestMismatch = std::numeric_limits<double>::max();
+    for (size_t lag = 0; lag <= 60; ++lag) {
+        double mismatch = 0.0;
+        for (size_t start = settled; start + (lag + 1) * kWindow <= run.heard.size();
+             start += kWindow) {
+            mismatch += std::abs(rms(run.heard.data() + start + lag * kWindow, kWindow)
+                                 - rms(reference.heard.data() + start, kWindow));
+        }
+        if (mismatch < bestMismatch) {
+            bestMismatch = mismatch;
+            shift = lag * kWindow;
+        }
+    }
+    for (size_t start = settled; start + shift + kWindow <= run.heard.size(); start += kWindow) {
         const double want = rms(reference.heard.data() + start, kWindow);
-        const double got = rms(run.heard.data() + start, kWindow);
+        const double got = rms(run.heard.data() + start + shift, kWindow);
         if (want >= toneRms / 2.0 && got < want / 2.0) {
             longest = std::max(longest, ++gap);
         } else {
@@ -403,6 +536,8 @@ void TestRemoteMicReceiver::onePercentLossLeavesNoGapOver10ms()
         }
     }
     QVERIFY2(longest <= 10, qPrintable(QString::number(longest)));
+    // At its level: the delay the buffer grew by only shifts the stream,
+    // so the level is compared over what both runs played.
     const double levelDb = 20.0 * std::log10(
         rms(run.heard.data() + settled, static_cast<int>(run.heard.size() - settled))
         / rms(reference.heard.data() + settled, static_cast<int>(reference.heard.size() - settled)));
@@ -427,8 +562,12 @@ void TestRemoteMicReceiver::lossWithoutFecIsConcealedWithinOneFrame()
     QVERIFY(run.lost >= 5);
     QCOMPARE(run.receiver.concealedPackets, quint64(run.lost));
     QCOMPARE(run.receiver.framesWritten, quint64(1000) * RemoteMicConfig::kOpusFrameSamples);
-    QCOMPARE(run.feed.underflows, 0);
-    const size_t settled = static_cast<size_t>(run.firstBlockHeard + 200) * kBlock;
+    // R-IOS-13: as for FEC, the first loss may run the smallest buffer dry
+    // once and teaches it; the later ones are concealed in place.
+    QVERIFY2(run.feed.underflows <= 1, qPrintable(QString::number(run.feed.underflows)));
+    // Measured from 200 packets (4 s) after the first loss, which comes at
+    // packet 200 or later.
+    const size_t settled = static_cast<size_t>(run.firstBlockHeard + 411 * 15) * kBlock;
     const double expected = kAmplitude / std::sqrt(2.0);
     const int gapMs = longestRunBelow(run.heard, settled, expected / 4.0);
     QVERIFY2(gapMs <= 20, qPrintable(QString::number(gapMs)));
@@ -583,7 +722,7 @@ void TestRemoteMicReceiver::senderOffTheRadiosClockRunsTenMinutesKeyed()
 }
 
 // A key waits for the buffer: answered ready as soon as the feed holds its
-// 60 ms, and never twice.
+// 30 ms target, and never twice.
 void TestRemoteMicReceiver::keyWaitIsAnsweredOnceTheBufferFills()
 {
     FakeTime time;
@@ -595,7 +734,7 @@ void TestRemoteMicReceiver::keyWaitIsAnsweredOnceTheBufferFills()
     QList<bool> answers;
     receiver.awaitReady([&answers](bool ready) { answers.append(ready); });
     QVERIFY(receiver.isWaiting());
-    for (int k = 0; k < 3; ++k) {
+    for (int k = 0; k < 2; ++k) {
         QVERIFY(answers.isEmpty());
         const std::vector<float> frame = toneFrame(k * 960, 0.3f);
         receiver.submit(encoder.encode(frame.data(), static_cast<quint16>(k),
@@ -676,6 +815,202 @@ void TestRemoteMicReceiver::starvationIsSignalledOnlyWhileWatched()
     QCOMPARE(starved.at(3).at(0).toBool(), false);
     time.advanceTo(time.nowMs + 1000);
     QCOMPARE(starved.count(), 4);
+}
+
+// R-IOS-13: steady 20 ms packets play from the smallest target, 30 ms (one
+// packet plus a 10 ms margin), for a minute with no underrun: the buffer
+// never holds more than that, and the delay it adds averages about 20 ms.
+void TestRemoteMicReceiver::steadyPacketsHoldTheSmallestTargetWithoutUnderrun()
+{
+    RemoteMicFeed feed;
+    feed.setInUse(true);
+    // Packets land 0.4 ms into a pump block, 20 ms apart.
+    const FeedRun run = runFeed(feed, 3000, [](int k) { return 0.4 + 20.0 * k; });
+    QCOMPARE(run.stats.underflows, 0);
+    int maxFill = 0;
+    int minFill = std::numeric_limits<int>::max();
+    // From 2 s on: the buffer starts on the packet that reaches its target,
+    // up to one packet over it, and sheds that in the first pause.
+    for (size_t b = 1500; b < run.fillAfterBlock.size() - 250; ++b) {
+        maxFill = std::max(maxFill, run.fillAfterBlock[b]);
+        minFill = std::min(minFill, run.fillAfterBlock[b]);
+    }
+    qInfo().noquote() << QStringLiteral("steady: fill %1..%2 frames (%3..%4 ms)")
+                             .arg(minFill).arg(maxFill)
+                             .arg(minFill / 48.0, 0, 'f', 1).arg(maxFill / 48.0, 0, 'f', 1);
+    // After a block the buffer holds at most one packet plus its margin
+    // (and the 3 ms it leaves alone), less the block just played.
+    QVERIFY2(maxFill <= kSmallestSettled, qPrintable(QString::number(maxFill)));
+    QVERIFY2(minFill >= kBlock, qPrintable(QString::number(minFill)));
+    QCOMPARE(run.stats.targetFrames, RemoteMicConfig::kTargetDepthFrames);
+    QCOMPARE(run.stats.grows, 0);
+    QVERIFY2(run.stats.shedFrames <= quint64(20 * 48),
+             qPrintable(QString::number(run.stats.shedFrames)));
+    QVERIFY2(run.stats.addedMeanMs > 15.0 && run.stats.addedMeanMs < 25.0,
+             qPrintable(QString::number(run.stats.addedMeanMs)));
+    QVERIFY2(run.stats.addedMaxMs <= 41.0,
+             qPrintable(QString::number(run.stats.addedMaxMs)));
+    // What was sent is what played, sample for sample, from the start.
+    const std::vector<std::pair<qint64, qint64>> words = playedWords(run.played);
+    QVERIFY(words.size() >= 100);
+    for (size_t w = 1; w + 1 < words.size(); ++w) {
+        const qint64 length = words[w].second - words[w].first + 1;
+        QVERIFY2(std::abs(length - kWordFrames) <= 24, qPrintable(QString::number(length)));
+    }
+    QVERIFY2(largestStep(run.played, 0) < 0.045,
+             qPrintable(QString::number(largestStep(run.played, 0))));
+}
+
+// R-IOS-13: packets up to 15 ms late grow the target by what they measure
+// (13 to 25 ms), with at most the first late packet running the buffer dry;
+// once the link is steady again the target eases back to its smallest.
+void TestRemoteMicReceiver::jitterGrowsTheTargetAndASteadyLinkEasesItBack()
+{
+    RemoteMicFeed feed;
+    feed.setInUse(true);
+    constexpr int kJittered = 1000;    // 20 s
+    constexpr int kPackets = 2500;     // then 30 s steady
+    std::vector<double> arrival(kPackets);
+    quint32 seed = 12345U;
+    double previous = 0.0;
+    for (int k = 0; k < kPackets; ++k) {
+        seed = seed * 1664525U + 1013904223U;
+        const double late = k < kJittered ? 15.0 * static_cast<double>(seed >> 8) / 16777216.0
+                                          : 0.0;
+        arrival[static_cast<size_t>(k)] = std::max(previous, 0.4 + 20.0 * k + late);
+        previous = arrival[static_cast<size_t>(k)];
+    }
+    int targetAfterJitter = 0;
+    int underrunsAfterJitter = -1;
+    const qint64 jitterEndBlock = static_cast<qint64>(kJittered) * 15;
+    const FeedRun run = runFeed(feed, kPackets,
+        [&arrival](int k) { return arrival[static_cast<size_t>(k)]; },
+        [&](qint64 block, const RemoteMicFeed& f) {
+            if (block == jitterEndBlock) {
+                targetAfterJitter = f.stats().targetFrames;
+                underrunsAfterJitter = f.stats().underflows;
+            }
+        });
+    qInfo().noquote() << QStringLiteral("jitter: target %1 ms after 20 s of up to 15 ms late, "
+                                        "%2 ms after 30 s steady; underruns %3, grew %4 times")
+                             .arg(targetAfterJitter / 48.0, 0, 'f', 1)
+                             .arg(run.stats.targetFrames / 48.0, 0, 'f', 1)
+                             .arg(run.stats.underflows).arg(run.stats.grows);
+    QVERIFY2(targetAfterJitter >= RemoteMicConfig::kTargetDepthFrames + 13 * 48,
+             qPrintable(QString::number(targetAfterJitter)));
+    QVERIFY2(targetAfterJitter <= RemoteMicConfig::kTargetDepthFrames + 25 * 48,
+             qPrintable(QString::number(targetAfterJitter)));
+    QVERIFY2(underrunsAfterJitter <= 1, qPrintable(QString::number(underrunsAfterJitter)));
+    QCOMPARE(run.stats.underflows, underrunsAfterJitter);
+    QCOMPARE(run.stats.targetFrames, RemoteMicConfig::kTargetDepthFrames);
+    // The words played whole once the buffer had learned the link.
+    const std::vector<std::pair<qint64, qint64>> words = playedWords(run.played);
+    for (size_t w = 4; w + 1 < words.size(); ++w) {
+        const qint64 length = words[w].second - words[w].first + 1;
+        QVERIFY2(std::abs(length - kWordFrames) <= 24,
+                 qPrintable(QStringLiteral("word %1: %2").arg(w).arg(length)));
+    }
+}
+
+// R-IOS-13: the link stalls for 200 ms in the middle of an over (starting
+// 100 ms before a pause ends), then delivers what it held at once. The
+// buffer runs dry in the pause, plays the late audio whole, and sheds the
+// excess only in the following pauses: within two seconds it is back at
+// its smallest, no word is shortened, and no sample steps as a splice
+// would. The stall was longer than the ceiling could cover, so the target
+// does not grow for it.
+void TestRemoteMicReceiver::aStallsExcessIsShedInSilenceNeverUnderTheVoice()
+{
+    RemoteMicFeed feed;
+    feed.setInUse(true);
+    // A cycle is a 300 ms word and a 200 ms pause; packet k is 20k..20k+20
+    // ms. The stall holds packets 70..79 (the last 100 ms of the pause at
+    // 1300..1500 ms and the first 100 ms of the next word) until 1600 ms.
+    constexpr int kStallFirst = 70;
+    constexpr int kStallLast = 79;
+    constexpr double kStallEndMs = 20.0 * (kStallLast + 1) + 0.4;
+    const auto arrival = [](int k) {
+        const double onTime = 0.4 + 20.0 * k;
+        return k >= kStallFirst && k <= kStallLast ? kStallEndMs : onTime;
+    };
+    const qint64 stallEndBlock = static_cast<qint64>(kStallEndMs * 48.0 / kBlock) + 1;
+    const FeedRun run = runFeed(feed, 750, arrival);
+    // Back at its smallest: the first block from which the buffer never
+    // again holds more than a settled smallest buffer does.
+    const size_t end = run.fillAfterBlock.size() - 250;
+    size_t backAt = end;
+    while (backAt > static_cast<size_t>(stallEndBlock)
+           && run.fillAfterBlock[backAt - 1] <= kSmallestSettled) {
+        --backAt;
+    }
+    const double backMs = static_cast<double>(static_cast<qint64>(backAt) - stallEndBlock)
+        * kBlock / 48.0;
+    qInfo().noquote()
+        << QStringLiteral("stall: back to the smallest buffer %1 ms after the stall ended; "
+                          "shed %2 ms, inserted %3 ms, underruns %4")
+               .arg(backMs, 0, 'f', 0)
+               .arg(run.stats.shedFrames / 48.0, 0, 'f', 1)
+               .arg(run.stats.insertedFrames / 48.0, 0, 'f', 1)
+               .arg(run.stats.underflows);
+    QVERIFY2(backAt < end - 1500, "the buffer did not come back to its smallest and stay");
+    QVERIFY2(backMs <= 2000.0, qPrintable(QString::number(backMs)));
+    QCOMPARE(run.stats.underflows, 1);
+    QCOMPARE(run.stats.targetFrames, RemoteMicConfig::kTargetDepthFrames);
+    QVERIFY(run.stats.shedFrames >= 150 * 48);
+    // Every word played whole: nothing shed or cut under the voice.
+    const std::vector<std::pair<qint64, qint64>> words = playedWords(run.played);
+    QVERIFY(words.size() >= 14);
+    for (size_t w = 1; w + 1 < words.size(); ++w) {
+        const qint64 length = words[w].second - words[w].first + 1;
+        QVERIFY2(std::abs(length - kWordFrames) <= 24,
+                 qPrintable(QStringLiteral("word %1: %2").arg(w).arg(length)));
+    }
+    QVERIFY2(largestStep(run.played, 0) < 0.045,
+             qPrintable(QString::number(largestStep(run.played, 0))));
+}
+
+
+// R-IOS-13: while DEXP's own timing runs (its hold, decay or VOX turn-off,
+// which it counts in the samples it processes), the buffer splices
+// nothing, so the pause DEXP sees is the one spoken; the excess waits and
+// goes in the first pause after DEXP's timing ends.
+void TestRemoteMicReceiver::nothingIsSplicedWhileDexpTimingRuns()
+{
+    const auto arrival = [](int k) {
+        return k >= 70 && k <= 79 ? 20.0 * 80 + 0.4 : 0.4 + 20.0 * k;
+    };
+    // Held for the whole run: the stall's excess stays, nothing is shed.
+    {
+        RemoteMicFeed feed;
+        feed.setInUse(true);
+        const FeedRun run = runFeed(feed, 750, arrival, {}, [](qint64) { return true; });
+        QCOMPARE(run.stats.shedFrames, quint64(0));
+        QCOMPARE(run.stats.insertedFrames, quint64(0));
+        QVERIFY(run.stats.heldBlocks > 10'000);
+        QVERIFY(run.fillAfterBlock[run.fillAfterBlock.size() - 20] > 150 * 48);
+    }
+    // Held until 4 s: nothing shed before, the excess shed after.
+    {
+        RemoteMicFeed feed;
+        feed.setInUse(true);
+        constexpr qint64 kReleaseBlock = 3000;   // 4 s
+        quint64 shedAtRelease = 0;
+        const FeedRun run = runFeed(feed, 750, arrival,
+            [&shedAtRelease](qint64 block, const RemoteMicFeed& f) {
+                if (block == kReleaseBlock) {
+                    shedAtRelease = f.stats().shedFrames;
+                }
+            },
+            [](qint64 block) { return block < kReleaseBlock; });
+        QCOMPARE(shedAtRelease, quint64(0));
+        QVERIFY(run.stats.shedFrames >= 150 * 48);
+        const std::vector<std::pair<qint64, qint64>> words = playedWords(run.played);
+        for (size_t w = 1; w + 1 < words.size(); ++w) {
+            const qint64 length = words[w].second - words[w].first + 1;
+            QVERIFY2(std::abs(length - kWordFrames) <= 24,
+                     qPrintable(QStringLiteral("word %1: %2").arg(w).arg(length)));
+        }
+    }
 }
 
 QTEST_GUILESS_MAIN(TestRemoteMicReceiver)
