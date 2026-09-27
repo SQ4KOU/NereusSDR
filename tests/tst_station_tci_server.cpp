@@ -41,6 +41,7 @@
 #include "core/TciServer.h"
 #include "core/TciSwitch.h"
 #include "core/session/IStationLink.h"
+#include "core/session/SessionCommandDispatcher.h"
 #include "models/RadioModel.h"
 #include "models/RfKitModel.h"
 #include "models/SliceModel.h"
@@ -259,6 +260,47 @@ private slots:
         QVERIFY(reason.isEmpty());
         QTRY_COMPARE(state.clients().size(), 0);
         QVERIFY(controller.setEnabled(false, port, &reason));
+    }
+
+    // Exercise the actual Core dispatcher with simulated transmit state;
+    // no radio or RF. A rejected disconnect must leave the client connected.
+    void stationOptionsAndDisconnectAreRefusedOnAir()
+    {
+        RadioModel model;
+        model.enableStationTci(QStringLiteral("127.0.0.1"));
+        QString reason;
+        const quint16 port = freePort();
+        QVERIFY(model.setStationTciForStation(true, port, &reason));
+        TciApp app(port);
+        auto* state = model.stationTciModel();
+        QTRY_COMPARE(state->clients().size(), 1);
+        const QString id = state->clients().first().id;
+        const bool original = state->emulateExpertSdr3();
+        SessionCommandDispatcher dispatcher(&model);
+        QSignalSpy results(&dispatcher, &SessionCommandDispatcher::commandResultReady);
+        model.transmitModel().setMox(true);
+        dispatcher.dispatch(SessionMessages::commandInvoke("setStationTciOptions", 1,
+            {{0, "emulateExpertSdr3", MirrorWireKind::Bool, !original},
+             {0, "emulateSunSdr2Pro", MirrorWireKind::Bool, false},
+             {0, "cwluBecomesCw", MirrorWireKind::Bool, true},
+             {0, "sendInitialState", MirrorWireKind::Bool, false}}));
+        dispatcher.dispatch(SessionMessages::commandInvoke("disconnectStationTciClient", 2,
+            {utf8("id", id)}));
+        QCOMPARE(results.size(), 2);
+        for (const auto& arguments : results) {
+            const auto result = qvariant_cast<SessionMessage>(arguments.first());
+            QVERIFY(!result.accepted);
+            QCOMPARE(result.reason, RadioModel::onAirReason());
+        }
+        QCOMPARE(state->emulateExpertSdr3(), original);
+        QCOMPARE(state->clients().size(), 1);
+        QCOMPARE(app.socket.state(), QAbstractSocket::ConnectedState);
+        model.transmitModel().setMox(false);
+        dispatcher.dispatch(SessionMessages::commandInvoke("disconnectStationTciClient", 3,
+            {utf8("id", id)}));
+        QCOMPARE(results.size(), 3);
+        QVERIFY(qvariant_cast<SessionMessage>(results.last().first()).accepted);
+        QTRY_VERIFY(state->clients().isEmpty());
     }
 
     void remoteAppletAndSetupUseTheCoreControlPath()
