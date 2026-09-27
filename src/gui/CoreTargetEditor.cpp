@@ -10,12 +10,15 @@
 #include "core/session/RemoteStationOptions.h"
 
 #include <QCheckBox>
+#include <QDateTime>
+#include <QTimer>
 #include <QDialogButtonBox>
 #include <QFormLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
 #include <QVBoxLayout>
+#include <utility>
 
 namespace NereusSDR {
 namespace {
@@ -82,6 +85,14 @@ CoreTargetEditor::CoreTargetEditor(const SavedCoreTarget& initial, QWidget* pare
     m_reachAnywhereReason->setWordWrap(true);
     m_reachAnywhereReason->setVisible(!refusal.isEmpty());
     form->addRow({}, m_reachAnywhereReason);
+    if (initial.connection.effectiveControlChannelVersion(
+            QDateTime::currentMSecsSinceEpoch()) == 0) {
+        const qint64 remaining = initial.connection.negativeControlObservedMs
+            + RemoteStationOptions::kNegativeControlLifetimeMs
+            - QDateTime::currentMSecsSinceEpoch();
+        QTimer::singleShot(static_cast<int>(remaining > 0 ? remaining : 1), this,
+                           &CoreTargetEditor::refreshServiceAvailability);
+    }
     layout->addLayout(form);
 
     m_errorLabel = new QLabel(this);
@@ -107,6 +118,31 @@ CoreTargetEditor::CoreTargetEditor(const SavedCoreTarget& initial, QWidget* pare
     connect(cancelButton, &QPushButton::clicked, this, &QDialog::reject);
 
     resize(540, sizeHint().height());
+}
+
+void CoreTargetEditor::setCurrentOptionsSource(CurrentOptionsSource source)
+{
+    m_currentOptionsSource = std::move(source);
+    auto* timer = new QTimer(this);
+    timer->setInterval(1000);
+    connect(timer, &QTimer::timeout, this, &CoreTargetEditor::refreshServiceAvailability);
+    timer->start();
+    refreshServiceAvailability();
+}
+
+void CoreTargetEditor::refreshServiceAvailability()
+{
+    if (m_currentOptionsSource) {
+        if (const auto current = m_currentOptionsSource();
+            current && current->identityFingerprint == m_initial.connection.identityFingerprint) {
+            m_initial.connection.controlChannelVersion = current->controlChannelVersion;
+            m_initial.connection.negativeControlObservedMs = current->negativeControlObservedMs;
+        }
+    }
+    const QString refusal = m_initial.connection.serviceConnectRefusal();
+    m_reachAnywhereCheck->setEnabled(refusal.isEmpty());
+    m_reachAnywhereReason->setText(refusal);
+    m_reachAnywhereReason->setVisible(!refusal.isEmpty());
 }
 
 SavedCoreTarget CoreTargetEditor::target() const
@@ -135,6 +171,7 @@ SavedCoreTarget CoreTargetEditor::target() const
         // Task 28 fix wave: what the old Core declared says nothing of the
         // new one.
         result.connection.controlChannelVersion = -1;
+        result.connection.negativeControlObservedMs = -1;
     }
     // Task 29: another identity is another Core: where the service finds
     // it, and its relay setting, were the old one's.

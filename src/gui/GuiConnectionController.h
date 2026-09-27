@@ -10,6 +10,7 @@
 
 #include <QMap>
 #include <QPointer>
+#include <QTimer>
 
 #include <memory>
 
@@ -60,6 +61,8 @@ private:
     void forgetTarget(const QString& key);
     void showDetails(const QString& key);
     void rememberAuthenticatedRadio();
+    void rememberAuthenticatedCapability();
+    void observeNetworkGeneration();
     // iPhone app Task 18: pairing, and the key a token sign-in enrolled.
     void pairTarget(const QString& key);
     void addByCode(const QString& address = QString());
@@ -82,5 +85,6 @@ private:
     quint64 m_request = 0;
     bool m_storeLoaded = false;
     bool m_shuttingDown = false;
+    QTimer m_negativeExpiryTimer;
 };
 } // namespace NereusSDR

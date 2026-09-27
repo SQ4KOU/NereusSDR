@@ -633,7 +633,8 @@ private slots:
         QVERIFY(directory.isValid());
         const QString path = directory.filePath(QStringLiteral("settings.xml"));
         AppSettings settings(path);
-        CoreTargetStore store(settings);
+        qint64 now = 1000000;
+        CoreTargetStore store(settings, [&now] { return now; });
         QVERIFY(store.load());
         SavedCoreTarget paired = makeTarget(QStringLiteral("paired"), QString());
         paired.connection.fingerprint.clear();
@@ -651,6 +652,7 @@ private slots:
         QCOMPARE(reloaded.target(QStringLiteral("paired"))->connection.controlChannelVersion, 1);
         QVERIFY(store.rememberControlChannelVersion(QStringLiteral("paired"), 0));
         QCOMPARE(store.target(QStringLiteral("paired"))->connection.controlChannelVersion, 0);
+        QCOMPARE(store.target(QStringLiteral("paired"))->connection.negativeControlObservedMs, now);
         QVERIFY(!store.rememberControlChannelVersion(QStringLiteral("nobody"), 1));
 
         QString error;
@@ -685,9 +687,111 @@ private slots:
         options.controlChannelVersion = 1;
         QVERIFY(options.serviceConnectRefusal().isEmpty());
         options.controlChannelVersion = 0;
-        QCOMPARE(options.serviceConnectRefusal(),
+        options.negativeControlObservedMs = 1000000;
+        QCOMPARE(options.serviceConnectRefusal(1000000),
                  QStringLiteral("Update the Core to reach it from anywhere."));
-        QVERIFY(NereusSDR::OperatorWording::isPlain(options.serviceConnectRefusal()));
+        QVERIFY(NereusSDR::OperatorWording::isPlain(options.serviceConnectRefusal(1000000)));
+        QVERIFY(options.serviceConnectRefusal(1300000).isEmpty());
+        QVERIFY(options.serviceConnectRefusal(999999).isEmpty());
+    }
+
+    void authenticatedNegativeObservationAgesAndNetworkChangeInvalidatesOnce()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("settings.xml"));
+        AppSettings settings(path);
+        qint64 now = 1000000;
+        CoreTargetStore store(settings, [&now] { return now; });
+        QVERIFY(store.load());
+        SavedCoreTarget paired = makeTarget(QStringLiteral("paired"), QString());
+        paired.connection.identityFingerprint = someIdentity();
+        paired.connection.rendezvousId = QStringLiteral("abcdefghijklmnopqrstuvwxyz");
+        paired.connection.relayAllowed = 0;
+        QVERIFY(store.upsert(paired));
+        QVERIFY(store.observeNetworkFingerprint(QStringLiteral("network-a")));
+        QVERIFY(store.rememberControlChannelVersion(paired.id, 0));
+        QCOMPARE(store.target(paired.id)->connection.effectiveControlChannelVersion(now), 0);
+        AppSettings freshSettings(path);
+        freshSettings.load();
+        CoreTargetStore fresh(freshSettings, [&now] { return now; });
+        QVERIFY(fresh.load());
+        QCOMPARE(fresh.target(paired.id)->connection.effectiveControlChannelVersion(now), 0);
+        now += 299999;
+        QCOMPARE(store.target(paired.id)->connection.effectiveControlChannelVersion(now), 0);
+        QVERIFY(store.observeNetworkFingerprint(QStringLiteral("network-a")));
+        QCOMPARE(store.target(paired.id)->connection.negativeControlObservedMs, 1000000);
+        now += 1;
+        QCOMPARE(store.target(paired.id)->connection.effectiveControlChannelVersion(now), -1);
+        QVERIFY(store.rememberControlChannelVersion(paired.id, 0));
+        QCOMPARE(store.target(paired.id)->connection.negativeControlObservedMs, now);
+        now += 1000;
+        QVERIFY(store.rememberControlChannelVersion(paired.id, 0));
+        QCOMPARE(store.target(paired.id)->connection.negativeControlObservedMs, now);
+        QVERIFY(store.observeNetworkFingerprint(QStringLiteral("network-b")));
+        QCOMPARE(store.target(paired.id)->connection.effectiveControlChannelVersion(now), -1);
+        QVERIFY(store.observeNetworkFingerprint(QStringLiteral("network-b")));
+        QCOMPARE(store.target(paired.id)->connection.negativeControlObservedMs, -1);
+        QCOMPARE(store.target(paired.id)->connection.relayAllowed, 0);
+
+        AppSettings reloadedSettings(path);
+        reloadedSettings.load();
+        CoreTargetStore reloaded(reloadedSettings, [&now] { return now; });
+        QVERIFY(reloaded.load());
+        QCOMPARE(reloaded.target(paired.id)->connection.controlChannelVersion, 0);
+        QCOMPARE(reloaded.target(paired.id)->connection.effectiveControlChannelVersion(now), -1);
+        QVERIFY(reloaded.rememberControlChannelVersion(paired.id, 1));
+        QCOMPARE(reloaded.target(paired.id)->connection.negativeControlObservedMs, -1);
+        QCOMPARE(reloaded.target(paired.id)->connection.effectiveControlChannelVersion(now), 1);
+    }
+
+    void legacyMalformedAndFutureObservationsNeverBlockDiscovery()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("settings.xml"));
+        AppSettings settings(path);
+        const qint64 now = 1000000;
+        for (const QJsonValue& stamp : {QJsonValue(), QJsonValue(QStringLiteral("bad")),
+                                        QJsonValue(1.5), QJsonValue(-1), QJsonValue(1000001)}) {
+            QJsonObject record = jsonTarget(QStringLiteral("paired"),
+                                            StationIdentity::toBase64Url(someIdentity()));
+            record.insert(QStringLiteral("controlChannelVersion"), 0);
+            if (!stamp.isUndefined()) {
+                record.insert(QStringLiteral("negativeControlObservedMs"), stamp);
+            }
+            record.insert(QStringLiteral("relayAllowed"), false);
+            settings.setValue(QLatin1String(kTargetKey),
+                              documentFor(QJsonArray{record}, QStringLiteral("paired")));
+            CoreTargetStore store(settings, [now] { return now; });
+            QVERIFY(store.load());
+            const auto target = store.target(QStringLiteral("paired"));
+            QVERIFY(target.has_value());
+            QCOMPARE(target->connection.effectiveControlChannelVersion(now), -1);
+            QCOMPARE(target->connection.relayAllowed, 0);
+            if (stamp == QJsonValue(1000001)) {
+                QCOMPARE(target->connection.negativeControlObservedMs, -1);
+            }
+        }
+    }
+
+    void clockRollbackDiscardsAnAlreadyRecordedNegative()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        AppSettings settings(directory.filePath(QStringLiteral("settings.xml")));
+        qint64 now = 1000000;
+        CoreTargetStore store(settings, [&now] { return now; });
+        QVERIFY(store.load());
+        SavedCoreTarget paired = makeTarget(QStringLiteral("paired"), QString());
+        paired.connection.identityFingerprint = someIdentity();
+        QVERIFY(store.upsert(paired));
+        QVERIFY(store.rememberControlChannelVersion(paired.id, 0));
+        now -= 1000;
+        QVERIFY(store.invalidateFutureNegativeObservations());
+        QCOMPARE(store.target(paired.id)->connection.negativeControlObservedMs, -1);
+        now += 1000;
+        QCOMPARE(store.target(paired.id)->connection.effectiveControlChannelVersion(now), -1);
     }
 
     // iPhone app plan Task 29 (R-IOS-16): the Core's rendezvous id and

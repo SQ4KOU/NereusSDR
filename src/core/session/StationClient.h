@@ -361,6 +361,7 @@
 #include <QUrl>
 
 #include <memory>
+#include <functional>
 #include <optional>
 
 #include "core/session/IStationLink.h"
@@ -630,6 +631,9 @@ public:
         QString rendezvousId;
         bool relayAllowed = true;
         int controlChannelVersion = -1;
+        // Consult the saved observation again for automatic retries, so a
+        // negative result can expire while this window stays open.
+        std::function<int()> currentControlChannelVersion;
     };
     void setServiceRoute(const ServiceRoute& route) { m_serviceRoute = route; }
     ServiceRoute serviceRoute() const { return m_serviceRoute; }

@@ -29,6 +29,7 @@
 #include <QString>
 
 #include <optional>
+#include <functional>
 
 namespace NereusSDR {
 
@@ -44,7 +45,7 @@ struct SavedCoreTarget {
 
 class CoreTargetStore {
 public:
-    explicit CoreTargetStore(AppSettings&);
+    explicit CoreTargetStore(AppSettings&, std::function<qint64()> clock = {});
 
     bool load(QString* error = nullptr);
     QList<SavedCoreTarget> targets() const;
@@ -64,6 +65,9 @@ public:
     /// (RemoteStationOptions::serviceConnectRefusal()).
     bool rememberControlChannelVersion(const QString& id, int version,
                                        QString* error = nullptr);
+    bool invalidateNegativeControlObservations(QString* error = nullptr);
+    bool invalidateFutureNegativeObservations(QString* error = nullptr);
+    bool observeNetworkFingerprint(const QString& fingerprint, QString* error = nullptr);
     /// iPhone app plan Task 29 (R-IOS-16): the saved Core `id`'s rendezvous
     /// id (from its hello; ignored when not one) and its relay setting as
     /// its last session told it (-1 leaves the recorded one), which a
@@ -79,9 +83,11 @@ private:
                  QString* error);
 
     AppSettings& m_settings;
+    std::function<qint64()> m_clock;
     QList<SavedCoreTarget> m_targets;
     QString m_selectedId{QStringLiteral("local")};
     bool m_loaded{false};
+    std::optional<QString> m_networkFingerprint;
 };
 
 } // namespace NereusSDR

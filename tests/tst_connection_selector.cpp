@@ -13,6 +13,7 @@
 #include <QCheckBox>
 #include <QApplication>
 #include <QDir>
+#include <QDateTime>
 #include <QStyleFactory>
 #include <QDialog>
 #include <QLabel>
@@ -347,6 +348,7 @@ void ConnectionSelectorTest::editorOffersReachingTheCoreFromAnywhere()
         QCOMPARE(edited.connection.relayAllowed, 1);
     }
     paired.connection.controlChannelVersion = 0;
+    paired.connection.negativeControlObservedMs = QDateTime::currentMSecsSinceEpoch();
     {
         CoreTargetEditor editor(paired);
         auto* check = editor.findChild<QCheckBox*>(QStringLiteral("coreTargetEditorReachAnywhere"));
@@ -354,6 +356,12 @@ void ConnectionSelectorTest::editorOffersReachingTheCoreFromAnywhere()
             editor.findChild<QLabel*>(QStringLiteral("coreTargetEditorReachAnywhereReason"));
         QVERIFY(!check->isEnabled());
         QCOMPARE(reason->text(), QStringLiteral("Update the Core to reach it from anywhere."));
+        RemoteStationOptions current = paired.connection;
+        editor.setCurrentOptionsSource([&current] { return current; });
+        current.negativeControlObservedMs = -1; // changed network generation
+        editor.refreshServiceAvailability();
+        QVERIFY(check->isEnabled());
+        QVERIFY(reason->isHidden());
     }
 }
 

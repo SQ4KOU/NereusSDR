@@ -38,6 +38,7 @@
 #include <QJsonObject>
 #include <QJsonParseError>
 #include <QJsonValue>
+#include <QDateTime>
 #include <QLatin1String>
 #include <QRegularExpression>
 #include <QSet>
@@ -188,6 +189,11 @@ QJsonObject toJson(const SavedCoreTarget& target, int version)
             object.insert(QStringLiteral("controlChannelVersion"),
                           target.connection.controlChannelVersion);
         }
+        if (target.connection.controlChannelVersion == 0
+            && target.connection.negativeControlObservedMs >= 0) {
+            object.insert(QStringLiteral("negativeControlObservedMs"),
+                          static_cast<double>(target.connection.negativeControlObservedMs));
+        }
         // Task 29: absent until a sign-in recorded them, and the
         // operator's choice only when it is off, so a record without them
         // is written exactly as before.
@@ -317,6 +323,16 @@ bool parseDocument(const QString& text, int expectedVersion, QList<SavedCoreTarg
                 }
                 target.connection.controlChannelVersion = static_cast<int>(value);
             }
+            // A bad optional observation only ages out the negative result;
+            // it never discards the saved Core or its trust binding.
+            const QJsonValue observed = object.value(QStringLiteral("negativeControlObservedMs"));
+            if (target.connection.controlChannelVersion == 0 && observed.isDouble()) {
+                const double stamp = observed.toDouble();
+                if (stamp >= 0.0 && stamp <= 9007199254740991.0
+                    && stamp == static_cast<double>(static_cast<qint64>(stamp))) {
+                    target.connection.negativeControlObservedMs = static_cast<qint64>(stamp);
+                }
+            }
             // Task 29: optional; a rendezvous id's form, and two booleans.
             const QJsonValue rendezvous = object.value(QStringLiteral("rendezvousId"));
             if (!rendezvous.isUndefined()) {
@@ -356,8 +372,10 @@ bool parseDocument(const QString& text, int expectedVersion, QList<SavedCoreTarg
 
 } // namespace
 
-CoreTargetStore::CoreTargetStore(AppSettings& settings)
-    : m_settings(settings)
+CoreTargetStore::CoreTargetStore(AppSettings& settings, std::function<qint64()> clock)
+    : m_settings(settings), m_clock(clock ? std::move(clock) : [] {
+        return QDateTime::currentMSecsSinceEpoch();
+    })
 {
 }
 
@@ -374,6 +392,15 @@ bool CoreTargetStore::load(QString* error)
                            &parsedSelectedId, error)) {
             return false;
         }
+        bool repairedFuture = false;
+        for (SavedCoreTarget& target : parsedTargets) {
+            if (target.connection.controlChannelVersion == 0
+                && target.connection.negativeControlObservedMs > m_clock()) {
+                target.connection.negativeControlObservedMs = -1;
+                repairedFuture = true;
+            }
+        }
+        if (repairedFuture && !persist(parsedTargets, parsedSelectedId, error)) { return false; }
         m_targets = std::move(parsedTargets);
         m_selectedId = std::move(parsedSelectedId);
         m_loaded = true;
@@ -528,13 +555,69 @@ bool CoreTargetStore::rememberControlChannelVersion(const QString& id, int versi
         return false;
     }
     const int recorded = std::max(0, version);
-    if (found->connection.controlChannelVersion == recorded) {
+    const qint64 observed = recorded == 0 ? m_clock() : -1;
+    if (found->connection.controlChannelVersion == recorded
+        && found->connection.negativeControlObservedMs == observed) {
         clearError(error);
         return true;
     }
     SavedCoreTarget updated = *found;
     updated.connection.controlChannelVersion = recorded;
+    updated.connection.negativeControlObservedMs = observed;
     return upsert(updated, error);
+}
+
+bool CoreTargetStore::invalidateNegativeControlObservations(QString* error)
+{
+    QList<SavedCoreTarget> updated = m_targets;
+    bool changed = false;
+    for (SavedCoreTarget& target : updated) {
+        if (target.connection.controlChannelVersion == 0
+            && target.connection.negativeControlObservedMs >= 0) {
+            target.connection.negativeControlObservedMs = -1;
+            changed = true;
+        }
+    }
+    if (!changed) { clearError(error); return true; }
+    if (!persist(updated, m_selectedId, error)) { return false; }
+    m_targets = std::move(updated);
+    clearError(error);
+    return true;
+}
+
+bool CoreTargetStore::invalidateFutureNegativeObservations(QString* error)
+{
+    QList<SavedCoreTarget> updated = m_targets;
+    bool changed = false;
+    const qint64 now = m_clock();
+    for (SavedCoreTarget& target : updated) {
+        if (target.connection.controlChannelVersion == 0
+            && target.connection.negativeControlObservedMs > now) {
+            target.connection.negativeControlObservedMs = -1;
+            changed = true;
+        }
+    }
+    if (!changed) { clearError(error); return true; }
+    if (!persist(updated, m_selectedId, error)) { return false; }
+    m_targets = std::move(updated);
+    clearError(error);
+    return true;
+}
+
+bool CoreTargetStore::observeNetworkFingerprint(const QString& fingerprint, QString* error)
+{
+    if (!m_networkFingerprint) {
+        m_networkFingerprint = fingerprint;
+        clearError(error);
+        return true;
+    }
+    if (*m_networkFingerprint == fingerprint) {
+        clearError(error);
+        return true;
+    }
+    if (!invalidateNegativeControlObservations(error)) { return false; }
+    m_networkFingerprint = fingerprint;
+    return true;
 }
 
 bool CoreTargetStore::rememberServiceRoute(const QString& id, const QString& rendezvousId,

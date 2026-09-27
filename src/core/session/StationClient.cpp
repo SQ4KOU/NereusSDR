@@ -5802,11 +5802,13 @@ PathRacer* StationClient::newRacer(bool upgrade)
     }
     racer->addDirectUrls(m_dialPlan, kMaxIncomingMessageBytes);
     const ServiceRoute& route = m_serviceRoute;
+    const int controlVersion = route.currentControlChannelVersion
+        ? route.currentControlChannelVersion() : route.controlChannelVersion;
     const bool routeUsable = !route.servers.isEmpty()
         && RendezvousWire::isRendezvousId(route.rendezvousId) && m_deviceIdentity
         && m_deviceIdentity->isValid();
     const QString serviceHost = route.servers.isEmpty() ? QString() : route.servers.first().host();
-    if (routeUsable && route.controlChannelVersion == 0) {
+    if (routeUsable && controlVersion == 0) {
         // Link section 21.1: a Core whose last session declared no control
         // channel does not answer through the service; not started.
         if (!upgrade) {
@@ -5827,7 +5829,7 @@ PathRacer* StationClient::newRacer(bool upgrade)
         }
         // Review Minor 5: a Core whose last session declared the control
         // channel is slow or offline when it does not answer, not old.
-        rung->setCoreAnswersIntroductions(route.controlChannelVersion >= 1);
+        rung->setCoreAnswersIntroductions(controlVersion >= 1);
         racer->addRung(rung);
         if (!upgrade && !route.relayAllowed) {
             racer->addNote(PathRacer::PathKind::Relay, serviceHost,

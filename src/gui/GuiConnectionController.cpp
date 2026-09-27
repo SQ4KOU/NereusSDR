@@ -24,11 +24,32 @@
 #include "models/RadioModel.h"
 
 #include <QDateTime>
+#include <QNetworkInterface>
 #include <QTimer>
 #include <QUrl>
 
 namespace NereusSDR {
 namespace {
+QString networkFingerprint()
+{
+    QStringList addresses;
+    for (const QNetworkInterface& interface : QNetworkInterface::allInterfaces()) {
+        const auto flags = interface.flags();
+        if (!flags.testFlag(QNetworkInterface::IsUp)
+            || !flags.testFlag(QNetworkInterface::IsRunning)
+            || flags.testFlag(QNetworkInterface::IsLoopBack)) { continue; }
+        for (const QNetworkAddressEntry& entry : interface.addressEntries()) {
+            if (entry.ip().isNull() || entry.ip().isLoopback()) { continue; }
+            addresses.append(QString::number(interface.index()) + QLatin1Char(':')
+                + entry.ip().toString() + QLatin1Char('/')
+                + QString::number(entry.prefixLength()));
+        }
+    }
+    addresses.removeDuplicates();
+    addresses.sort();
+    return addresses.join(QLatin1Char('|'));
+}
+
 QString endpointText(const QUrl& url)
 {
     QString host = url.host();
@@ -79,6 +100,8 @@ bool selectionMatchesSaved(const StationStartupSelection& selection, const Saved
 GuiConnectionController::GuiConnectionController(QObject* parent)
     : QObject(parent), m_store(AppSettings::instance()), m_lan(this), m_selector(std::make_unique<ConnectionSelector>())
 {
+    m_negativeExpiryTimer.setSingleShot(true);
+    connect(&m_negativeExpiryTimer, &QTimer::timeout, this, &GuiConnectionController::refresh);
     connect(&m_lan, &StationLanDiscovery::changed, this, &GuiConnectionController::refresh);
     connect(&m_sessions, &GuiSessionCoordinator::windowChanged,
             this, &GuiConnectionController::attachWindow);
@@ -115,6 +138,7 @@ void GuiConnectionController::start(const StationStartupRequest& request)
 {
     QString error;
     m_storeLoaded = m_store.load(&error);
+    if (m_storeLoaded) { observeNetworkGeneration(); }
     const auto selected = m_storeLoaded ? resolveStationStartup(request, m_store, &error)
                                         : std::nullopt;
     // A corrupt address book or bad CLI must not start the old local radio
@@ -179,16 +203,17 @@ void GuiConnectionController::attachWindow(MainWindow* window)
         // adds to them after each connect), not the list the window was made
         // with.
         const QPointer<GuiConnectionController> self(this);
-        m_remoteControls->setCachedAddressSource(
-            [self, generation]() -> std::optional<QStringList> {
+        m_remoteControls->setCurrentOptionsSource(
+            [self, generation]() -> std::optional<RemoteStationOptions> {
                 if (!self || generation != self->m_sessions.generation() || !self->m_storeLoaded) {
                     return std::nullopt;
                 }
+                self->observeNetworkGeneration();
                 const auto target = self->m_store.target(self->m_sessions.selection().savedId);
                 if (!target || !selectionMatchesSaved(self->m_sessions.selection(), *target)) {
                     return std::nullopt;
                 }
-                return target->connection.cachedAddresses;
+                return target->connection;
             });
     }
     if (auto* client = window->findChild<StationClient*>()) {
@@ -198,7 +223,8 @@ void GuiConnectionController::attachWindow(MainWindow* window)
                 refresh();
             }
         };
-        m_windowConnections.append(connect(client, &StationClient::stateSnapshotApplied, this, remember));
+        m_windowConnections.append(connect(client, &StationClient::stateSnapshotApplied, this,
+            [this, remember] { rememberAuthenticatedCapability(); remember(); }));
         m_windowConnections.append(connect(client, &StationClient::handshakeComplete, this, remember));
         m_windowConnections.append(connect(client, &StationClient::stationIdentityLearned, this,
             [this, generation](const QByteArray& identity) {
@@ -214,6 +240,21 @@ void GuiConnectionController::attachWindow(MainWindow* window)
 void GuiConnectionController::refresh()
 {
     if (m_shuttingDown) { return; }
+    observeNetworkGeneration();
+    m_negativeExpiryTimer.stop();
+    qint64 nextExpiry = 0;
+    const qint64 wallNow = QDateTime::currentMSecsSinceEpoch();
+    for (const SavedCoreTarget& target : m_store.targets()) {
+        const auto& options = target.connection;
+        if (options.effectiveControlChannelVersion(wallNow) == 0) {
+            const qint64 remaining = options.negativeControlObservedMs
+                + RemoteStationOptions::kNegativeControlLifetimeMs - wallNow;
+            if (nextExpiry == 0 || remaining < nextExpiry) { nextExpiry = remaining; }
+        }
+    }
+    if (nextExpiry > 0) {
+        m_negativeExpiryTimer.start(static_cast<int>(nextExpiry));
+    }
     MainWindow* window = m_sessions.window();
     if (!window) { return; }
     RadioModel* model = window->radioModel();
@@ -548,6 +589,13 @@ void GuiConnectionController::editCore(const QString& id)
         }
     }
     CoreTargetEditor editor(initial, m_selector.get());
+    if (!id.isEmpty()) {
+        editor.setCurrentOptionsSource([this, id]() -> std::optional<RemoteStationOptions> {
+            observeNetworkGeneration();
+            if (const auto current = m_store.target(id)) { return current->connection; }
+            return std::nullopt;
+        });
+    }
     if (editor.exec() != QDialog::Accepted) { return; }
     QString error;
     if (!m_store.upsert(editor.target(), &error)) { m_selector->setNotice(error); return; }
@@ -646,20 +694,6 @@ void GuiConnectionController::rememberAuthenticatedRadio()
         if (!target) { return; }
     }
     const auto& caps = client->capabilities();
-    // iPhone app plan Task 28 fix wave (R-IOS-16, Important 5): whether this
-    // Core takes the control session through the remote access service,
-    // recorded with it, so connecting from anywhere is offered only to one
-    // that does.
-    if (!target->connection.identityFingerprint.isEmpty()
-        && target->connection.controlChannelVersion != caps.controlChannelVersion) {
-        QString error;
-        if (!m_store.rememberControlChannelVersion(target->id, caps.controlChannelVersion,
-                                                   &error)) {
-            m_selector->setNotice(error);
-        }
-        target = m_store.target(target->id);
-        if (!target) { return; }
-    }
     // iPhone app plan Task 29 (R-IOS-16; link section 21.1): the Core's
     // rendezvous id and whether it allows the relay, so the next connect
     // races the internet service beside its addresses.
@@ -683,6 +717,35 @@ void GuiConnectionController::rememberAuthenticatedRadio()
     target->lastRadioMac = caps.macAddress;
     QString error;
     if (!m_store.upsert(*target, &error)) { m_selector->setNotice(error); }
+}
+
+void GuiConnectionController::rememberAuthenticatedCapability()
+{
+    if (!m_storeLoaded || !m_sessions.window()) { return; }
+    auto* client = m_sessions.window()->findChild<StationClient*>();
+    if (!client || !client->isHandshakeComplete()) { return; }
+    const auto target = m_store.target(m_sessions.selection().savedId);
+    if (!target || !selectionMatchesSaved(m_sessions.selection(), *target)
+        || target->connection.identityFingerprint.isEmpty()) { return; }
+    QString error;
+    if (!m_store.rememberControlChannelVersion(target->id,
+                                               client->capabilities().controlChannelVersion,
+                                               &error)) {
+        m_selector->setNotice(error);
+    }
+}
+
+void GuiConnectionController::observeNetworkGeneration()
+{
+    if (!m_storeLoaded) { return; }
+    QString error;
+    if (!m_store.invalidateFutureNegativeObservations(&error)) {
+        m_selector->setNotice(error);
+        return;
+    }
+    if (!m_store.observeNetworkFingerprint(networkFingerprint(), &error)) {
+        m_selector->setNotice(error);
+    }
 }
 
 // ── iPhone app Task 18 (R-IOS-08): pairing ───────────────────────────────
@@ -751,6 +814,8 @@ void GuiConnectionController::onPaired(const PairedStationRecord& record)
     if (!record.label.isEmpty()) { target.label = record.label; }
     target.connection.url = StationPairingClient::coreUrl(record.host, record.port).toString();
     target.connection.identityFingerprint = record.identityFingerprint;
+    target.connection.controlChannelVersion = -1;
+    target.connection.negativeControlObservedMs = -1;
     if (target.label.isEmpty()) { target.label = endpointText(target.connection); }
     QString error;
     if (!m_store.upsert(target, &error)) {

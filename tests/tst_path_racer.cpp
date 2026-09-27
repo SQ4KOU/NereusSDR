@@ -675,6 +675,31 @@ private slots:
                  StationConnectionAttempt::Outcome::CoreTooOld);
         window.client->disconnectFromStation(QStringLiteral("test done"));
     }
+
+    void aStaleNegativeRouteIsRecheckedWhenTheRaceStarts()
+    {
+        LocalService service;
+        QVERIFY(service.start());
+        Core core;
+        StationRendezvous rendezvous(core.server.get(), {service.url()}, /*relayAllowed=*/false);
+        core.server->setRelayAllowed(false);
+        QSignalSpy registered(rendezvous.client(), &RendezvousClient::registered);
+        QVERIFY(rendezvous.start());
+        QTRY_COMPARE_WITH_TIMEOUT(registered.size(), 1, 10000);
+        Window window(core);
+        window.route(service, rendezvous.client()->stationId(), false,
+                     /*controlChannelVersion=*/0);
+        StationClient::ServiceRoute route = window.client->serviceRoute();
+        int currentVersion = -1; // expired observation from the saved Core
+        route.currentControlChannelVersion = [&currentVersion] { return currentVersion; };
+        window.client->setServiceRoute(route);
+        window.client->connectToStation(
+            QUrl(QStringLiteral("wss://127.0.0.1:%1").arg(closedPort())), QString(), QString(),
+            false, identityOf(core));
+        QTRY_VERIFY_WITH_TIMEOUT(window.client->isHandshakeComplete(), 60000);
+        QCOMPARE(window.client->pathRank(), int(PathRacer::ServiceDirect));
+        window.client->disconnectFromStation(QStringLiteral("test done"));
+    }
 };
 
 QTEST_MAIN(TstPathRacer)
