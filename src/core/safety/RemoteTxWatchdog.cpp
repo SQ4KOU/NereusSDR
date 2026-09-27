@@ -114,8 +114,13 @@ bool RemoteTxWatchdog::keepalive(const QByteArray& deviceId, quint64 sequence, q
         return false;
     }
     watch.lastSequence = sequence;
-    watch.lastMs = now();
+    const qint64 heard = now();
+    // Task 29 step 2b: how long since the one before, for the measurement
+    // of keyed-event tails on the web relay (nothing acts on it).
+    const qint64 gap = watch.lastMs > 0 ? heard - watch.lastMs : -1;
+    watch.lastMs = heard;
     reschedule();
+    emit keepaliveHeard(deviceId, gap);
     return true;
 }
 

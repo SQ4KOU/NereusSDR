@@ -849,6 +849,8 @@ change shows as surface drift and as a change to this table.
 | `stationFreedvVersion` | 1 |
 | `mediaReplaceVersion` | 1 |
 | `controlSwitchVersion` | 1 |
+| `mediaTunnelVersion` | 1 |
+| `mediaRelayRoutingVersion` | 1 |
 | `sessionHolderVersion` | 1 |
 | `remoteTxVersion` | 2 |
 | `txStateVersion` | 2 |
@@ -1207,7 +1209,8 @@ When a feature is off, its version is 0:
 - `controlChannelVersion` (the iPhone app plan's Task 28 fix wave,
   R-IOS-16): sent only at agreed minor 11, after `displayClockVersion` in
   the minor-11 block (`txMonitorAudioVersion`, `stationFreedvVersion`,
-  `mediaReplaceVersion`, `controlSwitchVersion`, `relayAllowed`, then
+  `mediaReplaceVersion`, `controlSwitchVersion`, `relayAllowed`,
+  `mediaTunnelVersion`, `mediaRelayRoutingVersion`, then
   `sessionHolderVersion` and the remote transmit entries follow it), and 1
   on a Core with a bound
   certificate (section
@@ -1285,6 +1288,30 @@ When a feature is off, its version is 0:
   setting's default). A device records it with the paired Core at each
   sign-in, leaves the relay out of its races while it is false, and says
   so in its attempt record (section 21.1).
+
+- `mediaTunnelVersion` (Task 29 step 2b): 1 when media is on, after
+  `relayAllowed`. A media `start` may declare version 1 even if the session
+  currently uses the rendezvous data channel. The media connection uses the
+  direct WebSocket tunnel only while that session path carries binary
+  messages; a later path move can therefore use the declared tunnel on its
+  replacement. Its tag-2 payload is a 16-byte RFC 4122 `connectionId` UUID
+  followed by the unchanged ICE-agent datagram.
+- `mediaRelayRoutingVersion` (Task 29 step 2b): 1 when media is on, after
+  `mediaTunnelVersion`. A media `start` declaring version 1 enables the same
+  UUID prefix on the web-relay leg's tag-2 payload. An older peer omitting
+  the declaration keeps the original raw tag-2 payload. Replacement
+  inherits the start's mode and retains its exact three-field shape. A
+  legacy raw leg currently carrying media cannot overlap a replacement on
+  that leg, so the Core refuses that move before changing the live route.
+  The UUID selects a local media generation; DTLS still authenticates the
+  peer. A routed payload may hold at most 1484 bytes of agent datagram,
+  preserving the relay's existing 1501-byte frame limit and outer tags.
+  Each claimed local loopback route pins the source address and port of its
+  first well-formed agent datagram. Later datagrams from another local
+  source are dropped rather than retargeting the return route; a new agent
+  needs a new claim. This avoids accidental or stale local traffic changing
+  a live route. A local process that races the first datagram is not
+  authenticated by this pin; ICE/DTLS retains its peer checks.
 
 - `sessionHolderVersion`: sent only at agreed minor 11, last, and only to
   a peer whose hello declared `sessionHolder` 1 with `deviceAuth` 1; any
@@ -1501,12 +1528,14 @@ older window sees only the values it was built for.
 | 64 | `mediaReplaceVersion` | `i64` |
 | 65 | `controlSwitchVersion` | `i64` |
 | 66 | `relayAllowed` | `bool` |
-| 67 | `sessionHolderVersion` | `i64` |
-| 68 | `remoteTxVersion` | `i64` |
-| 69 | `txRefusalCode` | `utf8` |
-| 70 | `txRefusalReason` | `utf8` |
-| 71 | `txRefusalFix` | `utf8` |
-| 72 | `txStateVersion` | `i64` |
+| 67 | `mediaTunnelVersion` | `i64` |
+| 68 | `mediaRelayRoutingVersion` | `i64` |
+| 69 | `sessionHolderVersion` | `i64` |
+| 70 | `remoteTxVersion` | `i64` |
+| 71 | `txRefusalCode` | `utf8` |
+| 72 | `txRefusalReason` | `utf8` |
+| 73 | `txRefusalFix` | `utf8` |
+| 74 | `txStateVersion` | `i64` |
 
 <!-- /surface -->
 
@@ -4285,7 +4314,7 @@ Client to station:
 | `monitor-audio` | `txMonitorAudioVersion` | `connectionId`, `op`, `revision`, `route` | none | none |
 | `receiver-audio` | `receiverAudioVersion` | `connectionId`, `enabled`, `op`, `profile`, `revision`, `sliceId` | none | none |
 | `replace` | `mediaReplaceVersion` | `connectionId`, `op`, `replaces` | none | none |
-| `start` | `remoteMediaVersion` | `connectionId`, `op` | `audioProfileVersion` with audioProfileVersion; `headphonesMixVersion` with headphonesMixVersion; `receiverAudioVersion` with receiverAudioVersion; `remoteTxVersion` with remoteTxVersion; `txMonitorAudioVersion` with txMonitorAudioVersion | none |
+| `start` | `remoteMediaVersion` | `connectionId`, `op` | `audioProfileVersion` with audioProfileVersion; `headphonesMixVersion` with headphonesMixVersion; `mediaRelayRoutingVersion` with mediaRelayRoutingVersion; `mediaTunnelVersion` with mediaTunnelVersion; `receiverAudioVersion` with receiverAudioVersion; `remoteTxVersion` with remoteTxVersion; `txMonitorAudioVersion` with txMonitorAudioVersion | none |
 | `subscribe` | `remoteMediaVersion` | `centreHz`, `connectionId`, `endpointId`, `fftSize`, `fps`, `framesPerLine`, `maxDbm`, `minDbm`, `op`, `pixels`, `revision`, `sliceId`, `spanHz`, `tier`, `trace`, `waterfall`, `wideSpanFactor`, `windowType` | `activePeakHold` with displayExtrasVersion; `averageTimeMs` with displayExtrasVersion; `calibrationOffsetDb` with displayExtrasVersion; `decimation` with spectrumGrantVersion; `extendedView` with remoteWidebandDisplayVersion; `noiseFloor` with displayExtrasVersion; `normalize` with displayExtrasVersion; `peakBlobs` with displayExtrasVersion; `waterfallAverageTimeMs` with displayExtrasVersion; `waterfallLevels` with displayExtrasVersion | `activePeakHold`: {enabled, fallDbPerSec, holdMs}; `noiseFloor`: {enabled, shiftDb}; `peakBlobs`: {count, fallDbPerSec, holdMs, insideOnly}; `trace`: {averageAlpha, averageMode, detector}; `waterfall`: {averageAlpha, averageMode, detector}; `waterfallLevels`: {highDbm, lowDbm, mode, offsetDb} |
 | `unsubscribe` | `remoteMediaVersion` | `connectionId`, `endpointId`, `op` | `revision` with remoteDisplayBudgetVersion | none |
 

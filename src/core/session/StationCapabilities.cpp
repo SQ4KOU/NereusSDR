@@ -241,6 +241,10 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
         updates.append(intEntry("mediaReplaceVersion", mediaReplaceVersion));
         updates.append(intEntry("controlSwitchVersion", controlSwitchVersion));
         updates.append(boolEntry("relayAllowed", relayAllowed));
+        // Task 29 step 2b (R-IOS-16): the media tunnel inside a direct
+        // WebSocket session.
+        updates.append(intEntry("mediaTunnelVersion", mediaTunnelVersion));
+        updates.append(intEntry("mediaRelayRoutingVersion", mediaRelayRoutingVersion));
         // iPhone app Task 71: several devices at once, last, and only for
         // a peer that declared the feature.
         if (sessionHolderEntry) {
@@ -457,6 +461,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                    || u.name == "stationFreedvVersion"
                    || u.name == "mediaReplaceVersion"
                    || u.name == "controlSwitchVersion"
+                   || u.name == "mediaTunnelVersion"
+                   || u.name == "mediaRelayRoutingVersion"
                    || u.name == "sessionHolderVersion"
                    || u.name == "remoteTxVersion"
                    || u.name == "txStateVersion") {
@@ -518,6 +524,10 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                     caps.mediaReplaceVersion = version;
                 } else if (u.name == "controlSwitchVersion") {
                     caps.controlSwitchVersion = version;
+                } else if (u.name == "mediaTunnelVersion") {
+                    caps.mediaTunnelVersion = version;
+                } else if (u.name == "mediaRelayRoutingVersion") {
+                    caps.mediaRelayRoutingVersion = version;
                 } else {
                     caps.bandSelectVersion = version;
                 }

@@ -28,6 +28,7 @@
 // =================================================================
 
 #include "core/session/DataChannelTransport.h"
+#include "core/session/CandidateSourceLease.h"
 
 #include "core/security/OpenSslErrorScope.h"
 #include "core/session/media/LibDataChannelMediaTransport.h"
@@ -397,6 +398,10 @@ bool DataChannelTransport::start(const Options& options)
                 m_gatherRequested = true;
                 m_relays = options.ice->relayServers();
             }
+            if (options.ice->hasCandidateSourceFactory()) {
+                m_candidateSourceLease = CandidateSourceLease::create(*options.ice);
+                config.iceTransportLifetime = m_candidateSourceLease;
+            }
         }
         if (!options.certificatePemPath.isEmpty()) {
             // The Core's own persistent TLS certificate: the SHA-256 a
@@ -626,10 +631,10 @@ void DataChannelTransport::gatherIfReady()
     // iPhone app plan Task 29 (link section 21.5), step 2b: this
     // connection's own source on the control lane (the web relay's leg)
     // joins its ICE now, unless the relay is not allowed.
-    m_candidateSource = m_options.ice->makeCandidateSource(IceConfiguration::kControlLane);
-    if (m_candidateSource) {
+    if (m_candidateSourceLease) {
         const QPointer<DataChannelTransport> self(this);
-        m_candidateSource->start([self](const QString& candidate) {
+        m_candidateSourceLease->start(IceConfiguration::kControlLane, {},
+                                      [self](const QString& candidate) {
             if (!self) {
                 return;
             }
@@ -1102,11 +1107,9 @@ void DataChannelTransport::stopPeer(bool linger)
     if (!m_bridge) {
         return;
     }
-    // Task 29: its candidate source stops with the connection.
-    if (m_candidateSource) {
-        m_candidateSource->stop();
-        m_candidateSource.reset();
-    }
+    // The ICE transport owns the final lease. Its teardown runs after
+    // PeerConnection::close() and may outlive this wrapper.
+    m_candidateSourceLease.reset();
     m_pendingSourceCandidates.clear();
     std::shared_ptr<rtc::PeerConnection> peer;
     std::shared_ptr<rtc::DataChannel> channel;

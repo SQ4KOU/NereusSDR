@@ -365,6 +365,8 @@ private:
     bool m_introductionLive = false;
     /// Why the last server said no, for unreachable().
     QString m_lastRefusal;
+    // Step 2b: a sign-in page or an inspecting network, in plain words.
+    QString m_networkTrouble;
 
     bool m_mailboxOpen = false;
 };

@@ -15,6 +15,7 @@
 
 #include "core/session/RelayLeg.h"
 
+#include "core/session/NetworkTrouble.h"
 #include "core/session/SystemProxy.h"
 
 #include <QAbstractSocket>
@@ -23,6 +24,7 @@
 #include <QStandardPaths>
 #include <QTimer>
 #include <QUdpSocket>
+#include <QUuid>
 #include <QWebSocket>
 
 #include <algorithm>
@@ -54,7 +56,8 @@ bool isLetters(const QByteArray& bytes)
 // One ICE connection's use of a lane (IceConfiguration::CandidateSource).
 class RelayLaneSource final : public IceConfiguration::CandidateSource {
 public:
-    RelayLaneSource(RelayLeg* leg, int lane) : m_leg(leg), m_lane(lane) {}
+    RelayLaneSource(RelayLeg* leg, int lane, QByteArray id = {})
+        : m_leg(leg), m_lane(lane), m_id(std::move(id)) {}
     ~RelayLaneSource() override { stop(); }
 
     void start(std::function<void(const QString&)> add) override
@@ -62,19 +65,25 @@ public:
         if (m_leg.isNull() || m_started) {
             return;
         }
-        const quint16 port = m_leg->lanePort(m_lane);
-        if (port == 0) {
+        quint16 port = m_id.isEmpty() ? m_leg->lanePort(m_lane) : 0;
+        const quint64 claim = m_id.isEmpty() ? m_leg->claimLane(m_lane)
+                                              : m_leg->claimRoute(m_id, port);
+        if (port == 0 || claim == 0) {
             return;
         }
         m_started = true;
-        m_claim = m_leg->claimLane(m_lane);
+        m_claim = claim;
         add(RelayLeg::candidateLine(m_lane, port));
     }
 
     void stop() override
     {
         if (m_started && !m_leg.isNull()) {
-            m_leg->releaseLane(m_lane, m_claim);
+            if (m_id.isEmpty()) {
+                m_leg->releaseLane(m_lane, m_claim);
+            } else {
+                m_leg->releaseRoute(m_id, m_claim);
+            }
         }
         m_started = false;
     }
@@ -84,6 +93,7 @@ private:
     int m_lane = 0;
     bool m_started = false;
     quint64 m_claim = 0;
+    QByteArray m_id;
 };
 
 RelayLeg::RelayLeg(QObject* parent)
@@ -115,8 +125,9 @@ std::shared_ptr<RelayLeg> RelayLeg::create()
 
 IceConfiguration::CandidateSourceFactory RelayLeg::factoryFor(std::shared_ptr<RelayLeg> leg)
 {
-    return [leg](int lane) -> std::shared_ptr<IceConfiguration::CandidateSource> {
-        return leg ? leg->sourceFor(lane) : nullptr;
+    return [leg](int lane, const QString& connectionId,
+                 bool routed) -> std::shared_ptr<IceConfiguration::CandidateSource> {
+        return leg ? leg->sourceFor(lane, connectionId, routed) : nullptr;
     };
 }
 
@@ -160,12 +171,108 @@ QString RelayLeg::candidateLine(int lane, quint16 port)
         .arg(port);
 }
 
-std::shared_ptr<IceConfiguration::CandidateSource> RelayLeg::sourceFor(int lane)
+std::shared_ptr<IceConfiguration::CandidateSource> RelayLeg::sourceFor(
+    int lane, const QString& connectionId, bool routed)
 {
     if (lane < 1 || lane > static_cast<int>(m_lanes.size())) {
         return nullptr;
     }
+    if (lane == kTagMedia && routed) {
+        const QUuid uuid = QUuid::fromString(connectionId);
+        if (uuid.isNull() || uuid.toString(QUuid::WithoutBraces) != connectionId) {
+            return nullptr;
+        }
+        return std::make_shared<RelayLaneSource>(this, lane, uuid.toRfc4122());
+    }
     return std::make_shared<RelayLaneSource>(this, lane);
+}
+
+quint64 RelayLeg::claimRoute(const QByteArray& id, quint16& port)
+{
+    if (id.size() != 16 || m_routes.contains(id) || m_routes.size() >= 3
+        || (m_mediaModeChosen && !m_mediaRouted)) {
+        return 0;
+    }
+    auto* socket = new QUdpSocket(this);
+    if (!socket->bind(QHostAddress::LocalHost, 0)) {
+        delete socket;
+        return 0;
+    }
+    port = socket->localPort();
+    const quint64 claim = m_nextClaim++;
+    m_routes.insert(id, Route{socket, {}, 0, claim});
+    m_mediaModeChosen = true;
+    m_mediaRouted = true;
+    connect(socket, &QUdpSocket::readyRead, this, [this, id] { readRoute(id); });
+    return claim;
+}
+
+void RelayLeg::releaseRoute(const QByteArray& id, quint64 claim)
+{
+    auto it = m_routes.find(id);
+    if (it == m_routes.end() || it->claim != claim) {
+        return;
+    }
+    it->claim = 0;
+    it->agentAddress.clear();
+    it->agentPort = 0;
+    Lane& media = m_lanes[static_cast<size_t>(kTagMedia - 1)];
+    std::erase_if(media.queue, [&id](const QByteArray& frame) {
+        return frame.size() >= 17 && frame.mid(1, 16) == id;
+    });
+    media.queuedBytes = 0;
+    for (const QByteArray& frame : media.queue) {
+        media.queuedBytes += static_cast<int>(frame.size());
+    }
+    QUdpSocket* const socket = it->socket;
+    socket->disconnect(this);
+    socket->close();
+    socket->deleteLater();
+    m_routes.erase(it);
+}
+
+void RelayLeg::readRoute(const QByteArray& id)
+{
+    auto it = m_routes.find(id);
+    if (it == m_routes.end()) {
+        return;
+    }
+    QUdpSocket* socket = it->socket;
+    while (socket->hasPendingDatagrams()) {
+        const QNetworkDatagram datagram = socket->receiveDatagram(kMaxDatagramBytes + 1);
+        if (it->claim == 0) {
+            continue;
+        }
+        const QByteArray payload = datagram.data();
+        if (!datagram.senderAddress().isLoopback() || payload.isEmpty()) {
+            continue;
+        }
+        if (payload.size() > kMaxDatagramBytes - 16) {
+            ++m_droppedOversize;
+            continue;
+        }
+        if (m_state == State::Idle || m_state == State::Ended) {
+            continue;
+        }
+        const QHostAddress sender = datagram.senderAddress();
+        const quint16 senderPort = static_cast<quint16>(datagram.senderPort());
+        if (it->agentPort != 0
+            && (it->agentAddress != sender || it->agentPort != senderPort)) {
+            ++m_droppedWrongSender;
+            continue;
+        }
+        if (it->agentPort == 0) {
+            it->agentAddress = sender;
+            it->agentPort = senderPort;
+        }
+        QByteArray frame;
+        frame.reserve(1 + 16 + payload.size());
+        frame.append(static_cast<char>(kTagMedia));
+        frame.append(id);
+        frame.append(payload);
+        enqueue(kTagMedia, frame);
+    }
+    flush();
 }
 
 RelayLeg::Lane* RelayLeg::laneFor(int lane)
@@ -179,8 +286,12 @@ RelayLeg::Lane* RelayLeg::laneFor(int lane)
 quint64 RelayLeg::claimLane(int lane)
 {
     Lane* entry = laneFor(lane);
-    if (entry == nullptr) {
+    if (entry == nullptr || entry->claim != 0
+        || (lane == kTagMedia && m_mediaModeChosen && m_mediaRouted)) {
         return 0;
+    }
+    if (lane == kTagMedia) {
+        m_mediaModeChosen = true;
     }
     // A new connection on this lane: its agent is learned afresh.
     entry->claim = m_nextClaim++;
@@ -290,6 +401,15 @@ void RelayLeg::connectNow()
     connect(socket, &QWebSocket::connected, this, &RelayLeg::onConnected);
     connect(socket, &QWebSocket::disconnected, this, &RelayLeg::onDisconnected);
     connect(socket, &QWebSocket::binaryMessageReceived, this, &RelayLeg::onMessage);
+    // Options survey B.6 and B.7: the reason in plain words when the leg
+    // gives up (the relay is not pinned; the system's trust decides).
+    connect(socket, &QWebSocket::sslErrors, this, [this](const QList<QSslError>& errors) {
+        const QString words = NetworkTrouble::wordsForTlsErrors(errors);
+        if (!words.isEmpty()) {
+            qCWarning(lcRelayLeg).noquote() << words;
+            m_networkTrouble = words;
+        }
+    });
     connect(socket, &QWebSocket::bytesWritten, this, [this](qint64) { flush(); });
     socket->open(m_url);
 }
@@ -362,9 +482,32 @@ void RelayLeg::onMessage(const QByteArray& message)
     }
     const auto tag = static_cast<quint8>(message.at(0));
     if (tag == kTagControl || tag == kTagMedia) {
+        if (message.size() > kMaxDatagramBytes + 1) {
+            ++m_droppedOversize;
+            return;
+        }
         const QByteArray payload = message.mid(1);
+        if (tag == kTagMedia && m_mediaRouted) {
+            if (payload.size() <= 16) {
+                ++m_droppedNoAgent;
+                return;
+            }
+            const auto it = m_routes.constFind(payload.left(16));
+            if (it == m_routes.cend() || it->claim == 0 || it->agentPort == 0) {
+                ++m_droppedNoAgent;
+                return;
+            }
+            it->socket->writeDatagram(payload.constData() + 16, payload.size() - 16,
+                                      it->agentAddress, it->agentPort);
+            ++m_delivered;
+            return;
+        }
         Lane* lane = laneFor(tag);
-        if (payload.isEmpty() || lane == nullptr || lane->socket == nullptr) {
+        if (payload.isEmpty() || payload.size() > kMaxDatagramBytes
+            || lane == nullptr || lane->socket == nullptr) {
+            if (tag == kTagMedia && m_mediaRouted) {
+                ++m_droppedNoAgent;
+            }
             return;
         }
         if (lane->agentPort == 0) {
@@ -448,7 +591,9 @@ void RelayLeg::finish(const QString& code)
     m_connectTimer->stop();
     m_state = State::Ended;
     m_endCode = code;
-    const QString words = wordsFor(code);
+    // A leg lost on a network that breaks its secure connection says so.
+    const QString words = code == QLatin1String("lost") && !m_networkTrouble.isEmpty()
+        ? m_networkTrouble : wordsFor(code);
     emit ended(code, words);
 }
 
@@ -512,8 +657,6 @@ void RelayLeg::readLane(int lane)
         if (!sender.isLoopback()) {
             continue;
         }
-        entry->agentAddress = sender;
-        entry->agentPort = static_cast<quint16>(datagram.senderPort());
         const QByteArray payload = datagram.data();
         if (payload.isEmpty()) {
             continue;
@@ -525,6 +668,19 @@ void RelayLeg::readLane(int lane)
         }
         if (m_state == State::Idle || m_state == State::Ended) {
             continue;
+        }
+        if (lane == kTagMedia && m_mediaModeChosen && entry->claim == 0) {
+            continue;
+        }
+        const quint16 senderPort = static_cast<quint16>(datagram.senderPort());
+        if (entry->agentPort != 0
+            && (entry->agentAddress != sender || entry->agentPort != senderPort)) {
+            ++m_droppedWrongSender;
+            continue;
+        }
+        if (entry->agentPort == 0) {
+            entry->agentAddress = sender;
+            entry->agentPort = senderPort;
         }
         QByteArray frame;
         frame.reserve(1 + payload.size());

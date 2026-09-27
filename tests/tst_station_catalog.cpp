@@ -985,26 +985,28 @@ private slots:
         // Then parity Task 21's stationRadiosVersion.
         // Then parity Task 28's txDisplayVersion, R-R3-21's displayClockVersion and
         // the Task 28 fix wave's controlChannelVersion.
-        QCOMPARE(updates.at(updates.size() - 16).name, QByteArray("stationCatalogVersion"));
-        QCOMPARE(updates.at(updates.size() - 15).name, QByteArray("displayExtrasVersion"));
-        QCOMPARE(updates.at(updates.size() - 14).name, QByteArray("transmitSettingsVersion"));
-        QCOMPARE(updates.at(updates.size() - 13).name, QByteArray("bandSelectVersion"));
-        QCOMPARE(updates.at(updates.size() - 12).name, QByteArray("meterReadingsVersion"));
-        QCOMPARE(updates.at(updates.size() - 11).name, QByteArray("dspInfoVersion"));
-        QCOMPARE(updates.at(updates.size() - 10).name, QByteArray("recordStreamVersion"));
-        QCOMPARE(updates.at(updates.size() - 9).name, QByteArray("stationRadiosVersion"));
-        QCOMPARE(updates.at(updates.size() - 8).name, QByteArray("txDisplayVersion"));
-        QCOMPARE(updates.at(updates.size() - 7).name, QByteArray("displayClockVersion"));
-        QCOMPARE(updates.at(updates.size() - 6).name, QByteArray("controlChannelVersion"));
+        QCOMPARE(updates.at(updates.size() - 18).name, QByteArray("stationCatalogVersion"));
+        QCOMPARE(updates.at(updates.size() - 17).name, QByteArray("displayExtrasVersion"));
+        QCOMPARE(updates.at(updates.size() - 16).name, QByteArray("transmitSettingsVersion"));
+        QCOMPARE(updates.at(updates.size() - 15).name, QByteArray("bandSelectVersion"));
+        QCOMPARE(updates.at(updates.size() - 14).name, QByteArray("meterReadingsVersion"));
+        QCOMPARE(updates.at(updates.size() - 13).name, QByteArray("dspInfoVersion"));
+        QCOMPARE(updates.at(updates.size() - 12).name, QByteArray("recordStreamVersion"));
+        QCOMPARE(updates.at(updates.size() - 11).name, QByteArray("stationRadiosVersion"));
+        QCOMPARE(updates.at(updates.size() - 10).name, QByteArray("txDisplayVersion"));
+        QCOMPARE(updates.at(updates.size() - 9).name, QByteArray("displayClockVersion"));
+        QCOMPARE(updates.at(updates.size() - 8).name, QByteArray("controlChannelVersion"));
         // Then parity Task 32's txMonitorAudioVersion.
-        QCOMPARE(updates.at(updates.size() - 5).name, QByteArray("txMonitorAudioVersion"));
+        QCOMPARE(updates.at(updates.size() - 7).name, QByteArray("txMonitorAudioVersion"));
         // Then iPhone plan Task 22 / parity Task 20's stationFreedvVersion.
-        QCOMPARE(updates.at(updates.size() - 4).name, QByteArray("stationFreedvVersion"));
+        QCOMPARE(updates.at(updates.size() - 6).name, QByteArray("stationFreedvVersion"));
         // iPhone app plan Task 29: then mediaReplaceVersion,
         // controlSwitchVersion and relayAllowed.
-        QCOMPARE(updates.at(updates.size() - 3).name, QByteArray("mediaReplaceVersion"));
-        QCOMPARE(updates.at(updates.size() - 2).name, QByteArray("controlSwitchVersion"));
-        QCOMPARE(updates.last().name, QByteArray("relayAllowed"));
+        QCOMPARE(updates.at(updates.size() - 5).name, QByteArray("mediaReplaceVersion"));
+        QCOMPARE(updates.at(updates.size() - 4).name, QByteArray("controlSwitchVersion"));
+        QCOMPARE(updates.at(updates.size() - 3).name, QByteArray("relayAllowed"));
+        // Task 29 step 2b: the media tunnel, last.
+        QCOMPARE(updates.last().name, QByteArray("mediaRelayRoutingVersion"));
         QCOMPARE(StationCapabilities::fromUpdates(updates).stationCatalogVersion, 1);
         StationCapabilities older;
         older.stationCatalogVersion = 1;

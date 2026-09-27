@@ -375,6 +375,7 @@ bool MediaPeer::start(IMediaTransport::Role role, const QString& connectionId,
     d->transportStarting = true;
     d->transportStartError = false;
     IMediaTransport::StartOptions options{role, d->audioSsrc, audioTargetBitrate};
+    options.connectionId = connectionId;
     options.offerLosslessAudio = offerLosslessAudio;
     options.receiverAudioSsrcs = d->receiverAudioSsrcs;
     options.headphonesAudioSsrc = d->headphonesAudioSsrc;
@@ -414,6 +415,12 @@ void MediaPeer::setIceConfiguration(const std::optional<IceConfiguration>& ice)
 bool MediaPeer::usesIce() const
 {
     return d->ice.has_value();
+}
+
+bool MediaPeer::gathersFromServers() const
+{
+    return d->ice.has_value() && (d->ice->stunServer().has_value()
+                                  || !d->ice->relayServers().isEmpty());
 }
 
 void MediaPeer::stop()
@@ -584,6 +591,11 @@ bool MediaPeer::sendMicRtp(const QByteArray& packet)
 bool MediaPeer::sendTx(const QByteArray& message)
 {
     return d->started && d->transport && d->micAudioSsrc != 0 && d->transport->sendTx(message);
+}
+
+std::optional<MediaIcePath> MediaPeer::selectedPath() const
+{
+    return d->transport ? d->transport->selectedPath() : std::nullopt;
 }
 
 bool MediaPeer::isReady() const

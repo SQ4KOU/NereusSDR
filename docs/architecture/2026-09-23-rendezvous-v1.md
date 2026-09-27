@@ -1395,12 +1395,21 @@ token   = base64url(payload || mac), no padding: 62 bytes, 83 characters
 | `0x00` | never | | not a tag: a protocol error |
 | `0x01` | leg to relay to the other leg | one datagram, 1 to 1500 bytes | the control connection's ICE agent (the station link's control peer): the control lane |
 | `0x02` | leg to relay to the other leg | one datagram, 1 to 1500 bytes | the media connection's ICE agent (the link's media peer): the media lane |
+
 | `0x03` to `0x7F` | leg to relay | one datagram, 1 to 1500 bytes | kept for later streams. The relay of frame version 1 carries only 1 and 2: it drops (and counts) a datagram with any other data tag, and does not end the leg. An end sends one only to a relay whose READY version says it carries it, and drops (and counts) one it receives whose tag it does not know |
 | `0x80` JOIN | leg to relay | the token, as ASCII | the first message on a leg, within 10 s of opening it |
 | `0x81` READY | relay to leg | 2 bytes: the frame version (1), then 1 when the other leg is present or 0 | the join was accepted |
 | `0x82` PEER | relay to leg | 1 byte: 1 the other leg joined (or joined again), 0 it left and its place is held (section 12.4) | |
 | `0x83` END | relay to leg | 1 to 64 ASCII letters: the code (section 12.4) | the leg is ended; the close follows at once (1000, or 1001 for `shuttingDown`) |
 | `0x84` to `0xFF` | relay to leg | | kept for later relay messages: an end ignores one it does not know |
+
+When both media endpoints negotiate `mediaRelayRoutingVersion` 1 in the
+station link, the tag-2 payload begins with the media connection's exact
+16-byte RFC 4122 UUID, followed by 1 to 1484 bytes of the unchanged agent
+datagram. The relay still forwards opaque tag-2 frames and enforces the
+same 1501-byte total bound. A peer without that media declaration uses the
+original raw tag-2 payload. The UUID routes concurrent media generations
+at each endpoint; it does not replace end-to-end DTLS authentication.
 
 - A leg's JOIN when joined, a data message with no payload, a tag of `0x00`,
   and any tag from `0x80` up that a leg sends other than a first JOIN, are

@@ -546,6 +546,8 @@ private:
     // the media connection"): a new peer beside the current one, both
     // carrying audio for kReplaceOverlapMs, then the new one takes over.
     bool handleReplace(const QJsonObject& control);
+    /// Task 29 step 2b: the ICE settings a media peer of this session gets.
+    std::optional<IceConfiguration> mediaIceConfiguration();
     void onReplacementReady();
     void finishReplacement();
     void failReplacement(const QString& reason);
@@ -691,6 +693,9 @@ private:
     QHash<quint32, quint32> m_micSsrcRewrite;
     // What the current peer's start negotiated, which a replacement keeps.
     bool m_startOfferedLossless{false};
+    /// Task 29 step 2b: the media start declared the tunnel.
+    bool m_startTunnel = false;
+    bool m_startRelayRouting = false;
     bool m_startMicLine{false};
     std::unique_ptr<DaemonAudioSender> m_audioSender;
     int m_audioTargetBitrate{OpusAudioCodecConfig{}.bitrate};

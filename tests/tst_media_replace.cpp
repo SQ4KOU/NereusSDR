@@ -111,6 +111,7 @@ public:
         return true;
     }
     bool isReady() const override { return readyState; }
+    std::optional<MediaIcePath> selectedPath() const override { return path; }
     void becomeReady()
     {
         readyState = true;
@@ -122,6 +123,7 @@ public:
     bool stopped{false};
     bool readyState{false};
     StartOptions startOptions{Role::Answerer, 0};
+    std::optional<MediaIcePath> path;
     QList<QByteArray> rtpPackets;
 };
 
@@ -379,6 +381,26 @@ private slots:
         }
         QCOMPARE(h.transports.size(), 1);
         QVERIFY(!h.transports.first()->stopped);
+    }
+
+    void legacyRelayMediaRefusesOverlapWithoutDisturbingAudio()
+    {
+        CoreHarness h;
+        QVERIFY(h.establishWithAudio());
+        FakeTransport* const first = h.transports.first();
+        MediaIcePath relayPath;
+        relayPath.remoteAddress = QStringLiteral("127.0.0.1");
+        first->path = relayPath;
+        h.feed(4);
+        const qsizetype sentBefore = first->rtpPackets.size();
+        QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+        h.client.sendMediaControl(replaceControl(QLatin1String(kSecond), QLatin1String(kFirst)),
+                                  h.client.sessionEpoch());
+        QTRY_COMPARE(controlsNamed(controls, QStringLiteral("rejected")).size(), 1);
+        QCOMPARE(h.transports.size(), 1);
+        QVERIFY(!first->stopped);
+        h.feed(4);
+        QVERIFY(first->rtpPackets.size() > sentBefore);
     }
 
     // Nothing moves while the radio is on the air (the media document's
@@ -802,6 +824,118 @@ private slots:
         }
         QCOMPARE(contextsAfter, contextsBefore);
         h.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // A delayed packet from the old connection after promotion must still
+    // meet the overlap filter, even when its scheduling phase has ended.
+    void lateOldRtpAfterPromotionNeverReachesTheJitterQueue()
+    {
+        Test::RemoteAudioSessionHarness h;
+        RemoteMediaController media(&h.client, &h.remote, nullptr);
+        DaemonMediaController daemon(&h.server, &h.station);
+        QTimer source;
+        source.setInterval(10);
+        connect(&source, &QTimer::timeout, &source, [&h] { h.feedMixedTone(); });
+        QTimer speaker;
+        speaker.setInterval(10);
+        connect(&speaker, &QTimer::timeout, &speaker, [&h] { h.remoteBus->render(480); });
+        source.start();
+        speaker.start();
+        h.connectSession();
+        QTRY_VERIFY_WITH_TIMEOUT(media.audioStatus().state
+                                     == RemoteAudioStatus::State::Playing, 15000);
+        MediaPeer* const old = media.findChild<MediaPeer*>();
+        QVERIFY(old);
+        QPointer<MediaPeer> retired(old);
+        const quint32 oldSsrc = old->audioSsrc();
+        QVERIFY(media.replaceConnection());
+        MediaPeer* next = nullptr;
+        for (MediaPeer* peer : media.findChildren<MediaPeer*>()) {
+            if (peer != old) { next = peer; break; }
+        }
+        QVERIFY(next);
+        QSignalSpy nextRtp(next, &MediaPeer::rtpReceived);
+        QTRY_VERIFY_WITH_TIMEOUT(!media.replacingConnection(), 20000);
+        nextRtp.clear();
+        QTRY_VERIFY_WITH_TIMEOUT(!nextRtp.isEmpty(), 5000);
+        QByteArray late;
+        QTRY_VERIFY_WITH_TIMEOUT([&] {
+            for (const auto& call : nextRtp) {
+                const QByteArray packet = call.at(0).toByteArray();
+                if (packet.size() >= 12 && ssrcOf(packet) == next->audioSsrc()) {
+                    late = packet;
+                    return true;
+                }
+            }
+            return false;
+        }(), 5000);
+        QTest::qWait(120); // any held new-path packet has entered the filter
+        QVERIFY(late.size() >= 12);
+        qToBigEndian<quint32>(oldSsrc, late.data() + 8);
+        const quint64 filteredBefore = media.duplicateAudioDropped();
+        const quint64 jitterBefore = media.audioTelemetry().duplicatePackets;
+        emit old->rtpReceived(late);
+        QCOMPARE(media.duplicateAudioDropped(), filteredBefore + 1);
+        QTest::qWait(80);
+        QCOMPARE(media.audioTelemetry().duplicatePackets, jitterBefore);
+        QTRY_VERIFY_WITH_TIMEOUT(retired.isNull(),
+                                 DaemonMediaController::kReplaceDrainMs + 3000);
+        source.stop();
+        speaker.stop();
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // A second path move is remembered while the first old peer drains.
+    // It must start only after that owner is released, then use the current
+    // session path rather than the earlier request's ICE snapshot.
+    void anotherMoveWaitsForRetirementAndReleasesTheOldPeer()
+    {
+        Test::RemoteAudioSessionHarness h;
+        RemoteMediaController media(&h.client, &h.remote, nullptr);
+        DaemonMediaController daemon(&h.server, &h.station);
+        QTimer source;
+        source.setInterval(10);
+        connect(&source, &QTimer::timeout, &source, [&h] { h.feedMixedTone(); });
+        QTimer speaker;
+        speaker.setInterval(10);
+        connect(&speaker, &QTimer::timeout, &speaker, [&h] { h.remoteBus->render(480); });
+        source.start();
+        speaker.start();
+        h.connectSession();
+        QTRY_VERIFY_WITH_TIMEOUT(media.audioStatus().state
+                                     == RemoteAudioStatus::State::Playing, 15000);
+        QPointer<MediaPeer> first(media.findChild<MediaPeer*>());
+        QVERIFY(first);
+        const QString firstId = media.mediaConnectionId();
+        QVERIFY(media.replaceConnection());
+        QTRY_VERIFY_WITH_TIMEOUT(!media.replacingConnection()
+                                     && media.mediaConnectionId() != firstId, 20000);
+        const QString secondId = media.mediaConnectionId();
+        QVERIFY(first);
+        emit h.client.pathChanged();
+        QVERIFY(media.replacePending());
+        QVERIFY(!media.replaceConnection());
+        QVERIFY(!media.replacingConnection());
+        QCOMPARE(media.findChildren<MediaPeer*>().size(), 2);
+        QTRY_VERIFY_WITH_TIMEOUT(first.isNull(),
+                                 DaemonMediaController::kReplaceDrainMs + 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(media.replacingConnection(), 5000);
+        // The replacement and current peer are the only GUI owners now.
+        QCOMPARE(media.findChildren<MediaPeer*>().size(), 2);
+        QTRY_VERIFY_WITH_TIMEOUT(!media.replacingConnection()
+                                     && media.mediaConnectionId() != secondId, 20000);
+        QVERIFY(!media.replacePending());
+        // A fourth request during the next drain is discarded on stop.
+        emit h.client.pathChanged();
+        QVERIFY(media.replacePending());
+        source.stop();
+        speaker.stop();
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
+        QVERIFY(!media.replacePending());
+        QTest::qWait(DaemonMediaController::kReplaceDrainMs + 100);
+        QVERIFY(media.mediaConnectionId().isEmpty());
+        QVERIFY(!media.replacingConnection());
+        QVERIFY(media.findChildren<MediaPeer*>().isEmpty());
     }
 
     // Task 29 fix wave (review Important 1): the session moves to a better

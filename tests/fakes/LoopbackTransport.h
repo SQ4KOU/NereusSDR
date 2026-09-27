@@ -64,6 +64,9 @@ public:
 
     // ---- SessionTransport ----
     void sendText(const QByteArray& wire) override;
+    /// Task 29 step 2b: binary messages, queued as text is.
+    bool sendBinary(const QByteArray& message) override;
+    bool carriesBinary() const override { return true; }
     void ping() override;
     void closeLink(const QString& reason) override;
     bool isOpen() const override;

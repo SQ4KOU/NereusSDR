@@ -28,8 +28,9 @@
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
-#include "core/session/SystemProxy.h"
 #include "core/session/RendezvousClient.h"
+#include "core/session/NetworkTrouble.h"
+#include "core/session/SystemProxy.h"
 
 #include "core/security/StationIdentity.h"
 
@@ -276,6 +277,7 @@ void RendezvousClient::introduce(const QString& stationId, const QByteArray& dev
     m_deviceSign = std::move(sign);
     m_offer = offer;
     m_lastRefusal.clear();
+    m_networkTrouble.clear();
     if (m_socket) {
         // Connected: now. Still connecting: when the hello comes.
         if (m_helloReceived) {
@@ -309,6 +311,7 @@ void RendezvousClient::connectToService()
         return;
     }
     m_lastRefusal.clear();
+    m_networkTrouble.clear();
     connectTo(0);
 }
 
@@ -334,6 +337,7 @@ void RendezvousClient::openMailbox(int nameplate)
     m_pending = Pending::OpenMailbox;
     m_mailboxNameplate = nameplate;
     m_lastRefusal.clear();
+    m_networkTrouble.clear();
     if (m_socket) {
         // Connected: now. Still connecting: when the hello comes.
         if (m_helloReceived) {
@@ -457,6 +461,20 @@ void RendezvousClient::connectTo(int serverIndex)
             }
         }, Qt::QueuedConnection);
     });
+    // Task 29 step 2b (options survey B.6, B.7): a sign-in page or an
+    // inspecting network, in the operator's words. The service is not
+    // pinned; the system's trust decides, as before.
+    connect(socket, &QWebSocket::sslErrors, this,
+            [this, generation](const QList<QSslError>& errors) {
+        if (generation != m_generation) {
+            return;
+        }
+        const QString words = NetworkTrouble::wordsForTlsErrors(errors);
+        if (!words.isEmpty()) {
+            qCWarning(lcRendezvous).noquote() << words;
+            m_networkTrouble = words;
+        }
+    });
     connect(socket, &QWebSocket::textMessageReceived, this,
             [this, generation](const QString& text) {
         if (generation == m_generation) {
@@ -549,10 +567,14 @@ void RendezvousClient::tryNextServer()
         return;
     }
     m_pending = Pending::None;
-    const QString reason = m_lastRefusal.isEmpty()
-        ? QStringLiteral("The remote access service could not be reached. Check this "
-                         "computer's internet connection.")
-        : m_lastRefusal;
+    QString reason = m_lastRefusal;
+    if (reason.isEmpty()) {
+        reason = m_networkTrouble;
+    }
+    if (reason.isEmpty()) {
+        reason = QStringLiteral("The remote access service could not be reached. Check this "
+                                "computer's internet connection.");
+    }
     emit unreachable(reason);
 }
 

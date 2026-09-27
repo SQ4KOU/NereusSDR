@@ -79,6 +79,7 @@
 #include "core/AudioEngine.h"
 #include "core/Resampler.h"
 #include "core/audio/CaptureSupervisor.h"
+#include "core/session/PathRacer.h"
 #include "core/session/media/PcmAudioCodec.h"
 #include "core/session/media/RemoteAudioReceiver.h"
 #include "core/session/media/RemoteAudioRestartBackoff.h"
@@ -810,6 +811,12 @@ struct RemoteMediaController::Private {
     // Task 29 fix wave (Important 1): a move not yet followed by media.
     bool replacePending = false;
     int replaceRearms = 0;
+    // Task 29 step 2b: this media start declared the media tunnel.
+    bool tunnelNegotiated = false;
+    bool relayRoutingNegotiated = false;
+    // Step 2b: when audio last came, and the check for a stall.
+    QElapsedTimer lastAudio;
+    QTimer* stallTimer = nullptr;
     bool replaceStartFailed = false;
     QTimer* replaceRetry = nullptr;
     std::unique_ptr<DualPathAudio> dual;
@@ -1159,6 +1166,36 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
     connect(d->replaceDeadline, &QTimer::timeout, this, [this] {
         dropReplacement(QStringLiteral("the new audio and display connection did not open"));
     });
+    // Task 29 step 2b: the media stall rule's check.
+    d->stallTimer = new QTimer(this);
+    d->stallTimer->setInterval(500);
+    connect(d->stallTimer, &QTimer::timeout, this, [this] {
+        // Not isReady(): an agent that stopped hearing its pair may say it
+        // is not ready long before it fails, which is the case to catch.
+        // Nor audioEnabled: the audio receiver gives up on a starved
+        // stream within a second and waits to be asked again, which a dead
+        // connection never does. What counts is that audio came on this
+        // connection and this window still wants it (not muted).
+        const bool wanted = d->model && !d->model->audioEngine()->masterMuted();
+        if (!d->client || !d->peer || !wanted || !d->lastAudio.isValid()) {
+            return;
+        }
+        // The tunnel counts only once ICE settled on it (a host pair on an
+        // open network is not a slow path); the control heartbeat follows.
+        const std::optional<MediaIcePath> path = d->peer->selectedPath();
+        const bool viaTunnel = d->tunnelNegotiated && path && path->viaLoopbackShim();
+        d->client->setMediaTunnelInUse(viaTunnel);
+        const int rank = d->client->pathRank();
+        const bool slowPath = rank == PathRacer::ServiceRelayed || rank == PathRacer::Floor
+            || viaTunnel;
+        if (slowPath && d->lastAudio.elapsed() > kMediaStallMs) {
+            qCInfo(lcRemoteMedia) << "No audio from the Core for" << d->lastAudio.elapsed()
+                                  << "ms on a relayed path; starting audio and display again";
+            d->lastAudio.invalidate();
+            requestRecovery(d->epoch, QStringLiteral("Audio from the Core stopped. Starting "
+                                                     "audio and display again."));
+        }
+    });
     // Task 29 fix wave (Important 1): a pending replacement is tried until
     // it can start.
     d->replaceRetry = new QTimer(this);
@@ -1178,7 +1215,9 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
     d->dualTimer->setTimerType(Qt::PreciseTimer);
     connect(d->dualTimer, &QTimer::timeout, this, [this] {
         d->dual->tick(d->dualClock.elapsed());
-        if (!d->dual->active()) {
+        // The retired peer can still deliver delayed RTP throughout its drain.
+        // Keep the duplicate window until that peer is disconnected.
+        if (!d->dual->active() && !d->retiring) {
             d->duplicatesDropped += d->dual->duplicatesDropped();
             d->dualTimer->stop();
         }
@@ -1202,7 +1241,7 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
                   .arg(QString::number(d->descriptionDeadlineMs / 1000.0))
             : QStringLiteral("Station media did not connect within %1 seconds")
                   .arg(QString::number(connectStageMs(d->connectDeadlineMs,
-                                                      d->peer->usesIce())
+                                                      d->peer->gathersFromServers())
                                        / 1000.0)));
     });
     d->audio = std::make_unique<RemoteAudioReceiver>(model->audioEngine());
@@ -2426,6 +2465,13 @@ void RemoteMediaController::stop()
     d->replacePending = false;
     d->replaceRearms = 0;
     d->replaceRetry->stop();
+    if (d->stallTimer) {
+        d->stallTimer->stop();
+    }
+    d->lastAudio.invalidate();
+    if (d->client) {
+        d->client->setMediaTunnelInUse(false);
+    }
     for (QPointer<MediaPeer>* slot : {&d->replacement, &d->retiring}) {
         if (MediaPeer* other = slot->data()) {
             *slot = nullptr;
@@ -2648,13 +2694,14 @@ bool RemoteMediaController::replacingConnection() const
 
 quint64 RemoteMediaController::duplicateAudioDropped() const
 {
-    return d->duplicatesDropped + (d->dual->active() ? d->dual->duplicatesDropped() : 0);
+    return d->duplicatesDropped
+        + ((d->dual->active() || d->retiring) ? d->dual->duplicatesDropped() : 0);
 }
 
 bool RemoteMediaController::replaceConnection()
 {
     if (!d->client || !d->client->mediaAvailable() || !d->peer || !d->peer->isReady()
-        || d->replacement || d->epoch != d->client->sessionEpoch()
+        || d->replacement || d->retiring || d->epoch != d->client->sessionEpoch()
         || d->client->capabilities().mediaReplaceVersion < 1 || d->logicalSsrcs.isEmpty()) {
         return false;
     }
@@ -2704,7 +2751,7 @@ bool RemoteMediaController::replaceConnection()
     connect(peer, &MediaPeer::errorOccurred, this, [this, current](const QString& reason) {
         if (current()) { dropReplacement(reason); }
     });
-    peer->setIceConfiguration(d->client->sessionIceConfiguration());
+    peer->setIceConfiguration(mediaIceConfiguration());
     const QPointer<MediaPeer> started(peer);
     const bool ok = peer->start(IMediaTransport::Role::Answerer, id,
                                 IMediaTransport::kDefaultAudioTargetBitrate,
@@ -2812,6 +2859,31 @@ void RemoteMediaController::retireOldPeer()
         old->stop();
         old->deleteLater();
     }
+    // Once the old callback is disconnected, the overlap filter may settle.
+    // A path change queued during the drain uses today's ICE configuration.
+    if (!d->dual->active() && d->dualTimer->isActive()) {
+        d->duplicatesDropped += d->dual->duplicatesDropped();
+        d->dualTimer->stop();
+    }
+    if (d->replacePending) {
+        QTimer::singleShot(0, this, &RemoteMediaController::tryPendingReplace);
+    }
+}
+
+std::optional<IceConfiguration> RemoteMediaController::mediaIceConfiguration()
+{
+    // Task 29 step 2b: over the tunnel while it was declared and the
+    // session still runs on a WebSocket (as the Core decides the same).
+    if (d->tunnelNegotiated) {
+        if (auto tunnel = d->client->mediaTunnelIceConfiguration()) {
+            return tunnel;
+        }
+    }
+    auto ice = d->client->sessionIceConfiguration();
+    if (ice) {
+        ice->setMediaRouting(d->relayRoutingNegotiated);
+    }
+    return ice;
 }
 
 bool RemoteMediaController::replacePending() const
@@ -2840,8 +2912,20 @@ void RemoteMediaController::tryPendingReplace()
         d->replaceRetry->stop();
         return;
     }
+    // A raw tag-2 relay leg has one agent destination. Replacing it would
+    // redirect the live connection before the new one can take over.
+    if (d->peer && !d->relayRoutingNegotiated) {
+        const auto path = d->peer->selectedPath();
+        const auto nextIce = mediaIceConfiguration();
+        if (path && path->viaLoopbackShim() && (!nextIce || !nextIce->mediaRouting())) {
+            d->replacePending = false;
+            d->replaceRetry->stop();
+            qCInfo(lcRemoteMedia) << "The older relay media path cannot overlap a replacement";
+            return;
+        }
+    }
     // One under way: the next move is followed once it finishes.
-    if (d->replacement) {
+    if (d->replacement || d->retiring) {
         d->replaceRetry->start();
         return;
     }
@@ -2965,6 +3049,11 @@ void RemoteMediaController::connectPeer(MediaPeer* peer, quint32 epoch)
 
 void RemoteMediaController::routeRtp(const QByteArray& arrived, const MediaPeer* from)
 {
+    // Step 2b: the stall rule's clock.
+    d->lastAudio.start();
+    if (d->stallTimer && !d->stallTimer->isActive()) {
+        d->stallTimer->start();
+    }
     // iPhone app plan Task 29: every peer's packets as the streams this
     // media session started with (their own SSRCs), and while two
     // connections carry them, merged (DualPathAudio): each packet once, on
@@ -2977,7 +3066,7 @@ void RemoteMediaController::routeRtp(const QByteArray& arrived, const MediaPeer*
             qToBigEndian<quint32>(it.value(), packet.data() + 8);
         }
     }
-    if (d->dual->active()) {
+    if (d->dual->active() || d->retiring) {
         const bool fromNew = from != nullptr && from == d->dualNew.data();
         ++(fromNew ? d->dualFromNew : d->dualFromOld);
         d->dual->submit(packet, fromNew, d->dualClock.elapsed());
@@ -3046,8 +3135,15 @@ void RemoteMediaController::start()
     const bool micLine = micLineNegotiated();
     // iPhone app plan Task 28 (R-IOS-16): a session through the remote
     // access service makes its media connection with the same ICE settings
-    // as its control connection.
-    peer->setIceConfiguration(d->client->sessionIceConfiguration());
+    // as its control connection. Task 29 step 2b: a direct WebSocket
+    // session to a Core that carries the media tunnel also offers the
+    // tunnel (ICE takes it only when no UDP pair works).
+    d->tunnelNegotiated = d->client->mediaTunnelAvailable();
+    d->relayRoutingNegotiated = d->client->capabilities().mediaRelayRoutingVersion >= 1;
+    // The window pings faster once media rides the tunnel (step 2b; the
+    // stall check sets it when ICE has settled on the tunnel's pair).
+    d->client->setMediaTunnelInUse(false);
+    peer->setIceConfiguration(mediaIceConfiguration());
     const bool started = peer->start(IMediaTransport::Role::Answerer, d->connectionId,
                                      IMediaTransport::kDefaultAudioTargetBitrate,
                                      /*offerLosslessAudio=*/false, receiverAudioNegotiated(),
@@ -3122,6 +3218,14 @@ void RemoteMediaController::start()
     d->txMonitorNegotiated = d->client && d->client->capabilities().txMonitorAudioVersion >= 1;
     if (d->txMonitorNegotiated) {
         startControl.insert(QStringLiteral("txMonitorAudioVersion"), 1);
+    }
+    // Declare tunnel support even if this session currently uses the
+    // service data channel; a later direct-wss move may need it.
+    if (d->tunnelNegotiated) {
+        startControl.insert(QStringLiteral("mediaTunnelVersion"), 1);
+    }
+    if (d->relayRoutingNegotiated) {
+        startControl.insert(QStringLiteral("mediaRelayRoutingVersion"), 1);
     }
     // Task 36: likewise the microphone line, only to a Core that takes it.
     if (micLine) {
@@ -4871,7 +4975,7 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
             // Stage two: Core's description is here; the connection now
             // has the pinned library's own slowest failure report.
             d->awaitingDescription = false;
-            d->establishTimer->start(connectStageMs(d->connectDeadlineMs, peer->usesIce()));
+            d->establishTimer->start(connectStageMs(d->connectDeadlineMs, peer->gathersFromServers()));
         }
         return;
     }

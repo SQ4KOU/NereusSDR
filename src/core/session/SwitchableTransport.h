@@ -131,6 +131,12 @@ public:
     QString peerAddress() const override;
     QByteArray peerCertificateSha256() const override;
     std::optional<SessionTransportTelemetry> telemetry() const override;
+    bool sendBinary(const QByteArray& message) override
+    {
+        return m_sendOn && m_sendOn->sendBinary(message);
+    }
+    bool carriesBinary() const override { return m_sendOn && m_sendOn->carriesBinary(); }
+    qint64 backlogBytes() const override { return m_sendOn ? m_sendOn->backlogBytes() : 0; }
 
     /// Test seam: the move's deadline (kSwitchDeadlineMs).
     void setSwitchDeadlineMsForTest(int ms);

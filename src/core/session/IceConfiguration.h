@@ -245,7 +245,9 @@ public:
     /// (the session's media settings are a copy of its control's), and
     /// `needsRelay` gates it on relayAllowed(): `relay = deny` stops the
     /// web relay as it stops TURN.
-    using CandidateSourceFactory = std::function<std::shared_ptr<CandidateSource>(int lane)>;
+    using CandidateSourceFactory = std::function<std::shared_ptr<CandidateSource>(int lane,
+                                                                                  const QString& connectionId,
+                                                                                  bool routed)>;
     void setCandidateSourceFactory(CandidateSourceFactory factory, bool needsRelay)
     {
         m_sourceFactory = std::move(factory);
@@ -254,13 +256,16 @@ public:
     bool hasCandidateSourceFactory() const { return static_cast<bool>(m_sourceFactory); }
     /// A new source for one connection on `lane`; null when there is no
     /// factory or it needs the relay and the relay is not allowed.
-    std::shared_ptr<CandidateSource> makeCandidateSource(int lane) const
+    std::shared_ptr<CandidateSource> makeCandidateSource(int lane,
+                                                         const QString& connectionId = {}) const
     {
         if (!m_sourceFactory || (m_sourceNeedsRelay && !m_relayAllowed)) {
             return nullptr;
         }
-        return m_sourceFactory(lane);
+        return m_sourceFactory(lane, connectionId, m_mediaRouting);
     }
+    void setMediaRouting(bool routed) { m_mediaRouting = routed; }
+    bool mediaRouting() const { return m_mediaRouting; }
 
     std::optional<IceServerAddress> stunServer() const { return m_stun; }
     QList<IceRelayServer> relayServers() const { return m_relays; }
@@ -299,6 +304,7 @@ private:
     bool m_relayKnown = false;
     CandidateSourceFactory m_sourceFactory;
     bool m_sourceNeedsRelay = true;
+    bool m_mediaRouting = false;
 };
 
 } // namespace NereusSDR

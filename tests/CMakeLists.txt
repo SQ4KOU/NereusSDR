@@ -8879,6 +8879,10 @@ target_compile_definitions(tst_relay_session PRIVATE
 if(TEST tst_relay_session)
     set_tests_properties(tst_relay_session PROPERTIES TIMEOUT 400)
 endif()
+# Media inside a direct WebSocket session (the media tunnel): real Core,
+# real window, real DTLS/SRTP over an in-process link. Plays real-time
+# audio, so REALTIME.
+nereus_add_test(tst_media_tunnel fakes/LoopbackTransport.cpp REALTIME EXTRA_LABELS session)
 
 # --------------------------------------------------------------------------
 # Aggregate "all_tests" target  (2026-05-26 KG4VCF dev-loop fix, from PR #291)

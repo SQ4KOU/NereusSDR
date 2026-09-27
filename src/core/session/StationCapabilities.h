@@ -400,6 +400,16 @@ struct StationCapabilities {
     /// none: relayAllowedEntry false, and the relay is tried.
     bool relayAllowedEntry = false;
     bool relayAllowed = true;
+    /// iPhone app plan Task 29 step 2b (R-IOS-16; link section 21, "The
+    /// media tunnel"): 1 means the Core carries a media connection's
+    /// datagrams inside a direct WebSocket session, as binary messages,
+    /// when the window's media start declares it. Sent in the same minor-11
+    /// block, after relayAllowed; 1 whenever media is on for the peer. 0
+    /// (an older Core): media on a direct session runs over UDP only.
+    int mediaTunnelVersion = 0;
+    /// Version 1 prefixes relay tag-2 payloads with the media connection's
+    /// 16-byte UUID, preserving independent generations during replacement.
+    int mediaRelayRoutingVersion = 0;
     /// iPhone app Task 71 (R-IOS-02; the several-devices design, ruling
     /// 10.1): 1 means the Core admits up to four devices at once, sends the
     /// `connectedDevices` object and takes session.leave. Sent last in the

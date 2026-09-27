@@ -10,13 +10,16 @@
 // traffic.
 //
 // A session runs two ICE connections at each end, control (lane 1) and
-// media (lane 2). The leg keeps one loopback UDP socket per lane and gives
-// each ICE agent that socket's address as a low-priority remote candidate
+// media (lane 2). The leg keeps one loopback UDP socket for control and a
+// legacy media socket. Negotiated routed media instead has one socket per
+// connection UUID (at most current, replacement and retiring). It gives
+// each ICE agent its socket's address as a low-priority remote candidate
 // (kCandidatePriority), so the agent races it with every other pair and
 // nominates it only when nothing better works. A datagram the agent sends
 // to its lane's socket goes to the relay as one binary message, the lane's
-// tag in front; a message from the relay goes, untagged, to the agent the
-// tag names. The agent's address is learned from what it sends (both ends'
+// tag in front; routed tag-2 payloads carry the 16-byte connection UUID.
+// A message from the relay goes, without tag or UUID, to that agent. The
+// agent's address is learned from what it sends (both ends'
 // agents send ICE checks to their own lane socket), or set explicitly
 // (setAgent()).
 //
@@ -48,6 +51,7 @@
 #include <QByteArray>
 #include <QElapsedTimer>
 #include <QHostAddress>
+#include <QHash>
 #include <QObject>
 #include <QPointer>
 #include <QString>
@@ -128,9 +132,12 @@ public:
     /// A candidate source for one ICE connection on `lane`
     /// (IceConfiguration::kControlLane or kMediaLane): starting it gives
     /// the agent the lane's candidate and makes that connection the lane's
-    /// (a later connection on the same lane takes it over); stopping it
-    /// lets the lane go if it is still that connection's.
-    std::shared_ptr<IceConfiguration::CandidateSource> sourceFor(int lane);
+    /// (legacy mode: a later connection on the same lane takes it over;
+    /// routed media: every UUID has its own socket). Stopping it releases
+    /// only its own claim.
+    std::shared_ptr<IceConfiguration::CandidateSource> sourceFor(int lane,
+                                                                 const QString& connectionId = {},
+                                                                 bool routed = false);
 
     /// Opens the leg to the relay at `url` with `token` (the grant).
     /// Nothing happens when the leg is already open or over.
@@ -154,6 +161,7 @@ public:
     quint64 droppedNoAgent() const { return m_droppedNoAgent; }
     quint64 droppedUnknownTag() const { return m_droppedUnknownTag; }
     quint64 droppedOversize() const { return m_droppedOversize; }
+    quint64 droppedWrongSender() const { return m_droppedWrongSender; }
     int connections() const { return m_connections; }
 
     /// Test seam (the relay-leg conformance runner): the agent on `lane`
@@ -181,10 +189,19 @@ private:
         std::deque<QByteArray> queue;
         int queuedBytes = 0;
     };
+    struct Route {
+        QUdpSocket* socket = nullptr;
+        QHostAddress agentAddress;
+        quint16 agentPort = 0;
+        quint64 claim = 0;
+    };
 
     friend class RelayLaneSource;
     quint64 claimLane(int lane);
     void releaseLane(int lane, quint64 claim);
+    quint64 claimRoute(const QByteArray& id, quint16& port);
+    void releaseRoute(const QByteArray& id, quint64 claim);
+    void readRoute(const QByteArray& id);
     Lane* laneFor(int lane);
 
     void connectNow();
@@ -201,6 +218,9 @@ private:
     void dropSocket();
 
     std::array<Lane, 2> m_lanes;
+    QHash<QByteArray, Route> m_routes;
+    bool m_mediaRouted = false;
+    bool m_mediaModeChosen = false;
     int m_nextLane = 0;
     QUrl m_url;
     QString m_token;
@@ -217,6 +237,8 @@ private:
     bool m_sinceRunning = false;
     int m_rejoinDelayMs = 0;
     QString m_endCode;
+    // Step 2b: a sign-in page or an inspecting network, in plain words.
+    QString m_networkTrouble;
     quint64 m_nextClaim = 1;
     quint64 m_sent = 0;
     quint64 m_delivered = 0;
@@ -224,6 +246,7 @@ private:
     quint64 m_droppedNoAgent = 0;
     quint64 m_droppedUnknownTag = 0;
     quint64 m_droppedOversize = 0;
+    quint64 m_droppedWrongSender = 0;
     int m_connections = 0;
 };
 

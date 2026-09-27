@@ -113,6 +113,8 @@ public:
         // bitrate than this. Defaults to the encoder's own default target,
         // so a caller that names only role and SSRC keeps today's offer.
         int audioTargetBitrate = kDefaultAudioTargetBitrate;
+        // The canonical media generation for a routed WebSocket shim.
+        QString connectionId {};
         // R-R3-23 lossless audio. An offerer adds the L16 rtpmap
         // (PcmAudioCodecConfig::kPayloadType, "L16/48000/2") to its one audio
         // m-line, after Opus, which stays first. Set only for a GUI that

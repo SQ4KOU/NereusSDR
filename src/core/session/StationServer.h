@@ -468,6 +468,7 @@ class DeviceSessionRegistry;
 class RadioModel;
 class SessionCommandDispatcher;
 class SessionTransport;
+class MediaTunnel;
 class SettingsProxyServer;
 class StateMirror;
 class StationOpeningGate;
@@ -1073,6 +1074,15 @@ public:
     // moving a session to another connection).
     int mediaReplaceVersion() const;
     int controlSwitchVersion() const;
+    /// Task 29 step 2b (link section 21, "The media tunnel"): 1 on every
+    /// Core of this build; told a peer with media (mediaTunnelVersion).
+    int mediaTunnelVersion() const { return 1; }
+    /// The session with media `epoch` was told mediaTunnelVersion 1, so its
+    /// media start may declare the tunnel even before a move to WebSocket.
+    bool mediaTunnelAvailable(quint64 epoch) const;
+    /// The ICE settings for that session's media over the tunnel (the
+    /// tunnel made on first use); none unless the current path carries binary.
+    std::optional<IceConfiguration> mediaTunnelIceConfiguration(quint64 epoch);
     /// iPhone app plan Task 29: the session with media `epoch` agreed
     /// minor 11 and was told mediaReplaceVersion 1, so it may send
     /// `replace`.
@@ -1304,6 +1314,9 @@ private:
         /// of the connection through the service this session left, so its
         /// media keeps the service's STUN server after a move.
         std::optional<IceConfiguration> serviceIce;
+        /// Task 29 step 2b: the media tunnel on this session's WebSocket,
+        /// made the first time its media declares it.
+        std::shared_ptr<MediaTunnel> mediaTunnel;
         bool authenticated = false;
         quint16 agreedMinor = 0;
         /// iPhone app Task 4: the major the peer's hello chose (0 until

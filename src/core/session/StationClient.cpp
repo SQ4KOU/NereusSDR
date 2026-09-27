@@ -301,6 +301,7 @@
 #include "core/session/SessionEndReasons.h"
 #include "core/session/SessionTransport.h"
 #include "core/session/SwitchableTransport.h"
+#include "core/session/MediaTunnel.h"
 #include "core/session/TransmitStateFacade.h"
 #include "core/session/RemoteDevicesState.h"
 #include "core/settings/SettingsProxy.h"
@@ -967,10 +968,12 @@ void StationClient::dialThroughService()
 {
     stopServiceDial();
     m_lastError.clear();
-    // The attempt record: through the service, direct until the connection
-    // shows it went through the relay.
+    // The attempt record: through the service, until the connection shows
+    // it went through the relay or the web relay (step 2b: "through the
+    // internet service", no longer "direct", which named the service's
+    // host as if it were the Core's).
     StationConnectionAttempt::Try attempt;
-    attempt.path = StationConnectionAttempt::Path::Direct;
+    attempt.path = StationConnectionAttempt::Path::Service;
     attempt.address = m_serviceServers.first().host();
     m_attempt.tries.append(attempt);
     emit connectionAttemptChanged();
@@ -1039,6 +1042,27 @@ std::optional<IceConfiguration> StationClient::sessionIceConfiguration() const
     // service's STUN server for its media, with no relay of its own.
     return m_serviceIce ? std::optional<IceConfiguration>(m_serviceIce->withoutOwnRelay())
                         : std::nullopt;
+}
+
+bool StationClient::mediaTunnelAvailable() const
+{
+    const SwitchableTransport* session = sessionTransport();
+    return m_handshakeComplete && m_capabilities.mediaTunnelVersion >= 1 && mediaAvailable()
+        && session != nullptr;
+}
+
+std::optional<IceConfiguration> StationClient::mediaTunnelIceConfiguration()
+{
+    if (!mediaTunnelAvailable() || !sessionTransport()->carriesBinary()) {
+        return std::nullopt;
+    }
+    if (!m_mediaTunnel) {
+        m_mediaTunnel = MediaTunnel::create(sessionTransport());
+    }
+    if (!m_mediaTunnel) {
+        return std::nullopt;
+    }
+    return MediaTunnel::iceFor(m_mediaTunnel);
 }
 
 SwitchableTransport* StationClient::sessionTransport() const
@@ -1492,6 +1516,8 @@ void StationClient::attachTransport(SessionTransport* transport, const QString& 
     m_token = token;
     m_pathSwitches = 0;
     m_serviceIce.reset();
+    m_mediaTunnel.reset();
+    m_mediaTunnelInUse = false;
     m_stationRendezvousId.clear();
     // R-R3-38: a new link starts with no end recorded, so the report never
     // describes an older one.
@@ -1955,12 +1981,37 @@ void StationClient::onHandshakeDeadline()
     }
 }
 
+int StationClient::effectiveHeartbeatIntervalMs() const
+{
+    if (m_heartbeatIntervalMs <= 0) {
+        return m_heartbeatIntervalMs;
+    }
+    const bool relayed = m_pathRank == PathRacer::ServiceRelayed || m_pathRank == PathRacer::Floor
+        || m_mediaTunnelInUse;
+    return relayed ? std::min(m_heartbeatIntervalMs, kRelayedHeartbeatIntervalMs)
+                   : m_heartbeatIntervalMs;
+}
+
+void StationClient::setMediaTunnelInUse(bool inUse)
+{
+    if (m_mediaTunnelInUse == inUse) {
+        return; // setInterval restarts a running timer: only on a change
+    }
+    m_mediaTunnelInUse = inUse;
+    if (m_heartbeatIntervalMs > 0) {
+        m_heartbeatTimer->setInterval(effectiveHeartbeatIntervalMs());
+    }
+}
+
 void StationClient::onHeartbeatTick()
 {
     if (m_transport == nullptr) {
         m_heartbeatTimer->stop();
         return;
     }
+    // Step 2b: the cadence follows the path (a move or a settled pair may
+    // have changed it since the last tick).
+    m_heartbeatTimer->setInterval(effectiveHeartbeatIntervalMs());
     if (m_pingsAwaitingPong >= m_maxMissedPongs) {
         qCWarning(lcStationClient)
             << "Station missed" << m_pingsAwaitingPong
@@ -2077,6 +2128,7 @@ void StationClient::onTransportText(const QByteArray& wire)
     if (!m_linkUp) {
         m_linkUp = true;
         if (m_heartbeatIntervalMs > 0 && m_sessionActive) {
+            m_heartbeatTimer->setInterval(effectiveHeartbeatIntervalMs());
             m_heartbeatTimer->start();
         }
     }

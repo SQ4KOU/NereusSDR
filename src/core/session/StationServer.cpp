@@ -589,6 +589,7 @@
 #include "core/TxSliceArbiter.h"
 #include "core/session/DataChannelTransport.h"
 #include "core/session/SwitchableTransport.h"
+#include "core/session/MediaTunnel.h"
 
 #include "core/AppSettings.h"
 #include "core/BoardCapabilities.h"
@@ -7593,6 +7594,37 @@ int StationServer::txMonitorAudioVersion() const
         : 0;
 }
 
+bool StationServer::mediaTunnelAvailable(quint64 epoch) const
+{
+    // Declare support at media start even while this session is on a data
+    // channel. A later path move may use the already agreed direct tunnel;
+    // mediaTunnelIceConfiguration checks whether that path carries binary.
+    SessionTransport* session = mediaSessionFor(epoch);
+    const auto it = m_peers.constFind(session);
+    return mediaAvailable(epoch) && it != m_peers.cend()
+        && it->agreedMinor >= kRadioIdentitySessionProtocolMinor && mediaTunnelVersion() >= 1
+        && session != nullptr;
+}
+
+std::optional<IceConfiguration> StationServer::mediaTunnelIceConfiguration(quint64 epoch)
+{
+    if (!mediaTunnelAvailable(epoch) || !mediaSessionFor(epoch)->carriesBinary()) {
+        return std::nullopt;
+    }
+    SessionTransport* session = mediaSessionFor(epoch);
+    auto it = m_peers.find(session);
+    if (it == m_peers.end()) {
+        return std::nullopt;
+    }
+    if (!it->mediaTunnel) {
+        it->mediaTunnel = MediaTunnel::create(session);
+    }
+    if (!it->mediaTunnel) {
+        return std::nullopt;
+    }
+    return MediaTunnel::iceFor(it->mediaTunnel);
+}
+
 bool StationServer::txMonitorAudioAvailable(quint64 epoch) const
 {
     // As txDisplayAvailable: told only to a peer that agreed minor 11.
@@ -7914,6 +7946,9 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             caps.mediaReplaceVersion = media ? mediaReplaceVersion() : 0;
             caps.controlSwitchVersion = controlSwitchVersion();
             caps.relayAllowed = m_relayAllowed;
+            // Task 29 step 2b: the media tunnel, to a peer with media.
+            caps.mediaTunnelVersion = media ? mediaTunnelVersion() : 0;
+            caps.mediaRelayRoutingVersion = media ? 1 : 0;
             // iPhone app Task 71 (ruling 10.1): several devices at once, for
             // a peer that declared sessionHolder with deviceAuth; any other
             // peer is sent no entry, so its capabilities are today's.

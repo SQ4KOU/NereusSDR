@@ -770,7 +770,9 @@ private slots:
                                    // Task 29: moving media and the
                                    // session, and the relay.
                                    "mediaReplaceVersion", "controlSwitchVersion",
-                                   "relayAllowed"});
+                                   "relayAllowed",
+                                   // Step 2b: the media tunnel.
+                                   "mediaTunnelVersion", "mediaRelayRoutingVersion"});
                 QCOMPARE(names, withReason);
                 const int reason = updateIndex(last.updates,
                                                QByteArrayLiteral("displayBudgetReason"));
@@ -825,7 +827,9 @@ private slots:
                                            QByteArrayLiteral("stationFreedvVersion"),
                                            QByteArrayLiteral("mediaReplaceVersion"),
                                            QByteArrayLiteral("controlSwitchVersion"),
-                                           QByteArrayLiteral("relayAllowed")}) {
+                                           QByteArrayLiteral("relayAllowed"),
+                                           QByteArrayLiteral("mediaTunnelVersion"),
+                                           QByteArrayLiteral("mediaRelayRoutingVersion")}) {
                 stripped.removeAt(updateIndex(stripped, name));
             }
             QCOMPARE(SessionMessages::encode(SessionMessages::capabilities(stripped)), older);

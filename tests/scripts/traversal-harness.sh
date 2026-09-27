@@ -72,6 +72,28 @@
 #                      the same through the relay; all four allocations
 #                      (control and media at each end) given back
 #
+# and, plan Task 29 step 2b, the web relay (the rendezvous document,
+# section 12), run as on the server: its own process on a Unix socket
+# behind a TLS front that routes /v1/relay to it (tests/tools/
+# harness_front.py, which also counts the relay's datagrams and any
+# holding the session's plaintext):
+#
+#   web-relay          the client's network passes only DNS and TCP 443: a
+#                      session, audio and display over the web relay, both
+#                      connections on one leg per end, no plaintext seen
+#   web-relay-rejoin   the front restarts mid-session: both legs join again
+#                      and the session carries on
+#   web-relay-standby  every path open: the legs join, ICE takes another
+#                      pair
+#   direct-wss-media   direct TCP 443 works but UDP does not: media uses
+#                      the negotiated UUID tunnel
+#   web-to-direct-wss  media starts through the web relay, then the session
+#                      moves to direct wss and replacement media follows
+#   web-relay-deadline TUNE keyed over the web relay at 2 and 3 % loss and
+#                      150 ms round trip: keepalive gaps and trips, logged
+#   direct-wss-deadline the same TX deadline measurement over the direct
+#                      media tunnel, with the Core's wss forwarded on 443
+#
 # Every secret (the TURN secret, the TLS key, both ends' keys) is made at
 # run time in a temporary directory and removed with it. It never touches
 # the live server: every name is under harness.test and every address is a
@@ -165,6 +187,9 @@ PIDS=()
 
 cleanup() {
     set +e
+    if [[ -s "$WORK/front.pid" ]]; then
+        kill "$(cat "$WORK/front.pid")" 2>/dev/null
+    fi
     for pid in "${PIDS[@]:-}"; do
         [[ -n "$pid" ]] && kill "$pid" 2>/dev/null
     done
@@ -397,6 +422,10 @@ PIDS+=($!)
 
 python3 -c 'import secrets; print(secrets.token_hex(24))' > "$WORK/turn-secret"
 chmod 600 "$WORK/turn-secret"
+# Plan Task 29 step 2b: the web relay's own secret (never the TURN one,
+# rendezvous section 12.2), which the service mints grants with.
+python3 -c 'import secrets; print(secrets.token_hex(32))' > "$WORK/relay-secret"
+chmod 600 "$WORK/relay-secret"
 ip netns exec h-rvsrv turnserver -n -v --no-cli --no-tls --no-dtls --fingerprint \
     --listening-ip=198.51.100.2 --listening-ip=2001:db8:1::2 --listening-port=3478 \
     --relay-ip=198.51.100.2 --relay-ip=2001:db8:1::2 \
@@ -427,11 +456,32 @@ if (( FLOOR )); then
         python3 "$SOURCE/tests/tools/floor_relay_prototype.py" --config "$WORK/rendezvous.conf" \
         >"$WORK/rendezvous.log" 2>&1 &
 else
+    # Plan Task 29 step 2b: the service mints web relay grants
+    # (rendezvous section 12.1), and the relay runs as on the real server,
+    # on a Unix socket behind the front (below).
+    cat >> "$WORK/rendezvous.conf" <<EOF
+relay_url = wss://rv.harness.test/v1/relay
+relay_secret_file = $WORK/relay-secret
+EOF
     ip netns exec h-rvsrv env PYTHONPATH="$SOURCE/rendezvous/server" \
         python3 -m nereus_rendezvous --config "$WORK/rendezvous.conf" >"$WORK/rendezvous.log" 2>&1 &
 fi
 RENDEZVOUS_PID=$!
 PIDS+=("$RENDEZVOUS_PID")
+if (( ! FLOOR )); then
+    cat > "$WORK/relay.conf" <<EOF
+[relay]
+socket = $WORK/relay.sock
+socket_mode = 0660
+socket_group = root
+relay_secret_file = $WORK/relay-secret
+log_level = info
+EOF
+    ip netns exec h-rvsrv env PYTHONPATH="$SOURCE/rendezvous/server" \
+        python3 -m nereus_relay --config "$WORK/relay.conf" >"$WORK/relay.log" 2>&1 &
+    RELAY_PID=$!
+    PIDS+=("$RELAY_PID")
+fi
 
 # A test certificate authority and a certificate for rv.harness.test, made
 # now, trusted only by the two peers (--ca).
@@ -453,12 +503,38 @@ NODELAY=""
 if (( FLOOR )); then
     NODELAY=",nodelay"
 fi
-for listen in "OPENSSL-LISTEN:443,bind=198.51.100.2,reuseaddr,fork" \
-              "OPENSSL-LISTEN:443,bind=[2001:db8:1::2],pf=ip6,reuseaddr,fork"; do
-    ip netns exec h-rvsrv socat "$listen,cert=$WORK/rv-bundle.pem,verify=0$NODELAY" \
-        "TCP:127.0.0.1:8710$NODELAY" >>"$WORK/socat.log" 2>&1 &
-    PIDS+=($!)
-done
+# Plan Task 29 step 2b: the front stands in for Caddy (rendezvous section
+# 12.7): /v1/relay to the relay's Unix socket, the rest to the service, and
+# counts of the relay's datagrams and of any holding the session's
+# plaintext markers (the control channel's JSON, the marker the session
+# peer sends on its media "tx" channel).
+MARKER_JSON="$(printf '"type"' | od -An -tx1 | tr -d ' \n')"
+MARKER_TX="$(printf 'NEREUS-PLAINTEXT-MARKER' | od -An -tx1 | tr -d ' \n')"
+start_front() {
+    ip netns exec h-rvsrv python3 "$SOURCE/tests/tools/harness_front.py" \
+        --listen 198.51.100.2 --listen 2001:db8:1::2 --cert "$WORK/rv-bundle.pem" \
+        --relay-socket "$WORK/relay.sock" --marker "$MARKER_JSON" --marker "$MARKER_TX" \
+        --report "$WORK/front.json" >>"$WORK/front.log" 2>&1 &
+    FRONT_PID=$!
+    printf '%s\n' "$FRONT_PID" > "$WORK/front.pid"
+    PIDS+=("$FRONT_PID")
+}
+stop_front() {
+    local pid
+    pid="$(cat "$WORK/front.pid")"
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+}
+if (( FLOOR )); then
+    for listen in "OPENSSL-LISTEN:443,bind=198.51.100.2,reuseaddr,fork" \
+                  "OPENSSL-LISTEN:443,bind=[2001:db8:1::2],pf=ip6,reuseaddr,fork"; do
+        ip netns exec h-rvsrv socat "$listen,cert=$WORK/rv-bundle.pem,verify=0$NODELAY" \
+            "TCP:127.0.0.1:8710$NODELAY" >>"$WORK/socat.log" 2>&1 &
+        PIDS+=($!)
+    done
+else
+    start_front
+fi
 sleep 2
 
 SERVER="wss://rv.harness.test/"
@@ -567,7 +643,7 @@ run_session() {
     shift
     in_ns "$ns" "$PEER" session --dir "$WORK/desktop-key" --server "$SERVER" \
         --core "$WORK/core-id" --timeout-ms 120000 \
-        --ca "$WORK/ca.pem" "$@" 2>>"$WORK/session.log" | tail -n 1 || true
+        --ca "$WORK/ca.pem" "$@" 2>>"$WORK/session.log" | tee "$WORK/session-events.log" | tail -n 1 || true
 }
 
 FAILED=0
@@ -972,7 +1048,11 @@ if scenario upgrade-media; then
 import json, sys
 r = json.loads(sys.argv[1])
 ok = (r.get('mediaConnections', 0) >= 2 and r.get('heardMs', 0) > 3000
-      and r.get('longestSilentMs', 1000) <= 40 and not r.get('replacePending', True))
+      and r.get('longestSilentMs', 1000) <= 40
+      and r.get('audioAfterMoveMs', -1) >= 0
+      and r.get('displayAfterReplacement', 0) > 0
+      and r.get('displayAfterMoveMs', -1) >= 0
+      and not r.get('replacePending', True))
 sys.exit(0 if ok else 1)" "$result" 2>/dev/null; then
         say "PASS upgrade-media: media followed the move"
     else
@@ -1009,6 +1089,250 @@ if scenario session-media-relayed; then
         FAILED=1
     fi
     stop_core
+fi
+
+# ── Plan Task 29 step 2b: the web relay ─────────────────────────────
+
+# web_only NS_ROUTER: the network behind NS_ROUTER passes DNS and TCP 443
+# and nothing else (the options survey's N1).
+web_only() {
+    in_ns "$1" nft insert rule inet filter forward iifname "lan" meta l4proto udp udp dport != 53 drop
+    in_ns "$1" nft insert rule inet filter forward iifname "lan" meta l4proto tcp tcp dport != 443 drop
+}
+
+# front_field KEY TAG: a count from the front's report.
+front_field() {
+    python3 -c "
+import json, sys
+r = json.load(open(sys.argv[1]))
+print(r.get(sys.argv[2], {}).get(sys.argv[3], 0))" "$WORK/front.json" "$1" "$2" 2>/dev/null || echo 0
+}
+
+# check_web_relay NAME RESULT: the session ran over the web relay (rank 4)
+# with audio and display, both lanes carried datagrams, and none held the
+# session's plaintext markers.
+check_web_relay() {
+    local name="$1" result="$2"
+    sleep 1.5
+    local control media hits
+    control="$(front_field datagrams 1)"
+    media="$(front_field datagrams 2)"
+    hits="$(( $(front_field markerHits 1) + $(front_field markerHits 2) ))"
+    if python3 -c "
+import json, sys
+r = json.loads(sys.argv[1])
+ok = (r.get('connected') and r.get('rankAfter') == 4 and r.get('audioDecoded', 0) > 0
+      and r.get('displayDecoded', 0) > 0)
+sys.exit(0 if ok else 1)" "$result" 2>/dev/null \
+        && (( control > 0 && media > 0 && hits == 0 )); then
+        say "PASS $name: control $control, media $media datagrams through the relay, plaintext seen 0: $result"
+    else
+        say "FAIL $name: control $control, media $media, plaintext seen $hits: $result"
+        FAILED=1
+    fi
+}
+
+# web-relay: the client's network passes only DNS and TCP 443 (UDP to the
+# service's STUN and TURN too is dropped): the session, audio and display
+# run over the web relay, one leg per end carrying both connections, and
+# the relay sees no plaintext.
+if scenario web-relay; then
+    reset_rules
+    web_only natc
+    start_core allow --media
+    check_web_relay web-relay "$(run_session cli --media-ms 6000)"
+    stop_core
+fi
+
+# A forwarded Core wss port shares the allowed HTTPS port. ICE has no UDP
+# path between the devices, so audio and display must use the direct tunnel.
+if scenario direct-wss-media; then
+    reset_rules
+    web_only natc
+    CORE_PORT=443
+    CORE_URL="wss://198.51.100.10:$CORE_PORT"
+    forward_core
+    start_core allow --listen "$CORE_PORT" --media
+    result="$(run_session cli --direct "$CORE_URL" --media-ms 6000)"
+    check_path direct-wss-media "$result" 1 any
+    if python3 -c "
+import json,sys
+r=json.loads(sys.argv[1]); sys.exit(0 if r.get('audioDecoded',0)>0 and
+ r.get('displayDecoded',0)>0 and r.get('mediaViaShim') else 1)" "$result"; then
+        say "PASS direct-wss-media: media carried by the UUID tunnel: $result"
+    else
+        say "FAIL direct-wss-media: $result"
+        FAILED=1
+    fi
+    stop_core
+    CORE_PORT=47910
+    CORE_URL="wss://198.51.100.10:$CORE_PORT"
+fi
+
+# Start on the service's web relay, then open direct TCP 443 while UDP stays
+# blocked. The start declaration remains valid across the path move and the
+# replacement uses the direct tunnel without tearing down live media first.
+if scenario web-to-direct-wss; then
+    reset_rules
+    web_only natc
+    CORE_PORT=443
+    CORE_URL="wss://198.51.100.10:$CORE_PORT"
+    start_core allow --listen "$CORE_PORT" --media
+    ( sleep 12; forward_core ) &
+    OPEN_PID=$!
+    result="$(run_session cli --direct "$CORE_URL" \
+        --upgrade-schedule-ms 15000,5000,5000 --wait-upgrade-ms 40000 \
+        --follow-media-ms 6000)"
+    wait "$OPEN_PID" 2>/dev/null || true
+    check_path web-to-direct-wss "$result" 1 True
+    if python3 -c "
+import json,sys
+r=json.loads(sys.argv[1]); sys.exit(0 if r.get('mediaConnections',0)>=2 and
+ r.get('heardMs',0)>3000 and r.get('audioAfterMoveMs',-1)>=0 and
+ r.get('displayAfterReplacement',0)>0 and r.get('displayAfterMoveMs',-1)>=0 and
+ not r.get('replacePending',True) else 1)" "$result"; then
+        say "PASS web-to-direct-wss: replacement audio and display followed onto the tunnel: $result"
+    else
+        say "FAIL web-to-direct-wss: $result"
+        FAILED=1
+    fi
+    stop_core
+    CORE_PORT=47910
+    CORE_URL="wss://198.51.100.10:$CORE_PORT"
+fi
+
+# web-relay-rejoin: as web-relay, and the front restarts mid-session, so
+# both legs' connections drop without an END: each joins again with its
+# token, the loopback sockets kept, and the session carries on (one
+# sign-in, audio still coming).
+if scenario web-relay-rejoin; then
+    reset_rules
+    web_only natc
+    start_core allow --media
+    ( sleep 14; stop_front; sleep 1; start_front ) &
+    BOUNCE_PID=$!
+    result="$(run_session cli --media-ms 20000)"
+    wait "$BOUNCE_PID" 2>/dev/null || true
+    sleep 2
+    joins="$(grep -c "joined again\|joins again\|leg joined" "$WORK/relay.log" 2>/dev/null || true)"
+    if (( joins >= 2 )) && python3 -c "
+import json, sys
+r = json.loads(sys.argv[1])
+ok = (r.get('connected') and r.get('rankAfter') == 4 and r.get('handshakes') == 1
+      and r.get('audioDecoded', 0) > 350)
+sys.exit(0 if ok else 1)" "$result" 2>/dev/null; then
+        say "PASS web-relay-rejoin: the session carried on across the legs' drop ($joins relay join lines): $result"
+    else
+        say "FAIL web-relay-rejoin: $result"
+        tail -n 30 "$WORK/relay.log" >&2 || true
+        FAILED=1
+    fi
+    stop_core
+fi
+
+# web-relay-standby: every path open and the relay allowed: the legs join
+# at the introduction, and ICE still takes a direct pair (rank 2) or TURN
+# (rank 3), never the web relay.
+if scenario web-relay-standby; then
+    reset_rules
+    start_core allow --media
+    result="$(run_session cli --media-ms 3000)"
+    rank="$(field "$result" rankAfter 2>/dev/null || echo None)"
+    if [[ "$rank" == "2" || "$rank" == "3" ]]; then
+        say "PASS web-relay-standby: rank $rank with the web relay offered: $result"
+    else
+        say "FAIL web-relay-standby: rank $rank: $result"
+        FAILED=1
+    fi
+    stop_core
+fi
+
+# web-relay-deadline: the transmit deadline over the web relay (brief
+# requirement 7): the client's network passes only DNS and TCP 443, with
+# DEADLINE_LOSS % loss and DEADLINE_DELAY ms each way on its link (150 ms
+# round trip); TUNE keyed for 25 s from the device. The Core's watchdog
+# reports each keepalive's gap and any trip. A watchdog stop while TUNE is
+# requested fails the scenario; the observed tails remain for operator review.
+deadline_trace() {
+    python3 - "$WORK/core.log" "$WORK/session-events.log" <<'PY'
+import json, sys
+def events(path):
+    with open(path) as lines:
+        for line in lines:
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(event, dict):
+                yield event
+core = list(events(sys.argv[1]))
+session = list(events(sys.argv[2]))
+for trip in (e for e in core if e.get('event') == 'tripped' and not e.get('linkClosed')):
+    at = trip['atEpochMs']
+    nearby = sorted((e for e in core + session if e.get('event') in
+                     ('keepaliveSent', 'keepaliveReceived', 'tripped') and
+                     at - 800 <= e.get('atEpochMs', -1) <= at + 200),
+                    key=lambda e: e['atEpochMs'])
+    print(json.dumps(nearby, separators=(',', ':')))
+PY
+}
+if scenario web-relay-deadline; then
+    for condition in ${DEADLINE_CONDITIONS:-"2:75" "3:75"}; do
+        loss="${condition%%:*}"
+        delay="${condition##*:}"
+        reset_rules
+        web_only natc
+        in_ns natc tc qdisc add dev wan root netem loss "${loss}%" delay "${delay}ms"
+        in_ns inet tc qdisc del dev inet-natc root 2>/dev/null || true
+        in_ns inet tc qdisc add dev inet-natc root netem loss "${loss}%" delay "${delay}ms"
+        start_core allow --media --keyable
+        result="$(run_session cli --media-ms 30000 --tune-ms 25000)"
+        sleep 2
+        stats="$(grep '"event":"keepalives"' "$WORK/core.log" | tail -n 1)"
+        trips="$(grep -c '"event":"tripped"' "$WORK/core.log" || true)"
+        trip_events="$(grep '"event":"tripped"' "$WORK/core.log" || true)"
+        tune_events="$(grep '"event":"tune"' "$WORK/session-events.log" || true)"
+        say "MEASURE web-relay-deadline loss=${loss}% delay=${delay}ms: $stats trips=$trips tripEvents=$trip_events tuneEvents=$tune_events session=$result"
+        if grep -q '"event":"tripped".*"linkClosed":false' "$WORK/core.log"; then
+            say "FAIL web-relay-deadline: the Core stopped TUNE before its requested release"
+            say "TRACE web-relay-deadline: $(deadline_trace)"
+            FAILED=1
+        fi
+        in_ns inet tc qdisc del dev inet-natc root 2>/dev/null || true
+        stop_core
+    done
+fi
+
+if scenario direct-wss-deadline; then
+    for condition in ${DEADLINE_CONDITIONS:-"2:75" "3:75"}; do
+        loss="${condition%%:*}"
+        delay="${condition##*:}"
+        reset_rules
+        web_only natc
+        CORE_PORT=443
+        CORE_URL="wss://198.51.100.10:$CORE_PORT"
+        forward_core
+        in_ns natc tc qdisc add dev wan root netem loss "${loss}%" delay "${delay}ms"
+        in_ns inet tc qdisc del dev inet-natc root 2>/dev/null || true
+        in_ns inet tc qdisc add dev inet-natc root netem loss "${loss}%" delay "${delay}ms"
+        start_core allow --listen "$CORE_PORT" --media --keyable
+        result="$(run_session cli --direct "$CORE_URL" --media-ms 30000 --tune-ms 25000)"
+        sleep 2
+        stats="$(grep '"event":"keepalives"' "$WORK/core.log" | tail -n 1)"
+        trips="$(grep -c '"event":"tripped"' "$WORK/core.log" || true)"
+        trip_events="$(grep '"event":"tripped"' "$WORK/core.log" || true)"
+        tune_events="$(grep '"event":"tune"' "$WORK/session-events.log" || true)"
+        say "MEASURE direct-wss-deadline loss=${loss}% delay=${delay}ms: $stats trips=$trips tripEvents=$trip_events tuneEvents=$tune_events session=$result"
+        if grep -q '"event":"tripped".*"linkClosed":false' "$WORK/core.log"; then
+            say "FAIL direct-wss-deadline: the Core stopped TUNE before its requested release"
+            say "TRACE direct-wss-deadline: $(deadline_trace)"
+            FAILED=1
+        fi
+        in_ns inet tc qdisc del dev inet-natc root 2>/dev/null || true
+        stop_core
+        CORE_PORT=47910
+        CORE_URL="wss://198.51.100.10:$CORE_PORT"
+    done
 fi
 
 # ── Plan Task 29 Step 1: the relay floor measurement ─────────────────

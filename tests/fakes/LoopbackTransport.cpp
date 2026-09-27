@@ -56,6 +56,21 @@ void LoopbackTransport::deliver(const QByteArray& wire)
     emit textReceived(wire);
 }
 
+bool LoopbackTransport::sendBinary(const QByteArray& message)
+{
+    if (!m_open || m_peer.isNull() || m_severed || m_dropsOutgoing) {
+        return false;
+    }
+    QPointer<LoopbackTransport> peer(m_peer);
+    QMetaObject::invokeMethod(
+        peer, [peer, message]() {
+            if (!peer.isNull() && peer->m_open && !peer->m_severed) {
+                emit peer->binaryReceived(message);
+            }
+        }, Qt::QueuedConnection);
+    return true;
+}
+
 void LoopbackTransport::ping()
 {
     if (!m_open || m_peer.isNull() || m_severed) {

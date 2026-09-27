@@ -28,10 +28,13 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QNetworkDatagram>
+#include <QNetworkProxy>
 #include <QPointer>
 #include <QRandomGenerator>
 #include <QTcpServer>
+#include <QTcpSocket>
 #include <QUdpSocket>
+#include <QUuid>
 #include <QWebSocket>
 #include <QWebSocketServer>
 
@@ -40,6 +43,7 @@
 #include "OperatorWording.h"
 #include "core/security/StationIdentity.h"
 #include "core/session/RelayLeg.h"
+#include "core/session/SystemProxy.h"
 
 using namespace NereusSDR;
 
@@ -153,6 +157,7 @@ class TstRelayLeg final : public QObject {
 
 private slots:
     void initTestCase() { QStandardPaths::setTestModeEnabled(true); }
+    void cleanup() { SystemProxy::setProxyForTest(std::nullopt); }
 
     void coreFixtures_data()
     {
@@ -396,8 +401,8 @@ private slots:
     }
 
     // A connection's candidate source gives its agent the lane socket's
-    // candidate, at the lowest priority; a newer connection on the lane
-    // takes it over and the older one's stop leaves it alone.
+    // candidate, at the lowest priority; another connection cannot take
+    // over the same legacy lane while the first ICE owner still holds it.
     void aSourceClaimsItsLane()
     {
         std::shared_ptr<RelayLeg> leg = RelayLeg::create();
@@ -412,14 +417,165 @@ private slots:
         QCOMPARE(candidate, QStringLiteral("candidate:wsrelay2 1 UDP 1 127.0.0.1 %1 typ host")
                                 .arg(leg->lanePort(2)));
         auto second = ice.makeCandidateSource(IceConfiguration::kMediaLane);
-        second->start([](const QString&) {});
+        bool secondOffered = false;
+        second->start([&](const QString&) { secondOffered = true; });
+        QVERIFY(!secondOffered);
         first->stop();
+        second->start([&](const QString&) { secondOffered = true; });
+        QVERIFY(secondOffered);
         // `relay = deny` stops the web relay's sources as it stops TURN.
         IceConfiguration denied = IceConfiguration::throughRendezvous(
             {}, /*relayAllowed=*/false, IceConfiguration::localAddressFamilies(), HostFamilies{});
         denied.setCandidateSourceFactory(RelayLeg::factoryFor(leg), /*needsRelay=*/true);
         QVERIFY(!denied.makeCandidateSource(IceConfiguration::kControlLane));
         second->stop();
+    }
+
+    void routedMediaKeepsOverlappingAgentsSeparate()
+    {
+        RelayPlayer relay;
+        auto leg = RelayLeg::create();
+        QVERIFY(leg);
+        IceConfiguration ice = IceConfiguration::throughRendezvous(
+            {}, true, IceConfiguration::localAddressFamilies(), HostFamilies{});
+        ice.setCandidateSourceFactory(RelayLeg::factoryFor(leg), true);
+        ice.setMediaRouting(true);
+        QVERIFY(!ice.makeCandidateSource(IceConfiguration::kMediaLane,
+                                         QStringLiteral("00000000-0000-0000-0000-000000000000")));
+        const QString oldId = QStringLiteral("11111111-1111-4111-8111-111111111111");
+        const QString newId = QStringLiteral("22222222-2222-4222-8222-222222222222");
+        auto oldSource = ice.makeCandidateSource(IceConfiguration::kMediaLane, oldId);
+        auto newSource = ice.makeCandidateSource(IceConfiguration::kMediaLane, newId);
+        QVERIFY(oldSource);
+        QVERIFY(newSource);
+        quint16 oldPort = 0;
+        quint16 newPort = 0;
+        oldSource->start([&](const QString& line) { oldPort = line.split(' ').at(5).toUShort(); });
+        newSource->start([&](const QString& line) { newPort = line.split(' ').at(5).toUShort(); });
+        QVERIFY(oldPort != 0);
+        QVERIFY(newPort != 0);
+        QVERIFY(oldPort != newPort);
+        QUdpSocket oldAgent;
+        QUdpSocket newAgent;
+        QVERIFY(oldAgent.bind(QHostAddress::LocalHost, 0));
+        QVERIFY(newAgent.bind(QHostAddress::LocalHost, 0));
+        leg->open(relay.url(), QStringLiteral("test-token"));
+        auto connection = relay.waitForConnection();
+        QVERIFY(connection);
+        QTRY_VERIFY(!connection->received.isEmpty()); // JOIN
+        oldAgent.writeDatagram("old", QHostAddress::LocalHost, oldPort);
+        newAgent.writeDatagram("new", QHostAddress::LocalHost, newPort);
+        QTRY_VERIFY(connection->received.size() >= 3);
+        const QByteArray oldUuid = QUuid::fromString(oldId).toRfc4122();
+        const QByteArray newUuid = QUuid::fromString(newId).toRfc4122();
+        QVERIFY(connection->received.contains(QByteArray(1, '\x02') + oldUuid + "old"));
+        QVERIFY(connection->received.contains(QByteArray(1, '\x02') + newUuid + "new"));
+        QUdpSocket otherSender;
+        QVERIFY(otherSender.bind(QHostAddress::LocalHost, 0));
+        otherSender.writeDatagram("wrong-old", QHostAddress::LocalHost, oldPort);
+        otherSender.writeDatagram("wrong-new", QHostAddress::LocalHost, newPort);
+        QTRY_COMPARE(leg->droppedWrongSender(), quint64(2));
+        QCOMPARE(connection->received.size(), 3); // JOIN and two original datagrams
+        oldAgent.writeDatagram(QByteArray(1485, 'x'), QHostAddress::LocalHost, oldPort);
+        QTRY_COMPARE(leg->droppedOversize(), quint64(1));
+        connection->socket->sendBinaryMessage(QByteArray(1, '\x02') +
+                                              QUuid::fromString(oldId).toRfc4122() +
+                                              QByteArray(1485, 'x'));
+        QTRY_COMPARE(leg->droppedOversize(), quint64(2));
+        connection->socket->sendBinaryMessage(QByteArray(1, '\x02') + oldUuid + "to-old");
+        connection->socket->sendBinaryMessage(QByteArray(1, '\x02') + newUuid + "to-new");
+        QTRY_VERIFY(oldAgent.hasPendingDatagrams());
+        QTRY_VERIFY(newAgent.hasPendingDatagrams());
+        QCOMPARE(oldAgent.receiveDatagram().data(), QByteArray("to-old"));
+        QCOMPARE(newAgent.receiveDatagram().data(), QByteArray("to-new"));
+        QVERIFY(!otherSender.hasPendingDatagrams());
+        oldSource->stop();
+        connection->socket->sendBinaryMessage(QByteArray(1, '\x02') + oldUuid + "stale");
+        connection->socket->sendBinaryMessage(QByteArray(1, '\x02') + newUuid + "live");
+        QTRY_VERIFY(newAgent.hasPendingDatagrams());
+        QCOMPARE(newAgent.receiveDatagram().data(), QByteArray("live"));
+        QVERIFY(!oldAgent.hasPendingDatagrams());
+        newSource->stop();
+    }
+
+    void legacyMediaKeepsRawTagTwoBytes()
+    {
+        RelayPlayer relay;
+        auto leg = RelayLeg::create();
+        QVERIFY(leg);
+        IceConfiguration ice = IceConfiguration::throughRendezvous(
+            {}, true, IceConfiguration::localAddressFamilies(), HostFamilies{});
+        ice.setCandidateSourceFactory(RelayLeg::factoryFor(leg), true);
+        auto source = ice.makeCandidateSource(IceConfiguration::kMediaLane);
+        QVERIFY(source);
+        quint16 port = 0;
+        source->start([&](const QString& line) { port = line.split(' ').at(5).toUShort(); });
+        QVERIFY(port != 0);
+        QUdpSocket agent;
+        QVERIFY(agent.bind(QHostAddress::LocalHost, 0));
+        leg->open(relay.url(), QStringLiteral("test-token"));
+        auto connection = relay.waitForConnection();
+        QVERIFY(connection);
+        QTRY_VERIFY(!connection->received.isEmpty());
+        agent.writeDatagram("legacy", QHostAddress::LocalHost, port);
+        QTRY_VERIFY(connection->received.contains(QByteArray(1, '\x02') + "legacy"));
+        QUdpSocket otherSender;
+        QVERIFY(otherSender.bind(QHostAddress::LocalHost, 0));
+        otherSender.writeDatagram("wrong-legacy", QHostAddress::LocalHost, port);
+        QTRY_COMPARE(leg->droppedWrongSender(), quint64(1));
+        QCOMPARE(connection->received.size(), 2);
+        connection->socket->sendBinaryMessage(QByteArray(1, '\x02') + "reply");
+        QTRY_VERIFY(agent.hasPendingDatagrams());
+        QCOMPARE(agent.receiveDatagram().data(), QByteArray("reply"));
+        QVERIFY(!otherSender.hasPendingDatagrams());
+        source->stop();
+    }
+
+    void aLocalConnectProxyCarriesTheWebRelayLeg()
+    {
+        RelayPlayer relay;
+        QTcpServer proxy;
+        QVERIFY(proxy.listen(QHostAddress::LocalHost, 0));
+        bool sawConnect = false;
+        QObject::connect(&proxy, &QTcpServer::newConnection, &proxy, [&] {
+            QTcpSocket* downstream = proxy.nextPendingConnection();
+            auto* upstream = new QTcpSocket(&proxy);
+            QObject::connect(downstream, &QTcpSocket::readyRead, &proxy,
+                             [&, downstream, upstream] {
+                static QByteArray request;
+                if (!sawConnect) {
+                    request += downstream->readAll();
+                    if (!request.contains("\r\n\r\n")) { return; }
+                    sawConnect = request.startsWith("CONNECT ");
+                    if (!sawConnect) { return; }
+                    upstream->connectToHost(QHostAddress::LocalHost, relay.server->serverPort());
+                    QObject::connect(upstream, &QTcpSocket::connected, &proxy,
+                                     [downstream] {
+                        downstream->write("HTTP/1.1 200 Connection Established\r\n\r\n");
+                    });
+                    request.clear();
+                    return;
+                }
+                upstream->write(downstream->readAll());
+            });
+            QObject::connect(upstream, &QTcpSocket::readyRead, &proxy,
+                             [downstream, upstream] { downstream->write(upstream->readAll()); });
+            QObject::connect(downstream, &QTcpSocket::disconnected, upstream,
+                             &QTcpSocket::disconnectFromHost);
+            QObject::connect(upstream, &QTcpSocket::disconnected, downstream,
+                             &QTcpSocket::disconnectFromHost);
+        });
+        SystemProxy::setProxyForTest(QNetworkProxy(QNetworkProxy::HttpProxy,
+                                                  QStringLiteral("127.0.0.1"), proxy.serverPort()));
+        auto leg = RelayLeg::create();
+        QVERIFY(leg);
+        leg->open(relay.url(), QStringLiteral("proxy-token"));
+        auto connection = relay.waitForConnection();
+        QVERIFY(connection);
+        QTRY_VERIFY(sawConnect);
+        QTRY_VERIFY(!connection->received.isEmpty());
+        QCOMPARE(connection->received.first(), QByteArray("\x80proxy-token", 12));
+        leg->close();
     }
 };
 

@@ -23,6 +23,7 @@
 // =================================================================
 
 #include <QNetworkProxy>
+#include <optional>
 #include <QUrl>
 
 namespace NereusSDR::SystemProxy {
@@ -30,5 +31,7 @@ namespace NereusSDR::SystemProxy {
 /// The proxy for a WebSocket to `url` (ws:// or wss://), or
 /// QNetworkProxy::NoProxy.
 QNetworkProxy forUrl(const QUrl& url);
+/// Process-local test seam; never changes the computer's proxy settings.
+void setProxyForTest(const std::optional<QNetworkProxy>& proxy);
 
 } // namespace NereusSDR::SystemProxy

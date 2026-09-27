@@ -332,6 +332,16 @@
         },
         {
             "kind": "i64",
+            "name": "mediaTunnelVersion",
+            "value": 1
+        },
+        {
+            "kind": "i64",
+            "name": "mediaRelayRoutingVersion",
+            "value": 1
+        },
+        {
+            "kind": "i64",
             "name": "sessionHolderVersion",
             "value": 1
         },
@@ -2564,6 +2574,12 @@
                     ],
                     "headphonesMixVersion": [
                         "headphonesMixVersion"
+                    ],
+                    "mediaTunnelVersion": [
+                        "mediaTunnelVersion"
+                    ],
+                    "mediaRelayRoutingVersion": [
+                        "mediaRelayRoutingVersion"
                     ],
                     "receiverAudioVersion": [
                         "receiverAudioVersion"

@@ -391,6 +391,7 @@ class RadioModel;
 class RendezvousDialer;
 class SessionTransport;
 class SwitchableTransport;
+class MediaTunnel;
 class RemoteDevicesState;
 class SettingsProxy;
 class TransmitState;
@@ -499,6 +500,18 @@ public:
     /// alive, and which side that is is not knowable in advance.
     static constexpr int kDefaultHeartbeatIntervalMs = 20000;
     static constexpr int kDefaultMaxMissedPongs = 2;
+    /// Task 29 step 2b (fast failure detection): on a path through a relay
+    /// (TURN or the web relay) or with media in the WebSocket tunnel, the
+    /// window pings this often instead, so a link that died is found in
+    /// kMaxMissedPongs of these (4 to 6 s), not 40 to 60 s. Never longer
+    /// than the heartbeat set (setHeartbeatIntervalMs), and not at all
+    /// while the heartbeat is off.
+    static constexpr int kRelayedHeartbeatIntervalMs = 2000;
+    /// The cadence in use now (kRelayedHeartbeatIntervalMs on such a path).
+    int effectiveHeartbeatIntervalMs() const;
+    /// Step 2b: media runs in the WebSocket tunnel (the media controller
+    /// says so), which counts as a relayed path for the heartbeat.
+    void setMediaTunnelInUse(bool inUse);
 
     /// How often locally-observed property changes are drained toward the
     /// station. See StationServer::kDefaultDeltaFlushMs for the same
@@ -629,6 +642,13 @@ public:
     /// (DataChannelTransport::mediaIceConfiguration()); none for a
     /// WebSocket session.
     std::optional<IceConfiguration> sessionIceConfiguration() const;
+    /// Task 29 step 2b (link section 21, "The media tunnel"): the Core told
+    /// mediaTunnelVersion 1, so the media start may declare the tunnel even
+    /// before a later path move to a direct WebSocket.
+    bool mediaTunnelAvailable() const;
+    /// The ICE settings for media over the tunnel (made on first use on
+    /// this session's transport); none unless the current path carries binary.
+    std::optional<IceConfiguration> mediaTunnelIceConfiguration();
 
     /// iPhone app plan Task 29 (R-IOS-16; link section 21): where the
     /// paired Core can be reached through the internet service: the
@@ -1574,6 +1594,7 @@ private:
     QTimer* m_handshakeDeadlineTimer = nullptr;
     int m_handshakeDeadlineMs = kStationHandshakeDeadlineMs;
     int m_heartbeatIntervalMs = kDefaultHeartbeatIntervalMs;
+    bool m_mediaTunnelInUse = false;
     int m_maxMissedPongs = kDefaultMaxMissedPongs;
     int m_pingsAwaitingPong = 0;
 
@@ -1668,6 +1689,8 @@ private:
     /// The ICE settings of the connection through the service this session
     /// left, so its media keeps the service's STUN server (link 21.3).
     std::optional<IceConfiguration> m_serviceIce;
+    /// Task 29 step 2b: the media tunnel on this session's transport.
+    std::shared_ptr<MediaTunnel> m_mediaTunnel;
     bool m_serviceDialing = false;
     int m_dialIndex = 0;
     QString m_planToken;

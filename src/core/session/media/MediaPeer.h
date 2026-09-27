@@ -96,6 +96,11 @@ public:
     /// none (the default) keeps host candidates only.
     void setIceConfiguration(const std::optional<IceConfiguration>& ice);
     bool usesIce() const;
+    /// Task 29 step 2b: ICE that gathers from a STUN or TURN server (the
+    /// service's), which may take up to IceConfiguration::
+    /// kGatheringDeadlineMs; the media tunnel's settings gather only host
+    /// candidates and the tunnel's, at once.
+    bool gathersFromServers() const;
 
     bool acceptControl(const QJsonObject& control);
     bool sendDisplay(const QByteArray& message);
@@ -130,6 +135,10 @@ public:
     StartRefusal lastStartRefusal() const;
 
     bool isReady() const;
+    /// Task 29 step 2b: the candidate pair the connection settled on (for
+    /// the harness and the log), nullopt before or where the transport
+    /// cannot say.
+    std::optional<MediaIcePath> selectedPath() const;
     /// Both descriptions carry the L16 rtpmap (R-R3-23).
     bool losslessAudioNegotiated() const;
     /// Task 36: both descriptions carry the L16 rtpmap on the microphone

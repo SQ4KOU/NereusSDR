@@ -77,6 +77,7 @@
 #include <QSignalSpy>
 #include <QSslCertificate>
 #include <QSslConfiguration>
+#include <QSslKey>
 #include <QSslSocket>
 #include <QStandardPaths>
 #include <QTcpServer>
@@ -1026,7 +1027,10 @@ bool hasUsableIpv6()
 // run time and written where a Core's CertificateStore loads them, so a
 // test can add the certificate to the trust store and have a handshake to
 // that Core raise no TLS error at all. RSA, as CertificateStore uses.
-QSslCertificate writeLoopbackCertificate(const QString& directory)
+// Task 29 step 2b: `altName` another name, for a certificate a sign-in
+// page would present.
+QSslCertificate writeLoopbackCertificate(const QString& directory,
+                                         const char* altName = "IP:127.0.0.1")
 {
     using KeyPtr = std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)>;
     using CertPtr = std::unique_ptr<X509, decltype(&X509_free)>;
@@ -1042,9 +1046,13 @@ QSslCertificate writeLoopbackCertificate(const QString& directory)
         || X509_set_pubkey(cert.get(), key.get()) != 1) {
         return QSslCertificate();
     }
+    // Keep the subject consistent with the SAN. On some TLS backends a
+    // loopback CN masks a deliberately mismatched DNS SAN.
+    const char* commonName = QByteArrayView(altName).startsWith("DNS:")
+        ? altName + 4 : "127.0.0.1";
     X509_NAME* name = X509_get_subject_name(cert.get());
     if (X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC,
-                                   reinterpret_cast<const unsigned char*>("127.0.0.1"), -1, -1, 0)
+                                   reinterpret_cast<const unsigned char*>(commonName), -1, -1, 0)
             != 1
         || X509_set_issuer_name(cert.get(), name) != 1) {
         return QSslCertificate();
@@ -1055,7 +1063,7 @@ QSslCertificate writeLoopbackCertificate(const QString& directory)
         {NID_basic_constraints, "critical,CA:TRUE"},
         {NID_key_usage, "critical,digitalSignature,keyEncipherment,keyCertSign"},
         {NID_ext_key_usage, "serverAuth"},
-        {NID_subject_alt_name, "IP:127.0.0.1"},
+        {NID_subject_alt_name, altName},
     };
     for (const auto& [nid, value] : extensions) {
         X509_EXTENSION* extension = X509V3_EXT_conf_nid(nullptr, &context, nid, value);
@@ -1818,6 +1826,60 @@ private slots:
     // Every test binary runs in test mode (tests/TestSandboxInit.cpp): a
     // Core started with the default server list, as tst_daemon_app starts
     // one, never reaches rv.nereussdr.com from a test.
+    // Task 29 step 2b (options survey B.6, B.7): a network that breaks
+    // the secure connection to the service is named in plain words. The
+    // service is not pinned: these are the system's own trust errors.
+    void aNetworkThatBreaksTheSecureConnectionIsNamed_data()
+    {
+        QTest::addColumn<QByteArray>("altName");
+        QTest::addColumn<bool>("trusted");
+        QTest::addColumn<QString>("words");
+        // The right name, an authority this computer does not trust.
+        QTest::newRow("inspecting") << QByteArray("IP:127.0.0.1") << false
+            << QStringLiteral("This computer does not trust the certificate for the secure "
+                              "connection. Network inspection is one possible cause. Check "
+                              "the network's certificate policy or try another network.");
+        // A trusted certificate for another name: a sign-in page answering
+        // for every address with its own (TLS stacks stop at an untrusted
+        // authority before they check the name).
+        QTest::newRow("sign-in page") << QByteArray("DNS:portal.example.net") << true
+            << QStringLiteral("The secure connection answered with a certificate for another "
+                              "name. A Wi-Fi sign-in page is one possible cause. Check whether "
+                              "this network needs browser sign-in, then try again.");
+    }
+
+    void aNetworkThatBreaksTheSecureConnectionIsNamed()
+    {
+        if (!QSslSocket::supportsSsl()) {
+            QSKIP("Qt reports no working TLS backend on this machine");
+        }
+        QFETCH(QByteArray, altName);
+        QFETCH(bool, trusted);
+        QFETCH(QString, words);
+        QTemporaryDir dir;
+        const QSslCertificate certificate
+            = writeLoopbackCertificate(dir.path(), altName.constData());
+        QVERIFY(!certificate.isNull());
+        std::optional<TrustedAuthority> authority;
+        if (trusted) {
+            authority.emplace(certificate);
+        }
+        QFile keyFile(QDir(dir.path()).filePath(QStringLiteral("tls-key.pem")));
+        QVERIFY(keyFile.open(QIODevice::ReadOnly));
+        QSslConfiguration tls = QSslConfiguration::defaultConfiguration();
+        tls.setLocalCertificate(certificate);
+        tls.setPrivateKey(QSslKey(keyFile.readAll(), QSsl::Rsa));
+        QWebSocketServer network(QStringLiteral("network"), QWebSocketServer::SecureMode);
+        network.setSslConfiguration(tls);
+        QVERIFY(network.listen(QHostAddress::LocalHost, 0));
+        RendezvousClient client;
+        client.setServers({QUrl(QStringLiteral("wss://127.0.0.1:%1/").arg(network.serverPort()))});
+        QSignalSpy unreachable(&client, &RendezvousClient::unreachable);
+        client.connectToService();
+        QTRY_COMPARE_WITH_TIMEOUT(unreachable.size(), 1, 15000);
+        QCOMPARE(unreachable.at(0).at(0).toString(), words);
+    }
+
     void aTestRunNeverLeavesThisComputer()
     {
         QVERIFY(QStandardPaths::isTestModeEnabled());
@@ -2660,6 +2722,18 @@ private slots:
         // computer without the relay, so media takes no relay allocation at
         // either end (the Task 28 fix wave, Important 4); both control
         // allocations were made (ALLOCATED 2 below).
+        // ICE may briefly nominate the relay before settling on a direct
+        // pair. Wait for both actual control paths before asserting that
+        // media excludes its own relay allocation.
+        const auto* windowChannel = qobject_cast<const DataChannelTransport*>(window.transport());
+        const auto* coreChannel = core.server->findChild<DataChannelTransport*>();
+        QVERIFY(windowChannel != nullptr);
+        QVERIFY(coreChannel != nullptr);
+        QTRY_VERIFY_WITH_TIMEOUT(windowChannel->selectedPath().has_value()
+                                     && !windowChannel->selectedPath()->relayed()
+                                     && coreChannel->selectedPath().has_value()
+                                     && !coreChannel->selectedPath()->relayed(),
+                                 15000);
         const std::optional<IceConfiguration> ice = window.sessionIceConfiguration();
         QVERIFY(ice.has_value());
         QVERIFY(ice->relayKnown());

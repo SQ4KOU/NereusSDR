@@ -87,6 +87,8 @@
 
 namespace NereusSDR {
 
+class CandidateSourceLease;
+
 /// The chunking and the heartbeat bytes of the control data channel, apart
 /// from any connection: what the transport runs and what the conformance
 /// fixtures (tests/data/link/v1/framing/) check.
@@ -367,7 +369,7 @@ private:
     int m_acceptedCandidates = 0;
     QList<QPair<QString, quint16>> m_farEndRelays;
     /// Step 2b: this connection's own candidate source on the control lane.
-    std::shared_ptr<IceConfiguration::CandidateSource> m_candidateSource;
+    std::shared_ptr<CandidateSourceLease> m_candidateSourceLease;
     QStringList m_pendingSourceCandidates;
     quint32 m_nextPingId = 1;
     SessionTransportTelemetry m_telemetry;

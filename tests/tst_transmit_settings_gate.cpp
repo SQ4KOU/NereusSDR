@@ -253,6 +253,11 @@ void TstTransmitSettingsGate::olderCoreOffersNoTransmitSettings()
     // sends none.
     // iPhone app plan Task 29: mediaReplaceVersion, controlSwitchVersion and
     // relayAllowed after it.
+    // Step 2b's media routing and tunnel versions after those.
+    QCOMPARE(updates.last().name, QByteArrayLiteral("mediaRelayRoutingVersion"));
+    updates.removeLast();
+    QCOMPARE(updates.last().name, QByteArrayLiteral("mediaTunnelVersion"));
+    updates.removeLast();
     QCOMPARE(updates.last().name, QByteArrayLiteral("relayAllowed"));
     updates.removeLast();
     QCOMPARE(updates.last().name, QByteArrayLiteral("controlSwitchVersion"));
