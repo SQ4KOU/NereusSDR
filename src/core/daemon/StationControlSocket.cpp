@@ -8,6 +8,9 @@
 //   2026-09-24: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: candidatePathsFor() and the no-answer text (R-IOS-08,
+//               R-R3-26). J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/daemon/StationControlSocket.h"
@@ -41,17 +44,66 @@ QByteArray encodeReply(const StationControlReply& reply)
            + '\n';
 }
 
-StationControlReply notReached(const QString& path, QLocalSocket::LocalSocketError error)
+QStringList& packagedHomesOverride()
 {
+    static QStringList homes;
+    return homes;
+}
+
+bool& packagedHomesOverridden()
+{
+    static bool overridden = false;
+    return overridden;
+}
+
+// `tried` names every place the command looked: the one socket it found,
+// or all of them when none was there.
+StationControlReply notReached(const QStringList& tried, QLocalSocket::LocalSocketError error)
+{
+    const QString where = tried.join(QStringLiteral(" and "));
     if (error == QLocalSocket::SocketAccessError) {
-        return {false, QStringLiteral("This account may not manage the Core at %1. On a packaged "
-                                      "Core, run the command with sudo.")
-                           .arg(path)};
+        return {false, QStringLiteral("This account may not manage the Core at %1. Run the "
+                                      "command with sudo, for example sudo nereusd status.")
+                           .arg(where)};
     }
-    return {false, QStringLiteral("No Core answered at %1. Check that nereusd is running and that "
-                                  "this command has the same --config and --profile. On a "
-                                  "packaged Core, run the command with sudo.")
-                       .arg(path)};
+    return {false, QStringLiteral("No Core answered. Looked for it at %1. Check that nereusd is "
+                                  "running (systemctl status nereusd on a packaged Core). A "
+                                  "packaged Core answers the command with sudo and nothing "
+                                  "else, for example sudo nereusd status. A Core you started "
+                                  "yourself answers the command run from the same account, with "
+                                  "the same --config and --profile it was started with.")
+                       .arg(where)};
+}
+
+StationControlReply requestAt(const QString& path, const QStringList& args, int timeoutMs,
+                              const QStringList& tried)
+{
+    QLocalSocket socket;
+    socket.connectToServer(path);
+    if (!socket.waitForConnected(timeoutMs)) {
+        return notReached(tried, socket.error());
+    }
+    const QByteArray line = QJsonDocument(QJsonObject{{QStringLiteral("args"),
+                                                       QJsonArray::fromStringList(args)}})
+                                .toJson(QJsonDocument::Compact)
+                            + '\n';
+    socket.write(line);
+    if (!socket.waitForBytesWritten(timeoutMs)) {
+        return notReached(tried, socket.error());
+    }
+    QByteArray received;
+    while (!received.contains('\n') && received.size() <= StationControlSocket::kMaxReplyBytes) {
+        if (socket.bytesAvailable() == 0 && !socket.waitForReadyRead(timeoutMs)) {
+            break;
+        }
+        received += socket.readAll();
+    }
+    const QJsonDocument doc = QJsonDocument::fromJson(received.left(received.indexOf('\n')));
+    if (!doc.isObject()) {
+        return {false, QStringLiteral("The Core at %1 did not answer that command.").arg(path)};
+    }
+    return {doc.object().value(QStringLiteral("ok")).toBool(false),
+            doc.object().value(QStringLiteral("text")).toString()};
 }
 
 } // namespace
@@ -78,6 +130,59 @@ QString StationControlSocket::directoryFor(const DaemonConfig& config, const QSt
 QString StationControlSocket::socketPathFor(const DaemonConfig& config, const QString& profile)
 {
     return QDir(directoryFor(config, profile)).filePath(QString::fromLatin1(kSocketName));
+}
+
+QStringList StationControlSocket::packagedHomes()
+{
+    if (packagedHomesOverridden()) {
+        return packagedHomesOverride();
+    }
+#ifdef Q_OS_LINUX
+    // packaging/nereusd.service.in: StateDirectory=nereusd with
+    // DynamicUser=yes and Environment=HOME=/var/lib/nereusd. systemd keeps
+    // a DynamicUser's state in /var/lib/private/nereusd and links
+    // /var/lib/nereusd to it.
+    return {QStringLiteral("/var/lib/nereusd"), QStringLiteral("/var/lib/private/nereusd")};
+#else
+    return {};
+#endif
+}
+
+void StationControlSocket::setPackagedHomesForTest(const QStringList& homes)
+{
+    packagedHomesOverride() = homes;
+    packagedHomesOverridden() = true;
+}
+
+QStringList StationControlSocket::candidatePathsFor(const DaemonConfig& config,
+                                                    const QString& profile)
+{
+    return candidatePathsFor(config, profile, packagedHomes());
+}
+
+QStringList StationControlSocket::candidatePathsFor(const DaemonConfig& config,
+                                                    const QString& profile,
+                                                    const QStringList& homes)
+{
+    QStringList paths{socketPathFor(config, profile)};
+    if (!config.stateDirectory.isEmpty()) {
+        return paths;
+    }
+    // The profile's directory as AppSettings::resolveConfigDir() makes it
+    // on Linux ($HOME/.config/NereusSDR, then profiles/<name> for a valid
+    // name), under the packaged Core's HOME instead of this command's.
+    for (const QString& home : homes) {
+        QString directory = QDir(home).filePath(QStringLiteral(".config/NereusSDR"));
+        if (AppSettings::isValidProfileName(profile)) {
+            directory += QStringLiteral("/profiles/") + profile;
+        }
+        const QString path = QDir::cleanPath(
+            QDir(directory).filePath(QString::fromLatin1(kSocketName)));
+        if (!paths.contains(path)) {
+            paths << path;
+        }
+    }
+    return paths;
 }
 
 bool StationControlSocket::listen(const QString& path)
@@ -196,32 +301,18 @@ void StationControlSocket::serve(QLocalSocket* socket)
 StationControlReply StationControlSocket::request(const QString& path, const QStringList& args,
                                                   int timeoutMs)
 {
-    QLocalSocket socket;
-    socket.connectToServer(path);
-    if (!socket.waitForConnected(timeoutMs)) {
-        return notReached(path, socket.error());
-    }
-    const QByteArray line = QJsonDocument(QJsonObject{{QStringLiteral("args"),
-                                                       QJsonArray::fromStringList(args)}})
-                                .toJson(QJsonDocument::Compact)
-                            + '\n';
-    socket.write(line);
-    if (!socket.waitForBytesWritten(timeoutMs)) {
-        return notReached(path, socket.error());
-    }
-    QByteArray received;
-    while (!received.contains('\n') && received.size() <= kMaxReplyBytes) {
-        if (socket.bytesAvailable() == 0 && !socket.waitForReadyRead(timeoutMs)) {
-            break;
+    return requestAt(path, args, timeoutMs, {path});
+}
+
+StationControlReply StationControlSocket::request(const QStringList& paths,
+                                                  const QStringList& args, int timeoutMs)
+{
+    for (const QString& path : paths) {
+        if (QFileInfo::exists(path)) {
+            return requestAt(path, args, timeoutMs, {path});
         }
-        received += socket.readAll();
     }
-    const QJsonDocument doc = QJsonDocument::fromJson(received.left(received.indexOf('\n')));
-    if (!doc.isObject()) {
-        return {false, QStringLiteral("The Core at %1 did not answer that command.").arg(path)};
-    }
-    return {doc.object().value(QStringLiteral("ok")).toBool(false),
-            doc.object().value(QStringLiteral("text")).toString()};
+    return requestAt(paths.value(0), args, timeoutMs, paths);
 }
 
 } // namespace NereusSDR

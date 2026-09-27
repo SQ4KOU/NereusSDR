@@ -571,7 +571,8 @@ the pass (D34). Pictures are in `2026-09-23-iphone-app-design/`.
     it; then the paired devices with Revoke, and Add a device.
 11. **A small box** shows its code, while it is unclaimed, on a status page
     any browser on its own network can open, which changes nothing, and to
-    `nereusd pairing show` on its computer for claiming over SSH; the code never
+    `nereusd pairing show` on its computer for claiming over SSH (`sudo nereusd
+    pairing show` on a packaged Core, with no other options); the code never
     goes to its log. Only the console or an already-paired device can reopen
     pairing.
 12. **Another device on the Core** no longer brings a question: up to four

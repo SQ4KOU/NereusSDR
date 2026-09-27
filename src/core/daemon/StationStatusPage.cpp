@@ -15,6 +15,9 @@
 //   2026-09-24: Part C fix wave (R2-I1): the Host check accepts
 //               only this computer's own names, whole. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: the first-start notice gives the sudo form a packaged
+//               Core answers (R-IOS-08, R-R3-26). J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/daemon/StationStatusPage.h"
@@ -301,7 +304,7 @@ QString StationStatusPage::formatFirstStartNotice(const QString& label, const QS
     }
     text += QStringLiteral(
         "  Manage it with nereusd status, nereusd pairing show and nereusd devices\n"
-        "  (with sudo on a packaged Core).\n");
+        "  (on a packaged Core: sudo nereusd status, and so on).\n");
     return text;
 }
 
