@@ -595,6 +595,7 @@ private slots:
     void losslessRefusalKeepsOpusAndSaysWhy();
     void minorSevenPeerCannotAskForAnAudioProfile();
     void startNeedsAnAudioProfileVersionOfAtLeastOne();
+    void displayFramesAndAudioShareTheProducerClock();
     void clockProbeIsAnsweredWithTheCoreClockAndCapture();
     void minorEightPeerReceivesTodaysSpectrumContext();
     void minorNinePeerReceivesTheGrant();
@@ -1675,7 +1676,8 @@ void TstDaemonMediaController::displayDiagnosticsLineReportsBytesAndFragments()
              QStringLiteral("largestKeyframe=2977 bytes/4 fragments"
                             " largestDelta=1800 bytes/3 fragments"
                             " maxFragments=4 sendRefusals=0 transportErrors=0"
-                            " queuedLate=0"));
+                            " queuedLate=0 keyframeRequests=0"
+                            " keyframeRequestsRefused=0"));
 
     DaemonDisplayDiagnostics largest;
     largest.displayMaxKeyframeBytes = 9361; // 4096/4096 points with a 768-point 3D row
@@ -1684,11 +1686,14 @@ void TstDaemonMediaController::displayDiagnosticsLineReportsBytesAndFragments()
     largest.displaySendRefusals = 7;
     largest.displayTransportErrors = 2;
     largest.displayQueuedLate = 3;
+    largest.displayKeyframeRequests = 12;
+    largest.displayKeyframeRequestsRefused = 1;
     QCOMPARE(daemonDisplayDiagnosticsLine(largest),
              QStringLiteral("largestKeyframe=9361 bytes/11 fragments"
                             " largestDelta=9361 bytes/11 fragments"
                             " maxFragments=11 sendRefusals=7 transportErrors=2"
-                            " queuedLate=3"));
+                            " queuedLate=3 keyframeRequests=12"
+                            " keyframeRequestsRefused=1"));
     QCOMPARE(IMediaTransport::sctpFragmentCount(876), quint64(1));
     QCOMPARE(IMediaTransport::sctpFragmentCount(877), quint64(2));
     QCOMPARE(IMediaTransport::sctpFragmentCount(65536), quint64(75));
@@ -2351,6 +2356,9 @@ void TstDaemonMediaController::authenticatedControlProducesContextThenDecodedDis
         {QStringLiteral("contextGeneration"),
          context.value(QStringLiteral("contextGeneration")).toInteger()}},
         harness.client.sessionEpoch()));
+    // R-R3-21: the Core counts (and logs) each keyframe request.
+    QTRY_COMPARE(harness.controller.displayDiagnostics().displayKeyframeRequests, quint64{1});
+    QCOMPARE(harness.controller.displayDiagnostics().displayKeyframeRequestsRefused, quint64{0});
     QTest::qWait(20); // source cadence is 60 fps
     harness.mediaTransport->displays.clear();
     harness.feedRadio(0.1875);
@@ -3686,6 +3694,32 @@ QList<QJsonObject> clockEchoesIn(const QSignalSpy& controls)
 // end as an RTP time and the capture clock's reading then, for Opus and for
 // lossless. Before audio runs the capture fields are 0. Malformed probes
 // get no answer.
+// R-R3-21 / R-R3-08: with media on the Core advertises displayClockVersion 1,
+// and a controller without an injected clock reads the producer clock that
+// stamps every display frame, so a window can map display frames onto the
+// audio's capture times.
+void TstDaemonMediaController::displayFramesAndAudioShareTheProducerClock()
+{
+    Harness h;
+    h.establishSession();
+    const StationCapabilities caps = h.server.buildCapabilities();
+    QCOMPARE(caps.displayClockVersion, 1);
+    QCOMPARE(StationCapabilities::fromUpdates(caps.toUpdates()).displayClockVersion, 1);
+    QCOMPARE(h.client.capabilities().displayClockVersion, 1);
+
+    DaemonMediaController production(&h.server, &h.radio);
+    for (int i = 0; i < 3; ++i) {
+        const qint64 before = DaemonSpectrumSource::monotonicNowNs();
+        const qint64 media = production.mediaClockNowNs();
+        const qint64 after = DaemonSpectrumSource::monotonicNowNs();
+        QVERIFY2(before <= media && media <= after,
+                 qPrintable(QStringLiteral("%1 <= %2 <= %3").arg(before).arg(media).arg(after)));
+    }
+    // The injected clock still rules a test's controller.
+    h.nowNs = 42;
+    QCOMPARE(h.controller.mediaClockNowNs(), qint64{42});
+}
+
 void TstDaemonMediaController::clockProbeIsAnsweredWithTheCoreClockAndCapture()
 {
     OpusAudioEncoder encoder;

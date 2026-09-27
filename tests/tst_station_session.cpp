@@ -5735,9 +5735,10 @@ void TstStationSession::radioIdentityEntriesRoundTrip()
     sent.dspInfoVersion = 1;
     sent.recordStreamVersion = 1;
     sent.stationRadiosVersion = 1;
+    sent.displayClockVersion = 1; // R-R3-21 / R-R3-08, after it
     const QList<MirrorUpdate> updates = sent.toUpdates();
     const int model = updateIndexOf(updates, "hpsdrModel");
-    QCOMPARE(model, int(updates.size()) - 20);
+    QCOMPARE(model, int(updates.size()) - 21);
     QCOMPARE(updateIndexOf(updates, "radioProtocol"), model + 1);
     QCOMPARE(updateIndexOf(updates, "radioAddress"), model + 2);
     QCOMPARE(updateIndexOf(updates, "radioHardwareVersion"), model + 3);
@@ -5757,6 +5758,7 @@ void TstStationSession::radioIdentityEntriesRoundTrip()
     QCOMPARE(updateIndexOf(updates, "dspInfoVersion"), model + 17);
     QCOMPARE(updateIndexOf(updates, "recordStreamVersion"), model + 18);
     QCOMPARE(updateIndexOf(updates, "stationRadiosVersion"), model + 19);
+    QCOMPARE(updateIndexOf(updates, "displayClockVersion"), model + 20);
     const StationCapabilities received = StationCapabilities::fromUpdates(updates);
     QVERIFY(received.radioIdentityEntries);
     QCOMPARE(received.radioHardwareVersion, 1);
@@ -5868,10 +5870,10 @@ void TstStationSession::coreSendsRadioIdentityOnlyFromMinorEleven()
                              "displayExtrasVersion", "transmitSettingsVersion",
                              "bandSelectVersion", "meterReadingsVersion",
                              "dspInfoVersion", "recordStreamVersion",
-                             "stationRadiosVersion"}) {
+                             "stationRadiosVersion", "displayClockVersion"}) {
         QCOMPARE(updateIndexOf(older, name), -1);
     }
-    // Byte for byte: the minor-11 descriptor without the twenty (and the
+    // Byte for byte: the minor-11 descriptor without the twenty-one (and the
     // display budget reason, which is not sent here) is the minor-10 one.
     QList<MirrorUpdate> stripped = current;
     for (const char* name : {"hpsdrModel", "radioProtocol", "radioAddress",
@@ -5883,7 +5885,7 @@ void TstStationSession::coreSendsRadioIdentityOnlyFromMinorEleven()
                              "displayExtrasVersion", "transmitSettingsVersion",
                              "bandSelectVersion", "meterReadingsVersion",
                              "dspInfoVersion", "recordStreamVersion",
-                             "stationRadiosVersion"}) {
+                             "stationRadiosVersion", "displayClockVersion"}) {
         stripped.removeAt(updateIndexOf(stripped, name));
     }
     QCOMPARE(SessionMessages::encode(SessionMessages::capabilities(stripped)),

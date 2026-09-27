@@ -135,6 +135,8 @@
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-26 - R-IOS-18 / R-R3-49 (parity Task 21): stationRadiosVersion.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - R-R3-21 / R-R3-08: displayClockVersion. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -309,6 +311,13 @@ struct StationCapabilities {
     /// recordStreamVersion. 0 (a Core that is not nereusd, or older): a
     /// window shows This Core's Change radio disabled with a reason.
     int stationRadiosVersion = 0;
+    /// R-R3-21 / R-R3-08: 1 means the Core stamps every display frame's
+    /// producerTimestamp and its clock-echo times (t1, t2, capturedNs) from
+    /// one clock, so a window can present its spectrum and waterfall on its
+    /// audio's playout clock. No message changes shape. Sent in the same
+    /// minor-11 block, after stationRadiosVersion; 1 whenever media is on.
+    /// 0 (an older Core): a window draws each display frame on arrival.
+    int displayClockVersion = 0;
     /// iPhone app Task 71 (R-IOS-02; the several-devices design, ruling
     /// 10.1): 1 means the Core admits up to four devices at once, sends the
     /// `connectedDevices` object and takes session.leave. Sent last in the

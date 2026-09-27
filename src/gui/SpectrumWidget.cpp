@@ -36,6 +36,11 @@
 //                 Hz/bin readout follow the Core's granted FFT size, and its
 //                 peak hold, blob and noise floor decay follow the frame
 //                 rate the Core sends. AI-assisted via Anthropic Claude Code.
+//   2026-09-26 J.J. Boyd / KG4VCF - R-R3-21 / R-R3-08: a remote pan's
+//                 waterfall rows queue for the ticker (one a tick, two while
+//                 more than two wait) with the RF window they were captured
+//                 at, instead of one pending row. AI-assisted via Anthropic
+//                 Claude Code.
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
@@ -432,31 +437,10 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
     // ticker thread, slot runs on the main thread when the event loop
     // is free.  See WaterfallTicker.h for the cadence-isolation rationale.
     connect(m_waterfallTicker, &WaterfallTicker::tick, this, [this]() {
-        // Push on tick, EXCEPT while the TX analyzer owns the waterfall.
-        //
-        // "Always" was right when this was the only writer. During transmit
-        // it is not: pushTxWaterfallRow feeds rows straight in at the
-        // analyzer's own frame rate, and this ticker went on re-pushing the
-        // last cached RX row alongside them. Two writers at two cadences
-        // interleave, which paints the waterfall in horizontal bands of
-        // transmit and stale receive. Bench 2026-08-05, and it is the
-        // scanline artifact in that report.
-        //
-        // The cache write is already gated in updateSpectrumLinear, so the
-        // contents here are frozen RX data during transmit -- there is
-        // nothing worth drawing even if the cadence did line up.
-        if (m_txExternalWaterfall) {
+        if (m_waterfallTickerPausedForTest) {
             return;
         }
-        // Core controls remote waterfall cadence. Replaying a cached row
-        // would invent new waterfall time during loss or a paused session.
-        if (m_remoteSpectrum && !m_pendingWfPixelsDbmDirty) {
-            return;
-        }
-        m_pendingWfPixelsDbmDirty = false;
-        if (!m_pendingWfPixelsDbm.isEmpty()) {
-            pushWaterfallRow(m_pendingWfPixelsDbm);
-        }
+        onWaterfallTick();
     }, Qt::QueuedConnection);
     m_waterfallTickerThread->start();
     m_waterfallTicker->setUpdatePeriodMs(m_wfUpdatePeriodMs);
@@ -1383,6 +1367,10 @@ void SpectrumWidget::clearRemoteSpectrum()
     m_dss.clear();
     m_dssRowsPushed = 0;
     m_dssScrollProgressRows = 0.0f;
+    // R-R3-21: rows not yet drawn go with the history. A renewal
+    // (invalidateRemoteSpectrumFrame) keeps them: each carries the RF window
+    // it was captured at.
+    m_remoteRowQueue.clear();
     clearWaterfallHistory();
 }
 
@@ -1427,6 +1415,40 @@ void SpectrumWidget::setRemoteSpectrumContext(const SpectrumEndpointContext& con
     }
 }
 
+void SpectrumWidget::onWaterfallTick()
+{
+    // Push on tick, EXCEPT while the TX analyzer owns the waterfall.
+    //
+    // "Always" was right when this was the only writer. During transmit
+    // it is not: pushTxWaterfallRow feeds rows straight in at the
+    // analyzer's own frame rate, and this ticker went on re-pushing the
+    // last cached RX row alongside them. Two writers at two cadences
+    // interleave, which paints the waterfall in horizontal bands of
+    // transmit and stale receive. Bench 2026-08-05, and it is the
+    // scanline artifact in that report.
+    //
+    // The cache write is already gated in updateSpectrumLinear, so the
+    // contents here are frozen RX data during transmit -- there is
+    // nothing worth drawing even if the cadence did line up.
+    if (m_txExternalWaterfall) {
+        // R-R3-21: receive rows queued meanwhile are superseded by the
+        // transmit rows, as the one pending row was; none plays out late.
+        m_remoteRowQueue.clear();
+        return;
+    }
+    // Core controls remote waterfall cadence. Replaying a cached row
+    // would invent new waterfall time during loss or a paused session;
+    // R-R3-21: a remote pan draws only the rows its queue holds.
+    if (m_remoteSpectrum) {
+        drainRemoteWaterfallRows();
+        return;
+    }
+    m_pendingWfPixelsDbmDirty = false;
+    if (!m_pendingWfPixelsDbm.isEmpty()) {
+        pushWaterfallRow(m_pendingWfPixelsDbm);
+    }
+}
+
 bool SpectrumWidget::updateRemoteSpectrum(const DisplayCodecFrame& frame)
 {
     const auto& context = frame.context;
@@ -1463,13 +1485,77 @@ bool SpectrumWidget::updateRemoteSpectrum(const DisplayCodecFrame& frame)
     }
     updateReducedSpectrumOverlays();
     if (frame.waterfallAdvance) {
-        m_pendingWfPixelsDbm = m_wfRenderedPixels;
-        m_pendingRemoteWide = frame.wideDbm;
-        m_pendingWfPixelsDbmDirty = true;
+        // R-R3-21: queued, not one overwritten slot, so every row the Core
+        // sent is drawn in its own place.
+        m_remoteRowQueue.append({m_wfRenderedPixels, frame.wideDbm,
+                                 m_remoteExactCentreHz, m_remoteExactSpanHz});
+        while (m_remoteRowQueue.size() > kMaxRemoteRowQueue) {
+            m_remoteRowQueue.removeFirst();
+            ++m_remoteRowsDropped;
+        }
     }
     m_hasNewSpectrum = true;
     emit spectrumFrameRendered();
     return true;
+}
+
+bool SpectrumWidget::enqueueRemoteWaterfallRow(const QVector<float>& pixelsDbm,
+                                               const QVector<float>& wideDbm,
+                                               double centreHz, double spanHz)
+{
+    const auto finite = [](const QVector<float>& plane) {
+        return std::all_of(plane.cbegin(), plane.cend(),
+                           [](float value) { return std::isfinite(value); });
+    };
+    if (!m_remoteSpectrum || pixelsDbm.isEmpty() || spanHz <= 0.0
+        || !finite(pixelsDbm) || !finite(wideDbm)) {
+        return false;
+    }
+    QVector<float> pixels = pixelsDbm;
+    if (visualNotchWillDent() && qFuzzyCompare(centreHz, m_centerHz)
+        && qFuzzyCompare(spanHz, m_bandwidthHz)) {
+        applyVisualNotchDent(pixels);
+    }
+    m_remoteRowQueue.append({std::move(pixels), wideDbm, centreHz, spanHz});
+    while (m_remoteRowQueue.size() > kMaxRemoteRowQueue) {
+        m_remoteRowQueue.removeFirst();
+        ++m_remoteRowsDropped;
+    }
+    return true;
+}
+
+void SpectrumWidget::drainRemoteWaterfallRows()
+{
+    // One row a tick keeps the Core's cadence; two while more than two wait
+    // plays a late burst out over a few ticks instead of all at once.
+    const int rows = m_remoteRowQueue.size() > 2 ? 2 : int(m_remoteRowQueue.size());
+    for (int i = 0; i < rows; ++i) {
+        RemoteWaterfallRow row = m_remoteRowQueue.takeFirst();
+        if (!qFuzzyCompare(row.centreHz, m_centerHz)
+            || !qFuzzyCompare(row.spanHz, m_bandwidthHz)) {
+            // Captured before a tune or zoom: draw it at the frequency it
+            // was captured at, as the painted history was reprojected.
+            const int n = row.pixelsDbm.size();
+            const float floorDbm =
+                *std::min_element(row.pixelsDbm.cbegin(), row.pixelsDbm.cend());
+            const double oldStartHz = row.centreHz - row.spanHz / 2.0;
+            const double newStartHz = m_centerHz - m_bandwidthHz / 2.0;
+            QVector<float> moved(n, floorDbm);
+            for (int x = 0; x < n; ++x) {
+                const double hz = newStartHz + (x + 0.5) * m_bandwidthHz / n;
+                const double source = (hz - oldStartHz) / row.spanHz * n;
+                if (source >= 0.0 && source < n) {
+                    moved[x] = row.pixelsDbm.at(int(source));
+                }
+            }
+            row.pixelsDbm = std::move(moved);
+            row.wideDbm.clear();
+        }
+        m_pendingRemoteWide = row.wideDbm;
+        pushWaterfallRow(row.pixelsDbm);
+        ++m_remoteRowsPushed;
+        m_lastRemoteRowPushed = row.pixelsDbm;
+    }
 }
 
 void SpectrumWidget::setDisplayWindowPreservingHistory(double centerHz,

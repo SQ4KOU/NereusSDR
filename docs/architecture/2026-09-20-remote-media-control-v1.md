@@ -724,6 +724,55 @@ as play time. The newest sample's delay is reduced by that stretch, the
 play time the rate matcher made (everything ahead of the newest sample but
 the codec's delay) times `1 - 1 / ratio`, using the ratio at the reading.
 
+## Display on the audio's clock (displayClockVersion)
+
+Capability `displayClockVersion=1` (R-R3-21, R-R3-08) says the Core stamps
+every display frame's `producerTimestamp` (the display codec header) and the
+`clock-echo`'s `t1`, `t2` and `capturedNs` from one clock: its monotonic
+producer clock, steady nanoseconds since that clock's epoch. No message
+changes shape. The Core advertises it whenever media is on; it is sent in
+the minor-11 capability block after `stationRadiosVersion`. Before it, the
+echo's times counted from the start of each session's media, so no window
+could relate them to a display frame.
+
+A window facing such a Core presents each spectrum trace and waterfall row
+at its `producerTimestamp` plus the Core-to-window map, and sends clock
+probes while it shows a display, whether or not audio plays. The map is the
+measured audio delay minus the clock offset, that is the time a sample
+plays here minus the Core time it was captured, so a display frame appears
+when the audio captured with it is heard. The offset's own error cancels.
+The map follows the audio's delay: a change of 15 ms or more (a hold
+deepened after a stall, or shed as it eases) is taken at once, smaller ones
+are smoothed over 500 ms. With no audio playing (muted, no stream, a restart
+before its first echo) the window uses the last delay the audio had, or,
+before any, half the round trip plus the audio's 80 ms base hold, against
+the current offset. After an audio restart it keeps the last map until the
+next echo. An item the map would hold longer than 1.5 s is shown at once.
+A window without a map (an older Core, or no echo yet) draws each frame on
+arrival, as before.
+
+Between the transport and the widget the window keeps the decoded frames of
+each pan in order. A lost display message makes the decoder refuse the
+chain until a keyframe (requested as before, at most one per 200 ms); while
+it waits, each row slot that passes with nothing to show repeats the last
+good row. When the next good row arrives, the slots between it and the last
+good row that have not repeated are filled with rows blended linearly (in
+dBm) from the last good row to it, each at its own slot time, so the time
+axis stays true. Gaps in `producerTimestamp` without a loss (rows the Core
+never sent) are blended the same way; a gap of more than 64 rows is a pause
+and is not filled. The row period is `framesPerLine` frames at the context's
+`fps`. The widget queues up to 32 rows and draws one a waterfall tick, two
+while more than two wait. Only incoming content waits: tuning, the pan,
+zoom and every overlay move at once, and a row captured before a tune is
+drawn at the frequency it was captured at.
+
+The window's diagnostics line carries `displayKeyframeWaits`,
+`displayKeyframeRequests`, `displayRowsBlended`, `displayRowsRepeated`,
+`displayLargestArrivalGapMs` and `displayDelayMs`. The Core logs each
+keyframe request, and its display diagnostics line counts them
+(`keyframeRequests`, `keyframeRequestsRefused` for those over its five a
+second).
+
 The audio enable/context lifecycle, playback buffering and adaptive session
 budget are still being implemented. Their acceptance remains open in the
 [R3 plan](2026-09-20-remote-daemon-r3-plan.md); this document does not claim

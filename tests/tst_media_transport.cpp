@@ -257,6 +257,7 @@ private slots:
     void stalledReceiverRefusesDisplayInsteadOfQueueing();
     void heldDisplayMessageIsTakenAndSignalsWritable();
     void queuedDisplayOverflowDropsOldestAndCountsIt();
+    void heldBurstAfterAStallIsDeliveredWhole();
     void telemetryCountsValidatedTrafficAndResets();
     void boundedInputsRefuseBeforeTransport();
     void stopCancelsOldCallbacksAndRecreates();
@@ -578,13 +579,13 @@ void TestMediaTransport::queuedDisplayOverflowDropsOldestAndCountsIt()
 
     QList<QByteArray> sent;
     quint64 sentBytes = 0;
-    for (int i = 0; i < 9; ++i) {
+    for (int i = 0; i < 33; ++i) {
         sent.append(QStringLiteral("queued-display-%1").arg(i).toUtf8());
         sentBytes += quint64(sent.last().size());
         QVERIFY(offerer.sendDisplay(sent.last()));
     }
     // Keep this thread out of its event loop, so no drain runs, until the
-    // library has delivered all nine messages into the receive queue.
+    // library has delivered all 33 messages into the receive queue.
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     while (answerer.telemetry()->receivedDisplayPayloadBytes < sentBytes
            && std::chrono::steady_clock::now() < deadline) {
@@ -593,22 +594,66 @@ void TestMediaTransport::queuedDisplayOverflowDropsOldestAndCountsIt()
     QCOMPARE(answerer.telemetry()->receivedDisplayPayloadBytes, sentBytes);
     QCOMPARE(answerer.telemetry()->displayMessagesDropped, quint64(1));
 
-    // One drain hands over the newest eight; the eight-message rule dropped
-    // exactly one, and received bytes still count all nine arrivals.
-    QTRY_COMPARE_WITH_TIMEOUT(displayReceived.count(), 8, 5000);
+    // One drain hands over the newest 32; the 32-message rule dropped
+    // exactly one, and received bytes still count all 33 arrivals.
+    QTRY_COMPARE_WITH_TIMEOUT(displayReceived.count(), 32, 5000);
     QTest::qWait(50);
-    QCOMPARE(displayReceived.count(), 8);
+    QCOMPARE(displayReceived.count(), 32);
     QSet<QByteArray> delivered;
     for (const QList<QVariant>& arguments : displayReceived) {
         delivered.insert(arguments.at(0).toByteArray());
     }
-    QCOMPARE(delivered.size(), 8);
+    QCOMPARE(delivered.size(), 32);
     for (const QByteArray& message : delivered) {
         QVERIFY(sent.contains(message));
     }
     QCOMPARE(answerer.telemetry()->displayMessagesDropped, quint64(1));
     QCOMPARE(answerer.telemetry()->receivedDisplayPayloadBytes, sentBytes);
     QCOMPARE(offerer.telemetry()->displayMessagesDropped, quint64(0));
+
+    offerer.stop();
+    answerer.stop();
+}
+
+// R-R3-21: a link stall holds display messages in SCTP, then releases them
+// back to back into one drain. A 460 ms stall at 30 frames a second is 14
+// messages; every one reaches the window, none is dropped.
+void TestMediaTransport::heldBurstAfterAStallIsDeliveredWhole()
+{
+    LibDataChannelMediaTransport offerer;
+    LibDataChannelMediaTransport answerer;
+    QSignalSpy displayReceived(&answerer, &IMediaTransport::displayReceived);
+    startPair(offerer, answerer);
+
+    // The largest delta the operator's Core logged: 2150 bytes, 3 fragments.
+    constexpr qsizetype kDeltaBytes = 2150;
+    constexpr int kHeld = 14;
+    answerer.setDisplayReceiveStalledForTest(true);
+    QList<QByteArray> sent;
+    quint64 sentBytes = 0;
+    for (int i = 0; i < kHeld; ++i) {
+        QByteArray message(kDeltaBytes, char('a' + i));
+        sent.append(message);
+        sentBytes += quint64(message.size());
+        QVERIFY(offerer.sendDisplay(message));
+    }
+    QTest::qWait(100);
+    // Release, then keep this thread out of its event loop until the whole
+    // burst sits in the receive queue, so it arrives in one drain.
+    answerer.setDisplayReceiveStalledForTest(false);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (answerer.telemetry()->receivedDisplayPayloadBytes < sentBytes
+           && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    QCOMPARE(answerer.telemetry()->receivedDisplayPayloadBytes, sentBytes);
+    QTRY_COMPARE_WITH_TIMEOUT(displayReceived.count(), kHeld, 5000);
+    QTest::qWait(50);
+    QCOMPARE(displayReceived.count(), kHeld);
+    QCOMPARE(answerer.telemetry()->displayMessagesDropped, quint64(0));
+    for (int i = 0; i < kHeld; ++i) {
+        QCOMPARE(displayReceived.at(i).at(0).toByteArray(), sent.at(i));
+    }
 
     offerer.stop();
     answerer.stop();

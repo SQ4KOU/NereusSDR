@@ -898,13 +898,15 @@ private slots:
         // then parity Task 16's dspInfoVersion.
         // Then parity Task 19's recordStreamVersion.
         // Then parity Task 21's stationRadiosVersion.
-        QCOMPARE(updates.at(updates.size() - 7).name, QByteArray("displayExtrasVersion"));
-        QCOMPARE(updates.at(updates.size() - 6).name, QByteArray("transmitSettingsVersion"));
-        QCOMPARE(updates.at(updates.size() - 5).name, QByteArray("bandSelectVersion"));
-        QCOMPARE(updates.at(updates.size() - 4).name, QByteArray("meterReadingsVersion"));
-        QCOMPARE(updates.at(updates.size() - 3).name, QByteArray("dspInfoVersion"));
-        QCOMPARE(updates.at(updates.size() - 2).name, QByteArray("recordStreamVersion"));
-        QCOMPARE(updates.last().name, QByteArray("stationRadiosVersion"));
+        QCOMPARE(updates.at(updates.size() - 8).name, QByteArray("displayExtrasVersion"));
+        QCOMPARE(updates.at(updates.size() - 7).name, QByteArray("transmitSettingsVersion"));
+        QCOMPARE(updates.at(updates.size() - 6).name, QByteArray("bandSelectVersion"));
+        QCOMPARE(updates.at(updates.size() - 5).name, QByteArray("meterReadingsVersion"));
+        QCOMPARE(updates.at(updates.size() - 4).name, QByteArray("dspInfoVersion"));
+        QCOMPARE(updates.at(updates.size() - 3).name, QByteArray("recordStreamVersion"));
+        QCOMPARE(updates.at(updates.size() - 2).name, QByteArray("stationRadiosVersion"));
+        // Then R-R3-21's displayClockVersion.
+        QCOMPARE(updates.last().name, QByteArray("displayClockVersion"));
         QCOMPARE(StationCapabilities::fromUpdates(updates).displayExtrasVersion, 2);
         // An older peer's block (no minor-11 entries) carries none.
         StationCapabilities older;

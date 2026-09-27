@@ -383,6 +383,8 @@ void RemoteTelemetryController::logDiagnostics(qint64 now) const
     // computer's load from this one line. Absent values say so.
     const auto& p = m_view.playback;
     const StationHostTelemetry host = m_station ? m_station->host : StationHostTelemetry{};
+    const RemoteDisplayTelemetry display =
+        m_media ? m_media->displayTelemetry() : RemoteDisplayTelemetry{};
     const std::optional<double> driftPpm = p.driftRatio
         ? std::optional<double>((*p.driftRatio - 1.0) * 1'000'000.0) : std::nullopt;
     QStringList fields;
@@ -425,6 +427,14 @@ void RemoteTelemetryController::logDiagnostics(qint64 now) const
                   : QStringLiteral("not measured"))
            << QStringLiteral("deliveryDelayMs=%1").arg(logged(m_view.audioDelay.estimate
                   ? m_view.audioDelay.estimate->deliveryMs : std::nullopt))
+           // R-R3-21 / R-R3-08: the display on the audio's clock and how it
+           // rode through the link.
+           << QStringLiteral("displayKeyframeWaits=%1").arg(display.keyframeWaits)
+           << QStringLiteral("displayKeyframeRequests=%1").arg(display.keyframeRequests)
+           << QStringLiteral("displayRowsBlended=%1").arg(display.rowsBlended)
+           << QStringLiteral("displayRowsRepeated=%1").arg(display.rowsRepeated)
+           << QStringLiteral("displayLargestArrivalGapMs=%1").arg(logged(display.largestArrivalGapMs))
+           << QStringLiteral("displayDelayMs=%1").arg(logged(display.displayDelayMs))
            << QStringLiteral("coreTelemetryAgeMs=%1").arg(logged(m_station
                   ? std::optional<qint64>(qMax<qint64>(0, now - m_stationReceivedMs)) : std::nullopt))
            << QStringLiteral("coreSystemCpuPercent=%1").arg(logged(host.systemCpuPercent))

@@ -249,6 +249,9 @@ void TstTransmitSettingsGate::olderCoreOffersNoTransmitSettings()
     // meterReadingsVersion, parity Task 16's dspInfoVersion and parity Task
     // 19's recordStreamVersion and parity Task 21's stationRadiosVersion; a
     // Core from before them sends none.
+    // R-R3-21's displayClockVersion is last.
+    QCOMPARE(updates.last().name, QByteArrayLiteral("displayClockVersion"));
+    updates.removeLast();
     QCOMPARE(updates.last().name, QByteArrayLiteral("stationRadiosVersion"));
     updates.removeLast();
     QCOMPARE(updates.last().name, QByteArrayLiteral("recordStreamVersion"));

@@ -1596,6 +1596,8 @@ set(GUI_SOURCES
     src/gui/NetworkDiagnosticsDialog.h
     src/gui/AudioClockEstimator.cpp
     src/gui/AudioClockEstimator.h
+    src/gui/RemoteDisplayPresenter.cpp
+    src/gui/RemoteDisplayPresenter.h
     src/gui/TelemetryHistory.cpp
     src/gui/TelemetryHistory.h
     src/gui/TimeSeriesGraphWidget.h
