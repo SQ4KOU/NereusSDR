@@ -535,6 +535,12 @@
 //                (applyTxDspOptionsBeforeKey on txAboutToBegin), so no key
 //                path transmits at the channel's open sizes. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-27 - R-IOS-13 / R-R3-49 (txModMonitorVersion 1): the AM Mod
+//                Monitor in a remote window. setAmModTxTapEnabled,
+//                applyModMonitorSetting and the window's copy of the Core's
+//                txAmModulation / txAmModulationFeedback streams
+//                (stationModMonitorSnapshot). NereusSDR-original. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -748,6 +754,7 @@ warren@wpratt.com
 #include "RadioModel.h"
 #include "core/session/RemoteDevicesState.h"
 #include "core/AmModulationAnalyzer.h"
+#include "core/session/ModMonitorRecord.h"
 #include "BandDefaults.h"
 #include "BandGrid.h"
 #include "RxDspWorker.h"
@@ -3955,6 +3962,22 @@ StationSpotLook stationSpotLook(const QString& source)
 
 void RadioModel::applyStationRecordBatch(const RecordBatch& batch)
 {
+    // R-IOS-13 / R-R3-49 (txModMonitorVersion 1): the Core's AM Mod
+    // Monitor readings, one record per source; a reset or a remove means
+    // the Core sends none now.
+    const int modMonitorSource = ModMonitorRecord::sourceOfStream(batch.stream);
+    if (modMonitorSource >= 0) {
+        auto& held = m_stationModMonitor[static_cast<std::size_t>(modMonitorSource)];
+        if (batch.reset || !batch.removes.isEmpty()) {
+            held.reset();
+        }
+        for (const RecordUpsert& u : batch.upserts) {
+            if (u.id == QLatin1String(ModMonitorRecord::kRecordId)) {
+                held = ModMonitorRecord::fromFields(u.fields);
+            }
+        }
+        return;
+    }
     // Parity Task 21 (R-IOS-18): the Core's radios, in the Core's order.
     if (batch.stream == QLatin1String("stationRadios")) {
         QList<StationRadioEntry> entries = batch.reset ? QList<StationRadioEntry>{}
@@ -4097,6 +4120,7 @@ void RadioModel::clearStationRecords()
     clearStationRadios();
     clearStationSpots();
     clearStationFreedv();
+    clearStationModMonitor();
 }
 
 void RadioModel::clearStationFreedv()
@@ -14141,10 +14165,13 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
                 return;
             }
             m_txChannel->setConnection(m_connection);
-            // AM Mod Monitor: tap the TX I/Q at the radio's TX rate.
+            // AM Mod Monitor: tap the TX I/Q at the radio's TX rate. On a
+            // Core the tap waits for a watching device
+            // (setAmModTxTapEnabled, ModMonitorPublisher).
             if (m_amModTx) {
                 m_amModTx->setSampleRate(txOutRate);
-                m_txChannel->setAmModulationTap(m_amModTx.get());
+                m_txChannel->setAmModulationTap(
+                    m_amModTxTapEnabled.load() ? m_amModTx.get() : nullptr);
             }
 
             // Task 4.2: give TxChannel a handle to WdspEngine so onModeChanged()
@@ -18091,6 +18118,40 @@ void RadioModel::setAmModFeedbackStream(int streamIndex)
 void RadioModel::setAmModFeedbackWanted(bool wanted)
 {
     m_amModFbWanted.store(wanted, std::memory_order_release);
+}
+
+void RadioModel::setAmModTxTapEnabled(bool enabled)
+{
+    m_amModTxTapEnabled.store(enabled, std::memory_order_release);
+    if (m_txChannel) {
+        m_txChannel->setAmModulationTap(enabled && m_amModTx ? m_amModTx.get() : nullptr);
+    }
+}
+
+void RadioModel::applyModMonitorSetting(const QString& key, const QVariant& value)
+{
+    // The key the local applet's receiver box writes (ModMonitorApplet
+    // kKeyFbStream); a removal returns its default, rx1.
+    if (key != QLatin1String("ModMon/FbStream")) {
+        return;
+    }
+    bool ok = false;
+    const int stream = value.isValid() ? value.toString().toInt(&ok) : 1;
+    setAmModFeedbackStream(value.isValid() && !ok ? 1 : stream);
+}
+
+std::optional<AmModulationAnalyzer::Snapshot> RadioModel::stationModMonitorSnapshot(int source) const
+{
+    if (source != 0 && source != 1) {
+        return std::nullopt;
+    }
+    return m_stationModMonitor[static_cast<std::size_t>(source)];
+}
+
+void RadioModel::clearStationModMonitor()
+{
+    m_stationModMonitor[0].reset();
+    m_stationModMonitor[1].reset();
 }
 
 void RadioModel::applyTxAntennaFromBoundSlice()

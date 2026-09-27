@@ -582,6 +582,13 @@
 //               controlSwitchVersion and relayAllowed; media after a move
 //               keeps the service's STUN server. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-27: R-IOS-13 / R-R3-49 (iPhone plan Task 39 row A10):
+//               txModMonitorVersion 1, after relayAllowed: the AM Mod
+//               Monitor's readings on the txAmModulation and
+//               txAmModulationFeedback streams (ModMonitorPublisher),
+//               txModMonitor.reset, and a window's ModMon/FbStream applied
+//               to the Core's feedback analyzer. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -589,6 +596,8 @@
 #include "core/TxSliceArbiter.h"
 #include "core/session/DataChannelTransport.h"
 #include "core/session/SwitchableTransport.h"
+#include "core/session/ModMonitorPublisher.h"
+#include "core/session/ModMonitorRecord.h"
 
 #include "core/AppSettings.h"
 #include "core/BoardCapabilities.h"
@@ -671,6 +680,7 @@
 #include <QWebSocketServer>
 
 #include <algorithm>
+#include <array>
 #include <cstdio>
 
 namespace NereusSDR {
@@ -1874,6 +1884,8 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     // Parity Task 19 (R-IOS-25): the record streams follow the Core's spots
     // and its spot sources' consoles from here on.
     setUpRecordStreams();
+    // R-IOS-13 / R-R3-49: and the AM Mod Monitor's two streams.
+    setUpModMonitorStreams();
 
     connect(m_devicesFacade.get(), &StationDevicesFacade::tokenRetired, this, [this]() {
         endAuthenticatedPeers([](const Peer& peer) { return peer.signedInWithToken; },
@@ -2009,7 +2021,12 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
         if (m_dispatchingTransport == nullptr) {
             return false;
         }
-        handleRecordsCommand(m_dispatchingTransport, invoke);
+        // R-IOS-13 / R-R3-49: the Mod Monitor's reset is the Core's too.
+        if (invoke.commandVerb == "txModMonitor.reset") {
+            handleModMonitorReset(m_dispatchingTransport, invoke);
+        } else {
+            handleRecordsCommand(m_dispatchingTransport, invoke);
+        }
         m_resultSentInDispatch = true;
         return true;
     });
@@ -3205,6 +3222,10 @@ void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
     for (auto& [name, stream] : m_recordStreams) {
         Q_UNUSED(name);
         stream->unsubscribe(transport);
+    }
+    // R-IOS-13 / R-R3-49: the Mod Monitor stops with its last watcher.
+    if (m_modMonitor) {
+        m_modMonitor->subscriptionsChanged();
     }
     if (!view.isNull()) {
         view->close();
@@ -5576,6 +5597,9 @@ bool StationServer::applySettingsWrite(SessionTransport* transport, const Sessio
         // on and off the air, as the local page's change does. It changes
         // only the display, never the radio.
         m_radioModel->applyRemoteTxDisplaySetting(key);
+        // R-IOS-13 / R-R3-49 (txModMonitorVersion 1): the Mod Monitor's
+        // feedback receiver reaches the Core's feedback analyzer at once.
+        m_radioModel->applyModMonitorSetting(key, m_settings.value(key));
     }
     // D79: the Core's own band plan follows BandPlanName.
     applyBandPlanSetting(key);
@@ -5693,6 +5717,8 @@ void StationServer::applySettingsRemove(const SessionMessage& message)
         m_radioModel->applyMeterSetting(key, QVariant());
         // R-R3-49 (parity Task 30): the TX Display analyzer default.
         m_radioModel->applyRemoteTxDisplaySetting(key);
+        // R-IOS-13 / R-R3-49: the Mod Monitor's feedback receiver, rx1.
+        m_radioModel->applyModMonitorSetting(key, QVariant());
     }
     // D79: removing BandPlanName returns the Core to ARRL (US).
     applyBandPlanSetting(key);
@@ -7354,6 +7380,12 @@ int StationServer::stationFreedvVersion() const
         : 0;
 }
 
+int StationServer::txModMonitorVersion() const
+{
+    // R-IOS-13 / R-R3-49: the Core's own analyzers, on the record streams.
+    return recordStreamVersion() >= 1 && m_modMonitor != nullptr ? 1 : 0;
+}
+
 int StationServer::mediaReplaceVersion() const
 {
     // iPhone app plan Task 29 (R-IOS-16): the media `replace` operation,
@@ -7912,6 +7944,9 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             caps.mediaReplaceVersion = media ? mediaReplaceVersion() : 0;
             caps.controlSwitchVersion = controlSwitchVersion();
             caps.relayAllowed = m_relayAllowed;
+            // R-IOS-13 / R-R3-49: the AM Mod Monitor's readings, appended
+            // after relayAllowed.
+            caps.txModMonitorVersion = txModMonitorVersion();
             // iPhone app Task 71 (ruling 10.1): several devices at once, for
             // a peer that declared sessionHolder with deviceAuth; any other
             // peer is sent no entry, so its capabilities are today's.
@@ -8154,6 +8189,11 @@ void StationServer::flushRecordStreams()
             }
         }
     }
+    // R-IOS-13 / R-R3-49: what the Mod Monitor waited to send went; its
+    // next window of peaks starts.
+    if (m_modMonitor) {
+        m_modMonitor->flushed();
+    }
 }
 
 void StationServer::handleRecordsCommand(SessionTransport* transport, const SessionMessage& message)
@@ -8200,6 +8240,9 @@ void StationServer::handleRecordsCommand(SessionTransport* transport, const Sess
     if (!subscribe) {
         it->second->unsubscribe(transport);
         answer(true, QString());
+        if (m_modMonitor) {
+            m_modMonitor->subscriptionsChanged();
+        }
         return;
     }
     // The answer, then the backlog as a reset: the peer's copy starts from
@@ -8208,6 +8251,65 @@ void StationServer::handleRecordsCommand(SessionTransport* transport, const Sess
     const RecordBatch first = it->second->subscribe(transport, wanted);
     answer(true, QString());
     send(transport, SessionMessages::recordBatch(first));
+    // R-IOS-13 / R-R3-49: a Mod Monitor watcher starts the Core's reads.
+    if (m_modMonitor) {
+        m_modMonitor->subscriptionsChanged();
+    }
+}
+
+// ── R-IOS-13 / R-R3-49 (txModMonitorVersion 1): the AM Mod Monitor ────────
+
+void StationServer::setUpModMonitorStreams()
+{
+    if (m_radioModel.isNull() || recordStreamVersion() < 1) {
+        return;
+    }
+    if (m_recordFlushTimer == nullptr) {
+        m_recordFlushTimer = new QTimer(this);
+        m_recordFlushTimer->setSingleShot(true);
+        m_recordFlushTimer->setInterval(kDefaultDeltaFlushMs);
+        connect(m_recordFlushTimer, &QTimer::timeout, this, &StationServer::flushRecordStreams);
+    }
+    std::array<RecordStream*, 2> streams{};
+    for (int source = 0; source < 2; ++source) {
+        const QString name = ModMonitorRecord::streamName(source);
+        auto stream = std::make_unique<RecordStream>(name, ModMonitorRecord::kCapacity);
+        streams[static_cast<std::size_t>(source)] = stream.get();
+        m_recordStreams.emplace(name, std::move(stream));
+    }
+    // The feedback receiver a window chose, kept on the Core
+    // (ModMon/FbStream, rx1 by default, the local applet's default).
+    m_radioModel->applyModMonitorSetting(QStringLiteral("ModMon/FbStream"),
+                                         m_settings.value(QStringLiteral("ModMon/FbStream")));
+    m_modMonitor = std::make_unique<ModMonitorPublisher>(
+        m_radioModel.data(), streams[0], streams[1], [this]() { scheduleRecordFlush(); });
+}
+
+void StationServer::handleModMonitorReset(SessionTransport* transport,
+                                          const SessionMessage& message)
+{
+    const auto answer = [this, transport, &message](bool accepted, const QString& reason) {
+        send(transport, SessionMessages::commandResult(message.commandVerb, message.commandId,
+                                                       accepted, reason, {}));
+    };
+    if (m_peers.value(transport).agreedMinor < kRadioIdentitySessionProtocolMinor) {
+        answer(false, QStringLiteral("Update this app to see the Core's modulation monitor."));
+        return;
+    }
+    if (txModMonitorVersion() < 1) {
+        answer(false, QStringLiteral("This Core does not send the modulation monitor. "
+                                     "Updating the Core may help."));
+        return;
+    }
+    const bool readable = message.arguments.size() == 1
+        && message.arguments.first().name == "source"
+        && message.arguments.first().kind == MirrorWireKind::Int64;
+    const qlonglong source = readable ? message.arguments.first().value.toLongLong() : -1;
+    if ((source != 0 && source != 1) || !m_modMonitor->resetSource(static_cast<int>(source))) {
+        answer(false, QStringLiteral("The Core could not read this request."));
+        return;
+    }
+    answer(true, QString());
 }
 
 } // namespace NereusSDR

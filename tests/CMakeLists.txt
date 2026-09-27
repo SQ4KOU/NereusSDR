@@ -7881,6 +7881,17 @@ nereus_add_test(tst_remote_spots
     fakes/RemoteWindowHarness.cpp
     EXTRA_LABELS session)
 target_compile_definitions(tst_remote_spots PRIVATE NEREUS_BUILD_TESTS)
+# R-IOS-13 / R-R3-49 (iPhone plan Task 39 row A10, txModMonitorVersion 1):
+# the AM Mod Monitor in a remote window: the Core's readings on the
+# txAmModulation streams match a local window's on the same I/Q, the Core
+# spends nothing with no watcher, RESET and the feedback receiver reach the
+# Core, and below the capability the applet is disabled with its reason.
+# The in-process loopback only; nothing keys a radio.
+nereus_add_test(tst_remote_mod_monitor
+    fakes/LoopbackTransport.cpp
+    fakes/RemoteWindowHarness.cpp
+    EXTRA_LABELS session)
+target_compile_definitions(tst_remote_mod_monitor PRIVATE NEREUS_BUILD_TESTS)
 # iPhone plan Task 22 / parity Task 20 (R-IOS-26, B7.3, B7.4): FreeDV
 # Reporter at the Core: its own registration (never the Core's label), the
 # freedvStations stream in a remote window, the freedv.* verbs, the RADE

@@ -849,6 +849,7 @@ change shows as surface drift and as a change to this table.
 | `stationFreedvVersion` | 1 |
 | `mediaReplaceVersion` | 1 |
 | `controlSwitchVersion` | 1 |
+| `txModMonitorVersion` | 1 |
 | `sessionHolderVersion` | 1 |
 | `remoteTxVersion` | 2 |
 | `txStateVersion` | 2 |
@@ -1207,8 +1208,9 @@ When a feature is off, its version is 0:
 - `controlChannelVersion` (the iPhone app plan's Task 28 fix wave,
   R-IOS-16): sent only at agreed minor 11, after `displayClockVersion` in
   the minor-11 block (`txMonitorAudioVersion`, `stationFreedvVersion`,
-  `mediaReplaceVersion`, `controlSwitchVersion`, `relayAllowed`, then
-  `sessionHolderVersion` and the remote transmit entries follow it), and 1
+  `mediaReplaceVersion`, `controlSwitchVersion`, `relayAllowed`,
+  `txModMonitorVersion`, then `sessionHolderVersion` and the remote
+  transmit entries follow it), and 1
   on a Core with a bound
   certificate (section
   3.4). At 1 the Core answers an introduction through the rendezvous with
@@ -1225,8 +1227,8 @@ When a feature is off, its version is 0:
 - `txMonitorAudioVersion` (remote-window parity Task 32, R-IOS-13,
   R-R3-49): sent only at agreed minor 11, after `controlChannelVersion` in
   the minor-11 block (`stationFreedvVersion`, then this block's Task 29
-  entries, `sessionHolderVersion` and the remote transmit entries follow
-  it), and 1 while media is on and
+  entries, `txModMonitorVersion`, `sessionHolderVersion` and the remote
+  transmit entries follow it), and 1 while media is on and
   the Core runs its own
   radio model; 0 otherwise. At 1 a window may add `txMonitorAudioVersion`
   to its media `start` and then send `monitor-audio` with the route it
@@ -1247,9 +1249,10 @@ When a feature is off, its version is 0:
 - `stationFreedvVersion` (the iPhone app plan's Task 22 and remote-window
   parity Task 20, R-IOS-26, R-R3-49): sent only at agreed minor 11, after
   `txMonitorAudioVersion` in the minor-11 block (`mediaReplaceVersion`,
-  `controlSwitchVersion`, `relayAllowed`, `sessionHolderVersion` and the
-  remote transmit entries follow it), and 1 whenever
-  `recordStreamVersion` is 1 (the Core runs FreeDV Reporter itself); 0
+  `controlSwitchVersion`, `relayAllowed`, `txModMonitorVersion`,
+  `sessionHolderVersion` and the remote transmit entries follow it), and 1
+  whenever `recordStreamVersion` is 1 (the Core runs FreeDV Reporter
+  itself); 0
   otherwise. At 1 FreeDV Reporter is one of the Core's station sources
   (source name `freedvReporter`): the Core registers with its own
   callsign, grid square and status message, never its label (section
@@ -1285,6 +1288,22 @@ When a feature is off, its version is 0:
   setting's default). A device records it with the paired Core at each
   sign-in, leaves the relay out of its races while it is false, and says
   so in its attempt record (section 21.1).
+- `txModMonitorVersion` (R-IOS-13, R-R3-49; the iPhone app plan's Task 39,
+  parity row A10): sent only at agreed minor 11, after `relayAllowed`, the
+  last entry every minor-11 peer is sent (`sessionHolderVersion` and the
+  remote transmit entries follow it), and 1 whenever `recordStreamVersion`
+  is 1 (the Core runs its own AM modulation analyzers); 0 otherwise. At 1
+  the Core sends the AM Mod Monitor's readings on the `txAmModulation`
+  (the transmit I/Q it sends its radio) and `txAmModulationFeedback` (the
+  PureSignal feedback receiver, the PA's output) record streams (section
+  7.7), takes `txModMonitor.reset` (section 9.1), and applies a window's
+  `ModMon/FbStream` (section 8.1). A window subscribes to one of the two
+  streams only while its Mod Monitor is shown, and again after each
+  snapshot. On a Core that sends 0 or no entry a window shows its Mod
+  Monitor, docked or popped out, disabled with "This Core does not send
+  the modulation monitor. Updating the Core may help.", its readings
+  blank; with no Core connected it says "Connect to the Core to see the
+  modulation monitor.".
 
 - `sessionHolderVersion`: sent only at agreed minor 11, last, and only to
   a peer whose hello declared `sessionHolder` 1 with `deviceAuth` 1; any
@@ -1501,12 +1520,13 @@ older window sees only the values it was built for.
 | 64 | `mediaReplaceVersion` | `i64` |
 | 65 | `controlSwitchVersion` | `i64` |
 | 66 | `relayAllowed` | `bool` |
-| 67 | `sessionHolderVersion` | `i64` |
-| 68 | `remoteTxVersion` | `i64` |
-| 69 | `txRefusalCode` | `utf8` |
-| 70 | `txRefusalReason` | `utf8` |
-| 71 | `txRefusalFix` | `utf8` |
-| 72 | `txStateVersion` | `i64` |
+| 67 | `txModMonitorVersion` | `i64` |
+| 68 | `sessionHolderVersion` | `i64` |
+| 69 | `remoteTxVersion` | `i64` |
+| 70 | `txRefusalCode` | `utf8` |
+| 71 | `txRefusalReason` | `utf8` |
+| 72 | `txRefusalFix` | `utf8` |
+| 73 | `txStateVersion` | `i64` |
 
 <!-- /surface -->
 
@@ -3271,6 +3291,8 @@ keeps:
 | `spotConsole:<source>` | 200 | One console line of a station source (`dxCluster`, `rbn`, `pota`, `pskReporter`, and with `stationFreedvVersion` 1 `freedvReporter`), `id` a rising number: `line` (string). A command typed from any device shows as `> <command>` |
 | `freedvStations` | 1000 | With `stationFreedvVersion` 1: one station FreeDV Reporter lists, as the Core hears it, `id` its FreeDV Reporter session id: the FreeDV Reporter dialog's 14 columns, `callsign`, `gridSquare` (strings), `distanceKm` and `headingDeg` (numbers, from the Core's own grid square; 0 with `headingCardinal` empty while either grid square is not known), `headingCardinal` (string, `N` to `NNW`), `version` (string), `frequencyHz` (number, whole Hz, 0 not known), `txMode` (string), `status` (string: `Active`, `TX` or `RX Only`), `userMessage` (string), `lastTxUtc` (string, ISO 8601 UTC, empty when never), `lastRxCallsign`, `lastRxMode` (strings), `snrDb` (number, -99 not known) and `lastUpdateUtc` (string, ISO 8601 UTC, empty when not known); then `transmitting` (boolean), `receivingFrom` (string: whom its latest receive report heard, the last callsign it named, while that report stands; empty once a frequency change clears it), `messageChangedAtMs` (number, the Core's clock in ms since the epoch when `userMessage` last changed, 0 never) and `lastRxUtc` (string, ISO 8601 UTC, when its latest receive report came, empty when none stands). The list starts again (a reset) each time the Core's connection to FreeDV Reporter connects or ends |
 | `stationRadios` | 64 | With `stationRadiosVersion` 1: one radio the Core can see, the Core's radio first, `id` its MAC in upper case: `id` and `mac` (strings, the same), `name` (string, as the radio reports itself), `model` (number, the `hpsdrModel` the Core runs it as: its saved override, else its board's), `address` (string, its IP address, empty when not known), `protocol` (number, 1 or 2) and `inUse` (boolean, true for the Core's radio). The list is what the Core's last scan found, with the Core's radio; a radio stays listed after it drops off until a scan misses it |
+| `txAmModulation` | 1 | With `txModMonitorVersion` 1: the AM Mod Monitor's readings of the transmit I/Q the Core sends its radio (its TX tap, `AmModulationAnalyzer`), one record, `id` `0`, present only while the radio is keyed in AM, SAM or DSB (the transmit slice's mode) and a peer subscribes: `atMs` (number, the Core's clock in ms since the epoch when it read them), `posPeakPct` and `negPeakPct` (numbers, the positive and negative peak modulation in percent since the Core's previous record: the largest of the reads it merged), `posHoldPct` and `negHoldPct` (numbers, the peaks held 1.5 s, then falling as the Core's analyzer lets them fall), `carrierLevel` (number, the carrier in linear envelope units, 0 to 1 at the radio's full scale), `carrierDbfs` (number, that in dB, -120 with no carrier), `carrierPresent`, `carrierLow` and `carrierHigh` (booleans: a carrier is measured, below 0.05, above 0.98), `scopeRateHz` (number, the rate of the scope's points) and `scopePctTenths` (string: the envelope trace, oldest first, each point's percent modulation in tenths as a little-endian int16, in base64; at most 512 points, a longer trace reduced by keeping the largest-magnitude point of each group). Asymmetry is `posHoldPct` minus `negHoldPct` |
+| `txAmModulationFeedback` | 1 | With `txModMonitorVersion` 1: the same record for the PureSignal feedback receiver (the PA's output as the radio samples it), on the receiver `ModMon/FbStream` names (section 8.1); present under the same rule, and measured only while PureSignal's feedback runs on the Core's radio |
 
 A peer asks with `records.subscribe {stream, backlog}` (section 9.1); the
 Core answers, then sends at once a `record.batch` with `reset` true
@@ -3296,6 +3318,26 @@ capacity; when it would, the waiting changes are dropped and the peer is
 sent a reset instead, carrying the newest records up to its backlog, so
 the oldest records are the ones lost, never queued without limit
 (`RecordStream`).
+
+**The AM Mod Monitor's streams** (`txModMonitorVersion` 1). The Core
+spends nothing on them until a peer subscribes: with no subscriber it
+reads neither analyzer and feeds neither (its TX tap is off the transmit
+channel and the feedback fork is off). While a peer subscribes to a
+stream, the Core reads that stream's analyzer every 33 ms (the Mod
+Monitor's own refresh) while the radio is keyed in AM, SAM or DSB, and
+upserts the one record; records go out in the 50 ms flush, so a record
+carries the largest window peaks of the reads since the last one sent. At
+the key, or when a stream is first watched during one, the Core starts
+the analyzer afresh. When the key ends, the mode leaves AM, SAM and DSB,
+or the last subscriber leaves, the Core stops feeding it and removes the
+record: a window then shows no carrier. `txModMonitor.reset {source}`
+(section 9.1; 0 `txAmModulation`, 1 `txAmModulationFeedback`) starts that
+analyzer afresh for everyone watching, as a local window's RESET does its
+own. A window watches one stream (its Mod Monitor's TX I/Q or PA FB
+choice), backlog 1, only while its Mod Monitor is shown, and again after
+each snapshot; it puts each record through the local Mod Monitor's own
+display (bars, holds, flashers, lamps), so it shows what a local window
+shows for the same I/Q, and drops the readings when the session ends.
 
 A window subscribes to `spots` (backlog 500) and to each station source's
 console (backlog 200) once its snapshot is complete, again on every
@@ -3404,6 +3446,7 @@ computer, never sent). `classifySettingsKey` (`SettingsScope.cpp`) decides:
 | 3. whole key | `RemoteMoxTimeOutEnabled` | station |
 | 3. whole key | `RemoteMoxTimeOutSeconds` | station |
 | 3. whole key | `RxOnly` | station |
+| 3. whole key | `ModMon/FbStream` | station |
 | 3. whole key | `DisableHfPa` | operatorLocal |
 | 3. whole key | `ExtendedTxAllowed` | operatorLocal |
 | 3. whole key | `PreventTxOnDifferentBandToRx` | operatorLocal |
@@ -3480,6 +3523,14 @@ Multimeter > Polling delay), or its removal, sets the Core's meter pump
 rate at once, clamped to 10 to 2000 ms (a removal returns the 100 ms
 default); it only changes how often the Core reads its meters, so it is
 taken on and off the air, as a local window changes it. At
+`txModMonitorVersion` 1 a taken `ModMon/FbStream` (the AM Mod Monitor's
+feedback receiver, `0` to `4`, rx1 by default), or its removal, sets the
+receiver the Core's feedback analyzer listens to at once, as the local
+applet's receiver box does; text that is not a number returns rx1. It
+changes only what the Core measures, never the radio, so it is taken on
+and off the air. The applet's other keys (`ModMon/Source`,
+`ModMon/PosFlashPct`, `ModMon/NegFlashPct`, `ModMon/VintageMeters`) are
+each window's own. At
 `txDisplayVersion` 2 a taken Setup > Display > TX Display analyzer key
 (`DisplayTxFftSize`, `DisplayTxWindowType`, `DisplayTxPanDetector`,
 `DisplayTxPanAveraging`, `DisplayTxPanAvTimeMs`, `DisplayTxPanNormalize`,
@@ -3684,6 +3735,7 @@ refused.
 | `spots.disconnect` | `source` utf8 | `recordStreamVersion` | 1 | 11 |
 | `spots.sendCommand` | `source` utf8, `text` utf8 | `recordStreamVersion` | 1 | 11 |
 | `spots.clearAll` | none | `recordStreamVersion` | 1 | 11 |
+| `txModMonitor.reset` | `source` i64 | `txModMonitorVersion` | 1 | 11 |
 | `station.selectRadio` | `mac` utf8 | `stationRadiosVersion` | 1 | 11 |
 | `station.rescanRadios` | none | `stationRadiosVersion` | 1 | 11 |
 | `station.setRadioModel` | `mac` utf8, `model` i64 | `stationRadiosVersion` | 1 | 11 |
@@ -3909,6 +3961,18 @@ These command groups need a sentence beyond the table:
   Reporter now." and "The Core could not read this request.". A window
   shows a refusal on its FreeDV tab and, while it is open, beside the
   FreeDV Reporter dialog.
+- **The AM Mod Monitor's reset** (R-IOS-13, R-R3-49, `txModMonitorVersion`
+  1). `txModMonitor.reset` (`source` i64: 0 the transmit I/Q, 1 the PA
+  feedback) starts the Core's analyzer for that source afresh (its carrier
+  estimate, peaks, hold and scope), the local Mod Monitor's RESET; every
+  device watching that stream sees it (section 7.7). It reaches neither
+  the radio nor the key, so it is answered on and off the air and is not
+  on the several-devices list (section 7.6). Refusals: "The Core could not
+  read this request." (a source other than 0 or 1, or a missing or wrong
+  argument), "This Core does not send the modulation monitor. Updating
+  the Core may help." without the feature, and "Update this app to see
+  the Core's modulation monitor." below minor 11. A window subscribes and
+  unsubscribes with `records.subscribe` and `records.unsubscribe` (above).
 - **The filter graph's curve** (parity Task 16, `dspInfoVersion` 1).
   `dsp.filterResponse` asks the Core for the high-resolution filter graph's
   curve for the receiver of `sliceId`, computed from that receiver's
@@ -5217,7 +5281,7 @@ same on every machine.
 | `settings-write` | A station-scoped write echoed with its origin; an operator-local write rejected; a removal sent as `settings.value` with no entry; on the receive-only Core, a DSP > Options TX key and a PA forward-power table key (`paCalibration/calPoint1`, version 6) taken off the air, an OC transmit pin (`oc/tx/20m/pin3`), an OC pin action (`oc/actions/pin1/action`) and TX Display Cal (`cal/txDisplayOffset`) taken off the air (version 8), and a transmit hardware key refused |
 | `unknown-verb` | `command.result` refused, "The Core does not know this request. Updating the Core may help."; the connection stays up |
 | `unknown-kind` | `session.end` "The Core could not read a message from this app.", `retryable` false, `code` `protocolError` |
-| `verbs-*` | Each verb in `commands`, grouped by the capability that gates it, invoked with its own arguments (for `setPgxlHardware`, one of its three optional ones) and, where it takes any, with one argument renamed (and nothing else changed: the same values and kinds); the two get different answers, so each shows the station read the arguments (a PureSignal action with arguments it does not take is refused "The Core could not read this PureSignal request." before the transmit gate is asked); `verbs-ps3` (which requires `psAlgorithmVersion` 3) invokes the PureSignal verbs whose answers do not depend on arming (`ps3.off`, `ps3.twoTone` off and `ps3.saveCorrection`), and `verbs-ps3-arming` (which also requires `transmitSettingsVersion` 7) invokes `ps3.twoTone` with `enabled` true, a key (section 18.6) refused on that receive-only Core "This Core is set to receive only." (`refusalCode` `stationReceiveOnly`), and the arming verbs (`ps3.single`, `ps3.automatic`, `ps3.applyCurrent`, `ps3.restoreCorrection`), taken and then failing on the static station, which has no PureSignal running ("PureSignal is unavailable until the radio is ready."); `nnr.applyModelSelection` names the revision `dspAssets` gave in the snapshot; `verbs-tgxl-control` (which requires `remoteTgxlControlVersion` 2) invokes the antenna, operate and bypass switches, and `verbs-tgxl-relays` (which requires `remoteTgxlControlVersion` 4) matches `scanTgxlLan`'s `devicesJson` as any text, since a real Tuner Genius on the test computer's network may answer, and its accepted `setTgxlAddress` is followed by the `tuner` delta carrying the saved address, then a blank host, saved and shown as blank, and the address again; `verbs-pgxl-control` (which requires `remotePgxlControlVersion` 4) does the same for `scanPgxlLan` and `setPgxlAddress` (the `amplifier` delta, and the blank host), and its `setPgxlOperate` is refused on the static station, which has no amp connected ("The Core is not connected to the Power Genius."); `verbs-rfkit` (which requires `remoteRfKitControlVersion` 2) connects, disconnects and switches the RF-Kit, and `verbs-rfkit-control` (which requires `remoteRfKitControlVersion` 4) invokes `setRfKitOperate`, `setRfKitAntenna` and `setRfKitTciMode`, refused on the static station with no amp admitted ("The Core is not connected to the RF-Kit amplifier."), and its accepted `setRfKitAddress` is followed by the `rfkit` delta carrying the saved address, then the blank host and the address again; `verbs-tx-antenna` (which requires `radioHardwareVersion` 6) invokes `setAlexTxAntenna` with a band's current antenna (taken, no delta) and with `band` renamed; `verbs-io-board` (which requires `radioHardwareVersion` 7) invokes `requestIoBoardI2c` and `setIoBoardOutput`, each refused on the static station, which has no radio connection to reach the I2C bus through ("The radio is not connected, so its I2C bus cannot be reached."), and each with one argument renamed; `verbs-dsp-info` (which requires `dspInfoVersion` 1) invokes `dsp.filterResponse` with `highResolution` false (taken, `stepHz` 0 and an empty `magnitudesDbJson`), with `highResolution` true (refused on the static station, which runs no receiver channel: "The Core's receiver for this slice is not running.") and with one argument renamed; `verbs-records` (which requires `recordStreamVersion` 1) subscribes to `spots` with a backlog (taken, then the `record.batch` reset, empty on the static station), to a stream the Core does not keep (refused "The Core does not keep that list."), and with one argument renamed, then unsubscribes right and wrong; `verbs-station-radios` (which requires `stationRadiosVersion` 1, on a station set up with `stationRadios`: its static radio and a second "Bench G2" in sight, signed in as a paired device, since the Core refuses these verbs to a pairing-token sign-in) subscribes to `stationRadios`, sets the second radio's model (taken, then the record's upsert), refuses forgetting the Core's radio, rescans, refuses a radio it cannot see and takes the second radio, each with one argument renamed where it takes any; `station-radio-confirm` chooses the second radio with another device listening, is asked (`confirm.request`, `change` "Radio"), proceeds, and the other device is told (`notice`); `verbs-spots` (which requires `recordStreamVersion` 1) invokes `spots.connect` for the DX cluster with no callsign saved (refused "Enter your callsign in Spot Hub first."), `spots.disconnect` for POTA (taken: it is not running), `spots.sendCommand` to a cluster that is not connected (refused "The DX cluster is not connected."), each with one argument renamed, and `spots.clearAll` (taken; no station source is ever dialled). A version's new verbs go in a fixture of their own, so an app at the older version still runs the older file |
+| `verbs-*` | Each verb in `commands`, grouped by the capability that gates it, invoked with its own arguments (for `setPgxlHardware`, one of its three optional ones) and, where it takes any, with one argument renamed (and nothing else changed: the same values and kinds); the two get different answers, so each shows the station read the arguments (a PureSignal action with arguments it does not take is refused "The Core could not read this PureSignal request." before the transmit gate is asked); `verbs-ps3` (which requires `psAlgorithmVersion` 3) invokes the PureSignal verbs whose answers do not depend on arming (`ps3.off`, `ps3.twoTone` off and `ps3.saveCorrection`), and `verbs-ps3-arming` (which also requires `transmitSettingsVersion` 7) invokes `ps3.twoTone` with `enabled` true, a key (section 18.6) refused on that receive-only Core "This Core is set to receive only." (`refusalCode` `stationReceiveOnly`), and the arming verbs (`ps3.single`, `ps3.automatic`, `ps3.applyCurrent`, `ps3.restoreCorrection`), taken and then failing on the static station, which has no PureSignal running ("PureSignal is unavailable until the radio is ready."); `nnr.applyModelSelection` names the revision `dspAssets` gave in the snapshot; `verbs-tgxl-control` (which requires `remoteTgxlControlVersion` 2) invokes the antenna, operate and bypass switches, and `verbs-tgxl-relays` (which requires `remoteTgxlControlVersion` 4) matches `scanTgxlLan`'s `devicesJson` as any text, since a real Tuner Genius on the test computer's network may answer, and its accepted `setTgxlAddress` is followed by the `tuner` delta carrying the saved address, then a blank host, saved and shown as blank, and the address again; `verbs-pgxl-control` (which requires `remotePgxlControlVersion` 4) does the same for `scanPgxlLan` and `setPgxlAddress` (the `amplifier` delta, and the blank host), and its `setPgxlOperate` is refused on the static station, which has no amp connected ("The Core is not connected to the Power Genius."); `verbs-rfkit` (which requires `remoteRfKitControlVersion` 2) connects, disconnects and switches the RF-Kit, and `verbs-rfkit-control` (which requires `remoteRfKitControlVersion` 4) invokes `setRfKitOperate`, `setRfKitAntenna` and `setRfKitTciMode`, refused on the static station with no amp admitted ("The Core is not connected to the RF-Kit amplifier."), and its accepted `setRfKitAddress` is followed by the `rfkit` delta carrying the saved address, then the blank host and the address again; `verbs-tx-antenna` (which requires `radioHardwareVersion` 6) invokes `setAlexTxAntenna` with a band's current antenna (taken, no delta) and with `band` renamed; `verbs-io-board` (which requires `radioHardwareVersion` 7) invokes `requestIoBoardI2c` and `setIoBoardOutput`, each refused on the static station, which has no radio connection to reach the I2C bus through ("The radio is not connected, so its I2C bus cannot be reached."), and each with one argument renamed; `verbs-dsp-info` (which requires `dspInfoVersion` 1) invokes `dsp.filterResponse` with `highResolution` false (taken, `stepHz` 0 and an empty `magnitudesDbJson`), with `highResolution` true (refused on the static station, which runs no receiver channel: "The Core's receiver for this slice is not running.") and with one argument renamed; `verbs-records` (which requires `recordStreamVersion` 1) subscribes to `spots` with a backlog (taken, then the `record.batch` reset, empty on the static station), to a stream the Core does not keep (refused "The Core does not keep that list."), and with one argument renamed, then unsubscribes right and wrong; `verbs-station-radios` (which requires `stationRadiosVersion` 1, on a station set up with `stationRadios`: its static radio and a second "Bench G2" in sight, signed in as a paired device, since the Core refuses these verbs to a pairing-token sign-in) subscribes to `stationRadios`, sets the second radio's model (taken, then the record's upsert), refuses forgetting the Core's radio, rescans, refuses a radio it cannot see and takes the second radio, each with one argument renamed where it takes any; `station-radio-confirm` chooses the second radio with another device listening, is asked (`confirm.request`, `change` "Radio"), proceeds, and the other device is told (`notice`); `verbs-spots` (which requires `recordStreamVersion` 1) invokes `spots.connect` for the DX cluster with no callsign saved (refused "Enter your callsign in Spot Hub first."), `spots.disconnect` for POTA (taken: it is not running), `spots.sendCommand` to a cluster that is not connected (refused "The DX cluster is not connected."), each with one argument renamed, and `spots.clearAll` (taken; no station source is ever dialled); `verbs-tx-mod-monitor` (which requires `txModMonitorVersion` 1) subscribes to `txAmModulation` with a backlog of 1 (taken, then the `record.batch` reset, empty: the static station is not keyed), invokes `txModMonitor.reset` for source 0 (taken) and with `source` renamed, and unsubscribes. A version's new verbs go in a fixture of their own, so an app at the older version still runs the older file |
 
 `tst_link_conformance_session` also checks that every verb in the
 `commands` table is invoked both ways by some fixture, and that the two
@@ -5851,6 +5915,12 @@ is refused as any outbound property's is.
 | `keyedForSeconds` | How long the key now on has been on, in whole seconds on the Core's clock when this is sent (ruling 10.3); 0 while unkeyed. It supersedes `keyedSinceMs`, which a Core still sends |
 | `highSwr` | The Core's high-SWR protection has tripped (parity Task 28, appended after `stopEpoch`; sent by every Core that sends `txState`, whatever its `txDisplayVersion`): what the Core's own window hands its transmitting pan's high-SWR border |
 | `swrWindBackLatched` | The protection's drive fold-back has latched; the border shows fold-back while this and `highSwr` are both true |
+
+The AM Mod Monitor's readings (peaks, holds, carrier, lamps and envelope
+trace) are not `txState` properties: they travel as the `txAmModulation`
+and `txAmModulationFeedback` record streams, to a peer that subscribes
+(`txModMonitorVersion` 1, section 7.7), whether or not it declared
+`remoteTx`.
 
 **When it is sent.** While keyed the Core reads the meters ten times a
 second, from the transmit lane's last readings (never a DSP call on its

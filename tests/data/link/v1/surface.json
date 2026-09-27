@@ -332,6 +332,11 @@
         },
         {
             "kind": "i64",
+            "name": "txModMonitorVersion",
+            "value": 1
+        },
+        {
+            "kind": "i64",
             "name": "sessionHolderVersion",
             "value": 1
         },
@@ -1401,6 +1406,19 @@
             "capabilityVersion": 1,
             "minMinor": 11,
             "verb": "spots.clearAll"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "source",
+                    "optional": false
+                }
+            ],
+            "capability": "txModMonitorVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "txModMonitor.reset"
         },
         {
             "arguments": [
@@ -6983,7 +7001,8 @@
             "PingTimeOutHost",
             "RemoteMoxTimeOutEnabled",
             "RemoteMoxTimeOutSeconds",
-            "RxOnly"
+            "RxOnly",
+            "ModMon/FbStream"
         ],
         "stationPrefixes": [
             "hardware/",

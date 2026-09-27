@@ -155,6 +155,10 @@
 //                                    R-IOS-03, R-IOS-13):
 //                                    tgxlAutotuneAvailable. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-27  J.J. Boyd / KG4VCF  R-IOS-13 / R-R3-49: the AM Mod
+//                                    Monitor's availability, source and
+//                                    RESET (txModMonitorVersion 1).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QString>
@@ -540,6 +544,19 @@ public:
     virtual bool stationFreedvAvailable() const { return false; }
     virtual CommandOutcome requestFreedv(const QByteArray& /*verb*/, const QVariantMap& /*args*/)
     { return { false, stationFreedvUnavailableReason() }; }
+
+    // R-IOS-13 / R-R3-49 (txModMonitorVersion 1): the AM Mod Monitor in a
+    // remote window. Whether the Core sends its readings; which source this
+    // window watches (0 TX I/Q, 1 PA feedback, -1 none: the applet hidden),
+    // kept across reconnects and subscribed again after each snapshot; and
+    // RESET, which clears the Core's analyzer for a source. The readings
+    // arrive in RadioModel::stationModMonitorSnapshot.
+    static QString modMonitorUnavailableReason()
+    { return QStringLiteral("This Core does not send the modulation monitor. Updating the Core may help."); }
+    virtual bool txModMonitorAvailable() const { return false; }
+    virtual void setModMonitorSource(int /*source*/) {}
+    virtual CommandOutcome requestModMonitorReset(int /*source*/)
+    { return { false, modMonitorUnavailableReason() }; }
 
     // R-R3-46 / R-R3-21 (radioHardwareVersion 4): the filter policy dialog
     // in a remote window. Whether the Core takes a filter policy change from

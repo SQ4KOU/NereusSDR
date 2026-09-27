@@ -149,6 +149,9 @@
 //   2026-09-27 - R-IOS-16 (iPhone app plan Task 29): mediaReplaceVersion,
 //                controlSwitchVersion and relayAllowed. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-27 - R-IOS-13 / R-R3-49: txModMonitorVersion, the AM Mod
+//                Monitor's readings. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -400,6 +403,14 @@ struct StationCapabilities {
     /// none: relayAllowedEntry false, and the relay is tried.
     bool relayAllowedEntry = false;
     bool relayAllowed = true;
+    /// R-IOS-13 / R-R3-49 (iPhone plan Task 39 row A10): 1 means the Core
+    /// sends its AM Mod Monitor readings on the txAmModulation and
+    /// txAmModulationFeedback record streams (to a subscribing peer, while
+    /// its radio is keyed in AM, SAM or DSB), takes txModMonitor.reset and
+    /// applies a window's ModMon/FbStream. Sent in the minor-11 block,
+    /// after relayAllowed, with the record streams. 0: a window shows its
+    /// Mod Monitor disabled with the reason.
+    int txModMonitorVersion = 0;
     /// iPhone app Task 71 (R-IOS-02; the several-devices design, ruling
     /// 10.1): 1 means the Core admits up to four devices at once, sends the
     /// `connectedDevices` object and takes session.leave. Sent last in the

@@ -410,6 +410,10 @@
 //               under every session, session.pathTicket and path.join, the
 //               Task 29 capabilities. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-09-27: R-IOS-13 / R-R3-49: txModMonitorVersion(), the AM Mod
+//               Monitor's record streams (ModMonitorPublisher) and
+//               txModMonitor.reset. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/IceConfiguration.h"
@@ -465,6 +469,7 @@ class MirrorView;
 class SliceMarkerSet;
 class ConnectedDevicesFacade;
 class DeviceSessionRegistry;
+class ModMonitorPublisher;
 class RadioModel;
 class SessionCommandDispatcher;
 class SessionTransport;
@@ -1067,6 +1072,15 @@ public:
     // console and state in spotSources, and the freedv.* verbs; 0
     // otherwise.
     int stationFreedvVersion() const;
+    // R-IOS-13 / R-R3-49 (iPhone plan Task 39 row A10): txModMonitorVersion.
+    // 1 with recordStreamVersion 1: the AM Mod Monitor's readings on the
+    // txAmModulation and txAmModulationFeedback streams while a subscriber
+    // watches and the radio is keyed in AM, SAM or DSB, the
+    // txModMonitor.reset verb, and a window's ModMon/FbStream applied at
+    // once; 0 otherwise.
+    int txModMonitorVersion() const;
+    /// For a test: the Core's side of the Mod Monitor streams, or null.
+    ModMonitorPublisher* modMonitorPublisherForTest() const { return m_modMonitor.get(); }
     // iPhone app plan Task 29 (R-IOS-16; link section 21): mediaReplaceVersion
     // 1 whenever media is on (the media `replace` operation);
     // controlSwitchVersion 1 always (session.pathTicket, path.join and
@@ -1387,6 +1401,9 @@ private:
     void handlePropertyWrite(SessionTransport* transport, const SessionMessage& message);
     // Parity Task 19 (R-IOS-25): the record streams.
     void setUpRecordStreams();
+    // R-IOS-13 / R-R3-49: the Mod Monitor's two streams and txModMonitor.reset.
+    void setUpModMonitorStreams();
+    void handleModMonitorReset(SessionTransport* transport, const SessionMessage& message);
     void handleRecordsCommand(SessionTransport* transport, const SessionMessage& message);
     void scheduleRecordFlush();
     void flushRecordStreams();
@@ -1931,6 +1948,8 @@ private:
     std::map<QString, std::unique_ptr<RecordStream>> m_recordStreams;
     quint64 m_consoleLineId = 0;
     QTimer* m_recordFlushTimer = nullptr;
+    // R-IOS-13 / R-R3-49: the Core's side of the Mod Monitor streams.
+    std::unique_ptr<ModMonitorPublisher> m_modMonitor;
     // Parity Task 21: the Core's radios and their stream.
     QPointer<StationRadios> m_stationRadios;
     void publishStationRadios();

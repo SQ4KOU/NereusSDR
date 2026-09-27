@@ -15,8 +15,19 @@
 //   PA FB   — the PureSignal feedback receiver (the PA output), when
 //             PureSignal feedback is running on the connected board
 //
+// In a remote window the readings are the Core's (R-IOS-13, R-R3-49,
+// txModMonitorVersion 1): while shown, the applet watches its source's
+// stream on the Core and puts each snapshot the Core sends through the same
+// display path a local window uses, so the bars, holds, flashers and lamps
+// match a local window on the same I/Q. RESET clears the Core's analyzer.
+// On a Core that does not send them, or with no Core connected, the
+// applet is disabled with the reason in plain words.
+//
 // Modification history (NereusSDR):
 //   2026-09-08 — Created (Lee, AI-assisted via Anthropic Claude Code).
+//   2026-09-27   R-IOS-13 / R-R3-49: the Core's readings in a remote
+//                window, and the disabled state with its reason. J.J.
+//                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 #pragma once
 
@@ -79,6 +90,29 @@ public:
     QString carrierLampTextForTest() const;
     bool posFlasherLitForTest() const noexcept { return m_posLit; }
     bool negFlasherLitForTest() const noexcept { return m_negLit; }
+    /// Test seam: one refresh, as the timer's.
+    void tickForTest() { tick(); }
+    /// Test seam: what the applet shows.
+    struct DisplayForTest {
+        double posBar{0.0};
+        double negBar{0.0};
+        QString posText;
+        QString negText;
+        QString asymText;
+        QString carrierText;
+        QString lampText;
+        bool posLit{false};
+        bool negLit{false};
+        bool operator==(const DisplayForTest&) const = default;
+    };
+    DisplayForTest displayForTest() const;
+    std::size_t scopePointsForTest() const noexcept { return m_scopePoints; }
+    /// Test seam: whether the monitor can show readings, and why not.
+    bool monitorAvailableForTest() const { return m_available; }
+    QString unavailableReasonForTest() const;
+
+    /// Why a remote window cannot show the monitor with no Core connected.
+    static QString notConnectedReason();
 
 public slots:
     void setSource(Source s);
@@ -95,6 +129,12 @@ private:
     void loadSettings();
     void tick();
     void applySnapshot(const AmModulationAnalyzer::Snapshot& s);
+    bool isRemoteWindow() const;
+    // A remote window: whether the Core sends the readings now; disables
+    // the applet with the reason otherwise.
+    void updateRemoteAvailability();
+    // A remote window: the source this applet watches on the Core (-1 none).
+    void watchOnCore(int source);
     void setLamp(QLabel* lamp, const QString& text, const char* bg, const char* fg, const char* border);
 
     Source  m_source{Source::TxIq};
@@ -124,6 +164,10 @@ private:
     QSpinBox*    m_negFlashSpin{nullptr};
     QLabel*      m_carrierLamp{nullptr};
     ModScopeWidget* m_scope{nullptr};
+    QWidget*     m_body{nullptr};
+    QLabel*      m_unavailableLabel{nullptr};
+    bool         m_available{true};
+    std::size_t  m_scopePoints{0};
 };
 
 } // namespace NereusSDR

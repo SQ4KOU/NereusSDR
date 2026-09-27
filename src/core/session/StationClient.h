@@ -347,6 +347,10 @@
 //   2026-09-27: iPhone app plan Task 29 (R-IOS-16): the path race and moving
 //               the session (link section 21). J.J. Boyd (KG4VCF), AI-
 //               assisted via Anthropic Claude Code.
+//   2026-09-27: R-IOS-13 / R-R3-49: txModMonitorAvailable(),
+//               setModMonitorSource() and requestModMonitorReset(), the AM
+//               Mod Monitor in a remote window. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QAbstractSocket>
@@ -1157,6 +1161,14 @@ public:
     /// Verbs freedv.setMessage, freedv.sendQsy and freedv.setHidden; a
     /// refusal is shown as the Core's other refusals are.
     CommandOutcome requestFreedv(const QByteArray& verb, const QVariantMap& args) override;
+    /// R-IOS-13 / R-R3-49: spotSourcesAvailable() and txModMonitorVersion
+    /// at least 1.
+    bool txModMonitorAvailable() const override;
+    /// The source the window's Mod Monitor watches (-1 none); subscribes
+    /// to its stream now when available, and again after each snapshot.
+    void setModMonitorSource(int source) override;
+    /// txModMonitor.reset for a source.
+    CommandOutcome requestModMonitorReset(int source) override;
     /// Parity Task 21 (R-IOS-18): minor 11 and stationRadiosVersion at
     /// least 1 on a ready session.
     bool stationRadiosAvailable() const override;
@@ -1465,6 +1477,11 @@ private:
     bool m_handshakeComplete = false;
     bool m_authenticated = false;
     bool m_signedInWithDeviceKey = false;
+    // R-IOS-13 / R-R3-49: the Mod Monitor's source the window wants (-1
+    // none), and the stream this session is subscribed to (empty none).
+    int m_modMonitorSource = -1;
+    QString m_modMonitorStream;
+    void syncModMonitorSubscription();
     /// Task 78: this session's hello declared sessionHolder 1.
     bool m_declaredSessionHolder = false;
     bool m_declaresSessionHolder = true;
