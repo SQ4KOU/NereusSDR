@@ -231,11 +231,15 @@ function(nereus_add_test name)
     # step gets the shared FFTW wisdom cache (nereus_test_fftw_wisdom above).
     # Found by the names that start WDSP that way, in the test's own source
     # or an extra source file it names (fakes/ConnectableRadioModel.cpp).
+    # R-R3-49 flaky-test round: a test that opens WDSP channels itself
+    # (OpenChannel) plans the same way, and did so from nothing:
+    # tst_wdsp_channel_shutdown spent 104 s of its 120 s in its first case
+    # under load, tst_receiver_dsp_load_frames 31 s at rest in initTestCase.
     if(TARGET nereus_test_fftw_wisdom)
         set(_wisdom_scan "${_extra_sources}")
         file(READ "${CMAKE_CURRENT_SOURCE_DIR}/${name}.cpp" _wisdom_text)
         string(APPEND _wisdom_scan "${_wisdom_text}")
-        if(_wisdom_scan MATCHES "setSynchronousInitForTest|m_synchronousWdspForTest|m_initialized = true|ConnectableRadioModel")
+        if(_wisdom_scan MATCHES "setSynchronousInitForTest|m_synchronousWdspForTest|m_initialized = true|ConnectableRadioModel|OpenChannel\\(")
             target_sources(${name} PRIVATE $<TARGET_OBJECTS:nereus_test_fftw_wisdom>)
         endif()
     endif()
@@ -7533,6 +7537,20 @@ if(DEFINED libjuice_SOURCE_DIR AND EXISTS "${libjuice_SOURCE_DIR}/src/agent.c")
             -P ${CMAKE_SOURCE_DIR}/tests/scripts/check-libjuice-patch-paths.cmake)
     set_tests_properties(libjuice_patch_paths PROPERTIES LABELS "session" TIMEOUT 120)
 endif()
+# R-R3-49: libdatachannel's remote description change
+# (cmake/patches/libdatachannel-keep-remote-description-first.cpp) still
+# applies to the pinned source, both library targets compile it, and it
+# opens with the pinned file's own licence notice. Configures a small
+# project only; nothing is built or fetched.
+if(DEFINED libdatachannel_SOURCE_DIR AND EXISTS "${libdatachannel_SOURCE_DIR}/src/peerconnection.cpp")
+    add_test(NAME libdatachannel_patch_applies
+        COMMAND ${CMAKE_COMMAND}
+            -DREPO=${CMAKE_SOURCE_DIR}
+            -DPC_CPP=${libdatachannel_SOURCE_DIR}/src/peerconnection.cpp
+            -DWORK=${CMAKE_CURRENT_BINARY_DIR}/libdatachannel-patch
+            -P ${CMAKE_SOURCE_DIR}/tests/scripts/check-libdatachannel-patch.cmake)
+    set_tests_properties(libdatachannel_patch_applies PROPERTIES LABELS "session" TIMEOUT 120)
+endif()
 # The traversal harness (tests/scripts/traversal-harness.sh): Linux network
 # namespaces with nftables NATs (endpoint-independent, port-randomising at
 # both ends), UDP blocked, large datagrams dropped, an IPv6-only client
@@ -7825,6 +7843,16 @@ nereus_add_test(tst_remote_spots
     fakes/RemoteWindowHarness.cpp
     EXTRA_LABELS session)
 target_compile_definitions(tst_remote_spots PRIVATE NEREUS_BUILD_TESTS)
+# iPhone plan Task 22 / parity Task 20 (R-IOS-26, B7.3, B7.4): FreeDV
+# Reporter at the Core: its own registration (never the Core's label), the
+# freedvStations stream in a remote window, the freedv.* verbs, the RADE
+# slice's listing, and a real remote window's FreeDV tab and dialog. A fake
+# Socket.IO server on 127.0.0.1 only; no RF, no audio device.
+nereus_add_test(tst_freedv_reporter_station
+    fakes/LoopbackTransport.cpp
+    fakes/RemoteWindowHarness.cpp
+    EXTRA_LABELS session)
+target_compile_definitions(tst_freedv_reporter_station PRIVATE NEREUS_BUILD_TESTS)
 # Parity Task 21 (R-IOS-18, R-R3-38): the Core's choice of radio (the
 # order, the requests, the on-air rule, DaemonApp's wait, switch and saved
 # choice). Discovery is the test's own list; nothing connects.
@@ -8453,6 +8481,18 @@ nereus_add_test(tst_remote_tx_display_settings
     EXTRA_LABELS session)
 target_compile_definitions(tst_remote_tx_display_settings PRIVATE NEREUS_BUILD_TESTS)
 
+# Remote-window parity Task 32 (R-IOS-13, R-R3-49): the transmit monitor
+# goes to the device that holds transmit. The owner mixes with fake devices
+# and recording taps (route, level, another device, the Core's own outputs
+# quiet while a remote device holds, the unkey), and the session over the
+# loopback control link (the capability, monitor-audio and its answer, the
+# wrong shapes, an older peer, the holder rule). No radio is keyed, no sound
+# device is opened.
+nereus_add_test(tst_remote_tx_monitor
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+target_compile_definitions(tst_remote_tx_monitor PRIVATE NEREUS_BUILD_TESTS)
+
 # Remote Daemon R2: the GUI's slice controls reach the daemon.
 #
 # Task 11 built the command verbs, task 18 built the session that could
@@ -8728,6 +8768,33 @@ nereus_add_test(tst_remote_hl2_io
     EXTRA_LABELS session)
 target_compile_definitions(tst_remote_hl2_io PRIVATE NEREUS_BUILD_TESTS)
 
+# iPhone app plan Task 29 (R-IOS-16, R-IOS-08; the link document, section
+# 21.2): a session moves to another connection make-before-break, beneath
+# the session, with the path.switch barrier, no sign-in and no snapshot; a
+# bad or spent ticket ends only the new connection; nothing moves while the
+# Core is on the air. In-process links only.
+nereus_add_test(tst_session_transport_switch
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+# iPhone app plan Task 29 (R-IOS-16; the remote media control document,
+# "Replacing the media connection"): media moves to a new peer with no gap
+# and no repeat: the Core sends on both peers across the overlap and hands
+# over, the window merges the two paths (DualPathAudio), and end to end
+# over the real DTLS/SRTP session. The end-to-end case measures real-time
+# audio, so the test is REALTIME.
+nereus_add_test(tst_media_replace fakes/LoopbackTransport.cpp REALTIME)
+# iPhone app plan Task 29 (R-IOS-16, R-IOS-08; the link document, section
+# 21.1): the path race. Rungs of its own; then a window and a Core on this
+# computer with the remote access service (the real Python service and the
+# fake STUN/TURN server, loopback only): the direct path wins when open,
+# the service's when not, the session moves to the address once it opens,
+# the relay a Core turned off is not raced, and an older Core is told in
+# plain words.
+nereus_add_test(tst_path_racer fakes/LoopbackTransport.cpp EXTRA_LABELS session)
+target_compile_definitions(tst_path_racer PRIVATE
+    NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+set_tests_properties(tst_path_racer PROPERTIES TIMEOUT 400)
+
 # --------------------------------------------------------------------------
 # Aggregate "all_tests" target  (2026-05-26 KG4VCF dev-loop fix, from PR #291)
 # --------------------------------------------------------------------------
@@ -8768,30 +8835,3 @@ if(_label_names)
     endforeach()
     message(STATUS "NereusSDR: per-label test targets: ${_label_names}")
 endif()
-
-# iPhone app plan Task 29 (R-IOS-16, R-IOS-08; the link document, section
-# 21.2): a session moves to another connection make-before-break, beneath
-# the session, with the path.switch barrier, no sign-in and no snapshot; a
-# bad or spent ticket ends only the new connection; nothing moves while the
-# Core is on the air. In-process links only.
-nereus_add_test(tst_session_transport_switch
-    fakes/LoopbackTransport.cpp
-    EXTRA_LABELS session)
-# iPhone app plan Task 29 (R-IOS-16; the remote media control document,
-# "Replacing the media connection"): media moves to a new peer with no gap
-# and no repeat: the Core sends on both peers across the overlap and hands
-# over, the window merges the two paths (DualPathAudio), and end to end
-# over the real DTLS/SRTP session. The end-to-end case measures real-time
-# audio, so the test is REALTIME.
-nereus_add_test(tst_media_replace fakes/LoopbackTransport.cpp REALTIME)
-# iPhone app plan Task 29 (R-IOS-16, R-IOS-08; the link document, section
-# 21.1): the path race. Rungs of its own; then a window and a Core on this
-# computer with the remote access service (the real Python service and the
-# fake STUN/TURN server, loopback only): the direct path wins when open,
-# the service's when not, the session moves to the address once it opens,
-# the relay a Core turned off is not raced, and an older Core is told in
-# plain words.
-nereus_add_test(tst_path_racer fakes/LoopbackTransport.cpp EXTRA_LABELS session)
-target_compile_definitions(tst_path_racer PRIVATE
-    NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
-set_tests_properties(tst_path_racer PROPERTIES TIMEOUT 400)

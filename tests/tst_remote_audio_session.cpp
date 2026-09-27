@@ -12,6 +12,7 @@
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
 #include "core/HpsdrModel.h"
+#include "core/safety/TransmitHolder.h"
 #include "core/session/SessionMessages.h"
 #include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
@@ -26,6 +27,7 @@
 #include "gui/RemoteMediaController.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
+#include "models/TransmitModel.h"
 
 #include <QElapsedTimer>
 #include <QFile>
@@ -274,6 +276,8 @@ private slots:
         // Desktop remote transmit: such a Core predates the microphone line
         // too (the window is sent no remoteTxVersion).
         h.declareRemoteTx = false;
+        // Parity Task 32: and the transmit monitor.
+        h.hideTxMonitorAudio = true;
         h.connectSession();
         QVERIFY(remoteMedia.audioDetailNegotiated());
         QVERIFY(!remoteMedia.audioProfileNegotiated());
@@ -981,6 +985,8 @@ private slots:
         h.declareRemoteTx = false;
         // R-R3-45: such a Core predates the headphones mix too.
         h.hideHeadphonesMix = true;
+        // Parity Task 32: and the transmit monitor.
+        h.hideTxMonitorAudio = true;
         h.connectSession();
         QVERIFY(remoteMedia.audioProfileNegotiated());
         QVERIFY(!remoteMedia.receiverAudioNegotiated());
@@ -1177,6 +1183,147 @@ private slots:
         QCOMPARE(int(audioContexts(controls).size()), mainContexts);
         QCOMPARE(remoteErrors.count(), 0);
 
+        source.stop();
+        devices.stop();
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // Remote-window parity Task 32 (R-IOS-13, R-R3-49): the transmit monitor
+    // over the real encrypted session, measured after Opus decode at the
+    // Core's setting (48 kbit/s full band). A 1031 Hz tone stands for the
+    // transmitter's siphon (handed to txMonitorBlockReady as TxChannel would
+    // while keyed; nothing is keyed). This window holds transmit (a take)
+    // with MON on at 0.5: its main stream carries the tone at 0.5 of it
+    // within 1 dB; routed to the headphones it moves to the headphones
+    // stream (which runs for it though no receiver is there) and leaves the
+    // main one; route none, or MON off, carries it nowhere.
+    void theHolderHearsItsMonitorAtItsLevel()
+    {
+        Harness h;
+        h.attachRemoteHeadphones();
+        // This computer's speaker volume at full, so what is heard is what
+        // the Core sent (the headphones carry no master volume).
+        h.remote.audioEngine()->setVolume(1.0f);
+        RemoteMediaController remoteMedia(&h.client, &h.remote, nullptr);
+        DaemonMediaController daemonMedia(&h.server, &h.station);
+        QSignalSpy remoteErrors(&remoteMedia, &RemoteMediaController::errorOccurred);
+        constexpr double kMonHz = 1031.0;
+        constexpr double kMonIn = 0.3;
+        constexpr double kMonLevel = 0.5;
+        qint64 monFrames = 0;
+        QTimer source;
+        source.setInterval(10);
+        source.setTimerType(Qt::PreciseTimer);
+        connect(&source, &QTimer::timeout, &source, [&h, &monFrames] {
+            std::vector<float> mono(kFrames);
+            for (int frame = 0; frame < kFrames; ++frame) {
+                const double time = static_cast<double>(monFrames + frame) / 48000.0;
+                mono[static_cast<size_t>(frame)] =
+                    static_cast<float>(kMonIn * std::sin(2.0 * kPi * kMonHz * time));
+            }
+            monFrames += kFrames;
+            h.stationAudio->txMonitorBlockReady(mono.data(), kFrames);
+            h.feedMixedTone();
+        });
+        QTimer devices;
+        devices.setInterval(10);
+        devices.setTimerType(Qt::PreciseTimer);
+        connect(&devices, &QTimer::timeout, &devices, [&h] {
+            h.remoteBus->render(kFrames);
+            h.remoteHeadphonesBus->render(kFrames);
+        });
+        source.start();
+        devices.start();
+
+        h.connectSession();
+        QTRY_COMPARE_WITH_TIMEOUT(remoteMedia.audioStatus().state,
+                                  RemoteAudioStatus::State::Playing, 15000);
+        QVERIFY(remoteMedia.txMonitorAudioNegotiated());
+        QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.acceptedMonitorContext().has_value(), 5000);
+
+        // The monitor's level in the newest second a device played: the
+        // median of twenty 50 ms measurements, so a playback hiccup on a
+        // loaded machine (a jitter-hold gap, a concealed packet) does not
+        // count against the level.
+        const auto monitorOn = [](const QVector<float>& heard, int fromFrame) {
+            constexpr int kWindow = 2400;
+            const int frames = int(heard.size() / 2);
+            std::vector<double> levels;
+            for (int start = fromFrame; start + kWindow <= frames; start += kWindow) {
+                const QVector<float> part = heard.mid(qsizetype(start) * 2, kWindow * 2);
+                levels.push_back(std::max(toneAmplitude(part, 0, kMonHz),
+                                          toneAmplitude(part, 1, kMonHz)));
+            }
+            if (levels.empty()) {
+                return 0.0;
+            }
+            std::sort(levels.begin(), levels.end());
+            return levels[levels.size() / 2];
+        };
+        const auto newest = [](const PacedAudioBus* bus) {
+            return std::max(0, int(bus->heard.size() / 2) - 48000);
+        };
+        const auto waitSecond = [&h](const PacedAudioBus* bus) {
+            const int from = int(bus->heard.size() / 2);
+            QTRY_VERIFY_WITH_TIMEOUT(bus->heard.size() / 2 >= from + 72000, 20000);
+        };
+
+        // Not yet the holder: the main stream has none.
+        waitSecond(h.remoteBus);
+        QVERIFY(monitorOn(h.remoteBus->heard, newest(h.remoteBus)) < 0.01);
+
+        // Take transmit (never keys), MON on at 0.5.
+        TransmitHolder::Holder self;
+        self.deviceId = h.server.mediaSessionDevice(h.server.mediaSessionEpoch());
+        h.server.transmitHolder()->transferTo(self, QStringLiteral("test"));
+        h.station.transmitModel().setMonitorVolume(float(kMonLevel));
+        h.stationAudio->setTxMonitorVolume(float(kMonLevel));
+        h.station.transmitModel().setMonEnabled(true);
+        h.stationAudio->setTxMonitorEnabled(true);
+        QCOMPARE(daemonMedia.txMonitorRoute(), TxMonitorRoute::Speakers);
+        QVERIFY(!h.stationAudio->txMonitorLocal());
+        waitSecond(h.remoteBus);
+        const double expected = kMonIn * kMonLevel;
+        const double onMain = monitorOn(h.remoteBus->heard, newest(h.remoteBus));
+        qInfo() << "monitor on the main stream" << onMain << "expected" << expected;
+        QVERIFY2(std::fabs(20.0 * std::log10(onMain / expected)) < 1.0,
+                 qPrintable(QStringLiteral("main %1 against %2").arg(onMain).arg(expected)));
+        // The receivers still play beside it.
+        QVERIFY(toneAmplitude(h.remoteBus->heard, 0, 617.0, newest(h.remoteBus)) > 0.05);
+
+        // To the headphones.
+        remoteMedia.setTxMonitorRoute(TxMonitorRoute::Headphones);
+        QTRY_VERIFY_WITH_TIMEOUT(daemonMedia.headphonesMixSending(), 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.acceptedHeadphonesContext()
+                                     && remoteMedia.acceptedHeadphonesContext()->enabled, 5000);
+        waitSecond(h.remoteHeadphonesBus);
+        waitSecond(h.remoteHeadphonesBus);
+        const double onPhones = monitorOn(h.remoteHeadphonesBus->heard,
+                                          newest(h.remoteHeadphonesBus));
+        const double leftOnMain = monitorOn(h.remoteBus->heard, newest(h.remoteBus));
+        qInfo() << "monitor on the headphones" << onPhones << "left on the main" << leftOnMain;
+        QVERIFY2(std::fabs(20.0 * std::log10(onPhones / expected)) < 1.0,
+                 qPrintable(QStringLiteral("headphones %1 against %2").arg(onPhones).arg(expected)));
+        QVERIFY(leftOnMain < 0.1 * expected);
+
+        // Route none: nowhere, and the headphones mix has nothing to carry.
+        remoteMedia.setTxMonitorRoute(TxMonitorRoute::None);
+        QTRY_VERIFY_WITH_TIMEOUT(!daemonMedia.headphonesMixSending(), 5000);
+        waitSecond(h.remoteBus);
+        QVERIFY(monitorOn(h.remoteBus->heard, newest(h.remoteBus)) < 0.1 * expected);
+
+        // Back to the main stream, then MON off: nowhere.
+        remoteMedia.setTxMonitorRoute(TxMonitorRoute::Speakers);
+        QTRY_COMPARE_WITH_TIMEOUT(daemonMedia.txMonitorRoute(), TxMonitorRoute::Speakers, 5000);
+        waitSecond(h.remoteBus);
+        QVERIFY(monitorOn(h.remoteBus->heard, newest(h.remoteBus)) > 0.5 * expected);
+        h.station.transmitModel().setMonEnabled(false);
+        h.stationAudio->setTxMonitorEnabled(false);
+        waitSecond(h.remoteBus);
+        QVERIFY(monitorOn(h.remoteBus->heard, newest(h.remoteBus)) < 0.1 * expected);
+        QCOMPARE(remoteErrors.count(), 0);
+
+        h.server.transmitHolder()->transferTo(std::nullopt, QStringLiteral("test"));
         source.stop();
         devices.stop();
         h.client.disconnectFromStation(QStringLiteral("test complete"));

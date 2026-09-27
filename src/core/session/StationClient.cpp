@@ -267,6 +267,11 @@
 //               connectThroughService(), its retries through the service,
 //               and sessionIceConfiguration(). J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-27 - iPhone plan Task 22 / parity Task 20 (R-IOS-26): the
+//                Core's freedvStations stream and FreeDV Reporter console
+//                subscribed with stationFreedvVersion 1, and the freedv.*
+//                verbs. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -2199,8 +2204,17 @@ void StationClient::onTransportText(const QByteArray& wire)
                                             QVariant(static_cast<qlonglong>(backlog))}});
             };
             subscribe(QStringLiteral("spots"), 500);
-            for (const QString& source : SpotSourceHost::stationSources()) {
+            for (const QString& source : SpotSourceHost::recordStreamSources()) {
                 subscribe(SpotSourceHost::consoleStream(source), 200);
+            }
+            // iPhone plan Task 22 / parity Task 20 (stationFreedvVersion
+            // 1): the Core's FreeDV Reporter list and console.
+            if (stationFreedvAvailable()) {
+                if (!m_radioModel.isNull()) {
+                    m_radioModel->clearStationFreedv();
+                }
+                subscribe(SpotSourceHost::consoleStream(SpotSourceHost::kFreedvReporter), 200);
+                subscribe(QStringLiteral("freedvStations"), 1000);
             }
             // Parity Task 21 (R-IOS-18): the Core's radios, for This Core.
             if (stationRadiosAvailable()) {
@@ -4008,6 +4022,11 @@ StationClient::CommandOutcome StationClient::sendCommand(const QByteArray& verb,
             }
         }
     }
+    // iPhone plan Task 22: a FreeDV Reporter request's refusal is shown
+    // where the FreeDV Reporter controls are, as a source's is.
+    if (verb.startsWith("freedv.")) {
+        pending.spotSource = SpotSourceHost::kFreedvReporter;
+    }
     if ((verb == "requestStreamCtunPinned" || verb == "requestStreamCentre")
         && !m_radioModel.isNull()) {
         if (SliceModel* slice = m_radioModel->sliceById(sliceId)) {
@@ -4292,6 +4311,10 @@ StationClient::CommandOutcome StationClient::requestSpotSource(const QByteArray&
                                           : QStringLiteral("Not connected to the Core, so the "
                                                            "spot source request was not sent.")};
     }
+    // iPhone plan Task 22: an older Core does not run FreeDV Reporter.
+    if (source == SpotSourceHost::kFreedvReporter && !stationFreedvAvailable()) {
+        return {false, stationFreedvUnavailableReason()};
+    }
     QList<MirrorUpdate> arguments;
     if (verb != "spots.clearAll") {
         arguments.append(stringArgument("source", source));
@@ -4300,6 +4323,37 @@ StationClient::CommandOutcome StationClient::requestSpotSource(const QByteArray&
         arguments.append(stringArgument("text", text));
     }
     return sendCommand(verb, -1, arguments, QStringLiteral("the spot source request"));
+}
+
+bool StationClient::stationFreedvAvailable() const
+{
+    return spotSourcesAvailable() && m_capabilities.stationFreedvVersion >= 1;
+}
+
+StationClient::CommandOutcome StationClient::requestFreedv(const QByteArray& verb,
+                                                           const QVariantMap& args)
+{
+    if (!stationFreedvAvailable()) {
+        return {false, stationLinkReady() ? stationFreedvUnavailableReason()
+                                          : QStringLiteral("Not connected to the Core, so the "
+                                                           "FreeDV Reporter request was not "
+                                                           "sent.")};
+    }
+    QList<MirrorUpdate> arguments;
+    if (verb == "freedv.setMessage") {
+        arguments.append(stringArgument("text", args.value(QStringLiteral("text")).toString()));
+    } else if (verb == "freedv.sendQsy") {
+        arguments.append(
+            stringArgument("callsign", args.value(QStringLiteral("callsign")).toString()));
+        arguments.append(MirrorUpdate{
+            0, "frequencyHz", MirrorWireKind::Int64,
+            QVariant(static_cast<qlonglong>(args.value(QStringLiteral("frequencyHz")).toLongLong()))});
+    } else if (verb == "freedv.setHidden") {
+        arguments.append(boolArgument("on", args.value(QStringLiteral("on")).toBool()));
+    } else {
+        return {false, QStringLiteral("This app does not know that FreeDV Reporter request.")};
+    }
+    return sendCommand(verb, -1, arguments, QStringLiteral("the FreeDV Reporter request"));
 }
 
 bool StationClient::stationRadiosAvailable() const
@@ -4928,7 +4982,8 @@ void StationClient::handleCommandResult(const SessionMessage& message)
     const bool filterResponseRequest = pending.verb == "dsp.filterResponse";
     // Parity Task 19: a spot source's refusal is shown on its Spot Hub tab;
     // a record subscription's is only logged (the window asks by itself).
-    const bool spotRequest = pending.verb.startsWith("spots.");
+    const bool spotRequest = pending.verb.startsWith("spots.")
+        || pending.verb.startsWith("freedv.");
     // Parity Task 21: a radio request's refusal is shown on This Core.
     const bool radioRequest = pending.verb == "station.selectRadio"
         || pending.verb == "station.rescanRadios" || pending.verb == "station.setRadioModel"

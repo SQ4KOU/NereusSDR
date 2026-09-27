@@ -28,6 +28,22 @@
 // SpotCollector starts, the forwarding to a Core and its state) is
 // NereusSDR-original.
 //
+// FreeDV Reporter (iPhone plan Task 22 / parity Task 20): its start moved
+// here from RadioModel::restoreSpotClientAutoStartState, and the Core's
+// status message, QSY request and "hide my station" call the client's own
+// ports of freedv-gui FreeDVReporter.cpp (updateMessage :122-130,
+// requestQSY :104-119, hideFromView / showOurselves :167-185 [@77e793a];
+// see FreeDVReporterClient.h). The QSY request names a callsign on the
+// link; the Core looks up that station's session id in its own list, as
+// the dialog's selected row gives it locally (freedv-gui
+// src/gui/dialogs/freedv_reporter.cpp:1078-1090 OnSendQSY and :3266-3271
+// requestQSY send the selected row's sid [@77e793a]). Ported from freedv-gui
+// [@77e793a] for FreeDV Reporter: freedvHides (src/ongui.cpp:1523-1529 and
+// OnToggleReporterVisibility :1930-1942: the reporter follows analog mode
+// only while the operator has not hidden it) and setFreedvStationList
+// (src/gui/dialogs/freedv_reporter.cpp:3280-3304: the list is cleared on
+// connect and on disconnect).
+//
 // License (upstream):
 //   - freedv-gui main.cpp carries the GPL v2.1 header reproduced verbatim
 //     below per the upstream redistribution clause.
@@ -36,6 +52,10 @@
 //     BSD-2-Clause-style file header (Copyright Mooneer Salem, no per-
 //     file project copyright line); the BSD permission block is
 //     reproduced verbatim below per the upstream redistribution clause.
+//
+//   - freedv-gui's src/ongui.cpp carries only the short comment header
+//     reproduced verbatim below; src/gui/dialogs/freedv_reporter.cpp has
+//     no per-file header. The root LGPLv2.1+ license applies to both.
 //
 // LGPL is upgrade-compatible to GPL-3 (LGPL §3 conversion clause); the
 // BSD-2-Clause file-header carve-out is GPL-compatible by its own terms.
@@ -99,6 +119,14 @@
 //  SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 // =========================================================================
 //
+// --- From freedv-gui src/ongui.cpp [@77e793a] (verbatim header) ---
+//
+// /*
+//   ongui.cpp
+//
+//   The simpler GUI event handlers.
+// */
+//
 // Modification history (NereusSDR):
 //   2026-09-26  J.J. Boyd / KG4VCF  Created (parity Task 19, R-IOS-25,
 //                                    R-R3-49). AI-assisted via Anthropic
@@ -109,6 +137,16 @@
 //                                    move from MainWindow and RadioModel
 //                                    dropped are restored. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-27  J.J. Boyd / KG4VCF  iPhone plan Task 22 / parity Task 20
+//                                    (R-IOS-26, R-R3-49): FreeDV Reporter
+//                                    as a station source (start, stop,
+//                                    state, message, QSY, hide); ported
+//                                    freedvHides from freedv-gui
+//                                    ongui.cpp:1523-1529, 1930-1942 and
+//                                    setFreedvStationList from
+//                                    freedv_reporter.cpp:3280-3304
+//                                    [@77e793a], with ongui.cpp's header.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/SpotSourceHost.h"
@@ -116,6 +154,8 @@
 #include "core/AppSettings.h"
 #include "core/DxClusterClient.h"
 #include "core/DxccColorProvider.h"
+#include "core/FreeDVReporterClient.h"
+#include "models/FreeDVStationModel.h"
 #include "core/LogCategories.h"
 #include "core/PotaClient.h"
 #include "core/PskReporterClient.h"
@@ -133,6 +173,7 @@ namespace NereusSDR {
 const QString SpotSourceHost::kDxCluster = QStringLiteral("dxCluster");
 const QString SpotSourceHost::kRbn = QStringLiteral("rbn");
 const QString SpotSourceHost::kPota = QStringLiteral("pota");
+const QString SpotSourceHost::kFreedvReporter = QStringLiteral("freedvReporter");
 const QString SpotSourceHost::kPskReporter = QStringLiteral("pskReporter");
 const QString SpotSourceHost::kWsjtx = QStringLiteral("wsjtx");
 const QString SpotSourceHost::kSpotCollector = QStringLiteral("spotCollector");
@@ -180,6 +221,11 @@ QString resolveGrid(const QString& perSourceKey)
 } // namespace
 
 QStringList SpotSourceHost::stationSources()
+{
+    return {kDxCluster, kRbn, kPota, kFreedvReporter, kPskReporter};
+}
+
+QStringList SpotSourceHost::recordStreamSources()
 {
     return {kDxCluster, kRbn, kPota, kPskReporter};
 }
@@ -259,6 +305,7 @@ SpotSourceHost::SpotSourceHost(DxClusterClient* dxCluster, DxClusterClient* rbn,
     , m_pota(pota)
     , m_pskReporter(pskReporter)
     , m_spots(spots)
+    , m_freedvHidden(settingIsTrue(QStringLiteral("FreeDvReporter/Hidden")))
 {
     // Follow each client, so the state is what the client does, whoever
     // started it.
@@ -308,6 +355,71 @@ SpotSourceHost::SpotSourceHost(DxClusterClient* dxCluster, DxClusterClient* rbn,
     }
 }
 
+void SpotSourceHost::setFreedvReporter(FreeDVReporterClient* client)
+{
+    if (m_freedv) {
+        disconnect(m_freedv, nullptr, this, nullptr);
+    }
+    m_freedv = client;
+    if (client == nullptr) {
+        return;
+    }
+    // Follow the client, whoever started it (the FreeDV tab, the Core's
+    // restore, a window's spots.connect).
+    connect(client, &FreeDVReporterClient::connected, this,
+            [this]() { setSource(kFreedvReporter, kConnected); });
+    connect(client, &FreeDVReporterClient::disconnected, this,
+            [this]() { setSource(kFreedvReporter, kOff); });
+    connect(client, &FreeDVReporterClient::connectionLost, this, [this](int retryInMs) {
+        setSource(kFreedvReporter, kConnecting,
+                  QStringLiteral("Lost the connection; trying again in %1 s")
+                      .arg((retryInMs + 999) / 1000));
+    });
+    connect(client, &FreeDVReporterClient::connectionError, this,
+            [this](const QString& error) { setSource(kFreedvReporter, kError, error); });
+    connect(client, &FreeDVReporterClient::rawLineReceived, this,
+            [this](const QString& line) { emit consoleLine(kFreedvReporter, line); });
+}
+
+void SpotSourceHost::setFreedvStationList(FreeDVStationModel* list)
+{
+    m_freedvList = list;
+    if (m_freedv == nullptr || list == nullptr) {
+        return;
+    }
+    // From freedv-gui src/gui/dialogs/freedv_reporter.cpp:3280-3304
+    // [@77e793a]: onReporterConnect_ and onReporterDisconnect_ both call
+    // clearAllEntries_(), so the list starts again on each connect and
+    // empties when the connection ends, and a station the server stopped
+    // telling this client about never lingers. (The client forgets its own
+    // map at the same points: startConnection, stopConnection,
+    // onWsDisconnected.)
+    const auto clearAllEntries = [this]() {
+        if (m_freedvList) {
+            m_freedvList->clear();
+        }
+    };
+    connect(m_freedv, &FreeDVReporterClient::connected, this, clearAllEntries);
+    connect(m_freedv, &FreeDVReporterClient::disconnected, this, clearAllEntries);
+    connect(m_freedv, &FreeDVReporterClient::connectionLost, this, clearAllEntries);
+}
+
+bool SpotSourceHost::freedvHides(bool listedSliceInRade) const
+{
+    // From freedv-gui src/ongui.cpp:1523-1529 [@77e793a]: an analog-mode
+    // change reaches the shared reporter only while the operator has not
+    // hidden the station,
+    //     if (obj != wxGetApp().m_sharedReporterObject || !m_reporterHidden->GetValue())
+    //     {
+    //         obj->inAnalogMode(g_analog);
+    //     }
+    // and OnToggleReporterVisibility (ongui.cpp:1930-1942) hides or shows
+    // it with the toggle. With RADE as the FreeDV mode and any other mode
+    // as analog: hidden while "Hide my station" is on or the listed slice
+    // is not in RADE.
+    return freedvReporterHidden() || !listedSliceInRade;
+}
+
 void SpotSourceHost::restoreAutoStart(Placement placement)
 {
     const bool station = placement != Placement::WindowSources;
@@ -349,6 +461,18 @@ void SpotSourceHost::restoreAutoStart(Placement placement)
     // POTA (HTTPS poll loop).
     if (station && m_pota && settingIsTrue(QStringLiteral("PotaAutoStart"))) {
         m_pota->startPolling(s.value(QStringLiteral("PotaPollInterval"), 30).toInt());
+    }
+
+    // FreeDV Reporter (WebSocket connect). Moved here from
+    // RadioModel::restoreSpotClientAutoStartState (iPhone plan Task 22):
+    // the identity is resolved from the saved settings before the connect,
+    // and with none the start is skipped, as before, and says why.
+    if (station && m_freedv && settingIsTrue(QStringLiteral("FreeDvAutoStart"))) {
+        QString reason;
+        if (!startFreedvWith(&reason)) {
+            qCWarning(lcDsp) << "FreeDV Reporter auto-start skipped:" << reason;
+            setSource(kFreedvReporter, kOff, reason);
+        }
     }
 
     // PSK Reporter: send-only.  Identity refreshed from User/* fall-
@@ -425,6 +549,9 @@ bool SpotSourceHost::connectSource(const QString& source, QString* reason)
         m_pota->startPolling(s.value(QStringLiteral("PotaPollInterval"), 30).toInt());
         return true;
     }
+    if (source == kFreedvReporter) {
+        return startFreedvWith(reason);
+    }
     // PSK Reporter.
     if (m_pskReporter == nullptr) {
         return refuse(QStringLiteral("The Core does not run that spot source."));
@@ -458,6 +585,9 @@ bool SpotSourceHost::disconnectSource(const QString& source, QString* reason)
     } else if (source == kPota && m_pota) {
         m_pota->stopPolling();
         setSource(kPota, kOff);
+    } else if (source == kFreedvReporter && m_freedv) {
+        m_freedv->stopConnection();
+        setSource(kFreedvReporter, kOff);
     } else if (source == kPskReporter && m_pskReporter) {
         // From freedv-gui main.cpp:2694 [@77e793a]:
         //   m_pskReporterTimer.Stop();
@@ -505,6 +635,104 @@ void SpotSourceHost::clearAll()
     }
 }
 
+// ── FreeDV Reporter (iPhone plan Task 22, stationFreedvVersion 1) ────────
+
+QString SpotSourceHost::freedvCallsign()
+{
+    // R-IOS-26: a callsign, never the Core's label. The Spot Hub's own key
+    // and its Settings tab's identity first, as before; the Core's
+    // StationCallsign when neither is set.
+    QString call = resolveCall(QStringLiteral("FreeDvReporter/Callsign"));
+    if (call.isEmpty()) {
+        call = AppSettings::instance().value(QStringLiteral("StationCallsign")).toString();
+    }
+    return call.trimmed();
+}
+
+QString SpotSourceHost::freedvGridSquare()
+{
+    return resolveGrid(QStringLiteral("FreeDvReporter/GridSquare")).trimmed();
+}
+
+bool SpotSourceHost::setFreedvMessage(const QString& text, QString* reason)
+{
+    if (m_freedv == nullptr) {
+        if (reason != nullptr) {
+            *reason = QStringLiteral("The Core does not run FreeDV Reporter.");
+        }
+        return false;
+    }
+    // From freedv-gui FreeDVReporter.cpp:122-130 [@77e793a] (updateMessage):
+    // kept for the next connect when not connected now.
+    m_freedv->updateMessage(text);
+    return true;
+}
+
+bool SpotSourceHost::sendFreedvQsy(const QString& callsign, qint64 frequencyHz, QString* reason)
+{
+    const auto refuse = [reason](const QString& why) {
+        if (reason != nullptr) {
+            *reason = why;
+        }
+        return false;
+    };
+    if (m_freedv == nullptr) {
+        return refuse(QStringLiteral("The Core does not run FreeDV Reporter."));
+    }
+    if (!m_freedv->isConnected()) {
+        return refuse(QStringLiteral("FreeDV Reporter is not connected on the Core."));
+    }
+    if (frequencyHz <= 0) {
+        return refuse(QStringLiteral("Enter a frequency for the QSY request first."));
+    }
+    const QString wanted = callsign.trimmed();
+    if (wanted.isEmpty()) {
+        return refuse(QStringLiteral("Pick a callsign for the QSY request first."));
+    }
+    // The station listed with that callsign; with more than one (the same
+    // operator on two sessions), the one heard from last.
+    QString sid;
+    QDateTime newest;
+    const QHash<QString, FreeDVStation> stations = m_freedv->stations();
+    for (auto it = stations.cbegin(); it != stations.cend(); ++it) {
+        if (it->callsign.compare(wanted, Qt::CaseInsensitive) != 0) {
+            continue;
+        }
+        if (sid.isEmpty() || (it->lastUpdate.isValid() && it->lastUpdate > newest)) {
+            sid = it.key();
+            newest = it->lastUpdate;
+        }
+    }
+    if (sid.isEmpty()) {
+        return refuse(QStringLiteral("%1 is not on FreeDV Reporter now.").arg(wanted));
+    }
+    // From freedv-gui FreeDVReporter.cpp:104-119 [@77e793a] (requestQSY).
+    m_freedv->requestQSY(sid, static_cast<quint64>(frequencyHz), QString());
+    return true;
+}
+
+bool SpotSourceHost::setFreedvHidden(bool on, QString* reason)
+{
+    Q_UNUSED(reason);
+    auto& s = AppSettings::instance();
+    s.setValue(QStringLiteral("FreeDvReporter/Hidden"),
+               on ? QStringLiteral("True") : QStringLiteral("False"));
+    s.save();
+    if (m_freedvHidden == on) {
+        return true;
+    }
+    m_freedvHidden = on;
+    emit sourcesChanged();
+    emit sourceChanged(kFreedvReporter);
+    emit freedvHiddenChanged(on);
+    return true;
+}
+
+bool SpotSourceHost::freedvReporterHidden() const
+{
+    return forwardsStationSources() ? m_stationFreedvHidden : m_freedvHidden;
+}
+
 QString SpotSourceHost::state(const QString& source) const
 {
     const bool station = forwardsStationSources() && isStationSource(source);
@@ -537,6 +765,17 @@ void SpotSourceHost::setStationForwarder(StationForwarder forwarder)
 
 bool SpotSourceHost::applyStationValue(const QByteArray& propertyName, const QVariant& value)
 {
+    if (propertyName == "freedvReporterHidden") {
+        if (value.typeId() != QMetaType::Bool) {
+            return false;
+        }
+        if (m_stationFreedvHidden != value.toBool()) {
+            m_stationFreedvHidden = value.toBool();
+            emit sourcesChanged();
+            emit sourceChanged(kFreedvReporter);
+        }
+        return true;
+    }
     if (value.typeId() != QMetaType::QString) {
         return false;
     }
@@ -560,10 +799,11 @@ bool SpotSourceHost::applyStationValue(const QByteArray& propertyName, const QVa
 
 void SpotSourceHost::clearStationValues()
 {
-    if (m_station.isEmpty()) {
+    if (m_station.isEmpty() && !m_stationFreedvHidden) {
         return;
     }
     m_station.clear();
+    m_stationFreedvHidden = false;
     emit sourcesChanged();
     for (const QString& source : stationSources()) {
         emit sourceChanged(source);
@@ -584,6 +824,11 @@ void SpotSourceHost::appendStationConsole(const QString& source, const QStringLi
 void SpotSourceHost::reportStationRefusal(const QString& source, const QString& reason)
 {
     emit sourceRefused(source, reason);
+}
+
+void SpotSourceHost::setFreedvForwarder(FreedvForwarder forwarder)
+{
+    m_freedvForwarder = std::move(forwarder);
 }
 
 // ── The Spot Hub's buttons ───────────────────────────────────────────────
@@ -688,6 +933,59 @@ void SpotSourceHost::stopPskReporter()
     setSource(kPskReporter, kOff);
 }
 
+void SpotSourceHost::startFreedvReporter()
+{
+    if (forward("spots.connect", kFreedvReporter) || !m_freedv) {
+        return;
+    }
+    QString reason;
+    if (!startFreedvWith(&reason)) {
+        emit sourceRefused(kFreedvReporter, reason);
+    }
+}
+
+void SpotSourceHost::stopFreedvReporter()
+{
+    if (forward("spots.disconnect", kFreedvReporter) || !m_freedv) {
+        return;
+    }
+    disconnectSource(kFreedvReporter, nullptr);
+}
+
+void SpotSourceHost::sendFreedvMessage(const QString& text)
+{
+    if (forwardFreedv("freedv.setMessage", {{QStringLiteral("text"), text}})) {
+        return;
+    }
+    QString reason;
+    if (!setFreedvMessage(text, &reason)) {
+        emit sourceRefused(kFreedvReporter, reason);
+    }
+}
+
+void SpotSourceHost::requestFreedvQsy(const QString& callsign, qint64 frequencyHz)
+{
+    if (forwardFreedv("freedv.sendQsy", {{QStringLiteral("callsign"), callsign},
+                                         {QStringLiteral("frequencyHz"), frequencyHz}})) {
+        return;
+    }
+    QString reason;
+    if (!sendFreedvQsy(callsign, frequencyHz, &reason)) {
+        emit sourceRefused(kFreedvReporter, reason);
+    }
+}
+
+void SpotSourceHost::hideFreedvStation(bool on)
+{
+    if (forwardFreedv("freedv.setHidden", {{QStringLiteral("on"), on}})) {
+        return;
+    }
+    QString reason;
+    if (!setFreedvHidden(on, &reason)) {
+        emit sourceRefused(kFreedvReporter, reason);
+    }
+}
+
 void SpotSourceHost::typeCommand(const QString& source, const QString& text)
 {
     if (forward("spots.sendCommand", source, text)) {
@@ -735,6 +1033,57 @@ bool SpotSourceHost::forward(const QByteArray& verb, const QString& source, cons
     if (!m_forwarder(verb, source, text, &reason)) {
         emit sourceRefused(source, reason);
     }
+    return true;
+}
+
+bool SpotSourceHost::forwardFreedv(const QByteArray& verb, const QVariantMap& args)
+{
+    if (!m_forwarder) {
+        return false; // this window runs FreeDV Reporter itself
+    }
+    QString reason;
+    if (!m_freedvForwarder) {
+        reason = QStringLiteral("Not connected to the Core, so the FreeDV Reporter request was "
+                                "not sent.");
+    } else if (m_freedvForwarder(verb, args, &reason)) {
+        return true;
+    }
+    emit sourceRefused(kFreedvReporter, reason);
+    return true;
+}
+
+bool SpotSourceHost::startFreedvWith(QString* reason)
+{
+    const auto refuse = [reason](const QString& why) {
+        if (reason != nullptr) {
+            *reason = why;
+        }
+        return false;
+    };
+    if (m_freedv == nullptr) {
+        return refuse(QStringLiteral("The Core does not run that spot source."));
+    }
+    // Post-3J-2 UX fix [moved from RadioModel::restoreSpotClientAutoStartState
+    // in iPhone plan Task 22]: re-resolve identity from the saved settings
+    // and call setIdentity() before startConnection(); with no callsign or
+    // grid the qso.freedv.org server would take the session as view-only
+    // and never list the station, so the start is refused instead.
+    const QString call = freedvCallsign();
+    const QString grid = freedvGridSquare();
+    if (call.isEmpty() || grid.isEmpty()) {
+        return refuse(QStringLiteral("Enter your callsign and grid square in Spot Hub first."));
+    }
+    if (m_freedv->isConnected()) {
+        return true;
+    }
+    const QString message =
+        AppSettings::instance().value(QStringLiteral("FreeDvReporter/Message")).toString();
+    qCInfo(lcDsp) << "FreeDVReporter: starting connection with identity"
+                  << "callsign=" << call << "grid=" << grid << "msg=" << message
+                  << "version=" << versionString();
+    m_freedv->setIdentity(call, grid, message, versionString());
+    setSource(kFreedvReporter, kConnecting);
+    m_freedv->startConnection();
     return true;
 }
 

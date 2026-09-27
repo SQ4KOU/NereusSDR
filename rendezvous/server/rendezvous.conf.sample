@@ -30,6 +30,15 @@ turn_secret_file =
 # Relay credentials are valid this long.
 turn_ttl_seconds = 86400
 
+# The WebSocket relay (section 12): the URL every relay grant names, the
+# file holding the secret shared with nereus-relay (and nothing else; it
+# must differ from the TURN secret), and how long a grant admits a first
+# join. Empty relay_secret_file: no grants are minted. Under systemd,
+# LoadCredential= hands the secret over.
+relay_url = wss://rv.nereussdr.com/v1/relay
+relay_secret_file =
+relay_ttl_seconds = 120
+
 # debug, info, warning or error. Logs go to standard error only.
 log_level = info
 

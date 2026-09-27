@@ -3,8 +3,9 @@
 # Installed as /etc/systemd/system/nereus-rendezvous.service by
 # rendezvous/deploy/setup-server.sh. The code lives in /opt/nereus-rendezvous
 # (put there by rendezvous/deploy.sh), the configuration in
-# /etc/nereus-rendezvous/rendezvous.conf and the TURN secret in
-# /etc/nereus-rendezvous/turn-secret (both written by setup-server.sh).
+# /etc/nereus-rendezvous/rendezvous.conf and the TURN and relay secrets in
+# /etc/nereus-rendezvous/turn-secret and relay-secret (all written by
+# setup-server.sh).
 # The wire is docs/architecture/2026-09-23-rendezvous-v1.md.
 
 [Unit]
@@ -29,11 +30,14 @@ RestartSec=5
 KillSignal=SIGTERM
 TimeoutStopSec=20
 
-# --- The TURN secret ----------------------------------------------------
-# systemd copies the root-only secret file to
-# /run/credentials/nereus-rendezvous.service/turn-secret, readable by this
-# service alone, and rendezvous.conf's turn_secret_file points there.
+# --- The TURN secret and the relay secret -------------------------------
+# systemd copies the root-only secret files to
+# /run/credentials/nereus-rendezvous.service/, readable by this service
+# alone, and rendezvous.conf's turn_secret_file and relay_secret_file point
+# there. The relay secret signs relay grants (rendezvous document section
+# 12.2); nereus-relay.service reads the same file to check them.
 LoadCredential=turn-secret:/etc/nereus-rendezvous/turn-secret
+LoadCredential=relay-secret:/etc/nereus-rendezvous/relay-secret
 
 # --- Identity -----------------------------------------------------------
 # A transient account made for each run; the service owns no files.

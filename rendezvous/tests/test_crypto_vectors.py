@@ -1,6 +1,7 @@
 # no-port-check: NereusSDR-original.
-"""The crypto and derivation vectors, against the service's identity and
-TURN code, and TURN passwords recomputed here with hmac directly."""
+"""The crypto and derivation vectors, against the service's identity, TURN
+and relay grant code, and TURN passwords and relay grant MACs recomputed
+here with hmac directly."""
 
 import base64
 import hashlib
@@ -9,7 +10,7 @@ import hmac
 import pytest
 from cryptography.hazmat.primitives.asymmetric import ec
 
-from nereus_rendezvous import identity, turn
+from nereus_rendezvous import identity, relaygrant, turn
 from runner import load_fixture, load_manifest
 
 CRYPTO = {f["id"]: f["file"] for f in load_manifest()["fixtures"] if f["kind"] == "crypto"}
@@ -23,6 +24,7 @@ def test_every_crypto_file_is_listed():
         "register-proof",
         "introduce-signature",
         "turn-credentials",
+        "relay-grant",
     }
 
 
@@ -133,6 +135,32 @@ def test_turn_credentials():
         assert independent == case["password"]
         minted = turn.mint(secret, case["stationId"], case["expires"] - 86400, 86400, ["turn:x"])
         assert minted == {"username": case["username"], "password": case["password"], "expires": case["expires"], "urls": ["turn:x"]}
+
+
+def test_relay_grant():
+    """Section 12.2: every valid token is what the service mints and the
+    relay accepts, its MAC recomputed here with hmac directly; every
+    invalid one is refused by the relay's check."""
+    vectors = load_fixture(CRYPTO["relay-grant"])
+    assert bytes.fromhex(vectors["prefixHex"]) == relaygrant.PREFIX
+    assert bytes.fromhex(vectors["stationPrefixHex"]) == relaygrant.STATION_PREFIX
+    for case in vectors["cases"]:
+        secret = case["secret"].encode("utf-8")
+        got = relaygrant.verify(secret, case["token"])
+        if not case["valid"]:
+            assert got is None, case["name"]
+            continue
+        session = bytes.fromhex(case["sessionHex"])
+        station = bytes.fromhex(case["stationHex"])
+        independent = hmac.new(secret, relaygrant.STATION_PREFIX + case["stationId"].encode(), hashlib.sha256).digest()[:8]
+        assert relaygrant.station_of(secret, case["stationId"]) == station == independent, case["name"]
+        assert relaygrant.mint(secret, case["leg"], session, station, case["expires"]) == case["token"], case["name"]
+        assert got == relaygrant.Grant(case["leg"], session, station, case["expires"]), case["name"]
+        raw = base64.urlsafe_b64decode(case["token"] + "=" * (-len(case["token"]) % 4))
+        payload = bytes([1, case["leg"]]) + session + station + case["expires"].to_bytes(4, "big")
+        assert raw[:30] == payload
+        assert raw[30:] == hmac.new(secret, relaygrant.PREFIX + payload, hashlib.sha256).digest()
+        assert len(case["token"]) == 83
 
 
 @pytest.mark.parametrize("text", ["", "A" * 26, "a" * 25, "a" * 27, "abcdefghijklmnopqrstuvwxy1", "abcdefghijklmnopqrstuvwxy8"])

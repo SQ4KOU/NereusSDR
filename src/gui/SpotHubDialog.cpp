@@ -133,6 +133,15 @@
 //                                    reason while there is no Core
 //                                    session. AI tooling: Anthropic Claude
 //                                    Code.
+//   2026-09-27  J.J. Boyd / KG4VCF  iPhone plan Task 22 / parity Task 20
+//                                    (R-IOS-26): the FreeDV tab is the
+//                                    Core's in a remote window (Start /
+//                                    Stop, state, console, "Hide my
+//                                    station"); locally its console now
+//                                    shows the client's lines and "Hide my
+//                                    station" goes through the spot source
+//                                    host. AI tooling: Anthropic Claude
+//                                    Code.
 
 #include "SpotHubDialog.h"
 
@@ -153,6 +162,7 @@
 #include "models/SpotTableModel.h"
 
 #include <QCheckBox>
+#include <QSignalBlocker>
 #include <QColor>
 #include <QColorDialog>
 #include <QComboBox>
@@ -1844,8 +1854,16 @@ void SpotHubDialog::buildFreeDvTab(QTabWidget* tabs)
     m_freedvStartBtn->setFixedWidth(100);
     m_freedvStartBtn->setStyleSheet(kStartBtnStyle);
     connect(m_freedvStartBtn, &QPushButton::clicked, this, [this] {
-        if (m_freedvClient && m_freedvClient->isConnected()) {
+        // iPhone plan Task 22 / parity Task 20: in a remote window FreeDV
+        // Reporter is the Core's; the Core checks its own identity and its
+        // refusal comes back to the status label.
+        if (sourceRunning(SpotSourceHost::kFreedvReporter,
+                          m_freedvClient && m_freedvClient->isConnected())) {
             emit freedvStopRequested();
+            return;
+        }
+        if (stationRemote()) {
+            emit freedvStartRequested();
             return;
         }
         // Post-3J-2 UX fix: refuse to start with an empty identity.
@@ -1902,6 +1920,15 @@ void SpotHubDialog::buildFreeDvTab(QTabWidget* tabs)
                         m_freedvStatusLabel->setText(QString("Error: %1").arg(error));
                         m_freedvStatusLabel->setStyleSheet(
                             "QLabel { color: #e6c200; font-size: 11px; }");
+                    }
+                });
+        // iPhone plan Task 22: the client's lines in the FreeDV console, as
+        // every other tab streams its client's (the Core's arrive through
+        // the spot source host in a remote window).
+        connect(m_freedvClient, &FreeDVReporterClient::rawLineReceived,
+                this, [this](const QString& line) {
+                    if (m_freedvConsole && !stationRemote()) {
+                        m_freedvConsole->appendPlainText(line);
                     }
                 });
     }
@@ -2035,6 +2062,13 @@ void SpotHubDialog::buildFreeDvTab(QTabWidget* tabs)
             s.value("FreeDvReporter/Hidden", "False").toString() == "True");
         connect(hideChk, &QCheckBox::toggled, this,
                 [this](bool on) {
+                    // iPhone plan Task 22 / parity Task 20: through the spot
+                    // source host, which saves it and shows or hides the
+                    // station at once (the Core's in a remote window).
+                    if (m_sourceHost) {
+                        m_sourceHost->hideFreedvStation(on);
+                        return;
+                    }
                     auto& settings = AppSettings::instance();
                     settings.setValue("FreeDvReporter/Hidden",
                                       on ? "True" : "False");
@@ -3147,15 +3181,39 @@ void SpotHubDialog::setSourceHost(SpotSourceHost* host)
             : source == SpotSourceHost::kRbn                  ? m_rbnStatusLabel
             : source == SpotSourceHost::kPota                 ? m_potaStatusLabel
             : source == SpotSourceHost::kPskReporter          ? m_pskStatusLabel
+            : source == SpotSourceHost::kFreedvReporter       ? m_freedvStatusLabel
                                                               : nullptr;
         if (label != nullptr && !reason.isEmpty()) {
             label->setText(reason);
             label->setStyleSheet(QStringLiteral("QLabel { color: #ff4444; font-size: 11px; }"));
         }
+        // A refused "Hide my station" goes back to what the Core holds.
+        if (source == SpotSourceHost::kFreedvReporter) {
+            syncFreedvHidden();
+        }
     });
     for (const QString& source : SpotSourceHost::stationSources()) {
         refreshStationSource(source);
     }
+    syncFreedvHidden();
+}
+
+void SpotHubDialog::setStationFreedvAvailable(bool available, const QString& reason)
+{
+    m_stationFreedvAvailable = available;
+    m_stationFreedvReason = reason;
+    applyStationAvailability();
+    refreshStationSource(SpotSourceHost::kFreedvReporter);
+}
+
+void SpotHubDialog::syncFreedvHidden()
+{
+    auto* hideChk = findChild<QCheckBox*>(QStringLiteral("freedvHideFromViewChk"));
+    if (hideChk == nullptr || !m_sourceHost) {
+        return;
+    }
+    const QSignalBlocker block(hideChk);
+    hideChk->setChecked(m_sourceHost->freedvReporterHidden());
 }
 
 void SpotHubDialog::setStationSettingsAvailable(bool available, const QString& reason)
@@ -3202,11 +3260,17 @@ QPlainTextEdit* SpotHubDialog::consoleFor(const QString& source) const
     if (source == SpotSourceHost::kPskReporter) {
         return m_pskConsole;
     }
+    if (source == SpotSourceHost::kFreedvReporter) {
+        return m_freedvConsole;
+    }
     return nullptr;
 }
 
 void SpotHubDialog::refreshStationSource(const QString& source)
 {
+    if (source == SpotSourceHost::kFreedvReporter) {
+        syncFreedvHidden();
+    }
     if (!stationRemote()) {
         return;
     }
@@ -3234,13 +3298,18 @@ void SpotHubDialog::refreshStationSource(const QString& source)
     } else if (source == SpotSourceHost::kPskReporter) {
         label = m_pskStatusLabel;
         button = m_pskStartBtn;
+    } else if (source == SpotSourceHost::kFreedvReporter) {
+        label = m_freedvStatusLabel;
+        button = m_freedvStartBtn;
     }
+    // FreeDV's tab says Connected and Stopped, as it does locally.
+    const bool freedv = source == SpotSourceHost::kFreedvReporter;
     if (label != nullptr) {
         // The words each tab uses locally, for the Core's source.
         QString words;
         if (state == SpotSourceHost::kConnected) {
-            words = !text.isEmpty() ? text
-                : cluster           ? QStringLiteral("Connected")
+            words = !text.isEmpty()   ? text
+                : cluster || freedv ? QStringLiteral("Connected")
                                     : QStringLiteral("Running");
             label->setStyleSheet(kStatusActiveStyle);
         } else if (state == SpotSourceHost::kConnecting) {
@@ -3248,6 +3317,10 @@ void SpotHubDialog::refreshStationSource(const QString& source)
             label->setStyleSheet(kStatusIdleStyle);
         } else if (state == SpotSourceHost::kError) {
             words = QStringLiteral("Error: %1").arg(text);
+            label->setStyleSheet(QStringLiteral("QLabel { color: #e6c200; font-size: 11px; }"));
+        } else if (freedv && !text.isEmpty()) {
+            // Off with the Core's reason (no identity for its auto-start).
+            words = text;
             label->setStyleSheet(QStringLiteral("QLabel { color: #e6c200; font-size: 11px; }"));
         } else {
             words = cluster ? QStringLiteral("Disconnected") : QStringLiteral("Stopped");
@@ -3293,6 +3366,7 @@ void SpotHubDialog::applyStationAvailability()
         m_potaIntervalSpin, m_potaAutoStartBtn,
         findChild<QPushButton*>(QStringLiteral("potaColorBtn")),
         m_freedvAutoStartBtn, findChild<QPushButton*>(QStringLiteral("freedvColorBtn")),
+        findChild<QCheckBox*>(QStringLiteral("freedvHideFromViewChk")),
         m_pskCallEdit, m_pskGridEdit, m_pskAutoStartBtn,
     };
     for (QWidget* w : settings) {
@@ -3305,6 +3379,14 @@ void SpotHubDialog::applyStationAvailability()
                                                     : m_stationSourcesReason;
     for (QPushButton* b : {m_connectBtn, m_rbnConnectBtn, m_potaStartBtn, m_pskStartBtn}) {
         gate(b, sources, why);
+    }
+    // iPhone plan Task 22 / parity Task 20: FreeDV Reporter's Start, and
+    // "Hide my station", need a Core that runs FreeDV Reporter too.
+    const bool freedv = sources && m_stationFreedvAvailable;
+    const QString freedvWhy = !sources ? why : m_stationFreedvReason;
+    gate(m_freedvStartBtn, freedv, freedvWhy);
+    if (!freedv) {
+        gate(findChild<QCheckBox*>(QStringLiteral("freedvHideFromViewChk")), false, freedvWhy);
     }
     // The command lines follow their source's state as well
     // (refreshStationSource); here only the reason they cannot be used.

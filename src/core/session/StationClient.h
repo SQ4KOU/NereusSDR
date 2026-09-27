@@ -340,6 +340,10 @@
 //               service introduced, retried the same way, and
 //               sessionIceConfiguration() for its media. J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-27: iPhone plan Task 22 / parity Task 20 (R-IOS-26):
+//               stationFreedvAvailable() and requestFreedv(). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QAbstractSocket>
@@ -1144,6 +1148,12 @@ public:
     /// source host (SpotSourceHost::reportStationRefusal).
     CommandOutcome requestSpotSource(const QByteArray& verb, const QString& source,
                                      const QString& text) override;
+    /// iPhone plan Task 22 / parity Task 20: spotSourcesAvailable() and
+    /// stationFreedvVersion at least 1.
+    bool stationFreedvAvailable() const override;
+    /// Verbs freedv.setMessage, freedv.sendQsy and freedv.setHidden; a
+    /// refusal is shown as the Core's other refusals are.
+    CommandOutcome requestFreedv(const QByteArray& verb, const QVariantMap& args) override;
     /// Parity Task 21 (R-IOS-18): minor 11 and stationRadiosVersion at
     /// least 1 on a ready session.
     bool stationRadiosAvailable() const override;

@@ -9,6 +9,11 @@
 //   2026-09-23  J.J. Boyd / KG4VCF  R3 remote window harness plan, Task 2.
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-09-27  J.J. Boyd / KG4VCF  R-R3-49: the Core's pending slice
+//                                    saves are made before the window's
+//                                    settings backend is installed and at
+//                                    each admission.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "RemoteWindowHarness.h"
@@ -181,6 +186,22 @@ RemoteWindowHarness::RemoteWindowHarness(const Options& options)
     m_server.setHeartbeatIntervalMs(0);
     QObject::connect(&m_listener, &QWebSocketServer::newConnection,
                      &m_server, [this] { accept(); });
+    // R-R3-49: admitting a window adopts the Core's unowned slices
+    // (StationServer::placeSlicesForAdmission), which schedules the Core's
+    // 500 ms coalesced save. Left to its timer, that save went through the
+    // window's settings backend (see start()) before or after the window's
+    // first look depending on how busy the machine was, and a Core that
+    // never sent settings read as one that had. It is made at the
+    // admission instead, into this process's own store with the window's
+    // backend set aside, as a real Core writes its own store.
+    QObject::connect(&m_server, &StationServer::clientAuthenticated, &m_station,
+                     [this](const QString&) {
+        AppSettings& settings = AppSettings::instance();
+        ISettingsBackend* const window = settings.remoteBackend();
+        settings.setRemoteBackend(nullptr);
+        m_station.flushPendingSettingsSave();
+        settings.setRemoteBackend(window);
+    });
 }
 
 RemoteWindowHarness::~RemoteWindowHarness()
@@ -205,6 +226,13 @@ bool RemoteWindowHarness::start()
     // dialog; seeded anyway, as for every test that builds a MainWindow.
     suppressLinuxAudioFirstRun();
 
+    // R-R3-49: the Core's model and the window share this process's
+    // AppSettings (a real Core writes its own store), so a save the Core's
+    // model makes after this line goes through the window's settings
+    // backend. The slices the constructor added scheduled the Core's
+    // 500 ms coalesced save (RadioModel::scheduleSettingsSave); made now,
+    // it lands before the window's backend is installed, every run.
+    m_station.flushPendingSettingsSave();
     AppSettings::instance().setRemoteBackend(&m_proxy);
     m_backendInstalled = true;
     const RemoteStationOptions options{

@@ -162,6 +162,14 @@
 //                 slices for its own speakers and headphones taps, and the
 //                 local output carrying only setLocalOutputSliceMask()'s
 //                 slices (the station device's). NereusSDR-original.
+//   2026-09-27: Remote-window parity Task 32 (R-IOS-13, R-R3-49) by J.J.
+//                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code. The
+//                 transmit monitor to the device that holds transmit:
+//                 setOwnerMixMonitor() puts it in one owner mix's speakers
+//                 or headphones sum, and setTxMonitorLocal(false) keeps it
+//                 off this computer's own outputs. The MOX-gated slice's
+//                 own block now drains the mix (drainMixes), so MON is
+//                 heard with one slice. NereusSDR-original.
 // =================================================================
 
 #include "AudioDeviceConfig.h"
@@ -555,6 +563,13 @@ public:
     void clearOwnerMixAudioTap(int slot, MasterMixAudioTap* tap);
     bool setOwnerHeadphonesMixAudioTap(int slot, MasterMixAudioTap* tap);
     void clearOwnerHeadphonesMixAudioTap(int slot, MasterMixAudioTap* tap);
+    /// Remote-window parity Task 32: where the transmit monitor goes in this
+    /// owner's mix: nowhere (the default, and after acquire and release),
+    /// its speakers sum or its headphones sum, at MON's own level
+    /// (setTxMonitorVolume). A program tap (not speakersOnly) carries either.
+    /// Any thread; the audio thread reads it at the next drain.
+    void setOwnerMixMonitor(int slot, MasterMixer::OwnerMonitor monitor);
+    MasterMixer::OwnerMonitor ownerMixMonitor(int slot) const;
     /// Owner mixes taken now; diagnostics and leak checks.
     int ownerMixCount() const;
 
@@ -873,12 +888,20 @@ public:
     /// With the headphones chosen and no headphones output open, MON is
     /// heard nowhere; the control beside MON says why (headphonesAvailable).
     ///
-    /// R4 seam: on the Core this setter decides where the Core's MON goes,
-    /// and a MON routed to the headphones lands in the headphones mix that
-    /// setHeadphonesMixAudioTap() hands a remote window. When remote
-    /// transmit lands, a remote window's choice reaches the Core through a
-    /// session command calling this setter.
+    /// On the Core this setter decides where MON plays on the Core's own
+    /// outputs. A remote device's choice never calls it: remote-window
+    /// parity Task 32 routes MON into that device's own owner mix
+    /// (setOwnerMixMonitor) instead.
     void setTxMonitorOutput(TxMonitorOutput output);
+
+    /// Remote-window parity Task 32 (JJ's MON ruling, 2026-09-26): whether
+    /// MON plays on this computer's own outputs (the speakers or headphones
+    /// bus, and the master and headphones-mix taps). True by default, as
+    /// before; the Core sets it false while a remote device holds
+    /// transmit, whose MON plays only on that device. Any thread; the audio
+    /// thread reads it at the next drain.
+    void setTxMonitorLocal(bool local) { m_txMonitorLocal.store(local, std::memory_order_release); }
+    bool txMonitorLocal() const { return m_txMonitorLocal.load(std::memory_order_acquire); }
     TxMonitorOutput txMonitorOutput() const
     {
         return m_txMonitorToHeadphones.load(std::memory_order_acquire)
@@ -1264,6 +1287,8 @@ private:
         MixTapGate program;
         std::atomic<bool> programSpeakersOnly{false};
         MixTapGate headphones;
+        // Task 32: MasterMixer::OwnerMonitor, as an int for the atomic.
+        std::atomic<int> monitor{0};
     };
     std::array<OwnerMixSlot, kMaxOwnerMixes> m_ownerMixes;
     mutable std::mutex m_ownerMixControlMutex;
@@ -1279,6 +1304,12 @@ private:
         return slot >= 0 && slot < kMaxOwnerMixes;
     }
     void closeAndDrainSliceTap(SliceTapSlot& slot);
+    // DSP thread, from rxBlockReady only: drain both mixers, run the taps
+    // and push the outputs. Remote-window parity Task 32 split it out so
+    // the MOX-gated slice's call drains too, with `monitorOnly`: then only
+    // while no slice is a barrier member (MON alone is queued), and never
+    // the anti-VOX mixer, which MON is not in.
+    void drainMixes(int frames, bool monitorOnly = false);
     // DSP thread. Hands each tap for `sliceId` the block with the slice's AF
     // gain undone (afGainInverseForSlice).
     void feedSliceTaps(int sliceId, const float* samples, int frames) noexcept;
@@ -1354,6 +1385,8 @@ private:
     // by setTxMonitorOutput() on the main thread, read by
     // txMonitorBlockReady() on the audio thread.
     std::atomic<bool>  m_txMonitorToHeadphones{false};
+    // Task 32: MON on this computer's own outputs (setTxMonitorLocal).
+    std::atomic<bool>  m_txMonitorLocal{true};
 
     // Sub-Phase 9 Task 9.2a — per-channel VAX rx gain / mute and master
     // VAX tx gain. Main-thread writes via set*() setters, DSP-thread

@@ -23,21 +23,28 @@
 // DTLS and SCTP handshake), and the 50 ms flush fired in the middle of the
 // step and split one coalesced delta into two.
 //
-// A timer's virtual due time is taken from its real remaining time when
-// the clock first sees it, kept to its interval (a coarse timer, Qt's
-// default, may report up to 5% more). A timer started again is seen by its
-// real remaining time growing. That is judged on the real remaining time
-// as reported, never the value kept to the interval: the kept value stays
-// at the interval for as long as the report is above it (up to 9 s for a
-// 180 s timer), so it read as a fresh start every time the clock looked,
-// and each look pushed the due time forward again. A device's 180 s grace
-// then never ended inside its advanceMs.
+// A timer's virtual due time is its interval after the virtual instant it
+// was started, whatever real time passes before the clock looks: virtual
+// time stands still between two advances, so a timer is always started at
+// the clock's now. A start is seen by the timer's active property, which
+// notifies on every start (a restart while running included) and never on
+// a repeating timer's own real expiry. The clock used to read the start
+// from the timer's real remaining time instead, and so took real time into
+// virtual time: a timer the clock first saw a millisecond after its start
+// was due a millisecond early, and each real expiry of a repeating timer
+// outside a hold moved its phase. session-tx-keepalive over a data channel
+// then saw the meter pump poll at 999 ms instead of 1000 ms, too early for
+// the time-out's 179, and the transmit watchdog's 1051 ms stop came first.
 //
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-09-27: moved from LinkFixtures.cpp; a restart is judged on the
 //               real remaining time; real expiries are swallowed while the
 //               clock is held (iPhone app plan Task 28 tail, R-IOS-16). J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-27: a timer is due its interval after its start in virtual
+//               time; starts are seen by the active property, never by
+//               real remaining time (R-R3-49). J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
@@ -47,21 +54,19 @@
 #include <QMetaObject>
 #include <QObject>
 #include <QPointer>
+#include <QProperty>
 #include <QString>
 #include <QTimer>
 
 #include <algorithm>
 #include <functional>
+#include <memory>
 #include <vector>
 
 namespace NereusSDR::Test {
 
 class LinkVirtualClock : public QObject {
 public:
-    /// A timer whose real remaining time grew by more than this since it
-    /// was last seen was started again.
-    static constexpr qint64 kRestartSlackMs = 20;
-
     /// `drain` runs the queued work between timers (the player's drain()).
     LinkVirtualClock(QObject* root, std::function<void()> drain)
         : m_root(root)
@@ -101,8 +106,8 @@ public:
     void scan()
     {
         m_tracked.erase(std::remove_if(m_tracked.begin(), m_tracked.end(),
-                                       [](const Tracked& t) {
-                                           return t.timer.isNull() || !t.timer->isActive();
+                                       [](const std::unique_ptr<Tracked>& t) {
+                                           return t->timer.isNull() || !t->timer->isActive();
                                        }),
                         m_tracked.end());
         if (m_root.isNull()) {
@@ -113,23 +118,20 @@ public:
             if (!timer->isActive()) {
                 continue;
             }
-            const qint64 reported = std::max(0, timer->remainingTime());
-            // The clock keeps to the interval (a coarse timer may report
-            // up to 5% more).
-            const qint64 kept = std::min<qint64>(reported, std::max(0, timer->interval()));
             auto it = std::find_if(m_tracked.begin(), m_tracked.end(),
-                                   [timer](const Tracked& t) { return t.timer == timer; });
+                                   [timer](const std::unique_ptr<Tracked>& t) {
+                                       return t->timer == timer;
+                                   });
             if (it == m_tracked.end()) {
-                Tracked t;
-                t.timer = timer;
-                t.due = m_now + kept;
-                t.realRemaining = reported;
-                t.since.start();
-                m_tracked.push_back(t);
-            } else if (reported > it->realRemaining - it->since.elapsed() + kRestartSlackMs) {
-                it->due = m_now + kept;
-                it->realRemaining = reported;
-                it->since.restart();
+                auto t = std::make_unique<Tracked>();
+                t->timer = timer;
+                t->due = m_now + std::max(0, timer->interval());
+                Tracked* raw = t.get();
+                t->started = timer->bindableActive().addNotifier([raw]() { raw->restarted = true; });
+                m_tracked.push_back(std::move(t));
+            } else if ((*it)->restarted) {
+                (*it)->restarted = false;
+                (*it)->due = m_now + std::max(0, timer->interval());
             }
         }
     }
@@ -143,22 +145,24 @@ public:
             runQueued();
             scan();
             auto next = std::min_element(m_tracked.begin(), m_tracked.end(),
-                                         [](const Tracked& a, const Tracked& b) {
-                                             return a.due < b.due;
+                                         [](const std::unique_ptr<Tracked>& a,
+                                            const std::unique_ptr<Tracked>& b) {
+                                             return a->due < b->due;
                                          });
-            if (next == m_tracked.end() || next->due > target) {
+            if (next == m_tracked.end() || (*next)->due > target) {
                 break;
             }
-            m_now = std::max(m_now, next->due);
-            QPointer<QTimer> timer = next->timer;
+            m_now = std::max(m_now, (*next)->due);
+            QPointer<QTimer> timer = (*next)->timer;
             if (timer->isSingleShot()) {
                 timer->stop();
                 m_tracked.erase(next);
             } else {
+                // The clock's own restart: its next period, not a start the
+                // scan should read (a restart from the timeout still is).
                 timer->start();
-                next->due = m_now + std::max(1, timer->interval());
-                next->realRemaining = std::max(0, timer->remainingTime());
-                next->since.restart();
+                (*next)->restarted = false;
+                (*next)->due = m_now + std::max(1, timer->interval());
             }
             if (!QMetaObject::invokeMethod(timer, "timeout", Qt::DirectConnection)) {
                 return QStringLiteral("could not fire a timer's timeout");
@@ -168,6 +172,18 @@ public:
         runQueued();
         scan();
         return QString();
+    }
+
+    /// The virtual time `timer` is due, or -1 when the clock does not track
+    /// it (for the clock's own tests).
+    qint64 dueForTest(const QTimer* timer) const
+    {
+        for (const auto& t : m_tracked) {
+            if (t->timer == timer) {
+                return t->due;
+            }
+        }
+        return -1;
     }
 
 protected:
@@ -181,13 +197,7 @@ protected:
             return false;
         }
         // A real expiry of a timer the clock fires. The underlying timer
-        // runs on, so its next real expiry is one interval later: a
-        // repeating period, not a start the scan should read.
-        auto it = std::find_if(m_tracked.begin(), m_tracked.end(),
-                               [timer](const Tracked& t) { return t.timer == timer; });
-        if (it != m_tracked.end()) {
-            it->realRemaining += std::max(0, timer->interval());
-        }
+        // runs on; its virtual due time is the clock's alone.
         ++m_swallowed;
         return true;
     }
@@ -200,8 +210,9 @@ private:
     struct Tracked {
         QPointer<QTimer> timer;
         qint64 due = 0;
-        qint64 realRemaining = 0;
-        QElapsedTimer since;
+        /// Set by the timer's active property on a start or a stop.
+        bool restarted = false;
+        QPropertyNotifier started;
     };
 
     bool isUnderRoot(const QObject* object) const
@@ -224,7 +235,7 @@ private:
     QPointer<QObject> m_root;
     std::function<void()> m_drain;
     qint64 m_now = 0;
-    std::vector<Tracked> m_tracked;
+    std::vector<std::unique_ptr<Tracked>> m_tracked;
     int m_swallowed = 0;
     int m_holding = 0;
 };

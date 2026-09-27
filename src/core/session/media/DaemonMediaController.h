@@ -55,6 +55,11 @@
 //               display and keeps its receive frames while keyed, and its
 //               device's DUP reaches RadioModel for noise blanking. J.J.
 //               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-27: Parity Task 32 (R-IOS-13, R-R3-49): the transmit monitor.
+//               A peer that declares txMonitorAudioVersion sends
+//               monitor-audio; while its device holds transmit and MON is
+//               on, MON rides in its main or headphones stream. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/NoiseFloorEstimator.h"
@@ -309,6 +314,10 @@ public:
     /// context), and the profile it runs; empty while it is not sending.
     bool headphonesMixSending() const;
     std::optional<RemoteAudioProfile> headphonesMixProfile() const;
+    /// Parity Task 32: where this device's owner mix carries the transmit
+    /// monitor now (none unless the device declared txMonitorAudioVersion,
+    /// asked for a route, holds transmit and MON is on).
+    TxMonitorRoute txMonitorRoute() const noexcept { return m_monitorApplied; }
     DaemonDisplayDiagnostics displayDiagnostics() const;
     /// R-R3-21: the Core's media clock now (displayNowNs): the clock of
     /// clock-echo times and audio capture, and, without an injected clock,
@@ -474,6 +483,23 @@ private:
     /// start; anything else is ignored. Answered with a
     /// headphones-audio-context; never touches the main audio context.
     bool handleHeadphonesAudio(const QJsonObject& control);
+    /// Parity Task 32: {op:"monitor-audio", connectionId, revision, route},
+    /// only from a GUI that declared txMonitorAudioVersion in its start;
+    /// anything else (another shape, a stale revision, another connection)
+    /// is ignored. Answered with one monitor-audio-context carrying the
+    /// route as applied. Taken on and off the air: it only picks which of
+    /// this device's streams carries MON, and reaches no device.
+    bool handleMonitorAudio(const QJsonObject& control);
+    /// The route this device asked for, as it applies here: headphones is
+    /// the main stream for a device that did not declare the headphones mix.
+    TxMonitorRoute appliedMonitorRoute() const;
+    /// Recomputes where MON goes for this device (holder, MON, the route)
+    /// and hands it to the owner mix; the headphones mix follows when MON
+    /// comes onto or off it.
+    void refreshTxMonitor();
+    /// Whether this device's headphones mix has anything to carry: a
+    /// receiver of its own on the headphones, or MON routed there.
+    bool headphonesMixNeeded() const;
     /// R-R3-35: answers {op:"clock-probe", connectionId, id, t0} with
     /// {op:"clock-echo", connectionId, id, t0, t1, t2, generation,
     /// rtpTimestamp, capturedNs}. t1 is the Core clock on entry to
@@ -704,6 +730,12 @@ private:
     HeadphonesAudioStream m_headphones;
     quint32 m_nextHeadphonesContextGeneration{0};
     bool m_headphonesRouted{false};
+    // Parity Task 32: the transmit monitor, per media peer. Requests are
+    // honoured only when the GUI declared txMonitorAudioVersion at start.
+    bool m_txMonitorNegotiated{false};
+    quint32 m_monitorRevision{0};
+    TxMonitorRoute m_monitorRoute{TxMonitorRoute::None};
+    TxMonitorRoute m_monitorApplied{TxMonitorRoute::None};
     // Task 36: the microphone line of the current media peer, and the
     // device it is for.
     std::unique_ptr<RemoteMicReceiver> m_micReceiver;

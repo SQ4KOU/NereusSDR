@@ -433,7 +433,10 @@ struct Harness {
 
     explicit Harness(std::optional<DisplayBudgetLimits> limits = std::nullopt)
         : settings(directory.filePath(QStringLiteral("station.settings")))
-        , server(&radio, settings, NereusSDR::Test::seedUpgradedCoreToken(directory.path()))
+        // R-R3-49: one TLS certificate per test process (UpgradedCoreToken.h).
+        , server(&radio, settings,
+                 NereusSDR::Test::withSharedTlsIdentity(
+                     NereusSDR::Test::seedUpgradedCoreToken(directory.path())))
         , controller(&server, &radio, nullptr,
                      [this](QObject* parent) -> IMediaTransport* {
                          if (realTransport) { return realTransport(parent); }

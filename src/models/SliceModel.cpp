@@ -67,6 +67,9 @@
 //                                    R-IOS-03, R-IOS-13): setTxMarkAllowed
 //                                    (ruling 5.4a). AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-27 - R-R3-49: savedSampleRateHz, the rate saved for a band,
+//                read at connect. NereusSDR-original. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -2470,6 +2473,18 @@ bool SliceModel::hasSettingsFor(Band band) const
 {
     auto& s = AppSettings::instance();
     return s.contains(bandPrefix(m_sliceIndex, band) + QStringLiteral("DspMode"));
+}
+
+int SliceModel::savedSampleRateHz(Band band) const
+{
+    auto& s = AppSettings::instance();
+    const QString key = bandPrefix(m_sliceIndex, band) + QStringLiteral("SampleRate");
+    if (!s.contains(key)) {
+        return 0;
+    }
+    bool ok = false;
+    const int rate = s.value(key).toInt(&ok);
+    return ok && rate > 0 ? rate : 0;
 }
 
 void SliceModel::saveToSettings(Band band)

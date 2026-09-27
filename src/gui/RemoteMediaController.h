@@ -52,6 +52,11 @@
 //               the Core keeps the transmitting pan's receive frames while
 //               keyed. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //               Code.
+//   2026-09-27: parity Task 32 (R-IOS-13, R-R3-49): the transmit monitor. A
+//               Core at txMonitorAudioVersion 1 is told it at media start
+//               and sent this window's MON output as monitor-audio, on
+//               change and on each media connection. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 
 #include "core/session/media/DisplayBudget.h"
 #include "core/session/media/DisplayCodec.h"
@@ -271,6 +276,18 @@ public:
     /// context replaced it. Media and transmit state travel on different
     /// channels, so the context can land before the window's own rise.
     std::optional<SpectrumContextMessage> heldTransmitContext(const QString& panId) const;
+    /// Parity Task 32 (R-IOS-13, R-R3-49): this window's media start told a
+    /// Core at txMonitorAudioVersion 1 that it takes the transmit monitor.
+    bool txMonitorAudioNegotiated() const;
+    /// Parity Task 32: where this window wants MON while it holds transmit
+    /// (its MON output choice). Sent to the Core as monitor-audio at once
+    /// with a media session that negotiated it, and again on each new media
+    /// connection. Nothing is sent to an older Core. Speakers by default.
+    void setTxMonitorRoute(TxMonitorRoute route);
+    TxMonitorRoute txMonitorRoute() const;
+    /// Parity Task 32: the monitor-audio-context most recently accepted (the
+    /// route the Core applies), or empty before the first and after stop().
+    std::optional<MonitorAudioMessage> acceptedMonitorContext() const;
     /// R-R3-45: why a receiver routed to the headphones is not heard, for
     /// the slice flags; empty when nothing is wrong on the Core's side or
     /// this computer's headphones device. Plain words, shown as they are.
@@ -433,6 +450,9 @@ private:
     void settleWithoutRetry(quint32 expectedEpoch, const QString& reason);
     void refreshSubscriptions();
     void refreshBudgetSubscriptions();
+    // Parity Task 32: the monitor-audio request and its answer.
+    void requestMonitorAudio();
+    void receiveMonitorAudioContext(const QJsonObject& payload);
     /// Parity Task 18 (B3.5): a widget in `keepHistory` is taking the
     /// display of another slice on the same receiver, so its drawn
     /// waterfall, rewind history and 3D stack stay; only the live frame

@@ -141,6 +141,11 @@
 //   2026-09-26 - R-IOS-16 (iPhone app plan Task 28 fix wave):
 //                controlChannelVersion. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-27 - R-IOS-13 / R-R3-49 (parity Task 32): txMonitorAudioVersion.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-27 - R-IOS-26 / R-R3-49 (iPhone plan Task 22, parity Task 20):
+//                stationFreedvVersion. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 //   2026-09-27 - R-IOS-16 (iPhone app plan Task 29): mediaReplaceVersion,
 //                controlSwitchVersion and relayAllowed. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
@@ -350,10 +355,35 @@ struct StationCapabilities {
     /// identity key): connecting from anywhere is shown disabled with a
     /// reason.
     int controlChannelVersion = 0;
+    /// R-IOS-13 / R-R3-49 (remote-window parity Task 32): 1 means the Core
+    /// sends the transmit monitor (MON) to the device that holds transmit,
+    /// in its own media audio, while its radio is on the air and MON is on:
+    /// a media peer that declares txMonitorAudioVersion in its start may
+    /// send monitor-audio (route speakers, headphones or none) and is
+    /// answered with monitor-audio-context (the media document's "Transmit
+    /// monitor (monitor-audio)"). Sent in the same minor-11 block, after
+    /// controlChannelVersion; 1 whenever media is on with the Core's own
+    /// radio model, 0 otherwise. 0 (an older Core): a window shows its MON
+    /// output pair disabled with a reason.
+    int txMonitorAudioVersion = 0;
+    /// R-IOS-26 / R-R3-49 (iPhone app plan Task 22, remote-window parity
+    /// Task 20): 1 means the Core runs FreeDV Reporter itself, registered
+    /// with its own callsign, grid square and message and listing its own
+    /// RADE slice: it sends the `freedvStations` record stream (the newest
+    /// 1000 stations), the FreeDV Reporter console as
+    /// spotConsole:freedvReporter and its state in `spotSources`
+    /// (freedvReporterState, freedvReporterText, freedvReporterHidden), and
+    /// takes spots.connect / spots.disconnect for source freedvReporter and
+    /// freedv.setMessage, freedv.sendQsy and freedv.setHidden. Sent in the
+    /// same minor-11 block, after txMonitorAudioVersion; 1 whenever
+    /// recordStreamVersion is 1. 0 (an older Core): a window shows its
+    /// FreeDV Reporter controls disabled with a reason.
+    int stationFreedvVersion = 0;
     /// iPhone app plan Task 29 (R-IOS-16; link section 21.3): 1 means the
     /// Core takes the media `replace` operation (the remote media control
     /// document, "Replacing the media connection"). Sent in the same
-    /// minor-11 block, after controlChannelVersion; 1 whenever media is on.
+    /// minor-11 block, after stationFreedvVersion; 1 whenever media is on
+    /// for this peer.
     /// 0 (an older Core, or media off): a device keeps its media connection
     /// when its session moves.
     int mediaReplaceVersion = 0;

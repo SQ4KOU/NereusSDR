@@ -23,7 +23,7 @@ import logging
 import os
 from typing import Any, Callable, Dict, Iterator, List, Optional, Set
 
-from . import identity, protocol, turn
+from . import identity, protocol, relaygrant, turn
 from .clock import RealClock, TimerHandle
 from .config import Config
 from .config import check as check_config
@@ -518,15 +518,43 @@ class Service:
                 self.config.turn_ttl_seconds,
                 self.config.turn_urls,
             )
+        # Section 12.1: the relay grant is minted at the same moment as the
+        # TURN credentials, for an introduction the station accepted with the
+        # relay allowed, and never otherwise. One random session names the
+        # pairing; each end gets the token for its own leg.
+        grant_session: Optional[bytes] = None
+        if msg["turn"] and self.config.relay_secret:
+            grant_session = self.random(relaygrant.SESSION_BYTES)
         log.info(
-            "introduction %s to station %s answered, relay %s",
+            "introduction %s to station %s answered, relay %s, relay grant %s",
             short(intro.iid),
             short(intro.station_id),
             "offered" if relay else "not offered",
+            "offered" if grant_session is not None else "not offered",
         )
+        tokens: Dict[int, str] = {}
+        grant_expires = 0
+        if grant_session is not None:
+            # One expiry for the whole grant, so both ends get the same value.
+            secret = self.config.relay_secret
+            assert secret is not None
+            grant_expires = self.clock.wall_seconds() + self.config.relay_ttl_seconds
+            station = relaygrant.station_of(secret, intro.station_id)
+            for leg in relaygrant.LEGS:
+                tokens[leg] = relaygrant.mint(secret, leg, grant_session, station, grant_expires)
         intro.client.send(protocol.message("answer", "client", answer=msg["answer"], turn=relay))
+        if grant_session is not None:
+            intro.client.send(self._relay_grant("client", tokens[relaygrant.LEG_DEVICE], grant_expires))
         if msg["turn"]:
             conn.send(protocol.message("credentials", "station", **{"from": intro.iid, "turn": relay}))
+        if grant_session is not None:
+            conn.send(self._relay_grant("station", tokens[relaygrant.LEG_CORE], grant_expires, intro.iid))
+
+    def _relay_grant(self, receiver: str, token: str, expires: int, iid: Optional[str] = None) -> Dict[str, Any]:
+        fields: Dict[str, Any] = {"url": self.config.relay_url, "token": token, "expires": expires}
+        if iid is not None:
+            fields["from"] = iid
+        return protocol.message("relay.grant", receiver, **fields)
 
     def _station_candidate(self, conn: Connection, msg: Dict[str, Any]) -> None:
         if not self._registered(conn):

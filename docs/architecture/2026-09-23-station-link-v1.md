@@ -845,6 +845,8 @@ change shows as surface drift and as a change to this table.
 | `txDisplayVersion` | 0 |
 | `displayClockVersion` | 1 |
 | `controlChannelVersion` | 1 |
+| `txMonitorAudioVersion` | 1 |
+| `stationFreedvVersion` | 1 |
 | `mediaReplaceVersion` | 1 |
 | `controlSwitchVersion` | 1 |
 | `sessionHolderVersion` | 1 |
@@ -1204,8 +1206,11 @@ When a feature is off, its version is 0:
   entries added later move the position of those after them.
 - `controlChannelVersion` (the iPhone app plan's Task 28 fix wave,
   R-IOS-16): sent only at agreed minor 11, after `displayClockVersion` in
-  the minor-11 block (`sessionHolderVersion` and the remote transmit
-  entries follow it), and 1 on a Core with a bound certificate (section
+  the minor-11 block (`txMonitorAudioVersion`, `stationFreedvVersion`,
+  `mediaReplaceVersion`, `controlSwitchVersion`, `relayAllowed`, then
+  `sessionHolderVersion` and the remote transmit entries follow it), and 1
+  on a Core with a bound
+  certificate (section
   3.4). At 1 the Core answers an introduction through the rendezvous with
   this link over a data channel (section 20). A device records the value
   with the paired Core at each sign-in and offers connecting from anywhere
@@ -1217,9 +1222,54 @@ When a feature is off, its version is 0:
   version). A device that has had no session with the Core yet (one that
   paired through a mailbox) has no value recorded and tries; its first
   session records it.
+- `txMonitorAudioVersion` (remote-window parity Task 32, R-IOS-13,
+  R-R3-49): sent only at agreed minor 11, after `controlChannelVersion` in
+  the minor-11 block (`stationFreedvVersion`, then this block's Task 29
+  entries, `sessionHolderVersion` and the remote transmit entries follow
+  it), and 1 while media is on and
+  the Core runs its own
+  radio model; 0 otherwise. At 1 a window may add `txMonitorAudioVersion`
+  to its media `start` and then send `monitor-audio` with the route it
+  wants for the transmit monitor (`speakers`, its main stream;
+  `headphones`, its headphones stream, or its main stream when it did not
+  declare `headphonesMixVersion`; or `none`), answered by one
+  `monitor-audio-context` naming the route as applied (the media
+  document's "Transmit monitor (monitor-audio)"). While the radio is on
+  the air, MON is on and that window's device holds transmit (`txState`'s
+  holder), the Core adds MON at `monitorVolume` to that stream; no other
+  device's stream carries it, and while a remote device holds transmit the
+  Core's own outputs leave MON out. `monitor-audio` is taken on and off the
+  air: it reaches neither the radio nor any device. A window that does not
+  declare it gets today's wire and no monitor. A window on a Core that
+  sends 0 or no entry shows its MON output pair (SPEAKERS, PHONES) disabled
+  with "This Core does not send the transmit monitor. Updating the Core
+  may help."; MON itself still turns the Core's monitor on.
+- `stationFreedvVersion` (the iPhone app plan's Task 22 and remote-window
+  parity Task 20, R-IOS-26, R-R3-49): sent only at agreed minor 11, after
+  `txMonitorAudioVersion` in the minor-11 block (`mediaReplaceVersion`,
+  `controlSwitchVersion`, `relayAllowed`, `sessionHolderVersion` and the
+  remote transmit entries follow it), and 1 whenever
+  `recordStreamVersion` is 1 (the Core runs FreeDV Reporter itself); 0
+  otherwise. At 1 FreeDV Reporter is one of the Core's station sources
+  (source name `freedvReporter`): the Core registers with its own
+  callsign, grid square and status message, never its label (section
+  9.1, "The Core's FreeDV Reporter"), starts it with no window when its
+  `FreeDvAutoStart` is on, lists its own RADE slice and shows or hides the
+  station as that slice enters or leaves RADE. The Core sends the
+  `freedvStations` record stream and the FreeDV Reporter console as
+  `spotConsole:freedvReporter` (section 7.7), FreeDV Reporter's state in
+  `spotSources` (`freedvReporterState`, `freedvReporterText`,
+  `freedvReporterHidden`; section 7.1), and takes `spots.connect` and
+  `spots.disconnect` for `freedvReporter` and `freedv.setMessage`,
+  `freedv.sendQsy` and `freedv.setHidden` (section 9.1). A window
+  subscribes to the two streams only when it sees 1, and runs no FreeDV
+  Reporter connection of its own. On a Core that sends 0 or no entry a
+  window shows its FreeDV tab's Start and "Hide my station" and the FreeDV
+  Reporter dialog's Send QSY, Send and Clear disabled with "This Core does
+  not run FreeDV Reporter for this app. Updating the Core may help.".
 - `mediaReplaceVersion` (the iPhone app plan's Task 29, R-IOS-16): sent
-  only at agreed minor 11, after `controlChannelVersion`, and 1 whenever
-  media is on. At 1 the Core takes the media `replace` operation (the
+  only at agreed minor 11, after `stationFreedvVersion`, and 1 whenever
+  media is on for that device (as `txDisplayVersion`), 0 otherwise. At 1 the Core takes the media `replace` operation (the
   remote media control document, "Replacing the media connection"). On a
   Core that sends 0 or no entry a device keeps its media connection when
   its session moves (section 21.2), and starts media again only if that
@@ -1446,15 +1496,17 @@ older window sees only the values it was built for.
 | 59 | `txDisplayVersion` | `i64` |
 | 60 | `displayClockVersion` | `i64` |
 | 61 | `controlChannelVersion` | `i64` |
-| 62 | `mediaReplaceVersion` | `i64` |
-| 63 | `controlSwitchVersion` | `i64` |
-| 64 | `relayAllowed` | `bool` |
-| 65 | `sessionHolderVersion` | `i64` |
-| 66 | `remoteTxVersion` | `i64` |
-| 67 | `txRefusalCode` | `utf8` |
-| 68 | `txRefusalReason` | `utf8` |
-| 69 | `txRefusalFix` | `utf8` |
-| 70 | `txStateVersion` | `i64` |
+| 62 | `txMonitorAudioVersion` | `i64` |
+| 63 | `stationFreedvVersion` | `i64` |
+| 64 | `mediaReplaceVersion` | `i64` |
+| 65 | `controlSwitchVersion` | `i64` |
+| 66 | `relayAllowed` | `bool` |
+| 67 | `sessionHolderVersion` | `i64` |
+| 68 | `remoteTxVersion` | `i64` |
+| 69 | `txRefusalCode` | `utf8` |
+| 70 | `txRefusalReason` | `utf8` |
+| 71 | `txRefusalFix` | `utf8` |
+| 72 | `txStateVersion` | `i64` |
 
 <!-- /surface -->
 
@@ -1909,7 +1961,7 @@ An enum property lists the values its domain allows.
 | 148 | `agcAverageDb` | `f64` | outbound |  |
 | 149 | `minNotchWidthHz` | `f64` | outbound |  |
 
-**SpotSourceHost** (8 properties)
+**SpotSourceHost** (11 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -1921,6 +1973,9 @@ An enum property lists the values its domain allows.
 | 5 | `potaText` | `utf8` | outbound |  |
 | 6 | `pskReporterState` | `utf8` | outbound |  |
 | 7 | `pskReporterText` | `utf8` | outbound |  |
+| 8 | `freedvReporterState` | `utf8` | outbound |  |
+| 9 | `freedvReporterText` | `utf8` | outbound |  |
+| 10 | `freedvReporterHidden` | `bool` | outbound |  |
 
 **StationCatalog** (2 properties)
 
@@ -2198,7 +2253,18 @@ Notes on the keys:
   `pskReporterText`. They follow the Core's clients, whoever started them
   (a window, the Core's own start, a dropped connection). A window's Spot
   Hub Cluster, RBN, POTA and PSK Reporter tabs show them and clear them
-  when the session ends.
+  when the session ends. With `stationFreedvVersion` 1 FreeDV Reporter has
+  the same shape, after them: `freedvReporterState` and
+  `freedvReporterText` (`off` with the plain reason when the Core's own
+  start could not register, such as "Enter your callsign and grid square
+  in Spot Hub first."; `connecting` with "Lost the connection; trying
+  again in N s" while it reconnects; `error` with the connection's
+  error), then `freedvReporterHidden` (bool: "Hide my station" is on, set
+  only through `freedv.setHidden`). A window's FreeDV tab and the phone's
+  Spot Hub FreeDV row show them. These three are sent after
+  `pskReporterText`, so an older peer's property ordinals are unchanged,
+  and are sent to every peer that gets `spotSources`; one that does not
+  know them ignores them.
 - **`ioBoard` `outputs`.** The HL2 I/O board's output pins, one bit per
   output (o0 in bit 0), as the Core last read them back from the board's
   output register (169 at 0x1d on I2C bus 1): after `setIoBoardOutput`,
@@ -3202,7 +3268,8 @@ keeps:
 | Stream | Capacity | Record |
 | --- | --- | --- |
 | `spots` | 500 | One spot the Core holds (its SpotModel: the station sources' spots, and FreeDV Reporter's once the Core runs it), `id` its index: `timeUtc` (string, ISO 8601 UTC), `frequencyHz` (number, whole Hz), `call`, `mode`, `source` (the source's label: `Cluster`, `RBN`, `POTA`, `PSK`, `FreeDV`), `spotter`, `comment` (strings), `band` (number, the Band as the catalogue's `bands` numbers it, 13 for GEN), `dxccColour` (string, `#rrggbb`, empty when the Core does not colour it) and `dxccPriority` (number: 4 a new DXCC entity, 3 a new band, 2 a new mode, 1 worked before, 0 not known or colouring off) |
-| `spotConsole:<source>` | 200 | One console line of a station source (`dxCluster`, `rbn`, `pota`, `pskReporter`), `id` a rising number: `line` (string). A command typed from any device shows as `> <command>` |
+| `spotConsole:<source>` | 200 | One console line of a station source (`dxCluster`, `rbn`, `pota`, `pskReporter`, and with `stationFreedvVersion` 1 `freedvReporter`), `id` a rising number: `line` (string). A command typed from any device shows as `> <command>` |
+| `freedvStations` | 1000 | With `stationFreedvVersion` 1: one station FreeDV Reporter lists, as the Core hears it, `id` its FreeDV Reporter session id: the FreeDV Reporter dialog's 14 columns, `callsign`, `gridSquare` (strings), `distanceKm` and `headingDeg` (numbers, from the Core's own grid square; 0 with `headingCardinal` empty while either grid square is not known), `headingCardinal` (string, `N` to `NNW`), `version` (string), `frequencyHz` (number, whole Hz, 0 not known), `txMode` (string), `status` (string: `Active`, `TX` or `RX Only`), `userMessage` (string), `lastTxUtc` (string, ISO 8601 UTC, empty when never), `lastRxCallsign`, `lastRxMode` (strings), `snrDb` (number, -99 not known) and `lastUpdateUtc` (string, ISO 8601 UTC, empty when not known); then `transmitting` (boolean), `receivingFrom` (string: whom its latest receive report heard, the last callsign it named, while that report stands; empty once a frequency change clears it), `messageChangedAtMs` (number, the Core's clock in ms since the epoch when `userMessage` last changed, 0 never) and `lastRxUtc` (string, ISO 8601 UTC, when its latest receive report came, empty when none stands). The list starts again (a reset) each time the Core's connection to FreeDV Reporter connects or ends |
 | `stationRadios` | 64 | With `stationRadiosVersion` 1: one radio the Core can see, the Core's radio first, `id` its MAC in upper case: `id` and `mac` (strings, the same), `name` (string, as the radio reports itself), `model` (number, the `hpsdrModel` the Core runs it as: its saved override, else its board's), `address` (string, its IP address, empty when not known), `protocol` (number, 1 or 2) and `inUse` (boolean, true for the Core's radio). The list is what the Core's last scan found, with the Core's radio; a radio stays listed after it drops off until a scan misses it |
 
 A peer asks with `records.subscribe {stream, backlog}` (section 9.1); the
@@ -3232,7 +3299,10 @@ the oldest records are the ones lost, never queued without limit
 
 A window subscribes to `spots` (backlog 500) and to each station source's
 console (backlog 200) once its snapshot is complete, again on every
-reconnect. It shows the Core's spots in its panadapters and its Spot List
+reconnect; with `stationFreedvVersion` 1 also to `freedvStations`
+(backlog 1000), which replaces its FreeDV Reporter list (the dialog shows
+the Core's stations with the Core's distance and heading), and to
+`spotConsole:freedvReporter`. It shows the Core's spots in its panadapters and its Spot List
 beside its own WSJT-X and SpotCollector spots, in the colours and
 lifetimes of the Core's Spot Hub settings, and drops them when the session
 ends. A reset of a console stream (each subscribe's backlog) replaces that
@@ -3266,7 +3336,6 @@ computer, never sent). `classifySettingsKey` (`SettingsScope.cpp`) decides:
 | 1. exact key (exception) | `FreeDvReporter/VisibleColumns` | operatorLocal |
 | 1. exact key (exception) | `FreeDvReporter/ColumnFilters` | operatorLocal |
 | 1. exact key (exception) | `FreeDvReporter/BandFilter` | operatorLocal |
-| 1. exact key (exception) | `FreeDvReporter/Hidden` | operatorLocal |
 | 1. exact key (exception) | `FreeDvReporter/DistanceMiles` | operatorLocal |
 | 1. exact key (exception) | `FreeDvReporter/DirectionAsCardinal` | operatorLocal |
 | 1. exact key (exception) | `FreeDvReporter/FrequencyAsKhz` | operatorLocal |
@@ -3619,6 +3688,9 @@ refused.
 | `station.rescanRadios` | none | `stationRadiosVersion` | 1 | 11 |
 | `station.setRadioModel` | `mac` utf8, `model` i64 | `stationRadiosVersion` | 1 | 11 |
 | `station.forgetRadio` | `mac` utf8 | `stationRadiosVersion` | 1 | 11 |
+| `freedv.setMessage` | `text` utf8 | `stationFreedvVersion` | 1 | 11 |
+| `freedv.sendQsy` | `callsign` utf8, `frequencyHz` i64 | `stationFreedvVersion` | 1 | 11 |
+| `freedv.setHidden` | `on` bool | `stationFreedvVersion` | 1 | 11 |
 | `nnr.setDiagnostics` | `sliceId` i64, `testMode` i64, `outputMode` i64 | `nnrVersion` | 1 | 5 |
 | `nnr.resetTuning` | `sliceId` i64 | `nnrVersion` | 1 | 5 |
 | `nnr.tryAgain` | `sliceId` i64 | `nnrVersion` | 1 | 11 |
@@ -3806,7 +3878,37 @@ These command groups need a sentence beyond the table:
   connected.", "The Reverse Beacon Network is not connected.", "Only the
   DX cluster and the Reverse Beacon Network take typed commands.", "Type a
   command first." and "The Core could not read this request.". A window
-  shows a refusal on the source's tab.
+  shows a refusal on the source's tab. With `stationFreedvVersion` 1
+  `source` may also be `freedvReporter`: `spots.connect` registers with
+  qso.freedv.org as the Core's callsign (`FreeDvReporter/Callsign`, else
+  `User/Callsign`, else `StationCallsign`; never the Core's label,
+  R-IOS-26), grid square (`FreeDvReporter/GridSquare`, else
+  `User/GridSquare`) and status message (`FreeDvReporter/Message`), and
+  is refused "Enter your callsign and grid square in Spot Hub first."
+  without a callsign and a grid square; `spots.disconnect` ends the
+  connection.
+- **The Core's FreeDV Reporter** (the iPhone app plan's Task 22 and
+  remote-window parity Task 20, `stationFreedvVersion` 1).
+  `freedv.setMessage` (`text` utf8) sends the status message listed beside
+  the station (empty clears it), kept for the next connection when not
+  connected now. `freedv.sendQsy` (`callsign` utf8, `frequencyHz` i64)
+  asks the station listed with that callsign (compared without case; with
+  two, the one heard from last) to move to that frequency; the operator's
+  own radio is tuned by the device, as locally. `freedv.setHidden` (`on`
+  bool) is "Hide my station": the Core saves it (`FreeDvReporter/Hidden`,
+  Station scope) and the station is listed only while it is not hidden
+  and the slice the Core lists is in RADE (the first slice in RADE, else
+  the Core's active slice), as freedv-gui hides its reporter in analog
+  mode unless the operator hid it. The saved status messages
+  (`FreeDvReporter/SavedMessages`) are a Station setting (section 8).
+  None reaches the radio, so each is answered on and off the air, and
+  none is on the several-devices list (section 7.6). Refusals: "The Core
+  does not run FreeDV Reporter.", "FreeDV Reporter is not connected on
+  the Core.", "Enter a frequency for the QSY request first.", "Choose a
+  station for the QSY request first.", "<callsign> is not on FreeDV
+  Reporter now." and "The Core could not read this request.". A window
+  shows a refusal on its FreeDV tab and, while it is open, beside the
+  FreeDV Reporter dialog.
 - **The filter graph's curve** (parity Task 16, `dspInfoVersion` 1).
   `dsp.filterResponse` asks the Core for the high-resolution filter graph's
   curve for the receiver of `sliceId`, computed from that receiver's
@@ -4156,8 +4258,9 @@ slices, each with its own gain, pan, mute and route; the Core's own output
 plays only the station device's slices. A device that leaves ends its own
 media and no other's. Telemetry (`station.metrics.v1`) goes to every
 session that negotiated it, each on its own sequence. **Transmit joins
-here:** the transmit holder's mix carries the transmit monitor once remote
-transmit exists (Task 36). The `subscribe` fields that
+here:** the transmit holder's mix carries the transmit monitor
+(`txMonitorAudioVersion`, remote-window parity Task 32; the media
+document's "Transmit monitor (monitor-audio)"). The `subscribe` fields that
 come with `displayExtrasVersion` (`peakBlobs`, `activePeakHold`,
 `noiseFloor`, `waterfallLevels`, `normalize`, `calibrationOffsetDb`,
 `averageTimeMs`, `waterfallAverageTimeMs`), their ranges and what the Core sends for them are
@@ -4179,9 +4282,10 @@ Client to station:
 | `description` | `remoteMediaVersion` | `connectionId`, `op`, `sdp`, `type` | none | none |
 | `headphones-audio` | `headphonesMixVersion` | `connectionId`, `enabled`, `op`, `profile`, `revision` | none | none |
 | `keyframe` | `remoteMediaVersion` | `connectionId`, `contextGeneration`, `endpointId`, `op` | none | none |
+| `monitor-audio` | `txMonitorAudioVersion` | `connectionId`, `op`, `revision`, `route` | none | none |
 | `receiver-audio` | `receiverAudioVersion` | `connectionId`, `enabled`, `op`, `profile`, `revision`, `sliceId` | none | none |
 | `replace` | `mediaReplaceVersion` | `connectionId`, `op`, `replaces` | none | none |
-| `start` | `remoteMediaVersion` | `connectionId`, `op` | `audioProfileVersion` with audioProfileVersion; `headphonesMixVersion` with headphonesMixVersion; `receiverAudioVersion` with receiverAudioVersion; `remoteTxVersion` with remoteTxVersion | none |
+| `start` | `remoteMediaVersion` | `connectionId`, `op` | `audioProfileVersion` with audioProfileVersion; `headphonesMixVersion` with headphonesMixVersion; `receiverAudioVersion` with receiverAudioVersion; `remoteTxVersion` with remoteTxVersion; `txMonitorAudioVersion` with txMonitorAudioVersion | none |
 | `subscribe` | `remoteMediaVersion` | `centreHz`, `connectionId`, `endpointId`, `fftSize`, `fps`, `framesPerLine`, `maxDbm`, `minDbm`, `op`, `pixels`, `revision`, `sliceId`, `spanHz`, `tier`, `trace`, `waterfall`, `wideSpanFactor`, `windowType` | `activePeakHold` with displayExtrasVersion; `averageTimeMs` with displayExtrasVersion; `calibrationOffsetDb` with displayExtrasVersion; `decimation` with spectrumGrantVersion; `extendedView` with remoteWidebandDisplayVersion; `noiseFloor` with displayExtrasVersion; `normalize` with displayExtrasVersion; `peakBlobs` with displayExtrasVersion; `waterfallAverageTimeMs` with displayExtrasVersion; `waterfallLevels` with displayExtrasVersion | `activePeakHold`: {enabled, fallDbPerSec, holdMs}; `noiseFloor`: {enabled, shiftDb}; `peakBlobs`: {count, fallDbPerSec, holdMs, insideOnly}; `trace`: {averageAlpha, averageMode, detector}; `waterfall`: {averageAlpha, averageMode, detector}; `waterfallLevels`: {highDbm, lowDbm, mode, offsetDb} |
 | `unsubscribe` | `remoteMediaVersion` | `connectionId`, `endpointId`, `op` | `revision` with remoteDisplayBudgetVersion | none |
 
@@ -4196,6 +4300,7 @@ Station to client:
 | `context` | `remoteMediaVersion` | `centreHz`, `connectionId`, `contextGeneration`, `endpointId`, `fps`, `framesPerLine`, `maxDbm`, `minDbm`, `op`, `revision`, `sampleRateHz`, `sourceCentreHz`, `sourceStream`, `spanHz`, `traceSamples`, `waterfallSamples`, `wideCentreHz`, `wideSamples`, `wideSpanHz` | `grantedFftSize` with spectrumGrantVersion; `grantedPixels` with spectrumGrantVersion; `grantedTier` with spectrumGrantVersion; `limit` with spectrumGrantVersion; `requestedPixels` with spectrumGrantVersion; `wideband` with remoteWidebandDisplayVersion | `wideband`: {active, adcRateHz, available, filterChainIndex, geometryRateBasis, highHz, levelReference, lowHz, physicalAdcIndex, sourceGeneration, version} or {active, available, version} |
 | `description` | `remoteMediaVersion` | `connectionId`, `op`, `sdp`, `type` | none | none |
 | `headphones-audio-context` | `headphonesMixVersion` | `connectionId`, `enabled`, `firstSequence`, `firstTimestamp`, `generation`, `op`, `profile`, `revision`, `ssrc` | `encoder` with enabled=true; `profileRefusal` with profile=opus, profileRefused; `reason` with enabled=false | `encoder`: {audioBandwidthHz, channels, codec, frameSamples, sampleRate, targetBitrate} or {bitsPerSample, channels, codec, frameSamples, payloadType, sampleRate} |
+| `monitor-audio-context` | `txMonitorAudioVersion` | `connectionId`, `op`, `revision`, `route` | none | none |
 | `noise-floor` | `remoteMediaVersion` | `connectionId`, `contextGeneration`, `endpointId`, `floorDbm`, `op`, `revision` | none | none |
 | `receiver-audio-context` | `receiverAudioVersion` | `connectionId`, `enabled`, `firstSequence`, `firstTimestamp`, `generation`, `op`, `profile`, `revision`, `sliceId`, `ssrc` | `encoder` with enabled=true; `profileRefusal` with profile=opus, profileRefused; `reason` with enabled=false | `encoder`: {audioBandwidthHz, channels, codec, frameSamples, sampleRate, targetBitrate} or {bitsPerSample, channels, codec, frameSamples, payloadType, sampleRate} |
 | `rejected` | `remoteMediaVersion` | `connectionId`, `endpointId`, `op`, `reason`, `revision` | none | none |

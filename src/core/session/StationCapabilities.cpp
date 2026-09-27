@@ -92,9 +92,15 @@
 //                into the trunk after txDisplayVersion and
 //                displayClockVersion). J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-27 - R-IOS-13 / R-R3-49 (parity Task 32): txMonitorAudioVersion,
+//                after controlChannelVersion. J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
+//   2026-09-27 - R-IOS-26 / R-R3-49 (iPhone plan Task 22, parity Task 20):
+//                stationFreedvVersion, after txMonitorAudioVersion. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-27 - R-IOS-16 (iPhone app plan Task 29): mediaReplaceVersion,
 //                controlSwitchVersion and relayAllowed, after
-//                controlChannelVersion. J.J. Boyd (KG4VCF), AI-assisted via
+//                stationFreedvVersion. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
 // =================================================================
 
@@ -224,6 +230,12 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
         // R-IOS-16 (Task 28 fix wave): the control session through the
         // remote access service.
         updates.append(intEntry("controlChannelVersion", controlChannelVersion));
+        // R-IOS-13 / R-R3-49 (parity Task 32): the transmit monitor to the
+        // device that holds transmit.
+        updates.append(intEntry("txMonitorAudioVersion", txMonitorAudioVersion));
+        // R-IOS-26 / R-R3-49 (iPhone plan Task 22, parity Task 20): the
+        // Core's FreeDV Reporter.
+        updates.append(intEntry("stationFreedvVersion", stationFreedvVersion));
         // iPhone app plan Task 29 (R-IOS-16): moving media and the session
         // to a better path, and whether the Core allows the relay.
         updates.append(intEntry("mediaReplaceVersion", mediaReplaceVersion));
@@ -441,6 +453,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                    || u.name == "txDisplayVersion"
                    || u.name == "displayClockVersion"
                    || u.name == "controlChannelVersion"
+                   || u.name == "txMonitorAudioVersion"
+                   || u.name == "stationFreedvVersion"
                    || u.name == "mediaReplaceVersion"
                    || u.name == "controlSwitchVersion"
                    || u.name == "sessionHolderVersion"
@@ -496,6 +510,10 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                     caps.displayClockVersion = version;
                 } else if (u.name == "controlChannelVersion") {
                     caps.controlChannelVersion = version;
+                } else if (u.name == "txMonitorAudioVersion") {
+                    caps.txMonitorAudioVersion = version;
+                } else if (u.name == "stationFreedvVersion") {
+                    caps.stationFreedvVersion = version;
                 } else if (u.name == "mediaReplaceVersion") {
                     caps.mediaReplaceVersion = version;
                 } else if (u.name == "controlSwitchVersion") {

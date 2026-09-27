@@ -727,8 +727,13 @@ private slots:
             << QStringLiteral("FreeDvReporter/ColumnFilters") << int(SettingsScope::OperatorLocal);
         QTest::newRow("FreeDvReporter/BandFilter is OperatorLocal (this window's view filter)")
             << QStringLiteral("FreeDvReporter/BandFilter") << int(SettingsScope::OperatorLocal);
-        QTest::newRow("FreeDvReporter/Hidden is OperatorLocal (this window's hide-self toggle)")
-            << QStringLiteral("FreeDvReporter/Hidden") << int(SettingsScope::OperatorLocal);
+        // iPhone plan Task 22 / parity Task 20: the Core runs FreeDV
+        // Reporter, so "Hide my station" and the saved status messages are
+        // the Core's.
+        QTest::newRow("FreeDvReporter/Hidden is Station (the Core's Hide my station)")
+            << QStringLiteral("FreeDvReporter/Hidden") << int(SettingsScope::Station);
+        QTest::newRow("FreeDvReporter/SavedMessages is Station (the Core's saved messages)")
+            << QStringLiteral("FreeDvReporter/SavedMessages") << int(SettingsScope::Station);
         QTest::newRow("FreeDvReporter/DistanceMiles is OperatorLocal (a display unit)")
             << QStringLiteral("FreeDvReporter/DistanceMiles") << int(SettingsScope::OperatorLocal);
         QTest::newRow("FreeDvReporter/DirectionAsCardinal is OperatorLocal (a display unit)")

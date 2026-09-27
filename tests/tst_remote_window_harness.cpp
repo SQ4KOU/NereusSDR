@@ -839,7 +839,12 @@ private slots:
         h.stationSettings().remove(QLatin1String(AppSettings::kDaemonProfileSeededKey));
         QVERIFY(h.start());
         QVERIFY(connectFromRadioMenu(h));
-        QTest::qWait(kSettleMs);
+        // R-R3-49: past the Core's 500 ms coalesced save, which the window's
+        // admission schedules. It failed this case whenever it landed before
+        // the look (on a busy computer); the harness now makes it at the
+        // admission, into the Core's own store, and this wait keeps a
+        // regression of that from hiding behind a quick run.
+        QTest::qWait(kSettleMs + 600);
         QVERIFY(h.proxy().ready());
         QVERIFY(h.proxy().hasReceivedSnapshot());
         QVERIFY(!h.proxy().setupDialogAllowed());

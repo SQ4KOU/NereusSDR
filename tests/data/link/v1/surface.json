@@ -307,6 +307,16 @@
         },
         {
             "kind": "i64",
+            "name": "txMonitorAudioVersion",
+            "value": 1
+        },
+        {
+            "kind": "i64",
+            "name": "stationFreedvVersion",
+            "value": 1
+        },
+        {
+            "kind": "i64",
             "name": "mediaReplaceVersion",
             "value": 1
         },
@@ -1447,6 +1457,50 @@
         {
             "arguments": [
                 {
+                    "kind": "utf8",
+                    "name": "text",
+                    "optional": false
+                }
+            ],
+            "capability": "stationFreedvVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "freedv.setMessage"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "callsign",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "frequencyHz",
+                    "optional": false
+                }
+            ],
+            "capability": "stationFreedvVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "freedv.sendQsy"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "bool",
+                    "name": "on",
+                    "optional": false
+                }
+            ],
+            "capability": "stationFreedvVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "freedv.setHidden"
+        },
+        {
+            "arguments": [
+                {
                     "kind": "i64",
                     "name": "sliceId",
                     "optional": false
@@ -2318,6 +2372,15 @@
                     ]
                 }
             },
+            "monitor-audio-context": {
+                "capability": "txMonitorAudioVersion",
+                "fields": [
+                    "connectionId",
+                    "op",
+                    "revision",
+                    "route"
+                ]
+            },
             "noise-floor": {
                 "capability": "remoteMediaVersion",
                 "fields": [
@@ -2465,6 +2528,15 @@
                     "op"
                 ]
             },
+            "monitor-audio": {
+                "capability": "txMonitorAudioVersion",
+                "fields": [
+                    "connectionId",
+                    "op",
+                    "revision",
+                    "route"
+                ]
+            },
             "receiver-audio": {
                 "capability": "receiverAudioVersion",
                 "fields": [
@@ -2498,6 +2570,9 @@
                     ],
                     "remoteTxVersion": [
                         "remoteTxVersion"
+                    ],
+                    "txMonitorAudioVersion": [
+                        "txMonitorAudioVersion"
                     ]
                 },
                 "fields": [
@@ -5612,6 +5687,24 @@
                     "kind": "utf8",
                     "name": "pskReporterText",
                     "ordinal": 7
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "freedvReporterState",
+                    "ordinal": 8
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "freedvReporterText",
+                    "ordinal": 9
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "freedvReporterHidden",
+                    "ordinal": 10
                 }
             ]
         },
@@ -6822,10 +6915,6 @@
             },
             {
                 "key": "FreeDvReporter/BandFilter",
-                "scope": "operatorLocal"
-            },
-            {
-                "key": "FreeDvReporter/Hidden",
                 "scope": "operatorLocal"
             },
             {

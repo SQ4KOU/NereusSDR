@@ -321,6 +321,19 @@
 //                blanking rule and a remote window's subscriptions; the TX
 //                Display Cal Offset reaches every pan. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-27 - Parity Task 32 (R-IOS-13, R-R3-49): a remote window sends
+//                its MON output choice (audio/TxMonitor/Output) to the Core
+//                at start and on every change; its MON output pair is shown
+//                disabled with the reason on a Core that does not send the
+//                transmit monitor. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-27 - iPhone plan Task 22 / parity Task 20 (R-IOS-26, B7.3): the
+//                Spot Hub's FreeDV Start / Stop go through the spot source
+//                host (the Core's in a remote window); the FreeDV Reporter
+//                dialog's QSY and message go to the Core in a remote window,
+//                disabled with the reason on a Core that does not run FreeDV
+//                Reporter. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -1828,6 +1841,21 @@ void MainWindow::ensureRemoteSession()
                 this, &MainWindow::applyDisplayDuplex);
         applyDisplayDuplex();
         m_remoteMedia->setDisplayDuplex(m_moxDisplay->displayDuplex());
+        // Parity Task 32 (R-IOS-13, R-R3-49): this computer's MON output
+        // choice is where the Core sends MON while this window holds
+        // transmit: pushed now and on every change.
+        if (AudioEngine* devices = m_radioModel->localAudioDevices()) {
+            const auto routeFor = [](TxMonitorOutput output) {
+                return output == TxMonitorOutput::Headphones ? TxMonitorRoute::Headphones
+                                                             : TxMonitorRoute::Speakers;
+            };
+            m_remoteMedia->setTxMonitorRoute(routeFor(devices->txMonitorOutput()));
+            RemoteMediaController* const media = m_remoteMedia;
+            connect(devices, &AudioEngine::txMonitorOutputChanged, media,
+                    [media, routeFor](TxMonitorOutput output) {
+                media->setTxMonitorRoute(routeFor(output));
+            });
+        }
         m_remoteTelemetry = new RemoteTelemetryController(
             m_stationClient, m_remoteMedia, this);
         // R-R3-32 (parity Task 6): the Core's PA readings reach this
@@ -11780,6 +11808,7 @@ void MainWindow::refreshSpotHubAvailability()
     if (m_radioModel->ownsLocalDsp()) {
         m_spotHubDialog->setStationSettingsAvailable(true, QString());
         m_spotHubDialog->setStationSourcesAvailable(true, QString());
+        m_spotHubDialog->setStationFreedvAvailable(true, QString());
         return;
     }
     const bool settings = stationSettingsAvailable();
@@ -11787,6 +11816,27 @@ void MainWindow::refreshSpotHubAvailability()
     const bool sources = m_stationClient != nullptr && m_stationClient->spotSourcesAvailable();
     m_spotHubDialog->setStationSourcesAvailable(
         sources, settings ? IStationLink::spotSourcesUnavailableReason() : stationSettingsReason());
+    // iPhone plan Task 22 / parity Task 20: FreeDV Reporter is the Core's.
+    const bool freedv = m_stationClient != nullptr && m_stationClient->stationFreedvAvailable();
+    m_spotHubDialog->setStationFreedvAvailable(
+        freedv, IStationLink::stationFreedvUnavailableReason());
+}
+
+void MainWindow::refreshFreedvReporterAvailability()
+{
+    // iPhone plan Task 22 / parity Task 20 (R-IOS-26): in a remote window
+    // the FreeDV Reporter dialog's requests go to the Core.
+    if (!m_freeDVReporterDialog || m_radioModel == nullptr) {
+        return;
+    }
+    if (m_radioModel->ownsLocalDsp()) {
+        m_freeDVReporterDialog->setCoreRequestsAvailable(true, QString());
+        return;
+    }
+    const bool freedv = m_stationClient != nullptr && m_stationClient->stationFreedvAvailable();
+    m_freeDVReporterDialog->setCoreRequestsAvailable(
+        freedv, stationSettingsAvailable() ? IStationLink::stationFreedvUnavailableReason()
+                                           : stationSettingsReason());
 }
 
 RemoteReceiverAudioNote MainWindow::receiverAudioNoteFor(const RemoteMediaController* media)
@@ -11995,6 +12045,11 @@ void MainWindow::applyRemoteRoleGating()
         m_txApplet->setVoxPermitted(voxLine, voxReason);
         m_txApplet->setTransmitSettingsPermitted(settingsPermitted, settingsReason);
         m_txApplet->setTransmitChainSettingsPermitted(chainPermitted, chainReason);
+        // Parity Task 32: the MON output pair needs a Core that sends MON.
+        m_txApplet->setMonitorOutputPermitted(
+            m_stationClient == nullptr
+                || m_stationClient->capabilities().txMonitorAudioVersion >= 1,
+            TxApplet::monitorOutputUnavailableReason());
         m_txApplet->setTxProfilePermitted(profilePermitted, profileReason);
         m_txApplet->setTxProcessingPermitted(processingPermitted, processingReason);
         // R-R3-49 (group A fix wave, M3): the RF Power slider's per-band
@@ -12062,6 +12117,8 @@ void MainWindow::applyRemoteRoleGating()
     }
     // Parity Task 19 (B7.2): and the Spot Hub's Core settings and sources.
     refreshSpotHubAvailability();
+    // iPhone plan Task 22: and the FreeDV Reporter dialog's requests.
+    refreshFreedvReporterAvailability();
     if (m_actTxEqualizer) {
         // R-R3-49 (parity Task 4): opens whatever the Core says; the dialog
         // shows why it is greyed.
@@ -12487,13 +12544,15 @@ void MainWindow::openSpotHub()
         // Previously the button emitted freedvStartRequested /
         // freedvStopRequested but nothing handled the Stop side, so
         // clicking Stop appeared to do nothing.
-        if (auto* fdv = m_radioModel->freeDvReporter()) {
-            connect(m_spotHubDialog.data(),
-                    &SpotHubDialog::freedvStartRequested,
-                    fdv, &FreeDVReporterClient::startConnection);
-            connect(m_spotHubDialog.data(),
-                    &SpotHubDialog::freedvStopRequested,
-                    fdv, &FreeDVReporterClient::stopConnection);
+        //
+        // iPhone plan Task 22 / parity Task 20 (R-IOS-26): through the spot
+        // source host, which sets the saved identity before it connects and,
+        // in a remote window, asks the Core, which runs FreeDV Reporter.
+        if (SpotSourceHost* host = m_radioModel->spotSourceHost()) {
+            connect(m_spotHubDialog.data(), &SpotHubDialog::freedvStartRequested, host,
+                    &SpotSourceHost::startFreedvReporter);
+            connect(m_spotHubDialog.data(), &SpotHubDialog::freedvStopRequested, host,
+                    &SpotSourceHost::stopFreedvReporter);
         }
 
         // 2026-05-12 bench fix: wire the remaining 10 SpotHubDialog
@@ -12594,15 +12653,39 @@ void MainWindow::openFreeDVReporter()
             m_radioModel->freeDvReporter(),
             this);
         // QSY: dialog -> reporter client -> network broadcast.
-        connect(m_freeDVReporterDialog.data(),
-                &FreeDVReporterDialog::qsyRequested,
-                m_radioModel->freeDvReporter(),
-                &FreeDVReporterClient::requestQSY);
-        // Message update: dialog -> reporter client.
-        connect(m_freeDVReporterDialog.data(),
-                &FreeDVReporterDialog::messageSendRequested,
-                m_radioModel->freeDvReporter(),
-                &FreeDVReporterClient::updateMessage);
+        // iPhone plan Task 22 / parity Task 20 (R-IOS-26): in a remote
+        // window the list is the Core's, so the request names the row's
+        // callsign and the Core sends it (freedv.sendQsy).
+        connect(m_freeDVReporterDialog.data(), &FreeDVReporterDialog::qsyRequested, this,
+                [this](const QString& sid, quint64 freqHz, const QString& message) {
+            if (m_radioModel == nullptr) {
+                return;
+            }
+            SpotSourceHost* host = m_radioModel->spotSourceHost();
+            if (host != nullptr && host->forwardsStationSources()) {
+                const QString callsign =
+                    m_radioModel->freeDvStationModel()->stationBySid(sid).callsign;
+                host->requestFreedvQsy(callsign, static_cast<qint64>(freqHz));
+                return;
+            }
+            if (FreeDVReporterClient* client = m_radioModel->freeDvReporter()) {
+                client->requestQSY(sid, freqHz, message);
+            }
+        });
+        // Message update: dialog -> reporter client (the Core's in a remote
+        // window, freedv.setMessage).
+        if (SpotSourceHost* host = m_radioModel->spotSourceHost()) {
+            connect(m_freeDVReporterDialog.data(), &FreeDVReporterDialog::messageSendRequested,
+                    host, &SpotSourceHost::sendFreedvMessage);
+            // A refused request shows as the Core's other refusals do.
+            connect(host, &SpotSourceHost::sourceRefused, this,
+                    [this](const QString& source, const QString& reason) {
+                if (source == SpotSourceHost::kFreedvReporter && m_freeDVReporterDialog
+                    && m_freeDVReporterDialog->isVisible() && !reason.isEmpty()) {
+                    showToast(reason, ToastSeverity::Warning, 5000);
+                }
+            });
+        }
         // Local QSY: dialog -> active slice tune. tuneRequested signature
         // is quint64 Hz so no MHz conversion needed.
         connect(m_freeDVReporterDialog.data(),
@@ -12629,6 +12712,7 @@ void MainWindow::openFreeDVReporter()
                     });
         }
     }
+    refreshFreedvReporterAvailability();
     m_freeDVReporterDialog->show();
     m_freeDVReporterDialog->raise();
     m_freeDVReporterDialog->activateWindow();

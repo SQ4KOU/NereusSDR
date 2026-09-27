@@ -60,6 +60,9 @@
 //               radio in sight only when exactly one is visible). J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic Claude
 //               Code.
+//   2026-09-27: R-R3-49: sample_rate_hz is a starting value only. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic Claude
+//               Code.
 // =================================================================
 
 #include <QHostAddress>
@@ -88,19 +91,21 @@ struct DaemonConfig {
                                                 // an app, else the one radio
                                                 // in sight, else wait
                                                 // (StationRadios::choose)
-    int     sampleRateHz {192000};             // seeded into the per-MAC
-                                                // AppSettings key the shared
-                                                // connect path reads; see
+    int     sampleRateHz {192000};             // a starting value: seeded
+                                                // into the per-MAC AppSettings
+                                                // key the shared connect path
+                                                // reads only when that radio
+                                                // has no saved rate; see
                                                 // DaemonApp::applyConfigToSettings
     // True only when sample_rate_hz was actually present in the config
     // file. sampleRateHz alone cannot express "unset", because validate()
     // rejects <= 0 and so the field must always hold a usable rate. Without
     // this flag, a bare `nereusd` with no config file (a non-fatal case:
-    // server_main logs a warning and continues with defaults) would stamp
-    // the 192000 default over whatever rate the operator had already
-    // persisted for that radio, and the GUI would come up at the wrong rate
-    // on its next launch. Writing per-MAC settings is a side effect on
-    // shared user state, so it happens only on an explicit request.
+    // server_main logs a warning and continues with defaults) would seed
+    // the 192000 default into a radio the config file never mentioned.
+    // Writing per-MAC settings is a side effect on shared user state, so it
+    // happens only on an explicit request, and even then only to fill an
+    // empty slot: a rate already saved for the radio always wins (R-R3-49).
     bool    sampleRateExplicit {false};
     int     sliceCount   {1};                  // see header comment: the
                                                 // board-specific ceiling is

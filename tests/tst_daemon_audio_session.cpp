@@ -143,6 +143,9 @@ struct Harness {
         client.startSession(clientLink, server.token());
         server.acceptTransport(stationLink);
         QTRY_VERIFY(server.mediaAvailable());
+        // R-R3-49: sendMediaControl() needs this client's side of the
+        // handshake, which lands a queued delivery after the Core's.
+        QTRY_VERIFY(client.mediaAvailable());
         QVERIFY(client.sendMediaControl({
             {QStringLiteral("op"), QStringLiteral("start")},
             {QStringLiteral("connectionId"), QLatin1String(kConnectionId)}},

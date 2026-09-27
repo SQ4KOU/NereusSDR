@@ -28,6 +28,9 @@
 // before the headphones mix (no headphonesMixVersion), and
 // attachRemoteHeadphones() gives the remote window a paced headphones
 // device beside its speakers.
+// Remote-window parity Task 32: hideTxMonitorAudio likewise makes the Core
+// look like one from before the transmit monitor (no
+// txMonitorAudioVersion).
 // iPhone app plan Task 36 (R-IOS-13): declareRemoteTx makes the window's
 // hello declare remoteTx 1, so the Core tells it remoteTxVersion and the media
 // connection gets the microphone line; grantTransmit makes the Core's
@@ -115,12 +118,13 @@ public:
         const bool mayRewrite = ((m_helloMinor || !declareRemoteTx) && wire.contains("\"hello\""))
             || (grantTransmit && wire.contains("\"capabilities\""))
             || (forgeNextAudioContext && wire.contains("\"audio-context\""))
-            || ((hideAudioProfile || hideAudioClock || hideReceiverAudio || hideHeadphonesMix)
+            || ((hideAudioProfile || hideAudioClock || hideReceiverAudio || hideHeadphonesMix
+                 || hideTxMonitorAudio)
                 && wire.contains("\"capabilities\""));
         SessionMessage message;
         if (mayRewrite && SessionMessages::decode(wire, &message)) {
             if ((hideAudioProfile || hideAudioClock || hideReceiverAudio || hideHeadphonesMix
-                 || grantTransmit)
+                 || hideTxMonitorAudio || grantTransmit)
                 && message.kind == SessionMessageKind::Capabilities) {
                 StationCapabilities capabilities = StationCapabilities::fromUpdates(message.updates);
                 if (grantTransmit) { capabilities.txPermitted = true; }
@@ -128,6 +132,7 @@ public:
                 if (hideAudioClock) { capabilities.audioClockVersion = 0; }
                 if (hideReceiverAudio) { capabilities.receiverAudioVersion = 0; }
                 if (hideHeadphonesMix) { capabilities.headphonesMixVersion = 0; }
+                if (hideTxMonitorAudio) { capabilities.txMonitorAudioVersion = 0; }
                 ++hiddenAudioProfiles;
                 LoopbackTransport::sendText(SessionMessages::encode(
                     SessionMessages::capabilities(capabilities.toUpdates())));
@@ -173,6 +178,7 @@ public:
     bool hideAudioClock = false;
     bool hideReceiverAudio = false;
     bool hideHeadphonesMix = false;
+    bool hideTxMonitorAudio = false;
     bool declareRemoteTx = true;
     bool grantTransmit = false;
 
@@ -304,6 +310,7 @@ struct RemoteAudioSessionHarness {
         station->hideAudioClock = hideAudioClock;
         station->hideReceiverAudio = hideReceiverAudio;
         station->hideHeadphonesMix = hideHeadphonesMix;
+        station->hideTxMonitorAudio = hideTxMonitorAudio;
         station->grantTransmit = grantTransmit;
         clientEnd->declareRemoteTx = declareRemoteTx;
         stationLink = station;
@@ -333,12 +340,20 @@ struct RemoteAudioSessionHarness {
         }
         server.acceptTransport(station);
         QTRY_VERIFY(server.mediaAvailable());
+        // R-R3-49: the Core's side is ready once it has sent
+        // snapshot.complete; this window's is once it has read it, and with
+        // it the capabilities every *Negotiated() reads. The two are one
+        // queued delivery apart, and a wait that stops between them (its
+        // slice of the event loop ran out on a busy computer) left
+        // receiverAudioNegotiated() false.
+        QTRY_VERIFY(client.isHandshakeComplete());
         if (helloMinor) {
             QCOMPARE(station->rewrittenHellos, 1);
             QCOMPARE(clientEnd->rewrittenHellos, 1);
             QCOMPARE(client.agreedMinor(), *helloMinor);
         }
-        if (hideAudioProfile || hideAudioClock || hideReceiverAudio || hideHeadphonesMix) {
+        if (hideAudioProfile || hideAudioClock || hideReceiverAudio || hideHeadphonesMix
+            || hideTxMonitorAudio) {
             // On a reconnect the server can still report media from the
             // session being replaced; wait for this link's capabilities.
             QTRY_VERIFY(station->hiddenAudioProfiles >= 1 && client.isHandshakeComplete());
@@ -346,6 +361,7 @@ struct RemoteAudioSessionHarness {
             if (hideAudioClock) { QCOMPARE(client.capabilities().audioClockVersion, 0); }
             if (hideReceiverAudio) { QCOMPARE(client.capabilities().receiverAudioVersion, 0); }
             if (hideHeadphonesMix) { QCOMPARE(client.capabilities().headphonesMixVersion, 0); }
+            if (hideTxMonitorAudio) { QCOMPARE(client.capabilities().txMonitorAudioVersion, 0); }
         }
     }
 
@@ -399,6 +415,9 @@ struct RemoteAudioSessionHarness {
     // Set before connectSession(): the Core appears to predate the
     // headphones mix (R-R3-45).
     bool hideHeadphonesMix = false;
+    // Set before connectSession(): the Core appears to predate the transmit
+    // monitor (remote-window parity Task 32).
+    bool hideTxMonitorAudio = false;
     // Task 36: set before connectSession(): the window's hello declares
     // remoteTx 1 (as the desktop's own does; false takes it out); the
     // Core's capabilities say txPermitted.

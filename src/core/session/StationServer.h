@@ -400,6 +400,12 @@
 //               and privateKeyPemPath(), for the control connection through
 //               the remote access service. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-27: Parity Task 32 (R-IOS-13, R-R3-49): txMonitorAudioVersion()
+//               and txMonitorAudioAvailable(). J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-27: iPhone plan Task 22 / parity Task 20 (R-IOS-26):
+//               stationFreedvVersion(). J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/IceConfiguration.h"
@@ -1044,6 +1050,19 @@ public:
     // access service with the control session over a data channel (link
     // section 20); 0 otherwise.
     int controlChannelVersion() const;
+    // R-IOS-13 / R-R3-49 (parity Task 32): txMonitorAudioVersion. 1 while
+    // media is on with the Core's own radio model: the transmit monitor
+    // goes to the device that holds transmit (monitor-audio); 0 otherwise.
+    // txMonitorAudioAvailable(epoch): that session's peer agreed minor 11
+    // and was told it, so its media start may declare it.
+    int txMonitorAudioVersion() const;
+    bool txMonitorAudioAvailable(quint64 epoch) const;
+    // R-IOS-26 / R-R3-49 (iPhone plan Task 22, parity Task 20):
+    // stationFreedvVersion. 1 with recordStreamVersion 1 and the Core's own
+    // FreeDV Reporter: the freedvStations stream, the FreeDV Reporter
+    // console and state in spotSources, and the freedv.* verbs; 0
+    // otherwise.
+    int stationFreedvVersion() const;
     // iPhone app plan Task 29 (R-IOS-16; link section 21): mediaReplaceVersion
     // 1 whenever media is on (the media `replace` operation);
     // controlSwitchVersion 1 always (session.pathTicket, path.join and

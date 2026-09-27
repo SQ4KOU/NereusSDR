@@ -47,6 +47,9 @@
 //   2026-09-27 - J.J. Boyd (KG4VCF). Remote-window parity Task 31: the
 //                display duplex setting, its menu item and its apply.
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-27 - J.J. Boyd (KG4VCF). iPhone plan Task 22 / parity Task 20:
+//                refreshFreedvReporterAvailability. AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -702,6 +705,9 @@ private slots:
     // Parity Task 19 (R-IOS-25, B7.2): the Spot Hub's Core settings and the
     // station's spot sources, available or disabled with a reason.
     void refreshSpotHubAvailability();
+    // iPhone plan Task 22 / parity Task 20 (R-IOS-26): the FreeDV Reporter
+    // dialog's Send QSY, Send and Clear, the Core's in a remote window.
+    void refreshFreedvReporterAvailability();
 
     /// The one place in src/gui that runs `new SetupDialog`.
     ///

@@ -1,10 +1,10 @@
 # no-port-check: NereusSDR-original.
-"""Configuration: one INI file read at start, and the TURN secret from a
-file of its own.
+"""Configuration: one INI file read at start, and the TURN secret and the
+relay secret from files of their own.
 
-The secret file is separate so systemd can hand it over with
-LoadCredential= and it never sits in the configuration or the repository.
-The service never writes either file.
+The secret files are separate so systemd can hand them over with
+LoadCredential= and they never sit in the configuration or the repository.
+The service never writes any of these files.
 """
 
 from __future__ import annotations
@@ -50,6 +50,12 @@ class Config:
     )
     turn_secret_file: str = ""
     turn_ttl_seconds: int = 86400
+    # The WebSocket relay (rendezvous document section 12): the URL both
+    # ends open, the secret shared with the relay, and how long a grant
+    # admits a first join. Empty relay_secret_file: no grants.
+    relay_url: str = "wss://rv.nereussdr.com/v1/relay"
+    relay_secret_file: str = ""
+    relay_ttl_seconds: int = 120
     log_level: str = "info"
     # [limits]
     introductions_per_address_per_minute: int = 30
@@ -72,8 +78,10 @@ class Config:
     send_budget_bytes: int = 33554432
     send_stall_ms: int = 30000
     socket_buffer_bytes: int = 16384
-    # Not from the file: the secret's bytes, read from turn_secret_file.
+    # Not from the file: the secrets' bytes, read from turn_secret_file and
+    # relay_secret_file.
     turn_secret: Optional[bytes] = field(default=None, repr=False)
+    relay_secret: Optional[bytes] = field(default=None, repr=False)
 
 
 _SECTIONS = {
@@ -84,6 +92,9 @@ _SECTIONS = {
         "turn_urls",
         "turn_secret_file",
         "turn_ttl_seconds",
+        "relay_url",
+        "relay_secret_file",
+        "relay_ttl_seconds",
         "log_level",
     ],
     "limits": [
@@ -137,16 +148,16 @@ def parse_listen(text: str) -> List[Tuple[str, int]]:
     return out
 
 
-def read_secret(path: str) -> bytes:
+def read_secret(path: str, what: str = "TURN") -> bytes:
     try:
         with open(path, "rb") as handle:
             data = handle.read()
     except OSError as exc:
         # The error names the path, never the contents.
-        raise ConfigError(f"cannot read the TURN secret file {path}") from exc
+        raise ConfigError(f"cannot read the {what} secret file {path}") from exc
     secret = data.rstrip(b"\r\n")
     if not secret:
-        raise ConfigError("the TURN secret file is empty")
+        raise ConfigError(f"the {what} secret file is empty")
     return secret
 
 
@@ -168,6 +179,8 @@ def load(path: Optional[str]) -> Config:
                 apply(config, key, value)
     if config.turn_secret_file:
         config.turn_secret = read_secret(config.turn_secret_file)
+    if config.relay_secret_file:
+        config.relay_secret = read_secret(config.relay_secret_file, "relay")
     check(config)
     return config
 
@@ -181,7 +194,7 @@ _MAY_BE_ZERO = ("ping_interval_seconds", "ping_timeout_seconds", "socket_buffer_
 def check(config: Config) -> None:
     """URLs must fit the wire (rendezvous document section 5.2), and every
     limit, timeout and cap must leave the service usable."""
-    for key in _SECTIONS["limits"] + ["turn_ttl_seconds"]:
+    for key in _SECTIONS["limits"] + ["turn_ttl_seconds", "relay_ttl_seconds"]:
         value = getattr(config, key)
         if not isinstance(value, int) or isinstance(value, bool):
             raise ConfigError(f"{key}: not a whole number")
@@ -206,6 +219,22 @@ def check(config: Config) -> None:
     # within that bound.
     if len(json.dumps(config.turn_urls, separators=(",", ":"))) > TURN_URLS_JSON_MAX:
         raise ConfigError(f"turn_urls: more than {TURN_URLS_JSON_MAX} bytes together")
+    # Section 12.1: a wss URL of printable ASCII, at most 512 bytes. The
+    # grant travels in a message of its own, so it takes nothing from the
+    # answer's size bound (section 2).
+    url = config.relay_url
+    if (
+        not 1 <= len(url.encode("utf-8")) <= 512
+        or not url.startswith("wss://")
+        or not all(0x21 <= ord(c) <= 0x7E for c in url)
+    ):
+        raise ConfigError("relay_url: a wss:// URL of printable ASCII, at most 512 bytes")
+    # Two secrets, never one: coturn's is written into its configuration,
+    # and a relay token must not be forgeable by anyone who reads that.
+    if config.relay_secret is not None and config.relay_secret == config.turn_secret:
+        raise ConfigError("the relay secret must differ from the TURN secret")
+    if config.relay_ttl_seconds > 86400:
+        raise ConfigError("relay_ttl_seconds: at most 86400")
     if config.log_level.upper() not in ("DEBUG", "INFO", "WARNING", "ERROR"):
         raise ConfigError("log_level: debug, info, warning or error")
 
@@ -216,7 +245,7 @@ def apply(config: Config, key: str, value: str) -> None:
         config.listen = parse_listen(value)
     elif key in ("trusted_proxies", "stun_urls", "turn_urls"):
         setattr(config, key, value.split())
-    elif key in ("turn_secret_file", "log_level"):
+    elif key in ("turn_secret_file", "relay_secret_file", "relay_url", "log_level"):
         setattr(config, key, value.strip())
     elif key in fields:
         try:

@@ -15,6 +15,8 @@
 //               queues bounded by bytes, the close waits for the channel's
 //               close (Minors 3 and 7). J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-27: setLibraryLogForTest() (R-R3-49). J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
 //   2026-09-27: iPhone app plan Task 29 (R-IOS-16): the ICE settings'
 //               other candidate sources start with gathering and stop with
 //               the connection. J.J. Boyd (KG4VCF), with AI-assisted
@@ -31,6 +33,7 @@
 #include <QLoggingCategory>
 #include <QMetaMethod>
 #include <QMetaObject>
+#include <QThread>
 #include <QPointer>
 #include <QTimer>
 #include <QtEndian>
@@ -676,6 +679,20 @@ void DataChannelTransport::sendText(const QByteArray& wire)
     } catch (const std::exception& error) {
         qCWarning(lcControlChannel) << "A control message was not sent:" << error.what();
     }
+}
+
+void DataChannelTransport::setLibraryLogForTest(
+    std::function<void(quintptr thread, const QString& line)> sink)
+{
+    if (!sink) {
+        rtc::InitLogger(rtc::LogLevel::None);
+        return;
+    }
+    rtc::InitLogger(rtc::LogLevel::Verbose,
+                    [sink = std::move(sink)](rtc::LogLevel, const std::string& line) {
+        sink(reinterpret_cast<quintptr>(QThread::currentThreadId()),
+             QString::fromStdString(line));
+    });
 }
 
 bool DataChannelTransport::sendRawFrameForTest(const QByteArray& frame)

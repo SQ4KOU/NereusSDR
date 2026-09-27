@@ -36,6 +36,11 @@
 //                 the same drain, and a local mask for the local sums.
 //                 NereusSDR-original. J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-27 -- Remote-window parity Task 32 (R-IOS-13, R-R3-49): an
+//                 owner's monitor route takes the transmit monitor into its
+//                 speakers or headphones sum; the local sums may leave it
+//                 out. NereusSDR-original. J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 // --- From aamix.c ---
@@ -305,7 +310,8 @@ int MasterMixer::tryDrain(float* out, float* hpOut, int maxFrames) {
 }
 
 int MasterMixer::tryDrain(float* out, float* hpOut, int maxFrames,
-                          std::uint32_t localMask, OwnerOutput* owners, int ownerCount) {
+                          std::uint32_t localMask, OwnerOutput* owners, int ownerCount,
+                          bool localOutOfMask, bool onlyWithoutMembers) {
     // `out` is the speakers sum, `hpOut` the headphones sum (R-R3-45).
     if ((out == nullptr && hpOut == nullptr) || maxFrames <= 0) { return 0; }
     if (owners == nullptr) { ownerCount = 0; }
@@ -345,6 +351,9 @@ int MasterMixer::tryDrain(float* out, float* hpOut, int maxFrames,
         // Only opportunistic contributors (the TX monitor slot). Nothing
         // to wait for, so drain whatever is queued.
         n = maxAvail;
+    } else if (onlyWithoutMembers) {
+        // Task 32: a member's own call drains this period.
+        return 0;
     }
 
     // A member with nothing queued is LATE, not gone, and the barrier
@@ -385,7 +394,7 @@ int MasterMixer::tryDrain(float* out, float* hpOut, int maxFrames,
     // Task 76: each owner's sums start silent too.
     for (int k = 0; k < ownerCount; ++k) {
         OwnerOutput& owner = owners[k];
-        if (owner.sliceMask == 0) { continue; }
+        if (owner.sliceMask == 0 && owner.monitor == OwnerMonitor::None) { continue; }
         if (owner.speakers != nullptr) {
             std::fill(owner.speakers, owner.speakers + static_cast<size_t>(n) * 2, 0.0f);
         }
@@ -415,7 +424,9 @@ int MasterMixer::tryDrain(float* out, float* hpOut, int maxFrames,
         const int id = kv.first;
         const bool inMask = id >= 0 && id < 32;
         const std::uint32_t bit = inMask ? (std::uint32_t{1} << id) : 0u;
-        const bool local = !inMask || (localMask & bit) != 0;
+        // Task 32: the transmit monitor's slot plays locally unless the
+        // caller leaves it out (a remote device holds transmit).
+        const bool local = inMask ? (localMask & bit) != 0 : localOutOfMask;
         float* const sliceOut = local ? out : nullptr;
         float* const sliceHpOut = local ? hpOut : nullptr;
 
@@ -470,6 +481,21 @@ int MasterMixer::tryDrain(float* out, float* hpOut, int maxFrames,
             }
             for (int k = 0; k < ownerCount; ++k) {
                 OwnerOutput& owner = owners[k];
+                if (!inMask) {
+                    // Task 32: the transmit monitor, to the owner's chosen
+                    // sum at the slot's own gain. The slot is in exactly one
+                    // local sum (a route change crossfades), so the two
+                    // together are that gain whichever it is.
+                    float* const to = owner.monitor == OwnerMonitor::Speakers
+                        ? owner.speakers
+                        : owner.monitor == OwnerMonitor::Headphones ? owner.headphones
+                                                                     : nullptr;
+                    if (to != nullptr) {
+                        to[o + 0] += spkL + hpL;
+                        to[o + 1] += spkR + hpR;
+                    }
+                    continue;
+                }
                 if ((owner.sliceMask & bit) == 0) { continue; }
                 if (owner.speakers != nullptr) {
                     owner.speakers[o + 0] += spkL;
@@ -526,7 +552,7 @@ int MasterMixer::tryDrain(float* out, float* hpOut, int maxFrames,
             // And every owner's sums with them (Task 76).
             for (int k = 0; k < ownerCount; ++k) {
                 OwnerOutput& owner = owners[k];
-                if (owner.sliceMask == 0) { continue; }
+                if (owner.sliceMask == 0 && owner.monitor == OwnerMonitor::None) { continue; }
                 if (owner.speakers != nullptr) {
                     owner.speakers[o + 0] *= g;
                     owner.speakers[o + 1] *= g;

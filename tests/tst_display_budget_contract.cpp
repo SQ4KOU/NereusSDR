@@ -763,6 +763,10 @@ private slots:
                                    "displayClockVersion",
                                    // Task 28 fix wave: the control channel.
                                    "controlChannelVersion",
+                                   // Parity Task 32: the transmit monitor.
+                                   "txMonitorAudioVersion",
+                                   // iPhone plan Task 22: FreeDV Reporter.
+                                   "stationFreedvVersion",
                                    // Task 29: moving media and the
                                    // session, and the relay.
                                    "mediaReplaceVersion", "controlSwitchVersion",
@@ -817,6 +821,8 @@ private slots:
                                            QByteArrayLiteral("txDisplayVersion"),
                                            QByteArrayLiteral("displayClockVersion"),
                                            QByteArrayLiteral("controlChannelVersion"),
+                                           QByteArrayLiteral("txMonitorAudioVersion"),
+                                           QByteArrayLiteral("stationFreedvVersion"),
                                            QByteArrayLiteral("mediaReplaceVersion"),
                                            QByteArrayLiteral("controlSwitchVersion"),
                                            QByteArrayLiteral("relayAllowed")}) {

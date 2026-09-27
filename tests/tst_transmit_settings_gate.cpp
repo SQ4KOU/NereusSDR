@@ -259,6 +259,12 @@ void TstTransmitSettingsGate::olderCoreOffersNoTransmitSettings()
     updates.removeLast();
     QCOMPARE(updates.last().name, QByteArrayLiteral("mediaReplaceVersion"));
     updates.removeLast();
+    // Then iPhone plan Task 22 / parity Task 20's stationFreedvVersion.
+    QCOMPARE(updates.last().name, QByteArrayLiteral("stationFreedvVersion"));
+    updates.removeLast();
+    // Then parity Task 32's txMonitorAudioVersion.
+    QCOMPARE(updates.last().name, QByteArrayLiteral("txMonitorAudioVersion"));
+    updates.removeLast();
     QCOMPARE(updates.last().name, QByteArrayLiteral("controlChannelVersion"));
     updates.removeLast();
     QCOMPARE(updates.last().name, QByteArrayLiteral("displayClockVersion"));

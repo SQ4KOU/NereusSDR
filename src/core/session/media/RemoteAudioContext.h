@@ -5,8 +5,10 @@
 // for the remote audio context, in the minor-7 and minor-8 shapes and the
 // audio-profile shape (R-R3-23, audioProfileVersion 1), and for the
 // receiver audio context (R-R3-43, receiverAudioVersion 1) and the
-// headphones audio context (R-R3-45, headphonesMixVersion 1); it holds no
-// session identity or playback policy.
+// headphones audio context (R-R3-45, headphonesMixVersion 1), and for the
+// transmit monitor's route (remote-window parity Task 32,
+// txMonitorAudioVersion 1); it holds no session identity or playback
+// policy.
 // =================================================================
 
 #pragma once
@@ -176,5 +178,34 @@ std::optional<RemoteReceiverAudioContextMessage> decodeReceiverAudioContext(
 QJsonObject encodeHeadphonesAudioContext(const RemoteAudioContextMessage& message);
 /// Exactly that shape; otherwise as decodeRemoteAudioContext's profile shape.
 std::optional<RemoteAudioContextMessage> decodeHeadphonesAudioContext(const QJsonObject& payload);
+
+// ---- Transmit monitor (remote-window parity Task 32, txMonitorAudioVersion 1) ----
+
+/// Where a device wants the transmit monitor (MON) while it holds transmit
+/// and is on the air: its main stream, its headphones stream, or nowhere.
+enum class TxMonitorRoute { None, Speakers, Headphones };
+/// "none", "speakers" or "headphones".
+QString txMonitorRouteToWire(TxMonitorRoute route);
+/// Exactly one of the three strings; nullopt for any other value.
+std::optional<TxMonitorRoute> txMonitorRouteFromWire(const QJsonValue& value);
+
+/// The request {op:"monitor-audio", connectionId, revision, route}, and the
+/// Core's one answer to it, {op:"monitor-audio-context", connectionId,
+/// revision, route}: the request's revision and the route the Core applies
+/// for the device (headphones becomes speakers for a device whose start did
+/// not declare headphonesMixVersion, whose main stream carries it then).
+struct MonitorAudioMessage {
+    QString connectionId;
+    quint32 revision = 0;
+    TxMonitorRoute route = TxMonitorRoute::None;
+};
+QJsonObject encodeMonitorAudioRequest(const MonitorAudioMessage& message);
+QJsonObject encodeMonitorAudioContext(const MonitorAudioMessage& message);
+/// Exactly the request's four keys, op "monitor-audio", a string
+/// connectionId, a nonzero integral uint32 revision and a known route.
+std::optional<MonitorAudioMessage> decodeMonitorAudioRequest(const QJsonObject& payload);
+/// Exactly the context's four keys, under op "monitor-audio-context", as
+/// the request is checked.
+std::optional<MonitorAudioMessage> decodeMonitorAudioContext(const QJsonObject& payload);
 
 } // namespace NereusSDR
