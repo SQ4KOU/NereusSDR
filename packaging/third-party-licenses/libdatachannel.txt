@@ -10,3 +10,18 @@ libdatachannel v0.24.5 is licensed under the Mozilla Public License 2.0.
 The complete license is supplied in MPLv2.txt. Corresponding source for the
 unmodified pinned version and its exact transitive revisions is available
 through the source URL and NereusSDR's written source offer.
+
+Modification (MPL-2.0 section 3.1): NereusSDR compiles one covered file,
+src/peerconnection.cpp, with a change of its own. PeerConnection::
+setRemoteDescription() keeps the remote description (and with it the
+fingerprint the DTLS handshake is checked against) before it gives the ICE
+agent the description, instead of after, so a handshake that completes at
+once cannot be checked against no fingerprint. The change is the source
+file cmake/patches/libdatachannel-keep-remote-description-first.cpp in the
+NereusSDR source, which cmake/NereusRemoteMedia.cmake puts in place of the
+two lines it reorders in a copy of peerconnection.cpp in the build tree
+(nereus_patch_libdatachannel_remote_description_first). Because it becomes
+part of a covered file, the change is licensed under the Mozilla Public
+License 2.0, like the rest of peerconnection.cpp, and carries that file's
+MPL-2.0 notice at the top; it is not under NereusSDR's GPLv3. Its source is
+offered with NereusSDR's (SOURCE-OFFER.txt).

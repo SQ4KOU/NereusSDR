@@ -23,7 +23,7 @@ directory alongside NereusSDR's own `LICENSE`.
 | nlohmann json 55f93686 | JSON parsing for libdatachannel | MIT | `nlohmann-json.txt` | `nlohmann-json.txt` |
 | zlib v1.3.1 (Windows builds) | compression for stored equaliser settings | Zlib | `zlib.txt` | `zlib.txt` |
 | libASPL v3.1.2 (macOS audio driver) | the NereusSDR VAX audio driver installed by the macOS package | MIT | `libaspl.txt` | `libaspl.txt` |
-| libdatachannel 0.24.5 | direct DTLS/SCTP and SRTP media transport | MPL-2.0 | `libdatachannel.txt`, `libdatachannel-notices.txt` | `MPLv2.txt` |
+| libdatachannel 0.24.5 | direct DTLS/SCTP and SRTP media transport; `src/peerconnection.cpp` carries a NereusSDR change (MPL-2.0, `cmake/patches/libdatachannel-keep-remote-description-first.cpp`) | MPL-2.0 | `libdatachannel.txt`, `libdatachannel-notices.txt` | `MPLv2.txt` |
 | libjuice | direct ICE backend for libdatachannel; `src/agent.c` carries a NereusSDR change (MPL-2.0, `cmake/patches/libjuice-release-turn-allocations.c`) | MPL-2.0 | `libjuice.txt`, `libjuice-notices.txt` | `MPLv2.txt` |
 | plog | libdatachannel logging dependency | MIT | `plog.txt` | `plog.txt` |
 | usrsctp | SCTP implementation for libdatachannel | BSD-3-Clause | `usrsctp.txt`, `usrsctp-notices.txt` | `usrsctp.txt` |
@@ -61,7 +61,7 @@ directory, or when a text file here is named by no row.
 | DeepFilterNet | `third_party/deepfilter`, built or downloaded by `setup-deepfilter.sh` and `setup-deepfilter.ps1` | d375b2d8309e0935d165700c91da9de862a99c31 | desktop packages, and the Core when its build has the library | `deepfilternet.txt`, `deepfilternet-crates.txt` |
 | PortAudio | FetchContent `portaudio` | v19.7.0 | desktop packages and the Core | `portaudio.txt`, `portaudio-notices.txt` |
 | zlib | FetchContent `zlib` on Windows; the system library elsewhere | v1.3.1 on Windows | Windows packages | `zlib.txt` |
-| libdatachannel | FetchContent `nereus_libdatachannel` | v0.24.5 | desktop packages and the Core | `libdatachannel.txt`, `libdatachannel-notices.txt` |
+| libdatachannel | FetchContent `nereus_libdatachannel`, `src/peerconnection.cpp` compiled with the NereusSDR change in `cmake/patches/libdatachannel-keep-remote-description-first.cpp` | v0.24.5 | desktop packages and the Core | `libdatachannel.txt`, `libdatachannel-notices.txt` |
 | libjuice | FetchContent `nereus_libjuice`, `src/agent.c` compiled with the NereusSDR change in `cmake/patches/libjuice-release-turn-allocations.c` | 3c40a3545b6b1b62c7adee7f8f2bd58aa290afd6 | desktop packages and the Core | `libjuice.txt`, `libjuice-notices.txt` |
 | plog | FetchContent `nereus_plog` | 94899e0b926ac1b0f4750bfbd495167b4a6ae9ef | desktop packages and the Core | `plog.txt` |
 | usrsctp | FetchContent `nereus_usrsctp` | fec583d54493f879d2ae44a743423bf8a04371ab | desktop packages and the Core | `usrsctp.txt`, `usrsctp-notices.txt` |
@@ -188,6 +188,12 @@ the §6(b) fallback.
   `SOURCE-OFFER.txt` §3).
 - libdatachannel and libjuice: MPL-2.0 covered files, without an applied
   Exhibit B incompatible-secondary-license notice in the pinned sources.
+  libdatachannel carries one NereusSDR change: `src/peerconnection.cpp` is
+  compiled with `cmake/patches/libdatachannel-keep-remote-description-first.cpp`
+  in place of two of its lines (a remote description is kept before the ICE
+  agent takes it). The change is part of that covered file and is licensed
+  under MPL-2.0 (section 3.1), with the file's notice at its top;
+  `libdatachannel.txt` describes it.
   libjuice carries one NereusSDR change: `src/agent.c` is compiled with
   `cmake/patches/libjuice-release-turn-allocations.c` inserted (each TURN
   allocation given back when an ICE agent ends). The change is part of that

@@ -28,6 +28,12 @@
 #               the targets' sources by the file it names, not its spelling.
 #               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 #               Anthropic Claude Code.
+#   2026-09-27: R-R3-49: libdatachannel keeps a remote description before
+#               its ICE agent takes it (nereus_patch_libdatachannel_remote_
+#               description_first(), the change in cmake/patches/
+#               libdatachannel-keep-remote-description-first.cpp). J.J. Boyd
+#               (KG4VCF), with AI-assisted implementation via Anthropic
+#               Claude Code.
 #
 # =================================================================
 
@@ -101,6 +107,75 @@ function(nereus_patch_libjuice_turn_release juice_dir)
             set_property(TARGET ${_target} PROPERTY SOURCES ${_sources})
         endif()
     endforeach()
+endfunction()
+
+# R-R3-49: libdatachannel v0.24.5's PeerConnection::setRemoteDescription()
+# gives the ICE agent the remote description before it keeps it for the
+# DTLS fingerprint check, and a handshake that reaches the check in between
+# fails. On a busy computer an offerer taking its answer lost that race
+# (the Core's control channel and media alike: "DTLS alert: unknown CA").
+# This compiles libdatachannel's targets from a copy of src/peerconnection.cpp
+# in the build tree with the two calls in the other order (the change and
+# its notice are cmake/patches/libdatachannel-keep-remote-description-first.cpp).
+# The fetched source is left as it is; the copy is rewritten only when its
+# content changes. A pinned libdatachannel without exactly one place for the
+# change stops the configure rather than build without it.
+function(nereus_patch_libdatachannel_remote_description_first dc_dir)
+    set(_source "${dc_dir}/src/peerconnection.cpp")
+    file(READ "${_source}" _pc)
+    file(READ "${_NEREUS_REMOTE_MEDIA_CMAKE_DIR}/patches/libdatachannel-keep-remote-description-first.cpp"
+         _first)
+    set(_anchor "\ticeTransport->setRemoteDescription(description); // ICE transport might reject the description\n\n\timpl()->processRemoteDescription(std::move(description));\n")
+    string(FIND "${_pc}" "${_anchor}" _at)
+    string(FIND "${_pc}" "${_anchor}" _last REVERSE)
+    if(_at EQUAL -1 OR NOT _at EQUAL _last)
+        message(FATAL_ERROR
+            "libdatachannel ${_source} does not have exactly one place for the remote "
+            "description change; update "
+            "cmake/patches/libdatachannel-keep-remote-description-first.cpp for this "
+            "libdatachannel.")
+    endif()
+    string(REPLACE "${_anchor}" "${_first}" _pc "${_pc}")
+
+    set(_patched "${CMAKE_BINARY_DIR}/_deps/nereus-patched/libdatachannel/src/peerconnection.cpp")
+    set(_old "")
+    if(EXISTS "${_patched}")
+        file(READ "${_patched}" _old)
+    endif()
+    if(NOT _old STREQUAL _pc)
+        file(WRITE "${_patched}" "${_pc}")
+    endif()
+
+    file(REAL_PATH "${_source}" _source_real)
+    set(_swapped 0)
+    foreach(_target IN ITEMS datachannel datachannel-static)
+        if(TARGET ${_target})
+            get_target_property(_sources ${_target} SOURCES)
+            get_target_property(_target_dir ${_target} SOURCE_DIR)
+            set(_index -1)
+            set(_position 0)
+            foreach(_entry IN LISTS _sources)
+                if(_index EQUAL -1 AND NOT _entry MATCHES "^\\$<")
+                    file(REAL_PATH "${_entry}" _entry_real BASE_DIRECTORY "${_target_dir}")
+                    if(_entry_real STREQUAL _source_real)
+                        set(_index ${_position})
+                    endif()
+                endif()
+                math(EXPR _position "${_position} + 1")
+            endforeach()
+            if(_index EQUAL -1)
+                message(FATAL_ERROR
+                    "libdatachannel target ${_target} does not compile ${_source}")
+            endif()
+            list(REMOVE_AT _sources ${_index})
+            list(INSERT _sources ${_index} "${_patched}")
+            set_property(TARGET ${_target} PROPERTY SOURCES ${_sources})
+            math(EXPR _swapped "${_swapped} + 1")
+        endif()
+    endforeach()
+    if(_swapped EQUAL 0)
+        message(FATAL_ERROR "no libdatachannel target to compile ${_patched} into")
+    endif()
 endfunction()
 
 function(nereus_add_remote_media_dependency)
@@ -183,6 +258,7 @@ function(nereus_add_remote_media_dependency)
         "${CMAKE_BINARY_DIR}/_deps/nereus_libdatachannel-build"
         EXCLUDE_FROM_ALL)
     nereus_patch_libjuice_turn_release("${nereus_libdatachannel_SOURCE_DIR}/deps/libjuice")
+    nereus_patch_libdatachannel_remote_description_first("${nereus_libdatachannel_SOURCE_DIR}")
 
     # Older nested projects can still materialize these implementation
     # options in the parent cache. They are not NereusSDR user options.

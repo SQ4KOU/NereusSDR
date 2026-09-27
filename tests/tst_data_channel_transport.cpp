@@ -24,6 +24,9 @@
 //   2026-09-26: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-27: each end keeps the far end's description before its ICE
+//               agent takes it (R-R3-49). J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -34,7 +37,10 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QHash>
 #include <QHostAddress>
+#include <QMutex>
+#include <QScopeGuard>
 #include <QSignalSpy>
 #include <QSslSocket>
 #include <QTemporaryDir>
@@ -259,6 +265,48 @@ private slots:
         // On one computer the far end has an address of its own.
         QVERIFY(!pair.answerer->peerAddress().isEmpty());
         QVERIFY(pair.offerer->telemetry().has_value());
+    }
+
+    // R-R3-49: on a busy computer the connection failed with "DTLS alert:
+    // unknown CA" at both ends. libdatachannel v0.24.5 gave the ICE agent
+    // the far end's description before keeping it for the DTLS fingerprint
+    // check, so a handshake that ran in between failed that check (the
+    // Offerer taking its answer while the Answerer's checks and DTLS were
+    // already under way). NereusSDR compiles it with the two in the other
+    // order (cmake/patches/libdatachannel-keep-remote-description-first.cpp).
+    // What each end logs shows the order: the description kept, then the
+    // ICE agent adding the description's candidates, on the same thread.
+    void eachEndKeepsTheFarEndsDescriptionBeforeIceTakesIt()
+    {
+        QMutex mutex;
+        QList<QPair<quintptr, QString>> lines;
+        DataChannelTransport::setLibraryLogForTest([&](quintptr thread, const QString& line) {
+            const QMutexLocker lock(&mutex);
+            lines.append({thread, line});
+        });
+        const auto logOff = qScopeGuard([] { DataChannelTransport::setLibraryLogForTest({}); });
+        OpenPair pair;
+        QVERIFY(pair.open());
+        DataChannelTransport::setLibraryLogForTest({});
+
+        const QMutexLocker lock(&mutex);
+        int kept = 0;
+        int taken = 0;
+        QHash<quintptr, int> keptOnThread;
+        for (const auto& [thread, line] : std::as_const(lines)) {
+            if (line.contains(QLatin1String("Remote description kept before the ICE agent takes it"))) {
+                ++kept;
+                ++keptOnThread[thread];
+            } else if (line.contains(QLatin1String("candidates from remote description"))) {
+                ++taken;
+                // The agent takes a description only after it was kept.
+                QVERIFY2(keptOnThread.value(thread) > 0, qPrintable(line));
+                --keptOnThread[thread];
+            }
+        }
+        // One description each way: the offer, then the answer.
+        QCOMPARE(kept, 2);
+        QCOMPARE(taken, 2);
     }
 
     void a300KiBSettingsSnapshotCrossesInChunks()
