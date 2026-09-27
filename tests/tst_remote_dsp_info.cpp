@@ -34,6 +34,9 @@
 //                 RadioModel::nrCannotRunReason; kNotSaid is the reason
 //                 below dspAssetVersion 3 or 4. J.J. Boyd (KG4VCF), with
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-27 -- R-R3-49: the Core's receive lane is waited for as such
+//                 before its results are read. J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -370,8 +373,11 @@ private slots:
         const double before = ch->minNotchWidthHz();
         ch->setFilterSizeSamples(8192);
         // Trunk merge: the WDSP call runs on the receive lane (R-R3-39), so
-        // the new minimum lands once the lane has run it.
-        QTRY_VERIFY(ch->minNotchWidthHz() < before);
+        // the new minimum lands once the lane has run it. R-R3-49: waited
+        // for as that, not for QTRY's 5 s: the rebuild at 8192 samples took
+        // longer than that at load 430.
+        QVERIFY(model.waitForReceiveLaneForTest());
+        QVERIFY(ch->minNotchWidthHz() < before);
         QTRY_COMPARE(slice->minNotchWidthHz(), ch->minNotchWidthHz());
         harness.reset();
     }
@@ -467,8 +473,11 @@ private slots:
             }
         }
 
-        // A filter change on the Core's slice is fetched again.
+        // A filter change on the Core's slice is fetched again. R-R3-49:
+        // the change runs on the Core's receive lane first, waited for as
+        // that rather than inside QTRY's 5 s.
         coreSlice->setFilter(300, 2400);
+        QVERIFY(core.waitForReceiveLaneForTest());
         QTRY_VERIFY(curve.count() >= 2);
 
         // Right and wrong on the wire.
