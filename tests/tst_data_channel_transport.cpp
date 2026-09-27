@@ -21,6 +21,8 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-27: Start the short heartbeat test deadline after sign-in.
+//               J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 //   2026-09-26: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
@@ -749,11 +751,13 @@ private slots:
         SettingsProxy proxy;
         StationClient window(&remote, &proxy);
         window.setDeviceIdentity(key, QStringLiteral("Shack MacBook"));
-        window.setHeartbeatIntervalMs(100);
         QSignalSpy ended(&window, &StationClient::sessionEnded);
         window.startSession(offerer, QString(), QString(),
                             core.server->stationIdentity().fingerprint());
         QTRY_VERIFY_WITH_TIMEOUT(window.isHandshakeComplete(), 20000);
+        // Allow normal sign-in before testing the deliberately short liveness
+        // deadline. A busy test host must not time out during the snapshot.
+        window.setHeartbeatIntervalMs(100);
         // The Core goes silent without closing.
         answerer->setAnswersPingsForTest(false);
         QTRY_COMPARE_WITH_TIMEOUT(ended.count(), 1, 10000);
