@@ -59,6 +59,10 @@
 //   2026-09-26: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: Task 28 fix wave (review Minors 3, 5, 7): queues bounded
+//               by bytes, the close waits for the channel's close.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/IceConfiguration.h"
@@ -144,6 +148,22 @@ public:
     /// The channel's label (the link document, "Control over a data
     /// channel").
     static constexpr const char* kLabel = "control";
+
+    /// NereusSDR's own bounds (the Task 28 safety review's Minor 3 and 7):
+    ///
+    /// The bytes of whole messages waiting for this object's thread, and
+    /// separately the bytes held until something listens to textReceived,
+    /// are each at most kMaxQueuedCaps times the inbound cap (4 MiB on the
+    /// Core, 32 MiB on a device). Past either the owner has stopped keeping
+    /// up and the connection ends, rather than grow without limit before
+    /// anyone has signed in.
+    static constexpr quint64 kMaxQueuedCaps = 4;
+    /// closeLink() closes the channel and then the peer gracefully, and
+    /// the connection is kept until the peer reports it has closed, or for
+    /// at most this long, so what was already sent (a session.end behind a
+    /// backlog) is delivered even when the transport is deleted at once,
+    /// as a WebSocket's close waits for what it has written.
+    static constexpr int kCloseDrainDeadlineMs = 5000;
 
     struct Options {
         Role role = Role::Offerer;
@@ -242,6 +262,10 @@ public:
     };
     Counts countsForTest() const;
 
+    /// Test seam: the bytes of whole messages waiting for this object's
+    /// thread (the bound is kMaxQueuedCaps times the inbound cap).
+    quint64 pendingBytesForTest() const;
+
     /// Test seam: sends `frame` as one binary data-channel message exactly
     /// as given, to show what the far end does with frames a conforming
     /// sender never makes.
@@ -277,9 +301,10 @@ private:
     void deliverHeld();
     void drain();
     void handleOpen();
-    void handleClosed();
     void gatherIfReady();
-    void stopPeer();
+    /// Cancels the bridge and closes the connection; with `linger`, an open
+    /// channel closes first and the peer after it (closeLink()).
+    void stopPeer(bool linger = false);
     void finishClose();
 
     Options m_options;
@@ -305,6 +330,7 @@ private:
     quint64 m_pongsReceived = 0;
     std::optional<QString> m_peerAddressForTest;
     QList<QByteArray> m_held;
+    quint64 m_heldBytes = 0;
     bool m_heldDeliveryPosted = false;
 };
 

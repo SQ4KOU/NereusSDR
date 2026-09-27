@@ -11,6 +11,10 @@
 //   2026-09-26: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: Task 28 fix wave: the OpenSSL error scope (Important 3),
+//               queues bounded by bytes, the close waits for the channel's
+//               close (Minors 3 and 7). J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/DataChannelTransport.h"
@@ -18,10 +22,12 @@
 #include "core/security/OpenSslErrorScope.h"
 #include "core/session/media/LibDataChannelMediaTransport.h"
 
+#include <QCoreApplication>
 #include <QHostAddress>
 #include <QLoggingCategory>
 #include <QMetaMethod>
 #include <QMetaObject>
+#include <QTimer>
 #include <QtEndian>
 
 #include <rtc/rtc.hpp>
@@ -153,16 +159,22 @@ struct Event {
     quint32 id = 0;
 };
 
-// NereusSDR's own bound on events waiting for this object's thread. A
-// complete message is at most the inbound cap, and a burst of these past
-// the bound means the owner thread has stopped; the connection ends then
+// NereusSDR's own bounds on events waiting for this object's thread: how
+// many, and the bytes of the messages among them
+// (DataChannelTransport::kMaxQueuedCaps times the inbound cap). A burst
+// past either means the owner thread has stopped; the connection ends then
 // rather than grow without limit.
 constexpr std::size_t kMaxPendingEvents = 4096;
 
 } // namespace
 
 struct DataChannelTransport::Bridge {
-    explicit Bridge(DataChannelTransport* o, quint64 cap) : owner(o), reassembler(cap) {}
+    explicit Bridge(DataChannelTransport* o, quint64 cap)
+        : owner(o)
+        , maxPendingBytes(cap * DataChannelTransport::kMaxQueuedCaps)
+        , reassembler(cap)
+    {
+    }
 
     std::mutex mutex;
     DataChannelTransport* owner = nullptr;
@@ -170,6 +182,8 @@ struct DataChannelTransport::Bridge {
     bool drainPosted = false;
     bool overflowed = false;
     std::deque<Event> events;
+    const quint64 maxPendingBytes;
+    quint64 pendingBytes = 0;
     ControlFraming::Reassembler reassembler;
     std::shared_ptr<rtc::PeerConnection> peer;
     std::shared_ptr<rtc::DataChannel> channel;
@@ -184,14 +198,17 @@ struct DataChannelTransport::Bridge {
         if (cancelled) {
             return;
         }
-        if (events.size() >= kMaxPendingEvents) {
+        const quint64 bytes = static_cast<quint64>(event.bytes.size());
+        if (events.size() >= kMaxPendingEvents || pendingBytes + bytes > maxPendingBytes) {
             if (!overflowed) {
                 overflowed = true;
                 events.clear();
+                pendingBytes = 0;
                 events.push_back({Event::Kind::Refused, {},
                                   QStringLiteral("the control channel fell behind"), {}, 0});
             }
         } else if (!overflowed) {
+            pendingBytes += bytes;
             events.push_back(std::move(event));
         }
         if (!drainPosted) {
@@ -702,7 +719,11 @@ void DataChannelTransport::closeLink(const QString& reason)
     }
     m_closing = true;
     qCInfo(lcControlChannel) << "Closing the control connection:" << reason;
-    stopPeer();
+    // Review Minor 7: the channel and then the peer close gracefully, and
+    // the connection is held on its own until the peer has closed (or for
+    // kCloseDrainDeadlineMs), so a transport deleted straight after this
+    // still delivers what it sent (StationServer::dropPeer's session.end).
+    stopPeer(/*linger=*/true);
     // As a WebSocket's close: closed() follows, from the event loop.
     QMetaObject::invokeMethod(this, [this]() { finishClose(); }, Qt::QueuedConnection);
 }
@@ -800,6 +821,15 @@ void DataChannelTransport::setAnswersPingsForTest(bool answers)
     }
 }
 
+quint64 DataChannelTransport::pendingBytesForTest() const
+{
+    if (!m_bridge) {
+        return 0;
+    }
+    std::lock_guard lock(m_bridge->mutex);
+    return m_bridge->pendingBytes;
+}
+
 DataChannelTransport::Counts DataChannelTransport::countsForTest() const
 {
     Counts counts;
@@ -822,6 +852,7 @@ void DataChannelTransport::drain()
         std::lock_guard lock(m_bridge->mutex);
         m_bridge->drainPosted = false;
         events.swap(m_bridge->events);
+        m_bridge->pendingBytes = 0;
     }
     for (Event& event : events) {
         if (!m_bridge || m_closedEmitted) {
@@ -849,7 +880,18 @@ void DataChannelTransport::drain()
                 // the device's end has been handed to its session.
                 const QMetaMethod signal = QMetaMethod::fromSignal(&SessionTransport::textReceived);
                 if (!m_held.isEmpty() || !isSignalConnected(signal)) {
+                    const quint64 bytes = static_cast<quint64>(event.bytes.size());
+                    if (m_heldBytes + bytes
+                        > m_options.maxIncomingBytes * kMaxQueuedCaps) {
+                        // Nobody is taking them: end rather than grow.
+                        qCWarning(lcControlChannel)
+                            << "Ending the control connection: messages waited for a "
+                               "listener past the bound";
+                        closeLink(QStringLiteral("the control channel fell behind"));
+                        return;
+                    }
                     m_held.append(event.bytes);
+                    m_heldBytes += bytes;
                     scheduleHeldDelivery();
                 } else {
                     ++m_messagesDelivered;
@@ -911,6 +953,7 @@ void DataChannelTransport::deliverHeld()
     const QMetaMethod signal = QMetaMethod::fromSignal(&SessionTransport::textReceived);
     while (!m_held.isEmpty() && isOpen() && isSignalConnected(signal)) {
         const QByteArray message = m_held.takeFirst();
+        m_heldBytes -= static_cast<quint64>(message.size());
         ++m_messagesDelivered;
         emit textReceived(message);
     }
@@ -925,7 +968,72 @@ void DataChannelTransport::handleOpen()
     emit opened();
 }
 
-void DataChannelTransport::stopPeer()
+namespace {
+
+// A connection closing on its own after its transport let it go. The
+// channel's close (a stream reset) is queued behind what was sent on it,
+// and the peer's close flushes the SCTP send queue and shuts SCTP down
+// gracefully (libdatachannel v0.24.5 src/impl/sctptransport.cpp:423-439,
+// 572-592); dropping the last reference to the peer instead tears every
+// transport down at once and loses what was queued. So the peer is held
+// until it reports it has closed, or until the deadline. Only ever touched
+// on the thread that made it.
+struct Linger {
+    std::shared_ptr<rtc::PeerConnection> peer;
+    std::shared_ptr<rtc::DataChannel> channel;
+
+    void release()
+    {
+        if (!peer) {
+            return;
+        }
+        try {
+            peer->resetCallbacks();
+        } catch (const std::exception&) {
+            // Closing what is already closing.
+        }
+        channel.reset();
+        peer.reset();
+    }
+};
+
+// True when the connection was handed to a Linger; false when there is
+// nothing to wait for (the caller closes the peer at once).
+bool lingerUntilClosed(const std::shared_ptr<rtc::PeerConnection>& peer,
+                       const std::shared_ptr<rtc::DataChannel>& channel)
+{
+    QCoreApplication* app = QCoreApplication::instance();
+    if (app == nullptr || !peer || !channel || !channel->isOpen()) {
+        return false;
+    }
+    auto linger = std::make_shared<Linger>();
+    linger->peer = peer;
+    linger->channel = channel;
+    const std::weak_ptr<Linger> weak = linger;
+    peer->onStateChange([weak, app](rtc::PeerConnection::State state) {
+        if (state != rtc::PeerConnection::State::Closed
+            && state != rtc::PeerConnection::State::Failed
+            && state != rtc::PeerConnection::State::Disconnected) {
+            return;
+        }
+        QMetaObject::invokeMethod(app, [weak]() {
+            if (const auto held = weak.lock()) {
+                held->release();
+            }
+        }, Qt::QueuedConnection);
+    });
+    // The timer's copy holds the connection until the deadline at most.
+    QTimer::singleShot(DataChannelTransport::kCloseDrainDeadlineMs, app,
+                       [linger]() { linger->release(); });
+    channel->resetCallbacks();
+    channel->close();
+    peer->close();
+    return true;
+}
+
+} // namespace
+
+void DataChannelTransport::stopPeer(bool linger)
 {
     if (!m_bridge) {
         return;
@@ -936,16 +1044,22 @@ void DataChannelTransport::stopPeer()
         std::lock_guard lock(m_bridge->mutex);
         m_bridge->cancelled = true;
         m_bridge->events.clear();
+        m_bridge->pendingBytes = 0;
         peer = std::move(m_bridge->peer);
         channel = std::move(m_bridge->channel);
     }
     try {
+        if (peer) {
+            peer->resetCallbacks();
+        }
+        if (linger && lingerUntilClosed(peer, channel)) {
+            return;
+        }
         if (channel) {
             channel->resetCallbacks();
             channel->close();
         }
         if (peer) {
-            peer->resetCallbacks();
             // Closing the peer ends ICE, which gives back any relay
             // allocation (cmake/NereusRemoteMedia.cmake's libjuice change).
             peer->close();

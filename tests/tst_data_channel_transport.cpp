@@ -29,6 +29,8 @@
 #include <QtTest>
 
 #include <QDir>
+#include <QElapsedTimer>
+#include <QPointer>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -37,7 +39,10 @@
 #include <QSslSocket>
 #include <QTemporaryDir>
 
+#include <chrono>
 #include <memory>
+#include <optional>
+#include <thread>
 
 #include <openssl/err.h>
 
@@ -317,6 +322,76 @@ private slots:
         QCOMPARE(atDevice.count(), 0);
     }
 
+    // Review Minor 3: whole messages waiting for a thread that has stopped
+    // are bounded by bytes (kMaxQueuedCaps times the cap), not only by how
+    // many there are: the connection ends past it.
+    void messagesWaitingForABusyThreadAreBoundedByBytes()
+    {
+        OpenPair pair;
+        QVERIFY(pair.open());
+        QSignalSpy atCore(pair.answerer.get(), &SessionTransport::textReceived);
+        QSignalSpy coreClosed(pair.answerer.get(), &SessionTransport::closed);
+        const QByteArray message = patterned(static_cast<qsizetype>(kStationCap) - 64);
+        const int count = static_cast<int>(DataChannelTransport::kMaxQueuedCaps) + 2;
+        for (int i = 0; i < count; ++i) {
+            pair.offerer->sendText(message);
+        }
+        // This thread stays busy (no events run) while the library's
+        // threads carry the messages in; they wait for it, up to the bound.
+        QElapsedTimer busy;
+        busy.start();
+        quint64 highest = 0;
+        while (busy.elapsed() < 8000) {
+            highest = std::max(highest, pair.answerer->pendingBytesForTest());
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+        QVERIFY(highest <= kStationCap * DataChannelTransport::kMaxQueuedCaps);
+        QTest::ignoreMessage(QtWarningMsg, QRegularExpression(QStringLiteral("fell behind")));
+        QTRY_COMPARE_WITH_TIMEOUT(coreClosed.count(), 1, 15000);
+        QCOMPARE(atCore.count(), 0);
+    }
+
+    // Review Minor 3: messages held until something listens are bounded
+    // by bytes too.
+    void messagesHeldForNoListenerAreBoundedByBytes()
+    {
+        OpenPair pair;
+        QVERIFY(pair.open());
+        // Nothing listens to the Core's end.
+        QSignalSpy coreClosed(pair.answerer.get(), &SessionTransport::closed);
+        const QByteArray message = patterned(static_cast<qsizetype>(kStationCap) - 64);
+        QTest::ignoreMessage(QtWarningMsg, QRegularExpression(QStringLiteral("past the bound")));
+        const int count = static_cast<int>(DataChannelTransport::kMaxQueuedCaps) + 2;
+        for (int i = 0; i < count; ++i) {
+            pair.offerer->sendText(message);
+            QTest::qWait(50);
+        }
+        QTRY_COMPARE_WITH_TIMEOUT(coreClosed.count(), 1, 20000);
+    }
+
+    // Review Minor 7: what was sent before closeLink() arrives, even behind
+    // a backlog and with the transport deleted at once, as
+    // StationServer::dropPeer does after its session.end.
+    void theLastMessagesArriveWhenTheTransportIsDeletedAtItsClose()
+    {
+        auto offerer = std::make_unique<DataChannelTransport>();
+        auto* answerer = new DataChannelTransport();
+        QVERIFY(startDataChannelPair(offerer.get(), answerer, kClientCap, kStationCap, QString(),
+                                     QString()));
+        QVERIFY(waitFor([&] { return offerer->isOpen() && answerer->isOpen(); }, 15000));
+        QSignalSpy atDevice(offerer.get(), &SessionTransport::textReceived);
+        const QByteArray backlog = patterned(static_cast<qsizetype>(kStationCap) - 64);
+        const QByteArray last = QByteArrayLiteral("{\"type\":\"session.end\"}");
+        for (int i = 0; i < 3; ++i) {
+            answerer->sendText(backlog);
+        }
+        answerer->sendText(last);
+        answerer->closeLink(QStringLiteral("test"));
+        delete answerer;
+        QTRY_COMPARE_WITH_TIMEOUT(atDevice.count(), 4, 20000);
+        QCOMPARE(atDevice.last().first().toByteArray(), last);
+    }
+
     void anUnknownFrameEndsTheConnection()
     {
         OpenPair pair;
@@ -504,6 +579,15 @@ private slots:
         StationClient window(&remote, &proxy);
         window.setDeviceIdentity(key, QStringLiteral("Shack MacBook"));
         QSignalSpy ended(&window, &StationClient::sessionEnded);
+        // What the desktop's end had sent when the session ended (read
+        // then: the transport may go once it has).
+        std::optional<quint64> sentByDevice;
+        const QPointer<DataChannelTransport> deviceEnd(offerer);
+        QObject::connect(&window, &StationClient::sessionEnded, &window, [&sentByDevice, deviceEnd] {
+            if (deviceEnd) {
+                sentByDevice = deviceEnd->countsForTest().messagesSent;
+            }
+        });
         QTest::ignoreMessage(QtWarningMsg, QRegularExpression(QStringLiteral(".*")));
         window.startSession(offerer, QString(), QString(),
                             core.server->stationIdentity().fingerprint());
@@ -512,6 +596,8 @@ private slots:
         QVERIFY(!window.isHandshakeComplete());
         // Nothing reached the Core from the desktop: not its hello, not its
         // sign-in.
+        QVERIFY(sentByDevice.has_value());
+        QCOMPARE(*sentByDevice, quint64(0));
         QVERIFY(coreEnd.isNull() || coreEnd->countsForTest().messagesDelivered == 0);
         QVERIFY(!core.server->hasAuthenticatedSession());
     }
