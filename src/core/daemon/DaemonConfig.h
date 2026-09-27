@@ -194,8 +194,10 @@ struct DaemonConfig {
     // (`nereusd-control`) lives. Empty (the default) is the profile's own
     // directory (AppSettings::resolveConfigDir). A packaged Core sets its
     // systemd StateDirectory here (/var/lib/nereusd in the shipped sample),
-    // so `sudo nereusd status` finds the socket through --config alone,
-    // never through the caller's $HOME. Only the socket moves; the identity
+    // so `sudo nereusd status` finds the socket through the default
+    // --config. Without it a console command also looks in a packaged
+    // Core's HOME (StationControlSocket::candidatePathsFor), since under
+    // sudo its own $HOME is root's. Only the socket moves; the identity
     // key and the device list stay in the profile's directory. Must be an
     // absolute path when set. Read by StationControlSocket::socketPathFor()
     // on both sides.

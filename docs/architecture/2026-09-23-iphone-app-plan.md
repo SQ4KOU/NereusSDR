@@ -2411,7 +2411,14 @@ here).
     uncommented, so `sudo nereusd status` finds the socket through the default
     `--config /etc/nereusd.conf`. On a packaged Core, whose unit uses `DynamicUser` and
     `StateDirectory` `/var/lib/nereusd` (mode 0700), the console text says to run them
-    with sudo.
+    with sudo. A `/etc/nereusd.conf` without `state_directory` (an older sample, or a
+    kit's own file) still works: when the socket is not under the command's own `$HOME`
+    (root's, under sudo), the command also looks in the profile's directory under the
+    unit's `HOME=/var/lib/nereusd` and its DynamicUser path `/var/lib/private/nereusd`
+    (`StationControlSocket::candidatePathsFor`; fix 2026-09-26, R-IOS-08, R-R3-26). When
+    no Core answers, the text names every path it tried and says what works: `sudo
+    nereusd <command>` alone on a packaged Core, the same `--config` and `--profile`
+    from the same account for a Core started by hand.
   - Subcommands of `nereusd` that talk to the running daemon and print its answer:
     `nereusd status`, `nereusd pairing show`, `nereusd pairing open`,
     `nereusd pairing close`, `nereusd devices`, `nereusd devices revoke <id>`,
@@ -7291,8 +7298,9 @@ never sent anywhere), spec §4.7 (sound while locked).
    address and port; JJ reads the pairing code on the Pi himself (over SSH, with the
    command that session gives him). A Core that still holds the R2 access token counts
    as claimed, so its window starts closed: `sudo nereusd pairing open` opens it for one
-   more device for 10 minutes, then `sudo nereusd pairing show` prints the code; both
-   take the running Core's `--config` and `--profile` when it has them, and `sudo
+   more device for 10 minutes, then `sudo nereusd pairing show` prints the code; on a
+   packaged Core both need nothing but sudo (a Core started by hand takes its own
+   `--config` and `--profile`), and `sudo
    nereusd status` shows the pairing state ("Pairing: …") and how many devices are
    paired.
 4. JJ types the Pi's IPv6 address and the code: the phone pairs, signs in and shows the

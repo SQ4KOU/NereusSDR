@@ -611,7 +611,7 @@ private slots:
             QStringLiteral("Shack Core"), QStringLiteral("http://192.0.2.5:47911/"));
         QVERIFY(notice.contains(QStringLiteral("This Core: Shack Core")));
         QVERIFY(notice.contains(QStringLiteral("Status page: http://192.0.2.5:47911/")));
-        QVERIFY(notice.contains(QStringLiteral("sudo")));
+        QVERIFY(notice.contains(QStringLiteral("sudo nereusd status")));
         // The identity key banner beside it names the key's full path and
         // asks for a backup (StationServer::formatFirstRunBanner).
         const QString banner = StationServer::formatFirstRunBanner(

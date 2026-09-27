@@ -122,10 +122,11 @@ status_port = 47911
 
 # Where the console commands (nereusd status, nereusd pairing show, ...)
 # reach the running Core. Empty uses the profile's own directory. The
-# packaged service keeps its state in /var/lib/nereusd; with this line, run
-# the commands with sudo and the same --config, for example
-# `sudo nereusd status`. The Core's key and paired devices stay where they
-# are; only the command socket lives here.
+# packaged service keeps its state in /var/lib/nereusd; run the commands
+# with sudo and nothing else, for example `sudo nereusd status` (they read
+# this file by default, and without this line they still look in the
+# packaged service's home, /var/lib/nereusd). The Core's key and paired
+# devices stay where they are; only the command socket lives here.
 state_directory = /var/lib/nereusd
 
 # The station network: where this Core accepts connections from the

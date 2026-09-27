@@ -12,6 +12,9 @@
 //               lasts 10 minutes, five burned codes in a row close any window,
 //               and reopening starts afresh. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: the command list says a packaged Core needs only sudo
+//               (R-IOS-08, R-R3-26). J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/daemon/StationControlCommands.h"
@@ -94,8 +97,9 @@ QString StationControlCommands::usage()
         "  nereusd devices revoke <id>\n"
         "  nereusd token retire\n"
         "  nereusd reset --unclaimed --yes\n"
-        "Give each the same --config and --profile as the running Core, and run it with sudo "
-        "on a packaged Core.");
+        "On a packaged Core, run each with sudo and nothing else, for example sudo nereusd "
+        "status. For a Core you started yourself, run each from the same account with the "
+        "same --config and --profile it was started with.");
 }
 
 StationServer* StationControlCommands::server() const

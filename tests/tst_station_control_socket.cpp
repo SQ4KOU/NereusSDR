@@ -44,6 +44,10 @@
 //               an unreadable or invalid configuration file. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic Claude
 //               Code.
+//   2026-09-26: a packaged Core found with no options, the no-answer
+//               text, and a Core started by hand still found first
+//               (R-IOS-08, R-R3-26). J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -174,6 +178,20 @@ StationControlReply ask(const QString& path, const QStringList& args)
         done = true;
     });
     [[maybe_unused]] const bool waited1 = QTest::qWaitFor([&done]() { return done.load(); }, 15000);
+    client.join();
+    return reply;
+}
+
+// The same, looking through `paths` as a console command does.
+StationControlReply ask(const QStringList& paths, const QStringList& args)
+{
+    StationControlReply reply;
+    std::atomic<bool> done{false};
+    std::thread client([&]() {
+        reply = StationControlSocket::request(paths, args, 10000);
+        done = true;
+    });
+    [[maybe_unused]] const bool waited = QTest::qWaitFor([&done]() { return done.load(); }, 15000);
     client.join();
     return reply;
 }
@@ -384,6 +402,21 @@ bool endedWithCode(LoopbackTransport* client, const QString& code)
 
 // The reply's words, without what is not words: the pairing code (random
 // words) and device ids (base64url) are data, not wording.
+// The real entry point as a helper process: this test binary, re-run with
+// --daemon-helper; `--packaged-home <dir>` first stands a directory in for
+// a packaged Core's HOME (StationControlSocket::setPackagedHomesForTest).
+int runHelper(const QStringList& args, QString* out)
+{
+    QProcess process;
+    process.setProcessChannelMode(QProcess::MergedChannels);
+    process.start(QCoreApplication::applicationFilePath(),
+                  QStringList{QStringLiteral("--daemon-helper")} + args);
+    [[maybe_unused]] const bool finished = QTest::qWaitFor(
+        [&process]() { return process.state() == QProcess::NotRunning; }, 30000);
+    *out = QString::fromUtf8(process.readAll());
+    return process.exitStatus() == QProcess::NormalExit ? process.exitCode() : -1;
+}
+
 void verifyPlain(const StationControlReply& reply, const QString& code = QString())
 {
     QStringList lines = reply.text.split(QLatin1Char('\n'));
@@ -1007,6 +1040,146 @@ private slots:
         verifyPlain(reply);
     }
 
+    // ── A packaged Core (R-IOS-08, R-R3-26) ───────────────────────────
+    // A packaged unit pins the Core's HOME to /var/lib/nereusd and its
+    // /etc/nereusd.conf may have no state_directory, so the socket is in
+    // the profile's directory under that HOME; `sudo nereusd <command>`
+    // runs with root's HOME. A short temporary directory stands in for
+    // /var/lib/nereusd.
+
+    void thePackagedHomesAreTheUnitsOwn()
+    {
+#ifdef Q_OS_LINUX
+        QCOMPARE(StationControlSocket::packagedHomes(),
+                 (QStringList{QStringLiteral("/var/lib/nereusd"),
+                              QStringLiteral("/var/lib/private/nereusd")}));
+        // The packaged place mirrors AppSettings::resolveConfigDir(): under
+        // this command's own HOME it is the same path, listed once.
+        const DaemonConfig config = DaemonConfig::defaults();
+        QCOMPARE(StationControlSocket::candidatePathsFor(config, QStringLiteral("daemon"),
+                                                         {QString::fromLocal8Bit(qgetenv("HOME"))}),
+                 QStringList{StationControlSocket::socketPathFor(config, QStringLiteral("daemon"))});
+#else
+        QVERIFY(StationControlSocket::packagedHomes().isEmpty());
+#endif
+    }
+
+    void theCommandLooksInThePackagedHomeAfterItsOwn()
+    {
+        const QStringList homes{QStringLiteral("/var/lib/nereusd"),
+                                QStringLiteral("/var/lib/private/nereusd")};
+        DaemonConfig config = DaemonConfig::defaults();
+        QCOMPARE(StationControlSocket::candidatePathsFor(config, QStringLiteral("daemon"), homes),
+                 (QStringList{
+                     StationControlSocket::socketPathFor(config, QStringLiteral("daemon")),
+                     QStringLiteral("/var/lib/nereusd/.config/NereusSDR/profiles/daemon/"
+                                    "nereusd-control"),
+                     QStringLiteral("/var/lib/private/nereusd/.config/NereusSDR/profiles/daemon/"
+                                    "nereusd-control")}));
+        // With state_directory the Core is where it says, and nowhere else.
+        config.stateDirectory = QStringLiteral("/var/lib/nereusd");
+        QCOMPARE(StationControlSocket::candidatePathsFor(config, QStringLiteral("daemon"), homes),
+                 QStringList{QStringLiteral("/var/lib/nereusd/nereusd-control")});
+    }
+
+    void aPackagedCoreIsFoundWithNoOptions()
+    {
+        QTemporaryDir packagedHome(QStringLiteral("/tmp/tcp-XXXXXX"));
+        QVERIFY(packagedHome.isValid());
+        Core core;
+        core.config.stateDirectory.clear();
+        const QStringList candidates = StationControlSocket::candidatePathsFor(
+            core.config, QStringLiteral("daemon"), {packagedHome.path()});
+        QCOMPARE(candidates.size(), 2);
+        core.socketPath = candidates.at(1);
+        QVERIFY(core.socketPath.startsWith(packagedHome.path()));
+        QVERIFY(!QFileInfo::exists(candidates.at(0)));
+        QVERIFY(core.start());
+        QVERIFY(ask(candidates, {QStringLiteral("status")}).ok);
+
+        // The real entry point, as `sudo nereusd pairing show`: no
+        // --profile and no state_directory, with this test's HOME standing
+        // in for root's.
+        QTemporaryDir configDir;
+        const QString noConfig = configDir.filePath(QStringLiteral("absent.conf"));
+        QString out;
+        QCOMPARE(runHelper({QStringLiteral("--packaged-home"), packagedHome.path(),
+                            QStringLiteral("--config"), noConfig, QStringLiteral("pairing"),
+                            QStringLiteral("show")},
+                           &out),
+                 0);
+        QVERIFY2(out.contains(core.server()->pairingWindow()->currentCode()), qPrintable(out));
+        QCOMPARE(runHelper({QStringLiteral("--packaged-home"), packagedHome.path(),
+                            QStringLiteral("--config"), noConfig, QStringLiteral("status")},
+                           &out),
+                 0);
+        QVERIFY2(out.contains(QStringLiteral("This Core: ")), qPrintable(out));
+    }
+
+    void aCoreStartedByHandIsStillFoundFirst()
+    {
+        QTemporaryDir packagedHome(QStringLiteral("/tmp/tcp-XXXXXX"));
+        QVERIFY(packagedHome.isValid());
+        Core core;
+        core.config.stateDirectory.clear();
+        const QStringList candidates = StationControlSocket::candidatePathsFor(
+            core.config, AppSettings::profileOverride(), {packagedHome.path()});
+        QCOMPARE(candidates.size(), 2);
+        core.socketPath = candidates.at(0);
+        QVERIFY(core.start());
+        StationControlSocket packaged([](const QStringList&) {
+            return StationControlReply{true, QStringLiteral("the packaged Core")};
+        });
+        QVERIFY(packaged.listen(candidates.at(1)));
+        const StationControlReply reply = ask(candidates, {QStringLiteral("status")});
+        QVERIFY(reply.ok);
+        QVERIFY2(reply.text.startsWith(QStringLiteral("This Core")), qPrintable(reply.text));
+    }
+
+    void noCoreAnsweringNamesWhereItLookedAndWhatWorks()
+    {
+        QTemporaryDir packagedHome(QStringLiteral("/tmp/tcp-XXXXXX"));
+        QVERIFY(packagedHome.isValid());
+        const QStringList candidates = StationControlSocket::candidatePathsFor(
+            DaemonConfig::defaults(), QStringLiteral("elsewhere"), {packagedHome.path()});
+        QCOMPARE(candidates.size(), 2);
+        const StationControlReply reply =
+            StationControlSocket::request(candidates, {QStringLiteral("status")}, 1000);
+        QVERIFY(!reply.ok);
+        for (const QString& path : candidates) {
+            QVERIFY2(reply.text.contains(path), qPrintable(reply.text));
+        }
+        QVERIFY2(reply.text.contains(QStringLiteral("sudo nereusd status")),
+                 qPrintable(reply.text));
+        QVERIFY2(reply.text.contains(QStringLiteral("systemctl status nereusd")),
+                 qPrintable(reply.text));
+        QVERIFY2(reply.text.contains(QStringLiteral("--config and --profile")),
+                 qPrintable(reply.text));
+        verifyPlain(reply);
+
+        // A socket file left with no Core behind it is the one named.
+        QVERIFY(QDir().mkpath(QFileInfo(candidates.at(1)).absolutePath()));
+        {
+            QFile leftBehind(candidates.at(1));
+            QVERIFY(leftBehind.open(QIODevice::WriteOnly));
+        }
+        const StationControlReply stale =
+            StationControlSocket::request(candidates, {QStringLiteral("status")}, 1000);
+        QVERIFY(!stale.ok);
+        QVERIFY2(stale.text.contains(candidates.at(1)), qPrintable(stale.text));
+        QVERIFY2(!stale.text.contains(candidates.at(0)), qPrintable(stale.text));
+        verifyPlain(stale);
+    }
+
+    // The usage text says what works on each kind of Core.
+    void theCommandListSaysWhatWorks()
+    {
+        const QString usage = StationControlCommands::usage();
+        QVERIFY(usage.contains(QStringLiteral("sudo nereusd status")));
+        QVERIFY(usage.contains(QStringLiteral("--config and --profile")));
+        QVERIFY2(OperatorWording::isPlain(usage), qPrintable(usage));
+    }
+
     // ── The real binary ───────────────────────────────────────────────
 
     void theNereusdBinaryFindsTheSocketThroughConfig()
@@ -1148,7 +1321,13 @@ private slots:
 int main(int argc, char* argv[])
 {
     if (argc > 1 && std::strcmp(argv[1], "--daemon-helper") == 0) {
-        return nereusdEntryPointForTest(argc - 1, argv + 1);
+        int shift = 1;
+        if (argc > 3 && std::strcmp(argv[2], "--packaged-home") == 0) {
+            StationControlSocket::setPackagedHomesForTest({QString::fromLocal8Bit(argv[3])});
+            shift = 3;
+        }
+        argv[shift] = argv[0];
+        return nereusdEntryPointForTest(argc - shift, argv + shift);
     }
     QCoreApplication app(argc, argv);
     TstStationControlSocket test;

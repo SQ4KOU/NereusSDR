@@ -117,6 +117,10 @@
 //               an unreadable or invalid configuration file. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic Claude
 //               Code.
+//   2026-09-26: console commands also look in a packaged Core's HOME, so
+//               sudo nereusd <command> reaches it with no other options
+//               (R-IOS-08, R-R3-26). J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/AppSettings.h"
@@ -220,8 +224,12 @@ int main(int argc, char* argv[])
     const QStringList commandWords = parser.positionalArguments();
     if (!commandWords.isEmpty()) {
         // Nothing here touches AppSettings, the log or the Core's files: the
-        // socket's place comes from the config file and the profile name
-        // alone (StationControlSocket::socketPathFor), never from $HOME.
+        // socket's place comes from the config file (/etc/nereusd.conf
+        // unless --config names another) and the profile name
+        // (StationControlSocket::socketPathFor). Without state_directory
+        // that is the profile's directory under this command's $HOME, and
+        // then under a packaged Core's HOME, /var/lib/nereusd, since under
+        // sudo $HOME is root's (StationControlSocket::candidatePathsFor).
         const auto print = [](FILE* stream, const QString& text) {
             const QByteArray bytes = (text + QLatin1Char('\n')).toUtf8();
             std::fwrite(bytes.constData(), 1, static_cast<size_t>(bytes.size()), stream);
@@ -269,7 +277,7 @@ int main(int argc, char* argv[])
             args << QStringLiteral("--yes");
         }
         const NereusSDR::StationControlReply reply = NereusSDR::StationControlSocket::request(
-            NereusSDR::StationControlSocket::socketPathFor(commandCfg, commandProfile), args);
+            NereusSDR::StationControlSocket::candidatePathsFor(commandCfg, commandProfile), args);
         print(reply.ok ? stdout : stderr, reply.text);
         return reply.ok ? 0 : 1;
     }

@@ -21,7 +21,16 @@
 // `state_directory` when set (the shipped sample names /var/lib/nereusd,
 // so `sudo nereusd status` finds it through the default --config), or else
 // the profile's own directory (AppSettings::resolveConfigDir, from
-// --profile). Never the caller's $HOME: under sudo that is root's.
+// --profile), which is under the Core's $HOME.
+//
+// A console command also looks where a packaged Core keeps that profile
+// directory (candidatePathsFor()): a packaged unit pins HOME to
+// /var/lib/nereusd, and under sudo the command's own $HOME is root's, so
+// a Core whose /etc/nereusd.conf has no state_directory (an older sample,
+// or a kit's own file) is found there with no extra options. The
+// command's own place is tried first, so a Core started by hand is found
+// exactly as before. Nothing about who may connect changes: root reaches
+// the packaged directory and socket because it is root.
 //
 // One request per connection: a line of JSON, {"args": [...]}, at most
 // kMaxRequestBytes; one reply, {"ok": bool, "text": "..."}, and the Core
@@ -34,6 +43,10 @@
 //   2026-09-24: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: a console command also looks in a packaged Core's HOME,
+//               and the no-answer text says what works (R-IOS-08,
+//               R-R3-26). J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QObject>
@@ -92,10 +105,28 @@ public:
     /// directoryFor() plus kSocketName.
     static QString socketPathFor(const DaemonConfig& config, const QString& profile);
 
+    /// Where a packaged Core's HOME is: the unit's Environment=HOME
+    /// (/var/lib/nereusd) and the directory systemd's DynamicUser keeps it
+    /// in (/var/lib/private/nereusd). Linux only; empty elsewhere.
+    static QStringList packagedHomes();
+    /// Every place a console command looks for the socket, in order:
+    /// socketPathFor() first, then, when `state_directory` is not set, the
+    /// profile's directory under each of `homes` (packagedHomes() by
+    /// default). No path appears twice.
+    static QStringList candidatePathsFor(const DaemonConfig& config, const QString& profile);
+    static QStringList candidatePathsFor(const DaemonConfig& config, const QString& profile,
+                                         const QStringList& homes);
+    /// Tests only: replaces packagedHomes() in this process.
+    static void setPackagedHomesForTest(const QStringList& homes);
+
     /// A console command: sends `args` to the Core at `path` and waits for
     /// its reply. Blocking; needs no event loop. When no Core answers, the
     /// reply is not ok and says in plain words what to try.
     static StationControlReply request(const QString& path, const QStringList& args,
+                                       int timeoutMs = kClientTimeoutMs);
+    /// The same, for the first of `paths` that exists (the first path when
+    /// none does). When no Core answers, the reply names every path tried.
+    static StationControlReply request(const QStringList& paths, const QStringList& args,
                                        int timeoutMs = kClientTimeoutMs);
 
 private:
