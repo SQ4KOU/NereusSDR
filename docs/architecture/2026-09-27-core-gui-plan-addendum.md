@@ -661,6 +661,34 @@ colours for the same signal.
   lead contract does not assert a separate JJ ruling on the five-minute value.
 - Plan: automatic direct/manual/rendezvous recovery.
 
+### G-45: Full-suite build omitted the slice audio race executable
+
+- Evidence: the immutable Linux checkpoint registered `tst_slice_audio_view_race`
+  after creating `all_tests` and label aggregates. CTest found it, but the full
+  build never produced it, so the suite reported Not Run.
+- Ruling: JJ's requirement to run the required tests authorizes correcting build
+  coverage; no deadline or assertion changes are needed.
+- Status: registration moved before aggregate creation. Regenerated Ninja graph
+  includes the executable in all_tests, tests_core and tests_models; the freshly
+  built integrated race test passes (0.93 s). The Linux continuation will build
+  this target explicitly against its immutable checkpoint and record its result.
+- Plan: required full-suite verification.
+
+### G-46: Container filter display lacks slice-correct spectrum and overlays
+
+- Evidence: `FilterDisplayItem::setSpectrumData` has no production caller. Existing
+  FIR delivery is real, but broadcasts slice A's curve to all containers; filter
+  edge and notch setters also have no callers. Thetis MiniSpec uses 1024 pixels
+  and an independent RF window; the item's 512-pixel attribution is incorrect.
+  Existing remote pan frames have their own window and cannot be copied blindly.
+- Ruling: JJ's complete remote-window parity objective includes finishing this
+  feature. Exact mini endpoint, detector and overlay implementation remains a lead
+  source-based design decision; no separate JJ ruling is claimed.
+- Status: OPEN. Read-only source contract records per-container slice identity,
+  stream geometry, dBm reduction, lifetime and remote grant requirements. The
+  temporary hidden classification is not completion of this feature.
+- Plan: remote-window parity container meters and filter display.
+
 ## How this addendum is kept
 
 New gaps are appended here as they are found, each with its own `G-` number (next available

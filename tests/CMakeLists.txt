@@ -8976,6 +8976,14 @@ endif()
 # audio, so REALTIME.
 nereus_add_test(tst_media_tunnel fakes/LoopbackTransport.cpp REALTIME EXTRA_LABELS session)
 
+# ── R-R3-49: the audio thread reads a published view of the slices ───────────
+# rxBlockReady used to walk RadioModel's slice list on the DSP thread while
+# the main thread removed a slice from it and deleted the SliceModel. The
+# stress case adds and removes slices while a feeder thread delivers blocks
+# for every id; run it under the ThreadSanitizer build to see a race.
+nereus_add_test(tst_slice_audio_view_race)
+target_compile_definitions(tst_slice_audio_view_race PRIVATE NEREUS_BUILD_TESTS)
+
 # --------------------------------------------------------------------------
 # Aggregate "all_tests" target  (2026-05-26 KG4VCF dev-loop fix, from PR #291)
 # --------------------------------------------------------------------------
@@ -9016,11 +9024,3 @@ if(_label_names)
     endforeach()
     message(STATUS "NereusSDR: per-label test targets: ${_label_names}")
 endif()
-
-# ── R-R3-49: the audio thread reads a published view of the slices ───────────
-# rxBlockReady used to walk RadioModel's slice list on the DSP thread while
-# the main thread removed a slice from it and deleted the SliceModel. The
-# stress case adds and removes slices while a feeder thread delivers blocks
-# for every id; run it under the ThreadSanitizer build to see a race.
-nereus_add_test(tst_slice_audio_view_race)
-target_compile_definitions(tst_slice_audio_view_race PRIVATE NEREUS_BUILD_TESTS)
