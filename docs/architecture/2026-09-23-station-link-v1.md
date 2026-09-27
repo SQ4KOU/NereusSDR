@@ -905,7 +905,7 @@ When a feature is off, its version is 0:
   reports what the Core granted the endpoint (`grantedFftSize`,
   `grantedTier`, `requestedPixels`, `grantedPixels`, `limit`); 2 (parity
   Task 17, R-R3-01) adds the `subscribe` field `decimation`, a whole
-  number 1 to 32 applied to the endpoint's engine (the remote media
+  number 1 to 16 applied to the endpoint's engine (the remote media
   control document, "Display subscriptions"). A client that compares the
   version as a minimum reads 2 as it read 1; a window told less than 2
   does not send `decimation`, and a Core refuses it from a peer below the
@@ -3224,7 +3224,7 @@ subscribe, page, group, label, kind, default}` and, by `kind`, either
 | Spectrum Detector | `DisplaySpectrumDetector` | device | Peak, Rosenfell, Average, Sample, RMS (0 to 4) | 0 |
 | Spectrum Averaging | `DisplaySpectrumAveraging` | device | None, Recursive, Time Window, Log Recursive (0 to 3) | 3 |
 | Spectrum Avg Time | `DisplaySpectrumAverageTimeMs` | device | 10 to 9999 step 10, `ms` | 30 |
-| Decimation | none | device | 1 to 32 step 1 | 1 |
+| Decimation | none | device | 1 to 16 step 1 | 1 |
 | WF Detector | `DisplayWaterfallDetector` | device | Peak, Rosenfell, Average, Sample (0 to 3) | 0 |
 | WF Averaging | `DisplayWaterfallAveraging` | device | None, Recursive, Time Window, Log Recursive (0 to 3) | 0 |
 | WF Avg Time | `DisplayWaterfallAverageTimeMs` | device | 10 to 9999 step 10, `ms` | 120 |

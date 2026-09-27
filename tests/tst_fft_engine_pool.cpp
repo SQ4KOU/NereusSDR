@@ -368,9 +368,9 @@ private slots:
         }
         QCOMPARE(pool.engineForStream(2)->decimation(), 5);
 
-        // Outside 1 to 32 is ignored, as FFTEngine::setDecimation ignores it.
+        // Outside 1 to 16 is ignored, as FFTEngine::setDecimation ignores it.
         pool.setDecimation(0);
-        pool.setDecimation(33);
+        pool.setDecimation(17);
         QCOMPARE(pool.decimation(), 5);
         QCOMPARE(first->decimation(), 5);
     }

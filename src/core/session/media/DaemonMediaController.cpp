@@ -63,6 +63,11 @@
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
+// Modification history (NereusSDR):
+// 2026-09-27: Use the approved shared decimation bounds.
+// J.J. Boyd (KG4VCF), AI-assisted implementation via OpenAI Codex.
+
+#include "core/ControlRanges.h"
 #include "core/session/media/DaemonMediaController.h"
 #include "core/session/media/RemoteSpectrumContext.h"
 
@@ -2432,7 +2437,9 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
         || !finiteNumber(control.value(QStringLiteral("maxDbm")), maxDbm)
         || !finiteNumber(control.value(QStringLiteral("wideSpanFactor")), request.requestedWideSpanFactor)
         || (decimationPresent
-            && !exactInt(control.value(QStringLiteral("decimation")), 1, 32, decimation))
+            && !exactInt(control.value(QStringLiteral("decimation")),
+                         ControlRanges::kDisplayDecimationMin,
+                         ControlRanges::kDisplayDecimationMax, decimation))
         || minDbm < kMinDbmLimit || minDbm > kMaxDbmLimit
         || maxDbm < kMinDbmLimit || maxDbm > kMaxDbmLimit
         || maxDbm <= minDbm
@@ -4842,7 +4849,8 @@ bool DaemonMediaController::reconcileSource(const MediaSourceKey& key)
     config.fft.fftSize = maximumFft;
     config.fft.fps = maximumFps;
     config.fft.windowType = windowType;
-    config.decimation = std::clamp(decimation, 1, 32);
+    config.decimation = std::clamp(decimation, ControlRanges::kDisplayDecimationMin,
+                                   ControlRanges::kDisplayDecimationMax);
     config.maxPendingIqFloats = maximumFft * 4;
     // R-R3-08/40: while the budget is lowered because the Core is busy, a
     // lower frame rate must save FFT work too, so transforms follow the

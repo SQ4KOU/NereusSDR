@@ -5098,7 +5098,7 @@ void TstDaemonMediaController::minorNinePeerReceivesTheGrant()
 // Parity Task 17 (R-R3-01, B3.7): spectrumGrantVersion 2's `decimation`
 // reaches the endpoint's own engine. Beside another pan it runs at the
 // engine's decimation (no pan's spectrum changes to satisfy another's
-// request), and a pan left alone gets its own. A value outside 1 to 32 is
+// request), and a pan left alone gets its own. A value outside 1 to 16 is
 // a request the Core cannot read.
 void TstDaemonMediaController::subscribeDecimationReachesTheEndpointsEngine()
 {
@@ -5120,9 +5120,9 @@ void TstDaemonMediaController::subscribeDecimationReachesTheEndpointsEngine()
             .value(QStringLiteral("revision")).toInt();
     };
 
-    // Wrong: outside 1 to 32, or not a whole number.
+    // Wrong: outside 1 to 16, or not a whole number.
     int refusals = 0;
-    for (const QJsonValue& bad : {QJsonValue(0), QJsonValue(33), QJsonValue(2.5),
+    for (const QJsonValue& bad : {QJsonValue(0), QJsonValue(17), QJsonValue(32), QJsonValue(2.5),
                                   QJsonValue(QStringLiteral("4"))}) {
         QVERIFY(h.client.sendMediaControl(withDecimation(9, quint32(refusals + 1), bad),
                                           h.client.sessionEpoch()));

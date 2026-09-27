@@ -183,7 +183,7 @@ public:
     /// Parity Task 17 follow-up (R-R3-01): Setup > Display > Rendering >
     /// Decimation applies to every pan, so to every engine in the pool now
     /// and to every engine created after this call (FFTEngine::setDecimation;
-    /// 1 to 32, other values ignored). Until it is called the pool leaves
+    /// 1 to 16, other values ignored). Until it is called the pool leaves
     /// each engine's decimation alone, so the Core's spectrum source, which
     /// sets decimation per engine, never meets a pool-wide value.
     void setDecimation(int factor);

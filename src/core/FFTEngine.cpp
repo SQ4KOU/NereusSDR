@@ -71,6 +71,11 @@
 // Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
 //============================================================================================//
 
+// Modification history (NereusSDR):
+// 2026-09-27: Use the approved shared decimation bounds.
+// J.J. Boyd (KG4VCF), AI-assisted implementation via OpenAI Codex.
+
+#include "core/ControlRanges.h"
 #include "FFTEngine.h"
 #include "FftwPlanner.h"
 #include "LogCategories.h"
@@ -250,12 +255,12 @@ void FFTEngine::setTransformsFollowFrameRate(bool on)
 // From Thetis Project Files/Source/Console/setup.designer.cs:33834-33843 [v2.10.3.15]
 //   this.udDisplayDecimation.Maximum = new decimal(new int[] { 16, 0, 0, 0});
 //   this.udDisplayDecimation.Minimum = new decimal(new int[] { 1, 0, 0, 0});
-// NereusSDR-native range 1..32 (NereusSDR extends Thetis's 16 to 32;
-// ControlRanges::kDisplayDecimationMax). 1 = no decimation (every sample
-// is used).
+// JJ approved matching Thetis on 2026-09-27. The shared control range
+// governs local engines and remote requests. 1 uses every sample.
 void FFTEngine::setDecimation(int factor)
 {
-    if (factor < 1 || factor > 32) { return; }
+    if (factor < ControlRanges::kDisplayDecimationMin
+        || factor > ControlRanges::kDisplayDecimationMax) { return; }
     m_decimation.store(factor);
     // Reset the counter so the new factor takes effect cleanly on the
     // next feedIQ call rather than mid-stride.
