@@ -15,7 +15,7 @@
 // The plans FFTW made are kept in one file per build directory, beside the
 // test binaries (NEREUS_TEST_FFTW_WISDOM_FILE), and handed back to FFTW
 // before main() runs, so the next test to open the same channels finds
-// them. What is planned is unchanged, only when. At exit (after main()
+// them. At exit (after main()
 // returns, so the test object and every model and WDSP channel it held are
 // gone and no thread is planning) the process merges the file's current
 // plans with its own under a lock file and replaces the file whole, and
@@ -32,10 +32,27 @@
 // alone (connectable-radio-fftw-wisdom); the parity mini-round moved it
 // here, for every such test, and removed the harness's own copy.
 //
+// R-R3-49 load round: the cache alone left every test's time hanging on
+// the file's state. A plan the file does not hold yet (a new build
+// directory, as on CI; a new channel size; a test killed at its limit,
+// which saves nothing) was planned from nothing again, so the WDSP tests of
+// a first suite run all planned at once and pushed one another past the
+// limit: tst_wdsp_thread_hook took 96.8 s cold (37 s of processor time) at
+// load 117 and 0.48 s warm. Each plan search in a test process is now
+// capped at kPlanTimeLimitSeconds (fftw_set_timelimit), so a cold run costs
+// seconds: 1.9 s for that test at load 86. Plans the file holds are reused
+// as they are. What a plan computes does not change, only how long FFTW
+// searches for the fastest way to compute it; FFTW_PATIENT already picks
+// by timing, so no test could rely on which plan it got. The Core itself
+// keeps its full search and its own wisdom file.
+//
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 parity mini-round: created
 //                                    from the harness's cache.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-27  J.J. Boyd / KG4VCF  R-R3-49 load round: each plan search
+//                                    capped (kPlanTimeLimitSeconds).
 //                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
@@ -59,6 +76,10 @@ namespace fs = std::filesystem;
 constexpr const char* kCachePath = NEREUS_TEST_FFTW_WISDOM_FILE;
 constexpr auto kLockWait = std::chrono::seconds(2);
 constexpr auto kStaleLock = std::chrono::seconds(30);
+// The longest one plan search may take in a test process (see above).
+// 0.1 s: tst_wdsp_thread_hook's two channels plan in 1.9 s cold at load 86
+// (0.02 s: 0.9 s; 0.5 s: 6.3 s; no cap: 96.8 s at load 117).
+constexpr double kPlanTimeLimitSeconds = 0.1;
 
 std::string readCache()
 {
@@ -177,6 +198,7 @@ struct FftwWisdomCache {
     FftwWisdomCache()
     {
         // Before main(), so before any model exists and any thread plans.
+        fftw_set_timelimit(kPlanTimeLimitSeconds);
         const std::string wisdom = readCache();
         if (!wisdom.empty() && fftw_import_wisdom_from_string(wisdom.c_str()) != 0) {
             importedAtStart() = exportedWisdom();
