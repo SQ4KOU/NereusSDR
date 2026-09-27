@@ -20,6 +20,9 @@
 //               engine replans on its own spectrum thread (R-R3-39).
 //               NereusSDR-original. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-27: the decimation cite corrected: Thetis's range is 1 to 16;
+//               1 to 32 is NereusSDR's own (R-IOS-06). J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -242,8 +245,14 @@ void FFTEngine::setTransformsFollowFrameRate(bool on)
     m_transformsFollowFrameRate.store(on);
 }
 
-// From Thetis setup.designer.cs:33732 udDisplayDecimation [v2.10.3.13].
-// Range 1..32; 1 = no decimation (every sample is used).
+// The control is Thetis's udDisplayDecimation (setup.designer.cs:33732
+// [v2.10.3.13]), whose range is 1 to 16:
+// From Thetis Project Files/Source/Console/setup.designer.cs:33834-33843 [v2.10.3.15]
+//   this.udDisplayDecimation.Maximum = new decimal(new int[] { 16, 0, 0, 0});
+//   this.udDisplayDecimation.Minimum = new decimal(new int[] { 1, 0, 0, 0});
+// NereusSDR-native range 1..32 (NereusSDR extends Thetis's 16 to 32;
+// ControlRanges::kDisplayDecimationMax). 1 = no decimation (every sample
+// is used).
 void FFTEngine::setDecimation(int factor)
 {
     if (factor < 1 || factor > 32) { return; }
