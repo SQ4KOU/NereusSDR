@@ -231,11 +231,15 @@ function(nereus_add_test name)
     # step gets the shared FFTW wisdom cache (nereus_test_fftw_wisdom above).
     # Found by the names that start WDSP that way, in the test's own source
     # or an extra source file it names (fakes/ConnectableRadioModel.cpp).
+    # R-R3-49 flaky-test round: a test that opens WDSP channels itself
+    # (OpenChannel) plans the same way, and did so from nothing:
+    # tst_wdsp_channel_shutdown spent 104 s of its 120 s in its first case
+    # under load, tst_receiver_dsp_load_frames 31 s at rest in initTestCase.
     if(TARGET nereus_test_fftw_wisdom)
         set(_wisdom_scan "${_extra_sources}")
         file(READ "${CMAKE_CURRENT_SOURCE_DIR}/${name}.cpp" _wisdom_text)
         string(APPEND _wisdom_scan "${_wisdom_text}")
-        if(_wisdom_scan MATCHES "setSynchronousInitForTest|m_synchronousWdspForTest|m_initialized = true|ConnectableRadioModel")
+        if(_wisdom_scan MATCHES "setSynchronousInitForTest|m_synchronousWdspForTest|m_initialized = true|ConnectableRadioModel|OpenChannel\\(")
             target_sources(${name} PRIVATE $<TARGET_OBJECTS:nereus_test_fftw_wisdom>)
         endif()
     endif()
