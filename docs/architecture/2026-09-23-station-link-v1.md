@@ -3177,9 +3177,9 @@ outside their range are refused.
 | Slot | Controls |
 | --- | --- |
 | `nr1` | Taps 1 to 1024 (64), Delay 1 to 1023 (16), Gain 1 to 1000 x 1e-6 (100), Leak 1 to 1000 x 1e-3 (100): Thetis's NR spinboxes and conversion; Position Pre-AGC or Post-AGC (Post-AGC) |
-| `nr2` | Gain Method Linear, Log, Gamma, Trained (Gamma); NPE Method OSMS, MMSE, NSTAT (OSMS); AE Filter (on); Noise post proc (off); Factor 0 to 30 (15); Rate 0 to 30 (5) |
+| `nr2` | Gain Method Linear, Log, Gamma, Trained (Gamma); NPE Method OSMS, MMSE, NSTAT (OSMS); AE Filter (on); Noise post proc (off); Factor 0 to 100 in 0.1 steps (15); Rate 0 to 100 in 0.1 steps (5) |
 | `nr3` | Position (Post-AGC); Use fixed gain for input samples (on) |
-| `nr4` | Reduction 0 to 20 dB (10), Smoothing 0 to 100% (65), Whitening 0 to 100% (2), Rescale 0 to 20 dB (2), SNRthresh -30 to 0 dB (-10); Algo 1, 2 or 3 (Algo 2) |
+| `nr4` | Reduction 0 to 20 dB (10), Smoothing 0 to 100% (0), Whitening 0 to 100% (0), Rescale 0 to 12 dB (2), SNRthresh -10 to +10 dB (-10); all numeric increments 1, shown with one decimal; Algo 1, 2 or 3 (Algo 1) |
 | `dfnr` | Attenuation Limit 0 to 100 dB (100, Reset 100), Post-Filter Beta 0 to 100 x 0.01 shown to 2 places (0, Reset 0) |
 | `mnr` | Strength 0 to 200 x 0.01 shown as % (1.0, Reset 100), Aggressiveness 1 to 1000 (4, Reset 4), Floor 0 to 2000 x 0.001 shown with `m` (0.05, Reset 50), Alpha 0 to 100 x 0.01 (0.92, Reset 92), Bias 0 to 100 x 0.1 (1.2, Reset 12), Gsmooth 0 to 100 x 0.01 (0.70, Reset 70) |
 | `nnr` | Model Standard or Premium (Standard, kept by Reset); Suppression -50 to -10 dB step 0.01 (-25); Position (Post-AGC); Alpha 0 to 4 step 0.01 (1); Alpha knee 0 to 40 dB step 0.1 (10); Noise time 0.05 to 30 s step 0.05 (2); Maximum gain 0 to 24 dB step 0.1 (12); Attack and Release 0 to 500 ms step 0.1 (0); each Reset to its default |
