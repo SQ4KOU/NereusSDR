@@ -12,6 +12,9 @@
 // server's stop, a rate change, the channel's rebuild, destroy and the
 // engine's shutdown), and the live count ends at zero.
 //
+// Modification history: 2026-09-27 J.J. Boyd (KG4VCF), AI-assisted via
+// OpenAI Codex: retain idle/key-call scheduling evidence without relaxing bounds.
+//
 // REALTIME: the timer-gap bound is wall-clock time while a real TX channel
 // and a real RX channel run 200 ms blocks and feeder threads drive them.
 #include <QtTest/QtTest>
@@ -545,6 +548,32 @@ private slots:
 
         WdspThreadCheck::install(QThread::currentThread());
 
+        // Compare idle and keyed scheduling under the same live load and
+        // slow DSP workers. Keep the existing keyed bound unchanged.
+        double idleWorstGapMs = 0.0;
+        int idleTicks = 0;
+        {
+            QEventLoop idleLoop;
+            QTimer idleTicker;
+            idleTicker.setTimerType(Qt::PreciseTimer);
+            idleTicker.setInterval(kTimerIntervalMs);
+            auto previous = Clock::now();
+            connect(&idleTicker, &QTimer::timeout, &idleLoop, [&] {
+                const auto now = Clock::now();
+                if (idleTicks > 0) {
+                    idleWorstGapMs = std::max(idleWorstGapMs, msBetween(previous, now));
+                }
+                previous = now;
+                if (++idleTicks >= 555) {
+                    idleLoop.quit();
+                }
+            });
+            QTimer::singleShot(120000, &idleLoop, &QEventLoop::quit);
+            idleTicker.start();
+            idleLoop.exec();
+        }
+        double worstKeyCallMs = 0.0;
+        double worstUnkeyCallMs = 0.0;
         constexpr int kKeyedTicks = 12;    // 120 ms keyed
         constexpr int kSettleTicks = 15;   // 150 ms between cycles
         int ticks = 0;
@@ -559,6 +588,7 @@ private slots:
         ticker.setTimerType(Qt::PreciseTimer);
         ticker.setInterval(kTimerIntervalMs);
         const auto key = [&](bool on) {
+            const auto callStarted = Clock::now();
             switch (cycle % 3) {
             case 0:
                 model.moxController()->setMox(on);
@@ -570,6 +600,8 @@ private slots:
                 twoTone->setActive(on);
                 break;
             }
+            double& maximum = on ? worstKeyCallMs : worstUnkeyCallMs;
+            maximum = std::max(maximum, msBetween(callStarted, Clock::now()));
         };
         connect(&ticker, &QTimer::timeout, &loop, [&] {
             const Clock::time_point now = Clock::now();
@@ -616,6 +648,10 @@ private slots:
               "WDSP calls on the event loop %llu",
               keysTaken, ticks, kTimerIntervalMs, worstGapMs, kMaxTimerGapMs,
               rig.conn->txBlocks(), static_cast<unsigned long long>(eventLoopCalls));
+        qInfo("Scheduling comparison: idle ticks %d, idle worst gap %.2f ms, "
+              "key call worst %.2f ms, unkey call worst %.2f ms",
+              idleTicks, idleWorstGapMs, worstKeyCallMs, worstUnkeyCallMs);
+        QCOMPARE(idleTicks, 555);
         QCOMPARE(keysTaken, kKeyCycles);
         QCOMPARE(eventLoopCalls, quint64(0));
         QVERIFY2(worstGapMs <= kMaxTimerGapMs, "the event loop's 10 ms timer gapped");
