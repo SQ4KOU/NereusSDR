@@ -21,12 +21,17 @@
 // `controlChannelVersion` on a V2 record, what the Core declared at the last
 // sign-in (rememberControlChannelVersion()); absent until then. J.J. Boyd
 // (KG4VCF), AI-assisted via Anthropic Claude Code.
+// iPhone app plan Task 29 (R-IOS-16), 2026-09-27: `rendezvousId`,
+// `relayAllowed` and `reachFromAnywhere` on a V2 record, each optional, so
+// a connect can race the internet service beside the Core's addresses.
+// J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "gui/CoreTargetStore.h"
 
 #include "core/AppSettings.h"
 #include "core/security/StationIdentity.h"
+#include "core/session/RendezvousWire.h"
 
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -183,6 +188,18 @@ QJsonObject toJson(const SavedCoreTarget& target, int version)
             object.insert(QStringLiteral("controlChannelVersion"),
                           target.connection.controlChannelVersion);
         }
+        // Task 29: absent until a sign-in recorded them, and the
+        // operator's choice only when it is off, so a record without them
+        // is written exactly as before.
+        if (!target.connection.rendezvousId.isEmpty()) {
+            object.insert(QStringLiteral("rendezvousId"), target.connection.rendezvousId);
+        }
+        if (target.connection.relayAllowed >= 0) {
+            object.insert(QStringLiteral("relayAllowed"), target.connection.relayAllowed == 1);
+        }
+        if (!target.connection.reachFromAnywhere) {
+            object.insert(QStringLiteral("reachFromAnywhere"), false);
+        }
     }
     return object;
 }
@@ -299,6 +316,32 @@ bool parseDocument(const QString& text, int expectedVersion, QList<SavedCoreTarg
                     return false;
                 }
                 target.connection.controlChannelVersion = static_cast<int>(value);
+            }
+            // Task 29: optional; a rendezvous id's form, and two booleans.
+            const QJsonValue rendezvous = object.value(QStringLiteral("rendezvousId"));
+            if (!rendezvous.isUndefined()) {
+                if (!rendezvous.isString()
+                    || !RendezvousWire::isRendezvousId(rendezvous.toString())) {
+                    setError(error, QStringLiteral("Saved Core targets document has an invalid record."));
+                    return false;
+                }
+                target.connection.rendezvousId = rendezvous.toString();
+            }
+            const QJsonValue relay = object.value(QStringLiteral("relayAllowed"));
+            if (!relay.isUndefined()) {
+                if (!relay.isBool()) {
+                    setError(error, QStringLiteral("Saved Core targets document has an invalid record."));
+                    return false;
+                }
+                target.connection.relayAllowed = relay.toBool() ? 1 : 0;
+            }
+            const QJsonValue anywhere = object.value(QStringLiteral("reachFromAnywhere"));
+            if (!anywhere.isUndefined()) {
+                if (!anywhere.isBool()) {
+                    setError(error, QStringLiteral("Saved Core targets document has an invalid record."));
+                    return false;
+                }
+                target.connection.reachFromAnywhere = anywhere.toBool();
             }
         }
         parsed.append(target);
@@ -491,6 +534,29 @@ bool CoreTargetStore::rememberControlChannelVersion(const QString& id, int versi
     }
     SavedCoreTarget updated = *found;
     updated.connection.controlChannelVersion = recorded;
+    return upsert(updated, error);
+}
+
+bool CoreTargetStore::rememberServiceRoute(const QString& id, const QString& rendezvousId,
+                                           int relayAllowed, QString* error)
+{
+    const std::optional<SavedCoreTarget> found = target(id);
+    if (!found) {
+        setError(error, QStringLiteral("Saved Core target was not found."));
+        return false;
+    }
+    SavedCoreTarget updated = *found;
+    if (RendezvousWire::isRendezvousId(rendezvousId)) {
+        updated.connection.rendezvousId = rendezvousId;
+    }
+    if (relayAllowed >= 0) {
+        updated.connection.relayAllowed = relayAllowed > 0 ? 1 : 0;
+    }
+    if (updated.connection.rendezvousId == found->connection.rendezvousId
+        && updated.connection.relayAllowed == found->connection.relayAllowed) {
+        clearError(error);
+        return true;
+    }
     return upsert(updated, error);
 }
 

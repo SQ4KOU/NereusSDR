@@ -63,6 +63,7 @@ private slots:
     void editorValidatesAndPreservesSecrets();
     void editorCancelHasNoAcceptance();
     void editorForgetsLastAddressesWhenTheCoreChanges();
+    void editorOffersReachingTheCoreFromAnywhere();
     void controlsRemainReadableAndReachable();
     void rowSelectionNeverResizesTheWindow();
     void theCodeDialogNamesPlacesThatShowTheCode();
@@ -295,6 +296,52 @@ void ConnectionSelectorTest::editorForgetsLastAddressesWhenTheCoreChanges()
         editor.findChild<QLineEdit*>(QStringLiteral("coreTargetEditorAddress"))
             ->setText(QStringLiteral(" wss://shack.example:8443 "));
         QCOMPARE(editor.target().connection.cachedAddresses, cached);
+    }
+}
+
+// iPhone app plan Task 29 (R-IOS-16): reaching the Core through the
+// internet service beside its addresses is on for a paired Core and can be
+// turned off; for a Core it cannot reach that way the choice is shown,
+// disabled, with the reason beside it.
+void ConnectionSelectorTest::editorOffersReachingTheCoreFromAnywhere()
+{
+    {
+        CoreTargetEditor editor(initialTarget());
+        auto* check = editor.findChild<QCheckBox*>(QStringLiteral("coreTargetEditorReachAnywhere"));
+        auto* reason =
+            editor.findChild<QLabel*>(QStringLiteral("coreTargetEditorReachAnywhereReason"));
+        QVERIFY(check != nullptr && reason != nullptr);
+        QVERIFY(!check->isEnabled());
+        QCOMPARE(reason->text(), QStringLiteral("Pair with the Core to reach it from anywhere."));
+        QVERIFY(!reason->isHidden());
+    }
+    SavedCoreTarget paired = initialTarget();
+    paired.connection.identityFingerprint = QByteArray(32, '\x07');
+    paired.connection.rendezvousId = QStringLiteral("abcdefghijklmnopqrstuvwxyz");
+    paired.connection.relayAllowed = 1;
+    {
+        CoreTargetEditor editor(paired);
+        auto* check = editor.findChild<QCheckBox*>(QStringLiteral("coreTargetEditorReachAnywhere"));
+        auto* reason =
+            editor.findChild<QLabel*>(QStringLiteral("coreTargetEditorReachAnywhereReason"));
+        QVERIFY(check->isEnabled());
+        QVERIFY(check->isChecked());
+        QVERIFY(reason->isHidden());
+        check->setChecked(false);
+        const SavedCoreTarget edited = editor.target();
+        QVERIFY(!edited.connection.reachFromAnywhere);
+        // What the Core said of the service is kept across an address edit.
+        QCOMPARE(edited.connection.rendezvousId, paired.connection.rendezvousId);
+        QCOMPARE(edited.connection.relayAllowed, 1);
+    }
+    paired.connection.controlChannelVersion = 0;
+    {
+        CoreTargetEditor editor(paired);
+        auto* check = editor.findChild<QCheckBox*>(QStringLiteral("coreTargetEditorReachAnywhere"));
+        auto* reason =
+            editor.findChild<QLabel*>(QStringLiteral("coreTargetEditorReachAnywhereReason"));
+        QVERIFY(!check->isEnabled());
+        QCOMPARE(reason->text(), QStringLiteral("Update the Core to reach it from anywhere."));
     }
 }
 

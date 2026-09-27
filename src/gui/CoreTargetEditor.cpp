@@ -65,6 +65,23 @@ CoreTargetEditor::CoreTargetEditor(const SavedCoreTarget& initial, QWidget* pare
     form->addRow(tr("Token:"), m_tokenEdit);
     form->addRow(tr("Certificate fingerprint:"), m_fingerprintEdit);
     form->addRow({}, m_allowUnpinnedCheck);
+    // iPhone app plan Task 29 (R-IOS-16): a paired Core is also reached
+    // through the internet service, raced with its addresses; the operator
+    // may turn that off for this Core. Shown for every Core, disabled with
+    // the reason where it cannot run.
+    m_reachAnywhereCheck = new QCheckBox(
+        tr("Also reach this Core from anywhere through the internet service"), this);
+    m_reachAnywhereCheck->setObjectName(QStringLiteral("coreTargetEditorReachAnywhere"));
+    m_reachAnywhereCheck->setChecked(initial.connection.reachFromAnywhere);
+    const QString refusal = initial.connection.serviceConnectRefusal();
+    m_reachAnywhereCheck->setEnabled(refusal.isEmpty());
+    form->addRow({}, m_reachAnywhereCheck);
+    m_reachAnywhereReason = new QLabel(refusal, this);
+    m_reachAnywhereReason->setObjectName(QStringLiteral("coreTargetEditorReachAnywhereReason"));
+    m_reachAnywhereReason->setTextFormat(Qt::PlainText);
+    m_reachAnywhereReason->setWordWrap(true);
+    m_reachAnywhereReason->setVisible(!refusal.isEmpty());
+    form->addRow({}, m_reachAnywhereReason);
     layout->addLayout(form);
 
     m_errorLabel = new QLabel(this);
@@ -100,6 +117,7 @@ SavedCoreTarget CoreTargetEditor::target() const
     result.connection.token = m_tokenEdit->text();
     result.connection.fingerprint = m_fingerprintEdit->text();
     result.connection.allowUnpinned = m_allowUnpinnedCheck->isChecked();
+    result.connection.reachFromAnywhere = m_reachAnywhereCheck->isChecked();
     if (result.connection.url != m_initial.connection.url) {
         result.lastRadioName.clear();
         result.lastRadioMac.clear();
@@ -117,6 +135,12 @@ SavedCoreTarget CoreTargetEditor::target() const
         // Task 28 fix wave: what the old Core declared says nothing of the
         // new one.
         result.connection.controlChannelVersion = -1;
+    }
+    // Task 29: another identity is another Core: where the service finds
+    // it, and its relay setting, were the old one's.
+    if (after.identityFingerprint != before.identityFingerprint) {
+        result.connection.rendezvousId.clear();
+        result.connection.relayAllowed = -1;
     }
     return result;
 }

@@ -34,6 +34,9 @@ private:
     QLineEdit* m_tokenEdit{nullptr};
     QLineEdit* m_fingerprintEdit{nullptr};
     QCheckBox* m_allowUnpinnedCheck{nullptr};
+    // iPhone app plan Task 29: reach the Core through the internet service.
+    QCheckBox* m_reachAnywhereCheck{nullptr};
+    QLabel* m_reachAnywhereReason{nullptr};
     QLabel* m_errorLabel{nullptr};
 };
 
