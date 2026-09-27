@@ -1,7 +1,7 @@
 {
   "runs": [
     "relay",
-    "app"
+    "core"
   ],
   "steps": [
     {
@@ -37,14 +37,6 @@
       ]
     },
     {
-      "from": "device",
-      "role": "scripted",
-      "binary": [
-        "02",
-        "$bytes:60:m1"
-      ]
-    },
-    {
       "to": "device",
       "binary": [
         "81",
@@ -60,11 +52,38 @@
       ]
     },
     {
+      "from": "device",
+      "role": "scripted",
+      "binary": [
+        "05",
+        "$bytes:40:u1"
+      ]
+    },
+    {
+      "from": "device",
+      "role": "scripted",
+      "binary": [
+        "7f",
+        "$bytes:40:u2"
+      ]
+    },
+    {
+      "from": "device",
+      "role": "behaviour",
+      "binary": [
+        "02",
+        "$bytes:40:m1"
+      ]
+    },
+    {
       "to": "core",
       "binary": [
         "02",
         "$ref:m1"
       ]
+    },
+    {
+      "expectSilent": "core"
     }
   ]
 }

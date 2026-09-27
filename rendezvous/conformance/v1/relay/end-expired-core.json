@@ -1,25 +1,25 @@
 {
   "runs": [
-    "relay"
+    "relay",
+    "core"
   ],
   "steps": [
     {
       "connect": "core"
     },
     {
-      "advanceMs": 9999
-    },
-    {
-      "expectSilent": "core"
-    },
-    {
-      "advanceMs": 1
+      "from": "core",
+      "role": "behaviour",
+      "binary": [
+        "80",
+        "$token:core:s:a:expired"
+      ]
     },
     {
       "to": "core",
       "binary": [
         "83",
-        "74696d656f7574"
+        "65787069726564"
       ]
     },
     {

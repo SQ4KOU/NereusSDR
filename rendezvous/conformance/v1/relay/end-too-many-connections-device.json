@@ -1,7 +1,6 @@
 {
   "runs": [
     "relay",
-    "core",
     "app"
   ],
   "relaySetup": {
@@ -9,22 +8,22 @@
   },
   "steps": [
     {
-      "connect": "core",
-      "address": "198.51.100.9"
-    },
-    {
       "connect": "core2",
       "address": "198.51.100.9"
     },
     {
-      "to": "core2",
+      "connect": "device",
+      "address": "198.51.100.9"
+    },
+    {
+      "to": "device",
       "binary": [
         "83",
         "746f6f4d616e79436f6e6e656374696f6e73"
       ]
     },
     {
-      "expectClosed": "core2",
+      "expectClosed": "device",
       "code": 1000
     }
   ]

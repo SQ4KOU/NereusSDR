@@ -1,8 +1,7 @@
 {
   "runs": [
     "relay",
-    "core",
-    "app"
+    "core"
   ],
   "steps": [
     {
@@ -53,32 +52,29 @@
       ]
     },
     {
-      "disconnect": "device"
+      "drop": "core"
     },
     {
-      "to": "core",
+      "to": "device",
       "binary": [
         "82",
         "00"
       ]
     },
     {
-      "advanceMs": 29999
+      "connect": "core",
+      "address": "198.51.100.1"
     },
     {
-      "connect": "device2",
-      "address": "203.0.113.2"
-    },
-    {
-      "from": "device2",
+      "from": "core",
       "role": "behaviour",
       "binary": [
         "80",
-        "$token:device:s:a"
+        "$token:core:s:a"
       ]
     },
     {
-      "to": "device2",
+      "to": "core",
       "binary": [
         "81",
         "01",
@@ -86,14 +82,14 @@
       ]
     },
     {
-      "to": "core",
+      "to": "device",
       "binary": [
         "82",
         "01"
       ]
     },
     {
-      "from": "core",
+      "from": "device",
       "role": "behaviour",
       "binary": [
         "02",
@@ -101,14 +97,14 @@
       ]
     },
     {
-      "to": "device2",
+      "to": "core",
       "binary": [
         "02",
         "$ref:m1"
       ]
     },
     {
-      "from": "device2",
+      "from": "core",
       "role": "behaviour",
       "binary": [
         "01",
@@ -116,7 +112,7 @@
       ]
     },
     {
-      "to": "core",
+      "to": "device",
       "binary": [
         "01",
         "$ref:c1"

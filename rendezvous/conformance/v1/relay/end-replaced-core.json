@@ -1,12 +1,11 @@
 {
   "runs": [
     "relay",
-    "app"
+    "core"
   ],
   "steps": [
     {
-      "connect": "core",
-      "address": "198.51.100.1"
+      "connect": "core"
     },
     {
       "from": "core",
@@ -25,46 +24,37 @@
       ]
     },
     {
-      "connect": "device",
-      "address": "203.0.113.1"
+      "connect": "core2"
     },
     {
-      "from": "device",
+      "from": "core2",
       "role": "behaviour",
       "binary": [
         "80",
-        "$token:device:s:a"
+        "$token:core:s:a"
       ]
     },
     {
-      "from": "device",
-      "role": "scripted",
-      "binary": [
-        "02",
-        "$bytes:60:m1"
-      ]
-    },
-    {
-      "to": "device",
+      "to": "core2",
       "binary": [
         "81",
         "01",
-        "01"
+        "00"
       ]
     },
     {
       "to": "core",
       "binary": [
-        "82",
-        "01"
+        "83",
+        "7265706c61636564"
       ]
     },
     {
-      "to": "core",
-      "binary": [
-        "02",
-        "$ref:m1"
-      ]
+      "expectClosed": "core",
+      "code": 1000
+    },
+    {
+      "expectSilent": "core"
     }
   ]
 }

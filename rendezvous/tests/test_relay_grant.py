@@ -211,3 +211,39 @@ def test_relay_secret_file_errors_name_no_contents(tmp_path):
     conf.write_text(f"[relay]\nrelay_secret_file = {tmp_path / 'missing'}\n")
     with pytest.raises(relay_config.ConfigError, match="cannot read"):
         relay_config.load(str(conf))
+
+
+def test_both_ends_get_one_expiry_even_when_the_clock_moves_between_sends():
+    """Section 12.1 (M1): one expiry per grant, however the clock moves
+    while the service sends the two halves."""
+    from nereus_rendezvous import transport
+    from nereus_rendezvous.clock import ManualClock
+    from nereus_rendezvous.service import Service
+    from runner import make_config
+
+    class TickingClock(ManualClock):
+        def wall_seconds(self) -> int:
+            self._wall_start += 1
+            return super().wall_seconds()
+
+    async def go():
+        service = Service(make_config({"relay": True}, b"test-secret"), TickingClock())
+        server = await transport.start(service, "127.0.0.1", 0)
+        uri = "ws://127.0.0.1:%d/" % server.sockets[0].getsockname()[1]
+        try:
+            st, _, sid = await register(uri)
+            cl, hello = await _client(uri)
+            await cl.send(protocol.encode(introduce_message(sid, hello["nonce"])))
+            intro = await recv_json(st)
+            await st.send(protocol.encode({"type": "answer", "to": intro["from"], "answer": "v=0\r\n", "turn": True}))
+            await recv_json(cl)
+            device = await recv_json(cl)
+            await recv_json(st)
+            core = await recv_json(st)
+            assert device["expires"] == core["expires"]
+            secret = service.config.relay_secret
+            assert relaygrant.verify(secret, device["token"]).expires == relaygrant.verify(secret, core["token"]).expires == core["expires"]
+        finally:
+            await transport.stop([server], service, grace_s=0.05, timeout_s=5)
+
+    asyncio.run(go())

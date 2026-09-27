@@ -194,9 +194,19 @@ class RelayRunner:
             for _ in range(5):
                 await asyncio.sleep(0)
             return
-        if "disconnect" in step:
+        if "disconnect" in step or "drop" in step:
+            # disconnect: the leg closes its connection. drop: the
+            # connection breaks with no close at all (a network break); the
+            # relay sees both the same way, and a leg must join again after
+            # a drop (section 12.3).
+            conn = step.get("disconnect") or step["drop"]
             before = self.relay.finished
-            await self.conns[step["disconnect"]].close()
+            if "drop" in step:
+                transport = getattr(self.conns[conn], "transport", None)
+                if transport is not None:
+                    transport.abort()
+            else:
+                await self.conns[conn].close()
             loop = asyncio.get_running_loop()
             deadline = loop.time() + RECV_TIMEOUT_S
             while self.relay.finished == before:

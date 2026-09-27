@@ -1,8 +1,7 @@
 {
   "runs": [
     "relay",
-    "core",
-    "app"
+    "core"
   ],
   "steps": [
     {
@@ -53,35 +52,30 @@
       ]
     },
     {
-      "advanceMs": 30000
+      "disconnect": "device"
     },
     {
       "to": "core",
       "binary": [
-        "83",
-        "69646c65"
+        "82",
+        "00"
       ]
     },
     {
-      "expectClosed": "core",
-      "code": 1000
+      "advanceMs": 20000
     },
     {
-      "to": "device",
-      "binary": [
-        "83",
-        "69646c65"
-      ]
+      "drop": "core"
     },
     {
-      "expectClosed": "device",
-      "code": 1000
+      "advanceMs": 11000
     },
     {
-      "connect": "core2"
+      "connect": "core",
+      "address": "198.51.100.1"
     },
     {
-      "from": "core2",
+      "from": "core",
       "role": "behaviour",
       "binary": [
         "80",
@@ -89,14 +83,14 @@
       ]
     },
     {
-      "to": "core2",
+      "to": "core",
       "binary": [
         "83",
         "656e646564"
       ]
     },
     {
-      "expectClosed": "core2",
+      "expectClosed": "core",
       "code": 1000
     }
   ]

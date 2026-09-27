@@ -8,68 +8,156 @@
       "file": "join-and-forward.json"
     },
     {
-      "id": "unknown-data-tag",
-      "file": "unknown-data-tag.json"
+      "id": "idle",
+      "file": "idle.json"
+    },
+    {
+      "id": "end-expired-core",
+      "file": "end-expired-core.json"
+    },
+    {
+      "id": "end-full-core",
+      "file": "end-full-core.json"
+    },
+    {
+      "id": "end-too-many-sessions-core",
+      "file": "end-too-many-sessions-core.json"
+    },
+    {
+      "id": "end-too-many-connections-core",
+      "file": "end-too-many-connections-core.json"
+    },
+    {
+      "id": "end-shutting-down-core",
+      "file": "end-shutting-down-core.json"
+    },
+    {
+      "id": "end-replaced-core",
+      "file": "end-replaced-core.json"
+    },
+    {
+      "id": "end-ended-core",
+      "file": "end-ended-core.json"
+    },
+    {
+      "id": "peer-gone-never-joined-core",
+      "file": "peer-gone-never-joined-core.json"
+    },
+    {
+      "id": "peer-gone-after-leaving-core",
+      "file": "peer-gone-after-leaving-core.json"
+    },
+    {
+      "id": "rejoin-after-close-core",
+      "file": "rejoin-after-close-core.json"
+    },
+    {
+      "id": "unknown-data-tag-core",
+      "file": "unknown-data-tag-core.json"
+    },
+    {
+      "id": "data-before-peer-dropped-core",
+      "file": "data-before-peer-dropped-core.json"
+    },
+    {
+      "id": "reader-ready-trailing-byte-core",
+      "file": "reader-ready-trailing-byte-core.json"
+    },
+    {
+      "id": "reader-ready-version-2-core",
+      "file": "reader-ready-version-2-core.json"
+    },
+    {
+      "id": "reader-peer-trailing-byte-core",
+      "file": "reader-peer-trailing-byte-core.json"
+    },
+    {
+      "id": "reader-unknown-relay-tag-core",
+      "file": "reader-unknown-relay-tag-core.json"
+    },
+    {
+      "id": "reader-unknown-data-tag-core",
+      "file": "reader-unknown-data-tag-core.json"
+    },
+    {
+      "id": "end-expired-device",
+      "file": "end-expired-device.json"
+    },
+    {
+      "id": "end-full-device",
+      "file": "end-full-device.json"
+    },
+    {
+      "id": "end-too-many-sessions-device",
+      "file": "end-too-many-sessions-device.json"
+    },
+    {
+      "id": "end-too-many-connections-device",
+      "file": "end-too-many-connections-device.json"
+    },
+    {
+      "id": "end-shutting-down-device",
+      "file": "end-shutting-down-device.json"
+    },
+    {
+      "id": "end-replaced-device",
+      "file": "end-replaced-device.json"
+    },
+    {
+      "id": "end-ended-device",
+      "file": "end-ended-device.json"
+    },
+    {
+      "id": "peer-gone-never-joined-device",
+      "file": "peer-gone-never-joined-device.json"
+    },
+    {
+      "id": "peer-gone-after-leaving-device",
+      "file": "peer-gone-after-leaving-device.json"
+    },
+    {
+      "id": "rejoin-after-close-device",
+      "file": "rejoin-after-close-device.json"
+    },
+    {
+      "id": "unknown-data-tag-device",
+      "file": "unknown-data-tag-device.json"
+    },
+    {
+      "id": "data-before-peer-dropped-device",
+      "file": "data-before-peer-dropped-device.json"
+    },
+    {
+      "id": "reader-ready-trailing-byte-device",
+      "file": "reader-ready-trailing-byte-device.json"
+    },
+    {
+      "id": "reader-ready-version-2-device",
+      "file": "reader-ready-version-2-device.json"
+    },
+    {
+      "id": "reader-peer-trailing-byte-device",
+      "file": "reader-peer-trailing-byte-device.json"
+    },
+    {
+      "id": "reader-unknown-relay-tag-device",
+      "file": "reader-unknown-relay-tag-device.json"
+    },
+    {
+      "id": "reader-unknown-data-tag-device",
+      "file": "reader-unknown-data-tag-device.json"
     },
     {
       "id": "data-behind-join",
       "file": "data-behind-join.json"
     },
     {
-      "id": "data-before-peer-dropped",
-      "file": "data-before-peer-dropped.json"
-    },
-    {
-      "id": "rejoin",
-      "file": "rejoin.json"
-    },
-    {
-      "id": "replaced",
-      "file": "replaced.json"
-    },
-    {
-      "id": "peer-gone-never-joined",
-      "file": "peer-gone-never-joined.json"
-    },
-    {
-      "id": "peer-gone-after-leaving",
-      "file": "peer-gone-after-leaving.json"
-    },
-    {
-      "id": "idle",
-      "file": "idle.json"
-    },
-    {
-      "id": "end-bad-token",
-      "file": "end-bad-token.json"
-    },
-    {
-      "id": "end-expired",
-      "file": "end-expired.json"
-    },
-    {
-      "id": "end-ended",
-      "file": "end-ended.json"
-    },
-    {
-      "id": "end-full",
-      "file": "end-full.json"
-    },
-    {
-      "id": "end-too-many-connections",
-      "file": "end-too-many-connections.json"
-    },
-    {
-      "id": "end-too-many-sessions",
-      "file": "end-too-many-sessions.json"
-    },
-    {
       "id": "end-timeout",
       "file": "end-timeout.json"
     },
     {
-      "id": "end-shutting-down",
-      "file": "end-shutting-down.json"
+      "id": "end-bad-token",
+      "file": "end-bad-token.json"
     },
     {
       "id": "refuse-text",

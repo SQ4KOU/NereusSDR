@@ -1,30 +1,9 @@
 {
   "runs": [
     "relay",
-    "core",
     "app"
   ],
   "steps": [
-    {
-      "connect": "core",
-      "address": "198.51.100.1"
-    },
-    {
-      "from": "core",
-      "role": "behaviour",
-      "binary": [
-        "80",
-        "$token:core:s:a"
-      ]
-    },
-    {
-      "to": "core",
-      "binary": [
-        "81",
-        "01",
-        "00"
-      ]
-    },
     {
       "connect": "device",
       "address": "203.0.113.1"
@@ -42,18 +21,38 @@
       "binary": [
         "81",
         "01",
-        "01"
+        "00"
+      ]
+    },
+    {
+      "connect": "core",
+      "address": "198.51.100.1"
+    },
+    {
+      "from": "core",
+      "role": "behaviour",
+      "binary": [
+        "80",
+        "$token:core:s:a"
       ]
     },
     {
       "to": "core",
+      "binary": [
+        "81",
+        "01",
+        "01"
+      ]
+    },
+    {
+      "to": "device",
       "binary": [
         "82",
         "01"
       ]
     },
     {
-      "from": "device",
+      "from": "core",
       "role": "scripted",
       "binary": [
         "05",
@@ -61,7 +60,7 @@
       ]
     },
     {
-      "from": "device",
+      "from": "core",
       "role": "scripted",
       "binary": [
         "7f",
@@ -69,7 +68,7 @@
       ]
     },
     {
-      "from": "device",
+      "from": "core",
       "role": "behaviour",
       "binary": [
         "02",
@@ -77,14 +76,14 @@
       ]
     },
     {
-      "to": "core",
+      "to": "device",
       "binary": [
         "02",
         "$ref:m1"
       ]
     },
     {
-      "expectSilent": "core"
+      "expectSilent": "device"
     }
   ]
 }

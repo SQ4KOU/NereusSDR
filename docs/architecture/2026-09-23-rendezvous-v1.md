@@ -325,7 +325,7 @@ client that carry keys of no kind listed here, and they decode (section
 | `urls` | an array of 0 to 8 strings, each 1 to 512 bytes: STUN or TURN URLs (RFC 7064, RFC 7065) |
 | `turn` | `null`, or an object with these keys: `username` (a string of 1 to 512 bytes), `password` (a string of 1 to 128 bytes), `expires` (a whole number from 0 to 4294967295, Unix seconds) and `urls` (`urls`); section 8. The service sends exactly these; a receiver ignores any other key in it (section 5.1) |
 | `relayUrl` | a string of 1 to 512 bytes of printable ASCII (0x21 to 0x7E), starting `wss://`: where the WebSocket relay is (section 12.1) |
-| `relayToken` | a string of 1 to 512 bytes of the base64url alphabet (`A-Z a-z 0-9 - _`), no padding: a relay grant's token, opaque to a station and a client (section 12.2; version 1 tokens are 72 characters) |
+| `relayToken` | a string of 1 to 512 bytes of the base64url alphabet (`A-Z a-z 0-9 - _`), no padding: a relay grant's token, opaque to a station and a client (section 12.2; version 1 tokens are 83 characters) |
 | `expires` | a whole number from 0 to 4294967295: Unix seconds |
 
 ### 5.3 The kinds
@@ -1034,7 +1034,7 @@ file, so `test_control.py` also holds section 5.1's rule for those.
 | `"service"` | the service's (`rendezvous/tests/runner.py`), which runs every fixture | every connection, against the real service it builds from `serverSetup` |
 | `"core"` | the Core's station role (Task 27) | the service, towards its Core on the connection named `station` |
 | `"app"` | a client's (the desktop's, Task 27; the phone's, Task 27a) | the service, towards its client on the connection named `client` |
-| (relay runners) | the relay's own (`rendezvous/tests/relay_runner.py`) and the Core's and the clients' relay legs (Task 29) | the frame protocol's fixtures in `relay/`, a set of their own with runs values `relay`, `core` and `app` (section 12.8) |
+| (relay runners) | the relay's own (`rendezvous/tests/relay_runner.py`), and the Core's and the clients' relay legs (Task 29) | the frame protocol's fixtures in `relay/`, a set of their own: the relay's runner plays every leg against the real relay; a Core's relay-leg runner plays the relay towards its leg on the connection `core`, a client's towards its leg on `device`, each running the fixtures whose `runs` names it (section 12.8) |
 
 **Connections.** A step names a connection. A name starting `station` is a
 station connection and one starting `client` is a client connection:
@@ -1431,6 +1431,9 @@ token   = base64url(payload || mac), no padding: 62 bytes, 83 characters
 - It never sends a datagram of more than 1500 bytes: it drops one its ICE
   agent gives it rather than send it, since the relay would close the leg
   (1009). It never sends an empty datagram.
+- It joins with any grant it holds, without judging `expires` itself (its
+  clock and the relay's may differ): the relay answers `expired` when it
+  is.
 - It may send datagrams right after its JOIN, without waiting for READY:
   the relay reads a leg's messages in order, and forwards them once the
   join is accepted. Datagrams for a leg that is not there (the other end
@@ -1661,55 +1664,105 @@ and is not listed in `manifest.json`, so the rendezvous runners of section
 10 never see it.
 
 A fixture is `{"runs":[<runners>],"relaySetup":{...},"steps":[<steps>]}`
-(`relaySetup` may be absent):
+(`relaySetup` may be absent).
+
+**Runners.**
 
 | `runs` value | Runner | Plays |
 | --- | --- | --- |
-| `"relay"` | the relay's (`rendezvous/tests/relay_runner.py`, run by `test_relay_fixtures.py`), which runs every fixture | every leg, against the real relay on a manual clock |
-| `"core"` | the Core's leg implementation | the relay, towards its leg on the connection named `core` |
-| `"app"` | a client's leg implementation (the desktop's, the phone's) | the relay, towards its leg on the connection named `device` |
+| `"relay"` | the relay's (`rendezvous/tests/relay_runner.py`, run by `test_relay_fixtures.py`) | every connection, against the real relay on a manual clock |
+| `"core"` | a Core's relay-leg runner | the relay, towards its leg on the connection named exactly `core` |
+| `"app"` | a client's relay-leg runner (the desktop's, the phone's) | the relay, towards its leg on the connection named exactly `device` |
 
 Connections are named for their leg: `core`, `core2`, `device`,
-`device2` and so on. Steps:
+`device2` and so on. A core or app runner plays only its own connection;
+every other connection, and every step on one, exists only in the relay's
+run, except that such steps' placeholders are still filled to record them
+(as in section 10.4).
 
-- `{"connect":"<conn>"}` or with `"address":"<ip>"`: the leg opens (the
-  relay's runner sends `address` as `X-Forwarded-For`).
-- `{"from":"<conn>","role":"behaviour"|"scripted","binary":[<parts>]}` or
-  with `"text":"<text>"` instead of `binary`: the leg sends this message.
-  A behaviour message is one the leg under test must produce; a scripted
-  one a conformant leg never sends (a refusal), which a core or app runner
-  skips.
-- `{"to":"<conn>","binary":[<parts>]}`: the relay sends this to that leg.
-  The relay's runner matches the next message byte for byte; a core or app
-  runner sends it to its leg.
-- `{"advanceMs":N}`, `{"disconnect":"<conn>"}`,
-  `{"expectClosed":"<conn>","code":N}` and `{"expectSilent":"<conn>"}`: as
-  in section 10.4.
-- `{"shutdown":true}`: the relay stops (`shuttingDown`).
+**How a core or app runner plays the relay.** It gives its leg a grant (the
+token of the first `$token` of its own connection, with the relay's URL on
+loopback), and has the leg's ICE agents behind its shim: a behaviour data
+message from its leg is one the runner makes the leg send by writing the
+payload into the loopback socket of the agent the tag names, then matches;
+a data message to its leg is one the runner sends, then checks that the
+leg wrote exactly the payload to that agent's socket (a datagram the leg
+must drop, per the reader rules, must reach no socket). Then, step by step:
 
-A message's `parts` are joined in order: two lowercase hex digits a byte,
-or a placeholder. `"$token:<leg>:<session>:<station>"` is a token (as ASCII)
-the runner mints with its own relay secret for that leg (`core` or
-`device`), the session recorded under `<session>` (new the first time),
-the station whose id is `<station>` repeated to 26 characters, expiring
-`grantTtlSeconds` (120) after the clock's time; a fifth part `expired`
-makes it expire a second before now, and `forged` flips a bit of its MAC.
-`"$bytes:<n>:<name>"` is `n` random bytes when sent, recorded, and when
-matched any `n` bytes, recorded; `"$ref:<name>"` is the bytes recorded.
-`relaySetup` takes `slots`, `sessionsPerStation`, `connectionsPerAddress`,
-`maxPending`, `joinTimeoutMs`, `rejoinMs`, `idleTimeoutMs`, `wallClock`
-(1800000000) and `grantTtlSeconds`; a core or app runner reads the last
-two and applies the rest to nothing.
+- `{"connect":"<conn>"}` (or with `"address":"<ip>"`, which only the
+  relay's runner uses, as `X-Forwarded-For`): the leg opens a connection.
+  On its own connection, the runner accepts the leg's next connection; a
+  `connect` for a connection that has been closed or dropped is the leg
+  connecting again (it may already have).
+- `{"from":"<conn>","role":"behaviour","binary":[<parts>]}`: the leg must
+  send this; the runner matches it. With `"role":"scripted"` (or `"text"`
+  instead of `binary`), a message a conformant leg does not send, or need
+  not send (such as a datagram pipelined before READY, section 12.3): the
+  core or app runner skips it and goes on.
+- `{"to":"<conn>","binary":[<parts>]}`: the relay sends this; the core or
+  app runner sends it to its leg.
+- `{"expectClosed":"<conn>","code":N}`: the relay closes the connection
+  with that code; the runner does so.
+- `{"disconnect":"<conn>"}`: that connection closes from its own side. On
+  the runner's own connection the runner drives its leg to close (only the
+  relay's run uses this on a leg under test's other side).
+- `{"drop":"<conn>"}`: the connection breaks with no close at all. On its
+  own connection the runner cuts the TCP connection without an END or a
+  close frame; the leg must connect again and join with the same token
+  (section 12.3), which the next steps hold.
+- `{"advanceMs":N}`: time moves; the runner moves its leg's clock if it
+  keeps one.
+- `{"expectSilent":"<conn>"}`: on its own connection, the leg sends
+  nothing and opens no new connection within 1 s of real time.
+- `{"shutdown":true}`: the relay stops; the next steps give its END.
+- After it has sent an END, a runner ignores whatever the leg sends on that
+  connection (a leg may have pipelined a JOIN or datagrams before it read
+  the END).
+
+**Placeholders.** A message's `parts` are joined in order: two lowercase
+hex digits a byte, or a placeholder. `"$token:<leg>:<session>:<station>"`
+is a token (as ASCII) the runner mints with its own relay secret for that
+leg (`core` or `device`), the session recorded under `<session>` (new the
+first time), the station whose id is `<station>` repeated to 26
+characters, expiring `grantTtlSeconds` (120) after the clock's time; a
+fifth part `expired` makes it expire a second before now, and `forged`
+flips a bit of its MAC. `"$bytes:<n>:<name>"` is `n` random bytes when
+sent, recorded, and when matched any `n` bytes, recorded; `"$ref:<name>"`
+is the bytes recorded. `relaySetup` takes `slots`, `sessionsPerStation`,
+`connectionsPerAddress`, `maxPending`, `joinTimeoutMs`, `rejoinMs`,
+`idleTimeoutMs`, `wallClock` (1800000000) and `grantTtlSeconds`; a core or
+app runner reads the last two and applies the rest to nothing.
+
+**Which fixtures each runs.** The relay's runner runs every fixture whose
+`runs` has `relay` and checks the shape of the rest. A `-core` fixture runs
+`relay` and `core` with the Core's leg under test on `core`; its `-device`
+twin runs `relay` and `app` with the device's leg on `device`.
 
 | Fixture | Runs | What it holds |
 | --- | --- | --- |
 | `join-and-forward` | relay, core, app | READY `81 01 00` and `81 01 01`, PEER `82 01`, datagrams with tags 1 and 2 both ways, 1 to 1500 bytes |
-| `unknown-data-tag` | relay, core, app | tags `05` and `7f` dropped by the relay, a tag 2 datagram after them delivered |
-| `data-behind-join` | relay, app | a datagram sent right after JOIN, before READY, delivered once the join is accepted |
-| `data-before-peer-dropped` | relay, core | a datagram sent while the other leg is not there is dropped |
-| `rejoin` | relay, core, app | a leg leaves (PEER `82 00`), a new connection joins with the same token at 29999 ms, datagrams cross again |
-| `replaced` | relay, app | a second connection with the same token: END `replaced` to the first, close 1000 |
-| `peer-gone-never-joined`, `peer-gone-after-leaving` | relay, core (and app) | nothing at 29999 ms, END `peerGone` at 30000 ms |
 | `idle` | relay, core, app | nothing at 29999 ms after the last datagram, END `idle` to both at 30000 ms |
-| `end-bad-token`, `end-expired`, `end-ended`, `end-full`, `end-too-many-connections`, `end-too-many-sessions`, `end-timeout`, `end-shutting-down` | relay (and core, app) | each END code as its bytes, then the close (1000, or 1001 for `shuttingDown`); a third session for a station with `sessionsPerStation` 1 refused, another station's admitted |
+| `end-expired-core`, `end-expired-device` | relay, and core or app | a grant already expired: END `expired` |
+| `end-full-core`, `end-full-device` | relay, and core or app | the one slot taken by another station's session: END `full` |
+| `end-too-many-sessions-core`, `-device` | relay, and core or app | `sessionsPerStation` 1 and its station's one session open: the second is refused, END `tooManySessions` |
+| `end-too-many-connections-core`, `-device` | relay, and core or app | `connectionsPerAddress` 1 and another connection from the network: END `tooManyConnections` as soon as the leg connects |
+| `end-shutting-down-core`, `-device` | relay, and core or app | END `shuttingDown`, close 1001 |
+| `end-replaced-core`, `-device` | relay, and core or app | a newer connection joins with the leg's token: END `replaced` on the older, and the leg opens nothing new |
+| `end-ended-core`, `-device` | relay, and core or app | the other side leaves; the leg's connection drops 20 s later; the session ends at 30 s; the leg's join after it gets END `ended` |
+| `peer-gone-never-joined-core`, `-device` | relay, and core or app | nothing at 29999 ms, END `peerGone` at 30000 ms |
+| `peer-gone-after-leaving-core`, `-device` | relay, and core or app | the other leg leaves (PEER `82 00`): nothing at 29999 ms, END `peerGone` at 30000 ms |
+| `rejoin-after-close-core`, `-device` | relay, and core or app | the leg's connection drops with no END; it connects again and joins with the same token (READY `81 01 01`, PEER `82 01` to the other), and datagrams cross again |
+| `unknown-data-tag-core`, `-device` | relay, and core or app | tags `05` and `7f` sent to the relay are dropped there; a tag 2 datagram after them is delivered |
+| `data-before-peer-dropped-core`, `-device` | relay, and core or app | a datagram the leg sends before the other leg is there is dropped |
+| `data-behind-join` | relay, app | a datagram pipelined right after JOIN (scripted: allowed, not required) is delivered once the join is accepted; a leg that waits for READY is given READY all the same |
+| `reader-ready-trailing-byte-core`, `-device` | core or app | READY `81 01 01 ff`: the leg reads it as READY, other leg present, and delivers the datagram that follows |
+| `reader-ready-version-2-core`, `-device` | core or app | READY `81 02 01`: read as version 1's two bytes; the datagram that follows is delivered |
+| `reader-peer-trailing-byte-core`, `-device` | core or app | PEER `82 00 ff` and `82 01 ff` read as PEER 0 and 1; the datagram that follows is delivered |
+| `reader-unknown-relay-tag-core`, `-device` | core or app | relay messages `84 00 01` and `ff` ignored; the datagram that follows is delivered |
+| `reader-unknown-data-tag-core`, `-device` | core or app | data tags `05` and `7f` dropped and reach no agent; the tag 1 datagram that follows is delivered to the control agent |
+| `end-timeout`, `end-bad-token` | relay | END `timeout` (no JOIN within 10 s, which a conformant leg never does) and `badToken` (a forged token) |
 | `refuse-text`, `refuse-first-not-join`, `refuse-zero-tag`, `refuse-empty-payload`, `refuse-join-twice`, `refuse-oversize` | relay | END `protocolError` and the close, and for 1501 bytes of payload (1502 in all) the close 1009 with no END; the other leg gets PEER `82 00` |
+
+`test_relay_fixtures.py` also checks that each END code a conformant leg
+can meet (every code but `protocolError`, `timeout` and `badToken`) is
+played towards both the Core's leg and the device's.

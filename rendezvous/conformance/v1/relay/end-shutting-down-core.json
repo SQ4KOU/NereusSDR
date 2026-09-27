@@ -1,8 +1,7 @@
 {
   "runs": [
     "relay",
-    "core",
-    "app"
+    "core"
   ],
   "steps": [
     {

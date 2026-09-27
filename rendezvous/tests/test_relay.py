@@ -562,3 +562,35 @@ def test_the_hourly_check_logs_the_finished_day(caplog):
     asyncio.run(go())
     lines = [r.getMessage() for r in caplog.records if r.getMessage().startswith("relay data use")]
     assert lines and "0.00 GB forwarded on" in lines[0] and "in 1 sessions" in lines[0]
+
+
+def test_a_refused_connection_counts_until_it_has_closed():
+    """Section 12.5 (M3): a refused connection whose peer never answers the
+    close still holds its address group's place until it has closed, so a
+    new connection from that group meanwhile is refused too."""
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from caddy_probe import _SlowLeg
+
+    async def go():
+        async with live_relay(connections_per_address=1) as (relay, clock, uri):
+            first = await connect(uri, "198.51.100.44")
+            await asyncio.sleep(0.05)
+            loop = asyncio.get_running_loop()
+            # A peer that is refused and then never reads nor answers the close.
+            silent = await loop.run_in_executor(None, lambda: _SlowLeg(uri, "", 4096, "198.51.100.44"))
+            await asyncio.sleep(0.2)
+            assert relay.per_group.get("198.51.100.44") == 2
+            await first.close()
+            for _ in range(100):
+                if relay.per_group.get("198.51.100.44") == 1:
+                    break
+                await asyncio.sleep(0.01)
+            assert relay.per_group.get("198.51.100.44") == 1
+            late = await connect(uri, "198.51.100.44")
+            await expect_end(late, "tooManyConnections")
+            silent.sock.close()
+
+    asyncio.run(go())
