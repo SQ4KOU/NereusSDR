@@ -189,6 +189,11 @@
 //               the Core; the Core's refusal stays the backstop. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-27 - PowerPage's tune power conversions call HpsdrModel.h's
+//               tunePowerShownFor / tunePowerStoredFromShown (moved there
+//               with their mi0bot cites), which the Core's catalogue reads
+//               too (R-IOS-06, R-IOS-27). J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 #include "TransmitSetupPages.h"
 #include "gui/StyleConstants.h"
@@ -800,30 +805,18 @@ void PowerPage::applyHpsdrModel(HPSDRModel m)
 // always match the live SKU and stay correct across runtime swaps.
 double PowerPage::tunePowerDisplayFromStored(int stored)
 {
-    if (model() &&
-        model()->transmitModel().hpsdrModel() == HPSDRModel::HERMESLITE) {
-        // mi0bot setup.cs:5307 [v2.10.3.13-beta2]:
-        //   udTXTunePower.Value = (decimal)(value/3 - 33)/2;
-        return (static_cast<double>(stored) / 3.0 - 33.0) / 2.0;
-    }
-    return static_cast<double>(stored);
+    // HpsdrModel.h's tunePowerShownFor (mi0bot setup.cs:5307
+    // [v2.10.3.13-beta2]), which the Core's catalogue reads too.
+    const HPSDRModel sku = model() ? model()->transmitModel().hpsdrModel() : HPSDRModel::FIRST;
+    return tunePowerShownFor(sku, stored);
 }
 
 int PowerPage::tunePowerStoredFromDisplay(double display)
 {
-    if (model() &&
-        model()->transmitModel().hpsdrModel() == HPSDRModel::HERMESLITE) {
-        // mi0bot setup.cs:9397 [v2.10.3.13-beta2]:
-        //   console.TunePower = (int) ((33 + (udTXTunePower.Value * 2)) * 3);
-        // The int cast in C# is truncation-toward-zero; std::lround better
-        // matches the user-visible "0.5 dB step → 3 sub-step increment"
-        // expectation (avoids accumulating floor() truncation drift).  For
-        // exact half-step inputs both behave identically; for non-step
-        // inputs (e.g. mid-cell scroll) round() picks the nearest legal
-        // sub-step instead of always biasing low.
-        return static_cast<int>(std::lround((33.0 + display * 2.0) * 3.0));
-    }
-    return static_cast<int>(std::lround(display));
+    // HpsdrModel.h's tunePowerStoredFromShown (mi0bot setup.cs:9396-9397
+    // [v2.10.3.13-beta2]; rounded to the nearest legal sub-step).
+    const HPSDRModel sku = model() ? model()->transmitModel().hpsdrModel() : HPSDRModel::FIRST;
+    return tunePowerStoredFromShown(sku, display);
 }
 
 // ---------------------------------------------------------------------------

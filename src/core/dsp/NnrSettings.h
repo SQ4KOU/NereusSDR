@@ -8,8 +8,13 @@
 //                readback (R-R3-40) by J.J. Boyd (KG4VCF), with Anthropic
 //                Claude Code assistance. NnrLimitSite (the Core wording for
 //                a remote window) added the same day.
+//   2026-09-27 : the defaults and ranges read from ControlRanges.h (the
+//                table NnrControls and the Core's catalogue read; values
+//                unchanged; R-IOS-06, R-IOS-27) by J.J. Boyd (KG4VCF), with
+//                Anthropic Claude Code assistance.
 #pragma once
 
+#include "core/ControlRanges.h"
 #include "core/WdspTypes.h"
 
 #include <array>
@@ -19,32 +24,34 @@
 namespace NereusSDR {
 
 struct NnrSettings {
-    int modelSlot{0};
-    double maskFloorDb{-25.0};
-    NrPosition position{NrPosition::PostAgc};
-    double alpha{1.0};
-    double alphaKneeDb{10.0};
-    double tauSeconds{2.0};
-    double maxGainDb{12.0};
-    double attackMs{0.0};
-    double releaseMs{0.0};
+    // Defaults and ranges from ControlRanges.h, the table NnrControls and
+    // the Core's catalogue read.
+    int modelSlot{static_cast<int>(ControlRanges::kNnrModel.defaultValue)};
+    double maskFloorDb{ControlRanges::kNnrMaskFloor.defaultValue};
+    NrPosition position{static_cast<NrPosition>(ControlRanges::kNnrPosition.defaultValue)};
+    double alpha{ControlRanges::kNnrAlpha.defaultValue};
+    double alphaKneeDb{ControlRanges::kNnrAlphaKnee.defaultValue};
+    double tauSeconds{ControlRanges::kNnrTau.defaultValue};
+    double maxGainDb{ControlRanges::kNnrMaxGain.defaultValue};
+    double attackMs{ControlRanges::kNnrAttack.defaultValue};
+    double releaseMs{ControlRanges::kNnrRelease.defaultValue};
 
     bool operator==(const NnrSettings&) const = default;
 
     [[nodiscard]] bool isValid() const noexcept
     {
-        const auto within = [](double value, double low, double high) {
-            return std::isfinite(value) && value >= low && value <= high;
+        const auto within = [](double value, const ControlRanges::NrControl& control) {
+            return std::isfinite(value) && value >= control.min && value <= control.max;
         };
         return (modelSlot == 0 || modelSlot == 1)
             && (position == NrPosition::PreAgc || position == NrPosition::PostAgc)
-            && within(maskFloorDb, -50.0, -10.0)
-            && within(alpha, 0.0, 4.0)
-            && within(alphaKneeDb, 0.0, 40.0)
-            && within(tauSeconds, 0.05, 30.0)
-            && within(maxGainDb, 0.0, 24.0)
-            && within(attackMs, 0.0, 500.0)
-            && within(releaseMs, 0.0, 500.0);
+            && within(maskFloorDb, ControlRanges::kNnrMaskFloor)
+            && within(alpha, ControlRanges::kNnrAlpha)
+            && within(alphaKneeDb, ControlRanges::kNnrAlphaKnee)
+            && within(tauSeconds, ControlRanges::kNnrTau)
+            && within(maxGainDb, ControlRanges::kNnrMaxGain)
+            && within(attackMs, ControlRanges::kNnrAttack)
+            && within(releaseMs, ControlRanges::kNnrRelease);
     }
 };
 

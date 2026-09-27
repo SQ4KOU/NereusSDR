@@ -107,6 +107,10 @@
 //                 a new slice's values (Aggressiveness 4, Bias 1.2, where it
 //                 gave 6 and 1.5). J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-27 : NR2, NR3, NR4 and DFNR's quick controls read ControlRanges.h
+//                 too, the table the Core's catalogue sends (R-IOS-06,
+//                 R-IOS-27); their values are unchanged. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -428,7 +432,7 @@ void addNrSlider(DspParamPopup* popup, const ControlRanges::NrControl& control,
                          write(ControlRanges::nrValueFromSlider(entry, v));
                      },
                      tooltip,
-                     entry.reset == ControlRanges::kNrNoReset ? INT_MIN : entry.reset);
+                     entry.hasReset ? static_cast<int>(std::lround(entry.reset)) : INT_MIN);
 }
 
 // A noise-reduction choice's labels, in its order.
@@ -3768,8 +3772,9 @@ void VfoWidget::setSmallFilterMode(bool small)
 // ---- Sub-epic C-1: NR bank DspParamPopup builders (Task 15) ----
 // Each popup shows the 3-5 most-adjusted knobs for the given NR slot.
 // "More Settings…" fires openNrSetupRequested(slot) routed by MainWindow in Task 18.
-// Ranges and defaults from Thetis setup.cs [v2.10.3.13] + AetherSDR MainWindow.cpp
-// [@0cd4559] lines 7980-8324.
+// Ranges, defaults and Reset values come from ControlRanges.h, where each
+// keeps its source (Thetis, AetherSDR or NereusSDR's own); the Core's
+// catalogue sends the same table.
 
 void VfoWidget::showNr1Popup(const QPoint& globalPos)
 {
@@ -3802,38 +3807,27 @@ void VfoWidget::showNr2Popup(const QPoint& globalPos)
     if (!m_slice) { return; }
     auto* p = new DspParamPopup(this);
 
-    // NR2 (EMNR — Enhanced Multiband Noise Reduction).
-    // From Thetis setup.designer.cs grpDSPGainMethod / grpDSPNR2NPEMethod /
-    // chkDSPNR2AE / chkNR2PostProc_enable_rx1 labels [v2.10.3.13].
-    p->addRadioGroup(QStringLiteral("Gain Method"),
-                     {QStringLiteral("Linear"), QStringLiteral("Log"),
-                      QStringLiteral("Gamma"), QStringLiteral("Trained")},
+    // NR2 (EMNR, Enhanced Multiband Noise Reduction). Thetis's labels,
+    // choices and defaults, from ControlRanges.h.
+    using namespace ControlRanges;
+    p->addRadioGroup(QString::fromUtf8(kNr2GainMethod.label), nrOptionLabels(kNr2GainMethod),
                      static_cast<int>(m_slice->nr2GainMethod()),
                      [this](int v) {
                          if (m_slice) m_slice->setNr2GainMethod(static_cast<NereusSDR::EmnrGainMethod>(v));
                      });
-    // From Thetis setup.designer.cs grpDSPNR2NPEMethod / radDSPNR2OSMS/MMSE/NSTAT [v2.10.3.13].
-    p->addRadioGroup(QStringLiteral("NPE Method"),
-                     {QStringLiteral("OSMS"), QStringLiteral("MMSE"), QStringLiteral("NSTAT")},
+    p->addRadioGroup(QString::fromUtf8(kNr2NpeMethod.label), nrOptionLabels(kNr2NpeMethod),
                      static_cast<int>(m_slice->nr2NpeMethod()),
                      [this](int v) {
                          if (m_slice) m_slice->setNr2NpeMethod(static_cast<NereusSDR::EmnrNpeMethod>(v));
                      });
-    // From Thetis setup.designer.cs chkDSPNR2AE.Text = "AE Filter" [v2.10.3.13].
-    p->addCheckbox(QStringLiteral("AE Filter"), m_slice->nr2AeFilter(),
+    p->addCheckbox(QString::fromUtf8(kNr2AeFilter.label), m_slice->nr2AeFilter(),
                    [this](bool v) { if (m_slice) m_slice->setNr2AeFilter(v); });
-    // From Thetis setup.designer.cs chkNR2PostProc_enable_rx1.Text = "Noise post proc" [v2.10.3.13].
-    p->addCheckbox(QStringLiteral("Noise post proc"), m_slice->nr2Post2Run(),
+    p->addCheckbox(QString::fromUtf8(kNr2Post2Run.label), m_slice->nr2Post2Run(),
                    [this](bool v) { if (m_slice) m_slice->setNr2Post2Run(v); });
-    // From Thetis setup.designer.cs labelTS476.Text = "Factor:" / labelTS475.Text = "Rate:" [v2.10.3.13].
-    const int post2Factor = static_cast<int>(m_slice->nr2Post2Factor());
-    p->addSlider(QStringLiteral("Factor"), 0, 30, post2Factor,
-                 [](int v) { return QString::number(v); },
-                 [this](int v) { if (m_slice) m_slice->setNr2Post2Factor(static_cast<double>(v)); });
-    const int post2Rate = static_cast<int>(m_slice->nr2Post2Rate());
-    p->addSlider(QStringLiteral("Rate"), 0, 30, post2Rate,
-                 [](int v) { return QString::number(v); },
-                 [this](int v) { if (m_slice) m_slice->setNr2Post2Rate(static_cast<double>(v)); });
+    addNrSlider(p, kNr2Post2Factor, m_slice->nr2Post2Factor(),
+                [this](double v) { if (m_slice) m_slice->setNr2Post2Factor(v); });
+    addNrSlider(p, kNr2Post2Rate, m_slice->nr2Post2Rate(),
+                [this](double v) { if (m_slice) m_slice->setNr2Post2Rate(v); });
     p->finalize([this]() { requestNrSetup(NereusSDR::NrSlot::NR2); }, nullptr);
     p->showAt(globalPos);
 }
@@ -3843,18 +3837,15 @@ void VfoWidget::showNr3Popup(const QPoint& globalPos)
     if (!m_slice) { return; }
     auto* p = new DspParamPopup(this);
 
-    // NR3 (RNNR — Recurrent Neural Net NR).
-    // From Thetis setup.cs udRNNR position + RXANR3FixedGain [v2.10.3.13]
-    // and AetherSDR MainWindow.cpp:8200-8260 [@0cd4559].
-    p->addRadioGroup(QStringLiteral("Position"),
-                     {QStringLiteral("Pre-AGC"), QStringLiteral("Post-AGC")},
+    // NR3 (RNNR, Recurrent Neural Net NR). Thetis's position and fixed
+    // input gain, from ControlRanges.h.
+    using namespace ControlRanges;
+    p->addRadioGroup(QString::fromUtf8(kNr3Position.label), nrOptionLabels(kNr3Position),
                      static_cast<int>(m_slice->nr3Position()),
                      [this](int v) {
                          if (m_slice) m_slice->setNr3Position(static_cast<NereusSDR::NrPosition>(v));
                      });
-    // From Thetis setup.designer.cs chkNR3_RNNoiseFixedGain.Text =
-    // "Use fixed gain for input samples" [v2.10.3.13].
-    p->addCheckbox(QStringLiteral("Use fixed gain for input samples"), m_slice->nr3UseDefaultGain(),
+    p->addCheckbox(QString::fromUtf8(kNr3UseDefaultGain.label), m_slice->nr3UseDefaultGain(),
                    [this](bool v) { if (m_slice) m_slice->setNr3UseDefaultGain(v); });
     // "Load Model…" opens Setup NR3 page where file dialog lives (Task 17).
     p->finalize([this]() { requestNrSetup(NereusSDR::NrSlot::NR3); }, nullptr);
@@ -3866,32 +3857,20 @@ void VfoWidget::showNr4Popup(const QPoint& globalPos)
     if (!m_slice) { return; }
     auto* p = new DspParamPopup(this);
 
-    // NR4 (SBNR — Spectral Baseline NR).
-    // From Thetis setup.designer.cs labelTS446/473 "Reduction", labelTS449/471 "Smoothing",
-    // labelTS451/468 "Whitening", labelTS453/466 "Rescale", labelTS455/459 "SNRthresh",
-    // radNR4_algo1/2/3 "Algo 1/2/3" [v2.10.3.13].
-    const int reduction = static_cast<int>(m_slice->nr4Reduction());
-    p->addSlider(QStringLiteral("Reduction"), 0, 20, reduction,
-                 [](int v) { return QString::number(v) + QStringLiteral(" dB"); },
-                 [this](int v) { if (m_slice) m_slice->setNr4Reduction(static_cast<double>(v)); });
-    const int smoothing = static_cast<int>(m_slice->nr4Smoothing());
-    p->addSlider(QStringLiteral("Smoothing"), 0, 100, smoothing,
-                 [](int v) { return QString::number(v) + QStringLiteral("%"); },
-                 [this](int v) { if (m_slice) m_slice->setNr4Smoothing(static_cast<double>(v)); });
-    const int whitening = static_cast<int>(m_slice->nr4Whitening());
-    p->addSlider(QStringLiteral("Whitening"), 0, 100, whitening,
-                 [](int v) { return QString::number(v) + QStringLiteral("%"); },
-                 [this](int v) { if (m_slice) m_slice->setNr4Whitening(static_cast<double>(v)); });
-    const int rescale = static_cast<int>(m_slice->nr4Rescale());
-    p->addSlider(QStringLiteral("Rescale"), 0, 20, rescale,
-                 [](int v) { return QString::number(v) + QStringLiteral(" dB"); },
-                 [this](int v) { if (m_slice) m_slice->setNr4Rescale(static_cast<double>(v)); });
-    const int snrThresh = static_cast<int>(m_slice->nr4PostThresh());
-    p->addSlider(QStringLiteral("SNRthresh"), -30, 0, snrThresh,
-                 [](int v) { return QString::number(v) + QStringLiteral(" dB"); },
-                 [this](int v) { if (m_slice) m_slice->setNr4PostThresh(static_cast<double>(v)); });
-    p->addRadioGroup(QStringLiteral("Algo"),
-                     {QStringLiteral("Algo 1"), QStringLiteral("Algo 2"), QStringLiteral("Algo 3")},
+    // NR4 (SBNR, Spectral Baseline NR). Thetis's labels; the ranges and
+    // defaults ControlRanges.h holds (NereusSDR's where they differ).
+    using namespace ControlRanges;
+    addNrSlider(p, kNr4Reduction, m_slice->nr4Reduction(),
+                [this](double v) { if (m_slice) m_slice->setNr4Reduction(v); });
+    addNrSlider(p, kNr4Smoothing, m_slice->nr4Smoothing(),
+                [this](double v) { if (m_slice) m_slice->setNr4Smoothing(v); });
+    addNrSlider(p, kNr4Whitening, m_slice->nr4Whitening(),
+                [this](double v) { if (m_slice) m_slice->setNr4Whitening(v); });
+    addNrSlider(p, kNr4Rescale, m_slice->nr4Rescale(),
+                [this](double v) { if (m_slice) m_slice->setNr4Rescale(v); });
+    addNrSlider(p, kNr4PostThresh, m_slice->nr4PostThresh(),
+                [this](double v) { if (m_slice) m_slice->setNr4PostThresh(v); });
+    p->addRadioGroup(QString::fromUtf8(kNr4Algo.label), nrOptionLabels(kNr4Algo),
                      static_cast<int>(m_slice->nr4Algo()),
                      [this](int v) {
                          if (m_slice) m_slice->setNr4Algo(static_cast<NereusSDR::SbnrAlgo>(v));
@@ -3906,26 +3885,20 @@ void VfoWidget::showDfnrPopup(const QPoint& globalPos)
     if (!m_slice || !nrCannotRunReason(NereusSDR::NrSlot::DFNR).isEmpty()) { return; }
     auto* p = new DspParamPopup(this);
 
-    // DFNR (DeepFilterNet3) — AetherSDR post-WDSP filter, not in Thetis.
-    // Factory defaults per user directive 2026-04-23: AttenLimit 100 dB,
-    // Post-Filter Beta 0.05 (UI 5).
-    const int attenLimit = static_cast<int>(m_slice->dfnrAttenLimit());
-    p->addSlider(QStringLiteral("Attenuation Limit"), 0, 100, attenLimit,
-                 [](int v) { return QString::number(v) + QStringLiteral(" dB"); },
-                 [this](int v) { if (m_slice) m_slice->setDfnrAttenLimit(static_cast<double>(v)); },
-                 tr("Maximum noise attenuation in dB (0 = bypass, 100 = maximum). "
-                    "Default 100. Higher values suppress more noise but may clip speech peaks."),
-                 /*factory=*/100);
+    // DFNR (DeepFilterNet3), a post-WDSP filter that is not in Thetis. Its
+    // ranges and Reset (AetherSDR's defaults) from ControlRanges.h.
+    using namespace ControlRanges;
+    addNrSlider(p, kDfnrAttenLimit, m_slice->dfnrAttenLimit(),
+                [this](double v) { if (m_slice) m_slice->setDfnrAttenLimit(v); },
+                tr("Maximum noise attenuation in dB (0 = bypass, 100 = maximum). "
+                   "Default 100. Higher values suppress more noise but may clip speech peaks."));
 
-    const int beta = static_cast<int>(m_slice->dfnrPostFilterBeta() * 100.0);
-    p->addSlider(QStringLiteral("Post-Filter Beta"), 0, 100, beta,
-                 [](int v) { return QString::number(v / 100.0, 'f', 2); },
-                 [this](int v) { if (m_slice) m_slice->setDfnrPostFilterBeta(v / 100.0); },
-                 tr("Post-filter aggressiveness (0 = disabled, 0.30+ = aggressive). "
-                    "Default 0 (off). Higher values reduce "
-                    "residual musical-noise artifacts but may over-attenuate "
-                    "consonants. Typical tuning: start at 0.05-0.10 and nudge up."),
-                 /*factory=*/0);
+    addNrSlider(p, kDfnrPostFilterBeta, m_slice->dfnrPostFilterBeta(),
+                [this](double v) { if (m_slice) m_slice->setDfnrPostFilterBeta(v); },
+                tr("Post-filter aggressiveness (0 = disabled, 0.30+ = aggressive). "
+                   "Default 0 (off). Higher values reduce "
+                   "residual musical-noise artifacts but may over-attenuate "
+                   "consonants. Typical tuning: start at 0.05-0.10 and nudge up."));
 
     p->finalize([this]() { requestNrSetup(NereusSDR::NrSlot::DFNR); },
                 /*onReset=*/[]() { /* per-slider resetters push via valueChanged */ });

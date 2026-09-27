@@ -364,12 +364,14 @@ inline constexpr int kDisplayWaterfallAvgTimeDefaultMs = 120;
 //   slider  min, max, step are slider units; the property's value is
 //           slider x scale; the readout beside it is slider / divide to
 //           `decimals` places, then `suffix`. `defaultValue` is a new
-//           slice's value in the property's own units; `reset` is the
-//           slider value the popup's Reset button restores (kNrNoReset
-//           when the popup offers none of its own).
+//           slice's value in the property's own units; `reset` (when
+//           `hasReset`) is the slider value the control's Reset restores.
+//           Only DFNR's and MNR's popups and NNR's "Reset tuning" have a
+//           Reset of their own.
 //   switch  on or off; `defaultValue` is 1 for on.
 //   choice  one of `options` (each id the property's enum value);
-//           `defaultValue` is the default id.
+//           `defaultValue` is the default id, `reset` the id Reset
+//           restores when `hasReset`.
 
 enum class NrControlKind { Slider, Switch, Choice };
 
@@ -378,9 +380,6 @@ struct NrChoiceItem {
     int id;
     const char* label;
 };
-
-/// The Reset value of a control whose popup has no Reset of its own.
-inline constexpr int kNrNoReset = -2147483647 - 1;
 
 /// One noise-reduction control, as the quick controls draw it.
 struct NrControl {
@@ -395,32 +394,45 @@ struct NrControl {
     int decimals;
     const char* suffix;
     double defaultValue;
-    int reset;
+    bool hasReset;
+    double reset;
     const NrChoiceItem* options;
     std::size_t optionCount;
 };
 
+/// A slider with no Reset of its own.
 constexpr NrControl nrSlider(const char* property, const char* label, double min, double max,
                              double step, double scale, int divide, int decimals,
-                             const char* suffix, double defaultValue,
-                             int reset = kNrNoReset) noexcept
+                             const char* suffix, double defaultValue) noexcept
 {
     return NrControl{NrControlKind::Slider, property, label, min, max, step, scale, divide,
-                     decimals, suffix, defaultValue, reset, nullptr, 0};
+                     decimals, suffix, defaultValue, false, 0, nullptr, 0};
+}
+
+/// A slider whose Reset restores slider position `reset`.
+constexpr NrControl nrSliderWithReset(const char* property, const char* label, double min,
+                                      double max, double step, double scale, int divide,
+                                      int decimals, const char* suffix, double defaultValue,
+                                      double reset) noexcept
+{
+    return NrControl{NrControlKind::Slider, property, label, min, max, step, scale, divide,
+                     decimals, suffix, defaultValue, true, reset, nullptr, 0};
 }
 
 constexpr NrControl nrSwitch(const char* property, const char* label, bool defaultOn) noexcept
 {
     return NrControl{NrControlKind::Switch, property, label, 0, 1, 1, 1, 1, 0, "",
-                     defaultOn ? 1.0 : 0.0, kNrNoReset, nullptr, 0};
+                     defaultOn ? 1.0 : 0.0, false, 0, nullptr, 0};
 }
 
+/// A choice; `resetsToDefault` when its Reset restores the default.
 template <std::size_t N>
 constexpr NrControl nrChoice(const char* property, const char* label,
-                             const std::array<NrChoiceItem, N>& options, int defaultId) noexcept
+                             const std::array<NrChoiceItem, N>& options, int defaultId,
+                             bool resetsToDefault = false) noexcept
 {
     return NrControl{NrControlKind::Choice, property, label, 0, 0, 1, 1, 1, 0, "",
-                     double(defaultId), kNrNoReset, options.data(), N};
+                     double(defaultId), resetsToDefault, double(defaultId), options.data(), N};
 }
 
 /// The slider position of `defaultValue` (property units), for a Reset
@@ -489,6 +501,107 @@ inline constexpr std::array<NrControl, 5> kNr1Controls{
     kNr1Taps, kNr1Delay, kNr1Gain, kNr1Leak, kNr1Position,
 };
 
+// NR2 (WDSP EMNR). The popup's labels and choices, and a new slice's
+// values, are Thetis's:
+// From Thetis Project Files/Source/Console/setup.designer.cs:43175-43387 [v2.10.3.15]
+//   this.grpDSPNR2NPEMethod.Text = "NPE Method";   OSMS (Checked), MMSE, NSTAT
+//   this.grpDSPGainMethod.Text = "Gain Method";   Linear, Log, Gamma (Checked), Trained
+// From Thetis Project Files/Source/Console/setup.designer.cs:43223-43230 [v2.10.3.15]
+//   this.chkDSPNR2AE.Checked = true;   this.chkDSPNR2AE.Text = "AE Filter";
+// From Thetis Project Files/Source/Console/setup.designer.cs:42992 [v2.10.3.15]
+//   this.chkNR2PostProc_enable_rx1.Text = "Noise post proc";
+// From Thetis Project Files/Source/Console/setup.designer.cs:43005, 43100 [v2.10.3.15]
+//   this.labelTS476.Text = "Factor:";   this.labelTS475.Text = "Rate:";
+// From Thetis Project Files/Source/Console/radio.cs:2064-2179 [v2.10.3.15]
+//   rx_nr2_gain_method = 2;  rx_nr2_npe_method = 0;  rx_nr2_ae_run = 1;
+//   rx_nr2_ae_post2_run = 0;  rx_nr2_ae_post2_factor = 15.0;
+//   rx_nr2_ae_post2_rate = 5.0;
+// The popup's Factor and Rate sliders span 0 to 30 in whole steps,
+// NereusSDR's own range: Thetis's nudNR2PostProc_factor_rx1 spans 0 to 100
+// and nudNR2PostProc_rate_rx1 0 to 100.0, each in steps of 0.1
+// (setup.designer.cs:43019-43158 [v2.10.3.15]).
+inline constexpr std::array<NrChoiceItem, 4> kNr2GainMethods{{
+    {0, "Linear"},
+    {1, "Log"},
+    {2, "Gamma"},
+    {3, "Trained"},
+}};
+inline constexpr std::array<NrChoiceItem, 3> kNr2NpeMethods{{
+    {0, "OSMS"},
+    {1, "MMSE"},
+    {2, "NSTAT"},
+}};
+inline constexpr NrControl kNr2GainMethod =
+    nrChoice("nr2GainMethod", "Gain Method", kNr2GainMethods, 2);
+inline constexpr NrControl kNr2NpeMethod =
+    nrChoice("nr2NpeMethod", "NPE Method", kNr2NpeMethods, 0);
+inline constexpr NrControl kNr2AeFilter = nrSwitch("nr2AeFilter", "AE Filter", true);
+inline constexpr NrControl kNr2Post2Run = nrSwitch("nr2Post2Run", "Noise post proc", false);
+inline constexpr NrControl kNr2Post2Factor =
+    nrSlider("nr2Post2Factor", "Factor", 0, 30, 1, 1, 1, 0, "", 15.0);
+inline constexpr NrControl kNr2Post2Rate =
+    nrSlider("nr2Post2Rate", "Rate", 0, 30, 1, 1, 1, 0, "", 5.0);
+inline constexpr std::array<NrControl, 6> kNr2Controls{
+    kNr2GainMethod, kNr2NpeMethod, kNr2AeFilter, kNr2Post2Run, kNr2Post2Factor, kNr2Post2Rate,
+};
+
+// NR3 (WDSP RNNR). Its position starts Post-AGC and it starts with the
+// fixed input gain:
+// From Thetis Project Files/Source/Console/radio.cs:2275 [v2.10.3.15]
+//   private int rx_nr3_position = 1;
+// From Thetis Project Files/Source/Console/setup.designer.cs:42436-42443 [v2.10.3.15]
+//   this.chkNR3_RNNoiseFixedGain.Checked = true;
+//   this.chkNR3_RNNoiseFixedGain.Text = "Use fixed gain for input samples";
+inline constexpr NrControl kNr3Position =
+    nrChoice("nr3Position", "Position", kNrPositions, kNrPositionDefault);
+inline constexpr NrControl kNr3UseDefaultGain =
+    nrSwitch("nr3UseDefaultGain", "Use fixed gain for input samples", true);
+inline constexpr std::array<NrControl, 2> kNr3Controls{
+    kNr3Position, kNr3UseDefaultGain,
+};
+
+// NR4 (WDSP SBNR). The labels are Thetis's:
+// From Thetis Project Files/Source/Console/setup.designer.cs:42131-42386 [v2.10.3.15]
+//   "Reduction", "Smoothing", "Whitening", "Rescale", "SNRthresh",
+//   "Algo 1", "Algo 2", "Algo 3"
+// The popup's ranges and a new slice's values are NereusSDR's where they
+// differ from Thetis's spinboxes (setup.designer.cs:42186-42412
+// [v2.10.3.15]): Thetis's Rescale spans 0 to 12 (the popup 0 to 20), its
+// SNRthresh -10 to +10 (the popup -30 to 0), its Smoothing and Whitening
+// start at 0 (a new slice at 65 and 2), and Algo 1 starts checked (a new
+// slice at Algo 2). Reduction (0 to 20, 10) and SNRthresh's -10 match.
+inline constexpr std::array<NrChoiceItem, 3> kNr4Algos{{
+    {0, "Algo 1"},
+    {1, "Algo 2"},
+    {2, "Algo 3"},
+}};
+inline constexpr NrControl kNr4Reduction =
+    nrSlider("nr4Reduction", "Reduction", 0, 20, 1, 1, 1, 0, " dB", 10.0);
+inline constexpr NrControl kNr4Smoothing =
+    nrSlider("nr4Smoothing", "Smoothing", 0, 100, 1, 1, 1, 0, "%", 65.0);
+inline constexpr NrControl kNr4Whitening =
+    nrSlider("nr4Whitening", "Whitening", 0, 100, 1, 1, 1, 0, "%", 2.0);
+inline constexpr NrControl kNr4Rescale =
+    nrSlider("nr4Rescale", "Rescale", 0, 20, 1, 1, 1, 0, " dB", 2.0);
+inline constexpr NrControl kNr4PostThresh =
+    nrSlider("nr4PostThresh", "SNRthresh", -30, 0, 1, 1, 1, 0, " dB", -10.0);
+inline constexpr NrControl kNr4Algo = nrChoice("nr4Algo", "Algo", kNr4Algos, 1);
+inline constexpr std::array<NrControl, 6> kNr4Controls{
+    kNr4Reduction, kNr4Smoothing, kNr4Whitening, kNr4Rescale, kNr4PostThresh, kNr4Algo,
+};
+
+// DFNR (DeepFilterNet3), a post-WDSP filter that is not in Thetis. A new
+// slice starts at AetherSDR's DeepFilterFilter defaults [@0cd4559]
+// (m_attenLimit{100.0f}, m_postFilterBeta{0.0f}), and the popup's Reset
+// restores them (Attenuation Limit 100 dB, Post-Filter Beta 0).
+inline constexpr NrControl kDfnrAttenLimit = nrSliderWithReset(
+    "dfnrAttenLimit", "Attenuation Limit", 0, 100, 1, 1, 1, 0, " dB", 100.0, 100);
+inline constexpr NrControl kDfnrPostFilterBeta = nrSliderWithReset(
+    "dfnrPostFilterBeta", "Post-Filter Beta", 0, 100, 1, 0.01, 100, 2, "", 0.0, 0);
+inline constexpr std::array<NrControl, 2> kDfnrControls{
+    kDfnrAttenLimit, kDfnrPostFilterBeta,
+};
+
 // MNR (macOS Accelerate MMSE-Wiener NR), NereusSDR-native quick controls.
 // A new slice starts at MacNRFilter's own DEF_* values (src/core/
 // MacNRFilter.h, ported from AetherSDR [@0cd4559]; NereusSDR raised OVER
@@ -502,22 +615,22 @@ inline constexpr double kMnrAlphaDefault = 0.92;     // MacNRFilter::DEF_ALPHA
 inline constexpr double kMnrBiasDefault = 1.2;       // MacNRFilter::DEF_BIAS
 inline constexpr double kMnrGsmoothDefault = 0.70;   // MacNRFilter::DEF_GSMOOTH
 inline constexpr NrControl kMnrStrength =
-    nrSlider("mnrStrength", "Strength", 0, 200, 1, 0.01, 1, 0, "%", kMnrStrengthDefault,
+    nrSliderWithReset("mnrStrength", "Strength", 0, 200, 1, 0.01, 1, 0, "%", kMnrStrengthDefault,
              nrResetAtDefault(kMnrStrengthDefault, 0.01));
 inline constexpr NrControl kMnrOversub =
-    nrSlider("mnrOversub", "Aggressiveness", 1, 1000, 1, 1, 1, 0, "", kMnrOversubDefault,
+    nrSliderWithReset("mnrOversub", "Aggressiveness", 1, 1000, 1, 1, 1, 0, "", kMnrOversubDefault,
              nrResetAtDefault(kMnrOversubDefault, 1));
 inline constexpr NrControl kMnrFloor =
-    nrSlider("mnrFloor", "Floor", 0, 2000, 1, 0.001, 1, 0, "m", kMnrFloorDefault,
+    nrSliderWithReset("mnrFloor", "Floor", 0, 2000, 1, 0.001, 1, 0, "m", kMnrFloorDefault,
              nrResetAtDefault(kMnrFloorDefault, 0.001));
 inline constexpr NrControl kMnrAlpha =
-    nrSlider("mnrAlpha", "Alpha", 0, 100, 1, 0.01, 100, 2, "", kMnrAlphaDefault,
+    nrSliderWithReset("mnrAlpha", "Alpha", 0, 100, 1, 0.01, 100, 2, "", kMnrAlphaDefault,
              nrResetAtDefault(kMnrAlphaDefault, 0.01));
 inline constexpr NrControl kMnrBias =
-    nrSlider("mnrBias", "Bias", 0, 100, 1, 0.1, 10, 1, "", kMnrBiasDefault,
+    nrSliderWithReset("mnrBias", "Bias", 0, 100, 1, 0.1, 10, 1, "", kMnrBiasDefault,
              nrResetAtDefault(kMnrBiasDefault, 0.1));
 inline constexpr NrControl kMnrGsmooth =
-    nrSlider("mnrGsmooth", "Gsmooth", 0, 100, 1, 0.01, 100, 2, "", kMnrGsmoothDefault,
+    nrSliderWithReset("mnrGsmooth", "Gsmooth", 0, 100, 1, 0.01, 100, 2, "", kMnrGsmoothDefault,
              nrResetAtDefault(kMnrGsmoothDefault, 0.01));
 inline constexpr std::array<NrControl, 6> kMnrControls{
     kMnrStrength, kMnrOversub, kMnrFloor, kMnrAlpha, kMnrBias, kMnrGsmooth,
@@ -526,6 +639,65 @@ static_assert(kMnrOversub.reset == 4 && kMnrBias.reset == 12 && kMnrFloor.reset 
                   && kMnrAlpha.reset == 92 && kMnrGsmooth.reset == 70
                   && kMnrStrength.reset == 100,
               "MNR's Reset restores a new slice's values");
+
+// NNR (WDSP 2.10's neural noise reduction), NereusSDR-native controls
+// (NnrControls, in the VFO flag's NNR popup and Setup's NNR tab). Each is
+// in its property's own units; the defaults and domains are WDSP 2.10's
+// (RXA.c create_nnr, nnet.c create_dfhead, NNET_TAU_DEFAULT, NNET_GMAX_DB)
+// with the operator ranges of 2026-09-21-wdsp210-nnr-ps3-design.md section
+// 6. NnrSettings holds a slice's values to these and "Reset tuning"
+// restores the defaults, leaving the model as it is.
+inline constexpr std::array<NrChoiceItem, 2> kNnrModels{{
+    {0, "Standard"},
+    {1, "Premium"},
+}};
+inline constexpr NrControl kNnrModel = nrChoice("nnrModelSlot", "Model", kNnrModels, 0);
+inline constexpr NrControl kNnrMaskFloor = nrSliderWithReset(
+    "nnrMaskFloorDb", "Suppression", -50.0, -10.0, 0.01, 1, 1, 2, " dB", -25.0, -25.0);
+inline constexpr NrControl kNnrPosition =
+    nrChoice("nnrPosition", "Position", kNrPositions, kNrPositionDefault, true);
+inline constexpr NrControl kNnrAlpha =
+    nrSliderWithReset("nnrAlpha", "Alpha", 0.0, 4.0, 0.01, 1, 1, 2, "", 1.0, 1.0);
+inline constexpr NrControl kNnrAlphaKnee = nrSliderWithReset(
+    "nnrAlphaKneeDb", "Alpha knee", 0.0, 40.0, 0.1, 1, 1, 1, " dB", 10.0, 10.0);
+inline constexpr NrControl kNnrTau =
+    nrSliderWithReset("nnrTauSeconds", "Noise time", 0.05, 30.0, 0.05, 1, 1, 2, " s", 2.0, 2.0);
+inline constexpr NrControl kNnrMaxGain = nrSliderWithReset(
+    "nnrMaxGainDb", "Maximum gain", 0.0, 24.0, 0.1, 1, 1, 1, " dB", 12.0, 12.0);
+inline constexpr NrControl kNnrAttack =
+    nrSliderWithReset("nnrAttackMs", "Attack", 0.0, 500.0, 0.1, 1, 1, 1, " ms", 0.0, 0.0);
+inline constexpr NrControl kNnrRelease =
+    nrSliderWithReset("nnrReleaseMs", "Release", 0.0, 500.0, 0.1, 1, 1, 1, " ms", 0.0, 0.0);
+inline constexpr std::array<NrControl, 9> kNnrControls{
+    kNnrModel, kNnrMaskFloor, kNnrPosition, kNnrAlpha, kNnrAlphaKnee,
+    kNnrTau, kNnrMaxGain, kNnrAttack, kNnrRelease,
+};
+// The Suppression slider beside the spinbox moves in tenths of a dB.
+inline constexpr int kNnrMaskFloorSliderPerDb = 10;
+
+/// One noise-reduction slot's controls, as the catalogue lists them.
+struct NrSlotControls {
+    const char* key;
+    const NrControl* controls;
+    std::size_t count;
+};
+
+template <std::size_t N>
+constexpr NrSlotControls nrSlot(const char* key, const std::array<NrControl, N>& controls) noexcept
+{
+    return NrSlotControls{key, controls.data(), N};
+}
+
+// The catalogue's `noiseReduction` slots, in the VFO flag's order.
+inline constexpr std::array<NrSlotControls, 7> kNoiseReductionSlots{{
+    nrSlot("nr1", kNr1Controls),
+    nrSlot("nr2", kNr2Controls),
+    nrSlot("nr3", kNr3Controls),
+    nrSlot("nr4", kNr4Controls),
+    nrSlot("dfnr", kDfnrControls),
+    nrSlot("mnr", kMnrControls),
+    nrSlot("nnr", kNnrControls),
+}};
 
 // ── Slice colours ─────────────────────────────────────────────────────────
 
