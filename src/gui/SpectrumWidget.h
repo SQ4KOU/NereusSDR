@@ -3407,7 +3407,6 @@ private:
     // From AetherSDR: kMaxFftBins = 8192, kFftVertStride = 6
     static constexpr int kMaxFftBins = 65536;
     static constexpr int kFftVertStride = 6;  // x, y, r, g, b, a
-    int m_visibleBinCount{0};  // bins rendered this frame (for draw call count)
 
     // ---- 3DSS mesh GPU resources ----
     bool initDssMeshPipeline();
@@ -3469,6 +3468,10 @@ private:
     quint64 m_dssFallbackUploadedGen{~0ull};
 
 #endif
+
+    // Also reset on MOX/context changes in the shared path. The CPU painter
+    // uses m_renderedPixels for its trace; this count remains zero there.
+    int m_visibleBinCount{0};  // GPU bins rendered this frame (draw call count)
 
     // Whether the GPU 3DSS mesh pipeline is up and has data this frame.
     // Deliberately declared OUTSIDE the NEREUS_GPU_SPECTRUM block above
