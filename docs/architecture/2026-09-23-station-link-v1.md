@@ -6224,7 +6224,10 @@ rendezvous rung waiting. A device stops waiting for the Core's `answer`
 `RendezvousDialer::kAnswerDeadlineMs` (10 s) after its `introduce` and ends
 that rung with "This Core can't be reached through the internet service.
 Updating the Core may help." A device that recorded `controlChannelVersion`
-0 for the Core does not start the rung, and says the same.
+1 for the Core knows it is not too old: it ends the rung with "The Core did
+not answer through the internet service. Check that it is on and online."
+A device that recorded `controlChannelVersion` 0 for the Core does not
+start the rung, and says the first words.
 
 **The relay.** A Core with `relay = deny` in `nereusd.conf` answers every
 introduction with `turn` false (the rendezvous document, section 6.3), so
@@ -6232,7 +6235,17 @@ no relay credentials are minted and neither end uses a relay candidate; the
 floor (section 21.6) needs the same permission. A Core says which it has in
 its capabilities (`relayAllowed`, section 6.3); a device records it with
 the paired Core and, while it says false, leaves the relay out of every
-race and says why.
+race and says why. A device that has recorded nothing yet learns it from the
+Core's `answer`: one without relay credentials, though the device asked
+for the relay, is the Core's `relay = deny` (the live service always holds
+a TURN secret), and the record says so.
+
+At most `PathRacer::kMaxDirectOpening` (2) direct rungs open at once, the
+rest waiting their turn: a Core takes `StationServer::kMaxHandshakesPerAddress`
+(2) connections still signing in from one address, and all of a device's
+direct rungs come from one. An address is dialled once however the device
+names it (a literal and a host name that resolves to it), and an IPv6
+address keeps its scope (a link-local one reaches nothing without it).
 
 **The attempt record.** The device keeps one line per rung
 (`StationConnectionAttempt`): the path (this network, direct, through the
@@ -6255,7 +6268,9 @@ one the session runs on (section 21.1).
    there, which must show the paired identity key with a binding that
    verifies for the new connection's certificate (section 3.4). It sends
    nothing on the new connection yet.
-2. On the old connection it invokes `session.pathTicket` (no arguments).
+2. On the old connection it invokes `session.pathTicket` (no arguments;
+   with any, the Core refuses it with "The request to move this connection
+   was not understood.", as `session.leave`).
    The Core answers with `values` `ticket` (`utf8`: 32 random bytes,
    base64url without padding, 43 characters) and `expiresInMs` (`i64`,
    10000, `StationServer::kPathTicketLifetimeMs`). A ticket belongs to the
@@ -6322,17 +6337,27 @@ While a session runs on a rung worse than rank 0, a device looks for a
 better one: at once with a rung the race kept (section 21.1), then 5 s,
 30 s and 2 minutes after the session reached `snapshot.complete`, and every
 5 minutes after that (`PathRacer::kUpgradeRetryMs`), racing only the rungs
-of a better rank than the current one. Through the rendezvous an upgrade
+of a better rank than the current one: an address whose rank cannot beat
+the current one is not dialled at all. Before each look, and at
+`snapshot.complete`, a session through the rendezvous takes its rank from
+the pair its connection settled on then (an ICE agent may nominate a
+relayed pair first and a direct one later). A ticket refused for now (the
+radio on the air) keeps the schedule on its current step. Through the
+rendezvous an upgrade
 looks for a path that is not relayed: the device gathers no relay candidate
 and accepts none of the Core's for it (the Core may still allocate one, as
-for any introduction). The first rung ready moves the session (section
-21.2). Nothing is tried while the device is keyed or has VOX armed; the
-schedule waits for the unkey.
+for any introduction; section 21.4). The first rung ready moves the
+session (section 21.2). Nothing is tried while the device is keyed or has
+VOX armed; the schedule waits for the unkey.
 
 After a move the media connection (section 11) moves too, when the Core
 advertises `mediaReplaceVersion` 1: the device asks for a new media
 connection with the media `replace` operation (the remote media control
-document, "Replacing the media connection"). A session whose control came
+document, "Replacing the media connection"). A move that comes before the
+media connection is ready (the race's standby taken at `snapshot.complete`
+is the usual case) leaves the replacement pending: the device starts it
+once media is ready and the radio is back on receive, so media never stays
+on a relay the session has left. A session whose control came
 through the rendezvous keeps the rendezvous's STUN server for its media
 after a move, and takes a relay for media only while its control
 connection's path is relayed (section 20), so media over a direct control
@@ -6349,9 +6374,20 @@ device relayed at both ends fits (8); a third device's connection is
 refused an allocation (TURN `486`) and gathers without the relay at that
 end, so it connects only where a path without the relay exists. An
 upgrade's connection through the rendezvous asks for no relay at the
-device; the Core's answer may allocate one for its end until the old
-connection closes. Carrying control and media on one connection would halve
-this; it changes section 20's offer and is not part of this version.
+device, but the Core cannot tell it from a first connection (the
+introduction carries no such flag) and, when its `relay` allows, allocates
+one for its end as for any answer. That allocation lives as long as the
+Core's end of that connection: a few seconds when the look finds nothing
+better (the device leaves the introduction and the Core frees the unopened
+answer), or the rest of the session when the session moves onto it (its
+relay is never selected, but an ICE agent keeps its allocations until the
+connection closes). So a session stuck on the relay briefly takes one more
+of the quota every look (at most every 5 minutes, section 21.3), and one
+that moved to the service's path without the relay keeps one at the Core.
+While the quota is full a look's allocation is refused (TURN `486`) and the
+look runs without the Core's relay, which it would not use anyway.
+Carrying control and media on one connection would halve these; it changes
+section 20's offer and is not part of this version.
 
 ### 21.5 The rungs in code
 

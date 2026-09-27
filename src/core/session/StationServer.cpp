@@ -7416,6 +7416,13 @@ void StationServer::handlePathTicket(SessionTransport* transport, const SessionM
             {}));
         return;
     }
+    // Review Minor 12: no arguments, as session.leave takes none.
+    if (!message.arguments.isEmpty()) {
+        send(transport, SessionMessages::commandResult(
+            message.commandVerb, message.commandId, false,
+            QStringLiteral("The request to move this connection was not understood."), {}));
+        return;
+    }
     if (!radioIdleForPathChange()) {
         send(transport, SessionMessages::commandResult(
             message.commandVerb, message.commandId, false,
@@ -7497,10 +7504,12 @@ void StationServer::handlePathJoin(SessionTransport* transport, const SessionMes
     // Link section 21.2: a connection through the service joins only a
     // session signed in with a paired device's own key, and only the
     // introduced device's.
+    // Review Minor 15: an introduced connection with no device id named
+    // (never in production: the rendezvous verified one) joins nothing.
     if (joining->introduced
         && (session->deviceId.isEmpty() || session->signedInWithToken
-            || (!joining->introducedDeviceId.isEmpty()
-                && joining->introducedDeviceId != session->deviceId))) {
+            || joining->introducedDeviceId.isEmpty()
+            || joining->introducedDeviceId != session->deviceId)) {
         refuse("not the introduced device's connection");
         return;
     }

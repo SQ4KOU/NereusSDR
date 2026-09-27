@@ -592,6 +592,31 @@ private slots:
     // which sets the schedule; a packet the old path never brings goes on
     // at its arrival plus the lead; the lead eases once the old path is
     // done.
+    // Task 29 fix wave (review Minor 11): packets the new path holds go
+    // on in the order they came, across the RTP timestamp's wrap.
+    void heldPacketsGoOnInArrivalOrderAcrossTheWrap()
+    {
+        QList<quint32> delivered;
+        DualPathAudio dual([&delivered](const QByteArray& packet) {
+            delivered.append(qFromBigEndian<quint32>(packet.constData() + 4));
+        });
+        const auto packet = [](quint32 timestamp) {
+            QByteArray bytes(20, 'x');
+            qToBigEndian<quint32>(timestamp, bytes.data() + 4);
+            qToBigEndian<quint32>(7, bytes.data() + 8);
+            return bytes;
+        };
+        dual.start(0);
+        const QList<quint32> sent{0xFFFFF880u, 0xFFFFFC40u, 0x00000000u, 0x000003C0u};
+        for (const quint32 timestamp : sent) {
+            dual.submit(packet(timestamp), true, 0);
+        }
+        QVERIFY(delivered.isEmpty());
+        // No old copy and no lead known: all due at once, in arrival order.
+        dual.tick(DualPathAudio::kMaxWaitMs);
+        QCOMPARE(delivered, sent);
+    }
+
     void theNewPathWaitsForTheOldAndThenLeadsNothing()
     {
         QList<QPair<quint32, qint64>> delivered;

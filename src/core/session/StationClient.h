@@ -1322,6 +1322,10 @@ private:
     /// Link section 21.3: looking for a better path, and moving to it.
     void scheduleUpgrade(bool advance);
     void startUpgradeRace();
+    /// Task 29 fix wave (review Minor 7): a session through the service
+    /// takes its rank from the pair its connection settled on now (the
+    /// agent may nominate a relayed pair first and a direct one later).
+    void refreshPathRank();
     void beginUpgrade(PathRacer::Ready ready);
     void abandonUpgrade(const QString& why, bool reschedule);
     void onPathTicket(const SessionMessage& result);

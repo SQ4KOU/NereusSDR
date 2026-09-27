@@ -103,6 +103,7 @@ private:
     struct Held {
         QByteArray packet;
         qint64 arrivalMs = 0;
+        quint64 key = 0;
     };
     static quint64 keyOf(const QByteArray& packet);
     void deliver(const QByteArray& packet);
@@ -110,7 +111,12 @@ private:
 
     Deliver m_deliver;
     RtpDuplicateFilter m_duplicates;
+    /// Held packets by arrival order (Task 29 fix wave, review Minor 11:
+    /// never by timestamp, which wraps), and each one's order by (stream,
+    /// timestamp) for matching the old path's copy.
     std::map<quint64, Held> m_held;
+    QHash<quint64, quint64> m_heldOrder;
+    quint64 m_nextOrder = 0;
     /// When the old path brought each (stream, timestamp), the last few.
     QHash<quint64, qint64> m_oldArrivals;
     std::optional<qint64> m_leadMs;

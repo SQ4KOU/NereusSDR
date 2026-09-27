@@ -98,7 +98,9 @@ struct RemoteStationOptions {
     /// Why connecting through the remote access service is not offered for
     /// this Core, in plain words, or empty when it is: a Core this
     /// computer has not paired with (it is introduced by its identity key),
-    /// or one whose last session declared no control channel.
+    /// one whose last session declared no control channel, or (Task 29 fix
+    /// wave, review Minor 4) one whose service name (rendezvousId, learned
+    /// at a sign-in) this computer does not know yet.
     QString serviceConnectRefusal() const
     {
         if (identityFingerprint.isEmpty()) {
@@ -107,8 +109,13 @@ struct RemoteStationOptions {
         if (controlChannelVersion == 0) {
             return QString::fromLatin1(kUpdateCoreForServiceReason);
         }
+        if (rendezvousId.isEmpty()) {
+            return QString::fromLatin1(kSignInOnceForServiceReason);
+        }
         return QString();
     }
+    static constexpr const char* kSignInOnceForServiceReason =
+        "Connect to the Core once to reach it from anywhere.";
 
     /// iPhone app plan Task 29 (R-IOS-16; the link document, section 21):
     /// the Core's rendezvous id (learned from its hello at a sign-in), what

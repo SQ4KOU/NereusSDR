@@ -67,6 +67,8 @@ struct PathRacer::Entry {
     /// Ready and not yet taken: the standby.
     bool standby = false;
     QByteArray hello;
+    /// A direct rung started and not yet ready or ended (review Minor 8).
+    bool opening = false;
 };
 
 PathRacer::PathRacer(QObject* parent) : QObject(parent) {}
@@ -136,6 +138,9 @@ void PathRacer::addDirectUrls(const QList<QUrl>& urls, quint64 maxIncomingBytes)
         }
         seen.append(url);
         if (!QHostAddress(url.host()).isNull()) {
+            if (!admitDirect(url)) {
+                continue;
+            }
             const bool ipv4 = !isIpv6Host(url.host());
             addRung(new DirectPathRung(url, maxIncomingBytes),
                     ipv4 && ipv6Present ? kIpv4DelayMs : 0);
@@ -182,13 +187,64 @@ void PathRacer::resolveAndAdd(const QUrl& url, quint64 maxIncomingBytes, bool ip
             ordered.append({address, anyV6 ? kIpv4DelayMs : 0});
         }
         for (const auto& [address, delay] : ordered) {
+            // Review Minor 8: an IPv6 address keeps its scope (a link-local
+            // one reaches nothing without it; QUrl carries it as %25).
             QUrl resolved = url;
-            QHostAddress plain = address;
-            plain.setScopeId(QString());
-            resolved.setHost(plain.toString());
+            resolved.setHost(address.toString());
+            if (!admitDirect(resolved)) {
+                continue;
+            }
             const int index = addEntry(new DirectPathRung(resolved, maxIncomingBytes), delay);
             emit linesChanged();
             startRung(*m_entries[static_cast<size_t>(index)]);
+        }
+        checkAllEnded();
+    });
+}
+
+bool PathRacer::admitDirect(const QUrl& url)
+{
+    // An upgrade never dials an address whose rank cannot beat the path in
+    // use (a connection every five minutes, for ever, for nothing).
+    if (m_betterThan && rankFor(url) >= *m_betterThan) {
+        return false;
+    }
+    const QHostAddress address(url.host());
+    const QString key = (address.isNull() ? url.host().toLower() : address.toString())
+        + QLatin1Char('/') + QString::number(url.port());
+    if (m_directTargets.contains(key)) {
+        return false;
+    }
+    m_directTargets.insert(key);
+    return true;
+}
+
+void PathRacer::startWaitingDirect()
+{
+    while (m_directOpening < kMaxDirectOpening && !m_directWaiting.isEmpty() && !m_done) {
+        const int index = m_directWaiting.takeFirst();
+        Entry& e = *m_entries[static_cast<size_t>(index)];
+        if (e.ended || e.rung == nullptr) {
+            continue;
+        }
+        ++m_directOpening;
+        e.opening = true;
+        qCDebug(lcPathRacer) << "Trying" << e.rung->address();
+        e.rung->start();
+    }
+}
+
+void PathRacer::releaseDirectTurn(Entry& entry)
+{
+    if (!entry.opening) {
+        return;
+    }
+    entry.opening = false;
+    --m_directOpening;
+    // The next waiting direct rung, after this call's own bookkeeping.
+    QTimer::singleShot(0, this, [self = QPointer<PathRacer>(this)] {
+        if (self) {
+            self->startWaitingDirect();
         }
     });
 }
@@ -236,6 +292,15 @@ void PathRacer::startRung(Entry& entry)
     connect(rung, &Rung::ended, this, [this, index](Outcome outcome, const QString& reason) {
         endRung(index, outcome, reason);
     });
+    connect(rung, &Rung::relayNoted, this,
+            [this, rung](Outcome outcome, const QString& reason) {
+        for (const Line& line : std::as_const(m_lines)) {
+            if (line.outcome == Outcome::RelayOff) {
+                return;
+            }
+        }
+        addNote(PathKind::Relay, rung->address(), outcome, reason);
+    });
     entry.startTimer = new QTimer(this);
     entry.startTimer->setSingleShot(true);
     connect(entry.startTimer, &QTimer::timeout, this, [this, index] {
@@ -244,6 +309,13 @@ void PathRacer::startRung(Entry& entry)
         }
         Entry& e = *m_entries[static_cast<size_t>(index)];
         if (e.ended || e.rung == nullptr) {
+            return;
+        }
+        // Review Minor 8: direct connections take their turn within the
+        // Core's per-address handshake cap.
+        if (qobject_cast<DirectPathRung*>(e.rung.data()) != nullptr) {
+            m_directWaiting.append(index);
+            startWaitingDirect();
             return;
         }
         qCDebug(lcPathRacer) << "Trying" << e.rung->address();
@@ -307,6 +379,7 @@ void PathRacer::onHello(int index, const QByteArray& wire)
         return;
     }
     entry.hello = wire;
+    releaseDirectTurn(entry);
     const int rank = entry.rung ? entry.rung->rank() : Floor;
     const PathKind kind = entry.rung ? entry.rung->kind() : PathKind::Direct;
     Line& line = m_lines[entry.line];
@@ -394,6 +467,7 @@ void PathRacer::endRung(int index, Outcome outcome, const QString& reason)
     }
     entry.ended = true;
     entry.outcome = outcome;
+    releaseDirectTurn(entry);
     if (entry.startTimer != nullptr) {
         entry.startTimer->stop();
     }
@@ -644,6 +718,7 @@ void RendezvousPathRung::start()
     auto* dialer = new RendezvousDialer(this);
     m_dialer = dialer;
     dialer->setAllowRelay(m_allowRelay);
+    dialer->setCoreAnswersIntroductions(m_coreAnswersIntroductions);
     if (m_dialDeadlineMs > 0) {
         dialer->setDialDeadlineMs(m_dialDeadlineMs);
     }
@@ -661,6 +736,7 @@ void RendezvousPathRung::start()
         m_rank = path && path->relayed() ? PathRacer::ServiceRelayed : PathRacer::ServiceDirect;
         m_dialer = nullptr;
         dialer->deleteLater();
+        noteRelay(dialer);
         emit opened(transport);
     });
     connect(dialer, &RendezvousDialer::failed, this, [this, dialer](const QString& reason) {
@@ -668,14 +744,26 @@ void RendezvousPathRung::start()
             return;
         }
         m_done = true;
-        const PathRacer::Outcome outcome = dialer->coreDidNotAnswer()
+        const PathRacer::Outcome outcome = dialer->coreTooOld()
             ? PathRacer::Outcome::CoreTooOld
             : PathRacer::Outcome::NoAnswer;
         m_dialer = nullptr;
         dialer->deleteLater();
+        noteRelay(dialer);
         emit ended(outcome, reason);
     });
     dialer->dial(m_servers, m_stationId, m_device);
+}
+
+void RendezvousPathRung::noteRelay(const RendezvousDialer* dialer)
+{
+    // Review Minor 6: the Core answered without relay credentials though
+    // this computer asked for the relay. The live service always holds a
+    // TURN secret, so that is the Core's `relay = deny`.
+    if (m_allowRelay && dialer != nullptr && dialer->answered() && !dialer->relayOffered()) {
+        emit relayNoted(PathRacer::Outcome::RelayOff,
+                        QStringLiteral("The Core has the relay turned off."));
+    }
 }
 
 void RendezvousPathRung::stop()

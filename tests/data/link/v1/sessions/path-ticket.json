@@ -30,6 +30,8 @@
         {"from": "station", "message": {"class": "SliceModel", "key": "slice:0", "properties": "$any", "type": "object.create"}},
         {"from": "station", "message": {"type": "snapshot.complete"}},
         {"from": "client", "role": "scripted", "message": {"type": "command.invoke", "verb": "session.pathTicket", "id": 2901, "args": []}},
-        {"from": "station", "message": {"accepted": true, "affected": [], "id": 2901, "reason": "", "type": "command.result", "values": [{"kind": "utf8", "name": "ticket", "ordinal": 0, "value": "$string"}, {"kind": "i64", "name": "expiresInMs", "ordinal": 1, "value": 10000}], "verb": "session.pathTicket"}}
+        {"from": "station", "message": {"accepted": true, "affected": [], "id": 2901, "reason": "", "type": "command.result", "values": [{"kind": "utf8", "name": "ticket", "ordinal": 0, "value": "$string"}, {"kind": "i64", "name": "expiresInMs", "ordinal": 1, "value": 10000}], "verb": "session.pathTicket"}},
+        {"from": "client", "role": "scripted", "message": {"type": "command.invoke", "verb": "session.pathTicket", "id": 2902, "args": [{"ordinal": 0, "name": "conformanceWrongName", "kind": "utf8", "value": "now"}]}},
+        {"from": "station", "message": {"accepted": false, "affected": [], "id": 2902, "reason": "The request to move this connection was not understood.", "type": "command.result", "verb": "session.pathTicket"}}
     ]
 }

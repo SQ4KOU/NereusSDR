@@ -2258,6 +2258,16 @@ void StationClient::onTransportText(const QByteArray& wire)
                 m_racer->deleteLater();
                 m_racer = nullptr;
             }
+            // Review Minor 7: the rank from the pair the connection
+            // settled on; a standby no better than that is let go.
+            refreshPathRank();
+            if (standby && standby->rank >= m_pathRank) {
+                if (standby->transport) {
+                    standby->transport->closeLink(QStringLiteral("not needed"));
+                    standby->transport->deleteLater();
+                }
+                standby.reset();
+            }
             m_upgradeAttempt = 0;
             const QPointer<StationClient> self(this);
             emit handshakeComplete();
@@ -5745,6 +5755,11 @@ PathRacer* StationClient::newRacer(bool upgrade)
         return transport != nullptr
             && helloProvesPairedCore(hello, transport->peerCertificateSha256(), identity);
     });
+    // Review Minor 8: an upgrade knows its bar before any address is
+    // listed, so none that cannot beat it is dialled.
+    if (upgrade) {
+        racer->setBetterThan(m_pathRank);
+    }
     racer->addDirectUrls(m_dialPlan, kMaxIncomingMessageBytes);
     const ServiceRoute& route = m_serviceRoute;
     const bool routeUsable = !route.servers.isEmpty()
@@ -5770,15 +5785,15 @@ PathRacer* StationClient::newRacer(bool upgrade)
         if (m_serviceAnswerDeadlineMs > 0) {
             rung->setAnswerDeadlineMs(m_serviceAnswerDeadlineMs);
         }
+        // Review Minor 5: a Core whose last session declared the control
+        // channel is slow or offline when it does not answer, not old.
+        rung->setCoreAnswersIntroductions(route.controlChannelVersion >= 1);
         racer->addRung(rung);
         if (!upgrade && !route.relayAllowed) {
             racer->addNote(PathRacer::PathKind::Relay, serviceHost,
                            PathRacer::Outcome::RelayOff,
                            QStringLiteral("The Core has the relay turned off."));
         }
-    }
-    if (upgrade) {
-        racer->setBetterThan(m_pathRank);
     }
     return racer;
 }
@@ -5972,9 +5987,44 @@ void StationClient::scheduleUpgrade(bool advance)
     m_upgradeTimer->start(m_upgradeScheduleMs.at(index));
 }
 
+void StationClient::refreshPathRank()
+{
+    if (m_pathRank != PathRacer::ServiceRelayed && m_pathRank != PathRacer::ServiceDirect) {
+        return;
+    }
+    const auto* channel = qobject_cast<const DataChannelTransport*>(transport());
+    const std::optional<MediaIcePath> path =
+        channel != nullptr ? channel->selectedPath() : std::nullopt;
+    if (!path) {
+        return;
+    }
+    const int rank = path->relayed() ? PathRacer::ServiceRelayed : PathRacer::ServiceDirect;
+    if (rank == m_pathRank) {
+        return;
+    }
+    qCInfo(lcStationClient) << "The connection through the service settled on"
+                            << (path->relayed() ? "the relay" : "a direct pair");
+    m_pathRank = rank;
+    // The record names the path the session runs on.
+    for (StationConnectionAttempt::Try& attempt : m_attempt.tries) {
+        if (attempt.outcome == StationConnectionAttempt::Outcome::Connected
+            && (attempt.path == StationConnectionAttempt::Path::Relay
+                || attempt.path == StationConnectionAttempt::Path::Service)) {
+            attempt.path = path->relayed() ? StationConnectionAttempt::Path::Relay
+                                           : StationConnectionAttempt::Path::Service;
+        }
+    }
+    emit connectionAttemptChanged();
+}
+
 void StationClient::startUpgradeRace()
 {
     if (m_upgradeRacer || m_upgrade) {
+        return;
+    }
+    // Review Minor 7: look only for what beats the path in use now.
+    refreshPathRank();
+    if (m_pathRank <= PathRacer::ThisNetwork) {
         return;
     }
     if (!canMovePathNow()) {
@@ -6082,9 +6132,13 @@ void StationClient::onPathTicket(const SessionMessage& result)
     }
     SwitchableTransport* switchable = sessionTransport();
     if (!result.accepted || ticket.isEmpty() || switchable == nullptr || !canMovePathNow()) {
+        // Review Minor 14: a refusal for now (the radio on the air, here
+        // or at the Core) is not a failed look: the schedule stays on its
+        // current step.
         abandonUpgrade(result.accepted ? QStringLiteral("this connection cannot move now")
                                        : result.reason,
-                       true);
+                       /*reschedule=*/false);
+        scheduleUpgrade(/*advance=*/false);
         return;
     }
     const PathRacer::Ready upgrade = *m_upgrade;

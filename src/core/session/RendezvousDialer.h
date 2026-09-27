@@ -90,6 +90,12 @@ public:
     /// The words for that Core (link section 21.1).
     static constexpr const char* kCoreTooOldReason =
         "This Core can't be reached through the internet service. Updating the Core may help.";
+    /// Task 29 fix wave (review Minor 5): the words when the Core's last
+    /// session said it answers through the service (controlChannelVersion
+    /// 1), so it is slow or offline, not too old.
+    static constexpr const char* kCoreDidNotAnswerReason =
+        "The Core did not answer through the internet service. Check that it is on and "
+        "online.";
 
     explicit RendezvousDialer(QObject* parent = nullptr);
     ~RendezvousDialer() override;
@@ -113,11 +119,20 @@ public:
     /// without the relay; a Core with the relay turned off). Default true.
     /// Before dial().
     void setAllowRelay(bool allow) { m_allowRelay = allow; }
+    /// Task 29 fix wave (review Minor 5): the Core's last session declared
+    /// controlChannelVersion 1, so a Core that does not answer is not too
+    /// old. Before dial().
+    void setCoreAnswersIntroductions(bool answers) { m_coreAnswersIntroductions = answers; }
     /// The attempt ended because the Core never answered its introduction
-    /// (kCoreTooOldReason).
+    /// (kCoreTooOldReason, or kCoreDidNotAnswerReason for a Core known to
+    /// answer).
     bool coreDidNotAnswer() const { return m_coreDidNotAnswer; }
+    /// It never answered and nothing says it can: probably an older Core.
+    bool coreTooOld() const { return m_coreDidNotAnswer && !m_coreAnswersIntroductions; }
     /// The Core answered with relay credentials.
     bool relayOffered() const { return m_relayOffered; }
+    /// The Core's answer arrived.
+    bool answered() const { return m_answered; }
 
     /// The ICE settings of the connection, the relay included once known.
     std::optional<IceConfiguration> iceConfiguration() const { return m_ice; }
@@ -148,6 +163,7 @@ private:
     QTimer* m_answerDeadline = nullptr;
     bool m_allowRelay = true;
     bool m_coreDidNotAnswer = false;
+    bool m_coreAnswersIntroductions = false;
     bool m_relayOffered = false;
     bool m_started = false;
     bool m_done = false;

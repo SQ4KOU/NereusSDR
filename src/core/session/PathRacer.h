@@ -47,6 +47,7 @@
 
 #include <QByteArray>
 #include <QList>
+#include <QSet>
 #include <QObject>
 #include <QPointer>
 #include <QString>
@@ -104,6 +105,10 @@ public:
 signals:
     void opened(NereusSDR::SessionTransport* transport);
     void ended(NereusSDR::PathOutcome outcome, const QString& reason);
+    /// Task 29 fix wave (review Minor 6): something the attempt record
+    /// should say about the relay (the Core answered with the relay turned
+    /// off), as its own line.
+    void relayNoted(NereusSDR::PathOutcome outcome, const QString& reason);
 };
 
 class PathRacer : public QObject {
@@ -118,6 +123,11 @@ public:
     /// ones, when there is an IPv6 address to try (RFC 8305's connection
     /// attempt delay).
     static constexpr int kIpv4DelayMs = 250;
+    /// Task 29 fix wave (review Minor 8): direct connections this computer
+    /// has opening at once, all from one address as the Core sees it: the
+    /// Core takes StationServer::kMaxHandshakesPerAddress (2) at a time
+    /// and refuses the rest, so the others wait their turn.
+    static constexpr int kMaxDirectOpening = 2;
     /// How long an opened connection may take to bring the Core's hello
     /// before its rung ends: the Core's connect deadline (link section
     /// 12.2).
@@ -182,6 +192,8 @@ public:
     void addDirectUrls(const QList<QUrl>& urls, quint64 maxIncomingBytes);
     /// Only rungs better than `rank` count (an upgrade): a rung ready at a
     /// rank no better closes. Default: every rank counts.
+    /// Before addDirectUrls(), so an address whose rank cannot beat it is
+    /// never dialled (review Minor 8).
     void setBetterThan(int rank) { m_betterThan = rank; }
 
     void start();
@@ -206,6 +218,9 @@ public:
     /// Test seam: each rung's address and how long after start() it
     /// starts (names resolved so far included).
     QList<QPair<QString, int>> plannedStartsForTest() const;
+    /// Review Minor 8: direct rungs opening now, and waiting their turn.
+    int directOpeningForTest() const { return m_directOpening; }
+    int directWaitingForTest() const { return static_cast<int>(m_directWaiting.size()); }
 
 signals:
     /// The first ready rung.
@@ -237,6 +252,15 @@ private:
     int m_lookupsRunning = 0;
     std::optional<int> m_winnerRank;
     std::optional<int> m_betterThan;
+    /// Review Minor 8: every direct target (address and port) raced, so a
+    /// name that resolves to an address already listed is not dialled
+    /// twice; the direct rungs opening now and those waiting their turn.
+    QSet<QString> m_directTargets;
+    int m_directOpening = 0;
+    QList<int> m_directWaiting;
+    bool admitDirect(const QUrl& url);
+    void startWaitingDirect();
+    void releaseDirectTurn(Entry& entry);
     bool m_started = false;
     bool m_done = false;
     bool m_finished = false;
@@ -286,8 +310,11 @@ public:
     /// Test seam: the dialer's bounds.
     void setDialDeadlineMs(int ms) { m_dialDeadlineMs = ms; }
     void setAnswerDeadlineMs(int ms) { m_answerDeadlineMs = ms; }
+    /// RendezvousDialer::setCoreAnswersIntroductions (review Minor 5).
+    void setCoreAnswersIntroductions(bool answers) { m_coreAnswersIntroductions = answers; }
 
 private:
+    void noteRelay(const RendezvousDialer* dialer);
     QList<QUrl> m_servers;
     QString m_stationId;
     std::shared_ptr<const ClientDeviceIdentity> m_device;
@@ -295,6 +322,7 @@ private:
     int m_rank = PathRacer::ServiceDirect;
     int m_dialDeadlineMs = 0;
     int m_answerDeadlineMs = 0;
+    bool m_coreAnswersIntroductions = false;
     QPointer<RendezvousDialer> m_dialer;
     bool m_done = false;
 };

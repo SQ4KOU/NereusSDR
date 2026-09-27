@@ -68,7 +68,8 @@ RendezvousDialer::RendezvousDialer(QObject* parent)
         }
         qCInfo(lcRendezvousDialer) << "The Core did not answer its introduction";
         m_coreDidNotAnswer = true;
-        fail(QString::fromLatin1(kCoreTooOldReason));
+        fail(QString::fromLatin1(m_coreAnswersIntroductions ? kCoreDidNotAnswerReason
+                                                            : kCoreTooOldReason));
     });
 }
 

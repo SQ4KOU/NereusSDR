@@ -42,6 +42,7 @@
 
 #include <QPointer>
 #include <QSignalSpy>
+#include <QTcpServer>
 #include <QTimer>
 
 #include <memory>
@@ -63,6 +64,7 @@
 #include "fakes/LoopbackTransport.h"
 #include "models/RadioModel.h"
 #include "RendezvousTestHarness.h"
+#include "OperatorWording.h"
 
 using namespace NereusSDR;
 using namespace NereusSDR::Test::Rendezvous;
@@ -324,6 +326,60 @@ private slots:
     // IPv6 first: an IPv6 address starts at once and an IPv4 one
     // kIpv4DelayMs later; with no IPv6 address, IPv4 starts at once; a
     // name's addresses are ordered the same way once it resolves.
+    // Task 29 fix wave (review Minor 8): an upgrade never dials an address
+    // that cannot beat the path in use, a target is dialled once however
+    // it is named, and direct connections open two at a time (the Core's
+    // handshakes per address).
+    void anUpgradeDialsOnlyWhatCanWinAndEachTargetOnce()
+    {
+        {
+            PathRacer racer;
+            racer.setBetterThan(PathRacer::Direct);
+            racer.addDirectUrls({QUrl(QStringLiteral("wss://192.0.2.1:9")),
+                                 QUrl(QStringLiteral("wss://192.168.1.5:9"))},
+                                StationClient::kMaxIncomingMessageBytes);
+            const auto planned = racer.plannedStartsForTest();
+            QCOMPARE(planned.size(), 1);
+            QCOMPARE(planned.at(0).first, QStringLiteral("192.168.1.5:9"));
+        }
+        {
+            PathRacer racer;
+            racer.addDirectUrls({QUrl(QStringLiteral("wss://127.0.0.1:9")),
+                                 QUrl(QStringLiteral("wss://127.0.0.1:9/")),
+                                 QUrl(QStringLiteral("wss://localhost:9"))},
+                                StationClient::kMaxIncomingMessageBytes);
+            racer.start();
+            QTRY_VERIFY(racer.plannedStartsForTest().size() >= 2);
+            QTest::qWait(200);
+            int ipv4Loopback = 0;
+            for (const auto& [address, delay] : racer.plannedStartsForTest()) {
+                if (address == QLatin1String("127.0.0.1:9")) {
+                    ++ipv4Loopback;
+                }
+            }
+            QCOMPARE(ipv4Loopback, 1);
+            racer.cancel();
+        }
+        {
+            // Three addresses that accept and never answer: two open at
+            // once, the third waits its turn.
+            std::vector<std::unique_ptr<QTcpServer>> silent;
+            QList<QUrl> urls;
+            for (int i = 0; i < 3; ++i) {
+                auto server = std::make_unique<QTcpServer>();
+                QVERIFY(server->listen(QHostAddress::LocalHost));
+                urls.append(QUrl(QStringLiteral("wss://127.0.0.1:%1").arg(server->serverPort())));
+                silent.push_back(std::move(server));
+            }
+            PathRacer racer;
+            racer.addDirectUrls(urls, StationClient::kMaxIncomingMessageBytes);
+            racer.start();
+            QTRY_COMPARE(racer.directOpeningForTest(), PathRacer::kMaxDirectOpening);
+            QCOMPARE(racer.directWaitingForTest(), 1);
+            racer.cancel();
+        }
+    }
+
     void ipv6StartsAtOnceAndIpv4Later()
     {
         {
@@ -513,8 +569,17 @@ private slots:
 
     // A Core with the relay turned off: the service's path runs without
     // it, and the record says the Core turned it off.
+    void aCoreWithTheRelayOffIsRacedWithoutIt_data()
+    {
+        QTest::addColumn<bool>("recorded");
+        QTest::newRow("recorded at the last sign-in") << true;
+        // Task 29 fix wave (review Minor 6): nothing recorded yet; the
+        // Core's answer without relay credentials says it.
+        QTest::newRow("first connect") << false;
+    }
     void aCoreWithTheRelayOffIsRacedWithoutIt()
     {
+        QFETCH(bool, recorded);
         LocalService service;
         QVERIFY(service.start());
         Core core;
@@ -524,7 +589,7 @@ private slots:
         QVERIFY(rendezvous.start());
         QTRY_COMPARE_WITH_TIMEOUT(registered.size(), 1, 10000);
         Window window(core);
-        window.route(service, rendezvous.client()->stationId(), /*relayAllowed=*/false);
+        window.route(service, rendezvous.client()->stationId(), /*relayAllowed=*/!recorded);
         window.client->connectToStation(
             QUrl(QStringLiteral("wss://127.0.0.1:%1").arg(closedPort())), QString(), QString(),
             false, identityOf(core));
@@ -542,8 +607,31 @@ private slots:
 
     // A Core that never answers its introduction ends the service's path
     // in plain words, and the race fails with them.
+    void anOlderCoreIsToldInPlainWords_data()
+    {
+        QTest::addColumn<int>("recordedVersion");
+        QTest::addColumn<QString>("words");
+        QTest::addColumn<bool>("tooOld");
+        // No session recorded yet: probably a Core too old to answer.
+        QTest::newRow("nothing recorded")
+            << -1
+            << QStringLiteral("This Core can't be reached through the internet service. "
+                              "Updating the Core may help.")
+            << true;
+        // Task 29 fix wave (review Minor 5): its last session said it
+        // answers, so it is slow or offline, and is not told to update.
+        QTest::newRow("answered before")
+            << 1
+            << QStringLiteral("The Core did not answer through the internet service. Check "
+                              "that it is on and online.")
+            << false;
+    }
     void anOlderCoreIsToldInPlainWords()
     {
+        QFETCH(int, recordedVersion);
+        QFETCH(QString, words);
+        QFETCH(bool, tooOld);
+        QVERIFY(OperatorWording::isPlain(words));
         LocalService service;
         QVERIFY(service.start());
         Core core;
@@ -553,17 +641,15 @@ private slots:
         QVERIFY(rendezvous.start());
         QTRY_COMPARE_WITH_TIMEOUT(registered.size(), 1, 10000);
         Window window(core);
-        window.route(service, rendezvous.client()->stationId());
+        window.route(service, rendezvous.client()->stationId(), true, recordedVersion);
         window.client->setServiceRungDeadlinesForTest(0, 1500);
         QSignalSpy ended(window.client.get(), &StationClient::sessionEnded);
         window.client->connectToStation(
             QUrl(QStringLiteral("wss://127.0.0.1:%1").arg(closedPort())), QString(), QString(),
             false, identityOf(core));
         QTRY_VERIFY_WITH_TIMEOUT(!ended.isEmpty(), 20000);
-        QCOMPARE(ended.first().first().toString(),
-                 QStringLiteral("This Core can't be reached through the internet service. "
-                                "Updating the Core may help."));
-        QVERIFY(window.hasOutcome(StationConnectionAttempt::Outcome::CoreTooOld));
+        QCOMPARE(ended.first().first().toString(), words);
+        QCOMPARE(window.hasOutcome(StationConnectionAttempt::Outcome::CoreTooOld), tooOld);
         window.client->disconnectFromStation(QStringLiteral("test done"));
     }
 

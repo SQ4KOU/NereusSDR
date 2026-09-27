@@ -317,6 +317,18 @@ void ConnectionSelectorTest::editorOffersReachingTheCoreFromAnywhere()
     }
     SavedCoreTarget paired = initialTarget();
     paired.connection.identityFingerprint = QByteArray(32, '\x07');
+    {
+        // Task 29 fix wave (Minor 4): paired, but its service name is not
+        // known until a sign-in: shown disabled with the reason.
+        CoreTargetEditor editor(paired);
+        auto* check = editor.findChild<QCheckBox*>(QStringLiteral("coreTargetEditorReachAnywhere"));
+        auto* reason =
+            editor.findChild<QLabel*>(QStringLiteral("coreTargetEditorReachAnywhereReason"));
+        QVERIFY(!check->isEnabled());
+        QCOMPARE(reason->text(), QStringLiteral("Connect to the Core once to reach it from "
+                                                "anywhere."));
+        QVERIFY(!reason->isHidden());
+    }
     paired.connection.rendezvousId = QStringLiteral("abcdefghijklmnopqrstuvwxyz");
     paired.connection.relayAllowed = 1;
     {

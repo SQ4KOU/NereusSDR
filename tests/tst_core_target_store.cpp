@@ -675,6 +675,12 @@ private slots:
         QCOMPARE(options.serviceConnectRefusal(),
                  QStringLiteral("Pair with the Core to reach it from anywhere."));
         options.identityFingerprint = someIdentity();
+        // Task 29 fix wave (Minor 4): not before the Core's service name is
+        // known from a sign-in.
+        QCOMPARE(options.serviceConnectRefusal(),
+                 QStringLiteral("Connect to the Core once to reach it from anywhere."));
+        QVERIFY(NereusSDR::OperatorWording::isPlain(options.serviceConnectRefusal()));
+        options.rendezvousId = QStringLiteral("abcdefghijklmnopqrstuvwxyz");
         QVERIFY(options.serviceConnectRefusal().isEmpty());  // nothing recorded yet
         options.controlChannelVersion = 1;
         QVERIFY(options.serviceConnectRefusal().isEmpty());

@@ -38,10 +38,14 @@
 //   2026-09-24: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-27: iPhone app plan Task 29 fix wave (R-IOS-16, review Minor
+//               15): an introduced join must name its device. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
 
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QRandomGenerator>
@@ -605,6 +609,72 @@ private slots:
         QVERIFY(core.server->deviceStore()->list().isEmpty());
         // The same token on a direct connection still signs in.
         verifyAdmitted(core.tokenSignIn(token));
+    }
+
+    // Task 29 fix wave (review Minor 15): a connection the service
+    // introduced joins a session only when it names the paired device it
+    // was introduced for; one that names none (never in production) joins
+    // nothing, the named one moves the session.
+    void anIntroducedJoinMustNameItsDevice()
+    {
+        Core core(false);
+        Device phone;
+        QVERIFY(core.server->deviceStore()->add(phone.record()));
+        LoopbackTransport* app = core.open(QStringLiteral("192.168.1.20"));
+        verifyAdmitted(Core::signIn(
+            app, SessionMessages::authRequest(
+                     QString(), phone.block(Core::challengeOf(app), core.certSha256(),
+                                            core.stationSpki()))));
+        QTRY_VERIFY(app->receivedKinds().contains(QByteArrayLiteral("snapshot.complete")));
+        const auto ticketFor = [app](quint32 id) {
+            app->sendText(SessionMessages::encode(
+                SessionMessages::commandInvoke(QByteArrayLiteral("session.pathTicket"), id, {})));
+            QString ticket;
+            const bool arrived = QTest::qWaitFor([app, id, &ticket] {
+                for (const QByteArray& wire : app->received()) {
+                    const QJsonObject o = QJsonDocument::fromJson(wire).object();
+                    if (o.value(QStringLiteral("type")).toString() == QLatin1String("command.result")
+                        && o.value(QStringLiteral("id")).toInteger() == id) {
+                        for (const QJsonValue& v : o.value(QStringLiteral("values")).toArray()) {
+                            if (v.toObject().value(QStringLiteral("name")).toString()
+                                == QLatin1String("ticket")) {
+                                ticket = v.toObject().value(QStringLiteral("value")).toString();
+                            }
+                        }
+                        return true;
+                    }
+                }
+                return false;
+            }, 5000);
+            Q_UNUSED(arrived);
+            return ticket;
+        };
+        const auto join = [](LoopbackTransport* link, const QString& ticket) {
+            link->sendText(SessionMessages::encode(SessionMessages::hello(
+                kSessionProtocolMajor, kSessionProtocolMinor, 0, QStringLiteral("NereusSDR iPhone"),
+                {kSessionProtocolMajor}, {{"deviceAuth", 1}})));
+            link->sendText(SessionMessages::encode(SessionMessages::pathJoin(ticket)));
+        };
+
+        const QString first = ticketFor(1);
+        QVERIFY(!first.isEmpty());
+        LoopbackTransport* unnamed = core.openIntroduced(QStringLiteral("intro-a"));
+        join(unnamed, first);
+        QTRY_VERIFY(!firstOfType(unnamed->received(), QStringLiteral("session.end")).isEmpty());
+        QCOMPARE(core.server->sessionsMoved(), 0);
+        QVERIFY(app->isOpen());
+
+        const QString second = ticketFor(2);
+        QVERIFY(!second.isEmpty());
+        auto* named = new LoopbackTransport(QStringLiteral("app named"));
+        auto* station = new LoopbackTransport(QStringLiteral("introduced named"));
+        station->linkTo(named);
+        core.clients.append(named);
+        core.server->acceptIntroducedTransport(station, QStringLiteral("intro-b"),
+                                               phone.key.fingerprint());
+        QTRY_VERIFY(!named->received().isEmpty());
+        join(named, second);
+        QTRY_COMPARE(core.server->sessionsMoved(), 1);
     }
 
     void aPairedDeviceSignsInThroughTheService()
