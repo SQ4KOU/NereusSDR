@@ -478,20 +478,80 @@ def test_the_rate_cap_drops_what_is_over_it_each_way():
     asyncio.run(go())
 
 
-def test_tcp_nodelay_on_every_leg():
+def test_legs_come_over_the_unix_socket_with_its_buffers():
+    """Section 12.5: Caddy reaches the relay over a Unix stream socket whose
+    buffers the relay sets on every connection it accepts (the send buffer
+    is what the hop to Caddy can hold), and whose file only its owner (in
+    production, Caddy's group too) may open."""
+    import os
+    import socket
+    import stat
+
     async def go():
         async with live_relay() as (relay, clock, uri):
-            import socket
-
+            assert stat.S_ISSOCK(os.stat(relay.config.socket).st_mode)
+            assert stat.S_IMODE(os.stat(relay.config.socket).st_mode) == 0o600
             core_token, device_token, _ = grant_pair()
             await join(uri, core_token)
             await join(uri, device_token)
             assert len(relay.legs) == 2
             for leg in relay.legs:
                 sock = leg.transport.ws.transport.get_extra_info("socket")
-                assert sock.getsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY) != 0
+                assert sock.family == socket.AF_UNIX
+                # Linux reports twice the value set; macOS about the value.
+                assert 16384 <= sock.getsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF) <= 2 * 16384
+            path = relay.config.socket
+        assert not os.path.exists(path), "the socket file is removed when the relay stops"
 
     asyncio.run(go())
+
+
+def test_a_request_without_x_forwarded_for_is_refused():
+    """There is no peer address on a Unix socket, so the relay takes the
+    client's from X-Forwarded-For, which Caddy sets, and refuses a request
+    without one (400) before any WebSocket opens."""
+    import socket
+
+    async def go():
+        async with live_relay() as (relay, clock, uri):
+            path = uri[len("unix:"):]
+            loop = asyncio.get_running_loop()
+
+            def ask(extra: str) -> bytes:
+                s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                s.connect(path)
+                s.sendall((
+                    "GET /v1/relay HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+                    "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n" + extra + "\r\n"
+                ).encode())
+                data = s.recv(200)
+                s.close()
+                return data
+
+            assert (await loop.run_in_executor(None, ask, "")).startswith(b"HTTP/1.1 400")
+            assert (await loop.run_in_executor(None, ask, "X-Forwarded-For: not-an-address\r\n")).startswith(b"HTTP/1.1 400")
+            assert (await loop.run_in_executor(None, ask, "X-Forwarded-For: 192.0.2.7\r\n")).startswith(b"HTTP/1.1 101")
+            assert relay.legs == set() or all(leg.group == "192.0.2.7" for leg in relay.legs)
+
+    asyncio.run(go())
+
+
+def test_a_stale_socket_file_is_replaced():
+    import os
+
+    from relay_helpers import short_directory
+
+    directory = short_directory()
+    path = os.path.join(directory, "relay.sock")
+    open(path, "w").close()
+
+    async def go():
+        async with live_relay(socket=path) as (relay, clock, uri):
+            core_token, _, _ = grant_pair()
+            await join(uri, core_token)
+
+    asyncio.run(go())
+    os.rmdir(directory)
 
 
 def test_shutdown_tells_every_leg():

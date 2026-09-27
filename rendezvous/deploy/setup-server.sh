@@ -119,7 +119,11 @@ readonly CREDENTIAL_PATH="/run/credentials/${UNIT_NAME}/turn-secret"
 readonly RELAY_CREDENTIAL_PATH="/run/credentials/${UNIT_NAME}/relay-secret"
 readonly RELAY_OWN_CREDENTIAL_PATH="/run/credentials/${RELAY_UNIT_NAME}/relay-secret"
 readonly SERVICE_PORT=8710
-readonly WS_RELAY_PORT=8711
+# The WebSocket relay's Unix socket (in the RuntimeDirectory its unit
+# makes), mode and group: Caddy (group caddy) may connect, nobody else.
+readonly WS_RELAY_SOCKET="/run/nereus-relay/relay.sock"
+readonly WS_RELAY_SOCKET_MODE="0660"
+readonly WS_RELAY_SOCKET_GROUP="caddy"
 readonly RELAY_PORTS=(3478 443)
 readonly PACKAGES=(coturn python3 python3-websockets python3-cryptography rsync)
 # The site address in the repository's Caddyfile, replaced by RV_HOST.
@@ -883,8 +887,10 @@ note "${SERVICE_CONF}${would}: ${result}"
     printf '# rendezvous/deploy/setup-server.sh; every key not here has the\n'
     printf "# default in rendezvous/server/relay.conf.sample.\n\n"
     printf '[relay]\n'
-    printf 'listen = 127.0.0.1:%s [::1]:%s\n' "$WS_RELAY_PORT" "$WS_RELAY_PORT"
-    printf 'trusted_proxies = 127.0.0.1 ::1\n'
+    printf '# Caddy reaches it here (reverse_proxy unix//...); only its group may.\n'
+    printf 'socket = %s\n' "$WS_RELAY_SOCKET"
+    printf 'socket_mode = %s\n' "$WS_RELAY_SOCKET_MODE"
+    printf 'socket_group = %s\n' "$WS_RELAY_SOCKET_GROUP"
     printf '# systemd hands the secret over here (LoadCredential=).\n'
     printf 'relay_secret_file = %s\n' "$RELAY_OWN_CREDENTIAL_PATH"
     printf '\n[limits]\n'
@@ -1091,6 +1097,10 @@ else
     if [[ "$manage_caddy" == yes ]]; then
         enable_units caddy
     fi
+    # The relay's unit takes the caddy group (SupplementaryGroups=), which
+    # Caddy's package makes; without it systemd cannot start the relay.
+    getent group "$WS_RELAY_SOCKET_GROUP" >/dev/null \
+        || die "there is no ${WS_RELAY_SOCKET_GROUP} group (Caddy's package makes it); the WebSocket relay needs it for its socket"
     enable_units coturn "$UNIT_NAME" "$RELAY_UNIT_NAME" nereus-data-use.timer
     if [[ "$manage_caddy" == yes ]]; then
         apply_plan caddy "$caddy_plan"
@@ -1112,10 +1122,11 @@ fi
 
 if ! (( dry_run || no_start )); then
     # coturn: UDP 3478 and 443 on the two public addresses, and no TCP port.
-    # The service: TCP 8710, and the WebSocket relay TCP 8711, on loopback
-    # only. Caddy: no UDP (HTTP/3 off).
-    held="$(socket_holders 3478 443 "$SERVICE_PORT" "$WS_RELAY_PORT")"
-    note "sockets on UDP 3478, UDP 443, TCP ${SERVICE_PORT} and TCP ${WS_RELAY_PORT}:"
+    # The service: TCP 8710 on loopback only. The WebSocket relay: its Unix
+    # socket, mode 0660, group caddy, and no IP socket. Caddy: no UDP
+    # (HTTP/3 off).
+    held="$(socket_holders 3478 443 "$SERVICE_PORT")"
+    note "sockets on UDP 3478, UDP 443 and TCP ${SERVICE_PORT}:"
     printf '%s\n' "$held" | sed 's/^/      /'
     every="$(socket_holders)"
     if [[ -n "$(awk '$1 == "tcp" && $5 == "turnserver"' <<<"$every")" ]]; then
@@ -1130,11 +1141,18 @@ if ! (( dry_run || no_start )); then
                 || die "coturn does not hold UDP ${port} on ${addr}"
         done
     done
-    for port in "$SERVICE_PORT" "$WS_RELAY_PORT"; do
-        if [[ -n "$(awk -v p="$port" '$1 == "tcp" && $2 == p && $3 != "127.0.0.1" && $3 != "::1"' <<<"$held")" ]]; then
-            die "something listens on TCP ${port} beyond loopback"
+    if [[ -n "$(awk -v p="$SERVICE_PORT" '$1 == "tcp" && $2 == p && $3 != "127.0.0.1" && $3 != "::1"' <<<"$held")" ]]; then
+        die "something listens on TCP ${SERVICE_PORT} beyond loopback"
+    fi
+    if (( relay_code_present )); then
+        relay_socket="$(stat -c '%F %a %G' "$WS_RELAY_SOCKET" 2>/dev/null || true)"
+        [[ "$relay_socket" == "socket ${WS_RELAY_SOCKET_MODE#0} ${WS_RELAY_SOCKET_GROUP}" ]] \
+            || die "the WebSocket relay's socket ${WS_RELAY_SOCKET} is not a socket of mode ${WS_RELAY_SOCKET_MODE} and group ${WS_RELAY_SOCKET_GROUP} (found: ${relay_socket:-nothing})"
+        if [[ -n "$(awk '$1 == "tcp" || $1 == "udp"' <<<"$(socket_holders)" | awk '$5 == "python3" && $2 != '"$SERVICE_PORT"'')" ]]; then
+            die "a Python program holds an IP port other than the service's"
         fi
-    done
+        note "the WebSocket relay listens on ${WS_RELAY_SOCKET} (socket, mode ${WS_RELAY_SOCKET_MODE}, group ${WS_RELAY_SOCKET_GROUP}) and on no IP port"
+    fi
     note "coturn holds UDP 3478 and 443 on both addresses and no TCP port; Caddy holds no UDP port"
 fi
 
@@ -1149,7 +1167,7 @@ if ! (( dry_run )); then
     fi
 fi
 note "service name:  ${rv_host} (Caddy forwards it to 127.0.0.1:${SERVICE_PORT} and [::1]:${SERVICE_PORT})"
-note "ws relay:      wss://${rv_host}/v1/relay (Caddy forwards it to 127.0.0.1:${WS_RELAY_PORT} and [::1]:${WS_RELAY_PORT}); ${ws_relay_slots} sessions, MemoryMax ${ws_relay_limit_mb} MiB"
+note "ws relay:      wss://${rv_host}/v1/relay (Caddy forwards it to the Unix socket ${WS_RELAY_SOCKET}); ${ws_relay_slots} sessions, MemoryMax ${ws_relay_limit_mb} MiB"
 note "relay names:   ${relay_host4} (A ${public4}), ${relay_host6} (AAAA ${public6})"
 note "relay ports:   UDP 3478 and 443; relays on UDP 61000 to 65535"
 note "relay size:    ${total_quota} slots, ${user_quota} per station id, bps-capacity ${bps_capacity} bytes/s"

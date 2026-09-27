@@ -124,13 +124,23 @@ start_unit() {
     envs=()
     while IFS= read -r line; do envs+=("$line"); done < <(sed -n 's/^Environment=//p' "$unit")
     exec_start="$(sed -n 's/^ExecStart=//p' "$unit")"
+    # RuntimeDirectory= and SupplementaryGroups=, as systemd would.
+    local runtime extra groups_arg=--clear-groups
+    runtime="$(sed -n 's/^RuntimeDirectory=//p' "$unit")"
+    if [[ -n "$runtime" ]]; then
+        install -d -o nobody -m "$(sed -n 's/^RuntimeDirectoryMode=//p' "$unit")" "/run/${runtime}"
+    fi
+    extra="$(sed -n 's/^SupplementaryGroups=//p' "$unit")"
+    if [[ -n "$extra" ]]; then
+        groups_arg="--groups=${extra// /,}"
+    fi
     # shellcheck disable=SC2086
-    setsid env "${envs[@]}" runuser -u nobody -- $exec_start </dev/null >"/run/$1.log" 2>&1 &
+    setsid env "${envs[@]}" setpriv --reuid=nobody --regid=nogroup "$groups_arg" $exec_start </dev/null >"/run/$1.log" 2>&1 &
     for _ in $(seq 50); do grep -q "$3" "/run/$1.log" && break; sleep 0.2; done
     grep -q "$3" "/run/$1.log" || { cat "/run/$1.log" >&2; exit 1; }
 }
 start_unit nereus-rendezvous nereus_rendezvous 'listening on 2 addresses, relay on, relay grants on'
-start_unit nereus-relay nereus_relay 'listening on 2 addresses, 16 slots'
+start_unit nereus-relay nereus_relay 'listening on its Unix socket, 16 slots'
 
 EOS
 }

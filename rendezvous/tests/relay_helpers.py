@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import tempfile
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Dict, Optional, Tuple
 
@@ -17,10 +18,12 @@ from nereus_relay.relay import TAG_END, TAG_JOIN, TAG_PEER, TAG_READY, Relay
 
 try:  # websockets 13 and later
     from websockets.asyncio.client import connect as _ws_connect
+    from websockets.asyncio.client import unix_connect as _ws_unix_connect
 
     _HEADERS_KW = "additional_headers"
 except ImportError:  # websockets 10.x: the legacy client
     from websockets.legacy.client import connect as _ws_connect  # type: ignore[no-redef]
+    from websockets.legacy.client import unix_connect as _ws_unix_connect  # type: ignore[no-redef]
 
     _HEADERS_KW = "extra_headers"
 
@@ -35,6 +38,9 @@ STATION_B = relaygrant.station_of(SECRET, "b" * 26)
 def make_relay_config(**overrides: Any) -> Config:
     config = Config()
     config.relay_secret = SECRET
+    # Tests run as one user: no group to set, and the owner alone connects.
+    config.socket_group = ""
+    config.socket_mode = 0o600
     config.ping_interval_seconds = 0
     config.ping_timeout_seconds = 0
     for key, value in overrides.items():
@@ -45,13 +51,21 @@ def make_relay_config(**overrides: Any) -> Config:
 @asynccontextmanager
 async def live_relay(**overrides: Any) -> AsyncIterator[Tuple[Relay, ManualClock, str]]:
     clock = ManualClock(WALL)
+    directory = short_directory()
+    overrides.setdefault("socket", os.path.join(directory, "relay.sock"))
     relay = Relay(make_relay_config(**overrides), clock)
-    server = await relay_transport.start(relay, "127.0.0.1", 0)
-    port = server.sockets[0].getsockname()[1]
+    server = await relay_transport.start(relay)
     try:
-        yield relay, clock, f"ws://127.0.0.1:{port}/v1/relay"
+        yield relay, clock, "unix:" + relay.config.socket
     finally:
         await relay_transport.stop([server], relay, grace_s=0.05, timeout_s=5)
+        os.rmdir(directory)
+
+
+def short_directory() -> str:
+    """A directory for a Unix socket whose path fits the platform's limit
+    (104 bytes on macOS, where the default temporary directory is long)."""
+    return tempfile.mkdtemp(prefix="nr", dir="/tmp")
 
 
 def grant_pair(
@@ -70,6 +84,8 @@ def grant_pair(
 
 
 async def connect(uri: str, address: str = "192.0.2.1", max_queue: Optional[int] = None) -> Any:
+    """A leg as Caddy forwards it: to "unix:<path>" (the relay's socket) with
+    X-Forwarded-For, or to a ws:// or wss:// URL."""
     kwargs: Dict[str, Any] = {
         _HEADERS_KW: {"X-Forwarded-For": address},
         "max_size": None,
@@ -78,6 +94,8 @@ async def connect(uri: str, address: str = "192.0.2.1", max_queue: Optional[int]
     }
     if max_queue is not None:
         kwargs["max_queue"] = max_queue
+    if uri.startswith("unix:"):
+        return await _ws_unix_connect(uri[len("unix:"):], "ws://localhost/v1/relay", **kwargs)
     return await _ws_connect(uri, **kwargs)
 
 

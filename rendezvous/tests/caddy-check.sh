@@ -23,7 +23,8 @@
 #      WebSockets over HTTP/2 (RFC 8441) and what one gets.
 #   6. Caddy holds no UDP port (HTTP/3 stays off: UDP 443 is coturn's).
 #   7. wss://rv.nereussdr.com/v1/relay reaches the WebSocket relay
-#      (nereus-relay on loopback 8711; rendezvous document section 12): a
+#      (nereus-relay on its Unix socket, which only Caddy's group may
+#      open; rendezvous document section 12): a
 #      Core leg and a device leg of one grant join, datagrams up to the
 #      1500-byte cap cross both ways unchanged, the relay counts legs by
 #      the client's own address, and a plain request there gets 426.
@@ -135,8 +136,9 @@ exit 1
 EOS
 pass "the service listens on 127.0.0.1:8710 and [::1]:8710"
 
-# The WebSocket relay, as nobody, on loopback, with two connections allowed
-# per address for step 7.
+# The WebSocket relay, as nobody with the caddy group, on its Unix socket
+# as relay.conf on the server has it, with two connections allowed per
+# address for step 7.
 docker exec -i "$server" bash -s <<'EOS'
 set -euo pipefail
 python3 -c 'import secrets; print(secrets.token_hex(32))' > /run/rv/relay-secret
@@ -144,22 +146,40 @@ chown nobody /run/rv/relay-secret && chmod 600 /run/rv/relay-secret
 cp /run/rv/relay-secret /run/rv/relay-secret.probe && chmod 644 /run/rv/relay-secret.probe
 cat > /run/rv/relay.conf <<'CONF'
 [relay]
-listen = 127.0.0.1:8711 [::1]:8711
+socket = /run/nereus-relay/relay.sock
+socket_mode = 0660
+socket_group = caddy
 relay_secret_file = /run/rv/relay-secret
 [limits]
 connections_per_address = 2
 CONF
+install -d -o nobody -m 0755 /run/nereus-relay
 cd / && PYTHONPATH=/repo/rendezvous/server PYTHONDONTWRITEBYTECODE=1 \
-    setsid runuser -u nobody -- python3 -m nereus_relay --config /run/rv/relay.conf \
+    setsid setpriv --reuid=nobody --regid=nogroup --groups=caddy python3 -m nereus_relay --config /run/rv/relay.conf \
     > /run/rv/relay.log 2>&1 < /dev/null &
 for _ in $(seq 50); do
-    grep -q "listening on 2 addresses" /run/rv/relay.log 2>/dev/null && exit 0
+    grep -q "listening on its Unix socket" /run/rv/relay.log 2>/dev/null && exit 0
     sleep 0.2
 done
 cat /run/rv/relay.log >&2
 exit 1
 EOS
-pass "the WebSocket relay listens on 127.0.0.1:8711 and [::1]:8711"
+docker exec -i "$server" bash -s <<'EOS' || fail "the relay's socket is not as relay.conf has it, or someone outside Caddy's group can open it"
+set -euo pipefail
+[[ "$(stat -c '%F %a %U %G' /run/nereus-relay/relay.sock)" == "socket 660 nobody caddy" ]]
+open_as() {
+    runuser -u "$1" -- python3 -c 'import socket, sys
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+try:
+    s.connect("/run/nereus-relay/relay.sock")
+except PermissionError:
+    sys.exit(3)'
+}
+open_as caddy
+status=0; open_as daemon || status=$?
+[[ "$status" -eq 3 ]]
+EOS
+pass "the WebSocket relay listens on its Unix socket /run/nereus-relay/relay.sock (socket 660, group caddy): the caddy account may open it, another account may not"
 
 caddy_run() {
     # $1: start or reload; $2: the config.

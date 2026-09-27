@@ -175,7 +175,7 @@ def test_relay_sample_configuration_is_the_defaults(tmp_path):
     expected.relay_secret = b"s" * 64
     assert loaded == expected
     assert (expected.slots, expected.rate_bytes_per_second, expected.rejoin_ms, expected.idle_timeout_ms) == (16, 80000, 30000, 30000)
-    assert expected.listen == [("127.0.0.1", 8711), ("::1", 8711)]
+    assert (expected.socket, expected.socket_mode, expected.socket_group) == ("/run/nereus-relay/relay.sock", 0o660, "caddy")
 
 
 @pytest.mark.parametrize(
@@ -188,7 +188,9 @@ def test_relay_sample_configuration_is_the_defaults(tmp_path):
         "[limits]\nnot_a_key = 1\n",
         "[other]\n",
         "[relay]\nlog_level = loud\n",
-        "[relay]\nlisten = nowhere\n",
+        "[relay]\nsocket = relative/relay.sock\n",
+        "[relay]\nsocket_mode = 0999\n",
+        "[relay]\nlisten = 127.0.0.1:8711\n",
     ],
 )
 def test_relay_configuration_refused(tmp_path, text):
