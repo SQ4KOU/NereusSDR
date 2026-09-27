@@ -1580,6 +1580,19 @@ void SpectrumWidget::refreshRemoteTraceProjection()
     }
     const bool sameWindow = qFuzzyCompare(m_remoteTraceCentreHz, m_centerHz)
         && qFuzzyCompare(m_remoteTraceSpanHz, m_bandwidthHz);
+    const bool overlaps = m_remoteTraceCentreHz - m_remoteTraceSpanHz / 2.0
+            < m_centerHz + m_bandwidthHz / 2.0
+        && m_remoteTraceCentreHz + m_remoteTraceSpanHz / 2.0
+            > m_centerHz - m_bandwidthHz / 2.0;
+    if (!overlaps) {
+        // Nothing the Core sent lies in this window: no trace, not an
+        // invented flat line.
+        m_renderedPixels.clear();
+        m_undentedPixels.clear();
+        m_hasNewSpectrum = true;
+        update();
+        return;
+    }
     m_renderedPixels = sameWindow ? m_remoteTraceCaptured
         : reprojectedToView(m_remoteTraceCaptured, m_remoteTraceCentreHz, m_remoteTraceSpanHz);
     if (visualNotchWillDent()) {
