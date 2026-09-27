@@ -39,6 +39,11 @@
 //                 (remoteMeterReadingsNotSentText), as Task 39's transmit
 //                 meters are. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code.
+//   2026-09-27 - R-R3-49 (remote-window parity Task 33): panMaxBinSource
+//                 (Max Bin measured by each window from its own pan); the
+//                 S-meter's Level and Compression TX modes from the handed-
+//                 out MIC and COMP readings. J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -101,6 +106,7 @@ class WdspEngine;
 class RadioModel;
 class SliceModel;
 class TransmitState;
+class SpectrumWidget;
 
 // Binding IDs map to WDSP meter types (RxMeterType enum values)
 namespace MeterBinding {
@@ -188,6 +194,17 @@ public:
     void setRemoteRadioModel(RadioModel* model,
                              std::function<bool()> snapshotReady,
                              std::function<double(const SliceModel*)> maxBinSource = {});
+
+    // R-R3-49 (parity Task 33): Max Bin stays a measurement each window
+    // makes from its own display (the controller's ruling of 2026-09-27):
+    // the peak of the slice's passband on the slice's own pan, read from
+    // the displayed trace after the detector and averaging, exactly as the
+    // local window's reading (SpectrumWidget::peakDbmInSlicePassband, fed
+    // by MainWindow's spectrumFrameRendered hook). `spectrumFor` finds a
+    // pan's spectrum by its key; no pan, or a passband off it, reads the
+    // no-reading value (-400).
+    static std::function<double(const SliceModel*)> panMaxBinSource(
+        std::function<SpectrumWidget*(const QString& panKey)> spectrumFor);
 
     // R-R3-13 / R-R3-49 (remote-window parity Task 15): whether the Core
     // sends its ADC and AGC readings on its slices (meterReadingsVersion 1).
@@ -428,6 +445,10 @@ private:
     QString m_remoteReadingsUnavailableShown;
     // Task 39: the Core's transmit state and whether it sends it.
     QPointer<TransmitState> m_remoteTransmitState;
+    // Parity Task 33: the S-meter's Level and Compression TX modes, the
+    // last MIC and COMP readings handed out (setMicMeters takes both).
+    float m_sMeterMicDb{-50.0f};
+    float m_sMeterCompDb{0.0f};
     std::function<QString()> m_remoteTransmitUnavailable;
     // What the targets were last told (refreshRemoteTxAvailability).
     bool m_remoteTxAvailabilityShown{false};

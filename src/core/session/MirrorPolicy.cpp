@@ -132,6 +132,10 @@
 //   2026-09-26 - Parity Task 28 (R-R3-49, A11): TransmitState highSwr and
 //                 swrWindBackLatched Outbound (txDisplayVersion 1). J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-27 - Parity Task 33 (R-R3-49, R-R3-32): TransmitState
+//                 forwardAdcRaw and reflectedAdcRaw Outbound
+//                 (txReadingsVersion 1). J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorPolicy.h"
@@ -881,6 +885,10 @@ const MirrorPolicy::Entry kEntries[] = {
     // remote window's high-SWR border on its transmitting pan.
     { "TransmitState", "highSwr", MirrorDirection::Outbound },
     { "TransmitState", "swrWindBackLatched", MirrorDirection::Outbound },
+    // Parity Task 33 (txReadingsVersion 1): the radio's raw forward and
+    // reflected power readings, for a remote window's PA Values page.
+    { "TransmitState", "forwardAdcRaw", MirrorDirection::Outbound },
+    { "TransmitState", "reflectedAdcRaw", MirrorDirection::Outbound },
 
     // Normal PS3 configuration is distinct from operational arming/actions.
     { "PureSignalSettings", "autoCalEnabled", MirrorDirection::Bidirectional },

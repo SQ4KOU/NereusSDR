@@ -8765,6 +8765,16 @@ nereus_add_test(tst_remote_pa_pages
     EXTRA_LABELS session)
 target_compile_definitions(tst_remote_pa_pages PRIVATE NEREUS_BUILD_TESTS)
 
+# R-R3-49 / R-R3-32 / R-IOS-13 (remote-window parity Task 33): the CFC bar
+# chart and PA Values' transmit readings in a remote window
+# (txReadingsVersion 1), the remote window's transmit bars, meters and
+# S-meter from the Core, and Max Bin measured from the slice's own pan.
+# Loopback and a test TxChannel only, no RF, no audio device.
+nereus_add_test(tst_remote_tx_readings
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+target_compile_definitions(tst_remote_tx_readings PRIVATE NEREUS_BUILD_TESTS)
+
 # R-R3-49 (remote-window parity Task 7): PureSignal arming from a remote
 # window: a Core at transmitSettingsVersion 7 takes Single Cal, Automatic,
 # Apply current correction, Restore and the PureSignal settings off the air

@@ -16,6 +16,10 @@
 //                                    (seedUpgradedCoreToken), as Part C's
 //                                    paired-device sign-in requires.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-27  J.J. Boyd / KG4VCF  Parity Task 33: PA Values shows the
+//                                    Core's transmit readings, and the
+//                                    reason below txReadingsVersion 1.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -532,8 +536,9 @@ void TstRemotePaPages::remotePaReadingsShowOnRadioStatusPaValuesAndMeters()
     QCOMPARE(values.paCurrentTextForTest(), QStringLiteral("1.50 A"));
     QCOMPARE(values.supplyVoltsTextForTest(), QStringLiteral("12.1 V"));
     QVERIFY(values.paTempTextForTest().contains(QStringLiteral("38.0")));
-    // The Core's transmit readings wait for remote transmit.
-    QCOMPARE(values.fwdAdcTextForTest(), QStringLiteral("Unavailable"));
+    // Parity Task 33: the Core's transmit readings (txReadingsVersion 1),
+    // its raw forward reading before any sample.
+    QCOMPARE(values.fwdAdcTextForTest(), QStringLiteral("0"));
     tick();
     QCOMPARE(volts->value(), 13.8);
     QCOMPARE(amps->value(), 1.5);
@@ -617,7 +622,7 @@ void TstRemotePaPages::newReasonsArePlain()
     for (const QString& text : {
              QStringLiteral("Unavailable"), QStringLiteral("From the Core"),
              QStringLiteral("PA Status, from the Core"),
-             QStringLiteral("The Core sends this reading when this window can transmit."),
+             QStringLiteral("This Core does not send this reading. Updating the Core may help."),
              QStringLiteral("Not measured yet"),
              QStringLiteral("Expected a boolean TX inhibit observation.")}) {
         QVERIFY2(OperatorWording::isPlain(text), qPrintable(text));

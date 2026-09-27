@@ -98,6 +98,9 @@
 //   2026-09-27 - R-IOS-26 / R-R3-49 (iPhone plan Task 22, parity Task 20):
 //                stationFreedvVersion, after txMonitorAudioVersion. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-27 - R-R3-49 / R-R3-32 (parity Task 33): txReadingsVersion,
+//                right after txStateVersion and only with it. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationCapabilities.h"
@@ -247,6 +250,11 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
             updates.append(stringEntry("txRefusalFix", txRefusalFix));
             // iPhone app plan Task 39: the `txState` object, with it.
             updates.append(intEntry("txStateVersion", txStateVersion));
+            // Remote-window parity Task 33 (R-R3-49): the transmit
+            // readings (txState's raw forward and reflected power, the CFC
+            // compression stream), right after txStateVersion and only with
+            // it.
+            updates.append(intEntry("txReadingsVersion", txReadingsVersion));
         }
     }
     return updates;
@@ -448,7 +456,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                    || u.name == "stationFreedvVersion"
                    || u.name == "sessionHolderVersion"
                    || u.name == "remoteTxVersion"
-                   || u.name == "txStateVersion") {
+                   || u.name == "txStateVersion"
+                   || u.name == "txReadingsVersion") {
             // R-R3-47 / R-R3-22 / R-R3-48: sent in the same block as the
             // four above.
             caps.radioIdentityEntries = true;
@@ -481,6 +490,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                     caps.remoteTxVersion = version;
                 } else if (u.name == "txStateVersion") {
                     caps.txStateVersion = version;
+                } else if (u.name == "txReadingsVersion") {
+                    caps.txReadingsVersion = version;
                 } else if (u.name == "remoteTgxlControlVersion") {
                     caps.remoteTgxlControlVersion = version;
                 } else if (u.name == "transmitSettingsVersion") {

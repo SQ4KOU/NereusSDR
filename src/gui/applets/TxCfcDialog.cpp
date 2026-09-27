@@ -40,6 +40,10 @@
 //                 controls with a reason in a remote window while the Core
 //                 cannot take a CFC change. J.J. Boyd (KG4VCF), AI-assisted
 //                 via Anthropic Claude Code.
+//   2026-09-27 - R-R3-49 (parity Task 33): the bar chart's bin mapping in
+//                 drawCompressionBins, shared by the local timer and a remote
+//                 window's copy of the Core's CFC display. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -215,7 +219,7 @@ void TxCfcDialog::setSettingsPermitted(bool permitted, const QString& reason)
     // R-R3-49 (parity Task 4). Every control is a direct child of the
     // dialog (the layouts own none of them).
     for (QWidget* child : findChildren<QWidget*>(QString(), Qt::FindDirectChildrenOnly)) {
-        if (child == m_settingsReasonLabel) { continue; }
+        if (child == m_settingsReasonLabel || child == m_barChartReasonLabel) { continue; }
         child->setEnabled(permitted);
     }
     if (m_settingsReasonLabel) {
@@ -346,6 +350,13 @@ void TxCfcDialog::buildUi()
     m_compWidget->setMinimumSize(509, 320);  // Designer.cs:188 Size
 
     leftCol->addWidget(m_compWidget, 1);
+
+    // R-R3-49 (parity Task 33): why a remote window's chart has no bars.
+    m_barChartReasonLabel = new QLabel(this);
+    m_barChartReasonLabel->setObjectName(QStringLiteral("TxCfcBarChartReason"));
+    m_barChartReasonLabel->setWordWrap(true);
+    m_barChartReasonLabel->setVisible(false);
+    leftCol->addWidget(m_barChartReasonLabel);
 
     // ── Middle edit row (between widgets) ────────────────────────────────
     // From Thetis frmCFCConfig.Designer.cs:30-65 [v2.10.3.13] — labels
@@ -1375,34 +1386,72 @@ void TxCfcDialog::onBarChartTick()
         bins, TxChannel::kCfcDisplayBinCount);
 
     if (ready) {
-        const double startHz = m_compWidget->frequencyMinHz();
-        const double stopHz  = m_compWidget->frequencyMaxHz();
-        const double binsPerHz = static_cast<double>(TxChannel::kCfcDisplayBinCount) /
-                                 TxChannel::kCfcDisplaySampleRateHz;
-        int startIdx = static_cast<int>(startHz * binsPerHz);
-        int endIdx   = static_cast<int>(stopHz  * binsPerHz);
-
-        // Clamp to valid range.
-        if (startIdx < 0) startIdx = 0;
-        if (endIdx   < 0) endIdx   = 0;
-        if (startIdx >= TxChannel::kCfcDisplayBinCount) {
-            startIdx = TxChannel::kCfcDisplayBinCount - 1;
-        }
-        if (endIdx   >= TxChannel::kCfcDisplayBinCount) {
-            endIdx   = TxChannel::kCfcDisplayBinCount - 1;
-        }
-
-        const int len = endIdx - startIdx + 1;
-        if (len > 0) {
-            QVector<double> slice(len);
-            for (int i = 0; i < len; ++i) {
-                slice[i] = bins[startIdx + i];
-            }
-            m_compWidget->drawBarChartData(slice);
-        }
+        drawCompressionBins(bins, TxChannel::kCfcDisplayBinCount);
     }
 
     m_barChartBusy = false;
+}
+
+void TxCfcDialog::drawCompressionBins(const double* bins, int count)
+{
+    if (!m_compWidget || count < TxChannel::kCfcDisplayBinCount) {
+        return;
+    }
+    const double startHz = m_compWidget->frequencyMinHz();
+    const double stopHz  = m_compWidget->frequencyMaxHz();
+    const double binsPerHz = static_cast<double>(TxChannel::kCfcDisplayBinCount) /
+                             TxChannel::kCfcDisplaySampleRateHz;
+    int startIdx = static_cast<int>(startHz * binsPerHz);
+    int endIdx   = static_cast<int>(stopHz  * binsPerHz);
+
+    // Clamp to valid range.
+    if (startIdx < 0) startIdx = 0;
+    if (endIdx   < 0) endIdx   = 0;
+    if (startIdx >= TxChannel::kCfcDisplayBinCount) {
+        startIdx = TxChannel::kCfcDisplayBinCount - 1;
+    }
+    if (endIdx   >= TxChannel::kCfcDisplayBinCount) {
+        endIdx   = TxChannel::kCfcDisplayBinCount - 1;
+    }
+
+    const int len = endIdx - startIdx + 1;
+    if (len > 0) {
+        QVector<double> slice(len);
+        for (int i = 0; i < len; ++i) {
+            slice[i] = bins[startIdx + i];
+        }
+        m_compWidget->drawBarChartData(slice);
+    }
+}
+
+void TxCfcDialog::setStationBarChart(std::function<void(bool)> setWanted)
+{
+    m_stationBarChart = std::move(setWanted);
+    if (m_stationBarChart && m_barChartTimer) {
+        // The Core reads its own TxChannel; this window reads none.
+        m_barChartTimer->stop();
+    }
+    if (m_stationBarChart && isVisible()) {
+        m_stationBarChart(true);
+    }
+}
+
+void TxCfcDialog::applyStationCompression(const QList<double>& binsDb)
+{
+    if (!m_stationBarChart || !isVisible()
+        || binsDb.size() < TxChannel::kCfcDisplayBinCount) {
+        return;
+    }
+    drawCompressionBins(binsDb.constData(), static_cast<int>(binsDb.size()));
+}
+
+void TxCfcDialog::setBarChartUnavailable(const QString& reason)
+{
+    if (!m_barChartReasonLabel) {
+        return;
+    }
+    m_barChartReasonLabel->setText(reason);
+    m_barChartReasonLabel->setVisible(!reason.isEmpty());
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1412,6 +1461,11 @@ void TxCfcDialog::onBarChartTick()
 void TxCfcDialog::showEvent(QShowEvent* event)
 {
     QDialog::showEvent(event);
+    // Parity Task 33: a remote window asks the Core for its CFC display.
+    if (m_stationBarChart) {
+        m_stationBarChart(true);
+        return;
+    }
     if (m_barChartTimer && !m_barChartTimer->isActive()) {
         m_barChartTimer->start();
     }
@@ -1422,6 +1476,10 @@ void TxCfcDialog::hideEvent(QHideEvent* event)
     QDialog::hideEvent(event);
     if (m_barChartTimer) {
         m_barChartTimer->stop();
+    }
+    // Parity Task 33: closed, the window lets the Core stop reading.
+    if (m_stationBarChart) {
+        m_stationBarChart(false);
     }
     // Clear the bar chart so the next show isn't littered with stale data
     // (mirrors Thetis frmCFCConfig.cs:1052-1057 [v2.10.3.13] empty-array

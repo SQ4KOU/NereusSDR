@@ -41,6 +41,11 @@
 //                 controls with a reason in a remote window while the Core
 //                 cannot take a CFC change. J.J. Boyd (KG4VCF), AI-assisted
 //                 via Anthropic Claude Code.
+//   2026-09-27 - R-R3-49 (parity Task 33): in a remote window the bar
+//                 chart reads the Core's txCfcCompression stream while the
+//                 dialog is shown (setStationBarChart,
+//                 applyStationCompression), or says why it cannot. J.J.
+//                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -89,6 +94,7 @@
 
 #include <QCloseEvent>
 #include <QDialog>
+#include <functional>
 #include <QPointer>
 #include <QShowEvent>
 
@@ -179,6 +185,19 @@ public:
     // every control greys and the reason shows at the top.
     void setSettingsPermitted(bool permitted, const QString& reason);
     QLabel* settingsReasonLabel() const { return m_settingsReasonLabel; }
+
+    // R-R3-49 (parity Task 33): a remote window's bar chart. With a hook
+    // set, showing the dialog asks for the Core's CFC display
+    // (setWanted(true)) instead of reading a local TxChannel, and hiding it
+    // lets it go (setWanted(false)). applyStationCompression draws one of
+    // the Core's readings (TxChannel::kCfcDisplayBinCount values) over the
+    // chart's range exactly as a local reading is drawn.
+    void setStationBarChart(std::function<void(bool)> setWanted);
+    void applyStationCompression(const QList<double>& binsDb);
+    // Why the chart has no bars from the Core (a Core that does not send
+    // them); empty hides the note.
+    void setBarChartUnavailable(const QString& reason);
+    QLabel* barChartReasonLabel() const { return m_barChartReasonLabel; }
 
     // ── Widget accessors for tests ────────────────────────────────────────
 
@@ -309,6 +328,11 @@ private:
     // widgets (frmCFCConfig.cs:307-315 [v2.10.3.13]).
     int  selectedIndex() const;
 
+    // The bars for one CFC display reading (kCfcDisplayBinCount values):
+    // the slice over the chart's frequency range, as Thetis's timerTick
+    // takes it. Shared by the local and the remote chart.
+    void drawCompressionBins(const double* bins, int count);
+
     QPointer<TransmitModel> m_tm;        // non-owning
     QPointer<TxChannel>     m_tx;        // non-owning, may be null pre-connect
 
@@ -351,6 +375,9 @@ private:
     QTimer*         m_barChartTimer    = nullptr;
     QLabel*         m_settingsReasonLabel = nullptr;  // R-R3-49 (parity Task 4)
     bool            m_barChartBusy     = false;  // mirrors Thetis _busy
+    // Parity Task 33: a remote window's bar chart source and its note.
+    std::function<void(bool)> m_stationBarChart;
+    QLabel*         m_barChartReasonLabel = nullptr;
 
     // Scratch storage for a single tick of WDSP CFC display data.
     // Sized to TxChannel::kCfcDisplayBinCount (1025) lazily on first tick.

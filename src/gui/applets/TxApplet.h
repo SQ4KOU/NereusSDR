@@ -125,6 +125,12 @@
 //                R-R3-49): setMonitorOutputPermitted, the MON output pair
 //                in a remote window on a Core that does not send the
 //                transmit monitor. AI-assisted via Anthropic Claude Code.
+//   2026-09-27  J.J. Boyd / KG4VCF  Remote-window parity Task 33 (R-R3-49,
+//                R-IOS-13): the CFC dialog's bar chart from the Core's
+//                stream (setStationCfcBarChart); in a remote window the RF
+//                Pwr and SWR bars fall at the Core's unkey as a local
+//                window's do at its own. AI-assisted via Anthropic Claude
+//                Code.
 // =================================================================
 
 //=================================================================
@@ -192,6 +198,8 @@
 
 #include "AppletWidget.h"
 #include <QPointer>
+#include <QList>
+#include <functional>
 #include <QString>
 #include "models/Band.h"
 #include "core/BoardCapabilities.h"  // setBoardCapabilities slot
@@ -373,6 +381,17 @@ public slots:
                                   const QString& unavailableReason = QString());
     // The CFC dialog, once a right-click or Setup has built it.
     TxCfcDialog* cfcDialog() const { return m_cfcDialog; }
+    // R-R3-49 (parity Task 33): a remote window's CFC bar chart comes from
+    // the Core. `setWanted` asks for (true) or lets go of (false) the Core's
+    // CFC display while the dialog is shown; applyStationCfcCompression
+    // hands the dialog each reading; setStationCfcBarChartUnavailable says
+    // why there is none (empty when there is).
+    void setStationCfcBarChart(std::function<void(bool)> setWanted);
+    void applyStationCfcCompression(const QList<double>& binsDb);
+    void setStationCfcBarChartUnavailable(const QString& reason);
+    // Parity Task 33: the RF Pwr and SWR bars, for a test.
+    HGauge* fwdPowerGauge() const { return m_fwdPowerGauge; }
+    HGauge* swrGauge() const { return m_swrGauge; }
     // R-R3-49 (parity Task 7): PS-A arms PureSignal and keys nothing. It
     // follows this gate (not setTransmitPermitted): a remote window whose
     // Core offers arming (transmitSettingsVersion 7) uses it while the
@@ -587,6 +606,9 @@ private:
     // Lazy-created on first right-click of [CFC] or first call to
     // requestOpenCfcDialog().  Lives until applet (parent window) is destroyed.
     TxCfcDialog* m_cfcDialog  = nullptr;
+    // Parity Task 33: a remote window's CFC chart source and its note.
+    std::function<void(bool)> m_stationCfcBarChart;
+    QString m_stationCfcBarChartReason;
     // 5. MOX
     QPushButton* m_moxBtn     = nullptr;
     // 6. TUNE

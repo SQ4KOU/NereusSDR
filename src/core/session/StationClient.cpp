@@ -272,6 +272,12 @@
 //                subscribed with stationFreedvVersion 1, and the freedv.*
 //                verbs. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                Claude Code.
+//   2026-09-27 - Parity Task 33 (R-R3-49, R-R3-32): txReadingsAvailable();
+//                the Core's txCfcCompression stream while this window shows
+//                the CFC bar chart (setCfcCompressionWanted,
+//                cfcCompressionReceived); the window's model holds its
+//                `txState` copy. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -575,6 +581,11 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
                             m_supportedMajors.end());
     // iPhone app plan Task 39: the Core's transmit state, unbound (a mirror).
     m_transmitState = new TransmitState(this);
+    // Parity Task 33: pages that show the Core's transmit readings (PA
+    // Values) find it through the window's model.
+    if (!m_radioModel.isNull()) {
+        m_radioModel->setStationTransmitState(m_transmitState);
+    }
     // iPhone app plan Task 78: who else is on the Core.
     m_remoteDevices = new RemoteDevicesState(this);
     connect(m_transmitState, &TransmitState::holderChanged, this,
@@ -2139,6 +2150,10 @@ void StationClient::onTransportText(const QByteArray& wire)
                 subscribe(QStringLiteral("stationRadios"), 64);
             }
         }
+        // Parity Task 33: the CFC bar chart shown across a reconnect.
+        if (m_cfcCompressionWanted && txReadingsAvailable()) {
+            sendCfcCompressionSubscription(true);
+        }
         if (firstSnapshot) {
             qCInfo(lcStationClient) << "Session established with" << m_capabilities.stationName;
             // iPhone app plan Task 27: where the Core was reached, tried
@@ -2168,6 +2183,18 @@ void StationClient::onTransportText(const QByteArray& wire)
         break;
     // Parity Task 19 (R-IOS-25): a stream this window subscribed to.
     case SessionMessageKind::RecordBatch:
+        // Parity Task 33: the Core's CFC display, its one record.
+        if (message.recordBatch.stream == QLatin1String(TransmitState::kCfcStream)) {
+            for (const RecordUpsert& u : message.recordBatch.upserts) {
+                const QList<double> bins =
+                    TransmitState::decodeCfcBins(u.fields.value(QStringLiteral("binsDbTenths")).toString());
+                if (!bins.isEmpty()) {
+                    emit cfcCompressionReceived(
+                        bins, static_cast<qint64>(u.fields.value(QStringLiteral("atMs")).toDouble()));
+                }
+            }
+            break;
+        }
         if ((spotSourcesAvailable() || stationRadiosAvailable()) && !m_radioModel.isNull()) {
             m_radioModel->applyStationRecordBatch(message.recordBatch);
         }
@@ -4206,6 +4233,36 @@ StationClient::CommandOutcome StationClient::requestSpotSource(const QByteArray&
         arguments.append(stringArgument("text", text));
     }
     return sendCommand(verb, -1, arguments, QStringLiteral("the spot source request"));
+}
+
+bool StationClient::txReadingsAvailable() const
+{
+    return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.txStateVersion >= 1 && m_capabilities.txReadingsVersion >= 1;
+}
+
+void StationClient::setCfcCompressionWanted(bool wanted)
+{
+    if (m_cfcCompressionWanted == wanted) {
+        return;
+    }
+    m_cfcCompressionWanted = wanted;
+    if (txReadingsAvailable()) {
+        sendCfcCompressionSubscription(wanted);
+    }
+}
+
+void StationClient::sendCfcCompressionSubscription(bool subscribe)
+{
+    const MirrorUpdate stream{0, "stream", MirrorWireKind::Utf8,
+                              QVariant(QString::fromLatin1(TransmitState::kCfcStream))};
+    if (subscribe) {
+        invokeCommand("records.subscribe",
+                      {stream, MirrorUpdate{0, "backlog", MirrorWireKind::Int64,
+                                            QVariant(static_cast<qlonglong>(1))}});
+    } else {
+        invokeCommand("records.unsubscribe", {stream});
+    }
 }
 
 bool StationClient::stationFreedvAvailable() const

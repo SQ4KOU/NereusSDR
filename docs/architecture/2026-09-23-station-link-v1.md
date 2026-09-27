@@ -848,6 +848,7 @@ change shows as surface drift and as a change to this table.
 | `sessionHolderVersion` | 1 |
 | `remoteTxVersion` | 2 |
 | `txStateVersion` | 2 |
+| `txReadingsVersion` | 1 |
 
 <!-- /surface -->
 
@@ -1299,6 +1300,16 @@ When a feature is off, its version is 0:
   and its three `txRefusal` entries, and only with them. 1: the Core sends
   the read-only `txState` object (section 18.8) to that peer; any other
   peer never sees it or its schema.
+- `txReadingsVersion` (remote-window parity Task 33, R-R3-49, R-R3-32):
+  sent right after `txStateVersion` and only with it. 1 on a Core with its
+  own radio model and record streams (`recordStreamVersion` 1), 0
+  otherwise. At 1 `txState` also carries `forwardAdcRaw` and
+  `reflectedAdcRaw`, the radio's raw forward and reflected power readings
+  (section 18.8), and the Core keeps the `txCfcCompression` record stream,
+  the CFC bar chart's data (section 7.7). A window's PA Values page and
+  CFC dialog show their transmit readings from these; on a Core that sends
+  0 or no entry each shows "This Core does not send this reading. Updating
+  the Core may help.", never a 0.
 
 `txPermitted` (iPhone app plan Task 34) is true only for a session the
 station transmit gate permits (section 18.1): false until
@@ -1478,6 +1489,7 @@ older window sees only the values it was built for.
 | 67 | `txRefusalReason` | `utf8` |
 | 68 | `txRefusalFix` | `utf8` |
 | 69 | `txStateVersion` | `i64` |
+| 70 | `txReadingsVersion` | `i64` |
 
 <!-- /surface -->
 
@@ -2093,7 +2105,7 @@ An enum property lists the values its domain allows.
 | 84 | `twoToneDrivePowerSource` | `enum` | bidirectional | 0, 1, 2 |
 | 85 | `voxEnabled` | `bool` | bidirectional |  |
 
-**TransmitState** (31 properties)
+**TransmitState** (33 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -2128,6 +2140,8 @@ An enum property lists the values its domain allows.
 | 28 | `stopEpoch` | `i64` | outbound |  |
 | 29 | `highSwr` | `bool` | outbound |  |
 | 30 | `swrWindBackLatched` | `bool` | outbound |  |
+| 31 | `forwardAdcRaw` | `i64` | outbound |  |
+| 32 | `reflectedAdcRaw` | `i64` | outbound |  |
 
 **TunerModel** (21 properties)
 
@@ -2272,6 +2286,22 @@ Notes on the keys:
   radio is on the air the pump leaves them where they were. They reach a
   window whatever `meterReadingsVersion` says; a window reads them only when
   it is at least 1 (section 6.3). A window never writes them back.
+- **Max Bin is measured by the client, not sent.** The S-meter's Max Bin
+  mode (and a container meter bound to Max Bin) reads the strongest point
+  of the slice's passband on the slice's own panadapter, from the trace as
+  the client displays it, after the detector and averaging: the peak of
+  that pan's display between the slice's frequency plus its filter low and
+  high edges. A local window takes exactly this reading from its own
+  spectrum (`SpectrumWidget::peakDbmInSlicePassband`, the 2026-05-22 bench
+  fix: the raw FFT bins read 12 to 17 dB below the trace the operator
+  sees), and a remote window takes it from the Core's spectrum as it
+  displays it (`MeterPoller::panMaxBinSource`). So a local window, a remote
+  window and the phone all read the same value for the same trace, and no
+  Core has a better value to send: a headless Core (`nereusd`) runs no
+  display of its own and never sets Max Bin up. The link carries no Max Bin
+  property. An app needs that pan's display subscribed (the media
+  document's "Display subscriptions") to have the reading; without it the
+  Max Bin meter shows no reading with its reason, never 0.
 - **`devices`.** Sent only to a peer at agreed minor 11 whose hello
   declares `deviceAuth` 1 or later, while `deviceAdminVersion` is 1
   (`StationServer::sendToSession`). A window that declares nothing (today's
@@ -2373,6 +2403,9 @@ Notes on the keys:
   `txStateVersion` 1): the Core's transmitter, its meters and why it last
   stopped a transmission, section 18.8. Sent only at agreed minor 11 to a
   peer whose hello declared `remoteTx` 1; every property is `outbound`.
+  With `txReadingsVersion` 1 (parity Task 33) it also carries the radio's
+  raw forward and reflected power readings, `forwardAdcRaw` and
+  `reflectedAdcRaw` (i64), appended after `swrWindBackLatched`.
 - **`catalog`.** The values the Core owns and an app draws its controls
   from (section 7.4). Both properties are `outbound`
   (`StationCatalog`): `json` (`utf8`), the catalogue, and `revision`
@@ -3241,6 +3274,7 @@ keeps:
 | `spots` | 500 | One spot the Core holds (its SpotModel: the station sources' spots, and FreeDV Reporter's once the Core runs it), `id` its index: `timeUtc` (string, ISO 8601 UTC), `frequencyHz` (number, whole Hz), `call`, `mode`, `source` (the source's label: `Cluster`, `RBN`, `POTA`, `PSK`, `FreeDV`), `spotter`, `comment` (strings), `band` (number, the Band as the catalogue's `bands` numbers it, 13 for GEN), `dxccColour` (string, `#rrggbb`, empty when the Core does not colour it) and `dxccPriority` (number: 4 a new DXCC entity, 3 a new band, 2 a new mode, 1 worked before, 0 not known or colouring off) |
 | `spotConsole:<source>` | 200 | One console line of a station source (`dxCluster`, `rbn`, `pota`, `pskReporter`, and with `stationFreedvVersion` 1 `freedvReporter`), `id` a rising number: `line` (string). A command typed from any device shows as `> <command>` |
 | `freedvStations` | 1000 | With `stationFreedvVersion` 1: one station FreeDV Reporter lists, as the Core hears it, `id` its FreeDV Reporter session id: the FreeDV Reporter dialog's 14 columns, `callsign`, `gridSquare` (strings), `distanceKm` and `headingDeg` (numbers, from the Core's own grid square; 0 with `headingCardinal` empty while either grid square is not known), `headingCardinal` (string, `N` to `NNW`), `version` (string), `frequencyHz` (number, whole Hz, 0 not known), `txMode` (string), `status` (string: `Active`, `TX` or `RX Only`), `userMessage` (string), `lastTxUtc` (string, ISO 8601 UTC, empty when never), `lastRxCallsign`, `lastRxMode` (strings), `snrDb` (number, -99 not known) and `lastUpdateUtc` (string, ISO 8601 UTC, empty when not known); then `transmitting` (boolean), `receivingFrom` (string: whom its latest receive report heard, the last callsign it named, while that report stands; empty once a frequency change clears it), `messageChangedAtMs` (number, the Core's clock in ms since the epoch when `userMessage` last changed, 0 never) and `lastRxUtc` (string, ISO 8601 UTC, when its latest receive report came, empty when none stands). The list starts again (a reset) each time the Core's connection to FreeDV Reporter connects or ends |
+| `txCfcCompression` | 1 | With `txReadingsVersion` 1: the CFC display, one record, `id` `"0"`, replaced each time the Core reads new data: `atMs` (number, when the Core read it, in milliseconds on its own monotonic clock) and `binsDbTenths` (string: the 1025 values of the CFC compression display, each rounded to a tenth of a dB, as little-endian int16 tenths, in base64). Bin `i` is `i * 48000 / 1024` Hz; a chart draws the bins over its own frequency range as the local CFC dialog does (Thetis's frmCFCConfig `timerTick`: `binsPerHz` = 1025 / 48000). The Core reads the display every 50 ms, Thetis's interval, only while at least one peer subscribes and its radio is on the air with CFC on, and sends a record only when WDSP says new data is ready |
 | `stationRadios` | 64 | With `stationRadiosVersion` 1: one radio the Core can see, the Core's radio first, `id` its MAC in upper case: `id` and `mac` (strings, the same), `name` (string, as the radio reports itself), `model` (number, the `hpsdrModel` the Core runs it as: its saved override, else its board's), `address` (string, its IP address, empty when not known), `protocol` (number, 1 or 2) and `inUse` (boolean, true for the Core's radio). The list is what the Core's last scan found, with the Core's radio; a radio stays listed after it drops off until a scan misses it |
 
 A peer asks with `records.subscribe {stream, backlog}` (section 9.1); the
@@ -3273,7 +3307,11 @@ console (backlog 200) once its snapshot is complete, again on every
 reconnect; with `stationFreedvVersion` 1 also to `freedvStations`
 (backlog 1000), which replaces its FreeDV Reporter list (the dialog shows
 the Core's stations with the Core's distance and heading), and to
-`spotConsole:freedvReporter`. It shows the Core's spots in its panadapters and its Spot List
+`spotConsole:freedvReporter`. With `txReadingsVersion` 1 a window
+subscribes to `txCfcCompression` (backlog 1) while its CFC dialog is shown
+(again on a reconnect while it stays shown) and unsubscribes when the
+dialog closes, which stops the Core's reads when no other peer wants them.
+It shows the Core's spots in its panadapters and its Spot List
 beside its own WSJT-X and SpotCollector spots, in the colours and
 lifetimes of the Core's Spot Hub settings, and drops them when the session
 ends. A reset of a console stream (each subscribe's backlog) replaces that
@@ -5776,7 +5814,8 @@ and 8). The `txState` object (`TransmitState`, `txStateVersion` 1; 2 adds
 the holder of transmit and `keyedForSeconds`, appended after `stopSerial`,
 and `stopEpoch` after them, then `highSwr` and `swrWindBackLatched`,
 added with `txDisplayVersion` 1 and sent by every Core whatever its
-`txDisplayVersion`, as `stopEpoch` is) goes to
+`txDisplayVersion`, as `stopEpoch` is; then `forwardAdcRaw` and
+`reflectedAdcRaw`, with `txReadingsVersion` 1) goes to
 a peer at minor 11 whose hello declared `remoteTx` 1, in its snapshot after
 `connectedDevices`, and as deltas. Every property is `outbound`; a write
 is refused as any outbound property's is.
@@ -5806,12 +5845,27 @@ is refused as any outbound property's is.
 | `keyedForSeconds` | How long the key now on has been on, in whole seconds on the Core's clock when this is sent (ruling 10.3); 0 while unkeyed. It supersedes `keyedSinceMs`, which a Core still sends |
 | `highSwr` | The Core's high-SWR protection has tripped (parity Task 28, appended after `stopEpoch`; sent by every Core that sends `txState`, whatever its `txDisplayVersion`): what the Core's own window hands its transmitting pan's high-SWR border |
 | `swrWindBackLatched` | The protection's drive fold-back has latched; the border shows fold-back while this and `highSwr` are both true |
+| `forwardAdcRaw`, `reflectedAdcRaw` | The radio's raw forward and reflected power readings (i64, the ADC counts of its last PA sample, transmitting or not; parity Task 33, `txReadingsVersion` 1; 0 before the first sample). A window scales them exactly as its own PA Values page scales a local radio's (`PaTelemetryScaling`: raw forward power by `computeAlexFwdPower`, the forward and reflected RF voltage), with the Core's `hpsdrModel`; the Core sends the raw values, never a scaled one |
 
 **When it is sent.** While keyed the Core reads the meters ten times a
 second, from the transmit lane's last readings (never a DSP call on its
 event loop), and sends a reading that changed, with the time left when it
 changed. While unkeyed only changes are sent: the power readings as the
-radio reports them (they fall to 0 at the unkey), nothing else. Changes
+radio reports them (they fall to 0 at the unkey), and `forwardAdcRaw` and
+`reflectedAdcRaw` as the radio's samples change them, nothing else.
+
+**A window's transmit meters** (parity Task 33) read this object while
+keyed, with the local window's scaling, smoothing and peak handling: the TX
+applet's RF Pwr and SWR bars and the container Power, Reflected Power and
+SWR meters read `forwardPowerWatts`, `reflectedPowerWatts` and `swr`
+(through the window's radio status, as one sample); the ALC and MIC
+meters read `alcDb` and `micLevelDb`. The S-meter's TX modes: Power reads
+`forwardPowerWatts`, SWR `swr`, Level `micLevelDb` (the MIC reading, as
+AetherSDR's Level mode reads its mic peak) and Compression the COMP
+reading, which `txState` does not carry yet: that mode, and each container
+meter bound to a reading `txState` does not carry (EQ, Leveler, Leveler
+Gain, CFC, CFC Gain, Compression, ALC Gain, ALC Group), shows no reading
+with its reason, never 0. Changes
 travel in the 50 ms delta flush like any other.
 
 **Stops.** Each key (each rise of `keyed`) is stopped at most once: the

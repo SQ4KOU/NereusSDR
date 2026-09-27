@@ -334,6 +334,12 @@
 //                disabled with the reason on a Core that does not run FreeDV
 //                Reporter. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                Claude Code.
+//   2026-09-27 - Parity Task 33 (R-R3-49, R-R3-32, R-IOS-13): the CFC
+//                dialog's bar chart from the Core's txCfcCompression stream
+//                in a remote window (disabled with the reason on a Core that
+//                does not send it); the remote Max Bin source moved to
+//                MeterPoller::panMaxBinSource, unchanged. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -1519,6 +1525,33 @@ void MainWindow::wireRemoteTransmitMeters()
     // The compression reading is not in the Core's transmit state yet.
     if (m_phoneCwApplet) {
         m_phoneCwApplet->setCompressionUnavailable(MeterPoller::remoteTxMeterNotSentText());
+    }
+    // R-R3-49 (parity Task 33): the CFC dialog's bar chart reads the Core's
+    // txCfcCompression stream while it is shown; a Core that does not keep
+    // it (txReadingsVersion 0) is named as the reason.
+    if (m_txApplet) {
+        m_txApplet->setStationCfcBarChart([this](bool wanted) {
+            if (m_stationClient) {
+                m_stationClient->setCfcCompressionWanted(wanted);
+            }
+        });
+        connect(m_stationClient, &StationClient::cfcCompressionReceived, m_txApplet,
+                [this](const QList<double>& bins, qint64) {
+                    if (m_txApplet) {
+                        m_txApplet->applyStationCfcCompression(bins);
+                    }
+                });
+        const auto showCfcReason = [this]() {
+            if (m_txApplet && m_stationClient) {
+                m_txApplet->setStationCfcBarChartUnavailable(
+                    m_stationClient->isHandshakeComplete() && !m_stationClient->txReadingsAvailable()
+                        ? TransmitState::txReadingNotSentText()
+                        : QString());
+            }
+        };
+        connect(m_stationClient, &StationClient::handshakeComplete, this, showCfcReason);
+        connect(m_stationClient, &StationClient::stateSnapshotApplied, this, showCfcReason);
+        showCfcReason();
     }
     // Fix wave I4: who holds transmit on the Core, under MOX and TUNE.
     const auto showHolder = [this]() {
@@ -6568,17 +6601,15 @@ void MainWindow::populateDefaultMeter()
         m_meterPoller->setWdspEngine(m_radioModel->wdspEngine());
 
         if (m_radioModel->role() == RadioModel::Role::Remote) {
+            // Parity Task 33: Max Bin is measured here, from the slice's
+            // own pan, as the local window measures it (panMaxBinSource).
             m_meterPoller->setRemoteRadioModel(m_radioModel,
                 [this]() {
                     return m_stationClient && m_stationClient->isHandshakeComplete();
                 },
-                [this](const SliceModel* slice) -> double {
-                    SpectrumWidget* sw = m_panStack && slice
-                        ? m_panStack->spectrum(slice->panKey()) : nullptr;
-                    if (!sw) { return -400.0; }
-                    return sw->peakDbmInPassband(slice->frequency() + slice->filterLow(),
-                                                slice->frequency() + slice->filterHigh());
-                });
+                MeterPoller::panMaxBinSource([this](const QString& panKey) -> SpectrumWidget* {
+                    return m_panStack ? m_panStack->spectrum(panKey) : nullptr;
+                }));
             // R-R3-13 / R-R3-49 (parity Task 15): the ADC and AGC meters
             // read the Core's slice readings when it sends them.
             m_meterPoller->setRemoteMeterReadingsAvailable([this]() {

@@ -146,6 +146,8 @@
 //   2026-09-27 - R-IOS-26 / R-R3-49 (iPhone plan Task 22, parity Task 20):
 //                stationFreedvVersion. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-27 - R-R3-49 / R-R3-32 (parity Task 33): txReadingsVersion.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -403,6 +405,12 @@ struct StationCapabilities {
     /// transmission). Sent after remoteTxVersion and its three txRefusal*
     /// entries, and only with them.
     int txStateVersion = 0;
+    /// Remote-window parity Task 33 (R-R3-49, R-R3-32): 1 means `txState`
+    /// also carries forwardAdcRaw and reflectedAdcRaw (the radio's raw
+    /// forward and reflected power readings) and the Core keeps the
+    /// `txCfcCompression` record stream (the CFC bar chart). Sent right
+    /// after txStateVersion and only with it.
+    int txReadingsVersion = 0;
 
     /// Whether the DAEMON currently holds a live radio connection. A
     /// client that authenticated against a daemon whose radio is powered

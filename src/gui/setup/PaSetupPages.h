@@ -788,6 +788,22 @@ private:
     bool m_supplyPresent{false};
     void refreshPaReadings();
 
+    // R-R3-49 / R-R3-32 (parity Task 33): the power, raw ADC and RF voltage
+    // readings, shared by the local page (RadioStatus, the connection's PA
+    // samples) and a remote window's (the Core's `txState`, scaled here with
+    // the Core's radio model exactly as the local page scales its own).
+    void applyPowerReadings(double fwdW, double revW, double swr);
+    void applyRawAdc(HPSDRModel hpsdrModel, quint16 fwdRaw, quint16 revRaw);
+    // A remote window: whether its Core sends these readings
+    // (txReadingsVersion 1), and the page's copy of them.
+    bool coreSendsTransmitReadings();
+    void refreshCoreTransmitReadings();
+    void refreshCoreAdcOverload();
+    // Whether the Core's readings have been shown once (the first showing
+    // starts no peak or minimum tracking, as the local page's opening
+    // values do not).
+    bool m_coreReadingsShown{false};
+
     // Helper: format a label with peak/min annotation.  Output shape:
     //   "12.34 W  (P 50.00 / M 5.00)"
     // The annotation is collapsed (just "current unit") when:

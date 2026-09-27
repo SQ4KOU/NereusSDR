@@ -67,6 +67,13 @@
 //   2026-09-24  The vintage faces' steps above S9 read ControlRanges.h
 //                 (iPhone app Task 19, R-IOS-06) by J.J. Boyd (KG4VCF), with
 //                 AI-assisted transformation via Anthropic Claude Code.
+//   2026-09-27  TX modes without a reading (R-R3-49, remote-window parity
+//                 Task 33) by J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
+//                 setTxModeUnavailable(): a TX mode a remote window's Core
+//                 does not send shows "--" with the reason, never 0.  The TX
+//                 readout text of both faces moved unchanged into txReadout().
+//                 NereusSDR-native; no upstream equivalent.
 // =================================================================
 #include "SMeterWidget.h"
 
@@ -297,6 +304,7 @@ void SMeterWidget::setTransmitting(bool tx)
         m_txPower = 0.0f;
         m_txSwr   = 1.0f;
     }
+    refreshTxToolTip();
     updateNeedleTarget();
     update();
 }
@@ -313,6 +321,7 @@ void SMeterWidget::setTxMode(const QString& mode)
     // NereusSDR-native key per design doc ss5.4.2.
     AppSettings::instance().setValue("SMeter_TxSelect",
                                      static_cast<int>(m_txMode));
+    refreshTxToolTip();
     updateNeedleTarget();
     update();
 }
@@ -360,7 +369,10 @@ void SMeterWidget::updateNeedleTarget()
 {
     updatePeakHoldValue();
 
-    if (m_transmitting) {
+    if (m_transmitting && currentTxModeUnavailable()) {
+        // Parity Task 33: no reading in this TX mode; the pointer rests.
+        m_targetNeedleFraction = 0.0f;
+    } else if (m_transmitting) {
         m_targetNeedleFraction = txValueToFraction(currentTxValue());
     } else if (m_rxMode == RxMode::SMeterPeak) {
         m_targetNeedleFraction = dbmToFraction(m_peakDbm);
@@ -563,6 +575,52 @@ float SMeterWidget::txValueToFraction(float value) const
         return qBound(0.0f, (value + 25.0f) / 25.0f, 1.0f);
     }
     return 0.0f;
+}
+
+// Parity Task 33 (R-R3-49): the TX readout both faces draw.  The per-mode
+// text is the faces' own (classic: "1.5", vintage: "1.5 : 1"); a mode with
+// no reading here reads "--".  NereusSDR-native.
+QString SMeterWidget::txReadout(bool swrRatio) const
+{
+    if (currentTxModeUnavailable()) {
+        return QStringLiteral("--");
+    }
+    switch (m_txMode) {
+    case TxMode::Power:       return QString("%1 W").arg(m_txPower, 0, 'f', 0);
+    case TxMode::SWR:         return swrRatio ? QString("%1 : 1").arg(m_txSwr, 0, 'f', 1)
+                                              : QString("%1").arg(m_txSwr, 0, 'f', 1);
+    case TxMode::Level:       return QString("%1 dB").arg(m_micLevel, 0, 'f', 0);
+    case TxMode::Compression: return QString("%1 dB").arg(m_compLevel, 0, 'f', 0);
+    }
+    return QString();
+}
+
+bool SMeterWidget::currentTxModeUnavailable() const
+{
+    return !m_txUnavailable[static_cast<std::size_t>(m_txMode)].isEmpty();
+}
+
+void SMeterWidget::setTxModeUnavailable(TxMode mode, const QString& reason)
+{
+    QString& slot = m_txUnavailable[static_cast<std::size_t>(mode)];
+    if (slot == reason) {
+        return;
+    }
+    slot = reason;
+    refreshTxToolTip();
+    updateNeedleTarget();
+    update();
+}
+
+QString SMeterWidget::txModeUnavailableReason(TxMode mode) const
+{
+    return m_txUnavailable[static_cast<std::size_t>(mode)];
+}
+
+void SMeterWidget::refreshTxToolTip()
+{
+    // The reason shows while it applies: transmitting in that mode.
+    setToolTip(m_transmitting ? m_txUnavailable[static_cast<std::size_t>(m_txMode)] : QString());
 }
 
 // From AetherSDR src/gui/SMeterWidget.cpp:278-287 [@0cd4559]
@@ -907,13 +965,7 @@ void SMeterWidget::paintClassic(QPainter& p)
         p.drawText(6, topY, "TX");
 
         // Right: formatted value
-        QString valText;
-        switch (m_txMode) {
-        case TxMode::Power:       valText = QString("%1 W").arg(m_txPower, 0, 'f', 0); break;
-        case TxMode::SWR:         valText = QString("%1").arg(m_txSwr, 0, 'f', 1); break;
-        case TxMode::Level:       valText = QString("%1 dB").arg(m_micLevel, 0, 'f', 0); break;
-        case TxMode::Compression: valText = QString("%1 dB").arg(m_compLevel, 0, 'f', 0); break;
-        }
+        const QString valText = txReadout(false);
         p.setPen(QColor(0xc8, 0xd8, 0xe8));
         p.drawText(w - vfm.horizontalAdvance(valText) - 6, topY, valText);
     } else {
@@ -1065,12 +1117,7 @@ void SMeterWidget::paintVintage(QPainter& p)
         if (m_transmitting) {
             leftText  = QStringLiteral("TX");
             leftColor = QColor(theme.red);
-            switch (m_txMode) {
-            case TxMode::Power:       rightText = QString("%1 W").arg(m_txPower, 0, 'f', 0); break;
-            case TxMode::SWR:         rightText = QString("%1 : 1").arg(m_txSwr, 0, 'f', 1); break;
-            case TxMode::Level:       rightText = QString("%1 dB").arg(m_micLevel, 0, 'f', 0); break;
-            case TxMode::Compression: rightText = QString("%1 dB").arg(m_compLevel, 0, 'f', 0); break;
-            }
+            rightText = txReadout(true);
         } else {
             leftText  = rxSUnitsReadout();
             rightText = rxDbmReadout();
