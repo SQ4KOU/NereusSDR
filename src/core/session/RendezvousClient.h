@@ -55,6 +55,10 @@
 //               link tests; the missed-pong bound explained against the
 //               service's. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-27: iPhone app plan Task 29 fix wave (R-IOS-16): the relay
+//               grant (rendezvous section 12.1) decoded and kept for the
+//               relay leg; nothing acts on it yet. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/RendezvousWire.h"
@@ -195,6 +199,12 @@ public:
     /// again is dropped. False when it was not live.
     bool retireIntroduction(const QByteArray& introductionId);
     int liveIntroductions() const { return static_cast<int>(m_liveIntroductions.size()); }
+    /// Rendezvous section 12.1: the relay grant the service sent for an
+    /// introduction this Core answered (station), or for this client's live
+    /// introduction (client, `introductionId` ignored). Kept for the relay
+    /// leg (iPhone app plan Task 29 step 2b); nothing acts on it yet.
+    std::optional<RendezvousWire::RelayGrant> relayGrant(
+        const QByteArray& introductionId = QByteArray()) const;
 
     bool isRegistered() const { return m_registered; }
     QString stationId() const { return m_stationId; }
@@ -262,6 +272,9 @@ signals:
     /// A candidate from the far end (station: for this introduction; the
     /// client's introduction id is empty). Empty: the end of candidates.
     void candidateReceived(const QByteArray& introductionId, const QString& candidate);
+    /// Rendezvous section 12.1: a relay grant arrived (station: for this
+    /// answered introduction; client: empty id) and is held (relayGrant()).
+    void relayGrantReceived(const QByteArray& introductionId);
     /// The introduction ended (`clientLeft`, `stationLeft`, `expired`, or a
     /// code this build does not know). A session it set up is not touched.
     void introductionEnded(const QByteArray& introductionId, const QString& code);
@@ -334,11 +347,15 @@ private:
     /// how many candidates each has had.
     QSet<QByteArray> m_liveIntroductions;
     QHash<QByteArray, int> m_answered;
+    /// Task 29 fix wave: each answered introduction's relay grant.
+    QHash<QByteArray, RendezvousWire::RelayGrant> m_relayGrants;
     /// Task 28: introductions retired here, newest last, at most
     /// kMaxLiveIntroductions * 4, so the service cannot hand one back.
     QList<QByteArray> m_retiredIntroductions;
 
     // Client.
+    /// Task 29 fix wave: the live introduction's relay grant.
+    std::optional<RendezvousWire::RelayGrant> m_clientRelayGrant;
     Pending m_pending = Pending::None;
     QString m_targetId;
     QByteArray m_deviceKey;

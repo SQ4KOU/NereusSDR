@@ -29,6 +29,10 @@
 //   2026-09-26: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-27: iPhone app plan Task 29 fix wave (R-IOS-16): relay.grant
+//               (section 12.1), from the service to a station and a client.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -58,6 +62,9 @@ inline constexpr qsizetype kMaxTurnUsernameBytes = 512;
 inline constexpr qsizetype kMaxTurnPasswordBytes = 128;
 inline constexpr qint64 kMaxTurnExpires = 4294967295LL;
 inline constexpr qint64 kMaxRetryAfterMs = 2147483647LL;
+/// Section 5.2's `relayUrl` and `relayToken`: 1 to 512 bytes each.
+inline constexpr qsizetype kMaxRelayUrlBytes = 512;
+inline constexpr qsizetype kMaxRelayTokenBytes = 512;
 /// Section 5.2: nameplates run from 1 to this (PairingCode::kMaxNameplate).
 inline constexpr int kMaxNameplate = 999999;
 /// Section 4.2: the id is this many characters of `a-z` and `2-7`.
@@ -102,6 +109,8 @@ enum class Kind {
     MailboxClose,
     MailboxClosed,
     Error,
+    /// Section 12.1: the WebSocket relay's grant, from the service only.
+    RelayGrant,
 };
 
 /// Who sends a message to whom (section 5.3's four tables).
@@ -140,6 +149,18 @@ struct Message {
     QString code;               // introduction.end, mailbox.closed, error
     QString reason;             // error
     qint64 retryAfterMs = 0;    // error
+
+    QString relayUrl;           // relay.grant `url` (wss://)
+    QString relayToken;         // relay.grant `token`: opaque, never logged
+    qint64 relayExpires = 0;    // relay.grant `expires` (Unix seconds)
+};
+
+/// Section 12.1: a relay grant as the service sent it. `token` is opaque:
+/// it goes only to the relay at `url` and is never logged or put in a URL.
+struct RelayGrant {
+    QString url;
+    QString token;
+    qint64 expires = 0;
 };
 
 /// The kind's wire name ("mailbox.open"), empty for Unknown.

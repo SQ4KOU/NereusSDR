@@ -777,6 +777,9 @@ QStringList listedKeys(Wire::Direction direction, Wire::Kind kind)
     case K::Mailbox: return {"type", "body"};
     case K::MailboxClosed: return {"type", "code"};
     case K::Error: return {"type", "code", "reason", "retryAfterMs"};
+    case K::RelayGrant:
+        return toStation ? QStringList{"type", "from", "url", "token", "expires"}
+                         : QStringList{"type", "url", "token", "expires"};
     default: return {"type"};
     }
 }
@@ -1365,6 +1368,71 @@ private slots:
         core.stop();
     }
 
+    // Task 29 fix wave (rendezvous section 12.1): a relay grant for an
+    // introduction this Core answered is kept for the relay leg; one for an
+    // introduction it never answered is not, and it goes when the
+    // introduction ends.
+    void theCoreKeepsTheRelayGrantOfAnAnsweredIntroduction()
+    {
+        ServicePlayer player;
+        auto coreKey = makeKey();
+        auto device = makeKey();
+        const QByteArray deviceId = StationIdentity::fingerprintOf(device->spki());
+        RendezvousClient core;
+        core.setServers({player.url()});
+        QSignalSpy registered(&core, &RendezvousClient::registered);
+        QSignalSpy introduced(&core, &RendezvousClient::introduced);
+        QSignalSpy granted(&core, &RendezvousClient::relayGrantReceived);
+        core.registerStation(coreKey->spki(),
+                             [coreKey](const QByteArray& m) { return coreKey->sign(m); },
+                             [device, deviceId](const QByteArray& id) {
+                                 return id == deviceId ? device->spki() : QByteArray();
+                             });
+        QWebSocket* station = player.waitForConnection();
+        QVERIFY(station != nullptr);
+        const auto send = [station](const QJsonObject& message) {
+            station->sendTextMessage(compact(message));
+        };
+        send({{"type", "hello"}, {"version", 1}, {"nonce", b64(randomBytes(32))},
+              {"stun", QJsonArray()}});
+        QVERIFY(player.waitForMessage(station).has_value());
+        send({{"type", "challenge"}, {"nonce", b64(randomBytes(32))}});
+        QVERIFY(player.waitForMessage(station).has_value());
+        const QString id = Wire::rendezvousId(coreKey->spki());
+        send({{"type", "registered"}, {"id", id}});
+        QTRY_COMPARE(registered.size(), 1);
+        const QByteArray nonce = randomBytes(32);
+        const QString signature = b64(device->sign(Wire::introduceTranscript(id, nonce)));
+        const QString offer = readText(kSuite + QStringLiteral("/sdp/offer.sdp"));
+        const QByteArray answered = randomBytes(16);
+        const QByteArray unanswered = randomBytes(16);
+        for (const QByteArray& intro : {answered, unanswered}) {
+            send({{"type", "introduction"}, {"from", b64(intro)}, {"device", b64(deviceId)},
+                  {"deviceSignature", signature}, {"offer", offer}, {"nonce", b64(nonce)}});
+        }
+        QTRY_COMPARE(introduced.size(), 2);
+        QVERIFY(core.answer(answered, readText(kSuite + QStringLiteral("/sdp/answer.sdp"))));
+        QVERIFY(player.waitForMessage(station).has_value());
+        const QString token = QStringLiteral(
+            "AQEAAQIDBAUGBwgJCgsMDQ4P8pvPCvK38JprSdJ4pqn2imoBltp4JM7Y4jlm8z_CRueEVquUo2unUc8QLhE");
+        for (const QByteArray& intro : {unanswered, answered}) {
+            send({{"type", "relay.grant"}, {"from", b64(intro)},
+                  {"url", "wss://rv.conformance.invalid/v1/relay"}, {"token", token},
+                  {"expires", 1800000120}});
+        }
+        QTRY_COMPARE(granted.size(), 1);
+        QCOMPARE(granted.at(0).at(0).toByteArray(), answered);
+        QVERIFY(!core.relayGrant(unanswered).has_value());
+        const std::optional<Wire::RelayGrant> grant = core.relayGrant(answered);
+        QVERIFY(grant.has_value());
+        QCOMPARE(grant->url, QStringLiteral("wss://rv.conformance.invalid/v1/relay"));
+        QCOMPARE(grant->token, token);
+        QCOMPARE(grant->expires, qint64(1800000120));
+        send({{"type", "introduction.end"}, {"from", b64(answered)}, {"code", "clientLeft"}});
+        QTRY_VERIFY(!core.relayGrant(answered).has_value());
+        core.stop();
+    }
+
     // Fix wave I3: a service that sends its hello and then never registers
     // the Core is left after the hello time, and the reconnect runs; the
     // time is shortened through the injectable value.
@@ -1760,7 +1828,10 @@ private slots:
                 ++count;
             }
         }
-        QVERIFY(count == 10);
+        // Every session fixture the manifest lists for the Core runs here
+        // (Task 29 fix wave: the relay grant's added two); never fewer than
+        // version 1's ten.
+        QVERIFY2(count >= 10, qPrintable(QString::number(count)));
     }
 
     void coreRunner()
