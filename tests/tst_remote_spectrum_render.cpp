@@ -156,6 +156,83 @@ private slots:
                  < remote.dbmToY(stationCalibratedDbm, plot));
     }
 
+    void receiveWaterfallCalibratesLocalRowsOnly()
+    {
+        const QVector<float> rawRow(8, -100.0f);
+        const auto renderedColor = [&](float rowDbm, float offset, bool remote) {
+            SpectrumWidget widget;
+            widget.m_waterfall = QImage(8, 2, QImage::Format_RGB32);
+            widget.m_waterfall.fill(Qt::black);
+            widget.setWfLowThreshold(-130.0f);
+            widget.setWfHighThreshold(-60.0f);
+            widget.setWfAgcEnabled(false);
+            widget.setWaterfallNFAGCEnabled(false);
+            widget.setDbmCalOffset(offset);
+            widget.m_remoteSpectrum = remote;
+            widget.pushWaterfallRow(QVector<float>(8, rowDbm));
+            return widget.m_waterfall.pixel(0, widget.m_wfWriteRow);
+        };
+
+        QCOMPARE(renderedColor(-100.0f, 18.0f, false),
+                 renderedColor(-82.0f, 0.0f, false));
+        QCOMPARE(renderedColor(-100.0f, -18.0f, false),
+                 renderedColor(-118.0f, 0.0f, false));
+        // The Core has already calibrated a remote row. The client setting
+        // belongs to its own radio and must not shift that row a second time.
+        QCOMPARE(renderedColor(-100.0f, 18.0f, true),
+                 renderedColor(-100.0f, 0.0f, true));
+
+        for (float offset : {18.0f, -18.0f}) {
+            SpectrumWidget local;
+            SpectrumWidget alreadyCalibrated;
+            local.m_waterfall = QImage(8, 2, QImage::Format_RGB32);
+            alreadyCalibrated.m_waterfall = QImage(8, 2, QImage::Format_RGB32);
+            local.setDbmCalOffset(offset);
+            local.setWaterfallNFAGCEnabled(true);
+            alreadyCalibrated.setWaterfallNFAGCEnabled(true);
+            local.pushWaterfallRow(rawRow);
+            alreadyCalibrated.pushWaterfallRow(QVector<float>(8, -100.0f + offset));
+            QCOMPARE(local.wfActiveLowThreshold(), alreadyCalibrated.wfActiveLowThreshold());
+            QCOMPARE(local.wfActiveHighThreshold(), alreadyCalibrated.wfActiveHighThreshold());
+        }
+
+        const auto txColor = [](float rowDbm, float offset) {
+            SpectrumWidget widget;
+            widget.m_waterfall = QImage(8, 2, QImage::Format_RGB32);
+            widget.setTxDisplayCalOffsetDb(offset);
+            widget.setMoxOverlay(true);
+            widget.pushTxWaterfallRow(0, QVector<float>(8, rowDbm));
+            return widget.m_waterfall.pixel(0, widget.m_wfWriteRow);
+        };
+        QCOMPARE(txColor(-40.0f, 18.0f), txColor(-22.0f, 0.0f));
+
+        SpectrumWidget local3d;
+        SpectrumWidget reference3d;
+        for (SpectrumWidget* widget : {&local3d, &reference3d}) {
+            widget->m_waterfall = QImage(8, 2, QImage::Format_RGB32);
+            widget->setSpectrumRenderMode(int(SpectrumRenderMode::Mode3D));
+            widget->m_bandwidthHz = 24000;
+        }
+        local3d.setDbmCalOffset(18.0f);
+        local3d.m_lastFullBinsDbm = QVector<float>(4096, -100.0f);
+        reference3d.m_lastFullBinsDbm = QVector<float>(4096, -82.0f);
+        local3d.pushWaterfallRow(rawRow);
+        reference3d.pushWaterfallRow(QVector<float>(8, -82.0f));
+        QVERIFY(local3d.m_dss.rowWideBandwidthMhzAtAge(0) > 0.0);
+        const int localRing = local3d.m_dss.headRing();
+        const int referenceRing = reference3d.m_dss.headRing();
+        bool comparedWideBin = false;
+        for (int c = 0; c < local3d.m_dss.cols(); ++c) {
+            if (!local3d.m_dss.rowWideCoverageRing(localRing)[c]) {
+                continue;
+            }
+            QCOMPARE(local3d.m_dss.rowWideDataRing(localRing)[c],
+                     reference3d.m_dss.rowWideDataRing(referenceRing)[c]);
+            comparedWideBin = true;
+        }
+        QVERIFY(comparedWideBin);
+    }
+
     void acceptedGeometryReprojectsPaintedHistory()
     {
         SpectrumWidget widget;
