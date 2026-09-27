@@ -1001,6 +1001,34 @@ private slots:
         window.key(false);
         QTRY_VERIFY(!window.controller->isKeyed());
     }
+    void remoteRiseOnTheCarrierDrawsNoReceiveTrace()
+    {
+        // A pan already centred on the carrier does not move at the rise,
+        // so the move cannot be what retires its receive trace: the rise
+        // itself does, on an older Core (blank with its status) and a new
+        // one (blank until the transmit frames land) alike.
+        for (const bool withAnalyzer : {false, true}) {
+            RemoteWindow window(withAnalyzer);
+            QVERIFY(window.connect());
+            SpectrumWidget* two = window.pan(QStringLiteral("two"));
+            SliceModel* tx = window.remote.sliceById(window.txSliceId);
+            QVERIFY(tx);
+            const double carrier = static_cast<double>(window.remote.txFrequencyForSlice(tx));
+            two->setDisplayWindowPreservingHistory(carrier, two->bandwidth());
+            QVERIFY(window.receiveDraws(QStringLiteral("two")));
+            QVERIFY(!two->m_renderedPixels.isEmpty());
+            two->m_visibleBinCount = 100;  // the GPU path's receive trace
+            const double centreBefore = two->centerFrequency();
+
+            window.key(true);
+            QTRY_VERIFY(window.controller->isKeyed());
+            QCOMPARE(two->centerFrequency(), centreBefore);
+            QVERIFY(two->m_renderedPixels.isEmpty());
+            QVERIFY(!two->drawsSpectrumTrace());
+            window.key(false);
+            QTRY_VERIFY(!window.controller->isKeyed());
+        }
+    }
 };
 
 QTEST_MAIN(TstMoxDisplayController)
