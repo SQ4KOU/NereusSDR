@@ -503,8 +503,11 @@ Thetis only enables ADC0 on every board; NereusSDR offers two ADCs on boards tha
   handler before calling close, since a transport can signal closure synchronously.
 - Ruling: ordinary correctness fix within JJ's authorized Core station work; no change to
   pairing trust, permissions, or timing policy is proposed.
-- Status: root implementation in `codex/pairing-confirm-drain`, verification in progress.
-  Only Core code is included; the phone's final-frame receive change remains phone-owned.
+- Status: signed implementation `ecb939955` integrated into trunk. The regression first
+  failed for delayed close and server destruction; all three closure cases pass after the fix.
+  Session and pairing suites pass both in the lane (2/2, 26.07 s) and on the integrated
+  working tree (2/2, 25.34 s). Only Core code is included; the phone's final-frame receive
+  change remains phone-owned.
 - Plan: R-IOS-08; pairing interoperability.
 
 ## How this addendum is kept

@@ -1,3 +1,6 @@
+// Modification history (NereusSDR):
+// 2026-09-27: Cover queued and synchronous final connection closure.
+// J.J. Boyd (KG4VCF), AI-assisted implementation via OpenAI Codex.
 // =================================================================
 // tests/tst_station_session.cpp  (NereusSDR)
 // =================================================================
@@ -255,6 +258,25 @@ private:
     QList<QByteArray> m_received;
 };
 
+// Holds queued output until the test explicitly completes the close. This
+// models a busy socket without relying on scheduler timing or a real network.
+class DrainingTransport final : public SessionTransport {
+public:
+    bool immediate = false;
+    bool closing = false;
+    QList<QByteArray> pending;
+    void sendText(const QByteArray& wire) override { pending.append(wire); }
+    void ping() override {}
+    void closeLink(const QString&) override
+    {
+        closing = true;
+        if (immediate) { emit closed(); }
+    }
+    bool isOpen() const override { return !closing; }
+    QString peerDescription() const override { return QStringLiteral("draining-test"); }
+    void finish() { emit closed(); }
+};
+
 // ── Capturing whatever reaches the Qt logging handler ────────────────────
 //
 // Production installs CoreInit's handler, which redacts and then writes to
@@ -302,6 +324,8 @@ class TstStationSession : public QObject {
 private slots:
     void initTestCase();
     void cleanupTestCase();
+    void finalMessagesSurviveUntilClose_data();
+    void finalMessagesSurviveUntilClose();
 
     // ---- TokenStore (task 18 step 3) ----
     void tokenIsGeneratedNotChosenAndPersists();
@@ -486,6 +510,42 @@ void TstStationSession::cleanupTestCase()
     const QString path = AppSettings::instance().filePath();
     QFile::remove(path);
     QFile::remove(path + QStringLiteral(".bak"));
+}
+
+void TstStationSession::finalMessagesSurviveUntilClose_data()
+{
+    QTest::addColumn<bool>("immediate");
+    QTest::addColumn<bool>("destroyServer");
+    QTest::newRow("immediate") << true << false;
+    QTest::newRow("delayed") << false << false;
+    QTest::newRow("server-destroyed") << false << true;
+}
+
+void TstStationSession::finalMessagesSurviveUntilClose()
+{
+    QFETCH(bool, immediate);
+    QFETCH(bool, destroyServer);
+    QTemporaryDir settingsDir;
+    AppSettings settings(settingsDir.filePath(QStringLiteral("drain.settings")));
+    auto model = makeStationRadioModel(0);
+    auto server = std::make_unique<StationServer>(model.get(), settings,
+        NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
+    QPointer<DrainingTransport> transport = new DrainingTransport;
+    transport->immediate = immediate;
+    server->acceptTransport(transport);
+    server->close();
+    QVERIFY(transport && transport->closing);
+    if (destroyServer) { server.reset(); }
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    if (!immediate) {
+        QVERIFY2(transport, "Connection deleted before queued final output drained");
+        QVERIFY(!transport->pending.isEmpty());
+        const QJsonObject last = QJsonDocument::fromJson(transport->pending.last()).object();
+        QCOMPARE(last.value(QStringLiteral("type")).toString(), QStringLiteral("session.end"));
+        transport->finish();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    }
+    QVERIFY2(transport.isNull(), "Completed close must release connection promptly");
 }
 
 void TstStationSession::mediaEnvelopeIsBoundedAndTyped()

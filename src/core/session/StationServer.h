@@ -1991,7 +1991,6 @@ private:
     quint64 m_ps3SubscriberEpoch = 0;
     /// close() is ending every session.
     bool m_closing = false;
-    bool m_lingerOnDrop = false;
     SessionPs3DisplayAdmissionHandler m_ps3DisplayAdmission;
     DisplayDemandProvider m_displayDemand;
     /// During promoteToSession()'s attach: the session its burst is for.
