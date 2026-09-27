@@ -203,7 +203,8 @@ took exactly 26 frames (243,386 bytes; 13 sent at once, 13 held by the
 library) on every run. The test holds it to that measurement plus one frame
 (252,747 bytes); with libdatachannel's defaults 1,376,067 bytes piled up.
 
-The GUI keeps at most 8 received display messages or 256 KiB between drains,
-dropping the oldest first. Each dropped message is counted
+The GUI keeps at most 32 received display messages or 256 KiB between
+drains, dropping the oldest first (8 before R-R3-21, which dropped the middle
+of the delta chain in the burst a 480 ms stall releases). Each dropped message is counted
 (`displayMessagesDropped`) apart from the received bytes, which count every
 arrival, and the GUI log reports drops at most every 10 seconds.

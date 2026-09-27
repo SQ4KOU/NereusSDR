@@ -1015,6 +1015,14 @@ private slots:
             "audioDelayMs=90.0 audioDelayAccuracyMs=0.5 audioDelayIncludesDevice=yes "
             "deliveryDelayMs=60.0")),
                  qPrintable(g_diagnosticsLines.constLast()));
+        // R-R3-21 / R-R3-08: the display counters follow, not measured
+        // until a display has run.
+        QVERIFY2(g_diagnosticsLines.constLast().contains(QStringLiteral(
+            "deliveryDelayMs=60.0 displayKeyframeWaits=0 displayKeyframeRequests=0 "
+            "displayRowsBlended=0 displayRowsRepeated=0 "
+            "displayLargestArrivalGapMs=not measured displayDelayMs=not measured "
+            "displayItemsDropped=0 displayRowsDropped=0")),
+                 qPrintable(g_diagnosticsLines.constLast()));
 
         // A reconnect: the first figure after it starts a new line.
         const auto breaks = [](const TelemetryHistory::Series& path) {

@@ -128,6 +128,13 @@ public:
     bool publishFrameForTest(const MediaSourceKey& key, qint64 producedAtNs,
                              const QVector<float>& binsLinear);
 
+    /// The producer clock: steady_clock nanoseconds since its epoch, the
+    /// clock every DaemonSpectrumFrame::producedAtNs (and so each display
+    /// frame's producerTimestamp) is read from. R-R3-21: the Core's media
+    /// clock (DaemonMediaController::displayNowNs) is this same clock, so a
+    /// window can present display frames on its audio's clock.
+    static qint64 monotonicNowNs();
+
 signals:
     /// At most one queued notification per active source exists at a time.
     /// Consumers call takeLatest() to acquire the current frame.
@@ -141,7 +148,6 @@ private:
                               const DaemonSpectrumSourceConfig& config);
     static bool inputHistoryIsCompatible(const DaemonSpectrumSourceConfig& before,
                                          const DaemonSpectrumSourceConfig& after);
-    static qint64 monotonicNowNs();
     static void applyEngineConfig(FFTEngine* engine,
                                   const DaemonSpectrumSourceConfig& config);
     static void enqueueIq(FFTEngine* engine,

@@ -520,7 +520,6 @@ DaemonMediaController::DaemonMediaController(StationServer* server,
     m_receiverStreamSlice.fill(-1);
     m_receiverNextSequence.fill(1);
     m_receiverNextTimestamp.fill(0);
-    m_displayClock.start();
     m_shared->join(this);
     m_sendTimer.setInterval(kDisplaySenderIntervalMs);
     connect(&m_sendTimer, &QTimer::timeout, this, &DaemonMediaController::onSendTick);
@@ -735,7 +734,8 @@ QString daemonDisplayDiagnosticsLine(const DaemonDisplayDiagnostics& diagnostics
     return QStringLiteral("largestKeyframe=%1 bytes/%2 fragments"
                           " largestDelta=%3 bytes/%4 fragments"
                           " maxFragments=%5 sendRefusals=%6 transportErrors=%7"
-                          " queuedLate=%8")
+                          " queuedLate=%8 keyframeRequests=%9"
+                          " keyframeRequestsRefused=%10")
         .arg(diagnostics.displayMaxKeyframeBytes)
         .arg(IMediaTransport::sctpFragmentCount(diagnostics.displayMaxKeyframeBytes))
         .arg(diagnostics.displayMaxDeltaBytes)
@@ -743,7 +743,9 @@ QString daemonDisplayDiagnosticsLine(const DaemonDisplayDiagnostics& diagnostics
         .arg(diagnostics.displayMaxFragments)
         .arg(diagnostics.displaySendRefusals)
         .arg(diagnostics.displayTransportErrors)
-        .arg(diagnostics.displayQueuedLate);
+        .arg(diagnostics.displayQueuedLate)
+        .arg(diagnostics.displayKeyframeRequests)
+        .arg(diagnostics.displayKeyframeRequestsRefused);
 }
 
 void DaemonMediaController::recordDisplaySent(const QByteArray& spectrumFrame, bool keyframe)
@@ -880,7 +882,11 @@ std::optional<int> DaemonMediaController::spectrumSourceFps(quint32 endpointId) 
 
 qint64 DaemonMediaController::displayNowNs() const
 {
-    return m_monotonicClock ? m_monotonicClock() : m_displayClock.nsecsElapsed();
+    // R-R3-21 (displayClockVersion 1): the producer clock the display frames
+    // are stamped from, so audio capture, clock echoes and display frames
+    // share one Core clock. It was a per-session QElapsedTimer, whose origin
+    // no window could learn.
+    return m_monotonicClock ? m_monotonicClock() : DaemonSpectrumSource::monotonicNowNs();
 }
 
 bool DaemonMediaController::displayBudgetWireAvailable() const
@@ -2285,11 +2291,29 @@ bool DaemonMediaController::handleKeyframe(const QJsonObject& control)
         it->second.keyframeWindow.start();
         it->second.keyframesInWindow = 0;
     }
+    // R-R3-21: each request is a window that lost a display message and
+    // waits for this keyframe, so every one is logged and counted.
+    ++m_displayDiagnostics.displayKeyframeRequests;
     if (it->second.keyframesInWindow >= kMaxKeyframesPerSecond) {
+        ++m_displayDiagnostics.displayKeyframeRequestsRefused;
+        // The peer drives these: at most one line every 10 s, with the count.
+        if (!m_keyframeRefusalLog.isValid() || m_keyframeRefusalLog.elapsed() >= 10'000) {
+            qCInfo(lcDaemonMedia).noquote()
+                << QStringLiteral("display keyframe request refused endpoint=%1 generation=%2"
+                                  " (more than %3 a second) refused=%4 requests=%5")
+                       .arg(endpointId).arg(contextGeneration).arg(kMaxKeyframesPerSecond)
+                       .arg(m_displayDiagnostics.displayKeyframeRequestsRefused)
+                       .arg(m_displayDiagnostics.displayKeyframeRequests);
+            m_keyframeRefusalLog.start();
+        }
         return false;
     }
     ++it->second.keyframesInWindow;
     it->second.forceKeyframe = true;
+    qCInfo(lcDaemonMedia).noquote()
+        << QStringLiteral("display keyframe requested endpoint=%1 generation=%2 requests=%3")
+               .arg(endpointId).arg(contextGeneration)
+               .arg(m_displayDiagnostics.displayKeyframeRequests);
     return true;
 }
 

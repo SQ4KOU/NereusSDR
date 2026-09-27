@@ -7533,6 +7533,9 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
     caps.audioProfileVersion = media ? 1 : 0;
     // R-R3-35: the Core answers audio clock probes whenever media is on.
     caps.audioClockVersion = media ? 1 : 0;
+    // R-R3-21 / R-R3-08: display frames and those echoes share one Core
+    // clock (DaemonMediaController::displayNowNs), whenever media is on.
+    caps.displayClockVersion = media ? 1 : 0;
     // R-R3-43: a receiver's own audio on its own stream, whenever media is on.
     caps.receiverAudioVersion = media ? 1 : 0;
     // R-R3-45: the headphones mix on its own stream, whenever media is on.

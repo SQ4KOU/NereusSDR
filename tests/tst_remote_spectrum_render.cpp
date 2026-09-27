@@ -227,7 +227,11 @@ private slots:
         QCOMPARE(widget.m_waterfallHistory, paintedHistory);
         QCOMPARE(widget.m_waterfall, paintedViewport);
         QCOMPARE(widget.m_wfHistoryTimestamps, timestamps);
-        QVERIFY(widget.renderedPixels().isEmpty());
+        // R-R3-21: the old trace stays, drawn at the frequency it was
+        // captured at, until the new context's first frame; old data is
+        // still refused.
+        QCOMPARE(widget.renderedPixels().size(), 128);
+        QCOMPARE(widget.renderedPixels().at(64), -90.0f);
         QVERIFY(!widget.updateRemoteSpectrum(frame));
         QTest::qWait(80);
         QCOMPARE(widget.dssRowsPushedForTest(), 1); // No replay of the old pending row.
@@ -237,6 +241,7 @@ private slots:
         QCOMPARE(widget.m_dss.rowCenterMhzAtAge(1), 14.225);
         QCOMPARE(widget.m_wfHistoryRowCount, 2);
         widget.setCenterFrequency(context.exactCentreHz + 200000);
+        // Nothing captured lies in the new window: no trace.
         QVERIFY(widget.renderedPixels().isEmpty());
         QVERIFY(!widget.updateRemoteSpectrum(frame));
         widget.clearRemoteSpectrum();

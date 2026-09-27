@@ -38,6 +38,10 @@
 //               the Core's transmit context for a pan as it stands, so a
 //               context that beat the window's own rise is not lost. J.J.
 //               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26: R-R3-21 / R-R3-08: the spectrum and waterfall presented on
+//               the audio's playout clock (displayClockVersion 1), gap rows
+//               blended or repeated, and the display counters. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 
 #include "core/session/media/DisplayBudget.h"
 #include "core/session/media/DisplayCodec.h"
@@ -61,6 +65,29 @@ class StationClient;
 class RadioModel;
 class PanadapterStack;
 class SpectrumWidget;
+
+/// R-R3-21 / R-R3-08: this window's display counters for its media session
+/// (every pan together), for the diagnostics line.
+struct RemoteDisplayTelemetry {
+    /// Lost display messages that began a wait for a keyframe.
+    quint64 keyframeWaits = 0;
+    /// Keyframe requests sent to the Core.
+    quint64 keyframeRequests = 0;
+    /// Waterfall rows blended across a gap, and repeated while waiting.
+    quint64 rowsBlended = 0;
+    quint64 rowsRepeated = 0;
+    /// The largest time between two display messages of one pan arriving,
+    /// in the last 10 s (any pan).
+    std::optional<double> largestArrivalGapMs;
+    /// Decoded frames the presenter dropped because its queue was full, and
+    /// rows the pans' waterfalls dropped for the same reason (never expected).
+    quint64 itemsDropped = 0;
+    quint64 rowsDropped = 0;
+    /// How far behind the Core's capture the display is presented now (the
+    /// audio's delay, or the last known one), or nothing while each frame is
+    /// drawn on arrival (an older Core, or no clock echo yet).
+    std::optional<double> displayDelayMs;
+};
 
 /// Owns the GUI's media session and one bounded subscription per logical pan.
 /// Layout reparenting does not retire a pan; removing it from the stack does.
@@ -128,6 +155,14 @@ public:
     /// because newer ones arrived before it could show them. Zero without a
     /// media session; each session starts from zero.
     quint64 displayMessagesDropped() const;
+    /// R-R3-21 / R-R3-08: the display counters and the current delay.
+    RemoteDisplayTelemetry displayTelemetry() const;
+    /// R-R3-21 / R-R3-08: this Core stamps display frames and clock echoes
+    /// from one clock (displayClockVersion 1 or later, with audio clock
+    /// probes). Then the display is presented on the audio's clock and clock
+    /// probes run while the display does; without it each frame is drawn on
+    /// arrival, as before.
+    bool displayClockNegotiated() const;
     RemoteAudioReceiverTelemetry audioTelemetry() const;
     /// The audio context most recently accepted from Core. Its encoder and
     /// off reason are present only when audioDetailNegotiated().
@@ -404,6 +439,10 @@ private:
     void fallBackToOpus(const QString& cause);
     void sendClockProbe();
     void reconcileClockProbe();
+    // R-R3-21 / R-R3-08: display presentation on the audio's clock.
+    std::optional<qint64> displayMapNs();
+    void presentDueDisplay();
+    void scheduleDisplayPresentation(std::optional<qint64> mapNs);
     // Task 36: the microphone uplink.
     bool micUplinkWanted() const;
     void reconcileMicUplink();

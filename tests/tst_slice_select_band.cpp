@@ -278,14 +278,15 @@ void TstSliceSelectBand::theCapabilityIsLastInTheMinor11Block()
     // 16's dspInfoVersion.
     // Then parity Task 19's recordStreamVersion.
     // Then parity Task 21's stationRadiosVersion.
-    // Then parity Task 28's txDisplayVersion.
-    QCOMPARE(updates.at(updates.size() - 7).name, QByteArrayLiteral("transmitSettingsVersion"));
-    QCOMPARE(updates.at(updates.size() - 6).name, QByteArrayLiteral("bandSelectVersion"));
-    QCOMPARE(updates.at(updates.size() - 5).name, QByteArrayLiteral("meterReadingsVersion"));
-    QCOMPARE(updates.at(updates.size() - 4).name, QByteArrayLiteral("dspInfoVersion"));
-    QCOMPARE(updates.at(updates.size() - 3).name, QByteArrayLiteral("recordStreamVersion"));
-    QCOMPARE(updates.at(updates.size() - 2).name, QByteArrayLiteral("stationRadiosVersion"));
-    QCOMPARE(updates.last().name, QByteArrayLiteral("txDisplayVersion"));
+    // Then parity Task 28's txDisplayVersion, then R-R3-21's displayClockVersion.
+    QCOMPARE(updates.at(updates.size() - 8).name, QByteArrayLiteral("transmitSettingsVersion"));
+    QCOMPARE(updates.at(updates.size() - 7).name, QByteArrayLiteral("bandSelectVersion"));
+    QCOMPARE(updates.at(updates.size() - 6).name, QByteArrayLiteral("meterReadingsVersion"));
+    QCOMPARE(updates.at(updates.size() - 5).name, QByteArrayLiteral("dspInfoVersion"));
+    QCOMPARE(updates.at(updates.size() - 4).name, QByteArrayLiteral("recordStreamVersion"));
+    QCOMPARE(updates.at(updates.size() - 3).name, QByteArrayLiteral("stationRadiosVersion"));
+    QCOMPARE(updates.at(updates.size() - 2).name, QByteArrayLiteral("txDisplayVersion"));
+    QCOMPARE(updates.last().name, QByteArrayLiteral("displayClockVersion"));
     QCOMPARE(StationCapabilities::fromUpdates(updates).bandSelectVersion, 1);
     QCOMPARE(StationCapabilities::fromUpdates(updates).transmitSettingsVersion, 6);
 

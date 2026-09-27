@@ -758,7 +758,9 @@ private slots:
                                    // Parity Task 21: the Core's radio.
                                    "stationRadiosVersion",
                                    // Parity Task 28: the transmit display.
-                                   "txDisplayVersion"});
+                                   "txDisplayVersion",
+                                   // R-R3-21: the display on the audio's clock.
+                                   "displayClockVersion"});
                 QCOMPARE(names, withReason);
                 const int reason = updateIndex(last.updates,
                                                QByteArrayLiteral("displayBudgetReason"));
@@ -806,7 +808,8 @@ private slots:
                                            QByteArrayLiteral("dspInfoVersion"),
                                            QByteArrayLiteral("recordStreamVersion"),
                                            QByteArrayLiteral("stationRadiosVersion"),
-                                           QByteArrayLiteral("txDisplayVersion")}) {
+                                           QByteArrayLiteral("txDisplayVersion"),
+                                           QByteArrayLiteral("displayClockVersion")}) {
                 stripped.removeAt(updateIndex(stripped, name));
             }
             QCOMPARE(SessionMessages::encode(SessionMessages::capabilities(stripped)), older);

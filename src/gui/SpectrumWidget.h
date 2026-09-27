@@ -56,6 +56,9 @@
 //                                    drawsSpectrumTrace(); no stale receive
 //                                    trace under the transmit axis.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26 : a remote waterfall row queue (R-R3-21, R-R3-08): rows wait
+//                 for the ticker with the RF window they were captured at.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  enums.cs
@@ -408,6 +411,23 @@ public:
                                   double sourceCentreHz, double sampleRateHz,
                                   int grantedFftSize = 0);
     bool updateRemoteSpectrum(const DisplayCodecFrame& frame);
+    /// R-R3-21 / R-R3-08: one remote waterfall row, captured at centreHz and
+    /// spanHz, queued for the ticker without touching the trace: a gap row
+    /// (blended or repeated) or a row presented after its pan was tuned. It
+    /// is drawn at the frequency it was captured at. False outside a remote
+    /// window or for an empty or non-finite row.
+    bool enqueueRemoteWaterfallRow(const QVector<float>& pixelsDbm,
+                                   const QVector<float>& wideDbm,
+                                   double centreHz, double spanHz);
+    /// Rows the ticker has not drawn yet; beyond this the oldest is dropped.
+    static constexpr int kMaxRemoteRowQueue = 32;
+    /// R-R3-21: a remote trace captured at centreHz and spanHz, drawn on the
+    /// current axis (a frame presented after its pan was tuned). False
+    /// outside a remote window, during MOX, or for a non-finite trace.
+    bool presentRemoteTraceCaptured(const QVector<float>& traceDbm,
+                                    double centreHz, double spanHz);
+    /// Rows dropped because the queue was full, this widget's life.
+    quint64 remoteRowsDropped() const { return m_remoteRowsDropped; }
     /// The Core's granted FFT size for this pan, 0 outside a remote window
     /// or before its first context.
     int remoteGrantedFftSize() const { return m_remoteSpectrum ? m_remoteFftSize : 0; }
@@ -820,6 +840,13 @@ public:
     }
     void setTxActiveForTest(bool on) { m_txActiveForTest = on; }
     int  dssRowsPushedForTest() const { return m_dssRowsPushed; }
+    // R-R3-21: the remote row queue, and the ticker run by hand.
+    int  remoteRowQueueDepthForTest() const { return int(m_remoteRowQueue.size()); }
+    quint64 remoteRowsDroppedForTest() const { return m_remoteRowsDropped; }
+    quint64 remoteRowsPushedForTest() const { return m_remoteRowsPushed; }
+    QVector<float> lastRemoteRowPushedForTest() const { return m_lastRemoteRowPushed; }
+    void setWaterfallTickerPausedForTest(bool paused) { m_waterfallTickerPausedForTest = paused; }
+    void tickWaterfallForTest() { onWaterfallTick(); }
     // Parity Task 18 (B3.5): the waterfall's rewind history, in rows.
     int  waterfallHistoryRowsForTest() const { return m_wfHistoryRowCount; }
     // NoiseFloorTracker runs from live FFT frames; this seam drives
@@ -2573,6 +2600,30 @@ private:
     bool m_remoteWidebandActive{false};
     double m_remoteWidebandAdcRateHz{0.0};
     QVector<float> m_pendingRemoteWide;
+    // R-R3-21 / R-R3-08: remote waterfall rows waiting for the ticker,
+    // oldest first, each with the RF window it was captured at. The ticker
+    // draws one a tick, two while more than two wait (a late burst plays out
+    // instead of being squeezed into one row).
+    struct RemoteWaterfallRow {
+        QVector<float> pixelsDbm;
+        QVector<float> wideDbm;
+        double centreHz{0.0};
+        double spanHz{0.0};
+    };
+    QList<RemoteWaterfallRow> m_remoteRowQueue;
+    quint64 m_remoteRowsDropped{0};
+    quint64 m_remoteRowsPushed{0};
+    QVector<float> m_lastRemoteRowPushed;
+    bool m_waterfallTickerPausedForTest{false};
+    void onWaterfallTick();
+    void drainRemoteWaterfallRows();
+    QVector<float> reprojectedToView(const QVector<float>& pixelsDbm,
+                                     double centreHz, double spanHz) const;
+    void refreshRemoteTraceProjection();
+    // R-R3-21: the last trace the Core sent, as sent, and its window.
+    QVector<float> m_remoteTraceCaptured;
+    double m_remoteTraceCentreHz{0.0};
+    double m_remoteTraceSpanHz{0.0};
     double m_remoteWideCentreHz{0.0};
     double m_remoteWideSpanHz{0.0};
 

@@ -84,6 +84,9 @@
 //   2026-09-26 - R-R3-49 / A11 (parity Task 28): txDisplayVersion, after
 //                stationRadiosVersion. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-26 - R-R3-21 / R-R3-08: displayClockVersion, after
+//                txDisplayVersion (merge with parity Task 28). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationCapabilities.h"
@@ -207,6 +210,8 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
         updates.append(intEntry("stationRadiosVersion", stationRadiosVersion));
         // R-R3-49 / A11 (parity Task 28): the transmit display.
         updates.append(intEntry("txDisplayVersion", txDisplayVersion));
+        // R-R3-21 / R-R3-08: display frames and audio on one Core clock.
+        updates.append(intEntry("displayClockVersion", displayClockVersion));
         // iPhone app Task 71: several devices at once, last, and only for
         // a peer that declared the feature.
         if (sessionHolderEntry) {
@@ -417,6 +422,7 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                    || u.name == "recordStreamVersion"
                    || u.name == "stationRadiosVersion"
                    || u.name == "txDisplayVersion"
+                   || u.name == "displayClockVersion"
                    || u.name == "sessionHolderVersion"
                    || u.name == "remoteTxVersion"
                    || u.name == "txStateVersion") {
@@ -466,6 +472,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                     caps.stationRadiosVersion = version;
                 } else if (u.name == "txDisplayVersion") {
                     caps.txDisplayVersion = version;
+                } else if (u.name == "displayClockVersion") {
+                    caps.displayClockVersion = version;
                 } else {
                     caps.bandSelectVersion = version;
                 }

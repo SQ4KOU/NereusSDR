@@ -147,6 +147,10 @@ struct DaemonDisplayDiagnostics {
     quint64 displaySendRefusals = 0;
     quint64 displayTransportErrors = 0;
     quint64 displayQueuedLate = 0;
+    /// R-R3-21: keyframes the window asked for (after a lost display
+    /// message), and those refused by the five-a-second limit.
+    quint64 displayKeyframeRequests = 0;
+    quint64 displayKeyframeRequestsRefused = 0;
 
     bool operator==(const DaemonDisplayDiagnostics&) const = default;
 };
@@ -164,7 +168,9 @@ public:
     /// Monotonic nanoseconds, never negative. Besides display pacing it is
     /// the Core's audio clock (R-R3-35): clock-echo times and the capture
     /// times of audio blocks, which the DSP thread reads, so an injected
-    /// clock must be safe to call from any thread.
+    /// clock must be safe to call from any thread. Without one it is the
+    /// producer clock (DaemonSpectrumSource::monotonicNowNs), the one
+    /// display frames are stamped from (R-R3-21, displayClockVersion 1).
     using MonotonicClock = std::function<qint64()>;
     /// A controller on its own: it serves one media session at a time (the
     /// first that starts while it has none live), owns its spectrum engines
@@ -276,6 +282,10 @@ public:
     bool headphonesMixSending() const;
     std::optional<RemoteAudioProfile> headphonesMixProfile() const;
     DaemonDisplayDiagnostics displayDiagnostics() const;
+    /// R-R3-21: the Core's media clock now (displayNowNs): the clock of
+    /// clock-echo times and audio capture, and, without an injected clock,
+    /// the producer clock display frames are stamped from.
+    qint64 mediaClockNowNs() const { return displayNowNs(); }
     /// What Core granted a live spectrum endpoint: FFT size and tier after
     /// the largest-size and shared-engine rules, and pixels after the source
     /// bin rule (R-R3-01, R-R3-08). Empty for an unknown endpoint.
@@ -616,7 +626,6 @@ private:
     std::map<quint32, EndpointEntry> m_endpoints;
     QTimer m_sendTimer;
     QTimer m_audioDiagnosticsTimer;
-    QElapsedTimer m_displayClock;
     DisplayBudgetPacer m_displayPacer;
     bool m_displayPacerInitialized{false};
     quint64 m_lastSessionEpoch{0};
@@ -628,6 +637,8 @@ private:
     bool m_audioDesiredEnabled{false};
     DaemonAudioDiagnostics m_audioDiagnostics;
     QElapsedTimer m_audioDiagnosticsClock;
+    // R-R3-21: paces the refused-keyframe log line.
+    QElapsedTimer m_keyframeRefusalLog;
     qint64 m_audioDiagnosticsLastLogMs{0};
     QTimer m_displayDiagnosticsTimer;
     DaemonDisplayDiagnostics m_displayDiagnostics;

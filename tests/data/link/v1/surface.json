@@ -297,6 +297,11 @@
         },
         {
             "kind": "i64",
+            "name": "displayClockVersion",
+            "value": 1
+        },
+        {
+            "kind": "i64",
             "name": "sessionHolderVersion",
             "value": 1
         },

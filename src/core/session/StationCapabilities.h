@@ -136,6 +136,8 @@
 //   2026-09-26 - R-IOS-18 / R-R3-49 (parity Task 21): stationRadiosVersion.
 //   2026-09-26 - R-R3-49 / A11 (parity Task 28): txDisplayVersion.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - R-R3-21 / R-R3-08: displayClockVersion. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -318,6 +320,13 @@ struct StationCapabilities {
     /// the same minor-11 block, after stationRadiosVersion. 0 without media
     /// or on a station with no TX analyzer.
     int txDisplayVersion = 0;
+    /// R-R3-21 / R-R3-08: 1 means the Core stamps every display frame's
+    /// producerTimestamp and its clock-echo times (t1, t2, capturedNs) from
+    /// one clock, so a window can present its spectrum and waterfall on its
+    /// audio's playout clock. No message changes shape. Sent in the same
+    /// minor-11 block, after txDisplayVersion; 1 whenever media is on.
+    /// 0 (an older Core): a window draws each display frame on arrival.
+    int displayClockVersion = 0;
     /// iPhone app Task 71 (R-IOS-02; the several-devices design, ruling
     /// 10.1): 1 means the Core admits up to four devices at once, sends the
     /// `connectedDevices` object and takes session.leave. Sent last in the

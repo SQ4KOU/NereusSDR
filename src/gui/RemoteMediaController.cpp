@@ -34,6 +34,19 @@
 //   2026-09-26: parity Tasks 27-29 fix wave (R-R3-49): each binding holds
 //               its accepted transmit context (heldTransmitContext). J.J.
 //               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26: R-R3-21 / R-R3-08: display frames wait in a per-pan
+//               presenter and are drawn at their Core time plus the audio's
+//               delay (displayClockVersion 1; clock probes run while the
+//               display does), gap rows blend or repeat, and the display
+//               counters. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
+//   2026-09-26: merge of parity Tasks 28-29 with R-R3-21 (R-R3-49,
+//               R-R3-21, R-R3-08): transmit frames bypass the presenter; the
+//               keying hold also applies at presentation time; a key forgets
+//               the queued receive frames and an unkey restarts the blend
+//               chain; presented frames are checked against
+//               acceptedGeneration(). J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 
 #include "gui/RemoteMediaController.h"
 #include "core/AppSettings.h"
@@ -53,6 +66,8 @@
 #include "core/safety/RemoteTxWatchdog.h"
 #include "models/TransmitModel.h"
 #include "core/session/media/DisplayCodec.h"
+#include "core/session/media/AudioJitterBuffer.h"
+#include "gui/RemoteDisplayPresenter.h"
 #include "core/session/media/DisplayBudget.h"
 #include "core/session/media/RemoteSpectrumContext.h"
 #include "core/session/media/SpectrumEndpoint.h"
@@ -636,6 +651,9 @@ QString allocationIdentity(const DisplayBudgetLimits& limits,
 }
 } // namespace
 
+// R-R3-21: the display arrival gap reported is the largest of the last 10 s.
+constexpr qint64 kDisplayArrivalWindowNs = 10'000'000'000;
+
 struct RemoteMediaController::Private {
     struct Binding {
         enum class PendingKind { Subscribe, Unsubscribe };
@@ -673,6 +691,13 @@ struct RemoteMediaController::Private {
         QJsonObject askedAgain;
         double sourceCentreHz = 0;
         DisplayCodecDecoder decoder;
+        // R-R3-21 / R-R3-08: decoded frames waiting for their presentation
+        // time, and the rows filling a lost message's gap.
+        RemoteDisplayPresenter presenter;
+        // This pan's display arrivals (audio clock) and the waits between
+        // them, each with its arrival time, for the last 10 s.
+        std::optional<qint64> lastArrivalNs;
+        std::deque<std::pair<qint64, qint64>> arrivalGaps;
         qint64 lastKeyframeMs = -1000;
         bool accepted = false;
         bool rejected = false;
@@ -840,6 +865,13 @@ struct RemoteMediaController::Private {
     // Display drops already written to the log, and when (allocationClock).
     quint64 displayDropsReported = 0;
     qint64 displayDropsReportedAtMs = 0;
+    // R-R3-21 / R-R3-08, per media session: the display's presentation map
+    // (Core clock to this computer's, following the audio's delay), the
+    // audio delay last measured, the presentation timer and the counters.
+    DisplayDelayFollower displayDelay;
+    std::optional<qint64> lastAudioDelayNs;
+    QTimer* presentTimer = nullptr;
+    RemoteDisplayTelemetry displayCounters;
     Ps3DisplayAssembler ps3Assembler;
     quint64 ps3Generation = 0;
     std::unique_ptr<RemoteAudioReceiver> audio;
@@ -1062,6 +1094,11 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
     d->clockProbeTimer->setObjectName(QStringLiteral("remoteAudioClockProbeTimer"));
     d->clockProbeTimer->setInterval(kClockProbeIntervalMs);
     connect(d->clockProbeTimer, &QTimer::timeout, this, &RemoteMediaController::sendClockProbe);
+    d->presentTimer = new QTimer(this);
+    d->presentTimer->setObjectName(QStringLiteral("remoteDisplayPresentTimer"));
+    d->presentTimer->setSingleShot(true);
+    d->presentTimer->setTimerType(Qt::PreciseTimer);
+    connect(d->presentTimer, &QTimer::timeout, this, &RemoteMediaController::presentDueDisplay);
     d->audioStatusTimer = new QTimer(this);
     d->audioStatusTimer->setObjectName(QStringLiteral("remoteAudioStatusTimer"));
     d->audioStatusTimer->setInterval(kAudioStatusRefreshMs);
@@ -1406,7 +1443,7 @@ quint64 RemoteMediaController::displayMessagesDropped() const
 
 void RemoteMediaController::reportDisplayDrops()
 {
-    // The drop rule itself lives in the transport (8 messages or 256 KiB,
+    // The drop rule itself lives in the transport (32 messages or 256 KiB,
     // oldest first); this only reports it, at most every 10 seconds.
     constexpr qint64 kDisplayDropReportIntervalMs = 10'000;
     const quint64 dropped = displayMessagesDropped();
@@ -1438,10 +1475,28 @@ void RemoteMediaController::setPanTransmitting(const QString& panId, bool transm
                                                bool displayMissing)
 {
     if (panId.isEmpty()) { return; }
+    const bool wasTransmitting = d->transmittingPans.contains(panId);
     if (transmitting) {
         d->transmittingPans.insert(panId);
     } else {
         d->transmittingPans.remove(panId);
+    }
+    if (transmitting != wasTransmitting) {
+        // Merge of parity Task 29 with R-R3-21: receive frames queued for
+        // the audio's clock before the key would otherwise be drawn for
+        // about one audio delay into the over, so the key forgets them;
+        // and the unkey starts a new blend chain, so the first receive row
+        // after an over never blends from the row before the key.
+        for (auto& [id, binding] : d->bindings) {
+            Q_UNUSED(id);
+            if (binding.panId != panId) { continue; }
+            if (transmitting) {
+                binding.presenter.reset();
+            } else {
+                binding.presenter.restartChain();
+            }
+        }
+        scheduleDisplayPresentation(d->displayDelay.mapNs());
     }
     const bool missing = transmitting && displayMissing;
     const bool wasMissing = d->transmitDisplayMissingPans.contains(panId);
@@ -1543,9 +1598,14 @@ RemoteAudioDelayReport RemoteMediaController::audioDelay() const
 void RemoteMediaController::reconcileClockProbe()
 {
     // R-R3-35: probe once a second while this computer plays the Core's
-    // audio, and only to a Core that answers.
-    const bool probe = d->peer && audioClockNegotiated() && d->audioEnabled
-        && d->audio->isRunning();
+    // audio, and only to a Core that answers. R-R3-21: also while a display
+    // is shown from a Core on one clock, so the display keeps its map (the
+    // last audio delay, or the base one) with the audio muted.
+    const bool displaying = displayClockNegotiated()
+        && std::any_of(d->bindings.cbegin(), d->bindings.cend(),
+                       [](const auto& entry) { return entry.second.accepted; });
+    const bool probe = d->peer && audioClockNegotiated()
+        && ((d->audioEnabled && d->audio->isRunning()) || displaying);
     if (probe && !d->clockProbeTimer->isActive()) {
         d->clockProbeTimer->start();
     } else if (!probe && d->clockProbeTimer->isActive()) {
@@ -2202,6 +2262,11 @@ void RemoteMediaController::stop()
     d->clockEstimator.reset();
     d->captureAnchor.reset();
     d->pendingClockProbes.clear();
+    // R-R3-21: so do the display's map and counters.
+    d->presentTimer->stop();
+    d->displayDelay.reset();
+    d->lastAudioDelayNs.reset();
+    d->displayCounters = {};
     // A playback problem belongs to its session and ends with it.
     d->audioFailure.reset();
     d->audioRestarting = false;
@@ -2819,6 +2884,7 @@ void RemoteMediaController::refreshSubscriptions()
         binding.rejected = false;
         binding.refusalReason.clear();
         binding.decoder.reset();
+        binding.presenter.restartChain();
         // A tune/zoom renews this binding's codec, not its painted history.
         // New/replaced bindings were fully cleared above; rejection and
         // session retirement still clear them through their lifecycle paths.
@@ -4026,6 +4092,7 @@ void RemoteMediaController::receiveAllocationResult(const QJsonObject& payload)
             binding.accepted = false;
             binding.contextRevision = 0;
             binding.decoder.reset();
+            binding.presenter.reset();
             if (erase) { d->bindings.erase(found); }
             if (widget) { widget->invalidateRemoteSpectrumFrame(); }
             if (!self) { return; }
@@ -4079,6 +4146,7 @@ void RemoteMediaController::receiveAllocationResult(const QJsonObject& payload)
                 binding.accepted = false;
                 binding.contextRevision = 0;
                 binding.decoder.reset();
+                binding.presenter.reset();
                 binding.pending.reset();
                 if (erase) { d->bindings.erase(found); }
                 if (widget) {
@@ -4113,6 +4181,7 @@ void RemoteMediaController::receiveAllocationResult(const QJsonObject& payload)
             binding.accepted = false;
             binding.contextRevision = 0;
             binding.decoder.reset();
+            binding.presenter.reset();
             d->bindings.erase(found);
             if (widget) {
                 // Capacity suspension freezes painted history. Only reject
@@ -4315,6 +4384,7 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
             qCInfo(lcRemoteMedia).noquote() << "Remote display endpoint rejected:"
                                             << endpointId << reason.left(512);
             binding.decoder.reset();
+            binding.presenter.reset();
             const QPointer<RemoteMediaController> self(this);
             const QString panId = binding.panId;
             binding.widget->clearRemoteSpectrum();
@@ -4387,6 +4457,9 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
         binding.transmit = true;
         binding.transmitGeneration = context.codec.contextGeneration;
         binding.transmitContext = *decoded;
+        // Merge with R-R3-21: a transmit context that beats the window's
+        // own rise also forgets the receive frames waiting to be drawn.
+        binding.presenter.reset();
         binding.receivedFrameTimesMs.clear();
         const QPointer<RemoteMediaController> self(this);
         const QString connectionId = d->connectionId;
@@ -4416,6 +4489,7 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
     binding.contextRevision = revision;
     binding.sourceCentreHz = sourceCentre;
     binding.decoder.reset();
+    binding.presenter.restartChain();
     binding.accepted = true;
     binding.rejected = false;
     binding.receivedNoiseFloor = false;
@@ -4470,6 +4544,7 @@ void RemoteMediaController::requestKeyframe(quint32 endpointId)
     const qint64 now = d->clock.elapsed();
     if (now - binding.lastKeyframeMs < 200) { return; }
     binding.lastKeyframeMs = now;
+    ++d->displayCounters.keyframeRequests;
     send({{QStringLiteral("op"), QStringLiteral("keyframe")},
           {QStringLiteral("endpointId"), double(endpointId)},
           {QStringLiteral("contextGeneration"), double(binding.acceptedGeneration())}});
@@ -4505,14 +4580,41 @@ void RemoteMediaController::receiveDisplay(const QByteArray& packet)
         || it->second.observedStreamEpoch != it->second.slice->streamEpoch()
         || generation != it->second.acceptedGeneration()) { return; }
     auto& binding = it->second;
+    // R-R3-21: this pan's waits between display messages, the last 10 s.
+    const qint64 arrivalNs = d->audio->nowNs();
+    if (binding.lastArrivalNs) {
+        binding.arrivalGaps.emplace_back(arrivalNs, arrivalNs - *binding.lastArrivalNs);
+    }
+    binding.lastArrivalNs = arrivalNs;
+    while (!binding.arrivalGaps.empty()
+           && binding.arrivalGaps.front().first < arrivalNs - kDisplayArrivalWindowNs) {
+        binding.arrivalGaps.pop_front();
+    }
     const DisplayCodecDecodeResult decoded = binding.decoder.decode(packet);
     if (decoded.disposition == DisplayCodecDisposition::NeedKeyframe) {
-        requestKeyframe(id);
-    } else if (decoded.disposition == DisplayCodecDisposition::Accepted) {
-        const QPointer<RemoteMediaController> self(this);
-        const QString connectionId = d->connectionId;
         if (binding.transmit) {
-            // Parity Task 28: a transmit display frame, handed on.
+            // Merge of parity Task 28 with R-R3-21: the transmit display is
+            // drawn on arrival, not on the audio's clock (it has no audio
+            // playout to follow), so a lost transmit message only asks for
+            // a keyframe and never touches the receive presenter.
+            requestKeyframe(id);
+            return;
+        }
+        // A lost message: the rows wait for a keyframe, repeating the last
+        // good row while none comes, and blend in when it does.
+        if (!binding.presenter.waitingForKeyframe()) {
+            ++d->displayCounters.keyframeWaits;
+        }
+        binding.presenter.noteLoss();
+        requestKeyframe(id);
+        scheduleDisplayPresentation(d->displayDelay.mapNs());
+    } else if (decoded.disposition == DisplayCodecDisposition::Accepted) {
+        if (binding.transmit) {
+            // Parity Task 28: a transmit display frame, handed on at once.
+            // Merge with R-R3-21: it bypasses the presenter (no audio to
+            // follow), so it is never stamped against the audio clock.
+            const QPointer<RemoteMediaController> self(this);
+            const QString connectionId = d->connectionId;
             const QString panId = binding.panId;
             emit transmitFrameReceived(panId, decoded.frame);
             if (!self || d->connectionId != connectionId) { return; }
@@ -4523,24 +4625,196 @@ void RemoteMediaController::receiveDisplay(const QByteArray& packet)
             // Parity Task 29 (A11): the pan shows the transmit display; a
             // receive frame now is the receiver hearing its own
             // transmitter. Decoded (the next delta needs it), never drawn:
-            // the trace and waterfall hold.
+            // the trace and waterfall hold. Not queued either, so nothing
+            // from the over reaches the presenter.
             return;
         }
-        const bool rendered = binding.widget->updateRemoteSpectrum(decoded.frame);
-        // Rendering emits application signals; a receiver may end this session.
-        if (!self || d->connectionId != connectionId || !rendered) { return; }
-        it = d->bindings.find(id);
-        if (it == d->bindings.end() || !it->second.accepted
-            || it->second.context.codec.contextGeneration != generation) { return; }
-        const qint64 receivedAt = d->allocationClock();
-        it->second.receivedFrameTimesMs.append(receivedAt);
-        while (!it->second.receivedFrameTimesMs.isEmpty()
-               && it->second.receivedFrameTimesMs.constFirst() < receivedAt - 2'000) {
-            it->second.receivedFrameTimesMs.removeFirst();
-        }
-        ++d->frames;
-        if (d->frames == 1) { qCInfo(lcRemoteMedia) << "First encrypted remote spectrum frame received"; }
-        emit displayFrameReceived(id);
+        const SpectrumEndpointContext& context = binding.context;
+        binding.presenter.setRowPeriodNs(context.targetFps > 0 && context.framesPerLine > 0
+            ? qint64(context.framesPerLine) * 1'000'000'000LL / context.targetFps : 0);
+        const quint64 droppedBefore = binding.presenter.counters().itemsDropped;
+        binding.presenter.push(decoded.frame, context.exactCentreHz, context.exactSpanHz);
+        d->displayCounters.itemsDropped += binding.presenter.counters().itemsDropped - droppedBefore;
+        reconcileClockProbe();
+        presentDueDisplay();
     }
+}
+
+RemoteDisplayTelemetry RemoteMediaController::displayTelemetry() const
+{
+    RemoteDisplayTelemetry telemetry = d->displayCounters;
+    const qint64 now = d->audio->nowNs();
+    for (const auto& [id, binding] : d->bindings) {
+        for (const auto& [atNs, gapNs] : binding.arrivalGaps) {
+            if (atNs < now - kDisplayArrivalWindowNs) { continue; }
+            const double gapMs = double(gapNs) / 1'000'000.0;
+            if (!telemetry.largestArrivalGapMs || gapMs > *telemetry.largestArrivalGapMs) {
+                telemetry.largestArrivalGapMs = gapMs;
+            }
+        }
+        if (binding.widget) {
+            telemetry.rowsDropped += binding.widget->remoteRowsDropped();
+        }
+    }
+    if (const std::optional<qint64> map = d->displayDelay.mapNs()) {
+        const std::optional<AudioClockOffset> offset =
+            d->clockEstimator.offset(d->audio->nowNs());
+        if (offset) {
+            telemetry.displayDelayMs = double(*map + offset->offsetNs) / 1'000'000.0;
+        } else if (d->lastAudioDelayNs) {
+            telemetry.displayDelayMs = double(*d->lastAudioDelayNs) / 1'000'000.0;
+        }
+    }
+    return telemetry;
+}
+
+bool RemoteMediaController::displayClockNegotiated() const
+{
+    return audioClockNegotiated()
+        && d->client->capabilities().displayClockVersion >= 1;
+}
+
+std::optional<qint64> RemoteMediaController::displayMapNs()
+{
+    // An older Core: each frame is drawn on arrival.
+    if (!displayClockNegotiated()) {
+        return std::nullopt;
+    }
+    const qint64 now = d->audio->nowNs();
+    const std::optional<AudioClockOffset> offset = d->clockEstimator.offset(now);
+    if (offset && d->audioEnabled) {
+        const RemoteAudioReceiverTelemetry playback = d->audio->telemetry();
+        if (playback.running) {
+            AudioDelayInputs inputs;
+            inputs.offset = offset;
+            inputs.capture = d->captureAnchor;
+            inputs.playingGeneration = d->audioGeneration;
+            inputs.playout = playback.playout;
+            inputs.release = playback.release;
+            if (const std::optional<qint64> map = audioPresentationMapNs(inputs)) {
+                // The reading's own accuracy sets what counts as a change;
+                // a change of the jitter hold is one at once.
+                const std::optional<qint64> holdNs = playback.jitterHoldMs
+                    ? std::optional<qint64>(std::llround(*playback.jitterHoldMs * 1'000'000.0))
+                    : std::nullopt;
+                d->displayDelay.observe(*map, now,
+                                        playback.playout ? playback.playout->accuracyNs() : 0,
+                                        holdNs);
+                d->lastAudioDelayNs = *d->displayDelay.mapNs() + offset->offsetNs;
+                return d->displayDelay.mapNs();
+            }
+        }
+    }
+    if (offset) {
+        // No audio playing (muted, no stream, a restart before its first
+        // echo). The map needs no offset while it holds: keep it, and take
+        // a new one (the last audio delay, or the base one: the one-way trip
+        // plus the audio's base hold, against the current offset) only
+        // when it differs by more than the offset's own error bound, which
+        // is clock drift, not the estimate's noise.
+        const qint64 delayNs = d->lastAudioDelayNs.value_or(
+            offset->roundTripNs / 2 + AudioJitterBuffer::kHoldNs);
+        const qint64 candidate = delayNs - offset->offsetNs;
+        const std::optional<qint64> held = d->displayDelay.mapNs();
+        if (!held || double(std::llabs(candidate - *held)) > offset->boundNsAt(now)) {
+            d->displayDelay.set(candidate, now);
+        }
+    }
+    // Echoes stopped: keep the last map; none yet: draw on arrival.
+    return d->displayDelay.mapNs();
+}
+
+void RemoteMediaController::presentDueDisplay()
+{
+    d->presentTimer->stop();
+    const std::optional<qint64> map = displayMapNs();
+    const qint64 now = d->audio->nowNs();
+    const QPointer<RemoteMediaController> self(this);
+    const QString connectionId = d->connectionId;
+    std::vector<quint32> ids;
+    ids.reserve(d->bindings.size());
+    for (const auto& [id, binding] : d->bindings) {
+        ids.push_back(id);
+    }
+    for (const quint32 id : ids) {
+        auto it = d->bindings.find(id);
+        if (it == d->bindings.end()) { continue; }
+        std::vector<RemoteDisplayPresenter::Item> items = it->second.presenter.takeDue(now, map);
+        for (RemoteDisplayPresenter::Item& item : items) {
+            it = d->bindings.find(id);
+            if (it == d->bindings.end() || !it->second.widget) { break; }
+            // Merge of parity Tasks 28-29 with R-R3-21: the keying hold is
+            // checked at presentation time too. While the Core's transmit
+            // context holds this binding (acceptedGeneration() is the
+            // transmit one) or the pan is keyed, no receive item is drawn.
+            // An older receive generation (a tune) still draws at the
+            // frequency it was captured at, below.
+            if (it->second.transmit || d->transmittingPans.contains(it->second.panId)) {
+                continue;
+            }
+            const QPointer<SpectrumWidget> widget = it->second.widget;
+            if (item.kind != RemoteDisplayPresenter::Kind::Frame) {
+                if (widget->enqueueRemoteWaterfallRow(item.frame.waterfallDbm, item.frame.wideDbm,
+                                                      item.centreHz, item.spanHz)) {
+                    if (item.kind == RemoteDisplayPresenter::Kind::Blended) {
+                        ++d->displayCounters.rowsBlended;
+                    } else {
+                        ++d->displayCounters.rowsRepeated;
+                    }
+                }
+                continue;
+            }
+            const bool rendered = widget->updateRemoteSpectrum(item.frame);
+            // Rendering emits application signals; a receiver may end this session.
+            if (!self || d->connectionId != connectionId) { return; }
+            if (!rendered) {
+                // Captured before this pan was tuned or renewed: its trace and
+                // waterfall row are drawn at the frequency they were captured
+                // at, so a tune or drag never blanks the trace (R-R3-21).
+                if (widget) {
+                    widget->presentRemoteTraceCaptured(item.frame.traceDbm,
+                                                       item.centreHz, item.spanHz);
+                }
+                if (item.frame.waterfallAdvance && widget) {
+                    widget->enqueueRemoteWaterfallRow(item.frame.waterfallDbm,
+                                                      item.frame.wideDbm,
+                                                      item.centreHz, item.spanHz);
+                }
+                continue;
+            }
+            it = d->bindings.find(id);
+            if (it == d->bindings.end() || !it->second.accepted
+                || it->second.acceptedGeneration()
+                    != item.frame.context.contextGeneration) { continue; }
+            const qint64 receivedAt = d->allocationClock();
+            it->second.receivedFrameTimesMs.append(receivedAt);
+            while (!it->second.receivedFrameTimesMs.isEmpty()
+                   && it->second.receivedFrameTimesMs.constFirst() < receivedAt - 2'000) {
+                it->second.receivedFrameTimesMs.removeFirst();
+            }
+            ++d->frames;
+            if (d->frames == 1) { qCInfo(lcRemoteMedia) << "First encrypted remote spectrum frame received"; }
+            emit displayFrameReceived(id);
+            if (!self || d->connectionId != connectionId) { return; }
+        }
+    }
+    scheduleDisplayPresentation(map);
+}
+
+void RemoteMediaController::scheduleDisplayPresentation(std::optional<qint64> mapNs)
+{
+    const qint64 now = d->audio->nowNs();
+    std::optional<qint64> next;
+    for (const auto& [id, binding] : d->bindings) {
+        if (const std::optional<qint64> due = binding.presenter.nextDueNs(now, mapNs)) {
+            next = next ? std::min(*next, *due) : *due;
+        }
+    }
+    if (!next) {
+        d->presentTimer->stop();
+        return;
+    }
+    const qint64 waitMs = std::clamp<qint64>((*next - now + 999'999) / 1'000'000, 0, 1'000);
+    d->presentTimer->start(int(waitMs));
 }
 } // namespace NereusSDR

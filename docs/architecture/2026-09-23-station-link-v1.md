@@ -839,6 +839,7 @@ change shows as surface drift and as a change to this table.
 | `recordStreamVersion` | 1 |
 | `stationRadiosVersion` | 0 |
 | `txDisplayVersion` | 0 |
+| `displayClockVersion` | 1 |
 | `sessionHolderVersion` | 1 |
 | `remoteTxVersion` | 2 |
 | `txStateVersion` | 2 |
@@ -849,8 +850,8 @@ When a feature is off, its version is 0:
 
 - `remoteMediaVersion`, `remoteWidebandDisplayVersion`,
   `remoteAudioStatusVersion`, `spectrumGrantVersion`, `audioProfileVersion`,
-  `audioClockVersion`, `receiverAudioVersion`, `headphonesMixVersion`: 0
-  unless media is enabled.
+  `audioClockVersion`, `receiverAudioVersion`, `headphonesMixVersion`,
+  `displayClockVersion`: 0 unless media is enabled.
 - `remoteDisplayBudgetVersion`: 0 unless media and budget enforcement are
   on and a budget has been computed.
 - `stationTelemetryVersion`: 0 unless telemetry is enabled. At 4 the
@@ -1145,7 +1146,8 @@ When a feature is off, its version is 0:
   help.".
 - `txDisplayVersion` (remote-window parity Task 28, A11): sent only at
   agreed minor 11, after `stationRadiosVersion` in the minor-11 block
-  (`sessionHolderVersion` and the remote transmit entries follow it), and
+  (`displayClockVersion`, then `sessionHolderVersion` and the remote
+  transmit entries follow it), and
   1 only while media is on and the Core has a TX analyzer (a Core that
   runs its own DSP); 0 otherwise. At 1 a window may add
   `txDisplayVersion` to its media `start`; then its subscribes may carry
@@ -1157,6 +1159,16 @@ When a feature is off, its version is 0:
   `transmit`, and receive frames while keyed. (`txState`'s `highSwr` and
   `swrWindBackLatched`, section 18.8, came with this version but do not
   depend on it: every Core that sends `txState` sends them.)
+- `displayClockVersion` (R-R3-21, R-R3-08): sent only at agreed minor 11,
+  after `txDisplayVersion`, and 1 whenever media is on. At 1 every
+  display frame's `producerTimestamp` and the `clock-echo`'s `t1`, `t2` and
+  `capturedNs` are one Core clock, so a window presents its spectrum and
+  waterfall on its audio's playout clock (the remote media control
+  document, "Display on the audio's clock"). No message changes shape. On
+  a Core that sends 0 or no entry a window draws each display frame on
+  arrival, with no delay; its waterfall row queue, gap blending and repeats
+  while waiting for a keyframe still apply. Capabilities are read by name:
+  entries added later move the position of those after them.
 
 - `sessionHolderVersion`: sent only at agreed minor 11, last, and only to
   a peer whose hello declared `sessionHolder` 1 with `deviceAuth` 1; any
@@ -1366,12 +1378,13 @@ older window sees only the values it was built for.
 | 57 | `recordStreamVersion` | `i64` |
 | 58 | `stationRadiosVersion` | `i64` |
 | 59 | `txDisplayVersion` | `i64` |
-| 60 | `sessionHolderVersion` | `i64` |
-| 61 | `remoteTxVersion` | `i64` |
-| 62 | `txRefusalCode` | `utf8` |
-| 63 | `txRefusalReason` | `utf8` |
-| 64 | `txRefusalFix` | `utf8` |
-| 65 | `txStateVersion` | `i64` |
+| 60 | `displayClockVersion` | `i64` |
+| 61 | `sessionHolderVersion` | `i64` |
+| 62 | `remoteTxVersion` | `i64` |
+| 63 | `txRefusalCode` | `utf8` |
+| 64 | `txRefusalReason` | `utf8` |
+| 65 | `txRefusalFix` | `utf8` |
+| 66 | `txStateVersion` | `i64` |
 
 <!-- /surface -->
 

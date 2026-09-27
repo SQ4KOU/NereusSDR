@@ -247,8 +247,11 @@ void TstTransmitSettingsGate::olderCoreOffersNoTransmitSettings()
     QList<MirrorUpdate> updates = caps.toUpdates();
     // R-IOS-27's bandSelectVersion now follows it, then parity Task 15's
     // meterReadingsVersion, parity Task 16's dspInfoVersion and parity Task
-    // 19's recordStreamVersion, parity Task 21's stationRadiosVersion and
-    // parity Task 28's txDisplayVersion; a Core from before them sends none.
+    // 19's recordStreamVersion, parity Task 21's stationRadiosVersion,
+    // parity Task 28's txDisplayVersion and R-R3-21's displayClockVersion;
+    // a Core from before them sends none.
+    QCOMPARE(updates.last().name, QByteArrayLiteral("displayClockVersion"));
+    updates.removeLast();
     QCOMPARE(updates.last().name, QByteArrayLiteral("txDisplayVersion"));
     updates.removeLast();
     QCOMPARE(updates.last().name, QByteArrayLiteral("stationRadiosVersion"));

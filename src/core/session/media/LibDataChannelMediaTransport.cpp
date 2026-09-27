@@ -60,7 +60,11 @@ constexpr char kMicMid[] = "mic";
 constexpr char kMicStreamName[] = "nereus-microphone";
 constexpr int kOpusPayloadType = 111;
 constexpr std::size_t kMaxPendingEvents = 128;
-constexpr std::size_t kMaxPendingDisplayMessages = 8;
+// R-R3-21: a stall of about 480 ms releases about 14 display messages at
+// once, all within one drain. The window decodes and plays them out on their
+// timestamps, so the queue holds a whole burst (8 dropped the middle of the
+// delta chain and cost a keyframe wait); the byte cap still bounds it.
+constexpr std::size_t kMaxPendingDisplayMessages = 32;
 constexpr std::size_t kMaxPendingDisplayBytes = 256 * 1024;
 // R-R3-43: every declared audio stream keeps the 256 ms of lossless cushion
 // the one main stream had: 64 packets at 250 packets/s.
