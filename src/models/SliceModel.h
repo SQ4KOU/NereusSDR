@@ -53,7 +53,8 @@
 //                                    them (gain 100e-6, leak 100e-3), read
 //                                    from ControlRanges.h (R-IOS-06,
 //                                    R-IOS-27). AI-assisted via Anthropic
-//                                    Claude Code.
+//                                    Claude Code. MNR's defaults read from
+//                                    there too.
 // =================================================================
 
 //=================================================================
@@ -1615,12 +1616,13 @@ private:
 
     // BNR + MNR — AetherSDR filter defaults (post-WDSP, not in Thetis).
     double m_bnrStrength = 1.0;
-    double m_mnrStrength = 1.0;
-    double m_mnrOversub  = 4.0;    // MacNRFilter::DEF_OVER;   range 0.01-1000 at filter
-    double m_mnrFloor    = 0.05;   // MacNRFilter::DEF_FLOOR;  range 0.0-2.0 at filter
-    double m_mnrAlpha    = 0.92;   // MacNRFilter::DEF_ALPHA;  range 0.0-1.0
-    double m_mnrBias     = 1.2;    // MacNRFilter::DEF_BIAS;   range 0.0-10.0
-    double m_mnrGsmooth  = 0.70;   // MacNRFilter::DEF_GSMOOTH; range 0.0-1.0
+    // MNR: MacNRFilter's DEF_* values, from ControlRanges.h.
+    double m_mnrStrength = ControlRanges::kMnrStrengthDefault;
+    double m_mnrOversub  = ControlRanges::kMnrOversubDefault;  // range 0.01-1000 at filter
+    double m_mnrFloor    = ControlRanges::kMnrFloorDefault;    // range 0.0-2.0 at filter
+    double m_mnrAlpha    = ControlRanges::kMnrAlphaDefault;    // range 0.0-1.0
+    double m_mnrBias     = ControlRanges::kMnrBiasDefault;     // range 0.0-10.0
+    double m_mnrGsmooth  = ControlRanges::kMnrGsmoothDefault;  // range 0.0-1.0
 
     bool   m_snbEnabled{false};       // Neutral default — feature off at start
     bool   m_anfEnabled{false};       // Neutral default, feature off at start

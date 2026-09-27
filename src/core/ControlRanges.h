@@ -44,6 +44,10 @@
 //               their SetRXAANRVals conversion (R-IOS-06, R-IOS-27). J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-27: MNR's quick controls, their Reset made to restore
+//               MacNRFilter's own DEF_* values (Aggressiveness 4, Bias
+//               1.2) as a new slice does. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <array>
@@ -419,6 +423,14 @@ constexpr NrControl nrChoice(const char* property, const char* label,
                      double(defaultId), kNrNoReset, options.data(), N};
 }
 
+/// The slider position of `defaultValue` (property units), for a Reset
+/// that restores a new slice's value.
+constexpr int nrResetAtDefault(double defaultValue, double scale) noexcept
+{
+    const double position = defaultValue / scale;
+    return static_cast<int>(position < 0 ? position - 0.5 : position + 0.5);
+}
+
 /// The slider position that shows `value` (property units).
 inline int nrSliderFromValue(const NrControl& control, double value) noexcept
 {
@@ -476,6 +488,44 @@ inline constexpr NrControl kNr1Position =
 inline constexpr std::array<NrControl, 5> kNr1Controls{
     kNr1Taps, kNr1Delay, kNr1Gain, kNr1Leak, kNr1Position,
 };
+
+// MNR (macOS Accelerate MMSE-Wiener NR), NereusSDR-native quick controls.
+// A new slice starts at MacNRFilter's own DEF_* values (src/core/
+// MacNRFilter.h, ported from AetherSDR [@0cd4559]; NereusSDR raised OVER
+// from AetherSDR's 2 to 4), and Reset restores the same values, so the
+// popup, Setup's MNR tab and a new slice agree. MacNRFilter.h checks its
+// DEF_* against these on a Mac build.
+inline constexpr double kMnrStrengthDefault = 1.0;
+inline constexpr double kMnrOversubDefault = 4.0;    // MacNRFilter::DEF_OVER
+inline constexpr double kMnrFloorDefault = 0.05;     // MacNRFilter::DEF_FLOOR
+inline constexpr double kMnrAlphaDefault = 0.92;     // MacNRFilter::DEF_ALPHA
+inline constexpr double kMnrBiasDefault = 1.2;       // MacNRFilter::DEF_BIAS
+inline constexpr double kMnrGsmoothDefault = 0.70;   // MacNRFilter::DEF_GSMOOTH
+inline constexpr NrControl kMnrStrength =
+    nrSlider("mnrStrength", "Strength", 0, 200, 1, 0.01, 1, 0, "%", kMnrStrengthDefault,
+             nrResetAtDefault(kMnrStrengthDefault, 0.01));
+inline constexpr NrControl kMnrOversub =
+    nrSlider("mnrOversub", "Aggressiveness", 1, 1000, 1, 1, 1, 0, "", kMnrOversubDefault,
+             nrResetAtDefault(kMnrOversubDefault, 1));
+inline constexpr NrControl kMnrFloor =
+    nrSlider("mnrFloor", "Floor", 0, 2000, 1, 0.001, 1, 0, "m", kMnrFloorDefault,
+             nrResetAtDefault(kMnrFloorDefault, 0.001));
+inline constexpr NrControl kMnrAlpha =
+    nrSlider("mnrAlpha", "Alpha", 0, 100, 1, 0.01, 100, 2, "", kMnrAlphaDefault,
+             nrResetAtDefault(kMnrAlphaDefault, 0.01));
+inline constexpr NrControl kMnrBias =
+    nrSlider("mnrBias", "Bias", 0, 100, 1, 0.1, 10, 1, "", kMnrBiasDefault,
+             nrResetAtDefault(kMnrBiasDefault, 0.1));
+inline constexpr NrControl kMnrGsmooth =
+    nrSlider("mnrGsmooth", "Gsmooth", 0, 100, 1, 0.01, 100, 2, "", kMnrGsmoothDefault,
+             nrResetAtDefault(kMnrGsmoothDefault, 0.01));
+inline constexpr std::array<NrControl, 6> kMnrControls{
+    kMnrStrength, kMnrOversub, kMnrFloor, kMnrAlpha, kMnrBias, kMnrGsmooth,
+};
+static_assert(kMnrOversub.reset == 4 && kMnrBias.reset == 12 && kMnrFloor.reset == 50
+                  && kMnrAlpha.reset == 92 && kMnrGsmooth.reset == 70
+                  && kMnrStrength.reset == 100,
+              "MNR's Reset restores a new slice's values");
 
 // ── Slice colours ─────────────────────────────────────────────────────────
 

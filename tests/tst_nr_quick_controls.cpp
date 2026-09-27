@@ -13,8 +13,8 @@
 //     [v2.10.3.15]: gain x 1e-6, leak x 1e-3). A new slice starts where
 //     the sliders do, so the Gain slider is not pinned above its top and
 //     Leak does not show 0.
-//   - MNR: the Reset button and a new slice agree on MacNRFilter's own
-//     DEF_* values (Aggressiveness 4, Bias 1.2).
+//   - MNR: the Reset button, a new slice and Setup's MNR tab agree on
+//     MacNRFilter's own DEF_* values (Aggressiveness 4, Bias 1.2).
 //
 // No radio is connected, nothing keys and no audio device opens.
 //
@@ -226,6 +226,85 @@ private slots:
         sliders.at(3)->setValue(20);
         QVERIFY(std::abs(slice->nr1Gain() - 300e-6) < 1e-12);
         QVERIFY(std::abs(slice->nr1Leakage() - 20e-3) < 1e-12);
+    }
+
+    // MNR's Reset restores a new slice's values: MacNRFilter's DEF_*
+    // (Strength 1.0, Aggressiveness 4, Floor 0.05, Alpha 0.92, Bias 1.2,
+    // Gsmooth 0.70), and the popup writes them in the properties' units.
+    void mnrResetRestoresANewSlicesValues()
+    {
+#ifndef HAVE_MNR
+        QSKIP("MNR's quick controls open only where MNR runs (a Mac Core).");
+#else
+        RadioModel model;
+        model.addSlice();
+        SliceModel* slice = model.activeSlice();
+        QVERIFY(slice);
+        const SliceModel fresh;
+        VfoWidget vfo;
+        vfo.setRadioModel(&model);
+        vfo.setSlice(slice);
+        DspParamPopup* popup = openPopup(vfo, QStringLiteral("MNR"));
+        QVERIFY(popup);
+        const QMap<QString, QSlider*> sliders = popupSliders(*popup);
+        QCOMPARE(sliders.size(), 6);
+        // Opened on a new slice, the sliders sit at its values.
+        QCOMPARE(sliders.value(QStringLiteral("Aggressiveness"))->value(), 4);
+        QCOMPARE(sliders.value(QStringLiteral("Bias"))->value(), 12);
+        // Moved away, then Reset.
+        for (QSlider* slider : sliders) {
+            slider->setValue(slider->minimum() + 1);
+        }
+        QPushButton* reset = buttonNamed(*popup, QStringLiteral("Reset"));
+        QVERIFY(reset);
+        reset->click();
+        QCOMPARE(QStringLiteral("Aggressiveness %1, Bias %2")
+                     .arg(slice->mnrOversub()).arg(slice->mnrBias()),
+                 QStringLiteral("Aggressiveness %1, Bias %2")
+                     .arg(fresh.mnrOversub()).arg(fresh.mnrBias()));
+        QVERIFY(std::abs(slice->mnrStrength() - fresh.mnrStrength()) < 1e-9);
+        QVERIFY(std::abs(slice->mnrOversub() - fresh.mnrOversub()) < 1e-9);
+        QVERIFY(std::abs(slice->mnrFloor() - fresh.mnrFloor()) < 1e-9);
+        QVERIFY(std::abs(slice->mnrAlpha() - fresh.mnrAlpha()) < 1e-9);
+        QVERIFY(std::abs(slice->mnrBias() - fresh.mnrBias()) < 1e-9);
+        QVERIFY(std::abs(slice->mnrGsmooth() - fresh.mnrGsmooth()) < 1e-9);
+#endif
+    }
+
+    // A new slice's MNR values are MacNRFilter's DEF_* values.
+    void mnrSliceDefaultsAreTheFiltersOwn()
+    {
+        const SliceModel slice;
+        QVERIFY(std::abs(slice.mnrStrength() - 1.0) < 1e-9);
+        QVERIFY(std::abs(slice.mnrOversub() - 4.0) < 1e-9);
+        QVERIFY(std::abs(slice.mnrFloor() - 0.05) < 1e-9);
+        QVERIFY(std::abs(slice.mnrAlpha() - 0.92) < 1e-9);
+        QVERIFY(std::abs(slice.mnrBias() - 1.2) < 1e-9);
+        QVERIFY(std::abs(slice.mnrGsmooth() - 0.70) < 1e-9);
+    }
+
+    // Setup's MNR tab, with no slice to read, starts where a new slice does.
+    void mnrSetupTabWithoutASliceStartsAtTheDefaults()
+    {
+        RadioModel model;
+        NrAnfSetupPage page(&model);
+        auto* tabs = page.findChild<QTabWidget*>();
+        QVERIFY(tabs);
+        QWidget* mnr = nullptr;
+        for (int i = 0; i < tabs->count(); ++i) {
+            if (tabs->tabText(i) == QStringLiteral("MNR")) {
+                mnr = tabs->widget(i);
+            }
+        }
+        QVERIFY(mnr);
+        // Strength, Aggressiveness, Floor, Alpha, Bias, Gsmooth.
+        const QList<QSlider*> sliders = mnr->findChildren<QSlider*>();
+        QCOMPARE(sliders.size(), 6);
+        QList<int> values;
+        for (const QSlider* slider : sliders) {
+            values.append(slider->value());
+        }
+        QCOMPARE(values, (QList<int>{100, 4, 50, 92, 12, 70}));
     }
 };
 

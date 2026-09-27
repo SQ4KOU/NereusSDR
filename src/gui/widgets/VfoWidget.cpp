@@ -103,6 +103,10 @@
 //                 1-1024, delay 1-1023, gain and leak 1-1000, defaults
 //                 64 / 16 / 100 / 100; R-IOS-06, R-IOS-27). J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-27 : MNR's quick controls read ControlRanges.h; Reset restores
+//                 a new slice's values (Aggressiveness 4, Bias 1.2, where it
+//                 gave 6 and 1.5). J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -3934,78 +3938,61 @@ void VfoWidget::showMnrPopup(const QPoint& globalPos)
     if (!m_slice || !nrCannotRunReason(NereusSDR::NrSlot::MNR).isEmpty()) { return; }
     auto* p = new DspParamPopup(this);
 
-    // MNR (macOS Accelerate MMSE-Wiener NR). 6 runtime-tunable knobs with
-    // factory defaults tuned for balanced noticeable-but-not-underwater NR.
-    // Right-click → Reset button restores these defaults.
-    const int strength = static_cast<int>(m_slice->mnrStrength() * 100.0);
-    p->addSlider(QStringLiteral("Strength"), 0, 200, strength,
-                 [](int v) { return QString::number(v) + QStringLiteral("%"); },
-                 [this](int v) { if (m_slice) { m_slice->setMnrStrength(v / 100.0); } },
-                 tr("Dry/wet blend.\n"
-                    "  0%   = bypass (filter runs but output = input)\n"
-                    "  100% = full NR (output = filter result)\n"
-                    "  200% = over-drive (phase-flip, destructive)\n"
-                    "Default 100."),
-                 /*factory=*/100);
+    // MNR (macOS Accelerate MMSE-Wiener NR). 6 runtime-tunable knobs; their
+    // ranges and Reset values come from ControlRanges.h, and Reset restores
+    // a new slice's values (MacNRFilter's DEF_*).
+    using namespace ControlRanges;
+    addNrSlider(p, kMnrStrength, m_slice->mnrStrength(),
+                [this](double v) { if (m_slice) { m_slice->setMnrStrength(v); } },
+                tr("Dry/wet blend.\n"
+                   "  0%   = bypass (filter runs but output = input)\n"
+                   "  100% = full NR (output = filter result)\n"
+                   "  200% = over-drive (phase-flip, destructive)\n"
+                   "Default 100."));
 
-    const int oversubUi = static_cast<int>(m_slice->mnrOversub());
-    p->addSlider(QStringLiteral("Aggressiveness"), 1, 1000, oversubUi,
-                 [](int v) { return QString::number(v); },
-                 [this](int v) { if (m_slice) { m_slice->setMnrOversub(static_cast<double>(v)); } },
-                 tr("MMSE-Wiener oversubtraction factor. Higher values attenuate "
-                    "low-SNR bins more aggressively while leaving high-SNR (voice) "
-                    "bins closer to unity.\n"
-                    "  1    = very gentle\n"
-                    "  6    = noticeable NR (default)\n"
-                    "  20+  = underwater/robotic\n"
-                    "  200+ = diminishing returns"),
-                 /*factory=*/6);
+    addNrSlider(p, kMnrOversub, m_slice->mnrOversub(),
+                [this](double v) { if (m_slice) { m_slice->setMnrOversub(v); } },
+                tr("MMSE-Wiener oversubtraction factor. Higher values attenuate "
+                   "low-SNR bins more aggressively while leaving high-SNR (voice) "
+                   "bins closer to unity.\n"
+                   "  1    = very gentle\n"
+                   "  4    = noticeable NR (default)\n"
+                   "  20+  = underwater/robotic\n"
+                   "  200+ = diminishing returns"));
 
-    const int floorUi = static_cast<int>(m_slice->mnrFloor() * 1000.0);
-    p->addSlider(QStringLiteral("Floor"), 0, 2000, floorUi,
-                 [](int v) { return QString::number(v) + QStringLiteral("m"); },
-                 [this](int v) { if (m_slice) { m_slice->setMnrFloor(v * 0.001); } },
-                 tr("Minimum Wiener gain per bin (×0.001).\n"
-                    "  0    = total silence (filter can zero a bin)\n"
-                    "  50   = -26 dB max attenuation (default)\n"
-                    "  1000 = 0 dB (bin never attenuated)\n"
-                    "  2000 = amplify (destructive)\n"
-                    "Lower floor = more aggressive noise subtraction but more "
-                    "musical-noise artifacts."),
-                 /*factory=*/50);
+    addNrSlider(p, kMnrFloor, m_slice->mnrFloor(),
+                [this](double v) { if (m_slice) { m_slice->setMnrFloor(v); } },
+                tr("Minimum Wiener gain per bin (×0.001).\n"
+                   "  0    = total silence (filter can zero a bin)\n"
+                   "  50   = -26 dB max attenuation (default)\n"
+                   "  1000 = 0 dB (bin never attenuated)\n"
+                   "  2000 = amplify (destructive)\n"
+                   "Lower floor = more aggressive noise subtraction but more "
+                   "musical-noise artifacts."));
 
-    const int alphaUi = static_cast<int>(m_slice->mnrAlpha() * 100.0);
-    p->addSlider(QStringLiteral("Alpha"), 0, 100, alphaUi,
-                 [](int v) { return QString::number(v / 100.0, 'f', 2); },
-                 [this](int v) { if (m_slice) { m_slice->setMnrAlpha(v * 0.01); } },
-                 tr("Decision-directed smoothing coefficient.\n"
-                    "  0.00 = no smoothing (fast/chattery tracking)\n"
-                    "  0.92 = Ephraim-Malah classic (default)\n"
-                    "  1.00 = frozen (prior SNR never updates)\n"
-                    "Balances NR speed vs. musical-noise artifacts."),
-                 /*factory=*/92);
+    addNrSlider(p, kMnrAlpha, m_slice->mnrAlpha(),
+                [this](double v) { if (m_slice) { m_slice->setMnrAlpha(v); } },
+                tr("Decision-directed smoothing coefficient.\n"
+                   "  0.00 = no smoothing (fast/chattery tracking)\n"
+                   "  0.92 = Ephraim-Malah classic (default)\n"
+                   "  1.00 = frozen (prior SNR never updates)\n"
+                   "Balances NR speed vs. musical-noise artifacts."));
 
-    const int biasUi = static_cast<int>(m_slice->mnrBias() * 10.0);
-    p->addSlider(QStringLiteral("Bias"), 0, 100, biasUi,
-                 [](int v) { return QString::number(v / 10.0, 'f', 1); },
-                 [this](int v) { if (m_slice) { m_slice->setMnrBias(v * 0.1); } },
-                 tr("Min-statistics noise-floor bias correction.\n"
-                    "  <1.0 = underestimate noise floor (less NR, more signal)\n"
-                    "  1.5  = balanced (default)\n"
-                    "  >3.0 = overestimate noise floor (more NR, may erode signal)\n"
-                    "If NR is too weak, nudge Bias up. If it's eating speech, nudge down."),
-                 /*factory=*/15);
+    addNrSlider(p, kMnrBias, m_slice->mnrBias(),
+                [this](double v) { if (m_slice) { m_slice->setMnrBias(v); } },
+                tr("Min-statistics noise-floor bias correction.\n"
+                   "  <1.0 = underestimate noise floor (less NR, more signal)\n"
+                   "  1.2  = balanced (default)\n"
+                   "  >3.0 = overestimate noise floor (more NR, may erode signal)\n"
+                   "If NR is too weak, nudge Bias up. If it's eating speech, nudge down."));
 
-    const int gsmoothUi = static_cast<int>(m_slice->mnrGsmooth() * 100.0);
-    p->addSlider(QStringLiteral("Gsmooth"), 0, 100, gsmoothUi,
-                 [](int v) { return QString::number(v / 100.0, 'f', 2); },
-                 [this](int v) { if (m_slice) { m_slice->setMnrGsmooth(v * 0.01); } },
-                 tr("Temporal (per-bin) gain smoothing.\n"
-                    "  0.00 = instant (more musical noise, fast transients)\n"
-                    "  0.70 = balanced (default)\n"
-                    "  1.00 = frozen (gain never updates; the filter is stuck)\n"
-                    "Higher = smoother but slower to react to changing noise."),
-                 /*factory=*/70);
+    addNrSlider(p, kMnrGsmooth, m_slice->mnrGsmooth(),
+                [this](double v) { if (m_slice) { m_slice->setMnrGsmooth(v); } },
+                tr("Temporal (per-bin) gain smoothing.\n"
+                   "  0.00 = instant (more musical noise, fast transients)\n"
+                   "  0.70 = balanced (default)\n"
+                   "  1.00 = frozen (gain never updates; the filter is stuck)\n"
+                   "Higher = smoother but slower to react to changing noise."));
 
     // Wire Reset button (finalize's second callback) to restore the
     // factory defaults on every slider. DspParamPopup::finalize runs the
