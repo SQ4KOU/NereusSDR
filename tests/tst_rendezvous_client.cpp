@@ -295,6 +295,168 @@ private:
     QSet<QWebSocket*> m_closed;
 };
 
+// Task 28 tail (R-IOS-16): a lossy path between the Core and a service,
+// for the Core's pings. A TCP relay on this computer that passes
+// everything through, except that the service's pongs can be dropped (the
+// next N, or all of them) or held for a while, with everything the service
+// sends after a held pong held behind it, as a stalled TCP path would.
+// Only the service's frames are read (unmasked, after the upgrade answer);
+// the Core's go through untouched.
+class LossyLink : public QObject {
+public:
+    explicit LossyLink(quint16 upstreamPort) : m_upstreamPort(upstreamPort)
+    {
+        m_server.listen(QHostAddress::LocalHost, 0);
+        QObject::connect(&m_server, &QTcpServer::newConnection, this, [this] {
+            while (m_server.hasPendingConnections()) {
+                adopt(m_server.nextPendingConnection());
+            }
+        });
+    }
+
+    QUrl url() const
+    {
+        return QUrl(QStringLiteral("ws://127.0.0.1:%1/").arg(m_server.serverPort()));
+    }
+
+    /// Drops the service's next `count` pongs.
+    void dropNextPongs(int count) { m_dropNext = count; }
+    /// Drops every pong from now on, until set false.
+    void setDropAllPongs(bool drop) { m_dropAll = drop; }
+    /// Holds each pong (and what follows it) this long.
+    void setPongDelayMs(int ms) { m_delayMs = ms; }
+
+    int pongsSeen() const { return m_pongsSeen; }
+    int pongsDropped() const { return m_pongsDropped; }
+    /// For each connection the Core opened, how many of its earlier ones
+    /// were still open at this end when it arrived.
+    QList<int> openAtArrival;
+
+private:
+    struct Pipe {
+        QPointer<QTcpSocket> down;
+        QPointer<QTcpSocket> up;
+        QByteArray fromUp;
+        bool upgraded = false;
+        bool holding = false;
+        QByteArray held;
+    };
+
+    void adopt(QTcpSocket* down)
+    {
+        int open = 0;
+        for (const auto& pipe : m_pipes) {
+            if (pipe->down && pipe->down->state() == QAbstractSocket::ConnectedState) {
+                ++open;
+            }
+        }
+        openAtArrival.append(open);
+        auto owned = std::make_unique<Pipe>();
+        Pipe* pipe = owned.get();
+        m_pipes.push_back(std::move(owned));
+        down->setParent(this);
+        auto* up = new QTcpSocket(this);
+        pipe->down = down;
+        pipe->up = up;
+        QObject::connect(down, &QTcpSocket::readyRead, this,
+                         [pipe] { if (pipe->up) { pipe->up->write(pipe->down->readAll()); } });
+        QObject::connect(up, &QTcpSocket::readyRead, this, [this, pipe] { fromService(pipe); });
+        QObject::connect(down, &QTcpSocket::disconnected, this,
+                         [pipe] { if (pipe->up) { pipe->up->abort(); } });
+        QObject::connect(up, &QTcpSocket::disconnected, this,
+                         [pipe] { if (pipe->down) { pipe->down->disconnectFromHost(); } });
+        up->connectToHost(QHostAddress::LocalHost, m_upstreamPort);
+    }
+
+    void toCore(Pipe* pipe, const QByteArray& bytes)
+    {
+        if (pipe->holding) {
+            pipe->held.append(bytes);
+        } else if (pipe->down) {
+            pipe->down->write(bytes);
+        }
+    }
+
+    void fromService(Pipe* pipe)
+    {
+        pipe->fromUp.append(pipe->up->readAll());
+        if (!pipe->upgraded) {
+            const qsizetype end = pipe->fromUp.indexOf("\r\n\r\n");
+            if (end < 0) {
+                return;
+            }
+            toCore(pipe, pipe->fromUp.left(end + 4));
+            pipe->fromUp.remove(0, end + 4);
+            pipe->upgraded = true;
+        }
+        for (;;) {
+            const QByteArray& b = pipe->fromUp;
+            if (b.size() < 2) {
+                return;
+            }
+            const quint8 first = static_cast<quint8>(b.at(0));
+            const quint8 second = static_cast<quint8>(b.at(1));
+            qint64 length = second & 0x7f;
+            qsizetype header = 2;
+            if (length == 126) {
+                if (b.size() < 4) {
+                    return;
+                }
+                length = (qint64(quint8(b.at(2))) << 8) | quint8(b.at(3));
+                header = 4;
+            } else if (length == 127) {
+                if (b.size() < 10) {
+                    return;
+                }
+                length = 0;
+                for (int i = 2; i < 10; ++i) {
+                    length = (length << 8) | quint8(b.at(i));
+                }
+                header = 10;
+            }
+            if ((second & 0x80) != 0) {
+                header += 4;
+            }
+            const qsizetype total = header + qsizetype(length);
+            if (b.size() < total) {
+                return;
+            }
+            const QByteArray frame = b.left(total);
+            pipe->fromUp.remove(0, total);
+            if ((first & 0x0f) == 0x0a) {
+                ++m_pongsSeen;
+                if (m_dropAll || m_dropNext > 0) {
+                    if (m_dropNext > 0) {
+                        --m_dropNext;
+                    }
+                    ++m_pongsDropped;
+                    continue;
+                }
+                if (m_delayMs > 0 && !pipe->holding) {
+                    pipe->holding = true;
+                    QTimer::singleShot(m_delayMs, this, [pipe] {
+                        pipe->holding = false;
+                        if (pipe->down) {
+                            pipe->down->write(pipe->held);
+                        }
+                        pipe->held.clear();
+                    });
+                }
+            }
+            toCore(pipe, frame);
+        }
+    }
+
+    QTcpServer m_server;
+    quint16 m_upstreamPort = 0;
+    std::vector<std::unique_ptr<Pipe>> m_pipes;
+    int m_dropNext = 0;
+    bool m_dropAll = false;
+    int m_delayMs = 0;
+    int m_pongsSeen = 0;
+    int m_pongsDropped = 0;
+};
+
 // ── Placeholders (section 10.4, and link section 16.1) ─────────────────
 
 struct Context {
@@ -1218,6 +1380,20 @@ private:
 
 } // namespace
 
+// Plays the service's side of a Core's registration on `socket`: hello,
+// challenge, registered.
+void registerOnPlayer(ServicePlayer& player, QWebSocket* socket, const QString& id)
+{
+    socket->sendTextMessage(compact(QJsonObject{{"type", "hello"}, {"version", 1},
+                                                {"nonce", b64(randomBytes(32))},
+                                                {"stun", QJsonArray()}}));
+    QVERIFY(player.waitForMessage(socket).has_value());  // register
+    socket->sendTextMessage(
+        compact(QJsonObject{{"type", "challenge"}, {"nonce", b64(randomBytes(32))}}));
+    QVERIFY(player.waitForMessage(socket).has_value());  // prove
+    socket->sendTextMessage(compact(QJsonObject{{"type", "registered"}, {"id", id}}));
+}
+
 class TstRendezvousClient : public QObject {
     Q_OBJECT
 
@@ -1489,11 +1665,13 @@ private slots:
 
     // Task 28 fix wave (the reconnect seen on the live service): whatever
     // makes the Core reconnect (the service closing its connection, a
-    // registration that never finishes, a Core that stopped hearing its
-    // pongs), it closes the connection it had before it opens the next, so
-    // the service never sees two of the Core's connections at once from the
-    // Core's side. ("registered again; closing the older connection" on the
-    // service then means the older one's close never reached it.)
+    // registration that never finishes, and, in
+    // aCoreThatHearsNoPongsLeavesThatConnectionFirst below, a Core that
+    // stopped hearing its pongs), it closes the connection it had before it
+    // opens the next, so the service never sees two of the Core's
+    // connections at once from the Core's side. ("registered again; closing
+    // the older connection" on the service then means the older one's close
+    // never reached it.)
     void theCoreClosesItsConnectionBeforeItOpensTheNext()
     {
         ServicePlayer player;
@@ -1538,6 +1716,105 @@ private slots:
         // Each new connection arrived with none of the Core's older ones
         // open.
         QCOMPARE(player.openAtArrival, QList<int>({0, 0, 0}));
+        core.stop();
+    }
+
+    // Task 28 tail (R-IOS-16), the Rock's registrations: a registered Core
+    // pings every kPingIntervalMs and leaves the connection only when two
+    // pings in a row go unanswered. On a lossy path (LossyLink: shortened
+    // interval, the same rule) one lost pong, and pongs held for 5% or 15%
+    // of the interval (1 s and 3 s of the real 20 s), keep the registration
+    // and the one connection.
+    void aLostOrLatePongKeepsTheRegistration_data()
+    {
+        QTest::addColumn<int>("dropped");
+        QTest::addColumn<int>("delayPercent");
+        QTest::newRow("one pong lost") << 1 << 0;
+        QTest::newRow("every pong 5% late") << 0 << 5;
+        QTest::newRow("every pong 15% late") << 0 << 15;
+    }
+
+    void aLostOrLatePongKeepsTheRegistration()
+    {
+        QFETCH(int, dropped);
+        QFETCH(int, delayPercent);
+        constexpr int kIntervalMs = 400;
+        ServicePlayer player;
+        LossyLink link(player.port());
+        link.dropNextPongs(dropped);
+        link.setPongDelayMs(kIntervalMs * delayPercent / 100);
+        auto coreKey = makeKey();
+        RendezvousClient core;
+        core.setServers({link.url()});
+        QCOMPARE(core.pingIntervalMs(), RendezvousClient::kPingIntervalMs);
+        core.setPingIntervalMs(kIntervalMs);
+        core.setReconnectDelaysMs({50});
+        QSignalSpy registered(&core, &RendezvousClient::registered);
+        QSignalSpy lost(&core, &RendezvousClient::connectionLost);
+        core.registerStation(coreKey->spki(),
+                             [coreKey](const QByteArray& m) { return coreKey->sign(m); },
+                             [](const QByteArray&) { return QByteArray(); });
+        QWebSocket* socket = player.waitForConnection();
+        QVERIFY(socket != nullptr);
+        registerOnPlayer(player, socket, Wire::rendezvousId(coreKey->spki()));
+        QTRY_COMPARE(registered.size(), 1);
+        // Eight pings.
+        QTRY_VERIFY_WITH_TIMEOUT(link.pongsSeen() >= 8, 20 * kIntervalMs);
+        QCOMPARE(link.pongsDropped(), dropped);
+        QCOMPARE(lost.size(), 0);
+        QVERIFY(core.isRegistered());
+        QCOMPARE(link.openAtArrival.size(), 1);
+        core.stop();
+    }
+
+    // Task 28 tail (R-IOS-16), and the ping case the comment above names: a
+    // path that carries no pong (two lost in a row, or none at all) is
+    // found at the third tick after the last pong, the Core leaves that
+    // connection before it opens the next, and it registers again once
+    // pongs come back.
+    void aCoreThatHearsNoPongsLeavesThatConnectionFirst()
+    {
+        constexpr int kIntervalMs = 400;
+        ServicePlayer player;
+        LossyLink link(player.port());
+        auto coreKey = makeKey();
+        RendezvousClient core;
+        core.setServers({link.url()});
+        core.setPingIntervalMs(kIntervalMs);
+        core.setReconnectDelaysMs({50});
+        QSignalSpy registered(&core, &RendezvousClient::registered);
+        QSignalSpy lost(&core, &RendezvousClient::connectionLost);
+        core.registerStation(coreKey->spki(),
+                             [coreKey](const QByteArray& m) { return coreKey->sign(m); },
+                             [](const QByteArray&) { return QByteArray(); });
+        const QString id = Wire::rendezvousId(coreKey->spki());
+        QWebSocket* first = player.waitForConnection();
+        QVERIFY(first != nullptr);
+        registerOnPlayer(player, first, id);
+        QTRY_COMPARE(registered.size(), 1);
+        QTRY_VERIFY_WITH_TIMEOUT(link.pongsSeen() >= 1, 10 * kIntervalMs);
+        QCOMPARE(lost.size(), 0);
+
+        // From here the service's pongs never reach the Core.
+        link.setDropAllPongs(true);
+        QElapsedTimer silent;
+        silent.start();
+        QTRY_COMPARE_WITH_TIMEOUT(lost.size(), 1, 20 * kIntervalMs);
+        // Two ticks with a ping outstanding, then the third ends it: never
+        // before two intervals of silence.
+        QVERIFY2(silent.elapsed() >= 2 * kIntervalMs - kIntervalMs / 10,
+                 qPrintable(QStringLiteral("left after %1 ms").arg(silent.elapsed())));
+        QCOMPARE(link.pongsDropped(), 2);
+
+        link.setDropAllPongs(false);
+        QWebSocket* second = player.waitForConnection();
+        QVERIFY(second != nullptr);
+        registerOnPlayer(player, second, id);
+        QTRY_COMPARE(registered.size(), 2);
+        QVERIFY(core.isRegistered());
+        // The first connection was closed at the Core's end before the
+        // second opened.
+        QCOMPARE(link.openAtArrival, QList<int>({0, 0}));
         core.stop();
     }
 
@@ -2552,6 +2829,58 @@ private slots:
         // once rather than held for their lifetime.
         QTRY_VERIFY_WITH_TIMEOUT(service.turnOutput().contains(QLatin1String("RELEASED 2")),
                                  15000);
+    }
+
+    // Task 28 tail (R-IOS-16), what a device sees while the Core registers
+    // again: a session already open through the service rides its own
+    // connection, so the Core leaving the service (its pongs stopped, as on
+    // the Rock) and registering again leaves it signed in and answering.
+    void aSessionOutlivesTheCoresRegisteringAgain()
+    {
+        LocalService service;
+        QVERIFY(service.start());
+        LossyLink link(service.port());
+        Core core;
+        QTemporaryDir keyDir;
+        auto key = std::make_shared<const ClientDeviceIdentity>(
+            ClientDeviceIdentity::loadOrCreate(keyDir.path()));
+        QVERIFY(core.pairComputer(*key));
+        // The Core reaches the service through the lossy path; the device
+        // straight.
+        StationRendezvous rendezvous(core.server.get(), {link.url()}, /*relayAllowed=*/true);
+        rendezvous.client()->setPingIntervalMs(400);
+        rendezvous.client()->setReconnectDelaysMs({200});
+        QSignalSpy registered(rendezvous.client(), &RendezvousClient::registered);
+        QSignalSpy lost(rendezvous.client(), &RendezvousClient::connectionLost);
+        QVERIFY(rendezvous.start());
+        QTRY_COMPARE_WITH_TIMEOUT(registered.size(), 1, 10000);
+
+        RadioModel remote(RadioModel::Role::Remote);
+        SettingsProxy proxy;
+        StationClient window(&remote, &proxy);
+        window.setDeviceIdentity(key, QStringLiteral("Shack MacBook"));
+        QSignalSpy ended(&window, &StationClient::sessionEnded);
+        QSignalSpy results(&window, &StationClient::commandResult);
+        window.connectThroughService({service.url()}, rendezvous.client()->stationId(),
+                                     core.server->stationIdentity().fingerprint());
+        QTRY_VERIFY_WITH_TIMEOUT(window.isHandshakeComplete(), 60000);
+
+        // The Core's pongs stop: it leaves the service and registers again.
+        link.setDropAllPongs(true);
+        QTRY_VERIFY_WITH_TIMEOUT(lost.size() >= 1, 10000);
+        link.setDropAllPongs(false);
+        QTRY_VERIFY_WITH_TIMEOUT(registered.size() >= 2, 20000);
+
+        // The session never noticed, and still answers.
+        QCOMPARE(ended.size(), 0);
+        QVERIFY(window.isHandshakeComplete());
+        QVERIFY(core.server->hasAuthenticatedSession());
+        const quint32 id = window.invokeCommand(QByteArrayLiteral("conformanceUnknownVerb"), {});
+        QTRY_VERIFY_WITH_TIMEOUT(!results.isEmpty(), 10000);
+        QCOMPARE(results.last().at(0).toUInt(), id);
+        QCOMPARE(results.last().at(1).toBool(), false);
+        window.disconnectFromStation(QStringLiteral("test done"));
+        QTRY_VERIFY_WITH_TIMEOUT(!core.server->hasAuthenticatedSession(), 10000);
     }
 
     // The Core answered with the relay allowed and the credentials never

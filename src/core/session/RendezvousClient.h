@@ -51,6 +51,10 @@
 //   2026-09-26: iPhone app plan Task 28 (R-IOS-16): retireIntroduction()
 //               and liveIntroductions(). J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-27: Task 28 tail (R-IOS-16): setPingIntervalMs() for the lossy
+//               link tests; the missed-pong bound explained against the
+//               service's. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/RendezvousWire.h"
@@ -111,7 +115,12 @@ public:
     static constexpr int kHelloTimeoutMs = 10000;
     /// A registered Core pings the service this often, and reconnects when
     /// two pings in a row go unanswered: the service's own ping interval
-    /// (section 9.2), so a connection a NAT dropped is noticed.
+    /// (section 9.2), so a connection a NAT dropped is noticed. On TCP a
+    /// pong is never lost on its own, only held behind a stalled path, so
+    /// this leaves a connection that has carried no pong for 40 to 60 s. The
+    /// service already leaves one silent for 20 to 40 s (a pong 20 s late),
+    /// so a longer tolerance here would keep nothing: it would only leave
+    /// the Core longer on a connection the service has closed.
     static constexpr int kPingIntervalMs = 20000;
     static constexpr int kMaxMissedPongs = 2;
     /// The most candidates the Core sends for one introduction (section
@@ -148,6 +157,10 @@ public:
     /// connection.
     void setHelloTimeoutMs(int ms);
     int helloTimeoutMs() const { return m_helloTimeoutMs; }
+    /// The ping interval in use: kPingIntervalMs unless a test shortened
+    /// it (the missed-pong rule is the same). Applies to the running timer.
+    void setPingIntervalMs(int ms);
+    int pingIntervalMs() const;
 
     // ── Station role ──────────────────────────────────────────────────
 
