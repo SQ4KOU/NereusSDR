@@ -2238,6 +2238,11 @@ void StationClient::onTransportText(const QByteArray& wire)
             if (stationRadiosAvailable()) {
                 subscribe(QStringLiteral("stationRadios"), 64);
             }
+            // Parity Task 23 (stationTciVersion 2): the apps on the Core's
+            // TCI server, for the TCI applets, page and log.
+            if (stationTciServerAvailable()) {
+                subscribe(QStringLiteral("tciClients"), StationTciModel::kClientsCapacity);
+            }
         }
         // Parity Task 22 (R-R3-49): the Core's log follows again for the
         // viewers that hold it, and the support controls learn the session.
@@ -2330,7 +2335,8 @@ void StationClient::onTransportText(const QByteArray& wire)
             }
             break;
         }
-        if ((spotSourcesAvailable() || stationRadiosAvailable()) && !m_radioModel.isNull()) {
+        if ((spotSourcesAvailable() || stationRadiosAvailable() || stationTciServerAvailable())
+            && !m_radioModel.isNull()) {
             m_radioModel->applyStationRecordBatch(message.recordBatch);
         }
         break;
@@ -4020,7 +4026,8 @@ QString accessoryRefusalDevice(const QByteArray& verb, const QString& faultsDevi
     if (verb == "setTxInterlockPolicy") {
         return QStringLiteral("interlock");
     }
-    if (verb == "setStationTci") {
+    if (verb == "setStationTci" || verb == "setStationTciOptions"
+        || verb == "disconnectStationTciClient") {
         return QStringLiteral("tci");
     }
     if (verb == "setFourO3AEnabled") {
@@ -4689,6 +4696,39 @@ StationClient::CommandOutcome StationClient::requestStationTci(bool enabled, qui
     return sendCommand("setStationTci", -1,
                        { boolArgument("enabled", enabled), intArgument("port", port) },
                        QStringLiteral("the Core's TCI server switch"));
+}
+
+// Parity Task 23 (stationTciVersion 2): the Core's station TCI server's
+// options and apps.
+bool StationClient::stationTciServerAvailable() const
+{
+    return stationTciAvailable() && m_capabilities.stationTciVersion >= 2;
+}
+
+StationClient::CommandOutcome StationClient::requestStationTciOptions(bool emulateExpertSdr3,
+                                                                      bool emulateSunSdr2Pro,
+                                                                      bool cwluBecomesCw,
+                                                                      bool sendInitialState)
+{
+    if (!stationTciServerAvailable()) {
+        return { false, stationTciServerUnavailableReason() };
+    }
+    return sendCommand("setStationTciOptions", -1,
+                       { boolArgument("emulateExpertSdr3", emulateExpertSdr3),
+                         boolArgument("emulateSunSdr2Pro", emulateSunSdr2Pro),
+                         boolArgument("cwluBecomesCw", cwluBecomesCw),
+                         boolArgument("sendInitialState", sendInitialState) },
+                       QStringLiteral("the Core's TCI server settings"));
+}
+
+StationClient::CommandOutcome StationClient::requestDisconnectStationTciClient(const QString& id)
+{
+    if (!stationTciServerAvailable()) {
+        return { false, stationTciServerUnavailableReason() };
+    }
+    return sendCommand("disconnectStationTciClient", -1,
+                       { MirrorUpdate{0, "id", MirrorWireKind::Utf8, QVariant(id)} },
+                       QStringLiteral("an app on the Core's TCI server"));
 }
 
 // R-R3-47 / R-R3-22 (accessoryDataVersion 1): the Core's accessory records

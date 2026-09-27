@@ -30,6 +30,7 @@
 #ifdef HAVE_WEBSOCKETS
 
 #include "AppletWidget.h"
+#include <QPointer>
 
 class QLabel;
 class QPushButton;
@@ -42,6 +43,8 @@ namespace NereusSDR {
 
 class HGauge;
 class TciServer;
+class TciSwitch;
+class RadioModel;
 
 // TciApplet — operator-facing TCI status applet.
 //
@@ -70,6 +73,7 @@ public:
 
     // R-R3-42: the notice line, in plain words; empty while hidden.
     QString noticeText() const;
+    void setStationContext(TciSwitch* control, RadioModel* model);
 
 signals:
     // Emitted when the user clicks the Setup button.
@@ -114,8 +118,12 @@ private:
 
     // Update the status dot color + port label + client count labels.
     void updateStatusWidgets();
+    void updateCoreStatus();
 
     TciServer*   m_server{nullptr};
+    QPointer<TciSwitch> m_switch;
+    QPointer<RadioModel> m_model;
+    QLabel* m_coreStatus{nullptr};
     QTimer*      m_refreshTimer{nullptr};
 
     // ── Main content widgets (hidden when server is stopped) ─────────────────

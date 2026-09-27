@@ -839,7 +839,7 @@ change shows as surface drift and as a change to this table.
 | `radioHardwareVersion` | 7 |
 | `remotePgxlControlVersion` | 4 |
 | `remoteRfKitControlVersion` | 4 |
-| `stationTciVersion` | 1 |
+| `stationTciVersion` | 2 |
 | `accessoryDataVersion` | 3 |
 | `remoteTgxlControlVersion` | 4 |
 | `stationIdentityVersion` | 1 |
@@ -980,7 +980,10 @@ When a feature is off, its version is 0:
   `setRfKitTciMode`, `setRfKitAddress`, section 9.1, parity Task 10).
   `remoteTgxlControlVersion` is followed by `stationIdentityVersion`.
 - `stationTciVersion`: sent only at agreed minor 11, and 0 unless the Core
-  runs a station TCI server.
+  runs a station TCI server. Version 2 adds its four read-only option
+  properties, the `tciClients` record stream, `setStationTciOptions`, and
+  `disconnectStationTciClient`. The Core keeps the options; a window does
+  not write `stationTci` properties.
 - `accessoryDataVersion`: sent only at agreed minor 11, and 0 unless the
   Core owns its accessories. At 1 the station sends the read-only
   `accessoryData` object (fault histories, connection counters, the
@@ -2042,7 +2045,7 @@ An enum property lists the values its domain allows.
 | 7 | `pairingWindowOpen` | `bool` | outbound |  |
 | 8 | `pairingCode` | `utf8` | outbound |  |
 
-**StationTciModel** (5 properties)
+**StationTciModel** (9 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -2051,6 +2054,10 @@ An enum property lists the values its domain allows.
 | 2 | `listening` | `bool` | outbound |  |
 | 3 | `stationAddress` | `utf8` | outbound |  |
 | 4 | `error` | `utf8` | outbound |  |
+| 5 | `emulateExpertSdr3` | `bool` | outbound |  |
+| 6 | `emulateSunSdr2Pro` | `bool` | outbound |  |
+| 7 | `cwluBecomesCw` | `bool` | outbound |  |
+| 8 | `sendInitialState` | `bool` | outbound |  |
 
 **StepAttenuatorFacade** (18 properties)
 
@@ -3748,6 +3755,8 @@ refused.
 | `setRfKitTciMode` | none | `remoteRfKitControlVersion` | 4 | 11 |
 | `setRfKitAddress` | `host` utf8, `port` i64 | `remoteRfKitControlVersion` | 4 | 11 |
 | `setStationTci` | `enabled` bool, `port` i64 | `stationTciVersion` | 1 | 11 |
+| `setStationTciOptions` | `emulateExpertSdr3` bool, `emulateSunSdr2Pro` bool, `cwluBecomesCw` bool, `sendInitialState` bool | `stationTciVersion` | 2 | 11 |
+| `disconnectStationTciClient` | `id` utf8 | `stationTciVersion` | 2 | 11 |
 | `setTxInterlockPolicy` | `mode` i64, `graceMs` i64, `swrGateEnabled` bool, `swrGateMax` f64 | `accessoryDataVersion` | 1 | 11 |
 | `setPgxlPowerCap` | `enabled` bool, `watts` i64 | `accessoryDataVersion` | 1 | 11 |
 | `clearAccessoryFaults` | `device` utf8 | `accessoryDataVersion` | 1 | 11 |

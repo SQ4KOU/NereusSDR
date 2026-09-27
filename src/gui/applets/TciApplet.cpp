@@ -28,6 +28,9 @@
 //                Claude Code. The TCI gains are this computer's settings
 //                now; a notice line shows, in plain words, what TCI
 //                refused or why a receiver's audio stopped.
+//   2026-09-27 - Parity Task 23 control UI by J.J. Boyd (KG4VCF);
+//                AI-assisted implementation via OpenAI Codex. The applet
+//                names both TCI servers and saves Enable through TciSwitch.
 // =================================================================
 
 #ifdef HAVE_WEBSOCKETS
@@ -38,10 +41,15 @@
 #include "gui/OperatorReasonText.h"
 #include "core/LogCategories.h"
 #include "core/TciServer.h"
+#include "core/TciSwitch.h"
+#include "core/session/IStationLink.h"
 #include "gui/HGauge.h"
 #include "gui/StyleConstants.h"
+#include "models/RadioModel.h"
+#include "models/StationTciModel.h"
 
 #include <QFrame>
+#include <QHostAddress>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
@@ -216,6 +224,48 @@ void TciApplet::buildUI()
         buildDisabledState(vbox);
     }
     root->addWidget(m_disabledContent);
+
+    m_coreStatus = makeSecondaryLabel(QString(), this);
+    m_coreStatus->setObjectName(QStringLiteral("tciCoreStatus"));
+    m_coreStatus->setWordWrap(true);
+    m_coreStatus->setVisible(false);
+    root->addWidget(m_coreStatus);
+}
+
+void TciApplet::setStationContext(TciSwitch* control, RadioModel* model)
+{
+    m_switch = control;
+    m_model = model;
+    if (model && model->stationTciModel()) {
+        connect(model->stationTciModel(), &StationTciModel::stateChanged,
+                this, &TciApplet::updateCoreStatus);
+        connect(model->stationTciModel(), &StationTciModel::clientsChanged,
+                this, &TciApplet::updateCoreStatus);
+        connect(model, &RadioModel::stationLinkStateChanged,
+                this, &TciApplet::updateCoreStatus);
+    }
+    updateCoreStatus();
+}
+
+void TciApplet::updateCoreStatus()
+{
+    if (!m_coreStatus) {
+        return;
+    }
+    const IStationLink* link = m_model ? m_model->stationLink() : nullptr;
+    const StationTciModel* station = m_model ? m_model->stationTciModel() : nullptr;
+    if (!link || !link->stationTciAvailable() || !station) {
+        m_coreStatus->hide();
+        return;
+    }
+    const QString state = station->listening()
+        ? QStringLiteral("listening on port %1").arg(station->port())
+        : station->enabled() ? QStringLiteral("waiting to listen")
+                             : QStringLiteral("off");
+    const QString clients = link->stationTciServerAvailable()
+        ? QStringLiteral(", %1 apps connected").arg(station->clients().size()) : QString();
+    m_coreStatus->setText(QStringLiteral("The Core's TCI server: %1%2").arg(state, clients));
+    m_coreStatus->show();
 }
 
 void TciApplet::buildHeaderRow(QVBoxLayout* vbox)
@@ -226,7 +276,7 @@ void TciApplet::buildHeaderRow(QVBoxLayout* vbox)
     m_statusDot = makeStatusDot(this);
     row->addWidget(m_statusDot);
 
-    auto* titleLbl = new QLabel(QStringLiteral("TCI Server"), this);
+    auto* titleLbl = new QLabel(QStringLiteral("This window's TCI server"), this);
     titleLbl->setStyleSheet(QStringLiteral(
         "QLabel { color: %1; font-size: 10px; font-weight: bold; }"
     ).arg(Style::kTextPrimary));
@@ -501,6 +551,7 @@ void TciApplet::syncFromModel()
         return;
     }
     applyEnabledState(m_server->isRunning());
+    updateCoreStatus();
 }
 
 // ── Periodic refresh ──────────────────────────────────────────────────────────
@@ -586,16 +637,26 @@ void TciApplet::onEnableToggled(bool on)
     if (!m_server) {
         return;
     }
-    // Phase 3J-1 review P2.4: handle both enable (on=true → start) and
-    // disable (on=false → stop) so the TciApplet enable button is a
-    // true live toggle — not a one-way latch.
+    // Keep the applet's switch, Setup, and the Core's station switch in
+    // one path. The saved choice survives the next link report.
+    auto& settings = AppSettings::instance();
+    settings.setValue(QStringLiteral("TciServerEnabled"),
+                      on ? QStringLiteral("True") : QStringLiteral("False"));
+    settings.save();
+    const quint16 port = static_cast<quint16>(
+        settings.value(QStringLiteral("TciServerPort"), QStringLiteral("50001"))
+            .toString().toUShort());
+    QHostAddress bind;
+    if (!bind.setAddress(settings.value(QStringLiteral("TciServerBindAddress"),
+                                         QStringLiteral("127.0.0.1")).toString())) {
+        bind = QHostAddress(QHostAddress::LocalHost);
+    }
+    if (m_switch) {
+        m_switch->setSwitch(on, port, bind);
+        return;
+    }
     if (on) {
-        // Read the persisted port preference; default 50001.
-        const quint16 port = static_cast<quint16>(
-            AppSettings::instance()
-                .value(QStringLiteral("TciServerPort"), QStringLiteral("50001"))
-                .toString().toUShort());
-        if (!m_server->start(port)) {
+        if (!m_server->start(bind, port)) {
             qCWarning(lcTci) << "TciApplet: failed to start TCI server on port" << port;
         }
     } else {

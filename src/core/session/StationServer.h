@@ -1132,7 +1132,9 @@ public:
     // setRfKitAddress, parity Task 10); 0 otherwise.
     int rfKitControlVersion() const;
     // R-R3-48: stationTciVersion. 1 on a Core that runs its own station
-    // TCI server (the `stationTci` object and the setStationTci verb).
+    // TCI server (the `stationTci` object and the setStationTci verb); 2
+    // (parity Task 23) with the record streams: the tciClients stream,
+    // setStationTciOptions and disconnectStationTciClient.
     int stationTciVersion() const;
     // R-R3-47 / R-R3-22: accessoryDataVersion. 2 on a Core that owns its
     // accessories (the `accessoryData` object and the setTxInterlockPolicy,
@@ -1977,6 +1979,8 @@ private:
     // Parity Task 21: the Core's radios and their stream.
     QPointer<StationRadios> m_stationRadios;
     void publishStationRadios();
+    // Parity Task 23: the apps on the Core's station TCI server.
+    void publishStationTciClients();
     // iPhone app Task 71: who holds a place on the Core.
     std::unique_ptr<DeviceSessionRegistry> m_deviceSessions;
     // The connection whose command.invoke is being dispatched, and the end

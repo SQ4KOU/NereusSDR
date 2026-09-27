@@ -3,6 +3,8 @@
 // key names and default values were verified against the Thetis control
 // inventory (setup.designer.cs / TCIServer.cs). No Thetis code is
 // translated here; all AppSettings keys are attributed in TciProtocol.h.
+// 2026-09-27 - Parity Task 23 Core TCI options and read-only bind,
+//              J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 
 #include "CatNetworkSetupPages.h"
 #include "gui/StyleConstants.h"
@@ -135,6 +137,7 @@ void CatTciServerPage::buildUI()
     NereusSDR::Style::applyDarkPageStyle(this);
 
     buildServerGroup();
+    buildCoreGroup();
     buildCompatibilityGroup();
     buildIqStreamGroup();
     buildAudioStreamGroup();
@@ -153,7 +156,7 @@ void CatTciServerPage::buildUI()
 // ---------------------------------------------------------------------------
 void CatTciServerPage::buildServerGroup()
 {
-    auto* group = new QGroupBox(tr("Server"), this);
+    auto* group = new QGroupBox(tr("This window's server"), this);
     m_serverGroup = group;  // saved so refreshTciStatusDisplay() can update title
     group->setStyleSheet(QString::fromLatin1(Style::kGroupBoxStyle));
     auto* form = new QFormLayout(group);
@@ -354,12 +357,15 @@ void CatTciServerPage::setRadioModel(NereusSDR::RadioModel* model)
     if (model) {
         connect(model, &NereusSDR::RadioModel::stationLinkStateChanged,
                 this, &CatTciServerPage::refreshStationLine);
+        connect(model, &NereusSDR::RadioModel::coreOnAirChanged,
+                this, &CatTciServerPage::refreshCoreGroup);
         if (auto* station = model->stationTciModel()) {
             connect(station, &NereusSDR::StationTciModel::stateChanged,
                     this, &CatTciServerPage::refreshStationLine);
         }
     }
     refreshStationLine();
+    refreshCoreGroup();
 }
 
 void CatTciServerPage::refreshStationLine()
@@ -374,6 +380,92 @@ void CatTciServerPage::refreshStationLine()
     const QString line = NereusSDR::TciSwitch::stationLine(m_radioModelRef.data());
     m_stationLine->setText(line);
     m_stationLine->setVisible(!line.isEmpty());
+    refreshCoreGroup();
+}
+
+void CatTciServerPage::buildCoreGroup()
+{
+    m_coreGroup = new QGroupBox(tr("The Core's TCI server"), this);
+    m_coreGroup->setObjectName(QStringLiteral("coreTciOptions"));
+    m_coreGroup->setStyleSheet(QString::fromLatin1(Style::kGroupBoxStyle));
+    auto* form = new QFormLayout(m_coreGroup);
+    form->setSpacing(6);
+    m_coreBind = new QLabel(m_coreGroup);
+    m_coreBind->setObjectName(QStringLiteral("coreTciBind"));
+    m_coreBind->setTextFormat(Qt::PlainText);
+    form->addRow(tr("Listens on:"), m_coreBind);
+    m_coreExpert = new QCheckBox(tr("Emulate ExpertSDR3 protocol"), m_coreGroup);
+    m_coreSunSdr = new QCheckBox(tr("Emulate SunSDR2 PRO device"), m_coreGroup);
+    m_coreCwlu = new QCheckBox(tr("CWL/CWU becomes CW"), m_coreGroup);
+    m_coreInitial = new QCheckBox(tr("Send initial state on connect"), m_coreGroup);
+    for (QCheckBox* option : {m_coreExpert, m_coreSunSdr, m_coreCwlu, m_coreInitial}) {
+        option->setStyleSheet(QString::fromLatin1(Style::kCheckBoxStyle));
+        connect(option, &QCheckBox::toggled, this, &CatTciServerPage::sendCoreOptions);
+        form->addRow(QString(), option);
+    }
+    m_coreReason = new QLabel(m_coreGroup);
+    m_coreReason->setObjectName(QStringLiteral("coreTciReason"));
+    m_coreReason->setWordWrap(true);
+    m_coreReason->setTextFormat(Qt::PlainText);
+    form->addRow(QString(), m_coreReason);
+    m_coreGroup->hide();
+    contentLayout()->addWidget(m_coreGroup);
+}
+
+void CatTciServerPage::refreshCoreGroup()
+{
+    if (!m_coreGroup) {
+        return;
+    }
+    const bool remote = m_radioModelRef && m_radioModelRef->role() == RadioModel::Role::Remote;
+    m_coreGroup->setVisible(remote);
+    if (!remote) {
+        return;
+    }
+    IStationLink* link = m_radioModelRef->stationLink();
+    const StationTciModel* station = m_radioModelRef->stationTciModel();
+    const bool available = link && link->stationTciServerAvailable() && station;
+    const bool onAir = m_radioModelRef->isCoreOnAir();
+    const QString reason = !link || !link->stationLinkReady()
+        ? tr("Connect to the Core to change its TCI server settings.")
+        : !available ? IStationLink::stationTciServerUnavailableReason()
+                     : onAir ? tr("The radio is on the air. Try again when it stops.") : QString();
+    m_coreReason->setText(reason);
+    m_coreBind->setText(station && link && link->stationTciAvailable()
+        ? QStringLiteral("%1, port %2 (set on the Core)")
+              .arg(station->stationAddress().isEmpty() ? QStringLiteral("the Core's computer")
+                                                       : station->stationAddress())
+              .arg(station->port())
+        : QStringLiteral("--"));
+    if (station && available) {
+        const QSignalBlocker b1(m_coreExpert);
+        const QSignalBlocker b2(m_coreSunSdr);
+        const QSignalBlocker b3(m_coreCwlu);
+        const QSignalBlocker b4(m_coreInitial);
+        m_coreExpert->setChecked(station->emulateExpertSdr3());
+        m_coreSunSdr->setChecked(station->emulateSunSdr2Pro());
+        m_coreCwlu->setChecked(station->cwluBecomesCw());
+        m_coreInitial->setChecked(station->sendInitialState());
+    }
+    for (QCheckBox* option : {m_coreExpert, m_coreSunSdr, m_coreCwlu, m_coreInitial}) {
+        option->setEnabled(available && !onAir);
+        option->setToolTip(reason);
+    }
+}
+
+void CatTciServerPage::sendCoreOptions()
+{
+    IStationLink* link = m_radioModelRef ? m_radioModelRef->stationLink() : nullptr;
+    if (!link || !link->stationTciServerAvailable()) {
+        refreshCoreGroup();
+        return;
+    }
+    const auto outcome = link->requestStationTciOptions(
+        m_coreExpert->isChecked(), m_coreSunSdr->isChecked(), m_coreCwlu->isChecked(),
+        m_coreInitial->isChecked());
+    if (!outcome.sent) {
+        m_coreReason->setText(outcome.reason);
+    }
 }
 
 void CatTciServerPage::reloadSwitchFromSettings()
@@ -897,11 +989,11 @@ void CatTciServerPage::refreshTciStatusDisplay()
     if (m_serverGroup) {
         if (m_tciServerRunning) {
             m_serverGroup->setTitle(
-                tr("Server (%1 %2)")
+                tr("This window's server (%1 %2)")
                     .arg(m_tciClientCount)
                     .arg(m_tciClientCount == 1 ? tr("client") : tr("clients")));
         } else {
-            m_serverGroup->setTitle(tr("Server"));
+            m_serverGroup->setTitle(tr("This window's server"));
         }
     }
 

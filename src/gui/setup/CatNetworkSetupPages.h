@@ -138,6 +138,15 @@ private:
     QLabel* m_stationLine{nullptr};
     void refreshStationLine();
     void reloadSwitchFromSettings();
+    QGroupBox* m_coreGroup{nullptr};
+    QLabel* m_coreBind{nullptr};
+    QLabel* m_coreReason{nullptr};
+    QCheckBox* m_coreExpert{nullptr};
+    QCheckBox* m_coreSunSdr{nullptr};
+    QCheckBox* m_coreCwlu{nullptr};
+    QCheckBox* m_coreInitial{nullptr};
+    void refreshCoreGroup();
+    void sendCoreOptions();
 
     // Group 2: Compatibility
     QCheckBox*   m_emulateExpertSdr3Check{nullptr};
@@ -164,6 +173,7 @@ private:
 
     void buildUI();
     void buildServerGroup();
+    void buildCoreGroup();
     void buildCompatibilityGroup();
     void buildIqStreamGroup();
     void buildAudioStreamGroup();

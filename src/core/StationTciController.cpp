@@ -14,15 +14,22 @@
 // 2026-09-25: iPhone app Task 73 (R-IOS-02, ruling 5.13): the Core's server
 // changes only the station device's own slices. J.J. Boyd (KG4VCF),
 // AI-assisted via Anthropic Claude Code.
+// 2026-09-27: Parity Task 23 (R-R3-48, R-R3-42, R-R3-49): the apps, their
+// disconnect and the four options. J.J. Boyd (KG4VCF), AI-assisted via
+// Anthropic Claude Code.
 #include "core/StationTciController.h"
 
 #include "core/AppSettings.h"
 #include "core/LogCategories.h"
 #include "core/StationNetwork.h"
 #include "core/SliceOwnership.h"
+#include "core/TciClientSession.h"
 #include "core/TciServer.h"
 #include "models/RadioModel.h"
 
+#include <QWebSocket>
+
+#include <algorithm>
 #include <iterator>
 
 namespace NereusSDR {
@@ -42,9 +49,10 @@ StationTciController::StationTciController(RadioModel* radio, StationTciModel* m
     // TciEmulateSunSDR2Pro, TciCwluBecomesCw, TciCwBecomesCwuAbove10mhz or
     // the other Tci* keys, and relies on their readers' defaults on
     // purpose (the two emulation keys read True, as in a fresh window).
-    // The Core has no page to change them; a Core whose settings file
-    // still holds Tci values from before R-R3-42 honours those, as the
-    // operator's own earlier choices.
+    // A Core whose settings file still holds Tci values from before
+    // R-R3-42 honours those, as the operator's own earlier choices. Since
+    // parity Task 23 a remote window changes four of them
+    // (setStationTciOptions, setOptions below).
     m_server = std::make_unique<TciServer>(radio);
     m_server->setStationReceiveOnly(true);
     // iPhone app Task 73 (ruling 5.13): it reads every slice (trx:N is
@@ -71,6 +79,21 @@ StationTciController::StationTciController(RadioModel* radio, StationTciModel* m
     connect(m_server.get(), &TciServer::operatorNotice, this,
             [](const QString& peer, const QString& reason, bool) {
         qCInfo(lcTci) << "Station TCI server:" << reason << "(app" << peer << ")";
+    });
+    // Parity Task 23 (stationTciVersion 2): the apps, as the `tciClients`
+    // stream. An app arriving or leaving, and each line an app sends (its
+    // last command, and what it subscribed to), change the list; changes in
+    // one turn of the event loop are published once.
+    const auto clientsChanged = [this] { publishClients(); };
+    connect(m_server.get(), &TciServer::clientConnected, this, clientsChanged);
+    connect(m_server.get(), &TciServer::clientDisconnected, this, clientsChanged);
+    connect(m_server.get(), &TciServer::serverStopped, this, clientsChanged);
+    connect(m_server.get(), &TciServer::txAudioActiveClientChanged, this, clientsChanged);
+    connect(m_server.get(), &TciServer::messageLogged, this,
+            [this](const QString& direction, const QString&, const QString&, qint64) {
+        if (direction == QLatin1String("in")) {
+            publishClients();
+        }
     });
 #endif
 }
@@ -187,6 +210,128 @@ bool StationTciController::setEnabled(bool enabled, int port, QString* reason)
     return true; // Saved; whether it listens is the `stationTci` object.
 }
 
+// static
+QString StationTciController::unknownClientReason()
+{
+    return QStringLiteral("That app is no longer connected to the Core's TCI server.");
+}
+
+void StationTciController::setOptions(bool emulateExpertSdr3, bool emulateSunSdr2Pro,
+                                      bool cwluBecomesCw, bool sendInitialState)
+{
+    // The keys and values TciProtocol::buildInitBurst and
+    // buildInitialRadioStateLines read for every app that connects.
+    const auto flag = [](bool on) {
+        return on ? QStringLiteral("True") : QStringLiteral("False");
+    };
+    auto& settings = AppSettings::instance();
+    settings.setValue(QStringLiteral("TciEmulateExpertSDR3Protocol"), flag(emulateExpertSdr3));
+    settings.setValue(QStringLiteral("TciEmulateSunSDR2Pro"), flag(emulateSunSdr2Pro));
+    settings.setValue(QStringLiteral("TciCwluBecomesCw"), flag(cwluBecomesCw));
+    settings.setValue(QStringLiteral("TciSendInitialFrequencyStateOnConnect"),
+                      flag(sendInitialState));
+    settings.save();
+    qCInfo(lcTci) << "Station TCI server options: ExpertSDR3" << emulateExpertSdr3
+                  << "SunSDR2 PRO" << emulateSunSdr2Pro << "CWL/CWU as CW" << cwluBecomesCw
+                  << "initial state" << sendInitialState;
+    publish();
+}
+
+bool StationTciController::disconnectClient(const QString& id, QString* reason)
+{
+#ifdef HAVE_WEBSOCKETS
+    if (m_server) {
+        const auto clients = m_server->clients();
+        for (auto it = clients.cbegin(); it != clients.cend(); ++it) {
+            if (m_clientIds.value(it.key()) == id && it.key() != nullptr) {
+                qCInfo(lcTci) << "Station TCI server: disconnecting app" << it.value()->peer
+                              << "at a remote device's request";
+                // As the TCI Clients applet's Disconnect: the server's own
+                // disconnect handling tidies the app's state.
+                it.key()->close();
+                if (reason) {
+                    reason->clear();
+                }
+                return true;
+            }
+        }
+    }
+#endif
+    if (reason) {
+        *reason = unknownClientReason();
+    }
+    return false;
+}
+
+void StationTciController::publishClients()
+{
+    if (m_clientsQueued) {
+        return;
+    }
+    m_clientsQueued = true;
+    QMetaObject::invokeMethod(this, [this] {
+        m_clientsQueued = false;
+        if (!m_model) {
+            return;
+        }
+        QList<StationTciClient> list;
+#ifdef HAVE_WEBSOCKETS
+        if (m_server && m_server->isRunning()) {
+            const auto clients = m_server->clients();
+            const QWebSocket* transmitter = m_server->activeTxAudioClient();
+            QHash<const void*, QString> ids;
+            for (auto it = clients.cbegin(); it != clients.cend(); ++it) {
+                const std::shared_ptr<TciClientSession>& session = it.value();
+                if (!session || session->disconnected) {
+                    continue;
+                }
+                QString id = m_clientIds.value(it.key());
+                if (id.isEmpty()) {
+                    id = QString::number(m_nextClientId++);
+                }
+                ids.insert(it.key(), id);
+                StationTciClient client;
+                client.id = id;
+                client.name = session->userAgent.trimmed();
+                if (client.name.isEmpty()) {
+                    client.name = QStringLiteral("(unknown)");
+                }
+                client.address = session->peer;
+                QList<int> audio(session->audioStreamEnabled.cbegin(),
+                                 session->audioStreamEnabled.cend());
+                QList<int> iq(session->iqStreamEnabled.cbegin(), session->iqStreamEnabled.cend());
+                std::sort(audio.begin(), audio.end());
+                std::sort(iq.begin(), iq.end());
+                for (int rx : audio) {
+                    client.subscriptions.append(QStringLiteral("audio:%1").arg(rx));
+                }
+                for (int rx : iq) {
+                    client.subscriptions.append(QStringLiteral("iq:%1").arg(rx));
+                }
+                if (session->rxSensorsEnabled) {
+                    client.subscriptions.append(QStringLiteral("rxSensors"));
+                }
+                if (session->txSensorsEnabled) {
+                    client.subscriptions.append(QStringLiteral("txSensors"));
+                }
+                client.transmitting = transmitter != nullptr && transmitter == it.key();
+                client.lastCommand = session->lastCommand;
+                list.append(client);
+            }
+            m_clientIds = ids;
+        } else {
+            m_clientIds.clear();
+        }
+#endif
+        // In the order they connected (their ids rise).
+        std::sort(list.begin(), list.end(), [](const StationTciClient& a,
+                                               const StationTciClient& b) {
+            return a.id.toULongLong() < b.id.toULongLong();
+        });
+        m_model->setClients(list);
+    }, Qt::QueuedConnection);
+}
+
 QList<QHostAddress> StationTciController::wantedAddresses() const
 {
     // The one station listener rule (StationNetwork::StationBind).
@@ -282,6 +427,17 @@ void StationTciController::publish()
     // Which address is blocked, if any, in plain words; the station address
     // above says which one serves the station.
     state.error = m_blocked.isEmpty() ? QString() : blockedReason(m_port, m_blocked);
+    // Parity Task 23: the options as the server reads them, with its
+    // readers' defaults (TciProtocol::buildInitBurst).
+    auto& settings = AppSettings::instance();
+    const auto flag = [&settings](const char* key, const char* fallback) {
+        return settings.value(QString::fromLatin1(key), QString::fromLatin1(fallback)).toString()
+            == QStringLiteral("True");
+    };
+    state.emulateExpertSdr3 = flag("TciEmulateExpertSDR3Protocol", "True");
+    state.emulateSunSdr2Pro = flag("TciEmulateSunSDR2Pro", "True");
+    state.cwluBecomesCw = flag("TciCwluBecomesCw", "False");
+    state.sendInitialState = flag("TciSendInitialFrequencyStateOnConnect", "True");
     m_model->setState(state);
 }
 

@@ -221,6 +221,11 @@
 //               (R-R3-49, R-IOS-18, supportBundleVersion 1): support.collect
 //               and support.setLogCategories. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-27: Parity Task 23 (R-R3-48, R-R3-42, R-R3-49,
+//               stationTciVersion 2): setStationTciOptions and
+//               disconnectStationTciClient, refused while the radio is on
+//               the air. J.J. Boyd (KG4VCF), with AI-assisted implementation
+//               via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -423,6 +428,9 @@ QString notRepresentableReason()
 //   setRfKitOperate, setRfKitAntenna, setRfKitTciMode, setRfKitAddress
 //                          rfKitFullControlAvailable() (version 4)
 //   setStationTci          stationTciAvailable() (version 1)
+//   setStationTciOptions, disconnectStationTciClient
+//                          stationTciVersion 2 (requestStationTciOptions,
+//                          requestDisconnectStationTciClient)
 //   setTxInterlockPolicy, setPgxlPowerCap, clearAccessoryFaults
 //                          accessoryDataAvailable() (version 1)
 //   requestIoBoardProbe    remoteHardwareConfigAvailable() (version 2)
@@ -585,6 +593,14 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
         {"setRfKitAddress", {arg("host", kUtf8), arg("port", kInt)},
          "remoteRfKitControlVersion", 4, kRadioIdentitySessionProtocolMinor},
         {"setStationTci", {arg("enabled", kBool), arg("port", kInt)}, "stationTciVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
+        // The Core's station TCI server's options and apps (R-R3-48,
+        // R-R3-42, parity Task 23).
+        {"setStationTciOptions",
+         {arg("emulateExpertSdr3", kBool), arg("emulateSunSdr2Pro", kBool),
+          arg("cwluBecomesCw", kBool), arg("sendInitialState", kBool)},
+         "stationTciVersion", 2, kRadioIdentitySessionProtocolMinor},
+        {"disconnectStationTciClient", {arg("id", kUtf8)}, "stationTciVersion", 2,
          kRadioIdentitySessionProtocolMinor},
         // The Core's accessory records and settings (R-R3-47, R-R3-22).
         {"setTxInterlockPolicy",
@@ -997,6 +1013,9 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         handleSetRfKitAddress(invoke);
     } else if (invoke.commandVerb == "setStationTci") {
         handleSetStationTci(invoke);
+    } else if (invoke.commandVerb == "setStationTciOptions"
+               || invoke.commandVerb == "disconnectStationTciClient") {
+        handleStationTciServer(invoke);
     } else if (invoke.commandVerb == "setTxInterlockPolicy") {
         handleSetTxInterlockPolicy(invoke);
     } else if (invoke.commandVerb == "setPgxlPowerCap") {
@@ -2581,6 +2600,52 @@ void SessionCommandDispatcher::handleSetStationTci(const SessionMessage& invoke)
         return;
     }
     emitResult(invoke.commandVerb, invoke.commandId, true, QString(), {});
+}
+
+// Parity Task 23 (R-R3-48, R-R3-42, stationTciVersion 2): the station TCI
+// server's four options and closing one of its apps. Each is refused while
+// the Core's radio is on the air (the parity plan's rule); nothing changes
+// then.
+void SessionCommandDispatcher::handleStationTciServer(const SessionMessage& invoke)
+{
+    const bool options = invoke.commandVerb == "setStationTciOptions";
+    QVariant expert;
+    QVariant sunSdr;
+    QVariant cwlu;
+    QVariant initial;
+    QVariant id;
+    const bool readable = options
+        ? (hasExactlyArguments(invoke.arguments, {"emulateExpertSdr3", "emulateSunSdr2Pro",
+                                                  "cwluBecomesCw", "sendInitialState"})
+           && findArgument(invoke.arguments, "emulateExpertSdr3", &expert)
+           && expert.typeId() == QMetaType::Bool
+           && findArgument(invoke.arguments, "emulateSunSdr2Pro", &sunSdr)
+           && sunSdr.typeId() == QMetaType::Bool
+           && findArgument(invoke.arguments, "cwluBecomesCw", &cwlu)
+           && cwlu.typeId() == QMetaType::Bool
+           && findArgument(invoke.arguments, "sendInitialState", &initial)
+           && initial.typeId() == QMetaType::Bool)
+        : (hasExactlyArguments(invoke.arguments, {"id"})
+           && findArgument(invoke.arguments, "id", &id) && id.typeId() == QMetaType::QString);
+    if (!readable) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   options ? QStringLiteral("The request to change the Core's TCI server "
+                                            "settings was not understood.")
+                           : QStringLiteral("The request to disconnect an app from the "
+                                            "Core's TCI server was not understood."),
+                   {});
+        return;
+    }
+    QString reason;
+    if (m_radioModel->stationOnAirRefusal(&reason)) {
+        emitResult(invoke.commandVerb, invoke.commandId, false, reason, {});
+        return;
+    }
+    const bool accepted = options
+        ? m_radioModel->setStationTciOptionsForStation(expert.toBool(), sunSdr.toBool(),
+                                                       cwlu.toBool(), initial.toBool(), &reason)
+        : m_radioModel->disconnectStationTciClientForStation(id.toString(), &reason);
+    emitResult(invoke.commandVerb, invoke.commandId, accepted, accepted ? QString() : reason, {});
 }
 
 // R-R3-47 / R-R3-22 (accessoryDataVersion 1): the transmit interlock policy.

@@ -1073,6 +1073,12 @@ public:
     CommandOutcome requestResetRfKitError() override;
     CommandOutcome requestRfKitEnabled(bool enabled) override;
     CommandOutcome requestStationTci(bool enabled, quint16 port) override;
+    // Parity Task 23 (stationTciVersion 2).
+    bool stationTciServerAvailable() const override;
+    CommandOutcome requestStationTciOptions(bool emulateExpertSdr3, bool emulateSunSdr2Pro,
+                                            bool cwluBecomesCw,
+                                            bool sendInitialState) override;
+    CommandOutcome requestDisconnectStationTciClient(const QString& id) override;
     CommandOutcome requestTxInterlockPolicy(int mode, int graceMs, bool swrGateEnabled,
                                             double swrGateMax) override;
     CommandOutcome requestPgxlPowerCap(bool enabled, int watts) override;

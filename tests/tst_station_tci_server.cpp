@@ -21,12 +21,16 @@
 // allows remote transmit, the Core's own server still never keys, with
 // transmit unheld or held by a device, and never releases a device's key.
 // J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-27: Parity Task 23 options, client records and remote controls,
+// J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 #include "MultiDeviceHarness.h"
 
 #include <QtTest/QtTest>
 #include <QNetworkInterface>
 #include <QTcpServer>
 #include <QWebSocket>
+#include <QCheckBox>
+#include <QPushButton>
 
 #include "OperatorWording.h"
 #include "core/AppSettings.h"
@@ -37,10 +41,13 @@
 #include "core/TciServer.h"
 #include "core/TciSwitch.h"
 #include "core/session/IStationLink.h"
+#include "core/session/SessionCommandDispatcher.h"
 #include "models/RadioModel.h"
 #include "models/RfKitModel.h"
 #include "models/SliceModel.h"
 #include "models/StationTciModel.h"
+#include "gui/applets/TciApplet.h"
+#include "gui/setup/CatNetworkSetupPages.h"
 
 using namespace NereusSDR;
 using BandFollow = TunerModel::BandFollow;
@@ -86,10 +93,13 @@ public:
     bool tciAvailable{true};
     bool coreHere{false};
     bool ready{true};
+    bool serverVersion2{true};
     int stored{1};   // the Core has a stored station switch (-1: not known yet)
     int requests{0};
     bool requestedOn{false};
     quint16 requestedPort{0};
+    int optionRequests{0};
+    bool requestedExpert{true};
     CommandOutcome requestAddSlice(const QString&) override { return {}; }
     CommandOutcome requestAddSliceOnPan(const QString&) override { return {}; }
     CommandOutcome requestRemoveSlice(int) override { return {}; }
@@ -97,6 +107,8 @@ public:
     CommandOutcome requestSliceSampleRate(int, int) override { return {}; }
     bool stationLinkReady() const override { return ready; }
     bool stationTciAvailable() const override { return ready && tciAvailable; }
+    bool stationTciServerAvailable() const override
+    { return stationTciAvailable() && serverVersion2; }
     bool coreServesTciOnThisComputer() const override { return coreHere; }
     int coreStationTciStored() const override { return stored; }
     CommandOutcome requestStationTci(bool on, quint16 port) override
@@ -105,6 +117,12 @@ public:
         requestedOn = on;
         requestedPort = port;
         return {true, {}, quint32(100 + requests)};   // command ids 101, 102, ...
+    }
+    CommandOutcome requestStationTciOptions(bool expert, bool, bool, bool) override
+    {
+        ++optionRequests;
+        requestedExpert = expert;
+        return {true, {}, quint32(200 + optionRequests)};
     }
 };
 
@@ -206,6 +224,138 @@ private slots:
             QVERIFY(!state.listening());
             QVERIFY(!restarted.server()->isRunning());
         }
+    }
+
+    // Parity Task 23: the four station options are kept by the Core;
+    // each connected app has a stable record id and can be disconnected.
+    void stationOptionsAndClientDisconnect()
+    {
+        const quint16 port = freePort();
+        QVERIFY(port >= 1024);
+        RadioModel model;
+        StationTciModel state;
+        StationTciController controller(&model, &state);
+        controller.setBindOverride(QStringLiteral("127.0.0.1"));
+        controller.setOptions(false, true, true, false);
+        QVERIFY(!state.emulateExpertSdr3());
+        QVERIFY(state.emulateSunSdr2Pro());
+        QVERIFY(state.cwluBecomesCw());
+        QVERIFY(!state.sendInitialState());
+        QCOMPARE(AppSettings::instance().value(QStringLiteral("TciEmulateExpertSDR3Protocol"))
+                     .toString(), QStringLiteral("False"));
+        QCOMPARE(AppSettings::instance().value(QStringLiteral("TciCwluBecomesCw")).toString(),
+                 QStringLiteral("True"));
+        QString reason;
+        QVERIFY(controller.setEnabled(true, port, &reason));
+        TciApp app(port);
+        QTRY_COMPARE(state.clients().size(), 1);
+        const StationTciClient client = state.clients().first();
+        QVERIFY(!client.id.isEmpty());
+        QVERIFY(!client.address.isEmpty());
+        QCOMPARE(StationTciClient::fromFields(client.id, client.toFields()).value(), client);
+        QVERIFY(!controller.disconnectClient(QStringLiteral("missing"), &reason));
+        QCOMPARE(reason, StationTciController::unknownClientReason());
+        QVERIFY(OperatorWording::isPlain(reason));
+        QVERIFY(controller.disconnectClient(client.id, &reason));
+        QVERIFY(reason.isEmpty());
+        QTRY_COMPARE(state.clients().size(), 0);
+        QVERIFY(controller.setEnabled(false, port, &reason));
+    }
+
+    // Exercise the actual Core dispatcher with simulated transmit state;
+    // no radio or RF. A rejected disconnect must leave the client connected.
+    void stationOptionsAndDisconnectAreRefusedOnAir()
+    {
+        RadioModel model;
+        model.enableStationTci(QStringLiteral("127.0.0.1"));
+        QString reason;
+        const quint16 port = freePort();
+        QVERIFY(model.setStationTciForStation(true, port, &reason));
+        TciApp app(port);
+        auto* state = model.stationTciModel();
+        QTRY_COMPARE(state->clients().size(), 1);
+        const QString id = state->clients().first().id;
+        const bool original = state->emulateExpertSdr3();
+        SessionCommandDispatcher dispatcher(&model);
+        QSignalSpy results(&dispatcher, &SessionCommandDispatcher::commandResultReady);
+        model.transmitModel().setMox(true);
+        dispatcher.dispatch(SessionMessages::commandInvoke("setStationTciOptions", 1,
+            {{0, "emulateExpertSdr3", MirrorWireKind::Bool, !original},
+             {0, "emulateSunSdr2Pro", MirrorWireKind::Bool, false},
+             {0, "cwluBecomesCw", MirrorWireKind::Bool, true},
+             {0, "sendInitialState", MirrorWireKind::Bool, false}}));
+        dispatcher.dispatch(SessionMessages::commandInvoke("disconnectStationTciClient", 2,
+            {utf8("id", id)}));
+        QCOMPARE(results.size(), 2);
+        for (const auto& arguments : results) {
+            const auto result = qvariant_cast<SessionMessage>(arguments.first());
+            QVERIFY(!result.accepted);
+            QCOMPARE(result.reason, RadioModel::onAirReason());
+        }
+        QCOMPARE(state->emulateExpertSdr3(), original);
+        QCOMPARE(state->clients().size(), 1);
+        QCOMPARE(app.socket.state(), QAbstractSocket::ConnectedState);
+        model.transmitModel().setMox(false);
+        dispatcher.dispatch(SessionMessages::commandInvoke("disconnectStationTciClient", 3,
+            {utf8("id", id)}));
+        QCOMPARE(results.size(), 3);
+        QVERIFY(qvariant_cast<SessionMessage>(results.last().first()).accepted);
+        QTRY_VERIFY(state->clients().isEmpty());
+    }
+
+    void remoteAppletAndSetupUseTheCoreControlPath()
+    {
+        const quint16 port = freePort();
+        QVERIFY(port >= 1024);
+        AppSettings::instance().setValue(QStringLiteral("TciServerPort"), QString::number(port));
+        RadioModel window(RadioModel::Role::Remote);
+        FakeStationLink link;
+        window.attachStation(&link);
+        TciServer local(&window);
+        TciSwitch control(&local, &window);
+        TciApplet applet(&local);
+        applet.setStationContext(&control, &window);
+        auto* enable = [&]() -> QPushButton* {
+            for (QPushButton* button : applet.findChildren<QPushButton*>()) {
+                if (button->text() == QStringLiteral("Enable Server")) { return button; }
+            }
+            return nullptr;
+        }();
+        QVERIFY(enable);
+        enable->click();
+        QCOMPARE(link.requests, 1);
+        QVERIFY(link.requestedOn);
+        QCOMPARE(link.requestedPort, port);
+        QCOMPARE(AppSettings::instance().value(QStringLiteral("TciServerEnabled")).toString(),
+                 QStringLiteral("True"));
+        QVERIFY(local.isRunning());
+        local.stop();
+
+        CatTciServerPage page;
+        page.setRadioModel(&window);
+        auto* coreOption = [&]() -> QCheckBox* {
+            for (QCheckBox* box : page.findChildren<QCheckBox*>()) {
+                if (box->text() == QStringLiteral("Emulate ExpertSDR3 protocol")
+                    && box->parent() != nullptr
+                    && box->parent()->objectName() == QStringLiteral("coreTciOptions")) {
+                    return box;
+                }
+            }
+            return nullptr;
+        }();
+        QVERIFY(coreOption);
+        QVERIFY(coreOption->isEnabled());
+        const QVariant localOption =
+            AppSettings::instance().value(QStringLiteral("TciEmulateExpertSDR3Protocol"));
+        coreOption->click();
+        QCOMPARE(link.optionRequests, 1);
+        QVERIFY(!link.requestedExpert);
+        QCOMPARE(AppSettings::instance().value(QStringLiteral("TciEmulateExpertSDR3Protocol")),
+                 localOption);
+        link.serverVersion2 = false;
+        window.reportStationLinkStateChanged();
+        QVERIFY(!coreOption->isEnabled());
+        QVERIFY(OperatorWording::isPlain(IStationLink::stationTciServerUnavailableReason()));
     }
 
     // A TCI app at the station (the RF-Kit amplifier's stand-in) hears the
