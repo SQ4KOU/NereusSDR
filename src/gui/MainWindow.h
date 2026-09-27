@@ -40,6 +40,10 @@
 //                 panLayoutLimitFor(), applySpotModeToSlice(); the pan-0
 //                 strip pointer is gone. AI-assisted implementation via
 //                 Anthropic Claude Code.
+//   2026-09-26 - J.J. Boyd (KG4VCF). Remote-window parity Task 29:
+//                m_moxDisplay and its local and remote transmit display
+//                sources replace m_txDisplayPanId and the saved receive
+//                rate and DDC centre. AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1236,32 +1240,20 @@ private:
     /// Auto AGC-T needs the noise floor of the band a slice is actually on;
     /// a single tracker fed from stream 0 would mis-set every other slice.
     QMap<int, class NoiseFloorTracker*> m_streamNoiseFloors;
-    /// Pan currently showing the transmit spectrum instead of its receiver,
-    /// or empty when not transmitting. Set on the MOX rise edge from the
-    /// TX-bound slice's panKey(), cleared on the fall edge.
-    ///
-    /// Two jobs, and it has to be a stored id rather than a re-derivation
-    /// for both. dispatchFftFrameToPans skips this pan so a receiver that
-    /// survives transmit does not fight the TX trace on the same widget
-    /// (the ORION class keeps RX1 through PureSignal; the HERMES class does
-    /// not, which is why the G2 and the G2E behave differently here). And
-    /// the MOX fall edge restores exactly the pan that was taken over, even
-    /// if the TX binding moved to a different slice while keyed.
-    QString             m_txDisplayPanId;
+    /// Remote-window parity Task 29 (A11, R-R3-49): the rise and fall of
+    /// the pan hosting the transmitting slice while the radio is keyed
+    /// (the transmit display, grid, palette, waterfall levels and red
+    /// border), shared by a local and a remote window. Its transmitPanId()
+    /// is the pan dispatchFftFrameToPans skips while keyed. Qt-parented to
+    /// this window; its source is one of the two below.
+    class MoxDisplayController* m_moxDisplay{nullptr};
+    std::unique_ptr<class LocalTxDisplaySource> m_localTxDisplaySource;
+    std::unique_ptr<class RemoteTxDisplaySource> m_remoteTxDisplaySource;
 
     // PR #212 follow-up: TX-side panadapter source via WDSP analyzer.
     // Source-switched in via the MoxController::moxStateChanged lambda
     // (FFTEngine for RX, TxAnalyzer for TX).  See TxAnalyzer.h header.
     TxAnalyzer*         m_txAnalyzer{nullptr};
-    // Saved RX panadapter state captured on MOX-up so we can restore on
-    // MOX-down.  During TX, the SpectrumWidget is reconfigured to display
-    // the *TX filter passband* (a few-kHz window around the carrier) per
-    // Thetis's UpdateTXDisplayVars + CalcSpectrum (console.cs:8015-8049 +
-    // specHPSDR.cs:738-806 [v2.10.3.13]) — so all four state values
-    // (sample rate, center, bandwidth, DDC center) need to flip on MOX
-    // edge and restore on un-key.
-    double              m_savedSpectrumSampleRate{0.0};
-    double              m_savedSpectrumDdcHz{0.0};
 
     /// Last centre + sample rate RadioModel published for each stream, kept
     /// so a pan that subscribes AFTER the stream was centred still learns

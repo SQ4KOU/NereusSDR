@@ -21,12 +21,31 @@
 //               micLineChanged, so VOX shows disabled with its reason while
 //               this computer has no microphone line to the Core. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26: parity Task 28 (R-R3-49, A11, R-IOS-13): a Core at
+//               txDisplayVersion 1 is told at media start that this window
+//               takes its transmit display; each subscribe carries the pan's
+//               transmit window (txMinDbm, txMaxDbm), and a context the Core
+//               marks `transmit` and its frames are handed on
+//               (transmitContextReceived, transmitFrameReceived) instead of
+//               being drawn as receive; drawing them is Task 29. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26: parity Task 29 (A11, R-R3-49): setPanTransmitting holds a
+//               transmitting pan's receive frames while keyed and says when
+//               the Core sends no transmit display; refreshTransmitView asks
+//               again at once for the transmitting pan's moved view. J.J.
+//               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26: parity Tasks 27-29 fix wave (R-R3-49): heldTransmitContext,
+//               the Core's transmit context for a pan as it stands, so a
+//               context that beat the window's own rise is not lost. J.J.
+//               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 
 #include "core/session/media/DisplayBudget.h"
+#include "core/session/media/DisplayCodec.h"
 #include "core/session/media/IReceiverPcmSink.h"
 #include "core/session/media/MediaPeer.h"
 #include "core/session/media/RemoteAudioContext.h"
 #include "core/session/media/RemoteAudioReceiver.h"
+#include "core/session/media/RemoteSpectrumContext.h"
 #include "gui/PanStatusText.h"
 #include "gui/RemoteAudioStatus.h"
 #include <QHash>
@@ -173,6 +192,26 @@ public:
     /// the main stream) and a headphones-audio request go out; otherwise
     /// the controls on the wire are exactly today's.
     bool headphonesMixNegotiated() const;
+    /// Parity Task 28 (R-R3-49, A11): this window's media start told a Core
+    /// at txDisplayVersion 1 that it takes the transmit display: its
+    /// subscribes carry the transmit window and its contexts `transmit`.
+    bool txDisplayNegotiated() const;
+    /// Parity Task 29 (A11): the pan shows the transmit display while the
+    /// Core is keyed (MoxDisplayController's rise and fall). While it does,
+    /// the pan's receive frames are decoded but not drawn, so the receiver
+    /// hearing its own transmitter never reaches the trace or the waterfall.
+    /// With `displayMissing` (a Core below txDisplayVersion 1) the pan's
+    /// status line says the Core does not send its transmit display.
+    void setPanTransmitting(const QString& panId, bool transmitting, bool displayMissing);
+    bool isPanTransmitting(const QString& panId) const;
+    /// Parity Task 29: the transmitting pan's view moved while keyed; ask
+    /// the Core again now rather than on the next planner pass.
+    void refreshTransmitView();
+    /// The Core's transmit context for the pan while it sends one (the
+    /// newest accepted context marked `transmit`); none once a receive
+    /// context replaced it. Media and transmit state travel on different
+    /// channels, so the context can land before the window's own rise.
+    std::optional<SpectrumContextMessage> heldTransmitContext(const QString& panId) const;
     /// R-R3-45: why a receiver routed to the headphones is not heard, for
     /// the slice flags; empty when nothing is wrong on the Core's side or
     /// this computer's headphones device. Plain words, shown as they are.
@@ -293,6 +332,14 @@ signals:
     void recoveryRequested(quint32 expectedEpoch, const QString& reason);
     void errorOccurred(const QString& reason);
     void displayFrameReceived(quint32 endpointId);
+    /// Parity Task 28: the Core switched the pan to its transmit display
+    /// (context `transmit` true): the transmit analyzer's view, centred on
+    /// the carrier. The pan's receive context stands; drawing the transmit
+    /// display is the MOX display controller's (Task 29).
+    void transmitContextReceived(const QString& panId,
+                                 const NereusSDR::SpectrumContextMessage& context);
+    /// Parity Task 28: one transmit display frame for the pan, decoded.
+    void transmitFrameReceived(const QString& panId, const NereusSDR::DisplayCodecFrame& frame);
     /// Once per accepted audio context, after playback was started or
     /// stopped for it. A malformed or stale context emits nothing.
     void audioContextAccepted();

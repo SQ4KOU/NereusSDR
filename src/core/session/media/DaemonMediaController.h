@@ -28,6 +28,18 @@
 //               view of the lines by device; VOX another device armed is
 //               never this one's. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-26: Parity Task 28 (R-R3-49, A11, R-IOS-13): the transmit
+//               display. A media peer that declared txDisplayVersion gets
+//               the transmit analyzer's view, from RadioModel's
+//               TxDisplayFeed, on each endpoint of the transmitting pan
+//               while the Core is keyed. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: Parity Tasks 27-29 fix wave (R-R3-49): the transmitting
+//               pan is the transmit slice's pan recorded at the keyed rise
+//               and kept until the fall, as the window records it, so a
+//               slice or binding that moves while keyed cannot move the
+//               transmit display to another pan. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/NoiseFloorEstimator.h"
@@ -63,6 +75,7 @@ class RadioModel;
 class SliceModel;
 class StationServer;
 class DaemonMediaController;
+class TxDisplayFeed;
 enum class ConnectionState;
 
 /// iPhone app Task 76 (ruling 9.1): the spectrum engines every media
@@ -299,6 +312,12 @@ public:
     /// iPhone app plan Task 36 (R-IOS-13): the media connection's microphone
     /// line receiver, while its start carried remoteTxVersion; null
     /// otherwise. Its starved(bool) is the Core's starvation signal.
+    /// Parity Task 28 (R-R3-49, A11): whether this session's media start
+    /// declared txDisplayVersion, and whether an endpoint is showing the
+    /// transmit display now (a viewer of RadioModel's TxDisplayFeed).
+    bool txDisplayNegotiated() const noexcept { return m_txDisplayNegotiated; }
+    bool transmitDisplayActive(quint32 endpointId) const;
+
     RemoteMicReceiver* micReceiver() const { return m_micReceiver.get(); }
     /// Task 36: the keying's view of the line (RemoteKeying::setMicUplink;
     /// a controller on its own installs it on the Core's RemoteKeying, and
@@ -416,6 +435,17 @@ private:
     /// end (DaemonAudioSenderTelemetry::captureTimestamp/captureNs); all
     /// three are 0 when no audio context is capturing.
     bool handleClockProbe(const QJsonObject& control, qint64 receivedNs);
+    // Parity Task 28: the transmit display.
+    void wireTxDisplayFeed();
+    void reconcileTransmitDisplay();
+    bool endpointOnTransmitPan(const EndpointEntry& entry) const;
+    /// Records the transmit slice's pan at the rise (keyed true) and
+    /// forgets it at the fall.
+    void recordTransmitPan(bool keyed);
+    std::optional<QJsonObject> transmitContextFor(const EndpointEntry& entry) const;
+    void onTransmitPlane(const QVector<float>& dbm, bool waterfall);
+    bool trySendTransmitFrame(quint32 endpointId, MediaPeer* peer, quint64 epoch,
+                              qint64 nowNs);
     // Task 36: the microphone line.
     void startMicLine(MediaPeer* peer);
     void stopMicLine();
@@ -549,6 +579,16 @@ private:
     // declares the receiver stream ids). Entries outlive their streams so a
     // stale revision stays refused; only slices that existed are entered.
     bool m_receiverAudioNegotiated{false};
+    // Parity Task 28: this session's start declared txDisplayVersion.
+    bool m_txDisplayNegotiated{false};
+    QPointer<TxDisplayFeed> m_txFeed;
+    QMetaObject::Connection m_txArbiterConnection;
+    /// The transmitting pan, recorded at the keyed rise and used until the
+    /// fall (the window's MoxDisplayController records the same pan): its
+    /// key, or the transmit slice's id when that slice had no pan key.
+    bool m_txRiseRecorded{false};
+    QString m_txRisePanKey;
+    int m_txRiseSliceId{-1};
     /// The current peer's connection failed (ICE consent lost, DTLS failed)
     /// before it closed: which reason the app is told.
     bool m_peerLost{false};

@@ -200,6 +200,21 @@ PanStatusText zoomText(const PanDisplayState& state)
     return {};
 }
 
+// Parity Task 29 (A11): a transmitting pan whose Core sends no transmit
+// display holds its last picture; the line says why and what helps, in
+// forms that fit the pan's row (the whole sentence on hover).
+PanStatusText transmitDisplayText(const PanDisplayState& state)
+{
+    if (!state.transmitDisplayMissing) {
+        return {};
+    }
+    return withForms({QStringLiteral("No transmit display: update the Core"),
+                      QStringLiteral("No transmit display"),
+                      QStringLiteral("Update Core")},
+                     QStringLiteral("This Core does not send its transmit display. "
+                                    "Updating the Core may help."));
+}
+
 } // namespace
 
 PanStatusText buildPanStatusText(const PanDisplayState& state)
@@ -210,7 +225,8 @@ PanStatusText buildPanStatusText(const PanDisplayState& state)
     PanStatusText text;
     QStringList paragraphs;
     for (const PanStatusText& part :
-         {displayText(state), pureSignalText(state), zoomText(state)}) {
+         {transmitDisplayText(state), displayText(state), pureSignalText(state),
+          zoomText(state)}) {
         if (text.shortLine.isEmpty()) {
             text.shortLine = part.shortLine;
             text.shorterForms = part.shorterForms;

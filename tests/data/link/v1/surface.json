@@ -292,6 +292,11 @@
         },
         {
             "kind": "i64",
+            "name": "txDisplayVersion",
+            "value": 0
+        },
+        {
+            "kind": "i64",
             "name": "sessionHolderVersion",
             "value": 1
         },
@@ -6409,6 +6414,18 @@
                     "kind": "i64",
                     "name": "stopEpoch",
                     "ordinal": 28
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "highSwr",
+                    "ordinal": 29
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "swrWindBackLatched",
+                    "ordinal": 30
                 }
             ]
         },

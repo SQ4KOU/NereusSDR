@@ -23,6 +23,10 @@
 //                                    computer is busy, "Core limit" for its
 //                                    display limit (R-R3-08, R-R3-37).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Parity Task 29 (A11): a transmitting
+//                                    pan on a Core that sends no transmit
+//                                    display says so. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 #pragma once
 
@@ -103,6 +107,10 @@ struct PanDisplayState {
     // The zoom-detail limit the Core reported for this pan.
     ZoomLimit zoomLimit = ZoomLimit::None;
     int zoomPoints = 0;
+
+    // Parity Task 29: the pan is transmitting and its Core sends no
+    // transmit display (txDisplayVersion below 1). Speaks before the rest.
+    bool transmitDisplayMissing = false;
 
     /// Showing, but at less than the pan asked for.
     bool reduced() const

@@ -57,7 +57,7 @@ is not evidence.** Rows below check numbers, not vibes.
 | 14 | Restore after a mid-transmit layout change | Key up, change pan layout while keyed, un-key | No crash, no pan left stuck showing transmit. Restore is by the pan id recorded on the rise edge, so a moved TX binding cannot strand it | PENDING |
 | 18 | Grids are genuinely independent | Set a receive range, key up, set a different transmit range, un-key, change receive again, key up | Transmit comes back to ITS range untouched by the receive edits, and vice versa. Two stored pairs selected by MOX (Thetis `SpectrumGridMaxMoxModified`), not one pair saved and restored | UNIT-TESTED, bench re-check |
 | 17 | dBm labels survive repeated transmissions | Key TUNE, un-key, key again, watch the right-hand scale | Numbers stay. Regression 2026-08-05: on an ORION-class radio the receive noise-floor tracker kept dragging the grid DURING transmit, the fall edge captured that instead of the operator's choice, and the second key-up came up on a degenerate range with no labels | FIXED, re-check |
-| 15 | **Known open:** residual skirt | Key TUNE, read the raw pixel profile | ~35 dB down at 66 Hz from the peak, which is far worse than Blackman-Harris 4T should give (>90 dB). Present in WDSP's raw `GetPixels` output, so it is upstream of everything this branch fixes | OPEN |
+| 15 | **Known open:** residual skirt | Key TUNE in LSB into a dummy load, Blackman-Harris 4T, Peak detector, no averaging; compare with Thetis on the same radio and frequency | At least 90 dB down 66 Hz from the peak and beyond. Bench 2026-08-05 read ~35 dB. Not reproduced offline on 2026-09-26: `tst_tx_analyzer_skirt` puts the analyzer's arguments and a real TX channel's TUNE tone through WDSP and reads 125 dB or more down (see the section below) | NOT REPRODUCED OFFLINE, bench re-check |
 | 16 | XIT while keyed | Key up, nudge XIT mid-transmission | **Known limitation:** the display does NOT follow. Centre, window and grid are all computed once on the MOX rise edge, so the trace stays where it started until the next key-up. Raised by Codex on PR #317; fixing it properly means a live-update path for the whole rise-edge set, not a special case for XIT | OPEN |
 | 19 | Remote transmit trace appears | In a remote window on the Pi 4 Core (HL2) and the Rock Core (G2), key TUNE from any device | The pan hosting the transmit slice shows the transmit trace and waterfall. No receiver hump, no full-width band on the waterfall. Other pans keep receiving | PENDING |
 | 20 | Remote trace on frequency | As row 2, in a remote window | Peak `cw_pitch` below the dial in LSB, above in USB, the same as a local window on the same Core's radio | PENDING |
@@ -90,6 +90,95 @@ bins for 1202 pixels), window type (changing it visibly moves the skirts, and
 BH-4T is selected), tone magnitude (`0.99999`, identical to Thetis's
 `MAX_TONE_MAG`), and our render path (the skirt exists before it).
 
+### 2026-09-26: the offline comparison (remote-window parity plan, Task 27)
+
+Every argument `TxAnalyzer` hands `SetAnalyzer` and `SetDisplaySampleRate`
+now comes from one computation, `TxAnalyzer::currentArgs()` (a
+`TxAnalyzerArgs`), which `applySetAnalyzer` passes to WDSP and a test can
+read. At TUNE in LSB on a 1200-pixel pan with the MOX edge's +/-4 kHz window
+it gives: `n_pixout` 2, `n_fft` 1, `typ` 1, `sz` 32768, `bf_sz` 2048 (the TX
+channel's `dsp_size`), window as selected, `pi` 14.0, `ovrlp` 26368, `clp` 0,
+`fscLin` 15019, `fscHin` 15018, `n_pix` 1200, `n_stch` 1, `calset` 0, `fmin`
+and `fmax` 0, `max_w` 42368, 96000 Hz. Against Thetis v2.10.3.15's
+`initAnalyzer` (`specHPSDR.cs:504-643`, the path its transmit panadapter
+uses) only the clip arguments differ: Thetis passes `clp` 1310 and span clips
+of 12108.8 bins each from its zoom and pan sliders (default zoom 150, pan
+500), a +/-8684 Hz view, where NereusSDR clips to its own window the way
+`CalcSpectrum` does. The tap is the same as Thetis's: the siphon after the
+ALC meter and before PureSignal (`TXA.c:586`), at `dsp_rate` 96000, mode 1,
+display 5. One build difference outside the arguments: Thetis builds WDSP
+with `_Thetis`, so the analyzer's input ring holds doubles; NereusSDR's holds
+floats. That limits nothing near 90 dB.
+
+`tst_tx_analyzer_skirt` then measured, with Blackman-Harris 4T:
+
+```
+synthetic tone into Spectrum0, NereusSDR's arguments:
+  peak -0.1 dB at -606 Hz; 66 Hz below -130.1 dB, above -134.1 dB;
+  worst at or beyond 66 Hz -124.9 dB
+real TX channel, TUNE generator, 64-frame blocks as TxWorkerThread pumps:
+  the same figures; 30 siphon pushes for 32 DSP blocks fed (the last two
+  still in the channel), 61197 sample steps checked, no break in the tone
+Thetis's initAnalyzer arguments on the same samples:
+  66 Hz -126.8 / -127.2 dB; worst beyond -124.9 dB
+```
+
+A real-time run (blocks every 1.33 ms, three key cycles in the MOX edge's
+order, the analyzer's own 15 fps poll on the transmit lane) read the same.
+The tests are sensitive to the failure: in the same set-up Rectangular reads
+-41 dB at 66 Hz and Hamming -58 dB, and a skipped or repeated block breaks the
+continuity check.
+
+So on the current trunk nothing on NereusSDR's side of `GetPixels` makes the
+skirt, and neither does WDSP's analyzer: no fix was made. Two clues in the
+2026-08-05 numbers point at the samples the analyzer was fed rather than at
+its set-up. A clean tone reads -0.1 dB at the peak with the Peak detector;
+-9.3 dB is what a tone present for about a third of each FFT frame gives
+(20 log 1/3 = -9.5 dB). And the skirt fell about 19 dB a decade (66 Hz to
+1332 Hz), the slope of hard on/off steps in the signal, which a window cannot
+remove.
+
+What the bench re-check needs (the operator's, on the G2 in a local window):
+
+1. Current build, LSB, TX filter 100 to 2900 Hz, TUNE at low power into a
+   dummy load. Setup > Display > TX Display: FFT size 32768, Window
+   Blackman-Harris 4T, Panadapter detector Peak, averaging None. Note the
+   values actually set there if they differ. Record the build's SHA (the
+   window title's build name, or `git rev-parse --short HEAD` of the tree it
+   was built from). The 2026-08-05 reading and the analyzer block size fix
+   (`f8cff594`, `TxAnalyzer::setBlockSize`) carry the same date, and a
+   `bf_sz` that does not match the siphon's push size feeds the analyzer
+   exactly this kind of gapped input, so a reading without its SHA cannot
+   say which side of that fix it was taken on.
+2. Launch with `QT_LOGGING_RULES="nereus.dsp.debug=true"` and keep the
+   `TxAnalyzer SetAnalyzer` line from the key-up; it should match the
+   arguments above with `win=1`.
+3. Read the peak and the level 66 Hz either side, and record the tone's peak
+   level every time, skirt or not (-0.1 dB expected; near -9 dB means the
+   tone is not continuous at the analyzer). If the skirt is gone, row 15
+   closes with the SHA and the peak level. If it is still there, take the
+   A/B screenshot against Thetis on the same radio, frequency and TUNE power.
+
+Two things about the build under test that bear on the reading:
+
+- **The up-slew stage sits between the tone and the display.** In the TX
+  chain (`third_party/wdsp/src/TXA.c:575-578`) the order is `xgen` (gen1,
+  the TUNE tone), then `xuslew`, then the ALC meter, then `xsiphon`, which
+  feeds the analyzer. A channel state restart or flush during TUNE re-runs
+  the up-slew ramp and would show at the analyzer as periodic ramps on the
+  tone: gaps of exactly the kind the -9.3 dB peak suggests. If the skirt is
+  still there, a debug hook worth adding for the bench is a log line (on
+  the `nereus.dsp` category) wherever the TX channel's state is restarted
+  or flushed while TUNE is on; one or more per FFT frame names the cause.
+- **The first key's SetAnalyzer now runs earlier on the transmit lane.**
+  Since parity Task 28, `TxDisplayFeed` starts the analyzer from
+  `MoxController::moxStateChanged`, which `onRfDelayElapsed` emits before
+  `moxChanged`; the first key's deferred SetAnalyzer (the FFTW plan) is
+  therefore posted on the transmit lane ahead of the work `moxChanged`
+  handlers post on the same edge. `nereusd` already behaved this way. It is
+  not a change to the transmit chain, but a first-key hitch or a
+  first-frame oddity on the display belongs with this note.
+
 Not yet ruled out, in the order worth trying:
 
 1. **A/B against Thetis** on the same radio, same frequency, same TUNE
@@ -102,6 +191,7 @@ Not yet ruled out, in the order worth trying:
    against 2048-sample pushes, which is not an integer number of blocks.
    Thetis computes overlap the same way, so this is a weak suspect, but it
    has not been positively excluded.
+4. The up-slew debug hook above, when the peak reads near -9 dB.
 
 ---
 

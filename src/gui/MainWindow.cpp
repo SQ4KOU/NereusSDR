@@ -305,6 +305,11 @@
 //                R-IOS-13): the Power Genius applet's OPERATE also waits
 //                while a Tuner Genius cycle runs. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - Remote-window parity Task 29 (A11, R-R3-49, R-R3-12): the
+//                MOX lambda's rise and fall moved into MoxDisplayController,
+//                which a remote window drives from the Core's txState; this
+//                window's pan is the transmit analyzer feed's local viewer.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -672,6 +677,8 @@ warren@wpratt.com
 #include "models/RfKitModel.h"
 #include "RemoteConnectionController.h"
 #include "gui/RemoteMediaController.h"
+#include "gui/MoxDisplayController.h"
+#include "gui/TxDisplaySource.h"
 #include "gui/RemoteVaxRouter.h"
 #include "gui/ReceiverStopNotices.h"
 #include "core/session/media/IReceiverPcmSink.h"
@@ -1362,6 +1369,14 @@ MainWindow::~MainWindow()
     }
     delete m_remoteTelemetry;
     m_remoteTelemetry = nullptr;
+    // Parity Task 29: the MOX display controller (a child, destroyed after
+    // the members) lets go of its transmit source before the source and the
+    // media controller it draws from go.
+    if (m_moxDisplay) {
+        m_moxDisplay->setSource(nullptr);
+    }
+    m_remoteTxDisplaySource.reset();
+    m_localTxDisplaySource.reset();
     // Join remote playback before QObject destroys the earlier-created
     // RadioModel child and its speaker AudioEngine.
     delete m_remoteMedia;
@@ -1736,6 +1751,19 @@ void MainWindow::ensureRemoteSession()
                 this, &MainWindow::applyRemoteRoleGating);
         m_remoteMedia = new RemoteMediaController(m_stationClient, m_radioModel,
                                                m_panStack, m_stationClient);
+        // Remote-window parity Task 29 (A11, R-R3-49, R-R3-12): while the
+        // Core is keyed the pan hosting the transmitting slice shows the
+        // Core's transmit display with the transmit grid, palette,
+        // waterfall levels and red border, from the same controller a local
+        // window uses; it follows the Core's txState (or, on a Core that
+        // sends none, radio.transmitting and the transmit slice).
+        m_remoteTxDisplaySource = std::make_unique<RemoteTxDisplaySource>(
+            m_remoteMedia, m_stationClient, m_panStack);
+        if (m_moxDisplay == nullptr) {
+            m_moxDisplay = new MoxDisplayController(m_panStack, m_radioModel, this);
+        }
+        m_moxDisplay->setSource(m_remoteTxDisplaySource.get());
+        m_moxDisplay->followStation(m_stationClient);
         m_remoteTelemetry = new RemoteTelemetryController(
             m_stationClient, m_remoteMedia, this);
         // R-R3-32 (parity Task 6): the Core's PA readings reach this
@@ -4105,7 +4133,9 @@ void MainWindow::dispatchFftFrameToPans(int streamIndex,
         // no frame arrives at all; on the ORION class RX1 keeps its DDC
         // right through transmit, so without this the two traces would
         // alternate frame by frame on one widget. Cleared on MOX fall.
-        if (!m_txDisplayPanId.isEmpty() && panId == m_txDisplayPanId) {
+        // Remote-window parity Task 29: MoxDisplayController owns the id.
+        if (m_moxDisplay && !m_moxDisplay->transmitPanId().isEmpty()
+            && panId == m_moxDisplay->transmitPanId()) {
             continue;
         }
         if (SpectrumWidget* sw = m_panStack->spectrum(panId)) {
@@ -5366,470 +5396,20 @@ void MainWindow::buildUI()
         // the TRANSMITTING slice. Both facts have to agree about which
         // widget that is, so one lambda owns both.
 
-        // ── PR #212 follow-up bench fix (J.J. KG4VCF, 2026-05-07) ────────
-        // MOX-aware panadapter source switch: FFTEngine (RX-DDC FFTW3) ↔
-        // TxAnalyzer (WDSP TX siphon, pre-IQC).
-        //
-        // From Thetis console.cs:24399-24462 [v2.10.3.13] DisplayThread2.
-        // Author tags carried verbatim from inside that range, per
-        // CLAUDE.md 'Inline comment preservation'. They sit on sibling
-        // switch arms of the same DisplayThread2 dispatch rather than on
-        // the GetPixels lines quoted below, so they are grouped here:
-        //   // MW0LGE                                    [console.cs:24429]
-        //   //[2.10.3.4]MW0LGE not used anymore since scope was coded in cmaster.cs
-        //                                                [console.cs:24450]
-        //   // MW0LGE would be null if audio not running (ie not connected?)
-        //                                                [console.cs:24465]
-        //   if (bLocalMox && !_display_duplex)
-        //       SpecHPSDRDLL.GetPixels(cmaster.inid(1, 0), 0, ptr, ref flag);
-        //   else
-        //       SpecHPSDRDLL.GetPixels(0, 0, ptr, ref flag);
-        //
-        // We achieve the same effect by signal/slot reconnection rather
-        // than runtime branching in a polling loop: on MOX up, swap the
-        // SpectrumWidget connection from FFTEngine::fftReadyLinear to
-        // TxAnalyzer::txFftReady; reverse on MOX down.
-        //
-        // API note: fftReadyLinear/updateSpectrumLinear carry extra params
-        // (windowEnb, dbmOffset) for the Thetis WDSP analyzer pipeline.
-        // txFftReady emits pre-computed dBm bins; the lambda adapter bridges
-        // the signature mismatch by passing windowEnb=1.0, dbmOffset=0.0
-        // (no additional scaling — TxAnalyzer already computes dBm output).
-        // This is a throwaway debug adapter; Task 2 may refine TxAnalyzer
-        // to emit the full fftReadyLinear-compatible signature.
-        //
-        // Qt::QueuedConnection mirrors the pattern established by the
-        // hardwareFlipped + setMoxOverlay connects above.  Capture
-        // shouldn't outlive MainWindow (this), so the lambda is safe.
-        if (m_txAnalyzer) {
-            connect(mox, &MoxController::moxStateChanged, this,
-                    [this](bool isTx) {
-                if (isTx) {
-                    // Resolve the target pan HERE, on the MOX edge, rather
-                    // than capturing a widget when this connect was made.
-                    // The pre-multi-pan version captured m_spectrumWidget;
-                    // there is no such thing now, and "whichever pan is
-                    // active" is the wrong answer anyway. The TX picture
-                    // belongs on the pan hosting the transmitting slice.
-                    //
-                    // Deliberately NOT spectrumForSlice(): that helper falls
-                    // back to activeSpectrumWidget() when the pan does not
-                    // resolve (MainWindow.cpp:888-896), which would paint the
-                    // transmit trace onto an unrelated pan. A slice pointing
-                    // at a pan that no longer exists is a bug worth leaving
-                    // visible, not one worth covering with a plausible
-                    // picture in the wrong place.
-                    SliceModel* txSlice = m_radioModel
-                        ? m_radioModel->txBoundSlice() : nullptr;
-                    if (!txSlice) { return; }
-                    const QString panId = txSlice->panKey();
-                    SpectrumWidget* sw = m_panStack
-                        ? m_panStack->spectrum(panId) : nullptr;
-                    if (!sw) { return; }
-
-                    // Remember which pan was taken over, so un-key restores
-                    // THIS one even if the TX binding moved mid-transmission.
-                    m_txDisplayPanId = panId;
-
-                    // Suppress RX frames for this pan while TX owns it.
-                    //
-                    // This replaces a disconnect of FFTEngine::fftReadyLinear
-                    // from the widget, which no longer exists as a direct
-                    // connection: dispatchFftFrameToPans resolves targets
-                    // through FFTRouter::pansForReceiver on every frame, so
-                    // there is no per-widget connection left to break.
-                    //
-                    // On a 1-ADC HERMES class radio this is a no-op during
-                    // PureSignal transmit -- the radio has stopped streaming,
-                    // so no RX frame arrives to suppress. It matters on the
-                    // ORION class, where RX1 keeps its DDC right through
-                    // transmit (Thetis console.cs:8265-8272 [v2.10.3.15],
-                    // DDCEnable = DDC0 + DDC2 with Rate[2] = rx1_rate). There
-                    // the receiver really is still delivering, and without
-                    // this the RX and TX traces would alternate frame by
-                    // frame on the same pan.
-                    // dispatchFftFrameToPans reads m_txDisplayPanId.
-
-                    // Red border / TX palette / TX threshold path all key off
-                    // this flag, on the pan that is actually transmitting.
-                    sw->setMoxOverlay(true);
-                    // Save just the two settings the TX path actually
-                    // needs to flip:
-                    //   sampleRate  — RX is at the wire DDC rate (768k
-                    //                 Saturn / 192k HL2); TX is fixed at
-                    //                 96 kHz (WdspEngine::kTxDspSampleRate
-                    //                 = cmaster.c:182 [v2.10.3.13]).
-                    //   ddcCenterHz — RX DDC may be off-VFO under CTUN;
-                    //                 TX FFT is centered on the carrier.
-                    // Critically we DO NOT touch centerHz / bandwidth so
-                    // the user's zoom level survives the transition; the
-                    // waterfall scrolls continuously across MOX edges
-                    // because no setFrequencyRange call fires the
-                    // largeShift-clear path in SpectrumWidget.
-                    m_savedSpectrumSampleRate = sw->sampleRate();
-                    m_savedSpectrumDdcHz      = sw->ddcCenterFrequency();
-                    // All four now, not two. The old code saved only the
-                    // rate and DDC centre because it deliberately left the
-                    // operator's zoom alone; the passband view moves the
-                    // window itself, so centre and bandwidth have to come
-                    // back on un-key or the receive pan would stay parked
-                    // on a 3 kHz slice of the band.
-
-                    // The transmit grid is SpectrumWidget's own business now.
-                    // setMoxOverlay(true) below parks the receive pair and
-                    // loads the transmit one, mirroring Thetis's
-                    // SpectrumGridMaxMoxModified (display.cs:1782-1804
-                    // [v2.10.3.15]). Saving and restoring it from here was
-                    // the fragile version: it made the transmit range
-                    // whatever happened to be live at un-key, so any writer
-                    // between the edges redefined the operator's choice.
-                    // TX FFT is centered on the active slice's carrier.
-                    // If no slice (shouldn't happen during MOX, but guard
-                    // anyway) reuse the RX DDC center as a best-effort
-                    // fallback so the bins still render somewhere sane.
-                    // The TRANSMITTING slice, not the active one, and its
-                    // TRANSMIT frequency, not its dial frequency.
-                    //
-                    // Two distinct mistakes were possible here and both were
-                    // made. Centring on activeSlice puts the trace at the
-                    // receive-focused slice's frequency whenever TX has been
-                    // handed elsewhere; centring on slice->frequency() puts
-                    // it at the RX VFO whenever XIT is on, while the radio
-                    // transmits at the shifted carrier.
-                    //
-                    // txFrequencyForSlice is the helper that owns that
-                    // arithmetic (RadioModel.cpp:9109-9117, dial + XIT when
-                    // enabled), so the display and the transmitter cannot
-                    // disagree about where the carrier is. Both found by
-                    // Codex on PR #317.
-                    const double carrierHz = static_cast<double>(
-                        m_radioModel->txFrequencyForSlice(txSlice));
-
-                    // Reconfigure the bin-frequency mapping.  centerHz /
-                    // bandwidth are LEFT ALONE — the user's zoom window
-                    // stays put, and visibleBinRange() now maps that
-                    // window onto the TX bins (96 kHz centered on
-                    // carrier) instead of the RX DDC bins.  Both setters
-                    // bypass setFrequencyRange so neither triggers the
-                    // history-clear path.
-                    // ── The transmit window ──────────────────────────────
-                    //
-                    // From Thetis display.cs:1284-1295 + :4585-4590
-                    // [v2.10.3.15]:
-                    //     private static int tx_display_low  = -4000;
-                    //     private static int tx_display_high =  4000;
-                    //     if (local_mox) {
-                    //         if (!displayduplex) {
-                    //             Low  = tx_display_low;
-                    //             High = tx_display_high;
-                    //         }
-                    // The panadapter shows a fixed +/-4 kHz around the
-                    // carrier while transmitting. Nothing in Thetis ever
-                    // assigns those two properties, so the defaults are what
-                    // ships.
-                    //
-                    // NOT the filter-derived passband from
-                    // UpdateTXDisplayVars: that function returns immediately
-                    // unless the display mode is SPECTRUM, HISTOGRAM or
-                    // SPECTRASCOPE (console.cs:8026-8029), so it governs the
-                    // old scope-style displays and never a panadapter. I
-                    // ported it first and it zoomed to ~3 kHz, which is not
-                    // what Thetis looks like. Bench 2026-08-05.
-                    //
-                    // The analyzer is clipped to that same window, and this
-                    // is not optional. Thetis derives its analyzer span and
-                    // its display window from ONE zoom state, in
-                    // initAnalyzer (specHPSDR.cs:565-584 [v2.10.3.15]):
-                    //     span_clip_l = pan_slider * (intervals - width);
-                    //     span_clip_h = intervals - width - span_clip_l;
-                    //     _low_freq  = -(int)((intervals / 2.0 - span_clip_l)
-                    //                         * bin_width);
-                    //     _high_freq = +(int)((intervals / 2.0 - span_clip_h)
-                    //                         * bin_width);
-                    // so the pixels it returns always cover exactly what is
-                    // on screen -- one data point per pixel.
-                    //
-                    // Leaving the analyzer at full span and slicing 8 kHz out
-                    // of 96 kHz afterwards gives about 100 real points
-                    // upsampled twelvefold across the width. A pure tune tone
-                    // rendered that way is a broad interpolated blob with
-                    // shoulders, and every FFT-size / window / detector /
-                    // averaging control is smeared away underneath the
-                    // interpolation -- which is exactly the "all the settings
-                    // look the same, with shoulders" bench report of
-                    // 2026-08-05.
-                    static constexpr double kTxDisplayHalfSpanHz = 4000.0;
-                    static constexpr int    kTxDisplayLowHz  = -4000;
-                    static constexpr int    kTxDisplayHighHz = +4000;
-
-                    // Tell the analyzer how many samples the siphon
-                    // actually hands it per push. Spectrum0() carries no
-                    // length, so SetAnalyzer's bf_sz is the only thing
-                    // telling WDSP where the buffer ends; it had been given
-                    // the FFT size, which is a different and much larger
-                    // number. See TxAnalyzer::setBlockSize.
-                    if (TxChannel* txc = m_radioModel->txChannel()) {
-                        m_txAnalyzer->setBlockSize(txc->dspBlockFrames());
-                    }
-
-                    m_txAnalyzer->setSpectrumWindow(kTxDisplayLowHz,
-                                                    kTxDisplayHighHz);
-
-                    // Bins now cover the window and nothing else, so the
-                    // span handed to visibleBinRange is the window width.
-                    sw->setTxCenterFrequency(carrierHz);
-                    sw->setTxSampleRate(2.0 * kTxDisplayHalfSpanHz);
-                    // Keep the analyzer's span equal to whatever window is
-                    // on screen, for as long as transmit owns this pan.
-                    //
-                    // Thetis gets this for free: initAnalyzer derives span
-                    // and window from one zoom state, so they cannot drift
-                    // apart. Ours are separate, and a zoom made
-                    // mid-transmission left the analyzer clipped to the span
-                    // chosen at key-down while the pan showed something
-                    // wider -- 8 kHz of bins stretched across 55 kHz of
-                    // axis, with the trace wherever that stretch put it.
-                    // Bench 2026-08-05.
-                    //
-                    // Context object is `sw`, so this dies with the pan; the
-                    // fall edge disconnects it explicitly as well, because a
-                    // pan that survives must stop re-clipping once receive
-                    // owns it again.
-                    auto syncTxAnalyzerToView =
-                            [this, sw, carrierHz](double centreHz, double bwHz) {
-                        if (!m_txAnalyzer || bwHz <= 0.0) { return; }
-
-                        // Nothing exists outside the siphon's baseband.
-                        constexpr double kHalfBaseband = 48000.0;
-
-                        // Clamp the VIEW, not only the analyzer's span.
-                        //
-                        // Clamping lo/hi alone left the widget showing a
-                        // window the analyzer cannot fill:
-                        // updateSpectrumFromTxPixels then resampled the
-                        // clipped bins across the whole axis, stretching and
-                        // mislabelling them, and a window driven almost
-                        // entirely outside the baseband tripped the
-                        // too-narrow return below and left the PREVIOUS
-                        // mapping sitting under a new axis. Found by Codex
-                        // on PR #317.
-                        //
-                        // Pulling the window back inside the baseband is the
-                        // honest answer: the transmit display genuinely
-                        // cannot show more than 96 kHz, so the operator is
-                        // stopped at the edge rather than shown a stretch.
-                        //
-                        // Re-entrant by exactly one pass. The push below
-                        // re-emits this signal synchronously with the
-                        // clamped values, that pass finds nothing left to
-                        // clamp and configures the analyzer, and
-                        // applyViewWindow emits nothing when nothing moved.
-                        const double viewBw = qMin(bwHz, 2.0 * kHalfBaseband);
-                        double lo = centreHz - viewBw / 2.0 - carrierHz;
-                        double hi = lo + viewBw;
-                        if (lo < -kHalfBaseband) { lo = -kHalfBaseband; hi = lo + viewBw; }
-                        if (hi >  kHalfBaseband) { hi =  kHalfBaseband; lo = hi - viewBw; }
-
-                        const double clampedCentre = carrierHz + (lo + hi) / 2.0;
-                        if (!qFuzzyCompare(clampedCentre, centreHz)
-                            || !qFuzzyCompare(viewBw, bwHz)) {
-                            sw->setDisplayWindowPreservingHistory(clampedCentre,
-                                                                  viewBw);
-                            return;
-                        }
-
-                        // lo / hi are RELATIVE TO THE CARRIER, because that
-                        // is where the siphon's baseband sits.
-                        //
-                        // Asymmetric on purpose. A symmetric +/-half clip is
-                        // only correct while the view is centred on the
-                        // carrier; pan away and the analyzer covers
-                        // carrier +/- half while the widget is told the bins
-                        // are centred on the panned centre. The two disagree
-                        // by exactly the pan offset, and since that offset
-                        // changes continuously while dragging, the trace
-                        // slides around under the cursor. Bench 2026-08-05,
-                        // "the passband jitters when I drag back and forth".
-                        if (hi - lo < 1000.0) { return; }
-
-                        // Quantised to 100 Hz. SetAnalyzer reconfigures the
-                        // analyzer, and recomputing it on every mouse-move
-                        // pixel (about 40 Hz of window per pixel at this
-                        // zoom) thrashes it for sub-bin changes nobody can
-                        // see.
-                        const int loQ = static_cast<int>(std::round(lo / 100.0)) * 100;
-                        const int hiQ = static_cast<int>(std::round(hi / 100.0)) * 100;
-
-                        m_txAnalyzer->setSpectrumWindow(loQ, hiQ);
-                        // Tell the widget where those bins actually sit, so
-                        // visibleBinRange maps them to the same axis the
-                        // operator is reading.
-                        sw->setTxCenterFrequency(carrierHz + (loQ + hiQ) / 2.0);
-                        sw->setTxSampleRate(static_cast<double>(hiQ - loQ));
-                    };
-
-                    // Context object is `sw`, so this dies with the pan; the
-                    // fall edge disconnects it explicitly as well, because a
-                    // pan that survives must stop re-clipping once receive
-                    // owns it again.
-                    connect(sw, &SpectrumWidget::txViewWindowChanged, sw,
-                            syncTxAnalyzerToView);
-
-                    // Centre on the carrier, but keep whatever SPAN
-                    // setMoxOverlay just loaded from the transmit store.
-                    // Forcing the +/-4 kHz seed here is what made a zoom
-                    // made during one transmission vanish on the next
-                    // (bench 2026-08-05): the seed is a first-run default,
-                    // not something to re-impose every key-up.
-                    sw->setDisplayWindowPreservingHistory(carrierHz,
-                                                          sw->bandwidth());
-
-                    // Then sync the analyzer explicitly, rather than
-                    // assuming the call above moved something.
-                    //
-                    // When the receive view already sat on the carrier at the
-                    // transmit span, that call changes nothing, applyViewWindow
-                    // returns without emitting, and the analyzer keeps the
-                    // hard-coded +/-4 kHz seed set further up while the pan
-                    // draws the restored wider axis. Every transmission after
-                    // the first zoom hit it. Found by Codex on PR #317.
-                    syncTxAnalyzerToView(sw->centerFrequency(), sw->bandwidth());
-
-                    // PR #212 follow-up bench fix (KG4VCF, 2026-05-10):
-                    // disable Clarity so the waterfall AGC takes over for
-                    // TX dynamic range.  Clarity tracks RX noise floor
-                    // (~-100 dBm range) and was leaving its RX-tuned
-                    // thresholds in place during TX, mapping every TX bin
-                    // (which sits well above the RX threshold band) to
-                    // the colormap's red end.  Clarity's next RX-side
-                    // emit re-enables itself via the lambda at MainWindow
-                    // line 1430+ (which is now MOX-gated to ignore TX
-                    // emissions).
-                    sw->setClarityActive(false);
-
-                    // Match analyzer output bin count to display width so
-                    // every panadapter pixel comes from a unique bin.
-                    m_txAnalyzer->setNumPixels(sw->width());
-
-                    // (The RX side is suppressed by m_txDisplayPanId above,
-                    // not by disconnecting a signal. See the note there.)
-                    //
-                    // TxAnalyzer emits dBm values from WDSP GetPixels (which applies
-                    // 10*log10 internally per analyzer.c:1505 [v2.10.3.13+501e3f51]).
-                    // SpectrumWidget::updateSpectrumLinear expects linear power
-                    // |X[k]|^2 and applies its own 10*log10(linear*scale) per
-                    // SpectrumWidget.cpp:2315-2317.  Convert dBm to linear here so
-                    // the SpectrumWidget side produces the original dBm.  windowEnb=1
-                    // disables additional ENB correction (already baked into WDSP's
-                    // dBm output); dbmOffset=0 because tx_display_cal_offset = 0 per
-                    // Display.cs:1407 [v2.10.3.13+501e3f51].
-                    // Context object is `sw`, so Qt tears this down by
-                    // itself if the pan is destroyed mid-transmission (a
-                    // layout change while keyed). Capturing sw by value is
-                    // safe for the same reason: the connection cannot
-                    // outlive its context object.
-                    //
-                    // Straight to the TX pixel path. TxAnalyzer's output has
-                    // already had the TX Display detector and averaging
-                    // applied by WDSP; updateSpectrumLinear would run the
-                    // RECEIVE detector and avenger over it a second time, so
-                    // the transmit controls only behaved as labelled while
-                    // receive sat at Peak / None. That also removes a dBm ->
-                    // linear -> dBm round trip that existed purely to match
-                    // a signature. Found by Codex on PR #317.
-                    connect(m_txAnalyzer, &TxAnalyzer::txFftReady, sw,
-                            &SpectrumWidget::updateSpectrumFromTxPixels);
-                    // 3M-5d: with TxAnalyzer's n_pixout bumped to 2, the
-                    // waterfall plane is driven by pixout=1 (DetTypeWF +
-                    // AverageModeWF applied inside WDSP) rather than by
-                    // the spectrum trace path's avenger.  Tell
-                    // SpectrumWidget to skip its internal pushWaterfallRow
-                    // inside updateSpectrumLinear, and wire the pixout=1
-                    // stream straight into pushTxWaterfallRow.
-                    sw->setTxExternalWaterfall(true);
-                    connect(m_txAnalyzer, &TxAnalyzer::txWaterfallReady,
-                            sw,
-                            &SpectrumWidget::pushTxWaterfallRow);
-                    // Force the waterfall-AGC tracker to re-prime on the
-                    // first TX frame.  RX bins live around -110 dBm; TX
-                    // siphon bins land around -50 dBm.  Without an AGC
-                    // reset the 0.05-alpha follower needs ~3 s to drag
-                    // the colormap thresholds up and the panadapter
-                    // saturates solid red until then.
-                    sw->resetWaterfallAgc();
-                    // 3M-5b polish (KG4VCF, 2026-05-10): clear the spectrum +
-                    // waterfall avenger accumulators on MOX rise so the trace
-                    // doesn't fade from pre-MOX RX state into TX state via
-                    // LogRecursive smoothing (~3 s time constant), which would
-                    // otherwise show a brief mic-like blend overlaid on the
-                    // TUNE tone for the first few frames after key.
-                    sw->clearAvengers();
-                    m_txAnalyzer->start();
-                } else {
-                    m_txAnalyzer->stop();
-
-                    // Restore the pan we actually took over, looked up by
-                    // the id recorded on MOX rise rather than re-resolved
-                    // from txBoundSlice(). If the TX binding moved to
-                    // another slice while keyed, re-resolving would restore
-                    // the WRONG pan and strand the real one showing TX
-                    // forever. The recorded id cannot drift.
-                    //
-                    // A null lookup here means the pan was destroyed mid-
-                    // transmission; there is nothing to restore, and the
-                    // per-pan state died with the widget. Still clear the
-                    // suppression id so the router is not left refusing RX
-                    // frames for a pan id that no longer exists.
-                    const QString panId = m_txDisplayPanId;
-                    m_txDisplayPanId.clear();
-                    SpectrumWidget* sw = (m_panStack && !panId.isEmpty())
-                        ? m_panStack->spectrum(panId) : nullptr;
-                    if (!sw) { return; }
-
-                    sw->setMoxOverlay(false);
-
-                    // 3M-5d: re-enable the internal pushWaterfallRow path
-                    // before disconnecting the pixout=1 stream so the
-                    // first RX frame post-unkey drives the waterfall.
-                    sw->setTxExternalWaterfall(false);
-                    // Disconnect the lambda — Qt requires matching signal pointer for context-based disconnect
-                    disconnect(m_txAnalyzer, &TxAnalyzer::txFftReady, sw, nullptr);
-                    disconnect(m_txAnalyzer, &TxAnalyzer::txWaterfallReady, sw, nullptr);
-                    // No reconnect of the RX engine: clearing
-                    // m_txDisplayPanId above is what lets
-                    // dispatchFftFrameToPans route to this pan again.
-
-                    // Restore the RX-side bin-frequency mapping (sample
-                    // rate + DDC center).  centerHz / bandwidth never
-                    // changed, so they don't need restoring; the
-                    // waterfall picks up where it left off without a
-                    // history wipe.
-                    if (m_savedSpectrumSampleRate > 0.0) {
-                        sw->setSampleRate(m_savedSpectrumSampleRate);
-                        sw->setDdcCenterFrequency(m_savedSpectrumDdcHz);
-                    }
-                    // Leave TX context behind, so visibleBinRange goes back
-                    // to the RX rate and DDC centre. Its useTx test requires
-                    // a non-zero centre, so zeroing that is what disarms it;
-                    // clearing the analyzer's span clip in the same breath
-                    // keeps the two from disagreeing if the next key-up
-                    // finds a different filter.
-                    disconnect(sw, &SpectrumWidget::txViewWindowChanged,
-                               sw, nullptr);
-                    sw->setTxCenterFrequency(0.0);
-                    m_txAnalyzer->setSpectrumWindow(0, 0);
-                    // Receive window comes back via setMoxOverlay(false)'s
-                    // swap, same as the grid. No restore needed here.
-                    // Symmetric AGC reset on un-key so the waterfall
-                    // snaps back to the RX dynamic range without the
-                    // same 3 s saturation pause in the other direction.
-                    sw->resetWaterfallAgc();
-                    // Symmetric avenger clear on un-key so the trace doesn't
-                    // fade from TX tone state into RX state.
-                    sw->clearAvengers();
-                }
-            },
-            Qt::QueuedConnection);
+        // Remote-window parity Task 29 (A11, R-R3-49): the MOX-aware
+        // panadapter source switch (PR #212 follow-up and the 3M-5 revive)
+        // lives in MoxDisplayController, which a remote window drives too.
+        // This window's own pan is a viewer of the transmit analyzer's feed
+        // (TxDisplayFeed, local, so it governs the analyzer's window); the
+        // rise and fall follow MoxController::moxStateChanged with the
+        // TX-bound slice, queued as before so they run after the feed has
+        // started the analyzer on the same edge.
+        if (m_txAnalyzer && m_radioModel->txDisplayFeed()) {
+            m_localTxDisplaySource = std::make_unique<LocalTxDisplaySource>(
+                m_radioModel->txDisplayFeed());
+            m_moxDisplay = new MoxDisplayController(m_panStack, m_radioModel, this);
+            m_moxDisplay->setSource(m_localTxDisplaySource.get());
+            m_moxDisplay->followLocalRadio();
         }
 
         // ── Phase 3M-4 Task 12: SpectrumWidget IMD overlay state wiring ──────
@@ -6049,6 +5629,10 @@ void MainWindow::buildUI()
         MoxController* mox = m_radioModel ? m_radioModel->moxController()
                                           : nullptr;
         if (mox && mox->isMox()) {
+            return;
+        }
+        // Parity Task 29: a remote window's Core keyed (no local MOX).
+        if (m_moxDisplay && m_moxDisplay->isKeyed()) {
             return;
         }
         activeSpectrumWidget()->setClarityActive(true);

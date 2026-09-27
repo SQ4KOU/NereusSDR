@@ -43,6 +43,17 @@
 //                 holds the rate and frame rate MainWindow set, so nereusd
 //                 sets up its analyzer the same way. AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-26 : Task 27 (R-R3-49) by J.J. Boyd (KG4VCF): currentArgs()
+//                 computes the SetAnalyzer arguments once; applySetAnalyzer
+//                 passes them. AI-assisted implementation via Anthropic
+//                 Claude Code.
+//   2026-09-26 : Task 28 (R-R3-49, A11) by J.J. Boyd (KG4VCF):
+//                 clampViewToBaseband(), MainWindow's syncTxAnalyzerToView
+//                 rule moved here unchanged for TxDisplayFeed. AI-assisted
+//                 implementation via Anthropic Claude Code.
+//   2026-09-26 : Tasks 27-29 fix wave (R-R3-49) by J.J. Boyd (KG4VCF):
+//                 setView(), the window and pixel count in one SetAnalyzer.
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "TxAnalyzer.h"
@@ -354,6 +365,45 @@ void TxAnalyzer::poll()
 // port; it is what upstream does, and it biases the surviving span to
 // sit inside the requested window rather than overhang it.
 // ---------------------------------------------------------------------------
+TxDisplayView TxAnalyzer::clampViewToBaseband(double carrierHz, double centreHz,
+                                               double spanHz, int pixels)
+{
+    // Task 28: moved unchanged from MainWindow's syncTxAnalyzerToView (the
+    // PR #317 rule), so a local pan and a remote one get the same view.
+    TxDisplayView view;
+    view.carrierHz = carrierHz;
+    view.pixels = pixels;
+    if (!std::isfinite(carrierHz) || !std::isfinite(centreHz) || !std::isfinite(spanHz)
+        || spanHz <= 0.0) {
+        return view;
+    }
+
+    // Nothing exists outside the siphon's baseband.
+    constexpr double kHalfBaseband = 48000.0;
+
+    // Clamp the VIEW, not only the analyzer's span: the transmit display
+    // cannot show more than 96 kHz, so a view past the baseband is pulled
+    // back inside it rather than stretched (Codex, PR #317).
+    const double viewBw = std::min(spanHz, 2.0 * kHalfBaseband);
+    double lo = centreHz - viewBw / 2.0 - carrierHz;
+    double hi = lo + viewBw;
+    if (lo < -kHalfBaseband) { lo = -kHalfBaseband; hi = lo + viewBw; }
+    if (hi >  kHalfBaseband) { hi =  kHalfBaseband; lo = hi - viewBw; }
+
+    // lo / hi are RELATIVE TO THE CARRIER, because that is where the
+    // siphon's baseband sits; asymmetric on purpose, so a panned view keeps
+    // the trace under the cursor (bench 2026-08-05).
+    if (hi - lo < 1000.0) {
+        return view; // empty: the caller keeps its last good view
+    }
+
+    // Quantised to 100 Hz: SetAnalyzer reconfigures the analyzer, and a
+    // sub-bin change nobody can see is not worth a reconfiguration.
+    view.lowHz = static_cast<int>(std::round(lo / 100.0)) * 100;
+    view.highHz = static_cast<int>(std::round(hi / 100.0)) * 100;
+    return view;
+}
+
 std::pair<int, int> TxAnalyzer::spanClipBins(int lowHz, int highHz,
                                              double sampleRateHz, int fftSize)
 {
@@ -403,13 +453,27 @@ void TxAnalyzer::setSpectrumWindow(int lowHz, int highHz)
     }
 }
 
-void TxAnalyzer::applySetAnalyzer()
+void TxAnalyzer::setView(int lowHz, int highHz, int pixels)
 {
-    // Held off until the first start(); see the constructor.
-    if (m_deferSetAnalyzer) {
+    const bool windowMoved = m_spanLowHz != lowHz || m_spanHighHz != highHz;
+    const bool pixelsMoved = pixels > 0 && pixels != m_numPixels;
+    if (!windowMoved && !pixelsMoved) {
         return;
     }
+    m_spanLowHz  = lowHz;
+    m_spanHighHz = highHz;
+    if (pixelsMoved) {
+        m_numPixels = pixels;
+        m_pixBuf.resize(m_numPixels);
+        m_pixBufWf.resize(m_numPixels);
+    }
+    if (m_analyzerCreated) {
+        applySetAnalyzer();
+    }
+}
 
+TxAnalyzerArgs TxAnalyzer::currentArgs() const
+{
     // From Thetis specHPSDR.cs:529 + :534-643 [v2.10.3.13+501e3f51] —
     // initAnalyzer case 1 (complex FFT) + the SetAnalyzer call at :624.
     //
@@ -475,45 +539,57 @@ void TxAnalyzer::applySetAnalyzer()
     // 3M-5b BH4 divergence was reverted by 3M-5d per controller decision
     // 2026-05-10; user can still pick BH4 via Setup → Display → TX → FFT
     // → Window combo if splatter returns.
-    // R-R3-39: on the transmit lane with the values as they stand now.
-    runWdsp([dispId = m_dispId, nPixout = m_nPixout, fftSize = m_fftSize,
-             bfSz = (m_blockSize > 0 ? m_blockSize : m_fftSize),
-             windowType = m_windowType, overlap = ovrlp, clipBins = effectiveClip,
-             clipLow = fsclipL, clipHigh = fsclipH, numPixels = m_numPixels,
-             maxW = max_w, sampleRate = m_sampleRate]() {
-        int flpOnLane[1] = {0};
-        SetAnalyzer(
-            dispId,
-            /*n_pixout=*/nPixout,
-            /*n_fft=*/1,
-            /*typ=*/1,
-            flpOnLane,
-            /*sz=*/fftSize,
-            // bf_sz is the SIPHON's push size, not the FFT size. See
-            // setBlockSize. Falls back to m_fftSize only when nothing has told
-            // us the real block size yet.
-            /*bf_sz=*/bfSz,
-            /*win_type=*/windowType,
-            /*pi=*/14.0,               // Thetis default (unused for non-Kaiser)
-            /*ovrlp=*/overlap,
-            /*clp=*/clipBins,     // 0 while span-clipped; see above
-            // fscLin / fscHin are BIN COUNTS to clip from the low and high ends,
-            // not frequencies. Thetis computes them in CalcSpectrum
-            // (specHPSDR.cs:772-774 [v2.10.3.15]) and passes them in these two
-            // slots. Leaving them at zero, as this did before, is what made the
-            // transmit trace land at the wrong dial frequency: the analyzer
-            // emitted the whole baseband while the pan kept its RX window, and
-            // SpectrumWidget stretched one across the other.
-            /*fscLin=*/static_cast<double>(clipLow),
-            /*fscHin=*/static_cast<double>(clipHigh),
-            /*n_pix=*/numPixels,
-            /*n_stch=*/1,
-            /*calset=*/0,
-            /*fmin=*/0.0,
-            /*fmax=*/0.0,
-            /*max_w=*/maxW);
+    TxAnalyzerArgs args;
+    args.nPixout = m_nPixout;
+    args.nFft = 1;
+    args.typ = 1;
+    args.sz = m_fftSize;
+    // bf_sz is the SIPHON's push size, not the FFT size. See setBlockSize.
+    // Falls back to m_fftSize only when nothing has told us the real block
+    // size yet.
+    args.bfSz = (m_blockSize > 0 ? m_blockSize : m_fftSize);
+    args.winType = m_windowType;
+    args.pi = 14.0;   // Thetis default (unused for non-Kaiser)
+    args.ovrlp = ovrlp;
+    args.clp = effectiveClip;   // 0 while span-clipped; see above
+    // fscLin / fscHin are BIN COUNTS to clip from the low and high ends,
+    // not frequencies. Thetis computes them in CalcSpectrum
+    // (specHPSDR.cs:772-774 [v2.10.3.15]) and passes them in these two
+    // slots. Leaving them at zero, as this did before, is what made the
+    // transmit trace land at the wrong dial frequency: the analyzer
+    // emitted the whole baseband while the pan kept its RX window, and
+    // SpectrumWidget stretched one across the other.
+    args.fscLin = static_cast<double>(fsclipL);
+    args.fscHin = static_cast<double>(fsclipH);
+    args.nPix = m_numPixels;
+    args.nStch = 1;
+    args.calset = 0;
+    args.fmin = 0.0;
+    args.fmax = 0.0;
+    args.maxW = max_w;
+    args.sampleRateHz = m_sampleRate;
+    return args;
+}
 
-        SetDisplaySampleRate(dispId, static_cast<int>(sampleRate));
+void TxAnalyzer::applySetAnalyzer()
+{
+    // Held off until the first start(); see the constructor.
+    if (m_deferSetAnalyzer) {
+        return;
+    }
+
+    const TxAnalyzerArgs args = currentArgs();
+    ++m_setAnalyzerCount;
+
+    // R-R3-39: on the transmit lane with the values as they stand now.
+    runWdsp([dispId = m_dispId, args]() {
+        int flpOnLane[1] = {0};
+        SetAnalyzer(dispId, args.nPixout, args.nFft, args.typ, flpOnLane, args.sz,
+                    args.bfSz, args.winType, args.pi, args.ovrlp, args.clp,
+                    args.fscLin, args.fscHin, args.nPix, args.nStch, args.calset,
+                    args.fmin, args.fmax, args.maxW);
+
+        SetDisplaySampleRate(dispId, static_cast<int>(args.sampleRateHz));
     });
     ++m_analyzerConfigCount;
 
@@ -524,15 +600,16 @@ void TxAnalyzer::applySetAnalyzer()
     // when the analyzer is reconfigured, not per frame.
     qCDebug(lcDsp).nospace()
         << "TxAnalyzer SetAnalyzer: disp=" << m_dispId
-        << " fft=" << m_fftSize
-        << " bf_sz=" << (m_blockSize > 0 ? m_blockSize : m_fftSize)
+        << " fft=" << args.sz
+        << " bf_sz=" << args.bfSz
         << " (blockSize=" << m_blockSize << ")"
-        << " win=" << m_windowType
-        << " ovrlp=" << ovrlp
-        << " clp=" << effectiveClip
-        << " fsclipL=" << fsclipL << " fsclipH=" << fsclipH
-        << " n_pix=" << m_numPixels
-        << " rate=" << m_sampleRate
+        << " win=" << args.winType
+        << " ovrlp=" << args.ovrlp
+        << " clp=" << args.clp
+        << " fsclipL=" << args.fscLin << " fsclipH=" << args.fscHin
+        << " n_pix=" << args.nPix
+        << " max_w=" << args.maxW
+        << " rate=" << args.sampleRateHz
         << " window=[" << m_spanLowHz << "," << m_spanHighHz << "]";
 }
 

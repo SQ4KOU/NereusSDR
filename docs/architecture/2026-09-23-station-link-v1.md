@@ -838,6 +838,7 @@ change shows as surface drift and as a change to this table.
 | `dspInfoVersion` | 1 |
 | `recordStreamVersion` | 1 |
 | `stationRadiosVersion` | 0 |
+| `txDisplayVersion` | 0 |
 | `sessionHolderVersion` | 1 |
 | `remoteTxVersion` | 2 |
 | `txStateVersion` | 2 |
@@ -1142,6 +1143,20 @@ When a feature is off, its version is 0:
   no entry a window shows This Core's Change radio disabled with "This
   Core does not let this app change its radio. Updating the Core may
   help.".
+- `txDisplayVersion` (remote-window parity Task 28, A11): sent only at
+  agreed minor 11, after `stationRadiosVersion` in the minor-11 block
+  (`sessionHolderVersion` and the remote transmit entries follow it), and
+  1 only while media is on and the Core has a TX analyzer (a Core that
+  runs its own DSP); 0 otherwise. At 1 a window may add
+  `txDisplayVersion` to its media `start`; then its subscribes may carry
+  the transmit window (`txMinDbm`, `txMaxDbm`), every context it is sent
+  carries `transmit`, and while the Core is keyed each of its displays on
+  the pan hosting the transmitting slice shows the transmit analyzer's
+  display instead of the receiver's (the media document's "Transmit
+  display"). A window that does not declare it gets today's wire: no
+  `transmit`, and receive frames while keyed. (`txState`'s `highSwr` and
+  `swrWindBackLatched`, section 18.8, came with this version but do not
+  depend on it: every Core that sends `txState` sends them.)
 
 - `sessionHolderVersion`: sent only at agreed minor 11, last, and only to
   a peer whose hello declared `sessionHolder` 1 with `deviceAuth` 1; any
@@ -1350,12 +1365,13 @@ older window sees only the values it was built for.
 | 56 | `dspInfoVersion` | `i64` |
 | 57 | `recordStreamVersion` | `i64` |
 | 58 | `stationRadiosVersion` | `i64` |
-| 59 | `sessionHolderVersion` | `i64` |
-| 60 | `remoteTxVersion` | `i64` |
-| 61 | `txRefusalCode` | `utf8` |
-| 62 | `txRefusalReason` | `utf8` |
-| 63 | `txRefusalFix` | `utf8` |
-| 64 | `txStateVersion` | `i64` |
+| 59 | `txDisplayVersion` | `i64` |
+| 60 | `sessionHolderVersion` | `i64` |
+| 61 | `remoteTxVersion` | `i64` |
+| 62 | `txRefusalCode` | `utf8` |
+| 63 | `txRefusalReason` | `utf8` |
+| 64 | `txRefusalFix` | `utf8` |
+| 65 | `txStateVersion` | `i64` |
 
 <!-- /surface -->
 
@@ -1968,7 +1984,7 @@ An enum property lists the values its domain allows.
 | 84 | `twoToneDrivePowerSource` | `enum` | bidirectional | 0, 1, 2 |
 | 85 | `voxEnabled` | `bool` | bidirectional |  |
 
-**TransmitState** (29 properties)
+**TransmitState** (31 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -2001,6 +2017,8 @@ An enum property lists the values its domain allows.
 | 26 | `holderTransferring` | `bool` | outbound |  |
 | 27 | `keyedForSeconds` | `i64` | outbound |  |
 | 28 | `stopEpoch` | `i64` | outbound |  |
+| 29 | `highSwr` | `bool` | outbound |  |
+| 30 | `swrWindBackLatched` | `bool` | outbound |  |
 
 **TunerModel** (21 properties)
 
@@ -4869,6 +4887,7 @@ processors; its vectors hold decoders to the reference PCM instead.
 | `nsdc1` | `nsdc1-malformed-delta`: frame 2's delta with its trace plane's block size code set to 4 (no such size), to a fresh decoder | none | `disposition` `rejected`, `reason` `malformed`, `keyframe` false, no frame (not `needKeyframe` `noHistory`) |
 | `nsdc1` | `nsdc1-malformed-stale-delta`: frame 2's delta with sequence 0 (older than frame 1's) and its last byte cut off | `nsdc1-full` | `rejected`, `malformed`, `keyframe` false, no frame (not `staleSequence`) |
 | `nsdc1` | `nsdc1-malformed-keyframe`: frame 4's keyframe with its trace plane claiming one block more than its length needs, to a decoder that needs a keyframe | `nsdc1-full`, `nsdc1-delta-after-loss` | `rejected`, `malformed`, `keyframe` true, no frame |
+| `nsdc1` | `nsdc1-transmit`: the first frame of a transmit display context (parity Task 28, `txDisplayVersion` 1): the transmit window, -80 to 20 dBm, and a tune tone's trace and waterfall rows; a transmit frame is an ordinary NSDC frame | none | As `nsdc1-full`: `accepted`, `keyframe` true, `waterfallAdvance` true, the frame |
 | `nsdx1` | `nsdx1-full`: the display extras datagram beside `nsdc1-full`'s endpoint, every section (three blobs, a 32-sample peak hold row, the noise floor, the waterfall's levels) | none | `accepted` true, `reason` `none`, `endpointId`, `contextGeneration`, `encoderSequence`, `peakBlobs` (`pixel`, `dbm`), `peakHoldDbm` (the decoder's dequantised row), `noiseFloorDbm`, `waterfallLevelsDbm` (`lowDbm`, `highDbm`); `context` names the endpoint context it decodes against; `tolerance` `{"dbm": 0.01}` |
 | `nsdx1` | `nsdx1-noise-floor`: the noise floor section alone | none | As above, with `noiseFloorDbm` the only section |
 | `nsdx1` | `nsdx1-other-generation`: `nsdx1-full`'s bytes, against generation 2 | none | `accepted` false, `reason` `contextMismatch` |
@@ -5393,7 +5412,9 @@ two-tone use no microphone and are never stopped by it.
 iPhone app plan Task 39 (D14, R-IOS-13, R-IOS-21; spec section 5.5 items 5
 and 8). The `txState` object (`TransmitState`, `txStateVersion` 1; 2 adds
 the holder of transmit and `keyedForSeconds`, appended after `stopSerial`,
-and `stopEpoch` after them) goes to
+and `stopEpoch` after them, then `highSwr` and `swrWindBackLatched`,
+added with `txDisplayVersion` 1 and sent by every Core whatever its
+`txDisplayVersion`, as `stopEpoch` is) goes to
 a peer at minor 11 whose hello declared `remoteTx` 1, in its snapshot after
 `connectedDevices`, and as deltas. Every property is `outbound`; a write
 is refused as any outbound property's is.
@@ -5421,6 +5442,8 @@ is refused as any outbound property's is.
 | `holderAway` | The holder's link dropped and it keeps transmit, unkeyed, for its 3 minutes |
 | `holderTransferring` | Every key is refused while it is true: transmit is changing hands, or a dropped holder's key is being stopped ("Transmit is changing hands."), or, with no holder, the radio did not confirm it stopped transmitting after a transfer ("The radio did not confirm it stopped transmitting.") until MOX reads off |
 | `keyedForSeconds` | How long the key now on has been on, in whole seconds on the Core's clock when this is sent (ruling 10.3); 0 while unkeyed. It supersedes `keyedSinceMs`, which a Core still sends |
+| `highSwr` | The Core's high-SWR protection has tripped (parity Task 28, appended after `stopEpoch`; sent by every Core that sends `txState`, whatever its `txDisplayVersion`): what the Core's own window hands its transmitting pan's high-SWR border |
+| `swrWindBackLatched` | The protection's drive fold-back has latched; the border shows fold-back while this and `highSwr` are both true |
 
 **When it is sent.** While keyed the Core reads the meters ten times a
 second, from the transmit lane's last readings (never a DSP call on its

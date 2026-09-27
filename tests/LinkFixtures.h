@@ -57,6 +57,10 @@
 //                                    {"$json": ...} form for a station
 //                                    string holding JSON.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Parity Task 28 (R-R3-49, A11): the
+//                                    transmit display's NSDC vector
+//                                    (nsdc1-transmit). AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -222,6 +226,12 @@ public:
     /// a keyframe, two deltas, and a keyframe the sender was asked for
     /// after the third was lost (encode it with requestKeyframe = true).
     static QList<NereusSDR::DisplayCodecFrame> nsdcFrames();
+    /// Parity Task 28: one transmit display frame as the Core sends it for a
+    /// pan on the transmitting slice while keyed: the transmit window (-80
+    /// to 20 dBm), a tune tone's trace and waterfall rows, a new waterfall
+    /// row, the first frame of its context (a keyframe). Transmit frames
+    /// are ordinary NSDC frames.
+    static NereusSDR::DisplayCodecFrame nsdcTransmitFrame();
     /// The malformed-and-refused vectors, each made from the station
     /// encoder's own packet of nsdcFrames(): frame 2's delta with its trace
     /// plane's block size code set to 4 (no such size); frame 2's delta with

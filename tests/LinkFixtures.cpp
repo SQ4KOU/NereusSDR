@@ -52,6 +52,10 @@
 //   2026-09-26: iPhone app plan Task 77 (R-IOS-02, R-IOS-03, R-IOS-13): the
 //               radioPtt step. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Parity Task 28 (R-R3-49, A11): the
+//                                    transmit display's NSDC vector
+//                                    (nsdc1-transmit). AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "LinkFixtures.h"
@@ -1921,6 +1925,30 @@ QList<DisplayCodecFrame> LinkMediaVectors::nsdcFrames()
         frames.append(frame);
     }
     return frames;
+}
+
+DisplayCodecFrame LinkMediaVectors::nsdcTransmitFrame()
+{
+    DisplayCodecContext context;
+    context.endpointId = 1;
+    context.contextGeneration = 2;
+    context.minDbm = -80.0f;
+    context.maxDbm = 20.0f;
+    context.traceSamples = 32;
+    context.waterfallSamples = 32;
+    context.wideSamples = 0;
+    DisplayCodecFrame frame;
+    frame.context = context;
+    frame.encoderSequence = 0;
+    frame.producerTimestamp = 66'666'667ULL;
+    frame.waterfallAdvance = true;
+    for (int i = 0; i < 32; ++i) {
+        const double offset = static_cast<double>(i - 16);
+        const float tone = static_cast<float>(-70.0 + 80.0 * std::exp(-offset * offset / 4.0));
+        frame.traceDbm.append(tone);
+        frame.waterfallDbm.append(tone - 3.0f);
+    }
+    return frame;
 }
 
 // The first plane's prefix starts right after the 42-byte header:

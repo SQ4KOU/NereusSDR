@@ -48,6 +48,14 @@
 //   2026-09-26 : bandPlanManager() accessor, so a test reads the plan the
 //                 strip draws (R-IOS-11, R-R3-49). J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Parity Task 28 (R-R3-49, A11):
+//                                    transmitRefLevel() and
+//                                    transmitDynamicRange() readers.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Parity Task 29 (R-R3-49, R-R3-12):
+//                                    drawsSpectrumTrace(); no stale receive
+//                                    trace under the transmit axis.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  enums.cs
@@ -453,6 +461,14 @@ public:
     void setDbmRange(float minDbm, float maxDbm);
     float refLevel() const { return m_refLevel; }
     float dynamicRange() const { return m_dynamicRange; }
+    /// Parity Task 28: the transmit grid's pair whether or not it is live
+    /// (setMoxOverlay swaps it in while keyed), for the transmit window a
+    /// remote pan asks the Core for.
+    float transmitRefLevel() const { return m_moxOverlay ? m_refLevel : m_txRefLevel; }
+    float transmitDynamicRange() const
+    {
+        return m_moxOverlay ? m_dynamicRange : m_txDynamicRange;
+    }
 
     // ---- Waterfall settings ----
     void setWfColorScheme(WfColorScheme scheme) override;
@@ -1117,6 +1133,16 @@ public:
     // this slot drives the spectrum-panel TX filter shadow.
 
     bool isMoxOverlayActive() const noexcept { return m_moxOverlay; }
+    /// Whether the GPU path draws a spectrum trace this frame: new pixels,
+    /// or the last trace it built. Parity Task 29: never the last trace
+    /// while the MOX overlay is on and there are no transmit pixels (a
+    /// remote pan on a Core that sends no transmit display): the receive
+    /// trace would sit under the transmit axis and read at the wrong
+    /// frequencies, so the pan stays blank with its status line.
+    bool drawsSpectrumTrace() const noexcept
+    {
+        return !m_renderedPixels.isEmpty() || (m_visibleBinCount > 0 && !m_moxOverlay);
+    }
     float txAttenuatorOffsetDb() const noexcept { return m_txAttOffsetDb; }
     bool txFilterVisible() const noexcept { return m_txFilterVisible; }
 

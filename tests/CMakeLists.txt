@@ -455,6 +455,18 @@ if(TARGET wdsp_static)
     set_source_files_properties(WdspEqProbe.c PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(tst_wdsp_txa_eq_q PRIVATE ${FFTW3_INCLUDE_DIRS})
     target_compile_definitions(tst_wdsp_txa_eq_q PRIVATE WDSP_STATIC_BUILD)
+    # R-R3-49 (Task 27, row 15 of the TX display matrix): the transmit
+    # analyzer's skirt. A synthetic TUNE tone into Spectrum0 and a real TX
+    # channel's TUNE generator, both through the arguments TxAnalyzer gives
+    # SetAnalyzer with Blackman-Harris 4T, are at least 90 dB down 66 Hz from
+    # the peak and beyond; every DSP block reaches the siphon once, in order.
+    # Reads the analyzer's input ring (analyzer.h), hence the WDSP headers.
+    # REALTIME: real WDSP threads, and the first SetAnalyzer plans a
+    # 32768-point FFTW_PATIENT transform with no wisdom.
+    nereus_add_test(tst_tx_analyzer_skirt EXTRA_LABELS core REALTIME)
+    target_include_directories(tst_tx_analyzer_skirt PRIVATE ${FFTW3_INCLUDE_DIRS})
+    target_compile_definitions(tst_tx_analyzer_skirt PRIVATE WDSP_STATIC_BUILD)
+    set_tests_properties(tst_tx_analyzer_skirt PROPERTIES TIMEOUT 900)
 endif()
 
 # ── Issue #75: receiver leak across disconnect/reconnect ──────────────────
@@ -5456,6 +5468,11 @@ nereus_add_test(tst_tx_analyzer_settings)
 # dial frequency; clipped to the wrong width it left too few points and the
 # trace was a blob. Pure, so it needs no WDSP channel and no bench.
 nereus_add_test(tst_tx_display_window)
+# Remote-window parity Task 28 (R-R3-49, A11): TxDisplayFeed, the one
+# owner of the transmit analyzer's view (start and stop on every key, the
+# governing viewer's window and pixels, the carrier following XIT), and
+# TxAnalyzer::clampViewToBaseband.
+nereus_add_test(tst_tx_display_feed)
 # ── Phase 3J-1 Task 2.1: TciServer + ClientSession lifecycle ─────────────────
 # 3 tests: start/listen/signal, double-start rejection, stop/clear.
 # Gated on Qt6WebSockets_FOUND — TciServer.h/.cpp are #ifdef HAVE_WEBSOCKETS.
@@ -8247,6 +8264,43 @@ nereus_add_test(tst_remote_media_controller
 # (repeatedAudioRestartsBackOff waits out the 1, 2, 4, 4 s retry backoff),
 # too close to the default 120 s, and a loaded machine stretches them.
 set_tests_properties(tst_remote_media_controller PROPERTIES TIMEOUT 300)
+# Parity Tasks 27-29 fix wave (R-R3-49): the audio functions (the test's
+# kAudioFunctions) run as their own ctest entry, the same binary with
+# NEREUS_REMOTE_MEDIA_GROUP=audio, and the first entry runs the rest, so
+# neither carries the other's time against the 120 s limit (the whole run
+# reached 110 to 117 s under load). The second entry takes the first's
+# labels, limit and environment, with its own home.
+if(TEST tst_remote_media_controller)
+    get_test_property(tst_remote_media_controller LABELS _rmc_labels)
+    get_test_property(tst_remote_media_controller TIMEOUT _rmc_timeout)
+    get_test_property(tst_remote_media_controller ENVIRONMENT_MODIFICATION _rmc_env_mod)
+    add_test(NAME tst_remote_media_controller_audio COMMAND tst_remote_media_controller)
+    set_tests_properties(tst_remote_media_controller_audio PROPERTIES
+        LABELS "${_rmc_labels}"
+        TIMEOUT ${_rmc_timeout})
+    if(_rmc_env_mod)
+        set_property(TEST tst_remote_media_controller_audio
+            PROPERTY ENVIRONMENT_MODIFICATION ${_rmc_env_mod})
+    endif()
+    if(NEREUS_TESTS_OFFSCREEN AND CMAKE_VERSION VERSION_LESS 3.22)
+        set_property(TEST tst_remote_media_controller_audio APPEND PROPERTY ENVIRONMENT
+            "QT_QPA_PLATFORM=offscreen")
+    endif()
+    if(NOT WIN32)
+        set(_rmc_home "${CMAKE_CURRENT_BINARY_DIR}/test-home/tst_remote_media_controller_audio")
+        file(MAKE_DIRECTORY "${_rmc_home}")
+        set_property(TEST tst_remote_media_controller_audio APPEND PROPERTY ENVIRONMENT
+            "HOME=${_rmc_home}")
+        if(APPLE)
+            set_property(TEST tst_remote_media_controller_audio APPEND PROPERTY ENVIRONMENT
+                "CFFIXED_USER_HOME=${_rmc_home}")
+        endif()
+    endif()
+    set_property(TEST tst_remote_media_controller APPEND PROPERTY ENVIRONMENT
+        "NEREUS_REMOTE_MEDIA_GROUP=rest")
+    set_property(TEST tst_remote_media_controller_audio APPEND PROPERTY ENVIRONMENT
+        "NEREUS_REMOTE_MEDIA_GROUP=audio")
+endif()
 
 # iPhone app plan, desktop remote transmit (R-IOS-13, R-R3-42): the window's
 # side of the transmit verbs (copies, epochs, releases) on its own.
@@ -8265,6 +8319,21 @@ endif()
 # Remote Daemon R3 daemon controller: authenticated session/media lifecycle,
 # real FFT/display production, stale control rejection, and slice cleanup.
 nereus_add_test(tst_daemon_media_controller
+    fakes/LoopbackTransport.cpp)
+
+# Remote-window parity Task 28 (R-R3-49, A11): the Core sends the transmit
+# analyzer's display for the transmitting pan while keyed, to a media peer
+# that declared txDisplayVersion; txState's high-SWR state.
+nereus_add_test(tst_remote_tx_display
+    fakes/LoopbackTransport.cpp)
+
+# Remote-window parity Task 29 (A11, R-R3-49, R-R3-12, rows 14 and 16): one
+# MOX display controller for a local and a remote window. The local rise and
+# fall make the old MainWindow lambda's calls; a remote window shows the
+# Core's transmit display with the transmit grid, palette, waterfall levels
+# and red border; XIT while keyed, tuning while keyed, high SWR and a layout
+# change while keyed, in both windows.
+nereus_add_test(tst_mox_display_controller
     fakes/LoopbackTransport.cpp)
 
 # Remote Daemon R2: the GUI's slice controls reach the daemon.

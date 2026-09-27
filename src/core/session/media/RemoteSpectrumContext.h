@@ -5,6 +5,11 @@
 // for the spectrum display context, in the minor-8 shape and the minor-9
 // shape that also reports what Core granted the endpoint; it holds no
 // session identity or subscription policy.
+//
+// Modification history (NereusSDR):
+//   2026-09-26 : Parity Task 28 (R-R3-49, A11): `transmit`. J.J. Boyd
+//                 (KG4VCF), AI-assisted implementation via Anthropic Claude
+//                 Code.
 // =================================================================
 
 #pragma once
@@ -66,6 +71,9 @@ struct SpectrumContextMessage {
     std::optional<WidebandDisplayContext> wideband;
     /// Set only when the grant report was negotiated (minor 9).
     std::optional<SpectrumContextGrant> grant;
+    /// Parity Task 28: set only for a peer that declared txDisplayVersion in
+    /// its media start: true while the endpoint shows the transmit display.
+    std::optional<bool> transmit;
 };
 
 // grantNegotiated=false: exactly today's 19 keys (op, connectionId,
@@ -86,7 +94,11 @@ QJsonObject encodeRemoteSpectrumContext(const SpectrumContextMessage& message,
 // shape selected by grantNegotiated, with or without "wideband"; nullopt
 // otherwise. The field ranges are the ones the GUI's context parser has
 // always applied.
+// transmitNegotiated=true (parity Task 28, a GUI that declared
+// txDisplayVersion): the grant shape plus exactly one more key, `transmit`, a
+// boolean; refused without the grant shape.
 std::optional<SpectrumContextMessage> decodeRemoteSpectrumContext(const QJsonObject& payload,
-                                                                  bool grantNegotiated);
+                                                                  bool grantNegotiated,
+                                                                  bool transmitNegotiated = false);
 
 } // namespace NereusSDR

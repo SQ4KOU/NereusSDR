@@ -185,7 +185,8 @@ private slots:
         for (const PanDisplayState& state : PanStatusSamples::all()) {
             const PanStatusText text = buildPanStatusText(state);
             if (state.phase == PanDisplayState::Phase::None
-                && state.zoomLimit == PanDisplayState::ZoomLimit::None) {
+                && state.zoomLimit == PanDisplayState::ZoomLimit::None
+                && !state.transmitDisplayMissing) {
                 QCOMPARE(text, PanStatusText{});
                 continue;
             }

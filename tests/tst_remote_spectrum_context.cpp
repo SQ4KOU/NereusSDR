@@ -6,6 +6,11 @@
 // wire codec Core and GUI share, in the minor-8 shape and the minor-9 shape
 // that reports Core's grant.
 //
+// Modification history (NereusSDR):
+//   2026-09-26 : Parity Task 28 (R-R3-49, A11): the `transmit` field, only
+//                 for a peer that declared txDisplayVersion. J.J. Boyd
+//                 (KG4VCF), AI-assisted implementation via Anthropic Claude
+//                 Code.
 // =================================================================
 
 #include <QtTest>
@@ -366,6 +371,40 @@ private slots:
             QVERIFY(golden.has_value());
             QVERIFY(!golden->grant.has_value());
             QCOMPARE(golden->wideband.has_value(), withWideband);
+        }
+    }
+
+    // Parity Task 28: `transmit` travels only to a peer that declared
+    // txDisplayVersion, on the grant shape, as a boolean; without it the
+    // encoding is byte-for-byte today's.
+    void transmitIsOneMoreFieldOnlyWhereDeclared()
+    {
+        for (const bool withWideband : {false, true}) {
+            SpectrumContextMessage message = sampleMessage(withWideband, true);
+            const QJsonObject today = encodeRemoteSpectrumContext(message, true);
+            QVERIFY(!today.contains(QStringLiteral("transmit")));
+            for (const bool transmit : {false, true}) {
+                message.transmit = transmit;
+                const QJsonObject declared = encodeRemoteSpectrumContext(message, true);
+                QCOMPARE(declared.size(), today.size() + 1);
+                QCOMPARE(declared.value(QStringLiteral("transmit")).toBool(), transmit);
+                QJsonObject stripped = declared;
+                stripped.remove(QStringLiteral("transmit"));
+                QCOMPARE(compact(stripped), compact(today));
+                const auto decoded = decodeRemoteSpectrumContext(declared, true, true);
+                QVERIFY(decoded.has_value());
+                compareMessages(*decoded, message);
+                QCOMPARE(decoded->transmit, std::optional<bool>(transmit));
+                QVERIFY(!decodeRemoteSpectrumContext(declared, true).has_value());
+                QVERIFY(!decodeRemoteSpectrumContext(declared, false, true).has_value());
+                QJsonObject notBool = declared;
+                notBool.insert(QStringLiteral("transmit"), QStringLiteral("true"));
+                QVERIFY(!decodeRemoteSpectrumContext(notBool, true, true).has_value());
+            }
+            // A declared peer refuses a context without the field.
+            QVERIFY(!decodeRemoteSpectrumContext(today, true, true).has_value());
+            message.transmit.reset();
+            QVERIFY(!decodeRemoteSpectrumContext(today, true)->transmit.has_value());
         }
     }
 

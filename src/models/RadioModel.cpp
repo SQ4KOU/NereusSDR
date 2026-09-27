@@ -498,6 +498,11 @@
 //                the amplifier's changeover, and the stop's words say how to
 //                transmit without it. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-26 - Parity Task 28 (R-R3-49, A11): setTxAnalyzer also makes
+//                the transmit display's feed (txDisplayFeed), which starts
+//                and stops the TX analyzer on the MOX edge and holds its
+//                view for every viewer. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -735,6 +740,7 @@ warren@wpratt.com
 #include "core/PsFeedbackChannel.h"
 #include "core/StepAttenuatorController.h"
 #include "core/TwoToneController.h"
+#include "core/TxDisplayFeed.h"
 // Phase 3F Sub-Epic C Task 6: TxSliceArbiter integration.
 #include "core/TxSliceArbiter.h"
 #include "core/safety/UnkeyGate.h"
@@ -1029,6 +1035,19 @@ double scalePaTemperatureCelsius(quint16 /*adcRaw*/, HPSDRModel /*model*/)
 // No local copy needed here; PaTelemetryScaling.h is already included above.
 
 } // anonymous namespace
+
+void RadioModel::setTxAnalyzer(TxAnalyzer* a)
+{
+    if (a == m_txAnalyzer) {
+        return;
+    }
+    // Task 28 (R-R3-49, A11): the feed goes with the analyzer it drives.
+    m_txDisplayFeed.reset();
+    m_txAnalyzer = a;
+    if (a != nullptr) {
+        m_txDisplayFeed = std::make_unique<TxDisplayFeed>(this, a);
+    }
+}
 
 RadioModel::RadioModel(QObject* parent)
     : RadioModel(Role::Local, parent)

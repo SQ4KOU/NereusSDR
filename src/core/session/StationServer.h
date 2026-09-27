@@ -992,6 +992,12 @@ public:
     // station.rescanRadios, station.setRadioModel and station.forgetRadio
     // verbs; 0 otherwise.
     int stationRadiosVersion() const;
+    // R-R3-49 / A11 (parity Task 28): txDisplayVersion. 1 while media is on
+    // and the Core has a TX analyzer (RadioModel::txDisplayFeed); 0
+    // otherwise. txDisplayAvailable(epoch): that session's peer agreed minor
+    // 11 and was told it, so its media start may declare it.
+    int txDisplayVersion() const;
+    bool txDisplayAvailable(quint64 epoch) const;
     /// Parity Task 21: the Core's radios (nereusd's DaemonApp owns it).
     void setStationRadios(StationRadios* radios);
     /// For a test: the stream by name (spots, spotConsole:<source>), or

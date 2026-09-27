@@ -99,6 +99,10 @@
 //               the chosen radio; station.rescanRadios scans while
 //               connected. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-26: Parity Task 28 (R-R3-49, A11): the TX analyzer's MOX start
+//               and stop move into RadioModel's TxDisplayFeed. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/daemon/DaemonApp.h"
@@ -549,26 +553,13 @@ void DaemonApp::createTxAnalyzer()
     m_txAnalyzer = std::make_unique<TxAnalyzer>(TxAnalyzer::kTxDispId, nullptr,
                                                 m_radioModel->transmitLane());
     m_txAnalyzer->applyStationRates();
+    // Task 28 (R-R3-49, A11): setTxAnalyzer makes the transmit display's
+    // feed (RadioModel::txDisplayFeed), which runs the analyzer on every
+    // key as this function used to (SetAnalyzer's bf_sz from the TX
+    // channel's DSP block, then start; stop on unkey), whether or not a
+    // window watches, and sets its view from a remote window's
+    // transmitting pan when one does.
     m_radioModel->setTxAnalyzer(m_txAnalyzer.get());
-
-    // Runs it as the desktop does on the MOX edge (MainWindow's
-    // moxStateChanged connect): SetAnalyzer's bf_sz from the TX channel's
-    // DSP block (TxAnalyzer::setBlockSize), then start; stop on unkey. The
-    // desktop's display-window and pixel-width steps follow a pan, which a
-    // Core does not have.
-    TxAnalyzer* analyzer = m_txAnalyzer.get();
-    RadioModel* model = m_radioModel.get();
-    connect(model->moxController(), &MoxController::moxStateChanged, analyzer,
-            [analyzer, model](bool isTx) {
-        if (isTx) {
-            if (TxChannel* txc = model->txChannel()) {
-                analyzer->setBlockSize(txc->dspBlockFrames());
-            }
-            analyzer->start();
-        } else {
-            analyzer->stop();
-        }
-    });
 }
 
 void DaemonApp::configureStepAttenuatorController(const QString& mac)

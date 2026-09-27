@@ -542,6 +542,11 @@
 //               tells that device why (notice tuneEnded). J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  R-R3-49 / A11 (parity Task 28):
+//                                    txDisplayVersion 1 after
+//                                    stationRadiosVersion: the transmit
+//                                    display for a declaring media peer.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -7158,6 +7163,23 @@ int StationServer::stationRadiosVersion() const
         : 0;
 }
 
+int StationServer::txDisplayVersion() const
+{
+    // R-R3-49 / A11 (parity Task 28): the transmit display travels on the
+    // media display channel and comes from the Core's own TX analyzer.
+    return m_mediaEnabled && m_radioModel && m_radioModel->txDisplayFeed() != nullptr ? 1 : 0;
+}
+
+bool StationServer::txDisplayAvailable(quint64 epoch) const
+{
+    // Advertised in the minor-11 capabilities block only, so only a peer
+    // that agreed minor 11 was told it may declare it.
+    const auto it = m_peers.constFind(mediaSessionFor(epoch));
+    return mediaAvailable(epoch) && it != m_peers.cend()
+        && it->agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && txDisplayVersion() >= 1;
+}
+
 void StationServer::setStationRadios(StationRadios* radios)
 {
     if (!m_stationRadios.isNull()) {
@@ -7441,6 +7463,9 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             caps.recordStreamVersion = recordStreamVersion();
             // R-IOS-18 / R-R3-49 (parity Task 21): the Core's radio choice.
             caps.stationRadiosVersion = stationRadiosVersion();
+            // R-R3-49 / A11 (parity Task 28): the transmit display, with
+            // media, appended after the last entry of the minor-11 block.
+            caps.txDisplayVersion = media ? txDisplayVersion() : 0;
             // iPhone app Task 71 (ruling 10.1): several devices at once, for
             // a peer that declared sessionHolder with deviceAuth; any other
             // peer is sent no entry, so its capabilities are today's.

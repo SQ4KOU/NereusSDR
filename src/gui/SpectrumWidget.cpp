@@ -40,6 +40,14 @@
 //                 Hz/bin readout follow the Core's granted FFT size, and its
 //                 peak hold, blob and noise floor decay follow the frame
 //                 rate the Core sends. AI-assisted via Anthropic Claude Code.
+//   2026-09-26 J.J. Boyd / KG4VCF - R-R3-49 / R-R3-12 (parity Task 29): the
+//                 GPU path draws no stale receive trace while the MOX overlay
+//                 is on without transmit pixels (drawsSpectrumTrace).
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-09-26 J.J. Boyd / KG4VCF - R-R3-49 (parity Tasks 27-29 fix wave):
+//                 a remote pan's rise and fall retire the other axis's trace,
+//                 so the GPU path cannot redraw it under the new axis before
+//                 a frame for it lands. AI-assisted via Anthropic Claude Code.
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
@@ -6846,6 +6854,22 @@ void SpectrumWidget::setMoxOverlay(bool isTx)
     // where both grids get written.
 
     m_moxOverlay = isTx;
+    if (m_remoteSpectrum) {
+        // Either edge on a remote pan: the last trace built belongs to the
+        // other axis (the receive trace at the rise, the transmit display at
+        // the fall). Retire it, and the vertices built from it, so nothing
+        // is drawn under the new axis until a frame for it lands: the
+        // Core's transmit context and frames at the rise (none at all from
+        // a Core that sends no transmit display, whose pan stays blank with
+        // its status line), its receive context and keyframe at the fall,
+        // each a round trip away. The rise's move to the carrier cleared
+        // the pixels only when the view actually moved. A local pan's
+        // frames follow at once.
+        m_renderedPixels.clear();
+        m_undentedPixels.clear();
+        m_visibleBinCount = 0;
+        m_hasNewSpectrum = true;
+    }
     markOverlayDirty();
     update();   // ensure QPainter path repaints immediately on MOX flip;
                 // markOverlayDirty alone waits for the next natural QRhi
@@ -11201,7 +11225,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
         cb->setVertexInput(0, 1, &vbuf);
         cb->draw(4);
     } else if (!is3D && m_fftFillPipeline && m_fftLinePipeline
-               && m_visibleBinCount > 0) {
+               && m_visibleBinCount > 0 && drawsSpectrumTrace()) {
         float specVpX = static_cast<float>(specRect.x()) * dpr;
         float specVpY = static_cast<float>(h - specRect.bottom() - 1) * dpr;
         float specVpW = static_cast<float>(specRect.width()) * dpr;

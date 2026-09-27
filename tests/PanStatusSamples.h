@@ -77,6 +77,14 @@ inline QList<PanDisplayState> all()
         zoomShowing.zoomPoints = 16384;
         states << zoomShowing;
     }
+    // Parity Task 29 (A11): a transmitting pan on a Core that sends no
+    // transmit display, alone and over a showing display.
+    PanDisplayState noTransmitDisplay;
+    noTransmitDisplay.transmitDisplayMissing = true;
+    states << noTransmitDisplay;
+    PanDisplayState noTransmitDisplayShowing = showing(512, 15, 1024, 30);
+    noTransmitDisplayShowing.transmitDisplayMissing = true;
+    states << noTransmitDisplayShowing;
     return states;
 }
 

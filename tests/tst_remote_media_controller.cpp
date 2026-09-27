@@ -8,7 +8,21 @@
 //               packets, and at the Core); the microphone and a program's
 //               audio reach the Core's transmit ring over real DTLS/SRTP.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26: parity Task 28 (R-R3-49, A11): the window declares
+//               txDisplayVersion to a Core with a TX analyzer, sends the
+//               pan's transmit window, and hands the Core's transmit context
+//               and frames on without drawing them as receive. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26: parity Tasks 27-29 fix wave (R-R3-49): the test runs as two
+//               ctest entries, the audio functions (kAudioFunctions) in
+//               tst_remote_media_controller_audio and the rest in
+//               tst_remote_media_controller (NEREUS_REMOTE_MEDIA_GROUP), so
+//               neither carries the other's time against the 120 s limit;
+//               run by hand with no group, it runs everything. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 #include <QTest>
+#include <QApplication>
+#include <QMetaMethod>
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QLabel>
@@ -30,6 +44,9 @@
 #include <thread>
 #include <utility>
 #include "core/AppSettings.h"
+#include "core/MoxController.h"
+#include "core/TxAnalyzer.h"
+#include "core/TxDisplayFeed.h"
 #include "core/AudioDeviceConfig.h"
 #include "core/AudioEngine.h"
 #include "core/ClarityController.h"
@@ -4894,6 +4911,157 @@ private slots:
         client.disconnectFromStation(QStringLiteral("test complete"));
     }
 
+    // Parity Task 28 (R-R3-49, A11): a Core with a TX analyzer is told at
+    // start that this window takes its transmit display; the pan's
+    // subscribe carries its transmit window; while the Core is keyed the
+    // transmit context and its frames are handed on, and the pan keeps its
+    // receive context; the fall brings receive frames back. A Core without
+    // one sees today's start and subscribe.
+    void transmitDisplayIsDeclaredAndHandedOn_data()
+    {
+        QTest::addColumn<bool>("analyzer");
+        QTest::newRow("core with a TX analyzer") << true;
+        QTest::newRow("core without one") << false;
+    }
+
+    void transmitDisplayIsDeclaredAndHandedOn()
+    {
+        QFETCH(bool, analyzer);
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
+        RadioModel station;
+        station.setBoardForTest(HPSDRHW::Saturn);
+        station.configureStreamPool(5, 5, 192000);
+        station.setConnectionStateForTest(ConnectionState::Connected);
+        const int sliceId = station.addSlice();
+        auto* slice = station.sliceById(sliceId);
+        QVERIFY(slice);
+        const int stream = slice->streamIndex();
+        const double centre = station.streamCentreHz(stream);
+        std::unique_ptr<TxAnalyzer> txAnalyzer;
+        if (analyzer) {
+            txAnalyzer = std::make_unique<TxAnalyzer>(TxAnalyzer::kTxDispId);
+            station.setTxAnalyzer(txAnalyzer.get());
+        }
+        const auto clearAnalyzer = qScopeGuard([&station] { station.setTxAnalyzer(nullptr); });
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
+        server.setMediaEnabled(true);
+        QPointer<DisplayTransport> sourceMedia;
+        DaemonMediaController daemon(&server, &station, nullptr,
+            [&sourceMedia](QObject* owner) -> IMediaTransport* {
+                sourceMedia = new DisplayTransport(owner);
+                return sourceMedia;
+            });
+        RadioModel remote(RadioModel::Role::Remote);
+        remote.audioEngine()->setMasterMuted(true); // Display fixture opens no speaker.
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        PanadapterStack stack;
+        auto* applet = stack.addPanadapter(QStringLiteral("only"));
+        applet->setActiveSliceIndex(sliceId);
+        SpectrumWidget* widget = applet->spectrumWidget();
+        widget->setDisplayWindowPreservingHistory(centre, 48000);
+        stack.resize(600, 400);
+        stack.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&stack));
+        QPointer<DisplayTransport> sinkMedia;
+        RemoteMediaController gui(&client, &remote, &stack, nullptr,
+            [&sinkMedia](QObject* owner) -> IMediaTransport* {
+                sinkMedia = new DisplayTransport(owner);
+                return sinkMedia;
+            });
+        QSignalSpy outbound(&server, &StationServer::mediaControlReceived);
+        QSignalSpy inbound(&client, &StationClient::mediaControlReceived);
+        QSignalSpy frames(&gui, &RemoteMediaController::displayFrameReceived);
+        QSignalSpy transmitContexts(&gui, &RemoteMediaController::transmitContextReceived);
+        QSignalSpy transmitFrames(&gui, &RemoteMediaController::transmitFrameReceived);
+        auto* stationLink = new Test::LoopbackTransport(QStringLiteral("station"));
+        auto* clientLink = new Test::LoopbackTransport(QStringLiteral("client"));
+        stationLink->linkTo(clientLink);
+        client.startSession(clientLink, server.token());
+        server.acceptTransport(stationLink);
+        QTRY_VERIFY(sourceMedia && sinkMedia);
+        QCOMPARE(client.capabilities().txDisplayVersion, analyzer ? 1 : 0);
+        QCOMPARE(gui.txDisplayNegotiated(), analyzer);
+        const QJsonObject start = lastControl(outbound, QStringLiteral("start"));
+        QCOMPARE(start.contains(QStringLiteral("txDisplayVersion")), analyzer);
+        sourceMedia->other = sinkMedia;
+        sourceMedia->activate();
+        sinkMedia->activate();
+        QTRY_COMPARE(daemon.activeEndpointCount(), 1);
+        QCOMPARE(daemon.txDisplayNegotiated(), analyzer);
+        const QJsonObject asked = lastControl(outbound, QStringLiteral("subscribe"));
+        QCOMPARE(asked.contains(QStringLiteral("txMinDbm")), analyzer);
+        QCOMPARE(asked.contains(QStringLiteral("txMaxDbm")), analyzer);
+        QVector<float> iq(2048);
+        for (int i = 0; i < iq.size(); i += 2) {
+            iq[i] = 0.01f * std::cos(double(i) * 0.17);
+            iq[i + 1] = 0.01f * std::sin(double(i) * 0.17);
+        }
+        const auto feed = [&] {
+            QMetaObject::invokeMethod(&station, "rawIqDataForStream", Qt::DirectConnection,
+                Q_ARG(int, stream), Q_ARG(QVector<float>, iq));
+        };
+        QTRY_VERIFY_WITH_TIMEOUT((feed(), frames.count() > 0), 5000);
+        if (!analyzer) {
+            for (const QJsonObject& context : controlsFor(inbound, QStringLiteral("context"))) {
+                QVERIFY(!context.contains(QStringLiteral("transmit")));
+            }
+            client.disconnectFromStation(QStringLiteral("test complete"));
+            return;
+        }
+        // The transmit window: the pan's transmit grid widened by its
+        // transmit waterfall levels, rounded outward to a tenth of a dB.
+        const double gridMax = widget->transmitRefLevel();
+        const double gridMin = gridMax - widget->transmitDynamicRange();
+        QCOMPARE(asked.value(QStringLiteral("txMinDbm")).toDouble(),
+                 std::floor(std::min(gridMin, double(widget->txWfLowLevel())) * 10.0) / 10.0);
+        QCOMPARE(asked.value(QStringLiteral("txMaxDbm")).toDouble(),
+                 std::ceil(std::max(gridMax, double(widget->txWfHighLevel())) * 10.0) / 10.0);
+        const double receiveRate = widget->sampleRate();
+
+        // Keyed at the Core (its MoxController, the receive-only pre-check
+        // lifted): the transmit context is handed on, not applied.
+        MoxController* mox = station.moxController();
+        QVERIFY(mox);
+        mox->setMoxCheck({});
+        mox->setMox(true);
+        QTRY_COMPARE(transmitContexts.count(), 1);
+        QCOMPARE(transmitContexts.last().at(0).toString(), applet->panId());
+        const auto context = transmitContexts.last().at(1).value<SpectrumContextMessage>();
+        QCOMPARE(context.transmit, std::optional<bool>(true));
+        QCOMPARE(context.sourceCentreHz, double(station.txFrequencyForSlice(slice)));
+        QCOMPARE(widget->sampleRate(), receiveRate);
+        const int receivedBefore = frames.count();
+        QTRY_VERIFY_WITH_TIMEOUT(([&] {
+            const QVector<float> trace(context.traceSamples, -30.0f);
+            emit txAnalyzer->txFftReady(-1, trace);
+            emit txAnalyzer->txWaterfallReady(-1, trace);
+            feed();
+            return transmitFrames.count() > 0;
+        }()), 5000);
+        const auto frame = transmitFrames.last().at(1).value<DisplayCodecFrame>();
+        QCOMPARE(transmitFrames.last().at(0).toString(), applet->panId());
+        QCOMPARE(frame.traceDbm.size(), context.traceSamples);
+        QVERIFY(std::abs(frame.traceDbm.first() + 30.0f) < 1.0f);
+        QVERIFY(frames.count() > receivedBefore);
+        QCOMPARE(widget->sampleRate(), receiveRate);
+
+        // The fall: the receive context again, and receive frames draw.
+        mox->setMox(false);
+        QTRY_VERIFY_WITH_TIMEOUT(([&] {
+            feed();
+            const QList<QJsonObject> contexts = controlsFor(inbound, QStringLiteral("context"));
+            return !contexts.isEmpty()
+                && contexts.last().value(QStringLiteral("transmit")) == QJsonValue(false);
+        }()), 5000);
+        const int transmitFramesAtFall = transmitFrames.count();
+        const int framesAtFall = frames.count();
+        QTRY_VERIFY_WITH_TIMEOUT((feed(), frames.count() > framesAtFall + 2), 5000);
+        QCOMPARE(transmitFrames.count(), transmitFramesAtFall);
+        client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
     // R-R3-08/37 (final review I4): the budget nereusd computes when adaptation
     // is on and nothing is configured reaches only an app that knows the
     // budget reason. An older app keeps legacy mode exactly: no budget, no
@@ -6525,5 +6693,90 @@ private slots:
         QVERIFY2(OperatorWording::isPlain(shown), qPrintable(shown));
     }
 };
-QTEST_MAIN(TestRemoteMediaController)
+
+namespace {
+
+// The audio functions: the speakers, headphones, lossless trial and the
+// microphone uplink (each starts real audio and a real DTLS/SRTP link, and
+// together they take about half the run). NEREUS_REMOTE_MEDIA_GROUP=audio
+// runs exactly these; =rest runs every other test function; unset runs
+// everything. A name here that is not a test function stops the run, so a
+// rename cannot quietly drop a test from both entries.
+const QStringList kAudioFunctions{
+    QStringLiteral("playsOnTheSpeakerFormatThisComputerChose"),
+    QStringLiteral("speakerLossPersistsAcrossMuteDeviceChangeAndDisabledContext"),
+    QStringLiteral("retryClearsTheProblemOnlyOnceTheNewContextPlays"),
+    QStringLiteral("lateFaultFromAnEndedSessionChangesNothing"),
+    QStringLiteral("minorSevenCorePlaysWithoutCodecDetail"),
+    QStringLiteral("coreReasonsShowAsCoreCouldNotStartAndRadioOffline"),
+    QStringLiteral("losslessFallsBackToOpusWhenTheNetworkCannotCarryIt"),
+    QStringLiteral("retiredReceiverStreamStopsWithItsReasonAndDoesNotLoop"),
+    QStringLiteral("losslessTrialCountsEveryLosslessStreamAndFallsBackOnce"),
+    QStringLiteral("losslessRefusedByTheCoreKeepsOpusAndSaysWhy"),
+    QStringLiteral("losslessTrialCountsTheHeadphonesMixAndFallsBackOnce"),
+    QStringLiteral("headphonesFailureIsReportedAndLeavesTheSpeakersPlaying"),
+    QStringLiteral("olderCoreCannotSendTheHeadphonesMixAndSaysSo"),
+    QStringLiteral("micLineOnlyWithACoreThatTakesTheMicrophone"),
+    QStringLiteral("micUplinkRunsOnlyWhileTransmittingOrVoxArmed"),
+    QStringLiteral("microphoneAndProgramReachTheCoresRing"),
+    QStringLiteral("headphonesWordingIsPlain"),
+};
+
+// The test functions QtTest would run: private slots with no arguments,
+// other than the four fixtures and the _data functions.
+QStringList testFunctions(const QMetaObject* meta)
+{
+    QStringList names;
+    for (int i = meta->methodOffset(); i < meta->methodCount(); ++i) {
+        const QMetaMethod method = meta->method(i);
+        const QString name = QString::fromLatin1(method.name());
+        if (method.methodType() != QMetaMethod::Slot
+            || method.access() != QMetaMethod::Private || method.parameterCount() != 0
+            || name.endsWith(QStringLiteral("_data"))
+            || name == QStringLiteral("initTestCase") || name == QStringLiteral("cleanupTestCase")
+            || name == QStringLiteral("init") || name == QStringLiteral("cleanup")) {
+            continue;
+        }
+        names.append(name);
+    }
+    return names;
+}
+
+} // namespace
+
+int main(int argc, char** argv)
+{
+    QApplication app(argc, argv);
+    app.setAttribute(Qt::AA_Use96Dpi, true);
+    TestRemoteMediaController test;
+    QTEST_SET_MAIN_SOURCE_PATH
+    QStringList arguments = app.arguments();
+    const QString group = qEnvironmentVariable("NEREUS_REMOTE_MEDIA_GROUP");
+    // A run that names its own functions (or options) runs as asked.
+    if (!group.isEmpty() && arguments.size() == 1) {
+        const QStringList all = testFunctions(test.metaObject());
+        for (const QString& name : kAudioFunctions) {
+            if (!all.contains(name)) {
+                qCritical("kAudioFunctions names %s, which is not a test function",
+                          qPrintable(name));
+                return 1;
+            }
+        }
+        if (group == QStringLiteral("audio")) {
+            arguments += kAudioFunctions;
+        } else if (group == QStringLiteral("rest")) {
+            for (const QString& name : all) {
+                if (!kAudioFunctions.contains(name)) {
+                    arguments += name;
+                }
+            }
+        } else {
+            qCritical("NEREUS_REMOTE_MEDIA_GROUP must be audio or rest, not %s",
+                      qPrintable(group));
+            return 1;
+        }
+    }
+    return QTest::qExec(&test, arguments);
+}
+
 #include "tst_remote_media_controller.moc"

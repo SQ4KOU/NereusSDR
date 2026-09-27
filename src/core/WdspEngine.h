@@ -45,6 +45,9 @@
 //   2026-09-25 : Test-only friendship for the confirm-step test (several-
 //                 devices fix wave 2). J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-26 : Task 27 (R-R3-49) by J.J. Boyd (KG4VCF): test-only
+//                 friendship for the transmit analyzer skirt test.
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  cmaster.cs
@@ -184,6 +187,8 @@ class TestStopTransmitNow;
 // Several-devices fix wave 2: the confirm-step test drives a Protocol 1
 // rate change, which needs an initialized engine with RX channels.
 class TstConfirmStep;
+// Task 27: the transmit analyzer skirt test opens a real TX channel.
+class TestTxAnalyzerSkirt;
 #endif
 
 namespace NereusSDR {
@@ -1049,6 +1054,8 @@ private:
     // test's Protocol 1 rate change (the synchronous init would open the
     // PureSignal feedback channel too, which the test does not need).
     friend class ::TstConfirmStep;
+    // Task 27: same friendship for the transmit analyzer skirt test.
+    friend class ::TestTxAnalyzerSkirt;
 #endif
 };
 

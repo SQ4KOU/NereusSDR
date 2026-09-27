@@ -319,6 +319,11 @@
 //                the amplifier's changeover, and the stop's words say how to
 //                transmit without it. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-26 - Parity Task 28 (R-R3-49, A11): setTxAnalyzer also makes
+//                the transmit display's feed (txDisplayFeed), which starts
+//                and stops the TX analyzer on the MOX edge and holds its
+//                view for every viewer. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -513,6 +518,7 @@ class PaProfileManager;
 class TxWorkerThread;
 // iPhone app plan Task 36: the remote microphone ring.
 class RemoteMicFeed;
+class TxDisplayFeed;
 // Stage C2 filter preset editor — user-override layer over Thetis defaults.
 class FilterPresetStore;
 
@@ -2205,7 +2211,13 @@ public:
     // same way it reaches the FFT engine.  Non-owning pointer wired by
     // MainWindow at construction.
     class TxAnalyzer* txAnalyzer() const { return m_txAnalyzer; }
-    void setTxAnalyzer(class TxAnalyzer* a) { m_txAnalyzer = a; }
+    // Task 28 (R-R3-49, A11): also makes the transmit display's feed over
+    // it (TxDisplayFeed), the one owner of its view and its start and stop
+    // on the MOX edge; null clears both.
+    void setTxAnalyzer(class TxAnalyzer* a);
+    /// Task 28: the transmit display's feed, owned here; null without a TX
+    /// analyzer.
+    TxDisplayFeed* txDisplayFeed() const { return m_txDisplayFeed.get(); }
     class ClarityController* clarityController() const { return m_clarityController; }
     void setClarityController(class ClarityController* c) { m_clarityController = c; }
     class StepAttenuatorController* stepAttController() const { return m_stepAttController; }
@@ -6180,6 +6192,7 @@ private:
     class FFTEngine*          m_fftEngine{nullptr};
     class FftEnginePool*      m_fftEnginePool{nullptr};
     class TxAnalyzer*         m_txAnalyzer{nullptr};
+    std::unique_ptr<TxDisplayFeed> m_txDisplayFeed;
     class ClarityController*  m_clarityController{nullptr};
     class StepAttenuatorController* m_stepAttController{nullptr};
     // R-R3-46: followReceiveSliceWithStepAttenuator() has wired its connects.
