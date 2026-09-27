@@ -112,6 +112,10 @@ void RendezvousDialer::dial(const QList<QUrl>& servers, const QString& stationId
     });
     connect(m_client, &RendezvousClient::unreachable, this,
             [this](const QString& reason) { fail(reason); });
+    // Re-review: a relay grant means the Core allowed the relay (rendezvous
+    // section 12.1), whatever the answer's `turn` says.
+    connect(m_client, &RendezvousClient::relayGrantReceived, this,
+            [this](const QByteArray&) { m_relayGranted = true; });
     connect(m_client, &RendezvousClient::answerReceived, this,
             [this](const QString& sdp, bool offered, const RendezvousWire::Turn& turn) {
         if (m_done || !m_transport || m_answered) {

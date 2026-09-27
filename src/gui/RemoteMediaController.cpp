@@ -810,6 +810,7 @@ struct RemoteMediaController::Private {
     // Task 29 fix wave (Important 1): a move not yet followed by media.
     bool replacePending = false;
     int replaceRearms = 0;
+    bool replaceStartFailed = false;
     QTimer* replaceRetry = nullptr;
     std::unique_ptr<DualPathAudio> dual;
     QPointer<MediaPeer> dualNew;
@@ -2711,6 +2712,9 @@ bool RemoteMediaController::replaceConnection()
                                 headphonesMixNegotiated(), micLineNegotiated());
     if (!ok || !started) {
         dropReplacement(QStringLiteral("the new connection could not start"));
+        // Re-review: a connection that cannot start is tried again only a
+        // few times (tryPendingReplace counts it).
+        d->replaceStartFailed = true;
         return false;
     }
     // The new peer's streams are the streams this session started with.
@@ -2746,12 +2750,13 @@ void RemoteMediaController::receiveReplacementControl(const QJsonObject& payload
     // current connection carries on.
     if (op == QLatin1String("rejected") && payload.value(QStringLiteral("endpointId")).toDouble() == 0
         && payload.value(QStringLiteral("reason")).isString()) {
-        dropReplacement(payload.value(QStringLiteral("reason")).toString().left(512));
-        // Task 29 fix wave (Important 1): a Core that went on the air just
-        // as the replacement arrived refused it; try again once it is back
-        // on receive, a few times at most.
-        if (d->replaceRearms < kMaxReplaceRearms) {
-            ++d->replaceRearms;
+        const QString reason = payload.value(QStringLiteral("reason")).toString();
+        dropReplacement(reason.left(512));
+        // Task 29 fix wave (Important 1), re-review: a Core that went on the
+        // air just as the replacement arrived refused it; try again once it
+        // is back on receive (tryPendingReplace waits while the window sees
+        // it transmitting). Only that refusal: any other stays refused.
+        if (reason == QLatin1String(DaemonMediaController::kReplaceTransmittingReason)) {
             d->replacePending = true;
             d->replaceRetry->start();
         }
@@ -2840,9 +2845,18 @@ void RemoteMediaController::tryPendingReplace()
         d->replaceRetry->start();
         return;
     }
+    d->replaceStartFailed = false;
     if (replaceConnection()) {
         d->replacePending = false;
         d->replaceRetry->stop();
+        return;
+    }
+    // A new connection that could not start counts against the budget.
+    if (d->replaceStartFailed && ++d->replaceRearms >= kMaxReplaceRearms) {
+        d->replacePending = false;
+        d->replaceRetry->stop();
+        qCInfo(lcRemoteMedia) << "Audio and display stay on their connection: a new one could"
+                              << "not start";
         return;
     }
     // Not yet (media not ready, keyed, VOX armed, on the air): again soon.

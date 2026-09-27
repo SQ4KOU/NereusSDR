@@ -217,6 +217,12 @@ public:
 
     /// The candidate pair the connection settled on, once it has.
     std::optional<MediaIcePath> selectedPath() const;
+    /// Test seam (Task 29 step 2a re-review, Minor 7): when set, every
+    /// connection reports what this returns for it instead of the agent's
+    /// pair. Empty function: the agent's own.
+    using SelectedPathOverride =
+        std::function<std::optional<MediaIcePath>(const DataChannelTransport*)>;
+    static void setSelectedPathOverrideForTest(SelectedPathOverride override);
     /// The ICE settings it was started with, the relay included once known.
     std::optional<IceConfiguration> iceConfiguration() const { return m_options.ice; }
     /// The ICE settings the session's media connection uses (the Task 28

@@ -1433,6 +1433,46 @@ private slots:
         core.stop();
     }
 
+    // Task 29 step 2a re-review: a client keeps its introduction's relay
+    // grant (the relay leg reads it) and lets it go when the introduction
+    // ends.
+    void theClientKeepsItsRelayGrantWhileItsIntroductionLives()
+    {
+        ServicePlayer player;
+        auto phone = makeKey();
+        RendezvousClient client;
+        client.setServers({player.url()});
+        QSignalSpy granted(&client, &RendezvousClient::relayGrantReceived);
+        QSignalSpy ended(&client, &RendezvousClient::introductionEnded);
+        client.introduce(Wire::rendezvousId(makeKey()->spki()), phone->spki(),
+                         [phone](const QByteArray& message) { return phone->sign(message); },
+                         readText(kSuite + QStringLiteral("/sdp/offer.sdp")));
+        QWebSocket* service = player.waitForConnection();
+        QVERIFY(service != nullptr);
+        const auto send = [service](const QJsonObject& message) {
+            service->sendTextMessage(compact(message));
+        };
+        send({{"type", "hello"}, {"version", 1}, {"nonce", b64(randomBytes(32))},
+              {"stun", QJsonArray()}});
+        const std::optional<QString> introduce = player.waitForMessage(service);
+        QVERIFY(introduce.has_value() && introduce->contains(QLatin1String("\"introduce\"")));
+        QVERIFY(!client.relayGrant().has_value());
+        send({{"type", "answer"}, {"answer", readText(kSuite + QStringLiteral("/sdp/answer.sdp"))},
+              {"turn", QJsonValue()}});
+        const QString token = QStringLiteral(
+            "AQIAAQIDBAUGBwgJCgsMDQ4P8pvPCvK38JprSdJ4owlJqdQdFfk6rhCxyyJSkGlChqsG7n4s48iq69Pw1eU");
+        send({{"type", "relay.grant"}, {"url", "wss://rv.conformance.invalid/v1/relay"},
+              {"token", token}, {"expires", 1800000120}});
+        QTRY_COMPARE(granted.size(), 1);
+        QVERIFY(granted.at(0).at(0).toByteArray().isEmpty());
+        QVERIFY(client.relayGrant().has_value());
+        QCOMPARE(client.relayGrant()->token, token);
+        send({{"type", "introduction.end"}, {"code", "stationLeft"}});
+        QTRY_COMPARE(ended.size(), 1);
+        QVERIFY(!client.relayGrant().has_value());
+        client.stop();
+    }
+
     // Fix wave I3: a service that sends its hello and then never registers
     // the Core is left after the hello time, and the reconnect runs; the
     // time is shortened through the injectable value.
@@ -2605,7 +2645,7 @@ private slots:
         window.connectThroughService({service.url()}, rendezvous.client()->stationId(),
                                      core.server->stationIdentity().fingerprint());
         QVERIFY(window.isConnectionActive());
-        QTRY_VERIFY_WITH_TIMEOUT(window.isHandshakeComplete(), 60000);
+        QTRY_VERIFY_WITH_TIMEOUT(window.isHandshakeComplete(), kServiceConnectBudgetMs);
         QCOMPARE(ended.size(), 0);
         QCOMPARE(introduced.size(), 1);
         QVERIFY(core.server->hasAuthenticatedSession());
@@ -2666,7 +2706,7 @@ private slots:
         window.setDeviceIdentity(key, QStringLiteral("Shack MacBook"));
         window.connectThroughService({service.url()}, rendezvous.client()->stationId(),
                                      core.server->stationIdentity().fingerprint());
-        QTRY_VERIFY_WITH_TIMEOUT(window.isHandshakeComplete(), 60000);
+        QTRY_VERIFY_WITH_TIMEOUT(window.isHandshakeComplete(), kServiceConnectBudgetMs);
         const quint64 epoch = core.server->mediaSessionEpoch();
         const std::optional<IceConfiguration> coreIce = core.server->sessionIceConfiguration(epoch);
         QVERIFY(coreIce.has_value());
@@ -2709,7 +2749,7 @@ private slots:
         QSignalSpy results(&window, &StationClient::commandResult);
         window.connectThroughService({service.url()}, rendezvous.client()->stationId(),
                                      core.server->stationIdentity().fingerprint());
-        QTRY_VERIFY_WITH_TIMEOUT(window.isHandshakeComplete(), 60000);
+        QTRY_VERIFY_WITH_TIMEOUT(window.isHandshakeComplete(), kServiceConnectBudgetMs);
 
         // The Core's pongs stop: it leaves the service and registers again.
         link.setDropAllPongs(true);

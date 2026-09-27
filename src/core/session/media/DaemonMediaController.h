@@ -199,6 +199,10 @@ public:
     /// messages after that, for what the app sent it before it heard the
     /// replacement was done (at least one trip over the slower path).
     static constexpr int kReplaceDrainMs = 2000;
+    /// The refusal of a replacement while the radio is on the air (MOX not
+    /// idle); a device tries again once it is back on receive.
+    static constexpr const char* kReplaceTransmittingReason =
+        "The Core did not move audio and display: the radio is transmitting.";
     /// Monotonic nanoseconds, never negative. Besides display pacing it is
     /// the Core's audio clock (R-R3-35): clock-echo times and the capture
     /// times of audio blocks, which the DSP thread reads, so an injected

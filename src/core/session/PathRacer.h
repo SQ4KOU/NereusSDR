@@ -125,8 +125,10 @@ public:
     static constexpr int kIpv4DelayMs = 250;
     /// Task 29 fix wave (review Minor 8): direct connections this computer
     /// has opening at once, all from one address as the Core sees it: the
-    /// Core takes StationServer::kMaxHandshakesPerAddress (2) at a time
-    /// and refuses the rest, so the others wait their turn.
+    /// Core takes StationServer::kMaxHandshakesPerAddress (2) at a time,
+    /// each until it is signed in, and refuses the rest, so the others wait
+    /// their turn. A rung holds its turn until it ends, is let go, or
+    /// finish() (the winner signed in).
     static constexpr int kMaxDirectOpening = 2;
     /// How long an opened connection may take to bring the Core's hello
     /// before its rung ends: the Core's connect deadline (link section

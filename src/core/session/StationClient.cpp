@@ -6132,13 +6132,17 @@ void StationClient::onPathTicket(const SessionMessage& result)
     }
     SwitchableTransport* switchable = sessionTransport();
     if (!result.accepted || ticket.isEmpty() || switchable == nullptr || !canMovePathNow()) {
-        // Review Minor 14: a refusal for now (the radio on the air, here
-        // or at the Core) is not a failed look: the schedule stays on its
-        // current step.
+        // Review Minor 14 (and its re-review): a refusal for now (the Core
+        // on the air, or this window keyed or VOX armed) is not a failed
+        // look, so the schedule stays on its current step; anything else
+        // is, and advances it.
+        const bool forNow = !canMovePathNow()
+            || (!result.accepted
+                && result.reason == QLatin1String(kPathTransmittingReason));
         abandonUpgrade(result.accepted ? QStringLiteral("this connection cannot move now")
                                        : result.reason,
                        /*reschedule=*/false);
-        scheduleUpgrade(/*advance=*/false);
+        scheduleUpgrade(/*advance=*/!forNow);
         return;
     }
     const PathRacer::Ready upgrade = *m_upgrade;

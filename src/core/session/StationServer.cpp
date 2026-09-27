@@ -7426,6 +7426,8 @@ void StationServer::handlePathTicket(SessionTransport* transport, const SessionM
     if (!radioIdleForPathChange()) {
         send(transport, SessionMessages::commandResult(
             message.commandVerb, message.commandId, false,
+            // The words of kPathTransmittingReason (SessionMessages.h),
+            // which a device matches.
             QStringLiteral("Not while the radio is transmitting."), {}));
         return;
     }

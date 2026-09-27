@@ -50,6 +50,7 @@
 #include "core/security/ClientDeviceIdentity.h"
 #include "core/security/StationIdentity.h"
 #include "core/session/PathRacer.h"
+#include "core/session/DataChannelTransport.h"
 #include "core/HpsdrModel.h"
 #include "core/ConnectionState.h"
 #include "models/TransmitModel.h"
@@ -478,7 +479,7 @@ private slots:
         window.client->connectToStation(
             QUrl(QStringLiteral("wss://127.0.0.1:%1").arg(port)), QString(), QString(), false,
             identityOf(core));
-        QTRY_VERIFY_WITH_TIMEOUT(window.client->isHandshakeComplete(), 60000);
+        QTRY_VERIFY_WITH_TIMEOUT(window.client->isHandshakeComplete(), kServiceConnectBudgetMs);
         QVERIFY(window.client->pathRank() == int(PathRacer::ServiceDirect)
                 || window.client->pathRank() == int(PathRacer::ServiceRelayed));
         QCOMPARE(window.outcomeFor(StationConnectionAttempt::Path::ThisNetwork),
@@ -522,7 +523,7 @@ private slots:
         window.client->connectToStation(
             QUrl(QStringLiteral("wss://127.0.0.1:%1").arg(port)), QString(), QString(), false,
             identityOf(core));
-        QTRY_VERIFY_WITH_TIMEOUT(window.client->isHandshakeComplete(), 60000);
+        QTRY_VERIFY_WITH_TIMEOUT(window.client->isHandshakeComplete(), kServiceConnectBudgetMs);
         QVERIFY(window.client->pathRank() > int(PathRacer::ThisNetwork));
 
         // VOX armed at this window: its keepalives run, and no look starts.
@@ -569,6 +570,142 @@ private slots:
 
     // A Core with the relay turned off: the service's path runs without
     // it, and the record says the Core turned it off.
+    // Task 29 step 2a re-review (Minor 7): an agent that nominated a relayed
+    // pair first and settled on a direct one by snapshot.complete: the
+    // session is ranked by the settled pair, and the record says so.
+    void theRankIsTheSettledPairsAtSnapshotComplete()
+    {
+        LocalService service;
+        QVERIFY(service.start());
+        Core core;
+        StationRendezvous rendezvous(core.server.get(), {service.url()}, /*relayAllowed=*/true);
+        QSignalSpy registered(rendezvous.client(), &RendezvousClient::registered);
+        QVERIFY(rendezvous.start());
+        QTRY_COMPARE_WITH_TIMEOUT(registered.size(), 1, 10000);
+        Window window(core);
+        window.route(service, rendezvous.client()->stationId());
+        bool settled = false;
+        MediaIcePath relayed;
+        relayed.localType = QStringLiteral("relay");
+        relayed.remoteType = QStringLiteral("srflx");
+        relayed.localAddress = QStringLiteral("198.51.100.2");
+        relayed.remoteAddress = QStringLiteral("198.51.100.10");
+        MediaIcePath direct = relayed;
+        direct.localType = QStringLiteral("srflx");
+        direct.localAddress = QStringLiteral("198.51.100.6");
+        DataChannelTransport::setSelectedPathOverrideForTest(
+            [&settled, relayed, direct](const DataChannelTransport*) {
+                return std::optional<MediaIcePath>(settled ? direct : relayed);
+            });
+        // The Core signs the window in before it sends snapshot.complete.
+        QObject::connect(core.server.get(), &StationServer::clientAuthenticated,
+                         core.server.get(), [&settled] { settled = true; });
+        window.client->connectToStation(
+            QUrl(QStringLiteral("wss://127.0.0.1:%1").arg(closedPort())), QString(), QString(),
+            false, identityOf(core));
+        QTRY_VERIFY_WITH_TIMEOUT(window.client->isHandshakeComplete(), kServiceConnectBudgetMs);
+        const QString summary = window.client->connectionAttempt().summary();
+        DataChannelTransport::setSelectedPathOverrideForTest({});
+        QCOMPARE(window.client->pathRank(), int(PathRacer::ServiceDirect));
+        QCOMPARE(window.outcomeFor(StationConnectionAttempt::Path::Service),
+                 StationConnectionAttempt::Outcome::Connected);
+        QVERIFY2(window.outcomeFor(StationConnectionAttempt::Path::Relay)
+                     != StationConnectionAttempt::Outcome::Connected,
+                 qPrintable(summary));
+        window.client->disconnectFromStation(QStringLiteral("test done"));
+    }
+
+    // Task 29 step 2a re-review (Minor 14): the Core keys in the same turn
+    // the window starts a move, before the window hears of it; the Core
+    // refuses the ticket ("Not while the radio is transmitting.") and the
+    // look schedule stays on its step.
+    void aTicketRefusedForNowKeepsTheLookStep()
+    {
+        LocalService service;
+        QVERIFY(service.start());
+        Core core;
+        StationRendezvous rendezvous(core.server.get(), {service.url()}, /*relayAllowed=*/true);
+        QSignalSpy registered(rendezvous.client(), &RendezvousClient::registered);
+        QVERIFY(rendezvous.start());
+        QTRY_COMPARE_WITH_TIMEOUT(registered.size(), 1, 10000);
+        Window window(core);
+        window.route(service, rendezvous.client()->stationId());
+        window.client->setUpgradeScheduleForTest({60000, 60000});
+        window.client->connectToStation(
+            QUrl(QStringLiteral("wss://127.0.0.1:%1").arg(closedPort())), QString(), QString(),
+            false, identityOf(core));
+        QTRY_VERIFY_WITH_TIMEOUT(window.client->isHandshakeComplete(), kServiceConnectBudgetMs);
+        QVERIFY(window.client->pathRank() > int(PathRacer::ThisNetwork));
+        QCOMPARE(window.client->upgradeAttemptForTest(), 0);
+
+        core.model->setBoardForTest(HPSDRHW::HermesLite);
+        core.model->setConnectionStateForTest(ConnectionState::Connected);
+        MoxController* mox = core.model->moxController();
+        mox->setTimerIntervals(0, 0, 0, 0, 0, 0);
+        core.model->transmitModel().setMicSourceLocked(false);
+        core.model->transmitModel().setMicSource(MicSource::Radio);
+        if (core.model->slices().isEmpty()) {
+            core.model->addSlice();
+        }
+        if (SliceModel* slice = core.model->slices().value(0)) {
+            slice->setDspMode(DSPMode::USB);
+            slice->setFrequency(14200000.0);
+        }
+        core.server->setRemoteTransmitAllowed(true);
+        // A better connection, its hello read.
+        auto* stationB = new NereusSDR::Test::LoopbackTransport(QStringLiteral("station B"));
+        auto* clientB = new NereusSDR::Test::LoopbackTransport(QStringLiteral("client B"));
+        stationB->linkTo(clientB);
+        QList<QByteArray> hello;
+        const QMetaObject::Connection watch = QObject::connect(
+            clientB, &SessionTransport::textReceived, clientB,
+            [&hello](const QByteArray& wire) { hello.append(wire); });
+        core.server->acceptTransport(stationB);
+        QTRY_VERIFY(!hello.isEmpty());
+        QObject::disconnect(watch);
+
+        // One turn: the Core keys, and the window, not yet told, asks.
+        QSignalSpy moved(window.client.get(), &StationClient::pathChanged);
+        mox->setMox(true);
+        QVERIFY(!window.remote.isTransmitting());
+        QVERIFY(window.client->moveSessionForTest(clientB, PathRacer::ThisNetwork));
+        QVERIFY(window.client->upgradeUnderWayForTest());
+        QTRY_VERIFY(!window.client->upgradeUnderWayForTest());
+        QCOMPARE(moved.size(), 0);
+        QCOMPARE(core.server->sessionsMoved(), 0);
+        QCOMPARE(window.client->upgradeAttemptForTest(), 0);
+        mox->setMox(false);
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        window.client->disconnectFromStation(QStringLiteral("test done"));
+    }
+
+    // Task 29 step 2a re-review: a service with a relay secret and no TURN
+    // secret answers without relay credentials but sends a relay grant
+    // (rendezvous sections 10 and 12.1): the Core allowed the relay, and
+    // the record does not say it turned it off.
+    void aServiceWithoutTurnDoesNotBlameTheCore()
+    {
+        LocalService service(/*stun=*/true, /*relay=*/false);
+        service.setRelayGrants(true);
+        QVERIFY(service.start());
+        Core core;
+        StationRendezvous rendezvous(core.server.get(), {service.url()}, /*relayAllowed=*/true);
+        QSignalSpy registered(rendezvous.client(), &RendezvousClient::registered);
+        QSignalSpy granted(rendezvous.client(), &RendezvousClient::relayGrantReceived);
+        QVERIFY(rendezvous.start());
+        QTRY_COMPARE_WITH_TIMEOUT(registered.size(), 1, 10000);
+        Window window(core);
+        window.route(service, rendezvous.client()->stationId());
+        window.client->connectToStation(
+            QUrl(QStringLiteral("wss://127.0.0.1:%1").arg(closedPort())), QString(), QString(),
+            false, identityOf(core));
+        QTRY_VERIFY_WITH_TIMEOUT(window.client->isHandshakeComplete(), kServiceConnectBudgetMs);
+        QTRY_COMPARE(granted.size(), 1);
+        QVERIFY2(!window.hasOutcome(StationConnectionAttempt::Outcome::RelayOff),
+                 qPrintable(window.client->connectionAttempt().summary()));
+        window.client->disconnectFromStation(QStringLiteral("test done"));
+    }
+
     void aCoreWithTheRelayOffIsRacedWithoutIt_data()
     {
         QTest::addColumn<bool>("recorded");
@@ -593,7 +730,7 @@ private slots:
         window.client->connectToStation(
             QUrl(QStringLiteral("wss://127.0.0.1:%1").arg(closedPort())), QString(), QString(),
             false, identityOf(core));
-        QTRY_VERIFY_WITH_TIMEOUT(window.client->isHandshakeComplete(), 60000);
+        QTRY_VERIFY_WITH_TIMEOUT(window.client->isHandshakeComplete(), kServiceConnectBudgetMs);
         QCOMPARE(window.client->pathRank(), int(PathRacer::ServiceDirect));
         QVERIFY2(window.hasOutcome(StationConnectionAttempt::Outcome::RelayOff),
                  qPrintable(window.client->connectionAttempt().summary()));

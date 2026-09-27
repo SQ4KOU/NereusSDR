@@ -422,7 +422,10 @@ public:
     /// starts as soon as it can (the media connection ready, unkeyed, VOX
     /// disarmed, the Core back on receive), retried every
     /// kReplaceRetryMs while pending, and again after the Core refused one
-    /// while it was transmitting (at most kMaxReplaceRearms times a move).
+    /// because it was transmitting (DaemonMediaController::
+    /// kReplaceTransmittingReason; no other refusal re-arms it). A new
+    /// connection that cannot start is tried kMaxReplaceRearms times a
+    /// move.
     static constexpr int kReplaceRetryMs = 500;
     static constexpr int kMaxReplaceRearms = 3;
     bool replacePending() const;

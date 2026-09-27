@@ -630,8 +630,24 @@ void DataChannelTransport::gatherIfReady()
     }
 }
 
+namespace {
+DataChannelTransport::SelectedPathOverride& selectedPathOverride()
+{
+    static DataChannelTransport::SelectedPathOverride override;
+    return override;
+}
+} // namespace
+
+void DataChannelTransport::setSelectedPathOverrideForTest(SelectedPathOverride override)
+{
+    selectedPathOverride() = std::move(override);
+}
+
 std::optional<MediaIcePath> DataChannelTransport::selectedPath() const
 {
+    if (selectedPathOverride()) {
+        return selectedPathOverride()(this);
+    }
     if (!m_bridge || !m_bridge->peer) {
         return std::nullopt;
     }

@@ -304,6 +304,10 @@ inline constexpr qsizetype kMaxStationTelemetryBytes = 16 * 1024;
 // carry. A Core's own tickets are 43 characters (32 bytes, base64url);
 // the bound keeps a hostile one from being compared at any length.
 inline constexpr qsizetype kMaxPathTicketChars = 128;
+/// Link section 21.2: session.pathTicket's refusal while the radio is on the
+/// air (MOX not idle), which a device waits out rather than counting as a
+/// failed look.
+inline constexpr const char* kPathTransmittingReason = "Not while the radio is transmitting.";
 
 // iPhone app Task 12 (R-IOS-08): the machine-readable end codes an
 // auth.result refusal or a session.end may carry in `code` (the link

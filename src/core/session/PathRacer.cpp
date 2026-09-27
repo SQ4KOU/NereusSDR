@@ -379,7 +379,9 @@ void PathRacer::onHello(int index, const QByteArray& wire)
         return;
     }
     entry.hello = wire;
-    releaseDirectTurn(entry);
+    // Re-review: the turn is kept past the hello. The Core counts a
+    // connection against its handshakes per address until it is signed in
+    // (snapshot.complete, finish()) or let go (releaseTransport()).
     const int rank = entry.rung ? entry.rung->rank() : Floor;
     const PathKind kind = entry.rung ? entry.rung->kind() : PathKind::Direct;
     Line& line = m_lines[entry.line];
@@ -444,6 +446,7 @@ void PathRacer::onHello(int index, const QByteArray& wire)
 
 void PathRacer::releaseTransport(Entry& entry, bool close)
 {
+    releaseDirectTurn(entry);
     SessionTransport* transport = entry.transport;
     entry.transport = nullptr;
     if (transport == nullptr) {
@@ -531,6 +534,14 @@ void PathRacer::finish()
         }
     }
     m_done = true;
+    // The winner is signed in and the standby taken or let go: every turn
+    // they held is free.
+    for (auto& entry : m_entries) {
+        if (entry->opening) {
+            entry->opening = false;
+            --m_directOpening;
+        }
+    }
 }
 
 std::optional<PathRacer::Ready> PathRacer::takeStandby()
@@ -758,9 +769,12 @@ void RendezvousPathRung::start()
 void RendezvousPathRung::noteRelay(const RendezvousDialer* dialer)
 {
     // Review Minor 6: the Core answered without relay credentials though
-    // this computer asked for the relay. The live service always holds a
-    // TURN secret, so that is the Core's `relay = deny`.
-    if (m_allowRelay && dialer != nullptr && dialer->answered() && !dialer->relayOffered()) {
+    // this computer asked for the relay, and (re-review) no relay grant
+    // came either: a service with a relay secret and no TURN secret sends
+    // a grant when the Core allows the relay (rendezvous sections 10 and
+    // 12.1), so without one the Core turned it off.
+    if (m_allowRelay && dialer != nullptr && dialer->answered() && !dialer->relayOffered()
+        && !dialer->relayGranted()) {
         emit relayNoted(PathRacer::Outcome::RelayOff,
                         QStringLiteral("The Core has the relay turned off."));
     }

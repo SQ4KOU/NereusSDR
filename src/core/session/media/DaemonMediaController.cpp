@@ -1864,6 +1864,7 @@ bool DaemonMediaController::handleReplace(const QJsonObject& control)
             "The Core did not move audio and display: that connection is not the current one."));
     }
     if (!radioIdleForReplace()) {
+        // The words of kReplaceTransmittingReason, which a device matches.
         return refuse(QStringLiteral(
             "The Core did not move audio and display: the radio is transmitting."));
     }

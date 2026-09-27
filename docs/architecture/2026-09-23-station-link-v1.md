@@ -6237,13 +6237,20 @@ its capabilities (`relayAllowed`, section 6.3); a device records it with
 the paired Core and, while it says false, leaves the relay out of every
 race and says why. A device that has recorded nothing yet learns it from the
 Core's `answer`: one without relay credentials, though the device asked
-for the relay, is the Core's `relay = deny` (the live service always holds
-a TURN secret), and the record says so.
+for the relay, and with no relay grant after it (the rendezvous document,
+section 12.1: a service that holds a relay secret sends one whenever the
+Core allows the relay, even with no TURN secret), is the Core's `relay =
+deny`, and the record says so. A service with neither secret offers no
+relay at all, and a device that recorded nothing yet reads that the same
+way until its first sign-in records `relayAllowed`.
 
-At most `PathRacer::kMaxDirectOpening` (2) direct rungs open at once, the
-rest waiting their turn: a Core takes `StationServer::kMaxHandshakesPerAddress`
-(2) connections still signing in from one address, and all of a device's
-direct rungs come from one. An address is dialled once however the device
+At most `PathRacer::kMaxDirectOpening` (2) direct rungs are open and not
+yet signed in at once, the rest waiting their turn: a Core takes
+`StationServer::kMaxHandshakesPerAddress` (2) connections still signing in
+from one address, counting each until its `snapshot.complete`, and all of
+a device's direct rungs come from one. A rung holds its turn from its start
+until it ends, is let go, or the race finishes with the winner signed in
+(a winner still signing in and a standby hold both). An address is dialled once however the device
 names it (a literal and a host name that resolves to it), and an IPv6
 address keeps its scope (a link-local one reaches nothing without it).
 

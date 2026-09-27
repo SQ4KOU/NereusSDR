@@ -133,6 +133,9 @@ public:
     bool relayOffered() const { return m_relayOffered; }
     /// The Core's answer arrived.
     bool answered() const { return m_answered; }
+    /// The service sent a relay grant for this introduction: the Core
+    /// allowed the relay (rendezvous section 12.1).
+    bool relayGranted() const { return m_relayGranted; }
 
     /// The ICE settings of the connection, the relay included once known.
     std::optional<IceConfiguration> iceConfiguration() const { return m_ice; }
@@ -165,6 +168,7 @@ private:
     bool m_coreDidNotAnswer = false;
     bool m_coreAnswersIntroductions = false;
     bool m_relayOffered = false;
+    bool m_relayGranted = false;
     bool m_started = false;
     bool m_done = false;
     bool m_answered = false;

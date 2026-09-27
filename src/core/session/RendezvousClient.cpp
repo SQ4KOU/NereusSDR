@@ -745,6 +745,8 @@ void RendezvousClient::handle(const RendezvousWire::Message& message)
         } else if (m_introductionLive) {
             m_introductionLive = false;
             m_pending = Pending::None;
+            // Re-review: the grant goes with its introduction.
+            m_clientRelayGrant.reset();
             emit introductionEnded(QByteArray(), message.code);
         }
         return;

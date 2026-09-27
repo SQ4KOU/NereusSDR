@@ -653,6 +653,10 @@ public:
     /// Test seams: the upgrade schedule (PathRacer::kUpgradeRetryMs; the
     /// last repeats), and the rendezvous rung's deadlines in a race.
     void setUpgradeScheduleForTest(const QList<int>& delaysMs) { m_upgradeScheduleMs = delaysMs; }
+    /// Test seams (Task 29 step 2a re-review, Minor 14): the upgrade
+    /// schedule's step, and whether a move is waiting for its ticket.
+    int upgradeAttemptForTest() const { return m_upgradeAttempt; }
+    bool upgradeUnderWayForTest() const { return m_upgrade.has_value(); }
     void setServiceRungDeadlinesForTest(int dialMs, int answerMs)
     {
         m_serviceDialDeadlineMs = dialMs;
