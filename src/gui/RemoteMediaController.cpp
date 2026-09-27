@@ -817,6 +817,13 @@ struct RemoteMediaController::Private {
     // Step 2b: when audio last came, and the check for a stall.
     QElapsedTimer lastAudio;
     QTimer* stallTimer = nullptr;
+    bool txSilenceSuppressed = false;
+    bool coreTransmitting() const
+    {
+        if (!client || client->capabilities().txStateVersion < 1) { return false; }
+        const TransmitState* tx = client->transmitState();
+        return tx && (tx->keyed() || tx->tuning() || tx->txEnding());
+    }
     bool replaceStartFailed = false;
     QTimer* replaceRetry = nullptr;
     std::unique_ptr<DualPathAudio> dual;
@@ -1180,6 +1187,11 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
         if (!d->client || !d->peer || !wanted || !d->lastAudio.isValid()) {
             return;
         }
+        // The Core stops RX audio for the TX-bound slice while keyed. Only
+        // its negotiated txState can establish that this silence is expected.
+        // Keep the media connection and display alive; the independent TX
+        // keepalive watchdog continues to enforce its own deadline.
+        if (d->coreTransmitting()) { return; }
         // The tunnel counts only once ICE settled on it (a host pair on an
         // open network is not a slow path); the control heartbeat follows.
         const std::optional<MediaIcePath> path = d->peer->selectedPath();
@@ -1423,6 +1435,18 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
     // display budget's holder is the Core's, from `txState`'s holderEpoch
     // and holderAway (0 and not away while unheld or not sent).
     if (TransmitState* txState = client->transmitState()) {
+        connect(txState, &TransmitState::stateChanged, this, [this, client] {
+            if (d->client != client) { return; }
+            const bool onAir = d->coreTransmitting();
+            if (onAir == d->txSilenceSuppressed) { return; }
+            const bool returningToRx = d->txSilenceSuppressed && !onAir;
+            d->txSilenceSuppressed = onAir;
+            // Only the actual TX-to-RX transition restarts a clock already
+            // armed by RTP. Periodic txState fields cannot defer recovery.
+            if (returningToRx && d->lastAudio.isValid()) {
+                d->lastAudio.restart();
+            }
+        });
         connect(txState, &TransmitState::holderChanged, this, [this, txState] {
             setTransmitHolder(static_cast<quint64>(std::max<qint64>(0, txState->holderEpoch())),
                               txState->holderAway());
@@ -2469,6 +2493,7 @@ void RemoteMediaController::stop()
         d->stallTimer->stop();
     }
     d->lastAudio.invalidate();
+    d->txSilenceSuppressed = false;
     if (d->client) {
         d->client->setMediaTunnelInUse(false);
     }
@@ -3115,6 +3140,9 @@ void RemoteMediaController::start()
     }
     d->recoveryRequested = false;
     d->epoch = d->client->sessionEpoch();
+    // start() first stops the previous peer. Seed the current Core state so
+    // a media start during an existing TX still gets a full RX grace period.
+    d->txSilenceSuppressed = d->coreTransmitting();
     d->desiredPs3 = d->model && d->model->pureSignalFacade()
         && d->model->pureSignalFacade()->ampViewSubscribed();
     d->accountedPs3 = d->client->remotePs3DisplaySubscribed();
