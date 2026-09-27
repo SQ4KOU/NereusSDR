@@ -79,11 +79,21 @@ class RelayRunner:
         self.relay = Relay(make_relay_config(**overrides), self.clock)
         self.conns: Dict[str, Any] = {}
         self.records: Dict[str, bytes] = {}
+        # Section 12.8: a token placeholder fills to the same token every
+        # time its key (<leg>:<session>:<station>[:case]) comes back, so a
+        # leg joins again with the very token it was given.
+        self.tokens: Dict[str, bytes] = {}
         self.sent = 0
 
     # ------------------------------------------------------------- bytes
 
     def _token(self, parts: List[str], template: str) -> bytes:
+        key = ":".join(parts)
+        if key not in self.tokens:
+            self.tokens[key] = self._mint(parts, template)
+        return self.tokens[key]
+
+    def _mint(self, parts: List[str], template: str) -> bytes:
         if len(parts) not in (3, 4) or parts[0] not in _LEGS:
             raise RelayFixtureFailure(f"{template}: write $token:<core|device>:<session>:<station>[:expired|forged]")
         session = self.records.setdefault("session:" + parts[1], os.urandom(relaygrant.SESSION_BYTES))

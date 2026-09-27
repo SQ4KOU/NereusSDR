@@ -1724,9 +1724,13 @@ hex digits a byte, or a placeholder. `"$token:<leg>:<session>:<station>"`
 is a token (as ASCII) the runner mints with its own relay secret for that
 leg (`core` or `device`), the session recorded under `<session>` (new the
 first time), the station whose id is `<station>` repeated to 26
-characters, expiring `grantTtlSeconds` (120) after the clock's time; a
-fifth part `expired` makes it expire a second before now, and `forged`
-flips a bit of its MAC. `"$bytes:<n>:<name>"` is `n` random bytes when
+characters, expiring `grantTtlSeconds` (120) after the clock's time when
+it is first filled; a fifth part `expired` makes it expire a second before
+that time, and `forged` flips a bit of its MAC. A runner mints each
+placeholder once, keyed by all its parts, and fills every later use of the
+same key with the same token, so a leg that joins again (after a `drop`,
+however far the clock has moved) joins with the very token it was given; a
+fixture that wants a new token gives it a key of its own. `"$bytes:<n>:<name>"` is `n` random bytes when
 sent, recorded, and when matched any `n` bytes, recorded; `"$ref:<name>"`
 is the bytes recorded. `relaySetup` takes `slots`, `sessionsPerStation`,
 `connectionsPerAddress`, `maxPending`, `joinTimeoutMs`, `rejoinMs`,
@@ -1734,9 +1738,12 @@ is the bytes recorded. `relaySetup` takes `slots`, `sessionsPerStation`,
 app runner reads the last two and applies the rest to nothing.
 
 **Which fixtures each runs.** The relay's runner runs every fixture whose
-`runs` has `relay` and checks the shape of the rest. A `-core` fixture runs
-`relay` and `core` with the Core's leg under test on `core`; its `-device`
-twin runs `relay` and `app` with the device's leg on `device`.
+`runs` has `relay` and checks the shape of the rest, including that every
+behaviour JOIN on a leg's own connection uses one token placeholder. A
+`-core` fixture has the Core's leg under test on `core` and runs `core`,
+and also `relay` except for the `reader-*` fixtures, which only a leg's
+runner plays (the relay never sends what they hold); its `-device` twin
+does the same with `app` and the device's leg on `device`.
 
 | Fixture | Runs | What it holds |
 | --- | --- | --- |

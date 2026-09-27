@@ -46,6 +46,16 @@ def test_relay_fixture_shape(entry):
     for run, leg in (("core", "core"), ("app", "device")):
         if run in runs:
             assert leg in names, f"{entry['id']}: runs {run} but has no connection named {leg}"
+    # Every behaviour JOIN on a leg's own connection uses that leg's first
+    # token placeholder, which fills to the same token each time (a leg
+    # joins again with the token it was given).
+    for leg in ("core", "device"):
+        joins = [
+            step["binary"][1]
+            for step in fixture["steps"]
+            if step.get("from") == leg and step.get("role") == "behaviour" and step["binary"][0] == "80"
+        ]
+        assert len(set(joins)) <= 1, f"{entry['id']}: {leg} joins with {sorted(set(joins))}"
     if "relay" not in runs:
         # A reader-rule fixture: the leg joins, and every message to it is
         # the relay's.
@@ -55,6 +65,16 @@ def test_relay_fixture_shape(entry):
 @pytest.mark.parametrize("entry", RELAY_RUN, ids=[f["id"] for f in RELAY_RUN])
 def test_relay_fixture(entry):
     run_relay_fixture(load_fixture(entry["file"]), entry["id"])
+
+
+def test_a_token_placeholder_fills_to_the_same_token_after_time_moves():
+    from relay_runner import RelayRunner
+
+    runner = RelayRunner(load_fixture("end-ended-core.json"), "tokens")
+    first = runner.fill(["$token:core:s:a"])
+    runner.clock.advance(31000)
+    assert runner.fill(["$token:core:s:a"]) == first
+    assert runner.fill(["$token:core:s:a:expired"]) != first
 
 
 def test_each_end_code_is_seen_by_each_leg():
