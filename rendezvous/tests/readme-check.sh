@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 #
 # readme-check.sh: a fresh ubuntu:24.04 container set up by following
-# rendezvous/README.md alone, then used as both roles: the service (a
-# WebSocket through Caddy, by host name) and the relay (STUN and TURN by the
-# relay names, on both ports, in both families).
+# rendezvous/README.md alone, then used in every role: the service (a
+# WebSocket through Caddy, by host name), the TURN relay (STUN and TURN by
+# the relay names, on both ports, in both families) and the WebSocket relay
+# (the service's relay grants joined at wss://<host>/v1/relay through
+# Caddy).
 #
 # The README marks each shell block it expects to be run:
 #   <!-- check: server -->    run as written, as root, on the server
@@ -84,12 +86,20 @@ run_server_block() {
 
 start_services() {
     # What systemd would run, read from the installed units: coturn as its
-    # packaged unit and drop-in run it, the service as its unit runs it
-    # (LoadCredential= done by hand, nobody standing in for DynamicUser=).
+    # packaged unit and drop-in run it, the service and the WebSocket relay
+    # as their units run them (LoadCredential= done by hand, nobody standing
+    # in for DynamicUser=).
     docker exec -i "$server" bash -s <<'EOS'
 set -euo pipefail
 cd /
 running() { for p in /proc/[0-9]*; do [[ "$(cat "$p/comm" 2>/dev/null)" == "$1" ]] && return 0; done; return 1; }
+running_module() {
+    local p
+    for p in /proc/[0-9]*; do
+        tr '\0' ' ' < "$p/cmdline" 2>/dev/null | grep -q -- "-m $1 " && return 0
+    done
+    return 1
+}
 if ! running turnserver; then
     grep -qx 'AmbientCapabilities=CAP_NET_BIND_SERVICE' /etc/systemd/system/coturn.service.d/nereus.conf
     exec_start="$(sed -n 's/^ExecStart=//p' /usr/lib/systemd/system/coturn.service)"
@@ -100,19 +110,28 @@ if ! running turnserver; then
     sleep 2
     running turnserver
 fi
-unit=/etc/systemd/system/nereus-rendezvous.service
-if [[ -f /opt/nereus-rendezvous/nereus_rendezvous/__main__.py ]] && ! running python3; then
-    cred="$(sed -n 's/^LoadCredential=turn-secret://p' "$unit")"
-    install -d -m 0755 /run/credentials/nereus-rendezvous.service
-    install -m 0400 -o nobody "$cred" /run/credentials/nereus-rendezvous.service/turn-secret
+# $1: the unit's name; $2: its module; $3: the line its log shows once it
+# listens.
+start_unit() {
+    local unit="/etc/systemd/system/$1.service" cred src line exec_start
+    if [[ ! -f "/opt/nereus-rendezvous/$2/__main__.py" ]] || running_module "$2"; then
+        return 0
+    fi
+    install -d -m 0755 "/run/credentials/$1.service"
+    while IFS=: read -r cred src; do
+        install -m 0400 -o nobody "$src" "/run/credentials/$1.service/${cred}"
+    done < <(sed -n 's/^LoadCredential=//p' "$unit")
     envs=()
     while IFS= read -r line; do envs+=("$line"); done < <(sed -n 's/^Environment=//p' "$unit")
     exec_start="$(sed -n 's/^ExecStart=//p' "$unit")"
     # shellcheck disable=SC2086
-    setsid env "${envs[@]}" runuser -u nobody -- $exec_start </dev/null >/run/nereus-rendezvous.log 2>&1 &
-    for _ in $(seq 50); do grep -q 'listening on 2 addresses, relay on' /run/nereus-rendezvous.log && break; sleep 0.2; done
-    grep -q 'listening on 2 addresses, relay on' /run/nereus-rendezvous.log || { cat /run/nereus-rendezvous.log >&2; exit 1; }
-fi
+    setsid env "${envs[@]}" runuser -u nobody -- $exec_start </dev/null >"/run/$1.log" 2>&1 &
+    for _ in $(seq 50); do grep -q "$3" "/run/$1.log" && break; sleep 0.2; done
+    grep -q "$3" "/run/$1.log" || { cat "/run/$1.log" >&2; exit 1; }
+}
+start_unit nereus-rendezvous nereus_rendezvous 'listening on 2 addresses, relay on, relay grants on'
+start_unit nereus-relay nereus_relay 'listening on 2 addresses, 16 slots'
+
 EOS
 }
 
@@ -162,8 +181,10 @@ for block in "${blocks[@]}"; do
             ;;
         service)
             start_caddy || fail "${name}: Caddy did not start"
-            start_services || fail "${name}: coturn or the service did not start"
-            pass "${name}: Caddy (with the Caddyfile setup-server.sh installed, local certificates for the test), coturn and the service started as their units start them"
+            grep -q 'systemctl restart nereus-rendezvous nereus-relay' "$block" \
+                || fail "${name}: the block does not restart both the service and the relay"
+            start_services || fail "${name}: coturn, the service or the relay did not start"
+            pass "${name}: Caddy (with the Caddyfile setup-server.sh installed, local certificates for the test), coturn, the service and the WebSocket relay started as their units start them"
             ;;
         *) fail "unknown block kind ${kind}" ;;
     esac
@@ -199,6 +220,7 @@ import asyncio, json
 from nereus_rendezvous import protocol
 from helpers import register, recv_json, introduce_message
 from runner import ws_connect
+from relay_helpers import connect, recv
 async def meet(uri):
     st, _, sid = await register(uri)
     cl = await ws_connect(uri, "192.0.2.99")
@@ -208,7 +230,23 @@ async def meet(uri):
     intro = await recv_json(st)
     await st.send(protocol.encode({"type": "answer", "to": intro["from"], "answer": "v=0\r\n", "turn": True}))
     answer = await recv_json(cl)
+    device_grant = await recv_json(cl)
     assert answer["turn"] == (await recv_json(st))["turn"]
+    core_grant = await recv_json(st)
+    # The WebSocket relay: each end joins the URL its grant names, through
+    # Caddy, and a datagram crosses.
+    assert core_grant["url"] == device_grant["url"] == "wss://rv.test/v1/relay", core_grant
+    core = await connect(core_grant["url"], "192.0.2.98")
+    await core.send(b"\x80" + core_grant["token"].encode())
+    assert await recv(core) == b"\x81\x01\x00"
+    device = await connect(device_grant["url"], "192.0.2.99")
+    await device.send(b"\x80" + device_grant["token"].encode())
+    assert await recv(device) == b"\x81\x01\x01"
+    assert await recv(core) == b"\x82\x01"
+    await device.send(b"\x02" + bytes(1500))
+    assert await recv(core) == b"\x02" + bytes(1500)
+    await core.close()
+    await device.close()
     print(json.dumps(answer["turn"]))
 async def go():
     # Two Cores, the four relay URLs tried two per Core: the relays of each
@@ -218,7 +256,7 @@ async def go():
 asyncio.run(go())
 PY
 )" || fail "a Core and a client could not meet through wss://rv.test/"
-pass "wss://rv.test/ through Caddy: a Core registers, a client is introduced, and the answer carries relay credentials"
+pass "wss://rv.test/ through Caddy: a Core registers, a client is introduced, the answer carries relay credentials, and the relay grants to both ends join one session at wss://rv.test/v1/relay, where a datagram crosses"
 
 first="$(sed -n 1p <<<"$minted")"
 second="$(sed -n 2p <<<"$minted")"

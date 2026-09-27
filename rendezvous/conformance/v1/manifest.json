@@ -742,6 +742,91 @@
       "id": "refuse-server-client-candidate-a-prefix",
       "file": "control/refuse-server-client-candidate-a-prefix.json",
       "kind": "control"
+    },
+    {
+      "id": "relay-grant",
+      "file": "crypto/relay-grant.json",
+      "kind": "crypto"
+    },
+    {
+      "id": "server-client-relay-grant",
+      "file": "control/server-client-relay-grant.json",
+      "kind": "control"
+    },
+    {
+      "id": "server-station-relay-grant",
+      "file": "control/server-station-relay-grant.json",
+      "kind": "control"
+    },
+    {
+      "id": "server-client-relay-grant-extra-keys",
+      "file": "control/server-client-relay-grant-extra-keys.json",
+      "kind": "control"
+    },
+    {
+      "id": "refuse-server-client-relay-grant-token-number",
+      "file": "control/refuse-server-client-relay-grant-token-number.json",
+      "kind": "control"
+    },
+    {
+      "id": "refuse-server-client-relay-grant-token-padded",
+      "file": "control/refuse-server-client-relay-grant-token-padded.json",
+      "kind": "control"
+    },
+    {
+      "id": "refuse-server-client-relay-grant-https-url",
+      "file": "control/refuse-server-client-relay-grant-https-url.json",
+      "kind": "control"
+    },
+    {
+      "id": "refuse-server-client-relay-grant-missing-url",
+      "file": "control/refuse-server-client-relay-grant-missing-url.json",
+      "kind": "control"
+    },
+    {
+      "id": "refuse-server-station-relay-grant-missing-from",
+      "file": "control/refuse-server-station-relay-grant-missing-from.json",
+      "kind": "control"
+    },
+    {
+      "id": "refuse-server-station-relay-grant-expires-string",
+      "file": "control/refuse-server-station-relay-grant-expires-string.json",
+      "kind": "control"
+    },
+    {
+      "id": "refuse-station-relay-grant",
+      "file": "control/refuse-station-relay-grant.json",
+      "kind": "control"
+    },
+    {
+      "id": "refuse-client-relay-grant",
+      "file": "control/refuse-client-relay-grant.json",
+      "kind": "control"
+    },
+    {
+      "id": "introduce-relay-grant",
+      "file": "sessions/introduce-relay-grant.json",
+      "kind": "session"
+    },
+    {
+      "id": "introduce-relay-grant-without-turn",
+      "file": "sessions/introduce-relay-grant-without-turn.json",
+      "kind": "session"
+    },
+    {
+      "id": "introduce-relay-grant-direct",
+      "file": "sessions/introduce-relay-grant-direct.json",
+      "kind": "session"
+    },
+    {
+      "id": "introduce-relay-grant-unaccepted",
+      "file": "sessions/introduce-relay-grant-unaccepted.json",
+      "kind": "session"
+    },
+    {
+      "id": "introduce-relay-grant-per-introduction",
+      "file": "sessions/introduce-relay-grant-per-introduction.json",
+      "kind": "session"
     }
   ]
 }
