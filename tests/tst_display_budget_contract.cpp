@@ -772,7 +772,8 @@ private slots:
                                    "mediaReplaceVersion", "controlSwitchVersion",
                                    "relayAllowed",
                                    // Parity Task 22: the support bundle.
-                                   "supportBundleVersion"});
+                                   "supportBundleVersion",
+                                   "mediaTunnelVersion", "mediaRelayRoutingVersion"});
                 QCOMPARE(names, withReason);
                 const int reason = updateIndex(last.updates,
                                                QByteArrayLiteral("displayBudgetReason"));
@@ -828,7 +829,9 @@ private slots:
                                            QByteArrayLiteral("mediaReplaceVersion"),
                                            QByteArrayLiteral("controlSwitchVersion"),
                                            QByteArrayLiteral("relayAllowed"),
-                                           QByteArrayLiteral("supportBundleVersion")}) {
+                                           QByteArrayLiteral("supportBundleVersion"),
+                                           QByteArrayLiteral("mediaTunnelVersion"),
+                                           QByteArrayLiteral("mediaRelayRoutingVersion")}) {
                 stripped.removeAt(updateIndex(stripped, name));
             }
             QCOMPARE(SessionMessages::encode(SessionMessages::capabilities(stripped)), older);

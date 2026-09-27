@@ -163,6 +163,9 @@ signals:
     /// `silentMs` after the last keepalive that counted (or the watch's
     /// start).
     void tripped(const QByteArray& deviceId, bool linkClosed, qint64 silentMs);
+    /// Task 29 step 2b: a keepalive counted, `sinceLastMs` after the one
+    /// before (-1 for a key's first). For measurement; nothing acts on it.
+    void keepaliveHeard(const QByteArray& deviceId, qint64 sinceLastMs);
 
 private:
     struct Watch {

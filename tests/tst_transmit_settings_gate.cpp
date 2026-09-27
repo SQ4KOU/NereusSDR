@@ -252,7 +252,12 @@ void TstTransmitSettingsGate::olderCoreOffersNoTransmitSettings()
     // the Task 28 fix wave's controlChannelVersion; a Core from before them
     // sends none.
     // iPhone app plan Task 29: mediaReplaceVersion, controlSwitchVersion and
-    // relayAllowed after it, then parity Task 22's supportBundleVersion.
+    // relayAllowed after it, then parity Task 22's supportBundleVersion;
+    // the unpublished media-floor versions follow every existing field.
+    QCOMPARE(updates.last().name, QByteArrayLiteral("mediaRelayRoutingVersion"));
+    updates.removeLast();
+    QCOMPARE(updates.last().name, QByteArrayLiteral("mediaTunnelVersion"));
+    updates.removeLast();
     QCOMPARE(updates.last().name, QByteArrayLiteral("supportBundleVersion"));
     updates.removeLast();
     QCOMPARE(updates.last().name, QByteArrayLiteral("relayAllowed"));

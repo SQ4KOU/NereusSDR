@@ -71,6 +71,10 @@ void SwitchableTransport::attach(SessionTransport* transport)
             [this, transport](const QByteArray& wire) { onText(transport, wire); });
     connect(transport, &SessionTransport::pongReceived, this,
             &SessionTransport::pongReceived);
+    // Step 2b: the media tunnel's binary messages pass through, whichever
+    // connection brings them (datagrams need no order across a move).
+    connect(transport, &SessionTransport::binaryReceived, this,
+            &SessionTransport::binaryReceived);
     connect(transport, &SessionTransport::closed, this,
             [this, transport]() { onClosed(transport); });
 }

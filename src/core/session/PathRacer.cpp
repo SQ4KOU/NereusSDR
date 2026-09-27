@@ -11,8 +11,13 @@
 //   2026-09-27: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-27: iPhone app plan Task 29 step 2b (R-IOS-16, R-IOS-08): the
+//               web relay's leg (RelayLeg) and its per-connection candidate
+//               sources; the computer's own proxy settings (SystemProxy).
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
+#include "core/session/SystemProxy.h"
 #include "core/session/PathRacer.h"
 
 #include "core/security/ClientDeviceIdentity.h"
@@ -76,6 +81,17 @@ PathRacer::PathRacer(QObject* parent) : QObject(parent) {}
 PathRacer::~PathRacer()
 {
     cancel();
+}
+
+int PathRacer::rankForPath(const std::optional<MediaIcePath>& path)
+{
+    if (!path) {
+        return ServiceDirect;
+    }
+    if (path->viaLoopbackShim()) {
+        return Floor;
+    }
+    return path->relayed() ? ServiceRelayed : ServiceDirect;
 }
 
 int PathRacer::rankFor(const QUrl& url)
@@ -292,14 +308,14 @@ void PathRacer::startRung(Entry& entry)
     connect(rung, &Rung::ended, this, [this, index](Outcome outcome, const QString& reason) {
         endRung(index, outcome, reason);
     });
-    connect(rung, &Rung::relayNoted, this,
-            [this, rung](Outcome outcome, const QString& reason) {
+    connect(rung, &Rung::noted, this,
+            [this, rung](PathKind kind, Outcome outcome, const QString& reason) {
         for (const Line& line : std::as_const(m_lines)) {
-            if (line.outcome == Outcome::RelayOff) {
+            if (line.kind == kind && line.outcome == outcome) {
                 return;
             }
         }
-        addNote(PathKind::Relay, rung->address(), outcome, reason);
+        addNote(kind, rung->address(), outcome, reason);
     });
     entry.startTimer = new QTimer(this);
     entry.startTimer->setSingleShot(true);
@@ -379,7 +395,9 @@ void PathRacer::onHello(int index, const QByteArray& wire)
         return;
     }
     entry.hello = wire;
-    releaseDirectTurn(entry);
+    // Re-review: the turn is kept past the hello. The Core counts a
+    // connection against its handshakes per address until it is signed in
+    // (snapshot.complete, finish()) or let go (releaseTransport()).
     const int rank = entry.rung ? entry.rung->rank() : Floor;
     const PathKind kind = entry.rung ? entry.rung->kind() : PathKind::Direct;
     Line& line = m_lines[entry.line];
@@ -444,6 +462,7 @@ void PathRacer::onHello(int index, const QByteArray& wire)
 
 void PathRacer::releaseTransport(Entry& entry, bool close)
 {
+    releaseDirectTurn(entry);
     SessionTransport* transport = entry.transport;
     entry.transport = nullptr;
     if (transport == nullptr) {
@@ -531,6 +550,14 @@ void PathRacer::finish()
         }
     }
     m_done = true;
+    // The winner is signed in and the standby taken or let go: every turn
+    // they held is free.
+    for (auto& entry : m_entries) {
+        if (entry->opening) {
+            entry->opening = false;
+            --m_directOpening;
+        }
+    }
 }
 
 std::optional<PathRacer::Ready> PathRacer::takeStandby()
@@ -664,6 +691,8 @@ void DirectPathRung::start()
         transport->deleteLater();
         emit ended(PathRacer::Outcome::NoAnswer, QString());
     });
+    // Step 2b: the computer's own proxy settings (SystemProxy).
+    socket->setProxy(SystemProxy::forUrl(m_url));
     socket->open(m_url);
 }
 
@@ -701,6 +730,9 @@ RendezvousPathRung::~RendezvousPathRung()
 
 PathRacer::PathKind RendezvousPathRung::kind() const
 {
+    if (m_rank == PathRacer::Floor) {
+        return PathRacer::PathKind::WebRelay;
+    }
     return m_rank == PathRacer::ServiceRelayed ? PathRacer::PathKind::Relay
                                                : PathRacer::PathKind::Service;
 }
@@ -733,7 +765,7 @@ void RendezvousPathRung::start()
         }
         m_done = true;
         const std::optional<MediaIcePath> path = transport->selectedPath();
-        m_rank = path && path->relayed() ? PathRacer::ServiceRelayed : PathRacer::ServiceDirect;
+        m_rank = PathRacer::rankForPath(path);
         m_dialer = nullptr;
         dialer->deleteLater();
         noteRelay(dialer);
@@ -752,17 +784,27 @@ void RendezvousPathRung::start()
         noteRelay(dialer);
         emit ended(outcome, reason);
     });
+    // Step 2b: the web relay ending this attempt's leg is a line of its own.
+    connect(dialer, &RendezvousDialer::webRelayEnded, this,
+            [this](const QString&, const QString& words) {
+        if (!words.isEmpty()) {
+            emit noted(PathRacer::PathKind::WebRelay, PathRacer::Outcome::WebRelayEnded, words);
+        }
+    });
     dialer->dial(m_servers, m_stationId, m_device);
 }
 
 void RendezvousPathRung::noteRelay(const RendezvousDialer* dialer)
 {
     // Review Minor 6: the Core answered without relay credentials though
-    // this computer asked for the relay. The live service always holds a
-    // TURN secret, so that is the Core's `relay = deny`.
-    if (m_allowRelay && dialer != nullptr && dialer->answered() && !dialer->relayOffered()) {
-        emit relayNoted(PathRacer::Outcome::RelayOff,
-                        QStringLiteral("The Core has the relay turned off."));
+    // this computer asked for the relay, and (re-review) no relay grant
+    // came either: a service with a relay secret and no TURN secret sends
+    // a grant when the Core allows the relay (rendezvous sections 10 and
+    // 12.1), so without one the Core turned it off.
+    if (m_allowRelay && dialer != nullptr && dialer->answered() && !dialer->relayOffered()
+        && !dialer->relayGranted()) {
+        emit noted(PathRacer::PathKind::Relay, PathRacer::Outcome::RelayOff,
+                   QStringLiteral("The Core has the relay turned off."));
     }
 }
 

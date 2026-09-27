@@ -22,9 +22,15 @@
 //               (section 12.1), from the service to a station and a client.
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-27: iPhone app plan Task 29 step 2b (R-IOS-16, R-IOS-08): the
+//               web relay's leg (RelayLeg) and its per-connection candidate
+//               sources; the computer's own proxy settings (SystemProxy).
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/RendezvousClient.h"
+#include "core/session/NetworkTrouble.h"
+#include "core/session/SystemProxy.h"
 
 #include "core/security/StationIdentity.h"
 
@@ -271,6 +277,7 @@ void RendezvousClient::introduce(const QString& stationId, const QByteArray& dev
     m_deviceSign = std::move(sign);
     m_offer = offer;
     m_lastRefusal.clear();
+    m_networkTrouble.clear();
     if (m_socket) {
         // Connected: now. Still connecting: when the hello comes.
         if (m_helloReceived) {
@@ -304,6 +311,7 @@ void RendezvousClient::connectToService()
         return;
     }
     m_lastRefusal.clear();
+    m_networkTrouble.clear();
     connectTo(0);
 }
 
@@ -329,6 +337,7 @@ void RendezvousClient::openMailbox(int nameplate)
     m_pending = Pending::OpenMailbox;
     m_mailboxNameplate = nameplate;
     m_lastRefusal.clear();
+    m_networkTrouble.clear();
     if (m_socket) {
         // Connected: now. Still connecting: when the hello comes.
         if (m_helloReceived) {
@@ -452,6 +461,20 @@ void RendezvousClient::connectTo(int serverIndex)
             }
         }, Qt::QueuedConnection);
     });
+    // Task 29 step 2b (options survey B.6, B.7): a sign-in page or an
+    // inspecting network, in the operator's words. The service is not
+    // pinned; the system's trust decides, as before.
+    connect(socket, &QWebSocket::sslErrors, this,
+            [this, generation](const QList<QSslError>& errors) {
+        if (generation != m_generation) {
+            return;
+        }
+        const QString words = NetworkTrouble::wordsForTlsErrors(errors);
+        if (!words.isEmpty()) {
+            qCWarning(lcRendezvous).noquote() << words;
+            m_networkTrouble = words;
+        }
+    });
     connect(socket, &QWebSocket::textMessageReceived, this,
             [this, generation](const QString& text) {
         if (generation == m_generation) {
@@ -471,6 +494,9 @@ void RendezvousClient::connectTo(int serverIndex)
     m_helloTimer->start(m_helloTimeoutMs);
     qCInfo(lcRendezvous) << "Connecting to the remote access service"
                          << m_servers.at(serverIndex).host();
+    // Task 29 step 2b (options survey B.5): the computer's own proxy
+    // settings, for a network that reaches the web through one.
+    socket->setProxy(SystemProxy::forUrl(m_servers.at(serverIndex)));
     socket->open(m_servers.at(serverIndex));
 }
 
@@ -541,10 +567,14 @@ void RendezvousClient::tryNextServer()
         return;
     }
     m_pending = Pending::None;
-    const QString reason = m_lastRefusal.isEmpty()
-        ? QStringLiteral("The remote access service could not be reached. Check this "
-                         "computer's internet connection.")
-        : m_lastRefusal;
+    QString reason = m_lastRefusal;
+    if (reason.isEmpty()) {
+        reason = m_networkTrouble;
+    }
+    if (reason.isEmpty()) {
+        reason = QStringLiteral("The remote access service could not be reached. Check this "
+                                "computer's internet connection.");
+    }
     emit unreachable(reason);
 }
 
@@ -745,6 +775,8 @@ void RendezvousClient::handle(const RendezvousWire::Message& message)
         } else if (m_introductionLive) {
             m_introductionLive = false;
             m_pending = Pending::None;
+            // Re-review: the grant goes with its introduction.
+            m_clientRelayGrant.reset();
             emit introductionEnded(QByteArray(), message.code);
         }
         return;

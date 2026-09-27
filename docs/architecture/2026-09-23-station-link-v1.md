@@ -865,6 +865,8 @@ change shows as surface drift and as a change to this table.
 | `remoteTxVersion` | 2 |
 | `txStateVersion` | 2 |
 | `txReadingsVersion` | 1 |
+| `mediaTunnelVersion` | 1 |
+| `mediaRelayRoutingVersion` | 1 |
 
 <!-- /surface -->
 
@@ -1223,8 +1225,10 @@ When a feature is off, its version is 0:
 - `controlChannelVersion` (the iPhone app plan's Task 28 fix wave,
   R-IOS-16): sent only at agreed minor 11, after `displayClockVersion` in
   the minor-11 block (`txMonitorAudioVersion`, `stationFreedvVersion`,
-  `mediaReplaceVersion`, `controlSwitchVersion`, `relayAllowed`, then
-  `sessionHolderVersion` and the remote transmit entries follow it), and 1
+  `mediaReplaceVersion`, `controlSwitchVersion`, `relayAllowed`,
+  `supportBundleVersion`, then optional `sessionHolderVersion` and remote
+  transmit entries, followed by `mediaTunnelVersion` and
+  `mediaRelayRoutingVersion`), and 1
   on a Core with a bound
   certificate (section
   3.4). At 1 the Core answers an introduction through the rendezvous with
@@ -1320,7 +1324,35 @@ When a feature is off, its version is 0:
   writes the bundle on a worker thread and logs through a queue no
   logging thread waits on, so neither can stall the radio.
 
-- `sessionHolderVersion`: sent only at agreed minor 11, last, and only to
+- `mediaTunnelVersion` (Task 29 step 2b): 1 when media is on, after every
+  previously emitted minor-11 entry (including conditional transmit
+  readings). This unpublished field was ordered here at trunk integration
+  so existing field positions stay unchanged. A media `start` may declare
+  version 1 even if the session
+  currently uses the rendezvous data channel. The media connection uses the
+  direct WebSocket tunnel only while that session path carries binary
+  messages; a later path move can therefore use the declared tunnel on its
+  replacement. Its tag-2 payload is a 16-byte RFC 4122 `connectionId` UUID
+  followed by the unchanged ICE-agent datagram.
+- `mediaRelayRoutingVersion` (Task 29 step 2b): 1 when media is on, after
+  `mediaTunnelVersion`. A media `start` declaring version 1 enables the same
+  UUID prefix on the web-relay leg's tag-2 payload. An older peer omitting
+  the declaration keeps the original raw tag-2 payload. Replacement
+  inherits the start's mode and retains its exact three-field shape. A
+  legacy raw leg currently carrying media cannot overlap a replacement on
+  that leg, so the Core refuses that move before changing the live route.
+  The UUID selects a local media generation; DTLS still authenticates the
+  peer. A routed payload may hold at most 1484 bytes of agent datagram,
+  preserving the relay's existing 1501-byte frame limit and outer tags.
+  Each claimed local loopback route pins the source address and port of its
+  first well-formed agent datagram. Later datagrams from another local
+  source are dropped rather than retargeting the return route; a new agent
+  needs a new claim. This avoids accidental or stale local traffic changing
+  a live route. A local process that races the first datagram is not
+  authenticated by this pin; ICE/DTLS retains its peer checks.
+
+- `sessionHolderVersion`: sent only at agreed minor 11, after
+  `supportBundleVersion` and before the trailing media-floor versions, and only to
   a peer whose hello declared `sessionHolder` 1 with `deviceAuth` 1; any
   other peer is sent no entry (and reads 0), so its capabilities are
   today's. 1: up to four devices at once, the `connectedDevices` object
@@ -1337,7 +1369,8 @@ When a feature is off, its version is 0:
   budget. A Core with one device on it sends that device what the table
   says.
 
-- `remoteTxVersion`: sent only at agreed minor 11, last, and only to a
+- `remoteTxVersion`: sent only at agreed minor 11, before the trailing
+  media-floor versions, and only to a
   peer whose hello declared `remoteTx` 1; any other peer is sent no entry
   (and reads 0). 1: `txPermitted` is the station transmit gate's answer
   for that session, `tx.setTxSlice` and the keying verbs `tx.key`,
@@ -1553,6 +1586,8 @@ older window sees only the values it was built for.
 | 72 | `txRefusalFix` | `utf8` |
 | 73 | `txStateVersion` | `i64` |
 | 74 | `txReadingsVersion` | `i64` |
+| 75 | `mediaTunnelVersion` | `i64` |
+| 76 | `mediaRelayRoutingVersion` | `i64` |
 
 <!-- /surface -->
 
@@ -4420,7 +4455,7 @@ Client to station:
 | `monitor-audio` | `txMonitorAudioVersion` | `connectionId`, `op`, `revision`, `route` | none | none |
 | `receiver-audio` | `receiverAudioVersion` | `connectionId`, `enabled`, `op`, `profile`, `revision`, `sliceId` | none | none |
 | `replace` | `mediaReplaceVersion` | `connectionId`, `op`, `replaces` | none | none |
-| `start` | `remoteMediaVersion` | `connectionId`, `op` | `audioProfileVersion` with audioProfileVersion; `headphonesMixVersion` with headphonesMixVersion; `receiverAudioVersion` with receiverAudioVersion; `remoteTxVersion` with remoteTxVersion; `txMonitorAudioVersion` with txMonitorAudioVersion | none |
+| `start` | `remoteMediaVersion` | `connectionId`, `op` | `audioProfileVersion` with audioProfileVersion; `headphonesMixVersion` with headphonesMixVersion; `mediaRelayRoutingVersion` with mediaRelayRoutingVersion; `mediaTunnelVersion` with mediaTunnelVersion; `receiverAudioVersion` with receiverAudioVersion; `remoteTxVersion` with remoteTxVersion; `txMonitorAudioVersion` with txMonitorAudioVersion | none |
 | `subscribe` | `remoteMediaVersion` | `centreHz`, `connectionId`, `endpointId`, `fftSize`, `fps`, `framesPerLine`, `maxDbm`, `minDbm`, `op`, `pixels`, `revision`, `sliceId`, `spanHz`, `tier`, `trace`, `waterfall`, `wideSpanFactor`, `windowType` | `activePeakHold` with displayExtrasVersion; `averageTimeMs` with displayExtrasVersion; `calibrationOffsetDb` with displayExtrasVersion; `decimation` with spectrumGrantVersion; `extendedView` with remoteWidebandDisplayVersion; `noiseFloor` with displayExtrasVersion; `normalize` with displayExtrasVersion; `peakBlobs` with displayExtrasVersion; `waterfallAverageTimeMs` with displayExtrasVersion; `waterfallLevels` with displayExtrasVersion | `activePeakHold`: {enabled, fallDbPerSec, holdMs}; `noiseFloor`: {enabled, shiftDb}; `peakBlobs`: {count, fallDbPerSec, holdMs, insideOnly}; `trace`: {averageAlpha, averageMode, detector}; `waterfall`: {averageAlpha, averageMode, detector}; `waterfallLevels`: {highDbm, lowDbm, mode, offsetDb} |
 | `unsubscribe` | `remoteMediaVersion` | `connectionId`, `endpointId`, `op` | `revision` with remoteDisplayBudgetVersion | none |
 
@@ -6401,13 +6436,20 @@ its capabilities (`relayAllowed`, section 6.3); a device records it with
 the paired Core and, while it says false, leaves the relay out of every
 race and says why. A device that has recorded nothing yet learns it from the
 Core's `answer`: one without relay credentials, though the device asked
-for the relay, is the Core's `relay = deny` (the live service always holds
-a TURN secret), and the record says so.
+for the relay, and with no relay grant after it (the rendezvous document,
+section 12.1: a service that holds a relay secret sends one whenever the
+Core allows the relay, even with no TURN secret), is the Core's `relay =
+deny`, and the record says so. A service with neither secret offers no
+relay at all, and a device that recorded nothing yet reads that the same
+way until its first sign-in records `relayAllowed`.
 
-At most `PathRacer::kMaxDirectOpening` (2) direct rungs open at once, the
-rest waiting their turn: a Core takes `StationServer::kMaxHandshakesPerAddress`
-(2) connections still signing in from one address, and all of a device's
-direct rungs come from one. An address is dialled once however the device
+At most `PathRacer::kMaxDirectOpening` (2) direct rungs are open and not
+yet signed in at once, the rest waiting their turn: a Core takes
+`StationServer::kMaxHandshakesPerAddress` (2) connections still signing in
+from one address, counting each until its `snapshot.complete`, and all of
+a device's direct rungs come from one. A rung holds its turn from its start
+until it ends, is let go, or the race finishes with the winner signed in
+(a winner still signing in and a standby hold both). An address is dialled once however the device
 names it (a literal and a host name that resolves to it), and an IPv6
 address keeps its scope (a link-local one reaches nothing without it).
 

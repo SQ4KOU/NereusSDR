@@ -116,8 +116,26 @@ public:
     /// transports return absent rather than a fabricated zero measurement.
     virtual std::optional<SessionTransportTelemetry> telemetry() const { return std::nullopt; }
 
+    /// iPhone app plan Task 29 step 2b (the link document, "Paths", the
+    /// media tunnel): one binary message beside the session's text ones,
+    /// for the media connection's datagrams on a direct WebSocket. False
+    /// where the transport carries none (a data channel), or it is not
+    /// open. A peer that does not use them ignores binary messages (the
+    /// station always has, section 2).
+    virtual bool sendBinary(const QByteArray& message)
+    {
+        Q_UNUSED(message);
+        return false;
+    }
+    virtual bool carriesBinary() const { return false; }
+    /// Bytes waiting to be written, where the transport can say (the media
+    /// tunnel writes only while little waits, as the web relay's leg).
+    virtual qint64 backlogBytes() const { return 0; }
+
 signals:
     void textReceived(const QByteArray& wire);
+    /// Step 2b: one binary message (sendBinary()).
+    void binaryReceived(const QByteArray& message);
 
     /// A pong came back for one of our pings. This is the ONLY liveness
     /// evidence StationServer/StationClient accept -- see their heartbeat
@@ -165,6 +183,9 @@ public:
     QString peerAddress() const override;
     QByteArray peerCertificateSha256() const override;
     std::optional<SessionTransportTelemetry> telemetry() const override;
+    bool sendBinary(const QByteArray& message) override;
+    bool carriesBinary() const override { return true; }
+    qint64 backlogBytes() const override;
 
     QWebSocket* socket() const { return m_socket; }
 

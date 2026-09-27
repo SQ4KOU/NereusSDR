@@ -30,6 +30,8 @@
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTemporaryDir>
+
+#include "core/session/RendezvousDialer.h"
 #include <QUrl>
 
 #include <memory>
@@ -58,6 +60,14 @@ inline QString readText(const QString& path)
     }
     return QString::fromUtf8(file.readAll());
 }
+
+/// Task 29 step 2b (the run rule on failures under load): how long a test
+/// waits for a session through the service. One dial may take
+/// RendezvousDialer::kDialDeadlineMs (the ICE gathering and connectivity
+/// deadlines, 69.5 s) before it succeeds or fails, so a flat 60 s budget
+/// failed a connect that the code itself still allowed (61.35 s at load
+/// 152). The budget is that deadline and 10 s for the sign-in after it.
+inline constexpr int kServiceConnectBudgetMs = RendezvousDialer::kDialDeadlineMs + 10000;
 
 inline QByteArray randomBytes(int count)
 {
@@ -108,6 +118,14 @@ public:
     /// The fake relay refuses every allocation with 486 (Allocation Quota
     /// Reached), as a full relay does. Before start().
     void setRelayFull(bool full) { m_relayFull = full; }
+    /// Task 29 re-review: the service also mints relay grants (rendezvous
+    /// section 12.1), with its own relay secret, naming `relayUrl`. Before
+    /// start().
+    void setRelayGrants(bool on, const QString& relayUrl = QStringLiteral("wss://127.0.0.1:1/v1/relay"))
+    {
+        m_relayGrants = on;
+        m_relayUrl = relayUrl;
+    }
 
     ~LocalService() { stop(); stopTurn(); }
 
@@ -123,6 +141,17 @@ public:
         }
         secret.write(m_secret);
         secret.close();
+        QString relayLines;
+        if (m_relayGrants) {
+            QFile relaySecret(m_dir.filePath(QStringLiteral("relay-secret")));
+            if (!relaySecret.open(QIODevice::WriteOnly)) {
+                return false;
+            }
+            relaySecret.write(randomBytes(32).toHex());
+            relaySecret.close();
+            relayLines = QStringLiteral("relay_secret_file = %1\nrelay_url = %2\n")
+                             .arg(relaySecret.fileName(), m_relayUrl);
+        }
         QFile config(m_dir.filePath(QStringLiteral("rendezvous.conf")));
         if (!config.open(QIODevice::WriteOnly)) {
             return false;
@@ -141,7 +170,8 @@ public:
                          .arg(m_port)
                          .arg(stun, turn,
                               m_relay ? secret.fileName() : QString())
-                         .toUtf8());
+                         .toUtf8()
+                     + relayLines.toUtf8());
         config.close();
         return launch();
     }
@@ -252,6 +282,8 @@ private:
     bool m_stun = true;
     bool m_relay = true;
     bool m_relayFull = false;
+    bool m_relayGrants = false;
+    QString m_relayUrl;
     QTemporaryDir m_dir;
     QByteArray m_secret = randomBytes(24).toHex();
     quint16 m_port = 0;

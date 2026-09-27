@@ -1588,6 +1588,33 @@ bool DaemonMediaController::handleStart(const QJsonObject& control)
             return false;
         }
     }
+    // Task 29 step 2b (R-IOS-16): mediaTunnelVersion, from a peer the Core
+    // told it on a session that carries binary messages; then the media
+    // connection's datagrams may also run inside that WebSocket.
+    const bool declaresMediaTunnel = control.contains(QStringLiteral("mediaTunnelVersion"));
+    if (declaresMediaTunnel) {
+        legacyShape.remove(QStringLiteral("mediaTunnelVersion"));
+        quint32 mediaTunnelVersion = 0;
+        if (!m_server || !m_server->mediaTunnelAvailable(m_epoch)
+            || !exactUnsigned(control.value(QStringLiteral("mediaTunnelVersion")),
+                              mediaTunnelVersion, /*nonzero=*/true)
+            || mediaTunnelVersion != 1) {
+            return false;
+        }
+    }
+    const bool declaresRelayRouting =
+        control.contains(QStringLiteral("mediaRelayRoutingVersion"));
+    if (declaresRelayRouting) {
+        legacyShape.remove(QStringLiteral("mediaRelayRoutingVersion"));
+        quint32 version = 0;
+        if (!m_server || !m_server->mediaAvailable(m_epoch)
+            || !m_server->mediaReplaceAvailable(m_epoch)
+            || !exactUnsigned(control.value(QStringLiteral("mediaRelayRoutingVersion")),
+                              version, /*nonzero=*/true)
+            || version != 1) {
+            return false;
+        }
+    }
     // iPhone app plan Task 36 (R-IOS-13): remoteTxVersion, from a peer the
     // Core told remoteTxVersion (its hello declared remoteTx at minor 11);
     // only then does the offer carry the microphone line.
@@ -1659,8 +1686,10 @@ bool DaemonMediaController::handleStart(const QJsonObject& control)
     // access service makes its media connection with its control
     // connection's STUN server, and its relay only when the control path
     // is relayed (the fix wave, Important 4).
-    peer->setIceConfiguration(m_server ? m_server->sessionIceConfiguration(m_epoch)
-                                       : std::nullopt);
+    // Task 29 step 2b: over the media tunnel when the window declared it.
+    m_startTunnel = declaresMediaTunnel;
+    m_startRelayRouting = declaresRelayRouting;
+    peer->setIceConfiguration(mediaIceConfiguration());
     if (!peer->start(IMediaTransport::Role::Offerer, connectionId,
                      m_audioTargetBitrate, offerLossless, declaresReceiverAudio,
                      declaresHeadphonesMix, declaresRemoteTx)) {
@@ -1849,6 +1878,26 @@ bool DaemonMediaController::sendAudioRtp(MediaPeer* peer, const QByteArray& pack
     return accepted;
 }
 
+std::optional<IceConfiguration> DaemonMediaController::mediaIceConfiguration()
+{
+    if (!m_server) {
+        return std::nullopt;
+    }
+    // Task 29 step 2b: a media start that declared the tunnel runs over it
+    // (with its host candidates) while the session is on a WebSocket; on a
+    // data channel (after a move) the session's own settings, as before.
+    if (m_startTunnel) {
+        if (auto tunnel = m_server->mediaTunnelIceConfiguration(m_epoch)) {
+            return tunnel;
+        }
+    }
+    auto ice = m_server->sessionIceConfiguration(m_epoch);
+    if (ice) {
+        ice->setMediaRouting(m_startRelayRouting);
+    }
+    return ice;
+}
+
 bool DaemonMediaController::handleReplace(const QJsonObject& control)
 {
     if (!m_server || !m_server->mediaReplaceAvailable(m_epoch)
@@ -1868,7 +1917,16 @@ bool DaemonMediaController::handleReplace(const QJsonObject& control)
         return refuse(QStringLiteral(
             "The Core did not move audio and display: that connection is not the current one."));
     }
+    if (!m_startRelayRouting) {
+        const auto path = m_peer->selectedPath();
+        const auto nextIce = mediaIceConfiguration();
+        if (path && path->viaLoopbackShim() && (!nextIce || !nextIce->mediaRouting())) {
+            return refuse(QStringLiteral(
+                "This older relay media path cannot move while it is still in use."));
+        }
+    }
     if (!radioIdleForReplace()) {
+        // The words of kReplaceTransmittingReason, which a device matches.
         return refuse(QStringLiteral(
             "The Core did not move audio and display: the radio is transmitting."));
     }
@@ -1929,7 +1987,7 @@ bool DaemonMediaController::handleReplace(const QJsonObject& control)
             m_micReceiver->submit(rewriteRtpSsrc(packet, m_micSsrcRewrite));
         }
     });
-    peer->setIceConfiguration(m_server->sessionIceConfiguration(m_epoch));
+    peer->setIceConfiguration(mediaIceConfiguration());
     if (!peer->start(IMediaTransport::Role::Offerer, connectionId, m_audioTargetBitrate,
                      m_startOfferedLossless, m_receiverAudioNegotiated,
                      m_headphonesMixNegotiated, m_startMicLine)) {

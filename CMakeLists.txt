@@ -1434,6 +1434,7 @@ list(APPEND CORE_SOURCES
     src/core/session/RendezvousMailboxTransport.cpp
     src/core/session/StationRendezvous.cpp
     src/core/session/IceConfiguration.cpp
+    src/core/session/CandidateSourceLease.cpp
     # iPhone app plan Task 28 (R-IOS-16): the control session over a data
     # channel, for a connection the service introduced.
     src/core/session/DataChannelTransport.cpp
@@ -1444,6 +1445,10 @@ list(APPEND CORE_SOURCES
     # duplicate filter.
     src/core/session/SwitchableTransport.cpp
     src/core/session/PathRacer.cpp
+    src/core/session/RelayLeg.cpp
+    src/core/session/MediaTunnel.cpp
+    src/core/session/NetworkTrouble.cpp
+    src/core/session/SystemProxy.cpp
     src/core/session/media/RtpDuplicateFilter.cpp
     src/core/session/media/DualPathAudio.cpp
 )

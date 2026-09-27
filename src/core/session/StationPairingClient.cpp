@@ -18,8 +18,13 @@
 //               pair.start names this computer only kMailboxPlainName; its
 //               own name travels sealed. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-27: iPhone app plan Task 29 step 2b (R-IOS-16, R-IOS-08): the
+//               web relay's leg (RelayLeg) and its per-connection candidate
+//               sources; the computer's own proxy settings (SystemProxy).
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
+#include "core/session/SystemProxy.h"
 #include "core/session/StationPairingClient.h"
 
 #include "core/AppSettings.h"
@@ -93,6 +98,8 @@ SessionTransport* openWebSocket(const QUrl& url)
         }
         socket->ignoreSslErrors(ignorable);
     });
+    // Task 29 step 2b: the computer's own proxy settings (SystemProxy).
+    socket->setProxy(SystemProxy::forUrl(url));
     socket->open(url);
     return transport;
 }

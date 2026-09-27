@@ -18,11 +18,16 @@
 //               settled (none) before gathering, so the session's media
 //               gathers too. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-27: iPhone app plan Task 29 step 2b (R-IOS-16, R-IOS-08): the
+//               web relay's leg (RelayLeg) and its per-connection candidate
+//               sources; the computer's own proxy settings (SystemProxy).
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationRendezvous.h"
 
 #include "core/session/DataChannelTransport.h"
+#include "core/session/RelayLeg.h"
 
 #include "core/security/DeviceStore.h"
 #include "core/security/PairingWindow.h"
@@ -50,6 +55,10 @@ struct StationRendezvous::Answer {
     QTimer* credentialsTimer = nullptr;
     QTimer* deadline = nullptr;
     bool gathering = false;
+    /// Task 29 step 2b: the Core's leg to the web relay for this
+    /// introduction, opened when its grant comes; its candidate source
+    /// factory rides the ICE settings, so the session's connections keep it.
+    std::shared_ptr<RelayLeg> leg;
 };
 
 StationRendezvous::StationRendezvous(StationServer* server, const QList<QUrl>& servers,
@@ -143,6 +152,15 @@ bool StationRendezvous::start()
         }
         answerIntroduction(introduction);
     });
+    // Task 29 step 2b: the grant opens the Core's leg at once (section 12.1).
+    connect(m_client, &RendezvousClient::relayGrantReceived, this, [this](const QByteArray& id) {
+        Answer* answer = answerFor(id);
+        const std::optional<RendezvousWire::RelayGrant> grant = m_client->relayGrant(id);
+        if (answer == nullptr || !answer->leg || !grant) {
+            return;
+        }
+        answer->leg->open(QUrl(grant->url), grant->token);
+    });
     connect(m_client, &RendezvousClient::credentialsReceived, this,
             [this](const QByteArray& id, bool offered, const RendezvousWire::Turn& turn) {
         Answer* answer = answerFor(id);
@@ -231,6 +249,16 @@ void StationRendezvous::answerIntroduction(const RendezvousIntroduction& introdu
                                                       m_client->relayAllowed(),
                                                       IceConfiguration::localAddressFamilies(),
                                                       m_stunFamilies);
+    // Task 29 step 2b (rendezvous section 12): the web relay, when the relay
+    // is allowed. The leg opens when the grant comes; its lanes are offered
+    // to the control connection and, later, the session's media.
+    if (m_client->relayAllowed()) {
+        answer->leg = RelayLeg::create();
+        if (answer->leg) {
+            answer->ice.setCandidateSourceFactory(RelayLeg::factoryFor(answer->leg),
+                                                  /*needsRelay=*/true);
+        }
+    }
     answer->transport = new DataChannelTransport(this);
     answer->credentialsTimer = new QTimer(answer->transport);
     answer->credentialsTimer->setSingleShot(true);

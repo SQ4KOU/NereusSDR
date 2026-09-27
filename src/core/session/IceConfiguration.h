@@ -74,6 +74,9 @@
 //               seam where another source of the far end's candidates
 //               joins one connection's ICE (link section 21.5). J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-27: Task 29 step 2b (R-IOS-16): the candidate source factory,
+//               one source per connection and lane, gated on the relay.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/RendezvousWire.h"
@@ -221,28 +224,48 @@ public:
     /// iPhone app plan Task 29 (R-IOS-16; link section 21.5): another
     /// source of the far end's candidates, which the ICE agent races with
     /// every other inside one connection at the priority each candidate
-    /// line carries. The floor, once it is chosen, may be one (a relay's
-    /// loopback address given as a low-priority remote candidate); none is
-    /// built in this version. A source starts when the connection gathers
-    /// and hands each candidate (`candidate:...`, as the far end's) to
-    /// `add` on the connection's thread; stop() ends it and it calls `add`
-    /// no more.
+    /// line carries: the web relay's leg (RelayLeg), a loopback address
+    /// given as a low-priority remote candidate. A source starts when its
+    /// connection gathers and hands each candidate (`candidate:...`, as the
+    /// far end's) to `add` on the connection's thread; stop() ends it and
+    /// it calls `add` no more.
     class CandidateSource {
     public:
         virtual ~CandidateSource() = default;
         virtual void start(std::function<void(const QString& candidate)> add) = 0;
         virtual void stop() = 0;
     };
-    void addCandidateSource(std::shared_ptr<CandidateSource> source)
+    /// The lanes (the rendezvous document, section 12.3's tags): the
+    /// session's control connection, and its media connection.
+    static constexpr int kControlLane = 1;
+    static constexpr int kMediaLane = 2;
+    /// Step 2b (the step 2a review's Minor 10): each connection makes its
+    /// own source from the factory, for its lane, so no source is ever
+    /// shared by two connections. The factory travels with these settings
+    /// (the session's media settings are a copy of its control's), and
+    /// `needsRelay` gates it on relayAllowed(): `relay = deny` stops the
+    /// web relay as it stops TURN.
+    using CandidateSourceFactory = std::function<std::shared_ptr<CandidateSource>(int lane,
+                                                                                  const QString& connectionId,
+                                                                                  bool routed)>;
+    void setCandidateSourceFactory(CandidateSourceFactory factory, bool needsRelay)
     {
-        if (source) {
-            m_candidateSources.append(std::move(source));
+        m_sourceFactory = std::move(factory);
+        m_sourceNeedsRelay = needsRelay;
+    }
+    bool hasCandidateSourceFactory() const { return static_cast<bool>(m_sourceFactory); }
+    /// A new source for one connection on `lane`; null when there is no
+    /// factory or it needs the relay and the relay is not allowed.
+    std::shared_ptr<CandidateSource> makeCandidateSource(int lane,
+                                                         const QString& connectionId = {}) const
+    {
+        if (!m_sourceFactory || (m_sourceNeedsRelay && !m_relayAllowed)) {
+            return nullptr;
         }
+        return m_sourceFactory(lane, connectionId, m_mediaRouting);
     }
-    QList<std::shared_ptr<CandidateSource>> candidateSources() const
-    {
-        return m_candidateSources;
-    }
+    void setMediaRouting(bool routed) { m_mediaRouting = routed; }
+    bool mediaRouting() const { return m_mediaRouting; }
 
     std::optional<IceServerAddress> stunServer() const { return m_stun; }
     QList<IceRelayServer> relayServers() const { return m_relays; }
@@ -253,6 +276,10 @@ public:
     /// Whether a candidate the far end sent may be used: a relay candidate
     /// (`typ relay`) only when the relay is allowed.
     bool acceptsRemoteCandidate(const QString& candidate) const;
+    /// Test seam (step 2b): while set, every connection through the service
+    /// takes only a loopback-shim candidate (the web relay's), so a test on
+    /// one computer, where host pairs always work, runs over the web relay.
+    static void setOnlyLoopbackShimCandidatesForTest(bool only);
 
     /// `stun:host[:port]` (RFC 7064), an IPv6 literal in brackets.
     static std::optional<IceServerAddress> parseStunUrl(const QString& url);
@@ -275,7 +302,9 @@ private:
     QList<IceRelayServer> m_relays;
     bool m_relayAllowed = true;
     bool m_relayKnown = false;
-    QList<std::shared_ptr<CandidateSource>> m_candidateSources;
+    CandidateSourceFactory m_sourceFactory;
+    bool m_sourceNeedsRelay = true;
+    bool m_mediaRouting = false;
 };
 
 } // namespace NereusSDR

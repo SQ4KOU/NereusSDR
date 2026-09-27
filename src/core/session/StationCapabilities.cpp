@@ -251,12 +251,12 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
         // R-R3-49 / R-IOS-18 (parity Task 22, iPhone plan Task 25): the
         // support bundle, the Core's log and its logging categories.
         updates.append(intEntry("supportBundleVersion", supportBundleVersion));
-        // iPhone app Task 71: several devices at once, last, and only for
+        // iPhone app Task 71: several devices at once, only for
         // a peer that declared the feature.
         if (sessionHolderEntry) {
             updates.append(intEntry("sessionHolderVersion", sessionHolderVersion));
         }
-        // iPhone app plan Task 34: remote transmit, last, and only for a
+        // iPhone app plan Task 34: remote transmit, only for a
         // peer that declared the feature.
         if (remoteTxEntry) {
             updates.append(intEntry("remoteTxVersion", remoteTxVersion));
@@ -272,6 +272,10 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
             // it.
             updates.append(intEntry("txReadingsVersion", txReadingsVersion));
         }
+        // Task 29 step 2b (R-IOS-16): unpublished media-floor entries
+        // follow every previously emitted minor-11 field.
+        updates.append(intEntry("mediaTunnelVersion", mediaTunnelVersion));
+        updates.append(intEntry("mediaRelayRoutingVersion", mediaRelayRoutingVersion));
     }
     return updates;
 }
@@ -473,6 +477,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                    || u.name == "mediaReplaceVersion"
                    || u.name == "controlSwitchVersion"
                    || u.name == "supportBundleVersion"
+                   || u.name == "mediaTunnelVersion"
+                   || u.name == "mediaRelayRoutingVersion"
                    || u.name == "sessionHolderVersion"
                    || u.name == "remoteTxVersion"
                    || u.name == "txStateVersion"
@@ -539,6 +545,10 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                     caps.controlSwitchVersion = version;
                 } else if (u.name == "supportBundleVersion") {
                     caps.supportBundleVersion = version;
+                } else if (u.name == "mediaTunnelVersion") {
+                    caps.mediaTunnelVersion = version;
+                } else if (u.name == "mediaRelayRoutingVersion") {
+                    caps.mediaRelayRoutingVersion = version;
                 } else {
                     caps.bandSelectVersion = version;
                 }

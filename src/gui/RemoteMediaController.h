@@ -422,8 +422,16 @@ public:
     /// starts as soon as it can (the media connection ready, unkeyed, VOX
     /// disarmed, the Core back on receive), retried every
     /// kReplaceRetryMs while pending, and again after the Core refused one
-    /// while it was transmitting (at most kMaxReplaceRearms times a move).
+    /// because it was transmitting (DaemonMediaController::
+    /// kReplaceTransmittingReason; no other refusal re-arms it). A new
+    /// connection that cannot start is tried kMaxReplaceRearms times a
+    /// move.
     static constexpr int kReplaceRetryMs = 500;
+    /// Task 29 step 2b (fast failure detection): on a path through a relay
+    /// or the WebSocket tunnel, audio that stops coming for this long while
+    /// it plays is a dead media connection: it is started again at once
+    /// (recoveryRequested), rather than after ICE's 30 s consent check.
+    static constexpr int kMediaStallMs = 3000;
     static constexpr int kMaxReplaceRearms = 3;
     bool replacePending() const;
     /// iPhone app plan Task 29: the media connection's id now, and whether
@@ -535,6 +543,7 @@ private:
     void dropReplacement(const QString& why);
     void markReplacePending();
     void tryPendingReplace();
+    std::optional<IceConfiguration> mediaIceConfiguration();
     void retireOldPeer();
 };
 } // namespace NereusSDR

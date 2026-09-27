@@ -415,17 +415,30 @@ struct StationCapabilities {
     /// relayAllowed. 0 (an older Core): a window shows its Core-side
     /// support controls disabled with the reason.
     int supportBundleVersion = 0;
+    /// iPhone app plan Task 29 step 2b (R-IOS-16; link section 21, "The
+    /// media tunnel"): 1 means the Core carries a media connection's
+    /// datagrams inside a direct WebSocket session, as binary messages,
+    /// when the window's media start declares it. Sent in the same minor-11
+    /// block, after all previously emitted minor-11 entries; 1 whenever
+    /// media is on for the peer. 0
+    /// (an older Core): media on a direct session runs over UDP only.
+    int mediaTunnelVersion = 0;
+    /// Version 1 prefixes relay tag-2 payloads with the media connection's
+    /// 16-byte UUID, preserving independent generations during replacement.
+    int mediaRelayRoutingVersion = 0;
     /// iPhone app Task 71 (R-IOS-02; the several-devices design, ruling
     /// 10.1): 1 means the Core admits up to four devices at once, sends the
-    /// `connectedDevices` object and takes session.leave. Sent last in the
-    /// same minor-11 block, and only to a peer whose hello declared the
+    /// `connectedDevices` object and takes session.leave. Sent before the
+    /// trailing media-floor versions in the same minor-11 block, and only
+    /// to a peer whose hello declared the
     /// feature `sessionHolder` 1 with `deviceAuth` 1 (sessionHolderEntry);
     /// any other peer is sent no entry and reads 0, so its capabilities
     /// are exactly today's.
     bool sessionHolderEntry = false;
     int sessionHolderVersion = 0;
     /// iPhone app plan Task 34: remote transmit (txPermitted per session,
-    /// tx.setTxSlice, the on-air refusals). Sent last, only to a peer whose
+    /// tx.setTxSlice, the on-air refusals). Sent before the trailing
+    /// media-floor versions, only to a peer whose
     /// hello declared remoteTx 1 (remoteTxEntry); 0 otherwise.
     bool remoteTxEntry = false;
     int remoteTxVersion = 0;

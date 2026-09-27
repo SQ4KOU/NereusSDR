@@ -23,6 +23,7 @@
 #include <QHostAddress>
 #include <QSslCertificate>
 #include <QSslConfiguration>
+#include <QAbstractSocket>
 #include <QWebSocket>
 
 namespace NereusSDR {
@@ -77,6 +78,37 @@ WebSocketTransport::WebSocketTransport(QWebSocket* socket, quint64 maxIncomingBy
 
     connect(m_socket, &QWebSocket::disconnected, this,
             [this]() { emit closed(); });
+
+    // Task 29 step 2b: binary messages carry the media tunnel's datagrams
+    // (the message cap above applies to them as to text).
+    connect(m_socket, &QWebSocket::binaryMessageReceived, this,
+            [this](const QByteArray& message) {
+        m_telemetry.receivedPayloadBytes += static_cast<quint64>(message.size());
+        emit binaryReceived(message);
+    });
+}
+
+bool WebSocketTransport::sendBinary(const QByteArray& message)
+{
+    if (!isOpen() || m_closing) {
+        return false;
+    }
+    if (m_socket->sendBinaryMessage(message) < 0) {
+        return false;
+    }
+    m_telemetry.acceptedPayloadBytes += static_cast<quint64>(message.size());
+    return true;
+}
+
+qint64 WebSocketTransport::backlogBytes() const
+{
+    if (m_socket == nullptr) {
+        return 0;
+    }
+    if (const auto* inner = m_socket->findChild<QAbstractSocket*>()) {
+        return inner->bytesToWrite();
+    }
+    return 0;
 }
 
 WebSocketTransport::~WebSocketTransport() = default;

@@ -486,12 +486,15 @@ colours for the same signal.
   the transmit watchdog remain required.
 - Status: signed implementation `50fcf932` built and verified in trunk: lifetime, rendezvous
   and provenance checks passed 4/4 in 67.90 s. Phone both-end interop passed all seven tests
-  plus three release repeats with a staged copy of the verified helper. No updated Core has
-  yet been installed on a radio host. Signed trunk `c2b00a54` has a built Rock package
-  that passes the isolated 15-second startup check; Linux full-suite verification is running.
-  An earlier build was found to have skipped vendor patches despite
-  a successful tool exit. That evidence was withdrawn. The patch helper now rejects skipped
-  application and materialized hashes are checked. No build from that earlier run was deployed.
+  plus three release repeats with a staged copy of the verified helper. Signed trunk
+  `c2b00a54` had a built Rock package that passed the isolated 15-second startup check
+  before the later deployment.
+  The subsequently verified `1f3cc251` Rock package is installed: the Core is active with
+  no restarts, registered with the service, and `/etc/nereusd.conf` retains its measured
+  hash (`core-gui-rock-1f3cc251-health.log`). An earlier build was found to have skipped
+  vendor patches despite a successful tool exit. That evidence was withdrawn. The patch
+  helper now rejects skipped application and materialized hashes are checked; that earlier
+  skipped-patch build was never deployed.
 - Plan: R5 remote access; phone relay cleanup and replacement.
 
 ### G-35: Pairing confirmation can be deleted before the socket drains
@@ -551,9 +554,18 @@ colours for the same signal.
   the harness incorrectly printed a passing summary. This was synthetic; no radio keyed.
 - Ruling: JJ's existing requirement applies: diagnose load failures and bring the cause
   and suggested fix. The 400 ms safety deadline remains unchanged.
-- Status: R5 acceptance remains open. Earlier green measurement summary is withdrawn;
-  keepalive production/queue/transport/receive timing and direct-wss comparison are being
-  investigated. No success claim based only on accepted-packet gaps is valid.
+- Status: R5 acceptance remains open. The original tests used the control-only keepalive
+  fallback; a corrected production-follower harness also reproduced 402-403 ms false unkeys
+  on web relay at 2% and 3% loss and direct WSS at 2%, each with 150 ms RTT. A bounded
+  in-memory monotonic trace on the 2% web case captured client keepalive sequences 66-70
+  accepted locally every about 100 ms and tag-2 WebSocket enqueue/send continuing with
+  sampled backlog zero, while Core channel decode last accepted seq 66 at trip minus 402 ms
+  and Core relay tag-2 receive stopped at trip minus 318 ms. The missing stage is after
+  client `sendBinaryMessage` and before Core `RelayLeg::onMessage`. Service forwarding
+  versus socket/TCP buffering or retransmission remains unproved. Control and media share
+  the same TCP floor, so sending a duplicate over control has no independent deadline
+  guarantee. No watchdog adjustment or production behavior change was made. The old green
+  accepted-gap summary is withdrawn; an absent interval is a failure.
 - Plan: R5 restrictive-network transmit deadline.
 
 ### G-40: Code-only rendezvous reconnect stops at an already paired device
@@ -567,8 +579,10 @@ colours for the same signal.
   and three integrated session/readings/log regressions (43.42 s): complete code proof confirms an existing
   key without replacing its record; removal during the exchange invalidates it.
   Mailboxes remain pairing-only. The phone owns authenticated upsert and ordinary
-  rendezvous reconnect without waiting for stale saved private addresses. No updated
-  Core has been installed while JJ's current phone test is active.
+  rendezvous reconnect without waiting for stale saved private addresses. The verified
+  `1f3cc251` Core is now installed and healthy on Rock, registered to the service, with
+  `/etc/nereusd.conf` unchanged by hash (`core-gui-rock-1f3cc251-health.log`). The phone's
+  automatic initial-race and later path-switch work remains separately open.
 - Plan: Core station pairing and R5 code-only access.
 
 ### G-41: Audio reset headphone wording conflicts with default-off behavior
@@ -580,6 +594,69 @@ colours for the same signal.
   is preserved while the independent immediate audio-output rebuild work proceeds.
 - Status: Setup lane reports the discrepancy; no invented new headphone default.
 - Plan: remote-window parity Setup diagnostics and preferences.
+
+### G-42: Region and extended-transmit controls do not yet drive the Core TX gate
+
+- Evidence: General Options writes Region as a string (`GeneralOptionsPage.cpp`), while
+  the transmit gate reads numeric `BandPlanRegion` (`RadioModel.cpp`). The saved
+  `ExtendedTxAllowed` and cross-band values are OperatorLocal in `SettingsScope`; the
+  Core gate currently uses false constants instead of those values. A stale saved
+  Extended=true activation and split RX/TX band policy need a source-based safety review.
+  `BandPlanGuard::bandRangesFor` still has TODOs for most country tables and falls back
+  to US ranges; a stale comment calling the guard inert is false because MOX already
+  invokes it. Thetis `Console.cs` 6780-6812 also checks non-CW transmit filter edges
+  through `CheckValidTXFreq`, while Nereus's sole band-plan guard call passes carrier
+  frequency only; `pushTxModeAndBandpass` uses positive audio-space filter values before
+  TxChannel mode conversion. Filter-edge policy is another unresolved safety subgap.
+- Ruling: existing parity work authorizes making these controls functional, but the
+  precise safety policy and settings ownership migration remain OPEN. Do not import
+  an operator-local value into the Core gate without that ruling.
+- Status: source audit pending. Region activation needs complete Thetis-derived supported
+  country range tables as well as a correctly owned setting and Core gate; enabling the
+  combo alone would be unsafe. Thetis's current `Init60mChannels` has only UK, US and
+  default cases, so missing extra country-channel arrays are not established; Nereus's
+  explicit UK/Japan channelization is a native exception. The isolated parity lane is only
+  disabling misleading interim UI and recording this gap. Ganymede and DisableHFPA remain
+  the absent-producer classifications under G-21;
+  the alleged missing TX-inhibit reader was a false positive, since production
+  `attachRadioInput` is wired.
+- Plan: remote-window parity Setup and transmit gate safety.
+
+### G-43: Transmit frequency guard omits XIT offset
+
+- Evidence: `RadioModel::installBandPlanMoxCheck` passes the transmit-bound
+  slice's dial frequency to `BandPlanGuard::checkMoxAllowed`, while the hardware
+  transmit path uses `txFrequencyForSlice(slice)` including XIT. Thetis
+  `Console.cs` lines 29440-29450 applies XIT before `CheckValidTXFreq`
+  at line 29486.
+- Ruling: the existing source-faithful transmit guard objective authorizes this narrow
+  fix, without a broader Extended/cross-band policy change.
+- Status: the isolated parity lane produced signed narrow fix `d83b4e88c` (parent
+  `ce40a2c`), reviewed with fake-only tests; it awaits integration after this R5 handback.
+  Do not duplicate it during R5 integration.
+- Plan: transmit guard parity and safety.
+
+### G-44: Saved legacy control-channel result can permanently suppress recovery
+
+- Evidence: station-link sections 6.3 and 21.1, `CoreTargetStore`, and
+  `StationClient::newRacer` retain a saved `controlChannelVersion` of 0 and
+  skip the service rung on every later race. An upgraded Core can therefore
+  remain unreachable through rendezvous after a stale direct address fails.
+- Ruling: JJ approved automatic direct/manual/rendezvous recovery. The lead's
+  bounded implementation contract is a persisted, authenticated negative
+  observation fresh for five minutes; older records without a timestamp,
+  expired/future timestamps, and unparseable timestamps are unknown for
+  discovery. A real network-generation change invalidates the observation
+  once, without clearing it on every retry. A fresh authenticated 0 suppresses
+  the service rung until expiry or network change; authenticated 1 clears the
+  negative timestamp. Failed or unanswered probes do not renew 0. Full
+  same-identity code pairing invalidates the negative observation. Existing
+  identity/certificate checks, single authenticated race winner, bounded
+  deadlines and retries, and `relayAllowed` remain in force.
+- Status: OPEN for Core and desktop implementation and the exact shared link
+  document update. The phone is implementing its corresponding cache. This
+  lead contract does not assert a separate JJ ruling on the five-minute value.
+- Plan: automatic direct/manual/rendezvous recovery.
 
 ## How this addendum is kept
 

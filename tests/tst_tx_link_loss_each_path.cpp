@@ -629,9 +629,10 @@ private slots:
         QVERIFY2(onNew.size() >= 15, qPrintable(QString::number(onNew.size())));
         QVERIFY(strictlyRising(onOld));
         QVERIFY(strictlyRising(onNew));
-        if (!onOld.isEmpty()) {
-            QVERIFY(onOld.last() < onNew.first());
-        }
+        // Re-review: the before-barrier case is always covered: the key's
+        // first keepalive went on the old connection.
+        QVERIFY(!onOld.isEmpty());
+        QVERIFY(onOld.last() < onNew.first());
 
         h.remote.setMoxFromButton(false);
         QTRY_VERIFY_WITH_TIMEOUT(!h.station.moxController()->isMox(), 5000);

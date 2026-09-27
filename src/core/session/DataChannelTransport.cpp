@@ -21,9 +21,14 @@
 //               other candidate sources start with gathering and stop with
 //               the connection. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-27: iPhone app plan Task 29 step 2b (R-IOS-16, R-IOS-08): the
+//               web relay's leg (RelayLeg) and its per-connection candidate
+//               sources; the computer's own proxy settings (SystemProxy).
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/DataChannelTransport.h"
+#include "core/session/CandidateSourceLease.h"
 
 #include "core/security/OpenSslErrorScope.h"
 #include "core/session/media/LibDataChannelMediaTransport.h"
@@ -393,6 +398,10 @@ bool DataChannelTransport::start(const Options& options)
                 m_gatherRequested = true;
                 m_relays = options.ice->relayServers();
             }
+            if (options.ice->hasCandidateSourceFactory()) {
+                m_candidateSourceLease = CandidateSourceLease::create(*options.ice);
+                config.iceTransportLifetime = m_candidateSourceLease;
+            }
         }
         if (!options.certificatePemPath.isEmpty()) {
             // The Core's own persistent TLS certificate: the SHA-256 a
@@ -538,6 +547,9 @@ bool DataChannelTransport::acceptDescription(const QString& sdp, const QString& 
             m_bridge->peer->setLocalDescription(rtc::Description::Type::Answer);
             gatherIfReady();
         }
+        for (const QString& candidate : std::exchange(m_pendingSourceCandidates, {})) {
+            acceptCandidate(candidate);
+        }
         return true;
     } catch (const std::exception& error) {
         qCWarning(lcControlChannel) << "A control connection description was refused:"
@@ -616,22 +628,45 @@ void DataChannelTransport::gatherIfReady()
     } catch (const std::exception& error) {
         qCWarning(lcControlChannel) << "Gathering failed:" << error.what();
     }
-    // iPhone app plan Task 29 (link section 21.5): any other source of the
-    // far end's candidates joins this connection's ICE now. None is built
-    // in this version; the floor may be one.
-    const QPointer<DataChannelTransport> self(this);
-    for (const std::shared_ptr<IceConfiguration::CandidateSource>& source :
-         m_options.ice->candidateSources()) {
-        source->start([self](const QString& candidate) {
-            if (self) {
-                self->acceptCandidate(candidate);
+    // iPhone app plan Task 29 (link section 21.5), step 2b: this
+    // connection's own source on the control lane (the web relay's leg)
+    // joins its ICE now, unless the relay is not allowed.
+    if (m_candidateSourceLease) {
+        const QPointer<DataChannelTransport> self(this);
+        m_candidateSourceLease->start(IceConfiguration::kControlLane, {},
+                                      [self](const QString& candidate) {
+            if (!self) {
+                return;
             }
+            // Before the remote description the agent takes no remote
+            // candidate: held until it comes.
+            if (!self->m_remoteDescriptionAccepted) {
+                self->m_pendingSourceCandidates.append(candidate);
+                return;
+            }
+            self->acceptCandidate(candidate);
         });
     }
 }
 
+namespace {
+DataChannelTransport::SelectedPathOverride& selectedPathOverride()
+{
+    static DataChannelTransport::SelectedPathOverride override;
+    return override;
+}
+} // namespace
+
+void DataChannelTransport::setSelectedPathOverrideForTest(SelectedPathOverride override)
+{
+    selectedPathOverride() = std::move(override);
+}
+
 std::optional<MediaIcePath> DataChannelTransport::selectedPath() const
 {
+    if (selectedPathOverride()) {
+        return selectedPathOverride()(this);
+    }
     if (!m_bridge || !m_bridge->peer) {
         return std::nullopt;
     }
@@ -1072,13 +1107,10 @@ void DataChannelTransport::stopPeer(bool linger)
     if (!m_bridge) {
         return;
     }
-    // Task 29: the other candidate sources stop with the connection.
-    if (m_options.ice) {
-        for (const std::shared_ptr<IceConfiguration::CandidateSource>& source :
-             m_options.ice->candidateSources()) {
-            source->stop();
-        }
-    }
+    // The ICE transport owns the final lease. Its teardown runs after
+    // PeerConnection::close() and may outlive this wrapper.
+    m_candidateSourceLease.reset();
+    m_pendingSourceCandidates.clear();
     std::shared_ptr<rtc::PeerConnection> peer;
     std::shared_ptr<rtc::DataChannel> channel;
     {

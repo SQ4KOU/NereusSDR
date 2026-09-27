@@ -937,6 +937,10 @@ QJsonObject guiToCoreOps()
         {QStringLiteral("remoteTxVersion"), {QStringLiteral("remoteTxVersion")}},
         // Remote-window parity Task 32: the transmit monitor.
         {QStringLiteral("txMonitorAudioVersion"), {QStringLiteral("txMonitorAudioVersion")}},
+        // iPhone app plan Task 29 step 2b: the media tunnel.
+        {QStringLiteral("mediaTunnelVersion"), {QStringLiteral("mediaTunnelVersion")}},
+        {QStringLiteral("mediaRelayRoutingVersion"),
+         {QStringLiteral("mediaRelayRoutingVersion")}},
     }));
     // MediaPeer.cpp acceptControl: hasExactKeys for description / candidate.
     ops.insert(QStringLiteral("description"),

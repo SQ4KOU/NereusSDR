@@ -369,6 +369,16 @@
             "kind": "i64",
             "name": "txReadingsVersion",
             "value": 1
+        },
+        {
+            "kind": "i64",
+            "name": "mediaTunnelVersion",
+            "value": 1
+        },
+        {
+            "kind": "i64",
+            "name": "mediaRelayRoutingVersion",
+            "value": 1
         }
     ],
     "commands": [
@@ -2636,6 +2646,12 @@
                     ],
                     "headphonesMixVersion": [
                         "headphonesMixVersion"
+                    ],
+                    "mediaTunnelVersion": [
+                        "mediaTunnelVersion"
+                    ],
+                    "mediaRelayRoutingVersion": [
+                        "mediaRelayRoutingVersion"
                     ],
                     "receiverAudioVersion": [
                         "receiverAudioVersion"

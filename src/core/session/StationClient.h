@@ -355,6 +355,10 @@
 //               setCfcCompressionWanted() and cfcCompressionReceived (the
 //               Core's txCfcCompression stream). J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-27: iPhone app plan Task 29 step 2b (R-IOS-16, R-IOS-08): the
+//               web relay's leg (RelayLeg) and its per-connection candidate
+//               sources; the computer's own proxy settings (SystemProxy).
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QAbstractSocket>
@@ -395,6 +399,7 @@ class RadioModel;
 class RendezvousDialer;
 class SessionTransport;
 class SwitchableTransport;
+class MediaTunnel;
 class RemoteDevicesState;
 class SettingsProxy;
 class TransmitState;
@@ -415,7 +420,9 @@ struct StationConnectionAttempt {
     /// 28, records it).
     /// Service (iPhone app plan Task 29): through the internet service,
     /// before the connection shows whether it went through the relay.
-    enum class Path { ThisNetwork, Direct, Relay, Service };
+    /// WebRelay (step 2b): through the web relay on the service's name
+    /// (the rendezvous document, section 12).
+    enum class Path { ThisNetwork, Direct, Relay, Service, WebRelay };
     enum class Outcome {
         Trying,
         Connected,
@@ -428,12 +435,17 @@ struct StationConnectionAttempt {
         RelayOff,         ///< the Core has the relay turned off
         CoreTooOld,       ///< the Core does not answer through the service
         MovedOn,          ///< connected, then the session moved to a better path
+        // Step 2b: the web relay ended the leg; Try::reason holds its words.
+        WebRelayEnded,
     };
     struct Try {
         Path path = Path::Direct;
         /// host:port as the operator would type it.
         QString address;
         Outcome outcome = Outcome::Trying;
+        /// Step 2b: the words to show for this line in place of the
+        /// outcome's (the web relay's end, section 12.4), when set.
+        QString reason;
     };
 
     QDateTime started;
@@ -496,6 +508,18 @@ public:
     /// alive, and which side that is is not knowable in advance.
     static constexpr int kDefaultHeartbeatIntervalMs = 20000;
     static constexpr int kDefaultMaxMissedPongs = 2;
+    /// Task 29 step 2b (fast failure detection): on a path through a relay
+    /// (TURN or the web relay) or with media in the WebSocket tunnel, the
+    /// window pings this often instead, so a link that died is found in
+    /// kMaxMissedPongs of these (4 to 6 s), not 40 to 60 s. Never longer
+    /// than the heartbeat set (setHeartbeatIntervalMs), and not at all
+    /// while the heartbeat is off.
+    static constexpr int kRelayedHeartbeatIntervalMs = 2000;
+    /// The cadence in use now (kRelayedHeartbeatIntervalMs on such a path).
+    int effectiveHeartbeatIntervalMs() const;
+    /// Step 2b: media runs in the WebSocket tunnel (the media controller
+    /// says so), which counts as a relayed path for the heartbeat.
+    void setMediaTunnelInUse(bool inUse);
 
     /// How often locally-observed property changes are drained toward the
     /// station. See StationServer::kDefaultDeltaFlushMs for the same
@@ -626,6 +650,13 @@ public:
     /// (DataChannelTransport::mediaIceConfiguration()); none for a
     /// WebSocket session.
     std::optional<IceConfiguration> sessionIceConfiguration() const;
+    /// Task 29 step 2b (link section 21, "The media tunnel"): the Core told
+    /// mediaTunnelVersion 1, so the media start may declare the tunnel even
+    /// before a later path move to a direct WebSocket.
+    bool mediaTunnelAvailable() const;
+    /// The ICE settings for media over the tunnel (made on first use on
+    /// this session's transport); none unless the current path carries binary.
+    std::optional<IceConfiguration> mediaTunnelIceConfiguration();
 
     /// iPhone app plan Task 29 (R-IOS-16; link section 21): where the
     /// paired Core can be reached through the internet service: the
@@ -661,6 +692,10 @@ public:
     /// Test seams: the upgrade schedule (PathRacer::kUpgradeRetryMs; the
     /// last repeats), and the rendezvous rung's deadlines in a race.
     void setUpgradeScheduleForTest(const QList<int>& delaysMs) { m_upgradeScheduleMs = delaysMs; }
+    /// Test seams (Task 29 step 2a re-review, Minor 14): the upgrade
+    /// schedule's step, and whether a move is waiting for its ticket.
+    int upgradeAttemptForTest() const { return m_upgradeAttempt; }
+    bool upgradeUnderWayForTest() const { return m_upgrade.has_value(); }
     void setServiceRungDeadlinesForTest(int dialMs, int answerMs)
     {
         m_serviceDialDeadlineMs = dialMs;
@@ -1601,6 +1636,7 @@ private:
     QTimer* m_handshakeDeadlineTimer = nullptr;
     int m_handshakeDeadlineMs = kStationHandshakeDeadlineMs;
     int m_heartbeatIntervalMs = kDefaultHeartbeatIntervalMs;
+    bool m_mediaTunnelInUse = false;
     int m_maxMissedPongs = kDefaultMaxMissedPongs;
     int m_pingsAwaitingPong = 0;
 
@@ -1695,6 +1731,8 @@ private:
     /// The ICE settings of the connection through the service this session
     /// left, so its media keeps the service's STUN server (link 21.3).
     std::optional<IceConfiguration> m_serviceIce;
+    /// Task 29 step 2b: the media tunnel on this session's transport.
+    std::shared_ptr<MediaTunnel> m_mediaTunnel;
     bool m_serviceDialing = false;
     int m_dialIndex = 0;
     QString m_planToken;

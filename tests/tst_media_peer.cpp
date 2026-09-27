@@ -872,8 +872,15 @@ void TestMediaPeer::iceSettingsReachTheTransport()
     turn.username = QStringLiteral("1800086400:aaaaaaaaaaaaaaaaaaaaaaaaaa");
     turn.password = QUuid::createUuid().toString(QUuid::WithoutBraces);
     QCOMPARE(ice.setRelay(turn, 1), 1);
+    // Task 29 step 2b: ICE with no server of its own (the media tunnel's
+    // settings) gathers at once; the service's STUN and relay take longer.
+    peer.setIceConfiguration(IceConfiguration::throughRendezvous(
+        {}, false, AddressFamilies{}, HostFamilies{}));
+    QVERIFY(peer.usesIce());
+    QVERIFY(!peer.gathersFromServers());
     peer.setIceConfiguration(ice);
     QVERIFY(peer.usesIce());
+    QVERIFY(peer.gathersFromServers());
     QVERIFY(peer.start(IMediaTransport::Role::Answerer, QLatin1String(kConnectionA)));
     const std::optional<IceConfiguration> started = transports.constLast()->startedIce;
     QVERIFY(started.has_value());

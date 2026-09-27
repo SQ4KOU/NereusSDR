@@ -24,9 +24,14 @@
 //               for selectedPath(). J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
 //
+//   2026-09-27: iPhone app plan Task 29 step 2b (R-IOS-16, R-IOS-08): the
+//               web relay's leg (RelayLeg) and its per-connection candidate
+//               sources; the computer's own proxy settings (SystemProxy).
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/media/LibDataChannelMediaTransport.h"
+#include "core/session/CandidateSourceLease.h"
 #include "core/session/media/PcmAudioCodec.h"
 
 #include <QDebug>
@@ -487,6 +492,7 @@ struct LibDataChannelMediaTransport::Private {
     // Task 27: the ICE settings of a connection through the remote access
     // service, and where its gathering stands.
     std::optional<IceConfiguration> ice;
+    QString connectionId;
     bool gatherRequested = false;
     bool gatheringStarted = false;
     QList<IceRelayServer> relays;
@@ -498,6 +504,12 @@ struct LibDataChannelMediaTransport::Private {
     int acceptedCandidates = 0;
     /// The far end's relay candidates, address and port (selectedPath()).
     QList<QPair<QString, quint16>> farEndRelays;
+    // Task 29 step 2b: this connection's own candidate source on the media
+    // lane (the web relay's leg, or the direct link's tunnel).
+    std::shared_ptr<CandidateSourceLease> candidateSourceLease;
+    // Its candidates before the remote description (an offerer gathers
+    // first): the agent takes remote candidates only after it.
+    QStringList pendingSourceCandidates;
     std::chrono::steady_clock::time_point lastRtpTimingWarning;
 };
 
@@ -563,6 +575,11 @@ bool LibDataChannelMediaTransport::start(const StartOptions& options)
         config.enableIceTcp = false;
         config.iceServers.clear();
         d->ice = options.ice;
+        d->connectionId = options.connectionId;
+        if (options.ice && options.ice->hasCandidateSourceFactory()) {
+            d->candidateSourceLease = CandidateSourceLease::create(*options.ice);
+            config.iceTransportLifetime = d->candidateSourceLease;
+        }
         d->gatherRequested = false;
         d->gatheringStarted = false;
         d->relays.clear();
@@ -840,6 +857,22 @@ void LibDataChannelMediaTransport::gatherIfReady()
     } catch (const std::exception& error) {
         emit errorOccurred(QString::fromUtf8(error.what()));
     }
+    // Task 29 step 2b (the step 2a review's Minor 10): the media agent gets
+    // its own source on the media lane too.
+    if (d->candidateSourceLease) {
+        const QPointer<LibDataChannelMediaTransport> self(this);
+        d->candidateSourceLease->start(IceConfiguration::kMediaLane, d->connectionId,
+                                       [self](const QString& candidate) {
+            if (!self) {
+                return;
+            }
+            if (!self->d->remoteDescriptionAccepted) {
+                self->d->pendingSourceCandidates.append(candidate);
+                return;
+            }
+            self->acceptCandidate(candidate, QString());
+        });
+    }
 }
 
 std::optional<MediaIcePath> LibDataChannelMediaTransport::selectedPath() const
@@ -903,6 +936,11 @@ void LibDataChannelMediaTransport::stopInternal(bool notify)
     d->remoteDescribesMicLossless = false;
     d->acceptedCandidates = 0;
     d->farEndRelays.clear();
+    // The ICE transport retains the source/socket lease through its real
+    // asynchronous teardown. Releasing this wrapper's copy must not release
+    // the loopback port while the old ICE agent can still send.
+    d->candidateSourceLease.reset();
+    d->pendingSourceCandidates.clear();
     d->ice.reset();
     d->gatherRequested = false;
     d->gatheringStarted = false;
@@ -1013,6 +1051,9 @@ bool LibDataChannelMediaTransport::acceptDescription(const QString& sdp,
         if (d->role == Role::Answerer) {
             d->peer->setLocalDescription(rtc::Description::Type::Answer);
             gatherIfReady();
+        }
+        for (const QString& candidate : std::exchange(d->pendingSourceCandidates, {})) {
+            acceptCandidate(candidate, QString());
         }
         return true;
     } catch (const std::exception& error) {

@@ -47,6 +47,10 @@
 //               kAnswerDeadlineMs in plain words (link section 21.1). J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-27: iPhone app plan Task 29 step 2b (R-IOS-16, R-IOS-08): the
+//               web relay's leg (RelayLeg) and its per-connection candidate
+//               sources; the computer's own proxy settings (SystemProxy).
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/IceConfiguration.h"
@@ -69,6 +73,7 @@ namespace NereusSDR {
 class ClientDeviceIdentity;
 class DataChannelTransport;
 class RendezvousClient;
+class RelayLeg;
 
 class RendezvousDialer : public QObject {
     Q_OBJECT
@@ -133,9 +138,17 @@ public:
     bool relayOffered() const { return m_relayOffered; }
     /// The Core's answer arrived.
     bool answered() const { return m_answered; }
+    /// The service sent a relay grant for this introduction: the Core
+    /// allowed the relay (rendezvous section 12.1).
+    bool relayGranted() const { return m_relayGranted; }
 
     /// The ICE settings of the connection, the relay included once known.
     std::optional<IceConfiguration> iceConfiguration() const { return m_ice; }
+    /// Task 29 step 2b: this attempt's leg to the web relay (null without
+    /// the relay), and how it ended, if it has.
+    std::shared_ptr<RelayLeg> relayLeg() const { return m_leg; }
+    QString webRelayEndCode() const { return m_legEndCode; }
+    QString webRelayEndWords() const { return m_legEndWords; }
 
 signals:
     /// The control channel opened. The receiver takes `transport` (it has
@@ -143,6 +156,9 @@ signals:
     void ready(NereusSDR::DataChannelTransport* transport);
     /// The attempt ended without a connection. `reason` is plain words.
     void failed(const QString& reason);
+    /// Task 29 step 2b: the web relay ended this attempt's leg (section
+    /// 12.4's code and words).
+    void webRelayEnded(const QString& code, const QString& words);
 
 private:
     void fail(const QString& reason);
@@ -165,6 +181,10 @@ private:
     bool m_coreDidNotAnswer = false;
     bool m_coreAnswersIntroductions = false;
     bool m_relayOffered = false;
+    bool m_relayGranted = false;
+    std::shared_ptr<RelayLeg> m_leg;
+    QString m_legEndCode;
+    QString m_legEndWords;
     bool m_started = false;
     bool m_done = false;
     bool m_answered = false;

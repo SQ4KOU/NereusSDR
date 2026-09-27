@@ -65,6 +65,10 @@
 //               Anthropic Claude Code.
 //   2026-09-27: setLibraryLogForTest() (R-R3-49). J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-27: iPhone app plan Task 29 step 2b (R-IOS-16, R-IOS-08): the
+//               web relay's leg (RelayLeg) and its per-connection candidate
+//               sources; the computer's own proxy settings (SystemProxy).
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/IceConfiguration.h"
@@ -75,12 +79,15 @@
 #include <QElapsedTimer>
 #include <QList>
 #include <QString>
+#include <QStringList>
 
 #include <functional>
 #include <memory>
 #include <optional>
 
 namespace NereusSDR {
+
+class CandidateSourceLease;
 
 /// The chunking and the heartbeat bytes of the control data channel, apart
 /// from any connection: what the transport runs and what the conformance
@@ -217,6 +224,12 @@ public:
 
     /// The candidate pair the connection settled on, once it has.
     std::optional<MediaIcePath> selectedPath() const;
+    /// Test seam (Task 29 step 2a re-review, Minor 7): when set, every
+    /// connection reports what this returns for it instead of the agent's
+    /// pair. Empty function: the agent's own.
+    using SelectedPathOverride =
+        std::function<std::optional<MediaIcePath>(const DataChannelTransport*)>;
+    static void setSelectedPathOverrideForTest(SelectedPathOverride override);
     /// The ICE settings it was started with, the relay included once known.
     std::optional<IceConfiguration> iceConfiguration() const { return m_options.ice; }
     /// The ICE settings the session's media connection uses (the Task 28
@@ -237,7 +250,9 @@ public:
         if (!control) {
             return std::nullopt;
         }
-        if (controlPath && !controlPath->relayed()) {
+        // Task 29 step 2b: over the web relay the session's media may need
+        // TURN too (and keeps the relay's leg, which every copy carries).
+        if (controlPath && !controlPath->relayed() && !controlPath->viaLoopbackShim()) {
             return control->withoutOwnRelay();
         }
         return control;
@@ -353,6 +368,9 @@ private:
     QList<IceRelayServer> m_relays;
     int m_acceptedCandidates = 0;
     QList<QPair<QString, quint16>> m_farEndRelays;
+    /// Step 2b: this connection's own candidate source on the control lane.
+    std::shared_ptr<CandidateSourceLease> m_candidateSourceLease;
+    QStringList m_pendingSourceCandidates;
     quint32 m_nextPingId = 1;
     SessionTransportTelemetry m_telemetry;
     QElapsedTimer m_pongAge;
