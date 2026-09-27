@@ -31,6 +31,11 @@
 //   2026-09-25: R-R3-49 (group A fix wave, M6): ATT on TX, its value and
 //                 Force ATT schedule the Core's debounced save.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-27: A11 / R-R3-49 (parity Task 31): the display's TX attenuator
+//                 offset follows every TX step attenuation applied, as
+//                 Thetis sets Display.TXAttenuatorOffset beside each
+//                 NetworkIO.SetTxAttenData. J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -548,11 +553,26 @@ void StepAttenuatorController::setAttOnTxValue(int dB)
             conn->setTxStepAttenuation(dBcopy); //[2.10.3.6]MW0LGE att_fixes
         });
     }
+    // Display.TXAttenuatorOffset = _tx_attenuator_data (or 0), as quoted
+    // above (console.cs:10620-10626 [v2.10.3.15]).
+    setTxAttenuatorOffset(m_attOnTxEnabled ? dB : 0); //[2.10.3.6]MW0LGE att_fixes
 #ifdef NEREUS_BUILD_TESTS
     if (m_attOnTxEnabled) {
         m_lastTxStepAttDb = dB;
     }
 #endif
+}
+
+void StepAttenuatorController::setTxAttenuatorOffset(int dB)
+{
+    // From Thetis display.cs:1365-1370 [v2.10.3.15]:
+    //   private static float tx_attenuator_offset = 0.0f;
+    //   public static float TXAttenuatorOffset { get; set; }
+    if (m_txAttOffsetDb == dB) {
+        return;
+    }
+    m_txAttOffsetDb = dB;
+    emit txAttenuatorOffsetChanged(dB);
 }
 
 int StepAttenuatorController::attOnTxValue() const
@@ -653,6 +673,7 @@ void StepAttenuatorController::onMoxHardwareFlipped(bool isTx)
                     conn->setTxStepAttenuation(0); //[2.10.3.6]MW0LGE att_fixes
                 });
             }
+            setTxAttenuatorOffset(0); //[2.10.3.6]MW0LGE att_fixes
 #ifdef NEREUS_BUILD_TESTS
             m_lastTxStepAttDb = 0;
 #endif
@@ -719,6 +740,8 @@ void StepAttenuatorController::onMoxHardwareFlipped(bool isTx)
                     conn->setTxStepAttenuation(txAtt); //[2.10.3.6]MW0LGE att_fixes
                 });
             }
+            // SetupForm.ATTOnTX = txAtt; //[2.10.3.6]MW0LGE att_fixes NOTE: this will eventually call Display.TXAttenuatorOffset with the value
+            setTxAttenuatorOffset(txAtt);
 #ifdef NEREUS_BUILD_TESTS
             m_lastTxStepAttDb = txAtt;
 #endif
@@ -741,6 +764,7 @@ void StepAttenuatorController::onMoxHardwareFlipped(bool isTx)
                     conn->setTxStepAttenuation(0); //[2.10.3.6]MW0LGE att_fixes
                 });
             }
+            setTxAttenuatorOffset(0); //[2.10.3.6]MW0LGE att_fixes
 #ifdef NEREUS_BUILD_TESTS
             m_lastTxStepAttDb = 0;
 #endif

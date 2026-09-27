@@ -35,6 +35,10 @@
 //   2026-09-25 - R-R3-49 (remote-window parity Task 13): AlexTxFilterOptions
 //                 and Hl2TxTiming (plan C5, C6). J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-27 - A11 / R-R3-49 (remote-window parity Task 31): the container
+//                 DUP button leaves Fdx (display duplex is built); Fdx is the
+//                 status bar's FDX, full duplex, still unbuilt. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -75,7 +79,7 @@ enum class UnbuiltFeature {
     AntennaRxTxSplit, // The antenna box's receive/transmit split: the container antenna Rx/Tx button
     Voice,            // Voice Rec/Play container control; VFO flag record and play; DVK on the status bar;
                       // the container Play and Rec buttons
-    Fdx,              // FDX on the status bar; the container DUP button
+    Fdx,              // FDX on the status bar (full duplex; the DUP button is display duplex, built)
     Navigation,       // Setup > General > Navigation
     Sam,              // Setup > DSP > AM/SAM synchronous AM options (built after R4)
     Skins,            // Setup > Appearance > Skins

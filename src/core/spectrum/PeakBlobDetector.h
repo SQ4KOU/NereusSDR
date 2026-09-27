@@ -25,6 +25,10 @@
 //                 so the Core can run it for an app's display (iPhone app
 //                 Task 20, R-IOS-27). J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-27 - clearMaximums(), ResetBlobMaximums(rx, bClear=true), for a
+//                 display duplex change while keyed (parity Task 31, A11).
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -113,6 +117,11 @@ public:
     // ---- Configuration setters ----
 
     void setEnabled(bool e)            { m_enabled = e; if (!e) { m_blobs.clear(); } }
+    /// From Thetis display.cs:4542-4561 [v2.10.3.15] ResetBlobMaximums(rx,
+    /// bClear = true): every slot disabled at the lowest level, whatever
+    /// the hold settings. Display.DisplayDuplex calls it when DUP changes
+    /// while keyed (display.cs:514-521 [v2.10.3.15]).
+    void clearMaximums()               { m_blobs.clear(); }
     /// From Thetis Display.cs:4407 [v2.10.3.13] m_nNumberOfMaximums = 3; max 20.
     void setCount(int n)               { m_count = qMax(1, n); }
     /// From Thetis Display.cs:4401 [v2.10.3.13] m_bInsideFilterOnly = false.

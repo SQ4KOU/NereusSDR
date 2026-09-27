@@ -562,6 +562,9 @@
 //               removed, reaches the Core's TX analyzer at once, on and
 //               off the air. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-27: Parity Task 31 (A11, R-R3-49): txDisplayVersion 3; a media
+//               peer that declares 3 may add `duplex` to its subscribes.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -7274,7 +7277,9 @@ int StationServer::txDisplayVersion() const
     // media display channel and comes from the Core's own TX analyzer.
     // Parity Task 30 (A12): 2, the Core applies a window's Setup > Display
     // > TX Display analyzer settings to that analyzer at once.
-    return m_mediaEnabled && m_radioModel && m_radioModel->txDisplayFeed() != nullptr ? 2 : 0;
+    // Parity Task 31 (A11): 3, a subscribe may carry `duplex` (display
+    // duplex): that display keeps the receiver while keyed.
+    return m_mediaEnabled && m_radioModel && m_radioModel->txDisplayFeed() != nullptr ? 3 : 0;
 }
 
 bool StationServer::txDisplayAvailable(quint64 epoch) const

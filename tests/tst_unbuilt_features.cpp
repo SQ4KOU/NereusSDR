@@ -98,6 +98,7 @@
 #include <functional>
 #include <memory>
 
+#include "OperatorWording.h"
 #include "core/AppSettings.h"
 #include "core/BuildIdentity.h"
 #include "core/RadioDiscovery.h"
@@ -675,7 +676,9 @@ QMap<F, QList<Surface>> surfaces()
                     }
                     return false;
                 }}};
-    map[F::Fdx] = {status(QStringLiteral("statusFdxLabel")), functionButton(QStringLiteral("DUP"), B::Dup)};
+    // Parity Task 31: the container DUP button is display duplex, built;
+    // FDX (full duplex) is the status bar label only.
+    map[F::Fdx] = {status(QStringLiteral("statusFdxLabel"))};
     map[F::Navigation] = {setupPage(QStringLiteral("Navigation"))};
     map[F::Sam] = {onPage(QStringLiteral("AM/SAM"), QStringLiteral("SAM group"), named(QStringLiteral("samGroup")))};
     map[F::Skins] = {setupPage(QStringLiteral("Skins"))};
@@ -924,6 +927,43 @@ private slots:
                                 + others.join(QStringLiteral("; "))));
         }
         UnbuiltFeatures::resetForTest();
+        QVERIFY(sessions.replace({}, false));
+    }
+
+    // Parity Task 31 (A11): View > Display duplex (DUP) in both windows,
+    // off by default; a window running its own DSP changes the saved
+    // setting, a remote window whose Core is below txDisplayVersion 3 shows
+    // it disabled with the reason.
+    void theDisplayDuplexMenuItemIsInBothWindows()
+    {
+        GuiSessionCoordinator sessions;
+        for (bool remote : {false, true}) {
+            Hosts hosts(sessions, remote);
+            QAction* action =
+                hosts.window()->findChild<QAction*>(QStringLiteral("actionDisplayDuplex"));
+            QVERIFY(action != nullptr);
+            QVERIFY(action->isVisible());
+            QVERIFY(action->isCheckable());
+            QCOMPARE(action->text(), QStringLiteral("Display duplex (DUP)"));
+            QVERIFY(!action->isChecked());
+            QVERIFY(OperatorWording::isPlain(action->toolTip()));
+            if (remote) {
+                QVERIFY(!action->isEnabled());
+                QCOMPARE(action->toolTip(),
+                         QStringLiteral("This Core does not show the receiver while "
+                                        "transmitting for this app. Updating the Core may "
+                                        "help."));
+            } else {
+                QVERIFY(action->isEnabled());
+                action->trigger();
+                QVERIFY(action->isChecked());
+                QCOMPARE(AppSettings::instance().value(QStringLiteral("DisplayDuplex")).toString(),
+                         QStringLiteral("True"));
+                action->trigger();
+                QCOMPARE(AppSettings::instance().value(QStringLiteral("DisplayDuplex")).toString(),
+                         QStringLiteral("False"));
+            }
+        }
         QVERIFY(sessions.replace({}, false));
     }
 

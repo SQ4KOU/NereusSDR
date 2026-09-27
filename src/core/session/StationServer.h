@@ -1025,9 +1025,9 @@ public:
     // station.rescanRadios, station.setRadioModel and station.forgetRadio
     // verbs; 0 otherwise.
     int stationRadiosVersion() const;
-    // R-R3-49 / A11 (parity Task 28): txDisplayVersion. 2 (parity Task 30:
-    // the Core applies a window's TX Display analyzer settings at once)
-    // while media is on and the Core has a TX analyzer
+    // R-R3-49 / A11 (parity Task 28): txDisplayVersion. 3 (parity Task 30:
+    // the Core applies a window's TX Display analyzer settings at once;
+    // parity Task 31: a subscribe may carry `duplex`) while media is on and the Core has a TX analyzer
     // (RadioModel::txDisplayFeed); 0 otherwise. txDisplayAvailable(epoch): that session's peer agreed minor
     // 11 and was told it, so its media start may declare it.
     int txDisplayVersion() const;

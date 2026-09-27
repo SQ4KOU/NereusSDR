@@ -314,6 +314,13 @@
 //                keys and their defaults come from core/ControlRanges.h,
 //                the table the Core's catalogue reads. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-27 - Parity Task 31 (A11, R-R3-49): display duplex (DUP), the
+//                window's DisplayDuplex setting (off by default as Thetis),
+//                View > Display duplex (DUP) and the container DUP button,
+//                applied to the MOX display controller, this window's noise
+//                blanking rule and a remote window's subscriptions; the TX
+//                Display Cal Offset reaches every pan. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -1652,6 +1659,49 @@ void MainWindow::refreshRemoteDeviceScreens()
     refreshTakeReceiverOffer();
 }
 
+// Parity Task 31 (A11, R-R3-49): display duplex (DUP). The window's
+// setting DisplayDuplex, changed from View > Display duplex (DUP) or the
+// container DUP button, saved at once.
+void MainWindow::setDisplayDuplexSetting(bool on)
+{
+    if (m_displayDuplexSetting == on) {
+        return;
+    }
+    m_displayDuplexSetting = on;
+    MoxDisplayController::saveDisplayDuplex(on);
+    applyDisplayDuplex();
+}
+
+// The setting to what the pan does (MoxDisplayController: none in a remote
+// window whose Core is below txDisplayVersion 3), to this window's own
+// noise blanking rule (RadioModel, a window running its own DSP), and to
+// the two controls: checked from the setting, disabled with the reason
+// when DUP cannot apply.
+void MainWindow::applyDisplayDuplex()
+{
+    if (m_moxDisplay) {
+        m_moxDisplay->setDisplayDuplex(m_displayDuplexSetting);
+    }
+    if (m_radioModel) {
+        m_radioModel->setLocalDisplayDuplex(m_displayDuplexSetting);
+    }
+    const QString reason = MoxDisplayController::displayDuplexUnavailableReason(m_radioModel);
+    if (m_displayDuplexAction) {
+        const QSignalBlocker block(m_displayDuplexAction);
+        m_displayDuplexAction->setChecked(m_displayDuplexSetting);
+        m_displayDuplexAction->setEnabled(reason.isEmpty());
+        const QString tip = reason.isEmpty()
+            ? QStringLiteral("Keep the receiver on the transmitting panadapter while "
+                             "transmitting, under the transmit grid and colours.")
+            : reason;
+        m_displayDuplexAction->setToolTip(tip);
+        m_displayDuplexAction->setStatusTip(tip);
+    }
+    if (m_containerButtons) {
+        refreshContainerControls();
+    }
+}
+
 void MainWindow::ensureRemoteSession()
 {
     if (!m_station.isRemote() || !m_radioModel || m_shuttingDown) { return; }
@@ -1769,6 +1819,15 @@ void MainWindow::ensureRemoteSession()
         }
         m_moxDisplay->setSource(m_remoteTxDisplaySource.get());
         m_moxDisplay->followStation(m_stationClient);
+        // Parity Task 31 (A11): DUP. The Core keeps the transmitting pan's
+        // receive frames for a subscription that says `duplex` (version 3);
+        // the menu item and the DUP button follow the Core's version.
+        connect(m_moxDisplay, &MoxDisplayController::displayDuplexChanged,
+                m_remoteMedia, &RemoteMediaController::setDisplayDuplex);
+        connect(m_radioModel, &RadioModel::stationTxDisplayVersionChanged,
+                this, &MainWindow::applyDisplayDuplex);
+        applyDisplayDuplex();
+        m_remoteMedia->setDisplayDuplex(m_moxDisplay->displayDuplex());
         m_remoteTelemetry = new RemoteTelemetryController(
             m_stationClient, m_remoteMedia, this);
         // R-R3-32 (parity Task 6): the Core's PA readings reach this
@@ -3673,6 +3732,29 @@ void MainWindow::ensureOverlayPanels()
         wireSpectrumSliceControls(sw, panId);
         wireWidebandExtensionForTest(sw, m_radioModel, m_panStack, panId);
 
+        // Parity Task 31 (A11): the keyed trace's calibration
+        // (SpectrumWidget::displayCalOffsetDb; Thetis display.cs:4820-4850
+        // [v2.10.3.15], RX1Offset): Setup > Calibration's TX Display Cal
+        // Offset, and for display duplex the preamp half of the receive
+        // calibration and the TX attenuator offset (applyKeyedDisplayOffsets
+        // keeps every pan current).
+        {
+            const CalibrationController& cal = m_radioModel->calibrationController();
+            sw->setTxDisplayCalOffsetDb(static_cast<float>(cal.txDisplayOffsetDb()));
+            sw->setRxPreampOffsetDb(static_cast<float>(m_radioModel->rxPreampOffsetDb()));
+            if (m_stepAttController) {
+                sw->setTxAttenuatorOffsetDb(
+                    static_cast<float>(m_stepAttController->txAttenuatorOffsetDb()));
+            }
+            const QPointer<SpectrumWidget> guard(sw);
+            connect(&cal, &CalibrationController::changed, sw, [this, guard]() {
+                if (!guard.isNull() && m_radioModel) {
+                    guard->setTxDisplayCalOffsetDb(static_cast<float>(
+                        m_radioModel->calibrationController().txDisplayOffsetDb()));
+                }
+            });
+        }
+
         if (panId != QStringLiteral("pan-0")) {
             // Still pan-0-excluded: its spot, connection and MaxBin hooks are
             // wired one-shot elsewhere in this file (the activeSpectrumWidget()
@@ -4752,6 +4834,13 @@ void MainWindow::buildUI()
         // Desktop remote transmit: the Core's own reason when it gave one.
         hooks.remoteTransmitReasonNow = [this] { return remoteTransmitReason(); };
         hooks.spectrumFor = [this](SliceModel* s) { return spectrumForSlice(s); };
+        // Parity Task 31 (A11): DUP, the window's DisplayDuplex setting, as
+        // View > Display duplex (DUP) sets it.
+        hooks.displayDuplexOn = [this] { return m_displayDuplexSetting; };
+        hooks.setDisplayDuplex = [this](bool on) { setDisplayDuplexSetting(on); };
+        hooks.displayDuplexReason = [this] {
+            return MoxDisplayController::displayDuplexUnavailableReason(m_radioModel);
+        };
         // R-R3-49: VAX 1 / VAX 2 open and close this computer's VAX
         // outputs, as Setup > Audio > VAX does (live in a remote window).
         hooks.vaxDevices = m_radioModel->localAudioDevices();
@@ -5360,6 +5449,25 @@ void MainWindow::buildUI()
     // --- Phase 3G-13: Step attenuator + ADC overload ---
     m_stepAttController = new StepAttenuatorController(this);
     m_radioModel->setStepAttController(m_stepAttController);
+    // Parity Task 31 (A11): Thetis Display.TXAttenuatorOffset and
+    // Display.RX1PreampOffset reach every pan (the keyed trace with display
+    // duplex adds the first and leaves out the second, RX1Offset).
+    {
+        const auto pushKeyedOffsets = [this]() {
+            if (!m_panStack || !m_radioModel || !m_stepAttController) { return; }
+            for (PanadapterApplet* applet : m_panStack->allApplets()) {
+                SpectrumWidget* pan = applet ? applet->spectrumWidget() : nullptr;
+                if (!pan) { continue; }
+                pan->setTxAttenuatorOffsetDb(
+                    static_cast<float>(m_stepAttController->txAttenuatorOffsetDb()));
+                pan->setRxPreampOffsetDb(static_cast<float>(m_radioModel->rxPreampOffsetDb()));
+            }
+        };
+        connect(m_stepAttController, &StepAttenuatorController::txAttenuatorOffsetChanged,
+                this, pushKeyedOffsets);
+        connect(m_radioModel, &RadioModel::rxMeterOffsetChanged, this, pushKeyedOffsets);
+        pushKeyedOffsets();
+    }
     // R-R3-46 / R-R3-11: each band remembers its attenuator and preamp with
     // a local radio, as through the Core: the controller follows slice A's
     // receive band (Thetis rx1_band) and the transmit slice's band and mode
@@ -5422,6 +5530,8 @@ void MainWindow::buildUI()
             m_moxDisplay->setSource(m_localTxDisplaySource.get());
             m_moxDisplay->followLocalRadio();
         }
+        // Parity Task 31: DUP from the window's setting.
+        applyDisplayDuplex();
 
         // ── Phase 3M-4 Task 12: SpectrumWidget IMD overlay state wiring ──────
         // From Thetis display.cs:5008 [v2.10.3.13] show condition:
@@ -5435,7 +5545,9 @@ void MainWindow::buildUI()
         //   show_imd_measurements  <- PureSignal::show2ToneMeasurementsChanged
         //                              (mirrors Thetis Display.ShowIMDMeasurments,
         //                              display.cs:304-311 [v2.10.3.13])
-        // displayduplex stays at SpectrumWidget's default (true) — see header.
+        // displayduplex is the window's DUP (parity Task 31), set on the
+        // transmitting pan by MoxDisplayController; off by default as Thetis,
+        // so the overlay shows during two-tone only with DUP on.
         if (activeSpectrumWidget()) {
             activeSpectrumWidget()->setShowIMDMeasurements(
                 AppSettings::instance().value(
@@ -7745,6 +7857,23 @@ void MainWindow::buildMenuBar()
         // R-R3-49: hidden until display modes are built.
         UnbuiltFeatures::hideUnlessBuilt(displayModeMenu->menuAction(),
                                          UnbuiltFeature::DisplayMode);
+    }
+
+    // Parity Task 31 (A11, R-R3-49): display duplex (DUP), JJ's ruling Q5
+    // (2026-09-26): off by default as Thetis's _display_duplex
+    // (console.cs:15390-15395 [v2.10.3.15]), saved with this window
+    // (DisplayDuplex), as Thetis saves chkRX2SR with the console's check
+    // boxes (console.cs:3278-3288 [v2.10.3.15], addControlState). The
+    // container DUP button is the same setting.
+    {
+        m_displayDuplexSetting = MoxDisplayController::savedDisplayDuplex();
+        m_displayDuplexAction = viewMenu->addAction(QStringLiteral("Display duplex (DUP)"));
+        m_displayDuplexAction->setObjectName(QStringLiteral("actionDisplayDuplex"));
+        m_displayDuplexAction->setCheckable(true);
+        m_displayDuplexAction->setChecked(m_displayDuplexSetting);
+        connect(m_displayDuplexAction, &QAction::toggled, this,
+                [this](bool on) { setDisplayDuplexSetting(on); });
+        applyDisplayDuplex();
     }
 
     {

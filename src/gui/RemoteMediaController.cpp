@@ -57,6 +57,10 @@
 //               catalogue's `display` key reads (R-IOS-18, R-IOS-27,
 //               R-R3-08). J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-27: parity Task 31 (A11, R-R3-49): display duplex; the media
+//               start declares txDisplayVersion 3 to a Core that sends 3, and
+//               the subscribes carry `duplex` true while DUP is on. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 
 #include "gui/RemoteMediaController.h"
 #include "core/AppSettings.h"
@@ -378,6 +382,8 @@ struct RequestInputs {
     std::optional<int> decimation;
     // Parity Task 28: the transmit window, for a Core told txDisplayVersion.
     std::optional<DbmWindow> txDbmWindow;
+    // Parity Task 31: display duplex, for a Core told txDisplayVersion 3.
+    bool duplex = false;
 };
 
 // Parity Task 17 follow-up (R-R3-01, R-R3-04): the headroom a waterfall
@@ -568,6 +574,10 @@ QJsonObject requestFor(SpectrumWidget* widget, SliceModel* slice,
         // Parity Task 28 (R-R3-49, A11): txDisplayVersion 1.
         request.insert(QStringLiteral("txMinDbm"), inputs.txDbmWindow->minDbm);
         request.insert(QStringLiteral("txMaxDbm"), inputs.txDbmWindow->maxDbm);
+    }
+    if (inputs.duplex) {
+        // Parity Task 31 (R-R3-49, A11): txDisplayVersion 3; absent is false.
+        request.insert(QStringLiteral("duplex"), true);
     }
     return request;
 }
@@ -763,6 +773,10 @@ struct RemoteMediaController::Private {
     QPointer<PanadapterStack> stack;
     // Parity Task 28: this media start declared txDisplayVersion.
     bool txDisplayNegotiated = false;
+    // Parity Task 31: this media start declared txDisplayVersion 3, and the
+    // window's DUP as MoxDisplayController applies it.
+    bool displayDuplexNegotiated = false;
+    bool displayDuplex = false;
     // Parity Task 29: pans showing the transmit display (receive frames
     // held), and those whose Core sends none (the status line says so).
     QSet<QString> transmittingPans;
@@ -810,6 +824,7 @@ struct RemoteMediaController::Private {
         if (txDisplayNegotiated && widget) {
             inputs.txDbmWindow = transmitDbmWindow(widget);
         }
+        inputs.duplex = displayDuplexNegotiated && displayDuplex;
         return requestFor(widget, slice, client && client->remoteWidebandAvailable(), inputs);
     }
 
@@ -1548,6 +1563,27 @@ bool RemoteMediaController::isPanTransmitting(const QString& panId) const
 void RemoteMediaController::refreshTransmitView()
 {
     refreshSubscriptions();
+}
+
+void RemoteMediaController::setDisplayDuplex(bool on)
+{
+    if (d->displayDuplex == on) {
+        return;
+    }
+    d->displayDuplex = on;
+    if (d->displayDuplexNegotiated) {
+        refreshSubscriptions();
+    }
+}
+
+bool RemoteMediaController::displayDuplex() const
+{
+    return d->displayDuplex;
+}
+
+bool RemoteMediaController::displayDuplexNegotiated() const
+{
+    return d->displayDuplexNegotiated;
 }
 
 std::optional<SpectrumContextMessage> RemoteMediaController::heldTransmitContext(
@@ -2602,8 +2638,13 @@ void RemoteMediaController::start()
     // Parity Task 28 (R-R3-49, A11): likewise the transmit display, only to
     // a Core that sends it.
     d->txDisplayNegotiated = d->client && d->client->capabilities().txDisplayVersion >= 1;
+    // Parity Task 31: a Core at 3 is told 3, so its subscribes may carry
+    // `duplex`; any other declares 1, as before.
+    d->displayDuplexNegotiated = d->txDisplayNegotiated
+        && d->client->capabilities().txDisplayVersion >= 3;
     if (d->txDisplayNegotiated) {
-        startControl.insert(QStringLiteral("txDisplayVersion"), 1);
+        startControl.insert(QStringLiteral("txDisplayVersion"),
+                            d->displayDuplexNegotiated ? 3 : 1);
     }
     // Task 36: likewise the microphone line, only to a Core that takes it.
     if (micLine) {

@@ -330,6 +330,12 @@
 //                analyzer at once; stationTxDisplayVersion, the Core's
 //                txDisplayVersion as a remote window last heard it. J.J.
 //                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-27 - Parity Task 31 (A11, R-R3-49): display duplex and noise
+//                blanking. With DUP on at the key (this window's, or on a
+//                Core the transmit holder's), NB and NB2 go off on the
+//                transmit slice while keyed and come back at the unkey, as
+//                Thetis's UIMOXChangedTrue / False do. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1972,6 +1978,22 @@ public:
     /// (ruling 5.11). Local only.
     void setTransmitHolder(const QByteArray& holder);
 
+    // ── Parity Task 31 (A11, R-R3-49): display duplex (DUP) ─────────────
+    //
+    // Thetis turns noise blanking off while keyed with DUP on and restores
+    // it at the unkey (console.cs:29179 and :29213 [v2.10.3.15],
+    // UIMOXChangedTrue / UIMOXChangedFalse). Here the DUP that counts is
+    // the transmit holder's when a device holds transmit (a remote window,
+    // told to the Core by its media subscriptions), otherwise this
+    // window's own. Local only: a remote window's model follows the Core.
+    /// This window's DUP (the window's DisplayDuplex setting as it applies).
+    void setLocalDisplayDuplex(bool on);
+    bool localDisplayDuplex() const { return m_localDisplayDuplex; }
+    /// A remote device's DUP (DaemonMediaController, from its subscriptions).
+    void setDeviceDisplayDuplex(const QByteArray& deviceId, bool on);
+    /// The DUP the next key and unkey read: the holder's, else this window's.
+    bool transmitDisplayDuplex() const;
+
     /// iPhone app plan Task 35 (R-IOS-13): who is keyed. While MOX is on it
     /// names the transmit holder (a device's key, a program's key through
     /// its window, and VOX all name the device that holds transmit; the
@@ -3198,6 +3220,18 @@ public:
     // R-R3-46: 0 on a Remote model; the Core's readings and spectrum frames
     // already carry the Core's offset.
     double rxMeterOffsetDb() const;
+    // Parity Task 31 (A11): the preamp half of rxMeterOffsetDb(), Thetis
+    // RXPreampOffset(1) (console.cs:21029-21037 [v2.10.3.15]); the rest is
+    // the receive calibration. 0 on a Remote model.
+    double rxPreampOffsetDb() const;
+    // Parity Task 31 (A11): the display's calibration while keyed, Thetis
+    // RX1Offset (display.cs:4820-4850 [v2.10.3.15]) for the transmitting
+    // receiver: the TX Display Cal Offset, plus with display duplex on the
+    // receive calibration (rxMeterOffsetDb() less the preamp) and the TX
+    // attenuator offset (StepAttenuatorController::txAttenuatorOffsetDb).
+    // The Core calibrates a remote window's frames with it. 0 on a Remote
+    // model.
+    double keyedDisplayOffsetDb(bool displayDuplex) const;
 
 signals:
     void stationLinkStateChanged();
@@ -6080,6 +6114,12 @@ private:
     SliceModel* m_activeSlice{nullptr};
     // iPhone app Task 73: whose each slice is. Qt-parented to this model.
     SliceOwnership* m_sliceOwnership{nullptr};
+    // Parity Task 31: DUP, this window's and each remote device's, and the
+    // transmit slice's noise blanking saved at the key.
+    bool m_localDisplayDuplex{false};
+    QSet<QByteArray> m_deviceDisplayDuplex;
+    QPointer<SliceModel> m_nbSavedSlice;
+    NereusSDR::NbMode m_nbSavedMode{NereusSDR::NbMode::Off};
     // iPhone app plan Task 35.
     KeyedBy m_keyedBy;
     // iPhone app plan Task 38: the transmit time-out (Local only; Qt

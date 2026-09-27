@@ -46,6 +46,12 @@
 //               a session through the remote access service is longer by
 //               the gathering bound. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-27: parity Task 31 (A11, R-R3-49): display duplex. A Core at
+//               txDisplayVersion 3 is told 3 at media start, and while this
+//               window's DUP is on every subscribe carries `duplex` true, so
+//               the Core keeps the transmitting pan's receive frames while
+//               keyed. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//               Code.
 
 #include "core/session/media/DisplayBudget.h"
 #include "core/session/media/DisplayCodec.h"
@@ -251,6 +257,15 @@ public:
     /// Parity Task 29: the transmitting pan's view moved while keyed; ask
     /// the Core again now rather than on the next planner pass.
     void refreshTransmitView();
+    /// Parity Task 31 (A11): this window's display duplex (DUP), as
+    /// MoxDisplayController applies it. On a Core at txDisplayVersion 3 (told
+    /// 3 at media start), every subscribe carries `duplex` true while it is
+    /// on, and a change asks the Core again at once. Below 3 nothing is sent.
+    void setDisplayDuplex(bool on);
+    bool displayDuplex() const;
+    /// Whether this media start told the Core txDisplayVersion 3, so its
+    /// subscribes may carry `duplex`.
+    bool displayDuplexNegotiated() const;
     /// The Core's transmit context for the pan while it sends one (the
     /// newest accepted context marked `transmit`); none once a receive
     /// context replaced it. Media and transmit state travel on different

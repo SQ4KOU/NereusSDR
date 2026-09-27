@@ -536,13 +536,72 @@ the `txState` object (station link section 18.8), for the transmitting
 pan's high-SWR border. They do not depend on it: every Core that sends
 `txState` sends them, whatever its `txDisplayVersion`.
 
+**Display duplex (version 3).** Capability `txDisplayVersion=3`
+(remote-window parity Task 31, A11, R-R3-49), sent under the same condition
+as 1 and 2, adds display duplex (DUP), Thetis's DUP button
+(`console.cs:15390-15395 [v2.10.3.15]`, `_display_duplex`, false by default;
+`console.cs:37555-37575 [v2.10.3.15]`, "chkRX2SR is the DUPlex button"). A
+window whose Core sends 3 adds `txDisplayVersion` 3 to its `start`; a window
+whose Core sends 1 or 2 still declares 1. Only a peer that declared 3 may add
+one more field to a `subscribe`, `duplex` (boolean, absent is false); from any
+other peer, or as anything but a boolean, it is a subscribe of another shape.
+While the Core is keyed, an endpoint whose latest accepted subscribe carries
+`duplex` true is not a viewer of the transmit display even on the transmitting
+pan: it keeps its receive frames and every context it is sent says `transmit`
+false, as Thetis's DisplayThread keeps the receiver on the display while keyed
+with DUP on (`console.cs:24281-24338 [v2.10.3.15]`,
+`if (bLocalMox && !_display_duplex)`). A `subscribe` while keyed that adds or
+drops `duplex` swaps the endpoint at once: dropping it makes the endpoint a
+viewer (a context with `transmit` true, then transmit frames), adding it
+gives the endpoint back to the receiver (the next source frame sends a
+context with `transmit` false, then receive frames). The desktop sends
+`duplex` true on every subscription while its View > Display duplex (DUP)
+item or container DUP button is on, and omits it otherwise, so a window with
+DUP off sends exactly version 2's wire.
+
+The Core also takes each device's DUP from its subscriptions (any accepted
+subscription with `duplex` true) for noise blanking: at a key while that
+device holds transmit, NB and NB2 go off on the transmit slice, and at the
+unkey they come back if that device's DUP is still on, as Thetis's
+`UIMOXChangedTrue` and `UIMOXChangedFalse` do (`console.cs:29176-29213
+[v2.10.3.15]`). With no device holding transmit the Core's own window's DUP
+counts. A `duplex` change touches no radio setting when it arrives, so it is
+taken on and off the air.
+
+**Keyed calibration.** The Core calibrates what it sends while keyed as
+Thetis calibrates the transmitting receiver's display (RX1Offset,
+`display.cs:4820-4850 [v2.10.3.15]`), so a window adds no calibration of its
+own to a remote pan: transmit frames get the TX Display Cal Offset
+(`tx_display_cal_offset`, Setup > Calibration, the Core's
+`hardware/<mac>/cal/txDisplayOffset`, `setup.cs:14364 [v2.10.3.15]`) added to
+the analyzer's values before they are quantised; a `duplex` endpoint's
+receive frames on the transmitting pan get that offset plus the receive
+calibration without its preamp half (Thetis `RXCalibrationOffset(1)`) plus
+the transmit attenuator applied (Thetis `Display.TXAttenuatorOffset`, set
+beside every `SetTxAttenData`, `console.cs:10613-10622 [v2.10.3.15]`) in
+place of the receive calibration with its preamp. Every other frame keeps the
+receive calibration (`RadioModel::rxMeterOffsetDb`), as before.
+
+Everything else a window does with DUP is its own drawing: keyed with DUP on
+its transmitting pan keeps the receive span and bins under the red border,
+the transmit grid and the transmit waterfall levels (`display.cs:1782-1790`
+and `6420-6427 [v2.10.3.15]` read `localMox` only); the TX filter overlay sits
+at the VFO against the receive span with no XIT (`display.cs:4564-4594`,
+`console.cs:22144 [v2.10.3.15]`); a window running its own DSP applies the
+same keyed calibration itself; a DUP change while keyed resets the blob
+maxima and the active peak hold (`display.cs:514-521 [v2.10.3.15]`). On a Core that sends 0, 1, 2 or no entry the window shows
+its DUP controls disabled with "This Core does not show the receiver while
+transmitting for this app. Updating the Core may help." and its pan behaves
+as DUP off.
+
 `DaemonMediaController` (`reconcileTransmitDisplay`,
 `trySendTransmitFrame`) is the Core's code; `tst_remote_tx_display` and
 `tst_tx_display_feed` hold it. The desktop declares it at `start`, sends
 the transmit window and hands a transmit context and its frames on
 (`RemoteMediaController::transmitContextReceived`,
 `transmitFrameReceived`); drawing them is the MOX display controller's
-(parity Task 29).
+(parity Task 29). Display duplex is held by `tst_display_duplex` and the
+two `duplex` cases of `tst_remote_tx_display` (parity Task 31).
 
 ## Receiver audio (receiver-audio and receiver-audio-context)
 

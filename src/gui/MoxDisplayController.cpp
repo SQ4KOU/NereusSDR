@@ -11,10 +11,16 @@
 //                 #212 follow-up and the 3M-5 revive, 2026-05-07 to
 //                 2026-08-09) so a remote window makes the same ones.
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-27 : Parity Task 31 (A11, R-R3-49): display duplex (DUP): the
+//                 rise and fall split into the overlay and the transmit
+//                 view, the view left out with DUP on and swapped when DUP
+//                 changes while keyed. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 #include "gui/MoxDisplayController.h"
 
+#include "core/AppSettings.h"
 #include "core/MoxController.h"
 #include "core/session/StationCapabilities.h"
 #include "core/session/StationClient.h"
@@ -47,6 +53,73 @@ MoxDisplayController::MoxDisplayController(PanadapterStack* pans, RadioModel* mo
     , m_pans(pans)
     , m_model(model)
 {
+    // Parity Task 31: a remote window's DUP follows the Core's
+    // txDisplayVersion (3 and above).
+    if (model != nullptr) {
+        connect(model, &RadioModel::stationTxDisplayVersionChanged, this,
+                &MoxDisplayController::applyDisplayDuplex);
+    }
+}
+
+QString MoxDisplayController::displayDuplexUnavailableReason(const RadioModel* model)
+{
+    if (model != nullptr && model->role() == RadioModel::Role::Remote
+        && model->stationTxDisplayVersion() < 3) {
+        return QStringLiteral("This Core does not show the receiver while transmitting "
+                              "for this app. Updating the Core may help.");
+    }
+    return {};
+}
+
+bool MoxDisplayController::savedDisplayDuplex()
+{
+    return AppSettings::instance()
+               .value(QStringLiteral("DisplayDuplex"), QStringLiteral("False"))
+               .toString() == QStringLiteral("True");
+}
+
+void MoxDisplayController::saveDisplayDuplex(bool on)
+{
+    AppSettings::instance().setValue(QStringLiteral("DisplayDuplex"),
+                                     on ? QStringLiteral("True") : QStringLiteral("False"));
+}
+
+bool MoxDisplayController::displayDuplexAvailable() const
+{
+    return displayDuplexUnavailableReason(m_model.data()).isEmpty();
+}
+
+void MoxDisplayController::setDisplayDuplex(bool on)
+{
+    m_wantDuplex = on;
+    applyDisplayDuplex();
+}
+
+void MoxDisplayController::applyDisplayDuplex()
+{
+    const bool duplex = displayDuplex();
+    if (duplex == m_appliedDuplex) {
+        return;
+    }
+    m_appliedDuplex = duplex;
+    // First, so a remote window's subscriptions carry the new `duplex`
+    // before the view below asks the Core again.
+    emit displayDuplexChanged(duplex);
+    SpectrumWidget* sw = m_pan.data();
+    if (!m_keyed || sw == nullptr) {
+        return;
+    }
+    // Changed while keyed (Thetis Display.DisplayDuplex, display.cs:514-521
+    // [v2.10.3.15], "just incase dup is changed whilst tx'ing"): the widget
+    // resets its peaks and swaps the span; the transmit view starts or
+    // stops here, so the pan changes over within one frame period.
+    sw->setDisplayDuplex(duplex);
+    note(QStringLiteral("setDisplayDuplex"));
+    if (duplex && m_transmitView) {
+        endTransmitView(sw);
+    } else if (!duplex && !m_transmitView) {
+        beginTransmitView(sw);
+    }
 }
 
 MoxDisplayController::~MoxDisplayController()
@@ -164,13 +237,37 @@ void MoxDisplayController::rise(int txSliceId)
     m_pan = sw;
     m_slice = txSlice;
 
+    // Parity Task 31: DUP acts on this pan (Thetis isRxDuplex,
+    // display.cs:4619-4629 [v2.10.3.15]: the first receiver only). Set
+    // before the overlay, which keeps the receive span when it is on.
+    sw->setDisplayDuplex(displayDuplex());
+
     // Red border / TX palette / TX grid / TX waterfall levels all key off
     // this flag, on the pan that is actually transmitting. The transmit
     // grid is SpectrumWidget's own business: setMoxOverlay(true) parks the
     // receive pair and loads the transmit one, mirroring Thetis's
-    // SpectrumGridMaxMoxModified (display.cs:1782-1804 [v2.10.3.15]).
+    // SpectrumGridMaxMoxModified (display.cs:1782-1804 [v2.10.3.15]). It
+    // reads localMox only, so DUP on keeps the transmit grid and waterfall
+    // levels too.
     sw->setMoxOverlay(true);
     note(QStringLiteral("setMoxOverlay(true)"));
+
+    // The TRANSMITTING slice, not the active one, and its TRANSMIT
+    // frequency, not its dial frequency (see beginTransmitView).
+    m_carrierHz = static_cast<double>(m_model->txFrequencyForSlice(txSlice));
+
+    // Parity Task 31: with DUP on the pan keeps the receiver (Thetis's
+    // DisplayThread, console.cs:24281-24338 [v2.10.3.15],
+    // `if (bLocalMox && !_display_duplex)` takes the transmit analyzer
+    // only with DUP off): the overlay only.
+    if (!displayDuplex()) {
+        beginTransmitView(sw);
+    }
+}
+
+void MoxDisplayController::beginTransmitView(SpectrumWidget* sw)
+{
+    m_transmitView = true;
 
     // Save just the two settings the TX path actually needs to flip:
     //   sampleRate  -- RX is at the wire DDC rate (768k Saturn / 192k HL2);
@@ -192,7 +289,9 @@ void MoxDisplayController::rise(int txSliceId)
     // carrier. txFrequencyForSlice owns that arithmetic (dial + XIT when
     // enabled), so the display and the transmitter cannot disagree about
     // where the carrier is. Both found by Codex on PR #317.
-    m_carrierHz = static_cast<double>(m_model->txFrequencyForSlice(txSlice));
+    if (!m_slice.isNull() && !m_model.isNull()) {
+        m_carrierHz = static_cast<double>(m_model->txFrequencyForSlice(m_slice.data()));
+    }
 
     // ── The transmit window ──────────────────────────────────────
     //
@@ -290,12 +389,14 @@ void MoxDisplayController::fall()
     // let the source go.
     SpectrumWidget* sw = m_pan.data();
     const bool hadPan = !m_panId.isEmpty();
+    const bool hadTransmitView = m_transmitView;
     m_panId.clear();
     m_pan.clear();
     m_slice.clear();
     if (sw == nullptr) {
         QObject::disconnect(m_viewConnection);
-        if (hadPan && m_source != nullptr) {
+        m_transmitView = false;
+        if (hadPan && hadTransmitView && m_source != nullptr) {
             m_source->endTransmitView(nullptr);
         }
         return;
@@ -303,6 +404,15 @@ void MoxDisplayController::fall()
 
     sw->setMoxOverlay(false);
     note(QStringLiteral("setMoxOverlay(false)"));
+    // Parity Task 31: with DUP on there was no transmit view to undo.
+    if (hadTransmitView) {
+        endTransmitView(sw);
+    }
+}
+
+void MoxDisplayController::endTransmitView(SpectrumWidget* sw)
+{
+    m_transmitView = false;
 
     // 3M-5d: re-enable the internal pushWaterfallRow path before the
     // transmit source lets go, so the first RX frame post-unkey drives the
@@ -386,6 +496,13 @@ void MoxDisplayController::carrierChanged(double carrierHz)
         return;
     }
     if (qFuzzyCompare(1.0 + carrierHz, 1.0 + m_carrierHz)) {
+        return;
+    }
+    // Parity Task 31: XIT does not move the display in display duplex
+    // (console.cs:22144 [v2.10.3.15], "only when not in display duplex
+    // mode"); the transmit view takes the carrier when it starts.
+    if (!m_transmitView) {
+        m_carrierHz = carrierHz;
         return;
     }
     // Row 16: Thetis's display follows XIT while transmitting

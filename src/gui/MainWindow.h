@@ -44,6 +44,9 @@
 //                m_moxDisplay and its local and remote transmit display
 //                sources replace m_txDisplayPanId and the saved receive
 //                rate and DDC centre. AI-assisted via Anthropic Claude Code.
+//   2026-09-27 - J.J. Boyd (KG4VCF). Remote-window parity Task 31: the
+//                display duplex setting, its menu item and its apply.
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1247,6 +1250,12 @@ private:
     /// is the pan dispatchFftFrameToPans skips while keyed. Qt-parented to
     /// this window; its source is one of the two below.
     class MoxDisplayController* m_moxDisplay{nullptr};
+    // Parity Task 31 (A11, R-R3-49): display duplex (DUP), the window's
+    // DisplayDuplex setting and its View menu item.
+    bool m_displayDuplexSetting{false};
+    QPointer<QAction> m_displayDuplexAction;
+    void setDisplayDuplexSetting(bool on);
+    void applyDisplayDuplex();
     std::unique_ptr<class LocalTxDisplaySource> m_localTxDisplaySource;
     std::unique_ptr<class RemoteTxDisplaySource> m_remoteTxDisplaySource;
 

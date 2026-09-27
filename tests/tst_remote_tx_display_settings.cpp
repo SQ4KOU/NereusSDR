@@ -295,9 +295,10 @@ void TstRemoteTxDisplaySettings::coreAppliesEachWindowWriteAtOnce()
     Session s(m_securityDir.path(), this, receiveOnly);
     QVERIFY(s.connect(s.first));
     QVERIFY(s.connect(s.second));
-    QCOMPARE(s.server->txDisplayVersion(), 2);
-    QTRY_COMPARE(s.first.client.capabilities().txDisplayVersion, 2);
-    QTRY_COMPARE(s.first.model.stationTxDisplayVersion(), 2);
+    // Parity Task 31 raised it to 3; the analyzer keys came with 2.
+    QCOMPARE(s.server->txDisplayVersion(), 3);
+    QTRY_COMPARE(s.first.client.capabilities().txDisplayVersion, 3);
+    QTRY_COMPARE(s.first.model.stationTxDisplayVersion(), 3);
     QSignalSpy secondSaw(&s.second.model, &RadioModel::stationSettingChanged);
 
     for (const Case& c : nineChanges()) {

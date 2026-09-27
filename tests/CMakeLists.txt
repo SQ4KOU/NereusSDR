@@ -8418,6 +8418,15 @@ nereus_add_test(tst_remote_tx_display
 nereus_add_test(tst_mox_display_controller
     fakes/LoopbackTransport.cpp)
 
+# Remote-window parity Task 31 (A11, R-R3-49): display duplex (DUP) in both
+# windows, off by default as Thetis. The calibration rule (RX1Offset), noise
+# blanking off while keyed with DUP on (a Core reads the transmit holder's
+# DUP), the receiver kept under the transmit grid locally and from a Core at
+# txDisplayVersion 3, a change while keyed, an older Core, the setting.
+# Loopback and a test TxChannel only, no RF, no audio device.
+nereus_add_test(tst_display_duplex
+    fakes/LoopbackTransport.cpp)
+
 # Remote-window parity Task 30 (A12, R-R3-49, R-R3-21, R-R3-10): Setup >
 # Display > TX Display from a remote window. The Core applies a window's
 # write of the nine TX analyzer keys to its TxAnalyzer at once, keyed or

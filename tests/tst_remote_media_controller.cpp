@@ -5607,10 +5607,15 @@ private slots:
         client.startSession(clientLink, server.token());
         server.acceptTransport(stationLink);
         QTRY_VERIFY(sourceMedia && sinkMedia);
-        QCOMPARE(client.capabilities().txDisplayVersion, analyzer ? 2 : 0);
+        QCOMPARE(client.capabilities().txDisplayVersion, analyzer ? 3 : 0);
         QCOMPARE(gui.txDisplayNegotiated(), analyzer);
         const QJsonObject start = lastControl(outbound, QStringLiteral("start"));
         QCOMPARE(start.contains(QStringLiteral("txDisplayVersion")), analyzer);
+        // Parity Task 31: a Core at 3 is told 3 (its subscribes may then
+        // carry `duplex`, sent only while DUP is on).
+        if (analyzer) {
+            QCOMPARE(start.value(QStringLiteral("txDisplayVersion")).toInt(), 3);
+        }
         sourceMedia->other = sinkMedia;
         sourceMedia->activate();
         sinkMedia->activate();
@@ -5619,6 +5624,7 @@ private slots:
         const QJsonObject asked = lastControl(outbound, QStringLiteral("subscribe"));
         QCOMPARE(asked.contains(QStringLiteral("txMinDbm")), analyzer);
         QCOMPARE(asked.contains(QStringLiteral("txMaxDbm")), analyzer);
+        QVERIFY(!asked.contains(QStringLiteral("duplex")));
         QVector<float> iq(2048);
         for (int i = 0; i < iq.size(); i += 2) {
             iq[i] = 0.01f * std::cos(double(i) * 0.17);
