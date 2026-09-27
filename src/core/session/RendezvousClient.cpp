@@ -15,6 +15,9 @@
 //               an introduction the Core has finished with is forgotten at
 //               once, and never taken back. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-27: Task 28 tail (R-IOS-16): setPingIntervalMs(). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/RendezvousClient.h"
@@ -132,6 +135,16 @@ void RendezvousClient::setReconnectDelaysMs(const QList<int>& delays)
 void RendezvousClient::setHelloTimeoutMs(int ms)
 {
     m_helloTimeoutMs = std::max(1, ms);
+}
+
+void RendezvousClient::setPingIntervalMs(int ms)
+{
+    m_pingTimer->setInterval(std::max(1, ms));
+}
+
+int RendezvousClient::pingIntervalMs() const
+{
+    return m_pingTimer->interval();
 }
 
 QUrl RendezvousClient::currentServer() const

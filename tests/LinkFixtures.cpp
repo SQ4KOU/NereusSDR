@@ -60,9 +60,15 @@
 //               (runFraming) and the session player's data-channel mode
 //               (setSettleCheck, setConnectClient). J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-27: iPhone app plan Task 28 tail (R-IOS-16): the virtual clock
+//               moved to LinkVirtualClock.h, where it judges a restart on
+//               the real remaining time and swallows real expiries. J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "LinkFixtures.h"
+#include "LinkVirtualClock.h"
 
 #include <QAbstractEventDispatcher>
 #include <QCoreApplication>
@@ -113,9 +119,6 @@ constexpr int kMaxShownChars = 400;
 // queue has not produced yet (work on another thread of the fake radio). A
 // passing fixture never waits this long; it bounds a failing one.
 constexpr int kStationReplyWaitMs = 5000;
-// A timer whose real remaining time grew by more than this since it was
-// last seen was started again.
-constexpr qint64 kRestartSlackMs = 20;
 
 QString shown(const QJsonValue& value)
 {
@@ -359,104 +362,6 @@ void drain()
         drainQueue();
     }
 }
-
-// A virtual clock over every QTimer the station server owns (its heartbeat
-// and delta flush timers, and each peer's handshake deadline, which is
-// parented to that peer's transport). advance() fires them in virtual time
-// order by emitting their timeout directly, exactly as a real expiry would:
-// a single-shot timer stops first, a repeating one runs on. The same
-// timers still run in real time too, but a fixture run lasts milliseconds,
-// so only the 50 ms delta flush can fire on its own, and that only moves a
-// delta earlier, never out of order.
-class VirtualClock {
-public:
-    explicit VirtualClock(QObject* root)
-        : m_root(root)
-    {
-    }
-
-    qint64 now() const { return m_now; }
-
-    void scan()
-    {
-        m_tracked.erase(std::remove_if(m_tracked.begin(), m_tracked.end(),
-                                       [](const Tracked& t) {
-                                           return t.timer.isNull() || !t.timer->isActive();
-                                       }),
-                        m_tracked.end());
-        const QList<QTimer*> timers = m_root->findChildren<QTimer*>();
-        for (QTimer* timer : timers) {
-            if (!timer->isActive()) {
-                continue;
-            }
-            // A coarse timer (Qt's default) may report up to 5% more than
-            // its interval; the virtual clock keeps to the interval.
-            const int remaining =
-                std::clamp(timer->remainingTime(), 0, std::max(0, timer->interval()));
-            auto it = std::find_if(m_tracked.begin(), m_tracked.end(),
-                                   [timer](const Tracked& t) { return t.timer == timer; });
-            if (it == m_tracked.end()) {
-                Tracked t;
-                t.timer = timer;
-                t.due = m_now + remaining;
-                t.realRemaining = remaining;
-                t.since.start();
-                m_tracked.push_back(t);
-            } else if (remaining > it->realRemaining - it->since.elapsed() + kRestartSlackMs) {
-                it->due = m_now + remaining;
-                it->realRemaining = remaining;
-                it->since.restart();
-            }
-        }
-    }
-
-    /// Empty on success; a description when a timeout could not be fired.
-    QString advance(qint64 ms)
-    {
-        const qint64 target = m_now + ms;
-        for (int guard = 0; guard < 100000; ++guard) {
-            drain();
-            scan();
-            auto next = std::min_element(m_tracked.begin(), m_tracked.end(),
-                                         [](const Tracked& a, const Tracked& b) {
-                                             return a.due < b.due;
-                                         });
-            if (next == m_tracked.end() || next->due > target) {
-                break;
-            }
-            m_now = std::max(m_now, next->due);
-            QPointer<QTimer> timer = next->timer;
-            if (timer->isSingleShot()) {
-                timer->stop();
-                m_tracked.erase(next);
-            } else {
-                timer->start();
-                next->due = m_now + std::max(1, timer->interval());
-                next->realRemaining = timer->interval();
-                next->since.restart();
-            }
-            if (!QMetaObject::invokeMethod(timer, "timeout", Qt::DirectConnection)) {
-                return QStringLiteral("could not fire a timer's timeout");
-            }
-        }
-        m_now = target;
-        drain();
-        scan();
-        return QString();
-    }
-
-private:
-    struct Tracked {
-        QPointer<QTimer> timer;
-        qint64 due = 0;
-        qint64 realRemaining = 0;
-        QElapsedTimer since;
-    };
-
-    QObject* m_root = nullptr;
-    qint64 m_now = 0;
-    std::vector<Tracked> m_tracked;
-};
 
 } // namespace
 
@@ -1564,7 +1469,8 @@ QString LinkFixtures::runSession(const QJsonObject& fixture, StationServer& serv
         return nullptr;
     };
 
-    VirtualClock clock(&server);
+    // The station's timers fire on this clock only (LinkVirtualClock.h).
+    LinkVirtualClock clock(&server, [] { drain(); });
     // iPhone app Task 73: a device's 180 s count on the same virtual time as
     // the timer that ends them, so an advanceMs of 180000 ends them.
     if (server.deviceSessions() != nullptr) {
@@ -1609,10 +1515,19 @@ QString LinkFixtures::runSession(const QJsonObject& fixture, StationServer& serv
         return kinds;
     };
 
-    // Waits, in real time, for `client` to have received more than it
-    // consumed (work on another thread of the fake radio).
-    const auto waitForMessage = [&clock](const PlayedClient& client) {
+    // The queued work between two awaited messages, which takes no virtual
+    // time: the station's timers do not fire in real time meanwhile
+    // (LinkVirtualClock::Hold).
+    const auto settle = [&clock]() {
+        const LinkVirtualClock::Hold hold(clock);
         drain();
+    };
+
+    // Waits, in real time, for `client` to have received more than it
+    // consumed (work on another thread of the fake radio, or a delta the
+    // 50 ms flush sends in real time).
+    const auto waitForMessage = [&clock, &settle](const PlayedClient& client) {
+        settle();
         if (client.transport->received().size() <= client.consumed) {
             const QDeadlineTimer deadline(kStationReplyWaitMs);
             while (client.transport->received().size() <= client.consumed
@@ -1624,7 +1539,7 @@ QString LinkFixtures::runSession(const QJsonObject& fixture, StationServer& serv
         clock.scan();
     };
 
-    drain();
+    settle();
     clock.scan();
 
     for (int index = 0; index < steps.size(); ++index) {
@@ -1667,7 +1582,7 @@ QString LinkFixtures::runSession(const QJsonObject& fixture, StationServer& serv
                 }
                 client->transport->sendText(
                     QJsonDocument(sent.toObject()).toJson(QJsonDocument::Compact));
-                drain();
+                settle();
                 clock.scan();
             } else if (from == QStringLiteral("station")) {
                 if (client->transport == nullptr) {
@@ -1724,7 +1639,7 @@ QString LinkFixtures::runSession(const QJsonObject& fixture, StationServer& serv
                 return QStringLiteral("%1: the station has no radio to press").arg(describe(index));
             }
             model->moxController()->onMicPttFromRadio(step.value(QStringLiteral("radioPtt")).toBool());
-            drain();
+            settle();
             clock.scan();
         } else if (step.contains(QStringLiteral("connect"))) {
             // iPhone app Task 71: another client's whole connect sequence;
@@ -1733,6 +1648,9 @@ QString LinkFixtures::runSession(const QJsonObject& fixture, StationServer& serv
             if (client == nullptr || client->transport != nullptr || client->device == nullptr) {
                 return QStringLiteral("%1: that client cannot connect").arg(describe(index));
             }
+            // A connect takes no virtual time, however long its handshakes
+            // take in real time (over a data channel, DTLS and SCTP).
+            const LinkVirtualClock::Hold connecting(clock);
             client->owned = std::make_unique<LoopbackTransport>(
                 QStringLiteral("conformance-%1-client").arg(client->name));
             client->transport = client->owned.get();
@@ -1795,7 +1713,7 @@ QString LinkFixtures::runSession(const QJsonObject& fixture, StationServer& serv
                 return QStringLiteral("%1: that client has not connected").arg(describe(index));
             }
             client->transport->closeLink(QStringLiteral("conformance close"));
-            drain();
+            settle();
             clock.scan();
         } else if (step.contains(QStringLiteral("expectClosed"))) {
             problem = expectKeys(step, {QStringLiteral("expectClosed")}, {},
@@ -1813,7 +1731,7 @@ QString LinkFixtures::runSession(const QJsonObject& fixture, StationServer& serv
             if (client == nullptr || client->transport == nullptr) {
                 return QStringLiteral("%1: that client has not connected").arg(describe(index));
             }
-            drain();
+            settle();
             if (client->transport->isOpen()) {
                 const QDeadlineTimer deadline(kStationReplyWaitMs);
                 while (client->transport->isOpen() && !deadline.hasExpired()) {
@@ -1853,7 +1771,7 @@ QString LinkFixtures::runSession(const QJsonObject& fixture, StationServer& serv
     const QJsonObject last = steps.last().toObject();
     if (!last.contains(QStringLiteral("expectClosed"))
         || last.value(QStringLiteral("expectClosed")).toObject().contains(QStringLiteral("client"))) {
-        drain();
+        settle();
         if (!transport.isOpen()) {
             return QStringLiteral("after the last step: the station closed the link; the "
                                   "fixture does not expect it");

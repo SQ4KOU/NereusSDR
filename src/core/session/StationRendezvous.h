@@ -24,9 +24,13 @@
 //     once the credentials arrive (or no relay, when they have not come
 //     within kCredentialsTimeoutMs of the answer), candidates both ways
 //     through the service. When the channel opens it becomes one of
-//     StationServer's connections (acceptTransport()), exactly like a
-//     WebSocket's, and the introduction is retired at once; one that fails
-//     or has not opened within kAnswerDeadlineMs is retired and dropped.
+//     StationServer's connections through acceptIntroducedTransport(): the
+//     same session as a WebSocket's, with that function's three rules (it
+//     never pairs, since pairing through the service stays the mailbox's;
+//     it signs in by device key only, never a token; and every introduced
+//     connection still connecting shares one source's handshake cap). The
+//     introduction is retired at once; one that fails or has not opened
+//     within kAnswerDeadlineMs is retired and dropped.
 //   - Holds a nameplate while the pairing window is open, gives it back
 //     when it closes (after the mailbox of the pairing that closed it has
 //     closed, since releasing a nameplate ends its mailbox), and hands the
@@ -52,6 +56,10 @@
 //               the device leaves, answers owned by std::unique_ptr (Minors
 //               1 and 4). J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-27: Task 28 tail (re-review Minor): the header names
+//               acceptIntroducedTransport() and its three rules. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/IceConfiguration.h"

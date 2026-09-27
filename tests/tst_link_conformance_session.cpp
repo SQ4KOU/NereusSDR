@@ -242,6 +242,11 @@
 //               both transports too, and the data-channel connectable
 //               entry skips them. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-27: iPhone app plan Task 28 tail (R-IOS-16): the virtual
+//               clock's own tests (a long timer's due time as real time
+//               passes; the station's timers fire on the clock alone).
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -282,6 +287,7 @@
 #include "models/SliceModel.h"
 
 #include "LinkFixtures.h"
+#include "LinkVirtualClock.h"
 #include "OperatorWording.h"
 #include "fakes/ConnectableRadioModel.h"
 #include "fakes/DataChannelPair.h"
@@ -291,6 +297,7 @@
 using namespace NereusSDR;
 using NereusSDR::Test::ConnectableRadioModel;
 using NereusSDR::Test::LinkFixtures;
+using NereusSDR::Test::LinkVirtualClock;
 using NereusSDR::Test::LoopbackTransport;
 
 namespace {
@@ -1033,6 +1040,8 @@ private slots:
     void refusalsOfOutboundWritesArePlain();
     void alteredFixturesFailReadably();
     void jsonStringsMatchTheirShape();
+    void theVirtualClockKeepsALongTimersDueAsRealTimePasses();
+    void theVirtualClockAloneFiresTheStationsTimers();
 
 private:
     QString run(const QString& id, const QJsonObject& fixture,
@@ -1900,6 +1909,99 @@ void TstLinkConformanceSession::jsonStringsMatchTheirShape()
     QVERIFY2(failure.startsWith(QStringLiteral("altered-connected-devices: step %1").arg(index))
                  && failure.contains(QStringLiteral("$.properties[6].value: not JSON")),
              qPrintable(failure));
+}
+
+// Task 28 tail (R-IOS-16): session-grace-expired failed over a data
+// channel because the clock read a long coarse timer as started again each
+// time it looked (its remaining time, kept to the interval, stayed at the
+// interval while real time passed), and pushed the grace timer's due time
+// past the fixture's advanceMs. A timer reporting more than its interval
+// is forced here, then real time passes between two looks; the 180 s must
+// still end at 180 s of virtual time.
+void TstLinkConformanceSession::theVirtualClockKeepsALongTimersDueAsRealTimePasses()
+{
+    constexpr int kIntervalMs = 180000;
+    // How far above its interval the timer must report, so the real time
+    // below passes while the report is still above it.
+    constexpr int kAboveMs = 100;
+    QObject root;
+    auto* timer = new QTimer(&root);
+    timer->setSingleShot(true);
+    QSignalSpy fired(timer, &QTimer::timeout);
+    // A coarse timer (Qt's default) is rounded, later or earlier by the
+    // time it starts; start it until it reports well above its interval.
+    const QDeadlineTimer searching(5000);
+    timer->start(kIntervalMs);
+    while (timer->remainingTime() <= kIntervalMs + kAboveMs && !searching.hasExpired()) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 1);
+        timer->start(kIntervalMs);
+    }
+    QVERIFY2(timer->remainingTime() > kIntervalMs + kAboveMs,
+             "no start of a coarse timer reported more than its interval");
+
+    LinkVirtualClock clock(&root, [] { QCoreApplication::processEvents(); });
+    clock.scan();
+    QVERIFY(clock.advance(1000).isEmpty());
+    // Real time, well past the clock's restart slack and well inside the
+    // time the report stays above the interval.
+    QElapsedTimer passing;
+    passing.start();
+    while (passing.elapsed() < 3 * LinkVirtualClock::kRestartSlackMs) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
+    }
+    QVERIFY2(timer->remainingTime() > kIntervalMs,
+             "the report fell to the interval before the clock looked again");
+    QVERIFY(clock.advance(kIntervalMs - 1000 - 1).isEmpty());
+    QCOMPARE(fired.count(), 0);
+    QVERIFY(clock.advance(1).isEmpty());
+    QCOMPARE(fired.count(), 1);
+    QCOMPARE(clock.now(), qint64(kIntervalMs));
+}
+
+// Task 28 tail (R-IOS-16): a station timer firing in real time made a
+// fixture depend on how long its run took. Over a data channel the second
+// client's connect took long enough for the 50 ms delta flush to fire in
+// the middle of the step, and one coalesced delta went out as two. While
+// the player holds the clock (a drain, a connect, an advance), the timers
+// under its root fire on virtual time only; outside a hold they still run
+// in real time, which the fixtures count on for a delta the flush sends.
+void TstLinkConformanceSession::theVirtualClockAloneFiresTheStationsTimers()
+{
+    constexpr int kFlushMs = 50;
+    QObject root;
+    auto* flush = new QTimer(&root);
+    flush->setSingleShot(true);
+    flush->setTimerType(Qt::PreciseTimer);
+    QSignalSpy fired(flush, &QTimer::timeout);
+    // A timer outside the root keeps real time, held or not.
+    QTimer outside;
+    outside.setSingleShot(true);
+    outside.setTimerType(Qt::PreciseTimer);
+    QSignalSpy outsideFired(&outside, &QTimer::timeout);
+
+    LinkVirtualClock clock(&root, [] { QCoreApplication::processEvents(); });
+    {
+        const LinkVirtualClock::Hold hold(clock);
+        flush->start(kFlushMs);
+        outside.start(kFlushMs);
+        clock.scan();
+        // Real time: until the flush timer's real expiry has come and gone.
+        QVERIFY(QTest::qWaitFor([&outsideFired] { return outsideFired.count() == 1; }, 5000));
+        QTRY_VERIFY_WITH_TIMEOUT(clock.swallowedForTest() >= 1, 5000);
+        QCOMPARE(fired.count(), 0);
+        QVERIFY(flush->isActive());
+        // Virtual time: it fires at its interval (as the clock read it
+        // when it first looked, a millisecond or so after the start), once.
+        QVERIFY(clock.advance(kFlushMs - 5).isEmpty());
+        QCOMPARE(fired.count(), 0);
+        QVERIFY(clock.advance(5).isEmpty());
+        QCOMPARE(fired.count(), 1);
+        QVERIFY(!flush->isActive());
+    }
+
+    // Outside a hold its real expiry still fires it.
+    flush->start(kFlushMs);
+    QVERIFY(QTest::qWaitFor([&fired] { return fired.count() == 2; }, 5000));
 }
 
 QTEST_MAIN(TstLinkConformanceSession)

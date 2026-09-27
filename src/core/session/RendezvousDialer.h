@@ -23,7 +23,12 @@
 //
 // A service that does not answer, a Core that is not there, a connection
 // that fails or has not opened within kDialDeadlineMs ends the attempt
-// with failed(), in plain words. The certificate is not checked here: the
+// with failed(), in plain words. The introduction ending (the Core left the
+// service, it expired) or this computer's connection to the service ending
+// fails the attempt at once while the Core's answer or the end of its
+// candidates has not come. Once both have, this computer holds everything
+// the service would carry from the Core, ICE can finish without the
+// service, and the deadline runs. The certificate is not checked here: the
 // session checks the one the Core presents in DTLS against the one its
 // identity key binds, at the same gate as a WebSocket's (StationClient).
 //
@@ -32,6 +37,10 @@
 //   2026-09-26: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-27: Task 28 tail (re-review Minor): an introduction or service
+//               connection that ends after the Core's answer leaves the
+//               attempt to its deadline. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/IceConfiguration.h"
@@ -94,6 +103,10 @@ signals:
 private:
     void fail(const QString& reason);
     void startOffer();
+    /// The introduction or the connection to the service ended: fails at
+    /// once unless the Core's answer and the end of its candidates have
+    /// both come, when the attempt carries on to its deadline.
+    void serviceGone(const QString& why);
 
     RendezvousClient* m_client = nullptr;
     QPointer<DataChannelTransport> m_transport;
@@ -105,6 +118,8 @@ private:
     bool m_started = false;
     bool m_done = false;
     bool m_answered = false;
+    /// The Core's end of candidates (an empty candidate) came.
+    bool m_coreCandidatesEnded = false;
 };
 
 } // namespace NereusSDR

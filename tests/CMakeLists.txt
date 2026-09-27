@@ -7511,15 +7511,6 @@ add_executable(nereus_floor_probe EXCLUDE_FROM_ALL
     tools/floor/WsRelayPrototype.cpp)
 target_link_libraries(nereus_floor_probe PRIVATE NereusCore)
 set_target_properties(nereus_floor_probe PROPERTIES AUTOMOC ON)
-# The traversal harness (tests/scripts/traversal-harness.sh): Linux network
-# namespaces with nftables NATs (endpoint-independent, port-randomising at
-# both ends), UDP blocked, large datagrams dropped, an IPv6-only client
-# behind NAT64 and DNS64 with a CLAT, netem loss, and routed IPv6 at both
-# ends (an IPv6 pair must win), with the rendezvous service and coturn
-# started inside it and every secret made at run time. Opt in with
-# -DNEREUS_TRAVERSAL_TESTS=ON; it needs root and runs under the ctest label
-# `traversal` (the CI job of the same name, started by hand), never on the
-# live server.
 # iPhone app plan Task 28 fix wave (R-IOS-16; review Minor 6): the libjuice
 # TURN release change finds agent.c by the file, not the spelling of its
 # directory. Configures a small project only; nothing is built or fetched.
@@ -7532,6 +7523,15 @@ if(DEFINED libjuice_SOURCE_DIR AND EXISTS "${libjuice_SOURCE_DIR}/src/agent.c")
             -P ${CMAKE_SOURCE_DIR}/tests/scripts/check-libjuice-patch-paths.cmake)
     set_tests_properties(libjuice_patch_paths PROPERTIES LABELS "session" TIMEOUT 120)
 endif()
+# The traversal harness (tests/scripts/traversal-harness.sh): Linux network
+# namespaces with nftables NATs (endpoint-independent, port-randomising at
+# both ends), UDP blocked, large datagrams dropped, an IPv6-only client
+# behind NAT64 and DNS64 with a CLAT, netem loss, and routed IPv6 at both
+# ends (an IPv6 pair must win), with the rendezvous service and coturn
+# started inside it and every secret made at run time. Opt in with
+# -DNEREUS_TRAVERSAL_TESTS=ON; it needs root and runs under the ctest label
+# `traversal` (the CI job of the same name, started by hand), never on the
+# live server.
 option(NEREUS_TRAVERSAL_TESTS "Register the traversal harness (Linux, root)" OFF)
 if(NEREUS_TRAVERSAL_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_test(NAME traversal_harness
