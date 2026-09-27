@@ -54,6 +54,11 @@
 //   2026-09-26 : Tasks 27-29 fix wave (R-R3-49) by J.J. Boyd (KG4VCF):
 //                 setView(), the window and pixel count in one SetAnalyzer.
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-27 : Parity Task 30 (R-R3-49, R-R3-21, A12) by J.J. Boyd
+//                 (KG4VCF): reloadSetting(), a remote window's write of one
+//                 of the nine keys applied to the Core's analyzer at once,
+//                 keyed or not, through the local page's setters.
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "TxAnalyzer.h"
@@ -948,6 +953,9 @@ void TxAnalyzer::loadSettings()
 
 void TxAnalyzer::saveSettings()
 {
+    if (m_reloadingSetting) {
+        return;   // reloadSetting writes back its own key only
+    }
     auto& s = AppSettings::instance();
     s.setValue(QStringLiteral("DisplayTxFftSize"),      QString::number(m_fftSize));
     s.setValue(QStringLiteral("DisplayTxWindowType"),   QString::number(m_windowType));
@@ -960,6 +968,112 @@ void TxAnalyzer::saveSettings()
     s.setValue(QStringLiteral("DisplayTxWfAveraging"),  QString::number(m_wfAveraging));
     s.setValue(QStringLiteral("DisplayTxWfAvTimeMs"),   QString::number(m_wfAvTimeMs));
     s.save();
+}
+
+// ── Remote-window parity Task 30 (R-R3-49, R-R3-21, A12) ─────────────────
+
+bool TxAnalyzer::isSettingsKey(const QString& key)
+{
+    for (const char* name : {kFftSizeKey, kWindowTypeKey, kPanDetectorKey, kPanAveragingKey,
+                             kPanAvTimeMsKey, kPanNormalizeKey, kWfDetectorKey,
+                             kWfAveragingKey, kWfAvTimeMsKey}) {
+        if (key == QLatin1String(name)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+int TxAnalyzer::fftSizeSliderPositionFor(int fftSize) noexcept
+{
+    // tbTXDisplayFFTSize: Maximum = 6 (setup.designer.cs:36638-36642
+    // [v2.10.3.13+501e3f51]); the page's own derivation, unchanged.
+    for (int p = 0; p <= 6; ++p) {
+        if ((4096 << p) >= fftSize) {
+            return p;
+        }
+    }
+    return 6;
+}
+
+void TxAnalyzer::reloadSetting(const QString& key)
+{
+    if (!isSettingsKey(key)) {
+        return;
+    }
+    auto& s = AppSettings::instance();
+    const bool present = s.contains(key);
+    const QString stored = present ? s.value(key).toString() : QString();
+    // A number the setter can take, the key's default when the key is
+    // unset, or the analyzer's current value when the text is not a number.
+    const auto number = [&](int fallbackDefault, int current) -> int {
+        if (!present) {
+            return fallbackDefault;
+        }
+        bool ok = false;
+        const int v = stored.toInt(&ok);
+        return ok ? v : current;
+    };
+    QString applied;
+    m_reloadingSetting = true;
+    // Each handler sets the analyzer at once, with no MOX check, as Thetis's
+    // TX Display handlers do:
+    // From Thetis setup.cs:18146-18210 [v2.10.3.15]
+    //   comboTXDispPanDetector_SelectedIndexChanged:
+    //     console.specRX.GetSpecRX(cmaster.inid(1, 0)).DetTypePan = comboTXDispPanDetector.SelectedIndex;
+    //     //[2.10.3.5]MW0LGE note: see updateNormalizePan() in specHPSDR as it only applies to pan detector type 2,3,4
+    //   comboTXDispPanAveraging_SelectedIndexChanged: ...AverageMode = SelectedIndex;
+    //   udTXDisplayAVGTime_ValueChanged: ...AvTau = 0.001 * (double)udTXDisplayAVGTime.Value;
+    //   chkDispTXNormalize_CheckedChanged: ...NormOneHzPan = chkDispTXNormalize.Checked;
+    //   tbTXDisplayFFTSize_Scroll: ...FFTSize = (int)(4096 * Math.Pow(2, Math.Floor(...)));
+    //   comboTXDispWinType_SelectedIndexChanged: ...WindowType = SelectedIndex;
+    //   comboTXDispWFDetector_SelectedIndexChanged: ...DetTypeWF = SelectedIndex;
+    //   comboTXDispWFAveraging_SelectedIndexChanged: ...AverageModeWF = SelectedIndex;
+    //   udTXDisplayAVTime_ValueChanged: ...AvTauWF = 0.001 * (double)udTXDisplayAVTime.Value;
+    // each followed by console.UpdateTXSpectrumDisplayVars().
+    if (key == QLatin1String(kFftSizeKey)) {
+        // The page's slider is the only writer of this key: a size that is
+        // not one of its positions takes the position the page would show.
+        const int size = number(kDefaultFftSize, m_fftSize);
+        setFftSizeSliderPosition(fftSizeSliderPositionFor(size));
+        applied = QString::number(m_fftSize);
+    } else if (key == QLatin1String(kWindowTypeKey)) {
+        setWindowType(number(kDefaultWindowType, m_windowType));
+        applied = QString::number(m_windowType);
+    } else if (key == QLatin1String(kPanDetectorKey)) {
+        setPanDetector(number(kDefaultPanDetector, m_panDetector));
+        applied = QString::number(m_panDetector);
+    } else if (key == QLatin1String(kPanAveragingKey)) {
+        setPanAveraging(number(kDefaultPanAveraging, m_panAveraging));
+        applied = QString::number(m_panAveraging);
+    } else if (key == QLatin1String(kPanAvTimeMsKey)) {
+        setPanAvTimeMs(number(kDefaultPanAvTimeMs, m_panAvTimeMs));
+        applied = QString::number(m_panAvTimeMs);
+    } else if (key == QLatin1String(kPanNormalizeKey)) {
+        // As loadSettings reads it: "True" (any case) is on.
+        const bool on = present
+            ? stored.compare(QStringLiteral("True"), Qt::CaseInsensitive) == 0
+            : kDefaultPanNormalize;
+        setPanNormalize(on);
+        applied = m_panNormalize ? QStringLiteral("True") : QStringLiteral("False");
+    } else if (key == QLatin1String(kWfDetectorKey)) {
+        setWfDetector(number(kDefaultWfDetector, m_wfDetector));
+        applied = QString::number(m_wfDetector);
+    } else if (key == QLatin1String(kWfAveragingKey)) {
+        setWfAveraging(number(kDefaultWfAveraging, m_wfAveraging));
+        applied = QString::number(m_wfAveraging);
+    } else {
+        setWfAvTimeMs(number(kDefaultWfAvTimeMs, m_wfAvTimeMs));
+        applied = QString::number(m_wfAvTimeMs);
+    }
+    m_reloadingSetting = false;
+    // An unset key stays unset (its default is what the analyzer holds). A
+    // stored value the setter changed goes back as the value applied, so
+    // every window shows what the analyzer runs.
+    if (present && stored != applied) {
+        s.setValue(key, applied);
+    }
+    emit settingReloaded(key);
 }
 
 } // namespace NereusSDR

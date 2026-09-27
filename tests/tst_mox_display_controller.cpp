@@ -573,7 +573,7 @@ private slots:
         RemoteWindow window(/*withAnalyzer=*/true);
         QVERIFY(window.connect());
         QVERIFY(window.client->capabilities().txStateVersion >= 1);
-        QCOMPARE(window.client->capabilities().txDisplayVersion, 1);
+        QCOMPARE(window.client->capabilities().txDisplayVersion, 2);
         SpectrumWidget* one = window.pan(QStringLiteral("one"));
         SpectrumWidget* two = window.pan(QStringLiteral("two"));
         QVERIFY(window.receiveDraws(QStringLiteral("two")));

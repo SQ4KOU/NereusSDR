@@ -33,6 +33,13 @@
 //                and defaults are read from core/ControlRanges.h, the
 //                table the Core's catalogue sends an app. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-27 - R-R3-49 / R-R3-21 / A12 (parity Task 30): in a remote
+//                window TX Display's nine analyzer controls show the Core's
+//                keys and write them, and the Core applies each to its TX
+//                analyzer at once; below txDisplayVersion 2 they are
+//                disabled with a reason. The waterfall levels, palette, low
+//                colour and gradient stay the window's own. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -92,6 +99,8 @@
 #include "core/AppSettings.h"
 #include "core/ControlRanges.h"
 #include "core/TxAnalyzer.h"
+#include "core/WdspEngine.h"
+#include "core/settings/SettingsProxy.h"
 #include "models/Band.h"
 #include "models/PanadapterModel.h"
 #include "models/RadioModel.h"
@@ -2372,10 +2381,250 @@ TxDisplayPage::TxDisplayPage(RadioModel* model, QWidget* parent)
 
 void TxDisplayPage::setStationSettingsAvailable(bool available, const QString& reason)
 {
-    gateStationControls({m_txFftSizeSlider, m_txWindowCombo, m_txPanDetectorCombo,
-                         m_txPanAveragingCombo, m_txPanAvTimeSpin, m_txPanNormalizeCheck,
-                         m_txWfDetectorCombo, m_txWfAveragingCombo, m_txWfAvTimeSpin},
-                        available, reason);
+    m_stationAvailable = available;
+    m_stationReason = reason;
+    refreshTxAnalyzerGate();
+}
+
+QList<QWidget*> TxDisplayPage::txAnalyzerControlsForTest() const
+{
+    return {m_txFftSizeSlider, m_txWindowCombo, m_txPanDetectorCombo, m_txPanAveragingCombo,
+            m_txPanAvTimeSpin, m_txPanNormalizeCheck, m_txWfDetectorCombo,
+            m_txWfAveragingCombo, m_txWfAvTimeSpin};
+}
+
+QString TxDisplayPage::coreDoesNotApplyReason()
+{
+    return QStringLiteral("This Core does not apply transmit display settings from this app. "
+                          "Updating the Core may help.");
+}
+
+bool TxDisplayPage::remoteWindow()
+{
+    return model() != nullptr && !model()->ownsLocalDsp();
+}
+
+void TxDisplayPage::refreshTxAnalyzerGate()
+{
+    const QList<QWidget*> controls{m_txFftSizeSlider, m_txWindowCombo, m_txPanDetectorCombo,
+                                   m_txPanAveragingCombo, m_txPanAvTimeSpin,
+                                   m_txPanNormalizeCheck, m_txWfDetectorCombo,
+                                   m_txWfAveragingCombo, m_txWfAvTimeSpin};
+    // Put back each control's own state first, so Normalize's detector
+    // gate below is what the gate saves and restores.
+    gateStationControls(controls, true, QString());
+    if (remoteWindow() && m_txPanNormalizeCheck && m_txPanDetectorCombo) {
+        // From Thetis setup.cs:18152-18153 [v2.10.3.15]
+        //   //[2.10.3.5]MW0LGE note: see updateNormalizePan() in specHPSDR as it only applies to pan detector type 2,3,4
+        //   chkDispTXNormalize.Enabled = console.specRX.GetSpecRX(cmaster.inid(1, 0)).DetTypePan >= 2;
+        m_txPanNormalizeCheck->setEnabled(m_txPanDetectorCombo->currentIndex() >= 2);
+    }
+    bool available = m_stationAvailable;
+    QString reason = m_stationReason;
+    if (available && remoteWindow() && model()->stationTxDisplayVersion() < 2) {
+        available = false;
+        reason = coreDoesNotApplyReason();
+    }
+    gateStationControls(controls, available, reason);
+}
+
+void TxDisplayPage::showTxFftReadouts(int fftSize, double binWidthHz)
+{
+    m_txFftSizeReadout->setText(QString::number(fftSize));
+    m_txBinWidthLabel->setText(binWidthHz > 0.0 ? QString::number(binWidthHz, 'f', 3)
+                                                : QStringLiteral("0.000"));
+}
+
+void TxDisplayPage::showCoreTxAnalyzerSettings()
+{
+    // The Core's nine keys as its TxAnalyzer::loadSettings reads them, and
+    // held to what each setter takes, so a control never shows a value
+    // the Core's analyzer does not run.
+    auto& s = AppSettings::instance();
+    const auto readInt = [&s](const char* key, int fallback) {
+        bool ok = false;
+        const int v = s.value(QLatin1String(key), fallback).toInt(&ok);
+        return ok ? v : fallback;
+    };
+    const int fftSize = readInt(TxAnalyzer::kFftSizeKey, TxAnalyzer::kDefaultFftSize);
+    const int position = TxAnalyzer::fftSizeSliderPositionFor(fftSize);
+    const int shownSize = 4096 << position;
+    {
+        QSignalBlocker bSlider(m_txFftSizeSlider);
+        QSignalBlocker bWin   (m_txWindowCombo);
+        QSignalBlocker bPanDet(m_txPanDetectorCombo);
+        QSignalBlocker bPanAvg(m_txPanAveragingCombo);
+        QSignalBlocker bPanT  (m_txPanAvTimeSpin);
+        QSignalBlocker bPanN  (m_txPanNormalizeCheck);
+        QSignalBlocker bWfDet (m_txWfDetectorCombo);
+        QSignalBlocker bWfAvg (m_txWfAveragingCombo);
+        QSignalBlocker bWfT   (m_txWfAvTimeSpin);
+        // Not while the operator is dragging it: the Core's echo of an
+        // earlier step would pull the handle back.
+        if (!m_txFftSizeSlider->isSliderDown()) {
+            m_txFftSizeSlider->setValue(position);
+            // The Core's analyzer runs at the TX DSP rate, 96 kHz.
+            showTxFftReadouts(shownSize, static_cast<double>(WdspEngine::kTxDspSampleRate)
+                                             / static_cast<double>(shownSize));
+        }
+        m_txWindowCombo->setCurrentIndex(
+            std::clamp(readInt(TxAnalyzer::kWindowTypeKey, TxAnalyzer::kDefaultWindowType), 0, 6));
+        m_txPanDetectorCombo->setCurrentIndex(std::clamp(
+            readInt(TxAnalyzer::kPanDetectorKey, TxAnalyzer::kDefaultPanDetector), 0, 4));
+        m_txPanAveragingCombo->setCurrentIndex(std::clamp(
+            readInt(TxAnalyzer::kPanAveragingKey, TxAnalyzer::kDefaultPanAveraging), 0, 3));
+        m_txPanAvTimeSpin->setValue(std::clamp(
+            readInt(TxAnalyzer::kPanAvTimeMsKey, TxAnalyzer::kDefaultPanAvTimeMs), 1, 9999));
+        m_txPanNormalizeCheck->setChecked(
+            s.value(QLatin1String(TxAnalyzer::kPanNormalizeKey),
+                    TxAnalyzer::kDefaultPanNormalize ? QStringLiteral("True")
+                                                     : QStringLiteral("False"))
+                .toString()
+                .compare(QStringLiteral("True"), Qt::CaseInsensitive)
+            == 0);
+        m_txWfDetectorCombo->setCurrentIndex(std::clamp(
+            readInt(TxAnalyzer::kWfDetectorKey, TxAnalyzer::kDefaultWfDetector), 0, 3));
+        m_txWfAveragingCombo->setCurrentIndex(std::clamp(
+            readInt(TxAnalyzer::kWfAveragingKey, TxAnalyzer::kDefaultWfAveraging), 0, 3));
+        m_txWfAvTimeSpin->setValue(std::clamp(
+            readInt(TxAnalyzer::kWfAvTimeMsKey, TxAnalyzer::kDefaultWfAvTimeMs), 1, 9999));
+    }
+    refreshTxAnalyzerGate();
+}
+
+void TxDisplayPage::showLocalTxAnalyzerSettings()
+{
+    auto* txa = model() ? model()->txAnalyzer() : nullptr;
+    if (!txa) {
+        return;
+    }
+    // QSignalBlocker so a setValue does not echo back into the analyzer.
+    {
+        QSignalBlocker bSlider(m_txFftSizeSlider);
+        QSignalBlocker bWin   (m_txWindowCombo);
+        QSignalBlocker bPanDet(m_txPanDetectorCombo);
+        QSignalBlocker bPanAvg(m_txPanAveragingCombo);
+        QSignalBlocker bPanT  (m_txPanAvTimeSpin);
+        QSignalBlocker bPanN  (m_txPanNormalizeCheck);
+        QSignalBlocker bWfDet (m_txWfDetectorCombo);
+        QSignalBlocker bWfAvg (m_txWfAveragingCombo);
+        QSignalBlocker bWfT   (m_txWfAvTimeSpin);
+
+        // Derive slider position from current fftSize.  Defensive:
+        // log2(fftSize / 4096), clamped to [0, 6].
+        const int fs = txa->fftSize();
+        int sliderPos = 0;
+        for (int p = 0; p <= 6; ++p) {
+            if ((4096 << p) >= fs) {
+                sliderPos = p;
+                break;
+            }
+        }
+        m_txFftSizeSlider->setValue(sliderPos);
+
+        m_txFftSizeReadout->setText(QString::number(txa->fftSize()));
+        const double bw = txa->binWidthHz();
+        m_txBinWidthLabel->setText(
+            bw > 0.0 ? QString::number(bw, 'f', 3)
+                     : QStringLiteral("0.000"));
+
+        m_txWindowCombo->setCurrentIndex(
+            std::clamp(txa->windowType(), 0, 6));
+        m_txPanDetectorCombo->setCurrentIndex(
+            std::clamp(txa->panDetector(), 0, 4));
+        m_txPanAveragingCombo->setCurrentIndex(
+            std::clamp(txa->panAveraging(), 0, 3));
+        m_txPanAvTimeSpin->setValue(txa->panAvTimeMs());
+        m_txPanNormalizeCheck->setChecked(txa->panNormalize());
+        m_txPanNormalizeCheck->setEnabled(txa->panNormalizeEnabled());
+        m_txWfDetectorCombo->setCurrentIndex(
+            std::clamp(txa->wfDetector(), 0, 3));
+        m_txWfAveragingCombo->setCurrentIndex(
+            std::clamp(txa->wfAveraging(), 0, 3));
+        m_txWfAvTimeSpin->setValue(txa->wfAvTimeMs());
+    }
+}
+
+void TxDisplayPage::writeCoreTxAnalyzerSetting(const char* key, const QString& value)
+{
+    // Station scope: the window's settings proxy sends it to the Core,
+    // which applies it to its TX analyzer (RadioModel::
+    // applyRemoteTxDisplaySetting).
+    AppSettings::instance().setValue(QLatin1String(key), value);
+}
+
+void TxDisplayPage::wireCoreTxAnalyzerControls()
+{
+    showCoreTxAnalyzerSettings();
+
+    // Each control writes its key, as the local page's calls the setter
+    // (setup.cs:18146-18210 [v2.10.3.15]).
+    connect(m_txFftSizeSlider, &QSlider::valueChanged, this, [this](int v) {
+        // From Thetis setup.cs:18179-18183 [v2.10.3.15]
+        //   FFTSize = (int)(4096 * Math.Pow(2, Math.Floor((double)(tbTXDisplayFFTSize.Value))));
+        //   double bin_width = (double)...SampleRate / (double)...FFTSize;
+        //   lblTXDispBinWidth.Text = bin_width.ToString("N3");
+        const int size = 4096 << std::clamp(v, 0, 6);
+        showTxFftReadouts(size, static_cast<double>(WdspEngine::kTxDspSampleRate)
+                                    / static_cast<double>(size));
+        writeCoreTxAnalyzerSetting(TxAnalyzer::kFftSizeKey, QString::number(size));
+    });
+    connect(m_txWindowCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            [this](int idx) {
+        writeCoreTxAnalyzerSetting(TxAnalyzer::kWindowTypeKey, QString::number(idx));
+    });
+    connect(m_txPanDetectorCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            [this](int idx) {
+        writeCoreTxAnalyzerSetting(TxAnalyzer::kPanDetectorKey, QString::number(idx));
+        refreshTxAnalyzerGate();
+    });
+    connect(m_txPanAveragingCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            [this](int idx) {
+        writeCoreTxAnalyzerSetting(TxAnalyzer::kPanAveragingKey, QString::number(idx));
+    });
+    connect(m_txPanAvTimeSpin, QOverload<int>::of(&QSpinBox::valueChanged), this,
+            [this](int ms) {
+        writeCoreTxAnalyzerSetting(TxAnalyzer::kPanAvTimeMsKey, QString::number(ms));
+    });
+    connect(m_txPanNormalizeCheck, &QCheckBox::toggled, this, [this](bool on) {
+        writeCoreTxAnalyzerSetting(TxAnalyzer::kPanNormalizeKey,
+                                   on ? QStringLiteral("True") : QStringLiteral("False"));
+    });
+    connect(m_txWfDetectorCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            [this](int idx) {
+        writeCoreTxAnalyzerSetting(TxAnalyzer::kWfDetectorKey, QString::number(idx));
+    });
+    connect(m_txWfAveragingCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            [this](int idx) {
+        writeCoreTxAnalyzerSetting(TxAnalyzer::kWfAveragingKey, QString::number(idx));
+    });
+    connect(m_txWfAvTimeSpin, QOverload<int>::of(&QSpinBox::valueChanged), this,
+            [this](int ms) {
+        writeCoreTxAnalyzerSetting(TxAnalyzer::kWfAvTimeMsKey, QString::number(ms));
+    });
+    // Once the slider is let go, show what the Core holds.
+    connect(m_txFftSizeSlider, &QSlider::sliderReleased, this,
+            &TxDisplayPage::showCoreTxAnalyzerSettings);
+
+    // Another window's change, the Core's own (its value held to what the
+    // analyzer takes), a refusal, and a new snapshot all bring the
+    // controls back to the Core's keys; the Core's version opens or closes
+    // them.
+    connect(model(), &RadioModel::stationSettingChanged, this, [this](const QString& key) {
+        if (key.isEmpty() || TxAnalyzer::isSettingsKey(key)) {
+            showCoreTxAnalyzerSettings();
+        }
+    });
+    if (auto* proxy = dynamic_cast<SettingsProxy*>(AppSettings::instance().remoteBackend())) {
+        connect(proxy, &SettingsProxy::valueRejected, this,
+                [this](const QString& key, const QVariant&) {
+            if (TxAnalyzer::isSettingsKey(key)) {
+                showCoreTxAnalyzerSettings();
+            }
+        });
+    }
+    connect(model(), &RadioModel::stationTxDisplayVersionChanged, this,
+            &TxDisplayPage::refreshTxAnalyzerGate);
 }
 
 void TxDisplayPage::buildUI()
@@ -2813,53 +3062,12 @@ void TxDisplayPage::buildUI()
     // depend on MainWindow.
     auto* txa = model() ? model()->txAnalyzer() : nullptr;
     if (txa) {
-        // Initial sync uses QSignalBlocker so the first setValue does
-        // not echo back into the analyzer (no-op since the values match,
-        // but cleaner to gate).
-        {
-            QSignalBlocker bSlider(m_txFftSizeSlider);
-            QSignalBlocker bWin   (m_txWindowCombo);
-            QSignalBlocker bPanDet(m_txPanDetectorCombo);
-            QSignalBlocker bPanAvg(m_txPanAveragingCombo);
-            QSignalBlocker bPanT  (m_txPanAvTimeSpin);
-            QSignalBlocker bPanN  (m_txPanNormalizeCheck);
-            QSignalBlocker bWfDet (m_txWfDetectorCombo);
-            QSignalBlocker bWfAvg (m_txWfAveragingCombo);
-            QSignalBlocker bWfT   (m_txWfAvTimeSpin);
-
-            // Derive slider position from current fftSize.  Defensive:
-            // log2(fftSize / 4096), clamped to [0, 6].
-            const int fs = txa->fftSize();
-            int sliderPos = 0;
-            for (int p = 0; p <= 6; ++p) {
-                if ((4096 << p) >= fs) {
-                    sliderPos = p;
-                    break;
-                }
-            }
-            m_txFftSizeSlider->setValue(sliderPos);
-
-            m_txFftSizeReadout->setText(QString::number(txa->fftSize()));
-            const double bw = txa->binWidthHz();
-            m_txBinWidthLabel->setText(
-                bw > 0.0 ? QString::number(bw, 'f', 3)
-                         : QStringLiteral("0.000"));
-
-            m_txWindowCombo->setCurrentIndex(
-                std::clamp(txa->windowType(), 0, 6));
-            m_txPanDetectorCombo->setCurrentIndex(
-                std::clamp(txa->panDetector(), 0, 4));
-            m_txPanAveragingCombo->setCurrentIndex(
-                std::clamp(txa->panAveraging(), 0, 3));
-            m_txPanAvTimeSpin->setValue(txa->panAvTimeMs());
-            m_txPanNormalizeCheck->setChecked(txa->panNormalize());
-            m_txPanNormalizeCheck->setEnabled(txa->panNormalizeEnabled());
-            m_txWfDetectorCombo->setCurrentIndex(
-                std::clamp(txa->wfDetector(), 0, 3));
-            m_txWfAveragingCombo->setCurrentIndex(
-                std::clamp(txa->wfAveraging(), 0, 3));
-            m_txWfAvTimeSpin->setValue(txa->wfAvTimeMs());
-        }
+        showLocalTxAnalyzerSettings();
+        // Parity both ways (Task 30): a remote window's change to this
+        // Core's analyzer shows here too, signals blocked so it does not
+        // echo back into the analyzer.
+        connect(txa, &TxAnalyzer::settingReloaded, this,
+                [this](const QString&) { showLocalTxAnalyzerSettings(); });
 
         // FFT size slider → setFftSizeSliderPosition + readout refresh.
         // From Thetis setup.cs:18136-18143 [v2.10.3.13+501e3f51] —
@@ -2952,7 +3160,12 @@ void TxDisplayPage::buildUI()
                 a->setWfAvTimeMs(ms);
             }
         });
+    } else if (remoteWindow()) {
+        // R-R3-49 (parity Task 30): a remote window has no analyzer of its
+        // own; the Core's is the one it drives.
+        wireCoreTxAnalyzerControls();
     }
+    refreshTxAnalyzerGate();
 }
 
 // ---------------------------------------------------------------------------

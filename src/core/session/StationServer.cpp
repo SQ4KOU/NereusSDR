@@ -557,6 +557,11 @@
 //               relayed control path, controlChannelVersion. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-27: Parity Task 30 (R-R3-49, R-R3-21, A12): txDisplayVersion
+//               2; a window's TX Display analyzer setting, written or
+//               removed, reaches the Core's TX analyzer at once, on and
+//               off the air. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -5498,6 +5503,11 @@ bool StationServer::applySettingsWrite(SessionTransport* transport, const Sessio
         // R-R3-13 / R-R3-49 (parity Task 15): the Multimeter polling delay
         // sets the Core's meter pump rate at once, as the local page does.
         m_radioModel->applyMeterSetting(key, m_settings.value(key));
+        // R-R3-49 / R-R3-21 (parity Task 30, txDisplayVersion 2): a TX
+        // Display analyzer setting reaches the Core's TX analyzer at once,
+        // on and off the air, as the local page's change does. It changes
+        // only the display, never the radio.
+        m_radioModel->applyRemoteTxDisplaySetting(key);
     }
     // D79: the Core's own band plan follows BandPlanName.
     applyBandPlanSetting(key);
@@ -5610,6 +5620,8 @@ void StationServer::applySettingsRemove(const SessionMessage& message)
         m_radioModel->applySwrProtectionSetting(key, QVariant());
         // R-R3-13 / R-R3-49 (parity Task 15): the default meter pump rate.
         m_radioModel->applyMeterSetting(key, QVariant());
+        // R-R3-49 (parity Task 30): the TX Display analyzer default.
+        m_radioModel->applyRemoteTxDisplaySetting(key);
     }
     // D79: removing BandPlanName returns the Core to ARRL (US).
     applyBandPlanSetting(key);
@@ -7260,7 +7272,9 @@ int StationServer::txDisplayVersion() const
 {
     // R-R3-49 / A11 (parity Task 28): the transmit display travels on the
     // media display channel and comes from the Core's own TX analyzer.
-    return m_mediaEnabled && m_radioModel && m_radioModel->txDisplayFeed() != nullptr ? 1 : 0;
+    // Parity Task 30 (A12): 2, the Core applies a window's Setup > Display
+    // > TX Display analyzer settings to that analyzer at once.
+    return m_mediaEnabled && m_radioModel && m_radioModel->txDisplayFeed() != nullptr ? 2 : 0;
 }
 
 bool StationServer::txDisplayAvailable(quint64 epoch) const

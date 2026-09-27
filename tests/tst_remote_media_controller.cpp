@@ -5607,7 +5607,7 @@ private slots:
         client.startSession(clientLink, server.token());
         server.acceptTransport(stationLink);
         QTRY_VERIFY(sourceMedia && sinkMedia);
-        QCOMPARE(client.capabilities().txDisplayVersion, analyzer ? 1 : 0);
+        QCOMPARE(client.capabilities().txDisplayVersion, analyzer ? 2 : 0);
         QCOMPARE(gui.txDisplayNegotiated(), analyzer);
         const QJsonObject start = lastControl(outbound, QStringLiteral("start"));
         QCOMPARE(start.contains(QStringLiteral("txDisplayVersion")), analyzer);

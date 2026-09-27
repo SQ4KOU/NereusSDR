@@ -300,6 +300,77 @@ private slots:
         TxAnalyzer a;
         QCOMPARE(a.nPixout(), 2);
     }
+
+    // 9. reload_setting_applies_one_key (parity Task 30) -- a Core applies a
+    //    window's write of one key through the local page's setter: the
+    //    getter moves, the analyzer is reconfigured, and only that key is
+    //    written back, and only when the setter changed the value.
+    void reload_setting_applies_one_key()
+    {
+        auto& s = AppSettings::instance();
+        TxAnalyzer a;
+        s.setValue(QStringLiteral("DisplayTxWfDetector"), QStringLiteral("2"));
+        const int before = a.analyzerConfigCount();
+        a.reloadSetting(QStringLiteral("DisplayTxWfDetector"));
+        QCOMPARE(a.wfDetector(), 2);
+        QVERIFY(a.analyzerConfigCount() > before);
+        // The other eight were not saved with it.
+        QVERIFY(!s.contains(QStringLiteral("DisplayTxPanAvTimeMs")));
+        QVERIFY(!s.contains(QStringLiteral("DisplayTxFftSize")));
+
+        s.setValue(QStringLiteral("DisplayTxPanNormalize"), QStringLiteral("true"));
+        a.reloadSetting(QStringLiteral("DisplayTxPanNormalize"));
+        QCOMPARE(a.panNormalize(), true);
+        QCOMPARE(s.value(QStringLiteral("DisplayTxPanNormalize")).toString(),
+                 QStringLiteral("True"));
+    }
+
+    // 10. reload_setting_holds_values_to_the_setter -- an FFT size that is
+    //     not a slider position takes the page's position; out-of-range and
+    //     non-numbers are held; the applied value is written back.
+    void reload_setting_holds_values_to_the_setter()
+    {
+        auto& s = AppSettings::instance();
+        TxAnalyzer a;
+        s.setValue(QStringLiteral("DisplayTxFftSize"), QStringLiteral("20000"));
+        a.reloadSetting(QStringLiteral("DisplayTxFftSize"));
+        QCOMPARE(a.fftSize(), 32768);
+        QCOMPARE(s.value(QStringLiteral("DisplayTxFftSize")).toString(), QStringLiteral("32768"));
+        s.setValue(QStringLiteral("DisplayTxFftSize"), QStringLiteral("999999"));
+        a.reloadSetting(QStringLiteral("DisplayTxFftSize"));
+        QCOMPARE(a.fftSize(), 262144);
+
+        s.setValue(QStringLiteral("DisplayTxWindowType"), QStringLiteral("9"));
+        a.reloadSetting(QStringLiteral("DisplayTxWindowType"));
+        QCOMPARE(a.windowType(), 6);
+        QCOMPARE(s.value(QStringLiteral("DisplayTxWindowType")).toString(), QStringLiteral("6"));
+
+        s.setValue(QStringLiteral("DisplayTxWfAvTimeMs"), QStringLiteral("not a number"));
+        a.reloadSetting(QStringLiteral("DisplayTxWfAvTimeMs"));
+        QCOMPARE(a.wfAvTimeMs(), 120);
+        QCOMPARE(s.value(QStringLiteral("DisplayTxWfAvTimeMs")).toString(), QStringLiteral("120"));
+    }
+
+    // 11. reload_setting_unset_key_is_the_default -- a removed key returns
+    //     the analyzer to its default and stays unset.
+    void reload_setting_unset_key_is_the_default()
+    {
+        auto& s = AppSettings::instance();
+        TxAnalyzer a;
+        a.setPanAvTimeMs(400);
+        a.setWindowType(0);
+        s.remove(QStringLiteral("DisplayTxPanAvTimeMs"));
+        a.reloadSetting(QStringLiteral("DisplayTxPanAvTimeMs"));
+        QCOMPARE(a.panAvTimeMs(), TxAnalyzer::kDefaultPanAvTimeMs);
+        QVERIFY(!s.contains(QStringLiteral("DisplayTxPanAvTimeMs")));
+        // A key that is not one of the nine does nothing.
+        const int before = a.analyzerConfigCount();
+        a.reloadSetting(QStringLiteral("DisplayFftWindow"));
+        QCOMPARE(a.analyzerConfigCount(), before);
+        QCOMPARE(a.windowType(), 0);
+        QVERIFY(TxAnalyzer::isSettingsKey(QStringLiteral("DisplayTxWfAveraging")));
+        QVERIFY(!TxAnalyzer::isSettingsKey(QStringLiteral("DisplayTxWfGradient")));
+    }
 };
 
 QTEST_MAIN(TestTxAnalyzerSettings)

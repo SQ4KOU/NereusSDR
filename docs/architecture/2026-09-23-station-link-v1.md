@@ -1161,7 +1161,17 @@ When a feature is off, its version is 0:
   display"). A window that does not declare it gets today's wire: no
   `transmit`, and receive frames while keyed. (`txState`'s `highSwr` and
   `swrWindBackLatched`, section 18.8, came with this version but do not
-  depend on it: every Core that sends `txState` sends them.)
+  depend on it: every Core that sends `txState` sends them.) Version 2
+  (remote-window parity Task 30, A12) is sent under the same condition
+  (media on and a TX analyzer) and adds, with no new message: the Core
+  applies a window's `settings.write` or `settings.remove` of one of Setup
+  > Display > TX Display's nine analyzer keys to its TX analyzer at once
+  (section 8.1). A window on a Core that sends 0, 1 or no entry shows those
+  nine controls disabled with "This Core does not apply transmit display
+  settings from this app. Updating the Core may help.", and keeps the
+  page's other groups (the TX waterfall levels, palette, low colour and
+  gradient, the TX grid), which are its own. A media `start` still
+  declares 1: the transmit display itself did not change.
 - `displayClockVersion` (R-R3-21, R-R3-08): sent only at agreed minor 11,
   after `txDisplayVersion`, and 1 whenever media is on. At 1 every
   display frame's `producerTimestamp` and the `clock-echo`'s `t1`, `t2` and
@@ -3281,6 +3291,22 @@ Multimeter > Polling delay), or its removal, sets the Core's meter pump
 rate at once, clamped to 10 to 2000 ms (a removal returns the 100 ms
 default); it only changes how often the Core reads its meters, so it is
 taken on and off the air, as a local window changes it. At
+`txDisplayVersion` 2 a taken Setup > Display > TX Display analyzer key
+(`DisplayTxFftSize`, `DisplayTxWindowType`, `DisplayTxPanDetector`,
+`DisplayTxPanAveraging`, `DisplayTxPanAvTimeMs`, `DisplayTxPanNormalize`,
+`DisplayTxWfDetector`, `DisplayTxWfAveraging`, `DisplayTxWfAvTimeMs`), or
+its removal, applies to the Core's TX analyzer at once through the setter
+the local page calls (a removal returns the key's default: FFT size 32768,
+window 4 (Hamming), detectors and averaging 0, panadapter time 30 ms,
+normalize `False`, waterfall time 120 ms). It changes only the Core's
+transmit display, never the radio, so it is taken on and off the air and
+on a receive-only Core, as a local window changes it while keyed (Thetis
+sets the analyzer from these controls with no MOX check). A value the page's
+own control could not hold takes what the analyzer's setter makes of it (a
+number held to its range, an FFT size to the slider position the page
+shows, text that is not a number leaves the setting as it was) and the Core
+writes that value back to the key, so every window shows what the analyzer
+runs; the Core writes back only that key. At
 `transmitSettingsVersion` 6 the same off-air rule holds for Setup > PA's
 keys, `hardware/<mac>/pa/...` (the PA profiles: the profile list
 `pa/profile/_names`, each profile `pa/profile/<name>`, and the active

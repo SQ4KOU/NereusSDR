@@ -503,6 +503,12 @@
 //                and stops the TX analyzer on the MOX edge and holds its
 //                view for every viewer. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-27 - Parity Task 30 (R-R3-49, R-R3-21, A12):
+//                applyRemoteTxDisplaySetting, a window's Setup > Display >
+//                TX Display analyzer setting applied to the Core's TX
+//                analyzer at once; stationTxDisplayVersion, the Core's
+//                txDisplayVersion as a remote window last heard it. J.J.
+//                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -740,6 +746,7 @@ warren@wpratt.com
 #include "core/PsFeedbackChannel.h"
 #include "core/StepAttenuatorController.h"
 #include "core/TwoToneController.h"
+#include "core/TxAnalyzer.h"
 #include "core/TxDisplayFeed.h"
 // Phase 3F Sub-Epic C Task 6: TxSliceArbiter integration.
 #include "core/TxSliceArbiter.h"
@@ -6965,6 +6972,8 @@ void RadioModel::applyStationCapabilities(const NereusSDR::StationCapabilities& 
     // R-R3-49 (parity Task 16): whether the Core sends its filter curve,
     // and (trunk merge) whether it says which noise reduction it runs.
     setStationDspInfoVersion(caps.dspInfoVersion);
+    // Parity Task 30: whether the Core applies TX Display's settings.
+    setStationTxDisplayVersion(caps.txDisplayVersion);
     setStationDspAssetVersion(caps.dspAssetVersion);
 
     if (infoMoved) {
@@ -7412,6 +7421,26 @@ bool RadioModel::applyMeterSetting(const QString& key, const QVariant& value)
     const int ms = value.isValid() ? value.toString().toInt(&ok) : 100;
     m_sliceMeterPump->setIntervalMs(value.isValid() && !ok ? 100 : ms);
     return true;
+}
+
+void RadioModel::applyRemoteTxDisplaySetting(const QString& key)
+{
+    // Parity Task 30: Thetis's TX Display handlers set the transmit
+    // analyzer at once and check nothing about MOX; reloadSetting carries
+    // the cite.
+    if (m_txAnalyzer == nullptr || !TxAnalyzer::isSettingsKey(key)) {
+        return;
+    }
+    m_txAnalyzer->reloadSetting(key);
+}
+
+void RadioModel::setStationTxDisplayVersion(int version)
+{
+    if (m_role != Role::Remote || m_stationTxDisplayVersion == version) {
+        return;
+    }
+    m_stationTxDisplayVersion = version;
+    emit stationTxDisplayVersionChanged();
 }
 
 bool RadioModel::applySwrProtectionSetting(const QString& key, const QVariant& value)

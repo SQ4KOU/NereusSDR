@@ -379,8 +379,8 @@ void TstRemoteTxDisplay::capabilityFollowsTheAnalyzerAndTheMinor()
     {
         Harness h;
         h.establishSession();
-        QTRY_COMPARE(h.client.capabilities().txDisplayVersion, 1);
-        QCOMPARE(h.server.txDisplayVersion(), 1);
+        QTRY_COMPARE(h.client.capabilities().txDisplayVersion, 2);
+        QCOMPARE(h.server.txDisplayVersion(), 2);
         h.finish();
     }
     {
@@ -475,7 +475,7 @@ void TstRemoteTxDisplay::riseSendsTheTransmitDisplayAndFallResumesReceive()
     h.slice()->setPanKey(QStringLiteral("pan-a"));
     h.spare()->setPanKey(QStringLiteral("pan-b"));
     h.establishSession();
-    QTRY_COMPARE(h.client.capabilities().txDisplayVersion, 1);
+    QTRY_COMPARE(h.client.capabilities().txDisplayVersion, 2);
     QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
     h.startReadyPeer(/*declare=*/true);
     QVERIFY(h.controller->txDisplayNegotiated());
@@ -598,7 +598,7 @@ void TstRemoteTxDisplay::xitWhileKeyedRenewsTheContext()
 {
     Harness h;
     h.establishSession();
-    QTRY_COMPARE(h.client.capabilities().txDisplayVersion, 1);
+    QTRY_COMPARE(h.client.capabilities().txDisplayVersion, 2);
     QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
     h.startReadyPeer(true);
     const double centre = h.radio.streamCentreHz(h.slice()->streamIndex());
@@ -647,7 +647,7 @@ void TstRemoteTxDisplay::severalViewersShareTheGoverningView()
 {
     Harness h;
     h.establishSession();
-    QTRY_COMPARE(h.client.capabilities().txDisplayVersion, 1);
+    QTRY_COMPARE(h.client.capabilities().txDisplayVersion, 2);
     QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
     h.startReadyPeer(true);
     const double centre = h.radio.streamCentreHz(h.slice()->streamIndex());
@@ -691,7 +691,7 @@ void TstRemoteTxDisplay::aSubscribeWhileKeyedMovesTheView()
 {
     Harness h;
     h.establishSession();
-    QTRY_COMPARE(h.client.capabilities().txDisplayVersion, 1);
+    QTRY_COMPARE(h.client.capabilities().txDisplayVersion, 2);
     QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
     h.startReadyPeer(true);
     const double centre = h.radio.streamCentreHz(h.slice()->streamIndex());
@@ -732,7 +732,7 @@ void TstRemoteTxDisplay::olderPeerKeepsTodaysWire()
 {
     Harness h;
     h.establishSession();
-    QTRY_COMPARE(h.client.capabilities().txDisplayVersion, 1);
+    QTRY_COMPARE(h.client.capabilities().txDisplayVersion, 2);
     QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
     h.startReadyPeer(/*declare=*/false);
     QVERIFY(!h.controller->txDisplayNegotiated());
@@ -780,7 +780,7 @@ void TstRemoteTxDisplay::transmitWindowIsReadLikeTheReceiveWindow()
 {
     Harness h;
     h.establishSession();
-    QTRY_COMPARE(h.client.capabilities().txDisplayVersion, 1);
+    QTRY_COMPARE(h.client.capabilities().txDisplayVersion, 2);
     QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
     h.startReadyPeer(true);
     const double centre = h.radio.streamCentreHz(h.slice()->streamIndex());
@@ -847,7 +847,7 @@ void TstRemoteTxDisplay::budgetPacesTransmitFramesLikeReceiveFrames()
                                         cost.charge.spectrumSampleUnitsPerSecond, 3});
     QTest::failOnWarning(QRegularExpression(QStringLiteral("exceeded admitted display cost")));
     h.establishSession();
-    QTRY_COMPARE(h.client.capabilities().txDisplayVersion, 1);
+    QTRY_COMPARE(h.client.capabilities().txDisplayVersion, 2);
     QVERIFY(h.server.displayBudgetAvailable());
     QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
     h.startReadyPeer(true);
@@ -895,7 +895,7 @@ void TstRemoteTxDisplay::aSliceMovingWhileKeyedLeavesTheRisePanTransmitting()
     h.slice()->setPanKey(QStringLiteral("pan-a"));
     h.spare()->setPanKey(QStringLiteral("pan-b"));
     h.establishSession();
-    QTRY_COMPARE(h.client.capabilities().txDisplayVersion, 1);
+    QTRY_COMPARE(h.client.capabilities().txDisplayVersion, 2);
     QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
     h.startReadyPeer(true);
     const double centre = h.radio.streamCentreHz(h.slice()->streamIndex());
