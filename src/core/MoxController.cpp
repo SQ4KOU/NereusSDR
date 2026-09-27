@@ -172,6 +172,11 @@
 //               took is still down (a second press during the take is
 //               refused and keys nothing later). J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: iPhone app plan Task 77 fix round 3 (R-IOS-02, R-IOS-03,
+//               R-IOS-13): a CAT or TCI release that never keyed, and a
+//               refused CAT or TCI level, report pttSourcesReleased. J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis state-machine
@@ -1267,6 +1272,8 @@ void MoxController::tryPollKey(PttMode mode, quint8 refusedBit)
                 } else if (refusedBit == kRefusedTci) {
                     m_tciPtt = false;
                 }
+                // Task 77 fix round 3: a dropped level is a release too.
+                reportIfSourcesReleased();
             }
             return;
         }
@@ -2469,6 +2476,11 @@ void MoxController::onCatPtt(bool pressed)
     }
     m_catPtt = pressed;
     pollPtt();
+    if (!pressed) {
+        // Task 77 fix round 3: clearHeldBits ran with the level still set,
+        // so a release that never keyed is reported here.
+        reportIfSourcesReleased();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2585,6 +2597,10 @@ void MoxController::onTciPtt(bool pressed)
     }
     m_tciPtt = pressed;
     pollPtt();
+    if (!pressed) {
+        // Task 77 fix round 3: as onCatPtt.
+        reportIfSourcesReleased();
+    }
 }
 
 } // namespace NereusSDR

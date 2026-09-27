@@ -29,6 +29,9 @@
 //                 (iPhone app plan Task 77 fix round 2; R-IOS-02, R-IOS-03,
 //                 R-IOS-13): operateCommanded, every operate=0 or operate=1
 //                 written, so the Core knows the amp is changing over.
+//   2026-09-26  J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code
+//                 (Task 77 fix round 3): operateCommanded carries the
+//                 command's sequence.
 // =================================================================
 #pragma once
 
@@ -189,7 +192,9 @@ signals:
     /// iPhone app plan Task 77 fix round 2: an operate=1 (`operate` true)
     /// or operate=0 was written to the amp, by any sender. The amp is
     /// changing over until its status reports the commanded state.
-    void operateCommanded(bool operate);
+    /// Task 77 fix round 3: `seq` is the command's sequence, so an error
+    /// reply to it can end the changeover.
+    void operateCommanded(bool operate, quint32 seq);
 
     // Test seam: emitted from sendCommand so tests can assert frame format.
     void testFrameWrittenForTesting(const QString& frame);

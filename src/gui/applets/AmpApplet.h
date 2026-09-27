@@ -34,6 +34,11 @@
 //                 waits while the radio is on the air, and follows the
 //                 amp's reported state; coreDiagnosticsText. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26  iPhone app plan Task 77 fix round 3 (R-IOS-02, R-IOS-03,
+//                 R-IOS-13): OPERATE waits (disabled, with the reason) while
+//                 a Tuner Genius cycle runs, in both windows; a faulted
+//                 amp's click puts it in standby. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -187,6 +192,10 @@ private:
     // R-R3-22: a remote window's Disconnect or Connect, sent to the Core.
     void requestRemoteConnectionToggle();
     bool isRemoteWindow() const;
+    // iPhone app plan Task 77 fix round 3: the amp reports a fault (its
+    // OPERATE button then sends standby), and the tooltip saying so.
+    bool ampFaulted() const;
+    QString faultedTip() const;
     // R-R3-49 (parity Task 9): the Core puts its amp in operate or standby
     // for this remote window.
     bool remoteOperateControl() const;

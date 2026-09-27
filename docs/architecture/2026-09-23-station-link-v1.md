@@ -3632,7 +3632,9 @@ These command groups need a sentence beyond the table:
   checks. None keys anything, so a receive-only Core takes them, but each
   is refused while the radio is on the air ("The radio is on the air. Try
   again when it stops."); `setPgxlOperate` also while the Core is not
-  connected to the amp. A `property.write` of `amplifier` `operate` stays
+  connected to the amp, and (iPhone app plan Task 77 fix round 3) while a
+  Tuner Genius cycle runs or the Core's tuner reports its sweep ("The
+  tuner is tuning. Try again when it finishes."). A `property.write` of `amplifier` `operate` stays
   refused. The reasons are in the remote accessory control document.
 - **The RF-Kit's OPERATE, antenna, TCI mode and saved address.**
   `setRfKitOperate` (`on` bool), `setRfKitAntenna` (`port` i64, internal
@@ -5448,7 +5450,10 @@ no stop. The reasons:
 - `station`: any other stop the Core made itself: "The Core stopped
   transmitting.", or, for a key whose RF waited for the Power Genius and
   was stopped when it did not report within 1.5 s (iPhone app plan Task
-  77 fix round 2), "The amplifier did not finish switching. Try again."
+  77 fix round 2; words from fix round 3), "The amplifier did not answer.
+  Put it in standby or disconnect it in Setup to transmit without it."
+  (A FAULT report while `operate=1` is unconfirmed, or an error reply to
+  the operate command, ends the wait at once: the key goes out barefoot.)
 
 The Core sends the object to the holder and to every other declaring peer,
 so a device that lost its link learns why from the snapshot when it signs

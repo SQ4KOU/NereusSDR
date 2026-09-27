@@ -148,6 +148,10 @@
 //                                    own refusals (beginTgxlAutotune) are
 //                                    scanned and forwarded. AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Task 77 fix round 3: pgxlSwitchRefusal
+//                                    and tunerTuningReason scanned and
+//                                    forwarded. AI-assisted via Anthropic
+//                                    Claude Code.
 //   2026-09-26  J.J. Boyd / KG4VCF  Parity Task 19 (R-IOS-25):
 //                                    SpotSourceHost's refusals scanned and
 //                                    its readOnlyReason forwarded. AI-assisted
@@ -1169,6 +1173,9 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("stationTgxlControlAllowed"),
           // R-R3-49 (parity Task 1): the Core's one on-the-air refusal.
           QStringLiteral("onAirReason"), QStringLiteral("stationOnAirRefusal"),
+          // iPhone app plan Task 77 fix round 3: the Power Genius also
+          // waits while the Tuner Genius tunes.
+          QStringLiteral("tunerTuningReason"), QStringLiteral("pgxlSwitchRefusal"),
           QStringLiteral("setTgxlAntennaForStation"), QStringLiteral("setTgxlOperateForStation"),
           QStringLiteral("setTgxlBypassForStation"),
           // R-R3-49 (parity Task 8): the relay nudge, the Core's LAN scan and
@@ -1247,6 +1254,8 @@ const QList<ReasonSource>& reasonSources()
           // R-R3-49 (parity Task 1): onAirReason, a function of this file
           // scanned here.
           QStringLiteral("onAirReason()"),
+          // Task 77 fix round 3: tunerTuningReason, likewise.
+          QStringLiteral("tunerTuningReason()"),
           // R-R3-49 (parity Task 2): TransmitModel::settingRangeRefusal,
           // scanned below.
           QStringLiteral("range"),

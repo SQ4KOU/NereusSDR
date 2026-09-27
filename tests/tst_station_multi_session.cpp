@@ -141,6 +141,12 @@
 //               carrier; a second PTT press during a take keys nothing.
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-26: Task 77 fix round 3: a device's key and a device's
+//               two-tone started while the amplifier changes over are held
+//               and stopped without RF, the device told in the stop's
+//               words; a fresh key goes out once the amplifier reports.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -4708,6 +4714,82 @@ private slots:
         QCOMPARE(mox->currentKeyer().deviceId, a.key.fingerprint());
         QVERIFY(core.invoke(appA, "tx.twoTone", {off}).value(QStringLiteral("accepted")).toBool());
         QTRY_COMPARE(mox->state(), MoxState::Rx);
+        tt->setTxChannel(nullptr);
+    }
+
+    // Fix round 3 (minor D): a device's key and a device's two-tone started
+    // while the amplifier changes over wait at the RF-flow gate; still
+    // waiting 1.5 s after the command, each is stopped with its RF never
+    // started, and the device is told in the stop's words. Once the
+    // amplifier reports, the device's fresh key goes out.
+    void aDevicesKeyAndTwoToneHeldForTheAmplifierAreStoppedWithoutRf()
+    {
+        Core core;
+        allowTransmit(core);
+        Device a;
+        core.pair(a);
+        LoopbackTransport* appA = core.signIn(a, kTransmitter);
+        QVERIFY(admitted(appA));
+        CoreTx txr(core.model.get());
+        MoxController* mox = core.model->moxController();
+        const MirrorUpdate on{0, "on", MirrorWireKind::Bool, QVariant(true)};
+        PgxlConnection* pgxl = core.model->pgxlConnection();
+        pgxl->injectLineForTesting(QStringLiteral("V3.8.9"));
+        pgxl->injectLineForTesting(QStringLiteral("R1|0|state=OPERATE"));
+        const QString words = RadioModel::ampNotSwitchedText();
+        QVERIFY(OperatorWording::isPlain(words));
+        // Barefoot transmit with the amplifier in standby is this test's
+        // subject; an interlock left set by an earlier test would refuse it.
+        core.model->txInterlockPolicy()->setMode(TxInterlockPolicy::Disabled);
+
+        // The device's key while the amplifier goes to standby.
+        pgxl->sendCommand(QStringLiteral("operate=0"));
+        const QJsonObject held =
+            core.invoke(appA, "tx.key", {utf8("trigger", QStringLiteral("screen"))});
+        QVERIFY2(held.value(QStringLiteral("accepted")).toBool(),
+                 qPrintable(held.value(QStringLiteral("reason")).toString()));
+        QTRY_VERIFY(mox->isMox());
+        QTRY_VERIFY_WITH_TIMEOUT(!mox->isMox(), 4000);
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        QCOMPARE(txr.opens.load(), 0);
+        QTRY_COMPARE(latest(appA->received(), QStringLiteral("txState"),
+                            QStringLiteral("stopText")).toString(),
+                     words);
+
+        // A late report; the device's fresh key goes out.
+        pgxl->injectLineForTesting(QStringLiteral("S0|status state=STANDBY"));
+        QVERIFY(!core.model->ampChangingOver());
+        const QJsonObject fresh =
+            core.invoke(appA, "tx.key", {utf8("trigger", QStringLiteral("screen"))});
+        QVERIFY2(fresh.value(QStringLiteral("accepted")).toBool(),
+                 qPrintable(fresh.value(QStringLiteral("reason")).toString()));
+        QTRY_VERIFY(txr.tx.isRfGateOpen());
+        QCOMPARE(txr.opens.load(), 1);
+        QVERIFY(core.invoke(appA, "tx.unkey", {int64("epoch", core.model->keyedBy().epoch)})
+                    .value(QStringLiteral("accepted")).toBool());
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+
+        // The device's two-tone while the amplifier goes to operate.
+        TwoToneController* tt = core.model->twoToneController();
+        QVERIFY(tt);
+        tt->setTxChannel(&txr.tx);
+        tt->setPowerOn(true);
+        tt->setSettleDelaysMs(0, 0);
+        pgxl->sendCommand(QStringLiteral("operate=1"));
+        const QJsonObject twoTone = core.invoke(appA, "tx.twoTone", {on});
+        QVERIFY2(twoTone.value(QStringLiteral("accepted")).toBool(),
+                 qPrintable(twoTone.value(QStringLiteral("reason")).toString()));
+        QTRY_VERIFY(mox->isMox() && tt->isActive());
+        QTest::qWait(200);
+        QCOMPARE(txr.opens.load(), 1);
+        QTRY_VERIFY_WITH_TIMEOUT(!tt->isActive() && !mox->isMox(), 4000);
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        QCOMPARE(txr.opens.load(), 1);
+        QVERIFY(core.model->lastTransmitStopReason().code
+                == QByteArray(RadioModel::kAmpNotSwitchedStopCode));
+        QTRY_COMPARE(latest(appA->received(), QStringLiteral("txState"),
+                            QStringLiteral("stopText")).toString(),
+                     words);
         tt->setTxChannel(nullptr);
     }
 

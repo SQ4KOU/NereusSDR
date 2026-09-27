@@ -32,6 +32,8 @@
 //                 connected amp (the Core's device settings).
 //   2026-09-26  J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code
 //                 (iPhone app plan Task 77 fix round 2): operateCommanded.
+//   2026-09-26  J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code
+//                 (Task 77 fix round 3): operateCommanded carries its seq.
 // =================================================================
 #include "PgxlConnection.h"
 #include "AppSettings.h"
@@ -565,7 +567,7 @@ quint32 PgxlConnection::writeProtocolCommand(const QString& cmd)
     emit testFrameWrittenForTesting(line.trimmed());  // test seam
     // iPhone app plan Task 77 fix round 2: the amp starts changing over.
     if (cmd == QLatin1String("operate=1") || cmd == QLatin1String("operate=0")) {
-        emit operateCommanded(cmd == QLatin1String("operate=1"));
+        emit operateCommanded(cmd == QLatin1String("operate=1"), seq);
     }
     return seq;
 }

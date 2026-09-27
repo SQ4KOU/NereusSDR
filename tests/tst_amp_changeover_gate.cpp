@@ -19,6 +19,14 @@
 //      MOX comes on during its standby wait; the amplifier's restore is
 //      sent only with nothing keyed, no PTT down and nothing unconfirmed,
 //      and dropped when the amplifier changes state on its own.
+//   5. Fix round 3: the Power Genius's OPERATE and STANDBY are refused
+//      while a Tuner Genius cycle runs; an operate=1 that reaches the
+//      amplifier anyway during the cycle's standby wait ends the cycle
+//      without keying, the amplifier left as commanded; a FAULT report or
+//      an error reply ends the changeover (a held key goes out barefoot);
+//      the 1.5 s stop says how to transmit without the amplifier, and a
+//      fresh key after it goes out once the amplifier reports; a CAT or
+//      TCI release that never keyed is reported as a release.
 //
 // A local RadioModel with a mock radio, a TX channel wired as the connect
 // path wires it (no WDSP channel: the RF gate is the observable), and the
@@ -29,6 +37,8 @@
 //   2026-09-26: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), iPhone app plan Task 77 fix round 2, with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: fix round 3 cases (item 5 above). J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -47,6 +57,7 @@
 #include "core/TxChannel.h"
 #include "core/WdspEngine.h"
 #include "core/safety/TxRefusal.h"
+#include "OperatorWording.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
@@ -68,7 +79,12 @@ void quietUnopenedSockets(QtMsgType type, const QMessageLogContext& context, con
     }
 }
 
-const QString kAmpNotSwitched = QStringLiteral("The amplifier did not finish switching. Try again.");
+const QString kAmpNotSwitched = QStringLiteral(
+    "The amplifier did not answer. Put it in standby or disconnect it in Setup to transmit"
+    " without it.");
+const QString kNotStandbyForTune = QStringLiteral(
+    "The amplifier did not go to standby for tuning. Put it in standby or disconnect it in"
+    " Setup, then tune again.");
 
 class MockConnection : public RadioConnection {
     Q_OBJECT
@@ -328,6 +344,13 @@ private slots:
         QTest::qWait(100);
         QVERIFY(!rig.keyed());
         QCOMPARE(rig.rfOpens.load(), 0);
+        QVERIFY(!rig.model.ampChangingOver());
+        // Fix round 3: a fresh key now goes out (the amplifier reported).
+        rig.model.moxController()->setMox(true);
+        QTRY_VERIFY(rig.tx.isRfGateOpen());
+        QCOMPARE(rig.rfOpens.load(), 1);
+        rig.model.moxController()->setMox(false);
+        QTRY_VERIFY(rig.atRx());
     }
 
     // 3. No Power Genius, a Power Genius with nothing commanded, or one
@@ -455,6 +478,157 @@ private slots:
         QTRY_VERIFY(rig.atRx());
         QTest::qWait(200);
         QCOMPARE(rig.sentCount(QStringLiteral("operate=1")), 0);
+    }
+
+    // 5a. Fix round 3: while the Core's own cycle runs, the Power Genius's
+    //     OPERATE and STANDBY are refused with the tuning words (a local
+    //     click); the wait is announced when the cycle starts and ends.
+    void theAmplifierSwitchWaitsForATunerCycle()
+    {
+        Rig rig;
+        rig.connectAmp();
+        rig.connectTuner();
+        QSignalSpy waitChanged(&rig.model, &RadioModel::pgxlSwitchWaitChanged);
+        QSignalSpy refused(&rig.model, &RadioModel::accessoryRequestRefused);
+        QVERIFY(!rig.model.pgxlSwitchRefusal(nullptr));
+        rig.model.startTgxlAutotune(/*fromHardware=*/false);
+        QVERIFY(rig.model.isTgxlAutotuneInProgress());
+        QCOMPARE(waitChanged.count(), 1);
+        QVERIFY(rig.model.pgxlSwitchWaitsForTuner());
+        QString reason;
+        QVERIFY(rig.model.pgxlSwitchRefusal(&reason));
+        QCOMPARE(reason, RadioModel::tunerTuningReason());
+        QVERIFY(rig.model.refuseLocalAccessorySwitchOnAir(QStringLiteral("pgxl")));
+        QCOMPARE(refused.count(), 1);
+        QCOMPARE(refused.at(0).at(1).toString(), RadioModel::tunerTuningReason());
+        // The Tuner Genius and RF-Kit switches keep their own rule.
+        QVERIFY(!rig.model.refuseLocalAccessorySwitchOnAir(QStringLiteral("rfkit")));
+        QCOMPARE(rig.sentCount(QStringLiteral("operate=0")), 1);
+        QCOMPARE(rig.sentCount(QStringLiteral("operate=1")), 0);
+        // The cycle ends (the amplifier never reports): the wait is over.
+        QTRY_VERIFY_WITH_TIMEOUT(!rig.model.isTgxlAutotuneInProgress(), 4000);
+        QCOMPARE(waitChanged.count(), 2);
+        QVERIFY(!rig.model.pgxlSwitchRefusal(nullptr));
+    }
+
+    // 5b. Fix round 3: an operate=1 that reaches the amplifier during the
+    //     cycle's standby wait (anything but a window, which is refused):
+    //     whether the amplifier's standby comes first or it reports only
+    //     operating, no tune carrier is keyed, the cycle ends, and the
+    //     amplifier is left as commanded (no restore of the cycle's own).
+    void anOperateDuringTheStandbyWaitEndsTheCycleUnkeyed()
+    {
+        for (const bool standbyFirst : {true, false}) {
+            Rig rig;
+            rig.connectAmp();
+            rig.connectTuner();
+            QSignalSpy refused(&rig.model, &RadioModel::tuneRefused);
+            rig.model.startTgxlAutotune(/*fromHardware=*/false);
+            QVERIFY(rig.model.isTgxlAutotuneInProgress());
+            QCOMPARE(rig.sentCount(QStringLiteral("operate=0")), 1);
+            rig.amp()->sendCommand(QStringLiteral("operate=1"));   // the injected command
+            if (standbyFirst) {
+                rig.ampReports(QStringLiteral("STANDBY"));
+                QTRY_VERIFY(!rig.model.isTgxlAutotuneInProgress());
+                rig.ampReports(QStringLiteral("OPERATE"));
+            } else {
+                rig.ampReports(QStringLiteral("IDLE"));
+                QTRY_VERIFY_WITH_TIMEOUT(!rig.model.isTgxlAutotuneInProgress(), 4000);
+            }
+            QVERIFY2(!rig.model.isTune(), standbyFirst ? "standby first" : "idle only");
+            QVERIFY(!rig.keyed());
+            QCOMPARE(rig.rfOpens.load(), 0);
+            QCOMPARE(refused.count(), 1);
+            QCOMPARE(refused.at(0).at(0).toString(), kNotStandbyForTune);
+            QVERIFY(OperatorWording::isPlain(kNotStandbyForTune));
+            QTRY_VERIFY(rig.model.ampOperate());
+            QVERIFY(!rig.model.ampChangingOver());
+            QTest::qWait(100);
+            QCOMPARE(rig.sentCount(QStringLiteral("operate=1")), 1);   // only the injected one
+            QCOMPARE(rig.rfOpens.load(), 0);
+        }
+    }
+
+    // 5c. Fix round 3: an amplifier in FAULT while operate=1 is unconfirmed
+    //     never reaches it: the changeover ends at the report and a held
+    //     key goes out barefoot, well inside the 1.5 s bound.
+    void aFaultWhileOperateIsOutstandingReleasesTheGate()
+    {
+        Rig rig;
+        rig.connectAmp(QStringLiteral("STANDBY"));
+        QSignalSpy stopped(&rig.model, &RadioModel::transmitStopped);
+        rig.amp()->sendCommand(QStringLiteral("operate=1"));
+        rig.model.moxController()->setMox(true);
+        QTRY_VERIFY(rig.keyed());
+        QTest::qWait(150);
+        QCOMPARE(rig.rfOpens.load(), 0);
+        rig.ampReports(QStringLiteral("FAULT"));
+        QTRY_VERIFY_WITH_TIMEOUT(rig.tx.isRfGateOpen(), 500);
+        QVERIFY(!rig.model.ampChangingOver());
+        QVERIFY(!rig.model.ampOperate());
+        QTest::qWait(1600);   // past the bound: nothing stops it
+        QVERIFY(rig.keyed());
+        QCOMPARE(stopped.count(), 0);
+        rig.model.moxController()->setMox(false);
+        QTRY_VERIFY(rig.atRx());
+    }
+
+    // 5d. Fix round 3: an error reply to the operate command ends the
+    //     changeover; a held key goes on with the amplifier as it last
+    //     reported (here standby: barefoot). A reply to another command,
+    //     or an accepted one, does not.
+    void anErrorReplyToTheOperateCommandReleasesTheGate()
+    {
+        Rig rig;
+        rig.connectAmp(QStringLiteral("STANDBY"));
+        QSignalSpy stopped(&rig.model, &RadioModel::transmitStopped);
+        const quint32 seq = rig.amp()->sendCommand(QStringLiteral("operate=1"));
+        QVERIFY(seq != 0);
+        rig.model.moxController()->setMox(true);
+        QTRY_VERIFY(rig.keyed());
+        rig.amp()->injectLineForTesting(QStringLiteral("R%1|50000016|").arg(seq + 100));
+        rig.amp()->injectLineForTesting(QStringLiteral("R%1|0|").arg(seq));
+        QTest::qWait(150);
+        QVERIFY(rig.model.ampChangingOver());
+        QCOMPARE(rig.rfOpens.load(), 0);
+        rig.amp()->injectLineForTesting(QStringLiteral("R%1|50000016|").arg(seq));
+        QTRY_VERIFY_WITH_TIMEOUT(rig.tx.isRfGateOpen(), 500);
+        QVERIFY(!rig.model.ampChangingOver());
+        QTest::qWait(1600);
+        QVERIFY(rig.keyed());
+        QCOMPARE(stopped.count(), 0);
+        rig.model.moxController()->setMox(false);
+        QTRY_VERIFY(rig.atRx());
+    }
+
+    // 5e. Fix round 3: the 1.5 s stop's words are plain and say how to
+    //     transmit without the amplifier.
+    void theStopsWordsSayHowToTransmitWithoutTheAmplifier()
+    {
+        QCOMPARE(RadioModel::ampNotSwitchedText(), kAmpNotSwitched);
+        QCOMPARE(RadioModel::ampNotStandbyForTuneText(), kNotStandbyForTune);
+        QVERIFY(OperatorWording::isPlain(kAmpNotSwitched));
+    }
+
+    // 5f. Fix round 3 (minor C): a CAT or TCI press that never keyed (MOX
+    //     already on from a click) is reported as a release when it lets
+    //     go, so an owed amplifier restore is retried then.
+    void aCatOrTciReleaseThatNeverKeyedIsReported()
+    {
+        for (const bool cat : {true, false}) {
+            Rig rig;
+            MoxController* mox = rig.model.moxController();
+            mox->setMox(true);
+            QTRY_VERIFY(rig.keyed());
+            if (cat) { mox->onCatPtt(true); } else { mox->onTciPtt(true); }
+            QVERIFY(mox->anyPttSourceHeld());
+            QSignalSpy released(mox, &MoxController::pttSourcesReleased);
+            if (cat) { mox->onCatPtt(false); } else { mox->onTciPtt(false); }
+            QVERIFY(!mox->anyPttSourceHeld());
+            QVERIFY2(released.count() >= 1, cat ? "CAT" : "TCI");
+            mox->setMox(false);
+            QTRY_VERIFY(rig.atRx());
+        }
     }
 };
 

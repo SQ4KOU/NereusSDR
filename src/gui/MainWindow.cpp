@@ -301,6 +301,10 @@
 //                flags' TX from the Core and the radio's freeze, the empty
 //                band's offer of a take, session.leave on quit. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26 : iPhone app plan Task 77 fix round 3 (R-IOS-02, R-IOS-03,
+//                R-IOS-13): the Power Genius applet's OPERATE also waits
+//                while a Tuner Genius cycle runs. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -13346,9 +13350,10 @@ void MainWindow::onConnectionStateChanged()
                 // Core itself (setPgxlOperate); this computer's Power Genius
                 // connection is local only.
                 // Group B fix wave (M5): refused on the air, as the applet
-                // and a remote window are.
+                // and a remote window are. Task 77 fix round 3: and while a
+                // Tuner Genius cycle runs (pgxlSwitchRefusal).
                 if (m_radioModel->role() == RadioModel::Role::Remote
-                    || m_radioModel->stationOnAirRefusal(nullptr)) {
+                    || m_radioModel->pgxlSwitchRefusal(nullptr)) {
                     return;
                 }
                 // Bench-fix 2026-05-19: pcap stream 11 (.19 PowerGeniusDesktop

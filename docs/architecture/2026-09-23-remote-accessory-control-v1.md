@@ -1109,6 +1109,7 @@ Commands:
 | `setPgxlAddress` with other arguments | "The request to save the Power Genius address was not understood." |
 | `setPgxlOperate` while the radio is on the air (MOX, TUNE or two-tone, or the hand-back to receive after MOX) | "The radio is on the air. Try again when it stops." |
 | `setPgxlOperate` while the Core is not connected to the amp | "The Core is not connected to the Power Genius." |
+| `setPgxlOperate` while a Tuner Genius cycle runs on the Core (its standby wait, tune carrier and restore) or the Core's tuner reports its sweep (iPhone app plan Task 77 fix round 3) | "The tuner is tuning. Try again when it finishes." |
 | `setPgxlAddress` with no radio | "Connect the Core to a radio before setting up its Power Genius." |
 | `setPgxlAddress` with a host that is not blank and not an IP address or host name, or a port outside 1 to 65535 | "Enter the Power Genius's IP address or host name, and a port from 1 to 65535." |
 | `setRfKitOperate`, `setRfKitAntenna`, `setRfKitTciMode`, `setRfKitAddress` below minor 11 | "Update this app to switch the RF-Kit amplifier on this Core." |
@@ -1567,7 +1568,11 @@ A window reads `amplifier` and `rfkit` only while the Core offers them:
   while the amp is in standby and Standby while it operates. While the
   Core reports the radio on the air both are disabled with "The radio is
   on the air. Try again when it stops."; while the Core is not connected
-  to the amp, with "The Core is not connected to the Power Genius." A
+  to the amp, with "The Core is not connected to the Power Genius."; while
+  the Core's tuner (`tuner` `isTuning`) sweeps, with "The tuner is
+  tuning. Try again when it finishes." (iPhone app plan Task 77 fix round
+  3; a local window also waits through the Core's whole cycle). With the
+  amp in FAULT both read Standby and send `setPgxlOperate` off. A
   refusal shows as a notice. A local window's PowerGenius XL tab has the
   same Operate button beside its state badge (operator decision
   2026-09-25: the same controls however the window is connected). It
