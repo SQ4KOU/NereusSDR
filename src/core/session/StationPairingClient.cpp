@@ -14,6 +14,10 @@
 //               through the remote access service's mailbox. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: Task 28 fix wave (privacy): the mailbox's plain
+//               pair.start names this computer only kMailboxPlainName; its
+//               own name travels sealed. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationPairingClient.h"
@@ -343,10 +347,13 @@ void StationPairingClient::startMailbox(const QString& normalisedCode, SessionTr
         m_deadlineTimer->start(m_deadlineMs);
     }
     // No hellos through a mailbox (the rendezvous document, section 6.5):
-    // pair.start first, in code mode, the only mode a mailbox carries.
+    // pair.start first, in code mode, the only mode a mailbox carries. The
+    // service sees it, so it names this computer only kMailboxPlainName;
+    // the real name is in the sealed box (onStep2), the one the Core keeps.
     send(SessionMessages::pairStart(
         QStringLiteral("code"),
-        SessionPairDevice{StationIdentity::toBase64Url(m_identity->publicKeySpki()), m_deviceName,
+        SessionPairDevice{StationIdentity::toBase64Url(m_identity->publicKeySpki()),
+                          QString::fromLatin1(kMailboxPlainName),
                           QString::fromLatin1(ClientDeviceIdentity::kKind)}));
     m_state = State::AwaitStep0;
 }

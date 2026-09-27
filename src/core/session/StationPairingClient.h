@@ -41,6 +41,10 @@
 //               through the remote access service's mailbox. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: Task 28 fix wave (privacy): the mailbox's plain
+//               pair.start names this computer only kMailboxPlainName; its
+//               own name travels sealed. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -123,6 +127,13 @@ public:
     /// mailbox has no certificate, so the Core's certificate binding is
     /// checked at this computer's first sign-in (StationClient) instead.
     void pairByCodeOverMailbox(const QString& code, SessionTransport* mailbox);
+    /// The name the mailbox's plain pair.start gives for this computer.
+    /// The service never learns a device's name (the rendezvous document,
+    /// section 1), and a name is often an operator's callsign, so only
+    /// this neutral one travels in the clear; the computer's own name goes
+    /// in the sealed confirmation box, which is the one the Core records
+    /// (link document, section 3.6 step 5). The phone sends "iPhone".
+    static constexpr const char* kMailboxPlainName = "Computer";
     /// Opens the mailbox on the code's number through the remote access
     /// service (`servers`, tried in order) and pairs over it.
     void pairByCodeFromAnywhere(const QString& code, const QList<QUrl>& servers);

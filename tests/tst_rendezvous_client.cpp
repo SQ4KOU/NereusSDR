@@ -98,6 +98,7 @@
 #include "core/security/StationIdentity.h"
 #include "core/session/DataChannelTransport.h"
 #include "core/session/RendezvousDialer.h"
+#include "core/session/StationDevicesFacade.h"
 #include "core/session/IceConfiguration.h"
 #include "core/session/RendezvousClient.h"
 #include "core/session/RendezvousMailboxTransport.h"
@@ -2003,6 +2004,36 @@ private slots:
         // The service's own log records the mailbox (never its bodies).
         QTRY_VERIFY_WITH_TIMEOUT(service.log().contains(QLatin1String("mailbox opened")), 5000);
         QVERIFY(!service.log().contains(code));
+
+        // Task 28 fix wave (privacy): no device name and no Core label in
+        // the clear. The plain pair.start names the computer only
+        // "Computer"; its own name went sealed, and that is the name the
+        // Core recorded. The Core's label goes only in its sealed box.
+        const QString label = core.server->devicesFacade()->stationLabel();
+        QStringList secrets{QStringLiteral("Shack MacBook"), QStringLiteral("KG4VCF")};
+        if (!label.isEmpty()) {
+            secrets.append(label);
+        }
+        for (const QString& text : relay.toService + relay.fromService) {
+            for (const QString& secret : std::as_const(secrets)) {
+                QVERIFY2(!text.contains(secret, Qt::CaseInsensitive), qPrintable(secret));
+            }
+        }
+        bool sawStart = false;
+        for (const QString& body : std::as_const(sent)) {
+            const QJsonObject message = QJsonDocument::fromJson(body.toUtf8()).object();
+            if (message.value(QStringLiteral("type")).toString() == QLatin1String("pair.start")) {
+                sawStart = true;
+                QCOMPARE(message.value(QStringLiteral("device")).toObject()
+                             .value(QStringLiteral("name")).toString(),
+                         QStringLiteral("Computer"));
+            }
+            QVERIFY(message.value(QStringLiteral("type")).toString()
+                    != QLatin1String("pair.accept"));
+        }
+        QVERIFY(sawStart);
+        QCOMPARE(core.server->deviceStore()->find(identity->fingerprint())->name,
+                 QStringLiteral("Shack MacBook"));
     }
 
     void aSessionOutlivesTheService()

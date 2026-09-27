@@ -5420,6 +5420,17 @@ binding against the certificate of its first sign-in (section 3.4). The
 Core gives its nameplate back only after that mailbox has closed, since
 releasing a nameplate ends its mailbox.
 
+The rendezvous never learns a device's name or the Core's label (the
+rendezvous document, section 1), and it reads every mailbox message, so
+nothing that names either travels in the clear there. The device's
+`pair.start` through a mailbox gives a neutral `name` for its kind (the
+desktop "Computer", the phone "iPhone"), since a device's own name often
+carries its operator's callsign; its real name goes only in the sealed
+confirmation box (section 3.6, step 5), and that is the name the Core
+records, as it is for every pairing by code. The Core's label goes only in
+its sealed box too: `pair.accept`, which carries it in the clear, is sent
+only after one tap, which a mailbox never carries.
+
 ## 20. Control over a data channel
 
 iPhone app plan Task 28 (R-IOS-16; the remote design, section 10.4). A
