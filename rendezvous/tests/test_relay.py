@@ -386,6 +386,19 @@ def test_the_rate_cap_drops_what_is_over_it_each_way():
                 except asyncio.TimeoutError:
                     break
             assert again == 80000 // 1501
+            # A leg that joins again keeps its session's bucket: no fresh
+            # second's worth for reconnecting.
+            await device.close()
+            assert await recv(core) == bytes([TAG_PEER, 0])
+            device, _ = await join(uri, device_token)
+            assert await recv(core) == bytes([TAG_PEER, 1])
+            await device.send(frame)
+            await settle(relay, 2 + 201 + 2)
+            try:
+                got_after = await asyncio.wait_for(core.recv(), 0.3)
+            except asyncio.TimeoutError:
+                got_after = None
+            assert got_after is None
 
     asyncio.run(go())
 

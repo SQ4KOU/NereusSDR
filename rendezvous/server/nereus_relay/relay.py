@@ -189,10 +189,14 @@ class _Close:
 
 
 class Session:
-    def __init__(self, sid: bytes, expires: int, now_ms: int) -> None:
+    def __init__(self, sid: bytes, expires: int, now_ms: int, rate: int) -> None:
         self.sid = sid
         self.expires = expires
         self.started_ms = now_ms
+        # The rate cap each way, kept by the session rather than the
+        # connection, so a leg that joins again does not start a fresh
+        # bucket.
+        self.buckets: Dict[int, TokenBucket] = {side: TokenBucket(rate, now_ms) for side in relaygrant.LEGS}
         self.legs: Dict[int, Optional["Leg"]] = {relaygrant.LEG_CORE: None, relaygrant.LEG_DEVICE: None}
         # A side that has not joined yet, or has left, has this long to come
         # (back); the idle timer runs only while both legs are present.
@@ -227,7 +231,6 @@ class Leg:
         self.writer: Optional["asyncio.Future[None]"] = None
         self.timer: Optional[TimerHandle] = None
         self.stall_timer: Optional[TimerHandle] = None
-        self.bucket = TokenBucket(relay.config.rate_bytes_per_second, relay.clock.now_ms())
 
     def send_control(self, frame: bytes) -> None:
         if self.closing:
@@ -442,7 +445,7 @@ class Relay:
         if other is None or other.closing:
             session.dropped_no_peer += 1
             return
-        if not leg.bucket.allow(size, self.clock.now_ms()):
+        if not session.buckets[leg.side].allow(size, self.clock.now_ms()):
             session.dropped_rate += 1
             return
         session.dropped_queue += other.send_data(frame)
@@ -475,7 +478,7 @@ class Relay:
             if len(self.sessions) >= self.config.slots:
                 leg.end("full")
                 return
-            session = Session(grant.session, grant.expires, self.clock.now_ms())
+            session = Session(grant.session, grant.expires, self.clock.now_ms(), self.config.rate_bytes_per_second)
             self.sessions[grant.session] = session
             self.data_use.session()
             log.info("relay session %s opened", short_session(session.sid))
