@@ -4441,9 +4441,13 @@ void DaemonMediaController::onSendTick()
         m_ps3CurrentAttempted = false;
     }
     const qint64 nowNs = displayNowNs();
+    const QPointer<DaemonMediaController> self(this);
     const bool sentPs3 = trySendPs3(peer, epoch, nowNs);
+    if (!self || m_peer.get() != peer || m_epoch != epoch) { return; }
     for (int attempt = 0; attempt < 16; ++attempt) {
-        if (!trySendIq(peer, epoch, nowNs)) { break; }
+        const bool sentIq = trySendIq(peer, epoch, nowNs);
+        if (!self || m_peer.get() != peer || m_epoch != epoch) { return; }
+        if (!sentIq) { break; }
     }
     if (sentPs3) { return; }
     if (m_lastDisplayAttemptWasPs3) {

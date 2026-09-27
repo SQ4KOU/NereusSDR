@@ -54,6 +54,7 @@
 #include <chrono>
 #include <cmath>
 #include <functional>
+#include <limits>
 #include <numbers>
 #include <numeric>
 #include <thread>
@@ -689,6 +690,7 @@ private slots:
     void stalledRawIqFailsWithoutBlockingControl();
     void rawIqBusyRetryDebitsOnlyOnce();
     void rawIqSubmitBusyStopsAtDeadline();
+    void synchronousIqClosureRetiresPeerBeforeNextSend();
     void rawIqControlRejectsMalformedAndUnownedRequests();
 };
 
@@ -5970,6 +5972,64 @@ void TstDaemonMediaController::rawIqSubmitBusyStopsAtDeadline()
         }
         return false;
     })());
+    h.finish();
+}
+
+void TstDaemonMediaController::synchronousIqClosureRetiresPeerBeforeNextSend()
+{
+    Harness h(DisplayBudgetLimits{10'000'000, 10'000'000, 1});
+    h.establishSession();
+    QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+    h.startReadyPeer(true);
+    h.useManualDisplayTicks();
+    const auto request = [&](int revision) {
+        return QJsonObject{{QStringLiteral("op"), QStringLiteral("iq-stream")},
+            {QStringLiteral("connectionId"), QLatin1String(kConnectionId)},
+            {QStringLiteral("sliceId"), h.sliceId},
+            {QStringLiteral("revision"), revision},
+            {QStringLiteral("enabled"), true}};
+    };
+    QVERIFY(h.client.sendMediaControl(request(1), h.client.sessionEpoch()));
+    QTRY_VERIFY(([&] {
+        for (const auto& call : controls) {
+            const auto context = call.at(0).toJsonObject();
+            if (context.value(QStringLiteral("op")) == QLatin1String("iq-stream-context")
+                && context.value(QStringLiteral("enabled")).toBool()) { return true; }
+        }
+        return false;
+    })());
+    QPointer<QObject> retiredPeer = h.mediaTransport->parent();
+    bool closedInsideSubmit = false;
+    h.mediaTransport->onIqSend = [transport = h.mediaTransport, &closedInsideSubmit](
+                                     const QByteArray&) {
+        emit transport->closed();
+        closedInsideSubmit = true;
+    };
+    h.radio.rawIqDataForStream(h.streamIndex, QVector<float>(2048, 0.25f));
+    h.sendDisplayTick();
+    QVERIFY(closedInsideSubmit);
+    QTRY_VERIFY(retiredPeer.isNull() && h.mediaTransport.isNull());
+
+    // The control session survives; a new peer starts a fresh I/Q sequence.
+    h.startReadyPeer(true);
+    QVERIFY(h.client.sendMediaControl(request(1), h.client.sessionEpoch()));
+    QTRY_VERIFY(([&] {
+        for (const auto& call : controls) {
+            const auto context = call.at(0).toJsonObject();
+            if (context.value(QStringLiteral("op")) == QLatin1String("iq-stream-context")
+                && context.value(QStringLiteral("enabled")).toBool()
+                && context.value(QStringLiteral("generation")).toInt() > 1) { return true; }
+        }
+        return false;
+    })());
+    quint32 firstSequence = std::numeric_limits<quint32>::max();
+    h.mediaTransport->onIqSend = [&](const QByteArray& bytes) {
+        const auto frame = RemoteIqCodec::decode(bytes);
+        if (frame) { firstSequence = frame->sequence; }
+    };
+    h.radio.rawIqDataForStream(h.streamIndex, QVector<float>(2048, 0.25f));
+    h.sendDisplayTick();
+    QCOMPARE(firstSequence, quint32(0));
     h.finish();
 }
 
