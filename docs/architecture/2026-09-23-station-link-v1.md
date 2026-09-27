@@ -1216,15 +1216,23 @@ When a feature is off, its version is 0:
   certificate (section
   3.4). At 1 the Core answers an introduction through the rendezvous with
   this link over a data channel (section 20). A device records the value
-  with the paired Core at each sign-in and offers connecting from anywhere
-  only to a Core that sent 1; to a Core that sent 0 or no entry it shows
-  that control disabled with "Update the Core to reach it from anywhere.",
-  since an older Core leaves the device waiting out the whole attempt
-  (`RendezvousDialer::kDialDeadlineMs`) with no reason. The rendezvous
-  registration does not carry it (that would change the rendezvous
-  version). A device that has had no session with the Core yet (one that
-  paired through a mailbox) has no value recorded and tries; its first
-  session records it.
+  with the paired Core only from an authenticated ordinary-session snapshot.
+  A recorded 0 suppresses the service path, with "Update the Core to reach
+  it from anywhere.", for five minutes from that observation. A later
+  authenticated 0 renews that time; a 1 clears it. The observation time is
+  optional in the saved Core record: a legacy 0 without it, a malformed or
+  future time, and an expired time make the 0 unknown for connection
+  discovery, so the device tries the service again. A real change of local
+  network generation invalidates the negative once; duplicate callbacks
+  and ordinary retries do not renew it. A successful code pairing to the
+  same Core identity also invalidates the old negative. A failed or
+  unanswered probe never records or renews 0. The Core identity and
+  certificate binding checks (sections 3.4 and 21.1), the relay setting,
+  and the existing bounded race and retry schedule still apply. The
+  rendezvous registration does not carry this capability (that would change
+  the rendezvous version). A device that has had no session with the Core
+  yet (one that paired through a mailbox) has no value recorded and tries;
+  its first authenticated snapshot records it.
 - `txMonitorAudioVersion` (remote-window parity Task 32, R-IOS-13,
   R-R3-49): sent only at agreed minor 11, after `controlChannelVersion` in
   the minor-11 block (`stationFreedvVersion`, then this block's Task 29
@@ -6235,8 +6243,12 @@ that rung with "This Core can't be reached through the internet service.
 Updating the Core may help." A device that recorded `controlChannelVersion`
 1 for the Core knows it is not too old: it ends the rung with "The Core did
 not answer through the internet service. Check that it is on and online."
-A device that recorded `controlChannelVersion` 0 for the Core does not
-start the rung, and says the first words.
+A device with a fresh authenticated `controlChannelVersion` 0 observation
+does not start the rung, and says the first words. Once that observation
+expires or a changed network generation invalidates it, the next race
+tries the service again under the same answer deadline and bounded retry
+backoff. A failed service probe cannot renew the negative observation; a
+new authenticated ordinary-session snapshot can.
 
 **The relay.** A Core with `relay = deny` in `nereusd.conf` answers every
 introduction with `turn` false (the rendezvous document, section 6.3), so
