@@ -41,8 +41,10 @@
 #include <QtTest>
 
 #include <QPointer>
+#include <QSet>
 #include <QSignalSpy>
 #include <QTcpServer>
+#include <QTcpSocket>
 #include <QTimer>
 
 #include <memory>
@@ -337,28 +339,42 @@ private slots:
             PathRacer racer;
             racer.setBetterThan(PathRacer::Direct);
             racer.addDirectUrls({QUrl(QStringLiteral("wss://192.0.2.1:9")),
-                                 QUrl(QStringLiteral("wss://192.168.1.5:9"))},
+                                 QUrl(QStringLiteral("wss://127.0.0.1:9"))},
                                 StationClient::kMaxIncomingMessageBytes);
             const auto planned = racer.plannedStartsForTest();
             QCOMPARE(planned.size(), 1);
-            QCOMPARE(planned.at(0).first, QStringLiteral("192.168.1.5:9"));
+            QCOMPARE(planned.at(0).first, QStringLiteral("127.0.0.1:9"));
         }
         {
+            QTcpServer silent;
+            QVERIFY(silent.listen(QHostAddress::LocalHost));
+            const quint16 port = silent.serverPort();
+            const QUrl numeric(QStringLiteral("wss://127.0.0.1:%1").arg(port));
+            const QUrl numericWithSlash(QStringLiteral("wss://127.0.0.1:%1/").arg(port));
+            const QUrl hostname(QStringLiteral("wss://localhost:%1").arg(port));
             PathRacer racer;
-            racer.addDirectUrls({QUrl(QStringLiteral("wss://127.0.0.1:9")),
-                                 QUrl(QStringLiteral("wss://127.0.0.1:9/")),
-                                 QUrl(QStringLiteral("wss://localhost:9"))},
+            QSignalSpy failed(&racer, &PathRacer::failed);
+            racer.addDirectUrls({numeric, numericWithSlash, hostname},
                                 StationClient::kMaxIncomingMessageBytes);
             racer.start();
-            QTRY_VERIFY(racer.plannedStartsForTest().size() >= 2);
-            QTest::qWait(200);
-            int ipv4Loopback = 0;
-            for (const auto& [address, delay] : racer.plannedStartsForTest()) {
-                if (address == QLatin1String("127.0.0.1:9")) {
-                    ++ipv4Loopback;
-                }
+            QTRY_VERIFY(silent.hasPendingConnections());
+            QTcpSocket* peer = silent.nextPendingConnection();
+            QVERIFY(peer != nullptr);
+            silent.close();
+            peer->disconnectFromHost();
+            // failed() waits for every pending name lookup and rung to end.
+            QTRY_COMPARE(failed.size(), 1);
+            const QString unresolvedName = QStringLiteral("localhost:%1").arg(port);
+            for (const auto& line : racer.lines()) {
+                QVERIFY(line.address != unresolvedName);
             }
-            QCOMPARE(ipv4Loopback, 1);
+            QSet<QString> seen;
+            for (const auto& [address, delay] : racer.plannedStartsForTest()) {
+                Q_UNUSED(delay);
+                QVERIFY(!seen.contains(address));
+                seen.insert(address);
+            }
+            QVERIFY(seen.contains(QStringLiteral("127.0.0.1:%1").arg(port)));
             racer.cancel();
         }
         {

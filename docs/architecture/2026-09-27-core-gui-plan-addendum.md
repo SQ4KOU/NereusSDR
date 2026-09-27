@@ -728,7 +728,9 @@ colours for the same signal.
   test-fixture corrections preserve production behavior and existing deadlines.
 - Status: signed `710c2970` repairs the first three causes. Fresh macOS tests pass
   3/3; an isolated Linux checkpoint plus the exact patch also passes 3/3. The
-  path-racer fixture repair remains in progress. Earlier Linux environment repairs
+  path-racer fixture now uses numeric loopback, a controlled ephemeral TCP listener
+  and explicit lookup completion; fresh macOS (21.07 s) and isolated Linux patched
+  checkpoint (14.44 s) suites pass. Earlier Linux environment repairs
   supplied a non-loopback internal interface for ICE and existing offline Python
   service dependencies. Phase-specific passes are not a green current-branch suite.
 - Plan: cross-platform verification for the whole Core/GUI PR.
