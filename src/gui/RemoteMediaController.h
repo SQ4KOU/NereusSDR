@@ -34,6 +34,10 @@
 //               the Core sends no transmit display; refreshTransmitView asks
 //               again at once for the transmitting pan's moved view. J.J.
 //               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26: parity Tasks 27-29 fix wave (R-R3-49): heldTransmitContext,
+//               the Core's transmit context for a pan as it stands, so a
+//               context that beat the window's own rise is not lost. J.J.
+//               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 
 #include "core/session/media/DisplayBudget.h"
 #include "core/session/media/DisplayCodec.h"
@@ -203,6 +207,11 @@ public:
     /// Parity Task 29: the transmitting pan's view moved while keyed; ask
     /// the Core again now rather than on the next planner pass.
     void refreshTransmitView();
+    /// The Core's transmit context for the pan while it sends one (the
+    /// newest accepted context marked `transmit`); none once a receive
+    /// context replaced it. Media and transmit state travel on different
+    /// channels, so the context can land before the window's own rise.
+    std::optional<SpectrumContextMessage> heldTransmitContext(const QString& panId) const;
     /// R-R3-45: why a receiver routed to the headphones is not heard, for
     /// the slice flags; empty when nothing is wrong on the Core's side or
     /// this computer's headphones device. Plain words, shown as they are.

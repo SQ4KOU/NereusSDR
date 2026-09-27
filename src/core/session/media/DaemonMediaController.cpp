@@ -3599,6 +3599,11 @@ void DaemonMediaController::wireTxDisplayFeed()
             // Queued: an endpoint's viewer is given back from inside the
             // endpoint map's own erase, and the feed answers at once.
             const auto reconcile = [this]() { reconcileTransmitDisplay(); };
+            // Direct: the pan is recorded on the edge itself, before a
+            // rebinding or a layout change queued behind it can move the
+            // transmit slice.
+            connect(feed, &TxDisplayFeed::keyedChanged, this,
+                    [this](bool keyed) { recordTransmitPan(keyed); });
             connect(feed, &TxDisplayFeed::keyedChanged, this, reconcile, Qt::QueuedConnection);
             connect(feed, &TxDisplayFeed::viewChanged, this, reconcile, Qt::QueuedConnection);
             connect(feed, &TxDisplayFeed::governorChanged, this, reconcile,
@@ -3621,20 +3626,45 @@ void DaemonMediaController::wireTxDisplayFeed()
     }
 }
 
+void DaemonMediaController::recordTransmitPan(bool keyed)
+{
+    if (!keyed) {
+        m_txRiseRecorded = false;
+        m_txRisePanKey.clear();
+        m_txRiseSliceId = -1;
+        return;
+    }
+    if (m_txRiseRecorded || !m_radioModel) {
+        return;
+    }
+    const SliceModel* const tx = m_radioModel->txBoundSlice();
+    if (tx == nullptr) {
+        return;
+    }
+    m_txRiseRecorded = true;
+    m_txRisePanKey = tx->panKey();
+    m_txRiseSliceId = tx->sliceIndex();
+}
+
 bool DaemonMediaController::endpointOnTransmitPan(const EndpointEntry& entry) const
 {
-    if (!m_radioModel) {
+    if (!m_radioModel || !m_txRiseRecorded) {
         return false;
     }
-    // The pan hosting the transmitting slice, as the local window takes it
-    // over (MainWindow's MOX edge): the transmit slice, or a slice sharing
-    // its pan on the Core.
-    const SliceModel* const tx = m_radioModel->txBoundSlice();
+    // The pan hosting the transmitting slice at the rise, as the window
+    // takes it over (MoxDisplayController::rise records it and restores
+    // THAT pan at the fall): the transmit slice, or a slice sharing its pan
+    // on the Core. Recorded rather than re-resolved, so a layout change
+    // that rehomes slices, or a rebinding, while keyed leaves the transmit
+    // display where the window shows it until the fall.
     const SliceModel* const slice = m_radioModel->sliceById(entry.sliceId);
-    if (tx == nullptr || slice == nullptr) {
+    if (slice == nullptr) {
         return false;
     }
-    return slice == tx || (!tx->panKey().isEmpty() && slice->panKey() == tx->panKey());
+    if (m_txRisePanKey.isEmpty()) {
+        return slice->sliceIndex() == m_txRiseSliceId;
+    }
+    return slice->panKey() == m_txRisePanKey;
 }
 
 std::optional<QJsonObject> DaemonMediaController::transmitContextFor(
@@ -3700,6 +3730,9 @@ void DaemonMediaController::reconcileTransmitDisplay()
     const quint64 epoch = m_epoch;
     TxDisplayFeed* const feed = m_txFeed.data();
     const bool keyed = m_txDisplayNegotiated && feed != nullptr && feed->isKeyed();
+    // A feed keyed before this controller watched it (a peer that started
+    // mid-key) records its pan here.
+    recordTransmitPan(feed != nullptr && feed->isKeyed());
     for (quint32 endpointId : endpointIds()) {
         auto it = m_endpoints.find(endpointId);
         if (it == m_endpoints.end()) { continue; }

@@ -40,6 +40,10 @@
 //                 GPU path draws no stale receive trace while the MOX overlay
 //                 is on without transmit pixels (drawsSpectrumTrace).
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-26 J.J. Boyd / KG4VCF - R-R3-49 (parity Tasks 27-29 fix wave):
+//                 a remote pan's fall retires the transmit trace, so the GPU
+//                 path cannot redraw it under the receive axis before the
+//                 first receive frame. AI-assisted via Anthropic Claude Code.
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
@@ -6729,6 +6733,17 @@ void SpectrumWidget::setMoxOverlay(bool isTx)
     // where both grids get written.
 
     m_moxOverlay = isTx;
+    if (!isTx && m_remoteSpectrum) {
+        // The fall on a remote pan: the last trace built is the transmit
+        // display, on the transmit axis. Retire it, and the vertices built
+        // from it, so nothing is drawn under the restored receive axis until
+        // the Core's first receive frame lands (its context and keyframe are
+        // a round trip away). A local pan's receive frames follow at once.
+        m_renderedPixels.clear();
+        m_undentedPixels.clear();
+        m_visibleBinCount = 0;
+        m_hasNewSpectrum = true;
+    }
     markOverlayDirty();
     update();   // ensure QPainter path repaints immediately on MOX flip;
                 // markOverlayDirty alone waits for the next natural QRhi

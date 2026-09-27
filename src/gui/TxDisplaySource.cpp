@@ -7,6 +7,10 @@
 //   2026-09-26 : Created for remote-window parity Task 29 (A11, R-R3-49,
 //                 R-R3-12) by J.J. Boyd (KG4VCF). AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-26 : Tasks 27-29 fix wave (R-R3-49): the remote source replays
+//                 a transmit context that beat the rise, and asks the Core
+//                 again only when it sends a transmit display. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "gui/TxDisplaySource.h"
@@ -198,9 +202,24 @@ void RemoteTxDisplaySource::beginTransmitView(SpectrumWidget* pan, double carrie
     // receiver hearing its own transmitter); a Core that sends no transmit
     // display gets the pan's status line saying so.
     m_media->setPanTransmitting(m_panId, true, !available());
+    if (!available()) {
+        // No transmit display to ask for: asking again would only re-plan
+        // the receive endpoint (and perhaps the shared FFT engine) on a
+        // view the pan does not draw.
+        return;
+    }
+    // The Core's transmit context can land before this rise (media and
+    // transmit state travel on different channels): take the one it holds,
+    // or the pan stays blank for the whole key when the request below does
+    // not change and no new context follows.
+    if (const std::optional<SpectrumContextMessage> held = m_media->heldTransmitContext(m_panId)) {
+        onContext(m_panId, *held);
+        note(QStringLiteral("replay held transmit context"));
+    }
     // The pan's view moved to the carrier: ask the Core for it now, with the
     // transmit window, so its transmit context lands on this view.
     m_media->refreshTransmitView();
+    note(QStringLiteral("refreshTransmitView"));
 }
 
 void RemoteTxDisplaySource::requestView(double centreHz, double spanHz, int pixels)
@@ -210,8 +229,9 @@ void RemoteTxDisplaySource::requestView(double centreHz, double spanHz, int pixe
     Q_UNUSED(pixels);
     // The subscription carries the pan's view and width as the pan shows
     // them; asking again is the whole request.
-    if (!m_media.isNull() && !m_panId.isEmpty()) {
+    if (!m_media.isNull() && !m_panId.isEmpty() && available()) {
         m_media->refreshTransmitView();
+        note(QStringLiteral("refreshTransmitView"));
     }
 }
 
@@ -252,7 +272,10 @@ void RemoteTxDisplaySource::release()
 {
     if (!m_media.isNull() && !m_panId.isEmpty()) {
         m_media->setPanTransmitting(m_panId, false, false);
-        m_media->refreshTransmitView();
+        if (available()) {
+            m_media->refreshTransmitView();
+            note(QStringLiteral("refreshTransmitView"));
+        }
     }
     m_panId.clear();
     m_pan.clear();

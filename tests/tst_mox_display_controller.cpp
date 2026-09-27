@@ -25,6 +25,13 @@
 //   2026-09-26 : Created for remote-window parity Task 29 by J.J. Boyd
 //                 (KG4VCF). AI-assisted implementation via Anthropic
 //                 Claude Code.
+//   2026-09-26 : Tasks 27-29 fix wave (R-R3-49): the rise pan keeps the
+//                 transmit display on both sides through a rebinding and a
+//                 layout change while keyed; no transmit trace under the
+//                 receive axis after a remote fall; a transmit context that
+//                 beat the rise is replayed; an older Core is not asked
+//                 again. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -44,6 +51,9 @@
 
 #define private public
 #include "gui/SpectrumWidget.h"
+// The test seam for a rebinding while keyed (TxSliceArbiter::flipTo moves
+// the transmit flag without requestHandoff's unkey).
+#include "core/TxSliceArbiter.h"
 #undef private
 
 #include "core/AppSettings.h"
@@ -787,6 +797,186 @@ private slots:
         }
     }
 
+    // ── Parity Tasks 27-29 fix wave ────────────────────────────────────────
+
+    // Waits until pan `two` draws the Core's transmit frames at `dbm` and
+    // pan `one` draws receive frames: the rise pan kept the display.
+    static bool riseTwoDrawsTransmit(RemoteWindow& window, QSignalSpy& contexts, float dbm)
+    {
+        SpectrumWidget* one = window.pan(QStringLiteral("one"));
+        SpectrumWidget* two = window.pan(QStringLiteral("two"));
+        QSignalSpy oneDrawn(one, &SpectrumWidget::spectrumFrameRendered);
+        return QTest::qWaitFor([&] {
+            int samples = 0;
+            for (int i = contexts.size() - 1; i >= 0 && samples == 0; --i) {
+                if (contexts.at(i).at(0).toString() == QStringLiteral("two")) {
+                    samples = contexts.at(i).at(1).value<SpectrumContextMessage>().traceSamples;
+                }
+            }
+            if (samples <= 0) { return false; }
+            window.emitPlanes(dbm, samples);
+            window.feed();
+            return two->m_moxOverlay && !two->m_renderedPixels.isEmpty()
+                && std::abs(two->m_renderedPixels.at(two->m_renderedPixels.size() / 2) - dbm)
+                    < 1.0f
+                && oneDrawn.count() >= 2;
+        }, 5000);
+    }
+
+    void rebindingWhileKeyedKeepsTheRisePanOnBothSides()
+    {
+        RemoteWindow window(/*withAnalyzer=*/true);
+        QVERIFY(window.connect());
+        QSignalSpy contexts(window.gui.get(), &RemoteMediaController::transmitContextReceived);
+        window.key(true);
+        QTRY_VERIFY(window.controller->isKeyed());
+        QCOMPARE(window.controller->transmitPanId(), QStringLiteral("two"));
+        QVERIFY(riseTwoDrawsTransmit(window, contexts, -30.0f));
+
+        // The Core's transmit binding moves to the slice on pan one while
+        // keyed. Both sides keep pan two, recorded at the rise, until the
+        // fall: pan two keeps drawing the transmit frames (nothing freezes)
+        // and pan one keeps drawing receive (nothing blanks).
+        TxSliceArbiter* arbiter = window.station.txSliceArbiter();
+        QVERIFY(arbiter);
+        arbiter->flipTo(window.station.sliceById(window.otherSliceId));
+        QCOMPARE(window.station.txBoundSlice()->sliceIndex(), window.otherSliceId);
+        QTRY_VERIFY_WITH_TIMEOUT(window.client->transmitState()->txSliceId()
+                                     == window.otherSliceId, 5000);
+        QVERIFY(window.controller->isKeyed());
+        QCOMPARE(window.controller->transmitPanId(), QStringLiteral("two"));
+        QVERIFY(riseTwoDrawsTransmit(window, contexts, -20.0f));
+        QVERIFY(!window.gui->isPanTransmitting(QStringLiteral("one")));
+
+        window.key(false);
+        QTRY_VERIFY(!window.controller->isKeyed());
+        QVERIFY(window.receiveDraws(QStringLiteral("two")));
+    }
+
+    void layoutChangeWhileKeyedKeepsTheRisePanOnBothSides()
+    {
+        RemoteWindow window(/*withAnalyzer=*/true);
+        QVERIFY(window.connect());
+        QSignalSpy contexts(window.gui.get(), &RemoteMediaController::transmitContextReceived);
+        window.key(true);
+        QTRY_VERIFY(window.controller->isKeyed());
+        QVERIFY(riseTwoDrawsTransmit(window, contexts, -30.0f));
+
+        // A layout change on the Core while keyed rehomes the slices: the
+        // transmit slice to pan one, the other slice to pan two; the window
+        // follows (each pan shows the slice it now hosts). Pan two, recorded
+        // at the rise, keeps the transmit display on both sides.
+        window.station.sliceById(window.txSliceId)->setPanKey(QStringLiteral("one"));
+        window.station.sliceById(window.otherSliceId)->setPanKey(QStringLiteral("two"));
+        QTRY_VERIFY_WITH_TIMEOUT(
+            window.remote.sliceById(window.otherSliceId)->panKey() == QStringLiteral("two"),
+            5000);
+        window.stack.panadapter(QStringLiteral("one"))->setActiveSliceIndex(window.txSliceId);
+        window.stack.panadapter(QStringLiteral("two"))->setActiveSliceIndex(window.otherSliceId);
+        QVERIFY(riseTwoDrawsTransmit(window, contexts, -20.0f));
+        QCOMPARE(window.controller->transmitPanId(), QStringLiteral("two"));
+
+        window.key(false);
+        QTRY_VERIFY(!window.controller->isKeyed());
+        QVERIFY(window.receiveDraws(QStringLiteral("two")));
+    }
+
+    void remoteFallDrawsNoTransmitTraceUnderTheReceiveAxis()
+    {
+        RemoteWindow window(/*withAnalyzer=*/true);
+        QVERIFY(window.connect());
+        SpectrumWidget* two = window.pan(QStringLiteral("two"));
+        QSignalSpy contexts(window.gui.get(), &RemoteMediaController::transmitContextReceived);
+        window.key(true);
+        QTRY_VERIFY(window.controller->isKeyed());
+        QVERIFY(riseTwoDrawsTransmit(window, contexts, -30.0f));
+        // The GPU path built the transmit trace (offscreen has no GPU, so
+        // stand in for the vertices it would have built).
+        two->m_visibleBinCount = 100;
+        QVERIFY(two->drawsSpectrumTrace());
+
+        // The fall, before any receive frame: nothing from the transmit
+        // display is drawn under the restored receive axis.
+        window.key(false);
+        QTRY_VERIFY(!window.controller->isKeyed());
+        QVERIFY(!two->m_moxOverlay);
+        QVERIFY(two->m_renderedPixels.isEmpty());
+        QVERIFY(!two->drawsSpectrumTrace());
+        // The first receive frame draws again.
+        QVERIFY(window.receiveDraws(QStringLiteral("two")));
+        QVERIFY(two->drawsSpectrumTrace());
+    }
+
+    void aTransmitContextBeforeTheRiseIsReplayed()
+    {
+        RemoteWindow window(/*withAnalyzer=*/true);
+        QVERIFY(window.connect());
+        SpectrumWidget* two = window.pan(QStringLiteral("two"));
+        // The window's rise is held back, so the Core's transmit context
+        // lands first (media and transmit state travel on different
+        // channels).
+        QObject::disconnect(window.client->transmitState(), nullptr,
+                            window.controller.get(), nullptr);
+        QObject::disconnect(&window.remote, nullptr, window.controller.get(), nullptr);
+        QSignalSpy contexts(window.gui.get(), &RemoteMediaController::transmitContextReceived);
+        window.key(true);
+        QTRY_VERIFY_WITH_TIMEOUT(!contexts.isEmpty(), 5000);
+        QCOMPARE(contexts.last().at(0).toString(), QStringLiteral("two"));
+        const auto context = contexts.last().at(1).value<SpectrumContextMessage>();
+        const auto held = window.gui->heldTransmitContext(QStringLiteral("two"));
+        QVERIFY(held.has_value());
+        QCOMPARE(held->centreHz, context.centreHz);
+        QVERIFY(!window.gui->heldTransmitContext(QStringLiteral("one")).has_value());
+        two->m_txCenterHz = 1.0;
+        two->m_txSampleRateHz = 1.0;
+
+        // The rise takes the held context at once: its bins sit at the
+        // context's centre and span with no new context from the Core.
+        const int before = contexts.size();
+        window.controller->setKeyed(true, window.txSliceId);
+        QCOMPARE(contexts.size(), before);
+        QCOMPARE(two->m_txCenterHz, context.centreHz);
+        QCOMPARE(two->m_txSampleRateHz, context.spanHz);
+
+        window.controller->setKeyed(false, -1);
+        window.key(false);
+        // The fall's receive context replaces it.
+        QTRY_VERIFY([&] {
+            window.feed();
+            return !window.gui->heldTransmitContext(QStringLiteral("two")).has_value();
+        }());
+    }
+
+    void olderCoreIsNotAskedAgainAtTheRiseOrFall()
+    {
+        QStringList calls;
+        {
+            RemoteWindow window(/*withAnalyzer=*/false);
+            QVERIFY(window.connect());
+            QCOMPARE(window.client->capabilities().txDisplayVersion, 0);
+            window.source->setCallLog(&calls);
+            window.key(true);
+            QTRY_VERIFY(window.controller->isKeyed());
+            window.key(false);
+            QTRY_VERIFY(!window.controller->isKeyed());
+            window.source->setCallLog(nullptr);
+        }
+        QVERIFY2(!calls.contains(QStringLiteral("refreshTransmitView")), qPrintable(calls.join(u',')));
+        // A Core that sends the transmit display is asked at the rise and
+        // at the fall.
+        calls.clear();
+        {
+            RemoteWindow window(/*withAnalyzer=*/true);
+            QVERIFY(window.connect());
+            window.source->setCallLog(&calls);
+            window.key(true);
+            QTRY_VERIFY(window.controller->isKeyed());
+            window.key(false);
+            QTRY_VERIFY(!window.controller->isKeyed());
+            window.source->setCallLog(nullptr);
+        }
+        QCOMPARE(calls.count(QStringLiteral("refreshTransmitView")), 2);
+    }
 };
 
 QTEST_MAIN(TstMoxDisplayController)

@@ -31,6 +31,9 @@
 //   2026-09-26: parity Task 29 (A11, R-R3-49): see RemoteMediaController.h
 //               (setPanTransmitting, refreshTransmitView). J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26: parity Tasks 27-29 fix wave (R-R3-49): each binding holds
+//               its accepted transmit context (heldTransmitContext). J.J.
+//               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 
 #include "gui/RemoteMediaController.h"
 #include "core/AppSettings.h"
@@ -681,6 +684,8 @@ struct RemoteMediaController::Private {
         /// receive context's until the fall's context replaces them.
         bool transmit = false;
         quint32 transmitGeneration = 0;
+        /// The accepted transmit context, while `transmit` is true.
+        std::optional<SpectrumContextMessage> transmitContext;
         /// The newest context generation accepted, receive or transmit.
         quint32 acceptedGeneration() const
         {
@@ -1451,6 +1456,18 @@ bool RemoteMediaController::isPanTransmitting(const QString& panId) const
 void RemoteMediaController::refreshTransmitView()
 {
     refreshSubscriptions();
+}
+
+std::optional<SpectrumContextMessage> RemoteMediaController::heldTransmitContext(
+    const QString& panId) const
+{
+    for (const auto& [id, binding] : d->bindings) {
+        Q_UNUSED(id);
+        if (binding.panId == panId && binding.transmit && binding.transmitContext) {
+            return binding.transmitContext;
+        }
+    }
+    return std::nullopt;
 }
 
 bool RemoteMediaController::txDisplayNegotiated() const
@@ -4357,6 +4374,7 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
         binding.rejected = false;
         binding.transmit = true;
         binding.transmitGeneration = context.codec.contextGeneration;
+        binding.transmitContext = *decoded;
         binding.receivedFrameTimesMs.clear();
         const QPointer<RemoteMediaController> self(this);
         const QString connectionId = d->connectionId;
@@ -4367,6 +4385,7 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
     }
     binding.transmit = false;
     binding.transmitGeneration = 0;
+    binding.transmitContext.reset();
     if (decoded->grant && decoded->grant != binding.grant) {
         qCInfo(lcRemoteMedia).noquote()
             << QStringLiteral("Remote spectrum grant for %1: %2")

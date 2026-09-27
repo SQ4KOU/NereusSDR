@@ -20,9 +20,20 @@
 // Modification history (NereusSDR):
 //   2026-09-26 : Created for parity Task 28 by J.J. Boyd (KG4VCF).
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26 : Tasks 27-29 fix wave (R-R3-49): the rise pan holds the
+//                 transmit display through a layout change and a rebinding
+//                 while keyed. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
+
+// The test seam for a rebinding while keyed: TxSliceArbiter::flipTo moves
+// the transmit flag without requestHandoff's unkey (a slice removed while
+// keyed is the product path; this reaches the same edge directly).
+#define private public
+#include "core/TxSliceArbiter.h"
+#undef private
 
 #include "core/AppSettings.h"
 #include "core/MoxController.h"
@@ -344,6 +355,7 @@ private slots:
     void olderPeerKeepsTodaysWire();
     void transmitWindowIsReadLikeTheReceiveWindow();
     void budgetPacesTransmitFramesLikeReceiveFrames();
+    void aSliceMovingWhileKeyedLeavesTheRisePanTransmitting();
     void txStateCarriesTheHighSwrState();
 };
 
@@ -869,6 +881,79 @@ void TstRemoteTxDisplay::budgetPacesTransmitFramesLikeReceiveFrames()
     h.realClock = true;
     QVERIFY(h.key(false));
     QTRY_VERIFY(!h.feed()->isKeyed());
+    h.finish();
+}
+
+void TstRemoteTxDisplay::aSliceMovingWhileKeyedLeavesTheRisePanTransmitting()
+{
+    Harness h;
+    h.slice()->setPanKey(QStringLiteral("pan-a"));
+    h.spare()->setPanKey(QStringLiteral("pan-b"));
+    h.establishSession();
+    QTRY_COMPARE(h.client.capabilities().txDisplayVersion, 1);
+    QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+    h.startReadyPeer(true);
+    const double centre = h.radio.streamCentreHz(h.slice()->streamIndex());
+    const double spareCentre = h.radio.streamCentreHz(h.spare()->streamIndex());
+    quint32 revision = 1;
+    QVERIFY(h.send(withTxWindow(subscription(1, revision, h.sliceId, centre))));
+    QVERIFY(h.send(withTxWindow(subscription(2, revision, h.spareSliceId, spareCentre))));
+    QTRY_VERIFY([&] {
+        h.feedSlice(h.sliceId);
+        h.feedSlice(h.spareSliceId);
+        return lastContext(controls, 1) && lastContext(controls, 2);
+    }());
+    // Both endpoints ask again, and the Core answers both at the new
+    // revision: every reconcile queued before has run by then.
+    const auto resubscribeBoth = [&] {
+        ++revision;
+        QVERIFY(h.send(withTxWindow(subscription(1, revision, h.sliceId, centre))));
+        QVERIFY(h.send(withTxWindow(subscription(2, revision, h.spareSliceId, spareCentre))));
+        QTRY_VERIFY([&] {
+            h.feedSlice(h.sliceId);
+            h.feedSlice(h.spareSliceId);
+            const auto one = lastContext(controls, 1);
+            const auto two = lastContext(controls, 2);
+            return one && two
+                && one->value(QStringLiteral("revision")).toInteger() == revision
+                && two->value(QStringLiteral("revision")).toInteger() == revision;
+        }());
+    };
+
+    // A layout change while keyed rehomes the slices (the transmit slice to
+    // pan-b, the other to pan-a): pan-a, where the window shows the
+    // transmit display, keeps it until the fall.
+    QVERIFY(h.key(true));
+    QTRY_VERIFY(isTransmit(lastContext(controls, 1)));
+    h.slice()->setPanKey(QStringLiteral("pan-b"));
+    h.spare()->setPanKey(QStringLiteral("pan-a"));
+    resubscribeBoth();
+    QVERIFY(h.controller->transmitDisplayActive(2));
+    QVERIFY(!h.controller->transmitDisplayActive(1));
+    QVERIFY(isTransmit(lastContext(controls, 2)));
+    QVERIFY(!isTransmit(lastContext(controls, 1)));
+    QVERIFY(h.key(false));
+    QTRY_VERIFY(!h.controller->transmitDisplayActive(2));
+    QVERIFY(!h.controller->transmitDisplayActive(1));
+
+    // The next key records the transmit slice's pan now (pan-b). A
+    // rebinding to the other slice (on pan-a) while keyed leaves it there.
+    QVERIFY(h.key(true));
+    QTRY_VERIFY(h.controller->transmitDisplayActive(1));
+    QVERIFY(!h.controller->transmitDisplayActive(2));
+    TxSliceArbiter* arbiter = h.radio.txSliceArbiter();
+    QVERIFY(arbiter);
+    arbiter->flipTo(h.spare());
+    QCOMPARE(h.radio.txBoundSlice(), h.spare());
+    QVERIFY(h.feed()->isKeyed());
+    resubscribeBoth();
+    QVERIFY(h.controller->transmitDisplayActive(1));
+    QVERIFY(!h.controller->transmitDisplayActive(2));
+    QVERIFY(isTransmit(lastContext(controls, 1)));
+    QVERIFY(!isTransmit(lastContext(controls, 2)));
+    QVERIFY(h.key(false));
+    QTRY_VERIFY(!h.feed()->isKeyed());
+    QTRY_VERIFY(!h.controller->transmitDisplayActive(1));
     h.finish();
 }
 
