@@ -7513,7 +7513,9 @@ target_compile_definitions(tst_data_channel_transport PRIVATE
 # sandbox: it reaches a service in another network namespace, which a
 # test-mode RendezvousClient refuses to contact.
 add_executable(nereus_rendezvous_peer EXCLUDE_FROM_ALL tools/nereus_rendezvous_peer.cpp)
-target_link_libraries(nereus_rendezvous_peer PRIVATE NereusCore)
+# Task 29 fix wave: the desktop's own media controller (session
+# --follow-media-ms) lives in the GUI library.
+target_link_libraries(nereus_rendezvous_peer PRIVATE NereusSDRLib)
 set_target_properties(nereus_rendezvous_peer PROPERTIES AUTOMOC ON)
 # iPhone app plan Task 29 Step 1 (R-IOS-16): the relay floor measurement's
 # probe (tests/scripts/floor-measurement.sh), with the prototypes of options

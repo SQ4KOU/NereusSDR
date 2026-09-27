@@ -64,6 +64,9 @@
 #   upgrade            starts through the relay; the forward opens while it
 #                      runs and the session moves to the direct connection,
 #                      signed in once
+#   upgrade-media      the upgrade with the desktop's own media playing:
+#                      audio and display follow onto a new media
+#                      connection, no silent run over 40 ms
 #   session-media      audio and display decoded through the service
 #   session-media-relayed
 #                      the same through the relay; all four allocations
@@ -111,6 +114,8 @@
 #               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 #   2026-09-27: iPhone app plan Task 29 Step 2a (R-IOS-16): race-direct,
 #               race-service, upgrade, session-media, session-media-relayed.
+#               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+#   2026-09-27: Task 29 fix wave (review Important 1): upgrade-media.
 #               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 # =================================================================
 
@@ -940,6 +945,38 @@ if scenario upgrade; then
     handshakes="$(field "$result" handshakes 2>/dev/null || echo None)"
     if [[ "$handshakes" != "1" ]]; then
         say "FAIL upgrade: signed in $handshakes times, expected once"
+        FAILED=1
+    fi
+    stop_core
+fi
+
+# upgrade-media: the upgrade scenario with the desktop's own media
+# listening (Task 29 fix wave, review Important 1): the session starts
+# through the relay, moves to the direct connection once the forward
+# opens and UDP passes again, and its audio and display follow onto a new
+# media connection with no silent run over 40 ms.
+if scenario upgrade-media; then
+    reset_rules
+    block_direct_udp
+    start_core allow --listen "$CORE_PORT" --media
+    # The better network arrives: the forward opens and UDP between the
+    # routers passes again, so the new media connection has a path of its
+    # own (with UDP still blocked it stays on the relay, correctly).
+    ( sleep 12; forward_core; in_ns inet nft flush ruleset ) &
+    OPEN_PID=$!
+    result="$(run_session cli --direct "$CORE_URL" \
+        --upgrade-schedule-ms 15000,5000,5000 --wait-upgrade-ms 40000 --follow-media-ms 6000)"
+    wait "$OPEN_PID" 2>/dev/null || true
+    check_path upgrade-media "$result" 1 True
+    if python3 -c "
+import json, sys
+r = json.loads(sys.argv[1])
+ok = (r.get('mediaConnections', 0) >= 2 and r.get('heardMs', 0) > 3000
+      and r.get('longestSilentMs', 1000) <= 40 and not r.get('replacePending', True))
+sys.exit(0 if ok else 1)" "$result" 2>/dev/null; then
+        say "PASS upgrade-media: media followed the move"
+    else
+        say "FAIL upgrade-media: media did not follow the move cleanly: $result"
         FAILED=1
     fi
     stop_core

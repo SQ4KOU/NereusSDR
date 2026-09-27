@@ -90,6 +90,11 @@
 //               --listen and --media; session --direct, --wait-upgrade-ms
 //               and --media-ms). J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-09-27: iPhone app plan Task 29 fix wave (R-IOS-16, review
+//               Important 1): session --follow-media-ms, the desktop's own
+//               media (RemoteMediaController) played into a paced bus, to
+//               show media following a relay-to-direct move with no gap.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QCoreApplication>
@@ -128,6 +133,8 @@
 #include "core/session/media/OpusAudioCodec.h"
 #include "models/SliceModel.h"
 #include "core/settings/SettingsProxy.h"
+#include "gui/RemoteMediaController.h"
+#include "../fakes/PacedAudioBus.h"
 #include "models/RadioModel.h"
 
 #include "StunLookupGate.h"
@@ -670,8 +677,36 @@ int runSession(const QStringList& args)
     auto rankBefore = std::make_shared<int>(-1);
     auto moved = std::make_shared<bool>(false);
     auto media = std::make_shared<QPointer<MediaCounter>>();
-    const auto finish = [window, &clock, done, handshakes, rankBefore, moved,
-                         media](bool connected, const QString& reason) {
+    // Task 29 fix wave: the desktop's own media, played into a paced bus,
+    // and every media connection id it used.
+    const int followMs = option(args, QStringLiteral("--follow-media-ms"), QStringLiteral("0")).toInt();
+    PacedAudioBus* bus = nullptr;
+    QPointer<RemoteMediaController> follower;
+    auto followIds = std::make_shared<QStringList>();
+    if (followMs > 0) {
+        auto owned = std::make_unique<PacedAudioBus>();
+        bus = owned.get();
+        model->audioEngine()->setSpeakersBusForTest(std::move(owned));
+        follower = new RemoteMediaController(window, model, nullptr, window);
+        auto* render = new QTimer(window);
+        render->setInterval(10);
+        render->setTimerType(Qt::PreciseTimer);
+        QObject::connect(render, &QTimer::timeout, window, [bus] { bus->render(480); });
+        render->start();
+        auto* watch = new QTimer(window);
+        watch->setInterval(20);
+        QObject::connect(watch, &QTimer::timeout, window, [follower, followIds] {
+            if (follower) {
+                const QString id = follower->mediaConnectionId();
+                if (!id.isEmpty() && !followIds->contains(id)) {
+                    followIds->append(id);
+                }
+            }
+        });
+        watch->start();
+    }
+    const auto finish = [window, &clock, done, handshakes, rankBefore, moved, media, bus,
+                         follower, followIds](bool connected, const QString& reason) {
         if (*done) {
             return;
         }
@@ -692,6 +727,39 @@ int runSession(const QStringList& args)
                           static_cast<double>((*media)->displayMessages));
             result.insert(QStringLiteral("displayDecoded"),
                           static_cast<double>((*media)->displayDecoded));
+        }
+        if (bus != nullptr) {
+            // From the first tone heard, the longest silent run in 10 ms
+            // blocks, and how long was heard.
+            const QVector<float>& heard = bus->heard;
+            int first = -1;
+            int run = 0;
+            int longest = 0;
+            for (int frame = 0; (frame + 480) * 2 <= heard.size(); frame += 480) {
+                double energy = 0.0;
+                for (int i = 0; i < 480; ++i) {
+                    const double l = heard.at((frame + i) * 2);
+                    energy += l * l;
+                }
+                const bool silent = energy / 480.0 < 1e-6;
+                if (first < 0) {
+                    if (!silent) {
+                        first = frame;
+                    }
+                    continue;
+                }
+                run = silent ? run + 1 : 0;
+                longest = std::max(longest, run);
+            }
+            result.insert(QStringLiteral("mediaConnections"), static_cast<int>(followIds->size()));
+            result.insert(QStringLiteral("heardMs"),
+                          first < 0 ? 0.0 : static_cast<double>((heard.size() / 2 - first) / 48));
+            result.insert(QStringLiteral("longestSilentMs"), longest * 10);
+            if (follower) {
+                result.insert(QStringLiteral("duplicatesDropped"),
+                              static_cast<double>(follower->duplicateAudioDropped()));
+                result.insert(QStringLiteral("replacePending"), follower->replacePending());
+            }
         }
         result.insert(QStringLiteral("relayed"), false);
         if (const auto* transport = qobject_cast<const DataChannelTransport*>(window->transport())) {
@@ -716,7 +784,7 @@ int runSession(const QStringList& args)
     };
     QObject::connect(window, &StationClient::handshakeComplete, window,
                      [window, model, finish, handshakes, rankBefore, moved, media, waitUpgradeMs,
-                      mediaMs] {
+                      mediaMs, followMs] {
         ++*handshakes;
         if (*handshakes > 1) {
             return;
@@ -732,16 +800,19 @@ int runSession(const QStringList& args)
                    {QStringLiteral("path"), pathName(window->pathRank())}});
         if (waitUpgradeMs > 0) {
             QObject::connect(window, &StationClient::pathChanged, window, [window, finish, moved,
-                                                                           mediaMs] {
+                                                                           mediaMs, followMs] {
                 *moved = true;
                 printLine({{QStringLiteral("event"), QStringLiteral("moved")},
                            {QStringLiteral("rank"), window->pathRank()}});
-                if (mediaMs <= 0) {
+                if (followMs > 0) {
+                    // Listen on after the move: media follows it.
+                    QTimer::singleShot(followMs, window, [finish] { finish(true, QString()); });
+                } else if (mediaMs <= 0) {
                     finish(true, QString());
                 }
             });
-            QTimer::singleShot(waitUpgradeMs, window, [finish, mediaMs] {
-                if (mediaMs <= 0) {
+            QTimer::singleShot(waitUpgradeMs, window, [finish, mediaMs, moved, followMs] {
+                if (mediaMs <= 0 && (followMs <= 0 || !*moved)) {
                     finish(true, QString());
                 }
             });
