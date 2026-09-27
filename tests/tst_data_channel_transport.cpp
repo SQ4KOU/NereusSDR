@@ -32,7 +32,9 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QHostAddress>
 #include <QSignalSpy>
+#include <QSslSocket>
 #include <QTemporaryDir>
 
 #include <memory>
@@ -360,6 +362,84 @@ private slots:
         options.privateKeyPemPath = core.server->privateKeyPemPath();
         QVERIFY(answerer.start(options));
         QCOMPARE(ERR_peek_error(), 0UL);
+    }
+
+    // A certificate file that cannot be read makes the peer throw while
+    // the error is queued; the transport leaves the queue empty on that
+    // path too.
+    void aCertificateThatCannotBeReadLeavesNoOpenSslError()
+    {
+        QTemporaryDir dir;
+        const QString bad = dir.filePath(QStringLiteral("not-a-certificate.pem"));
+        QFile file(bad);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write("not a certificate\n");
+        file.close();
+        ERR_clear_error();
+        DataChannelTransport answerer;
+        DataChannelTransport::Options options;
+        options.role = DataChannelTransport::Role::Answerer;
+        options.maxIncomingBytes = kStationCap;
+        options.certificatePemPath = bad;
+        options.privateKeyPemPath = bad;
+        QTest::ignoreMessage(QtWarningMsg,
+                             QRegularExpression(QStringLiteral("The control connection could not "
+                                                               "start.*")));
+        QVERIFY(!answerer.start(options));
+        QCOMPARE(ERR_peek_error(), 0UL);
+    }
+
+    // A device's key whose point is not on the curve, and a signature
+    // with r = 0, reach StationIdentity before anyone has signed in (a
+    // pair.start, an auth.request, an introduction through the service).
+    // Each makes OpenSSL queue an error; none is left behind, and a
+    // wss:// session on this same thread goes on working after them.
+    void aBadDeviceKeyOrSignatureLeavesNoOpenSslErrorAndAWssSessionSurvives()
+    {
+        Core core;
+        QTemporaryDir keyDir;
+        auto key = std::make_shared<const ClientDeviceIdentity>(
+            ClientDeviceIdentity::loadOrCreate(keyDir.path()));
+        QVERIFY(core.pairComputer(*key));
+        QVERIFY2(core.server->listen(QHostAddress::LocalHost, 0),
+                 qPrintable(core.server->lastError()));
+        RadioModel remote(RadioModel::Role::Remote);
+        SettingsProxy proxy;
+        StationClient window(&remote, &proxy);
+        window.setDeviceIdentity(key, QStringLiteral("Shack MacBook"));
+        window.connectToStation(
+            QUrl(QStringLiteral("wss://127.0.0.1:%1").arg(core.server->serverPort())),
+            QString(), QString(), false, core.server->stationIdentity().fingerprint());
+        QTRY_VERIFY_WITH_TIMEOUT(window.isHandshakeComplete(), 20000);
+        qInfo() << "TLS backend:" << QSslSocket::activeBackend();
+
+        const QByteArray good = key->publicKeySpki();
+        QCOMPARE(good.size(), StationIdentity::kSpkiBytes);
+        QVERIFY(StationIdentity::isP256Spki(good));
+        // The last byte of y changed: the point is off the curve.
+        QByteArray offCurve = good;
+        offCurve[offCurve.size() - 1] = static_cast<char>(offCurve.at(offCurve.size() - 1) ^ 0x01);
+        // r = 0, s = 1.
+        QByteArray zeroR(StationIdentity::kSignatureBytes, '\0');
+        zeroR[zeroR.size() - 1] = 1;
+        const QByteArray message = QByteArrayLiteral("a device's transcript");
+
+        ERR_clear_error();
+        QVERIFY(!StationIdentity::isP256Spki(offCurve));
+        QCOMPARE(ERR_peek_error(), 0UL);
+        QVERIFY(!StationIdentity::verify(offCurve, message, zeroR));
+        QCOMPARE(ERR_peek_error(), 0UL);
+        QVERIFY(!StationIdentity::verify(good, message, zeroR));
+        QCOMPARE(ERR_peek_error(), 0UL);
+
+        // The session on this thread still carries traffic both ways: a
+        // heartbeat from the Core, answered.
+        core.server->setHeartbeatIntervalMs(200);
+        QTest::qWait(1500);
+        QVERIFY(window.isHandshakeComplete());
+        QVERIFY(core.server->hasAuthenticatedSession());
+        window.disconnectFromStation(QStringLiteral("test done"));
+        QTRY_VERIFY_WITH_TIMEOUT(!core.server->hasAuthenticatedSession(), 10000);
     }
 
     // ── A session over the channel ─────────────────────────────────────

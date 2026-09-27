@@ -15,6 +15,7 @@
 
 #include "core/session/DataChannelTransport.h"
 
+#include "core/security/OpenSslErrorScope.h"
 #include "core/session/media/LibDataChannelMediaTransport.h"
 
 #include <QHostAddress>
@@ -24,8 +25,6 @@
 #include <QtEndian>
 
 #include <rtc/rtc.hpp>
-
-#include <openssl/err.h>
 
 #include <atomic>
 #include <cstddef>
@@ -335,6 +334,17 @@ bool DataChannelTransport::start(const Options& options)
     m_options = options;
     m_bridge = std::make_shared<Bridge>(this, options.maxIncomingBytes);
     const std::weak_ptr<Bridge> weak = m_bridge;
+    // libdatachannel reads the PEM files while the peer is made, on this
+    // thread, and its loop over further certificates in the file ends on a
+    // failed read that stays in this thread's OpenSSL error queue
+    // (libdatachannel v0.24.5 src/impl/certificate.cpp:424-428); a bad or
+    // missing file throws with its error queued. Qt's OpenSSL TLS backend
+    // reads that queue after its own calls on the same thread, and a stale
+    // error there ends a healthy wss:// connection: the Core's own
+    // connection to the remote access service dropped the moment it
+    // answered an introduction (the traversal harness, Linux). The scope
+    // clears it on every way out, the throw included.
+    const OpenSslErrorScope openSslErrors;
 
     try {
         rtc::Configuration config;
@@ -371,15 +381,6 @@ bool DataChannelTransport::start(const Options& options)
         // kind (LibDataChannelMediaTransport.h).
         applyMediaSctpSettingsOnce();
         auto peer = std::make_shared<rtc::PeerConnection>(std::move(config));
-        // libdatachannel reads the PEM files here, on this thread, and its
-        // loop over further certificates in the file ends on a failed read
-        // that stays in this thread's OpenSSL error queue (libdatachannel
-        // v0.24.5 src/impl/certificate.cpp:424-428). Qt's OpenSSL TLS
-        // backend reads that queue after its own calls on the same thread,
-        // and a stale error there ends a healthy wss:// connection: the
-        // Core's own connection to the remote access service dropped the
-        // moment it answered an introduction (the traversal harness, Linux).
-        ERR_clear_error();
         m_bridge->peer = peer;
         peer->onLocalDescription([weak](rtc::Description description) {
             const auto bridge = weak.lock();
