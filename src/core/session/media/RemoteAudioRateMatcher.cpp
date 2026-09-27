@@ -25,6 +25,9 @@
 //                 Code. R-R3-23: the output runs at the speaker device's
 //                 rate (ivac.c:41 audio_rate in, vac_rate out), with WDSP's
 //                 native output quantum from cmsetup.c getbuffsize().
+//   2026-09-27: J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code. R-IOS-13: forceRatio() ports IVAC forceIVACvar
+//                 (ivac.c:39, 723-741) onto this matcher.
 // =================================================================
 //
 // === Verbatim Thetis Project Files/Source/ChannelMaster/ivac.c header ===
@@ -271,8 +274,10 @@ bool RemoteAudioRateMatcher::configure(int inputFrames, int outputFrames, int ri
     }
     // From Thetis Project Files/Source/ChannelMaster/ivac.c:41-44
     // [v2.10.3.15 @3759d09]. `force == 0` preserves WDSP's natural
-    // feedback controller; fvar is inactive in that mode.
-    forceRMatchVar(m_matcher, 0, 1.0);
+    // feedback controller; fvar is inactive in that mode. R-IOS-13: a
+    // caller that forced the ratio (forceRatio) keeps it across a rebuild,
+    // as ivac.c:39 re-applies INforce / INfvar after create_rmatchV.
+    forceRMatchVar(m_matcher, m_force ? 1 : 0, m_forcedRatio);
 
     m_inputFrames = inputFrames;
     m_outputFrames = outputFrames;
@@ -423,6 +428,21 @@ void RemoteAudioRateMatcher::reset()
     const int ringFrames = m_ringFrames;
     const int outputRateHz = m_outputRateHz;
     configure(inputFrames, outputFrames, ringFrames, outputRateHz);
+}
+
+void RemoteAudioRateMatcher::forceRatio(bool force, double ratio)
+{
+    m_force = force;
+    m_forcedRatio = ratio;
+#ifdef HAVE_WDSP
+    if (m_matcher) {
+        // From Thetis Project Files/Source/ChannelMaster/ivac.c:723-741
+        // [v2.10.3.15 @3759d09]: forceIVACvar(id, type, force, fvar) stores
+        // the pair and calls forceRMatchVar(a, force, fvar); rmatch.c:310-313
+        // then resamples at fvar instead of its controlled var.
+        forceRMatchVar(m_matcher, force ? 1 : 0, ratio);
+    }
+#endif
 }
 
 RemoteAudioRateMatcherStats RemoteAudioRateMatcher::stats() const

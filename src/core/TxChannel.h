@@ -349,6 +349,9 @@ warren@wpratt.com
 //                 EQ profile and globals, the CFC profile and scalars, the
 //                 phase rotator, CESSB, leveler and ALC. NereusSDR-original.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-27 — R-IOS-13: txIqQueuedMs(), the connection's send ring fill
+//                 for the remote microphone's buffer. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -753,6 +756,10 @@ public:
     //
     // Must be called before setRunning(true) to get samples on the wire.
     void setConnection(RadioConnection* conn);
+    /// R-IOS-13: what the connection's transmit I/Q send ring holds now, in
+    /// ms (RadioConnection::txIqQueuedMs); negative without a connection or
+    /// when it does not know. Called on the transmit pump.
+    double txIqQueuedMs() const;
 
     // Attach or detach the mic router used as fexchange2 input source.
     // Non-owning; the caller (RadioModel) owns the unique_ptr.

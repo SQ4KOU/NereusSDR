@@ -54,6 +54,10 @@
 //               headphones stream, which then runs) while the device holds
 //               transmit and MON is on. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-09-27: R-IOS-13, R-R3-42: the unkey line adds the microphone
+//               path's added latency (mean, max), the send ring's fill
+//               (mean, max) and the silence shed. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/media/DaemonMediaController.h"
@@ -1825,7 +1829,6 @@ void DaemonMediaController::logUnkeyStats()
     if (!m_micReceiver || !m_radioModel) {
         return;
     }
-    const RemoteMicReceiver::Stats rx = m_micReceiver->stats();
     RemoteMicFeed::Stats feed;
     const bool haveFeed = m_radioModel->remoteMicFeed() != nullptr;
     if (haveFeed) {
@@ -1835,16 +1838,47 @@ void DaemonMediaController::logUnkeyStats()
     if (const RadioConnection* conn = m_radioModel->connection()) {
         send = conn->txSendStats();
     }
+    qCInfo(lcDaemonMedia).noquote()
+        << unkeyStatsLine(m_micDeviceId, m_micReceiver->stats(), haveFeed ? &feed : nullptr, send);
+}
+
+QString DaemonMediaController::unkeyStatsLine(const QByteArray& deviceId,
+                                              const RemoteMicReceiver::Stats& rx,
+                                              const RemoteMicFeed::Stats* feedStats,
+                                              const RadioConnection::TxSendStats& send)
+{
     // One line (log only, never shown to a device).
     QString text;
     {
         QDebug line(&text);
         line.nospace().noquote();
-        line << "Transmit ended (" << QString::fromLatin1(m_micDeviceId) << "): microphone ";
-        if (haveFeed) {
+        line << "Transmit ended (" << QString::fromLatin1(deviceId) << "): microphone ";
+        if (feedStats != nullptr) {
+            const RemoteMicFeed::Stats& feed = *feedStats;
+            // R-IOS-13 (2026-09-27): what the path added to the microphone
+            // over the over (this buffer plus the send ring), the ring
+            // alone, and the silence shed or inserted to keep it minimal.
+            const auto ms = [](quint64 frames) {
+                return QString::number(static_cast<double>(frames)
+                                           / RemoteMicConfig::kFramesPerMs,
+                                       'f', 1);
+            };
+            const auto oneDecimal = [](double v) { return QString::number(v, 'f', 1); };
             line << "depth " << (feed.fillFrames * 1000 / RemoteMicConfig::kSampleRate)
+                 << " ms, target " << (feed.targetFrames / RemoteMicConfig::kFramesPerMs)
                  << " ms, underruns " << feed.underflows << ", overflows " << feed.overflows
-                 << ", dropped " << feed.droppedFrames << " frames";
+                 << ", dropped " << feed.droppedFrames << " frames; added latency mean "
+                 << oneDecimal(feed.addedMeanMs) << " ms, max " << oneDecimal(feed.addedMaxMs)
+                 << " ms; send ring ";
+            if (feed.ringMeanMs >= 0.0) {
+                line << "mean " << oneDecimal(feed.ringMeanMs) << " ms, max "
+                     << oneDecimal(feed.ringMaxMs) << " ms";
+            } else {
+                line << "unknown";
+            }
+            line << "; shed " << ms(feed.shedFrames + feed.shedForRingFrames) << " ms ("
+                 << ms(feed.shedForRingFrames) << " ms for the ring), inserted "
+                 << ms(feed.insertedFrames) << " ms, target grew " << feed.grows << " times";
         } else {
             line << "no feed";
         }
@@ -1861,7 +1895,7 @@ void DaemonMediaController::logUnkeyStats()
             line << "no counters";
         }
     }
-    qCInfo(lcDaemonMedia).noquote() << text;
+    return text;
 }
 
 bool DaemonMediaController::carriesMicFor(const QByteArray& deviceId) const

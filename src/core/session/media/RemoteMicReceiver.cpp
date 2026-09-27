@@ -13,6 +13,10 @@
 //               writes the transmitter's feed at a time. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-27: R-IOS-13, R-R3-42: the small adaptive transmit buffer,
+//               shedding a standing excess only in silence, and the
+//               over's latency figures. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/media/RemoteMicReceiver.h"
@@ -29,19 +33,32 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstring>
+#include <limits>
 
 namespace NereusSDR {
 
 namespace {
 
+using Cfg = RemoteMicConfig;
 constexpr int kFloatBytes = static_cast<int>(sizeof(float));
-constexpr int kPumpBlock = RemoteMicConfig::kPumpBlockFrames;
+constexpr int kPumpBlock = Cfg::kPumpBlockFrames;
 // libopus decodes at most 120 ms in one packet.
-constexpr int kMaxOpusFrames = RemoteMicConfig::kSampleRate / 1000 * 120;
-// A gap is concealed only while it fits the buffer's target; a longer one
-// inserts nothing (the buffer has run empty meanwhile anyway).
-constexpr int kMaxConcealFrames = RemoteMicConfig::kTargetDepthFrames;
+constexpr int kMaxOpusFrames = Cfg::kSampleRate / 1000 * 120;
+// A gap is concealed only up to 60 ms; a longer one inserts nothing (the
+// buffer has run dry meanwhile anyway).
+constexpr int kMaxConcealFrames = Cfg::kMaxConcealFrames;
+// The buffer's clock, in pump blocks (1.33 ms each).
+constexpr int blocksFor(int ms)
+{
+    return (ms * Cfg::kFramesPerMs + kPumpBlock - 1) / kPumpBlock;
+}
+constexpr int kWindowBlocks = blocksFor(Cfg::kWindowMs);
+constexpr int kShrinkIntervalBlocks = blocksFor(Cfg::kShrinkIntervalMs);
+constexpr int kJitterMemoryWindows = Cfg::kJitterMemoryMs / Cfg::kWindowMs;
+constexpr int kReserveFrames = Cfg::kReserveMs * Cfg::kFramesPerMs;
+constexpr int kSilenceRunFrames = Cfg::kSilenceRunMs * Cfg::kFramesPerMs;
 
 qint64 steadyMs()
 {
@@ -49,13 +66,16 @@ qint64 steadyMs()
     return duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
 }
 
-bool configureMatcher(RemoteAudioRateMatcher& matcher)
+bool configureMatcher(RemoteAudioRateMatcher& matcher, int ringFrames)
 {
-    // The ring is the transmit jitter buffer: WDSP rmatch holds it half full
-    // (its control targets n_ring = rsize / 2), so a 120 ms ring keeps the
-    // 60 ms target, and an overflow drops the oldest audio past 120 ms.
-    return matcher.configure(kPumpBlock, kPumpBlock, RemoteMicConfig::kMaxDepthFrames,
-                             RemoteMicConfig::kSampleRate);
+    // R-IOS-13: the buffer feeds rmatch a block at a time, so its ring only
+    // bridges one block to the next; the ratio is forced (the buffer's own
+    // control sets it), so rmatch's half-full target never sets the delay.
+    if (!matcher.configure(kPumpBlock, kPumpBlock, ringFrames, Cfg::kSampleRate)) {
+        return false;
+    }
+    matcher.forceRatio(true, 1.0);
+    return true;
 }
 
 } // namespace
@@ -74,13 +94,19 @@ bool opusPacketCarriesFec(const QByteArray& payload)
 
 RemoteMicFeed::RemoteMicFeed()
     : m_matcher(std::make_unique<RemoteAudioRateMatcher>())
+    , m_buffer(static_cast<size_t>(kBufferFrames))
+    , m_delayMinMemory(static_cast<size_t>(kJitterMemoryWindows),
+                       std::numeric_limits<qint64>::max())
+    , m_delayMaxMemory(static_cast<size_t>(kJitterMemoryWindows),
+                       std::numeric_limits<qint64>::min())
     , m_monoScratch(static_cast<size_t>(kPumpBlock))
     , m_stereoScratch(static_cast<size_t>(kPumpBlock) * 2)
 {
-    if (!configureMatcher(*m_matcher)) {
+    if (!configureMatcher(*m_matcher, kMatcherRingFrames)) {
         qCWarning(lcAudio) << "Remote microphone: the rate matcher could not be built;"
                            << "remote microphone audio will be silent";
     }
+    resetWindow();
 }
 
 RemoteMicFeed::~RemoteMicFeed() = default;
@@ -111,6 +137,9 @@ bool RemoteMicFeed::write(const float* mono, int frames)
     }
     m_writtenBytes += static_cast<quint64>(bytes);
     m_framesSinceInUse += frames;
+    // One packet a write (a concealed or recovered packet is its own write):
+    // the buffer's target is one packet plus its margin.
+    m_packetFrames.store(std::min(frames, Cfg::kMaxDepthFrames / 2), std::memory_order_relaxed);
     return true;
 }
 
@@ -141,7 +170,227 @@ void RemoteMicFeed::discardAllInput()
     }
 }
 
-bool RemoteMicFeed::pull(float* dst, int frames)
+int RemoteMicFeed::drainInput()
+{
+    // Whole frames only, into the jitter buffer's free space (the input
+    // ring keeps the rest until there is room).
+    int drained = 0;
+    while (m_bufferCount < kBufferFrames) {
+        const int tail = (m_bufferHead + m_bufferCount) % kBufferFrames;
+        const int room = std::min(kBufferFrames - m_bufferCount, kBufferFrames - tail);
+        const qint64 used = static_cast<qint64>(m_input.usedBytes()) / kFloatBytes;
+        const int take = static_cast<int>(std::min<qint64>(room, used));
+        if (take <= 0) {
+            break;
+        }
+        const qint64 got = m_input.popInto(
+            reinterpret_cast<uint8_t*>(m_buffer.data() + tail),
+            static_cast<qint64>(take) * kFloatBytes);
+        if (got <= 0) {
+            break;
+        }
+        m_readBytes += static_cast<quint64>(got);
+        m_bufferCount += static_cast<int>(got / kFloatBytes);
+        drained += static_cast<int>(got / kFloatBytes);
+    }
+    return drained;
+}
+
+bool RemoteMicFeed::memoryDelayMin(qint64* min) const
+{
+    qint64 lowest = m_windowArrived ? m_windowDelayMin : std::numeric_limits<qint64>::max();
+    for (const qint64 d : m_delayMinMemory) {
+        lowest = std::min(lowest, d);
+    }
+    if (lowest == std::numeric_limits<qint64>::max()) {
+        return false;
+    }
+    *min = lowest;
+    return true;
+}
+
+void RemoteMicFeed::noteArrival(int frames)
+{
+    // This arrival's delay: the pump's clock now less where its first
+    // frame sits in the stream. On time it is the same every arrival; a
+    // late one (a jittered packet, or one rebuilt from the next packet's
+    // FEC and written with it) shows as more. One past the ceiling is a
+    // stall, ridden through, not jitter the margin should cover.
+    const qint64 delay = static_cast<qint64>(m_block) * kPumpBlock
+        - static_cast<qint64>(m_arrivedFrames);
+    m_arrivedFrames += static_cast<quint64>(frames);
+    qint64 earliest = 0;
+    if (memoryDelayMin(&earliest) && delay - earliest > marginCeiling()) {
+        return;
+    }
+    if (!m_windowArrived) {
+        m_windowArrived = true;
+        m_windowDelayMin = delay;
+        m_windowDelayMax = delay;
+        return;
+    }
+    m_windowDelayMin = std::min(m_windowDelayMin, delay);
+    m_windowDelayMax = std::max(m_windowDelayMax, delay);
+}
+
+bool RemoteMicFeed::headIsSilent() const
+{
+    for (int i = 0; i < kPumpBlock; ++i) {
+        const float x = m_buffer[static_cast<size_t>((m_bufferHead + i) % kBufferFrames)];
+        if (std::abs(x) >= Cfg::kSilencePeak) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool RemoteMicFeed::canSplice() const
+{
+    // Deep in a pause: 20 ms of silence already went to rmatch (so what it
+    // still holds, and the block before, are silent) and the next block is
+    // silent too. A splice here steps by at most twice the silence peak.
+    return m_silentRunFrames >= kSilenceRunFrames && m_bufferCount >= kPumpBlock
+        && headIsSilent();
+}
+
+void RemoteMicFeed::popBlock(float* mono)
+{
+    bool silent = true;
+    for (int i = 0; i < kPumpBlock; ++i) {
+        mono[i] = m_buffer[static_cast<size_t>(m_bufferHead)];
+        silent = silent && std::abs(mono[i]) < Cfg::kSilencePeak;
+        m_bufferHead = (m_bufferHead + 1) % kBufferFrames;
+    }
+    m_bufferCount -= kPumpBlock;
+    m_silentRunFrames = silent ? m_silentRunFrames + kPumpBlock : 0;
+}
+
+void RemoteMicFeed::dropBlock()
+{
+    // Only ever a silent block (canSplice), so the run goes on.
+    m_bufferHead = (m_bufferHead + kPumpBlock) % kBufferFrames;
+    m_bufferCount -= kPumpBlock;
+    m_silentRunFrames += kPumpBlock;
+}
+
+int RemoteMicFeed::currentPacketFrames() const
+{
+    return std::max(kPumpBlock, m_packetFrames.load(std::memory_order_relaxed));
+}
+
+int RemoteMicFeed::currentTarget() const
+{
+    return m_marginFrames + currentPacketFrames();
+}
+
+int RemoteMicFeed::marginCeiling() const
+{
+    return std::max(Cfg::kMinMarginFrames, Cfg::kMaxDepthFrames - currentPacketFrames());
+}
+
+void RemoteMicFeed::resetWindow()
+{
+    m_windowStart = m_block;
+    m_windowFloor = std::numeric_limits<int>::max();
+    m_windowPlayed = false;
+    m_windowUnderrun = false;
+    m_windowArrived = false;
+    m_windowRingFloorMs = -1.0;
+}
+
+void RemoteMicFeed::endWindow()
+{
+    // The jitter: the spread of the arrival delays over the last
+    // kJitterMemoryMs, this window included.
+    qint64 earliest = 0;
+    const bool haveEarliest = memoryDelayMin(&earliest);
+    m_delayMinMemory[static_cast<size_t>(m_memoryIndex)] =
+        m_windowArrived ? m_windowDelayMin : std::numeric_limits<qint64>::max();
+    m_delayMaxMemory[static_cast<size_t>(m_memoryIndex)] =
+        m_windowArrived ? m_windowDelayMax : std::numeric_limits<qint64>::min();
+    m_memoryIndex = (m_memoryIndex + 1) % kJitterMemoryWindows;
+    qint64 latest = std::numeric_limits<qint64>::min();
+    for (const qint64 d : m_delayMaxMemory) {
+        latest = std::max(latest, d);
+    }
+    const qint64 jitter = haveEarliest && latest != std::numeric_limits<qint64>::min()
+        ? std::max<qint64>(0, latest - earliest)
+        : 0;
+    const int wanted = static_cast<int>(std::clamp<qint64>(
+        Cfg::kMinMarginFrames + jitter, Cfg::kMinMarginFrames, marginCeiling()));
+    if (wanted > m_marginFrames) {
+        // Jitter the margin did not cover: grow at once. The deficit is
+        // filled in silence (or at once, after an underrun).
+        m_marginFrames = wanted;
+        m_lastShrink = m_block;
+        ++m_overGrows;
+    } else if (wanted < m_marginFrames
+               && m_block - m_lastShrink >= static_cast<quint64>(kShrinkIntervalBlocks)) {
+        // A steadier link: ease back a step.
+        m_marginFrames = std::max(wanted,
+                                  m_marginFrames - Cfg::kShrinkStepMs * Cfg::kFramesPerMs);
+        m_lastShrink = m_block;
+    }
+    if (!m_windowPlayed || m_windowUnderrun || !m_windowArrived || !haveEarliest) {
+        m_shedBudget = 0;
+        m_insertBudget = 0;
+        m_ringShedBudget = 0;
+        resetWindow();
+        return;
+    }
+    // The buffer's level with this window's jitter added back: the lowest
+    // fill came just before its latest arrival.
+    const int level = m_windowFloor
+        + static_cast<int>(std::max<qint64>(0, m_windowDelayMax - earliest));
+    // What stood past the margin (or short of it) for the whole window.
+    m_shedBudget = std::max(0, level - m_marginFrames - kReserveFrames);
+    m_insertBudget = std::max(0, m_marginFrames - kReserveFrames - level);
+    m_ringShedBudget = m_windowRingFloorMs < 0.0
+        ? 0
+        : std::max(0, static_cast<int>((m_windowRingFloorMs - Cfg::kRingSlackMs)
+                                       * Cfg::kFramesPerMs));
+    // Clock matching: a small ratio moves the buffer toward its margin.
+    const double deviationMs = static_cast<double>(level - m_marginFrames) / Cfg::kFramesPerMs;
+    const double ppm = std::clamp(-Cfg::kRatioPpmPerMs * deviationMs, -Cfg::kMaxRatioPpm,
+                                  Cfg::kMaxRatioPpm);
+    const double ratio = 1.0 + ppm * 1e-6;
+    if (ratio != m_ratio) {
+        m_ratio = ratio;
+        m_matcher->forceRatio(true, m_ratio);
+    }
+    resetWindow();
+}
+
+void RemoteMicFeed::publishOver()
+{
+    m_statsBlocks.store(m_overBlocks, std::memory_order_relaxed);
+    m_statsAddedMeanMs.store(m_overBlocks > 0 ? m_overAddedSumMs / m_overBlocks : 0.0,
+                             std::memory_order_relaxed);
+    m_statsAddedMaxMs.store(m_overAddedMaxMs, std::memory_order_relaxed);
+    m_statsRingMeanMs.store(m_overRingBlocks > 0 ? m_overRingSumMs / m_overRingBlocks : -1.0,
+                            std::memory_order_relaxed);
+    m_statsRingMaxMs.store(m_overRingMaxMs, std::memory_order_relaxed);
+    m_statsShed.store(m_overShed, std::memory_order_relaxed);
+    m_statsShedForRing.store(m_overShedForRing, std::memory_order_relaxed);
+    m_statsInserted.store(m_overInserted, std::memory_order_relaxed);
+    m_statsGrows.store(m_overGrows, std::memory_order_relaxed);
+}
+
+void RemoteMicFeed::endBlock()
+{
+    ++m_block;
+    if (m_block - m_windowStart >= static_cast<quint64>(kWindowBlocks)) {
+        endWindow();
+    }
+    m_targetFrames.store(currentTarget(), std::memory_order_relaxed);
+    m_statsMargin.store(m_marginFrames, std::memory_order_relaxed);
+    m_statsFill.store(m_bufferCount + m_matcherFill, std::memory_order_relaxed);
+    m_statsRatio.store(m_ratio, std::memory_order_relaxed);
+    m_statsUnderflows.store(m_underflows, std::memory_order_relaxed);
+    publishOver();
+}
+
+RemoteMicFeed::Pull RemoteMicFeed::pullBlock(float* dst, int frames, double downstreamQueuedMs)
 {
     const quint64 change = m_change.load(std::memory_order_acquire);
     if (change != m_seenChange) {
@@ -152,17 +401,48 @@ bool RemoteMicFeed::pull(float* dst, int frames)
         m_matcher->reset();
         // WDSP rmatch starts with its ring half full of silence
         // (calc_rmatch: n_ring = rsize / 2). Read it out, so the buffer
-        // counts only the microphone's audio and the target means 60 ms of
-        // it. Reads before rmatch's control starts leave its estimate alone
-        // (control() runs only once control_flag is set).
+        // counts only the microphone's audio.
         while (m_matcher->stats().ringFillFrames >= kPumpBlock) {
             if (!m_matcher->takeInto(m_stereoScratch.data(), kPumpBlock)) {
                 break;
             }
         }
+        m_matcherFill = m_matcher->stats().ringFillFrames;
+        m_bufferHead = 0;
+        m_bufferCount = 0;
         m_started = false;
-        m_underflowsAtStart = 0;
+        m_silentRunFrames = 0;
+        m_underflows = 0;
+        m_shedBudget = 0;
+        m_insertBudget = 0;
+        m_ringShedBudget = 0;
+        m_ratio = 1.0;
+        m_matcher->forceRatio(true, m_ratio);
+        // The arrival clock starts again with the stream; the margin is the
+        // link's and is kept (it eases back if the link is steady).
+        m_arrivedFrames = 0;
+        std::fill(m_delayMinMemory.begin(), m_delayMinMemory.end(),
+                  std::numeric_limits<qint64>::max());
+        std::fill(m_delayMaxMemory.begin(), m_delayMaxMemory.end(),
+                  std::numeric_limits<qint64>::min());
+        resetWindow();
         m_seenChange = change;
+        const bool inUse = m_inUseForPump.load(std::memory_order_acquire);
+        if (inUse) {
+            // A new over: its figures start here (the last over's stay
+            // readable until then).
+            m_overBlocks = 0;
+            m_overAddedSumMs = 0.0;
+            m_overAddedMaxMs = 0.0;
+            m_overRingBlocks = 0;
+            m_overRingSumMs = 0.0;
+            m_overRingMaxMs = -1.0;
+            m_overShed = 0;
+            m_overShedForRing = 0;
+            m_overInserted = 0;
+            m_overGrows = 0;
+            publishOver();
+        }
         m_statsStarted.store(false, std::memory_order_relaxed);
         m_statsFill.store(0, std::memory_order_relaxed);
         m_statsRatio.store(1.0, std::memory_order_relaxed);
@@ -172,54 +452,109 @@ bool RemoteMicFeed::pull(float* dst, int frames)
     }
     if (!m_inUseForPump.load(std::memory_order_acquire)) {
         discardAllInput();
-        return false;
+        m_bufferCount = 0;
+        return Pull::NotInUse;
     }
     if (dst == nullptr || frames != kPumpBlock) {
-        return false;
+        return Pull::NotInUse;
     }
 
-    // Everything that arrived goes into the matcher, a pump block at a time.
-    const qint64 blockBytes = static_cast<qint64>(kPumpBlock) * kFloatBytes;
-    while (static_cast<qint64>(m_input.usedBytes()) >= blockBytes) {
-        const qint64 got =
-            m_input.popInto(reinterpret_cast<uint8_t*>(m_monoScratch.data()), blockBytes);
-        if (got != blockBytes) {
-            break;
-        }
-        m_readBytes += static_cast<quint64>(got);
-        for (int i = 0; i < kPumpBlock; ++i) {
-            const float sample = m_monoScratch[static_cast<size_t>(i)];
-            m_stereoScratch[static_cast<size_t>(2 * i)] = sample;
-            m_stereoScratch[static_cast<size_t>(2 * i + 1)] = sample;
-        }
-        m_matcher->push(m_stereoScratch.data(), kPumpBlock);
+    const int arrived = drainInput();
+    if (arrived > 0) {
+        noteArrival(arrived);
     }
-
     RemoteAudioRateMatcherStats matcher = m_matcher->stats();
+    m_matcherFill = matcher.ringFillFrames;
+    m_statsOverflows.store(matcher.overflows, std::memory_order_relaxed);
+    const int fill = m_bufferCount + m_matcherFill;
+
     if (!m_started) {
-        if (matcher.ringFillFrames < RemoteMicConfig::kTargetDepthFrames) {
+        if (fill < currentTarget()) {
             std::fill(dst, dst + frames, 0.0f);
-            m_statsFill.store(matcher.ringFillFrames, std::memory_order_relaxed);
-            m_statsOverflows.store(matcher.overflows, std::memory_order_relaxed);
-            return true;
+            endBlock();
+            return Pull::Audio;
         }
         m_started = true;
-        m_underflowsAtStart = matcher.underflows;
         m_statsStarted.store(true, std::memory_order_relaxed);
+    }
+
+    // The over's figures and the window's floors, before this block plays.
+    m_windowPlayed = true;
+    m_windowFloor = std::min(m_windowFloor, fill);
+    double addedMs = static_cast<double>(fill) / Cfg::kFramesPerMs;
+    if (downstreamQueuedMs >= 0.0) {
+        addedMs += downstreamQueuedMs;
+        m_windowRingFloorMs = m_windowRingFloorMs < 0.0
+            ? downstreamQueuedMs
+            : std::min(m_windowRingFloorMs, downstreamQueuedMs);
+        ++m_overRingBlocks;
+        m_overRingSumMs += downstreamQueuedMs;
+        m_overRingMaxMs = std::max(m_overRingMaxMs, downstreamQueuedMs);
+    }
+    ++m_overBlocks;
+    m_overAddedSumMs += addedMs;
+    m_overAddedMaxMs = std::max(m_overAddedMaxMs, addedMs);
+
+    // Excess past the send ring: shed a silent block and skip this pump
+    // block, so TX DSP never runs on it and the ring drains by one block.
+    if (downstreamQueuedMs >= 0.0 && m_ringShedBudget >= kPumpBlock && canSplice()) {
+        dropBlock();
+        m_ringShedBudget -= kPumpBlock;
+        m_overShedForRing += kPumpBlock;
+        endBlock();
+        return Pull::Shed;
+    }
+
+    // Feed rmatch only what this block needs; the buffer keeps the rest.
+    // At most one splice (a silent block shed, or one inserted) a block.
+    bool spliced = false;
+    while (m_matcherFill < kPumpBlock) {
+        if (!spliced && m_insertBudget >= kPumpBlock && canSplice()) {
+            std::fill(m_stereoScratch.begin(), m_stereoScratch.end(), 0.0f);
+            m_matcher->push(m_stereoScratch.data(), kPumpBlock);
+            m_insertBudget -= kPumpBlock;
+            m_overInserted += kPumpBlock;
+            m_silentRunFrames += kPumpBlock;
+            spliced = true;
+        } else if (m_bufferCount < kPumpBlock) {
+            break;
+        } else if (!spliced && m_shedBudget >= kPumpBlock && canSplice()) {
+            dropBlock();
+            m_shedBudget -= kPumpBlock;
+            m_overShed += kPumpBlock;
+            spliced = true;
+            continue;
+        } else {
+            popBlock(m_monoScratch.data());
+            for (int i = 0; i < kPumpBlock; ++i) {
+                const float sample = m_monoScratch[static_cast<size_t>(i)];
+                m_stereoScratch[static_cast<size_t>(2 * i)] = sample;
+                m_stereoScratch[static_cast<size_t>(2 * i + 1)] = sample;
+            }
+            m_matcher->push(m_stereoScratch.data(), kPumpBlock);
+        }
+        m_matcherFill = m_matcher->stats().ringFillFrames;
+    }
+
+    if (m_matcherFill < kPumpBlock) {
+        // Nothing left to play: rmatch fades what it holds out (its dslew)
+        // and the buffer fills again to its target, grown by how late the
+        // audio turns out to be when it comes back (noteArrival).
+        ++m_underflows;
+        m_windowUnderrun = true;
+        m_started = false;
+        m_statsStarted.store(false, std::memory_order_relaxed);
     }
     if (!m_matcher->takeInto(m_stereoScratch.data(), kPumpBlock)) {
         std::fill(dst, dst + frames, 0.0f);
-        return true;
+    } else {
+        for (int i = 0; i < kPumpBlock; ++i) {
+            dst[i] = m_stereoScratch[static_cast<size_t>(2 * i)];
+        }
     }
-    for (int i = 0; i < kPumpBlock; ++i) {
-        dst[i] = m_stereoScratch[static_cast<size_t>(2 * i)];
-    }
-    matcher = m_matcher->stats();
-    m_statsFill.store(matcher.ringFillFrames, std::memory_order_relaxed);
-    m_statsRatio.store(matcher.currentRatio, std::memory_order_relaxed);
-    m_statsUnderflows.store(matcher.underflows - m_underflowsAtStart, std::memory_order_relaxed);
-    m_statsOverflows.store(matcher.overflows, std::memory_order_relaxed);
-    return true;
+    m_matcherFill = m_matcher->stats().ringFillFrames;
+    endBlock();
+    return Pull::Audio;
 }
 
 RemoteMicFeed::Stats RemoteMicFeed::stats() const
@@ -232,6 +567,17 @@ RemoteMicFeed::Stats RemoteMicFeed::stats() const
     stats.overflows = m_statsOverflows.load(std::memory_order_relaxed);
     stats.droppedFrames = m_droppedFrames.load(std::memory_order_relaxed);
     stats.changes = m_statsChanges.load(std::memory_order_relaxed);
+    stats.targetFrames = m_targetFrames.load(std::memory_order_relaxed);
+    stats.marginFrames = m_statsMargin.load(std::memory_order_relaxed);
+    stats.blocks = m_statsBlocks.load(std::memory_order_relaxed);
+    stats.addedMeanMs = m_statsAddedMeanMs.load(std::memory_order_relaxed);
+    stats.addedMaxMs = m_statsAddedMaxMs.load(std::memory_order_relaxed);
+    stats.ringMeanMs = m_statsRingMeanMs.load(std::memory_order_relaxed);
+    stats.ringMaxMs = m_statsRingMaxMs.load(std::memory_order_relaxed);
+    stats.shedFrames = m_statsShed.load(std::memory_order_relaxed);
+    stats.shedForRingFrames = m_statsShedForRing.load(std::memory_order_relaxed);
+    stats.insertedFrames = m_statsInserted.load(std::memory_order_relaxed);
+    stats.grows = m_statsGrows.load(std::memory_order_relaxed);
     return stats;
 }
 
@@ -558,7 +904,7 @@ void RemoteMicReceiver::cancelWait()
 void RemoteMicReceiver::checkReady()
 {
     if (!m_waitDone || !m_feedWriter || m_feed == nullptr || !m_feed->inUse()
-        || m_feed->framesSinceInUse() < RemoteMicConfig::kTargetDepthFrames) {
+        || m_feed->framesSinceInUse() < m_feed->targetFrames()) {
         return;
     }
     std::function<void(bool)> done = std::move(m_waitDone);

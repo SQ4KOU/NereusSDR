@@ -51,6 +51,10 @@
 //                                    paired window can take transmit, and
 //                                    the holder line says how. AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-27: R-IOS-13: the program is looked for over the 800 ms it
+//               lasts, as the smaller buffer plays everything in order.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -864,17 +868,22 @@ private slots:
         }
         QTRY_VERIFY_WITH_TIMEOUT(feed->framesSinceInUse() >= 4 * RemoteMicConfig::kTargetDepthFrames,
                                  5000);
+        // R-IOS-13 (2026-09-27): the buffer keeps everything that arrived
+        // and plays it in order (it no longer drops the oldest past 120
+        // ms), so the line's silence from before the program plays first;
+        // the program follows within the 800 ms it lasts.
         std::vector<float> block(RemoteMicConfig::kPumpBlockFrames);
+        double loudest = 0.0;
         double sum = 0.0;
-        int count = 0;
-        for (int b = 0; b < 40; ++b) {
+        for (int b = 0; b < 600; ++b) {
             feed->pull(block.data(), RemoteMicConfig::kPumpBlockFrames);
-            if (b >= 20) {
-                for (float v : block) { sum += double(v) * v; ++count; }
+            for (float v : block) { sum += double(v) * v; }
+            if (b % 20 == 19) {
+                loudest = std::max(loudest, std::sqrt(sum / (20.0 * block.size())));
+                sum = 0.0;
             }
         }
-        const double rms = std::sqrt(sum / std::max(count, 1));
-        QVERIFY2(rms > 0.1, qPrintable(QString::number(rms)));   // the program, not silence
+        QVERIFY2(loudest > 0.1, qPrintable(QString::number(loudest)));   // the program, not silence
 
         app.sendTextMessage(QStringLiteral("trx:0,false;"));
         QTRY_VERIFY_WITH_TIMEOUT(!h.station.moxController()->isMox(), 5000);

@@ -371,6 +371,9 @@ warren@wpratt.com
 //                 setTXEQProfile do, Q included (eqform.cs:3041-3072
 //                 [v2.10.3.15]); the ten-band overload calls it with no Q.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-27 — R-IOS-13: txIqQueuedMs(), the connection's send ring fill
+//                 for the remote microphone's buffer. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "TxChannel.h"  // brings in WdspTypes.h (DSPMode)
@@ -3567,6 +3570,11 @@ void TxChannel::setConnection(RadioConnection* conn)
     m_connection = conn;
     qCDebug(lcDsp) << "TxChannel" << m_channelId
                    << "connection" << (conn ? "attached" : "detached");
+}
+
+double TxChannel::txIqQueuedMs() const
+{
+    return m_connection != nullptr ? m_connection->txIqQueuedMs() : -1.0;
 }
 
 // ---------------------------------------------------------------------------
