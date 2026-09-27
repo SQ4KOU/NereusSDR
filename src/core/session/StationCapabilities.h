@@ -323,6 +323,8 @@ struct StationCapabilities {
     /// recordStreamVersion. 0 (a Core that is not nereusd, or older): a
     /// window shows This Core's Change radio disabled with a reason.
     int stationRadiosVersion = 0;
+    // Task 24: Core-owned settings validation and per-MAC hygiene commands.
+    int settingsHygieneVersion = 0;
     /// R-R3-49 / A11 (remote-window parity Task 28): 1 means the Core sends
     /// the transmit analyzer's display, not the receiver's, for a pan on the
     /// transmitting slice while it is keyed, to a media peer that declared

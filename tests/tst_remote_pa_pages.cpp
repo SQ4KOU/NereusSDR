@@ -8,6 +8,8 @@
 // tst_remote_transmit_setup_pages does. No audio device is opened.
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-27  J.J. Boyd / KG4VCF  Task 24: remote Settings Validation
+//                                    gate reasons. AI-assisted via Codex.
 //   2026-09-25  J.J. Boyd / KG4VCF  R-R3-46 / R-R3-49 / R-R3-32 (parity
 //                                    Task 6). AI-assisted via Anthropic
 //                                    Claude Code.
@@ -25,6 +27,7 @@
 #include <QDoubleSpinBox>
 #include <QFile>
 #include <QLabel>
+#include <QPushButton>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 
@@ -48,6 +51,7 @@
 #include "fakes/UpgradedCoreToken.h"
 #include "gui/RemoteTelemetryController.h"
 #include "gui/diagnostics/RadioStatusPage.h"
+#include "gui/diagnostics/DiagnosticsPhaseHPages.h"
 #include "gui/meters/MeterItem.h"
 #include "gui/meters/MeterPoller.h"
 #include "gui/meters/MeterWidget.h"
@@ -234,6 +238,7 @@ private slots:
     void remoteWattMeterPageChangesTheCoresTable();
     void remotePaReadingsShowOnRadioStatusPaValuesAndMeters();
     void localRadioStatusSetsPaVoltage();
+    void remoteSettingsResetAndTokenMutationGivePlainDisabledReasons();
     void coreTxInhibitReachesTheWindow();
     void systemTileSaysTheReadingsAreTheCores();
     void newReasonsArePlain();
@@ -567,6 +572,46 @@ void TstRemotePaPages::localRadioStatusSetsPaVoltage()
     QVERIFY(hasText(QStringLiteral("PA Status")));
     QVERIFY(hasText(QStringLiteral("Unavailable")));
     QVERIFY(!local.paReadingsFromCore());
+}
+
+void TstRemotePaPages::remoteSettingsResetAndTokenMutationGivePlainDisabledReasons()
+{
+    Session s(m_securityDir.path(), this, /*coreUsesProcessSettings=*/false);
+    QVERIFY(s.connect());
+    QTRY_VERIFY(s.client->settingsHygieneAvailable());
+    QVERIFY(!s.client->signedInWithDeviceKey());
+
+    SettingsValidationPage validation(&s.window);
+    validation.setStationSettingsAvailable(true, {});
+    RadioStatusPage status(&s.window);
+    status.setStationSettingsAvailable(true, {});
+    const auto button = [](QWidget& page, const QString& label) {
+        for (QPushButton* candidate : page.findChildren<QPushButton*>()) {
+            if (candidate->text() == label) { return candidate; }
+        }
+        return static_cast<QPushButton*>(nullptr);
+    };
+    auto* validate = button(validation, QStringLiteral("Re-validate"));
+    auto* validationReset = button(validation, QStringLiteral("Reset to Defaults"));
+    auto* validationForget = button(validation, QStringLiteral("Forget This Radio"));
+    auto* statusReset = button(status, QStringLiteral("Reset to defaults"));
+    auto* statusForget = button(status, QStringLiteral("Forget this radio"));
+    QVERIFY(validate && validate->isEnabled());
+    for (QPushButton* reset : {validationReset, statusReset}) {
+        QVERIFY(reset && !reset->isEnabled());
+        QVERIFY(reset->toolTip().contains(QStringLiteral("approved definition")));
+    }
+    for (QPushButton* forget : {validationForget, statusForget}) {
+        QVERIFY(forget && !forget->isEnabled());
+        QVERIFY(forget->toolTip().contains(QStringLiteral("Pair this computer")));
+    }
+
+    RadioModel olderWindow(RadioModel::Role::Remote);
+    SettingsValidationPage older(&olderWindow);
+    older.setStationSettingsAvailable(true, {});
+    auto* olderValidate = button(older, QStringLiteral("Re-validate"));
+    QVERIFY(olderValidate && !olderValidate->isEnabled());
+    QVERIFY(olderValidate->toolTip().contains(QStringLiteral("does not offer Settings Validation")));
 }
 
 // Carried from gaps Task 13: the Core's TX inhibit reaches the window as

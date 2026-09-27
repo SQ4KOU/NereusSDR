@@ -119,7 +119,8 @@ void GuiConnectionController::start(const StationStartupRequest& request)
                                         : std::nullopt;
     // A corrupt address book or bad CLI must not start the old local radio
     // implicitly. Open an idle local-capable window with a visible error.
-    m_sessions.replace(selected.value_or(StationStartupSelection{}), selected.has_value());
+    m_sessions.replace(selected.value_or(StationStartupSelection{}),
+                       selected && shouldStartStationConnection(request, *selected, m_store));
     if (!error.isEmpty()) {
         m_selector->setNotice(error);
         showConnections();

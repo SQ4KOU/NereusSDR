@@ -1306,6 +1306,10 @@ void SetupDialog::buildTree()
         }
         connect(genOpts, &GeneralOptionsPage::cpuMeterRateChanged,
                 this,    &SetupDialog::cpuMeterRateChanged);
+        connect(genOpts, &GeneralOptionsPage::hideFeedbackLevelChanged,
+                this, &SetupDialog::hideFeedbackLevelChanged);
+        connect(genOpts, &GeneralOptionsPage::invertRedBluePsaChanged,
+                this, &SetupDialog::invertRedBluePsaChanged);
         return genOpts;
     });
 
@@ -1931,6 +1935,13 @@ void SetupDialog::reloadMeterStyles()
 {
     for (MeterStylesPage* page : findChildren<MeterStylesPage*>()) {
         page->reloadSMeterSettings();
+    }
+}
+
+void SetupDialog::reloadFeedbackPreferences()
+{
+    for (GeneralOptionsPage* page : findChildren<GeneralOptionsPage*>()) {
+        page->reloadFeedbackPreferences();
     }
 }
 

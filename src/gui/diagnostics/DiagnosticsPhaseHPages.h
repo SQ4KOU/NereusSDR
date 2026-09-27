@@ -78,6 +78,7 @@ public:
 
 private slots:
     void refresh();
+    void onRevalidateClicked();
     void onResetClicked();
     void onForgetClicked();
 

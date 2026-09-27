@@ -6,6 +6,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-27  J.J. Boyd / KG4VCF  Task 24: Core-owned Settings Hygiene
+//                                    commands and current-radio guards.
+//                                    AI-assisted implementation via Codex.
 //   2026-08-05  J.J. Boyd / KG4VCF  Remote daemon R2 Task 11: command
 //                                    dispatch (addSlice / removeSlice /
 //                                    requestSliceSampleRate /
@@ -226,6 +229,9 @@
 #include "core/SliceOwnership.h"
 #include "core/SpotSourceHost.h"
 #include "core/station/StationRadios.h"
+#include "core/AppSettings.h"
+#include "core/SettingsHygiene.h"
+#include "core/session/SettingsHygieneWire.h"
 #include "core/session/ObjectRegistry.h"
 #include "core/dsp/DspAssetService.h"
 #include "DspCommandValues.h"
@@ -655,6 +661,10 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
          "stationRadiosVersion", 1, kRadioIdentitySessionProtocolMinor},
         {"station.forgetRadio", {arg("mac", kUtf8)}, "stationRadiosVersion", 1,
          kRadioIdentitySessionProtocolMinor},
+        {"station.validateSettings", {arg("mac", kUtf8)}, "settingsHygieneVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
+        {"station.forgetSettings", {arg("mac", kUtf8)}, "settingsHygieneVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
         // The Core's FreeDV Reporter (R-IOS-26, R-R3-49, iPhone plan Task
         // 22, parity Task 20).
         {"freedv.setMessage", {arg("text", kUtf8)}, "stationFreedvVersion", 1,
@@ -1042,6 +1052,9 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
                || invoke.commandVerb == "station.setRadioModel"
                || invoke.commandVerb == "station.forgetRadio") {
         handleStationRadios(invoke);
+    } else if (invoke.commandVerb == "station.validateSettings"
+               || invoke.commandVerb == "station.forgetSettings") {
+        handleSettingsHygiene(invoke);
     } else if (invoke.commandVerb == "spots.connect" || invoke.commandVerb == "spots.disconnect"
                || invoke.commandVerb == "spots.sendCommand"
                || invoke.commandVerb == "spots.clearAll") {
@@ -3326,6 +3339,57 @@ void SessionCommandDispatcher::handleStationRadios(const SessionMessage& invoke)
         accepted = m_stationRadios->select(mac.toString(), &reason);
     }
     emitResult(invoke.commandVerb, invoke.commandId, accepted, reason, {});
+}
+
+void SessionCommandDispatcher::handleSettingsHygiene(const SessionMessage& invoke)
+{
+    QVariant supplied;
+    if (!hasExactlyArguments(invoke.arguments, {"mac"})
+        || !findArgument(invoke.arguments, "mac", &supplied)
+        || supplied.typeId() != QMetaType::QString) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The Core could not read this request."), {});
+        return;
+    }
+    const QString current = AppSettings::normalizedRadioMac(m_radioModel->currentRadioMac());
+    const QString target = supplied.toString();
+    if (current.isEmpty() || target != current) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("This radio changed. Open Settings Validation for the current radio."), {});
+        return;
+    }
+    const bool mutation = invoke.commandVerb != "station.validateSettings";
+    QString reason;
+    if (mutation && m_radioModel->stationOnAirRefusal(&reason)) {
+        emitResult(invoke.commandVerb, invoke.commandId, false, reason, {});
+        return;
+    }
+    SettingsHygiene& hygiene = m_radioModel->settingsHygiene();
+    if (mutation) {
+        hygiene.validate(current, m_radioModel->boardCapabilities());
+        if (!SettingsHygieneWire::encode({current, hygiene.issues()})) {
+            emitResult(invoke.commandVerb, invoke.commandId, false,
+                       QStringLiteral("Settings Validation has too many details to show."), {});
+            return;
+        }
+    }
+    if (invoke.commandVerb == "station.forgetSettings") {
+        hygiene.forgetRadio(current);
+    } else {
+        hygiene.validate(current, m_radioModel->boardCapabilities());
+    }
+    const auto values = SettingsHygieneWire::encode({current, hygiene.issues()});
+    if (!values) {
+        // A mutation already ran; accepted must reflect that fact even if
+        // its post-operation details cannot be encoded. The client treats
+        // the missing details as unavailable and can re-validate.
+        emit commandResultReady(SessionMessages::commandResult(
+            invoke.commandVerb, invoke.commandId, mutation, mutation ? QString() :
+                QStringLiteral("Settings Validation has too many details to show."), {}, {}));
+        return;
+    }
+    emit commandResultReady(SessionMessages::commandResult(
+        invoke.commandVerb, invoke.commandId, true, {}, {}, *values));
 }
 
 // R-IOS-25 / R-R3-49 (parity Task 19, recordStreamVersion 1): the Spot Hub's

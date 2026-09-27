@@ -200,6 +200,9 @@ QJsonObject toJson(const SavedCoreTarget& target, int version)
         if (!target.connection.reachFromAnywhere) {
             object.insert(QStringLiteral("reachFromAnywhere"), false);
         }
+        if (!target.autoConnect) {
+            object.insert(QStringLiteral("autoConnect"), false);
+        }
     }
     return object;
 }
@@ -342,6 +345,14 @@ bool parseDocument(const QString& text, int expectedVersion, QList<SavedCoreTarg
                     return false;
                 }
                 target.connection.reachFromAnywhere = anywhere.toBool();
+            }
+            const QJsonValue autoConnect = object.value(QStringLiteral("autoConnect"));
+            if (!autoConnect.isUndefined()) {
+                if (!autoConnect.isBool()) {
+                    setError(error, QStringLiteral("Saved Core targets document has an invalid record."));
+                    return false;
+                }
+                target.autoConnect = autoConnect.toBool();
             }
         }
         parsed.append(target);

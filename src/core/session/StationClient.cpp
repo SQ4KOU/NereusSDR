@@ -9,6 +9,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-27  J.J. Boyd / KG4VCF  Task 24: negotiated remote Settings
+//                                    Validation refresh and reply lifetime.
+//                                    AI-assisted implementation via Codex.
 //   2026-08-08  J.J. Boyd / KG4VCF  Remote daemon R2 Task 18: the GUI half
 //                                    of the wss session. AI-assisted
 //                                    transformation via Anthropic Claude
@@ -281,6 +284,9 @@
 #include "core/session/StationClient.h"
 
 #include "core/AppSettings.h"
+#include "core/session/SettingsHygieneWire.h"
+#include "core/SettingsHygiene.h"
+#include "core/station/StationRadios.h"
 #include "core/FaultLog.h"
 #include "core/safety/TxRefusal.h"
 #include "core/security/ClientDeviceIdentity.h"
@@ -618,6 +624,7 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
     // window transmits through the Core (link section 18.6), so its hello
     // says so and the Core answers with txPermitted and remoteTxVersion.
     m_declaredFeatures.insert(QByteArrayLiteral("remoteTx"), 1);
+    m_declaredFeatures.insert(QByteArrayLiteral("settingsHygiene"), 1);
     // Each transmit verb goes out as the same command three times (the
     // copies rule); the Core acts on the first and answers every copy.
     m_remoteTransmit = new RemoteTransmitClient(
@@ -1513,6 +1520,14 @@ void StationClient::attachTransport(SessionTransport* transport, const QString& 
     // first session is epoch 1; 0 means "never attached"). See
     // sessionEpoch()'s doc comment.
     ++m_sessionEpoch;
+    m_hygieneValidateId = 0;
+    m_hygieneValidateMac.clear();
+    m_hygieneValidateDirty = false;
+    m_hygieneMutations.clear();
+    if (!m_radioModel.isNull()) {
+        m_radioModel->settingsHygiene().setRemoteUnavailable(
+            QStringLiteral("Not connected to the Core."));
+    }
     m_settingsSnapshotThisLink = false;
     m_lastTelemetrySequence = 0;
     m_lastTelemetrySampleElapsedMs = -1;
@@ -1693,6 +1708,14 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
     m_authenticated = false;
     m_signedInWithDeviceKey = false;
     m_enrolledDeviceKey = false;
+    m_hygieneValidateId = 0;
+    m_hygieneValidateMac.clear();
+    m_hygieneValidateDirty = false;
+    m_hygieneMutations.clear();
+    if (m_radioModel) {
+        m_radioModel->settingsHygiene().setRemoteUnavailable(
+            QStringLiteral("Not connected to the Core."));
+    }
     // Task 78: who else was on the Core was this session's.
     m_declaredSessionHolder = false;
     m_remoteDevices->clear();
@@ -2287,6 +2310,7 @@ void StationClient::onTransportText(const QByteArray& wire)
         }
         m_remoteDevices->setSelfDeviceId(thisDeviceWireId());
         emit transmitTakeAvailabilityChanged();
+        refreshSettingsHygiene();
         emit stateSnapshotApplied();
         break;
     }
@@ -3070,6 +3094,9 @@ void StationClient::handleSettingsValue(const SessionMessage& message)
         // Follow-up 6: another window's (or the Core's) change reaches the
         // pages that show it.
         m_radioModel->reportStationSettingChanged(key);
+    }
+    if (key.startsWith(QStringLiteral("hardware/"))) {
+        refreshSettingsHygiene();
     }
 }
 
@@ -4376,6 +4403,105 @@ bool StationClient::stationRadiosAvailable() const
         && m_capabilities.stationRadiosVersion >= 1;
 }
 
+bool StationClient::settingsHygieneAvailable() const
+{
+    return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.settingsHygieneVersion >= 1 && m_settingsSnapshotThisLink;
+}
+
+StationClient::CommandOutcome StationClient::requestSettingsHygiene(
+    const QByteArray& verb, const QString& mac)
+{
+    if (!settingsHygieneAvailable()) {
+        return {false, settingsHygieneUnavailableReason()};
+    }
+    const QString target = AppSettings::normalizedRadioMac(mac);
+    if (target.isEmpty() || target != AppSettings::normalizedRadioMac(m_radioModel->currentRadioMac())) {
+        return {false, QStringLiteral("No current radio matches this Settings Validation request.")};
+    }
+    if (verb != "station.validateSettings" && verb != "station.forgetSettings") {
+        return {false, QStringLiteral("This app does not know that Settings Validation request.")};
+    }
+    if (verb == "station.forgetSettings" && !signedInWithDeviceKey()) {
+        return {false, StationRadios::pairedDeviceReason()};
+    }
+    if (verb != "station.validateSettings") {
+        QString onAir;
+        if (m_radioModel->stationOnAirRefusal(&onAir)) { return {false, onAir}; }
+    }
+    if (verb == "station.validateSettings" && m_hygieneValidateId != 0) {
+        m_hygieneValidateDirty = true;
+        return {true, {}, m_hygieneValidateId};
+    }
+    const quint32 id = invokeCommand(verb, {stringArgument("mac", target)});
+    if (id == 0) { return {false, QStringLiteral("Not connected to the Core.")}; }
+    if (verb == "station.validateSettings") {
+        m_hygieneValidateId = id;
+        m_hygieneValidateEpoch = m_sessionEpoch;
+        m_hygieneValidateMac = target;
+        m_hygieneValidateDirty = false;
+    } else {
+        m_hygieneMutations.insert(id, {m_sessionEpoch, target});
+    }
+    return {true, {}, id};
+}
+
+void StationClient::refreshSettingsHygiene()
+{
+    if (m_radioModel.isNull()) { return; }
+    if (!settingsHygieneAvailable() || m_radioModel->currentRadioMac().isEmpty()) {
+        m_radioModel->settingsHygiene().setRemoteUnavailable(
+            m_radioModel->currentRadioMac().isEmpty()
+                ? QStringLiteral("Connect a radio on the Core to validate its settings.")
+                : settingsHygieneUnavailableReason());
+        return;
+    }
+    const QPointer<StationClient> self(this);
+    m_radioModel->settingsHygiene().setRemoteUnavailable(
+        QStringLiteral("Checking this radio's settings on the Core."));
+    if (!self || m_radioModel.isNull()) { return; }
+    requestSettingsHygiene("station.validateSettings", m_radioModel->currentRadioMac());
+}
+
+void StationClient::handleSettingsHygieneResult(const SessionMessage& message)
+{
+    const QPointer<StationClient> self(this);
+    const bool validation = message.commandVerb == "station.validateSettings";
+    const bool matchingValidation = validation && m_hygieneValidateId == message.commandId
+        && m_hygieneValidateEpoch == m_sessionEpoch;
+    const auto mutation = m_hygieneMutations.take(message.commandId);
+    const bool matchingMutation = !validation && mutation.first == m_sessionEpoch
+        && !mutation.second.isEmpty();
+    if (!matchingValidation && !matchingMutation) { return; }
+    const QString target = validation ? m_hygieneValidateMac : mutation.second;
+    const bool dirty = m_hygieneValidateDirty;
+    if (matchingValidation) {
+        m_hygieneValidateId = 0;
+        m_hygieneValidateDirty = false;
+        m_hygieneValidateMac.clear();
+    }
+    if (!m_radioModel.isNull() && settingsHygieneAvailable()
+        && target == AppSettings::normalizedRadioMac(m_radioModel->currentRadioMac())) {
+        const auto reply = message.accepted ? SettingsHygieneWire::decode(message.updates)
+                                            : std::nullopt;
+        if (reply && reply->mac == target) {
+            m_radioModel->settingsHygiene().replaceRemoteIssues(reply->issues);
+        } else {
+            m_radioModel->settingsHygiene().setRemoteUnavailable(
+                message.accepted ? QStringLiteral("The Core sent invalid Settings Validation details.")
+                                 : message.reason);
+        }
+        m_radioModel->reportStationCommandFinished(message.commandId, message.accepted,
+            message.accepted ? QString() : message.reason);
+        if (!self) { return; }
+    }
+    emit commandResponse(message);
+    if (!self) { return; }
+    emit commandResult(message.commandId, message.accepted, message.reason);
+    if (!self) { return; }
+    if (matchingValidation && dirty) { refreshSettingsHygiene(); }
+}
+
 StationClient::CommandOutcome StationClient::requestStationRadio(const QByteArray& verb,
                                                                  const QString& mac, int model)
 {
@@ -4884,6 +5010,11 @@ void StationClient::refreshRemoteTransmit()
 
 void StationClient::handleCommandResult(const SessionMessage& message)
 {
+    if (message.commandVerb == "station.validateSettings"
+        || message.commandVerb == "station.forgetSettings") {
+        handleSettingsHygieneResult(message);
+        return;
+    }
     // R-R3-21: the app shows a refusal in user words (OperatorReasonText),
     // so the Core's own text is kept here, each time, as it arrived.
     if (!message.accepted) {

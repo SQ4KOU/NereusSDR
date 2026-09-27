@@ -1,4 +1,7 @@
 // Modification history (NereusSDR):
+//   2026-09-27  J.J. Boyd / KG4VCF  Task 24: negotiated Settings Hygiene
+//                                    capability and paired mutation gate.
+//                                    AI-assisted implementation via Codex.
 // 2026-09-27: Preserve final pairing output through connection drain.
 // J.J. Boyd (KG4VCF), AI-assisted implementation via OpenAI Codex.
 // =================================================================
@@ -3786,6 +3789,15 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
                 TxRefusals::appCannotTransmit().text, {}));
             break;
         }
+        if ((message.commandVerb == "station.validateSettings"
+             || message.commandVerb == "station.forgetSettings")
+            && (it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                || !peerDeclares(transport, QByteArrayLiteral("settingsHygiene"), 1))) {
+            send(transport, SessionMessages::commandResult(
+                message.commandVerb, message.commandId, false,
+                QStringLiteral("Update this app to use Settings Validation on this Core."), {}));
+            break;
+        }
         // iPhone app Task 13 (R-IOS-08): the device administration verbs
         // came with deviceAdminVersion 1, for a device at minor 11 that
         // declares deviceAuth (the peers the `devices` object goes to).
@@ -3835,6 +3847,13 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
              || message.commandVerb == "station.forgetRadio"
              || message.commandVerb == "station.rescanRadios")
             && !peerSeesPairingCode(transport) && !m_tokenSessionsMayChangeRadioForTest) {
+            send(transport, SessionMessages::commandResult(
+                message.commandVerb, message.commandId, false,
+                StationRadios::pairedDeviceReason(), {}));
+            break;
+        }
+        if (message.commandVerb == "station.forgetSettings"
+            && !peerSeesPairingCode(transport)) {
             send(transport, SessionMessages::commandResult(
                 message.commandVerb, message.commandId, false,
                 StationRadios::pairedDeviceReason(), {}));
@@ -7891,6 +7910,8 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             caps.recordStreamVersion = recordStreamVersion();
             // R-IOS-18 / R-R3-49 (parity Task 21): the Core's radio choice.
             caps.stationRadiosVersion = stationRadiosVersion();
+            caps.settingsHygieneVersion = peerDeclares(transport, QByteArrayLiteral("settingsHygiene"), 1)
+                && m_radioModel->role() == RadioModel::Role::Local ? 1 : 0;
             // R-R3-49 / A11 (parity Task 28): the transmit display, with
             // media, appended after the last entry of the minor-11 block.
             caps.txDisplayVersion = media ? txDisplayVersion() : 0;

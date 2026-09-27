@@ -53,6 +53,7 @@ class RadioStatusPage : public SetupPage {
     Q_OBJECT
 
 public:
+    void setStationSettingsAvailable(bool available, const QString& reason) override;
     explicit RadioStatusPage(RadioModel* model = nullptr, QWidget* parent = nullptr);
 
 private slots:
@@ -130,7 +131,6 @@ private:
     // ── Timers ────────────────────────────────────────────────────────────
     QTimer        m_uptimeTimer;
     QTimer        m_bwPollTimer;
-    QElapsedTimer m_connectClock;
 };
 
 } // namespace NereusSDR

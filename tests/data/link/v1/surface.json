@@ -359,6 +359,11 @@
             "kind": "i64",
             "name": "txStateVersion",
             "value": 2
+        },
+        {
+            "kind": "i64",
+            "name": "settingsHygieneVersion",
+            "value": 1
         }
     ],
     "commands": [
@@ -1453,6 +1458,24 @@
             "capabilityVersion": 1,
             "minMinor": 11,
             "verb": "station.forgetRadio"
+        },
+        {
+            "arguments": [
+                {"kind": "utf8", "name": "mac", "optional": false}
+            ],
+            "capability": "settingsHygieneVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "station.validateSettings"
+        },
+        {
+            "arguments": [
+                {"kind": "utf8", "name": "mac", "optional": false}
+            ],
+            "capability": "settingsHygieneVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "station.forgetSettings"
         },
         {
             "arguments": [

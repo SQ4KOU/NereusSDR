@@ -1318,6 +1318,23 @@ void GeneralOptionsPage::syncFromModel()
     m_spnAutoAttHoldRx1->setEnabled(autoOn && m_chkAutoAttUndoRx1->isChecked());
 }
 
+void GeneralOptionsPage::reloadFeedbackPreferences()
+{
+    const auto& settings = AppSettings::instance();
+    if (m_chkHideFeedback) {
+        QSignalBlocker block(m_chkHideFeedback);
+        m_chkHideFeedback->setChecked(
+            settings.value(QStringLiteral("HideFeedbackLevel"), QStringLiteral("False"))
+                .toString() == QStringLiteral("True"));
+    }
+    if (m_chkSwapRedBlue) {
+        QSignalBlocker block(m_chkSwapRedBlue);
+        m_chkSwapRedBlue->setChecked(
+            settings.value(QStringLiteral("InvertRedBluePsa"), QStringLiteral("False"))
+                .toString() == QStringLiteral("True"));
+    }
+}
+
 // ---------------------------------------------------------------------------
 // R-R3-46 / R-R3-21: a remote window's groups and the Core's `stepAtt` object
 // ---------------------------------------------------------------------------

@@ -98,6 +98,33 @@ class TstCoreTargetStore : public QObject {
     Q_OBJECT
 
 private slots:
+    void autoConnectIsPerCoreAndDefaultsOnForExistingRecords()
+    {
+        QTemporaryDir directory;
+        AppSettings settings(directory.filePath(QStringLiteral("settings.xml")));
+        CoreTargetStore store(settings);
+        QVERIFY(store.load());
+        auto first = makeTarget(QStringLiteral("first"));
+        auto second = makeTarget(QStringLiteral("second"));
+        first.autoConnect = false;
+        QVERIFY(store.upsert(first));
+        QVERIFY(store.upsert(second));
+        QVERIFY(!store.target(first.id)->autoConnect);
+        QVERIFY(store.target(second.id)->autoConnect);
+        AppSettings reloadedSettings(directory.filePath(QStringLiteral("settings.xml")));
+        reloadedSettings.load();
+        CoreTargetStore reloaded(reloadedSettings);
+        QVERIFY(reloaded.load());
+        QVERIFY(!reloaded.target(first.id)->autoConnect);
+        QVERIFY(reloaded.target(second.id)->autoConnect);
+
+        const auto document = QJsonDocument::fromJson(
+            reloadedSettings.value(QLatin1String(kTargetKey)).toString().toUtf8()).object();
+        const QJsonArray records = document.value(QStringLiteral("cores")).toArray();
+        QCOMPARE(records.at(0).toObject().value(QStringLiteral("autoConnect")), QJsonValue(false));
+        QVERIFY(!records.at(1).toObject().contains(QStringLiteral("autoConnect")));
+    }
+
     void newKeyIsOperatorLocal()
     {
         for (const char* key : {kV1Key, kTargetKey}) {

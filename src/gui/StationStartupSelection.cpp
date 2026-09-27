@@ -61,4 +61,15 @@ std::optional<StationStartupSelection> resolveStationStartup(
     return result;
 }
 
+bool shouldStartStationConnection(const StationStartupRequest& request,
+                                  const StationStartupSelection& selection,
+                                  const CoreTargetStore& store)
+{
+    if (request.local || request.stationSpecified || !selection.connection.isRemote()) {
+        return true;
+    }
+    const auto saved = store.target(selection.savedId);
+    return !saved || saved->autoConnect;
+}
+
 } // namespace NereusSDR

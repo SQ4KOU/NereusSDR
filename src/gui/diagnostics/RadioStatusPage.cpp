@@ -33,6 +33,7 @@
 #include "core/PaTempUnit.h"
 #include "core/RadioStatus.h"
 #include "core/SettingsHygiene.h"
+#include "core/session/IStationLink.h"
 #include "core/HermesLiteBandwidthMonitor.h"
 #include "core/PttSource.h"
 #include "gui/StyleConstants.h"
@@ -215,8 +216,12 @@ RadioStatusPage::RadioStatusPage(RadioModel* model, QWidget* parent)
     }
 
     // ── Uptime timer ──────────────────────────────────────────────────────
-    m_connectClock.start();
     connect(&m_uptimeTimer, &QTimer::timeout, this, &RadioStatusPage::onUptimeTick);
+    if (m_model) {
+        connect(m_model, &RadioModel::connectionStateChanged,
+                this, &RadioStatusPage::onUptimeTick);
+    }
+    onUptimeTick();
     m_uptimeTimer.start(kUptimeIntervalMs);
 
     // ── BW poll timer ─────────────────────────────────────────────────────
@@ -649,23 +654,38 @@ void RadioStatusPage::buildHygieneCard(QFrame* card)
     // Wire buttons
     if (m_model) {
         connect(m_resetBtn, &QPushButton::clicked, this, [this]() {
+            const QString mac = m_model->currentRadioMac();
             auto reply = QMessageBox::warning(this,
                 QStringLiteral("Reset settings"),
                 QStringLiteral("Reset all settings for this radio to safe defaults?"),
                 QMessageBox::Ok | QMessageBox::Cancel, QMessageBox::Cancel);
             if (reply == QMessageBox::Ok) {
-                m_model->settingsHygiene().resetSettingsToDefaults(
-                    QString{}, m_model->boardCapabilities());
+                if (mac.isEmpty() || mac != m_model->currentRadioMac()) { return; }
+                QString reason;
+                if (m_model->stationOnAirRefusal(&reason)) { return; }
+                if (m_model->ownsLocalDsp()) {
+                    m_model->settingsHygiene().resetSettingsToDefaults(
+                        mac, m_model->boardCapabilities());
+                }
             }
         });
 
         connect(m_forgetBtn, &QPushButton::clicked, this, [this]() {
+            const QString mac = m_model->currentRadioMac();
             auto reply = QMessageBox::warning(this,
                 QStringLiteral("Forget radio"),
                 QStringLiteral("Remove all saved settings for this radio? This cannot be undone."),
                 QMessageBox::Ok | QMessageBox::Cancel, QMessageBox::Cancel);
             if (reply == QMessageBox::Ok) {
-                m_model->settingsHygiene().forgetRadio(QString{});
+                if (mac.isEmpty() || mac != m_model->currentRadioMac()) { return; }
+                QString reason;
+                if (m_model->stationOnAirRefusal(&reason)) { return; }
+                if (m_model->ownsLocalDsp()) {
+                    m_model->settingsHygiene().forgetRadio(mac);
+                } else if (IStationLink* link = m_model->stationLink();
+                           link && link->settingsHygieneAvailable()) {
+                    link->requestSettingsHygiene("station.forgetSettings", mac);
+                }
             }
         });
     }
@@ -794,13 +814,7 @@ void RadioStatusPage::onIssuesChanged()
 
 void RadioStatusPage::onUptimeTick()
 {
-    qint64 elapsedMs = m_connectClock.elapsed();
-    int totalSec = static_cast<int>(elapsedMs / 1000);
-    int min = totalSec / 60;
-    int sec = totalSec % 60;
-    m_uptimeLabel->setText(QStringLiteral("%1:%2")
-        .arg(min, 2, 10, QLatin1Char('0'))
-        .arg(sec, 2, 10, QLatin1Char('0')));
+    m_uptimeLabel->setText(m_model ? m_model->connectionUptimeText() : QStringLiteral("–"));
 }
 
 void RadioStatusPage::onBwPollTick()
@@ -883,6 +897,11 @@ void RadioStatusPage::refreshHygieneRows()
     if (!m_model) { return; }
 
     m_issueList->clear();
+    const QString unavailable = m_model->settingsHygiene().remoteUnavailableReason();
+    if (!unavailable.isEmpty()) {
+        m_issueList->addItem(unavailable);
+        return;
+    }
     const QVector<SettingsHygiene::Issue> issues = m_model->settingsHygiene().issues();
 
     if (issues.isEmpty()) {
@@ -916,6 +935,21 @@ void RadioStatusPage::refreshHygieneRows()
         item->setForeground(col);
         m_issueList->addItem(item);
     }
+}
+
+void RadioStatusPage::setStationSettingsAvailable(bool available, const QString& reason)
+{
+    const IStationLink* link = m_model ? m_model->stationLink() : nullptr;
+    const bool hygiene = !m_model || m_model->ownsLocalDsp()
+        || (link && link->settingsHygieneAvailable());
+    const bool paired = !m_model || m_model->ownsLocalDsp()
+        || (link && link->signedInWithDeviceKey());
+    gateStationControls({m_forgetBtn}, available && hygiene && paired,
+        !hygiene ? IStationLink::settingsHygieneUnavailableReason() : paired ? reason
+            : QStringLiteral("Pair this computer with the Core to forget its radio settings."));
+    const bool localReset = !m_model || m_model->ownsLocalDsp();
+    gateStationControls({m_resetBtn}, available && localReset,
+        localReset ? reason : QStringLiteral("Remote Reset to Defaults is awaiting an approved definition."));
 }
 
 } // namespace NereusSDR

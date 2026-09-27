@@ -107,6 +107,7 @@ public:
     explicit GeneralOptionsPage(RadioModel* model, QWidget* parent = nullptr);
 
     void syncFromModel() override;
+    void reloadFeedbackPreferences();
 
     /// Task 16: the question asked before Receive Only is turned off
     /// (setup.cs:6484 [v2.10.3.15]). Tests answer it instead of a message

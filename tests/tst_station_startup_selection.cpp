@@ -11,6 +11,34 @@ using namespace NereusSDR;
 class TestStationStartupSelection : public QObject {
     Q_OBJECT
 private slots:
+    void savedCoreAutoConnectOnlyControlsImplicitLaunch()
+    {
+        QTemporaryDir directory;
+        AppSettings settings(directory.filePath(QStringLiteral("settings.xml")));
+        CoreTargetStore store(settings);
+        QVERIFY(store.load());
+        SavedCoreTarget core;
+        core.id = QStringLiteral("core");
+        core.connection.url = QStringLiteral("wss://core.example.test");
+        core.autoConnect = false;
+        QVERIFY(store.upsert(core));
+        QVERIFY(store.select(core.id));
+        const auto saved = resolveStationStartup({}, store);
+        QVERIFY(saved);
+        QVERIFY(!shouldStartStationConnection({}, *saved, store));
+
+        StationStartupRequest explicitCore;
+        explicitCore.stationSpecified = true;
+        explicitCore.connection.url = core.connection.url;
+        const auto explicitSelection = resolveStationStartup(explicitCore, store);
+        QVERIFY(explicitSelection);
+        QVERIFY(shouldStartStationConnection(explicitCore, *explicitSelection, store));
+
+        StationStartupRequest local;
+        local.local = true;
+        QVERIFY(shouldStartStationConnection(local, *resolveStationStartup(local, store), store));
+    }
+
     void resolvesSelectedTupleAndNeverBorrowsForAnotherAddress()
     {
         QTemporaryDir directory;

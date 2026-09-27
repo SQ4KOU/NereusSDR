@@ -9183,6 +9183,9 @@ void MainWindow::buildStatusBar()
         if (PureSignal* ps = m_radioModel->pureSignal()) {
             ps->setInvertRedBlue(inverted);
         }
+        for (SetupDialog* dialog : findChildren<SetupDialog*>()) {
+            dialog->reloadFeedbackPreferences();
+        }
     });
     connect(m_psaIndicator, &PsaIndicatorWidget::hideFeedbackToggleRequested, this, [this]() {
         auto& settings = AppSettings::instance();
@@ -9191,6 +9194,9 @@ void MainWindow::buildStatusBar()
         m_psaIndicator->setHideFeedback(hidden);
         if (PureSignal* ps = m_radioModel->pureSignal()) {
             ps->setHideFeedback(hidden);
+        }
+        for (SetupDialog* dialog : findChildren<SetupDialog*>()) {
+            dialog->reloadFeedbackPreferences();
         }
     });
     connect(m_radioModel->pureSignalSettings(), &PureSignalSettings::autoCalEnabledChanged,
@@ -10699,6 +10705,12 @@ void MainWindow::wireSetupDialog(SetupDialog* dialog)
     // Task 3.6: CPU meter rate live-apply.
     connect(dialog, &SetupDialog::cpuMeterRateChanged,
             this,   &MainWindow::setCpuTimerIntervalHz);
+    connect(dialog, &SetupDialog::hideFeedbackLevelChanged, this, [this](bool hidden) {
+        if (m_psaIndicator) { m_psaIndicator->setHideFeedback(hidden); }
+    });
+    connect(dialog, &SetupDialog::invertRedBluePsaChanged, this, [this](bool inverted) {
+        if (m_psaIndicator) { m_psaIndicator->setInvertRedBlue(inverted); }
+    });
     // Task 3.6: ANAN-8000DLE volts/amps live-apply.
     connect(dialog, &SetupDialog::anan8000DleVoltsAmpsChanged,
             this,   &MainWindow::setVoltsAmpsVisible);

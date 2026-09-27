@@ -1,6 +1,7 @@
 #include "GeneralSetupPages.h"
 
 #include "core/AppSettings.h"
+#include "gui/CoreTargetStore.h"
 #include "gui/SpotHubDialog.h"
 #include "models/FreeDVStationModel.h"
 #include "models/RadioModel.h"
@@ -29,7 +30,33 @@ StartupPrefsPage::StartupPrefsPage(RadioModel* model, QWidget* parent)
     // (AppSettings saved radio, read by MainWindow::tryAutoReconnect).
     auto* autoConnect = addLabeledToggle(QStringLiteral("Auto-connect to last radio"));
     autoConnect->setObjectName(QStringLiteral("startupAutoConnect"));
-    {
+    if (model && !model->ownsLocalDsp()) {
+        auto& settings = AppSettings::instance();
+        CoreTargetStore store(settings);
+        QString error;
+        const bool loaded = store.load(&error);
+        const auto target = loaded ? store.target(store.selectedId()) : std::nullopt;
+        QSignalBlocker block(autoConnect);
+        if (target) {
+            autoConnect->setChecked(target->autoConnect);
+            autoConnect->setToolTip(tr("Connect to %1 when NereusSDR starts")
+                .arg(target->label.isEmpty() ? target->connection.url : target->label));
+        } else {
+            autoConnect->setEnabled(false);
+            autoConnect->setToolTip(error.isEmpty()
+                ? tr("Save this Core in Connections to choose whether it connects at launch.")
+                : error);
+        }
+        connect(autoConnect, &QPushButton::toggled, this, [](bool on) {
+            auto& settings = AppSettings::instance();
+            CoreTargetStore store(settings);
+            if (!store.load()) { return; }
+            auto target = store.target(store.selectedId());
+            if (!target) { return; }
+            target->autoConnect = on;
+            store.upsert(*target);
+        });
+    } else {
         auto& s = AppSettings::instance();
         const auto saved = s.savedRadio(s.lastConnected());
         QSignalBlocker block(autoConnect);
@@ -42,15 +69,15 @@ StartupPrefsPage::StartupPrefsPage(RadioModel* model, QWidget* parent)
             autoConnect->setToolTip(
                 tr("Connect to a radio first; this then starts that radio with NereusSDR."));
         }
+        connect(autoConnect, &QPushButton::toggled, this, [](bool on) {
+            auto& s = AppSettings::instance();
+            const QString last = s.lastConnected();
+            if (!s.savedRadio(last).has_value()) { return; }
+            // Only the flag: saveRadio would also rewrite the radio's lastSeen.
+            s.setRadioAutoConnect(last, on);
+            s.save();
+        });
     }
-    connect(autoConnect, &QPushButton::toggled, this, [](bool on) {
-        auto& s = AppSettings::instance();
-        const QString last = s.lastConnected();
-        if (!s.savedRadio(last).has_value()) { return; }
-        // Only the flag: saveRadio would also rewrite the radio's lastSeen.
-        s.setRadioAutoConnect(last, on);
-        s.save();
-    });
 
     // R-R3-21: the operator identity the Spot Hub Settings tab edits
     // (User/Callsign, User/GridSquare and the copies each spot source reads).

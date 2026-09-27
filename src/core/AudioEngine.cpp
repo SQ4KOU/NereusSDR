@@ -19,6 +19,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-27  J.J. Boyd / KG4VCF  Task 24: remote-window audio reset
+//                                    keeps Core-owned DSP settings.
+//                                    AI-assisted implementation via Codex.
 //   2026-09-24 : R-R3-45 transmit monitor output by J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code. setTxMonitorOutput
 //                 picks the speakers or the headphones for MON;
@@ -180,6 +183,7 @@
 // =================================================================
 
 #include "AudioEngine.h"
+#include "core/settings/SettingsScope.h"
 
 #include "AppSettings.h"
 #include "LogCategories.h"
@@ -3158,7 +3162,7 @@ void AudioEngine::setDspBlockSize(int blockSize)
 // Sub-Phase 12 Task 12.4 — resetAudioSettings (addendum §2.5).
 // ---------------------------------------------------------------------------
 
-void AudioEngine::resetAudioSettings()
+void AudioEngine::resetAudioSettings(bool operatorLocalOnly)
 {
     auto& s = AppSettings::instance();
     const QStringList keys = s.allKeys();
@@ -3169,7 +3173,8 @@ void AudioEngine::resetAudioSettings()
     // with both "audio/" and "slice/" simultaneously, so no explicit exclusion
     // guard is needed here.
     for (const QString& key : keys) {
-        if (key.startsWith(QStringLiteral("audio/"))) {
+        if (key.startsWith(QStringLiteral("audio/"))
+            && (!operatorLocalOnly || classifySettingsKey(key) == SettingsScope::OperatorLocal)) {
             s.remove(key);
         }
     }

@@ -533,6 +533,7 @@ private:
     RecordAccess m_recordAccess;
     QPointer<StationRadios> m_stationRadios;
     void handleStationRadios(const NereusSDR::SessionMessage& invoke);
+    void handleSettingsHygiene(const NereusSDR::SessionMessage& invoke);
     void handleRecords(const NereusSDR::SessionMessage& invoke);
     void handleSpotSources(const NereusSDR::SessionMessage& invoke);
     // R-IOS-26 (iPhone plan Task 22, parity Task 20): freedv.setMessage,

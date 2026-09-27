@@ -471,7 +471,8 @@ std::optional<QList<QByteArray>> liveSessionWire(
     // so remoteTxVersion is.
     clientEnd->sendText(SessionMessages::encode(SessionMessages::hello(
         kSessionProtocolMajor, kSessionProtocolMinor, 0, QStringLiteral("link-surface"),
-        {kSessionProtocolMajor}, {{"deviceAuth", 1}, {"sessionHolder", 1}, {"remoteTx", 1}})));
+        {kSessionProtocolMajor}, {{"deviceAuth", 1}, {"sessionHolder", 1}, {"remoteTx", 1},
+                                  {"settingsHygiene", 1}})));
     clientEnd->sendText(SessionMessages::encode(SessionMessages::authRequest(server.token())));
 
     // The loopback delivers on later event-loop turns, as a socket would.
@@ -501,6 +502,7 @@ QJsonArray captureCapabilities()
     caps.sessionHolderEntry = true;
     // iPhone app plan Task 34: sent to a peer that declared remoteTx.
     caps.remoteTxEntry = true;
+    caps.settingsHygieneVersion = 1;
 
     // The values come from a live station with every feature a Core can
     // switch on: media, telemetry, an enforced display budget with its

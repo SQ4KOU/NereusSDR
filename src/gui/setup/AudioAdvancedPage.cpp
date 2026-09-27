@@ -237,14 +237,6 @@ void AudioAdvancedPage::buildFeatureFlagsSection()
         m_sendIqToVaxCheck->setChecked(on);
         auto* note = new QLabel(
             QStringLiteral("(not built yet)"), box);
-        // R-R3-44: a remote window never acts on it. The Core's raw I/Q is
-        // not sent to this computer, so there is nothing to put on VAX.
-        if (model() && !model()->ownsLocalDsp()) {
-            m_sendIqToVaxCheck->setEnabled(false);
-            m_sendIqToVaxCheck->setToolTip(remoteSendIqReason());
-            m_sendIqToVaxCheck->setAccessibleDescription(remoteSendIqReason());
-            note->setText(remoteSendIqReason());
-        }
         note->setStyleSheet(QLatin1String(kNoteStyle));
         row->addWidget(m_sendIqToVaxCheck);
         row->addWidget(note);
@@ -460,25 +452,10 @@ void AudioAdvancedPage::onResetClicked()
     }
 
     if (model() && !model()->ownsLocalDsp()) {
-        // R-R3-10 / R-R3-23: a remote window. AudioEngine::resetAudioSettings()
-        // removes every audio/* key AppSettings lists, which there includes
-        // the ones the Core holds (the settings proxy lists them too), and
-        // re-creates this computer's VAX outputs, which a remote window never
-        // opens. So only this computer's own audio/* keys are removed, and
-        // the speakers are reopened from defaults so remote playback follows
-        // (RemoteMediaController re-reads audio/Speakers on
-        // speakersConfigChanged). Nothing is written to the Core.
-        auto& s = AppSettings::instance();
-        const QStringList keys = s.allKeys();
-        for (const QString& key : keys) {
-            if (key.startsWith(QStringLiteral("audio/"))
-                && classifySettingsKey(key) == SettingsScope::OperatorLocal) {
-                s.remove(key);
-            }
-        }
-        s.save();
+        // The engine belongs to this computer even in a remote window.
+        // Rebuild all of its outputs, but leave the Core's DSP settings alone.
         if (m_engine) {
-            m_engine->setSpeakersConfig(AudioDeviceConfig{});
+            m_engine->resetAudioSettings(true);
         }
     } else if (m_engine) {
         m_engine->resetAudioSettings();

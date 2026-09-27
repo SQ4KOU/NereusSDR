@@ -1160,6 +1160,8 @@ public:
     /// Parity Task 21 (R-IOS-18): minor 11 and stationRadiosVersion at
     /// least 1 on a ready session.
     bool stationRadiosAvailable() const override;
+    bool settingsHygieneAvailable() const override;
+    CommandOutcome requestSettingsHygiene(const QByteArray& verb, const QString& mac) override;
     /// Fix wave (I5): this session signed in with this computer's own key.
     bool signedInWithDeviceKey() const override
     { return m_deviceKeySignInForTest >= 0 ? m_deviceKeySignInForTest == 1 : m_signedInWithDeviceKey; }
@@ -1456,6 +1458,13 @@ private:
     void watchForOutbound(const QByteArray& objectKey, QObject* object);
 
     QPointer<RadioModel> m_radioModel;
+    quint32 m_hygieneValidateId{0};
+    quint32 m_hygieneValidateEpoch{0};
+    QString m_hygieneValidateMac;
+    bool m_hygieneValidateDirty{false};
+    QHash<quint32, QPair<quint32, QString>> m_hygieneMutations;
+    void refreshSettingsHygiene();
+    void handleSettingsHygieneResult(const SessionMessage& message);
     QPointer<SettingsProxy> m_settingsProxy;
     SessionTransport* m_transport = nullptr;
 
