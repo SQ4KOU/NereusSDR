@@ -22,8 +22,9 @@
 //                 AI-assisted implementation via Anthropic Claude Code.
 //   2026-09-26 : Tasks 27-29 fix wave (R-R3-49): the rise pan holds the
 //                 transmit display through a layout change and a rebinding
-//                 while keyed. J.J. Boyd (KG4VCF), AI-assisted via
-//                 Anthropic Claude Code.
+//                 while keyed; remote view changes reach the analyzer at
+//                 most once per coalescing period. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -356,6 +357,7 @@ private slots:
     void transmitWindowIsReadLikeTheReceiveWindow();
     void budgetPacesTransmitFramesLikeReceiveFrames();
     void aSliceMovingWhileKeyedLeavesTheRisePanTransmitting();
+    void remoteViewChangesWhileKeyedAreCoalesced();
     void txStateCarriesTheHighSwrState();
 };
 
@@ -703,7 +705,10 @@ void TstRemoteTxDisplay::aSubscribeWhileKeyedMovesTheView()
     // analyzer, and the endpoint gets a context for its new revision.
     QVERIFY(h.send(withTxWindow(subscription(1, 2, h.sliceId, carrier + 3000.0, 10000.0),
                                 -90.0, 30.0)));
-    QTRY_COMPARE(lastContext(controls, 1)->value(QStringLiteral("revision")).toInteger(), 2);
+    // A change held for the coalescing period follows with its own context.
+    QTRY_VERIFY(lastContext(controls, 1)->value(QStringLiteral("revision")).toInteger() == 2
+                && lastContext(controls, 1)->value(QStringLiteral("centreHz")).toDouble()
+                    == carrier + 3000.0);
     const QJsonObject moved = *lastContext(controls, 1);
     QVERIFY(isTransmit(moved));
     QCOMPARE(moved.value(QStringLiteral("centreHz")).toDouble(), carrier + 3000.0);
@@ -714,9 +719,9 @@ void TstRemoteTxDisplay::aSubscribeWhileKeyedMovesTheView()
     QCOMPARE(h.analyzer->spectrumWindowHighHz(), 8000);
     // Past the baseband: clamped.
     QVERIFY(h.send(withTxWindow(subscription(1, 3, h.sliceId, carrier + 45000.0, 20000.0))));
-    QTRY_COMPARE(lastContext(controls, 1)->value(QStringLiteral("revision")).toInteger(), 3);
-    QCOMPARE(lastContext(controls, 1)->value(QStringLiteral("centreHz")).toDouble(),
-             carrier + 38000.0);
+    QTRY_VERIFY(lastContext(controls, 1)->value(QStringLiteral("revision")).toInteger() == 3
+                && lastContext(controls, 1)->value(QStringLiteral("centreHz")).toDouble()
+                    == carrier + 38000.0);
     QCOMPARE(h.analyzer->spectrumWindowHighHz(), 48000);
     QVERIFY(h.key(false));
     QTRY_VERIFY(!h.feed()->isKeyed());
@@ -955,6 +960,52 @@ void TstRemoteTxDisplay::aSliceMovingWhileKeyedLeavesTheRisePanTransmitting()
     QTRY_VERIFY(!h.feed()->isKeyed());
     QTRY_VERIFY(!h.controller->transmitDisplayActive(1));
     h.finish();
+}
+
+void TstRemoteTxDisplay::remoteViewChangesWhileKeyedAreCoalesced()
+{
+    Harness h;
+    TxDisplayFeed* feed = h.feed();
+    QVERIFY(feed);
+    QVERIFY(h.key(true));
+    QTRY_VERIFY(feed->isKeyed());
+    const double carrier = feed->currentView().carrierHz;
+    const int remote = feed->addViewer(carrier, 20000.0, 400, /*local=*/false);
+    QVERIFY(feed->isGoverning(remote));
+    QTRY_VERIFY(h.analyzer->setAnalyzerCount() > 0);  // the rise's own
+
+    // A drag from a remote window: twenty moves as fast as they come. The
+    // first reaches the analyzer at once (one SetAnalyzer, window and
+    // pixel count together); the rest are held.
+    QElapsedTimer drag;
+    drag.start();
+    const int before = h.analyzer->setAnalyzerCount();
+    for (int step = 1; step <= 20; ++step) {
+        feed->updateViewer(remote, carrier + 1000.0 * step, 20000.0, 400 + step);
+    }
+    const qint64 dragMs = drag.elapsed();
+    QVERIFY2(dragMs < TxDisplayFeed::kRemoteViewCoalesceMs,
+             qPrintable(QStringLiteral("drag took %1 ms").arg(dragMs)));
+    QVERIFY(h.analyzer->setAnalyzerCount() - before <= 1);
+    // The last move always follows, once, when the period ends.
+    QTRY_COMPARE(h.analyzer->spectrumWindowLowHz(), 20000 - 10000);
+    QCOMPARE(h.analyzer->spectrumWindowHighHz(), 20000 + 10000);
+    QCOMPARE(h.analyzer->numPixels(), 420);
+    QCOMPARE(feed->currentView().centreHz(), carrier + 20000.0);
+    QVERIFY(h.analyzer->setAnalyzerCount() - before <= 2);
+
+    // A local viewer's changes are never held.
+    const int local = feed->addViewer(carrier, 10000.0, 300, /*local=*/true);
+    const int localBefore = h.analyzer->setAnalyzerCount();
+    for (int step = 1; step <= 5; ++step) {
+        feed->updateViewer(local, carrier + 1000.0 * step, 10000.0, 300);
+        QCOMPARE(feed->currentView().centreHz(), carrier + 1000.0 * step);
+    }
+    QCOMPARE(h.analyzer->setAnalyzerCount() - localBefore, 5);
+    feed->removeViewer(local);
+    feed->removeViewer(remote);
+    QVERIFY(h.key(false));
+    QTRY_VERIFY(!feed->isKeyed());
 }
 
 void TstRemoteTxDisplay::txStateCarriesTheHighSwrState()

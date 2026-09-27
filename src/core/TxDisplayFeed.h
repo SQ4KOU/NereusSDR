@@ -29,15 +29,22 @@
 //   2026-09-26 : Created for remote-window parity Task 28 (R-R3-49, A11,
 //                 R-IOS-13) by J.J. Boyd (KG4VCF). AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-26 : Tasks 27-29 fix wave (R-R3-49): a remote viewer's view
+//                 changes while keyed reach the analyzer at most once per
+//                 kRemoteViewCoalesceMs, the last one always; the view goes
+//                 to the analyzer with one SetAnalyzer. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
 
 #include "core/TxAnalyzer.h"
 
+#include <QElapsedTimer>
 #include <QMetaObject>
 #include <QObject>
 #include <QPointer>
+#include <QTimer>
 #include <QVector>
 
 #include <map>
@@ -59,6 +66,12 @@ public:
     /// tx_display_high 4000).
     static constexpr int kDefaultLowHz = -4000;
     static constexpr int kDefaultHighHz = 4000;
+    /// A remote viewer's view changes while keyed (a pan drag across the
+    /// network) reach the analyzer at most once per this many ms: each one
+    /// is a SetAnalyzer, which holds the section the TX DSP thread's
+    /// Spectrum0 takes. The first goes at once, the last always follows.
+    /// NereusSDR-original; a local viewer's changes are not held.
+    static constexpr int kRemoteViewCoalesceMs = 50;
 
     /// A pan that shows the transmit display. `local` is a window running
     /// its own DSP (or hosting a Core); it governs whenever it is present.
@@ -114,6 +127,10 @@ private:
     bool m_keyed{false};
     TxDisplayView m_view;
     QPointer<SliceModel> m_watchedSlice;
+    /// When a remote viewer's change last reached the analyzer, and the
+    /// timer that brings a held one in.
+    QElapsedTimer m_remoteApplied;
+    QTimer m_remoteViewTimer;
     QList<QMetaObject::Connection> m_sliceConnections;
 };
 

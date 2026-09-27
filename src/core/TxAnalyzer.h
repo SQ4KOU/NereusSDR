@@ -72,6 +72,10 @@
 //                 syncTxAnalyzerToView applied, moved here unchanged for
 //                 TxDisplayFeed; numPixels() and outputFps() readers.
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26 : Tasks 27-29 fix wave (R-R3-49) by J.J. Boyd (KG4VCF):
+//                 setView() sets the window and the pixel count with one
+//                 SetAnalyzer; setAnalyzerCount() counts them for tests.
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -216,6 +220,13 @@ public:
     /// SetAnalyzerSection blocks briefly while the analyzer reconfigures).
     void setNumPixels(int n);
     int numPixels() const noexcept { return m_numPixels; }
+
+    /// setSpectrumWindow and setNumPixels together, with one SetAnalyzer
+    /// when either changed (TxDisplayFeed's view). `pixels` <= 0 keeps the
+    /// pixel count.
+    void setView(int lowHz, int highHz, int pixels);
+    /// How many SetAnalyzer calls this analyzer has posted (test seam).
+    int setAnalyzerCount() const noexcept { return m_setAnalyzerCount; }
 
     /// Update analyzer sample rate.  TX is always at the WDSP DSP rate
     /// (96 kHz — see WdspEngine::kTxDspSampleRate, matches Thetis
@@ -386,6 +397,7 @@ private:
     /// FFTW plan construction, so a cold launch does not plan a 32768
     /// point transform on the GUI thread inside buildUI().
     bool m_deferSetAnalyzer{false};
+    int m_setAnalyzerCount{0};
 
     int m_blockSize {0};
 

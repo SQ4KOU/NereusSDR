@@ -51,6 +51,9 @@
 //                 clampViewToBaseband(), MainWindow's syncTxAnalyzerToView
 //                 rule moved here unchanged for TxDisplayFeed. AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-26 : Tasks 27-29 fix wave (R-R3-49) by J.J. Boyd (KG4VCF):
+//                 setView(), the window and pixel count in one SetAnalyzer.
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "TxAnalyzer.h"
@@ -450,6 +453,25 @@ void TxAnalyzer::setSpectrumWindow(int lowHz, int highHz)
     }
 }
 
+void TxAnalyzer::setView(int lowHz, int highHz, int pixels)
+{
+    const bool windowMoved = m_spanLowHz != lowHz || m_spanHighHz != highHz;
+    const bool pixelsMoved = pixels > 0 && pixels != m_numPixels;
+    if (!windowMoved && !pixelsMoved) {
+        return;
+    }
+    m_spanLowHz  = lowHz;
+    m_spanHighHz = highHz;
+    if (pixelsMoved) {
+        m_numPixels = pixels;
+        m_pixBuf.resize(m_numPixels);
+        m_pixBufWf.resize(m_numPixels);
+    }
+    if (m_analyzerCreated) {
+        applySetAnalyzer();
+    }
+}
+
 TxAnalyzerArgs TxAnalyzer::currentArgs() const
 {
     // From Thetis specHPSDR.cs:529 + :534-643 [v2.10.3.13+501e3f51] —
@@ -557,6 +579,7 @@ void TxAnalyzer::applySetAnalyzer()
     }
 
     const TxAnalyzerArgs args = currentArgs();
+    ++m_setAnalyzerCount;
 
     // R-R3-39: on the transmit lane with the values as they stand now.
     runWdsp([dispId = m_dispId, args]() {

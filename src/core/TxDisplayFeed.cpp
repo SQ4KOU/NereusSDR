@@ -7,6 +7,9 @@
 //   2026-09-26 : Created for remote-window parity Task 28 (R-R3-49, A11,
 //                 R-IOS-13) by J.J. Boyd (KG4VCF). AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-26 : Tasks 27-29 fix wave (R-R3-49): remote viewer changes
+//                 coalesced while keyed; one SetAnalyzer per view. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/TxDisplayFeed.h"
@@ -34,6 +37,11 @@ TxDisplayFeed::TxDisplayFeed(RadioModel* model, TxAnalyzer* analyzer, QObject* p
     , m_model(model)
     , m_analyzer(analyzer)
 {
+    m_remoteViewTimer.setSingleShot(true);
+    connect(&m_remoteViewTimer, &QTimer::timeout, this, [this]() {
+        m_remoteApplied.restart();
+        recompute();
+    });
     if (m_model.isNull() || m_analyzer.isNull()) {
         return;
     }
@@ -98,7 +106,24 @@ void TxDisplayFeed::updateViewer(int id, double centreHz, double spanHz, int pix
     it->second.centreHz = centreHz - carrierHz();
     it->second.spanHz = spanHz;
     it->second.pixels = pixels;
-    recompute();
+    if (!m_keyed || it->second.local) {
+        recompute();
+        return;
+    }
+    // A remote viewer while keyed: at most one change per coalescing
+    // period reaches the analyzer; a held one follows when it ends, with
+    // the latest values (the viewer's own, stored above).
+    if (m_remoteViewTimer.isActive()) {
+        return;
+    }
+    const qint64 sinceMs = m_remoteApplied.isValid() ? m_remoteApplied.elapsed()
+                                                     : qint64(kRemoteViewCoalesceMs);
+    if (sinceMs >= kRemoteViewCoalesceMs) {
+        m_remoteApplied.restart();
+        recompute();
+        return;
+    }
+    m_remoteViewTimer.start(int(kRemoteViewCoalesceMs - sinceMs));
 }
 
 void TxDisplayFeed::removeViewer(int id)
@@ -164,6 +189,8 @@ void TxDisplayFeed::onMoxStateChanged(bool keyed)
         return;
     }
     m_analyzer->stop();
+    m_remoteViewTimer.stop();
+    m_remoteApplied.invalidate();
     // Clear the clip so the next key starts from the full baseband, as the
     // local window's fall does.
     m_analyzer->setSpectrumWindow(0, 0);
@@ -247,10 +274,7 @@ void TxDisplayFeed::recompute()
     }
 
     if (m_keyed && governor != 0) {
-        m_analyzer->setSpectrumWindow(view.lowHz, view.highHz);
-        if (view.pixels > 0) {
-            m_analyzer->setNumPixels(view.pixels);
-        }
+        m_analyzer->setView(view.lowHz, view.highHz, view.pixels);
     }
 
     const bool governorMoved = governor != m_governor;
