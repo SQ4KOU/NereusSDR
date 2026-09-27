@@ -1192,12 +1192,24 @@ RadioModel::RadioModel(Role role, QObject* parent)
     // rnnr.c's RNNRloadModel (it swaps the model under every NR3 instance);
     // DspAssetService only calls this with a file that passed its trial load.
     // A remote window never loads a model: its service ignores the loader.
-    m_dspAssets->setNr3ModelLoader([](const QString& path) {
-        qCInfo(lcDsp) << "NR3: loading rnnoise model from" << path;
+    // R-R3-49: on the receive lane, like every other receive-side WDSP call
+    // (R-R3-39). RNNRloadModel walks rnnr.c's global list of NR3 instances,
+    // which create_rnnr grows (and reallocates) as the lane opens channels;
+    // run from the event loop at a connect, it read that list while the
+    // lane replaced it (ThreadSanitizer, tst_receive_layout_native).
+    m_dspAssets->setNr3ModelLoader([this](const QString& path) {
+        auto load = [path]() {
+            qCInfo(lcDsp) << "NR3: loading rnnoise model from" << path;
 #ifdef HAVE_WDSP
-        const QByteArray encoded = QFile::encodeName(path);
-        RNNRloadModel(encoded.constData());
+            const QByteArray encoded = QFile::encodeName(path);
+            RNNRloadModel(encoded.constData());
 #endif
+        };
+        if (m_rxLane) {
+            m_rxLane->post(std::move(load));
+        } else {
+            load();
+        }
     });
     // Follow-up item 1 (R-R3-21): whenever the Core finds it has no usable
     // NR3 model (at start, at a connect's load, or after a model choice),
