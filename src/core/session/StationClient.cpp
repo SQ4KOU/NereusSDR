@@ -1796,6 +1796,9 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
             spotSources->clearStationValues();
         }
         m_radioModel->clearStationRecords();
+        // Parity Task 22: the Core's log and bundle wait for the next
+        // session.
+        m_radioModel->noteStationSupportAvailabilityChanged();
     }
 
     if (!m_settingsProxy.isNull()) {
@@ -2224,6 +2227,11 @@ void StationClient::onTransportText(const QByteArray& wire)
             if (stationRadiosAvailable()) {
                 subscribe(QStringLiteral("stationRadios"), 64);
             }
+        }
+        // Parity Task 22 (R-R3-49): the Core's log follows again for the
+        // viewers that hold it, and the support controls learn the session.
+        if (!m_radioModel.isNull()) {
+            m_radioModel->noteStationSupportAvailabilityChanged();
         }
         if (firstSnapshot) {
             qCInfo(lcStationClient) << "Session established with" << m_capabilities.stationName;
@@ -3577,6 +3585,8 @@ bool StationClient::applyOne(QObject* target, const MirrorProperty& prop,
         QByteArrayLiteral("RadioModel.dspOptionsLastApplyMs"),
         // Fix wave (M2): likewise the Core's waiting reason.
         QByteArrayLiteral("RadioModel.stationRadioWaiting"),
+        // Parity Task 22: likewise the Core's logging categories.
+        QByteArrayLiteral("RadioModel.logCategories"),
         QByteArrayLiteral("SliceModel.minNotchWidthHz"),
         QByteArrayLiteral("SliceModel.signalStrengthDbm"),
         QByteArrayLiteral("SliceModel.signalPeakDbm"),
@@ -4339,6 +4349,49 @@ StationClient::CommandOutcome StationClient::requestSpotSource(const QByteArray&
     return sendCommand(verb, -1, arguments, QStringLiteral("the spot source request"));
 }
 
+bool StationClient::supportBundleAvailable() const
+{
+    return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.supportBundleVersion >= 1;
+}
+
+StationClient::CommandOutcome StationClient::requestSupportBundle()
+{
+    if (!supportBundleAvailable()) {
+        return {false, stationLinkReady() ? supportBundleUnavailableReason()
+                                          : QStringLiteral("Not connected to the Core, so its "
+                                                           "support bundle was not asked for.")};
+    }
+    return sendCommand("support.collect", -1, {}, QStringLiteral("the support bundle request"));
+}
+
+StationClient::CommandOutcome StationClient::requestLogCategories(const QString& categories)
+{
+    if (!supportBundleAvailable()) {
+        return {false, stationLinkReady() ? supportBundleUnavailableReason()
+                                          : QStringLiteral("Not connected to the Core, so the "
+                                                           "logging change was not sent.")};
+    }
+    return sendCommand("support.setLogCategories", -1,
+                       { stringArgument("categories", categories) },
+                       QStringLiteral("the logging change"));
+}
+
+void StationClient::requestCoreLog(bool follow)
+{
+    if (!supportBundleAvailable()) {
+        return;
+    }
+    QList<MirrorUpdate> arguments{
+        MirrorUpdate{0, "stream", MirrorWireKind::Utf8, QVariant(QStringLiteral("coreLog"))}};
+    if (follow) {
+        arguments.append(MirrorUpdate{
+            0, "backlog", MirrorWireKind::Int64,
+            QVariant(static_cast<qlonglong>(RadioModel::kStationCoreLogLines))});
+    }
+    invokeCommand(follow ? "records.subscribe" : "records.unsubscribe", arguments);
+}
+
 bool StationClient::stationFreedvAvailable() const
 {
     return spotSourcesAvailable() && m_capabilities.stationFreedvVersion >= 1;
@@ -5009,6 +5062,27 @@ void StationClient::handleCommandResult(const SessionMessage& message)
                 : message.reason);
     }
     const bool recordRequest = pending.verb.startsWith("records.");
+    // Parity Task 22: the support bundle's answer and a logging change's
+    // refusal go to the Support dialog, which asked.
+    const bool supportRequest = pending.verb.startsWith("support.");
+    if (pending.verb == "support.collect" && !m_radioModel.isNull()) {
+        QByteArray bundle;
+        for (const MirrorUpdate& value : message.updates) {
+            if (value.name == "bundle" && value.kind == MirrorWireKind::Utf8) {
+                bundle = QByteArray::fromBase64(value.value.toString().toLatin1());
+            }
+        }
+        const QPointer<StationClient> self(this);
+        m_radioModel->reportStationSupportBundle(message.commandId, message.accepted,
+                                                 message.reason, bundle);
+        if (!self) { return; }
+    } else if (pending.verb == "support.setLogCategories" && !message.accepted
+               && !m_radioModel.isNull()) {
+        m_radioModel->reportStationLogCategoriesRefused(
+            message.reason.isEmpty()
+                ? QStringLiteral("The Core refused the request without giving a reason.")
+                : message.reason);
+    }
     if (spotRequest && !message.accepted && !m_radioModel.isNull()) {
         if (SpotSourceHost* spotSources = m_radioModel->spotSourceHost()) {
             spotSources->reportStationRefusal(pending.spotSource,
@@ -5019,6 +5093,7 @@ void StationClient::handleCommandResult(const SessionMessage& message)
     }
     if (!message.accepted && !m_radioModel.isNull() && !ioBoardRequest
         && !filterResponseRequest && !spotRequest && !recordRequest && !radioRequest
+        && !supportRequest
         && !message.commandVerb.startsWith("ps3.") && !message.commandVerb.startsWith("dspAssets.")
         && !message.commandVerb.startsWith("notch.")) {
         // The station's OWN reason, relayed verbatim. Wording a refusal

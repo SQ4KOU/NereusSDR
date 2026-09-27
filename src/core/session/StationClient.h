@@ -347,6 +347,10 @@
 //   2026-09-27: iPhone app plan Task 29 (R-IOS-16): the path race and moving
 //               the session (link section 21). J.J. Boyd (KG4VCF), AI-
 //               assisted via Anthropic Claude Code.
+//   2026-09-27: remote-window parity Task 22 (R-R3-49, R-IOS-18):
+//               supportBundleAvailable(), requestSupportBundle(),
+//               requestLogCategories() and requestCoreLog(). J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QAbstractSocket>
@@ -1157,6 +1161,17 @@ public:
     /// Verbs freedv.setMessage, freedv.sendQsy and freedv.setHidden; a
     /// refusal is shown as the Core's other refusals are.
     CommandOutcome requestFreedv(const QByteArray& verb, const QVariantMap& args) override;
+    /// Parity Task 22 (R-R3-49): minor 11 and supportBundleVersion at least
+    /// 1 on a ready session.
+    bool supportBundleAvailable() const override;
+    /// Verb support.collect; the answer goes to
+    /// RadioModel::reportStationSupportBundle.
+    CommandOutcome requestSupportBundle() override;
+    /// Verb support.setLogCategories; a refusal goes to
+    /// RadioModel::reportStationLogCategoriesRefused.
+    CommandOutcome requestLogCategories(const QString& categories) override;
+    /// records.subscribe (true) or records.unsubscribe (false) for coreLog.
+    void requestCoreLog(bool follow) override;
     /// Parity Task 21 (R-IOS-18): minor 11 and stationRadiosVersion at
     /// least 1 on a ready session.
     bool stationRadiosAvailable() const override;

@@ -155,6 +155,7 @@
         {"id": "session-verbs-io-board", "file": "sessions/verbs-io-board.json", "kind": "session", "requires": {"radioHardwareVersion": 7}},
         {"id": "session-verbs-dsp-info", "file": "sessions/verbs-dsp-info.json", "kind": "session", "requires": {"dspInfoVersion": 1}},
         {"id": "session-verbs-records", "file": "sessions/verbs-records.json", "kind": "session", "requires": {"recordStreamVersion": 1}},
+        {"id": "session-verbs-support", "file": "sessions/verbs-support.json", "kind": "session", "requires": {"supportBundleVersion": 1}},
         {"id": "session-verbs-spots", "file": "sessions/verbs-spots.json", "kind": "session", "requires": {"recordStreamVersion": 1}},
         {"id": "session-verbs-freedv", "file": "sessions/verbs-freedv.json", "kind": "session", "requires": {"stationFreedvVersion": 1}},
         {"id": "session-verbs-station-radios", "file": "sessions/verbs-station-radios.json", "kind": "session", "requires": {"stationRadiosVersion": 1}},

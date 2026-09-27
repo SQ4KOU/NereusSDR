@@ -132,6 +132,9 @@
 //   2026-09-26 - Parity Task 28 (R-R3-49, A11): TransmitState highSwr and
 //                 swrWindBackLatched Outbound (txDisplayVersion 1). J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-27 - R-R3-49 / R-IOS-18 (remote-window parity Task 22):
+//                 RadioModel logCategories, Outbound. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorPolicy.h"
@@ -938,6 +941,10 @@ const MirrorPolicy::Entry kEntries[] = {
     // Fix wave after parity Tasks 19 and 21 (M2, R-IOS-18): why the Core
     // waits for a radio, Core to window only (nereusd's StationRadios).
     { "RadioModel", "stationRadioWaiting", MirrorDirection::Outbound },
+    // Remote-window parity Task 22 (R-R3-49, supportBundleVersion 1): the
+    // Core's enabled logging categories, Core to window only; changed with
+    // support.setLogCategories.
+    { "RadioModel", "logCategories", MirrorDirection::Outbound },
 
     // ---- PanadapterModel (4 entries) ----
     { "PanadapterModel", "centerFrequency", MirrorDirection::Bidirectional },

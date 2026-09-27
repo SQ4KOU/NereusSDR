@@ -1592,6 +1592,10 @@ RadioModel::RadioModel(Role role, QObject* parent)
         // Parity Task 16: a new slice carries its channel's minimum notch
         // width at once (0 until its channel opens).
         connect(this, &RadioModel::sliceAdded, this, &RadioModel::refreshSliceMinNotchWidths);
+        // Remote-window parity Task 22: this process's logging categories
+        // are the ones a window at the Core sees and changes.
+        connect(&LogManager::instance(), &LogManager::categoryChanged, this,
+                [this](const QString&, bool) { emit logCategoriesChanged(logCategories()); });
         connect(this, &RadioModel::dspChangeMeasured, this, [this](qint64 elapsedMs) {
             if (m_dspOptionsLastApplyMs == elapsedMs) {
                 return;
@@ -3640,6 +3644,16 @@ QString RadioModel::applyMirroredValue(const QByteArray& propertyName, const QVa
             setStationRadioWaiting(value.toString());
             return {};
         }
+        if (propertyName == "logCategories") {
+            // Remote-window parity Task 22: the Core's logging categories,
+            // observed. This window's own logging stays its own.
+            if (value.typeId() != QMetaType::QString) { return QStringLiteral("Expected text."); }
+            if (m_remoteLogCategories != value.toString()) {
+                m_remoteLogCategories = value.toString();
+                emit logCategoriesChanged(m_remoteLogCategories);
+            }
+            return {};
+        }
         if (propertyName == "dspOptionsLastApplyMs") {
             // R-R3-49 (parity Task 16): the Core's last DSP Options apply.
             bool ok = false;
@@ -3960,6 +3974,21 @@ StationSpotLook stationSpotLook(const QString& source)
 
 void RadioModel::applyStationRecordBatch(const RecordBatch& batch)
 {
+    // Remote-window parity Task 22 (R-R3-49): the Core's log, newest last.
+    // A reset (each subscribe) replaces it.
+    if (batch.stream == QLatin1String("coreLog")) {
+        if (batch.reset) {
+            m_stationCoreLog.clear();
+        }
+        for (const RecordUpsert& u : batch.upserts) {
+            m_stationCoreLog.append(u.fields.value(QStringLiteral("line")).toString());
+        }
+        while (m_stationCoreLog.size() > kStationCoreLogLines) {
+            m_stationCoreLog.removeFirst();
+        }
+        emit stationCoreLogChanged();
+        return;
+    }
     // Parity Task 21 (R-IOS-18): the Core's radios, in the Core's order.
     if (batch.stream == QLatin1String("stationRadios")) {
         QList<StationRadioEntry> entries = batch.reset ? QList<StationRadioEntry>{}
@@ -4102,6 +4131,81 @@ void RadioModel::clearStationRecords()
     clearStationRadios();
     clearStationSpots();
     clearStationFreedv();
+    if (!m_stationCoreLog.isEmpty()) {
+        m_stationCoreLog.clear();
+        emit stationCoreLogChanged();
+    }
+    if (m_role == Role::Remote && !m_remoteLogCategories.isEmpty()) {
+        m_remoteLogCategories.clear();
+        emit logCategoriesChanged(m_remoteLogCategories);
+    }
+}
+
+// ── Remote-window parity Task 22 (R-R3-49): the Core's log and bundle ────────
+//
+// NereusSDR-original; no Thetis equivalent (Thetis has no remote window).
+
+QString RadioModel::logCategories() const
+{
+    if (m_role == Role::Remote) {
+        return m_remoteLogCategories;
+    }
+    return LogManager::instance().enabledList();
+}
+
+QString RadioModel::stationSupportUnavailableReason() const
+{
+    if (m_station == nullptr || !m_station->stationLinkReady()) {
+        return QStringLiteral("Connect to the Core to see its log.");
+    }
+    if (!m_station->supportBundleAvailable()) {
+        return IStationLink::supportBundleUnavailableReason();
+    }
+    return {};
+}
+
+void RadioModel::noteStationSupportAvailabilityChanged()
+{
+    // A new session: the viewers that hold the Core's log follow it again.
+    if (m_stationCoreLogViewers > 0 && m_station != nullptr) {
+        m_station->requestCoreLog(true);
+    }
+    emit stationSupportAvailabilityChanged();
+}
+
+void RadioModel::addStationCoreLogViewer()
+{
+    if (++m_stationCoreLogViewers == 1 && m_station != nullptr) {
+        m_station->requestCoreLog(true);
+    }
+}
+
+void RadioModel::removeStationCoreLogViewer()
+{
+    if (m_stationCoreLogViewers == 0) {
+        return;
+    }
+    if (--m_stationCoreLogViewers == 0 && m_station != nullptr) {
+        m_station->requestCoreLog(false);
+    }
+}
+
+void RadioModel::refreshStationCoreLog()
+{
+    if (m_stationCoreLogViewers > 0 && m_station != nullptr) {
+        m_station->requestCoreLog(true);
+    }
+}
+
+void RadioModel::reportStationSupportBundle(quint32 commandId, bool accepted,
+                                            const QString& reason, const QByteArray& bundle)
+{
+    emit stationSupportBundleFinished(commandId, accepted, reason, bundle);
+}
+
+void RadioModel::reportStationLogCategoriesRefused(const QString& reason)
+{
+    emit stationLogCategoriesRefused(reason);
 }
 
 void RadioModel::clearStationFreedv()

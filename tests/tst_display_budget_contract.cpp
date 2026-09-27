@@ -770,7 +770,9 @@ private slots:
                                    // Task 29: moving media and the
                                    // session, and the relay.
                                    "mediaReplaceVersion", "controlSwitchVersion",
-                                   "relayAllowed"});
+                                   "relayAllowed",
+                                   // Parity Task 22: the support bundle.
+                                   "supportBundleVersion"});
                 QCOMPARE(names, withReason);
                 const int reason = updateIndex(last.updates,
                                                QByteArrayLiteral("displayBudgetReason"));
@@ -825,7 +827,8 @@ private slots:
                                            QByteArrayLiteral("stationFreedvVersion"),
                                            QByteArrayLiteral("mediaReplaceVersion"),
                                            QByteArrayLiteral("controlSwitchVersion"),
-                                           QByteArrayLiteral("relayAllowed")}) {
+                                           QByteArrayLiteral("relayAllowed"),
+                                           QByteArrayLiteral("supportBundleVersion")}) {
                 stripped.removeAt(updateIndex(stripped, name));
             }
             QCOMPARE(SessionMessages::encode(SessionMessages::capabilities(stripped)), older);

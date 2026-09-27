@@ -953,6 +953,10 @@ set(CORE_SOURCES
     src/core/SkuUiProfile.cpp
     src/core/HardwareProfile.cpp
     src/core/LogCategories.cpp
+    # Remote-window parity Task 22 (R-R3-49): the log sink no logging
+    # thread waits on, and the zip archive the support bundle travels in.
+    src/core/LogSink.cpp
+    src/core/ZipArchive.cpp
     src/core/SupportBundle.cpp
     src/core/RadioDiscovery.cpp
     src/core/RadioConnection.cpp

@@ -73,25 +73,6 @@ waiting on the slower side.
 - Status: open.
 - Plan: R-IOS-16 (station Task 28).
 
-### G-09: The web-only relay floor for restrictive networks (Task 29) is unchosen
-
-On a network that passes only DNS and TCP 443, NereusSDR needs a fallback relay path. Three
-designs were measured side by side (a patched libjuice speaking TURN over TLS; a local TLS
-shim in front of coturn; a relay of NereusSDR's own on the rendezvous service), but JJ has not
-picked one.
-
-- Found: 2026-09-23 through 2026-09-26, R5 lane, `docs/architecture/2026-09-23-relay-floor-measurement.md`.
-- Evidence: that document's section 7, "JJ's choice": "Pending. The controller brings JJ the
-  recommendation above; his choice and its reason are recorded here before Step 2 starts."
-- Ruling: OPEN. The document's own recommendation is option (E), NereusSDR's own relay on the
-  rendezvous service: no upstream patch, no TLS library inside libjuice on the phone, and it
-  does not spend any of a Core's 4 TURN allocations (a relayed session already uses all 4, per
-  Task 28's finding). Its cost is higher jitter at low delay (absorbed by the jitter buffer)
-  and the relay becomes NereusSDR's own code to secure.
-- Status: measurement done; JJ's choice pending; Step 2 (the chosen floor, path racer,
-  make-before-break switch) waits on it.
-- Plan: R-IOS-16, R-IOS-08 (iPhone plan Task 29).
-
 ### G-10: The Pi's and Rock's explicit `audio_bitrate = 24000` config lines need JJ's yes to change
 
 JJ approved 48 kbps full-band Opus as the new default, but the Pi 4's and Rock's installed
@@ -145,48 +126,24 @@ features' own names.
 - Status: open.
 - Plan: needs an ID.
 
-### G-14: Multi-client design finding 9's older-window narrowing awaits JJ (through the phone session)
-
-The several-devices design's finding 9 (what an older window sees when it is turned away for
-lack of room) was narrowed by the design review; the narrower version still needs JJ's own
-answer, which the phone session (not this lane) is responsible for asking.
-
-- Found: 2026-09-24, multi-client design commit.
-- Evidence: `nereus-lane-b/.../progress.md:140`: "docs/architecture/2026-09-24-several-devices-on-one-core-design.md
-  (findings 2-11 and the five approved states in; finding 9's older-window narrowing awaits JJ
-  via the phone session ...)."
-- Ruling: OPEN, owned by the phone session, not this lane.
-- Status: open.
-- Plan: R-IOS-30, R-IOS-31 (several-devices design).
-
-### G-15: The away-first order for a fifth device is unconfirmed
-
-The design's fifth-device list order (away devices listed first) needs the phone session's
-confirmation before it is final.
-
-- Found: 2026-09-24, multi-client design commit.
-- Evidence: `nereus-lane-b/.../progress.md:140`: "...the away-first fifth-device order to be
-  confirmed by the phone session."
-- Ruling: OPEN, owned by the phone session.
-- Status: open (JJ separately confirmed "away first in the fifth-device list" as one of eight
-  notices checked on board v51, per line 145: "eight notices on board v51 checked, all
-  carried" -- so this may already be settled; recorded here as OPEN because the design commit's
-  own text still calls it unconfirmed as of this reading).
-- Plan: R-IOS-30, R-IOS-31.
-
 ## In progress
 
 ### G-16: Other config-file keys that may override every start (audit)
 
 Beyond `sample_rate_hz` (G-17 below), `audio_device` and `audio_bitrate` may have the same
-"overwrites the saved choice on every start" problem. An audit is running but has not reported
-a full list yet.
+"overwrites the saved choice on every start" problem. The continuation audit found one
+remaining settings overwrite: an explicit audio_device replaces the saved speaker choice.
+Audio bitrate is a runtime encoder policy, with no separate saved choice found to overwrite.
 
 - Found: 2026-09-27, controller's own audit alongside the sample-rate fix.
 - Evidence: brief's own seed list, corroborated by the sample-rate fix's commit message
   (`043b8cfb`) treating `sample_rate_hz` as the first instance of the pattern.
-- Ruling: none yet; this is the audit itself, not a decision.
-- Status: in progress.
+- Ruling: OPEN for whether explicit audio_device should seed only an absent speaker choice,
+  like sample_rate_hz. No radio config file has been edited.
+- Status: source audit complete in DaemonApp::applyConfigToSettings and setupRemoteSession.
+  applyConfigToSettings has only sample-rate seeding and the audio-device overwrite; bitrate
+  goes directly to DaemonMediaHub::setAudioTargetBitrate. Regression/behavior change awaits
+  the audio-device ruling.
 - Plan: R-R3-49 (small-followups lane).
 
 ### G-17: Config-file `sample_rate_hz` overwrote the saved rate every start
@@ -221,7 +178,7 @@ libdatachannel races), not in isolation. A dedicated lane is fixing them one at 
 - Status: in progress (`codex/flaky-tests`, not yet merged into the trunk).
 - Plan: R-R3-49.
 
-### G-19: Parity Task 32 (TX monitor / MON only on the transmitting device) is built but not yet merged
+### G-19: TX monitor plays only on the transmitting device
 
 - Found: 2026-09-26, parity lane.
 - Ruling (JJ, 2026-09-26, "no" to the Core's own speakers also playing):
@@ -232,9 +189,9 @@ libdatachannel races), not in isolation. A dedicated lane is fixing them one at 
 - Evidence of the build: `nereus-parity/.../progress.md:113`, Task 32 "complete with concerns
   (opus, medium; 7bc095a8 G; MON level after Opus decode within 0.2 dB (main) / 0.07 dB
   (headphones))."
-- Status: built (commit `7bc095a8` in worktree `nereus-tx`/parity lane); not yet an ancestor of
-  the trunk head `6c3f543d` as of this writing. `landing-for-phone.md` (2026-09-27) lists it as
-  one of the two things "Queued before it can land."
+- Status: built and integrated. Git confirms `7bc095a8` is an ancestor of current trunk;
+  the earlier handoff describing it as queued is stale. Hardware acceptance remains distinct
+  from the synthetic monitor-level evidence above.
 - Plan: parity Task 32.
 
 ## Queued
@@ -391,6 +348,36 @@ Thetis only enables ADC0 on every board; NereusSDR offers two ADCs on boards tha
 - Plan: needs an ID (raised in the gaps review; not a plan task on its own).
 
 ## Approved continuation work
+
+### G-09: Restrictive networks use JJ's approved layered connection plan
+
+- Evidence/ruling: lane-B crew progress records JJ on 2026-09-27: "Yes build the layerd
+  plan if this is the ideal way to handle naturalversal, given everything we know".
+  The accepted plan uses direct wss, rendezvous ICE, the rendezvous WebSocket relay as a
+  low-priority ICE candidate, direct-wss media fallback, fast failure detection and system
+  proxy support. Transmit deadline behavior must be measured on TCP fallback paths.
+- Status: R5 implementation and Linux/macOS traversal verification are in progress. The
+  earlier measurement document's pending choice is superseded by this recorded approval.
+- Plan: R-IOS-16, R-IOS-08; R5 remote access.
+
+### G-14: Older windows finding a full Core receive a retryable refusal
+
+- Ruling: JJ's 2026-09-24 board v50/v51 decisions are recorded in the phone crew ledger and
+  phone design D66. With four devices or no free receiver, an older window is refused with
+  "The Core is full. Update NereusSDR to take a device's place, or try again later."
+  Nobody already connected is disturbed. The phone controller confirmed these sources;
+  the Core lead read the ruling directly.
+- Status: decision settled; fifth-device station implementation and verification remain.
+- Plan: R-IOS-30, R-IOS-31.
+
+### G-15: Away devices come first in the fifth-device choice
+
+- Ruling: phone design section 5.9, kept by JJ on board v50/v51, explicitly puts an away
+  device first. D55's idle-longest ordering remains for connected candidates, and D64
+  protects the desktop hosting the Core.
+- Status: decision settled; implementation is not implied by the approved drawings.
+- Plan: R-IOS-30, R-IOS-31.
+
 
 ### G-01: Spectrum decimation range cited to Thetis is wider than Thetis allows
 
@@ -555,6 +542,19 @@ colours for the same signal.
   operations, with Core-owned MAC validation and paired-device/on-air gates for mutations.
   Reset behavior awaits the answer; independent diagnostics/preferences work continues.
 - Plan: remote-window parity Setup diagnostics and preferences.
+
+### G-39: Restrictive-network relay stress test falsely unkeys simulated TUNE
+
+- Evidence: Linux isolated relay test with 2% loss and 150 ms RTT tripped the transmit
+  watchdog 4.882 s after simulated TUNE began, after 403 ms without a keepalive. The session
+  still reported connected. The accepted-gap histogram omitted the missing interval and
+  the harness incorrectly printed a passing summary. This was synthetic; no radio keyed.
+- Ruling: JJ's existing requirement applies: diagnose load failures and bring the cause
+  and suggested fix. The 400 ms safety deadline remains unchanged.
+- Status: R5 acceptance remains open. Earlier green measurement summary is withdrawn;
+  keepalive production/queue/transport/receive timing and direct-wss comparison are being
+  investigated. No success claim based only on accepted-packet gaps is valid.
+- Plan: R5 restrictive-network transmit deadline.
 
 ## How this addendum is kept
 

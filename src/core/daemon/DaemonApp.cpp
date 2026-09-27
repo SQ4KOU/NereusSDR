@@ -110,6 +110,10 @@
 //   2026-09-27: iPhone app plan Task 29 (R-IOS-16): the server told
 //               nereusd.conf's `relay` (relayAllowed). J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-09-27: R-R3-49 (remote-window parity Task 22): nereusd.conf's path
+//               to the station server, for the Core's support bundle. J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/daemon/DaemonApp.h"
@@ -675,6 +679,9 @@ void DaemonApp::startStationServer(const DaemonConfig& cfg)
     // Parity Task 21 (R-IOS-18): the radios the Core finds and its choice of
     // one (stationRadiosVersion 1).
     m_stationServer->setStationRadios(m_stationRadios.get());
+    // Parity Task 22 (R-R3-49): nereusd.conf, secrets removed, goes in the
+    // Core's support bundle.
+    m_stationServer->setSupportConfigPath(cfg.sourcePath);
     // iPhone app Task 17 (R-IOS-08): the status page, bound exactly where the
     // listener binds: `bind` above, listenerAddressFor(remote_bind), which is
     // DaemonConfig::listenAddressFor's rule (R-R3-26). A Core bound to one

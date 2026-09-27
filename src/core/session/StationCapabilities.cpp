@@ -102,6 +102,10 @@
 //                controlSwitchVersion and relayAllowed, after
 //                stationFreedvVersion. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-27 - R-R3-49 / R-IOS-18 (remote-window parity Task 22, iPhone
+//                app plan Task 25): supportBundleVersion, after
+//                relayAllowed. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 
 #include "core/session/StationCapabilities.h"
@@ -241,6 +245,9 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
         updates.append(intEntry("mediaReplaceVersion", mediaReplaceVersion));
         updates.append(intEntry("controlSwitchVersion", controlSwitchVersion));
         updates.append(boolEntry("relayAllowed", relayAllowed));
+        // R-R3-49 / R-IOS-18 (parity Task 22, iPhone plan Task 25): the
+        // support bundle, the Core's log and its logging categories.
+        updates.append(intEntry("supportBundleVersion", supportBundleVersion));
         // iPhone app Task 71: several devices at once, last, and only for
         // a peer that declared the feature.
         if (sessionHolderEntry) {
@@ -457,6 +464,7 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                    || u.name == "stationFreedvVersion"
                    || u.name == "mediaReplaceVersion"
                    || u.name == "controlSwitchVersion"
+                   || u.name == "supportBundleVersion"
                    || u.name == "sessionHolderVersion"
                    || u.name == "remoteTxVersion"
                    || u.name == "txStateVersion") {
@@ -518,6 +526,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                     caps.mediaReplaceVersion = version;
                 } else if (u.name == "controlSwitchVersion") {
                     caps.controlSwitchVersion = version;
+                } else if (u.name == "supportBundleVersion") {
+                    caps.supportBundleVersion = version;
                 } else {
                     caps.bandSelectVersion = version;
                 }

@@ -4,6 +4,10 @@
 //
 // NereusSDR-original. Implementation for the four sibling Diagnostics
 // sub-tabs added in Phase 3P-H. See header for scope.
+//   2026-09-27 - R-R3-49 (remote-window parity Task 22): Logs shows the
+//                 Core's recent log in a remote window, and this
+//                 computer's labelled; Refresh reads both again. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 // Modification history (NereusSDR):
@@ -45,6 +49,7 @@
 
 #include <QFile>
 #include <QFileDialog>
+#include <QHideEvent>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QMessageBox>
@@ -350,17 +355,51 @@ void ExportImportConfigPage::onExportRadioClicked()
 
 // ── LogsPage ─────────────────────────────────────────────────────────────────
 
-LogsPage::LogsPage(QWidget* parent)
+LogsPage::LogsPage(RadioModel* model, QWidget* parent)
     : SetupPage(QStringLiteral("Logs"), parent)
+    , m_model(model)
 {
     buildUI();
 }
 
+LogsPage::~LogsPage()
+{
+    // Setup closed with this page showing still holds the Core's log.
+    if (m_holdingCoreLog && m_model != nullptr) {
+        m_model->removeStationCoreLogViewer();
+    }
+}
+
+bool LogsPage::isRemote() const
+{
+    return m_model != nullptr && m_model->role() == RadioModel::Role::Remote;
+}
+
 void LogsPage::buildUI()
 {
+    // Remote-window parity Task 22 (R-R3-49): the Core's recent log first,
+    // then this computer's, each labelled.
+    if (isRemote()) {
+        auto* coreGroup = addSection(QStringLiteral("The Core's Recent Log"));
+        auto* coreLayout = qobject_cast<QVBoxLayout*>(coreGroup->layout());
+        m_coreLogView = new QPlainTextEdit;
+        m_coreLogView->setObjectName(QStringLiteral("coreLogsView"));
+        m_coreLogView->setReadOnly(true);
+        m_coreLogView->setMaximumBlockCount(2000);
+        m_coreLogView->setStyleSheet(QStringLiteral(
+            "QPlainTextEdit { background: #0a0a18; color: #c8d8e8; "
+            "border: 1px solid #304050; font-family: 'Monaco','Menlo',monospace; }"));
+        m_coreLogView->setToolTip(QStringLiteral("The most recent lines of the Core's log"));
+        m_coreLogView->setMinimumHeight(200);
+        coreLayout->addWidget(m_coreLogView);
+        connect(m_model, &RadioModel::stationCoreLogChanged, this, &LogsPage::refreshCoreLog);
+        connect(m_model, &RadioModel::stationSupportAvailabilityChanged, this,
+                &LogsPage::refreshCoreLog);
+    }
     // Reuse the layout addSection() installs (see ConnectionQualityPage::buildUI
     // for context — #272).
-    auto* group = addSection(QStringLiteral("Recent Log"));
+    auto* group = addSection(isRemote() ? QStringLiteral("This Computer's Recent Log")
+                                        : QStringLiteral("Recent Log"));
     auto* layout = qobject_cast<QVBoxLayout*>(group->layout());
     m_logView = new QPlainTextEdit;
     m_logView->setObjectName(QStringLiteral("logsView"));
@@ -375,7 +414,8 @@ void LogsPage::buildUI()
 
     auto* buttons = new QHBoxLayout;
     m_refreshBtn = new QPushButton(QStringLiteral("Refresh"));
-    m_refreshBtn->setToolTip(QStringLiteral("Read the log file again"));
+    m_refreshBtn->setToolTip(isRemote() ? QStringLiteral("Read both logs again")
+                                        : QStringLiteral("Read the log file again"));
     buttons->addWidget(m_refreshBtn);
     m_clearBtn = new QPushButton(QStringLiteral("Clear"));
     m_clearBtn->setToolTip(QStringLiteral("Clear this view (the log file is kept)"));
@@ -384,6 +424,10 @@ void LogsPage::buildUI()
     layout->addLayout(buttons);
     connect(m_refreshBtn, &QPushButton::clicked, this, &LogsPage::refresh);
     connect(m_clearBtn, &QPushButton::clicked, m_logView, &QPlainTextEdit::clear);
+    if (m_coreLogView != nullptr) {
+        m_clearBtn->setToolTip(QStringLiteral("Clear these views (the logs are kept)"));
+        connect(m_clearBtn, &QPushButton::clicked, m_coreLogView, &QPlainTextEdit::clear);
+    }
 
     contentLayout()->addStretch();
     refresh();
@@ -393,12 +437,47 @@ void LogsPage::refresh()
 {
     m_logView->setPlainText(SupportDialog::logTailText());
     m_logView->moveCursor(QTextCursor::End);
+    if (m_holdingCoreLog) {
+        // Read the Core's log again: a new subscription and its backlog.
+        m_model->refreshStationCoreLog();
+    }
+    refreshCoreLog();
+}
+
+void LogsPage::refreshCoreLog()
+{
+    if (m_coreLogView == nullptr) {
+        return;
+    }
+    const QString reason = m_model->stationSupportUnavailableReason();
+    if (!reason.isEmpty()) {
+        m_coreLogView->setPlainText(reason);
+        return;
+    }
+    const QStringList lines = m_model->stationCoreLog();
+    m_coreLogView->setPlainText(lines.isEmpty() ? QStringLiteral("Reading the Core's log...")
+                                                : lines.join(QLatin1Char('\n')));
+    m_coreLogView->moveCursor(QTextCursor::End);
 }
 
 void LogsPage::showEvent(QShowEvent* event)
 {
     SetupPage::showEvent(event);
+    // The Core's log is followed only while this page shows.
+    if (isRemote() && !m_holdingCoreLog) {
+        m_holdingCoreLog = true;
+        m_model->addStationCoreLogViewer();
+    }
     refresh();
+}
+
+void LogsPage::hideEvent(QHideEvent* event)
+{
+    SetupPage::hideEvent(event);
+    if (m_holdingCoreLog) {
+        m_holdingCoreLog = false;
+        m_model->removeStationCoreLogViewer();
+    }
 }
 
 } // namespace NereusSDR

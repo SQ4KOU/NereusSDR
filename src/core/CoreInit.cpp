@@ -2,6 +2,7 @@
 
 #include "AppSettings.h"
 #include "LogCategories.h"
+#include "LogSink.h"
 
 #include <QDateTime>
 #include <QDir>
@@ -90,12 +91,12 @@ static void messageHandler(QtMsgType type, const QMessageLogContext& ctx, const 
     const QString line = QString("[%1] %2: %3\n")
         .arg(QDateTime::currentDateTime().toString("HH:mm:ss.zzz"), label, safeMsg);
 
-    if (s_logFile && s_logFile->isOpen()) {
-        QTextStream ts(s_logFile);
-        ts << line;
-        ts.flush();
-    }
-    fprintf(stderr, "%s", line.toLocal8Bit().constData());
+    // Remote-window parity Task 22 (R-R3-49): the line is only offered to
+    // the sink here, which never waits on the writer. Its writer thread
+    // writes the file and stderr. Fatal logging is also best effort: an
+    // audio-thread fatal must not wait on a stalled disk before Qt aborts.
+    LogSink& sink = LogSink::instance();
+    sink.offer(line);
 }
 
 bool initialize(const QString& profile)
@@ -130,6 +131,10 @@ bool initialize(const QString& profile)
     s_logFile = new QFile(logPath);
     if (s_logFile->open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
         s_logFile->setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+        // Remote-window parity Task 22: the sink's writer thread writes the
+        // file and stderr; the handler never does I/O on the logging thread.
+        LogSink::instance().setOutputs(s_logFile, true);
+        LogSink::instance().start();
         qInstallMessageHandler(messageHandler);
 
         const QString symlink = logDir + "/nereussdr.log";
@@ -200,6 +205,10 @@ void shutdown()
     // be destroyed. Belt-and-braces for the leaked-regex fix in
     // redactPii().
     qInstallMessageHandler(nullptr);
+    // Remote-window parity Task 22: what the sink still holds reaches the
+    // file before it closes.
+    LogSink::instance().stop();
+    LogSink::instance().setOutputs(nullptr, false);
     if (s_logFile) {
         s_logFile->close();
         // Intentionally leaked: Qt may still try to log between here and

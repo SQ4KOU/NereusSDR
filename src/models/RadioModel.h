@@ -668,6 +668,12 @@ class RadioModel : public QObject {
     // window only. This Core shows it.
     Q_PROPERTY(QString stationRadioWaiting READ stationRadioWaiting
                    NOTIFY stationRadioWaitingChanged)
+    // Remote-window parity Task 22 (R-R3-49, supportBundleVersion 1): the
+    // Core's enabled logging categories, their ids joined by commas in the
+    // Support dialog's order. On a local model this process's LogManager;
+    // a remote window holds the Core's (applyMirroredValue) and changes it
+    // with support.setLogCategories. Core to window only.
+    Q_PROPERTY(QString logCategories READ logCategories NOTIFY logCategoriesChanged)
 
 
 public:
@@ -2683,6 +2689,28 @@ public:
     /// Fix wave (M2): the Core's waiting reason (see the property).
     QString stationRadioWaiting() const { return m_stationRadioWaiting; }
     void setStationRadioWaiting(const QString& reason);
+
+    /// Remote-window parity Task 22 (R-R3-49): see the property.
+    QString logCategories() const;
+    /// A remote window's copy of the Core's log (the `coreLog` stream),
+    /// oldest first, at most kStationCoreLogLines. Followed only while a
+    /// viewer holds it (the Support dialog, Setup > Diagnostics > Logs).
+    static constexpr int kStationCoreLogLines = 200;
+    QStringList stationCoreLog() const { return m_stationCoreLog; }
+    void addStationCoreLogViewer();
+    void removeStationCoreLogViewer();
+    /// Reads the Core's log again (a new subscription and its backlog).
+    void refreshStationCoreLog();
+    /// Why a remote window cannot show or change the Core's log or collect
+    /// its bundle (empty when it can).
+    QString stationSupportUnavailableReason() const;
+    /// The link's support availability moved (capabilities, a new session).
+    void noteStationSupportAvailabilityChanged();
+    /// The Core answered support.collect `commandId` (`bundle` its ZIP).
+    void reportStationSupportBundle(quint32 commandId, bool accepted, const QString& reason,
+                                    const QByteArray& bundle);
+    /// The Core refused support.setLogCategories; the dialog shows why.
+    void reportStationLogCategoriesRefused(const QString& reason);
     bool stationRadioChangeUnderway() const { return m_stationRadioChangeUnderway; }
 
     // ── TNF (design section 8.1): the canonical notch store ─────────────────
@@ -4930,6 +4958,17 @@ signals:
     void dspOptionsLastApplyMsChanged(qint64 elapsedMs);
     // Fix wave (M2): stationRadioWaiting() changed.
     void stationRadioWaitingChanged(const QString& reason);
+    // Remote-window parity Task 22: logCategories() changed.
+    void logCategoriesChanged(const QString& categories);
+    // Remote-window parity Task 22: stationCoreLog() changed.
+    void stationCoreLogChanged();
+    // Remote-window parity Task 22: the link's support availability moved.
+    void stationSupportAvailabilityChanged();
+    // Remote-window parity Task 22: the Core answered support.collect.
+    void stationSupportBundleFinished(quint32 commandId, bool accepted, const QString& reason,
+                                      const QByteArray& bundle);
+    // Remote-window parity Task 22: the Core refused a category change.
+    void stationLogCategoriesRefused(const QString& reason);
     // Remote-window parity Task 16: coreFilterResponse() changed.
     void coreFilterResponseChanged();
 
@@ -7247,6 +7286,10 @@ private:
     qint64 m_dspOptionsLastApplyMs{0};
     bool m_stationRadioChangeUnderway{false};
     QString m_stationRadioWaiting;
+    // Remote-window parity Task 22: the Core's logging categories and log.
+    QString m_remoteLogCategories;
+    QStringList m_stationCoreLog;
+    int m_stationCoreLogViewers{0};
     FilterResponse m_coreFilterResponse;
     bool m_coreFilterResponseWanted{false};
     bool m_coreFilterResponseDirty{false};

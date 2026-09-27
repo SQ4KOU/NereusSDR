@@ -332,6 +332,11 @@
         },
         {
             "kind": "i64",
+            "name": "supportBundleVersion",
+            "value": 1
+        },
+        {
+            "kind": "i64",
             "name": "sessionHolderVersion",
             "value": 1
         },
@@ -1497,6 +1502,27 @@
             "capabilityVersion": 1,
             "minMinor": 11,
             "verb": "freedv.setHidden"
+        },
+        {
+            "arguments": [
+            ],
+            "capability": "supportBundleVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "support.collect"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "categories",
+                    "optional": false
+                }
+            ],
+            "capability": "supportBundleVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "support.setLogCategories"
         },
         {
             "arguments": [
@@ -4281,6 +4307,12 @@
                     "kind": "utf8",
                     "name": "stationRadioWaiting",
                     "ordinal": 25
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "logCategories",
+                    "ordinal": 26
                 }
             ]
         },

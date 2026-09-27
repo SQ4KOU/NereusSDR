@@ -52,6 +52,13 @@ public:
     bool isEnabled(const QString& id) const;
     void setEnabled(const QString& id, bool on);
     void setAllEnabled(bool on);
+    /// Remote-window parity Task 22 (R-R3-49): the enabled categories' ids
+    /// in the Support dialog's order, joined by commas (the Core's
+    /// `logCategories`, and what `support.setLogCategories` carries).
+    QString enabledList() const;
+    /// Turns on exactly the listed categories and off every other one; ids
+    /// this process does not keep are ignored.
+    void setEnabledList(const QStringList& ids);
 
     // --- Log File ---
     QString logFilePath() const;

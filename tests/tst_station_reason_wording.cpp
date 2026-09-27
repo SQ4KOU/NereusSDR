@@ -1423,6 +1423,13 @@ const QList<AppSideReason>& appSideReasons()
          "a remote window's own reason when its Core cannot take the request"},
         {"src/core/SpotSourceHost.cpp", "reportStationRefusal",
          "a remote window shows the Core's refusal it was given"},
+        // R-R3-49 (parity Task 22): the Core's log, logging and bundle. The
+        // Core also answers a coreLog subscribe with it when it keeps no
+        // log stream; tst_remote_core_log checks it is plain.
+        {"src/core/session/IStationLink.h", "supportBundleUnavailableReason",
+         "a remote window's own reason when its Core cannot take the request"},
+        {"src/models/RadioModel.cpp", "stationSupportUnavailableReason",
+         "a remote window's own reason its Core-side support controls are disabled"},
         {"src/models/RadioModel.h", "rxFilter0Reason",
          "the filter badge's status label (AlexController), not a refusal"},
         {"src/models/RadioModel.h", "rxFilter1Reason",

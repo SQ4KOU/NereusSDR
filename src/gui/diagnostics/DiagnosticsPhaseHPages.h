@@ -28,6 +28,10 @@
 //                 Quality's Live Counters title says "from the Core" in a
 //                 remote window. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-27 - R-R3-49 (remote-window parity Task 22): Logs shows the
+//                 Core's recent log in a remote window, and this
+//                 computer's labelled; Refresh reads both again. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -123,18 +127,27 @@ private:
 class LogsPage : public SetupPage {
     Q_OBJECT
 public:
-    explicit LogsPage(QWidget* parent = nullptr);
+    explicit LogsPage(RadioModel* model = nullptr, QWidget* parent = nullptr);
+    ~LogsPage() override;
 
     void refresh();
 
 protected:
     void showEvent(QShowEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
 
 private:
+    // Remote-window parity Task 22: in a remote window the Core's recent
+    // log (the `coreLog` stream) above this computer's.
+    RadioModel*     m_model{nullptr};
+    QPlainTextEdit* m_coreLogView{nullptr};
+    bool            m_holdingCoreLog{false};
     QPlainTextEdit* m_logView{nullptr};
     QPushButton*    m_refreshBtn{nullptr};
     QPushButton*    m_clearBtn{nullptr};
 
+    bool isRemote() const;
+    void refreshCoreLog();
     void buildUI();
 };
 

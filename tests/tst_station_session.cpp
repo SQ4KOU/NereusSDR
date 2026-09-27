@@ -5782,7 +5782,8 @@ void TstStationSession::radioIdentityEntriesRoundTrip()
     // txMonitorAudioVersion (R-IOS-13, parity Task 32), then
     // stationFreedvVersion (R-IOS-26, iPhone plan Task 22), then
     // mediaReplaceVersion, controlSwitchVersion and relayAllowed (R-IOS-16,
-    // iPhone app plan Task 29).
+    // iPhone app plan Task 29), then supportBundleVersion (R-R3-49, parity
+    // Task 22).
     StationCapabilities sent = g21kCaps();
     sent.radioHardwareVersion = 1;
     sent.remotePgxlControlVersion = 1;
@@ -5809,9 +5810,10 @@ void TstStationSession::radioIdentityEntriesRoundTrip()
     sent.mediaReplaceVersion = 1;   // iPhone app plan Task 29, after it
     sent.controlSwitchVersion = 1;
     sent.relayAllowed = true;
+    sent.supportBundleVersion = 1; // R-R3-49 (parity Task 22), after it
     const QList<MirrorUpdate> updates = sent.toUpdates();
     const int model = updateIndexOf(updates, "hpsdrModel");
-    QCOMPARE(model, int(updates.size()) - 28);
+    QCOMPARE(model, int(updates.size()) - 29);
     QCOMPARE(updateIndexOf(updates, "radioProtocol"), model + 1);
     QCOMPARE(updateIndexOf(updates, "radioAddress"), model + 2);
     QCOMPARE(updateIndexOf(updates, "radioHardwareVersion"), model + 3);
@@ -5839,9 +5841,11 @@ void TstStationSession::radioIdentityEntriesRoundTrip()
     QCOMPARE(updateIndexOf(updates, "mediaReplaceVersion"), model + 25);
     QCOMPARE(updateIndexOf(updates, "controlSwitchVersion"), model + 26);
     QCOMPARE(updateIndexOf(updates, "relayAllowed"), model + 27);
+    QCOMPARE(updateIndexOf(updates, "supportBundleVersion"), model + 28);
     const StationCapabilities received = StationCapabilities::fromUpdates(updates);
     QCOMPARE(received.txMonitorAudioVersion, 1);
     QCOMPARE(received.stationFreedvVersion, 1);
+    QCOMPARE(received.supportBundleVersion, 1);
     QVERIFY(received.radioIdentityEntries);
     QCOMPARE(received.radioHardwareVersion, 1);
     QCOMPARE(received.remotePgxlControlVersion, 1);
@@ -5955,10 +5959,11 @@ void TstStationSession::coreSendsRadioIdentityOnlyFromMinorEleven()
                              "stationRadiosVersion", "txDisplayVersion",
                              "displayClockVersion", "controlChannelVersion",
                              "txMonitorAudioVersion", "stationFreedvVersion",
-                             "mediaReplaceVersion", "controlSwitchVersion", "relayAllowed"}) {
+                             "mediaReplaceVersion", "controlSwitchVersion", "relayAllowed",
+                             "supportBundleVersion"}) {
         QCOMPARE(updateIndexOf(older, name), -1);
     }
-    // Byte for byte: the minor-11 descriptor without the twenty-eight (and the
+    // Byte for byte: the minor-11 descriptor without the twenty-nine (and the
     // display budget reason, which is not sent here) is the minor-10 one.
     QList<MirrorUpdate> stripped = current;
     for (const char* name : {"hpsdrModel", "radioProtocol", "radioAddress",
@@ -5973,7 +5978,8 @@ void TstStationSession::coreSendsRadioIdentityOnlyFromMinorEleven()
                              "stationRadiosVersion", "txDisplayVersion",
                              "displayClockVersion", "controlChannelVersion",
                              "txMonitorAudioVersion", "stationFreedvVersion",
-                             "mediaReplaceVersion", "controlSwitchVersion", "relayAllowed"}) {
+                             "mediaReplaceVersion", "controlSwitchVersion", "relayAllowed",
+                             "supportBundleVersion"}) {
         stripped.removeAt(updateIndexOf(stripped, name));
     }
     QCOMPARE(SessionMessages::encode(SessionMessages::capabilities(stripped)),

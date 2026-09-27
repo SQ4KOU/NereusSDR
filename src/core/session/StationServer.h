@@ -1067,6 +1067,14 @@ public:
     // console and state in spotSources, and the freedv.* verbs; 0
     // otherwise.
     int stationFreedvVersion() const;
+    // R-R3-49 / R-IOS-18 (remote-window parity Task 22, iPhone app plan
+    // Task 25): supportBundleVersion. 1 on every Core with a radio model:
+    // support.collect, support.setLogCategories, the `coreLog` record
+    // stream and radio's logCategories.
+    int supportBundleVersion() const;
+    // nereusd's configuration file, carried (secrets removed) in the Core's
+    // support bundle. Set by DaemonApp; empty on a desktop hosting the Core.
+    void setSupportConfigPath(const QString& path) { m_supportConfigPath = path; }
     // iPhone app plan Task 29 (R-IOS-16; link section 21): mediaReplaceVersion
     // 1 whenever media is on (the media `replace` operation);
     // controlSwitchVersion 1 always (session.pathTicket, path.join and
@@ -1387,6 +1395,10 @@ private:
     void handlePropertyWrite(SessionTransport* transport, const SessionMessage& message);
     // Parity Task 19 (R-IOS-25): the record streams.
     void setUpRecordStreams();
+    // Parity Task 22: the Core's log as a record stream, fed from the log
+    // sink while someone follows it.
+    void setUpCoreLogStream();
+    void pullCoreLog();
     void handleRecordsCommand(SessionTransport* transport, const SessionMessage& message);
     void scheduleRecordFlush();
     void flushRecordStreams();
@@ -1931,6 +1943,15 @@ private:
     std::map<QString, std::unique_ptr<RecordStream>> m_recordStreams;
     quint64 m_consoleLineId = 0;
     QTimer* m_recordFlushTimer = nullptr;
+    // Parity Task 22: the log sink's last line put in `coreLog`, the pull
+    // that runs while it has a subscriber, the newest telemetry this Core
+    // measured (for the support bundle) and nereusd's configuration file.
+    quint64 m_coreLogSequence = 0;
+    bool m_coreLogInPrivateKey = false;
+    QTimer* m_coreLogTimer = nullptr;
+    QJsonObject m_lastTelemetry;
+    qint64 m_lastTelemetryAtMs = 0;
+    QString m_supportConfigPath;
     // Parity Task 21: the Core's radios and their stream.
     QPointer<StationRadios> m_stationRadios;
     void publishStationRadios();
