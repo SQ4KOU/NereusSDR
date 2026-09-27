@@ -88,7 +88,12 @@ struct RemoteAudioReceiver::Private {
     RemotePlaybackOutput output = RemotePlaybackOutput::Speakers;
     // R-R3-43: set only in the PCM-sink mode, which has no engine.
     RemoteAudioReceiver::PcmSink sink;
-    std::jthread worker;
+    // std::thread and a flag, not std::jthread: the libc++ in Xcode 16
+    // (LLVM 19, the macos-15 CI runner) keeps jthread and stop_token
+    // behind -fexperimental-library. stop() sets the flag and joins;
+    // start() clears it before each new worker.
+    std::thread worker;
+    std::atomic<bool> stopWorker{false};
     std::mutex mutex;
     std::condition_variable wake;
     std::deque<Packet> incoming;
@@ -342,7 +347,7 @@ void RemoteAudioReceiver::stop()
     d->jitterHoldNs.store(-1);
     ++d->generation;
     if (d->worker.joinable()) {
-        d->worker.request_stop();
+        d->stopWorker.store(true);
         d->wake.notify_one();
         d->worker.join();
     }
@@ -430,8 +435,9 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
     d->running.store(true);
     d->telemetrySequence.fetch_add(1);
     const quint64 generation = d->generation;
-    d->worker = std::jthread([this, ssrc, firstTimestamp, generation, profile,
-                              speakerFormat](std::stop_token stop) {
+    d->stopWorker.store(false);
+    d->worker = std::thread([this, ssrc, firstTimestamp, generation, profile,
+                             speakerFormat] {
         // R-R3-21: this thread feeds the speaker's 20 ms queue, so it runs
         // in the latency-critical class, as the local DSP feeders do
         // (RxDspWorker, TxWorkerThread). At the default class a busy Mac
@@ -700,14 +706,14 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
             d->arrivalBoundPackets.store(jitter.maxPackets());
         };
         publishHold();
-        while (!stop.stop_requested()) {
+        while (!d->stopWorker.load()) {
             std::deque<Private::Packet> incoming;
             bool overflow = false;
             bool startBacklog = false;
             {
                 std::unique_lock<std::mutex> lock(d->mutex);
-                d->wake.wait_for(lock, std::chrono::milliseconds(2), [this, &stop] {
-                    return stop.stop_requested() || !d->incoming.empty() || d->overflow;
+                d->wake.wait_for(lock, std::chrono::milliseconds(2), [this] {
+                    return d->stopWorker.load() || !d->incoming.empty() || d->overflow;
                 });
                 incoming.swap(d->incoming);
                 overflow = d->overflow;
@@ -715,7 +721,7 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
                 startBacklog = d->startBacklog;
                 d->startBacklog = false;
             }
-            if (stop.stop_requested()) { break; }
+            if (d->stopWorker.load()) { break; }
             publishHold();
             const qint64 wakeAt = d->now();
             maxWakeGap = std::max(maxWakeGap, wakeAt - previousWake);

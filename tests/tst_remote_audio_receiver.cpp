@@ -6,6 +6,7 @@
 #include <QSignalSpy>
 #include <QRandomGenerator>
 #include <cmath>
+#include <atomic>
 #include <chrono>
 #include <mutex>
 #include <thread>
@@ -22,6 +23,32 @@
 #include <functional>
 using namespace NereusSDR;
 namespace {
+// A fake device callback thread with std::jthread's shape: the body polls a
+// stop flag, and destruction requests stop and joins, so a check that fails
+// and returns early still joins the thread. Not std::jthread itself: the
+// libc++ in Xcode 16 (LLVM 19, the macos-15 CI runner) keeps jthread and
+// stop_token behind -fexperimental-library.
+class DeviceThread {
+public:
+    class StopFlag {
+    public:
+        bool stopRequested() const { return m_requested.load(); }
+    private:
+        friend class DeviceThread;
+        std::atomic<bool> m_requested{false};
+    };
+    template <typename Body>
+    explicit DeviceThread(Body body)
+        : m_thread([this, body = std::move(body)]() mutable { body(m_stop); }) {}
+    ~DeviceThread() { requestStop(); join(); }
+    DeviceThread(const DeviceThread&) = delete;
+    DeviceThread& operator=(const DeviceThread&) = delete;
+    void requestStop() { m_stop.m_requested.store(true); }
+    void join() { if (m_thread.joinable()) { m_thread.join(); } }
+private:
+    StopFlag m_stop; // before m_thread: the thread reads it from its start
+    std::thread m_thread;
+};
 // One lossless packet of the two-tone test signal: 997 Hz left, 1703 Hz
 // right, 192 frames starting at packet * 192.
 QByteArray losslessTonePacket(int packet, quint32 ssrc)
@@ -489,14 +516,14 @@ private slots:
         // QtTest coalesces GUI timers, which can turn a nominal 1 ms timer
         // into normal-rate consumption. Drive the fake device independently,
         // just as the actual device callback is independent of the GUI loop.
-        std::jthread device([bus](std::stop_token stop) {
-            while (!stop.stop_requested()) {
+        DeviceThread device([bus](const DeviceThread::StopFlag& stop) {
+            while (!stop.stopRequested()) {
                 bus->render(480);
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }
         });
         QTRY_VERIFY_WITH_TIMEOUT(receiver.rateMatcherUnderflows() > 0 && !restarts.isEmpty(), 1500);
-        device.request_stop();
+        device.requestStop();
         device.join();
 
         // Do not sample the retired context. A restart entirely between
@@ -713,17 +740,17 @@ private slots:
         // The callback is independent of the Qt event loop, as a real audio
         // device is. Integer nanosecond deadlines preserve 48 kHz over the
         // whole run instead of accumulating a rounded 2.667 ms sleep error.
-        std::jthread device([bus, callbackFrames = kCallbackFrames](
-                                std::stop_token stop) {
+        DeviceThread device([bus, callbackFrames = kCallbackFrames](
+                                const DeviceThread::StopFlag& stop) {
             using Clock = std::chrono::steady_clock;
             const auto started = Clock::now();
             quint64 callback = 1;
-            while (!stop.stop_requested()) {
+            while (!stop.stopRequested()) {
                 const auto deadline = started + std::chrono::nanoseconds(
                     callback * quint64(callbackFrames) * 1'000'000'000ull
                     / 48'000ull);
                 std::this_thread::sleep_until(deadline);
-                if (stop.stop_requested()) {
+                if (stop.stopRequested()) {
                     break;
                 }
                 bus->render(callbackFrames);
@@ -774,7 +801,7 @@ private slots:
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
-        device.request_stop();
+        device.requestStop();
         device.join();
         QCoreApplication::processEvents();
         const bool runningAtSnapshot = receiver.isRunning();
@@ -852,14 +879,14 @@ private slots:
             receiver.submit(packets.at(packet));
         }
 
-        std::jthread device([bus](std::stop_token stop) {
+        DeviceThread device([bus](const DeviceThread::StopFlag& stop) {
             using Clock = std::chrono::steady_clock;
             const auto started = Clock::now();
             quint64 callback = 1;
-            while (!stop.stop_requested()) {
+            while (!stop.stopRequested()) {
                 std::this_thread::sleep_until(started + std::chrono::nanoseconds(
                     callback * 480ull * 1'000'000'000ull / 48'000ull));
-                if (stop.stop_requested()) { break; }
+                if (stop.stopRequested()) { break; }
                 bus->render(480);
                 ++callback;
             }
@@ -884,7 +911,7 @@ private slots:
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
-        device.request_stop();
+        device.requestStop();
         device.join();
         QCoreApplication::processEvents();
         const bool running = receiver.isRunning();
@@ -961,13 +988,13 @@ private slots:
             receiver.submit(packets.at(packet));
         }
 
-        std::jthread device([bus](std::stop_token stop) {
+        DeviceThread device([bus](const DeviceThread::StopFlag& stop) {
             const auto started = Clock::now();
             quint64 callback = 1;
-            while (!stop.stop_requested()) {
+            while (!stop.stopRequested()) {
                 std::this_thread::sleep_until(started + std::chrono::nanoseconds(
                     callback * 480ull * 1'000'000'000ull / 48'000ull));
-                if (stop.stop_requested()) { break; }
+                if (stop.stopRequested()) { break; }
                 bus->render(480);
                 ++callback;
             }
@@ -990,7 +1017,7 @@ private slots:
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
-        device.request_stop();
+        device.requestStop();
         device.join();
         QCoreApplication::processEvents();
         const bool running = receiver.isRunning();
@@ -1055,13 +1082,13 @@ private slots:
         QVERIFY(receiver.start(kSsrc, 0));
 
         using Clock = std::chrono::steady_clock;
-        std::jthread device([bus](std::stop_token stop) {
+        DeviceThread device([bus](const DeviceThread::StopFlag& stop) {
             const auto started = Clock::now();
             quint64 callback = 1;
-            while (!stop.stop_requested()) {
+            while (!stop.stopRequested()) {
                 std::this_thread::sleep_until(started + std::chrono::nanoseconds(
                     callback * 480ull * 1'000'000'000ull / 48'000ull));
-                if (stop.stop_requested()) { break; }
+                if (stop.stopRequested()) { break; }
                 bus->render(480);
                 ++callback;
             }
@@ -1099,7 +1126,7 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT((receiver.telemetry().release
                                   && receiver.telemetry().release->rtpTimestamp == end)
                                  || !restarts.isEmpty(), 2000);
-        device.request_stop();
+        device.requestStop();
         device.join();
         QCoreApplication::processEvents();
         QVERIFY2(restarts.isEmpty(),
@@ -1140,14 +1167,14 @@ private slots:
         QSignalSpy errors(&receiver, &RemoteAudioReceiver::errorOccurred);
         QSignalSpy restarts(&receiver, &RemoteAudioReceiver::restartRequested);
         QVERIFY(receiver.start(kSsrc, 0));
-        std::jthread device([bus](std::stop_token stop) {
+        DeviceThread device([bus](const DeviceThread::StopFlag& stop) {
             using Clock = std::chrono::steady_clock;
             const auto started = Clock::now();
             quint64 callback = 1;
-            while (!stop.stop_requested()) {
+            while (!stop.stopRequested()) {
                 std::this_thread::sleep_until(started + std::chrono::nanoseconds(
                     callback * 480ull * 1'000'000'000ull / 48'000ull));
-                if (stop.stop_requested()) { break; }
+                if (stop.stopRequested()) { break; }
                 bus->render(480);
                 ++callback;
             }
@@ -1177,7 +1204,7 @@ private slots:
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
-        device.request_stop();
+        device.requestStop();
         device.join();
         QCoreApplication::processEvents();
         const bool running = receiver.isRunning();
@@ -1579,13 +1606,13 @@ private slots:
         QVERIFY(receiver.start(kSsrc, 0, RemoteAudioProfile::Lossless));
 
         using Clock = std::chrono::steady_clock;
-        std::jthread device([bus](std::stop_token stop) {
+        DeviceThread device([bus](const DeviceThread::StopFlag& stop) {
             const auto started = Clock::now();
             quint64 callback = 1;
-            while (!stop.stop_requested()) {
+            while (!stop.stopRequested()) {
                 std::this_thread::sleep_until(started + std::chrono::nanoseconds(
                     callback * 480ull * 1'000'000'000ull / 48'000ull));
-                if (stop.stop_requested()) { break; }
+                if (stop.stopRequested()) { break; }
                 bus->render(480);
                 ++callback;
             }
@@ -1633,7 +1660,7 @@ private slots:
             QCOMPARE(receiver.telemetry().linkInterruptions, quint64(0));
             QCOMPARE(receiver.rateMatcherOverflows(), 0);
         }
-        device.request_stop();
+        device.requestStop();
         device.join();
         QCOMPARE(errors.count(), 0);
         receiver.stop();
@@ -2174,13 +2201,13 @@ private slots:
         });
         QVERIFY(receiver.start(kSsrc, 0));
 
-        std::jthread device([bus](std::stop_token stop) {
+        DeviceThread device([bus](const DeviceThread::StopFlag& stop) {
             const auto begun = Clock::now();
             quint64 callback = 1;
-            while (!stop.stop_requested()) {
+            while (!stop.stopRequested()) {
                 std::this_thread::sleep_until(begun + std::chrono::nanoseconds(
                     callback * quint64(kCallbackFrames) * 1'000'000'000ull / 48'000ull));
-                if (stop.stop_requested()) { break; }
+                if (stop.stopRequested()) { break; }
                 bus->render(kCallbackFrames);
                 ++callback;
             }
@@ -2243,7 +2270,7 @@ private slots:
         }
         const std::optional<double> holdAtEnd = telemetry.jitterHoldMs;
         const std::optional<double> queuedAtEnd = telemetry.reorderQueuedMs;
-        device.request_stop();
+        device.requestStop();
         device.join();
         QCoreApplication::processEvents();
         receiver.stop();
@@ -2385,8 +2412,8 @@ private slots:
         QSignalSpy restarts(&receiver, &RemoteAudioReceiver::restartRequested);
         QVERIFY(receiver.start(kSsrc, 0, RemoteAudioProfile::Lossless));
         bus->setPlayClockForTesting([&clock] { return clock.nsecsElapsed(); });
-        std::jthread device([bus](std::stop_token stop) {
-            while (!stop.stop_requested()) {
+        DeviceThread device([bus](const DeviceThread::StopFlag& stop) {
+            while (!stop.stopRequested()) {
                 bus->renderDue();
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }
@@ -2410,7 +2437,7 @@ private slots:
         const qint64 streamEndFrame = (clock.nsecsElapsed() - bus->playClockOriginNs()) * 48 / 1'000'000;
         QCoreApplication::processEvents();
         const RemoteAudioReceiverTelemetry telemetry = receiver.telemetry();
-        device.request_stop();
+        device.requestStop();
         device.join();
         receiver.stop();
         QStringList dry;
@@ -2484,14 +2511,14 @@ private slots:
         QVERIFY(receiver.start(kSsrc, 0));
         using Clock = std::chrono::steady_clock;
         const auto started = Clock::now();
-        std::jthread device([bus, started](std::stop_token stop) {
+        DeviceThread device([bus, started](const DeviceThread::StopFlag& stop) {
             // Nothing is pulled for the first 400 ms.
             const auto first = started + std::chrono::milliseconds(400);
             quint64 callback = 0;
-            while (!stop.stop_requested()) {
+            while (!stop.stopRequested()) {
                 std::this_thread::sleep_until(first + std::chrono::nanoseconds(
                     callback * 480ull * 1'000'000'000ull / 48'000ull));
-                if (stop.stop_requested()) { break; }
+                if (stop.stopRequested()) { break; }
                 bus->render(480);
                 ++callback;
             }
@@ -2501,7 +2528,7 @@ private slots:
             receiver.submit(packets.at(packet));
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(300));
-        device.request_stop();
+        device.requestStop();
         device.join();
         QCoreApplication::processEvents();
         const bool running = receiver.isRunning();
@@ -2540,12 +2567,12 @@ private slots:
         QVERIFY(receiver.start(kSsrc, 0));
         using Clock = std::chrono::steady_clock;
         const auto started = Clock::now();
-        std::jthread device([bus, started](std::stop_token stop) {
+        DeviceThread device([bus, started](const DeviceThread::StopFlag& stop) {
             quint64 callback = 1;
-            while (!stop.stop_requested()) {
+            while (!stop.stopRequested()) {
                 std::this_thread::sleep_until(started + std::chrono::nanoseconds(
                     callback * 480ull * 1'000'000'000ull / 48'000ull));
-                if (stop.stop_requested()) { break; }
+                if (stop.stopRequested()) { break; }
                 bus->render(480);
                 ++callback;
             }
@@ -2559,7 +2586,7 @@ private slots:
         // 600 ms with nothing at all.
         QTRY_VERIFY_WITH_TIMEOUT(!restarts.isEmpty() || !errors.isEmpty(), 1000);
         QTest::qWait(600 - 500);
-        device.request_stop();
+        device.requestStop();
         device.join();
         QCOMPARE(errors.count(), 0);
         QCOMPARE(restarts.count(), 1);
