@@ -20,6 +20,9 @@
 //               service. J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-27: iPhone app plan Task 29 (R-IOS-16): the answer deadline and
+//               plain words for an older Core, a dial without the relay.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/RendezvousDialer.h"

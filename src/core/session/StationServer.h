@@ -406,6 +406,10 @@
 //   2026-09-27: iPhone plan Task 22 / parity Task 20 (R-IOS-26):
 //               stationFreedvVersion(). J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-27: iPhone app plan Task 29 (R-IOS-16): SwitchableTransport
+//               under every session, session.pathTicket and path.join, the
+//               Task 29 capabilities. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/IceConfiguration.h"

@@ -57,6 +57,10 @@
 //               and sent this window's MON output as monitor-audio, on
 //               change and on each media connection. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-09-27: iPhone app plan Task 29 (R-IOS-16): replaceConnection() and,
+//               in its fix wave, a replacement kept pending until it can
+//               start. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//               Code.
 
 #include "core/session/media/DisplayBudget.h"
 #include "core/session/media/DisplayCodec.h"
@@ -413,6 +417,15 @@ public slots:
     bool replaceConnection();
 
 public:
+    /// iPhone app plan Task 29 fix wave (review Important 1): media follows
+    /// every move of the session. A move marks a replacement pending; it
+    /// starts as soon as it can (the media connection ready, unkeyed, VOX
+    /// disarmed, the Core back on receive), retried every
+    /// kReplaceRetryMs while pending, and again after the Core refused one
+    /// while it was transmitting (at most kMaxReplaceRearms times a move).
+    static constexpr int kReplaceRetryMs = 500;
+    static constexpr int kMaxReplaceRearms = 3;
+    bool replacePending() const;
     /// iPhone app plan Task 29: the media connection's id now, and whether
     /// a replacement is under way (for the window's diagnostics and tests).
     QString mediaConnectionId() const;
@@ -520,6 +533,8 @@ private:
     void receiveReplacementControl(const QJsonObject& payload);
     void promoteReplacement();
     void dropReplacement(const QString& why);
+    void markReplacePending();
+    void tryPendingReplace();
     void retireOldPeer();
 };
 } // namespace NereusSDR

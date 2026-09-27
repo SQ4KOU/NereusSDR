@@ -66,6 +66,12 @@
 //               sends it, and monitor-audio carries this window's MON output
 //               on change and when media is ready. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-09-27: iPhone app plan Task 29 (R-IOS-16): media `replace` with
+//               dual receive (DualPathAudio, RtpDuplicateFilter) when the
+//               session moves; its fix wave follows every move, retrying a
+//               pending replacement until the media connection is ready and
+//               the radio is on receive. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 
 #include "gui/RemoteMediaController.h"
 #include "core/AppSettings.h"
@@ -801,6 +807,10 @@ struct RemoteMediaController::Private {
     QPointer<MediaPeer> retiring;
     QTimer* replaceDeadline = nullptr;
     QTimer* retireTimer = nullptr;
+    // Task 29 fix wave (Important 1): a move not yet followed by media.
+    bool replacePending = false;
+    int replaceRearms = 0;
+    QTimer* replaceRetry = nullptr;
     std::unique_ptr<DualPathAudio> dual;
     QPointer<MediaPeer> dualNew;
     QTimer* dualTimer = nullptr;
@@ -1148,6 +1158,11 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
     connect(d->replaceDeadline, &QTimer::timeout, this, [this] {
         dropReplacement(QStringLiteral("the new audio and display connection did not open"));
     });
+    // Task 29 fix wave (Important 1): a pending replacement is tried until
+    // it can start.
+    d->replaceRetry = new QTimer(this);
+    d->replaceRetry->setInterval(kReplaceRetryMs);
+    connect(d->replaceRetry, &QTimer::timeout, this, &RemoteMediaController::tryPendingReplace);
     d->retireTimer = new QTimer(this);
     d->retireTimer->setSingleShot(true);
     connect(d->retireTimer, &QTimer::timeout, this, &RemoteMediaController::retireOldPeer);
@@ -1465,7 +1480,7 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
             this, &RemoteMediaController::receiveControl);
     // iPhone app plan Task 29: the session moved to a better path; media
     // follows it.
-    connect(client, &StationClient::pathChanged, this, [this] { replaceConnection(); });
+    connect(client, &StationClient::pathChanged, this, &RemoteMediaController::markReplacePending);
     connect(client, &StationClient::streamCtunPinFinished, this,
         [this](int sliceId, quint64 epoch, bool pinned, bool accepted) {
             if (!d->model) { return; }
@@ -2407,6 +2422,9 @@ void RemoteMediaController::stop()
     // draining go with the media session.
     d->replaceDeadline->stop();
     d->retireTimer->stop();
+    d->replacePending = false;
+    d->replaceRearms = 0;
+    d->replaceRetry->stop();
     for (QPointer<MediaPeer>* slot : {&d->replacement, &d->retiring}) {
         if (MediaPeer* other = slot->data()) {
             *slot = nullptr;
@@ -2729,6 +2747,14 @@ void RemoteMediaController::receiveReplacementControl(const QJsonObject& payload
     if (op == QLatin1String("rejected") && payload.value(QStringLiteral("endpointId")).toDouble() == 0
         && payload.value(QStringLiteral("reason")).isString()) {
         dropReplacement(payload.value(QStringLiteral("reason")).toString().left(512));
+        // Task 29 fix wave (Important 1): a Core that went on the air just
+        // as the replacement arrived refused it; try again once it is back
+        // on receive, a few times at most.
+        if (d->replaceRearms < kMaxReplaceRearms) {
+            ++d->replaceRearms;
+            d->replacePending = true;
+            d->replaceRetry->start();
+        }
         return;
     }
     if (op == QLatin1String("replace")
@@ -2783,6 +2809,46 @@ void RemoteMediaController::retireOldPeer()
     }
 }
 
+bool RemoteMediaController::replacePending() const
+{
+    return d->replacePending;
+}
+
+void RemoteMediaController::markReplacePending()
+{
+    d->replacePending = true;
+    d->replaceRearms = 0;
+    tryPendingReplace();
+}
+
+void RemoteMediaController::tryPendingReplace()
+{
+    if (!d->replacePending) {
+        d->replaceRetry->stop();
+        return;
+    }
+    // Media that has gone, or a Core that cannot replace it: nothing to
+    // follow.
+    if (!d->client || !d->client->mediaAvailable()
+        || d->client->capabilities().mediaReplaceVersion < 1) {
+        d->replacePending = false;
+        d->replaceRetry->stop();
+        return;
+    }
+    // One under way: the next move is followed once it finishes.
+    if (d->replacement) {
+        d->replaceRetry->start();
+        return;
+    }
+    if (replaceConnection()) {
+        d->replacePending = false;
+        d->replaceRetry->stop();
+        return;
+    }
+    // Not yet (media not ready, keyed, VOX armed, on the air): again soon.
+    d->replaceRetry->start();
+}
+
 void RemoteMediaController::dropReplacement(const QString& why)
 {
     d->replaceDeadline->stop();
@@ -2831,6 +2897,11 @@ void RemoteMediaController::connectPeer(MediaPeer* peer, quint32 epoch)
             d->establishTimer->stop();
             d->client->noteMediaEstablished(epoch);
             noteMicLine();
+            // Task 29 fix wave (Important 1): a move that came before media
+            // was ready is followed now (after this handler's requests).
+            if (d->replacePending) {
+                QTimer::singleShot(0, this, &RemoteMediaController::tryPendingReplace);
+            }
             if (!d->client->remoteDisplayBudgetLimits()) {
                 qCDebug(lcRemoteMedia)
                     << "Core supplied no aggregate display limits; using per-display subscriptions";

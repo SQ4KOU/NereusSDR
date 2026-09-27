@@ -107,6 +107,9 @@
 //               value only; a rate already saved for the radio wins at start
 //               (applyConfigToSettings). J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-27: iPhone app plan Task 29 (R-IOS-16): the server told
+//               nereusd.conf's `relay` (relayAllowed). J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/daemon/DaemonApp.h"

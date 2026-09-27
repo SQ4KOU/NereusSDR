@@ -63,6 +63,9 @@
 //   2026-09-26: parity Task 19 (R-IOS-25): the record.batch codec.
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-27: iPhone app plan Task 29 (R-IOS-16): path.join and
+//               path.switch. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/SessionMessages.h"

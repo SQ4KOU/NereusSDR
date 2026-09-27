@@ -54,6 +54,9 @@
 //               headphones stream, which then runs) while the device holds
 //               transmit and MON is on. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-09-27: iPhone app plan Task 29 (R-IOS-16): media `replace`: a
+//               second peer, audio sent on both, handed over on a keyframe.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/media/DaemonMediaController.h"

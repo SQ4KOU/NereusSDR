@@ -61,6 +61,7 @@
 #include "core/session/media/OpusAudioCodec.h"
 #include "core/session/media/DualPathAudio.h"
 #include "core/session/media/RtpDuplicateFilter.h"
+#include "core/session/PathRacer.h"
 #include "OperatorWording.h"
 #include "core/settings/SettingsProxy.h"
 #include "fakes/LoopbackTransport.h"
@@ -739,6 +740,105 @@ private slots:
             }
         }
         QCOMPARE(contextsAfter, contextsBefore);
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // Task 29 fix wave (review Important 1): the session moves to a better
+    // path right after it signs in, before its media connection is ready,
+    // as the race's standby does at snapshot.complete. Media follows the
+    // move by itself once it is ready (a replacement kept pending), while
+    // listening, with no silent run over 40 ms and no repeat.
+    void mediaFollowsAMoveThatCameBeforeItWasReady()
+    {
+        Test::RemoteAudioSessionHarness h;
+        RemoteMediaController remoteMedia(&h.client, &h.remote, nullptr);
+        DaemonMediaController daemonMedia(&h.server, &h.station);
+        QSignalSpy moved(&h.client, &StationClient::pathChanged);
+        QSignalSpy handshakes(&h.client, &StationClient::handshakeComplete);
+        QTimer source;
+        source.setInterval(10);
+        source.setTimerType(Qt::PreciseTimer);
+        connect(&source, &QTimer::timeout, &source, [&h] { h.feedMixedTone(); });
+        QTimer speaker;
+        speaker.setInterval(10);
+        speaker.setTimerType(Qt::PreciseTimer);
+        connect(&speaker, &QTimer::timeout, &speaker, [&h] { h.remoteBus->render(480); });
+        source.start();
+        speaker.start();
+        // The better path, ready before the session signs in: a second
+        // connection to the same Core with its hello read. The session
+        // moves there the moment it signs in, before media is ready (the
+        // media controller starts media from the same signal, first).
+        auto* stationB = new Test::LoopbackTransport(QStringLiteral("station B"));
+        auto* clientB = new Test::LoopbackTransport(QStringLiteral("client B"));
+        stationB->linkTo(clientB);
+        QList<QByteArray> onB;
+        const QMetaObject::Connection helloSpy =
+            connect(clientB, &SessionTransport::textReceived, clientB,
+                    [&onB](const QByteArray& wire) { onB.append(wire); });
+        h.server.acceptTransport(stationB);
+        QTRY_VERIFY(!onB.isEmpty());
+        disconnect(helloSpy);
+        QString firstId;
+        bool movedBeforeReady = false;
+        connect(&h.client, &StationClient::handshakeComplete, &h.client, [&] {
+            firstId = remoteMedia.mediaConnectionId();
+            movedBeforeReady = h.client.moveSessionForTest(clientB, PathRacer::ThisNetwork);
+        });
+        connect(&h.client, &StationClient::pathChanged, &h.client, [&] {
+            movedBeforeReady = movedBeforeReady
+                && remoteMedia.audioStatus().state != RemoteAudioStatus::State::Playing;
+        });
+        h.connectSession();
+        QVERIFY(h.client.capabilities().mediaReplaceVersion >= 1);
+        QVERIFY(!firstId.isEmpty());
+        QTRY_COMPARE_WITH_TIMEOUT(moved.size(), 1, 10000);
+        QVERIFY(movedBeforeReady);
+
+        // Media follows: a new connection takes over once the first was
+        // ready, and nothing stays pending.
+        QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.audioStatus().state
+                                     == RemoteAudioStatus::State::Playing, 15000);
+        QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.mediaConnectionId() != firstId
+                                     && !remoteMedia.replacingConnection(), 20000);
+        QVERIFY(!remoteMedia.replacePending());
+        // Past the old connection's drain, with audio still coming.
+        const int doneAt = h.remoteBus->heard.size() / 2;
+        QTRY_VERIFY_WITH_TIMEOUT(h.remoteBus->heard.size() / 2
+                                     >= doneAt + 48 * (DaemonMediaController::kReplaceDrainMs
+                                                       + 1000),
+                                 15000);
+        const RemoteAudioReceiverTelemetry after = remoteMedia.audioTelemetry();
+        source.stop();
+        speaker.stop();
+        QVERIFY(remoteMedia.duplicateAudioDropped() > 0);
+        QCOMPARE(after.duplicatePackets, quint64(0));
+        // From the first tone heard on, no silent run over 40 ms.
+        const QVector<float>& heard = h.remoteBus->heard;
+        int first = -1;
+        int silentRun = 0;
+        int longest = 0;
+        for (int frame = 0; (frame + 480) * 2 <= heard.size(); frame += 480) {
+            double energy = 0.0;
+            for (int i = 0; i < 480; ++i) {
+                const double l = heard.at((frame + i) * 2);
+                energy += l * l;
+            }
+            const bool silent = energy / 480.0 < 1e-6;
+            if (first < 0) {
+                if (!silent) {
+                    first = frame;
+                }
+                continue;
+            }
+            silentRun = silent ? silentRun + 1 : 0;
+            longest = std::max(longest, silentRun);
+        }
+        QVERIFY(first >= 0);
+        QVERIFY2(longest <= 4, qPrintable(QStringLiteral("silent for %1 ms").arg(longest * 10)));
+        // One sign-in, the session moved once.
+        QCOMPARE(handshakes.size(), 1);
+        QCOMPARE(h.client.pathSwitches(), 1);
         h.client.disconnectFromStation(QStringLiteral("test complete"));
     }
 };

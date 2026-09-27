@@ -272,6 +272,10 @@
 //                subscribed with stationFreedvVersion 1, and the freedv.*
 //                verbs. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                Claude Code.
+//   2026-09-27: iPhone app plan Task 29 (R-IOS-16): the path race, moving
+//               the session to a better path (session.pathTicket,
+//               path.join), the attempt record's service path. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
