@@ -1275,6 +1275,10 @@ const QList<AppSideReason>& appSideReasons()
         {"src/core/session/StationPairingClient.cpp", "",
          "the app's end of pairing: its own reasons are shown through OperatorReasonText"},
         {"src/core/session/StationPairingClient.h", "", "the app's end of pairing"},
+        // iPhone app plan Task 28 fix wave (R-IOS-16): the saved Core's own
+        // rule for connecting from anywhere, which the desktop shows as is.
+        {"src/core/session/RemoteStationOptions.h", "serviceConnectRefusal",
+         "a desktop's own reason for not offering to connect from anywhere"},
         {"src/core/session/SessionMessages.cpp", "", "encodes a reason it is given"},
         {"src/core/session/SessionMessages.h", "", "declares the messages"},
         {"src/core/session/SessionCommandDispatcher.h", "", "declares emitResult"},
