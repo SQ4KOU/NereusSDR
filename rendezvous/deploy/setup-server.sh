@@ -27,7 +27,7 @@
 #   RV_RELAY_HOST6           the IPv6-only relay name      rv6.nereussdr.com
 #   RV_PUBLIC_IPV4           the server's public IPv4      found on the host
 #   RV_PUBLIC_IPV6           the server's public IPv6      found on the host
-#   RV_RELAY_SLOTS           relays at once (total-quota)  64
+#   RV_RELAY_SLOTS           relays at once (total-quota)  128
 #   RV_TRANSFER_GB_PER_MONTH the data-use report's         1000
 #                            threshold, GB a month (it
 #                            caps nothing)
@@ -119,10 +119,11 @@ readonly CADDY_KEYRING="/usr/share/keyrings/caddy-stable-archive-keyring.gpg"
 readonly CADDY_SOURCES="/etc/apt/sources.list.d/caddy-stable.list"
 
 # How many relays (allocations) coturn serves at once: its total-quota.
-# One session relayed at both ends takes 2, so 64 is about 32 sessions
-# relayed at one end or 16 at both (rendezvous document section 8). The
-# one number to change for the relay's size.
-readonly DEFAULT_RELAY_SLOTS=64
+# A session runs two ICE connections (control and media), each taking up
+# to 2 relays at an end that relays, so 4 at one end and 8 at both: 128 is
+# about 32 sessions relayed at one end or 16 at both (rendezvous document
+# section 8). The one number to change for the relay's size.
+readonly DEFAULT_RELAY_SLOTS=128
 # The data-use report's threshold, in GB (10^9 bytes) a month: a warning
 # line in the journal once the server has sent more than this in the
 # calendar month. It caps nothing.

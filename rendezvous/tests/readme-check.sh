@@ -47,7 +47,7 @@ fail() { printf 'not ok - %s\n' "$*" >&2; exit 1; }
 work="$(mktemp -d "${TMPDIR:-/tmp}/nereus-readme-check.XXXXXX")"
 # A deploy key made for this run only.
 ssh-keygen -q -t ed25519 -N "" -C readme-check -f "${work}/deploy"
-test_settings="export RV_HOST=rv.test RV_RELAY_HOST4=rv4.test RV_RELAY_HOST6=rv6.test RV_RELAY_SLOTS=64 RV_TRANSFER_GB_PER_MONTH=1000 RV_DEPLOY_KEY='$(cat "${work}/deploy.pub")'"
+test_settings="export RV_HOST=rv.test RV_RELAY_HOST4=rv4.test RV_RELAY_HOST6=rv6.test RV_RELAY_SLOTS=128 RV_TRANSFER_GB_PER_MONTH=1000 RV_DEPLOY_KEY='$(cat "${work}/deploy.pub")'"
 readonly test_settings
 cleanup() {
     docker rm -f "$server" "$client" >/dev/null 2>&1 || true
@@ -212,7 +212,7 @@ async def meet(uri):
     print(json.dumps(answer["turn"]))
 async def go():
     # Two Cores, the four relay URLs tried two per Core: the relays of each
-    # Core stay allocated until they time out, well within user-quota 4.
+    # Core stay allocated until they time out, well within user-quota 8.
     for _ in range(2):
         await meet("wss://rv.test/")
 asyncio.run(go())

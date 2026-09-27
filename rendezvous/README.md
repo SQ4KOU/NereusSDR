@@ -156,7 +156,7 @@ this key):
 export RV_HOST=rv.example.org
 export RV_RELAY_HOST4=rv4.example.org
 export RV_RELAY_HOST6=rv6.example.org
-export RV_RELAY_SLOTS=64
+export RV_RELAY_SLOTS=128
 export RV_TRANSFER_GB_PER_MONTH=1000
 export RV_DEPLOY_KEY='ssh-ed25519 AAAA...your key... you@computer'
 ```
@@ -273,27 +273,28 @@ but it needs care, which is why nereussdr.com gives it a server of its own:
 
 ## Limits
 
-The relay is sized by slots: `RV_RELAY_SLOTS` (64 by default) is how many
+The relay is sized by slots: `RV_RELAY_SLOTS` (128 by default) is how many
 relays (coturn allocations) run at once. From it:
 
-- `total-quota` = the slots: **64**. One relayed session takes 2 when only
-  one end needs the relay and 4 when both do (each end may relay in both
-  address families), so 64 slots carry about 32 sessions relayed at one end
-  or 16 relayed at both. One more is refused (and NereusSDR tries the next
-  way to connect).
+- `total-quota` = the slots: **128**. A session runs two connections
+  (control and media) and each may relay in both address families, so one
+  relayed session takes 4 when only one end needs the relay and 8 when both
+  do: 128 slots carry about 32 sessions relayed at one end or 16 relayed at
+  both. One more is refused (and NereusSDR tries the next way to connect).
 - `max-bps` = 80000 bytes a second (640 kbit/s) each way for each relay, a
   little above the largest session NereusSDR sends (four panadapters and the
   microphone, about 520 kbit/s).
-- `bps-capacity` = slots x `max-bps` = 64 x 80000 = **5120000 bytes a
+- `bps-capacity` = slots x `max-bps` = 128 x 80000 = **10240000 bytes a
   second**. coturn reserves `max-bps` of it for every relay while it lives,
   so this keeps bandwidth from refusing a relay before the slots run out.
-  With every slot full at full rate the relay sends at most 5.12 MB a second
-  (about 41 Mbit/s), which would be about 13 TB in 30 days. That is the
+  With every slot full at full rate the relay sends at most 10.24 MB a
+  second (about 82 Mbit/s), which would be about 27 TB in 30 days. That is the
   ceiling, not the expectation: most sessions go direct and cost the server
   nothing, and a relayed session is usually far below its cap.
-- `user-quota` = 4 relays for each Core (both ends of one session use the
-  Core's id, and each end may take one per address family), so one Core
-  cannot take the whole relay.
+- `user-quota` = 8 relays for each Core (both ends of one session use the
+  Core's id, and each end may take one per address family on each of the
+  session's two connections), so one session relayed at both ends fits and
+  one Core cannot take the whole relay.
 
 Transfer is watched, not capped: see "Data use". To change the size, set
 `RV_RELAY_SLOTS` and run `setup-server.sh` again (it restarts coturn, which
