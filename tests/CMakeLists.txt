@@ -188,6 +188,13 @@ function(nereus_add_test name)
     # Skipping add_test() means ctest never sees the name.  A stable
     # MD5 of the test name keeps bucket assignment deterministic
     # across runs and across PRs.
+    #
+    # So a set_tests_properties(), set_property(TEST ...) or
+    # get_test_property() naming a test made here must sit inside
+    # if(TEST <name>): in the other shards the test does not exist and
+    # CMake stops the configure (PR #327, all four Linux shards).
+    # scripts/verify-test-registration.py checks it in the pre-commit hook
+    # and the CI compliance job.
     if(NEREUS_TEST_SHARDS GREATER 0)
         string(MD5 _hash "${name}")
         # Take the first 4 hex chars (16-bit) — plenty of entropy for
@@ -409,7 +416,9 @@ if(TARGET wdsp_static)
     nereus_add_test(tst_dsp_control_receive EXTRA_LABELS core REALTIME)
     # Its first OpenChannel plans FFTs with no wisdom (about 30 s alone, over
     # 100 s under a loaded build), so the default 120 s is too close.
-    set_tests_properties(tst_dsp_control_receive PROPERTIES TIMEOUT 900)
+    if(TEST tst_dsp_control_receive)
+        set_tests_properties(tst_dsp_control_receive PROPERTIES TIMEOUT 900)
+    endif()
     # R-R3-39 (Task 32): transmit DSP off the event loop. A real TX channel
     # on the transmit lane keeps the rf_delay keying order; twenty MOX, TUNE
     # and two-tone cycles with the PureSignal poll make no WDSP call on the
@@ -418,7 +427,9 @@ if(TARGET wdsp_static)
     # holds the event loop's 10 ms timer to a wall-clock bound. Its first
     # OpenChannel plans FFTs with no wisdom, hence the 900 s timeout.
     nereus_add_test(tst_dsp_control_transmit EXTRA_LABELS core REALTIME)
-    set_tests_properties(tst_dsp_control_transmit PROPERTIES TIMEOUT 900)
+    if(TEST tst_dsp_control_transmit)
+        set_tests_properties(tst_dsp_control_transmit PROPERTIES TIMEOUT 900)
+    endif()
     # Task 33 (R-IOS-03): stopping transmission at once. With both lanes
     # held for 200 ms, stopTransmitNow returns within 2 ms with the RF gate
     # shut and MOX off at the connection before either lane is free, and no
@@ -426,7 +437,9 @@ if(TARGET wdsp_static)
     # (Thetis's order). REALTIME: wall-clock bounds on real channels; the
     # first OpenChannel plans FFTs with no wisdom, hence the 900 s timeout.
     nereus_add_test(tst_stop_transmit_now EXTRA_LABELS core REALTIME)
-    set_tests_properties(tst_stop_transmit_now PROPERTIES TIMEOUT 900)
+    if(TEST tst_stop_transmit_now)
+        set_tests_properties(tst_stop_transmit_now PROPERTIES TIMEOUT 900)
+    endif()
     if(NOT WIN32)
         # R-R3-41: linux_port.c's thread-start hook fires once per channel
         # worker and flush thread, on that thread, with its kind and channel.
@@ -445,7 +458,9 @@ if(TARGET wdsp_static)
         # processor time, so ctest never runs it beside another test that
         # would take that processor away.
         nereus_add_test(tst_receiver_dsp_load_frames EXTRA_LABELS core REALTIME)
-        set_tests_properties(tst_receiver_dsp_load_frames PROPERTIES RUN_SERIAL TRUE)
+        if(TEST tst_receiver_dsp_load_frames)
+            set_tests_properties(tst_receiver_dsp_load_frames PROPERTIES RUN_SERIAL TRUE)
+        endif()
     endif()
     nereus_add_test(tst_wdsp210_cfc_compat WdspCfcProbe.c EXTRA_LABELS core)
     set_source_files_properties(WdspCfcProbe.c PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
@@ -470,7 +485,9 @@ if(TARGET wdsp_static)
     nereus_add_test(tst_tx_analyzer_skirt EXTRA_LABELS core REALTIME)
     target_include_directories(tst_tx_analyzer_skirt PRIVATE ${FFTW3_INCLUDE_DIRS})
     target_compile_definitions(tst_tx_analyzer_skirt PRIVATE WDSP_STATIC_BUILD)
-    set_tests_properties(tst_tx_analyzer_skirt PROPERTIES TIMEOUT 900)
+    if(TEST tst_tx_analyzer_skirt)
+        set_tests_properties(tst_tx_analyzer_skirt PROPERTIES TIMEOUT 900)
+    endif()
 endif()
 
 # ── Issue #75: receiver leak across disconnect/reconnect ──────────────────
@@ -8311,7 +8328,9 @@ nereus_add_test(tst_remote_audio_clock)
 # one hour, not both; on a Linux aarch64 host both hours took 347 s alone
 # and were aborted by that watchdog, and 267 s at the end of a full run.
 # TIMEOUT 700 is about twice the slowest (Linux, alone) measurement.
-set_tests_properties(tst_remote_audio_clock PROPERTIES TIMEOUT 700 PROCESSORS 2)
+if(TEST tst_remote_audio_clock)
+    set_tests_properties(tst_remote_audio_clock PROPERTIES TIMEOUT 700 PROCESSORS 2)
+endif()
 nereus_add_test(tst_daemon_audio_session fakes/LoopbackTransport.cpp)
 # R-R3-06/07/09: the 48 kHz mixed-audio contract through live radio rate,
 # mode, band and slice-count changes, on a RadioModel genuinely connected to
@@ -8326,7 +8345,9 @@ nereus_add_test(tst_daemon_audio_transitions
 # Measured 2026-09-23: about 42 s alone at load 4.6. The default 120 s is
 # under three times that, too close for a loaded -jN run; TIMEOUT 300 is
 # about seven times the measurement.
-set_tests_properties(tst_daemon_audio_transitions PROPERTIES TIMEOUT 300)
+if(TEST tst_daemon_audio_transitions)
+    set_tests_properties(tst_daemon_audio_transitions PROPERTIES TIMEOUT 300)
+endif()
 nereus_add_test(tst_daemon_telemetry fakes/LoopbackTransport.cpp)
 # R-R3-32/33: Core host sampler against fixture procfs/sysfs trees.
 nereus_add_test(tst_host_telemetry_sampler EXTRA_LABELS core)
@@ -8339,7 +8360,9 @@ nereus_add_test(tst_remote_audio_receiver REALTIME)
 # 1269) while it passed every run alone. About 35 s. RUN_SERIAL (as for
 # tst_receiver_dsp_load_frames, R-R3-40): ctest never runs it beside another
 # test that would take the worker's processor away.
-set_tests_properties(tst_remote_audio_receiver PROPERTIES RUN_SERIAL TRUE)
+if(TEST tst_remote_audio_receiver)
+    set_tests_properties(tst_remote_audio_receiver PROPERTIES RUN_SERIAL TRUE)
+endif()
 # REALTIME: its lossless case measures the stream's rate over a wall-clock
 # window, and its delay cases compare the measured delay with the heard one
 # on the wall clock within half a millisecond.
@@ -8349,7 +8372,9 @@ nereus_add_test(tst_remote_audio_session fakes/LoopbackTransport.cpp REALTIME)
 # through WDSP rmatch), the Core opening no VAX device, the per-Core
 # choice, and end to end against the in-process Core, Opus and lossless.
 nereus_add_test(tst_remote_vax_feeder fakes/LoopbackTransport.cpp)
-set_tests_properties(tst_remote_vax_feeder PROPERTIES TIMEOUT 300)
+if(TEST tst_remote_vax_feeder)
+    set_tests_properties(tst_remote_vax_feeder PROPERTIES TIMEOUT 300)
+endif()
 # R-R3-23: the audio-context wire codec in both negotiated shapes.
 nereus_add_test(tst_remote_audio_context)
 # R-R3-01/08: the spectrum-context wire codec in both negotiated shapes.
@@ -8388,7 +8413,9 @@ nereus_add_test(tst_remote_media_controller
 # R-R3-21: its real-session cases take about 115 s alone on a quiet Mac
 # (repeatedAudioRestartsBackOff waits out the 1, 2, 4, 4 s retry backoff),
 # too close to the default 120 s, and a loaded machine stretches them.
-set_tests_properties(tst_remote_media_controller PROPERTIES TIMEOUT 300)
+if(TEST tst_remote_media_controller)
+    set_tests_properties(tst_remote_media_controller PROPERTIES TIMEOUT 300)
+endif()
 # Parity Tasks 27-29 fix wave (R-R3-49): the audio functions (the test's
 # kAudioFunctions) run as their own ctest entry, the same binary with
 # NEREUS_REMOTE_MEDIA_GROUP=audio, and the first entry runs the rest, so
