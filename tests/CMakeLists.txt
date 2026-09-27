@@ -8207,6 +8207,43 @@ nereus_add_test(tst_remote_spectrum_render)
 # subscription lifecycle, stale context rejection, and teardown.
 nereus_add_test(tst_remote_media_controller
     fakes/LoopbackTransport.cpp)
+# Parity Tasks 27-29 fix wave (R-R3-49): the audio functions (the test's
+# kAudioFunctions) run as their own ctest entry, the same binary with
+# NEREUS_REMOTE_MEDIA_GROUP=audio, and the first entry runs the rest, so
+# neither carries the other's time against the 120 s limit (the whole run
+# reached 110 to 117 s under load). The second entry takes the first's
+# labels, limit and environment, with its own home.
+if(TEST tst_remote_media_controller)
+    get_test_property(tst_remote_media_controller LABELS _rmc_labels)
+    get_test_property(tst_remote_media_controller TIMEOUT _rmc_timeout)
+    get_test_property(tst_remote_media_controller ENVIRONMENT_MODIFICATION _rmc_env_mod)
+    add_test(NAME tst_remote_media_controller_audio COMMAND tst_remote_media_controller)
+    set_tests_properties(tst_remote_media_controller_audio PROPERTIES
+        LABELS "${_rmc_labels}"
+        TIMEOUT ${_rmc_timeout})
+    if(_rmc_env_mod)
+        set_property(TEST tst_remote_media_controller_audio
+            PROPERTY ENVIRONMENT_MODIFICATION ${_rmc_env_mod})
+    endif()
+    if(NEREUS_TESTS_OFFSCREEN AND CMAKE_VERSION VERSION_LESS 3.22)
+        set_property(TEST tst_remote_media_controller_audio APPEND PROPERTY ENVIRONMENT
+            "QT_QPA_PLATFORM=offscreen")
+    endif()
+    if(NOT WIN32)
+        set(_rmc_home "${CMAKE_CURRENT_BINARY_DIR}/test-home/tst_remote_media_controller_audio")
+        file(MAKE_DIRECTORY "${_rmc_home}")
+        set_property(TEST tst_remote_media_controller_audio APPEND PROPERTY ENVIRONMENT
+            "HOME=${_rmc_home}")
+        if(APPLE)
+            set_property(TEST tst_remote_media_controller_audio APPEND PROPERTY ENVIRONMENT
+                "CFFIXED_USER_HOME=${_rmc_home}")
+        endif()
+    endif()
+    set_property(TEST tst_remote_media_controller APPEND PROPERTY ENVIRONMENT
+        "NEREUS_REMOTE_MEDIA_GROUP=rest")
+    set_property(TEST tst_remote_media_controller_audio APPEND PROPERTY ENVIRONMENT
+        "NEREUS_REMOTE_MEDIA_GROUP=audio")
+endif()
 
 # iPhone app plan, desktop remote transmit (R-IOS-13, R-R3-42): the window's
 # side of the transmit verbs (copies, epochs, releases) on its own.

@@ -13,7 +13,16 @@
 //               pan's transmit window, and hands the Core's transmit context
 //               and frames on without drawing them as receive. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26: parity Tasks 27-29 fix wave (R-R3-49): the test runs as two
+//               ctest entries, the audio functions (kAudioFunctions) in
+//               tst_remote_media_controller_audio and the rest in
+//               tst_remote_media_controller (NEREUS_REMOTE_MEDIA_GROUP), so
+//               neither carries the other's time against the 120 s limit;
+//               run by hand with no group, it runs everything. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 #include <QTest>
+#include <QApplication>
+#include <QMetaMethod>
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QLabel>
@@ -6628,5 +6637,90 @@ private slots:
         QVERIFY2(OperatorWording::isPlain(shown), qPrintable(shown));
     }
 };
-QTEST_MAIN(TestRemoteMediaController)
+
+namespace {
+
+// The audio functions: the speakers, headphones, lossless trial and the
+// microphone uplink (each starts real audio and a real DTLS/SRTP link, and
+// together they take about half the run). NEREUS_REMOTE_MEDIA_GROUP=audio
+// runs exactly these; =rest runs every other test function; unset runs
+// everything. A name here that is not a test function stops the run, so a
+// rename cannot quietly drop a test from both entries.
+const QStringList kAudioFunctions{
+    QStringLiteral("playsOnTheSpeakerFormatThisComputerChose"),
+    QStringLiteral("speakerLossPersistsAcrossMuteDeviceChangeAndDisabledContext"),
+    QStringLiteral("retryClearsTheProblemOnlyOnceTheNewContextPlays"),
+    QStringLiteral("lateFaultFromAnEndedSessionChangesNothing"),
+    QStringLiteral("minorSevenCorePlaysWithoutCodecDetail"),
+    QStringLiteral("coreReasonsShowAsCoreCouldNotStartAndRadioOffline"),
+    QStringLiteral("losslessFallsBackToOpusWhenTheNetworkCannotCarryIt"),
+    QStringLiteral("retiredReceiverStreamStopsWithItsReasonAndDoesNotLoop"),
+    QStringLiteral("losslessTrialCountsEveryLosslessStreamAndFallsBackOnce"),
+    QStringLiteral("losslessRefusedByTheCoreKeepsOpusAndSaysWhy"),
+    QStringLiteral("losslessTrialCountsTheHeadphonesMixAndFallsBackOnce"),
+    QStringLiteral("headphonesFailureIsReportedAndLeavesTheSpeakersPlaying"),
+    QStringLiteral("olderCoreCannotSendTheHeadphonesMixAndSaysSo"),
+    QStringLiteral("micLineOnlyWithACoreThatTakesTheMicrophone"),
+    QStringLiteral("micUplinkRunsOnlyWhileTransmittingOrVoxArmed"),
+    QStringLiteral("microphoneAndProgramReachTheCoresRing"),
+    QStringLiteral("headphonesWordingIsPlain"),
+};
+
+// The test functions QtTest would run: private slots with no arguments,
+// other than the four fixtures and the _data functions.
+QStringList testFunctions(const QMetaObject* meta)
+{
+    QStringList names;
+    for (int i = meta->methodOffset(); i < meta->methodCount(); ++i) {
+        const QMetaMethod method = meta->method(i);
+        const QString name = QString::fromLatin1(method.name());
+        if (method.methodType() != QMetaMethod::Slot
+            || method.access() != QMetaMethod::Private || method.parameterCount() != 0
+            || name.endsWith(QStringLiteral("_data"))
+            || name == QStringLiteral("initTestCase") || name == QStringLiteral("cleanupTestCase")
+            || name == QStringLiteral("init") || name == QStringLiteral("cleanup")) {
+            continue;
+        }
+        names.append(name);
+    }
+    return names;
+}
+
+} // namespace
+
+int main(int argc, char** argv)
+{
+    QApplication app(argc, argv);
+    app.setAttribute(Qt::AA_Use96Dpi, true);
+    TestRemoteMediaController test;
+    QTEST_SET_MAIN_SOURCE_PATH
+    QStringList arguments = app.arguments();
+    const QString group = qEnvironmentVariable("NEREUS_REMOTE_MEDIA_GROUP");
+    // A run that names its own functions (or options) runs as asked.
+    if (!group.isEmpty() && arguments.size() == 1) {
+        const QStringList all = testFunctions(test.metaObject());
+        for (const QString& name : kAudioFunctions) {
+            if (!all.contains(name)) {
+                qCritical("kAudioFunctions names %s, which is not a test function",
+                          qPrintable(name));
+                return 1;
+            }
+        }
+        if (group == QStringLiteral("audio")) {
+            arguments += kAudioFunctions;
+        } else if (group == QStringLiteral("rest")) {
+            for (const QString& name : all) {
+                if (!kAudioFunctions.contains(name)) {
+                    arguments += name;
+                }
+            }
+        } else {
+            qCritical("NEREUS_REMOTE_MEDIA_GROUP must be audio or rest, not %s",
+                      qPrintable(group));
+            return 1;
+        }
+    }
+    return QTest::qExec(&test, arguments);
+}
+
 #include "tst_remote_media_controller.moc"
