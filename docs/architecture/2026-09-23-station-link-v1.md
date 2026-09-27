@@ -836,6 +836,7 @@ change shows as surface drift and as a change to this table.
 | `dspInfoVersion` | 1 |
 | `recordStreamVersion` | 1 |
 | `stationRadiosVersion` | 0 |
+| `controlChannelVersion` | 1 |
 | `sessionHolderVersion` | 1 |
 | `remoteTxVersion` | 1 |
 | `txStateVersion` | 2 |
@@ -1139,7 +1140,22 @@ When a feature is off, its version is 0:
   choice. It never picks the first radio found. On a Core that sends 0 or
   no entry a window shows This Core's Change radio disabled with "This
   Core does not let this app change its radio. Updating the Core may
-  help.".
+  help.". It is followed by `controlChannelVersion`.
+- `controlChannelVersion` (the iPhone app plan's Task 28 fix wave,
+  R-IOS-16): sent only at agreed minor 11, after `stationRadiosVersion` in
+  the minor-11 block (`sessionHolderVersion` and the remote transmit
+  entries follow it), and 1 on a Core with a bound certificate (section
+  3.4). At 1 the Core answers an introduction through the rendezvous with
+  this link over a data channel (section 20). A device records the value
+  with the paired Core at each sign-in and offers connecting from anywhere
+  only to a Core that sent 1; to a Core that sent 0 or no entry it shows
+  that control disabled with "Update the Core to reach it from anywhere.",
+  since an older Core leaves the device waiting out the whole attempt
+  (`RendezvousDialer::kDialDeadlineMs`) with no reason. The rendezvous
+  registration does not carry it (that would change the rendezvous
+  version). A device that has had no session with the Core yet (one that
+  paired through a mailbox) has no value recorded and tries; its first
+  session records it.
 
 - `sessionHolderVersion`: sent only at agreed minor 11, last, and only to
   a peer whose hello declared `sessionHolder` 1 with `deviceAuth` 1; any
@@ -1342,12 +1358,13 @@ older window sees only the values it was built for.
 | 56 | `dspInfoVersion` | `i64` |
 | 57 | `recordStreamVersion` | `i64` |
 | 58 | `stationRadiosVersion` | `i64` |
-| 59 | `sessionHolderVersion` | `i64` |
-| 60 | `remoteTxVersion` | `i64` |
-| 61 | `txRefusalCode` | `utf8` |
-| 62 | `txRefusalReason` | `utf8` |
-| 63 | `txRefusalFix` | `utf8` |
-| 64 | `txStateVersion` | `i64` |
+| 59 | `controlChannelVersion` | `i64` |
+| 60 | `sessionHolderVersion` | `i64` |
+| 61 | `remoteTxVersion` | `i64` |
+| 62 | `txRefusalCode` | `utf8` |
+| 63 | `txRefusalReason` | `utf8` |
+| 64 | `txRefusalFix` | `utf8` |
+| 65 | `txStateVersion` | `i64` |
 
 <!-- /surface -->
 

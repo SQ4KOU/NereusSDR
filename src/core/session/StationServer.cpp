@@ -530,6 +530,12 @@
 //               privateKeyPemPath() and sessionIceConfiguration(). J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-26: Task 28 fix wave (R-IOS-16): acceptIntroducedTransport()
+//               (no pairing, device key only, one source's handshake cap,
+//               the introduction to the limits), media's relay only on a
+//               relayed control path, controlChannelVersion. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -7056,6 +7062,15 @@ int StationServer::recordStreamVersion() const
         : 0;
 }
 
+int StationServer::controlChannelVersion() const
+{
+    // R-IOS-16 (Task 28 fix wave, Important 5): a Core answers an
+    // introduction with a control channel whose DTLS certificate its
+    // identity key binds (link section 20); without a binding it has none
+    // to offer.
+    return m_certBinding.isEmpty() ? 0 : 1;
+}
+
 int StationServer::stationRadiosVersion() const
 {
     // R-IOS-18 / R-R3-49 (parity Task 21): only a Core that chooses its own
@@ -7349,6 +7364,10 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             caps.recordStreamVersion = recordStreamVersion();
             // R-IOS-18 / R-R3-49 (parity Task 21): the Core's radio choice.
             caps.stationRadiosVersion = stationRadiosVersion();
+            // R-IOS-16 (Task 28 fix wave, Important 5): the control
+            // session over a data channel through the remote access
+            // service, which needs the bound certificate.
+            caps.controlChannelVersion = controlChannelVersion();
             // iPhone app Task 71 (ruling 10.1): several devices at once, for
             // a peer that declared sessionHolder with deviceAuth; any other
             // peer is sent no entry, so its capabilities are today's.

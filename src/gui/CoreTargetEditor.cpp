@@ -114,6 +114,9 @@ SavedCoreTarget CoreTargetEditor::target() const
         || after.fingerprint != before.fingerprint || after.allowUnpinned != before.allowUnpinned
         || after.identityFingerprint != before.identityFingerprint) {
         result.connection.cachedAddresses.clear();
+        // Task 28 fix wave: what the old Core declared says nothing of the
+        // new one.
+        result.connection.controlChannelVersion = -1;
     }
     return result;
 }

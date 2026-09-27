@@ -16,6 +16,11 @@
 // iPhone app plan Task 27 (R-IOS-16), 2026-09-26: `lastAddresses` on a V2
 // record, the Core's last good addresses (rememberAddress()). J.J. Boyd
 // (KG4VCF), AI-assisted via Anthropic Claude Code.
+//
+// iPhone app plan Task 28 fix wave (R-IOS-16), 2026-09-26:
+// `controlChannelVersion` on a V2 record, what the Core declared at the last
+// sign-in (rememberControlChannelVersion()); absent until then. J.J. Boyd
+// (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "gui/CoreTargetStore.h"
@@ -173,6 +178,11 @@ QJsonObject toJson(const SavedCoreTarget& target, int version)
             object.insert(QStringLiteral("lastAddresses"),
                           QJsonArray::fromStringList(target.connection.cachedAddresses));
         }
+        // Task 28 fix wave: absent until a sign-in recorded it.
+        if (target.connection.controlChannelVersion >= 0) {
+            object.insert(QStringLiteral("controlChannelVersion"),
+                          target.connection.controlChannelVersion);
+        }
     }
     return object;
 }
@@ -278,6 +288,17 @@ bool parseDocument(const QString& text, int expectedVersion, QList<SavedCoreTarg
                     }
                     target.connection.cachedAddresses.append(address.toString());
                 }
+            }
+            // Task 28 fix wave: optional; a whole number, at least 0.
+            const QJsonValue channel = object.value(QStringLiteral("controlChannelVersion"));
+            if (!channel.isUndefined()) {
+                const double value = channel.toDouble(-1.0);
+                if (!channel.isDouble() || value < 0.0 || value > 65535.0
+                    || value != static_cast<double>(static_cast<int>(value))) {
+                    setError(error, QStringLiteral("Saved Core targets document has an invalid record."));
+                    return false;
+                }
+                target.connection.controlChannelVersion = static_cast<int>(value);
             }
         }
         parsed.append(target);
@@ -452,6 +473,24 @@ bool CoreTargetStore::rememberAddress(const QString& id, const QString& url, QSt
     while (addresses.size() > RemoteStationOptions::kMaxCachedAddresses) {
         addresses.removeLast();
     }
+    return upsert(updated, error);
+}
+
+bool CoreTargetStore::rememberControlChannelVersion(const QString& id, int version,
+                                                   QString* error)
+{
+    const std::optional<SavedCoreTarget> found = target(id);
+    if (!found) {
+        setError(error, QStringLiteral("Saved Core target was not found."));
+        return false;
+    }
+    const int recorded = std::max(0, version);
+    if (found->connection.controlChannelVersion == recorded) {
+        clearError(error);
+        return true;
+    }
+    SavedCoreTarget updated = *found;
+    updated.connection.controlChannelVersion = recorded;
     return upsert(updated, error);
 }
 

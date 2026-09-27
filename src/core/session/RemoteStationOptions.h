@@ -33,6 +33,10 @@
 //                                    the Core's last good addresses.
 //                                    AI-assisted via Anthropic Claude
 //                                    Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  iPhone app plan Task 28 fix wave
+//                                    (R-IOS-16): the Core's recorded
+//                                    controlChannelVersion. AI-assisted
+//                                    via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -76,6 +80,31 @@ struct RemoteStationOptions {
     /// reconnect never needs the remote access service.
     static constexpr int kMaxCachedAddresses = 4;
     QStringList cachedAddresses;
+
+    /// iPhone app plan Task 28 fix wave (R-IOS-16; the safety review's
+    /// Important 5): the controlChannelVersion the Core sent at this
+    /// computer's last sign-in, or -1 before any (a Core paired through a
+    /// mailbox has had no session yet). Connecting from anywhere is offered
+    /// to a Core that sent 1 or has none recorded, and refused with
+    /// kUpdateCoreForServiceReason to one that sent 0
+    /// (serviceConnectRefusal()).
+    int controlChannelVersion = -1;
+    static constexpr const char* kUpdateCoreForServiceReason =
+        "Update the Core to reach it from anywhere.";
+    /// Why connecting through the remote access service is not offered for
+    /// this Core, in plain words, or empty when it is: a Core this
+    /// computer has not paired with (it is introduced by its identity key),
+    /// or one whose last session declared no control channel.
+    QString serviceConnectRefusal() const
+    {
+        if (identityFingerprint.isEmpty()) {
+            return QStringLiteral("Pair with the Core to reach it from anywhere.");
+        }
+        if (controlChannelVersion == 0) {
+            return QString::fromLatin1(kUpdateCoreForServiceReason);
+        }
+        return QString();
+    }
 
     /// True when this process should run as a remote client.
     bool isRemote() const { return !url.isEmpty(); }

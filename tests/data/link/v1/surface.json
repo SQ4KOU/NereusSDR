@@ -292,6 +292,11 @@
         },
         {
             "kind": "i64",
+            "name": "controlChannelVersion",
+            "value": 1
+        },
+        {
+            "kind": "i64",
             "name": "sessionHolderVersion",
             "value": 1
         },

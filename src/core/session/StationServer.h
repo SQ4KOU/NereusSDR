@@ -1020,6 +1020,12 @@ public:
     // station.rescanRadios, station.setRadioModel and station.forgetRadio
     // verbs; 0 otherwise.
     int stationRadiosVersion() const;
+    // R-IOS-16 (iPhone app plan Task 28 fix wave, the safety review's
+    // Important 5): controlChannelVersion. 1 when the Core has a bound
+    // certificate, so it can answer an introduction through the remote
+    // access service with the control session over a data channel (link
+    // section 20); 0 otherwise.
+    int controlChannelVersion() const;
     /// Parity Task 21: the Core's radios (nereusd's DaemonApp owns it).
     void setStationRadios(StationRadios* radios);
     /// For a test: the stream by name (spots, spotConsole:<source>), or

@@ -135,6 +135,9 @@
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-26 - R-IOS-18 / R-R3-49 (parity Task 21): stationRadiosVersion.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - R-IOS-16 (iPhone app plan Task 28 fix wave):
+//                controlChannelVersion. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -309,6 +312,16 @@ struct StationCapabilities {
     /// recordStreamVersion. 0 (a Core that is not nereusd, or older): a
     /// window shows This Core's Change radio disabled with a reason.
     int stationRadiosVersion = 0;
+    /// iPhone app plan Task 28 fix wave (R-IOS-16; the safety review's
+    /// Important 5): 1 means the Core answers an introduction through the
+    /// remote access service with the control session over a data channel
+    /// (link section 20), presenting its bound certificate in DTLS. A
+    /// device records it with the paired Core and offers connecting from
+    /// anywhere only to a Core that declared it. Sent in the same minor-11
+    /// block, after stationRadiosVersion. 0 (an older Core, or one with no
+    /// identity key): connecting from anywhere is shown disabled with a
+    /// reason.
+    int controlChannelVersion = 0;
     /// iPhone app Task 71 (R-IOS-02; the several-devices design, ruling
     /// 10.1): 1 means the Core admits up to four devices at once, sends the
     /// `connectedDevices` object and takes session.leave. Sent last in the

@@ -646,6 +646,20 @@ void GuiConnectionController::rememberAuthenticatedRadio()
         if (!target) { return; }
     }
     const auto& caps = client->capabilities();
+    // iPhone app plan Task 28 fix wave (R-IOS-16, Important 5): whether this
+    // Core takes the control session through the remote access service,
+    // recorded with it, so connecting from anywhere is offered only to one
+    // that does.
+    if (!target->connection.identityFingerprint.isEmpty()
+        && target->connection.controlChannelVersion != caps.controlChannelVersion) {
+        QString error;
+        if (!m_store.rememberControlChannelVersion(target->id, caps.controlChannelVersion,
+                                                   &error)) {
+            m_selector->setNotice(error);
+        }
+        target = m_store.target(target->id);
+        if (!target) { return; }
+    }
     if (!caps.radioConnected || caps.macAddress.isEmpty()) { return; }
     if (target->lastRadioName == caps.stationName && target->lastRadioMac == caps.macAddress) { return; }
     target->lastRadioName = caps.stationName;

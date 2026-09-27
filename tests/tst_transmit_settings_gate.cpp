@@ -249,7 +249,10 @@ void TstTransmitSettingsGate::olderCoreOffersNoTransmitSettings()
     // meterReadingsVersion, parity Task 16's dspInfoVersion and parity Task
     // 19's recordStreamVersion and parity Task 21's stationRadiosVersion; a
     // Core from before them sends none.
-    QCOMPARE(updates.last().name, QByteArrayLiteral("stationRadiosVersion"));
+    QCOMPARE(updates.at(updates.size() - 2).name, QByteArrayLiteral("stationRadiosVersion"));
+    // Then the Task 28 fix wave's controlChannelVersion.
+    QCOMPARE(updates.last().name, QByteArrayLiteral("controlChannelVersion"));
+    updates.removeLast();
     updates.removeLast();
     QCOMPARE(updates.last().name, QByteArrayLiteral("recordStreamVersion"));
     updates.removeLast();
