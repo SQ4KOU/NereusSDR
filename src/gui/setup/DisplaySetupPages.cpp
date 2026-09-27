@@ -2492,6 +2492,59 @@ void TxDisplayPage::showCoreTxAnalyzerSettings()
     refreshTxAnalyzerGate();
 }
 
+void TxDisplayPage::showLocalTxAnalyzerSettings()
+{
+    auto* txa = model() ? model()->txAnalyzer() : nullptr;
+    if (!txa) {
+        return;
+    }
+    // QSignalBlocker so a setValue does not echo back into the analyzer.
+    {
+        QSignalBlocker bSlider(m_txFftSizeSlider);
+        QSignalBlocker bWin   (m_txWindowCombo);
+        QSignalBlocker bPanDet(m_txPanDetectorCombo);
+        QSignalBlocker bPanAvg(m_txPanAveragingCombo);
+        QSignalBlocker bPanT  (m_txPanAvTimeSpin);
+        QSignalBlocker bPanN  (m_txPanNormalizeCheck);
+        QSignalBlocker bWfDet (m_txWfDetectorCombo);
+        QSignalBlocker bWfAvg (m_txWfAveragingCombo);
+        QSignalBlocker bWfT   (m_txWfAvTimeSpin);
+
+        // Derive slider position from current fftSize.  Defensive:
+        // log2(fftSize / 4096), clamped to [0, 6].
+        const int fs = txa->fftSize();
+        int sliderPos = 0;
+        for (int p = 0; p <= 6; ++p) {
+            if ((4096 << p) >= fs) {
+                sliderPos = p;
+                break;
+            }
+        }
+        m_txFftSizeSlider->setValue(sliderPos);
+
+        m_txFftSizeReadout->setText(QString::number(txa->fftSize()));
+        const double bw = txa->binWidthHz();
+        m_txBinWidthLabel->setText(
+            bw > 0.0 ? QString::number(bw, 'f', 3)
+                     : QStringLiteral("0.000"));
+
+        m_txWindowCombo->setCurrentIndex(
+            std::clamp(txa->windowType(), 0, 6));
+        m_txPanDetectorCombo->setCurrentIndex(
+            std::clamp(txa->panDetector(), 0, 4));
+        m_txPanAveragingCombo->setCurrentIndex(
+            std::clamp(txa->panAveraging(), 0, 3));
+        m_txPanAvTimeSpin->setValue(txa->panAvTimeMs());
+        m_txPanNormalizeCheck->setChecked(txa->panNormalize());
+        m_txPanNormalizeCheck->setEnabled(txa->panNormalizeEnabled());
+        m_txWfDetectorCombo->setCurrentIndex(
+            std::clamp(txa->wfDetector(), 0, 3));
+        m_txWfAveragingCombo->setCurrentIndex(
+            std::clamp(txa->wfAveraging(), 0, 3));
+        m_txWfAvTimeSpin->setValue(txa->wfAvTimeMs());
+    }
+}
+
 void TxDisplayPage::writeCoreTxAnalyzerSetting(const char* key, const QString& value)
 {
     // Station scope: the window's settings proxy sends it to the Core,
@@ -3009,53 +3062,12 @@ void TxDisplayPage::buildUI()
     // depend on MainWindow.
     auto* txa = model() ? model()->txAnalyzer() : nullptr;
     if (txa) {
-        // Initial sync uses QSignalBlocker so the first setValue does
-        // not echo back into the analyzer (no-op since the values match,
-        // but cleaner to gate).
-        {
-            QSignalBlocker bSlider(m_txFftSizeSlider);
-            QSignalBlocker bWin   (m_txWindowCombo);
-            QSignalBlocker bPanDet(m_txPanDetectorCombo);
-            QSignalBlocker bPanAvg(m_txPanAveragingCombo);
-            QSignalBlocker bPanT  (m_txPanAvTimeSpin);
-            QSignalBlocker bPanN  (m_txPanNormalizeCheck);
-            QSignalBlocker bWfDet (m_txWfDetectorCombo);
-            QSignalBlocker bWfAvg (m_txWfAveragingCombo);
-            QSignalBlocker bWfT   (m_txWfAvTimeSpin);
-
-            // Derive slider position from current fftSize.  Defensive:
-            // log2(fftSize / 4096), clamped to [0, 6].
-            const int fs = txa->fftSize();
-            int sliderPos = 0;
-            for (int p = 0; p <= 6; ++p) {
-                if ((4096 << p) >= fs) {
-                    sliderPos = p;
-                    break;
-                }
-            }
-            m_txFftSizeSlider->setValue(sliderPos);
-
-            m_txFftSizeReadout->setText(QString::number(txa->fftSize()));
-            const double bw = txa->binWidthHz();
-            m_txBinWidthLabel->setText(
-                bw > 0.0 ? QString::number(bw, 'f', 3)
-                         : QStringLiteral("0.000"));
-
-            m_txWindowCombo->setCurrentIndex(
-                std::clamp(txa->windowType(), 0, 6));
-            m_txPanDetectorCombo->setCurrentIndex(
-                std::clamp(txa->panDetector(), 0, 4));
-            m_txPanAveragingCombo->setCurrentIndex(
-                std::clamp(txa->panAveraging(), 0, 3));
-            m_txPanAvTimeSpin->setValue(txa->panAvTimeMs());
-            m_txPanNormalizeCheck->setChecked(txa->panNormalize());
-            m_txPanNormalizeCheck->setEnabled(txa->panNormalizeEnabled());
-            m_txWfDetectorCombo->setCurrentIndex(
-                std::clamp(txa->wfDetector(), 0, 3));
-            m_txWfAveragingCombo->setCurrentIndex(
-                std::clamp(txa->wfAveraging(), 0, 3));
-            m_txWfAvTimeSpin->setValue(txa->wfAvTimeMs());
-        }
+        showLocalTxAnalyzerSettings();
+        // Parity both ways (Task 30): a remote window's change to this
+        // Core's analyzer shows here too, signals blocked so it does not
+        // echo back into the analyzer.
+        connect(txa, &TxAnalyzer::settingReloaded, this,
+                [this](const QString&) { showLocalTxAnalyzerSettings(); });
 
         // FFT size slider → setFftSizeSliderPosition + readout refresh.
         // From Thetis setup.cs:18136-18143 [v2.10.3.13+501e3f51] —

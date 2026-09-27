@@ -1073,6 +1073,7 @@ void TxAnalyzer::reloadSetting(const QString& key)
     if (present && stored != applied) {
         s.setValue(key, applied);
     }
+    emit settingReloaded(key);
 }
 
 } // namespace NereusSDR

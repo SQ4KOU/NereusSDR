@@ -389,7 +389,7 @@ public:
     /// out of range, an FFT size that is not a slider position) applies
     /// what the setter makes of it and is written back as that value. Only
     /// `key` is written: the other eight stay as they are. Any other key
-    /// is ignored.
+    /// is ignored. Emits settingReloaded(key) once applied.
     void reloadSetting(const QString& key);
 
 signals:
@@ -405,6 +405,11 @@ signals:
     /// instead of sharing the pan plane's detector + averaging.
     /// receiverId arg is sentinel -1, same convention as txFftReady.
     void txWaterfallReady(int receiverId, const QVector<float>& binsDbm);
+
+    /// Parity Task 30: reloadSetting applied `key` (a remote window's
+    /// change on the Core). A TX Display page open on the Core's own
+    /// window shows the analyzer's values again.
+    void settingReloaded(const QString& key);
 
 private slots:
     /// Polled at outputFps.  Calls GetPixels(dispId, 0, ...) for the

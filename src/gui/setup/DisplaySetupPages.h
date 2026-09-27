@@ -357,6 +357,9 @@ private:
     bool remoteWindow();
     void wireCoreTxAnalyzerControls();
     void showCoreTxAnalyzerSettings();
+    // The local window's analyzer's values on the nine, signals blocked;
+    // again whenever a remote window changes that analyzer on this Core.
+    void showLocalTxAnalyzerSettings();
     void writeCoreTxAnalyzerSetting(const char* key, const QString& value);
     void showTxFftReadouts(int fftSize, double binWidthHz);
     // Enables the nine as the page's state allows: the pan detector's

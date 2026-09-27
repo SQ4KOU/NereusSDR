@@ -236,6 +236,7 @@ private slots:
     void remotePageShowsAndWritesTheCoresKeys();
     void olderCoreDisablesTheNineOnly();
     void localPageDrivesItsOwnAnalyzer();
+    void hostingWindowsPageFollowsARemoteChange();
     void reasonIsPlain();
 
 private:
@@ -576,6 +577,58 @@ void TstRemoteTxDisplaySettings::localPageDrivesItsOwnAnalyzer()
         wfTime->setValue(640);
         QCOMPARE(analyzer.wfAvTimeMs(), 640);
     }
+    model.setTxAnalyzer(nullptr);
+}
+
+// Parity both ways: a desktop window hosting the Core shows a remote
+// window's change on its own open TX Display page, and showing it writes
+// nothing back to the analyzer.
+void TstRemoteTxDisplaySettings::hostingWindowsPageFollowsARemoteChange()
+{
+    RadioModel model;
+    TxAnalyzer analyzer(TxAnalyzer::kTxDispId);
+    analyzer.start();
+    model.setTxAnalyzer(&analyzer);
+    {
+        TxDisplayPage page(&model);
+        page.setStationSettingsAvailable(true, QString());
+        const QList<QWidget*> nine = page.txAnalyzerControlsForTest();
+        auto* fft = qobject_cast<QSlider*>(nine[0]);
+        auto* win = qobject_cast<QComboBox*>(nine[1]);
+        auto* panDet = qobject_cast<QComboBox*>(nine[2]);
+        auto* norm = qobject_cast<QCheckBox*>(nine[5]);
+        auto* wfTime = qobject_cast<QSpinBox*>(nine[8]);
+        QVERIFY(fft && win && panDet && norm && wfTime);
+        QCOMPARE(fft->value(), 3);
+        QVERIFY(!norm->isEnabled());
+
+        // What StationServer does for a window's accepted write.
+        const auto remoteWrite = [&model](const char* key, const QString& value) {
+            AppSettings::instance().setValue(QLatin1String(key), value);
+            model.applyRemoteTxDisplaySetting(QLatin1String(key));
+        };
+        remoteWrite(TxAnalyzer::kFftSizeKey, QStringLiteral("8192"));
+        remoteWrite(TxAnalyzer::kWindowTypeKey, QStringLiteral("6"));
+        remoteWrite(TxAnalyzer::kPanDetectorKey, QStringLiteral("3"));
+        remoteWrite(TxAnalyzer::kWfAvTimeMsKey, QStringLiteral("777"));
+        const int applied = analyzer.analyzerConfigCount();
+        QCOMPARE(fft->value(), 1);
+        QCOMPARE(page.txFftSizeReadoutForTest()->text(), QStringLiteral("8192"));
+        QCOMPARE(page.txBinWidthReadoutForTest()->text(),
+                 QString::number(96000.0 / 8192.0, 'f', 3));
+        QCOMPARE(win->currentIndex(), 6);
+        QCOMPARE(panDet->currentIndex(), 3);
+        QVERIFY(norm->isEnabled());
+        QCOMPARE(wfTime->value(), 777);
+        // Nothing echoed back into the analyzer.
+        QCOMPARE(analyzer.analyzerConfigCount(), applied);
+        QCOMPARE(analyzer.fftSize(), 8192);
+
+        // The page's own control still drives the analyzer afterwards.
+        wfTime->setValue(900);
+        QCOMPARE(analyzer.wfAvTimeMs(), 900);
+    }
+    analyzer.stop();
     model.setTxAnalyzer(nullptr);
 }
 
