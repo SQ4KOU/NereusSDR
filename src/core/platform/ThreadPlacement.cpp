@@ -20,6 +20,9 @@
 //   2026-09-23: appliedPlan(): only the assignments whose move succeeded
 //               (R-R3-40, R-R3-41). J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-27: the transmit I/Q sender role (R-IOS-13, R-R3-42). J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/platform/ThreadPlacement.h"
@@ -423,6 +426,9 @@ PlacementPlan planThreadPlacement(const CpuTopology& topology,
     if (demand.txWorkerThread) {
         order.append({ThreadRole::TxWorkerThread, -1, -1});
     }
+    if (demand.txIqSender) {
+        order.append({ThreadRole::TxIqSender, -1, -1});
+    }
     int next = 0;
     for (RoleAssignment& a : order) {
         if (next < plan.signalPool.size()) {
@@ -689,6 +695,8 @@ PlacementDemand ThreadPlacement::demandLocked() const
         demand.dspThread = demand.dspThread || t.role == ThreadRole::DspThread;
         demand.txWorkerThread = demand.txWorkerThread
             || (t.role == ThreadRole::TxWorkerThread && demand.txWorker);
+        demand.txIqSender = demand.txIqSender
+            || (t.role == ThreadRole::TxIqSender && demand.txWorker);
     }
     return demand;
 }
@@ -703,6 +711,7 @@ bool ThreadPlacement::roleActiveLocked(ThreadRole role, int channel) const
     case ThreadRole::DspThread:
         return true;
     case ThreadRole::TxWorkerThread:
+    case ThreadRole::TxIqSender:
         for (bool on : m_activeTx) {
             if (on) {
                 return true;
@@ -949,6 +958,7 @@ void startDaemonThreadPlacement(bool enabled, int sliceCount)
     demand.dspThread = true;
     demand.txWorker = true;
     demand.txWorkerThread = true;
+    demand.txIqSender = true;
 
     logStartupLine(placement.start(topology, demand, makeSystemThreadSchedulingApi(),
                                    raisePermitted));

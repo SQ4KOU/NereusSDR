@@ -25,6 +25,10 @@
 //               and TUNE wait while another device holds. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-27: at each unkey, one info line with the microphone line's
+//               statistics and the transmit I/Q send path's counters
+//               (R-IOS-13, R-R3-42). J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/media/DaemonMediaController.h"
@@ -597,6 +601,12 @@ DaemonMediaController::DaemonMediaController(StationServer* server,
             &DaemonMediaController::refreshMicWatching);
     connect(m_radioModel, &RadioModel::remoteMicInUseChanged, this,
             [this](bool) { refreshMicWatching(); });
+    connect(&m_radioModel->transmitModel(), &TransmitModel::moxChanged, this,
+            [this](bool mox) {
+                if (!mox) {
+                    logUnkeyStats();
+                }
+            });
     // Task 76: a controller bound to a session starts with it at once
     // (DaemonMediaHub makes it as that session's media starts).
     if (m_boundEpoch != 0 && m_server->mediaAvailable(m_boundEpoch)) {
@@ -1653,6 +1663,52 @@ void DaemonMediaController::refreshMicWatching()
     const bool keyed = mox != nullptr && mox->isMox() && m_radioModel->remoteMicInUse()
         && m_radioModel->keyedBy().deviceId == m_micDeviceId;
     m_micReceiver->setWatching(keyed);
+}
+
+void DaemonMediaController::logUnkeyStats()
+{
+    // Only the controller carrying a microphone line reports, so a key
+    // from a device gives one line.
+    if (!m_micReceiver || !m_radioModel) {
+        return;
+    }
+    const RemoteMicReceiver::Stats rx = m_micReceiver->stats();
+    RemoteMicFeed::Stats feed;
+    const bool haveFeed = m_radioModel->remoteMicFeed() != nullptr;
+    if (haveFeed) {
+        feed = m_radioModel->remoteMicFeed()->stats();
+    }
+    RadioConnection::TxSendStats send;
+    if (const RadioConnection* conn = m_radioModel->connection()) {
+        send = conn->txSendStats();
+    }
+    // One line (log only, never shown to a device).
+    QString text;
+    {
+        QDebug line(&text);
+        line.nospace().noquote();
+        line << "Transmit ended (" << QString::fromLatin1(m_micDeviceId) << "): microphone ";
+        if (haveFeed) {
+            line << "depth " << (feed.fillFrames * 1000 / RemoteMicConfig::kSampleRate)
+                 << " ms, underruns " << feed.underflows << ", overflows " << feed.overflows
+                 << ", dropped " << feed.droppedFrames << " frames";
+        } else {
+            line << "no feed";
+        }
+        line << "; packets concealed " << rx.concealedPackets << ", recovered "
+             << rx.recoveredPackets << ", late " << rx.latePackets << ", long gaps " << rx.longGaps
+             << "; transmit I/Q ";
+        if (send.valid) {
+            line << "frames " << send.framesSent << ", silence " << send.zeroPaddedSamples
+                 << " samples, late wakes " << send.lateWakes << ", catch-up bursts "
+                 << send.catchUpBursts << ", radio ran dry " << send.radioRanDry << ", lost "
+                 << send.overflowSamples << " samples, send errors " << send.sendErrors
+                 << ", deepest queue " << send.maxRingMs << " ms";
+        } else {
+            line << "no counters";
+        }
+    }
+    qCInfo(lcDaemonMedia).noquote() << text;
 }
 
 bool DaemonMediaController::carriesMicFor(const QByteArray& deviceId) const

@@ -24,6 +24,10 @@
 //               copy of the plan without taking the mutex every tick.
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code (R-R3-40).
+//   2026-09-27: the Protocol 2 transmit I/Q sender is a role, placed and
+//               raised while transmitting like the transmit pump. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code (R-IOS-13, R-R3-42).
 //   2026-09-23: appliedPlan(), the assignments whose move succeeded, so
 //               the governor judges by where threads actually run. J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via
@@ -77,6 +81,7 @@ enum class ThreadRole {
     DspThread,       ///< RxDspWorker's thread (fexchange2 for every slice)
     TxWorker,        ///< the transmit channel's WDSP worker
     TxWorkerThread,  ///< TxWorkerThread, the transmit audio pump
+    TxIqSender,      ///< the Protocol 2 transmit I/Q send thread
 };
 
 /// Which signal processing threads are busy.
@@ -85,6 +90,7 @@ struct PlacementDemand {
     bool dspThread{false};
     bool txWorker{false};         ///< transmit channel active
     bool txWorkerThread{false};   ///< transmit pump running while transmitting
+    bool txIqSender{false};       ///< transmit I/Q sender running while transmitting
 };
 
 struct RoleAssignment {
@@ -122,8 +128,8 @@ struct PlacementPlan {
 ///
 /// Dedicated cores go, in order, to the first active receive worker (lowest
 /// channel), the DSP thread, the other active receive workers, the transmit
-/// worker, then the transmit pump. A role left without a core runs on the
-/// housekeeping cores.
+/// worker, the transmit pump, then the transmit I/Q sender. A role left
+/// without a core runs on the housekeeping cores.
 PlacementPlan planThreadPlacement(const CpuTopology& topology,
                                   const PlacementDemand& demand);
 

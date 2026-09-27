@@ -577,6 +577,25 @@ public slots:
     // From Thetis netInterface.c:1513 [v2.10.3.13] — P2 tx always 192 kHz.
     virtual int txSampleRate() const { return 48000; }
 
+public:
+    // R-IOS-13, R-R3-42: the transmit I/Q send path's counters since the
+    // last key. Any thread may read them (each is one atomic load); a
+    // protocol that does not keep them reports valid=false.
+    struct TxSendStats {
+        bool valid{false};
+        quint64 framesSent{0};          ///< TX I/Q frames on the wire
+        quint64 zeroPaddedSamples{0};   ///< silence sent while keyed, ring empty
+        quint64 lateWakes{0};           ///< the sender woke later than 5 ms
+        quint64 catchUpBursts{0};       ///< refills of more than 5 ms at once
+        quint64 radioRanDry{0};         ///< times the radio's buffer ran out (estimated)
+        quint64 overflowSamples{0};     ///< samples the full ring refused (lost)
+        quint64 sendErrors{0};          ///< sends the socket refused (retried)
+        int maxRingMs{0};               ///< deepest the ring got, in ms
+    };
+    virtual TxSendStats txSendStats() const { return {}; }
+
+public slots:
+
     // --- Watchdog ---
     // R-R3-49: the Network Watchdog setting (Setup > General > Options),
     // applied where the radio is. On both protocols it sets only how long

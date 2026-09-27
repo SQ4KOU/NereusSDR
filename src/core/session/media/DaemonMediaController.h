@@ -6,6 +6,10 @@
 // coordination; it contains neither GUI nor radio control policy.
 //
 // Modification history (NereusSDR):
+//   2026-09-27: at each unkey, one info line with the microphone line's
+//               statistics and the transmit I/Q send path's counters
+//               (R-IOS-13, R-R3-42). J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 //   2026-09-25: iPhone app plan Task 36 (R-IOS-13): the microphone line.
 //               A start carrying remoteTxVersion gets it; its receiver
 //               feeds RadioModel's remote microphone ring; keys wait on it
@@ -421,6 +425,9 @@ private:
     void stopMicLine();
     void refreshMicVoxArmed();
     void refreshMicWatching();
+    // R-IOS-13, R-R3-42: at each unkey, one info line with this line's
+    // microphone statistics and the transmit I/Q send path's counters.
+    void logUnkeyStats();
     bool acceptPeerControl(const QJsonObject& control);
 
     void clearSession();
