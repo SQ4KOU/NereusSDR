@@ -66,6 +66,16 @@
 # it when the workflow is started by hand (workflow_dispatch).
 #
 # Usage: traversal-harness.sh --peer PATH --source DIR [--only SCENARIO]
+#                             [--probe PATH]
+#
+# Plan Task 29 Step 1: the relay floor measurement
+# (tests/scripts/floor-measurement.sh) runs the scenario floor-measure,
+# only when named with --only, with tests/tools/nereus_floor_probe as
+# --probe. It adds a second coturn with a TLS listener on TCP 443 at a
+# second address of the service's host (rvtls.harness.test, 198.51.100.66),
+# as option (C) would need on the real server, and starts the service
+# through tests/tools/floor_relay_prototype.py, which adds option (E)'s
+# WebSocket relay at /v1/relay. See the script for its settings.
 #
 # =================================================================
 # Modification history (NereusSDR):
@@ -89,11 +99,13 @@
 set -euo pipefail
 
 PEER=""
+PROBE=""
 SOURCE=""
 ONLY=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --peer) PEER="$2"; shift 2 ;;
+        --probe) PROBE="$2"; shift 2 ;;
         --source) SOURCE="$2"; shift 2 ;;
         --only) ONLY="$2"; shift 2 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
@@ -257,6 +269,7 @@ for ns in sta cli; do
 198.51.100.2 rv.harness.test
 198.51.100.2 rv4.harness.test
 2001:db8:1::2 rv6.harness.test
+198.51.100.66 rvtls.harness.test
 EOF
     echo "nameserver 198.51.100.2" > "/etc/netns/h-$ns/resolv.conf"
 done
@@ -303,6 +316,7 @@ ns   IN A    198.51.100.2
 rv   IN A    198.51.100.2
 rv4  IN A    198.51.100.2
 rv6  IN AAAA 2001:db8:1::2
+rvtls IN A   198.51.100.66
 EOF
 ip netns exec h-rvsrv unbound -d -c "$WORK/unbound.conf" >"$WORK/unbound.log" 2>&1 &
 PIDS+=($!)
@@ -369,7 +383,8 @@ ip netns exec h-rvsrv turnserver -n -v --no-cli --no-tls --no-dtls --fingerprint
     --allowed-peer-ip=198.51.100.0-198.51.100.255 \
     --allowed-peer-ip=2001:db8::-2001:db8:ffff:ffff:ffff:ffff:ffff:ffff \
     --log-file=stdout >"$WORK/coturn.log" 2>&1 &
-PIDS+=($!)
+COTURN_PID=$!
+PIDS+=("$COTURN_PID")
 
 cat > "$WORK/rendezvous.conf" <<EOF
 [rendezvous]
@@ -379,9 +394,21 @@ turn_urls = turn:rv4.harness.test:3478?transport=udp turn:rv6.harness.test:3478?
 turn_secret_file = $WORK/turn-secret
 log_level = info
 EOF
-ip netns exec h-rvsrv env PYTHONPATH="$SOURCE/rendezvous/server" \
-    python3 -m nereus_rendezvous --config "$WORK/rendezvous.conf" >"$WORK/rendezvous.log" 2>&1 &
-PIDS+=($!)
+FLOOR=0
+if [[ "$ONLY" == floor-* ]]; then
+    FLOOR=1
+fi
+if (( FLOOR )); then
+    # Plan Task 29 Step 1: the service with option (E)'s relay prototype.
+    ip netns exec h-rvsrv env PYTHONPATH="$SOURCE/rendezvous/server" \
+        python3 "$SOURCE/tests/tools/floor_relay_prototype.py" --config "$WORK/rendezvous.conf" \
+        >"$WORK/rendezvous.log" 2>&1 &
+else
+    ip netns exec h-rvsrv env PYTHONPATH="$SOURCE/rendezvous/server" \
+        python3 -m nereus_rendezvous --config "$WORK/rendezvous.conf" >"$WORK/rendezvous.log" 2>&1 &
+fi
+RENDEZVOUS_PID=$!
+PIDS+=("$RENDEZVOUS_PID")
 
 # A test certificate authority and a certificate for rv.harness.test, made
 # now, trusted only by the two peers (--ca).
@@ -396,15 +423,53 @@ openssl x509 -req -in "$WORK/rv.csr" -CA "$WORK/ca.pem" -CAkey "$WORK/ca.key" \
     -CAcreateserial -days 1 -extfile "$WORK/rv.ext" -out "$WORK/rv.pem" >/dev/null 2>&1
 cat "$WORK/rv.pem" "$WORK/rv.key" > "$WORK/rv-bundle.pem"
 chmod 600 "$WORK"/*.key "$WORK/rv-bundle.pem"
+# Plan Task 29 Step 1: for the floor measurement the front sends each
+# write at once (TCP_NODELAY), as Caddy (Go's default) does on the real
+# server; option (E)'s frames cross it.
+NODELAY=""
+if (( FLOOR )); then
+    NODELAY=",nodelay"
+fi
 for listen in "OPENSSL-LISTEN:443,bind=198.51.100.2,reuseaddr,fork" \
               "OPENSSL-LISTEN:443,bind=[2001:db8:1::2],pf=ip6,reuseaddr,fork"; do
-    ip netns exec h-rvsrv socat "$listen,cert=$WORK/rv-bundle.pem,verify=0" TCP:127.0.0.1:8710 \
-        >>"$WORK/socat.log" 2>&1 &
+    ip netns exec h-rvsrv socat "$listen,cert=$WORK/rv-bundle.pem,verify=0$NODELAY" \
+        "TCP:127.0.0.1:8710$NODELAY" >>"$WORK/socat.log" 2>&1 &
     PIDS+=($!)
 done
 sleep 2
 
 SERVER="wss://rv.harness.test/"
+
+# ── Plan Task 29 Step 1: the relay floor's server side ──────────────
+
+# Option (C) (and (B)) reach coturn's TLS listener on TCP 443, which the
+# service's TLS front already holds on the service's address, so coturn's
+# TLS listener gets a second address of its own (D38: on the real server,
+# a second address or a splitter by TLS name in front of Caddy). Option
+# (E) needs nothing more: its relay is the service's /v1/relay, behind the
+# same TLS front.
+if (( FLOOR )); then
+    in_ns rvsrv ip addr add 198.51.100.66/32 dev lo
+    in_ns inet ip route add 198.51.100.66/32 via 198.51.100.2
+    openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
+        -subj "/CN=rvtls.harness.test" -addext "subjectAltName=DNS:rvtls.harness.test" \
+        -keyout "$WORK/rvtls.key" -out "$WORK/rvtls.csr" >/dev/null 2>&1
+    printf 'subjectAltName=DNS:rvtls.harness.test\n' > "$WORK/rvtls.ext"
+    openssl x509 -req -in "$WORK/rvtls.csr" -CA "$WORK/ca.pem" -CAkey "$WORK/ca.key" \
+        -CAcreateserial -days 1 -extfile "$WORK/rvtls.ext" -out "$WORK/rvtls.pem" >/dev/null 2>&1
+    chmod 600 "$WORK/rvtls.key"
+    ip netns exec h-rvsrv turnserver -n --no-cli --no-udp --no-tcp --no-dtls --fingerprint \
+        --listening-ip=198.51.100.66 --tls-listening-port=443 --relay-ip=198.51.100.66 \
+        --cert="$WORK/rvtls.pem" --pkey="$WORK/rvtls.key" \
+        --realm=harness.test --use-auth-secret \
+        --static-auth-secret="$(cat "$WORK/turn-secret")" \
+        --user-quota=64 --total-quota=64 \
+        --allowed-peer-ip=198.51.100.0-198.51.100.255 \
+        --log-file=stdout >"$WORK/coturn-tls.log" 2>&1 &
+    COTURN_TLS_PID=$!
+    PIDS+=("$COTURN_TLS_PID")
+    sleep 1
+fi
 
 # ── The two ends ─────────────────────────────────────────────────────
 
@@ -748,6 +813,159 @@ if scenario session-loss; then
     start_core allow
     check_session session-loss "$(run_session cli)" any
     stop_core
+fi
+
+# ── Plan Task 29 Step 1: the relay floor measurement ─────────────────
+
+# floor-measure: only when named (--only floor-measure), with --probe; run
+# by tests/scripts/floor-measurement.sh, which reads the settings below
+# from the environment and summarises FLOOR_OUT/results.jsonl.
+#   FLOOR_OUT            where results.jsonl and the logs go (required)
+#   FLOOR_OPTIONS        "none c e": none is today's TURN over UDP, for
+#                        reference (UDP open, direct blocked); c and e run
+#                        with the client's network passing only DNS and
+#                        TCP 443
+#   FLOOR_CONDITIONS     "LOSS:DELAY ..." (percent, ms), netem on each
+#                        direction of the client's link, default
+#                        "0.5:30 0.5:80 1:30 1:80"
+#   FLOOR_RATES          the payload rates for the first condition,
+#                        default "145 520"; the others run at the first
+#   FLOOR_DURATION_S     seconds of traffic per run, default 60
+#   FLOOR_RESET_AT_S     c and e: one more run at the first condition and
+#                        rate, its floor connection reset this many seconds
+#                        in (0: none), default 15
+floor_rules() {
+    local option="$1" loss="$2" delay="$3"
+    reset_rules
+    in_ns inet tc qdisc del dev inet-natc root 2>/dev/null || true
+    if [[ "$option" == "none" ]]; then
+        in_ns inet nft -f - <<EOF
+table inet filter {
+    chain forward {
+        type filter hook forward priority 0;
+        ip saddr 198.51.100.6 ip daddr 198.51.100.10 meta l4proto udp drop
+        ip saddr 198.51.100.10 ip daddr 198.51.100.6 meta l4proto udp drop
+    }
+}
+EOF
+    else
+        in_ns natc nft insert rule inet filter forward iifname "lan" meta l4proto udp udp dport != 53 drop
+        in_ns natc nft insert rule inet filter forward iifname "lan" meta l4proto tcp tcp dport != 443 drop
+    fi
+    if [[ "$loss" != "0" || "$delay" != "0" ]]; then
+        in_ns natc tc qdisc add dev wan root netem loss "${loss}%" delay "${delay}ms"
+        in_ns inet tc qdisc add dev inet-natc root netem loss "${loss}%" delay "${delay}ms"
+    fi
+}
+
+cpu_ticks() {
+    awk '{print $14 + $15}' "/proc/$1/stat" 2>/dev/null || echo 0
+}
+
+floor_run() {
+    local option="$1" loss="$2" delay="$3" rate="$4" reset="$5"
+    local tag="$option-$loss-$delay-$rate-$reset"
+    floor_rules "$option" "$loss" "$delay"
+    rm -f "$WORK/probe-core-id"
+    ip netns exec h-sta "$PROBE" core --dir "$WORK/probe-core" --server "$SERVER" \
+        --paired "$PROBE_KEY" --floor "$option" --relay-url "wss://rv.harness.test/v1/relay" \
+        --report-after-s "$(( FLOOR_DURATION_S + 2 ))" --id-file "$WORK/probe-core-id" --ca "$WORK/ca.pem" >"$FLOOR_OUT/core-$tag.log" 2>&1 &
+    local core_pid=$!
+    PIDS+=("$core_pid")
+    for _ in $(seq 1 100); do
+        [[ -s "$WORK/probe-core-id" ]] && break
+        sleep 0.2
+    done
+    local turn_before tls_before service_before
+    turn_before="$(cpu_ticks "$COTURN_PID")"
+    tls_before="$(cpu_ticks "${COTURN_TLS_PID:-0}")"
+    service_before="$(cpu_ticks "$RENDEZVOUS_PID")"
+    local reset_args=()
+    if (( reset > 0 )); then
+        reset_args=(--reset-at-s "$reset")
+    fi
+    local device
+    device="$(in_ns cli "$PROBE" device --dir "$WORK/probe-device" --server "$SERVER" \
+        --station-id "$(cat "$WORK/probe-core-id" 2>/dev/null)" --floor "$option" \
+        --turn-tls rvtls.harness.test:443 --relay-url "wss://rv.harness.test/v1/relay" \
+        --rate "$rate" --duration-s "$FLOOR_DURATION_S" "${reset_args[@]}" \
+        --ca "$WORK/ca.pem" 2>>"$FLOOR_OUT/device-$tag.log" | tail -n 1 || true)"
+    sleep 3
+    local core
+    core="$(grep '"event":"report"' "$FLOOR_OUT/core-$tag.log" | tail -n 1 || true)"
+    local ticks turn_cpu tls_cpu service_cpu
+    ticks="$(getconf CLK_TCK)"
+    turn_cpu=$(( $(cpu_ticks "$COTURN_PID") - turn_before ))
+    tls_cpu=$(( $(cpu_ticks "${COTURN_TLS_PID:-0}") - tls_before ))
+    service_cpu=$(( $(cpu_ticks "$RENDEZVOUS_PID") - service_before ))
+    kill "$core_pid" 2>/dev/null || true
+    wait "$core_pid" 2>/dev/null || true
+    python3 - "$option" "$loss" "$delay" "$rate" "$reset" "${device:-null}" "${core:-null}" \
+        "$turn_cpu" "$tls_cpu" "$service_cpu" "$ticks" >>"$FLOOR_OUT/results.jsonl" <<'PY'
+import json, sys
+a = sys.argv
+def load(text):
+    try:
+        return json.loads(text)
+    except ValueError:
+        return None
+ticks = float(a[11])
+print(json.dumps({
+    "option": a[1], "lossPercent": float(a[2]), "delayMs": float(a[3]),
+    "rateKbps": int(a[4]), "resetAtS": int(a[5]),
+    "device": load(a[6]), "core": load(a[7]),
+    "serverCpuSeconds": {"coturnUdp": int(a[8]) / ticks, "coturnTls": int(a[9]) / ticks,
+                         "service": int(a[10]) / ticks},
+}))
+PY
+    local connected
+    connected="$(field "${device:-null}" connected 2>/dev/null || echo None)"
+    if [[ "$connected" == "True" && ( -n "$core" || "$reset" -gt 0 ) ]]; then
+        say "PASS floor $tag: connected, measured"
+    else
+        say "FAIL floor $tag: device ${device:-none}, core ${core:-none}"
+        FAILED=1
+    fi
+}
+
+if [[ "$ONLY" == "floor-measure" ]]; then
+    if [[ -z "$PROBE" || -z "${FLOOR_OUT:-}" ]]; then
+        say "floor-measure needs --probe and FLOOR_OUT"
+        exit 2
+    fi
+    mkdir -p "$FLOOR_OUT"
+    : >"$FLOOR_OUT/results.jsonl"
+    PROBE_KEY="$("$PROBE" key --dir "$WORK/probe-device")"
+    read -r -a options <<<"${FLOOR_OPTIONS:-none c e}"
+    read -r -a conditions <<<"${FLOOR_CONDITIONS:-0.5:30 0.5:80 1:30 1:80}"
+    read -r -a rates <<<"${FLOOR_RATES:-145 520}"
+    FLOOR_DURATION_S="${FLOOR_DURATION_S:-60}"
+    reset_at="${FLOOR_RESET_AT_S:-15}"
+    first="${conditions[0]}"
+    for option in "${options[@]}"; do
+        for rate in "${rates[@]}"; do
+            floor_run "$option" "${first%%:*}" "${first##*:}" "$rate" 0
+        done
+        for condition in "${conditions[@]:1}"; do
+            floor_run "$option" "${condition%%:*}" "${condition##*:}" "${rates[0]}" 0
+        done
+        if [[ "$option" != "none" ]] && (( reset_at > 0 )); then
+            floor_run "$option" "${first%%:*}" "${first##*:}" "${rates[0]}" "$reset_at"
+        fi
+    done
+    # Option (E)'s relay saw only ciphertext: no frame it carried held the
+    # text every display frame carries.
+    plaintext="$(grep -o 'plaintext=[0-9]*' "$WORK/rendezvous.log" | tail -n 1 | cut -d= -f2 || true)"
+    if [[ " ${options[*]} " == *" e "* ]]; then
+        if [[ "${plaintext:-missing}" == "0" ]]; then
+            say "PASS floor-measure: the relay carried no plaintext"
+        else
+            say "FAIL floor-measure: the relay's plaintext count is ${plaintext:-missing}"
+            FAILED=1
+        fi
+    fi
+    cp "$WORK/rendezvous.log" "$WORK/coturn.log" "$FLOOR_OUT/" 2>/dev/null || true
+    cp "$WORK/coturn-tls.log" "$FLOOR_OUT/" 2>/dev/null || true
 fi
 
 if (( FAILED )); then

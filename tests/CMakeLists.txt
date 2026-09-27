@@ -7463,6 +7463,16 @@ target_compile_definitions(tst_data_channel_transport PRIVATE
 add_executable(nereus_rendezvous_peer EXCLUDE_FROM_ALL tools/nereus_rendezvous_peer.cpp)
 target_link_libraries(nereus_rendezvous_peer PRIVATE NereusCore)
 set_target_properties(nereus_rendezvous_peer PROPERTIES AUTOMOC ON)
+# iPhone app plan Task 29 Step 1 (R-IOS-16): the relay floor measurement's
+# probe (tests/scripts/floor-measurement.sh), with the prototypes of options
+# (C) and (E) it measures. Test tooling only; neither prototype is product
+# code.
+add_executable(nereus_floor_probe EXCLUDE_FROM_ALL
+    tools/nereus_floor_probe.cpp
+    tools/floor/TurnTlsShimPrototype.cpp
+    tools/floor/WsRelayPrototype.cpp)
+target_link_libraries(nereus_floor_probe PRIVATE NereusCore)
+set_target_properties(nereus_floor_probe PROPERTIES AUTOMOC ON)
 # The traversal harness (tests/scripts/traversal-harness.sh): Linux network
 # namespaces with nftables NATs (endpoint-independent, port-randomising at
 # both ends), UDP blocked, large datagrams dropped, an IPv6-only client
