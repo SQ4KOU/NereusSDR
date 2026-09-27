@@ -6,7 +6,13 @@
 
 #include <QtTest>
 
+// The source's engines are private; the teardown-order case below reads
+// them to watch one being destroyed.
+#define private public
 #include "core/session/media/DaemonSpectrumSource.h"
+#include "core/spectrum/FftEnginePool.h"
+#undef private
+#include "models/RadioModel.h"
 
 #include <QElapsedTimer>
 #include <QThread>
@@ -46,6 +52,15 @@ QVector<float> syntheticIq(int complexSamples, double cyclesPerSample)
     return iq;
 }
 
+// QObject::receivers() is protected; a member pointer named through a
+// derived class reads it on any QObject.
+struct ReceiverCount : QObject {
+    static int of(const QObject& object, const char* signal)
+    {
+        return (object.*(&ReceiverCount::receivers))(signal);
+    }
+};
+
 int dominantBin(const QVector<float>& bins)
 {
     int index = -1;
@@ -79,6 +94,40 @@ private slots:
         QVERIFY(source.activeSources().isEmpty());
         QVERIFY(!source.activate(key, {}));
         QVERIFY(source.activeSources().isEmpty());
+    }
+
+    // R-R3-49: the radio delivers raw I/Q to each engine from its
+    // connection thread over a direct connection. When an engine is
+    // destroyed while that route is still connected, Qt's ~QObject clears
+    // the route's slot object under any emission already in flight, and the
+    // connection thread then calls into the dying engine (the Core crash
+    // at stop, tst_receive_layout_native). Destroying a source must take
+    // the route down before any of its engines goes.
+    void destroyingTheSourceDisconnectsTheRadioBeforeItsEngines()
+    {
+        RadioModel radio;
+        const char* const iqSignal = SIGNAL(rawIqDataForStream(int,QList<float>));
+        const int baseline = ReceiverCount::of(radio, iqSignal);
+        auto source = std::make_unique<DaemonSpectrumSource>();
+        source->setRadioModel(&radio);
+        const MediaSourceKey key{0, FftTier::Wide};
+        QVERIFY(source->activate(key, sourceConfig(1024, 7100000.0, 48000.0)));
+        QTRY_VERIFY(source->isActive(key));
+        QCOMPARE(ReceiverCount::of(radio, iqSignal), baseline + 1);
+
+        const QList<NereusSDR::FFTEngine*> engines = source->m_pool->m_engines.values();
+        QCOMPARE(engines.size(), 1);
+        int routesWhenEngineDestroyed = -1;
+        // destroyed() is emitted from ~QObject before Qt removes the
+        // engine's incoming connections: exactly the moment of the crash.
+        connect(engines.first(), &QObject::destroyed, this,
+                [&radio, iqSignal, &routesWhenEngineDestroyed]() {
+            routesWhenEngineDestroyed = ReceiverCount::of(radio, iqSignal);
+        }, Qt::DirectConnection);
+
+        source.reset();
+        QCOMPARE(routesWhenEngineDestroyed, baseline);
+        QCOMPARE(ReceiverCount::of(radio, iqSignal), baseline);
     }
 
     void rejectsUnknownTierAndNonFiniteHzPerBinTarget()

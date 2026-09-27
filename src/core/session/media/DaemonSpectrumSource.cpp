@@ -67,6 +67,16 @@ DaemonSpectrumSource::~DaemonSpectrumSource()
         entry.state->notificationQueued = false;
         entry.state->pendingIq.clear();
     }
+    // R-R3-49: take the radio's I/Q route down before any engine goes, as
+    // deactivate() does. The radio emits on its connection thread straight
+    // into each engine; were an engine destroyed while still connected,
+    // Qt's ~QObject would clear the route's slot object under an emission
+    // already in flight and that thread would then call into the dying
+    // engine (the Core crashed this way at stop while the radio streamed).
+    for (SourceEntry& entry : m_sources) {
+        QObject::disconnect(entry.iqConnection);
+        entry.iqConnection = {};
+    }
     m_sources.clear();
     m_pool.reset();
 }
