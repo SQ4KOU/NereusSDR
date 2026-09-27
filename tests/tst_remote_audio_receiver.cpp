@@ -741,10 +741,14 @@ private slots:
         // The callback is independent of the Qt event loop, as a real audio
         // device is. Integer nanosecond deadlines preserve 48 kHz over the
         // whole run instead of accumulating a rounded 2.667 ms sleep error.
-        DeviceThread device([bus, callbackFrames = kCallbackFrames](
+        // Keep the device callback's scheduling evidence separate from the
+        // source and receiver worker: this device has its own thread.
+        std::atomic<qint64> maxDeviceWakeGapNs{0};
+        DeviceThread device([bus, callbackFrames = kCallbackFrames, &maxDeviceWakeGapNs](
                                 const DeviceThread::StopFlag& stop) {
             using Clock = std::chrono::steady_clock;
             const auto started = Clock::now();
+            auto previousWake = started;
             quint64 callback = 1;
             while (!stop.stopRequested()) {
                 const auto deadline = started + std::chrono::nanoseconds(
@@ -754,6 +758,12 @@ private slots:
                 if (stop.stopRequested()) {
                     break;
                 }
+                const auto wake = Clock::now();
+                const qint64 gapNs =
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(wake - previousWake)
+                        .count();
+                maxDeviceWakeGapNs.store(std::max(maxDeviceWakeGapNs.load(), gapNs));
+                previousWake = wake;
                 bus->render(callbackFrames);
                 ++callback;
             }
@@ -767,6 +777,9 @@ private slots:
         using Clock = std::chrono::steady_clock;
         const auto started = Clock::now();
         qint64 arrivalMs = 0;
+        qint64 maxSourceDeadlineLateNs = 0;
+        qint64 maxSourceGapNs = 0;
+        auto previousSource = started;
         for (int packet = 0; packet < kPackets; ++packet) {
             if (packet > 0) {
                 const int phase = packet % 20;
@@ -775,8 +788,18 @@ private slots:
                     : phase == 0 ? 20
                     : 40;
             }
-            std::this_thread::sleep_until(
-                started + std::chrono::milliseconds(arrivalMs));
+            const auto deadline = started + std::chrono::milliseconds(arrivalMs);
+            std::this_thread::sleep_until(deadline);
+            const auto submittedAt = Clock::now();
+            const qint64 lateNs =
+                std::chrono::duration_cast<std::chrono::nanoseconds>(submittedAt - deadline)
+                    .count();
+            const qint64 gapNs =
+                std::chrono::duration_cast<std::chrono::nanoseconds>(submittedAt - previousSource)
+                    .count();
+            maxSourceDeadlineLateNs = std::max(maxSourceDeadlineLateNs, lateNs);
+            maxSourceGapNs = std::max(maxSourceGapNs, gapNs);
+            previousSource = submittedAt;
             if (packet != kDroppedPacket) {
                 receiver.submit(packets.at(packet));
             }
@@ -791,6 +814,12 @@ private slots:
         const auto completionDeadline = Clock::now() + std::chrono::seconds(1);
         while (Clock::now() < completionDeadline) {
             telemetry = receiver.telemetry();
+            // Extra PLC already violates the final exact-one assertion.
+            // Stop here so the finite source's later no-packet restart does
+            // not obscure the first failure under load.
+            if (telemetry.concealedPackets > 1) {
+                break;
+            }
             if (!receiver.isRunning()) {
                 break;
             }
@@ -813,14 +842,23 @@ private slots:
             : restarts.first().first().toString();
         const QString evidence = QStringLiteral(
             "running=%1 accepted=%2 decoded=%3 plc=%4 underflows=%5 "
-            "overflows=%6 restarts=%7 errors=%8 queued=%9 reason=%10")
+            "overflows=%6 restarts=%7 errors=%8 queued=%9 reason=%10 "
+            "sourceLateMs=%11 sourceGapMs=%12 deviceWakeGapMs=%13 "
+            "workerWakeGapMs=%14 late=%15 missing=%16 interruptions=%17")
             .arg(runningAtSnapshot).arg(telemetry.acceptedPackets)
             .arg(telemetry.decodedPackets).arg(telemetry.concealedPackets)
             .arg(receiver.rateMatcherUnderflows())
             .arg(receiver.rateMatcherOverflows()).arg(restarts.count())
             .arg(errors.count())
             .arg(bus->outputPacing() ? bus->outputPacing()->queuedFrames : -1)
-            .arg(restartReason);
+            .arg(restartReason)
+            .arg(double(maxSourceDeadlineLateNs) / 1e6, 0, 'f', 1)
+            .arg(double(maxSourceGapNs) / 1e6, 0, 'f', 1)
+            .arg(double(maxDeviceWakeGapNs.load()) / 1e6, 0, 'f', 1)
+            .arg(telemetry.maxWorkerWakeGapMs, 0, 'f', 1)
+            .arg(telemetry.latePackets).arg(telemetry.missingPackets)
+            .arg(telemetry.linkInterruptions);
+        QVERIFY2(telemetry.concealedPackets <= 1, qPrintable(evidence));
         QVERIFY2(completed && runningAtSnapshot, qPrintable(evidence));
         QCOMPARE(telemetry.acceptedPackets, quint64(kPackets - 1));
         QCOMPARE(telemetry.decodedPackets, quint64(kPackets - 1));
