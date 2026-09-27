@@ -2675,6 +2675,110 @@ private slots:
         QVERIFY(NereusSDR::OperatorWording::isPlain(failed.at(0).at(0).toString()));
     }
 
+    // Task 28 tail (re-review Minor): the service going (the Core left it,
+    // or this computer lost its connection) fails a dial at once only while
+    // the Core's answer or the end of its candidates is missing. Once both
+    // have come, this computer holds everything the service would carry
+    // from the Core; the Core learns this computer's address from its
+    // checks, so ICE finishes without the service and the channel opens.
+    // The fake service plays the Core with a DataChannelTransport of its
+    // own, so the order of what reaches the dialer is the test's.
+    void aDialAfterTheCoresAnswerAndCandidatesOutlivesTheService_data()
+    {
+        QTest::addColumn<bool>("connectionLost");
+        QTest::addColumn<bool>("candidatesEnded");
+        QTest::newRow("stationLeft, answer and candidates") << false << true;
+        QTest::newRow("connectionLost, answer and candidates") << true << true;
+        QTest::newRow("stationLeft, answer only") << false << false;
+        QTest::newRow("connectionLost, answer only") << true << false;
+    }
+
+    void aDialAfterTheCoresAnswerAndCandidatesOutlivesTheService()
+    {
+        QFETCH(bool, connectionLost);
+        QFETCH(bool, candidatesEnded);
+        ServicePlayer player;
+        QTemporaryDir keyDir;
+        auto key = std::make_shared<const ClientDeviceIdentity>(
+            ClientDeviceIdentity::loadOrCreate(keyDir.path()));
+        RendezvousDialer dialer;
+        QSignalSpy failed(&dialer, &RendezvousDialer::failed);
+        QSignalSpy ready(&dialer, &RendezvousDialer::ready);
+        dialer.dial({player.url()}, QStringLiteral("aaaaaaaaaaaaaaaaaaaaaaaaaa"), key);
+        QWebSocket* service = player.waitForConnection();
+        QVERIFY(service != nullptr);
+        service->sendTextMessage(compact(QJsonObject{{"type", "hello"}, {"version", 1},
+                                                     {"nonce", b64(randomBytes(32))},
+                                                     {"stun", QJsonArray()}}));
+        const std::optional<QString> introduce = player.waitForMessage(service);
+        QVERIFY(introduce.has_value());
+        const QJsonObject introduceObject = QJsonDocument::fromJson(introduce->toUtf8()).object();
+        QCOMPARE(introduceObject.value("type").toString(), QStringLiteral("introduce"));
+
+        // The Core: its answer and every candidate, gathered first.
+        DataChannelTransport core;
+        QSignalSpy answered(&core, &DataChannelTransport::localDescription);
+        QSignalSpy coreCandidates(&core, &DataChannelTransport::localCandidate);
+        QSignalSpy gathered(&core, &DataChannelTransport::gatheringComplete);
+        DataChannelTransport::Options options;
+        options.role = DataChannelTransport::Role::Answerer;
+        options.maxIncomingBytes = StationServer::kMaxIncomingMessageBytes;
+        options.ice = IceConfiguration::throughRendezvous(
+            {}, false, IceConfiguration::localAddressFamilies(), HostFamilies{});
+        QVERIFY(core.start(options));
+        QVERIFY(core.acceptDescription(introduceObject.value("offer").toString(),
+                                       QStringLiteral("offer")));
+        QTRY_COMPARE(answered.size(), 1);
+        QVERIFY(core.gatherCandidates(*options.ice));
+        QTRY_COMPARE_WITH_TIMEOUT(gathered.size(), 1, 10000);
+        QVERIFY(!coreCandidates.isEmpty());
+
+        // In one burst: the answer, then (in one row) every candidate and
+        // their end, then the service goes.
+        Wire::Message answer;
+        answer.kind = Wire::Kind::Answer;
+        answer.sdp = answered.at(0).at(0).toString();
+        service->sendTextMessage(QString::fromUtf8(
+            Wire::encode(Wire::Direction::ServiceToClient, answer)));
+        if (candidatesEnded) {
+            QStringList candidates;
+            for (const QList<QVariant>& emitted : std::as_const(coreCandidates)) {
+                candidates.append(emitted.at(0).toString());
+            }
+            candidates.append(QString());
+            for (const QString& candidate : std::as_const(candidates)) {
+                Wire::Message message;
+                message.kind = Wire::Kind::Candidate;
+                message.candidate = candidate;
+                const QByteArray wire = Wire::encode(Wire::Direction::ServiceToClient, message);
+                QVERIFY(!wire.isEmpty());
+                service->sendTextMessage(QString::fromUtf8(wire));
+            }
+        }
+        QElapsedTimer elapsed;
+        elapsed.start();
+        if (connectionLost) {
+            service->close();
+        } else {
+            service->sendTextMessage(
+                compact(QJsonObject{{"type", "introduction.end"}, {"code", "stationLeft"}}));
+        }
+        if (!candidatesEnded) {
+            QTRY_COMPARE_WITH_TIMEOUT(failed.size(), 1, 5000);
+            QVERIFY(elapsed.elapsed() < 5000);
+            QCOMPARE(ready.size(), 0);
+            return;
+        }
+        // Nothing more goes through the service; the connection opens.
+        QTRY_COMPARE_WITH_TIMEOUT(ready.size(), 1, 20000);
+        QCOMPARE(failed.size(), 0);
+        QVERIFY(core.isOpen());
+        std::unique_ptr<DataChannelTransport> opened(
+            qvariant_cast<DataChannelTransport*>(ready.at(0).at(0)));
+        QVERIFY(opened != nullptr);
+        QVERIFY(opened->isOpen());
+    }
+
     // Task 28 fix wave (review Minor 1): the device leaving before its
     // connection opened frees the Core's answer at once (its peer
     // connection and any relay allocation), not at kAnswerDeadlineMs.

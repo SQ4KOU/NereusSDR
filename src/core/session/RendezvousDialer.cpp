@@ -14,6 +14,12 @@
 //               or a lost service connection ends the attempt at once.
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-27: Task 28 tail (re-review Minor): at once only while the
+//               Core's answer or the end of its candidates is missing; once
+//               both came the deadline runs, as ICE can finish without the
+//               service. J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/RendezvousDialer.h"
@@ -115,31 +121,27 @@ void RendezvousDialer::dial(const QList<QUrl>& servers, const QString& stationId
     });
     connect(m_client, &RendezvousClient::candidateReceived, this,
             [this](const QByteArray&, const QString& candidate) {
-        if (!m_done && m_transport && !candidate.isEmpty()) {
+        if (m_done) {
+            return;
+        }
+        if (candidate.isEmpty()) {
+            m_coreCandidatesEnded = true;
+            return;
+        }
+        if (m_transport) {
             m_transport->acceptCandidate(candidate);
         }
     });
-    // Task 28 fix wave (review Minor 1): once the introduction has ended
-    // (the Core left the service, it expired, or this computer's
-    // connection to the service was lost) no answer or candidate can come
-    // any more, so the attempt ends now rather than at the deadline, and
-    // the next try goes through the service again.
+    // Task 28 fix wave (review Minor 1), narrowed in the Task 28 tail: once
+    // the introduction has ended (the Core left the service, it expired, or
+    // this computer's connection to the service was lost) no answer or
+    // candidate can come any more.
     connect(m_client, &RendezvousClient::introductionEnded, this,
             [this](const QByteArray&, const QString& code) {
-        if (m_done) {
-            return;
-        }
-        qCInfo(lcRendezvousDialer) << "The introduction ended before the connection opened:"
-                                   << code;
-        fail(QString::fromLatin1(kNotReached));
+        serviceGone(QStringLiteral("the introduction ended (%1)").arg(code));
     });
     connect(m_client, &RendezvousClient::connectionLost, this, [this] {
-        if (m_done) {
-            return;
-        }
-        qCInfo(lcRendezvousDialer) << "The connection to the remote access service ended "
-                                      "before the Core's connection opened";
-        fail(QString::fromLatin1(kNotReached));
+        serviceGone(QStringLiteral("the connection to the remote access service ended"));
     });
     connect(m_client, &RendezvousClient::serviceError, this,
             [](const QString& code, const QString&, qint64) {
@@ -147,6 +149,27 @@ void RendezvousDialer::dial(const QList<QUrl>& servers, const QString& stationId
     });
     m_deadline->start(m_deadlineMs);
     m_client->connectToService();
+}
+
+void RendezvousDialer::serviceGone(const QString& why)
+{
+    if (m_done) {
+        return;
+    }
+    if (m_answered && m_coreCandidatesEnded) {
+        // Everything the service carries from the Core has come: the
+        // connectivity checks run between the two ends without it (the
+        // Core learns this computer's address from the checks), so the
+        // attempt carries on to its deadline.
+        qCInfo(lcRendezvousDialer) << "After the Core's answer and candidates," << why
+                                   << "; the connection can still open";
+        return;
+    }
+    // What the connection still needed from the Core cannot come any more:
+    // end now rather than at the deadline, so the next try goes through the
+    // service again.
+    qCInfo(lcRendezvousDialer) << "Before the Core's answer and candidates came," << why;
+    fail(QString::fromLatin1(kNotReached));
 }
 
 void RendezvousDialer::startOffer()
