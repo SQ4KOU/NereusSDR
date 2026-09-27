@@ -653,23 +653,25 @@ password = base64(HMAC-SHA1(secret, username)) standard base64, with padding
   per-id quotas, as it likes. What bounds the relay is coturn's total
   quota, sized in slots (JJ's ruling, 2026-09-26): data use is watched,
   not capped. On `rv.nereussdr.com`:
-  - `user-quota` 4 per station id: a session is up to 2 allocations at
-    each end (one per address family), and both ends share the station
-    id's quota (coturn counts per username, observed by
-    `coturn-check.sh`: a fourth allocation for one id is accepted, a fifth
-    refused with 486). It only keeps one Core's sessions from taking the
-    whole relay.
-  - `total-quota` 64 slots by default (`RV_RELAY_SLOTS` in
+  - `user-quota` 8 per station id: a session runs two ICE connections
+    (control and media), libjuice allocates on each whenever credentials
+    are configured, and each connection is up to 2 allocations at each end
+    (one per address family), so a session is up to 4 allocations at each
+    end and 8 relayed at both. Both ends share the station id's quota
+    (coturn counts per username, observed by `coturn-check.sh`: an eighth
+    allocation for one id is accepted, a ninth refused with 486). It only
+    keeps one Core's sessions from taking the whole relay.
+  - `total-quota` 128 slots by default (`RV_RELAY_SLOTS` in
     `setup-server.sh`, the one place it is set): about 16 sessions relayed
     at both ends at once, or 32 at one end.
   - `max-bps` 80000 bytes a second per allocation, each way, above the
     largest session shape (about 520 kbit/s).
-  - `bps-capacity` = slots x `max-bps` = 64 x 80000 = 5120000 bytes a
+  - `bps-capacity` = slots x `max-bps` = 128 x 80000 = 10240000 bytes a
     second. coturn reserves `max-bps` of it for each live allocation and
     refuses one when nothing is left, so it must never bind below the slot
-    count; at this value it cannot. The peak it allows is 5.12 MB a second
-    out (about 41 Mbit/s) with every slot full at full rate, about 13 TB
-    in 30 days; real use is far below that, since most sessions go direct
+    count; at this value it cannot. The peak it allows is 10.24 MB a
+    second out (about 82 Mbit/s) with every slot full at full rate, about
+    27 TB in 30 days; real use is far below that, since most sessions go direct
     and a relayed one rarely runs at its cap.
   - The monthly transfer figure (`RV_TRANSFER_GB_PER_MONTH`, default 1000)
     caps nothing. It is the threshold of a daily data-use report

@@ -37,7 +37,7 @@
 #     (turn_probe.py, for the error codes);
 #   - no anonymous, wrongly signed or TCP relay allocation, no TCP listener;
 #   - the per-user and total quotas (the relay's slots at a small test
-#     value, 6);
+#     value, 10);
 #   - credentials minted by the running service verify with coturn;
 #   - what coturn does when an allocation is refreshed after its credential
 #     expired (the rendezvous document, section 8), with the real nonce
@@ -110,9 +110,9 @@ sx() { docker exec -i "$server" bash -s -- "$@"; }
 px() { docker exec -i "$peer" bash -s -- "$@"; }
 probe() { docker exec "$peer" python3 /repo/rendezvous/tests/turn_probe.py "$@"; }
 # Test-only settings for setup-server.sh: the test addresses stand in for
-# public ones, and the relay has 6 slots so the total quota can be reached.
+# public ones, and the relay has 10 slots so the total quota can be reached.
 # RV_MEMORY_MB fixes the memory the limits are worked out from.
-readonly setup_env="RV_PUBLIC_IPV4=${s4} RV_PUBLIC_IPV6=${s6} RV_ALLOW_DOCUMENTATION_ADDRESSES=1 RV_RELAY_SLOTS=6 RV_MEMORY_MB=1024"
+readonly setup_env="RV_PUBLIC_IPV4=${s4} RV_PUBLIC_IPV6=${s6} RV_ALLOW_DOCUMENTATION_ADDRESSES=1 RV_RELAY_SLOTS=10 RV_MEMORY_MB=1024"
 
 # --------------------------------------------------------------- setup
 # A deploy key made for this run only; setup-server.sh makes the account.
@@ -205,18 +205,18 @@ test ! -e /etc/nereus-rendezvous && test ! -e /etc/systemd/system/nereus-rendezv
 ! id -u nereusrv >/dev/null 2>&1
 sha256sum --quiet -c /run/caddyfile.sum
 EOS
-grep -q 'relay: 6 slots (total-quota), 4 per station id (user-quota), 80000 bytes/s each way per slot (max-bps): bps-capacity 480000 bytes/s' <<<"$out" \
-    || { printf '%s\n' "$out" >&2; fail "the dry run's sizing line (6 slots)"; }
+grep -q 'relay: 10 slots (total-quota), 8 per station id (user-quota), 80000 bytes/s each way per slot (max-bps): bps-capacity 800000 bytes/s' <<<"$out" \
+    || { printf '%s\n' "$out" >&2; fail "the dry run's sizing line (10 slots)"; }
 out="$(sx <<EOS 2>&1
 set -euo pipefail
 env RV_PUBLIC_IPV4=${s4} RV_PUBLIC_IPV6=${s6} RV_ALLOW_DOCUMENTATION_ADDRESSES=1 rv-setup --dry-run --no-start
 EOS
 )" || { printf '%s\n' "$out" >&2; fail "setup-server.sh --dry-run with the default sizing failed"; }
-grep -q 'relay: 64 slots (total-quota), 4 per station id (user-quota), 80000 bytes/s each way per slot (max-bps): bps-capacity 5120000 bytes/s, at most 40960 kbit/s out' <<<"$out" \
+grep -q 'relay: 128 slots (total-quota), 8 per station id (user-quota), 80000 bytes/s each way per slot (max-bps): bps-capacity 10240000 bytes/s, at most 81920 kbit/s out' <<<"$out" \
     || { printf '%s\n' "$out" >&2; fail "the default sizing line"; }
 grep -Eq 'data-use report: outbound bytes on eth[0-9]+, a warning past 1000 GB' <<<"$out" \
     || { printf '%s\n' "$out" >&2; fail "the data-use line"; }
-pass "setup-server.sh --dry-run passes and changes nothing; default relay 64 slots, bps-capacity 5120000 bytes/s (64 x 80000), user-quota 4; data use on the default route's interface, threshold 1000 GB"
+pass "setup-server.sh --dry-run passes and changes nothing; default relay 128 slots, bps-capacity 10240000 bytes/s (128 x 80000), user-quota 8; data use on the default route's interface, threshold 1000 GB"
 
 out="$(sx <<EOS 2>&1
 set -euo pipefail
@@ -263,9 +263,9 @@ grep -qx 'Environment=GOMEMLIMIT=384MiB' /etc/systemd/system/caddy.service.d/ner
 grep -qx 'MemoryMax=268M' /etc/systemd/system/nereus-rendezvous.service.d/memory.conf
 grep -Eqx 'RV_DATA_USE_INTERFACE=eth[0-9]+' /etc/nereus-rendezvous/data-use.conf
 grep -qx 'RV_TRANSFER_GB_PER_MONTH=1000' /etc/nereus-rendezvous/data-use.conf
-grep -qx 'total-quota=6' /etc/turnserver.conf
-grep -qx 'bps-capacity=480000' /etc/turnserver.conf
-grep -qx 'user-quota=4' /etc/turnserver.conf
+grep -qx 'total-quota=10' /etc/turnserver.conf
+grep -qx 'bps-capacity=800000' /etc/turnserver.conf
+grep -qx 'user-quota=8' /etc/turnserver.conf
 [[ "$(wc -c < /etc/nereus-rendezvous/turn-secret)" -eq 65 ]]
 grep -qx "static-auth-secret=$(cat /etc/nereus-rendezvous/turn-secret)" /etc/turnserver.conf
 grep -qx 'turn_secret_file = /run/credentials/nereus-rendezvous.service/turn-secret' /etc/nereus-rendezvous/rendezvous.conf
@@ -282,7 +282,7 @@ for name in ("stun_urls", "turn_urls"):
 assert written.stun_urls[0].startswith("stun:rv4.") and written.turn_urls[0].startswith("turn:rv4."), written
 PY
 EOS
-pass "secret (root 600, 64 hex characters), coturn configuration (root:turnserver 640, total-quota 6, bps-capacity 480000, user-quota 4), service configuration (STUN and TURN URLs the same, in the same order, as the service's defaults and the sample: rv4 first), units, data-use report and code directory; the deploy account nereusrv with exactly the given key; the rv Caddyfile, validated; Caddy's drop-in with GOMEMLIMIT 384MiB and the service's MemoryMax 268M from 1024 MiB"
+pass "secret (root 600, 64 hex characters), coturn configuration (root:turnserver 640, total-quota 10, bps-capacity 800000, user-quota 8), service configuration (STUN and TURN URLs the same, in the same order, as the service's defaults and the sample: rv4 first), units, data-use report and code directory; the deploy account nereusrv with exactly the given key; the rv Caddyfile, validated; Caddy's drop-in with GOMEMLIMIT 384MiB and the service's MemoryMax 268M from 1024 MiB"
 
 # The data-use report as installed, run once the way its unit runs it.
 out="$(sx <<'EOS' 2>&1
@@ -806,13 +806,13 @@ for sid in ids:
     clients.append(c)
 PY
 a=useraaaaaaaaaaaaaaaaaaaaaa b=userbbbbbbbbbbbbbbbbbbbbbb
-python3 hold.py "$1" "$a" "$a" "$a" "$a" "$a" "$b" "$b" usercccccccccccccccccccccc
+python3 hold.py "$1" "$a" "$a" "$a" "$a" "$a" "$a" "$a" "$a" "$a" "$b" "$b" usercccccccccccccccccccccc
 EOS
 )"
 printf '%s\n' "$quota" | sed 's/^/# /'
-[[ "$(printf '%s\n' "$quota" | tr '\n' ' ')" == "useraa ok useraa ok useraa ok useraa ok useraa 486 userbb ok userbb ok usercc 486 " ]] \
-    || fail "quotas: expected ok ok ok ok 486 ok ok 486"
-pass "quotas: a fourth allocation by one station id is accepted and a fifth refused (486, user-quota 4); with 6 slots the seventh on the server is refused (486, total-quota 6), and bps-capacity 480000 (6 x 80000) never refuses first"
+[[ "$(printf '%s\n' "$quota" | tr '\n' ' ')" == "useraa ok useraa ok useraa ok useraa ok useraa ok useraa ok useraa ok useraa ok useraa 486 userbb ok userbb ok usercc 486 " ]] \
+    || fail "quotas: expected eight ok, 486, ok ok, 486"
+pass "quotas: an eighth allocation by one station id is accepted and a ninth refused (486, user-quota 8); with 10 slots the eleventh on the server is refused (486, total-quota 10), and bps-capacity 800000 (10 x 80000) never refuses first"
 
 # --------------------------------------------------- the service's credentials
 stop_coturn
