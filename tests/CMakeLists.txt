@@ -1053,6 +1053,10 @@ target_compile_definitions(tst_p2_regression_freeze PRIVATE
     NEREUS_BUILD_TESTS
     NEREUS_TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/data")
 
+# R-R3-49 load round: P1FakeRadio streams while the thread that made it is
+# busy (it runs on a thread of its own).
+nereus_add_test(tst_p1_fake_radio fakes/P1FakeRadio.cpp)
+
 # P1 loopback integration test — uses P1FakeRadio from tests/fakes/
 nereus_add_test(tst_p1_loopback_connection fakes/P1FakeRadio.cpp)
 target_compile_definitions(tst_p1_loopback_connection PRIVATE NEREUS_BUILD_TESTS)

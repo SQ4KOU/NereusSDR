@@ -6,13 +6,29 @@
 //
 // Used by tst_p1_loopback_connection.cpp (Phase 3I Task 9) and
 // tst_reconnect_on_silence.cpp (Phase 3I Task 10).
+//
+// R-R3-49 load round: the fake runs on a thread of its own, as a radio is a
+// device of its own. On the test's thread, a caller busy for two seconds
+// (ConnectableRadioModel's synchronous WDSP start, a loaded machine) kept it
+// from reading the metis-start and streaming, so P1RadioConnection's real
+// 2 s connect watchdog fired on the test, not on the radio. Every call below
+// runs on the fake's thread and returns once done, as before (frames sent
+// have been written when sendEp6Frames() returns); the readers take a lock.
 
 #pragma once
-#include <QObject>
-#include <QTimer>
-#include <QUdpSocket>
+#include <QByteArray>
 #include <QHostAddress>
 #include <QList>
+#include <QMutex>
+#include <QObject>
+
+#include <atomic>
+#include <functional>
+#include <memory>
+
+class QThread;
+class QTimer;
+class QUdpSocket;
 
 namespace NereusSDR::Test {
 
@@ -29,7 +45,7 @@ public:
     void stop();
 
     QHostAddress localAddress() const { return QHostAddress(QHostAddress::LocalHost); }
-    quint16      localPort()    const;
+    quint16      localPort()    const { return m_port.load(); }
 
     // Build `count` ep6 frames with I=0.5, Q=0.0 (DC tone) and send them
     // to the last client that sent a metis-start command.
@@ -53,33 +69,43 @@ public:
     // Skip `count` ep6 sequence numbers, as a radio whose frames were lost
     // on the way would appear: the next frame sent carries a number `count`
     // past the one it would have had.
-    void skipEp6Sequence(quint32 count) { m_ep6Seq += count; }
+    void skipEp6Sequence(quint32 count);
 
-    int  ep2FramesReceived() const { return m_ep2Count; }
-    bool isRunning()         const { return m_running; }
-    int  metisStopCount()    const { return m_stopCount; }
+    int  ep2FramesReceived() const;
+    bool isRunning()         const;
+    int  metisStopCount()    const;
     // Every start/stop (EF FE 04 xx) datagram received, as it arrived on
     // the socket, oldest first (R-R3-49: tests assert on the wire).
-    const QList<QByteArray>& metisCommandsReceived() const { return m_metisCommands; }
+    QList<QByteArray> metisCommandsReceived() const;
 
     // Override the firmware version reported in discovery replies (default: 72).
-    void setFirmwareVersion(int fw) { m_firmwareVersion = fw; }
-
-private slots:
-    void onReadyRead();
-    void onAutoStreamTick();
+    void setFirmwareVersion(int fw);
 
 private:
+    // Runs `work` on the fake's thread and returns once it has run.
+    void onRadioThread(const std::function<void()>& work);
+
+    // The fake's thread only.
+    void onReadyRead();
+    void onAutoStreamTick();
     void handleDiscoveryProbe(const QHostAddress& from, quint16 port);
     void handleMetisCommand(const QByteArray& pkt, const QHostAddress& from, quint16 port);
     void handleEp2Frame(const QByteArray& pkt);
+    void writeEp6Frames(int count);
 
     // Build one 1032-byte ep6 frame with a fixed DC tone (I=0.5, Q=0.0).
     // Puts `seq` in the sequence field.
     QByteArray buildEp6Frame(quint32 seq, int numRx = 1);
 
+    std::unique_ptr<QThread> m_thread;
+    // Lives on m_thread; the socket and the timer are its children.
+    QObject*     m_radio{nullptr};
     QUdpSocket*  m_socket{nullptr};
     QTimer*      m_streamTimer{nullptr};
+    std::atomic<quint16> m_port{0};
+
+    // Everything below is shared between the fake's thread and callers.
+    mutable QMutex m_mutex;
     QHostAddress m_clientAddress;
     quint16      m_clientPort{0};
     bool         m_running{false};

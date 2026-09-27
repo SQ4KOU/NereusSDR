@@ -139,6 +139,18 @@ std::unique_ptr<ConnectableRadioModel> ConnectableRadioModel::create(
             return nullptr;
         }
     }
+    // R-R3-49 load round: the receive channels open on the receive lane in
+    // the same way, and Connected does not wait for them either. The fake
+    // radio used to share the test's thread, which slowed the connect enough
+    // to hide it; streaming from a thread of its own, it let
+    // tst_remote_dsp_info read channel 0 before the lane had opened it.
+    if (NereusSDR::DspControlThread* lane = model->receiveLane()) {
+        constexpr int kRxOpenTimeoutMs = 600000;
+        if (!QTest::qWaitFor([lane]() { return lane->waitIdleForTest(0); },
+                             kRxOpenTimeoutMs)) {
+            return nullptr;
+        }
+    }
 
     return harness;
 }
