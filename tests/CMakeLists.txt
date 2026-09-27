@@ -7584,6 +7584,19 @@ target_compile_definitions(tst_station_pairing_client PRIVATE
 # through the remote access service, shaped by the pinned libdatachannel and
 # libjuice.
 nereus_add_test(tst_ice_configuration)
+# Task 56: the optional Core route owner lives with the actual ICE agent,
+# including a retained transport reference after its first owner closes.
+nereus_add_test(tst_ice_transport_lifetime CORE_ONLY EXTRA_LABELS session)
+target_link_libraries(tst_ice_transport_lifetime PRIVATE datachannel-static)
+target_include_directories(tst_ice_transport_lifetime PRIVATE
+    "${libdatachannel_SOURCE_DIR}/src"
+    "${libdatachannel_SOURCE_DIR}/include"
+    "${libdatachannel_SOURCE_DIR}/include/rtc"
+    "${libdatachannel_SOURCE_DIR}/deps/plog/include"
+    "${libdatachannel_SOURCE_DIR}/deps/usrsctp/usrsctplib"
+    "${libdatachannel_SOURCE_DIR}/deps/libjuice/include"
+    "${libdatachannel_SOURCE_DIR}/deps/libsrtp/include"
+    "${libdatachannel_SOURCE_DIR}/deps/json/include")
 # iPhone app plan Task 27 (R-IOS-08, R-IOS-16): the rendezvous wire and its
 # crypto and control vectors, the Core's and the desktop's conformance
 # runners (rendezvous/conformance/v1/), and the Core against the Python
@@ -7623,17 +7636,21 @@ add_executable(nereus_floor_probe EXCLUDE_FROM_ALL
     tools/floor/WsRelayPrototype.cpp)
 target_link_libraries(nereus_floor_probe PRIVATE NereusCore)
 set_target_properties(nereus_floor_probe PROPERTIES AUTOMOC ON)
-# iPhone app plan Task 28 fix wave (R-IOS-16; review Minor 6): the libjuice
-# TURN release change finds agent.c by the file, not the spelling of its
-# directory. Configures a small project only; nothing is built or fetched.
-if(DEFINED libjuice_SOURCE_DIR AND EXISTS "${libjuice_SOURCE_DIR}/src/agent.c")
-    add_test(NAME libjuice_patch_paths
+# Task 56: the Core's compiled vendor sources contain the exact reviewed
+# relay cleanup patches, including libjuice's public and internal headers.
+if(DEFINED libjuice_SOURCE_DIR AND DEFINED NEREUS_ORIGINAL_JUICE_SOURCE_DIR
+   AND DEFINED NEREUS_ORIGINAL_DC_SOURCE_DIR)
+    add_test(NAME relay_cleanup_patches
         COMMAND ${CMAKE_COMMAND}
             -DREPO=${CMAKE_SOURCE_DIR}
-            -DAGENT_C=${libjuice_SOURCE_DIR}/src/agent.c
-            -DWORK=${CMAKE_CURRENT_BINARY_DIR}/libjuice-patch-paths
-            -P ${CMAKE_SOURCE_DIR}/tests/scripts/check-libjuice-patch-paths.cmake)
-    set_tests_properties(libjuice_patch_paths PROPERTIES LABELS "session" TIMEOUT 120)
+            -DBUILD=${CMAKE_BINARY_DIR}
+            -DORIGINAL_JUICE=${NEREUS_ORIGINAL_JUICE_SOURCE_DIR}
+            -DORIGINAL_DC=${NEREUS_ORIGINAL_DC_SOURCE_DIR}
+            -DPATCHED_JUICE=${libjuice_SOURCE_DIR}
+            -DDATACHANNEL=${libdatachannel_SOURCE_DIR}
+            -DWORK=${CMAKE_CURRENT_BINARY_DIR}/relay-cleanup-patches
+            -P ${CMAKE_SOURCE_DIR}/tests/scripts/check-relay-cleanup-patches.cmake)
+    set_tests_properties(relay_cleanup_patches PROPERTIES LABELS "session" TIMEOUT 120)
 endif()
 # R-R3-49: libdatachannel's remote description change
 # (cmake/patches/libdatachannel-keep-remote-description-first.cpp) and its

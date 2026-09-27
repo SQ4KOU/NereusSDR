@@ -12,60 +12,6 @@ status, and the plan task or requirement ID it belongs to.
 
 ## Open questions (JJ has not ruled)
 
-### G-01: Spectrum decimation range cited to Thetis is wider than Thetis allows
-
-The Rendering setup page lets an operator pick a decimation step from 1 to 32. Thetis's own
-control tops out at 16, so NereusSDR's range is wider than the source it was ported from.
-
-- Found: 2026-09-27, trunk catalogue-ranges task, lane B.
-- Evidence: `nereus-lane-b/.../progress.md:434`: "the decimation range 1-32 is cited to Thetis,
-  which allows 1-16 (setup.designer.cs:33834 [v2.10.3.15]); cite correction sent back to the
-  implementer; the range itself is a question for JJ (low)."
-- Ruling: OPEN. Options: (1) narrow NereusSDR's range to Thetis's 1-16; (2) keep 1-32 as a
-  NereusSDR-original widening and say so in the catalogue's cite. Recommendation: option 1
-  (match Thetis; the wider range was a citation error, not a deliberate choice).
-- Status: cite corrected; range decision open.
-- Plan: R-IOS-06, R-IOS-27 (catalogue ranges task).
-
-### G-02: Several noise-reduction ranges and new-slice defaults differ from Thetis
-
-The desktop's NR2, NR4 and new-slice NR4 controls use different numeric ranges and starting
-values than Thetis's own dialogs. An operator moving between the two apps would see different
-numbers for what should be the same control.
-
-- Found: 2026-09-27, catalogue-ranges scout and task, lane B.
-- Evidence: `nereus-lane-b/.../progress.md:440`: "desktop NR values that differ from Thetis
-  v2.10.3.15 (NR2 Factor/Rate 0-30 vs 0-100; NR4 Rescale 0-20 vs 0-12; NR4 SNRthresh -30..0 vs
-  -10..+10; new-slice NR4 Smoothing 65/Whitening 2/Algo 2 vs 0/0/Algo 1). Recommend correcting
-  to Thetis, as NR1 was."
-- Ruling: JJ approved matching Thetis on 2026-09-27 in the Core/GUI Codex continuation:
-  "Match Thetis (recommended)". Match the NR2 Factor/Rate range and fractional steps,
-  NR4 Rescale/SNR threshold ranges, and new-slice Smoothing/Whitening/algorithm defaults.
-  Preserve saved operator choices; this is not a settings reset.
-- Status: NR1 corrected and built (commit `d6d96eaa`, in trunk); NR2/NR4 implementation
-  merged into trunk as signed `edfd220bb` (implementation `b9bedc3c5`). New control/default/save
-  regressions, catalogue checks and both session transports pass. Existing saved choices
-  remain intact; catalogue fixtures advertise the same ranges as the controls.
-- Plan: R-IOS-06, R-IOS-27.
-
-### G-03: A local window's receive waterfall never takes the display calibration
-
-A remote window's waterfall rows arrive already calibrated from the Core. A local window's
-receive waterfall does not apply the same calibration, so the two show slightly different
-colours for the same signal.
-
-- Found: 2026-09-25/26, parity Task 31.
-- Evidence: `nereus-parity/.../progress.md:110`: "Task 31: question for JJ: a local window's
-  receive waterfall never takes the display calibration (Thetis adds it; a remote window's
-  rows arrive calibrated from the Core), so local and remote differ; fixing it moves every
-  operator's receive colours."
-- Ruling: OPEN. Recommendation: none volunteered by the implementer, because the fix changes
-  what every operator currently sees; needs JJ's own call on whether the colour shift is
-  acceptable.
-- Status: open; the related TX display calibration (a separate item) was built in commit
-  `9d53bac1`.
-- Plan: parity Task 31 (A11, R-R3-49).
-
 ### G-04: ATT on TX changes take effect at the next key, not at once
 
 Thetis applies a step-attenuator-on-TX change immediately (`console.cs:19078`). NereusSDR
@@ -444,6 +390,60 @@ Thetis only enables ADC0 on every board; NereusSDR offers two ADCs on boards tha
   receiver's bandwidth and check the wide edges fill in.
 - Plan: needs an ID (raised in the gaps review; not a plan task on its own).
 
+## Approved continuation work
+
+### G-01: Spectrum decimation range cited to Thetis is wider than Thetis allows
+
+The Rendering setup page lets an operator pick a decimation step from 1 to 32. Thetis's own
+control tops out at 16, so NereusSDR's range is wider than the source it was ported from.
+
+- Found: 2026-09-27, trunk catalogue-ranges task, lane B.
+- Evidence: `nereus-lane-b/.../progress.md:434`: "the decimation range 1-32 is cited to Thetis,
+  which allows 1-16 (setup.designer.cs:33834 [v2.10.3.15]); cite correction sent back to the
+  implementer; the range itself is a question for JJ (low)."
+- Ruling: JJ approved on 2026-09-27: "Match Thetis: 1–16 (recommended)".
+- Status: implementation in `codex/display-decimation-parity`; the UI, catalogue, local FFT
+  engines and Core media request validation share the same bounds. Boundary regression
+  first failed because 17 was accepted. Verification in progress.
+- Plan: R-IOS-06, R-IOS-27 (catalogue ranges task).
+
+### G-02: Several noise-reduction ranges and new-slice defaults differ from Thetis
+
+The desktop's NR2, NR4 and new-slice NR4 controls use different numeric ranges and starting
+values than Thetis's own dialogs. An operator moving between the two apps would see different
+numbers for what should be the same control.
+
+- Found: 2026-09-27, catalogue-ranges scout and task, lane B.
+- Evidence: `nereus-lane-b/.../progress.md:440`: "desktop NR values that differ from Thetis
+  v2.10.3.15 (NR2 Factor/Rate 0-30 vs 0-100; NR4 Rescale 0-20 vs 0-12; NR4 SNRthresh -30..0 vs
+  -10..+10; new-slice NR4 Smoothing 65/Whitening 2/Algo 2 vs 0/0/Algo 1). Recommend correcting
+  to Thetis, as NR1 was."
+- Ruling: JJ approved matching Thetis on 2026-09-27 in the Core/GUI Codex continuation:
+  "Match Thetis (recommended)". Match the NR2 Factor/Rate range and fractional steps,
+  NR4 Rescale/SNR threshold ranges, and new-slice Smoothing/Whitening/algorithm defaults.
+  Preserve saved operator choices; this is not a settings reset.
+- Status: NR1 corrected and built (commit `d6d96eaa`, in trunk); NR2/NR4 implementation
+  merged into trunk as signed `edfd220bb` (implementation `b9bedc3c5`). New control/default/save
+  regressions, catalogue checks and both session transports pass. Existing saved choices
+  remain intact; catalogue fixtures advertise the same ranges as the controls.
+- Plan: R-IOS-06, R-IOS-27.
+
+### G-03: A local window's receive waterfall never takes the display calibration
+
+A remote window's waterfall rows arrive already calibrated from the Core. A local window's
+receive waterfall does not apply the same calibration, so the two show slightly different
+colours for the same signal.
+
+- Found: 2026-09-25/26, parity Task 31.
+- Evidence: `nereus-parity/.../progress.md:110`: "Task 31: question for JJ: a local window's
+  receive waterfall never takes the display calibration (Thetis adds it; a remote window's
+  rows arrive calibrated from the Core), so local and remote differ; fixing it moves every
+  operator's receive colours."
+- Ruling: JJ approved on 2026-09-27: "Apply calibration in both windows (recommended)".
+- Status: queued for implementation; local receive waterfall will apply the same calibration
+  as the remote path. The colour shift is explicitly approved.
+- Plan: parity Task 31 (A11, R-R3-49).
+
 ## Continuation findings and verification, 2026-09-27
 
 ### G-32: Slice publication and incoming DTLS records could race initialization
@@ -489,8 +489,10 @@ Thetis only enables ADC0 on every board; NereusSDR offers two ADCs on boards tha
 - Ruling: implementation under JJ's explicit authorization to finish R5 and Core phone
   prerequisites. No new operator behavior ruling is inferred. Existing identity checks and
   the transmit watchdog remain required.
-- Status: source and negative provenance checks pass; actual patched Core rebuild and runtime
-  verification in progress. An earlier build was found to have skipped vendor patches despite
+- Status: signed implementation `50fcf932` built and verified in trunk: lifetime, rendezvous
+  and provenance checks passed 4/4 in 67.90 s. Phone both-end interop passed all seven tests
+  plus three release repeats with a staged copy of the verified helper. No updated Core has
+  yet been installed on a radio host. An earlier build was found to have skipped vendor patches despite
   a successful tool exit. That evidence was withdrawn. The patch helper now rejects skipped
   application and materialized hashes are checked. No build from that earlier run was deployed.
 - Plan: R5 remote access; phone relay cleanup and replacement.
@@ -503,10 +505,10 @@ Thetis only enables ADC0 on every board; NereusSDR offers two ADCs on boards tha
   handler before calling close, since a transport can signal closure synchronously.
 - Ruling: ordinary correctness fix within JJ's authorized Core station work; no change to
   pairing trust, permissions, or timing policy is proposed.
-- Status: signed implementation `ecb939955` integrated into trunk. The regression first
+- Status: signed implementation `ecb939955` integrated into trunk as `40244520c`. The regression first
   failed for delayed close and server destruction; all three closure cases pass after the fix.
   Session and pairing suites pass both in the lane (2/2, 26.07 s) and on the integrated
-  working tree (2/2, 25.34 s). Only Core code is included; the phone's final-frame receive
+  working tree (2/2, 25.35 s). Only Core code is included; the phone's final-frame receive
   change remains phone-owned.
 - Plan: R-IOS-08; pairing interoperability.
 
