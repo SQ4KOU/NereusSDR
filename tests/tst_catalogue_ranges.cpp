@@ -28,6 +28,10 @@
 //   2026-09-27: original test for NereusSDR by J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code
 //               (R-IOS-06, R-IOS-27).
+//   2026-09-27: shown.rounding, and the TX applet's labels at every value
+//               between the steps (mi0bot's HL2 drive snap). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -88,27 +92,47 @@ QJsonObject range(double min, double max, double step)
 }
 
 QJsonObject rangeShown(double min, double max, double step, double shownMin, double shownMax,
-                       int decimals, const QString& unit)
+                       int decimals, const QString& unit,
+                       const QString& rounding = QStringLiteral("none"))
 {
     QJsonObject out = range(min, max, step);
     out.insert(QStringLiteral("shown"),
                QJsonObject{{QStringLiteral("min"), shownMin},
                            {QStringLiteral("max"), shownMax},
                            {QStringLiteral("decimals"), decimals},
-                           {QStringLiteral("unit"), unit}});
+                           {QStringLiteral("unit"), unit},
+                           {QStringLiteral("rounding"), rounding}});
     return out;
 }
 
-// What the control shows at `value`, by the catalogue's rule: linear from
-// shown.min at `min` to shown.max at `max`, to `decimals` places.
+// A half to the even whole number, as the catalogue's `halfEven` says.
+double roundHalfEven(double x)
+{
+    const double down = std::floor(x);
+    const double diff = x - down;
+    if (diff != 0.5) {
+        return std::round(x);
+    }
+    return std::fmod(down, 2.0) == 0.0 ? down : down + 1.0;
+}
+
+// What the control shows at `value`, by the catalogue's rule: with
+// shown.rounding `halfEven` a value between steps is first taken to the
+// nearest step (a half to the even step); then linear from shown.min at
+// `min` to shown.max at `max`, to `decimals` places.
 QString shownByTheCatalogue(const QJsonObject& control, int value)
 {
     const double min = control.value(QStringLiteral("min")).toDouble();
     const double max = control.value(QStringLiteral("max")).toDouble();
+    const double step = control.value(QStringLiteral("step")).toDouble();
     const QJsonObject shown = control.value(QStringLiteral("shown")).toObject();
+    double v = value;
+    if (shown.value(QStringLiteral("rounding")).toString() == QStringLiteral("halfEven")) {
+        v = min + step * roundHalfEven((value - min) / step);
+    }
     const double lo = shown.value(QStringLiteral("min")).toDouble();
     const double hi = shown.value(QStringLiteral("max")).toDouble();
-    const double at = lo + (value - min) * (hi - lo) / (max - min);
+    const double at = lo + (v - min) * (hi - lo) / (max - min);
     return QString::number(at, 'f', shown.value(QStringLiteral("decimals")).toInt());
 }
 
@@ -282,7 +306,7 @@ private slots:
                                 QStringLiteral("tunePower"), QStringLiteral("micGainDb")}));
 
         QCOMPARE(g2.value(QStringLiteral("power")).toObject(),
-                 rangeShown(0, 100, 1, 0, 100, 0, QString()));
+                 rangeShown(0, 100, 1, 0, 100, 0, QString(), QStringLiteral("halfEven")));
         QCOMPARE(g2.value(QStringLiteral("tunePowerForTxBand")).toObject(),
                  rangeShown(0, 100, 1, 0, 100, 0, QString()));
         QCOMPARE(g2.value(QStringLiteral("tunePower")).toObject(),
@@ -290,8 +314,11 @@ private slots:
         QCOMPARE(g2.value(QStringLiteral("micGainDb")).toObject(), range(-40, 10, 1));
 
         // The HL2's attenuator in dB (mi0bot console.cs:29245, setup.cs:5307).
+        // A drive between steps shows as mi0bot's label snaps it (the nearest
+        // step, a half to the even one; console.cs:29245-29264).
         QCOMPARE(hl2.value(QStringLiteral("power")).toObject(),
-                 rangeShown(0, 90, 6, -7.5, 0, 1, QStringLiteral("dB")));
+                 rangeShown(0, 90, 6, -7.5, 0, 1, QStringLiteral("dB"),
+                            QStringLiteral("halfEven")));
         QCOMPARE(hl2.value(QStringLiteral("tunePowerForTxBand")).toObject(),
                  rangeShown(0, 99, 3, -16.5, 0, 1, QStringLiteral("dB")));
         QCOMPARE(hl2.value(QStringLiteral("tunePower")).toObject(),
@@ -320,7 +347,7 @@ private slots:
     }
 
     // The TX applet's sliders span the catalogue's ranges, and their labels
-    // read what the catalogue's `shown` gives at every step.
+    // read what the catalogue's `shown` gives at every value.
     void transmitMatchesTheTxApplet()
     {
         QFETCH(int, model);
@@ -344,7 +371,9 @@ private slots:
             QCOMPARE(double(row.slider->maximum()), control.value(QStringLiteral("max")).toDouble());
             const int step = control.value(QStringLiteral("step")).toInt();
             QCOMPARE(row.slider->singleStep(), step);
-            for (int v = row.slider->minimum(); v <= row.slider->maximum(); v += step) {
+            // Every value, between the steps too (a drag, or another
+            // window's write).
+            for (int v = row.slider->minimum(); v <= row.slider->maximum(); ++v) {
                 row.slider->setValue(v);
                 applet.updatePowerSliderLabels();
                 QCOMPARE(row.label->text(), shownByTheCatalogue(control, v));

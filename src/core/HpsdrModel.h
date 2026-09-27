@@ -24,6 +24,11 @@
 //                 so the Core's catalogue reads what the widgets show
 //                 (R-IOS-06, R-IOS-27). J.J. Boyd (KG4VCF), with
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-27 - rfPowerShownFor ports the rest of mi0bot's UpdateDriveLabel:
+//                 the HL2 drive snap near the ends and C#'s Math.Round (a
+//                 half to even), so an in-between drive shows as mi0bot
+//                 shows it. J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 /*  enums.cs
@@ -400,17 +405,57 @@ constexpr int   hl2AttenuatorStepCount() noexcept { return 16; }
 // spinbox and the Core's catalogue (board.transmit) all read these, so an
 // app shows exactly what the desktop does.
 //
+// C#'s Math.Round(double), which mi0bot's labels use: the nearest whole
+// number, a half to the even one (MidpointRounding.ToEven).
+inline double csharpMathRound(double x) noexcept {
+    const double down = std::floor(x);
+    const double diff = x - down;
+    if (diff < 0.5) {
+        return down;
+    }
+    if (diff > 0.5) {
+        return down + 1.0;
+    }
+    return (std::fmod(down, 2.0) == 0.0) ? down : down + 1.0;
+}
+
 // RF Power (the `power` property, slider 0..rfPowerSliderMaxFor): the HL2
-// shows its output attenuator in dB, other SKUs the bare drive value.
+// shows its output attenuator in dB, other SKUs the bare drive value. A
+// drive between the slider's steps snaps as mi0bot's label does first.
 // From mi0bot-Thetis console.cs:29245-29264 [v2.10.3.13-beta2]
 //   if (HardwareSpecific.Model == HPSDRModel.HERMESLITE)       // MI0BOT: HL2 has only 15 output power levels
-//   ...
+//   {
+//       if (4 > drv)
+//       {
+//           drv = 0;
+//       }
+//       else if (3 < drv && 6 > drv)
+//       {
+//           drv = 6;
+//       }
+//       else if (87 < drv)
+//       {
+//           drv = 90;
+//       }
+//       else if (84 < drv && 88 > drv)
+//       {
+//           drv = 84;
+//       }
+//
 //       lblPWR.Text = "Drive:  " + ((Math.Round(drv / 6.0) / 2) - 7.5).ToString() + "dB";
-// (mi0bot also snaps a drive between the slider's steps to the nearest
-// step before this; the TX applet's slider moves in whole steps of 6.)
 inline double rfPowerShownFor(HPSDRModel m, int drive) noexcept {
-    if (m == HPSDRModel::HERMESLITE) {
-        return (std::round(drive / 6.0) / 2.0) - 7.5;
+    if (m == HPSDRModel::HERMESLITE) {       // MI0BOT: HL2 has only 15 output power levels
+        int drv = drive;
+        if (4 > drv) {
+            drv = 0;
+        } else if (3 < drv && 6 > drv) {
+            drv = 6;
+        } else if (87 < drv) {
+            drv = 90;
+        } else if (84 < drv && 88 > drv) {
+            drv = 84;
+        }
+        return (csharpMathRound(drv / 6.0) / 2.0) - 7.5;
     }
     return static_cast<double>(drive);
 }

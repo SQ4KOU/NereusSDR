@@ -39,6 +39,9 @@
 //               quick controls from ControlRanges.h; R-IOS-06, R-IOS-27).
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-27: board.transmit's `shown.rounding` (RF Power halfEven, the
+//               HL2 drive snap). J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationCatalog.h"
@@ -476,14 +479,21 @@ QJsonObject noiseReductionObject()
 // units, as the TX applet, the Phone/CW applet and Setup > Transmit >
 // Power range them (HpsdrModel.h, caps.micGainMinDb/MaxDb). The power
 // controls add `shown`: what the control shows at its two ends, linear in
-// between, to `decimals` places in `unit`.
+// between, to `decimals` places in `unit`; RF Power's `rounding` is
+// `halfEven` (rfPowerShownFor takes a drive between the slider's steps to
+// the nearest step, a half to the even one, as mi0bot's HL2 label does).
 
-QJsonObject shownObject(double min, double max, int decimals, const QString& unit)
+// `rounding` is `halfEven` where the control takes a value between its
+// steps to the nearest step (a half to the even step) before showing it,
+// `none` where it shows every value on the line.
+QJsonObject shownObject(double min, double max, int decimals, const QString& unit,
+                        const QString& rounding)
 {
     return QJsonObject{{QStringLiteral("min"), min},
                        {QStringLiteral("max"), max},
                        {QStringLiteral("decimals"), decimals},
-                       {QStringLiteral("unit"), unit}};
+                       {QStringLiteral("unit"), unit},
+                       {QStringLiteral("rounding"), rounding}};
 }
 
 QJsonObject transmitObject(const StationCatalog::Inputs& inputs)
@@ -495,12 +505,12 @@ QJsonObject transmitObject(const StationCatalog::Inputs& inputs)
     QJsonObject power = rangeObject(0, rfPowerSliderMaxFor(m), rfPowerSliderStepFor(m));
     power.insert(QStringLiteral("shown"),
                  shownObject(rfPowerShownFor(m, 0), rfPowerShownFor(m, rfPowerSliderMaxFor(m)),
-                             decimals, sliderUnit));
+                             decimals, sliderUnit, QStringLiteral("halfEven")));
 
     QJsonObject tune = rangeObject(0, tuneSliderMaxFor(m), tuneSliderStepFor(m));
     tune.insert(QStringLiteral("shown"),
                 shownObject(tunePowerShownFor(m, 0), tunePowerShownFor(m, tuneSliderMaxFor(m)),
-                            decimals, sliderUnit));
+                            decimals, sliderUnit, QStringLiteral("none")));
 
     // Setup's fixed tune spinbox: its shown range and step, and the stored
     // values they write.
@@ -513,7 +523,8 @@ QJsonObject transmitObject(const StationCatalog::Inputs& inputs)
     QJsonObject fixedTune = rangeObject(storedMin, storedMax, storedStep);
     fixedTune.insert(QStringLiteral("shown"),
                      shownObject(shownMin, shownMax, fixedTuneSpinboxDecimalsFor(m),
-                                 QString::fromLatin1(fixedTuneSpinboxSuffixFor(m)).trimmed()));
+                                 QString::fromLatin1(fixedTuneSpinboxSuffixFor(m)).trimmed(),
+                                 QStringLiteral("none")));
 
     return QJsonObject{
         {QStringLiteral("power"), power},
