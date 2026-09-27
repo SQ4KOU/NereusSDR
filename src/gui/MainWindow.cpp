@@ -13353,7 +13353,7 @@ void MainWindow::onConnectionStateChanged()
                 // and a remote window are. Task 77 fix round 3: and while a
                 // Tuner Genius cycle runs (pgxlSwitchRefusal).
                 if (m_radioModel->role() == RadioModel::Role::Remote
-                    || m_radioModel->pgxlSwitchRefusal(nullptr)) {
+                    || m_radioModel->pgxlSwitchRefusal(nullptr, /*standbyRequested=*/!wantOperate)) {
                     return;
                 }
                 // Bench-fix 2026-05-19: pcap stream 11 (.19 PowerGeniusDesktop

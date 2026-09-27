@@ -32,6 +32,8 @@
 //   2026-09-26  J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code
 //                 (Task 77 fix round 3): operateCommanded carries the
 //                 command's sequence.
+//   2026-09-26  J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code
+//                 (Task 77 fix round 4): replyRefused.
 // =================================================================
 #pragma once
 
@@ -180,6 +182,9 @@ signals:
     /// (admitted, on the Core): its sequence, whether its code was 0, and
     /// its body. The Core's device settings match their requests by it.
     void replyReceived(quint32 seq, bool accepted, const QString& body);
+    /// iPhone app plan Task 77 fix round 4: a reply whose code parses and
+    /// is not zero (the amp refused command `seq`), after replyReceived.
+    void replyRefused(quint32 seq);
 
     // R-R3-47 identity admission (only with setIdentityAdmissionRequired).
     void identityProtocolProgress(quint64 socketAttemptToken,

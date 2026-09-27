@@ -2604,35 +2604,7 @@ RadioModel::RadioModel(Role role, QObject* parent)
                     << key << "=" << value;
                 return;
             }
-            const QString cmd = QStringLiteral("%1=%2").arg(key).arg(value);
-            if (model == QStringLiteral("PowerGeniusXL")) {
-                if (m_pgxlConnection && m_pgxlConnection->isConnected()) {
-                    m_pgxlConnection->sendCommand(cmd);
-                    qCInfo(lcConnection)
-                        << "amplifier set proxy -> PGXL:9008" << cmd
-                        << "(ampHandle=0x" << ampHandle << ")";
-                } else {
-                    qCWarning(lcConnection)
-                        << "amplifier set proxy: PGXL target but PgxlConnection"
-                           " not connected; dropping" << cmd;
-                }
-            } else if (model == QStringLiteral("TunerGeniusXL")) {
-                if (m_tgxlConnection && m_tgxlConnection->isConnected()) {
-                    m_tgxlConnection->sendCommand(cmd);
-                    qCInfo(lcConnection)
-                        << "amplifier set proxy -> TGXL:9010" << cmd
-                        << "(ampHandle=0x" << ampHandle << ")";
-                } else {
-                    qCWarning(lcConnection)
-                        << "amplifier set proxy: TGXL target but TgxlConnection"
-                           " not connected; dropping" << cmd;
-                }
-            } else {
-                qCWarning(lcConnection)
-                    << "amplifier set proxy: unknown ampModel=" << model
-                    << "for ampHandle=" << ampHandle
-                    << "; dropping" << cmd;
-            }
+            forwardAmplifierSet(model, key, value);
         });
 
         // TGXL autotune orchestration: interlock-granted hook.
@@ -2735,8 +2707,11 @@ RadioModel::RadioModel(Role role, QObject* parent)
     // the end of a two-tone, and sent only once MOX reads receive with no
     // key pending and no amplifier command unconfirmed (ampSwitchAllowed).
     if (m_moxController) {
-        connect(m_moxController, &MoxController::stateChanged, this,
-                [this](MoxState) { retryOwedAmpRestore(); });
+        connect(m_moxController, &MoxController::stateChanged, this, [this](MoxState) {
+            retryOwedAmpRestore();
+            // Task 77 fix round 4: a relayed operate=1 held for the key.
+            retryHeldRelayedPgxlOperate();
+        });
         connect(m_moxController, &MoxController::pttSourcesReleased, this,
                 &RadioModel::retryOwedAmpRestore);
     }
@@ -2825,8 +2800,12 @@ RadioModel::RadioModel(Role role, QObject* parent)
     connect(m_pgxlConnection, &PgxlConnection::disconnected,
             this, &RadioModel::endAmpChangeover);
     // Task 77 fix round 3: an error reply to the operate command ends it.
-    connect(m_pgxlConnection, &PgxlConnection::replyReceived,
-            this, &RadioModel::onPgxlReply);
+    connect(m_pgxlConnection, &PgxlConnection::replyRefused,
+            this, &RadioModel::onPgxlReplyRefused);
+    // Task 77 fix round 4: a relayed operate=1 held for the key does not
+    // outlive the link.
+    connect(m_pgxlConnection, &PgxlConnection::disconnected, this,
+            [this]() { m_relayedPgxlOperateHeld = false; });
     m_ampHoldTimer = new QTimer(this);
     m_ampHoldTimer->setSingleShot(true);
     connect(m_ampHoldTimer, &QTimer::timeout, this, &RadioModel::onAmpHoldDeadline);
@@ -4733,7 +4712,7 @@ bool RadioModel::pgxlSwitchWaitsForTuner() const
     return m_tgxlAutotuneInProgress || (m_tunerModel && m_tunerModel->isTuning());
 }
 
-bool RadioModel::pgxlSwitchRefusal(QString* reason) const
+bool RadioModel::pgxlSwitchRefusal(QString* reason, bool standbyRequested) const
 {
     if (stationOnAirRefusal(reason)) {
         return true;
@@ -4742,7 +4721,26 @@ bool RadioModel::pgxlSwitchRefusal(QString* reason) const
         if (reason) { *reason = tunerTuningReason(); }
         return true;
     }
+    // Task 77 fix round 4: one amplifier command at a time. A second one
+    // while the first is unconfirmed could be refused by a busy amplifier,
+    // and the refusal must never be read as the end of the first. Standby
+    // stays open while operate=1 is unconfirmed: it is the way out of an
+    // amplifier that took operate=1 and keeps reporting standby.
+    if (ampChangingOver() && !(standbyRequested && ampOperateUnconfirmed())) {
+        if (reason) { *reason = ampStillSwitchingReason(); }
+        return true;
+    }
     return false;
+}
+
+QString RadioModel::ampStillSwitchingReason()
+{
+    return QStringLiteral("The amplifier is still switching. Try again in a moment.");
+}
+
+bool RadioModel::ampOperateUnconfirmed() const
+{
+    return ampChangingOver() && m_ampCommandedOperate.has_value() && *m_ampCommandedOperate;
 }
 
 void RadioModel::setTgxlAutotuneInProgress(bool running)
@@ -4754,7 +4752,7 @@ void RadioModel::setTgxlAutotuneInProgress(bool running)
     emit pgxlSwitchWaitChanged();
 }
 
-bool RadioModel::refuseLocalAccessorySwitchOnAir(const QString& device)
+bool RadioModel::refuseLocalAccessorySwitchOnAir(const QString& device, bool standbyRequested)
 {
     if (m_role == Role::Remote) {
         return false;
@@ -4762,8 +4760,9 @@ bool RadioModel::refuseLocalAccessorySwitchOnAir(const QString& device)
     QString reason;
     // Task 77 fix round 3: the Power Genius also waits for a Tuner Genius
     // cycle (pgxlSwitchRefusal).
-    const bool refused = device == QLatin1String("pgxl") ? pgxlSwitchRefusal(&reason)
-                                                         : stationOnAirRefusal(&reason);
+    const bool refused = device == QLatin1String("pgxl")
+        ? pgxlSwitchRefusal(&reason, standbyRequested)
+        : stationOnAirRefusal(&reason);
     if (!refused) {
         return false;
     }
@@ -5873,11 +5872,12 @@ void RadioModel::startStationLanScan(const QString& objectName, const QStringLis
     discovery->start(windowMs);
 }
 
-bool RadioModel::stationPgxlControlAllowed(QString* reason) const
+bool RadioModel::stationPgxlControlAllowed(QString* reason, bool standbyRequested) const
 {
     if (m_role != Role::Local || !m_stationPgxl) { return refuseNoStationDevice(reason); }
     // Task 77 fix round 3: on the air, or while a Tuner Genius cycle runs.
-    if (pgxlSwitchRefusal(reason)) {
+    // Round 4: or while the amplifier is still switching.
+    if (pgxlSwitchRefusal(reason, standbyRequested)) {
         return false;
     }
     if (!m_pgxlConnection || !m_pgxlConnection->isConnected()) {
@@ -5893,7 +5893,7 @@ bool RadioModel::stationPgxlControlAllowed(QString* reason) const
 // keys nothing: the amp amplifies only when the radio transmits.
 bool RadioModel::setPgxlOperateForStation(bool on, QString* reason)
 {
-    if (!stationPgxlControlAllowed(reason)) { return false; }
+    if (!stationPgxlControlAllowed(reason, /*standbyRequested=*/!on)) { return false; }
     // Bench-fix 2026-05-19 (MainWindow's operateToggled handler): pcap
     // stream 11 (.19 PowerGeniusDesktop -> .235 PGXL :9008) shows the
     // actually-used wire command for OPERATE is `operate=1` (key=value),
@@ -24406,11 +24406,23 @@ void RadioModel::onPgxlStatus(const QMap<QString, QString>& kvs)
             qCWarning(lcConnection) << "PGXL reports" << st << "while operate=1 is unconfirmed;"
                                        " the changeover ends (not operating)";
         }
+        // Task 77 fix round 4: an edge to operating that nobody commanded
+        // while the radio's RF may flow (a fault clearing by itself under a
+        // barefoot key, the front panel): the key stops, in plain words.
+        const bool operatedUnderKey = edge && nowOperate && !confirmed && tgxlRfFlowing();
         if (confirmed || faultedUnderOperate) {
             endAmpChangeover();
         }
         if (edge) {
             emit ampStateChanged();
+        }
+        if (operatedUnderKey && tgxlRfFlowing()) {
+            qCWarning(lcConnection) << "PGXL went to" << st << "on its own while the radio"
+                                       " transmits; stopping the key";
+            m_lastTransmitStopReason =
+                TransmitStopReason{QByteArray(kAmpOperatedUnderKeyStopCode), QByteArray(), -1};
+            stopAllTx(ampOperatedUnderKeyText());
+            emit transmitStopReasonRaised(m_lastTransmitStopReason.code, -1);
         }
 
         // Phase 3P-II Phase 4 Task 94: capture FAULT state *transitions* only.
@@ -24463,6 +24475,67 @@ void RadioModel::onPgxlStatus(const QMap<QString, QString>& kvs)
         const float watts    = pgxlDbmToWatts(dbm);
         const float ratio    = pgxlReturnLossToSwr(rlDbWire);
         emit ampMetersChanged(watts, ratio);
+    }
+}
+
+// Task 77 fix round 4 (R-IOS-02, R-IOS-03, R-IOS-13): the relay's body,
+// moved out of the listener's lambda so its hold can be tested. A Power
+// Genius operate=1 is held while the radio's RF may flow and sent once it
+// reads receive; operate=0 (the safe direction) goes at once and drops a
+// held operate=1.
+void RadioModel::forwardAmplifierSet(const QString& model, const QString& key,
+                                     const QString& value)
+{
+    if (model == QStringLiteral("PowerGeniusXL") && key == QLatin1String("operate")) {
+        if (value == QLatin1String("1") && tgxlRfFlowing()) {
+            m_relayedPgxlOperateHeld = true;
+            qCInfo(lcConnection) << "amplifier set proxy: operate=1 held while the radio"
+                                    " transmits; sent once it is back on receive";
+            return;
+        }
+        m_relayedPgxlOperateHeld = false;
+    }
+    const QString cmd = QStringLiteral("%1=%2").arg(key).arg(value);
+    if (model == QStringLiteral("PowerGeniusXL")) {
+        if (m_pgxlConnection && m_pgxlConnection->isConnected()) {
+            m_pgxlConnection->sendCommand(cmd);
+            qCInfo(lcConnection)
+                << "amplifier set proxy -> PGXL:9008" << cmd;
+        } else {
+            qCWarning(lcConnection)
+                << "amplifier set proxy: PGXL target but PgxlConnection"
+                   " not connected; dropping" << cmd;
+        }
+    } else if (model == QStringLiteral("TunerGeniusXL")) {
+        if (m_tgxlConnection && m_tgxlConnection->isConnected()) {
+            m_tgxlConnection->sendCommand(cmd);
+            qCInfo(lcConnection)
+                << "amplifier set proxy -> TGXL:9010" << cmd;
+        } else {
+            qCWarning(lcConnection)
+                << "amplifier set proxy: TGXL target but TgxlConnection"
+                   " not connected; dropping" << cmd;
+        }
+    } else {
+        qCWarning(lcConnection)
+            << "amplifier set proxy: unknown ampModel=" << model
+            << "; dropping" << cmd;
+    }
+}
+
+void RadioModel::retryHeldRelayedPgxlOperate()
+{
+    if (!m_relayedPgxlOperateHeld || tgxlRfFlowing()) {
+        return;
+    }
+    m_relayedPgxlOperateHeld = false;
+    if (ampOperateUnconfirmed() || (m_hasAmplifier && m_ampOperate)) {
+        // Already going to (or in) operate: nothing more to send.
+        return;
+    }
+    if (m_pgxlConnection && m_pgxlConnection->isConnected()) {
+        m_pgxlConnection->sendCommand(QStringLiteral("operate=1"));
+        qCInfo(lcConnection) << "amplifier set proxy -> PGXL:9008 operate=1 (held for the key)";
     }
 }
 
@@ -24650,7 +24723,7 @@ bool RadioModel::cancelTgxlAutotuneFor(const QByteArray& deviceId)
     return true;
 }
 
-void RadioModel::finishTgxlAutotuneCycle()
+void RadioModel::finishTgxlAutotuneCycle(const QString& unkeyedReason)
 {
     if (!m_tgxlAutotuneInProgress) {
         return;
@@ -24685,7 +24758,7 @@ void RadioModel::finishTgxlAutotuneCycle()
         qCInfo(lcConnection) << "TGXL autotune complete: PGXL was not operating"
                                 " before cycle, leaving in current state";
     }
-    emit tgxlAutotuneEnded(device);
+    emit tgxlAutotuneEnded(device, unkeyedReason);
 }
 
 bool RadioModel::tgxlRfFlowing() const
@@ -24741,6 +24814,12 @@ QString RadioModel::ampNotSwitchedText()
                           " in Setup to transmit without it.");
 }
 
+QString RadioModel::ampOperatedUnderKeyText()
+{
+    return QStringLiteral("The amplifier switched to operate by itself while the radio was"
+                          " transmitting, so the Core stopped transmitting.");
+}
+
 QString RadioModel::ampNotStandbyForTuneText()
 {
     return QStringLiteral("The amplifier did not go to standby for tuning. Put it in standby"
@@ -24775,30 +24854,53 @@ void RadioModel::onPgxlOperateCommanded(bool operate, quint32 seq)
                                 " is dropped";
     }
     m_ampCommandedOperate = operate;
-    m_ampCommandSeq = seq;
+    // Task 77 fix round 4: every unconfirmed command, so a refusal of one
+    // never ends the wait for another.
+    m_ampPendingCommands.append(AmpCommand{seq, operate});
+    emit pgxlSwitchWaitChanged();   // round 4: the windows' buttons follow
     m_ampCommandClock.start();
     if (m_rfHeldForAmp && m_ampHoldTimer) {
         m_ampHoldTimer->start(kAmpChangeoverBoundMs);
     }
 }
 
-void RadioModel::onPgxlReply(quint32 seq, bool accepted, const QString& body)
+void RadioModel::onPgxlReplyRefused(quint32 seq)
 {
-    // Task 77 fix round 3: the amplifier refused the operate command; it
-    // stays where it was, so its changeover is over (a held key goes on
-    // with the amplifier as it last reported).
-    if (accepted || seq == 0 || seq != m_ampCommandSeq || !ampChangingOver()) {
+    // Task 77 fix round 3, round 4: the amplifier refused an operate
+    // command (a code that reads and is not zero); it stays where it was.
+    // The changeover ends only when no other command is still unconfirmed;
+    // otherwise it goes back to waiting for the latest remaining one.
+    if (seq == 0 || !ampChangingOver()) {
         return;
     }
-    qCWarning(lcConnection) << "PGXL refused the operate command (" << body
-                            << "); the changeover ends";
-    endAmpChangeover();
+    const auto it = std::find_if(m_ampPendingCommands.begin(), m_ampPendingCommands.end(),
+                                 [seq](const AmpCommand& c) { return c.seq == seq; });
+    if (it == m_ampPendingCommands.end()) {
+        return;
+    }
+    m_ampPendingCommands.erase(it);
+    if (m_ampPendingCommands.isEmpty()) {
+        qCWarning(lcConnection) << "PGXL refused the operate command; the changeover ends";
+        endAmpChangeover();
+        return;
+    }
+    m_ampCommandedOperate = m_ampPendingCommands.last().operate;
+    qCWarning(lcConnection) << "PGXL refused an operate command; still waiting for operate="
+                            << (*m_ampCommandedOperate ? 1 : 0);
+    if (m_ampOperate == *m_ampCommandedOperate) {
+        // Its state was already reported after it was sent.
+        endAmpChangeover();
+    }
 }
 
 void RadioModel::endAmpChangeover()
 {
+    const bool wasChangingOver = m_ampCommandedOperate.has_value();
     m_ampCommandedOperate.reset();
-    m_ampCommandSeq = 0;
+    m_ampPendingCommands.clear();
+    if (wasChangingOver) {
+        emit pgxlSwitchWaitChanged();   // round 4: the windows' buttons follow
+    }
     if (m_ampHoldTimer) {
         m_ampHoldTimer->stop();
     }
@@ -24913,7 +25015,7 @@ QString RadioModel::beginTgxlAutotune(bool fromHardware)
     if (tgxlRfFlowing()) {
         busy = TxRefusals::radioOnAir().text;
     } else if (ampChangingOver()) {
-        busy = QStringLiteral("The amplifier is still switching. Try again in a moment.");
+        busy = ampStillSwitchingReason();
     } else if (m_hasAmplifier && m_ampOperate && ampKeyPending()) {
         busy = QStringLiteral("A transmission is about to start. Try again when it ends.");
     }
@@ -24952,6 +25054,8 @@ QString RadioModel::beginTgxlAutotune(bool fromHardware)
     m_pgxlRestoreWhenUnkeyed = false;
     m_pgxlSavedOperate = (m_hasAmplifier && m_ampOperate) || restoreOwed;
     setTgxlAutotuneInProgress(true);
+    // Task 77 fix round 4: this cycle's number, for its failsafe timers.
+    const quint64 generation = ++m_tgxlCycleGeneration;
     m_tgxlAutotuneFromHardware = fromHardware;
     // Need to await STANDBY confirm? Only while it is operating now.
     m_pgxlStandbyPending = m_hasAmplifier && m_ampOperate;
@@ -24982,7 +25086,12 @@ QString RadioModel::beginTgxlAutotune(bool fromHardware)
     // signal usually fires within 100-200 ms. If 1500 ms elapses without
     // confirmation (amp disconnected mid-cycle, status poll stuck), we
     // proceed anyway with a warning so the operator's TUNE isn't stranded.
-    QTimer::singleShot(1500, this, [this]() {
+    QTimer::singleShot(1500, this, [this, generation]() {
+        // Task 77 fix round 4: a timer left from an ended cycle never acts
+        // on a newer one.
+        if (generation != m_tgxlCycleGeneration) {
+            return;
+        }
         if (m_tgxlAutotuneInProgress && m_pgxlStandbyPending) {
             if (m_pgxlConnection && m_pgxlConnection->isConnected()) {
                 // Task 77 fix round 2, round 3: with the link up, no
@@ -24993,8 +25102,9 @@ QString RadioModel::beginTgxlAutotune(bool fromHardware)
                 qCWarning(lcConnection)
                     << "TGXL autotune: PGXL didn't confirm STANDBY within"
                        " 1.5 s; ending the cycle without keying";
+                // Round 4: the device whose cycle it was is told why.
                 const bool local = m_tgxlAutotuneDeviceId.isEmpty();
-                finishTgxlAutotuneCycle();
+                finishTgxlAutotuneCycle(ampNotStandbyForTuneText());
                 if (local) {
                     emit tuneRefused(ampNotStandbyForTuneText());
                 }
@@ -25071,8 +25181,9 @@ void RadioModel::continueTgxlAutotuneAfterStandby()
         // commanded.
         qCWarning(lcConnection) << "TGXL autotune: the amplifier is operating or was told to"
                                    " operate; ending the cycle without keying";
+        // Round 4: the device whose cycle it was is told why.
         const bool local = m_tgxlAutotuneDeviceId.isEmpty();
-        finishTgxlAutotuneCycle();
+        finishTgxlAutotuneCycle(ampNotStandbyForTuneText());
         if (local) {
             emit tuneRefused(ampNotStandbyForTuneText());
         }
@@ -25134,7 +25245,12 @@ void RadioModel::continueTgxlAutotuneAfterStandby()
     // before it could ACK -- send the autotune anyway so the operator's
     // TUNE isn't stranded. Mirrors the standby failsafe in startTgxl-
     // Autotune (same 1.5 s budget, same "proceed with warning" semantic).
-    QTimer::singleShot(1500, this, [this]() {
+    // Task 77 fix round 4: only for this cycle.
+    const quint64 generation = m_tgxlCycleGeneration;
+    QTimer::singleShot(1500, this, [this, generation]() {
+        if (generation != m_tgxlCycleGeneration) {
+            return;
+        }
         if (m_awaitingInterlockForAutotune && m_tgxlAutotuneInProgress) {
             qCWarning(lcConnection)
                 << "TGXL autotune: interlockGranted didn't fire within"

@@ -147,6 +147,10 @@
 //               words; a fresh key goes out once the amplifier reports.
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-26: Task 77 fix round 4: a device's tunerTune that ends
+//               without keying for the amplifier's sake tells the device
+//               why (notice tuneEnded). J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -4791,6 +4795,65 @@ private slots:
                             QStringLiteral("stopText")).toString(),
                      words);
         tt->setTxChannel(nullptr);
+    }
+
+    // Fix round 4 (Important 2): a device's tx.tunerTune, answered
+    // accepted, that ends without keying because of the amplifier tells
+    // that device why: a notice tuneEnded with the words, no `by` keys, no
+    // Take it back. Both endings: the amplifier put back in operate during
+    // the standby wait, and no standby within 1.5 s.
+    void aDevicesTunerTuneEndedUnkeyedIsToldWhy()
+    {
+        Core core;
+        allowTransmit(core);
+        Device a;
+        core.pair(a);
+        LoopbackTransport* appA = core.signIn(a, kTransmitter);
+        QVERIFY(admitted(appA));
+        CoreTx txr(core.model.get());
+        MoxController* mox = core.model->moxController();
+        const MirrorUpdate on{0, "on", MirrorWireKind::Bool, QVariant(true)};
+        core.model->tgxlConnection()->injectLineForTesting(QStringLiteral("V1.2.17"));
+        PgxlConnection* pgxl = core.model->pgxlConnection();
+        pgxl->injectLineForTesting(QStringLiteral("V3.8.9"));
+        pgxl->injectLineForTesting(QStringLiteral("R1|0|state=OPERATE"));
+        const QString words = RadioModel::ampNotStandbyForTuneText();
+        QVERIFY(OperatorWording::isPlain(words));
+        const auto tuneEnded = [appA]() {
+            QList<QJsonObject> found;
+            for (const QJsonObject& n : ofType(appA->received(), QStringLiteral("notice"))) {
+                if (n.value(QStringLiteral("kind")).toString() == QStringLiteral("tuneEnded")) {
+                    found.append(n);
+                }
+            }
+            return found;
+        };
+
+        // 1. Put back in operate during the wait (the standby came first).
+        QVERIFY(core.invoke(appA, "tx.tunerTune", {on}).value(QStringLiteral("accepted")).toBool());
+        QVERIFY(core.model->isTgxlAutotuneInProgress());
+        pgxl->sendCommand(QStringLiteral("operate=1"));
+        pgxl->injectLineForTesting(QStringLiteral("S0|status state=STANDBY"));
+        QTRY_VERIFY(!core.model->isTgxlAutotuneInProgress());
+        QVERIFY(!mox->isMox());
+        QCOMPARE(txr.opens.load(), 0);
+        QTRY_COMPARE(tuneEnded().size(), 1);
+        const QJsonObject first = tuneEnded().first();
+        QCOMPARE(first.value(QStringLiteral("reason")).toString(), words);
+        QCOMPARE(first.value(QStringLiteral("takeBack")).toBool(true), false);
+        QVERIFY(!first.contains(QStringLiteral("byDeviceId")));
+        pgxl->injectLineForTesting(QStringLiteral("S0|status state=OPERATE"));
+        QTRY_VERIFY(!core.model->ampChangingOver());
+
+        // 2. No standby within 1.5 s.
+        QVERIFY(core.invoke(appA, "tx.tunerTune", {on}).value(QStringLiteral("accepted")).toBool());
+        QVERIFY(core.model->isTgxlAutotuneInProgress());
+        QTRY_VERIFY_WITH_TIMEOUT(!core.model->isTgxlAutotuneInProgress(), 4000);
+        QVERIFY(!mox->isMox());
+        QCOMPARE(txr.opens.load(), 0);
+        QTRY_COMPARE(tuneEnded().size(), 2);
+        QCOMPARE(tuneEnded().last().value(QStringLiteral("reason")).toString(), words);
+        pgxl->injectLineForTesting(QStringLiteral("S0|status state=STANDBY"));
     }
 
     // Fix round 2 (the re-review's out-of-scope item, now in): the device's

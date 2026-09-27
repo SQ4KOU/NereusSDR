@@ -152,6 +152,10 @@
 //                                    and tunerTuningReason scanned and
 //                                    forwarded. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Task 77 fix round 4:
+//                                    ampStillSwitchingReason scanned and
+//                                    forwarded. AI-assisted via Anthropic
+//                                    Claude Code.
 //   2026-09-26  J.J. Boyd / KG4VCF  Parity Task 19 (R-IOS-25):
 //                                    SpotSourceHost's refusals scanned and
 //                                    its readOnlyReason forwarded. AI-assisted
@@ -1176,6 +1180,8 @@ const QList<ReasonSource>& reasonSources()
           // iPhone app plan Task 77 fix round 3: the Power Genius also
           // waits while the Tuner Genius tunes.
           QStringLiteral("tunerTuningReason"), QStringLiteral("pgxlSwitchRefusal"),
+          // Round 4: and while the amplifier is still switching.
+          QStringLiteral("ampStillSwitchingReason"),
           QStringLiteral("setTgxlAntennaForStation"), QStringLiteral("setTgxlOperateForStation"),
           QStringLiteral("setTgxlBypassForStation"),
           // R-R3-49 (parity Task 8): the relay nudge, the Core's LAN scan and
@@ -1256,6 +1262,8 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("onAirReason()"),
           // Task 77 fix round 3: tunerTuningReason, likewise.
           QStringLiteral("tunerTuningReason()"),
+          // Round 4: ampStillSwitchingReason, likewise.
+          QStringLiteral("ampStillSwitchingReason()"),
           // R-R3-49 (parity Task 2): TransmitModel::settingRangeRefusal,
           // scanned below.
           QStringLiteral("range"),

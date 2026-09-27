@@ -34,6 +34,9 @@
 //                 (iPhone app plan Task 77 fix round 2): operateCommanded.
 //   2026-09-26  J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code
 //                 (Task 77 fix round 3): operateCommanded carries its seq.
+//   2026-09-26  J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code
+//                 (Task 77 fix round 4): replyRefused, a reply whose code
+//                 reads and is not zero.
 // =================================================================
 #include "PgxlConnection.h"
 #include "AppSettings.h"
@@ -1090,6 +1093,14 @@ void PgxlConnection::processLine(const QString& line, quint64 attemptGeneration)
                 emit replyReceived(rseq, hexOk && hexCode == 0, body);
                 if (!self || (!offlineTest && !socketAttemptIsCurrent(attemptGeneration))) {
                     return;
+                }
+                // Task 77 fix round 4: a refusal only when the code reads
+                // and is not zero (an unreadable code refuses nothing).
+                if (hexOk && hexCode != 0) {
+                    emit replyRefused(rseq);
+                    if (!self || (!offlineTest && !socketAttemptIsCurrent(attemptGeneration))) {
+                        return;
+                    }
                 }
             }
 

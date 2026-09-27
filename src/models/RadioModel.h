@@ -2405,7 +2405,16 @@ public:
     // a sweep; a remote window sees the Core's tuner). True, with the
     // words, when refused: on the air (onAirReason()) first, then tuning
     // (tunerTuningReason()).
-    bool pgxlSwitchRefusal(QString* reason) const;
+    // Task 77 fix round 4: and while the amplifier is still switching from
+    // an earlier command (ampStillSwitchingReason()), except a standby
+    // (`standbyRequested`) while operate=1 is unconfirmed: the way out of
+    // an amplifier that took operate=1 and never reports operating.
+    bool pgxlSwitchRefusal(QString* reason, bool standbyRequested = false) const;
+    // "The amplifier is still switching. Try again in a moment."
+    static QString ampStillSwitchingReason();
+    // Task 77 fix round 4: operate=1 was sent and its state is not reported
+    // yet (a window's OPERATE button then sends standby).
+    bool ampOperateUnconfirmed() const;
     // True while a Tuner Genius cycle runs (see pgxlSwitchRefusal).
     bool pgxlSwitchWaitsForTuner() const;
     // The words for an amplifier switch refused while the tuner tunes.
@@ -2419,7 +2428,9 @@ public:
     // with the reason a remote window gets from its Core, which MainWindow
     // shows the same way, never a silent drop. False otherwise, and always
     // false in a remote window, which asks its Core instead.
-    bool refuseLocalAccessorySwitchOnAir(const QString& device);
+    // Task 77 fix round 4: `standbyRequested` for a Power Genius STANDBY
+    // (see pgxlSwitchRefusal).
+    bool refuseLocalAccessorySwitchOnAir(const QString& device, bool standbyRequested = false);
 
     // R-R3-49 (parity Task 7): PureSignal's operational permission. True
     // on a station, a receive-only Core included (a window arms PureSignal
@@ -2907,6 +2918,18 @@ public:
     /// the amplifier did not go to standby for it (or was put back in
     /// operate during the wait).
     static QString ampNotStandbyForTuneText();
+    /// Task 77 fix round 4: the amplifier reported operating, commanded by
+    /// nobody, while the radio transmitted (a fault clearing by itself, or
+    /// its front panel): the key is stopped with these words.
+    static QString ampOperatedUnderKeyText();
+    static constexpr char kAmpOperatedUnderKeyStopCode[] = "ampOperatedUnderKey";
+    /// Task 77 fix round 4: a SmartSDR `amplifier set <key>=<value>` for
+    /// the amp model `model` ("PowerGeniusXL" or "TunerGeniusXL"), relayed
+    /// to its own connection. A Power Genius operate=1 is held while the
+    /// radio's RF may flow (tgxlRfFlowing) and sent once it reads receive;
+    /// operate=0 goes at once (standby is the safe direction).
+    void forwardAmplifierSet(const QString& model, const QString& key, const QString& value);
+    bool isRelayedPgxlOperateHeld() const { return m_relayedPgxlOperateHeld; }
     /// The stop reason code lastTransmitStopReason() carries for it.
     static constexpr char kAmpNotSwitchedStopCode[] = "ampNotSwitched";
     /// An owed amplifier restore, sent now if nothing is pending. The
@@ -4874,9 +4897,12 @@ signals:
     /// iPhone app plan Task 77 fix round 2: a Tuner Genius autotune cycle
     /// ended (keyed or not); `deviceId` is the device it was for, empty for
     /// the Core's own.
-    void tgxlAutotuneEnded(const QByteArray& deviceId);
+    /// Round 4: `unkeyedReason`, when it ended without keying for the
+    /// amplifier's sake, the words for its device; empty otherwise.
+    void tgxlAutotuneEnded(const QByteArray& deviceId, const QString& unkeyedReason);
     /// iPhone app plan Task 77 fix round 3: pgxlSwitchWaitsForTuner()
     /// may have changed (a cycle started or ended, the tuner's sweep).
+    /// Round 4: also when an amplifier changeover starts or ends.
     void pgxlSwitchWaitChanged();
 
     // Phase 3P-III Task 13: cross-vendor external-amp aggregator signals.
@@ -4996,7 +5022,7 @@ private:
     bool stationTgxlControlAllowed(QString* reason) const;
     // R-R3-49 (parity Task 9): the Power Genius's OPERATE gate: a Core that
     // owns its accessories, off the air, connected to the amp.
-    bool stationPgxlControlAllowed(QString* reason) const;
+    bool stationPgxlControlAllowed(QString* reason, bool standbyRequested = false) const;
     // R-R3-49 (parity Task 10): the RF-Kit's gate before its controller's
     // own: a Core that owns its accessories, off the air.
     bool stationRfKitControlAllowed(QString* reason) const;
@@ -6910,7 +6936,16 @@ private:
     static constexpr int kTgxlDeviceCycleStartMs = 3000;
     /// Task 77: the cycle ended (or never keyed): the amplifier's state
     /// restored, the flags cleared.
-    void finishTgxlAutotuneCycle();
+    /// Task 77 fix round 4: `unkeyedReason`, the words for a cycle that ends
+    /// without keying because of the amplifier (carried on tgxlAutotuneEnded
+    /// to the device whose cycle it was).
+    void finishTgxlAutotuneCycle(const QString& unkeyedReason = QString());
+    /// Task 77 fix round 4: counts cycles, so a failsafe timer left from an
+    /// ended cycle never acts on a new one.
+    quint64 m_tgxlCycleGeneration{0};
+    /// Task 77 fix round 4: a relayed operate=1 held while RF may flow.
+    bool m_relayedPgxlOperateHeld{false};
+    void retryHeldRelayedPgxlOperate();
     /// Task 77 fix wave (I3, I4): the amplifier is never switched between
     /// standby and operate while RF flows. A restore owed while MOX is on
     /// or still walking back to receive waits here and is sent once MOX
@@ -6937,9 +6972,16 @@ private:
     bool m_ampOwnCommand{false};
     /// Task 77 fix round 3: the sequence of the unconfirmed operate
     /// command; an error reply to it ends the changeover.
-    quint32 m_ampCommandSeq{0};
+    /// Task 77 fix round 3, round 4: every operate command written and not
+    /// yet confirmed, oldest first; an error reply removes its own, and the
+    /// changeover ends only when none is left.
+    struct AmpCommand {
+        quint32 seq{0};
+        bool operate{false};
+    };
+    QList<AmpCommand> m_ampPendingCommands;
     void onPgxlOperateCommanded(bool operate, quint32 seq);
-    void onPgxlReply(quint32 seq, bool accepted, const QString& body);
+    void onPgxlReplyRefused(quint32 seq);
     /// Task 77 fix round 3: sets m_tgxlAutotuneInProgress and announces it.
     void setTgxlAutotuneInProgress(bool running);
     void endAmpChangeover();

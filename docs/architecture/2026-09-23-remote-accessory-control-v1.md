@@ -1109,6 +1109,7 @@ Commands:
 | `setPgxlAddress` with other arguments | "The request to save the Power Genius address was not understood." |
 | `setPgxlOperate` while the radio is on the air (MOX, TUNE or two-tone, or the hand-back to receive after MOX) | "The radio is on the air. Try again when it stops." |
 | `setPgxlOperate` while the Core is not connected to the amp | "The Core is not connected to the Power Genius." |
+| `setPgxlOperate` while the amp is still switching from an earlier operate command (not `on` false while an `operate=1` is unconfirmed; iPhone app plan Task 77 fix round 4) | "The amplifier is still switching. Try again in a moment." |
 | `setPgxlOperate` while a Tuner Genius cycle runs on the Core (its standby wait, tune carrier and restore) or the Core's tuner reports its sweep (iPhone app plan Task 77 fix round 3) | "The tuner is tuning. Try again when it finishes." |
 | `setPgxlAddress` with no radio | "Connect the Core to a radio before setting up its Power Genius." |
 | `setPgxlAddress` with a host that is not blank and not an IP address or host name, or a port outside 1 to 65535 | "Enter the Power Genius's IP address or host name, and a port from 1 to 65535." |

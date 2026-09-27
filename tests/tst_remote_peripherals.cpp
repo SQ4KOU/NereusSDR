@@ -78,6 +78,9 @@
 // R-IOS-13): the Power Genius's OPERATE waits while the Tuner Genius tunes
 // in both windows, and a faulted amp is sent standby. J.J. Boyd (KG4VCF),
 // AI-assisted via Anthropic Claude Code.
+// 2026-09-26: iPhone app plan Task 77 fix round 4: an amp whose operate=1
+// is unconfirmed is sent standby from both local buttons. J.J. Boyd
+// (KG4VCF), AI-assisted via Anthropic Claude Code.
 
 #include <QtTest>
 
@@ -4326,7 +4329,9 @@ void RemotePeripheralsTest::localPowerGeniusTabOperatesThisComputersAmp()
     // Operate: the applet's line; the button follows the amp's report.
     operate->click();
     QVERIFY(amp.waitFor(QStringLiteral("operate=1")) >= 0);
-    QCOMPARE(operate->text(), QStringLiteral("Operate"));
+    // Task 77 fix round 4 (Minor 3): until the amp reports operate, the tab
+    // offers Standby (the way out of an amp that never gets there).
+    QTRY_COMPARE(operate->text(), QStringLiteral("Standby"));
     amp.send(QStringLiteral("S0|status state=OPERATE"));
     QTRY_COMPARE(operate->text(), QStringLiteral("Standby"));
     QVERIFY(OperatorWording::isPlain(operate->toolTip()));
@@ -5000,6 +5005,29 @@ void RemotePeripheralsTest::ampOperateWaitsForTheTunerAndAFaultedAmpGoesToStandb
         tabOperate->click();
         QVERIFY(amp.waitFor(QStringLiteral("operate=0")) >= 0);
         QCOMPARE(operateLines(), QStringList{QStringLiteral("operate=0")});
+        amp.send(QStringLiteral("S0|status state=STANDBY"));
+        QTRY_VERIFY(!local.ampChangingOver());
+
+        // Round 4 (Minor 3): an amp that took operate=1 and keeps reporting
+        // standby: both buttons now send standby, which the next STANDBY
+        // report confirms, ending the wait.
+        QTRY_COMPARE(tabOperate->text(), QStringLiteral("Operate"));
+        tabOperate->click();
+        QVERIFY(amp.waitFor(QStringLiteral("operate=1")) >= 0);
+        QVERIFY(local.ampOperateUnconfirmed());
+        amp.send(QStringLiteral("S0|status state=STANDBY"));
+        QTRY_COMPARE(tabOperate->text(), QStringLiteral("Standby"));
+        QVERIFY(OperatorWording::isPlain(tabOperate->toolTip()));
+        const int togglesBefore = toggles.count();
+        applet.clickOperateForTesting();
+        QCOMPARE(toggles.count(), togglesBefore + 1);
+        QCOMPARE(toggles.last().at(0).toBool(), false);
+        tabOperate->click();
+        QTRY_COMPARE(operateLines().size(), 3);
+        QCOMPARE(operateLines().last(), QStringLiteral("operate=0"));
+        amp.send(QStringLiteral("S0|status state=STANDBY"));
+        QTRY_VERIFY(!local.ampChangingOver());
+        QTRY_COMPARE(tabOperate->text(), QStringLiteral("Operate"));
     }
 
     // A remote window: the Core's tuner sweeping greys OPERATE with the

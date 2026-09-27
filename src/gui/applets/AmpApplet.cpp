@@ -51,6 +51,9 @@
 //                 a Tuner Genius cycle runs, in both windows; a faulted
 //                 amp's click puts it in standby. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-26  iPhone app plan Task 77 fix round 4: while operate=1 is
+//                 unconfirmed the click sends standby. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "AmpApplet.h"
@@ -186,7 +189,10 @@ AmpApplet::AmpApplet(RadioModel* model, QWidget* parent)
         // iPhone app plan Task 77 fix round 3: a faulted amp's button reads
         // STANDBY, and its click puts it in standby (operate=0), which ends
         // a changeover the fault left waiting; operate=1 would not.
-        const bool wantOperate = ampFaulted() ? false : !isOp;
+        // Round 4: likewise while this computer's operate=1 is unconfirmed
+        // (the amp took it and keeps reporting standby).
+        const bool unconfirmed = !isRemoteWindow() && m_model && m_model->ampOperateUnconfirmed();
+        const bool wantOperate = (ampFaulted() || unconfirmed) ? false : !isOp;
         // R-R3-49 (parity Task 9): a remote window asks the Core, whose amp
         // switches; the button follows the amp's report, not the click.
         if (isRemoteWindow()) {
@@ -201,7 +207,8 @@ AmpApplet::AmpApplet(RadioModel* model, QWidget* parent)
         // computer's amp waits on the air too, by the Core's own rule.
         // Parity mini-round (ruling c): a click refused there says why.
         // Task 77 fix round 3: and while a Tuner Genius cycle runs.
-        if (m_model && m_model->refuseLocalAccessorySwitchOnAir(QStringLiteral("pgxl"))) {
+        if (m_model && m_model->refuseLocalAccessorySwitchOnAir(QStringLiteral("pgxl"),
+                                                                 /*standbyRequested=*/!wantOperate)) {
             updateOperateButton();
             return;
         }

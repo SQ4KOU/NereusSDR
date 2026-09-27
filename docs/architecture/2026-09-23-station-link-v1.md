@@ -2761,8 +2761,14 @@ included) and `change`. Kinds here: `sliceMoved` and `sliceClosed` (no
 Take it back), `receiverTaken` and `sliceTaken` (Take it back),
 `settingChanged` (section 7.6: `change`, who, no Take it back),
 `transmitTaken` (section 18.9: who took transmit, Take it back),
-`graceEnded`, `slicesNotRestored` and `antennaKept` (about the device's
-own state: no `by` keys, no Take it back). `graceEnded`, "You were away for more than 3
+`graceEnded`, `slicesNotRestored`, `antennaKept` and `tuneEnded` (about
+the device's own state: no `by` keys, no Take it back). `tuneEnded`
+(iPhone app plan Task 77 fix round 4) tells a device that its accepted
+`tx.tunerTune` ended without keying because the Power Genius did not go
+to standby for it (it never reported standby within 1.5 s, or was put
+back in operate during the wait): "The amplifier did not go to standby
+for tuning. Put it in standby or disconnect it in Setup, then tune
+again." `graceEnded`, "You were away for more than 3
 minutes. Your slices are back.", goes right after `snapshot.complete` to a
 device let in after its 3 minutes ran out, its `slices` listing any saved
 slice that could not be restored (then its words are "You were away for
@@ -3634,7 +3640,10 @@ These command groups need a sentence beyond the table:
   again when it stops."); `setPgxlOperate` also while the Core is not
   connected to the amp, and (iPhone app plan Task 77 fix round 3) while a
   Tuner Genius cycle runs or the Core's tuner reports its sweep ("The
-  tuner is tuning. Try again when it finishes."). A `property.write` of `amplifier` `operate` stays
+  tuner is tuning. Try again when it finishes."), and (fix round 4) while
+  the amp is still switching from an earlier operate command ("The
+  amplifier is still switching. Try again in a moment."), except `on`
+  false while an `operate=1` is unconfirmed. A `property.write` of `amplifier` `operate` stays
   refused. The reasons are in the remote accessory control document.
 - **The RF-Kit's OPERATE, antenna, TCI mode and saved address.**
   `setRfKitOperate` (`on` bool), `setRfKitAntenna` (`port` i64, internal
@@ -5453,7 +5462,13 @@ no stop. The reasons:
   77 fix round 2; words from fix round 3), "The amplifier did not answer.
   Put it in standby or disconnect it in Setup to transmit without it."
   (A FAULT report while `operate=1` is unconfirmed, or an error reply to
-  the operate command, ends the wait at once: the key goes out barefoot.)
+  the operate command, ends the wait at once: the key goes out barefoot.
+  From fix round 4 an error reply ends it only when no earlier command is
+  still unconfirmed, and only for a code that reads and is not zero.) A
+  key whose Power Genius goes to operate by itself while the radio
+  transmits (commanded by nobody, as a fault clearing on its own) is
+  stopped with "The amplifier switched to operate by itself while the
+  radio was transmitting, so the Core stopped transmitting."
 
 The Core sends the object to the holder and to every other declaring peer,
 so a device that lost its link learns why from the snapshot when it signs

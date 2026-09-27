@@ -32,6 +32,11 @@
 //               device's own keys refused while its autotune waits; I4
 //               endAutotuneFor. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-26: iPhone app plan Task 77 fix round 4 (R-IOS-02, R-IOS-03,
+//               R-IOS-13): a device's tunerTune that ends without keying
+//               tells that device why (notice tuneEnded). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/RemoteKeying.h"
@@ -144,10 +149,16 @@ RemoteKeying::RemoteKeying(RadioModel* model, TransmitHolder* holder, QObject* p
         // Task 77 fix round 2: a device's autotune that ended before its
         // carrier keyed (the amplifier never reported standby, MOX came on,
         // the carrier was refused) leaves no key to start.
-        connect(m_model, &RadioModel::tgxlAutotuneEnded, this, [this](const QByteArray& deviceId) {
+        // Fix round 4: and when it ended for the amplifier's sake, the
+        // device is told why (its tunerTune was answered accepted).
+        connect(m_model, &RadioModel::tgxlAutotuneEnded, this,
+                [this](const QByteArray& deviceId, const QString& unkeyedReason) {
             if (!deviceId.isEmpty() && m_pending.has_value() && m_pending->deviceId == deviceId
                 && !moxKeyedFor(deviceId)) {
                 m_pending.reset();
+                if (!unkeyedReason.isEmpty()) {
+                    emit tunerTuneEndedUnkeyed(deviceId, unkeyedReason);
+                }
                 emit pendingKeyEnded();
             }
         });

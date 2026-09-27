@@ -537,6 +537,11 @@
 //               removal moves the Core's own band plan; a plan the Core
 //               does not have is refused. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: iPhone app plan Task 77 fix round 4 (R-IOS-02, R-IOS-03,
+//               R-IOS-13): a device's tunerTune that ends without keying
+//               tells that device why (notice tuneEnded). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -1625,6 +1630,17 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
                 &RadioModel::retryOwedAmpRestore);
         connect(m_remoteKeying.get(), &RemoteKeying::pendingKeyEnded, m_radioModel,
                 &RadioModel::retryOwedAmpRestore);
+        // Task 77 fix round 4: a device's tunerTune that ended without
+        // keying: that device is told why (about its own request: no `by`
+        // keys, no Take it back).
+        connect(m_remoteKeying.get(), &RemoteKeying::tunerTuneEndedUnkeyed, this,
+                [this](const QByteArray& deviceId, const QString& reason) {
+                    ConfirmStep::Notice notice;
+                    notice.device = deviceId;
+                    notice.reason = reason;
+                    notice.prompt.kind = QStringLiteral("tuneEnded");
+                    tellDevice(notice, QByteArray());
+                });
         // Fix wave C1: the session gate a key without a microphone line is
         // judged by first, on the connection the command came on.
         m_remoteKeying->setSessionGate([this](const RemoteKeying::Command& command) -> TxRefusal {

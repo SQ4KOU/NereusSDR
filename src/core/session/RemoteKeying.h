@@ -88,6 +88,11 @@
 //               refused while its autotune carrier is up. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: iPhone app plan Task 77 fix round 4 (R-IOS-02, R-IOS-03,
+//               R-IOS-13): a device's tunerTune that ends without keying
+//               tells that device why (notice tuneEnded). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 #pragma once
 
@@ -208,6 +213,9 @@ signals:
     /// Fix round 2: a pending key ended (keyed, refused or cancelled); the
     /// Core retries an amplifier switch it owes.
     void pendingKeyEnded();
+    /// Task 77 fix round 4: `deviceId`'s tx.tunerTune (already answered
+    /// accepted) ended without keying, for `reason`; the Core tells it.
+    void tunerTuneEndedUnkeyed(const QByteArray& deviceId, const QString& reason);
 
 private:
     /// The key itself, after any wait: the gates, MOX, the epoch.
