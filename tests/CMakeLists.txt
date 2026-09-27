@@ -6969,6 +6969,10 @@ nereus_add_test(tst_notch_persistence)
 #         section 6.3.
 nereus_add_test(tst_notch_channel_sync)
 
+# R-R3-49: the Core's NR3 model load (RNNRloadModel) runs on the receive
+# lane, after the channel opens queued there, never on the event loop.
+nereus_add_test(tst_nr3_model_load_lane)
+
 # ── Tunable Notch Filter Task 5: TCI rx_nf_enable ─────────────────────────
 # TNF section 6.4: rx_nf_enable repoint + both-index broadcast.
 # Verifies the TCI master-notch surface against the real NotchModel:
