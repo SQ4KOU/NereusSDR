@@ -11,6 +11,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-27 - J.J. Boyd (KG4VCF). Parity Task 23 control UI: the TCI
+//                 status and log identify the Core and this window.
+//                 AI-assisted implementation via OpenAI Codex.
 //   2026-09-24 - J.J. Boyd (KG4VCF). R-R3-49 / R-R3-21: menu items and
 //                 status bar items whose feature is not built yet are
 //                 hidden through UnbuiltFeatures (local and remote
@@ -576,6 +579,8 @@ warren@wpratt.com
 #include "core/FFTRouter.h"
 #include "StyleConstants.h"
 #include "models/RadioModel.h"
+#include "models/StationTciModel.h"
+#include "core/session/IStationLink.h"
 #include "models/AccessoryDataModel.h"
 #include "models/SliceModel.h"
 #include "widgets/VfoWidget.h"
@@ -874,6 +879,14 @@ MainWindow::MainWindow(const RemoteStationOptions& station, QWidget* parent,
         // R-R3-48: the app's one TCI switch drives this server and, on a
         // Core that runs a station server, the Core's too.
         m_tciSwitch = new TciSwitch(m_tciServer, m_radioModel, this);
+        if (m_radioModel && m_radioModel->stationTciModel()) {
+            connect(m_radioModel->stationTciModel(), &StationTciModel::stateChanged,
+                    this, &MainWindow::updateTciIndicator);
+            connect(m_radioModel->stationTciModel(), &StationTciModel::clientsChanged,
+                    this, &MainWindow::updateTciIndicator);
+            connect(m_radioModel, &RadioModel::stationLinkStateChanged,
+                    this, &MainWindow::updateTciIndicator);
+        }
         connect(m_tciSwitch, &TciSwitch::stationRequestFailed, this,
                 [this](const QString& reason) {
             statusBar()->showMessage(OperatorReasonText::forDisplay(reason), 5000);
@@ -7083,6 +7096,7 @@ void MainWindow::populateDefaultMeter()
 #ifdef HAVE_WEBSOCKETS
     if (m_tciServer) {
         m_tciApplet = new TciApplet(m_tciServer, nullptr);
+        m_tciApplet->setStationContext(m_tciSwitch, m_radioModel);
         panel->addApplet(m_tciApplet);
         connect(m_tciApplet, &TciApplet::setupRequested,
                 this, &MainWindow::openTciSetupPage);
@@ -7099,6 +7113,7 @@ void MainWindow::populateDefaultMeter()
                 });
 
         m_clientChainApplet = new ClientChainApplet(m_tciServer, nullptr);
+        m_clientChainApplet->setStationModel(m_radioModel);
         panel->addApplet(m_clientChainApplet);
     }
 #endif
@@ -10050,6 +10065,23 @@ void MainWindow::updateTciIndicator()
                       .arg(txPeer.isEmpty() ? QStringLiteral("A client") : txPeer);
     }
 
+    // A remote window can have a local TCI server and a Core station
+    // server at the same time. Name each in the bottom indicator.
+    const IStationLink* stationLink = m_radioModel ? m_radioModel->stationLink() : nullptr;
+    const StationTciModel* stationTci = m_radioModel ? m_radioModel->stationTciModel() : nullptr;
+    if (stationLink && stationLink->stationTciAvailable() && stationTci) {
+        const int coreClients = stationLink->stationTciServerAvailable()
+            ? stationTci->clients().size() : 0;
+        text += stationTci->listening()
+            ? QStringLiteral(" | Core %1").arg(coreClients)
+            : QStringLiteral(" | Core off");
+        tooltip = QStringLiteral("This window: %1\nThe Core's TCI server: %2")
+            .arg(tooltip, stationTci->listening()
+                ? QStringLiteral("listening on port %1 with %2 apps")
+                      .arg(stationTci->port()).arg(coreClients)
+                : QStringLiteral("not listening"));
+    }
+
     m_tciIndicatorBotLabel->setText(text);
     m_tciIndicatorBotLabel->setStyleSheet(
         QStringLiteral("QLabel { color: %1; font-size: 11px; }").arg(color));
@@ -10786,16 +10818,50 @@ void MainWindow::showTciLogWindow()
     if (!m_tciLogWindow) {
         m_tciLogWindow = new TciLogWindow(this);
         connect(m_tciServer, &TciServer::messageLogged,
-                m_tciLogWindow, &TciLogWindow::appendEntry,
+                m_tciLogWindow, [log = m_tciLogWindow](const QString& direction,
+                                                       const QString& peer,
+                                                       const QString& line, qint64 atMs) {
+            log->appendEntry(direction, QStringLiteral("This window: %1").arg(peer),
+                             line, atMs);
+        },
                 Qt::QueuedConnection);
         // R-R3-42: the operator's notices, in plain words, between the
         // wire lines (never sent to an app).
         connect(m_tciServer, &TciServer::operatorNotice, m_tciLogWindow,
                 [log = m_tciLogWindow](const QString& peer, const QString& reason, bool) {
-            log->appendEntry(QStringLiteral("note"), peer,
+            log->appendEntry(QStringLiteral("note"),
+                             QStringLiteral("This window: %1").arg(peer),
                              OperatorReasonText::forDisplay(reason),
                              QDateTime::currentMSecsSinceEpoch());
         }, Qt::QueuedConnection);
+        // The Core sends its connected-app records, including each app's
+        // latest command. Show changes beside this window's live wire log.
+        if (m_radioModel && m_radioModel->role() == RadioModel::Role::Remote
+            && m_radioModel->stationTciModel()) {
+            auto* station = m_radioModel->stationTciModel();
+            connect(station, &StationTciModel::clientsChanged, m_tciLogWindow,
+                    [station, log = m_tciLogWindow,
+                     seen = QHash<QString, QString>{}]() mutable {
+                QHash<QString, QString> now;
+                for (const StationTciClient& client : station->clients()) {
+                    now.insert(client.id, client.lastCommand);
+                    if (!client.lastCommand.isEmpty()
+                        && seen.value(client.id) != client.lastCommand) {
+                        log->appendEntry(QStringLiteral("in"),
+                                         QStringLiteral("The Core: %1").arg(client.address),
+                                         client.lastCommand, QDateTime::currentMSecsSinceEpoch());
+                    }
+                }
+                seen = now;
+            });
+            const StationTciModel* state = station;
+            m_tciLogWindow->appendEntry(
+                QStringLiteral("note"), QStringLiteral("The Core"),
+                state->listening() ? QStringLiteral("TCI server listening on port %1")
+                                         .arg(state->port())
+                                   : QStringLiteral("TCI server is not listening"),
+                QDateTime::currentMSecsSinceEpoch());
+        }
     }
     m_tciLogWindow->show();
     m_tciLogWindow->raise();

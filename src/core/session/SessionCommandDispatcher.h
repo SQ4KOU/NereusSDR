@@ -438,6 +438,9 @@ private:
     void handleResetRfKitError(const NereusSDR::SessionMessage& invoke);
     // R-R3-48 (stationTciVersion 1): the station's TCI switch and port.
     void handleSetStationTci(const NereusSDR::SessionMessage& invoke);
+    // Parity Task 23 (stationTciVersion 2): setStationTciOptions and
+    // disconnectStationTciClient.
+    void handleStationTciServer(const NereusSDR::SessionMessage& invoke);
     // R-R3-47 / R-R3-22 (accessoryDataVersion 1): the Core's accessory
     // records and settings.
     void handleSetTxInterlockPolicy(const NereusSDR::SessionMessage& invoke);

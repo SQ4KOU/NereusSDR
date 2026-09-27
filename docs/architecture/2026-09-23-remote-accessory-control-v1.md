@@ -107,7 +107,7 @@ contract; each feature has its own version.
 | `remoteRfKitControlVersion` | 11 | 2 | Also: the interface, antenna, tuner and band-follow rows of `rfkit`; `configureRfKit`, `disconnectRfKit` and `setRfKitEnabled` work, and the Core identifies the RF2K-S itself |
 | `remoteRfKitControlVersion` | 11 | 3 | Also: `resetRfKitError` works, and the Core applies a window's `RfKit_AutoReconnect` and `RfKit_PollIntervalMs` station settings to its amp's connection at once, so the RF-Kit page's settings, antenna names and Reset amp error work from a remote window |
 | `remoteRfKitControlVersion` | 11 | 4 | Also: `setRfKitOperate` (OPERATE or STANDBY), `setRfKitAntenna` (ANT 1 to 4), `setRfKitTciMode` (the amp in TCI mode) work whenever the radio is not on the air, and `setRfKitAddress` (the address saved without dialling) works on the air too (see "Operating the RF-Kit amplifier") |
-| `stationTciVersion` | 11 | 1 | The Core runs its own TCI server on the station network: the read-only `stationTci` object, and `setStationTci` works |
+| `stationTciVersion` | 11 | 2 | Version 1: the Core's read-only `stationTci` object and `setStationTci`. Version 2: four server options, the `tciClients` stream, option changes and client disconnect |
 | `accessoryDataVersion` | 11 | 1 | The Core mirrors its accessory records and settings as the read-only `accessoryData` object, and `setTxInterlockPolicy`, `setPgxlPowerCap` and `clearAccessoryFaults` work |
 | `accessoryDataVersion` | 11 | 2 | Also: the RF-Kit's connection counts on `accessoryData` (`rfkitConnectedSinceMs`, `rfkitPollsOk`, `rfkitPollsFailed`, `rfkitReconnectCount`, `rfkitLastPollMs`) |
 | `accessoryDataVersion` | 11 | 3 | Also: the RF-Kit's average response time over its last ten polls on `accessoryData` (`rfkitRttAvgMs`), as a local window's RF-Kit page and Copy diagnostics show it |
@@ -666,6 +666,17 @@ Read-only; the switch changes only through `setStationTci`.
 | `listening` | bool | The server accepts connections |
 | `stationAddress` | utf8 | The station network address it listens on; empty when it listens only on the Core's own computer |
 | `error` | utf8 | Why it could not listen, as the system said; empty otherwise |
+| `emulateExpertSdr3`, `emulateSunSdr2Pro` | bool | Version 2: protocol and device identity reported to a new TCI app |
+| `cwluBecomesCw` | bool | Version 2: whether CWL/CWU is reported as CW |
+| `sendInitialState` | bool | Version 2: whether a new app receives the initial radio state |
+
+At version 2, `tciClients` is a record stream with at most 64 entries.
+Each record id is a stable connection id. Its fields are `id`, `name`,
+`address`, `subscriptions` (an array of audio, I/Q or sensor names),
+`transmitting` (bool) and `lastCommand` (string). The Core sends changes
+as record upserts and removals. A window subscribes after the snapshot
+and clears its list when the session ends. The Core's bind remains set by
+`station_bind` in `nereusd.conf`; the desktop page shows it read-only.
 
 The Core runs the app's existing TCI server on its own radio model, so a TCI
 app at the station (the RF2K-S first) hears the Core's radio: the init
@@ -960,6 +971,8 @@ the Core took the request (see "Accepted is not connected").
 | `setRfKitTciMode` | none | minor 11, `remoteRfKitControlVersion` 4 | Puts the amp in TCI mode, as the RF-Kit page's "Set amp to TCI mode" |
 | `setRfKitAddress` | `host` (utf8), `port` (i64, 1 to 65535) | minor 11, `remoteRfKitControlVersion` 4 | Saves the RF2K-S address for the Core's radio without dialling |
 | `setStationTci` | `enabled` (bool), `port` (i64, 1024 to 65535) | minor 11, `stationTciVersion` 1 | Saves the station's TCI switch and port on the Core and starts or stops its station TCI server. The Core keeps them across window sessions, other apps connecting and restarts |
+| `setStationTciOptions` | `emulateExpertSdr3`, `emulateSunSdr2Pro`, `cwluBecomesCw`, `sendInitialState` (bool) | minor 11, `stationTciVersion` 2 | Saves the Core's four TCI compatibility and initial-state options for new clients; changes no radio setting |
+| `disconnectStationTciClient` | `id` (utf8) | minor 11, `stationTciVersion` 2 | Closes only the named app on the Core's station TCI server; an unknown id is refused |
 | `setTxInterlockPolicy` | `mode` (i64, the `interlockMode` value 0 to 2), `graceMs` (i64, 0 to 30000), `swrGateEnabled` (bool), `swrGateMax` (f64, 1.0 to 10.0) | minor 11, `accessoryDataVersion` 1 | Sets the whole transmit interlock policy on the Core, which saves it and enforces it from the next transmit request. Keys nothing |
 | `setPgxlPowerCap` | `enabled` (bool), `watts` (i64, 100 to 2000) | minor 11, `accessoryDataVersion` 1 | Sets the Power Genius output limit on the Core, which saves it and raises the alert from then on |
 | `clearAccessoryFaults` | `device` (utf8: `pgxl`, `tgxl` or `rfkit`) | minor 11, `accessoryDataVersion` 1 | Empties that device's fault history on the Core (and in its settings) |
@@ -1480,6 +1493,17 @@ A window reads `amplifier` and `rfkit` only while the Core offers them:
   server (there is no radio there to serve), and on another computer its
   server follows the switch. With an older Core (or none) the window's own
   server follows the switch as it always has.
+- With `stationTciVersion` 2, the TCI applet, bottom indicator, clients
+  applet, Setup status and log distinguish this window's server from the
+  Core's. The clients applet subscribes to `tciClients` and can disconnect
+  one Core client by id. Setup shows the Core's bind and port read-only and
+  sends its four compatibility and initial-state options through
+  `setStationTciOptions`; this window's options remain local. The Core
+  refuses option changes and client disconnects while the radio is on the
+  air. An older Core leaves these controls visible but disabled with a
+  plain reason. The TCI applet's Enable Server saves the switch through
+  `TciSwitch`, including its Core request, so a link event does not erase
+  the operator's choice.
 - A local window's RF-Kit band follow is worked out from its own TCI server
   the same way.
 - With `accessoryDataVersion` 1 the desktop remote window's 4O3A page

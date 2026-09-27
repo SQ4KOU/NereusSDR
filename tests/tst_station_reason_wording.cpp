@@ -1070,7 +1070,9 @@ const QList<ReasonSource>& reasonSources()
         {"src/core/StationTciController.cpp", {}, {}, 1,
          {QStringLiteral("port"), QStringLiteral("stationAddresses.join(QStringLiteral(\", \"))")},
          {// TciServer's own error text, kept for the Core's log line only.
-          QStringLiteral("error")}},
+          QStringLiteral("error"),
+          // The unknown-client sentence is scanned in this file.
+          QStringLiteral("unknownClientReason()")}},
         // The SWR limit's range, one decimal.
         {"src/core/settings/SettingsProxyServer.cpp", {}, {}, 3,
          {QStringLiteral("kSwrProtectionLimitMin, 0, 'f', 1"),
@@ -1165,6 +1167,8 @@ const QList<ReasonSource>& reasonSources()
         {"src/models/RadioModel.cpp",
          {QStringLiteral("applyMirroredValue"), QStringLiteral("setFourO3AEnabledForStation"),
           QStringLiteral("setStationTciForStation"),
+          QStringLiteral("setStationTciOptionsForStation"),
+          QStringLiteral("disconnectStationTciClientForStation"),
           QStringLiteral("setTxInterlockPolicyForStation"),
           QStringLiteral("setPgxlPowerCapForStation"),
           QStringLiteral("clearAccessoryFaultsForStation"),
@@ -1421,6 +1425,8 @@ const QList<AppSideReason>& appSideReasons()
         // R-IOS-26 (iPhone plan Task 22): the Core's FreeDV Reporter.
         {"src/core/session/IStationLink.h", "stationFreedvUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},
+        {"src/core/session/IStationLink.h", "stationTciServerUnavailableReason",
+         "a remote window's own reason when its Core cannot manage its TCI apps"},
         {"src/core/SpotSourceHost.cpp", "reportStationRefusal",
          "a remote window shows the Core's refusal it was given"},
         {"src/models/RadioModel.h", "rxFilter0Reason",
@@ -1472,7 +1478,9 @@ const QList<ReasonSource>& propertyTextSources()
         {"src/core/StationTciController.cpp", {}, {}, 1,
          {QStringLiteral("port"), QStringLiteral("stationAddresses.join(QStringLiteral(\", \"))")},
          {// TciServer's own error text, kept for the Core's log line only.
-          QStringLiteral("error")},
+          QStringLiteral("error"),
+          // The unknown-client sentence is scanned in this file.
+          QStringLiteral("unknownClientReason()")},
          true},
 
         // The 4O3A listener's error (fourO3AListenerError).

@@ -1,10 +1,14 @@
 // no-port-check: NereusSDR-original. R-R3-48 / R-R3-25 the Core's station TCI server.
 // J.J. Boyd (KG4VCF), September 2026; AI-assisted via Anthropic Claude Code.
+// 2026-09-27: Parity Task 23 (R-R3-48, R-R3-42, R-R3-49): the server's apps
+// (the `tciClients` stream), disconnecting one, and its four options. J.J.
+// Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 #pragma once
 
 #include "core/StationNetwork.h"
 #include "models/StationTciModel.h"
 
+#include <QHash>
 #include <QHostAddress>
 #include <QList>
 #include <QNetworkAddressEntry>
@@ -86,9 +90,21 @@ public:
 
     TciServer* server() const;
 
+    /// Parity Task 23 (stationTciVersion 2): the server's options, the
+    /// Core's own TciEmulateExpertSDR3Protocol, TciEmulateSunSDR2Pro,
+    /// TciCwluBecomesCw and TciSendInitialFrequencyStateOnConnect, saved
+    /// and published. An app connecting later reads them in its init burst.
+    void setOptions(bool emulateExpertSdr3, bool emulateSunSdr2Pro, bool cwluBecomesCw,
+                    bool sendInitialState);
+    /// Parity Task 23: closes the app the `tciClients` record `id` names.
+    /// False, with a plain reason, when no app on the server has that id.
+    bool disconnectClient(const QString& id, QString* reason);
+    static QString unknownClientReason();
+
 private:
     void apply();
     void publish();
+    void publishClients();
     void resetRetry();
 
     QPointer<RadioModel> m_radio;
@@ -106,6 +122,10 @@ private:
     QTimer m_retryTimer;
     int m_retryStep{0};
     bool m_failing{false};
+    // Parity Task 23: each connection's `tciClients` id, a rising number.
+    QHash<const void*, QString> m_clientIds;
+    quint64 m_nextClientId{1};
+    bool m_clientsQueued{false};
 };
 
 } // namespace NereusSDR

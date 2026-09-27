@@ -502,6 +502,11 @@ struct SessionMessage {
     ///   setRfKitEnabled        -- {"enabled": Bool}
     ///   resetRfKitError        -- {}
     ///   setStationTci          -- {"enabled": Bool, "port": Int64}
+    ///   setStationTciOptions   -- {"emulateExpertSdr3": Bool,
+    ///                               "emulateSunSdr2Pro": Bool,
+    ///                               "cwluBecomesCw": Bool,
+    ///                               "sendInitialState": Bool}
+    ///   disconnectStationTciClient -- {"id": Utf8}
     ///   setTxInterlockPolicy   -- {"mode": Int64, "graceMs": Int64,
     ///                               "swrGateEnabled": Bool, "swrGateMax": Double}
     ///   setPgxlPowerCap        -- {"enabled": Bool, "watts": Int64}

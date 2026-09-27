@@ -2903,6 +2903,14 @@ public:
     void enableStationTci(const QString& bindOverride);
     /// The station's TCI switch and port, from a window's command.
     bool setStationTciForStation(bool enabled, int port, QString* reason);
+    /// Parity Task 23 (stationTciVersion 2): the station server's four
+    /// options, from a window's setStationTciOptions.
+    bool setStationTciOptionsForStation(bool emulateExpertSdr3, bool emulateSunSdr2Pro,
+                                        bool cwluBecomesCw, bool sendInitialState,
+                                        QString* reason);
+    /// Parity Task 23: closes one app on the station server (its
+    /// `tciClients` id), from a window's disconnectStationTciClient.
+    bool disconnectStationTciClientForStation(const QString& id, QString* reason);
 
     // R-R3-22 / R-R3-47 / R-R3-48: the Core's station network (DaemonApp,
     // before radio startup). The SmartSDR API listener on TCP 4992, the

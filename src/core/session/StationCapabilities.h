@@ -225,7 +225,10 @@ struct StationCapabilities {
     /// R-R3-48: 1 means the Core runs its own TCI server on the station
     /// network, mirrored as the read-only `stationTci` object and switched
     /// by the setStationTci command. Sent in the same block. 0: a
-    /// window's TCI switch changes only its own server.
+    /// window's TCI switch changes only its own server. 2 (remote-window
+    /// parity Task 23, with recordStreamVersion 1) adds the `tciClients`
+    /// record stream (the apps on that server), disconnectStationTciClient
+    /// and setStationTciOptions, and the object's four option properties.
     int stationTciVersion = 0;
     /// R-R3-47 / R-R3-22: 1 means the Core mirrors its accessory records
     /// and settings as the read-only `accessoryData` object (fault

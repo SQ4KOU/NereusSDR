@@ -132,6 +132,9 @@
 //   2026-09-26 - Parity Task 28 (R-R3-49, A11): TransmitState highSwr and
 //                 swrWindBackLatched Outbound (txDisplayVersion 1). J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-27 - Parity Task 23 (R-R3-48, R-R3-42): StationTciModel's four
+//                 options Outbound (stationTciVersion 2). J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorPolicy.h"
@@ -692,6 +695,12 @@ const MirrorPolicy::Entry kEntries[] = {
     { "StationTciModel", "listening", MirrorDirection::Outbound },
     { "StationTciModel", "stationAddress", MirrorDirection::Outbound },
     { "StationTciModel", "error", MirrorDirection::Outbound },
+    // Parity Task 23 (stationTciVersion 2): the server's options, changed
+    // only through setStationTciOptions.
+    { "StationTciModel", "emulateExpertSdr3", MirrorDirection::Outbound },
+    { "StationTciModel", "emulateSunSdr2Pro", MirrorDirection::Outbound },
+    { "StationTciModel", "cwluBecomesCw", MirrorDirection::Outbound },
+    { "StationTciModel", "sendInitialState", MirrorDirection::Outbound },
 
     // R-R3-47 / R-R3-22 (accessoryDataVersion 1): the Core's accessory
     // records and settings, read-only. A window changes the interlock

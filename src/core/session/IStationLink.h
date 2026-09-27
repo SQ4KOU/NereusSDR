@@ -155,6 +155,11 @@
 //                                    R-IOS-03, R-IOS-13):
 //                                    tgxlAutotuneAvailable. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-27  J.J. Boyd / KG4VCF  Parity Task 23 (R-R3-48, R-R3-42):
+//                                    stationTciServerAvailable,
+//                                    requestStationTciOptions,
+//                                    and requestDisconnectStationTciClient.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QString>
@@ -323,6 +328,19 @@ public:
     /// of its own yet (1), not yet (0: this window's switch seeds it), or
     /// its settings have not arrived on this link (-1).
     virtual int coreStationTciStored() const { return -1; }
+    /// Parity Task 23 (stationTciVersion 2): the Core lists the apps on
+    /// its station TCI server (the `tciClients` stream), closes one on
+    /// request, and takes its four options from this window.
+    virtual bool stationTciServerAvailable() const { return false; }
+    virtual CommandOutcome requestStationTciOptions(bool /*emulateExpertSdr3*/,
+                                                    bool /*emulateSunSdr2Pro*/,
+                                                    bool /*cwluBecomesCw*/,
+                                                    bool /*sendInitialState*/)
+    { return { false, stationTciServerUnavailableReason() }; }
+    virtual CommandOutcome requestDisconnectStationTciClient(const QString& /*id*/)
+    { return { false, stationTciServerUnavailableReason() }; }
+    static QString stationTciServerUnavailableReason()
+    { return QStringLiteral("This Core does not let this app change its TCI server's settings or see its apps. Updating the Core may help."); }
 
     /// R-R3-47 / R-R3-22 (accessoryDataVersion 1): the Core shares its
     /// accessory records and settings (`accessoryData`) and takes these

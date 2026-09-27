@@ -3955,6 +3955,36 @@ StationSpotLook stationSpotLook(const QString& source)
 
 void RadioModel::applyStationRecordBatch(const RecordBatch& batch)
 {
+    // Parity Task 23 (stationTciVersion 2): the apps on the Core's TCI
+    // server, in the Core's order (they connected in the order of their
+    // ids).
+    if (batch.stream == QLatin1String("tciClients")) {
+        QList<StationTciClient> clients =
+            batch.reset ? QList<StationTciClient>{} : m_stationTciModel->clients();
+        for (const QString& id : batch.removes) {
+            clients.removeIf([&id](const StationTciClient& c) { return c.id == id; });
+        }
+        for (const RecordUpsert& u : batch.upserts) {
+            const std::optional<StationTciClient> client =
+                StationTciClient::fromFields(u.id, u.fields);
+            if (!client) {
+                continue;
+            }
+            const auto at = std::find_if(clients.begin(), clients.end(),
+                                         [&u](const StationTciClient& c) { return c.id == u.id; });
+            if (at != clients.end()) {
+                *at = *client;
+            } else {
+                clients.append(*client);
+            }
+        }
+        std::stable_sort(clients.begin(), clients.end(),
+                         [](const StationTciClient& a, const StationTciClient& b) {
+            return a.id.toULongLong() < b.id.toULongLong();
+        });
+        m_stationTciModel->setClients(clients);
+        return;
+    }
     // Parity Task 21 (R-IOS-18): the Core's radios, in the Core's order.
     if (batch.stream == QLatin1String("stationRadios")) {
         QList<StationRadioEntry> entries = batch.reset ? QList<StationRadioEntry>{}
@@ -4094,6 +4124,10 @@ void RadioModel::reportStationRadioRefused(const QString& reason)
 
 void RadioModel::clearStationRecords()
 {
+    // Parity Task 23: a remote window's list of the Core's TCI apps.
+    if (m_role == Role::Remote && m_stationTciModel) {
+        m_stationTciModel->setClients({});
+    }
     clearStationRadios();
     clearStationSpots();
     clearStationFreedv();
@@ -4648,6 +4682,31 @@ bool RadioModel::setStationTciForStation(bool enabled, int port, QString* reason
         return false;
     }
     return m_stationTci->setEnabled(enabled, port, reason);
+}
+
+// Parity Task 23 (stationTciVersion 2): the station server's options and
+// its apps, from a window's command. NereusSDR-original; no Thetis logic.
+bool RadioModel::setStationTciOptionsForStation(bool emulateExpertSdr3, bool emulateSunSdr2Pro,
+                                                bool cwluBecomesCw, bool sendInitialState,
+                                                QString* reason)
+{
+    if (m_role != Role::Local || !m_stationTci) {
+        if (reason) { *reason = QStringLiteral("This Core has no TCI server."); }
+        return false;
+    }
+    m_stationTci->setOptions(emulateExpertSdr3, emulateSunSdr2Pro, cwluBecomesCw,
+                             sendInitialState);
+    if (reason) { reason->clear(); }
+    return true;
+}
+
+bool RadioModel::disconnectStationTciClientForStation(const QString& id, QString* reason)
+{
+    if (m_role != Role::Local || !m_stationTci) {
+        if (reason) { *reason = QStringLiteral("This Core has no TCI server."); }
+        return false;
+    }
+    return m_stationTci->disconnectClient(id, reason);
 }
 
 // ---------------------------------------------------------------------------

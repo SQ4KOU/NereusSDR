@@ -223,7 +223,7 @@
         {
             "kind": "i64",
             "name": "stationTciVersion",
-            "value": 1
+            "value": 2
         },
         {
             "kind": "i64",
@@ -1009,6 +1009,47 @@
             "capabilityVersion": 1,
             "minMinor": 11,
             "verb": "setStationTci"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "bool",
+                    "name": "emulateExpertSdr3",
+                    "optional": false
+                },
+                {
+                    "kind": "bool",
+                    "name": "emulateSunSdr2Pro",
+                    "optional": false
+                },
+                {
+                    "kind": "bool",
+                    "name": "cwluBecomesCw",
+                    "optional": false
+                },
+                {
+                    "kind": "bool",
+                    "name": "sendInitialState",
+                    "optional": false
+                }
+            ],
+            "capability": "stationTciVersion",
+            "capabilityVersion": 2,
+            "minMinor": 11,
+            "verb": "setStationTciOptions"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "id",
+                    "optional": false
+                }
+            ],
+            "capability": "stationTciVersion",
+            "capabilityVersion": 2,
+            "minMinor": 11,
+            "verb": "disconnectStationTciClient"
         },
         {
             "arguments": [
@@ -5813,6 +5854,30 @@
                     "kind": "utf8",
                     "name": "error",
                     "ordinal": 4
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "emulateExpertSdr3",
+                    "ordinal": 5
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "emulateSunSdr2Pro",
+                    "ordinal": 6
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "cwluBecomesCw",
+                    "ordinal": 7
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "sendInitialState",
+                    "ordinal": 8
                 }
             ]
         },

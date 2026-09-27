@@ -36,6 +36,22 @@
         {"advanceMs": 50},
         {"from": "client", "role": "scripted", "message": {"type": "command.invoke", "verb": "setStationTci", "id": 1133, "args": [{"ordinal": 0, "name": "conformanceWrongName", "kind": "bool", "value": false}, {"ordinal": 0, "name": "port", "kind": "i64", "value": 50001}]}},
         {"from": "station", "message": {"accepted": false, "affected": [], "id": 1133, "reason": "The request to turn the Core's TCI server on or off was not understood.", "type": "command.result", "verb": "setStationTci"}},
+        {"advanceMs": 50},
+        {"from": "client", "role": "scripted", "message": {"type": "command.invoke", "verb": "records.subscribe", "id": 2300, "args": [{"ordinal": 0, "name": "stream", "kind": "utf8", "value": "tciClients"}, {"ordinal": 0, "name": "backlog", "kind": "i64", "value": 64}]}},
+        {"from": "station", "message": {"accepted": true, "affected": [], "id": 2300, "reason": "", "type": "command.result", "verb": "records.subscribe"}},
+        {"from": "station", "message": {"generation": 1, "removes": [], "reset": true, "stream": "tciClients", "type": "record.batch", "upserts": []}},
+        {"advanceMs": 50},
+        {"from": "client", "role": "scripted", "message": {"type": "command.invoke", "verb": "setStationTciOptions", "id": 2301, "args": [{"ordinal": 0, "name": "emulateExpertSdr3", "kind": "bool", "value": true}, {"ordinal": 0, "name": "emulateSunSdr2Pro", "kind": "bool", "value": true}, {"ordinal": 0, "name": "cwluBecomesCw", "kind": "bool", "value": false}, {"ordinal": 0, "name": "sendInitialState", "kind": "bool", "value": true}]}},
+        {"from": "station", "message": {"accepted": true, "affected": [], "id": 2301, "reason": "", "type": "command.result", "verb": "setStationTciOptions"}},
+        {"advanceMs": 50},
+        {"from": "client", "role": "scripted", "message": {"type": "command.invoke", "verb": "setStationTciOptions", "id": 2302, "args": [{"ordinal": 0, "name": "conformanceWrongName", "kind": "bool", "value": true}, {"ordinal": 0, "name": "emulateSunSdr2Pro", "kind": "bool", "value": true}, {"ordinal": 0, "name": "cwluBecomesCw", "kind": "bool", "value": false}, {"ordinal": 0, "name": "sendInitialState", "kind": "bool", "value": true}]}},
+        {"from": "station", "message": {"accepted": false, "affected": [], "id": 2302, "reason": "The request to change the Core's TCI server settings was not understood.", "type": "command.result", "verb": "setStationTciOptions"}},
+        {"advanceMs": 50},
+        {"from": "client", "role": "scripted", "message": {"type": "command.invoke", "verb": "disconnectStationTciClient", "id": 2303, "args": [{"ordinal": 0, "name": "id", "kind": "utf8", "value": "absent"}]}},
+        {"from": "station", "message": {"accepted": false, "affected": [], "id": 2303, "reason": "That app is no longer connected to the Core's TCI server.", "type": "command.result", "verb": "disconnectStationTciClient"}},
+        {"advanceMs": 50},
+        {"from": "client", "role": "scripted", "message": {"type": "command.invoke", "verb": "disconnectStationTciClient", "id": 2304, "args": [{"ordinal": 0, "name": "conformanceWrongName", "kind": "utf8", "value": "absent"}]}},
+        {"from": "station", "message": {"accepted": false, "affected": [], "id": 2304, "reason": "The request to disconnect an app from the Core's TCI server was not understood.", "type": "command.result", "verb": "disconnectStationTciClient"}},
         {"advanceMs": 50}
     ]
 }

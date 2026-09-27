@@ -570,6 +570,11 @@
 //               transmit the Core's own outputs leave MON out (JJ's MON
 //               ruling of 2026-09-26). J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-09-27: Parity Task 23 (R-R3-48, R-R3-42, R-R3-49):
+//               stationTciVersion 2 with the record streams: the tciClients
+//               stream (the apps on the Core's station TCI server),
+//               setStationTciOptions and disconnectStationTciClient. J.J.
+//               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-27: iPhone plan Task 22 / parity Task 20 (R-IOS-26, R-R3-49):
 //               stationFreedvVersion 1, after txMonitorAudioVersion: the
 //               Core runs FreeDV Reporter and sends its list as the
@@ -3654,6 +3659,20 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
                 it->agreedMinor < kRadioIdentitySessionProtocolMinor
                     ? QStringLiteral("Update this app to turn the Core's TCI server on or off.")
                     : QStringLiteral("This Core has no TCI server."), {}));
+            break;
+        }
+        // Parity Task 23: the station TCI server's options and apps came
+        // with stationTciVersion 2.
+        if ((message.commandVerb == "setStationTciOptions"
+             || message.commandVerb == "disconnectStationTciClient")
+            && (it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                || stationTciVersion() < 2)) {
+            send(transport, SessionMessages::commandResult(
+                message.commandVerb, message.commandId, false,
+                it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                    ? QStringLiteral("Update this app to change the Core's TCI server.")
+                    : QStringLiteral("This Core cannot change its TCI server's settings or "
+                                     "apps from here."), {}));
             break;
         }
         // R-R3-47 / R-R3-22: the accessory record verbs came with
@@ -7664,6 +7683,37 @@ void StationServer::publishStationRadios()
     scheduleRecordFlush();
 }
 
+void StationServer::publishStationTciClients()
+{
+    // Parity Task 23: what went, then what is (each upsert only when it
+    // changed), as the Core's radios are published.
+    const auto it = m_recordStreams.find(QStringLiteral("tciClients"));
+    if (it == m_recordStreams.end() || m_radioModel.isNull()) {
+        return;
+    }
+    RecordStream& stream = *it->second;
+    const QList<StationTciClient> clients = m_radioModel->stationTciModel()->clients();
+    QSet<QString> now;
+    for (const StationTciClient& client : clients) {
+        now.insert(client.id);
+    }
+    QHash<QString, QJsonObject> held;
+    for (const RecordUpsert& record : stream.newest(stream.capacity())) {
+        if (!now.contains(record.id)) {
+            stream.remove(record.id);
+        } else {
+            held.insert(record.id, record.fields);
+        }
+    }
+    for (const StationTciClient& client : clients) {
+        const QJsonObject fields = client.toFields();
+        if (!held.contains(client.id) || held.value(client.id) != fields) {
+            stream.upsert(client.id, fields);
+        }
+    }
+    scheduleRecordFlush();
+}
+
 RecordStream* StationServer::recordStreamForTest(const QString& name) const
 {
     const auto it = m_recordStreams.find(name);
@@ -7750,7 +7800,12 @@ int StationServer::rfKitControlVersion() const
 
 int StationServer::stationTciVersion() const
 {
-    return !m_radioModel.isNull() && m_radioModel->stationTciController() != nullptr ? 1 : 0;
+    if (m_radioModel.isNull() || m_radioModel->stationTciController() == nullptr) {
+        return 0;
+    }
+    // Parity Task 23: 2 with the record streams, which carry its apps
+    // (`tciClients`); the options and the disconnect come with it.
+    return m_recordStreams.find(QStringLiteral("tciClients")) != m_recordStreams.end() ? 2 : 1;
 }
 
 int StationServer::accessoryDataVersion() const
@@ -8121,6 +8176,16 @@ void StationServer::setUpRecordStreams()
             freedvStream->reset();
             scheduleRecordFlush();
         });
+    }
+    // Parity Task 23 (stationTciVersion 2): the apps on the Core's station
+    // TCI server, each by the id the Core gave its connection.
+    if (m_radioModel->stationTciController() != nullptr) {
+        const QString name = QStringLiteral("tciClients");
+        m_recordStreams.emplace(name, std::make_unique<RecordStream>(
+                                          name, StationTciModel::kClientsCapacity));
+        connect(m_radioModel->stationTciModel(), &StationTciModel::clientsChanged, this,
+                &StationServer::publishStationTciClients);
+        publishStationTciClients();
     }
     connect(m_radioModel->spotSourceHost(), &SpotSourceHost::consoleLine, this,
             [this](const QString& source, const QString& line) {
