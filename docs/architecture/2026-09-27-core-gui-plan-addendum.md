@@ -556,6 +556,31 @@ colours for the same signal.
   investigated. No success claim based only on accepted-packet gaps is valid.
 - Plan: R5 restrictive-network transmit deadline.
 
+### G-40: Code-only rendezvous reconnect stops at an already paired device
+
+- Evidence: JJ's build 7 phone reached the Rock through pairing but received the
+  existing-key refusal before SPAKE. Returning to a saved entry connected, while
+  saved private addresses still delayed the intended address-free workflow.
+- Ruling: JJ said the operator should enter the pairing code and nothing else,
+  without managing saved IP addresses. This is part of the code-only objective.
+- Status: Core correction verified by the full pairing test (35 Qt rows, 13.39 s)
+  and three integrated session/readings/log regressions (43.42 s): complete code proof confirms an existing
+  key without replacing its record; removal during the exchange invalidates it.
+  Mailboxes remain pairing-only. The phone owns authenticated upsert and ordinary
+  rendezvous reconnect without waiting for stale saved private addresses. No updated
+  Core has been installed while JJ's current phone test is active.
+- Plan: Core station pairing and R5 code-only access.
+
+### G-41: Audio reset headphone wording conflicts with default-off behavior
+
+- Evidence: remote parity acceptance B6.10 says reset reopens headphones, but
+  AudioEngine::resetAudioSettings removes Headphones/Enabled and closes the headphone
+  output to restore its default-off state.
+- Ruling: OPEN on whether reset should preserve enabled headphones. Existing behavior
+  is preserved while the independent immediate audio-output rebuild work proceeds.
+- Status: Setup lane reports the discrepancy; no invented new headphone default.
+- Plan: remote-window parity Setup diagnostics and preferences.
+
 ## How this addendum is kept
 
 New gaps are appended here as they are found, each with its own `G-` number (next available

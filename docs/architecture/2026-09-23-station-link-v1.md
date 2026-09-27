@@ -454,10 +454,20 @@ Password hashing uses libsodium's default algorithm (Argon2id) with
    its ten minutes over, or closed and reopened), it burns the code and
    sends `pair.fail` as for a closed window. It opens the device's box. The box's
    `publicKey` must be the one `pair.start` named, and the box's `name`
-   and `kind` win over the plain ones. The station adds the device and
+   and `kind` win over the plain ones for a new device. The station adds a new device and
    answers with its own `pair.confirm`: a box sealed with `server_sk`
    around `{"identity": {"publicKey", "certBinding"}, "label"}`. Then it
    ends the connection.
+
+Code pairing also confirms an already paired key, through the same complete
+SPAKE exchange and current pairing window. In that case the existing device
+record is preserved, including its saved name and dates. Removing that device
+during the exchange invalidates confirmation, even if the same key is added
+again before confirmation. The client learns the Core identity only from the
+authenticated confirmation, then connects and signs in by device key on a new
+ordinary connection. A pairing mailbox never admits a session. This lets a
+saved phone use only the current code without a manual address or an
+unauthenticated identity shortcut.
 
 Whoever carries these messages (the rendezvous, later) learns nothing it
 could test guesses against. Each exchange is one guess, and the code burns
@@ -467,7 +477,8 @@ after it.
 | --- | --- | --- |
 | No pairing on this Core (no identity key or cryptography) | "This Core cannot pair new devices." | 0 |
 | A key that is not a P-256 key, or an unusable name or kind (in `pair.start` or the box), or a box that does not open or names another key | "The Core could not read this device's details. Update this app." | 0 (the wait, from the box on) |
-| The key is paired already | "This device is already paired with this Core. Connect to it instead." | 0 |
+| The key is paired already in one-tap mode | "This device is already paired with this Core. Connect to it instead." | 0 |
+| An existing device is removed during code confirmation | "This device was removed from the Core while pairing. Open pairing again to reconnect it." | current route backoff |
 | The window is closed (at `pair.start`, or at the confirm step when it closed after the exchange took the code, which burns it) | "This Core is not taking new devices. Open pairing on the Core or on a paired device first." | 0 |
 | One tap on a claimed Core | "One tap pairs only a Core with no paired devices. Use the pairing code the Core shows." | 0 |
 | One tap with `pairing_lan_click = deny` | "This Core pairs only with its code. Use the pairing code the Core shows." | 0 |

@@ -43,6 +43,8 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-27: Cover code-only reconnect and in-flight device revocation.
+//               J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 //   2026-09-27: Diagnose helper startup failures without changing deadlines.
 //               J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 //   2026-09-24: original implementation for NereusSDR by J.J. Boyd
@@ -665,6 +667,84 @@ class TstStationPairing : public QObject {
     Q_OBJECT
 
 private slots:
+    void anExistingDeviceCanConfirmTheCodeThroughEitherRoute_data()
+    {
+        QTest::addColumn<bool>("service");
+        QTest::newRow("direct") << false;
+        QTest::newRow("service") << true;
+    }
+
+    void anExistingDeviceCanConfirmTheCodeThroughEitherRoute()
+    {
+        QFETCH(bool, service);
+        Core core;
+        Device device;
+        QVERIFY(core.store().add(device.record()));
+        const PairedDevice before = *core.store().find(device.id());
+        core.window().reopen();
+        device.name = QStringLiteral("Do not replace the saved name");
+        const QString code = core.window().currentCode();
+        const Outcome outcome = service ? core.pairByCodeThroughService(device, code)
+                                        : core.pairByCode(device, code);
+        QCOMPARE(outcome.type, QStringLiteral("pair.confirm"));
+        QCOMPARE(outcome.identity.value(QStringLiteral("publicKey")).toString(),
+                 StationIdentity::toBase64Url(core.server->stationIdentity().publicKeySpki()));
+        QCOMPARE(core.store().list().size(), 1);
+        const PairedDevice after = *core.store().find(device.id());
+        QCOMPARE(after.name, before.name);
+        QCOMPARE(after.kind, before.kind);
+        QCOMPARE(after.pairedAt, before.pairedAt);
+        QCOMPARE(after.lastSeen, before.lastSeen);
+        QCOMPARE(after.lastAddress, before.lastAddress);
+        QCOMPARE(after.publicKeySpki, before.publicKeySpki);
+        QCOMPARE(core.window().state(), PairingWindow::State::ClosedClaimed);
+        QVERIFY(core.deviceSession(device) != nullptr);
+    }
+
+    void anExistingDeviceStillNeedsTheOpenWindowsCode()
+    {
+        Core core;
+        Device device;
+        QVERIFY(core.store().add(device.record()));
+        verifyPlainRefusal(core.pairByCode(device, QStringLiteral("7-anvil-harbor")));
+        core.window().reopen();
+        verifyPlainRefusal(core.pairByCodeThroughService(
+            device, core.window().currentCode(), /*lie=*/true));
+        QCOMPARE(core.window().consecutiveServiceFailures(), 1);
+        QCOMPARE(core.window().consecutiveFailures(), 0);
+        QCOMPARE(core.store().list().size(), 1);
+    }
+
+    void revokingAnExistingDeviceDuringCodeConfirmationCannotRestoreIt_data()
+    {
+        QTest::addColumn<bool>("readd");
+        QTest::newRow("removed") << false;
+        QTest::newRow("removed-and-readded") << true;
+    }
+
+    void revokingAnExistingDeviceDuringCodeConfirmationCannotRestoreIt()
+    {
+        QFETCH(bool, readd);
+        Core core;
+        Device device;
+        Device other;
+        QVERIFY(core.store().add(device.record()));
+        QVERIFY(core.store().add(other.record()));
+        const PairedDevice original = *core.store().find(device.id());
+        core.window().reopen();
+        bool reachedConfirmation = false;
+        const Outcome outcome = core.pairByCodeClosingFirst(device, [&] {
+            reachedConfirmation = true;
+            QVERIFY(core.store().remove(device.id()));
+            if (readd) {
+                QVERIFY(core.store().add(original));
+            }
+        });
+        QVERIFY(reachedConfirmation);
+        verifyPlainRefusal(outcome);
+        QCOMPARE(core.store().find(device.id()).has_value(), readd);
+    }
+
     // ── Refusals, burn and backoff ──────────────────────────────────────
 
     void oneTapIsRefusedOnAClaimedCore()

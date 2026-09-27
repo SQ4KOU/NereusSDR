@@ -1,4 +1,6 @@
 // Modification history (NereusSDR):
+// 2026-09-27: Confirm existing paired devices through the full code exchange.
+// J.J. Boyd (KG4VCF), AI-assisted implementation via OpenAI Codex.
 // 2026-09-27: Preserve final pairing output through connection drain.
 // J.J. Boyd (KG4VCF), AI-assisted implementation via OpenAI Codex.
 // =================================================================
@@ -1418,6 +1420,9 @@ void writePairingBanner(const QString& banner)
 // pair.start until the connection ends.
 struct StationServer::PairingAttempt {
     bool codeMode = false;
+    // Code pairing may confirm an existing device without changing its record.
+    std::optional<PairedDevice> existingDevice;
+    bool existingDeviceRevoked = false;
     /// The device's key as pair.start sent it (base64url) and as SPKI DER.
     QString publicKeyText;
     QByteArray publicKeySpki;
@@ -1893,6 +1898,13 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     m_devicesFacade = std::make_unique<StationDevicesFacade>(
         *m_devices, *m_tokens, *m_identity, m_settings, nullptr, m_pairingWindow.get());
     connect(m_devices.get(), &DeviceStore::deviceRemoved, this, [this](const QByteArray& id) {
+        // Remember revocation even if the same key is added again before confirm.
+        for (const Peer& peer : std::as_const(m_peers)) {
+            if (peer.pairing && peer.pairing->existingDevice
+                && peer.pairing->existingDevice->id == id) {
+                peer.pairing->existingDeviceRevoked = true;
+            }
+        }
         endAuthenticatedPeers([&id](const Peer& peer) { return peer.deviceId == id; },
                               QString::fromLatin1(kDeviceRemovedReason),
                               SessionEndCode::kDeviceRemoved);
@@ -4539,7 +4551,9 @@ void StationServer::handlePairStart(SessionTransport* transport, const SessionMe
                      0);
         return;
     }
-    if (m_devices->find(StationIdentity::fingerprintOf(attempt->publicKeySpki))) {
+    attempt->existingDevice =
+        m_devices->find(StationIdentity::fingerprintOf(attempt->publicKeySpki));
+    if (attempt->existingDevice && message.pairMode != QLatin1String("code")) {
         sendPairFail(transport,
                      QStringLiteral("This device is already paired with this Core. Connect "
                                     "to it instead."),
@@ -4756,7 +4770,18 @@ void StationServer::handlePairConfirm(SessionTransport* transport, const Session
     paired.name = name;
     paired.kind = kind;
     paired.lastAddress = transport->peerAddress();
-    if (!m_devices->add(paired)) {
+    if (attempt->existingDevice) {
+        const auto current = m_devices->find(paired.id);
+        if (attempt->existingDeviceRevoked || !current
+            || current->publicKeySpki != attempt->existingDevice->publicKeySpki
+            || current->pairedAt != attempt->existingDevice->pairedAt) {
+            refuse(QStringLiteral("This device was removed from the Core while pairing. "
+                                   "Open pairing again to reconnect it."));
+            return;
+        }
+        // Full code proof succeeded. Keep name, dates, and permissions as saved;
+        // ordinary device-key authentication still happens on a new connection.
+    } else if (!m_devices->add(paired)) {
         refuse(QStringLiteral("The Core could not save this device. Try again."));
         return;
     }
