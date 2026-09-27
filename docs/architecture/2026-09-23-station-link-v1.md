@@ -5487,9 +5487,28 @@ session uses the TLS certificate's: the `hello`'s `certBinding` must verify
 for it before the device sends anything (section 3.4), and it is the
 certificate hash in the device's sign-in transcript (section 3.5). A Core
 whose DTLS certificate is not the bound one is refused, as
-`identityChanged`, before the device's `hello`. Only a paired device is
-introduced, so a session over a data channel is always signed in by device
-key; the Core's end sees no certificate of the device's.
+`identityChanged`, before the device's `hello`. The Core's end sees no
+certificate of the device's.
+
+**What the Core allows on it.** The Core marks every control connection
+the rendezvous introduced (`StationServer::acceptIntroducedTransport`) and
+holds it to three rules a direct connection does not have, because an
+introduction is not device authentication (the rendezvous document,
+section 4) and the service could replay one:
+
+- It signs in by a paired device's own key only. An `auth.request` with a
+  `token`, with or without a `device` block, is refused (`auth.result`,
+  code `protocolError`, not retryable) before either limiter sees it.
+- It never pairs. Every `pair.*` message is answered with `pair.fail` and
+  the connection ends; no code is taken or burned. Pairing through the
+  service is the mailbox's, by code (section 3.6 and the rendezvous
+  document, section 6.5).
+- While still connecting, every such connection counts as one source
+  against the per-address handshake cap (`kMaxHandshakesPerAddress`, 2),
+  whatever address it reports; one that would pass it gets the same
+  retryable `session.end` as an address over the cap. A device's sign-in
+  failures are limited per introduction as well as per device id and
+  address (`DeviceAuthRequest::introduction`).
 
 **Messages.**
 

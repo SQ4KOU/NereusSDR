@@ -2784,7 +2784,14 @@ void StationServer::acceptPairingMailbox(SessionTransport* transport)
     adoptTransport(transport, /*mailbox=*/true);
 }
 
-void StationServer::adoptTransport(SessionTransport* transport, bool mailbox)
+void StationServer::acceptIntroducedTransport(SessionTransport* transport,
+                                              const QString& introductionId)
+{
+    adoptTransport(transport, /*mailbox=*/false, /*introduced=*/true, introductionId);
+}
+
+void StationServer::adoptTransport(SessionTransport* transport, bool mailbox, bool introduced,
+                                   const QString& introductionId)
 {
     if (transport == nullptr) {
         return;
@@ -2817,19 +2824,30 @@ void StationServer::adoptTransport(SessionTransport* transport, bool mailbox)
     // kMaxHandshakesPerAddress of the slots while it is still connecting,
     // so a host on the internet cannot keep the phone out by holding every
     // one of them. The same retryable refusal as the cap above.
-    const QString address = addressKey(transport->peerAddress());
-    if (!address.isEmpty()) {
+    //
+    // Task 28 fix wave (review Important 2): every connection the remote
+    // access service introduced is one source, whatever address it reports
+    // (a relayed one reports none): the service can replay introductions,
+    // and without this it could hold every slot the direct listener shares
+    // while home-network devices are turned away.
+    const QString address = introduced ? QString() : addressKey(transport->peerAddress());
+    if (introduced || !address.isEmpty()) {
         int connecting = 0;
         for (const Peer& other : std::as_const(m_peers)) {
-            if (!other.snapshotComplete && other.transport != nullptr
-                && addressKey(other.transport->peerAddress()) == address) {
+            if (other.snapshotComplete || other.transport == nullptr) {
+                continue;
+            }
+            if (introduced ? other.introduced
+                           : (!other.introduced
+                              && addressKey(other.transport->peerAddress()) == address)) {
                 ++connecting;
             }
         }
         if (connecting >= kMaxHandshakesPerAddress) {
             qCWarning(lcStation) << "Refusing connection from" << transport->peerDescription()
-                                 << ": that address already has" << connecting
-                                 << "connections still connecting";
+                                 << (introduced ? ": the remote access service already has"
+                                                : ": that address already has")
+                                 << connecting << "connections still connecting";
             const QString reason = QStringLiteral(
                 "The Core already has as many connections as it allows. Try again shortly.");
             transport->sendText(SessionMessages::encode(
@@ -2877,6 +2895,8 @@ void StationServer::adoptTransport(SessionTransport* transport, bool mailbox)
     // pairing starts at pair.start.
     peer.mailboxPairing = mailbox;
     peer.helloReceived = mailbox;
+    peer.introduced = introduced;
+    peer.introductionId = introductionId;
 
     m_peers.insert(transport, peer);
 
@@ -3224,6 +3244,24 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
         && message.kind != SessionMessageKind::PairFail) {
         dropPeer(transport, QStringLiteral("This app started pairing out of order."), true,
                  /*retryable=*/false, QString::fromLatin1(SessionEndCode::kProtocolError));
+        return;
+    }
+
+    // Task 28 fix wave (review Important 1): a connection the remote
+    // access service introduced never pairs. Pairing through the service
+    // is the mailbox's, by code, where a burned code counts as the
+    // service's and the service's pause applies (PairingWindow); on this
+    // connection it would count as a direct one's. Refused before anything
+    // takes a code.
+    if (it->introduced
+        && (message.kind == SessionMessageKind::PairStart
+            || message.kind == SessionMessageKind::PairSpake
+            || message.kind == SessionMessageKind::PairConfirm
+            || message.kind == SessionMessageKind::PairFail)) {
+        sendPairFail(transport,
+                     QStringLiteral("A device cannot pair over a connection through the remote "
+                                    "access service. Pair it with the Core's pairing code."),
+                     0);
         return;
     }
 
@@ -3761,7 +3799,19 @@ void StationServer::handleAuthRequest(SessionTransport* transport,
 
     // iPhone app Task 12 (R-IOS-08): what a device sends, as the
     // authenticator reads it. The address is the peer's own; over the
-    // relay (Part E) it is empty and the limits key on the introduction.
+    // relay it is empty. Through the service the limits also key on the
+    // introduction.
+    // Task 28 fix wave (review Important 1): over a connection the remote
+    // access service introduced, only a paired device's own key signs in
+    // (the link document, section 20). A token, or a token enrolling a
+    // key, is refused before either limiter sees it.
+    if (it->introduced && !(message.device && message.token.isEmpty())) {
+        refuse(QStringLiteral("Through the remote access service, a device signs in with its "
+                              "own key. Pair this device with the Core first."),
+               /*retryable=*/false, SessionEndCode::kProtocolError);
+        return;
+    }
+
     DeviceAuthRequest request;
     if (message.device) {
         request.id = message.device->id;
@@ -3770,6 +3820,9 @@ void StationServer::handleAuthRequest(SessionTransport* transport,
         request.kind = message.device->kind;
         request.signature = message.device->signature;
         request.sourceAddress = address;
+        // Task 28 fix wave (review Important 2): the service's introduction,
+        // so a replayed one is limited as one.
+        request.introduction = it->introductionId;
     }
 
     QByteArray deviceId;

@@ -483,6 +483,19 @@ struct Core {
         return app;
     }
 
+    // A control connection the remote access service introduced, as
+    // StationRendezvous hands one over once its channel is open.
+    LoopbackTransport* openIntroduced(const QString& address = QString())
+    {
+        auto* app = new LoopbackTransport(QStringLiteral("app"));
+        auto* station = new LoopbackTransport(QStringLiteral("introduced"));
+        station->setPeerAddress(address);
+        station->linkTo(app);
+        clients.append(app);
+        server->acceptIntroducedTransport(station, QStringLiteral("introduction-1"));
+        return app;
+    }
+
     // A pairing mailbox, as StationRendezvous hands one over: no hello, no
     // address.
     LoopbackTransport* openMailbox()
@@ -833,6 +846,47 @@ private slots:
         QCOMPARE(core.pairByCode(device, code).type, QStringLiteral("pair.confirm"));
         QVERIFY(core.store().find(device.id()));
         QVERIFY(!core.window().isPaused(PairingWindow::Route::Service));
+    }
+
+    // Task 28 fix wave (review Important 1): a connection the service
+    // introduced never pairs, by code or by tap; pairing through the
+    // service is the mailbox's. Nothing is burned and nothing is paired.
+    void aConnectionThroughTheServiceCannotPair()
+    {
+        Core core;
+        Device device;
+        const QString code = core.window().currentCode();
+        const quint64 serial = core.window().codeSerial();
+        QVERIFY(!code.isEmpty());
+        const QString reason = QStringLiteral(
+            "A device cannot pair over a connection through the remote access service. Pair it "
+            "with the Core's pairing code.");
+        for (const QString& address : {QString(), QStringLiteral("198.51.100.4")}) {
+            {
+                LoopbackLink link(core.openIntroduced(address));
+                DeviceSide side(device);
+                const Outcome outcome = side.code(link, code);
+                verifyPlainRefusal(outcome);
+                QCOMPARE(outcome.reason, reason);
+                QVERIFY(link.ended());
+            }
+            {
+                LoopbackLink link(core.openIntroduced(address));
+                DeviceSide side(device);
+                const Outcome outcome = side.lan(link);
+                verifyPlainRefusal(outcome);
+                QCOMPARE(outcome.reason, reason);
+                QVERIFY(link.ended());
+            }
+        }
+        QCOMPARE(core.window().currentCode(), code);
+        QCOMPARE(core.window().codeSerial(), serial);
+        QCOMPARE(core.window().consecutiveFailures(), 0);
+        QCOMPARE(core.window().consecutiveServiceFailures(), 0);
+        QVERIFY(core.store().list().isEmpty());
+        // The same code pairs through the mailbox.
+        QCOMPARE(core.pairByCodeThroughService(device, code).type, QStringLiteral("pair.confirm"));
+        QVERIFY(core.store().find(device.id()));
     }
 
     void leavingAfterTheCoreCommittedBurnsTheCode()

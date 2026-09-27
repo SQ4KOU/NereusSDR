@@ -291,8 +291,11 @@ void StationRendezvous::finishAnswer(const QByteArray& id, bool opened)
     delete answer;
     transport->disconnect(this);
     if (opened && m_server) {
-        // One of the Core's connections from here on, as a WebSocket's is.
-        m_server->acceptTransport(transport);
+        // One of the Core's connections from here on, as a WebSocket's is,
+        // marked as the service's: it never pairs, signs in by key only and
+        // shares one source's handshake cap (StationServer.h,
+        // acceptIntroducedTransport()).
+        m_server->acceptIntroducedTransport(transport, StationIdentity::toBase64Url(id));
         return;
     }
     transport->closeLink(QStringLiteral("not connected"));
