@@ -165,6 +165,10 @@ struct CallbackBridge {
     std::atomic<quint64> receivedRtpBytes{0};
     std::atomic<quint64> submittedRtpBytes{0};
     std::atomic<quint64> displayMessagesDropped{0};
+    std::atomic<quint64> receivedTxPayloadBytes{0};
+    std::atomic<quint64> submittedTxPayloadBytes{0};
+    std::atomic<quint64> receivedIqPayloadBytes{0};
+    std::atomic<quint64> submittedIqPayloadBytes{0};
 };
 
 void queueEvent(const std::weak_ptr<CallbackBridge>& weak,
@@ -294,8 +298,12 @@ void queueTx(const std::weak_ptr<CallbackBridge>& weak, rtc::binary data)
     }
     std::lock_guard lock(bridge->mutex);
     if (bridge->cancelled || bridge->receiveSeveredForTest || data.empty()
-        || data.size() > static_cast<std::size_t>(IMediaTransport::kMaxTxMessageBytes)
-        || bridge->events.size() >= kMaxPendingEvents) {
+        || data.size() > static_cast<std::size_t>(IMediaTransport::kMaxTxMessageBytes)) {
+        return;
+    }
+    bridge->receivedTxPayloadBytes.fetch_add(
+        static_cast<quint64>(data.size()), std::memory_order_relaxed);
+    if (bridge->events.size() >= kMaxPendingEvents) {
         return;
     }
     bridge->events.push_back({CallbackEvent::Kind::TxMessage,
@@ -309,8 +317,15 @@ void queueIq(const std::weak_ptr<CallbackBridge>& weak, rtc::binary data)
     if (!bridge) { return; }
     std::lock_guard lock(bridge->mutex);
     if (bridge->cancelled || bridge->receiveSeveredForTest || bridge->iqFailed) { return; }
-    if (data.empty() || data.size() > static_cast<std::size_t>(IMediaTransport::kMaxIqMessageBytes)
-        || bridge->iqMessages.size() >= kMaxPendingIqMessages
+    if (data.empty() || data.size() > static_cast<std::size_t>(IMediaTransport::kMaxIqMessageBytes)) {
+        bridge->iqMessages.clear();
+        bridge->iqBytes = 0;
+        bridge->iqFailed = true;
+        return;
+    }
+    bridge->receivedIqPayloadBytes.fetch_add(
+        static_cast<quint64>(data.size()), std::memory_order_relaxed);
+    if (bridge->iqMessages.size() >= kMaxPendingIqMessages
         || bridge->iqBytes + data.size() > kMaxPendingIqBytes) {
         bridge->iqMessages.clear();
         bridge->iqBytes = 0;
@@ -1255,6 +1270,10 @@ LibDataChannelMediaTransport::submitIq(const QByteArray& message)
         return DisplaySendResult::Refused;
     }
     if (d->iq->bufferedAmount() != 0) { return DisplaySendResult::Busy; }
+    const std::shared_ptr<CallbackBridge> bridge = d->bridge;
+    if (!bridge) { return DisplaySendResult::Refused; }
+    bridge->submittedIqPayloadBytes.fetch_add(
+        static_cast<quint64>(message.size()), std::memory_order_relaxed);
     try {
         return d->iq->send(reinterpret_cast<const rtc::byte*>(message.constData()),
                            static_cast<std::size_t>(message.size()))
@@ -1332,6 +1351,10 @@ bool LibDataChannelMediaTransport::sendTx(const QByteArray& message)
         || message.size() > kMaxTxMessageBytes || d->tx->bufferedAmount() != 0) {
         return false;
     }
+    const std::shared_ptr<CallbackBridge> bridge = d->bridge;
+    if (!bridge) { return false; }
+    bridge->submittedTxPayloadBytes.fetch_add(
+        static_cast<quint64>(message.size()), std::memory_order_relaxed);
     try {
         d->tx->send(reinterpret_cast<const rtc::byte*>(message.constData()),
                     static_cast<std::size_t>(message.size()));
@@ -1390,6 +1413,10 @@ LibDataChannelMediaTransport::telemetry() const
         bridge->receivedRtpBytes.load(std::memory_order_relaxed),
         bridge->submittedRtpBytes.load(std::memory_order_relaxed),
         bridge->displayMessagesDropped.load(std::memory_order_relaxed),
+        bridge->receivedTxPayloadBytes.load(std::memory_order_relaxed),
+        bridge->submittedTxPayloadBytes.load(std::memory_order_relaxed),
+        bridge->receivedIqPayloadBytes.load(std::memory_order_relaxed),
+        bridge->submittedIqPayloadBytes.load(std::memory_order_relaxed),
     };
 }
 

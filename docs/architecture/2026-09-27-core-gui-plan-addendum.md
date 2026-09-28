@@ -2330,11 +2330,14 @@ colours for the same signal.
   observed/submitted payload once, excluding encryption, tunnel envelopes,
   protocol framing and network overhead. No delivery guarantee can be inferred
   from a submission counter, and unavailable observations must remain absent.
-- Status: Sol 6 high owns the bounded media transmit-keepalive/raw-IQ
-  counter implementation and actual channel/lifetime regressions. The Astra
-  lead retains the separate auxiliary watch lifetime and aggregation design.
-  Both parts remain open. Keep this separate from G-110's confirmed
-  WebSocket overlap and from physical network usage.
+- Status: signed `1723c726c` adds media transmit-keepalive/raw-IQ counters.
+  Real encrypted-channel regressions first observed missing counts, then
+  passed with exact payload counts, restart resets and valid IQ arrival
+  counted before the existing bounded-queue failure. Root reviewed production
+  and tests; app/Core and all eight rebuilt media/portability suites pass
+  (28.80 s). The separate auxiliary watch remains open: Sol 6 high now
+  implements the lead's per-logical-session, fold-once lifetime contract.
+  Keep this separate from G-110's WebSocket overlap and physical network use.
 - Plan: complete Core/window application traffic observations for R5 and IQ.
 
 ### G-112: Cross-platform test fixtures assume one service manager and one ICE path
@@ -2347,12 +2350,13 @@ colours for the same signal.
 - Ruling basis: JJ requires failures to be explained and fixed at actual load.
   Preserve production behavior and test the intended contracts explicitly.
 - Status: signed `48764cd41` fixes the three test fixtures and passes app/Core
-  plus four affected Mac suites (23.25 s). Lead review requires an exact
-  allowlist of the read-only service query before acceptance: checking only
-  start/enable/disable strings would miss other platform service mutations.
-  That bounded correction is assigned to the same worker. Root integration
-  and Linux confirmation remain pending; the original full-run failures stay
-  in the evidence.
+  plus four affected Mac suites (23.25 s). Lead review caught a narrowed
+  service-action assertion; signed `d49ef4e48` now allows only the exact
+  read-only systemctl query, rejecting all other platform commands. The full
+  runtime suite passes, followed by root app/Core and all eight rebuilt
+  integration suites (28.80 s). Linux confirmation remains pending. The
+  completed 996-entry Linux run retains these failures against its older
+  immutable source; it passed 989 entries and failed seven.
 - Plan: cross-platform Core/GUI verification.
 
 ### G-113: Audio status test requires acceptance of a legitimately superseded reply
@@ -2367,7 +2371,7 @@ colours for the same signal.
 - Ruling basis: JJ requires a cause and fix, without increasing deadlines.
   Keep the current revision guard and prove both publication and current
   window status through the actual Core/GUI session.
-- Status: root test-only correction verifies Core emits the valid explanation,
+- Status: signed `8dec4aec5` test-only correction verifies Core emits the valid explanation,
   the GUI receives it, the newer reply matches the latest request, the window
   shows RadioOffline, and a deliberately superseded reply is never accepted.
   Ordinary delivery and controlled mirror-first rows preserve forged-context
