@@ -19,6 +19,11 @@ same secret and nothing else, so the two processes share no state.
 
 Only hashlib, hmac and base64 are used, so the relay imports this module
 without the cryptography package.
+
+Watch relay socket grants use a separate v2 grammar and MAC domain. The
+existing verify() accepts primary v1 grants only; future watch admission
+must explicitly call verify_watch(). Neither grant authenticates a Core
+session or authorizes Core watchdog and key operations.
 """
 
 from __future__ import annotations
@@ -30,6 +35,9 @@ import struct
 from typing import NamedTuple, Optional
 
 VERSION = 1
+WATCH_VERSION = 2
+PURPOSE_PRIMARY = 1
+PURPOSE_WATCH = 2
 LEG_CORE = 1
 LEG_DEVICE = 2
 LEGS = (LEG_CORE, LEG_DEVICE)
@@ -40,6 +48,10 @@ MAC_BYTES = 32
 TOKEN_BYTES = PAYLOAD_BYTES + MAC_BYTES
 TOKEN_CHARS = 83
 PREFIX = b"NereusSDR relay grant v1\n"
+WATCH_PAYLOAD_BYTES = PAYLOAD_BYTES + 1
+WATCH_TOKEN_BYTES = WATCH_PAYLOAD_BYTES + MAC_BYTES
+WATCH_TOKEN_CHARS = 84
+WATCH_PREFIX = b"NereusSDR relay grant v2\n"
 STATION_PREFIX = b"NereusSDR relay station v1\n"
 EXPIRES_MAX = 4294967295
 
@@ -51,6 +63,8 @@ class Grant(NamedTuple):
     session: bytes
     station: bytes
     expires: int
+    purpose: int = PURPOSE_PRIMARY
+    version: int = VERSION
 
 
 def to_b64url(data: bytes) -> str:
@@ -98,8 +112,16 @@ def mint(secret: bytes, leg: int, session: bytes, station: bytes, expires: int) 
     return to_b64url(payload + mac_of(secret, payload))
 
 
+def mint_watch(secret: bytes, leg: int, session: bytes, station: bytes, expires: int) -> str:
+    """Mint a v2 watch relay socket grant, never a Core/session credential."""
+    primary_payload = payload_of(leg, session, station, expires)
+    payload = bytes([WATCH_VERSION, leg, PURPOSE_WATCH]) + primary_payload[2:]
+    mac = hmac.new(bytes(secret), WATCH_PREFIX + payload, hashlib.sha256).digest()
+    return to_b64url(payload + mac)
+
+
 def verify(secret: bytes, token: str) -> Optional[Grant]:
-    """The grant a token carries, or None when it is not one this secret
+    """A primary v1 grant only, or None when it is not one this secret
     minted: bad base64url, another length, another version or leg, or a MAC
     that does not verify (compared in constant time)."""
     if not isinstance(token, str) or len(token) != TOKEN_CHARS:
@@ -115,3 +137,21 @@ def verify(secret: bytes, token: str) -> Optional[Grant]:
     at = 2 + SESSION_BYTES
     (expires,) = struct.unpack(">I", payload[at + STATION_BYTES :])
     return Grant(payload[1], payload[2:at], payload[at : at + STATION_BYTES], expires)
+
+
+def verify_watch(secret: bytes, token: str) -> Optional[Grant]:
+    """A watch v2 relay socket grant only; never accepts a primary grant."""
+    if not isinstance(token, str) or len(token) != WATCH_TOKEN_CHARS:
+        return None
+    raw = from_b64url(token)
+    if raw is None or len(raw) != WATCH_TOKEN_BYTES:
+        return None
+    payload, mac = raw[:WATCH_PAYLOAD_BYTES], raw[WATCH_PAYLOAD_BYTES:]
+    expected = hmac.new(bytes(secret), WATCH_PREFIX + payload, hashlib.sha256).digest()
+    if not hmac.compare_digest(mac, expected):
+        return None
+    if payload[0] != WATCH_VERSION or payload[1] not in LEGS or payload[2] != PURPOSE_WATCH:
+        return None
+    at = 3 + SESSION_BYTES
+    (expires,) = struct.unpack(">I", payload[at + STATION_BYTES :])
+    return Grant(payload[1], payload[3:at], payload[at : at + STATION_BYTES], expires, PURPOSE_WATCH, WATCH_VERSION)
