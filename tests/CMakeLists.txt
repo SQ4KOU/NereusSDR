@@ -257,15 +257,14 @@ function(nereus_add_test name)
     endif()
     set_property(GLOBAL APPEND PROPERTY NEREUS_ALL_TESTS ${name})
 
-    # Reuse the NereusCore precompiled header (CMakeLists.txt §PCH).
+    # Reuse the shared test PIE/nonpedantic Qt/STL PCH (CMakeLists.txt §PCH).
     # 589 test executables × per-target PCH compile would burn the wins;
-    # REUSE_FROM means the PCH is built once on NereusCore and shared
-    # across every test target. Save 5 to 10 minutes of test compile
-    # time on Linux CI. Gated on NEREUS_USE_PCH so users who turn the
+    # REUSE_FROM means the PCH is built once and shared
+    # across every test target. Gated on NEREUS_USE_PCH so users who turn the
     # PCH off (e.g. for header-hygiene auditing) don't get a broken
     # link.
     if(NEREUS_USE_PCH)
-        target_precompile_headers(${name} REUSE_FROM NereusCore)
+        target_precompile_headers(${name} REUSE_FROM nereus_test_pch)
     endif()
 
     add_test(NAME ${name} COMMAND ${name})

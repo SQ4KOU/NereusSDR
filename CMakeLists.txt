@@ -2156,14 +2156,10 @@ function(nereus_apply_core_deps target)
     # src/models is <QDesktopServices> in core/SupportBundle.cpp, and
     # that header is QtGui, not QtWidgets. No source-level need remains.
     #
-    # The link still cannot be dropped, for a build-system reason rather
-    # than a source one: the precompiled header attached to NereusCore
-    # below has a "GUI commons" section carrying <QWidget> / <QPainter> /
-    # <QPen> / <QBrush>, and NereusGui (217 of 351 TUs) consumes that same
-    # PCH via REUSE_FROM, which is what makes the PCH pay for itself.
-    # Dropping Widgets here breaks PCH compilation. Splitting the PCH is
-    # a build-performance change that needs its own measurement, and is
-    # not something to do as a drive-by.
+    # Keep this existing PUBLIC link interface while changing PCH ownership
+    # below. The new build-only donor links Widgets independently, so that
+    # PCH no longer requires NereusCore itself to link Widgets. Narrowing
+    # the Core link interface is a separate dependency-compatibility change.
     #
     # What keeps the invariant honest in the meantime is
     # tests/tst_core_has_no_gui_includes.cpp, which fails on any include
@@ -2727,8 +2723,11 @@ endif()
 # CI bake-off (ubuntu-24.04, 4 vCPU, 451 test executables) showed Linux
 # spending ~33m in the build step vs ~6m on macOS / ~12m on Windows.
 # Most of that is repeated parsing of Qt6 + STL headers across the
-# NereusCore translation units AND across every test target that
-# REUSE_FROMs this PCH (see tests/CMakeLists.txt nereus_add_test()).
+# NereusCore translation units and test targets. The donors use only shared
+# Qt/STL headers, without Core-private transport or export definitions. GCC
+# rejects a Core-built PCH in GUI because Core's RTC_STATIC is absent there.
+# Libraries and test executables also need separate donors: their -fPIC vs
+# -fPIE modes and pedantic warning settings differ on Linux.
 #
 # Keep the list conservative: only headers used by the vast majority of
 # TUs. Adding rarely-used headers slows incremental builds because every
@@ -2760,7 +2759,30 @@ if(APPLE)
         PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 endif()
 if(NEREUS_USE_PCH)
-    target_precompile_headers(NereusCore PRIVATE
+    # These build-only objects are never linked. A library donor preserves
+    # PIC/pedantic compilation, and one test donor preserves PIE/nonpedantic
+    # compilation. There is no PCH per test and no propagated private or
+    # export definitions. CMake's executable POSITION_INDEPENDENT_CODE=ON
+    # chooses -fPIE, so an OBJECT donor gets that mode explicitly on Unix.
+    set(_nereus_pch_source "${CMAKE_CURRENT_BINARY_DIR}/nereus_shared_pch.cpp")
+    file(GENERATE OUTPUT "${_nereus_pch_source}"
+        CONTENT "// Build-only translation unit for the shared Qt/STL PCH.\n")
+    add_library(nereus_library_pch OBJECT EXCLUDE_FROM_ALL "${_nereus_pch_source}")
+    add_library(nereus_test_pch OBJECT EXCLUDE_FROM_ALL "${_nereus_pch_source}")
+    foreach(_pch_target IN ITEMS nereus_library_pch nereus_test_pch)
+        target_link_libraries(${_pch_target} PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets)
+        set_target_properties(${_pch_target} PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
+    endforeach()
+    if(MSVC)
+        target_compile_options(nereus_library_pch PRIVATE /W3 /Zc:__cplusplus)
+    else()
+        target_compile_options(nereus_library_pch PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    if(UNIX)
+        set_target_properties(nereus_test_pch PROPERTIES POSITION_INDEPENDENT_CODE OFF)
+        target_compile_options(nereus_test_pch PRIVATE -fPIE)
+    endif()
+    set(_nereus_shared_pch_headers
         # Qt6 core (every model + worker TU)
         <QObject>
         <QString>
@@ -2799,7 +2821,10 @@ if(NEREUS_USE_PCH)
         <cstdint>
         <utility>
     )
-    target_precompile_headers(NereusSDRLib REUSE_FROM NereusCore)
+    target_precompile_headers(nereus_library_pch PRIVATE ${_nereus_shared_pch_headers})
+    target_precompile_headers(nereus_test_pch PRIVATE ${_nereus_shared_pch_headers})
+    target_precompile_headers(NereusCore REUSE_FROM nereus_library_pch)
+    target_precompile_headers(NereusSDRLib REUSE_FROM nereus_library_pch)
 endif()
 
 # --------------------------------------------------------------------------
