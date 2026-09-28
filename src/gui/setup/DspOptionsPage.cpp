@@ -445,6 +445,7 @@ void DspOptionsPage::buildUI()
 
         outRx = makeCombo(g, items);
         outRx->setObjectName(keyPrefix + modeKey + QStringLiteral("Rx"));
+        outRx->setProperty("nereusSetupId", QStringLiteral("dsp.options.") + outRx->objectName());
         outRx->setToolTip(comboTooltip);
         loadCombo(outRx, keyPrefix + modeKey + QStringLiteral("Rx"), rxDef);
         wireComboWithLiveApply(outRx, comboMode,
@@ -454,6 +455,7 @@ void DspOptionsPage::buildUI()
         if (!txDef.isEmpty()) {
             outTx = makeCombo(g, items);
             outTx->setObjectName(keyPrefix + modeKey + QStringLiteral("Tx"));
+            outTx->setProperty("nereusSetupId", QStringLiteral("dsp.options.") + outTx->objectName());
             outTx->setToolTip(comboTooltip);
             loadCombo(outTx, keyPrefix + modeKey + QStringLiteral("Tx"), txDef);
             wireComboWithLiveApply(outTx, comboMode,

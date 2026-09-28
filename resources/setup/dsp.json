@@ -5,8 +5,309 @@
     "title": "DSP",
     "where": "station"
   },
-  "coverage": "partial: remaining DSP pages await their descriptions",
+  "coverage": "partial: TNF and Filter Presets need collection contracts; listed page coverage identifies additional omissions",
   "pages": [
+    {
+      "id": "dsp.agcAlc",
+      "title": "AGC/ALC",
+      "where": "station",
+      "sections": [
+        {
+          "title": "RX1 AGC",
+          "controls": [
+            {
+              "id": "dsp.agcAlc.agcMode",
+              "label": "Mode",
+              "tooltip": "Automatic Gain Control Mode Setting",
+              "kind": "choice",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "agcMode"
+                }
+              },
+              "applies": "live",
+              "choices": [
+                "Off",
+                "Long",
+                "Slow",
+                "Med",
+                "Fast",
+                "Custom"
+              ]
+            },
+            {
+              "id": "dsp.agcAlc.agcAttack",
+              "label": "Attack",
+              "tooltip": "",
+              "kind": "integer",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "agcAttack"
+                }
+              },
+              "applies": "live",
+              "min": 1,
+              "max": 1000,
+              "step": 1,
+              "unit": " ms"
+            },
+            {
+              "id": "dsp.agcAlc.agcDecay",
+              "label": "Decay",
+              "tooltip": "Time-constant to increase signal amplitude after strong signal",
+              "kind": "integer",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "agcDecay"
+                }
+              },
+              "applies": "live",
+              "min": 1,
+              "max": 5000,
+              "step": 1,
+              "unit": " ms"
+            },
+            {
+              "id": "dsp.agcAlc.agcHang",
+              "label": "Hang",
+              "tooltip": "Time to hold constant gain after strong signal",
+              "kind": "integer",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "agcHang"
+                }
+              },
+              "applies": "live",
+              "min": 10,
+              "max": 5000,
+              "step": 1,
+              "unit": " ms"
+            },
+            {
+              "id": "dsp.agcAlc.agcSlope",
+              "label": "Slope",
+              "tooltip": "Gain difference for weak and strong signals",
+              "kind": "slider",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "agcSlope"
+                }
+              },
+              "applies": "live",
+              "min": 0,
+              "max": 200,
+              "step": 10
+            },
+            {
+              "id": "dsp.agcAlc.agcMaxGain",
+              "label": "Max Gain",
+              "tooltip": "Threshold AGC: no gain over this Max Gain is applied, irrespective of signal weakness",
+              "kind": "integer",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "agcMaxGain"
+                }
+              },
+              "applies": "live",
+              "min": -20,
+              "max": 120,
+              "step": 1,
+              "unit": " dB"
+            },
+            {
+              "id": "dsp.agcAlc.agcFixedGain",
+              "label": "Fixed Gain",
+              "tooltip": "Gain when AGC is disabled",
+              "kind": "integer",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "agcFixedGain"
+                }
+              },
+              "applies": "live",
+              "min": -20,
+              "max": 120,
+              "step": 1,
+              "unit": " dB"
+            },
+            {
+              "id": "dsp.agcAlc.agcHangThreshold",
+              "label": "Hang Threshold",
+              "tooltip": "Level at which the 'hang' function is engaged",
+              "kind": "slider",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "agcHangThreshold"
+                }
+              },
+              "applies": "live",
+              "min": 0,
+              "max": 100,
+              "step": 1
+            }
+          ]
+        },
+        {
+          "title": "Auto AGC",
+          "controls": [
+            {
+              "id": "dsp.agcAlc.autoAgcEnabled",
+              "label": "Auto AGC RX1",
+              "tooltip": "Automatically adjust AGC based on Noise Floor",
+              "kind": "toggle",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "autoAgcEnabled"
+                }
+              },
+              "applies": "live"
+            },
+            {
+              "id": "dsp.agcAlc.autoAgcOffset",
+              "label": "± Offset",
+              "tooltip": "dB shift from noise floor",
+              "kind": "decimal",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "autoAgcOffset"
+                }
+              },
+              "applies": "live",
+              "min": -60,
+              "max": 60,
+              "step": 1,
+              "unit": " dB"
+            }
+          ]
+        },
+        {
+          "title": "TX Leveler",
+          "controls": [
+            {
+              "id": "dsp.agcAlc.txLevelerOn",
+              "label": "Enable",
+              "tooltip": "Adjust gain if transmit audio increases/decreases",
+              "kind": "toggle",
+              "binding": {
+                "property": {
+                  "object": "transmit",
+                  "name": "txLevelerOn"
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 4,
+                "offAir": true
+              }
+            },
+            {
+              "id": "dsp.agcAlc.txLevelerMaxGain",
+              "label": "Max Gain",
+              "tooltip": "This provides for a 'threshold' ALC. Irrespective of how weak the input is, no gain over this max is applied.",
+              "kind": "integer",
+              "binding": {
+                "property": {
+                  "object": "transmit",
+                  "name": "txLevelerMaxGain"
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 4,
+                "offAir": true
+              },
+              "min": 0,
+              "max": 20,
+              "step": 1,
+              "unit": " dB"
+            },
+            {
+              "id": "dsp.agcAlc.txLevelerDecay",
+              "label": "Decay",
+              "tooltip": "Decay time-constant in ms.  Note that this is a time-constant for an exponential curve, not an absolute time.",
+              "kind": "integer",
+              "binding": {
+                "property": {
+                  "object": "transmit",
+                  "name": "txLevelerDecay"
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 4,
+                "offAir": true
+              },
+              "min": 1,
+              "max": 5000,
+              "step": 1,
+              "unit": " ms"
+            }
+          ]
+        },
+        {
+          "title": "TX ALC",
+          "controls": [
+            {
+              "id": "dsp.agcAlc.txAlcMaxGain",
+              "label": "Max Gain",
+              "tooltip": "Maximum gain to apply before ALC limiting",
+              "kind": "integer",
+              "binding": {
+                "property": {
+                  "object": "transmit",
+                  "name": "txAlcMaxGain"
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 4,
+                "offAir": true
+              },
+              "min": 0,
+              "max": 120,
+              "step": 1,
+              "unit": " dB"
+            },
+            {
+              "id": "dsp.agcAlc.txAlcDecay",
+              "label": "Decay",
+              "tooltip": "Decay time-constant in ms.  Note that this is a time-constant for an exponential curve, not an absolute time.",
+              "kind": "integer",
+              "binding": {
+                "property": {
+                  "object": "transmit",
+                  "name": "txAlcDecay"
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 4,
+                "offAir": true
+              },
+              "min": 1,
+              "max": 50,
+              "step": 1,
+              "unit": " ms"
+            }
+          ]
+        }
+      ]
+    },
     {
       "id": "dsp.nrAnf",
       "title": "NR/ANF",
@@ -969,6 +1270,741 @@
               "max": 96000,
               "step": 1,
               "unit": " Hz"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "dsp.cw",
+      "title": "CW",
+      "where": "station",
+      "coverage": "partial: CW keyer and timing are unbuilt; APF center uses a desktop pitch offset and bandwidth/gain are unbuilt",
+      "sections": [
+        {
+          "title": "APF",
+          "controls": [
+            {
+              "id": "dsp.cw.apfEnabled",
+              "label": "Enable",
+              "tooltip": "",
+              "kind": "toggle",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "apfEnabled"
+                }
+              },
+              "applies": "live"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "dsp.amSam",
+      "title": "AM/SAM",
+      "where": "station",
+      "coverage": "partial: SAM and squelch tail are unbuilt",
+      "sections": [
+        {
+          "title": "Squelch",
+          "controls": [
+            {
+              "id": "dsp.amSam.amsqThresh",
+              "label": "AM Squelch Threshold",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "amsqThresh"
+                }
+              },
+              "applies": "live",
+              "min": -160,
+              "max": 0,
+              "step": 1
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "dsp.fm",
+      "title": "FM",
+      "where": "station",
+      "coverage": "partial: RX deviation and de-emphasis and FM transmit are unbuilt",
+      "sections": [
+        {
+          "title": "RX",
+          "controls": [
+            {
+              "id": "dsp.fm.fmsqThresh",
+              "label": "Squelch Threshold",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "fmsqThresh"
+                }
+              },
+              "applies": "live",
+              "min": -160,
+              "max": 0,
+              "step": 1
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "dsp.cfc",
+      "title": "CFC",
+      "where": "station",
+      "coverage": "partial: Configure CFC bands opens a desktop composite editor without a v1 phone binding",
+      "sections": [
+        {
+          "title": "Phase Rotator",
+          "controls": [
+            {
+              "id": "dsp.cfc.phaseRotatorEnabled",
+              "label": "Enable",
+              "tooltip": "Turn the phase rotator on or off",
+              "kind": "toggle",
+              "binding": {
+                "property": {
+                  "object": "transmit",
+                  "name": "phaseRotatorEnabled"
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 4,
+                "offAir": true
+              }
+            },
+            {
+              "id": "dsp.cfc.phaseRotatorFreqHz",
+              "label": "FREQ",
+              "tooltip": "Set rotation frequency in Hz. (default 338)",
+              "kind": "integer",
+              "binding": {
+                "property": {
+                  "object": "transmit",
+                  "name": "phaseRotatorFreqHz"
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 4,
+                "offAir": true
+              },
+              "min": 10,
+              "max": 2000,
+              "step": 1,
+              "unit": " Hz"
+            },
+            {
+              "id": "dsp.cfc.phaseRotatorStages",
+              "label": "STAGES",
+              "tooltip": "Choose the number of rotation stages. Larger values = smoother (default 8)",
+              "kind": "integer",
+              "binding": {
+                "property": {
+                  "object": "transmit",
+                  "name": "phaseRotatorStages"
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 4,
+                "offAir": true
+              },
+              "min": 2,
+              "max": 16,
+              "step": 1
+            },
+            {
+              "id": "dsp.cfc.phaseReverseEnabled",
+              "label": "Reverse Phase",
+              "tooltip": "Reverses the phase",
+              "kind": "toggle",
+              "binding": {
+                "property": {
+                  "object": "transmit",
+                  "name": "phaseReverseEnabled"
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 4,
+                "offAir": true
+              }
+            }
+          ]
+        },
+        {
+          "title": "CFC",
+          "controls": [
+            {
+              "id": "dsp.cfc.cfcEnabled",
+              "label": "Enable",
+              "tooltip": "Enable the Continuous Frequency Compressor (10-band)",
+              "kind": "toggle",
+              "binding": {
+                "property": {
+                  "object": "transmit",
+                  "name": "cfcEnabled"
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 4,
+                "offAir": true
+              }
+            },
+            {
+              "id": "dsp.cfc.cfcPostEqEnabled",
+              "label": "Post-EQ Enable",
+              "tooltip": "Enable the Post-EQ stage applied after CFC compression",
+              "kind": "toggle",
+              "binding": {
+                "property": {
+                  "object": "transmit",
+                  "name": "cfcPostEqEnabled"
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 4,
+                "offAir": true
+              }
+            },
+            {
+              "id": "dsp.cfc.cfcPrecompDb",
+              "label": "Pre-Comp",
+              "tooltip": "Global pre-compression gain (0–16 dB) applied before per-band compression",
+              "kind": "integer",
+              "binding": {
+                "property": {
+                  "object": "transmit",
+                  "name": "cfcPrecompDb"
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 4,
+                "offAir": true
+              },
+              "min": 0,
+              "max": 16,
+              "step": 1,
+              "unit": " dB"
+            },
+            {
+              "id": "dsp.cfc.cfcPostEqGainDb",
+              "label": "Post-EQ Gain",
+              "tooltip": "Global Post-EQ make-up gain (-24 .. +24 dB)",
+              "kind": "integer",
+              "binding": {
+                "property": {
+                  "object": "transmit",
+                  "name": "cfcPostEqGainDb"
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 4,
+                "offAir": true
+              },
+              "min": -24,
+              "max": 24,
+              "step": 1,
+              "unit": " dB"
+            }
+          ]
+        },
+        {
+          "title": "CESSB",
+          "controls": [
+            {
+              "id": "dsp.cfc.cessbOn",
+              "label": "Enable",
+              "tooltip": "Enable Controlled-Envelope SSB (acts only when CPDR is enabled)",
+              "kind": "toggle",
+              "binding": {
+                "property": {
+                  "object": "transmit",
+                  "name": "cessbOn"
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 4,
+                "offAir": true
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "dsp.tnf",
+      "title": "TNF",
+      "where": "station",
+      "coverage": "partial: notch rows and Add require a list/row action contract; Visual Notch is a phone-local display preference",
+      "sections": [
+        {
+          "title": "Multi Notch Filter",
+          "controls": [
+            {
+              "id": "dsp.tnf.minNotchWidthHz",
+              "label": "Minimum Notch Width",
+              "tooltip": "Narrowest notch the current bandpass filter can realise",
+              "kind": "readout",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "minNotchWidthHz"
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "dspInfoVersion",
+                "min": 1
+              }
+            },
+            {
+              "id": "dsp.tnf.autoIncrease",
+              "label": "Auto-Increase width (if needed) to achieve >100dB attenuation",
+              "tooltip": "The notch width will be increased if needed to ensure >100dB of attenuation",
+              "kind": "toggle",
+              "binding": {
+                "property": {
+                  "object": "notches",
+                  "name": "autoIncrease"
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "notchControlVersion",
+                "min": 1
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "dsp.options",
+      "title": "Options",
+      "where": "station",
+      "coverage": "partial: cache toggles need an exact True/False setting codec; high-resolution filter graph control and rebuild timing readout are GUI render/runtime composites",
+      "sections": [
+        {
+          "title": "Buffer Size (IQcomp)",
+          "controls": [
+            {
+              "id": "dsp.options.DspOptionsBufferSizePhoneRx",
+              "label": "RX:",
+              "tooltip": "Sets the internal buffer size. Larger values give sharper filters but add latency.",
+              "kind": "choice",
+              "binding": {
+                "setting": "DspOptionsBufferSizePhoneRx"
+              },
+              "applies": "live",
+              "choices": [
+                "64",
+                "128",
+                "256",
+                "512",
+                "1024"
+              ]
+            },
+            {
+              "id": "dsp.options.DspOptionsBufferSizePhoneTx",
+              "label": "TX:",
+              "tooltip": "Sets the internal buffer size. Larger values give sharper filters but add latency.",
+              "kind": "choice",
+              "binding": {
+                "setting": "DspOptionsBufferSizePhoneTx"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 1,
+                "offAir": true
+              },
+              "choices": [
+                "64",
+                "128",
+                "256",
+                "512",
+                "1024"
+              ]
+            },
+            {
+              "id": "dsp.options.DspOptionsBufferSizeFmRx",
+              "label": "RX:",
+              "tooltip": "Sets the internal buffer size. Larger values give sharper filters but add latency.",
+              "kind": "choice",
+              "binding": {
+                "setting": "DspOptionsBufferSizeFmRx"
+              },
+              "applies": "live",
+              "choices": [
+                "64",
+                "128",
+                "256",
+                "512",
+                "1024"
+              ]
+            },
+            {
+              "id": "dsp.options.DspOptionsBufferSizeFmTx",
+              "label": "TX:",
+              "tooltip": "Sets the internal buffer size. Larger values give sharper filters but add latency.",
+              "kind": "choice",
+              "binding": {
+                "setting": "DspOptionsBufferSizeFmTx"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 1,
+                "offAir": true
+              },
+              "choices": [
+                "64",
+                "128",
+                "256",
+                "512",
+                "1024"
+              ]
+            },
+            {
+              "id": "dsp.options.DspOptionsBufferSizeCwRx",
+              "label": "RX:",
+              "tooltip": "Sets the internal buffer size. Larger values give sharper filters but add latency.",
+              "kind": "choice",
+              "binding": {
+                "setting": "DspOptionsBufferSizeCwRx"
+              },
+              "applies": "live",
+              "choices": [
+                "64",
+                "128",
+                "256",
+                "512",
+                "1024"
+              ]
+            },
+            {
+              "id": "dsp.options.DspOptionsBufferSizeDigRx",
+              "label": "RX:",
+              "tooltip": "Sets the internal buffer size. Larger values give sharper filters but add latency.",
+              "kind": "choice",
+              "binding": {
+                "setting": "DspOptionsBufferSizeDigRx"
+              },
+              "applies": "live",
+              "choices": [
+                "64",
+                "128",
+                "256",
+                "512",
+                "1024"
+              ]
+            },
+            {
+              "id": "dsp.options.DspOptionsBufferSizeDigTx",
+              "label": "TX:",
+              "tooltip": "Sets the internal buffer size. Larger values give sharper filters but add latency.",
+              "kind": "choice",
+              "binding": {
+                "setting": "DspOptionsBufferSizeDigTx"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 1,
+                "offAir": true
+              },
+              "choices": [
+                "64",
+                "128",
+                "256",
+                "512",
+                "1024"
+              ]
+            }
+          ]
+        },
+        {
+          "title": "Filter Size (taps)",
+          "controls": [
+            {
+              "id": "dsp.options.DspOptionsFilterSizePhoneRx",
+              "label": "RX:",
+              "tooltip": "Sets the FIR filter length. Larger values give sharper filter skirts but add CPU and latency.",
+              "kind": "choice",
+              "binding": {
+                "setting": "DspOptionsFilterSizePhoneRx"
+              },
+              "applies": "live",
+              "choices": [
+                "1024",
+                "2048",
+                "4096",
+                "8192",
+                "16384"
+              ]
+            },
+            {
+              "id": "dsp.options.DspOptionsFilterSizePhoneTx",
+              "label": "TX:",
+              "tooltip": "Sets the FIR filter length. Larger values give sharper filter skirts but add CPU and latency.",
+              "kind": "choice",
+              "binding": {
+                "setting": "DspOptionsFilterSizePhoneTx"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 1,
+                "offAir": true
+              },
+              "choices": [
+                "1024",
+                "2048",
+                "4096",
+                "8192",
+                "16384"
+              ]
+            },
+            {
+              "id": "dsp.options.DspOptionsFilterSizeFmRx",
+              "label": "RX:",
+              "tooltip": "Sets the FIR filter length. Larger values give sharper filter skirts but add CPU and latency.",
+              "kind": "choice",
+              "binding": {
+                "setting": "DspOptionsFilterSizeFmRx"
+              },
+              "applies": "live",
+              "choices": [
+                "1024",
+                "2048",
+                "4096",
+                "8192",
+                "16384"
+              ]
+            },
+            {
+              "id": "dsp.options.DspOptionsFilterSizeFmTx",
+              "label": "TX:",
+              "tooltip": "Sets the FIR filter length. Larger values give sharper filter skirts but add CPU and latency.",
+              "kind": "choice",
+              "binding": {
+                "setting": "DspOptionsFilterSizeFmTx"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 1,
+                "offAir": true
+              },
+              "choices": [
+                "1024",
+                "2048",
+                "4096",
+                "8192",
+                "16384"
+              ]
+            },
+            {
+              "id": "dsp.options.DspOptionsFilterSizeCwRx",
+              "label": "RX:",
+              "tooltip": "Sets the FIR filter length. Larger values give sharper filter skirts but add CPU and latency.",
+              "kind": "choice",
+              "binding": {
+                "setting": "DspOptionsFilterSizeCwRx"
+              },
+              "applies": "live",
+              "choices": [
+                "1024",
+                "2048",
+                "4096",
+                "8192",
+                "16384"
+              ]
+            },
+            {
+              "id": "dsp.options.DspOptionsFilterSizeDigRx",
+              "label": "RX:",
+              "tooltip": "Sets the FIR filter length. Larger values give sharper filter skirts but add CPU and latency.",
+              "kind": "choice",
+              "binding": {
+                "setting": "DspOptionsFilterSizeDigRx"
+              },
+              "applies": "live",
+              "choices": [
+                "1024",
+                "2048",
+                "4096",
+                "8192",
+                "16384"
+              ]
+            },
+            {
+              "id": "dsp.options.DspOptionsFilterSizeDigTx",
+              "label": "TX:",
+              "tooltip": "Sets the FIR filter length. Larger values give sharper filter skirts but add CPU and latency.",
+              "kind": "choice",
+              "binding": {
+                "setting": "DspOptionsFilterSizeDigTx"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 1,
+                "offAir": true
+              },
+              "choices": [
+                "1024",
+                "2048",
+                "4096",
+                "8192",
+                "16384"
+              ]
+            }
+          ]
+        },
+        {
+          "title": "Filter Type",
+          "controls": [
+            {
+              "id": "dsp.options.DspOptionsFilterTypePhoneRx",
+              "label": "RX:",
+              "tooltip": "Select 'Low Latency' (minimum phase) or 'Linear Phase' filters. Linear Phase has symmetric delay; Low Latency uses minimum-phase design with less group delay.",
+              "kind": "choice",
+              "binding": {
+                "setting": "DspOptionsFilterTypePhoneRx"
+              },
+              "applies": "live",
+              "choices": [
+                "Linear Phase",
+                "Low Latency"
+              ]
+            },
+            {
+              "id": "dsp.options.DspOptionsFilterTypePhoneTx",
+              "label": "TX:",
+              "tooltip": "Select 'Low Latency' (minimum phase) or 'Linear Phase' filters. Linear Phase has symmetric delay; Low Latency uses minimum-phase design with less group delay.",
+              "kind": "choice",
+              "binding": {
+                "setting": "DspOptionsFilterTypePhoneTx"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 1,
+                "offAir": true
+              },
+              "choices": [
+                "Linear Phase",
+                "Low Latency"
+              ]
+            },
+            {
+              "id": "dsp.options.DspOptionsFilterTypeFmRx",
+              "label": "RX:",
+              "tooltip": "Select 'Low Latency' (minimum phase) or 'Linear Phase' filters. Linear Phase has symmetric delay; Low Latency uses minimum-phase design with less group delay.",
+              "kind": "choice",
+              "binding": {
+                "setting": "DspOptionsFilterTypeFmRx"
+              },
+              "applies": "live",
+              "choices": [
+                "Linear Phase",
+                "Low Latency"
+              ]
+            },
+            {
+              "id": "dsp.options.DspOptionsFilterTypeFmTx",
+              "label": "TX:",
+              "tooltip": "Select 'Low Latency' (minimum phase) or 'Linear Phase' filters. Linear Phase has symmetric delay; Low Latency uses minimum-phase design with less group delay.",
+              "kind": "choice",
+              "binding": {
+                "setting": "DspOptionsFilterTypeFmTx"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 1,
+                "offAir": true
+              },
+              "choices": [
+                "Linear Phase",
+                "Low Latency"
+              ]
+            },
+            {
+              "id": "dsp.options.DspOptionsFilterTypeCwRx",
+              "label": "RX:",
+              "tooltip": "Select 'Low Latency' (minimum phase) or 'Linear Phase' filters. Linear Phase has symmetric delay; Low Latency uses minimum-phase design with less group delay.",
+              "kind": "choice",
+              "binding": {
+                "setting": "DspOptionsFilterTypeCwRx"
+              },
+              "applies": "live",
+              "choices": [
+                "Linear Phase",
+                "Low Latency"
+              ]
+            },
+            {
+              "id": "dsp.options.DspOptionsFilterTypeDigRx",
+              "label": "RX:",
+              "tooltip": "Select 'Low Latency' (minimum phase) or 'Linear Phase' filters. Linear Phase has symmetric delay; Low Latency uses minimum-phase design with less group delay.",
+              "kind": "choice",
+              "binding": {
+                "setting": "DspOptionsFilterTypeDigRx"
+              },
+              "applies": "live",
+              "choices": [
+                "Linear Phase",
+                "Low Latency"
+              ]
+            },
+            {
+              "id": "dsp.options.DspOptionsFilterTypeDigTx",
+              "label": "TX:",
+              "tooltip": "Select 'Low Latency' (minimum phase) or 'Linear Phase' filters. Linear Phase has symmetric delay; Low Latency uses minimum-phase design with less group delay.",
+              "kind": "choice",
+              "binding": {
+                "setting": "DspOptionsFilterTypeDigTx"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 1,
+                "offAir": true
+              },
+              "choices": [
+                "Linear Phase",
+                "Low Latency"
+              ]
             }
           ]
         }

@@ -230,7 +230,27 @@ static void bindSquelchThreshold(QObject* owner, RadioModel* model, QSlider* sli
 AgcAlcSetupPage::AgcAlcSetupPage(RadioModel* model, QWidget* parent)
     : SetupPage("AGC/ALC", model, parent)
 {
-    SliceModel* slice = model->activeSlice();
+    rebuildForActiveSlice();
+    if (model) {
+        connect(model, &RadioModel::activeSliceChanged, this,
+                [this](int) { rebuildForActiveSlice(); });
+    }
+}
+
+void AgcAlcSetupPage::rebuildForActiveSlice()
+{
+    // Drop the old receiver widgets and their slice connections before a
+    // new selection can receive a pending gesture (same contract as NR/ANF).
+    QVBoxLayout* layout = contentLayout();
+    while (layout->count() > 0) {
+        QLayoutItem* item = layout->takeAt(0);
+        delete item->widget();
+        delete item;
+    }
+    m_txLevelerGrp = nullptr;
+    m_txAlcGrp = nullptr;
+    RadioModel* model = this->model();
+    SliceModel* slice = model ? model->activeSlice() : nullptr;
     if (!slice) {
         // No active slice (disconnected) — show disabled placeholder
         QGroupBox* grp = addSection("RX1 AGC");
@@ -243,6 +263,7 @@ AgcAlcSetupPage::AgcAlcSetupPage(RadioModel* model, QWidget* parent)
     QVBoxLayout* agcLay = qobject_cast<QVBoxLayout*>(agcGrp->layout());
 
     m_agcModeCombo = new QComboBox;
+    m_agcModeCombo->setProperty("nereusSetupId", "dsp.agcAlc.agcMode");
     m_agcModeCombo->addItems({"Off", "Long", "Slow", "Med", "Fast", "Custom"});
     m_agcModeCombo->setCurrentIndex(static_cast<int>(slice->agcMode()));
     // From Thetis v2.10.3.13 console.resx:4555 — comboAGC.ToolTip
@@ -250,12 +271,14 @@ AgcAlcSetupPage::AgcAlcSetupPage(RadioModel* model, QWidget* parent)
     addLabeledCombo(agcLay, "Mode", m_agcModeCombo);
 
     m_agcAttack = new QSpinBox;
+    m_agcAttack->setProperty("nereusSetupId", "dsp.agcAlc.agcAttack");
     m_agcAttack->setRange(1, 1000);
     m_agcAttack->setSuffix(" ms");
     m_agcAttack->setValue(slice->agcAttack());
     addLabeledSpinner(agcLay, "Attack", m_agcAttack);
 
     m_agcDecay = new QSpinBox;
+    m_agcDecay->setProperty("nereusSetupId", "dsp.agcAlc.agcDecay");
     m_agcDecay->setRange(1, 5000);
     m_agcDecay->setSuffix(" ms");
     m_agcDecay->setValue(slice->agcDecay());
@@ -264,6 +287,7 @@ AgcAlcSetupPage::AgcAlcSetupPage(RadioModel* model, QWidget* parent)
     addLabeledSpinner(agcLay, "Decay", m_agcDecay);
 
     m_agcHang = new QSpinBox;
+    m_agcHang->setProperty("nereusSetupId", "dsp.agcAlc.agcHang");
     m_agcHang->setRange(10, 5000);
     m_agcHang->setSuffix(" ms");
     m_agcHang->setValue(slice->agcHang());
@@ -272,6 +296,8 @@ AgcAlcSetupPage::AgcAlcSetupPage(RadioModel* model, QWidget* parent)
     addLabeledSpinner(agcLay, "Hang", m_agcHang);
 
     m_agcSlope = new QSlider(Qt::Horizontal);
+    m_agcSlope->setProperty("nereusSetupId", "dsp.agcAlc.agcSlope");
+    m_agcSlope->setProperty("nereusSetupScale", 0.1);
     m_agcSlope->setRange(0, 20);
     m_agcSlope->setValue(slice->agcSlope() / 10);
     // From Thetis v2.10.3.13 setup.designer.cs:39358 — udDSPAGCSlope.ToolTip
@@ -279,6 +305,7 @@ AgcAlcSetupPage::AgcAlcSetupPage(RadioModel* model, QWidget* parent)
     addLabeledSlider(agcLay, "Slope", m_agcSlope);
 
     m_agcMaxGain = new QSpinBox;
+    m_agcMaxGain->setProperty("nereusSetupId", "dsp.agcAlc.agcMaxGain");
     m_agcMaxGain->setRange(-20, 120);
     m_agcMaxGain->setSuffix(" dB");
     m_agcMaxGain->setValue(slice->agcMaxGain());
@@ -287,6 +314,7 @@ AgcAlcSetupPage::AgcAlcSetupPage(RadioModel* model, QWidget* parent)
     addLabeledSpinner(agcLay, "Max Gain", m_agcMaxGain);
 
     m_agcFixedGain = new QSpinBox;
+    m_agcFixedGain->setProperty("nereusSetupId", "dsp.agcAlc.agcFixedGain");
     m_agcFixedGain->setRange(-20, 120);
     m_agcFixedGain->setSuffix(" dB");
     m_agcFixedGain->setValue(slice->agcFixedGain());
@@ -295,6 +323,7 @@ AgcAlcSetupPage::AgcAlcSetupPage(RadioModel* model, QWidget* parent)
     addLabeledSpinner(agcLay, "Fixed Gain", m_agcFixedGain);
 
     m_agcHangThresh = new QSlider(Qt::Horizontal);
+    m_agcHangThresh->setProperty("nereusSetupId", "dsp.agcAlc.agcHangThreshold");
     m_agcHangThresh->setRange(0, 100);
     m_agcHangThresh->setValue(slice->agcHangThreshold());
     // From Thetis v2.10.3.13 setup.designer.cs:39250 — tbDSPAGCHangThreshold.ToolTip
@@ -340,12 +369,14 @@ AgcAlcSetupPage::AgcAlcSetupPage(RadioModel* model, QWidget* parent)
     QVBoxLayout* autoAgcLay = qobject_cast<QVBoxLayout*>(autoAgcGrp->layout());
 
     m_autoAgcChk = new QCheckBox("Auto AGC RX1");
+    m_autoAgcChk->setProperty("nereusSetupId", "dsp.agcAlc.autoAgcEnabled");
     m_autoAgcChk->setChecked(slice->autoAgcEnabled());
     // From Thetis v2.10.3.13 setup.designer.cs:38679 — chkAutoAGCRX1.ToolTip
     m_autoAgcChk->setToolTip(QStringLiteral("Automatically adjust AGC based on Noise Floor"));
     autoAgcLay->addWidget(m_autoAgcChk);
 
     m_autoAgcOffset = new QSpinBox;
+    m_autoAgcOffset->setProperty("nereusSetupId", "dsp.agcAlc.autoAgcOffset");
     m_autoAgcOffset->setRange(-60, 60);
     m_autoAgcOffset->setSuffix(" dB");
     m_autoAgcOffset->setValue(static_cast<int>(slice->autoAgcOffset()));
@@ -382,6 +413,7 @@ AgcAlcSetupPage::AgcAlcSetupPage(RadioModel* model, QWidget* parent)
     QVBoxLayout* txLevLay = qobject_cast<QVBoxLayout*>(txLevGrp->layout());
 
     m_txLevelerOnChk = new QCheckBox("Enable");
+    m_txLevelerOnChk->setProperty("nereusSetupId", "dsp.agcAlc.txLevelerOn");
     m_txLevelerOnChk->setChecked(tx.txLevelerOn());
     // From Thetis setup.Designer.cs:38707 [v2.10.3.13] — chkDSPLevelerEnabled tooltip.
     m_txLevelerOnChk->setToolTip(
@@ -389,6 +421,7 @@ AgcAlcSetupPage::AgcAlcSetupPage(RadioModel* model, QWidget* parent)
     txLevLay->addWidget(m_txLevelerOnChk);
 
     m_txLevelerTopSpin = new QSpinBox;
+    m_txLevelerTopSpin->setProperty("nereusSetupId", "dsp.agcAlc.txLevelerMaxGain");
     m_txLevelerTopSpin->setRange(TransmitModel::kTxLevelerMaxGainDbMin,
                                  TransmitModel::kTxLevelerMaxGainDbMax);
     m_txLevelerTopSpin->setSuffix(" dB");
@@ -400,6 +433,7 @@ AgcAlcSetupPage::AgcAlcSetupPage(RadioModel* model, QWidget* parent)
     addLabeledSpinner(txLevLay, "Max Gain", m_txLevelerTopSpin);
 
     m_txLevelerDecaySpin = new QSpinBox;
+    m_txLevelerDecaySpin->setProperty("nereusSetupId", "dsp.agcAlc.txLevelerDecay");
     m_txLevelerDecaySpin->setRange(TransmitModel::kTxLevelerDecayMsMin,
                                    TransmitModel::kTxLevelerDecayMsMax);
     m_txLevelerDecaySpin->setSuffix(" ms");
@@ -451,6 +485,7 @@ AgcAlcSetupPage::AgcAlcSetupPage(RadioModel* model, QWidget* parent)
     QVBoxLayout* txAlcLay = qobject_cast<QVBoxLayout*>(txAlcGrp->layout());
 
     m_txAlcMaxGainSpin = new QSpinBox;
+    m_txAlcMaxGainSpin->setProperty("nereusSetupId", "dsp.agcAlc.txAlcMaxGain");
     m_txAlcMaxGainSpin->setRange(TransmitModel::kTxAlcMaxGainDbMin,
                                  TransmitModel::kTxAlcMaxGainDbMax);
     m_txAlcMaxGainSpin->setSuffix(" dB");
@@ -461,6 +496,7 @@ AgcAlcSetupPage::AgcAlcSetupPage(RadioModel* model, QWidget* parent)
     addLabeledSpinner(txAlcLay, "Max Gain", m_txAlcMaxGainSpin);
 
     m_txAlcDecaySpin = new QSpinBox;
+    m_txAlcDecaySpin->setProperty("nereusSetupId", "dsp.agcAlc.txAlcDecay");
     m_txAlcDecaySpin->setRange(TransmitModel::kTxAlcDecayMsMin,
                                TransmitModel::kTxAlcDecayMsMax);
     m_txAlcDecaySpin->setSuffix(" ms");
@@ -493,7 +529,8 @@ AgcAlcSetupPage::AgcAlcSetupPage(RadioModel* model, QWidget* parent)
     // start closed until SetupDialog pushes that gate, then change the
     // Core's values while its radio is off the air.
     if (!model->ownsLocalDsp()) {
-        setTransmitSettingsPermittedAt(4, false, QString());
+        setTransmitSettingsPermittedAt(4,
+            m_txSettingsGateKnown && m_txSettingsPermitted, m_txSettingsReason);
     }
 }
 
@@ -503,6 +540,9 @@ void AgcAlcSetupPage::setTransmitSettingsPermittedAt(int version, bool permitted
     if (version != 4) {
         return;
     }
+    m_txSettingsGateKnown = true;
+    m_txSettingsPermitted = permitted;
+    m_txSettingsReason = reason;
     gateTransmitControls({m_txLevelerGrp, m_txAlcGrp}, permitted,
         reason.isEmpty() ? IStationLink::transmitSettingsUnavailableReason() : reason);
 }
@@ -2008,6 +2048,7 @@ CwSetupPage::CwSetupPage(RadioModel* model, QWidget* parent)
     QVBoxLayout* apfLay = qobject_cast<QVBoxLayout*>(apfGrp->layout());
 
     auto* apfEnable = new QPushButton("Enable");
+    apfEnable->setProperty("nereusSetupId", "dsp.cw.apfEnabled");
     apfEnable->setCheckable(true);
     apfEnable->setObjectName(QStringLiteral("apfEnableButton"));
     addLabeledToggle(apfLay, "Enable", apfEnable);
@@ -2170,6 +2211,7 @@ AmSamSetupPage::AmSamSetupPage(RadioModel* model, QWidget* parent)
     // R-R3-21: the active slice's AM squelch threshold (SliceModel
     // amsqThresh, dB, sent to WDSP SetRXAAMSQThreshold by RadioModel).
     auto* sqThresh = new QSlider(Qt::Horizontal);
+    sqThresh->setProperty("nereusSetupId", "dsp.amSam.amsqThresh");
     sqThresh->setObjectName(QStringLiteral("amSquelchThresholdSlider"));
     sqThresh->setRange(ControlRanges::kAmsqThreshMinDb, ControlRanges::kAmsqThreshMaxDb);
     sqThresh->setSingleStep(ControlRanges::kAmsqThreshStepDb);
@@ -2215,6 +2257,7 @@ FmSetupPage::FmSetupPage(RadioModel* model, QWidget* parent)
     // R-R3-21: the active slice's FM squelch threshold (SliceModel
     // fmsqThresh, dB; RxChannel::setFmsqThresh converts it for WDSP).
     auto* squelchThresh = new QSlider(Qt::Horizontal);
+    squelchThresh->setProperty("nereusSetupId", "dsp.fm.fmsqThresh");
     squelchThresh->setObjectName(QStringLiteral("fmSquelchThresholdSlider"));
     squelchThresh->setRange(ControlRanges::kFmsqThreshMinDb, ControlRanges::kFmsqThreshMaxDb);
     squelchThresh->setSingleStep(ControlRanges::kFmsqThreshStepDb);
@@ -2301,6 +2344,7 @@ CfcSetupPage::CfcSetupPage(RadioModel* model, QWidget* parent)
     QVBoxLayout* phRotLay = qobject_cast<QVBoxLayout*>(phRotGrp->layout());
 
     m_phRotEnableChk = new QCheckBox("Enable");
+    m_phRotEnableChk->setProperty("nereusSetupId", "dsp.cfc.phaseRotatorEnabled");
     m_phRotEnableChk->setObjectName(QStringLiteral("chkPHROTEnable"));
     m_phRotEnableChk->setChecked(tx.phaseRotatorEnabled());
     // From Thetis setup.Designer.cs:46281 [v2.10.3.13] — chkPHROTEnable tooltip.
@@ -2308,6 +2352,7 @@ CfcSetupPage::CfcSetupPage(RadioModel* model, QWidget* parent)
     phRotLay->addWidget(m_phRotEnableChk);
 
     m_phRotFreqSpin = new QSpinBox;
+    m_phRotFreqSpin->setProperty("nereusSetupId", "dsp.cfc.phaseRotatorFreqHz");
     m_phRotFreqSpin->setObjectName(QStringLiteral("udPhRotFreq"));
     m_phRotFreqSpin->setRange(TransmitModel::kPhaseRotatorFreqHzMin,
                               TransmitModel::kPhaseRotatorFreqHzMax);
@@ -2319,6 +2364,7 @@ CfcSetupPage::CfcSetupPage(RadioModel* model, QWidget* parent)
     addLabeledSpinner(phRotLay, "FREQ", m_phRotFreqSpin);
 
     m_phRotStagesSpin = new QSpinBox;
+    m_phRotStagesSpin->setProperty("nereusSetupId", "dsp.cfc.phaseRotatorStages");
     m_phRotStagesSpin->setObjectName(QStringLiteral("udPHROTStages"));
     m_phRotStagesSpin->setRange(TransmitModel::kPhaseRotatorStagesMin,
                                 TransmitModel::kPhaseRotatorStagesMax);
@@ -2330,6 +2376,7 @@ CfcSetupPage::CfcSetupPage(RadioModel* model, QWidget* parent)
     addLabeledSpinner(phRotLay, "STAGES", m_phRotStagesSpin);
 
     m_phRotReverseChk = new QCheckBox("Reverse Phase");
+    m_phRotReverseChk->setProperty("nereusSetupId", "dsp.cfc.phaseReverseEnabled");
     m_phRotReverseChk->setObjectName(QStringLiteral("chkPHROTReverse"));
     m_phRotReverseChk->setChecked(tx.phaseReverseEnabled());
     // From Thetis setup.Designer.cs:46186 [v2.10.3.13] — chkPHROTReverse tooltip.
@@ -2382,6 +2429,7 @@ CfcSetupPage::CfcSetupPage(RadioModel* model, QWidget* parent)
     QVBoxLayout* cfcLay = qobject_cast<QVBoxLayout*>(cfcGrp->layout());
 
     m_cfcEnableChk = new QCheckBox("Enable");
+    m_cfcEnableChk->setProperty("nereusSetupId", "dsp.cfc.cfcEnabled");
     m_cfcEnableChk->setObjectName(QStringLiteral("chkCFCEnable"));
     m_cfcEnableChk->setChecked(tx.cfcEnabled());
     m_cfcEnableChk->setToolTip(QStringLiteral(
@@ -2389,6 +2437,7 @@ CfcSetupPage::CfcSetupPage(RadioModel* model, QWidget* parent)
     cfcLay->addWidget(m_cfcEnableChk);
 
     m_cfcPostEqEnableChk = new QCheckBox("Post-EQ Enable");
+    m_cfcPostEqEnableChk->setProperty("nereusSetupId", "dsp.cfc.cfcPostEqEnabled");
     m_cfcPostEqEnableChk->setObjectName(QStringLiteral("chkCFCPeqEnable"));
     m_cfcPostEqEnableChk->setChecked(tx.cfcPostEqEnabled());
     m_cfcPostEqEnableChk->setToolTip(QStringLiteral(
@@ -2396,6 +2445,7 @@ CfcSetupPage::CfcSetupPage(RadioModel* model, QWidget* parent)
     cfcLay->addWidget(m_cfcPostEqEnableChk);
 
     m_cfcPrecompSpin = new QSpinBox;
+    m_cfcPrecompSpin->setProperty("nereusSetupId", "dsp.cfc.cfcPrecompDb");
     m_cfcPrecompSpin->setObjectName(QStringLiteral("udCFCPreComp"));
     m_cfcPrecompSpin->setRange(TransmitModel::kCfcPrecompDbMin,
                                TransmitModel::kCfcPrecompDbMax);
@@ -2407,6 +2457,7 @@ CfcSetupPage::CfcSetupPage(RadioModel* model, QWidget* parent)
     addLabeledSpinner(cfcLay, "Pre-Comp", m_cfcPrecompSpin);
 
     m_cfcPostEqGainSpin = new QSpinBox;
+    m_cfcPostEqGainSpin->setProperty("nereusSetupId", "dsp.cfc.cfcPostEqGainDb");
     m_cfcPostEqGainSpin->setObjectName(QStringLiteral("udCFCPostEqGain"));
     m_cfcPostEqGainSpin->setRange(TransmitModel::kCfcPostEqGainDbMin,
                                   TransmitModel::kCfcPostEqGainDbMax);
@@ -2486,6 +2537,7 @@ CfcSetupPage::CfcSetupPage(RadioModel* model, QWidget* parent)
     QVBoxLayout* cessbLay = qobject_cast<QVBoxLayout*>(cessbGrp->layout());
 
     m_cessbEnableChk = new QCheckBox("Enable");
+    m_cessbEnableChk->setProperty("nereusSetupId", "dsp.cfc.cessbOn");
     m_cessbEnableChk->setObjectName(QStringLiteral("chkCESSBEnable"));
     m_cessbEnableChk->setChecked(tx.cessbOn());
     m_cessbEnableChk->setToolTip(QStringLiteral(
@@ -2660,6 +2712,7 @@ MnfSetupPage::MnfSetupPage(RadioModel* model, QWidget* parent)
     // to its notch popup rather than to the Setup tab.
     m_minWidthLbl = new QLabel(QStringLiteral("--"), mnfGrp);
     m_minWidthLbl->setObjectName(QStringLiteral("lblMNFMinWidth"));
+    m_minWidthLbl->setProperty("nereusSetupId", "dsp.tnf.minNotchWidthHz");
     m_minWidthLbl->setToolTip(QStringLiteral(
         "Narrowest notch the current bandpass filter can realise"));
     addLabeledLabel(mnfLay, QStringLiteral("Minimum Notch Width"), m_minWidthLbl);
@@ -2675,6 +2728,7 @@ MnfSetupPage::MnfSetupPage(RadioModel* model, QWidget* parent)
         QStringLiteral("Auto-Increase width (if needed) to achieve >100dB attenuation"),
         mnfGrp);
     m_autoIncreaseChk->setObjectName(QStringLiteral("chkMNFAutoIncrease"));
+    m_autoIncreaseChk->setProperty("nereusSetupId", "dsp.tnf.autoIncrease");
     m_autoIncreaseChk->setChecked(nm->autoIncrease());
     // From Thetis setup.designer.cs:44205 [v2.10.3.15] — chkMNFAutoIncrease tooltip.
     m_autoIncreaseChk->setToolTip(QStringLiteral(

@@ -5,6 +5,9 @@
 #include "core/session/MirrorPolicy.h"
 #include "models/StationTciModel.h"
 #include "models/SliceModel.h"
+#include "models/TransmitModel.h"
+#include "models/NotchModel.h"
+#include "core/settings/SettingsScope.h"
 
 #include <QFile>
 #include <QJsonArray>
@@ -65,7 +68,13 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps)
                         && !control.value(QStringLiteral("binding")).toObject()
                                 .contains(QStringLiteral("property"))
                         && !control.value(QStringLiteral("binding")).toObject()
-                                .contains(QStringLiteral("command")))
+                                .contains(QStringLiteral("command"))
+                        && !control.value(QStringLiteral("binding")).toObject()
+                                .contains(QStringLiteral("setting")))
+                    || (id == QLatin1String("dsp")
+                        && control.value(QStringLiteral("binding")).toObject()
+                               .contains(QStringLiteral("setting"))
+                        && !SetupDescription::validateDspSettingBinding(control))
                     || (id == QLatin1String("dsp")
                         && control.value(QStringLiteral("binding")).toObject()
                                .contains(QStringLiteral("property"))
@@ -126,18 +135,56 @@ bool SetupDescription::validateActiveSlicePropertyBinding(const QJsonObject& con
         return false;
     }
     const QJsonObject ref = binding.value(QStringLiteral("property")).toObject();
-    if (ref.size() != 2
-        || ref.value(QStringLiteral("object")).toString() != QLatin1String("slice:active")) {
+    if (ref.size() != 2) {
+        return false;
+    }
+    const QString object = ref.value(QStringLiteral("object")).toString();
+    const QMetaObject* meta = object == QLatin1String("slice:active")
+        ? &SliceModel::staticMetaObject
+        : object == QLatin1String("transmit")
+          ? &TransmitModel::staticMetaObject
+          : object == QLatin1String("notches")
+            ? &NotchModel::staticMetaObject : nullptr;
+    const QByteArray policyClass = object == QLatin1String("slice:active")
+        ? QByteArrayLiteral("SliceModel")
+        : object == QLatin1String("transmit")
+          ? QByteArrayLiteral("TransmitModel") : QByteArrayLiteral("NotchModel");
+    if (!meta) {
         return false;
     }
     const QByteArray name = ref.value(QStringLiteral("name")).toString().toUtf8();
-    const MirrorProperty* property = MirrorSchema::forMetaObject(&SliceModel::staticMetaObject)
-        .byName(name);
-    if (!property || !property->isWritable
-        || !MirrorPolicy::inboundAllowed(QByteArrayLiteral("SliceModel"), name)) {
+    const MirrorProperty* property = MirrorSchema::forMetaObject(meta).byName(name);
+    if (!property) {
         return false;
     }
+    if (object == QLatin1String("transmit")) {
+        const QJsonObject gate = control.value(QStringLiteral("gate")).toObject();
+        if (gate.value(QStringLiteral("offAir")) != QJsonValue(true)
+            || gate.value(QStringLiteral("capability")) != QJsonValue(QStringLiteral("transmitSettingsVersion"))
+            || gate.value(QStringLiteral("min")).toInt() < 4) {
+            return false;
+        }
+    }
     const QString kind = control.value(QStringLiteral("kind")).toString();
+    const QJsonObject gate = control.value(QStringLiteral("gate")).toObject();
+    if (kind == QLatin1String("readout")) {
+        return object == QLatin1String("slice:active")
+            && name == QByteArrayLiteral("minNotchWidthHz")
+            && gate.value(QStringLiteral("capability")) == QJsonValue(QStringLiteral("dspInfoVersion"))
+            && gate.value(QStringLiteral("min")).toInt() >= 1
+            && property->kind == MirrorWireKind::Float64
+            && MirrorPolicy::hasExplicitEntry(policyClass, name)
+            && MirrorPolicy::directionFor(policyClass, name) == MirrorDirection::Outbound;
+    }
+    if (!property->isWritable || !MirrorPolicy::inboundAllowed(policyClass, name)) {
+        return false;
+    }
+    if (object == QLatin1String("notches")
+        && (name != QByteArrayLiteral("autoIncrease")
+            || gate.value(QStringLiteral("capability")) != QJsonValue(QStringLiteral("notchControlVersion"))
+            || gate.value(QStringLiteral("min")).toInt() < 1)) {
+        return false;
+    }
     const MirrorWireKind expected = kind == QLatin1String("toggle") ? MirrorWireKind::Bool
         : kind == QLatin1String("decimal") ? MirrorWireKind::Float64
         : kind == QLatin1String("choice") ? MirrorWireKind::Enum
@@ -145,6 +192,63 @@ bool SetupDescription::validateActiveSlicePropertyBinding(const QJsonObject& con
           ? MirrorWireKind::Int64 : MirrorWireKind::Unsupported;
     return property->kind == expected
         || (kind == QLatin1String("choice") && property->kind == MirrorWireKind::Int64);
+}
+
+bool SetupDescription::validateDspSettingBinding(const QJsonObject& control)
+{
+    const QJsonObject binding = control.value(QStringLiteral("binding")).toObject();
+    if (binding.size() != 1 || !binding.value(QStringLiteral("setting")).isString()) {
+        return false;
+    }
+    const QString key = binding.value(QStringLiteral("setting")).toString();
+    if (classifySettingsKey(key) != SettingsScope::Station) {
+        return false;
+    }
+    const QString kind = control.value(QStringLiteral("kind")).toString();
+    if (kind != QLatin1String("choice")) {
+        return false;
+    }
+    for (const QString& family : {QStringLiteral("BufferSize"), QStringLiteral("FilterSize"),
+                                  QStringLiteral("FilterType")}) {
+        for (const QString& mode : {QStringLiteral("Phone"), QStringLiteral("Fm"),
+                                    QStringLiteral("Cw"), QStringLiteral("Dig")}) {
+            for (const QString& side : {QStringLiteral("Rx"), QStringLiteral("Tx")}) {
+                if (mode == QLatin1String("Cw") && side == QLatin1String("Tx")) {
+                    continue;
+                }
+                if (key == QStringLiteral("DspOptions") + family + mode + side) {
+                    const QJsonArray choices = control.value(QStringLiteral("choices")).toArray();
+                    const QStringList expected = family == QLatin1String("BufferSize")
+                        ? QStringList{QStringLiteral("64"), QStringLiteral("128"),
+                                      QStringLiteral("256"), QStringLiteral("512"),
+                                      QStringLiteral("1024")}
+                        : family == QLatin1String("FilterSize")
+                          ? QStringList{QStringLiteral("1024"), QStringLiteral("2048"),
+                                        QStringLiteral("4096"), QStringLiteral("8192"),
+                                        QStringLiteral("16384")}
+                          : QStringList{QStringLiteral("Linear Phase"),
+                                        QStringLiteral("Low Latency")};
+                    const QJsonObject gate = control.value(QStringLiteral("gate")).toObject();
+                    if (choices.size() != expected.size()
+                        || (side == QLatin1String("Tx")
+                            ? gate.value(QStringLiteral("offAir")) != QJsonValue(true)
+                            : gate.contains(QStringLiteral("offAir")))
+                        || (side == QLatin1String("Tx")
+                            && (gate.value(QStringLiteral("capability")) != QJsonValue(QStringLiteral("transmitSettingsVersion"))
+                                || gate.value(QStringLiteral("min")).toInt() < 1))) {
+                        return false;
+                    }
+                    for (int i = 0; i < expected.size(); ++i) {
+                        if (choices.at(i).toString() != expected.at(i)) {
+                            return false;
+                        }
+                    }
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
 }
 
 bool SetupDescription::validateCommandBinding(const QJsonObject& control, QString* error)

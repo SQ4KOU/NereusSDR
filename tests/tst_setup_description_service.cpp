@@ -12,6 +12,8 @@
 #include "core/ConnectionState.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
+#include "models/TransmitModel.h"
+#include "models/NotchModel.h"
 #include "fakes/LoopbackTransport.h"
 #include "fakes/UpgradedCoreToken.h"
 
@@ -172,10 +174,18 @@ private slots:
         SetupDescriptionService service;
         const QJsonArray pages = service.category(QStringLiteral("dsp"))
                                      .value(QStringLiteral("pages")).toArray();
-        QCOMPARE(pages.size(), 2);
+        QCOMPARE(pages.size(), 9);
         const MirrorSchema& sliceSchema = MirrorSchema::forMetaObject(
             &SliceModel::staticMetaObject);
+        const MirrorSchema& transmitSchema = MirrorSchema::forMetaObject(
+            &TransmitModel::staticMetaObject);
+        const MirrorSchema& notchSchema = MirrorSchema::forMetaObject(
+            &NotchModel::staticMetaObject);
         int count = 0;
+        int transmitCount = 0;
+        int settingCount = 0;
+        int notchCount = 0;
+        int readoutCount = 0;
         for (const QJsonValue& rawPage : pages) {
             for (const QJsonValue& rawSection : rawPage.toObject()
                      .value(QStringLiteral("sections")).toArray()) {
@@ -188,21 +198,46 @@ private slots:
                             rawControl.toObject(), &error), qPrintable(error));
                         continue;
                     }
+                    if (rawControl.toObject().value("binding").toObject()
+                            .contains("setting")) {
+                        QVERIFY(SetupDescriptionService::validateDspSettingBinding(
+                            rawControl.toObject()));
+                        ++settingCount;
+                        continue;
+                    }
                     const QJsonObject ref = rawControl.toObject().value("binding")
                         .toObject().value("property").toObject();
                     QVERIFY(SetupDescriptionService::validateActiveSlicePropertyBinding(
                         rawControl.toObject()));
-                    QCOMPARE(ref.value("object").toString(), QStringLiteral("slice:active"));
+                    const QString object = ref.value("object").toString();
+                    QVERIFY(object == QLatin1String("slice:active")
+                            || object == QLatin1String("transmit")
+                            || object == QLatin1String("notches"));
                     const QByteArray name = ref.value("name").toString().toUtf8();
-                    const MirrorProperty* property = sliceSchema.byName(name);
+                    const bool transmit = object == QLatin1String("transmit");
+                    const bool notch = object == QLatin1String("notches");
+                    const MirrorProperty* property = transmit ? transmitSchema.byName(name)
+                        : notch ? notchSchema.byName(name) : sliceSchema.byName(name);
                     QVERIFY2(property != nullptr, name.constData());
+                    if (rawControl.toObject().value("kind") == QJsonValue("readout")) {
+                        QVERIFY(!property->isWritable);
+                        ++readoutCount;
+                        continue;
+                    }
                     QVERIFY(property->isWritable);
-                    QVERIFY(MirrorPolicy::inboundAllowed("SliceModel", name));
-                    ++count;
+                    QVERIFY(MirrorPolicy::inboundAllowed(
+                        transmit ? "TransmitModel" : notch ? "NotchModel" : "SliceModel", name));
+                    if (transmit) { ++transmitCount; }
+                    else if (notch) { ++notchCount; }
+                    else { ++count; }
                 }
             }
         }
-        QCOMPARE(count, 50);
+        QCOMPARE(count, 63);
+        QCOMPARE(transmitCount, 14);
+        QCOMPARE(settingCount, 21);
+        QCOMPARE(notchCount, 1);
+        QCOMPARE(readoutCount, 1);
         QJsonObject valid = pages.first().toObject().value("sections").toArray().first()
             .toObject().value("controls").toArray().first().toObject();
         QJsonObject bad = valid;
@@ -215,6 +250,22 @@ private slots:
         bad = valid;
         bad.insert("binding", binding);
         QVERIFY(!SetupDescriptionService::validateActiveSlicePropertyBinding(bad));
+        QJsonObject options = pages.at(8).toObject().value("sections").toArray()
+            .first().toObject().value("controls").toArray().first().toObject();
+        QVERIFY(SetupDescriptionService::validateDspSettingBinding(options));
+        bad = options;
+        bad.insert("kind", "toggle");
+        QVERIFY(!SetupDescriptionService::validateDspSettingBinding(bad));
+        bad = options;
+        QJsonObject settingBinding = bad.value("binding").toObject();
+        settingBinding.insert("setting", "DspOptionsBufferSizeCwTx");
+        bad.insert("binding", settingBinding);
+        QVERIFY(!SetupDescriptionService::validateDspSettingBinding(bad));
+        bad = options;
+        QJsonArray wrongChoices = bad.value("choices").toArray();
+        wrongChoices[0] = "2048";
+        bad.insert("choices", wrongChoices);
+        QVERIFY(!SetupDescriptionService::validateDspSettingBinding(bad));
         ref.insert("name", "nr1Taps");
         ref.insert("object", "slice:0"); // must be late-bound to this device's selection
         binding.insert("property", ref);
