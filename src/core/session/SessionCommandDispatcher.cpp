@@ -260,6 +260,7 @@
 #include <QMetaObject>
 #include <QMetaType>
 #include <QSet>
+#include <QThread>
 #include <QVariant>
 
 #include <limits>
@@ -642,6 +643,9 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
          kRadioIdentitySessionProtocolMinor},
         {"setAlexRxAntenna", {arg("band", kInt), arg("antenna", kInt), arg("rxOnly", kBool)},
          "radioHardwareVersion", 3, kRadioIdentitySessionProtocolMinor},
+        {"setAlexRxAntennaForRadio",
+         {arg("mac", kUtf8), arg("band", kInt), arg("antenna", kInt), arg("rxOnly", kBool)},
+         "radioAntennaRowsVersion", 1, kRadioIdentitySessionProtocolMinor},
         {"setAlexBpfMode", {arg("chain", kInt), arg("mode", kInt)}, "radioHardwareVersion", 4,
          kRadioIdentitySessionProtocolMinor},
         // iPhone app plan Task 34 (R-IOS-02, ruling 8.10): move the TX flag
@@ -678,6 +682,8 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
          kRadioIdentitySessionProtocolMinor},
         {"setAlexTxAntenna", {arg("band", kInt), arg("antenna", kInt)},
          "radioHardwareVersion", 6, kRadioIdentitySessionProtocolMinor},
+        {"setAlexTxAntennaForRadio", {arg("mac", kUtf8), arg("band", kInt), arg("antenna", kInt)},
+         "radioAntennaRowsVersion", 1, kRadioIdentitySessionProtocolMinor},
         // HL2 Options' I2C tool and Pin Control (R-R3-46, parity Task 14).
         {"requestIoBoardI2c",
          {arg("bus", kInt), arg("address", kInt), arg("register", kInt), arg("write", kBool),
@@ -817,6 +823,67 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
          kRadioIdentitySessionProtocolMinor},
     };
     return specs;
+}
+
+QString SessionCommandDispatcher::radioAntennaRowRefusal(const SessionMessage& invoke,
+                                                          const RadioModel* radioModel)
+{
+    const bool rx = invoke.commandVerb == "setAlexRxAntennaForRadio";
+    const bool tx = invoke.commandVerb == "setAlexTxAntennaForRadio";
+    if (!rx && !tx) {
+        return {};
+    }
+
+    QString mac;
+    int band = 0;
+    int antenna = 0;
+    QVariant rxOnly;
+    const auto exactInt64 = [&invoke](const QByteArray& name, int* value) {
+        for (const MirrorUpdate& argument : invoke.arguments) {
+            if (argument.name != name) {
+                continue;
+            }
+            return argument.kind == MirrorWireKind::Int64
+                && argument.value.typeId() == QMetaType::LongLong
+                && findIntArgument(invoke.arguments, name, value) == ArgumentStatus::Ok;
+        }
+        return false;
+    };
+    if (!hasExactlyArguments(invoke.arguments, rx
+            ? std::initializer_list<QByteArray>{"mac", "band", "antenna", "rxOnly"}
+            : std::initializer_list<QByteArray>{"mac", "band", "antenna"})
+        || !findUtf8Argument(invoke.arguments, "mac", &mac)
+        || !exactInt64("band", &band) || !exactInt64("antenna", &antenna)
+        || (rx && (!hasWireKind(invoke.arguments, "rxOnly", MirrorWireKind::Bool)
+                   || !findArgument(invoke.arguments, "rxOnly", &rxOnly)
+                   || rxOnly.typeId() != QMetaType::Bool))) {
+        return QStringLiteral("The Core could not read this request.");
+    }
+    if (band < 0 || band >= AlexAntennaFacade::kBandCount) {
+        return QStringLiteral("The Core keeps antennas for 14 bands.");
+    }
+    // The shared-setting classifier reads this row before the facade's
+    // setter. Reject an unusable port here so no other device is asked to
+    // confirm a change the existing one-band setter would refuse.
+    if (antenna < (rx && rxOnly.toBool() ? 0 : 1) || antenna > 3) {
+        return rx && rxOnly.toBool()
+            ? QStringLiteral("The receive-only input is none or 1 to 3.")
+            : QStringLiteral("Antennas are numbered 1 to 3.");
+    }
+    if (radioModel == nullptr || radioModel->thread() != QThread::currentThread()
+        || radioModel->role() != RadioModel::Role::Local
+        || !radioModel->boardCapabilities().hasAlexFilters
+        || radioModel->alexAntennaFacade() == nullptr
+        || !radioModel->alexAntennaFacade()->isBound()) {
+        return QStringLiteral("The Core has no antenna settings ready.");
+    }
+    const QString current = radioModel->currentRadioMac();
+    if (mac.isEmpty() || AppSettings::normalizedRadioMac(mac) != mac
+        || current.isEmpty() || AppSettings::normalizedRadioMac(current) != current
+        || mac != current) {
+        return QStringLiteral("This antenna change is for another radio or a disconnected radio.");
+    }
+    return {};
 }
 
 SessionCommandDispatcher::SessionCommandDispatcher(RadioModel* radioModel, QObject* parent)
@@ -1130,10 +1197,28 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         handleRequestIoBoardProbe(invoke);
     } else if (invoke.commandVerb == "setAlexRxAntenna") {
         handleSetAlexRxAntenna(invoke);
+    } else if (invoke.commandVerb == "setAlexRxAntennaForRadio") {
+        const QString refusal = radioAntennaRowRefusal(invoke, m_radioModel);
+        if (!refusal.isEmpty()) {
+            emitResult(invoke.commandVerb, invoke.commandId, false, refusal, {});
+        } else {
+            SessionMessage row = invoke;
+            row.arguments.removeIf([](const MirrorUpdate& arg) { return arg.name == "mac"; });
+            handleSetAlexRxAntenna(row);
+        }
     } else if (invoke.commandVerb == "setAlexBpfMode") {
         handleSetAlexBpfMode(invoke);
     } else if (invoke.commandVerb == "setAlexTxAntenna") {
         handleSetAlexTxAntenna(invoke);
+    } else if (invoke.commandVerb == "setAlexTxAntennaForRadio") {
+        const QString refusal = radioAntennaRowRefusal(invoke, m_radioModel);
+        if (!refusal.isEmpty()) {
+            emitResult(invoke.commandVerb, invoke.commandId, false, refusal, {});
+        } else {
+            SessionMessage row = invoke;
+            row.arguments.removeIf([](const MirrorUpdate& arg) { return arg.name == "mac"; });
+            handleSetAlexTxAntenna(row);
+        }
     } else if (invoke.commandVerb == "requestIoBoardI2c") {
         handleRequestIoBoardI2c(invoke);
     } else if (invoke.commandVerb == "setIoBoardOutput") {
@@ -1200,6 +1285,7 @@ bool SessionCommandDispatcher::refusedWhileOnAir(const SessionMessage& invoke)
         QByteArrayLiteral("setTgxlNetwork"), QByteArrayLiteral("saveTgxlSettings"),
         QByteArrayLiteral("setTgxlAntenna"), QByteArrayLiteral("setTgxlOperate"),
         QByteArrayLiteral("setTgxlBypass"), QByteArrayLiteral("setAlexRxAntenna"),
+        QByteArrayLiteral("setAlexRxAntennaForRadio"),
         QByteArrayLiteral("amp.operate"), QByteArrayLiteral("amp.standby"),
         QByteArrayLiteral("tuner.operate"), QByteArrayLiteral("tuner.bypass"),
         QByteArrayLiteral("tuner.antenna"), QByteArrayLiteral("rfkit.operate"),

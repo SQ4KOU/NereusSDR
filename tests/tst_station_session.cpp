@@ -438,6 +438,7 @@ private slots:
     void ioBoardProbeIsAskedOfTheCore();
     void windowBandAntennaEditKeepsTheCoresNewerBands();
     void windowTxBandAntennaEditKeepsTheCoresNewerBands();
+    void windowUsesBoundAntennaVerbAndCurrentMacWhenOffered();
     void windowShowsTheCoresIoBoard();
     void windowForgetsTheIoBoardOfACoreThatDoesNotOfferIt();
     void windowOcMatrixFollowsTheCore();
@@ -6420,9 +6421,12 @@ struct HardwareSession {
 const QString kHardwareMac = QStringLiteral("AA:BB:CC:DD:EE:01");  // makeStationRadioModel's
 
 void joinHardwareWindow(HardwareSession& s, AppSettings& serverSettings, QObject* owner,
-                        const QString& securityDir)
+                        const QString& securityDir, bool alexBoard = false)
 {
     s.core = makeStationRadioModel(0);
+    if (alexBoard) {
+        s.core->setBoardForTest(HPSDRHW::Hermes);
+    }
     s.stepAtt = std::make_unique<StepAttenuatorController>();
     s.stepAtt->setTickTimerEnabled(false);
     s.core->setStepAttController(s.stepAtt.get());
@@ -7007,6 +7011,47 @@ void TstStationSession::windowTxBandAntennaEditKeepsTheCoresNewerBands()
     QVERIFY(OperatorWording::isPlain(toast.last().at(0).toString()));
     QCOMPARE(s.core->alexController().txAnt(Band::Band15m), 1);
     QCOMPARE(s.core->alexController().txAnt(Band::Band20m), 3);
+}
+
+void TstStationSession::windowUsesBoundAntennaVerbAndCurrentMacWhenOffered()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    AppSettings settings(dir.filePath(QStringLiteral("bound-antenna.settings")));
+    HardwareSession s;
+    joinHardwareWindow(s, settings, this, m_securityDir.path(), true);
+    const auto cleanup = qScopeGuard([&s] { leaveHardwareSession(s); });
+    if (QTest::currentTestFailed()) {
+        return;
+    }
+    QCOMPARE(s.client->capabilities().radioAntennaRowsVersion, 1);
+    QCOMPARE(s.window->currentRadioMac(), kHardwareMac);
+
+    s.stationEnd->clearReceived();
+    s.window->alexAntennaFacade()->setRxAnt(Band::Band40m, 2);
+    QTRY_COMPARE(s.core->alexController().rxAnt(Band::Band40m), 2);
+    QJsonObject invoke;
+    for (const QByteArray& wire : s.stationEnd->received()) {
+        const QJsonObject message = QJsonDocument::fromJson(wire).object();
+        if (message.value(QStringLiteral("type")) == QStringLiteral("command.invoke")) {
+            invoke = message;
+            break;
+        }
+    }
+    QCOMPARE(invoke.value(QStringLiteral("verb")).toString(),
+             QStringLiteral("setAlexRxAntennaForRadio"));
+    bool foundMac = false;
+    for (const QJsonValue& value : invoke.value(QStringLiteral("args")).toArray()) {
+        const QJsonObject arg = value.toObject();
+        if (arg.value(QStringLiteral("name")) == QStringLiteral("mac")) {
+            QCOMPARE(arg.value(QStringLiteral("kind")).toString(), QStringLiteral("utf8"));
+            QCOMPARE(arg.value(QStringLiteral("value")).toString(), kHardwareMac);
+            foundMac = true;
+        }
+    }
+    QVERIFY(foundMac);
+    s.stationEnd->closeLink(QStringLiteral("test session ended"));
+    QTRY_COMPARE(s.client->capabilities().radioAntennaRowsVersion, 0);
 }
 
 void TstStationSession::windowFilterPolicyReachesTheCore()

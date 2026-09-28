@@ -7962,6 +7962,10 @@ nereus_add_test(tst_antenna_kept
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)
 target_compile_definitions(tst_antenna_kept PRIVATE NEREUS_BUILD_TESTS)
+nereus_add_test(tst_radio_bound_antenna_rows
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+target_compile_definitions(tst_radio_bound_antenna_rows PRIVATE NEREUS_BUILD_TESTS)
 nereus_add_test(tst_confirm_step
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)

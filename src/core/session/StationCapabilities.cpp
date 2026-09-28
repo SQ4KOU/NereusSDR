@@ -343,6 +343,9 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
             updates.append(intEntry("miniDisplayVersion", miniDisplayVersion));
         }
         updates.append(intEntry("accessoryTxVersion", accessoryTxVersion));
+        if (radioAntennaRowsVersion == 1) {
+            updates.append(intEntry("radioAntennaRowsVersion", radioAntennaRowsVersion));
+        }
     }
     if (coreBuildInfo) {
         const QByteArray json = coreBuildInfo->toJson();
@@ -570,7 +573,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                    || u.name == "txStateVersion"
                    || u.name == "txReadingsVersion"
                    || u.name == "remoteIqVersion"
-                   || u.name == "miniDisplayVersion") {
+                   || u.name == "miniDisplayVersion"
+                   || u.name == "radioAntennaRowsVersion") {
             // R-R3-47 / R-R3-22 / R-R3-48: sent in the same block as the
             // four above.
             caps.radioIdentityEntries = true;
@@ -587,6 +591,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                     caps.accessoryDataVersion = version;
                 } else if (u.name == "accessoryTxVersion") {
                     caps.accessoryTxVersion = version;
+                } else if (u.name == "radioAntennaRowsVersion") {
+                    caps.radioAntennaRowsVersion = version == 1 ? 1 : 0;
                 } else if (u.name == "stationIdentityVersion") {
                     caps.stationIdentityVersion = version;
                 } else if (u.name == "deviceAdminVersion") {

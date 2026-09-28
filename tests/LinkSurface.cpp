@@ -440,7 +440,8 @@ QJsonObject captureMessageKinds()
 // itself adds none. `configure` runs on the server before the peer connects.
 // nullopt when the session does not complete; `error` then says why.
 std::optional<QList<QByteArray>> liveSessionWire(
-    const std::function<void(StationServer&)>& configure, QString* error)
+    const std::function<void(StationServer&)>& configure, QString* error,
+    bool alexBoard = false)
 {
     QTemporaryDir dir;
     if (!dir.isValid()) {
@@ -465,11 +466,11 @@ std::optional<QList<QByteArray>> liveSessionWire(
     model->enableStationAccessoryIdentity();
     model->enableStationTci(QStringLiteral("127.0.0.1"));
     model->setStepAttController(stepAtt.get());
-    model->setBoardForTest(HPSDRHW::HermesLite);
+    model->setBoardForTest(alexBoard ? HPSDRHW::Hermes : HPSDRHW::HermesLite);
     RadioInfo info;
     info.macAddress = QStringLiteral("AA:BB:CC:DD:EE:01");
     info.name = QStringLiteral("Link surface");
-    info.boardType = HPSDRHW::HermesLite;
+    info.boardType = alexBoard ? HPSDRHW::Hermes : HPSDRHW::HermesLite;
     model->setLastRadioInfoForTest(info);
     model->setConnectionStateForTest(ConnectionState::Connected);
     model->addSlice(QStringLiteral("pan-0"));
@@ -540,7 +541,8 @@ std::optional<QList<QByteArray>> liveSessionWire(
         {kSessionProtocolMajor}, {{"deviceAuth", 1}, {"sessionHolder", 1}, {"remoteTx", 1},
                                   {"settingsHygiene", 1}, {"coreBuildInfo", 1},
                                   {"settingsBackup", 1},
-                                  {"setupDescription", 1}, {"miniDisplay", 1}})));
+                                  {"setupDescription", 1}, {"miniDisplay", 1},
+                                  {"radioAntennaRows", 1}})));
     clientEnd->sendText(SessionMessages::encode(SessionMessages::authRequest({}, block)));
 
     // The loopback delivers on later event-loop turns, as a socket would.
@@ -576,6 +578,7 @@ QJsonArray captureCapabilities()
     caps.remoteIqVersion = 1;
     caps.setupDescriptionVersion = 1;
     caps.miniDisplayVersion = 1;
+    caps.radioAntennaRowsVersion = 1;
 
     // The values come from a live station with every feature a Core can
     // switch on: media, telemetry, an enforced display budget with its
@@ -605,6 +608,26 @@ QJsonArray captureCapabilities()
             for (const QJsonValue& entry : o.value(QStringLiteral("properties")).toArray()) {
                 const QJsonObject e = entry.toObject();
                 live.insert(e.value(QStringLiteral("name")).toString(), e);
+            }
+            break;
+        }
+    }
+    // The default object-key fixture is an HL2, which has no Alex filter
+    // board. Capture the optional radio-bound edit offer from an otherwise
+    // identical connected Hermes Core instead of inventing a value.
+    QString alexError;
+    const auto alexWire = liveSessionWire({}, &alexError, true);
+    if (alexWire) {
+        for (const QByteArray& message : *alexWire) {
+            const QJsonObject o = QJsonDocument::fromJson(message).object();
+            if (o.value(QStringLiteral("type")) != QStringLiteral("capabilities")) {
+                continue;
+            }
+            for (const QJsonValue& entry : o.value(QStringLiteral("properties")).toArray()) {
+                const QJsonObject e = entry.toObject();
+                if (e.value(QStringLiteral("name")) == QStringLiteral("radioAntennaRowsVersion")) {
+                    live.insert(QStringLiteral("radioAntennaRowsVersion"), e);
+                }
             }
             break;
         }

@@ -656,6 +656,7 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
     m_declaredFeatures.insert(QByteArrayLiteral("settingsHygiene"), 1);
     m_declaredFeatures.insert(QByteArrayLiteral("coreBuildInfo"), 1);
     m_declaredFeatures.insert(QByteArrayLiteral("settingsBackup"), 1);
+    m_declaredFeatures.insert(QByteArrayLiteral("radioAntennaRows"), 1);
     m_settingsBackupReplyTimer = new QTimer(this);
     m_settingsBackupReplyTimer->setSingleShot(true);
     connect(m_settingsBackupReplyTimer, &QTimer::timeout, this, [this]() {
@@ -1656,6 +1657,7 @@ void StationClient::attachTransport(SessionTransport* transport, const QString& 
     m_lastTelemetrySequence = 0;
     m_lastTelemetrySampleElapsedMs = -1;
     m_capabilities.remoteDisplayBudgetVersion = 0;
+    m_capabilities.radioAntennaRowsVersion = 0;
     m_capabilities.coreBuildInfo.reset();
     m_capabilities.displayBudget.reset();
     m_capabilities.displayBudgetReason.reset();
@@ -1859,6 +1861,7 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
 
     m_capabilities.coreBuildInfo.reset();
     m_signedInWithDeviceKey = false;
+    m_capabilities.radioAntennaRowsVersion = 0;
     m_enrolledDeviceKey = false;
     m_hygieneValidateId = 0;
     m_hygieneValidateMac.clear();
@@ -4563,9 +4566,20 @@ StationClient::CommandOutcome StationClient::requestAlexRxAntenna(Band band, int
     if (!remoteHardwareConfigAvailable() || m_capabilities.radioHardwareVersion < 3) {
         return {false, hardwareConfigUnavailableReason()};
     }
-    return sendCommand("setAlexRxAntenna", -1,
-                       { intArgument("band", static_cast<int>(band)),
-                         intArgument("antenna", antenna), boolArgument("rxOnly", rxOnly) },
+    const bool radioBound = m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.radioAntennaRowsVersion == 1;
+    const QString mac = m_radioModel ? m_radioModel->currentRadioMac() : QString();
+    if (radioBound && (mac.isEmpty() || AppSettings::normalizedRadioMac(mac) != mac)) {
+        return {false, QStringLiteral("The Core's connected radio is not ready for this antenna change.")};
+    }
+    QList<MirrorUpdate> arguments;
+    if (radioBound) {
+        arguments.append(stringArgument("mac", mac));
+    }
+    arguments.append({intArgument("band", static_cast<int>(band)),
+                      intArgument("antenna", antenna), boolArgument("rxOnly", rxOnly)});
+    return sendCommand(radioBound ? "setAlexRxAntennaForRadio" : "setAlexRxAntenna", -1,
+                       arguments,
                        QStringLiteral("the antenna change"));
 }
 
@@ -4574,9 +4588,20 @@ StationClient::CommandOutcome StationClient::requestAlexTxAntenna(Band band, int
     if (!remoteTransmitAntennasAvailable()) {
         return {false, transmitAntennasUnavailableReason()};
     }
-    return sendCommand("setAlexTxAntenna", -1,
-                       { intArgument("band", static_cast<int>(band)),
-                         intArgument("antenna", antenna) },
+    const bool radioBound = m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.radioAntennaRowsVersion == 1;
+    const QString mac = m_radioModel ? m_radioModel->currentRadioMac() : QString();
+    if (radioBound && (mac.isEmpty() || AppSettings::normalizedRadioMac(mac) != mac)) {
+        return {false, QStringLiteral("The Core's connected radio is not ready for this antenna change.")};
+    }
+    QList<MirrorUpdate> arguments;
+    if (radioBound) {
+        arguments.append(stringArgument("mac", mac));
+    }
+    arguments.append({intArgument("band", static_cast<int>(band)),
+                      intArgument("antenna", antenna)});
+    return sendCommand(radioBound ? "setAlexTxAntennaForRadio" : "setAlexTxAntenna", -1,
+                       arguments,
                        QStringLiteral("the antenna change"));
 }
 
@@ -6331,7 +6356,9 @@ void StationClient::handleCommandResult(const SessionMessage& message)
         }
         // R-R3-46 fix wave: a refused band antenna leaves the window's
         // values as the Core's; the Setup tab that showed the click re-reads.
-        if (pending.verb == "setAlexRxAntenna" || pending.verb == "setAlexTxAntenna") {
+        if (pending.verb == "setAlexRxAntenna" || pending.verb == "setAlexTxAntenna"
+            || pending.verb == "setAlexRxAntennaForRadio"
+            || pending.verb == "setAlexTxAntennaForRadio") {
             if (AlexAntennaFacade* alex = m_radioModel->alexAntennaFacade()) {
                 alex->reportBandEditRefused();
             }

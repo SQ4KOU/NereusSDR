@@ -262,6 +262,11 @@ public:
     /// fired by the time dispatch() itself returns.
     void dispatch(const NereusSDR::SessionMessage& invoke);
 
+    /// Check a radio-bound Alex row before shared-setting classification and
+    /// again on the RadioModel owner thread at application.
+    static QString radioAntennaRowRefusal(const NereusSDR::SessionMessage& invoke,
+                                          const RadioModel* radioModel);
+
     /// iPhone app Task 72 (ruling 5.8): the session the dispatches that
     /// follow act for, as `station:<sessionId>`. The Core sets it before
     /// each dispatch, so a DSP-asset job belongs to the device that started

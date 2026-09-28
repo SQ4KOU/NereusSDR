@@ -2399,6 +2399,24 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     // authenticated replacement already received its own initial snapshot,
     // and an old callback must never refresh it.
     if (m_radioModel) {
+        // Withdrawing the optional row edit offer is meaningful while a
+        // session stays up across a radio disconnect. A later connected
+        // radio is refreshed by currentRadioChanged below.
+        connect(m_radioModel, &RadioModel::connectionStateChanged, this,
+                [this](ConnectionState state) {
+                    if (state == ConnectionState::Connected) {
+                        return;
+                    }
+                    for (auto it = m_peers.cbegin(); it != m_peers.cend(); ++it) {
+                        if (!it->authenticated || !it->snapshotComplete
+                            || it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                            || it->features.value(QByteArrayLiteral("radioAntennaRows")) != 1) {
+                            continue;
+                        }
+                        send(it.key(), SessionMessages::capabilities(
+                            buildCapabilitiesFor(it.key()).toUpdates()));
+                    }
+                });
         // iPhone app Task 71: every admitted session, each with its own
         // capabilities. A session that ended (its transport gone) or a
         // connection no longer admitted is skipped.
@@ -4319,8 +4337,14 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
             // Fix wave I2 (ruling 8.11): closing the frozen transmit slice,
             // or moving it to another band, waits for the radio's press to
             // end.
-            const TxRefusal frozen = freezeRefusalFor(message);
-            if (!frozen.isEmpty()) {
+            const QString antennaRefusal = radioAntennaRowRefusal(transport, message);
+            const TxRefusal frozen = antennaRefusal.isEmpty() ? freezeRefusalFor(message)
+                                                                 : TxRefusal{};
+            if (!antennaRefusal.isEmpty()) {
+                send(transport, SessionMessages::commandResult(
+                    message.commandVerb, message.commandId, false, antennaRefusal, {}));
+                m_resultSentInDispatch = true;
+            } else if (!frozen.isEmpty()) {
                 send(transport, SessionMessages::commandResult(
                     message.commandVerb, message.commandId, false, frozen.text, {},
                     {{0, "refusalCode", MirrorWireKind::Utf8, QString::fromUtf8(frozen.code)},
@@ -9483,6 +9507,25 @@ int StationServer::radioHardwareVersion() const
     return m_radioModel->ioBoardFacade()->isBound() ? 7 : 2;
 }
 
+QString StationServer::radioAntennaRowRefusal(SessionTransport* transport,
+                                              const SessionMessage& invoke) const
+{
+    if (invoke.commandVerb != "setAlexRxAntennaForRadio"
+        && invoke.commandVerb != "setAlexTxAntennaForRadio") {
+        return {};
+    }
+    const auto peer = m_peers.constFind(peerKey(transport));
+    if (peer == m_peers.cend() || !peer->authenticated
+        || peer->agreedMinor < kRadioIdentitySessionProtocolMinor
+        || peer->features.value(QByteArrayLiteral("radioAntennaRows")) != 1) {
+        return QStringLiteral("Update this app to change this radio's antenna row on this Core.");
+    }
+    if (radioHardwareVersion() < 6) {
+        return QStringLiteral("The Core has no antenna settings ready.");
+    }
+    return SessionCommandDispatcher::radioAntennaRowRefusal(invoke, m_radioModel);
+}
+
 StationCapabilities StationServer::buildCapabilities() const
 {
     // What the primary media session is told (with none, what a first
@@ -9553,6 +9596,18 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             // R-R3-47 / R-R3-22: the Core's accessory records and settings.
             caps.accessoryDataVersion = accessoryDataVersion();
             caps.accessoryTxVersion = accessoryTxVersion();
+            // A radio-bound row needs the complete existing antenna path,
+            // an Alex board, and an exactly named connected radio.
+            const QString currentMac = m_radioModel->currentRadioMac();
+            caps.radioAntennaRowsVersion = peer->features.value(
+                    QByteArrayLiteral("radioAntennaRows")) == 1
+                && m_radioModel->role() == RadioModel::Role::Local
+                && caps.radioHardwareVersion >= 6
+                && board.hasAlexFilters
+                && m_radioModel->alexAntennaFacade() != nullptr
+                && m_radioModel->alexAntennaFacade()->isBound()
+                && !currentMac.isEmpty()
+                && AppSettings::normalizedRadioMac(currentMac) == currentMac ? 1 : 0;
             // R-R3-47 / R-R3-22: the Tuner Genius's own settings.
             caps.remoteTgxlControlVersion = tgxlControlVersion();
             // iPhone app Task 12 (R-IOS-08): device sign-in by key, last.
