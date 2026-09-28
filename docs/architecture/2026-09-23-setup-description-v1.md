@@ -47,6 +47,7 @@ closed `settingsHygiene` panel described below. Numeric controls carry
 `min`, `max`, `step` and, where shown, `unit`. Choices have an ordered `choices`
 array. A table has `rows`, `columns` and a cell kind. `tooltip` is the
 desktop's exact text, including an empty string when the desktop has none.
+
 Every control has exactly one `binding`: `setting` (an AppSettings key routed
 by `classifySettingsKey`), `property` (a mirrored object and property),
 `command` (a station verb), or `phone` (a key the phone keeps locally). The
@@ -71,6 +72,19 @@ control; a permission gate disables its control with the Core's reason.
 unavailable desktop control visible with the same plain reason. General's
 Extended control uses this pending its migration policy; no edit is sent while
 unavailable. Region requires transmitSettingsVersion 9 and the offAir gate.
+
+Appearance > Colors & Theme currently publishes a partial phone-owned page of
+ten built spectrum swatches. Each is `kind:"colour"`, `applies:"live"`, and has
+a literal PascalCase `binding.phone`; the phone owns per-pan persistence and
+never sends these values to the Core settings proxy. Each `default` and each
+edited value at this boundary is an eight-digit `#RRGGBBAA` string, including
+the final alpha byte. This is ColorSwatchButton's phone-facing format; the
+desktop's own AppSettings uses Qt `HexArgb` (`#AARRGGBB`) and is not copied to
+the phone. Core accepts only the ten named IDs/phone keys and exact default
+colours. The hidden Waterfall Low Color row, Reset Colors action, and Meter
+Styles controls remain undescribed. Appearance's source category is V4 so its
+RGBA defaults are sent only to V4+ peers; older projections retain all ten
+colour controls without `default`. No station settings permission is needed.
 
 An optional `decimals` field on a `kind:readout` control is an integer from 0
 through 6. It formats a finite numeric mirrored value with that many decimal
@@ -100,8 +114,9 @@ command or result binding. The actual peer must separately declare
 nothing. A V3 peer still receives the older controls with their existing
 semantics. The Core filters every control above the peer's negotiated
 description version, drops empty sections and pages, and caps an unknown
-future declaration at version 6. Hardware has a version-6 ceiling, Display a
-version-4 ceiling; the other categories on this source retain version 3.
+future declaration at version 6. Hardware has a version-6 ceiling, PA a
+version-5 ceiling, Display and Appearance version-4 ceilings; the other
+categories on this source retain version 3.
 No mirror field or ordinal changes.
 
 Version 6 adds exactly two closed `kind: "table"` controls to the partial
@@ -135,6 +150,22 @@ uses only the existing `setAlexTxAntennaForRadio` or
 rechecks identity and authority and sends the accepted mirror or refusal.
 The Setup description revision is not a per-row state revision.
 
+Version 5 adds only two optional PA Values telemetry readouts. The closed
+bindings are `{"telemetry":{"object":"radio","name":"paCurrentAmps"}}`
+for `PA Current:` (two decimals, A) and
+`{"telemetry":{"object":"radio","name":"supplyVolts"}}` for
+`DC Voltage:` (one decimal, V). No other telemetry object or field is a
+Setup binding.
+Both require `stationTelemetryVersion:4`, send no writes, and have no
+transmit-permission or off-air gate. The Core projects each row away when its
+board lacks the corresponding amps or volts telemetry; the whole PA category
+still requires an integrated PA and a non-RX-only SKU. Missing, malformed,
+nonfinite, disconnected, or stale-session values are unavailable, while a
+present zero is rendered as zero. The phone renderer must apply that freshness
+rule to the existing optional station telemetry wire. V1–V4 projections omit
+both rows; PA alone has a version-5 ceiling. This adds no peak/min/reset,
+temperature conversion, derived formula, or Core command.
+
 Version 4 publishes the partial Display category. Its station-scoped controls
 cover Spectrum Defaults FFT/window/Hz-per-bin/FPS, Multimeter polling delay,
 and TX Display FFT/window/panadapter/waterfall analyzer settings. The RX quartet
@@ -145,6 +176,17 @@ running objects, and these keys are not RX subscription fields. All TX Display
 controls require `txDisplayVersion: 2`. They have no transmit-permission or
 off-air gate because the desktop changes display processing while on air.
 Absent, malformed, stale, or unavailable settings disable their controls.
+
+V4 adds `default` metadata to these exact Display and Appearance controls.
+Display toggles use JSON booleans; its numeric controls use JSON numbers,
+with choice defaults as integer ordinals and FFT option defaults as their
+actual integer values. Appearance colour defaults are eight-digit
+`#RRGGBBAA` strings. Display's Hz/bin `kind:"decimal"` has `decimals:2` in
+V4. For V1–V3 peers, the Core strips `default` from all Display and Appearance
+controls and strips `decimals` from `kind:"decimal"`; it retains the controls,
+their older bindings and gates, and all existing `kind:"readout"` decimals in
+other categories. This is a closed extension of those two published
+categories, not permission to add arbitrary default or precision fields.
 
 The two FFT-size controls are the only V4 `kind: "slider"` controls with an
 `options` array. Each option is exactly `{ "value": 4096 * 2^index,

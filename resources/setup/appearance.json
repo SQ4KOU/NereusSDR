@@ -1,0 +1,134 @@
+{
+  "version": 4,
+  "category": {
+    "id": "appearance",
+    "title": "Appearance",
+    "where": "phone",
+    "coverage": "partial"
+  },
+  "pages": [
+    {
+      "id": "appearance.colorsTheme",
+      "title": "Colors & Theme",
+      "where": "phone",
+      "coverage": "partial",
+      "sections": [
+        {
+          "title": "Spectrum",
+          "controls": [
+            {
+              "id": "appearance.colorsTheme.traceFillColor",
+              "label": "Trace & Fill Color:",
+              "tooltip": "Click to choose the spectrum trace line and fill colour. QColorDialog lets you adjust alpha for the fill opacity.",
+              "kind": "colour",
+              "binding": {
+                "phone": "DisplayFillColor"
+              },
+              "applies": "live",
+              "default": "#00E5FFFF"
+            },
+            {
+              "id": "appearance.colorsTheme.gridColor",
+              "label": "Grid Color:",
+              "tooltip": "Color of the major vertical grid lines on the panadapter.",
+              "kind": "colour",
+              "binding": {
+                "phone": "DisplayGridColor"
+              },
+              "applies": "live",
+              "default": "#FFFFFF28"
+            },
+            {
+              "id": "appearance.colorsTheme.gridFineColor",
+              "label": "Grid Fine Color:",
+              "tooltip": "Color of the minor (fine) grid lines between major grid lines on the panadapter.",
+              "kind": "colour",
+              "binding": {
+                "phone": "DisplayGridFineColor"
+              },
+              "applies": "live",
+              "default": "#FFFFFF14"
+            },
+            {
+              "id": "appearance.colorsTheme.hGridColor",
+              "label": "H-Grid Color:",
+              "tooltip": "Color of the horizontal dB grid lines on the panadapter.",
+              "kind": "colour",
+              "binding": {
+                "phone": "DisplayHGridColor"
+              },
+              "applies": "live",
+              "default": "#FFFFFF28"
+            },
+            {
+              "id": "appearance.colorsTheme.gridTextColor",
+              "label": "Grid Text Color:",
+              "tooltip": "Color of the frequency and dB labels drawn on the panadapter grid.",
+              "kind": "colour",
+              "binding": {
+                "phone": "DisplayGridTextColor"
+              },
+              "applies": "live",
+              "default": "#FFFF00FF"
+            },
+            {
+              "id": "appearance.colorsTheme.bandEdgeColor",
+              "label": "Band Edge Color:",
+              "tooltip": "Color of the band edge markers drawn at the amateur band boundaries on the panadapter.",
+              "kind": "colour",
+              "binding": {
+                "phone": "DisplayBandEdgeColor"
+              },
+              "applies": "live",
+              "default": "#FF0000FF"
+            },
+            {
+              "id": "appearance.colorsTheme.rxZeroLineColor",
+              "label": "RX Zero Line Color:",
+              "tooltip": "Colour of the RX zero line (0 dBm marker) drawn on the panadapter when Show zero line is checked.",
+              "kind": "colour",
+              "binding": {
+                "phone": "DisplayRxZeroLineColor"
+              },
+              "applies": "live",
+              "default": "#FF0000FF"
+            },
+            {
+              "id": "appearance.colorsTheme.txZeroLineColor",
+              "label": "TX Zero Line Color:",
+              "tooltip": "Colour of the TX zero line drawn on the panadapter and waterfall at the TX centre frequency when transmitting (MOX active).",
+              "kind": "colour",
+              "binding": {
+                "phone": "DisplayTxZeroLineColor"
+              },
+              "applies": "live",
+              "default": "#FFB800FF"
+            },
+            {
+              "id": "appearance.colorsTheme.rxFilterColor",
+              "label": "RX Passband Color:",
+              "tooltip": "Click to choose the RX passband overlay colour and opacity. Shown on the panadapter and waterfall slice band during receive.",
+              "kind": "colour",
+              "binding": {
+                "phone": "DisplayRxFilterColor"
+              },
+              "applies": "live",
+              "default": "#00B4D850"
+            },
+            {
+              "id": "appearance.colorsTheme.txFilterColor",
+              "label": "TX Passband Color:",
+              "tooltip": "Click to choose the TX passband overlay colour and opacity. Shown on the panadapter and waterfall during MOX/TUNE.",
+              "kind": "colour",
+              "binding": {
+                "phone": "DisplayTxFilterColor"
+              },
+              "applies": "live",
+              "default": "#FF783C2E"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

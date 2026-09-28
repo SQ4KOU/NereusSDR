@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 5,
   "category": {"id": "pa", "title": "PA", "where": "station", "coverage": "partial"},
   "pages": [{
     "id": "pa.gain", "title": "PA Gain", "where": "station", "coverage": "partial",
@@ -14,6 +14,10 @@
         {"id": "pa.values.reflectedPower", "label": "Reflected:", "tooltip": "", "kind": "readout", "binding": {"property": {"object": "txState", "name": "reflectedPowerWatts"}}, "applies": "live", "gate": {"capability": "txReadingsVersion", "min": 1}, "decimals": 2, "unit": "W"},
         {"id": "pa.values.swr", "label": "SWR:", "tooltip": "", "kind": "readout", "binding": {"property": {"object": "txState", "name": "swr"}}, "applies": "live", "gate": {"capability": "txReadingsVersion", "min": 1}, "decimals": 2, "unit": ""},
         {"id": "pa.values.drive", "label": "Drive:", "tooltip": "", "kind": "readout", "binding": {"property": {"object": "transmit", "name": "power"}}, "applies": "live", "gate": {"capability": "transmitSettingsVersion", "min": 1}, "decimals": 0, "unit": "W"}
+      ]},
+      {"title": "PA Telemetry", "controls": [
+        {"id": "pa.values.paCurrent", "label": "PA Current:", "tooltip": "", "kind": "readout", "binding": {"telemetry": {"object": "radio", "name": "paCurrentAmps"}}, "applies": "live", "gate": {"capability": "stationTelemetryVersion", "min": 4}, "requiresDescriptionVersion": 5, "decimals": 2, "unit": "A"},
+        {"id": "pa.values.dcVoltage", "label": "DC Voltage:", "tooltip": "", "kind": "readout", "binding": {"telemetry": {"object": "radio", "name": "supplyVolts"}}, "applies": "live", "gate": {"capability": "stationTelemetryVersion", "min": 4}, "requiresDescriptionVersion": 5, "decimals": 1, "unit": "V"}
       ]},
       {"title": "Raw ADC Values", "controls": [
         {"id": "pa.values.forwardAdc", "label": "FWD ADC:", "tooltip": "", "kind": "readout", "binding": {"property": {"object": "txState", "name": "forwardAdcRaw"}}, "applies": "live", "gate": {"capability": "txReadingsVersion", "min": 1}, "decimals": 0, "unit": ""},

@@ -10,5 +10,6 @@
         <file alias="display.json">setup/display.json</file>
         <file alias="transmit.json">setup/transmit.json</file>
         <file alias="audio.json">setup/audio.json</file>
+        <file alias="appearance.json">setup/appearance.json</file>
     </qresource>
 </RCC>
