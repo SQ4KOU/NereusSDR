@@ -446,14 +446,14 @@ void RxApplet::buildUi()
         row->setSpacing(3);
 
         // Control 1: Slice letter badge (A/B/C/D)
-        // 20×20, bg #0070c0, white text, 3px radius
+        // 20×20, slice-identity background, white text, 3px radius
         m_sliceBadge = new QLabel(QStringLiteral("A"), this);
         m_sliceBadge->setFixedSize(20, 20);
         m_sliceBadge->setAlignment(Qt::AlignCenter);
         m_sliceBadge->setStyleSheet(QStringLiteral(
             "QLabel { background: %1; color: %2;"
             " border-radius: 3px; font-weight: bold; font-size: 11px; }"
-        ).arg(Style::kBlueBg, Style::kBlueText));
+        ).arg(VfoWidget::sliceColor(0).name(), Style::kBlueText));
         row->addWidget(m_sliceBadge);
 
         // Control 2: Lock button (checkable, 20×20, emoji 🔓/🔒)
@@ -1394,6 +1394,10 @@ void RxApplet::setSliceIndex(int idx)
     static const char* kLetters[] = {"A", "B", "C", "D"};
     if (idx >= 0 && idx < 4) {
         m_sliceBadge->setText(QString::fromLatin1(kLetters[idx]));
+        m_sliceBadge->setStyleSheet(QStringLiteral(
+            "QLabel { background: %1; color: %2;"
+            " border-radius: 3px; font-weight: bold; font-size: 11px; }"
+        ).arg(VfoWidget::sliceColor(idx).name(), Style::kBlueText));
     }
 }
 

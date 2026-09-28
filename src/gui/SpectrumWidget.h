@@ -1451,10 +1451,13 @@ public:
     /// order.
     ///
     /// This is drawVfoMarker()'s whole decision, split out so it is reachable
-    /// without a live QPainter or a shown QRhiWidget: the harness cannot
-    /// render this widget, so the geometry is what gets pinned and the pixel
-    /// emission is what does not. See tests/tst_pan_flag_positions.cpp.
+    /// without a shown QRhiWidget. See tests/tst_pan_flag_positions.cpp.
     QVector<SliceMarkerGeometry> sliceMarkerGeometry() const;
+    /// Paint-only seams for palette assertions without a shown QRhiWidget.
+    void drawOwnMarkersForTest(QPainter& p, const QRect& specRect, const QRect& wfRect)
+    { drawVfoMarker(p, specRect, wfRect); }
+    void drawOffScreenIndicatorForTest(QPainter& p, const QRect& specRect, const QRect& wfRect)
+    { drawOffScreenIndicator(p, specRect, wfRect); }
 
 public slots:
     // Phase 3Q-8: update connection state for the disconnect overlay.
