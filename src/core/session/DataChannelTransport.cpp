@@ -856,6 +856,9 @@ void DataChannelTransport::setSelectedPathOverrideForTest(SelectedPathOverride o
 
 std::optional<MediaIcePath> DataChannelTransport::selectedPath() const
 {
+    if (thread() != QThread::currentThread() || m_closing) {
+        return std::nullopt;
+    }
     if (selectedPathOverride()) {
         return selectedPathOverride()(this);
     }
@@ -872,15 +875,28 @@ std::optional<MediaIcePath> DataChannelTransport::selectedPath() const
         path.localType = typeName(local);
         path.remoteType = typeName(remote);
         path.localAddress = QString::fromStdString(local.address().value_or(std::string()));
+        path.localPort = local.port().value_or(0);
         path.remoteAddress = QString::fromStdString(remote.address().value_or(std::string()));
         path.remotePort = remote.port().value_or(0);
         path.farEndRelays = m_farEndRelays;
         const auto endpoint = MediaIcePath::loopbackEndpoint(path.remoteAddress, path.remotePort);
         path.ownedLoopbackShim = endpoint && m_ownedShimEndpoints.contains(*endpoint);
+        if (path.ownedLoopbackShim && m_candidateSourceLease) {
+            path.ownedSourcePath = m_candidateSourceLease->networkPathSnapshot();
+        }
         return path;
     } catch (const std::exception&) {
         return std::nullopt;
     }
+}
+
+std::optional<NetworkPathSnapshot> DataChannelTransport::networkPathSnapshot() const
+{
+    if (thread() != QThread::currentThread() || !isOpen()) {
+        return std::nullopt;
+    }
+    const std::optional<MediaIcePath> path = selectedPath();
+    return path ? path->networkPathSnapshot() : std::nullopt;
 }
 
 void DataChannelTransport::sendText(const QByteArray& wire)

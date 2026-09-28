@@ -39,6 +39,7 @@
 #include <QWebSocketServer>
 
 #include <memory>
+#include <thread>
 
 #include "OperatorWording.h"
 #include "core/security/StationIdentity.h"
@@ -158,6 +159,49 @@ class TstRelayLeg final : public QObject {
 private slots:
     void initTestCase() { QStandardPaths::setTestModeEnabled(true); }
     void cleanup() { SystemProxy::setProxyForTest(std::nullopt); }
+
+    void routeObservationFollowsUsablePeerAndCurrentSocket()
+    {
+        RelayPlayer relay;
+        auto leg = RelayLeg::create();
+        QVERIFY(leg);
+        auto source = leg->sourceFor(IceConfiguration::kControlLane);
+        QVERIFY(source);
+        source->start([](const QString&) {});
+        QVERIFY(!source->networkPathSnapshot());
+        leg->open(relay.url(), QStringLiteral("test-token"));
+        auto first = relay.waitForConnection();
+        QVERIFY(first);
+        QTRY_VERIFY(!first->received.isEmpty());
+        first->socket->sendBinaryMessage(QByteArray("\x81\x01\x00", 3));
+        QTRY_COMPARE(leg->state(), RelayLeg::State::Joined);
+        QVERIFY(!source->networkPathSnapshot()); // Joined, but no peer.
+        first->socket->sendBinaryMessage(QByteArray("\x82\x01", 2));
+        QTRY_VERIFY(leg->peerPresent());
+        const auto route = source->networkPathSnapshot();
+        QVERIFY(route);
+        QCOMPARE(route->carrier, NetworkPathSnapshot::Carrier::WebRelay);
+        QCOMPARE(route->kind, NetworkPathSnapshot::Kind::Relayed);
+        QCOMPARE(route->endpoints, NetworkPathSnapshot::Endpoints::Socket);
+        QCOMPARE(route->remoteAddress, QStringLiteral("127.0.0.1"));
+        QCOMPARE(route->remotePort, relay.server->serverPort());
+        QVERIFY(route->localPort != 0);
+        std::optional<NetworkPathSnapshot> wrongThread;
+        std::thread observer([&] { wrongThread = source->networkPathSnapshot(); });
+        observer.join();
+        QVERIFY(!wrongThread);
+        first->socket->close();
+        QTRY_VERIFY(!source->networkPathSnapshot());
+        auto next = relay.waitForConnection();
+        QVERIFY(next);
+        QTRY_VERIFY(!next->received.isEmpty());
+        QVERIFY(!source->networkPathSnapshot());
+        next->socket->sendBinaryMessage(QByteArray("\x81\x01\x01", 3));
+        QTRY_VERIFY(source->networkPathSnapshot().has_value());
+        source->stop();
+        QVERIFY(!source->networkPathSnapshot());
+        leg->close();
+    }
 
     void coreFixtures_data()
     {

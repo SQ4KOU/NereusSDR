@@ -29,6 +29,7 @@
 // =================================================================
 
 #include "core/session/IceConfiguration.h"
+#include "core/session/NetworkPathSnapshot.h"
 
 #include <QByteArray>
 #include <QHostAddress>
@@ -48,6 +49,7 @@ struct MediaIcePath {
     QString localType;
     QString remoteType;
     QString localAddress;
+    quint16 localPort = 0;
     QString remoteAddress;
     quint16 remotePort = 0;
     /// The relay candidates (`typ relay`) the far end sent, as address and
@@ -56,6 +58,35 @@ struct MediaIcePath {
     /// The selected remote endpoint matches a loopback candidate admitted
     /// from this transport's own CandidateSource, not merely a loopback IP.
     bool ownedLoopbackShim = false;
+    std::optional<NetworkPathSnapshot> ownedSourcePath;
+
+    std::optional<NetworkPathSnapshot> networkPathSnapshot() const
+    {
+        if (ownedLoopbackShim) {
+            return ownedSourcePath;
+        }
+        const auto numeric = [](const QString& value) {
+            QHostAddress address(value);
+            if (address.isNull()) { return QString(); }
+            bool ipv4 = false;
+            const quint32 v4 = address.toIPv4Address(&ipv4);
+            if (ipv4) { address = QHostAddress(v4); }
+            address.setScopeId(QString());
+            return address.toString();
+        };
+        NetworkPathSnapshot path;
+        path.kind = relayed() ? NetworkPathSnapshot::Kind::Relayed
+                              : NetworkPathSnapshot::Kind::Direct;
+        path.carrier = NetworkPathSnapshot::Carrier::Ice;
+        path.endpoints = NetworkPathSnapshot::Endpoints::IceCandidates;
+        path.localAddress = numeric(localAddress);
+        path.localPort = localPort;
+        path.remoteAddress = numeric(remoteAddress);
+        path.remotePort = remotePort;
+        path.localCandidateType = localType;
+        path.remoteCandidateType = remoteType;
+        return path;
+    }
 
     static std::optional<QPair<QString, quint16>> loopbackEndpoint(const QString& address,
                                                                     quint16 port)

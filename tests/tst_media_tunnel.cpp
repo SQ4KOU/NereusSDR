@@ -29,6 +29,8 @@
 #include <QNetworkDatagram>
 #include <QUdpSocket>
 #include <QUuid>
+#include <QWebSocket>
+#include <QWebSocketServer>
 
 #include <algorithm>
 #include <thread>
@@ -43,6 +45,7 @@
 #include "fakes/LoopbackTransport.h"
 #include "core/session/MediaTunnel.h"
 #include "core/session/CandidateSourceLease.h"
+#include "core/session/SessionTransport.h"
 #include "gui/PanadapterStack.h"
 #include "gui/PanadapterApplet.h"
 #include "gui/SpectrumWidget.h"
@@ -71,6 +74,38 @@ class TstMediaTunnel final : public QObject {
     Q_OBJECT
 
 private slots:
+    void directWebSocketTunnelReportsItsCurrentControlSocket()
+    {
+        QWebSocketServer server(QStringLiteral("local tunnel"), QWebSocketServer::NonSecureMode);
+        QVERIFY(server.listen(QHostAddress::LocalHost, 0));
+        auto* clientSocket = new QWebSocket;
+        WebSocketTransport control(clientSocket, 4096);
+        auto tunnel = MediaTunnel::create(&control);
+        QVERIFY(tunnel);
+        IceConfiguration ice = MediaTunnel::iceFor(tunnel);
+        const QString id = QStringLiteral("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+        auto source = ice.makeCandidateSource(IceConfiguration::kMediaLane, id);
+        QVERIFY(source);
+        source->start([](const QString&) {});
+        QVERIFY(!source->networkPathSnapshot());
+        clientSocket->open(QUrl(QStringLiteral("ws://127.0.0.1:%1").arg(server.serverPort())));
+        QTRY_VERIFY(clientSocket->state() == QAbstractSocket::ConnectedState);
+        QTRY_VERIFY(server.hasPendingConnections());
+        QScopedPointer<QWebSocket> accepted(server.nextPendingConnection());
+        const auto path = source->networkPathSnapshot();
+        QVERIFY(path);
+        QCOMPARE(path->kind, NetworkPathSnapshot::Kind::Direct);
+        QCOMPARE(path->carrier, NetworkPathSnapshot::Carrier::WebSocket);
+        QCOMPARE(path->endpoints, NetworkPathSnapshot::Endpoints::Socket);
+        QVERIFY(path->mediaRidesControl);
+        QCOMPARE(path->remoteAddress, QStringLiteral("127.0.0.1"));
+        QCOMPARE(path->remotePort, server.serverPort());
+        QVERIFY(path->localPort != 0);
+        control.closeLink(QStringLiteral("test done"));
+        QVERIFY(!source->networkPathSnapshot());
+        source->stop();
+    }
+
     void tunnelRoutesConcurrentGenerationsAndRejectsOversize()
     {
         Test::LoopbackTransport local(QStringLiteral("local"));

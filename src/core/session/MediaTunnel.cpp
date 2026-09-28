@@ -20,6 +20,7 @@
 #include <QLoggingCategory>
 #include <QNetworkDatagram>
 #include <QTimer>
+#include <QThread>
 #include <QUdpSocket>
 #include <QUuid>
 
@@ -33,7 +34,7 @@ namespace NereusSDR {
 class MediaTunnelSource final : public IceConfiguration::CandidateSource {
 public:
     MediaTunnelSource(std::shared_ptr<MediaTunnel> tunnel, QByteArray id)
-        : m_tunnel(std::move(tunnel)), m_id(std::move(id)) {}
+        : m_ownerThread(tunnel ? tunnel->thread() : nullptr), m_tunnel(std::move(tunnel)), m_id(std::move(id)) {}
     ~MediaTunnelSource() override { stop(); }
 
     void start(std::function<void(const QString&)> add) override
@@ -58,7 +59,25 @@ public:
         m_started = false;
     }
 
+    std::optional<NetworkPathSnapshot> networkPathSnapshot() const override
+    {
+        if (m_ownerThread != QThread::currentThread() || !m_started || m_claim == 0 || !m_tunnel) {
+            return std::nullopt;
+        }
+        const QPointer<SessionTransport> transport = m_tunnel->m_transport;
+        if (!transport || transport->thread() != QThread::currentThread()
+            || !transport->isOpen() || !transport->carriesBinary()) {
+            return std::nullopt;
+        }
+        std::optional<NetworkPathSnapshot> path = transport->networkPathSnapshot();
+        if (path) {
+            path->mediaRidesControl = true;
+        }
+        return path;
+    }
+
 private:
+    QThread* m_ownerThread = nullptr;
     std::shared_ptr<MediaTunnel> m_tunnel;
     bool m_started = false;
     quint64 m_claim = 0;

@@ -25,8 +25,36 @@
 #include <QSslConfiguration>
 #include <QAbstractSocket>
 #include <QWebSocket>
+#include <QThread>
 
 namespace NereusSDR {
+
+std::optional<NetworkPathSnapshot> socketNetworkPathSnapshot(
+    const QWebSocket* socket, NetworkPathSnapshot::Carrier carrier)
+{
+    if (!socket || socket->thread() != QThread::currentThread()
+        || socket->state() != QAbstractSocket::ConnectedState) {
+        return std::nullopt;
+    }
+    const auto numeric = [](QHostAddress address) {
+        if (address.isNull()) { return QString(); }
+        bool ipv4 = false;
+        const quint32 v4 = address.toIPv4Address(&ipv4);
+        if (ipv4) { address = QHostAddress(v4); }
+        address.setScopeId(QString());
+        return address.toString();
+    };
+    NetworkPathSnapshot path;
+    path.kind = carrier == NetworkPathSnapshot::Carrier::WebRelay
+                    ? NetworkPathSnapshot::Kind::Relayed : NetworkPathSnapshot::Kind::Direct;
+    path.carrier = carrier;
+    path.endpoints = NetworkPathSnapshot::Endpoints::Socket;
+    path.localAddress = numeric(socket->localAddress());
+    path.localPort = socket->localPort();
+    path.remoteAddress = numeric(socket->peerAddress());
+    path.remotePort = socket->peerPort();
+    return path;
+}
 
 WebSocketTransport::WebSocketTransport(QWebSocket* socket, quint64 maxIncomingBytes,
                                        QObject* parent)
@@ -198,6 +226,14 @@ std::optional<SessionTransportTelemetry> WebSocketTransport::telemetry() const
     SessionTransportTelemetry snapshot = m_telemetry;
     if (m_pongAge.isValid()) { snapshot.pongAgeMs = m_pongAge.elapsed(); }
     return snapshot;
+}
+
+std::optional<NetworkPathSnapshot> WebSocketTransport::networkPathSnapshot() const
+{
+    if (thread() != QThread::currentThread() || m_closing) {
+        return std::nullopt;
+    }
+    return socketNetworkPathSnapshot(m_socket, NetworkPathSnapshot::Carrier::WebSocket);
 }
 
 } // namespace NereusSDR

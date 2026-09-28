@@ -115,6 +115,17 @@ public:
     }
     bool isOpen() const override { return m_open; }
     QString peerDescription() const override { return m_description; }
+    std::optional<NetworkPathSnapshot> networkPathSnapshot() const override
+    {
+        if (!m_open) { return std::nullopt; }
+        NetworkPathSnapshot path;
+        path.kind = NetworkPathSnapshot::Kind::Direct;
+        path.carrier = NetworkPathSnapshot::Carrier::WebSocket;
+        path.endpoints = NetworkPathSnapshot::Endpoints::Socket;
+        path.remoteAddress = QStringLiteral("127.0.0.1");
+        path.remotePort = static_cast<quint16>(10000 + m_delayMs);
+        return path;
+    }
 
 private:
     QString m_description;
@@ -313,6 +324,21 @@ private slots:
     }
 
     // ── SwitchableTransport alone ─────────────────────────────────────
+
+    void routeObservationFollowsCurrentSendingLink()
+    {
+        SwitchPair pair(80, 5);
+        QVERIFY(pair.station->networkPathSnapshot());
+        QCOMPARE(pair.station->networkPathSnapshot()->remotePort, quint16(10080));
+        QVERIFY(pair.client->beginClientSwitch(pair.newClient));
+        // Client still sends on old until the barrier arrives.
+        QCOMPARE(pair.client->networkPathSnapshot()->remotePort, quint16(10080));
+        QVERIFY(pair.station->beginStationSwitch(pair.newStation));
+        QCOMPARE(pair.station->networkPathSnapshot()->remotePort, quint16(10005));
+        QTRY_COMPARE(pair.client->networkPathSnapshot()->remotePort, quint16(10005));
+        pair.station->closeLink(QStringLiteral("test done"));
+        QVERIFY(!pair.station->networkPathSnapshot());
+    }
 
     // A move from a slow path to a fast one (relay to direct) and the
     // reverse: messages sent before, during and after the move arrive

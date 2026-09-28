@@ -165,6 +165,17 @@ class WatchSource final : public IceConfiguration::CandidateSource {
 public:
     void start(std::function<void(const QString&)> add) override { m_add = std::move(add); }
     void stop() override { m_add = {}; }
+    std::optional<NetworkPathSnapshot> networkPathSnapshot() const override
+    {
+        if (!m_add) { return std::nullopt; }
+        NetworkPathSnapshot path;
+        path.kind = NetworkPathSnapshot::Kind::Relayed;
+        path.carrier = NetworkPathSnapshot::Carrier::WebRelay;
+        path.endpoints = NetworkPathSnapshot::Endpoints::Socket;
+        path.remoteAddress = QStringLiteral("198.51.100.7");
+        path.remotePort = 443;
+        return path;
+    }
     bool ready() const { return static_cast<bool>(m_add); }
     std::function<void(const QString&)> callback() const { return m_add; }
     void inject(const QString& candidate) { if (m_add) { m_add(candidate); } }
@@ -439,6 +450,56 @@ class TstDataChannelTransport : public QObject {
     Q_OBJECT
 
 private slots:
+    void selectedCandidateSnapshotKeepsEndpointMeaning()
+    {
+        MediaIcePath direct;
+        direct.localType = QStringLiteral("host");
+        direct.remoteType = QStringLiteral("host");
+        direct.localAddress = QStringLiteral("::1");
+        direct.localPort = 41000;
+        direct.remoteAddress = QStringLiteral("::1");
+        direct.remotePort = 42000;
+        const auto directRoute = direct.networkPathSnapshot();
+        QVERIFY(directRoute);
+        QCOMPARE(directRoute->kind, NetworkPathSnapshot::Kind::Direct);
+        QCOMPARE(directRoute->carrier, NetworkPathSnapshot::Carrier::Ice);
+        QCOMPARE(directRoute->endpoints, NetworkPathSnapshot::Endpoints::IceCandidates);
+        QCOMPARE(directRoute->localAddress, QStringLiteral("::1"));
+        QCOMPARE(directRoute->localPort, quint16(41000));
+        QCOMPARE(directRoute->remotePort, quint16(42000));
+        MediaIcePath namedPeer = direct;
+        namedPeer.remoteAddress = QStringLiteral("peer.local");
+        const auto numericOnly = namedPeer.networkPathSnapshot();
+        QVERIFY(numericOnly);
+        QVERIFY(numericOnly->remoteAddress.isEmpty());
+        QCOMPARE(numericOnly->remotePort, quint16(42000));
+
+        MediaIcePath turn = direct;
+        turn.localAddress = QStringLiteral("198.51.100.4");
+        turn.remoteAddress = QStringLiteral("203.0.113.8");
+        turn.localType = QStringLiteral("relay");
+        const auto relayed = turn.networkPathSnapshot();
+        QVERIFY(relayed);
+        QCOMPARE(relayed->kind, NetworkPathSnapshot::Kind::Relayed);
+        QCOMPARE(relayed->endpoints, NetworkPathSnapshot::Endpoints::IceCandidates);
+        QCOMPARE(relayed->localAddress, QStringLiteral("198.51.100.4"));
+        QCOMPARE(relayed->localCandidateType, QStringLiteral("relay"));
+
+        direct.ownedLoopbackShim = true;
+        QVERIFY(!direct.networkPathSnapshot()); // Hide internal loopback without current source facts.
+        NetworkPathSnapshot source;
+        source.kind = NetworkPathSnapshot::Kind::Relayed;
+        source.carrier = NetworkPathSnapshot::Carrier::WebRelay;
+        source.endpoints = NetworkPathSnapshot::Endpoints::Socket;
+        source.remoteAddress = QStringLiteral("198.51.100.3");
+        source.remotePort = 443;
+        direct.ownedSourcePath = source;
+        const auto routed = direct.networkPathSnapshot();
+        QVERIFY(routed);
+        QCOMPARE(routed->remoteAddress, QStringLiteral("198.51.100.3"));
+        QCOMPARE(routed->remotePort, quint16(443));
+        QVERIFY(routed->localAddress.isEmpty()); // Never leak the selected internal loopback.
+    }
     void initTestCase()
     {
         QStandardPaths::setTestModeEnabled(true);
@@ -687,6 +748,17 @@ private slots:
         QVERIFY(answerer->selectedPath().has_value());
         QCOMPARE(offerer->selectedPath()->remoteAddress, QStringLiteral("127.0.0.1"));
         QCOMPARE(answerer->selectedPath()->remoteAddress, QStringLiteral("127.0.0.1"));
+        const auto clientRoute = offerer->networkPathSnapshot();
+        const auto coreRoute = answerer->networkPathSnapshot();
+        QVERIFY(clientRoute && coreRoute);
+        for (const auto& route : {clientRoute, coreRoute}) {
+            QCOMPARE(route->kind, NetworkPathSnapshot::Kind::Relayed);
+            QCOMPARE(route->carrier, NetworkPathSnapshot::Carrier::WebRelay);
+            QCOMPARE(route->endpoints, NetworkPathSnapshot::Endpoints::Socket);
+            QCOMPARE(route->remoteAddress, QStringLiteral("127.0.0.1"));
+            QCOMPARE(route->remotePort, static_cast<quint16>(relay.url().port()));
+            QVERIFY(route->localPort != 0);
+        }
         QCOMPARE(offerer->peerCertificateSha256(),
                  QByteArray::fromHex(core.server->certificateFingerprint()
                                          .remove(QLatin1Char(':')).toLatin1()));
@@ -1329,6 +1401,7 @@ private slots:
             offer.ice = watchIce(source);
             QVERIFY(answerer.start(answer));
             QVERIFY(offerer.start(offer));
+            QVERIFY(!offerer.networkPathSnapshot());
             QTRY_VERIFY_WITH_TIMEOUT(descriptionsAccepted, 10000);
             QTRY_VERIFY_WITH_TIMEOUT(source->ready(), 10000);
             QTRY_VERIFY_WITH_TIMEOUT(!loopbackFor(offeredCandidates).isEmpty(), 10000);
@@ -1362,6 +1435,22 @@ private slots:
                                                     static_cast<quint16>(port)));
             QCOMPARE(selected->viaLoopbackShim(), selectedFromSource);
             QVERIFY(!answerer.selectedPath()->viaLoopbackShim());
+            const auto route = offerer.networkPathSnapshot();
+            QVERIFY(route);
+            if (selectedFromSource) {
+                QCOMPARE(route->kind, NetworkPathSnapshot::Kind::Relayed);
+                QCOMPARE(route->carrier, NetworkPathSnapshot::Carrier::WebRelay);
+                QCOMPARE(route->remoteAddress, QStringLiteral("198.51.100.7"));
+                QCOMPARE(route->remotePort, quint16(443));
+                QVERIFY(route->localAddress.isEmpty());
+            } else {
+                QCOMPARE(route->kind, NetworkPathSnapshot::Kind::Direct);
+                QCOMPARE(route->carrier, NetworkPathSnapshot::Carrier::Ice);
+                QCOMPARE(route->remotePort, static_cast<quint16>(port));
+                QVERIFY(route->localPort != 0);
+            }
+            offerer.closeLink(QStringLiteral("test done"));
+            QVERIFY(!offerer.networkPathSnapshot());
         }
     }
 
@@ -1384,6 +1473,7 @@ private slots:
         QCOMPARE(offerer.pendingSourceCandidateCountForTest(), 0);
         QCOMPARE(offerer.ownedShimEndpointCountForTest(), 0);
         QVERIFY(!offerer.selectedPath());
+        QVERIFY(!offerer.networkPathSnapshot());
     }
 
     // ── A session over the channel ─────────────────────────────────────

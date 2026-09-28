@@ -1367,6 +1367,13 @@ void TestMediaTransport::ordinaryMediaHostOnLoopbackIsNotAnOwnedShim()
                                            answerer.selectedPath()->remotePort));
     QVERIFY(!offerer.selectedPath()->viaLoopbackShim());
     QVERIFY(!answerer.selectedPath()->viaLoopbackShim());
+    const auto route = offerer.selectedPath()->networkPathSnapshot();
+    QVERIFY(route);
+    QCOMPARE(route->kind, NetworkPathSnapshot::Kind::Direct);
+    QCOMPARE(route->carrier, NetworkPathSnapshot::Carrier::Ice);
+    QCOMPARE(route->endpoints, NetworkPathSnapshot::Endpoints::IceCandidates);
+    QVERIFY(route->localPort != 0);
+    QVERIFY(route->remotePort != 0);
 }
 
 void TestMediaTransport::retiredMediaSourceCannotMarkARestartedPeer()
@@ -1451,6 +1458,10 @@ void TestMediaTransport::retiredMediaSourceCannotMarkARestartedPeer()
     QVERIFY(MediaIcePath::loopbackEndpoint(offerer.selectedPath()->remoteAddress,
                                            offerer.selectedPath()->remotePort));
     QVERIFY(!offerer.selectedPath()->viaLoopbackShim());
+    const auto route = offerer.selectedPath()->networkPathSnapshot();
+    QVERIFY(route);
+    QCOMPARE(route->kind, NetworkPathSnapshot::Kind::Direct);
+    QCOMPARE(route->carrier, NetworkPathSnapshot::Carrier::Ice);
 }
 
 // R-R3-23 acceptance: real DTLS/SRTP between two real peers carries the
