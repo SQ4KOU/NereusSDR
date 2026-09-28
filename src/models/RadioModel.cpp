@@ -20225,7 +20225,7 @@ bool RadioModel::saveForStationHandover(QString* error)
         if (!m_stationHandoverTrackSuppressedReceiverEdits) {
             if (error) {
                 *error = tr("The Core has not checked its receiver changes for release. "
-                            "It still owns the station.");
+                            "It still owns the radio.");
             }
             return false;
         }
@@ -20233,7 +20233,7 @@ bool RadioModel::saveForStationHandover(QString* error)
             || !m_dirtySettingsSliceIds.isEmpty() || m_alexControllerDirty) {
             if (error) {
                 *error = tr("The Core has unsaved receiver changes while the radio is unavailable. "
-                            "It still owns the station.");
+                            "It still owns the radio.");
             }
             return false;
         }

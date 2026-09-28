@@ -43,14 +43,14 @@ bool StationHandover::acquire(int timeoutMs, QString* error)
     if (error) { error->clear(); }
     if (ownsProfile()) { return true; }
     if (!QDir().mkpath(m_directory)) {
-        if (error) { *error = QStringLiteral("The station profile directory could not be created."); }
+        if (error) { *error = QStringLiteral("The Core profile directory could not be created."); }
         return false;
     }
     if (m_lock->tryLock(qMax(0, timeoutMs))) { return true; }
     if (error) {
         *error = m_lock->error() == QLockFile::LockFailedError
-            ? QStringLiteral("Another Core owns this station profile.")
-            : QStringLiteral("The station profile could not be locked.");
+            ? QStringLiteral("Another Core owns this profile.")
+            : QStringLiteral("The Core profile could not be locked.");
     }
     return false;
 }

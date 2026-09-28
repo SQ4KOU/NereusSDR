@@ -3201,28 +3201,32 @@ void AudioEngine::resetAudioSettings(bool operatorLocalOnly)
         emit txMonitorOutputChanged(TxMonitorOutput::Speakers);
     }
 
-    // Rebuild each VAX bus as well — previously we only emitted the config-
+    // For a local reset, rebuild each VAX bus as well — previously we only emitted the config-
     // changed signal, but rxBlockReady kept pushing audio to whatever bus
     // was live pre-reset (stale BYO PortAudio bus, or the prior native HAL
     // bus tied to the wiped settings).  Mirror the setVaxConfig native-HAL
     // fallback contract: on Mac/Linux re-mint the platform HAL bus; on
     // Windows leave the slot null until the user picks a device.
-    for (int ch = 1; ch <= 4; ++ch) {
-        const int idx = ch - 1;
-        {
-            std::lock_guard<std::mutex> busLock(m_vaxBusMutex[idx]);
-            m_vaxBus[idx].reset();
+    // A remote window has no local VAX stream to rebuild. Its reset removes
+    // only this computer's audio preferences and leaves any slot occupant alone.
+    if (!operatorLocalOnly) {
+        for (int ch = 1; ch <= 4; ++ch) {
+            const int idx = ch - 1;
+            {
+                std::lock_guard<std::mutex> busLock(m_vaxBusMutex[idx]);
+                m_vaxBus[idx].reset();
 #if defined(Q_OS_MAC) || defined(Q_OS_LINUX)
-            m_vaxBus[idx] = makeVaxBus(ch);
-            if (m_vaxBus[idx]) {
-                qCInfo(lcAudio) << "VAX" << ch
-                                << "bus restored to native HAL (reset)"
-                                << "[" << m_vaxBus[idx]->backendName() << "]";
-            }
+                m_vaxBus[idx] = makeVaxBus(ch);
+                if (m_vaxBus[idx]) {
+                    qCInfo(lcAudio) << "VAX" << ch
+                                    << "bus restored to native HAL (reset)"
+                                    << "[" << m_vaxBus[idx]->backendName() << "]";
+                }
 #endif
+            }
+            emit vaxBusOpenChanged(ch);  // R-R3-21: the output was rebuilt or closed
+            emit vaxConfigChanged(ch, AudioDeviceConfig{});
         }
-        emit vaxBusOpenChanged(ch);  // R-R3-21: the output was rebuilt or closed
-        emit vaxConfigChanged(ch, AudioDeviceConfig{});
     }
 
     emit audioSettingsReset();

@@ -263,7 +263,7 @@ int main(int argc, char* argv[])
     QString handoverError;
     while (!ownership.reclaimFromBackground(15000, &handoverError)) {
         QMessageBox handover(QMessageBox::Warning, QStringLiteral("NereusSDR"),
-            QStringLiteral("NereusSDR could not take ownership of this station profile."));
+            QStringLiteral("NereusSDR could not take ownership of this Core profile."));
         handover.setInformativeText(handoverError);
         QPushButton* const retry = handover.addButton(QStringLiteral("Retry"),
                                                        QMessageBox::AcceptRole);

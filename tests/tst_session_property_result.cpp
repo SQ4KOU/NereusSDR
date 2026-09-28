@@ -257,11 +257,13 @@ private slots:
                 for (const auto& wire : coreEnd->received()) {
                     SessionMessage message;
                     QVERIFY(SessionMessages::decode(wire, &message));
-                    // Parity Task 19: a window's own record subscriptions
-                    // (the Core's spots and radios) change nothing on the
-                    // Core; any other command would.
-                    QVERIFY(message.kind != SessionMessageKind::CommandInvoke
-                            || message.commandVerb == "records.subscribe");
+                    // Record subscriptions and the automatic settings
+                    // validation only read Core state. Neither can hydrate
+                    // stale client preferences back into the Core.
+                    QVERIFY2(message.kind != SessionMessageKind::CommandInvoke
+                                 || message.commandVerb == "records.subscribe"
+                                 || message.commandVerb == "station.validateSettings",
+                             message.commandVerb.constData());
                     QVERIFY(message.kind != SessionMessageKind::PropertyWrite);
                 }
             }
