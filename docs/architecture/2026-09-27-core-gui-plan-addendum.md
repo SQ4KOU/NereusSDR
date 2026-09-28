@@ -2465,8 +2465,14 @@ colours for the same signal.
   Its later watch-deadline scenario could not create its report directory
   because the root mounted the build read-only. Supply the harness's existing
   DEADLINE_OUT setting with a writable scratch path before resuming those
-  scenarios. The test-build aggregate still needs an explicit helper
-  dependency. Logs: traversal-383984e5-matched-session-direct/console.log
+  scenarios. Both all_tests and tests_traversal now depend on the helper
+  when Linux traversal is enabled. The actual registration/aggregate CMake
+  blocks were configured in an isolated Ninja graph probe: both targets
+  include the helper when enabled, and the disabled configuration remains
+  opt-in. The test-registration verifier passes. The scratch full Linux
+  recipe also names the helper explicitly. Logs:
+  traversal-build-aggregate-probe/verification.log,
+  traversal-383984e5-matched-session-direct/console.log
   and traversal-383984e5-matched-full/console.log.
 - Plan: complete R5 full-session Linux traversal verification.
 
@@ -2487,8 +2493,10 @@ colours for the same signal.
   and audio/display paths. Preserve the existing app appearance and controls.
 - Status: layout approved with that correction. The revised mockup keeps
   all four measurements visible while its drop-down is open; verified at
-  desktop width with keyboard activation. Implementation source inspection
-  is underway. Do not infer a relayed connection from RV discovery or expose
+  desktop width with keyboard activation. JJ then confirmed "this header
+  area look ok." Source inspection is complete; implementation needs a
+  current media-path snapshot and truthful tunnel endpoint metadata as well
+  as the compact header/popup wiring. Do not infer a relayed connection from RV discovery or expose
   a tunnel's loopback shim as the internet peer. Clear stale path details on
   reconnect and identify unavailable facts honestly.
 - Plan: remote-window connection visibility and R5 operator diagnostics.
@@ -2531,8 +2539,10 @@ colours for the same signal.
   561dd89c. The app/Core build and eight affected full offscreen suites passed
   together in the trunk (2.58 s), including painted B/C/D cues and existing
   E color fallback. Existing receive-filter fill and alpha settings are
-  retained. Hosting foreign-marker repair remains queued; its documented
-  owner-labeled dashed presentation still needs deterministic host coverage.
+  retained. Sol 6 medium now owns the hosting foreign-marker repair in
+  codex/host-slice-ownership-markers, based on accepted signed 71921fd9;
+  its documented owner-labeled dashed presentation needs deterministic
+  host coverage. No new Take/Release behavior is authorized by this repair.
   Evidence: core-gui-slice-colors-root-build.log and
   core-gui-slice-colors-root-ctest.log.
 - Plan: several-devices visual parity and truthful ownership presentation.
@@ -2585,9 +2595,14 @@ colours for the same signal.
   classification finding; no cause has yet been established.
 - Ruling basis: JJ requires the cause and a suggested fix for failures at
   actual load. Preserve the two-reservation release assertion and deadlines.
-- Status: OPEN investigation. Retained private scenario/service logs and
-  the full console are under traversal-383984e5-matched-full. No live
-  rendezvous service or radio was changed.
+- Status: OPEN investigation. The full console is retained under
+  traversal-383984e5-matched-full; its original per-scenario Core log was
+  overwritten by later scenarios and its cleanup did not preserve coturn's
+  log. The focused session-relayed run with identical verified helper/library
+  hashes returned both allocations and passed, with coturn and session logs
+  now retained under traversal-383984e5-matched-session-relayed. One passing
+  retry does not establish the earlier failure's cause. No live rendezvous
+  service or radio was changed.
 - Plan: R5 relay cleanup and real-service traversal acceptance.
 
 ## How this addendum is kept

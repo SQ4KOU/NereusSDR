@@ -7689,6 +7689,11 @@ endif()
 # live server.
 option(NEREUS_TRAVERSAL_TESTS "Register the traversal harness (Linux, root)" OFF)
 if(NEREUS_TRAVERSAL_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # The harness launches this EXCLUDE_FROM_ALL helper. Both documented
+    # test build aggregates must refresh it with the libraries it loads.
+    set_property(GLOBAL APPEND PROPERTY NEREUS_ALL_TESTS nereus_rendezvous_peer)
+    set_property(GLOBAL APPEND PROPERTY NEREUS_TEST_LABEL_NAMES traversal)
+    set_property(GLOBAL APPEND PROPERTY NEREUS_TESTS_LABEL_traversal nereus_rendezvous_peer)
     add_test(NAME traversal_harness
         COMMAND bash ${CMAKE_SOURCE_DIR}/tests/scripts/traversal-harness.sh
             --peer $<TARGET_FILE:nereus_rendezvous_peer>
