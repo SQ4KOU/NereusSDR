@@ -6669,7 +6669,7 @@ SpectrumWidget::sliceMarkerGeometry() const
     QVector<SliceMarkerGeometry> out;
 
     if (m_vfoWidgets.isEmpty()) {
-        if (m_vfoHz > 0.0) {
+        if (m_ownSliceMarkerPresentationAllowed && m_vfoHz > 0.0) {
             out.append(SliceMarkerGeometry{m_vfoHz, m_filterLowHz,
                                            m_filterHighHz, nullptr});
         }
@@ -6681,7 +6681,7 @@ SpectrumWidget::sliceMarkerGeometry() const
     out.reserve(m_vfoWidgets.size());
     for (auto it = m_vfoWidgets.constBegin(); it != m_vfoWidgets.constEnd(); ++it) {
         const VfoWidget* flag = it.value();
-        if (!flag || flag->frequency() <= 0.0) {
+        if (!flag || !flag->stationPresentationAllowed() || flag->frequency() <= 0.0) {
             continue;
         }
         out.append(SliceMarkerGeometry{flag->frequency(), flag->filterLow(),
@@ -6710,6 +6710,13 @@ void SpectrumWidget::setForeignSliceMarkers(const QVector<ForeignSliceMarker>& m
 {
     m_foreignMarkers = markers;
     m_foreignLabelRects.clear();
+    markOverlayDirty();
+}
+
+void SpectrumWidget::setOwnSliceMarkerPresentationAllowed(bool allowed)
+{
+    if (m_ownSliceMarkerPresentationAllowed == allowed) { return; }
+    m_ownSliceMarkerPresentationAllowed = allowed;
     markOverlayDirty();
 }
 
@@ -6921,7 +6928,8 @@ void SpectrumWidget::drawOffScreenIndicator(QPainter& p, const QRect& specRect,
                                              const QRect& wfRect)
 {
     Q_UNUSED(wfRect);
-    if (m_vfoOffScreen == VfoOffScreen::None) {
+    if (m_vfoOffScreen == VfoOffScreen::None
+        || !m_ownSliceMarkerPresentationAllowed) {
         return;
     }
 
@@ -6929,13 +6937,22 @@ void SpectrumWidget::drawOffScreenIndicator(QPainter& p, const QRect& specRect,
     static constexpr int kArrowW = 14;
     static constexpr int kArrowH = 20;
     int arrowSliceId = m_frontSliceIndex;
-    if (!m_vfoWidgets.contains(arrowSliceId)) {
-        for (auto it = m_vfoWidgets.cbegin(); it != m_vfoWidgets.cend(); ++it) {
-            if (it.value() && it.value()->frequency() == m_vfoHz) {
-                arrowSliceId = it.key();
-                break;
+    if (!m_vfoWidgets.isEmpty()) {
+        // The pan-level VFO can still name a selected foreign slice. Never
+        // borrow another own flag's color for that foreign frequency.
+        const VfoWidget* front = m_vfoWidgets.value(arrowSliceId, nullptr);
+        if (!front || !front->stationPresentationAllowed()
+            || !qFuzzyCompare(front->frequency(), m_vfoHz)) {
+            arrowSliceId = -1;
+            for (auto it = m_vfoWidgets.cbegin(); it != m_vfoWidgets.cend(); ++it) {
+                if (it.value() && it.value()->stationPresentationAllowed()
+                    && qFuzzyCompare(it.value()->frequency(), m_vfoHz)) {
+                    arrowSliceId = it.key();
+                    break;
+                }
             }
         }
+        if (arrowSliceId < 0) { return; }
     }
     const QColor arrowColor = VfoWidget::sliceColor(arrowSliceId);
 

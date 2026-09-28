@@ -629,6 +629,8 @@ warren@wpratt.com
 #include "core/SliceOwnership.h"
 #include "core/safety/TransmitHolder.h"
 #include "core/session/StationServer.h"
+#include "core/session/ConnectedDevicesFacade.h"
+#include "core/session/DeviceSessionRegistry.h"
 #include "gui/multidevice/TakeTransmitDialog.h"
 #include "models/PanadapterModel.h"
 #include "models/Band.h"
@@ -1663,6 +1665,8 @@ void MainWindow::refreshDesktopStationState()
     StationServer* server = hosting ? m_desktopStationController->server() : nullptr;
     if (m_desktopBoundServer != server) {
         disconnect(m_desktopHolderConnection);
+        disconnect(m_desktopDevicesConnection);
+        disconnect(m_desktopPresenceConnection);
         m_desktopBoundServer = server;
         if (server && server->transmitHolder()) {
             m_desktopHolderConnection = connect(server->transmitHolder(),
@@ -1672,6 +1676,16 @@ void MainWindow::refreshDesktopStationState()
                     if (!self) { return; }
                     refreshDesktopStationState();
                 });
+        }
+        if (server && server->connectedDevices()) {
+            m_desktopDevicesConnection = connect(server->connectedDevices(),
+                &ConnectedDevicesFacade::connectedDevicesChanged, this,
+                &MainWindow::refreshForeignMarkers);
+        }
+        if (server && server->deviceSessions()) {
+            m_desktopPresenceConnection = connect(server->deviceSessions(),
+                &DeviceSessionRegistry::changed, this,
+                &MainWindow::refreshForeignMarkers);
         }
     }
 #ifdef HAVE_WEBSOCKETS
@@ -1745,6 +1759,7 @@ void MainWindow::refreshDesktopStationState()
     for (SetupDialog* dialog : findChildren<SetupDialog*>()) {
         dialog->notifyReceiverSelectionChanged();
     }
+    refreshForeignMarkers();
 }
 
 void MainWindow::requestDesktopTransmit(bool tune, bool on)
@@ -2013,14 +2028,52 @@ void MainWindow::wireRemoteDevices()
 
 void MainWindow::refreshForeignMarkers()
 {
-    if (m_stationClient == nullptr || m_panStack == nullptr) {
-        return;
+    if (m_panStack == nullptr) { return; }
+    QVector<SpectrumWidget::ForeignSliceMarker> markers;
+    const bool hosting = desktopHosting();
+    StationServer* server = hosting ? m_desktopStationController->server() : nullptr;
+    SliceOwnership* ownership = hosting && m_radioModel ? m_radioModel->sliceOwnership() : nullptr;
+    if (server && ownership && m_radioModel) {
+        for (SliceModel* slice : m_radioModel->slices()) {
+            if (!slice) { continue; }
+            const SliceOwnership::Mark mark = ownership->mark(slice->sliceIndex());
+            const QByteArray subject = mark.subject();
+            if (subject.isEmpty() || subject == SliceOwnership::stationDevice()) { continue; }
+            SpectrumWidget::ForeignSliceMarker marker;
+            marker.sliceId = slice->sliceIndex();
+            marker.centreHz = slice->frequency();
+            marker.filterLowHz = slice->filterLow();
+            marker.filterHighHz = slice->filterHigh();
+            marker.color = VfoWidget::sliceColor(marker.sliceId);
+            marker.letter = slice->sliceLetter();
+            if (const auto words = server->connectedDevices()->describe(subject)) {
+                marker.ownerName = words->name;
+                marker.ownerShortName = words->shortName;
+            }
+            const auto device = server->deviceSessions()->entry(subject);
+            marker.away = mark.isHeld()
+                || (device && device->state == DeviceSessionRegistry::State::Away);
+            marker.tx = slice->txSliceMarked();
+            markers.append(marker);
+        }
+    } else if (m_stationClient) {
+        markers = MultiDeviceController::foreignMarkers(*m_stationClient->remoteDevices());
     }
-    const QVector<SpectrumWidget::ForeignSliceMarker> markers =
-        MultiDeviceController::foreignMarkers(*m_stationClient->remoteDevices());
     for (PanadapterApplet* applet : m_panStack->allApplets()) {
         if (applet && applet->spectrumWidget()) {
-            applet->spectrumWidget()->setForeignSliceMarkers(markers);
+            SpectrumWidget* spectrum = applet->spectrumWidget();
+            spectrum->setForeignSliceMarkers(markers);
+            bool hasOwnSlice = !hosting;
+            if (hosting && ownership && m_radioModel) {
+                for (SliceModel* slice : m_radioModel->slices()) {
+                    if (slice && desktopSliceAllowed(slice->sliceIndex())
+                        && spectrumForSlice(slice) == spectrum) {
+                        hasOwnSlice = true;
+                        break;
+                    }
+                }
+            }
+            spectrum->setOwnSliceMarkerPresentationAllowed(hasOwnSlice);
         }
     }
 }
@@ -3329,6 +3382,13 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
             && m_radioModel->txSliceArbiter()
             && m_radioModel->txSliceArbiter()->txBoundSliceId() == sliceIndex);
     }
+    connect(slice, &SliceModel::frequencyChanged, newFlag,
+            [this](double) { if (desktopHosting()) { refreshForeignMarkers(); } });
+    connect(slice, &SliceModel::filterChanged, newFlag,
+            [this](int, int) { if (desktopHosting()) { refreshForeignMarkers(); } });
+    connect(slice, &SliceModel::txSliceChanged, newFlag,
+            [this](bool) { if (desktopHosting()) { refreshForeignMarkers(); } });
+    refreshForeignMarkers();
     return newFlag;
 }
 
@@ -4030,10 +4090,7 @@ void MainWindow::wireSpectrumForPan(SpectrumWidget* sw, const QString& panId)
             [this](int, const QString& explanation) {
         showToast(explanation, ToastSeverity::Info, 4000);
     });
-    if (m_stationClient) {
-        sw->setForeignSliceMarkers(
-            MultiDeviceController::foreignMarkers(*m_stationClient->remoteDevices()));
-    }
+    refreshForeignMarkers();
 
     configureSpectrumForPanForTest(sw, panId);
 

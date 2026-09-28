@@ -318,6 +318,7 @@ private slots:
         QVERIFY(!flagB->txSliceShown());
         SpectrumWidget* spectrum = qobject_cast<SpectrumWidget*>(flagB->parentWidget());
         QVERIFY(spectrum);
+        QCOMPARE(spectrum->foreignSliceMarkers().size(), 1);
         spectrum->updateVfoPositions();
         QVERIFY(flagB->isHidden());
         QVERIFY(model->setActiveSliceByIdFor(SliceOwnership::stationDevice(),
@@ -330,20 +331,115 @@ private slots:
         QVERIFY(!controller.enabled());
         QVERIFY(!tci->desktopHostMode());
         QVERIFY(flagB->stationPresentationAllowed());
+        QVERIFY(spectrum->foreignSliceMarkers().isEmpty());
         auto replacement = std::make_unique<DesktopStationController>(
             model, optionsFor(settings, directory.path()));
         window.setDesktopStationController(replacement.get());
         QVERIFY(replacement->start(true));
         QVERIFY(tci->desktopHostMode());
+        QCOMPARE(spectrum->foreignSliceMarkers().size(), 1);
         replacement.reset();
         QVERIFY(!tci->desktopHostMode());
         QVERIFY(flagB->stationPresentationAllowed());
+        QVERIFY(spectrum->foreignSliceMarkers().isEmpty());
         SetupDialog* observed = nullptr;
         connect(&window, &MainWindow::setupDialogCreated, &window,
                 [&observed](SetupDialog* dialog) { observed = dialog; });
         QVERIFY(QMetaObject::invokeMethod(&window, "createSetupDialog"));
         QVERIFY(observed);
         observed->close();
+    }
+
+    void hostShowsOtherDeviceAsForeignMarker()
+    {
+        if (!QSslSocket::supportsSsl()) { QSKIP("Qt reports no working TLS backend."); }
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+        MainWindow window({}, nullptr, MainWindow::ConnectionStartup::Deferred);
+        RadioModel* model = window.radioModel();
+        model->setBoardForTest(HPSDRHW::Saturn);
+        model->configureStreamPool(5, 5, 192000);
+        model->setConnectionStateForTest(ConnectionState::Connected);
+        const int aId = model->addSlice(QStringLiteral("pan-0"));
+        const int bId = model->addSlice(QStringLiteral("pan-0"));
+        SliceModel* a = model->sliceById(aId);
+        SliceModel* b = model->sliceById(bId);
+        QVERIFY(a && b);
+        DesktopStationController controller(model, optionsFor(settings, directory.path()));
+        window.setDesktopStationController(&controller);
+        QVERIFY(controller.start(true));
+        StationServer* server = controller.server();
+        QVERIFY(server);
+        QObject phoneSession;
+        DeviceSessionRegistry::Entry phone;
+        phone.deviceId = QByteArrayLiteral("phone-device-id-for-away-state-01");
+        phone.kind = DeviceSessionRegistry::Kind::Paired;
+        phone.name = QStringLiteral("Living room iPhone");
+        phone.shortName = QStringLiteral("iPhone");
+        phone.deviceKind = QStringLiteral("phone");
+        QCOMPARE(server->deviceSessions()->admit(phone, &phoneSession).admission,
+                 DeviceSessionRegistry::Admission::Admitted);
+        auto* spectrum = window.findChild<PanadapterStack*>()->panadapter(
+            QStringLiteral("pan-0"))->spectrumWidget();
+        QVERIFY(spectrum);
+        SliceOwnership* ownership = model->sliceOwnership();
+        ownership->setOwner(bId, phone.deviceId);
+        QVERIFY(flagFor(window, aId)->stationPresentationAllowed());
+        QVERIFY(!flagFor(window, bId)->stationPresentationAllowed());
+        QCOMPARE(spectrum->sliceMarkerGeometry().size(), 1);
+        QCOMPARE(spectrum->sliceMarkerGeometry().first().flag,
+                 static_cast<const VfoWidget*>(flagFor(window, aId)));
+        QCOMPARE(spectrum->foreignSliceMarkers().size(), 1);
+        const auto first = spectrum->foreignSliceMarkers().first();
+        QCOMPARE(first.sliceId, bId);
+        QCOMPARE(first.letter, QStringLiteral("B"));
+        QCOMPARE(first.ownerShortName, QStringLiteral("iPhone"));
+        QCOMPARE(first.color, VfoWidget::sliceColor(bId));
+        QCOMPARE(SpectrumWidget::foreignMarkerLabel(first), QStringLiteral("B iPhone"));
+
+        TransmitHolder::KeyRequest key;
+        key.deviceId = phone.deviceId;
+        QCOMPARE(server->transmitHolder()->askKey(key).verdict, KeyingVerdict::Admit);
+        b->setTxSlice(true);
+        QVERIFY(b->txSliceMarked());
+        QVERIFY(spectrum->foreignSliceMarkers().first().tx);
+        QCOMPARE(SpectrumWidget::foreignMarkerLabel(spectrum->foreignSliceMarkers().first()),
+                 QStringLiteral("B iPhone TX"));
+        server->transmitHolder()->release(phone.deviceId, QStringLiteral("test release"));
+        QVERIFY(!spectrum->foreignSliceMarkers().first().tx);
+
+        auto* extra = window.findChild<PanadapterStack*>()->addPanadapter(
+            QStringLiteral("pan-1"));
+        QVERIFY(extra && extra->spectrumWidget());
+        QCOMPARE(extra->spectrumWidget()->foreignSliceMarkers().size(), 1);
+
+        b->setFrequency(b->frequency() + 1200.0);
+        b->setFilter(150, 2700);
+        QCOMPARE(spectrum->foreignSliceMarkers().first().centreHz, b->frequency());
+        QCOMPARE(spectrum->foreignSliceMarkers().first().filterLowHz, 150);
+        QCOMPARE(spectrum->foreignSliceMarkers().first().filterHighHz, 2700);
+        server->deviceSessions()->sessionEnded(phone.deviceId, &phoneSession,
+            DeviceSessionRegistry::EndKind::Dropped);
+        QVERIFY(spectrum->foreignSliceMarkers().first().away);
+
+        ownership->setOwner(bId, SliceOwnership::stationDevice());
+        QVERIFY(spectrum->foreignSliceMarkers().isEmpty());
+        QCOMPARE(spectrum->sliceMarkerGeometry().size(), 2);
+        ownership->hold(bId, phone.deviceId);
+        QCOMPARE(spectrum->foreignSliceMarkers().size(), 1);
+        QVERIFY(spectrum->foreignSliceMarkers().first().away);
+        QCOMPARE(spectrum->sliceMarkerGeometry().size(), 1);
+        ownership->setOwner(bId, phone.deviceId);
+        QCOMPARE(spectrum->foreignSliceMarkers().size(), 1);
+
+        ownership->setOwner(aId, phone.deviceId);
+        QVERIFY(spectrum->sliceMarkerGeometry().isEmpty());
+        QCOMPARE(spectrum->foreignSliceMarkers().size(), 2);
+        model->removeSlice(bId);
+        QCOMPARE(spectrum->foreignSliceMarkers().size(), 1);
+        controller.stop();
+        QVERIFY(spectrum->foreignSliceMarkers().isEmpty());
     }
 
     void appletAndContainerAskWithoutOptimisticKey()

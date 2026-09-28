@@ -1100,6 +1100,8 @@ private:
     QPointer<class TakeTransmitDialog> m_desktopTakeDialog;
     QPointer<class StationServer> m_desktopBoundServer;
     QMetaObject::Connection m_desktopHolderConnection;
+    QMetaObject::Connection m_desktopDevicesConnection;
+    QMetaObject::Connection m_desktopPresenceConnection;
     QMetaObject::Connection m_desktopOwnershipConnection;
     QMetaObject::Connection m_desktopActiveConnection;
     quint64 m_desktopBindingGeneration{0};
