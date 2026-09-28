@@ -26,6 +26,8 @@
 #include "core/MoxController.h"
 #include "core/TxAnalyzer.h"
 #include "core/TxDisplayFeed.h"
+#include "core/TxChannel.h"
+#include "core/WdspEngine.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
@@ -97,7 +99,46 @@ private slots:
     void carrierFollowsXitAndTheSliceWhileKeyed();
     void spanUnder1000KeepsTheLastGoodView();
     void planesPassOnlyWhileKeyed();
+    void mini_without_tx_channel_stays_unavailable();
+    void mini_does_not_attach_to_an_unopened_tx_channel();
 };
+
+void TstTxDisplayFeed::mini_without_tx_channel_stays_unavailable()
+{
+    Station station;
+    TxDisplayFeed* feed = station.feed();
+    QVERIFY(feed);
+    const int viewer = feed->addViewer(kDialHz, 40'000.0, 1024,
+                                       /*local=*/false, /*mini=*/true);
+    QCOMPARE(feed->miniView().pixels, 1024);
+    QCOMPARE(feed->miniView().spanHz(), 40'000.0);
+    QVERIFY(station.key(true));
+    QVERIFY(!feed->miniReady());
+    QCOMPARE(feed->viewerCount(), 0); // mini never perturbs pan governor
+    feed->removeViewer(viewer);
+    QVERIFY(station.key(false));
+}
+
+void TstTxDisplayFeed::mini_does_not_attach_to_an_unopened_tx_channel()
+{
+    Station station;
+    TxChannel unopened(WdspEngine::kTxChannelId, 256, 256,
+                       station.radio.transmitLane(), nullptr);
+    station.radio.injectTxChannelForTest(&unopened);
+    TxDisplayFeed* feed = station.feed();
+    QVERIFY(feed);
+    const int viewer = feed->addViewer(kDialHz, 40'000.0, 1024,
+                                       /*local=*/false, /*mini=*/true);
+    QVERIFY(station.key(true));
+    // Creation and SetAnalyzer may succeed for display 6, but the lane
+    // guard must refuse TXASetSipAllocDisps when OpenChannel never ran.
+    QTRY_VERIFY_WITH_TIMEOUT(feed->miniAttachmentSettledForTest(), 5'000);
+    QVERIFY(!feed->miniReady());
+    QVERIFY(!unopened.isWdspReady());
+    feed->removeViewer(viewer);
+    QVERIFY(station.key(false));
+    station.radio.injectTxChannelForTest(nullptr);
+}
 
 void TstTxDisplayFeed::clampHoldsTheViewInsideTheBaseband()
 {

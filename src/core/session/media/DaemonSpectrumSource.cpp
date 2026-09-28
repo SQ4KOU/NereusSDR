@@ -274,6 +274,17 @@ quint64 DaemonSpectrumSource::publishedFrames(const MediaSourceKey& key) const
     return it->state->publishedFrames;
 }
 
+DaemonSpectrumSource::InputQueueDiagnostics
+DaemonSpectrumSource::inputQueueDiagnostics(const MediaSourceKey& key) const
+{
+    const auto it = m_sources.constFind(key);
+    if (it == m_sources.cend()) { return {}; }
+    QMutexLocker lock(&it->state->mutex);
+    return {it->state->generation, it->state->active,
+            it->state->configurationPending, it->state->iqDrainQueued,
+            static_cast<int>(it->state->pendingIq.size()), it->state->maxPendingIqFloats};
+}
+
 int DaemonSpectrumSource::engineDecimation(const MediaSourceKey& key) const
 {
     const auto it = m_sources.constFind(key);

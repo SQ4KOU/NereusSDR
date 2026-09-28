@@ -48,6 +48,8 @@
 #include <QVector>
 
 #include <map>
+#include <memory>
+#include <set>
 
 namespace NereusSDR {
 
@@ -76,7 +78,8 @@ public:
     /// A pan that shows the transmit display. `local` is a window running
     /// its own DSP (or hosting a Core); it governs whenever it is present.
     /// Returns the viewer's id (1 and up, never reused).
-    int addViewer(double centreHz, double spanHz, int pixels, bool local);
+    int addViewer(double centreHz, double spanHz, int pixels, bool local,
+                  bool mini = false);
     void updateViewer(int id, double centreHz, double spanHz, int pixels);
     void removeViewer(int id);
 
@@ -92,6 +95,14 @@ public:
     /// The analyzer's FFT size and output rate, for a viewer's context.
     int fftSize() const;
     int outputFps() const;
+    void setLocalMiniDemand(bool wanted);
+    void stopMini();
+    TxDisplayView miniView() const;
+    int miniFftSize() const;
+    int miniOutputFps() const;
+    bool miniReady() const;
+    bool miniAttachmentSettledForTest() const { return m_miniAttachSettled; }
+    bool isMiniViewer(int id) const;
 
 signals:
     void viewChanged(const NereusSDR::TxDisplayView& view);
@@ -101,6 +112,9 @@ signals:
     /// The analyzer's trace (pixout 0) and waterfall (pixout 1), while keyed.
     void traceReady(const QVector<float>& dbm);
     void waterfallReady(const QVector<float>& dbm);
+    void miniViewChanged(const NereusSDR::TxDisplayView& view);
+    void miniTraceReady(const QVector<float>& dbm);
+    void miniWaterfallReady(const QVector<float>& dbm);
     void keyedChanged(bool keyed);
 
 private:
@@ -117,11 +131,22 @@ private:
     /// Recomputes the carrier and the governing viewer's view; while keyed,
     /// applies it to the analyzer and emits viewChanged when it moved.
     void recompute();
+    void ensureMini();
+    void updateMiniView();
+    void applyMiniRxSettings();
     double carrierHz() const;
 
     QPointer<RadioModel> m_model;
     QPointer<TxAnalyzer> m_analyzer;
     std::map<int, Viewer> m_viewers;
+    std::set<int> m_miniViewerIds;
+    bool m_localMiniDemand{false};
+    bool m_miniAttached{false};
+    bool m_miniAttachPending{false};
+    bool m_miniAttachSettled{false};
+    int m_miniChannelId{-1};
+    quint64 m_miniEpoch{0};
+    std::unique_ptr<TxAnalyzer> m_miniAnalyzer;
     int m_nextViewerId{1};
     int m_governor{0};
     bool m_keyed{false};

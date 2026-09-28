@@ -151,13 +151,19 @@ public:
     /// TXASetSipDisplay.  Phase 3M-4 PureSignal AmpView would use a separate
     /// disp ID.
     static constexpr int kTxDispId = 5;
+    // WDSP's 72 display slots: receiver displays occupy 0..3 and the
+    // primary TX siphon uses 5. Slot 6 is reserved for the one mini TX
+    // analyzer attached through TXASetSipAllocDisps.
+    static constexpr int kMiniTxDispId = 6;
 
     // R-R3-39: with `lane` (RadioModel::transmitLane), every WDSP analyzer
     // call runs there in the order it is made, and each poll's pixels come
     // back to this object's thread; without one they run here, as before.
     explicit TxAnalyzer(int dispId = kTxDispId, QObject* parent = nullptr,
-                        DspControlThread* lane = nullptr);
+                        DspControlThread* lane = nullptr,
+                        bool persistSettings = true);
     ~TxAnalyzer() override;
+    bool analyzerReady() const noexcept { return m_analyzerCreated; }
 
     /// Bins to clip from the low and high ends of the FFT so the analyzer
     /// emits only `lowHz`..`highHz` around the carrier.
@@ -393,6 +399,7 @@ public:
     void reloadSetting(const QString& key);
 
 signals:
+    void analyzerCreated(bool ready);
     /// FFT bins ready (in dBm) for the spectrum trace plane (pixout=0).
     /// Compatible signature with FFTEngine::fftReady so
     /// SpectrumWidget::updateSpectrum can be connected interchangeably.
@@ -431,6 +438,10 @@ private:
     // saveSettings does not write all nine keys back (reloadSetting writes
     // back only its own key, and only when the setter changed its value).
     bool m_reloadingSetting{false};
+    const bool m_persistSettings{true};
+    // Secondary creation completes on the TX lane. Its destructor queues a
+    // conditional destroy after creation even if the GUI callback was lost.
+    std::shared_ptr<std::atomic<bool>> m_createSucceeded;
 
     const int m_dispId;
     int m_numPixels{2048};   // matches typical SpectrumWidget width

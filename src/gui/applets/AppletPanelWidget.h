@@ -108,6 +108,10 @@ public:
 
     QList<AppletWidget*> applets() const { return m_applets; }
 
+signals:
+    void headerWidgetChanged(QWidget* header);
+    void panelWidgetAdded(QWidget* widget);
+
 protected:
     void resizeEvent(QResizeEvent* event) override;
 

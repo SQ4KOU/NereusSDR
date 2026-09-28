@@ -88,6 +88,7 @@
 #include "core/session/media/DualPathAudio.h"
 #include "core/session/IceConfiguration.h"
 #include "core/ClarityController.h"
+#include "core/spectrum/SpectrumReducer.h"
 #include "core/ControlRanges.h"
 #include "core/FFTEngine.h"
 #include "core/session/StationClient.h"
@@ -598,6 +599,18 @@ QJsonObject requestFor(SpectrumWidget* widget, SliceModel* slice,
     return request;
 }
 
+SpectrumWidget* miniSettingsWidget(PanadapterStack* stack, int sliceId)
+{
+    if (!stack) { return nullptr; }
+    SpectrumWidget* fallback = nullptr;
+    for (PanadapterApplet* applet : stack->allApplets()) {
+        if (!applet || !applet->spectrumWidget()) { continue; }
+        if (applet->activeSliceIndex() == sliceId) { return applet->spectrumWidget(); }
+        if (!fallback) { fallback = applet->spectrumWidget(); }
+    }
+    return fallback;
+}
+
 // Parity Task 28 (R-R3-49, A11): the window the Core quantises the pan's
 // transmit display to: its transmit grid (reference level down by its
 // dynamic range) widened by the transmit waterfall levels, which colour the
@@ -696,10 +709,10 @@ QString allocationIdentity(const DisplayBudgetLimits& limits,
         .arg(ps3Enabled)
         .arg(retainedPs3ExceedsCap);
     for (const RemoteDisplayIntent& intent : intents) {
-        key += QStringLiteral("|%1:%2:%3:%4:%5:%6")
+        key += QStringLiteral("|%1:%2:%3:%4:%5:%6:%7")
             .arg(intent.panId).arg(intent.pixels).arg(intent.fps)
             .arg(intent.includeWidePlane).arg(intent.waterfallPeriodMs)
-            .arg(intent.active);
+            .arg(intent.active).arg(int(intent.kind));
     }
     return key;
 }
@@ -721,6 +734,8 @@ struct RemoteMediaController::Private {
             bool timedOut = false;
         };
         QString panId;
+        int miniSliceId = -1; // -1 is the existing pan destination.
+        bool isMini() const { return miniSliceId >= 0; }
         QPointer<SpectrumWidget> widget;
         QPointer<SliceModel> slice;
         QJsonObject observed;
@@ -745,6 +760,7 @@ struct RemoteMediaController::Private {
         QJsonObject askedAgain;
         double sourceCentreHz = 0;
         DisplayCodecDecoder decoder;
+        QVector<float> lastMiniTrace;
         // R-R3-21 / R-R3-08: decoded frames waiting for their presentation
         // time, and the rows filling a lost message's gap.
         RemoteDisplayPresenter presenter;
@@ -787,6 +803,7 @@ struct RemoteMediaController::Private {
     QPointer<StationClient> client;
     QPointer<RadioModel> model;
     QPointer<PanadapterStack> stack;
+    QSet<int> miniWanted;
     // Parity Task 28: this media start declared txDisplayVersion.
     bool txDisplayNegotiated = false;
     // Parity Task 31: this media start declared txDisplayVersion 3, and the
@@ -880,6 +897,67 @@ struct RemoteMediaController::Private {
         }
         inputs.duplex = displayDuplexNegotiated && displayDuplex;
         return requestFor(widget, slice, client && client->remoteWidebandAvailable(), inputs);
+    }
+
+    QJsonObject requestMini(SliceModel* slice) const
+    {
+        if (!client || client->capabilities().miniDisplayVersion < 1 || !model
+            || !slice || slice->streamIndex() < 0 || slice->sampleRateHz() <= 0) { return {}; }
+        // From Thetis console.cs:13221 and MeterManager.cs:43361-43363 [@3759d096],
+        // 44463-44477 [v2.10.3.15]: the default 10 kHz RX half-width,
+        // 20 kHz TX half-width, 1024 pixels and 30 output frames/s.
+        constexpr double kRxSpanHz = 20'000.0;
+        constexpr double kTxSpanHz = 40'000.0;
+        constexpr int kPixels = 1024;
+        constexpr int kFps = 30;
+        const bool transmit = model->isTransmitting() && model->txBoundSlice() == slice;
+        const double span = transmit ? kTxSpanHz : kRxSpanHz;
+        const double centre = transmit ? double(model->txFrequencyForSlice(slice))
+                                       : slice->frequency();
+        const int base = fftSizeFor(AppSettings::instance().value(
+            QLatin1String(ControlRanges::kDisplayFftSizeKey),
+            QString::number(ControlRanges::kDisplayFftSizeDefault)).toString().toInt());
+        const int size = std::max(base, fftSizeFor(double(slice->sampleRateHz())
+                                                   * kPixels / span));
+        const int window = qBound(0, AppSettings::instance().value(
+            QLatin1String(ControlRanges::kDisplayFftWindowKey),
+            QString::number(ControlRanges::kDisplayFftWindowDefault)).toString().toInt(),
+            int(WindowFunction::Count) - 1);
+        SpectrumWidget* source = miniSettingsWidget(stack, slice->sliceIndex());
+        const double binWidthHz = double(slice->sampleRateHz()) / size;
+        const DbmWindow dbm = source
+            ? liveDbmWindow(source, binWidthHz,
+                waterfallLevelsWindow(source, std::nullopt,
+                    panLowDbm(source, binWidthHz)))
+            : DbmWindow{-140.0, -40.0};
+        QJsonObject request{{QStringLiteral("sliceId"), slice->sliceIndex()},
+            {QStringLiteral("tier"), size > base ? QStringLiteral("fine")
+                                                  : QStringLiteral("wide")},
+            {QStringLiteral("fftSize"), size}, {QStringLiteral("windowType"), window},
+            {QStringLiteral("centreHz"), centre}, {QStringLiteral("spanHz"), span},
+            {QStringLiteral("pixels"), kPixels}, {QStringLiteral("fps"), kFps},
+            {QStringLiteral("framesPerLine"), 1},
+            {QStringLiteral("trace"), plane(source ? int(source->spectrumDetector()) : 0,
+                source ? int(source->spectrumAveraging()) : 0,
+                source ? source->spectrumAverageAlpha() : 0.0)},
+            {QStringLiteral("waterfall"), plane(source ? int(source->waterfallDetector()) : 0,
+                source ? int(source->waterfallAveraging()) : 0,
+                source ? source->waterfallAverageAlpha() : 0.0)},
+            {QStringLiteral("minDbm"), dbm.minDbm},
+            {QStringLiteral("maxDbm"), dbm.maxDbm},
+            {QStringLiteral("wideSpanFactor"), 0.0},
+            {QStringLiteral("displayRole"), QStringLiteral("mini")}};
+        if (source) { setAveragingFor(request, source, kFps); }
+        if (client->spectrumDecimationAvailable()) {
+            request.insert(QStringLiteral("decimation"), model->fftEngine()
+                ? model->fftEngine()->decimation() : 1);
+        }
+        if (transmit && source && txDisplayNegotiated) {
+            const DbmWindow txWindow = transmitDbmWindow(source);
+            request.insert(QStringLiteral("txMinDbm"), txWindow.minDbm);
+            request.insert(QStringLiteral("txMaxDbm"), txWindow.maxDbm);
+        }
+        return request;
     }
 
     /// Parity Task 17: brings each pan's dBm window up to date. A pan seen
@@ -1599,6 +1677,8 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
             requestAudio();
         }
     });
+    connect(model, &RadioModel::transmittingChanged, this,
+            &RemoteMediaController::refreshSubscriptions);
     if (client && client->mediaAvailable()) {
         start();
     }
@@ -1633,6 +1713,16 @@ DisplayBudgetReason RemoteMediaController::panDisplayBudgetReason(const QString&
     return d->panBudgetReason.value(panId, DisplayBudgetReason::None);
 }
 int RemoteMediaController::activeEndpointCount() const { return int(d->bindings.size()); }
+
+void RemoteMediaController::setMiniDisplaySlices(const QSet<int>& sliceIds)
+{
+    if (d->miniWanted == sliceIds) { return; }
+    for (int id : std::as_const(d->miniWanted)) {
+        if (!sliceIds.contains(id)) { emit miniDisplayUnavailable(id); }
+    }
+    d->miniWanted = sliceIds;
+    refreshSubscriptions();
+}
 std::optional<MediaPeerTelemetry> RemoteMediaController::trafficTelemetry() const
 {
     return d->peer ? d->peer->telemetry() : std::nullopt;
@@ -2639,6 +2729,7 @@ void RemoteMediaController::stop()
     retiredWidgets.reserve(static_cast<qsizetype>(d->bindings.size()));
     for (const auto& [id, binding] : d->bindings) {
         retiredWidgets.append({binding.widget, binding.panId});
+        if (binding.isMini()) { emit miniDisplayUnavailable(binding.miniSliceId); }
     }
     d->bindings.clear();
     d->ctunStreams.clear();
@@ -3297,6 +3388,9 @@ void RemoteMediaController::start()
         startControl.insert(QStringLiteral("txDisplayVersion"),
                             d->displayDuplexNegotiated ? 3 : 1);
     }
+    if (d->client && d->client->capabilities().miniDisplayVersion >= 1) {
+        startControl.insert(QStringLiteral("miniDisplayVersion"), 1);
+    }
     // Parity Task 32 (R-IOS-13, R-R3-49): likewise the transmit monitor,
     // only to a Core that sends it.
     d->txMonitorNegotiated = d->client && d->client->capabilities().txMonitorAudioVersion >= 1;
@@ -3376,6 +3470,9 @@ bool RemoteMediaController::retireSubscriptions(const QList<quint32>& endpointId
     for (quint32 id : endpointIds) {
         auto found = d->bindings.find(id);
         if (found == d->bindings.end()) { continue; }
+        if (found->second.isMini()) {
+            emit miniDisplayUnavailable(found->second.miniSliceId);
+        }
         if (budgetMode) {
             QPointer<SpectrumWidget> widget = found->second.widget;
             QObject::disconnect(found->second.ctunGesture);
@@ -3515,6 +3612,7 @@ void RemoteMediaController::refreshSubscriptions()
     QSet<SpectrumWidget*> keepHistory;
     QList<quint32> retiredEndpoints;
     for (auto it = d->bindings.begin(); it != d->bindings.end(); ++it) {
+        if (it->second.isMini()) { continue; }
         const auto next = std::find_if(desired.cbegin(), desired.cend(),
             [&it](const Desired& item) {
                 return item.widget == it->second.widget && item.slice == it->second.slice;
@@ -3550,7 +3648,8 @@ void RemoteMediaController::refreshSubscriptions()
         }
         auto found = std::find_if(d->bindings.begin(), d->bindings.end(),
             [widget, slice](const auto& entry) {
-                return entry.second.widget == widget && entry.second.slice == slice;
+                return !entry.second.isMini() && entry.second.widget == widget
+                    && entry.second.slice == slice;
             });
         if (found == d->bindings.end()) {
             if (d->bindings.size() >= kMaxEndpoints || d->nextEndpoint == 0) { continue; }
@@ -3643,7 +3742,64 @@ void RemoteMediaController::refreshSubscriptions()
             found->second.observed = {};
         }
     }
+    refreshLegacyMiniSubscriptions();
     refreshCtunState();
+}
+
+void RemoteMediaController::refreshLegacyMiniSubscriptions()
+{
+    if (!d->model || !d->client || !d->peer || !d->peer->isReady()) { return; }
+    QList<quint32> retired;
+    for (const auto& [endpointId, binding] : d->bindings) {
+        if (!binding.isMini()) { continue; }
+        SliceModel* current = d->model->sliceById(binding.miniSliceId);
+        if (!d->miniWanted.contains(binding.miniSliceId) || !current
+            || current != binding.slice || d->requestMini(current).isEmpty()) {
+            emit miniDisplayUnavailable(binding.miniSliceId);
+            retired.append(endpointId);
+        }
+    }
+    if (!retired.isEmpty() && !retireSubscriptions(retired)) { return; }
+    QList<int> ids = d->miniWanted.values();
+    std::sort(ids.begin(), ids.end());
+    for (int sliceId : ids) {
+        SliceModel* slice = d->model->sliceById(sliceId);
+        const QJsonObject desired = d->requestMini(slice);
+        if (desired.isEmpty()) { emit miniDisplayUnavailable(sliceId); continue; }
+        auto found = std::find_if(d->bindings.begin(), d->bindings.end(),
+            [sliceId](const auto& entry) {
+                return entry.second.miniSliceId == sliceId && !entry.second.retiring;
+            });
+        if (found == d->bindings.end()) {
+            if (d->bindings.size() >= kMaxEndpoints || d->nextEndpoint == 0) {
+                emit miniDisplayUnavailable(sliceId);
+                continue;
+            }
+            const quint32 endpointId = d->nextEndpoint++;
+            found = d->bindings.try_emplace(endpointId).first;
+            found->second.panId = QStringLiteral("mini:%1").arg(sliceId);
+            found->second.miniSliceId = sliceId;
+            found->second.slice = slice;
+        }
+        auto& binding = found->second;
+        if (binding.observed == desired && binding.observedStream == slice->streamIndex()
+            && binding.observedStreamEpoch == slice->streamEpoch()) { continue; }
+        emit miniDisplayUnavailable(sliceId);
+        binding.observed = desired;
+        binding.observedStream = slice->streamIndex();
+        binding.observedStreamEpoch = slice->streamEpoch();
+        ++binding.revision;
+        if (binding.revision == 0) { ++binding.revision; }
+        binding.accepted = false;
+        binding.rejected = false;
+        binding.decoder.reset();
+        binding.presenter.reset();
+        QJsonObject wire = desired;
+        wire.insert(QStringLiteral("op"), QStringLiteral("subscribe"));
+        wire.insert(QStringLiteral("endpointId"), double(found->first));
+        wire.insert(QStringLiteral("revision"), double(binding.revision));
+        send(wire);
+    }
 }
 
 void RemoteMediaController::setPanStatus(const QString& panId, const PanDisplayState& status)
@@ -3781,6 +3937,20 @@ void RemoteMediaController::refreshBudgetSubscriptions()
         intent.active = intent.panId == d->stack->activePanId();
         desired.append({intent.panId, widget, slice, std::move(original), intent});
     }
+    QList<int> miniIds = d->miniWanted.values();
+    std::sort(miniIds.begin(), miniIds.end());
+    for (int sliceId : miniIds) {
+        SliceModel* slice = d->model->sliceById(sliceId);
+        QJsonObject original = d->requestMini(slice);
+        if (original.isEmpty()) { emit miniDisplayUnavailable(sliceId); continue; }
+        RemoteDisplayIntent intent;
+        intent.panId = QStringLiteral("mini:%1").arg(sliceId);
+        intent.pixels = original.value(QStringLiteral("pixels")).toInt();
+        intent.fps = original.value(QStringLiteral("fps")).toInt();
+        intent.waterfallPeriodMs = 1000 / 30;
+        intent.kind = RemoteDisplayIntent::Kind::Mini;
+        desired.append({intent.panId, nullptr, slice, std::move(original), intent});
+    }
 
     // Refuse an impossible PS3 enable before any pan operation can be
     // attributed to that request. Existing pan allocations remain intact.
@@ -3902,7 +4072,8 @@ void RemoteMediaController::refreshBudgetSubscriptions()
             const RemoteDisplayIntent& was = d->wantedIntents.at(i);
             const RemoteDisplayIntent& is = intents.at(i);
             sameDisplays = was.panId == is.panId && was.fps == is.fps
-                && was.includeWidePlane == is.includeWidePlane;
+                && was.includeWidePlane == is.includeWidePlane
+                && was.kind == is.kind;
             widthsMoved = widthsMoved || was.pixels != is.pixels;
         }
         if (d->resizeAsk && !sameDisplays) {
@@ -4046,9 +4217,14 @@ void RemoteMediaController::refreshBudgetSubscriptions()
         auto found = std::find_if(d->bindings.begin(), d->bindings.end(),
             [&item](const auto& entry) {
                 return !entry.second.retiring && entry.second.panId == item.panId
-                    && entry.second.widget == item.widget && entry.second.slice == item.slice;
+                    && entry.second.widget == item.widget && entry.second.slice == item.slice
+                    && entry.second.isMini()
+                        == (item.intent.kind == RemoteDisplayIntent::Kind::Mini);
             });
         if (quality.suspended) {
+            if (item.intent.kind == RemoteDisplayIntent::Kind::Mini) {
+                emit miniDisplayUnavailable(item.slice->sliceIndex());
+            }
             const QString suspendIdentity = QStringLiteral("suspend:%1").arg(limits->generation);
             if (found != d->bindings.end()
                 && found->second.refusedIdentity == suspendIdentity) {
@@ -4087,7 +4263,11 @@ void RemoteMediaController::refreshBudgetSubscriptions()
             binding.panId = item.panId;
             binding.widget = item.widget;
             binding.slice = item.slice;
+            if (item.intent.kind == RemoteDisplayIntent::Kind::Mini) {
+                binding.miniSliceId = item.slice->sliceIndex();
+            }
             SpectrumWidget* const sw = item.widget;
+            if (sw) {
             binding.ctunGesture = connect(sw, &SpectrumWidget::ctunEnabledChanged,
                 this, [this, endpointId](bool pinned) {
                     auto current = d->bindings.find(endpointId);
@@ -4123,12 +4303,15 @@ void RemoteMediaController::refreshBudgetSubscriptions()
             if (!self) { return; }
             found = d->bindings.find(endpointId);
             if (found == d->bindings.end()) { return; }
+            }
         }
 
         Private::Binding& binding = found->second;
         binding.suspending = false;
         binding.desiredOriginal = item.original;
-        const QJsonObject target = allocatedRequest(item.original, quality, item.widget);
+        const QJsonObject target = allocatedRequest(item.original, quality,
+            item.widget ? item.widget.data()
+                        : miniSettingsWidget(d->stack, item.slice->sliceIndex()));
         const QString identity = requestIdentity(target, limits->generation, targetPs3);
         if (!binding.refusedIdentity.isEmpty() && binding.refusedIdentity != identity) {
             binding.refusedIdentity.clear();
@@ -4197,6 +4380,13 @@ void RemoteMediaController::refreshBudgetSubscriptions()
         auto found = d->bindings.find(candidate.endpointId);
         if (found == d->bindings.end() || found->second.pending) { return; }
         Private::Binding& binding = found->second;
+        if (binding.isMini()) {
+            emit miniDisplayUnavailable(binding.miniSliceId);
+            binding.accepted = false;
+            binding.decoder.reset();
+            binding.presenter.reset();
+            binding.lastMiniTrace.clear();
+        }
         if (binding.askAgain) {
             binding.askAgain = false;
             binding.askedAgain = candidate.request;
@@ -5016,6 +5206,7 @@ void RemoteMediaController::receiveAllocationResult(const QJsonObject& payload)
             binding.refusedIdentity = pending.identity;
             binding.refusalReason = reason.isEmpty()
                 ? QStringLiteral("Core refused the display allocation.") : reason;
+            if (binding.isMini()) { emit miniDisplayUnavailable(binding.miniSliceId); }
             if (reason == QLatin1String(kDisplayBudgetRefusalReason)) {
                 // Fix wave 2 (Critical 1): the ask for what the operator
                 // wants is answered. The share the Core published with it
@@ -5240,7 +5431,7 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
     quint32 endpointId = 0, revision = 0;
     if (!uint32(payload, "endpointId", endpointId) || !uint32(payload, "revision", revision)) { return; }
     auto it = d->bindings.find(endpointId);
-    if (it == d->bindings.end() || !it->second.widget) { return; }
+    if (it == d->bindings.end() || (!it->second.widget && !it->second.isMini())) { return; }
     auto& binding = it->second;
     const bool budgetMode = d->client->remoteDisplayBudgetLimits().has_value();
     if (op == QLatin1String("noise-floor")) {
@@ -5305,6 +5496,10 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
                                             << endpointId << reason.left(512);
             binding.decoder.reset();
             binding.presenter.reset();
+            if (binding.isMini()) {
+                emit miniDisplayUnavailable(binding.miniSliceId);
+                return;
+            }
             const QPointer<RemoteMediaController> self(this);
             const QString panId = binding.panId;
             binding.widget->clearRemoteSpectrum();
@@ -5327,7 +5522,9 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
     // A gesture/rebind may arrive between the outgoing request and its ACK.
     // Issue the newer request before accepting an old view over that gesture.
     if (binding.slice) {
-        const QJsonObject currentRequest = d->request(binding.widget, binding.slice);
+        const QJsonObject currentRequest = binding.isMini()
+            ? d->requestMini(binding.slice)
+            : d->request(binding.widget, binding.slice);
         const bool requestChanged = budgetMode
             ? !sameOriginalIntent(currentRequest, binding.acceptedRequest)
             : currentRequest != binding.observed;
@@ -5365,6 +5562,60 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
     context.source.streamIndex = decoded->sourceStream;
     context.targetFps = decoded->fps;
     context.framesPerLine = decoded->framesPerLine;
+    if (binding.isMini()) {
+        const QJsonObject target = budgetMode ? binding.acceptedRequest : binding.observed;
+        const bool wantsTx = d->model && binding.slice && d->model->isTransmitting()
+            && d->model->txBoundSlice() == binding.slice;
+        const double expectedCentre = target.value(QStringLiteral("centreHz")).toDouble();
+        const double expectedSpan = target.value(QStringLiteral("spanHz")).toDouble();
+        const int fftSize = decoded->grant ? decoded->grant->grantedFftSize
+            : target.value(QStringLiteral("fftSize")).toInt();
+        // Core reports the exact inclusive FFT-bin crop, which can differ
+        // from the requested RF window by several bins. Recompute that crop
+        // from the same SpectrumReducer rule rather than allowing a broad
+        // tolerance that could admit a stale, shifted context.
+        ReducerConfig crop;
+        crop.centreHz = expectedCentre;
+        crop.spanHz = expectedSpan;
+        crop.streamCentreHz = decoded->sourceCentreHz;
+        crop.sampleRateHz = decoded->sampleRateHz;
+        const auto bins = fftSize > 0
+            ? SpectrumReducer::visibleBinRange(fftSize, crop)
+            : std::pair<int, int>{0, -1};
+        const double binHz = fftSize > 0 ? decoded->sampleRateHz / fftSize : 0.0;
+        const double cropCentre = decoded->sourceCentreHz - decoded->sampleRateHz * 0.5
+            + (bins.first + bins.second + 1) * binHz * 0.5;
+        const double cropSpan = (bins.second - bins.first + 1) * binHz;
+        const double rfEpsilon = std::max(1.0e-6, binHz * 1.0e-9);
+        if (!d->miniWanted.contains(binding.miniSliceId) || !binding.slice
+            || binding.slice->sliceIndex() != binding.miniSliceId
+            || decoded->sourceStream != binding.slice->streamIndex()
+            || binding.observedStreamEpoch != binding.slice->streamEpoch()
+            || decoded->transmit.value_or(false) != wantsTx
+            || bins.second < bins.first
+            || std::abs(decoded->centreHz - cropCentre) > rfEpsilon
+            || std::abs(decoded->spanHz - cropSpan) > rfEpsilon
+            || decoded->traceSamples <= 0
+            || decoded->traceSamples != decoded->waterfallSamples
+            || decoded->wideSamples != 0) {
+            return;
+        }
+        emit miniDisplayUnavailable(binding.miniSliceId);
+        binding.context = context;
+        binding.contextRevision = revision;
+        binding.sourceCentreHz = sourceCentre;
+        binding.grant = decoded->grant;
+        binding.decoder.reset();
+        binding.presenter.restartChain();
+        binding.lastMiniTrace.clear();
+        binding.accepted = true;
+        binding.rejected = false;
+        binding.transmit = wantsTx;
+        binding.transmitGeneration = wantsTx ? context.codec.contextGeneration : 0;
+        binding.transmitContext = wantsTx ? decoded : std::nullopt;
+        requestKeyframe(endpointId);
+        return;
+    }
     if (decoded->transmit.value_or(false)) {
         // Parity Task 28 (R-R3-49, A11): the Core's transmit display for
         // this pan while it is keyed. The pan's receive context, grant and
@@ -5494,11 +5745,22 @@ void RemoteMediaController::receiveDisplay(const QByteArray& packet)
     const quint32 id = qFromBigEndian<quint32>(packet.constData() + 8);
     const quint32 generation = qFromBigEndian<quint32>(packet.constData() + 12);
     auto it = d->bindings.find(id);
-    if (it == d->bindings.end() || !it->second.accepted || !it->second.widget
+    if (it == d->bindings.end() || !it->second.accepted
+        || (!it->second.widget && !it->second.isMini())
         || !it->second.slice
         || it->second.observedStream != it->second.slice->streamIndex()
         || it->second.observedStreamEpoch != it->second.slice->streamEpoch()
         || generation != it->second.acceptedGeneration()) { return; }
+    if (it->second.isMini()) {
+        const auto& mini = it->second;
+        const bool budgetMode = d->client->remoteDisplayBudgetLimits().has_value();
+        const QJsonObject wanted = d->requestMini(mini.slice);
+        if (!d->miniWanted.contains(mini.miniSliceId) || wanted.isEmpty()
+            || mini.transmit != (d->model->isTransmitting()
+                && d->model->txBoundSlice() == mini.slice)
+            || (budgetMode ? !sameOriginalIntent(wanted, mini.acceptedRequest)
+                           : wanted != mini.observed)) { return; }
+    }
     auto& binding = it->second;
     // R-R3-21: this pan's waits between display messages, the last 10 s.
     const qint64 arrivalNs = d->audio->nowNs();
@@ -5512,7 +5774,7 @@ void RemoteMediaController::receiveDisplay(const QByteArray& packet)
     }
     const DisplayCodecDecodeResult decoded = binding.decoder.decode(packet);
     if (decoded.disposition == DisplayCodecDisposition::NeedKeyframe) {
-        if (binding.transmit) {
+        if (binding.transmit && !binding.isMini()) {
             // Merge of parity Task 28 with R-R3-21: the transmit display is
             // drawn on arrival, not on the audio's clock (it has no audio
             // playout to follow), so a lost transmit message only asks for
@@ -5529,7 +5791,7 @@ void RemoteMediaController::receiveDisplay(const QByteArray& packet)
         requestKeyframe(id);
         scheduleDisplayPresentation(d->displayDelay.mapNs());
     } else if (decoded.disposition == DisplayCodecDisposition::Accepted) {
-        if (binding.transmit) {
+        if (binding.transmit && !binding.isMini()) {
             // Parity Task 28: a transmit display frame, handed on at once.
             // Merge with R-R3-21: it bypasses the presenter (no audio to
             // follow), so it is never stamped against the audio clock.
@@ -5541,7 +5803,7 @@ void RemoteMediaController::receiveDisplay(const QByteArray& packet)
             emit displayFrameReceived(id);
             return;
         }
-        if (d->transmittingPans.contains(binding.panId)) {
+        if (!binding.isMini() && d->transmittingPans.contains(binding.panId)) {
             // Parity Task 29 (A11): the pan shows the transmit display; a
             // receive frame now is the receiver hearing its own
             // transmitter. Decoded (the next delta needs it), never drawn:
@@ -5662,7 +5924,48 @@ void RemoteMediaController::presentDueDisplay()
         std::vector<RemoteDisplayPresenter::Item> items = it->second.presenter.takeDue(now, map);
         for (RemoteDisplayPresenter::Item& item : items) {
             it = d->bindings.find(id);
-            if (it == d->bindings.end() || !it->second.widget) { break; }
+            if (it == d->bindings.end()) { break; }
+            if (it->second.isMini()) {
+                auto& mini = it->second;
+                const bool currentTx = d->model && mini.slice
+                    && d->model->isTransmitting()
+                    && d->model->txBoundSlice() == mini.slice;
+                const bool budgetMode = d->client
+                    && d->client->remoteDisplayBudgetLimits().has_value();
+                const QJsonObject wanted = d->requestMini(mini.slice);
+                if (!mini.accepted || !mini.slice
+                    || !d->miniWanted.contains(mini.miniSliceId)
+                    || wanted.isEmpty() || mini.transmit != currentTx
+                    || (budgetMode ? !sameOriginalIntent(wanted, mini.acceptedRequest)
+                                   : wanted != mini.observed)
+                    || mini.slice->sliceIndex() != mini.miniSliceId
+                    || mini.observedStream != mini.slice->streamIndex()
+                    || mini.observedStreamEpoch != mini.slice->streamEpoch()
+                    || item.frame.context.contextGeneration != mini.acceptedGeneration()
+                    || item.centreHz != mini.context.exactCentreHz
+                    || item.spanHz != mini.context.exactSpanHz
+                    || item.frame.waterfallDbm.size() != mini.context.codec.waterfallSamples) {
+                    continue;
+                }
+                if (item.kind == RemoteDisplayPresenter::Kind::Frame) {
+                    if (item.frame.traceDbm.size() != mini.context.codec.traceSamples) {
+                        continue;
+                    }
+                    mini.lastMiniTrace = item.frame.traceDbm;
+                }
+                if (mini.lastMiniTrace.isEmpty()) { continue; }
+                emit miniDisplayFrame(mini.miniSliceId, mini.lastMiniTrace,
+                    item.frame.waterfallDbm, mini.context.exactCentreHz,
+                    mini.context.exactSpanHz, mini.transmit,
+                    item.kind == RemoteDisplayPresenter::Kind::Frame
+                        ? item.frame.waterfallAdvance : true);
+                if (!self || d->connectionId != connectionId) { return; }
+                ++d->frames;
+                emit displayFrameReceived(id);
+                if (!self || d->connectionId != connectionId) { return; }
+                continue;
+            }
+            if (!it->second.widget) { break; }
             // Merge of parity Tasks 28-29 with R-R3-21: the keying hold is
             // checked at presentation time too. While the Core's transmit
             // context holds this binding (acceptedGeneration() is the

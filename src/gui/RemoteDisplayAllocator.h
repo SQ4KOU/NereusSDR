@@ -18,12 +18,14 @@
 namespace NereusSDR {
 
 struct RemoteDisplayIntent {
+    enum class Kind { Pan, Mini };
     QString panId;
     int pixels = 0;
     int fps = 0;
     bool includeWidePlane = false;
     int waterfallPeriodMs = 0;
     bool active = false;
+    Kind kind = Kind::Pan;
 };
 
 struct RemoteDisplayQuality {

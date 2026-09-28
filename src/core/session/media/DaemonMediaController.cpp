@@ -4530,18 +4530,28 @@ void DaemonMediaController::onSendTick()
     }
     const qint64 nowNs = displayNowNs();
     const QPointer<DaemonMediaController> self(this);
-    const bool sentPs3 = trySendPs3(peer, epoch, nowNs);
-    if (!self || m_peer.get() != peer || m_epoch != epoch) { return; }
+    // A continuously pending PureSignal snapshot must leave the next
+    // writable display slot to spectrum. Whichever display kind last sent
+    // yields first, with the other kind as fallback when it has no frame.
+    if (m_lastDisplayAttemptWasPs3) {
+        const bool sentSpectrum = trySendSpectrum(peer, epoch, nowNs);
+        if (!self || m_peer.get() != peer || m_epoch != epoch) { return; }
+        if (!sentSpectrum) {
+            trySendPs3(peer, epoch, nowNs);
+            if (!self || m_peer.get() != peer || m_epoch != epoch) { return; }
+        }
+    } else {
+        const bool sentPs3 = trySendPs3(peer, epoch, nowNs);
+        if (!self || m_peer.get() != peer || m_epoch != epoch) { return; }
+        if (!sentPs3) {
+            trySendSpectrum(peer, epoch, nowNs);
+            if (!self || m_peer.get() != peer || m_epoch != epoch) { return; }
+        }
+    }
     for (int attempt = 0; attempt < 16; ++attempt) {
         const bool sentIq = trySendIq(peer, epoch, nowNs);
         if (!self || m_peer.get() != peer || m_epoch != epoch) { return; }
         if (!sentIq) { break; }
-    }
-    if (sentPs3) { return; }
-    if (m_lastDisplayAttemptWasPs3) {
-        if (trySendSpectrum(peer, epoch, nowNs)) { return; }
-    } else {
-        trySendSpectrum(peer, epoch, nowNs);
     }
 }
 
@@ -4666,6 +4676,14 @@ void DaemonMediaController::wireTxDisplayFeed()
             connect(feed, &TxDisplayFeed::waterfallReady, this,
                     [this](const QVector<float>& dbm) { onTransmitPlane(dbm, true); },
                     Qt::QueuedConnection);
+            connect(feed, &TxDisplayFeed::miniViewChanged, this, reconcile,
+                    Qt::QueuedConnection);
+            connect(feed, &TxDisplayFeed::miniTraceReady, this,
+                    [this](const QVector<float>& dbm) { onTransmitPlane(dbm, false, true); },
+                    Qt::QueuedConnection);
+            connect(feed, &TxDisplayFeed::miniWaterfallReady, this,
+                    [this](const QVector<float>& dbm) { onTransmitPlane(dbm, true, true); },
+                    Qt::QueuedConnection);
         }
     }
     // Which pan transmits follows the transmit slice.
@@ -4764,8 +4782,9 @@ std::optional<QJsonObject> DaemonMediaController::transmitContextFor(
     if (!m_peer || m_txFeed.isNull() || !entry.txViewer) {
         return std::nullopt;
     }
-    const TxDisplayView view = m_txFeed->currentView();
-    if (view.empty()) {
+    const bool mini = entry.miniDisplay;
+    const TxDisplayView view = mini ? m_txFeed->miniView() : m_txFeed->currentView();
+    if (view.empty() || (mini && !m_txFeed->miniReady())) {
         return std::nullopt;
     }
     // The view's pixels, never more than the endpoint was admitted for (a
@@ -4774,7 +4793,8 @@ std::optional<QJsonObject> DaemonMediaController::transmitContextFor(
         view.pixels > 0 ? std::min(view.pixels, entry.request.pixels) : entry.request.pixels,
         1, SpectrumEndpoint::kMaxPixels);
     // The analyzer's output rate, never faster than the endpoint asked.
-    const int fps = std::clamp(std::min(std::max(1, m_txFeed->outputFps()),
+    const int fps = std::clamp(std::min(std::max(1, mini ? m_txFeed->miniOutputFps()
+                                                       : m_txFeed->outputFps()),
                                         entry.request.targetFps),
                                1, 60);
     const std::pair<float, float> window =
@@ -4801,12 +4821,13 @@ std::optional<QJsonObject> DaemonMediaController::transmitContextFor(
         message.wideband = WidebandDisplayContext{};
     }
     SpectrumContextGrant grant;
-    grant.grantedFftSize = std::clamp(m_txFeed->fftSize(), 1, FFTEngine::maximumFftSize());
+    grant.grantedFftSize = std::clamp(mini ? m_txFeed->miniFftSize() : m_txFeed->fftSize(),
+                                     1, FFTEngine::maximumFftSize());
     grant.grantedTier = entry.request.source.tier;
     grant.requestedPixels = std::max(entry.grant.requestedPixels, samples);
     grant.grantedPixels = samples;
-    grant.limit = m_txFeed->isGoverning(entry.txViewer->id) ? SpectrumLimitReason::None
-                                                              : SpectrumLimitReason::SharedEngine;
+    grant.limit = (mini || m_txFeed->isGoverning(entry.txViewer->id))
+        ? SpectrumLimitReason::None : SpectrumLimitReason::SharedEngine;
     message.grant = grant;
     message.transmit = true;
     return encodeRemoteSpectrumContext(message, /*grantNegotiated=*/true);
@@ -4840,7 +4861,8 @@ void DaemonMediaController::reconcileTransmitDisplay()
             auto lease = std::make_unique<TxViewerLease>();
             lease->feed = feed;
             lease->id = feed->addViewer(feed->currentView().carrierHz, entry.request.spanHz,
-                                        entry.request.pixels, /*local=*/false);
+                                        entry.request.pixels, /*local=*/false,
+                                        entry.miniDisplay);
             entry.txViewer = std::move(lease);
             entry.endpoint.reset();
             entry.contextSent = false;
@@ -4913,14 +4935,16 @@ void DaemonMediaController::reconcileTransmitDisplay()
     }
 }
 
-void DaemonMediaController::onTransmitPlane(const QVector<float>& dbm, bool waterfall)
+void DaemonMediaController::onTransmitPlane(const QVector<float>& dbm, bool waterfall,
+                                            bool mini)
 {
     if (!m_peer || m_txFeed.isNull() || !m_txFeed->isKeyed()) {
         return;
     }
     // A poll made before the analyzer's pixel count last changed describes
     // another view: drop it rather than draw it across this one.
-    if (dbm.size() != m_txFeed->currentView().pixels) {
+    if (dbm.size() != (mini ? m_txFeed->miniView().pixels
+                           : m_txFeed->currentView().pixels)) {
         return;
     }
     const qint64 nowNs = displayNowNs();
@@ -4942,7 +4966,7 @@ void DaemonMediaController::onTransmitPlane(const QVector<float>& dbm, bool wate
     }
     for (auto& [endpointId, entry] : m_endpoints) {
         Q_UNUSED(endpointId);
-        if (!entry.txViewer || !entry.txContextSent) {
+        if (!entry.txViewer || !entry.txContextSent || entry.miniDisplay != mini) {
             continue;
         }
         QVector<float> plane = reduceTransmitPlane(*source, entry.txCodec.traceSamples,

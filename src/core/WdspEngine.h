@@ -195,6 +195,7 @@ class TestTxAnalyzerSkirt;
 // R-IOS-13: the transmit path's DSP latency test.
 class TestTxLatencyDsp;
 class TestTxKeyDspOptions;
+class TstRemoteTxDisplay;
 #endif
 
 namespace NereusSDR {
@@ -1012,6 +1013,7 @@ private:
     // createRxChannel without a running event loop or a real WDSP wisdom
     // file.  Production builds (without NEREUS_BUILD_TESTS) never see this.
     friend class ::TestWdspEngineTxChannel;
+    friend class ::TstRemoteTxDisplay;
     // Phase 3M-3a-iii Task 20: same friendship for the create_dexp test.
     friend class ::TstWdspEngineDexpInit;
     // Phase 3M-4 Task 4: same friendship for the PsFeedbackChannel test.

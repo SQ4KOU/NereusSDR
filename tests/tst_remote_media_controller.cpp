@@ -51,6 +51,7 @@
 #include <cmath>
 #include <functional>
 #include <memory>
+#include <numbers>
 #include <stdexcept>
 #include <thread>
 #include <utility>
@@ -5567,6 +5568,201 @@ private slots:
             QCOMPARE(gui.panDisplayState(applet->panId()).zoomLimit,
                      PanDisplayState::ZoomLimit::None);
         }
+        client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    void miniSlicesShareOneStreamButKeepIndependentEndpoints()
+    {
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
+        RadioModel station;
+        station.setBoardForTest(HPSDRHW::Saturn);
+        station.configureStreamPool(5, 5, 192000);
+        station.setConnectionStateForTest(ConnectionState::Connected);
+        const int a = station.addSlice();
+        const int b = station.addSlice();
+        SliceModel* first = station.sliceById(a);
+        SliceModel* second = station.sliceById(b);
+        QVERIFY(first && second);
+        const int stream = first->streamIndex();
+        QVERIFY(stream >= 0);
+        const double sourceHz = station.streamCentreHz(stream);
+        first->setFrequency(sourceHz - 12'000.0);
+        second->setFrequency(sourceHz + 12'000.0);
+        second->setStreamIndex(stream);
+        StationServer server(&station, settings,
+            NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
+        server.setMediaEnabled(true);
+        QPointer<DisplayTransport> sourceMedia;
+        DaemonMediaController daemon(&server, &station, nullptr,
+            [&sourceMedia](QObject* owner) -> IMediaTransport* {
+                sourceMedia = new DisplayTransport(owner);
+                return sourceMedia;
+            });
+        RadioModel remote(RadioModel::Role::Remote);
+        remote.audioEngine()->setMasterMuted(true);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        PanadapterStack stack;
+        auto* applet = stack.addPanadapter(QStringLiteral("main"));
+        applet->setActiveSliceIndex(a);
+        applet->spectrumWidget()->setDisplayWindowPreservingHistory(sourceHz, 48'000.0);
+        stack.resize(600, 400);
+        stack.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&stack));
+        QPointer<DisplayTransport> sinkMedia;
+        RemoteMediaController gui(&client, &remote, &stack, nullptr,
+            [&sinkMedia](QObject* owner) -> IMediaTransport* {
+                sinkMedia = new DisplayTransport(owner);
+                return sinkMedia;
+            });
+        QSignalSpy miniFrames(&gui, &RemoteMediaController::miniDisplayFrame);
+        QSignalSpy unavailable(&gui, &RemoteMediaController::miniDisplayUnavailable);
+        QSignalSpy outbound(&server, &StationServer::mediaControlReceived);
+        QSignalSpy inbound(&client, &StationClient::mediaControlReceived);
+        auto* stationLink = new Test::LoopbackTransport(QStringLiteral("station"));
+        auto* clientLink = new Test::LoopbackTransport(QStringLiteral("client"));
+        stationLink->linkTo(clientLink);
+        client.startSession(clientLink, server.token());
+        server.acceptTransport(stationLink);
+        QTRY_VERIFY(sourceMedia && sinkMedia);
+        QTRY_COMPARE(client.capabilities().miniDisplayVersion, 1);
+        sourceMedia->other = sinkMedia;
+        sourceMedia->activate();
+        sinkMedia->activate();
+        gui.setMiniDisplaySlices({a, b});
+        QTRY_COMPARE(daemon.activeEndpointCount(), 3);
+        const QList<QJsonObject> requests = controlsFor(outbound, QStringLiteral("subscribe"));
+        int miniCount = 0;
+        for (const QJsonObject& request : requests) {
+            if (request.value(QStringLiteral("displayRole")).toString() != QLatin1String("mini")) {
+                continue;
+            }
+            ++miniCount;
+            QCOMPARE(request.value(QStringLiteral("spanHz")).toDouble(), 20'000.0);
+            QCOMPARE(request.value(QStringLiteral("pixels")).toInt(), 1024);
+            QCOMPARE(request.value(QStringLiteral("fps")).toInt(), 30);
+        }
+        QCOMPARE(miniCount, 2);
+        QVector<float> iq(4096);
+        for (int n = 0; n < iq.size() / 2; ++n) {
+            const double phaseA = 2.0 * std::numbers::pi * (-10'000.0 / 192'000.0) * n;
+            const double phaseB = 2.0 * std::numbers::pi * (9'000.0 / 192'000.0) * n;
+            iq[2*n] = float(0.02 * (std::cos(phaseA) + std::cos(phaseB)));
+            iq[2*n+1] = float(0.02 * (std::sin(phaseA) + std::sin(phaseB)));
+        }
+        const auto seenBoth = [&] {
+            QMetaObject::invokeMethod(&station, "rawIqDataForStream", Qt::DirectConnection,
+                Q_ARG(int, stream), Q_ARG(QVector<float>, iq));
+            bool seenA = false;
+            bool seenB = false;
+            for (const auto& frame : miniFrames) {
+                seenA |= frame.at(0).toInt() == a;
+                seenB |= frame.at(0).toInt() == b;
+            }
+            return seenA && seenB;
+        };
+        const auto miniStage = qScopeGuard([&] {
+            bool seenA = false;
+            bool seenB = false;
+            for (const auto& frame : miniFrames) {
+                seenA |= frame.at(0).toInt() == a;
+                seenB |= frame.at(0).toInt() == b;
+            }
+            if (seenA && seenB) { return; }
+            qWarning() << "mini frame stage:" << "endpoints"
+                       << daemon.activeEndpointCount() << gui.activeEndpointCount()
+                       << "sourcePackets" << sourceMedia->displayPackets.size()
+                       << "sinkFrames" << miniFrames.size()
+                       << "allGuiFrames" << gui.receivedDisplayFrames()
+                       << "seen" << seenA << seenB
+                       << "contexts" << controlsFor(inbound, QStringLiteral("context")).size()
+                       << "rejections" << countControl(inbound, QStringLiteral("rejected"));
+            for (const QJsonObject& context : controlsFor(inbound, QStringLiteral("context"))) {
+                qWarning() << "mini context" << context.value(QStringLiteral("endpointId")).toInt()
+                           << context.value(QStringLiteral("centreHz")).toDouble()
+                           << context.value(QStringLiteral("spanHz")).toDouble()
+                           << context.value(QStringLiteral("traceSamples")).toInt()
+                           << context.value(QStringLiteral("sourceStream")).toInt()
+                           << context.value(QStringLiteral("contextGeneration")).toInt()
+                           << "revision" << context.value(QStringLiteral("revision")).toInt()
+                           << "fft" << context.value(QStringLiteral("grantedFftSize")).toInt()
+                           << "tx" << context.value(QStringLiteral("transmit")).toBool()
+                           << "wide" << context.value(QStringLiteral("wideSamples")).toInt()
+                           << "rate" << context.value(QStringLiteral("sampleRateHz")).toDouble();
+            }
+            for (const QJsonObject& request : controlsFor(outbound, QStringLiteral("subscribe"))) {
+                qWarning() << "mini request" << request.value(QStringLiteral("endpointId")).toInt()
+                           << request.value(QStringLiteral("displayRole")).toString()
+                           << request.value(QStringLiteral("centreHz")).toDouble()
+                           << request.value(QStringLiteral("spanHz")).toDouble()
+                           << "revision" << request.value(QStringLiteral("revision")).toInt()
+                           << "fft" << request.value(QStringLiteral("fftSize")).toInt();
+            }
+        });
+        QTRY_VERIFY_WITH_TIMEOUT(seenBoth(), 5'000);
+        const auto framesSince = [&](int previous, int sliceId) {
+            for (int index = previous; index < miniFrames.size(); ++index) {
+                if (miniFrames.at(index).at(0).toInt() == sliceId) { return true; }
+            }
+            return false;
+        };
+        QJsonObject acceptedMiniContext;
+        for (const QJsonObject& context : controlsFor(inbound, QStringLiteral("context"))) {
+            if (context.value(QStringLiteral("endpointId")).toInt() == 2) {
+                acceptedMiniContext = context;
+            }
+        }
+        QVERIFY(!acceptedMiniContext.isEmpty());
+        const double binHz = acceptedMiniContext.value(QStringLiteral("sampleRateHz")).toDouble()
+            / acceptedMiniContext.value(QStringLiteral("grantedFftSize")).toInt();
+        // Core's inclusive floor/ceil crop here exceeds two FFT bins beyond
+        // the requested 20 kHz. The GUI accepted exactly that crop.
+        QVERIFY(acceptedMiniContext.value(QStringLiteral("spanHz")).toDouble()
+                - 20'000.0 > 2.0 * binHz);
+        const int beforeInvalid = miniFrames.size();
+        QJsonObject shifted = acceptedMiniContext;
+        shifted.insert(QStringLiteral("contextGeneration"),
+            acceptedMiniContext.value(QStringLiteral("contextGeneration")).toInt() + 1);
+        shifted.insert(QStringLiteral("centreHz"),
+            acceptedMiniContext.value(QStringLiteral("centreHz")).toDouble() + binHz);
+        QVERIFY(server.sendMediaControl(shifted, server.mediaSessionEpoch()));
+        QTRY_VERIFY_WITH_TIMEOUT([&] {
+            QMetaObject::invokeMethod(&station, "rawIqDataForStream", Qt::DirectConnection,
+                Q_ARG(int, stream), Q_ARG(QVector<float>, iq));
+            return framesSince(beforeInvalid, a);
+        }(), 5'000);
+        const int beforePanZoom = miniFrames.size();
+        applet->spectrumWidget()->setDisplayWindowPreservingHistory(sourceHz + 4'000.0,
+                                                                     12'000.0);
+        QTRY_VERIFY_WITH_TIMEOUT([&] {
+            QMetaObject::invokeMethod(&station, "rawIqDataForStream", Qt::DirectConnection,
+                Q_ARG(int, stream), Q_ARG(QVector<float>, iq));
+            return framesSince(beforePanZoom, a) && framesSince(beforePanZoom, b);
+        }(), 5'000);
+        QByteArray retiredPacket;
+        for (const QByteArray& packet : sourceMedia->displayPackets) {
+            if (packet.size() >= 16 && packet.first(4) == QByteArrayLiteral("NSDC")
+                && qFromBigEndian<quint32>(packet.constData() + 8) == 3) {
+                retiredPacket = packet;
+            }
+        }
+        QVERIFY(!retiredPacket.isEmpty());
+        stack.removePanadapter(QStringLiteral("main"));
+        QTRY_COMPARE(daemon.activeEndpointCount(), 2);
+        const int beforeNoPan = miniFrames.size();
+        QTRY_VERIFY_WITH_TIMEOUT([&] {
+            QMetaObject::invokeMethod(&station, "rawIqDataForStream", Qt::DirectConnection,
+                Q_ARG(int, stream), Q_ARG(QVector<float>, iq));
+            return framesSince(beforeNoPan, a) && framesSince(beforeNoPan, b);
+        }(), 5'000);
+        gui.setMiniDisplaySlices({a});
+        QTRY_VERIFY(!unavailable.isEmpty());
+        QTRY_COMPARE(daemon.activeEndpointCount(), 1);
+        const int beforeStale = miniFrames.size();
+        sinkMedia->deliver(retiredPacket);
+        QTest::qWait(100);
+        QVERIFY(!framesSince(beforeStale, b));
         client.disconnectFromStation(QStringLiteral("test complete"));
     }
 

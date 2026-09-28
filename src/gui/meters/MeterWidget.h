@@ -154,6 +154,8 @@ signals:
     // Apply), so MainWindow can give it the saved meter settings and the
     // active slice's state.
     void itemAdded(NereusSDR::MeterItem* item);
+    void itemRemoved(NereusSDR::MeterItem* item);
+    void displayVisibilityChanged();
 
 protected:
 #ifdef NEREUS_GPU_SPECTRUM

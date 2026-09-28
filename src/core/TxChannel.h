@@ -623,6 +623,10 @@ public:
     // True once the WDSP channel is open and the worker may run blocks
     // through it (always true without a lane).
     bool isWdspReady() const noexcept { return m_wdspReady.load(std::memory_order_seq_cst); }
+    // Only called from the TX DSP lane. A wrapper may exist before
+    // OpenChannel succeeds or after its close barrier has begun; the mini
+    // siphon must never attach in either state.
+    bool canAttachMiniAnalyzerOnLane() const noexcept;
 
     // WdspEngine's lane-side lifecycle hooks (lane, or the caller's thread
     // with no lane):

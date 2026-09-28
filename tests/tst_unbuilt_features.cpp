@@ -938,6 +938,25 @@ private slots:
         QCOMPARE(map.size(), list.size());
     }
 
+    void enabledFilterDisplayIsVisibleInContainerAndAddMenu()
+    {
+        QVERIFY(!UnbuiltFeatures::isBuilt(F::ContainerFilterDisplay));
+        UnbuiltFeatures::setBuiltForTest(F::ContainerFilterDisplay, true);
+        const auto resetGate = qScopeGuard([] {
+            UnbuiltFeatures::setBuiltForTest(F::ContainerFilterDisplay, false);
+        });
+        GuiSessionCoordinator sessions;
+        Hosts hosts(sessions, false);
+        bool renders = false;
+        for (const MeterItem* item : hosts.containerMeter()->items()) {
+            if (qobject_cast<const FilterDisplayItem*>(item)) {
+                renders = hosts.containerMeter()->shouldRender(item);
+            }
+        }
+        QVERIFY(renders);
+        QVERIFY(actionShown(hosts.containerDialog(), QStringLiteral("Filter Display")));
+    }
+
     // Nothing on the list shows, in a local window or a remote one.
     void noUnbuiltSurfaceShowsInLocalOrRemoteWindows()
     {

@@ -631,6 +631,12 @@ void TxChannel::admitWorkerOnLane()
     m_wdspReady.store(true, std::memory_order_seq_cst);
 }
 
+bool TxChannel::canAttachMiniAnalyzerOnLane() const noexcept
+{
+    return m_lane && m_lane->isCurrentThread() && isWdspReady()
+        && !isRetired() && txaOpenLive();
+}
+
 void TxChannel::setRfGate(bool open)
 {
     const bool was = m_running.exchange(open, std::memory_order_acq_rel);

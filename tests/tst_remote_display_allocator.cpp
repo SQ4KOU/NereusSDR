@@ -51,6 +51,34 @@ class TestRemoteDisplayAllocator : public QObject {
     Q_OBJECT
 
 private slots:
+    void mini_yields_endpoint_and_budget_to_pans()
+    {
+        QList<RemoteDisplayIntent> intents;
+        for (int i = 0; i < 8; ++i) {
+            intents.append(pan(QStringLiteral("pan-%1").arg(i), 512, 30, i == 0));
+        }
+        RemoteDisplayIntent mini = pan(QStringLiteral("a-mini"), 1024, 30);
+        mini.kind = RemoteDisplayIntent::Kind::Mini;
+        intents.append(mini);
+        const auto endpointBound = allocateRemoteDisplay(
+            {100'000'000, 100'000'000, 1}, intents, false);
+        QVERIFY(endpointBound);
+        QVERIFY(quality(*endpointBound, QStringLiteral("a-mini")).suspended);
+        for (int i = 0; i < 8; ++i) {
+            QVERIFY(!quality(*endpointBound, QStringLiteral("pan-%1").arg(i)).suspended);
+        }
+
+        const auto onePanCost = spectrumDisplayCost(512, 30, false)->charge;
+        const auto budgetBound = allocateRemoteDisplay(
+            {onePanCost.applicationBytesPerSecond,
+             onePanCost.spectrumSampleUnitsPerSecond, 1},
+            {pan(QStringLiteral("pan"), 512, 30, true), mini}, false);
+        QVERIFY(budgetBound);
+        QCOMPARE(quality(*budgetBound, QStringLiteral("pan")).fps, 30);
+        QCOMPARE(quality(*budgetBound, QStringLiteral("pan")).pixels, 512);
+        QVERIFY(quality(*budgetBound, QStringLiteral("a-mini")).suspended);
+    }
+
     void preservesRequestedQualityWhenItFits()
     {
         const QList<RemoteDisplayIntent> intents{

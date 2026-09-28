@@ -19,6 +19,9 @@
 #include "core/TxSliceArbiter.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
+#include "AppSettings.h"
+#include "core/DspControlThread.h"
+#include "core/wdsp_api.h"
 
 #include <cmath>
 
@@ -80,11 +83,17 @@ TxDisplayFeed::TxDisplayFeed(RadioModel* model, TxAnalyzer* analyzer, QObject* p
     });
 }
 
-TxDisplayFeed::~TxDisplayFeed() = default;
+TxDisplayFeed::~TxDisplayFeed() { stopMini(); }
 
-int TxDisplayFeed::addViewer(double centreHz, double spanHz, int pixels, bool local)
+int TxDisplayFeed::addViewer(double centreHz, double spanHz, int pixels, bool local,
+                             bool mini)
 {
     const int id = m_nextViewerId++;
+    if (mini) {
+        m_miniViewerIds.insert(id);
+        ensureMini();
+        return id;
+    }
     Viewer viewer;
     // Held relative to the carrier, so the view moves with it (XIT, a
     // retune of the transmit slice) as Thetis's does (getLowHighForRXn).
@@ -99,6 +108,7 @@ int TxDisplayFeed::addViewer(double centreHz, double spanHz, int pixels, bool lo
 
 void TxDisplayFeed::updateViewer(int id, double centreHz, double spanHz, int pixels)
 {
+    if (isMiniViewer(id)) { return; } // the mini has a fixed Thetis RF window
     auto it = m_viewers.find(id);
     if (it == m_viewers.end()) {
         return;
@@ -128,6 +138,10 @@ void TxDisplayFeed::updateViewer(int id, double centreHz, double spanHz, int pix
 
 void TxDisplayFeed::removeViewer(int id)
 {
+    if (m_miniViewerIds.erase(id) != 0) {
+        if (m_miniViewerIds.empty() && !m_localMiniDemand) { stopMini(); }
+        return;
+    }
     if (m_viewers.erase(id) == 0) {
         return;
     }
@@ -185,10 +199,12 @@ void TxDisplayFeed::onMoxStateChanged(bool keyed)
         watchTransmitSlice();
         recompute();
         m_analyzer->start();
+        ensureMini();
         emit keyedChanged(true);
         return;
     }
     m_analyzer->stop();
+    stopMini();
     m_remoteViewTimer.stop();
     m_remoteApplied.invalidate();
     // Clear the clip so the next key starts from the full baseband, as the
@@ -287,6 +303,157 @@ void TxDisplayFeed::recompute()
     if (viewMoved && m_keyed) {
         emit viewChanged(view);
     }
+    if (m_keyed && m_miniAttached) { updateMiniView(); }
+}
+
+bool TxDisplayFeed::isMiniViewer(int id) const
+{
+    return m_miniViewerIds.contains(id);
+}
+
+void TxDisplayFeed::setLocalMiniDemand(bool wanted)
+{
+    if (m_localMiniDemand == wanted) { return; }
+    m_localMiniDemand = wanted;
+    if (wanted) { ensureMini(); }
+    else if (m_miniViewerIds.empty()) { stopMini(); }
+}
+
+TxDisplayView TxDisplayFeed::miniView() const
+{
+    TxDisplayView view;
+    view.carrierHz = carrierHz();
+    view.lowHz = -20'000;
+    view.highHz = 20'000;
+    view.pixels = 1024; // MiniSpec.PIXELS, MeterManager.cs:43362
+    return view;
+}
+
+int TxDisplayFeed::miniFftSize() const
+{
+    return m_miniAnalyzer ? m_miniAnalyzer->fftSize() : 0;
+}
+
+int TxDisplayFeed::miniOutputFps() const
+{
+    return m_miniAnalyzer ? m_miniAnalyzer->outputFps() : 0;
+}
+
+bool TxDisplayFeed::miniReady() const
+{
+    return m_miniAttached && m_miniAnalyzer && m_miniAnalyzer->analyzerReady();
+}
+
+void TxDisplayFeed::applyMiniRxSettings()
+{
+    if (!m_miniAnalyzer) { return; }
+    auto& settings = AppSettings::instance();
+    const auto integer = [&settings](const char* key, int fallback) {
+        bool valid = false;
+        const int value = settings.value(QString::fromLatin1(key), fallback).toInt(&valid);
+        return valid ? value : fallback;
+    };
+    // Thetis MeterManager.cs:44118-44143 copies the RX analyzer's detector,
+    // average, FFT and window settings into MiniSpec even during MOX.
+    m_miniAnalyzer->setFftSize(integer("DisplayFftSize", 32768));
+    m_miniAnalyzer->setWindowType(integer("DisplayFftWindow", 4));
+    m_miniAnalyzer->setPanDetector(integer("DisplaySpectrumDetector", 0));
+    m_miniAnalyzer->setPanAveraging(integer("DisplaySpectrumAveraging", 3));
+    m_miniAnalyzer->setPanAvTimeMs(integer("DisplaySpectrumAverageTimeMs", 30));
+    m_miniAnalyzer->setWfDetector(integer("DisplayWaterfallDetector", 0));
+    m_miniAnalyzer->setWfAveraging(integer("DisplayWaterfallAveraging", 0));
+    m_miniAnalyzer->setWfAvTimeMs(integer("DisplayWaterfallAverageTimeMs", 120));
+}
+
+void TxDisplayFeed::ensureMini()
+{
+    if (!m_keyed || (!m_localMiniDemand && m_miniViewerIds.empty())
+        || m_miniAnalyzer || !m_model || !m_model->txChannel()
+        || !m_model->transmitLane()) { return; }
+    TxChannel* channel = m_model->txChannel();
+    m_miniChannelId = channel->channelId();
+    const quint64 epoch = ++m_miniEpoch;
+    m_miniAnalyzer = std::make_unique<TxAnalyzer>(TxAnalyzer::kMiniTxDispId,
+                                                  nullptr, m_model->transmitLane(),
+                                                  /*persistSettings=*/false);
+    m_miniAnalyzer->setNumPixels(1024);
+    m_miniAnalyzer->setOutputFps(30);
+    m_miniAnalyzer->setSampleRate(96000.0);
+    m_miniAnalyzer->setBlockSize(channel->dspBlockFrames());
+    m_miniAnalyzer->setView(-20'000, 20'000, 1024);
+    applyMiniRxSettings();
+    connect(m_miniAnalyzer.get(), &TxAnalyzer::txFftReady, this,
+            [this](int, const QVector<float>& dbm) {
+        if (m_keyed && miniReady()) { emit miniTraceReady(dbm); }
+    });
+    connect(m_miniAnalyzer.get(), &TxAnalyzer::txWaterfallReady, this,
+            [this](int, const QVector<float>& dbm) {
+        if (m_keyed && miniReady()) { emit miniWaterfallReady(dbm); }
+    });
+    connect(m_miniAnalyzer.get(), &TxAnalyzer::analyzerCreated, this,
+            [this, epoch](bool ready) {
+        if (!ready || epoch != m_miniEpoch || !m_keyed || !m_model
+            || !m_model->txChannel()
+            || m_model->txChannel()->channelId() != m_miniChannelId
+            || (!m_localMiniDemand && m_miniViewerIds.empty())) { return; }
+#ifdef HAVE_WDSP
+        if (DspControlThread* lane = m_model->transmitLane()) {
+            const int channel = m_miniChannelId;
+            QPointer<TxChannel> liveChannel = m_model->txChannel();
+            // start queues SetAnalyzer and every per-plane setting on this
+            // FIFO lane. Attach only after those jobs have run: xsiphon may
+            // call Spectrum0 on its next TX block immediately after attach.
+            m_miniAnalyzer->start();
+            m_miniAttachPending = true;
+            lane->request<bool>([channel, liveChannel]() {
+                if (!liveChannel || liveChannel->channelId() != channel
+                    || !liveChannel->canAttachMiniAnalyzerOnLane()) { return false; }
+                int run = 1;
+                int display = TxAnalyzer::kMiniTxDispId;
+                TXASetSipAllocDisps(channel, 1, &run, &display);
+                return true;
+            }, this, [this, epoch](bool attached) {
+                if (epoch != m_miniEpoch || !m_miniAnalyzer) { return; }
+                m_miniAttachPending = false;
+                m_miniAttachSettled = true;
+                m_miniAttached = attached;
+                if (attached) {
+                    updateMiniView();
+                } else {
+                    m_miniAnalyzer->stop();
+                }
+            });
+        }
+#endif
+    });
+}
+
+void TxDisplayFeed::updateMiniView()
+{
+    if (!miniReady()) { return; }
+    const TxDisplayView view = miniView();
+    m_miniAnalyzer->setView(view.lowHz, view.highHz, view.pixels);
+    emit miniViewChanged(view);
+}
+
+void TxDisplayFeed::stopMini()
+{
+    ++m_miniEpoch;
+    if (m_miniAnalyzer) { m_miniAnalyzer->stop(); }
+#ifdef HAVE_WDSP
+    if ((m_miniAttached || m_miniAttachPending) && m_model && m_model->transmitLane()
+        && m_miniChannelId >= 0) {
+        const int channel = m_miniChannelId;
+        m_model->transmitLane()->post([channel]() {
+            TXASetSipAllocDisps(channel, 0, nullptr, nullptr);
+        });
+    }
+#endif
+    m_miniAttached = false;
+    m_miniAttachPending = false;
+    m_miniAttachSettled = false;
+    m_miniChannelId = -1;
+    m_miniAnalyzer.reset(); // queues DestroyAnalyzer after detach on the same lane
 }
 
 } // namespace NereusSDR

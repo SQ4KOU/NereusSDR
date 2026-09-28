@@ -179,6 +179,7 @@ void MeterWidget::removeItem(MeterItem* item)
         m_bgDirty = true;
 #endif
         update();
+        emit itemRemoved(item);
     }
 }
 
@@ -190,6 +191,7 @@ void MeterWidget::clearItems()
         }
     }
     m_items.clear();
+    emit displayVisibilityChanged();
 #ifdef NEREUS_GPU_SPECTRUM
     markOverlayDirty();
     m_bgDirty = true;
@@ -712,6 +714,7 @@ void MeterWidget::setMox(bool mox)
     m_bgDirty = true;
 #endif
     update();
+    emit displayVisibilityChanged();
 }
 
 void MeterWidget::setDisplayGroup(int group)
@@ -723,6 +726,7 @@ void MeterWidget::setDisplayGroup(int group)
     m_bgDirty = true;
 #endif
     update();
+    emit displayVisibilityChanged();
 }
 
 // ============================================================================
