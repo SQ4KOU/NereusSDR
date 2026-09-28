@@ -493,6 +493,7 @@ private slots:
     void connectedHeaderShowsCurrentSocketAndClearsOnDisconnect()
     {
         RemoteWindowHarness h;
+        h.server().setMediaEnabled(true);
         QVERIFY(h.start());
         h.startStartupConnection();
         QTRY_VERIFY_WITH_TIMEOUT(h.client()->isHandshakeComplete(), 10000);
@@ -518,6 +519,22 @@ private slots:
         QVERIFY(controls->text().contains(QStringLiteral("Direct")));
         QVERIFY(controls->text().contains(QStringLiteral("Local")));
         QVERIFY(controls->text().contains(QStringLiteral("Remote")));
+        h.remoteModel()->audioEngine()->setMasterMuted(true);
+        QTRY_VERIFY(segment->remotePresentationText().contains(QStringLiteral("Audio muted")));
+        QVERIFY2(segment->width() >= headerMetrics.horizontalAdvance(segment->remotePresentationText()) + 34,
+                 qPrintable(QStringLiteral("muted segment %1, text %2")
+                                .arg(segment->width())
+                                .arg(headerMetrics.horizontalAdvance(segment->remotePresentationText()))));
+        QStringList faultGroups = segment->remotePresentationText().split(QStringLiteral(" · "));
+        QCOMPARE(faultGroups.size(), 4);
+        faultGroups[1] = ConnectionSegment::audioMetricText(
+            std::nullopt, RemoteAudioStatus::State::PlaybackProblem);
+        QVERIFY2(segment->width() >= headerMetrics.horizontalAdvance(faultGroups.join(QStringLiteral(" · "))) + 34,
+                 qPrintable(QStringLiteral("fault segment %1, text %2: %3")
+                                .arg(segment->width())
+                                .arg(headerMetrics.horizontalAdvance(faultGroups.join(QStringLiteral(" · "))))
+                                .arg(faultGroups.join(QStringLiteral(" · ")))));
+        h.remoteModel()->audioEngine()->setMasterMuted(false);
         QVERIFY(disconnectFromRadioMenu(h));
         QTRY_VERIFY(!h.client()->isConnectionActive());
         QVERIFY(!segment->routePopup()->isVisible());

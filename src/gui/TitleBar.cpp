@@ -255,6 +255,31 @@ QString ConnectionSegment::routeText(const std::optional<NetworkPathSnapshot>& p
     return text;
 }
 
+QString ConnectionSegment::audioMetricText(std::optional<double> kbps,
+                                           RemoteAudioStatus::State state)
+{
+    using State = RemoteAudioStatus::State;
+    if (state == State::MutedHere) { return tr("Audio muted"); }
+    if (state == State::RadioOffline) { return tr("Audio radio offline"); }
+    if (state == State::CoreCouldNotStart || state == State::PlaybackProblem) {
+        return tr("Audio unavailable");
+    }
+    QString status;
+    switch (state) {
+    case State::Playing: status = QStringLiteral("▶"); break;
+    case State::WaitingForAudio:
+    case State::Starting:
+    case State::Reconnecting: status = QStringLiteral("…"); break;
+    case State::NotConnected: status = QStringLiteral("■"); break;
+    case State::MutedHere:
+    case State::RadioOffline:
+    case State::CoreCouldNotStart:
+    case State::PlaybackProblem: break;
+    }
+    return tr("Audio %1 kbps %2")
+        .arg(kbps ? QString::number(*kbps, 'f', 1) : QStringLiteral("—"), status);
+}
+
 void ConnectionSegment::setRemotePaths(std::optional<NetworkPathSnapshot> controls,
                                        std::optional<NetworkPathSnapshot> media)
 {
@@ -295,11 +320,10 @@ QSize ConnectionSegment::sizeHint() const
     const QFontMetrics metrics(metricFont);
     const QString text = remotePresentationText();
     if (!text.isEmpty()) {
-        // Dot + its gap + text + trailing breathing room. The title bar has
-        // stretches on either side, so reporting the real preferred width
-        // prevents its remote measurements from being elided by the old 200px
-        // minimum-size floor.
-        return {8 + 10 + 8 + metrics.horizontalAdvance(text) + 10, 30};
+        // Dot + its gap + text + trailing breathing room. Reserve enough
+        // width for the title bar's layout compression so a persistent audio
+        // status remains visible alongside the other three groups at 1440px.
+        return {8 + 10 + 8 + metrics.horizontalAdvance(text) + 22, 30};
     }
     return {200, 30};
 }

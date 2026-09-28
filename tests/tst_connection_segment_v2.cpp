@@ -250,6 +250,18 @@ private slots:
         button->click();
         QCOMPARE(diagnostics.count(), 1);
     }
+
+    void audioMetricKeepsPersistentStatesDistinct() {
+        using State = RemoteAudioStatus::State;
+        QCOMPARE(ConnectionSegment::audioMetricText(0.0, State::MutedHere),
+                 QStringLiteral("Audio muted"));
+        QCOMPARE(ConnectionSegment::audioMetricText(std::nullopt, State::CoreCouldNotStart),
+                 QStringLiteral("Audio unavailable"));
+        QCOMPARE(ConnectionSegment::audioMetricText(std::nullopt, State::PlaybackProblem),
+                 QStringLiteral("Audio unavailable"));
+        QVERIFY(ConnectionSegment::audioMetricText(std::nullopt, State::RadioOffline)
+                    .contains(QStringLiteral("radio offline")));
+    }
 };
 
 QTEST_MAIN(TstConnectionSegmentV2)

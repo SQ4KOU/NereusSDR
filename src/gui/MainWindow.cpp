@@ -2365,6 +2365,8 @@ void MainWindow::ensureRemoteSession()
                 this, &MainWindow::refreshRemoteConnectionUi);
         connect(m_remoteMedia, &RemoteMediaController::networkPathChanged,
                 this, &MainWindow::refreshRemoteConnectionUi);
+        connect(m_remoteMedia, &RemoteMediaController::audioStatusChanged,
+                this, &MainWindow::refreshRemoteConnectionUi);
         connect(m_remoteMedia, &RemoteMediaController::errorOccurred, this, [this](const QString& reason) {
             // The raw reason is for the log; the toast says it in user
             // words (R-R3-21, R-R3-23).
@@ -2708,17 +2710,17 @@ void MainWindow::refreshRemoteConnectionUi()
                 return number(value ? std::optional<double>(*value / divisor) : std::nullopt);
             };
             const QStringList groups{
-                tr("Traffic ↓%1 ↑%2 %3")
-                    .arg(traffic(view.coreGuiRxKbps), traffic(view.coreGuiTxKbps),
-                         megabits ? tr("Mbps") : tr("kbps")),
-                tr("Audio %1 kbps %2")
-                    .arg(number(view.audioPayloadRxKbps),
-                         view.playbackActive ? QStringLiteral("▶")
-                         : view.playback.running ? QStringLiteral("…") : QStringLiteral("■")),
+                (!view.coreGuiRxKbps && !view.coreGuiTxKbps)
+                    ? tr("Traffic — kbps")
+                    : tr("Traffic ↓%1 ↑%2 %3")
+                          .arg(traffic(view.coreGuiRxKbps), traffic(view.coreGuiTxKbps),
+                               megabits ? tr("Mbps") : tr("kbps")),
+                ConnectionSegment::audioMetricText(
+                    view.audioPayloadRxKbps, m_remoteMedia->audioStatus().state),
                 view.state == RemoteTelemetryView::State::Current && view.radio.connected
                     ? tr("Radio ↓%1 ↑%2 Mbps")
                           .arg(number(view.radio.rxMbps), number(view.radio.txMbps))
-                    : tr("Radio ↓— ↑— Mbps"),
+                    : tr("Radio — Mbps"),
                 tr("Core RTT %1ms")
                     .arg(view.coreRttMs ? QString::number(*view.coreRttMs) : QStringLiteral("—"))};
             segment->setRemoteMetrics(groups);

@@ -70,6 +70,7 @@
 #include "core/AudioEngine.h"
 #include "core/ConnectionState.h"
 #include "core/session/NetworkPathSnapshot.h"
+#include "gui/RemoteAudioStatus.h"
 
 #include <QQueue>
 #include <QSize>
@@ -147,6 +148,7 @@ public:
     void setRemotePaths(std::optional<NetworkPathSnapshot> controls,
                         std::optional<NetworkPathSnapshot> media);
     static QString routeText(const std::optional<NetworkPathSnapshot>& path);
+    static QString audioMetricText(std::optional<double> kbps, RemoteAudioStatus::State state);
     void showRoutePopup();
     QWidget* routePopup() const;
 
