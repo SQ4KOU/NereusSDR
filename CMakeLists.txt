@@ -1344,6 +1344,7 @@ set(CORE_SOURCES
     src/core/session/StationCapabilities.cpp
     src/core/session/SettingsHygieneWire.cpp
     src/core/session/StationServer.cpp
+    src/core/session/TxWatchServer.cpp
     src/core/session/StationOpeningGate.cpp
     src/core/session/StationReceivers.cpp
     src/core/session/StationSharedSettings.cpp
@@ -1358,6 +1359,7 @@ set(CORE_SOURCES
     # nereus_apply_core_deps().
     src/core/session/DnsSdAdvertiser.cpp
     src/core/session/StationClient.cpp
+    src/core/session/TxWatchClient.cpp
     # R3 media transport, signalling, display, spectrum, and Opus building
     # blocks. IMediaTransport carries Q_OBJECT and is listed so AUTOMOC emits
     # its signal metadata.
@@ -1521,6 +1523,8 @@ set(MODEL_SOURCES
 
 set(GUI_SOURCES
     src/gui/MainWindow.cpp
+    src/gui/DesktopStationController.cpp
+    src/gui/DesktopStationController.h
     src/gui/SliceFlagPresentationBinding.cpp
     src/gui/SliceFlagPresentationBinding.h
     src/gui/RemoteMediaController.cpp

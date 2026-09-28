@@ -98,6 +98,8 @@ public:
         Session,
         /// The media connection's "tx" data channel.
         TxChannel,
+        /// A separately authenticated transmit-watch transport.
+        Auxiliary,
     };
 
     struct Hooks {

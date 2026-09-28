@@ -159,6 +159,10 @@ bool StationRendezvous::start()
         if (answer == nullptr || !answer->leg || !grant) {
             return;
         }
+        if (!grant->watchToken.isEmpty()) {
+            answer->transport->setWatchRelayGrant(
+                {QUrl(grant->url), grant->watchToken, grant->expires, answer->leg});
+        }
         answer->leg->open(QUrl(grant->url), grant->token);
     });
     connect(m_client, &RendezvousClient::credentialsReceived, this,

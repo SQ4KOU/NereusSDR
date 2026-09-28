@@ -82,6 +82,7 @@
 #include <QList>
 #include <QString>
 #include <QStringList>
+#include <QUrl>
 
 #include <functional>
 #include <memory>
@@ -90,6 +91,7 @@
 namespace NereusSDR {
 
 class CandidateSourceLease;
+class RelayLeg;
 
 /// The chunking and the heartbeat bytes of the control data channel, apart
 /// from any connection: what the transport runs and what the conformance
@@ -234,6 +236,21 @@ public:
     /// reports. `configured` is the start()'s settings with the relay
     /// added; its STUN server is not changed. Once only.
     bool gatherCandidates(const IceConfiguration& configured);
+
+    /// Negotiated by this primary introduction only. The grant is opaque and
+    /// must never be logged or transferred to a replacement primary.
+    struct WatchRelayGrant {
+        QUrl url;
+        QString token;
+        qint64 expires = 0;
+        std::weak_ptr<RelayLeg> primaryLeg;
+    };
+    bool setWatchRelayGrant(const WatchRelayGrant& grant);
+    const std::optional<WatchRelayGrant>& watchRelayGrant() const { return m_watchRelayGrant; }
+    /// Existing admitted watch sessions may outlive their grant's admission
+    /// expiry. Both checks still require this exact live primary relay route.
+    bool hasWatchRelayRoute() const;
+    bool canOpenWatchRelay() const;
 
     /// The candidate pair the connection settled on, once it has.
     std::optional<MediaIcePath> selectedPath() const;
@@ -382,6 +399,7 @@ private:
     void finishClose();
 
     Options m_options;
+    std::optional<WatchRelayGrant> m_watchRelayGrant;
     std::shared_ptr<Bridge> m_bridge;
     bool m_started = false;
     bool m_open = false;

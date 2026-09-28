@@ -30,6 +30,9 @@
 // =================================================================
 
 #include "core/session/DataChannelTransport.h"
+#include "core/session/RelayLeg.h"
+
+#include <QDateTime>
 #include "core/session/CandidateSourceLease.h"
 
 #include "core/security/OpenSslErrorScope.h"
@@ -403,6 +406,37 @@ DataChannelTransport::DataChannelTransport(QObject* parent)
 DataChannelTransport::~DataChannelTransport()
 {
     stopPeer();
+}
+
+bool DataChannelTransport::setWatchRelayGrant(const WatchRelayGrant& grant)
+{
+    if (!m_started || m_closing || m_options.purpose != Purpose::Control || m_watchRelayGrant
+        || !grant.url.isValid() || grant.url.scheme() != QLatin1String("wss")
+        || grant.url.host().isEmpty() || grant.url.authority(QUrl::FullyEncoded).contains('@')
+        || grant.url.hasFragment() || grant.token.isEmpty()
+        || grant.token.toUtf8().size() > RendezvousWire::kMaxRelayTokenBytes
+        || grant.expires <= QDateTime::currentSecsSinceEpoch() || grant.primaryLeg.expired()) {
+        return false;
+    }
+    m_watchRelayGrant = grant;
+    return true;
+}
+
+bool DataChannelTransport::hasWatchRelayRoute() const
+{
+    if (!isOpen() || m_closing || m_options.purpose != Purpose::Control || !m_watchRelayGrant) {
+        return false;
+    }
+    const auto path = selectedPath();
+    const auto primary = m_watchRelayGrant->primaryLeg.lock();
+    return path && path->viaLoopbackShim() && primary
+        && primary->state() == RelayLeg::State::Joined && primary->peerPresent();
+}
+
+bool DataChannelTransport::canOpenWatchRelay() const
+{
+    return hasWatchRelayRoute()
+        && m_watchRelayGrant->expires > QDateTime::currentSecsSinceEpoch();
 }
 
 bool DataChannelTransport::start(const Options& options)
@@ -1353,6 +1387,7 @@ bool lingerUntilClosed(const std::shared_ptr<rtc::PeerConnection>& peer,
 
 void DataChannelTransport::stopPeer(bool linger)
 {
+    m_watchRelayGrant.reset();
     if (!m_bridge) {
         return;
     }
