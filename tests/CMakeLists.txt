@@ -8059,6 +8059,10 @@ nereus_add_test(tst_setup_description_parity EXTRA_LABELS gui)
 nereus_add_test(tst_setup_description_live fakes/LoopbackTransport.cpp EXTRA_LABELS core)
 target_compile_definitions(tst_station_catalog PRIVATE
     NEREUS_LINK_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/data/link/v1")
+# iPhone app plan Task 25 (D41, R-IOS-18): the catalogue's Tools and Radio
+# items follow the radio, the Core and the unbuilt features list. No radio,
+# no listening socket, no audio device.
+nereus_add_test(tst_station_tools EXTRA_LABELS session)
 # iPhone app Task 14 (R-IOS-08, D37): the pairing code and its word list,
 # the pairing window (injected clock), and the SPAKE2+EE exchange with its
 # confirmation boxes.

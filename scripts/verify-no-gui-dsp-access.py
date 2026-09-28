@@ -140,6 +140,10 @@ LOCAL_AUDIO_ALLOWLIST = {
     # monitor routing, a window-scope setting, live in a remote window as
     # in a local one (R-R3-49, parity Task 2).
     "src/gui/applets/TxApplet.cpp": 1,
+    # The Core's catalogue: whether the station computer publishes VAX
+    # devices (AudioEngine::vaxOutputsAllowed), read only, so the VAX Audio
+    # tool is offered only where it can open (iPhone app plan Task 25, D41).
+    "src/core/session/StationCatalog.cpp": 1,
 }
 
 # A double-quoted C++ string literal, escapes included. Removed from a line

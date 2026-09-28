@@ -3562,9 +3562,21 @@ Hz/bin target holds the bin width at or below the target at any zoom
 is the sample rate over the size the Core grants (its spectrum context's
 `grantedFftSize`), which may be less than asked.
 
-`offered` is the Core's: an item is listed as offered once the desktop has
-built it (CWX, Memory Manager, CAT Control and Transverters are not yet),
-and an app shows only offered items, in their place. The two catalogue
+`offered` is the Core's (iPhone app plan Task 25, D41). It starts from
+the unbuilt features list the desktop hides by (`UnbuiltFeatureList.h`:
+CWX, Memory Manager, CAT Control and Transverters are not offered until
+built), then follows the radio and the Core: Spot Hub, FreeDV Reporter,
+TX Equalizer, Network Diagnostics, Support Bundle, Manage Radios and
+Protocol Info always; PureSignal when the radio has it (the board's
+`hasPureSignal`); Diversity when it has a diversity receiver
+(`hasDiversityReceiver`); TCI Server when the Core runs its own station
+TCI server (a Core with `stationTciVersion` 1 or later, whether or not the
+server is switched on, so an app can switch it on); VAX Audio when the
+station computer publishes VAX devices (a Core the desktop hosts; a
+headless Core publishes none); Antenna Setup when the radio has Alex and
+at least three antenna inputs, the desktop's own rule. The catalogue's
+revision moves when the radio or the station TCI server's state changes.
+An app shows only offered items, in their place. The two catalogue
 fixtures (section 16.3) hold an ANAN-G2's and a Hermes Lite 2's catalogue
 in full.
 
