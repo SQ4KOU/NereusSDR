@@ -67,6 +67,7 @@ signals:
     void stateChanged();
 
 private:
+    bool ownershipAvailable(QString* reason = nullptr) const;
     bool available(QString* reason = nullptr) const;
     bool actionAllowed(QString* reason = nullptr) const;
     bool loadConfig(QString* reason);
@@ -82,6 +83,7 @@ private:
     AppSettings* m_settings = nullptr;
     QString m_profileDirectory;
     bool m_profileOwned = false;
+    QString m_profileError;
     QString m_configurationError;
     DaemonConfig m_config;
     bool m_lifecycleBusy = false;

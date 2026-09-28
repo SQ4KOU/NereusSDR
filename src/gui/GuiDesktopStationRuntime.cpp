@@ -53,18 +53,18 @@ GuiDesktopStationRuntime::GuiDesktopStationRuntime(RadioModel* model, AppSetting
         m_profileDirectory = cleanPath(QFileInfo(settings->filePath()).absolutePath());
     }
     if (!profile.isEmpty() && !AppSettings::isValidProfileName(profile)) {
-        m_configurationError = tr("The selected Core profile name is invalid.");
+        m_profileError = tr("The selected Core profile name is invalid.");
     } else if (settings && cleanPath(AppSettings::resolveConfigDir(profile))
                            != m_profileDirectory) {
-        m_configurationError = tr("The selected Core profile does not match this window's settings.");
+        m_profileError = tr("The selected Core profile does not match this window's settings.");
     }
     m_serviceOptions = std::move(serviceOptions);
     if (!m_serviceOptions.profileDirectory.isEmpty()
         && cleanPath(m_serviceOptions.profileDirectory) != m_profileDirectory) {
-        m_configurationError = tr("The background station profile does not match this window's settings.");
+        m_profileError = tr("The background station profile does not match this window's settings.");
     }
     if (!m_serviceOptions.profile.isEmpty() && m_serviceOptions.profile != profile) {
-        m_configurationError = tr("The background station profile name does not match this window.");
+        m_profileError = tr("The background station profile name does not match this window.");
     }
     m_serviceOptions.profile = profile;
     m_serviceOptions.profileDirectory = m_profileDirectory;
@@ -74,7 +74,7 @@ GuiDesktopStationRuntime::GuiDesktopStationRuntime(RadioModel* model, AppSetting
     }
     m_service = std::make_unique<StationServiceManager>(m_serviceOptions);
     QString error;
-    if (m_configurationError.isEmpty() && !loadConfig(&error)) {
+    if (m_profileError.isEmpty() && !loadConfig(&error)) {
         m_configurationError = error;
     }
     StationHostOptions hosting;
@@ -130,7 +130,7 @@ GuiDesktopStationRuntime::~GuiDesktopStationRuntime()
     stop();
 }
 
-bool GuiDesktopStationRuntime::available(QString* reason) const
+bool GuiDesktopStationRuntime::ownershipAvailable(QString* reason) const
 {
     QString why;
     if (m_closed) {
@@ -144,11 +144,18 @@ bool GuiDesktopStationRuntime::available(QString* reason) const
         why = tr("Connect this window to a local radio to manage its Core.");
     } else if (!m_profileOwned) {
         why = tr("This window does not own the selected Core profile.");
-    } else if (!m_configurationError.isEmpty()) {
-        why = m_configurationError;
+    } else if (!m_profileError.isEmpty()) {
+        why = m_profileError;
     }
     if (reason) { *reason = why; }
     return why.isEmpty();
+}
+
+bool GuiDesktopStationRuntime::available(QString* reason) const
+{
+    if (!ownershipAvailable(reason)) { return false; }
+    if (reason) { *reason = m_configurationError; }
+    return m_configurationError.isEmpty();
 }
 
 bool GuiDesktopStationRuntime::actionAllowed(QString* reason) const
@@ -568,7 +575,9 @@ bool GuiDesktopStationRuntime::prepareForRetirement(bool requestBackground, QStr
 {
     if (error) { error->clear(); }
     QString reason;
-    if (!available(&reason) || m_lifecycleBusy || m_actionActive || m_retiring) {
+    // An invalid host config blocks hosting and background launch, but does
+    // not prevent the local window from saving and closing with Run off.
+    if (!ownershipAvailable(&reason) || m_lifecycleBusy || m_actionActive || m_retiring) {
         if (reason.isEmpty()) { reason = tr("A Core change is in progress."); }
         if (error) { *error = reason; }
         fail(reason);

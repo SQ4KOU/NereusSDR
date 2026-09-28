@@ -76,6 +76,7 @@ private slots:
         settings.remove(QStringLiteral("StationLabel"));
         settings.remove(QStringLiteral("StationKeyBackupAcknowledged"));
         settings.remove(QStringLiteral("StationRadioChoice"));
+        settings.remove(QStringLiteral("DesktopRuntimeRetirementMarker"));
         settings.save();
         QFile::remove(QFileInfo(settings.filePath()).absolutePath()
                       + QStringLiteral("/station.conf"));
@@ -293,6 +294,54 @@ private slots:
         QFile preserved(path);
         QVERIFY(preserved.open(QIODevice::ReadOnly));
         QCOMPARE(preserved.readAll(), bytes);
+    }
+
+    void invalidHostConfigAllowsCheckedLocalRetirementWithRunOff()
+    {
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        AppSettings& settings = AppSettings::instance();
+        settings.setValue(QStringLiteral("DesktopCore/Run"), false);
+        settings.setValue(QStringLiteral("DesktopRuntimeRetirementMarker"),
+                          QStringLiteral("saved before close"));
+        const QString path = serviceConfigPath(settings);
+        const QByteArray bytes("remote_port = 70000\n");
+        QFile config(path);
+        QVERIFY(config.open(QIODevice::WriteOnly));
+        QCOMPARE(config.write(bytes), bytes.size());
+        config.close();
+        StationServiceOptions service;
+        service.profileDirectory = QFileInfo(settings.filePath()).absolutePath();
+        service.homeDirectory = temp.filePath(QStringLiteral("home"));
+        service.inheritActiveProfile = false;
+        service.runner = [](const QString&, const QStringList&) {
+            return StationServiceCommandResult{0, {}};
+        };
+        RadioModel model;
+        for (const bool appQuit : {false, true}) {
+            GuiDesktopStationRuntime runtime(&model, &settings, AppSettings::profileOverride(),
+                                             true, service);
+            QVERIFY(!runtime.state().available);
+            QVERIFY(!runtime.setRunCore(true));
+            QString reason;
+            QVERIFY2(runtime.prepareForRetirement(appQuit, &reason), qPrintable(reason));
+            QVERIFY(!runtime.backgroundStartWanted());
+            QVERIFY(!runtime.controller()->enabled());
+            AppSettings saved(settings.filePath());
+            saved.load();
+            QCOMPARE(saved.value(QStringLiteral("DesktopRuntimeRetirementMarker")).toString(),
+                     QStringLiteral("saved before close"));
+            QFile preserved(path);
+            QVERIFY(preserved.open(QIODevice::ReadOnly));
+            QCOMPARE(preserved.readAll(), bytes);
+        }
+        StationServiceOptions wrongProfile = service;
+        wrongProfile.profileDirectory = temp.path();
+        GuiDesktopStationRuntime mismatched(&model, &settings, AppSettings::profileOverride(),
+                                            true, wrongProfile);
+        QString reason;
+        QVERIFY(!mismatched.prepareForRetirement(false, &reason));
+        QVERIFY(reason.contains(QStringLiteral("profile"), Qt::CaseInsensitive));
     }
 
     void wrongSettingsStoreCannotHostOrRetire()
