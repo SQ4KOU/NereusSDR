@@ -115,6 +115,7 @@
 #include "TciProtocol.h"
 #include "TciSendQueue.h"
 #include "TciBinaryFrame.h"
+#include "session/media/RemoteTciAudioStage.h"
 #include "TciSensorManager.h"
 #include "LogCategories.h"
 #include "models/RadioModel.h"
@@ -155,6 +156,12 @@ void  destroy_resampleFV(void* ptr);
 
 #include <algorithm>
 #include <cmath>
+#include <tuple>
+#include <set>
+#include <ctime>
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
 
 #include <QElapsedTimer>
 #include <QHostAddress>
@@ -337,7 +344,15 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         // R-R3-42: the rings are emptied once per tick into each receiver's
         // history, then every subscribed client takes its own next block
         // from its own read position (sendRxAudioBlock).
+        const QPointer<TciServer> self(this);
         collectRxAudio();
+        if (!self) { return; }
+        if (m_remoteWindow) {
+            // A send or operator notice can synchronously retire this
+            // server. Remote draining is the final action in this tick.
+            drainRemoteAudio();
+            return;
+        }
         for (auto cit = m_clients.begin(); cit != m_clients.end(); ++cit) {
             QWebSocket* ws = cit.key();
             TciClientSession& session = *cit.value();
@@ -1413,6 +1428,8 @@ TciServer::~TciServer()
     // a server that was never started (nothing is held then either).
     for (int rx = 0; rx < kMaxTciRxSlices; ++rx) {
         if (m_remoteRequested[rx] && m_remoteAudio.release) {
+            if (m_remoteStage[rx]) { m_remoteStage[rx]->publish({}); }
+            m_remoteStage[rx].reset();
             m_remoteRequested[rx] = false;
             m_remoteAudio.release(rx, this);
         }
@@ -1724,6 +1741,7 @@ void TciServer::stop()
         ws->deleteLater();
     }
     m_clients.clear();
+    m_remoteAudioSockets.clear();
 
     for (int rx = 0; rx < kMaxTciRxSlices; ++rx) {
         if (m_remoteIqRequested[rx]) {
@@ -1737,6 +1755,15 @@ void TciServer::stop()
         updateRemoteReceiverDemand(rx);
         updateRemoteIqDemand(rx);
     }
+    if (m_remoteSaturationNotified
+        && m_noticeReason == QStringLiteral(
+            "Remote TCI audio cannot keep up; older audio is being skipped.")) {
+        m_noticeReason.clear();
+        emit operatorNoticeCleared();
+    }
+    m_remoteSaturationNotified = false;
+    m_remoteSaturationDrops = 0;
+    m_remoteSaturationQuietTicks = 0;
 
     // Closed now, so the port is free at once and no connection arrives;
     // the clients above were already closed and released. Qt deletes the
@@ -2032,11 +2059,9 @@ QWebSocket* TciServer::activeTxAudioClient() const
 //   return (void *)create_resampleF(1, 0, 0, 0, in_rate, out_rate);
 // size=0 + null buffers are intentional; xresampleFV sets them per-call.
 //
-// R-R3-39: the pair and its scratch belong to the receive lane. create(),
-// resample() and destroy() run in jobs posted there, in the order they were
-// posted (at once, on the caller, when the model has no lane). The
-// destructor destroys what is left only if a destroy job never ran (a lane
-// that stopped for good).
+// Local TCI clients keep the model receive-lane ownership from R-R3-39.
+// Remote clients use RemoteTciAudioRun instead: each pair and its scratch
+// are created, resampled, and destroyed by the RemoteAudioReceiver worker.
 namespace {
 std::atomic<int> s_liveRxAudioResamplers{0};
 } // namespace
@@ -2139,6 +2164,348 @@ struct TciRxAudioResampler {
     }
 };
 
+RemoteTciAudioStage::RemoteTciAudioStage(int receiver) : m_receiver(receiver)
+{
+    auto config = std::make_shared<ConfigSnapshot>();
+    config->receiver = receiver;
+    config->receiverGeneration = m_generation.load();
+    m_config = std::move(config);
+}
+
+RemoteTciAudioStage::~RemoteTciAudioStage() = default;
+
+quint64 RemoteTciAudioStage::generation() const { return m_generation.load(); }
+
+void RemoteTciAudioStage::invalidate()
+{
+    const quint64 next = m_generation.fetch_add(1) + 1;
+    auto config = std::make_shared<ConfigSnapshot>();
+    config->receiver = m_receiver;
+    config->receiverGeneration = next;
+    std::lock_guard<std::mutex> lock(m_mutex);
+    config->clients = m_config->clients;
+    m_config = std::move(config);
+    m_results.clear();
+}
+
+void RemoteTciAudioStage::publish(std::vector<ClientConfig> clients)
+{
+    if (clients.size() > kMaxClients) { clients.resize(kMaxClients); }
+    auto config = std::make_shared<ConfigSnapshot>();
+    config->receiver = m_receiver;
+    config->clients = std::move(clients);
+    std::lock_guard<std::mutex> lock(m_mutex);
+    config->receiverGeneration = m_generation.load();
+    m_config = config;
+    for (auto it = m_results.begin(); it != m_results.end();) {
+        const auto found = std::find_if(config->clients.begin(), config->clients.end(),
+            [token = it->first](const ClientConfig& client) { return client.token == token; });
+        if (found == config->clients.end()) {
+            it = m_results.erase(it);
+            continue;
+        }
+        auto& queue = it->second;
+        std::erase_if(queue, [&](const Result& result) {
+            return result.receiverGeneration != config->receiverGeneration
+                || result.revision != found->revision;
+        });
+        ++it;
+    }
+}
+
+void RemoteTciAudioStage::push(Result result)
+{
+    if (result.bytes.size() > kMaxPayloadBytes) { return; }
+    std::lock_guard<std::mutex> lock(m_mutex);
+    const auto found = std::find_if(m_config->clients.begin(), m_config->clients.end(),
+        [token = result.token](const ClientConfig& client) { return client.token == token; });
+    if (found == m_config->clients.end() || result.revision != found->revision
+        || result.receiverGeneration != m_config->receiverGeneration) { return; }
+    auto& queue = m_results[result.token];
+    if (queue.size() == kMaxFramesPerClient) {
+        queue.pop_front();
+        ++m_mailboxEvictions;
+    }
+    queue.push_back(std::move(result));
+}
+
+bool RemoteTciAudioStage::popNext(Result* out)
+{
+    if (!out) { return false; }
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (m_results.empty()) { return false; }
+    auto it = m_results.upper_bound(m_nextDrainToken);
+    for (std::size_t tried = 0; tried < m_results.size(); ++tried) {
+        if (it == m_results.end()) { it = m_results.begin(); }
+        if (!it->second.empty()) {
+            m_nextDrainToken = it->first;
+            *out = std::move(it->second.front());
+            it->second.pop_front();
+            return true;
+        }
+        ++it;
+    }
+    return false;
+}
+
+void RemoteTciAudioStage::noteSocketBackpressureDrop()
+{
+    ++m_socketBackpressureDrops;
+}
+
+RemoteTciAudioStage::Diagnostics RemoteTciAudioStage::diagnostics() const
+{
+    return {m_historySkippedFrames.load(), m_mailboxEvictions.load(),
+            m_socketBackpressureDrops.load(),
+            m_serviceWallNs.load(), m_serviceCpuNs.load(), m_maxServiceWallNs.load(),
+            m_maxQuantumWallNs.load(), m_serviceQuanta.load(),
+            m_resamplerRecreates.load(), m_resamplerRecreateWallNs.load(),
+            m_resamplerRecreateCpuNs.load(), m_maxResamplerRecreateWallNs.load(),
+            m_liveWdspPairs.load()};
+}
+
+namespace {
+quint64 threadCpuNs()
+{
+#ifdef Q_OS_WIN
+    FILETIME created{}, exited{}, kernel{}, user{};
+    if (!GetThreadTimes(GetCurrentThread(), &created, &exited, &kernel, &user)) { return 0; }
+    ULARGE_INTEGER k{}, u{};
+    k.LowPart = kernel.dwLowDateTime; k.HighPart = kernel.dwHighDateTime;
+    u.LowPart = user.dwLowDateTime; u.HighPart = user.dwHighDateTime;
+    return (k.QuadPart + u.QuadPart) * 100;
+#else
+    timespec time{};
+    return clock_gettime(CLOCK_THREAD_CPUTIME_ID, &time) == 0
+        ? quint64(time.tv_sec) * 1'000'000'000 + quint64(time.tv_nsec) : 0;
+#endif
+}
+
+void storeMax(std::atomic<quint64>& destination, quint64 value)
+{
+    quint64 previous = destination.load();
+    while (previous < value && !destination.compare_exchange_weak(previous, value)) {}
+}
+} // namespace
+
+class RemoteTciAudioRun final : public IRemotePcmWorkerStage::Run {
+public:
+    explicit RemoteTciAudioRun(RemoteTciAudioStage& owner) : m_owner(owner) {}
+    ~RemoteTciAudioRun() override
+    {
+        int pairs = 0;
+        for (const auto& [token, client] : m_clients) {
+            Q_UNUSED(token);
+            if (client.resampler) { ++pairs; }
+        }
+        m_clients.clear();
+        m_owner.m_liveWdspPairs.fetch_sub(pairs);
+    }
+
+    void appendPcm(const float* stereo, int frames) override
+    {
+        if (!stereo || frames <= 0) { return; }
+        for (int i = 0; i < frames; ++i) {
+            const std::size_t slot = std::size_t((m_written + quint64(i))
+                                                 % RemoteTciAudioStage::kHistoryFrames) * 2;
+            m_history[slot] = stereo[2 * i];
+            m_history[slot + 1] = stereo[2 * i + 1];
+        }
+        m_written += quint64(frames);
+    }
+
+    void reconcile() override
+    {
+        std::shared_ptr<const RemoteTciAudioStage::ConfigSnapshot> config;
+        {
+            std::lock_guard<std::mutex> lock(m_owner.m_mutex);
+            config = m_owner.m_config;
+        }
+        if (config == m_config) {
+            m_reconcileBase = m_written;
+            return;
+        }
+        // Destroy every retired or revised pair before creating replacements.
+        std::set<quint64> revised;
+        for (auto it = m_clients.begin(); it != m_clients.end();) {
+            const auto found = std::find_if(config->clients.begin(), config->clients.end(),
+                [token = it->first](const RemoteTciAudioStage::ClientConfig& client) {
+                    return client.token == token;
+                });
+            if (found == config->clients.end() || found->revision != it->second.config.revision
+                || (m_config && config->receiverGeneration != m_config->receiverGeneration)) {
+                if (found != config->clients.end()) { revised.insert(it->first); }
+                const bool hadPair = bool(it->second.resampler);
+                it = m_clients.erase(it);
+                if (hadPair) { --m_owner.m_liveWdspPairs; }
+            } else {
+                ++it;
+            }
+        }
+        for (const auto& desired : config->clients) {
+            if (m_clients.contains(desired.token)) { continue; }
+            Client client;
+            client.config = desired;
+            // This wake's PCM was appended before reconciliation. Start a
+            // newly published client at the previous wake boundary so it
+            // receives the first packet after admission or a config change.
+            client.cursor = revised.contains(desired.token) ? m_written
+                : std::max(m_reconcileBase,
+                    m_written > RemoteTciAudioStage::kHistoryFrames
+                        ? m_written - RemoteTciAudioStage::kHistoryFrames : quint64{0});
+            client.output.reserve(std::size_t(desired.blockFrames * desired.channels * 8));
+            if (desired.rate != 48000) {
+                client.resampler = std::make_unique<TciRxAudioResampler>(48000, desired.rate);
+                client.resampler->create();
+                if (!client.resampler->left || !client.resampler->right) { continue; }
+                ++m_owner.m_liveWdspPairs;
+            }
+            m_clients.emplace(desired.token, std::move(client));
+        }
+        m_config = std::move(config);
+        m_reconcileBase = m_written;
+    }
+
+    bool hasRunnableWork() const override
+    {
+        for (const auto& [token, client] : m_clients) {
+            Q_UNUSED(token);
+            if (!client.failed && client.cursor < m_written) { return true; }
+        }
+        return false;
+    }
+
+    void serviceUntil(std::chrono::steady_clock::time_point deadline, int maxQuanta) override
+    {
+        const auto started = std::chrono::steady_clock::now();
+        const quint64 cpuStarted = threadCpuNs();
+        for (int q = 0; q < maxQuanta && !m_clients.empty(); ++q) {
+            auto it = m_clients.upper_bound(m_nextToken);
+            if (it == m_clients.end()) { it = m_clients.begin(); }
+            bool found = false;
+            for (std::size_t tried = 0; tried < m_clients.size(); ++tried) {
+                if (it == m_clients.end()) { it = m_clients.begin(); }
+                if (!it->second.failed && it->second.cursor < m_written) {
+                    found = true;
+                    break;
+                }
+                ++it;
+            }
+            if (!found) { break; }
+            m_nextToken = it->first;
+            const auto quantumStart = std::chrono::steady_clock::now();
+            service(it->second);
+            const auto quantumEnd = std::chrono::steady_clock::now();
+            storeMax(m_owner.m_maxQuantumWallNs, quint64(std::chrono::duration_cast<
+                std::chrono::nanoseconds>(quantumEnd - quantumStart).count()));
+            ++m_owner.m_serviceQuanta;
+            if (quantumEnd >= deadline) { break; }
+        }
+        const quint64 elapsed = quint64(std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - started).count());
+        m_owner.m_serviceWallNs.fetch_add(elapsed);
+        const quint64 cpuEnded = threadCpuNs();
+        if (cpuStarted != 0 && cpuEnded >= cpuStarted) {
+            m_owner.m_serviceCpuNs.fetch_add(cpuEnded - cpuStarted);
+        }
+        storeMax(m_owner.m_maxServiceWallNs, elapsed);
+    }
+
+private:
+    struct Client {
+        RemoteTciAudioStage::ClientConfig config;
+        quint64 cursor = 0;
+        quint64 sequence = 0;
+        int blockInput = 0;
+        bool failed = false;
+        std::unique_ptr<TciRxAudioResampler> resampler;
+        std::vector<float> output;
+    };
+
+    void service(Client& client)
+    {
+        if (m_written - client.cursor > RemoteTciAudioStage::kHistoryFrames) {
+            const quint64 skipped = m_written - client.cursor
+                - RemoteTciAudioStage::kHistoryFrames;
+            m_owner.m_historySkippedFrames.fetch_add(skipped);
+            client.cursor = m_written - RemoteTciAudioStage::kHistoryFrames;
+            client.output.clear();
+            client.blockInput = 0;
+            if (client.resampler) {
+                const auto resetStarted = std::chrono::steady_clock::now();
+                const quint64 cpuStarted = threadCpuNs();
+                client.resampler->destroy();
+                client.resampler->create();
+                const quint64 resetWallNs = quint64(std::chrono::duration_cast<
+                    std::chrono::nanoseconds>(std::chrono::steady_clock::now()
+                                             - resetStarted).count());
+                ++m_owner.m_resamplerRecreates;
+                m_owner.m_resamplerRecreateWallNs.fetch_add(resetWallNs);
+                storeMax(m_owner.m_maxResamplerRecreateWallNs, resetWallNs);
+                const quint64 cpuEnded = threadCpuNs();
+                if (cpuStarted != 0 && cpuEnded >= cpuStarted) {
+                    m_owner.m_resamplerRecreateCpuNs.fetch_add(cpuEnded - cpuStarted);
+                }
+                if (!client.resampler->left || !client.resampler->right) {
+                    client.resampler.reset();
+                    client.failed = true;
+                    --m_owner.m_liveWdspPairs;
+                    return;
+                }
+            }
+        }
+        const int frames = int(std::min<quint64>({96,
+            quint64(client.config.blockFrames - client.blockInput),
+            m_written - client.cursor}));
+        if (frames <= 0) { return; }
+        const int channels = client.config.channels;
+        for (int i = 0; i < frames; ++i) {
+            const std::size_t slot = std::size_t((client.cursor + quint64(i))
+                                                 % RemoteTciAudioStage::kHistoryFrames) * 2;
+            m_input[std::size_t(i * channels)] = m_history[slot] * client.config.gain;
+            if (channels == 2) {
+                m_input[std::size_t(2 * i + 1)] = m_history[slot + 1] * client.config.gain;
+            }
+        }
+        int outSamples = frames * channels;
+        const float* samples = m_input.data();
+        if (client.resampler) {
+            samples = client.resampler->resample(m_input.data(), frames, channels, outSamples);
+        }
+        client.output.insert(client.output.end(), samples, samples + outSamples);
+        client.cursor += quint64(frames);
+        client.blockInput += frames;
+        if (client.blockInput == client.config.blockFrames) {
+            RemoteTciAudioStage::Result result;
+            result.receiverGeneration = m_config->receiverGeneration;
+            result.token = client.config.token;
+            result.revision = client.config.revision;
+            result.sequence = ++client.sequence;
+            result.bytes = TciBinaryFrame::buildStreamPayload(
+                m_config->receiver, client.config.rate, client.config.type,
+                int(client.output.size()), int(TciStreamType::RxAudioStream),
+                channels, client.output.data());
+            m_owner.push(std::move(result));
+            client.output.clear();
+            client.blockInput = 0;
+        }
+    }
+
+    RemoteTciAudioStage& m_owner;
+    std::shared_ptr<const RemoteTciAudioStage::ConfigSnapshot> m_config;
+    std::map<quint64, Client> m_clients;
+    std::array<float, RemoteTciAudioStage::kHistoryFrames * 2> m_history{};
+    std::array<float, 96 * 2> m_input{};
+    quint64 m_written = 0;
+    quint64 m_reconcileBase = 0;
+    quint64 m_nextToken = 0;
+};
+
+std::unique_ptr<IRemotePcmWorkerStage::Run> RemoteTciAudioStage::createRun()
+{
+    return std::make_unique<RemoteTciAudioRun>(*this);
+}
+
 int TciServer::liveRxAudioResamplersForTest()
 {
     return s_liveRxAudioResamplers.load(std::memory_order_relaxed);
@@ -2191,6 +2558,17 @@ void TciServer::handleAudioSubscribe(std::shared_ptr<TciClientSession>& session,
         return;  // idempotent — Thetis HashSet.Add returns false on duplicate
     }
     session->audioStreamEnabled.insert(rx);
+    if (m_remoteWindow) {
+        if (session->remoteAudioToken == 0) {
+            session->remoteAudioToken = ++m_nextRemoteAudioToken;
+            m_remoteAudioSockets.insert(session->remoteAudioToken, session->socket);
+        }
+        ++session->remoteAudioRevision[rx];
+        session->remoteAudioLastSequence.remove(rx);
+        session->remoteAudioLastGeneration.remove(rx);
+        publishRemoteAudioConfig(rx);
+        return;
+    }
     // R-R3-42: this client hears the receiver from now on, at its own pace.
     session->audioReadFrame.insert(rx, rx >= 0 && rx < kMaxTciRxSlices
                                            ? m_rxFramesWritten[rx] : 0);
@@ -2220,6 +2598,17 @@ void TciServer::handleAudioUnsubscribe(std::shared_ptr<TciClientSession>& sessio
     }
     session->audioStreamEnabled.remove(rx);
     session->audioReadFrame.remove(rx);
+    if (m_remoteWindow) {
+        ++session->remoteAudioRevision[rx];
+        session->remoteAudioLastSequence.remove(rx);
+        session->remoteAudioLastGeneration.remove(rx);
+        publishRemoteAudioConfig(rx);
+        if (session->audioStreamEnabled.isEmpty()) {
+            m_remoteAudioSockets.remove(session->remoteAudioToken);
+            session->remoteAudioToken = 0;
+        }
+        return;
+    }
 
     auto rIt = session->audioResamplers.find(rx);
     if (rIt != session->audioResamplers.end()) {
@@ -2236,6 +2625,18 @@ void TciServer::handleAudioUnsubscribe(std::shared_ptr<TciClientSession>& sessio
 // given session. Called from onClientDisconnected and stop() to prevent leaks.
 void TciServer::cleanupResamplers(std::shared_ptr<TciClientSession>& session)
 {
+    if (m_remoteWindow) {
+        session->audioStreamEnabled.clear();
+        for (int rx = 0; rx < kMaxTciRxSlices; ++rx) {
+            ++session->remoteAudioRevision[rx];
+        }
+        m_remoteAudioSockets.remove(session->remoteAudioToken);
+        session->remoteAudioToken = 0;
+        session->remoteAudioLastSequence.clear();
+        session->remoteAudioLastGeneration.clear();
+        for (int rx = 0; rx < kMaxTciRxSlices; ++rx) { publishRemoteAudioConfig(rx); }
+        return;
+    }
     for (auto rIt = session->audioResamplers.begin();
          rIt != session->audioResamplers.end(); ++rIt) {
         releaseRxAudioResampler(rIt.value());
@@ -2313,7 +2714,7 @@ void TciServer::collectRxAudio()
     constexpr int kFrameBytes = 2 * static_cast<int>(sizeof(float));
     for (int rx = 0; rx < kMaxTciRxSlices; ++rx) {
         std::vector<float>& history = m_rxHistory[rx];
-        bool arrived = false;
+        bool arrived = m_remotePcmArrived[rx].exchange(false, std::memory_order_acq_rel);
         while (true) {
             const qint64 got = m_audioRing[rx].popInto(
                 reinterpret_cast<uint8_t*>(m_drainScratch.data()),
@@ -2341,7 +2742,9 @@ void TciServer::collectRxAudio()
             for (bool stopped : m_rxStoppedNotice) { anyStopped = anyStopped || stopped; }
             if (!anyStopped && m_noticeFromReceiverStop) {
                 m_noticeReason.clear();
+                const QPointer<TciServer> self(this);
                 emit operatorNoticeCleared();
+                if (!self) { return; }
             }
         }
     }
@@ -2456,7 +2859,7 @@ void TciServer::sendRxAudioBlock(QWebSocket* ws,
         return;
     }
 
-    // No lane (a remote window, or no model): at once, as before.
+    // A local model without a receive lane uses the original at-once path.
     const float* samples = m_drainScratch.data();
     int outSamples = totalSamples;
     if (resampler) {
@@ -2481,10 +2884,145 @@ void TciServer::sendRxAudioBlock(QWebSocket* ws,
 
 // ── R-R3-42: remote window receiver audio ────────────────────────────────────
 
+void TciServer::publishRemoteAudioConfig(int receiver)
+{
+    if (!m_remoteWindow || receiver < 0 || receiver >= kMaxTciRxSlices
+        || !m_remoteStage[receiver]) { return; }
+    std::vector<RemoteTciAudioStage::ClientConfig> clients;
+    clients.reserve(RemoteTciAudioStage::kMaxClients);
+    for (auto it = m_clients.cbegin(); it != m_clients.cend(); ++it) {
+        const TciClientSession& session = *it.value();
+        if (!session.audioStreamEnabled.contains(receiver) || session.remoteAudioToken == 0) {
+            continue;
+        }
+        clients.push_back({session.remoteAudioToken, session.remoteAudioRevision.value(receiver),
+                           session.audioSampleRate, session.audioStreamChannels,
+                           session.audioSampleType, session.audioStreamSamples,
+                           m_sliceRxGainLinear[receiver].load(std::memory_order_acquire)});
+    }
+    m_remoteStage[receiver]->publish(std::move(clients));
+}
+
+void TciServer::refreshRemoteAudioGain(int receiver)
+{
+    for (auto it = m_clients.begin(); it != m_clients.end(); ++it) {
+        TciClientSession& session = *it.value();
+        if (session.audioStreamEnabled.contains(receiver)) {
+            ++session.remoteAudioRevision[receiver];
+            session.remoteAudioLastSequence.remove(receiver);
+        }
+    }
+    publishRemoteAudioConfig(receiver);
+}
+
+void TciServer::drainRemoteAudio(
+    const std::function<qint64(QWebSocket*, const QByteArray&)>& send)
+{
+    if (!m_remoteWindow) { return; }
+    constexpr qint64 kMaxSocketPendingBytes = 262272;
+    constexpr qint64 kMaxTickBytes = 262272;
+    qint64 sentBytes = 0;
+    int sentFrames = 0;
+    int attemptedFrames = 0;
+    int emptyReceivers = 0;
+    quint64 droppedThisTick = 0;
+    for (int rx = 0; rx < kMaxTciRxSlices; ++rx) {
+        if (!m_remoteStage[rx]) { continue; }
+        const auto diagnostics = m_remoteStage[rx]->diagnostics();
+        if (diagnostics.mailboxEvictions < m_lastRemoteMailboxEvictions[rx]) {
+            m_lastRemoteMailboxEvictions[rx] = 0;
+        }
+        if (diagnostics.historySkippedFrames < m_lastRemoteHistorySkips[rx]) {
+            m_lastRemoteHistorySkips[rx] = 0;
+        }
+        droppedThisTick += diagnostics.mailboxEvictions - m_lastRemoteMailboxEvictions[rx];
+        droppedThisTick += diagnostics.historySkippedFrames - m_lastRemoteHistorySkips[rx];
+        m_lastRemoteMailboxEvictions[rx] = diagnostics.mailboxEvictions;
+        m_lastRemoteHistorySkips[rx] = diagnostics.historySkippedFrames;
+    }
+    // A rejected result consumes work too. Otherwise a refilling mailbox
+    // can keep this UI tick in the loop without ever increasing sentFrames.
+    while (attemptedFrames < 2 && emptyReceivers < kMaxTciRxSlices) {
+        const int rx = m_nextRemoteDrainReceiver;
+        m_nextRemoteDrainReceiver = (rx + 1) % kMaxTciRxSlices;
+        const std::shared_ptr<RemoteTciAudioStage> stage = m_remoteStage[rx];
+        RemoteTciAudioStage::Result result;
+        if (!stage || !stage->popNext(&result)) {
+            ++emptyReceivers;
+            continue;
+        }
+        ++attemptedFrames;
+        emptyReceivers = 0;
+        if (result.receiverGeneration != stage->generation()
+            || !m_remoteRequested[rx] || result.bytes.size() > kMaxTickBytes - sentBytes) {
+            continue;
+        }
+        const QPointer<QWebSocket> socket = m_remoteAudioSockets.value(result.token);
+        if (!socket) { continue; }
+        const auto sessionIt = m_clients.constFind(socket.data());
+        if (sessionIt == m_clients.cend()) { continue; }
+        TciClientSession& session = *sessionIt.value();
+        if (session.remoteAudioToken != result.token
+            || session.remoteAudioRevision.value(rx) != result.revision
+            || !session.audioStreamEnabled.contains(rx) || session.socket != socket.data()
+            || session.disconnected) { continue; }
+        if (session.remoteAudioLastGeneration.value(rx) != result.receiverGeneration) {
+            session.remoteAudioLastGeneration.insert(rx, result.receiverGeneration);
+            session.remoteAudioLastSequence.insert(rx, 0);
+        }
+        if (result.sequence <= session.remoteAudioLastSequence.value(rx)) { continue; }
+        session.remoteAudioLastSequence.insert(rx, result.sequence);
+        if (socket->bytesToWrite() + result.bytes.size() > kMaxSocketPendingBytes) {
+            ++m_socketBackpressureDrops;
+            stage->noteSocketBackpressureDrop();
+            ++droppedThisTick;
+            continue;
+        }
+        const QPointer<TciServer> self(this);
+        const qint64 queued = send ? send(socket.data(), result.bytes)
+                                   : socket->sendBinaryMessage(result.bytes);
+        // Sending can synchronously retire the socket, stream, or this
+        // server. No session reference or server state is safe until the
+        // server and stage are checked again.
+        if (!self) { return; }
+        if (m_remoteStage[rx] != stage || !m_remoteRequested[rx]) { return; }
+        if (queued < 0) {
+            ++m_socketBackpressureDrops;
+            stage->noteSocketBackpressureDrop();
+            ++droppedThisTick;
+            continue;
+        }
+        sentBytes += result.bytes.size();
+        ++sentFrames;
+    }
+    if (droppedThisTick > 0) {
+        m_remoteSaturationDrops += droppedThisTick;
+        m_remoteSaturationQuietTicks = 0;
+        if (!m_remoteSaturationNotified && m_remoteSaturationDrops >= 100) {
+            m_remoteSaturationNotified = true;
+            raiseOperatorNotice(QString(),
+                QStringLiteral("Remote TCI audio cannot keep up; older audio is being skipped."));
+        }
+    } else if (m_remoteSaturationNotified && sentFrames > 0) {
+        if (++m_remoteSaturationQuietTicks >= 200) {
+            m_remoteSaturationNotified = false;
+            m_remoteSaturationDrops = 0;
+            m_remoteSaturationQuietTicks = 0;
+            if (m_noticeReason == QStringLiteral(
+                    "Remote TCI audio cannot keep up; older audio is being skipped.")) {
+                m_noticeReason.clear();
+                emit operatorNoticeCleared();
+            }
+        }
+    }
+}
+
 void TciServer::setRemoteReceiverAudio(RemoteReceiverAudio source)
 {
     for (int rx = 0; rx < kMaxTciRxSlices; ++rx) {
         if (m_remoteRequested[rx]) {
+            if (m_remoteStage[rx]) { m_remoteStage[rx]->publish({}); }
+            m_remoteStage[rx].reset();
             m_remoteRequested[rx] = false;
             m_remoteUnavailable[rx] = false;
             if (m_remoteAudio.release) {
@@ -2572,6 +3110,12 @@ bool TciServer::remoteReceiverRequested(int rx) const
     return rx >= 0 && rx < kMaxTciRxSlices && m_remoteRequested[rx];
 }
 
+std::optional<RemoteTciAudioStage::Diagnostics> TciServer::remoteAudioDiagnostics(int rx) const
+{
+    if (rx < 0 || rx >= kMaxTciRxSlices || !m_remoteStage[rx]) { return std::nullopt; }
+    return m_remoteStage[rx]->diagnostics();
+}
+
 void TciServer::updateRemoteReceiverDemand(int rx)
 {
     if (!m_remoteWindow || rx < 0 || rx >= kMaxTciRxSlices) { return; }
@@ -2587,12 +3131,15 @@ void TciServer::updateRemoteReceiverDemand(int rx)
         // or a Core that cannot send it). A "cannot send" answer is acted
         // on here, once request() has returned, never inside it.
         m_remoteRequesting[rx] = true;
-        m_remoteAudio.request(rx, this);
+        m_remoteStage[rx] = m_remoteAudio.request(rx, this);
         m_remoteRequesting[rx] = false;
+        publishRemoteAudioConfig(rx);
         if (m_remoteUnavailable[rx]) {
             stopUnavailableReceiver(rx);
         }
     } else if (!wanted && m_remoteRequested[rx]) {
+        if (m_remoteStage[rx]) { m_remoteStage[rx]->publish({}); }
+        m_remoteStage[rx].reset();
         m_remoteRequested[rx] = false;
         m_remoteUnavailable[rx] = false;
         qCInfo(lcTci) << "TciServer: releasing receiver" << rx << "audio";
@@ -2604,10 +3151,13 @@ void TciServer::updateRemoteReceiverDemand(int rx)
 
 void TciServer::receiverAudioBlock(int sliceId, const float* interleavedStereo, int frames)
 {
-    // Receive worker thread, under the stream's fan-out lock: copy and go.
-    // This worker is the ring's only producer in a remote window (no
-    // RxChannel tap is hooked there), and one receiver stream per slice
-    // delivers at a time.
+    if (m_remoteWindow && sliceId >= 0 && sliceId < kMaxTciRxSlices) {
+        m_remotePcmArrived[sliceId].store(true, std::memory_order_release);
+        return;
+    }
+    // Receive worker thread, under the stream's fan-out lock. The worker
+    // appends the same PCM to its TCI stage after this callback returns and
+    // the fan-out lock is released. Only the arrival notice is needed here.
     if (sliceId < 0 || sliceId >= kMaxTciRxSlices || !interleavedStereo || frames <= 0) {
         return;
     }
@@ -2899,6 +3449,17 @@ void TciServer::onTextMessageReceived(const QString& msg)
             bool ok = false;
             const int rx = trimmed.mid(kAudioStart.size()).trimmed().toInt(&ok);
             if (ok && rx >= 0 && rx <= 1) {
+                if (m_remoteWindow && session->audioStreamEnabled.isEmpty()) {
+                    int active = 0;
+                    for (auto cit = m_clients.cbegin(); cit != m_clients.cend(); ++cit) {
+                        if (!cit.value()->audioStreamEnabled.isEmpty()) { ++active; }
+                    }
+                    if (active >= RemoteTciAudioStage::kMaxClients) {
+                        raiseOperatorNotice(session->peer,
+                            QStringLiteral("Remote TCI receiver audio is limited to eight clients"));
+                        return;
+                    }
+                }
                 handleAudioSubscribe(session, rx);
                 if (m_remoteWindow) {
                     // R-R3-42: TCI receiver N is the Core's slice N, asked
@@ -2998,6 +3559,9 @@ void TciServer::onTextMessageReceived(const QString& msg)
             const QString kAudioStreamSamples   = QStringLiteral("audio_stream_samples:");
             const QString kAudioStreamChannels  = QStringLiteral("audio_stream_channels:");
             const QString kAudioStreamSampleType = QStringLiteral("audio_stream_sample_type:");
+            const auto previousConfig = std::tuple(session->audioSampleRate,
+                session->audioStreamSamples, session->audioStreamChannels,
+                session->audioSampleType);
 
             if (trimmed.startsWith(kAudioSampleRate)) {
                 // From Thetis TCIServer.cs:5740-5795 [v2.10.3.13]:
@@ -3034,13 +3598,15 @@ void TciServer::onTextMessageReceived(const QString& msg)
                     // since the target rate has changed.  Destroy old, rebuild.
                     // R-R3-39: both on the receive lane, after every block
                     // already posted at the old rate.
-                    for (int rx : session->audioStreamEnabled) {
-                        auto rIt = session->audioResamplers.find(rx);
-                        if (rIt != session->audioResamplers.end()) {
-                            releaseRxAudioResampler(rIt.value());
-                            session->audioResamplers.erase(rIt);
+                    if (!m_remoteWindow) {
+                        for (int rx : session->audioStreamEnabled) {
+                            auto rIt = session->audioResamplers.find(rx);
+                            if (rIt != session->audioResamplers.end()) {
+                                releaseRxAudioResampler(rIt.value());
+                                session->audioResamplers.erase(rIt);
+                            }
+                            session->audioResamplers.insert(rx, makeRxAudioResampler(48000, sr));
                         }
-                        session->audioResamplers.insert(rx, makeRxAudioResampler(48000, sr));
                     }
                 }
             } else if (trimmed.startsWith(kAudioStreamSamples)) {
@@ -3078,6 +3644,15 @@ void TciServer::onTextMessageReceived(const QString& msg)
                 qCInfo(lcTci) << "TciServer: session audioSampleType set to" << typeStr
                               << "(" << typeInt << ")"
                               << "peer" << session->peer;
+            }
+            if (m_remoteWindow && previousConfig != std::tuple(session->audioSampleRate,
+                    session->audioStreamSamples, session->audioStreamChannels,
+                    session->audioSampleType)) {
+                for (int rx : session->audioStreamEnabled) {
+                    ++session->remoteAudioRevision[rx];
+                }
+                session->remoteAudioLastSequence.clear();
+                for (int rx : session->audioStreamEnabled) { publishRemoteAudioConfig(rx); }
             }
         }
 

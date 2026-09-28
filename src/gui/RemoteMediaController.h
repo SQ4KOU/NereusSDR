@@ -81,6 +81,7 @@
 #include <vector>
 
 namespace NereusSDR {
+class RemoteTciAudioStage;
 class StationClient;
 class RadioModel;
 class PanadapterStack;
@@ -238,7 +239,8 @@ public:
     /// reconnects until released; see IReceiverPcmSink for what it is told.
     /// Adding a sink that is already registered for the slice does nothing.
     /// GUI thread only.
-    void requestReceiverAudio(int sliceId, IReceiverPcmSink* sink);
+    std::shared_ptr<RemoteTciAudioStage> requestReceiverAudio(int sliceId,
+                                                               IReceiverPcmSink* sink);
     /// R-R3-43: undoes one requestReceiverAudio(). When it returns, `sink`
     /// is not called again for this slice; the last sink's release asks the
     /// Core to stop the stream. GUI thread only.

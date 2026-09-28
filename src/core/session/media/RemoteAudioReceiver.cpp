@@ -88,6 +88,7 @@ struct RemoteAudioReceiver::Private {
     RemotePlaybackOutput output = RemotePlaybackOutput::Speakers;
     // R-R3-43: set only in the PCM-sink mode, which has no engine.
     RemoteAudioReceiver::PcmSink sink;
+    std::shared_ptr<IRemotePcmWorkerStage> stage;
     // std::thread and a flag, not std::jthread: the libc++ in Xcode 16
     // (LLVM 19, the macos-15 CI runner) keeps jthread and stop_token
     // behind -fexperimental-library. stop() sets the flag and joins;
@@ -240,6 +241,7 @@ RemoteAudioReceiver::RemoteAudioReceiver(PcmSinkMode mode, QObject* parent, Cloc
     : QObject(parent), d(std::make_unique<Private>())
 {
     d->sink = std::move(mode.sink);
+    d->stage = std::move(mode.stage);
     d->clock = clock ? std::move(clock) : Clock(defaultClockNs);
 }
 bool RemoteAudioReceiver::isPcmSink() const { return bool(d->sink); }
@@ -447,6 +449,11 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
         // once per process, not once per context.
         static std::atomic<bool> priorityLogged{false};
         elevateLatencyCriticalThreadPriority(!priorityLogged.exchange(true));
+        // The run is created and destroyed on this worker, including every
+        // decoder-error return. Its WDSP handles never cross to the GUI.
+        std::unique_ptr<IRemotePcmWorkerStage::Run> stageRun =
+            d->stage ? d->stage->createRun() : nullptr;
+        if (stageRun) { stageRun->reconcile(); }
         const bool lossless = profile == RemoteAudioProfile::Lossless;
         const bool sinkMode = bool(d->sink);
         const int packetFrames = packetFramesFor(profile);
@@ -712,9 +719,11 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
             bool startBacklog = false;
             {
                 std::unique_lock<std::mutex> lock(d->mutex);
-                d->wake.wait_for(lock, std::chrono::milliseconds(2), [this] {
-                    return d->stopWorker.load() || !d->incoming.empty() || d->overflow;
-                });
+                if (!stageRun || !stageRun->hasRunnableWork()) {
+                    d->wake.wait_for(lock, std::chrono::milliseconds(2), [this] {
+                        return d->stopWorker.load() || !d->incoming.empty() || d->overflow;
+                    });
+                }
                 incoming.swap(d->incoming);
                 overflow = d->overflow;
                 d->overflow = false;
@@ -849,6 +858,7 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
                     }
                     const int frames = int(audio.size() / PcmAudioCodecConfig::kChannels);
                     d->sink(audio.constData(), frames);
+                    if (stageRun) { stageRun->appendPcm(audio.constData(), frames); }
                     if (frame->concealed()) { ++d->concealed; }
                     else { ++d->decoded; }
                     noteReleased(frame->timestamp, frame->concealed(), now);
@@ -867,6 +877,12 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
                     std::lock_guard<std::mutex> lock(d->pointsMutex);
                     d->release = *unpublishedRelease;
                     unpublishedRelease.reset();
+                }
+                if (stageRun) {
+                    stageRun->reconcile();
+                    stageRun->serviceUntil(
+                        std::chrono::steady_clock::now() + std::chrono::microseconds(1800),
+                        32);
                 }
                 continue;
             }

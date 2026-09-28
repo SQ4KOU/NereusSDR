@@ -82,6 +82,7 @@
 #include "core/session/PathRacer.h"
 #include "core/session/media/PcmAudioCodec.h"
 #include "core/session/media/RemoteAudioReceiver.h"
+#include "core/session/media/RemoteTciAudioStage.h"
 #include "core/session/media/RemoteAudioRestartBackoff.h"
 #include "core/session/media/RemoteMicReceiver.h"
 #include "core/session/media/DaemonMediaController.h"
@@ -986,6 +987,7 @@ struct RemoteMediaController::Private {
     struct ReceiverStream {
         QList<IReceiverPcmSink*> sinks;
         std::shared_ptr<ReceiverFanout> fanout;
+        std::shared_ptr<RemoteTciAudioStage> tciStage;
         std::unique_ptr<RemoteAudioReceiver> receiver;
         quint32 generation = 0;                        // newest accepted context
         std::optional<RemoteAudioContextMessage> context;
@@ -1623,6 +1625,7 @@ RemoteMediaController::~RemoteMediaController()
             std::lock_guard<std::mutex> lock(stream.fanout->mutex);
             stream.fanout->sinks.clear();
         }
+        stream.tciStage->invalidate();
         stream.receiver->stop();
     }
     d->receiverStreams.clear();
@@ -2603,6 +2606,7 @@ void RemoteMediaController::stop()
     d->monitorContext.reset();
     QList<int> interrupted;
     for (auto& [sliceId, stream] : d->receiverStreams) {
+        stream.tciStage->invalidate();
         stream.receiver->stop();
         stream.ssrc = 0;
         stream.generation = 0;
@@ -4479,15 +4483,17 @@ void RemoteMediaController::requestAudio()
 
 // ---- R-R3-43: receiver audio streams for apps on this computer ----
 
-void RemoteMediaController::requestReceiverAudio(int sliceId, IReceiverPcmSink* sink)
+std::shared_ptr<RemoteTciAudioStage> RemoteMediaController::requestReceiverAudio(
+    int sliceId, IReceiverPcmSink* sink)
 {
-    if (!sink || sliceId < 0) { return; }
+    if (!sink || sliceId < 0) { return {}; }
     auto found = d->receiverStreams.find(sliceId);
     const bool first = found == d->receiverStreams.end();
     if (first) {
         Private::ReceiverStream stream;
         stream.fanout = std::make_shared<Private::ReceiverFanout>();
         stream.fanout->sliceId = sliceId;
+        stream.tciStage = std::make_shared<RemoteTciAudioStage>(sliceId);
         const std::shared_ptr<Private::ReceiverFanout> fanout = stream.fanout;
         // Runs on the receiver's worker thread; see IReceiverPcmSink.
         stream.receiver = std::make_unique<RemoteAudioReceiver>(
@@ -4496,7 +4502,7 @@ void RemoteMediaController::requestReceiverAudio(int sliceId, IReceiverPcmSink* 
                 for (IReceiverPcmSink* consumer : std::as_const(fanout->sinks)) {
                     consumer->receiverAudioBlock(fanout->sliceId, pcm, frames);
                 }
-            }});
+            }, stream.tciStage});
         RemoteAudioReceiver* const receiver = stream.receiver.get();
         connect(receiver, &RemoteAudioReceiver::restartRequested, this,
                 [this, sliceId, receiver](const QString& reason, RemoteAudioReceiver::Fault fault) {
@@ -4508,9 +4514,10 @@ void RemoteMediaController::requestReceiverAudio(int sliceId, IReceiverPcmSink* 
         });
         found = d->receiverStreams.emplace(sliceId, std::move(stream)).first;
     } else if (found->second.sinks.contains(sink)) {
-        return;
+        return found->second.tciStage;
     }
     Private::ReceiverStream& stream = found->second;
+    const std::shared_ptr<RemoteTciAudioStage> stage = stream.tciStage;
     stream.sinks.append(sink);
     {
         std::lock_guard<std::mutex> lock(stream.fanout->mutex);
@@ -4533,8 +4540,9 @@ void RemoteMediaController::requestReceiverAudio(int sliceId, IReceiverPcmSink* 
         const QString reason = stream.stopReason;
         sink->receiverAudioStopped(sliceId, reason);
     }
-    if (!self) { return; }
+    if (!self) { return {}; }
     refreshAudioStatus();
+    return stage;
 }
 
 void RemoteMediaController::requestRawIq(int sliceId)
@@ -4693,6 +4701,7 @@ void RemoteMediaController::releaseReceiverAudio(int sliceId, IReceiverPcmSink* 
     if (!stream.sinks.isEmpty()) { return; }
     // The last consumer went: stop the stream here and at the Core.
     std::unique_ptr<RemoteAudioReceiver> receiver = std::move(stream.receiver);
+    stream.tciStage->invalidate();
     receiver->stop();
     disconnect(receiver.get(), nullptr, this, nullptr);
     // This may run inside the receiver's own signal; it goes when that is over.
@@ -4779,6 +4788,7 @@ void RemoteMediaController::receiveReceiverAudioContext(const QJsonObject& paylo
     stream.generation = context.generation;
     stream.context = context;
     stream.retryPending = false;
+    stream.tciStage->invalidate();
     stream.receiver->stop();
     stream.ssrc = 0;
     stream.runningProfile.reset();
@@ -4846,6 +4856,7 @@ void RemoteMediaController::onReceiverRestart(int sliceId, RemoteAudioReceiver* 
     Private::ReceiverStream& stream = found->second;
     qCWarning(lcRemoteMedia).noquote()
         << QStringLiteral("Remote receiver audio for slice %1: %2").arg(sliceId).arg(reason);
+    stream.tciStage->invalidate();
     stream.receiver->stop();
     stream.ssrc = 0;
     // R-R3-23: a lossless receiver stream's restart counts against the one
@@ -4884,6 +4895,7 @@ void RemoteMediaController::onReceiverError(int sliceId, RemoteAudioReceiver* re
     Private::ReceiverStream& stream = found->second;
     qCWarning(lcRemoteMedia).noquote()
         << QStringLiteral("Remote receiver audio for slice %1 failed: %2").arg(sliceId).arg(reason);
+    stream.tciStage->invalidate();
     stream.receiver->stop();
     stream.ssrc = 0;
     stream.runningProfile.reset();

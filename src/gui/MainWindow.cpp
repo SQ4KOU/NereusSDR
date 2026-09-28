@@ -1963,7 +1963,8 @@ void MainWindow::ensureRemoteSession()
             const QPointer<RemoteMediaController> media(m_remoteMedia);
             TciServer::RemoteReceiverAudio source;
             source.request = [media](int sliceId, IReceiverPcmSink* sink) {
-                if (media) { media->requestReceiverAudio(sliceId, sink); }
+                return media ? media->requestReceiverAudio(sliceId, sink)
+                             : std::shared_ptr<RemoteTciAudioStage>{};
             };
             source.release = [media](int sliceId, IReceiverPcmSink* sink) {
                 if (media) { media->releaseReceiverAudio(sliceId, sink); }

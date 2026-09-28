@@ -795,6 +795,12 @@ colours for the same signal.
   maximum wake gaps. Removing the explicit scheduler yield is not an established
   explanation for the severe run. The bounded worker implementation and lifetime
   tests continue separately; these passing repeats do not erase that finding.
+  The worker migration is now integrated with eight-client admission, bounded
+  conversion quanta/history/mailboxes and two-result UI ticks. Lead review also
+  fixed the timer caller continuing after a send/notice retired its server; a
+  real timer regression covers both notice and notice-clear destruction. Fresh
+  app/Core builds and four TCI/VAX/controller suites pass (65.01 s). This verifies
+  functional integration, not resolution of the severe load stall.
 - Plan: remote-window TCI audio parity and real-load acceptance.
 
 ### G-52: Catalog capability-order fixture missed two integrated appended fields
