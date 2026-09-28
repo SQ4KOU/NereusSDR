@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "category": {
+    "id": "hardware",
+    "title": "Hardware Config",
+    "where": "station",
+    "coverage": "partial"
+  },
+  "pages": [
+    {
+      "id": "hardware.antennaAlex",
+      "title": "Antenna / ALEX",
+      "where": "station",
+      "coverage": "partial",
+      "sections": [
+        {
+          "title": "Antenna Control",
+          "controls": [
+            {
+              "id": "hardware.antennaAlex.blockTxAnt2",
+              "label": "Block TX on Ant 2",
+              "tooltip": "Prevents transmit assignments to Antenna Port 2. Use when Ant 2 is wired for receive only.",
+              "kind": "toggle",
+              "binding": {"property": {"object": "alexAntennas", "name": "blockTxAnt2"}},
+              "applies": "live",
+              "gate": {"capability": "radioHardwareVersion", "min": 6, "offAir": true}
+            },
+            {
+              "id": "hardware.antennaAlex.blockTxAnt3",
+              "label": "Block TX on Ant 3",
+              "tooltip": "Prevents transmit assignments to Antenna Port 3. Use when Ant 3 is wired for receive only.",
+              "kind": "toggle",
+              "binding": {"property": {"object": "alexAntennas", "name": "blockTxAnt3"}},
+              "applies": "live",
+              "gate": {"capability": "radioHardwareVersion", "min": 6, "offAir": true}
+            },
+            {
+              "id": "hardware.antennaAlex.useTxAntennaForRx",
+              "label": "Use TX antenna for RX",
+              "tooltip": "Use the TX antenna for RX instead of the RX antenna.",
+              "kind": "toggle",
+              "binding": {"property": {"object": "alexAntennas", "name": "useTxAntennaForRx"}},
+              "applies": "live",
+              "gate": {"capability": "radioHardwareVersion", "min": 2}
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

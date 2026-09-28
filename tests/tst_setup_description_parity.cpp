@@ -12,6 +12,7 @@
 #include "gui/setup/DspOptionsPage.h"
 #include "gui/setup/TransmitSetupPages.h"
 #include "gui/setup/TxProfileSetupPage.h"
+#include "gui/setup/hardware/AntennaAlexAntennaControlTab.h"
 #include "gui/setup/TestTwoTonePage.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -153,6 +154,22 @@ void compareControl(QWidget& page, const QJsonObject& control)
 class SetupDescriptionParityTest : public QObject {
     Q_OBJECT
 private slots:
+    void describedHardwareAntennaScalarsMatchDesktop()
+    {
+        RadioModel model;
+        model.setBoardForTest(HPSDRHW::Hermes);
+        AntennaAlexAntennaControlTab page(&model);
+        SetupDescriptionService service;
+        service.setBoardCapabilities(model.boardCapabilities());
+        const QJsonObject hardware = service.category(QStringLiteral("hardware"));
+        QVERIFY(!hardware.isEmpty());
+        const QJsonArray described = controls(hardware);
+        QCOMPARE(described.size(), 3);
+        for (const QJsonValue& raw : described) {
+            compareControl(page, raw.toObject());
+        }
+    }
+
     void describedTransmitDexpControlsMatchDesktop_data()
     {
         QTest::addColumn<int>("board");

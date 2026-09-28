@@ -1,6 +1,7 @@
 <RCC>
     <qresource prefix="/setup">
         <file alias="general.json">setup/general.json</file>
+        <file alias="hardware.json">setup/hardware.json</file>
         <file alias="test.json">setup/test.json</file>
         <file alias="diagnostics.json">setup/diagnostics.json</file>
         <file alias="catNetwork.json">setup/catNetwork.json</file>

@@ -7,6 +7,7 @@
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
 #include "models/NotchModel.h"
+#include "core/accessories/AlexAntennaFacade.h"
 #include "core/settings/SettingsScope.h"
 
 #include <QFile>
@@ -94,6 +95,8 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps)
                     || (id == QLatin1String("transmit")
                         && !SetupDescription::validateTransmitPropertyBinding(control)
                         && !SetupDescription::validateTransmitSettingBinding(control))
+                    || (id == QLatin1String("hardware")
+                        && !SetupDescription::validateHardwarePropertyBinding(control))
                     || (id == QLatin1String("audio")
                         && !SetupDescription::validateAudioPropertyBinding(control))
                     || (control.value(QStringLiteral("binding")).toObject().contains(QStringLiteral("command"))
@@ -103,6 +106,11 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps)
                 ids.insert(controlId);
             }
         }
+    }
+    // This partial page is built only when the connected board has ALEX
+    // filters. A board change must retire its old controls altogether.
+    if (id == QLatin1String("hardware") && !caps.hasAlexFilters) {
+        return {};
     }
     // General > Options is the only Task-43 control with a board-dependent
     // range. The desktop reads this same BoardCapabilities row.
@@ -272,6 +280,59 @@ bool SetupDescription::validateTransmitPropertyBinding(const QJsonObject& contro
         : kind == QLatin1String("decimal") ? MirrorWireKind::Float64
         : MirrorWireKind::Unsupported;
     return expected != MirrorWireKind::Unsupported && property->kind == expected;
+}
+
+bool SetupDescription::validateHardwarePropertyBinding(const QJsonObject& control)
+{
+    // The first Hardware description slice deliberately has a closed scalar
+    // set. SKU-dependent relay labels/visibility need a separate projection.
+    const QJsonObject binding = control.value(QStringLiteral("binding")).toObject();
+    if (binding.size() != 1 || !binding.value(QStringLiteral("property")).isObject()
+        || control.size() != 7
+        || control.value(QStringLiteral("kind")) != QJsonValue(QStringLiteral("toggle"))
+        || control.value(QStringLiteral("applies")) != QJsonValue(QStringLiteral("live"))) {
+        return false;
+    }
+    const QJsonObject ref = binding.value(QStringLiteral("property")).toObject();
+    if (ref.size() != 2
+        || ref.value(QStringLiteral("object")) != QJsonValue(QStringLiteral("alexAntennas"))) {
+        return false;
+    }
+    const QByteArray name = ref.value(QStringLiteral("name")).toString().toUtf8();
+    const bool receive = name == QByteArrayLiteral("useTxAntennaForRx");
+    const bool block2 = name == QByteArrayLiteral("blockTxAnt2");
+    const bool block3 = name == QByteArrayLiteral("blockTxAnt3");
+    if (!receive && !block2 && !block3) {
+        return false;
+    }
+    const QString id = QStringLiteral("hardware.antennaAlex.") + QString::fromUtf8(name);
+    const QString label = receive ? QStringLiteral("Use TX antenna for RX")
+        : block2 ? QStringLiteral("Block TX on Ant 2")
+                 : QStringLiteral("Block TX on Ant 3");
+    const QString tooltip = receive
+        ? QStringLiteral("Use the TX antenna for RX instead of the RX antenna.")
+        : block2
+          ? QStringLiteral("Prevents transmit assignments to Antenna Port 2. Use when Ant 2 is wired for receive only.")
+          : QStringLiteral("Prevents transmit assignments to Antenna Port 3. Use when Ant 3 is wired for receive only.");
+    if (control.value(QStringLiteral("id")) != QJsonValue(id)
+        || control.value(QStringLiteral("label")) != QJsonValue(label)
+        || control.value(QStringLiteral("tooltip")) != QJsonValue(tooltip)) {
+        return false;
+    }
+    // hasAlexFilters is projected by this service, not repeated as a client
+    // gate: that BoardCapabilities flag is absent from the station catalogue.
+    QJsonObject expectedGate{{QStringLiteral("capability"), QStringLiteral("radioHardwareVersion")},
+                             {QStringLiteral("min"), receive ? 2 : 6}};
+    if (!receive) {
+        expectedGate.insert(QStringLiteral("offAir"), true);
+    }
+    if (control.value(QStringLiteral("gate")).toObject() != expectedGate) {
+        return false;
+    }
+    const MirrorProperty* property = MirrorSchema::forMetaObject(
+        &AlexAntennaFacade::staticMetaObject).byName(name);
+    return property && property->isWritable && property->kind == MirrorWireKind::Bool
+        && MirrorPolicy::inboundAllowed(QByteArrayLiteral("AlexAntennaFacade"), name);
 }
 
 bool SetupDescription::validateTransmitSettingBinding(const QJsonObject& control)

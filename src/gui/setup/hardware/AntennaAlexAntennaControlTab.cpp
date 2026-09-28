@@ -219,12 +219,14 @@ void AntennaAlexAntennaControlTab::buildBlockTxStrip(QVBoxLayout* outerLayout)
     row->setSpacing(16);
 
     m_blockTxAnt2 = new QCheckBox(tr("Block TX on Ant 2"), frame);
+    m_blockTxAnt2->setProperty("nereusSetupId", "hardware.antennaAlex.blockTxAnt2");
     m_blockTxAnt2->setChecked(blockTxAnt2Now());
     m_blockTxAnt2->setToolTip(tr("Prevents transmit assignments to Antenna Port 2. "
                                   "Use when Ant 2 is wired for receive only."));
     row->addWidget(m_blockTxAnt2);
 
     m_blockTxAnt3 = new QCheckBox(tr("Block TX on Ant 3"), frame);
+    m_blockTxAnt3->setProperty("nereusSetupId", "hardware.antennaAlex.blockTxAnt3");
     m_blockTxAnt3->setChecked(blockTxAnt3Now());
     m_blockTxAnt3->setToolTip(tr("Prevents transmit assignments to Antenna Port 3. "
                                   "Use when Ant 3 is wired for receive only."));
@@ -559,6 +561,7 @@ void AntennaAlexAntennaControlTab::buildTxBypassStrip(QVBoxLayout* outerLayout)
     m_chkExt2OutOnTx   = new QCheckBox(tr("Ext 2 on TX"), frame);
     m_chkRxOutOverride = new QCheckBox(tr("Disable RX Bypass relay"), frame);
     m_chkUseTxAntForRx = new QCheckBox(tr("Use TX antenna for RX"), frame);
+    m_chkUseTxAntForRx->setProperty("nereusSetupId", "hardware.antennaAlex.useTxAntennaForRx");
 
     // Tooltips — From Thetis setup.cs:6178/6198 [v2.10.3.13 @501e3f5].
     // SKU-specific tooltip for chkEXT2OutOnTx is picked in applySkuProfile().
