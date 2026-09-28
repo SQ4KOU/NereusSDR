@@ -321,6 +321,7 @@ void PowerPage::buildPowerGroup()
     m_maxPowerSlider->setValue(100);
     m_maxPowerSlider->setEnabled(true);   // Phase 3M-1a H.4: wired
     m_maxPowerSlider->setObjectName(QStringLiteral("maxPowerSlider"));
+    m_maxPowerSlider->setProperty("nereusSetupId", "transmit.power.power");
     m_maxPowerSlider->setToolTip(QStringLiteral("RF output power (0–100 W)"));
 
     if (model()) {
@@ -841,6 +842,7 @@ void PowerPage::buildSwrProtectionGroup()
     // chkSWRProtection — From Thetis setup.designer.cs:5913-5924 [v2.10.3.13]
     m_chkSWRProtection = new QCheckBox(tr("Enable Protection SWR >"), group);
     m_chkSWRProtection->setObjectName(QStringLiteral("chkSWRProtection"));
+    m_chkSWRProtection->setProperty("nereusSetupId", "transmit.power.SwrProtectionEnabled");
     // From Thetis setup.designer.cs:5922 [v2.10.3.13]
     m_chkSWRProtection->setToolTip(tr("Show a visual SWR warning in the spectral area"));
     m_chkSWRProtection->setChecked(
@@ -860,6 +862,7 @@ void PowerPage::buildSwrProtectionGroup()
     // Min=1.0, Max=5.0, Increment=0.1, DecimalPlaces=1, Default=2.0 (Value=20, 65536→one decimal)
     m_udSwrProtectionLimit = new QDoubleSpinBox(group);
     m_udSwrProtectionLimit->setObjectName(QStringLiteral("udSwrProtectionLimit"));
+    m_udSwrProtectionLimit->setProperty("nereusSetupId", "transmit.power.SwrProtectionLimit");
     m_udSwrProtectionLimit->setRange(1.0, 5.0);
     m_udSwrProtectionLimit->setSingleStep(0.1);
     m_udSwrProtectionLimit->setDecimals(1);
@@ -878,6 +881,7 @@ void PowerPage::buildSwrProtectionGroup()
     // chkSWRTuneProtection — From Thetis setup.designer.cs:5901-5911 [v2.10.3.13]
     m_chkSWRTuneProtection = new QCheckBox(tr("Ignore when Tune Pwr <"), group);
     m_chkSWRTuneProtection->setObjectName(QStringLiteral("chkSWRTuneProtection"));
+    m_chkSWRTuneProtection->setProperty("nereusSetupId", "transmit.power.SwrTuneProtectionEnabled");
     // From Thetis setup.designer.cs:5909 [v2.10.3.13]
     m_chkSWRTuneProtection->setToolTip(tr("Disables SWR Protection during Tune."));
     m_chkSWRTuneProtection->setChecked(
@@ -897,6 +901,7 @@ void PowerPage::buildSwrProtectionGroup()
     // Min=5, Max=50, Increment=1, Default=35
     m_udTunePowerSwrIgnore = new QSpinBox(group);
     m_udTunePowerSwrIgnore->setObjectName(QStringLiteral("udTunePowerSwrIgnore"));
+    m_udTunePowerSwrIgnore->setProperty("nereusSetupId", "transmit.power.TunePowerSwrIgnore");
     m_udTunePowerSwrIgnore->setRange(5, 50);
     m_udTunePowerSwrIgnore->setSingleStep(1);
     m_udTunePowerSwrIgnore->setValue(
@@ -914,6 +919,7 @@ void PowerPage::buildSwrProtectionGroup()
     // chkWindBackPowerSWR — From Thetis setup.designer.cs:5809-5820 [v2.10.3.13]
     m_chkWindBackPowerSWR = new QCheckBox(tr("Reduce Pwr if protected"), group);
     m_chkWindBackPowerSWR->setObjectName(QStringLiteral("chkWindBackPowerSWR"));
+    m_chkWindBackPowerSWR->setProperty("nereusSetupId", "transmit.power.WindBackPowerSwr");
     // From Thetis setup.designer.cs:5818 [v2.10.3.13]
     m_chkWindBackPowerSWR->setToolTip(tr("Winds back the power if high swr protection kicks in"));
     m_chkWindBackPowerSWR->setChecked(
@@ -946,6 +952,7 @@ void PowerPage::buildExternalTxInhibitGroup()
     // chkTXInhibit — From Thetis setup.designer.cs:46637-46646 [v2.10.3.13]
     m_chkTXInhibit = new QCheckBox(tr("Update with TX Inhibit state"), group);
     m_chkTXInhibit->setObjectName(QStringLiteral("chkTXInhibit"));
+    m_chkTXInhibit->setProperty("nereusSetupId", "transmit.power.TxInhibitMonitorEnabled");
     // From Thetis setup.designer.cs:46645 [v2.10.3.13] (reworded, R-R3-49
     // group A fix wave M8: the original names Thetis, "Thetis will update
     // on TX inhibit state change").
@@ -969,6 +976,7 @@ void PowerPage::buildExternalTxInhibitGroup()
     // chkTXInhibitReverse — From Thetis setup.designer.cs:46648-46657 [v2.10.3.13]
     m_chkTXInhibitReverse = new QCheckBox(tr("Reversed logic"), group);
     m_chkTXInhibitReverse->setObjectName(QStringLiteral("chkTXInhibitReverse"));
+    m_chkTXInhibitReverse->setProperty("nereusSetupId", "transmit.power.TxInhibitMonitorReversed");
     // From Thetis setup.designer.cs:46656 [v2.10.3.13]
     m_chkTXInhibitReverse->setToolTip(tr("Reverse the input state logic"));
     m_chkTXInhibitReverse->setChecked(
@@ -1653,6 +1661,7 @@ DexpVoxPage::DexpVoxPage(RadioModel* model, QWidget* parent)
     // chkDEXPEnable — "Enable DEXP" — line 45148
     m_chkDEXPEnable = new QCheckBox(QStringLiteral("Enable DEXP"));
     m_chkDEXPEnable->setObjectName(QStringLiteral("chkDEXPEnable"));
+    m_chkDEXPEnable->setProperty("nereusSetupId", "transmit.dexpVox.dexpEnabled");
     m_chkDEXPEnable->setChecked(tx.dexpEnabled());
     // From Thetis setup.designer.cs:45149 [v2.10.3.13] — chkDEXPEnable tooltip.
     m_chkDEXPEnable->setToolTip(QStringLiteral("Enable Downward Expander"));
@@ -1671,6 +1680,7 @@ DexpVoxPage::DexpVoxPage(RadioModel* model, QWidget* parent)
     // udDEXPAttack — range 2..100 default 2 — line 45027-45055
     m_udDEXPAttack = new QSpinBox;
     m_udDEXPAttack->setObjectName(QStringLiteral("udDEXPAttack"));
+    m_udDEXPAttack->setProperty("nereusSetupId", "transmit.dexpVox.dexpAttackTimeMs");
     m_udDEXPAttack->setRange(2, 100);
     m_udDEXPAttack->setSingleStep(1);
     m_udDEXPAttack->setValue(static_cast<int>(tx.dexpAttackTimeMs()));
@@ -1681,6 +1691,7 @@ DexpVoxPage::DexpVoxPage(RadioModel* model, QWidget* parent)
     // udDEXPHold — range 1..2000 default 500 step 10 — line 44997-45025
     m_udDEXPHold = new QSpinBox;
     m_udDEXPHold->setObjectName(QStringLiteral("udDEXPHold"));
+    m_udDEXPHold->setProperty("nereusSetupId", "transmit.dexpVox.voxHangTimeMs");
     m_udDEXPHold->setRange(1, 2000);
     m_udDEXPHold->setSingleStep(10);
     m_udDEXPHold->setValue(tx.voxHangTimeMs());
@@ -1691,6 +1702,7 @@ DexpVoxPage::DexpVoxPage(RadioModel* model, QWidget* parent)
     // udDEXPRelease — range 2..1000 default 100 — line 44967-44995
     m_udDEXPRelease = new QSpinBox;
     m_udDEXPRelease->setObjectName(QStringLiteral("udDEXPRelease"));
+    m_udDEXPRelease->setProperty("nereusSetupId", "transmit.dexpVox.dexpReleaseTimeMs");
     m_udDEXPRelease->setRange(2, 1000);
     m_udDEXPRelease->setSingleStep(1);
     m_udDEXPRelease->setValue(static_cast<int>(tx.dexpReleaseTimeMs()));
@@ -1703,6 +1715,7 @@ DexpVoxPage::DexpVoxPage(RadioModel* model, QWidget* parent)
     // value is what reaches the spinbox, range matches Thetis verbatim.)
     m_udDEXPThreshold = new QSpinBox;
     m_udDEXPThreshold->setObjectName(QStringLiteral("udDEXPThreshold"));
+    m_udDEXPThreshold->setProperty("nereusSetupId", "transmit.dexpVox.voxThresholdDb");
     m_udDEXPThreshold->setRange(-80, 0);
     m_udDEXPThreshold->setSingleStep(1);
     m_udDEXPThreshold->setValue(tx.voxThresholdDb());
@@ -1712,6 +1725,7 @@ DexpVoxPage::DexpVoxPage(RadioModel* model, QWidget* parent)
     // udDEXPExpansionRatio — range 0..30 default 10.0 step 0.1 dp 1 — line 44876-44905
     m_udDEXPExpansionRatio = new QDoubleSpinBox;
     m_udDEXPExpansionRatio->setObjectName(QStringLiteral("udDEXPExpansionRatio"));
+    m_udDEXPExpansionRatio->setProperty("nereusSetupId", "transmit.dexpVox.dexpExpansionRatioDb");
     m_udDEXPExpansionRatio->setDecimals(1);
     m_udDEXPExpansionRatio->setRange(0.0, 30.0);
     m_udDEXPExpansionRatio->setSingleStep(0.1);
@@ -1723,6 +1737,7 @@ DexpVoxPage::DexpVoxPage(RadioModel* model, QWidget* parent)
     // udDEXPHysteresisRatio — range 0..10 default 2.0 step 0.1 dp 1 — line 44845-44874
     m_udDEXPHysteresisRatio = new QDoubleSpinBox;
     m_udDEXPHysteresisRatio->setObjectName(QStringLiteral("udDEXPHysteresisRatio"));
+    m_udDEXPHysteresisRatio->setProperty("nereusSetupId", "transmit.dexpVox.dexpHysteresisRatioDb");
     m_udDEXPHysteresisRatio->setDecimals(1);
     m_udDEXPHysteresisRatio->setRange(0.0, 10.0);
     m_udDEXPHysteresisRatio->setSingleStep(0.1);
@@ -1734,6 +1749,7 @@ DexpVoxPage::DexpVoxPage(RadioModel* model, QWidget* parent)
     // udDEXPDetTau — range 1..100 default 20 — line 45070-45098
     m_udDEXPDetTau = new QSpinBox;
     m_udDEXPDetTau->setObjectName(QStringLiteral("udDEXPDetTau"));
+    m_udDEXPDetTau->setProperty("nereusSetupId", "transmit.dexpVox.dexpDetectorTauMs");
     m_udDEXPDetTau->setRange(1, 100);
     m_udDEXPDetTau->setSingleStep(1);
     m_udDEXPDetTau->setValue(static_cast<int>(tx.dexpDetectorTauMs()));
@@ -1803,6 +1819,7 @@ DexpVoxPage::DexpVoxPage(RadioModel* model, QWidget* parent)
     // chkDEXPLookAheadEnable — "Enable" — line 44815, default checked
     m_chkDEXPLookAheadEnable = new QCheckBox(QStringLiteral("Enable"));
     m_chkDEXPLookAheadEnable->setObjectName(QStringLiteral("chkDEXPLookAheadEnable"));
+    m_chkDEXPLookAheadEnable->setProperty("nereusSetupId", "transmit.dexpVox.dexpLookAheadEnabled");
     m_chkDEXPLookAheadEnable->setChecked(tx.dexpLookAheadEnabled());
     // From Thetis setup.designer.cs:44816 [v2.10.3.13] — chkDEXPLookAheadEnable tooltip.
     m_chkDEXPLookAheadEnable->setToolTip(QStringLiteral(
@@ -1812,6 +1829,7 @@ DexpVoxPage::DexpVoxPage(RadioModel* model, QWidget* parent)
     // udDEXPLookAhead — range 10..999 default 60 — line 44765-44793
     m_udDEXPLookAhead = new QSpinBox;
     m_udDEXPLookAhead->setObjectName(QStringLiteral("udDEXPLookAhead"));
+    m_udDEXPLookAhead->setProperty("nereusSetupId", "transmit.dexpVox.dexpLookAheadMs");
     m_udDEXPLookAhead->setRange(10, 999);
     m_udDEXPLookAhead->setSingleStep(1);
     m_udDEXPLookAhead->setValue(static_cast<int>(tx.dexpLookAheadMs()));
@@ -1845,6 +1863,7 @@ DexpVoxPage::DexpVoxPage(RadioModel* model, QWidget* parent)
     // chkSCFEnable — "Enable" — line 45257, default checked
     m_chkSCFEnable = new QCheckBox(QStringLiteral("Enable"));
     m_chkSCFEnable->setObjectName(QStringLiteral("chkSCFEnable"));
+    m_chkSCFEnable->setProperty("nereusSetupId", "transmit.dexpVox.dexpSideChannelFilterEnabled");
     m_chkSCFEnable->setChecked(tx.dexpSideChannelFilterEnabled());
     // From Thetis setup.designer.cs:45258 [v2.10.3.13] — chkSCFEnable tooltip.
     m_chkSCFEnable->setToolTip(QStringLiteral("Filter audio that triggers VOX"));
@@ -1853,6 +1872,7 @@ DexpVoxPage::DexpVoxPage(RadioModel* model, QWidget* parent)
     // udSCFLowCut — range 100..10000 default 500 step 10 — line 45217-45245
     m_udSCFLowCut = new QSpinBox;
     m_udSCFLowCut->setObjectName(QStringLiteral("udSCFLowCut"));
+    m_udSCFLowCut->setProperty("nereusSetupId", "transmit.dexpVox.dexpLowCutHz");
     m_udSCFLowCut->setRange(100, 10000);
     m_udSCFLowCut->setSingleStep(10);
     m_udSCFLowCut->setValue(static_cast<int>(tx.dexpLowCutHz()));
@@ -1863,6 +1883,7 @@ DexpVoxPage::DexpVoxPage(RadioModel* model, QWidget* parent)
     // udSCFHighCut — range 100..10000 default 1500 step 10 — line 45187-45215
     m_udSCFHighCut = new QSpinBox;
     m_udSCFHighCut->setObjectName(QStringLiteral("udSCFHighCut"));
+    m_udSCFHighCut->setProperty("nereusSetupId", "transmit.dexpVox.dexpHighCutHz");
     m_udSCFHighCut->setRange(100, 10000);
     m_udSCFHighCut->setSingleStep(10);
     m_udSCFHighCut->setValue(static_cast<int>(tx.dexpHighCutHz()));
@@ -1925,6 +1946,7 @@ DexpVoxPage::DexpVoxPage(RadioModel* model, QWidget* parent)
     // (no .Checked= setter at setup.designer.cs:44740-44751 [v2.10.3.13]).
     m_chkAntiVoxEnable = new QCheckBox(QStringLiteral("Anti-VOX Enable"));
     m_chkAntiVoxEnable->setObjectName(QStringLiteral("chkAntiVoxEnable"));
+    m_chkAntiVoxEnable->setProperty("nereusSetupId", "transmit.dexpVox.antiVoxRun");
     // Tooltip from Thetis setup.designer.cs:44749 [v2.10.3.13].
     m_chkAntiVoxEnable->setToolTip(QStringLiteral(
         "Enable prevention measures for RX audio tripping VOX"));
@@ -1962,6 +1984,7 @@ DexpVoxPage::DexpVoxPage(RadioModel* model, QWidget* parent)
     // (decimal + default 10) is a follow-up.
     m_udAntiVoxGain = new QSpinBox;
     m_udAntiVoxGain->setObjectName(QStringLiteral("udAntiVoxGain"));
+    m_udAntiVoxGain->setProperty("nereusSetupId", "transmit.dexpVox.antiVoxGainDb");
     m_udAntiVoxGain->setRange(TransmitModel::kAntiVoxGainDbMin,
                               TransmitModel::kAntiVoxGainDbMax);
     m_udAntiVoxGain->setSingleStep(1);
@@ -1974,6 +1997,7 @@ DexpVoxPage::DexpVoxPage(RadioModel* model, QWidget* parent)
     // from setup.designer.cs:44660-44688 [v2.10.3.13].
     m_udAntiVoxTau = new QSpinBox;
     m_udAntiVoxTau->setObjectName(QStringLiteral("udAntiVoxTau"));
+    m_udAntiVoxTau->setProperty("nereusSetupId", "transmit.dexpVox.antiVoxTauMs");
     m_udAntiVoxTau->setRange(TransmitModel::kAntiVoxTauMsMin,
                              TransmitModel::kAntiVoxTauMsMax);
     m_udAntiVoxTau->setSingleStep(1);

@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "category": {
+    "id": "audio",
+    "title": "Audio",
+    "where": "station"
+  },
+  "coverage": "partial: TX Profile picker and actions need a live profile collection contract; TX Input needs microphone source and source-dependent visibility; Devices, VAX, TCI, and most Advanced controls are desktop-local",
+  "pages": [
+    {
+      "id": "audio.txProfile",
+      "title": "TX Profile",
+      "where": "station",
+      "coverage": "partial: active profile choice, Save, and Delete need a live collection and action contract",
+      "sections": [
+        {
+          "title": "TX Filter",
+          "controls": [
+            {
+              "id": "audio.txProfile.filterLow",
+              "label": "Low cutoff",
+              "tooltip": "TX bandpass filter lower cutoff (Hz).  0 Hz for voice SSB modes.",
+              "kind": "integer",
+              "binding": { "property": { "object": "transmit", "name": "filterLow" } },
+              "applies": "live",
+              "gate": { "capability": "transmitSettingsVersion", "min": 1, "transmit": true },
+              "min": 0,
+              "max": 5000,
+              "step": 1
+            },
+            {
+              "id": "audio.txProfile.filterHigh",
+              "label": "High cutoff",
+              "tooltip": "TX bandpass filter upper cutoff (Hz).  2900 Hz for typical SSB voice.",
+              "kind": "integer",
+              "binding": { "property": { "object": "transmit", "name": "filterHigh" } },
+              "applies": "live",
+              "gate": { "capability": "transmitSettingsVersion", "min": 1, "transmit": true },
+              "min": 200,
+              "max": 10000,
+              "step": 1
+            },
+            {
+              "id": "audio.txProfile.amCarrierLevel",
+              "label": "AM carrier level",
+              "tooltip": "AM / SAM / DSB carrier level (%).  100 % = full carrier, as in Thetis.  In AM the TX filter is symmetric: +/- High cutoff around the carrier.",
+              "kind": "integer",
+              "binding": { "property": { "object": "transmit", "name": "amCarrierLevel" } },
+              "applies": "live",
+              "gate": { "capability": "transmitSettingsVersion", "min": 2, "transmit": true },
+              "min": 0,
+              "max": 100,
+              "step": 1
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -140,6 +140,7 @@ void TxProfileSetupPage::buildUi()
 
         auto* lowSpin = new QSpinBox(filterGroup);
         m_filterLowSpin = lowSpin;
+        lowSpin->setProperty("nereusSetupId", QStringLiteral("audio.txProfile.filterLow"));
         lowSpin->setRange(0, 5000);
         lowSpin->setSuffix(QStringLiteral(" Hz"));
         lowSpin->setStyleSheet(QString::fromLatin1(Style::kSpinBoxStyle));
@@ -150,6 +151,7 @@ void TxProfileSetupPage::buildUi()
 
         auto* highSpin = new QSpinBox(filterGroup);
         m_filterHighSpin = highSpin;
+        highSpin->setProperty("nereusSetupId", QStringLiteral("audio.txProfile.filterHigh"));
         highSpin->setRange(200, 10000);
         highSpin->setSuffix(QStringLiteral(" Hz"));
         highSpin->setStyleSheet(QString::fromLatin1(Style::kSpinBoxStyle));
@@ -161,6 +163,7 @@ void TxProfileSetupPage::buildUi()
         // AM / SAM / DSB carrier level (Thetis TXProfile AM_Carrier_Level).
         auto* carrierSpin = new QSpinBox(filterGroup);
         m_amCarrierSpin = carrierSpin;
+        carrierSpin->setProperty("nereusSetupId", QStringLiteral("audio.txProfile.amCarrierLevel"));
         carrierSpin->setRange(TransmitModel::kAmCarrierLevelMin,
                               TransmitModel::kAmCarrierLevelMax);
         carrierSpin->setSuffix(QStringLiteral(" %"));

@@ -488,6 +488,8 @@ void TstRemoteTxProfiles::txProfilePageWorksOnTheCoresProfiles()
     // TX filter and AM carrier are the Core's settings.
     page.filterLowSpin()->setValue(150);
     QTRY_COMPARE(s.core->transmitModel().filterLow(), 150);
+    page.filterHighSpin()->setValue(3200);
+    QTRY_COMPARE(s.core->transmitModel().filterHigh(), 3200);
     const int carrier = s.core->transmitModel().amCarrierLevel() == 60 ? 61 : 60;
     page.amCarrierSpin()->setValue(carrier);
     QTRY_COMPARE(s.core->transmitModel().amCarrierLevel(), carrier);

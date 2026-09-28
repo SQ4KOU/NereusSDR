@@ -10,6 +10,8 @@
 #include "gui/setup/CatNetworkSetupPages.h"
 #include "gui/setup/DspSetupPages.h"
 #include "gui/setup/DspOptionsPage.h"
+#include "gui/setup/TransmitSetupPages.h"
+#include "gui/setup/TxProfileSetupPage.h"
 #include "gui/setup/TestTwoTonePage.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -117,6 +119,56 @@ void compareControl(QWidget& page, const QJsonObject& control)
 class SetupDescriptionParityTest : public QObject {
     Q_OBJECT
 private slots:
+    void describedTransmitDexpControlsMatchDesktop_data()
+    {
+        QTest::addColumn<int>("board");
+        QTest::newRow("ANAN-G2") << int(HPSDRHW::Saturn);
+        QTest::newRow("HL2") << int(HPSDRHW::HermesLite);
+    }
+
+    void describedAudioTxProfileControlsMatchDesktop()
+    {
+        RadioModel model;
+        TxProfileSetupPage page(&model, nullptr, &model.transmitModel());
+        SetupDescriptionService service;
+        const QJsonObject audio = service.category(QStringLiteral("audio"));
+        QVERIFY(!audio.isEmpty());
+        const QJsonArray pages = audio.value(QStringLiteral("pages")).toArray();
+        QCOMPARE(pages.size(), 1);
+        QCOMPARE(pages.first().toObject().value(QStringLiteral("id")),
+                 QJsonValue(QStringLiteral("audio.txProfile")));
+        const QJsonArray described = controls(audio);
+        QCOMPARE(described.size(), 3);
+        for (const QJsonValue& raw : described) {
+            compareControl(page, raw.toObject());
+        }
+    }
+
+    void describedTransmitDexpControlsMatchDesktop()
+    {
+        QFETCH(int, board);
+        RadioModel model;
+        model.setBoardForTest(static_cast<HPSDRHW>(board));
+        DexpVoxPage dexp(&model);
+        PowerPage power(&model);
+        SetupDescriptionService service;
+        const QJsonObject transmit = service.category(QStringLiteral("transmit"));
+        QVERIFY(!transmit.isEmpty());
+        const QJsonArray pages = transmit.value(QStringLiteral("pages")).toArray();
+        QCOMPARE(pages.size(), 2);
+        QCOMPARE(pages.first().toObject().value(QStringLiteral("id")),
+                 QJsonValue(QStringLiteral("transmit.power")));
+        QCOMPARE(pages.last().toObject().value(QStringLiteral("id")),
+                 QJsonValue(QStringLiteral("transmit.dexpVox")));
+        const QJsonArray described = controls(transmit);
+        QCOMPARE(described.size(), 24);
+        for (const QJsonValue& raw : described) {
+            const QJsonObject control = raw.toObject();
+            compareControl(control.value(QStringLiteral("id")).toString().startsWith(QStringLiteral("transmit.power."))
+                               ? static_cast<QWidget&>(power) : static_cast<QWidget&>(dexp), control);
+        }
+    }
+
     void describedGeneralAndTestControlsMatchDesktop_data()
     {
         QTest::addColumn<int>("board");
