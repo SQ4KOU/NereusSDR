@@ -34,6 +34,9 @@ public:
     static bool validateDspSettingBinding(const QJsonObject& control);
     static bool validateSettingToggleEncoding(const QJsonObject& control);
     static bool validateCommandBinding(const QJsonObject& control, QString* error = nullptr);
+    static bool validateTnfTable(const QJsonObject& control, QString* error = nullptr);
+    /// Stateless per-session projection of a category string (empty if no ready pages).
+    static QString fitCategoryForVersion(const QString& description, int version);
     void setBoardCapabilities(const BoardCapabilities& caps);
     quint32 revision() const { return m_revision; }
     QString general() const { return m_general; }

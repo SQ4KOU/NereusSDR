@@ -862,7 +862,11 @@ colours for the same signal.
   (2.70 s), including A-to-B edits, removal fallback and old-widget destruction.
   The AGC/ALC page now also rebuilds on selected-receiver changes. DSP
   descriptions cover nine pages with their implemented scalar controls; composite
-  NNR, CFC, TNF and Filter Presets work remains explicitly incomplete.
+  NNR, CFC and Filter Presets work remains explicitly incomplete. TNF now has
+  an explicitly negotiated v2 table with existing Core edit commands; v1 clients
+  retain their scalar controls. App/Core build and five integrated suites passed
+  (32.37 s), including wire version fitting and shared-edit confirmation. The
+  phone's generic Setup renderer remains unbuilt.
 - Plan: remote-window selected-receiver parity and Core DSP Setup descriptions.
 
 ### G-55: TCP relay loss can delay transmit keepalives beyond the safety cutoff
@@ -953,6 +957,10 @@ colours for the same signal.
   when either curve has other than ten points. The visible five- and eighteen-band
   layouts therefore do not apply their per-band edits to the transmit model.
   RadioModel also forwards empty Q vectors despite the visible per-band Q controls.
+  Thetis saves CFC as two curve JSON objects separated by `<SEP>` inside its
+  compressed envelope (frmCFCConfig.cs, ConfigData). The current remote validator
+  instead uses the single-curve TX EQ decoder, so it cannot accept that paired
+  Thetis CFC payload. The saved opaque blob is not applied by RadioModel either.
 - Ruling: JJ requires every gap found in this effort to be built. No separate
   ruling on CFC behavior has been requested or received; preserve the intended
   Thetis-derived controls while completing their Core apply path.
@@ -972,6 +980,21 @@ colours for the same signal.
   Integrated app/Core build and four focused suites passed (5.17 s). Receive
   controls are outside this discrepancy.
 - Plan: Transmit/Audio Setup parity and consistent phone behavior.
+
+### G-62: Background-service management needs reliable state and duration handling
+
+- Evidence: review of the first packaging implementation found a Windows running
+  check tied to English status text, no explicit unlimited task execution time,
+  and stop treating a failed status query as an already stopped service. On macOS,
+  writing a new plist while a stopped definition remains loaded can restart the
+  old executable/profile arguments.
+- Ruling: JJ's goal includes a Core that keeps running after the desktop closes.
+  No separate operator choice has been requested or received for these defects;
+  the proposed fixes preserve that requirement and report query errors honestly.
+- Status: in progress in the packaging lane. Locale-independent state, explicit
+  unlimited runtime, query-error handling and idle definition refresh need tests
+  and lead integration. No real service or radio configuration was changed.
+- Plan: station packaging and background-service manager.
 
 ## How this addendum is kept
 

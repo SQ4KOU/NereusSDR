@@ -2634,6 +2634,7 @@ MnfSetupPage::MnfSetupPage(RadioModel* model, QWidget* parent)
     // ── Notch table ──────────────────────────────────────────────────────────
     m_notchTable = new QTableWidget(0, 4, mnfGrp);
     m_notchTable->setObjectName(QStringLiteral("tblMNFNotches"));
+    m_notchTable->setProperty("nereusSetupId", "dsp.tnf.list");
     // Column captions follow Thetis lblMNFFreq / lblMNFWidth / chkMNFActive
     // (setup.designer.cs:44308, :44298, :44260 [v2.10.3.15]); the frequency
     // column is Hz here where upstream is MHz.
@@ -2672,6 +2673,7 @@ MnfSetupPage::MnfSetupPage(RadioModel* model, QWidget* parent)
 
     m_addBtn = new QPushButton(QStringLiteral("Add"), mnfGrp);
     m_addBtn->setObjectName(QStringLiteral("btnMNFAdd"));
+    m_addBtn->setProperty("nereusSetupId", "dsp.tnf.add");
     // From Thetis setup.designer.cs:44286 [v2.10.3.15] — btnMNFAdd tooltip.
     m_addBtn->setToolTip(QStringLiteral("Add a notch"));
     m_addBtn->setStyleSheet(kMnfButtonStyle);
@@ -2831,6 +2833,7 @@ void MnfSetupPage::rebuildTable()
         // the editor takes the bounds NotchModel itself constrains to.
         auto* freqSpin = new QDoubleSpinBox(m_notchTable);
         freqSpin->setObjectName(QStringLiteral("udMNFFreq"));
+        freqSpin->setProperty("nereusSetupId", "dsp.tnf.list.centreHz");
         freqSpin->setDecimals(0);
         freqSpin->setRange(NotchModel::kMinNotchCentreHz,
                            NotchModel::kMaxNotchCentreHz);
@@ -2850,6 +2853,7 @@ void MnfSetupPage::rebuildTable()
         // Col 1: width.
         auto* widthSpin = new QDoubleSpinBox(m_notchTable);
         widthSpin->setObjectName(QStringLiteral("udMNFWidth"));
+        widthSpin->setProperty("nereusSetupId", "dsp.tnf.list.widthHz");
         widthSpin->setDecimals(0);
         widthSpin->setRange(kMnfWidthMinHz, NotchModel::kMaxNotchWidthHz);
         widthSpin->setSingleStep(kMnfWidthStepHz);
@@ -2867,6 +2871,7 @@ void MnfSetupPage::rebuildTable()
         // Col 2: active.
         auto* activeChk = new QCheckBox(m_notchTable);
         activeChk->setObjectName(QStringLiteral("chkMNFActive"));
+        activeChk->setProperty("nereusSetupId", "dsp.tnf.list.active");
         activeChk->setChecked(n.active);
         // From Thetis setup.designer.cs:44261 [v2.10.3.15] — chkMNFActive tooltip.
         activeChk->setToolTip(QStringLiteral("Checked if the notch is active"));
@@ -2882,6 +2887,7 @@ void MnfSetupPage::rebuildTable()
         // Col 3: delete.
         auto* delBtn = new QPushButton(QStringLiteral("Delete"), m_notchTable);
         delBtn->setObjectName(QStringLiteral("btnMNFDelete"));
+        delBtn->setProperty("nereusSetupId", "dsp.tnf.list.delete");
         // From Thetis setup.designer.cs:44219 [v2.10.3.15] — btnMNFDelete tooltip.
         delBtn->setToolTip(QStringLiteral("Delete the current notch index"));
         delBtn->setStyleSheet(kMnfRowButtonStyle);

@@ -36,7 +36,8 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps)
         return {};
     }
     QJsonObject root = document.object();
-    if (root.value(QStringLiteral("version")).toInt() != 1
+    if ((root.value(QStringLiteral("version")).toInt() != 1
+         && root.value(QStringLiteral("version")).toInt() != 2)
         || root.value(QStringLiteral("category")).toObject()
                .value(QStringLiteral("id")).toString() != id
         || root.value(QStringLiteral("pages")).toArray().isEmpty()) {
@@ -64,12 +65,22 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps)
                 if (controlId.isEmpty() || ids.contains(controlId)
                     || control.value(QStringLiteral("label")).toString().isEmpty()
                     || !control.value(QStringLiteral("binding")).isObject()
+                    || (control.contains(QStringLiteral("requiresDescriptionVersion"))
+                        && (root.value(QStringLiteral("version")).toInt() < 2
+                            || control.value(QStringLiteral("requiresDescriptionVersion")) != QJsonValue(2)))
+                    || (control.value(QStringLiteral("kind")) == QJsonValue(QStringLiteral("table"))
+                        && (id != QLatin1String("dsp")
+                            || !SetupDescription::validateTnfTable(control)))
+                    || (control.value(QStringLiteral("kind")) != QJsonValue(QStringLiteral("table"))
+                        && control.value(QStringLiteral("binding")).toObject().contains(QStringLiteral("table")))
                     || !SetupDescription::validateSettingToggleEncoding(control)
                     || (id == QLatin1String("dsp")
                         && !control.value(QStringLiteral("binding")).toObject()
                                 .contains(QStringLiteral("property"))
                         && !control.value(QStringLiteral("binding")).toObject()
                                 .contains(QStringLiteral("command"))
+                        && !control.value(QStringLiteral("binding")).toObject()
+                                .contains(QStringLiteral("table"))
                         && !control.value(QStringLiteral("binding")).toObject()
                                 .contains(QStringLiteral("setting")))
                     || (id == QLatin1String("dsp")
@@ -395,6 +406,23 @@ bool SetupDescription::validateCommandBinding(const QJsonObject& control, QStrin
         return false;
     };
     const QString kind = control.value(QStringLiteral("kind")).toString();
+    if (control.value(QStringLiteral("id")) == QJsonValue(QStringLiteral("dsp.tnf.add"))) {
+        const QJsonObject expected{{QStringLiteral("id"), QStringLiteral("dsp.tnf.add")},
+            {QStringLiteral("label"), QStringLiteral("Add")},
+            {QStringLiteral("tooltip"), QStringLiteral("Add a notch")},
+            {QStringLiteral("kind"), QStringLiteral("button")},
+            {QStringLiteral("requiresDescriptionVersion"), 2},
+            {QStringLiteral("binding"), QJsonObject{{QStringLiteral("command"), QJsonObject{
+                {QStringLiteral("verb"), QStringLiteral("notch.addAtSlice")},
+                {QStringLiteral("arguments"), QJsonObject{{QStringLiteral("sliceId"),
+                    QJsonObject{{QStringLiteral("$selectedOwnedSliceId"), true}}}}}}}}},
+            {QStringLiteral("applies"), QStringLiteral("live")},
+            {QStringLiteral("gate"), QJsonObject{{QStringLiteral("capability"),
+                QStringLiteral("notchControlVersion")}, {QStringLiteral("min"), 2}}}};
+        if (control != expected) {
+            return fail(QStringLiteral("TNF Add must use the exact selected owned slice contract"));
+        }
+    }
     const MirrorWireKind controlKind = kind == QLatin1String("toggle") ? MirrorWireKind::Bool
         : kind == QLatin1String("integer") || kind == QLatin1String("slider")
           || kind == QLatin1String("choice") ? MirrorWireKind::Int64
@@ -476,6 +504,14 @@ bool SetupDescription::validateCommandBinding(const QJsonObject& control, QStrin
                     return fail(QStringLiteral("$controlValue must be true"));
                 }
                 supplied = controlKind;
+            } else if (source.contains(QStringLiteral("$selectedOwnedSliceId"))) {
+                if (control.value(QStringLiteral("id")) != QJsonValue(QStringLiteral("dsp.tnf.add"))
+                    || control.value(QStringLiteral("requiresDescriptionVersion")) != QJsonValue(2)
+                    || verb != "notch.addAtSlice" || name != QLatin1String("sliceId")
+                    || source.value(QStringLiteral("$selectedOwnedSliceId")) != QJsonValue(true)) {
+                    return fail(QStringLiteral("invalid selected owned slice source"));
+                }
+                supplied = MirrorWireKind::Int64;
             } else if (source.contains(QStringLiteral("$property"))) {
                 supplied = propertyKind(source.value(QStringLiteral("$property")));
             } else {
@@ -509,6 +545,179 @@ bool SetupDescription::validateCommandBinding(const QJsonObject& control, QStrin
         error->clear();
     }
     return true;
+}
+
+bool SetupDescription::validateTnfTable(const QJsonObject& control, QString* error)
+{
+    const auto fail = [error](const QString& why) {
+        if (error) { *error = why; }
+        return false;
+    };
+    const QJsonObject expectedBinding{{QStringLiteral("table"), QJsonObject{
+        {QStringLiteral("valueProperty"), QJsonObject{{QStringLiteral("object"), QStringLiteral("notches")},
+                                                     {QStringLiteral("name"), QStringLiteral("listJson")}}},
+        {QStringLiteral("revisionProperty"), QJsonObject{{QStringLiteral("object"), QStringLiteral("notches")},
+                                                        {QStringLiteral("name"), QStringLiteral("revision")}}},
+        {QStringLiteral("format"), QStringLiteral("json-array")},
+        {QStringLiteral("rowKey"), QStringLiteral("id")},
+        {QStringLiteral("maxRows"), NotchModel::kMaxNotches}}}};
+    if (control.value(QStringLiteral("id")) != QJsonValue(QStringLiteral("dsp.tnf.list"))
+        || control.value(QStringLiteral("kind")) != QJsonValue(QStringLiteral("table"))
+        || control.size() != 10
+        || control.value(QStringLiteral("label"))
+            != QJsonValue(QStringLiteral("Tunable Notch Filter"))
+        || control.value(QStringLiteral("tooltip")) != QJsonValue(QStringLiteral(""))
+        || control.value(QStringLiteral("requiresDescriptionVersion")) != QJsonValue(2)
+        || control.value(QStringLiteral("applies")) != QJsonValue(QStringLiteral("live"))
+        || control.value(QStringLiteral("gate")).toObject()
+            != QJsonObject{{QStringLiteral("capability"), QStringLiteral("notchControlVersion")},
+                           {QStringLiteral("min"), 1}}
+        || control.value(QStringLiteral("binding")).toObject() != expectedBinding) {
+        return fail(QStringLiteral("TNF table source, version or gate is invalid"));
+    }
+    const MirrorSchema& schema = MirrorSchema::forMetaObject(&NotchModel::staticMetaObject);
+    const MirrorProperty* list = schema.byName("listJson");
+    const MirrorProperty* revision = schema.byName("revision");
+    if (!list || list->kind != MirrorWireKind::Utf8
+        || !revision || revision->kind != MirrorWireKind::Int64
+        || MirrorPolicy::directionFor("NotchModel", "listJson") != MirrorDirection::Outbound
+        || MirrorPolicy::directionFor("NotchModel", "revision") != MirrorDirection::Outbound) {
+        return fail(QStringLiteral("TNF table source is not an outbound mirrored list"));
+    }
+    const QJsonArray columns = control.value(QStringLiteral("columns")).toArray();
+    if (columns.size() != 4) { return fail(QStringLiteral("TNF table needs four columns")); }
+    const QJsonArray expectedColumns{
+        QJsonObject{{QStringLiteral("id"), QStringLiteral("dsp.tnf.list.centreHz")},
+                    {QStringLiteral("field"), QStringLiteral("centreHz")},
+                    {QStringLiteral("label"), QStringLiteral("Center Frequency (Hz)")},
+                    {QStringLiteral("tooltip"), QStringLiteral("Center frequency of the notch")},
+                    {QStringLiteral("kind"), QStringLiteral("decimal")},
+                    {QStringLiteral("min"), NotchModel::kMinNotchCentreHz},
+                    {QStringLiteral("max"), NotchModel::kMaxNotchCentreHz},
+                    {QStringLiteral("step"), 1}},
+        QJsonObject{{QStringLiteral("id"), QStringLiteral("dsp.tnf.list.widthHz")},
+                    {QStringLiteral("field"), QStringLiteral("widthHz")},
+                    {QStringLiteral("label"), QStringLiteral("Width (Hz)")},
+                    {QStringLiteral("tooltip"), QStringLiteral("Bandwdith of the notch")},
+                    {QStringLiteral("kind"), QStringLiteral("decimal")},
+                    {QStringLiteral("min"), 0}, {QStringLiteral("max"), NotchModel::kMaxNotchWidthHz},
+                    {QStringLiteral("step"), 1}},
+        QJsonObject{{QStringLiteral("id"), QStringLiteral("dsp.tnf.list.active")},
+                    {QStringLiteral("field"), QStringLiteral("active")},
+                    {QStringLiteral("label"), QStringLiteral("Active")},
+                    {QStringLiteral("tooltip"), QStringLiteral("Checked if the notch is active")},
+                    {QStringLiteral("kind"), QStringLiteral("toggle")}},
+        QJsonObject{{QStringLiteral("id"), QStringLiteral("dsp.tnf.list.delete")},
+                    {QStringLiteral("rowAction"), QStringLiteral("delete")},
+                    {QStringLiteral("label"), QStringLiteral("Delete")},
+                    {QStringLiteral("tooltip"), QStringLiteral("Delete the current notch index")},
+                    {QStringLiteral("kind"), QStringLiteral("button")}}};
+    if (columns != expectedColumns) { return fail(QStringLiteral("TNF table column schema is invalid")); }
+    const QJsonArray actions = control.value(QStringLiteral("rowActions")).toArray();
+    if (actions.size() != 3) { return fail(QStringLiteral("TNF table needs three row actions")); }
+    const auto source = [](const QString& marker, const QString& field) {
+        return QJsonObject{{marker, field}};
+    };
+    const QJsonArray expectedActions{
+        QJsonObject{{QStringLiteral("id"), QStringLiteral("move")},
+                    {QStringLiteral("command"), QJsonObject{
+                        {QStringLiteral("verb"), QStringLiteral("notch.move")},
+                        {QStringLiteral("arguments"), QJsonObject{
+                            {QStringLiteral("id"), source(QStringLiteral("$row"), QStringLiteral("id"))},
+                            {QStringLiteral("centreHz"), source(QStringLiteral("$edit"), QStringLiteral("centreHz"))},
+                            {QStringLiteral("widthHz"), source(QStringLiteral("$edit"), QStringLiteral("widthHz"))}}}}}},
+        QJsonObject{{QStringLiteral("id"), QStringLiteral("active")},
+                    {QStringLiteral("command"), QJsonObject{
+                        {QStringLiteral("verb"), QStringLiteral("notch.setActive")},
+                        {QStringLiteral("arguments"), QJsonObject{
+                            {QStringLiteral("id"), source(QStringLiteral("$row"), QStringLiteral("id"))},
+                            {QStringLiteral("active"), source(QStringLiteral("$edit"), QStringLiteral("active"))}}}}}},
+        QJsonObject{{QStringLiteral("id"), QStringLiteral("delete")},
+                    {QStringLiteral("command"), QJsonObject{
+                        {QStringLiteral("verb"), QStringLiteral("notch.delete")},
+                        {QStringLiteral("arguments"), QJsonObject{
+                            {QStringLiteral("id"), source(QStringLiteral("$row"), QStringLiteral("id"))}}}}}}};
+    if (actions != expectedActions) { return fail(QStringLiteral("TNF row action schema is invalid")); }
+    const QList<CommandVerbSpec>& specs = SessionCommandDispatcher::verbSpecs();
+    const auto hasVerb = [&specs](const QByteArray& verb,
+                                  const QList<QByteArray>& names,
+                                  const QList<MirrorWireKind>& kinds) {
+        for (const CommandVerbSpec& spec : specs) {
+            if (spec.verb != verb || spec.capability != "notchControlVersion"
+                || spec.capabilityVersion != 1 || spec.arguments.size() != kinds.size()) {
+                continue;
+            }
+            bool matched = true;
+            for (int i = 0; i < kinds.size(); ++i) {
+                matched &= !spec.arguments.at(i).optional
+                    && spec.arguments.at(i).name == names.at(i)
+                    && spec.arguments.at(i).kind == kinds.at(i);
+            }
+            if (matched) { return true; }
+        }
+        return false;
+    };
+    if (!hasVerb("notch.move", {"id", "centreHz", "widthHz"},
+                 {MirrorWireKind::Int64, MirrorWireKind::Float64,
+                                 MirrorWireKind::Float64})
+        || !hasVerb("notch.setActive", {"id", "active"},
+                    {MirrorWireKind::Int64, MirrorWireKind::Bool})
+        || !hasVerb("notch.delete", {"id"}, {MirrorWireKind::Int64})) {
+        return fail(QStringLiteral("TNF row verbs no longer match typed Core commands"));
+    }
+    if (error) { error->clear(); }
+    return true;
+}
+
+QString SetupDescription::fitCategoryForVersion(const QString& description, int version)
+{
+    if (version < 1 || description.isEmpty()) { return {}; }
+    const QJsonDocument document = QJsonDocument::fromJson(description.toUtf8());
+    if (!document.isObject()) { return {}; }
+    QJsonObject category = document.object();
+    QJsonArray pages;
+    for (const QJsonValue& rawPage : category.value(QStringLiteral("pages")).toArray()) {
+        QJsonObject page = rawPage.toObject();
+        QJsonArray sections;
+        for (const QJsonValue& rawSection : page.value(QStringLiteral("sections")).toArray()) {
+            QJsonObject section = rawSection.toObject();
+            QJsonArray controls;
+            for (const QJsonValue& rawControl : section.value(QStringLiteral("controls")).toArray()) {
+                const QJsonObject control = rawControl.toObject();
+                if (control.value(QStringLiteral("requiresDescriptionVersion")).toInt(1) <= version) {
+                    controls.append(rawControl);
+                }
+            }
+            if (!controls.isEmpty()) {
+                section.insert(QStringLiteral("controls"), controls);
+                sections.append(section);
+            }
+        }
+        if (!sections.isEmpty()) {
+            page.insert(QStringLiteral("sections"), sections);
+            pages.append(page);
+        }
+    }
+    if (pages.isEmpty()) { return {}; }
+    category.insert(QStringLiteral("pages"), pages);
+    category.insert(QStringLiteral("version"), qMin(version, 2));
+    if (version >= 2 && category.value(QStringLiteral("category")).toObject()
+            .value(QStringLiteral("id")) == QJsonValue(QStringLiteral("dsp"))) {
+        category.insert(QStringLiteral("coverage"), QStringLiteral(
+            "partial: Filter Presets and other listed page controls remain incomplete"));
+        QJsonArray fittedPages = category.value(QStringLiteral("pages")).toArray();
+        for (int i = 0; i < fittedPages.size(); ++i) {
+            QJsonObject page = fittedPages.at(i).toObject();
+            if (page.value(QStringLiteral("id")) == QJsonValue(QStringLiteral("dsp.tnf"))) {
+                page.insert(QStringLiteral("coverage"), QStringLiteral(
+                    "partial: Visual Notch is a phone-local display preference"));
+                fittedPages[i] = page;
+                break;
+            }
+        }
+        category.insert(QStringLiteral("pages"), fittedPages);
+    }
+    return QString::fromUtf8(QJsonDocument(category).toJson(QJsonDocument::Compact));
 }
 
 SetupDescription::SetupDescription(QObject* parent) : QObject(parent)

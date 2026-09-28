@@ -20,9 +20,11 @@
 
 #include <QJsonDocument>
 #include <QScopeGuard>
+#include <QSet>
 #include <QTemporaryDir>
 
 #include <memory>
+#include <cmath>
 
 using namespace NereusSDR;
 
@@ -52,7 +54,8 @@ struct WireCore {
             model.get(), *settings, Test::seedUpgradedCoreToken(securityDir.path()));
     }
 
-    bool connect(const QHash<QByteArray, int>& features = {})
+    bool connect(const QHash<QByteArray, int>& features = {},
+                 quint16 minor = kSessionProtocolMinor)
     {
         app = std::make_unique<Test::LoopbackTransport>(QStringLiteral("app"));
         auto* station = new Test::LoopbackTransport(QStringLiteral("station"), server.get());
@@ -62,7 +65,7 @@ struct WireCore {
             return false;
         }
         app->sendText(SessionMessages::encode(SessionMessages::hello(
-            kSessionProtocolMajor, kSessionProtocolMinor, 0, QStringLiteral("Setup test"),
+            kSessionProtocolMajor, minor, 0, QStringLiteral("Setup test"),
             {kSessionProtocolMajor}, features)));
         app->sendText(SessionMessages::encode(SessionMessages::authRequest(server->token())));
         return QTest::qWaitFor([this] {
@@ -86,6 +89,111 @@ bool hasSetupTraffic(const Test::LoopbackTransport& app)
         }
     }
     return false;
+}
+
+QString setupCategoryOnWire(const Test::LoopbackTransport& app, const QByteArray& name,
+                           SessionMessageKind kind)
+{
+    for (const QByteArray& wire : app.received()) {
+        SessionMessage message;
+        if (!SessionMessages::decode(wire, &message) || message.kind != kind
+            || message.objectKey != "setup") { continue; }
+        for (const MirrorUpdate& update : message.updates) {
+            if (update.name == name) { return update.value.toString(); }
+        }
+    }
+    return {};
+}
+
+int setupCapabilityOnWire(const Test::LoopbackTransport& app)
+{
+    for (const QByteArray& wire : app.received()) {
+        SessionMessage message;
+        if (SessionMessages::decode(wire, &message)
+            && message.kind == SessionMessageKind::Capabilities) {
+            return StationCapabilities::fromUpdates(message.updates).setupDescriptionVersion;
+        }
+    }
+    return -1;
+}
+
+// A renderer stand-in: it rejects a stale gesture before resolving the
+// table's typed sources. Production clients must also apply these checks.
+QList<MirrorUpdate> materializeTnfRowAction(const QJsonObject& action,
+                                            const QString& listJson, quint32 listRevision,
+                                            quint32 gestureRevision, int rowId,
+                                            const QJsonObject& edits,
+                                            const QString& gestureSession,
+                                            const QString& liveSession,
+                                            quint64 gestureEpoch, quint64 liveEpoch)
+{
+    if (gestureSession != liveSession || gestureEpoch != liveEpoch
+        || listRevision != gestureRevision) { return {}; }
+    const QJsonDocument document = QJsonDocument::fromJson(listJson.toUtf8());
+    if (!document.isArray() || document.array().size() > NotchModel::kMaxNotches) { return {}; }
+    QSet<int> seen;
+    bool found = false;
+    for (const QJsonValue& raw : document.array()) {
+        if (!raw.isObject()) { return {}; }
+        const QJsonObject row = raw.toObject();
+        const QJsonValue id = row.value("id");
+        const QJsonValue centre = row.value("centreHz");
+        const QJsonValue width = row.value("widthHz");
+        if (!id.isDouble() || id.toInteger(-1) < 0
+            || !centre.isDouble() || !std::isfinite(centre.toDouble())
+            || centre.toDouble() < NotchModel::kMinNotchCentreHz
+            || centre.toDouble() > NotchModel::kMaxNotchCentreHz
+            || !width.isDouble() || !std::isfinite(width.toDouble())
+            || width.toDouble() < 0 || width.toDouble() > NotchModel::kMaxNotchWidthHz
+            || !row.value("active").isBool() || seen.contains(int(id.toInteger()))) {
+            return {};
+        }
+        seen.insert(int(id.toInteger()));
+        found |= id.toInteger() == rowId;
+    }
+    if (!found) { return {}; }
+    const QJsonObject command = action.value("command").toObject();
+    if (command.value("verb").toString().isEmpty()) { return {}; }
+    const QJsonObject arguments = command.value("arguments").toObject();
+    QList<MirrorUpdate> resolved;
+    for (auto it = arguments.constBegin(); it != arguments.constEnd(); ++it) {
+        const QJsonObject source = it.value().toObject();
+        if (source.size() != 1) { return {}; }
+        if (source.value("$row") == QJsonValue("id") && it.key() == QLatin1String("id")) {
+            resolved.append({0, "id", MirrorWireKind::Int64, qlonglong(rowId)});
+        } else if (source.value("$edit") == QJsonValue(it.key())
+                   && (it.key() == QLatin1String("centreHz")
+                       || it.key() == QLatin1String("widthHz"))) {
+            const QJsonValue value = edits.value(it.key());
+            const double min = it.key() == QLatin1String("centreHz")
+                ? NotchModel::kMinNotchCentreHz : 0;
+            const double max = it.key() == QLatin1String("centreHz")
+                ? NotchModel::kMaxNotchCentreHz : NotchModel::kMaxNotchWidthHz;
+            if (!value.isDouble() || !std::isfinite(value.toDouble())
+                || value.toDouble() < min || value.toDouble() > max) { return {}; }
+            resolved.append({0, it.key().toUtf8(), MirrorWireKind::Float64, value.toDouble()});
+        } else if (source.value("$edit") == QJsonValue("active")
+                   && it.key() == QLatin1String("active")
+                   && edits.value("active").isBool()) {
+            resolved.append({0, "active", MirrorWireKind::Bool, edits.value("active").toBool()});
+        } else { return {}; }
+    }
+    return resolved;
+}
+
+QList<MirrorUpdate> materializeTnfAdd(const QJsonObject& control,
+                                     int capturedSliceId, int selectedSliceId,
+                                     bool selectedOwned, const QString& gestureSession,
+                                     const QString& liveSession,
+                                     quint64 gestureEpoch, quint64 liveEpoch)
+{
+    const QJsonObject source = control.value("binding").toObject()
+        .value("command").toObject().value("arguments").toObject()
+        .value("sliceId").toObject();
+    if (source != QJsonObject{{"$selectedOwnedSliceId", true}}
+        || capturedSliceId < 0 || capturedSliceId != selectedSliceId || !selectedOwned
+        || gestureSession != liveSession || gestureEpoch != liveEpoch) { return {}; }
+    return {{0, "sliceId", MirrorWireKind::Int64, qlonglong(selectedSliceId)}};
 }
 
 // A small stand-in for Task 58's renderer. The Core validates static source
@@ -125,7 +233,8 @@ private slots:
         for (const QString& id : {QStringLiteral("general"), QStringLiteral("test"),
                                   QStringLiteral("catNetwork"), QStringLiteral("dsp")}) {
             const QJsonObject category = service.category(id);
-            QCOMPARE(category.value(QStringLiteral("version")).toInt(), 1);
+            QCOMPARE(category.value(QStringLiteral("version")).toInt(),
+                     id == QLatin1String("dsp") ? 2 : 1);
             QCOMPARE(category.value(QStringLiteral("category")).toObject()
                          .value(QStringLiteral("id")).toString(), id);
             QVERIFY(!category.value(QStringLiteral("pages")).toArray().isEmpty());
@@ -396,6 +505,12 @@ private slots:
                      .value(QStringLiteral("sections")).toArray()) {
                 for (const QJsonValue& rawControl : rawSection.toObject()
                          .value(QStringLiteral("controls")).toArray()) {
+                    if (rawControl.toObject().value("kind") == QJsonValue("table")) {
+                        QString error;
+                        QVERIFY2(SetupDescriptionService::validateTnfTable(
+                            rawControl.toObject(), &error), qPrintable(error));
+                        continue;
+                    }
                     if (rawControl.toObject().value("binding").toObject()
                             .contains("command")) {
                         QString error;
@@ -579,6 +694,262 @@ private slots:
             capability |= wire.contains("setupDescriptionVersion");
         }
         QVERIFY(capability);
+    }
+
+    void negotiatedVersionsFitInitialSnapshotAndLaterDelta()
+    {
+        const auto check = [](int declared, quint16 minor, int expected) {
+            WireCore core;
+            QHash<QByteArray, int> features;
+            if (declared > 0) { features.insert("setupDescription", declared); }
+            QVERIFY(core.connect(features, minor));
+            QCOMPARE(setupCapabilityOnWire(*core.app), expected);
+            if (expected == 0) {
+                QVERIFY(!hasSetupTraffic(*core.app));
+                return;
+            }
+            const QString dsp = setupCategoryOnWire(
+                *core.app, "dsp", SessionMessageKind::ObjectCreate);
+            QVERIFY(!dsp.isEmpty());
+            const QJsonObject category = QJsonDocument::fromJson(dsp.toUtf8()).object();
+            QCOMPARE(category.value("version").toInt(), expected);
+            bool hasTable = false;
+            bool hasAdd = false;
+            for (const QJsonValue& page : category.value("pages").toArray()) {
+                for (const QJsonValue& section : page.toObject().value("sections").toArray()) {
+                    for (const QJsonValue& raw : section.toObject().value("controls").toArray()) {
+                        const QString id = raw.toObject().value("id").toString();
+                        hasTable |= id == QLatin1String("dsp.tnf.list");
+                        hasAdd |= id == QLatin1String("dsp.tnf.add");
+                    }
+                }
+            }
+            QCOMPARE(hasTable, expected == 2);
+            QCOMPARE(hasAdd, expected == 2);
+            const QString v1 = SetupDescriptionService::fitCategoryForVersion(
+                core.server->setupDescription()->dsp(), 1);
+            QVERIFY(!v1.contains(QStringLiteral("requiresDescriptionVersion")));
+            QCOMPARE(QJsonDocument::fromJson(v1.toUtf8()).object().value("version").toInt(), 1);
+            BoardCapabilities changed = core.model->boardCapabilities();
+            changed.attenuator.present = !changed.attenuator.present;
+            core.server->setupDescription()->setBoardCapabilities(changed);
+            QString general;
+            QTRY_VERIFY(!(general = setupCategoryOnWire(
+                *core.app, "general", SessionMessageKind::Delta)).isEmpty());
+            QCOMPARE(QJsonDocument::fromJson(general.toUtf8()).object()
+                         .value("version").toInt(), expected);
+        };
+        check(0, kSessionProtocolMinor, 0);
+        check(1, kSessionProtocolMinor, 1);
+        check(2, kSessionProtocolMinor, 2);
+        check(9, kSessionProtocolMinor, 2);
+        check(2, quint16(kRadioIdentitySessionProtocolMinor - 1), 0);
+    }
+
+    void tnfTableRejectsMalformedSourcesAndActions()
+    {
+        SetupDescriptionService service;
+        QJsonObject table;
+        QJsonObject add;
+        for (const QJsonValue& page : service.category(QStringLiteral("dsp"))
+                 .value("pages").toArray()) {
+            for (const QJsonValue& section : page.toObject().value("sections").toArray()) {
+                for (const QJsonValue& raw : section.toObject().value("controls").toArray()) {
+                    const QJsonObject control = raw.toObject();
+                    if (control.value("id") == QJsonValue("dsp.tnf.list")) { table = control; }
+                    if (control.value("id") == QJsonValue("dsp.tnf.add")) { add = control; }
+                }
+            }
+        }
+        QVERIFY(!table.isEmpty());
+        QVERIFY(!add.isEmpty());
+        QString error;
+        QVERIFY2(SetupDescriptionService::validateTnfTable(table, &error), qPrintable(error));
+        QVERIFY2(SetupDescriptionService::validateCommandBinding(add, &error), qPrintable(error));
+        const auto rejects = [&](const QJsonObject& bad) {
+            QVERIFY(!SetupDescriptionService::validateTnfTable(bad, &error));
+        };
+        QJsonObject bad = table;
+        QJsonObject binding = bad.value("binding").toObject();
+        QJsonObject source = binding.value("table").toObject();
+        source.insert("format", "json-path");
+        binding.insert("table", source);
+        bad.insert("binding", binding);
+        rejects(bad);
+        bad = table;
+        QJsonArray columns = bad.value("columns").toArray();
+        QJsonObject column = columns.at(0).toObject();
+        column.insert("min", 0);
+        columns[0] = column;
+        bad.insert("columns", columns);
+        rejects(bad);
+        bad = table;
+        QJsonArray actions = bad.value("rowActions").toArray();
+        QJsonObject action = actions.at(0).toObject();
+        QJsonObject command = action.value("command").toObject();
+        QJsonObject args = command.value("arguments").toObject();
+        args.insert("id", QJsonObject{{"$row", "id"}, {"fallback", 0}});
+        command.insert("arguments", args);
+        action.insert("command", command);
+        actions[0] = action;
+        bad.insert("rowActions", actions);
+        rejects(bad);
+        bad = table;
+        actions = bad.value("rowActions").toArray();
+        action = actions.at(0).toObject();
+        command = action.value("command").toObject();
+        command.insert("verb", "notch.add");
+        action.insert("command", command);
+        actions[0] = action;
+        bad.insert("rowActions", actions);
+        rejects(bad);
+        bad = table;
+        QJsonObject gate = bad.value("gate").toObject();
+        gate.insert("min", 0);
+        bad.insert("gate", gate);
+        rejects(bad);
+        bad = add;
+        binding = bad.value("binding").toObject();
+        command = binding.value("command").toObject();
+        args = command.value("arguments").toObject();
+        args.insert("sliceId", QJsonObject{{"$selectedOwnedSliceId", true}, {"fallback", 0}});
+        command.insert("arguments", args);
+        binding.insert("command", command);
+        bad.insert("binding", binding);
+        QVERIFY(!SetupDescriptionService::validateCommandBinding(bad, &error));
+        args.insert("sliceId", QJsonObject{{"$selectedOwnedSliceId", false}});
+        command.insert("arguments", args);
+        binding.insert("command", command);
+        bad.insert("binding", binding);
+        QVERIFY(!SetupDescriptionService::validateCommandBinding(bad, &error));
+    }
+
+    void tnfDescribedVerbsExecuteThroughCoreSession()
+    {
+        WireCore core;
+        QVERIFY(core.connect({{QByteArrayLiteral("setupDescription"), 2}}));
+        QCOMPARE(setupCapabilityOnWire(*core.app), 2);
+        const QJsonObject dsp = QJsonDocument::fromJson(setupCategoryOnWire(
+            *core.app, "dsp", SessionMessageKind::ObjectCreate).toUtf8()).object();
+        QJsonObject table;
+        QJsonObject add;
+        for (const QJsonValue& page : dsp.value("pages").toArray()) {
+            for (const QJsonValue& section : page.toObject().value("sections").toArray()) {
+                for (const QJsonValue& raw : section.toObject().value("controls").toArray()) {
+                    const QJsonObject control = raw.toObject();
+                    if (control.value("id") == QJsonValue("dsp.tnf.list")) { table = control; }
+                    if (control.value("id") == QJsonValue("dsp.tnf.add")) { add = control; }
+                }
+            }
+        }
+        QVERIFY(!table.isEmpty());
+        QVERIFY(!add.isEmpty());
+        quint32 nextId = 100;
+        const auto invoke = [&](const QByteArray& verb, const QList<MirrorUpdate>& args) {
+            const quint32 id = ++nextId;
+            core.app->sendText(SessionMessages::encode(
+                SessionMessages::commandInvoke(verb, id, args)));
+            SessionMessage result;
+            result.reason = QStringLiteral("no command.result arrived");
+            (void)QTest::qWaitFor([&] {
+                for (const QByteArray& wire : core.app->received()) {
+                    SessionMessage message;
+                    if (SessionMessages::decode(wire, &message)
+                        && message.kind == SessionMessageKind::CommandResult
+                        && message.commandId == id) {
+                        result = message;
+                        return true;
+                    }
+                }
+                return false;
+            }, 3000);
+            return result;
+        };
+        const auto i64 = [](const QByteArray& name, int value) {
+            return MirrorUpdate{0, name, MirrorWireKind::Int64, qlonglong(value)};
+        };
+        const QByteArray addVerb = add.value("binding").toObject()
+            .value("command").toObject().value("verb").toString().toUtf8();
+        const QString session = QStringLiteral("phone-A");
+        const quint64 epoch = 7;
+        const QList<MirrorUpdate> addArgs = materializeTnfAdd(
+            add, 0, 0, true, session, session, epoch, epoch);
+        QCOMPARE(addArgs.size(), 1);
+        QVERIFY(materializeTnfAdd(add, 0, 1, true, session, session, epoch, epoch).isEmpty());
+        QVERIFY(materializeTnfAdd(add, 0, 0, false, session, session, epoch, epoch).isEmpty());
+        QVERIFY(materializeTnfAdd(add, 0, 0, true, session, QStringLiteral("phone-B"),
+                                 epoch, epoch).isEmpty());
+        QVERIFY(materializeTnfAdd(add, 0, 0, true, session, session,
+                                 epoch, epoch + 1).isEmpty());
+        SessionMessage result = invoke(addVerb, addArgs);
+        QVERIFY2(result.accepted, qPrintable(result.reason));
+        QCOMPARE(core.model->notchModel()->notches().size(), 1);
+        const int rowId = core.model->notchModel()->notches().first().id;
+        const QJsonArray rowActions = table.value("rowActions").toArray();
+        const QByteArray moveVerb = rowActions.at(0).toObject().value("command")
+            .toObject().value("verb").toString().toUtf8();
+        const QByteArray activeVerb = rowActions.at(1).toObject().value("command")
+            .toObject().value("verb").toString().toUtf8();
+        const QByteArray deleteVerb = rowActions.at(2).toObject().value("command")
+            .toObject().value("verb").toString().toUtf8();
+        const quint32 revision = core.model->notchModel()->revision();
+        const QString list = core.model->notchModel()->listJson();
+        const QJsonObject edits{{"centreHz", 14075000.0}, {"widthHz", 300.0}};
+        const QJsonObject move = rowActions.at(0).toObject();
+        const QList<MirrorUpdate> moveArgs = materializeTnfRowAction(
+            move, list, revision, revision, rowId, edits, session, session, epoch, epoch);
+        QCOMPARE(moveArgs.size(), 3);
+        QVERIFY(materializeTnfRowAction(move, list, revision + 1, revision, rowId,
+                edits, session, session, epoch, epoch).isEmpty());
+        QVERIFY(materializeTnfRowAction(move, list, revision, revision, rowId,
+                edits, session, QStringLiteral("phone-B"), epoch, epoch).isEmpty());
+        QVERIFY(materializeTnfRowAction(move, list, revision, revision, rowId,
+                edits, session, session, epoch, epoch + 1).isEmpty());
+        QVERIFY(materializeTnfRowAction(move, list, revision, revision, rowId + 500,
+                edits, session, session, epoch, epoch).isEmpty());
+        QVERIFY(materializeTnfRowAction(move,
+                QStringLiteral("[{\"id\":1,\"centreHz\":14074000,\"widthHz\":200,\"active\":true},"
+                               "{\"id\":1,\"centreHz\":14074000,\"widthHz\":200,\"active\":true}]"),
+                revision, revision, 1, edits, session, session, epoch, epoch).isEmpty());
+        QVERIFY(materializeTnfRowAction(move, QStringLiteral("not-an-array"),
+                revision, revision, rowId, edits, session, session, epoch, epoch).isEmpty());
+        QVERIFY(materializeTnfRowAction(move,
+                QStringLiteral("[{\"id\":1,\"centreHz\":\"14074000\",\"widthHz\":200,\"active\":true}]"),
+                revision, revision, 1, edits, session, session, epoch, epoch).isEmpty());
+        QVERIFY(materializeTnfRowAction(move, list, revision, revision, rowId,
+                QJsonObject{{"centreHz", QStringLiteral("14075000")}, {"widthHz", 300.0}},
+                session, session, epoch, epoch).isEmpty());
+        result = invoke(moveVerb, moveArgs);
+        QVERIFY2(result.accepted, qPrintable(result.reason));
+        QCOMPARE(core.model->notchModel()->notchById(rowId)->centerHz, 14075000.0);
+        QCOMPARE(core.model->notchModel()->notchById(rowId)->widthHz, 300.0);
+        const QJsonObject active = rowActions.at(1).toObject();
+        const quint32 movedRevision = core.model->notchModel()->revision();
+        result = invoke(activeVerb, materializeTnfRowAction(active,
+            core.model->notchModel()->listJson(), movedRevision, movedRevision, rowId,
+            QJsonObject{{"active", false}}, session, session, epoch, epoch));
+        QVERIFY2(result.accepted, qPrintable(result.reason));
+        QVERIFY(!core.model->notchModel()->notchById(rowId)->active);
+        const QJsonObject remove = rowActions.at(2).toObject();
+        const quint32 activeRevision = core.model->notchModel()->revision();
+        result = invoke(deleteVerb, materializeTnfRowAction(remove,
+            core.model->notchModel()->listJson(), activeRevision, activeRevision, rowId,
+            {}, session, session, epoch, epoch));
+        QVERIFY2(result.accepted, qPrintable(result.reason));
+        QVERIFY(core.model->notchModel()->notchById(rowId) == nullptr);
+        // The client cancels the old row; a stale direct command still gets
+        // the Core's missing-row refusal.
+        QVERIFY(materializeTnfRowAction(move, core.model->notchModel()->listJson(),
+            core.model->notchModel()->revision(), revision, rowId, edits,
+            session, session, epoch, epoch).isEmpty());
+        result = invoke(moveVerb, {i64("id", rowId),
+            MirrorUpdate{0, "centreHz", MirrorWireKind::Float64, 14076000.0},
+            MirrorUpdate{0, "widthHz", MirrorWireKind::Float64, 200.0}});
+        QVERIFY(!result.accepted);
+        QCOMPARE(result.reason, QStringLiteral("That notch is no longer on this Core."));
+        result = invoke(addVerb, {i64("sliceId", 999)});
+        QVERIFY(!result.accepted);
+        QVERIFY(core.model->notchModel()->notches().isEmpty());
     }
 
     void commandSourcesHaveOneTypedSource()

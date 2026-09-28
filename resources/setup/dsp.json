@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "category": {
     "id": "dsp",
     "title": "DSP",
@@ -1600,6 +1600,135 @@
               "gate": {
                 "capability": "notchControlVersion",
                 "min": 1
+              }
+            },
+            {
+              "id": "dsp.tnf.list",
+              "label": "Tunable Notch Filter",
+              "tooltip": "",
+              "kind": "table",
+              "requiresDescriptionVersion": 2,
+              "binding": {
+                "table": {
+                  "valueProperty": {
+                    "object": "notches",
+                    "name": "listJson"
+                  },
+                  "revisionProperty": {
+                    "object": "notches",
+                    "name": "revision"
+                  },
+                  "format": "json-array",
+                  "rowKey": "id",
+                  "maxRows": 1024
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "notchControlVersion",
+                "min": 1
+              },
+              "columns": [
+                {
+                  "id": "dsp.tnf.list.centreHz",
+                  "field": "centreHz",
+                  "label": "Center Frequency (Hz)",
+                  "tooltip": "Center frequency of the notch",
+                  "kind": "decimal",
+                  "min": 100000,
+                  "max": 61440000,
+                  "step": 1
+                },
+                {
+                  "id": "dsp.tnf.list.widthHz",
+                  "field": "widthHz",
+                  "label": "Width (Hz)",
+                  "tooltip": "Bandwdith of the notch",
+                  "kind": "decimal",
+                  "min": 0,
+                  "max": 10000,
+                  "step": 1
+                },
+                {
+                  "id": "dsp.tnf.list.active",
+                  "field": "active",
+                  "label": "Active",
+                  "tooltip": "Checked if the notch is active",
+                  "kind": "toggle"
+                },
+                {
+                  "id": "dsp.tnf.list.delete",
+                  "rowAction": "delete",
+                  "label": "Delete",
+                  "tooltip": "Delete the current notch index",
+                  "kind": "button"
+                }
+              ],
+              "rowActions": [
+                {
+                  "id": "move",
+                  "command": {
+                    "verb": "notch.move",
+                    "arguments": {
+                      "id": {
+                        "$row": "id"
+                      },
+                      "centreHz": {
+                        "$edit": "centreHz"
+                      },
+                      "widthHz": {
+                        "$edit": "widthHz"
+                      }
+                    }
+                  }
+                },
+                {
+                  "id": "active",
+                  "command": {
+                    "verb": "notch.setActive",
+                    "arguments": {
+                      "id": {
+                        "$row": "id"
+                      },
+                      "active": {
+                        "$edit": "active"
+                      }
+                    }
+                  }
+                },
+                {
+                  "id": "delete",
+                  "command": {
+                    "verb": "notch.delete",
+                    "arguments": {
+                      "id": {
+                        "$row": "id"
+                      }
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "id": "dsp.tnf.add",
+              "label": "Add",
+              "tooltip": "Add a notch",
+              "kind": "button",
+              "requiresDescriptionVersion": 2,
+              "binding": {
+                "command": {
+                  "verb": "notch.addAtSlice",
+                  "arguments": {
+                    "sliceId": {
+                      "$selectedOwnedSliceId": true
+                    }
+                  }
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "notchControlVersion",
+                "min": 2
               }
             }
           ]
