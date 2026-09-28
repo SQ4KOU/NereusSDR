@@ -80,6 +80,11 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps)
                         && control.value(QStringLiteral("binding")).toObject()
                                .contains(QStringLiteral("property"))
                         && !SetupDescription::validateActiveSlicePropertyBinding(control))
+                    || (id == QLatin1String("transmit")
+                        && !SetupDescription::validateTransmitPropertyBinding(control)
+                        && !SetupDescription::validateTransmitSettingBinding(control))
+                    || (id == QLatin1String("audio")
+                        && !SetupDescription::validateAudioPropertyBinding(control))
                     || (control.value(QStringLiteral("binding")).toObject().contains(QStringLiteral("command"))
                         && !SetupDescription::validateCommandBinding(control))) {
                     return {};
@@ -217,6 +222,106 @@ bool SetupDescription::validateActiveSlicePropertyBinding(const QJsonObject& con
           ? MirrorWireKind::Int64 : MirrorWireKind::Unsupported;
     return property->kind == expected
         || (kind == QLatin1String("choice") && property->kind == MirrorWireKind::Int64);
+}
+
+bool SetupDescription::validateTransmitPropertyBinding(const QJsonObject& control)
+{
+    const QJsonObject binding = control.value(QStringLiteral("binding")).toObject();
+    if (binding.size() != 1 || !binding.value(QStringLiteral("property")).isObject()) {
+        return false;
+    }
+    const QJsonObject ref = binding.value(QStringLiteral("property")).toObject();
+    if (ref.size() != 2 || ref.value(QStringLiteral("object")) != QJsonValue(QStringLiteral("transmit"))) {
+        return false;
+    }
+    const QByteArray name = ref.value(QStringLiteral("name")).toString().toUtf8();
+    static const QSet<QByteArray> kDexpSettings{
+        "dexpEnabled", "dexpAttackTimeMs", "voxHangTimeMs", "dexpReleaseTimeMs",
+        "voxThresholdDb", "dexpExpansionRatioDb", "dexpHysteresisRatioDb",
+        "dexpDetectorTauMs", "dexpLookAheadEnabled", "dexpLookAheadMs",
+        "dexpSideChannelFilterEnabled", "dexpLowCutHz", "dexpHighCutHz",
+        "antiVoxRun", "antiVoxGainDb", "antiVoxTauMs"};
+    const QJsonObject gate = control.value(QStringLiteral("gate")).toObject();
+    if ((name != QByteArrayLiteral("power") && !kDexpSettings.contains(name))
+        || gate.value(QStringLiteral("transmit")) != QJsonValue(true)
+        || gate.value(QStringLiteral("capability")) != QJsonValue(QStringLiteral("transmitSettingsVersion"))
+        || gate.value(QStringLiteral("min")).toInt() < 5
+        || gate.value(QStringLiteral("offAir")) != QJsonValue(true)) {
+        return false;
+    }
+    const MirrorProperty* property = MirrorSchema::forMetaObject(&TransmitModel::staticMetaObject).byName(name);
+    if (!property || !property->isWritable
+        || !MirrorPolicy::inboundAllowed(QByteArrayLiteral("TransmitModel"), name)) {
+        return false;
+    }
+    const QString kind = control.value(QStringLiteral("kind")).toString();
+    const MirrorWireKind expected = kind == QLatin1String("toggle") ? MirrorWireKind::Bool
+        : kind == QLatin1String("integer") ? MirrorWireKind::Int64
+        : kind == QLatin1String("slider") ? MirrorWireKind::Int64
+        : kind == QLatin1String("decimal") ? MirrorWireKind::Float64
+        : MirrorWireKind::Unsupported;
+    return expected != MirrorWireKind::Unsupported && property->kind == expected;
+}
+
+bool SetupDescription::validateTransmitSettingBinding(const QJsonObject& control)
+{
+    const QJsonObject binding = control.value(QStringLiteral("binding")).toObject();
+    if (binding.size() != 1 || !binding.value(QStringLiteral("setting")).isString()) {
+        return false;
+    }
+    const QString key = binding.value(QStringLiteral("setting")).toString();
+    const QJsonObject gate = control.value(QStringLiteral("gate")).toObject();
+    if (classifySettingsKey(key) != SettingsScope::Station
+        || gate.value(QStringLiteral("transmit")) != QJsonValue(true)
+        || gate.value(QStringLiteral("capability")) != QJsonValue(QStringLiteral("transmitSettingsVersion"))
+        || gate.value(QStringLiteral("min")).toInt() < 5
+        || gate.value(QStringLiteral("offAir")) != QJsonValue(true)) {
+        return false;
+    }
+    if (key == QLatin1String("SwrProtectionLimit")) {
+        return control.value(QStringLiteral("kind")) == QJsonValue(QStringLiteral("decimal"))
+            && control.value(QStringLiteral("min")) == QJsonValue(1.0)
+            && control.value(QStringLiteral("max")) == QJsonValue(5.0)
+            && control.value(QStringLiteral("step")) == QJsonValue(0.1);
+    }
+    if (key == QLatin1String("TunePowerSwrIgnore")) {
+        return control.value(QStringLiteral("kind")) == QJsonValue(QStringLiteral("integer"))
+            && control.value(QStringLiteral("min")) == QJsonValue(5)
+            && control.value(QStringLiteral("max")) == QJsonValue(50)
+            && control.value(QStringLiteral("step")) == QJsonValue(1);
+    }
+    static const QSet<QString> kToggles{
+        QStringLiteral("SwrProtectionEnabled"), QStringLiteral("SwrTuneProtectionEnabled"),
+        QStringLiteral("WindBackPowerSwr"), QStringLiteral("TxInhibitMonitorEnabled"),
+        QStringLiteral("TxInhibitMonitorReversed")};
+    return kToggles.contains(key) && validateSettingToggleEncoding(control);
+}
+
+bool SetupDescription::validateAudioPropertyBinding(const QJsonObject& control)
+{
+    const QJsonObject binding = control.value(QStringLiteral("binding")).toObject();
+    if (binding.size() != 1 || !binding.value(QStringLiteral("property")).isObject()) {
+        return false;
+    }
+    const QJsonObject ref = binding.value(QStringLiteral("property")).toObject();
+    if (ref.size() != 2 || ref.value(QStringLiteral("object")) != QJsonValue(QStringLiteral("transmit"))) {
+        return false;
+    }
+    const QByteArray name = ref.value(QStringLiteral("name")).toString().toUtf8();
+    const int version = name == QByteArrayLiteral("filterLow")
+        || name == QByteArrayLiteral("filterHigh") ? 1
+        : name == QByteArrayLiteral("amCarrierLevel") ? 2 : 0;
+    const QJsonObject gate = control.value(QStringLiteral("gate")).toObject();
+    if (version == 0 || control.value(QStringLiteral("kind")) != QJsonValue(QStringLiteral("integer"))
+        || gate.value(QStringLiteral("transmit")) != QJsonValue(true)
+        || gate.value(QStringLiteral("capability")) != QJsonValue(QStringLiteral("transmitSettingsVersion"))
+        || gate.value(QStringLiteral("min")) != QJsonValue(version)
+        || gate.value(QStringLiteral("offAir")) != QJsonValue(true)) {
+        return false;
+    }
+    const MirrorProperty* property = MirrorSchema::forMetaObject(&TransmitModel::staticMetaObject).byName(name);
+    return property && property->isWritable && property->kind == MirrorWireKind::Int64
+        && MirrorPolicy::inboundAllowed(QByteArrayLiteral("TransmitModel"), name);
 }
 
 bool SetupDescription::validateDspSettingBinding(const QJsonObject& control)

@@ -28,6 +28,9 @@ public:
 
     QJsonObject category(const QString& id) const;
     static bool validateActiveSlicePropertyBinding(const QJsonObject& control);
+    static bool validateTransmitPropertyBinding(const QJsonObject& control);
+    static bool validateTransmitSettingBinding(const QJsonObject& control);
+    static bool validateAudioPropertyBinding(const QJsonObject& control);
     static bool validateDspSettingBinding(const QJsonObject& control);
     static bool validateSettingToggleEncoding(const QJsonObject& control);
     static bool validateCommandBinding(const QJsonObject& control, QString* error = nullptr);

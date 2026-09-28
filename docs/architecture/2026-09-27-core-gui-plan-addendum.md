@@ -882,8 +882,11 @@ colours for the same signal.
   in three 50 ms samples; three 25 ms samples passed 25 seconds each with maximum
   received gaps of 249/277/282 ms. These short stochastic samples do not establish
   an acceptance rate. The override was restored exactly afterward; production
-  remains 100 ms. A 25 ms TCP-floor cadence is another candidate for further
-  measurement before deciding whether a separate heartbeat path is needed.
+  remains 100 ms. The longer 25 ms experiment also failed all four predeclared 60-second
+  rows at 3% loss/75 ms each way: both relay and direct WSS. Trips occurred at
+  55.310, 59.714, 20.733 and 1.456 seconds into requested TUNE, with 401-403 ms
+  silence. Client production continued. A timer-only fix is rejected; separately
+  delivered authenticated liveness needs an explicit contract and verification.
   The observed failure remains an R5 acceptance gap.
 - Plan: R5 direct-WSS/web-relay transmit under impaired networks.
 
@@ -956,6 +959,19 @@ colours for the same signal.
 - Status: OPEN. Source verified by the lead; variable-width model/DSP application,
   persistence, remote atomic editing and regression coverage remain required.
 - Plan: complete DSP Setup parity and live Core application.
+
+### G-61: Phone transmit Setup needs the desktop's on-air lock
+
+- Evidence: remote desktop Setup disables transmit settings while the Core is
+  on air, while the Core accepts some ordinary live transmit-setting edits.
+  Initial Transmit/Audio descriptions therefore allowed more than that window.
+- Ruling: JJ answered "Lock Setup controls while transmitting (recommended)".
+- Status: built and verified. All 27 new transmit-related Setup controls require
+  offAir; the Core descriptor validators reject a missing gate. Missing or stale
+  txState disables them; keyed, tuning, twoTone and txEnding must all be false.
+  Integrated app/Core build and four focused suites passed (5.17 s). Receive
+  controls are outside this discrepancy.
+- Plan: Transmit/Audio Setup parity and consistent phone behavior.
 
 ## How this addendum is kept
 

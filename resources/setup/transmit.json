@@ -1,0 +1,562 @@
+{
+  "version": 1,
+  "category": {
+    "id": "transmit",
+    "title": "Transmit",
+    "where": "station"
+  },
+  "coverage": "partial: Power step attenuator and Tune controls, Speech Processor, TX Profiles, and VOX enable need exact bindings or composite contracts",
+  "pages": [
+    {
+      "id": "transmit.power",
+      "title": "Power",
+      "where": "station",
+      "coverage": "partial: ATT on TX uses the stepAtt facade; Tune fixed drive has SKU-dependent display conversion; TX TUN Meter and Disable HF PA have no Core apply binding",
+      "sections": [
+        {
+          "title": "Power",
+          "controls": [
+            {
+              "id": "transmit.power.power",
+              "label": "Max Power",
+              "tooltip": "RF output power (0\u2013100 W)",
+              "kind": "slider",
+              "binding": {
+                "property": {
+                  "object": "transmit",
+                  "name": "power"
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 5,
+                "transmit": true,
+                "offAir": true
+              },
+              "min": 0,
+              "max": 100,
+              "step": 1
+            }
+          ]
+        },
+        {
+          "title": "SWR Protection",
+          "controls": [
+            {
+              "id": "transmit.power.SwrProtectionEnabled",
+              "label": "Enable Protection SWR >",
+              "tooltip": "Show a visual SWR warning in the spectral area",
+              "kind": "toggle",
+              "binding": {
+                "setting": "SwrProtectionEnabled"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 5,
+                "transmit": true,
+                "offAir": true
+              },
+              "valueEncoding": {
+                "true": "True",
+                "false": "False"
+              }
+            },
+            {
+              "id": "transmit.power.SwrProtectionLimit",
+              "label": "SWR Protection Limit",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "setting": "SwrProtectionLimit"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 5,
+                "transmit": true,
+                "offAir": true
+              },
+              "min": 1,
+              "max": 5,
+              "step": 0.1
+            },
+            {
+              "id": "transmit.power.SwrTuneProtectionEnabled",
+              "label": "Ignore when Tune Pwr <",
+              "tooltip": "Disables SWR Protection during Tune.",
+              "kind": "toggle",
+              "binding": {
+                "setting": "SwrTuneProtectionEnabled"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 5,
+                "transmit": true,
+                "offAir": true
+              },
+              "valueEncoding": {
+                "true": "True",
+                "false": "False"
+              }
+            },
+            {
+              "id": "transmit.power.TunePowerSwrIgnore",
+              "label": "Tune Power SWR Ignore",
+              "tooltip": "",
+              "kind": "integer",
+              "binding": {
+                "setting": "TunePowerSwrIgnore"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 5,
+                "transmit": true,
+                "offAir": true
+              },
+              "min": 5,
+              "max": 50,
+              "step": 1
+            },
+            {
+              "id": "transmit.power.WindBackPowerSwr",
+              "label": "Reduce Pwr if protected",
+              "tooltip": "Winds back the power if high swr protection kicks in",
+              "kind": "toggle",
+              "binding": {
+                "setting": "WindBackPowerSwr"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 5,
+                "transmit": true,
+                "offAir": true
+              },
+              "valueEncoding": {
+                "true": "True",
+                "false": "False"
+              }
+            }
+          ]
+        },
+        {
+          "title": "External TX Inhibit",
+          "controls": [
+            {
+              "id": "transmit.power.TxInhibitMonitorEnabled",
+              "label": "Update with TX Inhibit state",
+              "tooltip": "NereusSDR follows the radio's TX inhibit input when it changes.",
+              "kind": "toggle",
+              "binding": {
+                "setting": "TxInhibitMonitorEnabled"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 5,
+                "transmit": true,
+                "offAir": true
+              },
+              "valueEncoding": {
+                "true": "True",
+                "false": "False"
+              }
+            },
+            {
+              "id": "transmit.power.TxInhibitMonitorReversed",
+              "label": "Reversed logic",
+              "tooltip": "Reverse the input state logic",
+              "kind": "toggle",
+              "binding": {
+                "setting": "TxInhibitMonitorReversed"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 5,
+                "transmit": true,
+                "offAir": true
+              },
+              "valueEncoding": {
+                "true": "True",
+                "false": "False"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "transmit.dexpVox",
+      "title": "DEXP/VOX",
+      "where": "station",
+      "coverage": "partial: Enable VOX also depends on a live microphone-to-Core line gate; Anti-VOX source is an informational row, not a control",
+      "sections": [
+        {
+          "title": "VOX / DEXP",
+          "controls": [
+            {
+              "id": "transmit.dexpVox.dexpEnabled",
+              "label": "Enable DEXP",
+              "tooltip": "Enable Downward Expander",
+              "kind": "toggle",
+              "binding": {
+                "property": {
+                  "object": "transmit",
+                  "name": "dexpEnabled"
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 5,
+                "transmit": true,
+                "offAir": true
+              }
+            },
+            {
+              "id": "transmit.dexpVox.dexpAttackTimeMs",
+              "label": "Attack (ms)",
+              "tooltip": "Time from low to high gain of downward expander",
+              "kind": "decimal",
+              "binding": {
+                "property": {
+                  "object": "transmit",
+                  "name": "dexpAttackTimeMs"
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 5,
+                "transmit": true,
+                "offAir": true
+              },
+              "min": 2,
+              "max": 100,
+              "step": 1
+            },
+            {
+              "id": "transmit.dexpVox.voxHangTimeMs",
+              "label": "Hold (ms)",
+              "tooltip": "Time from signal drop to initiation of gain increase",
+              "kind": "integer",
+              "binding": {
+                "property": {
+                  "object": "transmit",
+                  "name": "voxHangTimeMs"
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 5,
+                "transmit": true,
+                "offAir": true
+              },
+              "min": 1,
+              "max": 2000,
+              "step": 10
+            },
+            {
+              "id": "transmit.dexpVox.dexpReleaseTimeMs",
+              "label": "Release (ms)",
+              "tooltip": "Time from high to low gain of downward expander",
+              "kind": "decimal",
+              "binding": {
+                "property": {
+                  "object": "transmit",
+                  "name": "dexpReleaseTimeMs"
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 5,
+                "transmit": true,
+                "offAir": true
+              },
+              "min": 2,
+              "max": 1000,
+              "step": 1
+            },
+            {
+              "id": "transmit.dexpVox.voxThresholdDb",
+              "label": "Activation threshold",
+              "tooltip": "Activation threshold",
+              "kind": "integer",
+              "binding": {
+                "property": {
+                  "object": "transmit",
+                  "name": "voxThresholdDb"
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 5,
+                "transmit": true,
+                "offAir": true
+              },
+              "min": -80,
+              "max": 0,
+              "step": 1
+            },
+            {
+              "id": "transmit.dexpVox.dexpExpansionRatioDb",
+              "label": "Expansion Ratio",
+              "tooltip": "Ratio between full gain and reduced gain of expander",
+              "kind": "decimal",
+              "binding": {
+                "property": {
+                  "object": "transmit",
+                  "name": "dexpExpansionRatioDb"
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 5,
+                "transmit": true,
+                "offAir": true
+              },
+              "min": 0,
+              "max": 30,
+              "step": 0.1
+            },
+            {
+              "id": "transmit.dexpVox.dexpHysteresisRatioDb",
+              "label": "Hysteresis Ratio",
+              "tooltip": "Ratio of activation level and hold level",
+              "kind": "decimal",
+              "binding": {
+                "property": {
+                  "object": "transmit",
+                  "name": "dexpHysteresisRatioDb"
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 5,
+                "transmit": true,
+                "offAir": true
+              },
+              "min": 0,
+              "max": 10,
+              "step": 0.1
+            },
+            {
+              "id": "transmit.dexpVox.dexpDetectorTauMs",
+              "label": "Detector Tau (ms)",
+              "tooltip": "Time-constant for low-pass filtering of input",
+              "kind": "decimal",
+              "binding": {
+                "property": {
+                  "object": "transmit",
+                  "name": "dexpDetectorTauMs"
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 5,
+                "transmit": true,
+                "offAir": true
+              },
+              "min": 1,
+              "max": 100,
+              "step": 1
+            }
+          ]
+        },
+        {
+          "title": "Audio LookAhead",
+          "controls": [
+            {
+              "id": "transmit.dexpVox.dexpLookAheadEnabled",
+              "label": "Enable",
+              "tooltip": "Trigger VOX ahead of transmit audio",
+              "kind": "toggle",
+              "binding": {
+                "property": {
+                  "object": "transmit",
+                  "name": "dexpLookAheadEnabled"
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 5,
+                "transmit": true,
+                "offAir": true
+              }
+            },
+            {
+              "id": "transmit.dexpVox.dexpLookAheadMs",
+              "label": "Look Ahead (ms)",
+              "tooltip": "Time for VOX audio lookahead",
+              "kind": "decimal",
+              "binding": {
+                "property": {
+                  "object": "transmit",
+                  "name": "dexpLookAheadMs"
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 5,
+                "transmit": true,
+                "offAir": true
+              },
+              "min": 10,
+              "max": 999,
+              "step": 1
+            }
+          ]
+        },
+        {
+          "title": "Side-Channel Trigger Filter",
+          "controls": [
+            {
+              "id": "transmit.dexpVox.dexpSideChannelFilterEnabled",
+              "label": "Enable",
+              "tooltip": "Filter audio that triggers VOX",
+              "kind": "toggle",
+              "binding": {
+                "property": {
+                  "object": "transmit",
+                  "name": "dexpSideChannelFilterEnabled"
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 5,
+                "transmit": true,
+                "offAir": true
+              }
+            },
+            {
+              "id": "transmit.dexpVox.dexpLowCutHz",
+              "label": "Low  Cut (Hz)",
+              "tooltip": "Low frequency cut-off for VOX trigger filter",
+              "kind": "decimal",
+              "binding": {
+                "property": {
+                  "object": "transmit",
+                  "name": "dexpLowCutHz"
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 5,
+                "transmit": true,
+                "offAir": true
+              },
+              "min": 100,
+              "max": 10000,
+              "step": 10
+            },
+            {
+              "id": "transmit.dexpVox.dexpHighCutHz",
+              "label": "High Cut (Hz)",
+              "tooltip": "High frequency cut-off for VOX trigger filter",
+              "kind": "decimal",
+              "binding": {
+                "property": {
+                  "object": "transmit",
+                  "name": "dexpHighCutHz"
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 5,
+                "transmit": true,
+                "offAir": true
+              },
+              "min": 100,
+              "max": 10000,
+              "step": 10
+            }
+          ]
+        },
+        {
+          "title": "Anti-VOX",
+          "controls": [
+            {
+              "id": "transmit.dexpVox.antiVoxRun",
+              "label": "Anti-VOX Enable",
+              "tooltip": "Enable prevention measures for RX audio tripping VOX",
+              "kind": "toggle",
+              "binding": {
+                "property": {
+                  "object": "transmit",
+                  "name": "antiVoxRun"
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 5,
+                "transmit": true,
+                "offAir": true
+              }
+            },
+            {
+              "id": "transmit.dexpVox.antiVoxGainDb",
+              "label": "Gain (dB)",
+              "tooltip": "Gain applied to Anti-VOX audio (Anti-VOX sensitivity)",
+              "kind": "integer",
+              "binding": {
+                "property": {
+                  "object": "transmit",
+                  "name": "antiVoxGainDb"
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 5,
+                "transmit": true,
+                "offAir": true
+              },
+              "min": -60,
+              "max": 60,
+              "step": 1
+            },
+            {
+              "id": "transmit.dexpVox.antiVoxTauMs",
+              "label": "Tau (ms)",
+              "tooltip": "Time-constant used in smoothing Anti-VOX data",
+              "kind": "integer",
+              "binding": {
+                "property": {
+                  "object": "transmit",
+                  "name": "antiVoxTauMs"
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 5,
+                "transmit": true,
+                "offAir": true
+              },
+              "min": 1,
+              "max": 500,
+              "step": 1
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

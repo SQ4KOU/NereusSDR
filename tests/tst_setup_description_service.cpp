@@ -282,6 +282,68 @@ private slots:
         }
     }
 
+    void transmitDexpBindingsAreExactMirroredSettings()
+    {
+        SetupDescriptionService service;
+        const QJsonObject transmit = service.category(QStringLiteral("transmit"));
+        QVERIFY(!transmit.isEmpty());
+        int count = 0;
+        for (const QJsonValue& rawPage : transmit.value(QStringLiteral("pages")).toArray()) {
+            for (const QJsonValue& rawSection : rawPage.toObject().value(QStringLiteral("sections")).toArray()) {
+                for (const QJsonValue& raw : rawSection.toObject().value(QStringLiteral("controls")).toArray()) {
+                    const QJsonObject control = raw.toObject();
+                    QVERIFY(SetupDescriptionService::validateTransmitPropertyBinding(control)
+                        || SetupDescriptionService::validateTransmitSettingBinding(control));
+                    QVERIFY(control.value(QStringLiteral("gate")).toObject()
+                        .value(QStringLiteral("transmit")) == QJsonValue(true));
+                    ++count;
+                }
+            }
+        }
+        QCOMPARE(count, 24);
+        QJsonObject invalid = transmit.value(QStringLiteral("pages")).toArray().last()
+            .toObject().value(QStringLiteral("sections")).toArray().first()
+            .toObject().value(QStringLiteral("controls")).toArray().first().toObject();
+        QJsonObject gate = invalid.value(QStringLiteral("gate")).toObject();
+        gate.remove(QStringLiteral("transmit"));
+        invalid.insert(QStringLiteral("gate"), gate);
+        QVERIFY(!SetupDescriptionService::validateTransmitPropertyBinding(invalid));
+        gate.insert(QStringLiteral("transmit"), true);
+        gate.remove(QStringLiteral("offAir"));
+        invalid.insert(QStringLiteral("gate"), gate);
+        QVERIFY(!SetupDescriptionService::validateTransmitPropertyBinding(invalid));
+    }
+
+    void audioTxFilterBindingsAreExactMirroredProperties()
+    {
+        SetupDescriptionService service;
+        const QJsonObject audio = service.category(QStringLiteral("audio"));
+        QVERIFY(!audio.isEmpty());
+        const QJsonArray described = audio.value(QStringLiteral("pages")).toArray()
+            .first().toObject().value(QStringLiteral("sections")).toArray()
+            .first().toObject().value(QStringLiteral("controls")).toArray();
+        QCOMPARE(described.size(), 3);
+        for (const QJsonValue& raw : described) {
+            QVERIFY(SetupDescriptionService::validateAudioPropertyBinding(raw.toObject()));
+        }
+        QJsonObject bad = described.first().toObject();
+        QJsonObject gate = bad.value(QStringLiteral("gate")).toObject();
+        gate.remove(QStringLiteral("transmit"));
+        bad.insert(QStringLiteral("gate"), gate);
+        QVERIFY(!SetupDescriptionService::validateAudioPropertyBinding(bad));
+        gate.insert(QStringLiteral("transmit"), true);
+        gate.remove(QStringLiteral("offAir"));
+        bad.insert(QStringLiteral("gate"), gate);
+        QVERIFY(!SetupDescriptionService::validateAudioPropertyBinding(bad));
+        bad = described.first().toObject();
+        QJsonObject binding = bad.value(QStringLiteral("binding")).toObject();
+        QJsonObject property = binding.value(QStringLiteral("property")).toObject();
+        property.insert(QStringLiteral("name"), QStringLiteral("mox"));
+        binding.insert(QStringLiteral("property"), property);
+        bad.insert(QStringLiteral("binding"), binding);
+        QVERIFY(!SetupDescriptionService::validateAudioPropertyBinding(bad));
+    }
+
     void boardRefreshOnlyMovesRevisionOnChange()
     {
         SetupDescriptionService service;
