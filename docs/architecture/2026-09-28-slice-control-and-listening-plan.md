@@ -1,10 +1,15 @@
 # Slice control and shared listening: implementation plan
 
-Status: plan for crew. The six Core policies are approved and final (JJ,
-September 28, 2026; addendum G-118). The full-window UI (flags, applets,
-multiple pans, placement of unseen slices, floating focus, same-pan flag
-stacking, local-audio presentation) is still under JJ's review; those tasks
-are planned at the end and marked BLOCKED until he rules.
+Status: plan for crew, in progress. The six Core policies are approved and
+final (JJ, September 28, 2026; addendum G-118). JJ ruled the full-window UI
+(flags, applets, multiple pans, placement of unseen slices, floating focus,
+same-pan flag stacking, local-audio presentation, layout changes and the TX
+applet letters) the same day as U1 to U8, recorded verbatim below; Tasks 13
+to 16 are no longer blocked and carry acceptance cases written from those
+rulings. Task 1 is complete on its lane (signed `efb398303` on
+`codex/slice-access`, not yet merged to the trunk); the crew ledger is
+`.crew/2026-09-28-slice-control-and-listening-plan/progress.md` in the trunk
+worktree.
 
 Inputs read in full:
 
@@ -39,7 +44,7 @@ Dependency spine:
               -> 10 hosting desktop through the same validated operations
                 -> 11 TX surfaces stay on the transmit slice
                   -> 12 phone contract note
-                    -> 13..16 UI (BLOCKED on JJ's review; 13 is the approved bottom area)
+                    -> 13..16 UI (ruled by JJ, U1 to U8, 2026-09-28)
                       -> 17 delivery verification
 ```
 
@@ -125,6 +130,9 @@ controller has JJ's answer (or JJ accepts the recommendation).
   silences every listener. **Recommendation:** accept it for this plan and
   let the listener's screen say why from the mirrored AF value (no DSP
   change); a pre-PanelGain1 WDSP tap is a separate DSP change.
+  **Superseded 2026-09-28 by U5** (lead ruling, "settles Q2 vs U5"): U5
+  wins; a listener's audio never depends on the controller's AF, including
+  AF at zero. See Task 6.
 - **Q3. Listener pan and route.** A slice's pan (`audioPan`) and
   speakers/headphones route (`outputRoute`) are shared `SliceModel`
   properties. **Recommendation:** a listener hears the slice centered in its
@@ -203,42 +211,90 @@ controller has JJ's answer (or JJ accepts the recommendation).
   answers Core questions in the same chooser dialog a remote desktop uses
   (`MultiDeviceController`, `MainWindow.cpp:1990-2035`), not a new dialog.
 
-UI questions (already under JJ's review; Tasks 13 to 16 are blocked on them):
+UI questions and JJ's rulings (2026-09-28). Each question keeps the
+recommendation it was asked with; JJ's words are quoted exactly as the crew
+ledger records them, and "Ruled" is the lead's recorded reading.
 
 - **U1. Where an unseen slice shows.** Recommendation (design): focus its
   existing pane if visible (floating included); else prefer an empty pane;
   else offer a named destination or another pane. Never create a physical
   receiver or change shared tuning to show it.
+  JJ: "1 your recommendation but maybe not a floating pan but a layout that
+  fits in the single window". Ruled: an unseen slice goes into the main
+  window: an existing main-window pan showing it comes forward, else an
+  empty main-window pan, else the main window grows to a pan layout that
+  fits in the single window, or asks for a named destination; placing a
+  slice never opens a new floating pan. Lead confirmation (2026-09-28): ask
+  only when no larger single-window layout fits; growing the layout to place
+  a slice adds no new slice to any other empty pan.
 - **U2. Bottom RX selection and a floating pan.** Recommendation: selecting
   a row whose slice sits in a floating pan raises that floater and updates
   main-window RX; focusing a floater's flag updates the main bottom bar.
+  JJ: "1 your recommendation". Ruled: a slice already showing in a floating
+  pan brings that floater to the front and switches the main window's RX to
+  it; nothing moves, no second copy.
 - **U3. Pan background click.** Recommendation (scout): keep today's
   display-only meaning (`PanadapterApplet.cpp:217-234`); only a flag, a
   joined RX tab or explicit Select RX changes window RX.
+  JJ: "1 your recommendation". Ruled: a pan background click keeps today's
+  display-only meaning (keyboard and scroll focus); slices are chosen by
+  flag or tab.
 - **U4. Same-pan stacking** of controlled and listened flags. Recommendation:
   keep today's per-pan selected-flag-forward behavior
   (`PanadapterApplet.cpp:118-134,197-213`) for joined flags; foreign
   markers stay dashed.
+  JJ: "1 your recommendation". Ruled: same-pan stacking keeps today's rule,
+  the selected slice's flag on top; listened slices keep their color with
+  "Listening · controlled by ..." text.
 - **U5. Local audio presentation.** Recommendation: a listener's flag and RX
   applet show a local volume and mute bound to the device's listen level
   (never `SliceModel::afGain` / `muted`); the controller keeps today's AF
   and mute controls.
+  JJ: "1 your recommendation". Ruled: the existing AF slider and mute on any
+  slice (controlled or listened) change only what this device hears;
+  labeled "Your volume" on a listened slice; nobody's volume or mute changes
+  anyone else's audio, the controller's included. Consequence carried into
+  Task 6: the controller's AF must become per-device too, not only
+  listeners'. The RX applet has no AF slider or mute today
+  (`RxApplet.cpp:1190-1191`), so the existing surfaces are the flag's
+  (`VfoWidget`) AF slider and mute; no new volume control is added.
 - **U6. Listener flag wording and actions.** Recommendation (design): letter
   and Aether color unchanged; text "You control" or "Listening" plus the
   controller's name; Take control and Stop listening reachable from the
   flag and the chooser.
+  JJ: "1 your wording sounds fine". Ruled: flag text "You control" (menu:
+  Release); "Listening · controlled by <device>" (menu: Take control, Stop
+  listening; tuning disabled with "<device> controls this slice"); "TX" as
+  today, red on air.
 - **U7. Layout change behavior** (G-126). Recommendation: a layout change
   never moves or recreates a listened slice or spends a DDC; empty panes
   offer Choose a slice and New slice instead of adding automatically.
+  JJ: "stop listening to slices, its confusinf to hear slices you have no
+  visual referance to". Ruled: a listened slice that loses its pan in a
+  layout change stops being listened to on this device (with a plain
+  notice); principle: a device hears only slices it can see. Controlled
+  slices keep today's rehoming into a remaining pan so every heard slice
+  stays visible. This supersedes the design's earlier "replacing or hiding
+  a view retains listening until explicit leave" and the RX applet tabs for
+  hidden joined slices.
 - **U8. TX applet showing every letter** (JJ's tentative idea in G-118).
   Recommendation: not in this plan; TX selection stays in today's TX
   controls.
+  JJ: "2 but for only slices tgat are activatyed show in the applet".
+  Ruled: the TX applet shows a row of slice letter buttons, only for slices
+  active on this device (read: slices this device controls, the only ones it
+  may transmit on); pressing one selects it for transmit through the
+  existing `tx.setTxSlice` behavior, the same for every client (ruling 8.10:
+  while keyed it unkeys, then moves). Correction (lead, 2026-09-28): an
+  earlier record added "idle only; refused on air"; that was the lead's
+  addition, not JJ's ruling, and is withdrawn. Built in Task 11.
 
 ## Controller rulings on the open decisions (2026-09-28)
 
 The lead (controller) settled Q1-Q17 as recommended, each consistent with JJ's six approved policies:
 Q1 mix listened audio into the device's existing Core-side mix from the per-receiver feed block (before mute, AF undone);
-Q2 accept listener silence when the controller's AF is at zero (a pre-AF WDSP tap is a separate change);
+Q2 accept listener silence when the controller's AF is at zero (a pre-AF WDSP tap is a separate change; superseded
+later the same day by the lead's ruling that U5 wins, see Task 6);
 Q3 listeners hear the slice centered on their own route; Q4 a listener's level starts at the current AF level (new
 listeners and the former controller); Q5 the controller cannot Stop listening, the Core refuses and points to Release;
 Q6 existing close paths (flag close, removeSlice) act as Release on a slice others listen to; Q7 Take control from a
@@ -250,7 +306,8 @@ unowned Slice A (Protocol 2 needs a streaming DDC; zero slices remains a valid i
 do not survive a Core restart; Q12 no new held-for marks; Q13 listeners get the display, raw I/Q and TCI I/Q stay
 controller-only; Q14 connectedDevices.listeningOn keeps its current content; Q15 the TX applet band follows the
 transmit slice, after reading how Thetis does it; Q16 no per-device quota in this plan; Q17 the hosting desktop uses the
-remote desktop's chooser dialog. U1-U8 go to JJ one at a time; Tasks 13-16 stay blocked until he rules.
+remote desktop's chooser dialog. U1-U8 went to JJ one at a time and he ruled all eight on 2026-09-28 (above);
+Tasks 13-16 are unblocked. U5 adds a consequence to Task 6 and U8 adds the TX applet letter row to Task 11.
 
 ## Task 1: Slice incarnation and control revision
 
@@ -260,6 +317,17 @@ and confirmations never act on a reused letter or a newer assignment);
 deep scout P1 "takeSlice currently checks subject, not a unique object
 generation".
 Depends on: nothing. Model tier: opus.
+
+Status (2026-09-28): complete on lane `codex/slice-access` in signed
+`efb398303` ("feat(slice): give each slice an incarnation and a control
+revision"), not yet merged to the trunk. Ledger results: `tst_slice_ownership`
+19/19 (4 new), `tst_confirm_step` 80/80 (2 new, red on the trunk before the
+change), `tst_station_multi_session` 100/100. The task added
+`ConfirmStep::Question::shownRefs`, needed to catch reused ids. The lead
+accepted one implementer ruling: a held-for mark moving between devices keeps
+the revision, because the owner stays the station device. Finding carried
+into Task 4: `incarnation()` reads 0 during removal; if the removal message
+needs it, Task 4 adds an accessor.
 
 Today:
 - Slice identity on the wire is only the reusable id: `sliceIndex` is the
@@ -489,6 +557,11 @@ authority without an intermediate destroyed or unowned slice. Do not rebuild
 its DSP channel or remove/recreate its audio source"; G-118 rulings.
 Depends on: Task 3; Q5, Q6, Q7, Q8 answered. Model tier: opus.
 
+Carried from Task 1 (ledger finding, 2026-09-28): `SliceOwnership::incarnation()`
+reads 0 while a slice is being removed. If the removal message this task
+publishes needs the removed slice's incarnation, add an accessor that keeps
+it readable through removal rather than sending 0.
+
 Today:
 - Negotiation: hello features (`StationClient.cpp:2831-2882`, server
   `peerDeclares` at `StationServer.cpp:2971`); capabilities appended per
@@ -710,7 +783,29 @@ reconnect/session fencing, and remote audio clock behavior"; "DSP callback
 code must never traverse mutable listener collections"; "Host speakers and
 remote playback must obey the same per-device listening policy"; verification
 bullet 1 (continuous audio after handoff, independent volume and mute).
-Depends on: Task 4; ruling Q1 (mechanism), Q2, Q3, Q4. Model tier: opus.
+Depends on: Task 4; ruling Q1 (mechanism), Q3, Q4; JJ's ruling U5 and the
+lead's ruling that U5 supersedes Q2.
+Model tier: opus.
+
+U5 consequence (JJ 2026-09-28, "1 your recommendation"; ledger finding):
+the existing AF slider and mute on any slice change only what this device
+hears, "the controller's included". So the controller's AF and mute become
+per-device too, not only a listener's level:
+- The controller's slider and mute set the controller's own hearing only;
+  they never change a listener's sum or the local output of another device.
+- A handoff carries no device's level to another: the former controller
+  keeps its level as a listener (Q4 seeds it from what it heard), and the
+  new controller keeps the level it had as a listener instead of inheriting
+  the former controller's AF.
+- Ruling (lead, 2026-09-28, settles Q2 vs U5): U5 wins. A listener's audio
+  must never depend on the controller's AF, including AF at zero. The
+  listener feed is taken before the controller's AF: before WDSP's panel
+  gain (`SetRXAPanelGain1`, where AF is applied today), or an equivalent
+  that never divides by the AF. The AF-undo route (which returns 1.0 at or
+  below 0.001, `AudioEngine.cpp:2040-2053`) does not meet this. The
+  controller's own path stays as it is today. Read the WDSP source and
+  Thetis's callsite before choosing where the feed is taken, change no DSP
+  parameter or constant, and name the chosen point in the task report.
 
 Today:
 - Owner mixes sum only a device's own slices, each at the slice's shared
@@ -770,9 +865,11 @@ Interfaces:
 
 Acceptance:
 - A controls A0, B listens: the controller muting A0 (`SliceModel::muted`)
-  or lowering AF leaves B's sum unchanged (to 1e-6, AF above 0.001); B
-  muting leaves A's sum and the local output unchanged.
-- AF 0 (Q2): B hears silence and the test documents it; nothing else moves.
+  or lowering AF leaves B's sum unchanged (to 1e-6); B muting leaves A's
+  sum and the local output unchanged.
+- U5 over Q2: with the controller's AF at 0 and at maximum, B's level is
+  unchanged (to 1e-6) from its level at the starting AF; the controller's
+  own sum follows its AF as today.
 - Handoff under a running drain: B takes A0; neither A's nor B's sum has a
   gap longer than one period or a level step larger than the seeded level
   difference; no owner-mix slot is released or acquired; no receiver stream
@@ -785,6 +882,12 @@ Acceptance:
 - A level for a stale incarnation is refused and changes nothing.
 - Hosting desktop listening to a device's slice plays it locally at the
   host's level; the device's own mute does not silence the host.
+- U5: the controller moving its AF slider or muting changes only its own
+  sum; every listener's sum and the host's local output are unchanged (to
+  1e-6).
+- U5: B takes A0 from A. Neither device's level changes at the handoff: A
+  hears A0 at the level it had, B at the level it had as a listener; the
+  slider each device shows reads its own level.
 
 Verification: `tst_slice_listen_audio`, `tst_audio_engine_owner_mix`,
 `tst_audio_engine_slice_tap`, `tst_slice_audio_view_race` (TSan),
@@ -1090,8 +1193,10 @@ Verification: `tst_hosting_slice_operations`, `tst_multi_device_screens`,
 Implements: design "TX remains explicitly bound to the selected transmit
 slice even when a different slice is selected for receive. The current
 active-RX-dependent TX applet bindings need a safety audit"; "RX control
-never implicitly keys or grants transmit" (verification bullet 3).
-Depends on: Task 10; Q15. Model tier: opus.
+never implicitly keys or grants transmit" (verification bullet 3); JJ's
+ruling U8 (2026-09-28, "2 but for only slices tgat are activatyed show in
+the applet"): the TX applet letter row.
+Depends on: Task 10; Q15; U8. Model tier: opus.
 
 Today:
 - `TxApplet::txBand()` and `activeSliceForControls()` follow the window's
@@ -1110,6 +1215,18 @@ Change:
   controlled non-TX receive slice still drives them.
 - A test drives every TX-applet binding with window RX on a listened slice
   and TX on a controlled one.
+- U8 letter row: the TX applet shows one letter button per slice this
+  device controls, in its Aether color, and none for a listened or foreign
+  slice. The row follows take, release and handoff. Pressing a letter
+  selects that slice for transmit through the existing `tx.setTxSlice`
+  behavior, the same for every client (ruling 8.10): unkeyed it moves at
+  once; while keyed the transmitter unkeys through the unkey gate and the
+  flag moves once that is confirmed (`SessionCommandDispatcher.cpp:1585-1590`).
+  A remote window sends `tx.setTxSlice`; the hosting desktop calls the same
+  validated operation (Task 10). The verb's behavior does not change.
+- Correction (lead, 2026-09-28): an earlier version of this task added "idle
+  only; refused on air" to U8. That was the lead's addition, not JJ's
+  ruling, and is withdrawn; the row is not disabled on air.
 
 Files: `src/gui/applets/TxApplet.{h,cpp}`, `src/gui/MainWindow.cpp`,
 `tests/tst_tx_applet_binding.cpp` (new or the existing TxApplet test).
@@ -1117,15 +1234,28 @@ Files: `src/gui/applets/TxApplet.{h,cpp}`, `src/gui/MainWindow.cpp`,
 Interfaces:
 - `void TxApplet::setTransmitSliceResolver(std::function<SliceModel*()> resolver);`
   (replacing the fifth `setDesktopKeyHandlers` argument)
+- U8 row: the applet is given the slices this device controls and the
+  transmit slice, and emits a request naming a slice id; the implementer
+  names these in the report (they are consumed only inside this task and
+  Task 17's captures).
 
 Acceptance:
 - Window RX on listened B0 (20 m), TX bound on controlled A1 (40 m): TX band
   reads 40 m; power slider loads the 40 m value; no MOX, no holder change.
 - Selecting a listened slice for receive never changes `txBoundSliceId`,
   `m_chosenTxSlice` or the holder.
+- U8: device X controls A0 and C2 and listens to B1; the row shows A and C
+  only. Pressing C while unkeyed and holding transmit binds C2
+  (`txBoundSliceId` 2) with no key. Pressing C while on air on A0 unkeys A0
+  through the unkey gate, then binds C2 once the unkey is confirmed; nothing
+  keys C2. After Y takes A0, A leaves X's row; if A0 was X's transmit
+  selection it clears by the Q8 path.
+- U8: a device that does not hold transmit gets today's refusal words
+  (`StationServer.cpp:2576-2582`) and nothing changes.
 
 Verification: `tst_tx_applet_binding`, `tst_tx_slice_arbiter`,
-`tst_multi_device_screens`, offscreen, real load.
+`tst_multi_device_screens` (including a capture of the U8 row unkeyed and on
+air), offscreen, real load.
 
 ## Task 12: Phone contract note
 
@@ -1145,27 +1275,34 @@ extended select; `controlTaken`; capacity result values and question fields;
 local level semantics (the phone's volume never writes shared AF or mute);
 refusal words to show as sent; the approved behaviors and journeys; the
 phone parity gaps the deep scout found (log-only refusals, foreign note
-wording) as items for that PR; the UI questions U1 to U8 flagged as JJ's.
+wording) as items for that PR; JJ's desktop window rulings U1 to U8
+(2026-09-28), quoted, as the behavior the phone's receive-slice UI should
+match where it applies (per-device volume and mute, the listened wording,
+hearing only slices it can see, the transmit letter choice among controlled
+slices), with
+the phone's actual layout left to the phone crew's review.
 
 Files: `docs/architecture/2026-09-28-slice-access-phone-contract.md` (new).
 
 Acceptance: every wire name in the note matches `surface.json` after Task 9;
-no em dash; American spelling; no UI decision stated as settled.
+no em dash; American spelling; no phone layout stated as settled beyond
+JJ's rulings.
 
 Verification: `scripts/render-link-tables.py` shows no drift; a grep of the
 note's names against `tests/data/link/v1/surface.json` finds each one.
 
-## Task 13: Bottom RX chooser (approved area; row-to-pan focus BLOCKED)
+## Task 13: Bottom RX chooser
 
 Status: the bottom area is approved by JJ (design status line; G-118 "JJ
 said the bottom area seems good"). Build it to
-`nereus-slice-chooser-review.html`. Its effect on flags, applets and pans
-(U1 to U4) and any local audio control in a row (U5) are BLOCKED on JJ's
-full-flow review; until then the chooser's Select RX focuses only what it
-focuses today.
+`nereus-slice-chooser-review.html`, adjusted by JJ's rulings of 2026-09-28:
+row wording per U6, no volume control in a row (U5 keeps volume on the
+existing AF slider and mute), and Select RX placing or raising the slice's
+pan per U1 and U2 (built in Task 16; until Task 16 lands, Select RX focuses
+only what it focuses today).
 Implements: design "What the operator should be able to do" and the chooser
 paragraph; "An empty window still offers Choose a slice and New slice";
-deep scout P2 (misleading empty-state wording).
+deep scout P2 (misleading empty-state wording); U5, U6.
 Depends on: Tasks 5 and 10. Model tier: opus.
 
 Today:
@@ -1193,19 +1330,37 @@ Interfaces: `class SliceChooser : public QWidget` with
 `releaseRequested(int sliceId)`, `stopListeningRequested(int sliceId)`,
 `newSliceRequested()`, `selectRequested(int sliceId)`.
 
-Acceptance: offscreen capture at the reference geometry
-(`core-gui-multi-pan-reference-report.md`, 1440 by 900) matches the reviewed
-mockup's content; narrow width does not clip; every action shows pending
-then the Core's result; two same-named devices are told apart; zero-slice
-window offers both entries.
+Acceptance:
+- Offscreen capture at the reference geometry
+  (`core-gui-multi-pan-reference-report.md`, 1440 by 900) matches the
+  reviewed mockup's content as adjusted by U5 and U6; narrow width does not
+  clip.
+- U6 wording: a row this device controls reads "You control" and offers
+  Release; a row it listens to reads "Listening · controlled by <device>"
+  and offers Take control and Stop listening; a row on air shows "TX" in
+  red; an idle transmit selection shows "TX" as today.
+- Inspecting a row (selection or hover) sends nothing on the wire and
+  changes no window RX, TX, pan or slice state (signal spy on the model and
+  the session).
+- No row has a volume or mute control (U5).
+- Every action shows pending, then the Core's result or refusal words as
+  sent; a refused action changes nothing.
+- Two devices with the same display name are told apart (by id, not
+  name); this window and the Core's desktop are marked as such.
+- A zero-slice window offers Choose a slice and New slice, and the empty
+  state never blames another device after this device's own close
+  (deep scout P2).
+- `selectRequested` is emitted for Select RX; its pan effect is Task 16's
+  acceptance.
 
 Verification: `tst_slice_chooser`, `tst_multi_device_screens` with
 `NEREUS_TASK78_SHOTS` captures reviewed by the controller before any launch.
 
-## Task 14: Joined flags, foreign markers and same-pan stacking (BLOCKED on U4, U6)
+## Task 14: Joined flags, foreign markers and same-pan stacking
 
-Implements: design full-window proposal bullet 2; G-119 palette.
-Depends on: Task 13 and JJ's ruling. Model tier: opus.
+Implements: design full-window bullet 2; G-119 palette; JJ's rulings U4,
+U5 and U6 (2026-09-28).
+Depends on: Task 13; Task 6 for the per-device level. Model tier: opus.
 
 Today: a hosting flag not station-owned is hidden (`MainWindow.cpp:1708-1729`;
 `src/gui/widgets/VfoWidget.cpp:2489-2495`); foreign slices are dashed markers with owner,
@@ -1213,40 +1368,80 @@ away and TX cues (`MainWindow::refreshForeignMarkers`, `MainWindow.cpp:2034+`); 
 `muted`, pan and AF (`MainWindow.cpp:3166-3168`, `:3312-3317`; `src/gui/widgets/VfoWidget.cpp:1245-1271`,
 `:1369-1390`).
 
-Change (as ruled): a joined listened flag with letter and color unchanged,
-"Listening" plus controller name, shared tuning controls disabled with the
-controller named, Take control and Stop listening reachable, local
-level/mute bound to the listen level (U5); stacking per U4.
+Change (as ruled): a controlled flag reads "You control" with Release in
+its menu; a listened flag keeps its letter and Aether color and reads
+"Listening · controlled by <device>", with Take control and Stop listening
+in its menu and its tuning controls disabled with "<device> controls this
+slice"; "TX" as today, red on air (U6). The flag's existing AF slider and
+mute set this device's own level for both controlled and listened slices,
+never `SliceModel::afGain` or `muted` on a listened slice; on a listened
+slice the slider is labeled "Your volume" (U5). Stacking keeps today's
+selected-flag-on-top rule (U4). Slices not joined here stay dashed foreign
+markers.
 
-Acceptance: to be written from JJ's ruling; at minimum a listener's flag
-never writes `SliceModel` tuning, AF or mute (signal spy), and a capture
-shows each state.
+Acceptance:
+- A controlled flag shows "You control" and its menu offers Release; a
+  listened flag shows "Listening · controlled by <device>" with the
+  controller's device name, and its menu offers Take control and Stop
+  listening (U6).
+- On a listened flag every tuning control (frequency, mode, filter, DSP) is
+  disabled and says "<device> controls this slice"; a signal spy shows no
+  `SliceModel` tuning write and no wire tuning message from any of them.
+- A listened flag keeps its slice's letter and Aether color (U4).
+- On a listened flag the AF slider reads "Your volume"; moving it or
+  pressing mute changes only this device's level (Task 6's verb or its
+  in-process call); `SliceModel::afGain` and `muted` are unchanged, and the
+  controller's and other listeners' sums are unchanged (U5).
+- On a controlled flag the AF slider and mute change only this device's
+  hearing; a listener's sum is unchanged (U5, Task 6 consequence).
+- "TX" shows on the transmit slice's flag as today and turns red on air
+  (U6).
+- A controlled and a listened slice on one pan: the selected slice's flag
+  is on top; selecting the other brings its flag forward (U4, today's rule
+  at `PanadapterApplet.cpp:118-134,197-213`).
+- Offscreen captures show each state: controlled idle, controlled with TX
+  selected, controlled on air, listened, listened under a controlled flag
+  on one pan, and a foreign marker.
 
 Verification: `tst_multi_device_screens`, `tst_remote_window_harness`
 captures.
 
-## Task 15: RX applet tabs, listener gating and local volume and mute (BLOCKED on U5)
+## Task 15: RX applet tabs and listener gating
 
-Implements: design full-window proposal bullet 3.
-Depends on: Task 14 and JJ's ruling. Model tier: opus.
+Implements: design full-window bullet 3; JJ's rulings U5, U6 and U7
+(2026-09-28). U7 supersedes the earlier plan for tabs of hidden joined
+slices: a device hears only slices it can see, so every joined slice is
+visible and there are no hidden-slice tabs. U5 keeps volume and mute on the
+existing surfaces; the RX applet gains no volume or mute.
+Depends on: Task 14. Model tier: opus.
 
 Today: RX applet tabs list only station-owned slices on a hosting window, via `RxApplet::updateSliceButtons` (`RxApplet.cpp:1411`)
 (`MainWindow.cpp:1711-1740`); its controls write `SliceModel` directly
 (for example the mode combo at `RxApplet.cpp:614-619`); its mute button was removed, VfoWidget is the mute surface (`RxApplet.cpp:1190`, `:1605`).
 
-Change (as ruled): tabs for every joined slice including hidden ones;
-shared tuning and DSP disabled for a listener with the controller named;
-local volume and mute bound to the listen level; Take control reachable.
+Change (as ruled): tabs for every slice this device controls or listens
+to; shared tuning and DSP disabled for a listened slice with "<device>
+controls this slice" (U6); Take control reachable from a listened tab.
 
-Acceptance: to be written from the ruling; at minimum no listener edit
-reaches `SliceModel` or the wire.
+Acceptance:
+- Tabs list exactly the slices this device controls or listens to; a
+  slice not joined here has no tab.
+- After a layout change stops listening to a slice (U7, Task 16), its tab
+  goes away; no tab ever exists for a slice this device cannot see.
+- On a listened tab every shared tuning and DSP control is disabled and
+  says "<device> controls this slice"; a signal spy shows no `SliceModel`
+  write and no wire message from any of them; Take control is reachable.
+- The RX applet has no volume or mute control (U5; `RxApplet.cpp:1190-1191`).
+- Selecting a listened tab changes window RX (bottom bar, flag focus) and
+  never changes the transmit selection or the holder.
 
 Verification: `tst_rx_applet_*`, `tst_multi_device_screens` captures.
 
-## Task 16: Multiple pans, unseen slices, floating focus, background click and layout changes (BLOCKED on U1, U2, U3, U7)
+## Task 16: Multiple pans, unseen slices, floating focus, background click and layout changes
 
-Implements: design full-window proposal bullets 1 and 5; G-126.
-Depends on: Task 15 and JJ's ruling. Model tier: opus.
+Implements: design full-window bullets 1 and 5; G-126; JJ's rulings U1,
+U2, U3 and U7 (2026-09-28).
+Depends on: Task 15. Model tier: opus.
 
 Today: `applyPanLayout` rehomes and spreads slices and `populatePanSlices`
 adds a slice to every empty pane (`MainWindow.cpp:13853-13958`); the layout
@@ -1255,14 +1450,45 @@ focus only (`PanadapterApplet.cpp:217-234`); floating reparents without
 changing identity (`PanadapterStack::floatPanadapter` `:481`, `dockPanadapter` `:534`); spectrum actions target
 the emitting pan's slice through `sliceForPan` (`MainWindow.cpp:3936-3980`, `:4179`, `:4222-4261`).
 
-Change (as ruled): showing an unseen joined slice per U1 without allocating
-or retuning; floating focus per U2; background click per U3; layout changes
-per U7 never moving, recreating or spending a DDC for a listened slice;
-every control keeps an explicit target slice.
+Change (as ruled): showing an unseen slice goes into the main window (U1):
+an existing main-window pan showing it comes forward, else an empty
+main-window pan, else the main window grows to a pan layout that fits in
+the single window, or asks for a named destination; never a new floating
+pan. A slice in a floating pan raises that floater and switches the main
+window's RX to it (U2). A pan background click keeps display-only focus
+(U3). A layout change that removes the only pan showing a listened slice
+stops listening to it on this device with a plain notice; controlled slices
+keep today's rehoming (U7). Every control keeps an explicit target slice.
 
-Acceptance: to be written from the ruling; at minimum a layout change with a
-listened slice leaves slice count, streams, DDC mask and the controller's
-tuning unchanged.
+Acceptance:
+- U1, placement order: with the slice already in a main-window pan, that
+  pan comes forward; with none showing it and an empty main-window pan,
+  that pan shows it; with no empty pan, the main window grows to a layout
+  that fits in the single window and the new pan shows it; when no larger
+  layout fits, the operator is asked to name a destination pan (reading
+  confirmed by the lead, 2026-09-28). In every
+  case: slice count, DDC mask and the controller's frequency, mode and
+  filter are unchanged, no floating window is created, and growing the
+  layout for placement adds no new slice to any other empty pan.
+- U2: Select RX (chooser row, flag or tab) on a slice showing in a
+  floating pan raises that floater and sets the main window's RX to it; the
+  floater's pan is not reparented or docked, the slice keeps its pan, and no
+  second view of it is created.
+- U3: a pan background click changes keyboard and scroll focus only; window
+  RX, the pan's selected slice, the transmit selection and the wire are
+  unchanged (signal spy). A flag or tab click still changes window RX.
+- U7, listened slice: shrinking the layout so no remaining pan of this
+  device shows listened B0 stops listening to B0 on this device through
+  Task 4's stop-listening path, shows a plain notice naming the slice, and
+  leaves B0, its controller's tuning, the other listeners' audio, slice
+  count and DDC mask unchanged.
+- U7, controlled slice: shrinking the layout rehomes a controlled slice
+  into a remaining pan as today (`tst_slice_rehome_on_layout_shrink` still
+  passes).
+- U7 invariant: after any layout change, every slice this device controls
+  or listens to is shown in one of this device's pans (checked over the
+  preset layouts with a mix of controlled and listened slices).
+- A layout change never recreates a listened slice or spends a DDC for it.
 
 Verification: `tst_panadapter_stack_layouts`, `tst_pan_floating_window`,
 `tst_slice_rehome_on_layout_shrink`, `tst_pan_active_slice_sync`,
@@ -1296,6 +1522,12 @@ until JJ authorizes a bench session):
   here; phone in its PR per Task 12). The real desktop layout is verified
   offscreen before any preview launch JJ authorizes; the HTML mockup is not
   evidence. (Tasks 10, 13 to 16)
+- JJ's window rulings hold end to end on the desktop: placement without a
+  new floating pan, receiver or tuning change (U1), floater raise without a
+  move (U2), display-only background click (U3), stacking and wording (U4,
+  U6), per-device volume and mute including the controller's (U5), a
+  device hears only slices it can see (U7), and the TX applet letter row
+  (U8). (Tasks 6, 11, 13 to 16)
 - Full affected suites (labels `core`, `session`, `audio`, `gui`) once at the
   end, offscreen, at real load, with load average and step count recorded;
   whole-branch review by one reviewer.
