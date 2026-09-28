@@ -563,6 +563,69 @@ void StepAttenuatorController::setAttOnTxValue(int dB)
 #endif
 }
 
+void StepAttenuatorController::setAttOnTxEnabled(bool on)
+{
+    // From Thetis console.cs:19071-19094 [v2.10.3.15] ATTOnTX setter:
+    //   if (!value && _auto_attTX_when_not_in_ps) return; // ignore in this case
+    //   m_bATTonTX = value;
+    //   updateAttNudsCombos();
+    //   if (PowerOn) {
+    //       if (m_bATTonTX) {
+    //           int txatt = getTXstepAttenuatorForBand(_tx_band);
+    //           NetworkIO.SetTxAttenData(txatt); //[2.10.3.6]MW0LGE att_fixes
+    //           Display.TXAttenuatorOffset = txatt; //[2.10.3.6]MW0LGE att_fixes
+    //       } else {
+    //           NetworkIO.SetTxAttenData(0);
+    //           Display.TXAttenuatorOffset = 0;
+    //       }
+    //   }
+    // NereusSDR has no _auto_attTX_when_not_in_ps option, so the early
+    // return has nothing to test. The HL2 "31 - txatt" wire form
+    // (mi0bot console.cs:19164-19167 [v2.10.3.13-beta2] // MI0BOT: Greater
+    // range for HL2) lives in the HL2 codec's setTxStepAttenuation.
+    if (m_attOnTxEnabled == on) { return; }
+    m_attOnTxEnabled = on;
+    emit attOnTxEnabledChanged(on);
+    scheduleSave();  // R-R3-49 (group A fix wave, M6): saved at once on the Core
+
+    // updateAttNudsCombos(): while keyed Thetis shows udTXStepAttData over
+    // the receive attenuator only when m_bATTonTX is set
+    // (console.cs:29287-29291 [v2.10.3.15]). NereusSDR has one bound S-ATT
+    // readout, so it swaps the value the same way onMoxHardwareFlipped does.
+    // The HPSDR board keys through the preamp path instead and keeps it.
+    const int txAtt = m_attOnTxEnabled ? applyTxAttenuationForBand(m_txBand) : 0;
+    if (m_isMox && !m_isHpsdrBoard) {
+        if (m_attOnTxEnabled) {
+            if (!m_savedRxAttDbValid) {
+                m_savedRxAttDbForTx = m_attDb;
+                m_savedRxAttDbValid = true;
+            }
+            if (m_attDb != txAtt) {
+                m_attDb = txAtt;
+                emit attenuationChanged(txAtt);
+            }
+        } else if (m_savedRxAttDbValid) {
+            m_savedRxAttDbValid = false;
+            if (m_attDb != m_savedRxAttDbForTx) {
+                m_attDb = m_savedRxAttDbForTx;
+                emit attenuationChanged(m_attDb);
+            }
+        }
+    }
+
+    // if (PowerOn): the radio is connected.
+    if (m_connection) {
+        RadioConnection* conn = m_connection.get();
+        QMetaObject::invokeMethod(conn, [conn, txAtt]() {
+            conn->setTxStepAttenuation(txAtt); //[2.10.3.6]MW0LGE att_fixes
+        });
+        setTxAttenuatorOffset(txAtt); //[2.10.3.6]MW0LGE att_fixes
+#ifdef NEREUS_BUILD_TESTS
+        m_lastTxStepAttDb = txAtt;
+#endif
+    }
+}
+
 void StepAttenuatorController::setTxAttenuatorOffset(int dB)
 {
     // From Thetis display.cs:1365-1370 [v2.10.3.15]:
