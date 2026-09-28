@@ -101,6 +101,16 @@ public:
     /// Frames the engine published into this source's latest-frame slot,
     /// each replacing the one before (so it can exceed frameAvailable).
     quint64 publishedFrames(const MediaSourceKey& key) const;
+    /// Read-only source queue state for diagnosing a slow first context.
+    struct InputQueueDiagnostics {
+        quint64 generation{0};
+        bool active{false};
+        bool configurationPending{false};
+        bool drainQueued{false};
+        int pendingIqFloats{0};
+        int maxPendingIqFloats{0};
+    };
+    InputQueueDiagnostics inputQueueDiagnostics(const MediaSourceKey& key) const;
     /// The decimation the source's engine runs at (FFTEngine::decimation),
     /// 0 for an unknown source.
     int engineDecimation(const MediaSourceKey& key) const;

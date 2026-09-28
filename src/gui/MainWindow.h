@@ -103,6 +103,7 @@
 
 #include <functional>
 #include <memory>
+#include <map>
 #include <QMainWindow>
 #include <QLabel>
 #include <QAction>
@@ -239,6 +240,8 @@ public:
     void retireForSessionSwitch();
     void setConnectionPickerManaged(bool managed);
     RadioModel* radioModel() const { return m_radioModel; }
+    FftEnginePool* fftEnginePoolForTest() const { return m_fftEnginePool; }
+    int miniProducerCountForTest() const { return int(m_miniProducers.size()); }
 
     // R-R3-49 / R-R3-21: true in a test run (QStandardPaths test mode, set
     // before main() by tests/TestSandboxInit.cpp), false in the app. A test
@@ -832,6 +835,11 @@ private slots:
     void refreshContainerFrequency(SliceModel* slice);
     void watchContainerItems(QWidget* content);
     void onContainerItemAdded(MeterItem* item);
+    void reconcileMiniDisplays();
+    void presentMiniFrame(int sliceId, const QVector<float>& traceDbm,
+                          const QVector<float>& waterfallDbm, double centreHz,
+                          double spanHz, bool transmit, bool advance);
+    void clearMiniSlice(int sliceId);
     void watchSlicesForContainers();
     SliceModel* containerSlice(const class ContainerWidget* container) const;
     void onContainerModeClicked(class ContainerWidget* container, int index);
@@ -1137,6 +1145,8 @@ private:
     QPointer<DiversityDialog> m_diversityDialog;
     // R-R3-21: every slice's signals the container controls follow.
     QList<QMetaObject::Connection> m_containerSliceConnections;
+    struct MiniProducer;
+    std::map<int, std::unique_ptr<MiniProducer>> m_miniProducers;
     // R-R3-21 / R-R3-49: maps each container function and band button to
     // its target on the container's own slice.
     std::unique_ptr<ContainerButtonDispatcher> m_containerButtons;

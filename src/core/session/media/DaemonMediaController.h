@@ -557,7 +557,7 @@ private:
     // with `duplex` true) to RadioModel::setDeviceDisplayDuplex.
     void refreshDeviceDisplayDuplex();
     std::optional<QJsonObject> transmitContextFor(const EndpointEntry& entry) const;
-    void onTransmitPlane(const QVector<float>& dbm, bool waterfall);
+    void onTransmitPlane(const QVector<float>& dbm, bool waterfall, bool mini = false);
     bool trySendTransmitFrame(quint32 endpointId, MediaPeer* peer, quint64 epoch,
                               qint64 nowNs);
     // Task 36: the microphone line.

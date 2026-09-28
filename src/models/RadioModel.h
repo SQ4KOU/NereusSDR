@@ -1380,6 +1380,10 @@ public:
     // or rate changes; coreFilterResponse() holds the latest.
     void setCoreFilterResponseWanted(bool wanted);
     const FilterResponse& coreFilterResponse() const { return m_coreFilterResponse; }
+    // Container minis retain a response per owning slice; a late reply for
+    // one slice cannot replace another slice's curve.
+    void setMiniFilterResponseSlices(const QSet<int>& sliceIds);
+    FilterResponse miniFilterResponse(int sliceId) const;
     // Why a remote window cannot draw its Core's curve, or empty.
     QString coreFilterResponseUnavailableReason() const;
     // Remote window: the Core answered dsp.filterResponse `commandId`.
@@ -5042,6 +5046,7 @@ signals:
     void stationLogCategoriesRefused(const QString& reason);
     // Remote-window parity Task 16: coreFilterResponse() changed.
     void coreFilterResponseChanged();
+    void miniFilterResponseChanged(int sliceId);
 
     // Phase 3Q Task 10: auto-connect failure signals.
     //
@@ -7378,6 +7383,18 @@ private:
     void requestCoreFilterResponse();
     void watchCoreFilterResponseSlice();
     SliceModel* coreFilterResponseSlice() const;
+    struct MiniFilterResponseState {
+        FilterResponse response;
+        quint64 serial{0}; // changes when demand is removed and later recreated
+        quint32 command{0};
+        bool dirty{false};
+        QList<QMetaObject::Connection> connections;
+    };
+    QHash<int, MiniFilterResponseState> m_miniFilterResponses;
+    friend class TestMiniFilterResponseLifecycle;
+    quint64 m_nextMiniFilterResponseSerial{0};
+    quint64 m_miniFilterDemandSetEpoch{0};
+    void requestMiniFilterResponse(int sliceId);
     // R-R3-32 (parity Task 6): the Core's PA readings in a remote window,
     // and in a local one whether a telemetry sample has reported the PA
     // current and the PA temperature since connect.

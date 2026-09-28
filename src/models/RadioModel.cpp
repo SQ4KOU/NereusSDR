@@ -3605,6 +3605,7 @@ RadioModel::~RadioModel()
     m_rfKitBandFollow.reset();
     m_stationTci.reset();
     teardownConnection();
+    if (m_txDisplayFeed) { m_txDisplayFeed->stopMini(); }
     if (m_txLane) {
         // R-R3-39: the transmit lane's jobs run before it goes (TX before RX,
         // as WDSP's teardown order has it).
@@ -7544,14 +7545,30 @@ void RadioModel::setStationDspInfoVersion(int version)
     if (m_role != Role::Remote) {
         return;
     }
+    const QPointer<RadioModel> self(this);
     const bool changed = m_stationDspInfoVersion != version;
     m_stationDspInfoVersion = version;
     if (changed) {
         emit stationDspInfoVersionChanged();
+        if (!self) { return; }
     }
+    if (m_stationDspInfoVersion != version) { return; }
     if (m_coreFilterResponseWanted) {
         watchCoreFilterResponseSlice();
         requestCoreFilterResponse();
+        if (!self) { return; }
+    }
+    QVector<QPair<int, quint64>> demands;
+    demands.reserve(m_miniFilterResponses.size());
+    for (auto it = m_miniFilterResponses.cbegin(); it != m_miniFilterResponses.cend(); ++it) {
+        demands.append({it.key(), it->serial});
+    }
+    for (const auto& [sliceId, serial] : demands) {
+        const auto current = m_miniFilterResponses.constFind(sliceId);
+        if (current == m_miniFilterResponses.cend() || current->serial != serial
+            || m_stationDspInfoVersion != version) { continue; }
+        requestMiniFilterResponse(sliceId);
+        if (!self) { return; }
     }
 }
 
@@ -7733,11 +7750,98 @@ void RadioModel::requestCoreFilterResponse()
     m_coreFilterResponseCommand = outcome.commandId != 0 ? outcome.commandId : 1;
 }
 
+void RadioModel::setMiniFilterResponseSlices(const QSet<int>& sliceIds)
+{
+    if (m_role != Role::Remote) { return; }
+    const QPointer<RadioModel> self(this);
+    const quint64 setEpoch = ++m_miniFilterDemandSetEpoch;
+    for (auto it = m_miniFilterResponses.begin(); it != m_miniFilterResponses.end();) {
+        if (sliceIds.contains(it.key()) && sliceById(it.key())) { ++it; continue; }
+        for (const auto& connection : it->connections) { disconnect(connection); }
+        it = m_miniFilterResponses.erase(it);
+    }
+    for (int sliceId : sliceIds) {
+        if (m_miniFilterDemandSetEpoch != setEpoch) { return; }
+        if (m_miniFilterResponses.contains(sliceId)) { continue; }
+        SliceModel* slice = sliceById(sliceId);
+        if (!slice) { continue; }
+        MiniFilterResponseState& state = m_miniFilterResponses[sliceId];
+        state.serial = ++m_nextMiniFilterResponseSerial;
+        const auto again = [this, sliceId]() { requestMiniFilterResponse(sliceId); };
+        state.connections << connect(slice, &SliceModel::filterChanged, this, again)
+                          << connect(slice, &SliceModel::dspModeChanged, this, again)
+                          << connect(slice, &SliceModel::minNotchWidthHzChanged, this, again)
+                          << connect(slice, &SliceModel::streamIndexChanged, this, again);
+        requestMiniFilterResponse(sliceId);
+        if (!self) { return; }
+        if (m_miniFilterDemandSetEpoch != setEpoch) { return; }
+    }
+}
+
+RadioModel::FilterResponse RadioModel::miniFilterResponse(int sliceId) const
+{
+    const auto found = m_miniFilterResponses.constFind(sliceId);
+    return found == m_miniFilterResponses.cend() ? FilterResponse{} : found->response;
+}
+
+void RadioModel::requestMiniFilterResponse(int sliceId)
+{
+    auto found = m_miniFilterResponses.find(sliceId);
+    if (found == m_miniFilterResponses.end()) { return; }
+    const QPointer<RadioModel> self(this);
+    const quint64 serial = found->serial;
+    found->response = {};
+    emit miniFilterResponseChanged(sliceId);
+    if (!self) { return; }
+    found = m_miniFilterResponses.find(sliceId);
+    if (found == m_miniFilterResponses.end() || found->serial != serial) { return; }
+    if (found->command != 0) { found->dirty = true; return; }
+    if (m_role != Role::Remote || !m_station || m_stationDspInfoVersion < 1
+        || !sliceById(sliceId)) { return; }
+    const IStationLink::CommandOutcome outcome =
+        m_station->requestFilterResponse(sliceId, /*highResolution=*/true);
+    if (!self) { return; }
+    found = m_miniFilterResponses.find(sliceId);
+    if (found == m_miniFilterResponses.end() || found->serial != serial) { return; }
+    if (outcome.sent) {
+        found->command = outcome.commandId != 0 ? outcome.commandId : 1;
+        found->dirty = false;
+    }
+}
+
 void RadioModel::reportStationFilterResponse(quint32 commandId, bool accepted,
                                              const QString& reason, double startHz,
                                              double stepHz, const QString& json)
 {
     Q_UNUSED(reason);
+    const QPointer<RadioModel> self(this);
+    for (int sliceId : m_miniFilterResponses.keys()) {
+        auto it = m_miniFilterResponses.find(sliceId);
+        if (it == m_miniFilterResponses.end() || it->command != commandId
+            || it->command == 0) { continue; }
+        const quint64 serial = it->serial;
+        const bool again = it->dirty;
+        it->command = 0;
+        it->dirty = false;
+        FilterResponse response;
+        if (accepted) {
+            const auto values = filterResponseFromJson(json);
+            if (values && std::isfinite(startHz) && std::isfinite(stepHz)
+                && stepHz > 0.0) {
+                response.startHz = startHz;
+                response.stepHz = stepHz;
+                response.magnitudesDb = *values;
+            }
+        }
+        it->response = std::move(response);
+        emit miniFilterResponseChanged(sliceId);
+        if (!self) { return; }
+        it = m_miniFilterResponses.find(sliceId);
+        if (again && it != m_miniFilterResponses.end() && it->serial == serial) {
+            requestMiniFilterResponse(sliceId);
+        }
+        return;
+    }
     if (m_coreFilterResponseCommand == 0 || commandId != m_coreFilterResponseCommand) {
         return;
     }
@@ -7756,6 +7860,7 @@ void RadioModel::reportStationFilterResponse(quint32 commandId, bool accepted,
         m_coreFilterResponse = FilterResponse{};
     }
     emit coreFilterResponseChanged();
+    if (!self) { return; }
     if (m_coreFilterResponseDirty) {
         requestCoreFilterResponse();
     }
@@ -7767,6 +7872,21 @@ void RadioModel::failStationFilterResponse()
     // next session asks afresh (setStationDspInfoVersion).
     m_coreFilterResponseCommand = 0;
     m_coreFilterResponseDirty = false;
+    const QPointer<RadioModel> self(this);
+    QVector<QPair<int, quint64>> failedDemands;
+    failedDemands.reserve(m_miniFilterResponses.size());
+    for (auto it = m_miniFilterResponses.cbegin(); it != m_miniFilterResponses.cend(); ++it) {
+        failedDemands.append({it.key(), it->serial});
+    }
+    for (const auto& [sliceId, serial] : failedDemands) {
+        auto it = m_miniFilterResponses.find(sliceId);
+        if (it == m_miniFilterResponses.end() || it->serial != serial) { continue; }
+        it->command = 0;
+        it->dirty = false;
+        it->response = {};
+        emit miniFilterResponseChanged(sliceId);
+        if (!self) { return; }
+    }
 }
 
 void RadioModel::refreshSliceMinNotchWidths()
@@ -20186,6 +20306,10 @@ void RadioModel::teardownConnection()
     if (!m_connection) {
         return;
     }
+    // Detach the extra mini analyzer from the TX siphon before WDSP queues
+    // its channel-close barrier. DestroyAnalyzer follows detach on the
+    // transmit lane; a reconnect cannot feed the old display slot.
+    if (m_txDisplayFeed) { m_txDisplayFeed->stopMini(); }
     m_widebandConnectionEpoch.fetch_add(1, std::memory_order_acq_rel);
     // Retire every availability offer before notifying observers. The P2
     // object and Connected state remain live during the rest of teardown.

@@ -122,7 +122,7 @@ enum class UnbuiltFeature {
     GanymedeTrip,     // Status PA badge: Andromeda/Ganymede CAT trip input is not ported
     DisableHfPa,      // Setup > Transmit > Power: HF PA relay routing refresh is not ported
     PbSnr,            // Multimeter PBSNR binding has no producer
-    ContainerFilterDisplay, // Container FIR curve binds, but spectrum/waterfall feed is absent
+    ContainerFilterDisplay, // Feed implemented; gate awaits loaded FFT startup acceptance
     ContainerClickBox, // Container click box has no host action routing
     AudioBitDepth,    // Audio Devices bit-depth hint is not consumed by an audio backend
     AudioAutoMatch,   // Audio Devices default sample-rate lookup is not ported

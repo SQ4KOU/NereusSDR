@@ -159,6 +159,7 @@ void AppletPanelWidget::setHeaderWidget(QWidget* widget, const QString& title,
     // Set initial height based on current width
     int h = qMax(80, static_cast<int>(width() / aspectRatio));
     widget->setFixedHeight(h);
+    emit headerWidgetChanged(widget);
 }
 
 void AppletPanelWidget::clearHeaderWidget()
@@ -179,6 +180,7 @@ void AppletPanelWidget::clearHeaderWidget()
     }
     m_headerWidget = nullptr;
     m_headerAspect = 0.0f;
+    emit headerWidgetChanged(nullptr);
 }
 
 void AppletPanelWidget::resizeEvent(QResizeEvent* event)
@@ -374,6 +376,7 @@ void AppletPanelWidget::addWidget(QWidget* widget, const QString& title)
     // Insert before the trailing stretch
     int idx = m_stackLayout->count() - 1;
     m_stackLayout->insertWidget(idx, wrapped);
+    emit panelWidgetAdded(widget);
 }
 
 QWidget* AppletPanelWidget::wrapWithTitleBar(QWidget* child, const QString& title,

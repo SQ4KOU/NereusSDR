@@ -176,6 +176,9 @@ public:
 
     quint64 receivedDisplayFrames() const;
     int activeEndpointCount() const;
+    // One remote mini analyzer endpoint per wanted receiver slice. Callers
+    // fan accepted frames to every visible container that owns the slice.
+    void setMiniDisplaySlices(const QSet<int>& sliceIds);
     std::optional<MediaPeerTelemetry> trafficTelemetry() const;
     /// Display updates this computer received but discarded, oldest first,
     /// because newer ones arrived before it could show them. Zero without a
@@ -462,6 +465,10 @@ signals:
                                  const NereusSDR::SpectrumContextMessage& context);
     /// Parity Task 28: one transmit display frame for the pan, decoded.
     void transmitFrameReceived(const QString& panId, const NereusSDR::DisplayCodecFrame& frame);
+    void miniDisplayFrame(int sliceId, const QVector<float>& traceDbm,
+                          const QVector<float>& waterfallDbm, double centreHz,
+                          double spanHz, bool transmit, bool waterfallAdvance);
+    void miniDisplayUnavailable(int sliceId);
     /// Once per accepted audio context, after playback was started or
     /// stopped for it. A malformed or stale context emits nothing.
     void audioContextAccepted();
@@ -480,6 +487,7 @@ private:
     void settleWithoutRetry(quint32 expectedEpoch, const QString& reason);
     void refreshSubscriptions();
     void refreshBudgetSubscriptions();
+    void refreshLegacyMiniSubscriptions();
     // Parity Task 32: the monitor-audio request and its answer.
     void requestMonitorAudio();
     void sendIqRequest(int sliceId, bool enabled);

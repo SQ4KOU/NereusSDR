@@ -733,7 +733,11 @@ colours for the same signal.
   negotiates a mini display role only with declaring peers and applies TX takeover
   only to the actual transmitting slice. Surface/conformance/session checks and
   the full TX-display suite pass. GUI and independent local/remote TX analyzer
-  wiring remain in progress; the visible feature stays gated.
+  wiring are now implemented in signed `29ebbf388`, including panel header/body
+  fanout and a separate TX analyzer. The integrated app/Core build and nine
+  focused suites passed (74.86 seconds). The visible feature stays gated while
+  the source-queue overflow finding in G-63 is corrected and verified; this is
+  not final feature acceptance.
 - Plan: remote-window parity container meters and filter display.
 
 ### G-47: Expected transmit silence falsely restarts relay media

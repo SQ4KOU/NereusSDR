@@ -613,6 +613,8 @@ warren@wpratt.com
 #include "core/spectrum/FftEnginePool.h"
 #include "core/spectrum/FftTopology.h"
 #include "core/TxAnalyzer.h"
+#include "core/TxDisplayFeed.h"
+#include "gui/widgets/GradientPickerWidget.h"
 #include "core/NbFamily.h"
 #include "core/ClarityController.h"
 #include "core/StepAttenuatorController.h"
@@ -633,6 +635,8 @@ warren@wpratt.com
 #include "containers/ContainerButtonDispatcher.h"
 #include "containers/ContainerSettingsDialog.h"
 #include "meters/MeterWidget.h"
+#include "meters/FilterDisplayItem.h"
+#include "core/spectrum/SpectrumReducer.h"
 #include "meters/MeterItem.h"
 #include "meters/ItemGroup.h"
 #include "meters/MeterPoller.h"
@@ -791,6 +795,7 @@ warren@wpratt.com
 #include <QJsonObject>
 #include <QVersionNumber>
 #include <QPointer>
+#include <QElapsedTimer>
 #include <QShortcut>
 
 #include <cmath>
@@ -858,6 +863,30 @@ QString testTxBoundReRouteToolTip()
 }
 } // namespace
 
+struct MainWindow::MiniProducer {
+    QPointer<SliceModel> slice;
+    QList<QPointer<FilterDisplayItem>> items;
+    SpectrumReducer trace;
+    SpectrumReducer waterfall;
+    ReducerConfig geometry;
+    ReducerConfig waterfallGeometry;
+    int streamIndex{-1};
+    quint64 streamEpoch{0};
+    int binCount{0};
+    QElapsedTimer cadence;
+    RadioModel::FilterResponse filterResponse;
+    int filterLow{0};
+    int filterHigh{0};
+    int sampleRate{0};
+    DSPMode dspMode{};
+    bool filterCached{false};
+    QString gradientKey;
+    QVector<QColor> customGradient;
+    bool gradientTx{false};
+    QVector<float> txTrace;
+    QVector<float> txWaterfall;
+};
+
 MainWindow::MainWindow(QWidget* parent)
     : MainWindow(RemoteStationOptions{}, parent)
 {
@@ -875,6 +904,20 @@ MainWindow::MainWindow(const RemoteStationOptions& station, QWidget* parent,
                                                        : RadioModel::Role::Local,
                                   this))
 {
+    connect(m_radioModel, &RadioModel::miniFilterResponseChanged, this,
+            [this](int sliceId) {
+        const auto found = m_miniProducers.find(sliceId);
+        if (found == m_miniProducers.end()) { return; }
+        const auto response = m_radioModel->miniFilterResponse(sliceId);
+        SliceModel* slice = found->second->slice;
+        if (!slice) { return; }
+        for (const auto& item : found->second->items) {
+            if (item && item->frameAvailable()) {
+                item->setRfFilterResponse(response.magnitudesDb,
+                    response.startHz, response.stepHz, slice->frequency());
+            }
+        }
+    });
     // ── Phase 23 (bench fix 2026-05-10): TCI Server BEFORE buildUI ───────────
     // TciApplet + ClientChainApplet are constructed by populateDefaultMeter()
     // (called from buildUI), gated on `if (m_tciServer)`. The original Phase
@@ -1887,6 +1930,10 @@ void MainWindow::ensureRemoteSession()
                 this, &MainWindow::applyRemoteRoleGating);
         m_remoteMedia = new RemoteMediaController(m_stationClient, m_radioModel,
                                                m_panStack, m_stationClient);
+        connect(m_remoteMedia, &RemoteMediaController::miniDisplayFrame, this,
+                &MainWindow::presentMiniFrame);
+        connect(m_remoteMedia, &RemoteMediaController::miniDisplayUnavailable, this,
+                &MainWindow::clearMiniSlice);
         // Remote-window parity Task 29 (A11, R-R3-49, R-R3-12): while the
         // Core is keyed the pan hosting the transmitting slice shows the
         // Core's transmit display with the transmit grid, palette,
@@ -4326,6 +4373,106 @@ void MainWindow::dispatchFftFrameToPans(int streamIndex,
                                         double windowEnb,
                                         double dbmOffset)
 {
+    if (m_radioModel && m_panStack
+        && m_radioModel->role() != RadioModel::Role::Remote) {
+        // From Thetis MeterManager.cs:43362-43363,44463-44477 [@3759d096]
+        // [v2.10.3.15]: each receiver has its own 1024-pixel, 30-fps
+        // RF window at twice MaxFilterWidth (console.cs:13221 = 10000 Hz).
+        constexpr double kMiniRxSpanHz = 20'000.0;
+        constexpr int kMiniPixels = FilterDisplayItem::kSpectrumPixels;
+        constexpr int kMiniFramePeriodMs = 1000 / 30;
+        for (auto& [sliceId, producer] : m_miniProducers) {
+            SliceModel* slice = producer->slice;
+            if (!slice || slice->streamIndex() != streamIndex
+                || (m_radioModel->isTransmitting()
+                    && m_radioModel->txBoundSlice() == slice)) {
+                continue;
+            }
+            const double centreHz = slice->frequency();
+            const double sourceHz = m_radioModel->streamCentreHz(streamIndex);
+            const double rateHz = m_radioModel->streamSampleRateHz(streamIndex);
+            if (!m_radioModel->streamActive(streamIndex) || !std::isfinite(sourceHz)
+                || !std::isfinite(rateHz) || rateHz <= 0.0
+                || centreHz - kMiniRxSpanHz / 2.0 < sourceHz - rateHz / 2.0
+                || centreHz + kMiniRxSpanHz / 2.0 > sourceHz + rateHz / 2.0) {
+                clearMiniSlice(sliceId);
+                continue;
+            }
+            ReducerConfig config;
+            config.pixels = kMiniPixels;
+            config.centreHz = centreHz;
+            config.spanHz = kMiniRxSpanHz;
+            config.streamCentreHz = sourceHz;
+            config.sampleRateHz = rateHz;
+            ReducerConfig waterfallConfig = config;
+            SpectrumWidget* analyzerSettings = nullptr;
+            for (PanadapterApplet* applet : m_panStack->allApplets()) {
+                if (!applet || !applet->spectrumWidget()) { continue; }
+                if (!analyzerSettings) { analyzerSettings = applet->spectrumWidget(); }
+                if (applet->activeSliceIndex() == sliceId) {
+                    analyzerSettings = applet->spectrumWidget();
+                    break;
+                }
+            }
+            // A slice can share a pan or have no dedicated pan. Thetis still
+            // copies the RX analyzer's settings into that slice's MiniSpec.
+            if (analyzerSettings) {
+                config.detector = static_cast<SpectrumDetectorMode>(
+                    analyzerSettings->spectrumDetector());
+                config.averageMode = int(analyzerSettings->spectrumAveraging());
+                config.averageAlpha = analyzerSettings->spectrumAverageAlpha();
+                waterfallConfig.detector = static_cast<SpectrumDetectorMode>(
+                    analyzerSettings->waterfallDetector());
+                waterfallConfig.averageMode = int(analyzerSettings->waterfallAveraging());
+                waterfallConfig.averageAlpha = analyzerSettings->waterfallAverageAlpha();
+            }
+            const bool changed = producer->streamIndex != streamIndex
+                || producer->streamEpoch != slice->streamEpoch()
+                || producer->binCount != binsLinear.size()
+                || producer->geometry.centreHz != config.centreHz
+                || producer->geometry.spanHz != config.spanHz
+                || producer->geometry.streamCentreHz != config.streamCentreHz
+                || producer->geometry.sampleRateHz != config.sampleRateHz
+                || producer->geometry.detector != config.detector
+                || producer->geometry.averageMode != config.averageMode
+                || producer->geometry.averageAlpha != config.averageAlpha
+                || producer->waterfallGeometry.detector != waterfallConfig.detector
+                || producer->waterfallGeometry.averageMode != waterfallConfig.averageMode
+                || producer->waterfallGeometry.averageAlpha != waterfallConfig.averageAlpha;
+            if (changed) {
+                producer->trace.clearAveraging();
+                producer->waterfall.clearAveraging();
+                producer->cadence.invalidate();
+                clearMiniSlice(sliceId);
+                producer->geometry = config;
+                producer->waterfallGeometry = waterfallConfig;
+                producer->streamIndex = streamIndex;
+                producer->streamEpoch = slice->streamEpoch();
+                producer->binCount = binsLinear.size();
+            }
+            if (producer->cadence.isValid()
+                && producer->cadence.elapsed() < kMiniFramePeriodMs) { continue; }
+            const auto [firstBin, lastBin] = SpectrumReducer::visibleBinRange(
+                binsLinear.size(), config);
+            if (lastBin < firstBin) {
+                clearMiniSlice(sliceId);
+                continue;
+            }
+            producer->trace.setConfig(config);
+            producer->waterfall.setConfig(waterfallConfig);
+            QVector<float> trace;
+            QVector<float> waterfall;
+            producer->trace.reduce(binsLinear, windowEnb, dbmOffset, trace);
+            producer->waterfall.reduce(binsLinear, windowEnb, dbmOffset, waterfall);
+            if (trace.size() != kMiniPixels || waterfall.size() != kMiniPixels) {
+                clearMiniSlice(sliceId);
+                continue;
+            }
+            producer->cadence.restart();
+            presentMiniFrame(sliceId, trace, waterfall, centreHz,
+                             kMiniRxSpanHz, false, true);
+        }
+    }
     if (!m_panStack || !m_radioModel) { return; }
     auto* router = m_radioModel->fftRouter();
     if (!router) { return; }
@@ -4977,11 +5124,22 @@ void MainWindow::buildUI()
             wireContainerControls(c);
         }
     });
+    connect(m_containerManager, &ContainerManager::containerRemoved, this,
+            [this](const QString&) { reconcileMiniDisplays(); });
     // R-R3-21: every slice's state reaches the containers set to it.
     connect(m_radioModel, &RadioModel::sliceAdded, this,
             [this](int) { watchSlicesForContainers(); });
     connect(m_radioModel, &RadioModel::sliceRemoved, this,
             [this](int) { watchSlicesForContainers(); });
+    connect(m_radioModel, &RadioModel::transmittingChanged, this,
+            [this](bool) {
+        for (const auto& [sliceId, producer] : m_miniProducers) {
+            producer->txTrace.clear();
+            producer->txWaterfall.clear();
+            clearMiniSlice(sliceId);
+        }
+        reconcileMiniDisplays();
+    });
     // The function buttons' global targets: they light from the target.
     {
         const auto refresh = [this]() { refreshContainerControls(); };
@@ -5484,6 +5642,30 @@ void MainWindow::buildUI()
         // Phase 3M-5d: expose TxAnalyzer on RadioModel so Setup Display TX
         // page can reach it without depending on MainWindow.
         m_radioModel->setTxAnalyzer(m_txAnalyzer);
+        if (TxDisplayFeed* feed = m_radioModel->txDisplayFeed()) {
+            const auto showMiniTx = [this, feed](const QVector<float>& dbm,
+                                                  bool waterfall) {
+                if (!m_radioModel || !m_radioModel->isTransmitting()
+                    || !feed->miniReady()) { return; }
+                SliceModel* slice = m_radioModel->txBoundSlice();
+                if (!slice) { return; }
+                auto it = m_miniProducers.find(slice->sliceIndex());
+                if (it == m_miniProducers.end() || it->second->slice != slice) { return; }
+                MiniProducer& producer = *it->second;
+                (waterfall ? producer.txWaterfall : producer.txTrace) = dbm;
+                if (producer.txTrace.size() != 1024 || producer.txWaterfall.size() != 1024) {
+                    return;
+                }
+                const TxDisplayView view = feed->miniView();
+                presentMiniFrame(slice->sliceIndex(), producer.txTrace,
+                                 producer.txWaterfall, view.centreHz(),
+                                 view.spanHz(), true, waterfall);
+            };
+            connect(feed, &TxDisplayFeed::miniTraceReady, this,
+                    [showMiniTx](const QVector<float>& dbm) { showMiniTx(dbm, false); });
+            connect(feed, &TxDisplayFeed::miniWaterfallReady, this,
+                    [showMiniTx](const QVector<float>& dbm) { showMiniTx(dbm, true); });
+        }
     }
     // Filter passband + n_pix get re-applied on every MOX-up edge in the
     // MoxController connect block below — the active slice's mode/filter
@@ -10242,21 +10424,200 @@ void MainWindow::openSetup(const QString& pageKey)
 
 namespace {
 
-// The container's meter (its content, or the one inside it), as
-// ContainerManager::forEachMeterItem finds it.
-MeterWidget* containerMeter(const ContainerWidget* c)
+// A panel can contain a header meter and additional meter widgets in its
+// scroll body. All of their visible FilterDisplays share the slice producer.
+QList<MeterWidget*> contentMeters(QWidget* content)
 {
-    QWidget* content = c ? c->content() : nullptr;
-    if (!content) { return nullptr; }
-    if (auto* meter = qobject_cast<MeterWidget*>(content)) { return meter; }
-    return content->findChild<MeterWidget*>();
+    if (!content) { return {}; }
+    QList<MeterWidget*> meters;
+    if (auto* meter = qobject_cast<MeterWidget*>(content)) { meters.append(meter); }
+    for (MeterWidget* meter : content->findChildren<MeterWidget*>()) {
+        if (!meters.contains(meter)) { meters.append(meter); }
+    }
+    return meters;
+}
+
+// Existing control refresh paths use the container's primary meter.
+MeterWidget* containerMeter(const ContainerWidget* container)
+{
+    const auto meters = contentMeters(container ? container->content() : nullptr);
+    return meters.isEmpty() ? nullptr : meters.first();
 }
 
 } // namespace
 
+void MainWindow::reconcileMiniDisplays()
+{
+    if (m_shuttingDown || !m_containerManager || !m_radioModel) { return; }
+    std::map<int, QList<QPointer<FilterDisplayItem>>> wanted;
+    for (ContainerWidget* container : m_containerManager->allContainers()) {
+        // A floating form can hide its owner without setting the child's
+        // explicit hidden flag. isVisible() includes that ancestor state.
+        if (!container || !container->isVisible()) { continue; }
+        SliceModel* slice = containerSlice(container);
+        if (!slice || slice->streamIndex() < 0) { continue; }
+        for (MeterWidget* meter : contentMeters(container->content())) {
+            if (!meter->isVisible()) { continue; }
+            for (MeterItem* base : meter->items()) {
+                auto* item = qobject_cast<FilterDisplayItem*>(base);
+                if (item && meter->shouldRender(item)
+                    && item->displayMode() != FilterDisplayItem::DisplayMode::None) {
+                    wanted[slice->sliceIndex()].append(item);
+                }
+            }
+        }
+    }
+    for (auto it = m_miniProducers.begin(); it != m_miniProducers.end();) {
+        if (wanted.count(it->first) == 0) {
+            for (const QPointer<FilterDisplayItem>& item : it->second->items) {
+                if (item) { item->clearFrame(); }
+            }
+            it = m_miniProducers.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    for (auto& [sliceId, items] : wanted) {
+        auto& producer = m_miniProducers[sliceId];
+        if (!producer) { producer = std::make_unique<MiniProducer>(); }
+        SliceModel* slice = m_radioModel->sliceById(sliceId);
+        if (producer->slice != slice) {
+            for (const auto& item : producer->items) { if (item) { item->clearFrame(); } }
+            producer->trace.clearAveraging();
+            producer->waterfall.clearAveraging();
+            producer->cadence.invalidate();
+            producer->filterCached = false;
+            producer->txTrace.clear();
+            producer->txWaterfall.clear();
+            producer->slice = slice;
+        }
+        for (const auto& former : producer->items) {
+            if (former && !items.contains(former)) { former->clearFrame(); }
+        }
+        producer->items = items;
+    }
+    if (m_remoteMedia) {
+        QSet<int> slices;
+        for (const auto& [sliceId, producer] : m_miniProducers) {
+            if (!producer->items.isEmpty()) { slices.insert(sliceId); }
+        }
+        m_remoteMedia->setMiniDisplaySlices(slices);
+        const bool highResolution = AppSettings::instance().value(
+            QStringLiteral("DspOptionsHighResFilterCharacteristics"),
+            QStringLiteral("False")).toString() == QLatin1String("True");
+        m_radioModel->setMiniFilterResponseSlices(highResolution ? slices : QSet<int>{});
+    } else if (TxDisplayFeed* feed = m_radioModel->txDisplayFeed()) {
+        const SliceModel* tx = m_radioModel->txBoundSlice();
+        feed->setLocalMiniDemand(tx && wanted.count(tx->sliceIndex()) != 0);
+    }
+}
+
+void MainWindow::clearMiniSlice(int sliceId)
+{
+    auto found = m_miniProducers.find(sliceId);
+    if (found == m_miniProducers.end()) { return; }
+    found->second->txTrace.clear();
+    found->second->txWaterfall.clear();
+    for (const auto& item : found->second->items) {
+        if (item) { item->clearFrame(); }
+    }
+}
+
+void MainWindow::presentMiniFrame(int sliceId, const QVector<float>& traceDbm,
+                                  const QVector<float>& waterfallDbm,
+                                  double centreHz, double spanHz,
+                                  bool transmit, bool advance)
+{
+    auto found = m_miniProducers.find(sliceId);
+    if (found == m_miniProducers.end() || !m_radioModel) { return; }
+    SliceModel* slice = m_radioModel->sliceById(sliceId);
+    if (!slice || found->second->slice != slice) { clearMiniSlice(sliceId); return; }
+    const double rxCentre = slice->frequency();
+    const double txCentre = transmit ? double(m_radioModel->txFrequencyForSlice(slice)) : rxCentre;
+    const auto& tx = m_radioModel->transmitModel();
+    QVector<double> notches;
+    if (NotchModel* model = m_radioModel->notchModel()) {
+        for (const Notch& notch : model->notches()) {
+            if (notch.active && notch.centerHz >= centreHz - spanHz / 2.0
+                && notch.centerHz <= centreHz + spanHz / 2.0) {
+                notches.append(notch.centerHz);
+            }
+        }
+    }
+    MiniProducer& producer = *found->second;
+    SpectrumWidget* settingsWidget = nullptr;
+    if (m_panStack) {
+        for (PanadapterApplet* applet : m_panStack->allApplets()) {
+            if (applet && applet->activeSliceIndex() == sliceId
+                && applet->spectrumWidget()) {
+                settingsWidget = applet->spectrumWidget();
+                break;
+            }
+        }
+    }
+    // Thetis's CUSTOM branch indexes the source's 101-colour picker table
+    // (MeterManager.cs:34321-34375). Cache the table by encoded setting so
+    // the 30 fps presenter never rebuilds a widget on every frame.
+    const QString gradientKey = transmit
+        ? (settingsWidget ? settingsWidget->txWfGradient() : QString())
+        : AppSettings::instance().value(QStringLiteral("DisplayWfCustomStops")).toString();
+    if (producer.customGradient.isEmpty() || producer.gradientKey != gradientKey
+        || producer.gradientTx != transmit) {
+        GradientPickerWidget picker;
+        if (!gradientKey.isEmpty()) { picker.setEncodedText(gradientKey); }
+        producer.customGradient = picker.colorTable(101);
+        producer.gradientKey = gradientKey;
+        producer.gradientTx = transmit;
+    }
+    const bool highResolution = AppSettings::instance().value(
+        QStringLiteral("DspOptionsHighResFilterCharacteristics"),
+        QStringLiteral("False")).toString() == QLatin1String("True");
+    if (highResolution && m_radioModel->role() != RadioModel::Role::Remote) {
+        if (!producer.filterCached || producer.filterLow != slice->filterLow()
+            || producer.filterHigh != slice->filterHigh()
+            || producer.sampleRate != slice->sampleRateHz()
+            || producer.dspMode != slice->dspMode()) {
+            producer.filterResponse = {};
+            m_radioModel->filterResponseForStation(sliceId, true,
+                                                  &producer.filterResponse, nullptr);
+            producer.filterLow = slice->filterLow();
+            producer.filterHigh = slice->filterHigh();
+            producer.sampleRate = slice->sampleRateHz();
+            producer.dspMode = slice->dspMode();
+            producer.filterCached = true;
+        }
+    } else if (highResolution) {
+        producer.filterResponse = m_radioModel->miniFilterResponse(sliceId);
+    } else {
+        producer.filterResponse = {};
+    }
+    for (const auto& item : found->second->items) {
+        if (!item) { continue; }
+        item->setWaterfallLowColour(transmit && settingsWidget
+            ? settingsWidget->txWfLowColor() : QColor(Qt::black));
+        item->setCustomWaterfallGradient(producer.customGradient,
+                                         producer.customGradient);
+        item->presentFrame(traceDbm, waterfallDbm, centreHz, spanHz,
+                           transmit, advance);
+        item->setRfMarkers(rxCentre + slice->filterLow(),
+                           rxCentre + slice->filterHigh(),
+                           txCentre + tx.filterLow(), txCentre + tx.filterHigh(),
+                           notches);
+        if (highResolution && !producer.filterResponse.magnitudesDb.isEmpty()) {
+            item->bindRxChannel(nullptr);
+            item->setRfFilterResponse(producer.filterResponse.magnitudesDb,
+                                      producer.filterResponse.startHz,
+                                      producer.filterResponse.stepHz, rxCentre);
+        } else {
+            item->setRfFilterResponse({}, 0.0, 0.0, rxCentre);
+        }
+    }
+}
+
 void MainWindow::wireContainerControls(ContainerWidget* c)
 {
     if (!c) { return; }
+    c->installEventFilter(this);
     // Issue #118: the band buttons, now on the container's own slice.
     connect(c, &ContainerWidget::bandClicked, this, [this, c](int idx) {
         if (!m_containerButtons) { return; }
@@ -10277,7 +10638,7 @@ void MainWindow::wireContainerControls(ContainerWidget* c)
     connect(c, &ContainerWidget::unavailableButtonClicked,
             this, &MainWindow::showContainerButtonReason);
     connect(c, &ContainerWidget::rxSourceChanged, this,
-            [this, c](int) { refreshContainer(c); });
+            [this, c](int) { refreshContainer(c); reconcileMiniDisplays(); });
     // An item added later (a preset, Container settings > Apply) gets the
     // saved meter settings and the slice's state as it arrives; one refresh
     // now covers restored containers.
@@ -10292,21 +10653,44 @@ void MainWindow::wireContainerControls(ContainerWidget* c)
 
 void MainWindow::watchContainerItems(QWidget* content)
 {
-    auto* meter = qobject_cast<MeterWidget*>(content);
-    if (!meter) { return; }
-    connect(meter, &MeterWidget::itemAdded, this,
-            &MainWindow::onContainerItemAdded, Qt::UniqueConnection);
+    if (auto* panel = qobject_cast<AppletPanelWidget*>(content)) {
+        connect(panel, &AppletPanelWidget::headerWidgetChanged,
+                this, &MainWindow::watchContainerItems, Qt::UniqueConnection);
+        connect(panel, &AppletPanelWidget::panelWidgetAdded,
+                this, &MainWindow::watchContainerItems, Qt::UniqueConnection);
+    }
+    for (MeterWidget* meter : contentMeters(content)) {
+        meter->installEventFilter(this);
+        connect(meter, &MeterWidget::itemAdded, this,
+                &MainWindow::onContainerItemAdded, Qt::UniqueConnection);
+        connect(meter, &MeterWidget::itemRemoved, this,
+                &MainWindow::reconcileMiniDisplays, Qt::UniqueConnection);
+        connect(meter, &MeterWidget::displayVisibilityChanged, this,
+                &MainWindow::reconcileMiniDisplays, Qt::UniqueConnection);
+        for (MeterItem* item : meter->items()) {
+            if (auto* mini = qobject_cast<FilterDisplayItem*>(item)) {
+                connect(mini, &FilterDisplayItem::displayModeChanged, this,
+                        &MainWindow::reconcileMiniDisplays, Qt::UniqueConnection);
+            }
+        }
+    }
+    reconcileMiniDisplays();
 }
 
 void MainWindow::onContainerItemAdded(MeterItem* item)
 {
     if (!item) { return; }
+    if (auto* mini = qobject_cast<FilterDisplayItem*>(item)) {
+        connect(mini, &FilterDisplayItem::displayModeChanged, this,
+                &MainWindow::reconcileMiniDisplays, Qt::UniqueConnection);
+    }
     // R-R3-21: Setup > Multimeter's unit, decimal and history duration and
     // DSP > Options' high-resolution filter graph, which otherwise reached
     // a new item only when those Setup pages next opened.
     MultimeterPage::applyPersistedSettingsTo(item);
     DspOptionsPage::applyPersistedHighResFilterTo(m_radioModel, item);
     refreshContainerControls(item);
+    reconcileMiniDisplays();
 }
 
 SliceModel* MainWindow::containerSlice(const ContainerWidget* c) const
@@ -10333,6 +10717,13 @@ void MainWindow::watchSlicesForContainers()
         m_containerSliceConnections
             << connect(slice, &SliceModel::frequencyChanged, this,
                        [this, slice]() { refreshContainerFrequency(slice); })
+            << connect(slice, &SliceModel::frequencyChanged, this,
+                       [this, slice]() { clearMiniSlice(slice->sliceIndex()); })
+            << connect(slice, &SliceModel::streamIndexChanged, this,
+                       [this, slice]() {
+                           clearMiniSlice(slice->sliceIndex());
+                           reconcileMiniDisplays();
+                       })
             << connect(slice, &SliceModel::dspModeChanged, this, refresh)
             << connect(slice, &SliceModel::filterChanged, this, refresh)
             << connect(slice, &SliceModel::stepHzChanged, this, refresh)
@@ -10366,6 +10757,7 @@ void MainWindow::refreshContainerControls(MeterItem* only)
         }
         refreshContainer(c);
     }
+    reconcileMiniDisplays();
 }
 
 void MainWindow::refreshContainer(ContainerWidget* c, MeterItem* only)
@@ -11642,6 +12034,13 @@ void MainWindow::resizeEvent(QResizeEvent* event)
 
 bool MainWindow::eventFilter(QObject* watched, QEvent* event)
 {
+    if (!m_shuttingDown
+        && (qobject_cast<ContainerWidget*>(watched)
+            || qobject_cast<MeterWidget*>(watched))
+        && (event->type() == QEvent::Show || event->type() == QEvent::Hide
+            || event->type() == QEvent::ParentChange)) {
+        QTimer::singleShot(0, this, &MainWindow::reconcileMiniDisplays);
+    }
     // R-R3-38: the stop message sits over the content area, which moves
     // and resizes on its own when a dock opens or closes; follow it so the
     // message never sits over a dock. Observe only.

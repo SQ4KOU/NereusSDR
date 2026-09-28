@@ -239,7 +239,7 @@ const QList<Entry>& all()
         {F::PbSnr, QStringLiteral("pb-snr"),
          QStringLiteral("Multimeter PBSNR binding has no producer")},
         {F::ContainerFilterDisplay, QStringLiteral("container-filter-display"),
-         QStringLiteral("Container filter display has no spectrum/waterfall frame feed")},
+         QStringLiteral("Container filter display awaits loaded FFT startup acceptance")},
         {F::ContainerClickBox, QStringLiteral("container-click-box"),
          QStringLiteral("Container click box has no host action routing")},
         {F::AudioBitDepth, QStringLiteral("audio-bit-depth"),

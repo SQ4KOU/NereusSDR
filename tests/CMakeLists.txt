@@ -5047,6 +5047,8 @@ nereus_add_test(tst_filter_high_resolution)
 # bindRxChannel(nullptr) safety, paint-with-nullptr-channel no-crash,
 # bind-and-clear lifecycle.
 nereus_add_test(tst_filter_display_high_resolution)
+nereus_add_test(tst_mini_display_composition fakes/RemoteWindowHarness.cpp)
+nereus_add_test(tst_mini_filter_response_lifecycle)
 
 # ── Task 1.6: RadioModel::setSampleRateLive() coordinator ────────────────
 # Guard-path contracts (no live WDSP or connection required):

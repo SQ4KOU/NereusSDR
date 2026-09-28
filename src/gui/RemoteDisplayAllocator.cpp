@@ -128,21 +128,28 @@ bool lowerPixels(const DisplayBudgetLimits& limits, QList<MutableQuality>& quali
 // work is set by the sample rate and frame rate, and a smaller FFT would
 // save none.
 bool reduceToFit(const DisplayBudgetLimits& limits, QList<MutableQuality>& qualities,
-                 const QList<int>& backgrounds, const QList<int>& actives,
+                 const QList<int>& minis, const QList<int>& backgrounds,
+                 const QList<int>& actives,
                  bool ps3Enabled, bool iqActive)
 {
     if (iqActive) {
         return fits(limits, qualities, ps3Enabled)
-            || lowerFps(limits, qualities, backgrounds, ps3Enabled, 1)
+            || lowerFps(limits, qualities, minis, ps3Enabled, 1)
+            || lowerPixels(limits, qualities, minis, ps3Enabled, 1)
+            || (minis.isEmpty() && (
+                lowerFps(limits, qualities, backgrounds, ps3Enabled, 1)
             || lowerFps(limits, qualities, actives, ps3Enabled, 1)
             || lowerPixels(limits, qualities, backgrounds, ps3Enabled, 1)
-            || lowerPixels(limits, qualities, actives, ps3Enabled, 1);
+            || lowerPixels(limits, qualities, actives, ps3Enabled, 1)));
     }
     return fits(limits, qualities, ps3Enabled)
-        || lowerFps(limits, qualities, backgrounds, ps3Enabled)
+        || lowerFps(limits, qualities, minis, ps3Enabled)
+        || lowerPixels(limits, qualities, minis, ps3Enabled)
+        || (minis.isEmpty() && (
+            lowerFps(limits, qualities, backgrounds, ps3Enabled)
         || lowerPixels(limits, qualities, backgrounds, ps3Enabled)
         || lowerFps(limits, qualities, actives, ps3Enabled)
-        || lowerPixels(limits, qualities, actives, ps3Enabled);
+        || lowerPixels(limits, qualities, actives, ps3Enabled)));
 }
 
 RemoteDisplayAllocation makeAllocation(const QList<MutableQuality>& qualities,
@@ -186,7 +193,9 @@ std::optional<RemoteDisplayAllocation> allocateRemoteDisplay(
     if (!limits.isValid()) {
         return fail(QStringLiteral("Display budget limits are invalid."));
     }
-    if (intents.size() > kMaximumPans) {
+    if (std::count_if(intents.cbegin(), intents.cend(), [](const auto& intent) {
+            return intent.kind == RemoteDisplayIntent::Kind::Pan;
+        }) > kMaximumPans) {
         return fail(QStringLiteral("At most eight remote display pans are supported."));
     }
 
@@ -206,7 +215,7 @@ std::optional<RemoteDisplayAllocation> allocateRemoteDisplay(
         if (index != 0 && intent.panId == sorted[index - 1].panId) {
             return fail(QStringLiteral("Remote display pan IDs must be unique."));
         }
-        activeCount += intent.active ? 1 : 0;
+        activeCount += intent.active && intent.kind == RemoteDisplayIntent::Kind::Pan ? 1 : 0;
     }
     if (activeCount > 1) {
         return fail(QStringLiteral("At most one remote display pan may be active."));
@@ -218,21 +227,36 @@ std::optional<RemoteDisplayAllocation> allocateRemoteDisplay(
     }
 
     QList<bool> suspended(sorted.size(), false);
+    // Core admits at most eight endpoints. Keep every visible pan before a
+    // lower-priority mini, independent of the lexical identifier order.
+    int admitted = int(sorted.size());
+    for (int index = sorted.size() - 1; index >= 0 && admitted > kMaximumPans; --index) {
+        if (sorted[index].kind == RemoteDisplayIntent::Kind::Mini) {
+            suspended[index] = true;
+            --admitted;
+        }
+    }
     while (true) {
         QList<MutableQuality> qualities;
         qualities.reserve(sorted.size());
         QList<int> backgrounds;
         QList<int> actives;
+        QList<int> minis;
         for (int index = 0; index < sorted.size(); ++index) {
             const RemoteDisplayIntent& intent = sorted[index];
             qualities.append({&intent, intent.pixels, intent.fps, suspended[index]});
             if (!suspended[index]) {
-                (intent.active ? actives : backgrounds).append(index);
+                if (intent.kind == RemoteDisplayIntent::Kind::Mini) { minis.append(index); }
+                else { (intent.active ? actives : backgrounds).append(index); }
             }
         }
 
-        if (reduceToFit(limits, qualities, backgrounds, actives, ps3Enabled, iqActive)) {
+        if (reduceToFit(limits, qualities, minis, backgrounds, actives, ps3Enabled, iqActive)) {
             return makeAllocation(qualities, ps3Enabled);
+        }
+        if (!minis.isEmpty()) {
+            suspended[minis.constLast()] = true;
+            continue;
         }
         if (iqActive) {
             return fail(QStringLiteral("The display share cannot keep visible pans at one frame per second with raw I/Q."));

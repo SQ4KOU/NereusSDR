@@ -69,6 +69,23 @@ class TestTxAnalyzerSettings : public QObject
     Q_OBJECT
 private slots:
 
+    void secondary_analyzer_does_not_mutate_primary_tx_settings()
+    {
+        auto& settings = AppSettings::instance();
+        settings.setValue(QStringLiteral("DisplayTxFftSize"), QStringLiteral("16384"));
+        settings.setValue(QStringLiteral("DisplayTxPanDetector"), QStringLiteral("4"));
+        TxAnalyzer mini(TxAnalyzer::kMiniTxDispId, nullptr, nullptr,
+                        /*persistSettings=*/false);
+        mini.setFftSize(4096);
+        mini.setPanDetector(2);
+        mini.setWindowType(1);
+        QCOMPARE(settings.value(QStringLiteral("DisplayTxFftSize")).toString(),
+                 QStringLiteral("16384"));
+        QCOMPARE(settings.value(QStringLiteral("DisplayTxPanDetector")).toString(),
+                 QStringLiteral("4"));
+        QVERIFY(!settings.contains(QStringLiteral("DisplayTxWindowType")));
+    }
+
     void initTestCase()
     {
         // Each test starts with a clean AppSettings slate. The sandbox

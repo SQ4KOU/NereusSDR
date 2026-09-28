@@ -44,7 +44,10 @@
 #include "core/MoxController.h"
 #include "core/TxAnalyzer.h"
 #include "core/TxDisplayFeed.h"
+#include "core/TxChannel.h"
+#include "core/DspControlThread.h"
 #include "core/WdspEngine.h"
+#include "core/wdsp_api.h"
 #include "core/session/StationCapabilities.h"
 #include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
@@ -61,8 +64,12 @@
 #include "models/SliceModel.h"
 
 #include <QLoggingCategory>
+#include <QDir>
 #include <QPointer>
+#include <QProcess>
 #include <QSignalSpy>
+#include <QScopeGuard>
+#include <QStringList>
 #include <QTemporaryDir>
 #include <QtEndian>
 
@@ -90,6 +97,7 @@ public:
     {
         if (!readyState) { return false; }
         displays.append(bytes);
+        if (onDisplay) { onDisplay(bytes); }
         return true;
     }
     bool sendRtp(const QByteArray&) override { return readyState; }
@@ -100,6 +108,7 @@ public:
     bool started{false};
     bool readyState{false};
     QList<QByteArray> displays;
+    std::function<void(const QByteArray&)> onDisplay;
 };
 
 QVector<float> syntheticIq(int complexSamples, double cyclesPerSample)
@@ -238,6 +247,15 @@ struct Harness {
     std::unique_ptr<DaemonMediaController> controller;
     int sliceId{-1};
     int spareSliceId{-1};
+    qint64 sessionReadyMs{-1};
+    qint64 mediaReadyMs{-1};
+    QHash<quint32, qint64> subscribeMs;
+    QHash<quint32, qint64> grantMs;
+    QHash<quint32, qint64> receivedContextMs;
+    QHash<quint32, qint64> transportFrameMs;
+    QMap<MediaSourceKey, qint64> sourceFrameMs;
+    QHash<int, qint64> firstIqMs;
+    QHash<int, int> iqSubmissions;
 
     explicit Harness(bool withAnalyzer = true,
                      std::optional<DisplayBudgetLimits> limits = std::nullopt)
@@ -259,6 +277,14 @@ struct Harness {
             &server, &radio, nullptr,
             [this](QObject* parent) -> IMediaTransport* {
                 mediaTransport = new FakeTransport(parent);
+                mediaTransport->onDisplay = [this](const QByteArray& bytes) {
+                    if (bytes.size() >= 16 && bytes.startsWith("NSDC")) {
+                        const quint32 id = packetEndpoint(bytes);
+                        if (!transportFrameMs.contains(id)) {
+                            transportFrameMs.insert(id, realTimer.elapsed());
+                        }
+                    }
+                };
                 return mediaTransport;
             },
             [this] { return realClock ? realTimer.nsecsElapsed() : nowNs; });
@@ -266,6 +292,24 @@ struct Harness {
         if (limits) {
             QVERIFY(server.setDisplayBudgetLimits(*limits));
         }
+        QObject::connect(&client, &StationClient::mediaControlReceived, &radio,
+                [this](const QJsonObject& control) {
+            if (control.value(QStringLiteral("op")).toString() != QLatin1String("context")) {
+                return;
+            }
+            const quint32 id = static_cast<quint32>(
+                control.value(QStringLiteral("endpointId")).toInteger());
+            if (!receivedContextMs.contains(id)) {
+                receivedContextMs.insert(id, realTimer.elapsed());
+            }
+        });
+        QObject::connect(&controller->sharedSpectrum()->source(),
+                &DaemonSpectrumSource::frameAvailable, &radio,
+                [this](MediaSourceKey key) {
+            if (!sourceFrameMs.contains(key)) {
+                sourceFrameMs.insert(key, realTimer.elapsed());
+            }
+        });
     }
     ~Harness()
     {
@@ -285,6 +329,7 @@ struct Harness {
         client.startSession(clientLink, server.token());
         server.acceptTransport(stationLink);
         QTRY_VERIFY(server.mediaAvailable() && client.mediaAvailable());
+        sessionReadyMs = realTimer.elapsed();
     }
 
     bool start(bool declare, int version = 1, bool mini = false)
@@ -305,15 +350,104 @@ struct Harness {
         QVERIFY(start(declare, version, mini));
         QTRY_VERIFY(mediaTransport);
         mediaTransport->becomeReady();
+        mediaReadyMs = realTimer.elapsed();
     }
 
     bool send(const QJsonObject& control)
     {
+        if (control.value(QStringLiteral("op")).toString() == QLatin1String("subscribe")) {
+            const quint32 id = static_cast<quint32>(
+                control.value(QStringLiteral("endpointId")).toInteger());
+            subscribeMs.insert(id, realTimer.elapsed());
+        }
         return client.sendMediaControl(control, client.sessionEpoch());
+    }
+
+    void observeGrants(std::initializer_list<quint32> endpoints)
+    {
+        for (quint32 id : endpoints) {
+            if (!grantMs.contains(id) && controller->spectrumGrant(id)) {
+                grantMs.insert(id, realTimer.elapsed());
+            }
+        }
+    }
+
+    void reportStage(const char* name, std::initializer_list<quint32> endpoints)
+    {
+        observeGrants(endpoints);
+        QStringList sources;
+        const DaemonSpectrumSource& producer = controller->sharedSpectrum()->source();
+        for (const MediaSourceKey& key : producer.activeSources()) {
+            const auto runtime = controller->sharedSpectrum()->runtimes().value(key);
+            const auto queue = producer.inputQueueDiagnostics(key);
+            sources << QStringLiteral("stream=%1 tier=%2 fft=%3 decim=%4 configured=%5 generation=%6 active=%7 configPending=%8 drainQueued=%9 pendingFloats=%10 maxPending=%11 input=%12 published=%13 dropped=%14 firstFrameMs=%15")
+                .arg(key.streamIndex)
+                .arg(static_cast<int>(key.tier))
+                .arg(runtime.config.fft.fftSize)
+                .arg(runtime.config.decimation)
+                .arg(runtime.configured)
+                .arg(queue.generation)
+                .arg(queue.active)
+                .arg(queue.configurationPending)
+                .arg(queue.drainQueued)
+                .arg(queue.pendingIqFloats)
+                .arg(queue.maxPendingIqFloats)
+                .arg(producer.completedInputHandoffs(key))
+                .arg(producer.publishedFrames(key))
+                .arg(producer.droppedInputFrames(key))
+                .arg(sourceFrameMs.value(key, -1));
+        }
+        QStringList grants;
+        for (quint32 id : endpoints) {
+            const auto grant = controller->spectrumGrant(id);
+            grants << QStringLiteral("endpoint=%1 grantedFft=%2 grantedPixels=%3 sourceFps=%4 sourceDecim=%5 contextRxMs=%6 transportFrameMs=%7")
+                .arg(id)
+                .arg(grant ? grant->grantedFftSize : -1)
+                .arg(grant ? grant->grantedPixels : -1)
+                .arg(controller->spectrumSourceFps(id).value_or(-1))
+                .arg(controller->spectrumSourceDecimation(id).value_or(-1))
+                .arg(receivedContextMs.value(id, -1))
+                .arg(transportFrameMs.value(id, -1));
+        }
+        qWarning() << name << "nowMs" << realTimer.elapsed()
+                   << "sessionReadyMs" << sessionReadyMs
+                   << "mediaReadyMs" << mediaReadyMs
+                   << "mediaTransportReady" << (!mediaTransport.isNull()
+                                                  && mediaTransport->isReady())
+                   << "activeEndpoints" << controller->activeEndpointCount()
+                   << "subscribeMs" << subscribeMs << "grantMs" << grantMs
+                   << "receivedContextMs" << receivedContextMs
+                   << "sources" << sources << "grants" << grants
+                   << "firstIqMs" << firstIqMs
+                   << "iqSubmissions" << iqSubmissions
+                   << "transportFrameMs" << transportFrameMs;
+    }
+
+    void captureSpectrumStall(const char* name,
+                              std::initializer_list<quint32> endpoints)
+    {
+        // A source with no first FFT at four seconds needs a worker stack,
+        // not another enlarged QTRY deadline. Keep the queue snapshot and
+        // sample file together so a stuck first feedIQ can be distinguished
+        // from an activation that never reached the worker.
+        reportStage(name, endpoints);
+        const QString path = QDir(QDir::tempPath()).filePath(
+            QStringLiteral("nereus-mini-spectrum-stall-%1-%2.sample.txt")
+                .arg(QCoreApplication::applicationPid())
+                .arg(QString::fromLatin1(name).replace(' ', '-')));
+        const bool started = QProcess::startDetached(
+            QStringLiteral("/usr/bin/sample"),
+            {QString::number(QCoreApplication::applicationPid()),
+             QStringLiteral("1"), QStringLiteral("-file"), path});
+        qWarning() << "spectrum stall sample" << path << "started" << started;
     }
 
     void feedStream(int streamIndex)
     {
+        if (!firstIqMs.contains(streamIndex)) {
+            firstIqMs.insert(streamIndex, realTimer.elapsed());
+        }
+        ++iqSubmissions[streamIndex];
         QVERIFY(QMetaObject::invokeMethod(
             &radio, "rawIqDataForStream", Qt::DirectConnection, Q_ARG(int, streamIndex),
             Q_ARG(QVector<float>, syntheticIq(1026, 0.125))));
@@ -508,12 +642,27 @@ void TstRemoteTxDisplay::riseSendsTheTransmitDisplayAndFallResumesReceive()
     QVERIFY(h.send(withTxWindow(subscription(1, 1, h.sliceId, centre))));
     QVERIFY(h.send(withTxWindow(subscription(2, 1, h.spareSliceId, spareCentre))));
     // Receive first: a receive context (transmit false) and receive frames.
+    QElapsedTimer receiveWait;
+    receiveWait.start();
+    bool receiveStageLogged = false;
+    bool receiveStackCaptured = false;
     QTRY_VERIFY([&] {
         h.feedSlice(h.sliceId);
         h.feedSlice(h.spareSliceId);
-        return lastContext(controls, 1) && lastContext(controls, 2)
+        h.observeGrants({1, 2});
+        const bool ready = lastContext(controls, 1) && lastContext(controls, 2)
             && framesFor(h.mediaTransport->displays, 1, std::nullopt) > 0
             && framesFor(h.mediaTransport->displays, 2, std::nullopt) > 0;
+        if (!ready && !receiveStackCaptured && receiveWait.elapsed() >= 3'800
+            && h.sourceFrameMs.isEmpty()) {
+            receiveStackCaptured = true;
+            h.captureSpectrumStall("receive setup", {1, 2});
+        }
+        if (!ready && !receiveStageLogged && receiveWait.elapsed() >= 4'500) {
+            receiveStageLogged = true;
+            h.reportStage("receive setup stage", {1, 2});
+        }
+        return ready;
     }());
     const QJsonObject receiveBefore = *lastContext(controls, 1);
     QCOMPARE(receiveBefore.value(QStringLiteral("transmit")).toBool(true), false);
@@ -926,10 +1075,25 @@ void TstRemoteTxDisplay::aSliceMovingWhileKeyedLeavesTheRisePanTransmitting()
     quint32 revision = 1;
     QVERIFY(h.send(withTxWindow(subscription(1, revision, h.sliceId, centre))));
     QVERIFY(h.send(withTxWindow(subscription(2, revision, h.spareSliceId, spareCentre))));
+    QElapsedTimer initialWait;
+    initialWait.start();
+    bool initialStageLogged = false;
+    bool initialStackCaptured = false;
     QTRY_VERIFY([&] {
         h.feedSlice(h.sliceId);
         h.feedSlice(h.spareSliceId);
-        return lastContext(controls, 1) && lastContext(controls, 2);
+        h.observeGrants({1, 2});
+        const bool ready = lastContext(controls, 1) && lastContext(controls, 2);
+        if (!ready && !initialStackCaptured && initialWait.elapsed() >= 3'800
+            && h.sourceFrameMs.isEmpty()) {
+            initialStackCaptured = true;
+            h.captureSpectrumStall("initial context", {1, 2});
+        }
+        if (!ready && !initialStageLogged && initialWait.elapsed() >= 4'500) {
+            initialStageLogged = true;
+            h.reportStage("initial context stage", {1, 2});
+        }
+        return ready;
     }());
     // Both endpoints ask again, and the Core answers both at the new
     // revision: every reconcile queued before has run by then.
@@ -937,6 +1101,20 @@ void TstRemoteTxDisplay::aSliceMovingWhileKeyedLeavesTheRisePanTransmitting()
         ++revision;
         QVERIFY(h.send(withTxWindow(subscription(1, revision, h.sliceId, centre))));
         QVERIFY(h.send(withTxWindow(subscription(2, revision, h.spareSliceId, spareCentre))));
+        const auto revisionStage = qScopeGuard([&] {
+            const auto one = lastContext(controls, 1);
+            const auto two = lastContext(controls, 2);
+            if (one && two && one->value(QStringLiteral("revision")).toInteger() == revision
+                && two->value(QStringLiteral("revision")).toInteger() == revision) { return; }
+            qWarning() << "revision stage:" << "wanted" << revision << "endpoints"
+                       << h.controller->activeEndpointCount() << "mediaReady"
+                       << (!h.mediaTransport.isNull() && h.mediaTransport->isReady())
+                       << "revisions"
+                       << (one ? one->value(QStringLiteral("revision")).toInteger() : -1)
+                       << (two ? two->value(QStringLiteral("revision")).toInteger() : -1)
+                       << "frames" << framesFor(h.mediaTransport->displays, 1, std::nullopt)
+                       << framesFor(h.mediaTransport->displays, 2, std::nullopt);
+        });
         QTRY_VERIFY([&] {
             h.feedSlice(h.sliceId);
             h.feedSlice(h.spareSliceId);
@@ -1317,29 +1495,92 @@ void TstRemoteTxDisplay::miniTakeoverFollowsTheTransmittingSliceAndRenewalResets
     QVERIFY(h.send(spareMini));
     QJsonObject txMini = subscription(3, 1, h.sliceId, txCentre, 20000.0);
     txMini.insert(QStringLiteral("displayRole"), QStringLiteral("mini"));
+    txMini.insert(QStringLiteral("pixels"), 1024);
     QVERIFY(h.send(txMini));
     QJsonObject secondCrop = subscription(4, 1, h.sliceId, txCentre + 5000.0, 10000.0);
     secondCrop.insert(QStringLiteral("displayRole"), QStringLiteral("mini"));
+    secondCrop.insert(QStringLiteral("pixels"), 1024);
     QVERIFY(h.send(secondCrop));
+    QElapsedTimer miniInitialWait;
+    miniInitialWait.start();
+    bool miniInitialStageLogged = false;
+    bool miniInitialStackCaptured = false;
     QTRY_VERIFY([&] {
         h.feedSlice(h.sliceId);
         h.feedSlice(h.spareSliceId);
-        return lastContext(controls, 1) && lastContext(controls, 2)
+        h.observeGrants({1, 2, 3, 4});
+        const bool ready = lastContext(controls, 1) && lastContext(controls, 2)
             && lastContext(controls, 3) && lastContext(controls, 4);
+        if (!ready && !miniInitialStackCaptured && miniInitialWait.elapsed() >= 3'800
+            && h.sourceFrameMs.isEmpty()) {
+            miniInitialStackCaptured = true;
+            h.captureSpectrumStall("mini initial context", {1, 2, 3, 4});
+        }
+        if (!ready && !miniInitialStageLogged && miniInitialWait.elapsed() >= 4'500) {
+            miniInitialStageLogged = true;
+            h.reportStage("mini initial context stage", {1, 2, 3, 4});
+        }
+        return ready;
     }());
     // The grant aligns each crop to source bins, so accepted geometry is
     // authoritative and the two contexts must remain distinct.
     QVERIFY(lastContext(controls, 3)->value(QStringLiteral("spanHz")).toDouble()
             > lastContext(controls, 4)->value(QStringLiteral("spanHz")).toDouble());
+    // This synthetic station has no radio connection, so open an in-process
+    // WDSP TX channel for the independent mini siphon before keying. The
+    // engine's friend-only initialization shortcut is used by the TX DSP
+    // tests as well; no RF device is opened.
+    WdspEngine* const engine = h.radio.wdspEngine();
+    engine->setTransmitLane(nullptr); // synchronous fixture open, before timed assertions
+    engine->m_initialized = true;
+    TxChannel* const channel = engine->createTxChannel(WdspEngine::kTxChannelId);
+    engine->setTransmitLane(h.radio.transmitLane());
+    QVERIFY(channel != nullptr);
+    h.radio.injectTxChannelForTest(channel);
+    AppSettings::instance().setValue(QStringLiteral("DisplayFftSize"), 4096);
     const quint32 oldGeneration = static_cast<quint32>(
         lastContext(controls, 1)->value(QStringLiteral("contextGeneration")).toInteger());
     QVERIFY(h.key(true));
     QTRY_VERIFY(isTransmit(lastContext(controls, 1)) && isTransmit(lastContext(controls, 3))
                 && isTransmit(lastContext(controls, 4)));
+    QCOMPARE(lastContext(controls, 3)->value(QStringLiteral("spanHz")).toDouble(), 40'000.0);
+    QCOMPARE(lastContext(controls, 4)->value(QStringLiteral("spanHz")).toDouble(), 40'000.0);
+    const int acceptedMiniPixels = lastContext(controls, 3)
+        ->value(QStringLiteral("traceSamples")).toInt();
+    QVERIFY(acceptedMiniPixels > 0 && acceptedMiniPixels <= 1024);
     QVERIFY(!h.controller->transmitDisplayActive(2));
     QVERIFY(!isTransmit(lastContext(controls, 2)));
     QVERIFY(h.controller->transmitDisplayActive(1));
     QVERIFY(h.controller->transmitDisplayActive(3));
+    // Exercise the actual WDSP TX siphon on its DSP lane. The synthetic
+    // channel has no RF connection; fexchange0 only produces analyzer data.
+    channel->setRunningAsync(true);
+    QTRY_VERIFY(channel->isRunning());
+    QSignalSpy miniTrace(h.radio.txDisplayFeed(), &TxDisplayFeed::miniTraceReady);
+    const quint32 miniGeneration = static_cast<quint32>(lastContext(controls, 3)
+        ->value(QStringLiteral("contextGeneration")).toInteger());
+    for (int batch = 0; batch < 6 && framesFor(h.mediaTransport->displays, 3,
+                                               miniGeneration) == 0; ++batch) {
+        bool fed = false;
+        h.radio.transmitLane()->request<bool>([id = channel->channelId()] {
+            double input[512]{};
+            double output[512]{};
+            int error = 0;
+            for (int block = 0; block < 128; ++block) {
+                for (int sample = 0; sample < 256; ++sample) {
+                    input[2 * sample] = 0.1 * std::sin(2.0 * std::numbers::pi
+                        * double(block * 256 + sample) * 1000.0 / 48000.0);
+                }
+                fexchange0(id, input, output, &error);
+                if (error != 0) { return false; }
+            }
+            return true;
+        }, &h.radio, [&fed](bool okay) { fed = okay; });
+        QTRY_VERIFY_WITH_TIMEOUT(fed, 5'000);
+        QTest::qWait(100);
+    }
+    QVERIFY(!miniTrace.isEmpty());
+    QVERIFY(framesFor(h.mediaTransport->displays, 3, miniGeneration) > 0);
     const int spareFrames = framesFor(h.mediaTransport->displays, 2, std::nullopt);
     QTRY_VERIFY([&] { h.feedSlice(h.spareSliceId);
         return framesFor(h.mediaTransport->displays, 2, std::nullopt) > spareFrames; }());
@@ -1364,6 +1605,8 @@ void TstRemoteTxDisplay::miniTakeoverFollowsTheTransmittingSliceAndRenewalResets
         return framesFor(h.mediaTransport->displays, 1, newGeneration) > 0; }());
     QCOMPARE(framesFor(h.mediaTransport->displays, 1, oldGeneration), oldFrames);
     QVERIFY(h.key(false));
+    channel->setRunningAsync(false);
+    h.radio.injectTxChannelForTest(nullptr);
     h.finish();
 }
 

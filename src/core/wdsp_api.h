@@ -1638,6 +1638,10 @@ void SetAnalyzer(int disp, int n_pixout, int n_fft, int typ,
 //   pix: float[n_pix] output buffer (dOUTREAL is float per comm.h:126)
 //   flag: out — 1 if frame written, 0 if no new frame ready
 void GetPixels(int disp, int pixout, float* pix, int* flag);
+// siphon.c:322, extra TX spectrum dispatch. Called on the transmit lane,
+// after the extra analyzer exists and before it is destroyed.
+void TXASetSipAllocDisps(int channel, int nAllocDisps, int* allocRun,
+                         int* allocDisp);
 
 // analyzer.c:1726 — Spectrum0 (push input samples; called from xsiphon mode 1)
 //   Not invoked directly by TxAnalyzer — the siphon dispatcher calls it

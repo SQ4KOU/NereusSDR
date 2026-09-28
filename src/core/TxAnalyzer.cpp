@@ -75,8 +75,10 @@
 
 namespace NereusSDR {
 
-TxAnalyzer::TxAnalyzer(int dispId, QObject* parent, DspControlThread* lane)
+TxAnalyzer::TxAnalyzer(int dispId, QObject* parent, DspControlThread* lane,
+                       bool persistSettings)
     : QObject(parent)
+    , m_persistSettings(persistSettings)
     , m_dispId(dispId)
 {
     m_lane = lane;
@@ -85,7 +87,7 @@ TxAnalyzer::TxAnalyzer(int dispId, QObject* parent, DspControlThread* lane)
     // user choices already in effect (no flash of pre-default config on
     // launch).  loadSettings is silent on missing keys; defaults from
     // header member initialisers remain in effect.
-    loadSettings();
+    if (m_persistSettings) { loadSettings(); }
 
     m_pixBuf.resize(m_numPixels);
     m_pixBufWf.resize(m_numPixels);
@@ -95,6 +97,41 @@ TxAnalyzer::TxAnalyzer(int dispId, QObject* parent, DspControlThread* lane)
     connect(&m_pollTimer, &QTimer::timeout, this, &TxAnalyzer::poll);
 
 #ifdef HAVE_WDSP
+    if (!m_persistSettings && !m_lane.isNull()) {
+        // A secondary display may only enter the siphon's extra-displays
+        // array after this result is known. Keep a lane-owned success flag
+        // so destruction is safe if the GUI callback never runs.
+        m_createSucceeded = std::make_shared<std::atomic<bool>>(false);
+        const auto createdFlag = m_createSucceeded;
+        m_lane->post([dispId = m_dispId, createdFlag]() {
+            int created = 0;
+            char path[1] = {0};
+            XCreateAnalyzer(dispId, &created, 262144, 1, 1, path);
+            createdFlag->store(created == 0);
+        });
+        m_lane->request<bool>([createdFlag]() { return createdFlag->load(); },
+                              this, [this](bool ready) {
+            m_analyzerCreated = ready;
+            if (ready) {
+                m_deferSetAnalyzer = true;
+                applyDetectorMode(0, m_panDetector);
+                applyDetectorMode(1, m_wfDetector);
+                applyAverageMode(0, m_panAveraging);
+                applyAverageMode(1, m_wfAveraging);
+                applyAvTau(0, m_panAvTimeMs);
+                applyAvTau(1, m_wfAvTimeMs);
+                applyNormalizePan();
+                if (m_pollTimer.isActive()) {
+                    m_deferSetAnalyzer = false;
+                    applySetAnalyzer();
+                }
+            } else {
+                qCWarning(lcDsp) << "TxAnalyzer: XCreateAnalyzer failed for disp" << m_dispId;
+            }
+            emit analyzerCreated(ready);
+        });
+        return;
+    }
     // Allocate the WDSP analyzer instance.  Parameters from
     // Thetis MeterManager.cs:42024 [v2.10.3.13+501e3f51]:
     //   _disp = cmaster.AllocAnalyzer(..., 262144);
@@ -173,7 +210,12 @@ TxAnalyzer::~TxAnalyzer()
 {
     stop();
 #ifdef HAVE_WDSP
-    if (m_analyzerCreated) {
+    if (m_createSucceeded && !m_lane.isNull()) {
+        const auto createdFlag = m_createSucceeded;
+        runWdsp([dispId = m_dispId, createdFlag]() {
+            if (createdFlag->load()) { DestroyAnalyzer(dispId); }
+        });
+    } else if (m_analyzerCreated) {
         runWdsp([dispId = m_dispId]() { DestroyAnalyzer(dispId); });
         m_analyzerCreated = false;
     }
@@ -953,7 +995,7 @@ void TxAnalyzer::loadSettings()
 
 void TxAnalyzer::saveSettings()
 {
-    if (m_reloadingSetting) {
+    if (!m_persistSettings || m_reloadingSetting) {
         return;   // reloadSetting writes back its own key only
     }
     auto& s = AppSettings::instance();
@@ -998,7 +1040,7 @@ int TxAnalyzer::fftSizeSliderPositionFor(int fftSize) noexcept
 
 void TxAnalyzer::reloadSetting(const QString& key)
 {
-    if (!isSettingsKey(key)) {
+    if (!m_persistSettings || !isSettingsKey(key)) {
         return;
     }
     auto& s = AppSettings::instance();
