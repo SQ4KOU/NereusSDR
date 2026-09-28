@@ -1135,8 +1135,20 @@ colours for the same signal.
   no media or ordinary candidate trickle, and owned relay-loopback candidates
   only. Real DTLS tests verify the presented Core certificate and raw watch
   frames; the integrated app/Core build and four transport suites passed
-  (19.95 seconds). Those tests inject loopback candidates and do not yet prove
-  actual outer-WebSocket relay forwarding. No deployed service was changed.
+  (19.95 seconds). A further real-RelayLeg test (`9c68e699`) uses four separate
+  outer WSS sockets and two real DTLS watch peers through a local protocol
+  player. It verifies raw attach/ack/heartbeat frames, the actual Core digest
+  distinct from the relay TLS certificate, tag-3 forwarding and source retirement.
+  The integrated full data-channel suite passed (14.09 seconds). The relay
+  player does not replace production Python service or loss-test acceptance.
+  No deployed service was changed.
+  The primary transport now retains its negotiated watch grant before the RV
+  introduction is retired. It permits new watch admission only on that exact
+  live WebSocket-relay primary with both relay legs present and an unexpired
+  grant. Admission expiry does not invalidate an already admitted watch;
+  primary close clears the context. The app/Core build and four relevant suites
+  passed (68.66 seconds), including expiry, missing peer and selected-route
+  boundaries. Production RV opt-in remains disabled pending owner integration.
   Station-session watch signaling and restrictive-network acceptance remain
   unfinished.
 - Plan: several-device capacity and restrictive-network relay access.
@@ -1207,9 +1219,32 @@ colours for the same signal.
   The direct client helper also verifies the fresh actual TLS certificate before
   sending its ticket and guards synchronous socket errors that delete or replace
   the helper (`d8f14ac1`). Its integrated app/Core build and two focused suites
-  passed (4.17 seconds). Production client wiring and the separate relay DTLS path
-  remain in progress.
+  passed (4.17 seconds). Actual StationClient direct-WSS wiring is now built
+  (`2673e991`): paired authentication and snapshot precede ticket requests,
+  actual primary authority/pin are reused, immutable generation and session epoch
+  correlate replies, and every retirement clears the auxiliary. Lead review
+  added guards for synchronous ticket-send and helper-close callbacks. One
+  existing timer sends the same sequence/epoch on auxiliary and media-or-primary,
+  retaining every release fence. The integrated app/Core build and six suites
+  passed (29.31 seconds), including real paired WSS heartbeat delivery, primary
+  close and reconnection, plus a DTLS primary rejecting a claimed direct route.
+  The separate relay owner and restrictive-network acceptance remain in progress.
 - Plan: independent transmit watch and restrictive-network liveness.
+
+### G-71: Hosted desktop TCI must preserve ownership through callbacks and receiver remaps
+
+- Evidence: lead review found the new accepted-program-key path continued after
+  synchronous keying callbacks without rechecking the client or server. The
+  worker confirmed that risk and that queued receive audio survives ownership
+  remaps. Review also found a logical receiver number entering a new broadcast
+  function that expects a physical slice number.
+- Ruling basis: JJ's standing instruction is “each gap is built as part of this
+  effort.” These corrections preserve the already approved station-owned TCI
+  receiver and program-key policy; they introduce no new operator preference.
+- Status: in progress. The worker is adding callback lifetime checks and focused
+  socket regressions, tracing safe audio retirement, and checking broadcast
+  mapping. No acceptance or live-radio result is claimed.
+- Plan: desktop hosting and several-device ownership.
 
 ## How this addendum is kept
 
