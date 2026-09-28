@@ -1,0 +1,978 @@
+{
+  "version": 1,
+  "category": {
+    "id": "dsp",
+    "title": "DSP",
+    "where": "station"
+  },
+  "coverage": "partial: remaining DSP pages await their descriptions",
+  "pages": [
+    {
+      "id": "dsp.nrAnf",
+      "title": "NR/ANF",
+      "where": "station",
+      "coverage": "partial: NR3 model picker, NNR composite diagnostics, diagnostic Apply, conditional Try Again, and NNR model asset button need declarative bindings",
+      "sections": [
+        {
+          "title": "NR1 (LMS)",
+          "controls": [
+            {
+              "id": "dsp.nrAnf.nr1Taps",
+              "label": "Taps",
+              "tooltip": "Determines the length of the NR computed filter.",
+              "kind": "slider",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nr1Taps"
+                }
+              },
+              "applies": "live",
+              "min": 1,
+              "max": 1024,
+              "step": 1
+            },
+            {
+              "id": "dsp.nrAnf.nr1Delay",
+              "label": "Delay",
+              "tooltip": "Determines how far back you look in the signal before you begin to compute a coherent signal enhancement filter.",
+              "kind": "slider",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nr1Delay"
+                }
+              },
+              "applies": "live",
+              "min": 1,
+              "max": 1023,
+              "step": 1
+            },
+            {
+              "id": "dsp.nrAnf.nr1Gain",
+              "label": "Gain",
+              "tooltip": "Determines the adaptation rate of the filter.",
+              "kind": "decimal",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nr1Gain"
+                }
+              },
+              "applies": "live",
+              "min": 1e-06,
+              "max": 0.001,
+              "step": 1e-06
+            },
+            {
+              "id": "dsp.nrAnf.nr1Leakage",
+              "label": "Leak",
+              "tooltip": "Determines the adaptation rate of the filter.",
+              "kind": "decimal",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nr1Leakage"
+                }
+              },
+              "applies": "live",
+              "min": 0.001,
+              "max": 1,
+              "step": 0.001
+            },
+            {
+              "id": "dsp.nrAnf.nr1Position",
+              "label": "Position",
+              "tooltip": "",
+              "kind": "choice",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nr1Position"
+                }
+              },
+              "applies": "live",
+              "choices": [
+                "Pre-AGC",
+                "Post-AGC"
+              ]
+            }
+          ]
+        },
+        {
+          "title": "NR2 Gain Method",
+          "controls": [
+            {
+              "id": "dsp.nrAnf.nr2GainMethod",
+              "label": "Gain Method",
+              "tooltip": "",
+              "kind": "choice",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nr2GainMethod"
+                }
+              },
+              "applies": "live",
+              "choices": [
+                "Linear",
+                "Log",
+                "Gamma",
+                "Trained"
+              ]
+            }
+          ]
+        },
+        {
+          "title": "NR2 NPE Method",
+          "controls": [
+            {
+              "id": "dsp.nrAnf.nr2NpeMethod",
+              "label": "NPE Method",
+              "tooltip": "",
+              "kind": "choice",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nr2NpeMethod"
+                }
+              },
+              "applies": "live",
+              "choices": [
+                "OSMS",
+                "MMSE",
+                "NSTAT"
+              ]
+            }
+          ]
+        },
+        {
+          "title": "NR2 Training / Filter",
+          "controls": [
+            {
+              "id": "dsp.nrAnf.nr2TrainT1",
+              "label": "T1",
+              "tooltip": "EMNR Zeta threshold (T1). Controls the asymmetry of the noise estimator. Range -5.0 to +5.0.",
+              "kind": "decimal",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nr2TrainT1"
+                }
+              },
+              "applies": "live",
+              "min": -5,
+              "max": 5,
+              "step": 0.1
+            },
+            {
+              "id": "dsp.nrAnf.nr2TrainT2",
+              "label": "T2",
+              "tooltip": "EMNR T2 training parameter. Range 0.0 to 2.0.",
+              "kind": "decimal",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nr2TrainT2"
+                }
+              },
+              "applies": "live",
+              "min": 0,
+              "max": 2,
+              "step": 0.05
+            },
+            {
+              "id": "dsp.nrAnf.nr2AeFilter",
+              "label": "AE Filter",
+              "tooltip": "Enable EMNR Acoustic Echo (AE) filter stage.",
+              "kind": "toggle",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nr2AeFilter"
+                }
+              },
+              "applies": "live"
+            },
+            {
+              "id": "dsp.nrAnf.nr2Position",
+              "label": "Position",
+              "tooltip": "",
+              "kind": "choice",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nr2Position"
+                }
+              },
+              "applies": "live",
+              "choices": [
+                "Pre-AGC",
+                "Post-AGC"
+              ]
+            }
+          ]
+        },
+        {
+          "title": "NR2 Noise Post-Proc",
+          "controls": [
+            {
+              "id": "dsp.nrAnf.nr2Post2Run",
+              "label": "Enable",
+              "tooltip": "Enable EMNR Noise Post-Processing cascade.",
+              "kind": "toggle",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nr2Post2Run"
+                }
+              },
+              "applies": "live"
+            },
+            {
+              "id": "dsp.nrAnf.nr2Post2Level",
+              "label": "Level",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nr2Post2Level"
+                }
+              },
+              "applies": "live",
+              "min": 0,
+              "max": 100,
+              "step": 1
+            },
+            {
+              "id": "dsp.nrAnf.nr2Post2Factor",
+              "label": "Factor",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nr2Post2Factor"
+                }
+              },
+              "applies": "live",
+              "min": 0,
+              "max": 100,
+              "step": 0.1
+            },
+            {
+              "id": "dsp.nrAnf.nr2Post2Rate",
+              "label": "Rate",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nr2Post2Rate"
+                }
+              },
+              "applies": "live",
+              "min": 0,
+              "max": 100,
+              "step": 0.1
+            },
+            {
+              "id": "dsp.nrAnf.nr2Post2Taper",
+              "label": "Taper",
+              "tooltip": "",
+              "kind": "slider",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nr2Post2Taper"
+                }
+              },
+              "applies": "live",
+              "min": 0,
+              "max": 100,
+              "step": 1
+            }
+          ]
+        },
+        {
+          "title": "NR3 (RNNoise)",
+          "controls": [
+            {
+              "id": "dsp.nrAnf.nr3Position",
+              "label": "Position",
+              "tooltip": "",
+              "kind": "choice",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nr3Position"
+                }
+              },
+              "applies": "live",
+              "choices": [
+                "Pre-AGC",
+                "Post-AGC"
+              ]
+            },
+            {
+              "id": "dsp.nrAnf.nr3UseDefaultGain",
+              "label": "Use fixed gain for input samples",
+              "tooltip": "Use a fixed (rather than adaptive) input sample gain.",
+              "kind": "toggle",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nr3UseDefaultGain"
+                }
+              },
+              "applies": "live"
+            }
+          ]
+        },
+        {
+          "title": "NR4 (SpecBleach)",
+          "controls": [
+            {
+              "id": "dsp.nrAnf.nr4Reduction",
+              "label": "Reduction",
+              "tooltip": "Spectral reduction amount in dB. Range 0-20, step 1.",
+              "kind": "decimal",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nr4Reduction"
+                }
+              },
+              "applies": "live",
+              "min": 0,
+              "max": 20,
+              "step": 1,
+              "unit": " dB"
+            },
+            {
+              "id": "dsp.nrAnf.nr4Smoothing",
+              "label": "Smoothing",
+              "tooltip": "Spectral smoothing factor. Range 0-100.",
+              "kind": "decimal",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nr4Smoothing"
+                }
+              },
+              "applies": "live",
+              "min": 0,
+              "max": 100,
+              "step": 1,
+              "unit": "%"
+            },
+            {
+              "id": "dsp.nrAnf.nr4Whitening",
+              "label": "Whitening",
+              "tooltip": "Spectral whitening factor. Range 0-100.",
+              "kind": "decimal",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nr4Whitening"
+                }
+              },
+              "applies": "live",
+              "min": 0,
+              "max": 100,
+              "step": 1,
+              "unit": "%"
+            },
+            {
+              "id": "dsp.nrAnf.nr4Rescale",
+              "label": "Rescale",
+              "tooltip": "Output rescale factor. Range 0-12, step 1.",
+              "kind": "decimal",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nr4Rescale"
+                }
+              },
+              "applies": "live",
+              "min": 0,
+              "max": 12,
+              "step": 1,
+              "unit": " dB"
+            },
+            {
+              "id": "dsp.nrAnf.nr4PostThresh",
+              "label": "SNRthresh",
+              "tooltip": "Post-processing SNR threshold. Range -10 to +10 dB, step 1.",
+              "kind": "decimal",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nr4PostThresh"
+                }
+              },
+              "applies": "live",
+              "min": -10,
+              "max": 10,
+              "step": 1,
+              "unit": " dB"
+            },
+            {
+              "id": "dsp.nrAnf.nr4Algo",
+              "label": "Algorithm",
+              "tooltip": "",
+              "kind": "choice",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nr4Algo"
+                }
+              },
+              "applies": "live",
+              "choices": [
+                "Algo 1",
+                "Algo 2",
+                "Algo 3"
+              ]
+            }
+          ]
+        },
+        {
+          "title": "DeepFilter NR",
+          "controls": [
+            {
+              "id": "dsp.nrAnf.dfnrAttenLimit",
+              "label": "Attenuation Limit",
+              "tooltip": "Maximum noise attenuation in dB (0 = bypass, 100 = maximum). Default 100. Higher values suppress more noise but may clip speech peaks.",
+              "kind": "decimal",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "dfnrAttenLimit"
+                }
+              },
+              "applies": "live",
+              "min": 0,
+              "max": 100,
+              "step": 1,
+              "unit": " dB"
+            },
+            {
+              "id": "dsp.nrAnf.dfnrPostFilterBeta",
+              "label": "Post-Filter Beta",
+              "tooltip": "Post-filter aggressiveness (0 = disabled, 0.30 = maximum). Default 0. Higher values reduce residual musical-noise artifacts but may over-attenuate consonants.",
+              "kind": "decimal",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "dfnrPostFilterBeta"
+                }
+              },
+              "applies": "live",
+              "min": 0,
+              "max": 0.3,
+              "step": 0.01
+            }
+          ]
+        },
+        {
+          "title": "macOS NR (MNR)",
+          "controls": [
+            {
+              "id": "dsp.nrAnf.mnrStrength",
+              "label": "Strength",
+              "tooltip": "Dry/wet blend. 0%% = bypass (filter runs but output = input), 100%% = full NR, 200%% = over-drive (phase-flip, destructive). Default 100%%.",
+              "kind": "decimal",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "mnrStrength"
+                }
+              },
+              "applies": "live",
+              "min": 0,
+              "max": 2,
+              "step": 0.01,
+              "unit": "%"
+            },
+            {
+              "id": "dsp.nrAnf.mnrOversub",
+              "label": "Aggressiveness",
+              "tooltip": "MMSE-Wiener oversubtraction factor. Higher = more attenuation on low-SNR bins; 1 = gentle, 4 = default, 20+ = underwater.",
+              "kind": "decimal",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "mnrOversub"
+                }
+              },
+              "applies": "live",
+              "min": 1,
+              "max": 1000,
+              "step": 1
+            },
+            {
+              "id": "dsp.nrAnf.mnrFloor",
+              "label": "Floor",
+              "tooltip": "Minimum Wiener gain per bin (x0.001). 0 = silence, 50 = -26 dB (default), 1000 = 0 dB, 2000 = amplify.",
+              "kind": "decimal",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "mnrFloor"
+                }
+              },
+              "applies": "live",
+              "min": 0,
+              "max": 2,
+              "step": 0.001,
+              "unit": "m"
+            },
+            {
+              "id": "dsp.nrAnf.mnrAlpha",
+              "label": "Alpha",
+              "tooltip": "Decision-directed smoothing (x0.01). 0 = no smoothing (chattery), 92 = Ephraim-Malah classic (default), 100 = frozen prior SNR.",
+              "kind": "decimal",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "mnrAlpha"
+                }
+              },
+              "applies": "live",
+              "min": 0,
+              "max": 1,
+              "step": 0.01
+            },
+            {
+              "id": "dsp.nrAnf.mnrBias",
+              "label": "Bias",
+              "tooltip": "Min-statistics noise-floor bias (x0.1). <10 = underestimate noise (less NR), 12 = default, >30 = overestimate (erodes signal). Nudge up if NR is weak, down if it eats speech.",
+              "kind": "decimal",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "mnrBias"
+                }
+              },
+              "applies": "live",
+              "min": 0,
+              "max": 10,
+              "step": 0.1
+            },
+            {
+              "id": "dsp.nrAnf.mnrGsmooth",
+              "label": "Gsmooth",
+              "tooltip": "Temporal gain smoothing (x0.01). 0 = instant (musical noise), 70 = balanced (default), 100 = frozen gain.",
+              "kind": "decimal",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "mnrGsmooth"
+                }
+              },
+              "applies": "live",
+              "min": 0,
+              "max": 1,
+              "step": 0.01
+            }
+          ]
+        },
+        {
+          "title": "Neural noise reduction (NNR)",
+          "controls": [
+            {
+              "id": "dsp.nrAnf.nnrModelSlot",
+              "label": "Model",
+              "tooltip": "This preference remains editable while offline.",
+              "kind": "choice",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nnrModelSlot"
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "nnrVersion",
+                "min": 1
+              },
+              "choices": [
+                "Standard",
+                "Premium"
+              ]
+            },
+            {
+              "id": "dsp.nrAnf.nnrMaskFloorDb",
+              "label": "Suppression",
+              "tooltip": "More-negative values permit stronger suppression. Higher values retain more of the original signal and noise.",
+              "kind": "decimal",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nnrMaskFloorDb"
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "nnrVersion",
+                "min": 1
+              },
+              "min": -50,
+              "max": -10,
+              "step": 0.01,
+              "unit": " dB"
+            },
+            {
+              "id": "dsp.nrAnf.nnrPosition",
+              "label": "Position",
+              "tooltip": "Choose whether NNR runs before or after automatic gain control.",
+              "kind": "choice",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nnrPosition"
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "nnrVersion",
+                "min": 1
+              },
+              "choices": [
+                "Pre-AGC",
+                "Post-AGC"
+              ]
+            },
+            {
+              "id": "dsp.nrAnf.nnrAlpha",
+              "label": "Alpha",
+              "tooltip": "Shapes deep-filter gains below the alpha knee. A value of 1 leaves those gains unchanged; values above 1 deepen them, while values below 1 lift them.",
+              "kind": "decimal",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nnrAlpha"
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "nnrVersion",
+                "min": 1
+              },
+              "min": 0,
+              "max": 4,
+              "step": 0.01
+            },
+            {
+              "id": "dsp.nrAnf.nnrAlphaKneeDb",
+              "label": "Alpha knee",
+              "tooltip": "Gain threshold below which Alpha reshapes the deep-filter response.",
+              "kind": "decimal",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nnrAlphaKneeDb"
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "nnrVersion",
+                "min": 1
+              },
+              "min": 0,
+              "max": 40,
+              "step": 0.1,
+              "unit": " dB"
+            },
+            {
+              "id": "dsp.nrAnf.nnrTauSeconds",
+              "label": "Noise time",
+              "tooltip": "Time constant for input-power normalization before the neural network.",
+              "kind": "decimal",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nnrTauSeconds"
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "nnrVersion",
+                "min": 1
+              },
+              "min": 0.05,
+              "max": 30,
+              "step": 0.05,
+              "unit": " s"
+            },
+            {
+              "id": "dsp.nrAnf.nnrMaxGainDb",
+              "label": "Maximum gain",
+              "tooltip": "Maximum gain the neural stage may add.",
+              "kind": "decimal",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nnrMaxGainDb"
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "nnrVersion",
+                "min": 1
+              },
+              "min": 0,
+              "max": 24,
+              "step": 0.1,
+              "unit": " dB"
+            },
+            {
+              "id": "dsp.nrAnf.nnrAttackMs",
+              "label": "Attack",
+              "tooltip": "How quickly suppression engages. Zero uses the model response.",
+              "kind": "decimal",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nnrAttackMs"
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "nnrVersion",
+                "min": 1
+              },
+              "min": 0,
+              "max": 500,
+              "step": 0.1,
+              "unit": " ms"
+            },
+            {
+              "id": "dsp.nrAnf.nnrReleaseMs",
+              "label": "Release",
+              "tooltip": "How quickly suppression relaxes. Zero uses the model response.",
+              "kind": "decimal",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nnrReleaseMs"
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "nnrVersion",
+                "min": 1
+              },
+              "min": 0,
+              "max": 500,
+              "step": 0.1,
+              "unit": " ms"
+            }
+          ]
+        },
+        {
+          "title": "NNR actions",
+          "controls": [
+            {
+              "id": "dsp.nrAnf.nnrResetTuning",
+              "label": "Reset tuning",
+              "tooltip": "",
+              "kind": "button",
+              "binding": {
+                "command": {
+                  "verb": "nnr.resetTuning",
+                  "arguments": {
+                    "sliceId": {
+                      "$property": {
+                        "object": "slice:active",
+                        "name": "sliceIndex"
+                      }
+                    }
+                  }
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "nnrVersion",
+                "min": 1
+              }
+            }
+          ]
+        },
+        {
+          "title": "Adaptive Noise Filter",
+          "controls": [
+            {
+              "id": "dsp.nrAnf.anfEnabled",
+              "label": "Enable ANF",
+              "tooltip": "Enable Adaptive Notch Filter.",
+              "kind": "toggle",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "anfEnabled"
+                }
+              },
+              "applies": "live"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "dsp.nbSnb",
+      "title": "NB/SNB",
+      "where": "station",
+      "sections": [
+        {
+          "title": "NB1",
+          "controls": [
+            {
+              "id": "dsp.nbSnb.nb1Threshold",
+              "label": "Threshold",
+              "tooltip": "Controls the detection threshold for impulse noise.\nLower = more aggressive (blanks weaker impulses too).\nHigher = more conservative (only strong clicks get blanked).",
+              "kind": "slider",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nb1Threshold"
+                }
+              },
+              "applies": "live",
+              "min": 1,
+              "max": 1000,
+              "step": 1
+            },
+            {
+              "id": "dsp.nbSnb.nb1TransitionMs",
+              "label": "Transition",
+              "tooltip": "Time to decrease/increase to/from zero amplitude around an\nimpulse. Controls how gradually the blanker fades in and out:\nvery short = crisp click; longer = gentler but audible.",
+              "kind": "decimal",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nb1TransitionMs"
+                }
+              },
+              "applies": "live",
+              "min": 0.01,
+              "max": 2,
+              "step": 0.01,
+              "unit": " ms"
+            },
+            {
+              "id": "dsp.nbSnb.nb1LeadMs",
+              "label": "Lead",
+              "tooltip": "Time at zero amplitude BEFORE the detected impulse. Blanks\nthe leading edge of the click that the detector would\notherwise miss. Raise slightly if clicks still get through.",
+              "kind": "decimal",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nb1LeadMs"
+                }
+              },
+              "applies": "live",
+              "min": 0.01,
+              "max": 2,
+              "step": 0.01,
+              "unit": " ms"
+            },
+            {
+              "id": "dsp.nbSnb.nb1LagMs",
+              "label": "Lag",
+              "tooltip": "Time to remain at zero amplitude AFTER the impulse. Blanks\nthe decay tail of the click. Raise this if pops still have\nan audible ringing after the initial transient.",
+              "kind": "decimal",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nb1LagMs"
+                }
+              },
+              "applies": "live",
+              "min": 0.01,
+              "max": 2,
+              "step": 0.01,
+              "unit": " ms"
+            },
+            {
+              "id": "dsp.nbSnb.nb2Mode",
+              "label": "NB2 Mode",
+              "tooltip": "Method used to fill in the blanked samples when NB2 triggers.\nZero silences the impulse entirely; the other modes synthesise\na replacement waveform from surrounding samples to reduce\naudible artifacts on voice peaks.",
+              "kind": "choice",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nb2Mode"
+                }
+              },
+              "applies": "live",
+              "choices": [
+                "Zero",
+                "Sample && Hold",
+                "Mean-Hold",
+                "Hold && Sample",
+                "Linear Interpolate"
+              ]
+            }
+          ]
+        },
+        {
+          "title": "SNB",
+          "controls": [
+            {
+              "id": "dsp.nbSnb.snbK1",
+              "label": "Threshold 1",
+              "tooltip": "Multiple of the running noise power at which a sample is\nflagged as a candidate outlier. Lower = more aggressive\nfirst-pass detection; higher = miss weaker noise.",
+              "kind": "decimal",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "snbK1"
+                }
+              },
+              "applies": "live",
+              "min": 2,
+              "max": 20,
+              "step": 0.1
+            },
+            {
+              "id": "dsp.nbSnb.snbK2",
+              "label": "Threshold 2",
+              "tooltip": "Multiplier applied to the final detection threshold. It confirms\ncandidates from Threshold 1 as real noise outliers. Lower =\nmore aggressive overall blanking; higher = fewer false triggers\non genuine voice peaks.",
+              "kind": "decimal",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "snbK2"
+                }
+              },
+              "applies": "live",
+              "min": 4,
+              "max": 60,
+              "step": 0.1
+            },
+            {
+              "id": "dsp.nbSnb.snbOutputBandwidthHz",
+              "label": "Output Bandwidth",
+              "tooltip": "Width of the audio band SNB operates on, centred on zero.\nSmaller = focuses the blanker on the active passband;\nlarger = covers wider modes (FM, DRM). Default 6000 Hz\ncovers SSB + AM comfortably.",
+              "kind": "slider",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "snbOutputBandwidthHz"
+                }
+              },
+              "applies": "live",
+              "min": 100,
+              "max": 96000,
+              "step": 1,
+              "unit": " Hz"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

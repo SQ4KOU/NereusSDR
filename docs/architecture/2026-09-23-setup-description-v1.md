@@ -90,6 +90,17 @@ or refuses the edit with a plain reason; it never reuses an old value. The
 station's existing command remains atomic. The Core validates the static
 description shape, while each client resolves the runtime references.
 
+For a per-receiver property, `object: "slice:active"` is the plan's dynamic
+alias. The client resolves it to its currently selected, owned slice in the
+current session and epoch at the start of an interaction, then writes that
+concrete `slice:<id>` mirror object. If selection changes during a gesture,
+the client cancels the pending edit instead of retargeting it. A missing,
+retired, or no-longer-owned selected slice disables the control and refuses
+the edit; there is no slice-zero or station-global active-slice fallback. The
+Core continues to enforce ownership on every inbound write. The same alias
+may be used in a command argument's `$property` reference, with the same
+session and selection checks.
+
 The Thetis-derived text and ranges in JSON are GPL material. Their upstream
 header is preserved in `resources/setup/HEADERS.md`, with each file listed in
 `docs/attribution/THETIS-PROVENANCE.md`.

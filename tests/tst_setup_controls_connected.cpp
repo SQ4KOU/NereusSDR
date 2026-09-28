@@ -260,7 +260,7 @@ private slots:
         CwSetupPage cwPage(&model);
         AmSamSetupPage amPage(&model);
         FmSetupPage fmPage(&model);
-        auto* anf = anfPage.findChild<QCheckBox*>(QStringLiteral("anfEnableCheck"));
+        QPointer<QCheckBox> anf = anfPage.findChild<QCheckBox*>(QStringLiteral("anfEnableCheck"));
         auto* apf = cwPage.findChild<QPushButton*>(QStringLiteral("apfEnableButton"));
         auto* center = cwPage.findChild<QSlider*>(QStringLiteral("apfCenterSlider"));
         auto* am = amPage.findChild<QSlider*>(QStringLiteral("amSquelchThresholdSlider"));
@@ -270,6 +270,9 @@ private slots:
         const int second = model.addSlice();
         QVERIFY(second >= 0);
         model.setActiveSlice(second);
+        QVERIFY(anf.isNull()); // NR tabs discard the prior receiver's gesture widgets.
+        anf = anfPage.findChild<QCheckBox*>(QStringLiteral("anfEnableCheck"));
+        QVERIFY(anf != nullptr);
         SliceModel* active = model.activeSlice();
         QVERIFY(active != nullptr && active != first);
         active->setAnfEnabled(true);

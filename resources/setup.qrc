@@ -4,5 +4,6 @@
         <file alias="test.json">setup/test.json</file>
         <file alias="diagnostics.json">setup/diagnostics.json</file>
         <file alias="catNetwork.json">setup/catNetwork.json</file>
+        <file alias="dsp.json">setup/dsp.json</file>
     </qresource>
 </RCC>
