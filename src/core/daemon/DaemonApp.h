@@ -239,11 +239,15 @@ public:
     /// object startControlSocket() serves).
     StationControlReply runControlCommand(const QStringList& args);
     enum class StationReleaseResult { Pending, Failed, Stopped };
+    enum class StationReleaseRecoveryResult { Pending, Restored, Unavailable };
     // Called by the entry-point release coordinator. The first call unkeys
     // before any other release work; completion is deferred past a nested
     // WDSP connect stack and refuses to destroy unsaved model state.
     void beginStationRelease();
     StationReleaseResult tryCompleteStationRelease(QString* reason);
+    // A refused pre-teardown release keeps the same model and settings.
+    // Reopen its ordinary host after the nested radio connect stack unwinds.
+    StationReleaseRecoveryResult recoverFailedStationRelease();
 
     /// The Core's label as the status page and console show it: its
     /// renamed label, or core_name, or this computer's name.
@@ -300,6 +304,9 @@ public:
     }
     void setStopAllTxForTest(std::function<void()> stop) {
         m_stopAllTxForTest = std::move(stop);
+    }
+    void setAfterStationStopForTest(std::function<void()> afterStop) {
+        m_afterStationStopForTest = std::move(afterStop);
     }
     void setDiscoveryProviderForTest(std::function<QList<RadioInfo>()> provider) {
         m_discoveryProviderForTest = std::move(provider);
@@ -537,6 +544,7 @@ private:
     quint64 m_radioRecoveryGeneration {0};
     quint64 m_radioRunGeneration {0};
     bool m_radioRecoveryEnabled {false};
+    bool m_stationReleaseRadioRecoveryWasEnabled {false};
     bool m_radioAttempted {false};
     bool m_radioConnectedBefore {false};
     bool m_retiringRadio {false};
@@ -584,6 +592,7 @@ private:
     // Install test audio devices before discovery can enter real DSP startup.
     std::function<void(RadioModel*)> m_radioInitializerForTest;
     std::function<void()> m_stopAllTxForTest;
+    std::function<void()> m_afterStationStopForTest;
     std::optional<HPSDRHW> m_testBoard;
     QString m_testRadioMac;
 #endif

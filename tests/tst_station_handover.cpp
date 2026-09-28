@@ -14,6 +14,8 @@
 #include <QTemporaryDir>
 #include <QUuid>
 
+#include <atomic>
+
 #include "core/AppSettings.h"
 #include "core/CoreInit.h"
 #include "core/daemon/DaemonApp.h"
@@ -220,7 +222,7 @@ private slots:
         QVERIFY(daemon.waitForFinished(3000));
     }
 
-    void failedSaveRetainsLockAndCanRetry()
+    void preTeardownFailedSaveRestoresCommandsAndCanRetry()
     {
 #ifdef Q_OS_WIN
         QSKIP("Directory permission failure injection is POSIX-only.");
@@ -266,10 +268,73 @@ private slots:
                  qPrintable(failed.text));
         QCOMPARE(daemon.state(), QProcess::Running);
         QVERIFY(!profileLock.acquire(0));
+        QTRY_VERIFY_WITH_TIMEOUT(!StationControlSocket::request(
+            socketPath, {QStringLiteral("pairing"), QStringLiteral("show")})
+                .text.contains(QStringLiteral("Only status and release")), 5000);
         const StationControlReply mutation = StationControlSocket::request(
             socketPath, {QStringLiteral("pairing"), QStringLiteral("open")});
         QVERIFY(!mutation.ok);
-        QVERIFY(mutation.text.contains(QStringLiteral("Only status and release")));
+        // The settings write failed before the model was destroyed. The
+        // retained Core has recovered its ordinary command path; this
+        // command can still fail because the profile is read-only.
+        QVERIFY2(!mutation.text.contains(QStringLiteral("Only status and release")),
+                 qPrintable(mutation.text));
+        QVERIFY(QFile::setPermissions(directory, QFileDevice::ReadOwner | QFileDevice::WriteOwner
+                                                 | QFileDevice::ExeOwner));
+        const StationControlReply retry = StationControlSocket::request(
+            socketPath, {QStringLiteral("release")});
+        QVERIFY2(retry.ok, qPrintable(retry.text));
+        QVERIFY(profileLock.acquire(1000));
+        profileLock.release();
+#endif
+    }
+
+    void postTeardownFailedSaveStaysFencedAndCanRetry()
+    {
+#ifdef Q_OS_WIN
+        QSKIP("Directory permission failure injection is POSIX-only.");
+#else
+        QTemporaryDir scratch;
+        QVERIFY(scratch.isValid());
+        const QString config = configFile(scratch, true);
+        QVERIFY(!config.isEmpty());
+        const QString socketPath = QDir(scratch.path()).filePath(
+            QString::fromLatin1(StationControlSocket::kSocketName));
+        const QString profile = profileName();
+        const QString directory = AppSettings::resolveConfigDir(profile);
+        StationHandover profileLock(profile);
+        QProcess daemon;
+        QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+        env.insert(QStringLiteral("NEREUS_HANDOVER_TEST_DISABLE_DISCOVERY"), QStringLiteral("1"));
+        env.insert(QStringLiteral("NEREUS_HANDOVER_TEST_PRIMED_BOARD"), QStringLiteral("1"));
+        env.insert(QStringLiteral("NEREUS_HANDOVER_TEST_FAIL_AFTER_STOP"), QStringLiteral("1"));
+        daemon.setProcessEnvironment(env);
+        daemon.start(QCoreApplication::applicationFilePath(),
+                     {QStringLiteral("--daemon-helper"), QStringLiteral("--config"), config,
+                      QStringLiteral("--profile"), profile});
+        const auto cleanup = qScopeGuard([&] {
+            QFile::setPermissions(directory, QFileDevice::ReadOwner | QFileDevice::WriteOwner
+                                              | QFileDevice::ExeOwner);
+            if (daemon.state() != QProcess::NotRunning) {
+                daemon.kill();
+                daemon.waitForFinished();
+            }
+            QDir(directory).removeRecursively();
+        });
+        QVERIFY(daemon.waitForStarted());
+        QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(socketPath), 10000);
+        const StationControlReply failed = StationControlSocket::request(
+            socketPath, {QStringLiteral("release")});
+        QVERIFY(!failed.ok);
+        QVERIFY2(failed.text.contains(QStringLiteral("could not save")),
+                 qPrintable(failed.text));
+        QCOMPARE(daemon.state(), QProcess::Running);
+        QVERIFY(!profileLock.acquire(0));
+        const StationControlReply mutation = StationControlSocket::request(
+            socketPath, {QStringLiteral("pairing"), QStringLiteral("open")});
+        QVERIFY(!mutation.ok);
+        QVERIFY2(mutation.text.contains(QStringLiteral("Only status and release")),
+                 qPrintable(mutation.text));
         QVERIFY(QFile::setPermissions(directory, QFileDevice::ReadOwner | QFileDevice::WriteOwner
                                                  | QFileDevice::ExeOwner));
         const StationControlReply retry = StationControlSocket::request(
@@ -471,6 +536,66 @@ private slots:
         // A retry cannot establish a fresh baseline over the unsaved edit.
         QCOMPARE(daemon.tryCompleteStationRelease(&reason),
                  DaemonApp::StationReleaseResult::Failed);
+        daemon.stop();
+    }
+
+    void offlineRefusalDefersRecoveryAndKeepsOriginalModel()
+    {
+        QTcpServer portProbe;
+        QVERIFY(portProbe.listen(QHostAddress::LocalHost, 0));
+        const quint16 port = portProbe.serverPort();
+        portProbe.close();
+        DaemonConfig config = DaemonConfig::defaults();
+        config.radioMac = QStringLiteral("02:00:00:00:00:54");
+        config.remoteBind = QStringLiteral("127.0.0.1");
+        config.remotePort = port;
+        config.statusPage = false;
+        DaemonApp daemon;
+        std::atomic<int> discoveryAttempts {0};
+        daemon.setDiscoveryProviderForTest([&] {
+            ++discoveryAttempts;
+            return QList<RadioInfo>{};
+        });
+        QVERIFY(daemon.start(config));
+        QVERIFY(daemon.stationListenerReady());
+        QTRY_VERIFY_WITH_TIMEOUT(discoveryAttempts.load() >= 1, 5000);
+        RadioModel* const model = daemon.radioModelForTest();
+        QVERIFY(model && model->receiveLayoutPendingAdmission());
+        SliceModel* const slice = model->sliceById(0);
+        QVERIFY(slice);
+        const double editedFrequency = slice->frequency() + 1000.0;
+        slice->setFrequency(editedFrequency);
+
+        daemon.beginStationRelease();
+        QVERIFY(!daemon.stationListenerReady());
+        daemon.setRadioConnectInProgressForTest(true);
+        QString reason;
+        QCOMPARE(daemon.tryCompleteStationRelease(&reason),
+                 DaemonApp::StationReleaseResult::Pending);
+        QCOMPARE(daemon.recoverFailedStationRelease(),
+                 DaemonApp::StationReleaseRecoveryResult::Pending);
+        QCOMPARE(daemon.radioModelForTest(), model);
+        daemon.setRadioConnectInProgressForTest(false);
+        QCOMPARE(daemon.tryCompleteStationRelease(&reason),
+                 DaemonApp::StationReleaseResult::Failed);
+        QVERIFY(reason.contains(QStringLiteral("unsaved receiver changes")));
+        QCOMPARE(daemon.recoverFailedStationRelease(),
+                 DaemonApp::StationReleaseRecoveryResult::Restored);
+        QCOMPARE(daemon.radioModelForTest(), model);
+        QCOMPARE(slice->frequency(), editedFrequency);
+        QVERIFY(daemon.stationListenerReady());
+        QCOMPARE(daemon.stationListenAttemptCountForTest(), 1);
+        QTRY_VERIFY_WITH_TIMEOUT(discoveryAttempts.load() >= 2, 5000);
+
+        daemon.beginStationRelease();
+        QCOMPARE(daemon.tryCompleteStationRelease(&reason),
+                 DaemonApp::StationReleaseResult::Failed);
+        QCOMPARE(daemon.recoverFailedStationRelease(),
+                 DaemonApp::StationReleaseRecoveryResult::Restored);
+        QCOMPARE(daemon.radioModelForTest(), model);
+        QCOMPARE(slice->frequency(), editedFrequency);
+        QVERIFY(daemon.stationListenerReady());
+        QCOMPARE(daemon.stationListenAttemptCountForTest(), 1);
         daemon.stop();
     }
 

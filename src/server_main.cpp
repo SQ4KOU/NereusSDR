@@ -144,6 +144,7 @@
 #include <QCommandLineParser>
 #include <QCoreApplication>
 #include <QElapsedTimer>
+#include <QFile>
 #include <QFileInfo>
 #include <QMetaObject>
 #include <QLocalSocket>
@@ -174,6 +175,8 @@ public:
 #ifdef NEREUS_BUILD_TESTS
         m_testReleaseDelayMs = qMax(0, qEnvironmentVariableIntValue(
             "NEREUS_HANDOVER_TEST_RELEASE_DELAY_MS"));
+        m_testRecoveryDelayMs = qMax(0, qEnvironmentVariableIntValue(
+            "NEREUS_HANDOVER_TEST_RECOVERY_DELAY_MS"));
 #endif
     }
 
@@ -201,11 +204,11 @@ public:
     QString lastError() const { return m_control ? m_control->lastError() : QString(); }
 
 private:
-    enum class State { Running, Releasing, Failed, Released };
+    enum class State { Running, Releasing, Recovering, Failed, Released };
 
     void acceptRelease(QLocalSocket* socket)
     {
-        if (m_state == State::Releasing) {
+        if (m_state == State::Releasing || m_state == State::Recovering) {
             NereusSDR::StationControlSocket::sendReply(
                 socket, {false, QStringLiteral("The Core is already handing back the radio.")});
             return;
@@ -227,7 +230,10 @@ private:
 
     void fail(const QString& reason)
     {
-        m_state = State::Failed;
+        // Keep every control mutation and duplicate release fenced until the
+        // pre-teardown owner is listening again. A late save failure has no
+        // model to restore and settles in Failed instead.
+        m_state = State::Recovering;
         if (m_replySocket) {
             NereusSDR::StationControlSocket::sendReply(
                 m_replySocket, {false, reason.isEmpty()
@@ -235,6 +241,19 @@ private:
                     : reason});
         }
         m_replySocket.clear();
+        QTimer::singleShot(m_testRecoveryDelayMs, this, [this]() { advanceRecovery(); });
+    }
+
+    void advanceRecovery()
+    {
+        if (m_state != State::Recovering) { return; }
+        const auto result = m_daemon.recoverFailedStationRelease();
+        if (result == NereusSDR::DaemonApp::StationReleaseRecoveryResult::Pending) {
+            QTimer::singleShot(50, this, [this]() { advanceRecovery(); });
+            return;
+        }
+        m_state = result == NereusSDR::DaemonApp::StationReleaseRecoveryResult::Restored
+            ? State::Running : State::Failed;
     }
 
     void advance()
@@ -295,6 +314,7 @@ private:
     QPointer<QLocalSocket> m_replySocket;
     QElapsedTimer m_elapsed;
     State m_state {State::Running};
+    int m_testRecoveryDelayMs {0};
 #ifdef NEREUS_BUILD_TESTS
     int m_testReleaseDelayMs {0};
 #endif
@@ -557,6 +577,19 @@ int main(int argc, char* argv[])
         // Process integration tests must never send radio discovery packets.
         daemon.primeBoardForTest(NereusSDR::HPSDRHW::HermesLite,
                                  QStringLiteral("02:00:00:00:00:48"));
+    }
+    if (qEnvironmentVariableIsSet("NEREUS_HANDOVER_TEST_FAIL_AFTER_STOP")) {
+        // Force only the final settings write to fail, after stop() has
+        // destroyed the model. The test parent restores this isolated
+        // profile directory before asking the retained owner to retry.
+        const QString settingsDirectory = QFileInfo(
+            NereusSDR::AppSettings::instance().filePath()).absolutePath();
+        daemon.setAfterStationStopForTest([settingsDirectory, first = true]() mutable {
+            if (!first) { return; }
+            first = false;
+            QFile::setPermissions(settingsDirectory,
+                                  QFileDevice::ReadOwner | QFileDevice::ExeOwner);
+        });
     }
 #endif
     ReleaseCoordinator release(daemon, ownership, app);
