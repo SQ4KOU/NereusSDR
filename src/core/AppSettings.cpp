@@ -85,6 +85,7 @@
 #include <QFileInfo>
 #include <QRegularExpression>
 #include <QSaveFile>
+#include <QBuffer>
 #include <QSet>
 #include <QStandardPaths>
 #include <QXmlStreamReader>
@@ -435,12 +436,14 @@ bool parseSettingsXml(const QString& sanitizedXml,
     QXmlStreamReader xml(sanitizedXml);
     QString currentStation;
     bool inStation = false;
+    bool rootSeen = false;
 
     while (!xml.atEnd()) {
         xml.readNext();
         if (xml.isStartElement()) {
             const QString tag = xml.name().toString();
-            if (tag == QStringLiteral("NereusSDR")) {
+            if (!rootSeen && tag == QStringLiteral("NereusSDR")) {
+                rootSeen = true;
                 continue;
             }
             if (!inStation && xml.attributes().hasAttribute(QStringLiteral("type"))
@@ -473,6 +476,138 @@ bool parseSettingsXml(const QString& sanitizedXml,
         return false;
     }
     return true;
+}
+
+bool parseImportXml(const QByteArray& input, QMap<QString, QString>& settings,
+                    QMap<QString, QString>& stationSettings, QString& stationName,
+                    QString* error)
+{
+    auto reject = [error](const QString& reason) {
+        if (error) {
+            *error = reason;
+        }
+        return false;
+    };
+    if (input.isEmpty()) {
+        return reject(QStringLiteral("Settings XML is empty"));
+    }
+    if (input.size() > 16 * 1024 * 1024) {
+        return reject(QStringLiteral("Settings XML exceeds 16 MiB"));
+    }
+    QXmlStreamReader xml(input);
+    int depth = 0;
+    bool rootSeen = false;
+    bool rootClosed = false;
+    bool stationSeen = false;
+    bool inStation = false;
+    stationName = QStringLiteral("NereusSDR");
+    while (!xml.atEnd()) {
+        const QXmlStreamReader::TokenType token = xml.readNext();
+        if (token == QXmlStreamReader::DTD || token == QXmlStreamReader::EntityReference) {
+            return reject(QStringLiteral("Settings XML may not contain DTDs or entities"));
+        }
+        if (token == QXmlStreamReader::StartElement) {
+            ++depth;
+            const QString tag = xml.name().toString();
+            const QXmlStreamAttributes attrs = xml.attributes();
+            if (depth == 1) {
+                if (rootSeen || rootClosed || tag != QStringLiteral("NereusSDR")
+                    || !attrs.isEmpty()) {
+                    return reject(QStringLiteral("Settings XML has the wrong root"));
+                }
+                rootSeen = true;
+                continue;
+            }
+            if (depth == 2 && attrs.size() == 1
+                && attrs.value(QStringLiteral("type")) == QStringLiteral("station")) {
+                if (stationSeen) {
+                    return reject(QStringLiteral("Settings XML has multiple station groups"));
+                }
+                stationSeen = true;
+                inStation = true;
+                stationName = tag;
+                continue;
+            }
+            if ((depth == 2 && !inStation) || (depth == 3 && inStation)) {
+                if (!attrs.isEmpty()) {
+                    return reject(QStringLiteral("Settings XML key has unexpected attributes"));
+                }
+                const QString key = decodeXmlKey(tag);
+                QMap<QString, QString>& target = inStation ? stationSettings : settings;
+                if (target.contains(key)) {
+                    return reject(QStringLiteral("Settings XML has a duplicate key: %1").arg(key));
+                }
+                const QString value = xml.readElementText();
+                if (xml.hasError()) {
+                    return reject(QStringLiteral("Settings XML has unexpected nested structure: %1")
+                                  .arg(xml.errorString()));
+                }
+                target.insert(key, value);
+                --depth; // readElementText consumed this element's end token.
+                continue;
+            }
+            return reject(QStringLiteral("Settings XML has unexpected nested structure"));
+        }
+        if (token == QXmlStreamReader::EndElement) {
+            if (depth == 2 && inStation) {
+                inStation = false;
+            }
+            --depth;
+            if (depth == 0) {
+                rootClosed = true;
+            }
+        } else if (token == QXmlStreamReader::Characters && !xml.isWhitespace()) {
+            return reject(QStringLiteral("Settings XML has text outside a value"));
+        }
+    }
+    if (xml.hasError() || !rootClosed || depth != 0) {
+        return reject(QStringLiteral("Settings XML is malformed: %1").arg(xml.errorString()));
+    }
+    if (error) {
+        error->clear();
+    }
+    return true;
+}
+
+QByteArray serializeLocalXml(const QMap<QString, QString>& settings,
+                             const QMap<QString, QString>& stationSettings,
+                             const QString& stationName, QString* error)
+{
+    QByteArray output;
+    QBuffer buffer(&output);
+    if (!buffer.open(QIODevice::WriteOnly)) {
+        if (error) {
+            *error = QStringLiteral("Settings XML buffer could not be opened");
+        }
+        return {};
+    }
+    QXmlStreamWriter xml(&buffer);
+    xml.setAutoFormatting(true);
+    xml.writeStartDocument();
+    xml.writeStartElement(QStringLiteral("NereusSDR"));
+    for (auto it = settings.constBegin(); it != settings.constEnd(); ++it) {
+        xml.writeTextElement(encodeXmlKey(it.key()), it.value());
+    }
+    if (!stationSettings.isEmpty()) {
+        xml.writeStartElement(stationName);
+        xml.writeAttribute(QStringLiteral("type"), QStringLiteral("station"));
+        for (auto it = stationSettings.constBegin(); it != stationSettings.constEnd(); ++it) {
+            xml.writeTextElement(encodeXmlKey(it.key()), it.value());
+        }
+        xml.writeEndElement();
+    }
+    xml.writeEndElement();
+    xml.writeEndDocument();
+    if (xml.hasError()) {
+        if (error) {
+            *error = QStringLiteral("Settings XML could not be written");
+        }
+        return {};
+    }
+    if (error) {
+        error->clear();
+    }
+    return output;
 }
 
 void logLoadedSummary(const QMap<QString, QString>& settings,
@@ -642,6 +777,11 @@ bool AppSettings::save(QString* error)
     if (error) {
         error->clear();
     }
+    const QByteArray localXml = serializeLocalXml(m_settings, m_stationSettings,
+                                                   m_stationName, error);
+    if (localXml.isEmpty()) {
+        return false;
+    }
     // Ensure directory exists
     QDir().mkpath(QFileInfo(m_filePath).absolutePath());
 
@@ -701,39 +841,14 @@ bool AppSettings::save(QString* error)
         return false;
     }
 
-    {
-        QXmlStreamWriter xml(&file);
-        xml.setAutoFormatting(true);
-        xml.writeStartDocument();
-        xml.writeStartElement(QStringLiteral("NereusSDR"));
-
-        // Write top-level settings (encode keys so XML element names are valid)
-        for (auto it = m_settings.constBegin(); it != m_settings.constEnd(); ++it) {
-            xml.writeTextElement(encodeXmlKey(it.key()), it.value());
+    if (file.write(localXml) != localXml.size()) {
+        const QString reason = QStringLiteral("Settings XML could not be written: %1")
+            .arg(file.errorString());
+        file.cancelWriting();
+        if (error) {
+            *error = reason;
         }
-
-        // Write station settings
-        if (!m_stationSettings.isEmpty()) {
-            xml.writeStartElement(m_stationName);
-            xml.writeAttribute(QStringLiteral("type"), QStringLiteral("station"));
-            for (auto it = m_stationSettings.constBegin(); it != m_stationSettings.constEnd(); ++it) {
-                xml.writeTextElement(encodeXmlKey(it.key()), it.value());
-            }
-            xml.writeEndElement();
-        }
-
-        xml.writeEndElement(); // NereusSDR
-        xml.writeEndDocument();
-        if (xml.hasError()) {
-            const QString reason = QStringLiteral("Settings XML could not be written: %1")
-                .arg(file.errorString());
-            file.cancelWriting();
-            qWarning() << reason;
-            if (error) {
-                *error = reason;
-            }
-            return false;
-        }
+        return false;
     }
 
     if (!file.commit()) {
@@ -747,6 +862,49 @@ bool AppSettings::save(QString* error)
 
     QFile::setPermissions(m_filePath,
                           QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+    return true;
+}
+
+QByteArray AppSettings::exportLocalXml(QString* error) const
+{
+    return serializeLocalXml(m_settings, m_stationSettings, m_stationName, error);
+}
+
+bool AppSettings::validateLocalXml(const QByteArray& input, QString* error)
+{
+    QMap<QString, QString> settings;
+    QMap<QString, QString> stationSettings;
+    QString stationName;
+    return parseImportXml(input, settings, stationSettings, stationName, error);
+}
+
+bool AppSettings::importLocalXml(const QByteArray& input, QString* error)
+{
+    if (error) {
+        error->clear();
+    }
+    if (m_remoteBackend || m_changeHook) {
+        if (error) {
+            *error = QStringLiteral("Settings owner is still active; stop its proxy and change hook before import");
+        }
+        return false;
+    }
+    QMap<QString, QString> settings;
+    QMap<QString, QString> stationSettings;
+    QString stationName;
+    if (!parseImportXml(input, settings, stationSettings, stationName, error)) {
+        return false;
+    }
+    AppSettings replacement(m_filePath);
+    replacement.m_settings = settings;
+    replacement.m_stationSettings = stationSettings;
+    replacement.m_stationName = stationName;
+    if (!replacement.save(error)) {
+        return false;
+    }
+    m_settings.swap(settings);
+    m_stationSettings.swap(stationSettings);
+    m_stationName.swap(stationName);
     return true;
 }
 

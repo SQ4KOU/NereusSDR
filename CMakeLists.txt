@@ -933,6 +933,7 @@ endif()
 set(CORE_SOURCES
     src/core/AntennaLabels.cpp
     src/core/AppSettings.cpp
+    src/core/settings/SettingsBackup.cpp
     src/core/BoardCapabilities.cpp
     src/core/BuildIdentity.cpp
     src/core/FFTRouter.cpp
