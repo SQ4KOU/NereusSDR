@@ -234,6 +234,7 @@ private slots:
         const QStringList expectedIds{QStringLiteral("pa.values.forwardCalibrated"),
                                       QStringLiteral("pa.values.reflectedPower"),
                                       QStringLiteral("pa.values.swr"),
+                                      QStringLiteral("pa.values.drive"),
                                       QStringLiteral("pa.values.forwardAdc"),
                                       QStringLiteral("pa.values.reflectedAdc")};
         QStringList actualIds;
@@ -246,7 +247,9 @@ private slots:
                 actualIds.append(id);
                 auto* widget = qobject_cast<MetricLabel*>(bySetupId(page, id));
                 QVERIFY2(widget != nullptr, qPrintable(id));
-                QVERIFY(SetupDescriptionService::validatePaReadoutBinding(control));
+                QVERIFY(id == QLatin1String("pa.values.drive")
+                            ? SetupDescriptionService::validatePaDriveReadoutBinding(control)
+                            : SetupDescriptionService::validatePaReadoutBinding(control));
                 QCOMPARE(widget->toolTip(), control.value("tooltip").toString());
                 auto* group = qobject_cast<QGroupBox*>(widget->parentWidget());
                 QVERIFY(group != nullptr);
@@ -261,8 +264,10 @@ private slots:
         QCOMPARE(actualIds, expectedIds);
         const QJsonArray power = sections.first().toObject().value("controls").toArray();
         const QJsonArray raw = sections.last().toObject().value("controls").toArray();
-        QCOMPARE(power.size(), 3);
+        QCOMPARE(power.size(), 4);
         QCOMPARE(raw.size(), 2);
+        model.transmitModel().setPower(37);
+        QCOMPARE(page.driveTextForTest(), QStringLiteral("37 W"));
     }
 
     void describedHardwareAntennaScalarsMatchDesktop_data()

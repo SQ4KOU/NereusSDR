@@ -171,6 +171,7 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                         && !SetupDescription::validateHardwarePropertyBinding(control))
                     || (id == QLatin1String("pa")
                         && !SetupDescription::validatePaReadoutBinding(control)
+                        && !SetupDescription::validatePaDriveReadoutBinding(control)
                         && !SetupDescription::validatePaBypassBinding(control))
                     || (id == QLatin1String("audio")
                         && !SetupDescription::validateAudioPropertyBinding(control))
@@ -535,6 +536,34 @@ bool SetupDescription::validatePaReadoutBinding(const QJsonObject& control)
         && MirrorPolicy::hasExplicitEntry(QByteArrayLiteral("TransmitState"), name)
         && MirrorPolicy::directionFor(QByteArrayLiteral("TransmitState"), name)
             == MirrorDirection::Outbound;
+}
+
+bool SetupDescription::validatePaDriveReadoutBinding(const QJsonObject& control)
+{
+    const QJsonObject binding = control.value(QStringLiteral("binding")).toObject();
+    const QJsonObject ref = binding.value(QStringLiteral("property")).toObject();
+    if (control.size() != 9 || binding.size() != 1 || ref.size() != 2
+        || ref != QJsonObject{{QStringLiteral("object"), QStringLiteral("transmit")},
+                              {QStringLiteral("name"), QStringLiteral("power")}}
+        || control.value(QStringLiteral("id")) != QJsonValue(QStringLiteral("pa.values.drive"))
+        || control.value(QStringLiteral("label")) != QJsonValue(QStringLiteral("Drive:"))
+        || control.value(QStringLiteral("tooltip")) != QJsonValue(QString())
+        || control.value(QStringLiteral("kind")) != QJsonValue(QStringLiteral("readout"))
+        || control.value(QStringLiteral("applies")) != QJsonValue(QStringLiteral("live"))
+        || control.value(QStringLiteral("gate")).toObject()
+            != QJsonObject{{QStringLiteral("capability"), QStringLiteral("transmitSettingsVersion")},
+                           {QStringLiteral("min"), 1}}
+        || control.value(QStringLiteral("decimals")) != QJsonValue(0)
+        || control.value(QStringLiteral("unit")) != QJsonValue(QStringLiteral("W"))) {
+        return false;
+    }
+    const QByteArray name = QByteArrayLiteral("power");
+    const MirrorProperty* property = MirrorSchema::forMetaObject(
+        &TransmitModel::staticMetaObject).byName(name);
+    return property && property->isWritable && property->kind == MirrorWireKind::Int64
+        && MirrorPolicy::hasExplicitEntry(QByteArrayLiteral("TransmitModel"), name)
+        && MirrorPolicy::directionFor(QByteArrayLiteral("TransmitModel"), name)
+            == MirrorDirection::Bidirectional;
 }
 
 bool SetupDescription::validatePaBypassBinding(const QJsonObject& control)

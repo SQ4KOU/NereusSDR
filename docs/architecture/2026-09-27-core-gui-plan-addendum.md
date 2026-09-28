@@ -1739,6 +1739,12 @@ colours for the same signal.
   settings gate, including the receive-only Core exception. No Core authority
   or schema ordinal changed. Lead review and the app/Core build plus fourteen
   named integration suites pass (11.13 s). This remains a partial PA page.
+  Drive is now described in signed `9af39d292`: a readout of the selected
+  `transmit.power` value, not measured RF output, with its existing version-1
+  capability gate. It is the sixth PA readout, remains visible while keyed,
+  and sends no write. Lead review and the combined app/Core build plus four
+  explicitly rebuilt Setup/native PA suites pass (6.39 s; load before run
+  10.36/9.30/9.08). Derived readings and PA actions remain open.
 - Plan: Core Hardware Config/PA Setup description dependencies in the phone plan
   and remote-window Hardware/PA parity.
 
@@ -1984,6 +1990,52 @@ colours for the same signal.
 - Status: observed in the real Linux build; exact target-definition diagnosis
   and bounded repair remain. The active immutable build continues unchanged.
 - Plan: reliable, efficient full-suite builds across CI platforms.
+
+### G-102: Trace and Fill colour is changed live but not saved
+
+- Evidence: the Display/Appearance scout traced the built Colors & Theme
+  swatch to `SpectrumWidget::setFillColor()`. It schedules a settings save,
+  but `loadSettings()` and `saveSettings()` omit `m_fillColor`. The other nine
+  built appearance swatches have per-pan saved keys. Reopening the window
+  therefore loses this choice.
+- Ruling basis: JJ requires working desktop parity and every discovered gap
+  to be built in this effort. This is missing persistence in an existing
+  control, with no change to its colour or rendering defaults.
+- Status: in progress in the isolated parity lane. Use `DisplayFillColor`,
+  the existing Qt `#AARRGGBB` format, and the same pan suffix and pan-zero
+  inheritance rules as the neighboring saved swatches. Verify alpha and
+  independent overrides through actual save/load paths.
+  Implementation inspection also found that the shared colour reader bypasses
+  the existing pan-zero fallback. The documented July 30 behavior says that
+  untouched pans follow pan zero until given their own values. Restore that
+  already-settled behavior for the shared per-pan colour reader too; global
+  Peak colours remain global. The scout's initial claim that those existing
+  swatches already inherited was incorrect.
+- Plan: Display/Appearance parity and the phone's local colour descriptions.
+
+### G-103: Display and Appearance have no published Setup descriptions
+
+- Evidence: `StationCatalog` publishes eleven display controls and preset
+  palette stops, but neither `resources/setup/display.json` nor
+  `appearance.json` exists. The source scout mapped the built desktop pages,
+  Core settings, local per-pan and per-band keys, and subscription fields.
+  Catalogue controls do not substitute for Setup pages or settle phone-local
+  persistence. Colours currently use three explicit formats: catalogue
+  `#RRGGBB`, SpectrumWidget `#AARRGGBB`, and Peak swatches `#RRGGBBAA`.
+- Ruling basis: JJ includes every Core dependency of the phone plan and built
+  desktop parity in this effort. Publish exact existing behavior and ownership;
+  do not describe hidden placeholders as working features. His accepted
+  decimation range is 1-16, with calibration applied once in both windows.
+- Status: source inventory complete; publication and the cross-checked phone
+  binding contract remain open. The lead has sent the exact map to the phone
+  owner, recommending literal PascalCase binding names within per-pan/per-band
+  phone storage and explicit `#RRGGBBAA` phone colour values. These are proposed
+  implementation details, not a claimed JJ ruling. The discrete FFT slider,
+  active-band grid context, TX subscription mapping, 3D page and local actions
+  must be accounted for before full coverage is claimed. Partial publication
+  may unblock verified controls but does not close this gap.
+- Plan: phone Display/Appearance description and renderer dependencies, and
+  remote-window parity.
 
 ## How this addendum is kept
 
