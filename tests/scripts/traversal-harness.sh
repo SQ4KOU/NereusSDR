@@ -139,6 +139,9 @@
 #               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 #   2026-09-27: Task 29 fix wave (review Important 1): upgrade-media.
 #               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+#   2026-09-28: observe the selected IPv6 pair after first echo, within the
+#               existing preference window. J.J. Boyd (KG4VCF), AI-assisted
+#               via OpenAI Codex.
 # =================================================================
 
 set -euo pipefail
@@ -608,9 +611,10 @@ stop_station() {
 # run_client NS: prints the client's JSON result line.
 run_client() {
     local ns="$1"
+    shift
     in_ns "$ns" "$PEER" client --dir "$WORK/client-key" --server "$SERVER" \
         --station-id "$(cat "$WORK/station-id")" --timeout-ms 90000 \
-        --ca "$WORK/ca.pem" 2>>"$WORK/client.log" | tail -n 1 || true
+        --ca "$WORK/ca.pem" "$@" 2>>"$WORK/client.log" | tail -n 1 || true
 }
 
 field() { python3 -c "import json,sys; print(json.loads(sys.argv[1]).get(sys.argv[2]))" "$1" "$2"; }
@@ -924,7 +928,7 @@ if scenario ipv6-both; then
     reset_rules
     ipv6_both up
     start_station deny
-    result="$(run_client cli)"
+    result="$(run_client cli --require-ipv6)"
     check ipv6-both "$result" True False
     local_address="$(field "$result" localAddress 2>/dev/null || echo None)"
     remote_address="$(field "$result" remoteAddress 2>/dev/null || echo None)"
