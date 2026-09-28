@@ -40,6 +40,7 @@
 #include <QScopeGuard>
 #include <QSignalSpy>
 #include <QTemporaryDir>
+#include <QStandardPaths>
 #include <QWheelEvent>
 
 #include <algorithm>
@@ -410,6 +411,81 @@ class TstMoxDisplayController : public QObject {
     Q_OBJECT
 
 private slots:
+    // Opt-in, offscreen evidence capture for the iPhone Task 54f software gate.
+    // This is the real remote pan stack and media path, without a radio.
+    void remoteTransmitDisplayEvidence()
+    {
+        const QString output = qEnvironmentVariable("NEREUS_TX_DISPLAY_EVIDENCE");
+        if (output.isEmpty()) { QSKIP("Set NEREUS_TX_DISPLAY_EVIDENCE to capture PNGs"); }
+        QStandardPaths::setTestModeEnabled(true);
+        RemoteWindow window(/*withAnalyzer=*/true);
+        auto* coreSlice = window.station.sliceById(window.txSliceId);
+        coreSlice->setFrequency(7'236'400.0);
+        coreSlice->setDspMode(DSPMode::LSB);
+        coreSlice->setFilterLow(-3000);
+        coreSlice->setFilterHigh(-100);
+        coreSlice->setTxSlice(true);
+        SpectrumWidget* two = window.pan(QStringLiteral("two"));
+        two->setSampleRate(96'000.0);
+        two->setDdcCenterFrequency(7'236'400.0);
+        two->setDisplayWindowPreservingHistory(7'236'400.0, 8'000.0);
+        QVERIFY(window.connect());
+        two->setTxMode(DSPMode::LSB);
+        two->setVfoFrequency(7'236'400.0);
+        two->setTxFilterRange(100, 2900);
+        two->setTxFilterVisible(true);
+        two->setDisplayFps(15);
+        window.stack.applyLayout(QStringLiteral("2h"),
+                                 {QStringLiteral("one"), QStringLiteral("two")});
+        window.stack.resize(1206, 900);
+        QSignalSpy contexts(window.gui.get(), &RemoteMediaController::transmitContextReceived);
+        window.key(true);
+        QTRY_VERIFY(window.controller->isKeyed());
+        QTRY_VERIFY_WITH_TIMEOUT(two->m_txCenterHz != 0.0, 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(!contexts.isEmpty(), 5000);
+        const auto context = contexts.last().at(1).value<SpectrumContextMessage>();
+        QVERIFY(context.traceSamples > 0);
+        two->setDisplayWindowPreservingHistory(7'236'400.0, 8'000.0);
+        QCoreApplication::processEvents();
+        const int count = context.traceSamples;
+        const double low = 7'236'400.0 - 4'000.0;
+        const double binHz = 8'000.0 / count;
+        for (int row = 0; row < 600; ++row) {
+            QVector<float> trace(count);
+            for (int index = 0; index < count; ++index) {
+                const double hz = low + (index + 0.5) * binHz;
+                const float wobble = float(std::sin(index * 0.37 + row * 0.21)) * 3.0f;
+                if (hz >= 7'233'500.0 && hz <= 7'236'300.0) {
+                    const float syllable = float(std::sin(hz / 420.0 + row * 0.09)) * 9.0f;
+                    trace[index] = -18.0f + syllable + wobble;
+                } else {
+                    const double skirt = hz > 7'236'300.0 ? hz - 7'236'300.0 : 7'233'500.0 - hz;
+                    trace[index] = std::max(-66.0f + wobble, -30.0f - float(skirt / 60.0));
+                }
+            }
+            emit window.analyzer->txFftReady(-1, trace);
+            emit window.analyzer->txWaterfallReady(-1, trace);
+            // The media budget drops burst rows. Fill the screenshot's
+            // history through the same widget paint input while the real
+            // context and transmitted trace travel through media.
+            two->pushTxWaterfallRow(-1, trace);
+            QCoreApplication::processEvents();
+        }
+        QTRY_VERIFY_WITH_TIMEOUT(!two->m_renderedPixels.isEmpty(), 5000);
+        QVERIFY(window.stack.grab().save(output + QStringLiteral("/desktop-keyed-pan-stack.png")));
+
+        window.station.swrProt().setEnabled(true);
+        window.station.swrProt().setWindBackEnabled(true);
+        for (int sample = 0; sample < 50 && !window.station.swrProt().highSwr(); ++sample) {
+            window.station.swrProt().ingest(50.0f, 30.0f, false);
+        }
+        QTRY_VERIFY(two->isHighSwrOverlayActive());
+        QVERIFY(two->isHighSwrFoldback());
+        QCoreApplication::processEvents();
+        QVERIFY(window.stack.grab().save(output + QStringLiteral("/desktop-high-swr-pan-stack.png")));
+        window.key(false);
+    }
+
     // ── The local window unchanged ─────────────────────────────────────────
 
     void localRiseAndFallMakeTheOldLambdasCalls()

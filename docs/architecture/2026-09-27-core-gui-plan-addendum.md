@@ -735,6 +735,22 @@ colours for the same signal.
   service dependencies. Phase-specific passes are not a green current-branch suite.
 - Plan: cross-platform verification for the whole Core/GUI PR.
 
+### G-49: Supported CPU spectrum renderer did not compile
+
+- Evidence: macOS Qt's offscreen platform cannot create QRhi. Building the supported
+  QPainter renderer exposed `m_visibleBinCount` declared only under the GPU guard,
+  although the shared trace query and MOX/context reset methods reference it.
+- Ruling: JJ's requirement to finish and verify cross-platform display parity covers
+  this compile repair. No display design or spectrum calculations change.
+- Status: signed lane `aa9b26bf` moves the zero-initialized count outside the guard.
+  Fresh CPU capture fixtures pass and the actual images were inspected by both Core
+  and phone leads. The CPU painter still draws from rendered pixels and leaves this
+  GPU count zero. Fresh integrated GPU builds and the two existing display/window
+  suites pass (32.89 s); opt-in captures remain CPU-only. The synthetic full-window
+  capture injects trace data; full-window media delivery, shared view, DUP, XIT and
+  hardware/RF acceptance remain open.
+- Plan: remote-window transmit display parity and verification.
+
 ## How this addendum is kept
 
 New gaps are appended here as they are found, each with its own `G-` number (next available

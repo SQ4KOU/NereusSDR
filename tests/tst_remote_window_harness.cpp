@@ -84,10 +84,16 @@
 #include <QTreeWidget>
 #include <QTreeWidgetItemIterator>
 
+#include <algorithm>
+#include <cmath>
+#include <memory>
+
 #include "core/safety/TxRefusal.h"
 #include "OperatorWording.h"
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
+#include "core/MoxController.h"
+#include "core/TxAnalyzer.h"
 #include "core/BoardCapabilities.h"
 #include "core/SkuUiProfile.h"
 #include "core/StepAttenuatorController.h"
@@ -97,6 +103,8 @@
 #include "core/session/StationClient.h"
 #include "gui/meters/MeterPoller.h"
 #include "gui/MainWindow.h"
+#include "gui/MoxDisplayController.h"
+#include "gui/RemoteMediaController.h"
 #include "gui/OperatorReasonText.h"
 #include "gui/RemoteConnectionController.h"
 #include "gui/SetupDialog.h"
@@ -312,6 +320,75 @@ class TestRemoteWindowHarness final : public QObject {
     Q_OBJECT
 
 private slots:
+    // Opt-in full-window companion to the remote pan capture. The Core and
+    // window are real, but the trace rows are test-synthesised at the widget.
+    void remoteTransmitDisplayWindowEvidence()
+    {
+        const QString output = qEnvironmentVariable("NEREUS_TX_DISPLAY_EVIDENCE");
+        if (output.isEmpty()) { QSKIP("Set NEREUS_TX_DISPLAY_EVIDENCE to capture PNGs"); }
+        auto analyzer = std::make_unique<TxAnalyzer>(TxAnalyzer::kTxDispId);
+        RemoteWindowHarness h;
+        h.station().setTxAnalyzer(analyzer.get());
+        auto* coreSlice = h.station().activeSlice();
+        QVERIFY(coreSlice);
+        coreSlice->setFrequency(7'236'400.0);
+        coreSlice->setDspMode(DSPMode::LSB);
+        coreSlice->setFilterLow(-3000);
+        coreSlice->setFilterHigh(-100);
+        coreSlice->setTxSlice(true);
+        QVERIFY(h.start());
+        h.startStartupConnection();
+        QTRY_VERIFY_WITH_TIMEOUT(h.client()->isHandshakeComplete(), 10000);
+        auto* pan = h.panSpectrum(QStringLiteral("pan-0"));
+        auto* display = h.window()->findChild<MoxDisplayController*>();
+        auto* media = h.window()->findChild<RemoteMediaController*>();
+        QVERIFY(pan && display && media);
+        pan->setTxMode(DSPMode::LSB);
+        pan->setVfoFrequency(7'236'400.0);
+        pan->setTxFilterRange(100, 2900);
+        pan->setTxFilterVisible(true);
+        h.window()->resize(1280, 800);
+        auto* mox = h.station().moxController();
+        QVERIFY(mox);
+        mox->setMoxCheck({});
+        mox->setMox(true);
+        QTRY_VERIFY_WITH_TIMEOUT(display->isKeyed(), 5000);
+        // MainWindow has no media transport seam. Supply this synthetic
+        // post-reduction display directly after the Core's key reaches it.
+        media->setPanTransmitting(QStringLiteral("pan-0"), true, false);
+        pan->setTxCenterFrequency(7'236'400.0);
+        pan->setTxSampleRate(8'000.0);
+        pan->setDisplayWindowPreservingHistory(7'236'400.0, 8'000.0);
+        for (int row = 0; row < 600; ++row) {
+            QVector<float> trace(1280);
+            for (int index = 0; index < trace.size(); ++index) {
+                const double hz = 7'232'400.0 + (index + 0.5) * (8'000.0 / trace.size());
+                const float wobble = float(std::sin(index * 0.37 + row * 0.21)) * 3.0f;
+                if (hz >= 7'233'500.0 && hz <= 7'236'300.0) {
+                    trace[index] = -18.0f + float(std::sin(hz / 420.0 + row * 0.09)) * 9.0f + wobble;
+                } else {
+                    const double skirt = hz > 7'236'300.0 ? hz - 7'236'300.0 : 7'233'500.0 - hz;
+                    trace[index] = std::max(-66.0f + wobble, -30.0f - float(skirt / 60.0));
+                }
+            }
+            pan->updateSpectrumFromTxPixels(-1, trace);
+            pan->pushTxWaterfallRow(-1, trace);
+            QCoreApplication::processEvents();
+        }
+        QVERIFY(pan->drawsSpectrumTrace());
+        QVERIFY(h.window()->grab().save(output + QStringLiteral("/desktop-keyed-full-window.png")));
+        h.station().swrProt().setEnabled(true);
+        h.station().swrProt().setWindBackEnabled(true);
+        for (int sample = 0; sample < 50 && !h.station().swrProt().highSwr(); ++sample) {
+            h.station().swrProt().ingest(50.0f, 15.0f, false);
+        }
+        QTRY_VERIFY_WITH_TIMEOUT(pan->isHighSwrOverlayActive(), 5000);
+        QVERIFY(pan->isHighSwrFoldback());
+        QVERIFY(h.window()->grab().save(output + QStringLiteral("/desktop-high-swr-full-window.png")));
+        mox->setMox(false);
+        h.station().setTxAnalyzer(nullptr);
+    }
+
     void initTestCase()
     {
         // A whole window logs every settings read at debug level; keep the
