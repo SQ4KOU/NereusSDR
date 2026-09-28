@@ -27,7 +27,7 @@ status, and the plan task or requirement ID it belongs to.
   lane. The first Core description slice publishes 35 controls across four pages
   in General, Test and Core TCI; coverage remains explicitly partial and
   Diagnostics remains unpublished. Setup-aware peers receive its read-only
-  object; older peers remain unchanged. Integrated app/Core build and eight
+  object; older peers remain unchanged. Integrated app/Core build and seven
   session/Setup checks passed, followed by repaired full surface and session
   conformance checks (five targets, 35.68 s). Omitted controls and empty pages
   do not count as completed parity. General Region is active behind
@@ -844,6 +844,37 @@ colours for the same signal.
   PlaceFreed's 180-second case is covered by Core integration; its wire fixture
   awaits a runner that can defer the initially opened 30-second pre-auth connection.
 - Plan: Core device admission and multi-device lifecycle.
+
+### G-54: Noise-reduction Setup stayed bound to the previously selected receiver
+
+- Evidence: NR1-4, DFNR and MNR controls captured the active slice when Setup
+  opened. Selecting another receiver could leave edits targeting the old one.
+- Ruling: JJ's goal requires finishing every remote-window parity task and
+  building every discovered gap. The existing selected-receiver contract applies;
+  this is its implementation repair, without a new operator-policy decision.
+- Status: NR/ANF rebuilds its controls on selection changes, destroys the old
+  gesture widgets and connections, retains the selected tab, and disables edits
+  without a receiver. Integrated app/Core build and six Setup/NR suites passed
+  (2.70 s), including A-to-B edits, removal fallback and old-widget destruction.
+  DSP descriptions now cover 51 controls across NR/ANF and NB/SNB; remaining
+  DSP pages and composite NNR controls are still explicitly incomplete.
+- Plan: remote-window selected-receiver parity and Core DSP Setup descriptions.
+
+### G-55: TCP relay loss can delay transmit keepalives beyond the safety cutoff
+
+- Evidence: a seeded 3% loss, 150 ms RTT harness run stopped a 25-second
+  simulated TUNE at 15.082 seconds. Client-to-front frames stalled for 376.748 ms;
+  service forwarding took about 0.24 ms. Core first received the next burst
+  400.441 ms after its last validated heartbeat, already beyond the 400 ms limit.
+  TCP retransmission/head-of-line delay is the strongest inference; packet-specific
+  retransmission was not captured. The later 2.5 ms callback delay is secondary.
+- Ruling: JJ requires the cause and a suggested fix for load failures. The existing
+  400 ms safety cutoff remains unchanged. A separate authenticated heartbeat path
+  is a proposal under review, not an approved protocol or an implemented fix.
+- Status: OPEN. Diagnosis is recorded in
+  `~/.config/nereus/work/core-gui-r5-loss-diagnosis-report.md`; no production change
+  or deadline relaxation. The observed failure remains an R5 acceptance gap.
+- Plan: R5 direct-WSS/web-relay transmit under impaired networks.
 
 ## How this addendum is kept
 

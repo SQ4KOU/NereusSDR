@@ -156,6 +156,7 @@ public:
     void selectSubtab(NereusSDR::NrSlot slot, int openerSliceId = -1);
 
 private:
+    void rebuildForActiveSlice();
     QTabWidget* m_tabs{nullptr};  // owned by content layout
     NnrControls* m_nnrControls{nullptr};
 };

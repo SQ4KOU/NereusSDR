@@ -27,6 +27,7 @@ public:
     explicit SetupDescription(QObject* parent = nullptr);
 
     QJsonObject category(const QString& id) const;
+    static bool validateActiveSlicePropertyBinding(const QJsonObject& control);
     static bool validateCommandBinding(const QJsonObject& control, QString* error = nullptr);
     void setBoardCapabilities(const BoardCapabilities& caps);
     quint32 revision() const { return m_revision; }

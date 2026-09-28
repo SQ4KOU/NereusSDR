@@ -4,12 +4,14 @@
 #include "core/setup/SetupDescriptionService.h"
 #include "core/BoardCapabilities.h"
 #include "core/session/MirrorSchema.h"
+#include "core/session/MirrorPolicy.h"
 #include "core/session/StationCapabilities.h"
 #include "core/session/SessionMessages.h"
 #include "core/session/StationServer.h"
 #include "core/AppSettings.h"
 #include "core/ConnectionState.h"
 #include "models/RadioModel.h"
+#include "models/SliceModel.h"
 #include "fakes/LoopbackTransport.h"
 #include "fakes/UpgradedCoreToken.h"
 
@@ -117,7 +119,7 @@ private slots:
     {
         SetupDescriptionService service;
         for (const QString& id : {QStringLiteral("general"), QStringLiteral("test"),
-                                  QStringLiteral("catNetwork")}) {
+                                  QStringLiteral("catNetwork"), QStringLiteral("dsp")}) {
             const QJsonObject category = service.category(id);
             QCOMPARE(category.value(QStringLiteral("version")).toInt(), 1);
             QCOMPARE(category.value(QStringLiteral("category")).toObject()
@@ -163,6 +165,100 @@ private slots:
         const quint32 second = service.revision();
         service.setBoardCapabilities(BoardCapsTable::forBoard(HPSDRHW::HermesLite));
         QCOMPARE(service.revision(), second);
+    }
+
+    void dspPropertiesAreWritableOnTheSelectedSliceAlias()
+    {
+        SetupDescriptionService service;
+        const QJsonArray pages = service.category(QStringLiteral("dsp"))
+                                     .value(QStringLiteral("pages")).toArray();
+        QCOMPARE(pages.size(), 2);
+        const MirrorSchema& sliceSchema = MirrorSchema::forMetaObject(
+            &SliceModel::staticMetaObject);
+        int count = 0;
+        for (const QJsonValue& rawPage : pages) {
+            for (const QJsonValue& rawSection : rawPage.toObject()
+                     .value(QStringLiteral("sections")).toArray()) {
+                for (const QJsonValue& rawControl : rawSection.toObject()
+                         .value(QStringLiteral("controls")).toArray()) {
+                    if (rawControl.toObject().value("binding").toObject()
+                            .contains("command")) {
+                        QString error;
+                        QVERIFY2(SetupDescriptionService::validateCommandBinding(
+                            rawControl.toObject(), &error), qPrintable(error));
+                        continue;
+                    }
+                    const QJsonObject ref = rawControl.toObject().value("binding")
+                        .toObject().value("property").toObject();
+                    QVERIFY(SetupDescriptionService::validateActiveSlicePropertyBinding(
+                        rawControl.toObject()));
+                    QCOMPARE(ref.value("object").toString(), QStringLiteral("slice:active"));
+                    const QByteArray name = ref.value("name").toString().toUtf8();
+                    const MirrorProperty* property = sliceSchema.byName(name);
+                    QVERIFY2(property != nullptr, name.constData());
+                    QVERIFY(property->isWritable);
+                    QVERIFY(MirrorPolicy::inboundAllowed("SliceModel", name));
+                    ++count;
+                }
+            }
+        }
+        QCOMPARE(count, 50);
+        QJsonObject valid = pages.first().toObject().value("sections").toArray().first()
+            .toObject().value("controls").toArray().first().toObject();
+        QJsonObject bad = valid;
+        bad.insert("kind", "toggle");
+        QVERIFY(!SetupDescriptionService::validateActiveSlicePropertyBinding(bad));
+        QJsonObject binding = valid.value("binding").toObject();
+        QJsonObject ref = binding.value("property").toObject();
+        ref.insert("name", "nnrStatus"); // outbound-only diagnostic
+        binding.insert("property", ref);
+        bad = valid;
+        bad.insert("binding", binding);
+        QVERIFY(!SetupDescriptionService::validateActiveSlicePropertyBinding(bad));
+        ref.insert("name", "nr1Taps");
+        ref.insert("object", "slice:0"); // must be late-bound to this device's selection
+        binding.insert("property", ref);
+        bad.insert("binding", binding);
+        QVERIFY(!SetupDescriptionService::validateActiveSlicePropertyBinding(bad));
+    }
+
+    void dspWritesMutateOnlyTheNamedLiveSlice()
+    {
+        WireCore core;
+        QCOMPARE(core.model->addSlice(QStringLiteral("pan-0")), 1);
+        QVERIFY(core.connect({{QByteArrayLiteral("setupDescription"), 1}}));
+        SliceModel* first = core.model->sliceById(0);
+        SliceModel* second = core.model->sliceById(1);
+        QVERIFY(first != nullptr);
+        QVERIFY(second != nullptr);
+        const int firstTaps = first->nr1Taps();
+        const double secondK1 = second->snbK1();
+        core.app->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
+            "slice:1", {MirrorUpdate{0, "nr1Taps", MirrorWireKind::Int64, qint64(88)}}, 201)));
+        core.app->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
+            "slice:0", {MirrorUpdate{0, "snbK1", MirrorWireKind::Float64, 7.5}}, 202)));
+        QTRY_COMPARE(second->nr1Taps(), 88);
+        QTRY_COMPARE(first->snbK1(), 7.5);
+        QCOMPARE(first->nr1Taps(), firstTaps);
+        QCOMPARE(second->snbK1(), secondK1);
+        core.model->removeSlice(1);
+        QVERIFY(core.model->sliceById(1) == nullptr);
+        core.app->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
+            "slice:1", {MirrorUpdate{0, "nr1Taps", MirrorWireKind::Int64, qint64(99)}}, 203)));
+        auto retiredResult = [&core]() {
+            for (const QByteArray& wire : core.app->received()) {
+                const QJsonObject message = QJsonDocument::fromJson(wire).object();
+                if (message.value("type") == QJsonValue("property.result")
+                    && message.value("writeId").toInt() == 203) {
+                    return message;
+                }
+            }
+            return QJsonObject{};
+        };
+        QTRY_VERIFY(!retiredResult().isEmpty());
+        const QJsonArray results = retiredResult().value("results").toArray();
+        QCOMPARE(results.size(), 1);
+        QVERIFY(!results.first().toObject().value("accepted").toBool());
     }
 
     void legacyCapabilitiesWireIsUnchanged()

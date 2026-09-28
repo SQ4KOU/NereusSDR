@@ -2,7 +2,9 @@
 #include "core/setup/SetupDescriptionService.h"
 #include "core/session/SessionCommandDispatcher.h"
 #include "core/session/MirrorSchema.h"
+#include "core/session/MirrorPolicy.h"
 #include "models/StationTciModel.h"
+#include "models/SliceModel.h"
 
 #include <QFile>
 #include <QJsonArray>
@@ -43,7 +45,7 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps)
         const QString pageId = page.value(QStringLiteral("id")).toString();
         if (pageId.isEmpty() || ids.contains(pageId)
             || page.value(QStringLiteral("title")).toString().isEmpty()
-            || page.value(QStringLiteral("sections")).toArray().isEmpty()) {
+                    || page.value(QStringLiteral("sections")).toArray().isEmpty()) {
             return {};
         }
         ids.insert(pageId);
@@ -59,6 +61,15 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps)
                 if (controlId.isEmpty() || ids.contains(controlId)
                     || control.value(QStringLiteral("label")).toString().isEmpty()
                     || !control.value(QStringLiteral("binding")).isObject()
+                    || (id == QLatin1String("dsp")
+                        && !control.value(QStringLiteral("binding")).toObject()
+                                .contains(QStringLiteral("property"))
+                        && !control.value(QStringLiteral("binding")).toObject()
+                                .contains(QStringLiteral("command")))
+                    || (id == QLatin1String("dsp")
+                        && control.value(QStringLiteral("binding")).toObject()
+                               .contains(QStringLiteral("property"))
+                        && !SetupDescription::validateActiveSlicePropertyBinding(control))
                     || (control.value(QStringLiteral("binding")).toObject().contains(QStringLiteral("command"))
                         && !SetupDescription::validateCommandBinding(control))) {
                     return {};
@@ -107,6 +118,34 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps)
 }
 
 } // namespace
+
+bool SetupDescription::validateActiveSlicePropertyBinding(const QJsonObject& control)
+{
+    const QJsonObject binding = control.value(QStringLiteral("binding")).toObject();
+    if (binding.size() != 1 || !binding.value(QStringLiteral("property")).isObject()) {
+        return false;
+    }
+    const QJsonObject ref = binding.value(QStringLiteral("property")).toObject();
+    if (ref.size() != 2
+        || ref.value(QStringLiteral("object")).toString() != QLatin1String("slice:active")) {
+        return false;
+    }
+    const QByteArray name = ref.value(QStringLiteral("name")).toString().toUtf8();
+    const MirrorProperty* property = MirrorSchema::forMetaObject(&SliceModel::staticMetaObject)
+        .byName(name);
+    if (!property || !property->isWritable
+        || !MirrorPolicy::inboundAllowed(QByteArrayLiteral("SliceModel"), name)) {
+        return false;
+    }
+    const QString kind = control.value(QStringLiteral("kind")).toString();
+    const MirrorWireKind expected = kind == QLatin1String("toggle") ? MirrorWireKind::Bool
+        : kind == QLatin1String("decimal") ? MirrorWireKind::Float64
+        : kind == QLatin1String("choice") ? MirrorWireKind::Enum
+        : kind == QLatin1String("integer") || kind == QLatin1String("slider")
+          ? MirrorWireKind::Int64 : MirrorWireKind::Unsupported;
+    return property->kind == expected
+        || (kind == QLatin1String("choice") && property->kind == MirrorWireKind::Int64);
+}
 
 bool SetupDescription::validateCommandBinding(const QJsonObject& control, QString* error)
 {
@@ -158,7 +197,9 @@ bool SetupDescription::validateCommandBinding(const QJsonObject& control, QStrin
         // Future categories extend this map alongside their object bindings.
         const QString object = ref.value(QStringLiteral("object")).toString();
         const QMetaObject* meta = object == QLatin1String("stationTci")
-            ? &StationTciModel::staticMetaObject : nullptr;
+            ? &StationTciModel::staticMetaObject
+            : object == QLatin1String("slice:active")
+              ? &SliceModel::staticMetaObject : nullptr;
         if (!meta) {
             return MirrorWireKind::Unsupported;
         }
