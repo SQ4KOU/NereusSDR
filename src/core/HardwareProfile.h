@@ -14,6 +14,10 @@
 //   2026-09-23: profileForStation() added for remote windows (R-R3-46),
 //                 NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-28: defaultVoltCalibrationFor() ported from
+//                 GetDefaultVoltCalibration (clsHardwareSpecific.cs:265-292
+//                 [v2.10.3.15]) for the PA current calibration. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  clsHardwareSpecific.cs
@@ -114,6 +118,22 @@ HardwareProfile profileForRadio(HPSDRHW board, HPSDRModel model);
 // (model FIRST, the Unknown capability row), never Hermes. Local connects do
 // not use this: defaultModelForBoard() is unchanged for them.
 HardwareProfile profileForStation(HPSDRHW board, HPSDRModel reportedModel);
+
+// The PA current sensor's calibration: the sensor voltage offset (mV) and
+// the reading sensitivity (mV per amp), Thetis AmpVoff / AmpSens.
+struct VoltCalibration {
+    float voff{360.0f};
+    float sens{120.0f};
+};
+
+// The model's factory volt calibration, Thetis btnAmpDefault's source.
+// From Thetis clsHardwareSpecific.cs:265-292 [v2.10.3.15]
+// GetDefaultVoltCalibration. Upstream inline comments preserved verbatim:
+// Adjacent upstream tag (HasAmps, clsHardwareSpecific.cs:260): //N1GP G2E added
+//   :279  voff = 0.001f;                                // current sensor voltage offset
+//   :280  sens = 66.23f;                                // current reading sensitivity //0.001 to prevent /0 in the calcs
+//   :282  case HPSDRModel.ANAN_G2_1K:                       // will need adjustment probably
+VoltCalibration defaultVoltCalibrationFor(HPSDRModel model);
 
 // Return the list of HPSDRModel values compatible with a discovered board byte.
 // From Thetis NetworkIO.cs:164-171

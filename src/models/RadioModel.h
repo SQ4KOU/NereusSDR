@@ -3663,6 +3663,7 @@ public:
         // Plan Task 15: profileForRadio, as connectToRadio builds it.
         m_hardwareProfile = ::NereusSDR::profileForRadio(
             board, defaultModelForBoard(board));
+        m_calController.setHardwareModel(m_hardwareProfile.model);
         applyRxOnly();   // Task 16: the kit runs receive only
     }
 
