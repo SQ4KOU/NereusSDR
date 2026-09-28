@@ -697,13 +697,13 @@ private slots:
         QVERIFY(temp.isValid());
         AppSettings& settings = AppSettings::instance();
         QVERIFY(writeConfig(serviceConfigPath(settings), freePort()));
-        QStringList commands;
+        QList<QPair<QString, QStringList>> commands;
         StationServiceOptions service;
         service.profileDirectory = QFileInfo(settings.filePath()).absolutePath();
         service.homeDirectory = temp.filePath(QStringLiteral("home"));
         service.inheritActiveProfile = false;
         service.runner = [&commands](const QString& program, const QStringList& args) {
-            commands << program + args.join(QLatin1Char(' '));
+            commands.append({program, args});
             if (program == QStringLiteral("systemctl")
                 && args.contains(QStringLiteral("is-enabled"))) {
                 return StationServiceCommandResult{1, {}};
@@ -721,15 +721,14 @@ private slots:
         QVERIFY(!runtime.setRunCore(true));
         QVERIFY(!runtime.prepareForRetirement(true, &reason));
         QVERIFY(runtime.backgroundStartWanted());
-        // Linux may probe is-enabled while constructing the runtime; final
-        // service start still belongs to the caller after unlock.
-        for (const QString& command : commands) {
-            QVERIFY2(!command.contains(QStringLiteral(" start ")),
-                     qPrintable(command));
-            QVERIFY2(!command.contains(QStringLiteral(" enable ")),
-                     qPrintable(command));
-            QVERIFY2(!command.contains(QStringLiteral(" disable ")),
-                     qPrintable(command));
+        // The final service start belongs to the caller after unlock.
+        // Linux may make only this read-only probe while constructing the runtime.
+        for (const auto& command : commands) {
+            QCOMPARE(command.first, QStringLiteral("systemctl"));
+            QCOMPARE(command.second, (QStringList{QStringLiteral("--user"),
+                                                  QStringLiteral("is-enabled"),
+                                                  QStringLiteral("--quiet"),
+                                                  QStringLiteral("nereusd.service")}));
         }
         runtime.stop();
         QVERIFY(runtime.backgroundStartWanted());
