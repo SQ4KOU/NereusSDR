@@ -1646,6 +1646,8 @@ void StationClient::attachTransport(SessionTransport* transport, const QString& 
     // first session is epoch 1; 0 means "never attached"). See
     // sessionEpoch()'s doc comment.
     ++m_sessionEpoch;
+    // The old watch was folded before this new logical primary epoch.
+    m_retiredWatchTelemetry = {};
     m_cancelledSettingsBackupBegin.reset();
     m_hygieneValidateId = 0;
     m_hygieneValidateMac.clear();
@@ -5744,6 +5746,13 @@ void StationClient::retireDirectWatch()
     if (m_directWatchTicketTimer) { m_directWatchTicketTimer->stop(); }
     const QPointer<TxWatchClient> watch = m_directWatch;
     m_directWatch = nullptr;
+    if (watch) {
+        // Detach first, then fold once while the final attempt is still
+        // readable. Its close callbacks cannot add these bytes again.
+        const AuxiliaryWatchTelemetry final = watch->telemetry();
+        m_retiredWatchTelemetry.receivedPayloadBytes += final.receivedPayloadBytes;
+        m_retiredWatchTelemetry.submittedPayloadBytes += final.submittedPayloadBytes;
+    }
     const QPointer<DataChannelTransport> pending = m_pendingWatchRelayPeer;
     m_pendingWatchRelayPeer = nullptr;
     const std::shared_ptr<RelayLeg> leg = std::move(m_watchRelayLeg);
@@ -6710,6 +6719,18 @@ std::optional<SessionTransportTelemetry> StationClient::transportTelemetry() con
 {
     if (!m_sessionActive || !m_handshakeComplete || !m_transport) { return std::nullopt; }
     return m_transport->telemetry();
+}
+
+std::optional<AuxiliaryWatchTelemetry> StationClient::auxiliaryWatchTelemetry() const
+{
+    if (!m_sessionActive || !m_handshakeComplete || !m_transport) { return std::nullopt; }
+    AuxiliaryWatchTelemetry total = m_retiredWatchTelemetry;
+    if (m_directWatch) {
+        const AuxiliaryWatchTelemetry current = m_directWatch->telemetry();
+        total.receivedPayloadBytes += current.receivedPayloadBytes;
+        total.submittedPayloadBytes += current.submittedPayloadBytes;
+    }
+    return total;
 }
 
 bool StationClient::mediaAvailable() const

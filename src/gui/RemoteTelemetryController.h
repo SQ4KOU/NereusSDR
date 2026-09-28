@@ -4,6 +4,7 @@
 #include "gui/RemoteAudioStatus.h"
 #include "core/session/StationTelemetry.h"
 #include "core/session/SessionTransport.h"
+#include "core/session/TxWatchClient.h"
 #include "core/session/media/RemoteAudioReceiver.h"
 #include "core/session/media/MediaPeer.h"
 #include <QElapsedTimer>
@@ -96,6 +97,7 @@ private:
     std::optional<SessionTransportTelemetry> m_transportBaseline;
     std::optional<RemoteAudioReceiverTelemetry> m_playbackBaseline;
     std::optional<MediaPeerTelemetry> m_mediaBaseline;
+    std::optional<AuxiliaryWatchTelemetry> m_watchBaseline;
     struct PlaybackEvents {
         quint64 underflows = 0, overflows = 0;
         qint64 sampledMs = 0;

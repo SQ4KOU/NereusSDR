@@ -91,6 +91,7 @@ void TxWatchClient::receiveAck(const QByteArray& message)
         finish(QStringLiteral("unexpected watch message"));
         return;
     }
+    m_telemetry.receivedPayloadBytes += quint64(message.size());
     m_deadline->stop();
     m_ready = true;
     const quint64 generation = m_generation;
@@ -142,6 +143,7 @@ bool TxWatchClient::openDirect(const QUrl& verifiedPrimaryUrl,
         return false;
     }
 
+    m_telemetry = {};
     m_pin = actualCorePinSha256;
     m_ticket = rawTicket;
     m_active = true;
@@ -187,6 +189,7 @@ bool TxWatchClient::openDirect(const QUrl& verifiedPrimaryUrl,
         const QPointer<TxWatchClient> self(this);
         const quint64 revision = m_revision;
         qint64 sent = -1;
+        m_telemetry.submittedPayloadBytes += quint64(attachSize);
 #ifdef NEREUS_BUILD_TESTS
         const BinaryWriterForTesting writer = m_binaryWriterForTesting;
         if (writer) {
@@ -275,6 +278,7 @@ bool TxWatchClient::openRelay(DataChannelTransport* transport,
         return false;
     }
 
+    m_telemetry = {};
     m_pin = actualCorePinSha256;
     m_ticket = rawTicket;
     m_active = true;
@@ -325,6 +329,7 @@ void TxWatchClient::attachRelay(DataChannelTransport* transport, quint64 generat
     const QPointer<TxWatchClient> self(this);
     const quint64 revision = m_revision;
     bool sent = false;
+    m_telemetry.submittedPayloadBytes += quint64(attach.size());
 #ifdef NEREUS_BUILD_TESTS
     const RelayWriterForTesting writer = m_relayWriterForTesting;
     sent = writer ? writer(transport, attach) : transport->sendBinary(attach);
@@ -364,6 +369,7 @@ bool TxWatchClient::sendKeepalive(quint64 sequence, quint32 epoch)
     const quint64 generation = m_generation;
     const quint64 revision = m_revision;
     qint64 sent = -1;
+    m_telemetry.submittedPayloadBytes += quint64(frame.size());
     if (relay != nullptr) {
         bool accepted = false;
 #ifdef NEREUS_BUILD_TESTS

@@ -187,17 +187,23 @@ private slots:
         QSignalSpy atCore(pair.answerer.get(), &SessionTransport::binaryReceived);
         TxWatchClient client;
         QSignalSpy ready(&client, &TxWatchClient::ready);
+        QCOMPARE(client.telemetry().receivedPayloadBytes, quint64(0));
+        QCOMPARE(client.telemetry().submittedPayloadBytes, quint64(0));
         QVERIFY(client.openRelay(pair.takeOfferer(), pair.pin(), ticket(), 101));
         QTRY_COMPARE_WITH_TIMEOUT(atCore.size(), 1, 15000);
         QCOMPARE(atCore.at(0).at(0).toByteArray(), QByteArray(1, char(1)) + ticket());
+        QCOMPARE(client.telemetry().submittedPayloadBytes, quint64(33));
         QVERIFY(!client.isReady());
         QVERIFY(pair.answerer->sendBinary(QByteArray::fromHex("0100")));
         QTRY_COMPARE_WITH_TIMEOUT(ready.size(), 1, 5000);
         QCOMPARE(ready.at(0).at(0).toULongLong(), quint64(101));
+        QCOMPARE(client.telemetry().receivedPayloadBytes, quint64(2));
         QVERIFY(client.sendKeepalive(123, 45));
         QTRY_COMPARE_WITH_TIMEOUT(atCore.size(), 2, 5000);
         QCOMPARE(atCore.at(1).at(0).toByteArray(),
                  RemoteTxWatchdog::channelKeepalive(123, 45));
+        QCOMPARE(client.telemetry().submittedPayloadBytes,
+                 quint64(33 + RemoteTxWatchdog::kChannelKeepaliveBytes));
     }
 
     void relayDtlsWrongPresentedPinDisclosesNoTicket()
@@ -213,6 +219,8 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(closed.size(), 1, 5000);
         QCOMPARE(atCore.size(), 0);
         QVERIFY(!client.isReady());
+        QCOMPARE(client.telemetry().submittedPayloadBytes, quint64(0));
+        QCOMPARE(client.telemetry().receivedPayloadBytes, quint64(0));
     }
 
     void relayRefusesControlTransportWithoutClosingIt()
@@ -276,9 +284,11 @@ private slots:
         TxWatchClient client;
         QSignalSpy ready(&client, &TxWatchClient::ready);
         QPointer<DataChannelTransport> old = first.offerer.get();
+        AuxiliaryWatchTelemetry firstAtClose;
         QObject::connect(&client, &TxWatchClient::closed, &client,
                          [&](quint64 generation, const QString&) {
             if (generation != 105) { return; }
+            firstAtClose = client.telemetry();
             QVERIFY(client.openRelay(second.takeOfferer(), second.pin(), ticket(), 106));
             if (old) { old->binaryReceived(QByteArray::fromHex("0100")); }
         });
@@ -291,6 +301,10 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(ready.size(), 1, 5000);
         QCOMPARE(ready.at(0).at(0).toULongLong(), quint64(106));
         QVERIFY(client.isReady());
+        QCOMPARE(firstAtClose.submittedPayloadBytes, quint64(33));
+        QCOMPARE(firstAtClose.receivedPayloadBytes, quint64(0));
+        QCOMPARE(client.telemetry().submittedPayloadBytes, quint64(33));
+        QCOMPARE(client.telemetry().receivedPayloadBytes, quint64(2));
     }
 
     void relaySynchronousTicketSendFailureMayDeleteClient()
@@ -323,9 +337,11 @@ private slots:
         QSignalSpy atSecond(second.answerer.get(), &SessionTransport::binaryReceived);
         TxWatchClient client;
         QSignalSpy ready(&client, &TxWatchClient::ready);
+        AuxiliaryWatchTelemetry firstAtClose;
         QObject::connect(&client, &TxWatchClient::closed, &client,
                          [&](quint64 generation, const QString&) {
             if (generation == 108) {
+                firstAtClose = client.telemetry();
                 QVERIFY(client.openRelay(second.takeOfferer(), second.pin(), ticket(), 109));
             }
         });
@@ -346,6 +362,11 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(ready.size(), 2, 5000);
         QCOMPARE(ready.at(1).at(0).toULongLong(), quint64(109));
         QVERIFY(client.isReady());
+        QCOMPARE(firstAtClose.submittedPayloadBytes,
+                 quint64(33 + RemoteTxWatchdog::kChannelKeepaliveBytes));
+        QCOMPARE(firstAtClose.receivedPayloadBytes, quint64(2));
+        QCOMPARE(client.telemetry().submittedPayloadBytes, quint64(33));
+        QCOMPARE(client.telemetry().receivedPayloadBytes, quint64(2));
     }
 
     void relayMissingAckExpires()
@@ -378,6 +399,8 @@ private slots:
         QVERIFY(!client.sendKeepalive(3, 4));
         QTRY_COMPARE_WITH_TIMEOUT(closed.size(), 1, 5000);
         QCOMPARE(atCore.size(), 1);
+        QCOMPARE(client.telemetry().submittedPayloadBytes, quint64(33));
+        QCOMPARE(client.telemetry().receivedPayloadBytes, quint64(2));
     }
 
     void correctFreshTlsPinAttachesAndSendsExistingFrame()
@@ -387,6 +410,8 @@ private slots:
         QVERIFY(peer.listening);
         TxWatchClient client;
         QSignalSpy ready(&client, &TxWatchClient::ready);
+        QCOMPARE(client.telemetry().receivedPayloadBytes, quint64(0));
+        QCOMPARE(client.telemetry().submittedPayloadBytes, quint64(0));
         QVERIFY(client.openDirect(peer.url(), peer.pin(), ticket(), 71));
         QTRY_COMPARE_WITH_TIMEOUT(peer.sockets.size(), 1, 5000);
         QWebSocket* socket = peer.sockets.at(0);
@@ -394,15 +419,19 @@ private slots:
         QVERIFY(!socket->requestUrl().hasQuery());
         QTRY_COMPARE_WITH_TIMEOUT(peer.messages[socket].size(), 1, 5000);
         QCOMPARE(peer.messages[socket].at(0), QByteArray(1, '\x01') + ticket());
+        QCOMPARE(client.telemetry().submittedPayloadBytes, quint64(33));
         QVERIFY(!client.isReady());
         socket->sendBinaryMessage(QByteArray::fromHex("0100"));
         QTRY_COMPARE_WITH_TIMEOUT(ready.size(), 1, 5000);
         QCOMPARE(ready.at(0).at(0).toULongLong(), quint64(71));
+        QCOMPARE(client.telemetry().receivedPayloadBytes, quint64(2));
         QVERIFY(client.isReady());
         QVERIFY(client.sendKeepalive(123, 45));
         QTRY_COMPARE_WITH_TIMEOUT(peer.messages[socket].size(), 2, 5000);
         QCOMPARE(peer.messages[socket].at(1),
                  RemoteTxWatchdog::channelKeepalive(123, 45));
+        QCOMPARE(client.telemetry().submittedPayloadBytes,
+                 quint64(33 + RemoteTxWatchdog::kChannelKeepaliveBytes));
     }
 
     void wrongActualPinNeverSendsTicket()
@@ -422,6 +451,8 @@ private slots:
             QCOMPARE(peer.messages[peer.sockets.at(0)].size(), 0);
         }
         QVERIFY(!client.isReady());
+        QCOMPARE(client.telemetry().submittedPayloadBytes, quint64(0));
+        QCOMPARE(client.telemetry().receivedPayloadBytes, quint64(0));
     }
 
     void badInputsAreRefusedBeforeDial()
@@ -450,6 +481,7 @@ private slots:
         first->sendBinaryMessage(QByteArray(13, 'x'));
         QTRY_COMPARE_WITH_TIMEOUT(closed.size(), 1, 5000);
         QVERIFY(!client.isReady());
+        QCOMPARE(client.telemetry().receivedPayloadBytes, quint64(0));
 
         QVERIFY(client.openDirect(peer.url(), peer.pin(), ticket(), 11));
         QTRY_COMPARE_WITH_TIMEOUT(peer.sockets.size(), 2, 5000);
@@ -459,6 +491,7 @@ private slots:
         second->sendBinaryMessage(QByteArray::fromHex("0100"));
         QTRY_COMPARE_WITH_TIMEOUT(closed.size(), 2, 5000);
         QVERIFY(!client.isReady());
+        QCOMPARE(client.telemetry().receivedPayloadBytes, quint64(2));
     }
 
     void missingAckExpiresAndTextIsNeverAccepted()
@@ -494,11 +527,13 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(peer.sockets.size(), 1, 5000);
         peer.sockets.at(0)->sendBinaryMessage(QByteArray::fromHex("0101"));
         QTRY_COMPARE_WITH_TIMEOUT(closed.size(), 1, 5000);
+        QCOMPARE(client.telemetry().receivedPayloadBytes, quint64(0));
         QVERIFY(client.openDirect(peer.url(), peer.pin(), ticket(), 42));
         QTRY_COMPARE_WITH_TIMEOUT(peer.sockets.size(), 2, 5000);
         peer.sockets.at(1)->sendBinaryMessage(QByteArray(34, 'x'));
         QTRY_COMPARE_WITH_TIMEOUT(closed.size(), 2, 5000);
         QVERIFY(!client.isReady());
+        QCOMPARE(client.telemetry().receivedPayloadBytes, quint64(0));
     }
 
     void closedHandlerMayReplaceGenerationWithoutOldCallbacks()
@@ -556,6 +591,8 @@ private slots:
         QVERIFY(!client.sendKeepalive(9, 2));
         QTRY_COMPARE_WITH_TIMEOUT(closed.size(), 1, 5000);
         QCOMPARE(peer.messages[socket].size(), 1);
+        QCOMPARE(client.telemetry().submittedPayloadBytes, quint64(33));
+        QCOMPARE(client.telemetry().receivedPayloadBytes, quint64(2));
     }
 
     void stalledLocalTlsOpeningExpires()
@@ -614,9 +651,11 @@ private slots:
         QVERIFY(peer.listening);
         TxWatchClient client;
         QSignalSpy ready(&client, &TxWatchClient::ready);
+        AuxiliaryWatchTelemetry firstAtClose;
         QObject::connect(&client, &TxWatchClient::closed, &client,
                          [&](quint64 generation, const QString&) {
             if (generation == 94) {
+                firstAtClose = client.telemetry();
                 QVERIFY(client.openDirect(peer.url(), peer.pin(), ticket(), 95));
             }
         });
@@ -633,6 +672,10 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(ready.size(), 1, 5000);
         QCOMPARE(ready.at(0).at(0).toULongLong(), quint64(95));
         QVERIFY(client.isReady());
+        QCOMPARE(firstAtClose.submittedPayloadBytes, quint64(33));
+        QCOMPARE(firstAtClose.receivedPayloadBytes, quint64(0));
+        QCOMPARE(client.telemetry().submittedPayloadBytes, quint64(33));
+        QCOMPARE(client.telemetry().receivedPayloadBytes, quint64(2));
     }
 
     void synchronousKeepaliveSendFailureCannotCloseReplacement()
@@ -642,9 +685,11 @@ private slots:
         QVERIFY(peer.listening);
         TxWatchClient client;
         QSignalSpy ready(&client, &TxWatchClient::ready);
+        AuxiliaryWatchTelemetry firstAtClose;
         QObject::connect(&client, &TxWatchClient::closed, &client,
                          [&](quint64 generation, const QString&) {
             if (generation == 91) {
+                firstAtClose = client.telemetry();
                 QVERIFY(client.openDirect(peer.url(), peer.pin(), ticket(), 92));
             }
         });
@@ -665,6 +710,11 @@ private slots:
         QCOMPARE(ready.at(1).at(0).toULongLong(), quint64(92));
         QCOMPARE(client.generation(), quint64(92));
         QVERIFY(client.isReady());
+        QCOMPARE(firstAtClose.submittedPayloadBytes,
+                 quint64(33 + RemoteTxWatchdog::kChannelKeepaliveBytes));
+        QCOMPARE(firstAtClose.receivedPayloadBytes, quint64(2));
+        QCOMPARE(client.telemetry().submittedPayloadBytes, quint64(33));
+        QCOMPARE(client.telemetry().receivedPayloadBytes, quint64(2));
     }
 
     void synchronousKeepaliveSendFailureMayDeleteClient()
