@@ -3,6 +3,7 @@
 
 #include <QAbstractSocket>
 #include <QCryptographicHash>
+#include <QDeadlineTimer>
 #include <QFile>
 #include <QHash>
 #include <QHostAddress>
@@ -17,6 +18,9 @@
 
 #include "core/safety/RemoteTxWatchdog.h"
 #include "core/security/CertificateStore.h"
+#include "core/session/DataChannelTransport.h"
+#include "core/session/IceConfiguration.h"
+#include "core/session/RelayLeg.h"
 #include "core/session/TxWatchClient.h"
 
 using namespace NereusSDR;
@@ -70,11 +74,312 @@ QByteArray ticket()
 {
     return QByteArray(32, '\x5a');
 }
+
+class WatchSource final : public IceConfiguration::CandidateSource {
+public:
+    void start(std::function<void(const QString&)> add) override { m_add = std::move(add); }
+    void stop() override { m_add = {}; }
+    bool ready() const { return static_cast<bool>(m_add); }
+    void inject(const QString& candidate) { if (m_add) { m_add(candidate); } }
+
+private:
+    std::function<void(const QString&)> m_add;
+};
+
+IceConfiguration watchIce(const std::shared_ptr<WatchSource>& source)
+{
+    IceConfiguration ice = IceConfiguration::throughRendezvous({}, true, {}, {});
+    ice.setRelay(std::nullopt, 1);
+    ice.setCandidateSourceFactory(
+        [source](int lane, const QString& id, bool routed)
+            -> std::shared_ptr<IceConfiguration::CandidateSource> {
+            return lane == IceConfiguration::kControlLane && id.isEmpty() && !routed
+                ? source : nullptr;
+        }, true);
+    return ice;
+}
+
+QString loopbackFor(const QStringList& gathered)
+{
+    for (const QString& candidate : gathered) {
+        const QStringList fields = candidate.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+        if (fields.size() >= 8 && fields.at(4).contains(QLatin1Char('.'))
+            && fields.at(7) == QLatin1String("host")) {
+            bool ok = false;
+            const int port = fields.at(5).toInt(&ok);
+            if (ok && port > 0 && port <= 65535) {
+                return RelayLeg::candidateLine(IceConfiguration::kControlLane,
+                                               static_cast<quint16>(port));
+            }
+        }
+    }
+    return {};
+}
+
+template <typename Done>
+bool until(Done done, int ms)
+{
+    const QDeadlineTimer deadline(ms);
+    while (!done() && !deadline.hasExpired()) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    }
+    return done();
+}
+
+struct DtlsWatchPair {
+    QTemporaryDir directory;
+    CertificateStore identity{directory.path()};
+    std::unique_ptr<DataChannelTransport> offerer = std::make_unique<DataChannelTransport>();
+    std::unique_ptr<DataChannelTransport> answerer = std::make_unique<DataChannelTransport>();
+    std::shared_ptr<WatchSource> offerSource = std::make_shared<WatchSource>();
+    std::shared_ptr<WatchSource> answerSource = std::make_shared<WatchSource>();
+    bool descriptionsAccepted = true;
+
+    QByteArray pin() const { return identity.certificate().digest(QCryptographicHash::Sha256); }
+
+    bool open(bool awaitChannel = true)
+    {
+        if (!directory.isValid() || !identity.isValid()) { return false; }
+        QObject::connect(offerer.get(), &DataChannelTransport::localDescription,
+                         answerer.get(), [this](const QString& sdp, const QString& type) {
+            descriptionsAccepted &= answerer->acceptDescription(sdp, type);
+        });
+        QObject::connect(answerer.get(), &DataChannelTransport::localDescription,
+                         offerer.get(), [this](const QString& sdp, const QString& type) {
+            descriptionsAccepted &= offerer->acceptDescription(sdp, type);
+        });
+        DataChannelTransport::Options answer;
+        answer.role = DataChannelTransport::Role::Answerer;
+        answer.purpose = DataChannelTransport::Purpose::TxWatch;
+        answer.maxIncomingBytes = DataChannelTransport::kMaxWatchFrameBytes;
+        answer.ice = watchIce(answerSource);
+        answer.certificatePemPath = identity.certificatePath();
+        answer.privateKeyPemPath = identity.privateKeyPath();
+        DataChannelTransport::Options offer = answer;
+        offer.role = DataChannelTransport::Role::Offerer;
+        offer.ice = watchIce(offerSource);
+        offer.certificatePemPath.clear();
+        offer.privateKeyPemPath.clear();
+        if (!answerer->start(answer) || !offerer->start(offer)) { return false; }
+        if (!until([this] {
+                return descriptionsAccepted && offerSource->ready() && answerSource->ready()
+                    && !loopbackFor(offerer->localCandidatesForTest()).isEmpty()
+                    && !loopbackFor(answerer->localCandidatesForTest()).isEmpty();
+            }, 10000)) { return false; }
+        offerSource->inject(loopbackFor(answerer->localCandidatesForTest()));
+        answerSource->inject(loopbackFor(offerer->localCandidatesForTest()));
+        return !awaitChannel || until([this] {
+            return offerer->isOpen() && answerer->isOpen();
+        }, 15000);
+    }
+
+    DataChannelTransport* takeOfferer() { return offerer.release(); }
+};
 }
 
 class TestTxWatchClient : public QObject {
     Q_OBJECT
 private slots:
+    void relayDtlsChecksPresentedPinThenAttachesAndSendsFrame()
+    {
+        DtlsWatchPair pair;
+        QVERIFY(pair.open(false));
+        QSignalSpy atCore(pair.answerer.get(), &SessionTransport::binaryReceived);
+        TxWatchClient client;
+        QSignalSpy ready(&client, &TxWatchClient::ready);
+        QVERIFY(client.openRelay(pair.takeOfferer(), pair.pin(), ticket(), 101));
+        QTRY_COMPARE_WITH_TIMEOUT(atCore.size(), 1, 15000);
+        QCOMPARE(atCore.at(0).at(0).toByteArray(), QByteArray(1, char(1)) + ticket());
+        QVERIFY(!client.isReady());
+        QVERIFY(pair.answerer->sendBinary(QByteArray::fromHex("0100")));
+        QTRY_COMPARE_WITH_TIMEOUT(ready.size(), 1, 5000);
+        QCOMPARE(ready.at(0).at(0).toULongLong(), quint64(101));
+        QVERIFY(client.sendKeepalive(123, 45));
+        QTRY_COMPARE_WITH_TIMEOUT(atCore.size(), 2, 5000);
+        QCOMPARE(atCore.at(1).at(0).toByteArray(),
+                 RemoteTxWatchdog::channelKeepalive(123, 45));
+    }
+
+    void relayDtlsWrongPresentedPinDisclosesNoTicket()
+    {
+        DtlsWatchPair pair;
+        QVERIFY(pair.open());
+        QSignalSpy atCore(pair.answerer.get(), &SessionTransport::binaryReceived);
+        TxWatchClient client;
+        QSignalSpy closed(&client, &TxWatchClient::closed);
+        QByteArray wrong = pair.pin();
+        wrong[0] = char(wrong.at(0) ^ 1);
+        QVERIFY(!client.openRelay(pair.takeOfferer(), wrong, ticket(), 102));
+        QTRY_COMPARE_WITH_TIMEOUT(closed.size(), 1, 5000);
+        QCOMPARE(atCore.size(), 0);
+        QVERIFY(!client.isReady());
+    }
+
+    void relayRefusesControlTransportWithoutClosingIt()
+    {
+        TxWatchClient client;
+        auto control = std::make_unique<DataChannelTransport>();
+        QVERIFY(!client.openRelay(control.get(), QByteArray(32, 'p'), ticket(), 103));
+        QVERIFY(control != nullptr);
+        QVERIFY(!control->isOpen());
+    }
+
+    void relayInvalidInputsAreRefused_data()
+    {
+        QTest::addColumn<int>("badField");
+        QTest::newRow("pin") << 1;
+        QTest::newRow("ticket") << 2;
+        QTest::newRow("generation") << 3;
+    }
+
+    void relayInvalidInputsAreRefused()
+    {
+        QFETCH(int, badField);
+        DtlsWatchPair pair;
+        QVERIFY(pair.open());
+        QSignalSpy atCore(pair.answerer.get(), &SessionTransport::binaryReceived);
+        TxWatchClient client;
+        QByteArray pin = pair.pin();
+        QByteArray rawTicket = ticket();
+        quint64 generation = 113;
+        if (badField == 1) { pin.chop(1); }
+        if (badField == 2) { rawTicket.chop(1); }
+        if (badField == 3) { generation = 0; }
+        QPointer<DataChannelTransport> offered = pair.offerer.get();
+        QVERIFY(!client.openRelay(pair.takeOfferer(), pin, rawTicket, generation));
+        QTRY_VERIFY(offered.isNull());
+        QCOMPARE(atCore.size(), 0);
+    }
+
+    void relayReadyHandlerMayDeleteClient()
+    {
+        DtlsWatchPair pair;
+        QVERIFY(pair.open());
+        QSignalSpy atCore(pair.answerer.get(), &SessionTransport::binaryReceived);
+        QPointer<TxWatchClient> client = new TxWatchClient;
+        QObject::connect(client, &TxWatchClient::ready, client,
+                         [&client](quint64) { delete client.data(); });
+        QVERIFY(client->openRelay(pair.takeOfferer(), pair.pin(), ticket(), 104));
+        QTRY_COMPARE_WITH_TIMEOUT(atCore.size(), 1, 5000);
+        QVERIFY(pair.answerer->sendBinary(QByteArray::fromHex("0100")));
+        QTRY_VERIFY_WITH_TIMEOUT(client.isNull(), 5000);
+    }
+
+    void relayClosedHandlerMayReplaceGenerationWithoutOldCallbacks()
+    {
+        DtlsWatchPair first;
+        DtlsWatchPair second;
+        QVERIFY(first.open());
+        QVERIFY(second.open());
+        QSignalSpy atFirst(first.answerer.get(), &SessionTransport::binaryReceived);
+        QSignalSpy atSecond(second.answerer.get(), &SessionTransport::binaryReceived);
+        TxWatchClient client;
+        QSignalSpy ready(&client, &TxWatchClient::ready);
+        QPointer<DataChannelTransport> old = first.offerer.get();
+        QObject::connect(&client, &TxWatchClient::closed, &client,
+                         [&](quint64 generation, const QString&) {
+            if (generation != 105) { return; }
+            QVERIFY(client.openRelay(second.takeOfferer(), second.pin(), ticket(), 106));
+            if (old) { old->binaryReceived(QByteArray::fromHex("0100")); }
+        });
+        QVERIFY(client.openRelay(first.takeOfferer(), first.pin(), ticket(), 105));
+        QTRY_COMPARE_WITH_TIMEOUT(atFirst.size(), 1, 5000);
+        QVERIFY(first.answerer->sendBinary(QByteArray::fromHex("0101")));
+        QTRY_COMPARE_WITH_TIMEOUT(atSecond.size(), 1, 5000);
+        QCOMPARE(ready.size(), 0);
+        QVERIFY(second.answerer->sendBinary(QByteArray::fromHex("0100")));
+        QTRY_COMPARE_WITH_TIMEOUT(ready.size(), 1, 5000);
+        QCOMPARE(ready.at(0).at(0).toULongLong(), quint64(106));
+        QVERIFY(client.isReady());
+    }
+
+    void relaySynchronousTicketSendFailureMayDeleteClient()
+    {
+        DtlsWatchPair pair;
+        QVERIFY(pair.open());
+        QSignalSpy atCore(pair.answerer.get(), &SessionTransport::binaryReceived);
+        QPointer<TxWatchClient> client = new TxWatchClient;
+        QObject::connect(client, &TxWatchClient::closed, client,
+                         [&client](quint64, const QString&) { delete client.data(); });
+        client->setRelayWriterForTesting(
+            [](DataChannelTransport* transport, const QByteArray&) {
+                transport->closeLink(QStringLiteral("test send failure"));
+                return false;
+            });
+        QPointer<DataChannelTransport> offerer = pair.offerer.get();
+        client->openRelay(pair.takeOfferer(), pair.pin(), ticket(), 107);
+        QTRY_VERIFY_WITH_TIMEOUT(client.isNull(), 5000);
+        QCOMPARE(atCore.size(), 0);
+        QTRY_VERIFY(offerer.isNull());
+    }
+
+    void relaySynchronousKeepaliveFailureCannotCloseReplacement()
+    {
+        DtlsWatchPair first;
+        DtlsWatchPair second;
+        QVERIFY(first.open());
+        QVERIFY(second.open());
+        QSignalSpy atFirst(first.answerer.get(), &SessionTransport::binaryReceived);
+        QSignalSpy atSecond(second.answerer.get(), &SessionTransport::binaryReceived);
+        TxWatchClient client;
+        QSignalSpy ready(&client, &TxWatchClient::ready);
+        QObject::connect(&client, &TxWatchClient::closed, &client,
+                         [&](quint64 generation, const QString&) {
+            if (generation == 108) {
+                QVERIFY(client.openRelay(second.takeOfferer(), second.pin(), ticket(), 109));
+            }
+        });
+        QVERIFY(client.openRelay(first.takeOfferer(), first.pin(), ticket(), 108));
+        QTRY_COMPARE_WITH_TIMEOUT(atFirst.size(), 1, 5000);
+        QVERIFY(first.answerer->sendBinary(QByteArray::fromHex("0100")));
+        QTRY_COMPARE_WITH_TIMEOUT(ready.size(), 1, 5000);
+        client.setRelayWriterForTesting([&client](DataChannelTransport* transport,
+                                                   const QByteArray&) {
+            client.setRelayWriterForTesting({});
+            transport->closeLink(QStringLiteral("test send failure"));
+            return false;
+        });
+        QVERIFY(!client.sendKeepalive(1, 2));
+        QTRY_COMPARE_WITH_TIMEOUT(atSecond.size(), 1, 5000);
+        QCOMPARE(atFirst.size(), 1);
+        QVERIFY(second.answerer->sendBinary(QByteArray::fromHex("0100")));
+        QTRY_COMPARE_WITH_TIMEOUT(ready.size(), 2, 5000);
+        QCOMPARE(ready.at(1).at(0).toULongLong(), quint64(109));
+        QVERIFY(client.isReady());
+    }
+
+    void relayMissingAckExpires()
+    {
+        DtlsWatchPair pair;
+        QVERIFY(pair.open());
+        QSignalSpy atCore(pair.answerer.get(), &SessionTransport::binaryReceived);
+        TxWatchClient client;
+        client.setDeadlinesForTesting(1000, 100);
+        QSignalSpy closed(&client, &TxWatchClient::closed);
+        QVERIFY(client.openRelay(pair.takeOfferer(), pair.pin(), ticket(), 110));
+        QTRY_COMPARE_WITH_TIMEOUT(atCore.size(), 1, 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(closed.size(), 1, 2000);
+        QVERIFY(closed.first().at(1).toString().contains(QStringLiteral("timed out")));
+        QVERIFY(!client.isReady());
+    }
+
+    void relayBacklogClosesBeforeKeepaliveWrite()
+    {
+        DtlsWatchPair pair;
+        QVERIFY(pair.open());
+        QSignalSpy atCore(pair.answerer.get(), &SessionTransport::binaryReceived);
+        TxWatchClient client;
+        QSignalSpy closed(&client, &TxWatchClient::closed);
+        QVERIFY(client.openRelay(pair.takeOfferer(), pair.pin(), ticket(), 111));
+        QTRY_COMPARE_WITH_TIMEOUT(atCore.size(), 1, 5000);
+        QVERIFY(pair.answerer->sendBinary(QByteArray::fromHex("0100")));
+        QTRY_VERIFY_WITH_TIMEOUT(client.isReady(), 5000);
+        client.setBacklogBytesForTesting(4084);
+        QVERIFY(!client.sendKeepalive(3, 4));
+        QTRY_COMPARE_WITH_TIMEOUT(closed.size(), 1, 5000);
+        QCOMPARE(atCore.size(), 1);
+    }
+
     void correctFreshTlsPinAttachesAndSendsExistingFrame()
     {
         if (!QSslSocket::supportsSsl()) { QSKIP("TLS backend unavailable"); }
