@@ -1812,7 +1812,17 @@ colours for the same signal.
   remaining independent findings can be collected. A bounded comparison using
   the exact same signed-source Linux binaries passed both previously failing
   ICE-gathering cases (464 ms) on the private internal interface; no code or
-  deadline changed. The full corrected-network run remains outstanding.
+  deadline changed. The original run finished with 951/991 passing; forty
+  nonpassing entries are individually classified in the progress evidence.
+  A full app/Core/all-tests rebuild and run of signed `3a2c73fa` is underway
+  on the private interface, with no test exclusions or changed limits.
+  A separate namespace preflight passed with NET_ADMIN/SYS_ADMIN capabilities
+  for the isolated traversal fixture; the old runner lacked those capabilities.
+  The exact audio-backoff binary also passed with the interface (12.528 s;
+  measured waits 2002/4004/4011 ms) and reproduced failure without it (46.903 s).
+  With no direct candidates, the fallback tunnel legitimately starts session
+  recovery after three seconds of silence, interrupting the direct-media
+  backoff sequence. The remedy is the required interface, not longer limits.
   This does not resolve G-57's separate macOS
   intermittent startup failure on a machine with usable interfaces.
 - Plan: full Linux verification and R5 network acceptance.
@@ -1924,6 +1934,20 @@ colours for the same signal.
   remote-audio session suite pass (44.39 s). The Linux minor-7 peer-open failure
   is separately confounded by G-91 and awaits the corrected-network run.
 - Plan: remote audio compatibility and meaningful CI evidence.
+
+### G-99: Mirror-policy test omits the published Setup class
+
+- Evidence: production includes `SetupDescription` in its mirrored classes,
+  but the test inventory omits it. This reports both a class-list mismatch and
+  false stale-policy entries for the published Setup properties.
+- Ruling basis: JJ requires complete verification of the actual Core surface;
+  restore test coverage rather than suppressing policy checks.
+- Status: signed `a85c0cd1` adds the actual metaobject to the fixture. It also
+  corrects three remaining capability fixtures under G-68, preserving exact
+  original field order, kinds and older-minor wire equality. App/Core and all
+  four integrated suites pass (5.22 s); no older-client capability leak was
+  observed and no production wire changed. Updated Linux execution remains.
+- Plan: complete mirror-policy and older-peer compatibility verification.
 
 ## How this addendum is kept
 

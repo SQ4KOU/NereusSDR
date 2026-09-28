@@ -7,7 +7,7 @@
 // The Core runs its own band restore on the slice, the path the desktop's
 // band buttons run (RadioModel::onBandButtonClicked(SliceModel*, Band)), so
 // the band's saved frequency, mode and filter come back as they do on the
-// desktop. Gated by bandSelectVersion 1, last in the minor-11 block.
+// desktop. Gated by bandSelectVersion 1 in the minor-11 block.
 //
 // Loopback link, no RF and no hardware: nothing here keys a radio. "On the
 // air" keys the Core's own MoxController with the receive-only MOX
@@ -200,7 +200,7 @@ private slots:
 
     void theVerbIsDeclaredWithItsCapability();
     void coreOffersBandSelectVersion1();
-    void theCapabilityIsLastInTheMinor11Block();
+    void theCapabilityKeepsItsPlaceInTheMinor11Block();
     void restoresTheBandAsTheDesktopButtonDoes();
     void aFirstVisitTakesTheBandsSeedAsTheDesktopDoes();
     void everyGridBandIsTaken();
@@ -267,41 +267,37 @@ void TstSliceSelectBand::coreOffersBandSelectVersion1()
     QCOMPARE(s.client->capabilities().bandSelectVersion, 1);
 }
 
-void TstSliceSelectBand::theCapabilityIsLastInTheMinor11Block()
+void TstSliceSelectBand::theCapabilityKeepsItsPlaceInTheMinor11Block()
 {
     StationCapabilities caps;
     caps.radioIdentityEntries = true;
     caps.transmitSettingsVersion = 6;
     caps.bandSelectVersion = 1;
     const QList<MirrorUpdate> updates = caps.toUpdates();
-    // Parity Task 15's meterReadingsVersion follows it, then parity Task
-    // 16's dspInfoVersion.
-    // Then parity Task 19's recordStreamVersion.
-    // Then parity Task 21's stationRadiosVersion.
-    // Then parity Task 28's txDisplayVersion, R-R3-21's displayClockVersion and
-    // the Task 28 fix wave's controlChannelVersion.
-    QCOMPARE(updates.at(updates.size() - 17).name, QByteArrayLiteral("transmitSettingsVersion"));
-    QCOMPARE(updates.at(updates.size() - 16).name, QByteArrayLiteral("bandSelectVersion"));
-    QCOMPARE(updates.at(updates.size() - 15).name, QByteArrayLiteral("meterReadingsVersion"));
-    QCOMPARE(updates.at(updates.size() - 14).name, QByteArrayLiteral("dspInfoVersion"));
-    QCOMPARE(updates.at(updates.size() - 13).name, QByteArrayLiteral("recordStreamVersion"));
-    QCOMPARE(updates.at(updates.size() - 12).name, QByteArrayLiteral("stationRadiosVersion"));
-    QCOMPARE(updates.at(updates.size() - 11).name, QByteArrayLiteral("txDisplayVersion"));
-    QCOMPARE(updates.at(updates.size() - 10).name, QByteArrayLiteral("displayClockVersion"));
-    QCOMPARE(updates.at(updates.size() - 9).name, QByteArrayLiteral("controlChannelVersion"));
-    // Then parity Task 32's txMonitorAudioVersion.
-    QCOMPARE(updates.at(updates.size() - 8).name, QByteArrayLiteral("txMonitorAudioVersion"));
-    // Then iPhone plan Task 22 / parity Task 20's stationFreedvVersion.
-    QCOMPARE(updates.at(updates.size() - 7).name, QByteArrayLiteral("stationFreedvVersion"));
-    // iPhone app plan Task 29: then mediaReplaceVersion,
-    // controlSwitchVersion and relayAllowed.
-    QCOMPARE(updates.at(updates.size() - 6).name, QByteArrayLiteral("mediaReplaceVersion"));
-    QCOMPARE(updates.at(updates.size() - 5).name, QByteArrayLiteral("controlSwitchVersion"));
-    QCOMPARE(updates.at(updates.size() - 4).name, QByteArrayLiteral("relayAllowed"));
-    // Preserve supportBundleVersion, then append the unpublished floors.
-    QCOMPARE(updates.at(updates.size() - 3).name, QByteArrayLiteral("supportBundleVersion"));
-    QCOMPARE(updates.at(updates.size() - 2).name, QByteArrayLiteral("mediaTunnelVersion"));
-    QCOMPARE(updates.last().name, QByteArrayLiteral("mediaRelayRoutingVersion"));
+    // The original entries remain a contiguous ordered block even as
+    // independent capabilities are added after it.
+    QList<QByteArray> names;
+    for (const MirrorUpdate& update : updates) { names.append(update.name); }
+    const QList<QByteArray> originalBlock{
+        "transmitSettingsVersion", "bandSelectVersion", "meterReadingsVersion",
+        "dspInfoVersion", "recordStreamVersion", "stationRadiosVersion",
+        "txDisplayVersion", "displayClockVersion", "controlChannelVersion",
+        "txMonitorAudioVersion", "stationFreedvVersion", "mediaReplaceVersion",
+        "controlSwitchVersion", "relayAllowed", "supportBundleVersion",
+        "mediaTunnelVersion", "mediaRelayRoutingVersion"};
+    const qsizetype first = names.indexOf(QByteArrayLiteral("transmitSettingsVersion"));
+    QVERIFY(first >= 0);
+    QCOMPARE(names.mid(first, originalBlock.size()), originalBlock);
+    QCOMPARE(names.indexOf(QByteArrayLiteral("remoteIqVersion")),
+             first + originalBlock.size());
+    QCOMPARE(names.indexOf(QByteArrayLiteral("txModMonitorVersion")),
+             first + originalBlock.size() + 1);
+    QCOMPARE(names.indexOf(QByteArrayLiteral("accessoryTxVersion")),
+             first + originalBlock.size() + 2);
+    QVERIFY(!names.contains(QByteArrayLiteral("setupDescriptionVersion")));
+    QVERIFY(!names.contains(QByteArrayLiteral("miniDisplayVersion")));
+    QCOMPARE(updates.at(first + 1).kind, MirrorWireKind::Int64);
+    QCOMPARE(updates.at(first + 1).value.toInt(), 1);
     QCOMPARE(StationCapabilities::fromUpdates(updates).bandSelectVersion, 1);
     QCOMPARE(StationCapabilities::fromUpdates(updates).transmitSettingsVersion, 6);
 

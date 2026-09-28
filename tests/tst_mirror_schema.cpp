@@ -71,6 +71,7 @@
 #include "models/AccessoryDataModel.h"
 #include "models/AccessorySettingsModel.h"
 #include "core/session/StationCatalog.h"
+#include "core/setup/SetupDescriptionService.h"
 #include "core/SpotSourceHost.h"
 #include "core/session/StationDevicesFacade.h"
 #include "core/session/ConnectedDevicesFacade.h"
@@ -890,6 +891,8 @@ private:
                  &StationDevicesFacade::staticMetaObject,
                  // iPhone app Task 19 (R-IOS-06): the Core's catalogue.
                  &StationCatalog::staticMetaObject,
+                 // The Core's read-only Setup descriptions and revision.
+                 &SetupDescription::staticMetaObject,
                  // Parity Task 19 (recordStreamVersion 1): the Core's spot
                  // sources, read-only.
                  &SpotSourceHost::staticMetaObject,

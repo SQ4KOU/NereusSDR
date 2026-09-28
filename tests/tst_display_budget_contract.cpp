@@ -715,6 +715,11 @@ private slots:
             const QList<QByteArray> names = updateNames(last.updates);
             if (minor < kDisplayBudgetReasonSessionProtocolMinor) {
                 QCOMPARE(names, golden);
+                for (const QByteArray& name : {QByteArrayLiteral("remoteIqVersion"),
+                                               QByteArrayLiteral("txModMonitorVersion"),
+                                               QByteArrayLiteral("accessoryTxVersion")}) {
+                    QCOMPARE(updateIndex(last.updates, name), -1);
+                }
             } else {
                 QList<QByteArray> withReason = golden;
                 withReason.append("displayBudgetReason");
@@ -773,8 +778,22 @@ private slots:
                                    "relayAllowed",
                                    // Parity Task 22: the support bundle.
                                    "supportBundleVersion",
-                                   "mediaTunnelVersion", "mediaRelayRoutingVersion"});
+                                   "mediaTunnelVersion", "mediaRelayRoutingVersion",
+                                   // Independent minor-11 capabilities.
+                                   "remoteIqVersion", "txModMonitorVersion",
+                                   "accessoryTxVersion"});
                 QCOMPARE(names, withReason);
+                QCOMPARE(updateIndex(last.updates, QByteArrayLiteral("setupDescriptionVersion")),
+                         -1);
+                QCOMPARE(updateIndex(last.updates, QByteArrayLiteral("miniDisplayVersion")), -1);
+                for (const QByteArray& name : {QByteArrayLiteral("remoteIqVersion"),
+                                               QByteArrayLiteral("txModMonitorVersion"),
+                                               QByteArrayLiteral("accessoryTxVersion")}) {
+                    const int index = updateIndex(last.updates, name);
+                    QVERIFY(index >= 0);
+                    QCOMPARE(last.updates.at(index).kind, MirrorWireKind::Int64);
+                    QCOMPARE(last.updates.at(index).ordinal, quint16{0});
+                }
                 const int reason = updateIndex(last.updates,
                                                QByteArrayLiteral("displayBudgetReason"));
                 QCOMPARE(last.updates.at(reason).value.toString(),
@@ -831,7 +850,10 @@ private slots:
                                            QByteArrayLiteral("relayAllowed"),
                                            QByteArrayLiteral("supportBundleVersion"),
                                            QByteArrayLiteral("mediaTunnelVersion"),
-                                           QByteArrayLiteral("mediaRelayRoutingVersion")}) {
+                                           QByteArrayLiteral("mediaRelayRoutingVersion"),
+                                           QByteArrayLiteral("remoteIqVersion"),
+                                           QByteArrayLiteral("txModMonitorVersion"),
+                                           QByteArrayLiteral("accessoryTxVersion")}) {
                 stripped.removeAt(updateIndex(stripped, name));
             }
             QCOMPARE(SessionMessages::encode(SessionMessages::capabilities(stripped)), older);
