@@ -2535,7 +2535,8 @@ colours for the same signal.
   Compare slice transfer, slice release and freeing a shared hardware
   receiver before implementing. Receive ownership must remain distinct
   from selecting or taking transmit. A read-only investigation of the
-  actual duplicate desktop identities is in progress.
+  actual duplicate desktop identities could not identify the live row IDs;
+  the duplicate-name cause remains unproven.
 - JJ then asked how the bottom banner's active-slice indicator fits the
   flow, and for matching iPhone/desktop behavior when switching, taking,
   releasing, reaching capacity or sharing a slice. The existing banner
@@ -2543,6 +2544,11 @@ colours for the same signal.
   The design discussion is still open. Current media mixes include only
   owned slices; a proposed Listen in action would be new functionality,
   not an existing capability or permission for multiple writers.
+- JJ explicitly requested a deep usability and completeness scout of creation,
+  ownership, release and takeover across desktop and iPhone. Sol 6 high
+  is tracing actual screens, commands, capacity, audio, reconnect and failure
+  recovery; report core-gui-slice-experience-deep-scout.md. Its recommendations
+  are design input, not approved new ownership policy.
 - Plan: several-devices UX and local/remote ownership parity.
 
 ### G-119: Slice markers and RX badges do not consistently use Aether colors
@@ -2674,10 +2680,14 @@ colours for the same signal.
 - Ruling basis: the agreed per-device active-slice and truthful ownership
   presentation require the banner to describe a currently owned slice.
   JJ specifically asked how that banner identifies the active slice.
-- Status: Sol 6 medium owns a bounded reproduction and stale-display repair
-  from signed e79b0589a, using existing neutral placeholders and guarding
-  slice lifetime. No new picker, takeover behavior or ownership policy is
-  included. App/Core and affected complete suites must pass before landing.
+- Status: built in signed 9925ed9a and integrated with the current networking
+  base. The dashboard clears its old letter, readings and click targets,
+  forwards empty bindings and guards slice destruction. The worker reproduced
+  both stale display and the destroyed-slice crash before the fix. Root
+  reviewed the diff, rebuilt app/Core and five affected complete suites, all
+  passing in 3.04 seconds at starting load 6.78/12.61/13.35. Logs are
+  core-gui-empty-banner-root-{build,ctest}.log. No new picker, takeover
+  behavior or ownership policy is included; Linux verification remains due.
 - Plan: truthful active-slice presentation and empty-window recovery.
 
 ## How this addendum is kept

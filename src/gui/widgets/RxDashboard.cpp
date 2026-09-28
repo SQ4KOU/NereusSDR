@@ -58,6 +58,7 @@ RxDashboard::RxDashboard(QWidget* parent) : QWidget(parent)
     // residualWidth(), so the fold budget now accounts for it honestly
     // instead of silently absorbing pressure the ladder never saw.
     setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Preferred);
+    bindSlice(nullptr);
 }
 
 namespace {
@@ -114,7 +115,9 @@ void RxDashboard::buildUi()
     for (const auto& [badge, which] : clickable) {
         badge->setClickable(true);
         connect(badge, &StatusBadge::clicked, this,
-                [this, which = which]() { emit badgeClicked(which); });
+                [this, which = which]() {
+                    if (m_slice) { emit badgeClicked(which); }
+                });
     }
 
     // Active-only badges hidden by default — "no NYI" rule.
@@ -206,12 +209,38 @@ int RxDashboard::residualWidth() const
 
 void RxDashboard::bindSlice(SliceModel* slice)
 {
-    if (m_slice == slice) { return; }
+    if (m_slice == slice && slice) { return; }
     if (m_slice) {
         disconnect(m_slice, nullptr, this, nullptr);
     }
     m_slice = slice;
-    if (!m_slice) { return; }
+    const std::pair<StatusBadge*, int> badges[] = {
+        {m_sqlBadge, 5}, {m_apfBadge, 6}, {m_nbBadge, 7},
+        {m_nrBadge, 8}, {m_agcBadge, 9},
+    };
+    for (StatusBadge* badge : {m_modeBadge, m_filterBadge, m_agcBadge,
+                                m_nrBadge, m_nbBadge, m_apfBadge, m_sqlBadge}) {
+        badge->setEnabled(slice != nullptr);
+        badge->setClickable(slice != nullptr);
+    }
+    m_sliceTag->setVisible(slice != nullptr);
+    if (!slice) {
+        setSliceLetter(QChar());
+        m_modeBadge->setLabel(QStringLiteral("–"));
+        m_modeBadge->setToolTip(tr("Operating mode"));
+        m_filterBadge->setLabel(QStringLiteral("–"));
+        m_filterBadge->setToolTip(tr("Filter passband width"));
+        m_agcBadge->setLabel(QStringLiteral("–"));
+        m_agcBadge->setToolTip(tr("AGC mode"));
+        for (const auto& [badge, rung] : badges) {
+            badge->setLabel(QString());
+            emit badgeAvailabilityChanged(rung, false);
+        }
+        emit residualWidthChanged();
+        return;
+    }
+
+    connect(slice, &QObject::destroyed, this, [this] { bindSlice(nullptr); });
 
     // Wire slice signals — exact names verified against SliceModel.h 2026-04-30.
     connect(slice, &SliceModel::dspModeChanged,    this,
