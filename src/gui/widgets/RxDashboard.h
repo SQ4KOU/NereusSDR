@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QChar>
+#include <QPointer>
 #include <QWidget>
 
 class QHBoxLayout;
@@ -56,7 +57,7 @@ public:
     explicit RxDashboard(QWidget* parent = nullptr);
 
     void bindSlice(SliceModel* slice);
-    SliceModel* slice() const noexcept { return m_slice; }
+    SliceModel* slice() const noexcept { return m_slice.data(); }
 
     /// Slice this dashboard is describing. Prepended to the row so a
     /// multi-pan operator can tell which slice the readings belong to.
@@ -126,7 +127,7 @@ private:
 
     QChar        m_sliceLetter{QLatin1Char('A')};
     QLabel*      m_sliceTag{nullptr};
-    SliceModel*  m_slice{nullptr};
+    QPointer<SliceModel> m_slice;
     StatusBadge* m_modeBadge{nullptr};
     StatusBadge* m_filterBadge{nullptr};
     StatusBadge* m_agcBadge{nullptr};

@@ -83,6 +83,45 @@ QAction* actionNamed(QMenu* menu, const QString& name)
 class TstDesktopStationWindow final : public QObject {
     Q_OBJECT
 private slots:
+    void hostedDashboardClearsWhenDesktopLosesLastReceiver()
+    {
+        if (!QSslSocket::supportsSsl()) { QSKIP("Qt reports no working TLS backend."); }
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+        MainWindow window({}, nullptr, MainWindow::ConnectionStartup::Deferred);
+        RadioModel* model = window.radioModel();
+        model->setBoardForTest(HPSDRHW::Saturn);
+        model->configureStreamPool(5, 5, 192000);
+        model->setConnectionStateForTest(ConnectionState::Connected);
+        const int aId = model->addSlice(QStringLiteral("pan-0"));
+        const int bId = model->addSlice(QStringLiteral("pan-0"));
+        SliceModel* a = model->sliceById(aId);
+        SliceModel* b = model->sliceById(bId);
+        QVERIFY(a && b);
+        a->setDspMode(DSPMode::CWU);
+        DesktopStationController controller(model, optionsFor(settings, directory.path()));
+        window.setDesktopStationController(&controller);
+        QVERIFY(controller.start(true));
+        SliceOwnership* ownership = model->sliceOwnership();
+        ownership->setOwner(bId, QByteArrayLiteral("token:phone"));
+        auto* dashboard = window.findChild<RxDashboard*>();
+        QVERIFY(dashboard);
+        QCOMPARE(dashboard->slice(), a);
+        QCOMPARE(dashboard->modeText(), QStringLiteral("CWU"));
+
+        ownership->setOwner(aId, QByteArrayLiteral("token:phone"));
+        QCOMPARE(dashboard->slice(), nullptr);
+        QCOMPARE(dashboard->modeText(), QStringLiteral("–"));
+        QVERIFY(dashboard->sliceLetter().isNull());
+
+        ownership->setOwner(bId, SliceOwnership::stationDevice());
+        b->setDspMode(DSPMode::AM);
+        QCOMPARE(dashboard->slice(), b);
+        QCOMPARE(dashboard->sliceLetter(), QLatin1Char('B'));
+        QCOMPARE(dashboard->modeText(), QStringLiteral("AM"));
+    }
+
     void hostedSetupEditsOnlyDesktopReceiver()
     {
         if (!QSslSocket::supportsSsl()) { QSKIP("Qt reports no working TLS backend."); }

@@ -5759,8 +5759,8 @@ void MainWindow::buildUI()
     auto rebindDashboard = [this]() {
         if (!m_rxDashboard || !m_radioModel) { return; }
         SliceModel* s = activeSliceForWindow();
-        if (!s) { return; }
         m_rxDashboard->bindSlice(s);
+        if (!s) { return; }
         // Use SliceModel::sliceLetter(), do NOT derive the letter here.
         // It is already derived from sliceIndex() upstream. It previously
         // returned a stored member defaulting to 'A', so every slice
