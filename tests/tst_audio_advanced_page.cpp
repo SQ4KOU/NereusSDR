@@ -12,9 +12,8 @@
 // again. In a remote window both halves are wrong. AppSettings there also
 // lists the keys the Core holds (audio/DspRate and audio/DspBlockSize
 // classify Station), so removing "every audio/* key" would send removes to
-// the Core; and a remote window opens no VAX outputs, so re-creating them
-// makes devices nothing feeds. A remote Reset removes only this
-// computer's audio/* keys and leaves the VAX slots alone.
+// the Core. A remote Reset removes only this computer's audio/* keys and
+// rebuilds its local VAX outputs, which carry remote receiver audio.
 //
 // The confirm box is modal (QMessageBox::exec), so each case answers it
 // from a timer the way an operator would, by clicking its button.
@@ -48,9 +47,8 @@ using namespace NereusSDR;
 
 namespace {
 
-// A VAX slot occupant that says when AudioEngine throws it away, so "no
-// VAX output was re-created" is observed on the slot itself rather than
-// inferred from a signal.
+// A VAX slot occupant that says when AudioEngine throws it away, so a
+// reset's output rebuild is observed on the slot as well as its signal.
 class WatchedVaxBus final : public FakeAudioBus {
 public:
     explicit WatchedVaxBus(bool* destroyed) : m_destroyed(destroyed) {}
@@ -140,7 +138,7 @@ private slots:
     }
 
     // A remote window: this computer's audio/* keys go, the Core's stay
-    // and nothing is sent to it, and no VAX output is made.
+    // and nothing is sent to it. Its local VAX output is rebuilt.
     void remoteResetTouchesOnlyThisComputersKeys()
     {
         SettingsProxy proxy;
@@ -183,9 +181,10 @@ private slots:
         QCOMPARE(writes.count(), 0);
         QCOMPARE(removes.count(), 0);
 
-        // No VAX output re-created: the slot was not touched.
-        QCOMPARE(vaxChanged.count(), 0);
-        QVERIFY(!vaxBusDestroyed);
+        // The old local output is retired and all four slots announce their
+        // rebuilt defaults, just as they do in direct mode.
+        QCOMPARE(vaxChanged.count(), 4);
+        QVERIFY(vaxBusDestroyed);
     }
 
     // Local direct mode: the Reset it has always done. Every audio/* key,
