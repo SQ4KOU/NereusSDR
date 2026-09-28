@@ -41,7 +41,7 @@ public:
     bool acceptChunk(qint64 offset, const QByteArray& chunk, QString* error = nullptr);
     bool completedPayload(QByteArray* output, QString* error = nullptr) const;
     void cancel();
-    qint64 expectedOffset() const { return m_bytes.size(); }
+    qint64 expectedOffset() const { return m_finished ? m_manifest.byteLength : m_bytes.size(); }
 
 private:
     QByteArray m_bytes;

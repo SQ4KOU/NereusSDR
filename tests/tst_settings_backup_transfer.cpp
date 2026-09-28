@@ -37,7 +37,27 @@ private slots:
         QByteArray result;
         QVERIFY2(assembled.completedPayload(&result, &error), qPrintable(error));
         QCOMPARE(result, snapshot);
-        QCOMPARE(assembled.expectedOffset(), qint64(0));
+        QCOMPARE(assembled.expectedOffset(), manifest.byteLength);
+    }
+
+    void borrowedSourceBytesAreSnapshotted()
+    {
+        char backing[] = {'a', 'b', 'c'};
+        const QByteArray borrowed = QByteArray::fromRawData(backing, sizeof(backing));
+        SettingsBackupTransferSource source;
+        QVERIFY(SettingsBackupTransferSource::create(borrowed, &source));
+        const auto manifest = source.manifest();
+        backing[0] = 'z';
+        backing[1] = 'z';
+        QByteArray chunk;
+        QVERIFY(source.readChunk(0, 3, &chunk));
+        QCOMPARE(chunk, QByteArray("abc"));
+        SettingsBackupTransferAssembler assembler;
+        QVERIFY(assembler.begin(manifest));
+        QVERIFY(assembler.acceptChunk(0, chunk));
+        QByteArray completed;
+        QVERIFY(assembler.completedPayload(&completed));
+        QCOMPARE(completed, QByteArray("abc"));
     }
 
     void sourceRejectsInvalidRequestsWithoutReplacingOutput()

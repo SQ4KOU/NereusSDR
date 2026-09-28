@@ -29,9 +29,12 @@ bool SettingsBackupTransferSource::create(const QByteArray& snapshot,
         return fail(error, QStringLiteral("Snapshot must contain 1 to 16 MiB of XML bytes"));
     }
     SettingsBackupTransferSource next;
-    next.m_snapshot = snapshot;
+    // A QByteArray may wrap caller-owned storage via fromRawData(). Take an
+    // owning copy so later caller mutation or release cannot change the bytes
+    // promised by the manifest digest.
+    next.m_snapshot = QByteArray(snapshot.constData(), snapshot.size());
     next.m_manifest.byteLength = snapshot.size();
-    next.m_manifest.sha256 = QCryptographicHash::hash(snapshot, QCryptographicHash::Sha256);
+    next.m_manifest.sha256 = QCryptographicHash::hash(next.m_snapshot, QCryptographicHash::Sha256);
     *output = std::move(next);
     succeed(error);
     return true;
