@@ -469,6 +469,9 @@ struct StationCapabilities {
     /// hello declared remoteTx 1 (remoteTxEntry); 0 otherwise.
     bool remoteTxEntry = false;
     int remoteTxVersion = 0;
+    /// Direct WSS transmit-watch attachment for a paired, permitted peer
+    /// that declared txWatchPath 1. Absent for every other peer.
+    int txWatchPathVersion = 0;
     /// Desktop remote transmit (R-IOS-13, R-R3-42): why txPermitted is
     /// false, as the Core's refusal (link section 18.3): its code, its
     /// sentence and its fix. Sent right after remoteTxVersion and only with

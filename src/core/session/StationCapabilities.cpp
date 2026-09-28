@@ -263,6 +263,9 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
         // peer that declared the feature.
         if (remoteTxEntry) {
             updates.append(intEntry("remoteTxVersion", remoteTxVersion));
+            if (txWatchPathVersion > 0) {
+                updates.append(intEntry("txWatchPathVersion", txWatchPathVersion));
+            }
             // Desktop remote transmit: the Core's reason with it.
             updates.append(stringEntry("txRefusalCode", txRefusalCode));
             updates.append(stringEntry("txRefusalReason", txRefusalReason));
@@ -500,6 +503,7 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                    || u.name == "txModMonitorVersion"
                    || u.name == "sessionHolderVersion"
                    || u.name == "remoteTxVersion"
+                   || u.name == "txWatchPathVersion"
                    || u.name == "txStateVersion"
                    || u.name == "txReadingsVersion"
                    || u.name == "remoteIqVersion"
@@ -538,6 +542,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                 } else if (u.name == "remoteTxVersion") {
                     caps.remoteTxEntry = true;
                     caps.remoteTxVersion = version;
+                } else if (u.name == "txWatchPathVersion") {
+                    caps.txWatchPathVersion = version;
                 } else if (u.name == "txStateVersion") {
                     caps.txStateVersion = version;
                 } else if (u.name == "txReadingsVersion") {

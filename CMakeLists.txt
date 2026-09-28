@@ -1344,6 +1344,7 @@ set(CORE_SOURCES
     src/core/session/StationCapabilities.cpp
     src/core/session/SettingsHygieneWire.cpp
     src/core/session/StationServer.cpp
+    src/core/session/TxWatchServer.cpp
     src/core/session/StationOpeningGate.cpp
     src/core/session/StationReceivers.cpp
     src/core/session/StationSharedSettings.cpp
