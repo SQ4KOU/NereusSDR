@@ -2501,6 +2501,12 @@ if(ENABLE_DFNR)
             install(FILES "${DFNR_MODEL}"
                 DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/NereusSDR/models/dfnet3"
                 OPTIONAL)
+            # The headless package installs only the nereusd component. Keep
+            # the model at ModelPaths probe #3 without changing desktop installs.
+            install(FILES "${DFNR_MODEL}"
+                DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/NereusSDR/models/dfnet3"
+                COMPONENT nereusd
+                EXCLUDE_FROM_ALL)
         endif()
     endif()
 endif()

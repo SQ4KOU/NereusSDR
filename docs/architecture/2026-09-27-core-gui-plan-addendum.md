@@ -1057,10 +1057,15 @@ colours for the same signal.
   implementation decision: preserve the desktop install, add the daemon model
   component, and build the image dependency from pinned source with explicit
   Pi 4 CPU flags. No separate operator request to omit DFNR is claimed.
-- Status: in progress. Source review confirmed the missing component. The image
-  lane is adding the source build and package assertions. Artifact construction
-  and device boot remain unverified. The Rock's installed model was separately
-  staged and hash-verified; this packaging finding does not claim it is missing.
+- Status: implemented in signed `043508ce`. A separate daemon-component rule
+  preserves the desktop install. The Pi workflow now requires DFNR from pinned
+  source/toolchain with an audited dependency lock and explicit ARMv8-A flags;
+  it checks the model and compiler definition rather than silently disabling it.
+  Six integrated stage checks passed, including execution of the actual CMake
+  install rules for both daemon and desktop components; shell lint and workflow
+  structure checks passed. Linux arm64 artifact construction and device boot
+  remain unverified. The Rock's installed model was separately staged and
+  hash-verified; this packaging finding does not claim it is missing.
 - Plan: station binary packaging and small-computer image.
 
 ### G-65: Independent heartbeats can outlive a delayed transmit-release command

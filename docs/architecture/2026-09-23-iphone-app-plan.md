@@ -6602,6 +6602,14 @@ a device check and touches first-boot security, so opus. Requires Tasks 16, 17 a
 - [ ] **Step 1:** The pi-gen stage, the Armbian script and the lint test.
 - [ ] **Step 2:** The workflow and the README.
 
+Implementation evidence: signed `7050acbf` and `043508ce` add the stage, Rock
+customization, manual artifact workflow, provenance and pinned Pi 4 DFNR source
+build. Six integrated stage checks pass, including real CMake component-install
+execution for the noise-reduction model; ShellCheck and workflow parsing pass.
+No image workflow has run and no card has been flashed or booted. Artifact and
+device acceptance remain pending.
+
+
 ---
 
 # Part J: The app
