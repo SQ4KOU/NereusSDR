@@ -167,15 +167,12 @@ private slots:
         SettingsProxy proxy;
         StationClient client(&remote, &proxy);
         client.setDeviceIdentity(device, record.name);
-        client.startSession(offerer, QString(), QString(), server.stationIdentity().fingerprint());
-        server.acceptTransport(answerer);
-        QTRY_VERIFY_WITH_TIMEOUT(client.isHandshakeComplete(), 10000);
-        QVERIFY(client.auxiliaryWatchTelemetry());
-        QCOMPARE(client.auxiliaryWatchTelemetry()->submittedPayloadBytes, quint64(0));
-        // The older Core fixture does not implement tx.watchRelay. Keep its
-        // authenticated primary, but substitute a bounded command responder.
-        QVERIFY(answerer->parent());
-        answerer->disconnect(answerer->parent());
+        // Substitute the bounded command responder after authentication but
+        // before the client's first watch attempt. Waiting for the handshake
+        // outside this signal can miss the command emitted immediately after.
+        QObject::connect(&client, &StationClient::handshakeComplete, &client, [answerer] {
+            if (answerer->parent()) { answerer->disconnect(answerer->parent()); }
+        });
         std::shared_ptr<RelayLeg> coreLeg;
         QPointer<DataChannelTransport> coreWatch;
         QList<QByteArray> watchFrames;
@@ -248,6 +245,11 @@ private slots:
             coreLeg->open(QUrl(QStringLiteral("wss://relay.example/ws")),
                           QStringLiteral("core-watch"));
         });
+        client.startSession(offerer, QString(), QString(), server.stationIdentity().fingerprint());
+        server.acceptTransport(answerer);
+        QTRY_VERIFY_WITH_TIMEOUT(client.isHandshakeComplete(), 10000);
+        QVERIFY(client.auxiliaryWatchTelemetry());
+        QCOMPARE(client.auxiliaryWatchTelemetry()->submittedPayloadBytes, quint64(0));
         StationCapabilities caps = client.capabilities();
         caps.txWatchPathVersion = caseId == 5 ? 0 : 1;
         if (caseId == 4) { caps.txPermitted = false; }

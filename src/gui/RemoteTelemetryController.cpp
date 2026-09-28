@@ -79,7 +79,7 @@ RemoteTelemetryController::RemoteTelemetryController(
         });
     }
     sampleNow();
-    m_timer.start();
+    if (!m_now) { m_timer.start(); }
 }
 
 void RemoteTelemetryController::setPaReadingsTarget(RadioModel* model)

@@ -163,6 +163,54 @@ private slots:
         QCOMPARE(client.connectedUrl().host(), QStringLiteral("127.0.0.1"));
         QCOMPARE(server.peerCount(), 1); // auxiliary does not adopt a primary peer
 
+        // Revoke watch eligibility, take a graph baseline, then admit and
+        // retire a whole new authenticated watch between graph ticks. The
+        // primary epoch stays put; the second attach and ACK must survive in
+        // the folded tally and appear in the next total exactly once.
+        const quint32 samePrimaryEpoch = client.sessionEpoch();
+        server.setRemoteTransmitAllowed(false);
+        QTRY_VERIFY_WITH_TIMEOUT(!client.directWatchReady(), 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(!client.capabilities().txPermitted, 3000);
+        now += 1000;
+        controller.sampleNow();
+        const auto controlAtTick = client.transportTelemetry();
+        const auto watchAtTick = client.auxiliaryWatchTelemetry();
+        QVERIFY(controlAtTick && watchAtTick);
+        QSignalSpy graphTicks(&controller, &RemoteTelemetryController::changed);
+        server.setRemoteTransmitAllowed(true);
+        QTRY_VERIFY_WITH_TIMEOUT(client.capabilities().txPermitted, 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(client.directWatchReady(), 10000);
+        server.setRemoteTransmitAllowed(false);
+        QTRY_VERIFY_WITH_TIMEOUT(!client.directWatchReady(), 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(!client.capabilities().txPermitted, 3000);
+        QCOMPARE(client.sessionEpoch(), samePrimaryEpoch);
+        QCOMPARE(graphTicks.size(), 0);
+        const auto controlAfterShortWatch = client.transportTelemetry();
+        const auto watchAfterShortWatch = client.auxiliaryWatchTelemetry();
+        QVERIFY(controlAfterShortWatch && watchAfterShortWatch);
+        QCOMPARE(watchAfterShortWatch->receivedPayloadBytes - watchAtTick->receivedPayloadBytes,
+                 quint64(2));
+        QCOMPARE(watchAfterShortWatch->submittedPayloadBytes - watchAtTick->submittedPayloadBytes,
+                 quint64(33));
+        now += 1000;
+        controller.sampleNow();
+        const double shortWatchRx = double(controlAfterShortWatch->receivedPayloadBytes
+            - controlAtTick->receivedPayloadBytes + 2) * 8.0 / 1000.0;
+        const double shortWatchTx = double(controlAfterShortWatch->acceptedPayloadBytes
+            - controlAtTick->acceptedPayloadBytes + 33) * 8.0 / 1000.0;
+        QVERIFY(controller.current().coreGuiRxKbps);
+        QVERIFY(controller.current().coreGuiTxKbps);
+        QVERIFY(qAbs(*controller.current().coreGuiRxKbps - shortWatchRx) < 0.001);
+        QVERIFY(qAbs(*controller.current().coreGuiTxKbps - shortWatchTx) < 0.001);
+        server.setRemoteTransmitAllowed(true);
+        QTRY_VERIFY_WITH_TIMEOUT(client.capabilities().txPermitted, 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(client.directWatchReady(), 10000);
+        QCOMPARE(client.sessionEpoch(), samePrimaryEpoch);
+        QCOMPARE(client.auxiliaryWatchTelemetry()->receivedPayloadBytes,
+                 watchAfterShortWatch->receivedPayloadBytes + quint64(2));
+        QCOMPARE(client.auxiliaryWatchTelemetry()->submittedPayloadBytes,
+                 watchAfterShortWatch->submittedPayloadBytes + quint64(33));
+
         RemoteTxWatchdog* watchdog = server.txWatchdog();
         QVERIFY(watchdog != nullptr);
         QSignalSpy heard(watchdog, &RemoteTxWatchdog::keepaliveHeard);

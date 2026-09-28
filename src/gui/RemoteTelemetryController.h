@@ -64,7 +64,8 @@ public:
     qint64 nowMs() const;
     QString bannerText() const;
     QString detailText() const;
-    // Also used by deterministic lifecycle tests with a monotonic clock.
+    // An injected clock makes sampling manually driven for deterministic
+    // lifecycle tests; the production clock keeps its automatic timer.
     void sampleNow();
     // R-R3-32 / R-R3-46 (parity Task 6): the remote window's model takes
     // the Core's PA readings from each current sample, and all of them
