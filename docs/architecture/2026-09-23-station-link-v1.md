@@ -869,7 +869,7 @@ change shows as surface drift and as a change to this table.
 | `pairingVersion` | 1 |
 | `stationCatalogVersion` | 1 |
 | `displayExtrasVersion` | 2 |
-| `transmitSettingsVersion` | 9 |
+| `transmitSettingsVersion` | 10 |
 | `bandSelectVersion` | 1 |
 | `meterReadingsVersion` | 1 |
 | `dspInfoVersion` | 1 |
@@ -1158,7 +1158,16 @@ When a feature is off, its version is 0:
   checks the complete signed TX passband (including XIT), and refuses writes
   and removals while on air, including at shared-setting confirmation. Removing
   the key restores United States (8). Legacy `Region` text is not migrated.
-  Extended transmit is not enabled by this capability.
+  Extended transmit is not enabled by this capability. Version 10 (iPhone
+  app plan Task 40) adds `transmit.micMuted` (bool, bidirectional, appended
+  after `voxEnabled`): true while the Core's mic is muted, the inverse of
+  Thetis's chkMicMute, whose checked state means the mic is in use. A write
+  takes the same gates as `micGainDb` (a permitted session on a transmit
+  Core, on or off the air; a receive-only Core's settings writer off the
+  air only) and never keys. Muting sets the Core's mic preamp to 0.0 and
+  unmuting restores the mic level, as Thetis's setAudioMicGain does
+  (console.cs:28856-28868 [v2.10.3.15]). It is never saved: the mic starts
+  in use after every Core start.
 - `bandSelectVersion`: sent only at agreed minor 11, and 0 on a
   station with no radio model. At 1 the Core takes `slice.selectBand`
   (section 9.1), a device's band button for a slice, for the bands the
@@ -2273,7 +2282,7 @@ An enum property lists the values its domain allows.
 | 16 | `attOnTxValue` | `i64` | bidirectional |  |
 | 17 | `forceAttWhenPsOff` | `bool` | bidirectional |  |
 
-**TransmitModel** (86 properties)
+**TransmitModel** (87 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -2363,6 +2372,7 @@ An enum property lists the values its domain allows.
 | 83 | `twoToneFreq2Delay` | `i64` | bidirectional |  |
 | 84 | `twoToneDrivePowerSource` | `enum` | bidirectional | 0, 1, 2 |
 | 85 | `voxEnabled` | `bool` | bidirectional |  |
+| 86 | `micMuted` | `bool` | bidirectional |  |
 
 **TransmitState** (44 properties)
 

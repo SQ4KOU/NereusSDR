@@ -9459,7 +9459,10 @@ int StationServer::transmitSettingsVersion() const
     // (parity Task 13).
     // 9: General Region writes the validated BandPlanRegion ID (0..23),
     // including TX filter edges, on-air refusal and shared confirmation.
-    return m_radioModel.isNull() ? 0 : 9;
+    // 10: the mic mute, `transmit.micMuted` (iPhone app plan Task 40),
+    // under the same gates as the mic level; muting sets the Core's mic
+    // preamp to 0.0 as Thetis's chkMicMute does.
+    return m_radioModel.isNull() ? 0 : 10;
 }
 
 bool StationServer::pureSignalArmingOffered(SessionTransport* transport) const

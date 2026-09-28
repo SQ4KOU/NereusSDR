@@ -267,6 +267,10 @@
 //   2026-09-25 - iPhone app plan, desktop remote transmit (R-IOS-13):
 //                 voxEnabled is a Q_PROPERTY, mirrored both ways. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - iPhone app plan Task 40: micMuted, the mic mute as a
+//                 Q_PROPERTY (true = muted), mirrored both ways; muting
+//                 zeroes the mic preamp as Thetis setAudioMicGain does.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 #pragma once
 
@@ -892,6 +896,8 @@ public:
     /// Default TRUE: from console.designer.cs:2029-2030 [v2.10.3.13]:
     ///   "Checked = true; CheckState = Checked"
     bool micMute() const noexcept { return m_micMute; }
+    /// iPhone app plan Task 40: true while the mic is muted (!micMute()).
+    bool micMuted() const noexcept { return !m_micMute; }
 
     /// 20 dB hardware microphone preamp enable.
     /// From Thetis console.cs:13237 [v2.10.3.13]: private bool mic_boost = true;
@@ -1296,6 +1302,13 @@ public:
     // property keeps its wire ordinal. Still never persisted: VOX always
     // starts off.
     Q_PROPERTY(bool voxEnabled READ voxEnabled WRITE setVoxEnabled NOTIFY voxEnabledChanged)
+    // iPhone app plan Task 40: the mic mute on the link as
+    // `transmit.micMuted`, true while the mic is muted (the inverse of
+    // micMute(), whose Thetis name reads true = mic in use), so a phone or
+    // a remote window mutes the Core's mic as a local window would.
+    // Declared after voxEnabled so every earlier ordinal stays. Never
+    // persisted: the mic always starts in use.
+    Q_PROPERTY(bool micMuted READ micMuted WRITE setMicMuted NOTIFY micMuteChanged)
 
     /// Bypass PA settings flag. false (default) = use board-specific table.
     bool paSettingsBypass() const noexcept { return m_paSettingsBypass; }
@@ -2236,6 +2249,8 @@ public slots:
 
     // ── Mic-jack flag setters (3M-1b C.2) ─────────────────────────────────
     void setMicMute(bool on);
+    /// iPhone app plan Task 40: setMicMute(!muted).
+    void setMicMuted(bool muted);
     void setMicBoost(bool on);
     void setMicXlr(bool on);
     void setLineIn(bool on);

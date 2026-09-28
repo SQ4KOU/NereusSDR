@@ -146,6 +146,9 @@
 //                 readings (eqDb .. alcGroupDb) Outbound (txReadingsVersion
 //                 3). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //                 Code.
+//   2026-09-28 - iPhone app plan Task 40: TransmitModel micMuted
+//                 Bidirectional (transmitSettingsVersion 10). J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorPolicy.h"
@@ -406,7 +409,7 @@ const MirrorPolicy::Entry kEntries[] = {
     // minimum notch width (RadioModel::refreshSliceMinNotchWidths).
     { "SliceModel", "minNotchWidthHz", MirrorDirection::Outbound },
 
-    // ---- TransmitModel (86 entries) ----
+    // ---- TransmitModel (87 entries) ----
     // iPhone app plan Task 35 (R-IOS-13): MOX and TUNE travel from the
     // Core only. A remote device keys with the transmit verbs (tx.key,
     // tx.tune), which pass the Core's gates; a property write never keys
@@ -515,6 +518,8 @@ const MirrorPolicy::Entry kEntries[] = {
     // VOX. A write is the permitted sessions' only (the station transmit
     // gate), and the Core turns VOX off at every change of holder.
     { "TransmitModel", "voxEnabled", MirrorDirection::Bidirectional },
+    // iPhone app plan Task 40 (transmitSettingsVersion 10): the mic mute.
+    { "TransmitModel", "micMuted", MirrorDirection::Bidirectional },
 
     // ---- TunerModel (21 entries) ----
     { "TunerModel", "relayC1", MirrorDirection::Outbound },
