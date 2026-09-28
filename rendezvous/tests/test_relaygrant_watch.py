@@ -85,13 +85,13 @@ def test_watch_expiry_wire_boundaries_and_mint_inputs():
             relaygrant.mint_watch(SECRET, leg, session, station, EXPIRES)
 
 
-def test_current_relay_does_not_admit_watch_grants():
+def test_watch_grant_cannot_create_a_primary_session():
     async def go():
         async with live_relay() as (relay, _, uri):
             watch = relaygrant.mint_watch(RELAY_SECRET, relaygrant.LEG_DEVICE, SESSION, STATION, WALL + 120)
             ws = await connect(uri)
             await ws.send(bytes([TAG_JOIN]) + watch.encode("ascii"))
-            await expect_end(ws, "badToken")
+            await expect_end(ws, "peerGone")
             assert relay.sessions == {} and relay.pending == 0
 
     asyncio.run(go())
