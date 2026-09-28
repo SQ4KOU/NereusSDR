@@ -53,6 +53,7 @@
 #include <QTimer>
 
 #include "core/AppSettings.h"
+#include "core/CfcProfile.h"
 #include "gui/applets/TxCfcDialog.h"
 #include "gui/widgets/ParametricEqWidget.h"
 #include "models/RadioModel.h"
@@ -77,6 +78,28 @@ private slots:
     void cleanup()
     {
         AppSettings::instance().clear();
+    }
+
+    void pairedCurveRefreshesAndEditsFiveAndEighteen()
+    {
+        RadioModel rm;
+        TransmitModel& tx = rm.transmitModel();
+        TxCfcDialog dlg(&tx, nullptr);
+        dlg.bands18Radio()->setChecked(true);
+        CfcProfile::Profile p;
+        QVERIFY(CfcProfile::decode(tx.cfcParaEqData(), p));
+        QCOMPARE(p.f.size(), std::size_t(18));
+        dlg.compWidget()->setSelectedIndex(3);
+        dlg.compQSpin()->setValue(7.25);
+        QVERIFY(CfcProfile::decode(tx.cfcParaEqData(), p));
+        QCOMPARE(p.qg.at(3), 7.25);
+        QCOMPARE(p.qe.at(3), 4.0);
+
+        dlg.bands5Radio()->setChecked(true);
+        QVERIFY(CfcProfile::decode(tx.cfcParaEqData(), p));
+        QCOMPARE(p.f.size(), std::size_t(5));
+        tx.setCfcParaEqData(CfcProfile::encode(p));
+        QCOMPARE(dlg.currentBandCount(), 5);
     }
 
     // ── 1. Dialog constructs with documented control surface ───────────
@@ -506,9 +529,14 @@ private slots:
         tx.setCfcPrecompDb(8);
         tx.setCfcCompression(3, 12);
         QApplication::processEvents();
+        const QString untouchedEq = dlg.postEqWidget()->saveToJson();
 
         dlg.resetCompBtn()->click();
         QApplication::processEvents();
+        QCOMPARE(dlg.postEqWidget()->saveToJson(), untouchedEq);
+        CfcProfile::Profile paired;
+        QVERIFY(CfcProfile::decode(tx.cfcParaEqData(), paired));
+        QVERIFY(paired.f != paired.postF);
 
         // Comp widget global gain reset to 0.
         QCOMPARE(dlg.compWidget()->globalGainDb(), 0.0);
@@ -532,9 +560,14 @@ private slots:
         tx.setCfcPostEqGainDb(-6);
         tx.setCfcPostEqBandGain(4, 9);
         QApplication::processEvents();
+        const QString untouchedComp = dlg.compWidget()->saveToJson();
 
         dlg.resetEqBtn()->click();
         QApplication::processEvents();
+        QCOMPARE(dlg.compWidget()->saveToJson(), untouchedComp);
+        CfcProfile::Profile paired;
+        QVERIFY(CfcProfile::decode(tx.cfcParaEqData(), paired));
+        QVERIFY(paired.f != paired.postF);
 
         QCOMPARE(dlg.postEqWidget()->globalGainDb(), 0.0);
         QVector<double> ef, eg, eq;

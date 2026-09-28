@@ -150,7 +150,7 @@ QString encode(const QString& payload)
 }
 
 // From Thetis Common.cs:1764-1790 [v2.10.3.13].
-std::optional<QString> decode(const QString& blob)
+std::optional<QString> decode(const QString& blob, qsizetype maxDecodedBytes)
 {
     // Thetis: "if (string.IsNullOrEmpty(compressed_input)) return null;"
     // Common.cs:1766 [v2.10.3.13].
@@ -205,7 +205,12 @@ std::optional<QString> decode(const QString& blob)
             inflateEnd(&strm);
             return std::nullopt;
         }
-        out.append(chunk, kChunkSize - static_cast<int>(strm.avail_out));
+        const int produced = kChunkSize - static_cast<int>(strm.avail_out);
+        if (maxDecodedBytes < 0 || produced > maxDecodedBytes - out.size()) {
+            inflateEnd(&strm);
+            return std::nullopt;
+        }
+        out.append(chunk, produced);
     } while (ret != Z_STREAM_END);
 
     inflateEnd(&strm);

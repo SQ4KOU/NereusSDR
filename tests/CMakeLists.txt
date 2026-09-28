@@ -4257,6 +4257,7 @@ nereus_add_test(tst_tx_channel_leveler_alc_setters)
 # for the existing Stage::CfComp / Stage::Compressor / Stage::OsCtrl arms in
 # setStageRunning.  Same does-not-crash strategy as B-1 / B-2.
 nereus_add_test(tst_tx_channel_cfc_cpdr_cessb_setters)
+nereus_add_test(tst_cfc_profile)
 
 # ── Phase 3M-3a-ii follow-up Batch 7: TxChannel CFC live-display readback ──
 # Plan: 3M-3a-ii follow-up Batch 7 — TxChannel::getCfcDisplayCompression

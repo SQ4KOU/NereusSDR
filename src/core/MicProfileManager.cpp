@@ -1535,10 +1535,14 @@ void MicProfileManager::applyValuesToModel(const QHash<QString, QVariant>& value
     tx->setPhaseRotatorStages(take(QStringLiteral("CFCPhaseRotatorStages"),
                                     QStringLiteral("8")).toInt());
     // CFC scalars (4) — defaults from database.cs:4724-4733 [v2.10.3.13].
+    tx->beginCfcProfileRestore();
     tx->setCfcEnabled(take(QStringLiteral("CFCEnabled"),
                             QStringLiteral("False")) == QLatin1String("True"));
     tx->setCfcPostEqEnabled(take(QStringLiteral("CFCPostEqEnabled"),
                                   QStringLiteral("False")) == QLatin1String("True"));
+    // The incoming profile's legacy fields precede its paired curve.
+    // Keep those setters from patching the previously active paired curve
+    // or reaching WDSP before the final CFCParaEQData field is installed.
     tx->setCfcPrecompDb(take(QStringLiteral("CFCPreComp"),    QStringLiteral("0")).toInt());
     tx->setCfcPostEqGainDb(take(QStringLiteral("CFCPostEqGain"), QStringLiteral("0")).toInt());
     // CFC profile arrays (30) — defaults from database.cs:4735-4766 [v2.10.3.13].
@@ -1558,6 +1562,7 @@ void MicProfileManager::applyValuesToModel(const QHash<QString, QVariant>& value
     }
     // CFC blob (1) — opaque QString; empty default per database.cs:4768.
     tx->setCfcParaEqData(take(QStringLiteral("CFCParaEQData"), QString()));
+    tx->endCfcProfileRestore();
     // CPDR (1) — cpdrOn is global console state, NOT applied here.
     tx->setCpdrLevelDb(take(QStringLiteral("CompanderLevel"), QStringLiteral("2")).toInt());
     tx->setAmCarrierLevel(take(QStringLiteral("AM_Carrier_Level"), QStringLiteral("100")).toInt());

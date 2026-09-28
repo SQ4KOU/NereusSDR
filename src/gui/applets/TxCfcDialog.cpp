@@ -90,6 +90,8 @@
 #include "TxCfcDialog.h"
 
 #include "core/TxChannel.h"
+#include "core/CfcProfile.h"
+#include "core/ParaEqEnvelope.h"
 #include "gui/StyleConstants.h"
 #include "gui/widgets/ParametricEqWidget.h"
 #include "models/TransmitModel.h"
@@ -653,6 +655,10 @@ void TxCfcDialog::wireSignals()
                 this, &TxCfcDialog::syncFromModel);
         connect(m_tm.data(), &TransmitModel::cfcPostEqBandGainChanged,
                 this, &TxCfcDialog::syncFromModel);
+        connect(m_tm.data(), &TransmitModel::cfcParaEqDataChanged,
+                this, &TxCfcDialog::syncFromModel);
+        connect(m_tm.data(), &TransmitModel::cfcProfileRestored,
+                this, &TxCfcDialog::syncFromModel);
     }
 }
 
@@ -699,14 +705,18 @@ void TxCfcDialog::seedWidgetsFromTransmitModel()
     QSignalBlocker bEq(m_postEqWidget);
     QSignalBlocker bLow(m_lowSpin);
     QSignalBlocker bHigh(m_highSpin);
+    QSignalBlocker bBandGroup(m_bandCountGroup);
+    QSignalBlocker bUseQ(m_useQFactorsChk);
 
     m_compWidget->setBandCount(10);
+    m_compWidget->setParametricEq(true);
     m_compWidget->setFrequencyMinHz(seedMinHz);
     m_compWidget->setFrequencyMaxHz(seedMaxHz);
     m_compWidget->setPointsData(freqs, compGains, compQ);
     m_compWidget->setGlobalGainDb(static_cast<double>(m_tm->cfcPrecompDb()));
 
     m_postEqWidget->setBandCount(10);
+    m_postEqWidget->setParametricEq(true);
     m_postEqWidget->setFrequencyMinHz(seedMinHz);
     m_postEqWidget->setFrequencyMaxHz(seedMaxHz);
     m_postEqWidget->setPointsData(freqs, eqGains, eqQ);
@@ -715,6 +725,9 @@ void TxCfcDialog::seedWidgetsFromTransmitModel()
     // Sync the Low/High spinboxes to match the seeded envelope.
     m_lowSpin->setValue(static_cast<int>(seedMinHz));
     m_highSpin->setValue(static_cast<int>(seedMaxHz));
+    m_bands10Radio->setChecked(true);
+    m_useQFactorsChk->setChecked(true);
+    m_selectedBandSpin->setMaximum(10);
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -800,34 +813,16 @@ void TxCfcDialog::updateEditRowFromSelection(int index)
 
 void TxCfcDialog::pushCfcProfileToModel()
 {
-    if (!m_tm || !m_compWidget || !m_postEqWidget) { return; }
-
-    QVector<double> cf, cg, cq, ef, eg, eq;
-    m_compWidget->getPointsData(cf, cg, cq);
-    m_postEqWidget->getPointsData(ef, eg, eq);
-
-    if (cf.size() != 10 || ef.size() != 10) {
-        // Non-10-band layouts (5-band / 18-band) don't fit TM's fixed
-        // 10-element arrays.  Profile push for those layouts is gated
-        // until the TM array width grows (separate follow-up; matches
-        // Thetis radCFC_5/18 which still calls setCFCProfile but has
-        // the variable-length WDSP API).  For now we just sync the
-        // GlobalGainDb scalars and skip the per-band push.
-        m_updatingFromModel = true;
-        m_tm->setCfcPrecompDb(static_cast<int>(std::round(m_compWidget->globalGainDb())));
-        m_tm->setCfcPostEqGainDb(static_cast<int>(std::round(m_postEqWidget->globalGainDb())));
-        m_updatingFromModel = false;
-        return;
-    }
-
+    if (!m_tm || !m_compWidget || !m_postEqWidget || m_updatingFromModel) { return; }
+    // From Thetis frmCFCConfig.cs:492-504 [v2.10.3.15]: the existing
+    // CFCParaEQData setting contains both widget JSON objects together.
+    const QString encoded = ParaEqEnvelope::encode(
+        m_compWidget->saveToJson() + QStringLiteral("<SEP>")
+        + m_postEqWidget->saveToJson());
+    CfcProfile::Profile candidate;
+    if (!CfcProfile::decode(encoded, candidate)) { return; }
     m_updatingFromModel = true;
-    m_tm->setCfcPrecompDb(static_cast<int>(std::round(m_compWidget->globalGainDb())));
-    m_tm->setCfcPostEqGainDb(static_cast<int>(std::round(m_postEqWidget->globalGainDb())));
-    for (int i = 0; i < 10; ++i) {
-        m_tm->setCfcEqFreq        (i, static_cast<int>(std::round(cf[i])));
-        m_tm->setCfcCompression   (i, static_cast<int>(std::round(cg[i])));
-        m_tm->setCfcPostEqBandGain(i, static_cast<int>(std::round(eg[i])));
-    }
+    m_tm->setCfcParaEqData(encoded);
     m_updatingFromModel = false;
 }
 
@@ -848,6 +843,7 @@ void TxCfcDialog::onBandCountChanged()
     m_postEqWidget->setBandCount(bands);
 
     updateSelectedRowEnable();
+    pushCfcProfileToModel();
 }
 
 // From Thetis frmCFCConfig.cs:120-129 [v2.10.3.13] — udCFC_low_ValueChanged.
@@ -858,8 +854,13 @@ void TxCfcDialog::onLowFreqChanged(int hz)
         m_lowSpin->setValue(m_highSpin->value() - kMinFreqSpreadHz);
         return;
     }
-    m_compWidget->setFrequencyMinHz  (static_cast<double>(hz));
-    m_postEqWidget->setFrequencyMinHz(static_cast<double>(hz));
+    {
+        QSignalBlocker compBlock(m_compWidget);
+        QSignalBlocker eqBlock(m_postEqWidget);
+        m_compWidget->setFrequencyMinHz(static_cast<double>(hz));
+        m_postEqWidget->setFrequencyMinHz(static_cast<double>(hz));
+    }
+    pushCfcProfileToModel();
 }
 
 // From Thetis frmCFCConfig.cs:131-140 [v2.10.3.13] — udCFC_high_ValueChanged.
@@ -870,8 +871,13 @@ void TxCfcDialog::onHighFreqChanged(int hz)
         m_highSpin->setValue(m_lowSpin->value() + kMinFreqSpreadHz);
         return;
     }
-    m_compWidget->setFrequencyMaxHz  (static_cast<double>(hz));
-    m_postEqWidget->setFrequencyMaxHz(static_cast<double>(hz));
+    {
+        QSignalBlocker compBlock(m_compWidget);
+        QSignalBlocker eqBlock(m_postEqWidget);
+        m_compWidget->setFrequencyMaxHz(static_cast<double>(hz));
+        m_postEqWidget->setFrequencyMaxHz(static_cast<double>(hz));
+    }
+    pushCfcProfileToModel();
 }
 
 int TxCfcDialog::currentBandCount() const
@@ -884,8 +890,12 @@ int TxCfcDialog::currentBandCount() const
 // From Thetis frmCFCConfig.cs:484-490 [v2.10.3.13] — chkCFC_UseQFactors.
 void TxCfcDialog::onUseQFactorsToggled(bool on)
 {
-    m_compWidget->setParametricEq(on);
-    m_postEqWidget->setParametricEq(on);
+    {
+        QSignalBlocker compBlock(m_compWidget);
+        QSignalBlocker eqBlock(m_postEqWidget);
+        m_compWidget->setParametricEq(on);
+        m_postEqWidget->setParametricEq(on);
+    }
     pushCfcProfileToModel();
 }
 
@@ -1012,11 +1022,7 @@ void TxCfcDialog::onPrecompSpinChanged(double db)
         QSignalBlocker b(m_compWidget);
         m_compWidget->setGlobalGainDb(db);
     }
-    if (m_tm && !m_updatingFromModel) {
-        m_updatingFromModel = true;
-        m_tm->setCfcPrecompDb(static_cast<int>(std::round(db)));
-        m_updatingFromModel = false;
-    }
+    pushCfcProfileToModel();
 }
 
 // From Thetis frmCFCConfig.cs:159-167 [v2.10.3.13] — nudCFC_c_ValueChanged.
@@ -1035,11 +1041,7 @@ void TxCfcDialog::onCompSpinChanged(double db)
         QSignalBlocker b(m_compWidget);
         m_compWidget->setPointData(index, f, g, q);
     }
-    if (m_tm && !m_updatingFromModel) {
-        m_updatingFromModel = true;
-        m_tm->setCfcCompression(index, static_cast<int>(std::round(g)));
-        m_updatingFromModel = false;
-    }
+    pushCfcProfileToModel();
 }
 
 // From Thetis frmCFCConfig.cs:196-204 [v2.10.3.13] — nudCFC_cq_ValueChanged.
@@ -1073,11 +1075,7 @@ void TxCfcDialog::onPostEqGainSpinChanged(double db)
         QSignalBlocker b(m_postEqWidget);
         m_postEqWidget->setGlobalGainDb(db);
     }
-    if (m_tm && !m_updatingFromModel) {
-        m_updatingFromModel = true;
-        m_tm->setCfcPostEqGainDb(static_cast<int>(std::round(db)));
-        m_updatingFromModel = false;
-    }
+    pushCfcProfileToModel();
 }
 
 // From Thetis frmCFCConfig.cs:176-184 [v2.10.3.13] — nudCFC_gain_ValueChanged.
@@ -1096,11 +1094,7 @@ void TxCfcDialog::onGainSpinChanged(double db)
         QSignalBlocker b(m_postEqWidget);
         m_postEqWidget->setPointData(index, f, g, q);
     }
-    if (m_tm && !m_updatingFromModel) {
-        m_updatingFromModel = true;
-        m_tm->setCfcPostEqBandGain(index, static_cast<int>(std::round(g)));
-        m_updatingFromModel = false;
-    }
+    pushCfcProfileToModel();
 }
 
 // From Thetis frmCFCConfig.cs:186-194 [v2.10.3.13] — nudCFC_q_ValueChanged.
@@ -1288,9 +1282,45 @@ void TxCfcDialog::syncFromModel()
     if (!m_tm || !m_compWidget || !m_postEqWidget) { return; }
 
     // Avoid re-entrant model writes during an in-flight pushCfcProfileToModel.
-    if (m_updatingFromModel) { return; }
+    if (m_updatingFromModel || m_tm->cfcProfileMutationInProgress()) { return; }
 
     m_updatingFromModel = true;
+
+    CfcProfile::Profile paired;
+    if (CfcProfile::decode(m_tm->cfcParaEqData(), paired)) {
+        const std::optional<QString> json = ParaEqEnvelope::decode(m_tm->cfcParaEqData());
+        const qsizetype separator = json ? json->indexOf(QStringLiteral("<SEP>")) : -1;
+        if (separator >= 0) {
+            QSignalBlocker compBlock(m_compWidget);
+            QSignalBlocker eqBlock(m_postEqWidget);
+            QSignalBlocker groupBlock(m_bandCountGroup);
+            QSignalBlocker qBlock(m_useQFactorsChk);
+            QSignalBlocker lowBlock(m_lowSpin);
+            QSignalBlocker highBlock(m_highSpin);
+            QSignalBlocker preBlock(m_precompSpin);
+            QSignalBlocker postBlock(m_postEqGainSpin);
+            m_compWidget->loadFromJson(json->left(separator));
+            m_postEqWidget->loadFromJson(json->mid(separator + 5));
+            m_compWidget->setSelectedIndex(-1);
+            m_postEqWidget->setSelectedIndex(-1);
+            const int count = static_cast<int>(paired.f.size());
+            (count == 5 ? m_bands5Radio : count == 18 ? m_bands18Radio
+                        : m_bands10Radio)->setChecked(true);
+            m_selectedBandSpin->setMaximum(count);
+            m_useQFactorsChk->setChecked(paired.usesQ());
+            m_lowSpin->setValue(static_cast<int>(std::lround(paired.minHz)));
+            m_highSpin->setValue(static_cast<int>(std::lround(paired.maxHz)));
+            m_precompSpin->setValue(paired.precompDb);
+            m_postEqGainSpin->setValue(paired.postEqGainDb);
+            m_updatingFromModel = false;
+            updateSelectedRowEnable();
+            return;
+        }
+    }
+
+    if (m_compWidget->bandCount() != 10 || m_postEqWidget->bandCount() != 10) {
+        seedWidgetsFromTransmitModel();
+    }
 
     // Pre-comp + post-EQ gain scalars → top edit row + widgets.
     {

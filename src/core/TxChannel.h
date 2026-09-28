@@ -2567,6 +2567,9 @@ public:
     const std::vector<double>& lastTxCfcProfileFForTest() const noexcept { return m_txCfcProfileFLast; }
     const std::vector<double>& lastTxCfcProfileGForTest() const noexcept { return m_txCfcProfileGLast; }
     const std::vector<double>& lastTxCfcProfileEForTest() const noexcept { return m_txCfcProfileELast; }
+    const std::vector<double>& lastTxCfcProfileQgForTest() const noexcept { return m_txCfcProfileQgLast; }
+    const std::vector<double>& lastTxCfcProfileQeForTest() const noexcept { return m_txCfcProfileQeLast; }
+    int txCfcProfilePushCountForTest() const noexcept { return m_txCfcProfilePushCount; }
     bool   lastTxCfcPostEqRunningForTest()    const noexcept { return m_cfcPostEqOn; }
     double lastTxCfcPrecompDbForTest()        const noexcept { return m_cfcPrecompDb; }
     double lastTxCfcPrePeqDbForTest()         const noexcept { return m_cfcPostEqGainDb; }
@@ -3450,6 +3453,9 @@ private:
     std::vector<double> m_txCfcProfileFLast;
     std::vector<double> m_txCfcProfileGLast;
     std::vector<double> m_txCfcProfileELast;
+    std::vector<double> m_txCfcProfileQgLast;
+    std::vector<double> m_txCfcProfileQeLast;
+    int m_txCfcProfilePushCount = 0;
     bool    m_phaseRotatorRunLast {false};
 
     // PureSignal carry — 3M-4 work

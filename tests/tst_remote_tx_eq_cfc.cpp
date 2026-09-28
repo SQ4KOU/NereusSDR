@@ -52,6 +52,7 @@
 #include <vector>
 
 #include "core/AppSettings.h"
+#include "core/CfcProfile.h"
 #include "core/ConnectionState.h"
 #include "core/HardwareProfile.h"
 #include "core/MicProfileManager.h"
@@ -252,6 +253,27 @@ QString flatParametricBlob(double gainDb)
         QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact)));
 }
 
+QString pairedCfcBlob(int count, bool useQ = true)
+{
+    const auto curve = [count, useQ](double global, double gain, double q) {
+        QJsonArray points;
+        for (int i = 0; i < count; ++i) {
+            points.append(QJsonObject{{QStringLiteral("frequency_hz"), i * 100.0},
+                                      {QStringLiteral("gain_db"), gain},
+                                      {QStringLiteral("q"), q}});
+        }
+        return QString::fromUtf8(QJsonDocument(QJsonObject{
+            {QStringLiteral("band_count"), count},
+            {QStringLiteral("parametric_eq"), useQ},
+            {QStringLiteral("global_gain_db"), global},
+            {QStringLiteral("frequency_min_hz"), 0.0},
+            {QStringLiteral("frequency_max_hz"), (count - 1) * 100.0},
+            {QStringLiteral("points"), points}}).toJson(QJsonDocument::Compact));
+    };
+    return ParaEqEnvelope::encode(curve(6.0, 5.0, 2.0) + QStringLiteral("<SEP>")
+                                  + curve(-7.0, -3.0, 6.0));
+}
+
 QList<QSpinBox*> groupSpins(QWidget* page, const QString& title)
 {
     for (QGroupBox* group : page->findChildren<QGroupBox*>()) {
@@ -291,6 +313,10 @@ private slots:
     void txaFlushedTellsPureSignalOnTheMainThread();
     void parametricEqPushesAreCoalescedToTheTick();
     void unreadableCurveIsRefusedWithAReason();
+    void pairedCfcReachesWdspAndRejectsLegacyWidthMismatch();
+    void profileSwitchRestoresOnlyCoherentCfcCurve();
+    void settingsReloadAppliesFinalCfcEnableAndCurveTogether();
+    void reentrantCfcProjectionKeepsNewestCurve();
 
 private:
     QTemporaryDir m_securityDir;
@@ -566,7 +592,7 @@ void TstRemoteTxEqCfc::cfcPhaseRotatorAndCessbRoundTrip()
 
     // The parametric CFC blob travels too.
     // (A curve the Core can load: group A fix wave, M4.)
-    const QString cfcCurve = flatParametricBlob(-2.0);
+    const QString cfcCurve = pairedCfcBlob(10);
     windowTx.setCfcParaEqData(cfcCurve);
     QTRY_COMPARE(coreTx.cfcParaEqData(), cfcCurve);
 
@@ -1107,13 +1133,14 @@ void TstRemoteTxEqCfc::unreadableCurveIsRefusedWithAReason()
     Session s(m_securityDir.path(), this);
     QVERIFY(s.connect());
     TransmitModel& coreTx = s.core->transmitModel();
-    const QString good = flatParametricBlob(2.0);
     const QString reason =
         QStringLiteral("The Core could not read that equalizer curve. Save the curve again and retry.");
     QVERIFY(OperatorWording::isPlain(reason));
 
     for (const QByteArray name : {QByteArrayLiteral("txEqParaEqData"),
                                   QByteArrayLiteral("cfcParaEqData")}) {
+        const QString good = name == QByteArrayLiteral("cfcParaEqData")
+            ? pairedCfcBlob(5) : flatParametricBlob(2.0);
         const SessionPropertyResult ok = s.writeTransmit(name, MirrorWireKind::Utf8, good);
         QVERIFY2(ok.accepted, qPrintable(name + ' ' + ok.reason));
         QCOMPARE(coreTx.property(name.constData()).toString(), good);
@@ -1135,6 +1162,163 @@ void TstRemoteTxEqCfc::unreadableCurveIsRefusedWithAReason()
         QVERIFY2(empty.accepted, qPrintable(name + ' ' + empty.reason));
         QCOMPARE(coreTx.property(name.constData()).toString(), QString());
     }
+}
+
+void TstRemoteTxEqCfc::pairedCfcReachesWdspAndRejectsLegacyWidthMismatch()
+{
+    Session s(m_securityDir.path(), this);
+    QVERIFY(s.connect());
+    TransmitModel& tx = s.core->transmitModel();
+    const QString eighteen = pairedCfcBlob(18);
+    const SessionPropertyResult write = s.writeTransmit(
+        QByteArrayLiteral("cfcParaEqData"), MirrorWireKind::Utf8, eighteen);
+    QVERIFY2(write.accepted, qPrintable(write.reason));
+    QCOMPARE(tx.cfcParaEqData(), eighteen);
+    QTRY_COMPARE(s.txChannel.lastTxCfcProfileFForTest().size(), std::size_t(18));
+    QCOMPARE(s.txChannel.lastTxCfcProfileGForTest().at(3), 5.0);
+    QCOMPARE(s.txChannel.lastTxCfcProfileEForTest().at(3), -3.0);
+    QCOMPARE(s.txChannel.lastTxCfcProfileQgForTest().at(3), 2.0);
+    QCOMPARE(s.txChannel.lastTxCfcProfileQeForTest().at(3), 6.0);
+    QCOMPARE(s.txChannel.lastTxCfcPrecompDbForTest(), 6.0);
+    QCOMPARE(s.txChannel.lastTxCfcPrePeqDbForTest(), -7.0);
+    const SessionPropertyResult old = s.writeTransmit(
+        QByteArrayLiteral("cfcCompressionJson"), MirrorWireKind::Utf8,
+        QStringLiteral("[5,5,5,5,5,5,5,5,5,5]"));
+    QVERIFY(!old.accepted);
+    QCOMPARE(tx.cfcParaEqData(), eighteen);
+    const SessionPropertyResult malformed = s.writeTransmit(
+        QByteArrayLiteral("cfcParaEqData"), MirrorWireKind::Utf8,
+        flatParametricBlob(2.0));
+    QVERIFY(!malformed.accepted);
+    QCOMPARE(tx.cfcParaEqData(), eighteen);
+
+    const QString fiveGraphic = pairedCfcBlob(5, false);
+    QVERIFY(s.writeTransmit(QByteArrayLiteral("cfcParaEqData"), MirrorWireKind::Utf8,
+                            fiveGraphic).accepted);
+    QTRY_COMPARE(s.txChannel.lastTxCfcProfileFForTest().size(), std::size_t(5));
+    QVERIFY(s.txChannel.lastTxCfcProfileQgForTest().empty());
+    QVERIFY(s.txChannel.lastTxCfcProfileQeForTest().empty());
+
+    QVERIFY(s.writeTransmit(QByteArrayLiteral("cfcParaEqData"), MirrorWireKind::Utf8,
+                            pairedCfcBlob(10)).accepted);
+    const SessionPropertyResult legacy = s.writeTransmit(
+        QByteArrayLiteral("cfcCompressionJson"), MirrorWireKind::Utf8,
+        QStringLiteral("[5,5,9,5,5,5,5,5,5,5]"));
+    QVERIFY2(legacy.accepted, qPrintable(legacy.reason));
+    QTRY_COMPARE(s.txChannel.lastTxCfcProfileGForTest().at(2), 9.0);
+    QCOMPARE(s.txChannel.lastTxCfcProfileQgForTest().at(2), 2.0);
+    QVERIFY(tx.cfcParaEqData() != pairedCfcBlob(10));
+
+    // Thetis passes compression frequencies and post-EQ gains to WDSP;
+    // resetting one widget can legitimately leave their axes different.
+    CfcProfile::Profile divergent;
+    QVERIFY(CfcProfile::decode(tx.cfcParaEqData(), divergent));
+    divergent.f[2] += 1.0;
+    divergent.postF[2] += 3.0;
+    divergent.e[2] = -9.0;
+    const QString independent = CfcProfile::encode(divergent);
+    QVERIFY(!independent.isEmpty());
+    QVERIFY(s.writeTransmit(QByteArrayLiteral("cfcParaEqData"), MirrorWireKind::Utf8,
+                            independent).accepted);
+    QTRY_COMPARE(s.txChannel.lastTxCfcProfileFForTest().at(2), divergent.f[2]);
+    QCOMPARE(s.txChannel.lastTxCfcProfileEForTest().at(2), divergent.e[2]);
+    QVERIFY(s.txChannel.lastTxCfcProfileFForTest().at(2) != divergent.postF[2]);
+}
+
+void TstRemoteTxEqCfc::profileSwitchRestoresOnlyCoherentCfcCurve()
+{
+    Session s(m_securityDir.path(), this);
+    QVERIFY(s.connect());
+    TransmitModel& tx = s.core->transmitModel();
+    MicProfileManager* mgr = s.core->micProfileManager();
+    QVERIFY(mgr);
+    const QString mac = QStringLiteral("aa:bb:cc:dd:ee:01");
+    tx.setMacAddress(mac);
+    tx.loadFromSettings(mac);
+    mgr->setMacAddress(mac);
+    mgr->load();
+
+    const QString eighteen = pairedCfcBlob(18);
+    const QString five = pairedCfcBlob(5);
+    const QString opaque = QStringLiteral("opaque-imported-cfc-data");
+    tx.setCfcParaEqData(eighteen);
+    QVERIFY(mgr->saveProfile(QStringLiteral("Cfc18"), &tx));
+    tx.setCfcParaEqData(QString());
+    tx.setCfcCompression(3, 11);
+    QVERIFY(mgr->saveProfile(QStringLiteral("CfcLegacy"), &tx));
+    tx.setCfcParaEqData(five);
+    QVERIFY(mgr->saveProfile(QStringLiteral("Cfc5"), &tx));
+    tx.setCfcParaEqData(opaque);
+    QVERIFY(mgr->saveProfile(QStringLiteral("CfcOpaque"), &tx));
+
+    for (const auto& row : {std::pair{QStringLiteral("Cfc18"), 18},
+                            std::pair{QStringLiteral("CfcLegacy"), 10},
+                            std::pair{QStringLiteral("Cfc5"), 5},
+                            std::pair{QStringLiteral("CfcOpaque"), 10}}) {
+        const int before = s.txChannel.txCfcProfilePushCountForTest();
+        QVERIFY(mgr->setActiveProfile(row.first, &tx));
+        QTRY_COMPARE(s.txChannel.txCfcProfilePushCountForTest(), before + 1);
+        QCOMPARE(s.txChannel.lastTxCfcProfileFForTest().size(),
+                 static_cast<std::size_t>(row.second));
+        if (row.first == QStringLiteral("Cfc18")) {
+            QCOMPARE(tx.cfcParaEqData(), eighteen);
+            QCOMPARE(s.txChannel.lastTxCfcProfileQgForTest().size(), std::size_t(18));
+        }
+        if (row.first == QStringLiteral("CfcLegacy")) {
+            QVERIFY(tx.cfcParaEqData().isEmpty());
+            QCOMPARE(s.txChannel.lastTxCfcProfileGForTest().at(3), 11.0);
+        }
+        if (row.first == QStringLiteral("Cfc5")) { QCOMPARE(tx.cfcParaEqData(), five); }
+        if (row.first == QStringLiteral("CfcOpaque")) { QCOMPARE(tx.cfcParaEqData(), opaque); }
+    }
+
+    TransmitModel reloaded;
+    reloaded.loadFromSettings(mac);
+    QCOMPARE(reloaded.cfcParaEqData(), opaque);
+    QVERIFY(mgr->setActiveProfile(QStringLiteral("Cfc18"), &reloaded));
+    QCOMPARE(reloaded.cfcParaEqData(), eighteen);
+}
+
+void TstRemoteTxEqCfc::settingsReloadAppliesFinalCfcEnableAndCurveTogether()
+{
+    Session s(m_securityDir.path(), this);
+    QVERIFY(s.connect());
+    TransmitModel& tx = s.core->transmitModel();
+    tx.setCfcEnabled(true);
+    tx.setCfcPostEqEnabled(true);
+    tx.setCfcParaEqData(pairedCfcBlob(18));
+    QTRY_COMPARE(s.txChannel.lastTxCfcProfileFForTest().size(), std::size_t(18));
+    QVERIFY(s.txChannel.lastTxCfcRunningForTest());
+    QVERIFY(s.txChannel.lastTxCfcPostEqRunningForTest());
+
+    const QString mac = QStringLiteral("aa:bb:cc:dd:ee:02");
+    auto& settings = AppSettings::instance();
+    const QString prefix = QStringLiteral("hardware/%1/tx/").arg(mac);
+    settings.setValue(prefix + QStringLiteral("CFCEnabled"), QStringLiteral("False"));
+    settings.setValue(prefix + QStringLiteral("CFCPostEqEnabled"), QStringLiteral("False"));
+    settings.setValue(prefix + QStringLiteral("CFCParaEQData"), pairedCfcBlob(5));
+    const int before = s.txChannel.txCfcProfilePushCountForTest();
+    tx.loadFromSettings(mac);
+    QTRY_COMPARE(s.txChannel.txCfcProfilePushCountForTest(), before + 1);
+    QCOMPARE(s.txChannel.lastTxCfcProfileFForTest().size(), std::size_t(5));
+    QVERIFY(!s.txChannel.lastTxCfcRunningForTest());
+    QVERIFY(!s.txChannel.lastTxCfcPostEqRunningForTest());
+}
+
+void TstRemoteTxEqCfc::reentrantCfcProjectionKeepsNewestCurve()
+{
+    TransmitModel tx;
+    const QString newest = pairedCfcBlob(5);
+    QSignalSpy changed(&tx, &TransmitModel::cfcParaEqDataChanged);
+    QObject::connect(&tx, &TransmitModel::cfcPrecompDbChanged, &tx,
+                     [&tx, newest](int) { tx.setCfcParaEqData(newest); });
+    tx.setCfcParaEqData(pairedCfcBlob(10));
+    QCOMPARE(tx.cfcParaEqData(), newest);
+    QCOMPARE(tx.cfcPrecompDb(), 6);
+    QCOMPARE(tx.cfcPostEqGainDb(), -7);
+    QVERIFY(!tx.cfcProfileMutationInProgress());
+    QCOMPARE(changed.size(), 1);
+    QCOMPARE(changed.at(0).at(0).toString(), newest);
 }
 
 // Group A follow-up (group B fix wave): the unkey stops the TX channel on

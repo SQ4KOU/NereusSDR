@@ -4923,6 +4923,9 @@ void TxChannel::setTxCfcProfile(const std::vector<double>& F,
     m_txCfcProfileFLast = F;
     m_txCfcProfileGLast = G;
     m_txCfcProfileELast = E;
+    m_txCfcProfileQgLast = Qg;
+    m_txCfcProfileQeLast = Qe;
+    ++m_txCfcProfilePushCount;
 
 #ifdef HAVE_WDSP
     if (!txaOpenAtOnce()) {
