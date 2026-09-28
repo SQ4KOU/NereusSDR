@@ -18,9 +18,11 @@ contents=$(dpkg-deb --contents "$deb")
 printf '%s\n' "$contents" | grep -q 'usr/bin/nereusd$'
 printf '%s\n' "$contents" | grep -q 'systemd/system/nereusd.service$'
 printf '%s\n' "$contents" | grep -q 'usr/share/nereusd/nereusd.conf.sample$'
+printf '%s\n' "$contents" | grep -q 'usr/share/NereusSDR/models/dfnet3/DeepFilterNet3_onnx.tar.gz$'
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 dpkg-deb --extract "$deb" "$tmp"
 test "$(readelf -h "$tmp/usr/bin/nereusd" | sed -n 's/^[[:space:]]*Machine:[[:space:]]*//p')" = AArch64
 grep -q '^DynamicUser=yes$' "$tmp/usr/lib/systemd/system/nereusd.service" 2>/dev/null || \
     grep -q '^DynamicUser=yes$' "$tmp/lib/systemd/system/nereusd.service"
+test -s "$tmp/usr/share/NereusSDR/models/dfnet3/DeepFilterNet3_onnx.tar.gz"

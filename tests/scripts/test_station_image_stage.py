@@ -75,10 +75,32 @@ def test_armbian_contract_and_workflow_provenance():
     assert "ENABLE_SSH=0" in workflow
     assert "DEPLOY_COMPRESSION=xz" in workflow
     assert "source_sha" in workflow and "image_sha256" in workflow
+    assert '"dfnr": dfnr' in workflow
+    assert "rust:1.94.1-trixie" in workflow
     assert "_arm64_trixie.deb" in workflow
     assert "upload-artifact@v4" in workflow
     assert "release.yml" not in workflow
     builder = read("build-trixie-deb.sh")
     assert "-march=armv8-a" in builder
-    assert "-DENABLE_DFNR=OFF" in builder
+    assert "-DENABLE_DFNR=ON" in builder
+    assert "build-dfnr-source.sh" in builder
+    assert "DeepFilterFilter.cpp" in builder and "-DHAVE_DFNR" in builder
+    assert "DeepFilterNet3_onnx.tar.gz" in builder
     assert "-march=native" not in builder and "-mcpu=native" not in builder
+
+
+def test_dfnr_source_is_locked_and_model_is_packaged():
+    dfnr = read("build-dfnr-source.sh")
+    assert "d375b2d8309e0935d165700c91da9de862a99c31" in dfnr
+    assert "cargo install cargo-c --version '0.10.21+cargo-0.95.0' --locked" in dfnr
+    assert "cargo cbuild --locked --release" in dfnr
+    assert "RUSTFLAGS='-C target-cpu=generic'" in dfnr
+    assert "-march=armv8-a" in dfnr
+    assert "DeepFilterNet-Cargo.lock" in dfnr
+    assert "setup-deepfilter.sh" not in dfnr
+    lock = read("DeepFilterNet-Cargo.lock")
+    assert 'name = "deep_filter"' in lock
+    cmake = (ROOT / "CMakeLists.txt").read_text()
+    assert 'install(FILES "${DFNR_MODEL}"\n                DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/NereusSDR/models/dfnet3"\n                COMPONENT nereusd\n                EXCLUDE_FROM_ALL)' in cmake
+    verifier = read("verify-package.sh")
+    assert "usr/share/NereusSDR/models/dfnet3/DeepFilterNet3_onnx.tar.gz" in verifier

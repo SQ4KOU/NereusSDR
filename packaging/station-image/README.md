@@ -11,16 +11,22 @@ pi-gen revision, builder image digest, package and image SHA-256 hashes.
 The workflow uses [pi-gen's arm64 branch](https://github.com/RPi-Distro/pi-gen)
 at commit `74d08a337bd29da289b9aedbe5b48c79fb2e5a03` and explicitly selects
 Debian trixie. It builds `nereusd` from the same checked-out source in a native
-arm64 Debian trixie container, then installs that package with `apt` inside the
-trixie image rootfs. The release workflow's Ubuntu 24.04 `.deb` is not an image
-input. The compiler is restricted to ARMv8-A, the Pi 4 Cortex-A72 baseline.
-DFNR is disabled because its prebuilt aarch64 Rust library has no verified Pi
-4 ISA baseline. This image therefore has the daemon's other compiled features
-but no DeepFilterNet noise reduction.
+arm64 `rust:1.94.1-trixie` container, then installs that package with `apt`
+inside the trixie image rootfs. The release workflow's Ubuntu 24.04 `.deb` is
+not an image input. C/C++ compilation is restricted to ARMv8-A, the Pi 4
+Cortex-A72 baseline. DFNR is required: the workflow builds DeepFilterNet from
+source commit `d375b2d8309e0935d165700c91da9de862a99c31`, with Rust
+1.94.1, cargo-c `0.10.21+cargo-0.95.0`, and `-C target-cpu=generic` for
+AArch64. Its source, model, generated lock file, build flags and output hashes
+are recorded in the provenance manifest. The upstream commit's Cargo.lock is
+stale for Cargo 1.94.1; `DeepFilterNet-Cargo.lock` is a checked-in refresh made
+with that toolchain. No DeepFilterNet prebuilt library is accepted. The package
+check requires the model at the daemon's runtime search path.
 
 The workflow needs GitHub Actions `ubuntu-24.04-arm` capacity, Docker, working
-Debian and Raspberry Pi package mirrors, `sudo`, loop devices, and enough disk
-space for pi-gen's rootfs copies and image export (tens of gigabytes). It is
+Debian and Raspberry Pi package mirrors, crates.io, `sudo`, loop devices, and enough disk
+space for the Rust build, pi-gen's rootfs copies and image export (tens of
+gigabytes). It is
 manual only and uploads an artifact; it does not publish a release or flash a
 card. Run `python3 -m pytest tests/scripts/test_station_image_stage.py -q`
 for the offline stage lint before dispatching it. A successful lint does not
