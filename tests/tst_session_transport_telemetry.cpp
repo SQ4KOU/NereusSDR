@@ -11,6 +11,49 @@ using namespace NereusSDR;
 class TestSessionTransportTelemetry : public QObject {
     Q_OBJECT
 private slots:
+    void binaryDeliveryDoesNotCountAsControlPayload()
+    {
+        QWebSocketServer listener(QStringLiteral("binary-metrics-test"),
+                                  QWebSocketServer::NonSecureMode);
+        QVERIFY(listener.listen(QHostAddress::LocalHost, 0));
+        auto* socket = new QWebSocket;
+        WebSocketTransport client(socket, 16384);
+        socket->open(QUrl(QStringLiteral("ws://127.0.0.1:%1").arg(listener.serverPort())));
+        QTRY_VERIFY(listener.hasPendingConnections());
+        WebSocketTransport server(listener.nextPendingConnection(), 16384);
+        QTRY_VERIFY(client.isOpen());
+
+        QSignalSpy serverBinary(&server, &SessionTransport::binaryReceived);
+        QSignalSpy clientBinary(&client, &SessionTransport::binaryReceived);
+        const QByteArray outward = QByteArray::fromHex("004E534443FF80");
+        const QByteArray inward = QByteArray::fromHex("004E534458FE81");
+        QVERIFY(client.sendBinary(outward));
+        QTRY_COMPARE(serverBinary.count(), 1);
+        QCOMPARE(serverBinary.first().first().toByteArray(), outward);
+        QVERIFY(server.sendBinary(inward));
+        QTRY_COMPARE(clientBinary.count(), 1);
+        QCOMPARE(clientBinary.first().first().toByteArray(), inward);
+        QCOMPARE(client.telemetry()->acceptedPayloadBytes, quint64(0));
+        QCOMPARE(client.telemetry()->receivedPayloadBytes, quint64(0));
+        QCOMPARE(server.telemetry()->acceptedPayloadBytes, quint64(0));
+        QCOMPARE(server.telemetry()->receivedPayloadBytes, quint64(0));
+
+        QSignalSpy serverText(&server, &SessionTransport::textReceived);
+        QSignalSpy clientText(&client, &SessionTransport::textReceived);
+        const QByteArray request = QStringLiteral("request 音声").toUtf8();
+        const QByteArray response = QStringLiteral("reply →").toUtf8();
+        client.sendText(request);
+        QTRY_COMPARE(serverText.count(), 1);
+        QCOMPARE(serverText.first().first().toByteArray(), request);
+        server.sendText(response);
+        QTRY_COMPARE(clientText.count(), 1);
+        QCOMPARE(clientText.first().first().toByteArray(), response);
+        QCOMPARE(client.telemetry()->acceptedPayloadBytes, static_cast<quint64>(request.size()));
+        QCOMPARE(client.telemetry()->receivedPayloadBytes, static_cast<quint64>(response.size()));
+        QCOMPARE(server.telemetry()->acceptedPayloadBytes, static_cast<quint64>(response.size()));
+        QCOMPARE(server.telemetry()->receivedPayloadBytes, static_cast<quint64>(request.size()));
+    }
+
     void countsActualUtf8PayloadAndObservesExistingPong()
     {
         QWebSocketServer listener(QStringLiteral("metrics-test"),

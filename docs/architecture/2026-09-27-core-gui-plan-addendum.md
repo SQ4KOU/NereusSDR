@@ -440,6 +440,10 @@ control tops out at 16, so NereusSDR's range is wider than the source it was por
   first failed because 17 was accepted. Signed implementation `87f59425b` passed five focused
   tests including link conformance in 45.43 s; the integrated trunk passed the same
   five targets in 41.99 s. Generated protocol tables and diff checks pass.
+  A September 28 read-only phone scout found its range, request encoder and
+  subscriber clamp still permit 1-32 at phone `3c5771c82`. The exact source
+  finding was delivered to the phone owner for correction under this same
+  ruling. Core remains 1-16; phone-side acceptance is not yet verified.
 - Plan: R-IOS-06, R-IOS-27 (catalogue ranges task).
 
 ### G-02: Several noise-reduction ranges and new-slice defaults differ from Thetis
@@ -2229,12 +2233,18 @@ colours for the same signal.
   addressless records cannot be represented there. Failed saves restore every
   prior value. This narrows the lead's original blanket rollback-snapshot
   proposal after inspecting the existing credential-removal invariant.
-- Status: approved mockup recorded and implementation resumed from signed
-  `68245ce22`. Sol 6 high owns the desktop dialog/controller, addressless target storage
-  and reconnect integration; Astra lead owns identity/lifetime review.
-  The frozen preview remains open for JJ and does not yet contain this fix.
-  Automated end-to-end evidence and a new verified preview are required
-  before calling the feature ready for JJ's live test.
+- Status: implemented in signed `e09474320` and reviewed by the Astra lead
+  for identity validation, credential migration and shutdown lifetime. Root
+  app/Core and all nine rebuilt pairing, target-store, connection and route
+  suites pass at actual load (67.50 s). Real mailbox fixtures cover code-only
+  pairing, an addressless saved Core, authenticated WebRelay connection,
+  relaunch/reconnect and same-identity re-pairing. Cancel, service refusal,
+  retry and shutdown cannot accidentally start a local Core. The previous
+  frozen preview remains under JJ's control. Signed `7d9292190` is now
+  packaged separately, with deep strict code-signature validation and a
+  manifest proving the GUI/private Core build identity and file hashes.
+  JJ's standing relaunch approval is pending for that ready replacement;
+  his actual Core pairing test remains to be performed.
 - Plan: approved rendezvous desktop-client flow and remote-window parity.
 
 ### G-108: App wording mixes American and British spellings
@@ -2254,10 +2264,14 @@ colours for the same signal.
   signed `50be8c9a8`. Root compared all 21 changed C++ comment streams with
   their originals: byte-identical. The eight JSON edits change only labels
   and tooltips. Integrated app/Core build and all eight rebuilt affected
-  suites pass (14.47 s), including native/description parity. A few literals
-  in the pairing worker's owned files are included with G-107. Compatibility
-  keys and verbatim source text remain intact. The phone owner has received
-  the same ruling for phone-owned presentation strings.
+  suites pass (14.47 s), including native/description parity. Six remaining
+  literals in the pairing-owned files are included with signed `e09474320`
+  and its nine-suite root verification. The expanded audit found five more
+  authored Setup help strings: signed `bfb09fd05` changes parameterised and
+  greys to American spelling, with five worker suites passing (5.43 s);
+  root app/Core and all eight rebuilt integration suites pass (28.85 s).
+  Compatibility keys, existing comments and verbatim source text remain intact. The phone owner has the same ruling
+  for phone-owned presentation strings.
 - Plan: consistent desktop/Core/phone-facing wording without compatibility or
   attribution changes.
 
@@ -2277,6 +2291,51 @@ colours for the same signal.
   alone (6.15 s) and in the eight-suite trunk integration (14.47 s total).
   Existing coverage floors, production behavior and comments remain unchanged.
 - Plan: keep all Core refusal messages covered by the operator-wording check.
+
+### G-110: Tunneled media is counted again as control traffic
+
+- Evidence: the phone team asked about the accounting boundary. Source review
+  confirms WebSocketTransport increments its session payload counters for
+  binary media-tunnel frames as well as text. StationClient and
+  SwitchableTransport forward those counters unchanged; RemoteTelemetryController
+  then adds the media display/RTP counters. A tunneled packet is therefore
+  included in both terms, with tunnel/encryption bytes mixed into the control
+  series. SessionTransport's documented UTF-8 boundary and the September 21
+  telemetry design explicitly exclude media from the control term.
+- Ruling basis: JJ requires discovered gaps to be recorded and built. Restore
+  the documented payload accounting, retaining actual binary delivery and all
+  existing connection behavior. This is a source-supported defect, not a
+  claimed measurement of JJ's current connection.
+- Status: signed `60d6cfe93` removes the two binary increments while retaining
+  real bidirectional binary delivery and exact UTF-8 text counts. The real
+  loopback regression first failed on seven binary bytes counted as text,
+  then passed; worker app/Core and all three affected full suites pass
+  (28.79 s). Root reviewed the actual changes; integrated app/Core and
+  all eight rebuilt traffic/Setup/wording suites pass (28.85 s), after
+  the priority pairing preview was packaged. Dedicated DataChannelTransport
+  watch binary is separate and unchanged. The phone owner has the boundary.
+- Plan: accurate Core/window bandwidth graphs and phone diagnostic dependencies.
+
+### G-111: Newer payload channels are absent from the desktop traffic total
+
+- Evidence: LibDataChannelMediaTransport's observable traffic contains display
+  and RTP counts only. Its separate transmit-keepalive and raw-IQ channels
+  have no corresponding payload counters; RemoteTelemetryController sums only
+  control text, display and RTP. The dedicated transmit-watch transport has
+  its own counters, but the controller's selected-session snapshot does not
+  aggregate that separate path. Thus the current total does not cover all
+  newer application channels. No live traffic discrepancy has been measured.
+- Ruling basis: JJ's complete parity and diagnostic goal includes truthful
+  accounting. Preserve the documented application-payload boundary: count each
+  observed/submitted payload once, excluding encryption, tunnel envelopes,
+  protocol framing and network overhead. No delivery guarantee can be inferred
+  from a submission counter, and unavailable observations must remain absent.
+- Status: Sol 6 high owns the bounded media transmit-keepalive/raw-IQ
+  counter implementation and actual channel/lifetime regressions. The Astra
+  lead retains the separate auxiliary watch lifetime and aggregation design.
+  Both parts remain open. Keep this separate from G-110's confirmed
+  WebSocket overlap and from physical network usage.
+- Plan: complete Core/window application traffic observations for R5 and IQ.
 
 ## How this addendum is kept
 

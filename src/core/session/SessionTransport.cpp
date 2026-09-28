@@ -83,7 +83,6 @@ WebSocketTransport::WebSocketTransport(QWebSocket* socket, quint64 maxIncomingBy
     // (the message cap above applies to them as to text).
     connect(m_socket, &QWebSocket::binaryMessageReceived, this,
             [this](const QByteArray& message) {
-        m_telemetry.receivedPayloadBytes += static_cast<quint64>(message.size());
         emit binaryReceived(message);
     });
 }
@@ -96,7 +95,6 @@ bool WebSocketTransport::sendBinary(const QByteArray& message)
     if (m_socket->sendBinaryMessage(message) < 0) {
         return false;
     }
-    m_telemetry.acceptedPayloadBytes += static_cast<quint64>(message.size());
     return true;
 }
 

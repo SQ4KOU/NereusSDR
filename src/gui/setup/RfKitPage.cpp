@@ -164,7 +164,7 @@ QWidget* RfKitPage::buildGeneralTab()
         "When enabled, the Rf2ks applet appears in the right-column panel, "
         "the analog S-meter switches to 2 kW scale when the amp is in OPERATE, "
         "and TCI band tracking flows to the amp automatically. When disabled, "
-        "the applet hides and the RF2K-S tab below greys out."), tab);
+        "the applet hides and the RF2K-S tab below grays out."), tab);
     helper->setWordWrap(true);
     helper->setStyleSheet(QStringLiteral("color: #9aa5b1; font-size: 11px;"));
     lay->addWidget(helper);
