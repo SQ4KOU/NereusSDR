@@ -112,6 +112,9 @@
 //   2026-09-27 - R-IOS-13 / R-R3-49: txModMonitorVersion, after
 //                relayAllowed. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-28 - Slice control plan Task 4: sliceAccessVersion, after
+//                radioAntennaRowsVersion, only with sliceAccessEntry. J.J.
+//                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationCapabilities.h"
@@ -346,6 +349,12 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
         if (radioAntennaRowsVersion == 1) {
             updates.append(intEntry("radioAntennaRowsVersion", radioAntennaRowsVersion));
         }
+        // Slice control plan Task 4: shared listening and control handoff,
+        // appended after radioAntennaRowsVersion, only for a peer that
+        // declared sliceAccess.
+        if (sliceAccessEntry) {
+            updates.append(intEntry("sliceAccessVersion", sliceAccessVersion));
+        }
     }
     if (coreBuildInfo) {
         const QByteArray json = coreBuildInfo->toJson();
@@ -574,7 +583,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                    || u.name == "txReadingsVersion"
                    || u.name == "remoteIqVersion"
                    || u.name == "miniDisplayVersion"
-                   || u.name == "radioAntennaRowsVersion") {
+                   || u.name == "radioAntennaRowsVersion"
+                   || u.name == "sliceAccessVersion") {
             // R-R3-47 / R-R3-22 / R-R3-48: sent in the same block as the
             // four above.
             caps.radioIdentityEntries = true;
@@ -593,6 +603,9 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                     caps.accessoryTxVersion = version;
                 } else if (u.name == "radioAntennaRowsVersion") {
                     caps.radioAntennaRowsVersion = version == 1 ? 1 : 0;
+                } else if (u.name == "sliceAccessVersion") {
+                    caps.sliceAccessEntry = true;
+                    caps.sliceAccessVersion = version;
                 } else if (u.name == "stationIdentityVersion") {
                     caps.stationIdentityVersion = version;
                 } else if (u.name == "deviceAdminVersion") {

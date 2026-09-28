@@ -193,6 +193,15 @@
 //                                    predicate (SliceAccessPolicy), so a
 //                                    listener's verbs are refused.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  Slice control plan Task 4:
+//                                    slice.listen, slice.stopListening,
+//                                    slice.takeControl and slice.release
+//                                    (SliceAccessController);
+//                                    setActiveSliceById on a listened
+//                                    slice, and removeSlice from a
+//                                    controller others listen with as a
+//                                    release (ruling Q6).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -215,6 +224,7 @@
 namespace NereusSDR {
 
 class RadioModel;
+class SliceAccessController;
 class SliceModel;
 class StationRadios;
 
@@ -316,6 +326,16 @@ public:
     /// a new slice has no owner and setActiveSliceById moves the one active
     /// slice.
     void setRequester(const QByteArray& device) { m_requester = device; }
+    /// Slice control plan Task 4: the listen, stop listening, take control
+    /// and release checks (StationServer's). Not owned. Without one
+    /// slice.listen, slice.stopListening, slice.takeControl and
+    /// slice.release are refused in plain words.
+    void setSliceAccessController(SliceAccessController* controller);
+    /// Slice control plan Task 4: whether the requester of the dispatches
+    /// that follow shares slices (sliceAccessVersion 1 reached it): its
+    /// setActiveSliceById may name any slice it listens to. The Core sets
+    /// it with the requester and clears it after.
+    void setRequesterSharesSlices(bool shares) { m_requesterSharesSlices = shares; }
     /// Fix wave after the several-devices group review: the next
     /// requestSliceSampleRate dispatched (a confirmed rate change) closes
     /// `closing` through `close`, and only once the change is certain
@@ -547,6 +567,9 @@ private:
     void handleSessionLeave(const NereusSDR::SessionMessage& invoke);
     // iPhone app Task 74 (R-IOS-30, sessionHolderVersion 1).
     void handleConfirmAnswer(const NereusSDR::SessionMessage& invoke);
+    // Slice control plan Task 4 (sliceAccessVersion 1): slice.listen,
+    // slice.stopListening, slice.takeControl and slice.release.
+    void handleSliceAccessVerb(const NereusSDR::SessionMessage& invoke);
 
     void emitResult(const QByteArray& verb, quint32 commandId, bool accepted,
                     const QString& reason, const QList<QByteArray>& affectedKeys);
@@ -562,6 +585,9 @@ private:
     std::function<void(int)> m_rateClose;
     QString m_rateChangedReason;
     SliceAccess m_sliceAccess;
+    // Slice control plan Task 4.
+    QPointer<SliceAccessController> m_sliceAccessController;
+    bool m_requesterSharesSlices = false;
     ConfirmAnswer m_confirmAnswer;
     RecordAccess m_recordAccess;
     SupportInputs m_supportInputs;

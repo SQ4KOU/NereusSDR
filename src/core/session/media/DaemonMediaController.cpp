@@ -66,6 +66,10 @@
 //               headphones), hearsSlice (receiver streams) and seesSlice
 //               (display subscriptions). J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-28: slice control and shared listening plan Task 4: the owner
+//               mix and displays follow a leave (listenersChanged) as they
+//               follow a change of controller. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 // Modification history (NereusSDR):
@@ -647,18 +651,27 @@ DaemonMediaController::DaemonMediaController(StationServer* server,
         }
     });
     // Task 76: this session's owner mix follows whose each slice is.
-    connect(m_radioModel->sliceOwnership(), &SliceOwnership::markChanged, this,
-            [this](int sliceId, const QByteArray&, const QByteArray&) {
+    // Slice control plan Task 4: and who listens to it, so a leave (stop
+    // listening, the listener half of a claims removal) reaches the media
+    // as a change of controller does.
+    const auto followAccess = [this](int sliceId) {
         const QPointer<DaemonMediaController> self(this);
         refreshOwnerMixMask();
-        // Fix wave: a slice that passed to another owner is gone from this
-        // device's view (ruling 5.8 sends it object.destroy), so its
-        // displays retire as a removed slice's do (ruling 9.1).
+        // Fix wave: a slice this device can no longer see is gone from its
+        // view (ruling 5.8 sends it object.destroy), so its displays
+        // retire as a removed slice's do (ruling 9.1). A former controller
+        // that stays a listener still sees it and keeps them.
         if (self && m_epoch != 0 && m_radioModel && m_radioModel->sliceById(sliceId) != nullptr
             && !seesSlice(sliceId)) {
             retireSliceDisplays(sliceId);
         }
-    });
+    };
+    connect(m_radioModel->sliceOwnership(), &SliceOwnership::markChanged, this,
+            [followAccess](int sliceId, const QByteArray&, const QByteArray&) {
+                followAccess(sliceId);
+            });
+    connect(m_radioModel->sliceOwnership(), &SliceOwnership::listenersChanged, this,
+            followAccess);
     // A slice made for this device is noted without a mark change.
     connect(m_radioModel->sliceOwnership(), &SliceOwnership::activeChanged, this,
             [this] { refreshOwnerMixMask(); });
@@ -1387,6 +1400,24 @@ bool DaemonMediaController::controlsSlice(int sliceId) const
 bool DaemonMediaController::hearsSlice(int sliceId) const
 {
     return m_server && m_epoch != 0 && m_server->mediaSessionHearsSlice(m_epoch, sliceId);
+}
+
+QList<const DaemonAudioSender*> DaemonMediaController::audioSendersForTest() const
+{
+    QList<const DaemonAudioSender*> senders;
+    if (m_audioSender) {
+        senders.append(m_audioSender.get());
+    }
+    if (m_headphones.sender) {
+        senders.append(m_headphones.sender.get());
+    }
+    for (const auto& [sliceId, stream] : m_receiverStreams) {
+        Q_UNUSED(sliceId);
+        if (stream.sender) {
+            senders.append(stream.sender.get());
+        }
+    }
+    return senders;
 }
 
 bool DaemonMediaController::seesSlice(int sliceId) const

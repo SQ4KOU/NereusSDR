@@ -294,6 +294,10 @@
 //               txAmModulationFeedback stream while shown, again after each
 //               snapshot, and sends txModMonitor.reset. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-09-28: slice control and shared listening plan Task 4: the hello
+//               declares sliceAccess with sessionHolder; the `access:<id>`
+//               objects are held by no model object until Task 5. J.J.
+//               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SystemProxy.h"
@@ -2835,6 +2839,9 @@ bool StationClient::signIn(const SessionMessage& hello)
         }
         if (m_declaresSessionHolder) {
             features.insert(QByteArrayLiteral("sessionHolder"), 1);
+            // Slice control plan Task 4: listening to and taking another
+            // device's slice (the rest of the window's side is Task 5).
+            features.insert(QByteArrayLiteral("sliceAccess"), 1);
         }
         m_declaredSessionHolder = m_declaresSessionHolder;
         send(SessionMessages::hello(m_agreedMajor, kSessionProtocolMinor, m_localSettingsSchema,
@@ -3519,6 +3526,11 @@ QObject* StationClient::resolveOrCreate(const QByteArray& objectKey,
     if (objectKey == QByteArrayLiteral("devices")) {
         return nullptr;
     }
+    // Slice control plan Task 4: nor, until Task 5, for who controls and
+    // who listens to each slice (`access:<id>`).
+    if (objectKey.startsWith("access:")) {
+        return nullptr;
+    }
 
     const int sliceId = idFromKey(objectKey, kSliceKeyPrefix);
     if (sliceId < 0) {
@@ -3707,7 +3719,8 @@ void StationClient::handleDelta(const SessionMessage& message)
         // Once per object per session: a newer Core's object this client
         // does not hold (notches on an older app) changes often.
         if (!m_unheldDeltaKeys.contains(message.objectKey)
-            && message.objectKey != QByteArrayLiteral("devices")) {
+            && message.objectKey != QByteArrayLiteral("devices")
+            && !message.objectKey.startsWith("access:")) {
             m_unheldDeltaKeys.insert(message.objectKey);
             qCWarning(lcStationClient) << "Delta for an object this client does not hold:"
                                        << message.objectKey;

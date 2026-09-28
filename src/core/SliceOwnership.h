@@ -115,6 +115,10 @@
 //               and leaving, claims removal and each device's active
 //               receive slice. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-28: slice control and shared listening plan Task 4: a lone
+//               device adopts only unclaimed slices (ruling Q9). J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -278,8 +282,10 @@ public:
     /// Returns them.
     QList<int> returnHeld(const QByteArray& device);
     /// Ruling 5.2 step 3: `device` adopts every slice with no owner (never a
-    /// slice held for another device). The slice that was active among the
-    /// unowned ones becomes its active slice when it has none. Returns them.
+    /// slice held for another device) and nobody listening to it (slice
+    /// control plan ruling Q9: a released slice others still hear is taken
+    /// only by Take control). The slice that was active among the unowned
+    /// ones becomes its active slice when it has none. Returns them.
     QList<int> adoptUnowned(const QByteArray& device);
 
     // ---- The active slice ----

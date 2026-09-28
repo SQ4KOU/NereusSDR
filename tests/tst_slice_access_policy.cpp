@@ -34,6 +34,11 @@
 //               listener seam is gone); a change of owner keeps the former
 //               controller listening. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-28: slice control and shared listening plan Task 4: the
+//               form swap's site is onSliceAccessChanged; the access
+//               controller's release checks name mayChange. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -699,8 +704,15 @@ private slots:
              {QStringLiteral("SliceAccessPolicy::mayChange(")}},
             {"src/core/session/StationServer.cpp", "StationServer::ownershipAllows",
              {QStringLiteral("SliceAccessPolicy::maySee(")}},
-            {"src/core/session/StationServer.cpp", "StationServer::onSliceOwnerChanged",
+            // Slice control plan Task 4: the form swap moved from the owner
+            // change to every change of controller or listeners.
+            {"src/core/session/StationServer.cpp", "StationServer::onSliceAccessChanged",
              {QStringLiteral("SliceAccessPolicy::maySee(")}},
+            {"src/core/session/SliceAccessController.cpp",
+             "SliceAccessController::closeIsRelease",
+             {QStringLiteral("SliceAccessPolicy::mayChange(")}},
+            {"src/core/session/SliceAccessController.cpp", "SliceAccessController::release",
+             {QStringLiteral("SliceAccessPolicy::mayChange(")}},
             {"src/core/session/StationServer.cpp", "StationServer::mediaSessionControlsSlice",
              {QStringLiteral("SliceAccessPolicy::mayChange(")}},
             {"src/core/session/StationServer.cpp", "StationServer::mediaSessionHearsSlice",

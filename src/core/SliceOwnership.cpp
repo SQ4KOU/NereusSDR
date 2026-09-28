@@ -25,6 +25,10 @@
 //               and leaving, claims removal and each device's active
 //               receive slice. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-28: slice control and shared listening plan Task 4: a lone
+//               device adopts only unclaimed slices (ruling Q9). J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/SliceOwnership.h"
@@ -519,7 +523,10 @@ QList<int> SliceOwnership::adoptUnowned(const QByteArray& device)
         return {};
     }
     const ActiveRxWatch watch(this);
-    const QList<int> ids = unowned();
+    // Slice control plan Task 4 (ruling Q9): never a slice others still
+    // listen to after its controller released it; control of that one
+    // comes only from Take control.
+    const QList<int> ids = unclaimed();
     const int wasActive = activeFor(QByteArray());
     for (int id : ids) {
         setOwner(id, device);

@@ -40,6 +40,11 @@
 //               SliceAccessPolicy::mayTransmitOn, never a listener. J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-28: slice control and shared listening plan Task 4 (ruling
+//               Q8): a new holder's binding prefers its slices other than
+//               one it took control of and has not chosen. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -528,8 +533,37 @@ void StationServer::bindTransmitSliceForHolder()
     if (!holder || holder->source == TransmitHolder::Source::RadioPtt) {
         return;
     }
-    m_radioModel->txSliceArbiter()->bindForHolder(holder->deviceId,
-                                                  m_chosenTxSlice.value(holder->deviceId, -1));
+    int preferred = m_chosenTxSlice.value(holder->deviceId, -1);
+    // Slice control plan Task 4 (ruling Q8): a slice the holder took
+    // control of is its transmit slice only once it chooses it
+    // (tx.setTxSlice). The binding goes to another of its slices instead:
+    // its choice, else its active slice, else its first. With only taken
+    // slices it keeps today's binding, so transmit never lands on a slice
+    // that is not the holder's.
+    const QSet<int> taken = m_takenNotChosenForTx.value(holder->deviceId);
+    if (!taken.isEmpty()) {
+        const SliceOwnership* ownership = m_radioModel->sliceOwnership();
+        const auto usable = [&](int id) {
+            return id >= 0 && !taken.contains(id) && m_radioModel->sliceById(id) != nullptr
+                && SliceAccessPolicy::mayTransmitOn(*ownership, holder->deviceId, id);
+        };
+        if (!usable(preferred)) {
+            int other = ownership->activeFor(holder->deviceId);
+            if (!usable(other)) {
+                other = -1;
+                for (int id : ownership->ownedBy(holder->deviceId)) {
+                    if (usable(id)) {
+                        other = id;
+                        break;
+                    }
+                }
+            }
+            if (other >= 0) {
+                preferred = other;
+            }
+        }
+    }
+    m_radioModel->txSliceArbiter()->bindForHolder(holder->deviceId, preferred);
 }
 
 void StationServer::onSliceClosedForHolder(int sliceId)

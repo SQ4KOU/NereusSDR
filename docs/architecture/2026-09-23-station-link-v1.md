@@ -782,7 +782,16 @@ be read) and sends `{}` otherwise (iPhone app plan Task 18). Signing in
 with that key to a Core it paired with, it also declares `sessionHolder` 1
 (iPhone app plan Task 78), so it is asked, told and may take transmit as
 any device; a token sign-in does not, since it cannot know the id the Core
-numbers a token window by. A client's
+numbers a token window by. **`sliceAccess` 1** (slice control and shared listening plan Task 4):
+listening to another device's slice and taking or releasing control of
+one. A client declares it only together with `sessionHolder` 1 (and so
+`deviceAuth` 1); the station treats it as not declared otherwise. A client
+that declares it receives `sliceAccessVersion` in its capabilities
+(section 6.3), the `SliceAccess` objects (section 7.1), the slices it has
+joined as `slice:<id>` and every other as `marker:<id>` (section 7.5), and
+may send the four `slice.*` access verbs (section 9.1). A client that does
+not sees exactly the wire it was built for. The desktop client declares it
+whenever it declares `sessionHolder`. A client's
 `deviceAuth` 1
 (or later) also asks for the `devices` object and its commands (section
 7.1): the station sends them to no other peer, so a window that declares
@@ -897,6 +906,7 @@ change shows as surface drift and as a change to this table.
 | `miniDisplayVersion` | 1 |
 | `accessoryTxVersion` | 1 |
 | `radioAntennaRowsVersion` | 1 |
+| `sliceAccessVersion` | 1 |
 
 <!-- /surface -->
 
@@ -1002,6 +1012,22 @@ When a feature is off, its version is 0:
   `setAlexTxAntennaForRadio` (section 9.1). Missing, malformed and unknown
   versions are unusable. Older peers receive byte-for-byte the previous
   capability shape and keep the existing one-band verbs.
+- `sliceAccessVersion`: optional and appended after
+  `radioAntennaRowsVersion` (last before `coreBuildInfo`), only at agreed
+  minor 11 and only to a peer whose hello declared `sliceAccess` 1 with
+  `sessionHolder` 1 and `deviceAuth` 1; any other peer is sent no entry
+  (and reads 0), so its capabilities, its `slice:` and `marker:` objects
+  and its verbs are today's. Two-key gate (section 6.2): agreed minor 11
+  and `sliceAccessVersion` 1 or more. 1 on a Core that runs its radio:
+  the `SliceAccess` object per slice (`access:<id>`, section 7.1), each
+  slice the device has joined as `slice:<id>` and every other as
+  `marker:<id>` (section 7.5), the verbs `slice.listen`,
+  `slice.stopListening`, `slice.takeControl` and `slice.release`
+  (section 9.1), `setActiveSliceById` on any joined slice, and the
+  `controlTaken` notice. A Core without the feature, and a peer that did
+  not declare it, refuse the verbs: "Update this app to listen to and take
+  slices on this Core." to the peer, "This Core cannot share slices
+  between devices." from a Core that cannot.
 - `remotePgxlControlVersion`, `remoteRfKitControlVersion`,
   `remoteTgxlControlVersion`: sent only at agreed minor 11, and 0 unless
   the Core owns its accessories. `remotePgxlControlVersion` 3 adds the
@@ -1720,7 +1746,8 @@ older window sees only the values it was built for.
 | 82 | `miniDisplayVersion` | `i64` |
 | 83 | `accessoryTxVersion` | `i64` |
 | 84 | `radioAntennaRowsVersion` | `i64` |
-| 85 | `coreBuildInfo` | `utf8` |
+| 85 | `sliceAccessVersion` | `i64` |
+| 86 | `coreBuildInfo` | `utf8` |
 
 <!-- /surface -->
 
@@ -2018,6 +2045,19 @@ An enum property lists the values its domain allows.
 | 9 | `diagnostics` | `utf8` | outbound |  |
 | 10 | `revision` | `i64` | outbound |  |
 | 11 | `pa` | `utf8` | outbound |  |
+
+**SliceAccess** (8 properties)
+
+| Ordinal | Property | Wire kind | Direction | Enum values |
+| --- | --- | --- | --- | --- |
+| 0 | `sliceId` | `i64` | constantSnapshot |  |
+| 1 | `incarnation` | `i64` | constantSnapshot |  |
+| 2 | `controllerDeviceId` | `utf8` | outbound |  |
+| 3 | `controlRevision` | `i64` | outbound |  |
+| 4 | `listenerDeviceIds` | `utf8` | outbound |  |
+| 5 | `activeRxDeviceIds` | `utf8` | outbound |  |
+| 6 | `txSelected` | `bool` | outbound |  |
+| 7 | `onAir` | `bool` | outbound |  |
 
 **SliceMarker** (14 properties)
 
@@ -2358,7 +2398,7 @@ An enum property lists the values its domain allows.
 | 84 | `twoToneDrivePowerSource` | `enum` | bidirectional | 0, 1, 2 |
 | 85 | `voxEnabled` | `bool` | bidirectional |  |
 
-**TransmitState** (34 properties)
+**TransmitState** (37 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -2396,6 +2436,9 @@ An enum property lists the values its domain allows.
 | 31 | `forwardAdcRaw` | `i64` | outbound |  |
 | 32 | `reflectedAdcRaw` | `i64` | outbound |  |
 | 33 | `compressionDb` | `f64` | outbound |  |
+| 34 | `forwardRawPowerWatts` | `f64` | outbound |  |
+| 35 | `forwardAdcVolts` | `f64` | outbound |  |
+| 36 | `reflectedAdcVolts` | `f64` | outbound |  |
 
 **TunerModel** (21 properties)
 
@@ -2457,6 +2500,7 @@ destroyed during the session.
 | `pan:<i>` | `PanadapterModel` |
 | `slice:<id>` | `SliceModel` |
 | `marker:<id>` | `SliceMarker` |
+| `access:<id>` | `SliceAccess` |
 
 <!-- /surface -->
 
@@ -2847,13 +2891,33 @@ Notes on the keys:
   owner is `txState.holderDeviceId` (the several-devices design, ruling
   5.4a; iPhone app plan Task 77), as on a `slice:` object. A marker has no colour on the wire: a client draws it in
   its letter's colour. A write to a marker is refused (section 7.3).
+  To a session with `sliceAccessVersion` 1 the rule is by membership
+  instead: a marker for every slice it has not joined (section 7.5).
+- **`access:<id>`** (`SliceAccess`, `sliceAccessVersion` 1). One per live
+  slice, made with the slice and destroyed with it, sent only to a session
+  with the feature (its schema too); any other session never receives one.
+  Every property is `outbound`: `sliceId` and `incarnation`
+  (`constantSnapshot`): which slice of that letter this is, never 0 and
+  never reused while the Core runs, so a command naming it never reaches
+  the letter made again after a close); `controllerDeviceId` (the
+  controller's id as `connectedDevices` names it, `""` for none, `station`
+  for the Core's own operating position); `controlRevision` (1 when made,
+  one more on each change of controller); `listenerDeviceIds` (utf8, a
+  JSON array of every joined device's id, the controller first, then in
+  join order); `activeRxDeviceIds` (utf8, a JSON array of the devices
+  whose active receive slice this is); `txSelected` (the marker's
+  `txSlice` rule, ruling 5.4a); `onAir` (the slice is transmitting now).
 - **A change of owner** (a device adopting slices nobody owned, a slice
-  passing to the station for a device that left, a held slice returning)
-  reaches each session as `object.destroy` of the form it had and
-  `object.create` of the form it has now (`slice:<id>` to `marker:<id>`,
-  or back). A session first sent an object of a class after its
-  connect-time burst (its first marker, when a second device arrives) is
-  sent that class's `schema` just before it.
+  passing to the station for a device that left, a held slice returning,
+  a take or a release) reaches each session as `object.destroy` of the
+  form it had and `object.create` of the form it has now (`slice:<id>` to
+  `marker:<id>`, or back); so does a join or a leave for a session with
+  `sliceAccessVersion` 1. A session whose form did not change (a
+  controller that stays on as a listener after a take, a listener that
+  takes control) is sent nothing but the `access:<id>` delta. A session
+  first sent an object of a class after its connect-time burst (its first
+  marker, when a second device arrives) is sent that class's `schema`
+  just before it.
 - **Unknown classes.** A client that receives a schema for a class it does
   not know records the difference and drops that class's objects and
   deltas.
@@ -3128,6 +3192,68 @@ slices at their frequencies, modes and panadapters, with their settings.
 Once taken back, a notice cannot be taken back again ("That can no longer
 be taken back.").
 
+**Listening and control** (`sliceAccessVersion` 1; the slice control
+and shared listening design, docs/architecture/2026-09-28-slice-control-
+and-listening-design.md). Each slice has one controller (its owner) or
+none, and any number of listeners; the controller is always one of them.
+A device sees and hears every slice it has joined and changes only the
+one it controls: a write or a slice verb from a listener is refused with
+"Slice <letter> is controlled by <name>. Take control to change it."
+("Nobody controls Slice <letter>. Take control to change it." with no
+controller). A session with the feature receives `slice:<id>` for every
+slice it has joined and `marker:<id>` for every other; a join or a leave
+swaps them as a change of owner does (section 7.1). The `access:<id>`
+object says who controls and who listens. The verbs (section 9.1):
+
+- `slice.listen {sliceId, incarnation}` joins the slice. Nothing is
+  allocated: no slice, receiver or DDC, so it works with every receiver
+  and the slice cap in use. Already joined is accepted and changes
+  nothing. Its result carries the slice's `controlRevision`.
+- `slice.stopListening {sliceId, incarnation}` leaves it. From the
+  controller it is refused, "You control slice <letter>. Use Release to
+  leave it."; not joined, it is accepted and changes nothing. When it was
+  the device's active receive slice, the next slice the device has joined
+  (in creation order) becomes it. A slice left with no controller and no
+  listener closes (the Core's last slice stays).
+- `slice.takeControl {sliceId, incarnation, controlRevision}` makes the
+  device its controller in one change: no slice is closed or made, and
+  its receiver, channel and audio stay. The former controller stays a
+  listener (its `slice:<id>` stays; it is sent `notice` `controlTaken`)
+  and every other listener stays. Refused while the slice is
+  transmitting (the transmit slice of a holder on the air, or the one a
+  keyed radio holds), checked when the take is applied: "Slice <letter>
+  is transmitting. Take control once it stops."; and when its controller
+  cannot stay on as a listener: a session without the feature ("<name>
+  needs an update before control of slice <letter> can pass to another
+  device."), a device that is away, or the Core's own position. When the
+  former controller holds transmit on the slice, the transmit flag moves
+  to another of its slices, or with none transmit is released; its
+  remembered transmit choice no longer names the slice, and the new
+  controller's transmit binding prefers its other slices until it picks
+  this one with `tx.setTxSlice`. Its result carries the new
+  `controlRevision`.
+- `slice.release {sliceId, incarnation, controlRevision}`, from the
+  controller only ("Only the device that controls slice <letter> can
+  release it."): the controller is cleared and it leaves. The slice stays
+  for its other listeners with no controller (nobody adopts it, not even a
+  device alone on the Core; `slice.takeControl` does), refused while it
+  transmits ("Slice <letter> is transmitting. Release it once it
+  stops."), or closes when nobody else is on it (the Core's last slice
+  stays, with nobody on it). A `removeSlice` from a controller of a slice
+  others listen to acts as this release, from an older window too.
+- `setActiveSliceById` from a session with the feature makes any slice it
+  has joined its active receive slice; only a slice it controls also
+  becomes its active slice (ruling 5.10). From an older window, today's
+  rule.
+
+Each verb names the slice by `sliceId` and `incarnation` (the
+`access:<id>` object's): a slice closed and its letter made again is
+refused, "That slice has closed. Choose it again from the list.". Take
+and release carry the `controlRevision` the device saw: of two devices
+that saw the same one, the first is applied and the other refused,
+"Someone else changed who controls slice <letter>. Look again and try
+once more.".
+
 **An older window** (a session without `sessionHolderVersion` 1) is never
 asked: it gets the refusal only, naming the devices involved. When a take
 closes its last slice its session ends: "<taker's name> took the receiver
@@ -3211,6 +3337,10 @@ included) and `change`. Kinds here: `sliceMoved` and `sliceClosed` (no
 Take it back), `receiverTaken` and `sliceTaken` (Take it back),
 `settingChanged` (section 7.6: `change`, who, no Take it back),
 `transmitTaken` (section 18.9: who took transmit, Take it back),
+`controlTaken` (`sliceAccessVersion` 1: another device took control of
+the device's slice, which it still listens to; who, the slice, no Take
+it back: "<taker's name> took control of slice <letter>. You are still
+listening."),
 `graceEnded`, `slicesNotRestored`, `antennaKept` and `tuneEnded` (about
 the device's own state: no `by` keys, no Take it back). `tuneEnded`
 (iPhone app plan Task 77 fix round 4) tells a device that its accepted
@@ -3935,6 +4065,15 @@ command (`biasMode` "ClassA" or "ClassAB", `fanMode` "Auto", "Quiet" or
 "Continuous", or `ledIntensity` 0 to 100), and none or more than one is
 refused.
 
+`slice.listen`, `slice.stopListening`, `slice.takeControl` and
+`slice.release` (`sliceAccessVersion` 1, section 7.5) name the slice by
+`sliceId` and `incarnation`, each a whole number of 0 or more (read from
+the `access:<id>` object); take and release add the `controlRevision`
+the device saw. `slice.listen` and `slice.takeControl` return the slice's
+`controlRevision` afterwards in `values` (`i64`), and each accepted verb
+names `slice:<id>` and `access:<id>` in `affected`. From a peer without
+the feature they are refused before they are read (section 6.3).
+
 <!-- surface:commands -->
 <!-- Generated by scripts/render-link-tables.py from tests/data/link/v1/surface.json. Do not edit by hand. -->
 
@@ -4072,6 +4211,10 @@ refused.
 | `confirm.cancel` | `id` i64 | `sessionHolderVersion` | 1 | 11 |
 | `notice.takeBack` | `id` i64 | `sessionHolderVersion` | 1 | 11 |
 | `session.pathTicket` | none | `controlSwitchVersion` | 1 | 11 |
+| `slice.listen` | `sliceId` i64, `incarnation` i64 | `sliceAccessVersion` | 1 | 11 |
+| `slice.stopListening` | `sliceId` i64, `incarnation` i64 | `sliceAccessVersion` | 1 | 11 |
+| `slice.takeControl` | `sliceId` i64, `incarnation` i64, `controlRevision` i64 | `sliceAccessVersion` | 1 | 11 |
+| `slice.release` | `sliceId` i64, `incarnation` i64, `controlRevision` i64 | `sliceAccessVersion` | 1 | 11 |
 | `station.settingsExport.begin` | none | `settingsBackupVersion` | 1 | 11 |
 | `station.settingsExport.read` | `transferId` utf8, `offset` i64 | `settingsBackupVersion` | 1 | 11 |
 | `station.settingsExport.cancel` | `transferId` utf8 | `settingsBackupVersion` | 1 | 11 |
@@ -5632,6 +5775,7 @@ same on every machine.
 | `short-name` | Another device signs in with a short name, drops, and signs in again with a new one: each change moves `connectedDevices`' and `devices`' revisions, the new short name replacing the old in both lists and on its slice's marker |
 | `grace-return` | Another device drops and is away; a minute later nothing has been sent about it but its slice's marker turning `ownerAway`; it signs in again within its 3 minutes and is let in with no question, the list sent again and its marker back; it drops again, and when its 3 minutes end with this device still on the Core its slice closes (the marker's `object.destroy`) and is saved for its return |
 | `two-devices` | Another device holds the Core's slice; this device is let in with a slice of its own (`slice:1`) and the other's as `marker:0`, naming its owner, with the `SliceMarker` schema; the other device is sent `marker:1` for this device's slice, and when this device tunes its slice the other sees the marker move, never the slice |
+| `slice-access` | This device declares `sliceAccess` with `sessionHolder` (slice control plan Task 4): its capabilities end with `sliceAccessVersion` 1, its burst carries the `SliceAccess` schema and `access:0` (the incarnation and control revision recorded, controller and only listener this device, its active receive slice, not transmitting). `slice.listen` on its own slice is accepted and changes nothing, returning the revision; `slice.stopListening` is refused "You control slice A. Use Release to leave it."; `slice.takeControl` with the revision seen is accepted with no change; `slice.release` with another revision is refused "Someone else changed who controls slice A. Look again and try once more."; each verb with a renamed argument is refused "The Core could not read this request.". Runs on the station alone |
 | `foreign-write-refused` | This device holds slice 0 and another device slice 1: a `property.write` to `slice:1` and to `marker:1`, and `removeSlice` and `setActiveSliceById` naming slice 1, are refused "That slice belongs to Other device 1. It can be changed only there.", with no value sent back and nothing changed; its own slice it may make active |
 | `held-for-device` | Another device, alone on the Core, leaves with `session.leave`: its slice keeps running, held for it. This device, let in meanwhile, does not adopt it: it gets a slice of its own and the other's as a marker with `ownerAway` true; the other device signs in again and the marker's `ownerAway` turns false (the slice is its own again) |
 | `verbs-tx-set-tx-slice` | On a Core with `remote_transmit` allow (stationSetup `remoteTransmit`), a device that declares `remoteTx` is sent `txPermitted` false in its first `capabilities` and true in the `capabilities` sent again after `snapshot.complete`, each with `remoteTxVersion` 1 and the `txRefusal` entries (`notReady` first, empty once permitted); `tx.setTxSlice` with an argument it does not take is refused "The Core could not read this request."; with `sliceId` while nobody holds transmit it is refused "Take transmit on this device first." with the values `refusalCode` `notHolder` and `refusalFix` `takeTransmit`. Runs on the station alone |

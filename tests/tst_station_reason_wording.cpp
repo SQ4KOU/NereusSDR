@@ -173,6 +173,11 @@
 //   2026-09-26  J.J. Boyd / KG4VCF  D79 (R-IOS-11, R-R3-49): the Core's
 //                                    unknown band plan refusal forwards.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  Slice control plan Task 4:
+//                                    SliceAccessController.cpp scanned;
+//                                    the hand-off and controlTaken words'
+//                                    names and letter are plain inserts.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -724,7 +729,10 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("takerName"),
           // Slice control plan Task 2: listenerChangeReason's slice letter
           // (A to P); the controller's name beside it is `owner` above.
-          QStringLiteral("letter")},
+          QStringLiteral("letter"),
+          // Slice control plan Task 4: the controller's or the taker's
+          // name (the operator's own words, ruling 4.3) and the letter.
+          QStringLiteral("name, letter"), QStringLiteral("planDevice(taker).name, letter")},
          {// listen(): the Core's own setup error (m_lastError), for its
           // console and log; never sent to an app.
           QStringLiteral("CertificateStore::tlsBackendDiagnostic()"),
@@ -827,6 +835,14 @@ const QList<ReasonSource>& reasonSources()
         // iPhone app plan Task 77: taking transmit's refusals and the
         // transmitTaken notice's words. The taker's name is the operator's
         // own words or "Radio" (ruling 4.3, ruling 8.1).
+        // Slice control plan Task 4: listen, stop listening, take control
+        // and release. Only the slice letter is inserted.
+        {"src/core/session/SliceAccessController.cpp", {}, {}, 8,
+         {QStringLiteral("letter"), QStringLiteral("letterOf(sliceId)")},
+         {// refused()'s parameter, from this file's calls.
+          QStringLiteral("reason"),
+          // StationServer::handOffRefusal's words (scanned there).
+          QStringLiteral("m_hooks.cannotHandOff(former, sliceId)")}},
         {"src/core/session/StationTransmitTake.cpp", {}, {}, 2,
          {QStringLiteral("takerName")},
          {// This file's own constant and reason function, scanned here;

@@ -285,6 +285,10 @@ public:
     /// integration tests. Endpoint internals remain session-private.
     int activeEndpointCount() const;
     int activeSourceCount() const;
+    /// Test hook (slice control plan Task 4): every audio sender this
+    /// session runs now (the speakers' mix, the headphones mix, each
+    /// receiver stream's), so a test can see none was remade.
+    QList<const DaemonAudioSender*> audioSendersForTest() const;
     DaemonAudioDiagnostics audioDiagnostics() const;
     /// The Opus target, bit/s, for the speakers' mix and the headphones mix
     /// this controller sends (R-R3-23: nereusd's audio_bitrate). Applies to

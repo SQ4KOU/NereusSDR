@@ -160,6 +160,10 @@
 //               listening, and retires when its device's claims go.
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-28: slice control and shared listening plan Task 4: a take
+//               keeps every audio sender and owner mix, and a leave
+//               retires the leaver's display. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -180,6 +184,8 @@
 #include "core/TxInterlockPolicy.h"
 #include "core/WdspEngine.h"
 #include "core/session/RemoteKeying.h"
+#include "core/session/SliceAccessController.h"
+#include "core/session/media/DaemonAudioSender.h"
 
 #include <atomic>
 #include "models/Band.h"
@@ -361,11 +367,11 @@ struct MediaCore {
         hub.reset();
     }
 
-    void signInBoth()
+    void signInBoth(const QHash<QByteArray, int>& features = kHolder)
     {
-        appA = core.signIn(a);
+        appA = core.signIn(a, features);
         QVERIFY(admitted(appA));
-        appB = core.signIn(b);
+        appB = core.signIn(b, features);
         QVERIFY(admitted(appB));
         QTRY_COMPARE(hub->controllerCount(), 2);
     }
@@ -3919,6 +3925,93 @@ private slots:
         };
         QTRY_VERIFY(retired());
         QCOMPARE(m.hub->controllerFor(m.epochOf(0))->activeEndpointCount(), 1);
+    }
+
+    // Slice control plan Task 4: taking control keeps every audio sender
+    // and each session's owner mix; the former controller, still
+    // listening, keeps its display; its leave (stop listening) retires it,
+    // as a change of controller away from a device retires one.
+    void aTakeKeepsTheAudioAndALeaveRetiresTheDisplay()
+    {
+        MediaCore m(DisplayBudgetLimits{10'000'000, 1'000'000, 1});
+        m.signInBoth({{"deviceAuth", 1}, {"sessionHolder", 1}, {"sliceAccess", 1}});
+        const int sliceA = m.sliceOf(m.epochOf(0));
+        const int sliceB = m.sliceOf(m.epochOf(1));
+        SliceModel* a = m.core.model->sliceById(sliceA);
+        QVERIFY(a != nullptr && sliceB >= 0);
+        const double centre = m.core.model->streamCentreHz(a->streamIndex());
+        QVERIFY(m.startMedia(m.appA));
+        QVERIFY(m.startMedia(m.appB));
+        sendMedia(m.appA, displayRequest(2, sliceA, centre));
+        sendMedia(m.appB, displayRequest(1, sliceB, centre));
+        DaemonMediaController* controllerA = m.hub->controllerFor(m.epochOf(0));
+        DaemonMediaController* controllerB = m.hub->controllerFor(m.epochOf(1));
+        QTRY_COMPARE(controllerA->activeEndpointCount(), 1);
+        QTRY_COMPARE(controllerB->activeEndpointCount(), 1);
+        for (LoopbackTransport* app : {m.appA, m.appB}) {
+            sendMedia(app, {{QStringLiteral("op"), QStringLiteral("audio")},
+                            {QStringLiteral("connectionId"), QLatin1String(kMediaConnection)},
+                            {QStringLiteral("revision"), 1},
+                            {QStringLiteral("enabled"), true},
+                            {QStringLiteral("profile"), QStringLiteral("lossless")}});
+        }
+        QTRY_VERIFY(!mediaOps(m.appA, QStringLiteral("audio-context")).isEmpty()
+                    && !mediaOps(m.appB, QStringLiteral("audio-context")).isEmpty());
+        const QByteArray deviceA = m.a.key.fingerprint();
+        const QByteArray deviceB = m.b.key.fingerprint();
+        SliceOwnership* ownership = m.core.model->sliceOwnership();
+        SliceAccessController* access = m.core.server->sliceAccessController();
+        QVERIFY(access != nullptr);
+        // B listens to A's slice, and hears it on a receiver stream of its
+        // own.
+        QVERIFY(access->listen(deviceB, ownership->refOf(sliceA)).accepted);
+        sendMedia(m.appB, {{QStringLiteral("op"), QStringLiteral("receiver-audio")},
+                           {QStringLiteral("connectionId"), QLatin1String(kMediaConnection)},
+                           {QStringLiteral("sliceId"), sliceA},
+                           {QStringLiteral("revision"), 1},
+                           {QStringLiteral("enabled"), true},
+                           {QStringLiteral("profile"), QStringLiteral("opus")}});
+        QTRY_VERIFY(!mediaOps(m.appB, QStringLiteral("receiver-audio-context")).isEmpty());
+        QVERIFY(mediaOps(m.appB, QStringLiteral("receiver-audio-context")).last()
+                    .value(QStringLiteral("enabled")).toBool());
+        const QList<const DaemonAudioSender*> sendersA = controllerA->audioSendersForTest();
+        const QList<const DaemonAudioSender*> sendersB = controllerB->audioSendersForTest();
+        QVERIFY(!sendersA.isEmpty());
+        QCOMPARE(sendersB.size(), 2);
+        const int mixA = controllerA->ownerMixSlot();
+        const int mixB = controllerB->ownerMixSlot();
+        QVERIFY(mixA >= 0 && mixB >= 0);
+
+        const SliceAccessController::Result taken = access->takeControl(
+            deviceB, ownership->refOf(sliceA), ownership->controlRevision(sliceA));
+        QVERIFY2(taken.accepted, qPrintable(taken.reason));
+        QCOMPARE(ownership->mark(sliceA).owner, deviceB);
+        QTest::qWait(50);
+        QCOMPARE(controllerA->audioSendersForTest(), sendersA);
+        QCOMPARE(controllerB->audioSendersForTest(), sendersB);
+        QCOMPARE(controllerA->ownerMixSlot(), mixA);
+        QCOMPARE(controllerB->ownerMixSlot(), mixB);
+        QCOMPARE(controllerA->activeEndpointCount(), 1);
+        QCOMPARE(controllerB->activeEndpointCount(), 1);
+
+        // A stops listening: the slice is out of its view and its display
+        // retires.
+        QVERIFY(access->stopListening(deviceA, ownership->refOf(sliceA)).accepted);
+        QTRY_COMPARE(controllerA->activeEndpointCount(), 0);
+        const auto retired = [&m]() {
+            for (const QString& op : {QStringLiteral("allocation-result"), QStringLiteral("rejected")}) {
+                for (const QJsonObject& o : mediaOps(m.appA, op)) {
+                    if (o.value(QStringLiteral("endpointId")).toInteger() == 2
+                        && o.value(QStringLiteral("reason")).toString()
+                            == QLatin1String(kRetireReasonSliceRemoved)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        };
+        QTRY_VERIFY(retired());
+        QCOMPARE(controllerB->activeEndpointCount(), 1);
     }
 
     // The governor sees every device's display charge, PureSignal's once.

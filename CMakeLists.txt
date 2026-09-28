@@ -1265,6 +1265,11 @@ set(CORE_SOURCES
     # iPhone app Task 73 (R-IOS-02): the read-only marker another device sees
     # for a slice that is not its own, one per slice.
     src/core/session/SliceMarker.cpp
+    # Slice control and shared listening plan Task 4: who controls and who
+    # listens to each slice (SliceAccess, access:<id>), and the listen,
+    # stop listening, take control and release checks in one place.
+    src/core/session/SliceAccessSet.cpp
+    src/core/session/SliceAccessController.cpp
     # iPhone app plan Task 78 (R-IOS-02, R-IOS-30): a remote window's copy of
     # who else is on the Core, their slices, and the Core's questions and
     # notices for it.
