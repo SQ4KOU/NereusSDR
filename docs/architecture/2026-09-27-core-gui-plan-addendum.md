@@ -32,8 +32,11 @@ audit does not substitute for matching local/remote operating checks.
   equivalents should be built in this effort.
 - Status: the exact inventory and disabled wording are recorded in the Setup
   lane. The first Core description slice publishes 35 controls across four pages
-  in General, Test and Core TCI; coverage remains explicitly partial and
-  Diagnostics remains unpublished. Setup-aware peers receive its read-only
+  in General, Test and Core TCI; coverage remains explicitly partial. (Corrected 2026-09-28:
+  "Diagnostics remains unpublished" is stale. Its Settings Validation page is published as the
+  closed version 3 panel in signed `9fad480b`, `resources/setup/diagnostics.json`; see G-97.
+  The desktop-local file and log actions this entry asks about remain unpublished and the
+  question stays OPEN.) Setup-aware peers receive its read-only
   object; older peers remain unchanged. Integrated app/Core build and seven
   session/Setup checks passed, followed by repaired full surface and session
   conformance checks (five targets, 35.68 s). Omitted controls and empty pages
@@ -86,7 +89,10 @@ keyed, unlike the receive-side thread placement work already done.
   can overflow); clock drift only over many-minute overs; the unkey line has no dedicated
   test."
 - Ruling: OPEN.
-- Status: open; also missing a dedicated test for the unkey line.
+- Status: the P1 ring question is open. The unkey-line test part is built (corrected
+  2026-09-28): `unkeyLineCarriesTheMicrophonePathsLatency` (`tests/tst_daemon_media_controller.cpp:613`,
+  `:4418`) from signed `d5849337d` checks the unkey line's latency, ring fill and silence-shed
+  fields. That this is the unkey line the ledger meant is inferred, not confirmed.
 - Plan: needs an ID.
 
 ### G-08: The Core keeps a dead rendezvous path open up to 60 s; the service gives up in 20-40 s
@@ -117,45 +123,6 @@ install would need to either change that line or leave those two Cores at the ol
   installed Cores' config files are unchanged pending JJ's answer.
 - Plan: R-R3-21, R-IOS-09.
 
-### G-11: Protocol 2 sample rates for Atlas, Hermes, HermesII and HL2 sit below Thetis's range
-
-Thetis allows these boards 48 kHz to 1536 kHz under Protocol 2 firmware; NereusSDR's current
-range is narrower for the same boards.
-
-- Found: 2026-09-24/25, gaps review.
-- Evidence: `~/.config/nereus/work/checkpoint-next-operator-list.md:184`: "JJ QUEUE: Protocol 2
-  rates for Atlas, Hermes, HermesII and HL2 kept below Thetis's 48-1536 kHz (Hermes-class
-  radios can run P2 firmware): follow Thetis? (from the gaps review)."
-- Ruling: OPEN; no answer found in any source read for this addendum.
-- Status: open.
-- Plan: needs an ID (raised from the receiver-and-transmit-gaps plan review).
-
-### G-12: TCI and MMIO Setup pages keep protocol-facing names (WebSocket, endpoint, binding)
-
-JJ's standing rule is plain operator wording with no protocol jargon, but the TCI Server and
-MMIO setup pages still use "WebSocket," "endpoint," and "binding," because those are the
-features' own names.
-
-- Found: 2026-09-23, checkpoint wording review.
-- Evidence: `~/.config/nereus/work/checkpoint-next-operator-list.md:67`: "Question queued for
-  JJ: the TCI and MMIO Setup pages keep their feature names (WebSocket, endpoint, binding):
-  keep or reword?"
-- Ruling: OPEN.
-- Status: open; the same file's line 99 lists specific TCI/MMIO strings an implementer chose
-  beyond this list, also awaiting a look.
-- Plan: needs an ID.
-
-### G-13: The Connections window says "Your stations" / "Stations on this network" while the app says "Core"
-
-- Found: 2026-09-23, checkpoint wording review.
-- Evidence: `~/.config/nereus/work/checkpoint-next-operator-list.md:68`: "Operator review item
-  (wording): the Connections window says 'Your stations' and 'Stations on this network' while
-  the rest of the app says 'Core'; keep 'station' (a Core with its radio) or change to
-  'Core'?"
-- Ruling: OPEN.
-- Status: open.
-- Plan: needs an ID.
-
 ## In progress
 
 ### G-16: Other config-file keys that may override every start (audit)
@@ -175,6 +142,171 @@ Audio bitrate is a runtime encoder policy, with no separate saved choice found t
   goes directly to DaemonMediaHub::setAudioTargetBitrate. Regression/behavior change awaits
   the audio-device ruling.
 - Plan: R-R3-49 (small-followups lane).
+
+## Queued
+
+### G-20: TGXL TRANSMITTING hold (~400 ms) so the amplifier never sweeps without carrier
+
+When a network device's TUNE turns on while the TGXL amplifier is still switching, the display
+should hold "TRANSMITTING" for up to about 400 ms so the antenna tuner never sweeps with no
+carrier present.
+
+- Found: 2026-09-2x, PGXL/TGXL capture analysis (read-only).
+- Evidence: `nereus-lane-b/.../progress.md:401`: "QUEUED (low priority): hold TRANSMITTING for
+  a network device's tune on while the amp is still switching, at most ~400 ms, so the TGXL
+  never sweeps without carrier (SmartSdrApiListener.cpp:429)."
+- Ruling: queued as low priority; no operator ruling needed beyond the queue placement itself.
+- Status: queued, not started.
+- Plan: needs an ID.
+
+## Ruled and built (record with commits)
+
+### G-01: Spectrum decimation range cited to Thetis is wider than Thetis allows
+
+The Rendering setup page lets an operator pick a decimation step from 1 to 32. Thetis's own
+control tops out at 16, so NereusSDR's range is wider than the source it was ported from.
+
+- Found: 2026-09-27, trunk catalogue-ranges task, lane B.
+- Evidence: `nereus-lane-b/.../progress.md:434`: "the decimation range 1-32 is cited to Thetis,
+  which allows 1-16 (setup.designer.cs:33834 [v2.10.3.15]); cite correction sent back to the
+  implementer; the range itself is a question for JJ (low)."
+- Ruling: JJ approved on 2026-09-27: "Match Thetis: 1–16 (recommended)".
+- Status: implementation in `codex/display-decimation-parity`; the UI, catalogue, local FFT
+  engines and Core media request validation share the same bounds. Boundary regression
+  first failed because 17 was accepted. Signed implementation `87f59425b` passed five focused
+  tests including link conformance in 45.43 s; the integrated trunk passed the same
+  five targets in 41.99 s. Generated protocol tables and diff checks pass.
+  A September 28 read-only phone scout found its range, request encoder and
+  subscriber clamp still permit 1-32 at phone `3c5771c82`. The exact source
+  finding was delivered to the phone owner for correction under this same
+  ruling. Core remains 1-16; phone-side acceptance is not yet verified.
+  (Re-sorted 2026-09-28 into "Ruled and built" for the Core side, `87f59425b` being an
+  ancestor of the trunk; the phone's clamp remains the phone owner's work.)
+- Plan: R-IOS-06, R-IOS-27 (catalogue ranges task).
+
+### G-02: Several noise-reduction ranges and new-slice defaults differ from Thetis
+
+The desktop's NR2, NR4 and new-slice NR4 controls use different numeric ranges and starting
+values than Thetis's own dialogs. An operator moving between the two apps would see different
+numbers for what should be the same control.
+
+- Found: 2026-09-27, catalogue-ranges scout and task, lane B.
+- Evidence: `nereus-lane-b/.../progress.md:440`: "desktop NR values that differ from Thetis
+  v2.10.3.15 (NR2 Factor/Rate 0-30 vs 0-100; NR4 Rescale 0-20 vs 0-12; NR4 SNRthresh -30..0 vs
+  -10..+10; new-slice NR4 Smoothing 65/Whitening 2/Algo 2 vs 0/0/Algo 1). Recommend correcting
+  to Thetis, as NR1 was."
+- Ruling: JJ approved matching Thetis on 2026-09-27 in the Core/GUI Codex continuation:
+  "Match Thetis (recommended)". Match the NR2 Factor/Rate range and fractional steps,
+  NR4 Rescale/SNR threshold ranges, and new-slice Smoothing/Whitening/algorithm defaults.
+  Preserve saved operator choices; this is not a settings reset.
+- Status: NR1 corrected and built (commit `d6d96eaa`, in trunk); NR2/NR4 implementation
+  merged into trunk as signed `edfd220bb` (implementation `b9bedc3c5`). New control/default/save
+  regressions, catalogue checks and both session transports pass. Existing saved choices
+  remain intact; catalogue fixtures advertise the same ranges as the controls.
+- Plan: R-IOS-06, R-IOS-27.
+
+### G-03: A local window's receive waterfall never takes the display calibration
+
+A remote window's waterfall rows arrive already calibrated from the Core. A local window's
+receive waterfall does not apply the same calibration, so the two show slightly different
+colours for the same signal.
+
+- Found: 2026-09-25/26, parity Task 31.
+- Evidence: `nereus-parity/.../progress.md:110`: "Task 31: question for JJ: a local window's
+  receive waterfall never takes the display calibration (Thetis adds it; a remote window's
+  rows arrive calibrated from the Core), so local and remote differ; fixing it moves every
+  operator's receive colours."
+- Ruling: JJ approved on 2026-09-27: "Apply calibration in both windows (recommended)".
+- Status: signed implementation `f7af7860f` applies local receive calibration once before
+  colours, threshold tracking and 3D history. Six focused tests passed in 7.83 s, including
+  positive/negative offsets and remote/TX no-double-calibration checks. The integrated
+  trunk passed the same six targets in 7.64 s.
+  The colour shift is explicitly approved.
+- Plan: parity Task 31 (A11, R-R3-49).
+
+### G-11: Protocol 2 sample rates for Atlas, Hermes, HermesII and HL2 sit below Thetis's range
+
+Thetis allows these boards 48 kHz to 1536 kHz under Protocol 2 firmware; NereusSDR's current
+range is narrower for the same boards.
+
+- Found: 2026-09-24/25, gaps review.
+- Evidence: `~/.config/nereus/work/checkpoint-next-operator-list.md:184`: "JJ QUEUE: Protocol 2
+  rates for Atlas, Hermes, HermesII and HL2 kept below Thetis's 48-1536 kHz (Hermes-class
+  radios can run P2 firmware): follow Thetis? (from the gaps review)."
+- Ruling (corrected 2026-09-28; the earlier "OPEN" missed it): JJ answered on 2026-09-25,
+  "1 follow thetis", as recorded in `2026-09-24-receiver-and-transmit-gaps-plan.md` Task 15:
+  Atlas, Hermes, HermesII and HL2 rows on Protocol 2 follow Thetis too; mi0bot-Thetis is
+  authoritative for the HL2.
+- Status: built in signed `8d65d0ac7` (an ancestor of the trunk). The Atlas, Hermes, HermesII
+  and HL2 rows offer all six rates, 48 to 1536 kHz (`src/core/BoardCapabilities.cpp:330`, `:393`,
+  `:462`, `:935`), each citing "the operator's ruling of 2026-09-25" (`:324`, `:387`, `:456`,
+  `:925`); `sampleRatesFor` trims each row to the protocol in use.
+- Plan: receiver-and-transmit-gaps plan Task 15.
+
+### G-12: TCI and MMIO Setup pages keep protocol-facing names (WebSocket, endpoint, binding)
+
+JJ's standing rule is plain operator wording with no protocol jargon, but the TCI Server and
+MMIO setup pages still use "WebSocket," "endpoint," and "binding," because those are the
+features' own names.
+
+- Found: 2026-09-23, checkpoint wording review.
+- Evidence: `~/.config/nereus/work/checkpoint-next-operator-list.md:67`: "Question queued for
+  JJ: the TCI and MMIO Setup pages keep their feature names (WebSocket, endpoint, binding):
+  keep or reword?"
+- Ruling (corrected 2026-09-28): decided by the operator on 2026-09-24. Signed `5e9f58b70`
+  records "the words the operator approved on 2026-09-24"; no verbatim quote of his answer was
+  found in the sources read for this correction. Words another program shows stay as it shows
+  them (TCI, TCP, UDP, JSON, XML, port, IP address, MMIO in brackets); NereusSDR's own jargon is
+  said plainly.
+- Status: built in signed `5e9f58b70` (an ancestor of the trunk). The TCI page reads "Listen
+  on:" (`src/gui/setup/CatNetworkSetupPages.cpp:224`); the MMIO window is "Meter Data Sources
+  (MMIO)" with "Data sources" (`src/gui/containers/MmioEndpointsDialog.cpp:116`, `:135`). The
+  wording sweep (`tests/tst_operator_wording_sweep.cpp`) fails if endpoint, binding, bind
+  interface or WebSocket return in text a user reads there. Still awaiting the operator's
+  look: the wording the implementer chose beyond the approved list
+  (`checkpoint-next-operator-list.md:99`: the TCI listen-address choices and tooltips, the
+  network-card entry format, the meter editor labels and similar); that review item is
+  unchanged by this correction.
+- Plan: R-R3-21, R-R3-48.
+
+### G-13: The Connections window says "Your stations" / "Stations on this network" while the app says "Core"
+
+- Found: 2026-09-23, checkpoint wording review.
+- Evidence: `~/.config/nereus/work/checkpoint-next-operator-list.md:68`: "Operator review item
+  (wording): the Connections window says 'Your stations' and 'Stations on this network' while
+  the rest of the app says 'Core'; keep 'station' (a Core with its radio) or change to
+  'Core'?"
+- Ruling (corrected 2026-09-28): the operator decided on 2026-09-24 that user text calls the
+  computer you connect to "the Core" (phone design D43's wording rule, set by JJ on 2026-09-24;
+  signed `831a60100`: "Operator decision of 2026-09-24"); "station" stays only in its ham sense.
+- Status: built in signed `831a60100` (an ancestor of the trunk). The Connections window reads
+  "Cores on this network" and "Your Cores" (`src/gui/ConnectionSelector.cpp:234`, `:236`), with
+  "No Cores found on this network." and "No saved Cores."
+- Plan: R-R3-21.
+
+### G-14: Older windows finding a full Core receive a retryable refusal
+
+- Ruling: JJ's 2026-09-24 board v50/v51 decisions are recorded in the phone crew ledger and
+  phone design D66. With four devices or no free receiver, an older window is refused with
+  "The Core is full. Update NereusSDR to take a device's place, or try again later."
+  Nobody already connected is disturbed. The phone controller confirmed these sources;
+  the Core lead read the ruling directly.
+- Status: built in signed `43e8140a` and integrated by `dd42fc56f`.
+  Older clients receive the retryable full-Core refusal without displacing an
+  admitted device. The integrated admission/session verification and subsequent
+  lifetime corrections are recorded under G-53.
+- Plan: R-IOS-30, R-IOS-31.
+
+### G-15: Away devices come first in the fifth-device choice
+
+- Ruling: phone design section 5.9, kept by JJ on board v50/v51, explicitly puts an away
+  device first. D55's idle-longest ordering remains for connected candidates, and D64
+  protects the desktop hosting the Core.
+- Status: built in signed `43e8140a` and integrated by `dd42fc56f`.
+  `DeviceSessionRegistry::replacementCandidates` sorts away devices first;
+  `awayIncumbentIsOfferedFirstAndReplaced` verifies the offered device and actual
+  replacement. G-53 records the integrated verification and remaining fixture limit.
+- Plan: R-IOS-30, R-IOS-31.
 
 ### G-17: Config-file `sample_rate_hz` overwrote the saved rate every start
 
@@ -233,24 +365,6 @@ libdatachannel races), not in isolation. A dedicated lane is fixing them one at 
   the earlier handoff describing it as queued is stale. Hardware acceptance remains distinct
   from the synthetic monitor-level evidence above.
 - Plan: parity Task 32.
-
-## Queued
-
-### G-20: TGXL TRANSMITTING hold (~400 ms) so the amplifier never sweeps without carrier
-
-When a network device's TUNE turns on while the TGXL amplifier is still switching, the display
-should hold "TRANSMITTING" for up to about 400 ms so the antenna tuner never sweeps with no
-carrier present.
-
-- Found: 2026-09-2x, PGXL/TGXL capture analysis (read-only).
-- Evidence: `nereus-lane-b/.../progress.md:401`: "QUEUED (low priority): hold TRANSMITTING for
-  a network device's tune on while the amp is still switching, at most ~400 ms, so the TGXL
-  never sweeps without carrier (SmartSdrApiListener.cpp:429)."
-- Ruling: queued as low priority; no operator ruling needed beyond the queue placement itself.
-- Status: queued, not started.
-- Plan: needs an ID.
-
-## Ruled and built (record with commits)
 
 ### G-21: Absent hardware hidden; controls that exist but cannot run stay disabled with a reason
 
@@ -400,92 +514,6 @@ Thetis only enables ADC0 on every board; NereusSDR offers two ADCs on boards tha
   earlier measurement document's pending choice is superseded by this recorded approval.
 - Plan: R-IOS-16, R-IOS-08; R5 remote access.
 
-### G-14: Older windows finding a full Core receive a retryable refusal
-
-- Ruling: JJ's 2026-09-24 board v50/v51 decisions are recorded in the phone crew ledger and
-  phone design D66. With four devices or no free receiver, an older window is refused with
-  "The Core is full. Update NereusSDR to take a device's place, or try again later."
-  Nobody already connected is disturbed. The phone controller confirmed these sources;
-  the Core lead read the ruling directly.
-- Status: built in signed `43e8140a` and integrated by `dd42fc56f`.
-  Older clients receive the retryable full-Core refusal without displacing an
-  admitted device. The integrated admission/session verification and subsequent
-  lifetime corrections are recorded under G-53.
-- Plan: R-IOS-30, R-IOS-31.
-
-### G-15: Away devices come first in the fifth-device choice
-
-- Ruling: phone design section 5.9, kept by JJ on board v50/v51, explicitly puts an away
-  device first. D55's idle-longest ordering remains for connected candidates, and D64
-  protects the desktop hosting the Core.
-- Status: built in signed `43e8140a` and integrated by `dd42fc56f`.
-  `DeviceSessionRegistry::replacementCandidates` sorts away devices first;
-  `awayIncumbentIsOfferedFirstAndReplaced` verifies the offered device and actual
-  replacement. G-53 records the integrated verification and remaining fixture limit.
-- Plan: R-IOS-30, R-IOS-31.
-
-
-### G-01: Spectrum decimation range cited to Thetis is wider than Thetis allows
-
-The Rendering setup page lets an operator pick a decimation step from 1 to 32. Thetis's own
-control tops out at 16, so NereusSDR's range is wider than the source it was ported from.
-
-- Found: 2026-09-27, trunk catalogue-ranges task, lane B.
-- Evidence: `nereus-lane-b/.../progress.md:434`: "the decimation range 1-32 is cited to Thetis,
-  which allows 1-16 (setup.designer.cs:33834 [v2.10.3.15]); cite correction sent back to the
-  implementer; the range itself is a question for JJ (low)."
-- Ruling: JJ approved on 2026-09-27: "Match Thetis: 1–16 (recommended)".
-- Status: implementation in `codex/display-decimation-parity`; the UI, catalogue, local FFT
-  engines and Core media request validation share the same bounds. Boundary regression
-  first failed because 17 was accepted. Signed implementation `87f59425b` passed five focused
-  tests including link conformance in 45.43 s; the integrated trunk passed the same
-  five targets in 41.99 s. Generated protocol tables and diff checks pass.
-  A September 28 read-only phone scout found its range, request encoder and
-  subscriber clamp still permit 1-32 at phone `3c5771c82`. The exact source
-  finding was delivered to the phone owner for correction under this same
-  ruling. Core remains 1-16; phone-side acceptance is not yet verified.
-- Plan: R-IOS-06, R-IOS-27 (catalogue ranges task).
-
-### G-02: Several noise-reduction ranges and new-slice defaults differ from Thetis
-
-The desktop's NR2, NR4 and new-slice NR4 controls use different numeric ranges and starting
-values than Thetis's own dialogs. An operator moving between the two apps would see different
-numbers for what should be the same control.
-
-- Found: 2026-09-27, catalogue-ranges scout and task, lane B.
-- Evidence: `nereus-lane-b/.../progress.md:440`: "desktop NR values that differ from Thetis
-  v2.10.3.15 (NR2 Factor/Rate 0-30 vs 0-100; NR4 Rescale 0-20 vs 0-12; NR4 SNRthresh -30..0 vs
-  -10..+10; new-slice NR4 Smoothing 65/Whitening 2/Algo 2 vs 0/0/Algo 1). Recommend correcting
-  to Thetis, as NR1 was."
-- Ruling: JJ approved matching Thetis on 2026-09-27 in the Core/GUI Codex continuation:
-  "Match Thetis (recommended)". Match the NR2 Factor/Rate range and fractional steps,
-  NR4 Rescale/SNR threshold ranges, and new-slice Smoothing/Whitening/algorithm defaults.
-  Preserve saved operator choices; this is not a settings reset.
-- Status: NR1 corrected and built (commit `d6d96eaa`, in trunk); NR2/NR4 implementation
-  merged into trunk as signed `edfd220bb` (implementation `b9bedc3c5`). New control/default/save
-  regressions, catalogue checks and both session transports pass. Existing saved choices
-  remain intact; catalogue fixtures advertise the same ranges as the controls.
-- Plan: R-IOS-06, R-IOS-27.
-
-### G-03: A local window's receive waterfall never takes the display calibration
-
-A remote window's waterfall rows arrive already calibrated from the Core. A local window's
-receive waterfall does not apply the same calibration, so the two show slightly different
-colours for the same signal.
-
-- Found: 2026-09-25/26, parity Task 31.
-- Evidence: `nereus-parity/.../progress.md:110`: "Task 31: question for JJ: a local window's
-  receive waterfall never takes the display calibration (Thetis adds it; a remote window's
-  rows arrive calibrated from the Core), so local and remote differ; fixing it moves every
-  operator's receive colours."
-- Ruling: JJ approved on 2026-09-27: "Apply calibration in both windows (recommended)".
-- Status: signed implementation `f7af7860f` applies local receive calibration once before
-  colours, threshold tracking and 3D history. Six focused tests passed in 7.83 s, including
-  positive/negative offsets and remote/TX no-double-calibration checks. The integrated
-  trunk passed the same six targets in 7.64 s.
-  The colour shift is explicitly approved.
-- Plan: parity Task 31 (A11, R-R3-49).
-
 ## Continuation findings and verification, 2026-09-27
 
 ### G-32: Slice publication and incoming DTLS records could race initialization
@@ -569,8 +597,12 @@ colours for the same signal.
   two seconds. A second replacement can also overwrite the retiring peer owner.
 - Ruling: correctness repair within JJ's approved R5 replacement work; no watchdog or test
   tolerance change. Preserve the current connection while retirement completes.
-- Status: keep filtering until the retired peer stops, defer another replacement and retry
-  the desired path afterward. Deterministic regression and loaded verification in progress.
+- Status (corrected 2026-09-28): built in `d82ee3428` (an ancestor of the trunk). Filtering
+  continues until the retired peer stops (`src/gui/RemoteMediaController.cpp:3020-3037`), another
+  replacement waits while a peer is retiring (`:2866`) and retries afterward (`:3098-3101`).
+  Deterministic regressions: `lateOldRtpAfterPromotionNeverReachesTheJitterQueue` and
+  `anotherMoveWaitsForRetirementAndReleasesTheOldPeer` (`tests/tst_media_replace.cpp:832`,
+  `:892`). Remaining: no recorded verification under load.
 - Plan: R5 media replacement and recovery.
 
 ### G-37: Local TCI I/Q labels every receiver as stream zero at 192 kHz
@@ -621,6 +653,8 @@ colours for the same signal.
   guarantee. No watchdog adjustment or production behavior change was made in that
   investigation. The old green accepted-gap summary is withdrawn; an absent interval
   is a failure.
+- Status (2026-09-28): superseded by G-55 and G-70, which carry the built fix and its
+  verification; this entry is kept as the investigation record.
 - Current status: the subsequent bounded relay trace and independent authenticated
   watch implementation are recorded under G-55 and G-70. The actual Python-service
   acceptance now passes the four predeclared impaired-network rows plus the
@@ -673,7 +707,10 @@ colours for the same signal.
 - Ruling: existing parity work authorizes making these controls functional, but the
   precise safety policy and settings ownership migration remain OPEN. Do not import
   an operator-local value into the Core gate without that ruling.
-- Status: country ranges from signed `7ffcc419` are integrated: all 24 supported
+- Status: country ranges from signed `7ffcc419` are integrated (corrected 2026-09-28: `7ffcc419`
+  itself is not an ancestor of the trunk; the integrated commit is `e400bc464`, "Complete Thetis
+  country transmit ranges", whose `BandPlanGuard.{h,cpp}` and `tst_band_plan_guard.cpp` changes
+  match `7ffcc419`'s line for line, plus this addendum's own edit): all 24 supported
   regions and 264 HF ranges independently match Thetis. Integrated app/Core build and
   both band-plan and TX-frequency suites pass (1.11 s). Unknown enum values fail closed.
   The filter-edge gate now follows Thetis: signed TX-chain filter edges for voice/
@@ -754,6 +791,13 @@ colours for the same signal.
   binary discovery, service management and the desktop hosting runtime. Their
   registrations now precede both aggregates; all three rebuilt macOS suites
   pass (1.16 s). Corrected Linux full-suite coverage remains to be verified.
+- Status (corrected 2026-09-28): built and covered on Linux. In the trunk every registration
+  precedes the aggregates (`tests/CMakeLists.txt:9038` race test, `:9042-9046` the three hosting
+  tests, `all_tests` at `:9063`, label aggregates after it). The immutable Linux `5c4ca88d` full
+  run built and ran all four: `tst_slice_audio_view_race` passed (2.10 s),
+  `tst_station_binary_locator` and `tst_station_service_manager` passed, and
+  `tst_gui_desktop_station_runtime` ran and failed on its own assertions, the fixture defect
+  fixed under G-112 (`48764cd41`, `d49ef4e48`). Log: core-gui-linux-5c4ca88d-build-and-test.log.
 - Plan: required full-suite verification.
 
 ### G-46: Container filter display lacks slice-correct spectrum and overlays
@@ -779,6 +823,10 @@ colours for the same signal.
   production-gate tests cover rendering and the Add menu without test overrides.
   All ten affected integrated suites passed (71.57 seconds) with the gate open.
   Physical radio acceptance remains separate from the automated checks.
+  Checked 2026-09-28: the gate is open in source (`src/gui/UnbuiltFeatures.cpp:273`, opened by
+  `8bad71253`). The enum comment at `src/gui/UnbuiltFeatures.h:125` still says the gate awaits
+  loaded FFT startup acceptance; that code comment is stale and needs a code change, not an
+  addendum change.
 - Plan: remote-window parity container meters and filter display.
 
 ### G-47: Expected transmit silence falsely restarts relay media
@@ -880,7 +928,6 @@ colours for the same signal.
   section unchanged. Production wire order is unchanged; no assertion or deadline
   was removed.
 - Plan: integrated Core protocol verification.
-
 
 ### G-53: Admission cleanup could outlive the Core server
 
@@ -1090,6 +1137,10 @@ colours for the same signal.
   txState disables them; keyed, tuning, twoTone and txEnding must all be false.
   Integrated app/Core build and four focused suites passed (5.17 s). Receive
   controls are outside this discrepancy.
+  (2026-09-28) Documentation fix `26e89c507` on the trunk: the Setup description document's V7
+  Appearance note now says only controls carrying the offAir gate lock while keyed, plus the
+  session freshness rule; the source has no whole-Setup on-air lock (a remote window disables
+  only transmit settings, `MainWindow::transmitSettingsPermitted`).
 - Plan: Transmit/Audio Setup parity and consistent phone behavior.
 
 ### G-62: Background-service management needs reliable state and duration handling
@@ -1262,6 +1313,13 @@ colours for the same signal.
   add/remove and ownership edits are tracked, including disconnected receivers.
   The integrated app/Core build and twelve focused tests passed (20.09 s).
   Desktop-to-background handover and live-device acceptance remain open.
+  (corrected 2026-09-28) The hosting and reverse-handover wiring is now built: startup
+  reclaims the profile from the background Core (`src/main.cpp:262-273`, from `1bebe1274`),
+  shutdown hands it back to the background service (`src/main.cpp:300-345`), the session
+  coordinator installs the desktop Core (`src/gui/GuiSessionCoordinator.cpp:152`, `:186-212`;
+  `ad5a3f878`), the background Core's control socket accepts the release
+  (`src/server_main.cpp:206`), and the loopback round trip is tested
+  (`tests/tst_station_handover_roundtrip.cpp`, `b22029c58`). Only live acceptance remains.
 - Plan: station profile ownership and radio handover.
 
 ### G-68: Capability-order test assumed newly added fields did not exist
@@ -1303,6 +1361,13 @@ colours for the same signal.
   reentrant deletion tests pass in the integrated app/Core build and six focused
   suites (27.62 seconds). These are in-process models without RF or a live window
   relaunch. MainWindow hosting and reverse handover wiring remain open.
+  (corrected 2026-09-28) The hosting and reverse-handover wiring is now built: startup
+  reclaims the profile from the background Core (`src/main.cpp:262-273`, from `1bebe1274`),
+  shutdown hands it back to the background service (`src/main.cpp:300-345`), the session
+  coordinator installs the desktop Core (`src/gui/GuiSessionCoordinator.cpp:152`, `:186-212`;
+  `ad5a3f878`), the background Core's control socket accepts the release
+  (`src/server_main.cpp:206`), and the loopback round trip is tested
+  (`tests/tst_station_handover_roundtrip.cpp`, `b22029c58`). Only live acceptance remains.
 - Plan: desktop hosting and station handover.
 
 ### G-70: Auxiliary watch callbacks and route declarations need strict lifetime bounds
@@ -1380,6 +1445,9 @@ colours for the same signal.
   integrated app/Core build and nine TCI suites passed (8.95 seconds) under
   concurrent lane load. Desktop runtime activation and live-radio acceptance
   remain open; no RF was used.
+  (corrected 2026-09-28) Desktop runtime activation is now built: the session coordinator
+  installs the desktop Core (`src/gui/GuiSessionCoordinator.cpp:152`, `:186-212`; `ad5a3f878`).
+  Only live-radio acceptance remains.
 - Plan: desktop hosting and several-device ownership.
 
 ### G-72: An open Rename dialog could bypass the transmit Setup lock
@@ -1395,6 +1463,10 @@ colours for the same signal.
   rendered and inspected. Action signal blockers now end before callbacks and
   operator labels use plain text. Real hosting/service/device action wiring is
   still in progress, so page presentation alone does not complete the plan.
+  (corrected 2026-09-28) That wiring is now built in `fb325954d`: the Remote Access page's
+  run, keep-running, start-with-computer, rename, revoke, add-device and key-backup actions
+  reach the desktop runtime (`src/gui/GuiDesktopStationRuntime.cpp:432-445`, handlers from
+  `:258`), covered by `tests/tst_gui_desktop_station_runtime.cpp`. Only live acceptance remains.
 - Plan: Remote Access controls and Setup transmit locking.
 
 ### G-73: A late heartbeat could renew an already expired transmit watch
@@ -1847,6 +1919,10 @@ colours for the same signal.
   accessory and handover suites pass (44.93 s). The pre-stop case recovers normal
   commands; the post-stop case stays fenced; both retain ownership and retry.
   Linux uid-0 and Windows execution remain outstanding.
+  (corrected 2026-09-28) Linux uid-0 execution is recorded: the immutable Linux `5c4ca88d`
+  full run, in the root verification container this entry describes and containing
+  `3c07c3f9`, passed `tst_settings_backup_export` (2.57 s), `tst_station_handover` and
+  `tst_station_handover_roundtrip`. Windows execution remains outstanding.
 - Plan: reliable settings export and portable CI evidence.
 
 ### G-90: HL2 option values are stored but never applied to hardware
@@ -1933,7 +2009,7 @@ colours for the same signal.
 - Evidence: the full Linux wording sweep reports user-visible hosting, service,
   handover and Setup messages using "station" for the serving computer.
 - Ruling basis: the standing operator wording rule calls that computer Core.
-  G-13's separate Connections heading decision remains open.
+  G-13's Connections headings are decided and built (see G-13; corrected 2026-09-28).
 - Status: signed `e51f8659` corrects those messages. Installed service names,
   scripts, wire keys and G-13 headings are preserved; exact installed-service
   strings have documented sweep exceptions. The sweep and hosting tests pass
@@ -2024,6 +2100,9 @@ colours for the same signal.
   original field order, kinds and older-minor wire equality. App/Core and all
   four integrated suites pass (5.22 s); no older-client capability leak was
   observed and no production wire changed. Updated Linux execution remains.
+  (corrected 2026-09-28) Linux execution is recorded: the immutable Linux `5c4ca88d` full run
+  contains `a85c0cd1` and passed `tst_mirror_schema` and `tst_link_surface_manifest`. Windows
+  remains.
 - Plan: complete mirror-policy and older-peer compatibility verification.
 
 ### G-100: Core refusal wording and its source scanner have drifted
@@ -2072,6 +2151,10 @@ colours for the same signal.
   CMake-generated donors and four actual Core/GUI/test source commands pass
   and report cache use. The Mac app/Core build and two representative suites
   also pass. No full Linux success or runtime-test speed improvement is claimed.
+  (checked 2026-09-28) The immutable Linux `5c4ca88d` full build contains `bcaf54cd` and
+  `10b796751` and its log shows no header-cache rejection, but that build did not enable
+  `-Winvalid-pch`, so the silence does not prove the cache was used. Linux reuse stays
+  unverified; Windows remains.
 - Plan: reliable, efficient full-suite builds across CI platforms.
 
 ### G-102: Trace and Fill colour is changed live but not saved
@@ -2444,6 +2527,9 @@ colours for the same signal.
   The original Linux run lacked this trace, so its exact sample history is
   not retrospectively established; Linux confirmation of the repair remains
   pending. Evidence: core-gui-vax-startup-{probe-red,green-focused,green-ctest}.log.
+  (corrected 2026-09-28) Linux confirmation is recorded: the `ec28eeca` Linux focused run
+  (which contains `ecbcbe90`) passed `tst_remote_vax_feeder` in 133.64 s, 30 of 30 suites
+  (core-gui-linux-ec28eeca-focused-build-and-test-graph-fixed.log). Windows remains.
 - Plan: local/remote VAX audio parity under real load.
 
 ### G-115: Docker's read-only network settings prevent traversal setup
@@ -2587,7 +2673,44 @@ colours for the same signal.
   existing-style mockup is prepared as nereus-slice-chooser-review.html;
   its Listen, Take control and Release interactions and narrow-width layout
   were checked. This is a design preview, not built app behavior.
-- Status: OPEN. Recommend visible slice-specific actions and explicit owner,
+- JJ's window rulings (2026-09-28), quoted exactly as the slice crew ledger records them,
+  each followed by the lead's recorded reading. They settle what the bottom-area approval left
+  open (flags, RX/TX applets, multiple pans) and the TX applet letter idea below:
+  - U1 "1 your recommendation but maybe not a floating pan but a layout that fits in the
+    single window": an unseen slice goes into the main window: an existing main-window pan
+    showing it comes forward, else an empty main-window pan, else the main window grows to a
+    pan layout that fits in the single window, or asks for a named destination; placing a
+    slice never opens a new floating pan.
+  - U2 "1 your recommendation": a slice already showing in a floating pan brings that floater
+    to the front and switches the main window's RX to it; nothing moves, no second copy.
+  - U3 "1 your recommendation": a pan background click keeps today's display-only meaning
+    (keyboard/scroll focus); slices are chosen by flag or tab.
+  - U4 "1 your recommendation": same-pan stacking keeps today's rule, the selected slice's
+    flag on top; listened slices keep their color with "Listening · controlled by ..." text.
+  - U5 "1 your recommendation": the existing AF slider and mute on any slice (controlled or
+    listened) change only what this device hears; labeled "Your volume" on a listened slice;
+    nobody's volume or mute changes anyone else's audio, the controller's included. So the
+    controller's AF must become per-device too (plan Task 6).
+  - U6 "1 your wording sounds fine": flag text "You control" (menu: Release); "Listening ·
+    controlled by <device>" (menu: Take control, Stop listening; tuning disabled with
+    "<device> controls this slice"); "TX" as today, red on air.
+  - U7 "stop listening to slices, its confusinf to hear slices you have no visual referance
+    to": a listened slice that loses its pan in a layout change stops being listened to on
+    this device (with a plain notice); a device hears only slices it can see. Controlled
+    slices keep today's rehoming into a remaining pan. This supersedes the design's earlier
+    "replacing or hiding a view retains listening until explicit leave" and its RX-applet
+    tabs for hidden joined slices.
+  - U8 "2 but for only slices tgat are activatyed show in the applet": the TX applet shows a
+    row of slice letter buttons, only for slices active on this device (read: slices this
+    device controls, the only ones it may transmit on); pressing one selects it for transmit
+    (idle only; refused on air).
+- Status (2026-09-28): RULED. The six policies, the bottom area and U1 to U8 are settled and
+  recorded in `2026-09-28-slice-control-and-listening-design.md`; the implementation plan is
+  `2026-09-28-slice-control-and-listening-plan.md` (17 tasks, committed `2c0c5566e`, lead
+  rulings Q1 to Q17). In progress: plan Task 1 (slice incarnation and control revision) is
+  complete on lane `codex/slice-access` in signed `efb398303`, not yet in the trunk. Nothing
+  else from this entry is built. The earlier status below is kept as history.
+- Earlier status (before 2026-09-28's rulings): OPEN. Recommend visible slice-specific actions and explicit owner,
   this-window, hosting and away labels, preserving confirmations that name
   every affected listener and the protection for an on-air transmit slice.
   A release must not revoke pairing. Current Take frees capacity by closing
@@ -2599,6 +2722,8 @@ colours for the same signal.
 - Further discussion: JJ suggested showing every existing slice letter in
   the TX applet, with a foreign-slice click showing information and a
   takeover action, but explicitly said this is not yet the chosen design.
+  (Settled 2026-09-28 by U8 above: only this device's controlled slices
+  appear in the TX applet row.)
   Compare slice transfer, slice release and freeing a shared hardware
   receiver before implementing. Receive ownership must remain distinct
   from selecting or taking transmit. A read-only investigation of the
@@ -2742,7 +2867,10 @@ colours for the same signal.
   insufficient to satisfy its existing acceptance criterion.
 - Ruling basis: JJ requires causes and suggested fixes for failures at
   actual load, without weakening assertions or waiting for a quiet machine.
-- Status: OPEN investigation. Preserve the selected-pair evidence and
+- Status (corrected 2026-09-28): test defect repaired and accepted in signed trunk merge
+  `4c0e0e585` (`ea7494545` plus root review fix `de4c657d0`); see "Accepted test correction"
+  below. The separate connected-but-no-echo run is G-127. History of the investigation:
+  preserve the selected-pair evidence and
   investigate candidate availability, nomination and observation timing.
   A source read shows the peer reports its path on its first echoed message;
   that alone does not establish the failure's cause. Evidence:
@@ -2803,7 +2931,6 @@ colours for the same signal.
   app/Core and all 30 affected suites, including banner/chrome, passed in
   191.75 seconds; log core-gui-linux-ec28eeca-focused-build-and-test-graph-fixed.log.
 - Plan: truthful active-slice presentation and empty-window recovery.
-
 
 ### G-125: Confirmed capacity Take may close a slice without fulfilling the request
 
@@ -2866,7 +2993,7 @@ colours for the same signal.
   applets and multiple open pans are unclear. Explain and review the whole
   flow before changing the UI. Approval of the bottom area alone does not
   settle these behaviors.
-- Status: OPEN design. Root recommends keeping per-window visual placement,
+- Earlier status (before 2026-09-28's rulings): OPEN design. Root recommends keeping per-window visual placement,
   per-device receive selection and Core tuning authority separate. Selecting
   an already displayed slice should focus its existing pan; a view change
   must not silently move another slice's tuning or take ownership. How to
@@ -2887,6 +3014,18 @@ colours for the same signal.
   and remaining placement questions are recorded in
   2026-09-28-slice-control-and-listening-design.md. No new layout policy or
   shared-listener UI has been implemented or approved.
+- JJ's rulings (2026-09-28; quoted in full with readings under G-118): U1 "1 your
+  recommendation but maybe not a floating pan but a layout that fits in the single window"
+  (an unseen slice goes into the main window, growing it to a single-window layout or asking
+  for a named destination, never a new floating pan); U2 "1 your recommendation" (a floating
+  slice's floater comes forward, nothing moves); U3 "1 your recommendation" (background click
+  stays display-only); U7 "stop listening to slices, its confusinf to hear slices you have no
+  visual referance to" (a listened slice that loses its pan stops being listened to on this
+  device, with a notice; controlled slices keep today's rehoming). U7 supersedes the proposal's
+  retained hidden audio above.
+- Status (2026-09-28): RULED, not built. Plan Task 16 of
+  `2026-09-28-slice-control-and-listening-plan.md` carries acceptance written from these
+  rulings.
 - Plan: complete shared-slice UX across panes, flags and applets.
 
 ### G-127: Connected IPv6 traversal can finish without an echoed payload
@@ -2900,7 +3039,7 @@ colours for the same signal.
   station/client/rendezvous logs.
 - Ruling basis: JJ requires failures at actual load to be investigated at
   their cause without increasing time limits or dismissing intermittent runs.
-- Status: OPEN causal investigation. Preserve the failed run. Add bounded
+- Earlier status (before the cause was found): OPEN causal investigation. Preserve the failed run. Add bounded
   diagnostic payload/transport observations to reproduce whether readiness,
   send, delivery or echo stalled, then repair the proved cause. The existing
   ninety-second deadline remains unchanged. A scratch helper traced ready,
@@ -2911,6 +3050,34 @@ colours for the same signal.
   retransmits, so ICE connection alone cannot prove payload delivery.
   Evidence and the next boundary probe are preserved in
   core-gui-ipv6-no-echo-probe-report.md. No production fix is claimed.
+- Cause (found 2026-09-28): a product bug in `LibDataChannelMediaTransport::drainCallbacks()`,
+  not a lost fragment. Under load one 2 ms drain on the answering station could collect the
+  newly opened display channel together with the first 60000-byte message on it. The drain
+  delivered the message first and settled readiness last, so the station's echo handler ran
+  while the transport was not yet ready, `submitDisplay()` returned Refused, and the echo was
+  never sent; the client then reported "No echo in time." at the unchanged 90 s deadline.
+- Fix: signed `94366ef0c` settles readiness (and emits `ready()`) before delivering any display,
+  raw I/Q or audio data from the same drain
+  (`src/core/session/media/LibDataChannelMediaTransport.cpp:1602-1619`); signed `ac5d803a9`
+  narrows the ordering contract to display, I/Q and audio (transmit keepalives are not ordered
+  against ready) in `IMediaTransport.h` and `2026-09-20-remote-media-control-v1.md`. Both are in
+  the trunk through signed merge `136634fc7`. No wire change; the harness assertion and the 90 s
+  deadline are unchanged.
+- Evidence: deterministic test `readyPrecedesMessagesThatArriveWithIt`
+  (`tests/tst_media_transport.cpp:1085`) failed 5 of 5 before the fix and passed 5 of 5 after.
+  On the Linux traversal harness, the frozen library had 3 no-echo failures in 190 valid
+  attempts, each tracing message received while not ready, echo Refused, then ready; the fixed
+  library (the frozen objects relinked with the one fixed file) had 0 in 160 attempts, under
+  real and generated load. Report: core-gui-ipv6-no-echo-cause-report.md; artifacts in
+  ipv6-no-echo-cause/.
+- Remaining: the retained original run had no payload trace, so its exact history cannot be
+  re-derived; its signature (connected IPv6 host pair, station connected, no echo at 90 s)
+  matches all three reproductions. The Linux fix run used the de4c657 sources (drain code
+  identical to the committed one) with one relinked file, not a full Linux build of the branch.
+  By design a single unreliable 60000-byte message can still be lost on a truly lossy path;
+  a future lossy fixture would need a retry or a smaller message.
+- Status (2026-09-28): cause found and fixed in the trunk (`94366ef0c`, `ac5d803a9`, merged in
+  `136634fc7`).
 - Plan: reliable R5 direct IPv6 media transport and traversal acceptance.
 
 ### G-128: Pi upgrade rollback does not restore its saved daemon settings
@@ -2965,6 +3132,45 @@ colours for the same signal.
   core-gui-pi4-47d16744-model-repair.log, core-gui-pi4-47d16744-model-restart.log
   and core-gui-pi4-47d16744-install-report.md.
 - Plan: complete NR3 parity in deployed Core builds.
+
+### G-130: RADE end-of-over callsigns are neither sent nor decoded
+
+- Evidence (source read 2026-09-28 at trunk `136634fc7`): on receive,
+  `RadeChannel::processIq` drops every end-of-over frame (`src/core/RadeChannel.cpp:566-572`:
+  "For I2 we drop the EOO frame"). The `m_textChannel` member (`src/core/RadeChannel.h:372`) is
+  never constructed and nothing emits `rxTextDecoded`, so the connection at
+  `src/models/RadioModel.cpp:12625` never fires and no speaker callsign reaches the VFO flag or
+  the decoded-callsign report. On transmit, nothing in `src/` calls `rade_tx_eoo`. `RadeText`
+  wraps radae_nopy's raw 7-bit ASCII helpers, not the text format FreeDV sends on the air, so
+  even a wired path would not interoperate with FreeDV stations. CLAUDE.md's RADE lines
+  overstate this.
+- Ruling (JJ, 2026-09-28, "1 your recomendation"): RADE end-of-over callsigns are built in this
+  Core/GUI PR.
+- Status (2026-09-28): ruled; in progress. A lane is dispatched (brief
+  `claude-lane-rade-eoo-brief.md`: send and decode, interoperable with FreeDV V1, a vendored RADE
+  revision that does not force the V2 weights into the build, and a transmit tail that respects
+  every unkey path). Its branch `codex/rade-eoo` has no commits yet. Nothing is built.
+- Plan: 3R RADE requirements (the lane's commits carry the RADE requirement IDs from the 3R
+  plan).
+
+### G-131: The two relay link-loss-while-keyed rows have no test infrastructure
+
+- Evidence: `tst_tx_link_loss_each_path` skips its through-TURN and relay-floor rows
+  (`tests/tst_tx_link_loss_each_path.cpp:453`, `:465`). Signed `ac5d803a9` replaced the stale
+  "not built yet" skip text with the real gap: the relay transports exist, but nothing can cut a
+  live relayed path while a key is held. `tests/tools/fake_turn_server.py` has no control to
+  stop relaying an allocation; the `StandInRelay` is private to `tst_relay_session.cpp` and
+  forwards until destroyed; this file's session (`RemoteAudioSessionHarness`) runs over the
+  loopback link, not through the rendezvous service; and the Docker traversal harness keys over
+  its paths only to measure false stops, never severing a path with the key held.
+  Report: core-gui-ipv6-no-echo-cause-report.md (2026-09-28 follow-up section).
+- Ruling basis: no new ruling is needed. The two rows are the relayed paths' existing
+  unkey-on-link-loss checks in that test; they stay skipped with the true reason until the
+  infrastructure exists, and their assertions do not change.
+- Status (2026-09-28): OPEN, not started. Needed: a keyable Core and window session through the
+  service, a sever control added to the fake TURN server, and the stand-in relay moved to a
+  shared test header with its own sever control; then enable the two rows.
+- Plan: R5 restrictive-network transmit deadline (with G-55 and G-70).
 
 ## How this addendum is kept
 
