@@ -2357,6 +2357,50 @@ private slots:
     // Inhibit) disturb the holder of transmit: another device's change is
     // asked while the holder is unkeyed, refused with the on-air words while
     // it transmits, and applied at once with transmit unheld.
+    void transmitRegionProceedRechecksOnAir_data()
+    {
+        QTest::addColumn<bool>("remove");
+        QTest::addColumn<bool>("onAir");
+        QTest::newRow("write-off-air") << false << false;
+        QTest::newRow("write-now-on-air") << false << true;
+        QTest::newRow("remove-off-air") << true << false;
+        QTest::newRow("remove-now-on-air") << true << true;
+    }
+
+    void transmitRegionProceedRechecksOnAir()
+    {
+        QFETCH(bool, remove);
+        QFETCH(bool, onAir);
+        Shared s(2, 5, kTransmitter);
+        allowTransmit(s.core);
+        const QString key = QStringLiteral("BandPlanRegion");
+        s.core.settings->setValue(key, QStringLiteral("8"));
+        TransmitHolder::KeyRequest take;
+        take.deviceId = s.b.key.fingerprint();
+        QCOMPARE(s.core.server->transmitHolder()->askKey(take).verdict, KeyingVerdict::Admit);
+        s.appA->sendText(SessionMessages::encode(remove
+            ? SessionMessages::settingsRemove(key)
+            : SessionMessages::settingsWrite(key, QStringLiteral("3"), QStringLiteral("region"))));
+        const QJsonObject ask = waitForLast(s.appA, QStringLiteral("confirm.request"), 0);
+        QCOMPARE(ask.value(QStringLiteral("forSettingsKey")).toString(), key);
+        QCOMPARE(ask.value(QStringLiteral("change")).toObject().value(QStringLiteral("label")).toString(),
+                 QStringLiteral("Transmit region"));
+        QCOMPARE(s.core.settings->value(key).toString(), QStringLiteral("8"));
+        // State-only simulation; no actual keying or RF.
+        s.core.model->transmitModel().setMox(onAir);
+        const QJsonObject answer = s.proceed(s.appA, ask.value(QStringLiteral("id")).toInteger());
+        QCOMPARE(answer.value(QStringLiteral("accepted")).toBool(), !onAir);
+        if (onAir) {
+            QCOMPARE(answer.value(QStringLiteral("reason")).toString(), RadioModel::onAirReason());
+            QCOMPARE(s.core.settings->value(key).toString(), QStringLiteral("8"));
+        } else if (remove) {
+            QVERIFY(!s.core.settings->contains(key));
+        } else {
+            QCOMPARE(s.core.settings->value(key).toString(), QStringLiteral("3"));
+        }
+        s.core.model->transmitModel().setMox(false);
+    }
+
     void theTransmittersCoreSettingsAskTheHolder()
     {
         Shared s(2, 5, kTransmitter);

@@ -872,6 +872,59 @@ private slots:
     // echoed to every session, moves the Core's own plan and sends one
     // catalogue delta; an unknown name is refused with the Core's value; a
     // removal returns the Core to ARRL (US).
+    void transmitRegionWritesAreValidated_data()
+    {
+        QTest::addColumn<QString>("value");
+        QTest::newRow("text") << QStringLiteral("invalid");
+        QTest::newRow("fraction") << QStringLiteral("8.5");
+        QTest::newRow("wrap-positive") << QStringLiteral("264");
+        QTest::newRow("wrap-negative") << QStringLiteral("-248");
+        QTest::newRow("empty") << QString();
+        QTest::newRow("past-last") << QStringLiteral("24");
+    }
+
+    void transmitRegionWritesAreValidated()
+    {
+        QFETCH(QString, value);
+        Core core;
+        const QString key = QStringLiteral("BandPlanRegion");
+        core.settings->setValue(key, QStringLiteral("8"));
+        QVERIFY(core.connect(kSessionProtocolMinor));
+        core.app->sendText(SessionMessages::encode(SessionMessages::settingsWrite(
+            key, value, QStringLiteral("region-invalid"))));
+        QTRY_VERIFY(!settingsMessagesFor(*core.app, key).isEmpty());
+        QCOMPARE(settingsMessagesFor(*core.app, key).last().first(), QStringLiteral("settings.reject"));
+        QCOMPARE(core.settings->value(key).toString(), QStringLiteral("8"));
+    }
+
+    void transmitRegionWaitsWhileOnAir()
+    {
+        Core core;
+        const QString key = QStringLiteral("BandPlanRegion");
+        core.settings->setValue(key, QStringLiteral("8"));
+        QVERIFY(core.connect(kSessionProtocolMinor));
+        // No hardware: only the mirrored transmit latch represents on-air state.
+        core.model->transmitModel().setMox(true);
+        QVERIFY(core.model->stationOnAirRefusal(nullptr));
+        core.app->sendText(SessionMessages::encode(SessionMessages::settingsWrite(
+            key, QStringLiteral("3"), QStringLiteral("region-on-air"))));
+        QTRY_VERIFY(!settingsMessagesFor(*core.app, key).isEmpty());
+        QCOMPARE(settingsMessagesFor(*core.app, key).last().first(), QStringLiteral("settings.reject"));
+        QCOMPARE(core.settings->value(key).toString(), QStringLiteral("8"));
+        core.app->sendText(SessionMessages::encode(SessionMessages::settingsRemove(key)));
+        QTRY_COMPARE(settingsMessagesFor(*core.app, key).size(), 2);
+        QCOMPARE(settingsMessagesFor(*core.app, key).last().first(), QStringLiteral("settings.reject"));
+        QCOMPARE(core.settings->value(key).toString(), QStringLiteral("8"));
+        core.model->transmitModel().setMox(false);
+        for (int region = 0; region < 24; ++region) {
+            core.app->sendText(SessionMessages::encode(SessionMessages::settingsWrite(
+                key, QString::number(region), QStringLiteral("region-valid"))));
+            QTRY_COMPARE(core.settings->value(key).toInt(), region);
+        }
+        core.app->sendText(SessionMessages::encode(SessionMessages::settingsRemove(key)));
+        QTRY_VERIFY(!core.settings->contains(key));
+    }
+
     void aDevicePicksTheStationsPlan()
     {
         Core core;
@@ -985,30 +1038,32 @@ private slots:
         // Then parity Task 21's stationRadiosVersion.
         // Then parity Task 28's txDisplayVersion, R-R3-21's displayClockVersion and
         // the Task 28 fix wave's controlChannelVersion.
-        QCOMPARE(updates.at(updates.size() - 19).name, QByteArray("stationCatalogVersion"));
-        QCOMPARE(updates.at(updates.size() - 18).name, QByteArray("displayExtrasVersion"));
-        QCOMPARE(updates.at(updates.size() - 17).name, QByteArray("transmitSettingsVersion"));
-        QCOMPARE(updates.at(updates.size() - 16).name, QByteArray("bandSelectVersion"));
-        QCOMPARE(updates.at(updates.size() - 15).name, QByteArray("meterReadingsVersion"));
-        QCOMPARE(updates.at(updates.size() - 14).name, QByteArray("dspInfoVersion"));
-        QCOMPARE(updates.at(updates.size() - 13).name, QByteArray("recordStreamVersion"));
-        QCOMPARE(updates.at(updates.size() - 12).name, QByteArray("stationRadiosVersion"));
-        QCOMPARE(updates.at(updates.size() - 11).name, QByteArray("txDisplayVersion"));
-        QCOMPARE(updates.at(updates.size() - 10).name, QByteArray("displayClockVersion"));
-        QCOMPARE(updates.at(updates.size() - 9).name, QByteArray("controlChannelVersion"));
+        QCOMPARE(updates.at(updates.size() - 21).name, QByteArray("stationCatalogVersion"));
+        QCOMPARE(updates.at(updates.size() - 20).name, QByteArray("displayExtrasVersion"));
+        QCOMPARE(updates.at(updates.size() - 19).name, QByteArray("transmitSettingsVersion"));
+        QCOMPARE(updates.at(updates.size() - 18).name, QByteArray("bandSelectVersion"));
+        QCOMPARE(updates.at(updates.size() - 17).name, QByteArray("meterReadingsVersion"));
+        QCOMPARE(updates.at(updates.size() - 16).name, QByteArray("dspInfoVersion"));
+        QCOMPARE(updates.at(updates.size() - 15).name, QByteArray("recordStreamVersion"));
+        QCOMPARE(updates.at(updates.size() - 14).name, QByteArray("stationRadiosVersion"));
+        QCOMPARE(updates.at(updates.size() - 13).name, QByteArray("txDisplayVersion"));
+        QCOMPARE(updates.at(updates.size() - 12).name, QByteArray("displayClockVersion"));
+        QCOMPARE(updates.at(updates.size() - 11).name, QByteArray("controlChannelVersion"));
         // Then parity Task 32's txMonitorAudioVersion.
-        QCOMPARE(updates.at(updates.size() - 8).name, QByteArray("txMonitorAudioVersion"));
+        QCOMPARE(updates.at(updates.size() - 10).name, QByteArray("txMonitorAudioVersion"));
         // Then iPhone plan Task 22 / parity Task 20's stationFreedvVersion.
-        QCOMPARE(updates.at(updates.size() - 7).name, QByteArray("stationFreedvVersion"));
+        QCOMPARE(updates.at(updates.size() - 9).name, QByteArray("stationFreedvVersion"));
         // iPhone app plan Task 29: then mediaReplaceVersion,
         // controlSwitchVersion and relayAllowed.
-        QCOMPARE(updates.at(updates.size() - 6).name, QByteArray("mediaReplaceVersion"));
-        QCOMPARE(updates.at(updates.size() - 5).name, QByteArray("controlSwitchVersion"));
-        QCOMPARE(updates.at(updates.size() - 4).name, QByteArray("relayAllowed"));
+        QCOMPARE(updates.at(updates.size() - 8).name, QByteArray("mediaReplaceVersion"));
+        QCOMPARE(updates.at(updates.size() - 7).name, QByteArray("controlSwitchVersion"));
+        QCOMPARE(updates.at(updates.size() - 6).name, QByteArray("relayAllowed"));
         // Preserve supportBundleVersion, then append the unpublished floors.
-        QCOMPARE(updates.at(updates.size() - 3).name, QByteArray("supportBundleVersion"));
-        QCOMPARE(updates.at(updates.size() - 2).name, QByteArray("mediaTunnelVersion"));
-        QCOMPARE(updates.last().name, QByteArray("mediaRelayRoutingVersion"));
+        QCOMPARE(updates.at(updates.size() - 5).name, QByteArray("supportBundleVersion"));
+        QCOMPARE(updates.at(updates.size() - 4).name, QByteArray("mediaTunnelVersion"));
+        QCOMPARE(updates.at(updates.size() - 3).name, QByteArray("mediaRelayRoutingVersion"));
+        QCOMPARE(updates.at(updates.size() - 2).name, QByteArray("remoteIqVersion"));
+        QCOMPARE(updates.last().name, QByteArray("txModMonitorVersion"));
         QCOMPARE(StationCapabilities::fromUpdates(updates).stationCatalogVersion, 1);
         StationCapabilities older;
         older.stationCatalogVersion = 1;

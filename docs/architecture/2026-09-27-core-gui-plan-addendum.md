@@ -12,6 +12,23 @@ status, and the plan task or requirement ID it belongs to.
 
 ## Open questions (JJ has not ruled)
 
+### G-50: Phone Setup has no counterpart for desktop-local services and file actions
+
+- Evidence: the TCI Server page has twenty local controls/actions plus status,
+  separate from four implemented Core TCI toggles. Diagnostics Export All/Import
+  All operate on a desktop settings file; Logs Refresh/Clear operate on the local
+  view. The phone controller confirms that no phone-native TCI server or local
+  file/log action contract exists. Relabeling these as Core actions would change
+  their meaning.
+- Ruling: OPEN. JJ was asked whether the phone should show these as unavailable
+  with an explanation, retaining Core TCI and Core diagnostics, or whether phone
+  equivalents should be built in this effort.
+- Status: the exact inventory and disabled wording are recorded in the Setup
+  lane. Core description format and supported controls continue; omitted controls
+  and empty pages do not count as completed parity. General Region/Extended stay
+  visible with their current unavailable reasons until their implementation lands.
+- Plan: iPhone D16, Core Setup-description tasks 43-46 and phone renderer task 58.
+
 ### G-04: ATT on TX changes take effect at the next key, not at once
 
 Thetis applies a step-attenuator-on-TX change immediately (`console.cs:19078`). NereusSDR
@@ -622,8 +639,13 @@ colours for the same signal.
   digital modes, carrier-only TUNE/CW, with XIT included. Malformed or out-of-range
   stored regions are rejected before enum conversion. New regressions reproduced
   eleven failures before the fix; four guard/filter suites pass and the corrected
-  XIT suite passes with explicit whole-passband expectations. Region activation
-  still needs validated Core writes and the remote capability gate; enabling the
+  XIT suite passes with explicit whole-passband expectations. Core region writes
+  now reject malformed/out-of-range values and both writes/removals wait for RX.
+  Changes affecting another transmit holder use shared confirmation, with the
+  on-air check repeated at proceed. Seven network regressions failed before this
+  fix; the final catalog and confirmation suites pass 2/2 (12.17 s), including
+  all 24 accepted regions and four confirmation write/remove cases. Region activation
+  still needs the remote capability gate and local control wiring; enabling the
   combo alone would be unsafe. Thetis's current `Init60mChannels` has only UK, US and
   default cases, so missing extra country-channel arrays are not established; Nereus's
   explicit UK/Japan channelization is a native exception. The isolated parity lane is only
@@ -755,6 +777,33 @@ colours for the same signal.
   capture injects trace data; full-window media delivery, shared view, DUP, XIT and
   hardware/RF acceptance remain open.
 - Plan: remote-window transmit display parity and verification.
+
+### G-51: Remote TCI audio processing can fall behind under variable host load
+
+- Evidence: a paired 30-second test with eight TCI clients per receiver at 384 kHz
+  stereo Float32 accepted and decoded all 7,500 input packets per receiver, but one
+  run saw 96/102 ms worker wake gaps and discarded about 2.31/2.35 million client
+  history frames. Another run on the same implementation had no history loss.
+- Ruling: JJ requires failures at real load to be diagnosed, not hidden by relaxed
+  deadlines or waiting for the machine to quiet down.
+- Status: OPEN investigation. Four alternating yield/no-yield runs under concurrent
+  builds all retained input packets and history; both variants had roughly 5-6 ms
+  maximum wake gaps. Removing the explicit scheduler yield is not an established
+  explanation for the severe run. The bounded worker implementation and lifetime
+  tests continue separately; these passing repeats do not erase that finding.
+- Plan: remote-window TCI audio parity and real-load acceptance.
+
+### G-52: Catalog capability-order fixture missed two integrated appended fields
+
+- Evidence: the full catalog suite expected its tail to end at
+  `mediaRelayRoutingVersion`, although integrated Core capabilities also append
+  `remoteIqVersion` and `txModMonitorVersion`. The wire fixtures already covered
+  both; this separate catalog test had not been included in those focused runs.
+- Ruling: ordinary verification repair under JJ's complete-and-test instruction.
+  Preserve the exact order assertion and add the actual appended fields.
+- Status: corrected fixture passes in the full catalog suite. Production wire
+  order is unchanged; no assertion or deadline was removed.
+- Plan: integrated Core protocol verification.
 
 ## How this addendum is kept
 

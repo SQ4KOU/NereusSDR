@@ -1,3 +1,5 @@
+// 2026-09-27: validate transmit-region writes and shared confirmations.
+// J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 // =================================================================
 // src/core/settings/SettingsProxyServer.cpp  (NereusSDR)
 // =================================================================
@@ -193,7 +195,8 @@ SettingsProxyServer::SharedFamily SettingsProxyServer::sharedFamilyOf(const QStr
     // Merge of the trunk into the transmit lane: the transmitter's own
     // settings, which disturb the holder of transmit.
     if (key == QLatin1String("TxInhibitMonitorEnabled")
-        || key == QLatin1String("TxInhibitMonitorReversed") || key == QLatin1String("RxOnly")) {
+        || key == QLatin1String("TxInhibitMonitorReversed") || key == QLatin1String("RxOnly")
+        || key == QLatin1String("BandPlanRegion")) {
         return SharedFamily::Transmitter;
     }
     // Trunk merge of remote transmit (R-R3-46, parity Task 14 joined to

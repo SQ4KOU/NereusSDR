@@ -1,3 +1,5 @@
+// 2026-09-27: validate transmit-region writes and shared confirmations.
+// J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 // Modification history (NereusSDR):
 // 2026-09-27: Confirm existing paired devices through the full code exchange.
 // J.J. Boyd (KG4VCF), AI-assisted implementation via OpenAI Codex.
@@ -658,6 +660,7 @@
 #include "core/session/SliceMarker.h"
 #include "core/SliceOwnership.h"
 #include "core/MoxController.h"
+#include "core/safety/BandPlanGuard.h"
 #include "core/safety/RemoteTxWatchdog.h"
 #include "core/safety/TransmitHolder.h"
 #include "core/TwoToneController.h"
@@ -5616,6 +5619,17 @@ void StationServer::handleSettingsWrite(SessionTransport* transport,
 
 QString StationServer::bandPlanRefusal(const QString& key, const QVariant& value) const
 {
+    // G42: validate the effective TX region before it reaches persistent
+    // settings. RadioModel also rejects invalid values already on disk.
+    if (key == QLatin1String("BandPlanRegion")) {
+        bool ok = false;
+        const int region = value.toString().toInt(&ok);
+        if (!ok || region < static_cast<int>(safety::Region::Australia)
+            || region > static_cast<int>(safety::Region::Germany)) {
+            return QStringLiteral("Choose one of this Core's transmit regions.");
+        }
+        return {};
+    }
     if (key != QLatin1String(kBandPlanNameKey) || m_radioModel.isNull()) {
         return {};
     }
@@ -5670,6 +5684,22 @@ bool StationServer::applySettingsWrite(SessionTransport* transport, const Sessio
                                        QString* refusal)
 {
     const QString key = QString::fromUtf8(message.objectKey);
+    if (key == QLatin1String("BandPlanRegion")) {
+        QString reason = transmitSettingOnAirRefusal(key);
+        if (reason.isEmpty()) {
+            reason = bandPlanRefusal(key, message.updates.first().value);
+        }
+        if (!reason.isEmpty()) {
+            if (refusal) {
+                *refusal = reason;
+            } else {
+                const QVariant restored = m_settings.value(key);
+                send(transport, SessionMessages::settingsReject(
+                    key, restored.isValid(), restored.toString(), reason));
+            }
+            return false;
+        }
+    }
     const SettingsApplyResult result =
         m_settingsServer->applyInboundWrite(key, message.updates.first().value,
                                             message.originTag);
@@ -7462,6 +7492,12 @@ bool StationServer::receiveOnlyRefusesKey(SessionTransport* transport,
 QString StationServer::transmitSettingOnAirRefusal(const QString& key) const
 {
     QString reason;
+    // Changing a transmit region, including removing it to restore the
+    // default, always waits for RX, regardless of who holds transmit.
+    if (key == QLatin1String("BandPlanRegion") && m_radioModel) {
+        m_radioModel->stationOnAirRefusal(&reason);
+        return reason;
+    }
     if (m_radioModel.isNull() || !isTransmitSettingKeyAcceptedOffAir(key)) {
         return reason;
     }

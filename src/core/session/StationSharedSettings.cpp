@@ -1,3 +1,5 @@
+// 2026-09-27: validate transmit-region writes and shared confirmations.
+// J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 // no-port-check: NereusSDR-original.
 // =================================================================
 // src/core/session/StationSharedSettings.cpp  (NereusSDR)
@@ -807,6 +809,8 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
             transmitter();
             if (key == QLatin1String("RxOnly")) {
                 label = QStringLiteral("Receive Only");
+            } else if (key == QLatin1String("BandPlanRegion")) {
+                label = QStringLiteral("Transmit region");
             } else if (SettingsProxyServer::isAlexHpfTransmitSwitchKey(key)) {
                 // Trunk merge of remote transmit: the Alex tab's three
                 // transmit high-pass switches, in the Alex tab's words.
@@ -1368,6 +1372,16 @@ SessionMessage StationServer::proceedSharedSetting(SessionTransport* transport,
                                                    const SessionMessage& invoke)
 {
     const QByteArray requester = question.device;
+    // The radio may have keyed after the question was shown. Recheck
+    // before applying a region change or removal and before any side effect.
+    if (question.held == ConfirmStep::Held::SettingsWrite
+        && question.original.objectKey == "BandPlanRegion") {
+        const QString onAir = transmitSettingOnAirRefusal(QStringLiteral("BandPlanRegion"));
+        if (!onAir.isEmpty()) {
+            return SessionMessages::commandResult(invoke.commandVerb, invoke.commandId,
+                                                  false, onAir, {});
+        }
+    }
     const SharedChange now = classifyShared(question.original, requester);
     // Ruling 7.6: the target moved since the question was asked, whoever
     // moved it (a write that already set the asked-for value is a move).
