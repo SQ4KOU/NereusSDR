@@ -29,6 +29,9 @@
 //                 Core takes them; no on-air rule in either window, as in
 //                 Thetis. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code.
+//   2026-09-28 - Named native table groups, headers, rows and cells for
+//                 closed version-6 Setup description parity. J.J. Boyd
+//                 (KG4VCF), AI-assisted via OpenAI Codex.
 // =================================================================
 
 //=================================================================
@@ -268,6 +271,7 @@ void AntennaAlexAntennaControlTab::buildBlockTxStrip(QVBoxLayout* outerLayout)
 void AntennaAlexAntennaControlTab::buildTxGrid(QBoxLayout* outerLayout)
 {
     auto* grp = new QGroupBox(tr("TX Antenna per Band"), this);
+    grp->setProperty("nereusSetupId", "hardware.antenna.txRows");
     m_txGridGroup = grp;
     auto* layout = new QVBoxLayout(grp);
     layout->setContentsMargins(6, 6, 6, 6);
@@ -279,8 +283,10 @@ void AntennaAlexAntennaControlTab::buildTxGrid(QBoxLayout* outerLayout)
     auto* hdrBand = new QLabel(tr("Band"), grp);
     hdrBand->setFixedWidth(48);
     hdrRow->addWidget(hdrBand);
+    int txColumn = 0;
     for (const char* lbl : {"Ant 1", "Ant 2", "Ant 3"}) {
         auto* h = new QLabel(tr(lbl), grp);
+        h->setProperty("nereusAntennaColumn", QStringLiteral("tx%1").arg(++txColumn));
         h->setAlignment(Qt::AlignCenter);
         hdrRow->addWidget(h, 1);
     }
@@ -294,6 +300,8 @@ void AntennaAlexAntennaControlTab::buildTxGrid(QBoxLayout* outerLayout)
         rowLayout->setSpacing(4);
 
         auto* bandLbl = new QLabel(bandLabel(band), grp);
+        bandLbl->setProperty("nereusAntennaBand", b);
+        bandLbl->setProperty("nereusAntennaRowLabel", true);
         bandLbl->setFixedWidth(48);
         rowLayout->addWidget(bandLbl);
 
@@ -304,6 +312,8 @@ void AntennaAlexAntennaControlTab::buildTxGrid(QBoxLayout* outerLayout)
 
         for (int a = 0; a < 3; ++a) {
             auto* rb = new QRadioButton(grp);
+            rb->setProperty("nereusAntennaBand", b);
+            rb->setProperty("nereusAntennaColumn", QStringLiteral("tx%1").arg(a + 1));
             rb->setChecked((a + 1) == currentAnt);
             rb->setToolTip(tr("TX Ant %1 for %2").arg(a + 1).arg(bandLabel(band)));
             grpBtn->addButton(rb, a + 1);  // button id = 1-based ant number
@@ -341,6 +351,7 @@ void AntennaAlexAntennaControlTab::buildTxGrid(QBoxLayout* outerLayout)
 void AntennaAlexAntennaControlTab::buildRxGrid(QBoxLayout* outerLayout)
 {
     auto* grp = new QGroupBox(tr("RX1 / RX2 Antenna per Band"), this);
+    grp->setProperty("nereusSetupId", "hardware.antenna.rxRows");
     auto* layout = new QVBoxLayout(grp);
     layout->setContentsMargins(6, 6, 6, 6);
     layout->setSpacing(2);
@@ -353,6 +364,7 @@ void AntennaAlexAntennaControlTab::buildRxGrid(QBoxLayout* outerLayout)
     hdrRow->addWidget(hdrBand);
     // RX1 sub-header
     auto* rx1Hdr = new QLabel(tr("RX1"), grp);
+    rx1Hdr->setProperty("nereusAntennaColumnGroup", "RX1");
     rx1Hdr->setAlignment(Qt::AlignCenter);
     hdrRow->addWidget(rx1Hdr, 3);
     // separator
@@ -362,6 +374,7 @@ void AntennaAlexAntennaControlTab::buildRxGrid(QBoxLayout* outerLayout)
     hdrRow->addWidget(sep);
     // RX-only sub-header
     auto* rxOnlyHdr = new QLabel(tr("RX-only"), grp);
+    rxOnlyHdr->setProperty("nereusAntennaColumnGroup", "RX-only");
     rxOnlyHdr->setAlignment(Qt::AlignCenter);
     hdrRow->addWidget(rxOnlyHdr, 3);
     layout->addLayout(hdrRow);
@@ -372,8 +385,10 @@ void AntennaAlexAntennaControlTab::buildRxGrid(QBoxLayout* outerLayout)
     hdrRow2->setContentsMargins(0, 0, 0, 0);
     hdrRow2->addSpacing(48);  // band label space
     // RX1 column: always "1" / "2" / "3" — these stay generic.
+    int rxColumn = 0;
     for (const char* lbl : {"1", "2", "3"}) {
         auto* h = new QLabel(tr(lbl), grp);
+        h->setProperty("nereusAntennaColumn", QStringLiteral("rx%1").arg(++rxColumn));
         h->setAlignment(Qt::AlignCenter);
         hdrRow2->addWidget(h, 1);
     }
@@ -384,6 +399,7 @@ void AntennaAlexAntennaControlTab::buildRxGrid(QBoxLayout* outerLayout)
     // RX-only column: SKU-specific. applySkuProfile() fills these.
     for (int i = 0; i < 3; ++i) {
         auto* h = new QLabel(grp);           // text set later by applySkuProfile()
+        h->setProperty("nereusAntennaColumn", QStringLiteral("rxOnly%1").arg(i + 1));
         h->setAlignment(Qt::AlignCenter);
         hdrRow2->addWidget(h, 1);
         m_rxOnlyColumnLabels[i] = h;
@@ -398,6 +414,8 @@ void AntennaAlexAntennaControlTab::buildRxGrid(QBoxLayout* outerLayout)
         rowLayout->setSpacing(4);
 
         auto* bandLbl = new QLabel(bandLabel(band), grp);
+        bandLbl->setProperty("nereusAntennaBand", b);
+        bandLbl->setProperty("nereusAntennaRowLabel", true);
         bandLbl->setFixedWidth(48);
         rowLayout->addWidget(bandLbl);
 
@@ -407,6 +425,8 @@ void AntennaAlexAntennaControlTab::buildRxGrid(QBoxLayout* outerLayout)
         const int currentRx1 = rxAntOf(band);  // 1-based
         for (int a = 0; a < 3; ++a) {
             auto* rb = new QRadioButton(grp);
+            rb->setProperty("nereusAntennaBand", b);
+            rb->setProperty("nereusAntennaColumn", QStringLiteral("rx%1").arg(a + 1));
             rb->setChecked((a + 1) == currentRx1);
             rb->setToolTip(tr("RX1 Ant %1 for %2").arg(a + 1).arg(bandLabel(band)));
             rx1Grp->addButton(rb, a + 1);
@@ -438,6 +458,8 @@ void AntennaAlexAntennaControlTab::buildRxGrid(QBoxLayout* outerLayout)
         const int currentRxOnly = rxOnlyAntOf(band);  // 1-based
         for (int a = 0; a < 3; ++a) {
             auto* rb = new QRadioButton(grp);
+            rb->setProperty("nereusAntennaBand", b);
+            rb->setProperty("nereusAntennaColumn", QStringLiteral("rxOnly%1").arg(a + 1));
             rb->setChecked((a + 1) == currentRxOnly);
             // Tooltip will be set by applySkuProfile() with SKU-specific label.
             rxOnlyGrp->addButton(rb, a + 1);

@@ -1,4 +1,4 @@
-# Setup description versions 1–5
+# Setup description versions 1–6
 
 The Core sends the desktop's built Setup pages as JSON strings on the read-only
 `setup` mirror object (`SetupDescription`). It has one string property per
@@ -51,8 +51,9 @@ desktop's exact text, including an empty string when the desktop has none.
 Every control has exactly one `binding`: `setting` (an AppSettings key routed
 by `classifySettingsKey`), `property` (a mirrored object and property),
 `command` (a station verb), or `phone` (a key the phone keeps locally). The
-version-3 Settings Validation panel instead has its one closed
-`settingsHygiene` binding; it does not extend those generic binding rules. A
+version-3 Settings Validation panel and version-6 antenna tables have their
+own closed `settingsHygiene` and `antennaRows` bindings; neither extends
+those generic binding rules. A
 station binding has `applies: "live"`; the only other value,
 `subscription`, is for display keys a client puts into its endpoint
 subscription. A `toggle` backed by a station `setting` requires exactly
@@ -121,9 +122,41 @@ command or result binding. The actual peer must separately declare
 nothing. A V3 peer still receives the older controls with their existing
 semantics. The Core filters every control above the peer's negotiated
 description version, drops empty sections and pages, and caps an unknown
-future declaration at version 5. Display and Appearance retain version-4
-ceilings; PA has a version-5 ceiling, and other categories retain their
-version-3 ceiling. No mirror field or ordinal changes.
+future declaration at version 6. Hardware has a version-6 ceiling, PA a
+version-5 ceiling, Display and Appearance version-4 ceilings; the other
+categories on this source retain version 3.
+No mirror field or ordinal changes.
+
+Version 6 adds exactly two closed `kind: "table"` controls to the partial
+Hardware Config > Antenna / ALEX page: `hardware.antenna.txRows` and
+`hardware.antenna.rxRows`. Each has `binding.antennaRows` with
+`object: "alexAntennas"` and mode `tx` or `rx`, and requires
+`radioAntennaRowsVersion: 1`. The TX table also requires a fresh off-air
+`txState`; the RX table has no added transmit-permission gate. The Core
+omits both tables for a peer without the row feature and omits the whole
+partial Hardware page on a board without Alex filters. V1–V5 peers retain
+the scalar controls only. A description never grants an edit by itself.
+For a peer that declared the row feature, the supported board's static table
+shape remains described while its radio is disconnected. The live row
+capability is then absent; current-session capability, radio identity, and
+row-command checks must all allow an edit before a cell can be changed.
+
+Each table has the 14 `Band` rows from 160m through XVTR, in enum order.
+The TX columns are Ant 1/2/3 (`field: "tx"`). RX has three RX1 columns
+(`field: "rx"`, labels 1/2/3) and three RX-only columns
+(`field: "rxOnly"`, labels from the current Core SKU). The RX table's
+required `columnGroups` are exactly RX1 over rx1/rx2/rx3 and RX-only over
+rxOnly1/rxOnly2/rxOnly3; TX has no column groups. Each row's `cells` carry
+the native button tooltips in column order. These are fixed display and
+source facts, not a command-template language. The source is the existing
+three 14-integer CSV mirrors `txAntennas`, `rxAntennas`, and
+`rxOnlyAntennas`; RX-only value 0 means no button selected. The blocked
+TX-port mirrors disable columns 2 and 3. A phone checks all values,
+capability, canonical connected MAC and session freshness together, then
+uses only the existing `setAlexTxAntennaForRadio` or
+`setAlexRxAntennaForRadio` typed verb for a clicked band/port. The Core
+rechecks identity and authority and sends the accepted mirror or refusal.
+The Setup description revision is not a per-row state revision.
 
 Version 5 adds only two optional PA Values telemetry readouts. The closed
 bindings are `{"telemetry":{"object":"radio","name":"paCurrentAmps"}}`

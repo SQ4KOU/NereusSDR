@@ -26,6 +26,7 @@
 
 #include <memory>
 #include <cmath>
+#include <utility>
 
 using namespace NereusSDR;
 
@@ -228,6 +229,133 @@ QJsonObject resolveTciArguments(const QJsonObject& control, bool changed,
 class SetupDescriptionServiceTest : public QObject {
     Q_OBJECT
 private slots:
+    void antennaRowsRequireVersionSixAndAlex()
+    {
+        SetupDescriptionService service;
+        service.setRadioContext(BoardCapsTable::forBoard(HPSDRHW::Hermes),
+                                HPSDRModel::HERMES);
+        const QJsonObject hardware = service.category(QStringLiteral("hardware"));
+        QCOMPARE(hardware.value("version"), QJsonValue(6));
+        const QJsonArray sections = hardware.value("pages").toArray().first().toObject()
+            .value("sections").toArray();
+        QCOMPARE(sections.size(), 1);
+        const QJsonArray controls = sections.first().toObject().value("controls").toArray();
+        QCOMPARE(controls.size(), 8);
+        const QJsonObject tx = controls.at(6).toObject();
+        const QJsonObject rx = controls.at(7).toObject();
+        QCOMPARE(tx.value("id"), QJsonValue("hardware.antenna.txRows"));
+        QCOMPARE(rx.value("id"), QJsonValue("hardware.antenna.rxRows"));
+        QVERIFY(SetupDescriptionService::validateAntennaRowsTable(tx, HPSDRModel::HERMES));
+        QVERIFY(SetupDescriptionService::validateAntennaRowsTable(rx, HPSDRModel::HERMES));
+        for (int version = 1; version <= 5; ++version) {
+            const QJsonObject older = QJsonDocument::fromJson(
+                SetupDescriptionService::fitCategoryForVersion(service.hardware(), version).toUtf8())
+                .object();
+            const QJsonArray oldControls = older.value("pages").toArray().first().toObject()
+                .value("sections").toArray().first().toObject().value("controls").toArray();
+            QCOMPARE(oldControls.size(), 6);
+        }
+        service.setRadioContext(BoardCapsTable::forBoard(HPSDRHW::HermesLite),
+                                HPSDRModel::HERMESLITE);
+        QVERIFY(service.hardware().isEmpty());
+    }
+
+    void antennaRowsRejectChangedEnvelopeAndProjectSkuLabels()
+    {
+        SetupDescriptionService service;
+        service.setRadioContext(BoardCapsTable::forBoard(HPSDRHW::Hermes),
+                                HPSDRModel::HERMES);
+        const auto tables = [&service] {
+            const QJsonArray controls = service.category(QStringLiteral("hardware"))
+                .value("pages").toArray().first().toObject().value("sections").toArray()
+                .first().toObject().value("controls").toArray();
+            return std::pair{controls.at(controls.size() - 2).toObject(),
+                             controls.last().toObject()};
+        };
+        const auto [tx, rx] = tables();
+        QCOMPARE(tx.value("rows").toArray().size(), 14);
+        QCOMPARE(rx.value("rows").toArray().size(), 14);
+        QCOMPARE(tx.value("columns").toArray().size(), 3);
+        QCOMPARE(rx.value("columns").toArray().size(), 6);
+        QVERIFY(!tx.contains("columnGroups"));
+        QCOMPARE(rx.value("columnGroups").toArray().size(), 2);
+        const auto reject = [](QJsonObject changed, HPSDRModel model) {
+            QVERIFY(!SetupDescriptionService::validateAntennaRowsTable(changed, model));
+        };
+        QJsonObject bad = tx;
+        bad.insert("command", QJsonObject{{"verb", "setAlexTxAntennaForRadio"}});
+        reject(bad, HPSDRModel::HERMES);
+        bad = tx;
+        bad.insert("columnGroups", rx.value("columnGroups"));
+        reject(bad, HPSDRModel::HERMES);
+        bad = rx;
+        QJsonArray duplicateColumns = bad.value("columns").toArray();
+        duplicateColumns.append(duplicateColumns.first());
+        bad.insert("columns", duplicateColumns);
+        reject(bad, HPSDRModel::HERMES);
+        bad = tx;
+        QJsonObject gate = bad.value("gate").toObject();
+        gate.remove("offAir");
+        bad.insert("gate", gate);
+        reject(bad, HPSDRModel::HERMES);
+        bad = rx;
+        bad.remove("columnGroups");
+        reject(bad, HPSDRModel::HERMES);
+        bad = rx;
+        QJsonArray groups = bad.value("columnGroups").toArray();
+        groups[0] = QJsonObject{{"label", "RX-only"},
+                                {"columns", QJsonArray{"rx1", "rx2", "rx3"}}};
+        bad.insert("columnGroups", groups);
+        reject(bad, HPSDRModel::HERMES);
+        bad = rx;
+        QJsonObject binding = bad.value("binding").toObject();
+        binding.insert("antennaRows", QJsonObject{{"object", "alexAntennas"},
+                                                   {"mode", "tx"}});
+        bad.insert("binding", binding);
+        reject(bad, HPSDRModel::HERMES);
+        bad = rx;
+        QJsonArray rows = bad.value("rows").toArray();
+        QJsonObject row = rows.at(0).toObject();
+        row.insert("band", 1);
+        rows[0] = row;
+        bad.insert("rows", rows);
+        reject(bad, HPSDRModel::HERMES);
+        bad = rx;
+        rows = bad.value("rows").toArray();
+        rows.append(rows.first());
+        bad.insert("rows", rows);
+        reject(bad, HPSDRModel::HERMES);
+        bad = rx;
+        rows = bad.value("rows").toArray();
+        row = rows.at(0).toObject();
+        QJsonArray cells = row.value("cells").toArray();
+        QJsonObject cell = cells.at(0).toObject();
+        cell.insert("tooltip", "Wrong port");
+        cells[0] = cell;
+        row.insert("cells", cells);
+        rows[0] = row;
+        bad.insert("rows", rows);
+        reject(bad, HPSDRModel::HERMES);
+
+        service.setRadioContext(BoardCapsTable::forBoard(HPSDRHW::Hermes),
+                                HPSDRModel::ANAN100);
+        const auto [classicTx, classicRx] = tables();
+        QVERIFY(SetupDescriptionService::validateAntennaRowsTable(classicTx,
+                                                                   HPSDRModel::ANAN100));
+        QVERIFY(SetupDescriptionService::validateAntennaRowsTable(classicRx,
+                                                                   HPSDRModel::ANAN100));
+        QVERIFY(classicRx.value("columns") != rx.value("columns"));
+        QVERIFY(!SetupDescriptionService::validateAntennaRowsTable(classicRx,
+                                                                    HPSDRModel::HERMES));
+        service.setRadioContext(BoardCapsTable::forBoard(HPSDRHW::Saturn),
+                                HPSDRModel::ANAN_G2);
+        const auto [g2Tx, g2Rx] = tables();
+        QVERIFY(SetupDescriptionService::validateAntennaRowsTable(g2Tx,
+                                                                   HPSDRModel::ANAN_G2));
+        QVERIFY(SetupDescriptionService::validateAntennaRowsTable(g2Rx,
+                                                                   HPSDRModel::ANAN_G2));
+        QVERIFY(g2Rx.value("columns") != classicRx.value("columns"));
+    }
     void appearancePublishesTenPhoneColoursWithAlpha()
     {
         SetupDescriptionService service;
@@ -934,7 +1062,11 @@ private slots:
         SetupDescriptionService service;
         QVERIFY(service.hardware().isEmpty());
         service.setBoardCapabilities(BoardCapsTable::forBoard(HPSDRHW::Hermes));
-        const QJsonObject hardware = service.category(QStringLiteral("hardware"));
+        const auto v1Hardware = [&service] {
+            return QJsonDocument::fromJson(SetupDescriptionService::fitCategoryForVersion(
+                service.hardware(), 1).toUtf8()).object();
+        };
+        const QJsonObject hardware = v1Hardware();
         QCOMPARE(hardware.value("version").toInt(), 1);
         QCOMPARE(hardware.value("category").toObject().value("coverage"), QJsonValue("partial"));
         const QJsonArray pages = hardware.value("pages").toArray();
@@ -977,7 +1109,7 @@ private slots:
 
         service.setRadioContext(BoardCapsTable::forBoard(HPSDRHW::Hermes),
                                 HPSDRModel::ANAN100);
-        const QJsonArray classic = service.category(QStringLiteral("hardware"))
+        const QJsonArray classic = v1Hardware()
             .value("pages").toArray().first().toObject().value("sections").toArray()
             .first().toObject().value("controls").toArray();
         QCOMPARE(classic.size(), 7);
@@ -1016,11 +1148,11 @@ private slots:
         QCOMPARE(service.revision(), hiddenRevision);
         service.setRadioContext(BoardCapsTable::forBoard(HPSDRHW::Hermes),
                                 HPSDRModel::ANAN100);
-        QCOMPARE(service.category(QStringLiteral("hardware")).value("pages").toArray()
+        QCOMPARE(v1Hardware().value("pages").toArray()
                      .first().toObject().value("sections").toArray().first().toObject()
                      .value("controls").toArray(), classic);
         service.setBoardCapabilities(BoardCapsTable::forBoard(HPSDRHW::Hermes));
-        QCOMPARE(service.category(QStringLiteral("hardware")), hardware);
+        QCOMPARE(v1Hardware(), hardware);
 
         const quint32 beforeRetire = service.revision();
         service.setBoardCapabilities(BoardCapsTable::forBoard(HPSDRHW::HermesLite));
@@ -1028,7 +1160,7 @@ private slots:
         QVERIFY(service.category(QStringLiteral("hardware")).isEmpty());
         QVERIFY(service.revision() > beforeRetire);
         service.setBoardCapabilities(BoardCapsTable::forBoard(HPSDRHW::Hermes));
-        QCOMPARE(service.category(QStringLiteral("hardware")), hardware);
+        QCOMPARE(v1Hardware(), hardware);
 
         WireCore described(HPSDRHW::Hermes);
         QVERIFY(described.connect({{QByteArrayLiteral("setupDescription"), 1}}));
@@ -1393,7 +1525,8 @@ private slots:
         check(3, kSessionProtocolMinor, 3);
         check(4, kSessionProtocolMinor, 4);
         check(5, kSessionProtocolMinor, 5);
-        check(9, kSessionProtocolMinor, 5);
+        check(6, kSessionProtocolMinor, 6);
+        check(9, kSessionProtocolMinor, 6);
         check(2, quint16(kRadioIdentitySessionProtocolMinor - 1), 0);
         check(3, quint16(kRadioIdentitySessionProtocolMinor - 1), 0);
     }

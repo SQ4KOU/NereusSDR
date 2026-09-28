@@ -35,6 +35,7 @@
 #include <QGroupBox>
 #include <QFormLayout>
 #include <QLabel>
+#include <QRadioButton>
 #include <QSpinBox>
 #include <QSlider>
 #include <QTableWidget>
@@ -439,7 +440,9 @@ private slots:
         AntennaAlexAntennaControlTab page(&radio);
         SetupDescriptionService service;
         service.setRadioContext(radio.boardCapabilities(), sku);
-        const QJsonObject hardware = service.category(QStringLiteral("hardware"));
+        const QJsonObject hardware = QJsonDocument::fromJson(
+            SetupDescriptionService::fitCategoryForVersion(service.hardware(), 1).toUtf8())
+            .object();
         if (!radio.boardCapabilities().hasAlexFilters) {
             QVERIFY(hardware.isEmpty());
             return;
@@ -474,6 +477,200 @@ private slots:
             QCOMPARE(ext2Control.value("label"), QJsonValue("Rx BYPASS on Tx"));
             QCOMPARE(ext2Control.value("tooltip"),
                      QJsonValue("Enable RX 1 IN on Alex or Ext 2 on ANAN during transmit."));
+        }
+    }
+
+    void describedAntennaRowsMatchNativeGrid_data()
+    {
+        QTest::addColumn<int>("model");
+        QTest::newRow("Hermes") << int(HPSDRModel::HERMES);
+        QTest::newRow("ANAN-100") << int(HPSDRModel::ANAN100);
+        QTest::newRow("ANAN-G2") << int(HPSDRModel::ANAN_G2);
+        QTest::newRow("HL2-no-Alex") << int(HPSDRModel::HERMESLITE);
+    }
+
+    void describedAntennaRowsMatchNativeGrid()
+    {
+        QFETCH(int, model);
+        const auto sku = static_cast<HPSDRModel>(model);
+        RadioModel radio;
+        radio.setHpsdrModelForTest(sku);
+        AntennaAlexAntennaControlTab page(&radio);
+        SetupDescriptionService service;
+        service.setRadioContext(radio.boardCapabilities(), sku);
+        const QJsonObject hardware = service.category(QStringLiteral("hardware"));
+        if (!radio.boardCapabilities().hasAlexFilters) {
+            QVERIFY(hardware.isEmpty());
+            return;
+        }
+        QCOMPARE(hardware.value("version"), QJsonValue(6));
+        const QJsonArray described = controls(hardware);
+        const QJsonObject tx = described.at(described.size() - 2).toObject();
+        const QJsonObject rx = described.last().toObject();
+        QCOMPARE(tx.value("id"), QJsonValue("hardware.antenna.txRows"));
+        QCOMPARE(rx.value("id"), QJsonValue("hardware.antenna.rxRows"));
+        const auto verify = [&page, sku](const QJsonObject& table) {
+            QVERIFY(SetupDescriptionService::validateAntennaRowsTable(table, sku));
+            auto* group = qobject_cast<QGroupBox*>(bySetupId(page,
+                table.value("id").toString()));
+            QVERIFY(group != nullptr);
+            QCOMPARE(group->title(), table.value("label").toString());
+            QCOMPARE(group->toolTip(), table.value("tooltip").toString());
+            const QJsonArray columns = table.value("columns").toArray();
+            const QJsonArray rows = table.value("rows").toArray();
+            QCOMPARE(rows.size(), 14);
+            QStringList describedColumns;
+            for (const QJsonValue& rawColumn : columns) {
+                describedColumns << rawColumn.toObject().value("id").toString();
+            }
+            QStringList nativeColumns;
+            for (QLabel* label : group->findChildren<QLabel*>()) {
+                const QString id = label->property("nereusAntennaColumn").toString();
+                if (!id.isEmpty()) { nativeColumns << id; }
+            }
+            QCOMPARE(nativeColumns, describedColumns);
+            for (const QJsonValue& rawColumn : columns) {
+                const QJsonObject column = rawColumn.toObject();
+                QList<QLabel*> headers;
+                for (QLabel* label : group->findChildren<QLabel*>()) {
+                    if (label->property("nereusAntennaColumn")
+                        == column.value("id").toVariant()) { headers.append(label); }
+                }
+                QCOMPARE(headers.size(), 1);
+                QCOMPARE(headers.first()->text(), column.value("label").toString());
+            }
+            const QJsonArray columnGroups = table.value("columnGroups").toArray();
+            QStringList nativeGroups;
+            for (QLabel* label : group->findChildren<QLabel*>()) {
+                const QString title = label->property("nereusAntennaColumnGroup").toString();
+                if (!title.isEmpty()) { nativeGroups << title; }
+            }
+            QStringList describedGroups;
+            for (const QJsonValue& rawGroup : columnGroups) {
+                describedGroups << rawGroup.toObject().value("label").toString();
+            }
+            QCOMPARE(nativeGroups, describedGroups);
+            for (const QJsonValue& rawGroup : columnGroups) {
+                const QJsonObject header = rawGroup.toObject();
+                QList<QLabel*> matches;
+                for (QLabel* label : group->findChildren<QLabel*>()) {
+                    if (label->property("nereusAntennaColumnGroup")
+                        == header.value("label").toVariant()) { matches.append(label); }
+                }
+                QCOMPARE(matches.size(), 1);
+                QCOMPARE(matches.first()->text(), header.value("label").toString());
+            }
+            for (int band = 0; band < rows.size(); ++band) {
+                const QJsonObject row = rows.at(band).toObject();
+                QCOMPARE(row.value("band"), QJsonValue(band));
+                QList<QLabel*> labels;
+                for (QLabel* label : group->findChildren<QLabel*>()) {
+                    if (label->property("nereusAntennaRowLabel").toBool()
+                        && label->property("nereusAntennaBand").toInt() == band) {
+                        labels.append(label);
+                    }
+                }
+                QCOMPARE(labels.size(), 1);
+                QCOMPARE(labels.first()->text(), row.value("label").toString());
+                const QJsonArray cells = row.value("cells").toArray();
+                QCOMPARE(cells.size(), columns.size());
+                QStringList nativeCellOrder;
+                for (QRadioButton* button : group->findChildren<QRadioButton*>()) {
+                    if (button->property("nereusAntennaBand").toInt() == band) {
+                        nativeCellOrder << button->property("nereusAntennaColumn").toString();
+                    }
+                }
+                QCOMPARE(nativeCellOrder, describedColumns);
+                for (int i = 0; i < cells.size(); ++i) {
+                    const QJsonObject cell = cells.at(i).toObject();
+                    QCOMPARE(cell.value("column"), columns.at(i).toObject().value("id"));
+                    QList<QRadioButton*> buttons;
+                    for (QRadioButton* button : group->findChildren<QRadioButton*>()) {
+                        if (button->property("nereusAntennaBand").toInt() == band
+                            && button->property("nereusAntennaColumn")
+                                == cell.value("column").toVariant()) {
+                            buttons.append(button);
+                        }
+                    }
+                    QCOMPARE(buttons.size(), 1);
+                    QCOMPARE(buttons.first()->toolTip(), cell.value("tooltip").toString());
+                }
+            }
+        };
+        verify(tx);
+        verify(rx);
+        auto* rxGroup = qobject_cast<QGroupBox*>(bySetupId(page,
+            QStringLiteral("hardware.antenna.rxRows")));
+        QVERIFY(rxGroup != nullptr);
+        for (int band = 0; band < 14; ++band) {
+            int selected = 0;
+            for (QRadioButton* button : rxGroup->findChildren<QRadioButton*>()) {
+                if (button->property("nereusAntennaBand").toInt() == band
+                    && button->property("nereusAntennaColumn").toString().startsWith(
+                        QStringLiteral("rxOnly")) && button->isChecked()) {
+                    ++selected;
+                }
+            }
+            QCOMPARE(selected, radio.alexController().rxOnlyAnt(static_cast<Band>(band)) == 0
+                                    ? 0 : 1);
+        }
+        auto* txGroup = qobject_cast<QGroupBox*>(bySetupId(page,
+            QStringLiteral("hardware.antenna.txRows")));
+        QVERIFY(txGroup != nullptr);
+        radio.alexControllerMutable().setBlockTxAnt2(true);
+        radio.alexControllerMutable().setBlockTxAnt3(true);
+        for (QRadioButton* button : txGroup->findChildren<QRadioButton*>()) {
+            const QString column = button->property("nereusAntennaColumn").toString();
+            QCOMPARE(button->isEnabled(), column == QLatin1String("tx1"));
+        }
+    }
+
+    void describedAntennaRowsRetargetOnSameBoardSkuChange()
+    {
+        RadioModel radio;
+        radio.setHpsdrModelForTest(HPSDRModel::HERMES);
+        AntennaAlexAntennaControlTab page(&radio);
+        SetupDescriptionService service;
+        service.setRadioContext(radio.boardCapabilities(), HPSDRModel::HERMES);
+        const quint32 before = service.revision();
+        const QString oldDescription = service.hardware();
+        radio.setHpsdrModelForTest(HPSDRModel::ANAN100);
+        radio.currentRadioChanged(radio.currentRadioInfo());
+        service.setRadioContext(radio.boardCapabilities(), HPSDRModel::ANAN100);
+        QVERIFY(service.revision() > before);
+        QVERIFY(service.hardware() != oldDescription);
+        const QJsonArray described = controls(service.category(QStringLiteral("hardware")));
+        const QJsonObject rx = described.last().toObject();
+        QVERIFY(SetupDescriptionService::validateAntennaRowsTable(rx, HPSDRModel::ANAN100));
+        auto* group = qobject_cast<QGroupBox*>(bySetupId(page,
+            QStringLiteral("hardware.antenna.rxRows")));
+        QVERIFY(group != nullptr);
+        const QJsonArray columns = rx.value("columns").toArray();
+        for (int i = 3; i < 6; ++i) {
+            const QString id = columns.at(i).toObject().value("id").toString();
+            QLabel* header = nullptr;
+            for (QLabel* label : group->findChildren<QLabel*>()) {
+                if (label->property("nereusAntennaColumn").toString() == id) {
+                    header = label;
+                    break;
+                }
+            }
+            QVERIFY(header != nullptr);
+            QCOMPARE(header->text(), columns.at(i).toObject().value("label").toString());
+            for (int band = 0; band < 14; ++band) {
+                QRadioButton* button = nullptr;
+                for (QRadioButton* candidate : group->findChildren<QRadioButton*>()) {
+                    if (candidate->property("nereusAntennaBand").toInt() == band
+                        && candidate->property("nereusAntennaColumn").toString() == id) {
+                        button = candidate;
+                        break;
+                    }
+                }
+                QVERIFY(button != nullptr);
+                const QJsonObject row = rx.value("rows").toArray().at(band).toObject();
+                QCOMPARE(button->toolTip(), row.value("cells").toArray().at(i).toObject()
+                             .value("tooltip").toString());
+            }
         }
     }
 

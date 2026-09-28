@@ -68,6 +68,7 @@ Covered JSON files: `general.json`, `hardware.json`, `pa.json`, `test.json`, `di
 2026-09-28 - J.J. Boyd (KG4VCF), with AI-assisted transformation via OpenAI Codex: PA Values readout descriptions.
 2026-09-28 - J.J. Boyd (KG4VCF), with AI-assisted transformation via OpenAI Codex: ANAN-G2E PA bypass description.
 2026-09-28 - J.J. Boyd (KG4VCF), with AI-assisted transformation via OpenAI Codex: partial Display spectrum, meter, and TX analyzer settings description.
+2026-09-28 - J.J. Boyd (KG4VCF), with AI-assisted transformation via OpenAI Codex: 14-band TX and RX antenna table captions and tooltips, plus SKU-specific RX-only labels.
 2026-09-28 - J.J. Boyd (KG4VCF), with AI-assisted transformation via OpenAI Codex: PA Current and DC Voltage telemetry readout descriptions.
 2026-09-28 - J.J. Boyd (KG4VCF), with AI-assisted transformation via OpenAI Codex: partial Appearance Colors & Theme swatch description.
 2026-09-28 - J.J. Boyd (KG4VCF), with AI-assisted transformation via OpenAI Codex: PA raw-power and forward/reverse voltage readout descriptions using existing native PA Values labels.
