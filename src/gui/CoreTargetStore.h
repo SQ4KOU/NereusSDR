@@ -19,6 +19,11 @@
 // last good addresses (`lastAddresses`, most recent first), tried before
 // its saved address on the next connect; a record without any is written
 // exactly as before.
+//
+// Desktop code-only pairing: ConnectionTargets/V3 is now authoritative.
+// It admits a verified paired Core with no direct URL; existing V2 records
+// migrate losslessly. V2 and V1 remain older-app rollback documents and
+// follow later edits and forgets of records they already contain.
 // =================================================================
 
 #pragma once

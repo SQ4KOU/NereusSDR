@@ -970,7 +970,9 @@ void StationClient::connectToStation(const QUrl& url, const QString& token,
             }
         }
     }
-    m_dialPlan.append(url);
+    if (!url.isEmpty()) {
+        m_dialPlan.append(url);
+    }
     m_planToken = token;
     // iPhone app plan Task 29 (R-IOS-16; link section 21.1): a paired Core
     // is raced: every address at once (IPv6 first), and the internet
@@ -4450,7 +4452,7 @@ StationClient::CommandOutcome StationClient::requestStreamCentre(int sliceId, do
     }
     return sendCommand("requestStreamCentre", sliceId,
                        { intArgument("sliceId", sliceId), doubleArgument("centreHz", centreHz) },
-                       QStringLiteral("the C-Tune centre change"));
+                       QStringLiteral("the C-Tune center change"));
 }
 
 StationClient::CommandOutcome StationClient::requestConfigureTgxl(const QString& host, quint16 port)
@@ -4891,7 +4893,7 @@ void StationClient::cancelSettingsBackupExport(quint32 operationId)
 {
     if (m_settingsBackupExport
         && (operationId == 0 || operationId == m_settingsBackupExport->operationId)) {
-        finishSettingsBackupExport(false, QStringLiteral("Settings export cancelled."), {}, true);
+        finishSettingsBackupExport(false, QStringLiteral("Settings export canceled."), {}, true);
     }
 }
 

@@ -32,7 +32,8 @@ using namespace NereusSDR;
 
 namespace {
 
-constexpr auto kTargetKey = "ConnectionTargets/V2";
+constexpr auto kTargetKey = "ConnectionTargets/V3";
+constexpr auto kV2Key = "ConnectionTargets/V2";
 constexpr auto kV1Key = "ConnectionTargets/V1";
 
 SavedCoreTarget makeTarget(const QString& id, const QString& token = QStringLiteral("token"))
@@ -50,7 +51,7 @@ SavedCoreTarget makeTarget(const QString& id, const QString& token = QStringLite
 }
 
 QString documentFor(const QJsonArray& cores, const QString& selectedId = QStringLiteral("local"),
-                    int version = 2)
+                    int version = 3)
 {
     return QString::fromUtf8(QJsonDocument(QJsonObject{
         {QStringLiteral("version"), version},
@@ -98,6 +99,78 @@ class TstCoreTargetStore : public QObject {
     Q_OBJECT
 
 private slots:
+    void pairedServiceOnlyTargetIsRemoteAndPersistsWithoutChangingV2()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("settings.xml"));
+        AppSettings settings(path);
+        const QString oldDocument = documentFor(QJsonArray{jsonTarget(QStringLiteral("existing"))},
+                                                QStringLiteral("existing"), 2);
+        settings.setValue(QLatin1String(kV2Key), oldDocument);
+        CoreTargetStore store(settings);
+        QVERIFY(store.load());
+        SavedCoreTarget paired = makeTarget(QStringLiteral("service-only"), QString());
+        paired.connection.url.clear();
+        paired.connection.fingerprint.clear();
+        paired.connection.identityFingerprint = someIdentity();
+        paired.connection.rendezvousId = QStringLiteral("abcdefghijklmnopqrstuvwxyz");
+        QVERIFY(paired.connection.isRemote());
+        QVERIFY(store.upsert(paired));
+        QVERIFY(store.select(paired.id));
+        QCOMPARE(settings.value(QLatin1String(kV2Key)).toString(), oldDocument);
+        QVERIFY(settings.contains(QLatin1String(kTargetKey)));
+
+        AppSettings reloadedSettings(path);
+        reloadedSettings.load();
+        CoreTargetStore reloaded(reloadedSettings);
+        QVERIFY(reloaded.load());
+        QCOMPARE(reloaded.selectedId(), paired.id);
+        QCOMPARE(reloaded.target(paired.id)->connection.url, QString());
+        QCOMPARE(reloaded.target(paired.id)->connection.identityFingerprint,
+                 paired.connection.identityFingerprint);
+        QCOMPARE(reloaded.target(paired.id)->connection.rendezvousId,
+                 paired.connection.rendezvousId);
+    }
+
+    void invalidServiceOnlyTargetAndAuthoritativeV3FailClosed()
+    {
+        QTemporaryDir directory;
+        AppSettings settings(directory.filePath(QStringLiteral("settings.xml")));
+        settings.setValue(QLatin1String(kV2Key),
+                          documentFor(QJsonArray{jsonTarget(QStringLiteral("old"))},
+                                      QStringLiteral("old"), 2));
+        CoreTargetStore store(settings);
+        QVERIFY(store.load());
+        SavedCoreTarget target = makeTarget(QStringLiteral("service"));
+        target.connection.url.clear();
+        target.connection.token.clear();
+        target.connection.fingerprint.clear();
+        target.connection.identityFingerprint = someIdentity();
+        target.connection.rendezvousId = QStringLiteral("abcdefghijklmnopqrstuvwxyz");
+        QVERIFY(store.upsert(target));
+        for (void (*mutate)(SavedCoreTarget&) : {
+            +[](SavedCoreTarget& candidate) { candidate.connection.identityFingerprint.clear(); },
+            +[](SavedCoreTarget& candidate) { candidate.connection.rendezvousId = QStringLiteral("bad"); },
+            +[](SavedCoreTarget& candidate) { candidate.connection.token = QStringLiteral("secret"); },
+            +[](SavedCoreTarget& candidate) { candidate.connection.allowUnpinned = true; },
+        }) {
+            SavedCoreTarget invalid = target;
+            mutate(invalid);
+            QVERIFY(!store.upsert(invalid));
+            QCOMPARE(store.target(target.id)->connection.identityFingerprint,
+                     target.connection.identityFingerprint);
+        }
+        const QString previousV2 = settings.value(QLatin1String(kV2Key)).toString();
+        settings.setValue(QLatin1String(kTargetKey), QStringLiteral("{ malformed"));
+        CoreTargetStore reloaded(settings);
+        QString error;
+        QVERIFY(!reloaded.load(&error));
+        QVERIFY(!error.isEmpty());
+        QVERIFY(reloaded.targets().isEmpty());
+        QCOMPARE(settings.value(QLatin1String(kV2Key)).toString(), previousV2);
+    }
+
     void autoConnectIsPerCoreAndDefaultsOnForExistingRecords()
     {
         QTemporaryDir directory;
@@ -127,7 +200,7 @@ private slots:
 
     void newKeyIsOperatorLocal()
     {
-        for (const char* key : {kV1Key, kTargetKey}) {
+        for (const char* key : {kV1Key, kV2Key, kTargetKey}) {
             QCOMPARE(classifySettingsKey(QString::fromLatin1(key)), SettingsScope::OperatorLocal);
             SettingsProxy proxy;
             QVERIFY(!proxy.handlesKey(QString::fromLatin1(key)));
@@ -441,13 +514,17 @@ private slots:
         QCOMPARE(plain->connection.fingerprint, QStringLiteral("pin"));
         QVERIFY(!plain->connection.allowUnpinned);
 
-        // Written as V2 on disk; V1 is left exactly as it was.
+        // V3 is authoritative; V2 is a readable rollback copy and V1 is
+        // left exactly as it was during migration.
         AppSettings onDisk(path);
         onDisk.load();
         QVERIFY(onDisk.contains(QLatin1String(kTargetKey)));
         QCOMPARE(onDisk.value(QLatin1String(kV1Key)).toString(), v1);
-        const QJsonObject v2 = QJsonDocument::fromJson(
+        const QJsonObject v3 = QJsonDocument::fromJson(
             onDisk.value(QLatin1String(kTargetKey)).toString().toUtf8()).object();
+        QCOMPARE(v3.value(QStringLiteral("version")).toInt(), 3);
+        const QJsonObject v2 = QJsonDocument::fromJson(
+            onDisk.value(QLatin1String(kV2Key)).toString().toUtf8()).object();
         QCOMPARE(v2.value(QStringLiteral("version")).toInt(), 2);
         for (const QJsonValue& core : v2.value(QStringLiteral("cores")).toArray()) {
             QCOMPARE(core.toObject().value(QStringLiteral("identity")).toString(), QString());
@@ -531,6 +608,81 @@ private slots:
         QVERIFY(v1().value(QStringLiteral("cores")).toArray().isEmpty());
     }
 
+    void v2FollowsExistingRecordsButKeepsNewServiceTargetsOut()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        AppSettings settings(directory.filePath(QStringLiteral("settings.xml")));
+        QJsonObject first = jsonTarget(QStringLiteral("first"));
+        first.insert(QStringLiteral("token"), QStringLiteral("old-secret"));
+        const QString original = documentFor(QJsonArray{first}, QStringLiteral("first"), 2);
+        settings.setValue(QLatin1String(kV2Key), original);
+        CoreTargetStore store(settings);
+        QVERIFY(store.load());
+        QCOMPARE(settings.value(QLatin1String(kV2Key)).toString(), original);
+
+        SavedCoreTarget newTarget = makeTarget(QStringLiteral("service"), QString());
+        newTarget.connection.url.clear();
+        newTarget.connection.fingerprint.clear();
+        newTarget.connection.identityFingerprint = someIdentity();
+        newTarget.connection.rendezvousId = QStringLiteral("abcdefghijklmnopqrstuvwxyz");
+        QVERIFY(store.upsert(newTarget));
+        QCOMPARE(settings.value(QLatin1String(kV2Key)).toString(), original);
+
+        SavedCoreTarget edited = *store.target(QStringLiteral("first"));
+        edited.connection.token = QStringLiteral("new-secret");
+        QVERIFY(store.upsert(edited));
+        QJsonObject older = QJsonDocument::fromJson(
+            settings.value(QLatin1String(kV2Key)).toString().toUtf8()).object();
+        QCOMPARE(older.value(QStringLiteral("cores")).toArray().size(), 1);
+        QCOMPARE(older.value(QStringLiteral("cores")).toArray().first().toObject()
+                     .value(QStringLiteral("token")), QJsonValue("new-secret"));
+        QVERIFY(!QJsonDocument(older).toJson().contains("old-secret"));
+
+        edited.connection.url.clear();
+        edited.connection.token.clear();
+        edited.connection.fingerprint.clear();
+        edited.connection.identityFingerprint = someIdentity();
+        edited.connection.rendezvousId = QStringLiteral("abcdefghijklmnopqrstuvwxyz");
+        QVERIFY(store.upsert(edited));
+        older = QJsonDocument::fromJson(
+            settings.value(QLatin1String(kV2Key)).toString().toUtf8()).object();
+        QVERIFY(older.value(QStringLiteral("cores")).toArray().isEmpty());
+        QCOMPARE(older.value(QStringLiteral("selectedId")), QJsonValue("local"));
+        QVERIFY(store.remove(QStringLiteral("service")));
+        QVERIFY(store.remove(QStringLiteral("first")));
+        QVERIFY(!settings.value(QLatin1String(kV2Key)).toString().contains(QStringLiteral("new-secret")));
+    }
+
+    void failedV3MutationRestoresBothOlderDocuments()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString blocker = directory.filePath(QStringLiteral("not-a-file"));
+        QVERIFY(QDir().mkpath(blocker));
+        AppSettings settings(blocker);
+        const QString v2 = documentFor(QJsonArray{jsonTarget(QStringLiteral("one"))},
+                                       QStringLiteral("one"), 2);
+        const QString v3 = documentFor(QJsonArray{jsonTarget(QStringLiteral("one"))},
+                                       QStringLiteral("one"), 3);
+        settings.setValue(QLatin1String(kV2Key), v2);
+        const QString v1 = documentFor(QJsonArray{jsonV1Target(QStringLiteral("one"))},
+                                       QStringLiteral("one"), 1);
+        settings.setValue(QLatin1String(kV1Key), v1);
+        settings.setValue(QLatin1String(kTargetKey), v3);
+        CoreTargetStore store(settings);
+        QVERIFY(store.load());
+        SavedCoreTarget changed = *store.target(QStringLiteral("one"));
+        changed.connection.token = QStringLiteral("new-secret");
+        QString error;
+        QVERIFY(!store.upsert(changed, &error));
+        QVERIFY(!error.isEmpty());
+        QCOMPARE(settings.value(QLatin1String(kV2Key)).toString(), v2);
+        QCOMPARE(settings.value(QLatin1String(kV1Key)).toString(), v1);
+        QCOMPARE(settings.value(QLatin1String(kTargetKey)).toString(), v3);
+        QCOMPARE(store.target(QStringLiteral("one"))->connection.token, QStringLiteral("secret"));
+    }
+
     // A V1 that cannot be read, beside a V2, is removed at the next change:
     // nothing could keep a forgotten Core's token out of it.
     void anUnreadableV1BesideV2IsRemovedAtTheNextChange()
@@ -538,7 +690,7 @@ private slots:
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
         AppSettings settings(directory.filePath(QStringLiteral("settings.xml")));
-        settings.setValue(QLatin1String(kTargetKey),
+        settings.setValue(QLatin1String(kV2Key),
                           documentFor(QJsonArray{jsonTarget(QStringLiteral("one"))},
                                       QStringLiteral("one"), 2));
         settings.setValue(QLatin1String(kV1Key), QStringLiteral("{ not a list"));
@@ -547,6 +699,21 @@ private slots:
         QVERIFY(settings.contains(QLatin1String(kV1Key)));
         QVERIFY(store.remove(QStringLiteral("one")));
         QVERIFY(!settings.contains(QLatin1String(kV1Key)));
+    }
+
+    void anUnreadableV2BesideV3IsRemovedAtTheNextChange()
+    {
+        QTemporaryDir directory;
+        AppSettings settings(directory.filePath(QStringLiteral("settings.xml")));
+        settings.setValue(QLatin1String(kTargetKey),
+                          documentFor(QJsonArray{jsonTarget(QStringLiteral("one"))},
+                                      QStringLiteral("one")));
+        settings.setValue(QLatin1String(kV2Key), QStringLiteral("{ not a list"));
+        CoreTargetStore store(settings);
+        QVERIFY(store.load());
+        QVERIFY(settings.contains(QLatin1String(kV2Key)));
+        QVERIFY(store.remove(QStringLiteral("one")));
+        QVERIFY(!settings.contains(QLatin1String(kV2Key)));
     }
 
     // A V1 list that cannot be read writes nothing and is left as it is.

@@ -68,6 +68,8 @@ private slots:
     void controlsRemainReadableAndReachable();
     void rowSelectionNeverResizesTheWindow();
     void theCodeDialogNamesPlacesThatShowTheCode();
+    void codeAloneIsTheNormalPairingDialogPath();
+    void serviceOnlyEditorKeepsIdentityAndRouteWithoutAnAddress();
 };
 
 void ConnectionSelectorTest::selectionRefreshIsStableAndDoesNotConnect()
@@ -505,9 +507,8 @@ void ConnectionSelectorTest::rowSelectionNeverResizesTheWindow()
     assertRowFits();
 }
 
-// Part C fix wave (R2-M2): a headless Core has no screen, and the Remote
-// Access page shows no code yet; the dialog names the status page and the
-// console command.
+// Part C fix wave (R2-M2): a headless Core has no screen. The dialog names
+// the status and now-active Remote Access pages, plus the console command.
 void ConnectionSelectorTest::theCodeDialogNamesPlacesThatShowTheCode()
 {
     AddCoreByCodeDialog dialog;
@@ -517,7 +518,70 @@ void ConnectionSelectorTest::theCodeDialogNamesPlacesThatShowTheCode()
     QVERIFY(text.contains(QStringLiteral("status page")));
     QVERIFY(text.contains(QStringLiteral("nereusd pairing show")));
     QVERIFY(!text.contains(QStringLiteral("screen")));
-    QVERIFY(!text.contains(QStringLiteral("Remote Access")));
+    QVERIFY(text.contains(QStringLiteral("Remote Access page")));
+}
+
+void ConnectionSelectorTest::codeAloneIsTheNormalPairingDialogPath()
+{
+    AddCoreByCodeDialog dialog;
+    auto* code = dialog.findChild<QLineEdit*>(QStringLiteral("addCoreByCodeCode"));
+    auto* address = dialog.findChild<QLineEdit*>(QStringLiteral("addCoreByCodeAddress"));
+    auto* pair = dialog.findChild<QPushButton*>(QStringLiteral("addCoreByCodePair"));
+    QVERIFY(code && address && pair);
+    dialog.show();
+    QCoreApplication::processEvents();
+    QVERIFY(!address->isVisibleTo(&dialog));
+    code->setText(QStringLiteral("not-a-code"));
+    pair->click();
+    QCOMPARE(dialog.result(), int(QDialog::Rejected));
+    code->setText(QStringLiteral("7-anvil-harbor"));
+    pair->click();
+    QCOMPARE(dialog.result(), int(QDialog::Accepted));
+    QCOMPARE(dialog.host(), QString());
+    QCOMPARE(dialog.port(), quint16(0));
+
+    AddCoreByCodeDialog direct(QStringLiteral("shack-core.local"));
+    auto* directAddress = direct.findChild<QLineEdit*>(QStringLiteral("addCoreByCodeAddress"));
+    QVERIFY(directAddress);
+    direct.show();
+    QCoreApplication::processEvents();
+    QVERIFY(directAddress->isVisibleTo(&direct));
+    QCOMPARE(directAddress->text(), QStringLiteral("shack-core.local"));
+    auto* directCode = direct.findChild<QLineEdit*>(QStringLiteral("addCoreByCodeCode"));
+    auto* directPair = direct.findChild<QPushButton*>(QStringLiteral("addCoreByCodePair"));
+    QVERIFY(directCode && directPair);
+    directCode->setText(QStringLiteral("7-anvil-harbor"));
+    directAddress->setText(QStringLiteral("https://not-a-core"));
+    directPair->click();
+    QCOMPARE(direct.result(), int(QDialog::Rejected));
+    directAddress->setText(QStringLiteral("shack-core.local"));
+    directPair->click();
+    QCOMPARE(direct.result(), int(QDialog::Accepted));
+    QCOMPARE(direct.host(), QStringLiteral("shack-core.local"));
+}
+
+void ConnectionSelectorTest::serviceOnlyEditorKeepsIdentityAndRouteWithoutAnAddress()
+{
+    SavedCoreTarget paired;
+    paired.id = QStringLiteral("paired");
+    paired.label = QStringLiteral("SkyHQ");
+    paired.connection.identityFingerprint = QByteArray(32, 'k');
+    paired.connection.rendezvousId = QStringLiteral("abcdefghijklmnopqrstuvwxyz");
+    CoreTargetEditor editor(paired);
+    auto* address = editor.findChild<QLineEdit*>(QStringLiteral("coreTargetEditorAddress"));
+    auto* save = editor.findChild<QPushButton*>(QStringLiteral("coreTargetEditorSave"));
+    QVERIFY(address && save);
+    QVERIFY(address->text().isEmpty());
+    auto* label = editor.findChild<QLineEdit*>(QStringLiteral("coreTargetEditorLabel"));
+    QVERIFY(label);
+    label->setText(QStringLiteral("SkyHQ renamed"));
+    save->click();
+    QCOMPARE(editor.result(), int(QDialog::Accepted));
+    const SavedCoreTarget updated = editor.target();
+    QCOMPARE(updated.label, QStringLiteral("SkyHQ renamed"));
+    QCOMPARE(updated.connection.url, QString());
+    QCOMPARE(updated.connection.identityFingerprint, paired.connection.identityFingerprint);
+    QCOMPARE(updated.connection.rendezvousId, paired.connection.rendezvousId);
 }
 
 QTEST_MAIN(ConnectionSelectorTest)

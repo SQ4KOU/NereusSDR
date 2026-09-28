@@ -25,6 +25,10 @@
 // `relayAllowed` and `reachFromAnywhere` on a V2 record, each optional, so
 // a connect can race the internet service beside the Core's addresses.
 // J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+// Desktop code-only pairing: V3 is authoritative and accepts authenticated
+// addressless targets. Older V2 and V1 keys retain only their representable
+// existing records after edits and forgets so credentials cannot reappear
+// when an older app opens the profile.
 // =================================================================
 
 #include "gui/CoreTargetStore.h"
@@ -51,9 +55,11 @@
 namespace NereusSDR {
 namespace {
 
-constexpr auto kStorageKey = "ConnectionTargets/V2";
+constexpr auto kStorageKey = "ConnectionTargets/V3";
+constexpr auto kV2StorageKey = "ConnectionTargets/V2";
 constexpr auto kV1StorageKey = "ConnectionTargets/V1";
-constexpr int kVersion = 2;
+constexpr int kVersion = 3;
+constexpr int kV2Version = 2;
 constexpr int kV1Version = 1;
 constexpr qsizetype kIdentityBytes = 32;
 constexpr auto kLocalId = "local";
@@ -97,7 +103,7 @@ bool isBounded(const QString& text, qsizetype maximum)
     return text.size() <= maximum;
 }
 
-bool validateTarget(const SavedCoreTarget& target, QString* error)
+bool validateTarget(const SavedCoreTarget& target, QString* error, int version = kVersion)
 {
     if (!isSavedId(target.id)) {
         setError(error, QStringLiteral("Saved Core target has an invalid identifier."));
@@ -112,13 +118,23 @@ bool validateTarget(const SavedCoreTarget& target, QString* error)
         setError(error, QStringLiteral("Saved Core target contains text that is too long."));
         return false;
     }
-    if (!RemoteStationOptions::isValidStationUrl(target.connection.url)) {
+    if (target.connection.url.isEmpty()) {
+        if (version < kVersion || !target.connection.isValidRemoteTarget()) {
+            setError(error, QStringLiteral("Saved Core target needs a paired remote access route."));
+            return false;
+        }
+    } else if (!RemoteStationOptions::isValidStationUrl(target.connection.url)) {
         setError(error, QStringLiteral("Saved Core target has an invalid Core address."));
         return false;
     }
     if (!target.connection.identityFingerprint.isEmpty()
         && target.connection.identityFingerprint.size() != kIdentityBytes) {
         setError(error, QStringLiteral("Saved Core target has an invalid Core identity."));
+        return false;
+    }
+    if (!target.connection.rendezvousId.isEmpty()
+        && !RendezvousWire::isRendezvousId(target.connection.rendezvousId)) {
+        setError(error, QStringLiteral("Saved Core target has an invalid remote access route."));
         return false;
     }
     // iPhone app plan Task 27: the Core's last good addresses.
@@ -136,7 +152,7 @@ bool validateTarget(const SavedCoreTarget& target, QString* error)
 }
 
 bool validateDocument(const QList<SavedCoreTarget>& targets, const QString& selectedId,
-                      QString* error)
+                      QString* error, int version = kVersion)
 {
     if (targets.size() > kMaxRecords) {
         setError(error, QStringLiteral("Saved Core targets document has too many records."));
@@ -145,7 +161,7 @@ bool validateDocument(const QList<SavedCoreTarget>& targets, const QString& sele
 
     QSet<QString> ids;
     for (const SavedCoreTarget& target : targets) {
-        if (!validateTarget(target, error)) {
+        if (!validateTarget(target, error, version)) {
             return false;
         }
         if (ids.contains(target.id)) {
@@ -175,7 +191,7 @@ QJsonObject toJson(const SavedCoreTarget& target, int version)
         {QStringLiteral("lastRadioName"), target.lastRadioName},
         {QStringLiteral("lastRadioMac"), target.lastRadioMac},
     };
-    if (version == kVersion) {
+    if (version >= kV2Version) {
         object.insert(QStringLiteral("identity"),
                       StationIdentity::toBase64Url(target.connection.identityFingerprint));
         // iPhone app plan Task 27: absent when there are none, so a record
@@ -228,8 +244,8 @@ QString serialize(const QList<SavedCoreTarget>& targets, const QString& selected
     return QString::fromUtf8(QJsonDocument(document).toJson(QJsonDocument::Compact));
 }
 
-// `version` is the document's own: kVersion reads V2 records (with their
-// identity), kV1Version reads V1 records (with none).
+// V2 and V3 records carry the same fields; V3 also admits paired service-only
+// records. V1 has no identity.
 bool parseDocument(const QString& text, int expectedVersion, QList<SavedCoreTarget>* targets,
                    QString* selectedId, QString* error)
 {
@@ -285,7 +301,7 @@ bool parseDocument(const QString& text, int expectedVersion, QList<SavedCoreTarg
         }
         target.connection.allowUnpinned =
             object.value(QStringLiteral("allowUnpinned")).toBool();
-        if (expectedVersion == kVersion) {
+        if (expectedVersion >= kV2Version) {
             QString identity;
             bool decoded = true;
             if (!hasString(object, "identity", &identity)) {
@@ -374,7 +390,7 @@ bool parseDocument(const QString& text, int expectedVersion, QList<SavedCoreTarg
         parsed.append(target);
     }
 
-    if (!validateDocument(parsed, *selectedId, error)) {
+    if (!validateDocument(parsed, *selectedId, error, expectedVersion)) {
         return false;
     }
     *targets = std::move(parsed);
@@ -419,7 +435,26 @@ bool CoreTargetStore::load(QString* error)
         return true;
     }
 
-    // iPhone app Task 18: the V1 list moves to V2 once, each record as it
+    // V3 is authoritative once present. Migrate the prior document exactly
+    // once, keeping its bytes as a rollback snapshot for an older app.
+    const QString v2Key = QLatin1String(kV2StorageKey);
+    if (m_settings.contains(v2Key)) {
+        QList<SavedCoreTarget> v2Targets;
+        QString v2SelectedId;
+        if (!parseDocument(m_settings.value(v2Key).toString(), kV2Version, &v2Targets,
+                           &v2SelectedId, error)
+            || !persist(v2Targets, v2SelectedId, error)) {
+            return false;
+        }
+        m_targets = std::move(v2Targets);
+        m_selectedId = std::move(v2SelectedId);
+        m_loaded = true;
+        clearError(error);
+        return true;
+    }
+
+    // iPhone app Task 18: the V1 list moves to V3 via a V2 rollback copy,
+    // each record as it
     // was (address, token, pin, bench flag, label, last radio) and with no
     // identity yet; the key is enrolled on the Core's next token sign-in.
     // A V1 document that cannot be read writes nothing, like a bad V2.
@@ -718,54 +753,69 @@ bool CoreTargetStore::persist(const QList<SavedCoreTarget>& targets,
         return false;
     }
 
-    // Part C fix wave (R2-M3): V1 stays for a build from before V2, but it
-    // follows V2's forgets and edits: each V1 record is V2's record of the
-    // same id (with no identity), or gone when V2 no longer has it, so a
-    // forgotten Core's token, or a replaced one, does not stay behind. V1
-    // gains no record V2 added. A V1 document that cannot be read is
-    // removed, since nothing could filter it.
-    const QString v1Key = QLatin1String(kV1StorageKey);
-    const bool hadV1 = m_settings.contains(v1Key);
-    const QVariant previousV1 = m_settings.value(v1Key);
-    bool rewriteV1 = false;
-    bool removeV1 = false;
-    QString v1Serialized;
-    if (hadV1) {
-        QList<SavedCoreTarget> v1Targets;
-        QString v1SelectedId;
-        if (parseDocument(previousV1.toString(), kV1Version, &v1Targets, &v1SelectedId,
-                          nullptr)) {
-            QList<SavedCoreTarget> kept;
-            for (const SavedCoreTarget& old : std::as_const(v1Targets)) {
-                const auto current = std::find_if(
-                    targets.cbegin(), targets.cend(),
-                    [&old](const SavedCoreTarget& target) { return target.id == old.id; });
-                if (current != targets.cend()) {
-                    SavedCoreTarget carried = *current;
-                    carried.connection.identityFingerprint.clear();
-                    kept.append(carried);
-                }
-            }
-            const bool selectionKept = std::any_of(
-                kept.cbegin(), kept.cend(),
-                [&v1SelectedId](const SavedCoreTarget& target) { return target.id == v1SelectedId; });
-            const QString keptSelectedId =
-                selectionKept ? v1SelectedId : QString::fromLatin1(kLocalId);
-            v1Serialized = serialize(kept, keptSelectedId, kV1Version);
-            rewriteV1 = v1Serialized != serialize(v1Targets, v1SelectedId, kV1Version);
-        } else {
-            removeV1 = true;
-        }
-    }
-
     const QString key = QLatin1String(kStorageKey);
     const bool hadPreviousValue = m_settings.contains(key);
     const QVariant previousValue = m_settings.value(key);
+    struct OlderWrite {
+        QString key;
+        QVariant previous;
+        bool had = false;
+        bool rewrite = false;
+        bool remove = false;
+        QString serialized;
+    };
+    QList<OlderWrite> older;
+    for (const auto& [name, version] :
+         {std::pair{kV2StorageKey, kV2Version}, std::pair{kV1StorageKey, kV1Version}}) {
+        OlderWrite write;
+        write.key = QString::fromLatin1(name);
+        write.had = m_settings.contains(write.key);
+        write.previous = m_settings.value(write.key);
+        if (write.had && hadPreviousValue) {
+            QList<SavedCoreTarget> before;
+            QString oldSelection;
+            if (!parseDocument(write.previous.toString(), version, &before, &oldSelection,
+                               nullptr)) {
+                write.remove = true;
+            } else {
+                QList<SavedCoreTarget> kept;
+                for (const SavedCoreTarget& old : std::as_const(before)) {
+                    const auto current = std::find_if(
+                        targets.cbegin(), targets.cend(),
+                        [&old](const SavedCoreTarget& candidate) {
+                            return candidate.id == old.id && !candidate.connection.url.isEmpty();
+                        });
+                    if (current == targets.cend()) { continue; }
+                    SavedCoreTarget carried = *current;
+                    if (version == kV1Version) {
+                        carried.connection.identityFingerprint.clear();
+                    }
+                    kept.append(carried);
+                }
+                const bool selectionKept = oldSelection == QLatin1String(kLocalId)
+                    || std::any_of(kept.cbegin(), kept.cend(),
+                                   [&oldSelection](const SavedCoreTarget& candidate) {
+                                       return candidate.id == oldSelection;
+                                   });
+                const QString keptSelection = selectionKept ? oldSelection
+                                                             : QString::fromLatin1(kLocalId);
+                write.serialized = serialize(kept, keptSelection, version);
+                write.rewrite = write.serialized != serialize(before, oldSelection, version);
+            }
+        } else if (!write.had && !hadPreviousValue && version == kV2Version) {
+            // A fresh V3 store or a V1 import also leaves a V2-readable
+            // rollback copy. The first V3 save cannot contain new service-
+            // only records, because it is a migration of older data.
+            if (!validateDocument(targets, selectedId, error, kV2Version)) { return false; }
+            write.serialized = serialize(targets, selectedId, kV2Version);
+            write.rewrite = true;
+        }
+        older.append(std::move(write));
+    }
     m_settings.setValue(key, serialized);
-    if (rewriteV1) {
-        m_settings.setValue(v1Key, v1Serialized);
-    } else if (removeV1) {
-        m_settings.remove(v1Key);
+    for (const OlderWrite& write : std::as_const(older)) {
+        if (write.rewrite) { m_settings.setValue(write.key, write.serialized); }
+        else if (write.remove) { m_settings.remove(write.key); }
     }
 
     QString saveError;
@@ -778,8 +828,10 @@ bool CoreTargetStore::persist(const QList<SavedCoreTarget>& targets,
     } else {
         m_settings.remove(key);
     }
-    if (rewriteV1 || removeV1) {
-        m_settings.setValue(v1Key, previousV1);
+    for (const OlderWrite& write : std::as_const(older)) {
+        if (!write.rewrite && !write.remove) { continue; }
+        if (write.had) { m_settings.setValue(write.key, write.previous); }
+        else { m_settings.remove(write.key); }
     }
     setError(error, QStringLiteral("Saved Core targets could not be saved."));
     return false;

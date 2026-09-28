@@ -462,12 +462,12 @@ AddCoreByCodeDialog::AddCoreByCodeDialog(const QString& address, QWidget* parent
     setObjectName(QStringLiteral("addCoreByCode"));
 
     auto* layout = new QVBoxLayout(this);
-    // Part C fix wave (R2-M2): the places that show the code today. A
-    // headless Core has no screen, and the Remote Access page shows no code
-    // yet.
+    // Part C fix wave (R2-M2): the places that show the code. A headless
+    // Core has no screen; RemoteStationPage now shows the code while its
+    // pairing window is open, and the status page and CLI also show it.
     auto* explanation = new QLabel(
-        tr("Type the Core's pairing code and its address. The code is on the Core's status "
-           "page, or run nereusd pairing show on the computer the Core runs on."),
+        tr("Enter the pairing code from the Core's status page or Remote Access page. "
+           "For a headless Core, run nereusd pairing show on its computer."),
         this);
     explanation->setObjectName(QStringLiteral("addCoreByCodeExplanation"));
     configurePlainTextLabel(explanation);
@@ -478,13 +478,32 @@ AddCoreByCodeDialog::AddCoreByCodeDialog(const QString& address, QWidget* parent
     m_codeEdit->setObjectName(QStringLiteral("addCoreByCodeCode"));
     m_codeEdit->setPlaceholderText(tr("7-anvil-harbor"));
     m_codeEdit->setMaxLength(64);
-    m_addressEdit = new QLineEdit(address, this);
+    form->addRow(tr("Pairing code:"), m_codeEdit);
+    layout->addLayout(form);
+
+    auto* hint = new QLabel(tr("The app will find the Core and connect automatically."), this);
+    configurePlainTextLabel(hint);
+    layout->addWidget(hint);
+
+    auto* addressOptions = new QPushButton(tr("Use a Core address instead…"), this);
+    addressOptions->setObjectName(QStringLiteral("addCoreByCodeAddressOptions"));
+    addressOptions->setCheckable(true);
+    addressOptions->setAutoDefault(false);
+    layout->addWidget(addressOptions);
+    m_addressGroup = new QWidget(this);
+    auto* addressForm = new QFormLayout(m_addressGroup);
+    m_addressEdit = new QLineEdit(address, m_addressGroup);
     m_addressEdit->setObjectName(QStringLiteral("addCoreByCodeAddress"));
     m_addressEdit->setPlaceholderText(tr("shack-core.local, 192.168.1.20 or [2001:db8::20]"));
     m_addressEdit->setMaxLength(512);
-    form->addRow(tr("Pairing code:"), m_codeEdit);
-    form->addRow(tr("Core address:"), m_addressEdit);
-    layout->addLayout(form);
+    addressForm->addRow(tr("Core address:"), m_addressEdit);
+    layout->addWidget(m_addressGroup);
+    addressOptions->setChecked(!address.isEmpty());
+    m_addressGroup->setVisible(!address.isEmpty());
+    connect(addressOptions, &QPushButton::toggled, this, [this](bool shown) {
+        m_addressGroup->setVisible(shown);
+        if (!shown) { m_addressEdit->clear(); }
+    });
 
     m_errorLabel = new QLabel(this);
     m_errorLabel->setObjectName(QStringLiteral("addCoreByCodeError"));
@@ -493,7 +512,7 @@ AddCoreByCodeDialog::AddCoreByCodeDialog(const QString& address, QWidget* parent
     layout->addWidget(m_errorLabel);
 
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Cancel, this);
-    auto* pairButton = buttons->addButton(tr("Pair"), QDialogButtonBox::AcceptRole);
+    auto* pairButton = buttons->addButton(tr("Pair and connect"), QDialogButtonBox::AcceptRole);
     auto* cancelButton = buttons->button(QDialogButtonBox::Cancel);
     pairButton->setObjectName(QStringLiteral("addCoreByCodePair"));
     cancelButton->setObjectName(QStringLiteral("addCoreByCodeCancel"));
@@ -527,16 +546,19 @@ bool AddCoreByCodeDialog::validate()
         m_errorLabel->setVisible(true);
         return false;
     }
-    QString host;
-    quint16 port = 0;
-    if (!StationPairingClient::parseAddress(m_addressEdit->text(), &host, &port)) {
-        m_errorLabel->setText(tr("Enter the Core's address: a name, an IPv4 address or an "
-                                 "IPv6 address, with its port if it is not 47910."));
-        m_errorLabel->setVisible(true);
-        return false;
+    m_host.clear();
+    m_port = 0;
+    if (!m_addressEdit->text().trimmed().isEmpty()) {
+        QString host;
+        quint16 port = 0;
+        if (!StationPairingClient::parseAddress(m_addressEdit->text(), &host, &port)) {
+            m_errorLabel->setText(tr("Enter a valid Core address or leave it blank to find the Core automatically."));
+            m_errorLabel->setVisible(true);
+            return false;
+        }
+        m_host = host;
+        m_port = port;
     }
-    m_host = host;
-    m_port = port;
     m_errorLabel->clear();
     m_errorLabel->setVisible(false);
     return true;

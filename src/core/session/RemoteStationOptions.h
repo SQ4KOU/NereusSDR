@@ -50,12 +50,13 @@
 
 namespace NereusSDR {
 
-/// The station a GUI process should drive, or an empty url for local
-/// direct mode (the default, and the only mode before R2).
+/// The station a GUI process should drive. A fully empty object is local
+/// direct mode (the default, and the only mode before R2); a paired
+/// identity and remote access route can also be remote without a URL.
 struct RemoteStationOptions {
     /// `wss://host:port` (or `ws://` for a loopback bench run). Empty
-    /// means local direct mode: construct a Role::Local RadioModel and
-    /// behave exactly as every release before R2 did.
+    /// means no direct address. When no paired route is present either,
+    /// construct a Role::Local RadioModel as releases before R2 did.
     QString url;
 
     /// The daemon's shared token, as printed by `nereusd` on first run.
@@ -142,8 +143,16 @@ struct RemoteStationOptions {
     int relayAllowed = -1;
     bool reachFromAnywhere = true;
 
-    /// True when this process should run as a remote client.
-    bool isRemote() const { return !url.isEmpty(); }
+    /// Remote intent includes a paired service route without a direct URL.
+    /// Even malformed intent must not silently construct a local Core.
+    bool isRemote() const
+    {
+        return !url.isEmpty() || !identityFingerprint.isEmpty() || !rendezvousId.isEmpty();
+    }
+
+    /// A direct URL keeps its existing rules. Without one, only a paired
+    /// identity and service route can identify a remote Core.
+    bool isValidRemoteTarget(QString* whyNot = nullptr) const;
 
     /// Whether `candidate` is a station URL this build can dial.
     ///

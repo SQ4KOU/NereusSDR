@@ -11,6 +11,34 @@ using namespace NereusSDR;
 class TestStationStartupSelection : public QObject {
     Q_OBJECT
 private slots:
+    void serviceOnlySavedCoreIsRemoteAndRejectsCredentialOverrides()
+    {
+        QTemporaryDir directory;
+        AppSettings settings(directory.filePath(QStringLiteral("settings.xml")));
+        CoreTargetStore store(settings);
+        QVERIFY(store.load());
+        SavedCoreTarget core;
+        core.id = QStringLiteral("paired-service");
+        core.connection.identityFingerprint = QByteArray(32, 'k');
+        core.connection.rendezvousId = QStringLiteral("abcdefghijklmnopqrstuvwxyz");
+        QVERIFY(store.upsert(core));
+        QVERIFY(store.select(core.id));
+        const auto saved = resolveStationStartup({}, store);
+        QVERIFY(saved);
+        QVERIFY(saved->connection.isRemote());
+        QVERIFY(saved->connection.isValidRemoteTarget());
+        QCOMPARE(saved->connection.url, QString());
+        QVERIFY(shouldStartStationConnection({}, *saved, store));
+
+        StationStartupRequest token;
+        token.tokenSpecified = true;
+        token.connection.token = QStringLiteral("override");
+        QString error;
+        QVERIFY(!resolveStationStartup(token, store, &error));
+        QVERIFY(!error.isEmpty());
+        QCOMPARE(store.target(core.id)->connection.token, QString());
+    }
+
     void savedCoreAutoConnectOnlyControlsImplicitLaunch()
     {
         QTemporaryDir directory;
