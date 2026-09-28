@@ -1004,6 +1004,14 @@ colours for the same signal.
   failing row later passed alone in 0.52 s and the full conformance suite
   passed alone in 65.26 s; those results do not close the load failure.
   The original parallel log and stage state are retained for investigation.
+  The conformance join now also captures the existing safe fixed library
+  stages and structural description/candidate acceptance events, with bounded
+  shared lifetime and the same 15-second deadline. Its failure assertion
+  includes the evidence and current load, so Qt's exhausted warning allowance
+  cannot hide it. No connection material is retained. The rebuilt conformance,
+  data-channel and station suites pass (42.87 s; initial load
+  12.96/14.88/14.42), without reproducing the failure. This improves the next
+  observation; the cause and production repair remain open.
 - Plan: integrated protocol reliability under real host load.
 
 ### G-58: Setting-backed toggles need explicit boolean string encoding

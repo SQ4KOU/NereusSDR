@@ -162,7 +162,8 @@ public:
     template <typename Accept>
     DataChannelBridge(LoopbackTransport* client, quint64 stationCap, quint64 clientCap,
                       const QString& certificatePemPath, const QString& privateKeyPemPath,
-                      Accept accept, QObject* parent = nullptr)
+                      Accept accept, QObject* parent = nullptr,
+                      DataChannelPairObserver observer = {})
         : QObject(parent)
         , m_client(client)
     {
@@ -196,7 +197,8 @@ public:
         QObject::connect(m_answerer, &DataChannelTransport::failed, this,
                          [this](const QString&) { m_answererFailed = true; });
         m_started = startDataChannelPair(m_offerer, m_answerer, clientCap, stationCap,
-                                         certificatePemPath, privateKeyPemPath, &m_start);
+                                         certificatePemPath, privateKeyPemPath, &m_start,
+                                         std::move(observer));
     }
 
     ~DataChannelBridge() override
