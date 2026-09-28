@@ -26,10 +26,12 @@
 
 #include "OperatorWording.h"
 #include "core/AppSettings.h"
+#include "core/security/PairingWindow.h"
 #include "core/RadioDiscovery.h"
 #include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
 #include "gui/ConnectionSelector.h"
+#include "core/session/StationRendezvous.h"
 #include "gui/CoreTargetEditor.h"
 #include "gui/CoreTargetStore.h"
 #include "gui/GuiConnectionController.h"
@@ -39,6 +41,7 @@
 #include "models/RadioModel.h"
 #include "fakes/MainWindowTestSettings.h"
 #include "fakes/UpgradedCoreToken.h"
+#include "RendezvousTestHarness.h"
 
 using namespace NereusSDR;
 
@@ -155,6 +158,8 @@ private slots:
     void persistentLocalChoiceReturnsToEmbeddedCoreWithoutRadioAutoconnect();
     void savedCoreEditsDoNotChangeCurrentTupleBeforeConnect();
     void corruptStartupDocumentShowsIdleLocalAndNotice();
+    void codeOnlyDialogPairsThroughMailboxAndOpensRemoteCore();
+    void acceptingCodeDialogAfterShutdownDoesNotStartPairing();
 };
 
 void TestGuiConnectionController::initTestCase()
@@ -502,6 +507,201 @@ void TestGuiConnectionController::corruptStartupDocumentShowsIdleLocalAndNotice(
     QVERIFY(notice != nullptr && notice->isVisible());
     QVERIFY(!notice->text().isEmpty());
     controller.shutdown();
+}
+
+void TestGuiConnectionController::codeOnlyDialogPairsThroughMailboxAndOpensRemoteCore()
+{
+    using namespace NereusSDR::Test::Rendezvous;
+    LocalService service;
+    QVERIFY(service.start());
+    Core core;
+    StationRendezvous rendezvous(core.server.get(), {service.url()}, true);
+    QSignalSpy nameplates(rendezvous.client(), &RendezvousClient::nameplateClaimed);
+    QVERIFY(rendezvous.start());
+    QTRY_COMPARE_WITH_TIMEOUT(nameplates.size(), 1, 10000);
+    const QString code = core.server->pairingWindow()->currentCode();
+    QVERIFY(!code.isEmpty());
+    AppSettings::instance().setValue(QStringLiteral("RemoteAccessServers"), service.url().toString());
+    QVERIFY(AppSettings::instance().save());
+
+    GuiConnectionController controller;
+    controller.start({});
+    MainWindow* originalWindow = controller.sessions()->window();
+    QVERIFY(originalWindow && originalWindow->radioModel()->ownsLocalDsp());
+    controller.showConnections();
+    auto* addByCode = button(controller.selector(), QStringLiteral("connectionSelectorAddByCode"));
+    QVERIFY(addByCode);
+    bool canceledDialog = false;
+    QTimer::singleShot(0, &controller, [&] {
+        if (auto* dialog = qobject_cast<AddCoreByCodeDialog*>(QApplication::activeModalWidget())) {
+            dialog->reject();
+            canceledDialog = true;
+        }
+    });
+    addByCode->click();
+    QVERIFY(canceledDialog);
+    QCOMPARE(controller.sessions()->window(), originalWindow);
+    QVERIFY(!core.server->deviceStore()->find(
+        ClientDeviceIdentity::forThisProfile()->fingerprint()).has_value());
+    const int claimedNameplate = code.section(QLatin1Char('-'), 0, 0).toInt();
+    const int otherNameplate = claimedNameplate == 1 ? 2 : 1;
+    const QString missingCode = QString::number(otherNameplate)
+        + code.mid(code.indexOf(QLatin1Char('-')));
+    bool failedDialogAccepted = false;
+    QTimer::singleShot(0, &controller, [&] {
+        auto* dialog = qobject_cast<AddCoreByCodeDialog*>(QApplication::activeModalWidget());
+        if (!dialog) { return; }
+        auto* entry = dialog->findChild<QLineEdit*>(QStringLiteral("addCoreByCodeCode"));
+        auto* pair = dialog->findChild<QPushButton*>(QStringLiteral("addCoreByCodePair"));
+        if (!entry || !pair) { dialog->reject(); return; }
+        entry->setText(missingCode);
+        pair->click();
+        failedDialogAccepted = dialog->result() == QDialog::Accepted;
+    });
+    addByCode->click();
+    QVERIFY(failedDialogAccepted);
+    auto* notice = controller.selector()->findChild<QLabel*>(QStringLiteral("connectionSelectorNotice"));
+    QVERIFY(notice);
+    QTRY_VERIFY_WITH_TIMEOUT(notice->text().contains(QStringLiteral("No Core is showing")), 10000);
+    QCOMPARE(controller.sessions()->window(), originalWindow);
+    QVERIFY(!core.server->deviceStore()->find(
+        ClientDeviceIdentity::forThisProfile()->fingerprint()).has_value());
+    bool dialogAccepted = false;
+    QTimer::singleShot(0, &controller, [&] {
+        auto* dialog = qobject_cast<AddCoreByCodeDialog*>(QApplication::activeModalWidget());
+        if (!dialog) { return; }
+        auto* entry = dialog->findChild<QLineEdit*>(QStringLiteral("addCoreByCodeCode"));
+        auto* pair = dialog->findChild<QPushButton*>(QStringLiteral("addCoreByCodePair"));
+        if (!entry || !pair) { dialog->reject(); return; }
+        entry->setText(code);
+        pair->click();
+        dialogAccepted = dialog->result() == QDialog::Accepted;
+    });
+    addByCode->click();
+    QVERIFY(dialogAccepted);
+
+    QTRY_VERIFY_WITH_TIMEOUT(controller.sessions()->window()
+        && controller.sessions()->window()->findChild<StationClient*>()
+        && controller.sessions()->window()->findChild<StationClient*>()->isHandshakeComplete(),
+        kServiceConnectBudgetMs);
+    const auto selected = controller.sessions()->selection();
+    QVERIFY(selected.connection.url.isEmpty());
+    QVERIFY(selected.connection.isRemote());
+    QCOMPARE(selected.connection.identityFingerprint,
+             core.server->stationIdentity().fingerprint());
+    QCOMPARE(selected.connection.rendezvousId,
+             RendezvousWire::rendezvousId(core.server->stationIdentity().publicKeySpki()));
+    QVERIFY(!controller.sessions()->window()->radioModel()->ownsLocalDsp());
+    StationClient* client = controller.sessions()->window()->findChild<StationClient*>();
+    QCOMPARE(client->connectionAttempt().tries.size(), 1);
+    QVERIFY(client->connectionAttempt().tries.first().path
+                == StationConnectionAttempt::Path::Service
+            || client->connectionAttempt().tries.first().path
+                == StationConnectionAttempt::Path::Relay
+            || client->connectionAttempt().tries.first().path
+                == StationConnectionAttempt::Path::WebRelay);
+    CoreTargetStore persisted(AppSettings::instance());
+    QVERIFY(persisted.load());
+    QCOMPARE(persisted.targets().size(), 1);
+    QCOMPARE(persisted.targets().first().connection.identityFingerprint,
+             selected.connection.identityFingerprint);
+    QVERIFY(persisted.targets().first().connection.url.isEmpty());
+    controller.shutdown();
+    QTRY_VERIFY_WITH_TIMEOUT(!core.server->hasAuthenticatedSession(), 10000);
+
+    GuiConnectionController relaunched;
+    relaunched.start({});
+    QTRY_VERIFY_WITH_TIMEOUT(relaunched.sessions()->window()
+        && relaunched.sessions()->window()->findChild<StationClient*>()
+        && relaunched.sessions()->window()->findChild<StationClient*>()->isHandshakeComplete(),
+        kServiceConnectBudgetMs);
+    QCOMPARE(relaunched.sessions()->selection().savedId, persisted.targets().first().id);
+    QVERIFY(relaunched.sessions()->selection().connection.url.isEmpty());
+    QCOMPARE(relaunched.sessions()->selection().connection.identityFingerprint,
+             selected.connection.identityFingerprint);
+    relaunched.shutdown();
+    QTRY_VERIFY_WITH_TIMEOUT(!core.server->hasAuthenticatedSession(), 10000);
+
+    // Re-pair the same authenticated identity after the address book has a
+    // direct route and a disabled service preference. The mailbox result has
+    // no address, so the GUI must merge it into the existing row.
+    CoreTargetStore beforeRepair(AppSettings::instance());
+    QVERIFY(beforeRepair.load());
+    SavedCoreTarget retained = *beforeRepair.target(persisted.targets().first().id);
+    retained.label = QStringLiteral("Older saved name");
+    // This fixture's Core listens through rendezvous only. Keep the old
+    // direct address on loopback and verify its retention without claiming
+    // that this re-pair also proves a direct WSS connection.
+    retained.connection.url = QStringLiteral("wss://127.0.0.1:1");
+    retained.connection.cachedAddresses = {retained.connection.url};
+    retained.connection.reachFromAnywhere = false;
+    retained.autoConnect = false;
+    QVERIFY(beforeRepair.upsert(retained));
+    core.server->pairingWindow()->reopen();
+    QTRY_COMPARE_WITH_TIMEOUT(nameplates.size(), 2, 10000);
+    const QString renewedCode = core.server->pairingWindow()->currentCode();
+    QVERIFY(renewedCode.startsWith(QString::number(nameplates.last().first().toInt())
+                                   + QLatin1Char('-')));
+    GuiConnectionController repairing;
+    repairing.start({});
+    QVERIFY(repairing.sessions()->selection().connection.isRemote());
+    repairing.showConnections();
+    auto* again = button(repairing.selector(), QStringLiteral("connectionSelectorAddByCode"));
+    QVERIFY(again);
+    bool renewedDialogAccepted = false;
+    QTimer::singleShot(0, &repairing, [&] {
+        auto* dialog = qobject_cast<AddCoreByCodeDialog*>(QApplication::activeModalWidget());
+        if (!dialog) { return; }
+        auto* entry = dialog->findChild<QLineEdit*>(QStringLiteral("addCoreByCodeCode"));
+        auto* pair = dialog->findChild<QPushButton*>(QStringLiteral("addCoreByCodePair"));
+        if (!entry || !pair) { dialog->reject(); return; }
+        entry->setText(renewedCode);
+        pair->click();
+        renewedDialogAccepted = dialog->result() == QDialog::Accepted;
+    });
+    again->click();
+    QVERIFY(renewedDialogAccepted);
+    QTRY_VERIFY_WITH_TIMEOUT(!core.server->pairingWindow()->isOpen(), 60000);
+    const QString pairedLabel = persisted.targets().first().label;
+    const auto savedRepairedLabel = [&] {
+        CoreTargetStore current(AppSettings::instance());
+        return current.load() && current.target(retained.id)
+            && current.target(retained.id)->label == pairedLabel;
+    };
+    QTRY_VERIFY_WITH_TIMEOUT(savedRepairedLabel(), 10000);
+    CoreTargetStore afterRepair(AppSettings::instance());
+    QVERIFY(afterRepair.load());
+    QCOMPARE(afterRepair.targets().size(), 1);
+    const SavedCoreTarget repaired = afterRepair.targets().first();
+    QCOMPARE(repaired.id, retained.id);
+    QCOMPARE(repaired.label, pairedLabel);
+    QCOMPARE(repaired.connection.url, retained.connection.url);
+    QCOMPARE(repaired.connection.cachedAddresses, retained.connection.cachedAddresses);
+    QCOMPARE(repaired.connection.reachFromAnywhere, false);
+    QCOMPARE(repaired.connection.identityFingerprint, retained.connection.identityFingerprint);
+    QCOMPARE(repaired.connection.rendezvousId, retained.connection.rendezvousId);
+    repairing.shutdown();
+}
+
+void TestGuiConnectionController::acceptingCodeDialogAfterShutdownDoesNotStartPairing()
+{
+    GuiConnectionController controller;
+    controller.start({});
+    controller.showConnections();
+    auto* addByCode = button(controller.selector(), QStringLiteral("connectionSelectorAddByCode"));
+    auto* notice = controller.selector()->findChild<QLabel*>(QStringLiteral("connectionSelectorNotice"));
+    QVERIFY(addByCode && notice);
+    QTimer::singleShot(0, &controller, [&] {
+        auto* dialog = qobject_cast<AddCoreByCodeDialog*>(QApplication::activeModalWidget());
+        if (!dialog) { return; }
+        controller.shutdown();
+        dialog->accept();
+    });
+    addByCode->click();
+    QVERIFY(notice->text().isEmpty());
+    CoreTargetStore persisted(AppSettings::instance());
+    QVERIFY(persisted.load());
+    QVERIFY(persisted.targets().isEmpty());
 }
 
 QTEST_MAIN(TestGuiConnectionController)

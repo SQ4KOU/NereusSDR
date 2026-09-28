@@ -2138,7 +2138,7 @@ void MainWindow::applyDisplayDuplex()
         m_displayDuplexAction->setEnabled(reason.isEmpty());
         const QString tip = reason.isEmpty()
             ? QStringLiteral("Keep the receiver on the transmitting panadapter while "
-                             "transmitting, under the transmit grid and colours.")
+                             "transmitting, under the transmit grid and colors.")
             : reason;
         m_displayDuplexAction->setToolTip(tip);
         m_displayDuplexAction->setStatusTip(tip);
@@ -5634,7 +5634,7 @@ void MainWindow::buildUI()
     if (DxccColorProvider* dxcc = m_radioModel->dxccColorProvider()) {
         if (!dxcc->loadCtyDat()) {
             qCWarning(lcSpots) << "DXCC country table (:/cty.dat) did not load;"
-                               << "spots will not be coloured by country";
+                               << "spots will not be colored by country";
         }
     }
 
@@ -8315,7 +8315,7 @@ void MainWindow::buildMenuBar()
             disc->probeAddress(saved->info.address, saved->info.port);
         });
     m_actConnect->setToolTip(QStringLiteral(
-        "Reconnect to the last-used radio (greyed out when there's nothing to reconnect to)"));
+        "Reconnect to the last-used radio (grayed out when there's nothing to reconnect to)"));
 
     // Disconnect (⌘⇧K) — disabled while disconnected.
     m_actDisconnect = radioMenu->addAction(QStringLiteral("&Disconnect"),

@@ -16,11 +16,28 @@
 // =================================================================
 
 #include "core/session/RemoteStationOptions.h"
+#include "core/session/RendezvousWire.h"
 
 #include <QLatin1String>
 #include <QUrl>
 
 namespace NereusSDR {
+
+bool RemoteStationOptions::isValidRemoteTarget(QString* whyNot) const
+{
+    if (!url.isEmpty()) {
+        return isValidStationUrl(url, whyNot);
+    }
+    if (identityFingerprint.size() != 32
+        || !RendezvousWire::isRendezvousId(rendezvousId)
+        || !token.isEmpty() || !fingerprint.isEmpty() || allowUnpinned) {
+        if (whyNot) {
+            *whyNot = QStringLiteral("Pair with the Core again to reach it through remote access.");
+        }
+        return false;
+    }
+    return true;
+}
 
 bool RemoteStationOptions::isValidStationUrl(const QString& candidate, QString* whyNot)
 {

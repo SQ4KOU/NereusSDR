@@ -6,6 +6,7 @@
 #include <QObject>
 #include <QPointer>
 #include <QDialog>
+#include <QUrl>
 
 #include <functional>
 #include <optional>
@@ -18,6 +19,10 @@ namespace NereusSDR {
 class RadioModel;
 class StationClient;
 class RemoteMediaController;
+
+/// The operator-local remote access server preference, shared by pairing
+/// and the later Core connection.
+QList<QUrl> configuredRemoteAccessServers();
 
 // R-R3-38: why a remote window stopped for good, when it did. Anything
 // that will fix itself (a dropped link, an end the Core marks retryable)

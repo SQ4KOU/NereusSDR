@@ -104,8 +104,8 @@ bool GuiSessionCoordinator::canReplace(const StationStartupSelection& selection,
         return fail(tr("This window is closing."));
     }
     if (selection.connection.isRemote()
-        && !RemoteStationOptions::isValidStationUrl(selection.connection.url)) {
-        return fail(tr("The selected Core has an invalid address."));
+        && !selection.connection.isValidRemoteTarget()) {
+        return fail(tr("The selected Core needs a valid address or paired remote access route."));
     }
     if (m_window) {
         RadioModel* model = m_window->radioModel();

@@ -34,12 +34,15 @@ CoreTargetEditor::CoreTargetEditor(const SavedCoreTarget& initial, QWidget* pare
     : QDialog(parent)
     , m_initial(initial)
 {
+    const bool serviceOnly = initial.connection.url.isEmpty()
+        && !initial.connection.identityFingerprint.isEmpty();
     setWindowTitle(tr("Core setup"));
     setObjectName(QStringLiteral("coreTargetEditor"));
 
     auto* layout = new QVBoxLayout(this);
-    auto* explanation = new QLabel(
-        tr("Enter the Core address and its pairing token. The certificate fingerprint must come from Core setup."),
+    auto* explanation = new QLabel(serviceOnly
+        ? tr("This paired Core uses remote access. You can change its name and connection preference here.")
+        : tr("Enter the Core address and its pairing token. The certificate fingerprint must come from Core setup."),
         this);
     explanation->setObjectName(QStringLiteral("coreTargetEditorExplanation"));
     explanation->setTextFormat(Qt::PlainText);
@@ -68,6 +71,12 @@ CoreTargetEditor::CoreTargetEditor(const SavedCoreTarget& initial, QWidget* pare
     form->addRow(tr("Token:"), m_tokenEdit);
     form->addRow(tr("Certificate fingerprint:"), m_fingerprintEdit);
     form->addRow({}, m_allowUnpinnedCheck);
+    if (serviceOnly) {
+        form->setRowVisible(m_addressEdit, false);
+        form->setRowVisible(m_tokenEdit, false);
+        form->setRowVisible(m_fingerprintEdit, false);
+        form->setRowVisible(m_allowUnpinnedCheck, false);
+    }
     // iPhone app plan Task 29 (R-IOS-16): a paired Core is also reached
     // through the internet service, raced with its addresses; the operator
     // may turn that off for this Core. Shown for every Core, disabled with
@@ -184,7 +193,12 @@ SavedCoreTarget CoreTargetEditor::target() const
 
 bool CoreTargetEditor::validate()
 {
-    if (!RemoteStationOptions::isValidStationUrl(m_addressEdit->text().trimmed())) {
+    const QString address = m_addressEdit->text().trimmed();
+    const bool serviceOnly = address.isEmpty()
+        && !m_initial.connection.identityFingerprint.isEmpty();
+    RemoteStationOptions candidate = target().connection;
+    if (!candidate.isValidRemoteTarget() || (!serviceOnly
+        && !RemoteStationOptions::isValidStationUrl(address))) {
         // Keep this fixed: QUrl's detailed error can reflect untrusted input.
         m_errorLabel->setText(tr("Enter a valid Core address beginning with ws:// or wss://."));
         m_errorLabel->setVisible(true);

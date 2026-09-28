@@ -48,6 +48,13 @@ std::optional<StationStartupSelection> resolveStationStartup(
         result.savedId = saved->id;
     }
 
+    if (result.connection.isRemote() && !result.connection.isValidRemoteTarget()) {
+        return fail(QStringLiteral("The selected Core needs a valid address or paired remote access route."));
+    }
+    if (hasCredentials && result.connection.url.isEmpty() && result.connection.isRemote()) {
+        return fail(QStringLiteral("A Core reached through remote access cannot use a token or certificate override."));
+    }
+
     if (hasCredentials && !result.connection.isRemote()) {
         return fail(QStringLiteral("Core credentials require a remote Core target."));
     }

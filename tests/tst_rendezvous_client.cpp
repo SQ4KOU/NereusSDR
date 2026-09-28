@@ -2414,6 +2414,76 @@ private slots:
                  QStringLiteral("Shack MacBook"));
     }
 
+    void freshMailboxPairingPersistsAndConnectsWithoutDirectUrl()
+    {
+        QVERIFY(SpakeExchange::isAvailable());
+        LocalService service;
+        QVERIFY(service.start());
+        Core core;
+        StationRendezvous rendezvous(core.server.get(), {service.url()}, true);
+        rendezvous.setAnswersIntroductionsForTest(false);
+        QSignalSpy nameplates(rendezvous.client(), &RendezvousClient::nameplateClaimed);
+        QVERIFY(rendezvous.start());
+        QTRY_COMPARE_WITH_TIMEOUT(nameplates.size(), 1, 10000);
+        const QString code = core.server->pairingWindow()->currentCode();
+        QVERIFY(!code.isEmpty());
+
+        QTemporaryDir keyDir;
+        auto identity = std::make_shared<const ClientDeviceIdentity>(
+            ClientDeviceIdentity::loadOrCreate(keyDir.path()));
+        StationPairingClient pairing(identity, QStringLiteral("Shack MacBook"));
+        QSignalSpy paired(&pairing, &StationPairingClient::paired);
+        QSignalSpy failed(&pairing, &StationPairingClient::failed);
+        pairing.pairByCodeFromAnywhere(code, {service.url()});
+        QTRY_VERIFY_WITH_TIMEOUT(!paired.isEmpty() || !failed.isEmpty(), 60000);
+        QVERIFY2(failed.isEmpty(), failed.isEmpty() ? "" : qPrintable(failed.at(0).at(0).toString()));
+        const auto record = paired.at(0).at(0).value<PairedStationRecord>();
+        QVERIFY(record.host.isEmpty());
+        QCOMPARE(record.port, quint16(0));
+        QCOMPARE(record.identityKey, core.server->stationIdentity().publicKeySpki());
+        QCOMPARE(StationIdentity::fingerprintOf(record.identityKey), record.identityFingerprint);
+
+        QTemporaryDir savedDir;
+        AppSettings settings(savedDir.filePath(QStringLiteral("targets.settings")));
+        CoreTargetStore store(settings);
+        QVERIFY(store.load());
+        SavedCoreTarget target;
+        target.id = CoreTargetStore::createId();
+        target.label = record.label;
+        target.connection.identityFingerprint = record.identityFingerprint;
+        target.connection.rendezvousId = Wire::rendezvousId(record.identityKey);
+        QVERIFY(store.upsert(target));
+        QVERIFY(store.select(target.id));
+        CoreTargetStore reloaded(settings);
+        QVERIFY(reloaded.load());
+        const auto saved = reloaded.target(target.id);
+        QVERIFY(saved.has_value());
+        QVERIFY(saved->connection.url.isEmpty());
+        QCOMPARE(saved->connection.identityFingerprint, record.identityFingerprint);
+
+        rendezvous.setAnswersIntroductionsForTest(true);
+        RadioModel remote(RadioModel::Role::Remote);
+        SettingsProxy proxy;
+        StationClient window(&remote, &proxy);
+        window.setDeviceIdentity(identity, QStringLiteral("Shack MacBook"));
+        StationClient::ServiceRoute route;
+        route.servers = {service.url()};
+        route.rendezvousId = saved->connection.rendezvousId;
+        window.setServiceRoute(route);
+        window.connectToStation(QUrl(), QString(), QString(), false,
+                                saved->connection.identityFingerprint);
+        QTRY_VERIFY_WITH_TIMEOUT(window.isHandshakeComplete(), kServiceConnectBudgetMs);
+        QCOMPARE(window.connectionAttempt().tries.size(), 1);
+        QVERIFY(window.connectionAttempt().tries.first().path
+                == StationConnectionAttempt::Path::Service
+            || window.connectionAttempt().tries.first().path
+                == StationConnectionAttempt::Path::Relay
+            || window.connectionAttempt().tries.first().path
+                == StationConnectionAttempt::Path::WebRelay);
+        QVERIFY(core.server->hasAuthenticatedSession());
+        window.disconnectFromStation(QStringLiteral("test done"));
+    }
+
     void aSessionOutlivesTheService()
     {
         LocalService service;

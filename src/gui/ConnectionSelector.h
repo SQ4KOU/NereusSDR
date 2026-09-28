@@ -110,10 +110,10 @@ private:
 
 // iPhone app Task 18 (R-IOS-08): Add a Core by code. The operator types
 // the code the Core shows (on its console, its status page or the Core
-// computer's Remote Access page) and the Core's address. The code is
-// checked against the word list here, before anything is sent, so a typing
-// mistake never burns it; the address takes a name, an IPv4 address or an
-// IPv6 literal, with an optional port.
+// computer's Remote Access page). The code is checked against the word list
+// here, before anything is sent, so a typing mistake never burns it. A
+// direct address is optional and disclosed only when chosen or prefilled
+// from a known LAN Core; it takes a name, IPv4 or IPv6, with optional port.
 class AddCoreByCodeDialog final : public QDialog {
     Q_OBJECT
 
@@ -131,6 +131,7 @@ private:
 
     QLineEdit* m_codeEdit{nullptr};
     QLineEdit* m_addressEdit{nullptr};
+    QWidget* m_addressGroup{nullptr};
     QLabel* m_errorLabel{nullptr};
     QString m_host;
     quint16 m_port{0};

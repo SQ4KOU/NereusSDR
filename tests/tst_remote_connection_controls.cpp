@@ -1010,6 +1010,24 @@ private slots:
         QVERIFY(!controls.detailText().contains(QStringLiteral("private-token")));
     }
 
+    void addresslessCoreShowsRemoteAccessAndRefusesWhenDisabled()
+    {
+        RadioModel remote(RadioModel::Role::Remote);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        RemoteStationOptions options;
+        options.identityFingerprint = QByteArray(32, 'k');
+        options.rendezvousId = QStringLiteral("abcdefghijklmnopqrstuvwxyz");
+        options.reachFromAnywhere = false;
+        RemoteConnectionController controls(&client, &remote, options);
+        QCOMPARE(controls.endpointText(), QStringLiteral("Remote access"));
+        QVERIFY(!controls.canConnect());
+        QVERIFY(controls.detailText().contains(QStringLiteral("Turn on remote access")));
+        controls.connectToStation();
+        QVERIFY(!client.isConnectionActive());
+        QVERIFY(client.connectionAttempt().summary().isEmpty());
+    }
+
     // The extra-slice startup reproduction that used to live here copied
     // MainWindow's populateEmptyPans hook into a lambda. It now runs through
     // the real window: tst_remote_window_harness

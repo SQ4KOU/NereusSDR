@@ -12,7 +12,9 @@
 
 #include "core/AppSettings.h"
 #include "core/security/ClientDeviceIdentity.h"
+#include "core/security/StationIdentity.h"
 #include "core/session/StationClient.h"
+#include "core/session/RendezvousWire.h"
 #include "gui/AddCustomRadioDialog.h"
 #include "gui/ConnectionPanel.h"
 #include "gui/ConnectionSelector.h"
@@ -59,6 +61,9 @@ QString endpointText(const QUrl& url)
 
 QString endpointText(const RemoteStationOptions& connection)
 {
+    if (connection.url.isEmpty() && !connection.rendezvousId.isEmpty()) {
+        return QObject::tr("Remote access");
+    }
     return endpointText(QUrl(connection.url));
 }
 
@@ -66,7 +71,9 @@ bool sameConnection(const RemoteStationOptions& a, const RemoteStationOptions& b
 {
     return QUrl(a.url) == QUrl(b.url) && a.token == b.token
         && a.fingerprint == b.fingerprint && a.allowUnpinned == b.allowUnpinned
-        && a.identityFingerprint == b.identityFingerprint;
+        && a.identityFingerprint == b.identityFingerprint
+        && a.rendezvousId == b.rendezvousId
+        && a.reachFromAnywhere == b.reachFromAnywhere;
 }
 
 // iPhone app Task 18: whether a Core on this network takes this computer
@@ -432,8 +439,12 @@ QString GuiConnectionController::lanCoreNextStep(const StationLanAnnouncement& a
 
 bool GuiConnectionController::isReadyToConnect(const RemoteStationOptions& connection)
 {
+    if (!connection.isValidRemoteTarget()) { return false; }
     if (!connection.identityFingerprint.isEmpty()) {
-        return true;
+        return !connection.url.isEmpty()
+            || (connection.reachFromAnywhere
+                && connection.serviceConnectRefusal().isEmpty()
+                && !configuredRemoteAccessServers().isEmpty());
     }
     return !connection.token.isEmpty()
         && (!connection.fingerprint.isEmpty() || connection.allowUnpinned);
@@ -502,6 +513,15 @@ void GuiConnectionController::connectTarget(const QString& key)
         const auto target = m_store.target(key.mid(6));
         if (!target) { m_selector->setNotice(tr("That saved Core is no longer available.")); return; }
         if (!isReadyToConnect(target->connection)) {
+            if (target->connection.url.isEmpty() && target->connection.isValidRemoteTarget()) {
+                const QString reason = !target->connection.reachFromAnywhere
+                    ? tr("Turn on remote access for this Core in Edit to connect.")
+                    : !target->connection.serviceConnectRefusal().isEmpty()
+                        ? target->connection.serviceConnectRefusal()
+                        : tr("Remote access servers are unavailable. Check this computer's remote access setting.");
+                m_selector->setNotice(reason);
+                return;
+            }
             editCore(target->id);
             return;
         }
@@ -801,13 +821,31 @@ void GuiConnectionController::addByCode(const QString& address)
     }
     AddCoreByCodeDialog dialog(address, m_selector.get());
     if (dialog.exec() != QDialog::Accepted) { return; }
+    // The nested dialog event loop can process application shutdown.
+    if (m_shuttingDown) { return; }
     m_selector->setNotice(tr("Pairing with the Core by its code…"));
-    pairingClient()->pairByCode(dialog.code(), dialog.host(), dialog.port());
+    if (dialog.host().isEmpty()) {
+        pairingClient()->pairByCodeFromAnywhere(dialog.code(), configuredRemoteAccessServers());
+    } else {
+        pairingClient()->pairByCode(dialog.code(), dialog.host(), dialog.port());
+    }
 }
 
 void GuiConnectionController::onPaired(const PairedStationRecord& record)
 {
     if (m_shuttingDown) { return; }
+    if (!StationIdentity::isP256Spki(record.identityKey)
+        || record.identityFingerprint.size() != 32
+        || StationIdentity::fingerprintOf(record.identityKey) != record.identityFingerprint
+        || (record.host.isEmpty() != (record.port == 0))) {
+        m_selector->setNotice(tr("The Core's pairing identity could not be verified. Pair again."));
+        return;
+    }
+    const QString rendezvousId = RendezvousWire::rendezvousId(record.identityKey);
+    if (!RendezvousWire::isRendezvousId(rendezvousId)) {
+        m_selector->setNotice(tr("The Core's remote access identity could not be verified. Pair again."));
+        return;
+    }
     // One saved Core per identity: pairing again with a Core already under
     // Your Cores updates that entry's address rather than adding another.
     SavedCoreTarget target;
@@ -819,10 +857,16 @@ void GuiConnectionController::onPaired(const PairedStationRecord& record)
         }
     }
     if (!record.label.isEmpty()) { target.label = record.label; }
-    target.connection.url = StationPairingClient::coreUrl(record.host, record.port).toString();
+    if (!record.host.isEmpty()) {
+        target.connection.url = StationPairingClient::coreUrl(record.host, record.port).toString();
+    }
     target.connection.identityFingerprint = record.identityFingerprint;
-    target.connection.controlChannelVersion = -1;
-    target.connection.negativeControlObservedMs = -1;
+    target.connection.rendezvousId = rendezvousId;
+    if (target.connection.url.isEmpty()) {
+        target.connection.token.clear();
+        target.connection.fingerprint.clear();
+        target.connection.allowUnpinned = false;
+    }
     if (target.label.isEmpty()) { target.label = endpointText(target.connection); }
     QString error;
     if (!m_store.upsert(target, &error)) {

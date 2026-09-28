@@ -48,6 +48,11 @@ QStringList remoteAccessServerEntries()
 
 } // namespace
 
+QList<QUrl> configuredRemoteAccessServers()
+{
+    return RendezvousClient::serverUrls(remoteAccessServerEntries());
+}
+
 RemoteConnectionController::RemoteConnectionController(
     StationClient* client, RadioModel* model, RemoteStationOptions options, QObject* parent)
     : QObject(parent), m_client(client), m_model(model), m_options(std::move(options))
@@ -103,6 +108,9 @@ RemoteConnectionController::RemoteConnectionController(
 
 QString RemoteConnectionController::endpointText() const
 {
+    if (m_options.url.isEmpty() && !m_options.rendezvousId.isEmpty()) {
+        return tr("Remote access");
+    }
     const QUrl url(m_options.url);
     // Never display URL user-info/query/fragment or the pairing token.
     QString host = url.host();
@@ -112,7 +120,15 @@ QString RemoteConnectionController::endpointText() const
 
 bool RemoteConnectionController::canConnect() const
 {
-    return m_client && m_options.isRemote() && !m_client->isConnectionActive();
+    if (!m_client || !m_options.isValidRemoteTarget() || m_client->isConnectionActive()) {
+        return false;
+    }
+    if (m_options.url.isEmpty()) {
+        return m_options.reachFromAnywhere
+            && m_options.serviceConnectRefusal().isEmpty()
+            && !configuredRemoteAccessServers().isEmpty();
+    }
+    return true;
 }
 
 bool RemoteConnectionController::canDisconnect() const
@@ -162,6 +178,15 @@ QString RemoteConnectionController::detailText() const
 {
     QString text = tr("Core: %1\n%2\n%3")
         .arg(endpointText(), statusText(), radioText());
+    if (m_options.url.isEmpty()) {
+        if (!m_options.reachFromAnywhere) {
+            text += tr("\nTurn on remote access for this Core in Connections to connect.");
+        } else if (!m_options.serviceConnectRefusal().isEmpty()) {
+            text += QLatin1Char('\n') + m_options.serviceConnectRefusal();
+        } else if (configuredRemoteAccessServers().isEmpty()) {
+            text += tr("\nRemote access servers are unavailable. Check this computer's remote access setting.");
+        }
+    }
     if (state() == ConnectionState::Connected && m_model
         && !m_model->receiveLayoutRestoreMessage().isEmpty()) {
         text += tr("\nReceivers: %1").arg(m_model->receiveLayoutRestoreMessage());
@@ -230,7 +255,7 @@ QString RemoteConnectionController::stopTitle() const
     case CoreStopNotice::Refused: return tr("Core refused this window");
     case CoreStopNotice::DeviceRemoved: return tr("Removed from the Core");
     case CoreStopNotice::PairingRequired: return tr("Pair with the Core");
-    case CoreStopNotice::IdentityChanged: return tr("Core not recognised");
+    case CoreStopNotice::IdentityChanged: return tr("Core not recognized");
     }
     return {};
 }
@@ -324,7 +349,7 @@ void RemoteConnectionController::connectToStation()
     StationClient::ServiceRoute route;
     if (!m_options.identityFingerprint.isEmpty() && m_options.reachFromAnywhere
         && !m_options.rendezvousId.isEmpty()) {
-        route.servers = RendezvousClient::serverUrls(remoteAccessServerEntries());
+        route.servers = configuredRemoteAccessServers();
         route.rendezvousId = m_options.rendezvousId;
         route.relayAllowed = m_options.relayAllowed != 0;
         route.controlChannelVersion = m_options.effectiveControlChannelVersion(
