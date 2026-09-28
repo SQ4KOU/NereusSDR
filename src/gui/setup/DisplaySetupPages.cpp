@@ -619,7 +619,7 @@ void SpectrumDefaultsPage::buildUI()
         "FFT window function. Rectangular has the narrowest main lobe but "
         "the worst sidelobes. Blackman-Harris (4T or 7T) gives strong "
         "sidelobe rejection. Flat-Top is best for amplitude calibration. "
-        "Kaiser is parameterised (KaiserPi shape parameter)."));
+        "Kaiser is parameterized (KaiserPi shape parameter)."));
     fftGrid->addWidget(windowPrefix,  3, 0);
     fftGrid->addWidget(m_windowCombo, 3, 1, 1, 3);  // span cols 1-3
 
@@ -2736,7 +2736,7 @@ void TxDisplayPage::buildUI()
         "TX FFT window function. Hamming (default) trades a wide main "
         "lobe for moderate sidelobe rejection. Blackman-Harris (4T or 7T) "
         "gives strong sidelobe rejection for cleaner waterfall during TX. "
-        "Flat-Top is best for amplitude calibration. Kaiser is parameterised."));
+        "Flat-Top is best for amplitude calibration. Kaiser is parameterized."));
     fftGrid->addWidget(txWindowPrefix,  3, 0);
     fftGrid->addWidget(m_txWindowCombo, 3, 1, 1, 3);
 

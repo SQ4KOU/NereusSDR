@@ -61,7 +61,7 @@
             {
               "id": "display.spectrumDefaults.window",
               "label": "Window",
-              "tooltip": "FFT window function. Rectangular has the narrowest main lobe but the worst sidelobes. Blackman-Harris (4T or 7T) gives strong sidelobe rejection. Flat-Top is best for amplitude calibration. Kaiser is parameterised (KaiserPi shape parameter).",
+              "tooltip": "FFT window function. Rectangular has the narrowest main lobe but the worst sidelobes. Blackman-Harris (4T or 7T) gives strong sidelobe rejection. Flat-Top is best for amplitude calibration. Kaiser is parameterized (KaiserPi shape parameter).",
               "kind": "choice",
               "binding": {
                 "setting": "DisplayFftWindow"
@@ -204,7 +204,7 @@
             {
               "id": "display.txDisplay.window",
               "label": "Window",
-              "tooltip": "TX FFT window function. Hamming (default) trades a wide main lobe for moderate sidelobe rejection. Blackman-Harris (4T or 7T) gives strong sidelobe rejection for cleaner waterfall during TX. Flat-Top is best for amplitude calibration. Kaiser is parameterised.",
+              "tooltip": "TX FFT window function. Hamming (default) trades a wide main lobe for moderate sidelobe rejection. Blackman-Harris (4T or 7T) gives strong sidelobe rejection for cleaner waterfall during TX. Flat-Top is best for amplitude calibration. Kaiser is parameterized.",
               "kind": "choice",
               "binding": {
                 "setting": "DisplayTxWindowType"
