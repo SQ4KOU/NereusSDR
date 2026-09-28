@@ -537,7 +537,9 @@ writes.
 | `property.write` | `key` (string), `properties` (array), `type` (string) | `writeId` (number) |
 | `record.batch` | `generation` (number), `removes` (array), `reset` (boolean), `stream` (string), `type` (string), `upserts` (array) | none |
 | `schema` | `class` (string), `fields` (array), `type` (string) | none |
-| `session.end` | `reason` (string), `type` (string) | `code` (string), `retryable` (boolean) |
+| `session.end` | `reason` (string), `type` (string) | `code` (string), `retryable` (boolean), `secondsAgo` (number), `takenOverBy` (string), `takenOverById` (string) |
+| `session.held` | `devices` (array), `revision` (number), `type` (string) | `placeFreed` (object), `placeTaken` (object) |
+| `session.takeover` | `deviceId` (string), `revision` (number), `type` (string) | none |
 | `settings.reject` | `key` (string), `properties` (array), `type` (string) | `reason` (string) |
 | `settings.remove` | `key` (string), `properties` (array), `type` (string) | none |
 | `settings.snapshot` | `properties` (array), `type` (string) | none |
@@ -605,11 +607,10 @@ string in an `f64` entry is refused. The case is common: `SliceModel`'s
    device that already holds a place, live or away (section 12.4), is let
    in at once and its older connection ends with `session.end` "This device
    connected again.", `retryable` false, `code` `sameDevice`; with a place
-   free the device is let in; with every place taken the station sends
-   `session.end` "The Core already has four devices connected.",
-   `retryable` true, no code, and closes (a window that did not declare
-   `sessionHolder` with `deviceAuth`, which cannot answer the fifth-device
-   question, is told "The Core is full. Update NereusSDR to take a device's place, or try again later." instead, `retryable` true, no code). No sign-in ever ends another
+   free the device is let in. At capacity, an authenticated paired device
+   that declared both `sessionHolder` 1 and `deviceAuth` 1 at minor 11
+   receives `session.held` in place of `capabilities` (below). A window
+   without that gate is told "The Core is full. Update NereusSDR to take a device's place, or try again later." with `retryable` true, no code. No ordinary sign-in ends another
    device's session. A device let in gets, in this order
    (`StationServer::promoteToSession`):
    - `capabilities` (section 6);
@@ -621,6 +622,27 @@ string in an `f64` entry is refused. The case is common: `SliceModel`'s
      device with `sessionHolderVersion` 1, one `marker:<id>` per slice of
      another device (section 7.1, iPhone app plan Task 73);
    - `snapshot.complete`.
+
+   While held, the device receives no capabilities, settings, mirrored
+   objects, records or media. Its connect deadline pauses; the original
+   question expires after 60 seconds, including across list refreshes.
+   `session.held` carries the four devices, a revision, and optional
+   `placeTaken` or `placeFreed`. Entries use the `connectedDevices` names
+   and slice descriptions, plus `from` and `replaceable`. Away devices
+   appear first, longest away first; then present devices by actual
+   command/write inactivity, with the on-air device last. A hosting desktop
+   appears but cannot be chosen. The client answers with `session.takeover`
+   `{deviceId, revision}`; an empty id cancels. A stale revision or hosting
+   choice returns the current list without extending the deadline. A free
+   place admits the first waiting device. A successful choice first
+   confirms the selected holder is unkeyed and MOX is off, then ends and
+   removes that device and admits the waiting device. `session.end` for the
+   replaced connection carries `takenOverBy`, `takenOverById` and
+   `secondsAgo` with code `takenOver`.
+   `StationServer` owns the first-asked queue, original deadline, operation
+   serial and displayed-list revision. `DeviceSessionRegistry` owns the
+   admitted/away/hosting places, actual activity order, and place-taken
+   and place-freed records kept until sign-in, revoke or restart.
 
    These go to the device let in alone, from its own view of the station's
    state (iPhone app plan Task 72): another device's session receives none
@@ -3899,6 +3921,7 @@ refused.
 | `spots.disconnect` | `source` utf8 | `recordStreamVersion` | 1 | 11 |
 | `spots.sendCommand` | `source` utf8, `text` utf8 | `recordStreamVersion` | 1 | 11 |
 | `spots.clearAll` | none | `recordStreamVersion` | 1 | 11 |
+| `txModMonitor.reset` | `source` i64 | `txModMonitorVersion` | 1 | 11 |
 | `station.selectRadio` | `mac` utf8 | `stationRadiosVersion` | 1 | 11 |
 | `station.rescanRadios` | none | `stationRadiosVersion` | 1 | 11 |
 | `station.setRadioModel` | `mac` utf8, `model` i64 | `stationRadiosVersion` | 1 | 11 |
@@ -3946,7 +3969,6 @@ refused.
 | `confirm.cancel` | `id` i64 | `sessionHolderVersion` | 1 | 11 |
 | `notice.takeBack` | `id` i64 | `sessionHolderVersion` | 1 | 11 |
 | `session.pathTicket` | none | `controlSwitchVersion` | 1 | 11 |
-| `txModMonitor.reset` | `source` i64 | `txModMonitorVersion` | 1 | 11 |
 
 <!-- /surface -->
 
@@ -4671,7 +4693,8 @@ non-empty string; an empty one is refused like any mistyped key.
 | Message the station cannot decode (section 13) | `session.end` "The Core could not read a message from this app." | false | `protocolError` |
 | Out-of-order handshake (section 5.1) | `session.end` | false | `protocolError` |
 | The same device connected again (section 5.1): its older connection | `session.end` "This device connected again." | false | `sameDevice` |
-| Every place on the Core is taken (section 5.1), a device that declared `sessionHolder` | `session.end` "The Core already has four devices connected." | true | none |
+| Held device cancels or its original 60 seconds expire (section 5.1) | `session.end` "The Core already has four devices connected." | false | `coreFull` |
+| A device's place is taken by a held device (section 5.1) | `session.end` "<taker's name> took this device's place on the Core." with `takenOverBy`, `takenOverById`, `secondsAgo` | false | `takenOver` |
 | Every place on the Core is taken (section 5.1), an older window | `session.end` "The Core is full. Update NereusSDR to take a device's place, or try again later." | true | none |
 | A window without the several-devices feature, with no slice for it at sign-in (section 7.5) | `session.end` "All the radio's slices are in use. Try again when another device closes one." or "All the radio's receivers are in use. Try again when another device frees one." | true | none |
 | Such a window's last slice taken by another device (section 7.5) | `session.end` "<taker's name> took the receiver this app was using. Update NereusSDR to share the Core." | false | `takenOver` |
@@ -5001,6 +5024,7 @@ maximum also equals `kMaximumSpectrumDisplayFramesPerSecond` in
 | `serviceAnswerDeadlineMs` | 10000 | ms | RendezvousDialer::kAnswerDeadlineMs |
 | `shortNameMaxBytes` | 32 | bytes | DeviceStore::kMaxShortNameBytes |
 | `stationInboundMessageBytes` | 1048576 | bytes | StationServer::kMaxIncomingMessageBytes |
+| `takeoverAnswerMs` | 60000 | ms | StationServer::kTakeoverAnswerMs |
 | `telemetryBytes` | 16384 | bytes | kMaxStationTelemetryBytes |
 
 <!-- /surface -->

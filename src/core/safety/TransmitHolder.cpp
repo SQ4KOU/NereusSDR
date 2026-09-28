@@ -36,6 +36,8 @@
 // =================================================================
 
 #include "core/safety/TransmitHolder.h"
+#include <QPointer>
+#include <QScopeGuard>
 
 #include "core/LogCategories.h"
 
@@ -126,7 +128,7 @@ TxRefusal TransmitHolder::keyRefusalFor(const QByteArray& deviceId, bool program
         return TxRefusals::stopNotConfirmed();
     }
     // Ruling 8.2 step 1, and the dropped holder's fence (ruling 8.15).
-    if (m_state == State::Transferring || m_fenced) {
+    if (m_state == State::Transferring || m_fenced || m_keyingBlockDepth > 0) {
         return TxRefusals::changingHands();
     }
     if (m_state == State::Held && m_holder.has_value()) {
@@ -183,7 +185,7 @@ TransmitHolder::TakeAnswer TransmitHolder::askTake(const QByteArray& requester,
     if (m_stopUnconfirmed) {
         return {TakeVerdict::Refuse, TxRefusals::stopNotConfirmed()};
     }
-    if (m_state == State::Transferring || m_fenced) {
+    if (m_state == State::Transferring || m_fenced || m_keyingBlockDepth > 0) {
         return {TakeVerdict::Refuse, TxRefusals::changingHands()};
     }
     if (m_state != State::Held || !m_holder.has_value()) {
@@ -205,7 +207,7 @@ TransmitHolder::TakeAnswer TransmitHolder::askTake(const QByteArray& requester,
 void TransmitHolder::transferTo(std::optional<Holder> next, const QString& reason,
                                 std::function<void(bool)> done)
 {
-    if (m_state == State::Transferring) {
+    if (m_state == State::Transferring || (next.has_value() && m_keyingBlockDepth > 0)) {
         if (done) {
             done(false);
         }
@@ -226,6 +228,16 @@ void TransmitHolder::transferTo(std::optional<Holder> next, const QString& reaso
         return;
     }
     afterUnkey(generation);
+}
+
+void TransmitHolder::runWithKeyingBlocked(const std::function<void()>& callback)
+{
+    QPointer<TransmitHolder> self(this);
+    ++m_keyingBlockDepth;
+    auto exit = qScopeGuard([self]() {
+        if (self) --self->m_keyingBlockDepth;
+    });
+    callback();
 }
 
 void TransmitHolder::afterUnkey(quint64 generation)

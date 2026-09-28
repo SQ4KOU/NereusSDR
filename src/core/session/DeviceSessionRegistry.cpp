@@ -18,6 +18,7 @@
 #include "core/security/DeviceStore.h"
 
 #include <QHostAddress>
+#include <QPointer>
 #include <QSet>
 
 #include <algorithm>
@@ -57,9 +58,13 @@ int DeviceSessionRegistry::indexOf(const QByteArray& deviceId) const
 
 void DeviceSessionRegistry::emitChanges(int placesBefore)
 {
+    ++m_revision;
+    const QPointer<DeviceSessionRegistry> self(this);
     emit changed();
-    if (placesTaken() != placesBefore) {
-        emit placesTakenChanged(placesTaken());
+    if (!self) return;
+    const int placesAfter = placesTaken();
+    if (placesAfter != placesBefore) {
+        emit placesTakenChanged(placesAfter);
     }
 }
 
@@ -88,6 +93,9 @@ DeviceSessionRegistry::AdmitResult DeviceSessionRegistry::admit(const Entry& dev
         held.shortName = device.shortName;
         held.deviceKind = device.deviceKind;
         m_timeRanOut.remove(device.deviceId);
+        if (m_placeTaken.contains(device.deviceId)) {
+            result.placeTaken = m_placeTaken.take(device.deviceId);
+        }
         emitChanges(placesBefore);
         return result;
     }
@@ -111,6 +119,9 @@ DeviceSessionRegistry::AdmitResult DeviceSessionRegistry::admit(const Entry& dev
     if (ranOut != m_timeRanOut.cend()) {
         result.timeRanOutAtMs = *ranOut;
         m_timeRanOut.erase(ranOut);
+    }
+    if (m_placeTaken.contains(device.deviceId)) {
+        result.placeTaken = m_placeTaken.take(device.deviceId);
     }
     result.admission = Admission::Admitted;
     emitChanges(placesBefore);
@@ -145,6 +156,7 @@ void DeviceSessionRegistry::sessionEnded(const QByteArray& deviceId, const QObje
 void DeviceSessionRegistry::remove(const QByteArray& deviceId)
 {
     m_timeRanOut.remove(deviceId);
+    m_placeTaken.remove(deviceId);
     const int index = indexOf(deviceId);
     if (index < 0) {
         return;
@@ -152,6 +164,45 @@ void DeviceSessionRegistry::remove(const QByteArray& deviceId)
     const int placesBefore = placesTaken();
     m_entries.removeAt(index);
     emitChanges(placesBefore);
+}
+
+void DeviceSessionRegistry::replace(const QByteArray& deviceId, const QByteArray& byId,
+                                    const QString& byName)
+{
+    const int index = indexOf(deviceId);
+    if (index < 0 || m_entries.at(index).kind == Kind::Hosting) {
+        return;
+    }
+    const int placesBefore = placesTaken();
+    m_entries.removeAt(index);
+    m_timeRanOut.remove(deviceId);
+    m_placeTaken.insert(deviceId, {byId, byName, now()});
+    emitChanges(placesBefore);
+}
+
+std::optional<DeviceSessionRegistry::AdmitResult::TakenPlace>
+DeviceSessionRegistry::placeTakenBy(const QByteArray& deviceId) const
+{
+    const auto it = m_placeTaken.constFind(deviceId);
+    return it == m_placeTaken.cend() ? std::nullopt
+                                     : std::optional<AdmitResult::TakenPlace>(*it);
+}
+
+QList<DeviceSessionRegistry::Entry>
+DeviceSessionRegistry::replacementCandidates(const QByteArray& transmittingId) const
+{
+    QList<Entry> ordered = entries();
+    std::sort(ordered.begin(), ordered.end(), [&transmittingId](const Entry& a, const Entry& b) {
+        const int aGroup = a.state == State::Away ? 0
+            : a.deviceId == transmittingId ? 2 : 1;
+        const int bGroup = b.state == State::Away ? 0
+            : b.deviceId == transmittingId ? 2 : 1;
+        if (aGroup != bGroup) return aGroup < bGroup;
+        const qint64 aSince = aGroup == 0 ? a.awaySinceMs : a.lastActivityMs;
+        const qint64 bSince = bGroup == 0 ? b.awaySinceMs : b.lastActivityMs;
+        return aSince != bSince ? aSince < bSince : a.order < b.order;
+    });
+    return ordered;
 }
 
 QList<QByteArray> DeviceSessionRegistry::expireAway()
@@ -202,6 +253,7 @@ void DeviceSessionRegistry::noteActivity(const QByteArray& deviceId)
     Entry& held = m_entries[index];
     const qint64 time = now();
     held.lastActivityMs = time;
+    ++m_revision;
     if (time - held.reportedActivityMs >= kActivityResolutionMs) {
         held.reportedActivityMs = time;
         emit changed();

@@ -236,6 +236,28 @@ SessionMessage SessionMessages::sessionEnd(const QString& reason, bool retryable
     return m;
 }
 
+SessionMessage SessionMessages::sessionHeld(const QJsonArray& devices, quint32 revision,
+                                            std::optional<QJsonObject> placeTaken,
+                                            std::optional<QJsonObject> placeFreed)
+{
+    SessionMessage m;
+    m.kind = SessionMessageKind::SessionHeld;
+    m.heldDevices = devices;
+    m.heldRevision = revision;
+    m.placeTaken = std::move(placeTaken);
+    m.placeFreed = std::move(placeFreed);
+    return m;
+}
+
+SessionMessage SessionMessages::sessionTakeover(const QString& deviceId, quint32 revision)
+{
+    SessionMessage m;
+    m.kind = SessionMessageKind::SessionTakeover;
+    m.takeoverDeviceId = deviceId;
+    m.heldRevision = revision;
+    return m;
+}
+
 SessionMessage SessionMessages::authResult(bool accepted, const QString& reason,
                                            bool retryable)
 {
@@ -462,6 +484,8 @@ constexpr KindName kKindNames[] = {
     { SessionMessageKind::AuthResult, "auth.result" },
     { SessionMessageKind::Capabilities, "capabilities" },
     { SessionMessageKind::SessionEnd, "session.end" },
+    { SessionMessageKind::SessionHeld, "session.held" },
+    { SessionMessageKind::SessionTakeover, "session.takeover" },
     { SessionMessageKind::PropertyWrite, "property.write" },
     { SessionMessageKind::PropertyResult, "property.result" },
     { SessionMessageKind::SettingsSnapshot, "settings.snapshot" },
@@ -543,6 +567,8 @@ QList<SessionMessageKind> SessionMessages::allKinds()
         SessionMessageKind::AuthResult,
         SessionMessageKind::Capabilities,
         SessionMessageKind::SessionEnd,
+        SessionMessageKind::SessionHeld,
+        SessionMessageKind::SessionTakeover,
         SessionMessageKind::PropertyWrite,
         SessionMessageKind::SettingsSnapshot,
         SessionMessageKind::SettingsWrite,
@@ -983,6 +1009,25 @@ QByteArray SessionMessages::encode(const SessionMessage& message)
         if (!message.endCode.isEmpty()) {
             o.insert(QStringLiteral("code"), message.endCode);
         }
+        if (!message.takenOverBy.isEmpty()) {
+            o.insert(QStringLiteral("takenOverBy"), message.takenOverBy);
+            o.insert(QStringLiteral("takenOverById"), message.takenOverById);
+            o.insert(QStringLiteral("secondsAgo"), static_cast<double>(message.secondsAgo.value_or(0)));
+        }
+        break;
+    case SessionMessageKind::SessionHeld:
+        o.insert(QStringLiteral("devices"), message.heldDevices);
+        o.insert(QStringLiteral("revision"), static_cast<double>(message.heldRevision));
+        if (message.placeTaken) {
+            o.insert(QStringLiteral("placeTaken"), *message.placeTaken);
+        }
+        if (message.placeFreed) {
+            o.insert(QStringLiteral("placeFreed"), *message.placeFreed);
+        }
+        break;
+    case SessionMessageKind::SessionTakeover:
+        o.insert(QStringLiteral("deviceId"), message.takeoverDeviceId);
+        o.insert(QStringLiteral("revision"), static_cast<double>(message.heldRevision));
         break;
     case SessionMessageKind::PropertyWrite: {
         o.insert(QStringLiteral("key"), QString::fromUtf8(message.objectKey));
@@ -1342,6 +1387,91 @@ bool SessionMessages::decode(const QByteArray& wire, SessionMessage* out)
         && !o.value(QStringLiteral("reason")).isString()) {
         return false;
     }
+    if (kind == SessionMessageKind::SessionTakeover
+        && (!o.value(QStringLiteral("deviceId")).isString()
+            || !isWholeNumberIn(o.value(QStringLiteral("revision")), 0.0, 4294967295.0))) {
+        return false;
+    }
+    if (kind == SessionMessageKind::SessionHeld) {
+        if (!o.value(QStringLiteral("devices")).isArray()
+            || !isWholeNumberIn(o.value(QStringLiteral("revision")), 0.0, 4294967295.0)
+            || o.value(QStringLiteral("devices")).toArray().size() > 4) {
+            return false;
+        }
+        for (const QJsonValue& value : o.value(QStringLiteral("devices")).toArray()) {
+            if (!value.isObject()) {
+                return false;
+            }
+            const QJsonObject device = value.toObject();
+            for (const char* key : {"deviceId", "name", "shortName", "kind", "state", "from"}) {
+                if (!device.value(QLatin1String(key)).isString()) {
+                    return false;
+                }
+            }
+            if (!device.value(QStringLiteral("replaceable")).isBool()
+                || !device.value(QStringLiteral("holdsTransmit")).isBool()
+                || !device.value(QStringLiteral("listeningOn")).isArray()) {
+                return false;
+            }
+            if (device.value(QStringLiteral("deviceId")).toString().isEmpty()
+                || (device.value(QStringLiteral("state")).toString() != QLatin1String("away")
+                    && device.value(QStringLiteral("state")).toString() != QLatin1String("listening")
+                    && device.value(QStringLiteral("state")).toString() != QLatin1String("transmitting"))) {
+                return false;
+            }
+            auto validSlice = [](const QJsonValue& value) {
+                if (!value.isObject()) return false;
+                const QJsonObject slice = value.toObject();
+                return slice.value(QStringLiteral("letter")).isString()
+                    && isWholeNumberIn(slice.value(QStringLiteral("mode")), 0.0, 65535.0)
+                    && isWholeNumberIn(slice.value(QStringLiteral("band")), 0.0, 65535.0)
+                    && slice.value(QStringLiteral("frequencyHz")).isDouble()
+                    && std::isfinite(slice.value(QStringLiteral("frequencyHz")).toDouble())
+                    && slice.value(QStringLiteral("frequencyHz")).toDouble() >= 0.0;
+            };
+            for (const QJsonValue& slice : device.value(QStringLiteral("listeningOn")).toArray()) {
+                if (!validSlice(slice)) return false;
+            }
+            for (const char* key : {"lastActivitySeconds", "connectedForSeconds",
+                                    "awayForSeconds", "transmittingForSeconds"}) {
+                if (!isWholeNumberIn(device.value(QLatin1String(key)), 0.0, 9007199254740991.0)) {
+                    return false;
+                }
+            }
+            if (device.contains(QStringLiteral("transmittingOn"))
+                && !validSlice(device.value(QStringLiteral("transmittingOn")))) {
+                return false;
+            }
+        }
+        if (o.contains(QStringLiteral("placeTaken"))) {
+            const QJsonValue taken = o.value(QStringLiteral("placeTaken"));
+            if (!taken.isObject() || !taken.toObject().value(QStringLiteral("byName")).isString()
+                || !taken.toObject().value(QStringLiteral("byId")).isString()
+                || !isWholeNumberIn(taken.toObject().value(QStringLiteral("secondsAgo")),
+                                    0.0, 9007199254740991.0)) {
+                return false;
+            }
+        }
+        if (o.contains(QStringLiteral("placeFreed"))) {
+            const QJsonValue freed = o.value(QStringLiteral("placeFreed"));
+            if (!freed.isObject()
+                || !isWholeNumberIn(freed.toObject().value(QStringLiteral("secondsAgo")),
+                                    0.0, 9007199254740991.0)) {
+                return false;
+            }
+        }
+    }
+    if (kind == SessionMessageKind::SessionEnd) {
+        if ((o.contains(QStringLiteral("takenOverBy"))
+             && !o.value(QStringLiteral("takenOverBy")).isString())
+            || (o.contains(QStringLiteral("takenOverById"))
+                && !o.value(QStringLiteral("takenOverById")).isString())
+            || (o.contains(QStringLiteral("secondsAgo"))
+                && !isWholeNumberIn(o.value(QStringLiteral("secondsAgo")), 0.0,
+                                    9007199254740991.0))) {
+            return false;
+        }
+    }
     // iPhone app Task 12: `code`, when present, is a non-empty string.
     if ((kind == SessionMessageKind::AuthResult || kind == SessionMessageKind::SessionEnd)
         && o.contains(QStringLiteral("code"))
@@ -1677,6 +1807,29 @@ bool SessionMessages::decode(const QByteArray& wire, SessionMessage* out)
         message.reason = o.value(QStringLiteral("reason")).toString();
         message.retryable = o.value(QStringLiteral("retryable")).toBool();
         message.endCode = o.value(QStringLiteral("code")).toString();
+        if (o.contains(QStringLiteral("takenOverBy"))) {
+            message.takenOverBy = o.value(QStringLiteral("takenOverBy")).toString();
+        }
+        if (o.contains(QStringLiteral("takenOverById"))) {
+            message.takenOverById = o.value(QStringLiteral("takenOverById")).toString();
+        }
+        if (o.contains(QStringLiteral("secondsAgo"))) {
+            message.secondsAgo = static_cast<qint64>(o.value(QStringLiteral("secondsAgo")).toDouble());
+        }
+        break;
+    case SessionMessageKind::SessionHeld:
+        message.heldDevices = o.value(QStringLiteral("devices")).toArray();
+        message.heldRevision = static_cast<quint32>(o.value(QStringLiteral("revision")).toDouble());
+        if (o.contains(QStringLiteral("placeTaken"))) {
+            message.placeTaken = o.value(QStringLiteral("placeTaken")).toObject();
+        }
+        if (o.contains(QStringLiteral("placeFreed"))) {
+            message.placeFreed = o.value(QStringLiteral("placeFreed")).toObject();
+        }
+        break;
+    case SessionMessageKind::SessionTakeover:
+        message.takeoverDeviceId = o.value(QStringLiteral("deviceId")).toString();
+        message.heldRevision = static_cast<quint32>(o.value(QStringLiteral("revision")).toDouble());
         break;
     case SessionMessageKind::PropertyResult: {
         message.objectKey = o.value(QStringLiteral("key")).toString().toUtf8();

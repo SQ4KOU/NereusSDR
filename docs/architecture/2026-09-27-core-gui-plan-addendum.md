@@ -25,8 +25,8 @@ status, and the plan task or requirement ID it belongs to.
   equivalents should be built in this effort.
 - Status: the exact inventory and disabled wording are recorded in the Setup
   lane. Core description format and supported controls continue; omitted controls
-  and empty pages do not count as completed parity. General Region/Extended stay
-  visible with their current unavailable reasons until their implementation lands.
+  and empty pages do not count as completed parity. General Region is now active behind transmitSettingsVersion 9; Extended remains
+  unavailable pending its separate migration ruling.
 - Plan: iPhone D16, Core Setup-description tasks 43-46 and phone renderer task 58.
 
 ### G-04: ATT on TX changes take effect at the next key, not at once
@@ -811,9 +811,33 @@ colours for the same signal.
   both; this separate catalog test had not been included in those focused runs.
 - Ruling: ordinary verification repair under JJ's complete-and-test instruction.
   Preserve the exact order assertion and add the actual appended fields.
-- Status: corrected fixture passes in the full catalog suite. Production wire
-  order is unchanged; no assertion or deadline was removed.
+- Status: corrected fixture passes in the full catalog suite. Integration also
+  corrected the station-session append/old-peer omission checks and the surface
+  manifest's misplaced txModMonitor.reset command. Regeneration was checked to
+  change only command order, with identical command contents and every other
+  section unchanged. Production wire order is unchanged; no assertion or deadline
+  was removed.
 - Plan: integrated Core protocol verification.
+
+
+### G-53: Admission cleanup could outlive the Core server
+
+- Evidence: fifth-device review found raw server captures in shared admission/drop
+  cleanup and accesses after callbacks that can retire the server. The new registry
+  changed signal, incumbent session-end send and slice removal make these paths
+  relevant to replacement. The loopback send observer also needed a lifetime guard.
+- Ruling: covered by JJ's instruction to finish and verify every gap; preserve
+  admission and transmit ownership rules while stopping cleanup after destruction.
+- Status: fifth-device admission, the original 60-second question, 180-second away
+  place, cancellation, stale-answer refresh and reserved replacement are integrated.
+  QPointer guards cover registry notification, admission/drop cleanup and slice
+  release; three added regressions destroy the server at admission, incumbent end
+  and slice removal. Ten integrated device/session/conformance targets passed;
+  the sole surface-order failure was repaired and both the full fifth-device and
+  surface suites then passed (7.30 s, load 7.11/8.55/7.86). App/Core builds passed.
+  PlaceFreed's 180-second case is covered by Core integration; its wire fixture
+  awaits a runner that can defer the initially opened 30-second pre-auth connection.
+- Plan: Core device admission and multi-device lifecycle.
 
 ## How this addendum is kept
 

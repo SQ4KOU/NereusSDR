@@ -306,6 +306,7 @@ struct Core {
         const bool settled = QTest::qWaitFor(
             [app]() {
                 return app->receivedKinds().contains(QByteArrayLiteral("snapshot.complete"))
+                    || app->receivedKinds().contains(QByteArrayLiteral("session.held"))
                     || !app->isOpen();
             },
             5000);
@@ -389,6 +390,20 @@ void verifyCoreFull(LoopbackTransport* app, const QString& reason = kCoreFull)
     // Nothing of a session reached it.
     QVERIFY(!app->receivedKinds().contains(QByteArrayLiteral("capabilities")));
     QVERIFY(!app->receivedKinds().contains(QByteArrayLiteral("snapshot.complete")));
+}
+
+void verifyHeld(LoopbackTransport* app, QJsonObject* out = nullptr)
+{
+    const QJsonObject auth = firstOfType(app->received(), QStringLiteral("auth.result"));
+    QCOMPARE(auth.value(QStringLiteral("accepted")).toBool(), true);
+    const QJsonObject held = firstOfType(app->received(), QStringLiteral("session.held"));
+    QCOMPARE(held.value(QStringLiteral("devices")).toArray().size(), 4);
+    QVERIFY(held.value(QStringLiteral("revision")).isDouble());
+    QVERIFY(app->isOpen());
+    QVERIFY(!app->receivedKinds().contains(QByteArrayLiteral("capabilities")));
+    QVERIFY(!app->receivedKinds().contains(QByteArrayLiteral("settings.snapshot")));
+    QVERIFY(!app->receivedKinds().contains(QByteArrayLiteral("snapshot.complete")));
+    if (out) *out = held;
 }
 
 // Waits until `app`'s latest connectedDevices list satisfies `test`.

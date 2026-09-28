@@ -80,6 +80,7 @@ const QStringList& clientKinds()
         QStringLiteral("pair.confirm"), QStringLiteral("pair.fail"),
         // iPhone app plan Task 29: moving a session to another connection.
         QStringLiteral("path.join"), QStringLiteral("path.switch"),
+        QStringLiteral("session.takeover"),
     };
     return kinds;
 }
@@ -104,6 +105,7 @@ const QStringList& stationKinds()
         QStringLiteral("record.batch"),
         // iPhone app plan Task 29: the barrier of a move.
         QStringLiteral("path.switch"),
+        QStringLiteral("session.held"),
     };
     return kinds;
 }

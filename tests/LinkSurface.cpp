@@ -247,8 +247,22 @@ std::optional<SessionMessage> sampleMessage(SessionMessageKind kind)
                                            QStringLiteral("code"));
     case SessionMessageKind::Capabilities:
         return SessionMessages::capabilities({sampleUpdate("remoteMediaVersion")});
-    case SessionMessageKind::SessionEnd:
-        return SessionMessages::sessionEnd(QStringLiteral("ended"), true, QStringLiteral("code"));
+    case SessionMessageKind::SessionEnd: {
+        auto end = SessionMessages::sessionEnd(QStringLiteral("ended"), true,
+                                                QStringLiteral("code"));
+        end.takenOverBy = QStringLiteral("tablet");
+        end.takenOverById = QStringLiteral("id");
+        end.secondsAgo = 0;
+        return end;
+    }
+    case SessionMessageKind::SessionHeld:
+        return SessionMessages::sessionHeld({}, 1,
+            QJsonObject{{QStringLiteral("byName"), QStringLiteral("tablet")},
+                        {QStringLiteral("byId"), QStringLiteral("id")},
+                        {QStringLiteral("secondsAgo"), 0}},
+            QJsonObject{{QStringLiteral("secondsAgo"), 0}});
+    case SessionMessageKind::SessionTakeover:
+        return SessionMessages::sessionTakeover(QStringLiteral("id"), 1);
     case SessionMessageKind::PropertyWrite:
         return SessionMessages::propertyWrite("slice:0", {sampleUpdate("frequency")}, 7);
     case SessionMessageKind::PropertyResult: {
@@ -1295,6 +1309,9 @@ QJsonObject captureLimits()
     limits.insert(QStringLiteral("graceMs"),
                   limit(static_cast<qint64>(DeviceSessionRegistry::kGraceMs), QStringLiteral("ms"),
                         QStringLiteral("DeviceSessionRegistry::kGraceMs")));
+    limits.insert(QStringLiteral("takeoverAnswerMs"),
+                  limit(StationServer::kTakeoverAnswerMs, QStringLiteral("ms"),
+                        QStringLiteral("StationServer::kTakeoverAnswerMs")));
     // iPhone app Task 74 (R-IOS-30): how long a question stays open
     // (ruling 7.5; sent as expiresInMs, enforced from Task 75).
     limits.insert(QStringLiteral("confirmExpiryMs"),

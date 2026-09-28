@@ -540,7 +540,8 @@
             "verb": "configureTgxl"
         },
         {
-            "arguments": [],
+            "arguments": [
+            ],
             "capability": "remoteTgxlConfigVersion",
             "capabilityVersion": 1,
             "minMinor": 4,
@@ -578,7 +579,8 @@
             "verb": "configurePgxl"
         },
         {
-            "arguments": [],
+            "arguments": [
+            ],
             "capability": "remotePgxlControlVersion",
             "capabilityVersion": 2,
             "minMinor": 11,
@@ -672,14 +674,16 @@
             "verb": "setPgxlNetwork"
         },
         {
-            "arguments": [],
+            "arguments": [
+            ],
             "capability": "remotePgxlControlVersion",
             "capabilityVersion": 3,
             "minMinor": 11,
             "verb": "savePgxlSettings"
         },
         {
-            "arguments": [],
+            "arguments": [
+            ],
             "capability": "remotePgxlControlVersion",
             "capabilityVersion": 3,
             "minMinor": 11,
@@ -699,7 +703,8 @@
             "verb": "setPgxlOperate"
         },
         {
-            "arguments": [],
+            "arguments": [
+            ],
             "capability": "remotePgxlControlVersion",
             "capabilityVersion": 4,
             "minMinor": 11,
@@ -765,14 +770,16 @@
             "verb": "setTgxlNetwork"
         },
         {
-            "arguments": [],
+            "arguments": [
+            ],
             "capability": "remoteTgxlControlVersion",
             "capabilityVersion": 1,
             "minMinor": 11,
             "verb": "saveTgxlSettings"
         },
         {
-            "arguments": [],
+            "arguments": [
+            ],
             "capability": "remoteTgxlControlVersion",
             "capabilityVersion": 1,
             "minMinor": 11,
@@ -836,7 +843,8 @@
             "verb": "moveTgxlRelay"
         },
         {
-            "arguments": [],
+            "arguments": [
+            ],
             "capability": "remoteTgxlControlVersion",
             "capabilityVersion": 4,
             "minMinor": 11,
@@ -913,7 +921,8 @@
             "verb": "txProfile.delete"
         },
         {
-            "arguments": [],
+            "arguments": [
+            ],
             "capability": "transmitSettingsVersion",
             "capabilityVersion": 3,
             "minMinor": 11,
@@ -938,7 +947,8 @@
             "verb": "configureRfKit"
         },
         {
-            "arguments": [],
+            "arguments": [
+            ],
             "capability": "remoteRfKitControlVersion",
             "capabilityVersion": 2,
             "minMinor": 11,
@@ -958,7 +968,8 @@
             "verb": "setRfKitEnabled"
         },
         {
-            "arguments": [],
+            "arguments": [
+            ],
             "capability": "remoteRfKitControlVersion",
             "capabilityVersion": 3,
             "minMinor": 11,
@@ -991,7 +1002,8 @@
             "verb": "setRfKitAntenna"
         },
         {
-            "arguments": [],
+            "arguments": [
+            ],
             "capability": "remoteRfKitControlVersion",
             "capabilityVersion": 4,
             "minMinor": 11,
@@ -1134,7 +1146,8 @@
             "verb": "clearAccessoryFaults"
         },
         {
-            "arguments": [],
+            "arguments": [
+            ],
             "capability": "radioHardwareVersion",
             "capabilityVersion": 2,
             "minMinor": 11,
@@ -1458,11 +1471,25 @@
             "verb": "spots.sendCommand"
         },
         {
-            "arguments": [],
+            "arguments": [
+            ],
             "capability": "recordStreamVersion",
             "capabilityVersion": 1,
             "minMinor": 11,
             "verb": "spots.clearAll"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "source",
+                    "optional": false
+                }
+            ],
+            "capability": "txModMonitorVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "txModMonitor.reset"
         },
         {
             "arguments": [
@@ -1478,7 +1505,8 @@
             "verb": "station.selectRadio"
         },
         {
-            "arguments": [],
+            "arguments": [
+            ],
             "capability": "stationRadiosVersion",
             "capabilityVersion": 1,
             "minMinor": 11,
@@ -1586,7 +1614,8 @@
             "verb": "freedv.setHidden"
         },
         {
-            "arguments": [],
+            "arguments": [
+            ],
             "capability": "supportBundleVersion",
             "capabilityVersion": 1,
             "minMinor": 11,
@@ -1668,7 +1697,8 @@
             "verb": "nnr.applyModelSelection"
         },
         {
-            "arguments": [],
+            "arguments": [
+            ],
             "capability": "dspAssetVersion",
             "capabilityVersion": 1,
             "minMinor": 5,
@@ -1819,28 +1849,32 @@
             "verb": "ps3.subscribeDisplay"
         },
         {
-            "arguments": [],
+            "arguments": [
+            ],
             "capability": "psAlgorithmVersion",
             "capabilityVersion": 3,
             "minMinor": 5,
             "verb": "ps3.off"
         },
         {
-            "arguments": [],
+            "arguments": [
+            ],
             "capability": "psAlgorithmVersion",
             "capabilityVersion": 3,
             "minMinor": 5,
             "verb": "ps3.single"
         },
         {
-            "arguments": [],
+            "arguments": [
+            ],
             "capability": "psAlgorithmVersion",
             "capabilityVersion": 3,
             "minMinor": 5,
             "verb": "ps3.automatic"
         },
         {
-            "arguments": [],
+            "arguments": [
+            ],
             "capability": "psAlgorithmVersion",
             "capabilityVersion": 3,
             "minMinor": 5,
@@ -2002,35 +2036,40 @@
             "verb": "station.rename"
         },
         {
-            "arguments": [],
+            "arguments": [
+            ],
             "capability": "deviceAdminVersion",
             "capabilityVersion": 1,
             "minMinor": 11,
             "verb": "station.acknowledgeKeyBackup"
         },
         {
-            "arguments": [],
+            "arguments": [
+            ],
             "capability": "deviceAdminVersion",
             "capabilityVersion": 1,
             "minMinor": 11,
             "verb": "station.retireToken"
         },
         {
-            "arguments": [],
+            "arguments": [
+            ],
             "capability": "pairingVersion",
             "capabilityVersion": 1,
             "minMinor": 11,
             "verb": "pairing.open"
         },
         {
-            "arguments": [],
+            "arguments": [
+            ],
             "capability": "pairingVersion",
             "capabilityVersion": 1,
             "minMinor": 11,
             "verb": "pairing.close"
         },
         {
-            "arguments": [],
+            "arguments": [
+            ],
             "capability": "sessionHolderVersion",
             "capabilityVersion": 1,
             "minMinor": 11,
@@ -2081,24 +2120,12 @@
             "verb": "notice.takeBack"
         },
         {
-            "arguments": [],
+            "arguments": [
+            ],
             "capability": "controlSwitchVersion",
             "capabilityVersion": 1,
             "minMinor": 11,
             "verb": "session.pathTicket"
-        },
-        {
-            "arguments": [
-                {
-                    "kind": "i64",
-                    "name": "source",
-                    "optional": false
-                }
-            ],
-            "capability": "txModMonitorVersion",
-            "capabilityVersion": 1,
-            "minMinor": 11,
-            "verb": "txModMonitor.reset"
         }
     ],
     "limits": {
@@ -2259,6 +2286,11 @@
             "source": "StationServer::kMaxIncomingMessageBytes",
             "unit": "bytes",
             "value": 1048576
+        },
+        "takeoverAnswerMs": {
+            "source": "StationServer::kTakeoverAnswerMs",
+            "unit": "ms",
+            "value": 60000
         },
         "telemetryBytes": {
             "source": "kMaxStationTelemetryBytes",
@@ -2871,7 +2903,8 @@
             }
         },
         "capabilities": {
-            "optional": [],
+            "optional": [
+            ],
             "required": [
                 "properties",
                 "type"
@@ -2882,7 +2915,8 @@
             }
         },
         "command.invoke": {
-            "optional": [],
+            "optional": [
+            ],
             "required": [
                 "args",
                 "id",
@@ -2951,7 +2985,8 @@
             }
         },
         "delta": {
-            "optional": [],
+            "optional": [
+            ],
             "required": [
                 "key",
                 "properties",
@@ -2990,7 +3025,8 @@
             }
         },
         "media.control": {
-            "optional": [],
+            "optional": [
+            ],
             "required": [
                 "payload",
                 "type"
@@ -3035,7 +3071,8 @@
             }
         },
         "object.create": {
-            "optional": [],
+            "optional": [
+            ],
             "required": [
                 "class",
                 "key",
@@ -3050,7 +3087,8 @@
             }
         },
         "object.destroy": {
-            "optional": [],
+            "optional": [
+            ],
             "required": [
                 "class",
                 "key",
@@ -3063,7 +3101,8 @@
             }
         },
         "pair.accept": {
-            "optional": [],
+            "optional": [
+            ],
             "required": [
                 "identity",
                 "label",
@@ -3076,7 +3115,8 @@
             }
         },
         "pair.confirm": {
-            "optional": [],
+            "optional": [
+            ],
             "required": [
                 "box",
                 "type"
@@ -3087,7 +3127,8 @@
             }
         },
         "pair.fail": {
-            "optional": [],
+            "optional": [
+            ],
             "required": [
                 "reason",
                 "retryAfterMs",
@@ -3100,7 +3141,8 @@
             }
         },
         "pair.spake": {
-            "optional": [],
+            "optional": [
+            ],
             "required": [
                 "data",
                 "step",
@@ -3113,7 +3155,8 @@
             }
         },
         "pair.start": {
-            "optional": [],
+            "optional": [
+            ],
             "required": [
                 "device",
                 "mode",
@@ -3126,7 +3169,8 @@
             }
         },
         "path.join": {
-            "optional": [],
+            "optional": [
+            ],
             "required": [
                 "ticket",
                 "type"
@@ -3137,7 +3181,8 @@
             }
         },
         "path.switch": {
-            "optional": [],
+            "optional": [
+            ],
             "required": [
                 "type"
             ],
@@ -3146,7 +3191,8 @@
             }
         },
         "property.result": {
-            "optional": [],
+            "optional": [
+            ],
             "required": [
                 "key",
                 "results",
@@ -3177,7 +3223,8 @@
             }
         },
         "record.batch": {
-            "optional": [],
+            "optional": [
+            ],
             "required": [
                 "generation",
                 "removes",
@@ -3196,7 +3243,8 @@
             }
         },
         "schema": {
-            "optional": [],
+            "optional": [
+            ],
             "required": [
                 "class",
                 "fields",
@@ -3211,7 +3259,10 @@
         "session.end": {
             "optional": [
                 "code",
-                "retryable"
+                "retryable",
+                "secondsAgo",
+                "takenOverBy",
+                "takenOverById"
             ],
             "required": [
                 "reason",
@@ -3221,6 +3272,41 @@
                 "code": "string",
                 "reason": "string",
                 "retryable": "boolean",
+                "secondsAgo": "number",
+                "takenOverBy": "string",
+                "takenOverById": "string",
+                "type": "string"
+            }
+        },
+        "session.held": {
+            "optional": [
+                "placeFreed",
+                "placeTaken"
+            ],
+            "required": [
+                "devices",
+                "revision",
+                "type"
+            ],
+            "types": {
+                "devices": "array",
+                "placeFreed": "object",
+                "placeTaken": "object",
+                "revision": "number",
+                "type": "string"
+            }
+        },
+        "session.takeover": {
+            "optional": [
+            ],
+            "required": [
+                "deviceId",
+                "revision",
+                "type"
+            ],
+            "types": {
+                "deviceId": "string",
+                "revision": "number",
                 "type": "string"
             }
         },
@@ -3241,7 +3327,8 @@
             }
         },
         "settings.remove": {
-            "optional": [],
+            "optional": [
+            ],
             "required": [
                 "key",
                 "properties",
@@ -3254,7 +3341,8 @@
             }
         },
         "settings.snapshot": {
-            "optional": [],
+            "optional": [
+            ],
             "required": [
                 "properties",
                 "type"
@@ -3265,7 +3353,8 @@
             }
         },
         "settings.value": {
-            "optional": [],
+            "optional": [
+            ],
             "required": [
                 "key",
                 "origin",
@@ -3280,7 +3369,8 @@
             }
         },
         "settings.write": {
-            "optional": [],
+            "optional": [
+            ],
             "required": [
                 "key",
                 "origin",
@@ -3295,7 +3385,8 @@
             }
         },
         "snapshot.complete": {
-            "optional": [],
+            "optional": [
+            ],
             "required": [
                 "type"
             ],
@@ -3304,7 +3395,8 @@
             }
         },
         "station.metrics.v1": {
-            "optional": [],
+            "optional": [
+            ],
             "required": [
                 "payload",
                 "type"

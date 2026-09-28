@@ -182,6 +182,8 @@ enum class SessionMessageKind {
     AuthResult,
     Capabilities,
     SessionEnd,
+    SessionHeld,
+    SessionTakeover,
 
     // ── Task 18: the inbound half of the property mirror ────────────────
     PropertyWrite,
@@ -318,6 +320,7 @@ inline constexpr const char* kPathTransmittingReason = "Not while the radio is t
 namespace SessionEndCode {
 /// Another app signed in and took the session.
 inline constexpr const char* kTakenOver = "takenOver";
+inline constexpr const char* kCoreFull = "coreFull";
 /// The two ends share no link major.
 inline constexpr const char* kLinkVersion = "linkVersion";
 /// A sign-in with the pairing token on a Core that has none (a new Core,
@@ -647,6 +650,16 @@ struct SessionMessage {
     /// A SessionEndCode token, on the wire as `code` when not empty. A
     /// client that does not know the code reads `reason`.
     QString endCode;
+    /// Task 41: the authenticated fifth-device question and its answer.
+    QJsonArray heldDevices;
+    quint32 heldRevision = 0;
+    QString takeoverDeviceId;
+    std::optional<QJsonObject> placeTaken;
+    std::optional<QJsonObject> placeFreed;
+    /// Enriched takenOver session.end.
+    QString takenOverBy;
+    QString takenOverById;
+    std::optional<qint64> secondsAgo;
 
     // ── Task 18: SettingsWrite / SettingsValue only ─────────────────────
 
@@ -772,6 +785,10 @@ public:
     /// iPhone app Task 12: an end with its SessionEndCode.
     static SessionMessage sessionEnd(const QString& reason, bool retryable,
                                      const QString& endCode);
+    static SessionMessage sessionHeld(const QJsonArray& devices, quint32 revision,
+                                      std::optional<QJsonObject> placeTaken = std::nullopt,
+                                      std::optional<QJsonObject> placeFreed = std::nullopt);
+    static SessionMessage sessionTakeover(const QString& deviceId, quint32 revision);
 
     /// Client to daemon: apply these property values to this object. The
     /// mirror-image of a Delta, deliberately a DISTINCT kind rather than a

@@ -31,6 +31,10 @@ void LoopbackTransport::sendText(const QByteArray& wire)
     if (!m_open || m_peer.isNull() || m_severed || m_dropsOutgoing) {
         return;
     }
+    const QPointer<LoopbackTransport> self(this);
+    emit outboundText(wire);
+    if (!self) return;
+    if (!m_open || m_peer.isNull()) return;
     // Queued, not direct. A real socket never delivers inside the send
     // call, and a direct hop here would let a handshake reply run inside
     // the middle of the send that provoked it -- reentrancy the production
@@ -107,7 +111,9 @@ void LoopbackTransport::closeLink(const QString& reason)
     }
     m_open = false;
     m_closeReason = reason;
+    const QPointer<LoopbackTransport> self(this);
     emit closed();
+    if (!self) return;
     if (!m_peer.isNull()) {
         QPointer<LoopbackTransport> peer(m_peer);
         QMetaObject::invokeMethod(
