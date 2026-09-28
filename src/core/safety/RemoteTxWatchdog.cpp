@@ -105,6 +105,13 @@ bool RemoteTxWatchdog::keepalive(const QByteArray& deviceId, quint64 sequence, q
         return false;
     }
     Watch& watch = it.value();
+    const qint64 heard = now();
+    // Socket input can run before an overdue timer on a busy event loop.
+    // Once the watch expires, no arriving packet may renew it.
+    if (heard - watch.lastMs > kLinkLossDeadlineMs) {
+        trip(deviceId, false);
+        return false; // The stop callback may have destroyed this object.
+    }
     if (sequence <= watch.lastSequence) {
         // A copy (the same keepalive by another path) or one overtaken.
         return false;
@@ -114,7 +121,6 @@ bool RemoteTxWatchdog::keepalive(const QByteArray& deviceId, quint64 sequence, q
         return false;
     }
     watch.lastSequence = sequence;
-    const qint64 heard = now();
     // Task 29 step 2b: how long since the one before, for the measurement
     // of keyed-event tails on the web relay (nothing acts on it).
     const qint64 gap = watch.lastMs > 0 ? heard - watch.lastMs : -1;

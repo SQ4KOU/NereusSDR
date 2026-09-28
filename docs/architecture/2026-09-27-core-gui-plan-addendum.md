@@ -1275,6 +1275,25 @@ colours for the same signal.
   still in progress, so page presentation alone does not complete the plan.
 - Plan: Remote Access controls and Setup transmit locking.
 
+### G-73: A late heartbeat could renew an already expired transmit watch
+
+- Evidence: lead review found that heartbeat receipt updated the last-heard
+  time without checking the existing deadline. When a busy event loop dispatches
+  socket input before its overdue timer, a late heartbeat could keep a key on.
+  An injected-clock regression reproduced this on the session, media and
+  independent watch paths; nine expired-arrival rows failed before the fix.
+- Ruling basis: JJ requires findings under load to have a cause and a fix, and
+  every discovered gap to be built in this effort. This enforces the existing
+  approved rule of stopping after more than 400 ms without a valid heartbeat;
+  it changes neither that deadline nor the 100 ms send interval.
+- Status: built. Receipt checks elapsed time before accepting any packet and
+  stops an expired watch once; packets exactly at the deadline still count.
+  The regression and four adjacent suites passed after the app/Core rebuild
+  under concurrent lane load. This deterministically reproduces delayed timer
+  dispatch, not a measured guarantee about OS scheduling or physical RF release.
+  Restrictive-network acceptance and live-radio verification remain open.
+- Plan: remote transmit link-loss safety and restrictive-network liveness.
+
 ## How this addendum is kept
 
 New gaps are appended here as they are found, each with its own `G-` number (next available
