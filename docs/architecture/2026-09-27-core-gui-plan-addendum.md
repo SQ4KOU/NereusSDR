@@ -1757,6 +1757,12 @@ colours for the same signal.
   and sends no write. Lead review and the combined app/Core build plus four
   explicitly rebuilt Setup/native PA suites pass (6.39 s; load before run
   10.36/9.30/9.08). Derived readings and PA actions remain open.
+  Signed `e72fa12e` and lifetime follow-up `d9dc53cb` add authenticated,
+  connected-radio-bound single-band RX/TX antenna commands. Capability
+  withdrawal and confirmation revalidate the same radio and session; existing
+  authority, transmit and blocked-port restrictions remain. Root app/Core and
+  ten explicitly rebuilt suites pass (76.76 s; load 62.62/36.75/23.26).
+  The V6 antenna table descriptions are still being implemented separately.
 - Plan: Core Hardware Config/PA Setup description dependencies in the phone plan
   and remote-window Hardware/PA parity.
 
@@ -2010,6 +2016,13 @@ colours for the same signal.
   The older immutable Linux build was deliberately stopped at 1810/2799
   compile steps before tests, retaining its log and cache. Its replacement
   will use the verified integrated source; no test result is claimed for it.
+  The actual CMake-generated replacement at `10b796751` exposed another
+  mismatch: PipeWire's public `-D_REENTRANT` compile option reaches Core, GUI
+  and tests but neither donor. GCC again rejects the cache. The earlier
+  manually constructed probes missed the generated-target mismatch. The
+  cause is established from pkg-config and actual compile commands; correction
+  and verification using generated targets are in progress. No full Linux
+  success or runtime-test speed improvement is claimed.
 - Plan: reliable, efficient full-suite builds across CI platforms.
 
 ### G-102: Trace and Fill colour is changed live but not saved
@@ -2084,11 +2097,30 @@ colours for the same signal.
   broadcast helpers already copy their destinations for this reason.
 - Ruling basis: preserve session lifetime and truthful capability withdrawal;
   this is a concrete implementation defect, with no new operator policy.
-- Status: correction in progress in the antenna lane. Copy guarded session
-  identities, revalidate before each send, and stop after Core destruction.
-  Regression coverage must close peers during withdrawal and prove that
-  surviving peers update without notifying stale replacement sessions.
+- Status: signed `d9dc53cb` copies guarded transport and unique session
+  identities, revalidates before each send, and stops after Core destruction.
+  The regression first reproduced a replacement peer receiving two capability
+  messages instead of one, then passed with the correction. Root app/Core and
+  all ten affected suites pass (76.76 s; load 62.62/36.75/23.26), including
+  disconnect/replacement coverage and both session conformance modes.
 - Plan: radio-bound antenna commands and multi-device disconnect safety.
+
+### G-105: New Setup metadata is exposed to older strict parsers
+
+- Evidence: phone review of accepted `10b796751` found that the Display
+  resource adds `default` metadata and `decimals` on a decimal control, while
+  the prior format permits decimal formatting only on readouts. V1-V3
+  projections keep these new fields, so the strict phone parser rejects them.
+  The pending Appearance colour defaults have the same compatibility issue.
+- Ruling basis: preserve negotiated older grammar and exact native behavior;
+  this is a protocol compatibility repair, not permission to loosen parsing.
+- Status: correction pending. Keep new Display/Appearance defaults and decimal
+  control precision in V4, strip them from older projections, retain existing
+  readout precision, and test the exact older and current shapes. Update the
+  format document. The shared Hz/bin tooltip also needs plain punctuation in
+  both the native source and descriptor. The phone is holding this import;
+  it has not advertised Setup, so no shipped-client outage is claimed.
+- Plan: complete Setup descriptions and strict phone compatibility.
 
 ## How this addendum is kept
 

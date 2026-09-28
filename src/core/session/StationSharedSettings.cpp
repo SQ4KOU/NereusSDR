@@ -887,7 +887,7 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
               kHz(reach.fromRateHz), kHz(rateHz));
         return c;
     }
-    if (verb == "setAlexRxAntenna") {
+    if (verb == "setAlexRxAntenna" || verb == "setAlexRxAntennaForRadio") {
         const int band = intArgument(args, "band");
         const int antenna = intArgument(args, "antenna");
         const bool rxOnly = boolArgument(args, "rxOnly");
@@ -940,7 +940,7 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
     }
     // Checkpoint join (parity mini-round, radioHardwareVersion 6): one
     // band's TX antenna, the table's "Transmit antenna" (ruling 7.8).
-    if (verb == "setAlexTxAntenna") {
+    if (verb == "setAlexTxAntenna" || verb == "setAlexTxAntennaForRadio") {
         const int band = intArgument(args, "band");
         const int antenna = intArgument(args, "antenna");
         const Band b = static_cast<Band>(band);
@@ -1378,6 +1378,11 @@ SessionMessage StationServer::proceedSharedSetting(SessionTransport* transport,
                                                    const SessionMessage& invoke)
 {
     const QByteArray requester = question.device;
+    const QString antennaRefusal = radioAntennaRowRefusal(transport, question.original);
+    if (!antennaRefusal.isEmpty()) {
+        return SessionMessages::commandResult(invoke.commandVerb, invoke.commandId,
+                                              false, antennaRefusal, {});
+    }
     // The radio may have keyed after the question was shown. Recheck
     // before applying a region change or removal and before any side effect.
     if (question.held == ConfirmStep::Held::SettingsWrite
