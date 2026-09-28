@@ -1,0 +1,196 @@
+{
+  "version": 1,
+  "category": {
+    "id": "catNetwork",
+    "title": "CAT & Network",
+    "where": "mixed",
+    "coverage": "partial"
+  },
+  "pages": [
+    {
+      "id": "catNetwork.tciServer",
+      "title": "TCI Server",
+      "where": "mixed",
+      "sections": [
+        {
+          "title": "The Core's TCI server",
+          "controls": [
+            {
+              "id": "catNetwork.tciServer.coreExpert",
+              "label": "Emulate ExpertSDR3 protocol",
+              "tooltip": "",
+              "kind": "toggle",
+              "binding": {
+                "command": {
+                  "verb": "setStationTciOptions",
+                  "valueProperty": {
+                    "object": "stationTci",
+                    "name": "emulateExpertSdr3"
+                  },
+                  "arguments": {
+                    "emulateExpertSdr3": {
+                      "$controlValue": true
+                    },
+                    "emulateSunSdr2Pro": {
+                      "$property": {
+                        "object": "stationTci",
+                        "name": "emulateSunSdr2Pro"
+                      }
+                    },
+                    "cwluBecomesCw": {
+                      "$property": {
+                        "object": "stationTci",
+                        "name": "cwluBecomesCw"
+                      }
+                    },
+                    "sendInitialState": {
+                      "$property": {
+                        "object": "stationTci",
+                        "name": "sendInitialState"
+                      }
+                    }
+                  }
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "stationTciVersion",
+                "min": 2
+              }
+            },
+            {
+              "id": "catNetwork.tciServer.coreSunSdr",
+              "label": "Emulate SunSDR2 PRO device",
+              "tooltip": "",
+              "kind": "toggle",
+              "binding": {
+                "command": {
+                  "verb": "setStationTciOptions",
+                  "valueProperty": {
+                    "object": "stationTci",
+                    "name": "emulateSunSdr2Pro"
+                  },
+                  "arguments": {
+                    "emulateExpertSdr3": {
+                      "$property": {
+                        "object": "stationTci",
+                        "name": "emulateExpertSdr3"
+                      }
+                    },
+                    "emulateSunSdr2Pro": {
+                      "$controlValue": true
+                    },
+                    "cwluBecomesCw": {
+                      "$property": {
+                        "object": "stationTci",
+                        "name": "cwluBecomesCw"
+                      }
+                    },
+                    "sendInitialState": {
+                      "$property": {
+                        "object": "stationTci",
+                        "name": "sendInitialState"
+                      }
+                    }
+                  }
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "stationTciVersion",
+                "min": 2
+              }
+            },
+            {
+              "id": "catNetwork.tciServer.coreCwlu",
+              "label": "CWL/CWU becomes CW",
+              "tooltip": "",
+              "kind": "toggle",
+              "binding": {
+                "command": {
+                  "verb": "setStationTciOptions",
+                  "valueProperty": {
+                    "object": "stationTci",
+                    "name": "cwluBecomesCw"
+                  },
+                  "arguments": {
+                    "emulateExpertSdr3": {
+                      "$property": {
+                        "object": "stationTci",
+                        "name": "emulateExpertSdr3"
+                      }
+                    },
+                    "emulateSunSdr2Pro": {
+                      "$property": {
+                        "object": "stationTci",
+                        "name": "emulateSunSdr2Pro"
+                      }
+                    },
+                    "cwluBecomesCw": {
+                      "$controlValue": true
+                    },
+                    "sendInitialState": {
+                      "$property": {
+                        "object": "stationTci",
+                        "name": "sendInitialState"
+                      }
+                    }
+                  }
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "stationTciVersion",
+                "min": 2
+              }
+            },
+            {
+              "id": "catNetwork.tciServer.coreInitial",
+              "label": "Send initial state on connect",
+              "tooltip": "",
+              "kind": "toggle",
+              "binding": {
+                "command": {
+                  "verb": "setStationTciOptions",
+                  "valueProperty": {
+                    "object": "stationTci",
+                    "name": "sendInitialState"
+                  },
+                  "arguments": {
+                    "emulateExpertSdr3": {
+                      "$property": {
+                        "object": "stationTci",
+                        "name": "emulateExpertSdr3"
+                      }
+                    },
+                    "emulateSunSdr2Pro": {
+                      "$property": {
+                        "object": "stationTci",
+                        "name": "emulateSunSdr2Pro"
+                      }
+                    },
+                    "cwluBecomesCw": {
+                      "$property": {
+                        "object": "stationTci",
+                        "name": "cwluBecomesCw"
+                      }
+                    },
+                    "sendInitialState": {
+                      "$controlValue": true
+                    }
+                  }
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "stationTciVersion",
+                "min": 2
+              }
+            }
+          ]
+        }
+      ],
+      "coverage": "coreTciOnly"
+    }
+  ]
+}

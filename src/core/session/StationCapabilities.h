@@ -279,6 +279,9 @@ struct StationCapabilities {
     /// an app draws its controls from). Sent last in the same minor-11
     /// block.
     int stationCatalogVersion = 0;
+    /// Task 43: a peer declaring setupDescription receives the read-only
+    /// `setup` object; zero omits the capability from an older peer's wire.
+    int setupDescriptionVersion = 0;
     /// iPhone app Task 20 (R-IOS-27): 1 means a spectrum subscription may
     /// ask the Core for display extras (peak blobs, the active peak hold
     /// row, the noise floor, the waterfall's levels) and for normalise,

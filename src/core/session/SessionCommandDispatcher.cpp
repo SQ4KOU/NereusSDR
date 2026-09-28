@@ -644,6 +644,11 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
          kRadioIdentitySessionProtocolMinor},
         {"tx.twoTone", {arg("on", kBool)}, "remoteTxVersion", 1,
          kRadioIdentitySessionProtocolMinor},
+        // Setup > Test's two Thetis frequency presets change both mirrored
+        // frequencies as one request, so a remote renderer needs no local
+        // assumptions about either preset.
+        {"tx.twoTonePreset", {arg("name", kUtf8)}, "setupDescriptionVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
         // iPhone app plan Task 37 (R-IOS-13): the transmit watchdog's
         // keepalive, every 100 ms while the device is keyed or has VOX
         // armed. Sent once each (a lost one is overtaken by the next).
@@ -961,6 +966,33 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
     // path, a Protocol 1 rate change or a move of the holder's transmit
     // slice waits while another device's holder is on the air.
     if (refusedWhileOnAir(invoke)) {
+        return;
+    }
+    if (invoke.commandVerb == "tx.twoTonePreset") {
+        QString onAir;
+        if (m_radioModel->stationOnAirRefusal(&onAir)) {
+            emitResult(invoke.commandVerb, invoke.commandId, false, onAir, {});
+            return;
+        }
+        if (m_transmitAccess.transmitter) {
+            if (const TxRefusal refusal = m_transmitAccess.transmitter(m_requester);
+                !refusal.isEmpty()) {
+                emitRefusal(invoke.commandVerb, invoke.commandId, refusal);
+                return;
+            }
+        }
+        QString name;
+        if (!hasExactlyArguments(invoke.arguments, {"name"})
+            || !findUtf8Argument(invoke.arguments, "name", &name)
+            || (name != QLatin1String("defaults") && name != QLatin1String("stealth"))) {
+            emitResult(invoke.commandVerb, invoke.commandId, false,
+                       QStringLiteral("Choose a two-tone frequency preset."), {});
+            return;
+        }
+        auto& transmit = m_radioModel->transmitModel();
+        transmit.setTwoToneFrequencies(name == QLatin1String("defaults") ? 700 : 70,
+                                       name == QLatin1String("defaults") ? 1900 : 190);
+        emitResult(invoke.commandVerb, invoke.commandId, true, {}, {"transmit"});
         return;
     }
     if (invoke.commandVerb == "tx.setTxSlice") {

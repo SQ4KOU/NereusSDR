@@ -2297,6 +2297,7 @@ public slots:
     // ── Two-tone setters (3M-1c B.2) ───────────────────────────────────────
     void setTwoToneFreq1(int hz);
     void setTwoToneFreq2(int hz);
+    void setTwoToneFrequencies(int freq1Hz, int freq2Hz);
     void setTwoToneLevel(double db);
     void setTwoTonePower(int pct);
     void setTwoToneFreq2Delay(int ms);
@@ -2441,6 +2442,7 @@ signals:
     // ── Two-tone signals (3M-1c B.2) ───────────────────────────────────────
     void twoToneFreq1Changed(int hz);
     void twoToneFreq2Changed(int hz);
+    void twoToneFrequenciesChanged(int freq1Hz, int freq2Hz);
     void twoToneLevelChanged(double db);
     void twoTonePowerChanged(int pct);
     void twoToneFreq2DelayChanged(int ms);

@@ -141,6 +141,7 @@
 #include "core/session/ConnectedDevicesFacade.h"
 #include "core/session/SliceMarker.h"
 #include "core/session/TransmitStateFacade.h"
+#include "core/setup/SetupDescriptionService.h"
 #include "core/SliceOwnership.h"
 #include "core/session/ConfirmStep.h"
 #include "core/session/DeviceSessionRegistry.h"
@@ -486,7 +487,7 @@ std::optional<QList<QByteArray>> liveSessionWire(
     clientEnd->sendText(SessionMessages::encode(SessionMessages::hello(
         kSessionProtocolMajor, kSessionProtocolMinor, 0, QStringLiteral("link-surface"),
         {kSessionProtocolMajor}, {{"deviceAuth", 1}, {"sessionHolder", 1}, {"remoteTx", 1},
-                                  {"settingsHygiene", 1}})));
+                                  {"settingsHygiene", 1}, {"setupDescription", 1}})));
     clientEnd->sendText(SessionMessages::encode(SessionMessages::authRequest(server.token())));
 
     // The loopback delivers on later event-loop turns, as a socket would.
@@ -518,6 +519,7 @@ QJsonArray captureCapabilities()
     caps.remoteTxEntry = true;
     caps.settingsHygieneVersion = 1;
     caps.remoteIqVersion = 1;
+    caps.setupDescriptionVersion = 1;
 
     // The values come from a live station with every feature a Core can
     // switch on: media, telemetry, an enforced display budget with its
@@ -1542,6 +1544,7 @@ QList<const QMetaObject*> LinkSurface::mirroredMetaObjects()
             &AccessorySettingsModel::staticMetaObject,
             &StationDevicesFacade::staticMetaObject,
             &StationCatalog::staticMetaObject,
+            &SetupDescription::staticMetaObject,
             &SpotSourceHost::staticMetaObject,
             &ConnectedDevicesFacade::staticMetaObject,
             &SliceMarker::staticMetaObject,

@@ -1402,6 +1402,7 @@ list(APPEND CORE_SOURCES
     src/core/session/StationDevicesFacade.cpp
     # iPhone app Task 19 (R-IOS-06): the mirrored `catalog` object.
     src/core/session/StationCatalog.cpp
+    src/core/setup/SetupDescriptionService.cpp
     # Parity Task 19 (R-IOS-25): the link's record streams.
     src/core/session/RecordStream.cpp
     # R-IOS-13 / R-R3-49 (txModMonitorVersion 1): the AM Mod Monitor's
@@ -1837,7 +1838,7 @@ qt_add_resources(RESOURCES resources.qrc)
 # iPhone app Task 14 (R-IOS-08): the pairing code's word list belongs to the
 # Core too (PairingCode, which calls Q_INIT_RESOURCE(pairing) likewise). The
 # iPhone app carries a byte-for-byte copy of the same file.
-qt_add_resources(CORE_RESOURCES resources/bandplans.qrc resources/pairing.qrc)
+qt_add_resources(CORE_RESOURCES resources/bandplans.qrc resources/pairing.qrc resources/setup.qrc)
 
 # --------------------------------------------------------------------------
 # App icon (per-platform) — from main (PR #11)

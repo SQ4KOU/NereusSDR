@@ -284,6 +284,9 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
         }
         updates.append(intEntry("remoteIqVersion", remoteIqVersion));
         updates.append(intEntry("txModMonitorVersion", txModMonitorVersion));
+        if (setupDescriptionVersion > 0) {
+            updates.append(intEntry("setupDescriptionVersion", setupDescriptionVersion));
+        }
     }
     return updates;
 }
@@ -470,6 +473,7 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                    || u.name == "deviceAdminVersion"
                    || u.name == "pairingVersion"
                    || u.name == "stationCatalogVersion"
+                   || u.name == "setupDescriptionVersion"
                    || u.name == "displayExtrasVersion"
                    || u.name == "transmitSettingsVersion"
                    || u.name == "bandSelectVersion"
@@ -516,6 +520,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                     caps.pairingVersion = version;
                 } else if (u.name == "stationCatalogVersion") {
                     caps.stationCatalogVersion = version;
+                } else if (u.name == "setupDescriptionVersion") {
+                    caps.setupDescriptionVersion = version;
                 } else if (u.name == "displayExtrasVersion") {
                     caps.displayExtrasVersion = version;
                 } else if (u.name == "sessionHolderVersion") {

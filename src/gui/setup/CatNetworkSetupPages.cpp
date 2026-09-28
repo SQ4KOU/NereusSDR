@@ -423,6 +423,10 @@ void CatTciServerPage::buildCoreGroup()
     m_coreSunSdr = new QCheckBox(tr("Emulate SunSDR2 PRO device"), m_coreGroup);
     m_coreCwlu = new QCheckBox(tr("CWL/CWU becomes CW"), m_coreGroup);
     m_coreInitial = new QCheckBox(tr("Send initial state on connect"), m_coreGroup);
+    m_coreExpert->setProperty("nereusSetupId", "catNetwork.tciServer.coreExpert");
+    m_coreSunSdr->setProperty("nereusSetupId", "catNetwork.tciServer.coreSunSdr");
+    m_coreCwlu->setProperty("nereusSetupId", "catNetwork.tciServer.coreCwlu");
+    m_coreInitial->setProperty("nereusSetupId", "catNetwork.tciServer.coreInitial");
     for (QCheckBox* option : {m_coreExpert, m_coreSunSdr, m_coreCwlu, m_coreInitial}) {
         option->setStyleSheet(QString::fromLatin1(Style::kCheckBoxStyle));
         connect(option, &QCheckBox::toggled, this, &CatTciServerPage::sendCoreOptions);

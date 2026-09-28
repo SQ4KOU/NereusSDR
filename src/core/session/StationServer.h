@@ -482,6 +482,8 @@ class SettingsProxyServer;
 class StateMirror;
 class StationOpeningGate;
 class StationCatalog;
+class SetupDescription;
+using SetupDescriptionService = SetupDescription;
 class StationRadios;
 class StationDevicesFacade;
 class TokenStore;
@@ -711,6 +713,7 @@ public:
     /// iPhone app Task 19 (R-IOS-06): the mirrored `catalog` object, the
     /// values the Core owns and an app draws its controls from. Never null.
     StationCatalog* catalog() const;
+    SetupDescriptionService* setupDescription() const { return m_setupDescription.get(); }
     /// 1: the Core sends `catalog` to a peer at minor 11.
     int stationCatalogVersion() const;
     /// iPhone app Task 20 (R-IOS-27): 2 while media is enabled (0 without);
@@ -2041,6 +2044,7 @@ private:
     std::unique_ptr<StationDevicesFacade> m_devicesFacade;
     // iPhone app Task 19: the Core's catalogue.
     std::unique_ptr<StationCatalog> m_catalog;
+    std::unique_ptr<SetupDescriptionService> m_setupDescription;
     // Parity Task 19 (R-IOS-25): the record streams by name, the id of the
     // last console line, and the send that follows a change.
     std::map<QString, std::unique_ptr<RecordStream>> m_recordStreams;

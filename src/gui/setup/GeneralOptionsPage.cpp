@@ -438,6 +438,7 @@ void GeneralOptionsPage::buildHardwareConfigGroup()
     auto* regionLabel = new QLabel(tr("Region:"), group);
     m_comboFRSRegion = new QComboBox(group);
     m_comboFRSRegion->setObjectName(QStringLiteral("comboFRSRegion"));
+    m_comboFRSRegion->setProperty("nereusSetupId", "general.options.region");
     // From Thetis setup.designer.cs:8084-8108 [v2.10.3.13] — 24 entries
     m_comboFRSRegion->addItems({
         QStringLiteral("Australia"),
@@ -500,6 +501,7 @@ void GeneralOptionsPage::buildHardwareConfigGroup()
     // From Thetis setup.designer.cs:8065-8074 [v2.10.3.13]
     m_chkExtended = new QCheckBox(tr("Extended"), group);
     m_chkExtended->setObjectName(QStringLiteral("chkExtended"));
+    m_chkExtended->setProperty("nereusSetupId", "general.options.extended");
     m_chkExtended->setToolTip(QStringLiteral("Enable extended TX (out of band)"));
     m_chkExtended->setEnabled(false);
     m_chkExtended->setToolTip(tr("Extended transmit is not available on this Core."));
@@ -529,6 +531,7 @@ void GeneralOptionsPage::buildHardwareConfigGroup()
     // it on every radio (Task 16, syncReceiveOnly).
     m_chkGeneralRXOnly = new QCheckBox(tr("Receive Only"), group);
     m_chkGeneralRXOnly->setObjectName(QStringLiteral("chkGeneralRXOnly"));
+    m_chkGeneralRXOnly->setProperty("nereusSetupId", "general.options.rxOnly");
     m_chkGeneralRXOnly->setToolTip(QStringLiteral("Check to disable transmit functionality."));
     m_chkGeneralRXOnly->setChecked(RadioModel::rxOnlySetting());
     // Task 16. From Thetis setup.cs:6479-6502 [v2.10.3.15]
@@ -568,6 +571,7 @@ void GeneralOptionsPage::buildHardwareConfigGroup()
     // From Thetis setup.designer.cs:8385-8395 [v2.10.3.13] — Checked=true
     m_chkNetworkWDT = new QCheckBox(tr("Network Watchdog"), group);
     m_chkNetworkWDT->setObjectName(QStringLiteral("chkNetworkWDT"));
+    m_chkNetworkWDT->setProperty("nereusSetupId", "general.options.networkWatchdog");
     // Thetis's tooltip is "Resets software/firmware if network becomes
     // inactive." (setup.designer.cs:8442 [v2.10.3.15]). NereusSDR keeps the
     // radio's own safety timer on whatever this box says (operator decision
@@ -687,6 +691,7 @@ void GeneralOptionsPage::buildOptionsGroup()
     // (Thetis has no banner-click hook explanation in tooltip).
     m_chkHideFeedback = new QCheckBox(tr("Hide feedback level"), group);
     m_chkHideFeedback->setObjectName(QStringLiteral("chkHideFeedbackLevel"));
+    m_chkHideFeedback->setProperty("nereusSetupId", "general.options.hideFeedback");
     m_chkHideFeedback->setToolTip(
         tr("When checked, the bottom-banner FB indicator shows \"Feedback\" "
            "text instead of the numeric level. Mirror of FB-label right-click."));
@@ -707,6 +712,7 @@ void GeneralOptionsPage::buildOptionsGroup()
     m_chkSwapRedBlue = new QCheckBox(
         tr("Swap red and blue PS-A feedback colours"), group);
     m_chkSwapRedBlue->setObjectName(QStringLiteral("chkSwapREDBluePSAColours"));
+    m_chkSwapRedBlue->setProperty("nereusSetupId", "general.options.swapRedBlue");
     m_chkSwapRedBlue->setToolTip(
         tr("For users with red/blue color blindness or alternate display "
            "preferences. Mirror of FB-label left-click."));
@@ -754,6 +760,7 @@ void GeneralOptionsPage::buildOptionsGroup()
         auto* rateRow = new QHBoxLayout;
         auto* rateLabel = new QLabel(tr("CPU meter rate:"), group);
         m_cpuMeterRateHz = new QSpinBox(group);
+        m_cpuMeterRateHz->setProperty("nereusSetupId", "general.options.cpuMeterRate");
         m_cpuMeterRateHz->setRange(1, 30);
         m_cpuMeterRateHz->setSuffix(QStringLiteral(" Hz"));
         m_cpuMeterRateHz->setFixedWidth(80);
@@ -831,10 +838,12 @@ void GeneralOptionsPage::buildTimeOutGroup()
     //   this.toolTip1.SetToolTip(this.chkToTMox, "Time out Mox after X seconds");
     m_chkToTMox = new QCheckBox(tr("MOX"), group);
     m_chkToTMox->setObjectName(QStringLiteral("chkToTMox"));
+    m_chkToTMox->setProperty("nereusSetupId", "general.options.moxTimeoutEnabled");
     m_chkToTMox->setToolTip(tr("Time out Mox after X seconds"));
     m_chkToTMox->setChecked(readBool(QStringLiteral("MoxTimeOutEnabled"), false));
     m_udMoxToTSeconds = makeSeconds(QStringLiteral("MoxTimeOutSeconds"));
     m_udMoxToTSeconds->setObjectName(QStringLiteral("udMoxToTSeconds"));
+    m_udMoxToTSeconds->setProperty("nereusSetupId", "general.options.moxTimeoutSeconds");
     // From Thetis setup.designer.cs:10293 [v2.10.3.15]
     m_udMoxToTSeconds->setToolTip(tr("Stop mox if it is enabled for this duration"));
     m_lblMoxTotSec = new QLabel(tr("secs"), group);
@@ -849,11 +858,13 @@ void GeneralOptionsPage::buildTimeOutGroup()
     //   SetToolTip(this.chkToTPing, "If ping fails for X seconds, then stop mox.\r\nNote: use cmd line to check you can ping this IP.");
     m_chkToTPing = new QCheckBox(tr("Ping"), group);
     m_chkToTPing->setObjectName(QStringLiteral("chkToTPing"));
+    m_chkToTPing->setProperty("nereusSetupId", "general.options.pingTimeoutEnabled");
     m_chkToTPing->setToolTip(tr("If ping fails for X seconds, then stop mox.\n"
                                 "Note: use cmd line to check you can ping this IP."));
     m_chkToTPing->setChecked(readBool(QStringLiteral("PingTimeOutEnabled"), false));
     m_udPingToTSeconds = makeSeconds(QStringLiteral("PingTimeOutSeconds"));
     m_udPingToTSeconds->setObjectName(QStringLiteral("udPingToTSeconds"));
+    m_udPingToTSeconds->setProperty("nereusSetupId", "general.options.pingTimeoutSeconds");
     // From Thetis setup.designer.cs:10240 [v2.10.3.15]
     m_udPingToTSeconds->setToolTip(tr("If unable to ping for this long, stop mox"));
     m_lblPingTotSec = new QLabel(tr("secs"), group);
@@ -867,6 +878,7 @@ void GeneralOptionsPage::buildTimeOutGroup()
     //   SetToolTip(this.txtToTPingIP, "Try to ping this IP");
     m_txtToTPingIP = new QLineEdit(group);
     m_txtToTPingIP->setObjectName(QStringLiteral("txtToTPingIP"));
+    m_txtToTPingIP->setProperty("nereusSetupId", "general.options.pingTimeoutHost");
     m_txtToTPingIP->setToolTip(tr("Try to ping this IP"));
     m_txtToTPingIP->setFixedWidth(120);
     m_txtToTPingIP->setText(
@@ -886,6 +898,7 @@ void GeneralOptionsPage::buildTimeOutGroup()
     // --- Phone and iPad (NereusSDR, D29) ---
     m_chkRemoteMoxTimeOut = new QCheckBox(tr("Phone and iPad"), group);
     m_chkRemoteMoxTimeOut->setObjectName(QStringLiteral("chkRemoteMoxTimeOut"));
+    m_chkRemoteMoxTimeOut->setProperty("nereusSetupId", "general.options.remoteTimeoutEnabled");
     m_chkRemoteMoxTimeOut->setToolTip(
         tr("Stop a transmission from a phone or iPad after this many seconds. "
            "MOX and Ping above apply to this radio's own keys and to computers."));
@@ -893,6 +906,7 @@ void GeneralOptionsPage::buildTimeOutGroup()
         readBool(QStringLiteral("RemoteMoxTimeOutEnabled"), RadioModel::kRemoteMoxTimeOutDefault));
     m_udRemoteMoxTimeOutSeconds = makeSeconds(QStringLiteral("RemoteMoxTimeOutSeconds"));
     m_udRemoteMoxTimeOutSeconds->setObjectName(QStringLiteral("udRemoteMoxTimeOutSeconds"));
+    m_udRemoteMoxTimeOutSeconds->setProperty("nereusSetupId", "general.options.remoteTimeoutSeconds");
     m_udRemoteMoxTimeOutSeconds->setToolTip(
         tr("Stop a transmission from a phone or iPad if it lasts this long"));
     m_lblRemoteMoxTotSec = new QLabel(tr("secs"), group);
@@ -1017,9 +1031,11 @@ void GeneralOptionsPage::buildStepAttGroup()
     // --- RX1 row ---
     auto* rx1Row = new QHBoxLayout;
     m_chkRx1StepAttEnable = new QCheckBox(QStringLiteral("RX1 Enable"), group);
+    m_chkRx1StepAttEnable->setProperty("nereusSetupId", "general.options.rx1StepAttEnable");
     // From Thetis setup.cs: chkHermesStepAttenuator
     m_chkRx1StepAttEnable->setToolTip(QStringLiteral("Enable the step attenuator."));
     m_spnRx1StepAttValue = makeDbSpinBox(group);
+    m_spnRx1StepAttValue->setProperty("nereusSetupId", "general.options.rx1StepAtt");
     m_spnRx1StepAttValue->setEnabled(false);
     rx1Row->addWidget(m_chkRx1StepAttEnable);
     rx1Row->addWidget(m_spnRx1StepAttValue);
@@ -1106,6 +1122,7 @@ void GeneralOptionsPage::buildAutoAttGroup()
 
         // Enable checkbox
         chkEnable = new QCheckBox(QStringLiteral("Enable"), group);
+        if (rx == 0) chkEnable->setProperty("nereusSetupId", "general.options.autoAttEnable");
         // From Thetis setup.cs: chkAutoATTRx1 / chkAutoATTRx2
         chkEnable->setToolTip(
             QStringLiteral("Auto attenuate RX%1 on ADC overload").arg(rx + 1));
@@ -1115,6 +1132,7 @@ void GeneralOptionsPage::buildAutoAttGroup()
         auto* modeRow = new QHBoxLayout;
         auto* modeLabel = new QLabel(QStringLiteral("Mode:"), group);
         cmbMode = makeModeCombo(group);
+        if (rx == 0) cmbMode->setProperty("nereusSetupId", "general.options.autoAttMode");
         cmbMode->setEnabled(false);
         modeRow->addWidget(modeLabel);
         modeRow->addWidget(cmbMode);
@@ -1123,6 +1141,7 @@ void GeneralOptionsPage::buildAutoAttGroup()
 
         // Undo/Decay checkbox
         chkUndo = new QCheckBox(QStringLiteral("Undo"), group);
+        if (rx == 0) chkUndo->setProperty("nereusSetupId", "general.options.autoAttUndo");
         // From Thetis setup.cs: chkAutoATTRx1Undo concept
         chkUndo->setToolTip(
             QStringLiteral("Undo the changes made after the hold period."));

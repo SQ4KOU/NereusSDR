@@ -892,6 +892,7 @@ change shows as surface drift and as a change to this table.
 | `settingsHygieneVersion` | 1 |
 | `remoteIqVersion` | 1 |
 | `txModMonitorVersion` | 1 |
+| `setupDescriptionVersion` | 1 |
 
 <!-- /surface -->
 
@@ -1662,6 +1663,7 @@ older window sees only the values it was built for.
 | 77 | `settingsHygieneVersion` | `i64` |
 | 78 | `remoteIqVersion` | `i64` |
 | 79 | `txModMonitorVersion` | `i64` |
+| 80 | `setupDescriptionVersion` | `i64` |
 
 <!-- /surface -->
 
@@ -1942,6 +1944,22 @@ An enum property lists the values its domain allows.
 | 27 | `bandFollow` | `enum` | outbound | 0, 1, 2, 3 |
 | 28 | `bandFollowAddress` | `utf8` | outbound |  |
 | 29 | `bandFollowPort` | `i64` | outbound |  |
+
+**SetupDescription** (11 properties)
+
+| Ordinal | Property | Wire kind | Direction | Enum values |
+| --- | --- | --- | --- | --- |
+| 0 | `general` | `utf8` | outbound |  |
+| 1 | `hardware` | `utf8` | outbound |  |
+| 2 | `audio` | `utf8` | outbound |  |
+| 3 | `dsp` | `utf8` | outbound |  |
+| 4 | `display` | `utf8` | outbound |  |
+| 5 | `transmit` | `utf8` | outbound |  |
+| 6 | `appearance` | `utf8` | outbound |  |
+| 7 | `catNetwork` | `utf8` | outbound |  |
+| 8 | `test` | `utf8` | outbound |  |
+| 9 | `diagnostics` | `utf8` | outbound |  |
+| 10 | `revision` | `i64` | outbound |  |
 
 **SliceMarker** (14 properties)
 
@@ -2376,6 +2394,7 @@ destroyed during the session.
 | `connectedDevices` | `ConnectedDevicesFacade` |
 | `txState` | `TransmitState` |
 | `catalog` | `StationCatalog` |
+| `setup` | `SetupDescription` |
 | `spotSources` | `SpotSourceHost` |
 | `pan:<i>` | `PanadapterModel` |
 | `slice:<id>` | `SliceModel` |
@@ -3908,6 +3927,7 @@ refused.
 | `tx.unkey` | `epoch` i64 | `remoteTxVersion` | 1 | 11 |
 | `tx.tune` | `on` bool | `remoteTxVersion` | 1 | 11 |
 | `tx.twoTone` | `on` bool | `remoteTxVersion` | 1 | 11 |
+| `tx.twoTonePreset` | `name` utf8 | `setupDescriptionVersion` | 1 | 11 |
 | `tx.keepalive` | `sequence` i64, `epoch` i64 | `remoteTxVersion` | 1 | 11 |
 | `tx.take` | `holderEpoch` i64 (optional), `shownKeyed` bool (optional) | `remoteTxVersion` | 2 | 11 |
 | `tx.tunerTune` | `on` bool | `remoteTxVersion` | 2 | 11 |

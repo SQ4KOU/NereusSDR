@@ -394,6 +394,11 @@
             "kind": "i64",
             "name": "txModMonitorVersion",
             "value": 1
+        },
+        {
+            "kind": "i64",
+            "name": "setupDescriptionVersion",
+            "value": 1
         }
     ],
     "commands": [
@@ -1258,6 +1263,19 @@
             "capabilityVersion": 1,
             "minMinor": 11,
             "verb": "tx.twoTone"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "name",
+                    "optional": false
+                }
+            ],
+            "capability": "setupDescriptionVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "tx.twoTonePreset"
         },
         {
             "arguments": [
@@ -4708,6 +4726,76 @@
                 }
             ]
         },
+        "SetupDescription": {
+            "properties": [
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "general",
+                    "ordinal": 0
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "hardware",
+                    "ordinal": 1
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "audio",
+                    "ordinal": 2
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "dsp",
+                    "ordinal": 3
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "display",
+                    "ordinal": 4
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "transmit",
+                    "ordinal": 5
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "appearance",
+                    "ordinal": 6
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "catNetwork",
+                    "ordinal": 7
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "test",
+                    "ordinal": 8
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "diagnostics",
+                    "ordinal": 9
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "revision",
+                    "ordinal": 10
+                }
+            ]
+        },
         "SliceMarker": {
             "properties": [
                 {
@@ -7124,6 +7212,10 @@
         {
             "class": "StationCatalog",
             "key": "catalog"
+        },
+        {
+            "class": "SetupDescription",
+            "key": "setup"
         },
         {
             "class": "SpotSourceHost",

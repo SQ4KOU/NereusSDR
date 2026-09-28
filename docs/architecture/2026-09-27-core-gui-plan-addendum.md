@@ -24,8 +24,14 @@ status, and the plan task or requirement ID it belongs to.
   with an explanation, retaining Core TCI and Core diagnostics, or whether phone
   equivalents should be built in this effort.
 - Status: the exact inventory and disabled wording are recorded in the Setup
-  lane. Core description format and supported controls continue; omitted controls
-  and empty pages do not count as completed parity. General Region is now active behind transmitSettingsVersion 9; Extended remains
+  lane. The first Core description slice publishes 35 controls across four pages
+  in General, Test and Core TCI; coverage remains explicitly partial and
+  Diagnostics remains unpublished. Setup-aware peers receive its read-only
+  object; older peers remain unchanged. Integrated app/Core build and eight
+  session/Setup checks passed, followed by repaired full surface and session
+  conformance checks (five targets, 35.68 s). Omitted controls and empty pages
+  do not count as completed parity. General Region is active behind
+  transmitSettingsVersion 9 with a live off-air gate; Extended remains
   unavailable pending its separate migration ruling.
 - Plan: iPhone D16, Core Setup-description tasks 43-46 and phone renderer task 58.
 
