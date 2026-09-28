@@ -1536,11 +1536,16 @@ colours for the same signal.
   refusal before model destruction, keeping the same unsaved model and lock.
   It must never clear dirty flags, discard edits or resume an old transmit key.
   A failure after model destruction remains closed with an explicit retry path.
-- Status: isolated implementation and a real paired-client regression are in
-  progress. The normal admitted-board round trip is separate: signed `b22029c58`
-  uses three real owner processes, one paired client and one identity. Root
-  integration rebuilt both handover suites and passed them (7.84 s at load
-  6.77/4.87/4.80); it does not cover live hardware or the actual OS service manager.
+- Status: built in signed `28a6cc6c`. The Core reopens its listener around the
+  retained model, restores previously enabled discovery, and defers recovery
+  until an in-progress radio connection unwinds. The coordinator fences console
+  changes and duplicate releases during recovery. A real paired client reconnects
+  after two refusals; saved layout, edited state, identity and profile lock are
+  retained. A separate post-teardown write-failure test verifies continued fencing
+  and explicit retry. Root integration rebuilt app/Core and all three named
+  daemon/handover suites: 3/3 passed (22.96 s, load 16.69/15.52/21.13).
+  The normal admitted-board round trip in `b22029c58` uses three real owner
+  processes; neither fixture covers live hardware or the actual OS service manager.
 - Plan: reliable station ownership and recoverable Core handover.
 
 ### G-83: Core release build hides a production method behind the test guard

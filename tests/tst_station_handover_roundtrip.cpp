@@ -20,6 +20,7 @@
 #include "core/AppSettings.h"
 #include "core/CoreInit.h"
 #include "core/RadioDiscovery.h"
+#include "core/ReceiveLayoutStore.h"
 #include "core/daemon/StationControlSocket.h"
 #include "core/security/ClientDeviceIdentity.h"
 #include "core/security/DeviceStore.h"
@@ -54,12 +55,13 @@ QString profileName()
     return QStringLiteral("r%1").arg(QUuid::createUuid().toString(QUuid::Id128).left(6));
 }
 
-bool writeConfig(const QString& profileDirectory, quint16 port)
+bool writeConfig(const QString& profileDirectory, quint16 port,
+                 const QString& radioMac = {})
 {
     QFile config(QDir(profileDirectory).filePath(QStringLiteral("station.conf")));
     const QByteArray bytes = QStringLiteral("remote_bind = 127.0.0.1\nremote_port = %1\n"
-        "status_page = off\nrendezvous_servers =\nradio_mac =\n")
-        .arg(port).toUtf8();
+        "status_page = off\nrendezvous_servers =\nradio_mac = %2\n")
+        .arg(port).arg(radioMac).toUtf8();
     return config.open(QIODevice::WriteOnly) && config.write(bytes) == bytes.size();
 }
 
@@ -209,6 +211,122 @@ bool stopHelper(const QString& home, const QString& phase)
 class TestStationHandoverRoundtrip : public QObject {
     Q_OBJECT
 private slots:
+    void refusedOfflineReleaseRestoresPairedListener()
+    {
+        QTemporaryDir scratch;
+        QVERIFY(scratch.isValid());
+        const QString profile = profileName();
+        const QString profileDirectory = AppSettings::resolveConfigDir(profile);
+        const auto cleanup = qScopeGuard([&] { QDir(profileDirectory).removeRecursively(); });
+        QVERIFY(QDir().mkpath(profileDirectory));
+        QTcpServer reservation;
+        QVERIFY(reservation.listen(QHostAddress::LocalHost, 0));
+        const quint16 port = reservation.serverPort();
+        const QString radioMac = QStringLiteral("02:00:00:00:00:49");
+        QVERIFY(writeConfig(profileDirectory, port, radioMac));
+        const QString settingsPath = QDir(profileDirectory).filePath(
+            QStringLiteral("NereusSDR.settings"));
+        AppSettings saved(settingsPath);
+        const QList<ReceiveSliceState> baseline{
+            {0, QStringLiteral("pan-0"), 14293200.0, DSPMode::USB},
+        };
+        QVERIFY(ReceiveLayoutStore::stage(saved, radioMac, baseline));
+        QVERIFY(saved.save());
+        AppSettings baselineSettings(settingsPath);
+        baselineSettings.load();
+        const QVariant baselineLayout = baselineSettings.hardwareValue(
+            AppSettings::normalizedRadioMac(radioMac), QStringLiteral("receiveLayout"));
+        QVERIFY(baselineLayout.isValid());
+        const auto savedLayout = ReceiveLayoutStore::load(baselineSettings, radioMac);
+        QCOMPARE(savedLayout.state, ReceiveLayoutStore::LoadState::Loaded);
+        QCOMPARE(savedLayout.slices.size(), 1);
+        QCOMPARE(savedLayout.slices.front().frequencyHz, baseline.front().frequencyHz);
+
+        const StationIdentity station = StationIdentity::loadOrCreate(profileDirectory);
+        QVERIFY2(station.isValid(), qPrintable(station.lastError()));
+        const auto key = std::make_shared<const ClientDeviceIdentity>(
+            ClientDeviceIdentity::loadOrCreate(scratch.filePath(QStringLiteral("client"))));
+        QVERIFY2(key->isValid(), qPrintable(key->lastError()));
+        DeviceStore devices(profileDirectory);
+        PairedDevice paired;
+        paired.id = key->fingerprint();
+        paired.publicKeySpki = key->publicKeySpki();
+        paired.name = QStringLiteral("Refused handover client");
+        paired.kind = QStringLiteral("computer");
+        QVERIFY2(devices.add(paired), qPrintable(devices.lastError()));
+        reservation.close();
+
+        QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+        env.insert(QStringLiteral("QT_QPA_PLATFORM"), QStringLiteral("offscreen"));
+        env.insert(QStringLiteral("NEREUS_HANDOVER_TEST_DISABLE_DISCOVERY"), QStringLiteral("1"));
+        env.insert(QStringLiteral("NEREUS_HANDOVER_TEST_DIRTY_OFFLINE"), QStringLiteral("1"));
+        env.insert(QStringLiteral("NEREUS_HANDOVER_TEST_RECOVERY_DELAY_MS"),
+                   QStringLiteral("1500"));
+        QProcess daemon;
+        daemon.setProcessEnvironment(env);
+        daemon.start(QCoreApplication::applicationFilePath(),
+                     {QStringLiteral("--daemon-helper"), QStringLiteral("--config"),
+                      QDir(profileDirectory).filePath(QStringLiteral("station.conf")),
+                      QStringLiteral("--profile"), profile});
+        const auto stopDaemon = qScopeGuard([&] {
+            if (daemon.state() != QProcess::NotRunning) {
+                daemon.kill();
+                daemon.waitForFinished(3000);
+            }
+        });
+        QVERIFY(daemon.waitForStarted());
+        const QString socketPath = QDir(profileDirectory).filePath(
+            QString::fromLatin1(StationControlSocket::kSocketName));
+        QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(socketPath), 10000);
+        StationHandover competitor(profile);
+        QVERIFY(!competitor.acquire(0));
+
+        RadioModel remote(RadioModel::Role::Remote);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        client.setDeviceIdentity(key, paired.name);
+        QSignalSpy handshakes(&client, &StationClient::handshakeComplete);
+        QSignalSpy reconnects(&client, &StationClient::reconnectScheduled);
+        client.connectToStation(QUrl(QStringLiteral("wss://127.0.0.1:%1").arg(port)),
+                                {}, {}, false, station.fingerprint());
+        QTRY_COMPARE_WITH_TIMEOUT(handshakes.count(), 1, 15000);
+
+        for (int attempt = 1; attempt <= 2; ++attempt) {
+            const StationControlReply refused = StationControlSocket::request(
+                socketPath, {QStringLiteral("release")});
+            QVERIFY(!refused.ok);
+            QVERIFY2(refused.text.contains(QStringLiteral("unsaved receiver changes")),
+                     qPrintable(refused.text));
+            QCOMPARE(daemon.state(), QProcess::Running);
+            QVERIFY(!competitor.acquire(0));
+            const StationControlReply duplicate = StationControlSocket::request(
+                socketPath, {QStringLiteral("release")});
+            QVERIFY(!duplicate.ok);
+            QVERIFY2(duplicate.text.contains(QStringLiteral("already handing back")),
+                     qPrintable(duplicate.text));
+            const StationControlReply mutation = StationControlSocket::request(
+                socketPath, {QStringLiteral("pairing"), QStringLiteral("open")});
+            QVERIFY(!mutation.ok);
+            QVERIFY2(mutation.text.contains(QStringLiteral("Only status and release")),
+                     qPrintable(mutation.text));
+            AppSettings reloaded(settingsPath);
+            reloaded.load();
+            QCOMPARE(reloaded.hardwareValue(AppSettings::normalizedRadioMac(radioMac),
+                                            QStringLiteral("receiveLayout")), baselineLayout);
+            const auto stillSaved = ReceiveLayoutStore::load(reloaded, radioMac);
+            QCOMPARE(stillSaved.state, ReceiveLayoutStore::LoadState::Loaded);
+            QCOMPARE(stillSaved.slices.front().frequencyHz, baseline.front().frequencyHz);
+            QTRY_COMPARE_WITH_TIMEOUT(handshakes.count(), attempt + 1, 15000);
+            QCOMPARE(client.stationIdentityFingerprint(), station.fingerprint());
+            QVERIFY(reconnects.count() >= attempt);
+            QTcpServer duplicateListener;
+            QVERIFY(!duplicateListener.listen(QHostAddress::LocalHost, port));
+        }
+        client.disconnectFromStation(QStringLiteral("test finished"));
+        qInfo() << "refused release kept saved layout, lock, and paired listener; handshakes"
+                << handshakes.count() << "port" << port;
+    }
+
     void pairedClientFollowsBothOwners()
     {
         QTemporaryDir scratch;

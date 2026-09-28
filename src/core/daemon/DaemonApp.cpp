@@ -548,6 +548,7 @@ void DaemonApp::stop()
 
 void DaemonApp::beginStationRelease()
 {
+    m_stationReleaseRadioRecoveryWasEnabled = m_radioRecoveryEnabled;
     if (m_radioModel) {
 #ifdef NEREUS_BUILD_TESTS
         if (m_stopAllTxForTest) {
@@ -564,6 +565,30 @@ void DaemonApp::beginStationRelease()
     if (m_radioRetryTimer) { m_radioRetryTimer->stop(); }
 }
 
+DaemonApp::StationReleaseRecoveryResult DaemonApp::recoverFailedStationRelease()
+{
+    // A failure after stop() has destroyed the model must remain fail-closed.
+    // While the nested WDSP connect stack is active, neither its model nor
+    // the host borrowing it may be retired.
+    if (!m_radioModel || !m_stationHost) {
+        return StationReleaseRecoveryResult::Unavailable;
+    }
+    if (m_radioConnectInProgress) { return StationReleaseRecoveryResult::Pending; }
+
+    // quiesce() closes the old listener and retires its sessions. stop()
+    // drops the old server and media callbacks without touching the borrowed
+    // RadioModel; start() reuses the retained options, identity and model.
+    m_stationHost->stop();
+    if (!m_stationHost->start()) {
+        return StationReleaseRecoveryResult::Unavailable;
+    }
+    if (m_stationReleaseRadioRecoveryWasEnabled) {
+        m_radioRecoveryEnabled = true;
+        m_radioRetryTimer->start(0);
+    }
+    return StationReleaseRecoveryResult::Restored;
+}
+
 DaemonApp::StationReleaseResult DaemonApp::tryCompleteStationRelease(QString* reason)
 {
     if (reason) { reason->clear(); }
@@ -572,6 +597,9 @@ DaemonApp::StationReleaseResult DaemonApp::tryCompleteStationRelease(QString* re
         return StationReleaseResult::Failed;
     }
     stop();
+#ifdef NEREUS_BUILD_TESTS
+    if (m_afterStationStopForTest) { m_afterStationStopForTest(); }
+#endif
     QString saveError;
     if (!AppSettings::instance().save(&saveError)) {
         if (reason) {
