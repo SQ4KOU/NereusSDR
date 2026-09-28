@@ -19,6 +19,97 @@ using namespace NereusSDR;
 class SetupDescriptionLiveTest : public QObject {
     Q_OBJECT
 private slots:
+    void pairedPaBypassSettingUsesExistingCoreAuthority()
+    {
+        Core core;
+        core.model->setHpsdrModelForTest(HPSDRModel::ANAN_G2E);
+        RadioInfo info = core.model->currentRadioInfo();
+        info.boardType = HPSDRHW::HermesC10;
+        core.model->setLastRadioInfoForTest(info);
+        core.model->setReceiveOnlyStationPolicy(true);
+        core.server->setupDescription()->setRadioContext(core.model->boardCapabilities(),
+                                                         core.model->hardwareProfile().model);
+        Device settingsPhone(QStringLiteral("PA settings phone"), QStringLiteral("phone"));
+        core.pair(settingsPhone);
+        QHash<QByteArray, int> features = kHolder;
+        features.insert("setupDescription", 1);
+        LoopbackTransport* app = core.signIn(settingsPhone, features);
+        QVERIFY(admitted(app));
+        QCOMPARE(capability(app->received(), QStringLiteral("transmitSettingsVersion")),
+                 std::optional<qint64>(9));
+        const QJsonObject pa = QJsonDocument::fromJson(latest(app->received(),
+            QStringLiteral("setup"), QStringLiteral("pa")).toString().toUtf8()).object();
+        QCOMPARE(pa.value("pages").toArray().size(), 2);
+        const QJsonObject control = pa.value("pages").toArray().first().toObject()
+            .value("sections").toArray().first().toObject()
+            .value("controls").toArray().first().toObject();
+        QVERIFY(SetupDescriptionService::validatePaBypassBinding(control));
+        QVERIFY(!txPermitted(app));
+        QCOMPARE(core.model->transmitModel().paSettingsBypass(), false);
+        Device txPhone(QStringLiteral("Denied TX phone"), QStringLiteral("phone"));
+        core.pair(txPhone);
+        QHash<QByteArray, int> txFeatures = kTransmitter;
+        txFeatures.insert("setupDescription", 1);
+        LoopbackTransport* denied = core.signIn(txPhone, txFeatures);
+        QVERIFY(admitted(denied));
+        QVERIFY(!txPermitted(denied));
+
+        qint64 writeId = 970;
+        const auto write = [&writeId](LoopbackTransport* peer, bool bypass) {
+            const qint64 id = ++writeId;
+            peer->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
+                "transmit", {MirrorUpdate{0, "paSettingsBypass", MirrorWireKind::Bool, bypass}},
+                static_cast<quint32>(id))));
+            if (!QTest::qWaitFor([peer, id] { return !propertyResult(peer, id).isEmpty(); }, 5000)) {
+                return QJsonObject{};
+            }
+            const QJsonArray results = propertyResult(peer, id).value("results").toArray();
+            return results.isEmpty() ? QJsonObject{} : results.first().toObject();
+        };
+        const QJsonObject accepted = write(app, true);
+        QVERIFY2(accepted.value("accepted").toBool(),
+                 qPrintable(accepted.value("reason").toString()));
+        QCOMPARE(core.model->transmitModel().paSettingsBypass(), true);
+        // The writer gets settled readback in property.result; its own
+        // requested delta is intentionally withheld by the Core. The other
+        // paired session receives the changed mirror value.
+        QTRY_COMPARE(latest(denied->received(), QStringLiteral("transmit"),
+                            QStringLiteral("paSettingsBypass")), QJsonValue(true));
+        core.model->transmitModel().setPaSettingsBypass(false);
+        QTRY_COMPARE(latest(denied->received(), QStringLiteral("transmit"),
+                            QStringLiteral("paSettingsBypass")), QJsonValue(false));
+        QVERIFY(write(app, true).value("accepted").toBool());
+        QTRY_COMPARE(latest(denied->received(), QStringLiteral("transmit"),
+                            QStringLiteral("paSettingsBypass")), QJsonValue(true));
+
+        // A client asking for remote transmit remains subject to the Core's
+        // ordinary transmit decision when the receive-only settings exception
+        // is absent. The description changes no permission policy.
+        core.model->setReceiveOnlyStationPolicy(false);
+        const QJsonObject refused = write(denied, false);
+        QVERIFY(!refused.value("accepted").toBool(true));
+        QVERIFY(!refused.value("reason").toString().isEmpty());
+        QCOMPARE(core.model->transmitModel().paSettingsBypass(), true);
+
+        allowTransmit(core);
+        // allowTransmit configures a logical no-socket key but also turns
+        // off receive-only station policy. Restore the daemon-style settings
+        // exception before checking its on-air refusal.
+        core.model->setReceiveOnlyStationPolicy(true);
+        MoxController* mox = core.model->moxController();
+        mox->setMoxCheck({});
+        mox->setMox(true); // logical test state, no radio transport
+        QTRY_COMPARE(mox->state(), MoxState::Tx);
+        const QJsonObject onAir = write(app, false);
+        QVERIFY(!onAir.value("accepted").toBool(true));
+        QCOMPARE(onAir.value("reason"), QStringLiteral("The radio is on the air. Try again when it stops."));
+        QCOMPARE(core.model->transmitModel().paSettingsBypass(), true);
+        mox->setMox(false);
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        QVERIFY(!core.model->tune());
+        QVERIFY(!core.model->transmitModel().isTwoToneActive());
+    }
+
     void pairedPaReadoutsMirrorMetersAndRawCountsWithoutWriteAuthority()
     {
         Core core;

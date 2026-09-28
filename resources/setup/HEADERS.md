@@ -66,3 +66,4 @@ Covered JSON files: `general.json`, `hardware.json`, `pa.json`, `test.json`, `di
 2026-09-28 - J.J. Boyd (KG4VCF), with AI-assisted transformation via OpenAI Codex: Hardware Antenna/ALEX scalar descriptions.
 2026-09-28 - J.J. Boyd (KG4VCF), with AI-assisted transformation via OpenAI Codex: model-aware Antenna/ALEX relay labels and visibility.
 2026-09-28 - J.J. Boyd (KG4VCF), with AI-assisted transformation via OpenAI Codex: PA Values readout descriptions.
+2026-09-28 - J.J. Boyd (KG4VCF), with AI-assisted transformation via OpenAI Codex: ANAN-G2E PA bypass description.

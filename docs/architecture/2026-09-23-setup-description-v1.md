@@ -82,6 +82,16 @@ readouts remain visible while the radio transmits; they require neither
 transmit permission nor an off-air gate. A peer without the negotiated
 Setup-description feature receives no `setup` mirror object.
 
+On the ANAN-G2E only, the partial `PA Gain` page also describes the existing
+`transmit.paSettingsBypass` Boolean toggle. The Core projects that page away
+unless its board capabilities include both an integrated PA and
+`showsBypassPaSettingsUi`, and the SKU is not RX-only. Its gate is
+`transmitSettingsVersion:6` plus `offAir:true`, with no `transmit:true` gate:
+the Core already permits negotiated transmit *settings* on a receive-only
+station while it is off the air. The Core still applies its own property-write
+authority and on-air checks. This one toggle does not describe the PA profile
+grid, calibration, or auto-calibration sweep.
+
 `gate.offAir: true` requires a live txState with keyed, tuning, twoTone and
 txEnding all false. Missing or stale state disables the control; a renderer
 that cannot evaluate a gate disables that control rather than ignoring it.
