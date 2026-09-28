@@ -1,4 +1,5 @@
 #pragma once
+#include "core/session/NetworkPathSnapshot.h"
 // no-port-check: NereusSDR-original.
 // =================================================================
 // src/core/session/IceConfiguration.h  (NereusSDR)
@@ -234,6 +235,10 @@ public:
         virtual ~CandidateSource() = default;
         virtual void start(std::function<void(const QString& candidate)> add) = 0;
         virtual void stop() = 0;
+        virtual std::optional<NetworkPathSnapshot> networkPathSnapshot() const
+        {
+            return std::nullopt;
+        }
     };
     /// The lanes (the rendezvous document, section 12.3's tags): the
     /// session's control connection, and its media connection.

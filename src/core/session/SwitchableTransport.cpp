@@ -19,6 +19,7 @@
 
 #include <QLoggingCategory>
 #include <QTimer>
+#include <QThread>
 
 namespace NereusSDR {
 
@@ -394,6 +395,18 @@ QByteArray SwitchableTransport::peerCertificateSha256() const
 std::optional<SessionTransportTelemetry> SwitchableTransport::telemetry() const
 {
     return m_sendOn ? m_sendOn->telemetry() : std::nullopt;
+}
+
+std::optional<NetworkPathSnapshot> SwitchableTransport::networkPathSnapshot() const
+{
+    if (thread() != QThread::currentThread() || m_closed) {
+        return std::nullopt;
+    }
+    const QPointer<SessionTransport> current = m_sendOn;
+    if (!current || !current->isOpen()) {
+        return std::nullopt;
+    }
+    return current->networkPathSnapshot();
 }
 
 } // namespace NereusSDR

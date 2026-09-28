@@ -131,6 +131,7 @@ public:
     QString peerAddress() const override;
     QByteArray peerCertificateSha256() const override;
     std::optional<SessionTransportTelemetry> telemetry() const override;
+    std::optional<NetworkPathSnapshot> networkPathSnapshot() const override;
     bool sendBinary(const QByteArray& message) override
     {
         return m_sendOn && m_sendOn->sendBinary(message);

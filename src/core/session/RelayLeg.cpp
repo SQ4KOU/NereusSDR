@@ -26,6 +26,7 @@
 #include <QUdpSocket>
 #include <QUuid>
 #include <QWebSocket>
+#include <QThread>
 
 #include <algorithm>
 
@@ -57,7 +58,7 @@ bool isLetters(const QByteArray& bytes)
 class RelayLaneSource final : public IceConfiguration::CandidateSource {
 public:
     RelayLaneSource(RelayLeg* leg, int lane, QByteArray id = {})
-        : m_leg(leg), m_lane(lane), m_id(std::move(id)) {}
+        : m_ownerThread(leg ? leg->thread() : nullptr), m_leg(leg), m_lane(lane), m_id(std::move(id)) {}
     ~RelayLaneSource() override { stop(); }
 
     void start(std::function<void(const QString&)> add) override
@@ -88,7 +89,19 @@ public:
         m_started = false;
     }
 
+    std::optional<NetworkPathSnapshot> networkPathSnapshot() const override
+    {
+        if (m_ownerThread != QThread::currentThread() || !m_started || m_claim == 0 || !m_leg
+            || m_leg->m_state != RelayLeg::State::Joined
+            || !m_leg->m_peerPresent || m_leg->m_endSeen) {
+            return std::nullopt;
+        }
+        return socketNetworkPathSnapshot(m_leg->m_socket,
+                                         NetworkPathSnapshot::Carrier::WebRelay);
+    }
+
 private:
+    QThread* m_ownerThread = nullptr;
     QPointer<RelayLeg> m_leg;
     int m_lane = 0;
     bool m_started = false;

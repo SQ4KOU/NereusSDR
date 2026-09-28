@@ -53,6 +53,7 @@
 #include <QPointer>
 #include <QString>
 #include <optional>
+#include "core/session/NetworkPathSnapshot.h"
 
 QT_BEGIN_NAMESPACE
 class QWebSocket;
@@ -115,6 +116,13 @@ public:
     /// Read only on the transport's owner thread. Unsupported test/custom
     /// transports return absent rather than a fabricated zero measurement.
     virtual std::optional<SessionTransportTelemetry> telemetry() const { return std::nullopt; }
+
+    /// Present route on this transport's Qt thread; unsupported or closed
+    /// transports return unavailable rather than an inferred old path.
+    virtual std::optional<NetworkPathSnapshot> networkPathSnapshot() const
+    {
+        return std::nullopt;
+    }
 
     /// iPhone app plan Task 29 step 2b (the link document, "Paths", the
     /// media tunnel): one binary message beside the session's text ones,
@@ -183,6 +191,7 @@ public:
     QString peerAddress() const override;
     QByteArray peerCertificateSha256() const override;
     std::optional<SessionTransportTelemetry> telemetry() const override;
+    std::optional<NetworkPathSnapshot> networkPathSnapshot() const override;
     bool sendBinary(const QByteArray& message) override;
     bool carriesBinary() const override { return true; }
     qint64 backlogBytes() const override;

@@ -32,6 +32,7 @@
 
 #include "core/session/media/LibDataChannelMediaTransport.h"
 #include "core/session/CandidateSourceLease.h"
+#include <QThread>
 #include "core/session/media/PcmAudioCodec.h"
 
 #include <QDebug>
@@ -973,7 +974,7 @@ void LibDataChannelMediaTransport::gatherIfReady()
 
 std::optional<MediaIcePath> LibDataChannelMediaTransport::selectedPath() const
 {
-    if (!d->peer) {
+    if (thread() != QThread::currentThread() || !d->started || !d->peer) {
         return std::nullopt;
     }
     try {
@@ -1000,11 +1001,15 @@ std::optional<MediaIcePath> LibDataChannelMediaTransport::selectedPath() const
         path.localType = typeName(local);
         path.remoteType = typeName(remote);
         path.localAddress = QString::fromStdString(local.address().value_or(std::string()));
+        path.localPort = local.port().value_or(0);
         path.remoteAddress = QString::fromStdString(remote.address().value_or(std::string()));
         path.remotePort = remote.port().value_or(0);
         path.farEndRelays = d->farEndRelays;
         const auto endpoint = MediaIcePath::loopbackEndpoint(path.remoteAddress, path.remotePort);
         path.ownedLoopbackShim = endpoint && d->ownedShimEndpoints.contains(*endpoint);
+        if (path.ownedLoopbackShim && d->candidateSourceLease) {
+            path.ownedSourcePath = d->candidateSourceLease->networkPathSnapshot();
+        }
         return path;
     } catch (const std::exception&) {
         return std::nullopt;

@@ -309,6 +309,7 @@ public:
     /// as a WebSocket station sees no client certificate.
     QByteArray peerCertificateSha256() const override;
     std::optional<SessionTransportTelemetry> telemetry() const override;
+    std::optional<NetworkPathSnapshot> networkPathSnapshot() const override;
 
     // ---- Test seams ----
 

@@ -22,6 +22,7 @@ public:
 
     void start(int lane, const QString& connectionId,
                std::function<void(const QString& candidate)> add);
+    std::optional<NetworkPathSnapshot> networkPathSnapshot() const;
 
     ~CandidateSourceLease() override;
 

@@ -22,6 +22,50 @@ using namespace NereusSDR;
 class SetupDescriptionLiveTest : public QObject {
     Q_OBJECT
 private slots:
+    void pairedV9PublishesLocalRendererDispatchWithoutChangingV8()
+    {
+        Core core;
+        Device current(QStringLiteral("Renderer V9 iPhone"), QStringLiteral("phone"));
+        Device older(QStringLiteral("Renderer V8 iPhone"), QStringLiteral("phone"));
+        core.pair(current);
+        core.pair(older);
+        QHash<QByteArray, int> v9Features = kHolder;
+        v9Features.insert("setupDescription", 9);
+        auto* v9 = core.signIn(current, v9Features);
+        QVERIFY(admitted(v9));
+        QCOMPARE(capability(v9->received(), QStringLiteral("setupDescriptionVersion")),
+                 std::optional<qint64>(9));
+        const QJsonObject display = QJsonDocument::fromJson(latest(v9->received(),
+            QStringLiteral("setup"), QStringLiteral("display")).toString().toUtf8()).object();
+        QCOMPARE(display.value("version"), QJsonValue(9));
+        const QJsonArray pages = display.value("pages").toArray();
+        const QJsonArray rendering = pages.at(0).toObject().value("sections").toArray()
+            .at(1).toObject().value("controls").toArray();
+        const QJsonArray waterfall = pages.at(1).toObject().value("sections").toArray()
+            .at(0).toObject().value("controls").toArray();
+        QCOMPARE(rendering.size(), 10);
+        QCOMPARE(waterfall.size(), 6);
+        for (int i = 5; i < rendering.size(); ++i) {
+            QVERIFY(SetupDescriptionService::validateDisplayPhoneBinding(rendering.at(i).toObject()));
+        }
+        for (int i = 3; i < waterfall.size(); ++i) {
+            QVERIFY(SetupDescriptionService::validateDisplayPhoneBinding(waterfall.at(i).toObject()));
+        }
+        QHash<QByteArray, int> v8Features = kHolder;
+        v8Features.insert("setupDescription", 8);
+        auto* v8 = core.signIn(older, v8Features);
+        QVERIFY(admitted(v8));
+        QCOMPARE(capability(v8->received(), QStringLiteral("setupDescriptionVersion")),
+                 std::optional<qint64>(8));
+        const QJsonObject old = QJsonDocument::fromJson(latest(v8->received(),
+            QStringLiteral("setup"), QStringLiteral("display")).toString().toUtf8()).object();
+        QCOMPARE(old.value("version"), QJsonValue(8));
+        QCOMPARE(old.value("pages").toArray().at(0).toObject().value("sections").toArray()
+                     .at(1).toObject().value("controls").toArray().size(), 5);
+        QCOMPARE(old.value("pages").toArray().at(1).toObject().value("sections").toArray()
+                     .at(0).toObject().value("controls").toArray().size(), 3);
+    }
+
     void pairedV8PublishesOnlyClosedPhoneRxDispatch()
     {
         Core core;

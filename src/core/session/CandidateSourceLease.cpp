@@ -42,4 +42,12 @@ void CandidateSourceLease::start(int lane, const QString& connectionId,
     }
 }
 
+std::optional<NetworkPathSnapshot> CandidateSourceLease::networkPathSnapshot() const
+{
+    if (thread() != QThread::currentThread() || !m_source) {
+        return std::nullopt;
+    }
+    return m_source->networkPathSnapshot();
+}
+
 } // namespace NereusSDR
