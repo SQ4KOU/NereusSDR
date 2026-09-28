@@ -24,6 +24,7 @@ class SetupDescription final : public QObject {
     Q_PROPERTY(QString test READ test NOTIFY descriptionsChanged)
     Q_PROPERTY(QString diagnostics READ diagnostics NOTIFY descriptionsChanged)
     Q_PROPERTY(quint32 revision READ revision NOTIFY descriptionsChanged)
+    Q_PROPERTY(QString pa READ pa NOTIFY descriptionsChanged)
 public:
     explicit SetupDescription(QObject* parent = nullptr);
 
@@ -32,6 +33,7 @@ public:
     static bool validateTransmitPropertyBinding(const QJsonObject& control);
     static bool validateHardwarePropertyBinding(const QJsonObject& control,
                                                 HPSDRModel model = HPSDRModel::FIRST);
+    static bool validatePaReadoutBinding(const QJsonObject& control);
     static bool validateTransmitSettingBinding(const QJsonObject& control);
     static bool validateAudioPropertyBinding(const QJsonObject& control);
     static bool validateDspSettingBinding(const QJsonObject& control);
@@ -53,6 +55,7 @@ public:
     QString catNetwork() const { return m_catNetwork; }
     QString test() const { return m_test; }
     QString diagnostics() const { return m_diagnostics; }
+    QString pa() const { return m_pa; }
 
 signals:
     void descriptionsChanged();
@@ -72,6 +75,7 @@ private:
     QString m_catNetwork;
     QString m_test;
     QString m_diagnostics;
+    QString m_pa;
 };
 
 using SetupDescriptionService = SetupDescription;

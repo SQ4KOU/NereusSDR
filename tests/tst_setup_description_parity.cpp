@@ -13,6 +13,8 @@
 #include "gui/setup/TransmitSetupPages.h"
 #include "gui/setup/TxProfileSetupPage.h"
 #include "gui/setup/hardware/AntennaAlexAntennaControlTab.h"
+#include "gui/setup/PaSetupPages.h"
+#include "gui/widgets/MetricLabel.h"
 #include "gui/setup/TestTwoTonePage.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -24,6 +26,8 @@
 #include <QDoubleSpinBox>
 #include <QLineEdit>
 #include <QGroupBox>
+#include <QFormLayout>
+#include <QLabel>
 #include <QSpinBox>
 #include <QSlider>
 #include <QTableWidget>
@@ -156,6 +160,52 @@ void compareControl(QWidget& page, const QJsonObject& control)
 class SetupDescriptionParityTest : public QObject {
     Q_OBJECT
 private slots:
+    void describedPaReadoutsMatchDesktopRows()
+    {
+        RadioModel model;
+        model.setBoardForTest(HPSDRHW::Saturn);
+        PaValuesPage page(&model);
+        SetupDescriptionService service;
+        service.setRadioContext(model.boardCapabilities(), model.hardwareProfile().model);
+        const QJsonObject pa = service.category(QStringLiteral("pa"));
+        QVERIFY(!pa.isEmpty());
+        const QJsonArray sections = pa.value("pages").toArray().first().toObject()
+            .value("sections").toArray();
+        QCOMPARE(sections.size(), 2);
+        const QStringList expectedIds{QStringLiteral("pa.values.forwardCalibrated"),
+                                      QStringLiteral("pa.values.reflectedPower"),
+                                      QStringLiteral("pa.values.swr"),
+                                      QStringLiteral("pa.values.forwardAdc"),
+                                      QStringLiteral("pa.values.reflectedAdc")};
+        QStringList actualIds;
+        for (const QJsonValue& rawSection : sections) {
+            const QJsonObject section = rawSection.toObject();
+            const QJsonArray described = section.value("controls").toArray();
+            for (const QJsonValue& rawControl : described) {
+                const QJsonObject control = rawControl.toObject();
+                const QString id = control.value("id").toString();
+                actualIds.append(id);
+                auto* widget = qobject_cast<MetricLabel*>(bySetupId(page, id));
+                QVERIFY2(widget != nullptr, qPrintable(id));
+                QVERIFY(SetupDescriptionService::validatePaReadoutBinding(control));
+                QCOMPARE(widget->toolTip(), control.value("tooltip").toString());
+                auto* group = qobject_cast<QGroupBox*>(widget->parentWidget());
+                QVERIFY(group != nullptr);
+                QCOMPARE(group->title(), section.value("title").toString());
+                auto* form = qobject_cast<QFormLayout*>(group->layout());
+                QVERIFY(form != nullptr);
+                auto* label = qobject_cast<QLabel*>(form->labelForField(widget));
+                QVERIFY(label != nullptr);
+                QCOMPARE(label->text(), control.value("label").toString());
+            }
+        }
+        QCOMPARE(actualIds, expectedIds);
+        const QJsonArray power = sections.first().toObject().value("controls").toArray();
+        const QJsonArray raw = sections.last().toObject().value("controls").toArray();
+        QCOMPARE(power.size(), 3);
+        QCOMPARE(raw.size(), 2);
+    }
+
     void describedHardwareAntennaScalarsMatchDesktop_data()
     {
         QTest::addColumn<int>("model");

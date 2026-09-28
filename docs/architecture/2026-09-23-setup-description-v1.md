@@ -67,6 +67,21 @@ unavailable desktop control visible with the same plain reason. General's
 Extended control uses this pending its migration policy; no edit is sent while
 unavailable. Region requires transmitSettingsVersion 9 and the offAir gate.
 
+An optional `decimals` field on a `kind:readout` control is an integer from 0
+through 6. It formats a finite numeric mirrored value with that many decimal
+places; the existing `unit` string follows the number (empty means no unit).
+Missing, nonfinite, wrong-type, or stale-session values display unavailable,
+never zero or a cached value from another session. Readouts send no edits,
+including when the source property happens to be writable. A readout without
+`decimals` keeps the renderer's prior behavior. The PA Values partial page
+uses only five `txState` scalars with `txReadingsVersion:1`; no derived
+formula, peak/min tracker, or reset action is implied by this field.
+`setup.pa` is appended after `setup.revision` in the fixed mirror schema and
+is empty on a board without an integrated PA or on an RX-only SKU. Its five
+readouts remain visible while the radio transmits; they require neither
+transmit permission nor an off-air gate. A peer without the negotiated
+Setup-description feature receives no `setup` mirror object.
+
 `gate.offAir: true` requires a live txState with keyed, tuning, twoTone and
 txEnding all false. Missing or stale state disables the control; a renderer
 that cannot evaluate a gate disables that control rather than ignoring it.

@@ -721,6 +721,7 @@ const MirrorPolicy::Entry kEntries[] = {
     { "SetupDescription", "test", MirrorDirection::Outbound },
     { "SetupDescription", "diagnostics", MirrorDirection::Outbound },
     { "SetupDescription", "revision", MirrorDirection::Outbound },
+    { "SetupDescription", "pa", MirrorDirection::Outbound },
 
     // R-R3-47 / R-R3-22 (accessoryDataVersion 1): the Core's accessory
     // records and settings, read-only. A window changes the interlock
