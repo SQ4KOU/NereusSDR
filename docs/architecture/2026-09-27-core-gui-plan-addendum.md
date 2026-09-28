@@ -1111,6 +1111,24 @@ colours for the same signal.
   their own bounded accounting and tests before that feature can ship.
 - Plan: several-device capacity and restrictive-network relay access.
 
+### G-67: Releasing an offline Core must preserve receiver edits and saved layouts
+
+- Evidence: receiver saves are intentionally suppressed before radio resources
+  are admitted, or while a saved layout is protected. Unconditionally capturing
+  fallback receivers during handover would overwrite the saved layout; releasing
+  after a real offline edit would discard that unsaved edit.
+- Ruling: JJ requires preserving uncommitted work and completing safe station
+  handover. Lead implementation preserves the existing storage policy: release
+  unchanged offline state only after an explicit startup baseline, preserve its
+  saved layout byte-for-byte, and refuse release while receiver edits remain
+  unsaved. No new pending-layout format or operator policy is inferred.
+- Status: built in signed `1bebe127`. The Core retains the model and profile lock
+  on a refused save, with an explicit reason and retry path. Retune, gain, receiver
+  add/remove and ownership edits are tracked, including disconnected receivers.
+  The integrated app/Core build and twelve focused tests passed (20.09 s).
+  Desktop-to-background handover and live-device acceptance remain open.
+- Plan: station profile ownership and radio handover.
+
 ## How this addendum is kept
 
 New gaps are appended here as they are found, each with its own `G-` number (next available

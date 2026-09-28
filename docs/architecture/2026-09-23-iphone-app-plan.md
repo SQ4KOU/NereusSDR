@@ -6510,6 +6510,12 @@ review. Requires Task 47, Parts C and F, and Tasks 41, 42 and 71 to 77.
       Desktop hosting, profile locking and handover remain in the following steps.
 - [ ] **Step 2:** The desktop hosting it, the lock, `nereusd release` with its
       control-socket tests, and the two-way handover.
+      Profile ownership and daemon-to-desktop release are implemented in signed
+      `1bebe127`. The integrated app/Core build and twelve focused tests passed
+      (20.09 s), including checked saves, unchanged offline layouts, dirty offline
+      refusal, live/stale process locks and deferred control replies. Desktop
+      hosting and the reverse background handover remain open; no live radio or
+      window handover was performed.
 - [ ] **Step 3:** The window as the station device: its own slices, flags and audio, its
       MOX and TUNE through the take rules, and its TCI programs under the holder rule,
       with the hosting-desktop harness.

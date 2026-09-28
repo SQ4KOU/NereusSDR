@@ -85,8 +85,13 @@ public:
     static constexpr int kLongPathBytes = 80;
 
     using Handler = std::function<StationControlReply(const QStringList& args)>;
+    // Return true to retain the parsed request for a later reply. The
+    // accepted socket remains parented to StationControlSocket even when
+    // its listener is closed; the owner must finish it with sendReply().
+    using AsyncHandler = std::function<bool(const QStringList& args, QLocalSocket* socket)>;
 
-    explicit StationControlSocket(Handler handler, QObject* parent = nullptr);
+    explicit StationControlSocket(Handler handler, QObject* parent = nullptr,
+                                  AsyncHandler asyncHandler = {});
     ~StationControlSocket() override;
 
     /// Listens at `path`, owner-only. A stale socket file left by a Core
@@ -128,12 +133,14 @@ public:
     /// none does). When no Core answers, the reply names every path tried.
     static StationControlReply request(const QStringList& paths, const QStringList& args,
                                        int timeoutMs = kClientTimeoutMs);
+    static bool sendReply(QLocalSocket* socket, const StationControlReply& reply);
 
 private:
     void onNewConnection();
     void serve(QLocalSocket* socket);
 
     Handler m_handler;
+    AsyncHandler m_asyncHandler;
     QLocalServer* m_server = nullptr;
     QString m_path;
     QString m_lastError;

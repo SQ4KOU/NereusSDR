@@ -134,15 +134,24 @@
 #include "core/daemon/StationControlSocket.h"
 #include "core/platform/ThreadPlacement.h"
 #include "core/session/LinkVersion.h"
+#include "core/station/StationHandover.h"
+#ifdef NEREUS_BUILD_TESTS
+#include "models/RadioModel.h"
+#include "models/SliceModel.h"
+#endif
 
 #include <QCommandLineOption>
 #include <QCommandLineParser>
 #include <QCoreApplication>
+#include <QElapsedTimer>
 #include <QFileInfo>
 #include <QMetaObject>
+#include <QLocalSocket>
+#include <QPointer>
 #include <QTimer>
 #include <csignal>
 #include <cstdio>
+#include <memory>
 
 namespace {
 
@@ -155,6 +164,141 @@ void onTerm(int)
 {
     s_terminationRequested = 1;
 }
+
+class ReleaseCoordinator final : public QObject {
+public:
+    ReleaseCoordinator(NereusSDR::DaemonApp& daemon, NereusSDR::StationHandover& ownership,
+                       QCoreApplication& app)
+        : m_daemon(daemon), m_ownership(ownership), m_app(app)
+    {
+#ifdef NEREUS_BUILD_TESTS
+        m_testReleaseDelayMs = qMax(0, qEnvironmentVariableIntValue(
+            "NEREUS_HANDOVER_TEST_RELEASE_DELAY_MS"));
+#endif
+    }
+
+    bool listen(const QString& path)
+    {
+        m_control = std::make_unique<NereusSDR::StationControlSocket>(
+            [this](const QStringList& args) {
+                if (m_state != State::Running
+                    && args.value(0) != QLatin1String("status")) {
+                    return NereusSDR::StationControlReply{
+                        false, QStringLiteral("The Core is handing back the radio. Only status "
+                                              "and release are available now.")};
+                }
+                return m_daemon.runControlCommand(args);
+            }, this,
+            [this](const QStringList& args, QLocalSocket* socket) {
+                if (args != QStringList{QStringLiteral("release")}) { return false; }
+                acceptRelease(socket);
+                return true;
+            });
+        return m_control->listen(path);
+    }
+
+    void close() { if (m_control) { m_control->close(); } }
+    QString lastError() const { return m_control ? m_control->lastError() : QString(); }
+
+private:
+    enum class State { Running, Releasing, Failed, Released };
+
+    void acceptRelease(QLocalSocket* socket)
+    {
+        if (m_state == State::Releasing) {
+            NereusSDR::StationControlSocket::sendReply(
+                socket, {false, QStringLiteral("The Core is already handing back the radio.")});
+            return;
+        }
+        if (m_state == State::Released) {
+            NereusSDR::StationControlSocket::sendReply(
+                socket, {true, QStringLiteral("The Core handed back the radio.")});
+            return;
+        }
+        m_state = State::Releasing;
+        m_replySocket = socket;
+        m_elapsed.start();
+        // Freeze console mutations before stopAllTx can emit a direct
+        // callback and re-enter the local event loop. stopAllTx remains the
+        // first operation on station/radio state in beginStationRelease().
+        m_daemon.beginStationRelease();
+        QTimer::singleShot(0, this, [this]() { advance(); });
+    }
+
+    void fail(const QString& reason)
+    {
+        m_state = State::Failed;
+        if (m_replySocket) {
+            NereusSDR::StationControlSocket::sendReply(
+                m_replySocket, {false, reason.isEmpty()
+                    ? QStringLiteral("The Core could not hand back the radio. Try release again.")
+                    : reason});
+        }
+        m_replySocket.clear();
+    }
+
+    void advance()
+    {
+        if (m_state != State::Releasing) { return; }
+        // Leave room inside the console's existing 15-second wait for a
+        // truthful failure reply and its socket drain.
+        if (m_elapsed.elapsed() >= 12000) {
+            fail(QStringLiteral("The Core did not finish handing back the radio in time. "
+                                "It still owns the station; try release again."));
+            return;
+        }
+#ifdef NEREUS_BUILD_TESTS
+        if (m_elapsed.elapsed() < m_testReleaseDelayMs) {
+            QTimer::singleShot(50, this, [this]() { advance(); });
+            return;
+        }
+#endif
+        QString reason;
+        const auto result = m_daemon.tryCompleteStationRelease(&reason);
+        if (result == NereusSDR::DaemonApp::StationReleaseResult::Pending) {
+            QTimer::singleShot(50, this, [this]() { advance(); });
+            return;
+        }
+        if (result == NereusSDR::DaemonApp::StationReleaseResult::Failed) {
+            fail(reason);
+            return;
+        }
+
+        // No model or settings writer remains. Close and remove the old
+        // listener pathname while we still own the profile. The accepted
+        // socket was reparented off QLocalServer and stays alive for reply.
+        NereusSDR::CoreInit::shutdown();
+        m_control->close();
+        m_ownership.release();
+        m_state = State::Released;
+        if (m_replySocket) {
+            QLocalSocket* const socket = m_replySocket;
+            QCoreApplication* const application = &m_app;
+            QObject::connect(socket, &QLocalSocket::disconnected, &m_app,
+                             [application]() { application->exit(0); });
+            if (NereusSDR::StationControlSocket::sendReply(
+                    socket, {true, QStringLiteral("The Core handed back the radio.")})) {
+                // A peer that disappears must not keep a released, headless
+                // process alive indefinitely. Normal path exits on drain.
+                QTimer::singleShot(2000, &m_app, [application]() { application->exit(0); });
+                return;
+            }
+        }
+        QCoreApplication* const application = &m_app;
+        QTimer::singleShot(0, &m_app, [application]() { application->exit(0); });
+    }
+
+    NereusSDR::DaemonApp& m_daemon;
+    NereusSDR::StationHandover& m_ownership;
+    QCoreApplication& m_app;
+    std::unique_ptr<NereusSDR::StationControlSocket> m_control;
+    QPointer<QLocalSocket> m_replySocket;
+    QElapsedTimer m_elapsed;
+    State m_state {State::Running};
+#ifdef NEREUS_BUILD_TESTS
+    int m_testReleaseDelayMs {0};
+#endif
+};
 
 } // namespace
 
@@ -211,7 +355,8 @@ int main(int argc, char* argv[])
     // and --profile, instead of a second Core. No command runs the Core.
     parser.addPositionalArgument(QStringLiteral("command"),
         QStringLiteral("Optional. A command for the running Core: status, pairing show|open|close, "
-                       "devices, devices revoke <id>, token retire, reset --unclaimed --yes."),
+                       "devices, devices revoke <id>, token retire, reset --unclaimed --yes, "
+                       "release."),
         QStringLiteral("[command...]"));
     QCommandLineOption unclaimedOpt(QStringLiteral("unclaimed"),
         QStringLiteral("With reset: return the Core to having no paired device."));
@@ -325,6 +470,15 @@ int main(int argc, char* argv[])
         NereusSDR::AppSettings::setProfileOverride(profile);
     }
 
+    // Every same-profile process serializes settings, identity and radio
+    // ownership before CoreInit loads or writes anything in that profile.
+    NereusSDR::StationHandover ownership(profile);
+    QString lockError;
+    if (!ownership.acquire(15000, &lockError)) {
+        qCCritical(NereusSDR::lcApp).noquote() << lockError;
+        return 1;
+    }
+
     // Task 1: warn, never fail, when the resolved profile still lands on
     // the same settings/log directory the GUI client uses. Sharing stays
     // a supported configuration -- an operator opts into it explicitly
@@ -394,6 +548,18 @@ int main(int argc, char* argv[])
     // rather than relying solely on the implicit destructor call.
     NereusSDR::DaemonApp daemon;
     daemon.setLinkMajors(linkMajors);
+#ifdef NEREUS_BUILD_TESTS
+    if (qEnvironmentVariableIsSet("NEREUS_HANDOVER_TEST_DISABLE_DISCOVERY")) {
+        // Exercise a genuinely pending layout without LAN discovery.
+        daemon.setDiscoveryProviderForTest([] { return QList<NereusSDR::RadioInfo>{}; });
+    }
+    if (qEnvironmentVariableIsSet("NEREUS_HANDOVER_TEST_PRIMED_BOARD")) {
+        // Process integration tests must never send radio discovery packets.
+        daemon.primeBoardForTest(NereusSDR::HPSDRHW::HermesLite,
+                                 QStringLiteral("02:00:00:00:00:48"));
+    }
+#endif
+    ReleaseCoordinator release(daemon, ownership, app);
 
     // R1 Task 10: connects to a radio (or runs discovery when
     // cfg.radioMac is empty) and creates min(cfg.sliceCount,
@@ -412,16 +578,29 @@ int main(int argc, char* argv[])
     // alive for the rest of main(), well past the point this queued call
     // runs (the queued event is serviced from the very first turn of
     // app.exec()'s loop, still inside this stack frame).
-    QMetaObject::invokeMethod(s_app, [&daemon, &cfg, &profile]() {
+    QMetaObject::invokeMethod(s_app, [&daemon, &cfg, &profile, &release]() {
         if (!daemon.start(cfg)) {
             qCCritical(NereusSDR::lcApp) << "daemon failed to start";
             QCoreApplication::exit(4);
             return;
         }
+#ifdef NEREUS_BUILD_TESTS
+        if (qEnvironmentVariableIsSet("NEREUS_HANDOVER_TEST_DIRTY_OFFLINE")) {
+            // Test-only post-baseline edit while discovery is disabled.
+            if (auto* model = daemon.radioModelForTest()) {
+                if (auto* slice = model->sliceById(0)) {
+                    slice->setAfGain(slice->afGain() + 1);
+                }
+            }
+        }
+#endif
         qCInfo(NereusSDR::lcApp) << "nereusd started, slices" << daemon.sliceCount();
         // iPhone app Task 17: the console commands reach this Core through
         // state_directory, or the profile's directory.
-        daemon.startControlSocket(NereusSDR::StationControlSocket::socketPathFor(cfg, profile));
+        if (!release.listen(NereusSDR::StationControlSocket::socketPathFor(cfg, profile))) {
+            qCWarning(NereusSDR::lcApp) << "The Core's console socket could not listen:"
+                                        << release.lastError();
+        }
     }, Qt::QueuedConnection);
 
     const int rc = app.exec();
@@ -431,6 +610,7 @@ int main(int argc, char* argv[])
     // nothing to tear down (DaemonApp::stop() is safe with no prior
     // start()).
     daemon.stop();
+    release.close();
 
     // Mirrors main.cpp's teardown: uninstalls CoreInit::initialize()'s
     // message handler and closes its log file before static destructors

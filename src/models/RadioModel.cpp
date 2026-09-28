@@ -920,6 +920,8 @@ warren@wpratt.com
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QMetaObject>
+#include <QMetaMethod>
+#include <QMetaProperty>
 #include <QScopeGuard>
 #include <QScopedValueRollback>
 #include <QSignalBlocker>
@@ -11298,6 +11300,24 @@ int RadioModel::addSliceImpl(int requestedId, const QString& initialPanId,
     // once, as an ordinary new slice does, instead of waiting for
     // bindReceiveLayoutSlices.
     auto* slice = new SliceModel(this);
+    // Most persisted slice signals are wired by wireSliceSignals only once a
+    // radio connects. A disconnected station still exposes writable receiver
+    // properties, so track their edits while layout persistence is held.
+    // Connect the meta-object's stored writable properties as a group: a
+    // handpicked frequency/AF/etc. list would silently miss future fields.
+    if (m_receiveLayoutManaged) {
+        const QMetaObject* sliceMeta = slice->metaObject();
+        const int editSlotIndex = metaObject()->indexOfSlot("noteOfflineReceiverPropertyEdit()");
+        const QMetaMethod editSlot = metaObject()->method(editSlotIndex);
+        for (int propertyIndex = sliceMeta->propertyOffset();
+             propertyIndex < sliceMeta->propertyCount(); ++propertyIndex) {
+            const QMetaProperty property = sliceMeta->property(propertyIndex);
+            if (property.isWritable() && property.isStored() && property.hasNotifySignal()) {
+                QObject::connect(slice, property.notifySignal(), this, editSlot,
+                                 Qt::DirectConnection);
+            }
+        }
+    }
 
     // Phase 3F Sub-Epic I closeout, defect C3: lowest id not currently in
     // use, NOT m_slices.size().
@@ -20100,7 +20120,13 @@ bool RadioModel::hydrateReceiveLayout(const QString& radioMac,
 // Coalesce settings saves to avoid writing on every scroll tick.
 void RadioModel::scheduleSettingsSave(SliceModel* slice)
 {
-    if (role() != Role::Local || m_receiveLayoutPendingAdmission || m_receiveLayoutProtected) {
+    if (role() != Role::Local) {
+        return;
+    }
+    if (m_receiveLayoutPendingAdmission || m_receiveLayoutProtected) {
+        if (m_stationHandoverTrackSuppressedReceiverEdits && !m_receiveLayoutHydrating) {
+            m_stationHandoverSuppressedReceiverEdits = true;
+        }
         return;
     }
     if (!slice) {
@@ -20116,6 +20142,20 @@ void RadioModel::scheduleSettingsSave(SliceModel* slice)
     QTimer::singleShot(500, this, [this]() {
         flushPendingSettingsSave();
     });
+}
+
+void RadioModel::beginStationHandoverEditTracking()
+{
+    // The daemon has finished its deliberate initial receiver seed. Never
+    // clear this flag after the station is exposed to an external client.
+    m_stationHandoverTrackSuppressedReceiverEdits = true;
+}
+
+void RadioModel::noteOfflineReceiverPropertyEdit()
+{
+    if (m_receiveLayoutPendingAdmission || m_receiveLayoutProtected) {
+        scheduleSettingsSave();
+    }
 }
 
 // Force-run any pending coalesced slice save synchronously. Without this,
@@ -20165,6 +20205,60 @@ void RadioModel::flushPendingSettingsSave()
         m_settingsSaveError = error;
         emit settingsSaveErrorChanged(error);
     }
+}
+
+bool RadioModel::saveForStationHandover(QString* error)
+{
+    if (error) { error->clear(); }
+    if (m_receiveLayoutPendingAdmission || m_receiveLayoutProtected) {
+        if (!m_stationHandoverTrackSuppressedReceiverEdits) {
+            if (error) {
+                *error = tr("The Core has not checked its receiver changes for release. "
+                            "It still owns the station.");
+            }
+            return false;
+        }
+        if (m_stationHandoverSuppressedReceiverEdits || m_settingsSaveScheduled
+            || !m_dirtySettingsSliceIds.isEmpty() || m_alexControllerDirty) {
+            if (error) {
+                *error = tr("The Core has unsaved receiver changes while the radio is unavailable. "
+                            "It still owns the station.");
+            }
+            return false;
+        }
+        // There was no receiver edit after the daemon's startup seed. Keep
+        // the saved (possibly invalid/protected) receiveLayout value intact;
+        // captureReceiveLayout() would overwrite it with fallback slices.
+        QString reason;
+        if (!AppSettings::instance().save(&reason)) {
+            if (error) {
+                *error = tr("The Core could not save its settings. Check its log and try release again.");
+            }
+            return false;
+        }
+        return true;
+    }
+    flushPendingSettingsSave();
+    if (m_settingsSaveScheduled) {
+        if (error) {
+            *error = m_settingsSaveError.isEmpty()
+                ? tr("The Core has receiver settings still waiting to be saved. Try release again.")
+                : m_settingsSaveError;
+        }
+        return false;
+    }
+    QString reason;
+    if (!captureReceiveLayout(&reason)) {
+        if (error) { *error = reason; }
+        return false;
+    }
+    if (!AppSettings::instance().save(&reason)) {
+        if (error) {
+            *error = tr("The Core could not save its settings. Check its log and try release again.");
+        }
+        return false;
+    }
+    return true;
 }
 
 void RadioModel::applyStationSettingsSaveError(const QString& reason)
