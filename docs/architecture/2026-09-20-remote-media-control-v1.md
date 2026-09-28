@@ -74,11 +74,14 @@ and reject mismatching RTP. SSRC is a routing identity; authentication comes
 from the pinned WSS session and its negotiated DTLS peer.
 
 A peer is ready when its connection is up and its display channel and audio
-line are open. Each peer reports ready before any message or packet that
-arrived with that opening, so the first display message a peer handles
-always finds it ready, and a reply sent from that handler is taken. An
-earlier build could report such a message first; the reply was then refused
-and, on the unreliable display channel, never sent (addendum G-127).
+line are open. Each peer reports ready before any display message, raw I/Q
+message or audio packet that arrived with that opening, so the first display
+message a peer handles always finds it ready, and a reply sent from that
+handler is taken. An earlier build could report such a message first; the
+reply was then refused and, on the unreliable display channel, never sent
+(addendum G-127). Transmit keepalives on the `tx` channel are not ordered
+against ready: they are reported as they arrive, and sending one needs only
+the `tx` channel open, not a ready peer.
 
 The speakers' mix and the headphones mix are Opus at the Core's
 `audio_bitrate`: 48000 bit/s with fullband sound (audio up to 20 kHz) by
