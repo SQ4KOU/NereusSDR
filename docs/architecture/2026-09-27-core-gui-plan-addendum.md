@@ -1260,6 +1260,21 @@ colours for the same signal.
   remain open; no RF was used.
 - Plan: desktop hosting and several-device ownership.
 
+### G-72: An open Rename dialog could bypass the transmit Setup lock
+
+- Evidence: a focused test opened Remote Access Rename, changed the live state
+  to transmitting while the dialog was open, then accepted the name. The new
+  page emitted the rename despite its controls being disabled.
+- JJ's ruling: “Lock Setup controls while transmitting (recommended).” This
+  applies to an action completing after a dialog has already opened as well.
+- Status: built. The page rechecks its lifetime, current permission and original
+  name when the dialog returns. The formerly failing test and all page actions
+  pass in the integrated app build (0.52 seconds); four offscreen states were
+  rendered and inspected. Action signal blockers now end before callbacks and
+  operator labels use plain text. Real hosting/service/device action wiring is
+  still in progress, so page presentation alone does not complete the plan.
+- Plan: Remote Access controls and Setup transmit locking.
+
 ## How this addendum is kept
 
 New gaps are appended here as they are found, each with its own `G-` number (next available

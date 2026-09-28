@@ -12,10 +12,6 @@
 #include "gui/OperatorReasonText.h"
 #include "gui/UnbuiltFeatures.h"
 #include "core/AppSettings.h"
-// Remote-daemon R2 Task 20: RemoteStationPage validates its URL field with
-// the same rule src/main.cpp applies to --station, so a value the field
-// accepts is a value the next launch will actually dial.
-#include "core/session/RemoteStationOptions.h"
 #include "core/session/IStationLink.h"
 #include "models/AmplifierModel.h"
 #include "models/StationTciModel.h"
@@ -1168,27 +1164,6 @@ void CatMidiControlPage::buildUI()
     grid->addWidget(m_learnButton, 3, 0, 1, 2);
 
     contentLayout()->addWidget(group);
-    contentLayout()->addStretch();
-}
-
-// ---------------------------------------------------------------------------
-// RemoteStationPage — R-R3-38 unified connection entry point.
-// ---------------------------------------------------------------------------
-RemoteStationPage::RemoteStationPage(QWidget* parent)
-    : SetupPage(QStringLiteral("Remote Access"), parent)
-{
-    NereusSDR::Style::applyDarkPageStyle(this);
-    auto* description = new QLabel(
-        tr("Choose a Core and its radio, manage saved Core addresses, or use "
-           "this computer's built-in Core with a local radio. Connection "
-           "changes take effect when you select Connect."), this);
-    description->setWordWrap(true);
-    description->setTextFormat(Qt::PlainText);
-    contentLayout()->addWidget(description);
-    auto* button = new QPushButton(tr("Connections…"), this);
-    button->setObjectName(QStringLiteral("remoteStationConnections"));
-    connect(button, &QPushButton::clicked, this, &RemoteStationPage::connectionsRequested);
-    contentLayout()->addWidget(button, 0, Qt::AlignLeft);
     contentLayout()->addStretch();
 }
 

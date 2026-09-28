@@ -8019,6 +8019,7 @@ nereus_add_test(tst_this_core_page
     fakes/RemoteWindowHarness.cpp
     EXTRA_LABELS session)
 target_compile_definitions(tst_this_core_page PRIVATE NEREUS_BUILD_TESTS)
+nereus_add_test(tst_remote_station_page EXTRA_LABELS gui)
 # The catalogue's `display` key against the desktop's Setup > Display pages,
 # for the G2 and the HL2, and the page unchanged by reading the shared
 # table (R-IOS-18, R-IOS-27, R-R3-08).

@@ -6571,6 +6571,12 @@ phone by one tap, revoke the phone from the page.
 - [ ] **Step 1:** The page with its functional tests.
 - [ ] **Step 2:** The screenshots.
 
+Presentation is implemented in signed `df86b7a5` with lead modal-permission
+corrections. The integrated app and page tests pass; off/on/pairing/two-device/
+backup-acknowledged states were rendered and inspected. These remain partial:
+the production hosting/service bridge and end-to-end control effects are still
+being connected, so the steps are not yet accepted as complete.
+
 ## Task 50: The card image for a small computer
 
 **Runs in:** the Core/GUI session's lanes (a station task).
