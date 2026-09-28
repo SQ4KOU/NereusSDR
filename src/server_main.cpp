@@ -549,7 +549,7 @@ int main(int argc, char* argv[])
     }
 
     if (!NereusSDR::CoreInit::initialize(profile)) {
-        qCCritical(NereusSDR::lcApp) << "core initialisation failed";
+        qCCritical(NereusSDR::lcApp) << "core initialization failed";
         return 1;
     }
 

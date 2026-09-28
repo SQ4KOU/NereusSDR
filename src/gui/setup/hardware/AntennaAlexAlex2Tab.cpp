@@ -205,7 +205,7 @@ AntennaAlexAlex2Tab::AntennaAlexAlex2Tab(RadioModel* model, QWidget* parent)
     m_selectedLabel->setStyleSheet(
         QStringLiteral("QLabel { color: palette(mid); font-size: 10px; }"));
     m_selectedLabel->setToolTip(
-        tr("Live filter selection — derived from PanadapterModel centre frequency."));
+        tr("Live filter selection — derived from PanadapterModel center frequency."));
 
     statusLayout->addWidget(m_statusLed);
     statusLayout->addWidget(m_statusLabel);

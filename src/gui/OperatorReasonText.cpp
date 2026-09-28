@@ -451,7 +451,7 @@ constexpr Entry kOlderCoreEntries[] = {
     {"slice is not bound to an active stream", nullptr,
      "That receiver is not running on the Core."},
     {"C-Tune centre is invalid for this stream's cohosts", nullptr,
-     "C-Tune cannot centre there while other receivers share this spectrum."},
+     "C-Tune cannot center there while other receivers share this spectrum."},
     {"disconnectTgxl takes no arguments", nullptr,
      "The Core could not read this request."},
     {"setFourO3AEnabled requires exactly one enabled boolean argument", nullptr,

@@ -710,7 +710,7 @@ void GeneralOptionsPage::buildOptionsGroup()
     //   here as a source-cite reference; NereusSDR uses corrected spelling
     //   "feedback colours" in the user-visible text).
     m_chkSwapRedBlue = new QCheckBox(
-        tr("Swap red and blue PS-A feedback colours"), group);
+        tr("Swap red and blue PS-A feedback colors"), group);
     m_chkSwapRedBlue->setObjectName(QStringLiteral("chkSwapREDBluePSAColours"));
     m_chkSwapRedBlue->setProperty("nereusSetupId", "general.options.swapRedBlue");
     m_chkSwapRedBlue->setToolTip(

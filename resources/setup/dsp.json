@@ -1257,7 +1257,7 @@
             {
               "id": "dsp.nbSnb.snbOutputBandwidthHz",
               "label": "Output Bandwidth",
-              "tooltip": "Width of the audio band SNB operates on, centred on zero.\nSmaller = focuses the blanker on the active passband;\nlarger = covers wider modes (FM, DRM). Default 6000 Hz\ncovers SSB + AM comfortably.",
+              "tooltip": "Width of the audio band SNB operates on, centered on zero.\nSmaller = focuses the blanker on the active passband;\nlarger = covers wider modes (FM, DRM). Default 6000 Hz\ncovers SSB + AM comfortably.",
               "kind": "slider",
               "binding": {
                 "property": {

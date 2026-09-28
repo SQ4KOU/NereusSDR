@@ -567,7 +567,7 @@ void ContainerSettingsDialog::populateAvailableList()
         {"IMAGE",          "Image"},
         {"MAGICEYE",       "Magic Eye"},
         {"ROTATOR",        "Rotator"},
-        {"SOLID",          "Solid Colour"},
+        {"SOLID",          "Solid Color"},
         {"SPACER",         "Spacer"},
         {"TEXTOVERLAY",    "Text Overlay"},
         {"VFODISPLAY",     "VFO Display"},
@@ -914,7 +914,7 @@ void ContainerSettingsDialog::buildContainerPropertiesSection(QVBoxLayout* paren
                                          m_container && m_container->isLocked());
     m_hideTitleCheck         = makeCheck(QStringLiteral("Hide title"),
                                          m_container && !m_container->isTitleBarVisible());
-    m_minimisesCheck         = makeCheck(QStringLiteral("Minimises"),
+    m_minimisesCheck         = makeCheck(QStringLiteral("Minimizes"),
                                          m_container && m_container->containerMinimises());
     m_autoHeightCheck        = makeCheck(QStringLiteral("Auto height"),
                                          m_container && m_container->autoHeight());

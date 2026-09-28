@@ -643,7 +643,7 @@ void SpectrumDefaultsPage::buildUI()
         QStringLiteral(" ") + QString::fromLatin1(ControlRanges::kDisplayHzPerBinTargetUnit));
     m_hzPerBinTargetSpin->setToolTip(QStringLiteral(
         "Auto-zoom override: target a constant Hz/bin regardless of zoom. "
-        "Set to 0 (\"Off\") to use the default bins-in-window behaviour "
+        "Set to 0 (\"Off\") to use the default bins-in-window behavior "
         "(FFT replans on zoom). When > 0, the FFT size is fixed at "
         "sampleRate / target so the trace delivers the requested resolution "
         "at any zoom level, which is handy for hunting narrow signals (CW, digital). "
@@ -1166,7 +1166,7 @@ void SpectrumDefaultsPage::buildUI()
     {
         m_nfLineColorBtn = new ColorSwatchButton(Qt::red, overlayGroup);
         m_nfLineColorBtn->setToolTip(QStringLiteral(
-            "Colour for the NF line + 8x8 box. Thetis default red."));
+            "Color for the NF line + 8x8 box. Thetis default red."));
         connect(m_nfLineColorBtn, &ColorSwatchButton::colorChanged,
                 this, [this](const QColor& c) {
             if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
@@ -1181,7 +1181,7 @@ void SpectrumDefaultsPage::buildUI()
 
         m_nfTextColorBtn = new ColorSwatchButton(Qt::yellow, overlayGroup);
         m_nfTextColorBtn->setToolTip(QStringLiteral(
-            "Colour for the NF dBm label text. Thetis default yellow."));
+            "Color for the NF dBm label text. Thetis default yellow."));
         connect(m_nfTextColorBtn, &ColorSwatchButton::colorChanged,
                 this, [this](const QColor& c) {
             if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
@@ -1194,7 +1194,7 @@ void SpectrumDefaultsPage::buildUI()
 
         m_nfFastColorBtn = new ColorSwatchButton(Qt::gray, overlayGroup);
         m_nfFastColorBtn->setToolTip(QStringLiteral(
-            "Colour shown during fast-attack (band/freq/MOX change). "
+            "Color shown during fast-attack (band/freq/MOX change). "
             "Default gray, mirroring Thetis m_bDX2_Gray."));
         connect(m_nfFastColorBtn, &ColorSwatchButton::colorChanged,
                 this, [this](const QColor& c) {
@@ -1375,7 +1375,7 @@ void SpectrumDefaultsPage::buildUI()
     // Colour pickers for trace, grid, passband, and zero lines have moved to
     // Setup → Appearance → Colors & Theme (consolidated in one place).
     auto* colorHint = new QLabel(QStringLiteral(
-        "Spectrum / waterfall colours: Setup → Appearance → Colors & Theme."), this);
+        "Spectrum / waterfall colors: Setup → Appearance → Colors & Theme."), this);
     colorHint->setStyleSheet(QStringLiteral(
         "QLabel { color: #607080; font-style: italic; padding: 6px; }"));
     contentLayout()->addWidget(colorHint);
@@ -1901,7 +1901,7 @@ void WaterfallDefaultsPage::buildUI()
     m_showRxZeroLineToggle = new QCheckBox(QStringLiteral("Show RX zero line on waterfall"), ovGroup);
     // Thetis: setup.designer.cs:3188 (chkShowRXZeroLineOnWaterfall) — rewritten
     // Thetis original: (none)
-    m_showRxZeroLineToggle->setToolTip(QStringLiteral("Draw a line on the waterfall at the RX centre frequency (zero-beat reference)."));
+    m_showRxZeroLineToggle->setToolTip(QStringLiteral("Draw a line on the waterfall at the RX center frequency (zero-beat reference)."));
     connect(m_showRxZeroLineToggle, &QCheckBox::toggled, this, [this](bool on) {
         if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
             w->setShowRxZeroLineOnWaterfall(on);
@@ -1912,7 +1912,7 @@ void WaterfallDefaultsPage::buildUI()
     m_showTxZeroLineToggle = new QCheckBox(QStringLiteral("Show TX zero line on waterfall"), ovGroup);
     // Thetis: setup.designer.cs:3242 (chkShowTXZeroLineOnWaterfall) — rewritten
     // Thetis original: (none)
-    m_showTxZeroLineToggle->setToolTip(QStringLiteral("Draw a line on the waterfall at the TX centre frequency (zero-beat reference)."));
+    m_showTxZeroLineToggle->setToolTip(QStringLiteral("Draw a line on the waterfall at the TX center frequency (zero-beat reference)."));
     connect(m_showTxZeroLineToggle, &QCheckBox::toggled, this, [this](bool on) {
         if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
             w->setShowTxZeroLineOnWaterfall(on);
@@ -1992,7 +1992,7 @@ void WaterfallDefaultsPage::buildUI()
 
     // Low Level Color (W10) has moved to Setup → Appearance → Colors & Theme.
     auto* wfColorHint = new QLabel(QStringLiteral(
-        "Spectrum / waterfall colours: Setup → Appearance → Colors & Theme."), this);
+        "Spectrum / waterfall colors: Setup → Appearance → Colors & Theme."), this);
     wfColorHint->setStyleSheet(QStringLiteral(
         "QLabel { color: #607080; font-style: italic; padding: 6px; }"));
     contentLayout()->addWidget(wfColorHint);
@@ -2256,7 +2256,7 @@ void GridScalesPage::buildUI()
     // Grid/zero-line/band-edge colour pickers (G6/G9–G13) moved to
     // Setup → Appearance → Colors & Theme (consolidated colour panel).
     auto* gridColorHint = new QLabel(QStringLiteral(
-        "Spectrum / waterfall colours: Setup → Appearance → Colors & Theme."), this);
+        "Spectrum / waterfall colors: Setup → Appearance → Colors & Theme."), this);
     gridColorHint->setStyleSheet(QStringLiteral(
         "QLabel { color: #607080; font-style: italic; padding: 6px; }"));
     contentLayout()->addWidget(gridColorHint);
@@ -3369,9 +3369,9 @@ void Display3DSetupPage::buildUI()
         m_gainSlider = row.slider;
         m_gainSlider->setObjectName(QStringLiteral("setup3DGainSlider"));
         const QString gainTip = QStringLiteral(
-            "3D surface colour gain: how far down the signal range the "
-            "colormap reaches.\nHigher = colour down toward the noise "
-            "floor; lower = colour only on the strongest signals.");
+            "3D surface color gain: how far down the signal range the "
+            "colormap reaches.\nHigher = color down toward the noise "
+            "floor; lower = color only on the strongest signals.");
         m_gainSlider->setToolTip(gainTip);
         row.spin->setToolTip(gainTip);
         connect(m_gainSlider, &QSlider::valueChanged, this, [this](int v) {

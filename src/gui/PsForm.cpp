@@ -914,7 +914,7 @@ void PsForm::onSessionInvalidated()
 {
     m_pendingActions.clear();
     if (m_lblActionStatus) {
-        m_lblActionStatus->setText(tr("The connection to the Core changed; actions still waiting were cancelled."));
+        m_lblActionStatus->setText(tr("The connection to the Core changed; actions still waiting were canceled."));
     }
     refreshFacadeStatus();
 }

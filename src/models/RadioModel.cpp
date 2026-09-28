@@ -10074,7 +10074,7 @@ bool RadioModel::requestStreamCentre(int sliceId, double centreHz)
     if (m_role == Role::Remote) {
         if (m_station == nullptr) {
             emit sliceRetuneRejected(sliceId,
-                noStationReason(QStringLiteral("the C-Tune centre change")));
+                noStationReason(QStringLiteral("the C-Tune center change")));
             return false;
         }
         const auto outcome = m_station->requestStreamCentre(sliceId, centreHz);
