@@ -3213,7 +3213,7 @@ void StationServer::onNewWebSocketConnection()
             // frame and message caps before the event loop sees input.
             auto* watch = new WebSocketTransport(socket, TxWatchServer::kAttachBytes);
             if (request.hasQuery() || !request.userInfo().isEmpty()) {
-                watch->closeLink(QStringLiteral("invalid watch endpoint"));
+                watch->closeLink(QStringLiteral("The Core could not read this transmit watch address."));
                 watch->deleteLater();
             } else {
                 m_txWatchServer->acceptTransport(watch, addressKey(watch->peerAddress()));
@@ -8750,7 +8750,7 @@ void StationServer::handleTxWatchTicket(SessionTransport* transport,
         return;
     }
     if (!txWatchEligible(transport)) {
-        answer(false, QStringLiteral("A transmit watch path is unavailable for this session."));
+        answer(false, QStringLiteral("The Core cannot provide a separate transmit watch connection for this device."));
         return;
     }
     const Peer& peer = m_peers.value(transport);
@@ -8824,7 +8824,7 @@ void StationServer::handleTxWatchRelay(SessionTransport* transport,
         return;
     }
     if (!txWatchRelayEligible(transport)) {
-        answer(false, QStringLiteral("A transmit watch relay path is unavailable for this session."));
+        answer(false, QStringLiteral("The Core cannot relay the transmit watch connection for this device."));
         return;
     }
     const auto* switchable = qobject_cast<const SwitchableTransport*>(transport);

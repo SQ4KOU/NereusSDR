@@ -687,7 +687,7 @@ private slots:
             {{0, "offer", MirrorWireKind::Utf8, offer}}));
         QTRY_VERIFY(latest(SessionMessageKind::CommandResult, 805).commandId == 805);
         QCOMPARE(latest(SessionMessageKind::CommandResult, 805).reason,
-                 QStringLiteral("A transmit watch relay path is unavailable for this session."));
+                 QStringLiteral("The Core cannot relay the transmit watch connection for this device."));
         watchdog->setKeyed(record.id, true, 10);
         QVERIFY(watch.sendBinary(RemoteTxWatchdog::channelKeepalive(2, 10)));
         QTRY_COMPARE(heard.size(), 2);
