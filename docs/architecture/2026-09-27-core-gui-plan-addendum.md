@@ -2020,9 +2020,12 @@ colours for the same signal.
   mismatch: PipeWire's public `-D_REENTRANT` compile option reaches Core, GUI
   and tests but neither donor. GCC again rejects the cache. The earlier
   manually constructed probes missed the generated-target mismatch. The
-  cause is established from pkg-config and actual compile commands; correction
-  and verification using generated targets are in progress. No full Linux
-  success or runtime-test speed improvement is claimed.
+  cause is established from pkg-config and actual compile commands. Both
+  donors now receive the same optional PipeWire flags. The original generated
+  Core command fails with `-Werror=invalid-pch`; after the correction, both
+  CMake-generated donors and four actual Core/GUI/test source commands pass
+  and report cache use. The Mac app/Core build and two representative suites
+  also pass. No full Linux success or runtime-test speed improvement is claimed.
 - Plan: reliable, efficient full-suite builds across CI platforms.
 
 ### G-102: Trace and Fill colour is changed live but not saved

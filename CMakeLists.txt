@@ -2771,6 +2771,11 @@ if(NEREUS_USE_PCH)
     add_library(nereus_test_pch OBJECT EXCLUDE_FROM_ALL "${_nereus_pch_source}")
     foreach(_pch_target IN ITEMS nereus_library_pch nereus_test_pch)
         target_link_libraries(${_pch_target} PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets)
+        # PipeWire publishes thread-related compile flags to every consumer.
+        # Match those flags without importing Core-private definitions.
+        if(PIPEWIRE_FOUND)
+            target_compile_options(${_pch_target} PRIVATE ${PIPEWIRE_CFLAGS_OTHER})
+        endif()
         set_target_properties(${_pch_target} PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
     endforeach()
     if(MSVC)
