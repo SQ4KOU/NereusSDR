@@ -1968,10 +1968,7 @@ DexpVoxPage::DexpVoxPage(RadioModel* model, QWidget* parent)
         "VOX through the local mic.  VAX is intentionally not subject to anti-VOX\n"
         "treatment because VAX feeds digital-mode apps (no mic-feedback path).\n"
         "\n"
-        "NereusSDR-original divergence from Thetis chkAntiVoxSource\n"
-        "(setup.designer.cs:44646-44657 [v2.10.3.13]): Thetis selects between RX\n"
-        "and VAC; in NereusSDR, the audio output device is the only valid\n"
-        "cancellation reference."));
+        "The audio output device is the only valid cancellation reference."));
 
     // udAntiVoxGain — Y=71 in Thetis Designer.  Range -60..60 from
     // setup.designer.cs:44708-44717 [v2.10.3.13].

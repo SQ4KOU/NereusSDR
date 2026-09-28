@@ -347,7 +347,7 @@ void SpectrumPeaksPage::buildUI()
     m_aphEnable->setToolTip(QStringLiteral(
         "Display a secondary trace showing the highest level ever seen at each "
         "frequency bin. The trace decays downward at the configured rate once "
-        "the hold duration elapses. Full implementation in Task 2.5."));
+        "the hold duration elapses."));
     aphForm->addRow(QString(), m_aphEnable);
 
     m_aphDurationMs = new QSpinBox(m_aphGroup);
@@ -409,8 +409,7 @@ void SpectrumPeaksPage::buildUI()
     m_blobCount = new QSpinBox(m_blobGroup);
     m_blobCount->setRange(1, 20);
     m_blobCount->setToolTip(QStringLiteral(
-        "Number of peak markers to display (1–20). "
-        "From Thetis Display.cs:4407 [v2.10.3.13] — default 3, max 20."));
+        "Number of peak markers to display (1–20). Default 3."));
     blobForm->addRow(QStringLiteral("Number of peaks:"), m_blobCount);
 
     m_blobInsideFilter = new QCheckBox(
@@ -433,8 +432,7 @@ void SpectrumPeaksPage::buildUI()
     m_blobHoldMs->setSingleStep(100);
     m_blobHoldMs->setSuffix(QStringLiteral(" ms"));
     m_blobHoldMs->setToolTip(QStringLiteral(
-        "How long (ms) a blob is held at its peak before falling. "
-        "From Thetis Display.cs:4599 [v2.10.3.13] — default 500 ms."));
+        "How long (ms) a blob is held at its peak before falling. Default 500 ms."));
     blobForm->addRow(QStringLiteral("Hold duration:"), m_blobHoldMs);
 
     m_blobHoldDrop = new QCheckBox(
@@ -450,8 +448,7 @@ void SpectrumPeaksPage::buildUI()
     m_blobFallDbPerSec->setRange(1, 60);
     m_blobFallDbPerSec->setSuffix(QStringLiteral(" dB/s"));
     m_blobFallDbPerSec->setToolTip(QStringLiteral(
-        "Rate at which blobs fall after the hold duration. "
-        "From Thetis Display.cs:4697 [v2.10.3.13] — default 6 dB/s."));
+        "Rate at which blobs fall after the hold duration. Default 6 dB/s."));
     blobForm->addRow(QStringLiteral("Fall rate:"), m_blobFallDbPerSec);
 
     // Colors
@@ -460,16 +457,14 @@ void SpectrumPeaksPage::buildUI()
     // Placeholder color; setColor() is called in the constructor after buildUI().
     m_blobColor = new ColorSwatchButton(QColor(0xFF, 0x45, 0x00, 0xFF), m_blobGroup);
     m_blobColor->setToolTip(QStringLiteral(
-        "Color of the peak blob circles. "
-        "From Thetis display.cs:8434 [v2.10.3.13] — default OrangeRed."));
+        "Color of the peak blob circles. Default orange-red."));
     blobForm->addRow(QStringLiteral("Blob color:"), m_blobColor);
 
     // From Thetis display.cs:8435 [v2.10.3.13] m_bDX2_PeakBlobText = Color.Chartreuse
     // Placeholder color; setColor() is called in the constructor after buildUI().
     m_blobTextColor = new ColorSwatchButton(QColor(0x7F, 0xFF, 0x00, 0xFF), m_blobGroup);
     m_blobTextColor->setToolTip(QStringLiteral(
-        "Color of the dBm readout text on each peak blob. "
-        "From Thetis display.cs:8435 [v2.10.3.13] — default Chartreuse."));
+        "Color of the dBm readout text on each peak blob. Default chartreuse."));
     blobForm->addRow(QStringLiteral("Text color:"), m_blobTextColor);
 
     contentLayout()->addWidget(m_blobGroup);

@@ -1090,9 +1090,10 @@ void SpectrumDefaultsPage::buildUI()
     m_noiseFloorPositionCombo = makeOverlayPositionCombo(overlayGroup);
     m_noiseFloorPositionCombo->setCurrentIndex(2);  // Bottom Left default
     m_noiseFloorPositionCombo->setEnabled(false);
+    // The text anchors to the NF box as in Thetis display.cs:5443.
     m_noiseFloorPositionCombo->setToolTip(QStringLiteral(
-        "Deprecated. Text now anchors to the NF box per Thetis "
-        "(display.cs:5443). Setting persists but has no visual effect."));
+        "Deprecated. Text now anchors to the NF box. "
+        "Setting persists but has no visual effect."));
     connect(m_showNoiseFloorToggle, &QCheckBox::toggled, this, [this](bool on) {
         if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
             w->setShowNoiseFloor(on);
@@ -1129,9 +1130,10 @@ void SpectrumDefaultsPage::buildUI()
         m_nfShiftSpin->setSingleStep(0.5);
         m_nfShiftSpin->setDecimals(1);
         m_nfShiftSpin->setSuffix(QStringLiteral(" dB"));
+        // Thetis _fNFshiftDBM.
         m_nfShiftSpin->setToolTip(QStringLiteral(
-            "Operator-tunable offset added to the rendered NF level. "
-            "Thetis _fNFshiftDBM, clamped to [-12, +12]."));
+            "Operator-tunable offset added to the rendered NF level, "
+            "clamped to [-12, +12]."));
         connect(m_nfShiftSpin, qOverload<double>(&QDoubleSpinBox::valueChanged),
                 this, [this](double v) {
             if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
@@ -1147,9 +1149,9 @@ void SpectrumDefaultsPage::buildUI()
         m_nfLineWidthSpin->setSingleStep(0.5);
         m_nfLineWidthSpin->setDecimals(1);
         m_nfLineWidthSpin->setSuffix(QStringLiteral(" px"));
+        // Thetis m_fNoiseFloorLineWidth, default 1.0.
         m_nfLineWidthSpin->setToolTip(QStringLiteral(
-            "Width of the horizontal NF dashed line. "
-            "Thetis m_fNoiseFloorLineWidth, default 1.0."));
+            "Width of the horizontal NF dashed line. Default 1.0."));
         connect(m_nfLineWidthSpin, qOverload<double>(&QDoubleSpinBox::valueChanged),
                 this, [this](double v) {
             if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
@@ -1176,7 +1178,7 @@ void SpectrumDefaultsPage::buildUI()
     {
         m_nfLineColorBtn = new ColorSwatchButton(Qt::red, overlayGroup);
         m_nfLineColorBtn->setToolTip(QStringLiteral(
-            "Color for the NF line + 8x8 box. Thetis default red."));
+            "Color for the NF line + 8x8 box. Default red."));  // Thetis default
         connect(m_nfLineColorBtn, &ColorSwatchButton::colorChanged,
                 this, [this](const QColor& c) {
             if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
@@ -1191,7 +1193,7 @@ void SpectrumDefaultsPage::buildUI()
 
         m_nfTextColorBtn = new ColorSwatchButton(Qt::yellow, overlayGroup);
         m_nfTextColorBtn->setToolTip(QStringLiteral(
-            "Color for the NF dBm label text. Thetis default yellow."));
+            "Color for the NF dBm label text. Default yellow."));  // Thetis default
         connect(m_nfTextColorBtn, &ColorSwatchButton::colorChanged,
                 this, [this](const QColor& c) {
             if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
@@ -1203,9 +1205,10 @@ void SpectrumDefaultsPage::buildUI()
         });
 
         m_nfFastColorBtn = new ColorSwatchButton(Qt::gray, overlayGroup);
+        // Default gray, mirroring Thetis m_bDX2_Gray.
         m_nfFastColorBtn->setToolTip(QStringLiteral(
             "Color shown during fast-attack (band/freq/MOX change). "
-            "Default gray, mirroring Thetis m_bDX2_Gray."));
+            "Default gray."));
         connect(m_nfFastColorBtn, &ColorSwatchButton::colorChanged,
                 this, [this](const QColor& c) {
             if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
@@ -1426,8 +1429,7 @@ void SpectrumDefaultsPage::buildUI()
     m_configureMultimeterBtn = new QPushButton(
         QStringLiteral("Configure multimeter →"), crossLinkRow);
     m_configureMultimeterBtn->setToolTip(QStringLiteral(
-        "Open Display → Multimeter to configure the on-screen level meter. "
-        "Available after Task 3.1."));
+        "Open Display → Multimeter to configure the on-screen level meter."));
     m_configureMultimeterBtn->setStyleSheet(crossLinkStyle);
     // Multimeter page lands in Task 3.1; signal is wired in SetupDialog at that time.
     // The button is defined here so SetupDialog can connect it without touching this file again.
@@ -2312,10 +2314,11 @@ void GridScalesPage::buildUI()
     m_nfOffsetGridFollow->setEnabled(false);
     // From Thetis console.cs:46035-46040 [v2.10.3.13] _RX1NFoffsetGridFollow = 5f.
     // NereusSDR: range -60..+60, default 0. Offset is added to NF estimate.
+    // Thetis default is -5 dB below NF; equivalent here as offset -5.
     m_nfOffsetGridFollow->setToolTip(
         QStringLiteral("Offset added to the noise floor estimate to compute the grid min. "
                        "Use a negative value to place the grid min below the noise floor. "
-                       "(Thetis default is -5 dB below NF; equivalent here as offset -5.)"));
+                       "(-5 places it 5 dB below the noise floor.)"));
     connect(m_nfOffsetGridFollow, qOverload<int>(&QSpinBox::valueChanged),
             this, [this](int db) {
         if (auto* w = model() ? model()->spectrumWidget() : nullptr) {

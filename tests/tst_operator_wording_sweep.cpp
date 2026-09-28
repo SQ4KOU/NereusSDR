@@ -370,6 +370,88 @@ void collectDescriptionText(const QJsonValue& value, const QString& key, const Q
     }
 }
 
+// Desktop text (2026-09-28): the same rule for every tooltip the desktop
+// shows, since a tooltip is user text whether or not a description carries
+// it. Beyond setupInternalNameIn()'s upstream names, a tooltip may not name
+// a member (m_x, _x) or a settings key (PGXL_TxInterlockGraceMs). The
+// product's term list is not applied here: the desktop's own words for its
+// DSP, TCI and audio settings are checked by the slots that own them. Two
+// phrases name Thetis as a product the operator knows, not as a source.
+QString desktopInternalNameIn(const QString& text)
+{
+    static const QStringList productPhrases{
+        QStringLiteral("a skin made for Thetis"), QStringLiteral("to Thetis defaults")};
+    QString rest = text;
+    for (const QString& phrase : productPhrases) {
+        rest.replace(phrase, QStringLiteral(" "));
+    }
+    static const QRegularExpression name(QStringLiteral(
+        "\\bThetis\\b"
+        "|\\b(?:chk|ud|tb|ptb|combo|grp|tp|lbl|btn|rad|txt|nud)[A-Z]\\w*"
+        "|\\bQ[A-Z][a-z]\\w*"
+        "|\\b[a-z]{2,}[A-Z][a-z]\\w*"
+        "|\\w+\\(\\)|\\w+::\\w+"
+        "|\\b\\w+\\.(?:cs|cpp|h|c|json|py)\\b"
+        "|\\[@[0-9a-f]{6,}\\]|\\[v\\d+\\."
+        "|\\b(?:Task|Gap|Phase)\\s+\\d|\\bR-[A-Z0-9]+-\\d+|\\b\\d[A-Z]-\\d"
+        "|\\bAppSettings\\b|\\bm_\\w+|(?<![\\w-])_[A-Za-z]\\w*|\\b[A-Za-z]+_[A-Za-z]\\w*"));
+    return name.match(rest).captured(0);
+}
+
+// A source cite in user text: a source file or file:line, a version or
+// commit stamp, or "From Thetis" / "Source: Thetis". "bldr.cs" is the
+// PureSignal builder's own readout name, shown as Thetis shows it.
+QString sourceCiteIn(const QString& text)
+{
+    if (text == QLatin1String("bldr.cs")) {
+        return {};
+    }
+    static const QRegularExpression cite(QStringLiteral(
+        "\\b\\w+\\.(?:cs|cpp|h|c)\\b(?::\\d+)?|\\[v\\d+\\.\\d|\\[@[0-9a-f]{6,}\\]"
+        "|\\bSource: Thetis|\\bFrom Thetis\\b"));
+    return cite.match(text).captured(0);
+}
+
+// The string literals inside every setToolTip(...) call in a source file,
+// comments left out and adjacent literals joined as the compiler joins them.
+// Each literal is returned on its own, so the two arms of a ternary are not
+// read as one sentence.
+QStringList toolTipLiterals(const QString& path)
+{
+    const QString code = codeWithoutComments(path);
+    static const QRegularExpression call(QStringLiteral("\\bsetToolTip\\s*\\("));
+    static const QRegularExpression literal(QStringLiteral("\"((?:[^\"\\\\\\n]|\\\\.)*)\""));
+    QStringList found;
+    QRegularExpressionMatchIterator calls = call.globalMatch(code);
+    while (calls.hasNext()) {
+        qsizetype i = calls.next().capturedEnd();
+        const qsizetype start = i;
+        int depth = 1;
+        while (i < code.size() && depth > 0) {
+            const QChar c = code.at(i);
+            if (c == QLatin1Char('"')) {
+                ++i;
+                while (i < code.size() && code.at(i) != QLatin1Char('"')) {
+                    i += code.at(i) == QLatin1Char('\\') ? 2 : 1;
+                }
+            } else if (c == QLatin1Char('(')) {
+                ++depth;
+            } else if (c == QLatin1Char(')')) {
+                --depth;
+            }
+            ++i;
+        }
+        QRegularExpressionMatchIterator it = literal.globalMatch(code.mid(start, i - start));
+        while (it.hasNext()) {
+            const QString text = it.next().captured(1);
+            if (text != QLatin1String("nereusBaseToolTip")) { // a property name
+                found.append(text);
+            }
+        }
+    }
+    return found;
+}
+
 } // namespace
 
 class TestOperatorWordingSweep : public QObject {
@@ -1579,6 +1661,56 @@ private slots:
                 failures << QStringLiteral("%1 [%2]: %3").arg(where, name, text);
             }
         }
+        QVERIFY2(failures.isEmpty(), qPrintable(failures.join(QLatin1Char('\n'))));
+    }
+
+    void desktopTooltipsAndTextNameNoInternals()
+    {
+        // The rule is not vacuous.
+        for (const char* internal : {"Thetis _fNFshiftDBM, clamped to [-12, +12].",
+                                     "Range 0..20 dB matches Thetis ptbCPDR.",
+                                     "Applied by TxInterlockPolicy::evaluateTxRequest.",
+                                     "Persisted as PGXL_TxInterlockGraceMs.",
+                                     "Default gray, mirroring Thetis m_bDX2_Gray.",
+                                     "Full implementation in Task 2.5."}) {
+            QVERIFY2(!desktopInternalNameIn(QLatin1String(internal)).isEmpty(), internal);
+        }
+        for (const char* plain : {"Import a skin made for Thetis",
+                                  "Reset all OC matrix pin assignments and pin actions to Thetis defaults",
+                                  "Default 6 dB/s.", "RX-only antenna", "Buffer Size (IQcomp)"}) {
+            QVERIFY2(desktopInternalNameIn(QLatin1String(plain)).isEmpty(), plain);
+        }
+        for (const char* cite : {"From Thetis Display.cs:4407 [v2.10.3.13]",
+                                 "Source: Thetis setup.designer.cs:49304-49309",
+                                 "per Thetis (display.cs:5443)", "[@501e3f5]"}) {
+            QVERIFY2(!sourceCiteIn(QLatin1String(cite)).isEmpty(), cite);
+        }
+
+        QStringList failures;
+        int tooltips = 0;
+        int files = 0;
+        QDirIterator it(sourcePath("src/gui"), {QStringLiteral("*.cpp")}, QDir::Files,
+                        QDirIterator::Subdirectories);
+        while (it.hasNext()) {
+            const QString path = it.next();
+            const QString file = QDir(QStringLiteral(NEREUS_SOURCE_DIR)).relativeFilePath(path);
+            ++files;
+            for (const QString& text : toolTipLiterals(path)) {
+                ++tooltips;
+                const QString name = desktopInternalNameIn(text);
+                if (!name.isEmpty()) {
+                    failures << QStringLiteral("%1 tooltip [%2]: %3").arg(file, name, text);
+                }
+            }
+            for (const QString& text : userVisibleLiterals(path)) {
+                const QString cite = sourceCiteIn(text);
+                if (!cite.isEmpty()) {
+                    failures << QStringLiteral("%1 text [%2]: %3").arg(file, cite, text);
+                }
+            }
+        }
+        QVERIFY2(files > 100, qPrintable(QString::number(files)));
+        QVERIFY2(tooltips > 800, qPrintable(QString::number(tooltips)));
         QVERIFY2(failures.isEmpty(), qPrintable(failures.join(QLatin1Char('\n'))));
     }
 };

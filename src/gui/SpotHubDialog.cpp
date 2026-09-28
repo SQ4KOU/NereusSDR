@@ -2002,11 +2002,12 @@ void SpotHubDialog::buildFreeDvTab(QTabWidget* tabs)
                           QStringLiteral("Cardinal"));
         dirCombo->addItem("Numeric only (045°)",
                           QStringLiteral("Numeric"));
+        // Mirrors freedv-gui's reportingDirectionAsCardinal setting; the
+        // combined option matches NereusSDR's default pre-bench rendering.
         dirCombo->setToolTip(
             "Heading column rendering in the FreeDV Reporter dialog. "
-            "Mirrors freedv-gui's reportingDirectionAsCardinal setting "
-            "with an extra combined option matching NereusSDR's "
-            "default pre-bench rendering.");
+            "Matches the FreeDV app's heading setting, with an extra "
+            "combined option that is the default.");
         const QString savedDir =
             s.value("FreeDvReporter/DirectionAsCardinal",
                     QStringLiteral("Combined")).toString();
@@ -2034,8 +2035,7 @@ void SpotHubDialog::buildFreeDvTab(QTabWidget* tabs)
         khzChk->setObjectName("freedvFrequencyKhzChk");
         khzChk->setToolTip(
             "When checked, the FreeDV Reporter dialog's MHz column "
-            "shows kHz instead. Mirrors freedv-gui's "
-            "reportingFrequencyAsKhz setting.");
+            "shows kHz instead, as the FreeDV app's own setting does.");
         khzChk->setChecked(
             s.value("FreeDvReporter/FrequencyAsKhz", "False").toString()
             == "True");

@@ -393,10 +393,10 @@ PaGainByBandPage::PaGainByBandPage(RadioModel* model, QWidget* parent)
     // surface but still build the Phase 8 informational warning labels so
     // applyCapabilityVisibility() has something to toggle.
     if (!model || !model->paProfileManager()) {
+        // Needs a RadioModel with a PaProfileManager.
+        // Source: Thetis setup.designer.cs:47386-47525 [v2.10.3.13]
         auto* lbl = buildPlaceholderLabel(QStringLiteral(
-            "PA Gain -- requires a connected RadioModel with PaProfileManager.\n"
-            "\n"
-            "Source: Thetis setup.designer.cs:47386-47525 [v2.10.3.13]"));
+            "PA Gain -- requires a connected radio."));
         contentLayout()->insertWidget(contentLayout()->count() - 1, lbl);
         // Phase 8 (#167): Track the placeholder so test seams have a proxy
         // for editor-enabled state. Tests construct PaGainByBandPage(nullptr)
@@ -1993,10 +1993,9 @@ PaWattMeterPage::PaWattMeterPage(RadioModel* model, QWidget* parent)
         // render something coherent.
         // ASCII em-dash (--) for the disabled-italic placeholder; see
         // PaGainByBandPage above for the rationale.
+        // Source: Thetis setup.designer.cs:49304-49309 [v2.10.3.13]
         auto* lbl = buildPlaceholderLabel(QStringLiteral(
-            "Watt Meter -- requires a connected radio model.\n"
-            "\n"
-            "Source: Thetis setup.designer.cs:49304-49309 [v2.10.3.13]"));
+            "Watt Meter -- requires a connected radio."));
         contentLayout()->insertWidget(contentLayout()->count() - 1, lbl);
         // Note: the chkPAValues toggle and btnResetPAValues button are
         // model-independent (settings + signal only), so we fall through to
@@ -2185,10 +2184,9 @@ PaValuesPage::PaValuesPage(RadioModel* model, QWidget* parent)
         // Model-less preview path: render a brief hint label so the page
         // doesn't ship as an empty widget when Setup is opened before a
         // RadioModel is wired (mirrors the PaWattMeterPage fallback).
+        // Source: Thetis panelPAValues setup.designer.cs:51155-51177 [v2.10.3.13]
         auto* lbl = buildPlaceholderLabel(QStringLiteral(
-            "PA Values — requires a connected radio model.\n"
-            "\n"
-            "Source: Thetis panelPAValues setup.designer.cs:51155-51177 [v2.10.3.13]"));
+            "PA Values -- requires a connected radio."));
         contentLayout()->insertWidget(contentLayout()->count() - 1, lbl);
         return;
     }
