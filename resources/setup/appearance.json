@@ -1,5 +1,5 @@
 {
-  "version": 4,
+  "version": 7,
   "category": {
     "id": "appearance",
     "title": "Appearance",
@@ -125,6 +125,63 @@
               },
               "applies": "live",
               "default": "#FF783C2E"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "appearance.meterStyles",
+      "title": "Meter Styles",
+      "where": "phone",
+      "coverage": "partial",
+      "sections": [
+        {
+          "title": "S-Meter",
+          "controls": [
+            {
+              "id": "appearance.meterStyles.face",
+              "label": "Face:",
+              "tooltip": "The S-meter's face",
+              "kind": "choice",
+              "binding": {"phone": "SMeter_FaceStyle"},
+              "applies": "live",
+              "requiresDescriptionVersion": 7,
+              "options": [
+                {"value": 0, "label": "Aged Cream"},
+                {"value": 1, "label": "VU Amber"},
+                {"value": 2, "label": "Collins White"},
+                {"value": 3, "label": "Blackface"},
+                {"value": 4, "label": "Carbon"},
+                {"value": 5, "label": "Ice"},
+                {"value": 6, "label": "Classic (flat)"}
+              ],
+              "default": 0
+            },
+            {
+              "id": "appearance.meterStyles.peakHold",
+              "label": "Peak hold",
+              "tooltip": "Hold the S-meter's peak reading",
+              "kind": "toggle",
+              "binding": {"phone": "PeakHoldEnabled"},
+              "applies": "live",
+              "requiresDescriptionVersion": 7,
+              "default": true
+            },
+            {
+              "id": "appearance.meterStyles.peakDecay",
+              "label": "Decay Rate:",
+              "tooltip": "How fast the held peak falls back",
+              "kind": "choice",
+              "binding": {"phone": "PeakDecayRate"},
+              "applies": "live",
+              "requiresDescriptionVersion": 7,
+              "options": [
+                {"value": 0, "label": "Fast (20 dB/s)"},
+                {"value": 1, "label": "Medium (10 dB/s)"},
+                {"value": 2, "label": "Slow (5 dB/s)"}
+              ],
+              "default": 1
             }
           ]
         }

@@ -22,6 +22,50 @@ using namespace NereusSDR;
 class SetupDescriptionLiveTest : public QObject {
     Q_OBJECT
 private slots:
+    void pairedV7PublishesOnlyPhoneOwnedMeterStyles()
+    {
+        Core core;
+        Device current(QStringLiteral("Meter styles iPhone"), QStringLiteral("phone"));
+        Device older(QStringLiteral("Older meter styles iPhone"), QStringLiteral("phone"));
+        core.pair(current);
+        core.pair(older);
+        QHash<QByteArray, int> v7Features = kHolder;
+        v7Features.insert("setupDescription", 7);
+        auto* v7 = core.signIn(current, v7Features);
+        QVERIFY(admitted(v7));
+        QCOMPARE(capability(v7->received(), QStringLiteral("setupDescriptionVersion")),
+                 std::optional<qint64>(7));
+        const QJsonObject appearance = QJsonDocument::fromJson(latest(v7->received(),
+            QStringLiteral("setup"), QStringLiteral("appearance")).toString().toUtf8()).object();
+        QCOMPARE(appearance.value("version"), QJsonValue(7));
+        const QJsonArray pages = appearance.value("pages").toArray();
+        QCOMPARE(pages.size(), 2);
+        const QJsonArray styles = pages.at(1).toObject().value("sections").toArray()
+            .first().toObject().value("controls").toArray();
+        QCOMPARE(styles.size(), 3);
+        for (const QJsonValue& raw : styles) {
+            const QJsonObject control = raw.toObject();
+            QVERIFY(SetupDescriptionService::validateAppearanceMeterStyleBinding(control));
+            QCOMPARE(control.value("binding").toObject().size(), 1);
+            QVERIFY(control.value("binding").toObject().contains("phone"));
+            QVERIFY(!control.contains("gate"));
+            QVERIFY(!control.contains("valueEncoding"));
+        }
+        QHash<QByteArray, int> v6Features = kHolder;
+        v6Features.insert("setupDescription", 6);
+        auto* v6 = core.signIn(older, v6Features);
+        QVERIFY(admitted(v6));
+        QCOMPARE(capability(v6->received(), QStringLiteral("setupDescriptionVersion")),
+                 std::optional<qint64>(6));
+        const QJsonObject olderAppearance = QJsonDocument::fromJson(latest(v6->received(),
+            QStringLiteral("setup"), QStringLiteral("appearance")).toString().toUtf8()).object();
+        QCOMPARE(olderAppearance.value("version"), QJsonValue(4));
+        QCOMPARE(olderAppearance.value("pages").toArray().size(), 1);
+        QCOMPARE(olderAppearance.value("pages").toArray().first().toObject()
+                     .value("sections").toArray().first().toObject()
+                     .value("controls").toArray().size(), 10);
+    }
+
     void pairedV6RowsStayDescribedWhileRadioConnectsWithoutReconnect()
     {
         Core core;

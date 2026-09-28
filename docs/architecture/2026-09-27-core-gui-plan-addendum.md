@@ -852,6 +852,13 @@ colours for the same signal.
   real timer regression covers both notice and notice-clear destruction. Fresh
   app/Core builds and four TCI/VAX/controller suites pass (65.01 s). This verifies
   functional integration, not resolution of the severe load stall.
+  A subsequent bounded 30-second baseline/load pair measured CPU and wall
+  time inside each conversion quantum. Loaded maxima of 8.51/7.62 ms included
+  at least 8.32/7.39 ms not executing on the worker thread; all 7,500 packets
+  per receiver were decoded without history loss. This narrows measurement
+  toward scheduling or blocking but neither reproduces nor explains the
+  earlier severe stall. Temporary instrumentation was restored byte-for-byte;
+  the rebuilt app/Core and both full restored TCI suites pass (19.62 s).
 - Plan: remote-window TCI audio parity and real-load acceptance.
 
 ### G-52: Catalog capability-order fixture missed two integrated appended fields
@@ -2104,8 +2111,15 @@ colours for the same signal.
   Signed `04a6da23` and compatibility follow-up `b0bf9d264` also publish all ten
   built Colors & Theme swatches with exact native labels/tooltips and explicit
   RGBA defaults in V4. Root app/Core and eleven full named suites pass
-  (55.01 s; load 8.03/15.18/18.17). Meter Styles, local Display controls,
-  reset/copy actions and remaining derived/contextual controls are still open.
+  (55.01 s; load 8.03/15.18/18.17). Signed `e65100dd4` adds the three built
+  S-meter style controls in negotiated Appearance V7: face, peak hold and
+  decay. Their closed phone dispatch identities map to the phone's existing
+  typed model, as its owner confirmed. No Core write authority is added.
+  V1-V3 retain ten swatches without defaults; V4-V6 retain the previous
+  Appearance V4 shape; V7 adds only the three new controls. Root app/Core and
+  all seven rebuilt Setup, settings-scope and S-meter suites pass (9.12 s).
+  The phone renderer is still phone-owned work. Local Display controls,
+  reset/copy actions and remaining derived/contextual controls remain open.
   The phone owner confirmed that literal PascalCase binding names
   map to its existing typed per-pan/current-band model and that explicit
   `#RRGGBBAA` colours suit its boundary conversions. The phone model already
@@ -2118,10 +2132,9 @@ colours for the same signal.
   apply live to the Core analyzer, without an invented RX subscription field.
   This clarifies the plan's overly broad subscription label. Remaining local
   controls, readouts, active-band grid context, 3D page and actions still need
-  exact publication and phone checks. The next lane publishes the ten built
-  Colors and Theme swatches using the agreed local keys and RGBA boundary;
-  Reset Colours and Meter Styles remain separate. Partial publication does
-  not close this gap.
+  exact publication and phone checks. The ten Colors and Theme swatches and
+  three Meter Styles controls are now described; Reset Colors remains open.
+  Partial publication does not close this gap.
 - Plan: phone Display/Appearance description and renderer dependencies, and
   remote-window parity.
 
