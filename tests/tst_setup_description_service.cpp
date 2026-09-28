@@ -315,12 +315,47 @@ private slots:
         for (const QJsonValue& value : sections.at(1).toObject().value("controls").toArray()) {
             controls.append(value);
         }
-        QCOMPARE(controls.size(), 5);
+        QCOMPARE(controls.size(), 6);
         const QStringList names{QStringLiteral("forwardPowerWatts"),
                                 QStringLiteral("reflectedPowerWatts"), QStringLiteral("swr"),
-                                QStringLiteral("forwardAdcRaw"), QStringLiteral("reflectedAdcRaw")};
+                                QStringLiteral("power"), QStringLiteral("forwardAdcRaw"),
+                                QStringLiteral("reflectedAdcRaw")};
         for (int i = 0; i < controls.size(); ++i) {
             const QJsonObject valid = controls.at(i).toObject();
+            if (i == 3) {
+                QVERIFY(SetupDescriptionService::validatePaDriveReadoutBinding(valid));
+                QVERIFY(!SetupDescriptionService::validatePaReadoutBinding(valid));
+                QCOMPARE(valid.value("binding").toObject().value("property").toObject()
+                             .value("object"), QJsonValue("transmit"));
+                QCOMPARE(valid.value("binding").toObject().value("property").toObject()
+                             .value("name"), QJsonValue("power"));
+                QCOMPARE(valid.value("gate").toObject(),
+                         (QJsonObject{{"capability", "transmitSettingsVersion"}, {"min", 1}}));
+                QCOMPARE(valid.value("decimals"), QJsonValue(0));
+                QCOMPARE(valid.value("unit"), QJsonValue("W"));
+                auto rejectDrive = [&valid](const QString& key, const QJsonValue& value) {
+                    QJsonObject bad = valid;
+                    bad.insert(key, value);
+                    QVERIFY(!SetupDescriptionService::validatePaDriveReadoutBinding(bad));
+                };
+                rejectDrive("kind", "integer");
+                rejectDrive("kind", "toggle");
+                rejectDrive("decimals", 1);
+                rejectDrive("unit", "dB");
+                rejectDrive("gate", QJsonObject{{"capability", "transmitSettingsVersion"},
+                                                {"min", 1}, {"offAir", true}});
+                rejectDrive("gate", QJsonObject{{"capability", "transmitSettingsVersion"},
+                                                {"min", 1}, {"transmit", true}});
+                rejectDrive("binding", QJsonObject{{"property", QJsonObject{{"object", "transmit"},
+                                                                      {"name", "paSettingsBypass"}}}});
+                rejectDrive("binding", QJsonObject{{"property", QJsonObject{{"object", "txState"},
+                                                                      {"name", "power"}}}});
+                rejectDrive("binding", QJsonObject{{"setting", QJsonObject{{"key", "power"}}}});
+                rejectDrive("binding", QJsonObject{{"property", QJsonObject{{"object", "transmit"},
+                                                                      {"name", "power"}}},
+                                                      {"write", true}});
+                continue;
+            }
             QVERIFY(SetupDescriptionService::validatePaReadoutBinding(valid));
             QCOMPARE(valid.value("binding").toObject().value("property").toObject()
                          .value("name").toString(), names.at(i));

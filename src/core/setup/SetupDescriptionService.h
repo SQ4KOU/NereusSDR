@@ -34,6 +34,7 @@ public:
     static bool validateHardwarePropertyBinding(const QJsonObject& control,
                                                 HPSDRModel model = HPSDRModel::FIRST);
     static bool validatePaReadoutBinding(const QJsonObject& control);
+    static bool validatePaDriveReadoutBinding(const QJsonObject& control);
     static bool validatePaBypassBinding(const QJsonObject& control);
     static bool validateTransmitSettingBinding(const QJsonObject& control);
     static bool validateAudioPropertyBinding(const QJsonObject& control);

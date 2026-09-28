@@ -78,10 +78,12 @@ Missing, nonfinite, wrong-type, or stale-session values display unavailable,
 never zero or a cached value from another session. Readouts send no edits,
 including when the source property happens to be writable. A readout without
 `decimals` keeps the renderer's prior behavior. The PA Values partial page
-uses only five `txState` scalars with `txReadingsVersion:1`; no derived
-formula, peak/min tracker, or reset action is implied by this field.
+uses five `txState` scalars with `txReadingsVersion:1` and the selected Drive
+setpoint from `transmit.power` (Int64) with `transmitSettingsVersion:1`. Drive
+is a readout even though its mirrored source is writable; it sends no write.
+These fields imply no derived formula, peak/min tracker, or reset action.
 `setup.pa` is appended after `setup.revision` in the fixed mirror schema and
-is empty on a board without an integrated PA or on an RX-only SKU. Its five
+is empty on a board without an integrated PA or on an RX-only SKU. Its six
 readouts remain visible while the radio transmits; they require neither
 transmit permission nor an off-air gate. A peer without the negotiated
 Setup-description feature receives no `setup` mirror object.

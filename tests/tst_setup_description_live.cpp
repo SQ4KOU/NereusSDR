@@ -203,6 +203,37 @@ private slots:
         QCOMPARE(core.server->transmitState()->forwardAdcRaw(), qint64(2400));
     }
 
+    void pairedPaDriveReadoutUsesSelectedPowerMirror()
+    {
+        Core core;
+        core.model->setBoardForTest(HPSDRHW::Saturn);
+        RadioInfo info = core.model->currentRadioInfo();
+        info.boardType = HPSDRHW::Saturn;
+        core.model->setLastRadioInfoForTest(info);
+        core.server->setupDescription()->setRadioContext(core.model->boardCapabilities(),
+                                                         core.model->hardwareProfile().model);
+        Device phone(QStringLiteral("PA Drive phone"), QStringLiteral("phone"));
+        core.pair(phone);
+        QHash<QByteArray, int> features = kHolder;
+        features.insert("setupDescription", 1);
+        LoopbackTransport* app = core.signIn(phone, features);
+        QVERIFY(admitted(app));
+        QCOMPARE(capability(app->received(), QStringLiteral("transmitSettingsVersion")),
+                 std::optional<qint64>(9));
+        const QJsonObject pa = QJsonDocument::fromJson(latest(app->received(),
+            QStringLiteral("setup"), QStringLiteral("pa")).toString().toUtf8()).object();
+        const QJsonArray power = pa.value("pages").toArray().last().toObject()
+            .value("sections").toArray().first().toObject().value("controls").toArray();
+        QCOMPARE(power.size(), 4);
+        const QJsonObject drive = power.last().toObject();
+        QVERIFY(SetupDescriptionService::validatePaDriveReadoutBinding(drive));
+        QCOMPARE(drive.value("kind"), QJsonValue("readout"));
+        core.model->transmitModel().setPower(37);
+        QTRY_COMPARE(latest(app->received(), QStringLiteral("transmit"),
+                            QStringLiteral("power")).toInteger(), qint64(37));
+        QCOMPARE(core.model->transmitModel().power(), 37);
+    }
+
     void pairedHardwareDescriptionWritesReachBoundAlexAndRetireOnSwap()
     {
         Core core;
