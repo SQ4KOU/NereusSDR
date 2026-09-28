@@ -3406,11 +3406,8 @@ void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
     if (it == m_peers.end() || it->dropping) {
         return;
     }
-    if (m_txWatchServer) {
-        m_txWatchServer->retire(transport, /*primaryEnded=*/true);
-    }
-    it->txWatchGeneration = ++m_nextTxWatchGeneration;
     it->dropping = true;
+    it->txWatchGeneration = ++m_nextTxWatchGeneration;
     ++m_dropPeerDepth;
     auto finishDrop = qScopeGuard([this, self]() {
         if (!self) { return; }
@@ -3423,6 +3420,16 @@ void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
             drainHeld();
         }
     });
+    if (m_txWatchServer) {
+        m_txWatchServer->retire(transport, /*primaryEnded=*/true);
+    }
+    if (!self || !peerGuard) {
+        return;
+    }
+    it = m_peers.find(transport);
+    if (it == m_peers.end()) {
+        return;
+    }
     const QString description = it->description;
 
     if (it->heldSerial != 0) {
@@ -8414,14 +8421,17 @@ void StationServer::handlePathTicket(SessionTransport* transport, const SessionM
 bool StationServer::txWatchEligible(SessionTransport* transport) const
 {
     const auto it = m_peers.constFind(transport);
+    const auto* switchable = qobject_cast<const SwitchableTransport*>(transport);
     return it != m_peers.cend() && it->authenticated && it->snapshotComplete
-        && !it->dropping && !it->signedInWithToken && !it->deviceId.isEmpty()
+        && !it->dropping && !it->txWatchPathChanging
+        && !it->signedInWithToken && !it->deviceId.isEmpty()
         && it->sessionDeviceId == it->deviceId && it->sessionId != 0
         && m_devices->find(it->deviceId).has_value()
         && it->agreedMinor >= kRadioIdentitySessionProtocolMinor
         && peerDeclares(transport, QByteArrayLiteral("remoteTx"), 1)
         && peerDeclares(transport, QByteArrayLiteral("txWatchPath"), 1)
         && txDecisionFor(transport).permitted && isListening()
+        && (switchable == nullptr || !switchable->switching())
         && m_wsServer != nullptr && m_txWatchServer != nullptr;
 }
 
@@ -8555,23 +8565,71 @@ void StationServer::handlePathJoin(SessionTransport* transport, const SessionMes
     if (const auto* channel = qobject_cast<const DataChannelTransport*>(sessionSwitchable->inner())) {
         session->serviceIce = channel->iceConfiguration();
     }
-    // Invalidate before the path move starts, including a move that later
-    // fails. A new watch needs a fresh ticket and connection generation.
-    m_txWatchServer->retire(sessionKey);
+    // Invalidate before a callback can issue against the old connection,
+    // including when the path move later fails.
+    session->txWatchPathChanging = true;
     session->txWatchGeneration = ++m_nextTxWatchGeneration;
+    const QPointer<StationServer> self(this);
+    const QPointer<SessionTransport> joiningGuard(transport);
+    const QPointer<SessionTransport> sessionGuard(sessionKey);
+    const QPointer<SwitchableTransport> joiningSwitchableGuard(joiningSwitchable);
+    const QPointer<SwitchableTransport> sessionSwitchableGuard(sessionSwitchable);
+    auto clearPathChanging = qScopeGuard([this, self, sessionKey]() {
+        if (!self) { return; }
+        auto current = m_peers.find(sessionKey);
+        if (current != m_peers.end()) {
+            current->txWatchPathChanging = false;
+        }
+    });
+    m_txWatchServer->retire(sessionKey);
+    if (!self || !joiningGuard || !sessionGuard || !joiningSwitchableGuard
+        || !sessionSwitchableGuard) {
+        return;
+    }
+    joining = m_peers.find(transport);
+    session = m_peers.find(sessionKey);
+    if (joining == m_peers.end() || session == m_peers.end()
+        || joining->dropping || session->dropping || sessionSwitchableGuard->switching()) {
+        return;
+    }
     // The joining connection stops being a peer of its own: its connect
     // deadline (the wrapper's child) goes with the wrapper, and the
     // connection itself becomes the session's.
-    SessionTransport* connection = joiningSwitchable->takeInner();
-    disconnect(joiningSwitchable, nullptr, this, nullptr);
+    SessionTransport* connection = joiningSwitchableGuard->takeInner();
+    const QPointer<SessionTransport> connectionGuard(connection);
+    if (!self || !joiningGuard || !sessionGuard || !joiningSwitchableGuard
+        || !sessionSwitchableGuard) {
+        return;
+    }
+    joining = m_peers.find(transport);
+    if (joining == m_peers.end()) {
+        if (connectionGuard) {
+            connectionGuard->closeLink(refusal);
+            if (connectionGuard) {
+                connectionGuard->deleteLater();
+            }
+        }
+        return;
+    }
+    disconnect(joiningSwitchableGuard, nullptr, this, nullptr);
     m_peers.erase(joining);
-    joiningSwitchable->deleteLater();
-    if (connection == nullptr || !sessionSwitchable->beginStationSwitch(connection)) {
-        if (connection != nullptr) {
-            connection->closeLink(refusal);
-            connection->deleteLater();
+    joiningSwitchableGuard->deleteLater();
+    const bool started = connectionGuard
+        && sessionSwitchableGuard->beginStationSwitch(connectionGuard);
+    if (!self) {
+        return;
+    }
+    if (!started) {
+        if (connectionGuard) {
+            connectionGuard->closeLink(refusal);
+            if (connectionGuard) {
+                connectionGuard->deleteLater();
+            }
         }
         qCWarning(lcStation) << "A session could not move to its new connection";
+        return;
+    }
+    if (!sessionGuard) {
         return;
     }
     session = m_peers.find(sessionKey);

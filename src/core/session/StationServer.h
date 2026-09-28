@@ -1413,6 +1413,7 @@ private:
         quint64 sessionId = 0;
         /// Changes before a primary path move, even if the move fails.
         quint64 txWatchGeneration = 0;
+        bool txWatchPathChanging = false;
         /// iPhone app plan Task 34: the txPermitted this session was last
         /// sent, so a change is sent again and nothing else is.
         bool txPermittedSent = false;

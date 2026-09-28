@@ -45,8 +45,9 @@ bool TxWatchServer::equalTicket(const QByteArray& left, const QByteArray& right)
 
 bool TxWatchServer::live(const Binding& binding) const
 {
-    return binding.primary && m_current
-        && m_current(binding.primary, binding.sessionId, binding.deviceId, binding.generation);
+    const Current current = m_current;
+    return binding.primary && current
+        && current(binding.primary, binding.sessionId, binding.deviceId, binding.generation);
 }
 
 std::optional<TxWatchServer::Ticket> TxWatchServer::issue(
@@ -54,8 +55,13 @@ std::optional<TxWatchServer::Ticket> TxWatchServer::issue(
     quint64 generation, const QByteArray& random32)
 {
     if (primary == nullptr || sessionId == 0 || deviceId.isEmpty() || generation == 0
-        || random32.size() != kTicketBytes || !m_current
-        || !m_current(primary, sessionId, deviceId, generation)) {
+        || random32.size() != kTicketBytes || !m_current) {
+        return std::nullopt;
+    }
+    const QPointer<TxWatchServer> self(this);
+    const Current current = m_current;
+    const bool eligible = current(primary, sessionId, deviceId, generation);
+    if (!self || !eligible) {
         return std::nullopt;
     }
     const qint64 time = now();
@@ -118,8 +124,11 @@ bool TxWatchServer::acceptTransport(SessionTransport* auxiliary, const QString& 
     }
     if (pendingSocketCount() >= kMaxPendingSockets || sameAddress >= kMaxPendingPerAddress
         || !auxiliary->isOpen()) {
+        const QPointer<SessionTransport> guard(auxiliary);
         auxiliary->closeLink(QStringLiteral("watch attachment unavailable"));
-        auxiliary->deleteLater();
+        if (guard) {
+            guard->deleteLater();
+        }
         return false;
     }
     Socket socket;
@@ -162,6 +171,8 @@ bool TxWatchServer::acceptTransport(SessionTransport* auxiliary, const QString& 
 
 void TxWatchServer::onBinary(SessionTransport* auxiliary, const QByteArray& message)
 {
+    const QPointer<TxWatchServer> self(this);
+    const QPointer<SessionTransport> auxiliaryGuard(auxiliary);
     auto socket = m_sockets.find(auxiliary);
     if (socket == m_sockets.end() || !socket->transport) {
         return;
@@ -188,28 +199,67 @@ void TxWatchServer::onBinary(SessionTransport* auxiliary, const QByteArray& mess
         }
         auto binding = m_bindings.find(matched);
         binding->ticket.clear(); // first matched attempt consumes it
-        if (time >= binding->deadlineMs || binding->auxiliary || !live(*binding)
-            || auxiliary->backlogBytes() + 2 > kMaxOutboundBacklog) {
-            retireSocket(auxiliary, true);
-            binding = m_bindings.find(matched);
+        const Binding candidateBinding = *binding;
+        const bool eligible = time < candidateBinding.deadlineMs
+            && !candidateBinding.auxiliary && live(candidateBinding);
+        if (!self) {
+            return;
+        }
+        socket = m_sockets.find(auxiliary);
+        binding = m_bindings.find(matched);
+        if (socket == m_sockets.end() || binding == m_bindings.end()) {
+            return;
+        }
+        // backlogBytes() is supplied by the transport and may itself invoke
+        // callbacks. Never retain an iterator across it.
+        const qint64 backlog = auxiliaryGuard ? auxiliaryGuard->backlogBytes()
+                                              : kMaxOutboundBacklog;
+        if (!self) {
+            return;
+        }
+        socket = m_sockets.find(auxiliary);
+        binding = m_bindings.find(matched);
+        if (socket == m_sockets.end() || binding == m_bindings.end()) {
+            return;
+        }
+        if (!eligible || !auxiliaryGuard || backlog + 2 > kMaxOutboundBacklog
+            || binding->generation != candidateBinding.generation
+            || !binding->ticket.isEmpty() || binding->auxiliary || socket->primary) {
             if (binding != m_bindings.end() && !binding->auxiliary) {
                 m_bindings.erase(binding);
             }
+            retireSocket(auxiliary, true);
             return;
         }
         socket->primary = matched;
         socket->generation = binding->generation;
         socket->refilledMs = time;
         binding->auxiliary = auxiliary;
-        const QPointer<SessionTransport> guard(auxiliary);
-        if (!auxiliary->sendBinary(QByteArray::fromHex("0100")) || !guard) {
+        const bool ackSent = auxiliaryGuard->sendBinary(QByteArray::fromHex("0100"));
+        if (!self) {
+            return;
+        }
+        if (!ackSent || !auxiliaryGuard) {
             retireSocket(auxiliary, true);
         }
         return;
     }
     auto binding = m_bindings.find(socket->primary);
     if (binding == m_bindings.end() || binding->auxiliary != auxiliary
-        || binding->generation != socket->generation || !live(*binding)) {
+        || binding->generation != socket->generation) {
+        retireSocket(auxiliary, true);
+        return;
+    }
+    const Binding currentBinding = *binding;
+    const bool eligible = live(currentBinding);
+    if (!self) {
+        return;
+    }
+    socket = m_sockets.find(auxiliary);
+    binding = m_bindings.find(currentBinding.primary);
+    if (socket == m_sockets.end() || binding == m_bindings.end()
+        || binding->auxiliary != auxiliary
+        || binding->generation != currentBinding.generation || !eligible) {
         retireSocket(auxiliary, true);
         return;
     }
@@ -228,7 +278,9 @@ void TxWatchServer::onBinary(SessionTransport* auxiliary, const QByteArray& mess
         retireSocket(auxiliary, true);
         return;
     }
-    m_deliver(binding->deviceId, sequence, epoch);
+    const QByteArray deviceId = binding->deviceId;
+    const Deliver deliver = m_deliver;
+    deliver(deviceId, sequence, epoch);
 }
 
 void TxWatchServer::retireSocket(SessionTransport* auxiliary, bool close)
@@ -277,13 +329,20 @@ void TxWatchServer::retire(SessionTransport* primary, bool primaryEnded)
 
 void TxWatchServer::retireAll()
 {
+    const QPointer<TxWatchServer> self(this);
     const QList<SessionTransport*> primaries = m_bindings.keys();
     for (SessionTransport* primary : primaries) {
         retire(primary);
+        if (!self) {
+            return;
+        }
     }
     const QList<SessionTransport*> sockets = m_sockets.keys();
     for (SessionTransport* auxiliary : sockets) {
         retireSocket(auxiliary, true);
+        if (!self) {
+            return;
+        }
     }
     m_lastIssued.clear();
 }
