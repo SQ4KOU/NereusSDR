@@ -5295,6 +5295,8 @@ private:
     // While a tail runs: the TX slice's dspModeChanged and the arbiter's
     // txBoundSliceChanged, each ending it.
     QMetaObject::Connection m_endOfOverTailModeWatch;
+    // Set around teardownConnection's unkey: a disconnect sends no tail.
+    bool m_refuseEndOfOverTail{false};
     QMetaObject::Connection m_endOfOverTailSliceWatch;
 
     // R-R3-49 / R-R3-47: false, with the reason, when a window may not

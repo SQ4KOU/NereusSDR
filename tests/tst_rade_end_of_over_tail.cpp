@@ -289,6 +289,31 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(rig.model.moxController()->state(), MoxState::Rx, 5000);
     }
 
+    // Review Important 2: disconnecting while keyed in RADE sends no tail.
+    // The unkey walks as before the tail existed: the amp's UNKEY
+    // (txAboutToEnd) and the TX channel's drain happen inside the
+    // teardown's setMox(false), while the TX channel is still wired, so
+    // the RF gate is shut.
+    void disconnectWhileKeyedSendsNoTail()
+    {
+        RealRig rig;
+        rig.key();
+        QVERIFY(rig.model.mox());
+        QVERIFY(rig.tx.isRfGateOpen());
+
+        MoxController* mox = rig.model.moxController();
+        QSignalSpy tail(mox, &MoxController::endOfOverTailChanged);
+        QSignalSpy aboutToEnd(mox, &MoxController::txAboutToEnd);
+        QSignalSpy drain(mox, &MoxController::txDrainRequested);
+        rig.model.disconnectFromRadio();
+
+        QCOMPARE(tail.count(), 0);
+        QCOMPARE(aboutToEnd.count(), 1);
+        QCOMPARE(drain.count(), 1);
+        QVERIFY(!rig.tx.isRfGateOpen());
+        QVERIFY(!rig.model.endOfOverTailActive());
+    }
+
     void tailRunsBeforeTeardown()
     {
         Ctrl c;

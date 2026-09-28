@@ -6614,7 +6614,7 @@ void RadioModel::installTxWorkerForTest(std::unique_ptr<TxWorkerThread> worker)
 
 bool RadioModel::radeEndOfOverTailPermitted() const
 {
-    if (m_role == Role::Remote || m_transmitStopHold) {
+    if (m_role == Role::Remote || m_transmitStopHold || m_refuseEndOfOverTail) {
         return false;
     }
     // Review Important 1: the path the TX worker latched when this key
@@ -20618,8 +20618,14 @@ void RadioModel::teardownConnection()
     // (its manual key is cleared further down with the session's TUN
     // state). The TX-to-RX walk's hardware flip runs now, while the
     // connection is still live, so the radio gets the MOX bit off.
+    // RADE end-of-over callsigns (review Important 2): no end-of-over tail
+    // on a disconnect. The unkey walks as it did before the tail existed,
+    // so the amplifier's UNKEY (txAboutToEnd) and the TX channel's drain
+    // run inside this setMox(false), while the TX channel is still wired.
     if (m_moxController) {
+        m_refuseEndOfOverTail = true;
         m_moxController->setMox(false);
+        m_refuseEndOfOverTail = false;
     }
     if (m_isTuning) {
         setTune(false);
