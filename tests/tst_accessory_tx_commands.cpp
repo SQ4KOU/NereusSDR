@@ -1,8 +1,15 @@
 // no-port-check: NereusSDR-original. Task 42 accessory transmit commands.
 #include <QtTest>
+#include <QRegularExpression>
+#include <QTcpServer>
+#include <QTcpSocket>
 #include <algorithm>
 
 #include "MultiDeviceHarness.h"
+#include "core/LanDiscovery.h"
+#include "core/PgxlConnection.h"
+#include "core/StationPgxlController.h"
+#include "core/TxInterlockPolicy.h"
 #include "core/session/SessionCommandDispatcher.h"
 
 using namespace NereusSDR;
@@ -227,6 +234,83 @@ private slots:
         QVERIFY(!refused.value(QStringLiteral("accepted")).toBool());
         QVERIFY(refused.value(QStringLiteral("reason")).toString().contains(
             QStringLiteral("on the air")));
+    }
+
+    void remoteOperateRepairsAnAmpStandbyBlockWithoutKeying()
+    {
+        // All accessory traffic stays on a localhost TCP fake. The policy
+        // check is the same one MoxController uses, asked without a key.
+        QTcpServer fakeAmp;
+        QVERIFY(fakeAmp.listen(QHostAddress::LocalHost, 0));
+        Core core(true);
+        core.model->enableStationAccessoryIdentity();
+        core.model->setPeripheralValue(QStringLiteral("FourO3A_Enabled"),
+                                       QStringLiteral("True"));
+        core.model->setPgxlLanScanWindowMsForTest(150);
+        QSignalSpy frames(core.model->pgxlConnection(),
+                          &PgxlConnection::testFrameWrittenForTesting);
+        QString reason;
+        QVERIFY2(core.model->configurePgxlForStation(QStringLiteral("127.0.0.1"),
+                                                     fakeAmp.serverPort(), &reason),
+                 qPrintable(reason));
+        QTRY_VERIFY_WITH_TIMEOUT(fakeAmp.hasPendingConnections(), 2000);
+        QTcpSocket* peer = fakeAmp.nextPendingConnection();
+        QVERIFY(peer);
+        peer->write("V3.8.9\n");
+        peer->flush();
+        const auto infoSequence = [&frames]() -> quint32 {
+            const QRegularExpression info(QStringLiteral("^C(\\d+)\\|info$"));
+            for (const auto& row : frames) {
+                const QRegularExpressionMatch match = info.match(row.first().toString());
+                if (match.hasMatch()) { return match.captured(1).toUInt(); }
+            }
+            return 0;
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(infoSequence() != 0, 2000);
+        peer->write(QStringLiteral("R%1|0|serial=10-200/24-0046  version=3.8.9 "
+                                   "protocol=1.0 mains=240\n")
+                        .arg(infoSequence()).toUtf8());
+        peer->flush();
+        StationPgxlController* controller = core.model->findChild<StationPgxlController*>();
+        QVERIFY(controller);
+        LanDiscovery* discovery = nullptr;
+        QTRY_VERIFY_WITH_TIMEOUT((discovery = controller->findChild<LanDiscovery*>()) != nullptr,
+                                 2000);
+        discovery->injectDatagramForTesting(
+            QStringLiteral("PowerGeniusXL ip=127.0.0.1 v=3.8.9 "
+                           "serial=10-200/24-0046 nickname=PowerGeniusXL"),
+            fakeAmp.serverPort());
+        QTRY_VERIFY_WITH_TIMEOUT(core.model->pgxlConnection()->isConnected(), 2000);
+        peer->write("S0|status state=STANDBY\n");
+        peer->flush();
+        QTRY_VERIFY(core.model->hasAmplifier());
+        QVERIFY(!core.model->ampOperate());
+
+        allowTransmit(core);
+        TxInterlockPolicy* policy = core.model->txInterlockPolicy();
+        policy->setMode(TxInterlockPolicy::Block);
+        QVERIFY(!policy->evaluateTxRequest(core.model->hasAmplifier(),
+                                           core.model->ampOperate(), 1.0f));
+        QCOMPARE(policy->lastDenial(), TxInterlockPolicy::Denial::AmpStandby);
+
+        Device app(QStringLiteral("iPhone"), QStringLiteral("phone"));
+        core.pair(app);
+        LoopbackTransport* session = core.signIn(app, kTransmitter);
+        QVERIFY(admitted(session));
+        const QJsonObject switched = core.invoke(session, "amp.operate");
+        QVERIFY2(switched.value(QStringLiteral("accepted")).toBool(),
+                 qPrintable(switched.value(QStringLiteral("reason")).toString()));
+        QByteArray received;
+        QTRY_VERIFY_WITH_TIMEOUT((received += peer->readAll()).contains("operate=1\n"), 2000);
+        QVERIFY(!core.model->ampOperate()); // The request is not the readback.
+        peer->write("S0|status state=OPERATE\n");
+        peer->flush();
+        QTRY_VERIFY(core.model->ampOperate());
+        QVERIFY(policy->evaluateTxRequest(core.model->hasAmplifier(),
+                                          core.model->ampOperate(), 1.0f));
+        QCOMPARE(policy->lastDenial(), TxInterlockPolicy::Denial::None);
+        QVERIFY(!core.model->moxController()->isMox());
+        QVERIFY(!core.server->transmitHolder()->holder().has_value());
     }
 };
 
