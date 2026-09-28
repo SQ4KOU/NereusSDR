@@ -42,6 +42,17 @@ RemoteStationPage::RemoteStationPage(QWidget* parent)
     m_reason->setWordWrap(true);
     contentLayout()->insertWidget(0, m_reason);
 
+    // Opening Connections only navigates this window; it must remain
+    // available when hosting controls are locked or this Core is unavailable.
+    QGroupBox* window = addSection(tr("This window"));
+    QVBoxLayout* windowLayout = qobject_cast<QVBoxLayout*>(window->layout());
+    auto* connections = new QPushButton(tr("Connections…"), window);
+    connections->setObjectName(QStringLiteral("remoteStationConnections"));
+    connections->setStyleSheet(QString::fromLatin1(Style::kButtonStyle));
+    connections->setAutoDefault(false);
+    windowLayout->addWidget(connections, 0, Qt::AlignLeft);
+    connect(connections, &QPushButton::clicked, this, &RemoteStationPage::connectionsRequested);
+
     QGroupBox* core = addSection(tr("Core on this computer"));
     QVBoxLayout* coreLayout = qobject_cast<QVBoxLayout*>(core->layout());
     m_runCore = new QCheckBox(tr("Run a Core on this computer"), core);

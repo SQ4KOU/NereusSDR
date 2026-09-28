@@ -746,6 +746,10 @@ colours for the same signal.
   includes the executable in all_tests, tests_core and tests_models; the freshly
   built integrated race test passes (0.93 s). The Linux continuation will build
   this target explicitly against its immutable checkpoint and record its result.
+  The later Linux run found the same ordering error in three hosting tests:
+  binary discovery, service management and the desktop hosting runtime. Their
+  registrations now precede both aggregates; all three rebuilt macOS suites
+  pass (1.16 s). Corrected Linux full-suite coverage remains to be verified.
 - Plan: required full-suite verification.
 
 ### G-46: Container filter display lacks slice-correct spectrum and overlays
@@ -1763,9 +1767,12 @@ colours for the same signal.
   an operating-system skip. All nine macOS integration suites pass (5.16 s).
   Full Linux and Windows verification of this change remains outstanding.
   The full Linux run also exposed this assumption in the handover save-failure
-  fixture. Its current pre/post-teardown variants are being changed to a real
-  settings-file destination collision, preserving the original file and profile
-  lock, rather than relying on directory permissions or skipping Windows.
+  fixture. Signed `3c07c3f9` replaces both pre/post-teardown injections with a
+  directory at the settings-file destination, preserving the original file and
+  profile lock without Windows skips. App/Core and all seven integrated window,
+  accessory and handover suites pass (44.93 s). The pre-stop case recovers normal
+  commands; the post-stop case stays fenced; both retain ownership and retry.
+  Linux uid-0 and Windows execution remain outstanding.
 - Plan: reliable settings export and portable CI evidence.
 
 ### G-90: HL2 option values are stored but never applied to hardware
@@ -1858,9 +1865,11 @@ colours for the same signal.
   and fell through to the receiver error route.
 - Ruling basis: JJ requires working remote accessory parity and truthful
   refusals; preserve every existing permission and on-air restriction.
-- Status: the lane maps the nine existing amp/tuner/RF-Kit command names to
-  their actual accessory error route. Focused paired regressions pass, with
-  complete accessory/confirmation verification and lead integration pending.
+- Status: signed `e770593f` maps the nine existing amp/tuner/RF-Kit command names
+  to their actual accessory error route. All three lane suites pass (30.09 s);
+  app/Core and seven integrated suites pass (44.93 s). PGXL paired regression
+  coverage proves exactly one accessory refusal and no receiver error. Dormant
+  tuner/RF-Kit aliases were source-reviewed; existing legacy paths remain tested.
   Accepted-path fixtures use proper device permissions; denied and legacy
   coverage remain. No Core authority is relaxed and no RF is emitted.
 - Plan: remote accessory control and shared-setting confirmation.
@@ -1873,10 +1882,30 @@ colours for the same signal.
   entries do not restore the expected Setup entry.
 - Ruling basis: JJ requires existing working window entry points to retain
   parity. Opening Connections is navigation, not a Core configuration write.
-- Status: a bounded lane is restoring the button through the existing signal
-  and connection path, with focused window coverage. No automatic connection,
-  hosting-policy change or real window relaunch is authorized by this repair.
+- Status: signed `c3048c81` restores Connections in a This window section through
+  the existing signal path. App/Core and seven integrated suites pass (44.93 s),
+  including the full real-window harness. Coverage proves it opens the managed
+  picker without dialing, stays available during hosting locks and preserves
+  intentional disconnect. No real operator window was relaunched.
 - Plan: remote-window connection entry points and Core hosting integration.
+
+### G-97: Phone Settings Health has a protocol but no Setup description
+
+- Evidence: `setup.diagnostics` is empty and its service test requires that. The
+  independent minor-11 `settingsHygieneVersion:1` protocol already validates and
+  forgets current-radio settings, but ordinary descriptor bindings cannot carry
+  its session-bound current MAC and asynchronous bounded issue list.
+- Ruling basis: JJ includes existing remote desktop parity and phone Core
+  dependencies in this effort. Existing G-38 reset semantics and G-50 local
+  file/log questions remain OPEN and are not changed by this repair.
+- Recommendation: publish a closed Settings Health panel descriptor backed by
+  the existing typed commands, with current-session/MAC matching, malformed
+  reply rejection, paired/off-air Forget confirmation and truthful unavailable
+  reasons. Keep Reset unavailable. Avoid a general command/result scripting
+  language for this one established operation.
+- Status: read-only source audit complete; phone informed of the existing
+  protocol and missing description. Contract and implementation pending.
+- Plan: phone Setup description and remote Settings Validation parity.
 
 ## How this addendum is kept
 

@@ -9028,6 +9028,13 @@ nereus_add_test(tst_media_tunnel fakes/LoopbackTransport.cpp REALTIME EXTRA_LABE
 nereus_add_test(tst_slice_audio_view_race)
 target_compile_definitions(tst_slice_audio_view_race PRIVATE NEREUS_BUILD_TESTS)
 
+# Task 47: packaged station discovery and injected OS-owned startup operations.
+nereus_add_test(tst_station_binary_locator CORE_ONLY)
+target_compile_definitions(tst_station_binary_locator PRIVATE NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+nereus_add_test(tst_station_service_manager)
+# Desktop Remote Access runtime; temporary profile and logical local model only.
+nereus_add_test(tst_gui_desktop_station_runtime EXTRA_LABELS gui)
+
 # --------------------------------------------------------------------------
 # Aggregate "all_tests" target  (2026-05-26 KG4VCF dev-loop fix, from PR #291)
 # --------------------------------------------------------------------------
@@ -9068,10 +9075,3 @@ if(_label_names)
     endforeach()
     message(STATUS "NereusSDR: per-label test targets: ${_label_names}")
 endif()
-
-# Task 47: packaged station discovery and injected OS-owned startup operations.
-nereus_add_test(tst_station_binary_locator CORE_ONLY)
-target_compile_definitions(tst_station_binary_locator PRIVATE NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
-nereus_add_test(tst_station_service_manager)
-# Desktop Remote Access runtime; temporary profile and logical local model only.
-nereus_add_test(tst_gui_desktop_station_runtime EXTRA_LABELS gui)

@@ -4284,18 +4284,22 @@ QString accessoryRefusalDevice(const QByteArray& verb, const QString& faultsDevi
         || verb == "savePgxlSettings" || verb == "readPgxlSettings"
         || verb == "setPgxlPowerCap" || verb == "configurePgxl" || verb == "disconnectPgxl"
         || verb == "setPgxlConnectionSettings" || verb == "setPgxlOperate"
+        || verb == "amp.operate" || verb == "amp.standby"
         || verb == "scanPgxlLan" || verb == "setPgxlAddress") {
         return QStringLiteral("pgxl");
     }
     if (verb == "setTgxlName" || verb == "setTgxlNetwork" || verb == "saveTgxlSettings"
         || verb == "readTgxlSettings" || verb == "configureTgxl" || verb == "disconnectTgxl"
         || verb == "setTgxlAntenna" || verb == "setTgxlOperate" || verb == "setTgxlBypass"
-        || verb == "moveTgxlRelay" || verb == "scanTgxlLan" || verb == "setTgxlAddress") {
+        || verb == "moveTgxlRelay" || verb == "scanTgxlLan" || verb == "setTgxlAddress"
+        || verb == "tuner.tune" || verb == "tuner.operate" || verb == "tuner.bypass"
+        || verb == "tuner.antenna") {
         return QStringLiteral("tgxl");
     }
     if (verb == "configureRfKit" || verb == "disconnectRfKit" || verb == "setRfKitEnabled"
         || verb == "resetRfKitError" || verb == "setRfKitOperate" || verb == "setRfKitAntenna"
-        || verb == "setRfKitTciMode" || verb == "setRfKitAddress") {
+        || verb == "setRfKitTciMode" || verb == "setRfKitAddress"
+        || verb == "rfkit.operate" || verb == "rfkit.standby" || verb == "rfkit.antenna") {
         return QStringLiteral("rfkit");
     }
     if (verb == "setTxInterlockPolicy") {
