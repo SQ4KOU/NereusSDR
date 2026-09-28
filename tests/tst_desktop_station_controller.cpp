@@ -250,6 +250,93 @@ private slots:
         QVERIFY(controller.host() == nullptr);
         QVERIFY(!controller.enabled());
     }
+
+    void listenerCloseCanDeleteController()
+    {
+        if (!QSslSocket::supportsSsl()) {
+            QSKIP("Qt reports no working TLS backend.");
+        }
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+        RadioModel model;
+        auto* controller = new DesktopStationController(
+            &model, optionsFor(settings, directory.path()));
+        QPointer<DesktopStationController> alive(controller);
+        QVERIFY(controller->start(true));
+        StationServer* const server = controller->server();
+        connect(server, &StationServer::listeningChanged, &model, [&](bool listening) {
+            if (!listening) { delete controller; }
+        });
+        controller->stop();
+        QVERIFY(alive.isNull());
+    }
+
+    void sliceAdoptionCanDeleteControllerDuringStart()
+    {
+        if (!QSslSocket::supportsSsl()) {
+            QSKIP("Qt reports no working TLS backend.");
+        }
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+        RadioModel model;
+        QVERIFY(model.addSlice(QStringLiteral("pan-0")) >= 0);
+        auto* controller = new DesktopStationController(
+            &model, optionsFor(settings, directory.path()));
+        QPointer<DesktopStationController> alive(controller);
+        connect(model.sliceOwnership(), &SliceOwnership::markChanged, &model,
+                [&](int, const QByteArray&, const QByteArray&) { delete controller; });
+        QVERIFY(!controller->start(true));
+        QVERIFY(alive.isNull());
+    }
+
+    void rejectedTuneCallbackCanDeleteController()
+    {
+        if (!QSslSocket::supportsSsl()) {
+            QSKIP("Qt reports no working TLS backend.");
+        }
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+        RadioModel model;
+        auto* controller = new DesktopStationController(
+            &model, optionsFor(settings, directory.path()));
+        QPointer<DesktopStationController> alive(controller);
+        QVERIFY(controller->start(true));
+        QCOMPARE(controller->server()->takeTransmitForStation({}, {}),
+                 TransmitHolder::TakeVerdict::AtOnce);
+        connect(&model, &RadioModel::tuneRefused, &model,
+                [&](const QString&) { delete controller; });
+        controller->requestTune(true);
+        QVERIFY(alive.isNull());
+    }
+
+    void rejectedTuneCallbackCanCancelItsOwnIntent()
+    {
+        if (!QSslSocket::supportsSsl()) {
+            QSKIP("Qt reports no working TLS backend.");
+        }
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+        RadioModel model;
+        DesktopStationController controller(&model, optionsFor(settings, directory.path()));
+        QVERIFY(controller.start(true));
+        QCOMPARE(controller.server()->takeTransmitForStation({}, {}),
+                 TransmitHolder::TakeVerdict::AtOnce);
+        int refusals = 0;
+        connect(&model, &RadioModel::tuneRefused, &controller, [&](const QString&) {
+            ++refusals;
+            controller.requestTune(false);
+        });
+        QCOMPARE(controller.requestTune(true).state,
+                 DesktopStationController::RequestState::Pending);
+        QCOMPARE(refusals, 1);
+        QVERIFY(!model.isTune());
+        QVERIFY(!model.mox());
+        controller.stop();
+    }
 };
 
 QTEST_MAIN(TstDesktopStationController)

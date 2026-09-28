@@ -61,12 +61,14 @@ private:
     QPointer<RadioModel> m_model;
     StationHostOptions m_options;
     std::unique_ptr<StationHost> m_host;
+    StationHost* m_startingHost{nullptr}; // owned by start() until that call returns
     std::optional<TakeQuestion> m_question;
     quint64 m_intentGeneration{0};
     quint64 m_nextQuestionId{0};
     bool m_moxRequested{false};
     bool m_tuneRequested{false};
-    bool m_stopQueued{false};
+    bool m_stopDuringStart{false};
+    bool m_stopping{false};
 };
 
 } // namespace NereusSDR

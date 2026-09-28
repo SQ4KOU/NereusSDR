@@ -10,7 +10,6 @@
 
 #include <QDir>
 #include <QFileInfo>
-#include <QTimer>
 
 namespace NereusSDR {
 
@@ -34,7 +33,7 @@ DesktopStationController::~DesktopStationController()
 
 bool DesktopStationController::start(bool profileOwnershipEstablished)
 {
-    if (m_host || !profileOwnershipEstablished || !m_model
+    if (m_host || m_startingHost || m_stopping || !profileOwnershipEstablished || !m_model
         || m_model->role() != RadioModel::Role::Local || !m_options.settings
         || m_options.securityDirectory.isEmpty() || !m_options.hostingDevice
         || QDir::cleanPath(QFileInfo(m_options.settings->filePath()).absolutePath())
@@ -43,11 +42,22 @@ bool DesktopStationController::start(bool profileOwnershipEstablished)
         || StationHost::listenerAddressFor(m_options.remoteBind).isNull()) {
         return false;
     }
-    m_host = std::make_unique<StationHost>(m_model.data(), m_options);
-    if (!m_host->start()) {
-        stop();
+    // Keep ownership on this stack while start() can emit synchronous signals.
+    // A callback may delete the controller without deleting a Host whose own
+    // start() is still running.
+    auto host = std::make_unique<StationHost>(m_model.data(), m_options);
+    const QPointer<DesktopStationController> self(this);
+    m_startingHost = host.get();
+    m_stopDuringStart = false;
+    const bool started = host->start();
+    if (!self) { return false; }
+    m_startingHost = nullptr;
+    if (m_stopDuringStart || !started) {
+        m_stopDuringStart = false;
+        host->stop();
         return false;
     }
+    m_host = std::move(host);
     return enabled();
 }
 
@@ -57,26 +67,32 @@ void DesktopStationController::stop()
     m_question.reset();
     m_moxRequested = false;
     m_tuneRequested = false;
-    if (!m_host) { return; }
-    // This is a Core shutdown, so even a different device's on-air key must
-    // end before ingress closes. Ordinary button-off below is owner-scoped.
-    if (m_model) {
-        m_model->stopAllTx(QStringLiteral("The Core is closing."));
+    if (m_stopping) { return; }
+    m_stopping = true;
+    const QPointer<DesktopStationController> self(this);
+    // As in start(), keep the Host alive through callbacks that may delete
+    // this controller while its stop() is on the stack.
+    auto host = std::move(m_host);
+    StationHost* const startingHost = m_startingHost;
+    if (startingHost) {
+        m_stopDuringStart = true;
+        startingHost->quiesce();
     }
-    m_host->stop();
-    if (m_host->server()) {
-        // stop() called from a nested listener callback: Host retains its
-        // server until that call stack returns. Retire it on the next turn.
-        if (!m_stopQueued) {
-            m_stopQueued = true;
-            QTimer::singleShot(0, this, [this] {
-                m_stopQueued = false;
-                stop();
-            });
-        }
+    if (!self) { return; }
+    if (!host && !startingHost) {
+        m_stopping = false;
         return;
     }
-    m_host.reset();
+    const QPointer<RadioModel> model(m_model);
+    // This is a Core shutdown, so even a different device's on-air key must
+    // end before ingress closes. Ordinary button-off below is owner-scoped.
+    if (model) {
+        model->stopAllTx(QStringLiteral("The Core is closing."));
+    }
+    if (host) {
+        host->stop();
+    }
+    if (self) { m_stopping = false; }
 }
 
 StationServer* DesktopStationController::server() const
@@ -169,16 +185,22 @@ DesktopStationController::RequestResult DesktopStationController::takeAndKey(
             }
             self->keyNow(key);
         });
+    // runTake() may complete synchronously and keyNow() may emit callbacks
+    // that stop, replace, or delete this controller before this call returns.
+    if (!self || !serverRef || !modelRef || self->m_intentGeneration != intent
+        || self->server() != serverRef || self->m_model != modelRef) {
+        return {RequestState::Refused, {}, QStringLiteral("The transmit request changed.")};
+    }
     switch (verdict) {
     case TransmitHolder::TakeVerdict::AtOnce:
         return {RequestState::Pending, {}, {}};
     case TransmitHolder::TakeVerdict::AlreadyHeld:
-        keyNow(key);
+        self->keyNow(key);
         return {RequestState::Pending, {}, {}};
     case TransmitHolder::TakeVerdict::Ask:
-        return ask(key);
+        return self->ask(key);
     case TransmitHolder::TakeVerdict::Refuse:
-        return {RequestState::Refused, {}, stationServer->transmitHolder()
+        return {RequestState::Refused, {}, serverRef->transmitHolder()
             ->askTake(SliceOwnership::stationDevice(), shownEpoch, shownKeyed).refusal.text};
     }
     return {RequestState::Refused, {}, {}};
@@ -189,8 +211,13 @@ DesktopStationController::RequestResult DesktopStationController::ask(Key key)
     StationServer* const stationServer = server();
     if (!stationServer) { return {RequestState::Refused, {}, {}}; }
     TransmitHolder* const holder = stationServer->transmitHolder();
+    const QPointer<DesktopStationController> self(this);
+    const QPointer<StationServer> serverRef(stationServer);
+    const quint64 intent = m_intentGeneration;
     const std::optional<TransmitHolder::Holder> current = holder->holder();
-    if (!current) { return {RequestState::Refused, {}, {}}; }
+    if (!self || !serverRef || self->m_intentGeneration != intent || !current) {
+        return {RequestState::Refused, {}, {}};
+    }
     TakeQuestion question;
     question.key = key;
     question.holderEpoch = holder->epoch();
@@ -205,13 +232,22 @@ DesktopStationController::RequestResult DesktopStationController::ask(Key key)
 void DesktopStationController::keyNow(Key key)
 {
     if (!m_model || !stationHoldsTransmit()) { return; }
+    const QPointer<DesktopStationController> self(this);
+    const QPointer<RadioModel> model(m_model);
+    const quint64 intent = m_intentGeneration;
     if (key == Key::Mox) {
-        m_model->setMoxFromButton(true);
-        MoxController* const mox = m_model->moxController();
-        m_moxRequested = mox && mox->isManualKey();
+        model->setMoxFromButton(true);
+        if (!self || !model || self->m_model != model || self->m_intentGeneration != intent) {
+            return;
+        }
+        MoxController* const mox = model->moxController();
+        self->m_moxRequested = mox && mox->isManualKey();
     } else {
-        m_model->setTune(true);
-        m_tuneRequested = m_model->isTune();
+        model->setTune(true);
+        if (!self || !model || self->m_model != model || self->m_intentGeneration != intent) {
+            return;
+        }
+        self->m_tuneRequested = model->isTune();
     }
 }
 

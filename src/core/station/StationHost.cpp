@@ -151,28 +151,39 @@ bool StationHost::start()
                                                       *cfg.settings, cfg.securityDirectory,
                                                       nullptr, cfg.linkMajors);
     if (cfg.hostingDevice) {
+        const QPointer<StationServer> server(m_stationServer.get());
+        const QPointer<RadioModel> model(m_radioModel);
         const QByteArray& stationId = SliceOwnership::stationDevice();
-        m_stationServer->deviceSessions()->registerHostingDevice(
+        server->deviceSessions()->registerHostingDevice(
             stationId, cfg.hostingDevice->name, cfg.hostingDevice->shortName);
-        m_stationServer->setStationDeviceWords(cfg.hostingDevice->name,
-                                               cfg.hostingDevice->shortName);
-        if (SliceOwnership* ownership = m_radioModel->sliceOwnership()) {
+        if (!server || !model) { return false; }
+        server->setStationDeviceWords(cfg.hostingDevice->name,
+                                      cfg.hostingDevice->shortName);
+        if (!server || !model) { return false; }
+        const QPointer<SliceOwnership> ownership(model->sliceOwnership());
+        if (ownership) {
             const QList<int> adopted = ownership->adoptUnowned(stationId);
+            if (!server || !model || !ownership) { return false; }
             if (!adopted.isEmpty()) {
-                m_radioModel->setActiveSliceByIdFor(stationId, ownership->activeFor(stationId));
+                const int active = ownership->activeFor(stationId);
+                if (!model) { return false; }
+                model->setActiveSliceByIdFor(stationId, active);
             }
         }
+        if (!server || !model) { return false; }
         // The desktop may begin hosting before its radio has made Slice A.
         // A later unscoped local slice is still the hosting window's, never
         // a free slice for the first external peer to adopt.
-        connect(m_radioModel.data(), &RadioModel::sliceAdded, m_stationServer.get(),
-                [model = m_radioModel, stationId](int) {
+        connect(model.data(), &RadioModel::sliceAdded, server.data(),
+                [model, stationId](int) {
                     if (!model) { return; }
-                    SliceOwnership* const ownership = model->sliceOwnership();
+                    const QPointer<SliceOwnership> ownership(model->sliceOwnership());
                     if (!ownership) { return; }
                     const QList<int> adopted = ownership->adoptUnowned(stationId);
+                    if (!model || !ownership) { return; }
                     if (!adopted.isEmpty()) {
-                        model->setActiveSliceByIdFor(stationId, ownership->activeFor(stationId));
+                        const int active = ownership->activeFor(stationId);
+                        if (model) { model->setActiveSliceByIdFor(stationId, active); }
                     }
                 });
     }
