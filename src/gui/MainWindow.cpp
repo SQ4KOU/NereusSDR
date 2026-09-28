@@ -13324,9 +13324,8 @@ void MainWindow::onConnectionStateChanged()
                 // for OPERATE is `operate=1` (key=value), not bare `operate`.
                 // PGXL rejected `operate` / `standby` with error 50000016
                 // every click.
-                m_radioModel->pgxlConnection()->sendCommand(
-                    wantOperate ? QStringLiteral("operate=1")
-                                : QStringLiteral("operate=0"));
+                QString reason;
+                m_radioModel->setPgxlOperateForStation(wantOperate, &reason);
             });
 
             // R-R3-47 / R-R3-22: the gauges no longer come from here. The

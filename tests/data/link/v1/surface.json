@@ -404,6 +404,11 @@
             "kind": "i64",
             "name": "miniDisplayVersion",
             "value": 1
+        },
+        {
+            "kind": "i64",
+            "name": "accessoryTxVersion",
+            "value": 1
         }
     ],
     "commands": [
@@ -1036,6 +1041,98 @@
             "capabilityVersion": 4,
             "minMinor": 11,
             "verb": "setRfKitAddress"
+        },
+        {
+            "arguments": [
+            ],
+            "capability": "accessoryTxVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "amp.operate"
+        },
+        {
+            "arguments": [
+            ],
+            "capability": "accessoryTxVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "amp.standby"
+        },
+        {
+            "arguments": [
+            ],
+            "capability": "accessoryTxVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "tuner.tune"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "bool",
+                    "name": "on",
+                    "optional": false
+                }
+            ],
+            "capability": "accessoryTxVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "tuner.operate"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "bool",
+                    "name": "on",
+                    "optional": false
+                }
+            ],
+            "capability": "accessoryTxVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "tuner.bypass"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "port",
+                    "optional": false
+                }
+            ],
+            "capability": "accessoryTxVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "tuner.antenna"
+        },
+        {
+            "arguments": [
+            ],
+            "capability": "accessoryTxVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "rfkit.operate"
+        },
+        {
+            "arguments": [
+            ],
+            "capability": "accessoryTxVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "rfkit.standby"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "port",
+                    "optional": false
+                }
+            ],
+            "capability": "accessoryTxVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "rfkit.antenna"
         },
         {
             "arguments": [

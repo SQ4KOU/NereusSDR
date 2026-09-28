@@ -604,6 +604,20 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
          kRadioIdentitySessionProtocolMinor},
         {"setRfKitAddress", {arg("host", kUtf8), arg("port", kInt)},
          "remoteRfKitControlVersion", 4, kRadioIdentitySessionProtocolMinor},
+        // Task 42: station-owned transmit-coupled accessory actions.
+        {"amp.operate", {}, "accessoryTxVersion", 1, kRadioIdentitySessionProtocolMinor},
+        {"amp.standby", {}, "accessoryTxVersion", 1, kRadioIdentitySessionProtocolMinor},
+        {"tuner.tune", {}, "accessoryTxVersion", 1, kRadioIdentitySessionProtocolMinor},
+        {"tuner.operate", {arg("on", kBool)}, "accessoryTxVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
+        {"tuner.bypass", {arg("on", kBool)}, "accessoryTxVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
+        {"tuner.antenna", {arg("port", kInt)}, "accessoryTxVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
+        {"rfkit.operate", {}, "accessoryTxVersion", 1, kRadioIdentitySessionProtocolMinor},
+        {"rfkit.standby", {}, "accessoryTxVersion", 1, kRadioIdentitySessionProtocolMinor},
+        {"rfkit.antenna", {arg("port", kInt)}, "accessoryTxVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
         {"setStationTci", {arg("enabled", kBool), arg("port", kInt)}, "stationTciVersion", 1,
          kRadioIdentitySessionProtocolMinor},
         // The Core's station TCI server's options and apps (R-R3-48,
@@ -999,6 +1013,14 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         handleSetTxSlice(invoke);
         return;
     }
+    if (invoke.commandVerb == "amp.operate" || invoke.commandVerb == "amp.standby"
+        || invoke.commandVerb == "tuner.tune" || invoke.commandVerb == "tuner.operate"
+        || invoke.commandVerb == "tuner.bypass" || invoke.commandVerb == "tuner.antenna"
+        || invoke.commandVerb == "rfkit.operate" || invoke.commandVerb == "rfkit.standby"
+        || invoke.commandVerb == "rfkit.antenna") {
+        handleAccessoryTx(invoke);
+        return;
+    }
     if (invoke.commandVerb == "tx.key" || invoke.commandVerb == "tx.unkey"
         || invoke.commandVerb == "tx.tune" || invoke.commandVerb == "tx.twoTone"
         || invoke.commandVerb == "tx.tunerTune") {
@@ -1178,6 +1200,10 @@ bool SessionCommandDispatcher::refusedWhileOnAir(const SessionMessage& invoke)
         QByteArrayLiteral("setTgxlNetwork"), QByteArrayLiteral("saveTgxlSettings"),
         QByteArrayLiteral("setTgxlAntenna"), QByteArrayLiteral("setTgxlOperate"),
         QByteArrayLiteral("setTgxlBypass"), QByteArrayLiteral("setAlexRxAntenna"),
+        QByteArrayLiteral("amp.operate"), QByteArrayLiteral("amp.standby"),
+        QByteArrayLiteral("tuner.operate"), QByteArrayLiteral("tuner.bypass"),
+        QByteArrayLiteral("tuner.antenna"), QByteArrayLiteral("rfkit.operate"),
+        QByteArrayLiteral("rfkit.standby"), QByteArrayLiteral("rfkit.antenna"),
         QByteArrayLiteral("setTxInterlockPolicy"), QByteArrayLiteral("setPgxlPowerCap")};
     bool waits = kTransmitPath.contains(invoke.commandVerb);
     if (invoke.commandVerb.startsWith("ps3.")) {
@@ -1212,6 +1238,63 @@ bool SessionCommandDispatcher::refusedWhileOnAir(const SessionMessage& invoke)
     return true;
 }
 
+void SessionCommandDispatcher::handleAccessoryTx(const SessionMessage& invoke)
+{
+    const QByteArray& verb = invoke.commandVerb;
+    // The Core checks this again on confirm.proceed. The holder is omitted
+    // from this gate: an idle holder is asked by handleSharedSetting.
+    if (!m_transmitAccess.accessory) {
+        emitRefusal(verb, invoke.commandId, TxRefusals::stationReceiveOnly());
+        return;
+    }
+    if (const TxRefusal refusal = m_transmitAccess.accessory(m_requester); !refusal.isEmpty()) {
+        emitRefusal(verb, invoke.commandId, refusal);
+        return;
+    }
+    const bool portVerb = verb == "tuner.antenna" || verb == "rfkit.antenna";
+    const bool boolVerb = verb == "tuner.operate" || verb == "tuner.bypass";
+    int port = 0;
+    QVariant on;
+    const bool readable = portVerb
+        ? hasExactlyArguments(invoke.arguments, {"port"})
+              && hasWireKind(invoke.arguments, "port", MirrorWireKind::Int64)
+              && findIntArgument(invoke.arguments, "port", &port) == ArgumentStatus::Ok
+        : boolVerb
+            ? hasExactlyArguments(invoke.arguments, {"on"})
+                  && findArgument(invoke.arguments, "on", &on)
+                  && on.typeId() == QMetaType::Bool
+            : hasExactlyArguments(invoke.arguments, {});
+    if (!readable) {
+        emitRefusal(verb, invoke.commandId,
+                    {"invalidRequest", QStringLiteral("The Core could not read this request."), {}});
+        return;
+    }
+    if (verb == "tuner.tune") {
+        // RemoteKeying::TunerTune takes unheld transmit before starting the
+        // Core's PGXL/TGXL cycle, and refuses another holder or an on-air
+        // cycle before either accessory receives a command.
+        handleTxKeying(invoke);
+        return;
+    }
+    QString reason;
+    const bool sent = verb == "amp.operate" ? m_radioModel->setPgxlOperateForStation(true, &reason)
+        : verb == "amp.standby" ? m_radioModel->setPgxlOperateForStation(false, &reason)
+        : verb == "tuner.operate" ? m_radioModel->setTgxlOperateForStation(on.toBool(), &reason)
+        : verb == "tuner.bypass" ? m_radioModel->setTgxlBypassForStation(on.toBool(), &reason)
+        : verb == "tuner.antenna" ? m_radioModel->setTgxlAntennaForStation(port, &reason)
+        : verb == "rfkit.operate" ? m_radioModel->setRfKitOperateForStation(true, &reason)
+        : verb == "rfkit.standby" ? m_radioModel->setRfKitOperateForStation(false, &reason)
+                                     : m_radioModel->setRfKitAntennaForStation(port, &reason);
+    if (!sent) {
+        emitRefusal(verb, invoke.commandId,
+                    {"accessoryUnavailable",
+                     reason.isEmpty() ? QStringLiteral("The Core could not switch this accessory.")
+                                      : reason, {}});
+        return;
+    }
+    emitResult(verb, invoke.commandId, true, {}, {});
+}
+
 void SessionCommandDispatcher::handleTxKeying(const SessionMessage& invoke)
 {
     // iPhone app plan Task 35 (R-IOS-13): keying from a device. The rules
@@ -1242,12 +1325,15 @@ void SessionCommandDispatcher::handleTxKeying(const SessionMessage& invoke)
         command.epoch = readable ? static_cast<quint32>(epoch) : 0;
     } else {
         command.verb = invoke.commandVerb == "tx.tune"        ? RemoteKeying::Verb::Tune
-                     : invoke.commandVerb == "tx.tunerTune" ? RemoteKeying::Verb::TunerTune
+                     : invoke.commandVerb == "tx.tunerTune"
+                           || invoke.commandVerb == "tuner.tune" ? RemoteKeying::Verb::TunerTune
                                                             : RemoteKeying::Verb::TwoTone;
         QVariant on;
-        readable = hasExactlyArguments(invoke.arguments, {"on"})
+        readable = invoke.commandVerb == "tuner.tune"
+            ? hasExactlyArguments(invoke.arguments, {})
+            : hasExactlyArguments(invoke.arguments, {"on"})
             && findArgument(invoke.arguments, "on", &on) && on.typeId() == QMetaType::Bool;
-        command.on = readable && on.toBool();
+        command.on = readable && (invoke.commandVerb == "tuner.tune" || on.toBool());
     }
     if (!readable) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
@@ -1284,6 +1370,11 @@ void SessionCommandDispatcher::handleTxKeying(const SessionMessage& invoke)
             reason = result.refusal.text;
             values = {{0, "refusalCode", MirrorWireKind::Utf8, QString::fromUtf8(result.refusal.code)},
                       {0, "refusalFix", MirrorWireKind::Utf8, QString::fromUtf8(result.refusal.fix)}};
+        } else if (verb == "tuner.tune") {
+            reason = result.reason;
+            values = {{0, "refusalCode", MirrorWireKind::Utf8,
+                       QStringLiteral("accessoryUnavailable")},
+                      {0, "refusalFix", MirrorWireKind::Utf8, QString()}};
         } else {
             reason = result.reason;
         }

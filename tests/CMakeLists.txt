@@ -6458,6 +6458,8 @@ nereus_add_test(tst_tgxl_station_identity)
 # fixtures (tests/fixtures/accessories, read through NEREUS_SOURCE_DIR).
 nereus_add_test(tst_station_accessory_state
     fakes/LoopbackTransport.cpp)
+nereus_add_test(tst_accessory_tx_commands
+    fakes/LoopbackTransport.cpp)
 target_compile_definitions(tst_station_accessory_state PRIVATE
     NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 # R-R3-47: a remote window's Power Genius and RF-Kit applets read the Core's

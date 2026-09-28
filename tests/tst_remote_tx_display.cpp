@@ -432,7 +432,9 @@ void TstRemoteTxDisplay::capabilityFollowsTheAnalyzerAndTheMinor()
         previous = update.name;
     }
     QVERIFY(found);
-    QCOMPARE(caps.toUpdates().last().name, QByteArray("miniDisplayVersion"));
+    QCOMPARE(caps.toUpdates().at(caps.toUpdates().size() - 2).name,
+             QByteArray("miniDisplayVersion"));
+    QCOMPARE(caps.toUpdates().last().name, QByteArray("accessoryTxVersion"));
     QCOMPARE(StationCapabilities::fromUpdates(caps.toUpdates()).txDisplayVersion, 1);
     QCOMPARE(StationCapabilities::fromUpdates(caps.toUpdates()).miniDisplayVersion, 1);
     caps.miniDisplayVersion = 0;

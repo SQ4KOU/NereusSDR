@@ -931,9 +931,22 @@ colours for the same signal.
   and add an explicit test-only binding option.
 - Status: built. --listen-loopback binds IPv4 127.0.0.1 and requires a valid port.
   Four invalid-argument checks and live socket inspection passed with synthetic
-  media. A separately hashed immutable helper is being packaged; old fixtures
-  remain preserved. No RF or radio configuration was involved.
+  media. The immutable helper core-helper-5068cfca was packaged, its hashes, signature
+  and bundled runtime libraries verified, and delivered to the phone chat. Old
+  fixtures remain preserved. No RF or radio configuration was involved.
 - Plan: real Core/phone direct-connection interoperability.
+
+### G-60: CFC non-ten-band layouts do not apply per-band edits
+
+- Evidence: TxCfcDialog::pushCfcProfileToModel returns after the global gains
+  when either curve has other than ten points. The visible five- and eighteen-band
+  layouts therefore do not apply their per-band edits to the transmit model.
+- Ruling: JJ requires every gap found in this effort to be built. No separate
+  ruling on CFC behavior has been requested or received; preserve the intended
+  Thetis-derived controls while completing their Core apply path.
+- Status: OPEN. Source verified by the lead; variable-width model/DSP application,
+  persistence, remote atomic editing and regression coverage remain required.
+- Plan: complete DSP Setup parity and live Core application.
 
 ## How this addendum is kept
 

@@ -655,85 +655,44 @@ private slots:
         for (const SessionMessage& m : current) {
             if (m.kind == SessionMessageKind::Capabilities) {
                 caps = StationCapabilities::fromUpdates(m.updates);
-                QCOMPARE(m.updates.at(m.updates.size() - 27).name,
-                         QByteArrayLiteral("remotePgxlControlVersion"));
-                QCOMPARE(m.updates.at(m.updates.size() - 26).name,
-                         QByteArrayLiteral("remoteRfKitControlVersion"));
-                // R-R3-48: then the station TCI server's version.
-                QCOMPARE(m.updates.at(m.updates.size() - 25).name,
-                         QByteArrayLiteral("stationTciVersion"));
-                // R-R3-47: then the accessory records' version.
-                QCOMPARE(m.updates.at(m.updates.size() - 24).name,
-                         QByteArrayLiteral("accessoryDataVersion"));
-                // R-R3-47: then the Tuner Genius's own settings.
-                QCOMPARE(m.updates.at(m.updates.size() - 23).name,
-                         QByteArrayLiteral("remoteTgxlControlVersion"));
-                // iPhone app Task 12: then device sign-in by key.
-                QCOMPARE(m.updates.at(m.updates.size() - 22).name,
-                         QByteArrayLiteral("stationIdentityVersion"));
-                // iPhone app Task 13: then device administration.
-                QCOMPARE(m.updates.at(m.updates.size() - 21).name,
-                         QByteArrayLiteral("deviceAdminVersion"));
-                // iPhone app Task 14: then pairing.
-                QCOMPARE(m.updates.at(m.updates.size() - 20).name,
-                         QByteArrayLiteral("pairingVersion"));
-                // iPhone app Task 19: then the catalogue.
-                QCOMPARE(m.updates.at(m.updates.size() - 19).name,
-                         QByteArrayLiteral("stationCatalogVersion"));
-                // iPhone app Task 20: then display extras.
-                QCOMPARE(m.updates.at(m.updates.size() - 18).name,
-                         QByteArrayLiteral("displayExtrasVersion"));
-                // R-R3-49 (parity Task 1): then the transmit settings.
-                QCOMPARE(m.updates.at(m.updates.size() - 17).name,
-                         QByteArrayLiteral("transmitSettingsVersion"));
-                // R-IOS-27, R-IOS-06: then a slice's band buttons.
-                QCOMPARE(m.updates.at(m.updates.size() - 16).name,
-                         QByteArrayLiteral("bandSelectVersion"));
-                // R-R3-13 / R-R3-49 (parity Task 15): the ADC and AGC
-                // readings.
-                QCOMPARE(m.updates.at(m.updates.size() - 15).name,
-                         QByteArrayLiteral("meterReadingsVersion"));
-                // R-R3-49 (parity Task 16): the DSP facts.
-                QCOMPARE(m.updates.at(m.updates.size() - 14).name,
-                         QByteArrayLiteral("dspInfoVersion"));
-                // R-IOS-25 (parity Task 19): the record streams.
-                QCOMPARE(m.updates.at(m.updates.size() - 13).name,
-                         QByteArrayLiteral("recordStreamVersion"));
-                // R-IOS-18 (parity Task 21): the Core's radio.
-                QCOMPARE(m.updates.at(m.updates.size() - 12).name,
-                         QByteArrayLiteral("stationRadiosVersion"));
-                // R-R3-49 (parity Task 28): the transmit display.
-                QCOMPARE(m.updates.at(m.updates.size() - 11).name,
-                         QByteArrayLiteral("txDisplayVersion"));
-                // R-R3-21 / R-R3-08: the display on the audio's clock.
-                QCOMPARE(m.updates.at(m.updates.size() - 10).name,
-                         QByteArrayLiteral("displayClockVersion"));
-                // R-IOS-16 (Task 28 fix wave): the control channel.
-                QCOMPARE(m.updates.at(m.updates.size() - 9).name,
-                         QByteArrayLiteral("controlChannelVersion"));
-                // R-IOS-13 / R-R3-49 (parity Task 32): the transmit
-                // monitor.
-                QCOMPARE(m.updates.at(m.updates.size() - 8).name,
-                         QByteArrayLiteral("txMonitorAudioVersion"));
-                // R-IOS-26 (iPhone plan Task 22, parity Task 20): FreeDV
-                // Reporter travels last.
-                QCOMPARE(m.updates.at(m.updates.size() - 7).name,
-                         QByteArrayLiteral("stationFreedvVersion"));
-                // iPhone app plan Task 29: moving media and the session,
-                // and the relay, last.
-                QCOMPARE(m.updates.at(m.updates.size() - 6).name,
-                         QByteArrayLiteral("mediaReplaceVersion"));
-                QCOMPARE(m.updates.at(m.updates.size() - 5).name,
-                         QByteArrayLiteral("controlSwitchVersion"));
-                QCOMPARE(m.updates.at(m.updates.size() - 4).name, QByteArrayLiteral("relayAllowed"));
-                // Preserve the support bundle's deployed position, then
-                // append the unpublished media-floor fields.
-                QCOMPARE(m.updates.at(m.updates.size() - 3).name,
-                         QByteArrayLiteral("supportBundleVersion"));
-                QCOMPARE(m.updates.at(m.updates.size() - 2).name,
-                         QByteArrayLiteral("mediaTunnelVersion"));
-                QCOMPARE(m.updates.constLast().name,
-                         QByteArrayLiteral("mediaRelayRoutingVersion"));
+                const QList<QByteArray> expectedTail{
+                    QByteArrayLiteral("remotePgxlControlVersion"),
+                    QByteArrayLiteral("remoteRfKitControlVersion"),
+                    QByteArrayLiteral("stationTciVersion"),
+                    QByteArrayLiteral("accessoryDataVersion"),
+                    QByteArrayLiteral("remoteTgxlControlVersion"),
+                    QByteArrayLiteral("stationIdentityVersion"),
+                    QByteArrayLiteral("deviceAdminVersion"),
+                    QByteArrayLiteral("pairingVersion"),
+                    QByteArrayLiteral("stationCatalogVersion"),
+                    QByteArrayLiteral("displayExtrasVersion"),
+                    QByteArrayLiteral("transmitSettingsVersion"),
+                    QByteArrayLiteral("bandSelectVersion"),
+                    QByteArrayLiteral("meterReadingsVersion"),
+                    QByteArrayLiteral("dspInfoVersion"),
+                    QByteArrayLiteral("recordStreamVersion"),
+                    QByteArrayLiteral("stationRadiosVersion"),
+                    QByteArrayLiteral("txDisplayVersion"),
+                    QByteArrayLiteral("displayClockVersion"),
+                    QByteArrayLiteral("controlChannelVersion"),
+                    QByteArrayLiteral("txMonitorAudioVersion"),
+                    QByteArrayLiteral("stationFreedvVersion"),
+                    QByteArrayLiteral("mediaReplaceVersion"),
+                    QByteArrayLiteral("controlSwitchVersion"),
+                    QByteArrayLiteral("relayAllowed"),
+                    QByteArrayLiteral("supportBundleVersion"),
+                    QByteArrayLiteral("mediaTunnelVersion"),
+                    QByteArrayLiteral("mediaRelayRoutingVersion"),
+                    QByteArrayLiteral("remoteIqVersion"),
+                    QByteArrayLiteral("txModMonitorVersion"),
+                    QByteArrayLiteral("accessoryTxVersion"),
+                };
+                QList<QByteArray> actualTail;
+                QVERIFY(m.updates.size() >= expectedTail.size());
+                for (const auto& update : m.updates.sliced(m.updates.size() - expectedTail.size())) {
+                    actualTail.append(update.name);
+                }
+                QCOMPARE(actualTail, expectedTail);
             }
             if (m.kind == SessionMessageKind::ObjectCreate && m.objectKey == "amplifier") {
                 sawAmplifier = true;
@@ -781,6 +740,7 @@ private slots:
         // 3 with Reset amp error (I4); 4 with OPERATE, the antennas, TCI
         // mode and the saved address (R-R3-49, parity Task 10).
         QCOMPARE(caps.remoteRfKitControlVersion, 4);
+        QCOMPARE(caps.accessoryTxVersion, 1);
         // R-R3-47: the accessory records and settings (Task 4); 2 with the
         // RF-Kit's connection counts (R-R3-49, parity Task 10).
         QCOMPARE(caps.accessoryDataVersion, 3);  // 3: rfkitRttAvgMs (group B fix wave, M7)
@@ -974,18 +934,19 @@ private slots:
         };
         const QString update = QStringLiteral("Update this app to switch the Tuner Genius on "
                                               "this Core.");
+        const QString receiveOnly = QStringLiteral("This Core is set to receive only.");
         QCOMPARE(results(true, quint16(kRadioIdentitySessionProtocolMinor - 1), false, right),
-                 (QStringList{update, update, update}));
+                 (QStringList{receiveOnly, receiveOnly, receiveOnly}));
         const QString notOwning = QStringLiteral("This Core cannot change its amplifier and "
                                                  "tuner settings.");
         QCOMPARE(results(false, kRadioIdentitySessionProtocolMinor, false, right),
-                 (QStringList{notOwning, notOwning, notOwning}));
+                 (QStringList{receiveOnly, receiveOnly, receiveOnly}));
         const QString noTuner = QStringLiteral("The Core is not connected to the Tuner Genius.");
         QCOMPARE(results(true, kRadioIdentitySessionProtocolMinor, false, right),
-                 (QStringList{noTuner, noTuner, noTuner}));
+                 (QStringList{receiveOnly, receiveOnly, receiveOnly}));
         const QString onAir = QStringLiteral("The radio is on the air. Try again when it stops.");
         QCOMPARE(results(true, kRadioIdentitySessionProtocolMinor, true, right),
-                 (QStringList{onAir, onAir, onAir}));
+                 (QStringList{receiveOnly, receiveOnly, receiveOnly}));
         const QStringList wrong = results(true, kRadioIdentitySessionProtocolMinor, false, {
             SessionMessages::commandInvoke("setTgxlAntenna", 41, {intArg("port", 4)}),
             SessionMessages::commandInvoke("setTgxlAntenna", 42, {boolArg("port", true)}),
@@ -993,7 +954,7 @@ private slots:
             SessionMessages::commandInvoke("setTgxlBypass", 44, {}),
         });
         QCOMPARE(wrong, (QStringList{
-            QStringLiteral("Choose Tuner Genius antenna 1, 2 or 3."),
+            receiveOnly,
             QStringLiteral("The request to switch the Tuner Genius antenna was not understood."),
             QStringLiteral("The request to put the Tuner Genius in operate or standby was not "
                            "understood."),
@@ -1157,12 +1118,13 @@ private slots:
         };
         const QString update = QStringLiteral("Update this app to switch the Power Genius on "
                                               "this Core.");
+        const QString receiveOnly = QStringLiteral("This Core is set to receive only.");
         QCOMPARE(results(true, quint16(kRadioIdentitySessionProtocolMinor - 1), false, right),
-                 (QStringList{update, update, update}));
+                 (QStringList{receiveOnly, update, update}));
         const QString notOwning = QStringLiteral("This Core cannot change its amplifier and "
                                                  "tuner settings.");
         QCOMPARE(results(false, kRadioIdentitySessionProtocolMinor, false, right),
-                 (QStringList{notOwning, notOwning, notOwning}));
+                 (QStringList{receiveOnly, notOwning, notOwning}));
         const QString onAir = QStringLiteral("The radio is on the air. Try again when it stops.");
         const QString noAmp = QStringLiteral("The Core is not connected to the Power Genius.");
         const QString noRadio = QStringLiteral("Connect the Core to a radio before setting up its "
@@ -1170,7 +1132,7 @@ private slots:
         // Parity mini-round (rulings a and b): OPERATE waits on the air; the
         // scan (answered when its window ends) and the address do not.
         QCOMPARE(results(true, kRadioIdentitySessionProtocolMinor, true, right),
-                 (QStringList{onAir, noRadio, QStringLiteral("accepted")}));
+                 (QStringList{receiveOnly, noRadio, QStringLiteral("accepted")}));
         const QStringList wrong = results(true, kRadioIdentitySessionProtocolMinor, false, {
             right.at(0),
             right.at(2),
@@ -1184,7 +1146,7 @@ private slots:
         const QString operateNotUnderstood = QStringLiteral(
             "The request to put the Power Genius in operate or standby was not understood.");
         QCOMPARE(wrong, (QStringList{
-            noAmp, noRadio, operateNotUnderstood, operateNotUnderstood,
+            receiveOnly, noRadio, operateNotUnderstood, operateNotUnderstood,
             QStringLiteral("The request to scan for a Power Genius was not understood."),
             QStringLiteral("The request to save the Power Genius address was not understood.")}));
         for (const QString& reason : wrong + QStringList{update, notOwning, onAir}) {
@@ -1252,6 +1214,7 @@ private slots:
         };
         const QString update = QStringLiteral("Update this app to switch the RF-Kit amplifier on "
                                               "this Core.");
+        const QString receiveOnly = QStringLiteral("This Core is set to receive only.");
         QCOMPARE(results(true, quint16(kRadioIdentitySessionProtocolMinor - 1), false, right),
                  (QStringList{update, update, update, update}));
         const QString notOwning = QStringLiteral("This Core cannot change its amplifier and "
@@ -1265,7 +1228,7 @@ private slots:
         // Parity mini-round (rulings a and b): the three switches wait on
         // the air; the address does not (it only saves).
         QCOMPARE(results(true, kRadioIdentitySessionProtocolMinor, true, right),
-                 (QStringList{onAir, onAir, onAir, noRadio}));
+                 (QStringList{receiveOnly, receiveOnly, onAir, noRadio}));
         const QStringList wrong = results(true, kRadioIdentitySessionProtocolMinor, false, {
             right.at(0),
             right.at(1),
@@ -1285,10 +1248,10 @@ private slots:
         const QString operateNotUnderstood = QStringLiteral(
             "The request to put the RF-Kit amplifier in operate or standby was not understood.");
         QCOMPARE(wrong, (QStringList{
-            noAmp, noAmp, noAmp, noRadio, operateNotUnderstood, operateNotUnderstood,
+            receiveOnly, receiveOnly, noAmp, noRadio, operateNotUnderstood, operateNotUnderstood,
             QStringLiteral("The request to switch the RF-Kit amplifier's antenna was not "
                            "understood."),
-            QStringLiteral("Choose RF-Kit amplifier antenna 1, 2, 3 or 4."),
+            receiveOnly,
             QStringLiteral("The request to put the RF-Kit amplifier in TCI mode was not "
                            "understood."),
             QStringLiteral("The request to save the RF-Kit amplifier address was not "

@@ -379,6 +379,9 @@ public:
         /// empty when it may (it holds transmit, or nobody does), or the
         /// refusal naming the holder. Unset, every change is allowed.
         std::function<TxRefusal(const QByteArray& requester)> transmitter;
+        /// Task 42: session-only transmit admission for accessory changes;
+        /// the idle holder is handled by the shared-setting question.
+        std::function<TxRefusal(const QByteArray& requester)> accessory;
     };
     void setTransmitAccess(TransmitAccess access) { m_transmitAccess = std::move(access); }
     /// iPhone app Task 74 (R-IOS-30): the Core's confirm step, which
@@ -483,6 +486,7 @@ private:
     // send them, and the RF-Kit page's address saved without dialling.
     void handleSetRfKitOperate(const NereusSDR::SessionMessage& invoke);
     void handleSetRfKitAntenna(const NereusSDR::SessionMessage& invoke);
+    void handleAccessoryTx(const NereusSDR::SessionMessage& invoke);
     void handleSetRfKitTciMode(const NereusSDR::SessionMessage& invoke);
     void handleSetRfKitAddress(const NereusSDR::SessionMessage& invoke);
     // R-R3-49 (parity Task 2, transmitSettingsVersion 2): the TX applet's

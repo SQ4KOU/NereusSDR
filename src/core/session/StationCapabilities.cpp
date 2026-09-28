@@ -290,6 +290,7 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
         if (miniDisplayVersion > 0) {
             updates.append(intEntry("miniDisplayVersion", miniDisplayVersion));
         }
+        updates.append(intEntry("accessoryTxVersion", accessoryTxVersion));
     }
     return updates;
 }
@@ -471,6 +472,7 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                    || u.name == "remoteRfKitControlVersion"
                    || u.name == "stationTciVersion"
                    || u.name == "accessoryDataVersion"
+                   || u.name == "accessoryTxVersion"
                    || u.name == "remoteTgxlControlVersion"
                    || u.name == "stationIdentityVersion"
                    || u.name == "deviceAdminVersion"
@@ -516,6 +518,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                     caps.stationTciVersion = version;
                 } else if (u.name == "accessoryDataVersion") {
                     caps.accessoryDataVersion = version;
+                } else if (u.name == "accessoryTxVersion") {
+                    caps.accessoryTxVersion = version;
                 } else if (u.name == "stationIdentityVersion") {
                     caps.stationIdentityVersion = version;
                 } else if (u.name == "deviceAdminVersion") {

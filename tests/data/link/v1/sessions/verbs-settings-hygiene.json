@@ -467,8 +467,20 @@
                         "name": "remoteIqVersion",
                         "ordinal": 0,
                         "value": 0
+                    },
+                    {
+                        "kind": "i64",
+                        "name": "txModMonitorVersion",
+                        "ordinal": 0,
+                        "value": 1
+                    },
+                    {
+                        "kind": "i64",
+                        "name": "accessoryTxVersion",
+                        "ordinal": 0,
+                        "value": 0
                     }
-                , {"kind": "i64", "name": "txModMonitorVersion", "ordinal": 0, "value": 1}],
+                ],
                 "type": "capabilities"
             }
         },

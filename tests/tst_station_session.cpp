@@ -5818,7 +5818,7 @@ void TstStationSession::radioIdentityEntriesRoundTrip()
     sent.txModMonitorVersion = 1;
     const QList<MirrorUpdate> updates = sent.toUpdates();
     const int model = updateIndexOf(updates, "hpsdrModel");
-    QCOMPARE(model, int(updates.size()) - 33);
+    QCOMPARE(model, int(updates.size()) - 34);
     QCOMPARE(updateIndexOf(updates, "radioProtocol"), model + 1);
     QCOMPARE(updateIndexOf(updates, "radioAddress"), model + 2);
     QCOMPARE(updateIndexOf(updates, "radioHardwareVersion"), model + 3);
@@ -5851,6 +5851,7 @@ void TstStationSession::radioIdentityEntriesRoundTrip()
     QCOMPARE(updateIndexOf(updates, "mediaRelayRoutingVersion"), model + 30);
     QCOMPARE(updateIndexOf(updates, "remoteIqVersion"), model + 31);
     QCOMPARE(updateIndexOf(updates, "txModMonitorVersion"), model + 32);
+    QCOMPARE(updateIndexOf(updates, "accessoryTxVersion"), model + 33);
     const StationCapabilities received = StationCapabilities::fromUpdates(updates);
     QCOMPARE(received.mediaTunnelVersion, 1);
     QCOMPARE(received.mediaRelayRoutingVersion, 1);
@@ -5974,7 +5975,8 @@ void TstStationSession::coreSendsRadioIdentityOnlyFromMinorEleven()
                              "txMonitorAudioVersion", "stationFreedvVersion",
                              "mediaReplaceVersion", "controlSwitchVersion", "relayAllowed",
                              "supportBundleVersion", "mediaTunnelVersion",
-                             "mediaRelayRoutingVersion", "remoteIqVersion", "txModMonitorVersion"}) {
+                             "mediaRelayRoutingVersion", "remoteIqVersion", "txModMonitorVersion",
+                             "accessoryTxVersion"}) {
         QCOMPARE(updateIndexOf(older, name), -1);
     }
     // Byte for byte: the minor-11 descriptor without the thirty-three (and the
@@ -5994,7 +5996,8 @@ void TstStationSession::coreSendsRadioIdentityOnlyFromMinorEleven()
                              "txMonitorAudioVersion", "stationFreedvVersion",
                              "mediaReplaceVersion", "controlSwitchVersion", "relayAllowed",
                              "supportBundleVersion", "mediaTunnelVersion",
-                             "mediaRelayRoutingVersion", "remoteIqVersion", "txModMonitorVersion"}) {
+                             "mediaRelayRoutingVersion", "remoteIqVersion", "txModMonitorVersion",
+                             "accessoryTxVersion"}) {
         stripped.removeAt(updateIndexOf(stripped, name));
     }
     QCOMPARE(SessionMessages::encode(SessionMessages::capabilities(stripped)),

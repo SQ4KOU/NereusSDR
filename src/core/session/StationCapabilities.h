@@ -247,6 +247,8 @@ struct StationCapabilities {
     /// setTxInterlockPolicy, setPgxlPowerCap and clearAccessoryFaults
     /// commands. Sent last in the same block.
     int accessoryDataVersion = 0;
+    /// Task 42: transmit-coupled accessory command family, minor 11.
+    int accessoryTxVersion = 0;
     /// R-R3-47 / R-R3-22: 1 means the Core sends its Tuner Genius's own
     /// settings (the tgxl* properties of `accessorySettings`) and takes the
     /// setTgxlName, setTgxlNetwork, saveTgxlSettings and readTgxlSettings
