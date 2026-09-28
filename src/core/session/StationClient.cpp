@@ -651,6 +651,7 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
     // says so and the Core answers with txPermitted and remoteTxVersion.
     m_declaredFeatures.insert(QByteArrayLiteral("remoteTx"), 1);
     m_declaredFeatures.insert(QByteArrayLiteral("settingsHygiene"), 1);
+    m_declaredFeatures.insert(QByteArrayLiteral("coreBuildInfo"), 1);
     m_declaredFeatures.insert(QByteArrayLiteral("miniDisplay"), 1);
     // Each transmit verb goes out as the same command three times (the
     // copies rule); the Core acts on the first and answers every copy.
@@ -1629,6 +1630,7 @@ void StationClient::attachTransport(SessionTransport* transport, const QString& 
     m_lastTelemetrySequence = 0;
     m_lastTelemetrySampleElapsedMs = -1;
     m_capabilities.remoteDisplayBudgetVersion = 0;
+    m_capabilities.coreBuildInfo.reset();
     m_capabilities.displayBudget.reset();
     m_capabilities.displayBudgetReason.reset();
     m_capabilities.remotePs3DisplaySubscribed = false;
@@ -1806,6 +1808,7 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
 
     m_handshakeComplete = false;
     m_authenticated = false;
+    m_capabilities.coreBuildInfo.reset();
     m_signedInWithDeviceKey = false;
     m_enrolledDeviceKey = false;
     m_hygieneValidateId = 0;

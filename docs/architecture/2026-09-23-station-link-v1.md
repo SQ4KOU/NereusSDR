@@ -1494,6 +1494,18 @@ new `capabilities` when only the refusal changes (for example from
 "Transmit is changing hands." to "<holder> has the transmitter."). An older window that reads the flag without
 declaring `remoteTx` therefore never sees it true.
 
+**Core executable identity.** A client at agreed minor 11 may declare
+`coreBuildInfo` 1. After authentication, a Core with a known product version
+appends one optional `coreBuildInfo` utf8 capability after all existing
+entries. Its value is compact JSON with required string `productVersion`
+(1–128 UTF-8 bytes) and string `sourceTag` (0–1024 UTF-8 bytes); the whole
+JSON is at most 4096 bytes, and neither string may contain control
+characters. Clients ignore unknown JSON keys. Invalid, duplicate, or absent
+entries mean the Core's identity is unavailable, without affecting the
+session. An empty source tag means this executable is untagged; it does not
+prove the executable was a release build. These fields identify the Core
+binary, separately from the radio's `firmwareVersion` and settings schema.
+
 ### 6.4 The capabilities message
 
 `capabilities` carries property entries (section 4.1) in the order below.
@@ -1674,6 +1686,7 @@ older window sees only the values it was built for.
 | 80 | `setupDescriptionVersion` | `i64` |
 | 81 | `miniDisplayVersion` | `i64` |
 | 82 | `accessoryTxVersion` | `i64` |
+| 83 | `coreBuildInfo` | `utf8` |
 
 <!-- /surface -->
 

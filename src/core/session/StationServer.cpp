@@ -632,6 +632,7 @@
 #include "core/session/ModMonitorRecord.h"
 
 #include "core/AppSettings.h"
+#include "core/BuildIdentity.h"
 #include "core/BoardCapabilities.h"
 #include "core/DxccColorProvider.h"
 #include "core/HardwareProfile.h"
@@ -641,6 +642,7 @@
 #include "core/session/IStationLink.h"
 #include "core/session/StationTelemetry.h"
 #include <QDateTime>
+#include <QCoreApplication>
 #include <QElapsedTimer>
 #include "core/station/StationRadios.h"
 #include "core/WdspEngine.h"
@@ -9281,6 +9283,13 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
     // iPhone app Task 76: every admitted session has media and telemetry
     // (the topology note). Before any session, what a first one is told.
     const auto self = m_peers.constFind(transport);
+    if (self != m_peers.cend() && self->authenticated
+        && self->agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && peerDeclares(transport, QByteArrayLiteral("coreBuildInfo"), 1)) {
+        const CoreBuildInfo identity{QCoreApplication::applicationVersion(),
+                                     BuildIdentity::buildTag()};
+        if (!identity.toJson().isEmpty()) caps.coreBuildInfo = identity;
+    }
     const bool admitted = transport == nullptr
         || (self != m_peers.cend() && self->authenticated && self->mediaEpoch != 0);
     const bool media = m_mediaEnabled && admitted;

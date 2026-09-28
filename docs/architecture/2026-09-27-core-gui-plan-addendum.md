@@ -1635,9 +1635,17 @@ colours for the same signal.
   provide optional, backward-compatible metadata for connected clients. The
   generated header must stay private to executables to avoid rebuilding the
   shared Core and every test each time Git HEAD changes.
-- Status: source cause confirmed; implementation and remote metadata contract
-  pending. Existing packages passed startup checks but are not accepted as
-  complete source-information evidence.
+- Status: built and verified in this integration. Both executable entry points
+  receive the private generated tag. The daemon's `--build-info` and `--version`
+  return before configuration, settings or profile-lock work; their output
+  matches the generated tag and project version and leaves an isolated home
+  empty. Authenticated, opted-in minor-11 clients receive bounded optional
+  `coreBuildInfo` capabilities; malformed or duplicate metadata is absent,
+  old clients retain their existing contract, and reconnect clears old identity.
+  The app and daemon build and five named suites pass (25.84 s), including
+  Unicode byte bounds, negotiation and replacement. Release-package identity
+  checks and installation remain outstanding; the older packages are not
+  accepted as complete source-information evidence.
 - Plan: truthful Core build provenance and phone About support.
 
 ## How this addendum is kept

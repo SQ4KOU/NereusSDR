@@ -163,6 +163,7 @@
 
 #include <QByteArray>
 #include <QList>
+#include <optional>
 #include <QString>
 
 #include "core/HpsdrModel.h"
@@ -170,6 +171,15 @@
 #include "core/session/media/DisplayBudget.h"
 
 namespace NereusSDR {
+
+/// Optional identity of the Core executable, never radio firmware identity.
+struct CoreBuildInfo {
+    QString productVersion;
+    QString sourceTag;
+
+    QByteArray toJson() const;
+    static std::optional<CoreBuildInfo> fromJson(const QByteArray& json);
+};
 
 struct StationCapabilities {
     // ---- Station identity ----
@@ -344,6 +354,7 @@ struct StationCapabilities {
     int stationRadiosVersion = 0;
     // Task 24: Core-owned settings validation and per-MAC hygiene commands.
     int settingsHygieneVersion = 0;
+    std::optional<CoreBuildInfo> coreBuildInfo;
     /// R-R3-49 / A11 (remote-window parity Task 28): 1 means the Core sends
     /// the transmit analyzer's display, not the receiver's, for a pan on the
     /// transmitting slice while it is keyed, to a media peer that declared

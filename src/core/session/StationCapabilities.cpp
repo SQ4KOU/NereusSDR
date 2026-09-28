@@ -118,10 +118,56 @@
 
 #include "core/BoardCapabilities.h"
 #include <QHostAddress>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonParseError>
 #include <QSet>
 #include <limits>
 
 namespace NereusSDR {
+
+namespace {
+bool validBuildText(const QString& value, qsizetype maxBytes, bool required)
+{
+    if ((required && value.isEmpty()) || value.size() > maxBytes) return false;
+    for (qsizetype index = 0; index < value.size(); ++index) {
+        const QChar character = value.at(index);
+        if (character.category() == QChar::Other_Control) return false;
+        if (character.isHighSurrogate()) {
+            if (index + 1 >= value.size() || !value.at(index + 1).isLowSurrogate()) return false;
+            ++index;
+        } else if (character.isLowSurrogate()) {
+            return false;
+        }
+    }
+    return value.toUtf8().size() <= maxBytes;
+}
+} // namespace
+
+QByteArray CoreBuildInfo::toJson() const
+{
+    if (!validBuildText(productVersion, 128, true) || !validBuildText(sourceTag, 1024, false)) {
+        return {};
+    }
+    const QByteArray json = QJsonDocument(QJsonObject{
+        {QStringLiteral("productVersion"), productVersion},
+        {QStringLiteral("sourceTag"), sourceTag}}).toJson(QJsonDocument::Compact);
+    return json.size() <= 4096 ? json : QByteArray();
+}
+
+std::optional<CoreBuildInfo> CoreBuildInfo::fromJson(const QByteArray& json)
+{
+    if (json.isEmpty() || json.size() > 4096) return std::nullopt;
+    QJsonParseError error;
+    const QJsonDocument document = QJsonDocument::fromJson(json, &error);
+    if (error.error != QJsonParseError::NoError || !document.isObject()) return std::nullopt;
+    const QJsonObject object = document.object();
+    const QJsonValue version = object.value(QStringLiteral("productVersion"));
+    const QJsonValue tag = object.value(QStringLiteral("sourceTag"));
+    if (!version.isString() || !tag.isString()) return std::nullopt;
+    CoreBuildInfo identity{version.toString(), tag.toString()};
+    return identity.toJson().isEmpty() ? std::nullopt : std::optional(identity);
+}
 
 namespace {
 
@@ -295,6 +341,10 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
         }
         updates.append(intEntry("accessoryTxVersion", accessoryTxVersion));
     }
+    if (coreBuildInfo) {
+        const QByteArray json = coreBuildInfo->toJson();
+        if (!json.isEmpty()) updates.append(stringEntry("coreBuildInfo", QString::fromUtf8(json)));
+    }
     return updates;
 }
 
@@ -306,8 +356,17 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
     bool invalidBudget = false;
     int reasonEntries = 0;
     std::optional<DisplayBudgetReason> reason;
+    int buildInfoEntries = 0;
+    std::optional<CoreBuildInfo> buildInfo;
     for (const MirrorUpdate& u : updates) {
-        if (u.name == "displayBudgetReason") {
+        if (u.name == "coreBuildInfo") {
+            ++buildInfoEntries;
+            if (buildInfoEntries == 1 && u.ordinal == 0 && u.kind == MirrorWireKind::Utf8
+                && u.value.typeId() == QMetaType::QString) {
+                const QString text = u.value.toString();
+                if (text.size() <= 4096) buildInfo = CoreBuildInfo::fromJson(text.toUtf8());
+            }
+        } else if (u.name == "displayBudgetReason") {
             // Not one of the five budget fields: an older app ignores it,
             // and a bad reason never costs this app its budget.
             ++reasonEntries;
@@ -631,6 +690,7 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
         caps.remoteDisplayBudgetVersion = 0;
         caps.remotePs3DisplaySubscribed = false;
     }
+    if (buildInfoEntries == 1) caps.coreBuildInfo = buildInfo;
     return caps;
 }
 

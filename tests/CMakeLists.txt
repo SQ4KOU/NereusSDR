@@ -8127,6 +8127,9 @@ nereus_add_test(tst_station_tx_watch_direct EXTRA_LABELS session)
 nereus_add_test(tst_station_tx_watch_relay EXTRA_LABELS session)
 nereus_add_test(tst_station_session
     fakes/LoopbackTransport.cpp)
+nereus_add_test(tst_core_build_identity
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
 # R-R3-49 (parity Task 1): a receive-only Core takes a transmit setting off
 # the air, refuses it on the air and still refuses the keying set; a
 # window's on-the-air state follows the Core. Loopback only, no RF.

@@ -2062,6 +2062,7 @@ endif()
 # asks for it, not a Task 9 concern.
 # --------------------------------------------------------------------------
 add_executable(nereusd src/server_main.cpp)
+target_compile_definitions(nereusd PRIVATE NEREUS_DAEMON_EXECUTABLE=1)
 target_link_libraries(nereusd PRIVATE NereusCore)
 add_dependencies(NereusSDR nereusd)
 if(APPLE)
@@ -2690,14 +2691,16 @@ add_custom_target(nereus_build_tag ALL
     COMMENT "Re-deriving the smoke-build tag"
     VERBATIM)
 add_dependencies(NereusSDR nereus_build_tag)
+add_dependencies(nereusd nereus_build_tag)
 
-# Deliberately PRIVATE to the executable, and deliberately consumed only by
-# src/main.cpp. Every one of the 589 test executables links NereusCore,
+# Deliberately PRIVATE to the two executable targets, consumed only by
+# src/main.cpp and src/server_main.cpp. Every test executable links NereusCore,
 # so a generated header reaching that object library would relink all of them
-# each time HEAD moved. Confined here, a new commit recompiles one small
-# translation unit and relinks one binary. main.cpp hands the value to
-# BuildIdentity, which is what MainWindow reads when it composes the title.
+# each time HEAD moved. Confined here, a new commit recompiles the two small
+# entry-point translation units and relinks those binaries. Each entry point
+# hands its value to BuildIdentity; MainWindow reads it for the GUI title.
 target_include_directories(NereusSDR PRIVATE "${CMAKE_BINARY_DIR}/generated")
+target_include_directories(nereusd PRIVATE "${CMAKE_BINARY_DIR}/generated")
 
 # --------------------------------------------------------------------------
 # Version define + compiler warnings

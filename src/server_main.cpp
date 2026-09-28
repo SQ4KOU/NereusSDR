@@ -128,6 +128,7 @@
 #include "core/CoreInit.h"
 #include "core/LogCategories.h"
 #include "core/RadioConnection.h"
+#include "core/BuildIdentity.h"
 #include "core/daemon/DaemonApp.h"
 #include "core/daemon/DaemonConfig.h"
 #include "core/daemon/StationControlCommands.h"
@@ -143,6 +144,8 @@
 #include <QCommandLineOption>
 #include <QCommandLineParser>
 #include <QCoreApplication>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
@@ -153,6 +156,12 @@
 #include <csignal>
 #include <cstdio>
 #include <memory>
+
+// A few entry-point tests include this file directly. Only the actual
+// nereusd target receives the generated-header include directory.
+#ifdef NEREUS_DAEMON_EXECUTABLE
+#include "NereusBuildTag.h"
+#endif
 
 namespace {
 
@@ -326,6 +335,12 @@ int main(int argc, char* argv[])
 {
     QCoreApplication app(argc, argv);
     QCoreApplication::setApplicationName(QStringLiteral("nereusd"));
+    QCoreApplication::setApplicationVersion(QStringLiteral(NEREUSSDR_VERSION));
+#ifdef NEREUSSDR_BUILD_TAG
+    NereusSDR::BuildIdentity::setBuildTag(QString::fromUtf8(NEREUSSDR_BUILD_TAG));
+#else
+    NereusSDR::BuildIdentity::setBuildTag({});
+#endif
     s_app = &app;
 
     std::signal(SIGTERM, onTerm);
@@ -348,6 +363,10 @@ int main(int argc, char* argv[])
     QCommandLineParser parser;
     parser.setApplicationDescription(QStringLiteral("NereusSDR headless daemon"));
     parser.addHelpOption();
+    parser.addVersionOption();
+    QCommandLineOption buildInfoOpt(QStringLiteral("build-info"),
+        QStringLiteral("Print this Core executable's product version and source tag as JSON."));
+    parser.addOption(buildInfoOpt);
     QCommandLineOption cfgOpt({QStringLiteral("c"), QStringLiteral("config")},
         QStringLiteral("Config file path."), QStringLiteral("path"),
         QStringLiteral("/etc/nereusd.conf"));
@@ -385,6 +404,15 @@ int main(int argc, char* argv[])
         QStringLiteral("With reset: go ahead without asking."));
     parser.addOption(yesOpt);
     parser.process(app);
+    if (parser.isSet(buildInfoOpt)) {
+        const QJsonObject identity{
+            {QStringLiteral("productVersion"), QCoreApplication::applicationVersion()},
+            {QStringLiteral("sourceTag"), NereusSDR::BuildIdentity::buildTag()}};
+        const QByteArray json = QJsonDocument(identity).toJson(QJsonDocument::Compact) + '\n';
+        std::fwrite(json.constData(), 1, static_cast<size_t>(json.size()), stdout);
+        std::fflush(stdout);
+        return 0;
+    }
 
     const QStringList commandWords = parser.positionalArguments();
     if (!commandWords.isEmpty()) {
