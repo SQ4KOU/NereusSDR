@@ -6518,9 +6518,15 @@ review. Requires Task 47, Parts C and F, and Tasks 41, 42 and 71 to 77.
       coordinator/runtime in the current desktop integration. Final saves and
       window/model/MMIO destruction precede profile unlock and background launch;
       failed saves preserve the lock and retry intent. The saved Core radio choice
-      survives reclaim, with same-radio failure recovery. The remaining acceptance
-      work is the full two-process reverse round trip and live device observation;
-      no live radio or JJ window handover was performed.
+      survives reclaim, with same-radio failure recovery. The loopback round trip
+      is built in signed `b22029c58`: GUI owner, real daemon entry point and reopened
+      GUI owner, one identity/profile lock and one automatically reconnecting paired
+      client. Both transitions remain within 15 s; root integration's two rebuilt
+      handover suites pass (7.84 s at load 6.77/4.87/4.80). The fixture uses a logical
+      admitted board and an injected OS command runner; literal GUI main, actual
+      OS service startup and live radio/phone observation remain unverified. Its
+      separate offline-save refusal exposed G-82, now being fixed without losing
+      edits. No live radio or JJ window handover was performed.
 - [ ] **Step 3:** The window as the station device: its own slices, flags and audio, its
       MOX and TUNE through the take rules, and its TCI programs under the holder rule,
       with the hosting-desktop harness.

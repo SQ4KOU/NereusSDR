@@ -1494,6 +1494,48 @@ colours for the same signal.
   `build-r5-linux/watch-acceptance/second-rx` and `second-rx-corrected`.
 - Plan: R5 impaired-network acceptance with simultaneous receive audio.
 
+### G-81: Full phone diagnostics lack radio age, live UDP port and ADC observations
+
+- Evidence: the phone team's full Network Diagnostics audit finds no numeric
+  Core-to-radio connection age, no live radio UDP base/control port, and no
+  measured per-ADC overload status in telemetry versions 1-5. Session sample age
+  starts when a client joins, so cannot stand in for radio uptime. The local
+  diagnostics ADC label is a placeholder; positive-only `adcOverflow` signals
+  cannot establish a measured clear. P2's actual outbound base also differs
+  from a saved RadioInfo port when configured by a test.
+- Ruling basis: JJ approved the phone's full Network Diagnostics scope, recorded
+  in its plan commit `7361316de`; the phone team owns the interface. The lead
+  supplies truthful optional Core observations, with no Core counter-reset RPC.
+- Status: implementation in progress in an isolated lane. Settled version-6
+  contract uses the unreleased minor-11 extension: monotonic model-owned radio
+  age, owner-thread live base port, and bounded status-bit observations for the
+  board's ADCs. Clear requires an explicit zero bit; stale/unobserved status is
+  unavailable. Counts track observed overload transitions since this connection,
+  survive client joins, and reset on radio reconnect. No transmit or attenuation
+  behavior changes. Acceptance includes compatibility, malformed fields, stale
+  replies, reconnect fencing and actual parser bit coverage.
+- Plan: Core support for the phone's approved full diagnostics parity.
+
+### G-82: Refused handover leaves the still-owning Core unreachable
+
+- Evidence: the real-process handover fixture's unadmitted, no-radio variant
+  allowed a paired client to adopt a fallback receiver. G-67 correctly refused
+  release because that ownership edit could not yet be saved. However, release
+  had already closed the station listener and disabled radio recovery. The Core
+  retained its process, model and profile lock, but its clients could not return.
+  Source tracing confirms no resume path; the original failure is preserved.
+- Ruling basis: preserve JJ's unsaved-work rule and G-67's refusal. The lead's
+  fix restores client access and the original radio-recovery behavior after a
+  refusal before model destruction, keeping the same unsaved model and lock.
+  It must never clear dirty flags, discard edits or resume an old transmit key.
+  A failure after model destruction remains closed with an explicit retry path.
+- Status: isolated implementation and a real paired-client regression are in
+  progress. The normal admitted-board round trip is separate: signed `b22029c58`
+  uses three real owner processes, one paired client and one identity. Root
+  integration rebuilt both handover suites and passed them (7.84 s at load
+  6.77/4.87/4.80); it does not cover live hardware or the actual OS service manager.
+- Plan: reliable station ownership and recoverable Core handover.
+
 ## How this addendum is kept
 
 New gaps are appended here as they are found, each with its own `G-` number (next available
