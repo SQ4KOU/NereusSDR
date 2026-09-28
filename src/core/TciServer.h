@@ -83,15 +83,19 @@
 #include <atomic>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "TciClientSession.h"
 #include "core/audio/AudioRingSpsc.h"
 #include "core/session/media/IReceiverPcmSink.h"
+#include "core/session/media/RemoteTciAudioStage.h"
 
 class QWebSocketServer;
 class QWebSocket;
 class QTimer;
+
+class TestTciRemoteWindow;
 
 namespace NereusSDR {
 
@@ -136,7 +140,8 @@ public:
     // the stop reason meaning "this Core cannot send a receiver's audio":
     // an audio_start answered with it is not echoed.
     struct RemoteReceiverAudio {
-        std::function<void(int sliceId, IReceiverPcmSink* sink)> request;
+        std::function<std::shared_ptr<RemoteTciAudioStage>(int sliceId,
+                                                           IReceiverPcmSink* sink)> request;
         std::function<void(int sliceId, IReceiverPcmSink* sink)> release;
         QString unavailableReason;
     };
@@ -238,9 +243,11 @@ public:
     // Test and status hook: whether this server holds a request for the
     // Core's receiver `rx` (at least one app listens to it).
     bool remoteReceiverRequested(int rx) const;
+    std::optional<RemoteTciAudioStage::Diagnostics> remoteAudioDiagnostics(int rx) const;
+    quint64 remoteAudioSocketBackpressureDrops() const { return m_socketBackpressureDrops; }
 
-    // IReceiverPcmSink (remote window). receiverAudioBlock runs on a
-    // receive worker thread: it only copies into the receiver's ring.
+    // IReceiverPcmSink (remote window). The receive worker signals arrival
+    // here; its own stage holds PCM and performs TCI conversion.
     void receiverAudioBlock(int sliceId, const float* interleavedStereo, int frames) override;
     void receiverAudioStopped(int sliceId, const QString& reason) override;
 
@@ -544,6 +551,7 @@ private slots:
     void sendTxChronoFrame(QWebSocket* client);
 
 private:
+    friend class ::TestTciRemoteWindow;
     // Phase 3J-1 closeout Item 9 (2026-05-12): QPointer instead of raw
     // pointer.  TciServer outlives in normal operation, but during
     // MainWindow's child destruction (deleteChildren walk) RadioModel
@@ -562,6 +570,8 @@ private:
     bool m_stationReceiveOnly{false};
     bool m_quietListenAttempts{false};
     QHash<QWebSocket*, std::shared_ptr<TciClientSession>> m_clients;
+    // Only admitted remote audio subscribers appear here (at most eight).
+    QHash<quint64, QPointer<QWebSocket>> m_remoteAudioSockets;
 
     QTimer* m_pingTimer{nullptr};
 
@@ -591,7 +601,7 @@ private:
     // Thetis comment: "per websock spec ping frames are every 20 seconds."
     int m_pingIntervalMs{20000};
 
-    // Phase 16 Task 16.3 (sub-commit c): per-slice RX audio ring buffers.
+    // Phase 16 Task 16.3 (sub-commit c): local per-slice RX audio ring buffers.
     // The audio thread (DSP worker) pushes interleaved stereo F32 samples via
     // onAudioFrameReady() using tryPushCopy (non-blocking).  The 5ms drain
     // timer on the main thread pops bytes and sends TCI binary frames.
@@ -644,6 +654,7 @@ public:
     void setSliceRxGainLinear(int rx, float lin) {
         if (rx >= 0 && rx < kMaxTciRxSlices) {
             m_sliceRxGainLinear[rx].store(lin, std::memory_order_release);
+            if (m_remoteWindow) { refreshRemoteAudioGain(rx); }
         }
     }
     float sliceRxPeakAbs(int rx) const {
@@ -813,6 +824,20 @@ private:
     void updateRemoteIqDemand(int receiver);
     // A request is held with the Core for this receiver.
     std::array<bool, kMaxTciRxSlices> m_remoteRequested{};
+    std::array<std::shared_ptr<RemoteTciAudioStage>, kMaxTciRxSlices> m_remoteStage;
+    std::array<std::atomic<bool>, kMaxTciRxSlices> m_remotePcmArrived{};
+    quint64 m_nextRemoteAudioToken{0};
+    int m_nextRemoteDrainReceiver{0};
+    quint64 m_socketBackpressureDrops{0};
+    std::array<quint64, kMaxTciRxSlices> m_lastRemoteMailboxEvictions{};
+    std::array<quint64, kMaxTciRxSlices> m_lastRemoteHistorySkips{};
+    quint64 m_remoteSaturationDrops{0};
+    int m_remoteSaturationQuietTicks{0};
+    bool m_remoteSaturationNotified{false};
+    void publishRemoteAudioConfig(int receiver);
+    void refreshRemoteAudioGain(int receiver);
+    void drainRemoteAudio(
+        const std::function<qint64(QWebSocket*, const QByteArray&)>& send = {});
     // The Core cannot send this receiver's audio (an older Core); set from
     // receiverAudioStopped, cleared when the request is released.
     std::array<bool, kMaxTciRxSlices> m_remoteUnavailable{};

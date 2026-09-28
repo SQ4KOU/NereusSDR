@@ -114,6 +114,12 @@ struct TciClientSession {
 
     // From Thetis TCIServer.cs:767 [v2.10.3.13] — m_audioStreamEnabled HashSet<int>
     QSet<int> audioStreamEnabled;
+    // Remote-window audio identity. A new token is assigned after the last
+    // subscription ends; each format change advances the revision.
+    quint64 remoteAudioToken{0};
+    QHash<int, quint64> remoteAudioRevision;
+    QHash<int, quint64> remoteAudioLastSequence;
+    QHash<int, quint64> remoteAudioLastGeneration;
 
     // Phase 16 Task 16.3 (sub-commit b): per-slice WDSP RESAMPLEF instance.
     // Created lazily on audio_start, destroyed on audio_stop + disconnect.
@@ -131,10 +137,9 @@ struct TciClientSession {
     // From Thetis TCIServer.cs:702-708 [v2.10.3.15]: TCIRxAudioResamplerState
     // holds a LeftResampler and a RightResampler per receiver.
     //
-    // R-R3-39: the pair is a TciRxAudioResampler shared with the receive
-    // lane's jobs. The lane makes, runs and destroys its resamplers (at once
-    // when the model has no lane); this map only says which receivers have
-    // one.
+    // R-R3-39: local TCI keeps the pair on the receive lane. A remote
+    // window instead keeps it in RemoteTciAudioStage::Run on the receiver
+    // worker; this map is empty there.
     QHash<int, std::shared_ptr<TciRxAudioResampler>> audioResamplers;
 
     // R-R3-39: receive audio blocks of this client still on the receive lane

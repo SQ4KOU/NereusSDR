@@ -1,6 +1,7 @@
 #pragma once
 // no-port-check: NereusSDR-original remote audio lifecycle and worker wiring.
 #include "core/session/media/PcmAudioCodec.h"
+#include "core/session/media/IRemotePcmWorkerStage.h"
 #include <QObject>
 #include <QByteArray>
 #include <functional>
@@ -236,6 +237,7 @@ public:
     /// stream in place, never a pause and a burst.
     struct PcmSinkMode {
         PcmSink sink;
+        std::shared_ptr<IRemotePcmWorkerStage> stage;
     };
 
     /// `clock` (R-R3-35) stamps arrivals, playout and release times. Empty:

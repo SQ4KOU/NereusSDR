@@ -74,10 +74,14 @@
 #include "core/MicProfileManager.h"
 #include "core/TciServer.h"
 #include "core/TciVolume.h"
+#include "core/WdspThreadCheck.h"
 #include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
 #include "core/session/media/DaemonMediaController.h"
 #include "core/session/media/IReceiverPcmSink.h"
+#include "core/session/media/RemoteTciAudioStage.h"
+#include "core/session/media/RemoteAudioReceiver.h"
+#include "core/session/media/OpusAudioCodec.h"
 #include "fakes/RemoteAudioSessionHarness.h"
 #include "gui/OperatorReasonText.h"
 #include "gui/RemoteAudioStatus.h"
@@ -96,10 +100,22 @@
 #include <QWebSocket>
 
 #include <cmath>
+#include <array>
 #include <cstring>
+#include <condition_variable>
+#include <deque>
+#include <future>
+#include <mutex>
+#include <thread>
 #include <vector>
 
 using namespace NereusSDR;
+
+extern "C" {
+void* create_resampleFV(int inRate, int outRate);
+void xresampleFV(float* input, float* output, int frames, int* outputFrames, void* handle);
+void destroy_resampleFV(void* handle);
+}
 
 namespace {
 
@@ -163,9 +179,73 @@ int frameCount(const RxAudio& audio)
 // what the server asks for and lets the test deliver blocks as a receive
 // worker would.
 struct FakeReceiverSource {
+    struct WorkerSink final : IReceiverPcmSink {
+        IReceiverPcmSink* downstream;
+        std::shared_ptr<RemoteTciAudioStage> stage;
+        std::mutex mutex;
+        std::condition_variable wake;
+        std::deque<std::vector<float>> incoming;
+        bool stop = false;
+        std::thread worker;
+
+        WorkerSink(IReceiverPcmSink* sink, int receiver)
+            : downstream(sink), stage(std::make_shared<RemoteTciAudioStage>(receiver))
+        {
+            worker = std::thread([this] {
+                auto run = stage->createRun();
+                while (true) {
+                    std::vector<float> pcm;
+                    {
+                        std::unique_lock<std::mutex> lock(mutex);
+                        if (!run->hasRunnableWork()) {
+                            wake.wait_for(lock, std::chrono::milliseconds(2), [this] {
+                                return stop || !incoming.empty();
+                            });
+                        }
+                        if (stop) { break; }
+                        if (!incoming.empty()) {
+                            pcm = std::move(incoming.front());
+                            incoming.pop_front();
+                        }
+                    }
+                    if (!pcm.empty()) { run->appendPcm(pcm.data(), int(pcm.size() / 2)); }
+                    run->reconcile();
+                    run->serviceUntil(std::chrono::steady_clock::now()
+                                      + std::chrono::microseconds(1800), 32);
+                }
+            });
+        }
+        ~WorkerSink() override
+        {
+            {
+                std::lock_guard<std::mutex> lock(mutex);
+                stop = true;
+            }
+            wake.notify_one();
+            worker.join();
+        }
+        void receiverAudioBlock(int, const float* pcm, int frames) override
+        {
+            std::vector<float> copy(pcm, pcm + 2 * frames);
+            {
+                std::lock_guard<std::mutex> lock(mutex);
+                incoming.push_back(std::move(copy));
+            }
+            wake.notify_one();
+            // The real receiver calls its fanout before append; this fake
+            // gives the server the same notice-clearing callback.
+            downstream->receiverAudioBlock(stageReceiver, pcm, frames);
+        }
+        void receiverAudioStopped(int sliceId, const QString& reason) override
+        {
+            downstream->receiverAudioStopped(sliceId, reason);
+        }
+        int stageReceiver = -1;
+    };
     QList<int> requests;
     QList<int> releases;
     QHash<int, IReceiverPcmSink*> sinks;
+    std::vector<std::unique_ptr<WorkerSink>> workers;
     // When set, a request is answered at once with this stop reason, the
     // way RemoteMediaController answers for a Core without receiver streams.
     QString answerRequestsWith;
@@ -175,14 +255,20 @@ struct FakeReceiverSource {
         TciServer::RemoteReceiverAudio audio;
         audio.request = [this](int sliceId, IReceiverPcmSink* sink) {
             requests << sliceId;
-            sinks.insert(sliceId, sink);
+            auto worker = std::make_unique<WorkerSink>(sink, sliceId);
+            worker->stageReceiver = sliceId;
+            const auto stage = worker->stage;
+            sinks.insert(sliceId, worker.get());
+            workers.push_back(std::move(worker));
             if (!answerRequestsWith.isEmpty()) {
                 sink->receiverAudioStopped(sliceId, answerRequestsWith);
             }
+            return stage;
         };
         audio.release = [this](int sliceId, IReceiverPcmSink* sink) {
             releases << sliceId;
-            if (sinks.value(sliceId) == sink) { sinks.remove(sliceId); }
+            auto* worker = static_cast<WorkerSink*>(sinks.value(sliceId));
+            if (worker && worker->downstream == sink) { sinks.remove(sliceId); }
         };
         audio.unavailableReason =
             QString::fromLatin1(RemoteMediaController::kReceiverAudioUnavailableReason);
@@ -205,6 +291,7 @@ struct FakeReceiverSource {
                 pcm[size_t(2 * i + 1)] = -ramp(firstFrame + sent + i);
             }
             sink->receiverAudioBlock(sliceId, pcm.data(), n);
+            QTest::qWait(10);
         }
     }
 };
@@ -256,7 +343,8 @@ void wire(TciServer& tci, RemoteMediaController& media)
     const QPointer<RemoteMediaController> guarded(&media);
     TciServer::RemoteReceiverAudio source;
     source.request = [guarded](int sliceId, IReceiverPcmSink* sink) {
-        if (guarded) { guarded->requestReceiverAudio(sliceId, sink); }
+        return guarded ? guarded->requestReceiverAudio(sliceId, sink)
+                       : std::shared_ptr<RemoteTciAudioStage>{};
     };
     source.release = [guarded](int sliceId, IReceiverPcmSink* sink) {
         if (guarded) { guarded->releaseReceiverAudio(sliceId, sink); }
@@ -331,6 +419,411 @@ class TestTciRemoteWindow : public QObject {
     Q_OBJECT
 
 private slots:
+    void remoteHistoryOverflowSeparatesResamplerRecreationCost()
+    {
+        auto stage = std::make_shared<RemoteTciAudioStage>(0);
+        std::vector<RemoteTciAudioStage::ClientConfig> clients;
+        for (quint64 token = 1; token <= 8; ++token) {
+            clients.push_back({token, 1, 384000, 2, 3, 2048, 1.0f});
+        }
+        stage->publish(std::move(clients));
+        std::vector<float> pcm(std::size_t(RemoteTciAudioStage::kHistoryFrames + 192) * 2,
+                               0.125f);
+        std::thread worker([&] {
+            auto run = stage->createRun();
+            run->reconcile();
+            run->appendPcm(pcm.data(), int(pcm.size() / 2));
+            run->serviceUntil(std::chrono::steady_clock::now() + std::chrono::seconds(1),
+                              32);
+        });
+        worker.join();
+        const auto metrics = stage->diagnostics();
+        QCOMPARE(metrics.historySkippedFrames, quint64{8 * 192});
+        QCOMPARE(metrics.resamplerRecreates, quint64{8});
+        QVERIFY(metrics.resamplerRecreateWallNs > 0);
+        QVERIFY(metrics.resamplerRecreateCpuNs > 0);
+        QVERIFY(metrics.maxQuantumWallNs >= metrics.maxResamplerRecreateWallNs);
+        QVERIFY(metrics.serviceWallNs >= metrics.resamplerRecreateWallNs);
+        QCOMPARE(metrics.liveWdspPairs, 0);
+        qInfo().nospace() << "Overflow reset eight pairs: wall="
+                          << metrics.resamplerRecreateWallNs << " ns CPU="
+                          << metrics.resamplerRecreateCpuNs << " ns max reset="
+                          << metrics.maxResamplerRecreateWallNs << " ns max quantum="
+                          << metrics.maxQuantumWallNs << " ns";
+    }
+
+    void remoteDrainBoundsRejectedFramesAndSurvivesSynchronousRetirement()
+    {
+        RadioModel remote(RadioModel::Role::Remote);
+        FakeReceiverSource core;
+        auto tci = std::make_unique<TciServer>(&remote);
+        tci->setRemoteReceiverAudio(core.source());
+        QVERIFY(tci->start(0));
+        QWebSocket first;
+        QWebSocket second;
+        QSignalSpy firstReplies(&first, &QWebSocket::textMessageReceived);
+        QSignalSpy secondReplies(&second, &QWebSocket::textMessageReceived);
+        QVERIFY(connectClient(first, tci->port()));
+        QVERIFY(connectClient(second, tci->port()));
+        for (QWebSocket* socket : {&first, &second}) {
+            socket->sendTextMessage(QStringLiteral("audio_stream_samples:100;"));
+            socket->sendTextMessage(QStringLiteral("audio_start:0;"));
+        }
+        QTRY_VERIFY_WITH_TIMEOUT(
+            texts(firstReplies).contains(QStringLiteral("audio_start:0;")), 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(
+            texts(secondReplies).contains(QStringLiteral("audio_start:0;")), 3000);
+        tci->m_drainTimer->stop();
+        const auto stage = core.workers.front()->stage;
+        core.deliverRamp(0, 0, 300);
+        // Three blocks per client leave two queued and one evicted each.
+        QTRY_COMPARE_WITH_TIMEOUT(stage->diagnostics().mailboxEvictions, quint64{2}, 3000);
+        int sendCalls = 0;
+        tci->drainRemoteAudio([&](QWebSocket*, const QByteArray&) -> qint64 {
+            ++sendCalls;
+            return -1;  // sustained send refusal must still consume the tick budget
+        });
+        QCOMPARE(sendCalls, 2);
+        tci->drainRemoteAudio([&](QWebSocket*, const QByteArray&) -> qint64 {
+            ++sendCalls;
+            tci.reset();  // a synchronous send callback retires the server itself
+            return -1;
+        });
+        QCOMPARE(sendCalls, 3);
+        QVERIFY(!tci);
+        QCOMPARE(stage->diagnostics().liveWdspPairs, 0);
+    }
+
+    void remoteReceiverRevisionsAreIndependent()
+    {
+        RadioModel remote(RadioModel::Role::Remote);
+        TciServer tci(&remote);
+        FakeReceiverSource core;
+        tci.setRemoteReceiverAudio(core.source());
+        QVERIFY(tci.start(0));
+        QWebSocket app;
+        QSignalSpy binary(&app, &QWebSocket::binaryMessageReceived);
+        QSignalSpy replies(&app, &QWebSocket::textMessageReceived);
+        QVERIFY(connectClient(app, tci.port()));
+        app.sendTextMessage(QStringLiteral("audio_stream_samples:100;"));
+        app.sendTextMessage(QStringLiteral("audio_start:0;"));
+        QTRY_VERIFY_WITH_TIMEOUT(tci.remoteReceiverRequested(0), 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(texts(replies).contains(QStringLiteral("audio_start:0;")),
+                                 3000);
+        core.deliverRamp(0, 0, 100);
+        QTRY_COMPARE_WITH_TIMEOUT(rxAudio(binary, 0).blocks, 1, 3000);
+
+        app.sendTextMessage(QStringLiteral("audio_start:1;"));
+        QTRY_VERIFY_WITH_TIMEOUT(tci.remoteReceiverRequested(1), 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(texts(replies).contains(QStringLiteral("audio_start:1;")),
+                                 3000);
+        core.deliverRamp(0, 100, 100);
+        QTRY_COMPARE_WITH_TIMEOUT(rxAudio(binary, 0).blocks, 2, 3000);
+
+        tci.setSliceRxGainLinear(1, 0.5f);
+        core.deliverRamp(0, 200, 100);
+        QTRY_COMPARE_WITH_TIMEOUT(rxAudio(binary, 0).blocks, 3, 3000);
+
+        app.sendTextMessage(QStringLiteral("audio_stop:1;"));
+        QTRY_VERIFY_WITH_TIMEOUT(texts(replies).contains(QStringLiteral("audio_stop:1;")),
+                                 3000);
+        core.deliverRamp(0, 300, 100);
+        QTRY_COMPARE_WITH_TIMEOUT(rxAudio(binary, 0).blocks, 4, 3000);
+
+        tci.setSliceRxGainLinear(0, 0.5f);
+        QTest::qWait(30);  // let the worker retire the old receiver-0 revision
+        core.deliverRamp(0, 400, 100);
+        QTRY_COMPARE_WITH_TIMEOUT(rxAudio(binary, 0).blocks, 5, 3000);
+        QCOMPARE(rxAudio(binary, 0).samples.at(800), FakeReceiverSource::ramp(400) * 0.5f);
+        app.close();
+        tci.stop();
+    }
+
+    void remoteFormatAndBlockChangesRetirePreviousOutput()
+    {
+        RadioModel remote(RadioModel::Role::Remote);
+        TciServer tci(&remote);
+        FakeReceiverSource core;
+        tci.setRemoteReceiverAudio(core.source());
+        QVERIFY(tci.start(0));
+        QWebSocket app;
+        QSignalSpy binary(&app, &QWebSocket::binaryMessageReceived);
+        QVERIFY(connectClient(app, tci.port()));
+        for (const QString& command : {
+                 QStringLiteral("audio_samplerate:8000;"),
+                 QStringLiteral("audio_stream_channels:1;"),
+                 QStringLiteral("audio_stream_sample_type:int16;"),
+                 QStringLiteral("audio_stream_samples:100;"),
+                 QStringLiteral("audio_start:0;")}) { app.sendTextMessage(command); }
+        QTRY_VERIFY_WITH_TIMEOUT(tci.remoteReceiverRequested(0), 3000);
+        core.deliverRamp(0, 0, 100);
+        QTRY_VERIFY_WITH_TIMEOUT(binary.count() >= 1, 3000);
+        QByteArray frame = binary.constLast().at(0).toByteArray();
+        QCOMPARE(readLe32(frame, 4), 8000u);
+        QCOMPARE(readLe32(frame, 8), 0u);
+        QCOMPARE(readLe32(frame, 28), 1u);
+        binary.clear();
+
+        for (const QString& command : {
+                 QStringLiteral("audio_samplerate:384000;"),
+                 QStringLiteral("audio_stream_channels:2;"),
+                 QStringLiteral("audio_stream_sample_type:int24;"),
+                 QStringLiteral("audio_stream_samples:2048;")}) { app.sendTextMessage(command); }
+        QTest::qWait(30);
+        core.deliverRamp(0, 100, 2048);
+        QTRY_VERIFY_WITH_TIMEOUT(binary.count() >= 1, 3000);
+        frame = binary.constLast().at(0).toByteArray();
+        QCOMPARE(readLe32(frame, 4), 384000u);
+        QCOMPARE(readLe32(frame, 8), 1u);
+        QCOMPARE(readLe32(frame, 28), 2u);
+        QCOMPARE(readLe32(frame, 20), 32768u);
+        binary.clear();
+
+        for (const QString& command : {
+                 QStringLiteral("audio_samplerate:48000;"),
+                 QStringLiteral("audio_stream_sample_type:float32;"),
+                 QStringLiteral("audio_stream_samples:100;")}) { app.sendTextMessage(command); }
+        QTest::qWait(30);
+        core.deliverRamp(0, 2148, 100);
+        QTRY_VERIFY_WITH_TIMEOUT(binary.count() >= 1, 3000);
+        frame = binary.constLast().at(0).toByteArray();
+        QCOMPARE(readLe32(frame, 4), 48000u);
+        QCOMPARE(readLe32(frame, 8), 3u);
+        QCOMPARE(readLe32(frame, 20), 200u);
+        QCOMPARE(readLe32(frame, 28), 2u);
+        app.close();
+        tci.stop();
+    }
+
+    void remoteRetirementDropsQueuedAndInFlightOldRevisions()
+    {
+        auto stage = std::make_shared<RemoteTciAudioStage>(0);
+        stage->publish({{1, 1, 8000, 2, 3, 100, 1.0f}});
+        std::vector<float> pcm(200, 0.2f);
+        std::promise<void> oldBlockReady;
+        std::promise<void> resume;
+        auto resumeFuture = resume.get_future();
+        std::thread worker([&] {
+            auto run = stage->createRun();
+            run->reconcile();
+            run->appendPcm(pcm.data(), 100);
+            run->reconcile();
+            run->serviceUntil(std::chrono::steady_clock::now()
+                              + std::chrono::seconds(1), 32);
+            run->appendPcm(pcm.data(), 100);
+            oldBlockReady.set_value();
+            resumeFuture.wait();
+            // A result completed from the old snapshot after publication
+            // is rejected by the mailbox's generation/revision check.
+            run->serviceUntil(std::chrono::steady_clock::now()
+                              + std::chrono::seconds(1), 32);
+            run->reconcile();
+            run->appendPcm(pcm.data(), 100);
+            run->reconcile();
+            run->serviceUntil(std::chrono::steady_clock::now()
+                              + std::chrono::seconds(1), 32);
+        });
+        oldBlockReady.get_future().wait();
+        stage->publish({{1, 2, 8000, 2, 3, 100, 1.0f}});
+        RemoteTciAudioStage::Result result;
+        QVERIFY(!stage->popNext(&result));
+        resume.set_value();
+        worker.join();
+        QVERIFY(stage->popNext(&result));
+        QCOMPARE(result.revision, quint64{2});
+        QCOMPARE(result.sequence, quint64{1});
+        QVERIFY(!stage->popNext(&result));
+        QCOMPARE(stage->diagnostics().liveWdspPairs, 0);
+        stage->invalidate();
+        QVERIFY(!stage->popNext(&result));
+    }
+
+    void remoteWorkerRunFinalizesAfterDecoderFailure()
+    {
+        OpusAudioEncoder encoder;
+        const QVector<float> pcm(OpusAudioCodecConfig::kFrameSamples * 2, 0.1f);
+        const auto encoded = encoder.encode(pcm, 0, 0, 987);
+        QCOMPARE(encoded.status, OpusAudioCodecStatus::Accepted);
+        // This retains a valid RTP/Opus packet header and duration, but the
+        // two-byte payload fails libopus decode after jitter release.
+        const QByteArray malformed = encoded.packet.left(14);
+        QCOMPARE(inspectOpusRtp(malformed, 987).status,
+                 OpusAudioCodecStatus::Accepted);
+        OpusAudioDecoder check;
+        QCOMPARE(check.decodeRtp(malformed, 987).status,
+                 OpusAudioCodecStatus::DecodeFailed);
+
+        auto stage = std::make_shared<RemoteTciAudioStage>(0);
+        stage->publish({{1, 1, 384000, 2, 3, 100, 1.0f}});
+        RemoteAudioReceiver receiver(RemoteAudioReceiver::PcmSinkMode{
+            [](const float*, int) {}, stage});
+        QSignalSpy failed(&receiver, &RemoteAudioReceiver::restartRequested);
+        WdspThreadCheck::install(QThread::currentThread());
+        QVERIFY(receiver.start(987, 0, RemoteAudioProfile::Opus));
+        QTRY_COMPARE_WITH_TIMEOUT(stage->diagnostics().liveWdspPairs, 1, 3000);
+        receiver.submit(malformed);
+        QTRY_COMPARE_WITH_TIMEOUT(failed.count(), 1, 3000);
+        QCOMPARE(failed.first().at(1).value<RemoteAudioReceiver::Fault>(),
+                 RemoteAudioReceiver::Fault::DecodeFailed);
+        QTRY_COMPARE_WITH_TIMEOUT(stage->diagnostics().liveWdspPairs, 0, 3000);
+        receiver.stop();
+        QCOMPARE(WdspThreadCheck::eventLoopEntries(), quint64{0});
+        WdspThreadCheck::uninstall();
+    }
+
+    void remoteMailboxesStayWithinTwoFramesForEightClientsOnBothReceivers()
+    {
+        std::array<std::shared_ptr<RemoteTciAudioStage>, 2> stages{
+            std::make_shared<RemoteTciAudioStage>(0),
+            std::make_shared<RemoteTciAudioStage>(1)};
+        std::vector<RemoteTciAudioStage::ClientConfig> clients;
+        for (quint64 token = 1; token <= 8; ++token) {
+            clients.push_back({token, 1, 384000, 2, 3, 2048, 1.0f});
+        }
+        for (const auto& stage : stages) { stage->publish(clients); }
+        std::vector<float> pcm(4 * 2048 * 2, 0.125f);
+        std::array<std::thread, 2> workers;
+        for (int rx = 0; rx < 2; ++rx) {
+            workers[rx] = std::thread([&, rx] {
+                auto run = stages[rx]->createRun();
+                run->reconcile();
+                run->appendPcm(pcm.data(), 4 * 2048);
+                while (run->hasRunnableWork()) {
+                    run->serviceUntil(std::chrono::steady_clock::now()
+                                      + std::chrono::microseconds(1800), 32);
+                }
+            });
+        }
+        for (auto& worker : workers) { worker.join(); }
+        quint64 totalBytes = 0;
+        for (const auto& stage : stages) {
+            QCOMPARE(stage->diagnostics().mailboxEvictions, quint64{16});
+            QCOMPARE(stage->diagnostics().liveWdspPairs, 0);
+            QCOMPARE(stage->diagnostics().historySkippedFrames, quint64{0});
+            RemoteTciAudioStage::Result result;
+            int frames = 0;
+            quint64 receiverBytes = 0;
+            while (stage->popNext(&result)) {
+                ++frames;
+                receiverBytes += quint64(result.bytes.size());
+            }
+            QCOMPARE(frames, 16);
+            QVERIFY(receiverBytes <= 2'098'176);
+            totalBytes += receiverBytes;
+        }
+        QVERIFY(totalBytes <= 4'196'352);
+    }
+
+    void ninthRemoteAudioClientIsRefusedUntilAPlaceIsReleased()
+    {
+        RadioModel remote(RadioModel::Role::Remote);
+        TciServer tci(&remote);
+        FakeReceiverSource core;
+        tci.setRemoteReceiverAudio(core.source());
+        QSignalSpy notices(&tci, &TciServer::operatorNotice);
+        QVERIFY(tci.start(0));
+        std::vector<std::unique_ptr<QWebSocket>> sockets;
+        std::vector<std::unique_ptr<QSignalSpy>> replies;
+        for (int i = 0; i < 9; ++i) {
+            auto socket = std::make_unique<QWebSocket>();
+            auto reply = std::make_unique<QSignalSpy>(socket.get(),
+                                                      &QWebSocket::textMessageReceived);
+            QVERIFY(connectClient(*socket, tci.port()));
+            socket->sendTextMessage(QStringLiteral("audio_start:0;"));
+            sockets.push_back(std::move(socket));
+            replies.push_back(std::move(reply));
+        }
+        for (int i = 0; i < 8; ++i) {
+            QTRY_VERIFY_WITH_TIMEOUT(
+                texts(*replies[std::size_t(i)]).contains(QStringLiteral("audio_start:0;")), 3000);
+        }
+        QTRY_VERIFY_WITH_TIMEOUT(notices.count() >= 1, 3000);
+        QVERIFY(!texts(*replies[8]).contains(QStringLiteral("audio_start:0;")));
+        QVERIFY(notices.constLast().at(1).toString().contains(QStringLiteral("eight clients")));
+        sockets[0]->sendTextMessage(QStringLiteral("audio_stop:0;"));
+        QTRY_VERIFY_WITH_TIMEOUT(
+            texts(*replies[0]).contains(QStringLiteral("audio_stop:0;")), 3000);
+        sockets[8]->sendTextMessage(QStringLiteral("audio_start:0;"));
+        QTRY_VERIFY_WITH_TIMEOUT(
+            texts(*replies[8]).contains(QStringLiteral("audio_start:0;")), 3000);
+        tci.stop();
+    }
+
+    void remoteWorkerStageMatchesWholeBlockWdsp()
+    {
+        WdspThreadCheck::install(QThread::currentThread());
+        for (int rate : {8000, 48000, 384000}) {
+            for (int blockFrames : {100, 2048}) {
+                for (int channels : {1, 2}) {
+                    for (int type = 0; type <= 3; ++type) {
+                        auto stage = std::make_shared<RemoteTciAudioStage>(0);
+                        constexpr float kGain = 0.7f;
+                        stage->publish({{1, 1, rate, channels, type, blockFrames, kGain}});
+                        std::vector<float> pcm(std::size_t(blockFrames) * 2);
+                        for (int i = 0; i < blockFrames; ++i) {
+                            pcm[std::size_t(2 * i)] = float(0.25 * std::sin(i * 0.017));
+                            pcm[std::size_t(2 * i + 1)] = float(0.18 * std::cos(i * 0.029));
+                        }
+                        QByteArray actual;
+                        QByteArray expected;
+                        std::thread worker([&] {
+                            auto run = stage->createRun();
+                            run->reconcile();
+                            run->appendPcm(pcm.data(), blockFrames);
+                            while (run->hasRunnableWork()) {
+                                run->serviceUntil(std::chrono::steady_clock::now()
+                                                  + std::chrono::seconds(1), 32);
+                            }
+                            RemoteTciAudioStage::Result result;
+                            if (stage->popNext(&result)) { actual = std::move(result.bytes); }
+                            run.reset();
+
+                            std::vector<float> left(static_cast<std::size_t>(blockFrames), 0.0f);
+                            std::vector<float> right(static_cast<std::size_t>(blockFrames), 0.0f);
+                            for (int i = 0; i < blockFrames; ++i) {
+                                left[std::size_t(i)] = pcm[std::size_t(2 * i)] * kGain;
+                                right[std::size_t(i)] = pcm[std::size_t(2 * i + 1)] * kGain;
+                            }
+                            std::vector<float> output;
+                            if (rate == 48000) {
+                                for (int i = 0; i < blockFrames; ++i) {
+                                    output.push_back(left[std::size_t(i)]);
+                                    if (channels == 2) { output.push_back(right[std::size_t(i)]); }
+                                }
+                            } else {
+                                void* l = create_resampleFV(48000, rate);
+                                void* r = create_resampleFV(48000, rate);
+                                std::vector<float> outL(std::size_t(blockFrames) * 8);
+                                std::vector<float> outR(std::size_t(blockFrames) * 8);
+                                int nl = 0, nr = 0;
+                                xresampleFV(left.data(), outL.data(), blockFrames, &nl, l);
+                                if (channels == 2) {
+                                    xresampleFV(right.data(), outR.data(), blockFrames, &nr, r);
+                                }
+                                const int count = channels == 2 ? std::min(nl, nr) : nl;
+                                for (int i = 0; i < count; ++i) {
+                                    output.push_back(outL[std::size_t(i)]);
+                                    if (channels == 2) { output.push_back(outR[std::size_t(i)]); }
+                                }
+                                destroy_resampleFV(l);
+                                destroy_resampleFV(r);
+                            }
+                            expected = TciBinaryFrame::buildStreamPayload(
+                                0, rate, type, int(output.size()),
+                                int(TciStreamType::RxAudioStream), channels, output.data());
+                        });
+                        worker.join();
+                        QVERIFY2(actual == expected,
+                            qPrintable(QStringLiteral("rate=%1 frames=%2 channels=%3 type=%4")
+                                .arg(rate).arg(blockFrames).arg(channels).arg(type)));
+                        QCOMPARE(stage->diagnostics().liveWdspPairs, 0);
+                    }
+                }
+            }
+        }
+        QCOMPARE(WdspThreadCheck::eventLoopEntries(), quint64{0});
+        WdspThreadCheck::uninstall();
+    }
     void initTestCase()
     {
         const QString profile = QStringLiteral("tci-remote-window-%1")
