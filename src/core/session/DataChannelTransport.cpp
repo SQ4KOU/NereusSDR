@@ -917,7 +917,7 @@ bool DataChannelTransport::sendBinary(const QByteArray& message)
 
 qint64 DataChannelTransport::backlogBytes() const
 {
-    if (m_options.purpose != Purpose::TxWatch || !m_bridge) {
+    if (!m_bridge) {
         return 0;
     }
     std::shared_ptr<rtc::DataChannel> channel;

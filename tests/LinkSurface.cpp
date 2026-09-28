@@ -124,6 +124,8 @@
 #include "core/accessories/AlexAntennaFacade.h"
 #include "core/dsp/DspAssetService.h"
 #include "core/security/DeviceStore.h"
+#include "core/security/ClientDeviceIdentity.h"
+#include "core/security/DeviceAuthenticator.h"
 #include "core/session/DataChannelTransport.h"
 #include "core/session/PathRacer.h"
 #include "core/session/RendezvousDialer.h"
@@ -473,12 +475,51 @@ std::optional<QList<QByteArray>> liveSessionWire(
     // station end once it accepts it.
     auto clientEnd = std::make_unique<LoopbackTransport>(QStringLiteral("link-surface-client"));
     StationServer server(model.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
+    const ClientDeviceIdentity device = ClientDeviceIdentity::loadOrCreate(dir.path());
+    if (!device.isValid()) {
+        *error = QStringLiteral("no paired client key");
+        return std::nullopt;
+    }
+    PairedDevice record;
+    record.id = device.fingerprint();
+    record.publicKeySpki = device.publicKeySpki();
+    record.name = QStringLiteral("link-surface");
+    record.kind = QStringLiteral("computer");
+    if (!server.deviceStore()->add(record)) {
+        *error = QStringLiteral("could not enrol link-surface client");
+        return std::nullopt;
+    }
     if (configure) {
         configure(server);
     }
     auto* stationEnd = new LoopbackTransport(QStringLiteral("link-surface-station"), &server);
     stationEnd->linkTo(clientEnd.get());
     server.acceptTransport(stationEnd);
+    const QDeadlineTimer helloDeadline(5000);
+    while (clientEnd->received().isEmpty() && !helloDeadline.hasExpired()) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+    }
+    if (clientEnd->received().isEmpty()) {
+        *error = QStringLiteral("station hello did not arrive");
+        return std::nullopt;
+    }
+    SessionMessage hello;
+    if (!SessionMessages::decode(clientEnd->received().first(), &hello)
+        || hello.kind != SessionMessageKind::Hello) {
+        *error = QStringLiteral("station hello was invalid");
+        return std::nullopt;
+    }
+    QString fingerprint = server.certificateFingerprint();
+    fingerprint.remove(QLatin1Char(':'));
+    const QByteArray certificate = QByteArray::fromHex(fingerprint.toLatin1());
+    const QByteArray challenge = StationIdentity::fromBase64Url(hello.challenge);
+    const QByteArray signature = device.sign(DeviceAuthenticator::transcript(
+        challenge, certificate, server.stationIdentity().publicKeySpki(), device.publicKeySpki()));
+    const SessionDeviceBlock block{
+        StationIdentity::toBase64Url(device.fingerprint()),
+        StationIdentity::toBase64Url(device.publicKeySpki()),
+        QStringLiteral("link-surface"), QStringLiteral("computer"),
+        StationIdentity::toBase64Url(signature), {}};
     // Declaring deviceAuth, as a device that signs in by key does, so the
     // `devices` object (iPhone app Task 13) is among what the Core sends;
     // and sessionHolder (iPhone app Task 71), so `connectedDevices` and
@@ -487,8 +528,9 @@ std::optional<QList<QByteArray>> liveSessionWire(
     clientEnd->sendText(SessionMessages::encode(SessionMessages::hello(
         kSessionProtocolMajor, kSessionProtocolMinor, 0, QStringLiteral("link-surface"),
         {kSessionProtocolMajor}, {{"deviceAuth", 1}, {"sessionHolder", 1}, {"remoteTx", 1},
-                                  {"settingsHygiene", 1}, {"setupDescription", 1}, {"miniDisplay", 1}})));
-    clientEnd->sendText(SessionMessages::encode(SessionMessages::authRequest(server.token())));
+                                  {"settingsHygiene", 1}, {"settingsBackup", 1},
+                                  {"setupDescription", 1}, {"miniDisplay", 1}})));
+    clientEnd->sendText(SessionMessages::encode(SessionMessages::authRequest({}, block)));
 
     // The loopback delivers on later event-loop turns, as a socket would.
     const QDeadlineTimer deadline(10000);
@@ -518,6 +560,7 @@ QJsonArray captureCapabilities()
     // iPhone app plan Task 34: sent to a peer that declared remoteTx.
     caps.remoteTxEntry = true;
     caps.settingsHygieneVersion = 1;
+    caps.settingsBackupVersion = 1;
     caps.remoteIqVersion = 1;
     caps.setupDescriptionVersion = 1;
     caps.miniDisplayVersion = 1;
@@ -686,6 +729,26 @@ QJsonArray captureCommands()
             {QStringLiteral("minMinor"), static_cast<int>(spec.minMinor)},
         });
     }
+    // StationServer handles this read-only, session-bound family before the
+    // generic dispatcher. It still belongs to the published command surface.
+    const auto exportCommand = [&commands](const QString& verb, const QJsonArray& arguments) {
+        commands.append(QJsonObject{{QStringLiteral("verb"), verb},
+                                    {QStringLiteral("arguments"), arguments},
+                                    {QStringLiteral("capability"), QStringLiteral("settingsBackupVersion")},
+                                    {QStringLiteral("capabilityVersion"), 1},
+                                    {QStringLiteral("minMinor"), 11}});
+    };
+    const auto arg = [](const QString& name, const QString& kind) {
+        return QJsonObject{{QStringLiteral("name"), name},
+                           {QStringLiteral("kind"), kind},
+                           {QStringLiteral("optional"), false}};
+    };
+    exportCommand(QStringLiteral("station.settingsExport.begin"), {});
+    exportCommand(QStringLiteral("station.settingsExport.read"),
+                  {arg(QStringLiteral("transferId"), QStringLiteral("utf8")),
+                   arg(QStringLiteral("offset"), QStringLiteral("i64"))});
+    exportCommand(QStringLiteral("station.settingsExport.cancel"),
+                  {arg(QStringLiteral("transferId"), QStringLiteral("utf8"))});
     return commands;
 }
 
