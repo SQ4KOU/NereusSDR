@@ -65,6 +65,7 @@ void ColorsThemePage::buildUI()
         QColor(0x00, 0xe5, 0xff),
         [](SpectrumWidget* w){ return w->fillColor(); },
         &SpectrumWidget::setFillColor);
+    m_traceFillColorBtn->setProperty("nereusSetupId", "appearance.colorsTheme.traceFillColor");
     // Thetis: setup.designer.cs:3234 (clrbtnDataLine) / :3217 (clrbtnDataFill) — collapsed into
     // one picker because SpectrumWidget currently shares one colour for line and fill.
     m_traceFillColorBtn->setToolTip(QStringLiteral(
@@ -77,6 +78,7 @@ void ColorsThemePage::buildUI()
         QColor(255, 255, 255, 40),
         [](SpectrumWidget* w){ return w->gridColor(); },
         &SpectrumWidget::setGridColor);
+    m_gridColorBtn->setProperty("nereusSetupId", "appearance.colorsTheme.gridColor");
     // Thetis: setup.designer.cs:3202 (clrbtnGrid) — rewritten
     // Thetis original: (none)
     m_gridColorBtn->setToolTip(QStringLiteral("Color of the major vertical grid lines on the panadapter."));
@@ -87,6 +89,7 @@ void ColorsThemePage::buildUI()
         QColor(255, 255, 255, 20),
         [](SpectrumWidget* w){ return w->gridFineColor(); },
         &SpectrumWidget::setGridFineColor);
+    m_gridFineColorBtn->setProperty("nereusSetupId", "appearance.colorsTheme.gridFineColor");
     // Thetis: setup.designer.cs:3198 (clrbtnGridFine) — rewritten
     // Thetis original: (none)
     m_gridFineColorBtn->setToolTip(QStringLiteral("Color of the minor (fine) grid lines between major grid lines on the panadapter."));
@@ -97,6 +100,7 @@ void ColorsThemePage::buildUI()
         QColor(255, 255, 255, 40),
         [](SpectrumWidget* w){ return w->hGridColor(); },
         &SpectrumWidget::setHGridColor);
+    m_hGridColorBtn->setProperty("nereusSetupId", "appearance.colorsTheme.hGridColor");
     // Thetis: setup.designer.cs:3193 (clrbtnHGridColor) — rewritten
     // Thetis original: (none)
     m_hGridColorBtn->setToolTip(QStringLiteral("Color of the horizontal dB grid lines on the panadapter."));
@@ -107,6 +111,7 @@ void ColorsThemePage::buildUI()
         QColor(255, 255, 0),
         [](SpectrumWidget* w){ return w->gridTextColor(); },
         &SpectrumWidget::setGridTextColor);
+    m_gridTextColorBtn->setProperty("nereusSetupId", "appearance.colorsTheme.gridTextColor");
     // Thetis: setup.designer.cs:3206 (clrbtnText) — rewritten
     // Thetis original: (none)
     m_gridTextColorBtn->setToolTip(QStringLiteral("Color of the frequency and dB labels drawn on the panadapter grid."));
@@ -117,6 +122,7 @@ void ColorsThemePage::buildUI()
         QColor(255, 0, 0),
         [](SpectrumWidget* w){ return w->bandEdgeColor(); },
         &SpectrumWidget::setBandEdgeColor);
+    m_bandEdgeColorBtn->setProperty("nereusSetupId", "appearance.colorsTheme.bandEdgeColor");
     // Thetis: setup.designer.cs:3232 (clrbtnBandEdge) — rewritten
     // Thetis original: (none)
     m_bandEdgeColorBtn->setToolTip(QStringLiteral("Color of the band edge markers drawn at the amateur band boundaries on the panadapter."));
@@ -127,6 +133,7 @@ void ColorsThemePage::buildUI()
         QColor(255, 0, 0),
         [](SpectrumWidget* w){ return w->rxZeroLineColor(); },
         &SpectrumWidget::setRxZeroLineColor);
+    m_rxZeroLineColorBtn->setProperty("nereusSetupId", "appearance.colorsTheme.rxZeroLineColor");
     // Thetis: setup.designer.cs:3204 (clrbtnZeroLine) — rewritten; split per Plan 4 D9c-1
     // Thetis original: (none)
     m_rxZeroLineColorBtn->setToolTip(QStringLiteral(
@@ -139,6 +146,7 @@ void ColorsThemePage::buildUI()
         QColor(255, 184, 0),
         [](SpectrumWidget* w){ return w->txZeroLineColor(); },
         &SpectrumWidget::setTxZeroLineColor);
+    m_txZeroLineColorBtn->setProperty("nereusSetupId", "appearance.colorsTheme.txZeroLineColor");
     // NereusSDR Plan 4 D9c-1 — no Thetis equivalent (NereusSDR-original).
     m_txZeroLineColorBtn->setToolTip(QStringLiteral(
         "Colour of the TX zero line drawn on the panadapter and waterfall "
@@ -150,6 +158,7 @@ void ColorsThemePage::buildUI()
         QColor(0x00, 0xb4, 0xd8, 80),
         [](SpectrumWidget* w){ return w->rxFilterColor(); },
         &SpectrumWidget::setRxFilterColor);
+    m_rxFilterColorBtn->setProperty("nereusSetupId", "appearance.colorsTheme.rxFilterColor");
     m_rxFilterColorBtn->setToolTip(QStringLiteral(
         "Click to choose the RX passband overlay colour and opacity. "
         "Shown on the panadapter and waterfall slice band during receive."));
@@ -160,6 +169,7 @@ void ColorsThemePage::buildUI()
         QColor(255, 120, 60, 46),
         [](SpectrumWidget* w){ return w->txFilterColor(); },
         &SpectrumWidget::setTxFilterColor);
+    m_txFilterColorBtn->setProperty("nereusSetupId", "appearance.colorsTheme.txFilterColor");
     m_txFilterColorBtn->setToolTip(QStringLiteral(
         "Click to choose the TX passband overlay colour and opacity. "
         "Shown on the panadapter and waterfall during MOX/TUNE."));

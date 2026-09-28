@@ -90,6 +90,29 @@ bool validDiagnosticsEnvelope(const QJsonObject& root)
         && SetupDescription::validateSettingsHygienePanel(controls.first().toObject());
 }
 
+bool validAppearanceEnvelope(const QJsonObject& root)
+{
+    const QJsonArray pages = root.value(QStringLiteral("pages")).toArray();
+    if (root.size() != 3 || root.value(QStringLiteral("version")) != QJsonValue(1)
+        || root.value(QStringLiteral("category")) != QJsonValue(QJsonObject{
+            {QStringLiteral("id"), QStringLiteral("appearance")},
+            {QStringLiteral("title"), QStringLiteral("Appearance")},
+            {QStringLiteral("where"), QStringLiteral("phone")},
+            {QStringLiteral("coverage"), QStringLiteral("partial")}})
+        || pages.size() != 1) { return false; }
+    const QJsonObject page = pages.first().toObject();
+    const QJsonArray sections = page.value(QStringLiteral("sections")).toArray();
+    if (page.size() != 5 || page.value(QStringLiteral("id")) != QJsonValue(QStringLiteral("appearance.colorsTheme"))
+        || page.value(QStringLiteral("title")) != QJsonValue(QStringLiteral("Colors & Theme"))
+        || page.value(QStringLiteral("where")) != QJsonValue(QStringLiteral("phone"))
+        || page.value(QStringLiteral("coverage")) != QJsonValue(QStringLiteral("partial"))
+        || sections.size() != 1) { return false; }
+    const QJsonObject section = sections.first().toObject();
+    return section.size() == 2
+        && section.value(QStringLiteral("title")) == QJsonValue(QStringLiteral("Spectrum"))
+        && section.value(QStringLiteral("controls")).toArray().size() == 10;
+}
+
 QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRModel model)
 {
     QFile resource(QStringLiteral(":/setup/%1.json").arg(id));
@@ -113,7 +136,8 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
         || root.value(QStringLiteral("category")).toObject()
                .value(QStringLiteral("id")).toString() != id
         || root.value(QStringLiteral("pages")).toArray().isEmpty()
-        || (id == QLatin1String("diagnostics") && !validDiagnosticsEnvelope(root))) {
+        || (id == QLatin1String("diagnostics") && !validDiagnosticsEnvelope(root))
+        || (id == QLatin1String("appearance") && !validAppearanceEnvelope(root))) {
         return {};
     }
     QSet<QString> ids;
@@ -191,6 +215,8 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                         && !SetupDescription::validatePaBypassBinding(control))
                     || (id == QLatin1String("audio")
                         && !SetupDescription::validateAudioPropertyBinding(control))
+                    || (id == QLatin1String("appearance")
+                        && !SetupDescription::validateAppearanceColourBinding(control))
                     || (id == QLatin1String("diagnostics")
                         && !SetupDescription::validateSettingsHygienePanel(control))
                     || (control.value(QStringLiteral("binding")).toObject().contains(QStringLiteral("command"))
@@ -415,6 +441,44 @@ bool SetupDescription::validateDisplaySettingBinding(const QJsonObject& control)
         }
         return !control.contains(QStringLiteral("options"))
             && !control.contains(QStringLiteral("enabledWhen"));
+    }
+    return false;
+}
+
+bool SetupDescription::validateAppearanceColourBinding(const QJsonObject& control)
+{
+    struct Swatch { const char* id; const char* phoneKey; const char* defaultRgba; };
+    static constexpr Swatch swatches[] = {
+        {"traceFillColor", "DisplayFillColor", "#00E5FFFF"},
+        {"gridColor", "DisplayGridColor", "#FFFFFF28"},
+        {"gridFineColor", "DisplayGridFineColor", "#FFFFFF14"},
+        {"hGridColor", "DisplayHGridColor", "#FFFFFF28"},
+        {"gridTextColor", "DisplayGridTextColor", "#FFFF00FF"},
+        {"bandEdgeColor", "DisplayBandEdgeColor", "#FF0000FF"},
+        {"rxZeroLineColor", "DisplayRxZeroLineColor", "#FF0000FF"},
+        {"txZeroLineColor", "DisplayTxZeroLineColor", "#FFB800FF"},
+        {"rxFilterColor", "DisplayRxFilterColor", "#00B4D850"},
+        {"txFilterColor", "DisplayTxFilterColor", "#FF783C2E"},
+    };
+    const QString id = control.value(QStringLiteral("id")).toString();
+    const QJsonObject binding = control.value(QStringLiteral("binding")).toObject();
+    const QString defaultColour = control.value(QStringLiteral("default")).toString();
+    if (control.size() != 7 || control.value(QStringLiteral("kind")) != QJsonValue(QStringLiteral("colour"))
+        || control.value(QStringLiteral("applies")) != QJsonValue(QStringLiteral("live"))
+        || control.value(QStringLiteral("label")).toString().isEmpty()
+        || !control.value(QStringLiteral("tooltip")).isString()
+        || binding.size() != 1 || !binding.value(QStringLiteral("phone")).isString()
+        || defaultColour.size() != 9 || defaultColour.front() != QLatin1Char('#')) { return false; }
+    for (const QChar digit : defaultColour.sliced(1)) {
+        if (!digit.isDigit() && (digit < QLatin1Char('A') || digit > QLatin1Char('F'))) {
+            return false;
+        }
+    }
+    for (const Swatch& swatch : swatches) {
+        if (id == QStringLiteral("appearance.colorsTheme.") + QLatin1String(swatch.id)) {
+            return binding.value(QStringLiteral("phone")) == QJsonValue(QLatin1String(swatch.phoneKey))
+                && defaultColour == QLatin1String(swatch.defaultRgba);
+        }
     }
     return false;
 }

@@ -8,6 +8,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-28 J.J. Boyd / KG4VCF : persist the local trace/fill colour
+//                 per pan and let per-pan appearance colours inherit pan 0
+//                 until overridden. AI-assisted via OpenAI Codex.
 //   2026-09-27 J.J. Boyd / KG4VCF : local receive waterfall rows use
 //                 RX1Offset before colour and level tracking, matching
 //                 Core-calibrated remote rows. AI-assisted via OpenAI Codex.
@@ -942,11 +945,12 @@ void SpectrumWidget::loadSettings()
                            static_cast<int>(FreqLabelAlign::Count) - 1));
 
     auto readColor = [&](const QString& key, const QColor& def) -> QColor {
-        const QString hex = s.value(settingsKey(key, m_panIndex)).toString();
+        const QString hex = rawValue(key);
         if (hex.isEmpty()) { return def; }
         QColor c = QColor::fromString(hex);
         return c.isValid() ? c : def;
     };
+    m_fillColor = readColor(QStringLiteral("DisplayFillColor"), m_fillColor);
     m_gridColor     = readColor(QStringLiteral("DisplayGridColor"), m_gridColor);
     m_gridFineColor = readColor(QStringLiteral("DisplayGridFineColor"), m_gridFineColor);
     m_hGridColor    = readColor(QStringLiteral("DisplayHGridColor"), m_hGridColor);
@@ -1228,6 +1232,7 @@ void SpectrumWidget::saveSettings()
     auto writeColor = [&](const QString& key, const QColor& c) {
         s.setValue(settingsKey(key, m_panIndex), c.name(QColor::HexArgb));
     };
+    writeColor(QStringLiteral("DisplayFillColor"), m_fillColor);
     writeColor(QStringLiteral("DisplayGridColor"),     m_gridColor);
     writeColor(QStringLiteral("DisplayGridFineColor"), m_gridFineColor);
     writeColor(QStringLiteral("DisplayHGridColor"),    m_hGridColor);

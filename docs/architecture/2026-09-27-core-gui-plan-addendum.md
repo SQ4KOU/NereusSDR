@@ -1326,7 +1326,11 @@ colours for the same signal.
   new admission does not. Its integrated app/Core build and seven named suites
   passed (39.67 seconds) under concurrent load 9.17/9.21/7.35. The client test
   uses a bounded command responder alongside real paired authentication, so
-  production Python RV acceptance and loaded loss acceptance remain open.
+  that initial test did not establish production Python RV or loaded-loss
+  acceptance. Subsequent actual-service namespace runs are recorded in G-55:
+  four impaired-network rows and a second-receiver row passed with the unchanged
+  heartbeat cadence and cutoff. Installed-service and live-phone acceptance
+  remain separate.
 - Plan: independent transmit watch and restrictive-network liveness.
 
 ### G-71: Hosted desktop TCI must preserve ownership through callbacks and receiver remaps
@@ -2001,14 +2005,18 @@ colours for the same signal.
 - Ruling basis: JJ requires working desktop parity and every discovered gap
   to be built in this effort. This is missing persistence in an existing
   control, with no change to its colour or rendering defaults.
-- Status: in progress in the isolated parity lane. Use `DisplayFillColor`,
-  the existing Qt `#AARRGGBB` format, and the same pan suffix and pan-zero
-  inheritance rules as the neighboring saved swatches. Verify alpha and
-  independent overrides through actual save/load paths.
+- Status: built in signed `dc113a25`. `DisplayFillColor` uses the existing
+  Qt `#AARRGGBB` format, pan suffix and load-time pan-zero fallback. Lead review
+  and the integrated app/Core build plus six explicitly rebuilt display/Setup
+  suites pass (4.59 s; observed load before the run 89.89/47.60/29.83).
+  Tests cover alpha, independent overrides and invalid/default handling through
+  actual widget setters and save/load paths. As with the existing settings,
+  saving a pan writes all its current values; it can make inherited values
+  explicit. No property-by-property save policy change is claimed.
   Implementation inspection also found that the shared colour reader bypasses
   the existing pan-zero fallback. The documented July 30 behavior says that
-  untouched pans follow pan zero until given their own values. Restore that
-  already-settled behavior for the shared per-pan colour reader too; global
+  untouched pans follow pan zero until given their own values. The fix restores
+  that behavior for the shared per-pan colour reader too; global
   Peak colours remain global. The scout's initial claim that those existing
   swatches already inherited was incorrect.
 - Plan: Display/Appearance parity and the phone's local colour descriptions.
@@ -2026,14 +2034,21 @@ colours for the same signal.
   desktop parity in this effort. Publish exact existing behavior and ownership;
   do not describe hidden placeholders as working features. His accepted
   decimation range is 1-16, with calibration applied once in both windows.
-- Status: source inventory complete; publication and the cross-checked phone
-  binding contract remain open. The lead has sent the exact map to the phone
-  owner, recommending literal PascalCase binding names within per-pan/per-band
-  phone storage and explicit `#RRGGBBAA` phone colour values. These are proposed
-  implementation details, not a claimed JJ ruling. The discrete FFT slider,
-  active-band grid context, TX subscription mapping, 3D page and local actions
-  must be accounted for before full coverage is claimed. Partial publication
-  may unblock verified controls but does not close this gap.
+- Status: source inventory complete and first Core-owned description slice in
+  progress. The phone owner confirmed that literal PascalCase binding names
+  map to its existing typed per-pan/current-band model and that explicit
+  `#RRGGBBAA` colours suit its boundary conversions. The phone model already
+  exists in its checkout; absence in the Core checkout did not mean unbuilt
+  phone rendering. These are agreed implementation details, not a claimed
+  separate JJ ruling. Discrete FFT sliders use a negotiated version-4 ordered
+  numeric option contract matching StationCatalog, with actual sizes as values
+  and no arbitrary intermediate sizes; older projections omit them. The RX
+  quartet retains its existing subscription relationship. TX analyzer settings
+  apply live to the Core analyzer, without an invented RX subscription field.
+  This clarifies the plan's overly broad subscription label. Remaining local
+  controls, readouts, active-band grid context, 3D page and actions still need
+  exact publication and phone checks. Partial publication does not close this
+  gap.
 - Plan: phone Display/Appearance description and renderer dependencies, and
   remote-window parity.
 
