@@ -852,6 +852,8 @@ change shows as surface drift and as a change to this table.
 | `sessionHolderVersion` | 1 |
 | `remoteTxVersion` | 2 |
 | `txStateVersion` | 2 |
+| `remoteIqVersion` | 1 |
+| `accessoryTxVersion` | 1 |
 
 <!-- /surface -->
 
@@ -1518,6 +1520,8 @@ older window sees only the values it was built for.
 | 70 | `txRefusalReason` | `utf8` |
 | 71 | `txRefusalFix` | `utf8` |
 | 72 | `txStateVersion` | `i64` |
+| 73 | `remoteIqVersion` | `i64` |
+| 74 | `accessoryTxVersion` | `i64` |
 
 <!-- /surface -->
 
@@ -3674,6 +3678,15 @@ refused.
 | `setRfKitAntenna` | `port` i64 | `remoteRfKitControlVersion` | 4 | 11 |
 | `setRfKitTciMode` | none | `remoteRfKitControlVersion` | 4 | 11 |
 | `setRfKitAddress` | `host` utf8, `port` i64 | `remoteRfKitControlVersion` | 4 | 11 |
+| `amp.operate` | none | `accessoryTxVersion` | 1 | 11 |
+| `amp.standby` | none | `accessoryTxVersion` | 1 | 11 |
+| `tuner.tune` | none | `accessoryTxVersion` | 1 | 11 |
+| `tuner.operate` | `on` bool | `accessoryTxVersion` | 1 | 11 |
+| `tuner.bypass` | `on` bool | `accessoryTxVersion` | 1 | 11 |
+| `tuner.antenna` | `port` i64 | `accessoryTxVersion` | 1 | 11 |
+| `rfkit.operate` | none | `accessoryTxVersion` | 1 | 11 |
+| `rfkit.standby` | none | `accessoryTxVersion` | 1 | 11 |
+| `rfkit.antenna` | `port` i64 | `accessoryTxVersion` | 1 | 11 |
 | `setStationTci` | `enabled` bool, `port` i64 | `stationTciVersion` | 1 | 11 |
 | `setStationTciOptions` | `emulateExpertSdr3` bool, `emulateSunSdr2Pro` bool, `cwluBecomesCw` bool, `sendInitialState` bool | `stationTciVersion` | 2 | 11 |
 | `disconnectStationTciClient` | `id` utf8 | `stationTciVersion` | 2 | 11 |

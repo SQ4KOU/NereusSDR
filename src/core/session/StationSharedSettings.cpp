@@ -1017,13 +1017,14 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
     }
     // The tuner and the RF-Kit amplifier's antenna (ruling 7.2). Task 42's
     // tuner.* and rfkit.antenna verbs join this list when that task lands.
-    if (verb == "setTgxlAntenna" || verb == "setTgxlOperate" || verb == "setTgxlBypass") {
+    if (verb == "setTgxlAntenna" || verb == "setTgxlOperate" || verb == "setTgxlBypass"
+        || verb == "tuner.antenna" || verb == "tuner.operate" || verb == "tuner.bypass") {
         QHash<QByteArray, QVariant> now;
         for (const MirrorUpdate& u : m_mirror->snapshot(kTuner)) {
             now.insert(u.name, u.value);
         }
         tuner();
-        if (verb == "setTgxlAntenna") {
+        if (verb == "setTgxlAntenna" || verb == "tuner.antenna") {
             // R-IOS-30: the port is the button's number, 1 to 3 (activate
             // ant=N); the tuner reports antA 0-based (0 is ANT 1), and the
             // mirror's antennaA carries it as reported. Compare and name
@@ -1035,7 +1036,7 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
             c.shared = port != was;
             words(QStringLiteral("Tuner antenna"), QStringLiteral("ANT%1").arg(was),
                   QStringLiteral("ANT%1").arg(port));
-        } else if (verb == "setTgxlOperate") {
+        } else if (verb == "setTgxlOperate" || verb == "tuner.operate") {
             const bool on = boolArgument(args, "on");
             const bool was = now.value("isOperate").toBool();
             const auto state = [](bool operate) {
@@ -1058,13 +1059,16 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
     // Checkpoint join (parity Tasks 9 and 10): the Power Genius's and the
     // RF-Kit's OPERATE and STANDBY (the amplifier, the transmitter) and the
     // RF-Kit's antenna switch (ruling 7.2, what the tuner touches).
-    if (verb == "setPgxlOperate" || verb == "setRfKitOperate" || verb == "setRfKitAntenna") {
-        const bool pgxl = verb == "setPgxlOperate";
+    if (verb == "setPgxlOperate" || verb == "setRfKitOperate" || verb == "setRfKitAntenna"
+        || verb == "amp.operate" || verb == "amp.standby" || verb == "rfkit.operate"
+        || verb == "rfkit.standby" || verb == "rfkit.antenna") {
+        const bool pgxl = verb == "setPgxlOperate" || verb == "amp.operate"
+            || verb == "amp.standby";
         QHash<QByteArray, QVariant> now;
         for (const MirrorUpdate& u : m_mirror->snapshot(pgxl ? kAmplifier : kRfKit)) {
             now.insert(u.name, u.value);
         }
-        if (verb == "setRfKitAntenna") {
+        if (verb == "setRfKitAntenna" || verb == "rfkit.antenna") {
             tuner();
             // R-IOS-30: the port and activeAntennaNumber both count from 1
             // (0 is none reported), but the amp numbers its external
@@ -1087,7 +1091,9 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
             return c;
         }
         transmitter();
-        const bool on = boolArgument(args, "on");
+        const bool on = verb == "amp.operate" || verb == "rfkit.operate" ? true
+            : verb == "amp.standby" || verb == "rfkit.standby" ? false
+            : boolArgument(args, "on");
         const bool was = now.value("operate").toBool();
         const auto state = [](bool operate) {
             return operate ? QStringLiteral("Operate") : QStringLiteral("Standby");
@@ -1399,6 +1405,34 @@ SessionMessage StationServer::proceedSharedSetting(SessionTransport* transport,
         if (!question.shown.contains(entry)) {
             askSharedSetting(transport, question.original, now, affected, false);
             return askAgain(invoke);
+        }
+    }
+
+    // A held accessory switch still belongs to the session that asked.
+    // Recheck permission at proceed: receive-only may have been enabled
+    // while another device was considering the question.
+    const QByteArray& heldVerb = question.original.commandVerb;
+    const bool newAccessory = heldVerb == "amp.operate" || heldVerb == "amp.standby"
+        || heldVerb == "tuner.tune" || heldVerb == "tuner.operate"
+        || heldVerb == "tuner.bypass" || heldVerb == "tuner.antenna"
+        || heldVerb == "rfkit.operate" || heldVerb == "rfkit.standby"
+        || heldVerb == "rfkit.antenna";
+    const bool legacyAccessory = heldVerb == "setPgxlOperate"
+        || heldVerb == "setTgxlOperate" || heldVerb == "setTgxlBypass"
+        || heldVerb == "setTgxlAntenna" || heldVerb == "setRfKitOperate"
+        || heldVerb == "setRfKitAntenna";
+    if (newAccessory || legacyAccessory) {
+        StationTxGate sessionOnly;
+        sessionOnly.setRemoteTransmitAllowed(m_txGate.remoteTransmitAllowed());
+        const TxDecision decision = sessionOnly.decide(peerInfoFor(transport));
+        if (!decision.permitted) {
+            const QList<MirrorUpdate> values = legacyAccessory ? QList<MirrorUpdate>{}
+                : QList<MirrorUpdate>{{0, "refusalCode", MirrorWireKind::Utf8,
+                                       QString::fromUtf8(decision.refusal.code)},
+                                      {0, "refusalFix", MirrorWireKind::Utf8,
+                                       QString::fromUtf8(decision.refusal.fix)}};
+            return SessionMessages::commandResult(invoke.commandVerb, invoke.commandId, false,
+                                                  decision.refusal.text, {}, values);
         }
     }
 

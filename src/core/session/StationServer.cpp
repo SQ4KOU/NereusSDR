@@ -1025,6 +1025,71 @@ bool isRfKitFullControlVerb(const QByteArray& verb)
         || verb == "setRfKitAddress";
 }
 
+bool isAccessoryTxVerb(const QByteArray& verb)
+{
+    return verb == "amp.operate" || verb == "amp.standby" || verb == "tuner.tune"
+        || verb == "tuner.operate" || verb == "tuner.bypass" || verb == "tuner.antenna"
+        || verb == "rfkit.operate" || verb == "rfkit.standby" || verb == "rfkit.antenna";
+}
+
+bool isLegacyAccessoryTxVerb(const QByteArray& verb)
+{
+    return verb == "setPgxlOperate" || verb == "setTgxlOperate"
+        || verb == "setTgxlBypass" || verb == "setTgxlAntenna"
+        || verb == "setRfKitOperate" || verb == "setRfKitAntenna";
+}
+
+bool accessoryTxArgumentsValid(const SessionMessage& message)
+{
+    const QByteArray& verb = message.commandVerb;
+    const bool boolVerb = verb == "tuner.operate" || verb == "tuner.bypass"
+        || verb == "setPgxlOperate" || verb == "setTgxlOperate"
+        || verb == "setTgxlBypass" || verb == "setRfKitOperate";
+    const bool portVerb = verb == "tuner.antenna" || verb == "rfkit.antenna"
+        || verb == "setTgxlAntenna" || verb == "setRfKitAntenna";
+    if (!boolVerb && !portVerb) {
+        return message.arguments.isEmpty();
+    }
+    if (message.arguments.size() != 1 || message.arguments.first().ordinal != 0) {
+        return false;
+    }
+    const MirrorUpdate& argument = message.arguments.first();
+    if (boolVerb) {
+        return argument.name == "on" && argument.kind == MirrorWireKind::Bool
+            && argument.value.typeId() == QMetaType::Bool;
+    }
+    bool converted = false;
+    const qlonglong port = argument.value.toLongLong(&converted);
+    return argument.name == "port" && argument.kind == MirrorWireKind::Int64
+        && converted && (isLegacyAccessoryTxVerb(verb)
+            || (port >= 1 && port <= (verb == "tuner.antenna" ? 3 : 4)));
+}
+
+QString legacyAccessoryInvalidReason(const QByteArray& verb)
+{
+    if (verb == "setPgxlOperate") {
+        return QStringLiteral("The request to put the Power Genius in operate or standby was not "
+                              "understood.");
+    }
+    if (verb == "setTgxlOperate") {
+        return QStringLiteral("The request to put the Tuner Genius in operate or standby was not "
+                              "understood.");
+    }
+    if (verb == "setTgxlBypass") {
+        return QStringLiteral("The request to bypass the Tuner Genius was not understood.");
+    }
+    if (verb == "setTgxlAntenna") {
+        return QStringLiteral("The request to switch the Tuner Genius antenna was not "
+                              "understood.");
+    }
+    if (verb == "setRfKitOperate") {
+        return QStringLiteral("The request to put the RF-Kit amplifier in operate or standby was "
+                              "not understood.");
+    }
+    return QStringLiteral("The request to switch the RF-Kit amplifier's antenna was not "
+                          "understood.");
+}
+
 // R-R3-49 (parity Task 8): the relay nudge, the Core's LAN scan and the
 // saved address (remoteTgxlControlVersion 4).
 bool isTgxlFullControlVerb(const QByteArray& verb)
@@ -2348,6 +2413,15 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
                 return {};
             }
             return TxRefusals::otherDeviceHolds(holder->name);
+        };
+        access.accessory = [this](const QByteArray& requester) -> TxRefusal {
+            SessionTransport* const transport = m_dispatchingTransport;
+            if (transport == nullptr || peerInfoFor(transport).deviceId != requester) {
+                return TxRefusals::notReady();
+            }
+            StationTxGate sessionOnly;
+            sessionOnly.setRemoteTransmitAllowed(m_txGate.remoteTransmitAllowed());
+            return sessionOnly.decide(peerInfoFor(transport)).refusal;
         };
         // Task 77: tx.take, on the connection being dispatched.
         access.take = [this](const SessionMessage& invoke, std::optional<quint64> holderEpoch,
@@ -3689,6 +3763,46 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
                                      "tuner settings on this Core.")
                     : QStringLiteral("This Core cannot change its amplifier and tuner settings."), {}));
             break;
+        }
+        if (isAccessoryTxVerb(message.commandVerb)
+            || isLegacyAccessoryTxVerb(message.commandVerb)) {
+            const bool newAccessoryTxVerb = isAccessoryTxVerb(message.commandVerb);
+            const bool legacyAccessoryTxVerb = !newAccessoryTxVerb;
+            if (newAccessoryTxVerb && (it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                || accessoryTxVersion() < 1)) {
+                const TxRefusal refusal = TxRefusals::appCannotTransmit();
+                send(transport, SessionMessages::commandResult(
+                    message.commandVerb, message.commandId, false, refusal.text, {},
+                    {{0, "refusalCode", MirrorWireKind::Utf8, QString::fromUtf8(refusal.code)},
+                     {0, "refusalFix", MirrorWireKind::Utf8, QString::fromUtf8(refusal.fix)}}));
+                break;
+            }
+            if (!accessoryTxArgumentsValid(message)) {
+                send(transport, SessionMessages::commandResult(
+                    message.commandVerb, message.commandId, false,
+                    legacyAccessoryTxVerb ? legacyAccessoryInvalidReason(message.commandVerb)
+                                          : QStringLiteral("The Core could not read this request."), {},
+                    legacyAccessoryTxVerb ? QList<MirrorUpdate>{}
+                        : QList<MirrorUpdate>{{0, "refusalCode", MirrorWireKind::Utf8,
+                                               QStringLiteral("invalidRequest")},
+                                              {0, "refusalFix", MirrorWireKind::Utf8, QString()}}));
+                break;
+            }
+            // Gate before the shared-setting question, then once more when
+            // its held command runs on confirm.proceed.
+            StationTxGate sessionOnly;
+            sessionOnly.setRemoteTransmitAllowed(m_txGate.remoteTransmitAllowed());
+            const TxDecision decision = sessionOnly.decide(peerInfoFor(transport));
+            if (!decision.permitted) {
+                send(transport, SessionMessages::commandResult(
+                    message.commandVerb, message.commandId, false, decision.refusal.text, {},
+                    legacyAccessoryTxVerb ? QList<MirrorUpdate>{}
+                        : QList<MirrorUpdate>{{0, "refusalCode", MirrorWireKind::Utf8,
+                                               QString::fromUtf8(decision.refusal.code)},
+                                              {0, "refusalFix", MirrorWireKind::Utf8,
+                                               QString::fromUtf8(decision.refusal.fix)}}));
+                break;
+            }
         }
         // R-R3-47 / R-R3-22: the amp's own settings came with
         // remotePgxlControlVersion 3 and the tuner's with
@@ -7959,6 +8073,7 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             caps.stationTciVersion = stationTciVersion();
             // R-R3-47 / R-R3-22: the Core's accessory records and settings.
             caps.accessoryDataVersion = accessoryDataVersion();
+            caps.accessoryTxVersion = accessoryTxVersion();
             // R-R3-47 / R-R3-22: the Tuner Genius's own settings.
             caps.remoteTgxlControlVersion = tgxlControlVersion();
             // iPhone app Task 12 (R-IOS-08): device sign-in by key, last.

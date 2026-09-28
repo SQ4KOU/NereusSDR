@@ -4818,6 +4818,10 @@ StationClient::CommandOutcome StationClient::requestTgxlAddress(const QString& h
 // asked; the window says why in its own words.
 StationClient::CommandOutcome StationClient::requestPgxlOperate(bool on)
 {
+    if (m_capabilities.accessoryTxVersion >= 1) {
+        return sendCommand(on ? "amp.operate" : "amp.standby", -1, {},
+                           QStringLiteral("the Power Genius operate"));
+    }
     if (!pgxlFullControlAvailable()) {
         return IStationLink::requestPgxlOperate(on);
     }

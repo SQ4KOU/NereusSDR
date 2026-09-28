@@ -1135,6 +1135,7 @@ public:
     // setPgxlPowerCap and clearAccessoryFaults verbs; from 2 the RF-Kit's
     // rfkit* connection counts, parity Task 10); 0 otherwise.
     int accessoryDataVersion() const;
+    int accessoryTxVersion() const { return accessoryDataVersion() > 0 ? 1 : 0; }
 
     /// iPhone app Task 71 (R-IOS-02): who holds a place on the Core, and
     /// the mirrored `connectedDevices` object. Never null. Task 48

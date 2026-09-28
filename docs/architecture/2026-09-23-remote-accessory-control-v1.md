@@ -111,6 +111,7 @@ contract; each feature has its own version.
 | `accessoryDataVersion` | 11 | 1 | The Core mirrors its accessory records and settings as the read-only `accessoryData` object, and `setTxInterlockPolicy`, `setPgxlPowerCap` and `clearAccessoryFaults` work |
 | `accessoryDataVersion` | 11 | 2 | Also: the RF-Kit's connection counts on `accessoryData` (`rfkitConnectedSinceMs`, `rfkitPollsOk`, `rfkitPollsFailed`, `rfkitReconnectCount`, `rfkitLastPollMs`) |
 | `accessoryDataVersion` | 11 | 3 | Also: the RF-Kit's average response time over its last ten polls on `accessoryData` (`rfkitRttAvgMs`), as a local window's RF-Kit page and Copy diagnostics show it |
+| `accessoryTxVersion` | 11 | 1 | The Core accepts the nine transmit-coupled amplifier, tuner and RF-Kit commands listed below. Every refusal carries a code, text and fix. |
 | `remotePgxlControlVersion` | 11 | 3 | Also: the amp's own settings. The `pgxl*` properties of the read-only `accessorySettings` object, and `setPgxlName`, `setPgxlHardware`, `setPgxlNetwork`, `savePgxlSettings` and `readPgxlSettings` work |
 | `remotePgxlControlVersion` | 11 | 4 | Also: `setPgxlOperate` (OPERATE or STANDBY), `scanPgxlLan` (the Core listens for Power Genius announcements) and `setPgxlAddress` (the address saved without dialling): OPERATE and STANDBY work whenever the radio is not on the air, the scan and the address on the air too (see "Operating the Power Genius" and "Scanning for the Power Genius and its saved address") |
 | `remoteTgxlControlVersion` | 11 | 1 | The tuner's own settings: the `tgxl*` properties of `accessorySettings`, and `setTgxlName`, `setTgxlNetwork`, `saveTgxlSettings` and `readTgxlSettings` work |
@@ -949,6 +950,26 @@ receive-only and refuses every key, so it stays false until remote
 transmit.
 
 ## Commands
+
+Task 42 adds `amp.operate {}`, `amp.standby {}`, `tuner.tune {}`,
+`tuner.operate {on: bool}`, `tuner.bypass {on: bool}`,
+`tuner.antenna {port: i64}` (1 to 3), `rfkit.operate {}`,
+`rfkit.standby {}` and `rfkit.antenna {port: i64}` (1 to 4), all at
+minor 11 with `accessoryTxVersion` 1. The station checks session transmit
+admission before sending any device command. An idle holder is included in
+the shared-setting confirmation for the non-carrier actions; another
+device's change waits while that holder transmits. `tuner.tune` follows
+the transmit holder's keying rules, taking unheld transmit first. The
+RF2K-S tuner's own controls remain unavailable until its firmware accepts
+commands; use its front panel.
+
+The older switch commands `setPgxlOperate`, `setTgxlOperate`,
+`setTgxlBypass`, `setTgxlAntenna`, `setRfKitOperate` and
+`setRfKitAntenna` use the same session transmit admission. Their existing
+wire arguments and capability declarations remain available for older apps,
+but an app without remote transmit permission now gets a plain refusal
+before any shared-setting question or device action. A local Core window
+continues to operate its own admitted accessories through the local model.
 
 Each is a `command.invoke` with exactly the arguments shown, in exactly
 these wire kinds. The answer is a `command.result`; `accepted: true` means
