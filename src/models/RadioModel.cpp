@@ -17421,6 +17421,23 @@ void RadioModel::crossBandForSlice(SliceModel* slice, Band newBand)
     // change re-routes the antennas (onMoxHardwareFlipped), and the kept
     // band governs only the receive side. With nobody else listening, the
     // crossing switches as it always has, and the kept band is forgotten.
+    //
+    // Parity (band crossing while keyed): Thetis re-runs the antenna
+    // selection on a VFO change with tx = _mox, so a crossing while the
+    // radio transmits puts the new band's transmit routing on the relays:
+    // From Thetis console.cs:31713-31717 [v2.10.3.15] txtVFOAFreq_LostFocus
+    //   undoXVTRantennaModify(0);
+    //   Alex.getAlex().UpdateAlexAntSelection(RX1Band, _mox, alex_ant_ctrl_enabled, false);
+    // NereusSDR sends it for the transmit slice (the band the relays
+    // transmit on); a receive slice's crossing sends nothing mid-TX, and
+    // its receive routing goes out when the radio returns to receive
+    // (onMoxHardwareFlipped), as the antennaChanged handler does while keyed.
+    const bool keyed = m_alexRoutingTx;
+    const bool txSliceCrossed = keyed && slice == txBoundSlice();
+    if (txSliceCrossed) {
+        m_alexRoutingTxBand = newBand;
+        applyAlexAntennaForBand(newBand, /*isTx=*/true);
+    }
     const Band applied = m_keptRxAntennaBand.value_or(oldBand);
     if (receiveAntennaDiffers(applied, newBand)) {
         const QList<QByteArray> listeners = devicesListeningThroughRelay(slice);
@@ -17437,8 +17454,11 @@ void RadioModel::crossBandForSlice(SliceModel* slice, Band newBand)
     m_keptRxAntennaBand.reset();
     // Phase 3P-I-a T10 — reapply per-band antenna on boundary
     // crossing. Thetis UpdateAlexAntSelection equivalent
-    // (HPSDR/Alex.cs:310 [@501e3f5]).
-    applyAlexAntennaForBand(newBand);
+    // (HPSDR/Alex.cs:310 [@501e3f5]). Keyed, the transmit routing went
+    // out above and the receive routing waits for the return to receive.
+    if (!keyed) {
+        applyAlexAntennaForBand(newBand);
+    }
     // Phase 3P-I-a T10 follow-up — refresh the slice's cached
     // rxAntenna/txAntenna labels from AlexController so the
     // VFO Flag and RxApplet buttons show the new band's value.
