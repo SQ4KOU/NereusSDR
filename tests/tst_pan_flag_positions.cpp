@@ -20,7 +20,7 @@
 // m_filterLowHz/m_filterHighHz pair, so only the most recently tuned slice
 // got a shaded passband. The geometry half of that decision now lives in
 // SpectrumWidget::sliceMarkerGeometry(), which is what the marker cases below
-// pin -- the pixel emission needs a shown QRhiWidget and stays untested.
+// pin. The palette regression below also paints those markers into a QImage.
 //
 // Third bench report, Sub-Epic J, same two flags: "with Slice A selected,
 // Slice B's flag covered A's, clipping A's frequency readout to ".955.300"
@@ -38,10 +38,17 @@
 // =================================================================
 #include <QtTest/QtTest>
 #include <QApplication>
+#include <QImage>
+#include <QLabel>
+#include <QPainter>
 #include <QPushButton>
+#include <QToolButton>
+#include <cmath>
 
 #include "gui/SpectrumWidget.h"
+#include "gui/applets/RxApplet.h"
 #include "gui/widgets/VfoWidget.h"
+#include "models/SliceModel.h"
 
 using namespace NereusSDR;
 
@@ -64,6 +71,17 @@ constexpr int kUsbLowHz  =  150;
 constexpr int kUsbHighHz = 2850;
 constexpr int kCwLowHz   = -250;
 constexpr int kCwHighHz  =  250;
+
+struct SliceColorCase { int id; QRgb expected; };
+
+bool hasCueAtOpacity(QRgb actual, QRgb cue, int alpha)
+{
+    const auto near = [alpha](int seen, int channel) {
+        return std::abs(seen - qRound(channel * alpha / 255.0)) <= 2;
+    };
+    return near(qRed(actual), qRed(cue)) && near(qGreen(actual), qGreen(cue))
+        && near(qBlue(actual), qBlue(cue));
+}
 
 void placePan(SpectrumWidget& w)
 {
@@ -94,6 +112,128 @@ class TestPanFlagPositions : public QObject
     Q_OBJECT
 
 private slots:
+    void slice_letter_and_color_follow_stable_id_through_d_e_b()
+    {
+        SliceModel d(3), e(4), b(1);
+        const QVector<SliceModel*> slices{&d, &e, &b};
+        VfoWidget flag;
+        RxApplet applet(nullptr, nullptr);
+        const SliceModel* order[] = {&d, &e, &b};
+        for (const SliceModel* selected : order) {
+            const int id = selected->sliceIndex();
+            const QString letter(selected->sliceLetter());
+            const QColor expected = VfoWidget::sliceColor(id);
+            flag.setSliceIndex(id);
+            applet.setSliceIndex(id);
+            applet.updateSliceButtons(slices, id);
+
+            QLabel* flagBadge = nullptr;
+            for (QLabel* label : flag.findChildren<QLabel*>()) {
+                if (label->size() == QSize(18, 18)) { flagBadge = label; break; }
+            }
+            QVERIFY(flagBadge);
+            QCOMPARE(flagBadge->text(), letter);
+            QCOMPARE(flagBadge->grab().toImage().pixelColor(9, 2), expected);
+
+            QLabel* rxBadge = nullptr;
+            for (QLabel* label : applet.findChildren<QLabel*>()) {
+                if (label->size() == QSize(20, 20)) { rxBadge = label; break; }
+            }
+            QVERIFY(rxBadge);
+            QCOMPARE(rxBadge->text(), letter);
+            QCOMPARE(rxBadge->grab().toImage().pixelColor(10, 2), expected);
+
+            QToolButton* selectedTab = nullptr;
+            for (QToolButton* tab : applet.findChildren<QToolButton*>()) {
+                if (tab->isChecked() && tab->text() == letter) {
+                    selectedTab = tab;
+                    break;
+                }
+            }
+            QVERIFY(selectedTab);
+            QVERIFY(selectedTab->styleSheet().contains(expected.name()));
+        }
+    }
+
+    void own_marker_uses_the_flag_slice_color()
+    {
+        const SliceColorCase cases[] = {{1, 0xffff40ffu}, {2, 0xff40ff40u},
+                                       {3, 0xffffff00u}, {4, 0xff00d4ffu}};
+        for (const SliceColorCase item : cases) {
+            SpectrumWidget w;
+            w.resize(800, 400);
+            w.setFrequencyRange(14'200'000.0, 96'000.0);
+            VfoWidget* flag = w.addVfoWidget(item.id);
+            QVERIFY(flag);
+            flag->setFrequency(14'200'000.0);
+            flag->setFilter(-2'000, 2'000);
+            w.setRxFilterColor(Qt::transparent); // isolate the edge pixel from RX fill
+            QImage image(800, 400, QImage::Format_ARGB32_Premultiplied);
+            image.fill(Qt::black);
+            {
+                QPainter painter(&image);
+                w.drawOwnMarkersForTest(painter, QRect(0, 0, 800, 180),
+                                        QRect(0, 200, 800, 180));
+            }
+            QCOMPARE(image.pixel(400, 5), item.expected); // solid triangle
+            QVERIFY(hasCueAtOpacity(image.pixel(400, 190), item.expected, 220));
+            QVERIFY(hasCueAtOpacity(image.pixel(383, 100), item.expected, 130));
+        }
+    }
+
+    void shadow_cue_follows_each_slice_color()
+    {
+        SpectrumWidget w;
+        w.resize(800, 400);
+        w.setFrequencyRange(14'200'000.0, 96'000.0);
+        for (int id = 1; id <= 3; ++id) {
+            VfoWidget* flag = w.addVfoWidget(id);
+            QVERIFY(flag);
+            flag->setFrequency(14'180'000.0 + id * 10'000.0);
+            flag->setFilter(-2'000, 2'000);
+        }
+        w.setThreeDSliceDepth(true);
+        const auto bands = w.buildDssShadowBands();
+        QCOMPARE(bands.size(), 3);
+        QCOMPARE(bands[0].cue, QColor(0xff, 0x40, 0xff));
+        QCOMPARE(bands[1].cue, QColor(0x40, 0xff, 0x40));
+        QCOMPARE(bands[2].cue, QColor(0xff, 0xff, 0x00));
+    }
+
+    void offscreen_arrow_and_rx_badge_follow_active_slice()
+    {
+        SpectrumWidget w;
+        w.resize(800, 400);
+        w.setFrequencyRange(14'200'000.0, 96'000.0);
+        w.applyRemoteCtunState(true, true);
+        for (int id : {1, 2}) {
+            VfoWidget* flag = w.addVfoWidget(id);
+            QVERIFY(flag);
+            flag->setFrequency(14'000'000.0);
+        }
+        w.setVfoFrequency(14'000'000.0); // left of pinned view
+        RxApplet applet(nullptr, nullptr);
+        for (const SliceColorCase item : {SliceColorCase{1, 0xffff40ffu},
+                                          SliceColorCase{2, 0xff40ff40u}}) {
+            w.setFrontSliceIndex(item.id);
+            applet.setSliceIndex(item.id);
+            QImage image(800, 400, QImage::Format_ARGB32_Premultiplied);
+            image.fill(Qt::black);
+            {
+                QPainter painter(&image);
+                w.drawOffScreenIndicatorForTest(painter, QRect(0, 0, 800, 180),
+                                                QRect(0, 200, 800, 180));
+            }
+            QCOMPARE(image.pixel(8, 90), item.expected);
+            QLabel* badge = nullptr;
+            for (QLabel* label : applet.findChildren<QLabel*>()) {
+                if (label->text() == QString(QChar('A' + item.id))) { badge = label; break; }
+            }
+            QVERIFY(badge);
+            QCOMPARE(badge->grab().toImage().pixel(10, 2), item.expected);
+        }
+    }
+
     // Two slices co-hosted on one pan, tuned 100 kHz apart. Their flags must
     // sit at two different x positions, in frequency order.
     void two_flags_sit_at_their_own_frequencies()

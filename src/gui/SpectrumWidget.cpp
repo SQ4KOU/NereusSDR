@@ -6380,13 +6380,8 @@ QVector<SpectrumWidget::DssShadowBand> SpectrumWidget::buildDssShadowBands() con
         return static_cast<float>((hz - lowHz) / m_bandwidthHz);
     };
 
-    // Same cyan accent drawSliceMarker() uses for the VFO centre line and
-    // triangle marker (AetherSDR SliceColors.h:15-20, "Slice 0 (A) = cyan,
-    // active"). Duplicated rather than shared: drawSliceMarker()'s own
-    // kSliceR/G/B is local to that function, and this task's constraints
-    // forbid restructuring code it did not add.
-    const QColor cue(0x00, 0xd4, 0xff);
-
+    // Match drawSliceMarker()'s per-slice VFO cue. The AetherSDR
+    // SliceColors.h:15-20 mapping starts with cyan for slice 0 (A).
     for (const SliceMarkerGeometry& g : sliceMarkerGeometry()) {
         if (out.size() >= kDssShadowSlices) {
             break;
@@ -6406,7 +6401,8 @@ QVector<SpectrumWidget::DssShadowBand> SpectrumWidget::buildDssShadowBands() con
         // From AetherSDR SpectrumWidget.cpp:14263 [@1872028c]
         // (writeShadowSlot's `active ? 0.42f : 0.17f` band alpha).
         band.alpha       = 0.42f;
-        band.cue         = cue;
+        band.cue         = VfoWidget::sliceColor(
+            g.flag ? g.flag->sliceIndex() : m_frontSliceIndex);
         // From AetherSDR SpectrumWidget.cpp:14269 [@1872028c]
         // (writeShadowSlot's `active ? 0.36f : 0.11f` cue alpha).
         band.centreAlpha = 0.36f;
@@ -6832,7 +6828,8 @@ void SpectrumWidget::drawSliceMarker(QPainter& p, const QRect& specRect,
 
     // Per-slice color — from AetherSDR SliceColors.h:15-20
     // Slice 0 (A) = cyan, active
-    static constexpr int kSliceR = 0x00, kSliceG = 0xd4, kSliceB = 0xff;
+    const QColor sliceCue = VfoWidget::sliceColor(
+        g.flag ? g.flag->sliceIndex() : m_frontSliceIndex);
 
     // Filter passband rectangle
     double loHz = g.centreHz + g.filterLowHz;
@@ -6872,7 +6869,9 @@ void SpectrumWidget::drawSliceMarker(QPainter& p, const QRect& specRect,
     // Filter edge lines — from AetherSDR line 3237: slice color, alpha=130
     // Clip the spectrum-side edge to specBottomClipped so the line stops at
     // the bandplan strip's top edge.
-    p.setPen(QPen(QColor(kSliceR, kSliceG, kSliceB, 130), 1));
+    QColor edgeCue = sliceCue;
+    edgeCue.setAlpha(130);
+    p.setPen(QPen(edgeCue, 1));
     p.drawLine(xLo, specRect.top(), xLo, specBottomClipped);
     p.drawLine(xLo, wfRect.top(),   xLo, wfRect.bottom());
     p.drawLine(xHi, specRect.top(), xHi, specBottomClipped);
@@ -6881,7 +6880,9 @@ void SpectrumWidget::drawSliceMarker(QPainter& p, const QRect& specRect,
     // VFO center line — from AetherSDR line 3281: slice color, alpha=220, width=2
     // Width narrows to 1 when filter edge is ≤4px away (CW modes)
     qreal vfoLineW = (std::abs(vfoX - xLo) <= 4 || std::abs(vfoX - xHi) <= 4) ? 1.0 : 2.0;
-    p.setPen(QPen(QColor(kSliceR, kSliceG, kSliceB, 220), vfoLineW));
+    QColor centreCue = sliceCue;
+    centreCue.setAlpha(220);
+    p.setPen(QPen(centreCue, vfoLineW));
     p.drawLine(vfoX, specRect.top(), vfoX, wfRect.bottom());
 
     // VFO triangle marker — from AetherSDR line 3285-3293
@@ -6906,7 +6907,7 @@ void SpectrumWidget::drawSliceMarker(QPainter& p, const QRect& specRect,
         triTop = std::max(triTop, specRect.top());
 
         p.setPen(Qt::NoPen);
-        p.setBrush(QColor(kSliceR, kSliceG, kSliceB));
+        p.setBrush(sliceCue);
         QPolygon tri;
         tri << QPoint(vfoX - kTriHalf, triTop)
             << QPoint(vfoX + kTriHalf, triTop)
@@ -6927,7 +6928,16 @@ void SpectrumWidget::drawOffScreenIndicator(QPainter& p, const QRect& specRect,
     // Arrow and label colors — match slice accent color
     static constexpr int kArrowW = 14;
     static constexpr int kArrowH = 20;
-    QColor arrowColor(0x00, 0xb4, 0xd8);  // Cyan accent
+    int arrowSliceId = m_frontSliceIndex;
+    if (!m_vfoWidgets.contains(arrowSliceId)) {
+        for (auto it = m_vfoWidgets.cbegin(); it != m_vfoWidgets.cend(); ++it) {
+            if (it.value() && it.value()->frequency() == m_vfoHz) {
+                arrowSliceId = it.key();
+                break;
+            }
+        }
+    }
+    const QColor arrowColor = VfoWidget::sliceColor(arrowSliceId);
 
     // Format frequency text
     double mhz = m_vfoHz / 1.0e6;

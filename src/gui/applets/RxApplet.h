@@ -165,7 +165,7 @@ class SliceModel;
 // RxApplet — per-slice RX controls applet.
 //
 // Controls (17 total):
-//  1.  Slice badge (A/B/C/D)
+//  1.  Slice badge (stable slice-ID letter, A onward)
 //  2.  Lock button (checkable, NYI)
 //  3.  RX antenna button (Tier 1 wired)
 //  4.  TX antenna button (Tier 1 wired)
@@ -195,7 +195,7 @@ public:
     // Attach to a different slice (or nullptr to detach).
     void setSlice(SliceModel* slice);
 
-    // Set the slice letter badge (0=A, 1=B, 2=C, 3=D)
+    // Set the slice letter badge (0=A, 1=B, and so on).
     void setSliceIndex(int idx);
 
     // Phase 3F (Bug 3): rebuild the per-slice tab row to match the live slice

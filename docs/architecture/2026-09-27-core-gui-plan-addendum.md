@@ -2458,6 +2458,16 @@ colours for the same signal.
   helper/runtime and rerun full-session traversal before closing this gap.
   Evidence: core-gui-traversal-5c-triage-report.md. No live service, radio or
   host network mutation occurred.
+- Matching-build verification: the rebuilt helper and frozen 383984e5
+  libraries pass session-direct, including authenticated registration. The
+  full run also passes direct/relay/media, IPv6, tunnel and path-upgrade
+  scenarios before reaching a separate relay-release failure (G-122).
+  Its later watch-deadline scenario could not create its report directory
+  because the root mounted the build read-only. Supply the harness's existing
+  DEADLINE_OUT setting with a writable scratch path before resuming those
+  scenarios. The test-build aggregate still needs an explicit helper
+  dependency. Logs: traversal-383984e5-matched-session-direct/console.log
+  and traversal-383984e5-matched-full/console.log.
 - Plan: complete R5 full-session Linux traversal verification.
 
 ### G-117: Desktop connection header does not identify the active route
@@ -2470,12 +2480,17 @@ colours for the same signal.
 - JJ's ruling: put this information where "Core connected" appears and show
   a mockup first. JJ rejected the first mockup's stacked header and inaccurate
   surrounding app. Preserve the existing single-row header and app appearance.
-- Status: OPEN design review. The replacement preview is limited to the
-  existing header strip: a single-line connection/path readout with details
-  on activation. It was checked at desktop width against the running window;
-  opening/closing details was verified by keyboard. The previous invented
-  app shell and two-row alternative were removed. This is a mockup only;
-  do not implement the unapproved header design.
+- Further ruling: "keep the traffic, audio, core to radio, core round trip
+  in the header and for the drop down for the rest thats nice". Retain these
+  four measurements in the single existing header row; the connection
+  drop-down holds the route, IP family and addresses, with separate control
+  and audio/display paths. Preserve the existing app appearance and controls.
+- Status: layout approved with that correction. The revised mockup keeps
+  all four measurements visible while its drop-down is open; verified at
+  desktop width with keyboard activation. Implementation source inspection
+  is underway. Do not infer a relayed connection from RV discovery or expose
+  a tunnel's loopback shim as the internet peer. Clear stale path details on
+  reconnect and identify unavailable facts honestly.
 - Plan: remote-window connection visibility and R5 operator diagnostics.
 
 ### G-118: Slice ownership, takeover and dead-session release are unclear
@@ -2512,12 +2527,14 @@ colours for the same signal.
 - JJ's ruling: "we have stable colors selected like in the iphone we used
   the aether colors". Preserve that established palette and slice identity.
   Ownership is separate from the slice color.
-- Status: source cause established; Sol 6 medium owns the isolated own-marker
-  and current-badge repair in nereus-small, based on signed trunk 4a6b7b05.
-  Hosting foreign-marker repair remains queued. Verify own marker/flag/tab
-  consistency and the hosting desktop's foreign
-  marker visibility with focused deterministic UI coverage. Preserve user
-  display settings such as the receive-filter fill and all attribution.
+- Status: own-marker and current-badge repair integrated from signed
+  561dd89c. The app/Core build and eight affected full offscreen suites passed
+  together in the trunk (2.58 s), including painted B/C/D cues and existing
+  E color fallback. Existing receive-filter fill and alpha settings are
+  retained. Hosting foreign-marker repair remains queued; its documented
+  owner-labeled dashed presentation still needs deterministic host coverage.
+  Evidence: core-gui-slice-colors-root-build.log and
+  core-gui-slice-colors-root-ctest.log.
 - Plan: several-devices visual parity and truthful ownership presentation.
 
 ### G-120: Linux service fixture expects relay removal on a loopback ICE path
@@ -2531,7 +2548,11 @@ colours for the same signal.
   change or late candidate classification is not excluded.
 - Ruling basis: JJ requires a cause and fix for failures at actual load;
   preserve relay cleanup and reachability policy, with no deadline increase.
-- Status: OPEN. Sol 6 high completed a read-only scout. Next verify the
+- Status: OPEN. Sol 6 high is implementing explicit locally admitted
+  CandidateSource endpoint provenance, after lead review of the trust
+  boundary. Real loopback ICE must not be classified as a relay shim merely
+  by its address, and a remote foundation string cannot assert local shim
+  ownership. Verify the
   authenticated session's current inner path at the ICE query, preserving
   the service's RELEASED 2 assertion; judge genuine loopback ICE versus
   explicit RelayLeg shim provenance before any production policy change.
@@ -2548,11 +2569,26 @@ colours for the same signal.
 - Ruling basis: the approved several-devices design requires Core-assigned
   slice letters to agree across clients. JJ reiterated that the existing
   Aether palette must be preserved; no new color or identity policy is needed.
-- Status: Sol 6 medium owns a separate follow-up after signed 561dd89c,
-  with E and D-to-E-to-B label/color regressions. Preserve the Core's exact
-  existing label mapping and color fallback. No ownership mutation or new
-  Take/Release interaction is included.
+- Status: integrated from signed 2bba1a3a after 561dd89c. The D-to-E-to-B
+  regression failed on the original stale D badge, then passed with all
+  eight affected full suites in the combined trunk (2.58 s). Both badge
+  setters preserve the Core's exact existing letter mapping and color
+  fallback. No ownership mutation or new Take/Release action is included.
 - Plan: truthful slice identity throughout the desktop window.
+
+### G-122: Real Linux relayed-session teardown returns only one reservation
+
+- Evidence: the matching frozen 383984e5 traversal run connects the real
+  relayed session successfully, then counts one returned reservation where
+  the harness requires two. The later relayed-media scenario returns all
+  four reservations and passes. This is separate from the loopback-shim
+  classification finding; no cause has yet been established.
+- Ruling basis: JJ requires the cause and a suggested fix for failures at
+  actual load. Preserve the two-reservation release assertion and deadlines.
+- Status: OPEN investigation. Retained private scenario/service logs and
+  the full console are under traversal-383984e5-matched-full. No live
+  rendezvous service or radio was changed.
+- Plan: R5 relay cleanup and real-service traversal acceptance.
 
 ## How this addendum is kept
 
