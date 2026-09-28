@@ -34,13 +34,17 @@
 //               implementation via Anthropic Claude Code.
 //   2026-09-27: real transmit-watch peer, candidate and frame tests;
 //               AI-assisted via OpenAI Codex for J.J. Boyd (KG4VCF).
+//   2026-09-28: watch peers through two actual RelayLegs and a local WSS
+//               relay player; AI-assisted via OpenAI Codex for J.J. Boyd.
 // =================================================================
 
 #include <QtTest>
 
 #include <QDir>
+#include <QCryptographicHash>
 #include <QElapsedTimer>
 #include <QPointer>
+#include <QSet>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -49,8 +53,13 @@
 #include <QMutex>
 #include <QScopeGuard>
 #include <QSignalSpy>
+#include <QSslCertificate>
+#include <QSslConfiguration>
+#include <QSslKey>
 #include <QSslSocket>
 #include <QTemporaryDir>
+#include <QWebSocket>
+#include <QWebSocketServer>
 
 #include <chrono>
 #include <memory>
@@ -58,6 +67,9 @@
 #include <thread>
 
 #include <openssl/err.h>
+#include <openssl/evp.h>
+#include <openssl/pem.h>
+#include <openssl/x509v3.h>
 
 #include "core/AppSettings.h"
 #include "core/security/CertificateStore.h"
@@ -228,6 +240,191 @@ struct WatchPair {
     }
 };
 
+struct LoopbackTlsIdentity {
+    QSslCertificate certificate;
+    QSslKey key;
+};
+
+LoopbackTlsIdentity makeLoopbackTlsIdentity()
+{
+    using Key = std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)>;
+    using Cert = std::unique_ptr<X509, decltype(&X509_free)>;
+    using Bio = std::unique_ptr<BIO, decltype(&BIO_free)>;
+    Key key(EVP_RSA_gen(2048), &EVP_PKEY_free);
+    Cert cert(X509_new(), &X509_free);
+    if (!key || !cert || X509_set_version(cert.get(), 2) != 1
+        || ASN1_INTEGER_set_int64(X509_get_serialNumber(cert.get()), 1) != 1
+        || !X509_gmtime_adj(X509_getm_notBefore(cert.get()), -60)
+        || !X509_gmtime_adj(X509_getm_notAfter(cert.get()), 3600)
+        || X509_set_pubkey(cert.get(), key.get()) != 1) {
+        return {QSslCertificate(), QSslKey()};
+    }
+    X509_NAME* name = X509_get_subject_name(cert.get());
+    if (X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC,
+                                   reinterpret_cast<const unsigned char*>("127.0.0.1"),
+                                   -1, -1, 0) != 1
+        || X509_set_issuer_name(cert.get(), name) != 1) {
+        return {QSslCertificate(), QSslKey()};
+    }
+    X509V3_CTX context;
+    X509V3_set_ctx(&context, cert.get(), cert.get(), nullptr, nullptr, 0);
+    for (const auto& [nid, value] : {
+             std::pair<int, const char*>{NID_basic_constraints, "critical,CA:TRUE"},
+             {NID_key_usage, "critical,digitalSignature,keyEncipherment,keyCertSign"},
+             {NID_ext_key_usage, "serverAuth"},
+             {NID_subject_alt_name, "IP:127.0.0.1"}}) {
+        X509_EXTENSION* extension = X509V3_EXT_conf_nid(nullptr, &context, nid, value);
+        const bool added = extension && X509_add_ext(cert.get(), extension, -1) == 1;
+        X509_EXTENSION_free(extension);
+        if (!added) {
+            return {QSslCertificate(), QSslKey()};
+        }
+    }
+    if (X509_sign(cert.get(), key.get(), EVP_sha256()) == 0) {
+        return {QSslCertificate(), QSslKey()};
+    }
+    Bio certBio(BIO_new(BIO_s_mem()), &BIO_free);
+    Bio keyBio(BIO_new(BIO_s_mem()), &BIO_free);
+    if (!certBio || !keyBio || PEM_write_bio_X509(certBio.get(), cert.get()) != 1
+        || PEM_write_bio_PrivateKey(keyBio.get(), key.get(), nullptr, nullptr, 0,
+                                    nullptr, nullptr) != 1) {
+        return {QSslCertificate(), QSslKey()};
+    }
+    const auto contents = [](BIO* bio) {
+        char* data = nullptr;
+        const long size = BIO_get_mem_data(bio, &data);
+        return QByteArray(data, static_cast<qsizetype>(size));
+    };
+    const QByteArray certPem = contents(certBio.get());
+    return {QSslCertificate(certPem, QSsl::Pem),
+            QSslKey(contents(keyBio.get()), QSsl::Rsa, QSsl::Pem, QSsl::PrivateKey)};
+}
+
+// A bounded local WSS player for the relay protocol. JOIN tokens select
+// primary/watch and Core/client; watch tag-3 datagrams alone are forwarded.
+// Admission here is a fixture, not the Python production relay's verifier.
+class LocalWatchRelay {
+public:
+    LocalWatchRelay()
+        : m_savedTls(QSslConfiguration::defaultConfiguration())
+        , m_identity(makeLoopbackTlsIdentity())
+        , m_server(QStringLiteral("watch-relay"), QWebSocketServer::SecureMode)
+    {
+        if (m_identity.certificate.isNull() || m_identity.key.isNull()) {
+            return;
+        }
+        QSslConfiguration trusted = m_savedTls;
+        trusted.addCaCertificate(m_identity.certificate);
+        QSslConfiguration::setDefaultConfiguration(trusted);
+        QSslConfiguration serverTls = trusted;
+        serverTls.setLocalCertificate(m_identity.certificate);
+        serverTls.setPrivateKey(m_identity.key);
+        m_server.setSslConfiguration(serverTls);
+        if (!m_server.listen(QHostAddress::LocalHost, 0)) {
+            return;
+        }
+        QObject::connect(&m_server, &QWebSocketServer::newConnection, &m_server, [this] {
+            while (QWebSocket* socket = m_server.nextPendingConnection()) {
+                socket->setMaxAllowedIncomingMessageSize(RelayLeg::kMaxDatagramBytes + 65);
+                QObject::connect(socket, &QWebSocket::binaryMessageReceived, &m_server,
+                                 [this, socket](const QByteArray& frame) {
+                    onFrame(socket, frame);
+                });
+            }
+        });
+    }
+
+    ~LocalWatchRelay() { QSslConfiguration::setDefaultConfiguration(m_savedTls); }
+    bool listening() const { return m_server.isListening(); }
+    QUrl url() const
+    {
+        return QUrl(QStringLiteral("wss://127.0.0.1:%1/v1/relay").arg(m_server.serverPort()));
+    }
+    QSslCertificate certificate() const { return m_identity.certificate; }
+    bool hasAllLegs() const { return m_joined.size() == 4; }
+    bool fourSockets() const
+    {
+        QSet<QWebSocket*> sockets;
+        for (const auto& socket : m_joined) {
+            if (!socket) {
+                return false;
+            }
+            sockets.insert(socket.data());
+        }
+        return sockets.size() == 4;
+    }
+    const QList<QByteArray>& forwardedWatchFrames() const { return m_forwardedWatch; }
+    const QList<QByteArray>& primaryFrames() const { return m_primaryFrames; }
+    int rejected() const { return m_rejected; }
+
+private:
+    void onFrame(QWebSocket* socket, const QByteArray& frame)
+    {
+        if (frame.isEmpty()) {
+            ++m_rejected;
+            socket->close();
+            return;
+        }
+        const quint8 tag = static_cast<quint8>(frame.at(0));
+        if (tag == RelayLeg::kTagJoin) {
+            const QString token = QString::fromLatin1(frame.mid(1));
+            if (!QStringList{QStringLiteral("core-primary"), QStringLiteral("client-primary"),
+                             QStringLiteral("core-watch"), QStringLiteral("client-watch")}
+                     .contains(token)
+                || m_joined.contains(token)) {
+                ++m_rejected;
+                socket->close();
+                return;
+            }
+            m_joined.insert(token, socket);
+            m_role.insert(socket, token);
+            const bool watch = token.endsWith(QLatin1String("watch"));
+            const QString other = watch
+                ? (token == QLatin1String("core-watch")
+                       ? QStringLiteral("client-watch") : QStringLiteral("core-watch"))
+                : (token == QLatin1String("core-primary")
+                       ? QStringLiteral("client-primary") : QStringLiteral("core-primary"));
+            if (m_joined.contains(other)) {
+                const QByteArray ready("\x81\x01\x01", 3);
+                socket->sendBinaryMessage(ready);
+                m_joined.value(other)->sendBinaryMessage(ready);
+            }
+            return;
+        }
+        const QString token = m_role.value(socket);
+        if (token.isEmpty()) {
+            ++m_rejected;
+            socket->close();
+            return;
+        }
+        if (token.endsWith(QLatin1String("primary"))) {
+            m_primaryFrames.append(frame);
+            return;
+        }
+        if (tag != RelayLeg::kTagWatch || frame.size() < 2
+            || frame.size() > RelayLeg::kMaxDatagramBytes + 1) {
+            ++m_rejected;
+            socket->close();
+            return;
+        }
+        const QString other = token == QLatin1String("core-watch")
+            ? QStringLiteral("client-watch") : QStringLiteral("core-watch");
+        if (QWebSocket* peer = m_joined.value(other).data()) {
+            m_forwardedWatch.append(frame);
+            peer->sendBinaryMessage(frame);
+        }
+    }
+
+    QSslConfiguration m_savedTls;
+    LoopbackTlsIdentity m_identity;
+    QWebSocketServer m_server;
+    QHash<QString, QPointer<QWebSocket>> m_joined;
+    QHash<QWebSocket*, QString> m_role;
+    QList<QByteArray> m_forwardedWatch;
+    QList<QByteArray> m_primaryFrames;
+    int m_rejected = 0;
+};
+
 } // namespace
 
 class TstDataChannelTransport : public QObject {
@@ -393,6 +590,135 @@ private slots:
         pair.answerer.reset();
         QVERIFY(gone.isNull());
         QTRY_VERIFY_WITH_TIMEOUT(!pair.answerSource->ready(), 5000);
+    }
+
+    void watchPeersUseSeparateRealRelayLegsOverLocalWss()
+    {
+        Core core;
+        LocalWatchRelay relay;
+        QVERIFY(relay.listening());
+        auto corePrimary = RelayLeg::create();
+        auto clientPrimary = RelayLeg::create();
+        auto coreWatch = RelayLeg::createWatch();
+        auto clientWatch = RelayLeg::createWatch();
+        QVERIFY(corePrimary && clientPrimary && coreWatch && clientWatch);
+        QVERIFY(corePrimary->lanePort(1) != coreWatch->lanePort(1));
+        QVERIFY(clientPrimary->lanePort(1) != clientWatch->lanePort(1));
+        QCOMPARE(coreWatch->lanePort(2), quint16(0));
+        QCOMPARE(clientWatch->lanePort(2), quint16(0));
+        corePrimary->open(relay.url(), QStringLiteral("core-primary"));
+        clientPrimary->open(relay.url(), QStringLiteral("client-primary"));
+        coreWatch->open(relay.url(), QStringLiteral("core-watch"));
+        clientWatch->open(relay.url(), QStringLiteral("client-watch"));
+        QVERIFY(waitFor([&] {
+            return relay.hasAllLegs() && relay.fourSockets()
+                && corePrimary->state() == RelayLeg::State::Joined
+                && clientPrimary->state() == RelayLeg::State::Joined
+                && coreWatch->state() == RelayLeg::State::Joined
+                && clientWatch->state() == RelayLeg::State::Joined;
+        }, 10000));
+
+        const auto iceForLeg = [](const std::shared_ptr<RelayLeg>& leg) {
+            IceConfiguration ice = IceConfiguration::throughRendezvous(
+                {}, true, IceConfiguration::localAddressFamilies(), {});
+            ice.setRelay(std::nullopt, 1);
+            ice.setCandidateSourceFactory(RelayLeg::factoryFor(leg), true);
+            return ice;
+        };
+        auto offerer = std::make_unique<DataChannelTransport>();
+        auto answerer = std::make_unique<DataChannelTransport>();
+        bool descriptionsAccepted = true;
+        QObject::connect(offerer.get(), &DataChannelTransport::localDescription,
+                         answerer.get(), [&](const QString& sdp, const QString& type) {
+            descriptionsAccepted &= answerer->acceptDescription(sdp, type);
+        });
+        QObject::connect(answerer.get(), &DataChannelTransport::localDescription,
+                         offerer.get(), [&](const QString& sdp, const QString& type) {
+            descriptionsAccepted &= offerer->acceptDescription(sdp, type);
+        });
+        QSignalSpy offerCandidates(offerer.get(), &DataChannelTransport::localCandidate);
+        QSignalSpy answerCandidates(answerer.get(), &DataChannelTransport::localCandidate);
+        QSignalSpy atCore(answerer.get(), &SessionTransport::binaryReceived);
+        QSignalSpy atClient(offerer.get(), &SessionTransport::binaryReceived);
+        DataChannelTransport::Options answer;
+        answer.purpose = DataChannelTransport::Purpose::TxWatch;
+        answer.role = DataChannelTransport::Role::Answerer;
+        answer.maxIncomingBytes = DataChannelTransport::kMaxWatchFrameBytes;
+        answer.certificatePemPath = core.server->certificatePemPath();
+        answer.privateKeyPemPath = core.server->privateKeyPemPath();
+        answer.ice = iceForLeg(coreWatch);
+        DataChannelTransport::Options offer = answer;
+        offer.role = DataChannelTransport::Role::Offerer;
+        offer.certificatePemPath.clear();
+        offer.privateKeyPemPath.clear();
+        offer.ice = iceForLeg(clientWatch);
+        QVERIFY(answerer->start(answer));
+        QVERIFY(offerer->start(offer));
+        QVERIFY(waitFor([&] {
+            return descriptionsAccepted && answerer->isOpen() && offerer->isOpen();
+        }, 20000));
+        QCOMPARE(offerCandidates.size(), 0);
+        QCOMPARE(answerCandidates.size(), 0);
+        QVERIFY(!offerer->acceptCandidate(RelayLeg::candidateLine(1, coreWatch->lanePort(1))));
+        QVERIFY(!answerer->acceptCandidate(RelayLeg::candidateLine(1, clientWatch->lanePort(1))));
+        QVERIFY(offerer->selectedPath().has_value());
+        QVERIFY(answerer->selectedPath().has_value());
+        QCOMPARE(offerer->selectedPath()->remoteAddress, QStringLiteral("127.0.0.1"));
+        QCOMPARE(answerer->selectedPath()->remoteAddress, QStringLiteral("127.0.0.1"));
+        QCOMPARE(offerer->peerCertificateSha256(),
+                 QByteArray::fromHex(core.server->certificateFingerprint()
+                                         .remove(QLatin1Char(':')).toLatin1()));
+        QVERIFY(offerer->peerCertificateSha256()
+                != relay.certificate().digest(QCryptographicHash::Sha256));
+
+        const QByteArray attach = QByteArray(1, char(1)) + patterned(32);
+        const QByteArray ack = QByteArray::fromHex("0100");
+        const QByteArray heartbeat = QByteArray::fromHex("01000000010000000100000001");
+        QVERIFY(offerer->sendBinary(attach));
+        QTRY_COMPARE(atCore.size(), 1);
+        QCOMPARE(atCore.first().first().toByteArray(), attach);
+        QVERIFY(answerer->sendBinary(ack));
+        QTRY_COMPARE(atClient.size(), 1);
+        QCOMPARE(atClient.first().first().toByteArray(), ack);
+        QVERIFY(offerer->sendBinary(heartbeat));
+        QTRY_COMPARE(atCore.size(), 2);
+        QCOMPARE(atCore.last().first().toByteArray(), heartbeat);
+        QVERIFY(!relay.forwardedWatchFrames().isEmpty());
+        for (const QByteArray& frame : relay.forwardedWatchFrames()) {
+            QCOMPARE(static_cast<quint8>(frame.at(0)), RelayLeg::kTagWatch);
+        }
+        QCOMPARE(relay.primaryFrames().size(), 0);
+        QCOMPARE(relay.rejected(), 0);
+        QCOMPARE(corePrimary->state(), RelayLeg::State::Joined);
+        QCOMPARE(clientPrimary->state(), RelayLeg::State::Joined);
+
+        offerer->closeLink(QStringLiteral("watch fixture done"));
+        answerer->closeLink(QStringLiteral("watch fixture done"));
+        offerer.reset();
+        answerer.reset();
+        const auto sourceAvailable = [](const std::shared_ptr<RelayLeg>& leg) {
+            auto probe = leg->sourceFor(IceConfiguration::kControlLane);
+            if (!probe) {
+                return false;
+            }
+            QString candidate;
+            probe->start([&](const QString& line) { candidate = line; });
+            probe->stop();
+            return !candidate.isEmpty();
+        };
+        // CandidateSourceLease releases the RelayLaneSource through
+        // deleteLater() after ICE teardown. QTest::qWaitFor advances deferred
+        // deletion; the generic waitFor() pump does not.
+        QVERIFY2(QTest::qWaitFor([&] { return sourceAvailable(coreWatch); }, 5000),
+                 "Core watch source remained claimed after peer teardown");
+        QVERIFY2(QTest::qWaitFor([&] { return sourceAvailable(clientWatch); }, 5000),
+                 "Client watch source remained claimed after peer teardown");
+        QCOMPARE(corePrimary->state(), RelayLeg::State::Joined);
+        QCOMPARE(clientPrimary->state(), RelayLeg::State::Joined);
+        coreWatch->close();
+        clientWatch->close();
+        corePrimary->close();
+        clientPrimary->close();
     }
 
     // ── The bytes ─────────────────────────────────────────────────────

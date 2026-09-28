@@ -1135,8 +1135,13 @@ colours for the same signal.
   no media or ordinary candidate trickle, and owned relay-loopback candidates
   only. Real DTLS tests verify the presented Core certificate and raw watch
   frames; the integrated app/Core build and four transport suites passed
-  (19.95 seconds). Those tests inject loopback candidates and do not yet prove
-  actual outer-WebSocket relay forwarding. No deployed service was changed.
+  (19.95 seconds). A further real-RelayLeg test (`9c68e699`) uses four separate
+  outer WSS sockets and two real DTLS watch peers through a local protocol
+  player. It verifies raw attach/ack/heartbeat frames, the actual Core digest
+  distinct from the relay TLS certificate, tag-3 forwarding and source retirement.
+  The integrated full data-channel suite passed (14.09 seconds). The relay
+  player does not replace production Python service or loss-test acceptance.
+  No deployed service was changed.
   The primary transport now retains its negotiated watch grant before the RV
   introduction is retired. It permits new watch admission only on that exact
   live WebSocket-relay primary with both relay legs present and an unexpired
