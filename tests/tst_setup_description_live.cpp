@@ -22,6 +22,46 @@ using namespace NereusSDR;
 class SetupDescriptionLiveTest : public QObject {
     Q_OBJECT
 private slots:
+    void pairedV11PublishesSpectrumPeaksAndKeepsV10Projection()
+    {
+        Core core;
+        Device current(QStringLiteral("Spectrum peaks V11 iPhone"), QStringLiteral("phone"));
+        Device older(QStringLiteral("Spectrum peaks V10 iPhone"), QStringLiteral("phone"));
+        core.pair(current);
+        core.pair(older);
+        QHash<QByteArray, int> v11Features = kHolder;
+        v11Features.insert("setupDescription", 11);
+        auto* v11 = core.signIn(current, v11Features);
+        QVERIFY(admitted(v11));
+        QCOMPARE(capability(v11->received(), QStringLiteral("setupDescriptionVersion")),
+                 std::optional<qint64>(11));
+        const QJsonObject display = QJsonDocument::fromJson(latest(v11->received(),
+            QStringLiteral("setup"), QStringLiteral("display")).toString().toUtf8()).object();
+        QCOMPARE(display.value("version"), QJsonValue(11));
+        const QJsonObject peaks = display.value("pages").toArray().at(1).toObject();
+        QCOMPARE(peaks.value("id"), QJsonValue("display.spectrumPeaks"));
+        int described = 0;
+        for (const QJsonValue& section : peaks.value("sections").toArray()) {
+            for (const QJsonValue& raw : section.toObject().value("controls").toArray()) {
+                QVERIFY(SetupDescriptionService::validateDisplayPhoneBinding(raw.toObject()));
+                ++described;
+            }
+        }
+        QCOMPARE(described, 13);
+        QHash<QByteArray, int> v10Features = kHolder;
+        v10Features.insert("setupDescription", 10);
+        auto* v10 = core.signIn(older, v10Features);
+        QVERIFY(admitted(v10));
+        QCOMPARE(capability(v10->received(), QStringLiteral("setupDescriptionVersion")),
+                 std::optional<qint64>(10));
+        const QJsonObject old = QJsonDocument::fromJson(latest(v10->received(),
+            QStringLiteral("setup"), QStringLiteral("display")).toString().toUtf8()).object();
+        QCOMPARE(old.value("version"), QJsonValue(10));
+        QCOMPARE(old.value("pages").toArray().size(), 4);
+        QCOMPARE(old.value("pages").toArray().at(1).toObject().value("id"),
+                 QJsonValue("display.waterfallDefaults"));
+    }
+
     void pairedV10PublishesWaterfallOverlaysAndKeepsV9Projection()
     {
         Core core;

@@ -16,6 +16,11 @@
 //   2026-05-01 — Skeleton created in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-09-28 - Setup description ids for the thirteen rows the remote
+//                 Display description publishes (version 11); source
+//                 references moved out of four tooltips into comments.
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -344,10 +349,11 @@ void SpectrumPeaksPage::buildUI()
 
     m_aphEnable = new QCheckBox(
         QStringLiteral("Enable per-bin peak trace with decay"), m_aphGroup);
+    m_aphEnable->setProperty("nereusSetupId", "display.spectrumPeaks.activePeakHold");
     m_aphEnable->setToolTip(QStringLiteral(
         "Display a secondary trace showing the highest level ever seen at each "
         "frequency bin. The trace decays downward at the configured rate once "
-        "the hold duration elapses. Full implementation in Task 2.5."));
+        "the hold duration elapses."));
     aphForm->addRow(QString(), m_aphEnable);
 
     m_aphDurationMs = new QSpinBox(m_aphGroup);
@@ -361,12 +367,14 @@ void SpectrumPeaksPage::buildUI()
     m_aphDropDbPerSec = new QSpinBox(m_aphGroup);
     m_aphDropDbPerSec->setRange(1, 60);
     m_aphDropDbPerSec->setSuffix(QStringLiteral(" dB/s"));
+    m_aphDropDbPerSec->setProperty("nereusSetupId", "display.spectrumPeaks.activePeakHoldDropRate");
     m_aphDropDbPerSec->setToolTip(QStringLiteral(
         "Rate at which a held peak falls after the hold duration elapses."));
     aphForm->addRow(QStringLiteral("Drop rate:"), m_aphDropDbPerSec);
 
     m_aphFill = new QCheckBox(
         QStringLiteral("Fill area between peak trace and current trace"), m_aphGroup);
+    m_aphFill->setProperty("nereusSetupId", "display.spectrumPeaks.activePeakHoldFill");
     m_aphFill->setToolTip(QStringLiteral(
         "Shade the region between the live spectrum and the peak-hold trace."));
     aphForm->addRow(QString(), m_aphFill);
@@ -381,6 +389,7 @@ void SpectrumPeaksPage::buildUI()
     // Placeholder colour; setColor() is called in the constructor after buildUI().
     // Gold default contrasts well against typical clarity-blue and white live traces.
     m_aphColor = new ColorSwatchButton(QColor(0xFF, 0xD7, 0x00, 0xFF), m_aphGroup);
+    m_aphColor->setProperty("nereusSetupId", "display.spectrumPeaks.activePeakHoldColor");
     m_aphColor->setToolTip(QStringLiteral(
         "Color of the dashed Active Peak Hold trace. Set this to a hue "
         "different from the live data-line color so the peak trace stays "
@@ -401,6 +410,7 @@ void SpectrumPeaksPage::buildUI()
     m_blobEnable = new QCheckBox(
         QStringLiteral("Show top-N peak markers"), m_blobGroup);
     // From Thetis setup.cs chkShowPeakBlobMaximums [v2.10.3.13]
+    m_blobEnable->setProperty("nereusSetupId", "display.spectrumPeaks.peakBlobs");
     m_blobEnable->setToolTip(QStringLiteral(
         "Display small circle markers at the top-N highest signal peaks in the spectrum."));
     blobForm->addRow(QString(), m_blobEnable);
@@ -408,14 +418,16 @@ void SpectrumPeaksPage::buildUI()
     // From Thetis Display.cs:4407 [v2.10.3.13] range 1..m_nRX1Maximums.Length (=20)
     m_blobCount = new QSpinBox(m_blobGroup);
     m_blobCount->setRange(1, 20);
+    // Default 3, max 20 from the Display.cs:4407 cite above.
+    m_blobCount->setProperty("nereusSetupId", "display.spectrumPeaks.peakBlobCount");
     m_blobCount->setToolTip(QStringLiteral(
-        "Number of peak markers to display (1–20). "
-        "From Thetis Display.cs:4407 [v2.10.3.13] — default 3, max 20."));
+        "Number of peak markers to display (1 to 20)."));
     blobForm->addRow(QStringLiteral("Number of peaks:"), m_blobCount);
 
     m_blobInsideFilter = new QCheckBox(
         QStringLiteral("Only show peaks inside the RX filter passband"), m_blobGroup);
     // From Thetis Display.cs:4401 [v2.10.3.13] ShowPeakBlobsInsideFilterOnly
+    m_blobInsideFilter->setProperty("nereusSetupId", "display.spectrumPeaks.peakBlobInsideFilter");
     m_blobInsideFilter->setToolTip(QStringLiteral(
         "Restrict peak blobs to frequencies within the current RX filter passband."));
     blobForm->addRow(QString(), m_blobInsideFilter);
@@ -423,6 +435,7 @@ void SpectrumPeaksPage::buildUI()
     m_blobHoldEnable = new QCheckBox(
         QStringLiteral("Hold peaks before decay"), m_blobGroup);
     // From Thetis Display.cs:4593 [v2.10.3.13] BlobPeakHold
+    m_blobHoldEnable->setProperty("nereusSetupId", "display.spectrumPeaks.peakBlobHold");
     m_blobHoldEnable->setToolTip(QStringLiteral(
         "Keep each blob at its peak position for the hold duration before falling."));
     blobForm->addRow(QString(), m_blobHoldEnable);
@@ -432,14 +445,16 @@ void SpectrumPeaksPage::buildUI()
     m_blobHoldMs->setRange(100, 60000);
     m_blobHoldMs->setSingleStep(100);
     m_blobHoldMs->setSuffix(QStringLiteral(" ms"));
+    // Default 500 ms from the Display.cs:4599 cite above.
+    m_blobHoldMs->setProperty("nereusSetupId", "display.spectrumPeaks.peakBlobHoldTime");
     m_blobHoldMs->setToolTip(QStringLiteral(
-        "How long (ms) a blob is held at its peak before falling. "
-        "From Thetis Display.cs:4599 [v2.10.3.13] — default 500 ms."));
+        "How long (ms) a blob is held at its peak before falling."));
     blobForm->addRow(QStringLiteral("Hold duration:"), m_blobHoldMs);
 
     m_blobHoldDrop = new QCheckBox(
         QStringLiteral("Decay after hold (off = hard cut)"), m_blobGroup);
     // From Thetis Display.cs:4605 [v2.10.3.13] BlobPeakHoldDrop
+    m_blobHoldDrop->setProperty("nereusSetupId", "display.spectrumPeaks.peakBlobHoldDrop");
     m_blobHoldDrop->setToolTip(QStringLiteral(
         "When on, blobs decay at the fall rate after the hold. "
         "When off, blobs disappear instantly after the hold duration."));
@@ -449,9 +464,10 @@ void SpectrumPeaksPage::buildUI()
     m_blobFallDbPerSec = new QSpinBox(m_blobGroup);
     m_blobFallDbPerSec->setRange(1, 60);
     m_blobFallDbPerSec->setSuffix(QStringLiteral(" dB/s"));
+    // Default 6 dB/s from the Display.cs:4697 cite above.
+    m_blobFallDbPerSec->setProperty("nereusSetupId", "display.spectrumPeaks.peakBlobFallRate");
     m_blobFallDbPerSec->setToolTip(QStringLiteral(
-        "Rate at which blobs fall after the hold duration. "
-        "From Thetis Display.cs:4697 [v2.10.3.13] — default 6 dB/s."));
+        "Rate at which blobs fall after the hold duration."));
     blobForm->addRow(QStringLiteral("Fall rate:"), m_blobFallDbPerSec);
 
     // Colors
@@ -459,17 +475,19 @@ void SpectrumPeaksPage::buildUI()
     // Upstream tags preserved: //MW0LGE (from cited display.cs:8429) [v2.10.3.15]
     // Placeholder color; setColor() is called in the constructor after buildUI().
     m_blobColor = new ColorSwatchButton(QColor(0xFF, 0x45, 0x00, 0xFF), m_blobGroup);
+    // Default OrangeRed from the display.cs:8434 cite above.
+    m_blobColor->setProperty("nereusSetupId", "display.spectrumPeaks.peakBlobColor");
     m_blobColor->setToolTip(QStringLiteral(
-        "Color of the peak blob circles. "
-        "From Thetis display.cs:8434 [v2.10.3.13] — default OrangeRed."));
+        "Color of the peak blob circles."));
     blobForm->addRow(QStringLiteral("Blob color:"), m_blobColor);
 
     // From Thetis display.cs:8435 [v2.10.3.13] m_bDX2_PeakBlobText = Color.Chartreuse
     // Placeholder color; setColor() is called in the constructor after buildUI().
     m_blobTextColor = new ColorSwatchButton(QColor(0x7F, 0xFF, 0x00, 0xFF), m_blobGroup);
+    // Default Chartreuse from the display.cs:8435 cite above.
+    m_blobTextColor->setProperty("nereusSetupId", "display.spectrumPeaks.peakBlobTextColor");
     m_blobTextColor->setToolTip(QStringLiteral(
-        "Color of the dBm readout text on each peak blob. "
-        "From Thetis display.cs:8435 [v2.10.3.13] — default Chartreuse."));
+        "Color of the dBm readout text on each peak blob."));
     blobForm->addRow(QStringLiteral("Text color:"), m_blobTextColor);
 
     contentLayout()->addWidget(m_blobGroup);

@@ -17,6 +17,7 @@
 #include "gui/setup/DspOptionsPage.h"
 #include "gui/setup/DisplaySetupPages.h"
 #include "gui/setup/MultimeterPage.h"
+#include "gui/setup/SpectrumPeaksPage.h"
 #include "gui/setup/TransmitSetupPages.h"
 #include "gui/setup/TxProfileSetupPage.h"
 #include "gui/setup/hardware/AntennaAlexAntennaControlTab.h"
@@ -193,13 +194,14 @@ private slots:
     {
         RadioModel model;
         SpectrumDefaultsPage spectrum(&model);
+        SpectrumPeaksPage peaks(&model);
         WaterfallDefaultsPage waterfall(&model);
         MultimeterPage multimeter(&model);
         TxDisplayPage tx(&model);
         SetupDescriptionService service;
         const QJsonObject display = service.category(QStringLiteral("display"));
         const QJsonArray pages = display.value("pages").toArray();
-        QCOMPARE(pages.size(), 4);
+        QCOMPARE(pages.size(), 5);
         const QStringList expectedIds{
             "display.spectrumDefaults.fftSize", "display.spectrumDefaults.window",
             "display.spectrumDefaults.hzPerBinTarget", "display.spectrumDefaults.fps",
@@ -208,6 +210,13 @@ private slots:
             "display.spectrumDefaults.panFill", "display.spectrumDefaults.fillAlpha",
             "display.spectrumDefaults.gradient", "display.spectrumDefaults.peakHold",
             "display.spectrumDefaults.peakDelay",
+            "display.spectrumPeaks.activePeakHold", "display.spectrumPeaks.activePeakHoldDropRate",
+            "display.spectrumPeaks.activePeakHoldFill", "display.spectrumPeaks.activePeakHoldColor",
+            "display.spectrumPeaks.peakBlobs", "display.spectrumPeaks.peakBlobCount",
+            "display.spectrumPeaks.peakBlobInsideFilter", "display.spectrumPeaks.peakBlobHold",
+            "display.spectrumPeaks.peakBlobHoldTime", "display.spectrumPeaks.peakBlobHoldDrop",
+            "display.spectrumPeaks.peakBlobFallRate", "display.spectrumPeaks.peakBlobColor",
+            "display.spectrumPeaks.peakBlobTextColor",
             "display.waterfallDefaults.detector", "display.waterfallDefaults.averaging",
             "display.waterfallDefaults.averageTime", "display.waterfallDefaults.updatePeriod",
             "display.waterfallDefaults.stopOnTx", "display.waterfallDefaults.opacity",
@@ -226,6 +235,8 @@ private slots:
             ControlRanges::kDisplaySpectrumAvgTimeDefaultMs,
             ControlRanges::kDisplayDecimationDefault,
             true, 70, false, false, 2000,
+            false, 6, false, "#FFD700FF", false, 3, false, false, 500, false, 6,
+            "#FF4500FF", "#7FFF00FF",
             ControlRanges::kDisplayWaterfallDetectorDefault,
             ControlRanges::kDisplayWaterfallAveragingDefault,
             ControlRanges::kDisplayWaterfallAvgTimeDefaultMs,
@@ -242,20 +253,39 @@ private slots:
         QCOMPARE(pages.at(0).toObject().value("sections").toArray().at(1).toObject().value("title"),
                  QJsonValue("Rendering"));
         QCOMPARE(pages.at(1).toObject().value("sections").toArray().at(0).toObject().value("title"),
-                 QJsonValue("Display"));
+                 QJsonValue("Active Peak Hold"));
         QCOMPARE(pages.at(1).toObject().value("sections").toArray().at(1)
-                     .toObject().value("title"), QJsonValue("Overlays"));
+                     .toObject().value("title"), QJsonValue("Peak Blobs"));
         QCOMPARE(pages.at(1).toObject().value("where"), QJsonValue("phone"));
         QCOMPARE(pages.at(2).toObject().value("sections").toArray().at(0).toObject().value("title"),
+                 QJsonValue("Display"));
+        QCOMPARE(pages.at(2).toObject().value("sections").toArray().at(1)
+                     .toObject().value("title"), QJsonValue("Overlays"));
+        QCOMPARE(pages.at(2).toObject().value("where"), QJsonValue("phone"));
+        QCOMPARE(pages.at(3).toObject().value("sections").toArray().at(0).toObject().value("title"),
                  QJsonValue("Multimeter"));
-        QCOMPARE(pages.at(3).toObject().value("sections").toArray().at(1).toObject().value("title"),
+        QCOMPARE(pages.at(4).toObject().value("sections").toArray().at(1).toObject().value("title"),
                  QJsonValue("Panadapter"));
-        QCOMPARE(pages.at(3).toObject().value("sections").toArray().at(2).toObject().value("title"),
+        QCOMPARE(pages.at(4).toObject().value("sections").toArray().at(2).toObject().value("title"),
                  QJsonValue("Waterfall"));
+        // The native group titles are the described section titles.
+        const QList<QGroupBox*> peakGroups = peaks.findChildren<QGroupBox*>();
+        QStringList peakTitles;
+        for (const QGroupBox* group : peakGroups) { peakTitles << group->title(); }
+        QCOMPARE(peakTitles, (QStringList{"Active Peak Hold", "Peak Blobs"}));
+        // The peak hold's Hold duration and Update during TX rows are built
+        // but change nothing on the desktop, so they carry no description id:
+        // thirteen of the page's fifteen rows are tagged.
+        int taggedPeakRows = 0;
+        for (QObject* object : peaks.findChildren<QObject*>()) {
+            taggedPeakRows += object->property("nereusSetupId").isValid() ? 1 : 0;
+        }
+        QCOMPARE(taggedPeakRows, 13);
         for (int p = 0; p < pages.size(); ++p) {
             QWidget* native = p == 0 ? static_cast<QWidget*>(&spectrum)
-                : p == 1 ? static_cast<QWidget*>(&waterfall)
-                : p == 2 ? static_cast<QWidget*>(&multimeter) : static_cast<QWidget*>(&tx);
+                : p == 1 ? static_cast<QWidget*>(&peaks)
+                : p == 2 ? static_cast<QWidget*>(&waterfall)
+                : p == 3 ? static_cast<QWidget*>(&multimeter) : static_cast<QWidget*>(&tx);
             for (const QJsonValue& section : pages.at(p).toObject().value("sections").toArray()) {
                 for (const QJsonValue& raw : section.toObject().value("controls").toArray()) {
                     const QJsonObject control = raw.toObject();
