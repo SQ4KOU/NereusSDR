@@ -8,6 +8,7 @@
 #include "models/TransmitModel.h"
 #include "models/NotchModel.h"
 #include "core/accessories/AlexAntennaFacade.h"
+#include "core/session/TransmitStateFacade.h"
 #include "core/SkuUiProfile.h"
 #include "core/settings/SettingsScope.h"
 
@@ -98,6 +99,8 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                         && !SetupDescription::validateTransmitSettingBinding(control))
                     || (id == QLatin1String("hardware")
                         && !SetupDescription::validateHardwarePropertyBinding(control))
+                    || (id == QLatin1String("pa")
+                        && !SetupDescription::validatePaReadoutBinding(control))
                     || (id == QLatin1String("audio")
                         && !SetupDescription::validateAudioPropertyBinding(control))
                     || (control.value(QStringLiteral("binding")).toObject().contains(QStringLiteral("command"))
@@ -111,6 +114,9 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
     // This partial page is built only when the connected board has ALEX
     // filters. A board change must retire its old controls altogether.
     if (id == QLatin1String("hardware") && !caps.hasAlexFilters) {
+        return {};
+    }
+    if (id == QLatin1String("pa") && (!caps.hasPaProfile || caps.isRxOnlySku)) {
         return {};
     }
     if (id == QLatin1String("hardware")) {
@@ -394,6 +400,57 @@ bool SetupDescription::validateHardwarePropertyBinding(const QJsonObject& contro
         &AlexAntennaFacade::staticMetaObject).byName(name);
     return property && property->isWritable && property->kind == MirrorWireKind::Bool
         && MirrorPolicy::inboundAllowed(QByteArrayLiteral("AlexAntennaFacade"), name);
+}
+
+bool SetupDescription::validatePaReadoutBinding(const QJsonObject& control)
+{
+    const QJsonObject binding = control.value(QStringLiteral("binding")).toObject();
+    const QJsonObject ref = binding.value(QStringLiteral("property")).toObject();
+    const QJsonObject gate = control.value(QStringLiteral("gate")).toObject();
+    if (control.size() != 9 || binding.size() != 1 || ref.size() != 2
+        || ref.value(QStringLiteral("object")) != QJsonValue(QStringLiteral("txState"))
+        || control.value(QStringLiteral("kind")) != QJsonValue(QStringLiteral("readout"))
+        || control.value(QStringLiteral("applies")) != QJsonValue(QStringLiteral("live"))
+        || gate != QJsonObject{{QStringLiteral("capability"), QStringLiteral("txReadingsVersion")},
+                               {QStringLiteral("min"), 1}}) {
+        return false;
+    }
+    const QByteArray name = ref.value(QStringLiteral("name")).toString().toUtf8();
+    const bool power = name == QByteArrayLiteral("forwardPowerWatts")
+        || name == QByteArrayLiteral("reflectedPowerWatts");
+    const bool swr = name == QByteArrayLiteral("swr");
+    const bool raw = name == QByteArrayLiteral("forwardAdcRaw")
+        || name == QByteArrayLiteral("reflectedAdcRaw");
+    if (!power && !swr && !raw) { return false; }
+    const QString id = name == QByteArrayLiteral("forwardPowerWatts")
+        ? QStringLiteral("pa.values.forwardCalibrated")
+        : name == QByteArrayLiteral("reflectedPowerWatts")
+          ? QStringLiteral("pa.values.reflectedPower")
+        : swr ? QStringLiteral("pa.values.swr")
+        : name == QByteArrayLiteral("forwardAdcRaw")
+          ? QStringLiteral("pa.values.forwardAdc") : QStringLiteral("pa.values.reflectedAdc");
+    const QString label = name == QByteArrayLiteral("forwardPowerWatts")
+        ? QStringLiteral("Forward (calibrated):")
+        : name == QByteArrayLiteral("reflectedPowerWatts") ? QStringLiteral("Reflected:")
+        : swr ? QStringLiteral("SWR:")
+        : name == QByteArrayLiteral("forwardAdcRaw") ? QStringLiteral("FWD ADC:")
+                                                       : QStringLiteral("REV ADC:");
+    const QJsonValue decimals = control.value(QStringLiteral("decimals"));
+    if (!decimals.isDouble() || std::floor(decimals.toDouble()) != decimals.toDouble()
+        || decimals.toInt(-1) != (raw ? 0 : 2)
+        || control.value(QStringLiteral("id")) != QJsonValue(id)
+        || control.value(QStringLiteral("label")) != QJsonValue(label)
+        || control.value(QStringLiteral("tooltip")) != QJsonValue(QString())
+        || control.value(QStringLiteral("unit")) != QJsonValue(power ? QStringLiteral("W") : QString())) {
+        return false;
+    }
+    const MirrorProperty* property = MirrorSchema::forMetaObject(
+        &TransmitState::staticMetaObject).byName(name);
+    return property && !property->isWritable
+        && property->kind == (raw ? MirrorWireKind::Int64 : MirrorWireKind::Float64)
+        && MirrorPolicy::hasExplicitEntry(QByteArrayLiteral("TransmitState"), name)
+        && MirrorPolicy::directionFor(QByteArrayLiteral("TransmitState"), name)
+            == MirrorDirection::Outbound;
 }
 
 bool SetupDescription::validateTransmitSettingBinding(const QJsonObject& control)
@@ -861,6 +918,7 @@ QJsonObject SetupDescription::category(const QString& id) const
     else if (id == QLatin1String("catNetwork")) { value = &m_catNetwork; }
     else if (id == QLatin1String("test")) { value = &m_test; }
     else if (id == QLatin1String("diagnostics")) { value = &m_diagnostics; }
+    else if (id == QLatin1String("pa")) { value = &m_pa; }
     return value == nullptr || value->isEmpty() ? QJsonObject{}
         : QJsonDocument::fromJson(value->toUtf8()).object();
 }
@@ -899,6 +957,7 @@ void SetupDescription::rebuild()
     update(QStringLiteral("catNetwork"), m_catNetwork);
     update(QStringLiteral("test"), m_test);
     update(QStringLiteral("diagnostics"), m_diagnostics);
+    update(QStringLiteral("pa"), m_pa);
     if (changed) {
         ++m_revision;
         emit descriptionsChanged();

@@ -227,6 +227,84 @@ QJsonObject resolveTciArguments(const QJsonObject& control, bool changed,
 class SetupDescriptionServiceTest : public QObject {
     Q_OBJECT
 private slots:
+    void paReadoutsAreClosedTypedBindingsAndAppendSchema()
+    {
+        RadioModel radio;
+        radio.setBoardForTest(HPSDRHW::Saturn);
+        SetupDescriptionService service;
+        service.setRadioContext(radio.boardCapabilities(), radio.hardwareProfile().model);
+        const QJsonObject pa = service.category(QStringLiteral("pa"));
+        QCOMPARE(pa.value("version"), QJsonValue(1));
+        QCOMPARE(pa.value("category").toObject().value("where"), QJsonValue("station"));
+        QCOMPARE(pa.value("category").toObject().value("coverage"), QJsonValue("partial"));
+        const QJsonArray sections = pa.value("pages").toArray().first().toObject()
+            .value("sections").toArray();
+        QCOMPARE(sections.size(), 2);
+        QCOMPARE(sections.at(0).toObject().value("title"), QJsonValue("Power"));
+        QCOMPARE(sections.at(1).toObject().value("title"), QJsonValue("Raw ADC Values"));
+        QJsonArray controls = sections.at(0).toObject().value("controls").toArray();
+        for (const QJsonValue& value : sections.at(1).toObject().value("controls").toArray()) {
+            controls.append(value);
+        }
+        QCOMPARE(controls.size(), 5);
+        const QStringList names{QStringLiteral("forwardPowerWatts"),
+                                QStringLiteral("reflectedPowerWatts"), QStringLiteral("swr"),
+                                QStringLiteral("forwardAdcRaw"), QStringLiteral("reflectedAdcRaw")};
+        for (int i = 0; i < controls.size(); ++i) {
+            const QJsonObject valid = controls.at(i).toObject();
+            QVERIFY(SetupDescriptionService::validatePaReadoutBinding(valid));
+            QCOMPARE(valid.value("binding").toObject().value("property").toObject()
+                         .value("name").toString(), names.at(i));
+            QCOMPARE(valid.value("decimals").toInt(), i < 3 ? 2 : 0);
+            QCOMPARE(valid.value("unit"), QJsonValue(i < 2 ? "W" : ""));
+            auto rejected = [&valid](const QString& field, const QJsonValue& value) {
+                QJsonObject bad = valid;
+                bad.insert(field, value);
+                QVERIFY(!SetupDescriptionService::validatePaReadoutBinding(bad));
+            };
+            rejected(QStringLiteral("kind"), QStringLiteral("decimal"));
+            rejected(QStringLiteral("decimals"), i < 3 ? QJsonValue(0) : QJsonValue(2));
+            rejected(QStringLiteral("decimals"), 7);
+            rejected(QStringLiteral("decimals"), 1.5);
+            rejected(QStringLiteral("unit"), QStringLiteral("dB"));
+            rejected(QStringLiteral("gate"), QJsonObject{{"capability", "txStateVersion"}, {"min", 1}});
+            rejected(QStringLiteral("gate"), QJsonObject{{"capability", "txReadingsVersion"}, {"min", 1}, {"transmit", true}});
+            rejected(QStringLiteral("gate"), QJsonObject{{"capability", "txReadingsVersion"}, {"min", 1}, {"offAir", true}});
+            QJsonObject bad = valid;
+            QJsonObject binding = bad.value("binding").toObject();
+            QJsonObject ref = binding.value("property").toObject();
+            ref.insert("object", "transmit");
+            binding.insert("property", ref);
+            bad.insert("binding", binding);
+            QVERIFY(!SetupDescriptionService::validatePaReadoutBinding(bad));
+            ref.insert("object", "txState");
+            ref.insert("name", "alcDb");
+            binding.insert("property", ref);
+            bad.insert("binding", binding);
+            QVERIFY(!SetupDescriptionService::validatePaReadoutBinding(bad));
+        }
+        const MirrorSchema& schema = MirrorSchema::forObject(&service);
+        const MirrorProperty* paField = schema.byName("pa");
+        const MirrorProperty* revision = schema.byName("revision");
+        QVERIFY(paField != nullptr);
+        QVERIFY(revision != nullptr);
+        QCOMPARE(paField->ordinal, revision->ordinal + 1);
+        QCOMPARE(paField->kind, MirrorWireKind::Utf8);
+        QVERIFY(!paField->isWritable);
+        QCOMPARE(MirrorPolicy::directionFor("SetupDescription", "pa"), MirrorDirection::Outbound);
+
+        const quint32 presentRevision = service.revision();
+        BoardCapabilities absent = radio.boardCapabilities();
+        absent.hasPaProfile = false;
+        service.setRadioContext(absent, radio.hardwareProfile().model);
+        QVERIFY(service.pa().isEmpty());
+        QVERIFY(service.revision() > presentRevision);
+        absent.hasPaProfile = true;
+        absent.isRxOnlySku = true;
+        service.setRadioContext(absent, radio.hardwareProfile().model);
+        QVERIFY(service.pa().isEmpty());
+    }
+
     void categoriesLoadAndMirrorAsStrings()
     {
         SetupDescriptionService service;
@@ -844,7 +922,7 @@ private slots:
     void negotiatedVersionsFitInitialSnapshotAndLaterDelta()
     {
         const auto check = [](int declared, quint16 minor, int expected) {
-            WireCore core;
+            WireCore core(HPSDRHW::Saturn);
             QHash<QByteArray, int> features;
             if (declared > 0) { features.insert("setupDescription", declared); }
             QVERIFY(core.connect(features, minor));
@@ -856,6 +934,11 @@ private slots:
             const QString dsp = setupCategoryOnWire(
                 *core.app, "dsp", SessionMessageKind::ObjectCreate);
             QVERIFY(!dsp.isEmpty());
+            const QString pa = setupCategoryOnWire(
+                *core.app, "pa", SessionMessageKind::ObjectCreate);
+            QVERIFY(!pa.isEmpty());
+            QCOMPARE(QJsonDocument::fromJson(pa.toUtf8()).object().value("version").toInt(),
+                     expected);
             const QJsonObject category = QJsonDocument::fromJson(dsp.toUtf8()).object();
             QCOMPARE(category.value("version").toInt(), expected);
             bool hasTable = false;

@@ -7,7 +7,7 @@ Ported from Thetis `Project Files/Source/Console/setup.cs` and
 
 Sources: Thetis v2.10.3.15 (3759d09), `Project Files/Source/Console/setup.cs` and `setup.designer.cs`.
 
-Covered JSON files: `general.json`, `hardware.json`, `test.json`, `diagnostics.json`, `catNetwork.json`, `dsp.json`, `transmit.json`, `audio.json`.
+Covered JSON files: `general.json`, `hardware.json`, `pa.json`, `test.json`, `diagnostics.json`, `catNetwork.json`, `dsp.json`, `transmit.json`, `audio.json`.
 
 ## setup.cs — verbatim upstream header
 
@@ -65,3 +65,4 @@ Covered JSON files: `general.json`, `hardware.json`, `test.json`, `diagnostics.j
 2026-09-27 - J.J. Boyd (KG4VCF), with AI-assisted transformation via OpenAI Codex.
 2026-09-28 - J.J. Boyd (KG4VCF), with AI-assisted transformation via OpenAI Codex: Hardware Antenna/ALEX scalar descriptions.
 2026-09-28 - J.J. Boyd (KG4VCF), with AI-assisted transformation via OpenAI Codex: model-aware Antenna/ALEX relay labels and visibility.
+2026-09-28 - J.J. Boyd (KG4VCF), with AI-assisted transformation via OpenAI Codex: PA Values readout descriptions.

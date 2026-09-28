@@ -988,7 +988,12 @@ colours for the same signal.
   safe fixture cleanup. Three predetermined full-suite observations and the
   final diagnostic-lifetime run passed; the last took 14.60 s. The original
   failure remains in `core-gui-export-owned-cancel-ctest.log`; passing reruns do
-  not establish a cause. A focused source/handshake investigation is active.
+  not establish a cause. The focused source audit found that the fixture did
+  not record description/candidate acceptance, but did not establish this as
+  the cause. Signed `c0260823` adds bounded acceptance/state events and fixed
+  protocol-stage markers without raw SDP, candidates or certificates. Its
+  50-case run passed (14.14 s), followed by the six-suite trunk integration
+  (44.26 s). The production deadline is unchanged; the cause remains OPEN.
 - Plan: integrated protocol reliability under real host load.
 
 ### G-58: Setting-backed toggles need explicit boolean string encoding
@@ -1705,8 +1710,10 @@ colours for the same signal.
   mirrors (calibrated forward/reflected power, SWR, two raw ADC counts), while
   derived watts/volts, combined overload, PA telemetry and peak/min/reset require
   further work. Five direct PA readout descriptions are built in signed
-  `7e294608`, awaiting lead review and integration; the worker reports five
-  focused suites passing (41.71 s). The phone's generic Setup renderer is
+  `7e294608`, reviewed and verified in trunk: app/Core plus six explicitly
+  rebuilt suites pass (44.26 s), including encrypted transport and session
+  conformance. The worker's five focused suites also passed (41.71 s).
+  The phone's generic Setup renderer is
   separate unfinished phone work, so publication does not establish phone
   page parity. Band antenna/OC/filter tables, connected-radio scalar settings,
   PA profile lifecycle and calibration/I/O actions remain incomplete; their

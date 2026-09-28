@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "category": {"id": "pa", "title": "PA", "where": "station", "coverage": "partial"},
+  "pages": [{
+    "id": "pa.values", "title": "PA Values", "where": "station", "coverage": "partial",
+    "sections": [
+      {"title": "Power", "controls": [
+        {"id": "pa.values.forwardCalibrated", "label": "Forward (calibrated):", "tooltip": "", "kind": "readout", "binding": {"property": {"object": "txState", "name": "forwardPowerWatts"}}, "applies": "live", "gate": {"capability": "txReadingsVersion", "min": 1}, "decimals": 2, "unit": "W"},
+        {"id": "pa.values.reflectedPower", "label": "Reflected:", "tooltip": "", "kind": "readout", "binding": {"property": {"object": "txState", "name": "reflectedPowerWatts"}}, "applies": "live", "gate": {"capability": "txReadingsVersion", "min": 1}, "decimals": 2, "unit": "W"},
+        {"id": "pa.values.swr", "label": "SWR:", "tooltip": "", "kind": "readout", "binding": {"property": {"object": "txState", "name": "swr"}}, "applies": "live", "gate": {"capability": "txReadingsVersion", "min": 1}, "decimals": 2, "unit": ""}
+      ]},
+      {"title": "Raw ADC Values", "controls": [
+        {"id": "pa.values.forwardAdc", "label": "FWD ADC:", "tooltip": "", "kind": "readout", "binding": {"property": {"object": "txState", "name": "forwardAdcRaw"}}, "applies": "live", "gate": {"capability": "txReadingsVersion", "min": 1}, "decimals": 0, "unit": ""},
+        {"id": "pa.values.reflectedAdc", "label": "REV ADC:", "tooltip": "", "kind": "readout", "binding": {"property": {"object": "txState", "name": "reflectedAdcRaw"}}, "applies": "live", "gate": {"capability": "txReadingsVersion", "min": 1}, "decimals": 0, "unit": ""}
+      ]}
+    ]
+  }]
+}

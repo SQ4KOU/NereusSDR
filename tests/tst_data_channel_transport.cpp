@@ -65,6 +65,7 @@
 #include <memory>
 #include <optional>
 #include <thread>
+#include <utility>
 
 #include <openssl/err.h>
 #include <openssl/evp.h>
@@ -90,10 +91,51 @@
 
 using namespace NereusSDR;
 using NereusSDR::Test::LinkFixtures;
+using NereusSDR::Test::DataChannelPairEvent;
 using NereusSDR::Test::startDataChannelPair;
 using NereusSDR::Test::waitFor;
 
 namespace {
+
+// Keep only fixed protocol-stage words from libdatachannel's verbose log.
+// Its other lines can contain raw SDP, candidates, addresses or fingerprints.
+QString safeRtcStage(const QString& line)
+{
+    const auto state = [&line](QStringView marker, QStringView label) -> QString {
+        const qsizetype at = line.indexOf(marker);
+        if (at < 0) return {};
+        QString value = line.mid(at + marker.size()).trimmed().split(QLatin1Char(' ')).first().toLower();
+        static const QSet<QString> allowed{
+            QStringLiteral("new"), QStringLiteral("checking"), QStringLiteral("connecting"),
+            QStringLiteral("connected"), QStringLiteral("completed"), QStringLiteral("failed"),
+            QStringLiteral("disconnected"), QStringLiteral("closed"), QStringLiteral("stable"),
+            QStringLiteral("gathering"), QStringLiteral("inprogress"),
+            QStringLiteral("have-local-offer"), QStringLiteral("have-remote-offer")};
+        if (!allowed.contains(value)) value = QStringLiteral("other");
+        return label.toString() + QStringLiteral(":") + value;
+    };
+    for (const auto& [marker, label] : {
+             std::pair{QStringView(u"Changed ICE state to"), QStringView(u"ice")},
+             std::pair{QStringView(u"Changed gathering state to"), QStringView(u"gathering")},
+             std::pair{QStringView(u"Changed signaling state to"), QStringView(u"signaling")},
+             std::pair{QStringView(u"Changed state to"), QStringView(u"peer")}}) {
+        if (const QString phase = state(marker, label); !phase.isEmpty()) return phase;
+    }
+    for (const auto& [marker, label] : {
+             std::pair{QStringView(u"Remote description kept before the ICE agent takes it"), QStringView(u"remote-description-kept")},
+             std::pair{QStringView(u"candidates from remote description"), QStringView(u"remote-candidates-consumed")},
+             std::pair{QStringView(u"Starting ICE transport"), QStringView(u"ice-start")},
+             std::pair{QStringView(u"Starting DTLS transport"), QStringView(u"dtls-start")},
+             std::pair{QStringView(u"before incoming records are taken"), QStringView(u"dtls-mtu-set")},
+             std::pair{QStringView(u"Registering incoming callback"), QStringView(u"dtls-incoming-ready")},
+             std::pair{QStringView(u"DTLS handshake finished"), QStringView(u"dtls-handshake-finished")},
+             std::pair{QStringView(u"Starting SCTP transport"), QStringView(u"sctp-start")},
+             std::pair{QStringView(u"ICE timeout"), QStringView(u"ice-timeout")},
+             std::pair{QStringView(u"Handshake failed"), QStringView(u"dtls-handshake-failed")}}) {
+        if (line.contains(marker)) return label.toString();
+    }
+    return {};
+}
 
 constexpr quint64 kStationCap = StationServer::kMaxIncomingMessageBytes;
 constexpr quint64 kClientCap = StationClient::kMaxIncomingMessageBytes;
@@ -1266,22 +1308,30 @@ private slots:
         struct StartupEvidence {
             QElapsedTimer elapsed;
             QMutex mutex;
-            QStringList lines;
+            QStringList libraryStages;
+            QStringList pairEvents;
+            int descriptionsEmitted[2]{};
+            int candidatesEmitted[2]{};
         };
         const auto evidence = std::make_shared<StartupEvidence>();
         evidence->elapsed.start();
         DataChannelTransport::setLibraryLogForTest(
             [evidence](quintptr thread, const QString& line) {
+                const QString stage = safeRtcStage(line);
+                if (stage.isEmpty()) return;
                 const QMutexLocker lock(&evidence->mutex);
-                if (evidence->lines.size() == 2000) evidence->lines.removeFirst();
-                evidence->lines.append(QStringLiteral("%1 ms thread %2 %3")
-                    .arg(evidence->elapsed.elapsed()).arg(thread).arg(line));
+                if (evidence->libraryStages.size() == 2000) evidence->libraryStages.removeFirst();
+                evidence->libraryStages.append(QStringLiteral("%1 ms thread %2 %3")
+                    .arg(evidence->elapsed.elapsed()).arg(thread).arg(stage));
             });
         const auto restoreLogger = qScopeGuard([evidence]() {
             DataChannelTransport::setLibraryLogForTest({});
             if (QTest::currentTestFailed()) {
                 const QMutexLocker lock(&evidence->mutex);
-                for (const QString& line : std::as_const(evidence->lines)) {
+                for (const QString& line : std::as_const(evidence->pairEvents)) {
+                    qWarning().noquote() << line;
+                }
+                for (const QString& line : std::as_const(evidence->libraryStages)) {
                     qWarning().noquote() << line;
                 }
             }
@@ -1307,9 +1357,44 @@ private slots:
                          [&](const QString& reason) { answererFailure = reason; });
         QObject::connect(answerer, &DataChannelTransport::opened, core.server.get(),
                          [&core, answerer] { core.server->acceptTransport(answerer); });
+        const auto observePair = [evidence](DataChannelPairEvent event) {
+            const QMutexLocker lock(&evidence->mutex);
+            const int sideIndex = event.side == DataChannelPairEvent::Side::Offerer ? 0 : 1;
+            const QString side = sideIndex == 0 ? QStringLiteral("offerer")
+                                                : QStringLiteral("answerer");
+            QString detail;
+            switch (event.kind) {
+            case DataChannelPairEvent::Kind::DescriptionEmitted:
+                detail = QStringLiteral("description emitted count=%1")
+                    .arg(++evidence->descriptionsEmitted[sideIndex]);
+                break;
+            case DataChannelPairEvent::Kind::DescriptionAccepted:
+                detail = QStringLiteral("description accepted=%1").arg(int(event.accepted));
+                break;
+            case DataChannelPairEvent::Kind::CandidateEmitted:
+                detail = QStringLiteral("candidate emitted count=%1")
+                    .arg(++evidence->candidatesEmitted[sideIndex]);
+                break;
+            case DataChannelPairEvent::Kind::CandidateAccepted:
+                detail = QStringLiteral("candidate accepted=%1").arg(int(event.accepted));
+                break;
+            case DataChannelPairEvent::Kind::GatheringComplete:
+                detail = QStringLiteral("gathering complete");
+                break;
+            case DataChannelPairEvent::Kind::Opened:
+                detail = QStringLiteral("opened");
+                break;
+            case DataChannelPairEvent::Kind::Failed:
+                detail = QStringLiteral("failed");
+                break;
+            }
+            if (evidence->pairEvents.size() == 256) evidence->pairEvents.removeFirst();
+            evidence->pairEvents.append(QStringLiteral("%1 ms %2 %3")
+                .arg(evidence->elapsed.elapsed()).arg(side, detail));
+        };
         QVERIFY(startDataChannelPair(offerer, answerer, kClientCap, kStationCap,
                                      core.server->certificatePemPath(),
-                                     core.server->privateKeyPemPath()));
+                                     core.server->privateKeyPemPath(), nullptr, observePair));
         const qint64 openingStarted = evidence->elapsed.elapsed();
         const bool opened = waitFor([offerer] { return offerer->isOpen(); }, 15000);
         const QString openState = QStringLiteral("wait=%1ms offererOpen=%2 answererOpen=%3 "

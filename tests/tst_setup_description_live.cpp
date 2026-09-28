@@ -11,6 +11,7 @@
 #include "core/accessories/AlexAntennaFacade.h"
 #include "core/accessories/AlexController.h"
 #include "core/StepAttenuatorController.h"
+#include "core/session/TransmitStateFacade.h"
 #include "MultiDeviceHarness.h"
 
 using namespace NereusSDR;
@@ -18,6 +19,56 @@ using namespace NereusSDR;
 class SetupDescriptionLiveTest : public QObject {
     Q_OBJECT
 private slots:
+    void pairedPaReadoutsMirrorMetersAndRawCountsWithoutWriteAuthority()
+    {
+        Core core;
+        core.model->setBoardForTest(HPSDRHW::Saturn);
+        RadioInfo info = core.model->currentRadioInfo();
+        info.boardType = HPSDRHW::Saturn;
+        core.model->setLastRadioInfoForTest(info);
+        core.server->setupDescription()->setRadioContext(core.model->boardCapabilities(),
+                                                         core.model->hardwareProfile().model);
+        Device phone(QStringLiteral("PA iPhone"), QStringLiteral("phone"));
+        core.pair(phone);
+        QHash<QByteArray, int> features = kTransmitter;
+        features.insert("setupDescription", 1);
+        LoopbackTransport* app = core.signIn(phone, features);
+        QVERIFY(admitted(app));
+        QCOMPARE(capability(app->received(), QStringLiteral("txReadingsVersion")),
+                 std::optional<qint64>(1));
+        const QJsonObject pa = QJsonDocument::fromJson(latest(app->received(),
+            QStringLiteral("setup"), QStringLiteral("pa")).toString().toUtf8()).object();
+        QVERIFY(!pa.isEmpty());
+        QCOMPARE(pa.value("pages").toArray().first().toObject().value("sections").toArray().size(), 2);
+
+        core.model->handlePaTelemetryForTest(2400, 320, 0, 0, 0, 0);
+        QVERIFY(core.model->radioStatus().forwardPowerWatts() > 0.0);
+        QVERIFY(core.model->radioStatus().reflectedPowerWatts() > 0.0);
+        QTRY_COMPARE(latest(app->received(), QStringLiteral("txState"),
+                            QStringLiteral("forwardAdcRaw")).toInteger(), qint64(2400));
+        QTRY_COMPARE(latest(app->received(), QStringLiteral("txState"),
+                            QStringLiteral("reflectedAdcRaw")).toInteger(), qint64(320));
+        QTRY_COMPARE(latest(app->received(), QStringLiteral("txState"),
+                            QStringLiteral("forwardPowerWatts")).toDouble(),
+                     core.model->radioStatus().forwardPowerWatts());
+        QTRY_COMPARE(latest(app->received(), QStringLiteral("txState"),
+                            QStringLiteral("reflectedPowerWatts")).toDouble(),
+                     core.model->radioStatus().reflectedPowerWatts());
+        QTRY_COMPARE(latest(app->received(), QStringLiteral("txState"),
+                            QStringLiteral("swr")).toDouble(),
+                     core.model->radioStatus().swrRatio());
+
+        const qint64 writeId = 876;
+        app->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
+            "txState", {MirrorUpdate{0, "forwardAdcRaw", MirrorWireKind::Int64, qint64(1)}},
+            static_cast<quint32>(writeId))));
+        QTRY_VERIFY(!propertyResult(app, writeId).isEmpty());
+        const QJsonArray results = propertyResult(app, writeId).value("results").toArray();
+        QVERIFY(!results.isEmpty());
+        QVERIFY(!results.first().toObject().value("accepted").toBool(true));
+        QCOMPARE(core.server->transmitState()->forwardAdcRaw(), qint64(2400));
+    }
+
     void pairedHardwareDescriptionWritesReachBoundAlexAndRetireOnSwap()
     {
         Core core;

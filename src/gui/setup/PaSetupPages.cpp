@@ -2200,6 +2200,7 @@ PaValuesPage::PaValuesPage(RadioModel* model, QWidget* parent)
     auto* powerForm   = new QFormLayout(powerGroup);
     m_fwdCalibratedLabel = new MetricLabel(QStringLiteral("FWD (cal)"),
                                            QStringLiteral("0.00 W"), powerGroup);
+    m_fwdCalibratedLabel->setProperty("nereusSetupId", "pa.values.forwardCalibrated");
     // Phase 5B (#167) — Raw FWD power label, scaled from raw ADC counts via
     // PaTelemetryScaling helpers (Phase 1B).
     // From Thetis panelPAValues textPAFwdPower setup.designer.cs:51155-51177
@@ -2208,8 +2209,10 @@ PaValuesPage::PaValuesPage(RadioModel* model, QWidget* parent)
                                            QStringLiteral("0.00 W"), powerGroup);
     m_revPowerLabel      = new MetricLabel(QStringLiteral("REV"),
                                            QStringLiteral("0.00 W"), powerGroup);
+    m_revPowerLabel->setProperty("nereusSetupId", "pa.values.reflectedPower");
     m_swrLabel           = new MetricLabel(QStringLiteral("SWR"),
                                            QStringLiteral("1.00"), powerGroup);
+    m_swrLabel->setProperty("nereusSetupId", "pa.values.swr");
     // Phase 5B (#167) — Drive label, populated from TransmitModel::power().
     // From Thetis panelPAValues textDrivePower setup.designer.cs:51155-51177
     // [v2.10.3.13] — Thetis renders averaged exciter drive in mW; NereusSDR
@@ -2267,8 +2270,10 @@ PaValuesPage::PaValuesPage(RadioModel* model, QWidget* parent)
     auto* adcForm  = new QFormLayout(adcGroup);
     m_fwdAdcLabel = new MetricLabel(QStringLiteral("FWD"),
                                     QStringLiteral("0"), adcGroup);
+    m_fwdAdcLabel->setProperty("nereusSetupId", "pa.values.forwardAdc");
     m_revAdcLabel = new MetricLabel(QStringLiteral("REV"),
                                     QStringLiteral("0"), adcGroup);
+    m_revAdcLabel->setProperty("nereusSetupId", "pa.values.reflectedAdc");
     adcForm->addRow(QStringLiteral("FWD ADC:"), m_fwdAdcLabel);
     adcForm->addRow(QStringLiteral("REV ADC:"), m_revAdcLabel);
     contentLayout()->insertWidget(contentLayout()->count() - 1, adcGroup);

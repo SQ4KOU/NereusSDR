@@ -31,6 +31,8 @@
 #include <QPointer>
 #include <QString>
 
+#include <functional>
+
 #include "core/session/DataChannelTransport.h"
 #include "LoopbackTransport.h"
 
@@ -41,26 +43,78 @@ struct DataChannelPairStart {
     bool offererStarted = false;
 };
 
+struct DataChannelPairEvent {
+    enum class Side { Offerer, Answerer };
+    enum class Kind {
+        DescriptionEmitted, DescriptionAccepted,
+        CandidateEmitted, CandidateAccepted,
+        GatheringComplete, Opened, Failed,
+    };
+    Side side;
+    Kind kind;
+    bool accepted = false; // meaningful only for DescriptionAccepted/CandidateAccepted
+};
+
+using DataChannelPairObserver = std::function<void(DataChannelPairEvent)>;
+
 /// Joins `offerer` and `answerer` directly and starts both. False when
 /// either refuses to start.
 inline bool startDataChannelPair(DataChannelTransport* offerer, DataChannelTransport* answerer,
                                  quint64 offererCap, quint64 answererCap,
                                  const QString& certificatePemPath,
                                  const QString& privateKeyPemPath,
-                                 DataChannelPairStart* result = nullptr)
+                                 DataChannelPairStart* result = nullptr,
+                                 DataChannelPairObserver observer = {})
 {
     QObject::connect(offerer, &DataChannelTransport::localDescription, answerer,
-                     [answerer](const QString& sdp, const QString& type) {
-        answerer->acceptDescription(sdp, type);
+                     [answerer, observer](const QString& sdp, const QString& type) {
+        if (observer) observer({DataChannelPairEvent::Side::Offerer,
+                                DataChannelPairEvent::Kind::DescriptionEmitted});
+        const bool accepted = answerer->acceptDescription(sdp, type);
+        if (observer) observer({DataChannelPairEvent::Side::Answerer,
+                                DataChannelPairEvent::Kind::DescriptionAccepted, accepted});
     });
     QObject::connect(answerer, &DataChannelTransport::localDescription, offerer,
-                     [offerer](const QString& sdp, const QString& type) {
-        offerer->acceptDescription(sdp, type);
+                     [offerer, observer](const QString& sdp, const QString& type) {
+        if (observer) observer({DataChannelPairEvent::Side::Answerer,
+                                DataChannelPairEvent::Kind::DescriptionEmitted});
+        const bool accepted = offerer->acceptDescription(sdp, type);
+        if (observer) observer({DataChannelPairEvent::Side::Offerer,
+                                DataChannelPairEvent::Kind::DescriptionAccepted, accepted});
     });
     QObject::connect(offerer, &DataChannelTransport::localCandidate, answerer,
-                     [answerer](const QString& candidate) { answerer->acceptCandidate(candidate); });
+                     [answerer, observer](const QString& candidate) {
+        if (observer) observer({DataChannelPairEvent::Side::Offerer,
+                                DataChannelPairEvent::Kind::CandidateEmitted});
+        const bool accepted = answerer->acceptCandidate(candidate);
+        if (observer) observer({DataChannelPairEvent::Side::Answerer,
+                                DataChannelPairEvent::Kind::CandidateAccepted, accepted});
+    });
     QObject::connect(answerer, &DataChannelTransport::localCandidate, offerer,
-                     [offerer](const QString& candidate) { offerer->acceptCandidate(candidate); });
+                     [offerer, observer](const QString& candidate) {
+        if (observer) observer({DataChannelPairEvent::Side::Answerer,
+                                DataChannelPairEvent::Kind::CandidateEmitted});
+        const bool accepted = offerer->acceptCandidate(candidate);
+        if (observer) observer({DataChannelPairEvent::Side::Offerer,
+                                DataChannelPairEvent::Kind::CandidateAccepted, accepted});
+    });
+    if (observer) {
+        const auto observeState = [observer](DataChannelTransport* transport,
+                                            DataChannelPairEvent::Side side) {
+            QObject::connect(transport, &DataChannelTransport::gatheringComplete, transport,
+                             [observer, side] {
+                observer({side, DataChannelPairEvent::Kind::GatheringComplete});
+            });
+            QObject::connect(transport, &DataChannelTransport::opened, transport,
+                             [observer, side] { observer({side, DataChannelPairEvent::Kind::Opened}); });
+            QObject::connect(transport, &DataChannelTransport::failed, transport,
+                             [observer, side](const QString&) {
+                observer({side, DataChannelPairEvent::Kind::Failed});
+            });
+        };
+        observeState(offerer, DataChannelPairEvent::Side::Offerer);
+        observeState(answerer, DataChannelPairEvent::Side::Answerer);
+    }
     DataChannelTransport::Options answer;
     answer.role = DataChannelTransport::Role::Answerer;
     answer.maxIncomingBytes = answererCap;
