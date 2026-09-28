@@ -25,6 +25,9 @@
 #include <QDirIterator>
 #include <QFile>
 #include <QGroupBox>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QLabel>
 #include <QRegularExpression>
 #include <QSpinBox>
@@ -39,6 +42,7 @@
 #include "core/dsp/NnrSettings.h"
 #include "core/safety/BandPlanGuard.h"
 #include "core/session/media/SpectrumEndpoint.h"
+#include "core/setup/SetupDescriptionService.h"
 #include "gui/OperatorReasonText.h"
 #include "gui/RemoteAudioStatus.h"
 #include "gui/RemoteMediaController.h"
@@ -297,6 +301,73 @@ QStringList headings(const ::QTreeWidget& tree)
         texts << tree.headerItem()->text(i);
     }
     return texts;
+}
+
+// Setup descriptions (phone request of 2026-09-28): the phone and the remote
+// windows show a description's words as the Core sends them, so every title,
+// label, tooltip, unit, reason, message and choice must be in operator words.
+// Beyond the product's term list, none may name an upstream control or
+// variable (chkDisableRXOut, udDSPNB), Thetis itself, a Qt class, a
+// function, a file or file:line, a source stamp, or a task or requirement
+// number. A few real operator phrases share a word with the internal list;
+// each is set aside by its whole phrase, never by the word alone.
+QString setupInternalNameIn(const QString& text)
+{
+    if (text == QLatin1String("DSP")) {
+        return {}; // the Setup category's own name, as the desktop shows it
+    }
+    static const QStringList operatorPhrases{
+        QStringLiteral("minor (fine) grid lines"), // grid lines, not a version
+        QStringLiteral("ExpertSDR3 protocol"),     // the TCI mode, by its product's name
+        QStringLiteral("PA Telemetry"),            // the radio's PA readings
+    };
+    QString rest = text;
+    for (const QString& phrase : operatorPhrases) {
+        rest.replace(phrase, QStringLiteral(" "));
+    }
+    const QString term = OperatorWording::internalTermIn(rest);
+    if (!term.isEmpty()) {
+        return term;
+    }
+    static const QRegularExpression internalName(QStringLiteral(
+        "\\bThetis\\b"
+        "|\\b(?:chk|ud|tb|combo|grp|tp|lbl|btn|rad|txt|nud)[A-Z]\\w*"
+        "|\\bQ[A-Z][a-z]\\w*"
+        "|\\b[a-z]{2,}[A-Z][a-z]\\w*"
+        "|\\w+\\(\\)|\\w+::\\w+"
+        "|\\b\\w+\\.(?:cs|cpp|h|c|json|py)\\b"
+        "|\\[@[0-9a-f]{6,}\\]|\\[v\\d+\\."
+        "|\\b(?:Task|Gap|Phase)\\s+\\d|\\bR-[A-Z0-9]+-\\d+|\\b\\d[A-Z]-\\d"
+        "|\\bAppSettings\\b"));
+    return internalName.match(rest).captured(0);
+}
+
+// Every string a Setup description shows: the named keys at any depth and
+// each plain choice. `where` names the description it came from.
+void collectDescriptionText(const QJsonValue& value, const QString& key, const QString& where,
+                            QList<QPair<QString, QString>>& out)
+{
+    static const QStringList shownKeys{
+        QStringLiteral("title"), QStringLiteral("label"), QStringLiteral("tooltip"),
+        QStringLiteral("unit"), QStringLiteral("reason"), QStringLiteral("message")};
+    if (value.isObject()) {
+        const QJsonObject object = value.toObject();
+        for (auto it = object.constBegin(); it != object.constEnd(); ++it) {
+            if (shownKeys.contains(it.key()) && it.value().isString()) {
+                out.append({where + QLatin1Char(' ') + object.value(QStringLiteral("id")).toString()
+                                + QLatin1Char('.') + it.key(),
+                            it.value().toString()});
+            }
+            collectDescriptionText(it.value(), it.key(), where, out);
+        }
+    } else if (value.isArray()) {
+        for (const QJsonValue& item : value.toArray()) {
+            if (key == QLatin1String("choices") && item.isString()) {
+                out.append({where + QStringLiteral(" choice"), item.toString()});
+            }
+            collectDescriptionText(item, key, where, out);
+        }
+    }
 }
 
 } // namespace
@@ -1441,6 +1512,74 @@ private slots:
             }
         }
         QVERIFY2(checked >= 1, qPrintable(QString::number(checked)));
+    }
+
+    void setupDescriptionsNameNoInternals()
+    {
+        // The rule is not vacuous: the phone's own examples fail it.
+        for (const char* internal : {"Disable the RX Bypass Out relay (chkDisableRXOut in Thetis).",
+                                     "How often the meter values are read from WDSP.",
+                                     "The FFT size is fixed at sampleRate / target.",
+                                     "QColorDialog lets you adjust alpha.",
+                                     "From setup.cs:1234.", "Added in Task 12."}) {
+            QVERIFY2(!setupInternalNameIn(QLatin1String(internal)).isEmpty(), internal);
+        }
+        for (const char* plain : {"DSP", "Color of the minor (fine) grid lines.",
+                                  "Emulate ExpertSDR3 protocol", "PA Telemetry", "Phone and iPad",
+                                  "macOS NR (MNR)", "Buffer Size (IQcomp)", "SNRthresh"}) {
+            QVERIFY2(setupInternalNameIn(QLatin1String(plain)).isEmpty(), plain);
+        }
+
+        QList<QPair<QString, QString>> shown;
+        const QStringList ids{QStringLiteral("general"), QStringLiteral("hardware"),
+                              QStringLiteral("audio"), QStringLiteral("dsp"),
+                              QStringLiteral("display"), QStringLiteral("transmit"),
+                              QStringLiteral("appearance"), QStringLiteral("catNetwork"),
+                              QStringLiteral("test"), QStringLiteral("diagnostics"),
+                              QStringLiteral("pa")};
+        // Every description as written, published or not.
+        for (const QString& id : ids) {
+            QFile resource(QStringLiteral(":/setup/%1.json").arg(id));
+            QVERIFY2(resource.open(QIODevice::ReadOnly), qPrintable(id));
+            collectDescriptionText(QJsonDocument::fromJson(resource.readAll()).object(), {},
+                                   id + QStringLiteral(".json"), shown);
+        }
+        // And every description the Core sends, per radio and per version, so
+        // text the service writes itself is checked as well.
+        const QList<QPair<HPSDRHW, HPSDRModel>> radios{
+            {HPSDRHW::Hermes, HPSDRModel::HERMES},
+            {HPSDRHW::OrionMKII, HPSDRModel::ANAN7000D},
+            {HPSDRHW::Saturn, HPSDRModel::ANAN_G2},
+            {HPSDRHW::HermesC10, HPSDRModel::ANAN_G2E},
+            {HPSDRHW::HermesLite, HPSDRModel::HERMESLITE}};
+        for (const auto& [board, model] : radios) {
+            SetupDescriptionService service;
+            service.setRadioContext(BoardCapsTable::forBoard(board), model);
+            for (const QString& id : ids) {
+                const QString description =
+                    service.property(id.toLatin1().constData()).toString();
+                for (int version = 1; version <= 12; ++version) {
+                    const QString fitted =
+                        SetupDescriptionService::fitCategoryForVersion(description, version);
+                    collectDescriptionText(
+                        QJsonDocument::fromJson(fitted.toUtf8()).object(), {},
+                        QStringLiteral("%1 v%2 (model %3)").arg(id).arg(version)
+                            .arg(int(model)),
+                        shown);
+                }
+            }
+        }
+        QVERIFY2(shown.size() > 2000, qPrintable(QString::number(shown.size())));
+        QStringList failures;
+        QSet<QString> reported;
+        for (const auto& [where, text] : std::as_const(shown)) {
+            const QString name = setupInternalNameIn(text);
+            if (!name.isEmpty() && !reported.contains(text)) {
+                reported.insert(text);
+                failures << QStringLiteral("%1 [%2]: %3").arg(where, name, text);
+            }
+        }
+        QVERIFY2(failures.isEmpty(), qPrintable(failures.join(QLatin1Char('\n'))));
     }
 };
 

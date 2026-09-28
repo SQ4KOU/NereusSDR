@@ -19,7 +19,7 @@
             {
               "id": "appearance.colorsTheme.traceFillColor",
               "label": "Trace & Fill Color:",
-              "tooltip": "Click to choose the spectrum trace line and fill color. QColorDialog lets you adjust alpha for the fill opacity.",
+              "tooltip": "Click to choose the spectrum trace line and fill color. The color picker lets you adjust alpha for the fill opacity.",
               "kind": "colour",
               "binding": {
                 "phone": "DisplayFillColor"

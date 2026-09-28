@@ -603,7 +603,8 @@ void DspOptionsPage::buildUI()
     auto* cacheGroup  = new QGroupBox(tr("Filter Impulse Cache"), this);
     auto* cacheLayout = new QVBoxLayout(cacheGroup);
 
-    m_cacheImpulse = new QCheckBox(tr("Enable WDSP impulse caching"), cacheGroup);
+    // The cache is WDSP's filter impulse cache (Thetis chkWDSP_cache_impulse).
+    m_cacheImpulse = new QCheckBox(tr("Enable impulse caching"), cacheGroup);
     m_cacheImpulse->setProperty("nereusSetupId", "dsp.options.DspOptionsCacheImpulse");
     m_cacheImpulse->setToolTip(
         tr("Cache filter impulse responses in memory for faster channel rebuilds. "
@@ -611,7 +612,7 @@ void DspOptionsPage::buildUI()
            "Takes effect on the next radio connect or channel rebuild."));
 
     m_cacheImpulseSaveRestore = new QCheckBox(
-        tr("Persist impulse cache to disk between sessions"), cacheGroup);
+        tr("Keep impulse cache on disk between launches"), cacheGroup);
     m_cacheImpulseSaveRestore->setProperty("nereusSetupId", "dsp.options.DspOptionsCacheImpulseSaveRestore");
     m_cacheImpulseSaveRestore->setToolTip(
         tr("Save the impulse cache to disk on shutdown and reload on next launch. "

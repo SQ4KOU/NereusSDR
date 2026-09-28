@@ -986,7 +986,8 @@ bool SetupDescription::validateHardwarePropertyBinding(const QJsonObject& contro
         : rxOut ? QStringLiteral("Enable RX Bypass Out relay on transmit.")
         : ext1 ? QStringLiteral("Route Ext 1 to receive path during transmit.")
         : ext2 ? sku.ext2OutOnTxTooltip
-               : QStringLiteral("Disable the RX Bypass Out relay (chkDisableRXOut in Thetis).");
+               // The Thetis control for this relay is chkDisableRXOut.
+               : QStringLiteral("Disable the RX Bypass Out relay.");
     if (control.value(QStringLiteral("id")) != QJsonValue(id)
         || control.value(QStringLiteral("label")) != QJsonValue(label)
         || control.value(QStringLiteral("tooltip")) != QJsonValue(tooltip)) {
