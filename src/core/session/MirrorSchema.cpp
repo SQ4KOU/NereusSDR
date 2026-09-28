@@ -125,6 +125,7 @@ const char* const kMirroredClasses[] = {
     // iPhone app Task 19 (R-IOS-06, stationCatalogVersion 1): the values the
     // Core owns and an app draws its controls from, read-only.
     "NereusSDR::StationCatalog",
+    "NereusSDR::SetupDescription",
     // R-IOS-25 / R-R3-49 (parity Task 19, recordStreamVersion 1): the
     // Core's spot sources, read-only.
     "NereusSDR::SpotSourceHost",

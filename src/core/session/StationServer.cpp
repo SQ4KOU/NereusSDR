@@ -690,6 +690,7 @@
 #include "models/AccessoryDataModel.h"
 #include "models/AccessorySettingsModel.h"
 #include "models/TunerModel.h"
+#include "core/setup/SetupDescriptionService.h"
 
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -958,6 +959,15 @@ bool isDevicesSettingsKey(const QString& key)
 // Core owns and an app draws its controls from, read-only, for a peer at
 // kRadioIdentitySessionProtocolMinor. An older peer never sees the object.
 constexpr const char* kCatalogKey = "catalog";
+
+constexpr const char* kSetupDescriptionKey = "setup";
+
+bool isSetupDescriptionMessage(const SessionMessage& message)
+{
+    return message.objectKey == kSetupDescriptionKey
+        || (message.kind == SessionMessageKind::Schema
+            && message.className == "SetupDescription");
+}
 
 bool isCatalogMessage(const SessionMessage& message)
 {
@@ -1922,6 +1932,16 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     // its filter presets and its band plans from here on.
     m_catalog = std::make_unique<StationCatalog>();
     m_catalog->bind(radioModel);
+    m_setupDescription = std::make_unique<SetupDescriptionService>();
+    if (radioModel != nullptr) {
+        m_setupDescription->setBoardCapabilities(radioModel->boardCapabilities());
+        connect(radioModel, &RadioModel::currentRadioChanged, this,
+                [this](const NereusSDR::RadioInfo&) {
+                    if (m_radioModel && m_setupDescription) {
+                        m_setupDescription->setBoardCapabilities(m_radioModel->boardCapabilities());
+                    }
+                });
+    }
     // Parity Task 19 (R-IOS-25): the record streams follow the Core's spots
     // and its spot sources' consoles from here on.
     setUpRecordStreams();
@@ -3872,6 +3892,25 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
                 TxRefusals::appCannotTransmit().text, {}));
             break;
         }
+        if (message.commandVerb == "tx.twoTonePreset"
+            && (it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                || !peerDeclares(transport, QByteArrayLiteral("setupDescription"), 1)
+                || !transmitSettingsOffered(peerKey(transport)))) {
+            send(transport, SessionMessages::commandResult(
+                message.commandVerb, message.commandId, false,
+                QStringLiteral("This app cannot change the Core's two-tone preset."), {}));
+            break;
+        }
+        if (message.commandVerb == "tx.twoTonePreset" && !m_radioModel.isNull()
+            && !m_radioModel->receiveOnlyStationPolicy()) {
+            const TxDecision decision = txDecisionFor(transport);
+            if (!decision.permitted) {
+                send(transport, SessionMessages::commandResult(
+                    message.commandVerb, message.commandId, false,
+                    decision.refusal.text, {}));
+                break;
+            }
+        }
         if ((message.commandVerb == "station.validateSettings"
              || message.commandVerb == "station.forgetSettings")
             && (it->agreedMinor < kRadioIdentitySessionProtocolMinor
@@ -5018,6 +5057,8 @@ void StationServer::buildMirror()
     // to a peer at minor 11 (sendToPeer).
     m_catalog->refresh();
     m_mirror->watch(QByteArray(kCatalogKey), m_catalog.get());
+    m_setupDescription->setBoardCapabilities(m_radioModel->boardCapabilities());
+    m_mirror->watch(QByteArray(kSetupDescriptionKey), m_setupDescription.get());
     // Parity Task 19 (recordStreamVersion 1): the Core's spot sources. Sent
     // only to a peer at minor 11 (sendToPeer).
     if (m_radioModel->spotSourceHost() != nullptr) {
@@ -5095,6 +5136,29 @@ bool StationServer::sendCapabilitiesAndSettingsSnapshot(SessionTransport* transp
 void StationServer::handlePropertyWrite(SessionTransport* transport,
                                         const SessionMessage& message)
 {
+    if (message.objectKey == kSetupDescriptionKey) {
+        // Descriptions are station-authored. A peer that did not declare
+        // setupDescription must not learn any value through a write result.
+        QList<SessionPropertyResult> results;
+        QSet<QByteArray> reported;
+        for (const MirrorUpdate& update : message.updates) {
+            if (reported.contains(update.name)) {
+                continue;
+            }
+            reported.insert(update.name);
+            SessionPropertyResult result;
+            result.property = update.name;
+            result.accepted = false;
+            result.reason = QStringLiteral("The Core owns Setup descriptions.");
+            results.append(result);
+        }
+        if (m_peers.value(transport).agreedMinor >= kDspControlSessionProtocolMinor
+            && message.writeId != 0) {
+            send(transport,
+                 SessionMessages::propertyResult(message.objectKey, message.writeId, results));
+        }
+        return;
+    }
     // iPhone app Task 73 (ruling 5.9): a device writes only its own slices,
     // and nobody writes a marker. Refused before anything is read or
     // applied, with no value of the other device's slice in the answer.
@@ -5677,7 +5741,7 @@ bool StationServer::applySettingsWrite(SessionTransport* transport, const Sessio
         m_radioModel->applyRemoteAccessorySetting(key);
         // iPhone plan Task 22 / parity Task 20 (B7.3): a grid square change
         // reaches the Core's FreeDV Reporter list at once.
-        m_radioModel->applyRemoteFreedvSetting(key);
+        m_radioModel->applyRemoteFreedvSetting(key, m_settings);
         // R-R3-49 (parity Task 5): so does an SWR protection setting, to the
         // Core's SwrProtectionController, as the local page's change does.
         m_radioModel->applySwrProtectionSetting(key, m_settings.value(key));
@@ -5799,7 +5863,7 @@ void StationServer::applySettingsRemove(const SessionMessage& message)
         m_radioModel->applyRemoteAccessorySetting(key);
         // iPhone plan Task 22 / parity Task 20 (B7.3): a grid square change
         // reaches the Core's FreeDV Reporter list at once.
-        m_radioModel->applyRemoteFreedvSetting(key);
+        m_radioModel->applyRemoteFreedvSetting(key, m_settings);
         // R-R3-49 (parity Task 5): the SWR protection default, at once.
         m_radioModel->applySwrProtectionSetting(key, QVariant());
         // R-R3-13 / R-R3-49 (parity Task 15): the default meter pump rate.
@@ -6000,6 +6064,11 @@ void StationServer::sendToPeer(SessionTransport* transport, const SessionMessage
         // iPhone app Task 19: nor the catalogue to an older app.
         if (isCatalogMessage(message)
             && (minor < kRadioIdentitySessionProtocolMinor || stationCatalogVersion() < 1)) {
+            return;
+        }
+        if (isSetupDescriptionMessage(message)
+            && (minor < kRadioIdentitySessionProtocolMinor
+                || !peerDeclares(transport, QByteArrayLiteral("setupDescription"), 1))) {
             return;
         }
         // Parity Task 19: nor the spot sources to an older app.
@@ -8108,6 +8177,8 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             caps.pairingVersion = pairingVersion();
             // iPhone app Task 19: the catalogue.
             caps.stationCatalogVersion = stationCatalogVersion();
+            caps.setupDescriptionVersion =
+                peerDeclares(transport, QByteArrayLiteral("setupDescription"), 1) ? 1 : 0;
             // iPhone app Task 20: display extras.
             caps.displayExtrasVersion = media ? displayExtrasVersion() : 0;
             // R-R3-49 (parity Task 1): the transmit settings.

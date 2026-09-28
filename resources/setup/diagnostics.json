@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "category": {
+    "id": "diagnostics",
+    "title": "Diagnostics",
+    "where": "mixed",
+    "coverage": "pendingPhoneActions"
+  },
+  "pages": []
+}

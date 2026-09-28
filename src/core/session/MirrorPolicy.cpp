@@ -709,6 +709,19 @@ const MirrorPolicy::Entry kEntries[] = {
     { "StationTciModel", "cwluBecomesCw", MirrorDirection::Outbound },
     { "StationTciModel", "sendInitialState", MirrorDirection::Outbound },
 
+    // iPhone app Task 43: the station authors every Setup description.
+    { "SetupDescription", "general", MirrorDirection::Outbound },
+    { "SetupDescription", "hardware", MirrorDirection::Outbound },
+    { "SetupDescription", "audio", MirrorDirection::Outbound },
+    { "SetupDescription", "dsp", MirrorDirection::Outbound },
+    { "SetupDescription", "display", MirrorDirection::Outbound },
+    { "SetupDescription", "transmit", MirrorDirection::Outbound },
+    { "SetupDescription", "appearance", MirrorDirection::Outbound },
+    { "SetupDescription", "catNetwork", MirrorDirection::Outbound },
+    { "SetupDescription", "test", MirrorDirection::Outbound },
+    { "SetupDescription", "diagnostics", MirrorDirection::Outbound },
+    { "SetupDescription", "revision", MirrorDirection::Outbound },
+
     // R-R3-47 / R-R3-22 (accessoryDataVersion 1): the Core's accessory
     // records and settings, read-only. A window changes the interlock
     // policy, the output limit and a fault history only through

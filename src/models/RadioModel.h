@@ -491,6 +491,8 @@
 
 namespace NereusSDR {
 
+class AppSettings;
+
 class ReceiverManager;
 class RemoteDevicesState;
 class AudioEngine;
@@ -3165,7 +3167,7 @@ public:
     /// iPhone plan Task 22 / parity Task 20 (B7.3): a window's grid square
     /// write reaches the Core's FreeDV Reporter list (distance and heading)
     /// at once. Other keys: no change.
-    void applyRemoteFreedvSetting(const QString& key);
+    void applyRemoteFreedvSetting(const QString& key, AppSettings& settings);
 
     // R-R3-47 / R-R3-22: the Power Genius's and Tuner Genius's own settings
     // (`accessorySettings`, remotePgxlControlVersion 3 and

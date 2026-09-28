@@ -235,8 +235,21 @@ def list_wdsp_sources():
 
 
 def check_required_markers(path: Path, markers):
-    head = header_text(path.read_text(errors="replace"), path.suffix)
+    head = attribution_header_text(path)
     return [m for m in markers if m not in head]
+
+
+def attribution_header_text(path: Path) -> str:
+    """JSON Setup resources share a verbatim upstream header in HEADERS.md."""
+    if (path.suffix == ".json" and path.parent.name == "setup"
+            and path.parent.parent.name == "resources"):
+        headers = path.parent / "HEADERS.md"
+        if not headers.is_file():
+            return ""
+        text = headers.read_text(errors="replace")
+        # A shared header only covers resources explicitly named in it.
+        return text if f"`{path.name}`" in text else ""
+    return header_text(path.read_text(errors="replace"), path.suffix)
 
 
 def check_orphan_pair(rel: str, listed) -> Optional[str]:
@@ -278,7 +291,7 @@ def check_samphire_marker(path: Path, source_cell: str) -> Optional[str]:
     cited = [s for s in SAMPHIRE_AUTHORED_SOURCES if s in source_cell]
     if not cited:
         return None
-    head = header_text(path.read_text(errors="replace"), path.suffix)
+    head = attribution_header_text(path)
     if "MW0LGE" in head:
         return None
     return (

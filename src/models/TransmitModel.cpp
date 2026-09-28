@@ -2866,6 +2866,24 @@ void TransmitModel::setTwoToneFreq2(int hz)
     emit twoToneFreq2Changed(clamped);
 }
 
+void TransmitModel::setTwoToneFrequencies(int freq1Hz, int freq2Hz)
+{
+    const int first = std::clamp(freq1Hz, kTwoToneFreq1HzMin, kTwoToneFreq1HzMax);
+    const int second = std::clamp(freq2Hz, kTwoToneFreq2HzMin, kTwoToneFreq2HzMax);
+    const bool firstChanged = first != m_twoToneFreq1;
+    const bool secondChanged = second != m_twoToneFreq2;
+    if (!firstChanged && !secondChanged) { return; }
+    m_twoToneFreq1 = first;
+    m_twoToneFreq2 = second;
+    if (firstChanged) { persistOne(QStringLiteral("TwoToneFreq1"), QString::number(first)); }
+    if (secondChanged) { persistOne(QStringLiteral("TwoToneFreq2"), QString::number(second)); }
+    // The combined signal pushes both DSP parameters first. Observers of
+    // either ordinary property signal then see the complete new pair.
+    emit twoToneFrequenciesChanged(first, second);
+    if (firstChanged) { emit twoToneFreq1Changed(first); }
+    if (secondChanged) { emit twoToneFreq2Changed(second); }
+}
+
 void TransmitModel::setTwoToneLevel(double db)
 {
     // Clamp to Thetis Designer range per setup.Designer.cs:61994-62003 [v2.10.3.13].

@@ -4861,13 +4861,45 @@ bool RadioModel::clearAccessoryFaultsForStation(const QString& device, QString* 
     return m_stationAccessoryData->clearFaults(device, reason);
 }
 
-void RadioModel::applyRemoteFreedvSetting(const QString& key)
+void RadioModel::applyRemoteFreedvSetting(const QString& key, AppSettings& settings)
 {
     // iPhone plan Task 22 / parity Task 20 (B7.3): a window's Save &
     // Propagate reaches the Core's FreeDV Reporter list at once: distance
     // and heading follow the Core's grid square. The callsign, grid and
     // message the reporter registers with are read at its next start.
-    if (m_role != Role::Local || !m_freeDvStationModel) {
+    if (m_role != Role::Local) {
+        return;
+    }
+    if (key == QLatin1String("User/Callsign")
+        || key == QLatin1String("User/GridSquare")) {
+        const QString call = settings.value(QStringLiteral("User/Callsign")).toString();
+        const QString grid = settings.value(QStringLiteral("User/GridSquare")).toString();
+        const QString message = settings.value(QStringLiteral("FreeDvReporter/Message")).toString();
+        // Keep the existing per-source readers in step with the canonical
+        // identity, as SpotHubDialog::saveIdentity does for a local edit.
+        settings.setValue(QStringLiteral("DxClusterCallsign"), call);
+        settings.setValue(QStringLiteral("RbnCallsign"), call);
+        settings.setValue(QStringLiteral("PskReporter/Callsign"), call);
+        settings.setValue(QStringLiteral("PskReporter/GridSquare"), grid);
+        settings.setValue(QStringLiteral("FreeDvReporter/Callsign"), call);
+        settings.setValue(QStringLiteral("FreeDvReporter/GridSquare"), grid);
+        settings.save();
+        // The same existing clients the local Startup and Spot Hub pages
+        // update must see a remote settings edit without a restart.
+        const QString version = QStringLiteral("NereusSDR/")
+            + QStringLiteral(NEREUSSDR_VERSION);
+        if (m_freeDvReporter) {
+            m_freeDvReporter->setIdentity(call, grid, message, version);
+        }
+        if (m_pskReporter) {
+            m_pskReporter->setIdentity(call, grid, version);
+        }
+        if (m_freeDvStationModel && !grid.isEmpty()) {
+            m_freeDvStationModel->setOurGridSquare(grid);
+        }
+        return;
+    }
+    if (!m_freeDvStationModel) {
         return;
     }
     if (key == QLatin1String("User/GridSquare")
@@ -14749,6 +14781,14 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
             // magnitude.  These L.2 connects therefore push the level as
             // a literal dB value to a separate TXPostGen path that
             // doesn't gate on the active-test flag — bench-verify in M.
+            connect(&m_transmitModel, &TransmitModel::twoToneFrequenciesChanged,
+                    m_txChannel, [this](int first, int second) {
+                if (!m_txChannel) { return; }
+                m_txChannel->setTxPostGenTTFreq1(static_cast<double>(first));
+                m_txChannel->setTxPostGenTTPulseToneFreq1(static_cast<double>(first));
+                m_txChannel->setTxPostGenTTFreq2(static_cast<double>(second));
+                m_txChannel->setTxPostGenTTPulseToneFreq2(static_cast<double>(second));
+            });
             connect(&m_transmitModel, &TransmitModel::twoToneFreq1Changed,
                     m_txChannel, [this](int hz) {
                 if (!m_txChannel) { return; }

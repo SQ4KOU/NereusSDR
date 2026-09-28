@@ -84,10 +84,12 @@ StartupPrefsPage::StartupPrefsPage(RadioModel* model, QWidget* parent)
     auto* callsign = addLabeledEdit(QStringLiteral("Callsign"),
                                     QStringLiteral("e.g. KG4VCF"));
     callsign->setObjectName(QStringLiteral("startupCallsign"));
+    callsign->setProperty("nereusSetupId", "general.startup.callsign");
     callsign->setToolTip(tr("Your callsign, as the spot sources send it"));
     auto* gridSquare = addLabeledEdit(QStringLiteral("Grid Square"),
                                       QStringLiteral("e.g. EM73"));
     gridSquare->setObjectName(QStringLiteral("startupGridSquare"));
+    gridSquare->setProperty("nereusSetupId", "general.startup.gridSquare");
     gridSquare->setToolTip(tr("Your Maidenhead grid square (4 or 6 characters)"));
     gridSquare->setMaxLength(6);
     {
