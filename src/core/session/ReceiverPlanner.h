@@ -127,6 +127,18 @@ public:
     /// One choice per slice of another device (ruling 6.9).
     QList<Choice> sliceChoices(const QByteArray& requester) const;
 
+    struct AddPlacement {
+        bool sliceSpace = false;
+        bool receiverFits = false;
+        bool mayClose = true;
+        QString reason;
+        bool fits() const { return sliceSpace && receiverFits && mayClose; }
+    };
+    /// Predict the Add that follows an exact confirmed victim set, using
+    /// the same allocator and owner+pan rule as RadioModel::addSliceImpl.
+    AddPlacement planAddAfterClosing(const QByteArray& requester, const QString& panId,
+                                     const QList<int>& closes) const;
+
     /// Whether any receiver in use carries a slice of a device other than
     /// `requester`: with none, a take has nobody to take from.
     bool anotherDeviceHoldsAReceiver(const QByteArray& requester) const;

@@ -187,6 +187,82 @@ QList<ReceiverPlanner::Choice> ReceiverPlanner::sliceChoices(const QByteArray& r
     return choices;
 }
 
+ReceiverPlanner::AddPlacement ReceiverPlanner::planAddAfterClosing(
+    const QByteArray& requester, const QString& panId, const QList<int>& closes) const
+{
+    AddPlacement plan;
+    const QSet<int> removed(closes.cbegin(), closes.cend());
+    const QList<SliceModel*> liveSlices = m_model.slices();
+    const int survivors = liveSlices.size() - removed.size();
+    plan.mayClose = removed.isEmpty() || survivors > 0;
+    plan.sliceSpace = survivors < m_model.sliceCapForDevices();
+    if (!plan.mayClose) {
+        plan.reason = QStringLiteral("The Core must keep its last receiver slice.");
+        return plan;
+    }
+    SliceStreamAllocator copy = m_model.streamAllocator();
+    for (int stream = 0; stream < copy.streamCount(); ++stream) {
+        bool occupied = false;
+        for (int id : m_model.slicesOnStream(stream)) {
+            occupied = occupied || !removed.contains(id);
+        }
+        if (!occupied) {
+            copy.deactivateStream(stream);
+        }
+    }
+
+    bool ownPan = false;
+    const SliceOwnership* ownership = m_model.sliceOwnership();
+    const int ownActive = ownership->activeFor(requester);
+    const SliceModel* seed = ownActive >= 0 && !removed.contains(ownActive)
+        ? m_model.sliceById(ownActive) : nullptr;
+    if (seed == nullptr) {
+        const int stationActive = ownership->stationActiveSlice();
+        if (stationActive >= 0 && !removed.contains(stationActive)) {
+            seed = m_model.sliceById(stationActive);
+        } else if (stationActive >= 0) {
+            // beginRemove selects that owner's next active slice before
+            // RadioModel::applyActiveSlices chooses the post-close seed.
+            const QByteArray previousOwner = ownership->mark(stationActive).owner;
+            for (const SliceModel* slice : liveSlices) {
+                if (slice != nullptr && !removed.contains(slice->sliceIndex())
+                    && ownership->mark(slice->sliceIndex()).owner == previousOwner) {
+                    seed = slice;
+                    break;
+                }
+            }
+        }
+        if (seed == nullptr && m_model.activeSlice() != nullptr
+            && !removed.contains(m_model.activeSlice()->sliceIndex())) {
+            seed = m_model.activeSlice();
+        }
+    }
+    for (const SliceModel* slice : liveSlices) {
+        if (slice == nullptr || removed.contains(slice->sliceIndex())) {
+            continue;
+        }
+        if (seed == nullptr) {
+            seed = slice;
+        }
+        if (!panId.isEmpty() && slice->panKey() == panId
+            && ownership->mark(slice->sliceIndex()).owner == requester) {
+            ownPan = true;
+        }
+    }
+    // The unsized local pool intentionally leaves a new slice unbound until
+    // connectToRadio configures it, just as addSliceImpl does.
+    if (copy.streamCount() <= 0) {
+        plan.receiverFits = true;
+        return plan;
+    }
+    const double frequency = seed != nullptr ? seed->frequency() : 14225000.0;
+    const auto placement = copy.placeSlice(frequency, !panId.isEmpty() && !ownPan);
+    plan.receiverFits = placement.outcome != SliceStreamAllocator::Outcome::Rejected;
+    plan.reason = !plan.sliceSpace ? QStringLiteral("All slice places are in use.")
+                                   : placement.reason;
+    return plan;
+}
+
 bool ReceiverPlanner::anotherDeviceHoldsAReceiver(const QByteArray& requester) const
 {
     for (const SliceModel* slice : m_model.slices()) {

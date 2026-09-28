@@ -1114,6 +1114,221 @@ private slots:
         QCOMPARE(told.value(QStringLiteral("takeBack")).toBool(false), true);
     }
 
+    // A stored single-slice choice must be reconsidered if another device
+    // claims the free receiver before it is confirmed.
+    void aSliceTakeThatCannotPlaceTheNewPanPreservesTheVictim()
+    {
+        Core core;
+        Device a(QStringLiteral("Mac A"), QStringLiteral("computer"));
+        Device c(QStringLiteral("Mac C"), QStringLiteral("computer"));
+        Device b(QStringLiteral("iPhone B"), QStringLiteral("phone"));
+        core.model->configureStreamPool(2, 5, 192000);
+        core.model->sliceById(0)->setFrequency(7074000.0);
+        core.pair(a);
+        core.pair(c);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a);
+        QVERIFY(admitted(appA));
+        QCOMPARE(core.model->sliceOwnership()->ownedBy(a.key.fingerprint()), QList<int>{0});
+        const int aStream = streamOf(core, 0);
+        QVERIFY(aStream >= 0);
+
+        for (int expected = 2; expected <= 4; ++expected) {
+            const QJsonObject added =
+                core.invoke(appA, "addSliceOnPan", {utf8("panId", QStringLiteral("pan-0"))});
+            QVERIFY2(added.value(QStringLiteral("accepted")).toBool(false),
+                     QJsonDocument(added).toJson().constData());
+            QCOMPARE(core.model->sliceOwnership()->ownedBy(a.key.fingerprint()).size(), expected);
+        }
+        const QList<int> aIds = core.model->sliceOwnership()->ownedBy(a.key.fingerprint());
+        for (int id : aIds) {
+            QCOMPARE(streamOf(core, id), aStream);
+        }
+
+        LoopbackTransport* appC = core.signIn(c);
+        QVERIFY(admitted(appC));
+        const QList<int> cIds = core.model->sliceOwnership()->ownedBy(c.key.fingerprint());
+        QCOMPARE(cIds.size(), 1);
+        const int cId = cIds.first();
+        const int cStream = streamOf(core, cId);
+        QCOMPARE(cStream, aStream);
+        QCOMPARE(core.model->slices().size(), 5);
+
+        LoopbackTransport* appB = core.signIn(b);
+        QVERIFY(admitted(appB));
+        QVERIFY(core.model->sliceOwnership()->ownedBy(b.key.fingerprint()).isEmpty());
+        const int noticesBefore = countOf(appA, QStringLiteral("notice"));
+        const int destroysBefore = countOf(appA, QStringLiteral("object.destroy"));
+        const int questionsBefore = countOf(appB, QStringLiteral("confirm.request"));
+        const QJsonObject refused =
+            core.invoke(appB, "addSliceOnPan", {utf8("panId", QStringLiteral("b-new-pan"))});
+        QCOMPARE(refused.value(QStringLiteral("accepted")).toBool(true), false);
+        const QJsonObject asked = waitForLast(appB, QStringLiteral("confirm.request"), questionsBefore);
+        QCOMPARE(asked.value(QStringLiteral("kind")).toString(), QStringLiteral("takeSlice"));
+        int choice = -1;
+        for (const QJsonValue& value : asked.value(QStringLiteral("choices")).toArray()) {
+            const QJsonObject candidate = value.toObject();
+            if (candidate.value(QStringLiteral("sliceId")).toInt(-1) == aIds.first()) {
+                choice = candidate.value(QStringLiteral("choice")).toInt(-1);
+            }
+        }
+        QVERIFY(choice >= 0);
+        core.model->sliceById(cId)->setFrequency(14074000.0);
+        QVERIFY(streamOf(core, cId) != aStream);
+        const QJsonObject done = core.invoke(
+            appB, "confirm.proceed",
+            {int64("id", asked.value(QStringLiteral("id")).toInteger()), int64("choice", choice)});
+
+        const QList<int> afterA = core.model->sliceOwnership()->ownedBy(a.key.fingerprint());
+        const QList<int> afterB = core.model->sliceOwnership()->ownedBy(b.key.fingerprint());
+        const QList<int> afterC = core.model->sliceOwnership()->ownedBy(c.key.fingerprint());
+        qInfo().noquote() << "take atomicity: before A=" << aIds << "C=" << cIds
+                          << "DDCs=" << aStream << cStream
+                          << "; after A=" << afterA << "B=" << afterB << "C=" << afterC
+                          << "DDCs=" << streamOf(core, aIds.first()) << streamOf(core, cId)
+                          << "; result=" << QJsonDocument(done).toJson(QJsonDocument::Compact)
+                          << "; notices=" << countOf(appA, QStringLiteral("notice")) - noticesBefore
+                          << "; destroys=" << countOf(appA, QStringLiteral("object.destroy")) - destroysBefore
+                          << "; lastNotice=" << QJsonDocument(lastOf(appA, QStringLiteral("notice")))
+                                                   .toJson(QJsonDocument::Compact)
+                          << "; lastDestroy=" << QJsonDocument(lastOf(appA, QStringLiteral("object.destroy")))
+                                                    .toJson(QJsonDocument::Compact);
+        QCOMPARE(done.value(QStringLiteral("accepted")).toBool(true), false);
+        QCOMPARE(done.value(QStringLiteral("reason")).toString(), kWaiting);
+        QCOMPARE(valueOf(done, QStringLiteral("phase")).toString(), QStringLiteral("needsConfirmation"));
+        const QJsonObject replacement = waitForLast(appB, QStringLiteral("confirm.request"), questionsBefore + 1);
+        QCOMPARE(replacement.value(QStringLiteral("kind")).toString(), QStringLiteral("takeReceiver"));
+        bool namesC = false;
+        for (const QJsonValue& value : replacement.value(QStringLiteral("choices")).toArray()) {
+            const QJsonObject receiver = value.toObject();
+            if (receiver.value(QStringLiteral("streamIndex")).toInt(-1) == streamOf(core, cId)) {
+                const QJsonArray slices = receiver.value(QStringLiteral("slices")).toArray();
+                namesC = slices.size() == 1
+                    && slices.first().toObject().value(QStringLiteral("sliceId")).toInt() == cId
+                    && slices.first().toObject().value(QStringLiteral("deviceName")).toString()
+                           == QStringLiteral("Mac C");
+            }
+        }
+        QVERIFY(namesC);
+        QCOMPARE(afterA, aIds);
+        QCOMPARE(afterB.size(), 0);
+        QCOMPARE(afterC, cIds);
+        QCOMPARE(countOf(appA, QStringLiteral("notice")), noticesBefore);
+        QCOMPARE(countOf(appA, QStringLiteral("object.destroy")), destroysBefore);
+    }
+
+    void fullSliceAndReceiverPoolOffersTheNamedReceiverGroup()
+    {
+        Shared s(2, 3);
+        QCOMPARE(s.core.invoke(s.appA, "addSliceOnPan", {utf8("panId", QStringLiteral("pan-0"))})
+                     .value(QStringLiteral("accepted")).toBool(false), true);
+        s.core.model->sliceById(1)->setFrequency(14074000.0);
+        QCOMPARE(s.core.model->slices().size(), 3);
+        const int notices = countOf(s.appB, QStringLiteral("notice"));
+        const int destroys = countOf(s.appB, QStringLiteral("object.destroy"));
+        const QJsonObject refused = s.core.invoke(
+            s.appA, "addSliceOnPan", {utf8("panId", QStringLiteral("new-own-pan"))});
+        QCOMPARE(refused.value(QStringLiteral("accepted")).toBool(true), false);
+        const QJsonObject ask = waitForLast(s.appA, QStringLiteral("confirm.request"), 0);
+        QCOMPARE(ask.value(QStringLiteral("kind")).toString(), QStringLiteral("takeReceiver"));
+        bool found = false;
+        for (const QJsonValue& item : ask.value(QStringLiteral("choices")).toArray()) {
+            const QJsonObject receiver = item.toObject();
+            if (receiver.value(QStringLiteral("streamIndex")).toInt(-1) == streamOf(s.core, 1)) {
+                found = true;
+                QCOMPARE(receiver.value(QStringLiteral("takeable")).toBool(false), true);
+                const QJsonArray named = receiver.value(QStringLiteral("slices")).toArray();
+                QCOMPARE(named.size(), 1);
+                QCOMPARE(named.first().toObject().value(QStringLiteral("sliceId")).toInt(), 1);
+                QCOMPARE(named.first().toObject().value(QStringLiteral("deviceName")).toString(),
+                         QStringLiteral("iPad"));
+            }
+        }
+        QVERIFY(found);
+        QCOMPARE(s.core.model->slices().size(), 3);
+        QCOMPARE(countOf(s.appB, QStringLiteral("notice")), notices);
+        QCOMPARE(countOf(s.appB, QStringLiteral("object.destroy")), destroys);
+    }
+
+    void aReceiverTakeAtTheSliceCapFreesBothResources()
+    {
+        Shared s(2, 3);
+        QCOMPARE(s.core.invoke(s.appA, "addSliceOnPan", {utf8("panId", QStringLiteral("pan-0"))})
+                     .value(QStringLiteral("accepted")).toBool(false), true);
+        s.core.model->sliceById(1)->setFrequency(14074000.0);
+        const int bStream = streamOf(s.core, 1);
+        s.core.invoke(s.appA, "addSliceOnPan", {utf8("panId", QStringLiteral("new-own-pan"))});
+        const QJsonObject ask = waitForLast(s.appA, QStringLiteral("confirm.request"), 0);
+        QCOMPARE(ask.value(QStringLiteral("kind")).toString(), QStringLiteral("takeReceiver"));
+        int choice = -1;
+        for (const QJsonValue& item : ask.value(QStringLiteral("choices")).toArray()) {
+            const QJsonObject receiver = item.toObject();
+            if (receiver.value(QStringLiteral("streamIndex")).toInt(-1) == bStream) {
+                choice = receiver.value(QStringLiteral("choice")).toInt(-1);
+            }
+        }
+        QVERIFY(choice >= 0);
+        const QJsonObject done = s.proceed(s.appA, ask.value(QStringLiteral("id")).toInteger(), choice);
+        QCOMPARE(done.value(QStringLiteral("accepted")).toBool(false), true);
+        QVERIFY(s.core.model->sliceOwnership()->ownedBy(s.b.key.fingerprint()).isEmpty());
+        QCOMPARE(s.core.model->slices().size(), 3);
+        QCOMPARE(lastOf(s.appB, QStringLiteral("notice")).value(QStringLiteral("kind")).toString(),
+                 QStringLiteral("receiverTaken"));
+    }
+
+    void malformedAddAtCapacityNeverAsksToTakeOrRemoves()
+    {
+        Shared s(2, 2);
+        QCOMPARE(s.core.model->slices().size(), 2);
+        for (const QByteArray& verb : {QByteArrayLiteral("addSlice"), QByteArrayLiteral("addSliceOnPan")}) {
+            const int before = countOf(s.appA, QStringLiteral("confirm.request"));
+            const int destroys = countOf(s.appB, QStringLiteral("object.destroy"));
+            const QJsonObject refused = s.core.invoke(s.appA, verb, {});
+            QCOMPARE(refused.value(QStringLiteral("accepted")).toBool(true), false);
+            QCOMPARE(refused.value(QStringLiteral("reason")).toString(),
+                     QStringLiteral("The Core could not read this request."));
+            QCOMPARE(countOf(s.appA, QStringLiteral("confirm.request")), before);
+            QCOMPARE(countOf(s.appB, QStringLiteral("object.destroy")), destroys);
+            QCOMPARE(s.core.model->slices().size(), 2);
+        }
+    }
+
+    void sharedOwnPanAtSliceCapStillSucceedsAfterSliceTake()
+    {
+        Shared s(2, 2);
+        QCOMPARE(streamOf(s.core, 0), streamOf(s.core, 1));
+        s.core.invoke(s.appA, "addSliceOnPan", {utf8("panId", QStringLiteral("pan-0"))});
+        const QJsonObject ask = waitForLast(s.appA, QStringLiteral("confirm.request"), 0);
+        QCOMPARE(ask.value(QStringLiteral("kind")).toString(), QStringLiteral("takeSlice"));
+        const QJsonObject done = s.proceed(s.appA, ask.value(QStringLiteral("id")).toInteger(), 0);
+        QCOMPARE(done.value(QStringLiteral("accepted")).toBool(false), true);
+        QCOMPARE(s.core.model->sliceOwnership()->ownedBy(s.a.key.fingerprint()).size(), 2);
+        QCOMPARE(streamOf(s.core, 0), streamOf(s.core, 1));
+    }
+
+    void lastPhysicalCoreSliceCannotBeOfferedAsAnAddVictim()
+    {
+        Core core;
+        Device a(QStringLiteral("Mac A"), QStringLiteral("computer"));
+        Device b(QStringLiteral("iPhone B"), QStringLiteral("phone"));
+        core.model->configureStreamPool(1, 1, 192000);
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a);
+        LoopbackTransport* appB = core.signIn(b);
+        QVERIFY(admitted(appA));
+        QVERIFY(admitted(appB));
+        const int before = countOf(appB, QStringLiteral("confirm.request"));
+        const int destroys = countOf(appA, QStringLiteral("object.destroy"));
+        const QJsonObject refused = core.invoke(
+            appB, "addSliceOnPan", {utf8("panId", QStringLiteral("new-pan"))});
+        QCOMPARE(refused.value(QStringLiteral("accepted")).toBool(true), false);
+        QCOMPARE(countOf(appB, QStringLiteral("confirm.request")), before);
+        QCOMPARE(countOf(appA, QStringLiteral("object.destroy")), destroys);
+        QCOMPARE(core.model->sliceOwnership()->ownedBy(a.key.fingerprint()), QList<int>{0});
+        QCOMPARE(core.model->slices().size(), 1);
+    }
+
     // ── Notices for an away device (7.4) ─────────────────────────────────
 
     void aNoticeWaitsForAnAwayDeviceAndArrivesAfterItsSnapshotComplete()

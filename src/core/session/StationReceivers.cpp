@@ -112,6 +112,21 @@ constexpr const char* kCapFullAtAdmissionReason =
 constexpr const char* kReceiversFullAtAdmissionReason =
     "All the radio's receivers are in use. Try again when another device frees one.";
 
+// Match the two Add handlers' first named argument (including their
+// QVariant-to-string conversion). A missing required argument is refused by
+// the dispatcher and must never turn into a destructive capacity question.
+std::optional<QString> addPanIdFor(const SessionMessage& command)
+{
+    const QByteArray name = command.commandVerb == "addSliceOnPan"
+        ? QByteArrayLiteral("panId") : QByteArrayLiteral("initialPanId");
+    for (const MirrorUpdate& argument : command.arguments) {
+        if (argument.name == name) {
+            return argument.value.toString();
+        }
+    }
+    return std::nullopt;
+}
+
 // Ruling 6.3.
 QString pinReason(const QString& anchorName)
 {
@@ -618,9 +633,23 @@ bool StationServer::handleAddWithTake(SessionTransport* transport, const Session
     if (!answered || answer.accepted || !peerHasSessionHolderVersion(transport)) {
         return true;
     }
+    const std::optional<QString> panId = addPanIdFor(message);
+    if (!panId) {
+        return true;  // The dispatcher already answered the malformed Add.
+    }
     const ReceiverPlanner planner = receiverPlanner();
+    const bool newPan = !panId->isEmpty() && !m_radioModel->panHasSlicesFor(*panId, requester);
+    ReceiverPlanner::TakeRequest request;
+    request.need = newPan ? ReceiverPlanner::Need::AddPan : ReceiverPlanner::Need::AddSlice;
+    request.requester = requester;
     if (capFull) {
-        // Ruling 6.9: the slice cap, not the receivers, is full.
+        // When the requested new pan also needs a DDC, taking one slice
+        // would free a slot but could leave both receivers occupied.
+        if (!planner.planAddAfterClosing(requester, *panId, {}).receiverFits
+            && planner.anotherDeviceHoldsAReceiver(requester)) {
+            askTake(transport, message, request);
+            return true;
+        }
         const QList<ReceiverPlanner::Choice> choices = planner.sliceChoices(requester);
         if (!choices.isEmpty()) {
             askTakeSlice(transport, message, choices);
@@ -629,20 +658,6 @@ bool StationServer::handleAddWithTake(SessionTransport* transport, const Session
     }
     if (live.activeStreamCount() >= live.streamCount()
         && planner.anotherDeviceHoldsAReceiver(requester)) {
-        ReceiverPlanner::TakeRequest request;
-        // Fix wave I4 (ruling 5.12): a new pan is a pan key the requester
-        // has no slice on, whoever else uses the same key string; the
-        // same rule addSliceImpl places by.
-        QString panId;
-        for (const MirrorUpdate& u : message.arguments) {
-            if (u.name == "panId" || u.name == "initialPanId") {
-                panId = u.value.toString();
-            }
-        }
-        const bool newPan =
-            !panId.isEmpty() && !m_radioModel->panHasSlicesFor(panId, requester);
-        request.need = newPan ? ReceiverPlanner::Need::AddPan : ReceiverPlanner::Need::AddSlice;
-        request.requester = requester;
         askTake(transport, message, request);
     }
     return true;
@@ -861,13 +876,37 @@ void StationServer::askPanMove(SessionTransport* transport, const SessionMessage
     sendQuestion(transport, question, prompt);
 }
 
-void StationServer::askTake(SessionTransport* transport, const SessionMessage& original,
+bool StationServer::askTake(SessionTransport* transport, const SessionMessage& original,
                             const ReceiverPlanner::TakeRequest& request)
 {
     const ReceiverPlanner planner = receiverPlanner();
-    const QList<ReceiverPlanner::Choice> choices = planner.receiverChoices(request);
+    QList<ReceiverPlanner::Choice> choices = planner.receiverChoices(request);
     if (choices.isEmpty()) {
-        return;
+        return false;
+    }
+    if (request.need == ReceiverPlanner::Need::AddSlice
+        || request.need == ReceiverPlanner::Need::AddPan) {
+        const std::optional<QString> panId = addPanIdFor(original);
+        if (!panId) {
+            return false;
+        }
+        bool anyTakeable = false;
+        bool initiallyTakeable = false;
+        for (ReceiverPlanner::Choice& candidate : choices) {
+            if (candidate.takeable) {
+                initiallyTakeable = true;
+                const ReceiverPlanner::AddPlacement placement =
+                    planner.planAddAfterClosing(request.requester, *panId, candidate.closes);
+                if (!placement.fits()) {
+                    candidate.takeable = false;
+                    candidate.why = placement.reason;
+                }
+            }
+            anyTakeable = anyTakeable || candidate.takeable;
+        }
+        if (initiallyTakeable && !anyTakeable) {
+            return false;
+        }
     }
     ConfirmStep::Question question;
     question.kind = QStringLiteral("takeReceiver");
@@ -886,24 +925,46 @@ void StationServer::askTake(SessionTransport* transport, const SessionMessage& o
     SessionPrompt prompt;
     prompt.choices = planner.receiverChoicesJson(choices);
     sendQuestion(transport, question, prompt);
+    return true;
 }
 
-void StationServer::askTakeSlice(SessionTransport* transport, const SessionMessage& original,
+bool StationServer::askTakeSlice(SessionTransport* transport, const SessionMessage& original,
                                  const QList<ReceiverPlanner::Choice>& choices)
 {
+    const std::optional<QString> panId = addPanIdFor(original);
+    if (!panId) {
+        return false;
+    }
+    QList<ReceiverPlanner::Choice> offered = choices;
+    const ReceiverPlanner planner = receiverPlanner();
+    const QByteArray requester = m_peers.value(transport).sessionDeviceId;
+    bool anyTakeable = false;
+    for (ReceiverPlanner::Choice& candidate : offered) {
+        const ReceiverPlanner::AddPlacement placement =
+            planner.planAddAfterClosing(requester, *panId, {candidate.sliceId});
+        if (!placement.fits()) {
+            candidate.takeable = false;
+            candidate.why = placement.reason;
+        }
+        anyTakeable = anyTakeable || candidate.takeable;
+    }
+    if (!anyTakeable) {
+        return false;
+    }
     ConfirmStep::Question question;
     question.kind = QStringLiteral("takeSlice");
     question.held = ConfirmStep::Held::Command;
     question.original = original;
-    for (const ReceiverPlanner::Choice& c : choices) {
+    for (const ReceiverPlanner::Choice& c : offered) {
         question.choiceTargets.append(c.sliceId);
         question.choiceTakeable.append(c.takeable);
         question.shownChoices.append(QSet<int>(c.closes.cbegin(), c.closes.cend()));
         question.shownOwners.append(m_radioModel->sliceOwnership()->mark(c.sliceId).subject());
     }
     SessionPrompt prompt;
-    prompt.choices = receiverPlanner().sliceChoicesJson(choices);
+    prompt.choices = planner.sliceChoicesJson(offered);
     sendQuestion(transport, question, prompt);
+    return true;
 }
 
 // ── Applying ─────────────────────────────────────────────────────────────
@@ -1053,8 +1114,10 @@ bool StationServer::heldFitsNow(const ConfirmStep::Question& question) const
     }
     switch (static_cast<ReceiverPlanner::Need>(question.need)) {
     case ReceiverPlanner::Need::AddSlice:
-    case ReceiverPlanner::Need::AddPan:
-        return free > 0 && m_radioModel->slices().size() < m_radioModel->sliceCapForDevices();
+    case ReceiverPlanner::Need::AddPan: {
+        const std::optional<QString> panId = addPanIdFor(question.original);
+        return panId && receiverPlanner().planAddAfterClosing(question.device, *panId, {}).fits();
+    }
     case ReceiverPlanner::Need::PanMove:
         return free > 0;
     case ReceiverPlanner::Need::Retune: {
@@ -1516,8 +1579,28 @@ SessionMessage StationServer::proceedTakeReceiver(SessionTransport* transport,
         }
     }
     if (grew) {
-        askTake(transport, question.original, request);
-        return askAgain(invoke);
+        return askTake(transport, question.original, request) ? askAgain(invoke)
+            : SessionMessages::commandResult(invoke.commandVerb, invoke.commandId, false,
+                                             QString::fromLatin1(kChangedReason), {});
+    }
+    if (request.need == ReceiverPlanner::Need::AddSlice
+        || request.need == ReceiverPlanner::Need::AddPan) {
+        const std::optional<QString> panId = addPanIdFor(question.original);
+        const ReceiverPlanner::AddPlacement placement = panId
+            ? receiverPlanner().planAddAfterClosing(question.device, *panId, now->closes)
+            : ReceiverPlanner::AddPlacement{};
+        if (!panId || !placement.fits()) {
+            if (panId && askTake(transport, question.original, request)) {
+                return askAgain(invoke);
+            }
+            return SessionMessages::commandResult(
+                invoke.commandVerb, invoke.commandId, false,
+                panId ? placement.reason : QStringLiteral("The Core could not read this request."), {});
+        }
+    }
+    if (now->closes.size() >= m_radioModel->slices().size()) {
+        return SessionMessages::commandResult(invoke.commandVerb, invoke.commandId, false,
+                                              QStringLiteral("The Core must keep its last receiver slice."), {});
     }
     // Ruling 6.7: every other device's slice on it closes, then the held
     // request is applied on the freed receiver, before anyone can claim it.
@@ -1544,7 +1627,7 @@ SessionMessage StationServer::proceedTakeSlice(SessionTransport* transport,
         return SessionMessages::commandResult(invoke.commandVerb, invoke.commandId, false,
                                               QString::fromLatin1(kNoChoiceReason), {});
     }
-    if (m_radioModel->slices().size() < m_radioModel->sliceCapForDevices()) {
+    if (heldFitsNow(question)) {
         return applyHeld(transport, question, -1, invoke);
     }
     const int target = question.choiceTargets.at(choice);
@@ -1553,12 +1636,32 @@ SessionMessage StationServer::proceedTakeSlice(SessionTransport* transport,
         || ownership->mark(target).subject() != question.shownOwners.value(choice)) {
         const QList<ReceiverPlanner::Choice> choices =
             receiverPlanner().sliceChoices(question.device);
-        if (!choices.isEmpty()) {
-            askTakeSlice(transport, question.original, choices);
+        if (!choices.isEmpty() && askTakeSlice(transport, question.original, choices)) {
             return askAgain(invoke);
         }
         return SessionMessages::commandResult(invoke.commandVerb, invoke.commandId, false,
                                               QString::fromLatin1(kChangedReason), {});
+    }
+    const std::optional<QString> panId = addPanIdFor(question.original);
+    const ReceiverPlanner planner = receiverPlanner();
+    const ReceiverPlanner::AddPlacement placement = panId
+        ? planner.planAddAfterClosing(question.device, *panId, {target})
+        : ReceiverPlanner::AddPlacement{};
+    if (!panId || !placement.fits()) {
+        if (panId && !placement.receiverFits
+            && planner.anotherDeviceHoldsAReceiver(question.device)) {
+            ReceiverPlanner::TakeRequest request;
+            request.need = !panId->isEmpty()
+                    && !m_radioModel->panHasSlicesFor(*panId, question.device)
+                ? ReceiverPlanner::Need::AddPan : ReceiverPlanner::Need::AddSlice;
+            request.requester = question.device;
+            if (askTake(transport, question.original, request)) {
+                return askAgain(invoke);
+            }
+        }
+        return SessionMessages::commandResult(
+            invoke.commandVerb, invoke.commandId, false,
+            panId ? placement.reason : QStringLiteral("The Core could not read this request."), {});
     }
     const QHash<QByteArray, QList<SavedSlice>> closedBy = closeForTake({target});
     const SessionMessage result = applyHeld(transport, question, -1, invoke);

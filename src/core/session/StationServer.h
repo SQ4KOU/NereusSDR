@@ -1843,9 +1843,9 @@ private:
                       SessionPrompt prompt);
     void askPanMove(SessionTransport* transport, const SessionMessage& original,
                     const PanMoveCheck& check, const std::optional<QJsonObject>& change);
-    void askTake(SessionTransport* transport, const SessionMessage& original,
+    bool askTake(SessionTransport* transport, const SessionMessage& original,
                  const ReceiverPlanner::TakeRequest& request);
-    void askTakeSlice(SessionTransport* transport, const SessionMessage& original,
+    bool askTakeSlice(SessionTransport* transport, const SessionMessage& original,
                       const QList<ReceiverPlanner::Choice>& choices);
     void applyPanMove(const PanMoveCheck& check, const QByteArray& requester);
     SessionMessage runHeldCommand(const SessionMessage& original);
