@@ -29,6 +29,10 @@
 //                 display duplex change while keyed (parity Task 31, A11).
 //                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code.
+//   2026-09-28 - clearMaximums() starts Thetis's 500 ms display delay
+//                 (display.cs:841-877, 4219-4221, 4542-4544 [v2.10.3.15]).
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -120,8 +124,16 @@ public:
     /// From Thetis display.cs:4542-4561 [v2.10.3.15] ResetBlobMaximums(rx,
     /// bClear = true): every slot disabled at the lowest level, whatever
     /// the hold settings. Display.DisplayDuplex calls it when DUP changes
-    /// while keyed (display.cs:514-521 [v2.10.3.15]).
-    void clearMaximums()               { m_blobs.clear(); }
+    /// while keyed (display.cs:514-521 [v2.10.3.15]). It also starts the
+    /// display delay (display.cs:4542-4544 [v2.10.3.15]:
+    ///   if (bClear) delayBlobsActivePeakDisplay(rx, true);):
+    /// for kDisplayDelayMs no blobs are found or drawn.
+    void clearMaximums();
+    /// Inside the display delay that follows clearMaximums().
+    bool displayDelayed() const        { return m_displayDelayed; }
+    /// From Thetis display.cs:876 [v2.10.3.15]:
+    ///   m_dPeakDelay = m_dElapsedFrameStart + 500;
+    static constexpr qint64 kDisplayDelayMs = 500;
     /// From Thetis Display.cs:4407 [v2.10.3.13] m_nNumberOfMaximums = 3; max 20.
     void setCount(int n)               { m_count = qMax(1, n); }
     /// From Thetis Display.cs:4401 [v2.10.3.13] m_bInsideFilterOnly = false.
@@ -180,6 +192,9 @@ private:
     QVector<PeakBlob> m_blobs;
     // Monotonically increasing wall-clock counter advanced by tickFrame().
     qint64 m_currentTimeMs = 0;
+    // Thetis m_bDelayRX1Blobs / m_dPeakDelay (display.cs:841-845).
+    bool   m_displayDelayed = false;
+    qint64 m_displayDelayUntilMs = 0;
 
     // Verbatim port of Thetis's blob-array maintenance helpers.
     // From Thetis Display.cs:4429-4448 [v2.10.3.13] isOccupied().

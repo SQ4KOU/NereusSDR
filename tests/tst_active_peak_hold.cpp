@@ -269,6 +269,34 @@ private slots:
         QCOMPARE(trace.peak(0), -10.0f);
     }
 
+    // Thetis display.cs:4527-4530, 859-877, 4219-4221, 5011 [v2.10.3.15]:
+    // ResetSpectrumPeaks holds the trace back for 500 ms; it neither rises,
+    // falls nor draws until a frame starting more than 500 ms after the
+    // reset has ended.
+    void clear_holds_the_trace_back_for_500_ms()
+    {
+        ActivePeakHoldTrace trace(4);
+        trace.setEnabled(true);
+        trace.setDurationMs(0);
+        trace.setDropDbPerSec(25.0);
+        trace.update(QVector<float>(4, -40.0f));
+        trace.tickFrame(25);                   // frame 0 ms; clock now 40
+        QCOMPARE(trace.peak(0), -40.0f);
+
+        trace.clear();                         // reset at 40 ms: delay to 540 ms
+        // Frames starting at 40 .. 520 ms: nothing raised.
+        for (int frame = 0; frame < 13; ++frame) {
+            trace.update(QVector<float>(4, -30.0f));
+            QVERIFY(!std::isfinite(trace.peak(0)));
+            trace.tickFrame(25);
+        }
+        // The frame starting at 560 ms (> 540) ends the delay; the next draws.
+        trace.update(QVector<float>(4, -30.0f));
+        trace.tickFrame(25);
+        trace.update(QVector<float>(4, -30.0f));
+        QCOMPARE(trace.peak(0), -30.0f);
+    }
+
     void on_tx_true_allows_update_during_tx()
     {
         ActivePeakHoldTrace trace(256);

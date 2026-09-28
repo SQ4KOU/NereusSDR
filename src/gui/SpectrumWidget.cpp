@@ -1322,10 +1322,12 @@ void SpectrumWidget::invalidateRemoteSpectrumFrame()
     recomputeExtendedMode();
     m_remoteCodec = {};
     m_pxPeakHold.clear();
+    // A new context is a reset, as Thetis's centre-frequency change
+    // (display.cs:907-921 [v2.10.3.15]: ResetBlobMaximums(1, true);
+    // ResetSpectrumPeaks(1);): both empty and wait out the 500 ms display
+    // delay before they show again.
     m_activePeakHold.resize(0);
-    const bool blobsEnabled = m_peakBlobs.enabled();
-    m_peakBlobs.setEnabled(false);
-    m_peakBlobs.setEnabled(blobsEnabled);
+    m_peakBlobs.clearMaximums();
     m_renderedPixels.clear();
     m_undentedPixels.clear();
     m_wfRenderedPixels.clear();
@@ -4493,7 +4495,8 @@ void SpectrumWidget::drawSpectrum(QPainter& p, const QRect& specRect)
 
     // Peak Blobs render pass.  Drawn on top of the live trace line.
     // From Thetis Display.cs:5453-5508 [v2.10.3.13].
-    if (m_peakBlobs.enabled() && !m_peakBlobs.blobs().isEmpty()) {
+    if (m_peakBlobs.enabled() && !m_peakBlobs.displayDelayed()
+        && !m_peakBlobs.blobs().isEmpty()) {
         paintPeakBlobs(p, specRect);
     }
 
@@ -11414,7 +11417,8 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
                 if (m_activePeakHold.active() && m_activePeakHold.size() > 0) {
                     paintActivePeakHoldTrace(pd, specRect);
                 }
-                if (m_peakBlobs.enabled() && !m_peakBlobs.blobs().isEmpty()) {
+                if (m_peakBlobs.enabled() && !m_peakBlobs.displayDelayed()
+                    && !m_peakBlobs.blobs().isEmpty()) {
                     paintPeakBlobs(pd, specRect);
                 }
             }

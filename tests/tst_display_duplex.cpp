@@ -657,11 +657,13 @@ private slots:
         two->m_peakBlobs.setEnabled(true);
         two->m_peakBlobs.m_blobs.resize(3);
         two->m_peakBlobs.m_blobs[0].enabled = true;
+        // A sized trace that has not been reset, so no display delay runs.
+        two->m_activePeakHold = ActivePeakHoldTrace(8);
         two->m_activePeakHold.setEnabled(true);
         // Keyed, the trace runs only with "Update during TX" on (Thetis
         // display.cs:5011 [v2.10.3.15]); this test is about the reset.
+        two->m_activePeakHold.setTxActive(true);
         two->m_activePeakHold.setOnTx(true);
-        two->m_activePeakHold.resize(8);
         two->m_activePeakHold.update(QVector<float>(8, -40.0f));
         QCOMPARE(two->m_activePeakHold.peak(0), -40.0f);
         QSignalSpy changed(window.controller.get(), &MoxDisplayController::displayDuplexChanged);
@@ -677,6 +679,10 @@ private slots:
         QCOMPARE(window.radio.txDisplayFeed()->viewerCount(), 0);
         QVERIFY(two->m_peakBlobs.m_blobs.isEmpty());
         QVERIFY(std::isinf(two->m_activePeakHold.peak(0)));
+        // Both resets hold the peaks back 500 ms (Thetis display.cs:4527-4530,
+        // 4542-4544, 859-877 [v2.10.3.15]).
+        QVERIFY(two->m_activePeakHold.displayDelayed());
+        QVERIFY(two->m_peakBlobs.displayDelayed());
 
         // Off again: the transmit view comes back on the carrier.
         two->m_activePeakHold.update(QVector<float>(8, -30.0f));

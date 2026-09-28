@@ -23,6 +23,10 @@
 //                 so the Core can run it for an app's display (iPhone app
 //                 Task 20, R-IOS-27). J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-28 - The 500 ms display delay after clearMaximums(), ported
+//                 from Thetis display.cs:841-877, 4219-4221, 4542-4544,
+//                 5013 [v2.10.3.15]. J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -208,10 +212,27 @@ void PeakBlobDetector::processMaximum(float dbm, int nX)
 // from a "bins[i] > bins[i-1] && bins[i] > bins[i+1]" local-maxima
 // scan: it produces the SAME peaks Thetis's UI shows because both
 // use the same hysteresis state machine.
+void PeakBlobDetector::clearMaximums()
+{
+    m_blobs.clear();
+    // From Thetis display.cs:4542-4544 [v2.10.3.15]:
+    //   static public void ResetBlobMaximums(int rx, bool bClear = false)
+    //   {
+    //       if (bClear) delayBlobsActivePeakDisplay(rx, true);
+    // and display.cs:859-877 [v2.10.3.15] delayBlobsActivePeakDisplay:
+    //   m_bDelayRX1Blobs = true;
+    //   m_dPeakDelay = m_dElapsedFrameStart + 500;
+    m_displayDelayed = true;
+    m_displayDelayUntilMs = m_currentTimeMs + kDisplayDelayMs;
+}
+
 void PeakBlobDetector::update(const QVector<float>& bins,
                               int filterLowBin, int filterHighBin)
 {
-    if (!m_enabled || bins.isEmpty()) {
+    // From Thetis display.cs:5013 [v2.10.3.15]:
+    //   bPeakBlobs = m_bPeakBlobMaximums && !m_bDelayRX1Blobs;
+    // While delayed there is no per-frame reset and no scan.
+    if (!m_enabled || bins.isEmpty() || m_displayDelayed) {
         return;  // leave m_blobs untouched (cleared by setEnabled(false))
     }
     ensureBlobsSized();
@@ -303,7 +324,19 @@ void PeakBlobDetector::update(const QVector<float>& bins,
 //   }
 void PeakBlobDetector::tickFrame(int fps, int elapsedMs)
 {
+    const qint64 frameStartMs = m_currentTimeMs;
     m_currentTimeMs += elapsedMs;
+
+    // At the end of each frame, as Thetis display.cs:4219-4221 [v2.10.3.15]:
+    //   //MW0LGE_21k8
+    //   processBlobsActivePeakDisplayDelay();
+    //   //
+    // with display.cs:847-858 [v2.10.3.15]:
+    //   if (m_dElapsedFrameStart > m_dPeakDelay) { ... m_bDelayRX1Blobs = false; }
+    // The next frame finds and draws blobs again.
+    if (m_displayDelayed && frameStartMs > m_displayDelayUntilMs) {
+        m_displayDelayed = false;
+    }
 
     if (!m_enabled || fps <= 0) { return; }
 

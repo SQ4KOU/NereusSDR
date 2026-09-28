@@ -76,8 +76,10 @@ namespace NereusSDR {
 
 ActivePeakHoldTrace::ActivePeakHoldTrace(int nBins)
 {
+    // Sized, not reset: no display delay for a trace that has shown nothing.
     if (nBins > 0) {
-        resize(nBins);
+        m_peaks.fill(-std::numeric_limits<float>::infinity(), nBins);
+        m_peakTimesMs.fill(0.0, nBins);
     }
 }
 
@@ -96,10 +98,28 @@ void ActivePeakHoldTrace::clear()
     std::fill(m_peaks.begin(), m_peaks.end(),
               -std::numeric_limits<float>::infinity());
     std::fill(m_peakTimesMs.begin(), m_peakTimesMs.end(), m_frameMs);
+
+    // From Thetis display.cs:4527-4530 [v2.10.3.15]:
+    //   static public void ResetSpectrumPeaks(int rx)
+    //   {
+    //       delayBlobsActivePeakDisplay(rx, false);
+    // and display.cs:859-877 [v2.10.3.15] delayBlobsActivePeakDisplay:
+    //   m_bDelayRX1SpectrumPeaks = true;
+    //   m_dPeakDelay = m_dElapsedFrameStart + 500;
+    m_displayDelayed = true;
+    m_displayDelayEnded = false;
+    m_displayDelayUntilMs = m_frameMs + kDisplayDelayMs;
 }
 
 void ActivePeakHoldTrace::update(const QVector<float>& bins)
 {
+    // A display delay that ended with the last frame (tickFrame) is over
+    // from this frame on.
+    if (m_displayDelayEnded) {
+        m_displayDelayed = false;
+        m_displayDelayEnded = false;
+    }
+
     // From Thetis display.cs:5011 [v2.10.3.15]:
     //   bSpectralPeakHold = (!local_mox || _activePeakInTxRX1) && m_bSpectralPeakHoldRX1 && ...
     // Off while transmitting without "Also in TX": nothing is raised.
@@ -124,7 +144,7 @@ void ActivePeakHoldTrace::update(const QVector<float>& bins)
 
 void ActivePeakHoldTrace::tickFrame(int fps)
 {
-    if (!active() || fps <= 0) {
+    if (fps <= 0) {
         return;
     }
 
@@ -136,13 +156,28 @@ void ActivePeakHoldTrace::tickFrame(int fps)
     //   {
     //       peak.max_dBm -= dBmSpectralPeakFall;
     //   }
-    const float dropPerFrame = static_cast<float>(m_dropDbPerSec / fps);
-    for (int i = 0; i < m_peaks.size(); ++i) {
-        float& p = m_peaks[i];
-        if (std::isfinite(p) && m_frameMs - m_peakTimesMs[i] > m_durationMs) {
-            p -= dropPerFrame;
+    if (active()) {
+        const float dropPerFrame = static_cast<float>(m_dropDbPerSec / fps);
+        for (int i = 0; i < m_peaks.size(); ++i) {
+            float& p = m_peaks[i];
+            if (std::isfinite(p) && m_frameMs - m_peakTimesMs[i] > m_durationMs) {
+                p -= dropPerFrame;
+            }
         }
     }
+
+    // At the end of each frame, as Thetis display.cs:4219-4221 [v2.10.3.15]:
+    //   //MW0LGE_21k8
+    //   processBlobsActivePeakDisplayDelay();
+    //   //
+    // with display.cs:847-858 [v2.10.3.15]:
+    //   if (m_dElapsedFrameStart > m_dPeakDelay) { ... m_bDelayRX1SpectrumPeaks = false; }
+    // The flag clears for the NEXT frame: this one was drawn without the
+    // trace, and update() at the next frame's start lets it run again.
+    if (m_displayDelayed && m_frameMs > m_displayDelayUntilMs) {
+        m_displayDelayEnded = true;
+    }
+
     // The next frame starts one frame later (Thetis m_dElapsedFrameStart).
     m_frameMs += 1000.0 / fps;
 }

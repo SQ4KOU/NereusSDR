@@ -33,6 +33,11 @@
 //                 transmits without "Also in TX" the trace neither updates,
 //                 decays nor draws. J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-28 - The 500 ms display delay after a reset ported from Thetis
+//                 display.cs:841-877, 4219-4221 [v2.10.3.15]
+//                 (delayBlobsActivePeakDisplay / processBlobsActivePeakDisplayDelay).
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -95,7 +100,8 @@ namespace NereusSDR {
 ///     and the bin's time is the current frame's
 ///   - tickFrame(fps): a bin whose time is more than durationMs old falls by
 ///     dropDbPerSec / fps, then the frame clock advances one frame
-///   - clear(): reset peaks to -∞
+///   - clear(): reset peaks to -∞ and start the 500 ms display delay, during
+///     which the trace is inactive (display.cs:4527-4530, 859-877)
 ///
 /// Rendered as a separate trace on SpectrumWidget (Q14.1: separate pass for
 /// architectural flexibility, not composited with main spectrum trace).
@@ -129,8 +135,17 @@ public:
     void setTxActive(bool t)            { m_txActive = t; }
     bool txActive() const               { return m_txActive; }
     bool onTx() const                   { return m_onTx; }
-    /// Enabled, and not switched off by transmitting.
-    bool active() const                 { return m_enabled && (!m_txActive || m_onTx); }
+    /// Enabled, past the display delay after a reset, and not switched off
+    /// by transmitting (Thetis display.cs:5011 [v2.10.3.15]:
+    /// ... && m_bSpectralPeakHoldRX1 && !m_bDelayRX1SpectrumPeaks).
+    bool active() const                 {
+        return m_enabled && !m_displayDelayed && (!m_txActive || m_onTx);
+    }
+    /// Inside the display delay that follows a reset.
+    bool displayDelayed() const         { return m_displayDelayed; }
+    /// From Thetis display.cs:876 [v2.10.3.15]:
+    ///   m_dPeakDelay = m_dElapsedFrameStart + 500;
+    static constexpr double kDisplayDelayMs = 500.0;
 
     // ---- Per-frame operations ----
 
@@ -138,12 +153,15 @@ public:
     /// raised bins with the current frame's time. No-op when !active().
     void update(const QVector<float>& currentBins);
 
-    /// Decay the finite peaks older than the hold time by
-    /// (dropDbPerSec / fps) dB, then advance the frame clock by one frame.
-    /// No-op when !active() or fps <= 0.
+    /// When active(), decay the finite peaks older than the hold time by
+    /// (dropDbPerSec / fps) dB. Then mark a display delay whose time has
+    /// passed as over from the next frame's update(), and advance the frame
+    /// clock by one frame (both run inactive too, as Thetis's frame clock
+    /// does). No-op when fps <= 0.
     void tickFrame(int fps);
 
-    /// Reset all peaks to -infinity.
+    /// Reset all peaks to -infinity and start the display delay
+    /// (Thetis ResetSpectrumPeaks).
     void clear();
 
     // ---- Accessors ----
@@ -175,6 +193,10 @@ private:
     // frame clock (Thetis local_frame_start), in ms.
     QVector<double> m_peakTimesMs;
     double m_frameMs       = 0.0;
+    // Thetis m_bDelayRX1SpectrumPeaks / m_dPeakDelay (display.cs:843-845).
+    bool   m_displayDelayed = false;
+    bool   m_displayDelayEnded = false;   // set at a frame's end, applied at the next
+    double m_displayDelayUntilMs = 0.0;
 };
 
 }  // namespace NereusSDR
