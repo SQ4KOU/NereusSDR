@@ -36,12 +36,18 @@
 
 namespace NereusSDR::Test {
 
+struct DataChannelPairStart {
+    bool answererStarted = false;
+    bool offererStarted = false;
+};
+
 /// Joins `offerer` and `answerer` directly and starts both. False when
 /// either refuses to start.
 inline bool startDataChannelPair(DataChannelTransport* offerer, DataChannelTransport* answerer,
                                  quint64 offererCap, quint64 answererCap,
                                  const QString& certificatePemPath,
-                                 const QString& privateKeyPemPath)
+                                 const QString& privateKeyPemPath,
+                                 DataChannelPairStart* result = nullptr)
 {
     QObject::connect(offerer, &DataChannelTransport::localDescription, answerer,
                      [answerer](const QString& sdp, const QString& type) {
@@ -63,7 +69,13 @@ inline bool startDataChannelPair(DataChannelTransport* offerer, DataChannelTrans
     DataChannelTransport::Options offer;
     offer.role = DataChannelTransport::Role::Offerer;
     offer.maxIncomingBytes = offererCap;
-    return answerer->start(answer) && offerer->start(offer);
+    const bool answererStarted = answerer->start(answer);
+    const bool offererStarted = answererStarted && offerer->start(offer);
+    if (result) {
+        result->answererStarted = answererStarted;
+        result->offererStarted = offererStarted;
+    }
+    return answererStarted && offererStarted;
 }
 
 /// Both ends have handled everything the other sent: every message
@@ -121,12 +133,16 @@ public:
         });
         QObject::connect(m_offerer, &DataChannelTransport::opened, this,
                          [this]() { m_offererOpened = true; });
+        QObject::connect(m_offerer, &DataChannelTransport::failed, this,
+                         [this](const QString&) { m_offererFailed = true; });
         QObject::connect(m_answerer, &DataChannelTransport::opened, this, [this, accept]() {
             m_answererOpened = true;
             accept(m_answerer);
         });
+        QObject::connect(m_answerer, &DataChannelTransport::failed, this,
+                         [this](const QString&) { m_answererFailed = true; });
         m_started = startDataChannelPair(m_offerer, m_answerer, clientCap, stationCap,
-                                         certificatePemPath, privateKeyPemPath);
+                                         certificatePemPath, privateKeyPemPath, &m_start);
     }
 
     ~DataChannelBridge() override
@@ -141,6 +157,19 @@ public:
     /// Both ends opened (the station may have closed its end again at
     /// once, as it does a connection past its limit).
     bool opened() const { return m_offererOpened && m_answererOpened; }
+
+    /// Structural status only: never include SDP, candidate, key, or device identity.
+    QString openDiagnostic() const
+    {
+        return QStringLiteral("start(answerer=%1,offerer=%2) opened(answerer=%3,offerer=%4) "
+                              "failed(answerer=%5,offerer=%6)")
+            .arg(int(m_start.answererStarted))
+            .arg(int(m_start.offererStarted))
+            .arg(int(m_answererOpened))
+            .arg(int(m_offererOpened))
+            .arg(int(m_answererFailed))
+            .arg(int(m_offererFailed));
+    }
 
     /// Everything each end sent has been handled at the other, a close at
     /// either end has reached the other, and the client's choice about
@@ -168,8 +197,11 @@ private:
     DataChannelTransport* m_offerer = nullptr;
     QPointer<DataChannelTransport> m_answerer;
     bool m_started = false;
+    DataChannelPairStart m_start;
     bool m_offererOpened = false;
     bool m_answererOpened = false;
+    bool m_offererFailed = false;
+    bool m_answererFailed = false;
 };
 
 } // namespace NereusSDR::Test
