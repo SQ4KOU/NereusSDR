@@ -6071,6 +6071,20 @@ void StationServer::sendToPeer(SessionTransport* transport, const SessionMessage
                 || !peerDeclares(transport, QByteArrayLiteral("setupDescription"), 1))) {
             return;
         }
+        if (isSetupDescriptionMessage(message)
+            && message.kind != SessionMessageKind::Schema) {
+            SessionMessage fitted = message;
+            const int declared = peer->features.value(QByteArrayLiteral("setupDescription"), 0);
+            const int version = qMin(declared, 2);
+            for (MirrorUpdate& update : fitted.updates) {
+                if (update.name != "revision") {
+                    update.value = SetupDescription::fitCategoryForVersion(
+                        update.value.toString(), version);
+                }
+            }
+            transport->sendText(SessionMessages::encode(fitted));
+            return;
+        }
         // Parity Task 19: nor the spot sources to an older app.
         if (isSpotSourcesMessage(message)
             && (minor < kRadioIdentitySessionProtocolMinor || recordStreamVersion() < 1)) {
@@ -8177,8 +8191,9 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             caps.pairingVersion = pairingVersion();
             // iPhone app Task 19: the catalogue.
             caps.stationCatalogVersion = stationCatalogVersion();
-            caps.setupDescriptionVersion =
-                peerDeclares(transport, QByteArrayLiteral("setupDescription"), 1) ? 1 : 0;
+            caps.setupDescriptionVersion = peerDeclares(
+                transport, QByteArrayLiteral("setupDescription"), 1)
+                ? qMin(peer->features.value(QByteArrayLiteral("setupDescription")), 2) : 0;
             // iPhone app Task 20: display extras.
             caps.displayExtrasVersion = media ? displayExtrasVersion() : 0;
             // R-R3-49 (parity Task 1): the transmit settings.

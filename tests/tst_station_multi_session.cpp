@@ -1809,6 +1809,44 @@ private slots:
         QVERIFY(deltaValues(appA->received(), fromA, sharedKey, QStringLiteral("nbMode")).isEmpty());
     }
 
+    void aTnfRowMoveStillUsesSharedSettingConfirmation()
+    {
+        Core core;
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a);
+        LoopbackTransport* appB = core.signIn(b);
+        QVERIFY(admitted(appA) && admitted(appB));
+        const QStringList bKeys = heldKeys(appB, QStringLiteral("slice:"));
+        QCOMPARE(bKeys.size(), 1);
+        const int bSlice = bKeys.first().mid(6).toInt();
+        const double centre = core.model->sliceById(0)->frequency();
+        core.model->sliceById(bSlice)->setFrequency(centre);
+        const int rowId = core.model->notchModel()->addNotch(centre, 200.0);
+        QVERIFY(rowId >= 0);
+        const quint32 revision = core.model->notchModel()->revision();
+        const QJsonObject asked = core.invoke(appA, "notch.move",
+            {int64("id", rowId), f64("centreHz", centre + 100.0),
+             f64("widthHz", 300.0)});
+        QCOMPARE(asked.value(QStringLiteral("accepted")).toBool(true), false);
+        QCOMPARE(asked.value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("Waiting for you to confirm."));
+        QCOMPARE(core.model->notchModel()->revision(), revision);
+        QTRY_VERIFY(!ofType(appA->received(), QStringLiteral("confirm.request")).isEmpty());
+        const QJsonObject question = ofType(appA->received(), QStringLiteral("confirm.request")).last();
+        QCOMPARE(question.value(QStringLiteral("kind")).toString(), QStringLiteral("sharedSetting"));
+        const QJsonObject proceeded = core.invoke(appA, "confirm.proceed",
+            {int64("id", question.value(QStringLiteral("id")).toInteger()),
+             int64("choice", -1)});
+        QVERIFY2(proceeded.value(QStringLiteral("accepted")).toBool(),
+                 qPrintable(proceeded.value(QStringLiteral("reason")).toString()));
+        QCOMPARE(core.model->notchModel()->notchById(rowId)->centerHz, centre + 100.0);
+        QCOMPARE(core.model->notchModel()->notchById(rowId)->widthHz, 300.0);
+        QCOMPARE(core.model->notchModel()->revision(), revision + 1);
+    }
+
     void aNewcomerLeavesAnotherDevicesDeltasInPlace()
     {
         Core core;

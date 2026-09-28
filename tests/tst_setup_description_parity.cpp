@@ -15,14 +15,17 @@
 #include "gui/setup/TestTwoTonePage.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
+#include "models/NotchModel.h"
 
 #include <QAbstractButton>
 #include <QButtonGroup>
 #include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QLineEdit>
+#include <QGroupBox>
 #include <QSpinBox>
 #include <QSlider>
+#include <QTableWidget>
 
 using namespace NereusSDR;
 
@@ -98,6 +101,37 @@ void compareControl(QWidget& page, const QJsonObject& control)
                 auto* button = group->button(i);
                 QVERIFY(button != nullptr);
                 QCOMPARE(button->text(), choices.at(i).toString());
+            }
+        }
+    } else if (kind == "table") {
+        auto* table = qobject_cast<QTableWidget*>(object);
+        QVERIFY2(table != nullptr, qPrintable(id));
+        auto* group = qobject_cast<QGroupBox*>(table->parentWidget());
+        QVERIFY(group != nullptr);
+        QCOMPARE(group->title(), control.value("label").toString());
+        QCOMPARE(table->rowCount(), 1);
+        const QJsonArray columns = control.value("columns").toArray();
+        QCOMPARE(table->columnCount(), columns.size());
+        for (int col = 0; col < columns.size(); ++col) {
+            const QJsonObject column = columns.at(col).toObject();
+            QWidget* cell = table->cellWidget(0, col);
+            QVERIFY(cell != nullptr);
+            QCOMPARE(cell->property("nereusSetupId").toString(), column.value("id").toString());
+            QCOMPARE(cell->toolTip(), column.value("tooltip").toString());
+            const QString header = col == 3 ? QString() : column.value("label").toString();
+            QCOMPARE(table->horizontalHeaderItem(col)->text(), header);
+            if (col == 0 || col == 1) {
+                auto* spin = qobject_cast<QDoubleSpinBox*>(cell);
+                QVERIFY(spin != nullptr);
+                QCOMPARE(spin->minimum(), column.value("min").toDouble());
+                QCOMPARE(spin->maximum(), column.value("max").toDouble());
+                QCOMPARE(spin->singleStep(), column.value("step").toDouble());
+            } else if (col == 2) {
+                QVERIFY(qobject_cast<QCheckBox*>(cell) != nullptr);
+            } else {
+                auto* button = qobject_cast<QAbstractButton*>(cell);
+                QVERIFY(button != nullptr);
+                QCOMPARE(button->text(), column.value("label").toString());
             }
         }
     } else if (kind == "text") {
@@ -183,6 +217,8 @@ private slots:
         RadioModel model;
         model.setBoardForTest(static_cast<HPSDRHW>(board));
         model.addSlice();
+        QVERIFY(model.notchModel() != nullptr);
+        QVERIFY(model.notchModel()->addNotch(14074000.0) >= 0);
         // A real Setup page opens after connectToRadio has installed and
         // ranged the controller. Recreate that state without RF hardware.
         auto* attenuator = new StepAttenuatorController(&model);
