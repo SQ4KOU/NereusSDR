@@ -302,8 +302,9 @@ private slots:
         radio.setBoardForTest(HPSDRHW::Saturn);
         SetupDescriptionService service;
         service.setRadioContext(radio.boardCapabilities(), radio.hardwareProfile().model);
-        const QJsonObject pa = service.category(QStringLiteral("pa"));
-        QCOMPARE(pa.value("version"), QJsonValue(1));
+        const QJsonObject pa = QJsonDocument::fromJson(
+            SetupDescriptionService::fitCategoryForVersion(service.pa(), 4).toUtf8()).object();
+        QCOMPARE(pa.value("version"), QJsonValue(4));
         QCOMPARE(pa.value("category").toObject().value("where"), QJsonValue("station"));
         QCOMPARE(pa.value("category").toObject().value("coverage"), QJsonValue("partial"));
         const QJsonArray sections = pa.value("pages").toArray().first().toObject()
@@ -407,6 +408,89 @@ private slots:
         absent.isRxOnlySku = true;
         service.setRadioContext(absent, radio.hardwareProfile().model);
         QVERIFY(service.pa().isEmpty());
+    }
+
+    void paTelemetryRequiresV5AndKeepsOlderProjection()
+    {
+        RadioModel radio;
+        radio.setBoardForTest(HPSDRHW::Saturn);
+        SetupDescriptionService service;
+        service.setRadioContext(radio.boardCapabilities(), radio.hardwareProfile().model);
+        const QString source = service.pa();
+        QVERIFY(!source.isEmpty());
+        const auto findControls = [](const QJsonObject& category) {
+            QJsonArray controls;
+            for (const QJsonValue& page : category.value("pages").toArray()) {
+                if (page.toObject().value("id") != QJsonValue("pa.values")) { continue; }
+                for (const QJsonValue& section : page.toObject().value("sections").toArray()) {
+                    for (const QJsonValue& control : section.toObject().value("controls").toArray()) {
+                        controls.append(control);
+                    }
+                }
+            }
+            return controls;
+        };
+        for (int version = 1; version <= 4; ++version) {
+            const QJsonObject older = QJsonDocument::fromJson(
+                SetupDescriptionService::fitCategoryForVersion(source, version).toUtf8()).object();
+            QCOMPARE(findControls(older).size(), 6);
+        }
+        const QJsonObject current = QJsonDocument::fromJson(
+            SetupDescriptionService::fitCategoryForVersion(source, 5).toUtf8()).object();
+        QCOMPARE(current.value("version"), QJsonValue(5));
+        QCOMPARE(findControls(current).size(), 8);
+        const QJsonArray telemetry = current.value("pages").toArray().last().toObject()
+            .value("sections").toArray().at(1).toObject().value("controls").toArray();
+        QCOMPARE(telemetry.size(), 2);
+        const QStringList names{QStringLiteral("paCurrentAmps"), QStringLiteral("supplyVolts")};
+        for (int i = 0; i < 2; ++i) {
+            const QJsonObject valid = telemetry.at(i).toObject();
+            QVERIFY(SetupDescriptionService::validatePaTelemetryReadoutBinding(valid));
+            QCOMPARE(valid.value("binding").toObject().value("telemetry").toObject()
+                         .value("name"), QJsonValue(names.at(i)));
+            const auto rejects = [&valid](const QString& key, const QJsonValue& value) {
+                QJsonObject bad = valid;
+                bad.insert(key, value);
+                QVERIFY(!SetupDescriptionService::validatePaTelemetryReadoutBinding(bad));
+            };
+            rejects("kind", "integer");
+            rejects("kind", "toggle");
+            rejects("id", "pa.values.other");
+            rejects("label", "Other:");
+            rejects("decimals", i == 0 ? 1 : 2);
+            rejects("decimals", QJsonValue(QJsonValue::Undefined));
+            rejects("unit", "W");
+            rejects("unit", QJsonValue(QJsonValue::Undefined));
+            rejects("requiresDescriptionVersion", 4);
+            rejects("requiresDescriptionVersion", QJsonValue(QJsonValue::Undefined));
+            rejects("gate", QJsonObject{{"capability", "stationTelemetryVersion"}, {"min", 3}});
+            rejects("gate", QJsonValue(QJsonValue::Undefined));
+            rejects("gate", QJsonObject{{"capability", "stationTelemetryVersion"},
+                                     {"min", 4}, {"offAir", true}});
+            rejects("binding", QJsonObject{{"telemetry", QJsonObject{{"object", "radio"},
+                                                                        {"name", "paVolts"}}}});
+            rejects("binding", QJsonValue(QJsonValue::Undefined));
+            rejects("binding", QJsonObject{{"telemetry", QJsonObject{{"object", "radio"},
+                                                                        {"name", names.at(i)},
+                                                                        {"write", true}}}});
+            rejects("binding", QJsonObject{{"telemetry", QJsonObject{{"object", "host"},
+                                                                        {"name", names.at(i)}}}});
+            rejects("binding", QJsonObject{{"telemetry", QJsonObject{{"object", "radio"},
+                                                                        {"name", names.at(i)}}},
+                                             {"write", true}});
+        }
+        BoardCapabilities ampsAbsent = radio.boardCapabilities();
+        ampsAbsent.hasPaAmpsTelemetry = false;
+        service.setRadioContext(ampsAbsent, radio.hardwareProfile().model);
+        const QJsonObject noAmps = QJsonDocument::fromJson(
+            SetupDescriptionService::fitCategoryForVersion(service.pa(), 5).toUtf8()).object();
+        QCOMPARE(findControls(noAmps).size(), 7);
+        BoardCapabilities voltsAbsent = radio.boardCapabilities();
+        voltsAbsent.hasPaVoltsTelemetry = false;
+        service.setRadioContext(voltsAbsent, radio.hardwareProfile().model);
+        const QJsonObject noVolts = QJsonDocument::fromJson(
+            SetupDescriptionService::fitCategoryForVersion(service.pa(), 5).toUtf8()).object();
+        QCOMPARE(findControls(noVolts).size(), 7);
     }
 
     void categoriesLoadAndMirrorAsStrings()
@@ -1135,19 +1219,19 @@ private slots:
             QVERIFY(!dsp.isEmpty());
             const QJsonObject display = QJsonDocument::fromJson(setupCategoryOnWire(
                 *core.app, "display", SessionMessageKind::ObjectCreate).toUtf8()).object();
-            QCOMPARE(display.value("version"), QJsonValue(expected));
+            QCOMPARE(display.value("version"), QJsonValue(qMin(expected, 4)));
             int displayControls = 0;
             for (const QJsonValue& page : display.value("pages").toArray()) {
                 for (const QJsonValue& section : page.toObject().value("sections").toArray()) {
                     displayControls += section.toObject().value("controls").toArray().size();
                 }
             }
-            QCOMPARE(displayControls, expected == 4 ? 14 : 11);
+            QCOMPARE(displayControls, expected >= 4 ? 14 : 11);
             const QString pa = setupCategoryOnWire(
                 *core.app, "pa", SessionMessageKind::ObjectCreate);
             QVERIFY(!pa.isEmpty());
             QCOMPARE(QJsonDocument::fromJson(pa.toUtf8()).object().value("version").toInt(),
-                     qMin(expected, 3));
+                     qMin(expected, 5));
             QCOMPARE(QJsonDocument::fromJson(pa.toUtf8()).object().value("pages").toArray().size(), 2);
             const QString diagnostics = setupCategoryOnWire(
                 *core.app, "diagnostics", SessionMessageKind::ObjectCreate);
@@ -1191,7 +1275,8 @@ private slots:
         check(2, kSessionProtocolMinor, 2);
         check(3, kSessionProtocolMinor, 3);
         check(4, kSessionProtocolMinor, 4);
-        check(9, kSessionProtocolMinor, 4);
+        check(5, kSessionProtocolMinor, 5);
+        check(9, kSessionProtocolMinor, 5);
         check(2, quint16(kRadioIdentitySessionProtocolMinor - 1), 0);
         check(3, quint16(kRadioIdentitySessionProtocolMinor - 1), 0);
     }

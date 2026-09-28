@@ -2235,10 +2235,12 @@ PaValuesPage::PaValuesPage(RadioModel* model, QWidget* parent)
     auto* paForm  = new QFormLayout(paGroup);
     m_paCurrentLabel   = new MetricLabel(QStringLiteral("PA I"),
                                          QStringLiteral("0.00 A"), paGroup);
+    m_paCurrentLabel->setProperty("nereusSetupId", "pa.values.paCurrent");
     m_paTempLabel      = new MetricLabel(QStringLiteral("PA T"),
                                          QStringLiteral("0.0 \xC2\xB0""C"), paGroup);
     m_supplyVoltsLabel = new MetricLabel(QStringLiteral("V"),
                                          QStringLiteral("0.0 V"), paGroup);
+    m_supplyVoltsLabel->setProperty("nereusSetupId", "pa.values.dcVoltage");
     // Phase 5B (#167) — FWD/REV RF voltage labels, derived from raw ADC
     // via PaTelemetryScaling::scaleFwdRevVoltage (Phase 1B).
     // From Thetis panelPAValues textFwdVoltage / textRevVoltage at

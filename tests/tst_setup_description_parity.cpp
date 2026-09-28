@@ -301,11 +301,13 @@ private slots:
         QVERIFY(!pa.isEmpty());
         const QJsonArray sections = pa.value("pages").toArray().first().toObject()
             .value("sections").toArray();
-        QCOMPARE(sections.size(), 2);
+        QCOMPARE(sections.size(), 3);
         const QStringList expectedIds{QStringLiteral("pa.values.forwardCalibrated"),
                                       QStringLiteral("pa.values.reflectedPower"),
                                       QStringLiteral("pa.values.swr"),
                                       QStringLiteral("pa.values.drive"),
+                                      QStringLiteral("pa.values.paCurrent"),
+                                      QStringLiteral("pa.values.dcVoltage"),
                                       QStringLiteral("pa.values.forwardAdc"),
                                       QStringLiteral("pa.values.reflectedAdc")};
         QStringList actualIds;
@@ -320,7 +322,10 @@ private slots:
                 QVERIFY2(widget != nullptr, qPrintable(id));
                 QVERIFY(id == QLatin1String("pa.values.drive")
                             ? SetupDescriptionService::validatePaDriveReadoutBinding(control)
-                            : SetupDescriptionService::validatePaReadoutBinding(control));
+                            : (id == QLatin1String("pa.values.paCurrent")
+                               || id == QLatin1String("pa.values.dcVoltage"))
+                                ? SetupDescriptionService::validatePaTelemetryReadoutBinding(control)
+                                : SetupDescriptionService::validatePaReadoutBinding(control));
                 QCOMPARE(widget->toolTip(), control.value("tooltip").toString());
                 auto* group = qobject_cast<QGroupBox*>(widget->parentWidget());
                 QVERIFY(group != nullptr);

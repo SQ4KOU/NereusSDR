@@ -107,7 +107,9 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
          && !(id == QLatin1String("diagnostics")
               && root.value(QStringLiteral("version")) == QJsonValue(3))
          && !(id == QLatin1String("display")
-              && root.value(QStringLiteral("version")) == QJsonValue(4)))
+              && root.value(QStringLiteral("version")) == QJsonValue(4))
+         && !(id == QLatin1String("pa")
+              && root.value(QStringLiteral("version")) == QJsonValue(5)))
         || root.value(QStringLiteral("category")).toObject()
                .value(QStringLiteral("id")).toString() != id
         || root.value(QStringLiteral("pages")).toArray().isEmpty()
@@ -148,7 +150,10 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                                     != QJsonValue(3)
                                 && !(id == QLatin1String("display")
                                      && control.value(QStringLiteral("requiresDescriptionVersion"))
-                                         == QJsonValue(4)))))
+                                         == QJsonValue(4))
+                                && !(id == QLatin1String("pa")
+                                     && control.value(QStringLiteral("requiresDescriptionVersion"))
+                                         == QJsonValue(5)))))
                     || (control.value(QStringLiteral("kind")) == QJsonValue(QStringLiteral("table"))
                         && (id != QLatin1String("dsp")
                             || !SetupDescription::validateTnfTable(control)))
@@ -182,6 +187,7 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                     || (id == QLatin1String("pa")
                         && !SetupDescription::validatePaReadoutBinding(control)
                         && !SetupDescription::validatePaDriveReadoutBinding(control)
+                        && !SetupDescription::validatePaTelemetryReadoutBinding(control)
                         && !SetupDescription::validatePaBypassBinding(control))
                     || (id == QLatin1String("audio")
                         && !SetupDescription::validateAudioPropertyBinding(control))
@@ -211,6 +217,32 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                 pages.removeAt(p);
                 break;
             }
+        }
+        root.insert(QStringLiteral("pages"), pages);
+    }
+    if (id == QLatin1String("pa")) {
+        QJsonArray pages = root.value(QStringLiteral("pages")).toArray();
+        for (int p = 0; p < pages.size(); ++p) {
+            QJsonObject page = pages.at(p).toObject();
+            if (page.value(QStringLiteral("id")) != QJsonValue(QStringLiteral("pa.values"))) {
+                continue;
+            }
+            QJsonArray sections = page.value(QStringLiteral("sections")).toArray();
+            for (int s = 0; s < sections.size(); ++s) {
+                QJsonObject section = sections.at(s).toObject();
+                QJsonArray controls = section.value(QStringLiteral("controls")).toArray();
+                for (int c = 0; c < controls.size(); ++c) {
+                    const QString controlId = controls.at(c).toObject().value(QStringLiteral("id")).toString();
+                    if ((controlId == QLatin1String("pa.values.paCurrent") && !caps.hasPaAmpsTelemetry)
+                        || (controlId == QLatin1String("pa.values.dcVoltage") && !caps.hasPaVoltsTelemetry)) {
+                        controls.removeAt(c--);
+                    }
+                }
+                if (controls.isEmpty()) { sections.removeAt(s--); }
+                else { section.insert(QStringLiteral("controls"), controls); sections[s] = section; }
+            }
+            page.insert(QStringLiteral("sections"), sections);
+            pages[p] = page;
         }
         root.insert(QStringLiteral("pages"), pages);
     }
@@ -640,6 +672,37 @@ bool SetupDescription::validatePaDriveReadoutBinding(const QJsonObject& control)
         && MirrorPolicy::hasExplicitEntry(QByteArrayLiteral("TransmitModel"), name)
         && MirrorPolicy::directionFor(QByteArrayLiteral("TransmitModel"), name)
             == MirrorDirection::Bidirectional;
+}
+
+bool SetupDescription::validatePaTelemetryReadoutBinding(const QJsonObject& control)
+{
+    const QJsonObject binding = control.value(QStringLiteral("binding")).toObject();
+    const QJsonObject ref = binding.value(QStringLiteral("telemetry")).toObject();
+    if (control.size() != 10 || binding.size() != 1 || ref.size() != 2
+        || ref.value(QStringLiteral("object")) != QJsonValue(QStringLiteral("radio"))
+        || control.value(QStringLiteral("kind")) != QJsonValue(QStringLiteral("readout"))
+        || control.value(QStringLiteral("applies")) != QJsonValue(QStringLiteral("live"))
+        || control.value(QStringLiteral("tooltip")) != QJsonValue(QString())
+        || control.value(QStringLiteral("requiresDescriptionVersion")) != QJsonValue(5)
+        || control.value(QStringLiteral("gate")).toObject()
+            != QJsonObject{{QStringLiteral("capability"), QStringLiteral("stationTelemetryVersion")},
+                           {QStringLiteral("min"), 4}}) {
+        return false;
+    }
+    const QString name = ref.value(QStringLiteral("name")).toString();
+    if (name == QLatin1String("paCurrentAmps")) {
+        return control.value(QStringLiteral("id")) == QJsonValue(QStringLiteral("pa.values.paCurrent"))
+            && control.value(QStringLiteral("label")) == QJsonValue(QStringLiteral("PA Current:"))
+            && control.value(QStringLiteral("decimals")) == QJsonValue(2)
+            && control.value(QStringLiteral("unit")) == QJsonValue(QStringLiteral("A"));
+    }
+    if (name == QLatin1String("supplyVolts")) {
+        return control.value(QStringLiteral("id")) == QJsonValue(QStringLiteral("pa.values.dcVoltage"))
+            && control.value(QStringLiteral("label")) == QJsonValue(QStringLiteral("DC Voltage:"))
+            && control.value(QStringLiteral("decimals")) == QJsonValue(1)
+            && control.value(QStringLiteral("unit")) == QJsonValue(QStringLiteral("V"));
+    }
+    return false;
 }
 
 bool SetupDescription::validatePaBypassBinding(const QJsonObject& control)
@@ -1104,9 +1167,11 @@ QString SetupDescription::fitCategoryForVersion(const QString& description, int 
     }
     if (pages.isEmpty()) { return {}; }
     category.insert(QStringLiteral("pages"), pages);
-    const bool display = category.value(QStringLiteral("category")).toObject()
-        .value(QStringLiteral("id")) == QJsonValue(QStringLiteral("display"));
-    category.insert(QStringLiteral("version"), qMin(version, display ? 4 : 3));
+    const QString categoryId = category.value(QStringLiteral("category")).toObject()
+        .value(QStringLiteral("id")).toString();
+    const int ceiling = categoryId == QLatin1String("pa") ? 5
+        : categoryId == QLatin1String("display") ? 4 : 3;
+    category.insert(QStringLiteral("version"), qMin(version, ceiling));
     if (version >= 2 && category.value(QStringLiteral("category")).toObject()
             .value(QStringLiteral("id")) == QJsonValue(QStringLiteral("dsp"))) {
         category.insert(QStringLiteral("coverage"), QStringLiteral(

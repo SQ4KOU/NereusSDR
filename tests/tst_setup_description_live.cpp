@@ -21,6 +21,70 @@ using namespace NereusSDR;
 class SetupDescriptionLiveTest : public QObject {
     Q_OBJECT
 private slots:
+    void pairedV5PaTelemetryDescriptionUsesExistingOptionalWire()
+    {
+        Core core;
+        core.model->setBoardForTest(HPSDRHW::Saturn);
+        RadioInfo info = core.model->currentRadioInfo();
+        info.boardType = HPSDRHW::Saturn;
+        core.model->setLastRadioInfoForTest(info);
+        core.server->setupDescription()->setRadioContext(core.model->boardCapabilities(),
+                                                         core.model->hardwareProfile().model);
+        core.server->setTelemetryEnabled(true);
+        Device phone(QStringLiteral("PA telemetry iPhone"), QStringLiteral("phone"));
+        core.pair(phone);
+        QHash<QByteArray, int> features = kHolder;
+        features.insert("setupDescription", 5);
+        LoopbackTransport* app = core.signIn(phone, features);
+        QVERIFY(admitted(app));
+        QCOMPARE(capability(app->received(), QStringLiteral("setupDescriptionVersion")),
+                 std::optional<qint64>(5));
+        QCOMPARE(capability(app->received(), QStringLiteral("stationTelemetryVersion")),
+                 std::optional<qint64>(6));
+        const QJsonObject pa = QJsonDocument::fromJson(latest(app->received(),
+            QStringLiteral("setup"), QStringLiteral("pa")).toString().toUtf8()).object();
+        QCOMPARE(pa.value("version"), QJsonValue(5));
+        const QJsonArray telemetry = pa.value("pages").toArray().last().toObject()
+            .value("sections").toArray().at(1).toObject().value("controls").toArray();
+        QCOMPARE(telemetry.size(), 2);
+        QVERIFY(SetupDescriptionService::validatePaTelemetryReadoutBinding(telemetry.at(0).toObject()));
+        QVERIFY(SetupDescriptionService::validatePaTelemetryReadoutBinding(telemetry.at(1).toObject()));
+
+        StationTelemetrySnapshot sample;
+        sample.sequence = 1;
+        sample.radio.connected = true;
+        sample.radio.paCurrentAmps = 0.0;
+        sample.radio.supplyVolts = 13.8;
+        QVERIFY(core.server->sendTelemetry(sample, core.server->sessionEpoch()));
+        QJsonObject radio;
+        QTRY_VERIFY([&] {
+            for (const QJsonObject& message : ofType(app->received(), QStringLiteral("station.metrics.v1"))) {
+                if (message.value("payload").toObject().value("sequence") == QJsonValue(1)) {
+                    radio = message.value("payload").toObject().value("radio").toObject();
+                    return true;
+                }
+            }
+            return false;
+        }());
+        QCOMPARE(radio.value("paCurrentAmps"), QJsonValue(0.0));
+        QCOMPARE(radio.value("supplyVolts"), QJsonValue(13.8));
+        QVERIFY(!radio.contains("paVolts"));
+        sample.sequence = 2;
+        sample.radio.paCurrentAmps.reset();
+        sample.radio.supplyVolts.reset();
+        QVERIFY(core.server->sendTelemetry(sample, core.server->sessionEpoch()));
+        QTRY_VERIFY([&] {
+            for (const QJsonObject& message : ofType(app->received(), QStringLiteral("station.metrics.v1"))) {
+                if (message.value("payload").toObject().value("sequence") != QJsonValue(2)) {
+                    continue;
+                }
+                const QJsonObject next = message.value("payload").toObject().value("radio").toObject();
+                return !next.contains("paCurrentAmps") && !next.contains("supplyVolts");
+            }
+            return false;
+        }());
+    }
+
     void pairedV4DisplaySettingsReachCoreAndNormalizeTracksCurrentDetector()
     {
         TxAnalyzer analyzer(TxAnalyzer::kTxDispId);

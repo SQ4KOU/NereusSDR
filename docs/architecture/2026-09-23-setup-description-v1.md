@@ -99,8 +99,22 @@ command or result binding. The actual peer must separately declare
 nothing. A V3 peer still receives the older controls with their existing
 semantics. The Core filters every control above the peer's negotiated
 description version, drops empty sections and pages, and caps an unknown
-future declaration at version 4. Categories other than Display retain their
-version-3 ceiling. No mirror field or ordinal changes.
+future declaration at version 5. Display retains its version-4 ceiling;
+categories other than Display and PA retain their version-3 ceiling. No mirror
+field or ordinal changes.
+
+Version 5 adds only two optional PA Values telemetry readouts: `PA Current:`
+binds `telemetry.radio.paCurrentAmps` with two decimals and `A`, and
+`DC Voltage:` binds `telemetry.radio.supplyVolts` with one decimal and `V`.
+Both require `stationTelemetryVersion:4`, send no writes, and have no
+transmit-permission or off-air gate. The Core projects each row away when its
+board lacks the corresponding amps or volts telemetry; the whole PA category
+still requires an integrated PA and a non-RX-only SKU. Missing, malformed,
+nonfinite, disconnected, or stale-session values are unavailable, while a
+present zero is rendered as zero. The phone renderer must apply that freshness
+rule to the existing optional station telemetry wire. V1–V4 projections omit
+both rows; PA alone has a version-5 ceiling. This adds no peak/min/reset,
+temperature conversion, derived formula, or Core command.
 
 Version 4 publishes the partial Display category. Its station-scoped controls
 cover Spectrum Defaults FFT/window/Hz-per-bin/FPS, Multimeter polling delay,
