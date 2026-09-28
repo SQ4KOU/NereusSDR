@@ -47,6 +47,7 @@ closed `settingsHygiene` panel described below. Numeric controls carry
 `min`, `max`, `step` and, where shown, `unit`. Choices have an ordered `choices`
 array. A table has `rows`, `columns` and a cell kind. `tooltip` is the
 desktop's exact text, including an empty string when the desktop has none.
+
 Every control has exactly one `binding`: `setting` (an AppSettings key routed
 by `classifySettingsKey`), `property` (a mirrored object and property),
 `command` (a station verb), or `phone` (a key the phone keeps locally). The
@@ -70,6 +71,18 @@ control; a permission gate disables its control with the Core's reason.
 unavailable desktop control visible with the same plain reason. General's
 Extended control uses this pending its migration policy; no edit is sent while
 unavailable. Region requires transmitSettingsVersion 9 and the offAir gate.
+
+Appearance > Colors & Theme currently publishes a partial phone-owned page of
+ten built spectrum swatches. Each is `kind:"colour"`, `applies:"live"`, and has
+a literal PascalCase `binding.phone`; the phone owns per-pan persistence and
+never sends these values to the Core settings proxy. Each `default` and each
+edited value at this boundary is an eight-digit `#RRGGBBAA` string, including
+the final alpha byte. This is ColorSwatchButton's phone-facing format; the
+desktop's own AppSettings uses Qt `HexArgb` (`#AARRGGBB`) and is not copied to
+the phone. Core accepts only the ten named IDs/phone keys and exact default
+colours. The hidden Waterfall Low Color row, Reset Colors action, and Meter
+Styles controls remain undescribed. This Appearance page needs no new
+description version or station settings permission.
 
 An optional `decimals` field on a `kind:readout` control is an integer from 0
 through 6. It formats a finite numeric mirrored value with that many decimal

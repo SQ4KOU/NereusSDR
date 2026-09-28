@@ -1,5 +1,6 @@
 // no-port-check: NereusSDR-original test of the Setup description wire surface.
 #include <QtTest>
+#include <QRegularExpression>
 
 #include "core/setup/SetupDescriptionService.h"
 #include "core/BoardCapabilities.h"
@@ -227,6 +228,55 @@ QJsonObject resolveTciArguments(const QJsonObject& control, bool changed,
 class SetupDescriptionServiceTest : public QObject {
     Q_OBJECT
 private slots:
+    void appearancePublishesTenPhoneColoursWithAlpha()
+    {
+        SetupDescriptionService service;
+        const QJsonObject appearance = service.category(QStringLiteral("appearance"));
+        QCOMPARE(appearance.value("version"), QJsonValue(1));
+        QCOMPARE(appearance.value("category").toObject().value("where"), QJsonValue("phone"));
+        const QJsonArray pages = appearance.value("pages").toArray();
+        QCOMPARE(pages.size(), 1);
+        const QJsonArray sections = pages.first().toObject().value("sections").toArray();
+        QCOMPARE(sections.size(), 1);
+        const QJsonArray controls = sections.first().toObject().value("controls").toArray();
+        QCOMPARE(controls.size(), 10);
+        for (const QJsonValue& raw : controls) {
+            const QJsonObject control = raw.toObject();
+            QCOMPARE(control.value("kind"), QJsonValue("colour"));
+            QCOMPARE(control.value("applies"), QJsonValue("live"));
+            const QString colour = control.value("default").toString();
+            QVERIFY(QRegularExpression(QStringLiteral("^#[0-9A-F]{8}$")).match(colour).hasMatch());
+        }
+    }
+
+    void appearanceRejectsOtherBindingsAndMalformedRgba()
+    {
+        SetupDescriptionService service;
+        const QJsonArray controls = service.category(QStringLiteral("appearance"))
+            .value("pages").toArray().first().toObject().value("sections").toArray()
+            .first().toObject().value("controls").toArray();
+        QCOMPARE(controls.size(), 10);
+        for (const QJsonValue& raw : controls) {
+            QVERIFY(SetupDescriptionService::validateAppearanceColourBinding(raw.toObject()));
+        }
+        const QJsonObject original = controls.first().toObject();
+        const auto rejects = [&original](const QString& field, const QJsonValue& value) {
+            QJsonObject changed = original;
+            changed.insert(field, value);
+            QVERIFY(!SetupDescriptionService::validateAppearanceColourBinding(changed));
+        };
+        rejects(QStringLiteral("id"), QStringLiteral("appearance.colorsTheme.unbuilt"));
+        rejects(QStringLiteral("kind"), QStringLiteral("text"));
+        rejects(QStringLiteral("applies"), QStringLiteral("subscription"));
+        rejects(QStringLiteral("default"), QStringLiteral("#00E5FF"));
+        rejects(QStringLiteral("default"), QStringLiteral("#FF00E5FF")); // wrong channel order
+        rejects(QStringLiteral("default"), QStringLiteral("#00E5FFFG"));
+        rejects(QStringLiteral("default"), QStringLiteral("#00e5ffff"));
+        rejects(QStringLiteral("gate"), QJsonObject{{"transmit", true}});
+        rejects(QStringLiteral("valueEncoding"), QJsonObject{});
+        rejects(QStringLiteral("binding"), QJsonObject{{"setting", "DisplayFillColor"}});
+        rejects(QStringLiteral("binding"), QJsonObject{{"phone", "DisplayGridColor"}});
+    }
     void paBypassIsAClosedVersionSixSettingAndSkuProjected()
     {
         RadioModel radio;
@@ -1133,6 +1183,12 @@ private slots:
             const QString dsp = setupCategoryOnWire(
                 *core.app, "dsp", SessionMessageKind::ObjectCreate);
             QVERIFY(!dsp.isEmpty());
+            const QJsonObject appearance = QJsonDocument::fromJson(setupCategoryOnWire(
+                *core.app, "appearance", SessionMessageKind::ObjectCreate).toUtf8()).object();
+            QCOMPARE(appearance.value("version"), QJsonValue(expected));
+            QCOMPARE(appearance.value("pages").toArray().first().toObject()
+                         .value("sections").toArray().first().toObject()
+                         .value("controls").toArray().size(), 10);
             const QString pa = setupCategoryOnWire(
                 *core.app, "pa", SessionMessageKind::ObjectCreate);
             QVERIFY(!pa.isEmpty());
