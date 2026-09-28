@@ -1,4 +1,4 @@
-# Setup description versions 1–6
+# Setup description versions 1–7
 
 The Core sends the desktop's built Setup pages as JSON strings on the read-only
 `setup` mirror object (`SetupDescription`). It has one string property per
@@ -50,7 +50,7 @@ desktop's exact text, including an empty string when the desktop has none.
 
 Every control has exactly one `binding`: `setting` (an AppSettings key routed
 by `classifySettingsKey`), `property` (a mirrored object and property),
-`command` (a station verb), or `phone` (a key the phone keeps locally). The
+`command` (a station verb), or `phone` (a closed phone-owned dispatch identity). The
 version-3 Settings Validation panel and version-6 antenna tables have their
 own closed `settingsHygiene` and `antennaRows` bindings; neither extends
 those generic binding rules. A
@@ -81,10 +81,33 @@ edited value at this boundary is an eight-digit `#RRGGBBAA` string, including
 the final alpha byte. This is ColorSwatchButton's phone-facing format; the
 desktop's own AppSettings uses Qt `HexArgb` (`#AARRGGBB`) and is not copied to
 the phone. Core accepts only the ten named IDs/phone keys and exact default
-colors. The hidden Waterfall Low Color row, Reset Colors action, and Meter
-Styles controls remain undescribed. Appearance's source category is V4 so its
-RGBA defaults are sent only to V4+ peers; older projections retain all ten
+colors. The hidden Waterfall Low Color row and Reset Colors action remain
+undescribed. Appearance's source category is V7; its RGBA defaults are sent
+only to V4+ peers, while older projections retain all ten
 color controls without `default`. No station settings permission is needed.
+
+Version 7 also publishes the built Appearance > Meter Styles > S-Meter page,
+with exactly three phone-owned live controls. `appearance.meterStyles.face`
+is a `choice` bound to `SMeter_FaceStyle` with integer options 0–6 in native
+order: Aged Cream, VU Amber, Collins White, Blackface, Carbon, Ice, and
+Classic (flat); default 0. The phone maps them to its existing typed face
+cases `agedCream`, `vuAmber`, `collinsWhite`, `blackface`, `carbon`, `ice`,
+and `classic`. `appearance.meterStyles.peakHold` is a `toggle` bound to
+`PeakHoldEnabled`, default `true`. `appearance.meterStyles.peakDecay` is a
+`choice` bound to `PeakDecayRate`, with integer options 0 Fast (20 dB/s),
+1 Medium (10 dB/s), and 2 Slow (5 dB/s); default 1. The phone maps these to
+its existing `fast`, `medium`, and `slow` cases. These binding strings are
+dispatch identities for existing phone model actions, not independent
+phone storage keys or Core settings writes. Each control has
+`requiresDescriptionVersion:7`; options use only the closed numeric
+`[{"value":<integer>,"label":<native text>}]` shape. The Core accepts only
+these three IDs, bindings, kinds, exact options/defaults, labels and tooltips.
+V1–V3 receive the old ten swatches without defaults, V4–V6 receive the old
+version-4 Appearance shape with ten defaults, and V7+ receive the new page.
+The existing whole-Setup on-air and session freshness lock still applies;
+the description adds no permission or capability gate. VFO Small Filter,
+Skins, and unused controls remain omitted. Phone rendering is owned by the
+phone implementation and is not established by this Core publication.
 
 An optional `decimals` field on a `kind:readout` control is an integer from 0
 through 6. It formats a finite numeric mirrored value with that many decimal
@@ -122,8 +145,9 @@ command or result binding. The actual peer must separately declare
 nothing. A V3 peer still receives the older controls with their existing
 semantics. The Core filters every control above the peer's negotiated
 description version, drops empty sections and pages, and caps an unknown
-future declaration at version 6. Hardware has a version-6 ceiling, PA a
-version-5 ceiling, Display and Appearance version-4 ceilings; the other
+future declaration at version 7. Hardware has a version-6 ceiling, PA a
+version-5 ceiling, Display a version-4 ceiling, and Appearance a version-7
+ceiling with its prior version-4 projection for V4–V6; the other
 categories on this source retain version 3.
 No mirror field or ordinal changes.
 

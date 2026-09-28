@@ -42,6 +42,7 @@ public:
     static bool validateDspSettingBinding(const QJsonObject& control);
     static bool validateDisplaySettingBinding(const QJsonObject& control);
     static bool validateAppearanceColourBinding(const QJsonObject& control);
+    static bool validateAppearanceMeterStyleBinding(const QJsonObject& control);
     static bool validateSettingToggleEncoding(const QJsonObject& control);
     static bool validateCommandBinding(const QJsonObject& control, QString* error = nullptr);
     static bool validateTnfTable(const QJsonObject& control, QString* error = nullptr);

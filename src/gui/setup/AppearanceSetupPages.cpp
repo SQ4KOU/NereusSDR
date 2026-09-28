@@ -292,6 +292,7 @@ void MeterStylesPage::buildUI()
 
     m_faceCombo = new QComboBox(smGroup);
     m_faceCombo->setObjectName(QStringLiteral("sMeterFaceCombo"));
+    m_faceCombo->setProperty("nereusSetupId", "appearance.meterStyles.face");
     for (int i = 0; i <= static_cast<int>(Face::Classic); ++i) {
         m_faceCombo->addItem(SMeterWidget::faceStyleLabel(static_cast<Face>(i)), i);
     }
@@ -304,6 +305,7 @@ void MeterStylesPage::buildUI()
 
     m_peakHoldToggle = new QCheckBox(QStringLiteral("Peak hold"), smGroup);
     m_peakHoldToggle->setObjectName(QStringLiteral("sMeterPeakHoldCheck"));
+    m_peakHoldToggle->setProperty("nereusSetupId", "appearance.meterStyles.peakHold");
     m_peakHoldToggle->setChecked(
         s0.value(QStringLiteral("PeakHoldEnabled"), QStringLiteral("True")).toString()
         == QStringLiteral("True"));
@@ -312,6 +314,7 @@ void MeterStylesPage::buildUI()
 
     m_decayRateCombo = new QComboBox(smGroup);
     m_decayRateCombo->setObjectName(QStringLiteral("sMeterDecayCombo"));
+    m_decayRateCombo->setProperty("nereusSetupId", "appearance.meterStyles.peakDecay");
     // SMeterWidget::setPeakDecayRate: 20 / 10 / 5 dB/s.
     m_decayRateCombo->addItem(QStringLiteral("Fast (20 dB/s)"), QStringLiteral("Fast"));
     m_decayRateCombo->addItem(QStringLiteral("Medium (10 dB/s)"), QStringLiteral("Medium"));
