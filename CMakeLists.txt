@@ -1525,6 +1525,8 @@ set(GUI_SOURCES
     src/gui/MainWindow.cpp
     src/gui/DesktopStationController.cpp
     src/gui/DesktopStationController.h
+    src/gui/GuiDesktopStationRuntime.cpp
+    src/gui/GuiDesktopStationRuntime.h
     src/gui/SliceFlagPresentationBinding.cpp
     src/gui/SliceFlagPresentationBinding.h
     src/gui/RemoteMediaController.cpp

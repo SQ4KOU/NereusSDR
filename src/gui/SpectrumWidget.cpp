@@ -12010,7 +12010,7 @@ void SpectrumWidget::updateVfoPositions()
         // pan was tuned away. m_vfoOffScreen still drives the pan's own
         // off-screen chevron (drawOffScreenIndicator) and is left alone.
         const double flagHz = vfo->frequency();
-        if (flagHz < leftEdge || flagHz > rightEdge) {
+        if (!vfo->stationPresentationAllowed() || flagHz < leftEdge || flagHz > rightEdge) {
             vfo->hide();
         } else {
             // isHidden(), not isVisible(): a flag on a pan that has not been

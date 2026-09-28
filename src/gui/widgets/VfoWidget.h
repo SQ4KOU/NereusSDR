@@ -388,6 +388,9 @@ public:
     void setStepHz(int hz);
     void setSliceIndex(int index);
     void setTxSlice(bool isTx);
+    // SpectrumWidget respects this before its per-frame show() pass.
+    void setStationPresentationAllowed(bool allowed);
+    bool stationPresentationAllowed() const { return m_stationPresentationAllowed; }
     /// iPhone app plan Task 78 (the several-devices design, ruling 8.11):
     /// the radio's own PTT is transmitting on this slice (the Core's
     /// txState keyed, holderSource radioPtt, txSliceId this slice). The TX
@@ -862,6 +865,7 @@ private:
     QList<QPushButton*> m_tabButtons;
     QStackedWidget*     m_tabStack{nullptr};
     int                 m_activeTab{0};
+    bool                m_stationPresentationAllowed{true};
 
     // --- Mode tab ---
     QComboBox*          m_modeCmb{nullptr};

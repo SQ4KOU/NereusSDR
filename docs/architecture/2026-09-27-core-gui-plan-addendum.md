@@ -1333,11 +1333,17 @@ colours for the same signal.
   parity scout found this, and the lead verified the handlers and existing
   operator ruling. The disabled historical File > Profiles placeholder is not
   evidence of an additional working feature lost in the split.
-- JJ's ruling: the remote-window parity plan's recorded Q1 decision says
+- Ruling basis: the remote-window parity plan's recorded Q1 decision says
   “Settings import and export in a remote window carry both computers' settings,
-  and the Core applies its part through a radio reconnect.” The scope remains
-  this effort; the separate phone-local action question in G-50 does not waive
-  desktop remote parity.
+  and the Core applies its part through a radio reconnect.” The original
+  conversation confirms this was the previous controller's interpretation of
+  JJ's standing parity rule, not a direct JJ answer. JJ's current instruction
+  includes parity gaps in this effort; G-50 does not waive desktop remote
+  backup/restore. The plan's Q1 option says to refuse while another device is
+  connected, but its recommendation also says to use the shared-setting confirm
+  step. JJ was asked on 2026-09-28 to choose between requiring disconnection or
+  naming the affected devices, confirming, and reconnecting them. That specific
+  multi-device behavior remains OPEN; restore is always refused on the air.
 - Status: implementation open. Export must carry both parts in one file;
   import must validate and restore them through their respective owners, apply
   the Core part through the approved reconnect path, and enforce the plan's
@@ -1345,6 +1351,99 @@ colours for the same signal.
   settings. Acceptance needs a real remote round trip, persistence after
   reconnect, refusal while busy, and invalid/failed-import preservation.
 - Plan: remote-window parity B6.1 and approved Q1.
+
+### G-75: A refused desktop Core start left a listener retry alive
+
+- Evidence: the desktop runtime's blocked-port regression reproduced a failed
+  Run action leaving a StationHost alive with a scheduled listener retry. The
+  page reported the Core as off and its saved Run preference remained false,
+  yet the retained host could start listening after the port became available.
+- Ruling basis: the existing desktop-hosting acceptance requires that with the
+  switch off nothing listens. Stopping the retained host on failed startup
+  implements that approved requirement; it introduces no new operator choice.
+- Status: built in the signed desktop runtime through `25750342` and verified
+  in trunk integration. Failed Run and failed preference restoration retire the
+  host and report that it is off, avoiding a later listener retry in that run.
+  A rejected new Run request does not save a successful Run preference. The
+  integrated runtime suite and the initial fifteen-suite integration run pass.
+- Plan: desktop hosting and the Remote Access page.
+
+### G-76: Desktop receiver controls still followed another device's active receiver
+
+- Evidence: an actual MainWindow regression assigns receiver A to the desktop
+  and B to a phone that holds transmit, making B the Core's active receiver.
+  Triggering desktop ANF changes B instead of A. Source review also found the
+  dashboard using the Core's active receiver and pan controls accepting a
+  foreign receiver as their target.
+- Ruling basis: the approved hosting-desktop design requires its window to
+  operate its own receivers and read its own active receiver. JJ's current
+  parity instruction includes these gaps in this effort.
+- Status: built in signed `5dfb27690` and verified in trunk integration. The
+  actual-window regression covers menus, dashboard, pan and container controls
+  with a foreign transmit holder and desktop A-to-C selection. Core station-level
+  active-receiver semantics remain intact. The later Setup audit found G-79,
+  which is tracked separately and remains in progress.
+- Plan: hosting-desktop receiver ownership and remote-window parity.
+
+### G-77: Radio replacement could start during the return from transmit to receive
+
+- Evidence: the integrated coordinator checked MOX/Tune booleans but omitted
+  the full station on-air gate. An actual local-window regression reached
+  `TxToRxFlush` with both MOX booleans false and the station gate still active;
+  `canReplace()` incorrectly allowed retirement. The failure was reproduced
+  before replacing that predicate. Two-tone is also covered by the full gate.
+- Ruling basis: JJ's existing transmit safety and radio-handover requirements
+  prohibit retiring an on-air radio. This restores that requirement without
+  changing the transmit sequence or cutoff.
+- Status: correction built; the focused regression passed after failing before
+  the change. The deferred radio-change callback uses this same replacement
+  gate before answering success. Final app/Core build and six focused
+  integration suites pass (10.86 s; load 3.71/4.14/6.16). The independent
+  lifecycle reviewer found the original issues and verified their corrections.
+- Plan: desktop Core hosting and safe radio handover.
+
+### G-78: Reopening the desktop ignored a radio selected from the phone
+
+- Evidence: the desktop startup used saved auto-connect flags and lastConnected,
+  while the background Core used StationRadioChoice and radio_mac. A regression
+  with old auto-connect A and saved Core choice B reproduced an empty target;
+  the old startup would then attempt A and overwrite the confirmed Core choice.
+- Ruling basis: the approved shared Core radio choice survives desktop/background
+  handover and follows the existing StationRadios choice order.
+- Status: correction built. Hosted startup now seeds the saved/configured target,
+  resolves the completed discovery through StationRadios, and waits when the
+  chosen radio is absent or the available radios are ambiguous. Legacy local
+  auto-connect remains the non-hosted path. Five focused cases pass (3.637 s):
+  saved choice, configured choice, missing choice, ambiguous radios, and the
+  sole available radio. Tests cancel before opening radio/audio sockets.
+  Review also found a transient failed attempt stopped retrying. The correction
+  retires failed I/O, retains same-radio receiver edits, and retries discovery;
+  an intentional Disconnect cancels recovery, including late failure callbacks.
+  A sixth regression now observes the real retry against loopback only and then
+  verifies manual cancellation. All six rows pass (1.839 s). The first retry
+  assertion incorrectly counted one-time WDSP initialization; the log showed
+  a real retry, so the test now observes its connection instead. No production
+  timeout was changed. Final app/Core build and six focused integration suites
+  pass (10.86 s; load 3.71/4.14/6.16). Independent source review found no remaining
+  defect in the corrected retry and intentional-disconnect boundary.
+- Plan: desktop Core hosting and persistent radio selection.
+
+### G-79: Hosted desktop Setup still selected another device's receiver
+
+- Evidence: source inspection found SetupDialog's DSP factories still use the
+  shared RadioModel active receiver and its global selection signal. A phone
+  holding transmit can make B globally active while the desktop selects A/C;
+  changing the desktop selection then emits no global active-receiver change.
+  AGC, NR/ANF, NB/SNB, CW APF, squelch and TNF paths can consequently remain on B.
+  Existing tests cover global selection changes and desktop menus, not this
+  hosted Setup case. This is distinct from G-54 and extends G-76's audit.
+- Ruling basis: JJ's approved hosted-window ownership rule requires the window's
+  controls to operate its own selected receiver; the station-level transmit
+  holder selection must remain unchanged.
+- Status: in progress in the desktop window lane. Add an explicit window receiver
+  selector and notification to Setup, and reproduce A-to-C editing while B
+  remains the station's active receiver. No additional DSP behavior is proposed.
+- Plan: hosted desktop receiver ownership and Setup parity.
 
 ## How this addendum is kept
 

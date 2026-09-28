@@ -222,6 +222,7 @@ class PureSignalSessionFacade;
 class TwoToneController;
 class TxCfcDialog;
 class DexpPeakMeter;
+class SliceModel;
 
 // TxApplet — transmit controls panel.
 //
@@ -409,6 +410,14 @@ public:
     // Task 16: the keying buttons receive only disables.
     QPushButton* moxButton()         const { return m_moxBtn; }
     QPushButton* tuneButton()        const { return m_tuneBtn; }
+    // Borrowed desktop host routes key requests through its holder gate.
+    // Empty handlers restore direct-local behavior.
+    void setDesktopKeyHandlers(std::function<void(bool)> mox,
+                               std::function<void(bool)> tune,
+                               std::function<bool()> moxOn,
+                               std::function<bool()> tuneOn,
+                               std::function<SliceModel*()> activeSlice = {});
+    void syncDesktopKeyState();
     QPushButton* voxButton()         const { return m_voxBtn; }
     // Issue #175 Task 7: HL2 slider rescale + dB label test access.
     QSlider*     rfPowerSlider()    const noexcept { return m_rfPowerSlider; }
@@ -657,6 +666,12 @@ private:
 
     // Flag preventing echo loops between the model and the UI.
     bool m_updatingFromModel{false};
+    std::function<void(bool)> m_desktopMoxRequest;
+    std::function<void(bool)> m_desktopTuneRequest;
+    std::function<bool()> m_desktopMoxOn;
+    std::function<bool()> m_desktopTuneOn;
+    std::function<SliceModel*()> m_desktopActiveSlice;
+    SliceModel* activeSliceForControls() const;
 
     // Defaults to local-direct behaviour. Remote MainWindow wiring replaces it
     // after handshake/capability evaluation.

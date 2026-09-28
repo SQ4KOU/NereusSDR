@@ -4,25 +4,35 @@
 // first. J.J. Boyd (KG4VCF), 2026-09-25, AI-assisted via Anthropic Claude Code.
 #include <QtTest/QtTest>
 #include <QApplication>
+#include <QCloseEvent>
+#include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QPointer>
 #include <QTemporaryDir>
 #include <QUrl>
 #include <QTcpServer>
 #include <QWebSocketServer>
+#include <QScopeGuard>
 
 #include "OperatorWording.h"
 #include "core/AppSettings.h"
 #include "core/RadioDiscovery.h"
 #include "core/WdspEngine.h"
+#include "core/MoxController.h"
 #include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
 #include "core/session/StationDevicesFacade.h"
 #include "core/security/StationIdentity.h"
 #include "core/security/DeviceStore.h"
 #include "core/settings/SettingsProxy.h"
+#include "core/station/StationHandover.h"
+#include "core/station/StationRadios.h"
+#include "gui/GuiDesktopStationRuntime.h"
 #include "gui/GuiSessionCoordinator.h"
 #include "gui/MainWindow.h"
+#include "gui/SetupDialog.h"
+#include "gui/setup/RemoteStationPage.h"
 #include "gui/RemoteConnectionController.h"
 #include "gui/SpectrumWidget.h"
 #include "gui/meters/MeterPoller.h"
@@ -80,6 +90,8 @@ private slots:
     {
         QVERIFY(!AppSettings::instance().remoteBackend());
         RadioDiscovery::clearHoldOffForTest();
+        QFile::remove(QFileInfo(AppSettings::instance().filePath()).absolutePath()
+                      + QStringLiteral("/station.conf"));
     }
 
     void cleanupTestCase()
@@ -87,6 +99,238 @@ private slots:
         const QString path = AppSettings::instance().filePath();
         QFile::remove(path);
         QFile::remove(path + QStringLiteral(".bak"));
+    }
+
+    void desktopReclaimKeepsCoreRadioChoice_data()
+    {
+        QTest::addColumn<QString>("saved");
+        QTest::addColumn<QString>("configured");
+        QTest::addColumn<bool>("showA");
+        QTest::addColumn<bool>("showB");
+        QTest::addColumn<bool>("attempt");
+        QTest::addColumn<bool>("retryFailure");
+        const QString b = QStringLiteral("AA:BB:CC:11:22:44");
+        QTest::newRow("saved-choice-beats-legacy-auto") << b << QString() << true << true << true << false;
+        QTest::newRow("config-choice-beats-legacy-auto") << QString() << b << true << true << true << false;
+        QTest::newRow("missing-choice-waits") << b << QString() << true << false << false << false;
+        QTest::newRow("ambiguous-waits") << QString() << QString() << true << true << false << false;
+        QTest::newRow("one-visible-radio") << QString() << QString() << false << true << true << false;
+        QTest::newRow("transient-failure-retries") << b << QString() << true << true << true << true;
+    }
+
+    void desktopReclaimKeepsCoreRadioChoice()
+    {
+        QFETCH(QString, saved);
+        QFETCH(QString, configured);
+        QFETCH(bool, showA);
+        QFETCH(bool, showB);
+        QFETCH(bool, attempt);
+        QFETCH(bool, retryFailure);
+        AppSettings& settings = AppSettings::instance();
+        StationHandover ownership(AppSettings::profileOverride());
+        QString error;
+        QVERIFY2(ownership.acquire(0, &error), qPrintable(error));
+        QTcpServer port;
+        QVERIFY(port.listen(QHostAddress::LocalHost, 0));
+        const quint16 selectedPort = port.serverPort();
+        port.close();
+        QFile config(QFileInfo(settings.filePath()).absolutePath() + QStringLiteral("/station.conf"));
+        QVERIFY(config.open(QIODevice::WriteOnly));
+        const QByteArray bytes = QStringLiteral("remote_bind = 127.0.0.1\nremote_port = %1\n"
+            "status_page = off\nrendezvous_servers =\nradio_mac = %2\n")
+            .arg(selectedPort).arg(configured).toUtf8();
+        QCOMPARE(config.write(bytes), bytes.size());
+        config.close();
+        RadioInfo a;
+        a.address = QHostAddress::LocalHost;
+        a.port = 9;
+        a.boardType = HPSDRHW::HermesLite;
+        a.protocol = ProtocolVersion::Protocol1;
+        a.macAddress = QStringLiteral("AA:BB:CC:11:22:33");
+        RadioInfo b = a;
+        b.macAddress = QStringLiteral("AA:BB:CC:11:22:44");
+        settings.saveRadio(a, false, true);
+        settings.setLastConnected(a.macAddress);
+        settings.setValue(QLatin1String(StationRadios::kChoiceKey), saved);
+        settings.setValue(QStringLiteral("DesktopCore/Run"), true);
+        GuiSessionCoordinator sessions;
+        QVERIFY(sessions.configureDesktopStation(AppSettings::profileOverride(), true));
+        QVERIFY2(sessions.replace({}, false, &error), qPrintable(error));
+        QVERIFY(sessions.desktopRuntime()->controller()->enabled());
+        QCOMPARE(sessions.stationRadios()->target(), !saved.isEmpty() ? saved : configured);
+        RadioModel* model = sessions.window()->radioModel();
+        RadioDiscovery* discovery = model->discovery();
+        if (showA) { discovery->injectLastSeenForTest(a.macAddress, a, 0); }
+        if (showB) { discovery->injectLastSeenForTest(b.macAddress, b, 0); }
+        QString attemptedMac;
+        int attempts = 0;
+        connect(model->wdspEngine(), &WdspEngine::initializedChanged, &sessions, [&](bool ready) {
+            if (!ready) { return; }
+            attemptedMac = model->currentRadioInfo().macAddress;
+            ++attempts;
+            // Cancel before opening audio/radio sockets. For the failure row,
+            // suppress the manual-disconnect notification and inject the
+            // transport failure boundary below. Its retry uses loopback only.
+            if (retryFailure && attempts == 1) {
+                const QSignalBlocker blocked(model);
+                model->disconnectFromRadio();
+            } else {
+                model->disconnectFromRadio();
+            }
+        });
+        sessions.window()->startInitialConnection();
+        emit discovery->discoveryFinished();
+        if (attempt) {
+            QTRY_COMPARE(attemptedMac, b.macAddress);
+            QCOMPARE(sessions.stationRadios()->target(), b.macAddress);
+        } else {
+            QTRY_VERIFY(!sessions.stationRadios()->waitingReason().isEmpty());
+            QVERIFY(attemptedMac.isEmpty());
+        }
+        if (retryFailure) {
+            model->onConnectionStateChangedForTest(ConnectionState::LinkLost);
+            emit discovery->discoveryFinished();
+            // The aborted first setup already initialized WDSP, so its ready
+            // signal does not fire a second time. Observe the real retry's
+            // loopback-only connection instead of counting initialization.
+            QTRY_VERIFY(model->connection());
+            QCOMPARE(model->currentRadioInfo().macAddress, b.macAddress);
+            model->disconnectFromRadio();
+            // A late failure or discovery completion must not undo Disconnect.
+            model->onConnectionStateChangedForTest(ConnectionState::LinkLost);
+            emit discovery->discoveryFinished();
+            QCoreApplication::processEvents();
+            QVERIFY(!model->connection());
+        }
+        QVERIFY(!model->connection());
+        // Merely attempting a radio must not replace the last confirmed choice.
+        QCOMPARE(sessions.stationRadios()->savedChoice(), saved);
+    }
+
+    void desktopHostRetiresBeforeModelWithoutStartingBackgroundOnReplacement()
+    {
+        AppSettings& settings = AppSettings::instance();
+        StationHandover ownership(AppSettings::profileOverride());
+        QString error;
+        QVERIFY2(ownership.acquire(0, &error), qPrintable(error));
+        QTcpServer port;
+        QVERIFY(port.listen(QHostAddress::LocalHost, 0));
+        const quint16 selectedPort = port.serverPort();
+        port.close();
+        QFile config(QFileInfo(settings.filePath()).absolutePath() + QStringLiteral("/station.conf"));
+        QVERIFY(config.open(QIODevice::WriteOnly));
+        const QByteArray configBytes = QStringLiteral("remote_bind = 127.0.0.1\nremote_port = %1\n"
+            "status_page = off\nrendezvous_servers =\n").arg(selectedPort).toUtf8();
+        QCOMPARE(config.write(configBytes), configBytes.size());
+        config.close();
+        settings.setValue(QStringLiteral("DesktopCore/Run"), true);
+        settings.setValue(QStringLiteral("DesktopCore/KeepRunning"), true);
+        QTemporaryDir serviceHome;
+        QVERIFY(serviceHome.isValid());
+        StationServiceOptions options;
+        options.homeDirectory = serviceHome.path();
+        options.runner = [](const QString&, const QStringList&) {
+            return StationServiceCommandResult{0, {}};
+        };
+        GuiSessionCoordinator sessions;
+        QVERIFY(sessions.configureDesktopStation(AppSettings::profileOverride(),
+                                                   ownership.ownsProfile(), options));
+        QVERIFY2(sessions.replace({}, false, &error), qPrintable(error));
+        auto* runtime = sessions.desktopRuntime();
+        QVERIFY(runtime && runtime->controller()->enabled());
+        QVERIFY(sessions.stationRadios());
+        QVERIFY(!sessions.backgroundServiceOptions());
+        SetupDialog* setup = nullptr;
+        connect(sessions.window(), &MainWindow::setupDialogCreated, &sessions,
+                [&setup](SetupDialog* dialog) { setup = dialog; });
+        QVERIFY(QMetaObject::invokeMethod(sessions.window(), "createSetupDialog"));
+        QVERIFY(setup);
+        setup->selectPage(QStringLiteral("Remote Access"));
+        auto* page = setup->findChild<RemoteStationPage*>();
+        QVERIFY(page && page->state().available && page->state().runCore);
+        setup->close();
+        QPointer<GuiDesktopStationRuntime> oldRuntime(runtime);
+        QPointer<StationHost> oldHost(runtime->controller()->host());
+        QPointer<RadioModel> oldModel(sessions.window()->radioModel());
+        bool hostGoneBeforeModel = false;
+        connect(oldModel, &QObject::destroyed, &sessions, [&] {
+            hostGoneBeforeModel = oldHost.isNull() && oldRuntime.isNull();
+        });
+        QVERIFY2(sessions.replace(core(QStringLiteral("other")), false, &error), qPrintable(error));
+        QVERIFY(oldModel.isNull());
+        QVERIFY(hostGoneBeforeModel);
+        QVERIFY(!sessions.desktopRuntime());
+        QVERIFY(!sessions.stationRadios());
+        QVERIFY(!sessions.backgroundServiceOptions());
+        QVERIFY(ownership.ownsProfile());
+        QVERIFY(port.listen(QHostAddress::LocalHost, selectedPort));
+        sessions.shutdown();
+    }
+
+    void checkedQuitKeepsBackgroundIntentAndProfileUntilModelRetirement()
+    {
+        AppSettings& settings = AppSettings::instance();
+        StationHandover ownership(AppSettings::profileOverride());
+        QString error;
+        QVERIFY2(ownership.acquire(0, &error), qPrintable(error));
+        QTcpServer port;
+        QVERIFY(port.listen(QHostAddress::LocalHost, 0));
+        const quint16 selectedPort = port.serverPort();
+        port.close();
+        QFile config(QFileInfo(settings.filePath()).absolutePath() + QStringLiteral("/station.conf"));
+        QVERIFY(config.open(QIODevice::WriteOnly));
+        const QByteArray configBytes = QStringLiteral("remote_bind = 127.0.0.1\nremote_port = %1\n"
+            "status_page = off\nrendezvous_servers =\n").arg(selectedPort).toUtf8();
+        QCOMPARE(config.write(configBytes), configBytes.size());
+        config.close();
+        settings.setValue(QStringLiteral("DesktopCore/Run"), true);
+        settings.setValue(QStringLiteral("DesktopCore/KeepRunning"), true);
+        QTemporaryDir serviceHome;
+        QVERIFY(serviceHome.isValid());
+        StationServiceOptions options;
+        options.homeDirectory = serviceHome.path();
+        options.runner = [](const QString&, const QStringList&) {
+            return StationServiceCommandResult{0, {}};
+        };
+        GuiSessionCoordinator sessions;
+        QVERIFY(sessions.configureDesktopStation(AppSettings::profileOverride(),
+                                                   ownership.ownsProfile(), options));
+        QVERIFY2(sessions.replace({}, false, &error), qPrintable(error));
+        QPointer<RadioModel> model(sessions.window()->radioModel());
+        // A checked close must preserve the live window/profile when the
+        // destination cannot be replaced, and a repaired retry keeps Keep on.
+        const QString backup = settings.filePath() + QStringLiteral(".handover-test-original");
+        QVERIFY(QFile::rename(settings.filePath(), backup));
+        const auto restoreFile = qScopeGuard([&] {
+            QDir().rmdir(settings.filePath());
+            if (QFile::exists(backup)) { QFile::rename(backup, settings.filePath()); }
+        });
+        QVERIFY(QDir().mkdir(settings.filePath()));
+        QSignalSpy failed(&sessions, &GuiSessionCoordinator::stationOperationFailed);
+        QCloseEvent close;
+        QCoreApplication::sendEvent(sessions.window(), &close);
+        QVERIFY(!close.isAccepted());
+        QVERIFY(!failed.isEmpty());
+        QVERIFY(model && sessions.window());
+        QVERIFY(ownership.ownsProfile());
+        QVERIFY(!sessions.backgroundServiceOptions());
+        QVERIFY(QDir().rmdir(settings.filePath()));
+        QVERIFY(QFile::rename(backup, settings.filePath()));
+        QVERIFY2(sessions.prepareApplicationQuit(&error), qPrintable(error));
+        QVERIFY(sessions.backgroundServiceOptions());
+        QVERIFY(!sessions.desktopRuntime()->controller()->host());
+        QVERIFY(model && ownership.ownsProfile());
+        QVERIFY(sessions.prepareApplicationQuit(&error));
+        sessions.shutdown();
+        QVERIFY(model.isNull());
+        QVERIFY(sessions.backgroundServiceOptions());
+        QCOMPARE(sessions.backgroundServiceOptions()->profile, AppSettings::profileOverride());
+        QVERIFY(!sessions.backgroundServiceOptions()->inheritActiveProfile);
+        StationHandover competitor(AppSettings::profileOverride());
+        QVERIFY(!competitor.acquire(0, &error));
+        QVERIFY(settings.save(&error));
+        ownership.release();
+        QVERIFY(competitor.acquire(0, &error));
     }
 
     void replacesWholeSessionAndRetiresQueuedPickerAndProxy()
@@ -232,6 +476,33 @@ private slots:
         QCOMPARE(sessions.window(), original);
         original->radioModel()->transmitModel().setTune(false);
         QVERIFY(sessions.replace({}, false));
+    }
+
+    void radioSwitchWaitsForTransmitToReceiveHandover()
+    {
+        GuiSessionCoordinator sessions;
+        QVERIFY(sessions.replace({}, false));
+        RadioModel* model = sessions.window()->radioModel();
+        QVERIFY(!model->connection()); // logical keying only, no attached radio
+        MoxController* mox = model->moxController();
+        mox->setMoxCheck({});
+        mox->setTimerIntervals(0, 0, 0, 0, 0, 0);
+        mox->setMox(true);
+        QTRY_COMPARE(mox->state(), MoxState::Tx);
+        bool checkedFlush = false;
+        connect(mox, &MoxController::stateChanged, &sessions, [&](MoxState state) {
+            if (state != MoxState::TxToRxFlush) { return; }
+            checkedFlush = true;
+            QVERIFY(!model->mox() && !model->transmitModel().isMox());
+            QVERIFY(model->stationOnAirRefusal(nullptr));
+            QString error;
+            QVERIFY(!sessions.canReplace({}, &error));
+            QVERIFY(!error.isEmpty());
+        });
+        mox->setMox(false);
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        QVERIFY(checkedFlush);
+        QVERIFY(sessions.canReplace({}));
     }
 
     void cancelsRetryAndLateOldCoreStateOnSwitch()

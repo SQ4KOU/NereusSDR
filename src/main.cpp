@@ -296,19 +296,53 @@ int main(int argc, char* argv[])
     // R-R3-38: one application owner replaces complete local/remote sessions.
     // It resolves credentials as a single target tuple, installs a fresh proxy
     // before each remote model, and retires the window before its backend.
-    NereusSDR::GuiConnectionController connections;
-    connections.start(request);
-    const int rc = app.exec();
-    connections.shutdown();
+    int rc = 0;
+    std::optional<NereusSDR::StationServiceOptions> background;
+    {
+        NereusSDR::GuiConnectionController connections;
+        connections.sessions()->configureDesktopStation(activeProfile, ownership.ownsProfile());
+        connections.start(request);
+        rc = app.exec();
+        background = connections.sessions()->backgroundServiceOptions();
+        connections.shutdown();
+    }
 
     // Graceful shutdown so worker threads drain before the engine
     // singleton is destroyed.
     NereusSDR::ExternalVariableEngine::instance().shutdown();
+
+    // Model, window and MMIO destructors can all write settings. Keep the
+    // profile lock until their final values have reached disk, not merely
+    // until the hosted listener or radio connection has stopped.
+    QString finalSaveError;
+    while (!NereusSDR::AppSettings::instance().save(&finalSaveError)) {
+        const auto answer = QMessageBox::warning(nullptr, QStringLiteral("NereusSDR"),
+            QStringLiteral("The Core could not save its final settings. The background Core "
+                           "has not been started.\n\n%1").arg(finalSaveError),
+            QMessageBox::Retry | QMessageBox::Close, QMessageBox::Retry);
+        if (answer != QMessageBox::Retry) {
+            NereusSDR::CoreInit::shutdown();
+            return 1;
+        }
+    }
 
     // Uninstalls the custom message handler and closes the log file that
     // CoreInit::initialize() installed above. See src/core/CoreInit.cpp
     // for why the handler teardown has to be safe even if Qt logs
     // something between here and its own thread-storage teardown.
     NereusSDR::CoreInit::shutdown();
+    ownership.release();
+    if (background) {
+        // Options were copied while the local runtime existed. The launcher
+        // uses that explicit profile without touching shutdown AppSettings.
+        NereusSDR::StationServiceManager service(*background);
+        while (!service.startBackground()) {
+            const auto answer = QMessageBox::warning(nullptr, QStringLiteral("NereusSDR"),
+                QStringLiteral("The background Core could not start.\n\n%1")
+                    .arg(service.lastError()),
+                QMessageBox::Retry | QMessageBox::Close, QMessageBox::Retry);
+            if (answer != QMessageBox::Retry) { return 1; }
+        }
+    }
     return rc;
 }

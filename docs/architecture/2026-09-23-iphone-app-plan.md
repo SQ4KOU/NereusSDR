@@ -6514,16 +6514,24 @@ review. Requires Task 47, Parts C and F, and Tasks 41, 42 and 71 to 77.
       `1bebe127`. The integrated app/Core build and twelve focused tests passed
       (20.09 s), including checked saves, unchanged offline layouts, dirty offline
       refusal, live/stale process locks and deferred control replies. Desktop
-      hosting and the reverse background handover remain open; no live radio or
-      window handover was performed.
+      hosting and the reverse background handover are now wired through the
+      coordinator/runtime in the current desktop integration. Final saves and
+      window/model/MMIO destruction precede profile unlock and background launch;
+      failed saves preserve the lock and retry intent. The saved Core radio choice
+      survives reclaim, with same-radio failure recovery. The remaining acceptance
+      work is the full two-process reverse round trip and live device observation;
+      no live radio or JJ window handover was performed.
 - [ ] **Step 3:** The window as the station device: its own slices, flags and audio, its
       MOX and TUNE through the take rules, and its TCI programs under the holder rule,
       with the hosting-desktop harness.
       The reusable desktop controller is implemented in signed `fc58c3ad`,
       `987eb996` and `f7fd0b0b`: hosting-device admission, ownership adoption,
       holder confirmation and TX-first teardown. Integrated app/Core build and
-      six focused suites passed (27.62 s). MainWindow presentation/keying, TCI
-      program admission and reverse background handover are not yet wired.
+      six focused suites passed (27.62 s). MainWindow presentation/keying and TCI
+      program admission are now wired in signed `abeb6ca53`/`5dfb27690` and the
+      current coordinator integration. Actual-window ownership/menu/pan and
+      transmit-take regressions pass. Setup receiver selection remains open as
+      addendum G-79, and full reverse handover acceptance is recorded above.
 
 ## Task 49: The Remote Access page
 
@@ -6574,8 +6582,11 @@ phone by one tap, revoke the phone from the page.
 Presentation is implemented in signed `df86b7a5` with lead modal-permission
 corrections. The integrated app and page tests pass; off/on/pairing/two-device/
 backup-acknowledged states were rendered and inspected. These remain partial:
-the production hosting/service bridge and end-to-end control effects are still
-being connected, so the steps are not yet accepted as complete.
+the runtime/service bridge is now built in signed `25750342` and integrated with
+late-created Setup dialogs. Real temporary listeners, failed starts, pairing/revoke,
+checked preference saves, configured network policy, and fake OS service-runner
+checks pass. Final two-process handover acceptance remains with Task 48 before
+these steps are accepted as complete.
 
 ## Task 50: The card image for a small computer
 

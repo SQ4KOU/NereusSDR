@@ -127,6 +127,7 @@
 #include "gui/ReceiveLayoutNotices.h"
 #include "gui/ReceiverStopNotices.h"
 #include "gui/RemoteReceiverAudioNote.h"
+#include "gui/DesktopStationController.h"
 
 class QProgressDialog;
 class QSplitter;
@@ -240,6 +241,9 @@ public:
     void retireForSessionSwitch();
     void setConnectionPickerManaged(bool managed);
     RadioModel* radioModel() const { return m_radioModel; }
+    // Caller owns the controller and model; local windows only.
+    void setDesktopStationController(DesktopStationController* controller);
+    void refreshDesktopStationState();
     FftEnginePool* fftEnginePoolForTest() const { return m_fftEnginePool; }
     int miniProducerCountForTest() const { return int(m_miniProducers.size()); }
 
@@ -250,6 +254,8 @@ public:
 
 signals:
     void connectionsRequested();
+    void hostedInitialConnectionRequested();
+    void setupDialogCreated(NereusSDR::SetupDialog* dialog);
 
 public:
 
@@ -1090,6 +1096,23 @@ private:
     RemoteStationOptions m_station;
 
     RadioModel* m_radioModel{nullptr};
+    QPointer<DesktopStationController> m_desktopStationController;
+    QPointer<class TakeTransmitDialog> m_desktopTakeDialog;
+    QPointer<class StationServer> m_desktopBoundServer;
+    QMetaObject::Connection m_desktopHolderConnection;
+    QMetaObject::Connection m_desktopOwnershipConnection;
+    QMetaObject::Connection m_desktopActiveConnection;
+    quint64 m_desktopBindingGeneration{0};
+    // Stop clears controller.enabled() before the Host has finished stopping.
+    // TCI leaves host mode only after the controller's final lifecycle signal.
+    bool m_desktopHostStopConfirmed{true};
+    bool desktopHosting() const;
+    bool desktopSliceAllowed(int sliceId) const;
+    SliceModel* activeSliceForWindow() const;
+    void refreshActiveSlicePresentation();
+    bool desktopOwnsTransmit() const;
+    void requestDesktopTransmit(bool tune, bool on);
+    void handleDesktopTakeResult(const DesktopStationController::RequestResult& result);
     ConnectionPanel* m_connectionPanel{nullptr};
     SupportDialog* m_supportDialog{nullptr};
 
@@ -1410,6 +1433,7 @@ private:
     // single toggle actions that mirror SliceModel state.
     QActionGroup* m_nrGroup   = nullptr;
     QActionGroup* m_nbGroup   = nullptr;
+    QAction*      m_anfAction = nullptr;
     QAction*      m_snbAction = nullptr;
     QAction*      m_apfAction = nullptr;
     QAction*      m_binAction = nullptr;

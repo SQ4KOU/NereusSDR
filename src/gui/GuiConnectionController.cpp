@@ -107,6 +107,12 @@ GuiConnectionController::GuiConnectionController(QObject* parent)
             this, &GuiConnectionController::attachWindow);
     connect(&m_sessions, &GuiSessionCoordinator::connectionsRequested,
             this, &GuiConnectionController::showConnections);
+    connect(&m_sessions, &GuiSessionCoordinator::stationOperationFailed, this,
+            [this](const QString& reason) {
+        if (m_shuttingDown) { return; }
+        m_selector->setNotice(reason);
+        showConnections();
+    }, Qt::QueuedConnection);
     connect(m_selector.get(), &ConnectionSelector::connectRequested,
             this, &GuiConnectionController::queueConnect);
     connect(m_selector.get(), &ConnectionSelector::disconnectRequested,

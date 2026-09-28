@@ -61,6 +61,8 @@ bool DesktopStationController::start(bool profileOwnershipEstablished)
         return false;
     }
     m_host = std::move(host);
+    emit hostingStateChanged(enabled());
+    if (!self) { return false; }
     return enabled();
 }
 
@@ -99,7 +101,11 @@ void DesktopStationController::stop()
     if (host) {
         host->stop();
     }
-    if (self) { m_stopping = false; }
+    host.reset();
+    if (self) {
+        m_stopping = false;
+        emit hostingStateChanged(false);
+    }
 }
 
 StationServer* DesktopStationController::server() const
