@@ -1359,6 +1359,7 @@ set(CORE_SOURCES
     # nereus_apply_core_deps().
     src/core/session/DnsSdAdvertiser.cpp
     src/core/session/StationClient.cpp
+    src/core/session/TxWatchClient.cpp
     # R3 media transport, signalling, display, spectrum, and Opus building
     # blocks. IMediaTransport carries Q_OBJECT and is listed so AUTOMOC emits
     # its signal metadata.

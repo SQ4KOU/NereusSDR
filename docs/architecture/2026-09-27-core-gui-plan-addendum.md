@@ -1193,7 +1193,11 @@ colours for the same signal.
   primaries. The real paired two-socket Core handshake, accepted heartbeats and
   replay refusal passed on trunk. The integrated app/Core build and nine
   focused suites passed (46.10 seconds) at concurrent lane load.
-  Direct client wiring and the separate relay DTLS path remain in progress.
+  The direct client helper also verifies the fresh actual TLS certificate before
+  sending its ticket and guards synchronous socket errors that delete or replace
+  the helper (`d8f14ac1`). Its integrated app/Core build and two focused suites
+  passed (4.17 seconds). Production client wiring and the separate relay DTLS path
+  remain in progress.
 - Plan: independent transmit watch and restrictive-network liveness.
 
 ## How this addendum is kept
