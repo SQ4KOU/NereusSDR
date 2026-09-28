@@ -1258,6 +1258,10 @@ colours for the same signal.
   The same full run found matching tail assumptions in the Core log and
   pairing suites. Both now anchor their original contiguous blocks by name;
   their explicitly rebuilt complete suites pass together (10.66 s).
+  Signed `a85c0cd1`, integrated in `f7e2f3287`, fixes the same assumption in
+  transmit settings, band selection and display-budget compatibility tests.
+  Four integrated suites pass (5.22 s), preserving the exact older-minor
+  descriptor bytes and strict ordering/types of the newer fields.
 - Plan: several-device capability compatibility.
 
 ### G-69: Desktop shutdown could close ingress before ending transmit
@@ -1913,11 +1917,14 @@ colours for the same signal.
   reply rejection, paired/off-air Forget confirmation and truthful unavailable
   reasons. Keep Reset unavailable. Avoid a general command/result scripting
   language for this one established operation.
-- Status: read-only source audit complete; phone informed of the existing
-  protocol and missing description. The lead settled a closed V3 Settings
-  Validation panel with exact desktop actions and existing command semantics;
-  implementation is assigned. V1/V2 clients keep their prior empty Diagnostics
-  projection. This does not settle Reset or local file/log behavior.
+- Status: signed `9fad480b` publishes the closed V3 panel, with exact desktop
+  labels, existing command semantics and strict schema validation. App/Core and
+  twelve integrated suites pass (62.78 s), including real paired snapshot and
+  capability gates, older-version projection, desktop label parity and full
+  link conformance. V1/V2 clients keep their prior empty Diagnostics response.
+  Phone renderer and lifecycle implementation remain separate phone work; Core
+  publication alone is not phone parity. Reset and local file/log rulings remain
+  unchanged.
 - Plan: phone Setup description and remote Settings Validation parity.
 
 ### G-98: Audio compatibility tests reject independently negotiated start fields
@@ -1948,6 +1955,35 @@ colours for the same signal.
   four integrated suites pass (5.22 s); no older-client capability leak was
   observed and no production wire changed. Updated Linux execution remains.
 - Plan: complete mirror-policy and older-peer compatibility verification.
+
+### G-100: Core refusal wording and its source scanner have drifted
+
+- Evidence: three transmit-watch close/refusal messages expose internal terms.
+  The reason scanner also mistakes a compared wire verb and a media helper's
+  slice ID for operator text, and lacks exact new forwarding/site records.
+- Ruling basis: preserve plain operator messages and meaningful future-source
+  checking without changing refusal, authority or timing behavior.
+- Status: signed `851846c0` corrects the three messages, traces individual
+  forwarded reasons to their scanned sources and adds scanner regressions for
+  real bad text. Root corrected a lane verification naming gap by rebuilding
+  the actual changed watch suite as well as both other watch suites. App/Core
+  and all twelve integration suites pass (62.78 s). Wire names, reason codes,
+  permissions and deadlines remain unchanged.
+- Plan: operator wording and complete Core refusal verification.
+
+### G-101: Linux build repeatedly rejects its shared precompiled header
+
+- Evidence: the signed `3a2c73fa` build reports that the Core precompiled header
+  cannot be reused for GUI sources because `RTC_STATIC` is not defined there.
+  CMake explicitly configures the GUI and test targets to reuse that header.
+  The compiler falls back to parsing headers normally; this is build overhead,
+  not evidence of a slow runtime test or a correctness failure.
+- Ruling basis: JJ requires cost-aware work and understanding slow verification.
+  Align the intended compile environment or use a compatible header cache,
+  preserving static-library linkage and platform-specific visibility semantics.
+- Status: observed in the real Linux build; exact target-definition diagnosis
+  and bounded repair remain. The active immutable build continues unchanged.
+- Plan: reliable, efficient full-suite builds across CI platforms.
 
 ## How this addendum is kept
 

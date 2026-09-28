@@ -387,14 +387,109 @@ private slots:
             QVERIFY(!category.value(QStringLiteral("pages")).toArray().isEmpty());
             QVERIFY(!service.property(id.toLatin1().constData()).toString().isEmpty());
         }
-        // An unfinished category does not claim to be a rendered page.
-        QVERIFY(service.category(QStringLiteral("diagnostics")).isEmpty());
-        QVERIFY(service.diagnostics().isEmpty());
+        const QJsonObject diagnostics = service.category(QStringLiteral("diagnostics"));
+        QCOMPARE(diagnostics.value(QStringLiteral("version")), QJsonValue(3));
+        QCOMPARE(diagnostics.value(QStringLiteral("pages")).toArray().size(), 1);
+        QVERIFY(!service.diagnostics().isEmpty());
         QCOMPARE(service.revision(), quint32(1));
         const MirrorSchema& schema = MirrorSchema::forObject(&service);
         QVERIFY(schema.byName("general"));
         QVERIFY(schema.byName("catNetwork"));
         QVERIFY(schema.byName("revision"));
+    }
+
+    void settingsHygienePanelIsClosedAndOnlyV3()
+    {
+        SetupDescriptionService service;
+        const QJsonObject diagnostics = service.category(QStringLiteral("diagnostics"));
+        QCOMPARE(diagnostics.value("category").toObject().value("where"), QJsonValue("station"));
+        QCOMPARE(diagnostics.value("category").toObject().value("coverage"), QJsonValue("partial"));
+        const QJsonObject page = diagnostics.value("pages").toArray().first().toObject();
+        QCOMPARE(page.value("id"), QJsonValue("diagnostics.settingsValidation"));
+        QCOMPARE(page.value("title"), QJsonValue("Settings Validation"));
+        const QJsonObject section = page.value("sections").toArray().first().toObject();
+        QCOMPARE(section.value("title"), QJsonValue("Validation Issues"));
+        const QJsonArray controls = section.value("controls").toArray();
+        QCOMPARE(controls.size(), 1);
+        const QJsonObject panel = controls.first().toObject();
+        QVERIFY(SetupDescriptionService::validateSettingsHygienePanel(panel));
+        QCOMPARE(panel.value("id"), QJsonValue("diagnostics.settingsValidation.health"));
+        QCOMPARE(panel.value("label"), QJsonValue("Validation Issues"));
+        QCOMPARE(panel.value("tooltip"), QJsonValue(""));
+        QCOMPARE(panel.value("kind"), QJsonValue("settingsHygiene"));
+        QCOMPARE(panel.value("requiresDescriptionVersion"), QJsonValue(3));
+        QCOMPARE(panel.value("gate").toObject(),
+                 (QJsonObject{{"capability", "settingsHygieneVersion"}, {"min", 1}}));
+        QCOMPARE(panel.value("binding").toObject(),
+                 (QJsonObject{{"settingsHygiene", QJsonObject{{"version", 1}}}}));
+        QCOMPARE(panel.value("actions").toArray().size(), 3);
+        QCOMPARE(panel.value("actions").toArray().at(0).toObject().value("label"),
+                 QJsonValue("Re-validate"));
+        QCOMPARE(panel.value("actions").toArray().at(1).toObject().value("enabled"),
+                 QJsonValue(false));
+        QCOMPARE(panel.value("actions").toArray().at(2).toObject().value("label"),
+                 QJsonValue("Forget This Radio"));
+
+        const auto reject = [&panel](const QString& key, const QJsonValue& value) {
+            QJsonObject changed = panel;
+            changed.insert(key, value);
+            QVERIFY(!SetupDescriptionService::validateSettingsHygienePanel(changed));
+        };
+        reject("extra", true);
+        reject("kind", "button");
+        reject("requiresDescriptionVersion", 2);
+        reject("binding", QJsonObject{{"command", QJsonObject{{"verb", "station.forgetSettings"}}}});
+        reject("binding", QJsonObject{{"settingsHygiene", QJsonObject{{"version", 2}}}});
+        reject("gate", QJsonObject{{"capability", "settingsHygieneVersion"}, {"min", 0}});
+        reject("gate", QJsonObject{{"capability", "settingsHygieneVersion"},
+                                    {"min", 1}, {"transmit", true}});
+        QJsonArray actions = panel.value("actions").toArray();
+        QJsonObject reset = actions.at(1).toObject();
+        reset.insert("enabled", true);
+        actions[1] = reset;
+        reject("actions", actions);
+        actions = panel.value("actions").toArray();
+        QJsonObject validate = actions.at(0).toObject();
+        validate.insert("verb", "station.forgetSettings");
+        actions[0] = validate;
+        reject("actions", actions);
+        actions = panel.value("actions").toArray();
+        const QJsonValue firstAction = actions.at(0);
+        actions[0] = actions.at(2);
+        actions[2] = firstAction;
+        reject("actions", actions);
+        actions = panel.value("actions").toArray();
+        QJsonObject forget = actions.at(2).toObject();
+        forget.remove("paired");
+        actions[2] = forget;
+        reject("actions", actions);
+        forget = panel.value("actions").toArray().at(2).toObject();
+        forget.remove("offAir");
+        actions[2] = forget;
+        reject("actions", actions);
+        forget = panel.value("actions").toArray().at(2).toObject();
+        forget.remove("confirmation");
+        actions[2] = forget;
+        reject("actions", actions);
+        forget = panel.value("actions").toArray().at(2).toObject();
+        forget.insert("verb", "station.forgetRadio");
+        actions[2] = forget;
+        reject("actions", actions);
+        actions = panel.value("actions").toArray();
+        forget = actions.at(2).toObject();
+        QJsonObject confirmation = forget.value("confirmation").toObject();
+        confirmation.insert("default", "confirm");
+        forget.insert("confirmation", confirmation);
+        actions[2] = forget;
+        reject("actions", actions);
+
+        QVERIFY(SetupDescriptionService::fitCategoryForVersion(service.diagnostics(), 1).isEmpty());
+        QVERIFY(SetupDescriptionService::fitCategoryForVersion(service.diagnostics(), 2).isEmpty());
+        const QJsonObject v3 = QJsonDocument::fromJson(
+            SetupDescriptionService::fitCategoryForVersion(service.diagnostics(), 3).toUtf8())
+            .object();
+        QCOMPARE(v3.value("version"), QJsonValue(3));
+        QCOMPARE(v3.value("pages").toArray().size(), 1);
     }
 
     void settingToggleEncodingIsExactAndPersistsAsReaderStrings()
@@ -1009,6 +1104,15 @@ private slots:
             QCOMPARE(QJsonDocument::fromJson(pa.toUtf8()).object().value("version").toInt(),
                      expected);
             QCOMPARE(QJsonDocument::fromJson(pa.toUtf8()).object().value("pages").toArray().size(), 2);
+            const QString diagnostics = setupCategoryOnWire(
+                *core.app, "diagnostics", SessionMessageKind::ObjectCreate);
+            if (expected < 3) {
+                QVERIFY(diagnostics.isEmpty());
+            } else {
+                const QJsonObject panel = QJsonDocument::fromJson(diagnostics.toUtf8()).object();
+                QCOMPARE(panel.value("version"), QJsonValue(3));
+                QCOMPARE(panel.value("pages").toArray().size(), 1);
+            }
             const QJsonObject category = QJsonDocument::fromJson(dsp.toUtf8()).object();
             QCOMPARE(category.value("version").toInt(), expected);
             bool hasTable = false;
@@ -1022,8 +1126,8 @@ private slots:
                     }
                 }
             }
-            QCOMPARE(hasTable, expected == 2);
-            QCOMPARE(hasAdd, expected == 2);
+            QCOMPARE(hasTable, expected >= 2);
+            QCOMPARE(hasAdd, expected >= 2);
             const QString v1 = SetupDescriptionService::fitCategoryForVersion(
                 core.server->setupDescription()->dsp(), 1);
             QVERIFY(!v1.contains(QStringLiteral("requiresDescriptionVersion")));
@@ -1040,8 +1144,10 @@ private slots:
         check(0, kSessionProtocolMinor, 0);
         check(1, kSessionProtocolMinor, 1);
         check(2, kSessionProtocolMinor, 2);
-        check(9, kSessionProtocolMinor, 2);
+        check(3, kSessionProtocolMinor, 3);
+        check(9, kSessionProtocolMinor, 3);
         check(2, quint16(kRadioIdentitySessionProtocolMinor - 1), 0);
+        check(3, quint16(kRadioIdentitySessionProtocolMinor - 1), 0);
     }
 
     void tnfTableRejectsMalformedSourcesAndActions()

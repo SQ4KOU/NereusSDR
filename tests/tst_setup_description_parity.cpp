@@ -16,6 +16,7 @@
 #include "gui/setup/PaSetupPages.h"
 #include "gui/widgets/MetricLabel.h"
 #include "gui/setup/TestTwoTonePage.h"
+#include "gui/diagnostics/DiagnosticsPhaseHPages.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/NotchModel.h"
@@ -160,6 +161,28 @@ void compareControl(QWidget& page, const QJsonObject& control)
 class SetupDescriptionParityTest : public QObject {
     Q_OBJECT
 private slots:
+    void settingsValidationPanelMatchesDesktopActions()
+    {
+        RadioModel model;
+        SettingsValidationPage page(&model);
+        SetupDescriptionService service;
+        const QJsonObject diagnostics = service.category(QStringLiteral("diagnostics"));
+        const QJsonObject panel = diagnostics.value("pages").toArray().first().toObject()
+            .value("sections").toArray().first().toObject()
+            .value("controls").toArray().first().toObject();
+        QVERIFY(SetupDescriptionService::validateSettingsHygienePanel(panel));
+        const QJsonArray actions = panel.value("actions").toArray();
+        QCOMPARE(actions.size(), 3);
+        const auto buttons = page.findChildren<QPushButton*>();
+        QCOMPARE(buttons.size(), 3);
+        for (int i = 0; i < actions.size(); ++i) {
+            QCOMPARE(buttons.at(i)->text(), actions.at(i).toObject().value("label").toString());
+        }
+        QCOMPARE(actions.at(2).toObject().value("confirmation").toObject()
+                     .value("message"), QJsonValue("Forget all settings for this radio?"));
+        QVERIFY(!actions.at(1).toObject().value("enabled").toBool(true));
+    }
+
     void describedPaBypassMatchesG2eDesktopOnly()
     {
         RadioModel g2e;

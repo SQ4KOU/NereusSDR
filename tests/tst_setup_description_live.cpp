@@ -19,6 +19,49 @@ using namespace NereusSDR;
 class SetupDescriptionLiveTest : public QObject {
     Q_OBJECT
 private slots:
+    void pairedV3SettingsValidationPanelUsesExistingHygieneCapability()
+    {
+        Core core;
+        Device phone(QStringLiteral("Settings Validation iPhone"), QStringLiteral("phone"));
+        core.pair(phone);
+        QHash<QByteArray, int> features = kHolder;
+        features.insert("setupDescription", 3);
+        features.insert("settingsHygiene", 1);
+        LoopbackTransport* app = core.signIn(phone, features);
+        QVERIFY(admitted(app));
+        QCOMPARE(capability(app->received(), QStringLiteral("setupDescriptionVersion")),
+                 std::optional<qint64>(3));
+        QCOMPARE(capability(app->received(), QStringLiteral("settingsHygieneVersion")),
+                 std::optional<qint64>(1));
+        const QJsonObject diagnostics = QJsonDocument::fromJson(latest(app->received(),
+            QStringLiteral("setup"), QStringLiteral("diagnostics")).toString().toUtf8()).object();
+        QCOMPARE(diagnostics.value("version"), QJsonValue(3));
+        const QJsonObject panel = diagnostics.value("pages").toArray().first().toObject()
+            .value("sections").toArray().first().toObject()
+            .value("controls").toArray().first().toObject();
+        QVERIFY(SetupDescriptionService::validateSettingsHygienePanel(panel));
+        const QJsonObject validated = core.invoke(app, "station.validateSettings",
+            {MirrorUpdate{0, "mac", MirrorWireKind::Utf8, core.model->currentRadioMac()}});
+        QVERIFY2(validated.value("accepted").toBool(),
+                 qPrintable(validated.value("reason").toString()));
+        QCOMPARE(validated.value("values").toArray().size(), 2);
+        const QJsonObject noReset = core.invoke(app, "station.resetSettings",
+            {MirrorUpdate{0, "mac", MirrorWireKind::Utf8, core.model->currentRadioMac()}});
+        QVERIFY(!noReset.value("accepted").toBool(true));
+
+        Device withoutHygiene(QStringLiteral("Older Settings iPhone"), QStringLiteral("phone"));
+        core.pair(withoutHygiene);
+        QHash<QByteArray, int> descriptionOnly = kHolder;
+        descriptionOnly.insert("setupDescription", 3);
+        LoopbackTransport* older = core.signIn(withoutHygiene, descriptionOnly);
+        QVERIFY(admitted(older));
+        QVERIFY(!capability(older->received(), QStringLiteral("settingsHygieneVersion"))
+                     .value_or(0));
+        const QJsonObject gated = core.invoke(older, "station.validateSettings",
+            {MirrorUpdate{0, "mac", MirrorWireKind::Utf8, core.model->currentRadioMac()}});
+        QVERIFY(!gated.value("accepted").toBool(true));
+    }
+
     void pairedPaBypassSettingUsesExistingCoreAuthority()
     {
         Core core;
