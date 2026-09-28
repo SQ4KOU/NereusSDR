@@ -5295,6 +5295,9 @@ private:
     void wireTxWorkerRade(TxWorkerThread* worker);
     // The tail ended (sent, timed out, stopped or cut by a new key).
     void onEndOfOverTailChanged(bool active);
+    // At every unkey's drain: the RADE TX audio the over left (the worker's
+    // queue, the 24 -> 48 kHz resampler, the channel's encoder state).
+    void dropRadeTxAudio();
     // While a tail runs: the TX slice's dspModeChanged and the arbiter's
     // txBoundSliceChanged, each ending it.
     QMetaObject::Connection m_endOfOverTailModeWatch;

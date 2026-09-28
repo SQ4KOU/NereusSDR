@@ -48,6 +48,7 @@
 //                 Anthropic Claude Code.
 
 #include <QtTest/QtTest>
+#include <cmath>
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QSignalSpy>
@@ -145,6 +146,17 @@ struct Ctrl {
         QCOMPARE(mox.state(), MoxState::Tx);
     }
 };
+
+// A second of speech-like 16 kHz int16 audio (as tst_rade_channel's).
+QByteArray speech16k(int nSamples)
+{
+    QByteArray buf(nSamples * static_cast<int>(sizeof(int16_t)), Qt::Uninitialized);
+    auto* p = reinterpret_cast<int16_t*>(buf.data());
+    for (int i = 0; i < nSamples; ++i) {
+        p[i] = static_cast<int16_t>(12000.0 * std::sin(6.283185307179586 * 300.0 * i / 16000.0));
+    }
+    return buf;
+}
 
 // The whole RADE transmit path with no radio behind it: RadioModel's own
 // tail function, the slice's RadeChannel (created, wired and started by
@@ -369,6 +381,52 @@ private slots:
             QVERIFY(rig.model.endOfOverTailActive());
             QCOMPARE(rig.channel()->textChannel()->ourCallsign(),
                      reporting ? QStringLiteral("KG4VCF") : QString());
+        }
+    }
+
+    // Found in review: when an over ends with no tail (Stop All TX, TX
+    // inhibit), the audio still queued for the worker and held in the TX
+    // resamplers came out at the start of the next over. Every unkey now
+    // drops it: the next over starts exactly as on a fresh channel.
+    void noOldAudioReachesTheNextOver()
+    {
+        // What a fresh channel emits for 1 s of speech (sizes only).
+        int freshBytes = 0;
+        {
+            RadeChannel fresh;
+            QVERIFY(fresh.start(QStringLiteral("dummy")));
+            QObject::connect(&fresh, &RadeChannel::txModemReady,
+                             [&freshBytes](const QByteArray& b) { freshBytes += b.size(); });
+            fresh.txEncode(speech16k(16000));
+            fresh.stop();
+        }
+        QVERIFY(freshBytes > 0);
+
+        for (int path = 0; path < 2; ++path) {
+            RealRig rig;
+            rig.key();
+            rig.channel()->txEncode(speech16k(16000 + 80));   // a partial frame too
+            pump();
+            QVERIFY(rig.worker->radeAudioQueuedSamplesForTest() > 0);
+            QVERIFY(rig.model.radeTxResamplerForTest() != nullptr);
+
+            if (path == 0) {
+                rig.model.stopAllTx(QStringLiteral("Time Out Timer"));
+            } else {
+                rig.model.moxController()->setTxInhibited(true);
+            }
+            QTRY_COMPARE_WITH_TIMEOUT(rig.model.moxController()->state(), MoxState::Rx, 5000);
+            pump();
+            QVERIFY(!rig.model.endOfOverTailActive());
+            QCOMPARE(rig.worker->radeAudioQueuedSamplesForTest(), 0);
+            QVERIFY(rig.model.radeTxResamplerForTest() == nullptr);
+            QCOMPARE(rig.channel()->txFeatureAccumSizeForTest(), 0);
+
+            int nextBytes = 0;
+            QObject::connect(rig.channel(), &RadeChannel::txModemReady,
+                             [&nextBytes](const QByteArray& b) { nextBytes += b.size(); });
+            rig.channel()->txEncode(speech16k(16000));
+            QCOMPARE(nextBytes, freshBytes);
         }
     }
 

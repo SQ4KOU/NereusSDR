@@ -97,6 +97,10 @@ public:
     // given. r8brain sizes its buffers for maxBlockSamples at construction,
     // so this must never exceed maxBlockSamples().
     int largestInputBlock() const { return m_largestInputBlock; }
+
+    // NereusSDR: drop everything the resampler holds (r8brain clear()), as a
+    // freshly built one.
+    void clear();
     int maxBlockSamples() const { return m_maxBlockSamples; }
 
     double srcRate() const { return m_srcRate; }

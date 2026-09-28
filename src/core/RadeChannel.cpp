@@ -827,6 +827,11 @@ void RadeChannel::resetTx()
     m_txFeatAccum.clear();
     m_radeTxCallCount = 0;
     m_endOfOverQueued = false;  // RADE end-of-over callsigns: a new over
+    // NereusSDR: the 8 -> 24 kHz stage holds about 300 ms of this over's
+    // modem audio; drop it so none of it starts the next over.
+    if (m_up8to24) {
+        m_up8to24->clear();
+    }
     ++m_resetTxCountForTest;  // R-R3-49 (parity Task 3): test seam only
 }
 

@@ -53,6 +53,11 @@ int Resampler::latencyInputSamples() const
     return m_resampler->getInLenBeforeOutPos(0);
 }
 
+void Resampler::clear()
+{
+    m_resampler->clear();
+}
+
 // NereusSDR: every r8brain process() call goes through here, so the
 // largest single call is on record (largestInputBlock).
 int Resampler::r8bProcess(double* in, int numSamples, double*& out)

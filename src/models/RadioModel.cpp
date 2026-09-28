@@ -1941,6 +1941,13 @@ RadioModel::RadioModel(Role role, QObject* parent)
     m_moxController->setEndOfOverTail([this]() { return startRadeEndOfOverTail(); });
     connect(m_moxController, &MoxController::endOfOverTailChanged,
             this, &RadioModel::onEndOfOverTailChanged);
+    // Every unkey reaches the TX channel's drain (after a tail, or at once
+    // without one: Stop All TX, TX inhibit, the time-out). Whatever RADE
+    // audio the over left, queued for the worker or held in the TX
+    // resamplers and encoder, is dropped there so it never starts the next
+    // over.
+    connect(m_moxController, &MoxController::txDrainRequested,
+            this, &RadioModel::dropRadeTxAudio);
 
     // R-IOS-13 (2026-09-27): every key (MOX, TUNE, a remote key, VOX,
     // two-tone) goes through txAboutToBegin before the hardware flip and
@@ -6693,6 +6700,23 @@ bool RadioModel::startRadeEndOfOverTail()
     QMetaObject::invokeMethod(m_txWorker.get(), "armRadeAudioDrainedNotice",
                               Qt::QueuedConnection);
     return true;
+}
+
+void RadioModel::dropRadeTxAudio()
+{
+    if (m_txWorker) {
+        QMetaObject::invokeMethod(m_txWorker.get(), "clearRadeAudio",
+                                  Qt::QueuedConnection);
+    }
+    m_radeTxResampler.reset();
+    m_radeTxResamplerHwRate = 0;
+    if (m_wdspEngine != nullptr) {
+        if (SliceModel* const txSlice = txBoundSlice()) {
+            if (RadeChannel* const channel = m_wdspEngine->radeChannel(txSlice->sliceIndex())) {
+                channel->resetTx();
+            }
+        }
+    }
 }
 
 void RadioModel::onEndOfOverTailChanged(bool active)

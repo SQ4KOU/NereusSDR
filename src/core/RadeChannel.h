@@ -166,6 +166,10 @@
 //                 resampler's latency in zeros so all of it leaves;
 //                 nothing more is encoded until resetTx(). AI tooling:
 //                 Anthropic Claude Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  resetTx also clears the 8 -> 24 kHz
+//                 resampler, so no modem audio held from one over starts
+//                 the next. NereusSDR-original. AI tooling: Anthropic
+//                 Claude Code.
 // =================================================================
 
 #pragma once
