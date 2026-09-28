@@ -2829,7 +2829,7 @@ void SpectrumWidget::setTxWfGradient(const QString& encoded)
     emit txWfSettingsChanged();
 }
 
-// Task 2.8: Stop-on-TX — gate pushWaterfallRow() while TX is active.
+// Task 2.8: Stop-on-TX — gate pushWaterfallRow() while this pan transmits.
 void SpectrumWidget::setWaterfallStopOnTx(bool on)
 {
     if (m_wfStopOnTx == on) { return; }
@@ -6164,8 +6164,16 @@ void SpectrumWidget::pushWaterfallRow(const QVector<float>& wfPixelsDbm)
         return;
     }
 
-    // Task 2.8: Stop-on-TX -- skip if TX active and feature enabled.
-    if (m_wfStopOnTx && (m_activePeakHold.txActive() || m_txActiveForTest)) {
+    // Task 2.8: Stop-on-TX -- skip while this pan is transmitting and the
+    // feature is on. From Thetis display.cs:7601-7604 [v2.10.3.15]:
+    //   bool stopWaterfallOnTx = (rx == 1 && m_bStopRX1WaterfallOnTX && local_mox) ||
+    //                            (rx == 2 && m_bStopRX2WaterfallOnTX && local_mox);
+    //   if (!stopWaterfallOnTx) { ... draw the row ... }
+    // local_mox is this receiver transmitting: m_moxOverlay, which
+    // MoxDisplayController sets on the transmitting pan for a local radio
+    // (MoxController::moxStateChanged) and for a Core (txState / transmitting)
+    // alike. It used to read the peak hold's transmit flag, which nothing set.
+    if (m_wfStopOnTx && (m_moxOverlay || m_txActiveForTest)) {
         return;
     }
 
