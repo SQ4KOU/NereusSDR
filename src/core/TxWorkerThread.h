@@ -10,6 +10,10 @@
 // =================================================================
 //
 // Modification history (NereusSDR):
+//   2026-09-28 - RADE end-of-over callsigns by J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code: radeAudioDrained,
+//                 armRadeAudioDrainedNotice and clearRadeAudio, so the
+//                 end-of-over tail knows when its audio has gone out.
 //   2026-09-22 — R-R3-36 prerequisite by J.J. Boyd (KG4VCF), AI-assisted
 //                 via OpenAI Codex. Worker source routing now follows PC-mic
 //                 selection intent and fails silent when capture is unavailable.
@@ -212,6 +216,11 @@ signals:
     /// thread boundary without holding any audio-thread lock.
     void radeMicBlockReady(const QByteArray& speech16k);
 
+    /// RADE end-of-over callsigns: the RADE audio queued before
+    /// armRadeAudioDrainedNotice() has all gone through the TX chain.
+    /// Emitted once per arming, from this worker's thread.
+    void radeAudioDrained();
+
     /// Phase 3F Sub-Epic J Task 9: internal anti-VOX handoff.  Carries an
     /// OWNED copy of one mixed anti-VOX reference block from
     /// onAntiVoxBlockReady (which runs on the DSP thread) to
@@ -254,6 +263,16 @@ public slots:
     // worker thread differs). Invoked via QMetaObject::invokeMethod
     // with Qt::QueuedConnection from the wireRadeChannel lambda.
     void setRadeAudioBlock(const QByteArray& audio48k);
+
+    // ── RADE end-of-over callsigns ──────────────────────────────────────
+    //
+    // armRadeAudioDrainedNotice: queued behind the end-of-over frame's
+    // setRadeAudioBlock, so radeAudioDrained fires once the dispatch has
+    // taken the last of it (at once when nothing is queued).
+    // clearRadeAudio: drops the queued RADE audio and any armed notice (a
+    // stop, or a new key, during the tail).
+    void armRadeAudioDrainedNotice();
+    void clearRadeAudio();
 
     // ── Phase 3R K-bench: RADE pre-encoder mic processing config ────────
     //
@@ -417,6 +436,9 @@ private:
     // every ~25 ms during RADE TX, contention is negligible).
     QMutex      m_radeAudioOverrideMutex;
     QByteArray  m_radeAudioOverride;
+    // RADE end-of-over callsigns: radeAudioDrained is owed once
+    // m_radeAudioOverride empties (under m_radeAudioOverrideMutex).
+    bool        m_radeDrainNoticeArmed{false};
 
     // Phase 3R K-bench: RADE pre-encoder mic processing state.
     // Mic gain dB is read live from TransmitModel via setRadeMicGainDb;

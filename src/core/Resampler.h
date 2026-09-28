@@ -29,6 +29,10 @@
 //                 Replaces the 17-line I1 stub. Namespace renamed
 //                 AetherSDR -> NereusSDR; otherwise byte-for-byte.
 //                 AI tooling: Anthropic Claude Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  RADE end-of-over callsigns:
+//                 latencyInputSamples(), so a caller can push its last
+//                 samples out (r8brain getInLenBeforeOutPos(0)).
+//                 NereusSDR-original. AI tooling: Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -78,6 +82,11 @@ public:
 
     // Convenience: stereo float32 -> downmix to mono -> resample -> duplicate to stereo float32
     QByteArray processStereoToStereo(const float* stereoIn, int numStereoFrames);
+
+    // NereusSDR: the input samples this resampler holds back before its
+    // first output sample (r8brain getInLenBeforeOutPos(0)). Pushing this
+    // many zeros after a signal brings all of the signal out.
+    int latencyInputSamples() const;
 
     double srcRate() const { return m_srcRate; }
     double dstRate() const { return m_dstRate; }

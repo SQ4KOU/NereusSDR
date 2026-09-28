@@ -212,6 +212,13 @@ constexpr const char* kDummyModelSentinel = "dummy";
 // oversized inputs into ≤ kRadeResamplerMaxBlock pieces.
 constexpr int kRadeResamplerMaxBlock = 16384;
 
+// From freedv-backend src/pipeline/RADETransmitStep.cpp:65-69 [@f02e7e9]
+// Additional silence added at the end of the EOO block to ensure that it actually gets
+// transmitted out over the air. This was determined experimentally using the FlexRadio
+// waveform and OTA testing to be 200ms. Other radios (especially ones directly connected
+// to a PC) may not need as long.
+constexpr int NUM_SAMPLES_SILENCE = 200 * RADE_MODEM_SAMPLE_RATE / 1000;
+
 }  // namespace
 
 // From AetherSDR src/core/RADEEngine.cpp:18-25 [@0cd4559]
@@ -222,7 +229,12 @@ constexpr int kRadeResamplerMaxBlock = 16384;
 //   their destructors.
 RadeChannel::RadeChannel(QObject* parent)
     : QObject(parent)
+    , m_textChannel(std::make_unique<RadeText>())
 {
+    // RADE end-of-over callsigns: FreeDV's end-of-over frame carries a
+    // callsign and no grid square.
+    connect(m_textChannel.get(), &RadeText::textDecoded, this,
+            [this](const QString& callsign) { emit rxTextDecoded(callsign, QString()); });
 }
 
 RadeChannel::~RadeChannel()
@@ -335,6 +347,7 @@ bool RadeChannel::start(const QString& modelPath)
     m_synced = false;
     m_radeRxCallCount = 0;
     m_radeTxCallCount = 0;
+    m_endOfOverQueued = false;
 
     // From AetherSDR src/core/RADEEngine.cpp:68-72 [@0cd4559]
     const int n_features = rade_n_features_in_out(m_rade);
@@ -390,6 +403,7 @@ void RadeChannel::stop()
     m_farganWarmedUp = false;
     m_radeRxCallCount = 0;
     m_radeTxCallCount = 0;
+    m_endOfOverQueued = false;
 
     qCInfo(lcRade) << "RadeChannel: stopped";
 }
@@ -563,10 +577,12 @@ void RadeChannel::processIq(const QByteArray& iqSamples)
         // Remove consumed samples.
         m_rxAccum.remove(0, nin * sizeof(RADE_COMP));
 
-        // EOO (end-of-over) handling lands at I4 with the embedded
-        // text channel. For I2 we drop the EOO frame; AetherSDR
-        // does likewise.
+        // From freedv-backend src/pipeline/RADEReceiveStep.cpp:233-242
+        // [@f02e7e9]: an EOO frame carries no speech features; its data
+        // goes to the text channel (rade_text_rx there, RadeText here).
         if (has_eoo) {
+            // Handle RX of bits from EOO.  [original inline comment from RADEReceiveStep.cpp:238]
+            m_textChannel->processRxEooBits(eoo_out.data(), n_eoo_bits);
             nin = rade_nin(m_rade);
             continue;
         }
@@ -717,6 +733,12 @@ void RadeChannel::txEncode(const QByteArray& speechSamples)
     if (speechSamples.isEmpty()) {
         return;
     }
+    // RADE end-of-over callsigns: once the end-of-over frame is queued the
+    // over is ending; FreeDV takes no more microphone audio then
+    // (freedv-gui src/main.cpp:3986 [@a4ae053], `if (!endingTx...)`).
+    if (m_endOfOverQueued) {
+        return;
+    }
 
     // Step 1: append the int16 mono 16 kHz input straight into the
     // TX accumulator. NereusSDR divergence vs AetherSDR (which
@@ -804,7 +826,74 @@ void RadeChannel::resetTx()
     m_txAccum.clear();
     m_txFeatAccum.clear();
     m_radeTxCallCount = 0;
+    m_endOfOverQueued = false;  // RADE end-of-over callsigns: a new over
     ++m_resetTxCountForTest;  // R-R3-49 (parity Task 3): test seam only
+}
+
+int RadeChannel::endOfOverSamples8k() const
+{
+    if (!m_active || !m_rade) {
+        return 0;
+    }
+    return rade_n_tx_eoo_out(m_rade) + NUM_SAMPLES_SILENCE
+           + (m_up8to24 ? m_up8to24->latencyInputSamples() : 0);
+}
+
+// From freedv-backend src/pipeline/RADETransmitStep.cpp:248-271 [@f02e7e9]
+// (RADETransmitStep::restartVocoder), with the callsign set first as
+// freedv-gui src/freedv_interface.cpp:697-711 [@a4ae053] (setReliableText)
+// does:
+//   // Queues up EOO for return on the next call to this pipeline step.
+//   rade_tx_eoo(dv_, eooOut_);
+//   memset(eooOutShort_, 0, sizeof(short) * (numEOOSamples + NUM_SAMPLES_SILENCE));
+//   for (int index = 0; index < numEOOSamples; index++)
+//       eooOutShort_[index] = eooOut_[index].real * RADE_SCALING_FACTOR;
+//   outputSampleFifo_.write(eooOutShort_, numEOOSamples + NUM_SAMPLES_SILENCE)
+// NereusSDR follows txEncode's path for the samples (the real leg as
+// float, 8 -> 24 kHz stereo, txModemReady) instead of scaling to int16 for
+// a sound card.
+bool RadeChannel::queueEndOfOver(const QString& callsign)
+{
+    if (!m_active || !m_rade || !m_up8to24) {
+        return false;
+    }
+
+    m_textChannel->setOurCallsign(callsign);
+    m_textChannel->pushTxCallsign(m_rade);
+
+    const int numEOOSamples = rade_n_tx_eoo_out(m_rade);
+    if (numEOOSamples <= 0) {
+        return false;
+    }
+    std::vector<RADE_COMP> eooOut(static_cast<size_t>(numEOOSamples));
+    rade_tx_eoo(m_rade, eooOut.data());
+
+    // NereusSDR: the 8 -> 24 kHz resampler holds back its latency (about
+    // 300 ms of input), more than the 200 ms of silence, so that many more
+    // zeros follow to bring the EOO and all of the silence out. FreeDV has
+    // no resampler at this point.
+    const int total = numEOOSamples + NUM_SAMPLES_SILENCE + m_up8to24->latencyInputSamples();
+    std::vector<float> modem8k(static_cast<size_t>(total), 0.0f);
+    for (int index = 0; index < numEOOSamples; index++) {
+        modem8k[static_cast<size_t>(index)] = eooOut[static_cast<size_t>(index)].real;
+    }
+
+    // Nothing more is encoded in this over (txEncode checks this flag).
+    m_endOfOverQueued = true;
+
+    QByteArray stereo24k;
+    for (int offset = 0; offset < total; offset += kRadeResamplerMaxBlock) {
+        const int chunk = std::min(kRadeResamplerMaxBlock, total - offset);
+        stereo24k.append(m_up8to24->processMonoToStereo(modem8k.data() + offset, chunk));
+    }
+    qCInfo(lcRade) << "RadeChannel: end-of-over frame queued"
+                   << "eooSamples=" << numEOOSamples
+                   << "silenceSamples=" << NUM_SAMPLES_SILENCE
+                   << "callsign=" << (callsign.isEmpty() ? QStringLiteral("(none)") : callsign);
+    if (!stereo24k.isEmpty()) {
+        emit txModemReady(stereo24k);
+    }
+    return true;
 }
 
 }  // namespace NereusSDR

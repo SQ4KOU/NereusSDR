@@ -278,6 +278,29 @@ void TxWorkerThread::setRadeAudioBlock(const QByteArray& audio48k)
     }
 }
 
+void TxWorkerThread::armRadeAudioDrainedNotice()
+{
+    bool drainedNow = false;
+    {
+        QMutexLocker lk(&m_radeAudioOverrideMutex);
+        if (m_radeAudioOverride.isEmpty()) {
+            drainedNow = true;
+        } else {
+            m_radeDrainNoticeArmed = true;
+        }
+    }
+    if (drainedNow) {
+        emit radeAudioDrained();
+    }
+}
+
+void TxWorkerThread::clearRadeAudio()
+{
+    QMutexLocker lk(&m_radeAudioOverrideMutex);
+    m_radeAudioOverride.clear();
+    m_radeDrainNoticeArmed = false;
+}
+
 void TxWorkerThread::startPump()
 {
     if (isRunning()) {
@@ -608,6 +631,7 @@ void TxWorkerThread::dispatchOneBlock()
     //
     // No early-return-with-log scaffolding; the pump runs every tick.
     const TxPath path = m_currentTxPath.load(std::memory_order_acquire);
+    bool radeDrained = false;   // RADE end-of-over callsigns (see below)
     if (path == TxPath::Rade) {
         // ── Phase 3R K-bench (source-first reframe) ──────────────────────
         //
@@ -867,6 +891,12 @@ void TxWorkerThread::dispatchOneBlock()
                 m_radeAudioOverride.remove(
                     0, take * static_cast<int>(sizeof(float)));
             }
+            // RADE end-of-over callsigns: the tail's audio is in this
+            // block; it goes through the TX chain below.
+            radeDrained = m_radeDrainNoticeArmed && m_radeAudioOverride.isEmpty();
+            if (radeDrained) {
+                m_radeDrainNoticeArmed = false;
+            }
         }
         // Fall through to the WDSP TXA chain below.
     }
@@ -976,6 +1006,12 @@ void TxWorkerThread::dispatchOneBlock()
     // TxChannel::driveOneTxBlockFromInterleaved internally handles
     // fexchange0 + interleave-to-float + sendTxIq + sip1OutputReady emit.
     m_txChannel->driveOneTxBlockFromInterleaved(m_in.data());
+
+    // RADE end-of-over callsigns: the last of the tail's audio went into
+    // the TX chain in this block.
+    if (radeDrained) {
+        emit radeAudioDrained();
+    }
 }
 
 #ifdef NEREUS_BUILD_TESTS

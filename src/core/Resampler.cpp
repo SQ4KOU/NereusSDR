@@ -40,6 +40,11 @@ Resampler::Resampler(double srcRate, double dstRate, int maxBlockSamples)
 // From AetherSDR src/core/Resampler.cpp:15 [@0cd4559]
 Resampler::~Resampler() = default;
 
+int Resampler::latencyInputSamples() const
+{
+    return m_resampler->getInLenBeforeOutPos(0);
+}
+
 // From AetherSDR src/core/Resampler.cpp:17-38 [@0cd4559]
 QByteArray Resampler::process(const float* in, int numSamples)
 {

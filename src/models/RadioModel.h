@@ -9,6 +9,11 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-28 - RADE end-of-over callsigns: endOfOverTailActive /
+//                 endOfOverTailChanged, startRadeEndOfOverTail and
+//                 onEndOfOverTailChanged (FreeDV's end-of-over frame after
+//                 an operator's release). J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
@@ -2530,6 +2535,16 @@ public:
     // holds the Core's value as it last heard it.
     bool isTransmitting() const;
 
+    // RADE end-of-over callsigns: the radio is sending FreeDV's end-of-over
+    // frame after an operator's release (MoxController's end-of-over tail).
+    // The Core's value; TransmitState sends it as txEnding.
+    bool endOfOverTailActive() const;
+    // Whether an unkey now may send the RADE end-of-over tail: the Core's
+    // own release (not after one of its stops, the RF gate still open), not
+    // TUNE or two-tone, and the TX-bound slice in RADE. The tail also needs
+    // the slice's running RADE channel and the TX worker.
+    bool radeEndOfOverTailPermitted() const;
+
     // R-R3-49 (parity Task 1): the Core's one on-the-air refusal. True,
     // with "The radio is on the air. Try again when it stops." in `reason`,
     // while the radio is keyed (MoxController from any source, through its
@@ -4802,6 +4817,8 @@ signals:
     void rfKitEnabledChanged(bool enabled);
     // R-R3-49: isTransmitting() changed.
     void transmittingChanged(bool transmitting);
+    // RADE end-of-over callsigns: endOfOverTailActive() changed.
+    void endOfOverTailChanged(bool active);
     // R-R3-49 (parity Task 1): isCoreOnAir() changed.
     void coreOnAirChanged(bool onAir);
     // R-R3-32 (parity Task 6): paReadings() changed.
@@ -5257,6 +5274,15 @@ private slots:
 
 private:
     void updateAutoAgc();
+
+    // RADE end-of-over callsigns (MoxController::setEndOfOverTail). Starts
+    // the tail when this release is an operator's and the transmitter runs
+    // RADE: queues the end-of-over frame, carrying the station callsign
+    // FreeDV Reporter uses, on the TX-bound slice's RADE channel and arms
+    // the TX worker's drained notice. False (no tail) otherwise.
+    bool startRadeEndOfOverTail();
+    // The tail ended (sent, timed out, stopped or cut by a new key).
+    void onEndOfOverTailChanged(bool active);
 
     // R-R3-49 / R-R3-47: false, with the reason, when a window may not
     // switch the Core's Tuner Genius now (not the Core's tuner, the radio

@@ -6304,6 +6304,16 @@ nereus_add_test(tst_rade_text)
 # itself (scripts/gen-rade-text-vectors.sh).
 nereus_add_test(tst_rade_text_codec)
 
+# tst_rade_end_of_over_tail: the transmit safety boundary around the RADE
+# end-of-over tail. MoxController sends the tail only on an operator's
+# release (never on a key, never under TX inhibit, the PA trip or
+# receive-only), keeps the hardware keyed and MOX off while it runs, bounds
+# it at 1 s, ends it on a new key or a stop; RadioModel permits it only for
+# a RADE release, reports it as txEnding, and stopAllTx stops a running one
+# at once.
+nereus_add_test(tst_rade_end_of_over_tail)
+target_compile_definitions(tst_rade_end_of_over_tail PRIVATE NEREUS_BUILD_TESTS)
+
 # ── Phase 3R Task I5: RadeChannel -> RadioModel slot graph wiring ─────────
 # Pins the six contracts RadioModel::wireRadeChannel(sliceId, channel, slice)
 # must satisfy when Phase J creates a RadeChannel per slice:

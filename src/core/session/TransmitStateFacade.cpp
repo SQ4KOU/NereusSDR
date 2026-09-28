@@ -11,6 +11,9 @@
 //               (KG4VCF), iPhone app plan Task 39 (D14, R-IOS-13,
 //               R-IOS-21), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-28: RADE end-of-over callsigns: txEnding follows
+//               RadioModel::endOfOverTailActive. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 //   2026-09-26: Transmit group fix wave: I4 txState names the holder
 //               (holder fields, keyedForSeconds, txStateVersion 2); M3
 //               one lost-link sentence. J.J. Boyd (KG4VCF), with AI-
@@ -117,6 +120,8 @@ void TransmitState::bind(RadioModel* model)
 
     connect(model, &RadioModel::transmittingChanged, this, &TransmitState::onTransmittingChanged);
     connect(model, &RadioModel::keyedByChanged, this, &TransmitState::refreshState);
+    // RADE end-of-over callsigns: txEnding follows the Core's tail.
+    connect(model, &RadioModel::endOfOverTailChanged, this, &TransmitState::refreshState);
     connect(&model->transmitModel(), &TransmitModel::tuneChanged, this,
             &TransmitState::refreshState);
     connect(&model->transmitModel(), &TransmitModel::twoToneActiveChanged, this,
@@ -369,13 +374,14 @@ void TransmitState::refreshState()
     const QString kind = keyed ? keyedBy.deviceKind : QString();
     const QString trigger = keyed ? QString::fromLatin1(keyedBy.trigger) : QString();
     const qint64 since = keyed ? m_keyedSinceMs : 0;
+    const bool ending = m_model->endOfOverTailActive();
     if (keyed && !keyedBy.isEmpty()) {
         m_lastKeyedByName = keyedBy.deviceName;
         m_lastKeyedByKind = keyedBy.deviceKind;
     }
     if (keyed == m_keyed && tuning == m_tuning && twoTone == m_twoTone
         && txSliceId == m_txSliceId && name == m_keyedByName && kind == m_keyedByKind
-        && trigger == m_keyedTrigger && since == m_keyedSinceMs) {
+        && trigger == m_keyedTrigger && since == m_keyedSinceMs && ending == m_txEnding) {
         return;
     }
     m_keyed = keyed;
@@ -386,6 +392,7 @@ void TransmitState::refreshState()
     m_keyedByKind = kind;
     m_keyedTrigger = trigger;
     m_keyedSinceMs = since;
+    m_txEnding = ending;
     emit stateChanged();
 }
 

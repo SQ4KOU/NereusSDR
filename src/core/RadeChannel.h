@@ -154,6 +154,18 @@
 //                 resetTxCountForTest() so a test sees a window's Reset
 //                 vocoder reach the Core's channel. NereusSDR-original.
 //                 AI tooling: Anthropic Claude Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  RADE end-of-over callsigns. RX: an
+//                 EOO frame's data goes to the RadeText channel and a
+//                 decoded callsign leaves as rxTextDecoded, as
+//                 freedv-backend src/pipeline/RADEReceiveStep.cpp:231-242
+//                 [@f02e7e9] hands it to rade_text_rx. TX: queueEndOfOver
+//                 sends the operator's callsign in the EOO frame followed
+//                 by 200 ms of silence, from RADETransmitStep::
+//                 restartVocoder (RADETransmitStep.cpp:248-271) and its
+//                 NUM_SAMPLES_SILENCE (:65-69) [@f02e7e9], then the
+//                 resampler's latency in zeros so all of it leaves;
+//                 nothing more is encoded until resetTx(). AI tooling:
+//                 Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -251,6 +263,23 @@ public:
     // Test seam (R-R3-49, parity Task 3). How many times resetTx() ran.
     int resetTxCountForTest() const { return m_resetTxCountForTest; }
 
+    // RADE end-of-over callsigns. Queue the end-of-over frame, carrying
+    // `callsign` in FreeDV's format, and 200 ms of silence behind the modem
+    // output already sent: emits txModemReady once with both. After it the
+    // channel encodes no more speech until resetTx(), as FreeDV stops
+    // taking microphone audio once the over is ending. Returns false (and
+    // sends nothing) when the channel is not running.
+    bool queueEndOfOver(const QString& callsign);
+    bool endOfOverQueued() const { return m_endOfOverQueued; }
+
+    // The samples queueEndOfOver adds at 8 kHz: rade_n_tx_eoo_out(), the
+    // 200 ms of silence, and the zeros that push both out of the 8 -> 24 kHz
+    // resampler; 0 when not running.
+    int endOfOverSamples8k() const;
+
+    // The callsign channel (test seam and RadioModel's view).
+    RadeText* textChannel() const { return m_textChannel.get(); }
+
 public slots:
     // Sideband selection hook.  Set true for RADE_U (upper) and false
     // for RADE_L (lower).  Stored on the channel; not yet consumed by
@@ -290,8 +319,8 @@ signals:
     // (used by the panadapter overlay to draw a sync mark).
     void freqOffsetChanged(float hz);
 
-    // Embedded text-channel decode (callsign + Maidenhead grid). I4
-    // wires this up to the rade_text aux channel.
+    // Embedded text-channel decode (callsign + Maidenhead grid). FreeDV's
+    // end-of-over frame carries a callsign only, so grid is empty.
     void rxTextDecoded(const QString& callsign, const QString& grid);
 
 private:
@@ -334,6 +363,10 @@ private:
     int                  m_radeTxCallCount{0};
     int                  m_resetTxCountForTest{0};  // R-R3-49 parity Task 3
 
+    // RADE end-of-over callsigns: the EOO frame is queued; txEncode takes
+    // no more speech until resetTx().
+    bool                 m_endOfOverQueued{false};
+
     // Resampler chain. The AetherSDR client owns four resamplers
     // (24kHz<->8kHz for the modem leg and 24kHz<->16kHz for the
     // LPCNet/FARGAN leg). NereusSDR's TX-side input is 16 kHz mono
@@ -367,8 +400,8 @@ private:
     QByteArray m_rxFeatAccum;
     QByteArray m_rxOutAccum;
 
-    // Embedded aux text channel. I4 wires this up to rade_text_set_tx /
-    // rade_text_get_data and emits rxTextDecoded on a complete payload.
+    // The end-of-over callsign channel (FreeDV's format). Built in the
+    // constructor; its textDecoded leaves as rxTextDecoded(callsign, "").
     std::unique_ptr<RadeText> m_textChannel;
 };
 

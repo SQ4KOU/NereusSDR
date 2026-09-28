@@ -108,6 +108,11 @@
 //                 (RX vs VAC at cmaster.cs:912-943 [v2.10.3.13]); see commit
 //                 message for rationale.  J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-28 : RADE end-of-over callsigns: an operator's release sends
+//                 the end-of-over tail before the TX→RX walk's phase 1
+//                 (setEndOfOverTail, beginTxToRxTeardown split out of
+//                 setMox). NereusSDR-original. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 //   2026-09-25 : Task 33 (R-IOS-03): the TX→RX walk follows Thetis's
 //                 unkey (console.cs:29651-29685 [v2.10.3.15]): txDrainRequested
 //                 first, a bounded wait for the drain, mox_delay, then
@@ -215,6 +220,7 @@ MoxController::MoxController(QObject* parent)
     m_pttOutDelayTimer.setSingleShot(true);
     m_breakInDelayTimer.setSingleShot(true);
     m_txDrainTimeoutTimer.setSingleShot(true);
+    m_endOfOverTailTimer.setSingleShot(true);
 
     // Set default intervals from Thetis constants.
     // From Thetis console.cs:19687 — private int rf_delay = 30 [v2.10.3.13]
@@ -231,6 +237,7 @@ MoxController::MoxController(QObject* parent)
     m_breakInDelayTimer.setInterval(kBreakInDelayMs);
     // Task 33: WDSP SetChannelState's 100 x Sleep(1) drain bound.
     m_txDrainTimeoutTimer.setInterval(kTxDrainTimeoutMs);
+    m_endOfOverTailTimer.setInterval(kEndOfOverTailMaxMs);
     m_txDrainTimeoutTimer.setTimerType(Qt::PreciseTimer);
 
     // Wire timer timeouts to their advancement slots.
@@ -241,6 +248,7 @@ MoxController::MoxController(QObject* parent)
     connect(&m_pttOutDelayTimer,  &QTimer::timeout, this, &MoxController::onPttOutElapsed);
     connect(&m_breakInDelayTimer, &QTimer::timeout, this, &MoxController::onBreakInDelayElapsed);
     connect(&m_txDrainTimeoutTimer, &QTimer::timeout, this, &MoxController::onTxDrainTimedOut);
+    connect(&m_endOfOverTailTimer, &QTimer::timeout, this, &MoxController::onEndOfOverTailTimedOut);
 }
 
 MoxController::~MoxController() = default;
@@ -267,6 +275,67 @@ void MoxController::setTimerIntervals(int rfMs, int moxMs, int spaceMs,
 void MoxController::setTxDrainTimeoutMsForTest(int ms)
 {
     m_txDrainTimeoutTimer.setInterval(ms);
+}
+
+void MoxController::setEndOfOverTailMaxMsForTest(int ms)
+{
+    m_endOfOverTailTimer.setInterval(ms);
+}
+
+// ---------------------------------------------------------------------------
+// RADE end-of-over callsigns: the end-of-over tail (NereusSDR-original).
+//
+// FreeDV sends its end-of-over frame after the operator lets go of PTT and
+// before it drops PTT: the release sets endingTx, the TX thread queues the
+// EOO and 200 ms of silence once the remaining audio is through, and PTT
+// drops once that has been queued and played out.
+//   From freedv-gui src/ongui.cpp:1479-1523 [@a4ae053] (the wait on
+//   g_eoo_enqueued, then on the output FIFO, before PTT off) and
+//   src/pipeline/TxRxThread.cpp:808-847 [@a4ae053] (restartTxVocoder once
+//   per ending, then the step's queued output).
+// Here the release commits MOX off at once (every keying rule sees the
+// release), keeps the hardware keyed and the TX channel running while the
+// tail goes out, then walks on exactly as an unkey without a tail.
+// ---------------------------------------------------------------------------
+void MoxController::setEndOfOverTail(EndOfOverTailFn fn)
+{
+    m_endOfOverTail = std::move(fn);
+}
+
+void MoxController::onEndOfOverTailDone()
+{
+    if (!m_waitingForEndOfOverTail) {
+        return;   // a tail this walk is not waiting for
+    }
+    finishEndOfOverTail();
+}
+
+void MoxController::abortEndOfOverTail()
+{
+    if (!m_waitingForEndOfOverTail) {
+        return;
+    }
+    qCInfo(lcDsp) << "MoxController: transmit stopped; the end-of-over tail is not sent";
+    finishEndOfOverTail();
+}
+
+void MoxController::onEndOfOverTailTimedOut()
+{
+    if (!m_waitingForEndOfOverTail) {
+        return;
+    }
+    qCInfo(lcDsp) << "MoxController: the end-of-over tail did not finish within"
+                  << m_endOfOverTailTimer.interval()
+                  << "ms; releasing the radio without the rest of it";
+    finishEndOfOverTail();
+}
+
+void MoxController::finishEndOfOverTail()
+{
+    m_waitingForEndOfOverTail = false;
+    m_endOfOverTailTimer.stop();
+    emit endOfOverTailChanged(false);
+    beginTxToRxTeardown();
 }
 
 // ---------------------------------------------------------------------------
@@ -1158,25 +1227,43 @@ void MoxController::setMox(bool on)
         //
         // spaceDelay is skipped when kSpaceDelayMs == 0 (matches the
         // Thetis `if (space_mox_delay > 0)` guard).
-        emit txAboutToEnd();                            // TX→RX phase 1 of 5
-        advanceState(MoxState::TxToRxInFlight);
-        const bool awaitDrain = m_awaitTxDrain;
-        if (awaitDrain) {
-            // Thetis's SetChannelState(tx, 0, 1) returns before mox_delay
-            // starts; the drain runs on the transmit lane here, so wait for
-            // it, bounded as WDSP bounds it. Armed before the request so a
-            // drain that reports at once (no lane) is not missed.
-            m_waitingForTxDrain = true;
-            m_txDrainTimeoutTimer.start();
+        //
+        // RADE end-of-over callsigns: an operator's release first sends the
+        // end-of-over tail (at most kEndOfOverTailMaxMs), with the hardware
+        // still keyed, and phase 1 follows it. Never under TX inhibit, the
+        // PA trip or receive-only: those unkeys stop transmit at once.
+        if (m_endOfOverTail && !transmitBlocked() && m_endOfOverTail()) {
+            advanceState(MoxState::TxToRxInFlight);
+            m_waitingForEndOfOverTail = true;
+            m_endOfOverTailTimer.start();
+            emit endOfOverTailChanged(true);
+            return;
         }
-        emit txDrainRequested();                        // TX→RX phase 2 of 5
-        if (!awaitDrain) {
-            m_keyUpDelayTimer.start();
-        }
+        beginTxToRxTeardown();
     }
     // NOTE: moxStateChanged is NOT emitted here.  It is emitted at the END
     // of the timer walk (in onRfDelayElapsed for TX, onPttOutElapsed for RX)
     // so subscribers see "MOX fully engaged" / "MOX fully released".
+}
+
+// The TX→RX walk from phase 1 on (Task 33's order; see setMox above).
+void MoxController::beginTxToRxTeardown()
+{
+    emit txAboutToEnd();                            // TX→RX phase 1 of 5
+    advanceState(MoxState::TxToRxInFlight);
+    const bool awaitDrain = m_awaitTxDrain;
+    if (awaitDrain) {
+        // Thetis's SetChannelState(tx, 0, 1) returns before mox_delay
+        // starts; the drain runs on the transmit lane here, so wait for
+        // it, bounded as WDSP bounds it. Armed before the request so a
+        // drain that reports at once (no lane) is not missed.
+        m_waitingForTxDrain = true;
+        m_txDrainTimeoutTimer.start();
+    }
+    emit txDrainRequested();                        // TX→RX phase 2 of 5
+    if (!awaitDrain) {
+        m_keyUpDelayTimer.start();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1633,6 +1720,10 @@ void MoxController::setTxInhibited(bool on)
     if (on && m_mox) {
         setMox(false);
     }
+    // RADE end-of-over callsigns: a block ends a running tail at once too.
+    if (on) {
+        abortEndOfOverTail();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1673,6 +1764,10 @@ void MoxController::setPaTripped(bool on)
     }
     if (on && m_mox) {
         setMox(false);
+    }
+    // RADE end-of-over callsigns: a block ends a running tail at once too.
+    if (on) {
+        abortEndOfOverTail();
     }
 }
 
@@ -1727,6 +1822,10 @@ void MoxController::setRxOnly(bool on, const QString& reason)
     }
     if (on && m_mox) {
         setMox(false);
+    }
+    // RADE end-of-over callsigns: a block ends a running tail at once too.
+    if (on) {
+        abortEndOfOverTail();
     }
 }
 
@@ -1825,6 +1924,12 @@ void MoxController::stopAllTimers()
     m_pttOutDelayTimer.stop();
     m_txDrainTimeoutTimer.stop();
     m_waitingForTxDrain = false;
+    // RADE end-of-over callsigns: a new key during a tail ends the tail.
+    m_endOfOverTailTimer.stop();
+    if (m_waitingForEndOfOverTail) {
+        m_waitingForEndOfOverTail = false;
+        emit endOfOverTailChanged(false);
+    }
     // m_breakInDelayTimer is never started in 3M-1a so stop() is a no-op,
     // but include it for completeness so future 3M-2 CW code gets the guard
     // for free.
