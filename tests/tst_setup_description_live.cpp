@@ -22,6 +22,41 @@ using namespace NereusSDR;
 class SetupDescriptionLiveTest : public QObject {
     Q_OBJECT
 private slots:
+    void pairedV10PublishesWaterfallOverlaysAndKeepsV9Projection()
+    {
+        Core core;
+        Device current(QStringLiteral("Waterfall overlays V10 iPhone"), QStringLiteral("phone"));
+        Device older(QStringLiteral("Waterfall overlays V9 iPhone"), QStringLiteral("phone"));
+        core.pair(current);
+        core.pair(older);
+        QHash<QByteArray, int> v10Features = kHolder;
+        v10Features.insert("setupDescription", 10);
+        auto* v10 = core.signIn(current, v10Features);
+        QVERIFY(admitted(v10));
+        QCOMPARE(capability(v10->received(), QStringLiteral("setupDescriptionVersion")),
+                 std::optional<qint64>(10));
+        const QJsonObject display = QJsonDocument::fromJson(latest(v10->received(),
+            QStringLiteral("setup"), QStringLiteral("display")).toString().toUtf8()).object();
+        QCOMPARE(display.value("version"), QJsonValue(10));
+        const QJsonArray overlays = display.value("pages").toArray().at(1).toObject()
+            .value("sections").toArray().at(1).toObject().value("controls").toArray();
+        QCOMPARE(overlays.size(), 4);
+        for (const QJsonValue& raw : overlays) {
+            QVERIFY(SetupDescriptionService::validateDisplayPhoneBinding(raw.toObject()));
+        }
+        QHash<QByteArray, int> v9Features = kHolder;
+        v9Features.insert("setupDescription", 9);
+        auto* v9 = core.signIn(older, v9Features);
+        QVERIFY(admitted(v9));
+        QCOMPARE(capability(v9->received(), QStringLiteral("setupDescriptionVersion")),
+                 std::optional<qint64>(9));
+        const QJsonObject old = QJsonDocument::fromJson(latest(v9->received(),
+            QStringLiteral("setup"), QStringLiteral("display")).toString().toUtf8()).object();
+        QCOMPARE(old.value("version"), QJsonValue(9));
+        QCOMPARE(old.value("pages").toArray().at(1).toObject()
+                     .value("sections").toArray().size(), 1);
+    }
+
     void pairedV9PublishesLocalRendererDispatchWithoutChangingV8()
     {
         Core core;

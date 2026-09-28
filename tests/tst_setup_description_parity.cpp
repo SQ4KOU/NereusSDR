@@ -211,6 +211,8 @@ private slots:
             "display.waterfallDefaults.detector", "display.waterfallDefaults.averaging",
             "display.waterfallDefaults.averageTime", "display.waterfallDefaults.updatePeriod",
             "display.waterfallDefaults.stopOnTx", "display.waterfallDefaults.opacity",
+            "display.waterfallDefaults.showRxFilter", "display.waterfallDefaults.showTxFilter",
+            "display.waterfallDefaults.showRxZeroLine", "display.waterfallDefaults.showTxZeroLine",
             "display.multimeter.pollingDelay", "display.txDisplay.fftSize",
             "display.txDisplay.window", "display.txDisplay.panDetector",
             "display.txDisplay.panAveraging", "display.txDisplay.panAvTime",
@@ -228,6 +230,7 @@ private slots:
             ControlRanges::kDisplayWaterfallAveragingDefault,
             ControlRanges::kDisplayWaterfallAvgTimeDefaultMs,
             30, false, 100,
+            false, true, false, false,
             100, TxAnalyzer::kDefaultFftSize, TxAnalyzer::kDefaultWindowType,
             TxAnalyzer::kDefaultPanDetector, TxAnalyzer::kDefaultPanAveraging,
             TxAnalyzer::kDefaultPanAvTimeMs, TxAnalyzer::kDefaultPanNormalize,
@@ -240,6 +243,8 @@ private slots:
                  QJsonValue("Rendering"));
         QCOMPARE(pages.at(1).toObject().value("sections").toArray().at(0).toObject().value("title"),
                  QJsonValue("Display"));
+        QCOMPARE(pages.at(1).toObject().value("sections").toArray().at(1)
+                     .toObject().value("title"), QJsonValue("Overlays"));
         QCOMPARE(pages.at(1).toObject().value("where"), QJsonValue("phone"));
         QCOMPARE(pages.at(2).toObject().value("sections").toArray().at(0).toObject().value("title"),
                  QJsonValue("Multimeter"));

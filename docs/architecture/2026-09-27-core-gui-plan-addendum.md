@@ -1795,13 +1795,20 @@ colours for the same signal.
   withdrawal and confirmation revalidate the same radio and session; existing
   authority, transmit and blocked-port restrictions remain. Root app/Core and
   ten explicitly rebuilt suites pass (76.76 s; load 62.62/36.75/23.26).
-  The V6 antenna table descriptions are still being implemented separately.
+  Signed 7102a610 includes the V6 antenna table descriptions and the
+  late-connection correction; they are no longer an unfinished Core table.
   Signed `2954472b` adds PA Current and DC Voltage readouts from the existing
   optional Core telemetry, with exact amps/supply-volts board projection and
   no fabricated zero for an absent field. They require Setup V5 and telemetry
   V4. Root app/Core and eleven explicitly rebuilt suites pass (55.01 s; load
-  8.03/15.18/18.17). Derived raw power/voltage readings are the next active
-  slice; temperature, overload presentation, peak/min and PA actions remain.
+  8.03/15.18/18.17). The later raw power/voltage work above is already
+  integrated. A refreshed source audit confirms eleven of thirteen physical
+  PA Values rows are described. Temperature and combined ADC overload remain,
+  plus profile/calibration/I/O contracts. Peak/min and their reset controls
+  are per-window presentation, not missing Core measurement/reset commands.
+  Report core-gui-pa-hardware-remaining-scout.md records the native overload
+  latch versus remote instantaneous discrepancy and actual phone parser/UI
+  limitations; publication alone still does not establish phone page parity.
 - Plan: Core Hardware Config/PA Setup description dependencies in the phone plan
   and remote-window Hardware/PA parity.
 
@@ -2129,6 +2136,24 @@ colours for the same signal.
   V1-V7 retain their exact 11/14-control projections and prior category
   versions. Root reviewed the implementation and rebuilt app/Core plus all
   five named Setup, catalogue and settings-scope suites: 5/5 pass (7.00 s).
+  Signed `70ede33f2`, accepted in trunk `47d16744`, adds the eight existing
+  Spectrum Rendering and Waterfall Display controls in Display V9, for 29
+  controls. V1-V8 retain their exact 11/14/21-control projections. Root
+  reviewed the actual changes and rebuilt app/Core plus all eleven affected
+  complete suites, passing in 109.71 seconds at load 10.52/11.60/11.54.
+  Evidence: core-gui-display-rendering-description-report.md and
+  core-gui-header-display-root-ctest.log. The four existing Waterfall Overlays
+  toggles are built in signed 982b8d29d and integrated at this checkpoint as
+  Display V10, with 33 controls and unchanged V1-V9 projections. Root reviewed
+  the actual diff, rebuilt app/Core and all three complete Setup suites plus
+  the station wording audit; all four passed at starting load
+  18.36/14.17/10.07. Native defaults and phone bindings are traced in
+  core-gui-display-next-contract-scout.md. Implementation and root evidence:
+  core-gui-display-waterfall-overlay-description-report.md and
+  core-gui-final-handoff-root-proof.json.
+  The phone's TX-filter overlay default differs from the desktop's actual
+  persisted-load default; its owner has been asked to align absent/default
+  behavior while preserving explicit user settings and check TX geometry.
   The phone renderer is still phone-owned work. Other local Display controls,
   reset/copy actions and remaining derived/contextual controls remain open.
   The phone owner confirmed that literal PascalCase binding names
@@ -2481,7 +2506,11 @@ colours for the same signal.
   tests, not physical RF or a claim of continuous keyed receive audio.
   Evidence: traversal-383984e5-matched-web-relay-deadline and
   traversal-383984e5-matched-direct-wss-deadline. The full generated Linux
-  aggregate graph still needs verification on the next signed snapshot.
+  aggregate graph is now verified in the actual generated ec28eeca Linux
+  build: both all_tests and tests_traversal include the matching helper.
+  The signed snapshot built app/Core and helper, then passed all 30 affected
+  suites in 191.75 seconds. Evidence:
+  core-gui-linux-ec28eeca-focused-build-and-test-graph-fixed.log.
 - Plan: complete R5 full-session Linux traversal verification.
 
 ### G-117: Desktop connection header does not identify the active route
@@ -2506,7 +2535,21 @@ colours for the same signal.
   current media-path snapshot and truthful tunnel endpoint metadata as well
   as the compact header/popup wiring. Do not infer a relayed connection from RV discovery or expose
   a tunnel's loopback shim as the internet peer. Clear stale path details on
-  reconnect and identify unavailable facts honestly.
+  reconnect and identify unavailable facts honestly. Core-only route
+  snapshots are signed in 717de0552, with the worker app/Core build and
+  seven affected full suites passing in 181.08 seconds. Root reviewed the
+  actual implementation and tests. Signed trunk merge 47d16744 accepts the
+  Core metadata together with Display V9 after an app/Core build and all
+  11 affected suites passed in 109.71 seconds at actual load. GUI wiring is
+  signed in 018f97399 and corrected in 9ec154d20 after independent Sol 6 high
+  review found muted/unavailable audio states were lost from the visible
+  header. The correction preserves typed audio status and the single-row
+  fit. Root reviewed the final changes and integrated them in signed
+  9a4971798 after rebuilding app/Core and all five affected complete suites,
+  passing in 77.03 seconds at load 4.48/5.25/6.79. Evidence:
+  core-gui-header-final-root-{proof.json,build.log,ctest.log}. Native popup
+  interaction remains unverified; offscreen tests cover keyboard activation,
+  current routes, stale clearing, width, mute and unavailable presentation.
 - Plan: remote-window connection visibility and R5 operator diagnostics.
 
 ### G-118: Slice ownership, takeover and dead-session release are unclear
@@ -2518,15 +2561,39 @@ colours for the same signal.
   retains slices for a 180-second reconnect grace period. The connected-device
   list is read-only. Remote Take is offered only when an add/retune is blocked;
   the hosting desktop bypasses that chooser entirely.
-- JJ's ruling: requested an explanation and discussion of creating, taking
-  and releasing slices. No new takeover/release interaction has been approved.
+- JJ's ruling: approved handing over the existing slice intact: "Yes, hand
+  over the existing slice (recommended)". Take control preserves letter,
+  color, frequency, mode and filter, tells the former controller it no longer
+  controls that slice, and leaves transmit control as a separate action.
+  JJ also approved "Yes, shared listening with one controller (recommended)":
+  another paired phone/desktop can choose Listen in, adjust its own volume
+  and mute, and must Take control before changing shared frequency, mode or
+  filter. JJ approved release: "Keep it for listeners; otherwise close it
+  (recommended)". Keep a released slice playing for remaining listeners and
+  available for Take control; with no users, close it and free resources,
+  including the last physical Core slice. This changes the old minimum-one
+  rule. JJ also approved "Keep listening after handoff (recommended)": the
+  former controller retains audio as a listener and sees the new controller.
+  JJ approved "Clear transmit selection on handoff (recommended)": an idle
+  slice handoff clears that slice's transmit selection, requiring the new
+  controller to select it explicitly. Taking an actually transmitting slice
+  is blocked until transmission stops. JJ approved "Release after three
+  minutes (recommended)": after the reconnect grace expires, remove the
+  absent client's control/listening claim, keep slices for other listeners
+  and make them available to control, or close them if nobody remains.
+  JJ said the bottom area seems good. Its relationship to flags, RX/TX
+  applets and multiple pans remains under discussion. The proposed bottom RX
+  badge opens an all-slice chooser, separate from TX selection. A focused
+  existing-style mockup is prepared as nereus-slice-chooser-review.html;
+  its Listen, Take control and Release interactions and narrow-width layout
+  were checked. This is a design preview, not built app behavior.
 - Status: OPEN. Recommend visible slice-specific actions and explicit owner,
   this-window, hosting and away labels, preserving confirmations that name
   every affected listener and the protection for an on-air transmit slice.
   A release must not revoke pairing. Current Take frees capacity by closing
   affected slices and applying the new request; a proposed Take over action
   that preserves an existing slice's tuning and identity is a distinct,
-  unapproved operation. Decide exact release/transfer semantics before
+  now-approved operation. Settle its remaining edge cases and release semantics before
   implementing a new action. Read-only evidence is retained
   in core-gui-slice-ownership-reconnect-scout.md.
 - Further discussion: JJ suggested showing every existing slice letter in
@@ -2541,14 +2608,24 @@ colours for the same signal.
   flow, and for matching iPhone/desktop behavior when switching, taking,
   releasing, reaching capacity or sharing a slice. The existing banner
   follows this window's active receive slice; transmit selection is separate.
-  The design discussion is still open. Current media mixes include only
-  owned slices; a proposed Listen in action would be new functionality,
-  not an existing capability or permission for multiple writers.
+  Current media mixes include only owned slices; the now-approved Listen in
+  action requires new audio subscription support with one tuning controller.
+  It is not existing capability or permission for multiple writers.
 - JJ explicitly requested a deep usability and completeness scout of creation,
   ownership, release and takeover across desktop and iPhone. Sol 6 high
-  is tracing actual screens, commands, capacity, audio, reconnect and failure
-  recovery; report core-gui-slice-experience-deep-scout.md. Its recommendations
-  are design input, not approved new ownership policy.
+  completed the source audit of actual screens, commands, capacity, audio,
+  reconnect and failure recovery; report core-gui-slice-experience-deep-scout.md.
+  Root reviewed its findings against StationReceivers.cpp. The hosting
+  desktop lacks a capacity Take entry; a desktop empty-state message can
+  wrongly blame another device after deliberate self-release; phone close
+  and active-selection refusals are log-only; a final physical Core slice
+  cannot be closed even though a client may lose its final own slice. These
+  are separate gaps in reachability, feedback and release policy. Same-slice
+  listening and intact transfer are absent. Recommended common inventory
+  and explicit actions remain design input except for JJ's subsequent
+  approvals of intact Take control and one-controller shared listening above.
+  Existing stale-confirmation and on-air protections are present. The
+  suspected failed-allocation victim loss is tracked separately below.
 - Plan: several-devices UX and local/remote ownership parity.
 
 ### G-119: Slice markers and RX badges do not consistently use Aether colors
@@ -2603,9 +2680,12 @@ colours for the same signal.
   fixture reads both current authenticated inner transports, with epoch
   and lifetime checks, and preserves ALLOCATED 2 and RELEASED 2.
   Root logs: core-gui-ice-provenance-root-build.log and
-  core-gui-ice-provenance-root-ctest.log. Linux re-verification is still
-  required; the original failing selected pair was not recorded, so this
-  does not prove every contributor to that historical failure.
+  core-gui-ice-provenance-root-ctest.log. Matching signed ec28eeca Linux
+  app/Core/helper built and all 30 affected complete suites passed in
+  191.75 seconds, including the original rendezvous service suite (69.88 s).
+  Evidence: core-gui-linux-ec28eeca-focused-build-and-test-graph-fixed.log.
+  The original failing selected pair was not recorded, so this does not
+  prove every contributor to that historical failure.
   Evidence: core-gui-linux-relay-return-scout.md and
   core-gui-linux-383984e5-focused-build-and-test.log (116.99 s).
 - Plan: real-service R5 session and relay-release verification.
@@ -2667,6 +2747,38 @@ colours for the same signal.
   A source read shows the peer reports its path on its first echoed message;
   that alone does not establish the failure's cause. Evidence:
   traversal-383984e5-matched-release-prelude/console.log.
+- Diagnostic follow-up: a separately hashed helper linked to the read-only
+  ec28eeca Linux libraries now retains verbose candidate/nomination logs and
+  observes the selected path for ten seconds after its original first-echo
+  result. The original acceptance assertion is unchanged. Its first run
+  selected IPv6 host candidates at 135 ms and remained IPv6 at 10047 ms,
+  passing the assertion. This does not reproduce or close the intermittent
+  IPv4 failure. Evidence: traversal-ec28eeca-ipv6-observation-1 and
+  ipv6-diagnostic-ec28eeca/artifact-hashes.json.
+- Reproduced cause on ec28eeca: the first bounded extra diagnostic run
+  echoed over IPv4 srflx at 97 ms, then selected and nominated IPv6 before
+  the 10170 ms observation. Both IPv6 candidates were already exchanged.
+  The trace shows the IPv4 connectivity check succeeding first, followed by
+  the higher-priority IPv6 check and nomination. The immediate family
+  assertion samples a valid intermediate ICE state. The existing
+  rendezvous IPv6 unit test already waits up to ten seconds for preference.
+  Root reviewed the trace and assigned a test-only correction that observes
+  both selected IPv6 endpoints within that window and the unchanged outer
+  deadline. IPv4-only failure and delayed-IPv6 success must be verified.
+  This establishes the new reproduction's cause, not the older untraced
+  run's exact history. Report: core-gui-ipv6-nomination-probe-report.md.
+- Accepted test correction: signed trunk merge 4c0e0e585 includes ea7494545
+  plus root review fix de4c657d. The helper retains first-echo timing and
+  observes the same peer for the existing preference window; only ipv6-both
+  opts in. Controlled IPv4-first then IPv6, bounded IPv4-only rejection,
+  ordinary IPv4 and normal dual-stack checks passed. Root caught that the
+  harness masked helper exit status, added connected/error checks, proved
+  the error and disconnected cases failed before/fixed after, and reran
+  delayed IPv6 successfully. Matching trunk helper build passed. Evidence:
+  core-gui-ipv6-preference-fix-report.md and the root-acceptance-delayed run.
+  The first-echo observation defect is repaired. A separate connected but
+  no-echo run remains an open finding below; successful retries do not
+  explain it.
 - Plan: R5 IPv6 path preference and truthful route reporting.
 
 ### G-124: Bottom banner can retain a slice after the window loses it
@@ -2687,8 +2799,172 @@ colours for the same signal.
   reviewed the diff, rebuilt app/Core and five affected complete suites, all
   passing in 3.04 seconds at starting load 6.78/12.61/13.35. Logs are
   core-gui-empty-banner-root-{build,ctest}.log. No new picker, takeover
-  behavior or ownership policy is included; Linux verification remains due.
+  behavior or ownership policy is included. Matching signed ec28eeca Linux
+  app/Core and all 30 affected suites, including banner/chrome, passed in
+  191.75 seconds; log core-gui-linux-ec28eeca-focused-build-and-test-graph-fixed.log.
 - Plan: truthful active-slice presentation and empty-window recovery.
+
+
+### G-125: Confirmed capacity Take may close a slice without fulfilling the request
+
+- Evidence: the read-only deep slice scout traced proceedTakeReceiver and
+  proceedTakeSlice: both call closeForTake before applyHeld, then tellTaken
+  regardless of whether the held operation succeeded. No rollback spans
+  those steps. A source-derived example fills the configured HL2 two user
+  DDCs and five slice slots: four compatible A-owned slices share one DDC,
+  C owns one on the other, and B has none. Taking one A slice frees a slice
+  slot but no DDC for B's new pan, so creation can fail after removal.
+  The following fake-radio regression now proves this case; no physical
+  radio result is claimed.
+- Ruling basis: JJ requires complete, usable slice handling and causal fixes
+  for discovered bugs. A failed action must preserve existing slice work.
+  No new ownership or sharing policy is authorized by this repair.
+- Status: reproduced by Sol 6 high on signed ec28eeca in the existing
+  confirmation suite using the configured HL2 fake-radio pool. Confirmed
+  Take returned accepted=false with the receiver-full reason; A lost slice
+  0 and received both object.destroy and a Take notice, while B gained no
+  slice. The invariant that a failed action preserves A's IDs failed.
+  The bounded Add placement preflight and confirmation repair is signed
+  in 6848a1d44 after root diff/test review. App/Core built, all 74 confirm
+  cases passed, and the 91 complete session suites passed in 243.26 s at
+  actual load. Evidence: core-gui-slice-take-atomicity-fix-report.md and
+  core-gui-slice-atomicity-session-tests.log. It checks the copied allocator after exactly the confirmed
+  removals, and offers the receiver chooser when one slice cannot free the
+  required receiver. Existing ownership, affected-set, expiry and on-air
+  guards remain intact. This is not a general rollback transaction. Review
+  also identified PanMove and Take-back paths that close victims before a
+  failing or partial replay. Both now have deterministic original-source
+  RED regressions and bounded preflight repairs in signed c54147ae9. The
+  planner checks carried frequencies and the whole saved group's slice/DDC
+  capacity before closing exactly the shown victims, and rechecks their
+  controller identities. The actual new-stream rate is shared with RadioModel.
+  Worker verification: 78 confirmation cases and nine complete affected
+  suites passed; the broader 91-suite session run passed 90 and found one
+  missing wording-origin declaration. Signed test-only cae94f7c adds a real
+  ReceiverPlanner wording scan and exact forwarding declaration; its full
+  wording suite passes without changing product messages. Root app/Core and
+  ten affected complete suites passed in 72.89 seconds at load 10.31/8.15/7.09;
+  the final integrated wording suite also passed. Evidence:
+  core-gui-slice-move-restore-report.md and core-gui-slice-move-restore-root-proof.json.
+  This remains OPEN for broader transaction safety: direct callbacks during
+  closing and non-capacity restoration failures can still leave a partial
+  result. Abnormal stale settings differing from a locked saved frequency
+  are not repaired by the capacity preflight. Keep new intact-transfer UX
+  separate; neither preflight establishes general rollback.
+- Plan: reliable several-client capacity operations and recovery.
+
+### G-126: Pan layout changes also allocate or move station slices
+
+- Evidence: MainWindow::applyPanLayout rehomes slices when shrinking,
+  spreads them across empty pans when growing, then populatePanSlices
+  attempts addSliceOnPan for every empty pane. showPanLayoutDialog caps
+  layouts by user hardware receiver count because a new independent pan
+  requests another receiver. These assumptions describe owned slices;
+  shared listening also needs to show a receiver already used by another
+  device without creating a new slice or taking tuning authority.
+- JJ's request: the bottom chooser looks good, but its effects on flags,
+  applets and multiple open pans are unclear. Explain and review the whole
+  flow before changing the UI. Approval of the bottom area alone does not
+  settle these behaviors.
+- Status: OPEN design. Root recommends keeping per-window visual placement,
+  per-device receive selection and Core tuning authority separate. Selecting
+  an already displayed slice should focus its existing pan; a view change
+  must not silently move another slice's tuning or take ownership. How to
+  show an unseen receiver and how layout changes offer new slices need to
+  be part of the complete design. The Sol 6 medium scout has completed its
+  trace against signed 6848a1d44. Pan-background selection currently changes
+  display focus only; a flag or RX tab changes window RX focus. Spectrum
+  tuning targets the emitting pan's own selected slice. RX controls and
+  flag audio controls currently write shared state, so listened flags need
+  explicit read-only tuning and independent local volume/mute. TX applet
+  bindings also use active RX in places and must be audited before allowing
+  a listened RX to become selected. None of these findings grants TX rights.
+  Report: core-gui-multi-pan-slice-flow-scout.md. Real offscreen two-pan Qt
+  captures informed the full-window interactive proposal delivered to JJ as
+  nereus-multi-pan-slice-flow.html. Preview checks cover joined flags/RX tabs,
+  independent TX, read-only listening, intact handoff and explicit destination
+  for an unseen slice without silently releasing hidden audio. The proposal
+  and remaining placement questions are recorded in
+  2026-09-28-slice-control-and-listening-design.md. No new layout policy or
+  shared-listener UI has been implemented or approved.
+- Plan: complete shared-slice UX across panes, flags and applets.
+
+### G-127: Connected IPv6 traversal can finish without an echoed payload
+
+- Evidence: the first normal dual-stack verification run for the IPv6
+  observation correction reached a connected IPv6 host pair, but returned
+  echoed=false at 90410 ms with No echo in time. Station and RV logs confirm
+  connection/introduction; they do not record payload send/receive or verbose
+  ICE transitions. Later successful runs cannot identify this run's cause.
+  Evidence: ipv6-preference-fix-verification/normal/console.log and retained
+  station/client/rendezvous logs.
+- Ruling basis: JJ requires failures at actual load to be investigated at
+  their cause without increasing time limits or dismissing intermittent runs.
+- Status: OPEN causal investigation. Preserve the failed run. Add bounded
+  diagnostic payload/transport observations to reproduce whether readiness,
+  send, delivery or echo stalled, then repair the proved cause. The existing
+  ninety-second deadline remains unchanged. A scratch helper traced ready,
+  payload submission, receipt and echo against the matching frozen Linux
+  libraries. Three bounded attempts passed at 189/133/81 ms, each showing
+  the whole 60000-byte payload in both directions. They did not reproduce
+  or explain the retained failure. The channel is unordered with zero
+  retransmits, so ICE connection alone cannot prove payload delivery.
+  Evidence and the next boundary probe are preserved in
+  core-gui-ipv6-no-echo-probe-report.md. No production fix is claimed.
+- Plan: reliable R5 direct IPv6 media transport and traversal acceptance.
+
+### G-128: Pi upgrade rollback does not restore its saved daemon settings
+
+- Evidence: the private pi4-docker/pi-files/upgrade-core-pi4.sh copies the
+  daemon .config directory into rollback storage, but its rollback function
+  restores binaries/unit/config-file/DFNR without restoring that directory.
+  It also takes the settings copy before stopping Core. A failed new Core
+  that changes persisted settings could leave old binaries with new state.
+- Ruling basis: JJ authorizes verified Core installation while preserving
+  operator radio configuration and uncommitted work. Rollback must preserve
+  the previous runtime state and retain failure evidence.
+- Status: repaired in the private Pi helper and verified before installing
+  signed checkpoint 47d16744. Root's full-script isolated fixture reproduced
+  the old start/health-failure rollback leaving new settings, then passed
+  seven corrected cases: success, start failure, health failure, snapshot
+  failure, restore-copy failure, restore-rename failure and rollback-stop
+  failure. Failed upgrade state is retained, and incomplete rollback does
+  not restart Core. Evidence: pi4-rollback-verification/green-failure-gates.log.
+  The successful live upgrade used helper SHA256
+  5c3243ee401c8fa80ea5765d453c0b60a66ba7e07cdb2d2d1228890dbdf41adb,
+  preserved /etc/nereusd.conf and left a root-only stopped-service settings
+  snapshot. See core-gui-pi4-47d16744-install-report.md. The equivalent private
+  Rock helper is also repaired and root-reviewed; its full-script isolated
+  fixture passes 15 cases including incomplete file/model restoration,
+  daemon reload failure and the existing nonzero-stop policy. Evidence:
+  rock-rollback-verification/README.md. No live Rock install was performed.
+- Plan: verified Core deployment and recoverable installation.
+
+### G-129: Private radio installer omits bundled RNNoise runtime models
+
+- Evidence: after the successful Pi upgrade to 47d16744, full package-manifest
+  verification found Default_large.bin and Default_small.bin absent from
+  /usr/local/share/NereusSDR/models/rnnoise. Both are in the verified package.
+  CMake installs them for nereusd and ModelPaths resolves NR3 defaults there;
+  the private upgrade helper copied only the DFNR model. The package also
+  contains an optional diagnostic benchmark, which is not a runtime dependency.
+- Ruling basis: JJ authorized verified Core installation with all planned
+  functionality. Required runtime models belong in that installation.
+- Status: live Pi repaired from the verified archive, with both model hashes
+  checked before and after installation. All packaged runtime files now
+  match; only the explicitly named benchmark is excluded. Core had already
+  cached NR3 unavailable at startup, so root then checked recorded MOX false
+  and completed one service restart with both models present. Final PID2394
+  is active with zero automatic restarts and unchanged radio config; RV and
+  HL2 EP6 reconnected and the journal explicitly loads Default_large.bin.
+  Both private installer corrections are complete and root-reviewed: Pi
+  passes eleven full-script cases and Rock passes fifteen, including existing
+  models, first installation, missing files and partial copy failure. Reports:
+  pi4-model-assets-verification/README.md and rock-rollback-verification/README.md.
+  Rock remains under JJ's active-test hold. Live Pi evidence:
+  core-gui-pi4-47d16744-model-repair.log, core-gui-pi4-47d16744-model-restart.log
+  and core-gui-pi4-47d16744-install-report.md.
+- Plan: complete NR3 parity in deployed Core builds.
 
 ## How this addendum is kept
 

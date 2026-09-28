@@ -75,3 +75,4 @@ Covered JSON files: `general.json`, `hardware.json`, `pa.json`, `test.json`, `di
 2026-09-28 - J.J. Boyd (KG4VCF), with AI-assisted transformation via OpenAI Codex: Meter Styles S-meter face, peak hold, and decay descriptions from the built native page.
 2026-09-28 - J.J. Boyd (KG4VCF), with AI-assisted transformation via OpenAI Codex: RX spectrum and waterfall detector, averaging, time, and decimation descriptions from the built native pages.
 2026-09-28 - J.J. Boyd (KG4VCF), with AI-assisted transformation via OpenAI Codex: eight RX renderer and waterfall pace descriptions from the built native pages; upstream Setup references retained where present.
+2026-09-28 - J.J. Boyd (KG4VCF), with AI-assisted transformation via OpenAI Codex: four Waterfall Defaults overlay descriptions from the built native page; original Thetis Setup widget references retained.

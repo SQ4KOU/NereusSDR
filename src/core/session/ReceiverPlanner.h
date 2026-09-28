@@ -139,6 +139,20 @@ public:
     AddPlacement planAddAfterClosing(const QByteArray& requester, const QString& panId,
                                      const QList<int>& closes) const;
 
+    /// Predict whether every carried slice still fits the requested pan
+    /// window after this exact receiver choice closes its other occupants.
+    bool panMoveFitsAfterClosing(int stream, double centreHz, const QList<int>& moving,
+                                 const QList<int>& closes) const;
+
+    struct RestorePlacement {
+        bool fits = false;
+        QString reason;
+    };
+    /// Predict restoring the whole saved group after the shown victims close.
+    /// A refusal must leave the saved Take-back claim and victims untouched.
+    RestorePlacement planRestoreAfterClosing(const QList<double>& frequencies,
+                                              const QList<int>& closes) const;
+
     /// Whether any receiver in use carries a slice of a device other than
     /// `requester`: with none, a take has nobody to take from.
     bool anotherDeviceHoldsAReceiver(const QByteArray& requester) const;

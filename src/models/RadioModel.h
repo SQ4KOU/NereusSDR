@@ -5923,6 +5923,11 @@ public:
     int streamSampleRateHz(int streamIndex) const {
         return m_streamAllocator.streamSampleRateHz(streamIndex);
     }
+    /// Rate activateStreamAt assigns when it claims a previously idle DDC.
+    /// Also used by confirmation planners that must predict its window.
+    int newStreamSampleRateHz() const {
+        return m_connectionSampleRateHz > 0 ? m_connectionSampleRateHz : m_streamDefaultRateHz;
+    }
     bool streamActive(int streamIndex) const {
         return m_streamAllocator.isStreamActive(streamIndex);
     }

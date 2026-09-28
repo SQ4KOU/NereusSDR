@@ -112,6 +112,12 @@ constexpr const char* kCapFullAtAdmissionReason =
 constexpr const char* kReceiversFullAtAdmissionReason =
     "All the radio's receivers are in use. Try again when another device frees one.";
 
+QString shownVictimKey(int choice, int sliceId, const QByteArray& subject)
+{
+    return QStringLiteral("%1|%2|%3").arg(choice).arg(sliceId)
+        .arg(QString::fromLatin1(subject.toHex()));
+}
+
 // Match the two Add handlers' first named argument (including their
 // QVariant-to-string conversion). A missing required argument is refused by
 // the dispatcher and must never turn into a destructive capacity question.
@@ -921,6 +927,10 @@ bool StationServer::askTake(SessionTransport* transport, const SessionMessage& o
         question.choiceTargets.append(c.stream);
         question.choiceTakeable.append(c.takeable);
         question.shownChoices.append(QSet<int>(c.closes.cbegin(), c.closes.cend()));
+        for (int id : c.closes) {
+            question.shown.insert(shownVictimKey(
+                c.choice, id, m_radioModel->sliceOwnership()->mark(id).subject()));
+        }
     }
     SessionPrompt prompt;
     prompt.choices = planner.receiverChoicesJson(choices);
@@ -1575,7 +1585,9 @@ SessionMessage StationServer::proceedTakeReceiver(SessionTransport* transport,
     bool grew = now == nullptr || !now->takeable;
     if (now != nullptr) {
         for (int id : now->closes) {
-            grew = grew || !shown.contains(id);
+            grew = grew || !shown.contains(id)
+                || !question.shown.contains(shownVictimKey(
+                    choice, id, m_radioModel->sliceOwnership()->mark(id).subject()));
         }
     }
     if (grew) {
@@ -1597,6 +1609,12 @@ SessionMessage StationServer::proceedTakeReceiver(SessionTransport* transport,
                 invoke.commandVerb, invoke.commandId, false,
                 panId ? placement.reason : QStringLiteral("The Core could not read this request."), {});
         }
+    }
+    if (request.need == ReceiverPlanner::Need::PanMove
+        && !receiverPlanner().panMoveFitsAfterClosing(
+            target, question.centreHz, question.moving, now->closes)) {
+        return SessionMessages::commandResult(invoke.commandVerb, invoke.commandId, false,
+                                              QString::fromLatin1(kCentreRefusedReason), {});
     }
     if (now->closes.size() >= m_radioModel->slices().size()) {
         return SessionMessages::commandResult(invoke.commandVerb, invoke.commandId, false,
@@ -1693,6 +1711,10 @@ SessionMessage StationServer::askTakeBack(SessionTransport* transport, const Ses
     }
     const ReceiverPlanner planner = receiverPlanner();
     const SliceStreamAllocator& live = m_radioModel->streamAllocator();
+    QList<double> savedFrequencies;
+    for (const SavedSlice& saved : record->closed) {
+        savedFrequencies.append(saved.frequencyHz);
+    }
     ConfirmStep::Question question;
     question.held = ConfirmStep::Held::TakeBack;
     question.noticeId = noticeId;
@@ -1722,10 +1744,18 @@ SessionMessage StationServer::askTakeBack(SessionTransport* transport, const Ses
         }
         for (int i = 0; i < choices.size(); ++i) {
             choices[i].choice = i;
+            const ReceiverPlanner::RestorePlacement placement =
+                planner.planRestoreAfterClosing(savedFrequencies, choices.at(i).closes);
+            choices[i].takeable = placement.fits;
+            choices[i].why = placement.reason;
             question.choiceTargets.append(choices.at(i).stream);
-            question.choiceTakeable.append(true);
+            question.choiceTakeable.append(choices.at(i).takeable);
             question.shownChoices.append(
                 QSet<int>(choices.at(i).closes.cbegin(), choices.at(i).closes.cend()));
+            for (int id : choices.at(i).closes) {
+                question.shown.insert(shownVictimKey(
+                    i, id, m_radioModel->sliceOwnership()->mark(id).subject()));
+            }
         }
         prompt.choices = planner.receiverChoicesJson(choices);
     } else {
@@ -1741,22 +1771,30 @@ SessionMessage StationServer::askTakeBack(SessionTransport* transport, const Ses
         }
         for (int i = 0; i < choices.size(); ++i) {
             choices[i].choice = i;
+            const ReceiverPlanner::RestorePlacement placement =
+                planner.planRestoreAfterClosing(savedFrequencies, choices.at(i).closes);
+            choices[i].takeable = placement.fits;
+            choices[i].why = placement.reason;
         }
         QJsonArray json = planner.sliceChoicesJson(choices);
         for (const ReceiverPlanner::Choice& c : choices) {
             question.choiceTargets.append(c.sliceId);
-            question.choiceTakeable.append(true);
+            question.choiceTakeable.append(c.takeable);
             question.shownChoices.append(QSet<int>{c.sliceId});
             question.shownOwners.append(record->taker);
+            question.shown.insert(shownVictimKey(
+                c.choice, c.sliceId, m_radioModel->sliceOwnership()->mark(c.sliceId).subject()));
         }
         if (m_radioModel->slices().size() < m_radioModel->sliceCapForDevices()) {
             // A slice free by then disturbs nobody.
+            const ReceiverPlanner::RestorePlacement placement =
+                planner.planRestoreAfterClosing(savedFrequencies, {});
             json.append(QJsonObject{{QStringLiteral("choice"), json.size()},
                                     {QStringLiteral("sliceId"), -1},
-                                    {QStringLiteral("takeable"), true},
-                                    {QStringLiteral("why"), QString()}});
+                                    {QStringLiteral("takeable"), placement.fits},
+                                    {QStringLiteral("why"), placement.reason}});
             question.choiceTargets.append(-1);
-            question.choiceTakeable.append(true);
+            question.choiceTakeable.append(placement.fits);
             question.shownChoices.append(QSet<int>{});
             question.shownOwners.append(QByteArray());
         }
@@ -1806,11 +1844,24 @@ SessionMessage StationServer::proceedTakeBack(SessionTransport* transport,
     }
     const QSet<int> shown = question.shownChoices.value(choice);
     for (int id : closes) {
-        if (!shown.contains(id)) {
+        if (!shown.contains(id)
+            || !question.shown.contains(shownVictimKey(
+                choice, id, m_radioModel->sliceOwnership()->mark(id).subject()))) {
             // Something the operator was not shown: ask the other way again.
-            askTakeBack(transport, invoke, static_cast<int>(question.noticeId));
-            return askAgain(invoke);
+            const SessionMessage again =
+                askTakeBack(transport, invoke, static_cast<int>(question.noticeId));
+            return again.reason == QLatin1String(kWaitingReason) ? askAgain(invoke) : again;
         }
+    }
+    QList<double> savedFrequencies;
+    for (const SavedSlice& saved : record->closed) {
+        savedFrequencies.append(saved.frequencyHz);
+    }
+    const ReceiverPlanner::RestorePlacement placement =
+        receiverPlanner().planRestoreAfterClosing(savedFrequencies, closes);
+    if (!placement.fits) {
+        return SessionMessages::commandResult(invoke.commandVerb, invoke.commandId, false,
+                                              placement.reason, {});
     }
     const QHash<QByteArray, QList<SavedSlice>> closedBy = closeForTake(closes);
     // On proceed the Core recreates the device's closed slices at their

@@ -638,6 +638,40 @@ private slots:
         QCOMPARE(ask.value(QStringLiteral("choices")).toArray().size(), 2);
     }
 
+    void aPanMoveThatNoLongerFitsPreservesTheChosenReceiver()
+    {
+        Shared s;
+        LoopbackTransport* appC = s.cOnTheOtherReceiver();
+        QVERIFY(admitted(appC));
+        const int cSlice = s.core.model->sliceOwnership()->ownedBy(s.c.key.fingerprint()).first();
+        const int cStream = streamOf(s.core, cSlice);
+        QCOMPARE(s.core.invoke(s.appB, "requestStreamCentre",
+                               {int64("sliceId", 1), f64("centreHz", 7120000.0)})
+                     .value(QStringLiteral("accepted")).toBool(true), false);
+        const QJsonObject ask = waitForLast(s.appB, QStringLiteral("confirm.request"), 0);
+        QCOMPARE(ask.value(QStringLiteral("kind")).toString(), QStringLiteral("takeReceiver"));
+        int choice = -1;
+        for (const QJsonValue& value : ask.value(QStringLiteral("choices")).toArray()) {
+            const QJsonObject candidate = value.toObject();
+            if (candidate.value(QStringLiteral("streamIndex")).toInt() == cStream) {
+                choice = candidate.value(QStringLiteral("choice")).toInt();
+            }
+        }
+        QVERIFY(choice >= 0);
+        // 7.000 MHz remains in B's current 7.074 MHz window, but lies
+        // outside the requested 7.120 MHz window.
+        s.core.model->sliceById(1)->setFrequency(7000000.0);
+        QCOMPARE(s.core.model->sliceById(1)->frequency(), 7000000.0);
+        const int notices = countOf(appC, QStringLiteral("notice"));
+        const QJsonObject done = s.proceed(s.appB, ask.value(QStringLiteral("id")).toInteger(),
+                                           choice);
+        QCOMPARE(done.value(QStringLiteral("accepted")).toBool(true), false);
+        QVERIFY(s.core.model->sliceById(cSlice) != nullptr);
+        QCOMPARE(s.core.model->sliceOwnership()->mark(cSlice).owner, s.c.key.fingerprint());
+        QCOMPARE(streamOf(s.core, cSlice), cStream);
+        QCOMPARE(countOf(appC, QStringLiteral("notice")), notices);
+    }
+
     // ── Taking a receiver (section 6.4, rulings 6.7 to 6.9) ──────────────
 
     void takingAReceiverClosesTheOthersSlicesAndTakeItBackAsksTheOtherWay()
@@ -725,6 +759,220 @@ private slots:
             s.appB, "notice.takeBack", {int64("id", told.value(QStringLiteral("id")).toInteger())});
         QCOMPARE(twice.value(QStringLiteral("accepted")).toBool(true), false);
         QVERIFY(twice.value(QStringLiteral("reason")).toString() != kWaiting);
+    }
+
+    void aReceiverChoiceWhoseVictimChangedOwnerAsksAgainWithoutClosingIt()
+    {
+        Shared s;
+        s.core.model->sliceById(1)->setFrequency(14074000.0);
+        const int bStream = streamOf(s.core, 1);
+        QCOMPARE(s.core.invoke(s.appA, "addSliceOnPan",
+                               {utf8("panId", QStringLiteral("pan-a2"))})
+                     .value(QStringLiteral("accepted")).toBool(true), false);
+        const QJsonObject ask = waitForLast(s.appA, QStringLiteral("confirm.request"), 0);
+        int choice = -1;
+        for (const QJsonValue& value : ask.value(QStringLiteral("choices")).toArray()) {
+            const QJsonObject candidate = value.toObject();
+            if (candidate.value(QStringLiteral("streamIndex")).toInt() == bStream) {
+                choice = candidate.value(QStringLiteral("choice")).toInt();
+            }
+        }
+        QVERIFY(choice >= 0);
+        s.core.model->sliceOwnership()->setOwner(1, s.c.key.fingerprint());
+        const QJsonObject done = s.proceed(s.appA, ask.value(QStringLiteral("id")).toInteger(),
+                                           choice);
+        QCOMPARE(done.value(QStringLiteral("reason")).toString(), kWaiting);
+        QCOMPARE(streamOf(s.core, 1), bStream);
+        QCOMPARE(s.core.model->sliceOwnership()->mark(1).owner, s.c.key.fingerprint());
+        QCOMPARE(countOf(s.appB, QStringLiteral("notice")), 0);
+        QCOMPARE(countOf(s.appA, QStringLiteral("confirm.request")), 2);
+    }
+
+    void aTakeBackRestoresTwoSavedSlicesInsideAnIdleReceiversDefaultWindow()
+    {
+        Core core;
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.model->configureStreamPool(2, 5, 192000);
+        core.model->sliceById(0)->setFrequency(7074000.0);
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a);
+        QVERIFY(admitted(appA));
+        QVERIFY(core.invoke(appA, "addSliceOnPan", {utf8("panId", QStringLiteral("pan-0"))})
+                    .value(QStringLiteral("accepted")).toBool());
+        const QList<int> aBefore = core.model->sliceOwnership()->ownedBy(a.key.fingerprint());
+        QCOMPARE(aBefore.size(), 2);
+        core.model->sliceById(aBefore.last())->setFrequency(7150000.0);
+        core.model->sliceById(aBefore.last())->setLocked(true);
+        const int aStream = streamOf(core, aBefore.first());
+        QCOMPARE(streamOf(core, aBefore.last()), aStream);
+
+        LoopbackTransport* appB = core.signIn(b, kHolder);
+        QVERIFY(admitted(appB));
+        const int bFirst = core.model->sliceOwnership()->ownedBy(b.key.fingerprint()).first();
+        core.model->sliceById(bFirst)->setFrequency(14074000.0);
+        QCOMPARE(core.invoke(appB, "addSliceOnPan", {utf8("panId", QStringLiteral("pan-b2"))})
+                     .value(QStringLiteral("accepted")).toBool(true), false);
+        const QJsonObject take = waitForLast(appB, QStringLiteral("confirm.request"), 0);
+        int choice = -1;
+        for (const QJsonValue& value : take.value(QStringLiteral("choices")).toArray()) {
+            const QJsonObject candidate = value.toObject();
+            if (candidate.value(QStringLiteral("streamIndex")).toInt() == aStream) {
+                choice = candidate.value(QStringLiteral("choice")).toInt();
+            }
+        }
+        QVERIFY(choice >= 0);
+        const QJsonObject taken = core.invoke(
+            appB, "confirm.proceed",
+            {int64("id", take.value(QStringLiteral("id")).toInteger()), int64("choice", choice)});
+        QVERIFY2(taken.value(QStringLiteral("accepted")).toBool(false),
+                 QJsonDocument(taken).toJson().constData());
+        const QJsonObject notice = waitForLast(appA, QStringLiteral("notice"), 0);
+        QCOMPARE(notice.value(QStringLiteral("slices")).toArray().size(), 2);
+
+        const QJsonObject back = core.invoke(
+            appA, "notice.takeBack", {int64("id", notice.value(QStringLiteral("id")).toInteger())});
+        QCOMPARE(back.value(QStringLiteral("reason")).toString(), kWaiting);
+        const QJsonObject ask = waitForLast(appA, QStringLiteral("confirm.request"), 0);
+        QCOMPARE(ask.value(QStringLiteral("choices")).toArray().first().toObject()
+                     .value(QStringLiteral("takeable")).toBool(false), true);
+        const QJsonObject restored = core.invoke(
+            appA, "confirm.proceed",
+            {int64("id", ask.value(QStringLiteral("id")).toInteger()), int64("choice", 0)});
+        QVERIFY2(restored.value(QStringLiteral("accepted")).toBool(false),
+                 QJsonDocument(restored).toJson().constData());
+        const QList<int> aAfter = core.model->sliceOwnership()->ownedBy(a.key.fingerprint());
+        QCOMPARE(aAfter.size(), 2);
+        QList<double> frequencies;
+        bool lockedOn7150 = false;
+        for (int id : aAfter) {
+            frequencies.append(core.model->sliceById(id)->frequency());
+            lockedOn7150 = lockedOn7150
+                || (core.model->sliceById(id)->frequency() == 7150000.0
+                    && core.model->sliceById(id)->locked());
+        }
+        QVERIFY(frequencies.contains(7074000.0));
+        QVERIFY(frequencies.contains(7150000.0));
+        QVERIFY(lockedOn7150);
+    }
+
+    void aTakeBackWithoutRoomForEverySavedSlicePreservesTheVictimAndClaim()
+    {
+        Core core;
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.model->configureStreamPool(2, 5, 192000);
+        core.model->sliceById(0)->setFrequency(7074000.0);
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a);
+        QVERIFY(admitted(appA));
+        QVERIFY(core.invoke(appA, "addSliceOnPan", {utf8("panId", QStringLiteral("pan-0"))})
+                    .value(QStringLiteral("accepted")).toBool());
+        const QList<int> aBefore = core.model->sliceOwnership()->ownedBy(a.key.fingerprint());
+        QCOMPARE(aBefore.size(), 2);
+        const int aStream = streamOf(core, aBefore.first());
+        QCOMPARE(streamOf(core, aBefore.last()), aStream);
+        core.model->sliceById(aBefore.last())->setFrequency(7150000.0);
+        QCOMPARE(streamOf(core, aBefore.last()), aStream);
+
+        LoopbackTransport* appB = core.signIn(b, kHolder);
+        QVERIFY(admitted(appB));
+        const int bFirst = core.model->sliceOwnership()->ownedBy(b.key.fingerprint()).first();
+        core.model->sliceById(bFirst)->setFrequency(14074000.0);
+        QVERIFY(streamOf(core, bFirst) != aStream);
+        QCOMPARE(core.invoke(appB, "addSliceOnPan", {utf8("panId", QStringLiteral("pan-b2"))})
+                     .value(QStringLiteral("accepted")).toBool(true), false);
+        const QJsonObject take = waitForLast(appB, QStringLiteral("confirm.request"), 0);
+        int takeChoice = -1;
+        for (const QJsonValue& value : take.value(QStringLiteral("choices")).toArray()) {
+            const QJsonObject candidate = value.toObject();
+            if (candidate.value(QStringLiteral("streamIndex")).toInt() == aStream) {
+                takeChoice = candidate.value(QStringLiteral("choice")).toInt();
+            }
+        }
+        QVERIFY(takeChoice >= 0);
+        const QJsonObject taken = core.invoke(
+            appB, "confirm.proceed",
+            {int64("id", take.value(QStringLiteral("id")).toInteger()), int64("choice", takeChoice)});
+        QVERIFY2(taken.value(QStringLiteral("accepted")).toBool(false),
+                 QJsonDocument(taken).toJson().constData());
+        QCOMPARE(core.model->sliceOwnership()->ownedBy(a.key.fingerprint()).size(), 0);
+        const QJsonObject notice = waitForLast(appA, QStringLiteral("notice"), 0);
+        QCOMPARE(notice.value(QStringLiteral("kind")).toString(), QStringLiteral("receiverTaken"));
+        QCOMPARE(notice.value(QStringLiteral("slices")).toArray().size(), 2);
+
+        const int bVictim = taken.value(QStringLiteral("affected")).toArray().first()
+                                .toString().mid(6).toInt();
+        QCOMPARE(streamOf(core, bVictim), aStream);
+        core.model->sliceById(bVictim)->setFrequency(7074000.0);
+        core.model->sliceOwnership()->setActive(b.key.fingerprint(), bFirst);
+        QList<int> bExtras;
+        for (int i = 0; i < 3; ++i) {
+            const QJsonObject added = core.invoke(
+                appB, "addSlice", {utf8("initialPanId", QString())});
+            QVERIFY2(added.value(QStringLiteral("accepted")).toBool(false),
+                     QJsonDocument(added).toJson().constData());
+            bExtras.append(added.value(QStringLiteral("affected")).toArray().first()
+                               .toString().mid(6).toInt());
+        }
+        QCOMPARE(core.model->slices().size(), 5);
+        QCOMPARE(core.model->slicesOnStream(aStream), QList<int>{bVictim});
+
+        const QJsonObject back = core.invoke(
+            appA, "notice.takeBack", {int64("id", notice.value(QStringLiteral("id")).toInteger())});
+        QCOMPARE(back.value(QStringLiteral("reason")).toString(), kWaiting);
+        const QJsonObject ask = waitForLast(appA, QStringLiteral("confirm.request"), 0);
+        const int bNotices = countOf(appB, QStringLiteral("notice"));
+        const QJsonObject refused = core.invoke(
+            appA, "confirm.proceed",
+            {int64("id", ask.value(QStringLiteral("id")).toInteger()), int64("choice", 0)});
+        QCOMPARE(refused.value(QStringLiteral("accepted")).toBool(true), false);
+        QCOMPARE(core.model->sliceOwnership()->ownedBy(a.key.fingerprint()).size(), 0);
+        QCOMPARE(core.model->slicesOnStream(aStream), QList<int>{bVictim});
+        QCOMPARE(core.model->sliceOwnership()->mark(bVictim).owner, b.key.fingerprint());
+        QCOMPARE(countOf(appB, QStringLiteral("notice")), bNotices);
+        // Refusal leaves the saved claim available for another attempt.
+        const QJsonObject again = core.invoke(
+            appA, "notice.takeBack", {int64("id", notice.value(QStringLiteral("id")).toInteger())});
+        QCOMPARE(again.value(QStringLiteral("reason")).toString(), kWaiting);
+
+        // Clear the slice-cap pressure. A slice already owned by A keeps
+        // the narrow target receiver active after B's victim would close.
+        const QJsonObject secondAsk = waitForLast(appA, QStringLiteral("confirm.request"), 1);
+        QVERIFY(core.invoke(appA, "confirm.cancel",
+                            {int64("id", secondAsk.value(QStringLiteral("id")).toInteger())})
+                    .value(QStringLiteral("accepted")).toBool());
+        for (int id : bExtras) {
+            QVERIFY(core.invoke(appB, "removeSlice", {int64("sliceId", id)})
+                        .value(QStringLiteral("accepted")).toBool());
+        }
+        const QJsonObject addedA = core.invoke(appA, "addSlice", {utf8("initialPanId", QString())});
+        QVERIFY2(addedA.value(QStringLiteral("accepted")).toBool(false),
+                 QJsonDocument(addedA).toJson().constData());
+        const int aExtra = addedA.value(QStringLiteral("affected")).toArray().first()
+                               .toString().mid(6).toInt();
+        core.model->sliceById(aExtra)->setFrequency(7074000.0);
+        QCOMPARE(streamOf(core, aExtra), aStream);
+        QVERIFY(core.model->setStreamSampleRate(aStream, 96000));
+        QCOMPARE(core.model->streamAllocator().streamSampleRateHz(aStream), 96000);
+
+        const QJsonObject backWithNarrowWindow = core.invoke(
+            appA, "notice.takeBack", {int64("id", notice.value(QStringLiteral("id")).toInteger())});
+        QCOMPARE(backWithNarrowWindow.value(QStringLiteral("reason")).toString(), kWaiting);
+        const QJsonObject narrowAsk = waitForLast(appA, QStringLiteral("confirm.request"), 2);
+        const int noticesBeforeNarrow = countOf(appB, QStringLiteral("notice"));
+        const QJsonObject narrowRefusal = core.invoke(
+            appA, "confirm.proceed",
+            {int64("id", narrowAsk.value(QStringLiteral("id")).toInteger()), int64("choice", 0)});
+        QCOMPARE(narrowRefusal.value(QStringLiteral("accepted")).toBool(true), false);
+        QCOMPARE(core.model->sliceOwnership()->ownedBy(a.key.fingerprint()), QList<int>{aExtra});
+        QCOMPARE(core.model->sliceOwnership()->mark(bVictim).owner, b.key.fingerprint());
+        QCOMPARE(countOf(appB, QStringLiteral("notice")), noticesBeforeNarrow);
+        QCOMPARE(core.invoke(appA, "notice.takeBack",
+                             {int64("id", notice.value(QStringLiteral("id")).toInteger())})
+                     .value(QStringLiteral("reason")).toString(), kWaiting);
     }
 
     // Fix wave C2 (ruling 5.2, its last paragraph): the phone leaves last,

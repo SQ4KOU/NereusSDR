@@ -22,6 +22,8 @@
 #include <QRegularExpression>
 #include <QSet>
 
+#include <cmath>
+
 #include "core/SliceOwnership.h"
 #include "core/SliceStreamAllocator.h"
 #include "models/RadioModel.h"
@@ -260,6 +262,98 @@ ReceiverPlanner::AddPlacement ReceiverPlanner::planAddAfterClosing(
     plan.receiverFits = placement.outcome != SliceStreamAllocator::Outcome::Rejected;
     plan.reason = !plan.sliceSpace ? QStringLiteral("All slice places are in use.")
                                    : placement.reason;
+    return plan;
+}
+
+bool ReceiverPlanner::panMoveFitsAfterClosing(int stream, double centreHz,
+                                               const QList<int>& moving,
+                                               const QList<int>& closes) const
+{
+    const SliceStreamAllocator& live = m_model.streamAllocator();
+    if (moving.isEmpty() || !live.isStreamActive(stream) || !std::isfinite(centreHz)
+        || centreHz <= 0.0) {
+        return false;
+    }
+    const QSet<int> removed(closes.cbegin(), closes.cend());
+    bool staysActive = false;
+    for (int id : m_model.slicesOnStream(stream)) {
+        staysActive = staysActive || !removed.contains(id);
+    }
+    const int rateHz = staysActive ? live.streamSampleRateHz(stream)
+                                   : m_model.newStreamSampleRateHz();
+    if (rateHz <= 0) {
+        return false;
+    }
+    const double halfWindow = static_cast<double>(rateHz) / 2.0;
+    for (int id : moving) {
+        const SliceModel* slice = m_model.sliceById(id);
+        if (slice == nullptr || removed.contains(id)) {
+            return false;
+        }
+        const double offset = slice->frequency() - centreHz;
+        if (!(offset > -halfWindow && offset < halfWindow)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+ReceiverPlanner::RestorePlacement ReceiverPlanner::planRestoreAfterClosing(
+    const QList<double>& frequencies, const QList<int>& closes) const
+{
+    RestorePlacement plan;
+    if (frequencies.isEmpty()) {
+        plan.reason = QStringLiteral("There are no saved slices to restore.");
+        return plan;
+    }
+    const QSet<int> removed(closes.cbegin(), closes.cend());
+    for (int id : removed) {
+        if (m_model.sliceById(id) == nullptr) {
+            plan.reason = QStringLiteral("That receiver changed since you asked.");
+            return plan;
+        }
+    }
+    const int survivors = m_model.slices().size() - removed.size();
+    if (survivors <= 0 || survivors + frequencies.size() > m_model.sliceCapForDevices()) {
+        plan.reason = survivors <= 0
+            ? QStringLiteral("The Core must keep its last receiver slice.")
+            : QStringLiteral("All slice places are in use.");
+        return plan;
+    }
+    SliceStreamAllocator copy = m_model.streamAllocator();
+    for (int stream = 0; stream < copy.streamCount(); ++stream) {
+        bool occupied = false;
+        for (int id : m_model.slicesOnStream(stream)) {
+            occupied = occupied || !removed.contains(id);
+        }
+        if (!occupied) {
+            copy.deactivateStream(stream);
+        }
+    }
+    if (copy.streamCount() <= 0) {
+        plan.fits = true;
+        return plan;
+    }
+    const int newRateHz = m_model.newStreamSampleRateHz();
+    if (newRateHz <= 0) {
+        plan.reason = QStringLiteral("The receiver has no usable sample rate.");
+        return plan;
+    }
+    for (double frequency : frequencies) {
+        if (!std::isfinite(frequency) || frequency <= 0.0) {
+            plan.reason = QStringLiteral("A saved slice has no usable frequency.");
+            return plan;
+        }
+        const auto placement = copy.placeSlice(frequency);
+        if (placement.outcome == SliceStreamAllocator::Outcome::Rejected) {
+            plan.reason = placement.reason;
+            return plan;
+        }
+        if (placement.outcome == SliceStreamAllocator::Outcome::NewStream) {
+            copy.activateStream(placement.streamIndex, placement.newStreamCentreHz, newRateHz);
+        }
+    }
+    plan.fits = true;
     return plan;
 }
 

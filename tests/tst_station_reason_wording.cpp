@@ -868,7 +868,19 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("withHolderNames(QString::fromLatin1(kPanNeedsReceiverReason), requester)"),
           QStringLiteral("withHolderNames(result.reason, requester)"),
           QStringLiteral("withHolderNames(r.reason, requester)"),
-          QStringLiteral("result.reason"), QStringLiteral("r.reason"), QStringLiteral("reason")}},
+          QStringLiteral("result.reason"), QStringLiteral("r.reason"), QStringLiteral("reason"),
+          // Take-back preflight passes ReceiverPlanner::RestorePlacement's
+          // reason through unchanged. ReceiverPlanner and the allocator it
+          // forwards are both scanned below.
+          QStringLiteral("placement.reason")}},
+        // Receiver choices and preflight refusals, including the complete
+        // saved-slice restore check used before a take-back closes victims.
+        {"src/core/session/ReceiverPlanner.cpp", {}, {}, 10,
+         {// A slice letter, or a list of those letters.
+          QStringLiteral("letters.first()"), QStringLiteral("joinWords(letters)")},
+         {// planAddAfterClosing and planRestoreAfterClosing relay the
+          // allocator's refusal; SliceStreamAllocator.cpp is scanned below.
+          QStringLiteral("placement.reason")}},
         // iPhone app Task 75 (R-IOS-30): settings that affect every device:
         // the refusals, the `change` words of confirm.request and notice,
         // and the notice reasons. Device names inserted are the operator's
@@ -2104,6 +2116,14 @@ private slots:
             QStringLiteral("Your slice %1 would close."),
             QStringLiteral("Your slices %1 would close."),
             QStringLiteral("Your panadapter already uses this receiver."),
+            // planRestoreAfterClosing's own refusals. Its remaining refusal
+            // comes from SliceStreamAllocator, scanned as a reason source.
+            QStringLiteral("There are no saved slices to restore."),
+            QStringLiteral("That receiver changed since you asked."),
+            QStringLiteral("The Core must keep its last receiver slice."),
+            QStringLiteral("All slice places are in use."),
+            QStringLiteral("The receiver has no usable sample rate."),
+            QStringLiteral("A saved slice has no usable frequency."),
         };
         const auto check = [&name](const QString& sentence) {
             QString filled = sentence;
