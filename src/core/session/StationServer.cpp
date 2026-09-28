@@ -8011,7 +8011,9 @@ int StationServer::transmitSettingsVersion() const
     // once (the OC matrix after the radio is back on receive), and the
     // N2ADR switch on the Core's HL2 applies its whole preset off the air
     // (parity Task 13).
-    return m_radioModel.isNull() ? 0 : 8;
+    // 9: General Region writes the validated BandPlanRegion ID (0..23),
+    // including TX filter edges, on-air refusal and shared confirmation.
+    return m_radioModel.isNull() ? 0 : 9;
 }
 
 bool StationServer::pureSignalArmingOffered(SessionTransport* transport) const

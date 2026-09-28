@@ -1,3 +1,5 @@
+// 2026-09-27: activate the validated Core transmit-region control.
+// J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 // =================================================================
 // src/gui/setup/GeneralOptionsPage.cpp  (NereusSDR)
 // =================================================================
@@ -197,6 +199,18 @@ GeneralOptionsPage::GeneralOptionsPage(RadioModel* model, QWidget* parent)
     buildStepAttGroup();
     buildAutoAttGroup();
 
+    m_regionSettingsAvailable = model && model->ownsLocalDsp();
+    if (model) {
+        const auto refresh = [this]() { refreshRegionAvailability(); };
+        connect(model, &RadioModel::coreOnAirChanged, this, refresh);
+        connect(model, &RadioModel::stationLinkStateChanged, this, refresh);
+        connect(model, &RadioModel::transmittingChanged, this, refresh);
+        connect(&model->transmitModel(), &TransmitModel::moxChanged, this, refresh);
+        connect(&model->transmitModel(), &TransmitModel::tuneChanged, this, refresh);
+        connect(&model->transmitModel(), &TransmitModel::twoToneActiveChanged, this, refresh);
+    }
+    refreshRegionAvailability();
+
     // Task 16: the Receive Only checkbox follows the model's receive-only
     // state (Thetis console.RXOnly keeps SetupForm.RXOnly in step,
     // console.cs:15328-15332 [v2.10.3.15]), including a Core's change seen
@@ -242,17 +256,15 @@ GeneralOptionsPage::GeneralOptionsPage(RadioModel* model, QWidget* parent)
 
 void GeneralOptionsPage::setStationSettingsAvailable(bool available, const QString& reason)
 {
+    m_regionSettingsAvailable = available;
+    m_regionSettingsReason = reason;
     // R-R3-49: the Network Watchdog is the Core's setting too; so is
     // Receive Only (Task 16). The radio-has-no-transmitter lock sits on top
     // of the Core's gate, so it is taken off first and put back after.
     setReceiveOnlyLocked(false, QString());
-    gateStationControls({m_comboFRSRegion, m_chkNetworkWDT, m_chkGeneralRXOnly},
+    gateStationControls({m_chkNetworkWDT, m_chkGeneralRXOnly},
                         available, reason);
-    // Region is persisted but the Core TX gate still reads BandPlanRegion.
-    // Keep this control visible with its own reason until those keys are
-    // reconciled; a station-settings refresh must not enable an inert edit.
-    m_comboFRSRegion->setEnabled(false);
-    m_comboFRSRegion->setToolTip(tr("Region selection is not available for transmit on this Core."));
+    refreshRegionAvailability();
     syncReceiveOnly();
     // iPhone app plan Task 38: so is every transmit time-out. A Core older
     // than the time-out stores these settings and ignores them, so a window
@@ -261,6 +273,32 @@ void GeneralOptionsPage::setStationSettingsAvailable(bool available, const QStri
     const bool olderCore = available && link != nullptr && !link->transmitTimeOutAvailable();
     gateStationControls({m_grpTimeOut}, available && !olderCore,
                         olderCore ? timeOutNeedsNewerCoreText() : reason);
+}
+
+bool GeneralOptionsPage::regionEditAvailable()
+{
+    const RadioModel* radio = model();
+    if (!radio || !m_regionSettingsAvailable) { return false; }
+    if (radio->ownsLocalDsp()) { return !radio->stationOnAirRefusal(nullptr); }
+    const IStationLink* link = radio->stationLink();
+    return link && link->transmitSettingsAvailable(9) && !radio->isCoreOnAir();
+}
+
+void GeneralOptionsPage::refreshRegionAvailability()
+{
+    const bool enabled = regionEditAvailable();
+    m_comboFRSRegion->setEnabled(enabled);
+    QString reason;
+    if (!enabled) {
+        const bool onAir = model() && (model()->ownsLocalDsp()
+            ? model()->stationOnAirRefusal(nullptr) : model()->isCoreOnAir());
+        reason = !m_regionSettingsAvailable && !m_regionSettingsReason.isEmpty()
+            ? m_regionSettingsReason
+            : onAir ? RadioModel::onAirReason()
+            : tr("Region selection is not available for transmit on this Core.");
+    }
+    m_comboFRSRegion->setToolTip(enabled ? tr("Select Region for your location") : reason);
+    m_comboFRSRegion->setAccessibleDescription(reason);
 }
 
 QString GeneralOptionsPage::timeOutNeedsNewerCoreText()
@@ -436,12 +474,21 @@ void GeneralOptionsPage::buildHardwareConfigGroup()
     // text (which remains saved but cannot influence transmit).
     auto& s = AppSettings::instance();
     const int usRegion = static_cast<int>(safety::Region::UnitedStates);
-    const int regionIdx = s.value(QStringLiteral("BandPlanRegion"), usRegion).toInt();
-    m_comboFRSRegion->setCurrentIndex(regionIdx >= 0 && regionIdx < m_comboFRSRegion->count()
-                                          ? regionIdx : usRegion);
+    bool regionOk = false;
+    const int regionIdx = s.value(QStringLiteral("BandPlanRegion"), usRegion).toString().toInt(&regionOk);
+    m_comboFRSRegion->setCurrentIndex(regionOk && regionIdx >= 0 && regionIdx < m_comboFRSRegion->count()
+                                          ? regionIdx : -1);
 
-    connect(m_comboFRSRegion, &QComboBox::currentTextChanged, this, [](const QString& text) {
-        AppSettings::instance().setValue(QStringLiteral("Region"), text);
+    connect(m_comboFRSRegion, &QComboBox::currentIndexChanged, this, [this](int index) {
+        if (!regionEditAvailable() || index < 0 || index >= m_comboFRSRegion->count()) {
+            const QSignalBlocker blocked(m_comboFRSRegion);
+            bool storedOk = false;
+            const int stored = AppSettings::instance().value(QStringLiteral("BandPlanRegion"), 8).toString().toInt(&storedOk);
+            m_comboFRSRegion->setCurrentIndex(storedOk && stored >= 0 && stored < m_comboFRSRegion->count() ? stored : -1);
+            refreshRegionAvailability();
+            return;
+        }
+        AppSettings::instance().setValue(QStringLiteral("BandPlanRegion"), QString::number(index));
     });
 
     regionRow->addWidget(regionLabel);

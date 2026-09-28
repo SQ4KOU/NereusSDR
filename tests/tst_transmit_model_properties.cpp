@@ -383,12 +383,13 @@ void TstTransmitModelProperties::coreOffersTransmitSettingsVersion4()
     // calibration); 4 is within it.
     Session s(m_securityDir.path(), this);
     QVERIFY(s.connect());
-    QCOMPARE(s.server->buildCapabilities().transmitSettingsVersion, 8);
-    QCOMPARE(s.client->capabilities().transmitSettingsVersion, 8);
+    QCOMPARE(s.server->buildCapabilities().transmitSettingsVersion, 9);
+    QCOMPARE(s.client->capabilities().transmitSettingsVersion, 9);
     QVERIFY(s.client->transmitSettingsAvailable(4));
     QVERIFY(s.client->transmitSettingsAvailable(7));
     QVERIFY(s.client->transmitSettingsAvailable(8));
-    QVERIFY(!s.client->transmitSettingsAvailable(9));
+    QVERIFY(s.client->transmitSettingsAvailable(9));
+    QVERIFY(!s.client->transmitSettingsAvailable(10));
 }
 
 // R-R3-49 (parity Task 5): the version 5 properties, after txAlcDecay in

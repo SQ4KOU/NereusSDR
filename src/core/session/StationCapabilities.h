@@ -1,3 +1,5 @@
+// 2026-09-27: activate the validated Core transmit-region control.
+// J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 #pragma once
 // =================================================================
 // src/core/session/StationCapabilities.h  (NereusSDR)
@@ -293,6 +295,7 @@ struct StationCapabilities {
     /// once; each is refused while the radio is on the air. Sent in the
     /// same minor-11 block, after displayExtrasVersion. 0: a window's
     /// transmit settings stay greyed and say the Core cannot take them.
+    /// 9 also offers validated BandPlanRegion edits and the TX passband guard.
     int transmitSettingsVersion = 0;
     /// R-IOS-27, R-IOS-06: 1 means the Core takes `slice.selectBand`, which
     /// runs the desktop's band button on a slice (its saved frequency, mode

@@ -1,3 +1,5 @@
+// 2026-09-27: activate the validated Core transmit-region control.
+// J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 // =================================================================
 // src/gui/setup/GeneralOptionsPage.h  (NereusSDR)
 // =================================================================
@@ -152,6 +154,10 @@ private slots:
     void onCurrentRadioChanged(const NereusSDR::RadioInfo& info);
 
 private:
+    void refreshRegionAvailability();
+    bool regionEditAvailable();
+    bool m_regionSettingsAvailable{false};
+    QString m_regionSettingsReason;
     void buildHardwareConfigGroup();
     void buildOptionsGroup();
     // iPhone app plan Task 38: Thetis's Time Out Timers group

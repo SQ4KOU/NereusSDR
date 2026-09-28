@@ -2154,12 +2154,7 @@ private slots:
                                         .arg(coreControls.value(label, 0))));
                 for (QWidget* control : gated) {
                     QVERIFY2(!control->isEnabled(), qPrintable(label));
-                    if (control->objectName() == QStringLiteral("comboFRSRegion")) {
-                        QCOMPARE(control->toolTip(),
-                                 QStringLiteral("Region selection is not available for transmit on this Core."));
-                    } else {
-                        QCOMPARE(control->toolTip(), kStationReason);
-                    }
+                    QCOMPARE(control->toolTip(), kStationReason);
                 }
                 break;
             }
@@ -4314,6 +4309,14 @@ private slots:
             // applet's PROC follow the same gate at transmitSettingsVersion
             // 2; the VOX button keeps the remote transmit reason.
             QVERIFY(client->transmitSettingsAvailable(2));
+            QVERIFY(client->transmitSettingsAvailable(9));
+            GeneralOptionsPage regionPage(window->radioModel());
+            regionPage.setStationSettingsAvailable(true, QString());
+            auto* regionCombo = regionPage.findChild<QComboBox*>(QStringLiteral("comboFRSRegion"));
+            QVERIFY(regionCombo);
+            QVERIFY(regionCombo->isEnabled());
+            regionCombo->setCurrentIndex(3);
+            QTRY_COMPARE(stationSettings.value(QStringLiteral("BandPlanRegion")).toInt(), 3);
             QPushButton* const lev = txApplet->findChild<QPushButton*>(QStringLiteral("TxLevButton"));
             QPushButton* const vox = txApplet->findChild<QPushButton*>(QStringLiteral("TxVoxButton"));
             auto* const phone = window->findChild<PhoneCwApplet*>();
@@ -4330,6 +4333,7 @@ private slots:
             coreMox->setMoxCheck({});
             coreMox->setMox(true);
             QTRY_VERIFY(window->radioModel()->isCoreOnAir());
+            QTRY_VERIFY(!regionCombo->isEnabled());
             QTRY_VERIFY(!txApplet->rfPowerSlider()->isEnabled());
             QCOMPARE(txApplet->rfPowerSlider()->toolTip(),
                      QStringLiteral("The radio is on the air. Try again when it stops."));
@@ -4351,6 +4355,7 @@ private slots:
             }
             coreMox->setMox(false);
             QTRY_VERIFY(!window->radioModel()->isCoreOnAir());
+            QTRY_VERIFY(regionCombo->isEnabled());
             QTRY_VERIFY(txApplet->rfPowerSlider()->isEnabled());
             QTRY_VERIFY(txApplet->tunePowerSlider()->isEnabled());
             QTRY_VERIFY(lev->isEnabled());

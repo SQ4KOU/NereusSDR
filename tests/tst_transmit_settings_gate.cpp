@@ -210,8 +210,8 @@ void TstTransmitSettingsGate::coreOffersTransmitSettingsVersion()
     // parity Task 6 (Setup > PA), 7 since parity Task 7 (PureSignal arming),
     // 8 since parity Task 13 (Hardware Config's OC transmit pins and
     // transmit calibration).
-    QCOMPARE(s.server->buildCapabilities().transmitSettingsVersion, 8);
-    QCOMPARE(s.client->capabilities().transmitSettingsVersion, 8);
+    QCOMPARE(s.server->buildCapabilities().transmitSettingsVersion, 9);
+    QCOMPARE(s.client->capabilities().transmitSettingsVersion, 9);
     QVERIFY(s.client->transmitSettingsAvailable());
     QVERIFY(s.client->transmitSettingsAvailable(1));
     QVERIFY(s.client->transmitSettingsAvailable(2));
@@ -221,7 +221,8 @@ void TstTransmitSettingsGate::coreOffersTransmitSettingsVersion()
     QVERIFY(s.client->transmitSettingsAvailable(6));
     QVERIFY(s.client->transmitSettingsAvailable(7));
     QVERIFY(s.client->transmitSettingsAvailable(8));
-    QVERIFY(!s.client->transmitSettingsAvailable(9));
+    QVERIFY(s.client->transmitSettingsAvailable(9));
+    QVERIFY(!s.client->transmitSettingsAvailable(10));
     QVERIFY(StationServer::isTransmitSettingKeyAcceptedOffAir(
         QStringLiteral("DspOptionsBufferSizePhoneTx")));
     QVERIFY(StationServer::isTransmitSettingKeyAcceptedOffAir(
@@ -254,6 +255,10 @@ void TstTransmitSettingsGate::olderCoreOffersNoTransmitSettings()
     // iPhone app plan Task 29: mediaReplaceVersion, controlSwitchVersion and
     // relayAllowed after it, then parity Task 22's supportBundleVersion;
     // the unpublished media-floor versions follow every existing field.
+    QCOMPARE(updates.last().name, QByteArrayLiteral("txModMonitorVersion"));
+    updates.removeLast();
+    QCOMPARE(updates.last().name, QByteArrayLiteral("remoteIqVersion"));
+    updates.removeLast();
     QCOMPARE(updates.last().name, QByteArrayLiteral("mediaRelayRoutingVersion"));
     updates.removeLast();
     QCOMPARE(updates.last().name, QByteArrayLiteral("mediaTunnelVersion"));

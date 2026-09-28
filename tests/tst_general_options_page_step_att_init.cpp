@@ -57,6 +57,46 @@ class TestGeneralOptionsPageStepAttInit : public QObject
     Q_OBJECT
 
 private slots:
+    void regionEditsEffectivePolicyAndWaitsForReceive()
+    {
+        auto& settings = AppSettings::instance();
+        settings.setValue(QStringLiteral("Region"), QStringLiteral("Italy"));
+        settings.setValue(QStringLiteral("BandPlanRegion"), QStringLiteral("8"));
+        RadioModel model;
+        GeneralOptionsPage page(&model);
+        auto* region = page.findChild<QComboBox*>(QStringLiteral("comboFRSRegion"));
+        QVERIFY(region);
+        QVERIFY(region->isEnabled());
+        for (int id = 0; id < 24; ++id) {
+            region->setCurrentIndex(id);
+            QCOMPARE(settings.value(QStringLiteral("BandPlanRegion")).toInt(), id);
+        }
+        QCOMPARE(settings.value(QStringLiteral("Region")).toString(), QStringLiteral("Italy"));
+        model.transmitModel().setMox(true);
+        QVERIFY(!region->isEnabled());
+        region->setCurrentIndex(3); // A stale/programmatic edit is refused too.
+        QCOMPARE(settings.value(QStringLiteral("BandPlanRegion")).toInt(), 23);
+        QCOMPARE(region->currentIndex(), 23);
+        model.transmitModel().setMox(false);
+        QVERIFY(region->isEnabled());
+        region->setCurrentIndex(8);
+        QCOMPARE(settings.value(QStringLiteral("BandPlanRegion")).toInt(), 8);
+    }
+
+    void invalidStoredRegionNeedsAnExplicitSelection()
+    {
+        auto& settings = AppSettings::instance();
+        settings.setValue(QStringLiteral("BandPlanRegion"), QStringLiteral("invalid"));
+        RadioModel model;
+        GeneralOptionsPage page(&model);
+        auto* region = page.findChild<QComboBox*>(QStringLiteral("comboFRSRegion"));
+        QVERIFY(region);
+        QCOMPARE(region->currentIndex(), -1);
+        QCOMPARE(settings.value(QStringLiteral("BandPlanRegion")).toString(), QStringLiteral("invalid"));
+        region->setCurrentIndex(8);
+        QCOMPARE(settings.value(QStringLiteral("BandPlanRegion")).toString(), QStringLiteral("8"));
+    }
+
     void initTestCase()
     {
         if (!qApp) {

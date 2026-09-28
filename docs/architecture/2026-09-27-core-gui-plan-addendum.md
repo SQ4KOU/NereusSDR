@@ -644,9 +644,13 @@ colours for the same signal.
   Changes affecting another transmit holder use shared confirmation, with the
   on-air check repeated at proceed. Seven network regressions failed before this
   fix; the final catalog and confirmation suites pass 2/2 (12.17 s), including
-  all 24 accepted regions and four confirmation write/remove cases. Region activation
-  still needs the remote capability gate and local control wiring; enabling the
-  combo alone would be unsafe. Thetis's current `Init60mChannels` has only UK, US and
+  all 24 accepted regions and four confirmation write/remove cases. Region is now
+  wired to numeric BandPlanRegion locally and on remote Core versions advertising
+  transmitSettingsVersion 9. It disables while on air and rejects stale UI edits;
+  invalid saved values show no selection until an explicit choice. Legacy Region
+  text is preserved. Eight affected GUI/capability/session suites pass (42.38 s,
+  host load 5.28/5.49/6.31); the app/Core builds and generated protocol-table check
+  pass. Extended-transmit migration still awaits JJ's ruling. Thetis's current `Init60mChannels` has only UK, US and
   default cases, so missing extra country-channel arrays are not established; Nereus's
   explicit UK/Japan channelization is a native exception. The isolated parity lane is only
   disabling misleading interim UI and recording this gap. Ganymede and DisableHFPA remain

@@ -847,7 +847,7 @@ change shows as surface drift and as a change to this table.
 | `pairingVersion` | 1 |
 | `stationCatalogVersion` | 1 |
 | `displayExtrasVersion` | 2 |
-| `transmitSettingsVersion` | 8 |
+| `transmitSettingsVersion` | 9 |
 | `bandSelectVersion` | 1 |
 | `meterReadingsVersion` | 1 |
 | `dspInfoVersion` | 1 |
@@ -1116,7 +1116,12 @@ When a feature is off, its version is 0:
   transmit settings unavailable. A peer below agreed minor 11 is never
   offered it, and a receive-only Core refuses its transmit writes and DSP >
   Options TX keys as before. `transmitSettingsVersion` is followed by
-  `bandSelectVersion`.
+  `bandSelectVersion`. Version 9 also offers General Region: `BandPlanRegion`
+  is an integer ID 0..23 in the desktop combo order. Core validates the value,
+  checks the complete signed TX passband (including XIT), and refuses writes
+  and removals while on air, including at shared-setting confirmation. Removing
+  the key restores United States (8). Legacy `Region` text is not migrated.
+  Extended transmit is not enabled by this capability.
 - `bandSelectVersion`: sent only at agreed minor 11, and 0 on a
   station with no radio model. At 1 the Core takes `slice.selectBand`
   (section 9.1), a device's band button for a slice, for the bands the
