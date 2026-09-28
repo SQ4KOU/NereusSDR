@@ -2620,6 +2620,10 @@ nereus_add_test(tst_waterfall_scrollback)
 # and smoke test for setActivePeakHoldTxActive + setWaterfallStopOnTx combo.
 nereus_add_test(tst_waterfall_defaults_changes)
 
+# The Spectrum Peaks settings are stored once for every pan: a Setup change
+# reaches every existing pan at once, and a new pan starts with them.
+nereus_add_test(tst_spectrum_peaks_all_pans EXTRA_LABELS gui)
+
 # ── Issue #230: waterfall threshold persistence under AGC/NF-AGC/Clarity ─────
 # Thetis sources: display.cs:2522-2548 + 6575-6594 (persistent vs runtime
 # threshold split) and console.cs:9094-9108 (setWaterfallGainsIfLinkedToSpectrum

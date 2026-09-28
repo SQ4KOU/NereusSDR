@@ -238,6 +238,7 @@
 #endif
 
 #include <algorithm>
+#include <vector>
 #include <array>
 #include <cmath>
 #include <cstring>
@@ -309,9 +310,20 @@ QRgb interpolateWfGradient(float t, const WfGradientStop* stops, int count)
 
 // ---- SpectrumWidget ----
 
+// Every SpectrumWidget, for the Spectrum Peaks settings every pan shares
+// (reloadSpectrumPeaksSettingsOnAllPans). GUI thread only.
+namespace {
+std::vector<SpectrumWidget*>& spectrumPeaksPans()
+{
+    static std::vector<SpectrumWidget*> pans;
+    return pans;
+}
+} // namespace
+
 SpectrumWidget::SpectrumWidget(QWidget* parent)
     : SpectrumBaseClass(parent)
 {
+    spectrumPeaksPans().push_back(this);
     setMinimumSize(400, 200);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     setAutoFillBackground(false);
@@ -558,6 +570,8 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
 
 SpectrumWidget::~SpectrumWidget()
 {
+    auto& pans = spectrumPeaksPans();
+    pans.erase(std::remove(pans.begin(), pans.end(), this), pans.end());
     prepareForShutdown();
     // 2026-05-25 KG4VCF bench fix #4: shut down the waterfall ticker
     // thread cleanly so its QTimer + event loop are torn down before
@@ -742,70 +756,9 @@ void SpectrumWidget::loadSettings()
 
     // Tasks 2.5 / 2.6 — Active Peak Hold + Peak Blobs persisted state.
     // SpectrumPeaksPage owns the UI but the renderer needs the persisted
-    // values at app-start time. Without this load the peak features stay at
-    // PeakBlobDetector / ActivePeakHoldTrace defaults until the user opens
-    // Setup → Display → Spectrum Peaks even when the on-disk toggles are on.
-    {
-        // Active Peak Hold
-        const bool aphOn = s.value(QStringLiteral("DisplayActivePeakHoldEnabled"),
-                                   QStringLiteral("False")).toString() == QStringLiteral("True");
-        const int aphDur = s.value(QStringLiteral("DisplayActivePeakHoldDurationMs"),
-                                   QStringLiteral("2000")).toInt();
-        const int aphDrop = s.value(QStringLiteral("DisplayActivePeakHoldDropDbPerSec"),
-                                    QStringLiteral("6")).toInt();
-        const bool aphFill = s.value(QStringLiteral("DisplayActivePeakHoldFill"),
-                                     QStringLiteral("False")).toString() == QStringLiteral("True");
-        const bool aphOnTx = s.value(QStringLiteral("DisplayActivePeakHoldOnTx"),
-                                     QStringLiteral("False")).toString() == QStringLiteral("True");
-        m_activePeakHold.setDurationMs(qBound(100, aphDur, 60000));
-        m_activePeakHold.setDropDbPerSec(qBound(0.1, static_cast<double>(aphDrop), 120.0));
-        m_activePeakHold.setFill(aphFill);
-        m_activePeakHold.setOnTx(aphOnTx);
-        if (aphOn) {
-            m_activePeakHold.setEnabled(true);
-        }
-        // NereusSDR-original — distinct peak trace colour so it stays visible
-        // when the data-line colour is changed (e.g. Smooth Defaults paints
-        // the live trace pure white). Default gold (#FFD700FF).
-        m_activePeakHoldColor = ColorSwatchButton::colorFromHex(
-            s.value(QStringLiteral("DisplayActivePeakHoldColor"),
-                    QStringLiteral("#FFD700FF")).toString());
-
-        // Peak Blobs — NereusSDR ships disabled by default (deviation from
-        // Thetis Display.cs:4395 [v2.10.3.13] m_bPeakBlobMaximums = true).
-        const bool blobOn = s.value(QStringLiteral("DisplayPeakBlobsEnabled"),
-                                    QStringLiteral("False")).toString() == QStringLiteral("True");
-        const int blobCount = s.value(QStringLiteral("DisplayPeakBlobsCount"),
-                                      QStringLiteral("3")).toInt();
-        const bool blobInside = s.value(QStringLiteral("DisplayPeakBlobsInsideFilterOnly"),
-                                        QStringLiteral("False")).toString() == QStringLiteral("True");
-        const bool blobHold = s.value(QStringLiteral("DisplayPeakBlobsHoldEnabled"),
-                                      QStringLiteral("False")).toString() == QStringLiteral("True");
-        const int blobHoldMs = s.value(QStringLiteral("DisplayPeakBlobsHoldMs"),
-                                       QStringLiteral("500")).toInt();
-        const bool blobHoldDrop = s.value(QStringLiteral("DisplayPeakBlobsHoldDrop"),
-                                          QStringLiteral("False")).toString() == QStringLiteral("True");
-        const int blobFall = s.value(QStringLiteral("DisplayPeakBlobsFallDbPerSec"),
-                                     QStringLiteral("6")).toInt();
-        m_peakBlobs.setCount(qMax(1, blobCount));
-        m_peakBlobs.setInsideFilterOnly(blobInside);
-        m_peakBlobs.setHoldEnabled(blobHold);
-        m_peakBlobs.setHoldMs(blobHoldMs);
-        m_peakBlobs.setHoldDrop(blobHoldDrop);
-        m_peakBlobs.setFallDbPerSec(static_cast<double>(blobFall));
-        if (blobOn) {
-            m_peakBlobs.setEnabled(true);
-        }
-
-        // Persisted format is "#RRGGBBAA" via ColorSwatchButton::colorToHex;
-        // use the matching colorFromHex helper so alpha lands correctly.
-        m_peakBlobColor = ColorSwatchButton::colorFromHex(
-            s.value(QStringLiteral("DisplayPeakBlobColor"),
-                    QStringLiteral("#FF4500FF")).toString());
-        m_peakBlobTextColor = ColorSwatchButton::colorFromHex(
-            s.value(QStringLiteral("DisplayPeakBlobTextColor"),
-                    QStringLiteral("#7FFF00FF")).toString());
-    }
+    // values at app-start time. The keys are global (one set for every
+    // pan), so the same load also serves every pan's live reload.
+    loadSpectrumPeaksSettings();
 
     // Phase 3G-8 commit 4: waterfall renderer state.
     m_wfAgcEnabled = readBool(QStringLiteral("DisplayWfAgc"), true);
@@ -2088,6 +2041,90 @@ void SpectrumWidget::setPeakHoldDelayMs(int ms)
         m_peakHoldDecayTimer->start(ms);
     }
     scheduleSettingsSave();
+}
+
+// ---- Spectrum Peaks: one set of settings for every pan ----
+//
+// The Spectrum Peaks keys are stored once, not per pan (SpectrumPeaksPage).
+// Every SpectrumWidget registers itself so a Setup change reaches every pan
+// at once, not just the one Setup is pointed at.
+
+void SpectrumWidget::loadSpectrumPeaksSettings()
+{
+    auto& s = AppSettings::instance();
+    const auto flag = [&s](const char* key) {
+        return s.value(QLatin1String(key), QStringLiteral("False")).toString()
+            == QStringLiteral("True");
+    };
+
+    // Active Peak Hold
+    const bool aphOn = flag("DisplayActivePeakHoldEnabled");
+    const int aphDur = s.value(QStringLiteral("DisplayActivePeakHoldDurationMs"),
+                               QStringLiteral("2000")).toInt();
+    const int aphDrop = s.value(QStringLiteral("DisplayActivePeakHoldDropDbPerSec"),
+                                QStringLiteral("6")).toInt();
+    m_activePeakHold.setDurationMs(qBound(100, aphDur, 60000));
+    m_activePeakHold.setDropDbPerSec(qBound(0.1, static_cast<double>(aphDrop), 120.0));
+    m_activePeakHold.setFill(flag("DisplayActivePeakHoldFill"));
+    m_activePeakHold.setOnTx(flag("DisplayActivePeakHoldOnTx"));
+    if (aphOn != m_activePeakHold.enabled()) {
+        // As setActivePeakHoldEnabled: off empties the trace, on starts it
+        // afresh (Thetis display.cs:460-470 [v2.10.3.15]).
+        m_activePeakHold.setEnabled(aphOn);
+        m_activePeakHold.clear();
+    }
+    // NereusSDR-original — distinct peak trace colour so it stays visible
+    // when the data-line colour is changed (e.g. Smooth Defaults paints
+    // the live trace pure white). Default gold (#FFD700FF).
+    m_activePeakHoldColor = ColorSwatchButton::colorFromHex(
+        s.value(QStringLiteral("DisplayActivePeakHoldColor"),
+                QStringLiteral("#FFD700FF")).toString());
+
+    // Peak Blobs — NereusSDR ships disabled by default (deviation from
+    // Thetis Display.cs:4395 [v2.10.3.13] m_bPeakBlobMaximums = true).
+    const bool blobOn = flag("DisplayPeakBlobsEnabled");
+    const int blobCount = s.value(QStringLiteral("DisplayPeakBlobsCount"),
+                                  QStringLiteral("3")).toInt();
+    const int blobHoldMs = s.value(QStringLiteral("DisplayPeakBlobsHoldMs"),
+                                   QStringLiteral("500")).toInt();
+    const int blobFall = s.value(QStringLiteral("DisplayPeakBlobsFallDbPerSec"),
+                                 QStringLiteral("6")).toInt();
+    m_peakBlobs.setCount(qMax(1, blobCount));
+    m_peakBlobs.setInsideFilterOnly(flag("DisplayPeakBlobsInsideFilterOnly"));
+    m_peakBlobs.setHoldEnabled(flag("DisplayPeakBlobsHoldEnabled"));
+    m_peakBlobs.setHoldMs(blobHoldMs);
+    m_peakBlobs.setHoldDrop(flag("DisplayPeakBlobsHoldDrop"));
+    m_peakBlobs.setFallDbPerSec(static_cast<double>(blobFall));
+    if (blobOn != m_peakBlobs.enabled()) {
+        m_peakBlobs.setEnabled(blobOn);
+    }
+
+    // Persisted format is "#RRGGBBAA" via ColorSwatchButton::colorToHex;
+    // use the matching colorFromHex helper so alpha lands correctly.
+    const QColor blobColor = ColorSwatchButton::colorFromHex(
+        s.value(QStringLiteral("DisplayPeakBlobColor"),
+                QStringLiteral("#FF4500FF")).toString());
+    if (blobColor != m_peakBlobColor) {
+        m_peakBlobColor = blobColor;
+        m_blobMarkerPixmap = QPixmap();   // rebuilt at the next paint
+    }
+    m_peakBlobTextColor = ColorSwatchButton::colorFromHex(
+        s.value(QStringLiteral("DisplayPeakBlobTextColor"),
+                QStringLiteral("#7FFF00FF")).toString());
+}
+
+void SpectrumWidget::reloadSpectrumPeaksSettings()
+{
+    loadSpectrumPeaksSettings();
+    markOverlayDirty();
+    update();
+}
+
+void SpectrumWidget::reloadSpectrumPeaksSettingsOnAllPans()
+{
+    for (SpectrumWidget* pan : spectrumPeaksPans()) {
+        pan->reloadSpectrumPeaksSettings();
+    }
 }
 
 // ---- Active Peak Hold trace setters (Task 2.5) ----

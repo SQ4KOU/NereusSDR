@@ -622,6 +622,12 @@ public:
     // trace (which would otherwise hide the peak trace behind a same-coloured
     // solid line).
     void setActivePeakHoldColor(const QColor& c);
+    /// Re-read the Spectrum Peaks settings (stored once for every pan) and
+    /// redraw. reloadSpectrumPeaksSettingsOnAllPans does it for every pan
+    /// that exists, so a Setup change reaches them all at once.
+    void reloadSpectrumPeaksSettings();
+    static void reloadSpectrumPeaksSettingsOnAllPans();
+
     // This pan transmitting, for the peak hold's transmit gate. setMoxOverlay
     // drives it on every MOX edge (MoxDisplayController, local and remote).
     void setActivePeakHoldTxActive(bool tx);
@@ -652,6 +658,11 @@ public:
 
     bool   peakBlobsEnabled()     const { return m_peakBlobs.enabled(); }
     int    peakBlobsCount()       const { return m_peakBlobs.count(); }
+    bool   peakBlobsInsideFilterOnly() const { return m_peakBlobs.insideOnly(); }
+    bool   peakBlobsHoldEnabled() const { return m_peakBlobs.holdEnabled(); }
+    int    peakBlobsHoldMs()      const { return m_peakBlobs.holdMs(); }
+    bool   peakBlobsHoldDrop()    const { return m_peakBlobs.holdDrop(); }
+    double peakBlobsFallDbPerSec() const { return m_peakBlobs.fallDbPerSec(); }
     QColor peakBlobColor()        const { return m_peakBlobColor; }
     QColor peakBlobTextColor()    const { return m_peakBlobTextColor; }
 
@@ -1343,6 +1354,7 @@ public:
     void setPanIndex(int idx) { m_panIndex = idx; }
     int  panIndex() const { return m_panIndex; }
     void loadSettings();
+    void loadSpectrumPeaksSettings();
     void saveSettings();
     // Public coalesced-save trigger. Used by setup pages that call setDbmRange()
     // directly (which has no internal save) and need to ensure the new range
