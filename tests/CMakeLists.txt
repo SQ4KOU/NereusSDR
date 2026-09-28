@@ -7483,6 +7483,7 @@ target_compile_definitions(tst_settings_scope PRIVATE
 # serverSuppressesEchoOnInboundApply, the test directly proving the hazard is
 # closed (exactly one broadcast per inbound write, not two).
 nereus_add_test(tst_settings_proxy)
+nereus_add_test(tst_settings_backup_codec)
 
 # Remote Daemon R2, Task 20: the remote-mode GUI gate. Pins RadioModel's
 # ownsLocalDsp() capability authority and the Role::Remote-only hand-out audit

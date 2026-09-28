@@ -30,23 +30,35 @@
 
 import argparse
 import asyncio
+import itertools
 import json
 import socket
 import ssl
 
-COUNTS = {"datagrams": {}, "markerHits": {}, "relayConnections": 0}
+COUNTS = {"datagrams": {}, "markerHits": {}, "relayConnections": 0,
+          "relaySockets": {}}
+CONNECTION_IDS = itertools.count(1)
 
 
 class FrameScanner:
     """Reads WebSocket frames from one direction of a stream and counts
     the relay's data messages and marker hits in their payloads."""
 
-    def __init__(self, markers):
+    def __init__(self, markers, connection, direction, response_header=False):
         self.buffer = bytearray()
         self.markers = markers
+        self.connection = connection
+        self.direction = direction
+        self.response_header = response_header
 
     def feed(self, data):
         self.buffer.extend(data)
+        if self.response_header:
+            end = self.buffer.find(b"\r\n\r\n")
+            if end < 0:
+                return
+            del self.buffer[:end + 4]
+            self.response_header = False
         while True:
             if len(self.buffer) < 2:
                 return
@@ -81,6 +93,8 @@ class FrameScanner:
                 if 1 <= tag <= 0x7F:
                     key = str(tag)
                     COUNTS["datagrams"][key] = COUNTS["datagrams"].get(key, 0) + 1
+                    tags = COUNTS["relaySockets"][self.connection][self.direction]
+                    tags[key] = tags.get(key, 0) + 1
                     for marker in self.markers:
                         if marker in payload[1:]:
                             COUNTS["markerHits"][key] = COUNTS["markerHits"].get(key, 0) + 1
@@ -125,12 +139,16 @@ async def handle(reader, writer, args, markers):
     try:
         if path.startswith(b"/v1/relay"):
             COUNTS["relayConnections"] += 1
+            connection = str(next(CONNECTION_IDS))
+            COUNTS["relaySockets"][connection] = {
+                "source": address, "toRelay": {}, "fromRelay": {}}
             up_reader, up_writer = await asyncio.open_unix_connection(args.relay_socket)
             head = head[:-2] + b"X-Forwarded-For: " + address.encode() + b"\r\n\r\n"
             up_writer.write(head)
             await asyncio.gather(
-                pump(reader, up_writer, FrameScanner(markers)),
-                pump(up_reader, writer, FrameScanner(markers)),
+                pump(reader, up_writer, FrameScanner(markers, connection, "toRelay")),
+                pump(up_reader, writer, FrameScanner(markers, connection, "fromRelay",
+                                                   response_header=True)),
             )
         else:
             up_reader, up_writer = await asyncio.open_connection(args.service_host,

@@ -73,6 +73,7 @@
 #include "RadioDiscovery.h"
 
 #include <QString>
+#include <QByteArray>
 #include <QStringList>
 #include <QVariant>
 #include <QMap>
@@ -129,6 +130,14 @@ public:
 
     // Atomic persistence; failure leaves in-memory preferences available for retry.
     bool save(QString* error = nullptr);
+
+    // Exact local store, independent of any installed SettingsProxy. The
+    // importer replaces the whole store only after its owner has stopped
+    // writing; callers must recreate consumers after success. No per-key
+    // change notifications are emitted for this wholesale replacement.
+    QByteArray exportLocalXml(QString* error = nullptr) const;
+    static bool validateLocalXml(const QByteArray& xml, QString* error = nullptr);
+    bool importLocalXml(const QByteArray& xml, QString* error = nullptr);
 
     // Get/set top-level settings.
     QVariant value(const QString& key, const QVariant& defaultValue = {}) const;

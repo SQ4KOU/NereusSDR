@@ -901,9 +901,9 @@ colours for the same signal.
   TCP retransmission/head-of-line delay is the strongest inference; packet-specific
   retransmission was not captured. The later 2.5 ms callback delay is secondary.
 - Ruling: JJ requires the cause and a suggested fix for load failures. The existing
-  400 ms safety cutoff remains unchanged. A separate authenticated heartbeat path
-  is a proposal under review, not an approved protocol or an implemented fix.
-- Status: OPEN. Diagnosis is recorded in
+  400 ms safety cutoff remains unchanged. The later independent, authenticated
+  watch contract is implemented under the approved R5 completion scope (G-70).
+- Original diagnosis and rejected alternatives are recorded in
   `~/.config/nereus/work/core-gui-r5-loss-diagnosis-report.md`; no production change
   or deadline relaxation. Follow-up diagnostic cadence trials found two failures
   in three 50 ms samples; three 25 ms samples passed 25 seconds each with maximum
@@ -914,7 +914,7 @@ colours for the same signal.
   55.310, 59.714, 20.733 and 1.456 seconds into requested TUNE, with 401-403 ms
   silence. Client production continued. A timer-only fix is rejected; separately
   delivered authenticated liveness needs an explicit contract and verification.
-  The observed failure remains an R5 acceptance gap.
+  Those failures establish the need for the separately delivered watch.
   A separate diagnostic used two independent TLS sockets at the unchanged 100 ms
   cadence for three 60-second samples. Every individual socket exceeded 400 ms;
   combined newer-sequence delivery had maximum observed gaps of 273/354/152 ms.
@@ -922,6 +922,24 @@ colours for the same signal.
   omitted application authentication, audio, relay framing and startup/end gaps.
   Evidence and required protocol constraints are in
   `~/.config/nereus/work/core-gui-r5-independent-flow-probe.md`.
+- Current status: built and verified with the actual Python rendezvous/relay
+  services in isolated Linux namespaces (`9406d54f`, `5c051110`). At unchanged
+  100 ms cadence and 400 ms cutoff, the four predeclared direct-WSS/web-relay
+  rows (seeds 20261011 and 20261013, 3% loss, 150 ms RTT) each passed once:
+  Core-keyed intervals 59964/60140/60033/60000 ms, maximum accepted heartbeat
+  gaps 324/321/352/317 ms, and zero watchdog trips. The checker requires
+  59900 ms Core coverage for these client-timed rows, explicit release, audible
+  receive recovery and continuing keyed display. This is bounded scenario
+  evidence, not a statistical reliability guarantee. A separate second-receiver
+  row proves continuous receive audio while logically keyed: 6000/6000 audible
+  10 ms blocks, 60/60 audible seconds, 604 accepted heartbeats, maximum gap
+  279 ms, and a 60340 ms Core-keyed interval. Its timing correction is G-80.
+  The strengthened checker also verifies each watch socket differs from that
+  endpoint's media socket; replay against saved evidence passed all five accepted
+  rows. Original failed evidence is retained. Old-service watch-version-zero
+  fallback passed both transports. App/Core and nine rebuilt focused suites
+  pass together (63.80 s, load 5.42/4.56/5.07). No radio or deployed service was
+  used or changed; live-phone and installed-service acceptance remains separate.
 - Plan: R5 direct-WSS/web-relay transmit under impaired networks.
 
 ### G-56: PureSignal continuously occupied the display send window
@@ -1165,9 +1183,11 @@ colours for the same signal.
   grant. Admission expiry does not invalidate an already admitted watch;
   primary close clears the context. The app/Core build and four relevant suites
   passed (68.66 seconds), including expiry, missing peer and selected-route
-  boundaries. Production RV opt-in remains disabled pending owner integration.
-  Station-session watch signaling and restrictive-network acceptance remain
-  unfinished.
+  boundaries. Core/client owner integration subsequently landed in `698615768`
+  and `899e9b742`; `9406d54f` enables explicit opt-in at both RV owners.
+  The service default remains disabled and older-service fallback remains intact.
+  The actual-service fixed-loss acceptance and simultaneous second-receiver
+  audio evidence are recorded under G-55. Live-service deployment is still open.
 - Plan: several-device capacity and restrictive-network relay access.
 
 ### G-67: Releasing an offline Core must preserve receiver edits and saved layouts
@@ -1344,7 +1364,15 @@ colours for the same signal.
   step. JJ was asked on 2026-09-28 to choose between requiring disconnection or
   naming the affected devices, confirming, and reconnecting them. That specific
   multi-device behavior remains OPEN; restore is always refused on the air.
-- Status: implementation open. Export must carry both parts in one file;
+- Status: the bounded two-part backup codec and local settings import/export
+  primitives are built in signed `be9ce291`. They preserve local window storage
+  independently of a settings proxy, validate XML before mutation, and publish
+  imported maps only after atomic disk save succeeds. The app/Core and nine
+  focused integration suites pass (63.80 s), including malformed input, arbitrary
+  settings keys and write-failure preservation. Network transfer, owner shutdown,
+  user interface and the pending multi-device policy remain open. The session's
+  1 MiB incoming message limit requires bounded chunking for a 16 MiB XML part.
+  Export must carry both parts in one file;
   import must validate and restore them through their respective owners, apply
   the Core part through the approved reconnect path, and enforce the plan's
   transmit and other-device restrictions. Failure must preserve existing
@@ -1448,6 +1476,23 @@ colours for the same signal.
   retains both the Remote Access binder and receiver selector. No DSP values or
   station-level active-receiver semantics changed.
 - Plan: hosted desktop receiver ownership and Setup parity.
+
+### G-80: Relay acceptance measured requested time instead of Core transmit time
+
+- Evidence: the separate second-receiver row at seed 20261015 held its client
+  command for 60001 ms, but the Core was keyed for only 59851 ms. The ON and OFF
+  commands took 234 ms and 84 ms respectively; that 150 ms difference explains
+  the failed 59900 ms Core-coverage assertion. Watchdog and media checks passed.
+- Ruling basis: JJ requires explaining load failures and fixing their cause.
+  Measure the test's hold from the authenticated Core state showing keyed/TUNE,
+  while preserving the production cadence, safety cutoff and coverage assertion.
+- Status: test-only correction built in `5c051110`. One predetermined rerun of
+  the same seed passed: client hold 60001 ms after observed Core ON, Core keyed
+  60340 ms, zero trips and continuous second-receiver audio. A 65 s fixture
+  release fallback remains bounded; it does not alter Core safety behavior.
+  The original failure and corrected artifacts are both retained under
+  `build-r5-linux/watch-acceptance/second-rx` and `second-rx-corrected`.
+- Plan: R5 impaired-network acceptance with simultaneous receive audio.
 
 ## How this addendum is kept
 
