@@ -351,6 +351,52 @@ private slots:
         h.client.disconnectFromStation(QStringLiteral("test complete"));
     }
 
+    // A real Core accepts the typed tuner release on the primary. Its
+    // result must reach RemoteTransmitClient before an independent TX
+    // heartbeat can resume after the delivery fence.
+    void acceptedTunerTuneOffReopensTheIndependentHeartbeat()
+    {
+        Test::RemoteAudioSessionHarness h;
+        h.pairWindow = true;
+        h.makeTransmitReady();
+        h.openFakeMicrophoneLine();
+        h.connectSession();
+        QTRY_VERIFY(h.client.capabilities().txPermitted);
+        RemoteTransmitClient* tx = h.client.remoteTransmit();
+        QVERIFY(tx != nullptr);
+        int primaryHeartbeats = 0;
+        int independentHeartbeats = 0;
+        tx->setSessionKeepalive([&](quint64, quint32) {
+            ++primaryHeartbeats;
+            return true;
+        });
+        tx->setChannelKeepalive([&](quint64, quint32) {
+            ++independentHeartbeats;
+            return true;
+        });
+        tx->setVoxArmed(true);
+        QSignalSpy answered(&h.client, &StationClient::commandResponse);
+        const int primaryBefore = primaryHeartbeats;
+        tx->setTunerTune(false);
+        const int independentBefore = independentHeartbeats;
+        tx->keepaliveTick();
+        QCOMPARE(independentHeartbeats, independentBefore);
+        QCOMPARE(primaryHeartbeats, primaryBefore);
+        QTRY_VERIFY(!commandsOf(h.stationLink, QStringLiteral("tx.tunerTune")).isEmpty());
+        QTRY_VERIFY(!answered.isEmpty());
+        bool acceptedOff = false;
+        for (const QList<QVariant>& response : answered) {
+            const SessionMessage message = response.at(0).value<SessionMessage>();
+            if (message.commandVerb == QByteArrayLiteral("tx.tunerTune") && message.accepted) {
+                acceptedOff = true;
+            }
+        }
+        QVERIFY(acceptedOff);
+        tx->keepaliveTick();
+        QCOMPARE(independentHeartbeats, independentBefore + 1);
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
     // A receive-only Core: not permitted, and the controls say why in the
     // Core's words, disabled and never hidden.
     void aReceiveOnlyCoreSaysWhyInItsWords()

@@ -1077,14 +1077,21 @@ colours for the same signal.
   assertions fail; seventeen existing/characterization cases pass. This is a
   modeled transport split, not an observed RF event.
 - Ruling: JJ requires diagnosing load failures and preserving the safety cutoff.
-  Lead safety decision: while an off command is unresolved, send keepalives only
-  through the ordered primary command connection. A matching accepted off reply
-  is a delivery barrier, not proof that every newer key is off; the Core's
-  existing stale-epoch protection remains authoritative. A new key request alone
-  cannot release this restriction. No separate operator policy change is claimed.
-- Status: fix in progress. Keep the existing 100 ms cadence and 400 ms watchdog.
-  Tests cover delayed off commands, rapid rekey and stale replies before any new
-  independent heartbeat connection is added.
+  Lead safety decision: pause ALL heartbeat paths while any off command is being
+  dispatched or awaiting its own accepted Core result. A command number does not
+  prove enqueue: the current transport API can silently drop a send. Failed or
+  refused releases remain fenced until session reset and reject new on requests
+  with reconnect guidance. An accepted result proves delivery, not that a newer
+  key is off. An unrelated accepted TUNE-off cannot discharge a failed MOX release.
+  This supersedes the earlier primary-only heartbeat proposal.
+- Status: built in signed worker `b8ea3c19` and integrated with an additional
+  callback regression: a release during one heartbeat callback must prevent a
+  fallback send in the same tick. That regression failed before the added gate.
+  The integrated app/Core build and both focused suites passed (12.04 s), including
+  client/watchdog failures with both heartbeat paths enabled and actual Core
+  tuner-TUNE acknowledgement routing. Callback destruction is guarded as well.
+  The 100 ms cadence and 400 ms cutoff are unchanged. This is deterministic and
+  loopback evidence; restrictive-network and hardware acceptance remain open.
 - Plan: remote transmit safety and restrictive-network liveness.
 
 ### G-66: Web relay limits still assume only two device sessions per Core
