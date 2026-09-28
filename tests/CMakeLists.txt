@@ -2941,6 +2941,10 @@ target_compile_definitions(tst_compression_reading PRIVATE NEREUS_BUILD_TESTS)
 # Derived from Thetis clsHardwareSpecific.cs:395-411 + console.cs:1991-2001
 # + console.cs:21040 RXOffset(rx) [v2.10.3.13].
 nereus_add_test(tst_rx_meter_offset)
+# The RX1 6 m LNA gain offset in the station's receive calibration
+# (Thetis txtVFOAFreq_LostFocus / RXCalibrationOffset).
+nereus_add_test(tst_rx_6m_lna_offset)
+target_compile_definitions(tst_rx_6m_lna_offset PRIVATE NEREUS_BUILD_TESTS)
 
 # ── Phase 3M-1a H.3: TxApplet wiring model-layer contracts ───────────────────
 # Verifies TransmitModel::setPower/tunePowerForBand round-trips, powerChanged

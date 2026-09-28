@@ -26,6 +26,9 @@
 //                 restoreDefaultVoltCalibration, initVoltsAmpsCalibration's
 //                 rule) now that the PA current reading applies it.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - 6 m LNA gain offsets default to Thetis's 13 dB where
+//                 nothing is stored (JJ's ruling: match Thetis). J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // --- From setup.cs ---
@@ -293,12 +296,16 @@ private:
     // Upstream inline attribution preserved verbatim:
     //   console.cs:21075  HardwareSpecific.Model == HPSDRModel.ANAN_G2_1K || HardwareSpecific.Model == HPSDRModel.REDPITAYA) //DH1KLM
     double m_levelOffsetDb{0.0};
-    // Source: setup.cs:3866 ud6mLNAGainOffset default 0 [@501e3f5]
-    double m_rx1_6mLnaOffset{0.0};
-    // Source: setup.cs:6262 ud6mRx2LNAGainOffset default 0 [@501e3f5]
+    // From Thetis setup.designer.cs:12112-12116 [v2.10.3.15]:
+    //   this.ud6mLNAGainOffset.Value = new decimal(new int[] { 13, 0, 0, 0});
+    // (console.cs:11812 _rx_6m_gain_offset_rx1 = 13 agrees.) An earlier
+    // comment here gave Thetis's default as 0; it is 13 dB.
+    double m_rx1_6mLnaOffset{13.0};
+    // From Thetis setup.designer.cs:12070-12074 [v2.10.3.15]: 13 dB
+    // (console.cs:11825 rx_6m_gain_offset_rx2 = 13).
     // Upstream inline attribution preserved verbatim:
     //   setup.cs:6261  HardwareSpecific.Model == HPSDRModel.REDPITAYA))//DH1KLM
-    double m_rx2_6mLnaOffset{0.0};
+    double m_rx2_6mLnaOffset{13.0};
     // Source: setup.cs:14325 udTXDisplayCalOffset default 0 [@501e3f5]
     double m_txDisplayOffsetDb{0.0};
     // From Thetis console.cs:24937-24938 [v2.10.3.15]:

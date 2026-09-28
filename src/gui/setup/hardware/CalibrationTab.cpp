@@ -40,6 +40,9 @@
 //                 model's defaults (btnAmpDefault), and is disabled with its
 //                 reason where it cannot change the PA current reading.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - 6 m LNA spins take Thetis's 0..25 dB, step 1 and 13 dB;
+//                 Rx2's is disabled with its reason. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // --- From setup.cs ---
@@ -268,13 +271,26 @@ CalibrationTab::CalibrationTab(RadioModel* model, QWidget* parent)
     levelCalForm->addRow(tr("Level (dBm):"), m_levelCalLevelSpin);
 
     // Source: setup.cs:17243-17248 ud6mLNAGainOffset -> console.RX6mGainOffset_RX1 [@501e3f5]
-    m_rx1LnaSpin = makeSpinBox(-30.0, 30.0, 0.0, 0.1, 1, levelCalGroup);
+    // From Thetis setup.designer.cs:12089-12116 [v2.10.3.15]: 0..25 dB,
+    // step 1, one decimal, 13 dB.
+    m_rx1LnaSpin = makeSpinBox(0.0, 25.0, 13.0, 1.0, 1, levelCalGroup);
+    m_rx1LnaSpin->setObjectName(QStringLiteral("rx1SixMeterLnaSpin"));
     m_rx1LnaSpin->setSuffix(tr(" dB"));
     levelCalForm->addRow(tr("Rx1 6m LNA:"), m_rx1LnaSpin);
 
     // Source: setup.cs:18315-18317 ud6mRx2LNAGainOffset -> console.RX6mGainOffset_RX2 [@501e3f5]
-    m_rx2LnaSpin = makeSpinBox(-30.0, 30.0, 0.0, 0.1, 1, levelCalGroup);
+    // From Thetis setup.designer.cs:12047-12074 [v2.10.3.15]: 0..25 dB,
+    // step 1, one decimal, 13 dB. Thetis applies it to RX2's own receive
+    // calibration (RXCalibrationOffset(2), console.cs:21068-21075 //DH1KLM); NereusSDR
+    // has one receive calibration for the station, which the Rx1 value
+    // enters, so this one is shown disabled with the reason.
+    m_rx2LnaSpin = makeSpinBox(0.0, 25.0, 13.0, 1.0, 1, levelCalGroup);
+    m_rx2LnaSpin->setObjectName(QStringLiteral("rx2SixMeterLnaSpin"));
     m_rx2LnaSpin->setSuffix(tr(" dB"));
+    m_rx2LnaSpin->setEnabled(false);
+    m_rx2LnaSpin->setToolTip(
+        tr("Not used yet: every receiver shares the Rx1 calibration until "
+           "each receiver has a calibration of its own."));
     levelCalForm->addRow(tr("Rx2 6m LNA:"), m_rx2LnaSpin);
 
     auto* levelBtnRow = new QHBoxLayout;

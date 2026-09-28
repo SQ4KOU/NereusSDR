@@ -31,6 +31,9 @@
 //                 initVoltsAmpsCalibration rule, now that the PA current
 //                 reading applies it. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-28 - 6 m LNA gain offsets default to Thetis's 13 dB where
+//                 nothing is stored. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 // --- From setup.cs ---
@@ -456,8 +459,10 @@ void CalibrationController::load()
     m_freqCorrectionFactor10M = s.value(base + QStringLiteral("freqFactor10M"), QStringLiteral("1.0")).toDouble();
     m_using10MHzRef          = s.value(base + QStringLiteral("using10M"),      QStringLiteral("False")).toString() == QStringLiteral("True");
     m_levelOffsetDb          = s.value(base + QStringLiteral("levelOffset"),   QStringLiteral("0.0")).toDouble();
-    m_rx1_6mLnaOffset        = s.value(base + QStringLiteral("rx1_6mLna"),     QStringLiteral("0.0")).toDouble();
-    m_rx2_6mLnaOffset        = s.value(base + QStringLiteral("rx2_6mLna"),     QStringLiteral("0.0")).toDouble();
+    // Thetis's 13 dB where nothing is stored (setup.designer.cs:12070-12074,
+    // 12112-12116 [v2.10.3.15]); a stored value, 0 included, is kept.
+    m_rx1_6mLnaOffset        = s.value(base + QStringLiteral("rx1_6mLna"),     QStringLiteral("13")).toDouble();
+    m_rx2_6mLnaOffset        = s.value(base + QStringLiteral("rx2_6mLna"),     QStringLiteral("13")).toDouble();
     m_txDisplayOffsetDb      = s.value(base + QStringLiteral("txDisplayOffset"), QStringLiteral("0.0")).toDouble();
     applyLoadedVoltCalibration(s.value(base + QStringLiteral("paSens")).toString(),
                                s.value(base + QStringLiteral("paOffset")).toString());
@@ -537,8 +542,8 @@ void CalibrationController::save()
     store(base + QStringLiteral("using10M"),        m_using10MHzRef ? QStringLiteral("True") : QStringLiteral("False"),
           QStringLiteral("False"));
     store(base + QStringLiteral("levelOffset"),     QString::number(m_levelOffsetDb),       QString::number(0.0));
-    store(base + QStringLiteral("rx1_6mLna"),       QString::number(m_rx1_6mLnaOffset),     QString::number(0.0));
-    store(base + QStringLiteral("rx2_6mLna"),       QString::number(m_rx2_6mLnaOffset),     QString::number(0.0));
+    store(base + QStringLiteral("rx1_6mLna"),       QString::number(m_rx1_6mLnaOffset),     QString::number(13.0));
+    store(base + QStringLiteral("rx2_6mLna"),       QString::number(m_rx2_6mLnaOffset),     QString::number(13.0));
     store(base + QStringLiteral("txDisplayOffset"), QString::number(m_txDisplayOffsetDb),   QString::number(0.0));
     // The volt calibration once the operator set either value (Thetis saves
     // both controls, so the other one's default is kept with it); the

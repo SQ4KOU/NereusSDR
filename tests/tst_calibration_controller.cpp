@@ -46,6 +46,7 @@ private slots:
     void aSavedVoltCalibrationSurvivesAModelChange();
     void theDefaultButtonRestoresTheModelDefaultsAndSavesThem();
     void voltCalibrationSettersClampAsThetis();
+    void sixMeterLnaStoredValuesAreKeptAndUnsetOnesTakeThirteen();
 };
 
 void TstCalibrationController::defaults_allCorrect()
@@ -63,9 +64,10 @@ void TstCalibrationController::defaults_allCorrect()
     // Upstream inline attribution preserved verbatim:
     //   :21075  HardwareSpecific.Model == HPSDRModel.ANAN_G2_1K || HardwareSpecific.Model == HPSDRModel.REDPITAYA) //DH1KLM
     QCOMPARE(ctrl.levelOffsetDb(), 0.0);
-    // Source: setup.cs:3866 ud6mLNAGainOffset default 0 [@501e3f5]
-    QCOMPARE(ctrl.rx1_6mLnaOffset(), 0.0);
-    QCOMPARE(ctrl.rx2_6mLnaOffset(), 0.0);
+    // From Thetis setup.designer.cs:12070-12074 and 12112-12116 [v2.10.3.15]:
+    // ud6mRx2LNAGainOffset.Value = 13; ud6mLNAGainOffset.Value = 13.
+    QCOMPARE(ctrl.rx1_6mLnaOffset(), 13.0);
+    QCOMPARE(ctrl.rx2_6mLnaOffset(), 13.0);
     // Source: setup.cs:14325 udTXDisplayCalOffset default 0 [@501e3f5]
     QCOMPARE(ctrl.txDisplayOffsetDb(), 0.0);
     // From Thetis console.cs:24937-24938 [v2.10.3.15]:
@@ -419,6 +421,48 @@ void TstCalibrationController::voltCalibrationSettersClampAsThetis()
     QCOMPARE(ctrl.paCurrentOffset(), 0.0);
     ctrl.setPaCurrentSensitivity(0.0);
     QCOMPARE(ctrl.paCurrentSensitivity(), 0.001);
+}
+
+// JJ's ruling (match Thetis): 13 dB where nothing was stored; a stored
+// value, 0 included, is the operator's and is kept.
+void TstCalibrationController::sixMeterLnaStoredValuesAreKeptAndUnsetOnesTakeThirteen()
+{
+    const QString mac = QStringLiteral("00:11:22:33:44:AF");
+    NereusSDR::AppSettings& s = NereusSDR::AppSettings::instance();
+    s.clearHardwareValues(mac);
+    const auto clean = qScopeGuard([&s, mac] { s.clearHardwareValues(mac); });
+    const QString base = QStringLiteral("hardware/%1/cal/").arg(mac);
+
+    {
+        NereusSDR::CalibrationController ctrl;
+        ctrl.setMacAddress(mac);
+        ctrl.load();
+        QCOMPARE(ctrl.rx1_6mLnaOffset(), 13.0);
+        QCOMPARE(ctrl.rx2_6mLnaOffset(), 13.0);
+        ctrl.save();
+        QVERIFY(!s.contains(base + QStringLiteral("rx1_6mLna")));
+        QVERIFY(!s.contains(base + QStringLiteral("rx2_6mLna")));
+    }
+
+    s.setValue(base + QStringLiteral("rx1_6mLna"), QStringLiteral("0"));
+    s.setValue(base + QStringLiteral("rx2_6mLna"), QStringLiteral("7.5"));
+    NereusSDR::CalibrationController ctrl;
+    ctrl.setMacAddress(mac);
+    ctrl.load();
+    QCOMPARE(ctrl.rx1_6mLnaOffset(), 0.0);
+    QCOMPARE(ctrl.rx2_6mLnaOffset(), 7.5);
+    ctrl.save();
+    QCOMPARE(s.value(base + QStringLiteral("rx1_6mLna")).toString(), QStringLiteral("0"));
+    QCOMPARE(s.value(base + QStringLiteral("rx2_6mLna")).toString(), QStringLiteral("7.5"));
+
+    // An operator's 0 set now is saved against the 13 dB default.
+    NereusSDR::CalibrationController fresh;
+    s.clearHardwareValues(mac);
+    fresh.setMacAddress(mac);
+    fresh.load();
+    fresh.setRx1_6mLnaOffset(0.0);
+    fresh.save();
+    QCOMPARE(s.value(base + QStringLiteral("rx1_6mLna")).toString(), QStringLiteral("0"));
 }
 
 QTEST_MAIN(TstCalibrationController)

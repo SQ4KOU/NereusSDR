@@ -31,6 +31,7 @@ private slots:
     void groupBoxCount_isFive();
     void controllerToUi_freqFactor();
     void uiToController_rx1LnaOffset();
+    void sixMeterLnaSpinsTakeThetisRangeAndRx2IsDisabled();
 };
 
 void TstCalibrationTab::construction_doesNotCrash()
@@ -75,8 +76,8 @@ void TstCalibrationTab::uiToController_rx1LnaOffset()
     NereusSDR::CalibrationTab tab(&model);
 
     NereusSDR::CalibrationController& ctrl = model.calibrationControllerMutable();
-    // Default should be 0
-    QCOMPARE(ctrl.rx1_6mLnaOffset(), 0.0);
+    // From Thetis setup.designer.cs:12112-12116 [v2.10.3.15]: 13 dB.
+    QCOMPARE(ctrl.rx1_6mLnaOffset(), 13.0);
 
     // Find the rx1LnaSpin: it's a QDoubleSpinBox inside a child widget
     // We exercise via controller setter (the UI->controller path requires
@@ -86,6 +87,33 @@ void TstCalibrationTab::uiToController_rx1LnaOffset()
     QCOMPARE(ctrl.rx1_6mLnaOffset(), 2.5);
     // After controller changed, onControllerChanged() is called and
     // the spinbox should reflect the new value (next syncFromController() tick)
+}
+
+// From Thetis setup.designer.cs:12047-12116 [v2.10.3.15]: ud6mLNAGainOffset
+// and ud6mRx2LNAGainOffset, 0..25 dB, step 1, one decimal, value 13. The Rx2
+// value has no receiver calibration of its own yet, in a local window and
+// in a remote one alike, so it shows disabled with the reason.
+void TstCalibrationTab::sixMeterLnaSpinsTakeThetisRangeAndRx2IsDisabled()
+{
+    for (const auto role : {NereusSDR::RadioModel::Role::Local,
+                            NereusSDR::RadioModel::Role::Remote}) {
+        NereusSDR::RadioModel model(role);
+        NereusSDR::CalibrationTab tab(&model);
+        auto* rx1 = tab.findChild<QDoubleSpinBox*>(QStringLiteral("rx1SixMeterLnaSpin"));
+        auto* rx2 = tab.findChild<QDoubleSpinBox*>(QStringLiteral("rx2SixMeterLnaSpin"));
+        QVERIFY(rx1 != nullptr);
+        QVERIFY(rx2 != nullptr);
+        for (QDoubleSpinBox* spin : {rx1, rx2}) {
+            QCOMPARE(spin->minimum(), 0.0);
+            QCOMPARE(spin->maximum(), 25.0);
+            QCOMPARE(spin->singleStep(), 1.0);
+            QCOMPARE(spin->decimals(), 1);
+            QCOMPARE(spin->value(), 13.0);
+        }
+        QVERIFY(rx1->isEnabled());
+        QVERIFY(!rx2->isEnabled());
+        QVERIFY(!rx2->toolTip().isEmpty());
+    }
 }
 
 QTEST_MAIN(TstCalibrationTab)

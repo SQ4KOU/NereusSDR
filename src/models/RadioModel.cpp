@@ -784,6 +784,7 @@ warren@wpratt.com
 #include "core/PaProfile.h"
 #include "core/PaProfileManager.h"
 #include "core/PaTelemetryScaling.h"
+#include "core/AlexSettingsKeys.h"
 #include "models/PureSignalSettings.h"
 #include "core/dsp/DspAssetService.h"
 #include "core/session/PureSignalSessionFacade.h"
@@ -4399,13 +4400,10 @@ void RadioModel::setStepAttController(StepAttenuatorController* c)
     // actually changed from the cached value, so we don't fire redundant
     // updates on every controller tick.
     if (c) {
-        auto recompute = [this]() {
-            const double v = rxMeterOffsetDb();
-            if (!qFuzzyCompare(1.0 + v, 1.0 + m_lastEmittedRxMeterOffsetDb)) {
-                m_lastEmittedRxMeterOffsetDb = v;
-                emit rxMeterOffsetChanged(v);
-            }
-        };
+        auto recompute = [this]() { refreshRxMeterOffset(); };
+        // The 6 m LNA gain offset (Setup > Calibration) is part of it too.
+        connect(&m_calController, &CalibrationController::changed,
+                this, &RadioModel::refreshRxMeterOffset, Qt::UniqueConnection);
         connect(c, &StepAttenuatorController::attenuationChanged,
                 this, [recompute](int) { recompute(); });
         connect(c, &StepAttenuatorController::preampModeChanged,
@@ -4495,6 +4493,8 @@ void RadioModel::syncStepAttenuatorToReceiveSlice()
     // transmit-bound slice then sets.
     if (SliceModel* const receive = sliceById(kStepAttReceiveSliceId)) {
         m_stepAttController->setBand(receive->band());
+        // The 6 m LNA gain offset follows the receive band.
+        refreshRxMeterOffset();
     }
     if (SliceModel* const tx = txBoundSlice()) {
         m_stepAttController->setTxBand(tx->band());
@@ -8045,7 +8045,7 @@ void RadioModel::reportStationRetuneRejected(int sliceId, const QString& reason)
 //                                         : preamp_offset[preamp_mode]
 //   RXCalibrationOffset(1) = _rx1_meter_cal_offset
 //                            (+ _rx1_xvtr_gain_offset deferred to XVTR epic)
-//                            (+ _rx1_6m_gain_offset   deferred to 6m epic)
+//                            + _rx1_6m_gain_offset (rx6mGainOffsetDb)
 //
 // _rx1_meter_cal_offset defaults to rxMeterCalOffsetDefaultFor(model)
 // (clsHardwareSpecific.cs:395-411 port) unless the user has saved an
@@ -8080,7 +8080,10 @@ double RadioModel::rxMeterOffsetDb() const
         ? static_cast<float>(userOverride)
         : factoryDefault;
 
-    return rxPreampOffsetDb() + static_cast<double>(meterCalOffset);
+    // RXCalibrationOffset(1) (console.cs:21062-21067 [v2.10.3.15]):
+    //   fOffset = _rx1_meter_cal_offset + _rx1_xvtr_gain_offset + _rx1_6m_gain_offset;
+    // The XVTR term rides the transverter work.
+    return rxPreampOffsetDb() + static_cast<double>(meterCalOffset) + rx6mGainOffsetDb();
 }
 
 double RadioModel::rxPreampOffsetDb() const
@@ -8110,6 +8113,93 @@ double RadioModel::rxPreampOffsetDb() const
     }
 
     return static_cast<double>(preampOffset);
+}
+
+double RadioModel::rx6mGainOffsetDb() const
+{
+    // A remote window's readings already carry the Core's offset.
+    if (m_role == Role::Remote) {
+        return 0.0;
+    }
+    // Thetis RX1_6mGainOffset, set in txtVFOAFreq_LostFocus:
+    // From Thetis console.cs:31754-31771 [v2.10.3.15]:
+    //   if (HardwareSpecific.Model == HPSDRModel.ANAN7000D || HardwareSpecific.Model == HPSDRModel.ANAN8000D ||
+    //       HardwareSpecific.Model == HPSDRModel.ANVELINAPRO3 || HardwareSpecific.Model == HPSDRModel.ANAN_G2 ||
+    //       HardwareSpecific.Model == HPSDRModel.ANAN_G2_1K || HardwareSpecific.Model == HPSDRModel.REDPITAYA) //DH1KLM
+    //   {
+    //       if (alexpresent && rx1_band == Band.B6M && // chksr button was hidden and always unchecked. This has become the 2TON button MW0LGE_21a
+    //          ((!disable_6m_lna_on_rx && !bpf1_6bp_bypass && !alex_hpf_bypass)))
+    //           RX1_6mGainOffset = -RX6mGainOffset_RX1;
+    //       else RX1_6mGainOffset = 0;
+    //   }
+    //   else
+    //   {
+    //       if (alexpresent && rx1_band == Band.B6M &&
+    //          ((!disable_6m_lna_on_rx && !alex6bphpf_bypass && !alex_hpf_bypass)) &&
+    //           HardwareSpecific.Model != HPSDRModel.ANAN10 &&
+    //           HardwareSpecific.Model != HPSDRModel.ANAN10E)
+    //           RX1_6mGainOffset = -RX6mGainOffset_RX1;
+    //       else RX1_6mGainOffset = 0;
+    //   }
+    // rx1_band: the receive band the step attenuator follows (slice A's,
+    // the RX1 equivalent; followReceiveSliceWithStepAttenuator).
+    // alexpresent: the board's Alex (BoardCapabilities::hasAlex, the
+    // chkAlexPresent state Thetis sets per model).
+    const Band rx1Band = m_stepAttController ? m_stepAttController->currentBand() : m_lastBand;
+    if (rx1Band != Band::Band6m || !boardCapabilities().hasAlex) {
+        return 0.0;
+    }
+    // The switches as saved by Setup > Hardware > Antenna/Filters > Alex:
+    // disable_6m_lna_on_rx (chkDisable6mLNAonRX), alex_hpf_bypass
+    // (chkAlexHPFBypass), and the 6 m rows' bypass, alex6bphpf_bypass
+    // (chkAlex6BPHPF, the Alex HPF 6 m row) and bpf1_6bp_bypass
+    // (chkBPF1_6BP, the BPF1 6 m row). The rows are read from their saved
+    // keys directly: the connection does not apply them yet.
+    const QString mac = currentRadioMac();
+    const auto flag = [&mac](const QString& key) {
+        if (mac.isEmpty()) {
+            return false;
+        }
+        return AppSettings::instance()
+                   .hardwareValue(mac, key, QStringLiteral("False"))
+                   .toString() == QStringLiteral("True");
+    };
+    const bool disable6mLnaOnRx = flag(QStringLiteral("alex/master/disable6mLnaOnRx"));
+    const bool alexHpfBypass = flag(QStringLiteral("alex/master/hpfBypass"));
+    const HPSDRModel model = m_hardwareProfile.model;
+    bool lnaInCircuit = false;
+    switch (model) {
+        case HPSDRModel::ANAN7000D:
+        case HPSDRModel::ANAN8000D:
+        case HPSDRModel::ANVELINAPRO3:
+        case HPSDRModel::ANAN_G2:
+        case HPSDRModel::ANAN_G2_1K:
+        case HPSDRModel::REDPITAYA: { //DH1KLM
+            const bool bpf1SixMeterBypass = flag(QStringLiteral("%1/%2/%3").arg(
+                QLatin1String(alexKeys::kAlex1Bpf1Prefix), QLatin1String(alexKeys::kPreselector6mBP),
+                QLatin1String(alexKeys::kLeafEnabled)));
+            lnaInCircuit = !disable6mLnaOnRx && !bpf1SixMeterBypass && !alexHpfBypass;
+            break;
+        }
+        default: {
+            const bool alexSixMeterBypass = flag(QStringLiteral("%1/%2/%3").arg(
+                QLatin1String(alexKeys::kAlex1HpfPrefix), QLatin1String(alexKeys::kPreselector6mBP),
+                QLatin1String(alexKeys::kLeafEnabled)));
+            lnaInCircuit = !disable6mLnaOnRx && !alexSixMeterBypass && !alexHpfBypass
+                && model != HPSDRModel::ANAN10 && model != HPSDRModel::ANAN10E;
+            break;
+        }
+    }
+    return lnaInCircuit ? -m_calController.rx1_6mLnaOffset() : 0.0;
+}
+
+void RadioModel::refreshRxMeterOffset()
+{
+    const double v = rxMeterOffsetDb();
+    if (!qFuzzyCompare(1.0 + v, 1.0 + m_lastEmittedRxMeterOffsetDb)) {
+        m_lastEmittedRxMeterOffsetDb = v;
+        emit rxMeterOffsetChanged(v);
+    }
 }
 
 double RadioModel::keyedDisplayOffsetDb(bool displayDuplex) const
@@ -20976,6 +21066,8 @@ void RadioModel::applyHpsdrModel(HPSDRModel m, HPSDRHW board)
     // The volt calibration's factory values follow the model (Thetis
     // GetDefaultVoltCalibration).
     m_calController.setHardwareModel(m_hardwareProfile.model);
+    // The 6 m LNA gain offset depends on the model.
+    refreshRxMeterOffset();
     // Task 13: PollTXInhibit reads HardwareSpecific.Model on every pass
     // (console.cs:25855-25873 [v2.10.3.15]).
     m_txInhibit.setRadioModel(m_hardwareProfile.model);
@@ -24724,6 +24816,9 @@ void RadioModel::flushRemoteHardwareApply()
             m_calController.setPaCalProfile(
                 PaCalProfile::defaults(paCalBoardClassFor(m_hardwareProfile.model)));
         }
+        // load() is silent about its scalar values; the 6 m LNA gain offset
+        // is part of the receive calibration the Core sends.
+        refreshRxMeterOffset();
         observe(QStringLiteral("cal"));
     }
     // R-R3-46 / R-R3-49 (parity Task 13): TX Display Cal and Volts/Amps
@@ -24796,6 +24891,8 @@ void RadioModel::flushRemoteHardwareApply()
 // ---------------------------------------------------------------------------
 void RadioModel::applyAlexHpfSwitchSettings()
 {
+    // The 6 m LNA gain offset reads the LNA and bypass switches.
+    refreshRxMeterOffset();
     if (!ownsLocalDsp() || m_connection == nullptr) {
         return;
     }
