@@ -6359,6 +6359,16 @@ network access: flag for earlier review. Requires Task 17.
 - [ ] **Step 1:** The binary in every package and the macOS helper bundle.
 - [ ] **Step 2:** The service manager with its per-platform start entries and tests.
 
+Implementation evidence: signed `67d9ebd5` integrates the binary packaging and
+service manager, with an app/Core/helper build, focused tests, strict macOS
+signature verification and bundled daemon help check. Signed `6ce88d4f` adds a
+verification-only workflow path that builds the selected immutable source commit
+without publishing or notarizing. Its integrated workflow checks and seven
+metadata-script cases pass. The release artifacts have not yet been built by
+that workflow, and the Mac background-radio hour remains unobserved; these
+checkboxes therefore remain open.
+
+
 ## Task 48: The station inside the desktop, and the radio handover
 
 **Runs in:** the Core/GUI session's lanes (a station task).
