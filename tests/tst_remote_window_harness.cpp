@@ -490,6 +490,57 @@ private slots:
         QCOMPARE(client->sessionEpoch(), epoch);
     }
 
+    void connectedHeaderShowsCurrentSocketAndClearsOnDisconnect()
+    {
+        RemoteWindowHarness h;
+        h.server().setMediaEnabled(true);
+        QVERIFY(h.start());
+        h.startStartupConnection();
+        QTRY_VERIFY_WITH_TIMEOUT(h.client()->isHandshakeComplete(), 10000);
+        h.window()->setConnectionPickerManaged(true);
+        ConnectionSegment* segment = h.titleSegment();
+        QVERIFY(segment);
+        h.window()->resize(1440, 900);
+        QCoreApplication::processEvents();
+        QTRY_VERIFY(segment->remotePresentationText().contains(QStringLiteral("Traffic")));
+        QVERIFY(segment->remotePresentationText().contains(QStringLiteral("Audio")));
+        QVERIFY(segment->remotePresentationText().contains(QStringLiteral("Radio")));
+        QVERIFY(segment->remotePresentationText().contains(QStringLiteral("Core RTT")));
+        const QFontMetrics headerMetrics(QFont(QStringLiteral("SF Mono"), 10, QFont::DemiBold));
+        QVERIFY2(segment->width() >= headerMetrics.horizontalAdvance(segment->remotePresentationText()) + 34,
+                 qPrintable(QStringLiteral("segment %1, text %2")
+                                .arg(segment->width())
+                                .arg(headerMetrics.horizontalAdvance(segment->remotePresentationText()))));
+        clickLeft(segment);
+        QTRY_VERIFY(segment->routePopup()->isVisible());
+        auto* controls = segment->routePopup()->findChild<QLabel*>(QStringLiteral("controlsRoute"));
+        QVERIFY(controls);
+        QTRY_VERIFY(controls->text().contains(QStringLiteral("socket endpoints")));
+        QVERIFY(controls->text().contains(QStringLiteral("Direct")));
+        QVERIFY(controls->text().contains(QStringLiteral("Local")));
+        QVERIFY(controls->text().contains(QStringLiteral("Remote")));
+        h.remoteModel()->audioEngine()->setMasterMuted(true);
+        QTRY_VERIFY(segment->remotePresentationText().contains(QStringLiteral("Audio muted")));
+        QVERIFY2(segment->width() >= headerMetrics.horizontalAdvance(segment->remotePresentationText()) + 34,
+                 qPrintable(QStringLiteral("muted segment %1, text %2")
+                                .arg(segment->width())
+                                .arg(headerMetrics.horizontalAdvance(segment->remotePresentationText()))));
+        QStringList faultGroups = segment->remotePresentationText().split(QStringLiteral(" · "));
+        QCOMPARE(faultGroups.size(), 4);
+        faultGroups[1] = ConnectionSegment::audioMetricText(
+            std::nullopt, RemoteAudioStatus::State::PlaybackProblem);
+        QVERIFY2(segment->width() >= headerMetrics.horizontalAdvance(faultGroups.join(QStringLiteral(" · "))) + 34,
+                 qPrintable(QStringLiteral("fault segment %1, text %2: %3")
+                                .arg(segment->width())
+                                .arg(headerMetrics.horizontalAdvance(faultGroups.join(QStringLiteral(" · "))))
+                                .arg(faultGroups.join(QStringLiteral(" · ")))));
+        h.remoteModel()->audioEngine()->setMasterMuted(false);
+        QVERIFY(disconnectFromRadioMenu(h));
+        QTRY_VERIFY(!h.client()->isConnectionActive());
+        QVERIFY(!segment->routePopup()->isVisible());
+        QVERIFY(controls->text().contains(QStringLiteral("Path unavailable")));
+    }
+
     void setupConnectionsAsksManagedPickerWithoutDialing()
     {
         RemoteWindowHarness h;

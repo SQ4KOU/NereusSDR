@@ -126,6 +126,7 @@
 #include <QSet>
 #include <QSignalBlocker>
 #include <QTimer>
+#include <QThread>
 #include <QUuid>
 #include <QtEndian>
 #include <algorithm>
@@ -2728,6 +2729,7 @@ void RemoteMediaController::stop()
         old->stop();
         old->deleteLater();
     }
+    emit networkPathChanged();
     noteMicLine();
     QList<QPair<QPointer<SpectrumWidget>, QString>> retiredWidgets;
     retiredWidgets.reserve(static_cast<qsizetype>(d->bindings.size()));
@@ -2834,6 +2836,17 @@ QList<quint32> audioSsrcsOf(const MediaPeer* peer)
 QString RemoteMediaController::mediaConnectionId() const
 {
     return d->connectionId;
+}
+
+std::optional<NetworkPathSnapshot> RemoteMediaController::currentNetworkPath() const
+{
+    if (QThread::currentThread() != thread() || !d->client
+        || !d->client->isHandshakeComplete() || !d->client->mediaAvailable()
+        || d->epoch != d->client->sessionEpoch() || !d->peer || !d->peer->isReady()) {
+        return std::nullopt;
+    }
+    const auto selected = d->peer->selectedPath();
+    return selected ? selected->networkPathSnapshot() : std::nullopt;
 }
 
 bool RemoteMediaController::replacingConnection() const
@@ -2986,6 +2999,7 @@ void RemoteMediaController::promoteReplacement()
     disconnect(next, nullptr, this, nullptr);
     d->replacement = nullptr;
     d->peer = next;
+    emit networkPathChanged();
     d->connectionId = d->replacementId;
     d->replacementId.clear();
     connectPeer(next, d->epoch);
@@ -3158,6 +3172,7 @@ void RemoteMediaController::connectPeer(MediaPeer* peer, quint32 epoch)
     });
     connect(peer, &MediaPeer::ready, this, [this, current, epoch] {
         if (current()) {
+            emit networkPathChanged();
             // Established: the deadline stands down, and only now does the
             // session count as working for the reconnect backoff (R-R3-28).
             d->establishTimer->stop();
@@ -3200,6 +3215,7 @@ void RemoteMediaController::connectPeer(MediaPeer* peer, quint32 epoch)
     });
     connect(peer, &MediaPeer::closed, this, [this, current, epoch] {
         if (current()) {
+            emit networkPathChanged();
             requestRecovery(epoch, QStringLiteral("Station media connection closed"));
         }
     });
@@ -3296,6 +3312,7 @@ void RemoteMediaController::start()
     d->connectionId = QUuid::createUuid().toString(QUuid::WithoutBraces);
     auto* peer = new MediaPeer(this, d->factory);
     d->peer = peer;
+    emit networkPathChanged();
     const quint32 epoch = d->epoch;
     d->displayDropsReported = 0;
     d->displayDropsReportedAtMs = 0;

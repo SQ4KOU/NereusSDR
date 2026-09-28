@@ -69,16 +69,22 @@
 
 #include "core/AudioEngine.h"
 #include "core/ConnectionState.h"
+#include "core/session/NetworkPathSnapshot.h"
+#include "gui/RemoteAudioStatus.h"
 
 #include <QQueue>
 #include <QSize>
 #include <QTimer>
 #include <QWidget>
+#include <QStringList>
+#include <optional>
 
 class QHBoxLayout;
 class QLabel;
 class QMenuBar;
 class QPushButton;
+class QFrame;
+class QKeyEvent;
 
 namespace NereusSDR {
 
@@ -95,9 +101,9 @@ class MasterOutputWidget;
 // State dot color encodes connection state; pulse animation encodes
 // radio/streaming activity. No separate activity LED.
 //
-// RTT readout: color-coded green/yellow/red (<50/<150/≥150 ms). Left-click
-// opens NetworkDiagnosticsDialog. Disconnected-state click anywhere does
-// the same.
+// RTT readout: color-coded green/yellow/red (<50/<150/≥150 ms). Remote
+// connected click opens the route popup; local connected click opens
+// NetworkDiagnosticsDialog. Disconnected click requests a connection.
 //
 // ♪ pip: audio pipeline health. Color: blue=Healthy, yellow=Underrun,
 // red=Stalled, dim=Dead.
@@ -136,6 +142,15 @@ public:
     // different operator questions.
     void setRemoteTelemetryText(const QString& text);
     QString remoteTelemetryText() const { return m_remoteTelemetryText; }
+    void setRemoteMetrics(const QStringList& groups);
+    QString remotePresentationText() const;
+    QString remoteTextForWidth(int pixels) const;
+    void setRemotePaths(std::optional<NetworkPathSnapshot> controls,
+                        std::optional<NetworkPathSnapshot> media);
+    static QString routeText(const std::optional<NetworkPathSnapshot>& path);
+    static QString audioMetricText(std::optional<double> kbps, RemoteAudioStatus::State state);
+    void showRoutePopup();
+    QWidget* routePopup() const;
 
     QSize sizeHint() const override;
 
@@ -149,20 +164,29 @@ signals:
     void rttClicked();
     void audioPipClicked();
     void contextMenuRequested(const QPoint& globalPos);
+    void diagnosticsRequested();
+    void pathsRefreshRequested();
 
 protected:
     void mousePressEvent(QMouseEvent* event) override;
     void paintEvent(QPaintEvent* event) override;
+    void keyPressEvent(QKeyEvent* event) override;
 
 private:
     QColor stateDotColor() const;
     QColor rttColor(int rttMs) const;
     QColor audioPipColor(AudioEngine::FlowState s) const;
-    QString remotePresentationText() const;
+    void updateRoutePopup();
 
     ConnectionState         m_state{ConnectionState::Disconnected};
     QString                 m_remoteStatusText;
     QString                 m_remoteTelemetryText;
+    QStringList             m_remoteMetrics;
+    std::optional<NetworkPathSnapshot> m_controlPath;
+    std::optional<NetworkPathSnapshot> m_mediaPath;
+    QFrame*                 m_routePopup{nullptr};
+    QLabel*                 m_controlsRoute{nullptr};
+    QLabel*                 m_mediaRoute{nullptr};
     double                  m_rxMbps{0.0};
     double                  m_txMbps{0.0};
     int                     m_rttMs{-1};
