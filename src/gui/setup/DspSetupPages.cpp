@@ -1945,7 +1945,7 @@ NbSnbSetupPage::NbSnbSetupPage(RadioModel* model, QWidget* parent,
         100, 96000,
         slice ? slice->snbOutputBandwidthHz() : 6000,
         tr(" Hz"),
-        tr("Width of the audio band SNB operates on, centred on zero.\n"
+        tr("Width of the audio band SNB operates on, centered on zero.\n"
            "Smaller = focuses the blanker on the active passband;\n"
            "larger = covers wider modes (FM, DRM). Default 6000 Hz\n"
            "covers SSB + AM comfortably."));

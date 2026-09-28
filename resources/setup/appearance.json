@@ -19,7 +19,7 @@
             {
               "id": "appearance.colorsTheme.traceFillColor",
               "label": "Trace & Fill Color:",
-              "tooltip": "Click to choose the spectrum trace line and fill colour. QColorDialog lets you adjust alpha for the fill opacity.",
+              "tooltip": "Click to choose the spectrum trace line and fill color. QColorDialog lets you adjust alpha for the fill opacity.",
               "kind": "colour",
               "binding": {
                 "phone": "DisplayFillColor"
@@ -85,7 +85,7 @@
             {
               "id": "appearance.colorsTheme.rxZeroLineColor",
               "label": "RX Zero Line Color:",
-              "tooltip": "Colour of the RX zero line (0 dBm marker) drawn on the panadapter when Show zero line is checked.",
+              "tooltip": "Color of the RX zero line (0 dBm marker) drawn on the panadapter when Show zero line is checked.",
               "kind": "colour",
               "binding": {
                 "phone": "DisplayRxZeroLineColor"
@@ -96,7 +96,7 @@
             {
               "id": "appearance.colorsTheme.txZeroLineColor",
               "label": "TX Zero Line Color:",
-              "tooltip": "Colour of the TX zero line drawn on the panadapter and waterfall at the TX centre frequency when transmitting (MOX active).",
+              "tooltip": "Color of the TX zero line drawn on the panadapter and waterfall at the TX center frequency when transmitting (MOX active).",
               "kind": "colour",
               "binding": {
                 "phone": "DisplayTxZeroLineColor"
@@ -107,7 +107,7 @@
             {
               "id": "appearance.colorsTheme.rxFilterColor",
               "label": "RX Passband Color:",
-              "tooltip": "Click to choose the RX passband overlay colour and opacity. Shown on the panadapter and waterfall slice band during receive.",
+              "tooltip": "Click to choose the RX passband overlay color and opacity. Shown on the panadapter and waterfall slice band during receive.",
               "kind": "colour",
               "binding": {
                 "phone": "DisplayRxFilterColor"
@@ -118,7 +118,7 @@
             {
               "id": "appearance.colorsTheme.txFilterColor",
               "label": "TX Passband Color:",
-              "tooltip": "Click to choose the TX passband overlay colour and opacity. Shown on the panadapter and waterfall during MOX/TUNE.",
+              "tooltip": "Click to choose the TX passband overlay color and opacity. Shown on the panadapter and waterfall during MOX/TUNE.",
               "kind": "colour",
               "binding": {
                 "phone": "DisplayTxFilterColor"

@@ -511,7 +511,7 @@ PaGainByBandPage::PaGainByBandPage(RadioModel* model, QWidget* parent)
     // the user-visible tooltip stays plain English; the upstream cite is
     // kept in this source comment.
     m_newCalCheck->setToolTip(QStringLiteral(
-        "New-calibration mode marker. No client-side behaviour is hooked "
+        "New-calibration mode marker. No client-side behavior is hooked "
         "to it yet — tracked for parity only."));
     // From Thetis chkPANewCal Visible=false default at setup.designer.cs:47417
     // [v2.10.3.13]; Thetis Ctrl+Alt+A keyhandler (setup.cs:12490-12498) unhides

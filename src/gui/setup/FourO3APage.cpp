@@ -226,7 +226,7 @@ QWidget* FourO3APage::buildGeneralTab()
            "and Tuner Genius XL pages become interactive; PGXL/TGXL "
            "auto-connect runs at startup.  When disabled: no port is "
            "bound, no outbound connection attempts, and the detail tabs "
-           "below are greyed out."),
+           "below are grayed out."),
         masterBox);
     masterHelp->setWordWrap(true);
     masterHelp->setStyleSheet(QStringLiteral("color: #888; font-size: 11px;"));

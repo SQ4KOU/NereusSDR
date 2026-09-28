@@ -69,7 +69,7 @@ void ColorsThemePage::buildUI()
     // Thetis: setup.designer.cs:3234 (clrbtnDataLine) / :3217 (clrbtnDataFill) — collapsed into
     // one picker because SpectrumWidget currently shares one colour for line and fill.
     m_traceFillColorBtn->setToolTip(QStringLiteral(
-        "Click to choose the spectrum trace line and fill colour. "
+        "Click to choose the spectrum trace line and fill color. "
         "QColorDialog lets you adjust alpha for the fill opacity."));
     specForm->addRow(QStringLiteral("Trace & Fill Color:"), m_traceFillColorBtn);
 
@@ -137,7 +137,7 @@ void ColorsThemePage::buildUI()
     // Thetis: setup.designer.cs:3204 (clrbtnZeroLine) — rewritten; split per Plan 4 D9c-1
     // Thetis original: (none)
     m_rxZeroLineColorBtn->setToolTip(QStringLiteral(
-        "Colour of the RX zero line (0 dBm marker) drawn on the panadapter "
+        "Color of the RX zero line (0 dBm marker) drawn on the panadapter "
         "when Show zero line is checked."));
     specForm->addRow(QStringLiteral("RX Zero Line Color:"), m_rxZeroLineColorBtn);
 
@@ -149,8 +149,8 @@ void ColorsThemePage::buildUI()
     m_txZeroLineColorBtn->setProperty("nereusSetupId", "appearance.colorsTheme.txZeroLineColor");
     // NereusSDR Plan 4 D9c-1 — no Thetis equivalent (NereusSDR-original).
     m_txZeroLineColorBtn->setToolTip(QStringLiteral(
-        "Colour of the TX zero line drawn on the panadapter and waterfall "
-        "at the TX centre frequency when transmitting (MOX active)."));
+        "Color of the TX zero line drawn on the panadapter and waterfall "
+        "at the TX center frequency when transmitting (MOX active)."));
     specForm->addRow(QStringLiteral("TX Zero Line Color:"), m_txZeroLineColorBtn);
 
     // RX Passband Color — Plan 4 D9b, already lived here.
@@ -160,7 +160,7 @@ void ColorsThemePage::buildUI()
         &SpectrumWidget::setRxFilterColor);
     m_rxFilterColorBtn->setProperty("nereusSetupId", "appearance.colorsTheme.rxFilterColor");
     m_rxFilterColorBtn->setToolTip(QStringLiteral(
-        "Click to choose the RX passband overlay colour and opacity. "
+        "Click to choose the RX passband overlay color and opacity. "
         "Shown on the panadapter and waterfall slice band during receive."));
     specForm->addRow(QStringLiteral("RX Passband Color:"), m_rxFilterColorBtn);
 
@@ -171,7 +171,7 @@ void ColorsThemePage::buildUI()
         &SpectrumWidget::setTxFilterColor);
     m_txFilterColorBtn->setProperty("nereusSetupId", "appearance.colorsTheme.txFilterColor");
     m_txFilterColorBtn->setToolTip(QStringLiteral(
-        "Click to choose the TX passband overlay colour and opacity. "
+        "Click to choose the TX passband overlay color and opacity. "
         "Shown on the panadapter and waterfall during MOX/TUNE."));
     specForm->addRow(QStringLiteral("TX Passband Color:"), m_txFilterColorBtn);
 
@@ -202,15 +202,15 @@ void ColorsThemePage::buildUI()
     resetRow->addStretch(1);
     auto* resetBtn = new QPushButton(QStringLiteral("Reset all colors to defaults"), this);
     resetBtn->setToolTip(QStringLiteral(
-        "Reset all spectrum and waterfall colours to factory defaults. "
+        "Reset all spectrum and waterfall colors to factory defaults. "
         "Other display settings (FPS, averaging, thresholds, etc.) are not affected."));
     connect(resetBtn, &QPushButton::clicked, this, [this]() {
         const auto res = QMessageBox::question(
             this,
             QStringLiteral("Reset all colors to defaults"),
             QStringLiteral(
-                "Reset all spectrum and waterfall colours to factory defaults?\n\n"
-                "Custom colours set here will be discarded. "
+                "Reset all spectrum and waterfall colors to factory defaults?\n\n"
+                "Custom colors set here will be discarded. "
                 "Other display settings are not affected."),
             QMessageBox::Yes | QMessageBox::Cancel,
             QMessageBox::Cancel);

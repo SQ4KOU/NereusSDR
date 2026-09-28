@@ -2237,10 +2237,14 @@ colours for the same signal.
   code comments, verbatim upstream/legal text, proper names, stable APIs,
   settings keys, wire/schema fields and exact reason-matching keys. Where a
   protocol key contains British spelling, change its displayed text only.
-- Status: read-only audit complete; Sol 6 medium owns the bounded wording
-  changes on the integrated Setup base. Root reviews comment preservation,
-  compatibility and the native/description parity results. The phone owner
-  has received the same ruling for phone-owned presentation strings.
+- Status: authored wording and matching Setup descriptions implemented in
+  signed `50be8c9a8`. Root compared all 21 changed C++ comment streams with
+  their originals: byte-identical. The eight JSON edits change only labels
+  and tooltips. Integrated app/Core build and all eight rebuilt affected
+  suites pass (14.47 s), including native/description parity. A few literals
+  in the pairing worker's owned files are included with G-107. Compatibility
+  keys and verbatim source text remain intact. The phone owner has received
+  the same ruling for phone-owned presentation strings.
 - Plan: consistent desktop/Core/phone-facing wording without compatibility or
   attribution changes.
 
@@ -2254,10 +2258,11 @@ colours for the same signal.
 - Ruling basis: JJ requires discovered failures to be investigated and fixed.
   This deterministic source-inventory failure is independent of spelling and
   machine load; no wording exemption or scanner relaxation is needed.
-- Status: cause traced to the missing exact forwarding entries. The wording
-  worker owns the test-only inventory correction and must verify that each
-  forwarded reason's defining function remains scanned. Existing coverage
-  floors, production behavior and comments remain unchanged.
+- Status: fixed in signed `5e1edb587`, with five exact forwarding entries
+  whose reason-producing functions are already scanned. Root reviewed those
+  functions and the test inventory. The rebuilt full wording suite passes
+  alone (6.15 s) and in the eight-suite trunk integration (14.47 s total).
+  Existing coverage floors, production behavior and comments remain unchanged.
 - Plan: keep all Core refusal messages covered by the operator-wording check.
 
 ## How this addendum is kept

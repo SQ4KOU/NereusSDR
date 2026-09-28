@@ -81,10 +81,10 @@ edited value at this boundary is an eight-digit `#RRGGBBAA` string, including
 the final alpha byte. This is ColorSwatchButton's phone-facing format; the
 desktop's own AppSettings uses Qt `HexArgb` (`#AARRGGBB`) and is not copied to
 the phone. Core accepts only the ten named IDs/phone keys and exact default
-colours. The hidden Waterfall Low Color row, Reset Colors action, and Meter
+colors. The hidden Waterfall Low Color row, Reset Colors action, and Meter
 Styles controls remain undescribed. Appearance's source category is V4 so its
 RGBA defaults are sent only to V4+ peers; older projections retain all ten
-colour controls without `default`. No station settings permission is needed.
+color controls without `default`. No station settings permission is needed.
 
 An optional `decimals` field on a `kind:readout` control is an integer from 0
 through 6. It formats a finite numeric mirrored value with that many decimal
@@ -188,7 +188,7 @@ Absent, malformed, stale, or unavailable settings disable their controls.
 V4 adds `default` metadata to these exact Display and Appearance controls.
 Display toggles use JSON booleans; its numeric controls use JSON numbers,
 with choice defaults as integer ordinals and FFT option defaults as their
-actual integer values. Appearance colour defaults are eight-digit
+actual integer values. Appearance color defaults are eight-digit
 `#RRGGBBAA` strings. Display's Hz/bin `kind:"decimal"` has `decimals:2` in
 V4. For V1–V3 peers, the Core strips `default` from all Display and Appearance
 controls and strips `decimals` from `kind:"decimal"`; it retains the controls,
@@ -214,7 +214,7 @@ disables it. Core rejects any altered or extended dependency envelope.
 Normalize is stored with the existing exact `True`/`False` setting encoding.
 V1–V3 omit it. The other Display controls retain their existing numeric ranges
 or ordinal string choices. The category and all three pages remain partial;
-local colours, palettes, per-band tables, derived readouts, and actions are not
+local colors, palettes, per-band tables, derived readouts, and actions are not
 described by this slice.
 
 The phone uses a current-session settings snapshot and the current canonical

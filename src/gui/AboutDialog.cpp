@@ -391,7 +391,7 @@ void AboutDialog::buildUI()
         QStringLiteral("Also built with RADE, Opus, PortAudio, r8brain, rnnoise, "
                        "DeepFilterNet, libspecbleach, libdatachannel, libjuice, "
                        "usrsctp, libsrtp, plog, nlohmann json, OpenSSL and zlib. "
-                       "Their licences ship with NereusSDR in its licenses folder."),
+                       "Their licenses ship with NereusSDR in its licenses folder."),
         this);
     alsoBuiltWith->setAlignment(Qt::AlignCenter);
     alsoBuiltWith->setWordWrap(true);
