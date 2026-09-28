@@ -2680,7 +2680,9 @@ Thetis only enables ADC0 on every board; NereusSDR offers two ADCs on boards tha
     single window": an unseen slice goes into the main window: an existing main-window pan
     showing it comes forward, else an empty main-window pan, else the main window grows to a
     pan layout that fits in the single window, or asks for a named destination; placing a
-    slice never opens a new floating pan.
+    slice never opens a new floating pan. Lead confirmation (2026-09-28): ask only when no
+    larger single-window layout fits; growing the layout to place a slice adds no new slice
+    to any other empty pan.
   - U2 "1 your recommendation": a slice already showing in a floating pan brings that floater
     to the front and switches the main window's RX to it; nothing moves, no second copy.
   - U3 "1 your recommendation": a pan background click keeps today's display-only meaning
@@ -2690,7 +2692,10 @@ Thetis only enables ADC0 on every board; NereusSDR offers two ADCs on boards tha
   - U5 "1 your recommendation": the existing AF slider and mute on any slice (controlled or
     listened) change only what this device hears; labeled "Your volume" on a listened slice;
     nobody's volume or mute changes anyone else's audio, the controller's included. So the
-    controller's AF must become per-device too (plan Task 6).
+    controller's AF must become per-device too (plan Task 6). Lead ruling (2026-09-28,
+    settles Q2 vs U5): U5 wins; a listener's audio never depends on the controller's AF,
+    including AF at zero (feed taken before the controller's AF; the controller's own path
+    unchanged).
   - U6 "1 your wording sounds fine": flag text "You control" (menu: Release); "Listening ·
     controlled by <device>" (menu: Take control, Stop listening; tuning disabled with
     "<device> controls this slice"); "TX" as today, red on air.
@@ -2703,7 +2708,10 @@ Thetis only enables ADC0 on every board; NereusSDR offers two ADCs on boards tha
   - U8 "2 but for only slices tgat are activatyed show in the applet": the TX applet shows a
     row of slice letter buttons, only for slices active on this device (read: slices this
     device controls, the only ones it may transmit on); pressing one selects it for transmit
-    (idle only; refused on air).
+    through the existing `tx.setTxSlice` behavior, the same for every client (ruling 8.10:
+    while keyed it unkeys, then moves). Correction (lead, 2026-09-28): an earlier record here
+    added "idle only; refused on air"; that was the lead's addition, not JJ's ruling, and is
+    withdrawn.
 - Status (2026-09-28): RULED. The six policies, the bottom area and U1 to U8 are settled and
   recorded in `2026-09-28-slice-control-and-listening-design.md`; the implementation plan is
   `2026-09-28-slice-control-and-listening-plan.md` (17 tasks, committed `2c0c5566e`, lead

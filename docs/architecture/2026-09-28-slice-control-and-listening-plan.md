@@ -130,6 +130,9 @@ controller has JJ's answer (or JJ accepts the recommendation).
   silences every listener. **Recommendation:** accept it for this plan and
   let the listener's screen say why from the mirrored AF value (no DSP
   change); a pre-PanelGain1 WDSP tap is a separate DSP change.
+  **Superseded 2026-09-28 by U5** (lead ruling, "settles Q2 vs U5"): U5
+  wins; a listener's audio never depends on the controller's AF, including
+  AF at zero. See Task 6.
 - **Q3. Listener pan and route.** A slice's pan (`audioPan`) and
   speakers/headphones route (`outputRoute`) are shared `SliceModel`
   properties. **Recommendation:** a listener hears the slice centered in its
@@ -221,7 +224,9 @@ ledger records them, and "Ruled" is the lead's recorded reading.
   window: an existing main-window pan showing it comes forward, else an
   empty main-window pan, else the main window grows to a pan layout that
   fits in the single window, or asks for a named destination; placing a
-  slice never opens a new floating pan.
+  slice never opens a new floating pan. Lead confirmation (2026-09-28): ask
+  only when no larger single-window layout fits; growing the layout to place
+  a slice adds no new slice to any other empty pan.
 - **U2. Bottom RX selection and a floating pan.** Recommendation: selecting
   a row whose slice sits in a floating pan raises that floater and updates
   main-window RX; focusing a floater's flag updates the main bottom bar.
@@ -278,14 +283,18 @@ ledger records them, and "Ruled" is the lead's recorded reading.
   JJ: "2 but for only slices tgat are activatyed show in the applet".
   Ruled: the TX applet shows a row of slice letter buttons, only for slices
   active on this device (read: slices this device controls, the only ones it
-  may transmit on); pressing one selects it for transmit (idle only; refused
-  on air). Built in Task 11.
+  may transmit on); pressing one selects it for transmit through the
+  existing `tx.setTxSlice` behavior, the same for every client (ruling 8.10:
+  while keyed it unkeys, then moves). Correction (lead, 2026-09-28): an
+  earlier record added "idle only; refused on air"; that was the lead's
+  addition, not JJ's ruling, and is withdrawn. Built in Task 11.
 
 ## Controller rulings on the open decisions (2026-09-28)
 
 The lead (controller) settled Q1-Q17 as recommended, each consistent with JJ's six approved policies:
 Q1 mix listened audio into the device's existing Core-side mix from the per-receiver feed block (before mute, AF undone);
-Q2 accept listener silence when the controller's AF is at zero (a pre-AF WDSP tap is a separate change);
+Q2 accept listener silence when the controller's AF is at zero (a pre-AF WDSP tap is a separate change; superseded
+later the same day by the lead's ruling that U5 wins, see Task 6);
 Q3 listeners hear the slice centered on their own route; Q4 a listener's level starts at the current AF level (new
 listeners and the former controller); Q5 the controller cannot Stop listening, the Core refuses and points to Release;
 Q6 existing close paths (flag close, removeSlice) act as Release on a slice others listen to; Q7 Take control from a
@@ -774,7 +783,8 @@ reconnect/session fencing, and remote audio clock behavior"; "DSP callback
 code must never traverse mutable listener collections"; "Host speakers and
 remote playback must obey the same per-device listening policy"; verification
 bullet 1 (continuous audio after handoff, independent volume and mute).
-Depends on: Task 4; ruling Q1 (mechanism), Q2, Q3, Q4; JJ's ruling U5.
+Depends on: Task 4; ruling Q1 (mechanism), Q3, Q4; JJ's ruling U5 and the
+lead's ruling that U5 supersedes Q2.
 Model tier: opus.
 
 U5 consequence (JJ 2026-09-28, "1 your recommendation"; ledger finding):
@@ -787,15 +797,15 @@ per-device too, not only a listener's level:
   keeps its level as a listener (Q4 seeds it from what it heard), and the
   new controller keeps the level it had as a listener instead of inheriting
   the former controller's AF.
-- How the controller's level maps onto WDSP's panel gain (`SetRXAPanelGain1`,
-  where AF is applied today) is decided from step 1's evidence, without
-  changing any DSP parameter or constant; bring the choice to the lead
-  before building it.
-- Open point for the lead, not the implementer: Q2 accepted that a
-  controller AF at zero silences listeners (the AF undo returns 1.0 at or
-  below 0.001). U5's wording ("nobody's volume or mute changes anyone
-  else's audio, the controller's included") reads against that exception.
-  The lead confirms whether Q2 stands under U5 before this task starts.
+- Ruling (lead, 2026-09-28, settles Q2 vs U5): U5 wins. A listener's audio
+  must never depend on the controller's AF, including AF at zero. The
+  listener feed is taken before the controller's AF: before WDSP's panel
+  gain (`SetRXAPanelGain1`, where AF is applied today), or an equivalent
+  that never divides by the AF. The AF-undo route (which returns 1.0 at or
+  below 0.001, `AudioEngine.cpp:2040-2053`) does not meet this. The
+  controller's own path stays as it is today. Read the WDSP source and
+  Thetis's callsite before choosing where the feed is taken, change no DSP
+  parameter or constant, and name the chosen point in the task report.
 
 Today:
 - Owner mixes sum only a device's own slices, each at the slice's shared
@@ -855,9 +865,11 @@ Interfaces:
 
 Acceptance:
 - A controls A0, B listens: the controller muting A0 (`SliceModel::muted`)
-  or lowering AF leaves B's sum unchanged (to 1e-6, AF above 0.001); B
-  muting leaves A's sum and the local output unchanged.
-- AF 0 (Q2): B hears silence and the test documents it; nothing else moves.
+  or lowering AF leaves B's sum unchanged (to 1e-6); B muting leaves A's
+  sum and the local output unchanged.
+- U5 over Q2: with the controller's AF at 0 and at maximum, B's level is
+  unchanged (to 1e-6) from its level at the starting AF; the controller's
+  own sum follows its AF as today.
 - Handoff under a running drain: B takes A0; neither A's nor B's sum has a
   gap longer than one period or a level step larger than the seeded level
   difference; no owner-mix slot is released or acquired; no receiver stream
@@ -1205,18 +1217,16 @@ Change:
   and TX on a controlled one.
 - U8 letter row: the TX applet shows one letter button per slice this
   device controls, in its Aether color, and none for a listened or foreign
-  slice. The row follows take, release and handoff. Pressing a letter while
-  idle selects that slice for transmit: a remote window sends the existing
-  `tx.setTxSlice`; the hosting desktop calls the same validated operation
-  (Task 10). On air the row is disabled and a press is refused, leaving
-  transmit on its current slice.
-- On-air refusal, source first: today `tx.setTxSlice` from the holder while
-  keyed unkeys through the unkey gate and then moves the flag
-  (`SessionCommandDispatcher.cpp:1585-1590`). U8 refuses on air instead. Whether
-  that refusal lives in the verb for every client (the phone uses it under
-  ruling 8.10) or only in the path the letter row uses is for the lead to
-  settle before this task starts; do not change the verb's keyed behavior
-  without that answer.
+  slice. The row follows take, release and handoff. Pressing a letter
+  selects that slice for transmit through the existing `tx.setTxSlice`
+  behavior, the same for every client (ruling 8.10): unkeyed it moves at
+  once; while keyed the transmitter unkeys through the unkey gate and the
+  flag moves once that is confirmed (`SessionCommandDispatcher.cpp:1585-1590`).
+  A remote window sends `tx.setTxSlice`; the hosting desktop calls the same
+  validated operation (Task 10). The verb's behavior does not change.
+- Correction (lead, 2026-09-28): an earlier version of this task added "idle
+  only; refused on air" to U8. That was the lead's addition, not JJ's
+  ruling, and is withdrawn; the row is not disabled on air.
 
 Files: `src/gui/applets/TxApplet.{h,cpp}`, `src/gui/MainWindow.cpp`,
 `tests/tst_tx_applet_binding.cpp` (new or the existing TxApplet test).
@@ -1235,15 +1245,16 @@ Acceptance:
 - Selecting a listened slice for receive never changes `txBoundSliceId`,
   `m_chosenTxSlice` or the holder.
 - U8: device X controls A0 and C2 and listens to B1; the row shows A and C
-  only. Pressing C while idle and holding transmit binds C2 (`txBoundSliceId`
-  2) with no key. Pressing C while on air on A0 is refused, A0 stays bound
-  and nothing unkeys. After Y takes A0, A leaves X's row; if A0 was X's
-  transmit selection it clears by the Q8 path.
+  only. Pressing C while unkeyed and holding transmit binds C2
+  (`txBoundSliceId` 2) with no key. Pressing C while on air on A0 unkeys A0
+  through the unkey gate, then binds C2 once the unkey is confirmed; nothing
+  keys C2. After Y takes A0, A leaves X's row; if A0 was X's transmit
+  selection it clears by the Q8 path.
 - U8: a device that does not hold transmit gets today's refusal words
   (`StationServer.cpp:2576-2582`) and nothing changes.
 
 Verification: `tst_tx_applet_binding`, `tst_tx_slice_arbiter`,
-`tst_multi_device_screens` (including a capture of the U8 row idle and on
+`tst_multi_device_screens` (including a capture of the U8 row unkeyed and on
 air), offscreen, real load.
 
 ## Task 12: Phone contract note
@@ -1267,7 +1278,8 @@ phone parity gaps the deep scout found (log-only refusals, foreign note
 wording) as items for that PR; JJ's desktop window rulings U1 to U8
 (2026-09-28), quoted, as the behavior the phone's receive-slice UI should
 match where it applies (per-device volume and mute, the listened wording,
-hearing only slices it can see, the transmit letter choice while idle), with
+hearing only slices it can see, the transmit letter choice among controlled
+slices), with
 the phone's actual layout left to the phone crew's review.
 
 Files: `docs/architecture/2026-09-28-slice-access-phone-contract.md` (new).
@@ -1453,7 +1465,8 @@ Acceptance:
   pan comes forward; with none showing it and an empty main-window pan,
   that pan shows it; with no empty pan, the main window grows to a layout
   that fits in the single window and the new pan shows it; when no larger
-  layout fits, the operator is asked to name a destination pan. In every
+  layout fits, the operator is asked to name a destination pan (reading
+  confirmed by the lead, 2026-09-28). In every
   case: slice count, DDC mask and the controller's frequency, mode and
   filter are unchanged, no floating window is created, and growing the
   layout for placement adds no new slice to any other empty pan.

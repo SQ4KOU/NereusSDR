@@ -102,7 +102,9 @@ is the lead's recorded reading of each answer.
   else the main window grows to a pan layout that fits in the single
   window, or asks for a named destination. Placing a slice never opens a
   new floating pan, never creates a physical receiver and never changes
-  shared tuning.
+  shared tuning. The lead confirmed on 2026-09-28: ask only when no larger
+  single-window layout fits, and growing the layout to place a slice adds
+  no new slice to any other empty pan.
 - **U2, a slice already in a floating pan.** JJ: "1 your recommendation".
   Ruled behavior: that floater comes to the front and the main window's RX
   switches to the slice. Nothing moves and no second copy is made.
@@ -133,7 +135,11 @@ is the lead's recorded reading of each answer.
   show in the applet". Ruled behavior: the TX applet shows a row of slice
   letter buttons, only for slices active on this device, read as the slices
   this device controls (the only ones it may transmit on). Pressing one
-  selects it for transmit, while idle only; it is refused on air.
+  selects it for transmit with the existing `tx.setTxSlice` behavior, the
+  same for every client: while keyed it unkeys through the unkey gate, then
+  moves (ruling 8.10). An earlier record of this ruling added "idle only;
+  refused on air"; that was the lead's addition, not JJ's words, and is
+  withdrawn (lead correction, 2026-09-28).
 
 The resulting mapping:
 
@@ -154,7 +160,8 @@ The resulting mapping:
   audio plumbing does not yet provide the per-device mix U5 needs.
 - TX stays explicitly bound to the selected transmit slice even when a
   different slice is selected for receive. The TX applet's letter row (U8)
-  selects among this device's controlled slices while idle. The current
+  selects among this device's controlled slices through the existing
+  transmit-slice behavior (while keyed it unkeys, then moves). The current
   active-RX-dependent TX applet bindings need a safety audit when this is
   implemented.
 - A new view of an existing slice does not create a physical receiver or
@@ -210,10 +217,11 @@ state. Host speakers and remote playback must obey the same per-device
 listening policy without one device muting another. Under U5 this covers the
 controller too: the controller's AF slider and mute set only the
 controller's own hearing, and a handoff carries no device's level to
-another. Because AF is applied inside WDSP (panel gain), a controller AF of
-zero would silence listeners under the planned fan-out; the lead accepted
-that before U5 (plan ruling Q2), and the plan records it as an open point
-against U5's wording.
+another. A listener's audio never depends on the controller's AF, including
+AF at zero: the listener feed is taken before the controller's AF (before
+WDSP's panel gain, or an equivalent that never divides by the AF), and the
+controller's own path stays as it is today (lead ruling 2026-09-28, U5 over
+the earlier Q2).
 
 Zero physical slices is a supported idle Core state. Audit all last-slice
 guards and first-slice indexing, active RX/TX fallbacks, saved layout,
@@ -250,8 +258,8 @@ or displacing a current user when an absent device returns.
   U6; every volume and mute is per-device, the controller's included (U5);
   a layout change that hides a listened slice stops listening there with a
   notice, and every slice a device hears is visible (U7); the TX applet
-  letter row lists only this device's controlled slices and selects while
-  idle only (U8).
+  letter row lists only this device's controlled slices and selects through
+  the existing transmit-slice behavior (U8).
 
 Use the current lane reports and addendum as the work record. G-125's
 bounded Add preflight is a separate repair and does not establish general
