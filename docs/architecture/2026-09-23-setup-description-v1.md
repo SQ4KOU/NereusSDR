@@ -1,4 +1,4 @@
-# Setup description versions 1–7
+# Setup description versions 1–8
 
 The Core sends the desktop's built Setup pages as JSON strings on the read-only
 `setup` mirror object (`SetupDescription`). It has one string property per
@@ -145,8 +145,8 @@ command or result binding. The actual peer must separately declare
 nothing. A V3 peer still receives the older controls with their existing
 semantics. The Core filters every control above the peer's negotiated
 description version, drops empty sections and pages, and caps an unknown
-future declaration at version 7. Hardware has a version-6 ceiling, PA a
-version-5 ceiling, Display a version-4 ceiling, and Appearance a version-7
+future declaration at version 8. Hardware has a version-6 ceiling, PA a
+version-5 ceiling, Display a version-8 ceiling, and Appearance a version-7
 ceiling with its prior version-4 projection for V4–V6; the other
 categories on this source retain version 3.
 No mirror field or ordinal changes.
@@ -208,6 +208,30 @@ running objects, and these keys are not RX subscription fields. All TX Display
 controls require `txDisplayVersion: 2`. They have no transmit-permission or
 off-air gate because the desktop changes display processing while on air.
 Absent, malformed, stale, or unavailable settings disable their controls.
+
+Version 8 appends seven phone-owned RX subscription controls to Display: four
+in Spectrum Defaults > Rendering (Spectrum Detector, Spectrum Averaging,
+Spectrum Avg Time, Decimation) and three in the new partial Waterfall Defaults
+> Display page (WF Detector, WF Averaging, WF Avg Time). The new controls use
+only closed `binding.phone` dispatch identities for the phone's existing
+per-pan typed settings. Six identities match the desktop's existing display
+names; Decimation uses the literal `decimation` field, which has no desktop
+settings key. These descriptors do not create Core or phone settings keys or
+grant permission to write Core settings. Detector options are numbered 0–4
+for spectrum (Peak, Rosenfell, Average, Sample, RMS) and 0–3 for waterfall
+(no RMS), both default 0. Averaging options are numbered 0–3 (None,
+Recursive, Time Window, Log Recursive), default 3 for spectrum and 0 for
+waterfall. Both averaging times span 10–9999 ms in steps of 10, default 30
+and 120 ms. Decimation spans 1–16 in steps of 1, default 1. Choices use
+exact integer `{value,label}` options. Each control has
+`requiresDescriptionVersion:8` and `applies:"subscription"`; detectors gate
+on `remoteMediaVersion:1`, averaging and times on `displayExtrasVersion:1`,
+and Decimation on `spectrumGrantVersion:2`. These capability gates are
+necessary but do not replace the phone's current-session media availability
+checks. Versions 1–7 retain their original 11/14-control Display shape and
+version numbers (1–3, then 4), and omit the new Waterfall page. Native rendering
+behavior is unchanged; phone
+parsing and rendering require their own implementation.
 
 V4 adds `default` metadata to these exact Display and Appearance controls.
 Display toggles use JSON booleans; its numeric controls use JSON numbers,

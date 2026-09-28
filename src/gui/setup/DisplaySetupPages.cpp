@@ -797,6 +797,7 @@ void SpectrumDefaultsPage::buildUI()
     // RX1 scope dropped — pan-agnostic per design Section 1B.
     // Items from ControlRanges::kDisplaySpectrumDetectors.
     m_spectrumDetectorCombo = new QComboBox(renderGroup);
+    m_spectrumDetectorCombo->setProperty("nereusSetupId", "display.spectrumDefaults.detector");
     for (const ControlRanges::DisplayChoiceItem& item : ControlRanges::kDisplaySpectrumDetectors) {
         m_spectrumDetectorCombo->addItem(QLatin1String(item.label));
     }
@@ -818,6 +819,7 @@ void SpectrumDefaultsPage::buildUI()
     // (setup.designer.cs:34835): None / Recursive / Time Window / Log Recursive.
     // Items from ControlRanges::kDisplayAveragingModes.
     m_spectrumAveragingCombo = new QComboBox(renderGroup);
+    m_spectrumAveragingCombo->setProperty("nereusSetupId", "display.spectrumDefaults.averaging");
     for (const ControlRanges::DisplayChoiceItem& item : ControlRanges::kDisplayAveragingModes) {
         m_spectrumAveragingCombo->addItem(QLatin1String(item.label));
     }
@@ -844,6 +846,7 @@ void SpectrumDefaultsPage::buildUI()
     // ms→alpha math here.
     // Range, step and default from ControlRanges.h.
     m_averagingTimeSpin = new QSpinBox(renderGroup);
+    m_averagingTimeSpin->setProperty("nereusSetupId", "display.spectrumDefaults.averageTime");
     m_averagingTimeSpin->setRange(ControlRanges::kDisplayAvgTimeMinMs,
                                   ControlRanges::kDisplayAvgTimeMaxMs);
     m_averagingTimeSpin->setSingleStep(ControlRanges::kDisplayAvgTimeStepMs);
@@ -863,6 +866,7 @@ void SpectrumDefaultsPage::buildUI()
                            + QLatin1Char(':'), m_averagingTimeSpin);
 
     m_decimationSpin = new QSpinBox(renderGroup);
+    m_decimationSpin->setProperty("nereusSetupId", "display.spectrumDefaults.decimation");
     m_decimationSpin->setRange(ControlRanges::kDisplayDecimationMin,
                                ControlRanges::kDisplayDecimationMax);
     m_decimationSpin->setSingleStep(ControlRanges::kDisplayDecimationStep);
@@ -1807,6 +1811,7 @@ void WaterfallDefaultsPage::buildUI()
     // RX1 scope dropped — pan-agnostic per design Section 1B.
     // Items from ControlRanges::kDisplayWaterfallDetectors.
     m_waterfallDetectorCombo = new QComboBox(dispGroup);
+    m_waterfallDetectorCombo->setProperty("nereusSetupId", "display.waterfallDefaults.detector");
     for (const ControlRanges::DisplayChoiceItem& item : ControlRanges::kDisplayWaterfallDetectors) {
         m_waterfallDetectorCombo->addItem(QLatin1String(item.label));
     }
@@ -1828,6 +1833,7 @@ void WaterfallDefaultsPage::buildUI()
     // (setup.designer.cs:34436): None / Recursive / Time Window / Log Recursive.
     // Items from ControlRanges::kDisplayAveragingModes.
     m_waterfallAveragingCombo = new QComboBox(dispGroup);
+    m_waterfallAveragingCombo->setProperty("nereusSetupId", "display.waterfallDefaults.averaging");
     for (const ControlRanges::DisplayChoiceItem& item : ControlRanges::kDisplayAveragingModes) {
         m_waterfallAveragingCombo->addItem(QLatin1String(item.label));
     }
@@ -1851,6 +1857,7 @@ void WaterfallDefaultsPage::buildUI()
     // Default 120 ms matches Thetis. Range 10..9999 ms.
     // Range, step and default from ControlRanges.h.
     m_waterfallAvgTimeSpin = new QSpinBox(dispGroup);
+    m_waterfallAvgTimeSpin->setProperty("nereusSetupId", "display.waterfallDefaults.averageTime");
     m_waterfallAvgTimeSpin->setRange(ControlRanges::kDisplayAvgTimeMinMs,
                                      ControlRanges::kDisplayAvgTimeMaxMs);
     m_waterfallAvgTimeSpin->setSingleStep(ControlRanges::kDisplayAvgTimeStepMs);

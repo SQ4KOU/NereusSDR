@@ -73,3 +73,4 @@ Covered JSON files: `general.json`, `hardware.json`, `pa.json`, `test.json`, `di
 2026-09-28 - J.J. Boyd (KG4VCF), with AI-assisted transformation via OpenAI Codex: partial Appearance Colors & Theme swatch description.
 2026-09-28 - J.J. Boyd (KG4VCF), with AI-assisted transformation via OpenAI Codex: PA raw-power and forward/reverse voltage readout descriptions using existing native PA Values labels.
 2026-09-28 - J.J. Boyd (KG4VCF), with AI-assisted transformation via OpenAI Codex: Meter Styles S-meter face, peak hold, and decay descriptions from the built native page.
+2026-09-28 - J.J. Boyd (KG4VCF), with AI-assisted transformation via OpenAI Codex: RX spectrum and waterfall detector, averaging, time, and decimation descriptions from the built native pages.

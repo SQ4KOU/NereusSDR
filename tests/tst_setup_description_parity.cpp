@@ -115,10 +115,13 @@ void compareControl(QWidget& page, const QJsonObject& control)
         }
     } else if (kind == "choice") {
         if (auto* combo = qobject_cast<QComboBox*>(object)) {
-            const QJsonArray choices = control.value("choices").toArray();
+            const QJsonArray choices = control.contains("options")
+                ? control.value("options").toArray() : control.value("choices").toArray();
             QCOMPARE(combo->count(), choices.size());
             for (int i = 0; i < choices.size(); ++i) {
-                QCOMPARE(combo->itemText(i), choices.at(i).toString());
+                QCOMPARE(combo->itemText(i), control.contains("options")
+                    ? choices.at(i).toObject().value("label").toString()
+                    : choices.at(i).toString());
             }
         } else {
             auto* group = qobject_cast<QButtonGroup*>(object);
@@ -190,15 +193,20 @@ private slots:
     {
         RadioModel model;
         SpectrumDefaultsPage spectrum(&model);
+        WaterfallDefaultsPage waterfall(&model);
         MultimeterPage multimeter(&model);
         TxDisplayPage tx(&model);
         SetupDescriptionService service;
         const QJsonObject display = service.category(QStringLiteral("display"));
         const QJsonArray pages = display.value("pages").toArray();
-        QCOMPARE(pages.size(), 3);
+        QCOMPARE(pages.size(), 4);
         const QStringList expectedIds{
             "display.spectrumDefaults.fftSize", "display.spectrumDefaults.window",
             "display.spectrumDefaults.hzPerBinTarget", "display.spectrumDefaults.fps",
+            "display.spectrumDefaults.detector", "display.spectrumDefaults.averaging",
+            "display.spectrumDefaults.averageTime", "display.spectrumDefaults.decimation",
+            "display.waterfallDefaults.detector", "display.waterfallDefaults.averaging",
+            "display.waterfallDefaults.averageTime",
             "display.multimeter.pollingDelay", "display.txDisplay.fftSize",
             "display.txDisplay.window", "display.txDisplay.panDetector",
             "display.txDisplay.panAveraging", "display.txDisplay.panAvTime",
@@ -207,6 +215,13 @@ private slots:
         const QList<QJsonValue> expectedDefaults{
             ControlRanges::kDisplayFftSizeDefault, ControlRanges::kDisplayFftWindowDefault,
             ControlRanges::kDisplayHzPerBinTargetDefault, ControlRanges::kDisplaySpectrumFpsDefault,
+            ControlRanges::kDisplaySpectrumDetectorDefault,
+            ControlRanges::kDisplaySpectrumAveragingDefault,
+            ControlRanges::kDisplaySpectrumAvgTimeDefaultMs,
+            ControlRanges::kDisplayDecimationDefault,
+            ControlRanges::kDisplayWaterfallDetectorDefault,
+            ControlRanges::kDisplayWaterfallAveragingDefault,
+            ControlRanges::kDisplayWaterfallAvgTimeDefaultMs,
             100, TxAnalyzer::kDefaultFftSize, TxAnalyzer::kDefaultWindowType,
             TxAnalyzer::kDefaultPanDetector, TxAnalyzer::kDefaultPanAveraging,
             TxAnalyzer::kDefaultPanAvTimeMs, TxAnalyzer::kDefaultPanNormalize,
@@ -218,21 +233,36 @@ private slots:
         QCOMPARE(pages.at(0).toObject().value("sections").toArray().at(1).toObject().value("title"),
                  QJsonValue("Rendering"));
         QCOMPARE(pages.at(1).toObject().value("sections").toArray().at(0).toObject().value("title"),
+                 QJsonValue("Display"));
+        QCOMPARE(pages.at(1).toObject().value("where"), QJsonValue("phone"));
+        QCOMPARE(pages.at(2).toObject().value("sections").toArray().at(0).toObject().value("title"),
                  QJsonValue("Multimeter"));
-        QCOMPARE(pages.at(2).toObject().value("sections").toArray().at(1).toObject().value("title"),
+        QCOMPARE(pages.at(3).toObject().value("sections").toArray().at(1).toObject().value("title"),
                  QJsonValue("Panadapter"));
-        QCOMPARE(pages.at(2).toObject().value("sections").toArray().at(2).toObject().value("title"),
+        QCOMPARE(pages.at(3).toObject().value("sections").toArray().at(2).toObject().value("title"),
                  QJsonValue("Waterfall"));
         for (int p = 0; p < pages.size(); ++p) {
             QWidget* native = p == 0 ? static_cast<QWidget*>(&spectrum)
-                : p == 1 ? static_cast<QWidget*>(&multimeter) : static_cast<QWidget*>(&tx);
+                : p == 1 ? static_cast<QWidget*>(&waterfall)
+                : p == 2 ? static_cast<QWidget*>(&multimeter) : static_cast<QWidget*>(&tx);
             for (const QJsonValue& section : pages.at(p).toObject().value("sections").toArray()) {
                 for (const QJsonValue& raw : section.toObject().value("controls").toArray()) {
                     const QJsonObject control = raw.toObject();
                     QCOMPARE(control.value("default"), expectedDefaults.at(actualIds.size()));
                     actualIds << control.value("id").toString();
-                    QVERIFY(SetupDescriptionService::validateDisplaySettingBinding(control));
+                    QVERIFY(SetupDescriptionService::validateDisplaySettingBinding(control)
+                            || SetupDescriptionService::validateDisplayPhoneBinding(control));
                     compareControl(*native, control);
+                    if (control.value("binding").toObject().contains("phone")) {
+                        auto* const widget = qobject_cast<QWidget*>(
+                            bySetupId(*native, control.value("id").toString()));
+                        QVERIFY(widget != nullptr);
+                        auto* const form = qobject_cast<QFormLayout*>(widget->parentWidget()->layout());
+                        QVERIFY(form != nullptr);
+                        auto* const label = qobject_cast<QLabel*>(form->labelForField(widget));
+                        QVERIFY(label != nullptr);
+                        QCOMPARE(label->text(), control.value("label").toString());
+                    }
                 }
             }
         }
