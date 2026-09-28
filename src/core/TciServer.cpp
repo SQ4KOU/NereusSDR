@@ -1660,7 +1660,9 @@ void TciServer::setDesktopHostMode(bool enabled)
 {
     if (m_desktopHostMode == enabled) { return; }
     ++m_desktopKeyGeneration;
+    const QPointer<TciServer> self(this);
     if (m_desktopHostMode) { releaseDesktopProgramKey(); }
+    if (!self) { return; }
     if (m_desktopHostMode && !enabled && m_model && m_model->wdspEngine()) {
         auto* wdsp = m_model->wdspEngine();
         for (int channel = 1; channel < WdspEngine::kMaxSliceChannels; ++channel) {
@@ -1818,9 +1820,10 @@ bool TciServer::start(const QHostAddress& bindAddress, quint16 port)
 
 void TciServer::stop()
 {
+    const QPointer<TciServer> self(this);
     ++m_desktopKeyGeneration;
     releaseDesktopProgramKey();
-    if (!m_server) { return; }
+    if (!self || !m_server) { return; }
 
     // Phase 26 review finding #4: explicitly sever DSP-thread signal connections
     // BEFORE stopping timers and clearing client state.  The audio tap from
@@ -1899,6 +1902,10 @@ void TciServer::stop()
         cleanupResamplers(it.value());
         QWebSocket* ws = it.key();
         ws->disconnect(this);
+        // A key-release callback may destroy this server from inside the
+        // socket's disconnected signal. Keep that socket alive until Qt's
+        // close stack unwinds, even when its parent server is destroyed now.
+        ws->setParent(nullptr);
         ws->close();
         ws->deleteLater();
     }
@@ -1927,16 +1934,17 @@ void TciServer::stop()
     m_remoteSaturationDrops = 0;
     m_remoteSaturationQuietTicks = 0;
 
-    // Closed now, so the port is free at once and no connection arrives;
-    // the clients above were already closed and released. Qt deletes the
-    // server (parented to this) after the current event, or with this
-    // object when it goes.
+    // Close ingress now, but defer destruction of the listener and its
+    // internal TCP children until any active socket-close stack unwinds.
+    // A key-release callback can delete this TciServer on that very stack.
     m_server->close();
+    m_server->setParent(nullptr);
     m_server->deleteLater();
     m_server = nullptr;
     for (QWebSocketServer* extra : std::as_const(m_extraServers)) {
         // M6: closed now, so the port is free at once; Qt deletes it.
         extra->close();
+        extra->setParent(nullptr);
         extra->deleteLater();
     }
     m_extraServers.clear();
@@ -2134,6 +2142,9 @@ void TciServer::onClientDisconnected()
 
     if (m_desktopHostMode && m_desktopKeyClient.data() == ws) {
         releaseDesktopProgramKey();
+        if (!self || !client) { return; }
+        it = m_clients.find(ws);
+        if (it == m_clients.end()) { return; }
     }
 
     // Phase 17: release TX audio mutex if this client held it.
@@ -3980,10 +3991,10 @@ void TciServer::onTextMessageReceived(const QString& msg)
                         parts.at(2).trimmed().compare(QLatin1String("tci"),
                             Qt::CaseInsensitive) == 0);
 
-                        const bool wantsMox = (parts.at(1).trimmed().compare(
+                    const bool wantsMox = (parts.at(1).trimmed().compare(
                         QLatin1String("true"), Qt::CaseInsensitive) == 0);
 
-                        if (m_desktopHostMode) {
+                    if (m_desktopHostMode) {
                         const QString requested = parts.at(1).trimmed();
                         if (requested.compare(QLatin1String("true"), Qt::CaseInsensitive) != 0
                             && requested.compare(QLatin1String("false"), Qt::CaseInsensitive) != 0) {

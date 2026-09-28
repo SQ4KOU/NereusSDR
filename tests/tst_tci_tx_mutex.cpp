@@ -98,7 +98,57 @@ private slots:
     void desktop_host_owned_two_three_broadcasts_logical_receivers();
     void desktop_host_reentrant_stop_cannot_take_audio();
     void desktop_host_reentrant_destruction_releases_original_key();
+    void desktop_host_release_callback_may_destroy_server_data();
+    void desktop_host_release_callback_may_destroy_server();
 };
+
+void TestTciTxMutex::desktop_host_release_callback_may_destroy_server_data()
+{
+    QTest::addColumn<int>("action");
+    QTest::newRow("stop") << 0;
+    QTest::newRow("disable hosting") << 1;
+    QTest::newRow("client disconnect") << 2;
+}
+
+void TestTciTxMutex::desktop_host_release_callback_may_destroy_server()
+{
+    QFETCH(int, action);
+    RadioModel radio;
+    const int owned = radio.addSlice(QStringLiteral("pan-0"));
+    radio.sliceOwnership()->setOwner(owned, SliceOwnership::stationDevice());
+    TransmitHolder holder;
+    radio.moxController()->setKeyingGate([&holder](PttMode source,
+                                                   const KeyerIdentity& keyer) {
+        return holder.askKey({keyer.deviceId, TransmitHolder::Source::Device,
+                              keyer.program, source == PttMode::Vox});
+    });
+    holder.transferTo(TransmitHolder::Holder{SliceOwnership::stationDevice()},
+                      QStringLiteral("test"), [](bool) {});
+    radio.setTransmitHolder(SliceOwnership::stationDevice());
+    QVERIFY(radio.txSliceArbiter()->bindForHolder(SliceOwnership::stationDevice(), owned));
+    QPointer<TciServer> server = new TciServer(&radio);
+    server->setDesktopHostMode(true);
+    QVERIFY(server->start(0));
+    QWebSocket app;
+    QSignalSpy connected(&app, &QWebSocket::connected);
+    app.open(QUrl(QStringLiteral("ws://127.0.0.1:%1").arg(server->port())));
+    QVERIFY(connected.wait(2000));
+    QTRY_COMPARE_WITH_TIMEOUT(server->clientCount(), 1, 3000);
+    app.sendTextMessage(QStringLiteral("trx:0,true,tci;"));
+    QTRY_VERIFY_WITH_TIMEOUT(radio.mox(), 3000);
+    QTRY_COMPARE_WITH_TIMEOUT(server->activeTxClientCount(), 1, 3000);
+    const auto destroying = connect(radio.moxController(), &MoxController::moxChanging,
+        &radio, [&server](int, bool, bool on) {
+            if (!on && server) { delete server.data(); }
+        });
+    if (action == 0) { server->stop(); }
+    else if (action == 1) { server->setDesktopHostMode(false); }
+    else { app.close(); }
+    QTRY_VERIFY_WITH_TIMEOUT(server.isNull(), 3000);
+    QTRY_VERIFY_WITH_TIMEOUT(!radio.mox(), 3000);
+    QObject::disconnect(destroying);
+    app.close();
+}
 
 void TestTciTxMutex::desktop_host_reentrant_destruction_releases_original_key()
 {
