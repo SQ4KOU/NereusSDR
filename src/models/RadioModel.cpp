@@ -6629,6 +6629,12 @@ bool RadioModel::radeEndOfOverTailPermitted() const
     if (m_isTuning || m_pendingTuneOff || m_transmitModel.isTwoToneActive()) {
         return false;
     }
+    // Review Minor 4: two-tone's own walk releases MOX before it keys (and
+    // again when it stops); neither release ends an over.
+    if (m_twoToneController
+        && (m_twoToneController->isActive() || m_twoToneController->isActivationInFlight())) {
+        return false;
+    }
     const SliceModel* const txSlice = txBoundSlice();
     if (txSlice == nullptr) {
         return false;

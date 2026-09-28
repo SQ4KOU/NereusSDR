@@ -57,6 +57,7 @@
 #include "core/MoxController.h"
 #include "core/RadeChannel.h"
 #include "core/Resampler.h"
+#include "core/TwoToneController.h"
 #include "core/TxWorkerThread.h"
 #include "core/audio/TxMicSource.h"
 #include "core/RadioConnection.h"
@@ -301,6 +302,31 @@ private slots:
         pump();
         QVERIFY(!rig.state.keyed());
         QVERIFY(rig.state.keyedByName().isEmpty());
+    }
+
+    // Review Minor 4: two-tone keyed from a RADE key releases MOX first
+    // (Thetis's TestIMD walk); that release is not an over's end, so it
+    // sends no tail.
+    void twoToneActivationSendsNoTail()
+    {
+        RealRig rig;
+        TwoToneController* twoTone = rig.model.twoToneController();
+        twoTone->setTxChannel(&rig.tx);
+        twoTone->setPowerOn(true);
+        twoTone->setSettleDelaysMs(0, 0);
+        rig.key();
+        QVERIFY(rig.model.mox());
+
+        QSignalSpy tail(&rig.model, &RadioModel::endOfOverTailChanged);
+        twoTone->setActive(true);
+        QTRY_VERIFY_WITH_TIMEOUT(twoTone->isActive(), 5000);
+        pump();
+        QCOMPARE(tail.count(), 0);
+        twoTone->setActive(false);
+        QTRY_VERIFY_WITH_TIMEOUT(!twoTone->isActive(), 5000);
+        pump();
+        QCOMPARE(tail.count(), 0);
+        twoTone->setTxChannel(nullptr);
     }
 
     // Review Important 1, case A: keyed in USB (the worker latched the WDSP
