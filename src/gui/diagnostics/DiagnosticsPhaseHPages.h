@@ -38,14 +38,18 @@
 
 #include "gui/SetupPage.h"
 
+#include <QByteArray>
 #include <QLabel>
+#include <QList>
 #include <QListWidget>
 #include <QPlainTextEdit>
+#include <QPointer>
 #include <QPushButton>
 
 namespace NereusSDR {
 
 class RadioModel;
+class IStationLink;
 
 // Diagnostics → Connection Quality (Phase H placeholder).
 class ConnectionQualityPage : public SetupPage {
@@ -105,6 +109,17 @@ class ExportImportConfigPage : public SetupPage {
     Q_OBJECT
 public:
     explicit ExportImportConfigPage(RadioModel* model = nullptr, QWidget* parent = nullptr);
+    ~ExportImportConfigPage() override;
+
+    void setStationSettingsAvailable(bool available, const QString& reason) override;
+
+protected:
+    // The native picker and message boxes live at the page boundary so the
+    // export transaction can be exercised without a modal desktop dialog.
+    virtual QString chooseExportDestination(bool remote);
+    virtual void showExportResult(bool success, const QString& text);
+    void closeEvent(QCloseEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
 
 private slots:
     void onExportAllClicked();
@@ -112,14 +127,45 @@ private slots:
     void onExportRadioClicked();
 
 private:
-    RadioModel*  m_model{nullptr};
+    struct ExportCompletion {
+        quint32 operationId {0};
+        bool accepted {false};
+        QString reason;
+        QByteArray coreXml;
+    };
+
+    QPointer<RadioModel> m_model;
     QLabel*      m_settingsPathLabel{nullptr};
+    QLabel*      m_exportExplanation{nullptr};
+    QLabel*      m_importExplanation{nullptr};
     QLabel*      m_radioSummaryLabel{nullptr};
     QPushButton* m_exportAllBtn{nullptr};
     QPushButton* m_importAllBtn{nullptr};
     QPushButton* m_exportRadioBtn{nullptr};
+    bool         m_stationSettingsAvailable{true};
+    QString      m_stationUnavailableReason;
+    quint64      m_linkGeneration{0};
+    quint64      m_visibilityGeneration{0};
+    quint64      m_pendingGeneration{0};
+    IStationLink* m_pendingLink{nullptr};
+    quint32      m_operationId{0};
+    bool         m_exportPending{false};
+    bool         m_requestStarting{false};
+    bool         m_ownsExport{false};
+    bool         m_shuttingDown{false};
+    QByteArray   m_windowXml;
+    QString      m_destination;
+    QList<ExportCompletion> m_earlyCompletions;
 
     void buildUI();
+    bool remoteWindow() const;
+    bool exportAllowed(QString* reason) const;
+    void refreshExportAvailability();
+    void onLinkStateChanged();
+    void onExportCompleted(quint32 operationId, bool accepted, const QString& reason,
+                           const QByteArray& coreXml);
+    void finishExport(const ExportCompletion& completion);
+    void clearPending(bool cancelOwned);
 };
 
 // Diagnostics → Logs. R-R3-21: shows the log file's recent lines, the

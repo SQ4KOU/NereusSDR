@@ -44,22 +44,27 @@
 #include "core/HermesLiteBandwidthMonitor.h"
 #include "core/SettingsHygiene.h"
 #include "core/session/IStationLink.h"
+#include "core/settings/SettingsBackup.h"
 #include "models/RadioModel.h"
 #include "gui/SupportDialog.h"
 #include "gui/UnbuiltFeatures.h"
 
 #include <QFile>
 #include <QFileDialog>
+#include <QCloseEvent>
 #include <QHideEvent>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QMessageBox>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QSaveFile>
 #include <QShowEvent>
 #include <QTextCursor>
 #include <QTimer>
 #include <QVBoxLayout>
+
+#include <utility>
 
 namespace NereusSDR {
 
@@ -297,6 +302,39 @@ ExportImportConfigPage::ExportImportConfigPage(RadioModel* model, QWidget* paren
     , m_model(model)
 {
     buildUI();
+    if (m_model) {
+        connect(m_model, &RadioModel::stationSettingsBackupExportFinished, this,
+                &ExportImportConfigPage::onExportCompleted);
+        connect(m_model, &RadioModel::stationLinkStateChanged, this,
+                &ExportImportConfigPage::onLinkStateChanged);
+    }
+    refreshExportAvailability();
+}
+
+ExportImportConfigPage::~ExportImportConfigPage()
+{
+    m_shuttingDown = true;
+    if (m_model) { disconnect(m_model, nullptr, this, nullptr); }
+    clearPending(true);
+}
+
+void ExportImportConfigPage::closeEvent(QCloseEvent* event)
+{
+    const QPointer<ExportImportConfigPage> guard(this);
+    clearPending(true);
+    if (!guard) { return; }
+    SetupPage::closeEvent(event);
+}
+
+void ExportImportConfigPage::hideEvent(QHideEvent* event)
+{
+    // SetupDialog hides pages through its stack and hides the whole dialog
+    // on close. Neither path necessarily calls this child's closeEvent.
+    ++m_visibilityGeneration;
+    const QPointer<ExportImportConfigPage> guard(this);
+    clearPending(true);
+    if (!guard) { return; }
+    SetupPage::hideEvent(event);
 }
 
 void ExportImportConfigPage::buildUI()
@@ -311,15 +349,25 @@ void ExportImportConfigPage::buildUI()
     m_settingsPathLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
     fileLayout->addWidget(m_settingsPathLabel);
 
-    auto* allGroup = addSection(QStringLiteral("Full Configuration (XML)"));
+    auto* allGroup = addSection(QStringLiteral("Full Configuration"));
     auto* allLayout = qobject_cast<QVBoxLayout*>(allGroup->layout());
     auto* btnRow = new QHBoxLayout;
     m_exportAllBtn = new QPushButton(QStringLiteral("Export All Settings…"));
     m_importAllBtn = new QPushButton(QStringLiteral("Import All Settings…"));
+    m_exportAllBtn->setObjectName(QStringLiteral("exportAllSettingsButton"));
+    m_importAllBtn->setObjectName(QStringLiteral("importAllSettingsButton"));
     btnRow->addWidget(m_exportAllBtn);
     btnRow->addWidget(m_importAllBtn);
     btnRow->addStretch();
     allLayout->addLayout(btnRow);
+    m_exportExplanation = new QLabel;
+    m_exportExplanation->setObjectName(QStringLiteral("backupExportExplanation"));
+    m_exportExplanation->setWordWrap(true);
+    allLayout->addWidget(m_exportExplanation);
+    m_importExplanation = new QLabel;
+    m_importExplanation->setObjectName(QStringLiteral("backupImportExplanation"));
+    m_importExplanation->setWordWrap(true);
+    allLayout->addWidget(m_importExplanation);
 
     auto* radioGroup = addSection(QStringLiteral("Per-Radio Configuration"));
     auto* radioLayout = qobject_cast<QVBoxLayout*>(radioGroup->layout());
@@ -348,25 +396,271 @@ void ExportImportConfigPage::buildUI()
 
 void ExportImportConfigPage::onExportAllClicked()
 {
-    AppSettings::instance().save();
-    const QString src = AppSettings::instance().filePath();
-    const QString dst = QFileDialog::getSaveFileName(
-        this, QStringLiteral("Export Settings"),
-        QStringLiteral("NereusSDR.settings.xml"),
-        QStringLiteral("XML (*.xml *.settings)"));
-    if (dst.isEmpty()) { return; }
-    QFile::remove(dst);
-    if (!QFile::copy(src, dst)) {
-        QMessageBox::warning(this, QStringLiteral("Export Failed"),
-                             QStringLiteral("Could not write to %1").arg(dst));
+    if (m_exportPending) { return; }
+    QString reason;
+    if (!exportAllowed(&reason)) {
+        showExportResult(false, reason);
         return;
     }
-    QMessageBox::information(this, QStringLiteral("Export Complete"),
-                             QStringLiteral("Settings exported to:\n%1").arg(dst));
+    const bool remote = remoteWindow();
+    const QPointer<ExportImportConfigPage> guard(this);
+    const QPointer<RadioModel> selectedModel(m_model);
+    IStationLink* const selectedLink = remote && selectedModel ? selectedModel->stationLink() : nullptr;
+    const quint64 selectedGeneration = m_linkGeneration;
+    const quint64 selectedVisibility = m_visibilityGeneration;
+    const QString destination = chooseExportDestination(remote);
+    if (!guard || destination.isEmpty()) { return; }
+    // The native picker pumps events. A disconnected Core, changed
+    // capability, or newly keyed radio cannot start an export afterward.
+    if (!selectedModel || m_model != selectedModel || remoteWindow() != remote
+        || m_visibilityGeneration != selectedVisibility
+        || (remote && (m_linkGeneration != selectedGeneration
+                       || m_model->stationLink() != selectedLink))) {
+        showExportResult(false, tr("The connection to the Core changed. Try the backup again."));
+        return;
+    }
+    if (!exportAllowed(&reason)) {
+        showExportResult(false, reason);
+        return;
+    }
+    const QByteArray windowXml = AppSettings::instance().exportLocalXml(&reason);
+    if (windowXml.isEmpty() || !AppSettings::validateLocalXml(windowXml, &reason)) {
+        showExportResult(false, reason.isEmpty()
+            ? tr("Could not serialize this window's settings.") : reason);
+        return;
+    }
+    if (!remote) {
+        QSaveFile file(destination);
+        if (!file.open(QIODevice::WriteOnly) || file.write(windowXml) != windowXml.size()
+            || !file.commit()) {
+            showExportResult(false, tr("Could not save this window's settings to %1: %2")
+                .arg(destination, file.errorString()));
+            return;
+        }
+        showExportResult(true, tr("This window's settings were exported to:\n%1")
+            .arg(destination));
+        return;
+    }
+
+    IStationLink* const link = m_model->stationLink();
+    m_exportPending = true;
+    m_requestStarting = true;
+    m_ownsExport = false;
+    m_pendingLink = link;
+    m_pendingGeneration = m_linkGeneration;
+    m_operationId = 0;
+    m_destination = destination;
+    m_windowXml = windowXml;
+    m_earlyCompletions.clear();
+    refreshExportAvailability();
+    const IStationLink::CommandOutcome outcome = link->requestSettingsBackupExport();
+    if (!guard) { return; }
+    m_requestStarting = false;
+    if (!m_exportPending) { return; } // A synchronous disconnect retired it.
+    if (!selectedModel || m_model != selectedModel || m_model->stationLink() != link
+        || m_linkGeneration != m_pendingGeneration
+        || !link->stationLinkReady()) {
+        clearPending(false);
+        showExportResult(false, tr("The connection to the Core changed. Try the backup again."));
+        return;
+    }
+    if (!outcome.sent || outcome.commandId == 0) {
+        clearPending(false);
+        showExportResult(false, outcome.reason.isEmpty()
+            ? tr("The Core could not start the settings backup. Try again.") : outcome.reason);
+        return;
+    }
+    m_ownsExport = true;
+    m_operationId = outcome.commandId;
+    for (const ExportCompletion& completion : std::as_const(m_earlyCompletions)) {
+        if (completion.operationId == m_operationId) {
+            const ExportCompletion matched = completion;
+            finishExport(matched);
+            return;
+        }
+    }
+    m_earlyCompletions.clear();
+}
+
+bool ExportImportConfigPage::remoteWindow() const
+{
+    return m_model && !m_model->ownsLocalDsp();
+}
+
+bool ExportImportConfigPage::exportAllowed(QString* reason) const
+{
+    if (reason) { reason->clear(); }
+    if (!m_model) {
+        if (reason) { *reason = tr("Connect a radio model before exporting settings."); }
+        return false;
+    }
+    if (m_model && m_model->stationOnAirRefusal(reason)) { return false; }
+    if (!remoteWindow()) { return true; }
+    if (!m_stationSettingsAvailable) {
+        if (reason) {
+            *reason = m_stationUnavailableReason.isEmpty()
+                ? tr("Connect to the Core before exporting both settings stores.")
+                : m_stationUnavailableReason;
+        }
+        return false;
+    }
+    IStationLink* const link = m_model->stationLink();
+    if (!link || !link->stationLinkReady()) {
+        if (reason) { *reason = tr("Connect to the Core before exporting both settings stores."); }
+        return false;
+    }
+    if (!link->settingsBackupExportAvailable()) {
+        if (reason) { *reason = tr("A combined backup requires an updated Core."); }
+        return false;
+    }
+    return true;
+}
+
+void ExportImportConfigPage::refreshExportAvailability()
+{
+    if (!m_exportAllBtn) { return; }
+    QString reason;
+    const bool allowed = !m_exportPending && exportAllowed(&reason);
+    m_exportAllBtn->setEnabled(allowed);
+    const QString exportText = m_exportPending
+        ? tr("A settings backup is in progress.")
+        : !allowed ? reason
+        : remoteWindow() ? tr("The backup includes this window and the paired Core.")
+                         : tr("Exports this window's settings as XML.");
+    m_exportExplanation->setText(exportText);
+    m_exportAllBtn->setToolTip(exportText);
+    m_exportAllBtn->setAccessibleDescription(exportText);
+
+    const bool remote = remoteWindow();
+    m_importAllBtn->setEnabled(!remote);
+    const QString importText = remote
+        ? tr("Importing a combined window and Core backup is not available yet.")
+        : tr("Imports a local XML settings file. Restart after importing.");
+    m_importExplanation->setText(importText);
+    m_importAllBtn->setToolTip(importText);
+    m_importAllBtn->setAccessibleDescription(importText);
+}
+
+void ExportImportConfigPage::setStationSettingsAvailable(bool available, const QString& reason)
+{
+    m_stationSettingsAvailable = available;
+    m_stationUnavailableReason = reason;
+    if (!available && m_exportPending) {
+        const QPointer<ExportImportConfigPage> guard(this);
+        clearPending(true);
+        if (!guard) { return; }
+        showExportResult(false, tr("The Core's settings became unavailable. Try again after reconnecting."));
+        if (!guard) { return; }
+    }
+    refreshExportAvailability();
+}
+
+QString ExportImportConfigPage::chooseExportDestination(bool remote)
+{
+    return QFileDialog::getSaveFileName(
+        this, remote ? tr("Export Window and Core Settings") : tr("Export Settings"),
+        remote ? QStringLiteral("NereusSDR.nereus-settings")
+               : QStringLiteral("NereusSDR.settings.xml"),
+        remote ? tr("Nereus settings backup (*.nereus-settings)")
+               : tr("XML (*.xml *.settings)"));
+}
+
+void ExportImportConfigPage::showExportResult(bool success, const QString& text)
+{
+    if (success) {
+        QMessageBox::information(this, tr("Export Complete"), text);
+    } else {
+        QMessageBox::warning(this, tr("Export Failed"), text);
+    }
+}
+
+void ExportImportConfigPage::onLinkStateChanged()
+{
+    ++m_linkGeneration;
+    if (m_exportPending) {
+        const QPointer<ExportImportConfigPage> guard(this);
+        // The old session's job is retired by the client.
+        clearPending(false);
+        showExportResult(false, tr("The connection to the Core changed. Try the backup again."));
+        if (!guard) { return; }
+    }
+    refreshExportAvailability();
+}
+
+void ExportImportConfigPage::onExportCompleted(quint32 operationId, bool accepted,
+                                                const QString& reason,
+                                                const QByteArray& coreXml)
+{
+    if (!m_exportPending) { return; }
+    const ExportCompletion completion{operationId, accepted, reason, coreXml};
+    if (m_requestStarting) {
+        if (m_earlyCompletions.size() < 4) { m_earlyCompletions.append(completion); }
+        return;
+    }
+    if (operationId == m_operationId) { finishExport(completion); }
+}
+
+void ExportImportConfigPage::finishExport(const ExportCompletion& completion)
+{
+    if (!m_exportPending || !m_model || m_model->stationLink() != m_pendingLink
+        || m_linkGeneration != m_pendingGeneration || !m_pendingLink->stationLinkReady()
+        || !m_stationSettingsAvailable) {
+        clearPending(false);
+        showExportResult(false, tr("The connection to the Core changed. Try the backup again."));
+        return;
+    }
+    const QString destination = m_destination;
+    const QByteArray windowXml = m_windowXml;
+    clearPending(false);
+    if (!completion.accepted) {
+        showExportResult(false, completion.reason.isEmpty()
+            ? tr("The Core refused the settings backup. Try again when it is available.")
+            : completion.reason);
+        return;
+    }
+    QString error;
+    if (!AppSettings::validateLocalXml(windowXml, &error)
+        || !AppSettings::validateLocalXml(completion.coreXml, &error)) {
+        showExportResult(false, tr("The settings backup contained invalid XML: %1").arg(error));
+        return;
+    }
+    if (!SettingsBackup::writeFile(destination, {windowXml, completion.coreXml}, &error)) {
+        showExportResult(false, tr("Could not save the settings backup: %1").arg(error));
+        return;
+    }
+    showExportResult(true, tr("This window and the paired Core were backed up to:\n%1")
+        .arg(destination));
+}
+
+void ExportImportConfigPage::clearPending(bool cancelOwned)
+{
+    IStationLink* const cancelLink = cancelOwned && m_exportPending && m_ownsExport && m_model
+        && m_model->stationLink() == m_pendingLink
+        && m_linkGeneration == m_pendingGeneration && m_pendingLink->stationLinkReady()
+        ? m_pendingLink : nullptr;
+    const quint32 cancelId = m_operationId;
+    m_exportPending = false;
+    m_requestStarting = false;
+    m_ownsExport = false;
+    m_pendingLink = nullptr;
+    m_operationId = 0;
+    m_windowXml.clear();
+    m_destination.clear();
+    m_earlyCompletions.clear();
+    if (!m_shuttingDown) { refreshExportAvailability(); }
+    // The client may emit completion synchronously from cancellation. It
+    // cannot finish a retired page job or cancel a newer job with another ID.
+    // This must be the final action: the callback may destroy this page.
+    if (cancelLink && cancelId != 0) { cancelLink->cancelSettingsBackupExport(cancelId); }
 }
 
 void ExportImportConfigPage::onImportAllClicked()
 {
+    if (remoteWindow()) {
+        QMessageBox::information(this, tr("Import Unavailable"),
+            tr("Importing a combined window and Core backup is not available yet."));
+        return;
+    }
     const QString src = QFileDialog::getOpenFileName(
         this, QStringLiteral("Import Settings"), {},
         QStringLiteral("XML (*.xml *.settings)"));
