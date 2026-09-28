@@ -463,6 +463,12 @@ else
 relay_url = wss://rv.harness.test/v1/relay
 relay_secret_file = $WORK/relay-secret
 EOF
+    # This isolated fixture opts in only for the independent-watch acceptance
+    # rows. Production's relay_watch_version default remains disabled.
+    if [[ -z "$ONLY" || "$ONLY" == web-relay-deadline
+          || "$ONLY" == direct-wss-deadline ]]; then
+        printf 'relay_watch_version = 1\n' >> "$WORK/rendezvous.conf"
+    fi
     ip netns exec h-rvsrv env PYTHONPATH="$SOURCE/rendezvous/server" \
         python3 -m nereus_rendezvous --config "$WORK/rendezvous.conf" >"$WORK/rendezvous.log" 2>&1 &
 fi
@@ -1250,7 +1256,7 @@ fi
 # web-relay-deadline: the transmit deadline over the web relay (brief
 # requirement 7): the client's network passes only DNS and TCP 443, with
 # DEADLINE_LOSS % loss and DEADLINE_DELAY ms each way on its link (150 ms
-# round trip); TUNE keyed for 25 s from the device. The Core's watchdog
+# round trip); TUNE requested for 60 s from the device. The Core's watchdog
 # reports each keepalive's gap and any trip. A watchdog stop while TUNE is
 # requested fails the scenario; the observed tails remain for operator review.
 deadline_trace() {
@@ -1276,58 +1282,207 @@ for trip in (e for e in core if e.get('event') == 'tripped' and not e.get('linkC
     print(json.dumps(nearby, separators=(',', ':')))
 PY
 }
+deadline_netem_add() {
+    local loss="$1" delay="$2"
+    local outbound=() inbound=()
+    if [[ -n "${DEADLINE_SEED:-}" ]]; then
+        [[ "$DEADLINE_SEED" =~ ^[0-9]+$ ]] || { say "invalid DEADLINE_SEED"; exit 2; }
+        outbound=(seed "$DEADLINE_SEED")
+        inbound=(seed "$((DEADLINE_SEED + 1))")
+        say "NETEM seed client-out=$DEADLINE_SEED client-in=$((DEADLINE_SEED + 1)) loss=${loss}% delay=${delay}ms each way"
+    fi
+    in_ns natc tc qdisc add dev wan root netem loss "${loss}%" delay "${delay}ms" "${outbound[@]}"
+    in_ns inet tc qdisc del dev inet-natc root 2>/dev/null || true
+    in_ns inet tc qdisc add dev inet-natc root netem loss "${loss}%" delay "${delay}ms" "${inbound[@]}"
+}
+deadline_netem_stats() {
+    local prefix="$deadline_output/netem"
+    in_ns natc tc -s -j qdisc show dev wan > "$prefix-out.json"
+    in_ns inet tc -s -j qdisc show dev inet-natc > "$prefix-in.json"
+    in_ns cli nstat -az > "$prefix-cli-nstat.txt"
+    in_ns rvsrv nstat -az > "$prefix-service-nstat.txt"
+    python3 - "$prefix-out.json" "$prefix-in.json" <<'PY'
+import json, sys
+for direction, path in zip(('client-out', 'client-in'), sys.argv[1:]):
+    data = json.load(open(path))[0]
+    packets, dropped = data.get('packets', 0), data.get('drops', 0)
+    total = packets + dropped
+    print(f'{direction}: packets={packets} drops={dropped} '
+          f'dropFraction={(dropped / total if total else 0):.5f} file={path}')
+PY
+    say "TCP retrans counters: $(grep TcpRetransSegs "$prefix-cli-nstat.txt") | $(grep TcpRetransSegs "$prefix-service-nstat.txt")"
+}
+deadline_check() {
+    python3 - "$1" "$2" "$WORK/core.log" "$WORK/session-events.log" \
+              "$WORK/front.json" "$deadline_output/check.json" <<'PY'
+import json
+import sys
+
+name, result_text, core_path, session_path, front_path, output_path = sys.argv[1:]
+try:
+    result = json.loads(result_text)
+except ValueError:
+    result = {}
+
+def events(path):
+    with open(path) as lines:
+        for line in lines:
+            try:
+                item = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(item, dict):
+                yield item
+
+core = list(events(core_path))
+session = list(events(session_path))
+key = [e for e in core if e.get('event') == 'coreKeyed']
+tune = [e for e in session if e.get('event') == 'tune']
+heard = [e for e in core if e.get('event') == 'keepaliveReceived']
+keyed_ms = (key[1]['atEpochMs'] - key[0]['atEpochMs']
+            if len(key) == 2 and key[0].get('on') is True
+            and key[1].get('on') is False else -1)
+false_stops = [e for e in core if e.get('event') == 'tripped'
+               and e.get('linkClosed') is False]
+try:
+    with open(front_path) as handle:
+        front = json.load(handle)
+except (OSError, ValueError):
+    front = {}
+
+checks = {
+    'connected': result.get('connected') is True and not result.get('reason'),
+    'selectedPath': result.get('rankAfter') == (4 if name.startswith('web-relay') else 1),
+    'watchReadyBeforeKey': result.get('watchReadyBeforeTune') is True,
+    'watchReadyAtOff': result.get('watchReadyAtOff') is True,
+    'requestedSixtySeconds': result.get('tuneKeyedMs', -1) >= 59900,
+    'coreSixtySeconds': keyed_ms >= 59900,
+    'explicitOnOff': len(tune) == 2 and tune[0].get('on') is True
+                     and tune[1].get('on') is False,
+    'noFalseWatchdogStop': len(false_stops) == 0,
+    'coreAcceptedHeartbeats': len(heard) >= 100,
+    'auxiliarySentHeartbeats': result.get('tuneKeyedAuxiliaryKeepalives', 0) >= 500,
+    'primarySentHeartbeats': result.get('tuneKeyedChannelKeepalives', 0) > 0
+                              or result.get('tuneKeyedSessionKeepalives', 0) > 0,
+    'mediaBeforeKey': result.get('tunePreAudioDecoded', 0) > 0
+                      and result.get('tunePreDisplay', 0) > 0,
+    # This one fake RX slice is half-duplex. Core intentionally has no RX
+    # audio source while TUNE is on; require real decoded audio on both sides
+    # of the key and display frames throughout the keyed interval.
+    'displayDuringKey': result.get('tuneKeyedDisplay', 0) > 0,
+    'postOffRecovery': result.get('tunePostWindowMs', -1) >= 4900
+                       and result.get('tunePostAudioDecoded', 0) > 0
+                       and result.get('tunePostDisplay', 0) > 0
+                       and result.get('tunePostAudio') is True
+                       and result.get('tunePostDisplayReady') is True
+                       and result.get('tunePostHeard') is True,
+}
+if name.startswith('web-relay'):
+    sockets = front.get('relaySockets', {})
+    client = [sid for sid, entry in sockets.items()
+              if entry.get('source') == '198.51.100.6'
+              and entry.get('toRelay', {}).get('3', 0) > 0]
+    station = [sid for sid, entry in sockets.items()
+               if entry.get('source') == '198.51.100.10'
+               and entry.get('fromRelay', {}).get('3', 0) > 0]
+    checks['separateWatchTrafficReachedCoreSocket'] = bool(
+        set(client).isdisjoint(station) and client and station)
+    checks['realMediaRelayTraffic'] = front.get('datagrams', {}).get('2', 0) > 0
+
+summary = {
+    'scenario': name, 'seed': int(__import__('os').environ.get('DEADLINE_SEED', '0')),
+    'requestedTuneMs': 60000, 'clientKeyedMs': result.get('tuneKeyedMs', -1),
+    'coreKeyedMs': keyed_ms, 'coreHeartbeats': len(heard),
+    'auxiliarySent': result.get('tuneKeyedAuxiliaryKeepalives', 0),
+    'falseWatchdogStops': len(false_stops), 'checks': checks,
+    'result': result,
+}
+with open(output_path, 'w') as output:
+    json.dump(summary, output, indent=2, sort_keys=True)
+print(json.dumps({key: value for key, value in summary.items() if key != 'result'},
+                 sort_keys=True))
+sys.exit(0 if all(checks.values()) else 1)
+PY
+}
+deadline_save_artifacts() {
+    local file
+    for file in core.log session.log session-events.log front.json front.log \
+                relay.log rendezvous.log; do
+        if [[ -f "$WORK/$file" ]]; then
+            cp "$WORK/$file" "$deadline_output/$file"
+        fi
+    done
+}
 if scenario web-relay-deadline; then
+    deadline_name=web-relay-deadline
+    deadline_args=(--follow-media-ms 65000 --tune-ms 60000 --require-watch
+                   --ready-timeout-ms 20000)
     for condition in ${DEADLINE_CONDITIONS:-"2:75" "3:75"}; do
         loss="${condition%%:*}"
         delay="${condition##*:}"
+        deadline_output="${DEADLINE_OUT:-$SOURCE/build-r5-linux/watch-acceptance}/$deadline_name-$loss-$delay-${DEADLINE_SEED:-unseeded}"
+        mkdir -p "$deadline_output"
         reset_rules
         web_only natc
-        in_ns natc tc qdisc add dev wan root netem loss "${loss}%" delay "${delay}ms"
-        in_ns inet tc qdisc del dev inet-natc root 2>/dev/null || true
-        in_ns inet tc qdisc add dev inet-natc root netem loss "${loss}%" delay "${delay}ms"
+        deadline_netem_add "$loss" "$delay"
         start_core allow --media --keyable
-        result="$(run_session cli --media-ms 30000 --tune-ms 25000)"
+        result="$(run_session cli "${deadline_args[@]}")"
         sleep 2
-        stats="$(grep '"event":"keepalives"' "$WORK/core.log" | tail -n 1)"
+        stats="$(grep '"event":"keepalives"' "$WORK/core.log" | tail -n 1 || true)"
         trips="$(grep -c '"event":"tripped"' "$WORK/core.log" || true)"
         trip_events="$(grep '"event":"tripped"' "$WORK/core.log" || true)"
         tune_events="$(grep '"event":"tune"' "$WORK/session-events.log" || true)"
-        say "MEASURE web-relay-deadline loss=${loss}% delay=${delay}ms: $stats trips=$trips tripEvents=$trip_events tuneEvents=$tune_events session=$result"
-        if grep -q '"event":"tripped".*"linkClosed":false' "$WORK/core.log"; then
-            say "FAIL web-relay-deadline: the Core stopped TUNE before its requested release"
-            say "TRACE web-relay-deadline: $(deadline_trace)"
+        say "MEASURE $deadline_name loss=${loss}% delay=${delay}ms: $stats trips=$trips tripEvents=$trip_events tuneEvents=$tune_events session=$result"
+        if ! deadline_check "$deadline_name" "$result"; then
+            say "FAIL $deadline_name: media or keepalive route did not match the scenario"
             FAILED=1
         fi
+        if grep -q '"event":"tripped".*"linkClosed":false' "$WORK/core.log"; then
+            say "FAIL $deadline_name: the Core stopped TUNE before its requested release"
+            say "TRACE $deadline_name: $(deadline_trace)"
+            FAILED=1
+        fi
+        deadline_netem_stats
+        deadline_save_artifacts
         in_ns inet tc qdisc del dev inet-natc root 2>/dev/null || true
         stop_core
     done
 fi
 
 if scenario direct-wss-deadline; then
+    deadline_name=direct-wss-deadline
+    deadline_args=(--follow-media-ms 65000 --tune-ms 60000 --require-watch
+                   --ready-timeout-ms 20000)
     for condition in ${DEADLINE_CONDITIONS:-"2:75" "3:75"}; do
         loss="${condition%%:*}"
         delay="${condition##*:}"
+        deadline_output="${DEADLINE_OUT:-$SOURCE/build-r5-linux/watch-acceptance}/$deadline_name-$loss-$delay-${DEADLINE_SEED:-unseeded}"
+        mkdir -p "$deadline_output"
         reset_rules
         web_only natc
         CORE_PORT=443
         CORE_URL="wss://198.51.100.10:$CORE_PORT"
         forward_core
-        in_ns natc tc qdisc add dev wan root netem loss "${loss}%" delay "${delay}ms"
-        in_ns inet tc qdisc del dev inet-natc root 2>/dev/null || true
-        in_ns inet tc qdisc add dev inet-natc root netem loss "${loss}%" delay "${delay}ms"
+        deadline_netem_add "$loss" "$delay"
         start_core allow --listen "$CORE_PORT" --media --keyable
-        result="$(run_session cli --direct "$CORE_URL" --media-ms 30000 --tune-ms 25000)"
+        result="$(run_session cli --direct "$CORE_URL" "${deadline_args[@]}")"
         sleep 2
-        stats="$(grep '"event":"keepalives"' "$WORK/core.log" | tail -n 1)"
+        stats="$(grep '"event":"keepalives"' "$WORK/core.log" | tail -n 1 || true)"
         trips="$(grep -c '"event":"tripped"' "$WORK/core.log" || true)"
         trip_events="$(grep '"event":"tripped"' "$WORK/core.log" || true)"
         tune_events="$(grep '"event":"tune"' "$WORK/session-events.log" || true)"
-        say "MEASURE direct-wss-deadline loss=${loss}% delay=${delay}ms: $stats trips=$trips tripEvents=$trip_events tuneEvents=$tune_events session=$result"
-        if grep -q '"event":"tripped".*"linkClosed":false' "$WORK/core.log"; then
-            say "FAIL direct-wss-deadline: the Core stopped TUNE before its requested release"
-            say "TRACE direct-wss-deadline: $(deadline_trace)"
+        say "MEASURE $deadline_name loss=${loss}% delay=${delay}ms: $stats trips=$trips tripEvents=$trip_events tuneEvents=$tune_events session=$result"
+        if ! deadline_check "$deadline_name" "$result"; then
+            say "FAIL $deadline_name: media or keepalive route did not match the scenario"
             FAILED=1
         fi
+        if grep -q '"event":"tripped".*"linkClosed":false' "$WORK/core.log"; then
+            say "FAIL $deadline_name: the Core stopped TUNE before its requested release"
+            say "TRACE $deadline_name: $(deadline_trace)"
+            FAILED=1
+        fi
+        deadline_netem_stats
+        deadline_save_artifacts
         in_ns inet tc qdisc del dev inet-natc root 2>/dev/null || true
         stop_core
         CORE_PORT=47910

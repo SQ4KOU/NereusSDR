@@ -453,6 +453,13 @@ int runCore(const QStringList& args)
     auto* rendezvous = new StationRendezvous(
         server, RendezvousClient::serverUrls({option(args, QStringLiteral("--server"))}),
         relayAllowed, QCoreApplication::instance());
+    QObject::connect(rendezvous->client(), &RendezvousClient::relayGrantReceived, server,
+                     [rendezvous](const QByteArray& id) {
+        const auto grant = rendezvous->client()->relayGrant(id);
+        printLine({{QStringLiteral("event"), QStringLiteral("coreRendezvousGrant")},
+                   {QStringLiteral("present"), grant.has_value()},
+                   {QStringLiteral("watchGranted"), grant && !grant->watchToken.isEmpty()}});
+    });
     const QString idFile = option(args, QStringLiteral("--id-file"));
     QObject::connect(rendezvous->client(), &RendezvousClient::registered, server,
                      [rendezvous, server, idFile] {
@@ -485,6 +492,14 @@ int runCore(const QStringList& args)
         && !server->listen(listenLoopback ? QHostAddress::LocalHost : QHostAddress::Any,
                            static_cast<quint16>(listen.toUInt()))) {
         std::fputs("core: could not listen\n", stderr);
+        return 2;
+    }
+    if (listen.isEmpty() && args.contains(QStringLiteral("--keyable"))
+        && !server->listen(QHostAddress::LocalHost, 0)) {
+        // nereusd keeps its persistent TLS listener active when a web-relay
+        // introduction wins. Mirror that authority here without exposing a
+        // direct WAN path in the isolated namespace.
+        std::fputs("core: could not open the loopback listener\n", stderr);
         return 2;
     }
     if (args.contains(QStringLiteral("--media"))) {
@@ -550,6 +565,22 @@ int runCore(const QStringList& args)
             first->setDspMode(DSPMode::USB);
             first->setFrequency(14200000.0);
         }
+        // Record the Core's actual logical key transitions. The client-side
+        // TUNE request alone cannot establish how long the Core stayed keyed.
+        auto keyed = std::make_shared<bool>(false);
+        auto* keyPoll = new QTimer(server);
+        keyPoll->setInterval(10);
+        keyPoll->setTimerType(Qt::PreciseTimer);
+        QObject::connect(keyPoll, &QTimer::timeout, server, [model, keyed] {
+            const bool now = !model->keyedBy().isEmpty() && model->transmitModel().isTune();
+            if (now == *keyed) { return; }
+            *keyed = now;
+            printLine({{QStringLiteral("event"), QStringLiteral("coreKeyed")},
+                       {QStringLiteral("on"), now},
+                       {QStringLiteral("atEpochMs"), static_cast<double>(
+                            QDateTime::currentMSecsSinceEpoch())}});
+        });
+        keyPoll->start();
         auto gaps = std::make_shared<QList<qint64>>();
         auto trips = std::make_shared<int>(0);
         auto changed = std::make_shared<bool>(false);
@@ -619,6 +650,46 @@ QString pathName(int rank)
     case PathRacer::Floor: return QStringLiteral("webRelay");
     default: return QStringLiteral("none");
     }
+}
+
+QJsonObject watchProbe(const StationClient* window)
+{
+    QJsonObject probe{{QStringLiteral("event"), QStringLiteral("watchProbe")},
+                      {QStringLiteral("remoteTxVersion"), window->capabilities().remoteTxVersion},
+                      {QStringLiteral("txPermitted"), window->capabilities().txPermitted},
+                      {QStringLiteral("txWatchPathVersion"),
+                       window->capabilities().txWatchPathVersion},
+                      {QStringLiteral("watchReady"), window->transmitWatchReady()}};
+    if (const auto* relay = qobject_cast<const DataChannelTransport*>(window->transport())) {
+        probe.insert(QStringLiteral("watchGrantPresent"), relay->watchRelayGrant().has_value());
+        probe.insert(QStringLiteral("watchRoute"), relay->hasWatchRelayRoute());
+        probe.insert(QStringLiteral("watchAdmission"), relay->canOpenWatchRelay());
+        probe.insert(QStringLiteral("primaryPinned"), relay->peerCertificateSha256().size() == 32);
+    }
+    return probe;
+}
+
+// The fake speaker advances on the session thread. Read each 10 ms block
+// once, so media readiness and post-unkey recovery do not scan the whole
+// recording on every timer tick.
+bool heardAudibleBlock(PacedAudioBus* bus, int& nextSample)
+{
+    if (bus == nullptr) {
+        return false;
+    }
+    const QVector<float>& heard = bus->heard;
+    while (nextSample + 960 <= heard.size()) {
+        double energy = 0.0;
+        for (int i = 0; i < 480; ++i) {
+            const double sample = heard.at(nextSample + i * 2);
+            energy += sample * sample;
+        }
+        nextSample += 960;
+        if (energy / 480.0 >= 1e-6) {
+            return true;
+        }
+    }
+    return false;
 }
 
 // Plan Task 29: real media over a session, counting what decodes: a
@@ -789,9 +860,12 @@ int runSession(const QStringList& args)
     const int waitUpgradeMs = option(args, QStringLiteral("--wait-upgrade-ms"), QStringLiteral("0")).toInt();
     const int mediaMs = option(args, QStringLiteral("--media-ms"), QStringLiteral("0")).toInt();
     const QString schedule = option(args, QStringLiteral("--upgrade-schedule-ms"));
-    // Plan Task 29 step 2b: TUNE keyed for this long, 1 s after the session
-    // is up (the transmit deadline's measurement; the Core logs the gaps).
+    // Plan Task 29 step 2b: TUNE keyed for this long after bounded fake
+    // media readiness (the transmit deadline's measurement).
     const int tuneMs = option(args, QStringLiteral("--tune-ms"), QStringLiteral("0")).toInt();
+    const bool requireWatch = args.contains(QStringLiteral("--require-watch"));
+    const int readyTimeoutMs = option(args, QStringLiteral("--ready-timeout-ms"),
+                                      QStringLiteral("8000")).toInt();
     if (!schedule.isEmpty()) {
         QList<int> delays;
         for (const QString& part : schedule.split(QLatin1Char(','), Qt::SkipEmptyParts)) {
@@ -820,6 +894,35 @@ int runSession(const QStringList& args)
         qint64 replacementReadyAtMs = -1;
     };
     auto followRecovery = std::make_shared<FollowRecovery>();
+    auto displayPresented = std::make_shared<int>(0);
+    struct TuneWindow {
+        bool ready = false;
+        bool watchReady = false;
+        bool watchReadyAtOff = false;
+        bool heardPre = false;
+        bool postAudio = false;
+        bool postDisplay = false;
+        bool postHeard = false;
+        qint64 readyAtMs = -1;
+        qint64 watchReadyAtMs = -1;
+        qint64 onAtMs = -1;
+        qint64 offAtMs = -1;
+        qint64 postAtMs = -1;
+        quint64 audioBefore = 0;
+        quint64 audioAtOff = 0;
+        quint64 audioAfter = 0;
+        int displayBefore = 0;
+        int displayAtOff = 0;
+        int displayAfter = 0;
+        int heardScanSample = 0;
+        quint64 channelBefore = 0;
+        quint64 channelAtOff = 0;
+        quint64 sessionBefore = 0;
+        quint64 sessionAtOff = 0;
+        quint64 auxiliaryBefore = 0;
+        quint64 auxiliaryAtOff = 0;
+    };
+    auto tuneWindow = std::make_shared<TuneWindow>();
     if (followMs > 0) {
         auto owned = std::make_unique<PacedAudioBus>();
         bus = owned.get();
@@ -842,7 +945,8 @@ int runSession(const QStringList& args)
         });
         follower = new RemoteMediaController(window, model, stack, window);
         QObject::connect(follower, &RemoteMediaController::displayFrameReceived, window,
-                         [follower, moved, followRecovery, &clock](quint32) {
+                         [follower, moved, followRecovery, displayPresented, &clock](quint32) {
+            ++*displayPresented;
             if (!*moved || !follower || follower->replacePending()
                 || followRecovery->replacementId.isEmpty()
                 || follower->mediaConnectionId() != followRecovery->replacementId) {
@@ -902,7 +1006,8 @@ int runSession(const QStringList& args)
         watch->start();
     }
     const auto finish = [window, &clock, done, handshakes, rankBefore, moved, media, bus,
-                         follower, followIds, followRecovery](bool connected, const QString& reason) {
+                         follower, followIds, followRecovery, displayPresented, tuneWindow](
+                            bool connected, const QString& reason) {
         if (*done) {
             return;
         }
@@ -916,6 +1021,14 @@ int runSession(const QStringList& args)
         result.insert(QStringLiteral("rankAfter"), window->pathRank());
         result.insert(QStringLiteral("handshakes"), *handshakes);
         result.insert(QStringLiteral("switches"), window->pathSwitches());
+        if (RemoteTransmitClient* transmit = window->remoteTransmit()) {
+            result.insert(QStringLiteral("channelKeepalives"),
+                          static_cast<double>(transmit->channelKeepalivesSent()));
+            result.insert(QStringLiteral("sessionKeepalives"),
+                          static_cast<double>(transmit->sessionKeepalivesSent()));
+            result.insert(QStringLiteral("auxiliaryKeepalives"),
+                          static_cast<double>(transmit->auxiliaryKeepalivesSent()));
+        }
         if (*media) {
             result.insert(QStringLiteral("audioPackets"), static_cast<double>((*media)->audioPackets));
             result.insert(QStringLiteral("audioDecoded"), static_cast<double>((*media)->audioDecoded));
@@ -960,10 +1073,53 @@ int runSession(const QStringList& args)
                           first < 0 ? 0.0 : static_cast<double>((heard.size() / 2 - first) / 48));
             result.insert(QStringLiteral("longestSilentMs"), longest * 10);
             if (follower) {
+                result.insert(QStringLiteral("audioDecoded"),
+                              static_cast<double>(follower->audioTelemetry().decodedPackets));
+                result.insert(QStringLiteral("displayPresented"), *displayPresented);
                 result.insert(QStringLiteral("duplicatesDropped"),
                               static_cast<double>(follower->duplicateAudioDropped()));
                 result.insert(QStringLiteral("replacePending"), follower->replacePending());
             }
+        }
+        if (tuneWindow->ready) {
+            const bool unkeyed = tuneWindow->offAtMs >= 0;
+            const bool postDone = tuneWindow->postAtMs >= 0;
+            result.insert(QStringLiteral("tuneReadyAtMs"), static_cast<double>(tuneWindow->readyAtMs));
+            result.insert(QStringLiteral("watchReadyBeforeTune"), tuneWindow->watchReady);
+            result.insert(QStringLiteral("watchReadyAtOff"), tuneWindow->watchReadyAtOff);
+            result.insert(QStringLiteral("watchReadyAtMs"), static_cast<double>(
+                tuneWindow->watchReadyAtMs));
+            result.insert(QStringLiteral("tuneKeyedMs"),
+                          unkeyed ? static_cast<double>(tuneWindow->offAtMs - tuneWindow->onAtMs) : -1.0);
+            result.insert(QStringLiteral("tunePostWindowMs"),
+                          postDone ? static_cast<double>(tuneWindow->postAtMs - tuneWindow->offAtMs) : -1.0);
+            result.insert(QStringLiteral("tunePreAudioDecoded"),
+                          static_cast<double>(tuneWindow->audioBefore));
+            result.insert(QStringLiteral("tuneKeyedAudioDecoded"),
+                          unkeyed && tuneWindow->audioAtOff >= tuneWindow->audioBefore
+                              ? static_cast<double>(tuneWindow->audioAtOff - tuneWindow->audioBefore) : 0.0);
+            result.insert(QStringLiteral("tunePostAudioDecoded"),
+                          postDone && tuneWindow->audioAfter >= tuneWindow->audioAtOff
+                              ? static_cast<double>(tuneWindow->audioAfter - tuneWindow->audioAtOff) : 0.0);
+            result.insert(QStringLiteral("tuneAudioCounterReset"),
+                          unkeyed && tuneWindow->audioAtOff < tuneWindow->audioBefore);
+            result.insert(QStringLiteral("tunePreDisplay"), tuneWindow->displayBefore);
+            result.insert(QStringLiteral("tuneKeyedDisplay"),
+                          unkeyed ? tuneWindow->displayAtOff - tuneWindow->displayBefore : 0);
+            result.insert(QStringLiteral("tunePostDisplay"),
+                          postDone ? tuneWindow->displayAfter - tuneWindow->displayAtOff : 0);
+            result.insert(QStringLiteral("tunePostAudio"), tuneWindow->postAudio);
+            result.insert(QStringLiteral("tunePostDisplayReady"), tuneWindow->postDisplay);
+            result.insert(QStringLiteral("tunePostHeard"), tuneWindow->postHeard);
+            result.insert(QStringLiteral("tuneKeyedChannelKeepalives"),
+                          unkeyed ? static_cast<double>(tuneWindow->channelAtOff - tuneWindow->channelBefore) : 0.0);
+            result.insert(QStringLiteral("tuneKeyedSessionKeepalives"),
+                          unkeyed ? static_cast<double>(tuneWindow->sessionAtOff - tuneWindow->sessionBefore) : 0.0);
+            result.insert(QStringLiteral("tuneKeyedAuxiliaryKeepalives"),
+                          unkeyed ? static_cast<double>(tuneWindow->auxiliaryAtOff
+                                                      - tuneWindow->auxiliaryBefore) : 0.0);
+        } else {
+            result.insert(QStringLiteral("tuneReadyAtMs"), -1);
         }
         result.insert(QStringLiteral("relayed"), false);
         if (const auto* transport = qobject_cast<const DataChannelTransport*>(window->transport())) {
@@ -988,18 +1144,17 @@ int runSession(const QStringList& args)
     };
     QObject::connect(window, &StationClient::handshakeComplete, window,
                      [window, model, finish, handshakes, rankBefore, moved, media, waitUpgradeMs,
-                      mediaMs, followMs, tuneMs, follower, followRecovery, &clock] {
+                      mediaMs, followMs, tuneMs, follower, followRecovery, bus,
+                      displayPresented, tuneWindow, done, requireWatch, readyTimeoutMs, &clock] {
         ++*handshakes;
         if (*handshakes > 1) {
             return;
         }
         *rankBefore = window->pathRank();
+        printLine(watchProbe(window));
         if (waitUpgradeMs <= 0 && mediaMs <= 0 && tuneMs <= 0) {
             finish(true, QString());
             return;
-        }
-        if (tuneMs > 0 && mediaMs <= 0 && waitUpgradeMs <= 0) {
-            QTimer::singleShot(tuneMs + 2500, window, [finish] { finish(true, QString()); });
         }
         if (tuneMs > 0) {
             auto* sentTrace = new QTimer(window);
@@ -1022,24 +1177,108 @@ int runSession(const QStringList& args)
                            {QStringLiteral("session"), static_cast<double>(session)}});
             });
             sentTrace->start();
-            QTimer::singleShot(1000, window, [window, tuneMs] {
-                if (RemoteTransmitClient* transmit = window->remoteTransmit()) {
+            const auto decodedAudio = [follower, media]() -> quint64 {
+                if (follower) { return follower->audioTelemetry().decodedPackets; }
+                return *media ? (*media)->audioDecoded : 0;
+            };
+            const auto displayed = [follower, media, displayPresented]() -> int {
+                if (follower) { return *displayPresented; }
+                return *media ? int((*media)->displayDecoded) : 0;
+            };
+            // The sole fake RX slice is half-duplex: TUNE removes it from
+            // the speaker mix. Prove reception before keying, then test
+            // recovery separately after the requested keyed window.
+            auto* readiness = new QTimer(window);
+            readiness->setInterval(20);
+            readiness->setTimerType(Qt::PreciseTimer);
+            const qint64 readyDeadlineMs = clock.elapsed() + readyTimeoutMs;
+            QObject::connect(readiness, &QTimer::timeout, window,
+                             [window, readiness, readyDeadlineMs, tuneMs, finish, done,
+                              tuneWindow, bus, decodedAudio, displayed, requireWatch, &clock] {
+                if (*done) { readiness->stop(); return; }
+                const quint64 audio = decodedAudio();
+                const int display = displayed();
+                if (bus != nullptr && !tuneWindow->heardPre) {
+                    tuneWindow->heardPre = heardAudibleBlock(bus, tuneWindow->heardScanSample);
+                }
+                if (audio > 0 && display > 0 && (bus == nullptr || tuneWindow->heardPre)
+                    && (!requireWatch || window->transmitWatchReady())) {
+                    readiness->stop();
+                    RemoteTransmitClient* transmit = window->remoteTransmit();
+                    if (transmit == nullptr) {
+                        finish(true, QStringLiteral("TUNE transmitter unavailable after media readiness."));
+                        return;
+                    }
+                    tuneWindow->ready = true;
+                    tuneWindow->readyAtMs = clock.elapsed();
+                    tuneWindow->watchReady = window->transmitWatchReady();
+                    if (tuneWindow->watchReady) {
+                        tuneWindow->watchReadyAtMs = tuneWindow->readyAtMs;
+                    }
+                    tuneWindow->audioBefore = audio;
+                    tuneWindow->displayBefore = display;
+                    tuneWindow->channelBefore = transmit->channelKeepalivesSent();
+                    tuneWindow->sessionBefore = transmit->sessionKeepalivesSent();
+                    tuneWindow->auxiliaryBefore = transmit->auxiliaryKeepalivesSent();
+                    printLine({{QStringLiteral("event"), QStringLiteral("tuneReady")},
+                               {QStringLiteral("atEpochMs"), static_cast<double>(
+                                    QDateTime::currentMSecsSinceEpoch())},
+                               {QStringLiteral("audioDecoded"), static_cast<double>(audio)},
+                               {QStringLiteral("displayPresented"), display},
+                               {QStringLiteral("watchReady"), tuneWindow->watchReady}});
+                    tuneWindow->onAtMs = clock.elapsed();
                     printLine({{QStringLiteral("event"), QStringLiteral("tune")},
                                {QStringLiteral("atEpochMs"), static_cast<double>(
                                     QDateTime::currentMSecsSinceEpoch())},
                                {QStringLiteral("on"), true}});
                     transmit->setTune(true);
-                    QTimer::singleShot(tuneMs, window, [window] {
+                    QTimer::singleShot(tuneMs, Qt::PreciseTimer, window,
+                                       [window, finish, done, tuneWindow, bus,
+                                        decodedAudio, displayed, &clock] {
+                        if (*done) { return; }
+                        tuneWindow->offAtMs = clock.elapsed();
+                        tuneWindow->watchReadyAtOff = window->transmitWatchReady();
+                        tuneWindow->audioAtOff = decodedAudio();
+                        tuneWindow->displayAtOff = displayed();
+                        if (bus != nullptr) {
+                            tuneWindow->heardScanSample = bus->heard.size();
+                        }
                         if (RemoteTransmitClient* again = window->remoteTransmit()) {
+                            tuneWindow->channelAtOff = again->channelKeepalivesSent();
+                            tuneWindow->sessionAtOff = again->sessionKeepalivesSent();
+                            tuneWindow->auxiliaryAtOff = again->auxiliaryKeepalivesSent();
                             again->setTune(false);
                         }
                         printLine({{QStringLiteral("event"), QStringLiteral("tune")},
                                    {QStringLiteral("atEpochMs"), static_cast<double>(
                                         QDateTime::currentMSecsSinceEpoch())},
                                    {QStringLiteral("on"), false}});
+                        QTimer::singleShot(5000, Qt::PreciseTimer, window,
+                                           [finish, done, tuneWindow, bus,
+                                            decodedAudio, displayed, &clock] {
+                            if (*done) { return; }
+                            tuneWindow->postAtMs = clock.elapsed();
+                            tuneWindow->audioAfter = decodedAudio();
+                            tuneWindow->displayAfter = displayed();
+                            tuneWindow->postAudio = tuneWindow->audioAfter > tuneWindow->audioAtOff;
+                            tuneWindow->postDisplay = tuneWindow->displayAfter > tuneWindow->displayAtOff;
+                            tuneWindow->postHeard = bus == nullptr
+                                || heardAudibleBlock(bus, tuneWindow->heardScanSample);
+                            const bool recovered = tuneWindow->postAudio
+                                && tuneWindow->postDisplay && tuneWindow->postHeard;
+                            finish(true, recovered ? QString()
+                                                   : QStringLiteral("Post-unkey media did not recover."));
+                        });
                     });
+                    return;
+                }
+                if (clock.elapsed() >= readyDeadlineMs) {
+                    readiness->stop();
+                    printLine(watchProbe(window));
+                    finish(true, QStringLiteral("Media or independent transmit watch was not ready before synthetic TUNE."));
                 }
             });
+            readiness->start();
         }
         // Tell the harness the session is up, then carry on.
         printLine({{QStringLiteral("event"), QStringLiteral("connected")},
@@ -1075,8 +1314,10 @@ int runSession(const QStringList& args)
                 finish(true, QStringLiteral("Media could not start."));
                 return;
             }
-            QTimer::singleShot(mediaMs + std::max(0, waitUpgradeMs), window,
-                               [finish] { finish(true, QString()); });
+            if (tuneMs <= 0) {
+                QTimer::singleShot(mediaMs + std::max(0, waitUpgradeMs), window,
+                                   [finish] { finish(true, QString()); });
+            }
         }
     });
     QObject::connect(window, &StationClient::sessionEnded, window,

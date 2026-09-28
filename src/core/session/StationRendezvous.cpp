@@ -69,6 +69,7 @@ StationRendezvous::StationRendezvous(StationServer* server, const QList<QUrl>& s
     m_client = new RendezvousClient(this);
     m_client->setServers(servers);
     m_client->setRelayAllowed(relayAllowed);
+    m_client->setWatchRelayEnabled(true);
 }
 
 StationRendezvous::~StationRendezvous()

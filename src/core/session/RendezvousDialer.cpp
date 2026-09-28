@@ -98,6 +98,7 @@ void RendezvousDialer::dial(const QList<QUrl>& servers, const QString& stationId
     }
     m_client = new RendezvousClient(this);
     m_client->setServers(servers);
+    m_client->setWatchRelayEnabled(true);
     connect(m_client, &RendezvousClient::connected, this, [this] {
         // The STUN server by this computer's families, once the names are
         // resolved (IceConfiguration).
