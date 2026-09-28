@@ -32,8 +32,8 @@ slots = 16
 sessions_per_station = 9
 # Connections per address group (an IPv4 address, or an IPv6 /56), joined
 # or not, counted until each has closed (refused ones included). Both ends
-# of all nine paths can share one address group.
-connections_per_address = 18
+# of all nine primary paths and nine watch paths can share one address group.
+connections_per_address = 36
 # Connections that have not joined yet, in total. When a new one comes and
 # they are all taken, the one waiting longest is ended (full) to make room.
 max_pending = 64
@@ -51,6 +51,11 @@ rate_bytes_per_second = 80000
 # cap drops that lane's oldest waiting frames first.
 queue_frames = 64
 queue_bytes = 24576
+# Each watch direction has its own small rate bucket and receive queue.
+# Watch bytes also spend that side's ordinary control-lane rate bucket.
+watch_rate_bytes_per_second = 8000
+watch_queue_frames = 16
+watch_queue_bytes = 8192
 # A leg whose writer spends longer than this on one frame is closed (1008).
 send_stall_ms = 10000
 ping_interval_seconds = 20

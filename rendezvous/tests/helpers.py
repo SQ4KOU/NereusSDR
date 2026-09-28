@@ -34,14 +34,17 @@ async def recv_json(ws: Any, timeout: float = 5.0) -> Dict[str, Any]:
     return json.loads(await asyncio.wait_for(ws.recv(), timeout))
 
 
-async def register(uri: str, key: Optional[ec.EllipticCurvePrivateKey] = None, address: str = "192.0.2.1") -> Tuple[Any, ec.EllipticCurvePrivateKey, str]:
+async def register(uri: str, key: Optional[ec.EllipticCurvePrivateKey] = None, address: str = "192.0.2.1", watch_relay_version: Optional[int] = None) -> Tuple[Any, ec.EllipticCurvePrivateKey, str]:
     key = key or ec.generate_private_key(ec.SECP256R1())
     spki = identity.spki_of(key.public_key())
     sid = identity.rendezvous_id(spki)
     ws = await ws_connect(uri, address)
     hello = await recv_json(ws)
     assert hello["type"] == "hello"
-    await ws.send(protocol.encode({"type": "register", "id": sid, "publicKey": identity.to_b64url(spki)}))
+    registration = {"type": "register", "id": sid, "publicKey": identity.to_b64url(spki)}
+    if watch_relay_version is not None:
+        registration["watchRelayVersion"] = watch_relay_version
+    await ws.send(protocol.encode(registration))
     challenge = await recv_json(ws)
     nonce = identity.from_b64url(challenge["nonce"])
     sig = identity.sign_raw(key, identity.register_transcript(nonce))

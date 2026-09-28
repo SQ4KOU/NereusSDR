@@ -56,6 +56,9 @@ class Config:
     relay_url: str = "wss://rv.nereussdr.com/v1/relay"
     relay_secret_file: str = ""
     relay_ttl_seconds: int = 120
+    # Enable only after the associated relay supports purpose-separated watch
+    # legs. The default keeps existing deployments and old peers unchanged.
+    relay_watch_version: int = 0
     log_level: str = "info"
     # [limits]
     introductions_per_address_per_minute: int = 30
@@ -95,6 +98,7 @@ _SECTIONS = {
         "relay_url",
         "relay_secret_file",
         "relay_ttl_seconds",
+        "relay_watch_version",
         "log_level",
     ],
     "limits": [
@@ -194,6 +198,8 @@ _MAY_BE_ZERO = ("ping_interval_seconds", "ping_timeout_seconds", "socket_buffer_
 def check(config: Config) -> None:
     """URLs must fit the wire (rendezvous document section 5.2), and every
     limit, timeout and cap must leave the service usable."""
+    if type(config.relay_watch_version) is not int or config.relay_watch_version not in (0, 1):
+        raise ConfigError("relay_watch_version: 0 (disabled) or 1")
     for key in _SECTIONS["limits"] + ["turn_ttl_seconds", "relay_ttl_seconds"]:
         value = getattr(config, key)
         if not isinstance(value, int) or isinstance(value, bool):

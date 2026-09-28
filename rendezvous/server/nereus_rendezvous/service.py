@@ -50,11 +50,12 @@ class _Close:
 
 
 class Introduction:
-    def __init__(self, iid: str, station_id: str, client: "Connection", station: "Connection") -> None:
+    def __init__(self, iid: str, station_id: str, client: "Connection", station: "Connection", watch_relay_version: int = 0) -> None:
         self.iid = iid
         self.station_id = station_id
         self.client = client
         self.station = station
+        self.watch_relay_version = watch_relay_version
         self.answered = False
         self.client_candidates = 0
         self.station_candidates = 0
@@ -99,6 +100,7 @@ class Connection:
         self.pending_spki: Optional[bytes] = None
         self.pending_id: Optional[str] = None
         self.station_id: Optional[str] = None
+        self.watch_relay_version = 0
         self.introductions: Dict[str, Introduction] = {}
         self.nameplate: Optional[int] = None
         self.mailbox: Optional[Mailbox] = None
@@ -363,9 +365,13 @@ class Service:
             protocol.message(
                 "hello",
                 "client",
-                version=protocol.VERSION,
+                version=(protocol.WATCH_PROTOCOL_VERSION
+                         if self.config.relay_watch_version == 1 and self.config.relay_secret
+                         else protocol.VERSION),
                 nonce=identity.to_b64url(conn.nonce),
                 stun=list(self.config.stun_urls),
+                **({"watchRelayVersion": 1}
+                   if self.config.relay_watch_version == 1 and self.config.relay_secret else {}),
             )
         )
         conn.timer = self.clock.call_later(self.config.handshake_timeout_ms, lambda: conn.fail("timeout"))
@@ -448,6 +454,7 @@ class Service:
             return
         conn.pending_spki = spki
         conn.pending_id = msg["id"]
+        conn.watch_relay_version = msg.get("watchRelayVersion", 0)
         conn.challenge = self.random(identity.NONCE_BYTES)
         conn.send(protocol.message("challenge", "station", nonce=identity.to_b64url(conn.challenge)))
 
@@ -533,6 +540,7 @@ class Service:
             "offered" if grant_session is not None else "not offered",
         )
         tokens: Dict[int, str] = {}
+        watch_tokens: Dict[int, str] = {}
         grant_expires = 0
         if grant_session is not None:
             # One expiry for the whole grant, so both ends get the same value.
@@ -542,18 +550,26 @@ class Service:
             station = relaygrant.station_of(secret, intro.station_id)
             for leg in relaygrant.LEGS:
                 tokens[leg] = relaygrant.mint(secret, leg, grant_session, station, grant_expires)
+                if (self.config.relay_watch_version == 1 and conn.watch_relay_version == 1
+                        and intro.watch_relay_version == 1):
+                    watch_tokens[leg] = relaygrant.mint_watch(secret, leg, grant_session, station, grant_expires)
         intro.client.send(protocol.message("answer", "client", answer=msg["answer"], turn=relay))
         if grant_session is not None:
-            intro.client.send(self._relay_grant("client", tokens[relaygrant.LEG_DEVICE], grant_expires))
+            intro.client.send(self._relay_grant("client", tokens[relaygrant.LEG_DEVICE], grant_expires,
+                                               watch_token=watch_tokens.get(relaygrant.LEG_DEVICE)))
         if msg["turn"]:
             conn.send(protocol.message("credentials", "station", **{"from": intro.iid, "turn": relay}))
         if grant_session is not None:
-            conn.send(self._relay_grant("station", tokens[relaygrant.LEG_CORE], grant_expires, intro.iid))
+            conn.send(self._relay_grant("station", tokens[relaygrant.LEG_CORE], grant_expires, intro.iid,
+                                       watch_tokens.get(relaygrant.LEG_CORE)))
 
-    def _relay_grant(self, receiver: str, token: str, expires: int, iid: Optional[str] = None) -> Dict[str, Any]:
+    def _relay_grant(self, receiver: str, token: str, expires: int, iid: Optional[str] = None,
+                     watch_token: Optional[str] = None) -> Dict[str, Any]:
         fields: Dict[str, Any] = {"url": self.config.relay_url, "token": token, "expires": expires}
         if iid is not None:
             fields["from"] = iid
+        if watch_token is not None:
+            fields["watchToken"] = watch_token
         return protocol.message("relay.grant", receiver, **fields)
 
     def _station_candidate(self, conn: Connection, msg: Dict[str, Any]) -> None:
@@ -643,7 +659,7 @@ class Service:
         iid = identity.to_b64url(self.random(identity.INTRODUCTION_ID_BYTES))
         while iid in self.introductions:
             iid = identity.to_b64url(self.random(identity.INTRODUCTION_ID_BYTES))
-        intro = Introduction(iid, station_id, conn, station)
+        intro = Introduction(iid, station_id, conn, station, msg.get("watchRelayVersion", 0))
         self.introductions[iid] = intro
         station.introductions[iid] = intro
         conn.introduction = intro

@@ -18,6 +18,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from . import identity
 
 VERSION = 1
+# Optional watch-grant keys are offered only by a service advertising v2.
+WATCH_PROTOCOL_VERSION = 2
 
 # Section 5.1: caps. The transport refuses a message longer than
 # MAX_MESSAGE_BYTES before it is decoded; the field caps are in UTF-8 bytes
@@ -162,6 +164,18 @@ TABLES = {
     ("server", "client"): TO_CLIENT,
 }
 
+# Optional negotiated extensions: unknown keys remain ignored, but known
+# optional keys are validated when present. Never add them to old peers' frames
+# merely because this service understands them.
+OPTIONAL_FIELDS = {
+    ("station", "server", "register"): [("watchRelayVersion", INT(1, VERSION_MAX))],
+    ("client", "server", "introduce"): [("watchRelayVersion", INT(1, VERSION_MAX))],
+    ("server", "station", "hello"): [("watchRelayVersion", INT(1, VERSION_MAX))],
+    ("server", "client", "hello"): [("watchRelayVersion", INT(1, VERSION_MAX))],
+    ("server", "station", "relay.grant"): [("watchToken", RELAY_TOKEN)],
+    ("server", "client", "relay.grant"): [("watchToken", RELAY_TOKEN)],
+}
+
 
 class DecodeError(Exception):
     """A message that is not what its kind says it must be."""
@@ -281,6 +295,10 @@ def decode(obj: Dict[str, Any], sender: str, receiver: str) -> Dict[str, Any]:
         if fkind is TURN_OR_NULL and value is not None:
             value = {sub: value[sub] for sub, _ in _TURN_KEYS}
         out[key] = value
+    for key, fkind in OPTIONAL_FIELDS.get((sender, receiver, kind), []):
+        if key in obj:
+            _check(key, obj[key], fkind)
+            out[key] = obj[key]
     return out
 
 
@@ -296,6 +314,10 @@ def message(kind: str, receiver: str, **fields: Any) -> Dict[str, Any]:
     out: Dict[str, Any] = {"type": kind}
     for key, _ in table[kind]:
         out[key] = fields[key]
+    for key, fkind in OPTIONAL_FIELDS.get(("server", receiver, kind), []):
+        if key in fields:
+            _check(key, fields[key], fkind)
+            out[key] = fields[key]
     return out
 
 

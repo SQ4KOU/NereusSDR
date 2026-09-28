@@ -1107,15 +1107,21 @@ colours for the same signal.
   four-device and replacement behavior. Lead implementation must size bounded
   relay admission for that contract, including temporary replacement paths;
   no permission to change a deployed service is inferred from this finding.
-- Status: built defaults for existing relay paths: nine logical sessions permit
-  four current paths, four reconnect introductions and a fifth-device question;
-  eighteen physical connections allow both ends to share one address group.
-  The global sixteen-session cap, queue bounds and rate limits are unchanged.
-  A loopback regression failed on the old third-session refusal, then proved all
-  nine pairs forward and the next station session is refused without displacing
-  them. All 148 focused relay/grant/queue/conformance tests passed (9.03 seconds).
-  No deployed service was changed. Proposed auxiliary watch sockets still need
-  their own bounded accounting and tests before that feature can ship.
+- Status: built bounded primary and auxiliary admission. Nine logical sessions
+  permit four current paths, four reconnect introductions and a fifth-device
+  question; thirty-six physical connections allow both primary and watch pairs
+  to share one address group. The global sixteen-session cap is unchanged.
+  Watch sockets require the same live primary pair, station, session and expiry;
+  they never create a logical session or extend its idle lifetime. Primary end
+  or replacement retires both watch legs. Separate bounded watch queues and
+  rates also charge the existing aggregate control budget.
+  Rendezvous negotiates purpose-separated watch grants only when explicitly
+  enabled and both peers declare version 1. Its default remains disabled;
+  enabled service hello uses protocol version 2. Old peers retain ordinary
+  version-1 primary grants. The integrated Python suite passed 478 tests
+  (23.03 seconds), including real loopback forwarding with service-issued grants.
+  No deployed service was changed. Client/Core watch signaling, separate DTLS
+  transport, and restrictive-network acceptance remain unfinished.
 - Plan: several-device capacity and restrictive-network relay access.
 
 ### G-67: Releasing an offline Core must preserve receiver edits and saved layouts
