@@ -67,6 +67,7 @@
 #include <QDir>
 #include <QPointer>
 #include <QProcess>
+#include <QSet>
 #include <QSignalSpy>
 #include <QScopeGuard>
 #include <QStringList>
@@ -431,7 +432,9 @@ struct Harness {
         // sample file together so a stuck first feedIQ can be distinguished
         // from an activation that never reached the worker.
         reportStage(name, endpoints);
-        const QString path = QDir(QDir::tempPath()).filePath(
+        const QString outputDir = qEnvironmentVariable(
+            "NEREUS_DIAGNOSTIC_OUTPUT_DIR", QDir::tempPath());
+        const QString path = QDir(outputDir).filePath(
             QStringLiteral("nereus-mini-spectrum-stall-%1-%2.sample.txt")
                 .arg(QCoreApplication::applicationPid())
                 .arg(QString::fromLatin1(name).replace(' ', '-')));
@@ -458,6 +461,20 @@ struct Harness {
         SliceModel* model = radio.sliceById(id);
         QVERIFY(model);
         feedStream(model->streamIndex());
+    }
+
+    void feedDistinctSliceStreams(std::initializer_list<int> ids)
+    {
+        QSet<int> fed;
+        for (int id : ids) {
+            SliceModel* model = radio.sliceById(id);
+            QVERIFY(model);
+            const int stream = model->streamIndex();
+            if (!fed.contains(stream)) {
+                fed.insert(stream);
+                feedStream(stream);
+            }
+        }
     }
 
     bool key(bool on)
@@ -513,6 +530,7 @@ void TstRemoteTxDisplay::initTestCase()
     // expected here.
     QLoggingCategory::setFilterRules(QStringLiteral(
         "nereus.*.debug=false\nnereus.*.info=false\nnereussdr.*.info=false\n"
+        "nereus.dsp.info=true\n"
         "nereus.connection.warning=false\n"
         // The test window is a bare StationClient with no settings
         // migration or catalogue of its own; its notes about that are the
@@ -645,8 +663,7 @@ void TstRemoteTxDisplay::riseSendsTheTransmitDisplayAndFallResumesReceive()
     bool receiveStageLogged = false;
     bool receiveStackCaptured = false;
     QTRY_VERIFY([&] {
-        h.feedSlice(h.sliceId);
-        h.feedSlice(h.spareSliceId);
+        h.feedDistinctSliceStreams({h.sliceId, h.spareSliceId});
         h.observeGrants({1, 2});
         const bool ready = lastContext(controls, 1) && lastContext(controls, 2)
             && framesFor(h.mediaTransport->displays, 1, std::nullopt) > 0
@@ -704,8 +721,7 @@ void TstRemoteTxDisplay::riseSendsTheTransmitDisplayAndFallResumesReceive()
     const QVector<float> waterfall = ramp(128, 10.0f, -0.6f);
     QTRY_VERIFY([&] {
         h.emitPlanes(trace, waterfall);
-        h.feedSlice(h.sliceId);
-        h.feedSlice(h.spareSliceId);
+        h.feedDistinctSliceStreams({h.sliceId, h.spareSliceId});
         return framesFor(h.mediaTransport->displays, 1, txGeneration) >= 3;
     }());
     DisplayCodecDecoder decoder;
@@ -1078,8 +1094,7 @@ void TstRemoteTxDisplay::aSliceMovingWhileKeyedLeavesTheRisePanTransmitting()
     bool initialStageLogged = false;
     bool initialStackCaptured = false;
     QTRY_VERIFY([&] {
-        h.feedSlice(h.sliceId);
-        h.feedSlice(h.spareSliceId);
+        h.feedDistinctSliceStreams({h.sliceId, h.spareSliceId});
         h.observeGrants({1, 2});
         const bool ready = lastContext(controls, 1) && lastContext(controls, 2);
         if (!ready && !initialStackCaptured && initialWait.elapsed() >= 3'800
@@ -1114,8 +1129,7 @@ void TstRemoteTxDisplay::aSliceMovingWhileKeyedLeavesTheRisePanTransmitting()
                        << framesFor(h.mediaTransport->displays, 2, std::nullopt);
         });
         QTRY_VERIFY([&] {
-            h.feedSlice(h.sliceId);
-            h.feedSlice(h.spareSliceId);
+            h.feedDistinctSliceStreams({h.sliceId, h.spareSliceId});
             const auto one = lastContext(controls, 1);
             const auto two = lastContext(controls, 2);
             return one && two
@@ -1504,8 +1518,7 @@ void TstRemoteTxDisplay::miniTakeoverFollowsTheTransmittingSliceAndRenewalResets
     bool miniInitialStageLogged = false;
     bool miniInitialStackCaptured = false;
     QTRY_VERIFY([&] {
-        h.feedSlice(h.sliceId);
-        h.feedSlice(h.spareSliceId);
+        h.feedDistinctSliceStreams({h.sliceId, h.spareSliceId});
         h.observeGrants({1, 2, 3, 4});
         const bool ready = lastContext(controls, 1) && lastContext(controls, 2)
             && lastContext(controls, 3) && lastContext(controls, 4);

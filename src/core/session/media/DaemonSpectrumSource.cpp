@@ -416,8 +416,7 @@ void DaemonSpectrumSource::enqueueIq(
     {
         QMutexLocker lock(&state->mutex);
         if (state->retired || !state->active || state->configurationPending
-            || interleavedIq.size() > state->maxPendingIqFloats
-            || state->pendingIq.size() > state->maxPendingIqFloats - interleavedIq.size()) {
+            || interleavedIq.size() > state->maxPendingIqFloats) {
             // The discarded whole packet may separate already queued I/Q
             // from the next accepted packet. Never join samples across that
             // unknown gap in the FFT overlap ring.
@@ -425,6 +424,15 @@ void DaemonSpectrumSource::enqueueIq(
             state->inputDiscontinuity = true;
             ++state->inputFramesDropped;
             return;
+        }
+        if (state->pendingIq.size() > state->maxPendingIqFloats - interleavedIq.size()) {
+            // A slow worker must still make forward progress. Retire the
+            // older pending samples, mark the gap for FFTEngine's overlap
+            // ring, and keep this individually valid whole packet. The
+            // already queued drain (if any) will take the replacement.
+            state->pendingIq.clear();
+            state->inputDiscontinuity = true;
+            ++state->inputFramesDropped;
         }
         state->pendingIq += interleavedIq;
         if (!state->iqDrainQueued) {

@@ -12,13 +12,17 @@
 #include "core/session/media/DaemonSpectrumSource.h"
 #include "core/spectrum/FftEnginePool.h"
 #undef private
+#include "core/FFTEngine.h"
 #include "models/RadioModel.h"
 
 #include <QElapsedTimer>
+#include <QScopeGuard>
+#include <QSemaphore>
 #include <QThread>
 
 #include <cmath>
 #include <limits>
+#include <memory>
 #include <numbers>
 
 using namespace NereusSDR;
@@ -337,6 +341,66 @@ private slots:
         source.submitIq(0, syntheticIq(1025, 0.125));
         source.submitIq(0, syntheticIq(1025, 0.125));
         QTRY_VERIFY(source.droppedInputFrames(key) > 0);
+    }
+
+    void validNewPacketSurvivesPendingOverflow()
+    {
+        const MediaSourceKey key{0, FftTier::Wide};
+        auto config = sourceConfig(1024, 7100000.0, 48000.0);
+        config.maxPendingIqFloats = 4096; // Core's FFT-size * 4 budget.
+
+        DaemonSpectrumSource reference;
+        QVERIFY(reference.activate(key, config));
+        QTRY_VERIFY(reference.isActive(key));
+        QSignalSpy referenceFrames(&reference, &DaemonSpectrumSource::frameAvailable);
+        reference.submitIq(0, syntheticIq(1026, 0.25));
+        QTRY_VERIFY(referenceFrames.count() > 0);
+        const auto expected = reference.takeLatest(key);
+        QVERIFY(expected.has_value());
+
+        DaemonSpectrumSource source;
+        QVERIFY(source.activate(key, config));
+        QTRY_VERIFY(source.isActive(key));
+        QSignalSpy frames(&source, &DaemonSpectrumSource::frameAvailable);
+        // A partial old-tone history has already reached the FFT ring. The
+        // pending overflow must reset that history before the new packet.
+        source.submitIq(0, syntheticIq(511, 0.125));
+        QTRY_COMPARE(source.completedInputHandoffs(key), quint64(1));
+        QCOMPARE(frames.count(), 0);
+        NereusSDR::FFTEngine* engine = source.m_pool->engineForSource(key, config.fft);
+        QVERIFY(engine);
+        auto entered = std::make_shared<QSemaphore>();
+        auto release = std::make_shared<QSemaphore>();
+        bool releaseNeeded = true;
+        const auto unblock = qScopeGuard([release, &releaseNeeded] {
+            if (releaseNeeded) { release->release(); }
+        });
+        QVERIFY(QMetaObject::invokeMethod(engine, [entered, release] {
+            entered->release();
+            release->acquire();
+        }, Qt::QueuedConnection));
+        QVERIFY(entered->tryAcquire(1, 5000));
+
+        // Both packets are individually valid. With the worker paused, their
+        // combined 4,104 floats exceed the 4,096-float pending budget by 8.
+        // The newest whole packet must replace the old pending data after a
+        // gap, rather than both packets disappearing.
+        source.submitIq(0, syntheticIq(1026, 0.125));
+        source.submitIq(0, syntheticIq(1026, 0.25));
+        QCOMPARE(source.droppedInputFrames(key), quint64(1));
+        const auto blocked = source.inputQueueDiagnostics(key);
+        QCOMPARE(blocked.maxPendingIqFloats, 4096);
+        QCOMPARE(blocked.pendingIqFloats, 2052);
+        QVERIFY(blocked.drainQueued);
+
+        releaseNeeded = false;
+        release->release();
+        QTRY_VERIFY(source.completedInputHandoffs(key) > 1);
+        QTRY_VERIFY(frames.count() > 0);
+        const auto actual = source.takeLatest(key);
+        QVERIFY(actual.has_value());
+        QCOMPARE(dominantBin(actual->binsLinear), dominantBin(expected->binsLinear));
+        QCOMPARE(actual->binsLinear, expected->binsLinear);
     }
 
     void overflowCreatesInputHistoryDiscontinuity()
