@@ -6152,9 +6152,10 @@ two-tone use no microphone and are never stopped by it.
 A client declaring `remoteTx:1` and `txWatchPath:1` at minor 11 or newer can
 receive `txWatchPathVersion:1` after its authenticated snapshot is complete.
 This requires a paired device-key session, current transmit permission and a
-live direct WSS primary on a Core with the separate WSS route available.
-Token-only sessions and older peers receive no extension. This first version
-does not advertise a watch route for a relay/DTLS primary.
+live supported primary route. A direct WSS primary uses the separate WSS
+route below. A relayed DTLS primary additionally requires `txWatchRelay:1`
+and its own negotiated watch relay grant. Token-only sessions and older peers
+receive no extension. An arbitrary DTLS primary is not a supported watch route.
 
 On that primary, `tx.watchTicket` takes no arguments. An accepted command result
 contains `ticket` (utf8, canonical base64url of 32 random bytes), `expiresInMs`
@@ -6185,6 +6186,9 @@ move does not restore the old generation. Core rechecks the primary binding
 and permission for each heartbeat. Auxiliary loss alone never ends or replaces
 the primary; primary loss still stops its key immediately. The existing sequence,
 epoch and 400 ms rules apply, so duplicate or stale copies never revive a key.
+Receipt checks elapsed time before renewal as well as on the timer: a packet
+arriving more than 400 ms after the last accepted one cannot rescue an expired
+watch merely because the event loop has delayed the timer.
 
 The client uses one 100 ms timer and the SAME sequence/epoch for its independent
 copy and ordinary media-or-primary copy. It must pause ALL heartbeat paths while
@@ -6193,11 +6197,30 @@ nonzero command number alone is not delivery proof. A failed/refused release
 remains fenced until session reset; an unrelated accepted off cannot clear it.
 Every continuation checks owner lifetime, connection generation and this fence.
 
-Core direct attachment and its real paired two-socket regression are built;
-production client wiring, separate relay DTLS transport and actual loaded loss
-acceptance are still in progress. Relay grants use rendezvous section 12.9 and
-are separate from this Core-authenticated ticket. No network acceptance or
-radio transmission is implied by the in-process tests.
+For a supported relayed primary, `tx.watchRelay` takes exactly one argument:
+`offer` (ordinal 0, utf8), a nonempty valid UTF-8 SDP without NUL and at most
+64 KiB. Core reserves the same bounded ticket before constructing a separate
+relay-only DTLS answerer using its persistent certificate. The accepted result
+has exactly four fields: `ticket` (ordinal 0, utf8), `expiresInMs` (1, i64,
+10000), `path` (2, utf8, `relay-dtls-v1`) and `answer` (3, utf8). The ten-second
+construction and attachment deadline runs from ticket issue. The watch has its
+own relay leg, no STUN/TURN or public candidate path, and carries the same
+33-byte attachment, two-byte acknowledgement and 13-byte heartbeat frames.
+The client must verify the actual DTLS certificate against its current Core
+pin before sending the ticket. Relay grants use rendezvous section 12.9 and
+are separate from this Core-authenticated ticket.
+
+New relay-watch admission requires the matching primary's unexpired grant.
+An already issued pending ticket or attached watch can survive admission-grant
+expiry while its exact primary route, generation and authority remain valid.
+Capabilities preserve that distinction. Primary end, replacement, revocation
+and path move retire pending construction before late callbacks can attach it.
+
+Direct client/Core attachment and Core relay ownership are built with real
+paired transport regressions. Client relay ownership integration, production
+RV opt-in and actual loaded loss acceptance remain in progress. The Core relay
+fixture uses a local relay protocol player; it does not prove acceptance by
+the production Python service or imply any radio transmission.
 
 ### 18.8 The transmit state (`txState`)
 

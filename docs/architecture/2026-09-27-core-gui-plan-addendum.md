@@ -1232,8 +1232,15 @@ colours for the same signal.
   verifies its actual Core certificate before sending any ticket, and preserves
   the bounded ack/frame/backlog and generation checks. Wrong-pin real-DTLS tests
   observed zero ticket bytes. The integrated app/Core build and three suites
-  passed (17.36 seconds), including all direct WSS checks. Core/client relay
-  ownership and restrictive-network acceptance remain in progress.
+  passed (17.36 seconds), including all direct WSS checks. Core relay ownership
+  is built in `2e75bf64` and `a63d210a`: pending construction is bounded and
+  revoked on primary replacement, path move, device revocation or the ten-second
+  deadline. An attached watch survives admission-grant expiry while its primary
+  remains valid, without permitting new admission. Lead integration rebuilt
+  app/Core and six named suites; all passed (35.13 seconds) at concurrent load
+  6.19/5.95/5.43. The watch uses real DTLS and relay sockets in a local protocol
+  fixture. Client integration, production Python RV acceptance and loaded loss
+  acceptance remain open.
 - Plan: independent transmit watch and restrictive-network liveness.
 
 ### G-71: Hosted desktop TCI must preserve ownership through callbacks and receiver remaps
@@ -1293,6 +1300,28 @@ colours for the same signal.
   dispatch, not a measured guarantee about OS scheduling or physical RF release.
   Restrictive-network acceptance and live-radio verification remain open.
 - Plan: remote transmit link-loss safety and restrictive-network liveness.
+
+### G-74: Remote settings export and import omit the Core's settings
+
+- Evidence: the working desktop at `86a1b20d` exported and imported its settings
+  XML in `ExportImportConfigPage`. At `11a1173a`, those handlers still copy only
+  `AppSettings::instance().filePath()` on the window's computer. They neither
+  export the Core's state nor restore it through a Core command. The frozen
+  parity scout found this, and the lead verified the handlers and existing
+  operator ruling. The disabled historical File > Profiles placeholder is not
+  evidence of an additional working feature lost in the split.
+- JJ's ruling: the remote-window parity plan's recorded Q1 decision says
+  “Settings import and export in a remote window carry both computers' settings,
+  and the Core applies its part through a radio reconnect.” The scope remains
+  this effort; the separate phone-local action question in G-50 does not waive
+  desktop remote parity.
+- Status: implementation open. Export must carry both parts in one file;
+  import must validate and restore them through their respective owners, apply
+  the Core part through the approved reconnect path, and enforce the plan's
+  transmit and other-device restrictions. Failure must preserve existing
+  settings. Acceptance needs a real remote round trip, persistence after
+  reconnect, refusal while busy, and invalid/failed-import preservation.
+- Plan: remote-window parity B6.1 and approved Q1.
 
 ## How this addendum is kept
 

@@ -7926,6 +7926,9 @@ nereus_add_test(tst_remote_keying
 # a key on (real time).
 nereus_add_test(tst_remote_tx_watchdog EXTRA_LABELS session)
 nereus_add_test(tst_tx_watch_server EXTRA_LABELS session)
+nereus_add_test(tst_station_watch_relay
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
 nereus_add_test(tst_starvation_policy EXTRA_LABELS session)
 nereus_add_test(tst_tx_link_loss_each_path
     fakes/LoopbackTransport.cpp
