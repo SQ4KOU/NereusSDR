@@ -569,6 +569,7 @@ private slots:
         QVERIFY(rx && rx != tx);
         auto* mock = new MockConnection();
         model.injectConnectionForTest(mock);
+        model.alexControllerMutable().setRxAnt(Band::Band40m, 3);
         model.enableBandTrackingForTest();
         tx->setFrequency(14074000.0);
         rx->setFrequency(14200000.0);
@@ -580,6 +581,16 @@ private slots:
         for (const AntennaRouting& r : std::as_const(mock->calls)) {
             QVERIFY2(r.tx, "a receive routing went out while keyed");
         }
+
+        // Unkey: the receive band's routing, the band the receive slice
+        // crossed to (40 m, ANT3), not the transmit slice's 20 m. Thetis
+        // HdwMOXChanged routes the transmit band at key-down and rx1_band
+        // on return to receive (console.cs:29161-29169 [v2.10.3.15]).
+        mock->calls.clear();
+        model.onMoxHardwareFlipped(false);
+        QVERIFY(!mock->calls.isEmpty());
+        QVERIFY(!mock->calls.last().tx);
+        QCOMPARE(mock->calls.last().trxAnt, 3);
 
         model.injectConnectionForTest(nullptr);
         delete mock;

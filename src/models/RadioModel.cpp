@@ -23445,7 +23445,14 @@ void RadioModel::onMoxHardwareFlipped(bool isTx)
         // changed its stored TX antenna before becoming TX-bound.
         applyTxAntennaFromBoundSlice();
     }
-    applyAlexAntennaForBand(band, isTx);
+    // Key-down routes the transmit band; the return to receive routes the
+    // receive band, the one the last band crossing left on the relay
+    // (m_lastBand), which a receive slice may have moved while keyed:
+    // From Thetis console.cs:29117 and 29161-29169 [v2.10.3.15] HdwMOXChanged:
+    //   (tx)  Alex.getAlex().UpdateAlexAntSelection(_tx_band, _mox, alex_ant_ctrl_enabled, false);
+    //   (rx)  UpdateTRXAnt(); //[2.3.10.6]MW0LGE added
+    //         Alex.getAlex().UpdateAlexAntSelection(rx1_band, _mox, alex_ant_ctrl_enabled, false);
+    applyAlexAntennaForBand(isTx ? band : m_lastBand, isTx);
 
     // Steps 2 + 3 — wire bits.  Guard against null connection (no radio
     // connected, or mid-teardown).  applyAlexAntennaForBand already guards
