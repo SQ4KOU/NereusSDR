@@ -1228,7 +1228,12 @@ colours for the same signal.
   retaining every release fence. The integrated app/Core build and six suites
   passed (29.31 seconds), including real paired WSS heartbeat delivery, primary
   close and reconnection, plus a DTLS primary rejecting a claimed direct route.
-  The separate relay owner and restrictive-network acceptance remain in progress.
+  The same client helper now accepts a dedicated watch DTLS offerer (`a18f349b`),
+  verifies its actual Core certificate before sending any ticket, and preserves
+  the bounded ack/frame/backlog and generation checks. Wrong-pin real-DTLS tests
+  observed zero ticket bytes. The integrated app/Core build and three suites
+  passed (17.36 seconds), including all direct WSS checks. Core/client relay
+  ownership and restrictive-network acceptance remain in progress.
 - Plan: independent transmit watch and restrictive-network liveness.
 
 ### G-71: Hosted desktop TCI must preserve ownership through callbacks and receiver remaps
