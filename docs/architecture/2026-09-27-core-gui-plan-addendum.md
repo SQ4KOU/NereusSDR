@@ -1137,6 +1137,13 @@ colours for the same signal.
   frames; the integrated app/Core build and four transport suites passed
   (19.95 seconds). Those tests inject loopback candidates and do not yet prove
   actual outer-WebSocket relay forwarding. No deployed service was changed.
+  The primary transport now retains its negotiated watch grant before the RV
+  introduction is retired. It permits new watch admission only on that exact
+  live WebSocket-relay primary with both relay legs present and an unexpired
+  grant. Admission expiry does not invalidate an already admitted watch;
+  primary close clears the context. The app/Core build and four relevant suites
+  passed (68.66 seconds), including expiry, missing peer and route replacement
+  boundaries. Production RV opt-in remains disabled pending owner integration.
   Station-session watch signaling and restrictive-network acceptance remain
   unfinished.
 - Plan: several-device capacity and restrictive-network relay access.

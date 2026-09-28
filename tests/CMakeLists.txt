@@ -8114,6 +8114,7 @@ nereus_add_test(tst_session_transport_telemetry
     EXTRA_LABELS session)
 
 nereus_add_test(tst_tx_watch_client EXTRA_LABELS session)
+nereus_add_test(tst_watch_relay_context EXTRA_LABELS session)
 nereus_add_test(tst_station_session
     fakes/LoopbackTransport.cpp)
 # R-R3-49 (parity Task 1): a receive-only Core takes a transmit setting off
