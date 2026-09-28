@@ -9063,3 +9063,5 @@ endif()
 nereus_add_test(tst_station_binary_locator CORE_ONLY)
 target_compile_definitions(tst_station_binary_locator PRIVATE NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 nereus_add_test(tst_station_service_manager)
+# Desktop Remote Access runtime; temporary profile and logical local model only.
+nereus_add_test(tst_gui_desktop_station_runtime EXTRA_LABELS gui)

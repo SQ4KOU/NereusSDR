@@ -584,6 +584,18 @@ QTreeWidgetItem* SetupDialog::registerPage(QTreeWidgetItem* parent,
     return item;
 }
 
+void SetupDialog::setRemoteStationPageBinder(
+    std::function<void(RemoteStationPage*)> binder)
+{
+    m_remoteStationPageBinder = std::move(binder);
+    if (!m_remoteStationPageBinder) { return; }
+    for (const PageEntry& entry : m_pages) {
+        if (auto* page = qobject_cast<RemoteStationPage*>(entry.widget)) {
+            m_remoteStationPageBinder(page);
+        }
+    }
+}
+
 QWidget* SetupDialog::realizePage(int entryIndex)
 {
     if (entryIndex < 0 || entryIndex >= static_cast<int>(m_pages.size())) {
@@ -1773,6 +1785,7 @@ void SetupDialog::buildTree()
         auto* page = new RemoteStationPage;
         connect(page, &RemoteStationPage::connectionsRequested,
                 this, &SetupDialog::connectionsRequested);
+        if (m_remoteStationPageBinder) { m_remoteStationPageBinder(page); }
         return page;
     });
     // R-R3-47: in a remote window RfKitPage asks the Core to switch,

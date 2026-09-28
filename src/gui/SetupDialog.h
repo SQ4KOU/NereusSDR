@@ -39,6 +39,7 @@ class TciServer;
 class CatTciServerPage;
 class AudioVaxPage;
 class SettingsProxy;
+class RemoteStationPage;
 
 // R-R3-21 / R-R3-23: what a Setup page's settings belong to. Every page
 // registration names one; registerPage() has no default, so a new page
@@ -77,6 +78,8 @@ public:
 
     // Navigate to a page by its label text (e.g. "AGC/ALC").
     void selectPage(const QString& label);
+    // The Remote Access page is lazy; apply the current runtime binder now or when built.
+    void setRemoteStationPageBinder(std::function<void(RemoteStationPage*)> binder);
     // R-R3-49 (parity Task 8): an applet's right-click entry. "pgxlAdvanced",
     // "tgxlAdvanced" and "pgxlInterlock" open CAT & Network > 4O3A at their
     // own tab (Power Genius XL, Tuner Genius XL, General), "peripherals"
@@ -369,6 +372,7 @@ private:
     QSet<QWidget*>  m_rebuildWaitsFor;
 
     std::vector<PageEntry> m_pages;
+    std::function<void(RemoteStationPage*)> m_remoteStationPageBinder;
 
     // Phase 3J-1 bench fix (2026-05-11): store the TciServer page reference
     // so setTciServer() can forward to it without a tree-walk lookup.
