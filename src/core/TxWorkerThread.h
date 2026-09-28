@@ -194,6 +194,10 @@ public:
     /// after setCurrentTxPath().
     TxPath currentTxPathForTest() const;
 
+    /// RADE end-of-over callsigns test seam: the RADE audio queued for the
+    /// dispatch (48 kHz mono samples).
+    int radeAudioQueuedSamplesForTest();
+
     /// Phase 3R K-bench test seam — observe the active RADE channel
     /// pointer without exposing the production member.  Tests verify
     /// setRadeChannel round-trip + null-clear via this accessor.

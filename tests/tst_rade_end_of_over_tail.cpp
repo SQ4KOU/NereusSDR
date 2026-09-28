@@ -254,6 +254,22 @@ private slots:
 
     void cleanup() { AppSettings::instance().clear(); }
 
+    // Review Minor 1: the tail pushes both resamplers' latency out, so the
+    // worker gets all of the EOO and the 200 ms of silence at 48 kHz:
+    // (1152 + 1600) x 6 samples from fresh resamplers.
+    void tailFlushesBothResamplers()
+    {
+        RealRig rig;
+        rig.key();
+        QCOMPARE(rig.worker->radeAudioQueuedSamplesForTest(), 0);
+        rig.model.moxController()->setMox(false);
+        QVERIFY(rig.model.endOfOverTailActive());
+        pump();
+        const int queued = rig.worker->radeAudioQueuedSamplesForTest();
+        QVERIFY2(std::abs(queued - (1152 + 1600) * 6) <= 6,
+                 qPrintable(QStringLiteral("%1 samples queued").arg(queued)));
+    }
+
     // Review Important 1, case A: keyed in USB (the worker latched the WDSP
     // path), the slice switched to RADE while keyed, then released. The
     // live microphone path must not stay on the air for a tail.

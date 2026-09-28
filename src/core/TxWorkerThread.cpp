@@ -1030,6 +1030,12 @@ void TxWorkerThread::tickForTest()
     dispatchOneBlock();
 }
 
+int TxWorkerThread::radeAudioQueuedSamplesForTest()
+{
+    QMutexLocker lk(&m_radeAudioOverrideMutex);
+    return static_cast<int>(m_radeAudioOverride.size() / static_cast<int>(sizeof(float)));
+}
+
 void TxWorkerThread::dispatchBlockForTest(const float* radioMic)
 {
     for (int i = 0; i < kBlockFrames; ++i) {

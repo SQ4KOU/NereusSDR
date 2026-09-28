@@ -6656,6 +6656,19 @@ bool RadioModel::startRadeEndOfOverTail()
     if (!channel->queueEndOfOver(callsign)) {
         return false;
     }
+    // Review Minor 1: the 24 -> 48 kHz stage holds back its latency too
+    // (about 70 ms); push that much silence through it so the worker gets
+    // all of the EOO and the 200 ms of silence behind it.
+    if (m_radeTxResampler) {
+        const std::vector<float> zeros(
+            static_cast<size_t>(m_radeTxResampler->latencyInputSamples()), 0.0f);
+        const QByteArray flushed =
+            m_radeTxResampler->process(zeros.data(), static_cast<int>(zeros.size()));
+        if (!flushed.isEmpty()) {
+            QMetaObject::invokeMethod(m_txWorker.get(), "setRadeAudioBlock",
+                                      Qt::QueuedConnection, Q_ARG(QByteArray, flushed));
+        }
+    }
     QMetaObject::invokeMethod(m_txWorker.get(), "armRadeAudioDrainedNotice",
                               Qt::QueuedConnection);
     return true;
