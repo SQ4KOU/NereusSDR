@@ -927,6 +927,11 @@ public:
     /// stationCommandFinished for a sender that waits on its own command.
     /// Ends any page's claim on the command (noteAccessoryRequestShownOnPage).
     void reportStationCommandFinished(quint32 commandId, bool accepted, const QString& reason);
+    /// Remote role only: a paired Core settings export completed or failed.
+    /// coreXml is populated only after length, digest and XML validation.
+    void reportStationSettingsBackupExportFinished(quint32 operationId, bool accepted,
+                                                    const QString& reason,
+                                                    const QByteArray& coreXml);
     /// R-R3-49 (parity Task 8): the Core answered a window's scanTgxlLan
     /// (`devicesJson` the answer's JSON array, empty on a refusal).
     /// Role::Remote only. Routed to stationTgxlLanScanFinished.
@@ -4864,6 +4869,9 @@ signals:
     /// the TCI switch's request wait both match their own id here (an
     /// accessory refusal also arrives on accessoryRequestRefused).
     void stationCommandFinished(quint32 commandId, bool accepted, const QString& reason);
+    void stationSettingsBackupExportFinished(quint32 operationId, bool accepted,
+                                             const QString& reason,
+                                             const QByteArray& coreXml);
     /// R-R3-49 (parity Task 8): see reportStationTgxlLanScan.
     /// R-R3-49 (parity Task 9): see reportStationPgxlLanScan.
     void stationPgxlLanScanFinished(quint32 commandId, bool accepted, const QString& reason,

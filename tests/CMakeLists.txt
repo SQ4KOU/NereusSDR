@@ -7485,6 +7485,7 @@ target_compile_definitions(tst_settings_scope PRIVATE
 nereus_add_test(tst_settings_proxy)
 nereus_add_test(tst_settings_backup_codec)
 nereus_add_test(tst_settings_backup_transfer)
+nereus_add_test(tst_settings_backup_export fakes/LoopbackTransport.cpp EXTRA_LABELS session)
 
 # Remote Daemon R2, Task 20: the remote-mode GUI gate. Pins RadioModel's
 # ownsLocalDsp() capability authority and the Role::Remote-only hand-out audit

@@ -539,6 +539,7 @@ std::optional<QList<QByteArray>> liveSessionWire(
         kSessionProtocolMajor, kSessionProtocolMinor, 0, QStringLiteral("link-surface"),
         {kSessionProtocolMajor}, {{"deviceAuth", 1}, {"sessionHolder", 1}, {"remoteTx", 1},
                                   {"settingsHygiene", 1}, {"coreBuildInfo", 1},
+                                  {"settingsBackup", 1},
                                   {"setupDescription", 1}, {"miniDisplay", 1}})));
     clientEnd->sendText(SessionMessages::encode(SessionMessages::authRequest({}, block)));
 
@@ -571,6 +572,7 @@ QJsonArray captureCapabilities()
     caps.remoteTxEntry = true;
     caps.settingsHygieneVersion = 1;
     caps.coreBuildInfo = CoreBuildInfo{QStringLiteral("0.5.2"), QStringLiteral("link-surface@fixture")};
+    caps.settingsBackupVersion = 1;
     caps.remoteIqVersion = 1;
     caps.setupDescriptionVersion = 1;
     caps.miniDisplayVersion = 1;
@@ -739,6 +741,26 @@ QJsonArray captureCommands()
             {QStringLiteral("minMinor"), static_cast<int>(spec.minMinor)},
         });
     }
+    // StationServer handles this read-only, session-bound family before the
+    // generic dispatcher. It still belongs to the published command surface.
+    const auto exportCommand = [&commands](const QString& verb, const QJsonArray& arguments) {
+        commands.append(QJsonObject{{QStringLiteral("verb"), verb},
+                                    {QStringLiteral("arguments"), arguments},
+                                    {QStringLiteral("capability"), QStringLiteral("settingsBackupVersion")},
+                                    {QStringLiteral("capabilityVersion"), 1},
+                                    {QStringLiteral("minMinor"), 11}});
+    };
+    const auto arg = [](const QString& name, const QString& kind) {
+        return QJsonObject{{QStringLiteral("name"), name},
+                           {QStringLiteral("kind"), kind},
+                           {QStringLiteral("optional"), false}};
+    };
+    exportCommand(QStringLiteral("station.settingsExport.begin"), {});
+    exportCommand(QStringLiteral("station.settingsExport.read"),
+                  {arg(QStringLiteral("transferId"), QStringLiteral("utf8")),
+                   arg(QStringLiteral("offset"), QStringLiteral("i64"))});
+    exportCommand(QStringLiteral("station.settingsExport.cancel"),
+                  {arg(QStringLiteral("transferId"), QStringLiteral("utf8"))});
     return commands;
 }
 

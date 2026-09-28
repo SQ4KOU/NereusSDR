@@ -541,6 +541,16 @@ public:
     virtual bool settingsHygieneAvailable() const { return false; }
     virtual CommandOutcome requestSettingsHygiene(const QByteArray& /*verb*/, const QString& /*mac*/)
     { return {false, settingsHygieneUnavailableReason()}; }
+    /// Export only. Connect to RadioModel::stationSettingsBackupExportFinished
+    /// before requesting; its operationId equals the returned commandId.
+    /// Cancel when the consuming page closes. Only completed, validated Core
+    /// XML is reported, and a failure carries empty bytes.
+    virtual bool settingsBackupExportAvailable() const { return false; }
+    virtual CommandOutcome requestSettingsBackupExport()
+    { return {false, QStringLiteral("This Core does not offer settings export to this app.")}; }
+    /// A nonzero operationId cancels only that owner's request. Zero is the
+    /// explicit client-wide cancel used by session/UI teardown.
+    virtual void cancelSettingsBackupExport(quint32 /*operationId*/ = 0) {}
     /// Fix wave (I5): whether this session signed in with this computer's
     /// own device key. The Core takes the four radio requests only from
     /// such a session (StationRadios::pairedDeviceReason otherwise).

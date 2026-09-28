@@ -387,6 +387,11 @@
         },
         {
             "kind": "i64",
+            "name": "settingsBackupVersion",
+            "value": 1
+        },
+        {
+            "kind": "i64",
             "name": "remoteIqVersion",
             "value": 1
         },
@@ -2251,6 +2256,45 @@
             "capabilityVersion": 1,
             "minMinor": 11,
             "verb": "session.pathTicket"
+        },
+        {
+            "arguments": [
+            ],
+            "capability": "settingsBackupVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "station.settingsExport.begin"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "transferId",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "offset",
+                    "optional": false
+                }
+            ],
+            "capability": "settingsBackupVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "station.settingsExport.read"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "transferId",
+                    "optional": false
+                }
+            ],
+            "capability": "settingsBackupVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "station.settingsExport.cancel"
         }
     ],
     "limits": {

@@ -890,6 +890,7 @@ change shows as surface drift and as a change to this table.
 | `mediaTunnelVersion` | 1 |
 | `mediaRelayRoutingVersion` | 1 |
 | `settingsHygieneVersion` | 1 |
+| `settingsBackupVersion` | 1 |
 | `remoteIqVersion` | 1 |
 | `txModMonitorVersion` | 1 |
 | `setupDescriptionVersion` | 1 |
@@ -1222,6 +1223,13 @@ When a feature is off, its version is 0:
   against an older Core disables these controls with a plain reason.
   Remote Reset to Defaults remains disabled until its operator-facing
   behavior is settled; version 1 does not accept a reset command.
+- `settingsBackupVersion`: optional minor-11 capability, 1 only for an
+  authenticated enrolled-device-key peer that declared `settingsBackup` 1
+  and a Core with a local radio model. It is advertised during capability
+  exchange, before `snapshot.complete`; its commands require that marker
+  and a still-admitted paired session. Version 1 offers **export only**.
+  It does not authorize settings import or include device identity keys,
+  private keys, pairing records, or trust files.
 - `txDisplayVersion` (remote-window parity Task 28, A11): sent only at
   agreed minor 11, after `stationRadiosVersion` in the minor-11 block
   (`displayClockVersion`, `controlChannelVersion`, then
@@ -1681,12 +1689,13 @@ older window sees only the values it was built for.
 | 75 | `mediaTunnelVersion` | `i64` |
 | 76 | `mediaRelayRoutingVersion` | `i64` |
 | 77 | `settingsHygieneVersion` | `i64` |
-| 78 | `remoteIqVersion` | `i64` |
-| 79 | `txModMonitorVersion` | `i64` |
-| 80 | `setupDescriptionVersion` | `i64` |
-| 81 | `miniDisplayVersion` | `i64` |
-| 82 | `accessoryTxVersion` | `i64` |
-| 83 | `coreBuildInfo` | `utf8` |
+| 78 | `settingsBackupVersion` | `i64` |
+| 79 | `remoteIqVersion` | `i64` |
+| 80 | `txModMonitorVersion` | `i64` |
+| 81 | `setupDescriptionVersion` | `i64` |
+| 82 | `miniDisplayVersion` | `i64` |
+| 83 | `accessoryTxVersion` | `i64` |
+| 84 | `coreBuildInfo` | `utf8` |
 
 <!-- /surface -->
 
@@ -4021,6 +4030,9 @@ refused.
 | `confirm.cancel` | `id` i64 | `sessionHolderVersion` | 1 | 11 |
 | `notice.takeBack` | `id` i64 | `sessionHolderVersion` | 1 | 11 |
 | `session.pathTicket` | none | `controlSwitchVersion` | 1 | 11 |
+| `station.settingsExport.begin` | none | `settingsBackupVersion` | 1 | 11 |
+| `station.settingsExport.read` | `transferId` utf8, `offset` i64 | `settingsBackupVersion` | 1 | 11 |
+| `station.settingsExport.cancel` | `transferId` utf8 | `settingsBackupVersion` | 1 | 11 |
 
 <!-- /surface -->
 
@@ -4028,6 +4040,31 @@ The table's capability columns are the gate the desktop client applies
 before sending (section 6.2).
 
 These command groups need a sentence beyond the table:
+
+- **Paired Core settings export** (`settingsBackupVersion` 1). The client
+  declares `settingsBackup` 1 in its hello. Each command requires agreed
+  minor 11, key sign-in as an enrolled device, completed admission and
+  `snapshot.complete`; a token session cannot export. `begin` has no args
+  and is refused while the station is on the air. It snapshots the Core's
+  own local AppSettings XML once, without reading the remote SettingsProxy,
+  then returns exactly `transferId` (32 lowercase hex UUID characters),
+  `byteLength` (i64, 1 through 16 MiB) and `sha256` (64 lowercase hex
+  characters). `read` takes that ID and the exact next zero-based byte
+  offset, returning exactly `transferId`, `offset` and `data` (canonical
+  base64 of at most 256 KiB raw XML). The final chunk retires the snapshot;
+  duplicate, reordered and cross-session reads fail. `cancel` takes the ID
+  and retires only that session's matching transfer; repeating it is safe.
+  Argument and result field counts, names, ordinals, wire kinds, JSON types
+  and encoded text are checked strictly. The client reports completed XML
+  only after exact length, SHA-256 and XML structure validation. No partial
+  XML is published. A Core holds at most one immutable snapshot per peer,
+  four total and 64 MiB raw total; transfers end after 30 seconds without
+  a valid read or 120 seconds overall, and on disconnect, session
+  replacement or revocation. A congested control transport (at least
+  1 MiB queued) refuses a new snapshot or chunk with a small busy result.
+  The client bounds each reply by 10 seconds and the operation by 120
+  seconds. This protocol exports settings only; restoration is not a
+  version-1 command.
 
 - **Slices** (iPhone app plan Task 73). With several devices on one Core,
   `addSlice` and `addSliceOnPan` make a slice the asking device owns;

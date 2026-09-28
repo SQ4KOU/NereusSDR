@@ -981,6 +981,14 @@ colours for the same signal.
   open callbacks and failure callbacks, with elapsed time and the unchanged
   15-second bound. Three bounded lane conformance runs passed without reproducing
   the failure; that is not a fix. First-failure logs remain preserved.
+  A later full data-channel suite also failed in
+  `aWholeSessionRunsOverTheChannel` before the offerer opened (49 cases passed,
+  one failed, load 18.87/38.90/30.75). Signed `46c984d9` preserves the same
+  15-second bound and adds bounded library logs, elapsed/open/failure state and
+  safe fixture cleanup. Three predetermined full-suite observations and the
+  final diagnostic-lifetime run passed; the last took 14.60 s. The original
+  failure remains in `core-gui-export-owned-cancel-ctest.log`; passing reruns do
+  not establish a cause. A focused source/handshake investigation is active.
 - Plan: integrated protocol reliability under real host load.
 
 ### G-58: Setting-backed toggles need explicit boolean string encoding
@@ -1392,7 +1400,11 @@ colours for the same signal.
   its regression failed before the owning-copy fix and passes afterward. The
   integrated app/Core and three focused suites pass (7.60 s, load
   12.50/25.25/27.82). External authentication, session ownership, expiry and
-  global limits are being implemented separately in the export protocol.
+  global limits are implemented in signed `46c984d9` and verified in trunk:
+  app/Core and eight explicitly rebuilt suites pass together (28.84 s, observed
+  load 42.87/34.46/28.92). The paired session export is read-only and checks
+  ownership, typed envelopes, final XML and integrity before publication.
+  The window export integration and restore policy remain outstanding.
   Export must carry both parts in one file;
   import must validate and restore them through their respective owners, apply
   the Core part through the approved reconnect path, and enforce the plan's
@@ -1616,10 +1628,20 @@ colours for the same signal.
   before callbacks, guard lifetime and session identity after callbacks, and
   apply export-specific bounds only to export replies. Preserve the existing
   session limits and unrelated traffic.
-- Status: returned to the export worker before integration, with regression
-  requirements for callback deletion/reconnect, malformed and stale replies,
-  transfer limits and capability loss. The passing large-file round trip alone
-  does not establish these properties. No affected code is installed.
+- Status: repaired in signed `46c984d9` and verified in trunk integration. After one
+  worker correction left callback ordering unsettled, the lead took over the
+  bounded repair. Three regressions failed before the repair and passed after:
+  unrelated large request/result text no longer changes export classification,
+  and reconnect from completion observes cleared old mirrors. Teardown retires
+  work before notification; lifetime guards protect callbacks; strict command
+  IDs are checked before narrowing. Cancellation names its operation, so an old
+  page cannot cancel newer work. Eight explicitly rebuilt integrated suites
+  pass with the app/Core build (28.84 s); the earlier seven-suite lane run also
+  passed (33.96 s). The
+  later cancellation run's separate encrypted-channel startup failure remains
+  OPEN under G-57. GUI review also found synchronous-cancel reentry, hidden-page
+  retirement and model changes during dialogs/requests; the window lane is
+  correcting and testing those before integration. No affected code is installed.
 - Plan: complete settings export, G-74.
 
 ### G-86: The Core daemon never receives its source build identity
@@ -1647,6 +1669,35 @@ colours for the same signal.
   checks and installation remain outstanding; the older packages are not
   accepted as complete source-information evidence.
 - Plan: truthful Core build provenance and phone About support.
+
+### G-87: Hardware and PA descriptions omit built desktop controls and readouts
+
+- Evidence: a source scout compared the constructed desktop Hardware and PA
+  pages with the Core's published Setup resources. Hardware had no published
+  category; PA has no mirrored category property. Existing local/remote desktop
+  controls therefore cannot be rendered by the phone from the Core description.
+  The generic readout kind alone is insufficient: current semantic validation
+  admits only the DSP notch-width readout. Some hardware controls already have
+  scalar mirrors; band matrices, profiles, calibration and I/O actions need
+  additional typed contracts. Historical hidden XVTR/bandwidth placeholders are
+  not working desktop controls and are not fabricated as completed pages.
+- Ruling basis: JJ requires the Core station dependencies for the phone and
+  working desktop parity; each missing built control remains in this effort.
+  Preserve actual board/model visibility, values, apply paths and transmit
+  restrictions. Partial publication is useful progress, not page completion.
+- Status: seven Antenna/ALEX scalar descriptions are built in signed
+  `8c6bf3133`/`8dbdb14b`, awaiting trunk integration. They use existing mirrored
+  writes, exact desktop IDs/text and Core board/model projection, including
+  same-board model changes; the worker's three focused suites passed in 4.39 s.
+  A second scout mapped all 13 PA Values rows: five have direct read-only
+  mirrors (calibrated forward/reflected power, SWR, two raw ADC counts), while
+  derived watts/volts, combined overload, PA telemetry and peak/min/reset require
+  further work. Core PA publication and phone renderer support are being
+  coordinated. Band antenna/OC/filter tables, connected-radio scalar settings,
+  PA profile lifecycle and calibration/I/O actions remain incomplete; their
+  existing source maps are retained for implementation.
+- Plan: Core Hardware Config/PA Setup description dependencies in the phone plan
+  and remote-window Hardware/PA parity.
 
 ## How this addendum is kept
 

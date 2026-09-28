@@ -355,6 +355,8 @@ struct StationCapabilities {
     // Task 24: Core-owned settings validation and per-MAC hygiene commands.
     int settingsHygieneVersion = 0;
     std::optional<CoreBuildInfo> coreBuildInfo;
+    /// Version 1 offers read-only paired Core settings XML export.
+    int settingsBackupVersion = 0;
     /// R-R3-49 / A11 (remote-window parity Task 28): 1 means the Core sends
     /// the transmit analyzer's display, not the receiver's, for a pan on the
     /// transmitting slice while it is keyed, to a media peer that declared

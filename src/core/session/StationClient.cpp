@@ -302,6 +302,7 @@
 
 #include "core/AppSettings.h"
 #include "core/session/SettingsHygieneWire.h"
+#include "core/session/SettingsBackupExportWire.h"
 #include "core/SettingsHygiene.h"
 #include "core/station/StationRadios.h"
 #include "core/FaultLog.h"
@@ -352,6 +353,8 @@
 #include <QCryptographicHash>
 #include <QHostAddress>
 #include <QLoggingCategory>
+#include <QRegularExpression>
+#include <QScopeGuard>
 #include <QSslCertificate>
 #include <QSslError>
 #include <QStringList>
@@ -652,6 +655,19 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
     m_declaredFeatures.insert(QByteArrayLiteral("remoteTx"), 1);
     m_declaredFeatures.insert(QByteArrayLiteral("settingsHygiene"), 1);
     m_declaredFeatures.insert(QByteArrayLiteral("coreBuildInfo"), 1);
+    m_declaredFeatures.insert(QByteArrayLiteral("settingsBackup"), 1);
+    m_settingsBackupReplyTimer = new QTimer(this);
+    m_settingsBackupReplyTimer->setSingleShot(true);
+    connect(m_settingsBackupReplyTimer, &QTimer::timeout, this, [this]() {
+        finishSettingsBackupExport(false, QStringLiteral("The Core did not answer the settings export in time."),
+                                   {}, true);
+    });
+    m_settingsBackupOverallTimer = new QTimer(this);
+    m_settingsBackupOverallTimer->setSingleShot(true);
+    connect(m_settingsBackupOverallTimer, &QTimer::timeout, this, [this]() {
+        finishSettingsBackupExport(false, QStringLiteral("The settings export took too long."),
+                                   {}, true);
+    });
     m_declaredFeatures.insert(QByteArrayLiteral("miniDisplay"), 1);
     // Each transmit verb goes out as the same command three times (the
     // copies rule); the Core acts on the first and answers every copy.
@@ -1526,6 +1542,7 @@ void StationClient::attachTransport(SessionTransport* transport, const QString& 
         return;
     }
     const QPointer<StationClient> watchSelf(this);
+    const QPointer<SessionTransport> requestedTransport(transport);
     retireDirectWatch();
     if (!watchSelf) { return; }
     m_directWatchDeclared = false;
@@ -1537,7 +1554,15 @@ void StationClient::attachTransport(SessionTransport* transport, const QString& 
     // session. Retire its media and mirror state, preserving the existing
     // contract that a deliberate redial emits no sessionEnded notification.
     if (m_sessionActive) {
+        const quint32 priorEpoch = m_sessionEpoch;
         endSession(QStringLiteral("replaced by a newer session"), false, false);
+        if (!watchSelf || m_sessionEpoch != priorEpoch || m_sessionActive) {
+            if (requestedTransport && (!watchSelf || requestedTransport != m_transport)) {
+                requestedTransport->closeLink(QStringLiteral("superseded during reconnect"));
+                if (requestedTransport) requestedTransport->deleteLater();
+            }
+            return;
+        }
     }
 
     // RELEASE THE OLD LINK FIRST. Overwriting m_transport without this was
@@ -1618,6 +1643,7 @@ void StationClient::attachTransport(SessionTransport* transport, const QString& 
     // first session is epoch 1; 0 means "never attached"). See
     // sessionEpoch()'s doc comment.
     ++m_sessionEpoch;
+    m_cancelledSettingsBackupBegin.reset();
     m_hygieneValidateId = 0;
     m_hygieneValidateMac.clear();
     m_hygieneValidateDirty = false;
@@ -1711,10 +1737,15 @@ void StationClient::disconnectFromStation(const QString& reason, bool attemptRec
     // caller was told that instead of "heartbeat timeout" -- the specific
     // reason, thrown away by ordering alone. endSession() touches no
     // transport, so running it first is safe.
+    const QPointer<StationClient> self(this);
+    const QPointer<SessionTransport> endingTransport(m_transport);
+    const quint32 endingEpoch = m_sessionEpoch;
     endSession(reason, attemptReconnect);
-    if (m_transport != nullptr) {
-        m_transport->closeLink(reason);
+    if (!self || m_sessionEpoch != endingEpoch || m_transport != endingTransport) return;
+    if (endingTransport) {
+        endingTransport->closeLink(reason);
     }
+    if (!self || m_sessionEpoch != endingEpoch || m_transport != endingTransport) return;
     // A cancelled backoff has no active session for endSession() to retire.
     emit connectionActivityChanged();
 }
@@ -1775,7 +1806,27 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
     if (!m_sessionActive) {
         return;  // already reported for this attach
     }
+    // Retire the operation now, but notify only as this teardown returns.
+    // A completion handler may destroy this client or reconnect it. Emitting
+    // before clearing mirrors/proxy/coalescer let that new session inherit
+    // the old one, because the outer cleanup then correctly refused to touch
+    // the replacement. The guard owns no client pointer and runs last.
+    const QPointer<RadioModel> exportModel(m_radioModel);
+    const quint32 exportOperation = m_settingsBackupExport
+        ? m_settingsBackupExport->operationId : 0;
+    m_settingsBackupExport.reset();
+    m_settingsBackupReplyTimer->stop();
+    m_settingsBackupOverallTimer->stop();
+    const auto exportCompletion = qScopeGuard([exportModel, exportOperation]() {
+        if (exportModel && exportOperation != 0) {
+            exportModel->reportStationSettingsBackupExportFinished(
+                exportOperation, false, QStringLiteral("The Core connection ended."), {});
+        }
+    });
     m_sessionActive = false;
+    m_handshakeComplete = false;
+    m_authenticated = false;
+    m_cancelledSettingsBackupBegin.reset();
     const QPointer<StationClient> watchSelf(this);
     retireDirectWatch();
     if (!watchSelf) { return; }
@@ -1806,8 +1857,6 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
         m_radioChangeReason.clear();
     }
 
-    m_handshakeComplete = false;
-    m_authenticated = false;
     m_capabilities.coreBuildInfo.reset();
     m_signedInWithDeviceKey = false;
     m_enrolledDeviceKey = false;
@@ -2229,7 +2278,33 @@ void StationClient::onTransportText(const QByteArray& wire)
 
     SessionMessage message;
     if (!SessionMessages::decode(wire, &message)) {
+        if (m_settingsBackupExport || m_cancelledSettingsBackupBegin) {
+            // Decode failure may concern this operation, but arbitrary text
+            // mentioning its verb is not a message identity. Inspect only
+            // the actual envelope fields, independent of JSON key ordering.
+            const QJsonObject envelope = QJsonDocument::fromJson(wire).object();
+            const QJsonValue id = envelope.value(QStringLiteral("id"));
+            const quint32 expected = m_settingsBackupExport
+                ? m_settingsBackupExport->expectedCommandId
+                : m_cancelledSettingsBackupBegin->first;
+            if (envelope.value(QStringLiteral("type")) == QJsonValue(QStringLiteral("command.result"))
+                && id.isDouble() && id.toDouble() == static_cast<double>(expected)) {
+                m_cancelledSettingsBackupBegin.reset();
+                finishSettingsBackupExport(false, QStringLiteral("Malformed settings export reply."), {}, true);
+                return;
+            }
+        }
         qCWarning(lcStationClient) << "Undecodable message from station; ignoring";
+        return;
+    }
+    if (message.kind == SessionMessageKind::CommandResult
+        && ((m_settingsBackupExport
+             && message.commandId == m_settingsBackupExport->expectedCommandId)
+            || (m_cancelledSettingsBackupBegin
+                && message.commandId == m_cancelledSettingsBackupBegin->first))
+        && !SettingsBackupExportWire::strictEnvelope(wire, true)) {
+        m_cancelledSettingsBackupBegin.reset();
+        finishSettingsBackupExport(false, QStringLiteral("Malformed settings export reply."), {}, true);
         return;
     }
 
@@ -2890,6 +2965,11 @@ void StationClient::handleCapabilities(const SessionMessage& message)
         }
     }
     m_capabilities = incoming;
+    if (m_settingsBackupExport && m_capabilities.settingsBackupVersion < 1) {
+        finishSettingsBackupExport(false, QStringLiteral("The Core stopped offering settings export."),
+                                   {}, true);
+        if (!self || m_sessionEpoch != epoch) return;
+    }
     if (!directWatchEligible() && !relayWatchEligible(false)) {
         retireDirectWatch();
         if (!self || m_sessionEpoch != epoch) { return; }
@@ -4748,6 +4828,208 @@ bool StationClient::settingsHygieneAvailable() const
         && m_capabilities.settingsHygieneVersion >= 1 && m_settingsSnapshotThisLink;
 }
 
+bool StationClient::settingsBackupExportAvailable() const
+{
+    return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.settingsBackupVersion >= 1 && m_settingsSnapshotThisLink
+        && signedInWithDeviceKey();
+}
+
+StationClient::CommandOutcome StationClient::requestSettingsBackupExport()
+{
+    if (!settingsBackupExportAvailable()) {
+        return {false, QStringLiteral("This Core does not offer paired settings export to this app.")};
+    }
+    if (m_settingsBackupExport || m_cancelledSettingsBackupBegin) {
+        return {false, QStringLiteral("A settings export is already in progress.")};
+    }
+    const quint32 id = m_nextCommandId++;
+    if (m_nextCommandId == 0) ++m_nextCommandId;
+    SettingsBackupExportPending pending;
+    pending.operationId = id;
+    pending.expectedCommandId = id;
+    pending.sessionEpoch = m_sessionEpoch;
+    pending.expectedVerb = "station.settingsExport.begin";
+    m_settingsBackupExport.emplace(std::move(pending));
+    m_settingsBackupReplyTimer->start(10000);
+    m_settingsBackupOverallTimer->start(120000);
+    // Pending is installed first: an in-process transport may answer in send().
+    send(SessionMessages::commandInvoke("station.settingsExport.begin", id, {}));
+    return {true, {}, id};
+}
+
+void StationClient::cancelSettingsBackupExport(quint32 operationId)
+{
+    if (m_settingsBackupExport
+        && (operationId == 0 || operationId == m_settingsBackupExport->operationId)) {
+        finishSettingsBackupExport(false, QStringLiteral("Settings export cancelled."), {}, true);
+    }
+}
+
+void StationClient::finishSettingsBackupExport(bool accepted, const QString& reason,
+                                               const QByteArray& xml, bool cancelRemote)
+{
+    if (!m_settingsBackupExport) return;
+    const QPointer<StationClient> self(this);
+    const QPointer<RadioModel> model(m_radioModel);
+    const SettingsBackupExportPending pending = std::move(*m_settingsBackupExport);
+    m_settingsBackupExport.reset();
+    m_settingsBackupReplyTimer->stop();
+    m_settingsBackupOverallTimer->stop();
+    if (cancelRemote && pending.transferId.isEmpty()
+        && pending.expectedVerb == "station.settingsExport.begin"
+        && pending.sessionEpoch == m_sessionEpoch && stationLinkReady()) {
+        m_cancelledSettingsBackupBegin = qMakePair(pending.expectedCommandId, pending.sessionEpoch);
+        QTimer::singleShot(10000, this, [this, id = pending.expectedCommandId,
+                                          epoch = pending.sessionEpoch]() {
+            if (m_cancelledSettingsBackupBegin
+                && *m_cancelledSettingsBackupBegin == qMakePair(id, epoch)) {
+                m_cancelledSettingsBackupBegin.reset();
+            }
+        });
+    }
+    if (cancelRemote && !pending.transferId.isEmpty()
+        && pending.sessionEpoch == m_sessionEpoch && stationLinkReady()) {
+        const quint32 id = m_nextCommandId++;
+        if (m_nextCommandId == 0) ++m_nextCommandId;
+        send(SessionMessages::commandInvoke("station.settingsExport.cancel", id,
+             {{0, "transferId", MirrorWireKind::Utf8,
+               QString::fromLatin1(pending.transferId)}}));
+        if (!self) return;
+    }
+    if (model) model->reportStationSettingsBackupExportFinished(
+        pending.operationId, accepted, reason, accepted ? xml : QByteArray());
+}
+
+void StationClient::requestNextSettingsBackupChunk()
+{
+    if (!m_settingsBackupExport || !settingsBackupExportAvailable()
+        || m_settingsBackupExport->sessionEpoch != m_sessionEpoch) {
+        finishSettingsBackupExport(false, QStringLiteral("The Core connection changed."));
+        return;
+    }
+    const qint64 offset = m_settingsBackupExport->assembler.expectedOffset();
+    const quint32 id = m_nextCommandId++;
+    if (m_nextCommandId == 0) ++m_nextCommandId;
+    m_settingsBackupExport->expectedCommandId = id;
+    m_settingsBackupExport->expectedVerb = "station.settingsExport.read";
+    const QByteArray transferId = m_settingsBackupExport->transferId;
+    m_settingsBackupReplyTimer->start(10000);
+    send(SessionMessages::commandInvoke("station.settingsExport.read", id,
+         {{0, "transferId", MirrorWireKind::Utf8, QString::fromLatin1(transferId)},
+          {0, "offset", MirrorWireKind::Int64, QVariant(static_cast<qlonglong>(offset))}}));
+}
+
+void StationClient::handleSettingsBackupExportResult(const SessionMessage& message)
+{
+    if (!m_settingsBackupExport || message.commandId != m_settingsBackupExport->expectedCommandId
+        || message.commandVerb != m_settingsBackupExport->expectedVerb
+        || m_settingsBackupExport->sessionEpoch != m_sessionEpoch) {
+        if (m_settingsBackupExport
+            && message.commandId == m_settingsBackupExport->expectedCommandId) {
+            finishSettingsBackupExport(false, QStringLiteral("Malformed settings export reply."), {}, true);
+        }
+        return;
+    }
+    m_settingsBackupReplyTimer->stop();
+    if (!message.accepted) {
+        finishSettingsBackupExport(false,
+            message.reason.isEmpty() ? QStringLiteral("The Core refused settings export.")
+                                     : message.reason);
+        return;
+    }
+    const auto& values = message.updates;
+    const auto textAt = [&values](int index, const QByteArray& name, qsizetype max,
+                                  QString* out) -> bool {
+        if (index >= values.size()) return false;
+        const MirrorUpdate& v = values.at(index);
+        if (v.ordinal != 0 || v.name != name || v.kind != MirrorWireKind::Utf8
+            || v.value.typeId() != QMetaType::QString) return false;
+        const QString s = v.value.toString();
+        if (s.toUtf8().size() > max) return false;
+        *out = s;
+        return true;
+    };
+    const auto intAt = [&values](int index, const QByteArray& name, qint64* out) -> bool {
+        if (index >= values.size()) return false;
+        const MirrorUpdate& v = values.at(index);
+        if (v.ordinal != 0 || v.name != name || v.kind != MirrorWireKind::Int64
+            || v.value.typeId() != QMetaType::LongLong) return false;
+        *out = v.value.toLongLong();
+        return true;
+    };
+    const auto fail = [this]() {
+        finishSettingsBackupExport(false, QStringLiteral("Malformed settings export reply."), {}, true);
+    };
+    if (!message.affectedKeys.isEmpty() || !message.reason.isEmpty() || values.size() != 3) {
+        fail(); return;
+    }
+    if (message.commandVerb == "station.settingsExport.begin") {
+        QString id, digest;
+        qint64 length = 0;
+        static const QRegularExpression idPattern(QStringLiteral("^[0-9a-f]{32}$"));
+        static const QRegularExpression digestPattern(QStringLiteral("^[0-9a-f]{64}$"));
+        if (!textAt(0, "transferId", 32, &id)
+            || !intAt(1, "byteLength", &length)
+            || !textAt(2, "sha256", 64, &digest)
+            || !idPattern.match(id).hasMatch() || !digestPattern.match(digest).hasMatch()) {
+            fail(); return;
+        }
+        SettingsBackupTransferManifest manifest{length, QByteArray::fromHex(digest.toLatin1())};
+        QString error;
+        if (!m_settingsBackupExport->assembler.begin(manifest, &error)) {
+            fail(); return;
+        }
+        m_settingsBackupExport->transferId = id.toLatin1();
+        const quint32 epoch = m_sessionEpoch;
+        const quint32 operation = m_settingsBackupExport->operationId;
+        QTimer::singleShot(0, this, [this, epoch, operation]() {
+            if (m_settingsBackupExport && m_sessionEpoch == epoch
+                && m_settingsBackupExport->operationId == operation) {
+                requestNextSettingsBackupChunk();
+            }
+        });
+        return;
+    }
+    QString id, data;
+    qint64 offset = -1;
+    constexpr qsizetype kEncodedMax = ((SettingsBackupTransferSource::kMaxChunkBytes + 2) / 3) * 4;
+    if (!textAt(0, "transferId", 32, &id)
+        || !intAt(1, "offset", &offset)
+        || !textAt(2, "data", kEncodedMax, &data)
+        || id.toLatin1() != m_settingsBackupExport->transferId
+        || offset != m_settingsBackupExport->assembler.expectedOffset()) {
+        fail(); return;
+    }
+    const QByteArray encoded = data.toLatin1();
+    const QByteArray chunk = QByteArray::fromBase64(encoded);
+    if (encoded.isEmpty() || chunk.isEmpty() || chunk.size() > SettingsBackupTransferSource::kMaxChunkBytes
+        || chunk.toBase64() != encoded || QString::fromLatin1(encoded) != data) {
+        fail(); return;
+    }
+    QString error;
+    if (!m_settingsBackupExport->assembler.acceptChunk(offset, chunk, &error)) {
+        fail(); return;
+    }
+    QByteArray xml;
+    if (m_settingsBackupExport->assembler.completedPayload(&xml)) {
+        if (!AppSettings::validateLocalXml(xml, &error)) {
+            finishSettingsBackupExport(false, error, {}, true);
+        } else {
+            finishSettingsBackupExport(true, {}, xml);
+        }
+        return;
+    }
+    const quint32 epoch = m_sessionEpoch;
+    const quint32 operation = m_settingsBackupExport->operationId;
+    QTimer::singleShot(0, this, [this, epoch, operation]() {
+        if (m_settingsBackupExport && m_sessionEpoch == epoch
+            && m_settingsBackupExport->operationId == operation) {
+            requestNextSettingsBackupChunk();
+        }
+    });
+}
+
 StationClient::CommandOutcome StationClient::requestSettingsHygiene(
     const QByteArray& verb, const QString& mac)
 {
@@ -5800,6 +6082,34 @@ void StationClient::refreshRemoteTransmit()
 
 void StationClient::handleCommandResult(const SessionMessage& message)
 {
+    if (m_cancelledSettingsBackupBegin
+        && message.commandId == m_cancelledSettingsBackupBegin->first) {
+        const quint32 epoch = m_cancelledSettingsBackupBegin->second;
+        m_cancelledSettingsBackupBegin.reset();
+        if (epoch == m_sessionEpoch && stationLinkReady() && message.accepted
+            && message.commandVerb == "station.settingsExport.begin"
+            && message.updates.size() == 3) {
+            const MirrorUpdate& field = message.updates.at(0);
+            const QString id = field.value.toString();
+            static const QRegularExpression idPattern(QStringLiteral("^[0-9a-f]{32}$"));
+            if (field.ordinal == 0 && field.name == "transferId"
+                && field.kind == MirrorWireKind::Utf8
+                && field.value.typeId() == QMetaType::QString
+                && idPattern.match(id).hasMatch()) {
+                const quint32 cancelId = m_nextCommandId++;
+                if (m_nextCommandId == 0) ++m_nextCommandId;
+                send(SessionMessages::commandInvoke("station.settingsExport.cancel", cancelId,
+                     {{0, "transferId", MirrorWireKind::Utf8, id}}));
+            }
+        }
+        return;
+    }
+    if ((m_settingsBackupExport
+         && message.commandId == m_settingsBackupExport->expectedCommandId)
+        || message.commandVerb.startsWith("station.settingsExport.")) {
+        handleSettingsBackupExportResult(message);
+        return;
+    }
     if (message.commandVerb == "tx.watchRelay") {
         handleRelayWatchResult(message);
         return;

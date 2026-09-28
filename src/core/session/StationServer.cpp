@@ -684,6 +684,8 @@
 #include "core/session/StationCatalog.h"
 #include "core/session/StationDevicesFacade.h"
 #include "core/settings/SettingsProxyServer.h"
+#include "core/settings/SettingsBackupTransfer.h"
+#include "core/session/SettingsBackupExportWire.h"
 #include "core/settings/SettingsScope.h"
 #include "models/NotchModel.h"
 #include "models/FreeDVStationModel.h"
@@ -725,6 +727,7 @@
 #include <QWebSocket>
 #include <QWebSocketServer>
 #include <QUrl>
+#include <QUuid>
 
 #include <algorithm>
 #include <array>
@@ -2636,6 +2639,13 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     m_heartbeatTimer->setInterval(m_heartbeatIntervalMs);
     connect(m_heartbeatTimer, &QTimer::timeout, this, &StationServer::onHeartbeatTick);
 
+    m_settingsExportClock.start();
+    m_settingsExportCleanup = new QTimer(this);
+    m_settingsExportCleanup->setInterval(1000);
+    connect(m_settingsExportCleanup, &QTimer::timeout, this,
+            &StationServer::expireSettingsExports);
+    m_settingsExportCleanup->start();
+
     m_deltaFlushTimer = new QTimer(this);
     m_deltaFlushTimer->setInterval(kDefaultDeltaFlushMs);
     connect(m_deltaFlushTimer, &QTimer::timeout, this, [this]() {
@@ -2803,6 +2813,7 @@ bool StationServer::listen(const QHostAddress& address, quint16 port)
 
 void StationServer::close()
 {
+    m_settingsExports.clear();
     const QList<SessionTransport*> pendingPrimaries = m_pendingRelayWatches.keys();
     for (SessionTransport* primary : pendingPrimaries) {
         retirePendingRelayWatch(primary);
@@ -3429,6 +3440,7 @@ void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
         return;
     }
     it->dropping = true;
+    m_settingsExports.remove(it->sessionId);
     it->txWatchGeneration = ++m_nextTxWatchGeneration;
     retirePendingRelayWatch(transport);
     ++m_dropPeerDepth;
@@ -3875,6 +3887,10 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
 
     switch (message.kind) {
     case SessionMessageKind::CommandInvoke:
+        if (message.commandVerb.startsWith("station.settingsExport.")) {
+            handleSettingsExport(transport, message, wire);
+            break;
+        }
         if (message.commandVerb == "tx.watchRelay") {
             handleTxWatchRelay(transport, message);
             break;
@@ -6635,6 +6651,201 @@ void StationServer::applySettingsRemove(const SessionMessage& message)
 
 // ── Send helpers ─────────────────────────────────────────────────────────
 
+namespace {
+constexpr qint64 kSettingsExportBacklogLimit = 1024 * 1024;
+constexpr qint64 kSettingsExportIdleMs = 30000;
+constexpr qint64 kSettingsExportLifetimeMs = 120000;
+
+bool exportString(const MirrorUpdate& field, const QByteArray& name, QString* value,
+                  qsizetype maxBytes)
+{
+    if (field.ordinal != 0 || field.name != name || field.kind != MirrorWireKind::Utf8
+        || field.value.typeId() != QMetaType::QString) return false;
+    const QString text = field.value.toString();
+    if (text.toUtf8().size() > maxBytes) return false;
+    if (value) *value = text;
+    return true;
+}
+
+bool exportInteger(const MirrorUpdate& field, const QByteArray& name, qint64* value)
+{
+    if (field.ordinal != 0 || field.name != name || field.kind != MirrorWireKind::Int64
+        || field.value.typeId() != QMetaType::LongLong) return false;
+    if (value) *value = field.value.toLongLong();
+    return true;
+}
+
+bool canonicalTransferId(const QString& value)
+{
+    static const QRegularExpression id(QStringLiteral("^[0-9a-f]{32}$"));
+    return id.match(value).hasMatch();
+}
+} // namespace
+
+bool StationServer::settingsExportEligible(SessionTransport* transport) const
+{
+    const auto peer = m_peers.constFind(transport);
+    return !m_closing && peer != m_peers.cend() && !peer->dropping
+        && peer->authenticated && peer->snapshotComplete && peer->sessionId != 0
+        && peer->mediaEpoch != 0 && peer->agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && peerSeesPairingCode(transport)
+        && peerDeclares(transport, QByteArrayLiteral("settingsBackup"), 1)
+        && m_radioModel && m_radioModel->role() == RadioModel::Role::Local
+        && transport && transport->isOpen();
+}
+
+void StationServer::expireSettingsExports()
+{
+    const qint64 now = settingsExportNow();
+    for (auto it = m_settingsExports.begin(); it != m_settingsExports.end();) {
+        if (now - it->lastReadMs >= kSettingsExportIdleMs
+            || now - it->bornMs >= kSettingsExportLifetimeMs) {
+            it = m_settingsExports.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+qint64 StationServer::settingsExportNow() const
+{
+    return m_settingsExportNowForTest ? m_settingsExportNowForTest()
+                                      : m_settingsExportClock.elapsed();
+}
+
+void StationServer::handleSettingsExport(SessionTransport* transport,
+                                         const SessionMessage& message, const QByteArray& wire)
+{
+    const auto reply = [this, transport, &message](bool accepted, const QString& reason,
+                                                    const QList<MirrorUpdate>& values = {}) {
+        send(transport, SessionMessages::commandResult(message.commandVerb, message.commandId,
+                                                        accepted, reason, {}, values));
+    };
+    if (!SettingsBackupExportWire::strictEnvelope(wire, false)) {
+        reply(false, QStringLiteral("Invalid settings export request."));
+        return;
+    }
+    if (!settingsExportEligible(transport)) {
+        reply(false, QStringLiteral("Settings export requires a connected paired device."));
+        return;
+    }
+    expireSettingsExports();
+    const quint64 sessionId = m_peers.value(transport).sessionId;
+    const auto stringField = [](const QByteArray& name, const QString& value) {
+        return MirrorUpdate{0, name, MirrorWireKind::Utf8, QVariant(value)};
+    };
+    const auto integerField = [](const QByteArray& name, qint64 value) {
+        return MirrorUpdate{0, name, MirrorWireKind::Int64,
+                            QVariant(static_cast<qlonglong>(value))};
+    };
+
+    if (message.commandVerb == "station.settingsExport.begin") {
+        if (!message.arguments.isEmpty()) {
+            reply(false, QStringLiteral("Invalid settings export request."));
+            return;
+        }
+        if (m_settingsExports.contains(sessionId)) {
+            reply(false, QStringLiteral("A settings export is already in progress."));
+            return;
+        }
+        qint64 heldBytes = 0;
+        for (const SettingsExportJob& job : std::as_const(m_settingsExports)) {
+            heldBytes += job.source.manifest().byteLength;
+        }
+        if (m_settingsExports.size() >= 4
+            || heldBytes > 64LL * 1024 * 1024 - SettingsBackupTransferSource::kMaxBytes
+            || transport->backlogBytes() >= kSettingsExportBacklogLimit) {
+            reply(false, QStringLiteral("The Core is busy sending settings. Try again shortly."));
+            return;
+        }
+        QString onAir;
+        if (m_radioModel->stationOnAirRefusal(&onAir)) {
+            reply(false, onAir);
+            return;
+        }
+        QString error;
+        const QByteArray xml = m_settings.exportLocalXml(&error);
+        SettingsBackupTransferSource source;
+        if (!SettingsBackupTransferSource::create(xml, &source, &error)) {
+            reply(false, error);
+            return;
+        }
+        // A caller may reenter during serialization. Never hand its bytes to
+        // a replacement or a closing session.
+        if (!settingsExportEligible(transport)
+            || m_peers.value(transport).sessionId != sessionId) return;
+        if (m_settingsExports.contains(sessionId) || m_settingsExports.size() >= 4) {
+            reply(false, QStringLiteral("The Core is busy sending settings. Try again shortly."));
+            return;
+        }
+        const QByteArray id = QUuid::createUuid().toString(QUuid::WithoutBraces)
+                                  .remove(QLatin1Char('-')).toLatin1();
+        const qint64 now = settingsExportNow();
+        const SettingsBackupTransferManifest manifest = source.manifest();
+        m_settingsExports.insert(sessionId, SettingsExportJob{std::move(source), id, 0, now, now});
+        reply(true, {}, {stringField("transferId", QString::fromLatin1(id)),
+                         integerField("byteLength", manifest.byteLength),
+                         stringField("sha256", QString::fromLatin1(manifest.sha256.toHex()))});
+        return;
+    }
+
+    if (message.commandVerb == "station.settingsExport.read") {
+        QString id;
+        qint64 offset = -1;
+        if (message.arguments.size() != 2
+            || !exportString(message.arguments.at(0), "transferId", &id, 32)
+            || !exportInteger(message.arguments.at(1), "offset", &offset)
+            || !canonicalTransferId(id)) {
+            reply(false, QStringLiteral("Invalid settings export read request."));
+            return;
+        }
+        auto job = m_settingsExports.find(sessionId);
+        if (job == m_settingsExports.end() || job->transferId != id.toLatin1()
+            || offset != job->nextOffset || offset < 0) {
+            reply(false, QStringLiteral("This settings export is no longer available."));
+            return;
+        }
+        if (transport->backlogBytes() >= kSettingsExportBacklogLimit) {
+            m_settingsExports.erase(job);
+            reply(false, QStringLiteral("The Core is busy sending settings. Try again shortly."));
+            return;
+        }
+        QByteArray chunk;
+        QString error;
+        if (!job->source.readChunk(offset, SettingsBackupTransferSource::kMaxChunkBytes,
+                                   &chunk, &error)) {
+            m_settingsExports.erase(job);
+            reply(false, error);
+            return;
+        }
+        const qint64 end = offset + chunk.size();
+        const bool final = end == job->source.manifest().byteLength;
+        job->nextOffset = end; // advance before a synchronously reentrant send
+        job->lastReadMs = settingsExportNow();
+        if (final) m_settingsExports.erase(job);
+        reply(true, {}, {stringField("transferId", id), integerField("offset", offset),
+                         stringField("data", QString::fromLatin1(chunk.toBase64()))});
+        return;
+    }
+
+    if (message.commandVerb == "station.settingsExport.cancel") {
+        QString id;
+        if (message.arguments.size() != 1
+            || !exportString(message.arguments.at(0), "transferId", &id, 32)
+            || !canonicalTransferId(id)) {
+            reply(false, QStringLiteral("Invalid settings export cancellation."));
+            return;
+        }
+        const auto job = m_settingsExports.constFind(sessionId);
+        if (job != m_settingsExports.cend() && job->transferId == id.toLatin1()) {
+            m_settingsExports.remove(sessionId);
+        }
+        reply(true, {});
+        return;
+    }
+    reply(false, QStringLiteral("The Core does not know this settings export request."));
+}
+
 void StationServer::send(SessionTransport* transport, const SessionMessage& message)
 {
     if (transport == nullptr) {
@@ -9367,6 +9578,9 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             // R-IOS-18 / R-R3-49 (parity Task 21): the Core's radio choice.
             caps.stationRadiosVersion = stationRadiosVersion();
             caps.settingsHygieneVersion = peerDeclares(transport, QByteArrayLiteral("settingsHygiene"), 1)
+                && m_radioModel->role() == RadioModel::Role::Local ? 1 : 0;
+            caps.settingsBackupVersion = peerSeesPairingCode(transport)
+                && peerDeclares(transport, QByteArrayLiteral("settingsBackup"), 1)
                 && m_radioModel->role() == RadioModel::Role::Local ? 1 : 0;
             // R-R3-49 / A11 (parity Task 28): the transmit display, with
             // media, appended after the last entry of the minor-11 block.
