@@ -258,19 +258,7 @@ void GuiDesktopStationRuntime::setLifecycleBusy(bool busy)
 bool GuiDesktopStationRuntime::setRunCore(bool enabled)
 {
     QString reason;
-    if (enabled) {
-        if (!actionAllowed(&reason)) { fail(reason); return false; }
-    } else {
-        // Turning the Core off is the TX-first teardown, including a stale
-        // page callback delivered while the radio was on the air.
-        if (!available(&reason) || m_actionActive || m_retiring || m_lifecycleBusy
-            || m_model->connectionState() == ConnectionState::Probing
-            || m_model->connectionState() == ConnectionState::Connecting) {
-            if (reason.isEmpty()) { reason = tr("A Core change is in progress."); }
-            fail(reason);
-            return false;
-        }
-    }
+    if (!actionAllowed(&reason)) { fail(reason); return false; }
     if (enabled && m_controller->enabled()) {
         updateState();
         return true;

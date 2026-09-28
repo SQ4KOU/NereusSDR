@@ -456,7 +456,11 @@ private slots:
         QVERIFY(!runtime.revokeDevice(QByteArrayLiteral("invalid")));
         QVERIFY(!runtime.addDevice());
         QVERIFY(!runtime.acknowledgeKeyBackup());
-        QVERIFY(runtime.setRunCore(false)); // TX-first off remains available.
+        QVERIFY(!runtime.setRunCore(false)); // stale Setup callback stays locked during TX.
+        QVERIFY(runtime.controller()->enabled());
+        QVERIFY(settings.value(QStringLiteral("DesktopCore/Run")).toBool());
+        model.transmitModel().setTune(false);
+        QVERIFY(runtime.setRunCore(false));
         QVERIFY(!runtime.controller()->enabled());
     }
 
