@@ -390,6 +390,7 @@ private slots:
         FakeTransport* const first = h.transports.first();
         MediaIcePath relayPath;
         relayPath.remoteAddress = QStringLiteral("127.0.0.1");
+        relayPath.ownedLoopbackShim = true;
         first->path = relayPath;
         h.feed(4);
         const qsizetype sentBefore = first->rtpPackets.size();

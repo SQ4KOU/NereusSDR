@@ -115,6 +115,7 @@ private:
     std::unique_ptr<Private> d;
 
     void drainCallbacks();
+    bool admitCandidate(const QString& candidate, const QString& mid, bool fromOwnedSource);
     /// Task 27: gathers once the local description is set and the relay is
     /// known.
     void gatherIfReady();

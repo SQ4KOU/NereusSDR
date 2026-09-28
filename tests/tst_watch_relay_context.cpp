@@ -53,6 +53,7 @@ private slots:
                 MediaIcePath path;
                 path.remoteAddress = relayPath ? QStringLiteral("127.0.0.1")
                                                : QStringLiteral("192.0.2.1");
+                path.ownedLoopbackShim = relayPath;
                 return path;
             });
         DataChannelTransport::WatchRelayGrant grant{

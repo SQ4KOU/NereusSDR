@@ -455,6 +455,7 @@ bool DataChannelTransport::start(const Options& options)
         return false;
     }
     m_options = options;
+    m_ownedShimEndpoints.clear();
     m_bridge = std::make_shared<Bridge>(this, options.maxIncomingBytes, options.purpose);
     const std::weak_ptr<Bridge> weak = m_bridge;
     // libdatachannel reads the PEM files while the peer is made, on this
@@ -663,7 +664,7 @@ bool DataChannelTransport::acceptDescription(const QString& sdp, const QString& 
                     return false;
                 }
             } else {
-                acceptCandidate(candidate);
+                admitCandidate(candidate, true);
             }
         }
         return true;
@@ -675,6 +676,11 @@ bool DataChannelTransport::acceptDescription(const QString& sdp, const QString& 
 }
 
 bool DataChannelTransport::acceptCandidate(const QString& candidate)
+{
+    return admitCandidate(candidate, false);
+}
+
+bool DataChannelTransport::admitCandidate(const QString& candidate, bool fromOwnedSource)
 {
     if (m_options.purpose == Purpose::TxWatch) {
         return false;
@@ -707,8 +713,20 @@ bool DataChannelTransport::acceptCandidate(const QString& candidate)
                     qMakePair(QString::fromStdString(*relay.address()), *relay.port()));
             }
         }
+        std::optional<QPair<QString, quint16>> ownedEndpoint;
+        if (fromOwnedSource) {
+            rtc::Candidate source = parsed;
+            if (source.resolve(rtc::Candidate::ResolveMode::Simple)
+                && source.address() && source.port()) {
+                ownedEndpoint = MediaIcePath::loopbackEndpoint(
+                    QString::fromStdString(*source.address()), *source.port());
+            }
+        }
         m_bridge->peer->addRemoteCandidate(std::move(parsed));
         ++m_acceptedCandidates;
+        if (ownedEndpoint && !m_ownedShimEndpoints.contains(*ownedEndpoint)) {
+            m_ownedShimEndpoints.append(*ownedEndpoint);
+        }
         return true;
     } catch (const std::exception&) {
         return false;
@@ -739,6 +757,11 @@ bool DataChannelTransport::acceptOwnedWatchCandidate(const QString& candidate)
         rtc::Candidate parsed(candidate.toStdString(), std::string());
         m_bridge->peer->addRemoteCandidate(std::move(parsed));
         ++m_acceptedCandidates;
+        const auto endpoint = MediaIcePath::loopbackEndpoint(QStringLiteral("127.0.0.1"),
+                                                             static_cast<quint16>(port));
+        if (endpoint && !m_ownedShimEndpoints.contains(*endpoint)) {
+            m_ownedShimEndpoints.append(*endpoint);
+        }
         return true;
     } catch (const std::exception&) {
         return false;
@@ -784,9 +807,14 @@ void DataChannelTransport::gatherIfReady()
     // joins its ICE now, unless the relay is not allowed.
     if (m_candidateSourceLease) {
         const QPointer<DataChannelTransport> self(this);
+        // ICE may retain an old lease after this wrapper closes. Its queued
+        // callback belongs only to the peer that installed that exact lease.
+        const std::weak_ptr<CandidateSourceLease> expected = m_candidateSourceLease;
         m_candidateSourceLease->start(IceConfiguration::kControlLane, {},
-                                      [self](const QString& candidate) {
-            if (!self) {
+                                      [self, expected](const QString& candidate) {
+            const auto lease = expected.lock();
+            if (!self || !lease || self->m_candidateSourceLease != lease
+                || !self->m_started || self->m_closing) {
                 return;
             }
             // Before the remote description the agent takes no remote
@@ -807,7 +835,7 @@ void DataChannelTransport::gatherIfReady()
                 return;
             }
             if (self->m_options.purpose == Purpose::Control) {
-                self->acceptCandidate(candidate);
+                self->admitCandidate(candidate, true);
             }
         });
     }
@@ -847,6 +875,8 @@ std::optional<MediaIcePath> DataChannelTransport::selectedPath() const
         path.remoteAddress = QString::fromStdString(remote.address().value_or(std::string()));
         path.remotePort = remote.port().value_or(0);
         path.farEndRelays = m_farEndRelays;
+        const auto endpoint = MediaIcePath::loopbackEndpoint(path.remoteAddress, path.remotePort);
+        path.ownedLoopbackShim = endpoint && m_ownedShimEndpoints.contains(*endpoint);
         return path;
     } catch (const std::exception&) {
         return std::nullopt;
@@ -1395,6 +1425,7 @@ void DataChannelTransport::stopPeer(bool linger)
     // PeerConnection::close() and may outlive this wrapper.
     m_candidateSourceLease.reset();
     m_pendingSourceCandidates.clear();
+    m_ownedShimEndpoints.clear();
     std::shared_ptr<rtc::PeerConnection> peer;
     std::shared_ptr<rtc::DataChannel> channel;
     {

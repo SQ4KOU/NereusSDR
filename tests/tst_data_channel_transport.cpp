@@ -166,6 +166,7 @@ public:
     void start(std::function<void(const QString&)> add) override { m_add = std::move(add); }
     void stop() override { m_add = {}; }
     bool ready() const { return static_cast<bool>(m_add); }
+    std::function<void(const QString&)> callback() const { return m_add; }
     void inject(const QString& candidate) { if (m_add) { m_add(candidate); } }
 
 private:
@@ -519,6 +520,8 @@ private slots:
         QVERIFY(pair.answerer->selectedPath().has_value());
         QCOMPARE(pair.offerer->selectedPath()->remoteAddress, QStringLiteral("127.0.0.1"));
         QCOMPARE(pair.answerer->selectedPath()->remoteAddress, QStringLiteral("127.0.0.1"));
+        QVERIFY(pair.offerer->selectedPath()->viaLoopbackShim());
+        QVERIFY(pair.answerer->selectedPath()->viaLoopbackShim());
         QVERIFY(pair.offerer->carriesBinary());
         QVERIFY(pair.answerer->carriesBinary());
         QVERIFY(!pair.offerer->mediaIceConfiguration().has_value());
@@ -1246,6 +1249,27 @@ private slots:
             QVERIFY(media->relayAllowed());
             QVERIFY(media->relayKnown());
         }
+        // A genuine same-computer ICE peer is still direct: its numeric
+        // loopback address alone does not identify a locally owned shim.
+        MediaIcePath localPeer = *path(QStringLiteral("host"), QStringLiteral("host"));
+        localPeer.remoteAddress = QStringLiteral("127.0.0.1");
+        QVERIFY(!localPeer.viaLoopbackShim());
+        QCOMPARE(DataChannelTransport::mediaIceFor(control, localPeer)->relayServers().size(), 0);
+        localPeer.remoteAddress = QStringLiteral("::1");
+        QVERIFY(!localPeer.viaLoopbackShim());
+        QCOMPARE(DataChannelTransport::mediaIceFor(control, localPeer)->relayServers().size(), 0);
+        localPeer.remoteAddress = QStringLiteral("::ffff:127.0.0.1");
+        QVERIFY(!localPeer.viaLoopbackShim());
+        QCOMPARE(DataChannelTransport::mediaIceFor(control, localPeer)->relayServers().size(), 0);
+        QCOMPARE(MediaIcePath::loopbackEndpoint(QStringLiteral("::ffff:127.0.0.1"), 4567),
+                 MediaIcePath::loopbackEndpoint(QStringLiteral("127.0.0.1"), 4567));
+        QVERIFY(MediaIcePath::loopbackEndpoint(QStringLiteral("::1"), 4567));
+        QVERIFY(!MediaIcePath::loopbackEndpoint(QStringLiteral("192.0.2.1"), 4567));
+        QVERIFY(!MediaIcePath::loopbackEndpoint(QStringLiteral("127.0.0.1"), 0));
+        localPeer.ownedLoopbackShim = true;
+        QVERIFY(localPeer.viaLoopbackShim());
+        QCOMPARE(DataChannelTransport::mediaIceFor(control, localPeer)->relayServers(),
+                 control.relayServers());
         // Relayed at either end, or through the far end's relay: kept.
         std::optional<MediaIcePath> viaFarRelay = path(QStringLiteral("srflx"), QStringLiteral("prflx"));
         viaFarRelay->farEndRelays.append(qMakePair(QStringLiteral("203.0.113.9"), quint16(50000)));
@@ -1262,6 +1286,104 @@ private slots:
         QVERIFY(!DataChannelTransport::mediaIceFor(std::nullopt, path(QStringLiteral("host"),
                                                                      QStringLiteral("host")))
                      .has_value());
+    }
+
+    void onlyAnOwnedSourceCandidateMakesTheSelectedLoopbackAShim()
+    {
+        Core core;
+        for (const bool selectedFromSource : {false, true}) {
+            DataChannelTransport offerer;
+            DataChannelTransport answerer;
+            const auto source = std::make_shared<WatchSource>();
+            bool descriptionsAccepted = true;
+            QString pendingAnswer;
+            QStringList offeredCandidates;
+            QStringList answeredCandidates;
+            QObject::connect(&offerer, &DataChannelTransport::localCandidate, &offerer,
+                             [&](const QString& candidate) { offeredCandidates.append(candidate); });
+            QObject::connect(&answerer, &DataChannelTransport::localCandidate, &answerer,
+                             [&](const QString& candidate) { answeredCandidates.append(candidate); });
+            QObject::connect(&offerer, &DataChannelTransport::localDescription, &answerer,
+                             [&](const QString& sdp, const QString& type) {
+                descriptionsAccepted &= answerer.acceptDescription(sdp, type);
+            });
+            QObject::connect(&answerer, &DataChannelTransport::localDescription, &offerer,
+                             [&](const QString& sdp, const QString& type) {
+                if (selectedFromSource) {
+                    QCOMPARE(type, QStringLiteral("answer"));
+                    pendingAnswer = sdp;
+                } else {
+                    descriptionsAccepted &= offerer.acceptDescription(sdp, type);
+                }
+            });
+            DataChannelTransport::Options answer;
+            answer.role = DataChannelTransport::Role::Answerer;
+            answer.maxIncomingBytes = kStationCap;
+            answer.ice = IceConfiguration::throughRendezvous({}, true, {}, {});
+            answer.ice->setRelay(std::nullopt, 1);
+            answer.certificatePemPath = core.server->certificatePemPath();
+            answer.privateKeyPemPath = core.server->privateKeyPemPath();
+            DataChannelTransport::Options offer;
+            offer.role = DataChannelTransport::Role::Offerer;
+            offer.maxIncomingBytes = kClientCap;
+            offer.ice = watchIce(source);
+            QVERIFY(answerer.start(answer));
+            QVERIFY(offerer.start(offer));
+            QTRY_VERIFY_WITH_TIMEOUT(descriptionsAccepted, 10000);
+            QTRY_VERIFY_WITH_TIMEOUT(source->ready(), 10000);
+            QTRY_VERIFY_WITH_TIMEOUT(!loopbackFor(offeredCandidates).isEmpty(), 10000);
+            QTRY_VERIFY_WITH_TIMEOUT(!loopbackFor(answeredCandidates).isEmpty(), 10000);
+            const QString actual = loopbackFor(answeredCandidates);
+            const QStringList fields = actual.split(QLatin1Char(' '));
+            QVERIFY(fields.size() >= 8);
+            bool parsed = false;
+            const int port = fields.at(5).toInt(&parsed);
+            QVERIFY(parsed && port > 0 && port <= 65535);
+            if (selectedFromSource) {
+                QVERIFY(!pendingAnswer.isEmpty());
+                // Exercise a source candidate queued before the remote
+                // description: the eventual admission must retain origin.
+                source->inject(actual);
+                QVERIFY(offerer.acceptDescription(pendingAnswer, QStringLiteral("answer")));
+            } else {
+                // Same address and a forged wsrelay foundation, but the
+                // owned source supplied a different port from the selected
+                // ordinary candidate. Neither text nor IP confers trust.
+                source->inject(RelayLeg::candidateLine(1,
+                    static_cast<quint16>(port == 65535 ? port - 1 : port + 1)));
+                QVERIFY(offerer.acceptCandidate(actual));
+            }
+            QVERIFY(answerer.acceptCandidate(loopbackFor(offeredCandidates)));
+            QTRY_VERIFY_WITH_TIMEOUT(offerer.isOpen() && answerer.isOpen(), 15000);
+            const auto selected = offerer.selectedPath();
+            QVERIFY(selected);
+            QCOMPARE(MediaIcePath::loopbackEndpoint(selected->remoteAddress, selected->remotePort),
+                     MediaIcePath::loopbackEndpoint(QStringLiteral("127.0.0.1"),
+                                                    static_cast<quint16>(port)));
+            QCOMPARE(selected->viaLoopbackShim(), selectedFromSource);
+            QVERIFY(!answerer.selectedPath()->viaLoopbackShim());
+        }
+    }
+
+    void closedControlSourceCannotQueueAnotherCandidate()
+    {
+        DataChannelTransport offerer;
+        const auto source = std::make_shared<WatchSource>();
+        DataChannelTransport::Options options;
+        options.role = DataChannelTransport::Role::Offerer;
+        options.maxIncomingBytes = kClientCap;
+        options.ice = watchIce(source);
+        QVERIFY(offerer.start(options));
+        QTRY_VERIFY_WITH_TIMEOUT(source->ready(), 10000);
+        const auto staleCallback = source->callback();
+        QVERIFY(staleCallback);
+        offerer.closeLink(QStringLiteral("test done"));
+        QCOMPARE(offerer.pendingSourceCandidateCountForTest(), 0);
+        QCOMPARE(offerer.ownedShimEndpointCountForTest(), 0);
+        staleCallback(RelayLeg::candidateLine(IceConfiguration::kControlLane, 65000));
+        QCOMPARE(offerer.pendingSourceCandidateCountForTest(), 0);
+        QCOMPARE(offerer.ownedShimEndpointCountForTest(), 0);
+        QVERIFY(!offerer.selectedPath());
     }
 
     // ── A session over the channel ─────────────────────────────────────

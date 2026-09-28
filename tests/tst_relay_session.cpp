@@ -254,6 +254,7 @@ private slots:
         QVERIFY(offerer.start(core));
         QTRY_VERIFY_WITH_TIMEOUT(offerer.isReady() && answerer.isReady(), 30000);
         QVERIFY(offerer.selectedPath() && offerer.selectedPath()->viaLoopbackShim());
+        QVERIFY(answerer.selectedPath() && answerer.selectedPath()->viaLoopbackShim());
         QByteArray rtp(12 + 60, '\0');
         rtp[0] = static_cast<char>(0x80);
         rtp[1] = static_cast<char>(111);

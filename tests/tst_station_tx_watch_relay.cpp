@@ -155,6 +155,7 @@ private slots:
             if (peer != offerer) { return std::nullopt; }
             MediaIcePath path;
             path.remoteAddress = QStringLiteral("127.0.0.1");
+            path.ownedLoopbackShim = true;
             return path;
         });
         const qint64 grantExpires = QDateTime::currentSecsSinceEpoch()

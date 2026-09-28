@@ -2536,6 +2536,13 @@ colours for the same signal.
   receiver before implementing. Receive ownership must remain distinct
   from selecting or taking transmit. A read-only investigation of the
   actual duplicate desktop identities is in progress.
+- JJ then asked how the bottom banner's active-slice indicator fits the
+  flow, and for matching iPhone/desktop behavior when switching, taking,
+  releasing, reaching capacity or sharing a slice. The existing banner
+  follows this window's active receive slice; transmit selection is separate.
+  The design discussion is still open. Current media mixes include only
+  owned slices; a proposed Listen in action would be new functionality,
+  not an existing capability or permission for multiple writers.
 - Plan: several-devices UX and local/remote ownership parity.
 
 ### G-119: Slice markers and RX badges do not consistently use Aether colors
@@ -2579,14 +2586,20 @@ colours for the same signal.
   change or late candidate classification is not excluded.
 - Ruling basis: JJ requires a cause and fix for failures at actual load;
   preserve relay cleanup and reachability policy, with no deadline increase.
-- Status: OPEN. Sol 6 high is implementing explicit locally admitted
-  CandidateSource endpoint provenance, after lead review of the trust
-  boundary. Real loopback ICE must not be classified as a relay shim merely
-  by its address, and a remote foundation string cannot assert local shim
-  ownership. Verify the
-  authenticated session's current inner path at the ICE query, preserving
-  the service's RELEASED 2 assertion; judge genuine loopback ICE versus
-  explicit RelayLeg shim provenance before any production policy change.
+- Status: explicit locally admitted CandidateSource endpoint provenance
+  from signed d77cb3e1 passes the combined trunk app/Core build and all ten
+  complete affected suites (112.81 s, starting load 18.11/18.52/13.31).
+  Real loopback ICE no longer becomes a shim merely by address or a remote
+  foundation string. The selected endpoint must match a successfully
+  admitted candidate from this transport's own source. Lead review also
+  found that an old source callback could affect a restarted peer; weak
+  exact-lease guards fix that reproduced lifetime defect. The real service
+  fixture reads both current authenticated inner transports, with epoch
+  and lifetime checks, and preserves ALLOCATED 2 and RELEASED 2.
+  Root logs: core-gui-ice-provenance-root-build.log and
+  core-gui-ice-provenance-root-ctest.log. Linux re-verification is still
+  required; the original failing selected pair was not recorded, so this
+  does not prove every contributor to that historical failure.
   Evidence: core-gui-linux-relay-return-scout.md and
   core-gui-linux-383984e5-focused-build-and-test.log (116.99 s).
 - Plan: real-service R5 session and relay-release verification.
@@ -2649,6 +2662,23 @@ colours for the same signal.
   that alone does not establish the failure's cause. Evidence:
   traversal-383984e5-matched-release-prelude/console.log.
 - Plan: R5 IPv6 path preference and truthful route reporting.
+
+### G-124: Bottom banner can retain a slice after the window loses it
+
+- Evidence: MainWindow::refreshActiveSlicePresentation binds a null slice
+  when a hosting window has no owned slice, but updates its letter only
+  for a non-null slice. RxDashboard::bindSlice returns on null without
+  clearing the previous letter or readings. The general dashboard rebind
+  lambda also returns before clearing the binding when no active slice
+  exists. This can misrepresent an old slice as the current one.
+- Ruling basis: the agreed per-device active-slice and truthful ownership
+  presentation require the banner to describe a currently owned slice.
+  JJ specifically asked how that banner identifies the active slice.
+- Status: Sol 6 medium owns a bounded reproduction and stale-display repair
+  from signed e79b0589a, using existing neutral placeholders and guarding
+  slice lifetime. No new picker, takeover behavior or ownership policy is
+  included. App/Core and affected complete suites must pass before landing.
+- Plan: truthful active-slice presentation and empty-window recovery.
 
 ## How this addendum is kept
 

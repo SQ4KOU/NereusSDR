@@ -156,6 +156,7 @@ struct PendingRig {
             }
             MediaIcePath path;
             path.remoteAddress = QStringLiteral("127.0.0.1");
+            path.ownedLoopbackShim = true;
             return path;
         });
         if (!QTest::qWaitFor([this] {
@@ -404,6 +405,7 @@ private slots:
             }
             MediaIcePath path;
             path.remoteAddress = QStringLiteral("127.0.0.1");
+            path.ownedLoopbackShim = true;
             return path;
         });
         const auto newResult = [&nextMessages](SessionMessageKind kind, quint32 id = 0) {
@@ -553,6 +555,7 @@ private slots:
             }
             MediaIcePath path;
             path.remoteAddress = QStringLiteral("127.0.0.1");
+            path.ownedLoopbackShim = true;
             return path;
         });
         const auto latest = [&messages](SessionMessageKind kind, quint32 id = 0) {
