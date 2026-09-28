@@ -621,6 +621,9 @@
 //   2026-09-28: spot resolved mode (R-IOS-25): recordStreamVersion 2, each
 //               spots record carrying resolvedMode. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-09-28: FreeDV band (R-IOS-26): stationFreedvVersion 2, each
+//               freedvStations record carrying the station's band. J.J.
+//               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -8634,10 +8637,12 @@ int StationServer::recordStreamVersion() const
 int StationServer::stationFreedvVersion() const
 {
     // R-IOS-26 / R-R3-49 (iPhone plan Task 22, parity Task 20): the Core
-    // runs FreeDV Reporter itself, with the record streams.
+    // runs FreeDV Reporter itself, with the record streams. 2 (R-IOS-26):
+    // each freedvStations record also carries the station's band
+    // (FreeDVStationModel::recordFields); everything 1 brings is unchanged.
     return recordStreamVersion() >= 1 && m_radioModel->freeDvReporter() != nullptr
             && m_radioModel->freeDvStationModel() != nullptr
-        ? 1
+        ? 2
         : 0;
 }
 

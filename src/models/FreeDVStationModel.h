@@ -59,6 +59,9 @@
 //                                    applyStationRecord). NereusSDR-
 //                                    original additions. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  R-IOS-26 (stationFreedvVersion 2): the
+//                                    record's band. AI-assisted via
+//                                    Anthropic Claude Code.
 
 #pragma once
 
@@ -104,7 +107,8 @@ public:
     /// distanceKm, headingDeg with headingCardinal, version, frequencyHz,
     /// txMode, status, userMessage, lastTxUtc, lastRxCallsign, lastRxMode,
     /// snrDb, lastUpdateUtc), then transmitting, receivingFrom,
-    /// messageChangedAtMs and lastRxUtc.
+    /// messageChangedAtMs and lastRxUtc; and band (stationFreedvVersion 2,
+    /// Band::bandFromFrequency of the frequency, absent while it is 0).
     static QJsonObject recordFields(const FreeDVStation& info, qint64 messageChangedAtMs);
     /// The station a `freedvStations` record describes (`sid` its id).
     static FreeDVStation stationFromRecord(const QString& sid, const QJsonObject& fields);

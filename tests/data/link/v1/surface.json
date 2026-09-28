@@ -313,7 +313,7 @@
         {
             "kind": "i64",
             "name": "stationFreedvVersion",
-            "value": 1
+            "value": 2
         },
         {
             "kind": "i64",
