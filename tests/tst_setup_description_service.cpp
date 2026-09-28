@@ -360,10 +360,10 @@ private slots:
     {
         SetupDescriptionService service;
         const QJsonObject appearance = service.category(QStringLiteral("appearance"));
-        QCOMPARE(appearance.value("version"), QJsonValue(4));
+        QCOMPARE(appearance.value("version"), QJsonValue(7));
         QCOMPARE(appearance.value("category").toObject().value("where"), QJsonValue("phone"));
         const QJsonArray pages = appearance.value("pages").toArray();
-        QCOMPARE(pages.size(), 1);
+        QCOMPARE(pages.size(), 2);
         const QJsonArray sections = pages.first().toObject().value("sections").toArray();
         QCOMPARE(sections.size(), 1);
         const QJsonArray controls = sections.first().toObject().value("controls").toArray();
@@ -374,6 +374,85 @@ private slots:
             QCOMPARE(control.value("applies"), QJsonValue("live"));
             const QString colour = control.value("default").toString();
             QVERIFY(QRegularExpression(QStringLiteral("^#[0-9A-F]{8}$")).match(colour).hasMatch());
+        }
+    }
+
+    void meterStylesPublishedInVersionSeven()
+    {
+        SetupDescriptionService service;
+        const QJsonObject appearance = service.category(QStringLiteral("appearance"));
+        QCOMPARE(appearance.value("version"), QJsonValue(7));
+        const QJsonArray pages = appearance.value("pages").toArray();
+        QCOMPARE(pages.size(), 2);
+        const QJsonArray controls = pages.at(1).toObject().value("sections").toArray()
+            .first().toObject().value("controls").toArray();
+        QCOMPARE(controls.size(), 3);
+        QCOMPARE(controls.at(0).toObject().value("id"), QJsonValue("appearance.meterStyles.face"));
+        QCOMPARE(controls.at(1).toObject().value("id"), QJsonValue("appearance.meterStyles.peakHold"));
+        QCOMPARE(controls.at(2).toObject().value("id"), QJsonValue("appearance.meterStyles.peakDecay"));
+    }
+
+    void meterStyleBindingRejectsMutatedGrammar()
+    {
+        SetupDescriptionService service;
+        const QJsonArray controls = service.category(QStringLiteral("appearance"))
+            .value("pages").toArray().at(1).toObject().value("sections").toArray()
+            .first().toObject().value("controls").toArray();
+        QCOMPARE(controls.size(), 3);
+        for (const QJsonValue& raw : controls) {
+            const QJsonObject original = raw.toObject();
+            QVERIFY(SetupDescriptionService::validateAppearanceMeterStyleBinding(original));
+            const auto rejects = [&original](const QString& field, const QJsonValue& value) {
+                QJsonObject changed = original;
+                changed.insert(field, value);
+                QVERIFY(!SetupDescriptionService::validateAppearanceMeterStyleBinding(changed));
+            };
+            rejects(QStringLiteral("id"), QStringLiteral("appearance.meterStyles.other"));
+            rejects(QStringLiteral("label"), QStringLiteral("Different"));
+            rejects(QStringLiteral("tooltip"), QStringLiteral("Different"));
+            rejects(QStringLiteral("kind"), QStringLiteral("button"));
+            rejects(QStringLiteral("binding"), QJsonObject{{"phone", "Other"}});
+            rejects(QStringLiteral("binding"), QJsonObject{{"setting", "SMeter_FaceStyle"}});
+            rejects(QStringLiteral("binding"), QJsonObject{{"phone", original.value("binding").toObject().value("phone")},
+                                                            {"setting", "SMeter_FaceStyle"}});
+            rejects(QStringLiteral("applies"), QStringLiteral("subscription"));
+            rejects(QStringLiteral("requiresDescriptionVersion"), 6);
+            rejects(QStringLiteral("gate"), QJsonObject{{"transmit", true}});
+            rejects(QStringLiteral("valueEncoding"), QJsonObject{});
+            if (original.value("kind") == QJsonValue("toggle")) {
+                rejects(QStringLiteral("default"), 1);
+                rejects(QStringLiteral("options"), QJsonArray{});
+            } else {
+                rejects(QStringLiteral("default"), true);
+                rejects(QStringLiteral("default"), 42);
+                rejects(QStringLiteral("default"), QStringLiteral("0"));
+                rejects(QStringLiteral("options"), QJsonArray{});
+                QJsonArray options = original.value("options").toArray();
+                QJsonObject first = options.first().toObject();
+                first.insert(QStringLiteral("value"), 99);
+                options[0] = first;
+                rejects(QStringLiteral("options"), options);
+                options = original.value("options").toArray();
+                first = options.first().toObject();
+                first.insert(QStringLiteral("value"), QStringLiteral("0"));
+                options[0] = first;
+                rejects(QStringLiteral("options"), options);
+                options = original.value("options").toArray();
+                first = options.first().toObject();
+                first.insert(QStringLiteral("label"), QStringLiteral("Different"));
+                options[0] = first;
+                rejects(QStringLiteral("options"), options);
+                options = original.value("options").toArray();
+                first = options.first().toObject();
+                first.insert(QStringLiteral("extra"), 1);
+                options[0] = first;
+                rejects(QStringLiteral("options"), options);
+                options = original.value("options").toArray();
+                const QJsonValue firstOption = options.at(0);
+                options[0] = options.at(1);
+                options[1] = firstOption;
+                rejects(QStringLiteral("options"), options);
+            }
         }
     }
 
@@ -487,21 +566,23 @@ private slots:
         QCOMPARE(pa.value("category").toObject().value("coverage"), QJsonValue("partial"));
         const QJsonArray sections = pa.value("pages").toArray().first().toObject()
             .value("sections").toArray();
-        QCOMPARE(sections.size(), 2);
+        QCOMPARE(sections.size(), 3);
         QCOMPARE(sections.at(0).toObject().value("title"), QJsonValue("Power"));
-        QCOMPARE(sections.at(1).toObject().value("title"), QJsonValue("Raw ADC Values"));
+        QCOMPARE(sections.at(1).toObject().value("title"), QJsonValue("PA Telemetry"));
+        QCOMPARE(sections.at(2).toObject().value("title"), QJsonValue("Raw ADC Values"));
         QJsonArray controls = sections.at(0).toObject().value("controls").toArray();
-        for (const QJsonValue& value : sections.at(1).toObject().value("controls").toArray()) {
+        for (const QJsonValue& value : sections.at(2).toObject().value("controls").toArray()) {
             controls.append(value);
         }
-        QCOMPARE(controls.size(), 6);
+        QCOMPARE(controls.size(), 7);
         const QStringList names{QStringLiteral("forwardPowerWatts"),
+                                QStringLiteral("forwardRawPowerWatts"),
                                 QStringLiteral("reflectedPowerWatts"), QStringLiteral("swr"),
                                 QStringLiteral("power"), QStringLiteral("forwardAdcRaw"),
                                 QStringLiteral("reflectedAdcRaw")};
         for (int i = 0; i < controls.size(); ++i) {
             const QJsonObject valid = controls.at(i).toObject();
-            if (i == 3) {
+            if (i == 4) {
                 QVERIFY(SetupDescriptionService::validatePaDriveReadoutBinding(valid));
                 QVERIFY(!SetupDescriptionService::validatePaReadoutBinding(valid));
                 QCOMPARE(valid.value("binding").toObject().value("property").toObject()
@@ -538,19 +619,25 @@ private slots:
             QVERIFY(SetupDescriptionService::validatePaReadoutBinding(valid));
             QCOMPARE(valid.value("binding").toObject().value("property").toObject()
                          .value("name").toString(), names.at(i));
-            QCOMPARE(valid.value("decimals").toInt(), i < 3 ? 2 : 0);
-            QCOMPARE(valid.value("unit"), QJsonValue(i < 2 ? "W" : ""));
+            const bool raw = i >= 5;
+            const int minimum = i == 1 ? 2 : 1;
+            QCOMPARE(valid.value("decimals").toInt(), raw ? 0 : 2);
+            QCOMPARE(valid.value("unit"), QJsonValue(i <= 2 ? "W" : ""));
+            QCOMPARE(valid.value("gate"), QJsonValue(QJsonObject{
+                {"capability", "txReadingsVersion"}, {"min", minimum}}));
             auto rejected = [&valid](const QString& field, const QJsonValue& value) {
                 QJsonObject bad = valid;
                 bad.insert(field, value);
                 QVERIFY(!SetupDescriptionService::validatePaReadoutBinding(bad));
             };
             rejected(QStringLiteral("kind"), QStringLiteral("decimal"));
-            rejected(QStringLiteral("decimals"), i < 3 ? QJsonValue(0) : QJsonValue(2));
+            rejected(QStringLiteral("decimals"), raw ? QJsonValue(2) : QJsonValue(0));
             rejected(QStringLiteral("decimals"), 7);
             rejected(QStringLiteral("decimals"), 1.5);
             rejected(QStringLiteral("unit"), QStringLiteral("dB"));
             rejected(QStringLiteral("gate"), QJsonObject{{"capability", "txStateVersion"}, {"min", 1}});
+            rejected(QStringLiteral("gate"), QJsonObject{{"capability", "txReadingsVersion"},
+                                                          {"min", minimum == 1 ? 2 : 1}});
             rejected(QStringLiteral("gate"), QJsonObject{{"capability", "txReadingsVersion"}, {"min", 1}, {"transmit", true}});
             rejected(QStringLiteral("gate"), QJsonObject{{"capability", "txReadingsVersion"}, {"min", 1}, {"offAir", true}});
             QJsonObject bad = valid;
@@ -611,15 +698,42 @@ private slots:
         for (int version = 1; version <= 4; ++version) {
             const QJsonObject older = QJsonDocument::fromJson(
                 SetupDescriptionService::fitCategoryForVersion(source, version).toUtf8()).object();
-            QCOMPARE(findControls(older).size(), 6);
+            QCOMPARE(findControls(older).size(), 9);
         }
         const QJsonObject current = QJsonDocument::fromJson(
             SetupDescriptionService::fitCategoryForVersion(source, 5).toUtf8()).object();
         QCOMPARE(current.value("version"), QJsonValue(5));
-        QCOMPARE(findControls(current).size(), 8);
+        QCOMPARE(findControls(current).size(), 11);
         const QJsonArray telemetry = current.value("pages").toArray().last().toObject()
             .value("sections").toArray().at(1).toObject().value("controls").toArray();
-        QCOMPARE(telemetry.size(), 2);
+        QCOMPARE(telemetry.size(), 4);
+        const QStringList scaledNames{QStringLiteral("forwardAdcVolts"),
+                                      QStringLiteral("reflectedAdcVolts")};
+        for (int i = 2; i < 4; ++i) {
+            const QJsonObject valid = telemetry.at(i).toObject();
+            QVERIFY(SetupDescriptionService::validatePaReadoutBinding(valid));
+            QCOMPARE(valid.value("binding").toObject().value("property").toObject()
+                         .value("name"), QJsonValue(scaledNames.at(i - 2)));
+            QCOMPARE(valid.value("gate"), QJsonValue(QJsonObject{
+                {"capability", "txReadingsVersion"}, {"min", 2}}));
+            QCOMPARE(valid.value("decimals"), QJsonValue(2));
+            QCOMPARE(valid.value("unit"), QJsonValue("V"));
+            for (const QJsonObject& wrong : {
+                     QJsonObject{{"capability", "txReadingsVersion"}, {"min", 1}},
+                     QJsonObject{{"capability", "txReadingsVersion"}, {"min", 2}, {"offAir", true}}}) {
+                QJsonObject bad = valid;
+                bad.insert("gate", wrong);
+                QVERIFY(!SetupDescriptionService::validatePaReadoutBinding(bad));
+            }
+            QJsonObject bad = valid;
+            bad.insert("binding", QJsonObject{{"property", QJsonObject{
+                {"object", "txState"}, {"name", "alcDb"}}}});
+            QVERIFY(!SetupDescriptionService::validatePaReadoutBinding(bad));
+            bad = valid;
+            bad.insert("binding", QJsonObject{{"property", QJsonObject{
+                {"object", "txState"}, {"name", scaledNames.at(i - 2)}}}, {"write", true}});
+            QVERIFY(!SetupDescriptionService::validatePaReadoutBinding(bad));
+        }
         const QStringList names{QStringLiteral("paCurrentAmps"), QStringLiteral("supplyVolts")};
         for (int i = 0; i < 2; ++i) {
             const QJsonObject valid = telemetry.at(i).toObject();
@@ -662,13 +776,13 @@ private slots:
         service.setRadioContext(ampsAbsent, radio.hardwareProfile().model);
         const QJsonObject noAmps = QJsonDocument::fromJson(
             SetupDescriptionService::fitCategoryForVersion(service.pa(), 5).toUtf8()).object();
-        QCOMPARE(findControls(noAmps).size(), 7);
+        QCOMPARE(findControls(noAmps).size(), 10);
         BoardCapabilities voltsAbsent = radio.boardCapabilities();
         voltsAbsent.hasPaVoltsTelemetry = false;
         service.setRadioContext(voltsAbsent, radio.hardwareProfile().model);
         const QJsonObject noVolts = QJsonDocument::fromJson(
             SetupDescriptionService::fitCategoryForVersion(service.pa(), 5).toUtf8()).object();
-        QCOMPARE(findControls(noVolts).size(), 7);
+        QCOMPARE(findControls(noVolts).size(), 10);
     }
 
     void categoriesLoadAndMirrorAsStrings()
@@ -1411,7 +1525,8 @@ private slots:
             QCOMPARE(displayControls, expected >= 4 ? 14 : 11);
             const QJsonObject appearance = QJsonDocument::fromJson(setupCategoryOnWire(
                 *core.app, "appearance", SessionMessageKind::ObjectCreate).toUtf8()).object();
-            QCOMPARE(appearance.value("version"), QJsonValue(qMin(expected, 4)));
+            QCOMPARE(appearance.value("version"), QJsonValue(expected >= 7 ? 7 : qMin(expected, 4)));
+            QCOMPARE(appearance.value("pages").toArray().size(), expected >= 7 ? 2 : 1);
             QCOMPARE(appearance.value("pages").toArray().first().toObject()
                          .value("sections").toArray().first().toObject()
                          .value("controls").toArray().size(), 10);
@@ -1491,7 +1606,8 @@ private slots:
         check(4, kSessionProtocolMinor, 4);
         check(5, kSessionProtocolMinor, 5);
         check(6, kSessionProtocolMinor, 6);
-        check(9, kSessionProtocolMinor, 6);
+        check(7, kSessionProtocolMinor, 7);
+        check(9, kSessionProtocolMinor, 7);
         check(2, quint16(kRadioIdentitySessionProtocolMinor - 1), 0);
         check(3, quint16(kRadioIdentitySessionProtocolMinor - 1), 0);
     }
@@ -1510,15 +1626,16 @@ private slots:
             }
             return controls;
         };
-        for (int version = 1; version <= 5; ++version) {
+        for (int version = 1; version <= 9; ++version) {
             const QJsonObject display = QJsonDocument::fromJson(
                 SetupDescriptionService::fitCategoryForVersion(service.display(), version).toUtf8()).object();
             const QJsonObject appearance = QJsonDocument::fromJson(
                 SetupDescriptionService::fitCategoryForVersion(service.appearance(), version).toUtf8()).object();
             QCOMPARE(display.value("version"), QJsonValue(qMin(version, 4)));
-            QCOMPARE(appearance.value("version"), QJsonValue(qMin(version, 4)));
+            QCOMPARE(appearance.value("version"), QJsonValue(version >= 7 ? 7 : qMin(version, 4)));
             QCOMPARE(controlsOf(display).size(), version < 4 ? 11 : 14);
-            QCOMPARE(controlsOf(appearance).size(), 10);
+            QCOMPARE(controlsOf(appearance).size(), version < 7 ? 10 : 13);
+            QCOMPARE(appearance.value("pages").toArray().size(), version < 7 ? 1 : 2);
             for (const QJsonObject& category : {display, appearance}) {
                 for (const QJsonValue& raw : controlsOf(category)) {
                     const QJsonObject control = raw.toObject();

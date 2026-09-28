@@ -852,6 +852,13 @@ colours for the same signal.
   real timer regression covers both notice and notice-clear destruction. Fresh
   app/Core builds and four TCI/VAX/controller suites pass (65.01 s). This verifies
   functional integration, not resolution of the severe load stall.
+  A subsequent bounded 30-second baseline/load pair measured CPU and wall
+  time inside each conversion quantum. Loaded maxima of 8.51/7.62 ms included
+  at least 8.32/7.39 ms not executing on the worker thread; all 7,500 packets
+  per receiver were decoded without history loss. This narrows measurement
+  toward scheduling or blocking but neither reproduces nor explains the
+  earlier severe stall. Temporary instrumentation was restored byte-for-byte;
+  the rebuilt app/Core and both full restored TCI suites pass (19.62 s).
 - Plan: remote-window TCI audio parity and real-load acceptance.
 
 ### G-52: Catalog capability-order fixture missed two integrated appended fields
@@ -998,6 +1005,20 @@ colours for the same signal.
   protocol-stage markers without raw SDP, candidates or certificates. Its
   50-case run passed (14.14 s), followed by the six-suite trunk integration
   (44.26 s). The production deadline is unchanged; the cause remains OPEN.
+  A later eleven-suite parallel PA-readout check reproduced the failure in
+  `session-verbs-tgxl`: both starts succeeded, neither side opened or failed,
+  and the unchanged bound expired after 15,001 ms. Ten suites passed. The
+  failing row later passed alone in 0.52 s and the full conformance suite
+  passed alone in 65.26 s; those results do not close the load failure.
+  The original parallel log and stage state are retained for investigation.
+  The conformance join now also captures the existing safe fixed library
+  stages and structural description/candidate acceptance events, with bounded
+  shared lifetime and the same 15-second deadline. Its failure assertion
+  includes the evidence and current load, so Qt's exhausted warning allowance
+  cannot hide it. No connection material is retained. The rebuilt conformance,
+  data-channel and station suites pass (42.87 s; initial load
+  12.96/14.88/14.42), without reproducing the failure. This improves the next
+  observation; the cause and production repair remain open.
 - Plan: integrated protocol reliability under real host load.
 
 ### G-58: Setting-backed toggles need explicit boolean string encoding
@@ -1756,7 +1777,15 @@ colours for the same signal.
   capability gate. It is the sixth PA readout, remains visible while keyed,
   and sends no write. Lead review and the combined app/Core build plus four
   explicitly rebuilt Setup/native PA suites pass (6.39 s; load before run
-  10.36/9.30/9.08). Derived readings and PA actions remain open.
+  10.36/9.30/9.08). Signed `69ecac959` now appends three outbound Core-scaled
+  readings: raw forward watts and forward/reverse ADC volts, gated by
+  `txReadingsVersion: 2`. They reuse existing hardware scaling and reset with
+  the session. Native and published PA values, same-count model changes and
+  client write refusal are covered. Root reviewed the implementation and the
+  combined app/Core build plus twelve full named suites pass (50.37 s;
+  starting load 20.16/18.00/15.08). This pass does not resolve the earlier
+  intermittent connection-open finding under G-57. Combined ADC overload,
+  peak/min/reset and the remaining PA actions are still open.
   Signed `e72fa12e` and lifetime follow-up `d9dc53cb` add authenticated,
   connected-radio-bound single-band RX/TX antenna commands. Capability
   withdrawal and confirmation revalidate the same radio and session; existing
@@ -2082,8 +2111,15 @@ colours for the same signal.
   Signed `04a6da23` and compatibility follow-up `b0bf9d264` also publish all ten
   built Colors & Theme swatches with exact native labels/tooltips and explicit
   RGBA defaults in V4. Root app/Core and eleven full named suites pass
-  (55.01 s; load 8.03/15.18/18.17). Meter Styles, local Display controls,
-  reset/copy actions and remaining derived/contextual controls are still open.
+  (55.01 s; load 8.03/15.18/18.17). Signed `e65100dd4` adds the three built
+  S-meter style controls in negotiated Appearance V7: face, peak hold and
+  decay. Their closed phone dispatch identities map to the phone's existing
+  typed model, as its owner confirmed. No Core write authority is added.
+  V1-V3 retain ten swatches without defaults; V4-V6 retain the previous
+  Appearance V4 shape; V7 adds only the three new controls. Root app/Core and
+  all seven rebuilt Setup, settings-scope and S-meter suites pass (9.12 s).
+  The phone renderer is still phone-owned work. Local Display controls,
+  reset/copy actions and remaining derived/contextual controls remain open.
   The phone owner confirmed that literal PascalCase binding names
   map to its existing typed per-pan/current-band model and that explicit
   `#RRGGBBAA` colours suit its boundary conversions. The phone model already
@@ -2096,10 +2132,9 @@ colours for the same signal.
   apply live to the Core analyzer, without an invented RX subscription field.
   This clarifies the plan's overly broad subscription label. Remaining local
   controls, readouts, active-band grid context, 3D page and actions still need
-  exact publication and phone checks. The next lane publishes the ten built
-  Colors and Theme swatches using the agreed local keys and RGBA boundary;
-  Reset Colours and Meter Styles remain separate. Partial publication does
-  not close this gap.
+  exact publication and phone checks. The ten Colors and Theme swatches and
+  three Meter Styles controls are now described; Reset Colors remains open.
+  Partial publication does not close this gap.
 - Plan: phone Display/Appearance description and renderer dependencies, and
   remote-window parity.
 
@@ -2138,6 +2173,110 @@ colours for the same signal.
   tooltips are corrected. The phone has not advertised Setup, so no
   shipped-client outage is claimed; its parser import remains phone-owned.
 - Plan: complete Setup descriptions and strict phone compatibility.
+
+### G-106: An antenna description filtered by live readiness can stay missing after connection
+
+- Evidence: lead review of the V6 antenna tables found that their per-peer
+  projection used the current row-edit capability instead of the peer's
+  declared row feature. A paired loopback regression reproduced it: sign in
+  before the same Hermes radio connects, receive scalars without tables,
+  then connect and receive row capability 1 but no table. The description
+  bytes/revision did not change, so no mirror delta was emitted.
+- Ruling basis: JJ requires complete working desktop/phone dependencies.
+  The existing contract omits tables for peers without the feature; a peer
+  that declares it may receive the supported table while its live capability
+  keeps editing unavailable. Transient readiness must gate edits, not remove
+  the static description. No new authority or stale-radio permission follows.
+- Status: signed `7102a610` corrects the projection and is integrated through
+  signed `68245ce22`. Paired regression coverage verifies offline admission,
+  same-radio connection, row editing, capability withdrawal and reconnect.
+  The merged worker app/Core build and all four full Setup/row-command suites
+  pass (30, 36, 15 and 10 tests). Root reviewed the change and reused that
+  tested merge. Combined trunk app/Core and all twelve rebuilt antenna, PA,
+  Setup and session suites pass (50.37 s; starting load 20.16/18.00/15.08).
+  Existing Core identity/confirmation checks remain.
+- Plan: Hardware antenna description and session lifecycle parity.
+
+### G-107: Desktop pairing still requires an address instead of accepting only the RV code
+
+- Evidence: the running verified Mac preview at signed `5c4ca88d` exposes
+  Add a Core by code, but its dialog requires a Core address and its
+  controller always calls direct `pairByCode`. The existing Core client
+  already implements `pairByCodeFromAnywhere`. Its authenticated mailbox
+  result has an identity and label with no address; the desktop currently
+  turns that into an invalid URL, and its saved-target validation requires
+  an address. Merely changing the button would not complete the flow.
+- JJ's ruling: on 2026-09-28 he made code-only desktop RV pairing the number
+  one priority because he wants to test it. The normal app flow must require
+  only the pairing code, with connection details handled automatically as
+  in the iPhone app. This supersedes further Setup publication as the next
+  implementation priority. He then requested a mockup before implementation
+  and explicitly approved the suggestion and mockup on 2026-09-28. The normal
+  dialog shows the code alone, with direct-address entry available as an
+  optional path; the surrounding Connections layout stays as shown.
+- Required behavior: Connections > Add a Core by code accepts the code
+  alone, uses the existing secure mailbox exchange, saves the verified Core
+  identity under its name and connects through the existing path selection.
+  Direct access is preferred when available and relay fallback stays
+  automatic. Saved pairing survives network/address changes and ordinary
+  reconnect/relaunch. An address remains an optional direct path. Missing,
+  invalid or unavailable service targets must never fall back to starting
+  a local Core. Existing trust and certificate checks remain mandatory.
+  V3 saved-target migration preserves existing trust and the old document
+  bytes initially. Subsequent forgets and edits also remove or update matching
+  older records, as the existing V1 compatibility rule requires, so downgrading
+  cannot restore forgotten credentials. Older lists gain no new V3 records;
+  addressless records cannot be represented there. Failed saves restore every
+  prior value. This narrows the lead's original blanket rollback-snapshot
+  proposal after inspecting the existing credential-removal invariant.
+- Status: approved mockup recorded and implementation resumed from signed
+  `68245ce22`. Sol 6 high owns the desktop dialog/controller, addressless target storage
+  and reconnect integration; Astra lead owns identity/lifetime review.
+  The frozen preview remains open for JJ and does not yet contain this fix.
+  Automated end-to-end evidence and a new verified preview are required
+  before calling the feature ready for JJ's live test.
+- Plan: approved rendezvous desktop-client flow and remote-window parity.
+
+### G-108: App wording mixes American and British spellings
+
+- Evidence: the current UI includes Colour, centre, colours, behaviour,
+  Normalise and recognised in labels, tooltips and status messages. Several
+  of these strings are also published in the Core's Setup descriptions.
+- JJ's ruling: on 2026-09-28 he requested American English throughout the app,
+  giving color and center as examples, while explicitly preserving attribution
+  and other people's comments.
+- Required behavior: use American spelling in authored app presentation text
+  and matching Setup descriptions and expected results. Preserve existing
+  code comments, verbatim upstream/legal text, proper names, stable APIs,
+  settings keys, wire/schema fields and exact reason-matching keys. Where a
+  protocol key contains British spelling, change its displayed text only.
+- Status: authored wording and matching Setup descriptions implemented in
+  signed `50be8c9a8`. Root compared all 21 changed C++ comment streams with
+  their originals: byte-identical. The eight JSON edits change only labels
+  and tooltips. Integrated app/Core build and all eight rebuilt affected
+  suites pass (14.47 s), including native/description parity. A few literals
+  in the pairing worker's owned files are included with G-107. Compatibility
+  keys and verbatim source text remain intact. The phone owner has received
+  the same ruling for phone-owned presentation strings.
+- Plan: consistent desktop/Core/phone-facing wording without compatibility or
+  attribution changes.
+
+### G-109: The wording test does not inventory the new antenna refusal paths
+
+- Evidence: American English verification passed seven of eight suites, but
+  `tst_station_reason_wording` reported five unlisted forwarding expressions
+  in StationServer, StationSharedSettings and SessionCommandDispatcher. The
+  new radio-bound antenna guards pass on existing human-readable reasons;
+  the test's explicit source inventory had not been extended for those paths.
+- Ruling basis: JJ requires discovered failures to be investigated and fixed.
+  This deterministic source-inventory failure is independent of spelling and
+  machine load; no wording exemption or scanner relaxation is needed.
+- Status: fixed in signed `5e1edb587`, with five exact forwarding entries
+  whose reason-producing functions are already scanned. Root reviewed those
+  functions and the test inventory. The rebuilt full wording suite passes
+  alone (6.15 s) and in the eight-suite trunk integration (14.47 s total).
+  Existing coverage floors, production behavior and comments remain unchanged.
+- Plan: keep all Core refusal messages covered by the operator-wording check.
 
 ## How this addendum is kept
 

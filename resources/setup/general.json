@@ -148,7 +148,7 @@
             },
             {
               "id": "general.options.swapRedBlue",
-              "label": "Swap red and blue PS-A feedback colours",
+              "label": "Swap red and blue PS-A feedback colors",
               "tooltip": "For users with red/blue color blindness or alternate display preferences. Mirror of FB-label left-click.",
               "kind": "toggle",
               "binding": {

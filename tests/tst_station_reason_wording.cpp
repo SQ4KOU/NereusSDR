@@ -808,7 +808,11 @@ const QList<ReasonSource>& reasonSources()
           // These functions' own sentences are scanned in this file;
           // transmitSettingOnAirRefusal also relays RadioModel::onAirReason.
           QStringLiteral("transmitSettingOnAirRefusal(key)"),
-          QStringLiteral("bandPlanRefusal(key, message.updates.first().value)")}},
+          QStringLiteral("bandPlanRefusal(key, message.updates.first().value)"),
+          // Antenna admission forwards the server helper, whose own words
+          // and the dispatcher's returned words are scanned in these entries.
+          QStringLiteral("radioAntennaRowRefusal(transport, message)"),
+          QStringLiteral("antennaRefusal")}},
         // iPhone app Task 74 (R-IOS-30): the confirm step's answers and
         // refusals, confirm.request and notice reasons, and the chooser's
         // `why`. Device names inserted are the operator's own words (ruling
@@ -903,7 +907,10 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("refusal"), QStringLiteral("applied ? QString() : refusal"),
           // A deferred rate change's own result (the dispatcher's, scanned
           // there).
-          QStringLiteral("result.reason")}},
+          QStringLiteral("result.reason"),
+          // Confirmed antenna changes forward the same scanned server helper.
+          QStringLiteral("radioAntennaRowRefusal(transport, question.original)"),
+          QStringLiteral("antennaRefusal")}},
         // command.result for every verb.
         // The device's name ("Power Genius", "Tuner Genius") and what the
         // request asked, both this file's own literals
@@ -957,7 +964,9 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("onAir"),
           // R-R3-46 (parity Task 14): RadioModel::requestIoBoardI2c's
           // refusal (scanned in RadioModel.cpp's entry), on a later turn.
-          QStringLiteral("ok ? QString() : reason")}},
+          QStringLiteral("ok ? QString() : reason"),
+          // This file's radio-antenna helper returns its scanned literals.
+          QStringLiteral("radioAntennaRowRefusal(invoke, m_radioModel)")}},
         // iPhone app plan Task 34 (R-IOS-13): every transmit refusal's
         // sentence. The device name put into two of them is the operator's
         // own word (ruling 4.3); a band plan reason is the band plan's

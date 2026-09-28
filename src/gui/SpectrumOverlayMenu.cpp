@@ -304,9 +304,9 @@ void SpectrumOverlayMenu::buildUI()
     m_dssGainSlider->setRange(0, 100);
     m_dssGainSlider->setValue(70);
     m_dssGainSlider->setToolTip(QStringLiteral(
-        "3D surface colour gain: how far down the signal range the colormap "
-        "reaches.\nHigher = colour down toward the noise floor; lower = "
-        "colour only on the strongest signals."));
+        "3D surface color gain: how far down the signal range the colormap "
+        "reaches.\nHigher = color down toward the noise floor; lower = "
+        "color only on the strongest signals."));
     m_dssGainLabel = new QLabel(QString::number(70), this);
     dssGainRow->addWidget(m_dssGainSlider);
     dssGainRow->addWidget(m_dssGainLabel);

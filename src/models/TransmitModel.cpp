@@ -1007,7 +1007,7 @@ QString TransmitModel::settingRangeRefusal(const QByteArray& propertyName,
     }
     if (propertyName == "txEqFreqsJson") {
         return bands(kTxEqFreqHzMin, kTxEqFreqHzMax,
-            QStringLiteral("Choose ten TX EQ band centres, each from %1 to %2 Hz.")
+            QStringLiteral("Choose ten TX EQ band centers, each from %1 to %2 Hz.")
                 .arg(kTxEqFreqHzMin).arg(kTxEqFreqHzMax));
     }
     if (propertyName == "cfcCompressionJson") {
@@ -1028,7 +1028,7 @@ QString TransmitModel::settingRangeRefusal(const QByteArray& propertyName,
     }
     if (propertyName == "cfcEqFreqJson") {
         const QString base = bands(kCfcEqFreqHzMin, kCfcEqFreqHzMax,
-            QStringLiteral("Choose ten CFC band centres, each from %1 to %2 Hz.")
+            QStringLiteral("Choose ten CFC band centers, each from %1 to %2 Hz.")
                 .arg(kCfcEqFreqHzMin).arg(kCfcEqFreqHzMax));
         if (!base.isEmpty()) { return base; }
         CfcProfile::Profile p;
@@ -1045,7 +1045,7 @@ QString TransmitModel::settingRangeRefusal(const QByteArray& propertyName,
         p.minHz = p.f.front(); p.maxHz = p.f.back();
         p.postMinHz = p.postF.front(); p.postMaxHz = p.postF.back();
         return CfcProfile::encode(p).isEmpty()
-            ? QStringLiteral("Choose CFC band centres in increasing order within the curve range.") : QString();
+            ? QStringLiteral("Choose CFC band centers in increasing order within the curve range.") : QString();
     }
     if (propertyName == "cfcPostEqBandGainJson") {
         const QString base = bands(kCfcPostEqBandGainDbMin, kCfcPostEqBandGainDbMax,

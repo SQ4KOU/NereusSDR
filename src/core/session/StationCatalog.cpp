@@ -891,7 +891,7 @@ void StationCatalog::setInputs(const Inputs& inputs)
     const QString json = QString::fromUtf8(
         QJsonDocument(build(inputs)).toJson(QJsonDocument::Compact));
     if (json.toUtf8().size() > kMaxJsonBytes) {
-        qCWarning(lcCatalog) << "The Core's catalogue is" << json.toUtf8().size()
+        qCWarning(lcCatalog) << "The Core's catalog is" << json.toUtf8().size()
                              << "bytes, over its" << kMaxJsonBytes << "byte limit";
     }
     if (json == m_json) {

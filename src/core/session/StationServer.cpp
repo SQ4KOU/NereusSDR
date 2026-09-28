@@ -7109,7 +7109,7 @@ void StationServer::sendToPeer(SessionTransport* transport, const SessionMessage
             && message.kind != SessionMessageKind::Schema) {
             SessionMessage fitted = message;
             const int declared = peer->features.value(QByteArrayLiteral("setupDescription"), 0);
-            const int version = qMin(declared, 6);
+            const int version = qMin(declared, 7);
             // The table describes the supported board's static row shape.
             // A disconnected radio withdraws the live row capability, but a
             // paired peer that negotiated rows keeps this description across
@@ -9665,7 +9665,7 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             caps.stationCatalogVersion = stationCatalogVersion();
             caps.setupDescriptionVersion = peerDeclares(
                 transport, QByteArrayLiteral("setupDescription"), 1)
-                ? qMin(peer->features.value(QByteArrayLiteral("setupDescription")), 6) : 0;
+                ? qMin(peer->features.value(QByteArrayLiteral("setupDescription")), 7) : 0;
             // iPhone app Task 20: display extras.
             caps.displayExtrasVersion = media ? displayExtrasVersion() : 0;
             // R-R3-49 (parity Task 1): the transmit settings.
@@ -10164,10 +10164,12 @@ int StationServer::txReadingsVersion() const
 {
     // Parity Task 33 (R-R3-49, R-R3-32): the raw PA readings come from the
     // Core's own radio model, and the CFC display travels as a record
-    // stream, which a Core without record streams does not keep.
-    return m_recordStreams.find(QString::fromLatin1(TransmitState::kCfcStream))
+    // stream, which a Core without record streams does not keep. Version 2
+    // adds the Core-scaled PA values from that local radio's raw samples.
+    return !m_radioModel.isNull() && m_radioModel->role() != RadioModel::Role::Remote
+            && m_recordStreams.find(QString::fromLatin1(TransmitState::kCfcStream))
             != m_recordStreams.end()
-        ? 1
+        ? 2
         : 0;
 }
 

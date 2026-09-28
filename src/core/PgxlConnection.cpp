@@ -931,7 +931,7 @@ void PgxlConnection::onReconnectTimeout()
         qCDebug(lcPgxl) << "discarded stale reconnect timeout";
         return;
     }
-    qCInfo(lcPgxl) << "reconnect timeout: dialling" << host << ":" << port;
+    qCInfo(lcPgxl) << "reconnect timeout: dialing" << host << ":" << port;
     queueDial(host, port, generation);
 }
 

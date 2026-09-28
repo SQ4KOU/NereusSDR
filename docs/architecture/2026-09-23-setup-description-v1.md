@@ -1,4 +1,4 @@
-# Setup description versions 1–6
+# Setup description versions 1–7
 
 The Core sends the desktop's built Setup pages as JSON strings on the read-only
 `setup` mirror object (`SetupDescription`). It has one string property per
@@ -50,7 +50,7 @@ desktop's exact text, including an empty string when the desktop has none.
 
 Every control has exactly one `binding`: `setting` (an AppSettings key routed
 by `classifySettingsKey`), `property` (a mirrored object and property),
-`command` (a station verb), or `phone` (a key the phone keeps locally). The
+`command` (a station verb), or `phone` (a closed phone-owned dispatch identity). The
 version-3 Settings Validation panel and version-6 antenna tables have their
 own closed `settingsHygiene` and `antennaRows` bindings; neither extends
 those generic binding rules. A
@@ -81,10 +81,33 @@ edited value at this boundary is an eight-digit `#RRGGBBAA` string, including
 the final alpha byte. This is ColorSwatchButton's phone-facing format; the
 desktop's own AppSettings uses Qt `HexArgb` (`#AARRGGBB`) and is not copied to
 the phone. Core accepts only the ten named IDs/phone keys and exact default
-colours. The hidden Waterfall Low Color row, Reset Colors action, and Meter
-Styles controls remain undescribed. Appearance's source category is V4 so its
-RGBA defaults are sent only to V4+ peers; older projections retain all ten
-colour controls without `default`. No station settings permission is needed.
+colors. The hidden Waterfall Low Color row and Reset Colors action remain
+undescribed. Appearance's source category is V7; its RGBA defaults are sent
+only to V4+ peers, while older projections retain all ten
+color controls without `default`. No station settings permission is needed.
+
+Version 7 also publishes the built Appearance > Meter Styles > S-Meter page,
+with exactly three phone-owned live controls. `appearance.meterStyles.face`
+is a `choice` bound to `SMeter_FaceStyle` with integer options 0–6 in native
+order: Aged Cream, VU Amber, Collins White, Blackface, Carbon, Ice, and
+Classic (flat); default 0. The phone maps them to its existing typed face
+cases `agedCream`, `vuAmber`, `collinsWhite`, `blackface`, `carbon`, `ice`,
+and `classic`. `appearance.meterStyles.peakHold` is a `toggle` bound to
+`PeakHoldEnabled`, default `true`. `appearance.meterStyles.peakDecay` is a
+`choice` bound to `PeakDecayRate`, with integer options 0 Fast (20 dB/s),
+1 Medium (10 dB/s), and 2 Slow (5 dB/s); default 1. The phone maps these to
+its existing `fast`, `medium`, and `slow` cases. These binding strings are
+dispatch identities for existing phone model actions, not independent
+phone storage keys or Core settings writes. Each control has
+`requiresDescriptionVersion:7`; options use only the closed numeric
+`[{"value":<integer>,"label":<native text>}]` shape. The Core accepts only
+these three IDs, bindings, kinds, exact options/defaults, labels and tooltips.
+V1–V3 receive the old ten swatches without defaults, V4–V6 receive the old
+version-4 Appearance shape with ten defaults, and V7+ receive the new page.
+The existing whole-Setup on-air and session freshness lock still applies;
+the description adds no permission or capability gate. VFO Small Filter,
+Skins, and unused controls remain omitted. Phone rendering is owned by the
+phone implementation and is not established by this Core publication.
 
 An optional `decimals` field on a `kind:readout` control is an integer from 0
 through 6. It formats a finite numeric mirrored value with that many decimal
@@ -96,9 +119,17 @@ including when the source property happens to be writable. A readout without
 uses five `txState` scalars with `txReadingsVersion:1` and the selected Drive
 setpoint from `transmit.power` (Int64) with `transmitSettingsVersion:1`. Drive
 is a readout even though its mirrored source is writable; it sends no write.
-These fields imply no derived formula, peak/min tracker, or reset action.
+Three additional readouts use the Core's existing PA scaling of its current
+board's raw samples: `forwardRawPowerWatts` (W), `forwardAdcVolts` (V), and
+`reflectedAdcVolts` (V), all Float64 from `txState` with
+`txReadingsVersion:2`. They have two decimals and no transmit or off-air
+gate. Their IDs are `pa.values.forwardRawPower`, `pa.values.forwardVoltage`,
+and `pa.values.reflectedVoltage`. All Setup versions can carry these standard
+property readouts; the independent capability gate makes them unavailable
+with an older Core. There is no client formula, peak/min tracker, or reset
+action in these descriptions.
 `setup.pa` is appended after `setup.revision` in the fixed mirror schema and
-is empty on a board without an integrated PA or on an RX-only SKU. Its six
+is empty on a board without an integrated PA or on an RX-only SKU. Its nine
 readouts remain visible while the radio transmits; they require neither
 transmit permission nor an off-air gate. A peer without the negotiated
 Setup-description feature receives no `setup` mirror object.
@@ -114,8 +145,9 @@ command or result binding. The actual peer must separately declare
 nothing. A V3 peer still receives the older controls with their existing
 semantics. The Core filters every control above the peer's negotiated
 description version, drops empty sections and pages, and caps an unknown
-future declaration at version 6. Hardware has a version-6 ceiling, PA a
-version-5 ceiling, Display and Appearance version-4 ceilings; the other
+future declaration at version 7. Hardware has a version-6 ceiling, PA a
+version-5 ceiling, Display a version-4 ceiling, and Appearance a version-7
+ceiling with its prior version-4 projection for V4–V6; the other
 categories on this source retain version 3.
 No mirror field or ordinal changes.
 
@@ -180,7 +212,7 @@ Absent, malformed, stale, or unavailable settings disable their controls.
 V4 adds `default` metadata to these exact Display and Appearance controls.
 Display toggles use JSON booleans; its numeric controls use JSON numbers,
 with choice defaults as integer ordinals and FFT option defaults as their
-actual integer values. Appearance colour defaults are eight-digit
+actual integer values. Appearance color defaults are eight-digit
 `#RRGGBBAA` strings. Display's Hz/bin `kind:"decimal"` has `decimals:2` in
 V4. For V1–V3 peers, the Core strips `default` from all Display and Appearance
 controls and strips `decimals` from `kind:"decimal"`; it retains the controls,
@@ -206,7 +238,7 @@ disables it. Core rejects any altered or extended dependency envelope.
 Normalize is stored with the existing exact `True`/`False` setting encoding.
 V1–V3 omit it. The other Display controls retain their existing numeric ranges
 or ordinal string choices. The category and all three pages remain partial;
-local colours, palettes, per-band tables, derived readouts, and actions are not
+local colors, palettes, per-band tables, derived readouts, and actions are not
 described by this slice.
 
 The phone uses a current-session settings snapshot and the current canonical

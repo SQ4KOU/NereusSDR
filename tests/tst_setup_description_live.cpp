@@ -2,6 +2,7 @@
 #include <QtTest>
 
 #include "core/AppSettings.h"
+#include "core/PaTelemetryScaling.h"
 #include "core/FreeDVReporterClient.h"
 #include "core/settings/SettingsProxyServer.h"
 #include "core/session/SessionCommandDispatcher.h"
@@ -21,6 +22,50 @@ using namespace NereusSDR;
 class SetupDescriptionLiveTest : public QObject {
     Q_OBJECT
 private slots:
+    void pairedV7PublishesOnlyPhoneOwnedMeterStyles()
+    {
+        Core core;
+        Device current(QStringLiteral("Meter styles iPhone"), QStringLiteral("phone"));
+        Device older(QStringLiteral("Older meter styles iPhone"), QStringLiteral("phone"));
+        core.pair(current);
+        core.pair(older);
+        QHash<QByteArray, int> v7Features = kHolder;
+        v7Features.insert("setupDescription", 7);
+        auto* v7 = core.signIn(current, v7Features);
+        QVERIFY(admitted(v7));
+        QCOMPARE(capability(v7->received(), QStringLiteral("setupDescriptionVersion")),
+                 std::optional<qint64>(7));
+        const QJsonObject appearance = QJsonDocument::fromJson(latest(v7->received(),
+            QStringLiteral("setup"), QStringLiteral("appearance")).toString().toUtf8()).object();
+        QCOMPARE(appearance.value("version"), QJsonValue(7));
+        const QJsonArray pages = appearance.value("pages").toArray();
+        QCOMPARE(pages.size(), 2);
+        const QJsonArray styles = pages.at(1).toObject().value("sections").toArray()
+            .first().toObject().value("controls").toArray();
+        QCOMPARE(styles.size(), 3);
+        for (const QJsonValue& raw : styles) {
+            const QJsonObject control = raw.toObject();
+            QVERIFY(SetupDescriptionService::validateAppearanceMeterStyleBinding(control));
+            QCOMPARE(control.value("binding").toObject().size(), 1);
+            QVERIFY(control.value("binding").toObject().contains("phone"));
+            QVERIFY(!control.contains("gate"));
+            QVERIFY(!control.contains("valueEncoding"));
+        }
+        QHash<QByteArray, int> v6Features = kHolder;
+        v6Features.insert("setupDescription", 6);
+        auto* v6 = core.signIn(older, v6Features);
+        QVERIFY(admitted(v6));
+        QCOMPARE(capability(v6->received(), QStringLiteral("setupDescriptionVersion")),
+                 std::optional<qint64>(6));
+        const QJsonObject olderAppearance = QJsonDocument::fromJson(latest(v6->received(),
+            QStringLiteral("setup"), QStringLiteral("appearance")).toString().toUtf8()).object();
+        QCOMPARE(olderAppearance.value("version"), QJsonValue(4));
+        QCOMPARE(olderAppearance.value("pages").toArray().size(), 1);
+        QCOMPARE(olderAppearance.value("pages").toArray().first().toObject()
+                     .value("sections").toArray().first().toObject()
+                     .value("controls").toArray().size(), 10);
+    }
+
     void pairedV6RowsStayDescribedWhileRadioConnectsWithoutReconnect()
     {
         Core core;
@@ -329,7 +374,7 @@ private slots:
         QCOMPARE(pa.value("version"), QJsonValue(5));
         const QJsonArray telemetry = pa.value("pages").toArray().last().toObject()
             .value("sections").toArray().at(1).toObject().value("controls").toArray();
-        QCOMPARE(telemetry.size(), 2);
+        QCOMPARE(telemetry.size(), 4);
         QVERIFY(SetupDescriptionService::validatePaTelemetryReadoutBinding(telemetry.at(0).toObject()));
         QVERIFY(SetupDescriptionService::validatePaTelemetryReadoutBinding(telemetry.at(1).toObject()));
 
@@ -576,6 +621,7 @@ private slots:
     void pairedPaReadoutsMirrorMetersAndRawCountsWithoutWriteAuthority()
     {
         Core core;
+        allowTransmit(core);
         core.model->setBoardForTest(HPSDRHW::Saturn);
         RadioInfo info = core.model->currentRadioInfo();
         info.boardType = HPSDRHW::Saturn;
@@ -589,11 +635,11 @@ private slots:
         LoopbackTransport* app = core.signIn(phone, features);
         QVERIFY(admitted(app));
         QCOMPARE(capability(app->received(), QStringLiteral("txReadingsVersion")),
-                 std::optional<qint64>(1));
+                 std::optional<qint64>(2));
         const QJsonObject pa = QJsonDocument::fromJson(latest(app->received(),
             QStringLiteral("setup"), QStringLiteral("pa")).toString().toUtf8()).object();
         QVERIFY(!pa.isEmpty());
-        QCOMPARE(pa.value("pages").toArray().first().toObject().value("sections").toArray().size(), 2);
+        QCOMPARE(pa.value("pages").toArray().first().toObject().value("sections").toArray().size(), 3);
 
         core.model->handlePaTelemetryForTest(2400, 320, 0, 0, 0, 0);
         QVERIFY(core.model->radioStatus().forwardPowerWatts() > 0.0);
@@ -602,6 +648,15 @@ private slots:
                             QStringLiteral("forwardAdcRaw")).toInteger(), qint64(2400));
         QTRY_COMPARE(latest(app->received(), QStringLiteral("txState"),
                             QStringLiteral("reflectedAdcRaw")).toInteger(), qint64(320));
+        QTRY_COMPARE(latest(app->received(), QStringLiteral("txState"),
+                            QStringLiteral("forwardRawPowerWatts")).toDouble(),
+                     scaleFwdPowerWatts(HPSDRModel::ANAN_G2, 2400));
+        QTRY_COMPARE(latest(app->received(), QStringLiteral("txState"),
+                            QStringLiteral("forwardAdcVolts")).toDouble(),
+                     scaleFwdRevVoltage(HPSDRModel::ANAN_G2, 2400));
+        QTRY_COMPARE(latest(app->received(), QStringLiteral("txState"),
+                            QStringLiteral("reflectedAdcVolts")).toDouble(),
+                     scaleFwdRevVoltage(HPSDRModel::ANAN_G2, 320));
         QTRY_COMPARE(latest(app->received(), QStringLiteral("txState"),
                             QStringLiteral("forwardPowerWatts")).toDouble(),
                      core.model->radioStatus().forwardPowerWatts());
@@ -621,6 +676,31 @@ private slots:
         QVERIFY(!results.isEmpty());
         QVERIFY(!results.first().toObject().value("accepted").toBool(true));
         QCOMPARE(core.server->transmitState()->forwardAdcRaw(), qint64(2400));
+        QVERIFY(core.invoke(app, "tx.take", {}).value(QStringLiteral("accepted")).toBool());
+        QVERIFY(txPermitted(app));
+        const qint64 ownerWriteId = 877;
+        app->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
+            "txState", {MirrorUpdate{34, "forwardRawPowerWatts", MirrorWireKind::Float64, 1.0}},
+            static_cast<quint32>(ownerWriteId))));
+        QTRY_VERIFY(!propertyResult(app, ownerWriteId).isEmpty());
+        QVERIFY(!propertyResult(app, ownerWriteId).value("results").toArray()
+                     .first().toObject().value("accepted").toBool(true));
+        QCOMPARE(core.server->transmitState()->forwardRawPowerWatts(),
+                 scaleFwdPowerWatts(HPSDRModel::ANAN_G2, 2400));
+        Device observer(QStringLiteral("PA observer"), QStringLiteral("phone"));
+        core.pair(observer);
+        LoopbackTransport* other = core.signIn(observer, kHolder);
+        QVERIFY(admitted(other));
+        QVERIFY(!txPermitted(other));
+        const qint64 observerWriteId = 878;
+        other->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
+            "txState", {MirrorUpdate{35, "forwardAdcVolts", MirrorWireKind::Float64, 1.0}},
+            static_cast<quint32>(observerWriteId))));
+        QTRY_VERIFY(!propertyResult(other, observerWriteId).isEmpty());
+        QVERIFY(!propertyResult(other, observerWriteId).value("results").toArray()
+                     .first().toObject().value("accepted").toBool(true));
+        QCOMPARE(core.server->transmitState()->forwardAdcVolts(),
+                 scaleFwdRevVoltage(HPSDRModel::ANAN_G2, 2400));
     }
 
     void pairedPaDriveReadoutUsesSelectedPowerMirror()
@@ -644,7 +724,7 @@ private slots:
             QStringLiteral("setup"), QStringLiteral("pa")).toString().toUtf8()).object();
         const QJsonArray power = pa.value("pages").toArray().last().toObject()
             .value("sections").toArray().first().toObject().value("controls").toArray();
-        QCOMPARE(power.size(), 4);
+        QCOMPARE(power.size(), 5);
         const QJsonObject drive = power.last().toObject();
         QVERIFY(SetupDescriptionService::validatePaDriveReadoutBinding(drive));
         QCOMPARE(drive.value("kind"), QJsonValue("readout"));

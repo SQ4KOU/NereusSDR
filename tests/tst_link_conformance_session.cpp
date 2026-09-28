@@ -291,6 +291,7 @@
 #include "OperatorWording.h"
 #include "fakes/ConnectableRadioModel.h"
 #include "fakes/DataChannelPair.h"
+#include "fakes/DataChannelStartupEvidence.h"
 #include "fakes/LoopbackTransport.h"
 #include "fakes/UpgradedCoreToken.h"
 
@@ -1156,10 +1157,12 @@ QString TstLinkConformanceSession::run(const QString& id, const QJsonObject& fix
                                                            QString* diagnostic = nullptr) {
         QElapsedTimer elapsed;
         elapsed.start();
+        NereusSDR::Test::DataChannelStartupEvidence evidence;
         auto bridge = std::make_unique<NereusSDR::Test::DataChannelBridge>(
             joined, StationServer::kMaxIncomingMessageBytes,
             StationClient::kMaxIncomingMessageBytes, certificate, key,
-            [server](DataChannelTransport* end) { server->acceptTransport(end); });
+            [server](DataChannelTransport* end) { server->acceptTransport(end); },
+            nullptr, evidence.observer());
         NereusSDR::Test::DataChannelBridge* opened = bridge.get();
         bridges.push_back(std::move(bridge));
         // Real time: the DTLS and SCTP handshakes on this computer.
@@ -1168,7 +1171,8 @@ QString TstLinkConformanceSession::run(const QString& id, const QJsonObject& fix
         if (!didOpen && diagnostic) {
             *diagnostic = QStringLiteral("%1 elapsed=%2ms")
                               .arg(opened->openDiagnostic())
-                              .arg(elapsed.elapsed());
+                              .arg(elapsed.elapsed())
+                + QLatin1Char('\n') + evidence.diagnostic();
         }
         return didOpen;
     };

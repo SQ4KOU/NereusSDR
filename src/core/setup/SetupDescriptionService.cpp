@@ -170,13 +170,13 @@ bool validDiagnosticsEnvelope(const QJsonObject& root)
 bool validAppearanceEnvelope(const QJsonObject& root)
 {
     const QJsonArray pages = root.value(QStringLiteral("pages")).toArray();
-    if (root.size() != 3 || root.value(QStringLiteral("version")) != QJsonValue(4)
+    if (root.size() != 3 || root.value(QStringLiteral("version")) != QJsonValue(7)
         || root.value(QStringLiteral("category")) != QJsonValue(QJsonObject{
             {QStringLiteral("id"), QStringLiteral("appearance")},
             {QStringLiteral("title"), QStringLiteral("Appearance")},
             {QStringLiteral("where"), QStringLiteral("phone")},
             {QStringLiteral("coverage"), QStringLiteral("partial")}})
-        || pages.size() != 1) { return false; }
+        || pages.size() != 2) { return false; }
     const QJsonObject page = pages.first().toObject();
     const QJsonArray sections = page.value(QStringLiteral("sections")).toArray();
     if (page.size() != 5 || page.value(QStringLiteral("id")) != QJsonValue(QStringLiteral("appearance.colorsTheme"))
@@ -185,9 +185,21 @@ bool validAppearanceEnvelope(const QJsonObject& root)
         || page.value(QStringLiteral("coverage")) != QJsonValue(QStringLiteral("partial"))
         || sections.size() != 1) { return false; }
     const QJsonObject section = sections.first().toObject();
-    return section.size() == 2
-        && section.value(QStringLiteral("title")) == QJsonValue(QStringLiteral("Spectrum"))
-        && section.value(QStringLiteral("controls")).toArray().size() == 10;
+    if (section.size() != 2
+        || section.value(QStringLiteral("title")) != QJsonValue(QStringLiteral("Spectrum"))
+        || section.value(QStringLiteral("controls")).toArray().size() != 10) { return false; }
+    const QJsonObject meterPage = pages.at(1).toObject();
+    const QJsonArray meterSections = meterPage.value(QStringLiteral("sections")).toArray();
+    if (meterPage.size() != 5
+        || meterPage.value(QStringLiteral("id")) != QJsonValue(QStringLiteral("appearance.meterStyles"))
+        || meterPage.value(QStringLiteral("title")) != QJsonValue(QStringLiteral("Meter Styles"))
+        || meterPage.value(QStringLiteral("where")) != QJsonValue(QStringLiteral("phone"))
+        || meterPage.value(QStringLiteral("coverage")) != QJsonValue(QStringLiteral("partial"))
+        || meterSections.size() != 1) { return false; }
+    const QJsonObject meterSection = meterSections.first().toObject();
+    return meterSection.size() == 2
+        && meterSection.value(QStringLiteral("title")) == QJsonValue(QStringLiteral("S-Meter"))
+        && meterSection.value(QStringLiteral("controls")).toArray().size() == 3;
 }
 
 QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRModel model)
@@ -209,7 +221,7 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
          && !(id == QLatin1String("display")
               && root.value(QStringLiteral("version")) == QJsonValue(4))
          && !(id == QLatin1String("appearance")
-              && root.value(QStringLiteral("version")) == QJsonValue(4))
+              && root.value(QStringLiteral("version")) == QJsonValue(7))
          && !(id == QLatin1String("pa")
               && root.value(QStringLiteral("version")) == QJsonValue(5))
          && !(id == QLatin1String("hardware")
@@ -245,7 +257,9 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                     || control.value(QStringLiteral("label")).toString().isEmpty()
                     || !control.value(QStringLiteral("binding")).isObject()
                     || (id != QLatin1String("display")
-                        && (control.contains(QStringLiteral("options"))
+                        && ((control.contains(QStringLiteral("options"))
+                             && !(id == QLatin1String("appearance")
+                                  && SetupDescription::validateAppearanceMeterStyleBinding(control)))
                             || control.contains(QStringLiteral("enabledWhen"))))
                     || (control.contains(QStringLiteral("requiresDescriptionVersion"))
                         && (root.value(QStringLiteral("version")).toInt()
@@ -262,7 +276,10 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                                          == QJsonValue(5))
                                 && !(id == QLatin1String("hardware")
                                      && control.value(QStringLiteral("requiresDescriptionVersion"))
-                                         == QJsonValue(6)))))
+                                         == QJsonValue(6))
+                                && !(id == QLatin1String("appearance")
+                                     && control.value(QStringLiteral("requiresDescriptionVersion"))
+                                         == QJsonValue(7)))))
                     || (control.value(QStringLiteral("kind")) == QJsonValue(QStringLiteral("table"))
                         && !((id == QLatin1String("dsp")
                               && SetupDescription::validateTnfTable(control))
@@ -306,7 +323,8 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                     || (id == QLatin1String("audio")
                         && !SetupDescription::validateAudioPropertyBinding(control))
                     || (id == QLatin1String("appearance")
-                        && !SetupDescription::validateAppearanceColourBinding(control))
+                        && !SetupDescription::validateAppearanceColourBinding(control)
+                        && !SetupDescription::validateAppearanceMeterStyleBinding(control))
                     || (id == QLatin1String("diagnostics")
                         && !SetupDescription::validateSettingsHygienePanel(control))
                     || (control.value(QStringLiteral("binding")).toObject().contains(QStringLiteral("command"))
@@ -588,6 +606,64 @@ bool SetupDescription::validateAppearanceColourBinding(const QJsonObject& contro
     return false;
 }
 
+bool SetupDescription::validateAppearanceMeterStyleBinding(const QJsonObject& control)
+{
+    struct StyleControl {
+        const char* id;
+        const char* phoneKey;
+        const char* label;
+        const char* tooltip;
+        const char* kind;
+        int defaultChoice;
+        QStringList options;
+    };
+    static const StyleControl styles[] = {
+        {"face", "SMeter_FaceStyle", "Face:", "The S-meter's face", "choice", 0,
+         {"Aged Cream", "VU Amber", "Collins White", "Blackface", "Carbon", "Ice", "Classic (flat)"}},
+        {"peakHold", "PeakHoldEnabled", "Peak hold", "Hold the S-meter's peak reading", "toggle", 0, {}},
+        {"peakDecay", "PeakDecayRate", "Decay Rate:", "How fast the held peak falls back", "choice", 1,
+         {"Fast (20 dB/s)", "Medium (10 dB/s)", "Slow (5 dB/s)"}},
+    };
+    const QJsonObject binding = control.value(QStringLiteral("binding")).toObject();
+    if (binding.size() != 1
+        || control.value(QStringLiteral("applies")) != QJsonValue(QStringLiteral("live"))
+        || control.value(QStringLiteral("requiresDescriptionVersion")) != QJsonValue(7)) {
+        return false;
+    }
+    for (const StyleControl& style : styles) {
+        if (control.value(QStringLiteral("id"))
+            != QJsonValue(QStringLiteral("appearance.meterStyles.") + QLatin1String(style.id))) {
+            continue;
+        }
+        if (control.value(QStringLiteral("label")) != QJsonValue(QLatin1String(style.label))
+            || control.value(QStringLiteral("tooltip")) != QJsonValue(QLatin1String(style.tooltip))
+            || control.value(QStringLiteral("kind")) != QJsonValue(QLatin1String(style.kind))
+            || binding.value(QStringLiteral("phone")) != QJsonValue(QLatin1String(style.phoneKey))) {
+            return false;
+        }
+        if (style.options.isEmpty()) {
+            return control.size() == 8 && !control.contains(QStringLiteral("options"))
+                && control.value(QStringLiteral("default")) == QJsonValue(true);
+        }
+        const QJsonArray options = control.value(QStringLiteral("options")).toArray();
+        if (control.size() != 9 || options.size() != style.options.size()
+            || control.value(QStringLiteral("default")) != QJsonValue(style.defaultChoice)) {
+            return false;
+        }
+        int index = 0;
+        for (const QString& label : style.options) {
+            const QJsonObject option = options.at(index).toObject();
+            if (option.size() != 2 || option.value(QStringLiteral("value")) != QJsonValue(index)
+                || option.value(QStringLiteral("label")) != QJsonValue(label)) {
+                return false;
+            }
+            ++index;
+        }
+        return true;
+    }
+    return false;
+}
+
 bool SetupDescription::validateActiveSlicePropertyBinding(const QJsonObject& control)
 {
     const QJsonObject binding = control.value(QStringLiteral("binding")).toObject();
@@ -772,29 +848,41 @@ bool SetupDescription::validatePaReadoutBinding(const QJsonObject& control)
     if (control.size() != 9 || binding.size() != 1 || ref.size() != 2
         || ref.value(QStringLiteral("object")) != QJsonValue(QStringLiteral("txState"))
         || control.value(QStringLiteral("kind")) != QJsonValue(QStringLiteral("readout"))
-        || control.value(QStringLiteral("applies")) != QJsonValue(QStringLiteral("live"))
-        || gate != QJsonObject{{QStringLiteral("capability"), QStringLiteral("txReadingsVersion")},
-                               {QStringLiteral("min"), 1}}) {
+        || control.value(QStringLiteral("applies")) != QJsonValue(QStringLiteral("live"))) {
         return false;
     }
     const QByteArray name = ref.value(QStringLiteral("name")).toString().toUtf8();
+    const bool derivedPower = name == QByteArrayLiteral("forwardRawPowerWatts");
+    const bool volts = name == QByteArrayLiteral("forwardAdcVolts")
+        || name == QByteArrayLiteral("reflectedAdcVolts");
+    const bool derived = derivedPower || volts;
+    if (gate != QJsonObject{{QStringLiteral("capability"), QStringLiteral("txReadingsVersion")},
+                            {QStringLiteral("min"), derived ? 2 : 1}}) {
+        return false;
+    }
     const bool power = name == QByteArrayLiteral("forwardPowerWatts")
         || name == QByteArrayLiteral("reflectedPowerWatts");
     const bool swr = name == QByteArrayLiteral("swr");
     const bool raw = name == QByteArrayLiteral("forwardAdcRaw")
         || name == QByteArrayLiteral("reflectedAdcRaw");
-    if (!power && !swr && !raw) { return false; }
+    if (!power && !swr && !raw && !derived) { return false; }
     const QString id = name == QByteArrayLiteral("forwardPowerWatts")
         ? QStringLiteral("pa.values.forwardCalibrated")
+        : derivedPower ? QStringLiteral("pa.values.forwardRawPower")
         : name == QByteArrayLiteral("reflectedPowerWatts")
           ? QStringLiteral("pa.values.reflectedPower")
         : swr ? QStringLiteral("pa.values.swr")
+        : name == QByteArrayLiteral("forwardAdcVolts") ? QStringLiteral("pa.values.forwardVoltage")
+        : name == QByteArrayLiteral("reflectedAdcVolts") ? QStringLiteral("pa.values.reflectedVoltage")
         : name == QByteArrayLiteral("forwardAdcRaw")
           ? QStringLiteral("pa.values.forwardAdc") : QStringLiteral("pa.values.reflectedAdc");
     const QString label = name == QByteArrayLiteral("forwardPowerWatts")
         ? QStringLiteral("Forward (calibrated):")
+        : derivedPower ? QStringLiteral("Forward (raw):")
         : name == QByteArrayLiteral("reflectedPowerWatts") ? QStringLiteral("Reflected:")
         : swr ? QStringLiteral("SWR:")
+        : name == QByteArrayLiteral("forwardAdcVolts") ? QStringLiteral("FWD Voltage:")
+        : name == QByteArrayLiteral("reflectedAdcVolts") ? QStringLiteral("REV Voltage:")
         : name == QByteArrayLiteral("forwardAdcRaw") ? QStringLiteral("FWD ADC:")
                                                        : QStringLiteral("REV ADC:");
     const QJsonValue decimals = control.value(QStringLiteral("decimals"));
@@ -803,7 +891,8 @@ bool SetupDescription::validatePaReadoutBinding(const QJsonObject& control)
         || control.value(QStringLiteral("id")) != QJsonValue(id)
         || control.value(QStringLiteral("label")) != QJsonValue(label)
         || control.value(QStringLiteral("tooltip")) != QJsonValue(QString())
-        || control.value(QStringLiteral("unit")) != QJsonValue(power ? QStringLiteral("W") : QString())) {
+        || control.value(QStringLiteral("unit")) != QJsonValue(
+               power || derivedPower ? QStringLiteral("W") : volts ? QStringLiteral("V") : QString())) {
         return false;
     }
     const MirrorProperty* property = MirrorSchema::forMetaObject(
@@ -1372,8 +1461,11 @@ QString SetupDescription::fitCategoryForVersion(const QString& description, int 
     category.insert(QStringLiteral("pages"), pages);
     const int ceiling = categoryId == QLatin1String("hardware") ? 6
         : categoryId == QLatin1String("pa") ? 5
-        : categoryId == QLatin1String("display") || categoryId == QLatin1String("appearance") ? 4 : 3;
-    category.insert(QStringLiteral("version"), qMin(version, ceiling));
+        : categoryId == QLatin1String("appearance") ? 7
+        : categoryId == QLatin1String("display") ? 4 : 3;
+    category.insert(QStringLiteral("version"),
+                    categoryId == QLatin1String("appearance") && version < 7
+                        ? qMin(version, 4) : qMin(version, ceiling));
     if (version >= 2 && category.value(QStringLiteral("category")).toObject()
             .value(QStringLiteral("id")) == QJsonValue(QStringLiteral("dsp"))) {
         category.insert(QStringLiteral("coverage"), QStringLiteral(

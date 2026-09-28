@@ -666,7 +666,7 @@ RemoteKeying::Result RemoteKeying::tunerTune(const Command& command)
             if (m_pending.has_value() && m_pending->deviceId == command.deviceId) {
                 m_pending.reset();
             }
-            qCInfo(lcDsp) << "Tuner autotune cancelled by" << command.deviceId;
+            qCInfo(lcDsp) << "Tuner autotune canceled by" << command.deviceId;
             return accepted(0);
         }
         return stopFrom(command.deviceId, false);

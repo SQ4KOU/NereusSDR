@@ -87,6 +87,7 @@
 
 #include "LinkFixtures.h"
 #include "fakes/DataChannelPair.h"
+#include "fakes/DataChannelStartupEvidence.h"
 #include "fakes/UpgradedCoreToken.h"
 
 using namespace NereusSDR;
@@ -99,43 +100,7 @@ namespace {
 
 // Keep only fixed protocol-stage words from libdatachannel's verbose log.
 // Its other lines can contain raw SDP, candidates, addresses or fingerprints.
-QString safeRtcStage(const QString& line)
-{
-    const auto state = [&line](QStringView marker, QStringView label) -> QString {
-        const qsizetype at = line.indexOf(marker);
-        if (at < 0) return {};
-        QString value = line.mid(at + marker.size()).trimmed().split(QLatin1Char(' ')).first().toLower();
-        static const QSet<QString> allowed{
-            QStringLiteral("new"), QStringLiteral("checking"), QStringLiteral("connecting"),
-            QStringLiteral("connected"), QStringLiteral("completed"), QStringLiteral("failed"),
-            QStringLiteral("disconnected"), QStringLiteral("closed"), QStringLiteral("stable"),
-            QStringLiteral("gathering"), QStringLiteral("inprogress"),
-            QStringLiteral("have-local-offer"), QStringLiteral("have-remote-offer")};
-        if (!allowed.contains(value)) value = QStringLiteral("other");
-        return label.toString() + QStringLiteral(":") + value;
-    };
-    for (const auto& [marker, label] : {
-             std::pair{QStringView(u"Changed ICE state to"), QStringView(u"ice")},
-             std::pair{QStringView(u"Changed gathering state to"), QStringView(u"gathering")},
-             std::pair{QStringView(u"Changed signaling state to"), QStringView(u"signaling")},
-             std::pair{QStringView(u"Changed state to"), QStringView(u"peer")}}) {
-        if (const QString phase = state(marker, label); !phase.isEmpty()) return phase;
-    }
-    for (const auto& [marker, label] : {
-             std::pair{QStringView(u"Remote description kept before the ICE agent takes it"), QStringView(u"remote-description-kept")},
-             std::pair{QStringView(u"candidates from remote description"), QStringView(u"remote-candidates-consumed")},
-             std::pair{QStringView(u"Starting ICE transport"), QStringView(u"ice-start")},
-             std::pair{QStringView(u"Starting DTLS transport"), QStringView(u"dtls-start")},
-             std::pair{QStringView(u"before incoming records are taken"), QStringView(u"dtls-mtu-set")},
-             std::pair{QStringView(u"Registering incoming callback"), QStringView(u"dtls-incoming-ready")},
-             std::pair{QStringView(u"DTLS handshake finished"), QStringView(u"dtls-handshake-finished")},
-             std::pair{QStringView(u"Starting SCTP transport"), QStringView(u"sctp-start")},
-             std::pair{QStringView(u"ICE timeout"), QStringView(u"ice-timeout")},
-             std::pair{QStringView(u"Handshake failed"), QStringView(u"dtls-handshake-failed")}}) {
-        if (line.contains(marker)) return label.toString();
-    }
-    return {};
-}
+using NereusSDR::Test::safeRtcStage;
 
 constexpr quint64 kStationCap = StationServer::kMaxIncomingMessageBytes;
 constexpr quint64 kClientCap = StationClient::kMaxIncomingMessageBytes;

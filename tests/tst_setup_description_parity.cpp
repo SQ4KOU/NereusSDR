@@ -9,6 +9,7 @@
 #include "core/settings/SettingsScope.h"
 #include "gui/setup/GeneralOptionsPage.h"
 #include "gui/setup/AppearanceSetupPages.h"
+#include "gui/SMeterWidget.h"
 #include "gui/ColorSwatchButton.h"
 #include "gui/setup/GeneralSetupPages.h"
 #include "gui/setup/CatNetworkSetupPages.h"
@@ -249,7 +250,7 @@ private slots:
         QCOMPARE(appearance.value("category").toObject().value("where"), QJsonValue("phone"));
         QCOMPARE(appearance.value("category").toObject().value("coverage"), QJsonValue("partial"));
         const QJsonArray pages = appearance.value("pages").toArray();
-        QCOMPARE(pages.size(), 1);
+        QCOMPARE(pages.size(), 2);
         QCOMPARE(pages.first().toObject().value("title"), QJsonValue("Colors & Theme"));
         QCOMPARE(pages.first().toObject().value("where"), QJsonValue("phone"));
         QCOMPARE(pages.first().toObject().value("coverage"), QJsonValue("partial"));
@@ -283,6 +284,85 @@ private slots:
         model.setBoardForTest(HPSDRHW::HermesLite);
         service.setRadioContext(model.boardCapabilities(), model.hardwareProfile().model);
         QCOMPARE(service.category(QStringLiteral("appearance")), appearance);
+    }
+    void describedMeterStylesMatchNativePage()
+    {
+        RadioModel model;
+        MeterStylesPage page(&model);
+        SetupDescriptionService service;
+        const QJsonObject appearance = service.category(QStringLiteral("appearance"));
+        const QJsonArray pages = appearance.value("pages").toArray();
+        QCOMPARE(pages.size(), 2);
+        const QJsonObject meterPage = pages.at(1).toObject();
+        QCOMPARE(meterPage.value("id"), QJsonValue("appearance.meterStyles"));
+        QCOMPARE(meterPage.value("title"), QJsonValue("Meter Styles"));
+        QCOMPARE(meterPage.value("where"), QJsonValue("phone"));
+        QCOMPARE(meterPage.value("coverage"), QJsonValue("partial"));
+        const QJsonArray sections = meterPage.value("sections").toArray();
+        QCOMPARE(sections.size(), 1);
+        QCOMPARE(sections.first().toObject().value("title"), QJsonValue("S-Meter"));
+        const QJsonArray described = sections.first().toObject().value("controls").toArray();
+        QCOMPARE(described.size(), 3);
+        const QStringList ids{QStringLiteral("appearance.meterStyles.face"),
+                              QStringLiteral("appearance.meterStyles.peakHold"),
+                              QStringLiteral("appearance.meterStyles.peakDecay")};
+        const QStringList keys{QStringLiteral("SMeter_FaceStyle"),
+                               QStringLiteral("PeakHoldEnabled"),
+                               QStringLiteral("PeakDecayRate")};
+        const QStringList decayNames{QStringLiteral("Fast"), QStringLiteral("Medium"),
+                                     QStringLiteral("Slow")};
+        const QList<QJsonValue> defaults{0, true, 1};
+        auto* face = qobject_cast<QComboBox*>(bySetupId(page, ids.at(0)));
+        auto* hold = qobject_cast<QCheckBox*>(bySetupId(page, ids.at(1)));
+        auto* decay = qobject_cast<QComboBox*>(bySetupId(page, ids.at(2)));
+        QVERIFY(face != nullptr);
+        QVERIFY(hold != nullptr);
+        QVERIFY(decay != nullptr);
+        const QList<QWidget*> widgets{face, hold, decay};
+        auto* group = qobject_cast<QGroupBox*>(face->parentWidget());
+        QVERIFY(group != nullptr);
+        QCOMPARE(group->title(), QStringLiteral("S-Meter"));
+        auto* form = qobject_cast<QFormLayout*>(group->layout());
+        QVERIFY(form != nullptr);
+        QCOMPARE(form->rowCount(), 3);
+        for (int i = 0; i < described.size(); ++i) {
+            const QJsonObject control = described.at(i).toObject();
+            QCOMPARE(form->itemAt(i, QFormLayout::FieldRole)->widget(), widgets.at(i));
+            QCOMPARE(control.value("id"), QJsonValue(ids.at(i)));
+            QCOMPARE(control.value("binding").toObject().value("phone"), QJsonValue(keys.at(i)));
+            QCOMPARE(control.value("requiresDescriptionVersion"), QJsonValue(7));
+            QCOMPARE(control.value("applies"), QJsonValue("live"));
+            QCOMPARE(control.value("default"), defaults.at(i));
+            QVERIFY(SetupDescriptionService::validateAppearanceMeterStyleBinding(control));
+            QCOMPARE(widgets.at(i)->toolTip(), control.value("tooltip").toString());
+            if (i != 1) {
+                auto* label = qobject_cast<QLabel*>(form->labelForField(widgets.at(i)));
+                QVERIFY(label != nullptr);
+                QCOMPARE(label->text(), control.value("label").toString());
+                auto* combo = qobject_cast<QComboBox*>(widgets.at(i));
+                const QJsonArray options = control.value("options").toArray();
+                QCOMPARE(combo->count(), options.size());
+                for (int option = 0; option < options.size(); ++option) {
+                    QCOMPARE(combo->itemText(option), options.at(option).toObject().value("label").toString());
+                    QCOMPARE(options.at(option).toObject().value("value"), QJsonValue(option));
+                    if (i == 0) {
+                        QCOMPARE(combo->itemData(option).toInt(), option);
+                        QCOMPARE(combo->itemText(option), SMeterWidget::faceStyleLabel(
+                            static_cast<SMeterWidget::FaceStyle>(option)));
+                    } else {
+                        QCOMPARE(combo->itemData(option).toString(), decayNames.at(option));
+                    }
+                }
+            } else {
+                QCOMPARE(hold->text(), control.value("label").toString());
+            }
+        }
+        QCOMPARE(SMeterWidget::faceStyleKey(SMeterWidget::FaceStyle::AgedCream),
+                 QStringLiteral("AgedCream"));
+        model.setBoardForTest(HPSDRHW::HermesLite);
+        service.setRadioContext(model.boardCapabilities(), model.hardwareProfile().model);
+        QCOMPARE(service.category(QStringLiteral("appearance")), appearance);
+        QVERIFY(bySetupId(page, QStringLiteral("appearance.meterStyles.smallFilter")) == nullptr);
     }
     void settingsValidationPanelMatchesDesktopActions()
     {
@@ -355,11 +435,14 @@ private slots:
             .value("sections").toArray();
         QCOMPARE(sections.size(), 3);
         const QStringList expectedIds{QStringLiteral("pa.values.forwardCalibrated"),
+                                      QStringLiteral("pa.values.forwardRawPower"),
                                       QStringLiteral("pa.values.reflectedPower"),
                                       QStringLiteral("pa.values.swr"),
                                       QStringLiteral("pa.values.drive"),
                                       QStringLiteral("pa.values.paCurrent"),
                                       QStringLiteral("pa.values.dcVoltage"),
+                                      QStringLiteral("pa.values.forwardVoltage"),
+                                      QStringLiteral("pa.values.reflectedVoltage"),
                                       QStringLiteral("pa.values.forwardAdc"),
                                       QStringLiteral("pa.values.reflectedAdc")};
         QStringList actualIds;
@@ -392,7 +475,7 @@ private slots:
         QCOMPARE(actualIds, expectedIds);
         const QJsonArray power = sections.first().toObject().value("controls").toArray();
         const QJsonArray raw = sections.last().toObject().value("controls").toArray();
-        QCOMPARE(power.size(), 4);
+        QCOMPARE(power.size(), 5);
         QCOMPARE(raw.size(), 2);
         model.transmitModel().setPower(37);
         QCOMPARE(page.driveTextForTest(), QStringLiteral("37 W"));

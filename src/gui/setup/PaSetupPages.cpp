@@ -511,7 +511,7 @@ PaGainByBandPage::PaGainByBandPage(RadioModel* model, QWidget* parent)
     // the user-visible tooltip stays plain English; the upstream cite is
     // kept in this source comment.
     m_newCalCheck->setToolTip(QStringLiteral(
-        "New-calibration mode marker. No client-side behaviour is hooked "
+        "New-calibration mode marker. No client-side behavior is hooked "
         "to it yet — tracked for parity only."));
     // From Thetis chkPANewCal Visible=false default at setup.designer.cs:47417
     // [v2.10.3.13]; Thetis Ctrl+Alt+A keyhandler (setup.cs:12490-12498) unhides
@@ -2209,6 +2209,7 @@ PaValuesPage::PaValuesPage(RadioModel* model, QWidget* parent)
     // [v2.10.3.13] — `alex_fwd.ToString("f1") + " W"` at console.cs:24670.
     m_fwdRawLabel        = new MetricLabel(QStringLiteral("FWD (raw)"),
                                            QStringLiteral("0.00 W"), powerGroup);
+    m_fwdRawLabel->setProperty("nereusSetupId", "pa.values.forwardRawPower");
     m_revPowerLabel      = new MetricLabel(QStringLiteral("REV"),
                                            QStringLiteral("0.00 W"), powerGroup);
     m_revPowerLabel->setProperty("nereusSetupId", "pa.values.reflectedPower");
@@ -2248,8 +2249,10 @@ PaValuesPage::PaValuesPage(RadioModel* model, QWidget* parent)
     // at console.cs:25068 / :25002.
     m_fwdVoltageLabel  = new MetricLabel(QStringLiteral("FWD V"),
                                          QStringLiteral("0.00 V"), paGroup);
+    m_fwdVoltageLabel->setProperty("nereusSetupId", "pa.values.forwardVoltage");
     m_revVoltageLabel  = new MetricLabel(QStringLiteral("REV V"),
                                          QStringLiteral("0.00 V"), paGroup);
+    m_revVoltageLabel->setProperty("nereusSetupId", "pa.values.reflectedVoltage");
     m_adcOverloadLabel = new MetricLabel(QStringLiteral("ADC OVF"),
                                          QStringLiteral("No"), paGroup);
     paForm->addRow(QStringLiteral("PA Current:"),     m_paCurrentLabel);
