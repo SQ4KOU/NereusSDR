@@ -7,6 +7,7 @@
         <file alias="diagnostics.json">setup/diagnostics.json</file>
         <file alias="catNetwork.json">setup/catNetwork.json</file>
         <file alias="dsp.json">setup/dsp.json</file>
+        <file alias="display.json">setup/display.json</file>
         <file alias="transmit.json">setup/transmit.json</file>
         <file alias="audio.json">setup/audio.json</file>
     </qresource>

@@ -556,6 +556,7 @@ void SpectrumDefaultsPage::buildUI()
     // The range, the positions' sizes and the start come from
     // ControlRanges.h (the catalogue's `display` table).
     m_fftSizeSlider = new QSlider(Qt::Horizontal, fftGroup);
+    m_fftSizeSlider->setProperty("nereusSetupId", "display.spectrumDefaults.fftSize");
     m_fftSizeSlider->setRange(0, ControlRanges::kDisplayFftSizePositionMax);
     m_fftSizeSlider->setSingleStep(1);
     m_fftSizeSlider->setPageStep(1);
@@ -604,6 +605,7 @@ void SpectrumDefaultsPage::buildUI()
     // (6, 101) + comboDispWinType at (83, 101) [v2.10.3.13].
     auto* windowPrefix = new QLabel(QLatin1String(ControlRanges::kDisplayFftWindowLabel), fftGroup);
     m_windowCombo = new QComboBox(fftGroup);
+    m_windowCombo->setProperty("nereusSetupId", "display.spectrumDefaults.window");
     // 7 items, ordering verbatim per Thetis comboDispWinType.Items at
     // setup.designer.cs:34966-34973 [v2.10.3.13].  Combo index maps 1:1
     // to WindowFunction enum integer (both follow WDSP analyzer.c case
@@ -630,6 +632,7 @@ void SpectrumDefaultsPage::buildUI()
     auto* hzPerBinPrefix = new QLabel(QLatin1String(ControlRanges::kDisplayHzPerBinTargetLabel),
                                       fftGroup);
     m_hzPerBinTargetSpin = new QDoubleSpinBox(fftGroup);
+    m_hzPerBinTargetSpin->setProperty("nereusSetupId", "display.spectrumDefaults.hzPerBinTarget");
     m_hzPerBinTargetSpin->setRange(ControlRanges::kDisplayHzPerBinTargetMin,
                                    ControlRanges::kDisplayHzPerBinTargetMax);
     m_hzPerBinTargetSpin->setSingleStep(ControlRanges::kDisplayHzPerBinTargetStep);
@@ -770,6 +773,7 @@ void SpectrumDefaultsPage::buildUI()
                                  QStringLiteral(" ") + QString::fromLatin1(ControlRanges::kDisplaySpectrumFpsUnit),
                                  renderGroup);
         m_fpSlider = row.slider;
+        m_fpSlider->setProperty("nereusSetupId", "display.spectrumDefaults.fps");
         m_fpSpin   = row.spin;
         // Thetis: setup.designer.cs:33856 (udDisplayFPS) — Thetis original: "Frames Per Second (approximate)" (placeholder); rewritten
         m_fpSlider->setToolTip(QStringLiteral("Spectrum/waterfall redraw rate. Higher = smoother animation at cost of CPU."));
@@ -2675,6 +2679,7 @@ void TxDisplayPage::buildUI()
     txMaxLabel->setAlignment(Qt::AlignLeft  | Qt::AlignVCenter);
 
     m_txFftSizeSlider = new QSlider(Qt::Horizontal, fftGroup);
+    m_txFftSizeSlider->setProperty("nereusSetupId", "display.txDisplay.fftSize");
     m_txFftSizeSlider->setRange(0, 6);
     m_txFftSizeSlider->setSingleStep(1);
     m_txFftSizeSlider->setPageStep(1);
@@ -2717,6 +2722,7 @@ void TxDisplayPage::buildUI()
     // WDSP analyzer window_type per specHPSDR.cs:134 default = 4 (Hamming).
     auto* txWindowPrefix = new QLabel(QStringLiteral("Window"), fftGroup);
     m_txWindowCombo = new QComboBox(fftGroup);
+    m_txWindowCombo->setProperty("nereusSetupId", "display.txDisplay.window");
     m_txWindowCombo->addItems({
         QStringLiteral("Rectangular"),         // 0
         QStringLiteral("Blackman-Harris 4T"),  // 1
@@ -2749,6 +2755,7 @@ void TxDisplayPage::buildUI()
 
     // Detector (Pan) — 5 items per setup.designer.cs:36718-36723.
     m_txPanDetectorCombo = new QComboBox(panGroup);
+    m_txPanDetectorCombo->setProperty("nereusSetupId", "display.txDisplay.panDetector");
     m_txPanDetectorCombo->addItems({
         QStringLiteral("Peak"),       // 0
         QStringLiteral("Rosenfell"),  // 1
@@ -2766,6 +2773,7 @@ void TxDisplayPage::buildUI()
 
     // Averaging (Pan) — 4 items per setup.designer.cs:36693-36697.
     m_txPanAveragingCombo = new QComboBox(panGroup);
+    m_txPanAveragingCombo->setProperty("nereusSetupId", "display.txDisplay.panAveraging");
     m_txPanAveragingCombo->addItems({
         QStringLiteral("None"),           // 0
         QStringLiteral("Recursive"),      // 1
@@ -2784,6 +2792,7 @@ void TxDisplayPage::buildUI()
     // per :36753 (NOT 120 — spec table was wrong; Thetis ships 30 for
     // the pan plane and 120 for the waterfall plane).
     m_txPanAvTimeSpin = new QSpinBox(panGroup);
+    m_txPanAvTimeSpin->setProperty("nereusSetupId", "display.txDisplay.panAvTime");
     m_txPanAvTimeSpin->setRange(1, 9999);
     m_txPanAvTimeSpin->setSingleStep(1);
     m_txPanAvTimeSpin->setSuffix(QStringLiteral(" ms"));
@@ -2800,6 +2809,7 @@ void TxDisplayPage::buildUI()
     // DetTypePan >= 2 (Average / Sample / RMS).
     m_txPanNormalizeCheck = new QCheckBox(
         QStringLiteral("1 Hz BW: Av / Sa"), panGroup);
+    m_txPanNormalizeCheck->setProperty("nereusSetupId", "display.txDisplay.panNormalize");
     m_txPanNormalizeCheck->setToolTip(QStringLiteral(
         "Normalize the TX panadapter trace to a 1 Hz reference "
         "bandwidth. Only available for the Average, Sample, and RMS "
@@ -2820,6 +2830,7 @@ void TxDisplayPage::buildUI()
 
     // Detector (WF) — 4 items per setup.designer.cs:36459-36463.  No RMS.
     m_txWfDetectorCombo = new QComboBox(wfGroup);
+    m_txWfDetectorCombo->setProperty("nereusSetupId", "display.txDisplay.wfDetector");
     m_txWfDetectorCombo->addItems({
         QStringLiteral("Peak"),       // 0
         QStringLiteral("Rosenfell"),  // 1
@@ -2834,6 +2845,7 @@ void TxDisplayPage::buildUI()
 
     // Averaging (WF) — same 4-item list as Pan.
     m_txWfAveragingCombo = new QComboBox(wfGroup);
+    m_txWfAveragingCombo->setProperty("nereusSetupId", "display.txDisplay.wfAveraging");
     m_txWfAveragingCombo->addItems({
         QStringLiteral("None"),
         QStringLiteral("Recursive"),
@@ -2849,6 +2861,7 @@ void TxDisplayPage::buildUI()
     // Range 1..9999 per setup.designer.cs:36478-36486.  Default 120 ms
     // per :36493.
     m_txWfAvTimeSpin = new QSpinBox(wfGroup);
+    m_txWfAvTimeSpin->setProperty("nereusSetupId", "display.txDisplay.wfAvTime");
     m_txWfAvTimeSpin->setRange(1, 9999);
     m_txWfAvTimeSpin->setSingleStep(1);
     m_txWfAvTimeSpin->setSuffix(QStringLiteral(" ms"));

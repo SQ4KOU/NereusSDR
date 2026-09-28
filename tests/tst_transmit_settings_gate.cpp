@@ -246,54 +246,30 @@ void TstTransmitSettingsGate::olderCoreOffersNoTransmitSettings()
     caps.remoteTgxlControlVersion = 3;
     caps.transmitSettingsVersion = 1;
     QList<MirrorUpdate> updates = caps.toUpdates();
-    // R-IOS-27's bandSelectVersion now follows it, then parity Task 15's
-    // meterReadingsVersion, parity Task 16's dspInfoVersion and parity Task
-    // 19's recordStreamVersion, parity Task 21's stationRadiosVersion,
-    // parity Task 28's txDisplayVersion, R-R3-21's displayClockVersion and
-    // the Task 28 fix wave's controlChannelVersion; a Core from before them
-    // sends none.
-    // iPhone app plan Task 29: mediaReplaceVersion, controlSwitchVersion and
-    // relayAllowed after it, then parity Task 22's supportBundleVersion;
-    // the unpublished media-floor versions follow every existing field.
-    QCOMPARE(updates.last().name, QByteArrayLiteral("txModMonitorVersion"));
-    updates.removeLast();
-    QCOMPARE(updates.last().name, QByteArrayLiteral("remoteIqVersion"));
-    updates.removeLast();
-    QCOMPARE(updates.last().name, QByteArrayLiteral("mediaRelayRoutingVersion"));
-    updates.removeLast();
-    QCOMPARE(updates.last().name, QByteArrayLiteral("mediaTunnelVersion"));
-    updates.removeLast();
-    QCOMPARE(updates.last().name, QByteArrayLiteral("supportBundleVersion"));
-    updates.removeLast();
-    QCOMPARE(updates.last().name, QByteArrayLiteral("relayAllowed"));
-    updates.removeLast();
-    QCOMPARE(updates.last().name, QByteArrayLiteral("controlSwitchVersion"));
-    updates.removeLast();
-    QCOMPARE(updates.last().name, QByteArrayLiteral("mediaReplaceVersion"));
-    updates.removeLast();
-    // Then iPhone plan Task 22 / parity Task 20's stationFreedvVersion.
-    QCOMPARE(updates.last().name, QByteArrayLiteral("stationFreedvVersion"));
-    updates.removeLast();
-    // Then parity Task 32's txMonitorAudioVersion.
-    QCOMPARE(updates.last().name, QByteArrayLiteral("txMonitorAudioVersion"));
-    updates.removeLast();
-    QCOMPARE(updates.last().name, QByteArrayLiteral("controlChannelVersion"));
-    updates.removeLast();
-    QCOMPARE(updates.last().name, QByteArrayLiteral("displayClockVersion"));
-    updates.removeLast();
-    QCOMPARE(updates.last().name, QByteArrayLiteral("txDisplayVersion"));
-    updates.removeLast();
-    QCOMPARE(updates.last().name, QByteArrayLiteral("stationRadiosVersion"));
-    updates.removeLast();
-    QCOMPARE(updates.last().name, QByteArrayLiteral("recordStreamVersion"));
-    updates.removeLast();
-    QCOMPARE(updates.last().name, QByteArrayLiteral("dspInfoVersion"));
-    updates.removeLast();
-    QCOMPARE(updates.last().name, QByteArrayLiteral("meterReadingsVersion"));
-    updates.removeLast();
-    QCOMPARE(updates.last().name, QByteArrayLiteral("bandSelectVersion"));
-    updates.removeLast();
-    QCOMPARE(updates.last().name, QByteArrayLiteral("transmitSettingsVersion"));
+    // Pin the original contiguous minor-11 block by name rather than by its
+    // distance from the end: independent capabilities can follow it.
+    QList<QByteArray> names;
+    for (const MirrorUpdate& update : updates) { names.append(update.name); }
+    const QList<QByteArray> originalBlock{
+        "transmitSettingsVersion", "bandSelectVersion", "meterReadingsVersion",
+        "dspInfoVersion", "recordStreamVersion", "stationRadiosVersion",
+        "txDisplayVersion", "displayClockVersion", "controlChannelVersion",
+        "txMonitorAudioVersion", "stationFreedvVersion", "mediaReplaceVersion",
+        "controlSwitchVersion", "relayAllowed", "supportBundleVersion",
+        "mediaTunnelVersion", "mediaRelayRoutingVersion", "remoteIqVersion",
+        "txModMonitorVersion"};
+    const qsizetype first = names.indexOf(QByteArrayLiteral("transmitSettingsVersion"));
+    QVERIFY(first >= 0);
+    QCOMPARE(names.mid(first, originalBlock.size()), originalBlock);
+    // This fixture has no feature declarations; the optional Setup and mini
+    // display entries stay absent. Accessory transmit is separately appended.
+    QVERIFY(!names.contains(QByteArrayLiteral("setupDescriptionVersion")));
+    QVERIFY(!names.contains(QByteArrayLiteral("miniDisplayVersion")));
+    QCOMPARE(names.indexOf(QByteArrayLiteral("accessoryTxVersion")),
+             first + originalBlock.size());
+    QCOMPARE(updates.at(first + originalBlock.size()).kind, MirrorWireKind::Int64);
+    QCOMPARE(updates.at(first + originalBlock.size()).value.toInt(), 0);
+    while (updates.size() > first + 1) { updates.removeLast(); }
     QCOMPARE(StationCapabilities::fromUpdates(updates).transmitSettingsVersion, 1);
     updates.removeLast();
     // The iPhone app's display extras entry now comes just before it.

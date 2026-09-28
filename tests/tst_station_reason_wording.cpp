@@ -345,6 +345,10 @@ const QList<ReasonSender>& reasonSenders()
         {"authResult", 1},   {"settingsReject", 3},       {"dropPeer", 1},
         {"sendRejected", 3}, {"sendAllocationResult", 4}, {"rejectAllocation", 3},
         {"reject", 0},       {"rejectDetail", 1},         {"fail", 0},
+        // PureSignal's fail(reason) and media's fail(sliceId, stream,
+        // reason) both carry operator text; the first media argument is an
+        // identifier, not a refusal.
+        {"fail", 2},
         // iPhone app Task 14: pair.fail and StationServer's sender for it.
         {"pairFail", 0},     {"sendPairFail", 1},
         // Text the station sends as a property value (propertyTextSources).
@@ -402,6 +406,14 @@ QStringList reasonExpressionsIn(const QString& statement)
             const qsizetype close = closingOf(statement, open, QLatin1Char('('), QLatin1Char(')'));
             const QStringList arguments =
                 splitTopLevel(statement.mid(open + 1, close - open - 2));
+            // These are two distinct, known helper signatures. Do not
+            // interpret media's slice id as PureSignal's one-argument
+            // refusal, or omit the actual third-argument media reason.
+            if (QLatin1String(sender.name) == QLatin1String("fail")
+                && ((sender.index == 0 && arguments.size() != 1)
+                    || (sender.index == 2 && arguments.size() < 3))) {
+                continue;
+            }
             if (sender.index < arguments.size()) {
                 expressions.append(arguments.at(sender.index));
             }
@@ -501,7 +513,15 @@ QList<ReasonText> reasonsIn(const QString& code)
             }
             QRegularExpressionMatchIterator it = literal.globalMatch(expression);
             while (it.hasNext()) {
-                const QString text = it.next().captured(1);
+                const QRegularExpressionMatch match = it.next();
+                // A conditional reason can compare a wire verb before
+                // choosing its text. That comparison operand is a code,
+                // not a reason; the selected arm is still scanned.
+                static const QRegularExpression comparedOperand(QStringLiteral("(?:==|!=)\\s*$"));
+                if (comparedOperand.match(expression.left(match.capturedStart())).hasMatch()) {
+                    continue;
+                }
+                const QString text = match.captured(1);
                 if (!text.isEmpty()) {
                     positioned.append(text);
                 }
@@ -693,7 +713,11 @@ const QList<ReasonSource>& reasonSources()
          // The other app's network address (WebSocketTransport::peerDescription),
          // and (iPhone app Task 73) the name of the device a slice belongs
          // to, the operator's own word (ruling 4.3).
-         {QStringLiteral("description"), QStringLiteral("owner")},
+         {QStringLiteral("description"), QStringLiteral("owner"),
+          // DeviceStore validates the replacement device's own name; the
+          // takeover sentence uses describe(selection.deviceId) or the
+          // registry's saved selection.name, both operator labels.
+          QStringLiteral("takerName")},
          {// listen(): the Core's own setup error (m_lastError), for its
           // console and log; never sent to an app.
           QStringLiteral("CertificateStore::tlsBackendDiagnostic()"),
@@ -762,6 +786,10 @@ const QList<ReasonSource>& reasonSources()
           // written in src/core/safety/TxRefusal.cpp (scanned below).
           QStringLiteral("m_transmitHolder->keyRefusalFor(requester)"),
           QStringLiteral("TxRefusals::appCannotTransmit().text"),
+          // A TxRefusal value is first stored then its text sent. Its
+          // source sentence is scanned in TxRefusal.cpp.
+          QStringLiteral("TxRefusals::appCannotTransmit()"),
+          QStringLiteral("refusal.text"),
           QStringLiteral("decision.refusal.text"),
           // Desktop remote transmit: the same sentences, sent with
           // txPermitted in capabilities (txRefusalReason) and remembered.
@@ -776,7 +804,11 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("range"),
           // D79 (R-IOS-11): bandPlanRefusal's literal, this file's own,
           // scanned here.
-          QStringLiteral("plan")}},
+          QStringLiteral("plan"),
+          // These functions' own sentences are scanned in this file;
+          // transmitSettingOnAirRefusal also relays RadioModel::onAirReason.
+          QStringLiteral("transmitSettingOnAirRefusal(key)"),
+          QStringLiteral("bandPlanRefusal(key, message.updates.first().value)")}},
         // iPhone app Task 74 (R-IOS-30): the confirm step's answers and
         // refusals, confirm.request and notice reasons, and the chooser's
         // `why`. Device names inserted are the operator's own words (ruling
@@ -863,6 +895,8 @@ const QList<ReasonSource>& reasonSources()
           // Merge of the trunk into the transmit lane: Task 34's on-air
           // refusal (TxRefusal.cpp's words, scanned there).
           QStringLiteral("onAir.text"), QStringLiteral("refused.text"), QStringLiteral("onAir"),
+          // StationTxGate::decide returns TxRefusal.cpp's scanned text.
+          QStringLiteral("decision.refusal.text"),
           QStringLiteral("olderWindowReason(ReceiverPlanner::joinWords(names))"),
           QStringLiteral("QString::fromLatin1(kTargetChangedReason)"),
           QStringLiteral("antennaKeptReason(antenna, names)"), QStringLiteral("reason"),
@@ -905,6 +939,9 @@ const QList<ReasonSource>& reasonSources()
           // StationServer's transmit access.
           QStringLiteral("refusal.text"), QStringLiteral("result.refusal.text"),
           QStringLiteral("m_transmitAccess.onAir(m_requester)"),
+          // StationServer supplies this callback; it returns a TxRefusal
+          // from StationTxGate/TxRefusal.cpp, then emitRefusal sends text.
+          QStringLiteral("m_transmitAccess.accessory(m_requester)"),
           // Fix wave M2: a release refused (TxRefusal.cpp's words).
           QStringLiteral("m_transmitAccess.release(m_requester)"),
           // iPhone app plan Task 77 (ruling 7.7): the transmitter's
@@ -993,7 +1030,8 @@ const QList<ReasonSource>& reasonSources()
         // The operator's ruling of 2026-09-26: the session.end every app
         // gets when the Core restarts its run on another radio; the radio's
         // name as it reports itself.
-        {"src/core/daemon/DaemonApp.cpp", {QStringLiteral("radioChangeReason")}, {}, 1,
+        {"src/core/daemon/DaemonApp.cpp",
+         {QStringLiteral("radioChangeReason"), QStringLiteral("tryCompleteStationRelease")}, {}, 2,
          {QStringLiteral("radioName")}},
         {"src/core/session/SessionEndReasons.cpp",
          {QStringLiteral("takenOver"), QStringLiteral("versionRefused")}, {}, 4,
@@ -1417,6 +1455,12 @@ const QList<AppSideReason>& appSideReasons()
         // R-IOS-18 (parity Task 21): the Core's radio.
         {"src/core/session/IStationLink.h", "stationRadiosUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},
+        {"src/core/session/IStationLink.h", "settingsHygieneUnavailableReason",
+         "a remote window's own fallback when its Core cannot validate settings"},
+        {"src/core/session/IStationLink.h", "modMonitorUnavailableReason",
+         "a remote window's own fallback when its Core cannot send modulation readings"},
+        {"src/core/SettingsHygiene.h", "remoteUnavailableReason",
+         "getter for desktop state set by StationClient and read by diagnostics pages"},
         {"src/core/station/StationRadios.h", "waitingReason",
          "the Core's own line while it waits for a radio, kept with its list; no app is sent it"},
         // R-IOS-25 (parity Task 19): the Core's spot sources.
@@ -1787,6 +1831,23 @@ private slots:
                                    ".arg(count), {});"),
                     {QStringLiteral("count")})
                     .isEmpty());
+        // The discriminator of a conditional reason remains a wire verb;
+        // only the chosen arm is operator text. A bad arm must still fail.
+        const QString conditional = QStringLiteral(
+            "emitResult(verb, id, false, verb == \"txModMonitor.reset\" ? "
+            "QStringLiteral(\"The Core cannot do this.\") : "
+            "QStringLiteral(\"The session expired.\"), {});");
+        const QStringList conditionalProblems = wordingProblemsInCode(conditional, {});
+        QVERIFY(!conditionalProblems.join(QLatin1Char('|')).contains(
+            QStringLiteral("txModMonitor.reset")));
+        QVERIFY(conditionalProblems.join(QLatin1Char('|')).contains(
+            QStringLiteral("The session expired.")));
+        // The media helper's first argument identifies a slice. Its third
+        // argument reaches sendIqContext, including one-word refusals.
+        const QStringList mediaProblems = wordingProblemsInCode(
+            QStringLiteral("fail(sliceId, stream, QStringLiteral(\"unavailable\"));"), {});
+        QVERIFY(!mediaProblems.join(QLatin1Char('|')).contains(QStringLiteral("sliceId")));
+        QVERIFY(mediaProblems.join(QLatin1Char('|')).contains(QStringLiteral("unavailable")));
     }
 
     void everyStationReasonIsPlain()
@@ -1886,6 +1947,18 @@ private slots:
         // Named on the app side, it is placed.
         QVERIFY(unplacedReasonSites(QStringLiteral("src/core/session/StationClient.cpp"), planted)
                     .isEmpty());
+        // The new desktop fallbacks are named individually. A future
+        // IStationLink reason remains visible to the guard.
+        QVERIFY(appSide(QStringLiteral("src/core/session/IStationLink.h"),
+                        QStringLiteral("modMonitorUnavailableReason")));
+        QVERIFY(!appSide(QStringLiteral("src/core/session/IStationLink.h"),
+                         QStringLiteral("newUnavailableReason")));
+        QVERIFY(unplacedReasonSites(
+                    QStringLiteral("src/core/session/IStationLink.h"),
+                    QStringLiteral("QString newUnavailableReason() { return "
+                                   "QStringLiteral(\"The session failed.\"); }"))
+                    .contains(QStringLiteral("src/core/session/IStationLink.h: "
+                                             "newUnavailableReason")));
     }
 
     void everyReasonSiteIsScannedOrOnTheAppSide()

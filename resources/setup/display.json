@@ -1,0 +1,394 @@
+{
+  "version": 4,
+  "category": {
+    "id": "display",
+    "title": "Display",
+    "where": "mixed",
+    "coverage": "partial"
+  },
+  "pages": [
+    {
+      "id": "display.spectrumDefaults",
+      "title": "Spectrum Defaults",
+      "where": "mixed",
+      "coverage": "partial",
+      "sections": [
+        {
+          "title": "Fast Fourier Transform",
+          "controls": [
+            {
+              "id": "display.spectrumDefaults.fftSize",
+              "label": "Size",
+              "tooltip": "FFT size used for spectrum analysis. Range 4096 to 262144 in powers of two. Larger = finer frequency resolution and a smaller bin width, at higher CPU cost.",
+              "kind": "slider",
+              "binding": {
+                "setting": "DisplayFftSize"
+              },
+              "applies": "subscription",
+              "requiresDescriptionVersion": 4,
+              "options": [
+                {
+                  "value": 4096,
+                  "label": "4096"
+                },
+                {
+                  "value": 8192,
+                  "label": "8192"
+                },
+                {
+                  "value": 16384,
+                  "label": "16384"
+                },
+                {
+                  "value": 32768,
+                  "label": "32768"
+                },
+                {
+                  "value": 65536,
+                  "label": "65536"
+                },
+                {
+                  "value": 131072,
+                  "label": "131072"
+                },
+                {
+                  "value": 262144,
+                  "label": "262144"
+                }
+              ],
+              "default": 4096
+            },
+            {
+              "id": "display.spectrumDefaults.window",
+              "label": "Window",
+              "tooltip": "FFT window function. Rectangular has the narrowest main lobe but the worst sidelobes. Blackman-Harris (4T or 7T) gives strong sidelobe rejection. Flat-Top is best for amplitude calibration. Kaiser is parameterised (KaiserPi shape parameter).",
+              "kind": "choice",
+              "binding": {
+                "setting": "DisplayFftWindow"
+              },
+              "applies": "subscription",
+              "choices": [
+                "Rectangular",
+                "Blackman-Harris 4T",
+                "Hann",
+                "Flat-Top",
+                "Hamming",
+                "Kaiser",
+                "Blackman-Harris 7T"
+              ],
+              "default": 1
+            },
+            {
+              "id": "display.spectrumDefaults.hzPerBinTarget",
+              "label": "Hz/bin Target",
+              "tooltip": "Auto-zoom override: target a constant Hz/bin regardless of zoom. Set to 0 (\"Off\") to use the default bins-in-window behaviour (FFT replans on zoom). When > 0, the FFT size is fixed at sampleRate / target so the trace delivers the requested resolution at any zoom level — handy for hunting narrow signals (CW, digital). Floor at the FFT slider value still applies (slider sets the minimum FFT size).",
+              "kind": "decimal",
+              "binding": {
+                "setting": "DisplayHzPerBinTarget"
+              },
+              "applies": "subscription",
+              "min": 0,
+              "max": 200,
+              "step": 0.5,
+              "decimals": 2,
+              "unit": "Hz/bin",
+              "default": 0
+            }
+          ]
+        },
+        {
+          "title": "Rendering",
+          "controls": [
+            {
+              "id": "display.spectrumDefaults.fps",
+              "label": "FPS:",
+              "tooltip": "Spectrum/waterfall redraw rate. Higher = smoother animation at cost of CPU.",
+              "kind": "slider",
+              "binding": {
+                "setting": "DisplaySpectrumFps"
+              },
+              "applies": "subscription",
+              "min": 10,
+              "max": 60,
+              "step": 1,
+              "unit": "fps",
+              "default": 30
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "display.multimeter",
+      "title": "Multimeter",
+      "where": "mixed",
+      "coverage": "partial",
+      "sections": [
+        {
+          "title": "Multimeter",
+          "controls": [
+            {
+              "id": "display.multimeter.pollingDelay",
+              "label": "Polling delay:",
+              "tooltip": "How often the meter values are read from WDSP (10–2000 ms). Lower values give faster response; higher values reduce CPU load.",
+              "kind": "integer",
+              "binding": {
+                "setting": "MultimeterDelayMs"
+              },
+              "applies": "live",
+              "min": 10,
+              "max": 2000,
+              "step": 1,
+              "unit": "ms",
+              "default": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "display.txDisplay",
+      "title": "TX Display",
+      "where": "mixed",
+      "coverage": "partial",
+      "sections": [
+        {
+          "title": "Fast Fourier Transform",
+          "controls": [
+            {
+              "id": "display.txDisplay.fftSize",
+              "label": "Size",
+              "tooltip": "TX FFT size used during MOX. Range 4096 to 262144 in powers of two. Larger gives finer frequency resolution and a smaller bin width at higher CPU cost. RX FFT slider is independent.",
+              "kind": "slider",
+              "binding": {
+                "setting": "DisplayTxFftSize"
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 4,
+              "options": [
+                {
+                  "value": 4096,
+                  "label": "4096"
+                },
+                {
+                  "value": 8192,
+                  "label": "8192"
+                },
+                {
+                  "value": 16384,
+                  "label": "16384"
+                },
+                {
+                  "value": 32768,
+                  "label": "32768"
+                },
+                {
+                  "value": 65536,
+                  "label": "65536"
+                },
+                {
+                  "value": 131072,
+                  "label": "131072"
+                },
+                {
+                  "value": 262144,
+                  "label": "262144"
+                }
+              ],
+              "default": 32768,
+              "gate": {
+                "capability": "txDisplayVersion",
+                "min": 2
+              }
+            },
+            {
+              "id": "display.txDisplay.window",
+              "label": "Window",
+              "tooltip": "TX FFT window function. Hamming (default) trades a wide main lobe for moderate sidelobe rejection. Blackman-Harris (4T or 7T) gives strong sidelobe rejection for cleaner waterfall during TX. Flat-Top is best for amplitude calibration. Kaiser is parameterised.",
+              "kind": "choice",
+              "binding": {
+                "setting": "DisplayTxWindowType"
+              },
+              "applies": "live",
+              "choices": [
+                "Rectangular",
+                "Blackman-Harris 4T",
+                "Hann",
+                "Flat-Top",
+                "Hamming",
+                "Kaiser",
+                "Blackman-Harris 7T"
+              ],
+              "default": 4,
+              "gate": {
+                "capability": "txDisplayVersion",
+                "min": 2
+              }
+            }
+          ]
+        },
+        {
+          "title": "Panadapter",
+          "controls": [
+            {
+              "id": "display.txDisplay.panDetector",
+              "label": "Detector:",
+              "tooltip": "TX panadapter trace detector. Peak shows the maximum bin value per pixel (transient-friendly). Average integrates across the bins (smoother). Sample takes one bin per pixel. RMS is true root-mean-square. Normalize is only available for Average / Sample / RMS.",
+              "kind": "choice",
+              "binding": {
+                "setting": "DisplayTxPanDetector"
+              },
+              "applies": "live",
+              "choices": [
+                "Peak",
+                "Rosenfell",
+                "Average",
+                "Sample",
+                "RMS"
+              ],
+              "default": 0,
+              "gate": {
+                "capability": "txDisplayVersion",
+                "min": 2
+              }
+            },
+            {
+              "id": "display.txDisplay.panAveraging",
+              "label": "Averaging:",
+              "tooltip": "TX panadapter trace averaging policy. None = instantaneous. Recursive = exponential smoothing with the time constant set below. Time Window = fixed-window N-frame average. Log Recursive = recursive in the log (dBm) domain.",
+              "kind": "choice",
+              "binding": {
+                "setting": "DisplayTxPanAveraging"
+              },
+              "applies": "live",
+              "choices": [
+                "None",
+                "Recursive",
+                "Time Window",
+                "Log Recursive"
+              ],
+              "default": 0,
+              "gate": {
+                "capability": "txDisplayVersion",
+                "min": 2
+              }
+            },
+            {
+              "id": "display.txDisplay.panAvTime",
+              "label": "Time:",
+              "tooltip": "TX panadapter averaging time constant in milliseconds. Larger values give smoother traces at the cost of slower response to transients. Internally divided by 1000 to drive the WDSP exponential back-multiplier.",
+              "kind": "integer",
+              "binding": {
+                "setting": "DisplayTxPanAvTimeMs"
+              },
+              "applies": "live",
+              "min": 1,
+              "max": 9999,
+              "step": 1,
+              "unit": "ms",
+              "default": 30,
+              "gate": {
+                "capability": "txDisplayVersion",
+                "min": 2
+              }
+            },
+            {
+              "id": "display.txDisplay.panNormalize",
+              "label": "1 Hz BW: Av / Sa",
+              "tooltip": "Normalize the TX panadapter trace to a 1 Hz reference bandwidth. Only available for the Average, Sample, and RMS detectors (the Peak and Rosenfell detectors are not power-like).",
+              "kind": "toggle",
+              "binding": {
+                "setting": "DisplayTxPanNormalize"
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 4,
+              "default": false,
+              "valueEncoding": {
+                "true": "True",
+                "false": "False"
+              },
+              "enabledWhen": {
+                "setting": "DisplayTxPanDetector",
+                "oneOf": [
+                  "2",
+                  "3",
+                  "4"
+                ]
+              },
+              "gate": {
+                "capability": "txDisplayVersion",
+                "min": 2
+              }
+            }
+          ]
+        },
+        {
+          "title": "Waterfall",
+          "controls": [
+            {
+              "id": "display.txDisplay.wfDetector",
+              "label": "Detector:",
+              "tooltip": "TX waterfall detector. Applied independently of the pan detector. Peak suits transient visibility; Average gives a smoother waterfall floor.",
+              "kind": "choice",
+              "binding": {
+                "setting": "DisplayTxWfDetector"
+              },
+              "applies": "live",
+              "choices": [
+                "Peak",
+                "Rosenfell",
+                "Average",
+                "Sample"
+              ],
+              "default": 0,
+              "gate": {
+                "capability": "txDisplayVersion",
+                "min": 2
+              }
+            },
+            {
+              "id": "display.txDisplay.wfAveraging",
+              "label": "Averaging:",
+              "tooltip": "TX waterfall averaging policy. Applied independently of the pan averaging.",
+              "kind": "choice",
+              "binding": {
+                "setting": "DisplayTxWfAveraging"
+              },
+              "applies": "live",
+              "choices": [
+                "None",
+                "Recursive",
+                "Time Window",
+                "Log Recursive"
+              ],
+              "default": 0,
+              "gate": {
+                "capability": "txDisplayVersion",
+                "min": 2
+              }
+            },
+            {
+              "id": "display.txDisplay.wfAvTime",
+              "label": "Time:",
+              "tooltip": "TX waterfall averaging time constant in milliseconds. Defaults to 120 ms (longer than the pan default of 30 ms) so the waterfall preserves a longer time history.",
+              "kind": "integer",
+              "binding": {
+                "setting": "DisplayTxWfAvTimeMs"
+              },
+              "applies": "live",
+              "min": 1,
+              "max": 9999,
+              "step": 1,
+              "unit": "ms",
+              "default": 120,
+              "gate": {
+                "capability": "txDisplayVersion",
+                "min": 2
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

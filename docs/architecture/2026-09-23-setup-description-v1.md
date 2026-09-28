@@ -1,4 +1,4 @@
-# Setup description versions 1–3
+# Setup description versions 1–4
 
 The Core sends the desktop's built Setup pages as JSON strings on the read-only
 `setup` mirror object (`SetupDescription`). It has one string property per
@@ -99,7 +99,40 @@ command or result binding. The actual peer must separately declare
 nothing. A V3 peer still receives the older controls with their existing
 semantics. The Core filters every control above the peer's negotiated
 description version, drops empty sections and pages, and caps an unknown
-future declaration at version 3. No mirror field or ordinal changes.
+future declaration at version 4. Categories other than Display retain their
+version-3 ceiling. No mirror field or ordinal changes.
+
+Version 4 publishes the partial Display category. Its station-scoped controls
+cover Spectrum Defaults FFT/window/Hz-per-bin/FPS, Multimeter polling delay,
+and TX Display FFT/window/panadapter/waterfall analyzer settings. The RX quartet
+uses `applies: "subscription"`: it writes through the current session's settings
+proxy and the existing endpoint subscription path picks up the changed values.
+The meter and TX analyzer controls use `applies: "live"`; Core reloads their
+running objects, and these keys are not RX subscription fields. All TX Display
+controls require `txDisplayVersion: 2`. They have no transmit-permission or
+off-air gate because the desktop changes display processing while on air.
+Absent, malformed, stale, or unavailable settings disable their controls.
+
+The two FFT-size controls are the only V4 `kind: "slider"` controls with an
+`options` array. Each option is exactly `{ "value": 4096 * 2^index,
+"label": "<that decimal value>" }` for indices 0 through 6, in ascending
+order. Their `default` is the stored FFT size (RX 4096; TX 32768), not a
+slider index. They have no `min`, `max`, or `step`. A view selects an option by
+index and writes its decimal `value` through the current settings proxy.
+Malformed, reordered, duplicate, unexpected, or empty options are rejected by
+Core validation. V1–V3 projections omit both FFT-size controls.
+
+TX Panadapter Normalize is also V4-only. Its one closed dependency is
+`"enabledWhen":{"setting":"DisplayTxPanDetector","oneOf":["2","3","4"]}`.
+The renderer reads that detector value from the same current-session settings
+proxy; missing, malformed, stale, or other values disable Normalize. A change
+to Average, Sample, or RMS enables it, and a change back to Peak or Rosenfell
+disables it. Core rejects any altered or extended dependency envelope.
+Normalize is stored with the existing exact `True`/`False` setting encoding.
+V1–V3 omit it. The other Display controls retain their existing numeric ranges
+or ordinal string choices. The category and all three pages remain partial;
+local colours, palettes, per-band tables, derived readouts, and actions are not
+described by this slice.
 
 The phone uses a current-session settings snapshot and the current canonical
 radio MAC. Re-validate sends only that MAC to `station.validateSettings`;
