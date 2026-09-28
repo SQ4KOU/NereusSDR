@@ -183,6 +183,8 @@
         {"id": "media-lan-announcement", "file": "media/lan-announcement.bin", "kind": "media", "requires": {}},
         {"id": "media-lan-announcement-2", "file": "media/lan-announcement-2.bin", "kind": "media", "requires": {}},
         {"id": "media-lan-announcement-2-devices", "file": "media/lan-announcement-2-devices.bin", "kind": "media", "requires": {}},
+        {"id": "media-lan-announcement-2-radio", "file": "media/lan-announcement-2-radio.bin", "kind": "media", "requires": {}},
+        {"id": "media-lan-announcement-2-waiting", "file": "media/lan-announcement-2-waiting.bin", "kind": "media", "requires": {}},
         {"id": "media-lan-announcement-2-trailing", "file": "media/lan-announcement-2-trailing.bin", "kind": "media", "requires": {}},
         {"id": "media-dnssd-txt", "file": "media/dnssd-txt.bin", "kind": "media", "requires": {}},
         {"id": "media-tx-keepalive", "file": "media/tx-keepalive.bin", "kind": "media", "requires": {"remoteTxVersion": 1}},

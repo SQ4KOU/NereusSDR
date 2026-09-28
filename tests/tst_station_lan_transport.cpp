@@ -266,10 +266,12 @@ private slots:
         largest.label = QString(32, QLatin1Char('K')) + QLatin1Char('/')
             + QString(32, QLatin1Char('s'));
         largest.devicesConnected = kStationLanMaxDevicesConnected;
+        // iPhone app plan Task 25 (R-IOS-16): and the radio state after it.
+        largest.radio = StationLanRadio::Connected;
         const QByteArray biggest = encodeStationLanAnnouncement(largest, &error);
         QVERIFY2(!biggest.isEmpty(), qPrintable(error));
         QCOMPARE(biggest.size(), kStationLanMaxSchema2DatagramBytes);
-        QCOMPARE(kStationLanMaxSchema2DatagramBytes, 480);
+        QCOMPARE(kStationLanMaxSchema2DatagramBytes, 481);
         QVERIFY(kStationLanMaxSchema2DatagramBytes <= kStationLanMaxDatagramBytes);
     }
 
@@ -291,6 +293,110 @@ private slots:
         QCOMPARE(discovery.endpoints().size(), 1);
         QCOMPARE(discovery.endpoints().first().announcement.devicesConnected,
                  std::optional<int>(2));
+    }
+
+    // iPhone app plan Task 25 (R-IOS-16): the radio state, one byte after
+    // the device count: 0 offline, 1 connected, 2 waiting for a choice.
+    void theRadioStateIsOneByteAfterTheCount()
+    {
+        QString error;
+        StationLanAnnouncement counted = announcementV2();
+        counted.devicesConnected = 1;
+        const QByteArray without = encodeStationLanAnnouncement(counted, &error);
+        QVERIFY2(!without.isEmpty(), qPrintable(error));
+        StationLanAnnouncement stated = counted;
+        stated.radio = StationLanRadio::Connected;
+        const QByteArray with = encodeStationLanAnnouncement(stated, &error);
+        QVERIFY2(!with.isEmpty(), qPrintable(error));
+        QCOMPARE(with.size(), without.size() + 1);
+        QCOMPARE(with.left(without.size()), without);
+        QCOMPARE(with.back(), char(1));
+        auto decoded = decodeStationLanAnnouncement(with, &error);
+        QVERIFY2(decoded, qPrintable(error));
+        QCOMPARE(decoded->radio, std::optional<StationLanRadio>(StationLanRadio::Connected));
+        QCOMPARE(*decoded, stated);
+
+        // Waiting for a radio: no radio connected, so no name and no MAC.
+        StationLanAnnouncement waiting = counted;
+        waiting.radioConnected = false;
+        waiting.radioName.clear();
+        waiting.radioMac = QStringLiteral("00:00:00:00:00:00");
+        waiting.radio = StationLanRadio::Waiting;
+        const QByteArray waitingBytes = encodeStationLanAnnouncement(waiting, &error);
+        QVERIFY2(!waitingBytes.isEmpty(), qPrintable(error));
+        QCOMPARE(waitingBytes.back(), char(2));
+        decoded = decodeStationLanAnnouncement(waitingBytes, &error);
+        QVERIFY2(decoded, qPrintable(error));
+        QCOMPARE(*decoded, waiting);
+        waiting.radio = StationLanRadio::Offline;
+        decoded = decodeStationLanAnnouncement(encodeStationLanAnnouncement(waiting), &error);
+        QVERIFY2(decoded, qPrintable(error));
+        QCOMPARE(decoded->radio, std::optional<StationLanRadio>(StationLanRadio::Offline));
+
+        // A Core before the field: the state is not known.
+        decoded = decodeStationLanAnnouncement(without, &error);
+        QVERIFY2(decoded, qPrintable(error));
+        QVERIFY(!decoded->radio);
+        // A later state this reader does not know reads as not known, so the
+        // Core is still listed.
+        QByteArray later = with;
+        later.back() = char(9);
+        decoded = decodeStationLanAnnouncement(later, &error);
+        QVERIFY2(decoded, qPrintable(error));
+        QVERIFY(!decoded->radio);
+        // Bytes after it are ignored.
+        decoded = decodeStationLanAnnouncement(with + QByteArray("\x07\x01\x00", 3), &error);
+        QVERIFY2(decoded, qPrintable(error));
+        QCOMPARE(*decoded, stated);
+
+        // The state agrees with Radio connected, both ways.
+        StationLanAnnouncement wrong = stated;
+        wrong.radio = StationLanRadio::Waiting;
+        QVERIFY(encodeStationLanAnnouncement(wrong, &error).isEmpty());
+        QByteArray disagree = waitingBytes;
+        disagree.back() = char(1);
+        QVERIFY(!decodeStationLanAnnouncement(disagree, &error));
+        // It follows the count, which it needs; schema 1 has neither.
+        StationLanAnnouncement noCount = announcementV2();
+        noCount.radio = StationLanRadio::Connected;
+        QVERIFY(encodeStationLanAnnouncement(noCount, &error).isEmpty());
+        StationLanAnnouncement schemaOne = announcement();
+        schemaOne.radio = StationLanRadio::Connected;
+        QVERIFY(encodeStationLanAnnouncement(schemaOne, &error).isEmpty());
+
+        // The words the Bonjour record and the vectors use.
+        QCOMPARE(stationLanRadioName(StationLanRadio::Offline), QStringLiteral("offline"));
+        QCOMPARE(stationLanRadioName(StationLanRadio::Connected), QStringLiteral("connected"));
+        QCOMPARE(stationLanRadioName(StationLanRadio::Waiting), QStringLiteral("waiting"));
+        QCOMPARE(stationLanRadioFromName(QStringLiteral("waiting")),
+                 std::optional<StationLanRadio>(StationLanRadio::Waiting));
+        QVERIFY(!stationLanRadioFromName(QStringLiteral("asleep")));
+    }
+
+    void aSchemaOneDatagramKeepsTheRadioStateItAgreesWith()
+    {
+        StationLanDiscovery discovery;
+        QVERIFY(discovery.start(0));
+        QUdpSocket sender;
+        QString error;
+        StationLanAnnouncement stated = announcementV2(5);
+        stated.devicesConnected = 0;
+        stated.radio = StationLanRadio::Connected;
+        sendLoopback(&sender, encodeStationLanAnnouncement(stated, &error), discovery.port());
+        QTRY_COMPARE(discovery.endpoints().size(), 1);
+        // Schema 1 saying the radio is connected keeps "connected".
+        sendLoopback(&sender, datagram(5), discovery.port());
+        QTest::qWait(50);
+        QCOMPARE(discovery.endpoints().first().announcement.radio,
+                 std::optional<StationLanRadio>(StationLanRadio::Connected));
+        // Schema 1 saying it is not: offline or waiting is not known.
+        StationLanAnnouncement gone = announcement(5);
+        gone.radioConnected = false;
+        gone.radioName.clear();
+        gone.radioMac = QStringLiteral("00:00:00:00:00:00");
+        sendLoopback(&sender, encodeStationLanAnnouncement(gone, &error), discovery.port());
+        QTRY_VERIFY(!discovery.endpoints().first().announcement.radioConnected);
+        QVERIFY(!discovery.endpoints().first().announcement.radio);
     }
 
     void announcerRejectsInvalidState()

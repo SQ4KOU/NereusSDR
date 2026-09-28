@@ -240,10 +240,11 @@ private slots:
         const QByteArray id = record().identity.toBase64(QByteArray::Base64UrlEncoding
                                                          | QByteArray::OmitTrailingEquals);
         QCOMPARE(id.size(), 43);
-        // iPhone app Task 71: `devices`, the sixth, after name.
+        // iPhone app Task 71: `devices`, the sixth, after name; iPhone app
+        // plan Task 25 (R-IOS-16): `radio`, the seventh.
         const DnsSdTxtEntries expected{
             {"v", "1"}, {"id", id.left(22)}, {"claimed", "0"}, {"pair", "click"},
-            {"name", "KG4VCF/shack"}, {"devices", "0"}};
+            {"name", "KG4VCF/shack"}, {"devices", "0"}, {"radio", "offline"}};
         QCOMPARE(entries, expected);
 
         const QByteArray bytes = encodeDnsSdTxtRecord(record(), &error);
@@ -269,12 +270,30 @@ private slots:
         QCOMPARE(asMap(dnsSdTxtEntries(longest)).value("name").size(), kStationLanMaxLabelBytes);
     }
 
+    // iPhone app plan Task 25 (R-IOS-16): `radio`, the station's radio state
+    // in the announcement's words, so a phone shows "Waiting for a radio"
+    // before it connects.
+    void theRadioEntryFollowsTheState()
+    {
+        for (const auto& [state, word] :
+             {std::pair{StationLanRadio::Offline, QByteArray("offline")},
+              std::pair{StationLanRadio::Connected, QByteArray("connected")},
+              std::pair{StationLanRadio::Waiting, QByteArray("waiting")}}) {
+            DnsSdRecord stated = record();
+            stated.radio = state;
+            const DnsSdTxtEntries entries = dnsSdTxtEntries(stated);
+            QCOMPARE(entries.last().first, QByteArray("radio"));
+            QCOMPARE(entries.last().second, word);
+            QCOMPARE(asMap(entries).value("v"), QByteArray("1"));
+        }
+    }
+
     void theDevicesEntryFollowsTheCount()
     {
         DnsSdRecord two = record();
         two.devicesConnected = 2;
         QCOMPARE(asMap(dnsSdTxtEntries(two)).value("devices"), QByteArray("2"));
-        QCOMPARE(dnsSdTxtEntries(two).last().first, QByteArray("devices"));
+        QCOMPARE(dnsSdTxtEntries(two).at(5).first, QByteArray("devices"));
         QCOMPARE(asMap(dnsSdTxtEntries(two)).value("v"), QByteArray("1"));
         // 0 to 4 only.
         DnsSdRecord five = record();

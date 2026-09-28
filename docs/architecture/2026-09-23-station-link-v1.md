@@ -5032,7 +5032,7 @@ listener bound to loopback only is neither announced nor advertised
 `dnsSdInterfaceForListener` in `DnsSdAdvertiser.cpp`). Discovery is never
 trust: a client pins what it finds (section 3.2) or pairs (section 3.6).
 
-Both carry the same five facts about the Core, and both change when one
+Both carry the same six facts about the Core, and both change when one
 does (`DaemonApp::updateStationAnnouncement`):
 
 - **identity**: the identity fingerprint, SHA-256 of the identity key
@@ -5055,6 +5055,14 @@ does (`DaemonApp::updateStationAnnouncement`):
   signed-in devices alone (`connectedDevices`, section 7.1). A Core
   reached through the rendezvous or the relay has no announcement, so its
   count shows only after sign-in.
+- **radio** (iPhone app plan Task 25, R-IOS-16): the station's radio,
+  `connected` while it is connected (the same as Radio connected),
+  `waiting` while the station waits for a radio to be chosen (it sees
+  none, or more than one with nothing saved to pick between them;
+  `StationRadios::choose`, `RadioModel::stationRadioWaiting`), and
+  `offline` otherwise. A list shows "Waiting for a radio" before a device
+  connects. A Core reached through the rendezvous or the relay says so only
+  after sign-in (the `stationRadios` stream).
 
 ### 14.1 The LAN announcement
 
@@ -5069,8 +5077,9 @@ does (`DaemonApp::updateStationAnnouncement`):
   (`kStationLanCacheTtlMs`);
 - a listener takes datagrams of at most 512 bytes
   (`kStationLanMaxDatagramBytes`); with the fields below a schema-2
-  datagram is at most 480 (`kStationLanMaxSchema2DatagramBytes`; 479 before
-  the device count), so no field is ever cut short.
+  datagram is at most 481 (`kStationLanMaxSchema2DatagramBytes`; 479 before
+  the device count, 480 before the radio state), so no field is ever cut
+  short.
 
 A station sends schema 2 only (`kStationLanAnnouncementSchema`). A listener
 reads schema 1 and schema 2, so a Core from before schema 2 is still found.
@@ -5095,6 +5104,7 @@ The datagram is binary, in this order; schema 1 ends after the radio MAC:
 | Label | that many bytes | schema 2: ASCII letters, digits, `/`, `_` and `-` (a callsign of up to 32, `/`, a suffix of up to 32) |
 | Pairing | 1 byte | schema 2: 0 `closed`, 1 `click`, 2 `code` |
 | Devices connected | 1 byte | schema 2, appended by iPhone app plan Task 71: 0 to 4 (`kStationLanMaxDevicesConnected`), the places taken; a station always sends it. A reader that never sees it (a datagram from an older Core) takes the count as not known and shows none |
+| Radio | 1 byte | schema 2, appended by iPhone app plan Task 25 after Devices connected, which it needs: 0 `offline`, 1 `connected`, 2 `waiting` (`StationLanRadio`); 1 exactly when Radio connected is 1, and a datagram where they disagree is refused. A station always sends it. A reader that never sees it (an older Core), or sees a value it does not know (a later Core's state), takes the state as not known and lists the Core as before |
 
 **Schema 2 extends by appending.** A reader ignores any bytes after the
 schema-2 fields it knows. It still refuses a datagram that is too short
@@ -5114,18 +5124,23 @@ the fields schema 1 carries; it never clears the identity, label, claimed
 state or pairing (`StationLanCache::ingest`).
 
 A schema-1 datagram for an endpoint that already sent schema 2 does not
-clear its device count either.
+clear its device count either, and keeps its radio state while schema 1's
+Radio connected agrees with it; when it no longer does, the state is not
+known.
 
 The conformance vectors `media/lan-announcement.bin` (schema 1),
 `media/lan-announcement-2.bin` (schema 2, from a Core before the device
 count) and `media/lan-announcement-2-devices.bin` (the same datagram with
-the count, 2) (section 16.4) are datagrams the
+the count, 2), `media/lan-announcement-2-radio.bin` (the same datagram
+with the radio state, `connected`) and `media/lan-announcement-2-waiting.bin`
+(the same Core waiting for a radio: no radio name, the unknown MAC,
+`waiting`) (section 16.4) are datagrams the
 station's own encoder wrote, with their decoded fields, `schema` among
-them, in the `.expect.json` beside each (`devicesConnected` only where the
-datagram carries it). `media/lan-announcement-2-trailing.bin` is the
-`lan-announcement-2-devices` datagram with five bytes appended after the
-count, as a later field would be; its expectation holds the same fields
-and `ignoredTrailingBytes` 5. `tst_link_conformance_media`
+them, in the `.expect.json` beside each (`devicesConnected` and `radio`
+only where the datagram carries them). `media/lan-announcement-2-trailing.bin`
+is the `lan-announcement-2-radio` datagram with five bytes appended after
+the radio state, as a later field would be; its expectation holds the same
+fields and `ignoredTrailingBytes` 5. `tst_link_conformance_media`
 decodes each and encodes the fields again, so a change to this layout
 fails there until the vectors, and this table, move with it.
 
@@ -5146,7 +5161,7 @@ The station registers one DNS-SD service:
   Bonjour renames it when another service holds the name, so a client reads
   the Core's label from the TXT record's `name`, not from the instance
   name;
-- a TXT record of six entries, in this order:
+- a TXT record of seven entries, in this order:
 
 | Key | Value |
 | --- | --- |
@@ -5156,6 +5171,7 @@ The station registers one DNS-SD service:
 | `pair` | `click`, `code` or `closed` |
 | `name` | the label, possibly empty; at most 65 characters |
 | `devices` | iPhone app plan Task 71: `0` to `4`, how many devices hold a place on the Core (section 14); `0` on a Core no device has claimed. `v` stays `1`: an older client ignores the key |
+| `radio` | iPhone app plan Task 25: `connected`, `offline` or `waiting`, the station's radio (section 14). `v` stays `1`: an older client ignores the key, and a client takes a value it does not know as not known |
 
 A client ignores a key it does not know, so a newer station still lists,
 and treats a record whose `v` is not `1` as one it cannot read. `id` names
@@ -5174,7 +5190,7 @@ themselves (`DnsSdAdvertiser::unavailableText`).
 
 The conformance vector `media/dnssd-txt.bin` (section 16.4) is the TXT
 record the station's encoder writes for the Core of
-`media/lan-announcement-2-devices.bin`, each entry preceded by its length in one
+`media/lan-announcement-2-radio.bin`, each entry preceded by its length in one
 byte (RFC 6763 section 6.1), with the service type and the entries as
 strings in `media/dnssd-txt.expect.json`.
 
@@ -5759,8 +5775,10 @@ processors; its vectors hold decoders to the reference PCM instead.
 | `nrsc1` | `lan-announcement`: one schema-1 LAN announcement datagram, as a Core from before schema 2 sends it (section 14.1) | none | `schema` 1, `controlPort`, `fingerprint`, `coreName`, `radioName`, `radioMac`, `radioConnected`, exact |
 | `nrsc1` | `lan-announcement-2`: one schema-2 LAN announcement datagram, from a claimed Core whose pairing window was reopened (section 14.1) | none | `schema` 2, the fields above, `claimed` true, `identity` (base64url of the 32 bytes, no padding), `label` `KG4VCF/shack`, `pairing` `code`, exact |
 | `nrsc1` | `lan-announcement-2-devices`: the `lan-announcement-2` datagram with the device count byte, 2, appended after Pairing (section 14.1) | none | The fields of `lan-announcement-2` and `devicesConnected` 2, exact |
-| `nrsc1` | `lan-announcement-2-trailing`: the `lan-announcement-2-devices` datagram with five bytes appended after its known fields, which a reader ignores (section 14.1) | none | The same fields as `lan-announcement-2-devices`, and `ignoredTrailingBytes` 5: the vector's last five bytes are not decoded, and the encoder writes the bytes before them, exact |
-| `dnssd-txt` | `dnssd-txt`: the Bonjour TXT record of the Core of `lan-announcement-2-devices` (section 14.2) | none | `serviceType` `_nereus-station._tcp` and `txt`, the entries as strings (`v`, `id`, `claimed`, `pair`, `name`, `devices`); the bytes are those entries in that order, exact |
+| `nrsc1` | `lan-announcement-2-radio`: the `lan-announcement-2-devices` datagram with the radio state byte, 1 (`connected`), appended after the count (section 14.1) | none | The fields of `lan-announcement-2-devices` and `radio` `connected`, exact |
+| `nrsc1` | `lan-announcement-2-waiting`: the same Core waiting for a radio to be chosen: Radio connected 0, no radio name, MAC `00:00:00:00:00:00`, radio state 2 (section 14.1) | none | The fields of `lan-announcement-2-devices` with `radioConnected` false, `radioName` empty, that MAC, and `radio` `waiting`, exact |
+| `nrsc1` | `lan-announcement-2-trailing`: the `lan-announcement-2-radio` datagram with five bytes appended after its known fields, which a reader ignores (section 14.1) | none | The same fields as `lan-announcement-2-radio`, and `ignoredTrailingBytes` 5: the vector's last five bytes are not decoded, and the encoder writes the bytes before them, exact |
+| `dnssd-txt` | `dnssd-txt`: the Bonjour TXT record of the Core of `lan-announcement-2-radio` (section 14.2) | none | `serviceType` `_nereus-station._tcp` and `txt`, the entries as strings (`v`, `id`, `claimed`, `pair`, `name`, `devices`, `radio`); the bytes are those entries in that order, exact |
 | `ps3d` | `ps3d-frame`: one PureSignal display chunk, eight points and four correction points | none | Every header field and the eight value lists; `tolerance` `{"absolute": 0}`, because the values travel as IEEE-754 binary64 |
 | `nsdc1` | `nsdc1-full`: frame 1, a keyframe | none | `disposition` `accepted`, `reason` `none`, `keyframe` (the header's keyframe flag), the context (`endpointId`, `contextGeneration`, `minDbm`, `maxDbm`), `encoderSequence`, `producerTimestamp`, `waterfallAdvance` and the reconstructed `traceDbm`, `waterfallDbm` and `wideDbm` rows; `tolerance` `{"dbm": 0.01}` |
 | `nsdc1` | `nsdc1-delta`: frame 2, a delta | `nsdc1-full` | As above, `keyframe` false |

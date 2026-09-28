@@ -224,21 +224,31 @@ public:
     /// iPhone app Task 71: the same Core with two devices on it, the
     /// "Devices connected" byte appended (lan-announcement-2-devices).
     static NereusSDR::StationLanAnnouncement lanAnnouncement2Devices();
+    /// iPhone app plan Task 25 (R-IOS-16): the same Core with its radio
+    /// state, "connected", appended after the count
+    /// (lan-announcement-2-radio).
+    static NereusSDR::StationLanAnnouncement lanAnnouncement2Radio();
+    /// The same Core waiting for a radio to be chosen: no radio connected,
+    /// no radio name, the unknown MAC, state "waiting"
+    /// (lan-announcement-2-waiting).
+    static NereusSDR::StationLanAnnouncement lanAnnouncement2Waiting();
     /// Bytes a later writer might append to schema 2 (a field today's
     /// reader does not know), for the lan-announcement-2-trailing vector,
-    /// which appends them after lanAnnouncement2Devices()'s count.
+    /// which appends them after lanAnnouncement2Radio()'s radio state.
     static QByteArray lanAnnouncementTrailingBytes();
     /// `schema`, schema 1's fields, and for schema 2 `claimed`, `identity`
     /// (base64url of the 32 bytes, no padding), `label` and `pairing`
     /// ("click", "code" or "closed"), and `devicesConnected` when the
-    /// datagram carries it (iPhone app Task 71).
+    /// datagram carries it (iPhone app Task 71), and `radio` ("offline",
+    /// "connected" or "waiting") when it carries that (iPhone app plan
+    /// Task 25).
     static QJsonObject toJson(const NereusSDR::StationLanAnnouncement& value);
     /// False, with `error` set, when `json` is not one announcement.
     static bool fromJson(const QJsonObject& json, NereusSDR::StationLanAnnouncement* value,
                          QString* error);
 
-    /// Task 16: the Bonjour record of the Core lanAnnouncement2Devices()
-    /// describes (Task 71: with its `devices` entry).
+    /// Task 16: the Bonjour record of the Core lanAnnouncement2Radio()
+    /// describes (Task 71: with its `devices` entry; Task 25: `radio`).
     static NereusSDR::DnsSdRecord dnsSdRecord();
     /// `serviceType` and `txt`, the TXT record's entries as strings.
     static QJsonObject toJson(const NereusSDR::DnsSdRecord& record);

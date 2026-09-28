@@ -7,8 +7,10 @@ static_assert(4 + 1 + 1 + 2 + 95 + 1 + NereusSDR::kStationLanMaxCoreNameBytes + 
                       + NereusSDR::kStationLanMaxLabelBytes + 1
                       // iPhone app Task 71: the device count.
                       + 1
+                      // iPhone app plan Task 25: the radio state.
+                      + 1
                   == NereusSDR::kStationLanMaxSchema2DatagramBytes,
-              "the largest schema-2 announcement is 480 bytes");
+              "the largest schema-2 announcement is 481 bytes");
 static_assert(NereusSDR::kStationLanMaxSchema2DatagramBytes
                   <= NereusSDR::kStationLanMaxDatagramBytes,
               "a schema-2 announcement always fits a listener's datagram bound");
@@ -98,6 +100,11 @@ bool validPairing(quint8 value)
     return value <= static_cast<quint8>(StationLanPairing::Code);
 }
 
+bool knownRadio(quint8 value)
+{
+    return value <= static_cast<quint8>(StationLanRadio::Waiting);
+}
+
 bool validate(const StationLanAnnouncement& value, QString* error)
 {
     if (value.controlPort == 0) {
@@ -126,7 +133,8 @@ bool validate(const StationLanAnnouncement& value, QString* error)
         // Schema 1 has nowhere to put these, so a value holding them would
         // not come back from its own bytes.
         if (value.claimed || !value.identity.isEmpty() || !value.label.isEmpty()
-            || value.pairing != StationLanPairing::Closed || value.devicesConnected) {
+            || value.pairing != StationLanPairing::Closed || value.devicesConnected
+            || value.radio) {
             setError(error, "Station LAN announcement schema 1 cannot carry the Core's identity.");
             return false;
         }
@@ -153,6 +161,15 @@ bool validate(const StationLanAnnouncement& value, QString* error)
             || *value.devicesConnected > kStationLanMaxDevicesConnected)) {
         setError(error, "Station LAN announcement has an invalid device count.");
         return false;
+    }
+    if (value.radio) {
+        // It follows the device count on the wire, so it cannot come alone,
+        // and it says the same as Radio connected.
+        if (!value.devicesConnected || !knownRadio(static_cast<quint8>(*value.radio))
+            || ((*value.radio == StationLanRadio::Connected) != value.radioConnected)) {
+            setError(error, "Station LAN announcement has an invalid radio state.");
+            return false;
+        }
     }
     return true;
 }
@@ -202,6 +219,30 @@ std::optional<StationLanPairing> stationLanPairingFromName(const QString& name)
     return std::nullopt;
 }
 
+QString stationLanRadioName(StationLanRadio radio)
+{
+    switch (radio) {
+    case StationLanRadio::Connected:
+        return QStringLiteral("connected");
+    case StationLanRadio::Waiting:
+        return QStringLiteral("waiting");
+    case StationLanRadio::Offline:
+        break;
+    }
+    return QStringLiteral("offline");
+}
+
+std::optional<StationLanRadio> stationLanRadioFromName(const QString& name)
+{
+    for (const StationLanRadio radio :
+         {StationLanRadio::Offline, StationLanRadio::Connected, StationLanRadio::Waiting}) {
+        if (name == stationLanRadioName(radio)) {
+            return radio;
+        }
+    }
+    return std::nullopt;
+}
+
 QByteArray encodeStationLanAnnouncement(const StationLanAnnouncement& value, QString* error)
 {
     if (!validate(value, error)) {
@@ -233,6 +274,10 @@ QByteArray encodeStationLanAnnouncement(const StationLanAnnouncement& value, QSt
         // iPhone app Task 71 (ruling 10.4): appended after Pairing.
         if (value.devicesConnected) {
             out.append(static_cast<char>(*value.devicesConnected));
+            // iPhone app plan Task 25 (R-IOS-16): appended after the count.
+            if (value.radio) {
+                out.append(static_cast<char>(*value.radio));
+            }
         }
     }
     if (out.size() > kStationLanMaxDatagramBytes) {
@@ -308,6 +353,17 @@ std::optional<StationLanAnnouncement> decodeStationLanAnnouncement(const QByteAr
         takeByte(bytes, &offset, &count);
         devicesConnected = count;
     }
+    // iPhone app plan Task 25 (R-IOS-16): the radio state after the count,
+    // when the Core sent it. A state this reader does not know (a later
+    // Core's) reads as not known, so the Core is still listed.
+    std::optional<StationLanRadio> radio;
+    if (schema == kStationLanAnnouncementSchema2 && devicesConnected && offset < bytes.size()) {
+        quint8 state = 0;
+        takeByte(bytes, &offset, &state);
+        if (knownRadio(state)) {
+            radio = static_cast<StationLanRadio>(state);
+        }
+    }
     // Schema 2 extends by appending (link document section 14.1): a reader
     // ignores bytes after the fields it knows. Schema 1 stays exact.
     if (schema == kStationLanAnnouncementSchema1 && offset != bytes.size()) {
@@ -350,6 +406,7 @@ std::optional<StationLanAnnouncement> decodeStationLanAnnouncement(const QByteAr
         value.label = QString::fromLatin1(label);
         value.pairing = static_cast<StationLanPairing>(pairing);
         value.devicesConnected = devicesConnected;
+        value.radio = radio;
     }
     if (!validate(value, error)) {
         return std::nullopt;

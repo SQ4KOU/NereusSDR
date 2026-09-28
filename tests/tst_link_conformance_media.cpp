@@ -17,7 +17,7 @@
 //                   decodeStationLanAnnouncement
 //   codec "dnssd-txt" the Bonjour TXT record (section 14.2), split by
 //                   decodeDnsSdTxtRecord; encoded again in the key order
-//                   v, id, claimed, pair, name, devices
+//                   v, id, claimed, pair, name, devices, radio
 //   codec "ps3d"    one PureSignal display chunk, assembled by a fresh
 //                   Ps3DisplayAssembler for the expectation's
 //                   sessionGeneration; values are exact (tolerance 0)
@@ -65,6 +65,10 @@
 //   2026-09-25: iPhone app Task 71 (R-IOS-02): the lan-
 //               announcement-2-devices vector and the TXT record's sixth entry.
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
+//   2026-09-28: iPhone app plan Task 25 (R-IOS-16): the radio state
+//               vectors and the TXT record's seventh entry, `radio`. J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
 //   2026-09-26  J.J. Boyd / KG4VCF  Parity Task 28 (R-R3-49, A11): the
 //                                    transmit display's NSDC vector
@@ -316,17 +320,18 @@ QString checkDnsSdTxt(const QByteArray& bytes, const QJsonObject& expect)
     }
     QByteArray encoded;
     const QJsonObject txt = expect.value(QStringLiteral("txt")).toObject();
-    // iPhone app Task 71: `devices`, the sixth, after name.
+    // iPhone app Task 71: `devices`, the sixth, after name; iPhone app plan
+    // Task 25: `radio`, the seventh.
     for (const QString& key : {QStringLiteral("v"), QStringLiteral("id"), QStringLiteral("claimed"),
                                QStringLiteral("pair"), QStringLiteral("name"),
-                               QStringLiteral("devices")}) {
+                               QStringLiteral("devices"), QStringLiteral("radio")}) {
         const QByteArray entry = key.toLatin1() + '=' + txt.value(key).toString().toLatin1();
         encoded.append(static_cast<char>(entry.size()));
         encoded.append(entry);
     }
     if (encoded != bytes) {
         return QStringLiteral("the TXT record's bytes are not its entries in the order v, id, "
-                              "claimed, pair, name, devices");
+                              "claimed, pair, name, devices, radio");
     }
     return QString();
 }
@@ -635,6 +640,8 @@ void TstLinkConformanceMedia::vectorsCoverThePlan()
           QStringLiteral("media-opus-4"), QStringLiteral("media-lan-announcement"),
           QStringLiteral("media-lan-announcement-2"),
           QStringLiteral("media-lan-announcement-2-devices"),
+          QStringLiteral("media-lan-announcement-2-radio"),
+          QStringLiteral("media-lan-announcement-2-waiting"),
           QStringLiteral("media-lan-announcement-2-trailing"), QStringLiteral("media-dnssd-txt"),
           QStringLiteral("media-ps3d-frame"), QStringLiteral("media-tx-keepalive"),
           QStringLiteral("media-nsdc1-transmit")}) {
@@ -660,17 +667,34 @@ void TstLinkConformanceMedia::vectorsCoverThePlan()
     withoutCount.remove(QStringLiteral("devicesConnected"));
     QCOMPARE(withoutCount, expectOf(m_vectors.value(QStringLiteral("media-lan-announcement-2"))));
     QVERIFY(counted.bytes.size() <= kStationLanMaxSchema2DatagramBytes);
-    // Schema 2 extends by appending: the trailing vector is the counted
+    // iPhone app plan Task 25 (R-IOS-16): the radio state is one byte
+    // appended after the count; the counted datagram without it decodes
+    // with the state unknown. The waiting vector names the state a list
+    // shows as "Waiting for a radio".
+    const Vector stated = m_vectors.value(QStringLiteral("media-lan-announcement-2-radio"));
+    QCOMPARE(stated.bytes.size(), counted.bytes.size() + 1);
+    QCOMPARE(stated.bytes.left(counted.bytes.size()), counted.bytes);
+    QVERIFY(!expectOf(counted).contains(QStringLiteral("radio")));
+    QCOMPARE(expectOf(stated).value(QStringLiteral("radio")).toString(),
+             QStringLiteral("connected"));
+    QJsonObject withoutRadio = expectOf(stated);
+    withoutRadio.remove(QStringLiteral("radio"));
+    QCOMPARE(withoutRadio, expectOf(counted));
+    const QJsonObject waiting =
+        expectOf(m_vectors.value(QStringLiteral("media-lan-announcement-2-waiting")));
+    QCOMPARE(waiting.value(QStringLiteral("radio")).toString(), QStringLiteral("waiting"));
+    QCOMPARE(waiting.value(QStringLiteral("radioConnected")).toBool(), false);
+    // Schema 2 extends by appending: the trailing vector is the stated
     // vector with bytes after it, and decodes to the same fields.
     const Vector extended = m_vectors.value(QStringLiteral("media-lan-announcement-2-trailing"));
-    const QByteArray known = counted.bytes;
+    const QByteArray known = stated.bytes;
     QVERIFY(extended.bytes.size() > known.size());
     QCOMPARE(extended.bytes.left(known.size()), known);
     QCOMPARE(expectOf(extended).value(QStringLiteral("ignoredTrailingBytes")).toInt(),
              int(extended.bytes.size() - known.size()));
     QJsonObject withoutMark = expectOf(extended);
     withoutMark.remove(QStringLiteral("ignoredTrailingBytes"));
-    QCOMPARE(withoutMark, expectOf(counted));
+    QCOMPARE(withoutMark, expectOf(stated));
     // The TXT vector is the station's encoder's output for the Core the
     // counted announcement describes, its sixth entry the count.
     QCOMPARE(m_vectors.value(QStringLiteral("media-dnssd-txt")).bytes,
@@ -681,6 +705,10 @@ void TstLinkConformanceMedia::vectorsCoverThePlan()
                  .value(QStringLiteral("txt")).toObject()
                  .value(QStringLiteral("devices")).toString(),
              QStringLiteral("2"));
+    QCOMPARE(expectOf(m_vectors.value(QStringLiteral("media-dnssd-txt")))
+                 .value(QStringLiteral("txt")).toObject()
+                 .value(QStringLiteral("radio")).toString(),
+             QStringLiteral("connected"));
     const QJsonObject delta = expectOf(m_vectors.value(QStringLiteral("media-nsdc1-delta")));
     QCOMPARE(delta.value(QStringLiteral("keyframe")).toBool(), false);
     const QJsonObject recovered =

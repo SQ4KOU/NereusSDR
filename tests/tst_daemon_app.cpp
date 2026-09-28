@@ -909,6 +909,20 @@ private slots:
         QCOMPARE(built.claimed, devices->claimed());
         QCOMPARE(built.label, devices->stationLabel());
         QCOMPARE(built.pairing, DaemonApp::stationLanPairingFor(*server));
+        // iPhone app plan Task 25 (R-IOS-16): the radio state, in the
+        // announcement and in Bonjour's record, follows the Core's wait for
+        // a radio choice.
+        RadioModel* const model = app.radioModelForTest();
+        QVERIFY(model);
+        model->setStationRadioWaiting(QString());
+        QCOMPARE(app.stationAnnouncementForTest().radio,
+                 std::optional<StationLanRadio>(StationLanRadio::Offline));
+        model->setStationRadioWaiting(QStringLiteral("Two radios are on this network."));
+        QCOMPARE(app.stationAnnouncementForTest().radio,
+                 std::optional<StationLanRadio>(StationLanRadio::Waiting));
+        model->setStationRadioWaiting(QString());
+        QCOMPARE(app.stationAnnouncementForTest().radio,
+                 std::optional<StationLanRadio>(StationLanRadio::Offline));
         QString error;
         QVERIFY2(!encodeStationLanAnnouncement(built, &error).isEmpty(), qPrintable(error));
         // Loopback: neither the announcement nor Bonjour goes out.

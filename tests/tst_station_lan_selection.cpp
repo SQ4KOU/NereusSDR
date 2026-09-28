@@ -135,6 +135,28 @@ private slots:
         QCOMPARE(row.state, QStringLiteral("Saved, ready to connect"));
     }
 
+    // iPhone app plan Task 25 (R-IOS-16): a Core waiting for a radio to be
+    // chosen says so in the list, as the phone's does, before connecting.
+    void aCoreWaitingForARadioSaysSo()
+    {
+        StationLanEndpoint endpoint;
+        endpoint.announcement = {4711, QStringLiteral("AB:").repeated(31) + QStringLiteral("AB"),
+            QStringLiteral("Core"), {}, QStringLiteral("00:00:00:00:00:00"), false};
+        endpoint.announcement.schema = kStationLanAnnouncementSchema2;
+        endpoint.announcement.identity = QByteArray(kStationLanIdentityBytes, '\x43');
+        endpoint.announcement.devicesConnected = 0;
+        endpoint.announcement.radio = StationLanRadio::Waiting;
+        QVERIFY(!encodeStationLanAnnouncement(endpoint.announcement).isEmpty());
+        QCOMPARE(GuiConnectionController::lanCoreRow(endpoint, {}).radioText,
+                 QStringLiteral("Waiting for a radio"));
+        endpoint.announcement.radio = StationLanRadio::Offline;
+        QCOMPARE(GuiConnectionController::lanCoreRow(endpoint, {}).radioText,
+                 QStringLiteral("Radio (advertised offline)"));
+        endpoint.announcement.radio.reset();   // a Core from before the state
+        QCOMPARE(GuiConnectionController::lanCoreRow(endpoint, {}).radioText,
+                 QStringLiteral("Radio (advertised offline)"));
+    }
+
     void detailsForAnUnclaimedCoreWhosePairingClosedSayWhereItReopens()
     {
         // Part C follow-up (R-IOS-08): the details text takes the same

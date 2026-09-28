@@ -38,11 +38,12 @@ inline constexpr int kStationLanMaxLabelBytes = 65;
 /// after Pairing, 0 to this (the Core's four places).
 inline constexpr int kStationLanMaxDevicesConnected = 4;
 /// The largest schema-2 datagram with today's fields: both names and the
-/// label at their limits, and the device count. Schema 2 extends by
-/// appending fields, which a reader that does not know them ignores (link
-/// document section 14.1); every datagram still fits
-/// kStationLanMaxDatagramBytes. 479 before the device count.
-inline constexpr int kStationLanMaxSchema2DatagramBytes = 480;
+/// label at their limits, the device count and the radio state. Schema 2
+/// extends by appending fields, which a reader that does not know them
+/// ignores (link document section 14.1); every datagram still fits
+/// kStationLanMaxDatagramBytes. 479 before the device count, 480 before the
+/// radio state.
+inline constexpr int kStationLanMaxSchema2DatagramBytes = 481;
 
 /// How the Core accepts a new device right now (the pairing window, link
 /// document section 3.6). On the wire: 0 closed, 1 click, 2 code.
@@ -56,6 +57,20 @@ enum class StationLanPairing : quint8 {
 /// conformance expectations use.
 QString stationLanPairingName(StationLanPairing pairing);
 std::optional<StationLanPairing> stationLanPairingFromName(const QString& name);
+
+/// iPhone app plan Task 25 (R-IOS-16): the station's radio, so a list shows
+/// "Waiting for a radio" before it connects. On the wire (the byte after
+/// the device count): 0 offline, 1 connected, 2 waiting.
+enum class StationLanRadio : quint8 {
+    Offline = 0,   ///< No radio connected, and none is being waited for.
+    Connected = 1, ///< The radio is connected (Radio connected is 1).
+    Waiting = 2,   ///< The station waits for a radio to be chosen.
+};
+
+/// "offline", "connected" or "waiting": the words the Bonjour TXT record
+/// and the conformance expectations use.
+QString stationLanRadioName(StationLanRadio radio);
+std::optional<StationLanRadio> stationLanRadioFromName(const QString& name);
 
 struct StationLanAnnouncement {
     quint16 controlPort = 0;
@@ -80,6 +95,12 @@ struct StationLanAnnouncement {
     /// from before it): the count is not known and a list shows none. A
     /// station always sends it.
     std::optional<int> devicesConnected;
+    /// iPhone app plan Task 25 (R-IOS-16), schema 2: the radio state, the
+    /// byte after the device count, which it needs. Connected exactly when
+    /// radioConnected. nullopt when the datagram does not carry it (a Core
+    /// from before it) or carries a state this reader does not know. A
+    /// station always sends it.
+    std::optional<StationLanRadio> radio;
 
     /// What a list shows: the label, or the Core name when there is none.
     QString displayName() const { return label.isEmpty() ? coreName : label; }
