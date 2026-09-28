@@ -10,6 +10,13 @@ Each entry: what the operator sees or would see, where it was found, the evidenc
 (verbatim quote and date, or an open question with options and a recommendation), its build
 status, and the plan task or requirement ID it belongs to.
 
+JJ clarified the acceptance bar on 2026-09-28: working desktop features from
+before the Core/GUI split must retain parity, and omissions become addenda in
+this effort. The scout compares main `86a1b20d` (which has no daemon target or
+`DaemonApp`) with integration `11a1173a`, tracing actual behavior rather than
+counting controls. Historical placeholders are identified separately; a source
+audit does not substitute for matching local/remote operating checks.
+
 ## Open questions (JJ has not ruled)
 
 ### G-50: Phone Setup has no counterpart for desktop-local services and file actions
@@ -180,8 +187,12 @@ saved rate, so a rate chosen from a window was thrown away at the next restart.
   value only; a saved per-radio rate wins across restarts and installs."
 - Evidence of the fix: commit `043b8cfb`, "Seed the Core's sample rate from the config file
   only when none is saved" (worktree `nereus-small`, branch `codex/conf-rate-seed`).
-- Status: built (commit `043b8cfb`) but not yet merged into the trunk (`codex/checkpoint-b`,
-  head `6c3f543d`); confirmed not an ancestor of the trunk head as of this writing.
+- Status: built and integrated as equivalent signed implementation `40766db6b`,
+  confirmed an ancestor of trunk `11a1173a` during the 2026-09-28 scout. The old
+  `043b8cfb` hash itself is not an ancestor; that does not mean the fix is absent.
+  `DaemonApp::applyConfigToSettings` preserves a saved per-radio rate; its tests
+  cover saved, initial, absent and unsupported rates. The separate audio-device
+  overwrite remains open in G-16.
 - Plan: R-R3-49.
 
 ### G-18: Tests failing under load, including "the data channel did not open"
@@ -197,8 +208,14 @@ libdatachannel races), not in isolation. A dedicated lane is fixing them one at 
   until the answer is kept"); trunk head's own non-realtime run
   (`nereus-lane-b/.../progress.md:444`) shows "tst_tci_remote_window lossless, three
   data-channel rows 'did not open'," passing below load 25.
-- Ruling: none needed; this is test-only hardening, not a product or design decision.
-- Status: in progress (`codex/flaky-tests`, not yet merged into the trunk).
+- Ruling basis: JJ requires a test that fails under load to be reported with its
+  cause and a suggested fix. This batch includes a real libdatachannel race as
+  well as test setup repairs; it is not all test-only hardening.
+- Status: the original batch is integrated in signed merge `02d0a4faf`,
+  confirmed an ancestor of trunk `11a1173a` during the 2026-09-28 scout. This
+  closes the stale “not yet merged” status, not every remaining load finding.
+  Later load failures retain their own cause, fix and verification requirements;
+  timeout increases alone are not an accepted resolution.
 - Plan: R-R3-49.
 
 ### G-19: TX monitor plays only on the transmitting device
