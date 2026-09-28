@@ -45,6 +45,8 @@
 //                receive-only, and TciServer answers a trx set command with
 //                the Core's verdict. NereusSDR-original. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - Desktop-host receiver-to-owned-slice mapping.
+//                NereusSDR-original, AI-assisted via OpenAI Codex.
 
 #pragma once
 
@@ -103,6 +105,7 @@ namespace NereusSDR {
 // Setup → Network → TCI Server. See design doc Section 10.
 // ─────────────────────────────────────────────────────────────────────────
 
+class SliceModel;
 class TciProtocol : public QObject {
     Q_OBJECT
 public:
@@ -272,6 +275,11 @@ public:
     // on its own): every slice, as before.
     using SliceWriteGate = std::function<bool(int sliceId)>;
     void setSliceWriteGate(SliceWriteGate gate) { m_sliceWriteGate = std::move(gate); }
+    // Desktop hosting: map TCI receiver N to the station device's Nth
+    // owned slice. Empty restores the ordinary identity mapping.
+    void setReceiverSliceMap(std::function<int(int)> map) { m_receiverSliceMap = std::move(map); }
+    int receiverSlice(int receiver) const;
+    int sliceReceiver(int sliceId) const;
     // M1 (R-R3-48 / R-R3-25): `command` (one TCI command, with or without
     // its ';') changes transmit configuration an app may not change on the
     // receive-only station server: tx_profile_ex, xit_enable and xit_offset
@@ -300,6 +308,7 @@ public:
     static QString tciAgcModeForWire(const QString& enumName);
 
 private:
+    SliceModel* mappedSlice(int receiver) const;
     // From Thetis TCIServer.cs:4924-5128 [v2.10.3.13] — 60-case set-command switch.
     // Phase 5+ adds individual cases via the matrix runner.
     QString handleSetCommand(const QString& name, const QStringList& args);
@@ -848,6 +857,7 @@ private:
     bool m_remoteTransmitForwarded{false};   // Task 35
     bool m_stationReceiveOnly{false};
     SliceWriteGate m_sliceWriteGate;
+    std::function<int(int)> m_receiverSliceMap;
 };
 
 } // namespace NereusSDR

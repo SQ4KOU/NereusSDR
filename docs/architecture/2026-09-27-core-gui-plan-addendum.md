@@ -1246,9 +1246,18 @@ colours for the same signal.
 - Ruling basis: JJ's standing instruction is “each gap is built as part of this
   effort.” These corrections preserve the already approved station-owned TCI
   receiver and program-key policy; they introduce no new operator preference.
-- Status: in progress. The worker is adding callback lifetime checks and focused
-  socket regressions, tracing safe audio retirement, and checking broadcast
-  mapping. No acceptance or live-radio result is claimed.
+- Status: built in signed implementation `46835b63` with lead integration
+  corrections. Program key requests recheck lifetime and ownership after
+  callbacks, receive remaps retire queued audio without blocking the DSP
+  producer, and broadcasts map physical owned slices to logical receivers.
+  Lead regressions additionally reproduced crashes when key release destroyed
+  the server: mode changes continued on a deleted object, and socket-close
+  processing lost its internal TCP object during parent destruction. Callers
+  now recheck lifetime and defer socket/listener destruction until the close
+  stack unwinds. All three stop/disable/disconnect reproductions pass. The
+  integrated app/Core build and nine TCI suites passed (8.95 seconds) under
+  concurrent lane load. Desktop runtime activation and live-radio acceptance
+  remain open; no RF was used.
 - Plan: desktop hosting and several-device ownership.
 
 ## How this addendum is kept

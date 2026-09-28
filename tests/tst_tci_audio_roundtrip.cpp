@@ -32,6 +32,8 @@
 #include <vector>
 
 #include "core/TciServer.h"
+#include "core/SliceOwnership.h"
+#include "models/RadioModel.h"
 
 using namespace NereusSDR;
 
@@ -42,6 +44,7 @@ private slots:
     void two_clients_on_one_receiver_each_get_all_of_it();
     void mono_client_gets_the_left_channel();
     void stereo_at_12k_keeps_left_and_right_apart();
+    void desktop_host_audio_uses_owned_slice();
 };
 
 namespace {
@@ -122,6 +125,59 @@ bool connectClient(QWebSocket& client, quint16 port)
 }
 
 } // namespace
+
+void TestTciAudioRoundtrip::desktop_host_audio_uses_owned_slice()
+{
+    RadioModel radio;
+    const int foreign = radio.addSlice(QStringLiteral("pan-0"));
+    const int owned = radio.addSlice(QStringLiteral("pan-0"));
+    QCOMPARE(foreign, 0);
+    QCOMPARE(owned, 1);
+    radio.sliceOwnership()->setOwner(foreign, QByteArray("phone"));
+    radio.sliceOwnership()->setOwner(owned, SliceOwnership::stationDevice());
+    TciServer server(&radio);
+    server.setDesktopHostMode(true);
+    QVERIFY(server.start(0));
+    QWebSocket client;
+    QSignalSpy binary(&client, &QWebSocket::binaryMessageReceived);
+    QVERIFY(connectClient(client, server.port()));
+    client.sendTextMessage(QStringLiteral("audio_start:0;"));
+    QTest::qWait(100);
+    std::vector<float> foreignSamples(2048, 0.2f);
+    std::vector<float> ownedSamples(2048, 0.4f);
+    server.injectAudioFrameForTest(foreign, foreignSamples.data(), foreignSamples.data(),
+                                   2048, 48000);
+    QTest::qWait(100);
+    QCOMPARE(decodeRxAudio(binary).size(), 0);
+    server.injectAudioFrameForTest(owned, ownedSamples.data(), ownedSamples.data(),
+                                   2048, 48000);
+    QTRY_COMPARE_WITH_TIMEOUT(decodeRxAudio(binary).size(), 1, 3000);
+    const DecodedBlock block = decodeRxAudio(binary).first();
+    QCOMPARE(block.receiver, 0u);
+    QVERIFY(std::abs(block.samples.at(0) - 0.4f) < 1e-3f);
+    // Leave a partial old-owner block in the ring, then change ownership.
+    // The next full receiver block must contain only the new owner's PCM.
+    server.injectAudioFrameForTest(owned, ownedSamples.data(), ownedSamples.data(),
+                                   1024, 48000);
+    radio.sliceOwnership()->setOwner(owned, QByteArray("phone"));
+    radio.sliceOwnership()->setOwner(foreign, SliceOwnership::stationDevice());
+    binary.clear();
+    server.injectAudioFrameForTest(owned, ownedSamples.data(), ownedSamples.data(),
+                                   2048, 48000);
+    QTest::qWait(100);
+    QCOMPARE(decodeRxAudio(binary).size(), 0);
+    std::vector<float> newOwnedSamples(2048, 0.6f);
+    server.injectAudioFrameForTest(foreign, newOwnedSamples.data(), newOwnedSamples.data(),
+                                   2048, 48000);
+    QTRY_COMPARE_WITH_TIMEOUT(decodeRxAudio(binary).size(), 1, 3000);
+    const DecodedBlock remapped = decodeRxAudio(binary).first();
+    QCOMPARE(remapped.receiver, 0u);
+    for (float sample : remapped.samples) {
+        QVERIFY(std::abs(sample - 0.6f) < 1e-3f);
+    }
+    client.close();
+    server.stop();
+}
 
 // Two apps on receiver 0 used to pop the one shared ring, so each got about
 // half of the blocks. Each must now get every block, in order.
