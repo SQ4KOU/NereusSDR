@@ -53,6 +53,7 @@
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
 #include "core/MoxController.h"
+#include "core/SliceOwnership.h"
 #include "core/TwoToneController.h"
 #include "core/session/PureSignalSessionFacade.h"
 #include "gui/SpectrumWidget.h"
@@ -104,7 +105,17 @@ ContainerButtonDispatcher::ContainerButtonDispatcher(RadioModel* model, Hooks ho
 SliceModel* ContainerButtonDispatcher::sliceFor(int rxSource) const
 {
     if (!m_model) { return nullptr; }
-    return m_model->sliceById(ContainerWidget::sliceIdForRxSource(rxSource));
+    const int sliceId = ContainerWidget::sliceIdForRxSource(rxSource);
+    SliceModel* slice = m_model->sliceById(sliceId);
+    if (slice && m_hooks.desktopHosting && m_hooks.desktopHosting()) {
+        SliceOwnership* ownership = m_model->sliceOwnership();
+        if (!ownership) { return nullptr; }
+        const SliceOwnership::Mark mark = ownership->mark(sliceId);
+        if (mark.owner != SliceOwnership::stationDevice() || !mark.heldFor.isEmpty()) {
+            return nullptr;
+        }
+    }
+    return slice;
 }
 
 QString ContainerButtonDispatcher::noSliceReason(int rxSource)
@@ -112,6 +123,19 @@ QString ContainerButtonDispatcher::noSliceReason(int rxSource)
     return QStringLiteral("%1 is not open. Open it, or choose another slice in this "
                           "container's settings.")
         .arg(ContainerWidget::sliceNameForRxSource(rxSource));
+}
+
+QString ContainerButtonDispatcher::sliceUnavailableReason(int rxSource) const
+{
+    if (m_model && m_hooks.desktopHosting && m_hooks.desktopHosting()) {
+        const int sliceId = ContainerWidget::sliceIdForRxSource(rxSource);
+        if (m_model->sliceById(sliceId)) {
+            return QStringLiteral("%1 belongs to another device. Choose a station slice in "
+                                  "this container's settings.")
+                .arg(ContainerWidget::sliceNameForRxSource(rxSource));
+        }
+    }
+    return noSliceReason(rxSource);
 }
 
 QString ContainerButtonDispatcher::noRadioTransmitReason()
@@ -241,7 +265,7 @@ ContainerButtonDispatcher::stateOf(Id id, int rxSource) const
     case Id::Bin: {
         SliceModel* slice = sliceFor(rxSource);
         if (!slice) {
-            unavailable(noSliceReason(rxSource));
+            unavailable(sliceUnavailableReason(rxSource));
             break;
         }
         st.on = id == Id::Anf    ? slice->anfEnabled()
@@ -259,7 +283,7 @@ ContainerButtonDispatcher::stateOf(Id id, int rxSource) const
     case Id::PeakHold:
     case Id::Ctun: {
         if (!sliceFor(rxSource)) {
-            unavailable(noSliceReason(rxSource));
+            unavailable(sliceUnavailableReason(rxSource));
             break;
         }
         SpectrumWidget* sw = spectrumOf(rxSource);
@@ -413,7 +437,7 @@ void ContainerButtonDispatcher::applySliceAvailability(ButtonBoxItem* box, int r
     if (sliceFor(rxSource)) {
         box->setAllButtonsAvailable(true);
     } else {
-        box->setAllButtonsAvailable(false, noSliceReason(rxSource));
+        box->setAllButtonsAvailable(false, sliceUnavailableReason(rxSource));
     }
 }
 
@@ -428,7 +452,7 @@ void ContainerButtonDispatcher::applyBand(BandButtonItem* item, int rxSource) co
 QString ContainerButtonDispatcher::clickBand(int bandUiIndex, int rxSource)
 {
     SliceModel* slice = sliceFor(rxSource);
-    if (!slice) { return noSliceReason(rxSource); }
+    if (!slice) { return sliceUnavailableReason(rxSource); }
     m_model->onBandButtonClicked(slice, bandFromUiIndex(bandUiIndex));
     return QString();
 }

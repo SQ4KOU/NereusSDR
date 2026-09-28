@@ -144,6 +144,7 @@ public:
     static QString noPowerTargetReason();
 
 private:
+    QString sliceUnavailableReason(int rxSource) const;
     bool transmitBlockedRemotely() const;
     SpectrumWidget* spectrumOf(int rxSource) const;
 

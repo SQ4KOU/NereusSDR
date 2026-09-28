@@ -12,12 +12,16 @@
 #include "gui/applets/TxApplet.h"
 #include "gui/multidevice/TakeTransmitDialog.h"
 #include "gui/SpectrumWidget.h"
+#include "gui/PanadapterApplet.h"
+#include "gui/PanadapterStack.h"
 #include "gui/widgets/VfoWidget.h"
+#include "gui/widgets/RxDashboard.h"
 #include "gui/SetupDialog.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
 #include <QLabel>
+#include <QMenu>
 #include <QPointer>
 #include <QPushButton>
 #include <QSslSocket>
@@ -54,11 +58,114 @@ VfoWidget* flagFor(MainWindow& window, int id)
     }
     return nullptr;
 }
+
+QMenu* menuNamed(MainWindow& window, const QString& name)
+{
+    for (QMenu* menu : window.findChildren<QMenu*>()) {
+        if (menu->title().remove(QLatin1Char('&')) == name) { return menu; }
+    }
+    return nullptr;
+}
+
+QAction* actionNamed(QMenu* menu, const QString& name)
+{
+    if (!menu) { return nullptr; }
+    for (QAction* action : menu->actions()) {
+        if (action->text().remove(QLatin1Char('&')) == name) { return action; }
+    }
+    return nullptr;
+}
 }
 
 class TstDesktopStationWindow final : public QObject {
     Q_OBJECT
 private slots:
+    void foreignGlobalActiveNeverBecomesDesktopTarget()
+    {
+        if (!QSslSocket::supportsSsl()) { QSKIP("Qt reports no working TLS backend."); }
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+        MainWindow window({}, nullptr, MainWindow::ConnectionStartup::Deferred);
+        RadioModel* model = window.radioModel();
+        model->setBoardForTest(HPSDRHW::Saturn);
+        model->configureStreamPool(5, 5, 192000);
+        model->setConnectionStateForTest(ConnectionState::Connected);
+        const int aId = model->addSlice(QStringLiteral("pan-0"));
+        const int bId = model->addSlice(QStringLiteral("pan-0"));
+        const int cId = model->addSlice(QStringLiteral("pan-0"));
+        SliceModel* a = model->sliceById(aId);
+        SliceModel* b = model->sliceById(bId);
+        SliceModel* c = model->sliceById(cId);
+        QVERIFY(a && b && c);
+        DesktopStationController controller(model, optionsFor(settings, directory.path()));
+        window.setDesktopStationController(&controller);
+        QVERIFY(controller.start(true));
+        SliceOwnership* ownership = model->sliceOwnership();
+        ownership->setOwner(bId, QByteArrayLiteral("token:phone"));
+        QVERIFY(model->setActiveSliceByIdFor(QByteArrayLiteral("token:phone"), bId));
+        model->setTransmitHolder(QByteArrayLiteral("token:phone"));
+        QCOMPARE(model->activeSlice(), b);
+        QCOMPARE(ownership->activeFor(SliceOwnership::stationDevice()), aId);
+
+        QMenu* dsp = menuNamed(window, QStringLiteral("DSP"));
+        QVERIFY(dsp);
+        QAction* anf = actionNamed(dsp, QStringLiteral("ANF"));
+        QVERIFY(anf);
+        anf->trigger();
+        QVERIFY(a->anfEnabled());
+        QVERIFY(!b->anfEnabled());
+        QAction* nbMenuAction = actionNamed(dsp, QStringLiteral("NB"));
+        QVERIFY(nbMenuAction);
+        QMenu* nb = nbMenuAction->menu();
+        QVERIFY(nb);
+        QAction* nbAction = actionNamed(nb, QStringLiteral("NB"));
+        QVERIFY(nbAction);
+        nbAction->trigger();
+        QCOMPARE(a->nbMode(), NbMode::NB);
+        // Co-hosted slices intentionally share the stream's single NB state.
+        QCOMPARE(b->nbMode(), NbMode::NB);
+        QMenu* mode = menuNamed(window, QStringLiteral("Mode"));
+        QVERIFY(mode);
+        QAction* am = actionNamed(mode, QStringLiteral("AM"));
+        QVERIFY(am);
+        const DSPMode foreignMode = b->dspMode();
+        am->trigger();
+        QCOMPARE(a->dspMode(), DSPMode::AM);
+        QCOMPARE(b->dspMode(), foreignMode);
+
+        auto* dashboard = window.findChild<RxDashboard*>();
+        QVERIFY(dashboard);
+        QCOMPARE(dashboard->sliceLetter(), a->sliceLetter());
+        auto* pans = window.findChild<PanadapterStack*>();
+        QVERIFY(pans);
+        auto* pan = pans->panadapter(QStringLiteral("pan-0"));
+        QVERIFY(pan);
+        QCOMPARE(pan->activeSliceIndex(), aId);
+        pan->setActiveSliceIndex(bId);  // stale foreign pan selection
+        const double foreignHz = b->frequency();
+        const double tunedHz = a->frequency() + 1000.0;
+        QVERIFY(QMetaObject::invokeMethod(pan->spectrumWidget(), "frequencyClicked",
+            Qt::DirectConnection, Q_ARG(double, tunedHz)));
+        QCOMPARE(a->frequency(), tunedHz);
+        QCOMPARE(b->frequency(), foreignHz);
+
+        QVERIFY(model->setActiveSliceByIdFor(SliceOwnership::stationDevice(), cId));
+        QCOMPARE(model->activeSlice(), b);
+        QCOMPARE(dashboard->sliceLetter(), c->sliceLetter());
+        QCOMPARE(pan->activeSliceIndex(), cId);
+        anf->trigger();
+        QVERIFY(c->anfEnabled());
+        QVERIFY(!b->anfEnabled());
+
+        ContainerWidget* container = window.findChild<ContainerWidget*>();
+        QVERIFY(container);
+        container->setRxSource(bId + 1);
+        QVERIFY(QMetaObject::invokeMethod(container, "otherButtonClicked", Qt::DirectConnection,
+            Q_ARG(int, int(OtherButtonItem::ButtonId::Snb))));
+        QVERIFY(!b->snbEnabled());
+    }
+
     void hostModeOwnFlagsAndDetach()
     {
         if (!QSslSocket::supportsSsl()) { QSKIP("Qt reports no working TLS backend."); }

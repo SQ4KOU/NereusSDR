@@ -1499,6 +1499,98 @@ bool MainWindow::desktopHosting() const
         && (m_desktopStationController->host() || !m_desktopHostStopConfirmed);
 }
 
+bool MainWindow::desktopSliceAllowed(int sliceId) const
+{
+    if (!desktopHosting() || !m_radioModel || !m_radioModel->sliceOwnership()
+        || !m_radioModel->sliceById(sliceId)) { return false; }
+    const SliceOwnership::Mark mark = m_radioModel->sliceOwnership()->mark(sliceId);
+    return mark.owner == SliceOwnership::stationDevice() && mark.heldFor.isEmpty();
+}
+
+SliceModel* MainWindow::activeSliceForWindow() const
+{
+    if (!m_radioModel) { return nullptr; }
+    if (!desktopHosting()) { return m_radioModel->activeSlice(); }
+    SliceOwnership* ownership = m_radioModel->sliceOwnership();
+    if (!ownership) { return nullptr; }
+    const int chosen = ownership->activeFor(SliceOwnership::stationDevice());
+    if (desktopSliceAllowed(chosen)) { return m_radioModel->sliceById(chosen); }
+    for (SliceModel* slice : m_radioModel->slices()) {
+        if (slice && desktopSliceAllowed(slice->sliceIndex())) { return slice; }
+    }
+    return nullptr;
+}
+
+void MainWindow::refreshActiveSlicePresentation()
+{
+    SliceModel* slice = activeSliceForWindow();
+    if (m_rxDashboard) {
+        m_rxDashboard->bindSlice(slice);
+        if (slice) { m_rxDashboard->setSliceLetter(slice->sliceLetter()); }
+    }
+    if (m_panStack && slice) {
+        m_panStack->setActiveSliceOnHostingPan(slice->sliceIndex());
+        if (desktopHosting()) {
+            for (PanadapterApplet* pan : m_panStack->allApplets()) {
+                if (pan && pan->associatedSlices().contains(slice->sliceIndex())) {
+                    m_panStack->setActivePan(pan->panId());
+                    break;
+                }
+            }
+        }
+    }
+    if (m_meterPoller && slice) {
+        if (RxChannel* channel = m_radioModel->rxChannelForSlice(slice->sliceIndex())) {
+            m_meterPoller->setRxChannel(channel);
+        }
+    }
+    if (m_anfAction) {
+        const QSignalBlocker block(m_anfAction);
+        m_anfAction->setChecked(slice && slice->anfEnabled());
+    }
+    if (m_nrGroup) {
+        for (QAction* action : m_nrGroup->actions()) {
+            const QSignalBlocker block(action);
+            action->setChecked(slice && action->data().toInt() == int(slice->activeNr()));
+        }
+    }
+    if (m_nbGroup) {
+        const NbMode order[] = {NbMode::Off, NbMode::NB, NbMode::NB2};
+        const QList<QAction*> actions = m_nbGroup->actions();
+        for (int i = 0; i < actions.size() && i < 3; ++i) {
+            const QSignalBlocker block(actions[i]);
+            actions[i]->setChecked(slice && slice->nbMode() == order[i]);
+        }
+    }
+    const auto syncToggle = [slice](QAction* action, bool on) {
+        if (!action) { return; }
+        const QSignalBlocker block(action);
+        action->setChecked(slice && on);
+    };
+    syncToggle(m_snbAction, slice && slice->snbEnabled());
+    syncToggle(m_apfAction, slice && slice->apfEnabled());
+    syncToggle(m_binAction, slice && slice->binauralEnabled());
+    if (m_agcGroup) {
+        const AGCMode order[] = {AGCMode::Off, AGCMode::Long, AGCMode::Slow,
+                                 AGCMode::Med, AGCMode::Fast, AGCMode::Custom};
+        const QList<QAction*> actions = m_agcGroup->actions();
+        for (int i = 0; i < actions.size() && i < 6; ++i) {
+            const QSignalBlocker block(actions[i]);
+            actions[i]->setChecked(slice && slice->agcMode() == order[i]);
+        }
+    }
+    const DSPMode modes[] = {DSPMode::LSB, DSPMode::USB, DSPMode::DSB,
+                             DSPMode::CWL, DSPMode::CWU, DSPMode::AM,
+                             DSPMode::SAM, DSPMode::FM, DSPMode::DIGL,
+                             DSPMode::DIGU, DSPMode::DRM, DSPMode::SPEC,
+                             DSPMode::RADE_U, DSPMode::RADE_L};
+    for (int i = 0; i < 14; ++i) {
+        if (!m_modeActions[i]) { continue; }
+        const QSignalBlocker block(m_modeActions[i]);
+        m_modeActions[i]->setChecked(slice && slice->dspMode() == modes[i]);
+    }
+}
+
 bool MainWindow::desktopOwnsTransmit() const
 {
     StationServer* server = desktopHosting() ? m_desktopStationController->server() : nullptr;
@@ -1595,8 +1687,8 @@ void MainWindow::refreshDesktopStationState()
     }
 #endif
     SliceOwnership* ownership = m_radioModel->sliceOwnership();
-    const int activeId = hosting && ownership
-        ? ownership->activeFor(SliceOwnership::stationDevice()) : -1;
+    SliceModel* windowActive = activeSliceForWindow();
+    const int activeId = hosting && windowActive ? windowActive->sliceIndex() : -1;
     QVector<SliceModel*> visibleSlices;
     if (hosting && ownership) {
         for (SliceModel* slice : m_radioModel->slices()) {
@@ -1639,9 +1731,7 @@ void MainWindow::refreshDesktopStationState()
                     && m_radioModel->moxController() && m_radioModel->moxController()->isMox(); },
                 [this] { return desktopOwnsTransmit() && m_radioModel && m_radioModel->isTune(); },
                 [this] {
-                    if (!desktopHosting() || !m_radioModel->sliceOwnership()) { return static_cast<SliceModel*>(nullptr); }
-                    return m_radioModel->sliceById(m_radioModel->sliceOwnership()
-                        ->activeFor(SliceOwnership::stationDevice()));
+                    return activeSliceForWindow();
                 });
             if (SliceModel* active = m_radioModel->sliceById(activeId)) {
                 m_txApplet->setCurrentBand(bandFromFrequency(active->frequency()));
@@ -1650,6 +1740,7 @@ void MainWindow::refreshDesktopStationState()
             m_txApplet->setDesktopKeyHandlers({}, {}, {}, {});
         }
     }
+    refreshActiveSlicePresentation();
     refreshContainerControls();
 }
 
@@ -4333,10 +4424,20 @@ SliceModel* MainWindow::sliceForPan(const QString& panId) const
     if (!applet) { return nullptr; }
     const int active = applet->activeSliceIndex();
     if (active >= 0) {
-        if (SliceModel* s = m_radioModel->sliceById(active)) { return s; }
+        if (!desktopHosting() || desktopSliceAllowed(active)) {
+            if (SliceModel* s = m_radioModel->sliceById(active)) { return s; }
+        }
+    }
+    if (desktopHosting()) {
+        if (SliceModel* chosen = activeSliceForWindow()) {
+            if (applet->associatedSlices().contains(chosen->sliceIndex())) {
+                return chosen;
+            }
+        }
     }
     for (SliceModel* s : m_radioModel->slices()) {
-        if (s && applet->associatedSlices().contains(s->sliceIndex())) {
+        if (s && applet->associatedSlices().contains(s->sliceIndex())
+            && (!desktopHosting() || desktopSliceAllowed(s->sliceIndex()))) {
             return s;
         }
     }
@@ -4391,7 +4492,11 @@ int MainWindow::panChainIndex(const QString& panId) const
     auto* applet = m_panStack->panadapter(panId);
     if (!applet) { return -1; }
 
-    const int chain = m_radioModel->sliceChainIndex(applet->activeSliceIndex());
+    const bool hosting = desktopHosting();
+    SliceModel* slice = hosting ? sliceForPan(panId) : nullptr;
+    if (hosting && !slice) { return -1; }
+    const int chain = m_radioModel->sliceChainIndex(
+        slice ? slice->sliceIndex() : applet->activeSliceIndex());
     if (chain >= 0) { return chain; }
 
     // The slice is bound to no stream, so the model has no chain to give.
@@ -4415,6 +4520,7 @@ void MainWindow::onPanWideBadgeClicked(const QString& panId)
 void MainWindow::onPanChainTagClicked(const QString& panId, int chainIdx)
 {
     if (!m_radioModel) { return; }
+    if (desktopHosting() && !sliceForPan(panId)) { return; }
 
     int chain = panChainIndex(panId);
     if (chain < 0) { chain = chainIdx; }
@@ -4438,9 +4544,15 @@ void MainWindow::onPanChainTagClicked(const QString& panId, int chainIdx)
 void MainWindow::onPanTxBadgeClicked(const QString& panId)
 {
     if (!m_panStack || !m_radioModel) { return; }
-    auto* applet = m_panStack->panadapter(panId);
-    if (!applet) { return; }
-    m_radioModel->requestTxHandoffToSlice(applet->activeSliceIndex());
+    if (!desktopHosting()) {
+        if (auto* applet = m_panStack->panadapter(panId)) {
+            m_radioModel->requestTxHandoffToSlice(applet->activeSliceIndex());
+        }
+        return;
+    }
+    SliceModel* slice = sliceForPan(panId);
+    if (!slice || !desktopOwnsTransmit()) { return; }
+    m_radioModel->requestTxHandoffToSlice(slice->sliceIndex());
 }
 
 // Task B5: straight forwarders. panId is the emitting applet's own id (see
@@ -5566,7 +5678,7 @@ void MainWindow::buildUI()
     // current. See design §4.2.
     auto rebindDashboard = [this]() {
         if (!m_rxDashboard || !m_radioModel) { return; }
-        SliceModel* s = m_radioModel->activeSlice();
+        SliceModel* s = activeSliceForWindow();
         if (!s) { return; }
         m_rxDashboard->bindSlice(s);
         // Use SliceModel::sliceLetter(), do NOT derive the letter here.
@@ -6835,14 +6947,8 @@ void MainWindow::buildUI()
     // formerly MeterPoller::pollSliceSMeters()) reading wdspEngine()->
     // rxChannel(slice->sliceIndex()) directly on RadioModel, so they are
     // untouched here.
-    connect(m_radioModel, &RadioModel::activeSliceChanged, this, [this](int) {
-        SliceModel* slice = m_radioModel->activeSlice();
-        if (!slice) { return; }
-        // Phase 3F Sub-Epic J Task 11: RadioModel::rxChannelForSlice()
-        // replaces the direct wdspEngine()->rxChannel() reach.
-        RxChannel* rxCh = m_radioModel->rxChannelForSlice(slice->sliceIndex());
-        if (rxCh) { m_meterPoller->setRxChannel(rxCh); }
-    });
+    connect(m_radioModel, &RadioModel::activeSliceChanged, this,
+            [this](int) { refreshActiveSlicePresentation(); });
 
     // NereusSDR (R-R3-13): a local LinkLost keeps the RX channels alive, so
     // the poller cannot tell from the channel that no reading exists. Only
@@ -7200,7 +7306,7 @@ void MainWindow::populateDefaultMeter()
             if (!m_radioModel) { return; }
             auto* eng = m_radioModel->wdspEngine();
             if (!eng) { return; }
-            SliceModel* slice = m_radioModel->activeSlice();
+            SliceModel* slice = activeSliceForWindow();
             if (!slice) { return; }
             eng->setMaxBinSliceOffsetHz(/*disp=*/0,
                                         slice->frequency() - ddcCenter);
@@ -8539,7 +8645,7 @@ void MainWindow::buildMenuBar()
             Slot slot = nr.second;
             QAction* a = nrMenu->addAction(nr.first,
                 this, [this, slot]() {
-                    SliceModel* slice = m_radioModel->activeSlice();
+                    SliceModel* slice = activeSliceForWindow();
                     if (!slice) { return; }
                     const QString refused = applyNrMenuChoice(slice, slot);
                     // Fix wave I3: a refused choice leaves the check on the
@@ -8560,7 +8666,7 @@ void MainWindow::buildMenuBar()
             m_nrGroup->addAction(a);
         }
         connect(nrMenu, &QMenu::aboutToShow, this, [this]() {
-            const SliceModel* slice = m_radioModel->activeSlice();
+            const SliceModel* slice = activeSliceForWindow();
             for (QAction* action : m_nrGroup->actions()) {
                 const NrSlot slot = static_cast<NrSlot>(action->data().toInt());
                 QSignalBlocker blocker(action);
@@ -8593,7 +8699,7 @@ void MainWindow::buildMenuBar()
             Mode mode = nb.mode;
             QAction* a = nbMenu->addAction(QString::fromUtf8(nb.label),
                 this, [this, mode]() {
-                    SliceModel* slice = m_radioModel->activeSlice();
+                    SliceModel* slice = activeSliceForWindow();
                     if (slice) { slice->setNbMode(mode); }
                 });
             a->setCheckable(true);
@@ -8607,12 +8713,13 @@ void MainWindow::buildMenuBar()
     // SliceModel and are synced too.
     {
         QAction* anfAction = dspMenu->addAction(QStringLiteral("&ANF"));
+        m_anfAction = anfAction;
         anfAction->setCheckable(true);
         connect(anfAction, &QAction::toggled, this, [this](bool on) {
             // A control attached to no flag targets the active slice, which
             // is whichever flag the operator last clicked. Resolved at
             // invocation, not captured, so it follows focus.
-            if (SliceModel* slice = m_radioModel->activeSlice()) {
+            if (SliceModel* slice = activeSliceForWindow()) {
                 slice->setAnfEnabled(on);
             }
         });
@@ -8621,7 +8728,7 @@ void MainWindow::buildMenuBar()
         // toggled back into the handler above.
         connect(m_radioModel, &RadioModel::activeSliceChanged, this,
                 [this, anfAction](int) {
-            if (SliceModel* slice = m_radioModel->activeSlice()) {
+            if (SliceModel* slice = activeSliceForWindow()) {
                 QSignalBlocker block(anfAction);
                 anfAction->setChecked(slice->anfEnabled());
             }
@@ -8631,21 +8738,21 @@ void MainWindow::buildMenuBar()
     m_snbAction = dspMenu->addAction(QStringLiteral("&SNB"));
     m_snbAction->setCheckable(true);
     connect(m_snbAction, &QAction::toggled, this, [this](bool on) {
-        SliceModel* slice = m_radioModel->activeSlice();
+        SliceModel* slice = activeSliceForWindow();
         if (slice) { slice->setSnbEnabled(on); }
     });
 
     m_apfAction = dspMenu->addAction(QStringLiteral("AP&F"));
     m_apfAction->setCheckable(true);
     connect(m_apfAction, &QAction::toggled, this, [this](bool on) {
-        SliceModel* slice = m_radioModel->activeSlice();
+        SliceModel* slice = activeSliceForWindow();
         if (slice) { slice->setApfEnabled(on); }
     });
 
     m_binAction = dspMenu->addAction(QStringLiteral("B&IN"));
     m_binAction->setCheckable(true);
     connect(m_binAction, &QAction::toggled, this, [this](bool on) {
-        SliceModel* slice = m_radioModel->activeSlice();
+        SliceModel* slice = activeSliceForWindow();
         if (slice) { slice->setBinauralEnabled(on); }
     });
 
@@ -8695,7 +8802,7 @@ void MainWindow::buildMenuBar()
             AGCMode agcMode = agc.mode;
             QAction* a = agcMenu->addAction(QString::fromUtf8(agc.label),
                 this, [this, agcMode]() {
-                    SliceModel* slice = m_radioModel->activeSlice();
+                    SliceModel* slice = activeSliceForWindow();
                     if (slice) { slice->setAgcMode(agcMode); }
                 });
             a->setCheckable(true);
@@ -8904,7 +9011,7 @@ void MainWindow::buildMenuBar()
         DSPMode mode = modes[i].mode;
         QAction* act = modeMenu->addAction(QString::fromUtf8(modes[i].label),
                                            this, [this, mode]() {
-            SliceModel* slice = m_radioModel->activeSlice();
+            SliceModel* slice = activeSliceForWindow();
             if (slice) { slice->setDspMode(mode); }
         });
         act->setCheckable(true);
@@ -8932,6 +9039,25 @@ void MainWindow::buildMenuBar()
                 }
             }
         });
+    });
+
+    // Menu checks follow this window's active slice, including a station
+    // selection that changes while the TX holder keeps global active fixed.
+    connect(m_radioModel, &RadioModel::sliceAdded, this, [this](int index) {
+        SliceModel* slice = m_radioModel->sliceById(index);
+        if (!slice) { return; }
+        auto refresh = [this] {
+            if (desktopHosting()) { refreshActiveSlicePresentation(); }
+        };
+        connect(slice, &SliceModel::activeNrChanged, this, refresh);
+        connect(slice, &SliceModel::nbModeChanged, this, refresh);
+        connect(slice, &SliceModel::anfEnabledChanged, this, refresh);
+        connect(slice, &SliceModel::snbEnabledChanged, this, refresh);
+        connect(slice, &SliceModel::apfEnabledChanged, this, refresh);
+        connect(slice, &SliceModel::binauralEnabledChanged, this, refresh);
+        connect(slice, &SliceModel::agcModeChanged, this, refresh);
+        connect(slice, &SliceModel::dspModeChanged, this, refresh);
+        if (desktopHosting()) { refreshActiveSlicePresentation(); }
     });
 
     // =========================================================================
@@ -12000,7 +12126,7 @@ void MainWindow::wireSliceToSpectrum()
 
         // AUTO button toggle → SliceModel
         connect(m_rxApplet, &RxApplet::autoAgcToggled, this, [this](bool enabled) {
-            if (SliceModel* active = m_radioModel->activeSlice()) {
+            if (SliceModel* active = activeSliceForWindow()) {
                 active->setAutoAgcEnabled(enabled);
             }
         });
@@ -13334,7 +13460,7 @@ void MainWindow::openSpotHub()
         // multiply by 1e6 to convert MHz to Hz.
         connect(m_spotHubDialog.data(), &SpotHubDialog::tuneRequested,
                 this, [this](double freqMhz) {
-                    if (auto* slice = m_radioModel->activeSlice()) {
+                    if (auto* slice = activeSliceForWindow()) {
                         slice->setFrequency(freqMhz * 1.0e6);
                     }
                 });
@@ -13518,7 +13644,7 @@ void MainWindow::openFreeDVReporter()
         connect(m_freeDVReporterDialog.data(),
                 &FreeDVReporterDialog::tuneRequested,
                 this, [this](quint64 freqHz) {
-                    if (auto* slice = m_radioModel->activeSlice()) {
+                    if (auto* slice = activeSliceForWindow()) {
                         slice->setFrequency(static_cast<double>(freqHz));
                     }
                 });
@@ -13526,7 +13652,7 @@ void MainWindow::openFreeDVReporter()
         // Phase 3R K-bench (bench feedback): wire active slice VFO ->
         // dialog so the Band/Exact-freq filter actually tracks. Push
         // current value immediately + on every frequencyChanged.
-        if (auto* slice = m_radioModel->activeSlice()) {
+        if (auto* slice = activeSliceForWindow()) {
             m_freeDVReporterDialog->setActiveFrequency(
                 static_cast<quint64>(slice->frequency()));
             connect(slice, &SliceModel::frequencyChanged,

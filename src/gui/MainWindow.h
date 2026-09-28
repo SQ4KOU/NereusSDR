@@ -1106,6 +1106,9 @@ private:
     // TCI leaves host mode only after the controller's final lifecycle signal.
     bool m_desktopHostStopConfirmed{true};
     bool desktopHosting() const;
+    bool desktopSliceAllowed(int sliceId) const;
+    SliceModel* activeSliceForWindow() const;
+    void refreshActiveSlicePresentation();
     bool desktopOwnsTransmit() const;
     void requestDesktopTransmit(bool tune, bool on);
     void handleDesktopTakeResult(const DesktopStationController::RequestResult& result);
@@ -1429,6 +1432,7 @@ private:
     // single toggle actions that mirror SliceModel state.
     QActionGroup* m_nrGroup   = nullptr;
     QActionGroup* m_nbGroup   = nullptr;
+    QAction*      m_anfAction = nullptr;
     QAction*      m_snbAction = nullptr;
     QAction*      m_apfAction = nullptr;
     QAction*      m_binAction = nullptr;
