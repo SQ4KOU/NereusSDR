@@ -3547,6 +3547,7 @@ void P1RadioConnection::parseEp6Frame(const QByteArray& pkt)
             // From Thetis networkproto1.c:335 [v2.10.3.13]:
             //   prn->adc[0].adc_overload = prn->adc[0].adc_overload || ControlBytesIn[1] & 0x01;
             //   // only cleared by getAndResetADC_Overload(), or'ed with existing state //[2.10.3.13]MW0LGE
+            observeAdcOverloads(0x01, c1);
             if (c1 & 0x01) {
                 emit adcOverflow(0);
             }
@@ -3615,6 +3616,8 @@ void P1RadioConnection::parseEp6Frame(const QByteArray& pkt)
             //   prn->adc[0].adc_overload = prn->adc[0].adc_overload || ControlBytesIn[1] & 1;        // only cleared by getAndResetADC_Overload(), or'ed with existing state //[2.10.3.13]MW0LGE
             //   prn->adc[1].adc_overload = prn->adc[1].adc_overload || (ControlBytesIn[2] & 1) << 1; // only cleared by getAndResetADC_Overload(), or'ed with existing state //[2.10.3.13]MW0LGE
             //   prn->adc[2].adc_overload = prn->adc[2].adc_overload || (ControlBytesIn[3] & 1) << 2; // only cleared by getAndResetADC_Overload(), or'ed with existing state //[2.10.3.13]MW0LGE
+            observeAdcOverloads(0x07, static_cast<quint8>((c1 & 0x01)
+                                | ((c2 & 0x01) << 1) | ((c3 & 0x01) << 2)));
             if (c1 & 0x01) { emit adcOverflow(0); }
             if (c2 & 0x01) { emit adcOverflow(1); }
             if (c3 & 0x01) { emit adcOverflow(2); }

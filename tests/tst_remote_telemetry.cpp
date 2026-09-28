@@ -626,7 +626,7 @@ private slots:
         server.acceptTransport(coreWire);
         client.startSession(guiWire, server.token());
         QTRY_VERIFY(client.isHandshakeComplete());
-        QCOMPARE(client.capabilities().stationTelemetryVersion, 5);
+        QCOMPARE(client.capabilities().stationTelemetryVersion, 6);
 
         StationTelemetrySnapshot sample;
         sample.sequence = 1;
@@ -773,7 +773,7 @@ private slots:
         server.acceptTransport(coreWire);
         client.startSession(guiWire, server.token());
         QTRY_VERIFY(client.isHandshakeComplete());
-        QCOMPARE(client.capabilities().stationTelemetryVersion, 5);
+        QCOMPARE(client.capabilities().stationTelemetryVersion, 6);
 
         StationTelemetrySnapshot sample;
         sample.sequence = 1;

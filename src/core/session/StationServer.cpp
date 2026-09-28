@@ -8036,6 +8036,7 @@ bool StationServer::sendTelemetry(const StationTelemetrySnapshot& snapshot,
         // R-R3-32 (parity Task 14): and without the HL2 link
         // (stationTelemetryVersion 5, minor 11).
         message.telemetry.radio.clearHl2Link();
+        message.telemetry.radio.clearRadioDiagnostics();
     }
     // Parity Task 22: the newest measurement, for the support bundle.
     if (const std::optional<QJsonObject> encoded = StationTelemetryCodec::encode(snapshot)) {
@@ -9500,7 +9501,8 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
     // 4 (R-R3-32, parity Task 6): the radio section also carries the Core's
     // PA readings and radio link quality, for a peer at minor 11.
     // 5 (R-R3-32, parity Task 14): and the Core's HL2 link (hl2*).
-    caps.stationTelemetryVersion = telemetry ? 5 : 0;
+    // 6: connected radio age, actual UDP base port and observed ADC status.
+    caps.stationTelemetryVersion = telemetry ? 6 : 0;
     caps.remoteTgxlConfigVersion = m_radioModel->stationAccessoryIdentityEnabled() ? 1 : 0;
     caps.remoteFourO3AControlVersion = m_radioModel->stationAccessoryIdentityEnabled() ? 1 : 0;
     caps.propertyResultVersion = 1;

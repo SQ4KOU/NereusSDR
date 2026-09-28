@@ -2259,6 +2259,10 @@ void StationClient::onTransportText(const QByteArray& wire)
                 || m_capabilities.stationTelemetryVersion < 5) {
                 message.telemetry.radio.clearHl2Link();
             }
+            if (m_agreedMinor < kReceiverLoadSessionProtocolMinor
+                || m_capabilities.stationTelemetryVersion < 6) {
+                message.telemetry.radio.clearRadioDiagnostics();
+            }
             emit telemetryReceived(message.telemetry, m_sessionEpoch);
         }
         break;

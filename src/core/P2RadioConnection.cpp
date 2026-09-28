@@ -4255,6 +4255,7 @@ void P2RadioConnection::processHighPriorityStatus(const QByteArray& data)
     // bitmap.  In NereusSDR raw[], ReadBufp[1] = raw[5] (after 4-byte seq prefix).
     // Bit 0=ADC0, Bit 1=ADC1, Bit 2=ADC2 (Thetis network.c:708).
     const quint8 adcOverloadBits = raw[5];
+    observeAdcOverloads(0x07, adcOverloadBits);
     for (int i = 0; i < 3; ++i) {
         if (adcOverloadBits & (1 << i)) {
             emit adcOverflow(i);

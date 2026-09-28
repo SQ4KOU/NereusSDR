@@ -21003,12 +21003,16 @@ void RadioModel::setConnectionState(ConnectionState s)
     if (s == ConnectionState::Connected) {
         m_widebandDemandRetiring = false;
     }
-    // Phase 3Q sub-PR-3: track when we become connected so
-    // connectionUptimeText() can produce a human-readable elapsed time.
+    // One monotonic connection epoch drives both the local uptime text and
+    // Core diagnostics. The session sampler never restarts this clock.
     if (s == ConnectionState::Connected) {
-        m_connectionStartedAt = QDateTime::currentDateTime();
+        m_connectionStartedAt.start();
+        m_connectionAgeOwner = m_connection;
+        m_connectionAgeHadOwner = m_connection != nullptr;
     } else {
-        m_connectionStartedAt = QDateTime{}; // clear — uptime is meaningless
+        m_connectionStartedAt.invalidate();
+        m_connectionAgeOwner.clear();
+        m_connectionAgeHadOwner = false;
         m_connectionSampleRateHz = 0;
         m_connectionActiveRxCount = 0;       // Task 1.7: reset on disconnect
     }
@@ -23514,13 +23518,11 @@ void RadioModel::onMoxRxReady()
 
 QString RadioModel::connectionUptimeText() const
 {
-    if (!m_connectionStartedAt.isValid()) {
+    const std::optional<qint64> ageMs = connectionAgeMs();
+    if (!ageMs) {
         return QStringLiteral("–");
     }
-    const qint64 elapsedSec = m_connectionStartedAt.secsTo(QDateTime::currentDateTime());
-    if (elapsedSec < 0) {
-        return QStringLiteral("–");
-    }
+    const qint64 elapsedSec = *ageMs / 1000;
     const qint64 h  = elapsedSec / 3600;
     const qint64 m  = (elapsedSec % 3600) / 60;
     const qint64 s  = elapsedSec % 60;
@@ -23533,6 +23535,19 @@ QString RadioModel::connectionUptimeText() const
     return QString::asprintf("%lldm %02llds",
                              static_cast<long long>(m),
                              static_cast<long long>(s));
+}
+
+std::optional<qint64> RadioModel::connectionAgeMs() const
+{
+    if (m_connectionState != ConnectionState::Connected
+        || !m_connectionStartedAt.isValid()
+        || m_connectionAgeOwner != m_connection
+        || (m_connectionAgeHadOwner && !m_connectionAgeOwner)) {
+        return std::nullopt;
+    }
+    constexpr qint64 kMaxExactJsonInteger = 9007199254740991LL;
+    return std::clamp<qint64>(m_connectionStartedAt.elapsed(), 0,
+                              kMaxExactJsonInteger);
 }
 
 QString RadioModel::connectedRadioName() const

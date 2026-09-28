@@ -3390,8 +3390,10 @@ public:
 
     // ── Phase 3Q sub-PR-3: NetworkDiagnosticsDialog text accessors ───────────
     // Each returns an em-dash placeholder ("—") when disconnected.
-    // m_connectionStartedAt is set in setConnectionState() on the
-    // Connected → anything transition; cleared on non-Connected states.
+    // The monotonic connection age is started by setConnectionState() on
+    // Connected and invalidated on every retirement, independent of a
+    // remote client's telemetry session.
+    std::optional<qint64> connectionAgeMs() const;
     QString connectionUptimeText() const;     // "14m 32s" / "—"
     QString connectedRadioName() const;       // RadioInfo.name / "—"
     QString connectionProtocolText() const;   // "1" or "2" / "—"
@@ -6535,10 +6537,12 @@ private:
     int m_stationUserDdcCount{0};
     int m_stationRemoteIqVersion{0};
 
-    // Phase 3Q sub-PR-3: uptime tracking for NetworkDiagnosticsDialog.
-    // Set to current time on Connected transition, cleared (default-constructed)
-    // on any non-Connected state. connectionUptimeText() reads this.
-    QDateTime m_connectionStartedAt;
+    // One model-owned monotonic age for local uptime and V6 telemetry. The
+    // connection identity fence also retires age if a pointer is replaced
+    // without a state edge (including the test injection seam).
+    QElapsedTimer m_connectionStartedAt;
+    QPointer<RadioConnection> m_connectionAgeOwner;
+    bool m_connectionAgeHadOwner{false};
 
     // Phase 3Q sub-PR-3: sample rate as last pushed to the wire.
     // Written from the wireSampleRateChanged path in connectToRadio().

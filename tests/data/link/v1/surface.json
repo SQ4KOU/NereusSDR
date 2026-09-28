@@ -88,7 +88,7 @@
         {
             "kind": "i64",
             "name": "stationTelemetryVersion",
-            "value": 5
+            "value": 6
         },
         {
             "kind": "i64",
@@ -7636,6 +7636,58 @@
                 ],
                 "minMinor": 11,
                 "version": 5
+            },
+            {
+                "fields": [
+                    "audio.active",
+                    "audio.contextGeneration",
+                    "audio.encodeFailuresPerSecond",
+                    "audio.encodedPacketsPerSecond",
+                    "audio.sendAcceptedPerSecond",
+                    "audio.sendRejectedPerSecond",
+                    "audio.sourceDropsPerSecond",
+                    "audio.sourceFramesPerSecond",
+                    "host.hottestZoneCelsius",
+                    "host.hottestZoneName",
+                    "host.memoryAvailableKiB",
+                    "host.memoryTotalKiB",
+                    "host.processCpuPercent",
+                    "host.processResidentKiB",
+                    "host.systemCpuPercent",
+                    "radio.adcOverloads[].adc",
+                    "radio.adcOverloads[].eventsSinceConnection",
+                    "radio.adcOverloads[].lastOverloadAgeMs",
+                    "radio.adcOverloads[].overloaded",
+                    "radio.adcOverloads[].statusAgeMs",
+                    "radio.connected",
+                    "radio.connectionAgeMs",
+                    "radio.hl2RxBytesPerSecond",
+                    "radio.hl2SequenceGaps",
+                    "radio.hl2Throttled",
+                    "radio.hl2TxBytesPerSecond",
+                    "radio.jitterMs",
+                    "radio.paCurrentAmps",
+                    "radio.paTemperatureCelsius",
+                    "radio.paVolts",
+                    "radio.packetGapMs",
+                    "radio.packetLossPercent",
+                    "radio.radioUdpBasePort",
+                    "radio.rttAgeMs",
+                    "radio.rttMs",
+                    "radio.rxMbps",
+                    "radio.sampleRateHz",
+                    "radio.supplyVolts",
+                    "radio.txMbps",
+                    "radio.udpPacketsSeen",
+                    "receivers[].inputDelayMs",
+                    "receivers[].loadPercent",
+                    "receivers[].skippedInputMs",
+                    "receivers[].sliceId",
+                    "sampledElapsedMs",
+                    "sequence"
+                ],
+                "minMinor": 11,
+                "version": 6
             }
         ]
     }

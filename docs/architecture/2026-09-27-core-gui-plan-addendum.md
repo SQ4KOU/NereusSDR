@@ -407,7 +407,10 @@ Thetis only enables ADC0 on every board; NereusSDR offers two ADCs on boards tha
   "The Core is full. Update NereusSDR to take a device's place, or try again later."
   Nobody already connected is disturbed. The phone controller confirmed these sources;
   the Core lead read the ruling directly.
-- Status: decision settled; fifth-device station implementation and verification remain.
+- Status: built in signed `43e8140a` and integrated by `dd42fc56f`.
+  Older clients receive the retryable full-Core refusal without displacing an
+  admitted device. The integrated admission/session verification and subsequent
+  lifetime corrections are recorded under G-53.
 - Plan: R-IOS-30, R-IOS-31.
 
 ### G-15: Away devices come first in the fifth-device choice
@@ -415,7 +418,10 @@ Thetis only enables ADC0 on every board; NereusSDR offers two ADCs on boards tha
 - Ruling: phone design section 5.9, kept by JJ on board v50/v51, explicitly puts an away
   device first. D55's idle-longest ordering remains for connected candidates, and D64
   protects the desktop hosting the Core.
-- Status: decision settled; implementation is not implied by the approved drawings.
+- Status: built in signed `43e8140a` and integrated by `dd42fc56f`.
+  `DeviceSessionRegistry::replacementCandidates` sorts away devices first;
+  `awayIncumbentIsOfferedFirstAndReplaced` verifies the offered device and actual
+  replacement. G-53 records the integrated verification and remaining fixture limit.
 - Plan: R-IOS-30, R-IOS-31.
 
 
@@ -598,7 +604,7 @@ colours for the same signal.
   the harness incorrectly printed a passing summary. This was synthetic; no radio keyed.
 - Ruling: JJ's existing requirement applies: diagnose load failures and bring the cause
   and suggested fix. The 400 ms safety deadline remains unchanged.
-- Status: R5 acceptance remains open. The original tests used the control-only keepalive
+- Original diagnosis: the original tests used the control-only keepalive
   fallback; a corrected production-follower harness also reproduced 402-403 ms false unkeys
   on web relay at 2% and 3% loss and direct WSS at 2%, each with 150 ms RTT. A bounded
   in-memory monotonic trace on the 2% web case captured client keepalive sequences 66-70
@@ -608,8 +614,16 @@ colours for the same signal.
   client `sendBinaryMessage` and before Core `RelayLeg::onMessage`. Service forwarding
   versus socket/TCP buffering or retransmission remains unproved. Control and media share
   the same TCP floor, so sending a duplicate over control has no independent deadline
-  guarantee. No watchdog adjustment or production behavior change was made. The old green
-  accepted-gap summary is withdrawn; an absent interval is a failure.
+  guarantee. No watchdog adjustment or production behavior change was made in that
+  investigation. The old green accepted-gap summary is withdrawn; an absent interval
+  is a failure.
+- Current status: the subsequent bounded relay trace and independent authenticated
+  watch implementation are recorded under G-55 and G-70. The actual Python-service
+  acceptance now passes the four predeclared impaired-network rows plus the
+  continuous second-receiver row, with the original 100 ms cadence and 400 ms safety
+  cutoff. G-55 retains the exact measurements and scenario limits; this supersedes
+  the earlier investigation-only status without erasing its failures. Installed
+  service and live-phone checks remain separate from those isolated results.
 - Plan: R5 restrictive-network transmit deadline.
 
 ### G-40: Code-only rendezvous reconnect stops at an already paired device
@@ -1513,14 +1527,18 @@ colours for the same signal.
 - Ruling basis: JJ approved the phone's full Network Diagnostics scope, recorded
   in its plan commit `7361316de`; the phone team owns the interface. The lead
   supplies truthful optional Core observations, with no Core counter-reset RPC.
-- Status: implementation in progress in an isolated lane. Settled version-6
+- Status: built in signed `749360b0e` and verified in trunk. The version-6
   contract uses the unreleased minor-11 extension: monotonic model-owned radio
   age, owner-thread live base port, and bounded status-bit observations for the
   board's ADCs. Clear requires an explicit zero bit; stale/unobserved status is
   unavailable. Counts track observed overload transitions since this connection,
   survive client joins, and reset on radio reconnect. No transmit or attenuation
-  behavior changes. Acceptance includes compatibility, malformed fields, stale
-  replies, reconnect fencing and actual parser bit coverage.
+  behavior changes. Root rebuilt app/Core and all 13 targeted suites, then
+  ran them serially: 13/13 passed in 48.98 s (load 54.49/21.03/18.78).
+  Coverage includes compatibility, malformed fields, stale replies, reconnect
+  fencing and actual P1/P2 parser bits. Lead review corrected a test that
+  compared a fresh asynchronous connection age to an old frozen age; it now
+  uses the enclosing monotonic timer, without relaxing product deadlines.
 - Plan: Core support for the phone's approved full diagnostics parity.
 
 ### G-82: Refused handover leaves the still-owning Core unreachable
@@ -1560,8 +1578,12 @@ colours for the same signal.
 - Status: the declaration is corrected. The actual DaemonApp.cpp compiles with
   NEREUS_BUILD_TESTS undefined and without a precompiled header (exit 0).
   The integrated app/Core build and three backup/handover suites pass (7.60 s,
-  load 12.50/25.25/27.82). A new test-disabled Linux package must pass before
-  installation. The failed package and compiler output remain
+  load 12.50/25.25/27.82). Signed `99245937` subsequently built with tests
+  disabled for both Rock and Pi 4; CPU/ISA, dependency and model checks passed.
+  Both isolated, network-disabled startup checks reached `nereusd started`
+  and remained running for the 15-second observation. Full Linux suite
+  verification and safe installation timing remain outstanding. The failed
+  original package and compiler output remain
   recorded in `core-gui-rock-9f87b4a9-build.log`.
 - Plan: production Core packaging on the Rock and Pi 4.
 
@@ -1574,11 +1596,49 @@ colours for the same signal.
 - Ruling basis: JJ's diagnostic/source information must describe the build that
   was actually installed. Record the source branch in the signed-source package
   manifest and have the Rock kit read it, matching the existing Pi behavior.
-- Status: local packaging tools corrected and syntax checked; the next signed
-  package will verify the embedded tag. These build-kit files live under
+- Status: local packaging tools corrected and syntax checked. Both signed
+  `99245937` packages now configure with `codex/checkpoint-b@99245937`, matching
+  their manifests. Inspection found that neither daemon embeds this tag at all;
+  G-86 records the separate product-side gap. These build-kit files live under
   `~/.config/nereus/work/`, outside the product repository. No radio configuration
   or installed binary has changed.
 - Plan: truthful Core build provenance in diagnostics.
+
+### G-85: Backup completion can outlive its client or disturb unrelated messages
+
+- Evidence: lead review of the uncommitted paired-export lane found that a cancel
+  send and export-completion signal could delete or replace StationClient before
+  the caller continued accessing it. Session teardown also emitted completion
+  before fencing new work. The new export size check rejected every large incoming
+  message during an export, including unrelated traffic allowed by the existing
+  session limit.
+- Ruling basis: JJ requires complete, reliable parity. Fence retired sessions
+  before callbacks, guard lifetime and session identity after callbacks, and
+  apply export-specific bounds only to export replies. Preserve the existing
+  session limits and unrelated traffic.
+- Status: returned to the export worker before integration, with regression
+  requirements for callback deletion/reconnect, malformed and stale replies,
+  transfer limits and capability loss. The passing large-file round trip alone
+  does not establish these properties. No affected code is installed.
+- Plan: complete settings export, G-74.
+
+### G-86: The Core daemon never receives its source build identity
+
+- Evidence: both signed `99245937` Core packages have the correct build-tag
+  cache value, but neither daemon binary contains it. The generated header is
+  private to the desktop executable; only `main.cpp` initializes BuildIdentity.
+  `server_main.cpp` never reads it, and Core sessions do not currently advertise
+  the source revision. A correct package manifest is not proof of an embedded
+  or remotely reported build identity.
+- Ruling basis: JJ approved full diagnostics and About source information.
+  The lead will make the actual daemon report its product/source identity and
+  provide optional, backward-compatible metadata for connected clients. The
+  generated header must stay private to executables to avoid rebuilding the
+  shared Core and every test each time Git HEAD changes.
+- Status: source cause confirmed; implementation and remote metadata contract
+  pending. Existing packages passed startup checks but are not accepted as
+  complete source-information evidence.
+- Plan: truthful Core build provenance and phone About support.
 
 ## How this addendum is kept
 

@@ -730,7 +730,7 @@ QJsonObject captureSettingsScope()
 
 // Version 1: radio and audio. 2: adds host. 3: adds receivers. 4: adds the
 // radio's PA readings and link quality in the radio section; 5 the Core's
-// HL2 link (hl2*, remote-window parity Task 14)
+// HL2 link (hl2*, remote-window parity Task 14); 6 adds radio diagnostics.
 // (StationCapabilities.h stationTelemetryVersion; StationServer::
 // sendTelemetry strips host below kCoreHostTelemetrySessionProtocolMinor and
 // receivers below kReceiverLoadSessionProtocolMinor). Every optional field
@@ -787,6 +787,12 @@ StationTelemetrySnapshot sampleTelemetry(int version)
         s.radio.hl2Throttled = false;
         s.radio.hl2SequenceGaps = 1;
     }
+    if (version >= 6) {
+        s.radio.connectionAgeMs = 1;
+        s.radio.radioUdpBasePort = 1024;
+        s.radio.adcOverloads = QVector<StationAdcOverloadTelemetry>{
+            {0, 1, 1, true, 1}};
+    }
     return s;
 }
 
@@ -812,15 +818,16 @@ void flattenPaths(const QString& prefix, const QJsonValue& value, QStringList* o
 
 QJsonObject captureTelemetry()
 {
-    // Version 4 (remote-window parity Task 6) and 5 (Task 14) need minor
+    // Versions 4 (remote-window parity Task 6), 5 (Task 14), and 6 need minor
     // 11, as 3 does.
     const quint16 minors[] = {kStationTelemetrySessionProtocolMinor,
                               kCoreHostTelemetrySessionProtocolMinor,
                               kReceiverLoadSessionProtocolMinor,
                               kReceiverLoadSessionProtocolMinor,
+                              kReceiverLoadSessionProtocolMinor,
                               kReceiverLoadSessionProtocolMinor};
     QJsonArray versions;
-    for (int version = 1; version <= 5; ++version) {
+    for (int version = 1; version <= 6; ++version) {
         const std::optional<QJsonObject> payload =
             StationTelemetryCodec::encode(sampleTelemetry(version));
         QStringList paths;

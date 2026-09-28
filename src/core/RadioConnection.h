@@ -19,7 +19,9 @@
 #include <QVector>
 
 #include <atomic>
+#include <array>
 #include <memory>
+#include <optional>
 
 namespace NereusSDR {
 
@@ -92,6 +94,22 @@ struct AntennaRouting {
 struct AlexRxBpf {
     int hpfBitsAdc0 {-1};
     int hpfBitsAdc1 {-1};
+};
+
+// A bounded copy made on the radio connection's parser thread for the
+// existing queued telemetry reply. Ages refer to that connection's current
+// Connected epoch. `known=false` means no valid status for this ADC.
+struct RadioAdcOverloadObservation {
+    bool known{false};
+    bool active{false};
+    qint64 eventsSinceConnection{0};
+    qint64 statusAgeMs{0};
+    std::optional<qint64> lastOverloadAgeMs;
+};
+
+struct RadioDiagnosticsObservation {
+    std::optional<quint16> radioUdpBasePort;
+    std::array<RadioAdcOverloadObservation, 3> adcOverloads{};
 };
 
 // Abstract base class for radio connections.
@@ -627,7 +645,8 @@ signals:
     // never renewed merely because another observation was requested.
     void telemetryObservationReady(quint64 requestId, double rxMbps,
                                    double txMbps, bool hasRtt,
-                                   qint64 rttMs, qint64 rttAgeMs);
+                                   qint64 rttMs, qint64 rttAgeMs,
+                                   NereusSDR::RadioDiagnosticsObservation diagnostics);
 
     // PSU supply voltage (V) from supply_volts (P1 AIN6 / P2 bytes 45-46).
     // Converted via Hermes DC-volts formula (console.cs computeHermesDCVoltage()
@@ -858,6 +877,15 @@ protected:
 
     void setState(ConnectionState newState);
 
+    // Call only on this connection's parser thread after a status frame has
+    // validated. mask says which ADC bits this particular status contains;
+    // a zero bit in mask is no observation and must never clear old state.
+    void observeAdcOverloads(quint8 mask, quint8 bits);
+
+    // The live outbound UDP base/control destination, read only in the
+    // owning-thread collectTelemetryObservation slot. P2 overrides it.
+    virtual int telemetryUdpBasePort() const { return m_radioInfo.port; }
+
     // R-R3-32 (parity Task 6): written only from the receive path on this
     // connection's thread; see linkStats().
     RadioLinkStats m_linkStats;
@@ -879,6 +907,16 @@ protected:
     std::atomic<ConnectionState> m_state{ConnectionState::Disconnected};
     RadioInfo m_radioInfo;
     HardwareProfile m_hardwareProfile;
+
+    struct AccumulatedAdcStatus {
+        bool known{false};
+        bool active{false};
+        qint64 eventsSinceConnection{0};
+        qint64 lastStatusAtMs{0};
+        qint64 lastPositiveAtMs{-1};
+    };
+    QElapsedTimer m_diagnosticsEpoch;
+    std::array<AccumulatedAdcStatus, 3> m_adcOverloads{};
 
     // Shared boolean state for setWatchdogEnabled / isWatchdogEnabled.
     // Both P1 and P2 overrides read/write this field. Default true, as
@@ -1004,3 +1042,4 @@ protected:
 
 Q_DECLARE_METATYPE(NereusSDR::RadioConnectionError)
 Q_DECLARE_METATYPE(NereusSDR::ConnectFailure)
+Q_DECLARE_METATYPE(NereusSDR::RadioDiagnosticsObservation)
