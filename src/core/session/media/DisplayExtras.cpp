@@ -232,8 +232,13 @@ bool parseDisplayExtrasRequest(const QJsonObject& subscribe, DisplayExtrasReques
     if (subscribe.contains(QStringLiteral("activePeakHold"))) {
         DisplayExtrasRequest::ActivePeakHold hold;
         // SpectrumWidget's setter bounds: 100..60000 ms, 0.1..120 dB/s.
-        if (!objectWithKeys(subscribe.value(QStringLiteral("activePeakHold")),
-                            {"enabled", "holdMs", "fallDbPerSec"}, object)
+        // onTx is optional (displayExtrasVersion 3); absent keeps it true.
+        const QJsonValue raw = subscribe.value(QStringLiteral("activePeakHold"));
+        const bool withOnTx = raw.isObject()
+            && raw.toObject().contains(QStringLiteral("onTx"));
+        if (!(withOnTx ? objectWithKeys(raw, {"enabled", "holdMs", "fallDbPerSec", "onTx"}, object)
+                       : objectWithKeys(raw, {"enabled", "holdMs", "fallDbPerSec"}, object))
+            || (withOnTx && !boolValue(object.value(QStringLiteral("onTx")), hold.onTx))
             || !boolValue(object.value(QStringLiteral("enabled")), hold.enabled)
             || !intIn(object.value(QStringLiteral("holdMs")), 100, 60000, hold.holdMs)
             || !numberIn(object.value(QStringLiteral("fallDbPerSec")), 0.1, 120.0,
@@ -505,10 +510,17 @@ DisplayExtrasProcessor::DisplayExtrasProcessor(const DisplayExtrasRequest& reque
         m_blobs.setHoldDrop(blobs.fallDbPerSec > 0.0);
         if (blobs.fallDbPerSec > 0.0) { m_blobs.setFallDbPerSec(blobs.fallDbPerSec); }
         m_blobs.setEnabled(true);
+        // A new display starts with a clearing reset, as the desktop's new
+        // context (SpectrumWidget::invalidateRemoteSpectrumFrame) and
+        // Thetis's clearBuffers (display.cs:2835-2837, 879-882
+        // [v2.10.3.15]): the blobs wait out the 500 ms display delay, as
+        // the peak hold does from its first resize.
+        m_blobs.clearMaximums();
     }
     if (m_request.activePeakHold) {
         m_peakHold.setDurationMs(m_request.activePeakHold->holdMs);
         m_peakHold.setDropDbPerSec(m_request.activePeakHold->fallDbPerSec);
+        m_peakHold.setOnTx(m_request.activePeakHold->onTx);
         m_peakHold.setEnabled(m_request.activePeakHold->enabled);
     }
     if (m_request.waterfallLevels) {
@@ -534,10 +546,11 @@ void DisplayExtrasProcessor::newContext()
 {
     // SpectrumWidget::invalidateRemoteSpectrumFrame: the peak hold empties
     // and the blobs start again; the noise floor and the levels carry on.
+    // Both wait out the 500 ms display delay (Thetis display.cs:859-877
+    // [v2.10.3.15]) before they are sent again.
     m_peakHold.resize(0);
     if (m_blobs.enabled()) {
-        m_blobs.setEnabled(false);
-        m_blobs.setEnabled(true);
+        m_blobs.clearMaximums();
     }
 }
 
@@ -592,15 +605,24 @@ DisplayExtrasFrame DisplayExtrasProcessor::process(const DisplayCodecFrame& fram
 
     // In SpectrumWidget::updateReducedSpectrumOverlays' order: the active
     // peak hold, the blobs, then the noise floor.
+    // As SpectrumWidget::setMoxOverlay: the trace's transmit gate is this
+    // endpoint's slice transmitting (Thetis display.cs:5011 [v2.10.3.15]:
+    //   bSpectralPeakHold = (!local_mox || _activePeakInTxRX1) && m_bSpectralPeakHoldRX1 && ...).
+    // Off while transmitting without onTx, and inside the display delay
+    // after a reset: no section is sent, and the app draws no trace. The
+    // frame still runs, so the delay and the hold keep time.
+    m_peakHold.setTxActive(inputs.transmitting);
     if (m_request.activePeakHold && m_request.activePeakHold->enabled && !trace.isEmpty()) {
         if (m_peakHold.size() != trace.size()) {
             m_peakHold.resize(trace.size());
         }
         m_peakHold.update(trace);
         m_peakHold.tickFrame(fps);
-        QVector<float> row = m_peakHold.peaks();
-        for (float& value : row) { value += shift; }
-        out.peakHoldDbm = std::move(row);
+        if (m_peakHold.active()) {
+            QVector<float> row = m_peakHold.peaks();
+            for (float& value : row) { value += shift; }
+            out.peakHoldDbm = std::move(row);
+        }
     }
     if (m_request.peakBlobs && !trace.isEmpty()) {
         const int n = trace.size();

@@ -117,7 +117,9 @@ private slots:
         QCOMPARE(widget.renderedPixels(), frame.traceDbm);
         QCOMPARE(widget.wfRenderedPixels(), frame.waterfallDbm);
         QCOMPARE(widget.activePeakHoldPeaksForTest().size(), frame.traceDbm.size());
-        QVERIFY(std::isfinite(widget.activePeakHoldPeaksForTest().first()));
+        // The first frame's reset starts the 500 ms display delay (Thetis
+        // display.cs:859-877 [v2.10.3.15]): the trace is held back.
+        QVERIFY(!widget.activePeakHoldActive());
         QTRY_COMPARE(widget.dssRowsPushedForTest(), 1);
         QCOMPARE(widget.dssNewestRowWideBandwidthForTest(), 0.096);
         // A display pause must not replay the last received waterfall row.
@@ -375,6 +377,7 @@ private slots:
         SpectrumWidget widget;
         widget.setDisplayFps(30);
         widget.setActivePeakHoldEnabled(true);
+        widget.setActivePeakHoldDurationMs(100);
         widget.setActivePeakHoldDropDbPerSec(60.0);
         SpectrumEndpointContext context;
         context.codec = {43, 1, -180, 0, 4, 4, 0};
@@ -387,13 +390,70 @@ private slots:
         frame.context = context.codec;
         frame.traceDbm = QVector<float>(4, -50.0f);
         frame.waterfallDbm = QVector<float>(4, -110.0f);
+        // Frames 100 ms apart at 10 a second. The first frame's reset holds
+        // the trace back 500 ms (Thetis display.cs:859-877 [v2.10.3.15]):
+        // the frame starting at 600 ms ends the delay, so the one at 700 ms
+        // is the first to raise the peak. (At the window's 30 a frame the
+        // delay would last 16 frames, not 7.)
+        for (int i = 0; i < 7; ++i) {
+            QVERIFY(widget.updateRemoteSpectrum(frame));
+            QVERIFY(!widget.activePeakHoldActive());
+        }
         QVERIFY(widget.updateRemoteSpectrum(frame));
+        QVERIFY(widget.activePeakHoldActive());
+        QCOMPARE(widget.activePeakHoldPeaksForTest().first(), -50.0f);
         frame.traceDbm = QVector<float>(4, -100.0f);
         QVERIFY(widget.updateRemoteSpectrum(frame));
-        // Two frames at 10 a second: 60 dB/s x 0.2 s = 12 dB below the peak.
-        // (At the window's 30 it would have fallen 4 dB.)
+        QVERIFY(widget.updateRemoteSpectrum(frame));
+        // The peak raised at 700 ms holds through 800 ms (not more than the
+        // 100 ms hold), then the frame at 900 ms drops it 60 dB/s / 10 = 6 dB.
         QCOMPARE(widget.activePeakHoldPeaksForTest().size(), 4);
-        QVERIFY(std::abs(widget.activePeakHoldPeaksForTest().first() - -62.0f) < 1.0e-3f);
+        QVERIFY(std::abs(widget.activePeakHoldPeaksForTest().first() - -56.0f) < 1.0e-3f);
+    }
+
+    // Thetis display.cs:5011 [v2.10.3.15]: a transmitting pan's peak hold is
+    // off unless "Update during TX" is on. The pan's MOX overlay is the
+    // transmitting state, for a remote pan as for a local one.
+    void peakHoldStopsWhileThePanTransmitsUnlessUpdateDuringTx()
+    {
+        SpectrumWidget widget;
+        widget.setActivePeakHoldEnabled(true);
+        widget.setActivePeakHoldDurationMs(100);
+        widget.setActivePeakHoldDropDbPerSec(60.0);
+        SpectrumEndpointContext context;
+        context.codec = {44, 1, -180, 0, 4, 4, 0};
+        context.exactCentreHz = 10000000;
+        context.exactSpanHz = 10000;
+        context.targetFps = 10;
+        widget.setRemoteSpectrumContext(context, context.exactCentreHz, 192000, 4096);
+        DisplayCodecFrame frame;
+        frame.context = context.codec;
+        frame.traceDbm = QVector<float>(4, -50.0f);
+        frame.waterfallDbm = QVector<float>(4, -110.0f);
+        // Past the 500 ms display delay after the first frame's reset.
+        for (int i = 0; i < 8; ++i) {
+            QVERIFY(widget.updateRemoteSpectrum(frame));
+        }
+        QVERIFY(widget.activePeakHoldActive());
+        QCOMPARE(widget.activePeakHoldPeaksForTest().first(), -50.0f);
+
+        widget.setDisplayDuplex(true);   // keep the receive axis and trace
+        widget.setMoxOverlay(true);
+        QVERIFY(!widget.activePeakHoldActive());
+        frame.traceDbm = QVector<float>(4, -20.0f);
+        QVERIFY(widget.updateRemoteSpectrum(frame));
+        QVERIFY(widget.updateRemoteSpectrum(frame));
+        QVERIFY(widget.updateRemoteSpectrum(frame));
+        QCOMPARE(widget.activePeakHoldPeaksForTest().first(), -50.0f);
+
+        widget.setActivePeakHoldOnTx(true);
+        QVERIFY(widget.activePeakHoldActive());
+        QVERIFY(widget.updateRemoteSpectrum(frame));
+        QCOMPARE(widget.activePeakHoldPeaksForTest().first(), -20.0f);
+
+        widget.setActivePeakHoldOnTx(false);
+        widget.setMoxOverlay(false);
+        QVERIFY(widget.activePeakHoldActive());
     }
 
     // Parity Task 17 (B3.9, C10, C11): in a remote window Spectrum Defaults

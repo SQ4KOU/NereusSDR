@@ -147,8 +147,8 @@ command or result binding. The actual peer must separately declare
 nothing. A V3 peer still receives the older controls with their existing
 semantics. The Core filters every control above the peer's negotiated
 description version, drops empty sections and pages, and caps an unknown
-future declaration at version 10. Hardware has a version-6 ceiling, PA a
-version-5 ceiling, Display a version-10 ceiling, and Appearance a version-7
+future declaration at version 11. Hardware has a version-6 ceiling, PA a
+version-5 ceiling, Display a version-11 ceiling, and Appearance a version-7
 ceiling with its prior version-4 projection for V4–V6; the other
 categories on this source retain version 3.
 No mirror field or ordinal changes.
@@ -273,6 +273,48 @@ verb. V1–V9 projections retain their previous version numbers and 11/14/21/29
 control counts; V10 has 33 controls on the same four partial pages. The
 phone's typed settings and render paths already exist, but V10 descriptor
 parsing/dispatch and its TX-filter default correction are separately owned.
+
+Version 11 adds the Spectrum Peaks page (`display.spectrumPeaks`,
+`where:"phone"`, `coverage:"partial"`) between Spectrum Defaults and
+Waterfall Defaults, with all fifteen of its rows in native order. Active
+Peak Hold has Enable per-bin peak trace with decay (`activePeakHold`,
+`DisplayActivePeakHoldEnabled`, false), Hold duration (`activePeakHoldTime`,
+`DisplayActivePeakHoldDurationMs`, integer 100–60000 ms, step 100, default
+2000), Drop rate (`activePeakHoldDropRate`,
+`DisplayActivePeakHoldDropDbPerSec`, integer 1–60 dB/s, step 1, default 6),
+Fill area between peak trace and current trace (`activePeakHoldFill`,
+`DisplayActivePeakHoldFill`, false), Update during TX (`activePeakHoldOnTx`,
+`DisplayActivePeakHoldOnTx`, false) and Trace color (`activePeakHoldColor`,
+`DisplayActivePeakHoldColor`, `#FFD700FF`). Peak Blobs has Show top-N peak
+markers (`peakBlobs`, `DisplayPeakBlobsEnabled`, false), Number of peaks
+(`peakBlobCount`, `DisplayPeakBlobsCount`, integer 1–20, step 1, default 3),
+Only show peaks inside the RX filter passband (`peakBlobInsideFilter`,
+`DisplayPeakBlobsInsideFilterOnly`, false), Hold peaks before decay
+(`peakBlobHold`, `DisplayPeakBlobsHoldEnabled`, false), Hold duration
+(`peakBlobHoldTime`, `DisplayPeakBlobsHoldMs`, integer 100–60000 ms, step
+100, default 500), Decay after hold (`peakBlobHoldDrop`,
+`DisplayPeakBlobsHoldDrop`, false), Fall rate (`peakBlobFallRate`,
+`DisplayPeakBlobsFallDbPerSec`, integer 1–60 dB/s, step 1, default 6), Blob
+color (`peakBlobColor`, `DisplayPeakBlobColor`, `#FF4500FF`) and Text color
+(`peakBlobTextColor`, `DisplayPeakBlobTextColor`, `#7FFF00FF`). Each id is
+prefixed `display.spectrumPeaks.`; each `binding.phone` is the desktop's own
+key. The desktop stores these keys once for every pan, and a Setup change
+reaches every pan at once. The desktop draws the peak hold trace and the
+blobs from the frames it already has; the phone gets the same computation
+from the Core's display extras `activePeakHold` and `peakBlobs`
+subscription fields. The eleven rows that feed those fields use
+`applies:"subscription"`; the fill and the three colors only change the
+phone's drawing and use `applies:"live"`. Every row requires
+`displayExtrasVersion:1` except Hold duration and Update during TX, which
+require 3: the Core that holds each peak for `holdMs` and honors
+`activePeakHold.onTx`. The blob hold, drop and fall rows reach the Core as
+the existing `holdMs` (0 when the hold is off) and `fallDbPerSec` (0 when
+decay after hold is off) numbers, which the Core turns back into the
+desktop's switches. Colors are eight-digit `#RRGGBBAA` strings as in
+Appearance. No new Core setting or wire verb is defined. V1–V10
+projections retain their prior version numbers, page lists and
+11/14/21/29/33 control counts; V11 has 48 Display controls on five partial
+pages. Phone parsing and dispatch of V11 are separately owned.
 
 V4 adds `default` metadata to these exact Display and Appearance controls.
 Display toggles use JSON booleans; its numeric controls use JSON numbers,

@@ -21,6 +21,12 @@
 //                                    Re-tune for one endpoint
 //                                    (displayExtrasVersion 2).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  activePeakHold.onTx and the
+//                                    endpoint's transmitting input: the
+//                                    desktop's "Update during TX" and hold
+//                                    time reach an app's peak hold
+//                                    (displayExtrasVersion 3).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/media/DisplayCodec.h"
@@ -61,11 +67,15 @@ struct DisplayExtrasRequest {
         bool insideOnly {false};
         bool operator==(const PeakBlobs&) const = default;
     };
-    /// `activePeakHold {enabled, holdMs, fallDbPerSec}`.
+    /// `activePeakHold {enabled, holdMs, fallDbPerSec[, onTx]}`. `onTx`
+    /// (displayExtrasVersion 3) keeps the trace running while the
+    /// endpoint's slice transmits; absent, it is true, which is how every
+    /// older app's trace behaved.
     struct ActivePeakHold {
         bool enabled {false};
         int holdMs {2000};
         double fallDbPerSec {6.0};
+        bool onTx {true};
         bool operator==(const ActivePeakHold&) const = default;
     };
     /// `noiseFloor {enabled, shiftDb}`.
@@ -191,6 +201,9 @@ struct DisplayExtrasInputs {
     double filterHighHz {0.0};
     int band {0};
     bool mox {false};
+    /// The endpoint's slice is the one transmitting (MOX on and the slice
+    /// is the transmit slice): Thetis's local_mox for that receiver.
+    bool transmitting {false};
     /// The source's bin width (sample rate / FFT size), for normalise.
     double binWidthHz {0.0};
 };

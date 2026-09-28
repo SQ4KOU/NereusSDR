@@ -475,6 +475,7 @@ private slots:
         DisplayExtrasProcessor station(request);
 
         int blobsCompared = 0;
+        int holdRowsCompared = 0;
         for (int i = 0; i < kFrames; ++i) {
             DisplayCodecFrame frame;
             frame.context = context.codec;
@@ -508,12 +509,16 @@ private slots:
                         <= kToleranceDb);
                 ++blobsCompared;
             }
-            // The active peak hold row.
+            // The active peak hold row: both wait out the same 500 ms display
+            // delay after the first frame's reset, then agree.
             const QVector<float>& desktopHold = desktop.activePeakHoldPeaksForTest();
-            QVERIFY(out.peakHoldDbm.has_value());
-            QCOMPARE(out.peakHoldDbm->size(), desktopHold.size());
-            for (int x = 0; x < desktopHold.size(); ++x) {
-                QVERIFY(std::abs(out.peakHoldDbm->at(x) - desktopHold.at(x)) <= kToleranceDb);
+            QCOMPARE(out.peakHoldDbm.has_value(), desktop.activePeakHoldActive());
+            if (out.peakHoldDbm.has_value()) {
+                ++holdRowsCompared;
+                QCOMPARE(out.peakHoldDbm->size(), desktopHold.size());
+                for (int x = 0; x < desktopHold.size(); ++x) {
+                    QVERIFY(std::abs(out.peakHoldDbm->at(x) - desktopHold.at(x)) <= kToleranceDb);
+                }
             }
             // The noise-floor line, where the desktop draws it (lerp + shift).
             QVERIFY(out.noiseFloorDbm.has_value());
@@ -528,6 +533,7 @@ private slots:
                     <= kToleranceDb);
         }
         QVERIFY2(blobsCompared >= minimumBlobs, qPrintable(QString::number(blobsCompared)));
+        QVERIFY2(holdRowsCompared >= kFrames / 2, qPrintable(QString::number(holdRowsCompared)));
     }
 
     void averagingConstantIsTheDesktopsForTheSameTimeAndRate()
@@ -575,7 +581,13 @@ private slots:
                 QVERIFY(std::abs(y.peakBlobs->at(k).dbm - x.peakBlobs->at(k).dbm - shift)
                         < 1.0e-3f);
             }
-            for (int k = 0; k < x.peakHoldDbm->size(); ++k) {
+            // Inside the display delay after the first reset neither sends
+            // the row; after it both do.
+            QCOMPARE(y.peakHoldDbm.has_value(), x.peakHoldDbm.has_value());
+            // 500 ms at 30 frames a second: absent through frame 14, present
+            // from frame 17 (frames 15 and 16 sit on the floating-point edge).
+            if (i <= 14 || i >= 17) { QCOMPARE(x.peakHoldDbm.has_value(), i >= 17); }
+            for (int k = 0; x.peakHoldDbm && k < x.peakHoldDbm->size(); ++k) {
                 QVERIFY(std::abs(y.peakHoldDbm->at(k) - x.peakHoldDbm->at(k) - shift) < 1.0e-3f);
             }
             QVERIFY(std::abs(*y.noiseFloorDbm - *x.noiseFloorDbm - shift) < 1.0e-3f);
@@ -613,6 +625,85 @@ private slots:
             QCOMPARE(out.first, desktop.lastLow());
             QCOMPARE(out.second, desktop.lastHigh());
         }
+    }
+
+    // Version 3: onTx is optional, a bool, and true when absent.
+    void activePeakHoldOnTxParses()
+    {
+        const auto hold = [](const QJsonObject& members) {
+            QJsonObject subscribe;
+            subscribe.insert(QStringLiteral("activePeakHold"), members);
+            return subscribe;
+        };
+        QJsonObject base{{QStringLiteral("enabled"), true},
+                         {QStringLiteral("holdMs"), 500},
+                         {QStringLiteral("fallDbPerSec"), 6.0}};
+        DisplayExtrasRequest request;
+        QVERIFY(parseDisplayExtrasRequest(hold(base), request));
+        QVERIFY(request.activePeakHold->onTx);
+        QJsonObject off = base;
+        off.insert(QStringLiteral("onTx"), false);
+        QVERIFY(parseDisplayExtrasRequest(hold(off), request));
+        QVERIFY(!request.activePeakHold->onTx);
+        QCOMPARE(request.activePeakHold->holdMs, 500);
+        QJsonObject wrong = base;
+        wrong.insert(QStringLiteral("onTx"), 1);
+        DisplayExtrasRequest untouched;
+        QVERIFY(!parseDisplayExtrasRequest(hold(wrong), untouched));
+        QJsonObject extra = off;
+        extra.insert(QStringLiteral("other"), true);
+        QVERIFY(!parseDisplayExtrasRequest(hold(extra), untouched));
+    }
+
+    // Thetis display.cs:5011, 5359-5363 [v2.10.3.15], as the desktop: a
+    // raised bin holds for holdMs, and while the endpoint's slice transmits
+    // without onTx the trace is not updated, not decayed and not sent.
+    void thePeakHoldHoldsAndStopsWhileTheSliceTransmits()
+    {
+        DisplayExtrasRequest request;
+        request.activePeakHold = DisplayExtrasRequest::ActivePeakHold{true, 100, 25.0, false};
+        DisplayExtrasProcessor station(request);
+        DisplayCodecFrame frame;
+        frame.context = {1, 1, -180.0f, 0.0f, 4, 4, 0};
+        frame.traceDbm = {-40, -40, -40, -40};
+        frame.waterfallDbm = frame.traceDbm;
+        DisplayExtrasInputs inputs;
+        inputs.fps = 25;
+        // The first frame's reset holds the row back 500 ms (Thetis
+        // display.cs:859-877 [v2.10.3.15]): 14 frames of 40 ms, then it runs.
+        DisplayExtrasFrame out;
+        int delayed = 0;
+        while (!(out = station.process(frame, inputs)).peakHoldDbm.has_value()) {
+            QVERIFY(++delayed <= 20);
+        }
+        QCOMPARE(delayed, 14);
+        QCOMPARE(out.peakHoldDbm->first(), -40.0f);
+        frame.traceDbm = {-90, -90, -90, -90};
+        out = station.process(frame, inputs);   // 40 ms old
+        out = station.process(frame, inputs);   // 80 ms old
+        QCOMPARE(out.peakHoldDbm->first(), -40.0f);
+        out = station.process(frame, inputs);   // 120 ms old: 1 dB lower
+        QVERIFY(std::abs(out.peakHoldDbm->first() - -41.0f) < 1.0e-4f);
+
+        inputs.transmitting = true;
+        frame.traceDbm = {-10, -10, -10, -10};
+        out = station.process(frame, inputs);
+        QVERIFY(!out.peakHoldDbm.has_value());
+        inputs.transmitting = false;
+        frame.traceDbm = {-90, -90, -90, -90};
+        out = station.process(frame, inputs);
+        // Not raised by the transmit frame, and it did not fall meanwhile.
+        QVERIFY(std::abs(out.peakHoldDbm->first() - -42.0f) < 1.0e-4f);
+
+        DisplayExtrasRequest running = request;
+        running.activePeakHold->onTx = true;
+        DisplayExtrasProcessor keyed(running);
+        for (int i = 0; i < 15; ++i) { keyed.process(frame, inputs); }
+        inputs.transmitting = true;
+        frame.traceDbm = {-10, -10, -10, -10};
+        out = keyed.process(frame, inputs);
+        QVERIFY(out.peakHoldDbm.has_value());
+        QCOMPARE(out.peakHoldDbm->first(), -10.0f);
     }
 
     void aNewContextRestartsTheHoldAndTheBlobs()
@@ -922,12 +1013,13 @@ private slots:
             QVERIFY(update.name != QByteArray("displayExtrasVersion"));
         }
         Harness harness;
-        // 2 (R-IOS-27, R-IOS-06): the extras and clarity-retune.
-        QCOMPARE(harness.server.displayExtrasVersion(), 2);
+        // 2 (R-IOS-27, R-IOS-06): the extras and clarity-retune; 3: the peak
+        // hold's hold time and activePeakHold.onTx.
+        QCOMPARE(harness.server.displayExtrasVersion(), 3);
         QVERIFY(!harness.server.displayExtrasAvailable()); // no session yet
         QVERIFY(harness.establishSession());
         QVERIFY(harness.server.displayExtrasAvailable());
-        QCOMPARE(harness.client.capabilities().displayExtrasVersion, 2);
+        QCOMPARE(harness.client.capabilities().displayExtrasVersion, 3);
         harness.finish();
     }
 
@@ -971,16 +1063,35 @@ private slots:
             QTest::qWait(20);
         }
         QTRY_VERIFY(withMagic(harness.mediaTransport->displays, "NSDX").size() >= 3);
+        // The peak hold section follows once the first reset's 500 ms
+        // display delay (counted in the Core's frames, Thetis display.cs:
+        // 859-877 [v2.10.3.15]) is over.
+        const auto fullExtras = [&harness, &context7]() {
+            for (const QByteArray& bytes : withMagic(harness.mediaTransport->displays, "NSDX")) {
+                const auto decoded = decodeDisplayExtras(bytes, context7);
+                if (decoded.accepted && decoded.frame.sections() == kDisplayExtrasKnownSections) {
+                    return true;
+                }
+            }
+            return false;
+        };
+        QTRY_VERIFY_WITH_TIMEOUT((harness.feedRadio(0.2), QTest::qWait(20), fullExtras()), 20'000);
         const QList<QByteArray> displays = harness.mediaTransport->displays;
 
         // Every NSDX datagram decodes against endpoint 7's context, goes
         // right after endpoint 7's frame with the same sequence, and fits.
         int checked = 0;
+        bool seenPeakHold = false;
         for (int i = 0; i < displays.size(); ++i) {
             if (!displays.at(i).startsWith("NSDX")) { continue; }
             const auto decoded = decodeDisplayExtras(displays.at(i), context7);
             QVERIFY(decoded.accepted);
-            QCOMPARE(int(decoded.frame.sections()), 0x0F);
+            // Every section, or every one but the peak hold while it is
+            // held back after the first reset; never the other way round.
+            const int sections = int(decoded.frame.sections());
+            QVERIFY2(sections == 0x0F || (sections == 0x0D && !seenPeakHold),
+                     qPrintable(QString::number(sections)));
+            seenPeakHold = seenPeakHold || sections == 0x0F;
             QVERIFY(displays.at(i).size() <= kDisplayExtrasMaxBytes);
             QVERIFY(i > 0 && displays.at(i - 1).startsWith("NSDC"));
             DisplayCodecDecoder check;
@@ -990,10 +1101,13 @@ private slots:
             QCOMPARE(int(static_cast<quint8>(frame.at(11))), 7);
             QCOMPARE(sequenceOfNsdc(frame), decoded.frame.encoderSequence);
             QVERIFY(decoded.frame.peakBlobs->size() <= 3);
-            QCOMPARE(decoded.frame.peakHoldDbm->size(), int(context7.traceSamples));
+            if (decoded.frame.peakHoldDbm) {
+                QCOMPARE(decoded.frame.peakHoldDbm->size(), int(context7.traceSamples));
+            }
             ++checked;
         }
         QVERIFY(checked >= 3);
+        QVERIFY(seenPeakHold);
         // Nothing but NSDC for endpoint 8.
         for (const QByteArray& bytes : displays) {
             if (bytes.startsWith("NSDX")) {

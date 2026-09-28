@@ -220,7 +220,7 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
          && !(id == QLatin1String("diagnostics")
               && root.value(QStringLiteral("version")) == QJsonValue(3))
          && !(id == QLatin1String("display")
-              && root.value(QStringLiteral("version")) == QJsonValue(10))
+              && root.value(QStringLiteral("version")) == QJsonValue(11))
          && !(id == QLatin1String("appearance")
               && root.value(QStringLiteral("version")) == QJsonValue(7))
          && !(id == QLatin1String("pa")
@@ -289,7 +289,10 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                                          == QJsonValue(9))
                                 && !(id == QLatin1String("display")
                                      && control.value(QStringLiteral("requiresDescriptionVersion"))
-                                         == QJsonValue(10)))))
+                                         == QJsonValue(10))
+                                && !(id == QLatin1String("display")
+                                     && control.value(QStringLiteral("requiresDescriptionVersion"))
+                                         == QJsonValue(11)))))
                     || (control.value(QStringLiteral("kind")) == QJsonValue(QStringLiteral("table"))
                         && !((id == QLatin1String("dsp")
                               && SetupDescription::validateTnfTable(control))
@@ -658,6 +661,120 @@ bool SetupDescription::validateDisplayPhoneBinding(const QJsonObject& control)
             && control.value(QStringLiteral("max")) == QJsonValue(spec.maximum)
             && control.value(QStringLiteral("step")) == QJsonValue(spec.step)
             && control.value(QStringLiteral("unit")) == QJsonValue(QLatin1String(spec.unit)));
+    }
+    // Version 11: Spectrum Peaks, in the native page's order. The desktop
+    // draws the peak hold trace and the blobs from the frames it already has
+    // (SpectrumWidget::updateReducedSpectrumOverlays); the phone asks the
+    // Core for the same computation through its display extras
+    // (peakBlobs / activePeakHold), so every row needs displayExtrasVersion 1;
+    // the peak hold's Hold duration and Update during TX need 3, the Core
+    // that honours holdMs and activePeakHold.onTx.
+    struct PeaksSpec {
+        const char* id;
+        const char* key;
+        const char* label;
+        const char* tooltip;
+        const char* kind;
+        const char* applies;
+        int defaultValue;
+        const char* defaultColour;
+        int minimum;
+        int maximum;
+        int step;
+        const char* unit;
+        int extrasVersion;
+    };
+    static constexpr PeaksSpec peaksSpecs[] = {
+        {"display.spectrumPeaks.activePeakHold", "DisplayActivePeakHoldEnabled",
+         "Enable per-bin peak trace with decay",
+         "Display a secondary trace of the highest recent level at each frequency bin. "
+         "Each bin holds its peak for the hold duration after it was last raised, then falls "
+         "at the drop rate.",
+         "toggle", "subscription", 0, "", 0, 0, 0, "", 1},
+        {"display.spectrumPeaks.activePeakHoldTime", "DisplayActivePeakHoldDurationMs",
+         "Hold duration:",
+         "How long (ms) a peak bin is held at its maximum before starting to decay.",
+         "integer", "subscription", 2000, "", 100, 60000, 100, "ms", 3},
+        {"display.spectrumPeaks.activePeakHoldDropRate", "DisplayActivePeakHoldDropDbPerSec",
+         "Drop rate:", "Rate at which a held peak falls once its hold duration has passed.",
+         "integer", "subscription", 6, "", 1, 60, 1, "dB/s", 1},
+        {"display.spectrumPeaks.activePeakHoldFill", "DisplayActivePeakHoldFill",
+         "Fill area between peak trace and current trace",
+         "Shade the region between the live spectrum and the peak-hold trace.",
+         "toggle", "live", 0, "", 0, 0, 0, "", 1},
+        {"display.spectrumPeaks.activePeakHoldOnTx", "DisplayActivePeakHoldOnTx",
+         "Update during TX",
+         "Keep the peak trace running while this panadapter transmits. "
+         "When off, the trace is hidden and paused until transmit ends.",
+         "toggle", "subscription", 0, "", 0, 0, 0, "", 3},
+        {"display.spectrumPeaks.activePeakHoldColor", "DisplayActivePeakHoldColor",
+         "Trace color:",
+         "Color of the dashed Active Peak Hold trace. Set this to a hue different from the "
+         "live data-line color so the peak trace stays visible (e.g. after Reset to Smooth "
+         "Defaults paints the live trace white).",
+         "colour", "live", 0, "#FFD700FF", 0, 0, 0, "", 1},
+        {"display.spectrumPeaks.peakBlobs", "DisplayPeakBlobsEnabled",
+         "Show top-N peak markers",
+         "Display small circle markers at the top-N highest signal peaks in the spectrum.",
+         "toggle", "subscription", 0, "", 0, 0, 0, "", 1},
+        {"display.spectrumPeaks.peakBlobCount", "DisplayPeakBlobsCount",
+         "Number of peaks:", "Number of peak markers to display (1 to 20).",
+         "integer", "subscription", 3, "", 1, 20, 1, "", 1},
+        {"display.spectrumPeaks.peakBlobInsideFilter", "DisplayPeakBlobsInsideFilterOnly",
+         "Only show peaks inside the RX filter passband",
+         "Restrict peak blobs to frequencies within the current RX filter passband.",
+         "toggle", "subscription", 0, "", 0, 0, 0, "", 1},
+        {"display.spectrumPeaks.peakBlobHold", "DisplayPeakBlobsHoldEnabled",
+         "Hold peaks before decay",
+         "Keep each blob at its peak position for the hold duration before falling.",
+         "toggle", "subscription", 0, "", 0, 0, 0, "", 1},
+        {"display.spectrumPeaks.peakBlobHoldTime", "DisplayPeakBlobsHoldMs",
+         "Hold duration:", "How long (ms) a blob is held at its peak before falling.",
+         "integer", "subscription", 500, "", 100, 60000, 100, "ms", 1},
+        {"display.spectrumPeaks.peakBlobHoldDrop", "DisplayPeakBlobsHoldDrop",
+         "Decay after hold (off = hard cut)",
+         "When on, blobs decay at the fall rate after the hold. "
+         "When off, blobs disappear instantly after the hold duration.",
+         "toggle", "subscription", 0, "", 0, 0, 0, "", 1},
+        {"display.spectrumPeaks.peakBlobFallRate", "DisplayPeakBlobsFallDbPerSec",
+         "Fall rate:", "Rate at which blobs fall after the hold duration.",
+         "integer", "subscription", 6, "", 1, 60, 1, "dB/s", 1},
+        {"display.spectrumPeaks.peakBlobColor", "DisplayPeakBlobColor",
+         "Blob color:", "Color of the peak blob circles.",
+         "colour", "live", 0, "#FF4500FF", 0, 0, 0, "", 1},
+        {"display.spectrumPeaks.peakBlobTextColor", "DisplayPeakBlobTextColor",
+         "Text color:", "Color of the dBm readout text on each peak blob.",
+         "colour", "live", 0, "#7FFF00FF", 0, 0, 0, "", 1},
+    };
+    for (const PeaksSpec& spec : peaksSpecs) {
+        if (control.value(QStringLiteral("id")) != QJsonValue(QLatin1String(spec.id))) {
+            continue;
+        }
+        const QLatin1String kind(spec.kind);
+        const bool integer = kind == QLatin1String("integer");
+        const bool hasUnit = spec.unit[0] != '\0';
+        const QJsonValue expectedDefault = kind == QLatin1String("toggle")
+            ? QJsonValue(spec.defaultValue != 0)
+            : kind == QLatin1String("colour") ? QJsonValue(QLatin1String(spec.defaultColour))
+                                              : QJsonValue(spec.defaultValue);
+        if (control.size() != (integer ? (hasUnit ? 13 : 12) : 9)
+            || control.value(QStringLiteral("binding")) != QJsonValue(QJsonObject{
+                   {QStringLiteral("phone"), QLatin1String(spec.key)}})
+            || control.value(QStringLiteral("label")) != QJsonValue(QLatin1String(spec.label))
+            || control.value(QStringLiteral("tooltip")) != QJsonValue(QLatin1String(spec.tooltip))
+            || control.value(QStringLiteral("kind")) != QJsonValue(kind)
+            || control.value(QStringLiteral("applies")) != QJsonValue(QLatin1String(spec.applies))
+            || control.value(QStringLiteral("requiresDescriptionVersion")) != QJsonValue(11)
+            || control.value(QStringLiteral("gate")) != QJsonValue(QJsonObject{
+                   {QStringLiteral("capability"), QStringLiteral("displayExtrasVersion")},
+                   {QStringLiteral("min"), spec.extrasVersion}})
+            || control.value(QStringLiteral("default")) != expectedDefault) {
+            return false;
+        }
+        return !integer || (control.value(QStringLiteral("min")) == QJsonValue(spec.minimum)
+            && control.value(QStringLiteral("max")) == QJsonValue(spec.maximum)
+            && control.value(QStringLiteral("step")) == QJsonValue(spec.step)
+            && (!hasUnit || control.value(QStringLiteral("unit")) == QJsonValue(QLatin1String(spec.unit))));
     }
     struct Spec {
         const char* id;
@@ -1630,7 +1747,7 @@ QString SetupDescription::fitCategoryForVersion(const QString& description, int 
     const int ceiling = categoryId == QLatin1String("hardware") ? 6
         : categoryId == QLatin1String("pa") ? 5
         : categoryId == QLatin1String("appearance") ? 7
-        : categoryId == QLatin1String("display") ? 10 : 3;
+        : categoryId == QLatin1String("display") ? 11 : 3;
     category.insert(QStringLiteral("version"),
                     categoryId == QLatin1String("appearance") && version < 7
                         ? qMin(version, 4)

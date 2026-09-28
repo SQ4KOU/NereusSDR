@@ -657,8 +657,13 @@ private slots:
         two->m_peakBlobs.setEnabled(true);
         two->m_peakBlobs.m_blobs.resize(3);
         two->m_peakBlobs.m_blobs[0].enabled = true;
+        // A sized trace that has not been reset, so no display delay runs.
+        two->m_activePeakHold = ActivePeakHoldTrace(8);
         two->m_activePeakHold.setEnabled(true);
-        two->m_activePeakHold.resize(8);
+        // Keyed, the trace runs only with "Update during TX" on (Thetis
+        // display.cs:5011 [v2.10.3.15]); this test is about the reset.
+        two->m_activePeakHold.setTxActive(true);
+        two->m_activePeakHold.setOnTx(true);
         two->m_activePeakHold.update(QVector<float>(8, -40.0f));
         QCOMPARE(two->m_activePeakHold.peak(0), -40.0f);
         QSignalSpy changed(window.controller.get(), &MoxDisplayController::displayDuplexChanged);
@@ -674,6 +679,10 @@ private slots:
         QCOMPARE(window.radio.txDisplayFeed()->viewerCount(), 0);
         QVERIFY(two->m_peakBlobs.m_blobs.isEmpty());
         QVERIFY(std::isinf(two->m_activePeakHold.peak(0)));
+        // Both resets hold the peaks back 500 ms (Thetis display.cs:4527-4530,
+        // 4542-4544, 859-877 [v2.10.3.15]).
+        QVERIFY(two->m_activePeakHold.displayDelayed());
+        QVERIFY(two->m_peakBlobs.displayDelayed());
 
         // Off again: the transmit view comes back on the carrier.
         two->m_activePeakHold.update(QVector<float>(8, -30.0f));
@@ -689,6 +698,69 @@ private slots:
         window.controller->setKeyed(false, -1);
         QCOMPARE(PanView::of(two), before);
         QVERIFY(!two->m_moxOverlay);
+    }
+
+    // Thetis resets every receiver's peaks on a MOX edge (display.cs:1582-1593,
+    // console.cs:24243-24254 [v2.10.3.15], PurgeBuffers) and when the radio
+    // comes on (display.cs:818-823 [v2.10.3.15]); every pan of the window
+    // does the same, the transmitting one and the others.
+    static void seedPeaks(SpectrumWidget* pan)
+    {
+        pan->m_activePeakHold = ActivePeakHoldTrace(8);
+        pan->m_activePeakHold.setEnabled(true);
+        pan->m_activePeakHold.setOnTx(true);
+        pan->m_activePeakHold.update(QVector<float>(8, -40.0f));
+        pan->m_peakBlobs.setEnabled(true);
+        pan->m_peakBlobs.m_blobs.resize(3);
+        pan->m_peakBlobs.m_blobs[0].enabled = true;
+    }
+    static bool wasReset(const SpectrumWidget* pan)
+    {
+        return std::isinf(pan->m_activePeakHold.peak(0))
+            && pan->m_activePeakHold.displayDelayed()
+            && pan->m_peakBlobs.m_blobs.isEmpty()
+            && pan->m_peakBlobs.displayDelayed();
+    }
+
+    void aMoxEdgeResetsEveryPansPeaks()
+    {
+        LocalWindow window;
+        SpectrumWidget* one = window.stack.spectrum(QStringLiteral("one"));
+        SpectrumWidget* two = window.pan();
+        for (SpectrumWidget* pan : {one, two}) { seedPeaks(pan); }
+        window.controller->setKeyed(true, window.txSliceId);
+        QVERIFY(wasReset(one));
+        QVERIFY(wasReset(two));
+        for (SpectrumWidget* pan : {one, two}) { seedPeaks(pan); }
+        window.controller->setKeyed(false, -1);
+        QVERIFY(wasReset(one));
+        QVERIFY(wasReset(two));
+    }
+
+    void theRadioComingOnResetsEveryPansPeaks()
+    {
+        LocalWindow window;
+        SpectrumWidget* one = window.stack.spectrum(QStringLiteral("one"));
+        SpectrumWidget* two = window.pan();
+        window.radio.setConnectionStateForTest(ConnectionState::Disconnected);
+        for (SpectrumWidget* pan : {one, two}) { seedPeaks(pan); }
+        window.radio.setConnectionStateForTest(ConnectionState::Connected);
+        QVERIFY(wasReset(one));
+        QVERIFY(wasReset(two));
+    }
+
+    void aRemoteWindowsMoxEdgeResetsEveryPansPeaks()
+    {
+        RemoteWindow window(/*withAnalyzer=*/true);
+        QVERIFY(window.connect());
+        SpectrumWidget* one = window.pan(QStringLiteral("one"));
+        SpectrumWidget* two = window.pan(QStringLiteral("two"));
+        QVERIFY(one != nullptr && two != nullptr);
+        for (SpectrumWidget* pan : {one, two}) { seedPeaks(pan); }
+        window.controller->setKeyed(true, window.txSliceId);
+        QVERIFY(wasReset(one));
+        QVERIFY(wasReset(two));
+        window.controller->setKeyed(false, -1);
     }
 
     // ── DUP on, a remote window ────────────────────────────────────────────

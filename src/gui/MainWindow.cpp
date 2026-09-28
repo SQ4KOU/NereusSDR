@@ -2702,7 +2702,7 @@ void MainWindow::refreshRemoteConnectionUi()
         if (current && m_remoteTelemetry) {
             const RemoteTelemetryView& view = m_remoteTelemetry->current();
             const auto number = [](std::optional<double> value) {
-                return value ? QString::number(*value, 'f', 1) : QStringLiteral("—");
+                return value ? QString::number(*value, 'f', 1) : QStringLiteral("–");
             };
             const bool megabits = view.coreGuiTotalKbps && *view.coreGuiTotalKbps >= 1000.0;
             const double divisor = megabits ? 1000.0 : 1.0;
@@ -2711,7 +2711,7 @@ void MainWindow::refreshRemoteConnectionUi()
             };
             const QStringList groups{
                 (!view.coreGuiRxKbps && !view.coreGuiTxKbps)
-                    ? tr("Traffic — kbps")
+                    ? tr("Traffic – kbps")
                     : tr("Traffic ↓%1 ↑%2 %3")
                           .arg(traffic(view.coreGuiRxKbps), traffic(view.coreGuiTxKbps),
                                megabits ? tr("Mbps") : tr("kbps")),
@@ -2720,9 +2720,9 @@ void MainWindow::refreshRemoteConnectionUi()
                 view.state == RemoteTelemetryView::State::Current && view.radio.connected
                     ? tr("Radio ↓%1 ↑%2 Mbps")
                           .arg(number(view.radio.rxMbps), number(view.radio.txMbps))
-                    : tr("Radio — Mbps"),
+                    : tr("Radio – Mbps"),
                 tr("Core RTT %1ms")
-                    .arg(view.coreRttMs ? QString::number(*view.coreRttMs) : QStringLiteral("—"))};
+                    .arg(view.coreRttMs ? QString::number(*view.coreRttMs) : QStringLiteral("–"))};
             segment->setRemoteMetrics(groups);
             std::optional<NetworkPathSnapshot> control;
             if (SessionTransport* transport = m_stationClient->transport()) {

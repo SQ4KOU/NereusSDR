@@ -622,10 +622,21 @@ public:
     // trace (which would otherwise hide the peak trace behind a same-coloured
     // solid line).
     void setActivePeakHoldColor(const QColor& c);
-    // Called by RadioModel on MOX state change (MoxController::moxStateChanged).
+    /// Re-read the Spectrum Peaks settings (stored once for every pan) and
+    /// redraw. reloadSpectrumPeaksSettingsOnAllPans does it for every pan
+    /// that exists, so a Setup change reaches them all at once.
+    void reloadSpectrumPeaksSettings();
+    static void reloadSpectrumPeaksSettingsOnAllPans();
+
+    // This pan transmitting, for the peak hold's transmit gate. setMoxOverlay
+    // drives it on every MOX edge (MoxDisplayController, local and remote).
     void setActivePeakHoldTxActive(bool tx);
 
     bool   activePeakHoldEnabled()    const { return m_activePeakHold.enabled(); }
+    /// Enabled and not switched off by this pan transmitting (Thetis
+    /// display.cs:5011 [v2.10.3.15] bSpectralPeakHold).
+    bool   activePeakHoldActive()     const { return m_activePeakHold.active(); }
+    bool   activePeakHoldOnTx()       const { return m_activePeakHold.onTx(); }
     int    activePeakHoldDurationMs() const { return m_activePeakHold.durationMs(); }
     double activePeakHoldDropDbPerSec() const { return m_activePeakHold.dropDbPerSec(); }
     bool   activePeakHoldFill()        const { return m_activePeakHold.fill(); }
@@ -647,6 +658,11 @@ public:
 
     bool   peakBlobsEnabled()     const { return m_peakBlobs.enabled(); }
     int    peakBlobsCount()       const { return m_peakBlobs.count(); }
+    bool   peakBlobsInsideFilterOnly() const { return m_peakBlobs.insideOnly(); }
+    bool   peakBlobsHoldEnabled() const { return m_peakBlobs.holdEnabled(); }
+    int    peakBlobsHoldMs()      const { return m_peakBlobs.holdMs(); }
+    bool   peakBlobsHoldDrop()    const { return m_peakBlobs.holdDrop(); }
+    double peakBlobsFallDbPerSec() const { return m_peakBlobs.fallDbPerSec(); }
     QColor peakBlobColor()        const { return m_peakBlobColor; }
     QColor peakBlobTextColor()    const { return m_peakBlobTextColor; }
 
@@ -1338,6 +1354,7 @@ public:
     void setPanIndex(int idx) { m_panIndex = idx; }
     int  panIndex() const { return m_panIndex; }
     void loadSettings();
+    void loadSpectrumPeaksSettings();
     void saveSettings();
     // Public coalesced-save trigger. Used by setup pages that call setDbmRange()
     // directly (which has no internal save) and need to ensure the new range
@@ -2330,6 +2347,14 @@ private:
     // Parity Task 31: a DUP change while keyed resets the blob maxima and
     // the active peak hold (Thetis display.cs:514-521 [v2.10.3.15]).
     void resetPeaksForDuplexChange();
+public:
+    /// Thetis's peak reset for one receiver (ResetBlobMaximums(rx, true) +
+    /// ResetSpectrumPeaks(rx)): the blobs and the active peak hold empty and
+    /// wait out the 500 ms display delay. applyViewWindow calls it on every
+    /// moved or resized view; MoxDisplayController on every MOX edge and on
+    /// the radio connecting.
+    void resetPeaks();
+private:
     void drawTxFilterWaterfallColumn(QPainter& p, const QRect& wfRect);
 
     // ---- Two-tone IMD overlay (Phase 3M-4 Task 12) ----

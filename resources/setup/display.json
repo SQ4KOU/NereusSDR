@@ -1,5 +1,5 @@
 {
-  "version": 10,
+  "version": 11,
   "category": {
     "id": "display",
     "title": "Display",
@@ -220,6 +220,189 @@
               "applies": "live",
               "requiresDescriptionVersion": 9,
               "min": 100, "max": 10000, "step": 100, "unit": "ms", "default": 2000
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "display.spectrumPeaks",
+      "title": "Spectrum Peaks",
+      "where": "phone",
+      "coverage": "partial",
+      "sections": [
+        {
+          "title": "Active Peak Hold",
+          "controls": [
+            {
+              "id": "display.spectrumPeaks.activePeakHold",
+              "label": "Enable per-bin peak trace with decay",
+              "tooltip": "Display a secondary trace of the highest recent level at each frequency bin. Each bin holds its peak for the hold duration after it was last raised, then falls at the drop rate.",
+              "kind": "toggle",
+              "binding": {"phone": "DisplayActivePeakHoldEnabled"},
+              "applies": "subscription",
+              "requiresDescriptionVersion": 11,
+              "default": false,
+              "gate": {"capability": "displayExtrasVersion", "min": 1}
+            },
+            {
+              "id": "display.spectrumPeaks.activePeakHoldTime",
+              "label": "Hold duration:",
+              "tooltip": "How long (ms) a peak bin is held at its maximum before starting to decay.",
+              "kind": "integer",
+              "binding": {"phone": "DisplayActivePeakHoldDurationMs"},
+              "applies": "subscription",
+              "requiresDescriptionVersion": 11,
+              "min": 100, "max": 60000, "step": 100, "unit": "ms", "default": 2000,
+              "gate": {"capability": "displayExtrasVersion", "min": 3}
+            },
+            {
+              "id": "display.spectrumPeaks.activePeakHoldDropRate",
+              "label": "Drop rate:",
+              "tooltip": "Rate at which a held peak falls once its hold duration has passed.",
+              "kind": "integer",
+              "binding": {"phone": "DisplayActivePeakHoldDropDbPerSec"},
+              "applies": "subscription",
+              "requiresDescriptionVersion": 11,
+              "min": 1, "max": 60, "step": 1, "unit": "dB/s", "default": 6,
+              "gate": {"capability": "displayExtrasVersion", "min": 1}
+            },
+            {
+              "id": "display.spectrumPeaks.activePeakHoldFill",
+              "label": "Fill area between peak trace and current trace",
+              "tooltip": "Shade the region between the live spectrum and the peak-hold trace.",
+              "kind": "toggle",
+              "binding": {"phone": "DisplayActivePeakHoldFill"},
+              "applies": "live",
+              "requiresDescriptionVersion": 11,
+              "default": false,
+              "gate": {"capability": "displayExtrasVersion", "min": 1}
+            },
+            {
+              "id": "display.spectrumPeaks.activePeakHoldOnTx",
+              "label": "Update during TX",
+              "tooltip": "Keep the peak trace running while this panadapter transmits. When off, the trace is hidden and paused until transmit ends.",
+              "kind": "toggle",
+              "binding": {"phone": "DisplayActivePeakHoldOnTx"},
+              "applies": "subscription",
+              "requiresDescriptionVersion": 11,
+              "default": false,
+              "gate": {"capability": "displayExtrasVersion", "min": 3}
+            },
+            {
+              "id": "display.spectrumPeaks.activePeakHoldColor",
+              "label": "Trace color:",
+              "tooltip": "Color of the dashed Active Peak Hold trace. Set this to a hue different from the live data-line color so the peak trace stays visible (e.g. after Reset to Smooth Defaults paints the live trace white).",
+              "kind": "colour",
+              "binding": {"phone": "DisplayActivePeakHoldColor"},
+              "applies": "live",
+              "requiresDescriptionVersion": 11,
+              "default": "#FFD700FF",
+              "gate": {"capability": "displayExtrasVersion", "min": 1}
+            }
+          ]
+        },
+        {
+          "title": "Peak Blobs",
+          "controls": [
+            {
+              "id": "display.spectrumPeaks.peakBlobs",
+              "label": "Show top-N peak markers",
+              "tooltip": "Display small circle markers at the top-N highest signal peaks in the spectrum.",
+              "kind": "toggle",
+              "binding": {"phone": "DisplayPeakBlobsEnabled"},
+              "applies": "subscription",
+              "requiresDescriptionVersion": 11,
+              "default": false,
+              "gate": {"capability": "displayExtrasVersion", "min": 1}
+            },
+            {
+              "id": "display.spectrumPeaks.peakBlobCount",
+              "label": "Number of peaks:",
+              "tooltip": "Number of peak markers to display (1 to 20).",
+              "kind": "integer",
+              "binding": {"phone": "DisplayPeakBlobsCount"},
+              "applies": "subscription",
+              "requiresDescriptionVersion": 11,
+              "min": 1, "max": 20, "step": 1, "default": 3,
+              "gate": {"capability": "displayExtrasVersion", "min": 1}
+            },
+            {
+              "id": "display.spectrumPeaks.peakBlobInsideFilter",
+              "label": "Only show peaks inside the RX filter passband",
+              "tooltip": "Restrict peak blobs to frequencies within the current RX filter passband.",
+              "kind": "toggle",
+              "binding": {"phone": "DisplayPeakBlobsInsideFilterOnly"},
+              "applies": "subscription",
+              "requiresDescriptionVersion": 11,
+              "default": false,
+              "gate": {"capability": "displayExtrasVersion", "min": 1}
+            },
+            {
+              "id": "display.spectrumPeaks.peakBlobHold",
+              "label": "Hold peaks before decay",
+              "tooltip": "Keep each blob at its peak position for the hold duration before falling.",
+              "kind": "toggle",
+              "binding": {"phone": "DisplayPeakBlobsHoldEnabled"},
+              "applies": "subscription",
+              "requiresDescriptionVersion": 11,
+              "default": false,
+              "gate": {"capability": "displayExtrasVersion", "min": 1}
+            },
+            {
+              "id": "display.spectrumPeaks.peakBlobHoldTime",
+              "label": "Hold duration:",
+              "tooltip": "How long (ms) a blob is held at its peak before falling.",
+              "kind": "integer",
+              "binding": {"phone": "DisplayPeakBlobsHoldMs"},
+              "applies": "subscription",
+              "requiresDescriptionVersion": 11,
+              "min": 100, "max": 60000, "step": 100, "unit": "ms", "default": 500,
+              "gate": {"capability": "displayExtrasVersion", "min": 1}
+            },
+            {
+              "id": "display.spectrumPeaks.peakBlobHoldDrop",
+              "label": "Decay after hold (off = hard cut)",
+              "tooltip": "When on, blobs decay at the fall rate after the hold. When off, blobs disappear instantly after the hold duration.",
+              "kind": "toggle",
+              "binding": {"phone": "DisplayPeakBlobsHoldDrop"},
+              "applies": "subscription",
+              "requiresDescriptionVersion": 11,
+              "default": false,
+              "gate": {"capability": "displayExtrasVersion", "min": 1}
+            },
+            {
+              "id": "display.spectrumPeaks.peakBlobFallRate",
+              "label": "Fall rate:",
+              "tooltip": "Rate at which blobs fall after the hold duration.",
+              "kind": "integer",
+              "binding": {"phone": "DisplayPeakBlobsFallDbPerSec"},
+              "applies": "subscription",
+              "requiresDescriptionVersion": 11,
+              "min": 1, "max": 60, "step": 1, "unit": "dB/s", "default": 6,
+              "gate": {"capability": "displayExtrasVersion", "min": 1}
+            },
+            {
+              "id": "display.spectrumPeaks.peakBlobColor",
+              "label": "Blob color:",
+              "tooltip": "Color of the peak blob circles.",
+              "kind": "colour",
+              "binding": {"phone": "DisplayPeakBlobColor"},
+              "applies": "live",
+              "requiresDescriptionVersion": 11,
+              "default": "#FF4500FF",
+              "gate": {"capability": "displayExtrasVersion", "min": 1}
+            },
+            {
+              "id": "display.spectrumPeaks.peakBlobTextColor",
+              "label": "Text color:",
+              "tooltip": "Color of the dBm readout text on each peak blob.",
+              "kind": "colour",
+              "binding": {"phone": "DisplayPeakBlobTextColor"},
+              "applies": "live",
+              "requiresDescriptionVersion": 11,
+              "default": "#7FFF00FF",
+              "gate": {"capability": "displayExtrasVersion", "min": 1}
             }
           ]
         }
