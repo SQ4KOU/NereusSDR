@@ -624,6 +624,8 @@
 
 #include "core/TxSliceArbiter.h"
 #include "core/session/DataChannelTransport.h"
+#include "core/session/RelayLeg.h"
+#include "core/session/media/IMediaTransport.h"
 #include "core/session/SwitchableTransport.h"
 #include "core/session/MediaTunnel.h"
 #include "core/session/ModMonitorPublisher.h"
@@ -639,6 +641,7 @@
 #include "core/session/IStationLink.h"
 #include "core/session/StationTelemetry.h"
 #include <QDateTime>
+#include <QElapsedTimer>
 #include "core/station/StationRadios.h"
 #include "core/WdspEngine.h"
 #include "core/dsp/NnrSettings.h"
@@ -726,6 +729,19 @@
 #include <cstdio>
 
 namespace NereusSDR {
+
+struct StationServer::PendingRelayWatch {
+    QPointer<DataChannelTransport> transport;
+    std::shared_ptr<RelayLeg> leg;
+    QElapsedTimer lifetime;
+    QByteArray ticket;
+    quint64 sessionId = 0;
+    QByteArray deviceId;
+    quint64 generation = 0;
+    quint32 commandId = 0;
+    QByteArray commandVerb;
+    bool answered = false;
+};
 
 namespace {
 Q_LOGGING_CATEGORY(lcStation, "nereus.station")
@@ -2785,6 +2801,10 @@ bool StationServer::listen(const QHostAddress& address, quint16 port)
 
 void StationServer::close()
 {
+    const QList<SessionTransport*> pendingPrimaries = m_pendingRelayWatches.keys();
+    for (SessionTransport* primary : pendingPrimaries) {
+        retirePendingRelayWatch(primary);
+    }
     if (m_txWatchServer) {
         m_txWatchServer->retireAll();
     }
@@ -3408,6 +3428,7 @@ void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
     }
     it->dropping = true;
     it->txWatchGeneration = ++m_nextTxWatchGeneration;
+    retirePendingRelayWatch(transport);
     ++m_dropPeerDepth;
     auto finishDrop = qScopeGuard([this, self]() {
         if (!self) { return; }
@@ -3732,6 +3753,9 @@ void StationServer::onHeartbeatTick()
         ++it->pingsAwaitingPong;
         transport->ping();
     }
+    // The selected relay pair and the separate leg can change after the
+    // initial snapshot without changing transmit permission.
+    publishTxPermitted();
 }
 
 // ── Inbound dispatch ─────────────────────────────────────────────────────
@@ -3849,6 +3873,10 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
 
     switch (message.kind) {
     case SessionMessageKind::CommandInvoke:
+        if (message.commandVerb == "tx.watchRelay") {
+            handleTxWatchRelay(transport, message);
+            break;
+        }
         if (message.commandVerb == "tx.watchTicket") {
             handleTxWatchTicket(transport, message);
             break;
@@ -5800,6 +5828,7 @@ bool StationServer::sendCapabilitiesAndSettingsSnapshot(SessionTransport* transp
     const StationCapabilities caps = buildCapabilitiesFor(transport);
     if (auto peer = m_peers.find(transport); peer != m_peers.end()) {
         peer->txPermittedSent = caps.txPermitted;   // Task 34
+        peer->txWatchPathVersionSent = caps.txWatchPathVersion;
         peer->txRefusalSent = txRefusalOf(caps);
         // iPhone app Task 76: what these capabilities say of the budget, so
         // a later change is published once.
@@ -6952,10 +6981,12 @@ void StationServer::publishTxPermitted()
         // told again when the reason changes (another holder, say).
         const StationCapabilities caps = buildCapabilitiesFor(it.key());
         const TxRefusal refusal = txRefusalOf(caps);
-        if (caps.txPermitted == it->txPermittedSent && refusal == it->txRefusalSent) {
+        if (caps.txPermitted == it->txPermittedSent && refusal == it->txRefusalSent
+            && caps.txWatchPathVersion == it->txWatchPathVersionSent) {
             continue;
         }
         it->txPermittedSent = caps.txPermitted;
+        it->txWatchPathVersionSent = caps.txWatchPathVersion;
         it->txRefusalSent = refusal;
         send(it.key(), SessionMessages::capabilities(caps.toUpdates()));
     }
@@ -7693,6 +7724,7 @@ void StationServer::publishBudgetToChangedSessions()
         m_peers[transport].publishedBudget = entries;
         const StationCapabilities caps = buildCapabilitiesFor(transport);
         m_peers[transport].txPermittedSent = caps.txPermitted;   // Task 34
+        m_peers[transport].txWatchPathVersionSent = caps.txWatchPathVersion;
         m_peers[transport].txRefusalSent = txRefusalOf(caps);
         send(transport, SessionMessages::capabilities(caps.toUpdates()));
     }
@@ -8418,15 +8450,11 @@ void StationServer::handlePathTicket(SessionTransport* transport, const SessionM
          {1, "expiresInMs", MirrorWireKind::Int64, qlonglong(m_pathTicketLifetimeMs)}}));
 }
 
-bool StationServer::txWatchEligible(SessionTransport* transport) const
+bool StationServer::txWatchAuthorityCurrent(SessionTransport* transport) const
 {
     const auto it = m_peers.constFind(transport);
     const auto* switchable = qobject_cast<const SwitchableTransport*>(transport);
-    const SessionTransport* carrying = switchable ? switchable->inner() : transport;
-    // Only a direct WSS primary proves this authority currently supplies the
-    // separate WSS route. Relay-only DTLS watch support is negotiated later.
-    const bool directWss = qobject_cast<const WebSocketTransport*>(carrying) != nullptr;
-    return directWss && it != m_peers.cend() && it->authenticated && it->snapshotComplete
+    return it != m_peers.cend() && it->authenticated && it->snapshotComplete
         && !it->dropping && !it->txWatchPathChanging
         && !it->signedInWithToken && !it->deviceId.isEmpty()
         && it->sessionDeviceId == it->deviceId && it->sessionId != 0
@@ -8436,7 +8464,26 @@ bool StationServer::txWatchEligible(SessionTransport* transport) const
         && peerDeclares(transport, QByteArrayLiteral("txWatchPath"), 1)
         && txDecisionFor(transport).permitted && isListening()
         && (switchable == nullptr || !switchable->switching())
-        && m_wsServer != nullptr && m_txWatchServer != nullptr;
+        && m_txWatchServer != nullptr;
+}
+
+bool StationServer::txWatchEligible(SessionTransport* transport) const
+{
+    const auto* switchable = qobject_cast<const SwitchableTransport*>(transport);
+    const SessionTransport* carrying = switchable ? switchable->inner() : transport;
+    return txWatchAuthorityCurrent(transport) && m_wsServer != nullptr
+        && qobject_cast<const WebSocketTransport*>(carrying) != nullptr;
+}
+
+bool StationServer::txWatchRelayEligible(SessionTransport* transport) const
+{
+    const auto* switchable = qobject_cast<const SwitchableTransport*>(transport);
+    const auto* carrying = qobject_cast<const DataChannelTransport*>(
+        switchable ? switchable->inner() : transport);
+    return txWatchAuthorityCurrent(transport)
+        && peerDeclares(transport, QByteArrayLiteral("txWatchRelay"), 1)
+        && carrying && carrying->canOpenWatchRelay()
+        && !certificatePemPath().isEmpty() && !privateKeyPemPath().isEmpty();
 }
 
 bool StationServer::txWatchBindingCurrent(SessionTransport* transport, quint64 sessionId,
@@ -8444,9 +8491,15 @@ bool StationServer::txWatchBindingCurrent(SessionTransport* transport, quint64 s
                                           quint64 generation) const
 {
     const auto it = m_peers.constFind(transport);
+    const auto* switchable = qobject_cast<const SwitchableTransport*>(transport);
+    const SessionTransport* carrying = switchable ? switchable->inner() : transport;
+    const auto* relay = qobject_cast<const DataChannelTransport*>(carrying);
+    const bool routeCurrent = qobject_cast<const WebSocketTransport*>(carrying) != nullptr
+        || (peerDeclares(transport, QByteArrayLiteral("txWatchRelay"), 1)
+            && relay && relay->hasWatchRelayRoute());
     return it != m_peers.cend() && it->sessionId == sessionId
         && it->deviceId == deviceId && it->txWatchGeneration == generation
-        && txWatchEligible(transport);
+        && txWatchAuthorityCurrent(transport) && routeCurrent;
 }
 
 void StationServer::handleTxWatchTicket(SessionTransport* transport,
@@ -8477,6 +8530,208 @@ void StationServer::handleTxWatchTicket(SessionTransport* transport,
            {{0, "ticket", MirrorWireKind::Utf8, StationIdentity::toBase64Url(ticket->value)},
             {1, "expiresInMs", MirrorWireKind::Int64, qlonglong(ticket->expiresInMs)},
             {2, "path", MirrorWireKind::Utf8, ticket->path}});
+}
+
+void StationServer::retirePendingRelayWatch(SessionTransport* primary)
+{
+    // Remove ownership before close: both DTLS and the relay leg can call
+    // back synchronously, and an old callback must never retire a new slot.
+    const std::shared_ptr<PendingRelayWatch> pending = m_pendingRelayWatches.take(primary);
+    if (!pending) {
+        return;
+    }
+    const QPointer<DataChannelTransport> watch = pending->transport;
+    pending->transport = nullptr;
+    if (watch) {
+        watch->closeLink(QStringLiteral("watch relay ended"));
+        if (watch) {
+            watch->deleteLater();
+        }
+    }
+    if (pending->leg) {
+        pending->leg->close();
+        pending->leg.reset();
+    }
+}
+
+void StationServer::handleTxWatchRelay(SessionTransport* transport,
+                                       const SessionMessage& message)
+{
+    const QByteArray verb = message.commandVerb;
+    const quint32 commandId = message.commandId;
+    const QPointer<SessionTransport> primary(transport);
+    const auto answer = [this, primary, verb, commandId](bool accepted, const QString& reason,
+                                                         const QList<MirrorUpdate>& values = {}) {
+        if (primary) {
+            send(primary, SessionMessages::commandResult(verb, commandId, accepted,
+                                                         reason, {}, values));
+        }
+    };
+    // Reject the shape and size before reserving a ticket or making an ICE
+    // peer. The wire codec has already parsed JSON, but escaped lone UTF-16
+    // surrogates must not be silently replaced in a security-bearing SDP.
+    if (message.arguments.size() != 1 || message.arguments.first().ordinal != 0
+        || message.arguments.first().name != QByteArrayLiteral("offer")
+        || message.arguments.first().kind != MirrorWireKind::Utf8
+        || message.arguments.first().value.metaType().id() != QMetaType::QString) {
+        answer(false, QStringLiteral("The watch relay offer was not understood."));
+        return;
+    }
+    const QString offer = message.arguments.first().value.toString();
+    if (offer.isEmpty() || offer.size() > IMediaTransport::kMaxDescriptionBytes) {
+        answer(false, QStringLiteral("The watch relay offer was not understood."));
+        return;
+    }
+    const QByteArray offerBytes = offer.toUtf8();
+    if (offerBytes.isEmpty() || offerBytes.size() > IMediaTransport::kMaxDescriptionBytes
+        || offerBytes.contains('\0') || QString::fromUtf8(offerBytes) != offer) {
+        answer(false, QStringLiteral("The watch relay offer was not understood."));
+        return;
+    }
+    if (!txWatchRelayEligible(transport)) {
+        answer(false, QStringLiteral("A transmit watch relay path is unavailable for this session."));
+        return;
+    }
+    const auto* switchable = qobject_cast<const SwitchableTransport*>(transport);
+    const auto* carrying = qobject_cast<const DataChannelTransport*>(
+        switchable ? switchable->inner() : transport);
+    const auto grant = carrying->watchRelayGrant();
+    if (!grant || m_pendingRelayWatches.contains(transport)) {
+        answer(false, QStringLiteral("A transmit watch ticket or path is already in use. Try again shortly."));
+        return;
+    }
+    const Peer peer = m_peers.value(transport);
+    const auto ticket = m_txWatchServer->issue(transport, peer.sessionId, peer.deviceId,
+                                               peer.txWatchGeneration,
+                                               m_deviceAuth->newChallenge());
+    if (!ticket) {
+        answer(false, QStringLiteral("A transmit watch ticket or path is already in use. Try again shortly."));
+        return;
+    }
+    auto pending = std::make_shared<PendingRelayWatch>();
+    pending->ticket = ticket->value;
+    pending->sessionId = peer.sessionId;
+    pending->deviceId = peer.deviceId;
+    pending->generation = peer.txWatchGeneration;
+    pending->commandId = commandId;
+    pending->commandVerb = verb;
+    pending->lifetime.start();
+    m_pendingRelayWatches.insert(transport, pending);
+
+    const std::weak_ptr<PendingRelayWatch> weak(pending);
+    const QPointer<StationServer> self(this);
+    const auto isCurrent = [self, primary, weak]() {
+        const auto held = weak.lock();
+        return self && primary && held
+            && self->m_pendingRelayWatches.value(primary.data()) == held;
+    };
+    const auto fail = [self, primary, weak, isCurrent](const QString& reason) {
+        if (!isCurrent()) {
+            return;
+        }
+        const auto held = weak.lock();
+        const bool mayAnswer = !held->answered
+            && self->txWatchBindingCurrent(primary, held->sessionId, held->deviceId,
+                                           held->generation);
+        self->retirePendingRelayWatch(primary);
+        if (!self) {
+            return;
+        }
+        self->m_txWatchServer->retire(primary);
+        if (mayAnswer && self && primary
+            && self->txWatchBindingCurrent(primary, held->sessionId, held->deviceId,
+                                           held->generation)) {
+            self->send(primary, SessionMessages::commandResult(
+                held->commandVerb, held->commandId, false, reason, {}));
+        }
+    };
+    pending->leg = RelayLeg::createWatch();
+    if (!pending->leg) {
+        fail(QStringLiteral("The watch relay could not start."));
+        return;
+    }
+    IceConfiguration ice = IceConfiguration::throughRendezvous({}, true, {}, {});
+    ice.setRelay(std::nullopt, 1);
+    ice.setCandidateSourceFactory(RelayLeg::factoryFor(pending->leg), true);
+    auto* watch = new DataChannelTransport(this);
+    pending->transport = watch;
+    connect(watch, &DataChannelTransport::localDescription, this,
+            [self, primary, weak, isCurrent, fail](const QString& sdp, const QString& type) {
+        if (!isCurrent()) {
+            return;
+        }
+        const auto held = weak.lock();
+        if (held->answered || type != QLatin1String("answer") || sdp.isEmpty()
+            || sdp.toUtf8().size() > IMediaTransport::kMaxDescriptionBytes
+            || held->lifetime.elapsed() >= TxWatchServer::kTicketLifetimeMs
+            || !self->txWatchBindingCurrent(primary, held->sessionId, held->deviceId,
+                                            held->generation)) {
+            fail(QStringLiteral("The watch relay could not answer in time."));
+            return;
+        }
+        held->answered = true;
+        self->send(primary, SessionMessages::commandResult(
+            held->commandVerb, held->commandId, true, {}, {},
+            {{0, "ticket", MirrorWireKind::Utf8, StationIdentity::toBase64Url(held->ticket)},
+             {1, "expiresInMs", MirrorWireKind::Int64,
+              qlonglong(TxWatchServer::kTicketLifetimeMs)},
+             {2, "path", MirrorWireKind::Utf8, QStringLiteral("relay-dtls-v1")},
+             {3, "answer", MirrorWireKind::Utf8, sdp}}));
+    });
+    connect(watch, &DataChannelTransport::opened, this,
+            [self, primary, weak, isCurrent, fail]() {
+        if (!isCurrent()) {
+            return;
+        }
+        const auto held = weak.lock();
+        if (!held->answered || held->lifetime.elapsed() >= TxWatchServer::kTicketLifetimeMs
+            || !self->txWatchBindingCurrent(primary, held->sessionId, held->deviceId,
+                                            held->generation)) {
+            fail(QStringLiteral("The watch relay could not open in time."));
+            return;
+        }
+        const QPointer<DataChannelTransport> watch = held->transport;
+        self->m_pendingRelayWatches.remove(primary);
+        held->transport = nullptr;
+        held->leg.reset(); // the peer's candidate-source lease retains its leg
+        if (self && primary && watch
+            && self->txWatchBindingCurrent(primary, held->sessionId, held->deviceId,
+                                           held->generation)) {
+            self->m_txWatchServer->acceptTransport(watch, QStringLiteral("relay-watch"));
+        } else if (watch) {
+            if (self && primary) {
+                const auto current = self->m_peers.constFind(primary);
+                if (current != self->m_peers.cend()
+                    && current->txWatchGeneration == held->generation) {
+                    self->m_txWatchServer->retire(primary);
+                }
+            }
+            watch->closeLink(QStringLiteral("watch relay ended"));
+            if (watch) {
+                watch->deleteLater();
+            }
+        }
+    });
+    connect(watch, &SessionTransport::closed, this,
+            [fail]() { fail(QStringLiteral("The watch relay closed before opening.")); });
+    QTimer::singleShot(TxWatchServer::kTicketLifetimeMs, this, [fail]() {
+        fail(QStringLiteral("The watch relay could not open in time."));
+    });
+    DataChannelTransport::Options options;
+    options.role = DataChannelTransport::Role::Answerer;
+    options.purpose = DataChannelTransport::Purpose::TxWatch;
+    options.maxIncomingBytes = DataChannelTransport::kMaxWatchFrameBytes;
+    options.certificatePemPath = certificatePemPath();
+    options.privateKeyPemPath = privateKeyPemPath();
+    options.ice = ice;
+    if (!watch->start(options) || !isCurrent() || !pending->transport
+        || !watch->acceptDescription(offer, QStringLiteral("offer"))) {
+        fail(QStringLiteral("The watch relay offer was not accepted."));
+        return;
+    }
+    if (isCurrent()) {
+        pending->leg->open(grant->url, grant->token);
+    }
 }
 
 void StationServer::handlePathJoin(SessionTransport* transport, const SessionMessage& message)
@@ -8584,7 +8839,9 @@ void StationServer::handlePathJoin(SessionTransport* transport, const SessionMes
         if (current != m_peers.end()) {
             current->txWatchPathChanging = false;
         }
+        publishTxPermitted();
     });
+    retirePendingRelayWatch(sessionKey);
     m_txWatchServer->retire(sessionKey);
     if (!self || !joiningGuard || !sessionGuard || !joiningSwitchableGuard
         || !sessionSwitchableGuard) {
@@ -9128,7 +9385,8 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             if (peerDeclares(transport, QByteArrayLiteral("remoteTx"), 1)) {
                 caps.remoteTxEntry = true;
                 caps.remoteTxVersion = remoteTxVersion();
-                caps.txWatchPathVersion = txWatchEligible(transport) ? 1 : 0;
+                caps.txWatchPathVersion = (txWatchEligible(transport)
+                                           || txWatchRelayEligible(transport)) ? 1 : 0;
                 // iPhone app plan Task 39: the `txState` object, with it.
                 caps.txStateVersion = txStateVersion();
                 // Parity Task 33: the transmit readings, right after it.

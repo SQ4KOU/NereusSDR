@@ -1417,6 +1417,7 @@ private:
         /// iPhone app plan Task 34: the txPermitted this session was last
         /// sent, so a change is sent again and nothing else is.
         bool txPermittedSent = false;
+        int txWatchPathVersionSent = 0;
         /// Desktop remote transmit: the refusal it was last sent with it
         /// (empty for a peer without remoteTx, or while permitted).
         TxRefusal txRefusalSent;
@@ -1445,9 +1446,14 @@ private:
 
     void onNewWebSocketConnection();
     void handleTxWatchTicket(SessionTransport* transport, const SessionMessage& message);
+    void handleTxWatchRelay(SessionTransport* transport, const SessionMessage& message);
     bool txWatchEligible(SessionTransport* transport) const;
+    bool txWatchRelayEligible(SessionTransport* transport) const;
+    bool txWatchAuthorityCurrent(SessionTransport* transport) const;
     bool txWatchBindingCurrent(SessionTransport* transport, quint64 sessionId,
                                const QByteArray& deviceId, quint64 generation) const;
+    struct PendingRelayWatch;
+    void retirePendingRelayWatch(SessionTransport* primary);
     void onTransportText(SessionTransport* transport, const QByteArray& wire);
     void onTransportClosed(SessionTransport* transport);
     void onHeartbeatTick();
@@ -2102,6 +2108,7 @@ private:
 
     QWebSocketServer* m_wsServer = nullptr;
     std::unique_ptr<TxWatchServer> m_txWatchServer;
+    QHash<SessionTransport*, std::shared_ptr<PendingRelayWatch>> m_pendingRelayWatches;
     quint64 m_nextTxWatchGeneration = 0;
     StationOpeningGate* m_openingGate = nullptr;
     int m_openingDeadlineMs = kDefaultOpeningDeadlineMs;

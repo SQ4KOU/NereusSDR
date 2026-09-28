@@ -458,6 +458,15 @@ private slots:
         }
         QVERIFY(advertised);
 
+        // A direct primary cannot obtain relay watch construction, even when
+        // it sends a syntactically valid relay command.
+        sendPrimary(SessionMessages::commandInvoke(
+            QByteArrayLiteral("tx.watchRelay"), 700,
+            {{0, "offer", MirrorWireKind::Utf8, QStringLiteral("offer")}}));
+        QVERIFY(QTest::qWaitFor([&]() { return !resultFor(700).isEmpty(); }, 5000));
+        QCOMPARE(resultFor(700).value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("A transmit watch relay path is unavailable for this session."));
+
         sendPrimary(SessionMessages::commandInvoke(QByteArrayLiteral("tx.watchTicket"), 701, {}));
         QVERIFY(QTest::qWaitFor([&]() { return !resultFor(701).isEmpty(); }, 5000));
         const QJsonObject result = resultFor(701);
