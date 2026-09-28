@@ -42,11 +42,13 @@
 #include <QLabel>
 #include <QPainter>
 #include <QPushButton>
+#include <QToolButton>
 #include <cmath>
 
 #include "gui/SpectrumWidget.h"
 #include "gui/applets/RxApplet.h"
 #include "gui/widgets/VfoWidget.h"
+#include "models/SliceModel.h"
 
 using namespace NereusSDR;
 
@@ -110,6 +112,49 @@ class TestPanFlagPositions : public QObject
     Q_OBJECT
 
 private slots:
+    void slice_letter_and_color_follow_stable_id_through_d_e_b()
+    {
+        SliceModel d(3), e(4), b(1);
+        const QVector<SliceModel*> slices{&d, &e, &b};
+        VfoWidget flag;
+        RxApplet applet(nullptr, nullptr);
+        const SliceModel* order[] = {&d, &e, &b};
+        for (const SliceModel* selected : order) {
+            const int id = selected->sliceIndex();
+            const QString letter(selected->sliceLetter());
+            const QColor expected = VfoWidget::sliceColor(id);
+            flag.setSliceIndex(id);
+            applet.setSliceIndex(id);
+            applet.updateSliceButtons(slices, id);
+
+            QLabel* flagBadge = nullptr;
+            for (QLabel* label : flag.findChildren<QLabel*>()) {
+                if (label->size() == QSize(18, 18)) { flagBadge = label; break; }
+            }
+            QVERIFY(flagBadge);
+            QCOMPARE(flagBadge->text(), letter);
+            QCOMPARE(flagBadge->grab().toImage().pixelColor(9, 2), expected);
+
+            QLabel* rxBadge = nullptr;
+            for (QLabel* label : applet.findChildren<QLabel*>()) {
+                if (label->size() == QSize(20, 20)) { rxBadge = label; break; }
+            }
+            QVERIFY(rxBadge);
+            QCOMPARE(rxBadge->text(), letter);
+            QCOMPARE(rxBadge->grab().toImage().pixelColor(10, 2), expected);
+
+            QToolButton* selectedTab = nullptr;
+            for (QToolButton* tab : applet.findChildren<QToolButton*>()) {
+                if (tab->isChecked() && tab->text() == letter) {
+                    selectedTab = tab;
+                    break;
+                }
+            }
+            QVERIFY(selectedTab);
+            QVERIFY(selectedTab->styleSheet().contains(expected.name()));
+        }
+    }
+
     void own_marker_uses_the_flag_slice_color()
     {
         const SliceColorCase cases[] = {{1, 0xffff40ffu}, {2, 0xff40ff40u},

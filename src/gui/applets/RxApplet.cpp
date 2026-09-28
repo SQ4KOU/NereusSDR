@@ -445,7 +445,7 @@ void RxApplet::buildUi()
         auto* row = new QHBoxLayout;
         row->setSpacing(3);
 
-        // Control 1: Slice letter badge (A/B/C/D)
+        // Control 1: Slice letter badge (stable slice-ID letter)
         // 20×20, slice-identity background, white text, 3px radius
         m_sliceBadge = new QLabel(QStringLiteral("A"), this);
         m_sliceBadge->setFixedSize(20, 20);
@@ -1391,9 +1391,8 @@ void RxApplet::setSlice(SliceModel* slice)
 
 void RxApplet::setSliceIndex(int idx)
 {
-    static const char* kLetters[] = {"A", "B", "C", "D"};
-    if (idx >= 0 && idx < 4) {
-        m_sliceBadge->setText(QString::fromLatin1(kLetters[idx]));
+    if (idx >= 0) {
+        m_sliceBadge->setText(QString(QChar(QLatin1Char(static_cast<char>('A' + idx)))));
         m_sliceBadge->setStyleSheet(QStringLiteral(
             "QLabel { background: %1; color: %2;"
             " border-radius: 3px; font-weight: bold; font-size: 11px; }"

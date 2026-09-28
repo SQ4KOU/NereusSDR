@@ -2472,9 +2472,8 @@ void VfoWidget::onTxBadgeClicked()
 void VfoWidget::setSliceIndex(int index)
 {
     m_sliceIndex = index;
-    static const QChar letters[] = {'A', 'B', 'C', 'D'};
-    if (index >= 0 && index < 4) {
-        m_sliceBadge->setText(QString(letters[index]));
+    if (index >= 0) {
+        m_sliceBadge->setText(QString(QChar(QLatin1Char(static_cast<char>('A' + index)))));
         QColor c = sliceColor(index);
         m_sliceBadge->setStyleSheet(
             QStringLiteral("background: %1; color: white; font-size: 11px;"
