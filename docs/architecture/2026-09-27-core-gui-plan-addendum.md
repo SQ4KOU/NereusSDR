@@ -1246,6 +1246,11 @@ colours for the same signal.
   from its named first entry and verifies newer entries follow in order. No
   production capability order was changed. The integrated app/Core build and
   six focused suites passed (27.62 seconds).
+  The full Linux run at `9f87b4a9` exposed the same stale-tail assumption
+  in `tst_display_extras`: its `size()-18` location now names a later field.
+  The lead corrected that test to locate the original named block and still
+  check every entry's contiguous order. The explicitly rebuilt full display
+  extras suite passes (2.83 s). No production ordering changed.
 - Plan: several-device capability compatibility.
 
 ### G-69: Desktop shutdown could close ingress before ending transmit
@@ -1771,6 +1776,24 @@ colours for the same signal.
   CL2 MHz; the existing Nereus labels/storage differ. Lead scope and semantic
   decisions remain open; no hardware effect or new permission is inferred.
 - Plan: honest Hardware Setup parity and phone dependencies, G-87.
+
+### G-91: Linux verification container has no usable ICE interface
+
+- Evidence: the full `9f87b4a9` suite runs in a network-disabled Docker
+  container. Inspection shows only loopback carrying IP traffic. The pinned
+  libjuice gatherer deliberately excludes loopback and link-local addresses;
+  ICE configuration and rendezvous tests therefore report zero candidates,
+  followed by data-channel and watch-relay connection failures/timeouts.
+- Ruling basis: JJ requires causes and suggested fixes for real-load failures.
+  Restore the test fixture's network prerequisite without changing production
+  ICE selection, weakening assertions or increasing time limits.
+- Status: source and actual runner interface state inspected. The next
+  verification runner will have a private internal Docker network interface,
+  with no external routing. The current run is preserved unchanged so its
+  remaining independent findings can be collected. A passing corrected-network
+  comparison is still required; this does not resolve G-57's separate macOS
+  intermittent startup failure on a machine with usable interfaces.
+- Plan: full Linux verification and R5 network acceptance.
 
 ## How this addendum is kept
 
