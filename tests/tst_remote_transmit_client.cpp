@@ -163,6 +163,90 @@ class TestRemoteTransmitClient : public QObject {
     Q_OBJECT
 
 private slots:
+    void auxiliarySuccessStillSendsExistingChannelCopy()
+    {
+        Recorder core;
+        RemoteTransmitClient client(core.sender());
+        QList<QPair<quint64, quint32>> auxiliary;
+        QList<QPair<quint64, quint32>> channel;
+        int primary = 0;
+        client.setAuxiliaryKeepalive([&](quint64 sequence, quint32 epoch) {
+            auxiliary.append({sequence, epoch});
+            return true;
+        });
+        client.setChannelKeepalive([&](quint64 sequence, quint32 epoch) {
+            channel.append({sequence, epoch});
+            return true;
+        });
+        client.setSessionKeepalive([&](quint64, quint32) {
+            ++primary;
+            return true;
+        });
+        client.setAvailable(true);
+        client.setVoxArmed(true);
+        QCOMPARE(auxiliary.size(), 1);
+        QCOMPARE(channel.size(), 1);
+        QCOMPARE(auxiliary.first(), channel.first());
+        QCOMPARE(primary, 0);
+        client.keepaliveTick();
+        QCOMPARE(auxiliary.size(), 2);
+        QCOMPARE(channel.size(), 2);
+        QCOMPARE(auxiliary.last(), channel.last());
+    }
+
+    void auxiliaryCallbackReleaseFencesEveryOtherPath()
+    {
+        Recorder core;
+        RemoteTransmitClient client(core.sender());
+        int auxiliary = 0;
+        int channel = 0;
+        int primary = 0;
+        client.setAuxiliaryKeepalive([&](quint64, quint32) {
+            ++auxiliary;
+            client.setTune(false);
+            return true;
+        });
+        client.setChannelKeepalive([&](quint64, quint32) {
+            ++channel;
+            return true;
+        });
+        client.setSessionKeepalive([&](quint64, quint32) {
+            ++primary;
+            return true;
+        });
+        client.setAvailable(true);
+        client.setVoxArmed(true);
+        QCOMPARE(auxiliary, 1);
+        QCOMPARE(channel, 0);
+        QCOMPARE(primary, 0);
+        QCOMPARE(core.sent.last().verb, QByteArrayLiteral("tx.tune"));
+        client.keepaliveTick();
+        QCOMPARE(auxiliary, 1);
+        QCOMPARE(channel, 0);
+        QCOMPARE(primary, 0);
+    }
+
+    void auxiliaryCallbackResetOrDeleteCannotSendOldSessionCopy()
+    {
+        Recorder core;
+        auto* client = new RemoteTransmitClient(core.sender());
+        QPointer<RemoteTransmitClient> alive(client);
+        int channel = 0;
+        client->setAuxiliaryKeepalive([&](quint64, quint32) {
+            client->setAvailable(false);
+            delete client;
+            return true;
+        });
+        client->setChannelKeepalive([&](quint64, quint32) {
+            ++channel;
+            return true;
+        });
+        client->setAvailable(true);
+        client->setVoxArmed(true);
+        QVERIFY(alive.isNull());
+        QCOMPARE(channel, 0);
+    }
+
     void releaseDuringChannelSendPreventsPrimaryFallback()
     {
         Recorder core;

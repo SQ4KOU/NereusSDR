@@ -134,6 +134,17 @@ void RemoteTransmitClient::keepaliveTick()
     }
     const QPointer<RemoteTransmitClient> self(this);
     const quint64 sessionGeneration = m_sessionGeneration;
+    if (m_auxiliaryKeepalive) {
+        const KeepaliveSender auxiliary = m_auxiliaryKeepalive;
+        const bool sent = auxiliary(sequence, epoch);
+        if (!self || m_sessionGeneration != sessionGeneration) { return; }
+        if (sent) { ++m_auxiliaryKeepalives; }
+    }
+    // The auxiliary callback may have sent an off or reset the session.
+    // It never supplants the existing media/primary delivery path.
+    if (m_releaseDispatches != 0 || m_pendingReleases != 0 || m_releaseFailureSticky) {
+        return;
+    }
     if (m_channelKeepalive) {
         const KeepaliveSender channel = m_channelKeepalive;
         const bool sent = channel(sequence, epoch);
@@ -174,6 +185,7 @@ void RemoteTransmitClient::setAvailable(bool available)
         m_keepaliveSequence = 0;
         m_channelKeepalives = 0;
         m_sessionKeepalives = 0;
+        m_auxiliaryKeepalives = 0;
     }
     refreshKeepalive();
 }

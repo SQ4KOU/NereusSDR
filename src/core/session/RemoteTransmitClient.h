@@ -119,6 +119,12 @@ public:
     /// release waits for its primary-session delivery barrier. Unset, or
     /// false (no channel open), the session carries it.
     void setChannelKeepalive(KeepaliveSender sender) { m_channelKeepalive = std::move(sender); }
+    /// Independent watch socket: one copy of this timer's sequence/epoch.
+    /// Its result never replaces the existing channel-or-primary copy.
+    void setAuxiliaryKeepalive(KeepaliveSender sender)
+    {
+        m_auxiliaryKeepalive = std::move(sender);
+    }
     /// The Core's VOX is on (the window's mirrored transmit.voxEnabled).
     void setVoxArmed(bool armed);
     /// Keepalives are going out now.
@@ -129,6 +135,7 @@ public:
     /// came up.
     quint64 channelKeepalivesSent() const { return m_channelKeepalives; }
     quint64 sessionKeepalivesSent() const { return m_sessionKeepalives; }
+    quint64 auxiliaryKeepalivesSent() const { return m_auxiliaryKeepalives; }
     /// One keepalive now (the timer's; public for tests).
     void keepaliveTick();
 
@@ -230,10 +237,12 @@ private:
     bool m_voxArmed{false};
     KeepaliveSender m_sessionKeepalive;
     KeepaliveSender m_channelKeepalive;
+    KeepaliveSender m_auxiliaryKeepalive;
     QTimer m_keepaliveTimer;
     quint64 m_keepaliveSequence{0};
     quint64 m_channelKeepalives{0};
     quint64 m_sessionKeepalives{0};
+    quint64 m_auxiliaryKeepalives{0};
     void refreshKeepalive();
     /// The Core's `transmitting` as last heard.
     quint32 m_coreStopSerial{0};   // fix wave M7
