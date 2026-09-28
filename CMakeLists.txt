@@ -990,6 +990,10 @@ set(CORE_SOURCES
     src/core/TxChannel.cpp
     src/core/RadeChannel.cpp
     src/core/RadeText.cpp
+    # RADE end-of-over callsigns: FreeDV's callsign format (freedv-backend
+    # rade_text + LDPC(112,56) port).
+    src/core/RadeTextCodec.cpp
+    src/core/RadeLdpc.cpp
     src/core/Resampler.cpp
     src/core/PsFeedbackChannel.cpp
     src/core/PureSignal.cpp

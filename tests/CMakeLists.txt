@@ -6289,28 +6289,20 @@ nereus_add_test(tst_rade_channel)
 # CDSPResampler24 has nontrivial internal latency.
 nereus_add_test(tst_resampler)
 
-# ── Phase 3R Task I4: RadeText (callsign-over-EOO wrapper) ────────────────
-# Pins the five contracts of the thin Qt6 wrapper around the
-# third_party/rade callsign-over-EOO channel
-# (rade_tx_set_eoo_callsign / rade_rx_get_eoo_callsign, declared in
-# third_party/rade/src/rade_api.h:120-145 [@b289102]):
-#   constructsAndIsEmpty             fresh wrapper has empty ourCallsign
-#   setOurCallsignStoresValue        getter returns the value the setter
-#                                    stashed; lower / upper / empty all
-#                                    round-trip unchanged
-#   pushTxNullRadeIsNoOp             pushTxCallsign(nullptr) is safe
-#                                    (RadeChannel's m_rade is null
-#                                    between stop() and start())
-#   pushTxEmptyCallsignIsNoOp        pushTxCallsign on an empty stash
-#                                    must not clobber rade_tx.eoo_bits
-#   roundTripDecodesEncodedCallsign  setOurCallsign + pushTxCallsign +
-#                                    processRxEooBits emits
-#                                    textDecoded("KG4VCF") once
-# The headline test does a bit-level round-trip (no OFDM mod/demod)
-# because the wrapper only sits on set_eoo_callsign / get_eoo_callsign;
-# the full OFDM round-trip is exercised separately by the upstream
-# third_party/rade/src/rade_callsign_test.c executable.
+# ── RADE end-of-over callsigns: RadeText + FreeDV's format ────────────────
+# tst_rade_text: the RadeText wrapper writes FreeDV's EOO data into librade
+# (float for float against freedv-backend vectors), writes zeros with no
+# callsign, emits a FreeDV station's callsign and nothing for an empty or
+# rejected one, and a callsign survives librade's modem end to end
+# (rade_tx frames, rade_tx_eoo, the real leg only, rade_rx).
 nereus_add_test(tst_rade_text)
+
+# tst_rade_text_codec: RadeTextCodec (the port of freedv-backend's
+# rade_text + LDPC(112,56)) encodes exactly what FreeDV encodes and accepts
+# or rejects exactly what FreeDV accepts or rejects. The vectors in
+# tests/data/rade_text/freedv_backend_vectors.h come from the upstream code
+# itself (scripts/gen-rade-text-vectors.sh).
+nereus_add_test(tst_rade_text_codec)
 
 # ── Phase 3R Task I5: RadeChannel -> RadioModel slot graph wiring ─────────
 # Pins the six contracts RadioModel::wireRadeChannel(sliceId, channel, slice)
