@@ -166,6 +166,10 @@ public:
     void setPingIntervalMs(int ms);
     int pingIntervalMs() const;
 
+    /// Section 12.9: opt in only when this owner has a separate watch transport.
+    /// Defaults off. Applies to the next service connection.
+    void setWatchRelayEnabled(bool enabled) { m_watchRelayEnabled = enabled; }
+
     // ── Station role ──────────────────────────────────────────────────
 
     /// Registers the Core under the rendezvous id of `stationKey` (its
@@ -331,6 +335,8 @@ private:
     int m_missedPongs = 0;
     bool m_stopped = false;
     bool m_helloReceived = false;
+    bool m_watchRelayEnabled = false;
+    bool m_watchRelayNegotiated = false;
     QByteArray m_helloNonce;
     QStringList m_stunUrls;
 

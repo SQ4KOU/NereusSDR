@@ -1120,8 +1120,14 @@ colours for the same signal.
   enabled service hello uses protocol version 2. Old peers retain ordinary
   version-1 primary grants. The integrated Python suite passed 478 tests
   (23.03 seconds), including real loopback forwarding with service-issued grants.
-  No deployed service was changed. Client/Core watch signaling, separate DTLS
-  transport, and restrictive-network acceptance remain unfinished.
+  C++ service negotiation is also built, disabled by default: explicit opt-in
+  and a version-2-or-newer service declaring watch version 1 are required. Unknown
+  future watch versions and older services retain ordinary primary behavior;
+  reconnect clears negotiated state. The integrated app/Core build and full
+  rendezvous client suite passed (64.42 seconds), with strict optional-field,
+  station/client negotiation and old-service reconnect regressions.
+  No deployed service was changed. Station-session watch signaling, separate
+  DTLS transport, and restrictive-network acceptance remain unfinished.
 - Plan: several-device capacity and restrictive-network relay access.
 
 ### G-67: Releasing an offline Core must preserve receiver edits and saved layouts
