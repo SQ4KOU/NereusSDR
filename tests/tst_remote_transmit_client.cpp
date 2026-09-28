@@ -33,6 +33,9 @@
 #include <QSignalSpy>
 
 #include "core/session/RemoteTransmitClient.h"
+#include "core/safety/RemoteTxWatchdog.h"
+
+#include <optional>
 
 using namespace NereusSDR;
 
@@ -90,6 +93,59 @@ void answerCopies(RemoteTransmitClient& client, const Sent& command, bool accept
         client.commandFinished(command.id, command.verb, accepted, reason, values);
     }
 }
+
+// A fake primary command transport and independent media TX path. The
+// watchdog and transmit client are production classes; only delivery and
+// time are controlled here, so a held unkey cannot be rescued by a sleep
+// or by the order the host happens to schedule threads.
+struct SplitTxPaths {
+    const QByteArray device = QByteArrayLiteral("paired-window");
+    qint64 nowMs = 0;
+    std::optional<qint64> timerDue;
+    int stops = 0;
+    int channelAccepted = 0;
+    bool keyed = false;
+    Recorder primary;
+    RemoteTxWatchdog watchdog;
+    RemoteTransmitClient client;
+
+    SplitTxPaths()
+        : client(primary.sender())
+    {
+        RemoteTxWatchdog::Hooks hooks;
+        hooks.clock = [this] { return nowMs; };
+        hooks.startTimer = [this](int ms) { timerDue = nowMs + ms; };
+        hooks.stopTimer = [this] { timerDue.reset(); };
+        hooks.stop = [this](const QByteArray& stopped, const QString&) {
+            if (stopped == device) {
+                ++stops;
+                keyed = false;
+            }
+        };
+        watchdog.setHooks(std::move(hooks));
+        client.setChannelKeepalive([this](quint64 sequence, quint32 epoch) {
+            if (watchdog.keepalive(device, sequence, epoch,
+                                   RemoteTxWatchdog::Path::TxChannel)) {
+                ++channelAccepted;
+            }
+            // This is the media sender's local success, independent of
+            // whether the Core counted a particular sequence.
+            return true;
+        });
+        client.setSessionKeepalive([](quint64, quint32) { return true; });
+        client.setAvailable(true);
+    }
+
+    void advanceTo(qint64 ms)
+    {
+        while (timerDue && *timerDue <= ms) {
+            nowMs = *timerDue;
+            timerDue.reset();
+            watchdog.onTimer();
+        }
+        nowMs = ms;
+    }
+};
 
 } // namespace
 
@@ -431,6 +487,382 @@ private slots:
         client.setAvailable(false);
         QVERIFY(!client.keepaliveRunning());
         QVERIFY(sent >= 4);
+    }
+
+    // Reproduction: the primary command connection holds tx.unkey, while
+    // the independent media TX path keeps delivering fresh heartbeats.
+    // VOX stays armed after the local key release, so the Core must still
+    // fail safe within its existing 400 ms deadline.
+    void heldUnkeyWithVoxArmedCannotBeSustainedByIndependentHeartbeats()
+    {
+        SplitTxPaths paths;
+        paths.watchdog.setVoxArmed(paths.device, true);
+        paths.client.setVoxArmed(true);
+        paths.client.setScreenKey(true);
+        QCOMPARE(paths.primary.sent.size(), 1);
+        QCOMPARE(paths.primary.sent.at(0).verb, QByteArrayLiteral("tx.key"));
+
+        // The fake Core accepted the primary key before the primary path
+        // stalls. It names the same device/epoch as the real Core would.
+        paths.keyed = true;
+        paths.watchdog.setKeyed(paths.device, true, 7);
+        answerCopies(paths.client, paths.primary.sent.at(0), true, QString(), epochValue(7));
+        paths.advanceTo(100);
+        paths.client.keepaliveTick();
+        QCOMPARE(paths.stops, 0);
+
+        paths.client.setScreenKey(false);
+        QCOMPARE(paths.primary.sent.size(), 2);
+        QCOMPARE(paths.primary.sent.at(1).verb, QByteArrayLiteral("tx.unkey"));
+        QVERIFY(paths.client.keepaliveRunning());  // VOX is still armed.
+        const int channelBeforeRelease = paths.channelAccepted;
+        const quint64 primaryBeforeRelease = paths.client.sessionKeepalivesSent();
+        // Deliberately do not deliver the queued tx.unkey to the Core.
+        for (qint64 at = 200; at <= 600; at += RemoteTxWatchdog::kKeepaliveIntervalMs) {
+            paths.advanceTo(at);
+            paths.client.keepaliveTick();
+        }
+        QCOMPARE(paths.channelAccepted, channelBeforeRelease);
+        QVERIFY(paths.client.sessionKeepalivesSent() >= primaryBeforeRelease + 5);
+        QCOMPARE(paths.stops, 1);
+        QVERIFY(!paths.keyed);
+    }
+
+    void heldProgramUnkeyWithVoxArmedCannotBeSustainedByIndependentHeartbeats()
+    {
+        SplitTxPaths paths;
+        paths.watchdog.setVoxArmed(paths.device, true);
+        paths.client.setVoxArmed(true);
+        RemoteTransmitClient::Answer keyAnswer;
+        paths.client.keyForProgram([&keyAnswer](const RemoteTransmitClient::Answer& answer) {
+            keyAnswer = answer;
+        });
+        QCOMPARE(paths.primary.sent.size(), 1);
+        paths.keyed = true;
+        paths.watchdog.setKeyed(paths.device, true, 7);
+        answerCopies(paths.client, paths.primary.sent.at(0), true, QString(), epochValue(7));
+        QVERIFY(keyAnswer.accepted);
+        paths.advanceTo(100);
+        paths.client.keepaliveTick();
+
+        paths.client.unkeyForProgram(7);
+        QCOMPARE(paths.primary.sent.size(), 2);
+        QCOMPARE(paths.primary.sent.at(1).verb, QByteArrayLiteral("tx.unkey"));
+        QVERIFY(paths.client.keepaliveRunning());
+        const int channelBeforeRelease = paths.channelAccepted;
+        const quint64 primaryBeforeRelease = paths.client.sessionKeepalivesSent();
+        for (qint64 at = 200; at <= 600; at += RemoteTxWatchdog::kKeepaliveIntervalMs) {
+            paths.advanceTo(at);
+            paths.client.keepaliveTick();
+        }
+        QCOMPARE(paths.channelAccepted, channelBeforeRelease);
+        QVERIFY(paths.client.sessionKeepalivesSent() >= primaryBeforeRelease + 5);
+        QCOMPARE(paths.stops, 1);
+        QVERIFY(!paths.keyed);
+    }
+
+    void heldUnkeyThenRapidRekeyWithVoxOffCannotSustainOldKey()
+    {
+        SplitTxPaths paths;
+        paths.client.setScreenKey(true);
+        paths.keyed = true;
+        paths.watchdog.setKeyed(paths.device, true, 7);
+        answerCopies(paths.client, paths.primary.sent.at(0), true, QString(), epochValue(7));
+        paths.advanceTo(100);
+        paths.client.keepaliveTick();
+
+        paths.client.setScreenKey(false);
+        const Sent heldRelease = paths.primary.sent.last();
+        QCOMPARE(heldRelease.verb, QByteArrayLiteral("tx.unkey"));
+        QVERIFY(!paths.client.keepaliveRunning());
+        // The old release stays queued on the primary path. A new press
+        // cannot overtake it there, but immediately restarts the local
+        // timer; the media TX path remains independently deliverable.
+        paths.client.setScreenKey(true);
+        QCOMPARE(paths.primary.sent.last().verb, QByteArrayLiteral("tx.key"));
+        QVERIFY(paths.client.keepaliveRunning());
+        QCOMPARE(paths.client.keepaliveEpoch(), RemoteTransmitClient::kReleaseAnyEpoch);
+        const int channelBeforeRelease = paths.channelAccepted;
+        const quint64 primaryBeforeRelease = paths.client.sessionKeepalivesSent();
+        for (qint64 at = 200; at <= 600; at += RemoteTxWatchdog::kKeepaliveIntervalMs) {
+            paths.advanceTo(at);
+            paths.client.keepaliveTick();
+        }
+        QCOMPARE(paths.channelAccepted, channelBeforeRelease);
+        QVERIFY(paths.client.sessionKeepalivesSent() >= primaryBeforeRelease + 5);
+        QCOMPARE(paths.stops, 1);
+        QVERIFY(!paths.keyed);
+    }
+
+    void acceptedReleaseStopsKeyAndLeavesVoxWatchRunning()
+    {
+        SplitTxPaths paths;
+        paths.watchdog.setVoxArmed(paths.device, true);
+        paths.client.setVoxArmed(true);
+        paths.client.setScreenKey(true);
+        paths.keyed = true;
+        paths.watchdog.setKeyed(paths.device, true, 7);
+        answerCopies(paths.client, paths.primary.sent.at(0), true, QString(), epochValue(7));
+        paths.client.setScreenKey(false);
+        const Sent release = paths.primary.sent.last();
+        QCOMPARE(release.verb, QByteArrayLiteral("tx.unkey"));
+        const quint64 channelBefore = paths.client.channelKeepalivesSent();
+        const quint64 sessionBefore = paths.client.sessionKeepalivesSent();
+        paths.client.keepaliveTick();
+        QCOMPARE(paths.client.channelKeepalivesSent(), channelBefore);
+        QCOMPARE(paths.client.sessionKeepalivesSent(), sessionBefore + 1);
+
+        // Delivery of the held primary command is the point at which the
+        // Core's key actually ends; the accepted result follows it.
+        paths.keyed = false;
+        paths.watchdog.released(paths.device);
+        answerCopies(paths.client, release, true, QString(), {});
+        QVERIFY(paths.watchdog.isWatching(paths.device));
+        QVERIFY(paths.client.keepaliveRunning());
+        paths.advanceTo(100);
+        paths.client.keepaliveTick();
+        QCOMPARE(paths.stops, 0);
+        QVERIFY(!paths.keyed);
+        QCOMPARE(paths.client.channelKeepalivesSent(), channelBefore + 1);
+    }
+
+    void releaseFenceIsSetBeforeSendingOffCommand()
+    {
+        Recorder core;
+        RemoteTransmitClient* clientPtr = nullptr;
+        quint64 channelAtReentrantTick = 0;
+        quint64 sessionAtReentrantTick = 0;
+        RemoteTransmitClient client(
+            [&](const QByteArray& verb, const QList<MirrorUpdate>& arguments) -> quint32 {
+                const quint32 id = core.sender()(verb, arguments);
+                if (verb == "tx.unkey") {
+                    clientPtr->keepaliveTick();
+                    channelAtReentrantTick = clientPtr->channelKeepalivesSent();
+                    sessionAtReentrantTick = clientPtr->sessionKeepalivesSent();
+                }
+                return id;
+            });
+        clientPtr = &client;
+        client.setChannelKeepalive([](quint64, quint32) { return true; });
+        client.setSessionKeepalive([](quint64, quint32) { return true; });
+        client.setAvailable(true);
+        client.setVoxArmed(true);
+        client.setScreenKey(true);
+        const quint64 beforeChannel = client.channelKeepalivesSent();
+        client.setScreenKey(false);
+        QCOMPARE(channelAtReentrantTick, beforeChannel);
+        QCOMPARE(sessionAtReentrantTick, quint64(1));
+    }
+
+    void refusedUnknownOrWrongVerbReplyCannotLiftReleaseFence()
+    {
+        Recorder core;
+        RemoteTransmitClient client(core.sender());
+        client.setChannelKeepalive([](quint64, quint32) { return true; });
+        client.setSessionKeepalive([](quint64, quint32) { return true; });
+        client.setAvailable(true);
+        client.setVoxArmed(true);
+        client.setScreenKey(true);
+        client.setScreenKey(false);
+        const Sent release = core.sent.last();
+        const quint64 channelBefore = client.channelKeepalivesSent();
+
+        client.commandFinished(release.id + 10, release.verb, true, {}, {});
+        client.commandFinished(release.id, QByteArrayLiteral("tx.key"), true, {}, {});
+        client.keepaliveTick();
+        QCOMPARE(client.channelKeepalivesSent(), channelBefore);
+        client.commandFinished(release.id, release.verb, false, QStringLiteral("refused"), {});
+        client.keepaliveTick();
+        QCOMPARE(client.channelKeepalivesSent(), channelBefore);
+        // A later duplicate accepted reply cannot turn the refusal into a
+        // delivery barrier.
+        client.commandFinished(release.id, release.verb, true, {}, {});
+        client.keepaliveTick();
+        QCOMPARE(client.channelKeepalivesSent(), channelBefore);
+    }
+
+    void oldCoreStopObservationCannotStandInForOffDelivery()
+    {
+        Recorder core;
+        RemoteTransmitClient client(core.sender());
+        client.setChannelKeepalive([](quint64, quint32) { return true; });
+        client.setSessionKeepalive([](quint64, quint32) { return true; });
+        client.setAvailable(true);
+        client.setVoxArmed(true);
+        client.setScreenKey(true);
+        client.setScreenKey(false);
+        const Sent release = core.sent.last();
+        const quint64 channelBefore = client.channelKeepalivesSent();
+        // Either observation can have been queued ahead of the off intent.
+        client.setCoreTransmitting(false);
+        client.coreStopped(1, false, 7);
+        client.keepaliveTick();
+        QCOMPARE(client.channelKeepalivesSent(), channelBefore);
+        answerCopies(client, release, true, QString(), {});
+        client.keepaliveTick();
+        QCOMPARE(client.channelKeepalivesSent(), channelBefore + 1);
+    }
+
+    void sendFailureKeepsReleaseFenceUntilSessionReset()
+    {
+        Recorder core;
+        RemoteTransmitClient client(core.sender());
+        client.setChannelKeepalive([](quint64, quint32) { return true; });
+        client.setSessionKeepalive([](quint64, quint32) { return true; });
+        client.setAvailable(true);
+        client.setVoxArmed(true);
+        client.setScreenKey(true);
+        const quint64 channelBefore = client.channelKeepalivesSent();
+        core.linked = false;
+        client.setScreenKey(false);  // sender returns 0; no Core reply can arrive.
+        client.keepaliveTick();
+        QCOMPARE(client.channelKeepalivesSent(), channelBefore);
+        client.setAvailable(false);
+        core.linked = true;
+        client.setAvailable(true);
+        QVERIFY(client.channelKeepalivesSent() > 0);  // VOX restarts on the new session.
+    }
+
+    void laterAcceptedOffCoversAnEarlierFailedSend()
+    {
+        Recorder core;
+        RemoteTransmitClient client(core.sender());
+        client.setChannelKeepalive([](quint64, quint32) { return true; });
+        client.setSessionKeepalive([](quint64, quint32) { return true; });
+        client.setAvailable(true);
+        client.setVoxArmed(true);
+        client.setScreenKey(true);
+        const quint64 channelBefore = client.channelKeepalivesSent();
+        core.linked = false;
+        client.setScreenKey(false);
+        client.keepaliveTick();
+        QCOMPARE(client.channelKeepalivesSent(), channelBefore);
+        core.linked = true;
+        client.setTune(false);  // A later off uses the same ordered primary.
+        const Sent laterOff = core.sent.last();
+        QCOMPARE(laterOff.verb, QByteArrayLiteral("tx.tune"));
+        answerCopies(client, laterOff, true, QString(), {});
+        client.keepaliveTick();
+        QCOMPARE(client.channelKeepalivesSent(), channelBefore + 1);
+    }
+
+    void previousSessionReplyCannotLiftTheNewSessionsReleaseFence()
+    {
+        Recorder core;
+        RemoteTransmitClient client(core.sender());
+        client.setChannelKeepalive([](quint64, quint32) { return true; });
+        client.setSessionKeepalive([](quint64, quint32) { return true; });
+        client.setAvailable(true);
+        client.setVoxArmed(true);
+        client.setScreenKey(true);
+        client.setScreenKey(false);
+        const Sent oldOff = core.sent.last();
+        client.setAvailable(false);
+        client.setAvailable(true);
+        client.setScreenKey(true);
+        client.setScreenKey(false);
+        const Sent newOff = core.sent.last();
+        const quint64 channelBefore = client.channelKeepalivesSent();
+        answerCopies(client, oldOff, true, QString(), {});
+        client.keepaliveTick();
+        QCOMPARE(client.channelKeepalivesSent(), channelBefore);
+        answerCopies(client, newOff, true, QString(), {});
+        client.keepaliveTick();
+        QCOMPARE(client.channelKeepalivesSent(), channelBefore + 1);
+    }
+
+    void olderOffReplyCannotLiftNewerOffFence()
+    {
+        Recorder core;
+        RemoteTransmitClient client(core.sender());
+        client.setChannelKeepalive([](quint64, quint32) { return true; });
+        client.setSessionKeepalive([](quint64, quint32) { return true; });
+        client.setAvailable(true);
+        client.setVoxArmed(true);
+        client.setScreenKey(true);
+        client.setScreenKey(false);
+        const Sent firstOff = core.sent.last();
+        client.setScreenKey(true);
+        client.setScreenKey(false);
+        const Sent secondOff = core.sent.last();
+        const quint64 channelBefore = client.channelKeepalivesSent();
+        answerCopies(client, firstOff, true, QString(), {});
+        client.keepaliveTick();
+        QCOMPARE(client.channelKeepalivesSent(), channelBefore);
+        answerCopies(client, secondOff, true, QString(), {});
+        client.keepaliveTick();
+        QCOMPARE(client.channelKeepalivesSent(), channelBefore + 1);
+    }
+
+    void offVariantsUseThePrimaryUntilTheirAcceptedReply()
+    {
+        const QList<QByteArray> verbs = {QByteArrayLiteral("tx.tune"),
+                                         QByteArrayLiteral("tx.tunerTune"),
+                                         QByteArrayLiteral("tx.twoTone")};
+        for (const QByteArray& verb : verbs) {
+            Recorder core;
+            RemoteTransmitClient client(core.sender());
+            client.setChannelKeepalive([](quint64, quint32) { return true; });
+            client.setSessionKeepalive([](quint64, quint32) { return true; });
+            client.setAvailable(true);
+            client.setVoxArmed(true);
+            if (verb == "tx.tune") {
+                client.setTune(true);
+                client.setTune(false);
+            } else if (verb == "tx.tunerTune") {
+                client.setTunerTune(true);
+                client.setTunerTune(false);
+            } else {
+                client.setTwoTone(true);
+                client.setTwoTone(false);
+            }
+            const Sent off = core.sent.last();
+            QCOMPARE(off.verb, verb);
+            QCOMPARE(core.argument(core.sent.size() - 1, "on").toBool(), false);
+            const quint64 channelBefore = client.channelKeepalivesSent();
+            client.keepaliveTick();
+            QCOMPARE(client.channelKeepalivesSent(), channelBefore);
+            answerCopies(client, off, true, QString(), {});
+            client.keepaliveTick();
+            QCOMPARE(client.channelKeepalivesSent(), channelBefore + 1);
+        }
+    }
+
+    void acceptedReleaseAndRapidRekeyRepliesKeepNewKeyState()
+    {
+        Recorder core;
+        RemoteTransmitClient client(core.sender());
+        client.setChannelKeepalive([](quint64, quint32) { return true; });
+        client.setSessionKeepalive([](quint64, quint32) { return true; });
+        client.setAvailable(true);
+        client.setVoxArmed(true);
+        client.setScreenKey(true);
+        const Sent firstKey = core.sent.last();
+        answerCopies(client, firstKey, true, QString(), epochValue(7));
+        client.setScreenKey(false);
+        const Sent release = core.sent.last();
+        QCOMPARE(release.verb, QByteArrayLiteral("tx.unkey"));
+        QCOMPARE(core.argument(core.sent.size() - 1, "epoch").toLongLong(), qlonglong(7));
+
+        // The operator presses again while release is still in flight.
+        client.setScreenKey(true);
+        const Sent nextKey = core.sent.last();
+        QCOMPARE(nextKey.verb, QByteArrayLiteral("tx.key"));
+        answerCopies(client, nextKey, true, QString(), epochValue(8));
+        QVERIFY(client.holdsTransmit());
+        QCOMPARE(client.keepaliveEpoch(), 8u);
+        const quint64 channelBefore = client.channelKeepalivesSent();
+        client.keepaliveTick();
+        QCOMPARE(client.channelKeepalivesSent(), channelBefore);
+        answerCopies(client, release, true, QString(), {});
+        QVERIFY(client.holdsTransmit());
+        QCOMPARE(client.keepaliveEpoch(), 8u);
+        // An accepted old-epoch release proves ordered delivery, not that
+        // the newer epoch 8 key was turned off by the Core.
+        client.keepaliveTick();
+        QCOMPARE(client.channelKeepalivesSent(), channelBefore + 1);
+        client.setScreenKey(false);
+        QCOMPARE(core.argument(core.sent.size() - 1, "epoch").toLongLong(), qlonglong(8));
     }
 };
 

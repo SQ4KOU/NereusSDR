@@ -126,7 +126,12 @@ void RemoteTransmitClient::keepaliveTick()
     }
     const quint64 sequence = ++m_keepaliveSequence;
     const quint32 epoch = keepaliveEpoch();
-    if (m_channelKeepalive && m_channelKeepalive(sequence, epoch)) {
+    // An off command on the primary is an ordered delivery barrier: while
+    // it has not been accepted there, an independent media heartbeat must
+    // not keep an old Core key alive behind a stalled release. The same
+    // eligibility gate applies to any future auxiliary heartbeat path.
+    if (m_releaseFenceGeneration == 0 && m_channelKeepalive
+        && m_channelKeepalive(sequence, epoch)) {
         ++m_channelKeepalives;
         return;
     }
@@ -154,14 +159,20 @@ void RemoteTransmitClient::setAvailable(bool available)
 }
 
 quint32 RemoteTransmitClient::send(const QByteArray& verb, const QList<MirrorUpdate>& arguments,
-                                   Kind kind)
+                                   Kind kind, bool releaseIntent)
 {
+    const quint64 issued = ++m_issuanceGeneration;
+    if (releaseIntent) {
+        // Set before calling the sender: it can reenter the event loop or
+        // fail, and either way no independent heartbeat may pass this off.
+        m_releaseFenceGeneration = issued;
+    }
     if (!m_available || !m_sender) {
         return 0;
     }
     const quint32 id = m_sender(verb, arguments);
     if (id != 0) {
-        m_pending.insert(id, kind);
+        m_pending.insert(id, Pending{kind, verb, issued, releaseIntent});
     }
     return id;
 }
@@ -219,13 +230,14 @@ void RemoteTransmitClient::setScreenKey(bool down)
 void RemoteTransmitClient::release(quint32 epoch)
 {
     send(QByteArrayLiteral("tx.unkey"), {int64Argument("epoch", static_cast<qint64>(epoch))},
-         Kind::Release);
+         Kind::Release, /*releaseIntent=*/true);
     qCInfo(lcRemoteTransmit) << "Release sent, epoch" << epoch;
 }
 
 void RemoteTransmitClient::setTune(bool on)
 {
-    const quint32 id = send(QByteArrayLiteral("tx.tune"), {boolArgument("on", on)}, Kind::Tune);
+    const quint32 id = send(QByteArrayLiteral("tx.tune"), {boolArgument("on", on)}, Kind::Tune,
+                            /*releaseIntent=*/!on);
     m_tuneAsked = on && id != 0;
     if (id == 0 && on) {
         emit refused(QString::fromLatin1(kNoLinkReason), QString(), QString());
@@ -238,7 +250,8 @@ void RemoteTransmitClient::setTunerTune(bool on)
     // Answered as TUNE is (Kind::Tune): its carrier keeps this window's
     // keepalives going while it waits for the amplifier and while it is on.
     const quint32 id =
-        send(QByteArrayLiteral("tx.tunerTune"), {boolArgument("on", on)}, Kind::Tune);
+        send(QByteArrayLiteral("tx.tunerTune"), {boolArgument("on", on)}, Kind::Tune,
+             /*releaseIntent=*/!on);
     m_tuneAsked = on && id != 0;
     if (id == 0 && on) {
         emit refused(QString::fromLatin1(kNoLinkReason), QString(), QString());
@@ -249,7 +262,8 @@ void RemoteTransmitClient::setTunerTune(bool on)
 void RemoteTransmitClient::setTwoTone(bool on)
 {
     const quint32 id =
-        send(QByteArrayLiteral("tx.twoTone"), {boolArgument("on", on)}, Kind::TwoTone);
+        send(QByteArrayLiteral("tx.twoTone"), {boolArgument("on", on)}, Kind::TwoTone,
+             /*releaseIntent=*/!on);
     m_twoToneAsked = on && id != 0;
     if (id == 0 && on) {
         emit refused(QString::fromLatin1(kNoLinkReason), QString(), QString());
@@ -315,11 +329,19 @@ void RemoteTransmitClient::commandFinished(quint32 commandId, const QByteArray& 
     // Only the first answer per command counts; the copies' answers are
     // the same answer again.
     const auto pending = m_pending.constFind(commandId);
-    if (pending == m_pending.cend()) {
+    if (pending == m_pending.cend() || pending->verb != verb) {
         return;
     }
-    const Kind kind = pending.value();
+    const Pending command = pending.value();
+    const Kind kind = command.kind;
     m_pending.erase(pending);
+    if (command.releaseIntent && accepted
+        && command.issuanceGeneration == m_releaseFenceGeneration) {
+        // Acceptance proves the off command reached the authenticated
+        // primary in order. It does not claim the key is now off: an old
+        // epoch may be deliberately ignored after a newer key.
+        m_releaseFenceGeneration = 0;
+    }
     const QString code = utf8Value(values, "refusalCode");
     const QString fix = utf8Value(values, "refusalFix");
     const QString shown = reason.isEmpty()
@@ -372,14 +394,14 @@ void RemoteTransmitClient::commandFinished(quint32 commandId, const QByteArray& 
         return;
     }
     case Kind::Tune:
-        if (!accepted && m_tuneAsked) {
+        if (!command.releaseIntent && !accepted && m_tuneAsked) {
             m_tuneAsked = false;
             refreshKeepalive();
         }
         [[fallthrough]];
     case Kind::Release:
     case Kind::TwoTone:
-        if (kind == Kind::TwoTone && !accepted && m_twoToneAsked) {
+        if (kind == Kind::TwoTone && !command.releaseIntent && !accepted && m_twoToneAsked) {
             m_twoToneAsked = false;
             refreshKeepalive();
         }
@@ -468,6 +490,7 @@ void RemoteTransmitClient::reset()
     m_tuneAsked = false;
     m_twoToneAsked = false;
     m_pending.clear();
+    m_releaseFenceGeneration = 0;
     auto reply = std::exchange(m_programAnswer, {});
     const QPointer<RemoteTransmitClient> self(this);
     publish();

@@ -5285,7 +5285,8 @@ void StationClient::handleCommandResult(const SessionMessage& message)
         return;
     }
     if (message.commandVerb == "tx.key" || message.commandVerb == "tx.unkey"
-        || message.commandVerb == "tx.tune" || message.commandVerb == "tx.twoTone") {
+        || message.commandVerb == "tx.tune" || message.commandVerb == "tx.tunerTune"
+        || message.commandVerb == "tx.twoTone") {
         const QPointer<StationClient> self(this);
         if (m_remoteTransmit != nullptr) {
             m_remoteTransmit->commandFinished(message.commandId, message.commandVerb,

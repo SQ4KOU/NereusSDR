@@ -113,7 +113,8 @@ public:
     static constexpr int kKeepaliveIntervalMs = 100;
     /// The session's tx.keepalive (sent once, never three times).
     void setSessionKeepalive(KeepaliveSender sender) { m_sessionKeepalive = std::move(sender); }
-    /// The media connection's "tx" data channel; tried first. Unset, or
+    /// The media connection's "tx" data channel; tried first while no
+    /// release waits for its primary-session delivery barrier. Unset, or
     /// false (no channel open), the session carries it.
     void setChannelKeepalive(KeepaliveSender sender) { m_channelKeepalive = std::move(sender); }
     /// The Core's VOX is on (the window's mirrored transmit.voxEnabled).
@@ -193,8 +194,15 @@ private:
         bool sawTransmitting{false};
     };
     enum class Kind { ScreenKey, ProgramKey, Release, Tune, TwoTone };
+    struct Pending {
+        Kind kind;
+        QByteArray verb;
+        quint64 issuanceGeneration;
+        bool releaseIntent;
+    };
 
-    quint32 send(const QByteArray& verb, const QList<MirrorUpdate>& arguments, Kind kind);
+    quint32 send(const QByteArray& verb, const QList<MirrorUpdate>& arguments, Kind kind,
+                 bool releaseIntent = false);
     void release(quint32 epoch);
     void reset();
     void publish();
@@ -206,7 +214,11 @@ private:
     Key m_program;
     std::function<void(const Answer&)> m_programAnswer;
     /// Commands still waiting for their first answer.
-    QHash<quint32, Kind> m_pending;
+    QHash<quint32, Pending> m_pending;
+    quint64 m_issuanceGeneration{0};
+    /// Nonzero from local off intent until its latest accepted primary
+    /// command result. A failed send has no result and remains fenced.
+    quint64 m_releaseFenceGeneration{0};
     bool m_tuneAsked{false};
     // Task 37.
     bool m_twoToneAsked{false};
