@@ -10,14 +10,23 @@ libjuice is licensed under the Mozilla Public License 2.0. The complete
 license is supplied in MPLv2.txt. This backend does not supply the R5 TURN
 TCP/TLS fallback; that deployment acceptance remains separate.
 
-Modification (MPL-2.0 section 3.1): NereusSDR compiles one covered file,
-src/agent.c, with a change of its own. When an ICE agent is destroyed it
-gives each TURN allocation back with a Refresh of LIFETIME 0 (RFC 8656
-section 7.2). The change is the source file
-cmake/patches/libjuice-release-turn-allocations.c in the NereusSDR source,
-which cmake/NereusRemoteMedia.cmake inserts into a copy of agent.c in the
-build tree (nereus_patch_libjuice_turn_release). Because it becomes part
-of a covered file, the change is licensed under the Mozilla Public License
-2.0, like the rest of agent.c, and carries agent.c's MPL-2.0 notice at the
-top of the file; it is not under NereusSDR's GPLv3. Its source is offered
-with NereusSDR's (SOURCE-OFFER.txt).
+Modifications (MPL-2.0 section 3.1): NereusSDR applies two numbered patches
+to build-owned copies of the pinned source in cmake/NereusRemoteMedia.cmake:
+
+  cmake/patches/libjuice-0001-give-turn-allocations-back.patch
+  cmake/patches/libjuice-0002-bounded-turn-release-lifecycle.patch
+
+The first changes src/agent.c to give TURN allocations back with an
+authenticated Refresh of LIFETIME 0 when an agent is destroyed. The second
+changes include/juice/juice.h, src/agent.c, src/agent.h and src/juice.c. It
+provides a nonblocking begin/status close API, retains the original socket
+and credentials for bounded authenticated release retries, and keeps the
+agent alive until release and resolver completion. Normal ICE traffic and
+callbacks stop during closing. The old direct-destroy best-effort behavior
+remains for legacy callers; a resolver test hook is excluded from release
+builds.
+
+These changes are licensed under the Mozilla Public License 2.0, like
+the covered files they modify, which retain their upstream notices. The
+exact patches are supplied with NereusSDR's source and its written source
+offer (SOURCE-OFFER.txt).

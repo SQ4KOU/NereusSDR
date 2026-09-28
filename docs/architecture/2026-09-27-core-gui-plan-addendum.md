@@ -1404,7 +1404,12 @@ colours for the same signal.
   app/Core and eight explicitly rebuilt suites pass together (28.84 s, observed
   load 42.87/34.46/28.92). The paired session export is read-only and checks
   ownership, typed envelopes, final XML and integrity before publication.
-  The window export integration and restore policy remain outstanding.
+  The window export is built in signed `e1c9647f`: remote export atomically
+  saves both window and paired Core XML in one `.nereus-settings` bundle;
+  local export retains XML. The integrated app/Core build and nine named
+  suites pass (5.16 s), including cancellation, replacement, invalid replies
+  and destination write failure. Remote import remains unavailable pending
+  the multi-device restore ruling and its implementation.
   Export must carry both parts in one file;
   import must validate and restore them through their respective owners, apply
   the Core part through the approved reconnect path, and enforce the plan's
@@ -1640,8 +1645,10 @@ colours for the same signal.
   passed (33.96 s). The
   later cancellation run's separate encrypted-channel startup failure remains
   OPEN under G-57. GUI review also found synchronous-cancel reentry, hidden-page
-  retirement and model changes during dialogs/requests; the window lane is
-  correcting and testing those before integration. No affected code is installed.
+  retirement and model changes during dialogs/requests. Those corrections are
+  built in signed `e1c9647f` and pass the nine-suite integration (5.16 s),
+  including deletion of the selected model inside the export request.
+  No affected code is installed.
 - Plan: complete settings export, G-74.
 
 ### G-86: The Core daemon never receives its source build identity
@@ -1665,9 +1672,13 @@ colours for the same signal.
   `coreBuildInfo` capabilities; malformed or duplicate metadata is absent,
   old clients retain their existing contract, and reconnect clears old identity.
   The app and daemon build and five named suites pass (25.84 s), including
-  Unicode byte bounds, negotiation and replacement. Release-package identity
-  checks and installation remain outstanding; the older packages are not
-  accepted as complete source-information evidence.
+  Unicode byte bounds, negotiation and replacement. Signed `21bbbd8e` packages
+  built with tests disabled for both Rock and Pi 4; CPU/ISA, dependency and
+  model checks passed. Each packaged executable reports product `0.5.2` and
+  source `codex/checkpoint-b@21bbbd8e`, leaves the isolated CLI home empty,
+  and passes the network-disabled startup observation. The Rock package is
+  staged without restarting JJ's active phone test. Installation timing is
+  pending; the recorded Pi 4 address is unreachable.
 - Plan: truthful Core build provenance and phone About support.
 
 ### G-87: Hardware and PA descriptions omit built desktop controls and readouts
@@ -1686,18 +1697,73 @@ colours for the same signal.
   Preserve actual board/model visibility, values, apply paths and transmit
   restrictions. Partial publication is useful progress, not page completion.
 - Status: seven Antenna/ALEX scalar descriptions are built in signed
-  `8c6bf3133`/`8dbdb14b`, awaiting trunk integration. They use existing mirrored
+  `8c6bf3133`/`8dbdb14b`, with trunk app/Core and nine named integration suites
+  passing (5.16 s). They use existing mirrored
   writes, exact desktop IDs/text and Core board/model projection, including
   same-board model changes; the worker's three focused suites passed in 4.39 s.
   A second scout mapped all 13 PA Values rows: five have direct read-only
   mirrors (calibrated forward/reflected power, SWR, two raw ADC counts), while
   derived watts/volts, combined overload, PA telemetry and peak/min/reset require
-  further work. Core PA publication and phone renderer support are being
-  coordinated. Band antenna/OC/filter tables, connected-radio scalar settings,
+  further work. Five direct PA readout descriptions are built in signed
+  `7e294608`, awaiting lead review and integration; the worker reports five
+  focused suites passing (41.71 s). The phone's generic Setup renderer is
+  separate unfinished phone work, so publication does not establish phone
+  page parity. Band antenna/OC/filter tables, connected-radio scalar settings,
   PA profile lifecycle and calibration/I/O actions remain incomplete; their
   existing source maps are retained for implementation.
 - Plan: Core Hardware Config/PA Setup description dependencies in the phone plan
   and remote-window Hardware/PA parity.
+
+### G-88: Networking source notes omit applied retirement patches
+
+- Evidence: the phone integration audit found that the desktop licence/source
+  notes list the older remote-description and DTLS-MTU changes, while the actual
+  CMake patch list also applies numbered libjuice and libdatachannel retirement
+  patches. The shipped source pointers did not describe those modifications.
+- Ruling basis: the repository requires accurate upstream attribution and
+  modification notices; no new operator behavior is proposed.
+- Status: corrected the licence README and both library modification notes to
+  match the actual patch files and affected sources. Original licence texts
+  and upstream notices remain intact. The licence checker passes for 21
+  libraries and 45 files. Subsequent packages must carry the corrected notes;
+  the already-built `21bbbd8e` packages predate this documentation correction.
+- Plan: complete source provenance for Core and phone networking dependencies.
+
+### G-89: Backup write-failure test assumes an unprivileged POSIX runner
+
+- Evidence: the GUI export test made its destination directory mode 0500 and
+  skipped Windows. A probe in the actual Linux verification container, which
+  runs as root, successfully wrote into that directory, so the setup would not
+  reliably exercise failure on that runner.
+- Ruling basis: JJ requires testing at real conditions and correcting causes.
+  Exercise a genuine atomic-write failure without changing production limits.
+- Status: the test now replaces the selected destination with a nonempty
+  directory while the asynchronous export is pending. It verifies the failure
+  message, untouched directory contents and preserved previous backup, without
+  an operating-system skip. All nine macOS integration suites pass (5.16 s).
+  Full Linux and Windows verification of this change remains outstanding.
+- Plan: reliable settings export and portable CI evidence.
+
+### G-90: HL2 option values are stored but never applied to hardware
+
+- Evidence: the source scout traced nine desktop HL2 options through their
+  per-radio saved keys and Core reload. The model explicitly describes wire
+  emission as deferred; production radio code never consumes these values.
+  P1 emits fixed PTT hang and TX latency values. This predates the Core/GUI
+  split, so it is an existing incomplete feature rather than lost working
+  desktop behavior. The two timing rows are currently hidden.
+- Ruling: OPEN on extending this parity effort to the unbuilt hardware behavior.
+  Recommendation: preserve truthful visibility, correct the misleading PS Sync
+  wording, and implement the actual supported HL2 behavior before advertising
+  these options to a phone. Merely publishing saved values is insufficient.
+- Status: bounded read-only audit complete, with exact pinned mi0bot source
+  paths, current setting authority and radio-identity fences recorded. CL2 and
+  the external reference use clock-chip I2C sequences; reset and timing use
+  P1 banks, audio swap changes outgoing samples, and Band Volts/PS Sync reuse
+  ADC control bits. Upstream says "Disable PS Sync" and supports fractional
+  CL2 MHz; the existing Nereus labels/storage differ. Lead scope and semantic
+  decisions remain open; no hardware effect or new permission is inferred.
+- Plan: honest Hardware Setup parity and phone dependencies, G-87.
 
 ## How this addendum is kept
 

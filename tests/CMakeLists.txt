@@ -7486,6 +7486,7 @@ nereus_add_test(tst_settings_proxy)
 nereus_add_test(tst_settings_backup_codec)
 nereus_add_test(tst_settings_backup_transfer)
 nereus_add_test(tst_settings_backup_export fakes/LoopbackTransport.cpp EXTRA_LABELS session)
+nereus_add_test(tst_settings_backup_window)
 
 # Remote Daemon R2, Task 20: the remote-mode GUI gate. Pins RadioModel's
 # ownsLocalDsp() capability authority and the Role::Remote-only hand-out audit
@@ -8045,7 +8046,7 @@ nereus_add_test(tst_station_catalog
     EXTRA_LABELS session)
 nereus_add_test(tst_setup_description_service fakes/LoopbackTransport.cpp EXTRA_LABELS session)
 nereus_add_test(tst_setup_description_parity EXTRA_LABELS gui)
-nereus_add_test(tst_setup_description_live EXTRA_LABELS core)
+nereus_add_test(tst_setup_description_live fakes/LoopbackTransport.cpp EXTRA_LABELS core)
 target_compile_definitions(tst_station_catalog PRIVATE
     NEREUS_LINK_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/data/link/v1")
 # iPhone app Task 14 (R-IOS-08, D37): the pairing code and its word list,

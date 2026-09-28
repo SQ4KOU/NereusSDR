@@ -12,6 +12,7 @@
 #include "gui/setup/DspOptionsPage.h"
 #include "gui/setup/TransmitSetupPages.h"
 #include "gui/setup/TxProfileSetupPage.h"
+#include "gui/setup/hardware/AntennaAlexAntennaControlTab.h"
 #include "gui/setup/TestTwoTonePage.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -26,6 +27,8 @@
 #include <QSpinBox>
 #include <QSlider>
 #include <QTableWidget>
+
+#include <utility>
 
 using namespace NereusSDR;
 
@@ -153,6 +156,83 @@ void compareControl(QWidget& page, const QJsonObject& control)
 class SetupDescriptionParityTest : public QObject {
     Q_OBJECT
 private slots:
+    void describedHardwareAntennaScalarsMatchDesktop_data()
+    {
+        QTest::addColumn<int>("model");
+        QTest::addColumn<bool>("rxOut");
+        QTest::addColumn<bool>("ext1");
+        QTest::addColumn<bool>("ext2");
+        QTest::addColumn<bool>("overrideRelay");
+        QTest::newRow("HPSDR") << int(HPSDRModel::HPSDR) << true << true << true << true;
+        QTest::newRow("Hermes") << int(HPSDRModel::HERMES) << true << true << true << false;
+        QTest::newRow("ANAN-10") << int(HPSDRModel::ANAN10) << false << false << false << false;
+        QTest::newRow("ANAN-10E") << int(HPSDRModel::ANAN10E) << false << false << false << false;
+        QTest::newRow("ANAN-100") << int(HPSDRModel::ANAN100) << true << true << true << true;
+        QTest::newRow("ANAN-100B") << int(HPSDRModel::ANAN100B) << true << true << true << true;
+        QTest::newRow("ANAN-100D") << int(HPSDRModel::ANAN100D) << true << true << true << true;
+        QTest::newRow("ANAN-200D") << int(HPSDRModel::ANAN200D) << true << true << true << true;
+        QTest::newRow("Orion MKII") << int(HPSDRModel::ORIONMKII) << true << true << true << true;
+        QTest::newRow("ANAN-7000D") << int(HPSDRModel::ANAN7000D) << false << true << true << false;
+        QTest::newRow("ANAN-8000D") << int(HPSDRModel::ANAN8000D) << false << false << false << false;
+        QTest::newRow("ANAN-G2") << int(HPSDRModel::ANAN_G2) << false << true << true << false;
+        QTest::newRow("ANAN-G2-1K") << int(HPSDRModel::ANAN_G2_1K) << false << false << false << false;
+        QTest::newRow("Anvelina Pro 3") << int(HPSDRModel::ANVELINAPRO3) << false << true << true << false;
+        QTest::newRow("Hermes Lite") << int(HPSDRModel::HERMESLITE) << false << false << false << false;
+        QTest::newRow("Red Pitaya") << int(HPSDRModel::REDPITAYA) << false << true << true << false;
+        QTest::newRow("ANAN-G2E") << int(HPSDRModel::ANAN_G2E) << false << true << true << false;
+    }
+
+    void describedHardwareAntennaScalarsMatchDesktop()
+    {
+        QFETCH(int, model);
+        QFETCH(bool, rxOut);
+        QFETCH(bool, ext1);
+        QFETCH(bool, ext2);
+        QFETCH(bool, overrideRelay);
+        const auto sku = static_cast<HPSDRModel>(model);
+        RadioModel radio;
+        radio.setHpsdrModelForTest(sku);
+        AntennaAlexAntennaControlTab page(&radio);
+        SetupDescriptionService service;
+        service.setRadioContext(radio.boardCapabilities(), sku);
+        const QJsonObject hardware = service.category(QStringLiteral("hardware"));
+        if (!radio.boardCapabilities().hasAlexFilters) {
+            QVERIFY(hardware.isEmpty());
+            return;
+        }
+        QVERIFY(!hardware.isEmpty());
+        const QJsonArray described = controls(hardware);
+        QCOMPARE(described.size(), 3 + int(rxOut) + int(ext1) + int(ext2) + int(overrideRelay));
+        QStringList expected{QStringLiteral("hardware.antennaAlex.blockTxAnt2"),
+                             QStringLiteral("hardware.antennaAlex.blockTxAnt3")};
+        if (rxOut) { expected << QStringLiteral("hardware.antennaAlex.rxOutOnTx"); }
+        if (ext1) { expected << QStringLiteral("hardware.antennaAlex.ext1OutOnTx"); }
+        if (ext2) { expected << QStringLiteral("hardware.antennaAlex.ext2OutOnTx"); }
+        if (overrideRelay) { expected << QStringLiteral("hardware.antennaAlex.rxOutOverride"); }
+        expected << QStringLiteral("hardware.antennaAlex.useTxAntennaForRx");
+        QStringList actual;
+        for (const QJsonValue& raw : described) {
+            actual << raw.toObject().value(QStringLiteral("id")).toString();
+            compareControl(page, raw.toObject());
+            QVERIFY(SetupDescriptionService::validateHardwarePropertyBinding(raw.toObject(), sku));
+        }
+        QCOMPARE(actual, expected);
+        for (const auto& [name, shown] : {
+                 std::pair{"rxOutOnTx", rxOut}, std::pair{"ext1OutOnTx", ext1},
+                 std::pair{"ext2OutOnTx", ext2}, std::pair{"rxOutOverride", overrideRelay}}) {
+            const auto* widget = qobject_cast<QWidget*>(bySetupId(
+                page, QStringLiteral("hardware.antennaAlex.") + QString::fromLatin1(name)));
+            QVERIFY(widget != nullptr);
+            QCOMPARE(!widget->isHidden(), shown);
+        }
+        if (sku == HPSDRModel::ANAN_G2E) {
+            const QJsonObject ext2Control = described.at(3).toObject();
+            QCOMPARE(ext2Control.value("label"), QJsonValue("Rx BYPASS on Tx"));
+            QCOMPARE(ext2Control.value("tooltip"),
+                     QJsonValue("Enable RX 1 IN on Alex or Ext 2 on ANAN during transmit."));
+        }
+    }
+
     void describedTransmitDexpControlsMatchDesktop_data()
     {
         QTest::addColumn<int>("board");

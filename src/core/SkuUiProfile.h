@@ -15,6 +15,9 @@
 //                 out on TX", the catalogue's board.relays; R-IOS-06,
 //                 R-IOS-27). NereusSDR-original. J.J. Boyd (KG4VCF), with
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-28 - Share the per-SKU Ext 2 relay tooltip with the desktop and
+//                 Setup description. J.J. Boyd (KG4VCF), with AI-assisted
+//                 transformation via OpenAI Codex.
 // =================================================================
 
 //=================================================================
@@ -99,6 +102,8 @@ struct SkuUiProfile {
     // [v2.10.3.15] //N1GP G2E added).
     QString                 ext1OutOnTxLabel {QStringLiteral("Ext 1 on Tx")};
     QString                 ext2OutOnTxLabel {QStringLiteral("Ext 2 on Tx")};
+    QString                 ext2OutOnTxTooltip {
+        QStringLiteral("Enable RX 1 IN on Alex or Ext 2 on ANAN during transmit.")};
 };
 
 SkuUiProfile skuUiProfileFor(HPSDRModel sku);
