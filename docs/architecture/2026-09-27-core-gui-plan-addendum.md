@@ -998,6 +998,12 @@ colours for the same signal.
   protocol-stage markers without raw SDP, candidates or certificates. Its
   50-case run passed (14.14 s), followed by the six-suite trunk integration
   (44.26 s). The production deadline is unchanged; the cause remains OPEN.
+  A later eleven-suite parallel PA-readout check reproduced the failure in
+  `session-verbs-tgxl`: both starts succeeded, neither side opened or failed,
+  and the unchanged bound expired after 15,001 ms. Ten suites passed. The
+  failing row later passed alone in 0.52 s and the full conformance suite
+  passed alone in 65.26 s; those results do not close the load failure.
+  The original parallel log and stage state are retained for investigation.
 - Plan: integrated protocol reliability under real host load.
 
 ### G-58: Setting-backed toggles need explicit boolean string encoding
@@ -2138,6 +2144,81 @@ colours for the same signal.
   tooltips are corrected. The phone has not advertised Setup, so no
   shipped-client outage is claimed; its parser import remains phone-owned.
 - Plan: complete Setup descriptions and strict phone compatibility.
+
+### G-106: An antenna description filtered by live readiness can stay missing after connection
+
+- Evidence: lead review of the V6 antenna tables found that their per-peer
+  projection used the current row-edit capability instead of the peer's
+  declared row feature. A paired loopback regression reproduced it: sign in
+  before the same Hermes radio connects, receive scalars without tables,
+  then connect and receive row capability 1 but no table. The description
+  bytes/revision did not change, so no mirror delta was emitted.
+- Ruling basis: JJ requires complete working desktop/phone dependencies.
+  The existing contract omits tables for peers without the feature; a peer
+  that declares it may receive the supported table while its live capability
+  keeps editing unavailable. Transient readiness must gate edits, not remove
+  the static description. No new authority or stale-radio permission follows.
+- Status: signed `7102a610` corrects the projection and is integrated through
+  signed `68245ce22`. Paired regression coverage verifies offline admission,
+  same-radio connection, row editing, capability withdrawal and reconnect.
+  The merged worker app/Core build and all four full Setup/row-command suites
+  pass (30, 36, 15 and 10 tests). Root reviewed the change and reused that
+  tested merge; combined trunk verification follows PA readout integration.
+  Existing Core identity/confirmation checks remain.
+- Plan: Hardware antenna description and session lifecycle parity.
+
+### G-107: Desktop pairing still requires an address instead of accepting only the RV code
+
+- Evidence: the running verified Mac preview at signed `5c4ca88d` exposes
+  Add a Core by code, but its dialog requires a Core address and its
+  controller always calls direct `pairByCode`. The existing Core client
+  already implements `pairByCodeFromAnywhere`. Its authenticated mailbox
+  result has an identity and label with no address; the desktop currently
+  turns that into an invalid URL, and its saved-target validation requires
+  an address. Merely changing the button would not complete the flow.
+- JJ's ruling: on 2026-09-28 he made code-only desktop RV pairing the number
+  one priority because he wants to test it. The normal app flow must require
+  only the pairing code, with connection details handled automatically as
+  in the iPhone app. This supersedes further Setup publication as the next
+  implementation priority. He then requested a mockup before implementation
+  and explicitly approved the suggestion and mockup on 2026-09-28. The normal
+  dialog shows the code alone, with direct-address entry available as an
+  optional path; the surrounding Connections layout stays as shown.
+- Required behavior: Connections > Add a Core by code accepts the code
+  alone, uses the existing secure mailbox exchange, saves the verified Core
+  identity under its name and connects through the existing path selection.
+  Direct access is preferred when available and relay fallback stays
+  automatic. Saved pairing survives network/address changes and ordinary
+  reconnect/relaunch. An address remains an optional direct path. Missing,
+  invalid or unavailable service targets must never fall back to starting
+  a local Core. Existing trust and certificate checks remain mandatory.
+- Status: approved mockup recorded and implementation resumed from signed
+  `68245ce22`. Sol 6 high owns the desktop dialog/controller, addressless target storage
+  and reconnect integration; Astra lead owns identity/lifetime review.
+  The frozen preview remains open for JJ and does not yet contain this fix.
+  Automated end-to-end evidence and a new verified preview are required
+  before calling the feature ready for JJ's live test.
+- Plan: approved rendezvous desktop-client flow and remote-window parity.
+
+### G-108: App wording mixes American and British spellings
+
+- Evidence: the current UI includes Colour, centre, colours, behaviour,
+  Normalise and recognised in labels, tooltips and status messages. Several
+  of these strings are also published in the Core's Setup descriptions.
+- JJ's ruling: on 2026-09-28 he requested American English throughout the app,
+  giving color and center as examples, while explicitly preserving attribution
+  and other people's comments.
+- Required behavior: use American spelling in authored app presentation text
+  and matching Setup descriptions and expected results. Preserve existing
+  code comments, verbatim upstream/legal text, proper names, stable APIs,
+  settings keys, wire/schema fields and exact reason-matching keys. Where a
+  protocol key contains British spelling, change its displayed text only.
+- Status: read-only audit complete; Sol 6 medium owns the bounded wording
+  changes on the integrated Setup base. Root reviews comment preservation,
+  compatibility and the native/description parity results. The phone owner
+  has received the same ruling for phone-owned presentation strings.
+- Plan: consistent desktop/Core/phone-facing wording without compatibility or
+  attribution changes.
 
 ## How this addendum is kept
 
