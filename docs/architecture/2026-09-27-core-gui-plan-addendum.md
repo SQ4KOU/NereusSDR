@@ -1372,6 +1372,13 @@ colours for the same signal.
   settings keys and write-failure preservation. Network transfer, owner shutdown,
   user interface and the pending multi-device policy remain open. The session's
   1 MiB incoming message limit requires bounded chunking for a 16 MiB XML part.
+  The binary transfer primitives are now built in `5fd79f1e`/`9ba6519a`:
+  owned immutable snapshots, 256 KiB chunks, exact offsets/length/checksum and
+  preserved outputs on errors. Lead review caught borrowed-memory aliasing;
+  its regression failed before the owning-copy fix and passes afterward. The
+  integrated app/Core and three focused suites pass (7.60 s, load
+  12.50/25.25/27.82). External authentication, session ownership, expiry and
+  global limits are being implemented separately in the export protocol.
   Export must carry both parts in one file;
   import must validate and restore them through their respective owners, apply
   the Core part through the approved reconnect path, and enforce the plan's
@@ -1535,6 +1542,38 @@ colours for the same signal.
   integration rebuilt both handover suites and passed them (7.84 s at load
   6.77/4.87/4.80); it does not cover live hardware or the actual OS service manager.
 - Plan: reliable station ownership and recoverable Core handover.
+
+### G-83: Core release build hides a production method behind the test guard
+
+- Evidence: the signed `9f87b4a9` Rock package failed with tests disabled because
+  DaemonApp::stationServer() was declared inside NEREUS_BUILD_TESTS. Production
+  console and radio-switch code calls it and its definition is unconditional.
+  Test-enabled app/Core builds therefore missed the missing declaration.
+- Ruling basis: JJ requires verified installable Core builds. Move the production
+  declaration outside the test-only observer block; retain all actual test hooks
+  behind their existing guard. No runtime behavior or deadline changes.
+- Status: the declaration is corrected. The actual DaemonApp.cpp compiles with
+  NEREUS_BUILD_TESTS undefined and without a precompiled header (exit 0).
+  The integrated app/Core build and three backup/handover suites pass (7.60 s,
+  load 12.50/25.25/27.82). A new test-disabled Linux package must pass before
+  installation. The failed package and compiler output remain
+  recorded in `core-gui-rock-9f87b4a9-build.log`.
+- Plan: production Core packaging on the Rock and Pi 4.
+
+### G-84: Rock package reports the previous integration branch name
+
+- Evidence: the Rock build kit hard-codes `codex/integrate-r2-main` in its build
+  tag even when packaging signed `codex/checkpoint-b` source. The commit hash is
+  correct, but the branch shown in source information is stale. The Pi kit already
+  reads a branch field from its source manifest.
+- Ruling basis: JJ's diagnostic/source information must describe the build that
+  was actually installed. Record the source branch in the signed-source package
+  manifest and have the Rock kit read it, matching the existing Pi behavior.
+- Status: local packaging tools corrected and syntax checked; the next signed
+  package will verify the embedded tag. These build-kit files live under
+  `~/.config/nereus/work/`, outside the product repository. No radio configuration
+  or installed binary has changed.
+- Plan: truthful Core build provenance in diagnostics.
 
 ## How this addendum is kept
 

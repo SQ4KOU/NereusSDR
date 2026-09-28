@@ -254,6 +254,9 @@ public:
     QString statusPageAddress() const;
     /// The status page, while it runs; null otherwise.
     StationStatusPage* statusPage() const;
+    // Borrowed from the live StationHost for console commands and radio
+    // changes. Null before start(), after stop(), or with remote control disabled.
+    StationServer* stationServer() const;
     // How the Core's pairing window reads on the announcement and in
     // Bonjour's `pair` key. The announcement builds from it, so it is
     // compiled whether or not the tests are.
@@ -282,12 +285,6 @@ public:
     // unique_ptr) or a later start() destroys/replaces it.
     QThread* widebandThread() const { return m_widebandThread.get(); }
 
-    // Remote Daemon R2 Task 18. nullptr when cfg.remotePort was 0 (the
-    // default: the listener is opt-in, see DaemonConfig.h) or before the
-    // first start(). Test-only for the same reason widebandThread() is:
-    // production code never asks, because start()/stop() own the lifetime
-    // and start() already logs whether the listener came up.
-    StationServer* stationServer() const;
     /// Parity Task 21: the Core's radios and its choice of one (kept across
     /// a radio change's restart).
     StationRadios* stationRadios() const { return m_stationRadios.get(); }
