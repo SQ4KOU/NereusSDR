@@ -1330,6 +1330,13 @@ private slots:
             // app compares; a wire value keeps its words. Kept for the
             // operator's checkpoint.
             {"src/models/SliceModel.cpp", "Station asset"},
+            // Installed Windows Task Scheduler identity and its lookup script:
+            // renaming either would orphan the existing scheduled task.
+            {"src/gui/StationServiceManager.cpp", "NereusSDR Station"},
+            {"src/gui/StationServiceManager.cpp", "$ErrorActionPreference='Stop'"},
+            // The installed systemd unit template carries its existing
+            // Description; this is service metadata, not an app sentence.
+            {"src/gui/StationServiceManager.cpp", "[Unit]"},
             // An older Core's version refusal, matched by
             // SessionEndReasons::parse and never shown; OperatorReasonText
             // words it for the operator.

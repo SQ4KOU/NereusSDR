@@ -272,7 +272,7 @@ private:
         // truthful failure reply and its socket drain.
         if (m_elapsed.elapsed() >= 12000) {
             fail(QStringLiteral("The Core did not finish handing back the radio in time. "
-                                "It still owns the station; try release again."));
+                                "It still owns the radio; try release again."));
             return;
         }
 #ifdef NEREUS_BUILD_TESTS

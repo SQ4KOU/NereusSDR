@@ -186,7 +186,7 @@ bool StationServiceManager::run(const QString& program, const QStringList& args,
 bool StationServiceManager::validateLaunch()
 {
     if (m_options.binaryPath.isEmpty()) {
-        fail(m_locatorError.isEmpty() ? QStringLiteral("The packaged station binary is missing. Reinstall NereusSDR.")
+        fail(m_locatorError.isEmpty() ? QStringLiteral("The packaged Core app is missing. Reinstall NereusSDR.")
                                       : m_locatorError);
         return false;
     }
@@ -197,16 +197,16 @@ bool StationServiceManager::validateLaunch()
         || hasLineBreak(m_options.profileDirectory) || hasLineBreak(m_options.homeDirectory)
         || hasLineBreak(m_options.binaryPath)
         || std::any_of(m_options.prefixArguments.begin(), m_options.prefixArguments.end(), hasLineBreak)) {
-        fail(QStringLiteral("Choose a valid station profile and installed station binary."));
+        fail(QStringLiteral("Choose a valid Core profile and installed Core app."));
         return false;
     }
     if (!QFileInfo(m_options.binaryPath).isFile()
         || !QFileInfo(m_options.binaryPath).isExecutable()) {
-        fail(QStringLiteral("The packaged station binary is missing. Reinstall NereusSDR."));
+        fail(QStringLiteral("The packaged Core app is missing. Reinstall NereusSDR."));
         return false;
     }
     if (!QFileInfo(configPath()).isFile()) {
-        fail(QStringLiteral("The station settings file is missing. Set up this Core before starting it."));
+        fail(QStringLiteral("The Core settings file is missing. Set up this Core before starting it."));
         return false;
     }
     return true;
@@ -216,7 +216,7 @@ bool StationServiceManager::writeEntry(bool startAtLogin)
 {
     const QFileInfo entry(entryPath());
     if (!QDir().mkpath(entry.absolutePath())) {
-        fail(QStringLiteral("Could not create the station startup folder."));
+        fail(QStringLiteral("Could not create the Core startup folder."));
         return false;
     }
     QString content;
@@ -284,12 +284,12 @@ bool StationServiceManager::writeEntry(bool startAtLogin)
     QSaveFile file(entryPath());
     const QByteArray bytes = content.toUtf8();
     if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size() || !file.commit()) {
-        fail(QStringLiteral("Could not save the station startup entry."));
+        fail(QStringLiteral("Could not save the Core startup entry."));
         return false;
     }
     if (m_options.platform != StationPlatform::Windows
         && !QFile::setPermissions(entryPath(), QFileDevice::ReadOwner | QFileDevice::WriteOwner)) {
-        fail(QStringLiteral("Could not protect the station startup entry."));
+        fail(QStringLiteral("Could not protect the Core startup entry."));
         return false;
     }
     return true;
@@ -366,11 +366,11 @@ bool StationServiceManager::startBackground()
         return true;
     }
     if (initial == ServiceState::Error) {
-        fail(QStringLiteral("Could not check the background station state."));
+        fail(QStringLiteral("Could not check the background Core state."));
         return false;
     }
     if (initial == ServiceState::Pending) {
-        fail(QStringLiteral("The background station is changing state. Try again shortly."));
+        fail(QStringLiteral("The background Core is changing state. Try again shortly."));
         return false;
     }
     if (!validateLaunch()) {
@@ -386,35 +386,35 @@ bool StationServiceManager::startBackground()
         // idle registration so a changed binary/profile takes effect.
         const ServiceState current = probeState();
         if (current == ServiceState::Error) {
-            fail(QStringLiteral("Could not check the background station state."));
+            fail(QStringLiteral("Could not check the background Core state."));
             return false;
         }
         if (current == ServiceState::Pending) {
-            fail(QStringLiteral("The background station is changing state. Try again shortly."));
+            fail(QStringLiteral("The background Core is changing state. Try again shortly."));
             return false;
         }
         if (current == ServiceState::Running) return true;
         if (current == ServiceState::Stopped
             && !run(QStringLiteral("launchctl"),
                     {QStringLiteral("bootout"), domain + QLatin1Char('/') + serviceName()})) {
-            fail(QStringLiteral("Could not reload the background station on macOS."));
+            fail(QStringLiteral("Could not reload the background Core on macOS."));
             return false;
         }
         if (!run(QStringLiteral("launchctl"),
                  {QStringLiteral("bootstrap"), domain, entryPath()})) {
-            fail(QStringLiteral("Could not register the background station with macOS."));
+            fail(QStringLiteral("Could not register the background Core with macOS."));
             return false;
         }
         if (!run(QStringLiteral("launchctl"),
                  {QStringLiteral("kickstart"), domain + QLatin1Char('/') + serviceName()})) {
-            fail(QStringLiteral("Could not start the background station on macOS."));
+            fail(QStringLiteral("Could not start the background Core on macOS."));
             return false;
         }
     } else if (m_options.platform == StationPlatform::Linux) {
         if (!run(QStringLiteral("systemctl"), {QStringLiteral("--user"), QStringLiteral("daemon-reload")})
             || !run(QStringLiteral("systemctl"), {QStringLiteral("--user"), QStringLiteral("start"),
                                                    QStringLiteral("nereusd.service")})) {
-            fail(QStringLiteral("Could not start the background station in this login."));
+            fail(QStringLiteral("Could not start the background Core in this login."));
             return false;
         }
     } else {
@@ -423,7 +423,7 @@ bool StationServiceManager::startBackground()
                                               QStringLiteral("/XML"), entryPath()})
             || !run(QStringLiteral("schtasks"), {QStringLiteral("/Run"), QStringLiteral("/TN"),
                                                   serviceName()})) {
-            fail(QStringLiteral("Could not start the background station at this login."));
+            fail(QStringLiteral("Could not start the background Core at this login."));
             return false;
         }
     }
@@ -435,11 +435,11 @@ bool StationServiceManager::stopBackground()
     m_lastError.clear();
     const ServiceState state = probeState();
     if (state == ServiceState::Error) {
-        fail(QStringLiteral("Could not check the background station state."));
+        fail(QStringLiteral("Could not check the background Core state."));
         return false;
     }
     if (state == ServiceState::Pending) {
-        fail(QStringLiteral("The background station is changing state. Try again shortly."));
+        fail(QStringLiteral("The background Core is changing state. Try again shortly."));
         return false;
     }
     if (state != ServiceState::Running) {
@@ -458,7 +458,7 @@ bool StationServiceManager::stopBackground()
                                                    serviceName()});
     }
     if (!stopped) {
-        fail(QStringLiteral("Could not stop the background station."));
+        fail(QStringLiteral("Could not stop the background Core."));
     }
     return stopped;
 }
@@ -470,7 +470,7 @@ bool StationServiceManager::setStartWithComputer(bool enabled)
         if (m_options.platform == StationPlatform::Windows) {
             const ServiceState state = probeState();
             if (state == ServiceState::Error) {
-                fail(QStringLiteral("Could not check the station login task."));
+                fail(QStringLiteral("Could not check the Core login task."));
                 return false;
             }
             const bool taskExists = state != ServiceState::Absent;
@@ -485,7 +485,7 @@ bool StationServiceManager::setStartWithComputer(bool enabled)
                                        {QStringLiteral("/Create"), QStringLiteral("/F"),
                                         QStringLiteral("/TN"), serviceName(),
                                         QStringLiteral("/XML"), entryPath()}))) {
-                fail(QStringLiteral("Could not remove the station login trigger."));
+                fail(QStringLiteral("Could not remove the Core login trigger."));
                 return false;
             }
             m_startupMode = StartupMode::Disabled;
@@ -500,16 +500,16 @@ bool StationServiceManager::setStartWithComputer(bool enabled)
         if (wasEnabled
             && !run(QStringLiteral("systemctl"), {QStringLiteral("--user"),
                                                     QStringLiteral("disable"), QStringLiteral("nereusd.service")})) {
-            fail(QStringLiteral("Could not disable the station login unit."));
+            fail(QStringLiteral("Could not disable the Core login unit."));
             return false;
         }
         if (QFileInfo::exists(entryPath()) && !QFile::remove(entryPath())) {
-            fail(QStringLiteral("Could not remove the station startup entry."));
+            fail(QStringLiteral("Could not remove the Core startup entry."));
             return false;
         }
         if (m_options.platform == StationPlatform::Linux
             && !run(QStringLiteral("systemctl"), {QStringLiteral("--user"), QStringLiteral("daemon-reload")})) {
-            fail(QStringLiteral("Could not reload the station login unit."));
+            fail(QStringLiteral("Could not reload the Core login unit."));
             return false;
         }
         m_startupMode = StartupMode::Disabled;
@@ -527,7 +527,7 @@ bool StationServiceManager::setStartWithComputer(bool enabled)
             || !run(QStringLiteral("systemctl"), {QStringLiteral("--user"),
                                                    QStringLiteral("enable"),
                                                    QStringLiteral("nereusd.service")})) {
-            fail(QStringLiteral("Could not change background station startup for this login."));
+            fail(QStringLiteral("Could not change background Core startup for this login."));
             return false;
         }
         QString linger;
@@ -545,14 +545,14 @@ bool StationServiceManager::setStartWithComputer(bool enabled)
             m_startupMode = StartupMode::Boot;
         } else {
             m_startupMode = StartupMode::Login;
-            m_lastError = QStringLiteral("The station starts at login; boot startup is not available for this user.");
+            m_lastError = QStringLiteral("The Core starts at login; boot startup is not available for this user.");
         }
         return true;
     }
     if (!run(QStringLiteral("schtasks"), {QStringLiteral("/Create"), QStringLiteral("/F"),
                                           QStringLiteral("/TN"), serviceName(),
                                           QStringLiteral("/XML"), entryPath()})) {
-        fail(QStringLiteral("Could not change the station login task."));
+        fail(QStringLiteral("Could not change the Core login task."));
         return false;
     }
     m_startupMode = StartupMode::Login;

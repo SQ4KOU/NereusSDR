@@ -160,6 +160,42 @@ void compareControl(QWidget& page, const QJsonObject& control)
 class SetupDescriptionParityTest : public QObject {
     Q_OBJECT
 private slots:
+    void describedPaBypassMatchesG2eDesktopOnly()
+    {
+        RadioModel g2e;
+        g2e.setHpsdrModelForTest(HPSDRModel::ANAN_G2E);
+        PaGainByBandPage page(&g2e);
+        page.applyCapabilityVisibility(g2e.boardCapabilities());
+        SetupDescriptionService service;
+        service.setRadioContext(g2e.boardCapabilities(), g2e.hardwareProfile().model);
+        const QJsonArray pages = service.category(QStringLiteral("pa")).value("pages").toArray();
+        QCOMPARE(pages.size(), 2);
+        const QJsonObject gain = pages.first().toObject();
+        QCOMPARE(gain.value("id"), QJsonValue("pa.gain"));
+        QCOMPARE(gain.value("coverage"), QJsonValue("partial"));
+        const QJsonArray described = gain.value("sections").toArray().first().toObject()
+            .value("controls").toArray();
+        QCOMPARE(described.size(), 1);
+        const QJsonObject control = described.first().toObject();
+        auto* check = page.bypassPaSettingsCheckForTest();
+        QVERIFY(check != nullptr);
+        QCOMPARE(check->property("nereusSetupId").toString(), control.value("id").toString());
+        QCOMPARE(check->text(), control.value("label").toString());
+        QCOMPARE(check->toolTip(), control.value("tooltip").toString());
+        QVERIFY(!check->isHidden());
+        QVERIFY(SetupDescriptionService::validatePaBypassBinding(control));
+        QCOMPARE(control.value("gate").toObject().value("offAir"), QJsonValue(true));
+        QVERIFY(!control.value("gate").toObject().contains("transmit"));
+
+        RadioModel other;
+        other.setHpsdrModelForTest(HPSDRModel::ANAN_G2);
+        PaGainByBandPage otherPage(&other);
+        otherPage.applyCapabilityVisibility(other.boardCapabilities());
+        service.setRadioContext(other.boardCapabilities(), other.hardwareProfile().model);
+        QCOMPARE(service.category(QStringLiteral("pa")).value("pages").toArray().size(), 1);
+        QVERIFY(otherPage.bypassPaSettingsCheckForTest()->isHidden());
+    }
+
     void describedPaReadoutsMatchDesktopRows()
     {
         RadioModel model;

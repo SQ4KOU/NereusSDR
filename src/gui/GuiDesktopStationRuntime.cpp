@@ -61,10 +61,10 @@ GuiDesktopStationRuntime::GuiDesktopStationRuntime(RadioModel* model, AppSetting
     m_serviceOptions = std::move(serviceOptions);
     if (!m_serviceOptions.profileDirectory.isEmpty()
         && cleanPath(m_serviceOptions.profileDirectory) != m_profileDirectory) {
-        m_profileError = tr("The background station profile does not match this window's settings.");
+        m_profileError = tr("The background Core profile does not match this window's settings.");
     }
     if (!m_serviceOptions.profile.isEmpty() && m_serviceOptions.profile != profile) {
-        m_profileError = tr("The background station profile name does not match this window.");
+        m_profileError = tr("The background Core profile name does not match this window.");
     }
     m_serviceOptions.profile = profile;
     m_serviceOptions.profileDirectory = m_profileDirectory;
@@ -178,12 +178,12 @@ bool GuiDesktopStationRuntime::loadConfig(QString* reason)
     const QString path = m_service->configPath();
     const QFileInfo info(path);
     if (info.isSymLink() && !info.exists()) {
-        if (reason) { *reason = tr("The station configuration link is broken."); }
+        if (reason) { *reason = tr("The Core configuration link is broken."); }
         return false;
     }
     if (info.exists()) {
         if (!info.isFile()) {
-            if (reason) { *reason = tr("The station configuration is not a regular file."); }
+            if (reason) { *reason = tr("The Core configuration is not a regular file."); }
             return false;
         }
         m_config = DaemonConfig::fromFile(path, reason);
@@ -195,7 +195,7 @@ bool GuiDesktopStationRuntime::loadConfig(QString* reason)
     if (!m_config.stateDirectory.isEmpty()
         && cleanPath(m_config.stateDirectory) != m_profileDirectory) {
         if (reason) {
-            *reason = tr("The station control socket must stay inside this profile.");
+            *reason = tr("The Core control socket must stay inside this profile.");
         }
         return false;
     }
@@ -208,14 +208,14 @@ bool GuiDesktopStationRuntime::ensureBackgroundConfig(QString* reason)
     const QString path = m_service->configPath();
     if (QFileInfo(path).exists()) { return true; }
     if (!QDir().mkpath(m_profileDirectory)) {
-        if (reason) { *reason = tr("Could not create the station profile folder."); }
+        if (reason) { *reason = tr("Could not create the Core profile folder."); }
         return false;
     }
     QSaveFile file(path);
     if (!file.open(QIODevice::WriteOnly)
         || file.write("# Desktop Core settings. Default listener, media and rendezvous options apply.\n") < 0
         || !file.commit()) {
-        if (reason) { *reason = tr("Could not save the station configuration."); }
+        if (reason) { *reason = tr("Could not save the Core configuration."); }
         return false;
     }
     return loadConfig(reason);
@@ -240,7 +240,7 @@ bool GuiDesktopStationRuntime::restore()
         // start() may keep a Host alive for listener retry. A rejected Run
         // preference must never become a listener after the port frees up.
         m_controller->stop();
-        fail(tr("The Core listener could not open. Check its station configuration and port."));
+        fail(tr("The Core listener could not open. Check its configuration and port."));
         return false;
     }
     attachHostSignals();
@@ -268,7 +268,7 @@ bool GuiDesktopStationRuntime::setRunCore(bool enabled)
         if (!m_controller->start(true)) {
             m_controller->stop();
             m_actionActive = false;
-            fail(tr("The Core listener could not open. Check its station configuration and port."));
+            fail(tr("The Core listener could not open. Check its configuration and port."));
             return false;
         }
         attachHostSignals();
@@ -346,7 +346,7 @@ bool GuiDesktopStationRuntime::setStartWithComputer(bool enabled)
     }
     m_startWithComputer = m_service->startsWithComputer();
     if (enabled && !m_startWithComputer) {
-        fail(tr("The station startup entry could not be verified."));
+        fail(tr("The Core startup entry could not be verified."));
         return false;
     }
     updateState();

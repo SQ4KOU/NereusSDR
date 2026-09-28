@@ -227,6 +227,75 @@ QJsonObject resolveTciArguments(const QJsonObject& control, bool changed,
 class SetupDescriptionServiceTest : public QObject {
     Q_OBJECT
 private slots:
+    void paBypassIsAClosedVersionSixSettingAndSkuProjected()
+    {
+        RadioModel radio;
+        radio.setHpsdrModelForTest(HPSDRModel::ANAN_G2E);
+        SetupDescriptionService service;
+        service.setRadioContext(radio.boardCapabilities(), radio.hardwareProfile().model);
+        const QJsonObject pa = service.category(QStringLiteral("pa"));
+        const QJsonArray pages = pa.value("pages").toArray();
+        QCOMPARE(pages.size(), 2);
+        QCOMPARE(pages.first().toObject().value("id"), QJsonValue("pa.gain"));
+        const QJsonArray controls = pages.first().toObject().value("sections").toArray()
+            .first().toObject().value("controls").toArray();
+        QCOMPARE(controls.size(), 1);
+        const QJsonObject valid = controls.first().toObject();
+        QVERIFY(SetupDescriptionService::validatePaBypassBinding(valid));
+        QCOMPARE(valid.value("id"), QJsonValue("pa.gain.bypassPaSettings"));
+        QCOMPARE(valid.value("binding").toObject().value("property").toObject()
+                     .value("name"), QJsonValue("paSettingsBypass"));
+        QCOMPARE(valid.value("gate"), QJsonValue(QJsonObject{
+            {"capability", "transmitSettingsVersion"}, {"min", 6}, {"offAir", true}}));
+        QVERIFY(!valid.value("gate").toObject().contains("transmit"));
+        const auto reject = [&valid](const QString& field, const QJsonValue& value) {
+            QJsonObject bad = valid;
+            bad.insert(field, value);
+            QVERIFY(!SetupDescriptionService::validatePaBypassBinding(bad));
+        };
+        reject(QStringLiteral("kind"), QStringLiteral("readout"));
+        reject(QStringLiteral("label"), QStringLiteral("Bypass PA"));
+        reject(QStringLiteral("tooltip"), QStringLiteral("Wrong tooltip"));
+        reject(QStringLiteral("gate"), QJsonObject{{"capability", "transmitSettingsVersion"},
+                                                   {"min", 5}, {"offAir", true}});
+        reject(QStringLiteral("gate"), QJsonObject{{"capability", "transmitSettingsVersion"},
+                                                   {"min", 6}, {"offAir", true}, {"transmit", true}});
+        reject(QStringLiteral("gate"), QJsonObject{{"capability", "transmitSettingsVersion"},
+                                                   {"min", 6}});
+        QJsonObject bad = valid;
+        QJsonObject binding = bad.value("binding").toObject();
+        QJsonObject ref = binding.value("property").toObject();
+        ref.insert("name", "mox");
+        binding.insert("property", ref);
+        bad.insert("binding", binding);
+        QVERIFY(!SetupDescriptionService::validatePaBypassBinding(bad));
+        ref.insert("name", "paSettingsBypass");
+        ref.insert("object", "txState");
+        binding.insert("property", ref);
+        bad.insert("binding", binding);
+        QVERIFY(!SetupDescriptionService::validatePaBypassBinding(bad));
+
+        const quint32 withGain = service.revision();
+        BoardCapabilities sameBoard = radio.boardCapabilities();
+        sameBoard.showsBypassPaSettingsUi = false;
+        service.setRadioContext(sameBoard, radio.hardwareProfile().model);
+        QVERIFY(service.revision() > withGain);
+        const QJsonArray withoutGain = service.category(QStringLiteral("pa"))
+            .value("pages").toArray();
+        QCOMPARE(withoutGain.size(), 1);
+        QCOMPARE(withoutGain.first().toObject().value("id"), QJsonValue("pa.values"));
+        sameBoard.showsBypassPaSettingsUi = true;
+        service.setRadioContext(sameBoard, radio.hardwareProfile().model);
+        QCOMPARE(service.category(QStringLiteral("pa")).value("pages").toArray().size(), 2);
+        sameBoard.isRxOnlySku = true;
+        service.setRadioContext(sameBoard, radio.hardwareProfile().model);
+        QVERIFY(service.pa().isEmpty());
+        sameBoard.isRxOnlySku = false;
+        sameBoard.hasPaProfile = false;
+        service.setRadioContext(sameBoard, radio.hardwareProfile().model);
+        QVERIFY(service.pa().isEmpty());
+    }
+
     void paReadoutsAreClosedTypedBindingsAndAppendSchema()
     {
         RadioModel radio;
@@ -922,7 +991,7 @@ private slots:
     void negotiatedVersionsFitInitialSnapshotAndLaterDelta()
     {
         const auto check = [](int declared, quint16 minor, int expected) {
-            WireCore core(HPSDRHW::Saturn);
+            WireCore core(HPSDRHW::HermesC10);
             QHash<QByteArray, int> features;
             if (declared > 0) { features.insert("setupDescription", declared); }
             QVERIFY(core.connect(features, minor));
@@ -939,6 +1008,7 @@ private slots:
             QVERIFY(!pa.isEmpty());
             QCOMPARE(QJsonDocument::fromJson(pa.toUtf8()).object().value("version").toInt(),
                      expected);
+            QCOMPARE(QJsonDocument::fromJson(pa.toUtf8()).object().value("pages").toArray().size(), 2);
             const QJsonObject category = QJsonDocument::fromJson(dsp.toUtf8()).object();
             QCOMPARE(category.value("version").toInt(), expected);
             bool hasTable = false;

@@ -130,7 +130,7 @@ QString ContainerButtonDispatcher::sliceUnavailableReason(int rxSource) const
     if (m_model && m_hooks.desktopHosting && m_hooks.desktopHosting()) {
         const int sliceId = ContainerWidget::sliceIdForRxSource(rxSource);
         if (m_model->sliceById(sliceId)) {
-            return QStringLiteral("%1 belongs to another device. Choose a station slice in "
+            return QStringLiteral("%1 belongs to another device. Choose a Core slice in "
                                   "this container's settings.")
                 .arg(ContainerWidget::sliceNameForRxSource(rxSource));
         }

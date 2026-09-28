@@ -421,6 +421,7 @@ PaGainByBandPage::PaGainByBandPage(RadioModel* model, QWidget* parent)
         // non-null target in the model-less path.  Defaults hidden (standard board).
         m_bypassPaSettingsCheck = new QCheckBox(
             QStringLiteral("Bypass ANAN PA Settings"), this);
+        m_bypassPaSettingsCheck->setProperty("nereusSetupId", "pa.gain.bypassPaSettings");
         m_bypassPaSettingsCheck->setVisible(false);
         return;
     }
@@ -731,6 +732,7 @@ PaGainByBandPage::PaGainByBandPage(RadioModel* model, QWidget* parent)
     // defaults hidden (false) here, shown by applyCapabilityVisibility().
     m_bypassPaSettingsCheck = new QCheckBox(
         QStringLiteral("Bypass ANAN PA Settings"), this);
+    m_bypassPaSettingsCheck->setProperty("nereusSetupId", "pa.gain.bypassPaSettings");
     m_bypassPaSettingsCheck->setToolTip(QStringLiteral(
         "Bypass the board-specific PA calibration table (BP PA). "
         "When checked, the generic Hermes gain row is used instead "

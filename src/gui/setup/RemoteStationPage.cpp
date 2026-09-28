@@ -54,10 +54,10 @@ RemoteStationPage::RemoteStationPage(QWidget* parent)
     coreLayout->addWidget(m_keepRunning);
     coreLayout->addWidget(m_startWithComputer);
 
-    QGroupBox* station = addSection(tr("Station"));
+    QGroupBox* station = addSection(tr("Core"));
     QVBoxLayout* stationLayout = qobject_cast<QVBoxLayout*>(station->layout());
     QHBoxLayout* nameRow = new QHBoxLayout;
-    nameRow->addWidget(new QLabel(tr("Station name:"), station));
+    nameRow->addWidget(new QLabel(tr("Core name:"), station));
     m_name = new QLabel(station);
     m_name->setObjectName(QStringLiteral("remoteAccessStationName"));
     m_name->setTextInteractionFlags(Qt::TextSelectableByMouse);
@@ -81,7 +81,7 @@ RemoteStationPage::RemoteStationPage(QWidget* parent)
     m_pairingCode->setTextFormat(Qt::PlainText);
     m_pairingCode->setWordWrap(true);
     stationLayout->addWidget(m_pairingCode);
-    m_pairingInstruction = new QLabel(tr("Enter this code on your device to pair it with this station."), station);
+    m_pairingInstruction = new QLabel(tr("Enter this code on your device to pair it with this Core."), station);
     m_pairingInstruction->setWordWrap(true);
     stationLayout->addWidget(m_pairingInstruction);
 
@@ -97,7 +97,7 @@ RemoteStationPage::RemoteStationPage(QWidget* parent)
     m_addDevice->setAutoDefault(false);
     devicesLayout->addWidget(m_addDevice, 0, Qt::AlignLeft);
 
-    QGroupBox* backup = addSection(tr("Station key backup"));
+    QGroupBox* backup = addSection(tr("Core key backup"));
     m_backupGroup = backup;
     QVBoxLayout* backupLayout = qobject_cast<QVBoxLayout*>(backup->layout());
     m_backupPath = new QLabel(backup);
@@ -137,7 +137,7 @@ RemoteStationPage::RemoteStationPage(QWidget* parent)
         const QPointer<RemoteStationPage> self(this);
         const QString originalName = m_state.stationName;
         bool accepted = false;
-        const QString name = QInputDialog::getText(this, tr("Rename station"), tr("Station name:"),
+        const QString name = QInputDialog::getText(this, tr("Rename Core"), tr("Core name:"),
                                                    QLineEdit::Normal, m_state.stationName,
                                                    &accepted).trimmed();
         // The modal dialog runs the event loop: transmit, host retirement,
@@ -183,7 +183,7 @@ void RemoteStationPage::refresh()
         ? tr("Run a Core on this computer first.") : unavailable;
     applyGate(m_keepRunning, allowed && m_state.runCore, coreReason);
     applyGate(m_startWithComputer, allowed && m_state.runCore, coreReason);
-    m_name->setText(m_state.stationName.isEmpty() ? tr("No station name") : m_state.stationName);
+    m_name->setText(m_state.stationName.isEmpty() ? tr("No Core name") : m_state.stationName);
     m_reachability->setText(m_state.reachabilityText);
     m_reachability->setVisible(!m_state.reachabilityText.isEmpty());
     m_pairingCode->setText(tr("Pairing code: %1").arg(m_state.pairingCode));
@@ -193,14 +193,14 @@ void RemoteStationPage::refresh()
     applyGate(m_rename, allowed && m_state.runCore, coreReason);
     applyGate(m_addDevice, allowed && m_state.runCore, coreReason);
     m_backupPath->setText(m_state.keyBackupPath.isEmpty()
-        ? tr("Back up this station's key when it is available.")
-        : tr("Back up the station key file: %1").arg(m_state.keyBackupPath));
+        ? tr("Back up this Core's key when it is available.")
+        : tr("Back up the Core key file: %1").arg(m_state.keyBackupPath));
     m_backupPath->setVisible(!m_state.keyBackupAcknowledged);
     m_backupAcknowledged->setVisible(!m_state.keyBackupAcknowledged);
     m_backupGroup->setVisible(!m_state.keyBackupAcknowledged);
     applyGate(m_backupAcknowledged,
               allowed && m_state.runCore && !m_state.keyBackupPath.isEmpty(),
-              !m_state.keyBackupPath.isEmpty() ? coreReason : tr("The station key is not available yet."));
+              !m_state.keyBackupPath.isEmpty() ? coreReason : tr("The Core key is not available yet."));
     rebuildDevices();
 }
 

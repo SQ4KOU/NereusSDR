@@ -49,7 +49,7 @@ StationLaunchSpec locateStationLaunch(const QString& applicationDir, StationPlat
     }
     const QString binary = locateStationBinary(applicationDir, platform);
     if (binary.isEmpty()) {
-        return {{}, {}, QStringLiteral("The packaged station binary is missing. Reinstall NereusSDR.")};
+        return {{}, {}, QStringLiteral("The packaged Core app is missing. Reinstall NereusSDR.")};
     }
     return {binary, {}, {}};
 }

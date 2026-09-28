@@ -1726,6 +1726,11 @@ colours for the same signal.
   page parity. Band antenna/OC/filter tables, connected-radio scalar settings,
   PA profile lifecycle and calibration/I/O actions remain incomplete; their
   existing source maps are retained for implementation.
+  The existing ANAN-G2E PA bypass checkbox is described in signed `ed7f6548`:
+  exact desktop text, SKU projection and the existing version-6/off-air
+  settings gate, including the receive-only Core exception. No Core authority
+  or schema ordinal changed. Lead review and the app/Core build plus fourteen
+  named integration suites pass (11.13 s). This remains a partial PA page.
 - Plan: Core Hardware Config/PA Setup description dependencies in the phone plan
   and remote-window Hardware/PA parity.
 
@@ -1757,6 +1762,10 @@ colours for the same signal.
   message, untouched directory contents and preserved previous backup, without
   an operating-system skip. All nine macOS integration suites pass (5.16 s).
   Full Linux and Windows verification of this change remains outstanding.
+  The full Linux run also exposed this assumption in the handover save-failure
+  fixture. Its current pre/post-teardown variants are being changed to a real
+  settings-file destination collision, preserving the original file and profile
+  lock, rather than relying on directory permissions or skipping Windows.
 - Plan: reliable settings export and portable CI evidence.
 
 ### G-90: HL2 option values are stored but never applied to hardware
@@ -1793,10 +1802,81 @@ colours for the same signal.
 - Status: source and actual runner interface state inspected. The next
   verification runner will have a private internal Docker network interface,
   with no external routing. The current run is preserved unchanged so its
-  remaining independent findings can be collected. A passing corrected-network
-  comparison is still required; this does not resolve G-57's separate macOS
+  remaining independent findings can be collected. A bounded comparison using
+  the exact same signed-source Linux binaries passed both previously failing
+  ICE-gathering cases (464 ms) on the private internal interface; no code or
+  deadline changed. The full corrected-network run remains outstanding.
+  This does not resolve G-57's separate macOS
   intermittent startup failure on a machine with usable interfaces.
 - Plan: full Linux verification and R5 network acceptance.
+
+### G-92: Hydration test treats automatic read-only validation as a settings edit
+
+- Evidence: the full Linux run rejects a reconnect command beyond record
+  subscription. A focused diagnostic identified `station.validateSettings`,
+  which reads settings and refreshes reported issues without writing preferences.
+- Ruling basis: preserve JJ's requirement that stale window preferences never
+  overwrite Core settings, while permitting the implemented read-only check.
+- Status: signed `e51f8659` permits exactly validation and record subscription
+  in that assertion; other commands and every property write remain rejected.
+  App/Core and fourteen integrated suites pass (11.13 s). No product behavior
+  or timeout changed, and no load-dependent cause is claimed.
+- Plan: settings ownership and reconnect verification.
+
+### G-93: Remote audio-reset test predates functioning local VAX outputs
+
+- Evidence: the remote Audio Advanced test expected zero VAX rebuild signals,
+  although approved parity B6.10 requires rebuilding those outputs in both
+  windows. The remote router and feeder now feed local VAX buses; the dedicated
+  reset test already verifies their reconstruction.
+- Ruling basis: preserve the approved B6.10 behavior and protect Core settings.
+- Status: the final signed `e51f8659` changes the stale page test to require
+  all four rebuild notifications and retirement of the previous output. It
+  retains assertions that Core DSP settings and outgoing writes are untouched.
+  Production AudioEngine is unchanged. Both audio suites and twelve other
+  integrated suites pass (11.13 s), after the app/Core build.
+- Plan: remote-window audio reset and VAX parity.
+
+### G-94: New hosting diagnostics call the Core a station
+
+- Evidence: the full Linux wording sweep reports user-visible hosting, service,
+  handover and Setup messages using "station" for the serving computer.
+- Ruling basis: the standing operator wording rule calls that computer Core.
+  G-13's separate Connections heading decision remains open.
+- Status: signed `e51f8659` corrects those messages. Installed service names,
+  scripts, wire keys and G-13 headings are preserved; exact installed-service
+  strings have documented sweep exceptions. The sweep and hosting tests pass
+  in the fourteen-suite integration (11.13 s).
+- Plan: plain operator wording and desktop Core hosting.
+
+### G-95: New accessory commands lose the Core's refusal in a desktop window
+
+- Evidence: after correcting old receive-only test fixtures to use genuinely
+  paired, permitted devices, the Core correctly refused `amp.operate` while
+  keyed or while the tuner was sweeping. StationClient classified only the
+  legacy accessory verbs, so the new refusal missed `accessoryRequestRefused`
+  and fell through to the receiver error route.
+- Ruling basis: JJ requires working remote accessory parity and truthful
+  refusals; preserve every existing permission and on-air restriction.
+- Status: the lane maps the nine existing amp/tuner/RF-Kit command names to
+  their actual accessory error route. Focused paired regressions pass, with
+  complete accessory/confirmation verification and lead integration pending.
+  Accepted-path fixtures use proper device permissions; denied and legacy
+  coverage remain. No Core authority is relaxed and no RF is emitted.
+- Plan: remote accessory control and shared-setting confirmation.
+
+### G-96: The new Remote Access page removed its Connections entry
+
+- Evidence: the real-window harness cannot find `remoteStationConnections`.
+  The new page retains its compatibility signal, and SetupDialog/MainWindow
+  still route it, but the page has no button that emits it. Other Radio menu
+  entries do not restore the expected Setup entry.
+- Ruling basis: JJ requires existing working window entry points to retain
+  parity. Opening Connections is navigation, not a Core configuration write.
+- Status: a bounded lane is restoring the button through the existing signal
+  and connection path, with focused window coverage. No automatic connection,
+  hosting-policy change or real window relaunch is authorized by this repair.
+- Plan: remote-window connection entry points and Core hosting integration.
 
 ## How this addendum is kept
 

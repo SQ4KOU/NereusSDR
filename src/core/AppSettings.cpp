@@ -521,7 +521,7 @@ bool parseImportXml(const QByteArray& input, QMap<QString, QString>& settings,
             if (depth == 2 && attrs.size() == 1
                 && attrs.value(QStringLiteral("type")) == QStringLiteral("station")) {
                 if (stationSeen) {
-                    return reject(QStringLiteral("Settings XML has multiple station groups"));
+                    return reject(QStringLiteral("Settings XML has multiple Core groups"));
                 }
                 stationSeen = true;
                 inStation = true;

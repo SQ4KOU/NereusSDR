@@ -100,7 +100,8 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                     || (id == QLatin1String("hardware")
                         && !SetupDescription::validateHardwarePropertyBinding(control))
                     || (id == QLatin1String("pa")
-                        && !SetupDescription::validatePaReadoutBinding(control))
+                        && !SetupDescription::validatePaReadoutBinding(control)
+                        && !SetupDescription::validatePaBypassBinding(control))
                     || (id == QLatin1String("audio")
                         && !SetupDescription::validateAudioPropertyBinding(control))
                     || (control.value(QStringLiteral("binding")).toObject().contains(QStringLiteral("command"))
@@ -118,6 +119,17 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
     }
     if (id == QLatin1String("pa") && (!caps.hasPaProfile || caps.isRxOnlySku)) {
         return {};
+    }
+    if (id == QLatin1String("pa") && !caps.showsBypassPaSettingsUi) {
+        QJsonArray pages = root.value(QStringLiteral("pages")).toArray();
+        for (int p = 0; p < pages.size(); ++p) {
+            if (pages.at(p).toObject().value(QStringLiteral("id"))
+                == QJsonValue(QStringLiteral("pa.gain"))) {
+                pages.removeAt(p);
+                break;
+            }
+        }
+        root.insert(QStringLiteral("pages"), pages);
     }
     if (id == QLatin1String("hardware")) {
         const SkuUiProfile sku = skuUiProfileFor(model);
@@ -451,6 +463,35 @@ bool SetupDescription::validatePaReadoutBinding(const QJsonObject& control)
         && MirrorPolicy::hasExplicitEntry(QByteArrayLiteral("TransmitState"), name)
         && MirrorPolicy::directionFor(QByteArrayLiteral("TransmitState"), name)
             == MirrorDirection::Outbound;
+}
+
+bool SetupDescription::validatePaBypassBinding(const QJsonObject& control)
+{
+    const QJsonObject binding = control.value(QStringLiteral("binding")).toObject();
+    const QJsonObject ref = binding.value(QStringLiteral("property")).toObject();
+    if (control.size() != 7 || binding.size() != 1 || ref.size() != 2
+        || ref.value(QStringLiteral("object")) != QJsonValue(QStringLiteral("transmit"))
+        || ref.value(QStringLiteral("name")) != QJsonValue(QStringLiteral("paSettingsBypass"))
+        || control.value(QStringLiteral("id")) != QJsonValue(QStringLiteral("pa.gain.bypassPaSettings"))
+        || control.value(QStringLiteral("label")) != QJsonValue(QStringLiteral("Bypass ANAN PA Settings"))
+        || control.value(QStringLiteral("tooltip")) != QJsonValue(QStringLiteral(
+            "Bypass the board-specific PA calibration table (BP PA). "
+            "When checked, the generic Hermes gain row is used instead "
+            "of the ANAN-G2E factory row. Useful if you have not yet "
+            "calibrated PA gain for this radio."))
+        || control.value(QStringLiteral("kind")) != QJsonValue(QStringLiteral("toggle"))
+        || control.value(QStringLiteral("applies")) != QJsonValue(QStringLiteral("live"))
+        || control.value(QStringLiteral("gate")).toObject() != QJsonObject{
+            {QStringLiteral("capability"), QStringLiteral("transmitSettingsVersion")},
+            {QStringLiteral("min"), 6}, {QStringLiteral("offAir"), true}}) {
+        return false;
+    }
+    const QByteArray name = QByteArrayLiteral("paSettingsBypass");
+    const MirrorProperty* property = MirrorSchema::forMetaObject(
+        &TransmitModel::staticMetaObject).byName(name);
+    return property && property->isWritable && property->kind == MirrorWireKind::Bool
+        && MirrorPolicy::hasExplicitEntry(QByteArrayLiteral("TransmitModel"), name)
+        && MirrorPolicy::inboundAllowed(QByteArrayLiteral("TransmitModel"), name);
 }
 
 bool SetupDescription::validateTransmitSettingBinding(const QJsonObject& control)
