@@ -1,10 +1,38 @@
 {
-  "version": 1,
+  "version": 3,
   "category": {
     "id": "diagnostics",
     "title": "Diagnostics",
-    "where": "mixed",
-    "coverage": "pendingPhoneActions"
+    "where": "station",
+    "coverage": "partial"
   },
-  "pages": []
+  "pages": [{
+    "id": "diagnostics.settingsValidation",
+    "title": "Settings Validation",
+    "where": "station",
+    "coverage": "partial",
+    "sections": [{
+      "title": "Validation Issues",
+      "controls": [{
+        "id": "diagnostics.settingsValidation.health",
+        "label": "Validation Issues",
+        "tooltip": "",
+        "kind": "settingsHygiene",
+        "requiresDescriptionVersion": 3,
+        "binding": {"settingsHygiene": {"version": 1}},
+        "applies": "live",
+        "gate": {"capability": "settingsHygieneVersion", "min": 1},
+        "actions": [
+          {"id": "validate", "label": "Re-validate"},
+          {"id": "reset", "label": "Reset to Defaults", "enabled": false,
+           "reason": "Reset to defaults is not available on this Core."},
+          {"id": "forget", "label": "Forget This Radio", "paired": true,
+           "offAir": true,
+           "confirmation": {"title": "Forget Radio",
+                            "message": "Forget all settings for this radio?",
+                            "default": "cancel"}}
+        ]
+      }]
+    }]
+  }]
 }
