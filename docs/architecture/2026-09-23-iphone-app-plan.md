@@ -6494,7 +6494,10 @@ TCI keys only while the desktop holds transmit; a fifth device cannot pick the d
 radio connection and settings safety, and keying at the desktop: flag for earlier
 review. Requires Task 47, Parts C and F, and Tasks 41, 42 and 71 to 77.
 
-- [ ] **Step 1:** `StationHost`, with the daemon moved onto it and its tests passing.
+- [x] **Step 1:** `StationHost`, with the daemon moved onto it and its tests passing.
+      Signed implementation `dd425d69`; integrated app/Core build and fourteen
+      focused daemon, host and dependency-boundary tests passed (23.00 s).
+      Desktop hosting, profile locking and handover remain in the following steps.
 - [ ] **Step 2:** The desktop hosting it, the lock, `nereusd release` with its
       control-socket tests, and the two-way handover.
 - [ ] **Step 3:** The window as the station device: its own slices, flags and audio, its

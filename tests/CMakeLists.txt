@@ -7738,6 +7738,7 @@ nereus_add_test(tst_slice_flag_presentation_lifetime)
 # stop() is safe with no prior start() and leaves sliceCount() == 0, and
 # that a restart does not accumulate slices from the previous run.
 nereus_add_test(tst_daemon_app)
+nereus_add_test(tst_station_host fakes/LoopbackTransport.cpp)
 nereus_add_test(tst_receive_layout_store)
 nereus_add_test(tst_receive_layout_hydration)
 nereus_add_test(tst_receive_layout_runtime)
