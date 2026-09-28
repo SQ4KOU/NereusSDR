@@ -68,6 +68,35 @@ bool waitForText(QProcess& process, const QByteArray& expected, int timeoutMs = 
     return false;
 }
 
+QString preservedSettingsPath(const QString& settingsPath)
+{
+    return settingsPath + QStringLiteral(".handover-test-original");
+}
+
+bool blockSettingsSave(const QString& settingsPath)
+{
+    const QString preserved = preservedSettingsPath(settingsPath);
+    if (!QFileInfo(settingsPath).isFile() || QFileInfo::exists(preserved)
+        || !QFile::rename(settingsPath, preserved)) {
+        return false;
+    }
+    if (QDir().mkdir(settingsPath)) { return true; }
+    QFile::rename(preserved, settingsPath);
+    return false;
+}
+
+bool restoreSettingsFile(const QString& settingsPath)
+{
+    return QDir().rmdir(settingsPath)
+        && QFile::rename(preservedSettingsPath(settingsPath), settingsPath);
+}
+
+QByteArray fileBytes(const QString& path)
+{
+    QFile file(path);
+    return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray{};
+}
+
 } // namespace
 
 class TestStationHandover : public QObject {
@@ -224,9 +253,6 @@ private slots:
 
     void preTeardownFailedSaveRestoresCommandsAndCanRetry()
     {
-#ifdef Q_OS_WIN
-        QSKIP("Directory permission failure injection is POSIX-only.");
-#else
         QTemporaryDir scratch;
         QVERIFY(scratch.isValid());
         const QString config = configFile(scratch, true);
@@ -234,6 +260,7 @@ private slots:
         const QString socketPath = QDir(scratch.path()).filePath(
             QString::fromLatin1(StationControlSocket::kSocketName));
         const QString profile = profileName();
+        const QString settingsPath = AppSettings::resolveSettingsPath(profile);
         StationHandover profileLock(profile);
         QProcess daemon;
         QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
@@ -244,8 +271,6 @@ private slots:
                       QStringLiteral("--profile"), profile});
         const QString directory = AppSettings::resolveConfigDir(profile);
         const auto cleanup = qScopeGuard([&] {
-            QFile::setPermissions(directory, QFileDevice::ReadOwner | QFileDevice::WriteOwner
-                                              | QFileDevice::ExeOwner);
             if (daemon.state() != QProcess::NotRunning) {
                 daemon.kill();
                 daemon.waitForFinished();
@@ -259,41 +284,52 @@ private slots:
         QVERIFY2(ready, qPrintable(QStringLiteral("socket %1, daemon state %2, output: %3")
             .arg(socketPath).arg(int(daemon.state()))
             .arg(QString::fromUtf8(daemon.readAll()))));
-        QVERIFY(QFile::setPermissions(directory, QFileDevice::ReadOwner | QFileDevice::ExeOwner));
+        const QByteArray originalBytes = fileBytes(settingsPath);
+        QVERIFY2(!originalBytes.isEmpty(), qPrintable(settingsPath));
+        const QString sentinelPath = QDir(directory).filePath(QStringLiteral("handover-sentinel"));
+        const QByteArray sentinelBytes("leave this profile sentinel unchanged");
+        {
+            QFile sentinel(sentinelPath);
+            QVERIFY(sentinel.open(QIODevice::WriteOnly));
+            QCOMPARE(sentinel.write(sentinelBytes), sentinelBytes.size());
+        }
+        const StationControlReply baselineShow = StationControlSocket::request(
+            socketPath, {QStringLiteral("pairing"), QStringLiteral("show")});
+        QVERIFY2(!baselineShow.text.contains(QStringLiteral("Only status and release")),
+                 qPrintable(baselineShow.text));
+        QVERIFY(blockSettingsSave(settingsPath));
         const StationControlReply failed = StationControlSocket::request(
             socketPath, {QStringLiteral("release")});
         QVERIFY(!failed.ok);
         QVERIFY2(failed.text.contains(QStringLiteral("could not save"))
                  || failed.text.contains(QStringLiteral("could not be saved")),
                  qPrintable(failed.text));
+        QVERIFY(QFileInfo(settingsPath).isDir());
+        QCOMPARE(fileBytes(preservedSettingsPath(settingsPath)), originalBytes);
+        QCOMPARE(fileBytes(sentinelPath), sentinelBytes);
         QCOMPARE(daemon.state(), QProcess::Running);
         QVERIFY(!profileLock.acquire(0));
-        QTRY_VERIFY_WITH_TIMEOUT(!StationControlSocket::request(
-            socketPath, {QStringLiteral("pairing"), QStringLiteral("show")})
-                .text.contains(QStringLiteral("Only status and release")), 5000);
+        StationControlReply show;
+        QTRY_VERIFY_WITH_TIMEOUT((show = StationControlSocket::request(
+            socketPath, {QStringLiteral("pairing"), QStringLiteral("show")})).ok
+                == baselineShow.ok && show.text == baselineShow.text, 5000);
         const StationControlReply mutation = StationControlSocket::request(
             socketPath, {QStringLiteral("pairing"), QStringLiteral("open")});
-        QVERIFY(!mutation.ok);
-        // The settings write failed before the model was destroyed. The
-        // retained Core has recovered its ordinary command path; this
-        // command can still fail because the profile is read-only.
+        // The Core has recovered the normal command path. Whether opening
+        // pairing changes state depends on its existing pairing state.
         QVERIFY2(!mutation.text.contains(QStringLiteral("Only status and release")),
                  qPrintable(mutation.text));
-        QVERIFY(QFile::setPermissions(directory, QFileDevice::ReadOwner | QFileDevice::WriteOwner
-                                                 | QFileDevice::ExeOwner));
+        QVERIFY(restoreSettingsFile(settingsPath));
+        QCOMPARE(fileBytes(settingsPath), originalBytes);
         const StationControlReply retry = StationControlSocket::request(
             socketPath, {QStringLiteral("release")});
         QVERIFY2(retry.ok, qPrintable(retry.text));
         QVERIFY(profileLock.acquire(1000));
         profileLock.release();
-#endif
     }
 
     void postTeardownFailedSaveStaysFencedAndCanRetry()
     {
-#ifdef Q_OS_WIN
-        QSKIP("Directory permission failure injection is POSIX-only.");
-#else
         QTemporaryDir scratch;
         QVERIFY(scratch.isValid());
         const QString config = configFile(scratch, true);
@@ -302,6 +338,7 @@ private slots:
             QString::fromLatin1(StationControlSocket::kSocketName));
         const QString profile = profileName();
         const QString directory = AppSettings::resolveConfigDir(profile);
+        const QString settingsPath = AppSettings::resolveSettingsPath(profile);
         StationHandover profileLock(profile);
         QProcess daemon;
         QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
@@ -313,8 +350,6 @@ private slots:
                      {QStringLiteral("--daemon-helper"), QStringLiteral("--config"), config,
                       QStringLiteral("--profile"), profile});
         const auto cleanup = qScopeGuard([&] {
-            QFile::setPermissions(directory, QFileDevice::ReadOwner | QFileDevice::WriteOwner
-                                              | QFileDevice::ExeOwner);
             if (daemon.state() != QProcess::NotRunning) {
                 daemon.kill();
                 daemon.waitForFinished();
@@ -323,11 +358,27 @@ private slots:
         });
         QVERIFY(daemon.waitForStarted());
         QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(socketPath), 10000);
+        const QByteArray originalBytes = fileBytes(settingsPath);
+        QVERIFY2(!originalBytes.isEmpty(), qPrintable(settingsPath));
+        const QString sentinelPath = QDir(directory).filePath(QStringLiteral("handover-sentinel"));
+        const QByteArray sentinelBytes("leave this profile sentinel unchanged");
+        {
+            QFile sentinel(sentinelPath);
+            QVERIFY(sentinel.open(QIODevice::WriteOnly));
+            QCOMPARE(sentinel.write(sentinelBytes), sentinelBytes.size());
+        }
         const StationControlReply failed = StationControlSocket::request(
             socketPath, {QStringLiteral("release")});
         QVERIFY(!failed.ok);
         QVERIFY2(failed.text.contains(QStringLiteral("could not save")),
                  qPrintable(failed.text));
+        QVERIFY(QFileInfo(settingsPath).isDir());
+        // stop() legitimately writes settings before this test-only hook
+        // blocks the final save. Preserve those post-stop bytes exactly.
+        const QByteArray preservedBytes = fileBytes(preservedSettingsPath(settingsPath));
+        QVERIFY(!preservedBytes.isEmpty());
+        QVERIFY(preservedBytes.contains("<DaemonProfileSeeded>True</DaemonProfileSeeded>"));
+        QCOMPARE(fileBytes(sentinelPath), sentinelBytes);
         QCOMPARE(daemon.state(), QProcess::Running);
         QVERIFY(!profileLock.acquire(0));
         const StationControlReply mutation = StationControlSocket::request(
@@ -335,14 +386,15 @@ private slots:
         QVERIFY(!mutation.ok);
         QVERIFY2(mutation.text.contains(QStringLiteral("Only status and release")),
                  qPrintable(mutation.text));
-        QVERIFY(QFile::setPermissions(directory, QFileDevice::ReadOwner | QFileDevice::WriteOwner
-                                                 | QFileDevice::ExeOwner));
+        QCOMPARE(fileBytes(preservedSettingsPath(settingsPath)), preservedBytes);
+        QCOMPARE(fileBytes(sentinelPath), sentinelBytes);
+        QVERIFY(restoreSettingsFile(settingsPath));
+        QCOMPARE(fileBytes(settingsPath), preservedBytes);
         const StationControlReply retry = StationControlSocket::request(
             socketPath, {QStringLiteral("release")});
         QVERIFY2(retry.ok, qPrintable(retry.text));
         QVERIFY(profileLock.acquire(1000));
         profileLock.release();
-#endif
     }
 
     void dirtyOfflineReceiverKeepsProcessAndLock()

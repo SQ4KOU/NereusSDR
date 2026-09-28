@@ -137,6 +137,7 @@
 #include "core/session/LinkVersion.h"
 #include "core/station/StationHandover.h"
 #ifdef NEREUS_BUILD_TESTS
+#include <QDir>
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #endif
@@ -608,15 +609,26 @@ int main(int argc, char* argv[])
     }
     if (qEnvironmentVariableIsSet("NEREUS_HANDOVER_TEST_FAIL_AFTER_STOP")) {
         // Force only the final settings write to fail, after stop() has
-        // destroyed the model. The test parent restores this isolated
-        // profile directory before asking the retained owner to retry.
-        const QString settingsDirectory = QFileInfo(
-            NereusSDR::AppSettings::instance().filePath()).absolutePath();
-        daemon.setAfterStationStopForTest([settingsDirectory, first = true]() mutable {
+        // destroyed the model. A directory at the destination defeats
+        // QSaveFile even under uid 0. The test parent restores the original
+        // file in this isolated profile before asking the owner to retry.
+        const QString settingsPath = NereusSDR::AppSettings::instance().filePath();
+        daemon.setAfterStationStopForTest([settingsPath, first = true]() mutable {
             if (!first) { return; }
             first = false;
-            QFile::setPermissions(settingsDirectory,
-                                  QFileDevice::ReadOwner | QFileDevice::ExeOwner);
+            const QString preserved = settingsPath
+                + QStringLiteral(".handover-test-original");
+            if (!QFileInfo(settingsPath).isFile() || QFileInfo::exists(preserved)
+                || !QFile::rename(settingsPath, preserved)) {
+                qCCritical(NereusSDR::lcApp) << "test could not preserve settings"
+                                            << settingsPath;
+                return;
+            }
+            if (!QDir().mkdir(settingsPath)) {
+                QFile::rename(preserved, settingsPath);
+                qCCritical(NereusSDR::lcApp) << "test could not block settings save"
+                                            << settingsPath;
+            }
         });
     }
 #endif
