@@ -5,6 +5,7 @@
 #include <QCheckBox>
 #include <QDir>
 #include <QEvent>
+#include <QGroupBox>
 #include <QInputDialog>
 #include <QLabel>
 #include <QPushButton>
@@ -52,6 +53,43 @@ private:
         QVERIFY(page.grab().save(directory + QLatin1Char('/') + file));
     }
 private slots:
+    void connectionsStayAvailableOutsideHostingAuthority()
+    {
+        RemoteStationPage page;
+        auto* connections = button(page, "remoteStationConnections");
+        auto* section = qobject_cast<QGroupBox*>(connections->parentWidget());
+        QVERIFY(section);
+        QCOMPARE(section->title(), QStringLiteral("This window"));
+        QSignalSpy requests(&page, &RemoteStationPage::connectionsRequested);
+        QSignalSpy run(&page, &RemoteStationPage::runCoreRequested);
+        QSignalSpy keep(&page, &RemoteStationPage::keepRunningRequested);
+
+        auto state = ready();
+        state.available = false;
+        state.runCore = false;
+        page.setState(state);
+        QVERIFY(!check(page, "remoteAccessRunCore")->isEnabled());
+        QVERIFY(connections->isEnabled());
+        connections->click();
+
+        state.available = true;
+        state.busy = true;
+        page.setState(state);
+        QVERIFY(connections->isEnabled());
+        connections->click();
+
+        state.busy = false;
+        state.transmitting = true;
+        page.setState(state);
+        QVERIFY(!check(page, "remoteAccessRunCore")->isEnabled());
+        QVERIFY(connections->isEnabled());
+        connections->click();
+
+        QCOMPARE(requests.size(), 3);
+        QCOMPARE(run.size(), 0);
+        QCOMPARE(keep.size(), 0);
+    }
+
     void actionsStayAuthoritative()
     {
         RemoteStationPage page;

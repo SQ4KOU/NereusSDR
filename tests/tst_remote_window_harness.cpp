@@ -490,6 +490,21 @@ private slots:
         QCOMPARE(client->sessionEpoch(), epoch);
     }
 
+    void setupConnectionsAsksManagedPickerWithoutDialing()
+    {
+        RemoteWindowHarness h;
+        QVERIFY(h.start());
+        h.window()->setConnectionPickerManaged(true);
+        QSignalSpy requests(h.window(), &MainWindow::connectionsRequested);
+        QPushButton* connections = openSetupConnectionsButton(h);
+        QVERIFY(connections);
+        QVERIFY(connections->isEnabled());
+        connections->click();
+        QCOMPARE(requests.size(), 1);
+        QCOMPARE(h.acceptedConnections(), 0);
+        QVERIFY(!h.client()->isConnectionActive());
+    }
+
     // R-R3-16 / R-R3-17: cancelling while a retry waits stops it for good.
     void cancelDuringBackoffStopsTheRetry_data()
     {

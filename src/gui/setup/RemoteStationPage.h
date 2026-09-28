@@ -56,7 +56,7 @@ signals:
     void revokeRequested(const QByteArray& id);
     void addDeviceRequested();
     void keyBackupAcknowledgedRequested();
-    // Compatibility with SetupDialog until its production bridge is wired.
+    // Opens this window's Connections through SetupDialog/MainWindow.
     void connectionsRequested();
 
 private:
