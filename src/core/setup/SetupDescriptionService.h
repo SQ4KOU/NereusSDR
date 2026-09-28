@@ -1,6 +1,7 @@
 #pragma once
 // no-port-check: NereusSDR-original Setup description transport.
 #include "core/BoardCapabilities.h"
+#include "core/HpsdrModel.h"
 
 #include <QJsonObject>
 #include <QObject>
@@ -29,7 +30,8 @@ public:
     QJsonObject category(const QString& id) const;
     static bool validateActiveSlicePropertyBinding(const QJsonObject& control);
     static bool validateTransmitPropertyBinding(const QJsonObject& control);
-    static bool validateHardwarePropertyBinding(const QJsonObject& control);
+    static bool validateHardwarePropertyBinding(const QJsonObject& control,
+                                                HPSDRModel model = HPSDRModel::FIRST);
     static bool validateTransmitSettingBinding(const QJsonObject& control);
     static bool validateAudioPropertyBinding(const QJsonObject& control);
     static bool validateDspSettingBinding(const QJsonObject& control);
@@ -39,6 +41,7 @@ public:
     /// Stateless per-session projection of a category string (empty if no ready pages).
     static QString fitCategoryForVersion(const QString& description, int version);
     void setBoardCapabilities(const BoardCapabilities& caps);
+    void setRadioContext(const BoardCapabilities& caps, HPSDRModel model);
     quint32 revision() const { return m_revision; }
     QString general() const { return m_general; }
     QString hardware() const { return m_hardware; }
@@ -57,6 +60,7 @@ signals:
 private:
     void rebuild();
     BoardCapabilities m_caps{};
+    HPSDRModel m_model = HPSDRModel::FIRST;
     quint32 m_revision = 0;
     QString m_general;
     QString m_hardware;

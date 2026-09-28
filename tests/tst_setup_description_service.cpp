@@ -529,6 +529,53 @@ private slots:
         wrongProperty.insert("binding", binding);
         QVERIFY(!SetupDescriptionService::validateHardwarePropertyBinding(wrongProperty));
 
+        service.setRadioContext(BoardCapsTable::forBoard(HPSDRHW::Hermes),
+                                HPSDRModel::ANAN100);
+        const QJsonArray classic = service.category(QStringLiteral("hardware"))
+            .value("pages").toArray().first().toObject().value("sections").toArray()
+            .first().toObject().value("controls").toArray();
+        QCOMPARE(classic.size(), 7);
+        QCOMPARE(classic.at(2).toObject().value("id"), QJsonValue("hardware.antennaAlex.rxOutOnTx"));
+        QCOMPARE(classic.at(3).toObject().value("id"), QJsonValue("hardware.antennaAlex.ext1OutOnTx"));
+        QCOMPARE(classic.at(4).toObject().value("id"), QJsonValue("hardware.antennaAlex.ext2OutOnTx"));
+        QCOMPARE(classic.at(5).toObject().value("id"), QJsonValue("hardware.antennaAlex.rxOutOverride"));
+        for (int index = 2; index <= 5; ++index) {
+            const QJsonObject relay = classic.at(index).toObject();
+            QVERIFY(SetupDescriptionService::validateHardwarePropertyBinding(relay,
+                                                                               HPSDRModel::ANAN100));
+            QVERIFY(!SetupDescriptionService::validateHardwarePropertyBinding(relay,
+                                                                                HPSDRModel::ANAN10));
+            QJsonObject unsafe = relay;
+            QJsonObject gate = unsafe.value("gate").toObject();
+            gate.remove("offAir");
+            unsafe.insert("gate", gate);
+            QVERIFY(!SetupDescriptionService::validateHardwarePropertyBinding(unsafe,
+                                                                                HPSDRModel::ANAN100));
+            unsafe = relay;
+            unsafe.insert("label", "Wrong relay");
+            QVERIFY(!SetupDescriptionService::validateHardwarePropertyBinding(unsafe,
+                                                                                HPSDRModel::ANAN100));
+        }
+        QCOMPARE(classic.at(2).toObject().value("gate").toObject().value("min"), QJsonValue(5));
+        QCOMPARE(classic.at(3).toObject().value("gate").toObject().value("min"), QJsonValue(6));
+
+        const quint32 classicRevision = service.revision();
+        service.setRadioContext(BoardCapsTable::forBoard(HPSDRHW::Hermes),
+                                HPSDRModel::ANAN10);
+        QVERIFY(service.revision() > classicRevision);
+        QVERIFY(!service.hardware().contains(QStringLiteral("ext1OutOnTx")));
+        const quint32 hiddenRevision = service.revision();
+        service.setRadioContext(BoardCapsTable::forBoard(HPSDRHW::Hermes),
+                                HPSDRModel::ANAN10E);
+        QCOMPARE(service.revision(), hiddenRevision);
+        service.setRadioContext(BoardCapsTable::forBoard(HPSDRHW::Hermes),
+                                HPSDRModel::ANAN100);
+        QCOMPARE(service.category(QStringLiteral("hardware")).value("pages").toArray()
+                     .first().toObject().value("sections").toArray().first().toObject()
+                     .value("controls").toArray(), classic);
+        service.setBoardCapabilities(BoardCapsTable::forBoard(HPSDRHW::Hermes));
+        QCOMPARE(service.category(QStringLiteral("hardware")), hardware);
+
         const quint32 beforeRetire = service.revision();
         service.setBoardCapabilities(BoardCapsTable::forBoard(HPSDRHW::HermesLite));
         QVERIFY(service.hardware().isEmpty());
@@ -548,6 +595,37 @@ private slots:
         WireCore undeclared(HPSDRHW::Hermes);
         QVERIFY(undeclared.connect());
         QVERIFY(!hasSetupTraffic(*undeclared.app));
+    }
+
+    void sameBoardSkuChangePublishesRelayDelta()
+    {
+        WireCore core(HPSDRHW::Hermes);
+        QVERIFY(core.connect({{QByteArrayLiteral("setupDescription"), 1}}));
+        core.app->clearReceived();
+        core.model->setHpsdrModelForTest(HPSDRModel::ANAN100);
+        core.model->currentRadioChanged(core.model->currentRadioInfo());
+        QString published;
+        QTRY_VERIFY(!(published = setupCategoryOnWire(
+            *core.app, "hardware", SessionMessageKind::Delta)).isEmpty());
+        QVERIFY(published.contains(QStringLiteral("rxOutOverride")));
+        const quint32 classicRevision = core.server->setupDescription()->revision();
+
+        core.app->clearReceived();
+        core.model->setHpsdrModelForTest(HPSDRModel::ANAN10);
+        core.model->currentRadioChanged(core.model->currentRadioInfo());
+        QTRY_VERIFY(!(published = setupCategoryOnWire(
+            *core.app, "hardware", SessionMessageKind::Delta)).isEmpty());
+        QVERIFY(!published.contains(QStringLiteral("rxOutOnTx")));
+        QVERIFY(!published.contains(QStringLiteral("ext1OutOnTx")));
+        QVERIFY(core.server->setupDescription()->revision() > classicRevision);
+        const quint32 hiddenRevision = core.server->setupDescription()->revision();
+
+        core.app->clearReceived();
+        core.model->setHpsdrModelForTest(HPSDRModel::ANAN10E);
+        core.model->currentRadioChanged(core.model->currentRadioInfo());
+        QCoreApplication::processEvents();
+        QCOMPARE(core.server->setupDescription()->revision(), hiddenRevision);
+        QVERIFY(setupCategoryOnWire(*core.app, "hardware", SessionMessageKind::Delta).isEmpty());
     }
 
     void dspPropertiesAreWritableOnTheSelectedSliceAlias()

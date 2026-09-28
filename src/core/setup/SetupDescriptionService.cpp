@@ -8,6 +8,7 @@
 #include "models/TransmitModel.h"
 #include "models/NotchModel.h"
 #include "core/accessories/AlexAntennaFacade.h"
+#include "core/SkuUiProfile.h"
 #include "core/settings/SettingsScope.h"
 
 #include <QFile>
@@ -25,7 +26,7 @@ static void initializeSetupResources()
 namespace NereusSDR {
 namespace {
 
-QString loadCategory(const QString& id, const BoardCapabilities& caps)
+QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRModel model)
 {
     QFile resource(QStringLiteral(":/setup/%1.json").arg(id));
     if (!resource.open(QIODevice::ReadOnly)) {
@@ -111,6 +112,48 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps)
     // filters. A board change must retire its old controls altogether.
     if (id == QLatin1String("hardware") && !caps.hasAlexFilters) {
         return {};
+    }
+    if (id == QLatin1String("hardware")) {
+        const SkuUiProfile sku = skuUiProfileFor(model);
+        QJsonArray pages = root.value(QStringLiteral("pages")).toArray();
+        for (int p = 0; p < pages.size(); ++p) {
+            QJsonObject page = pages.at(p).toObject();
+            QJsonArray sections = page.value(QStringLiteral("sections")).toArray();
+            for (int s = 0; s < sections.size(); ++s) {
+                QJsonObject section = sections.at(s).toObject();
+                QJsonArray controls = section.value(QStringLiteral("controls")).toArray();
+                for (int c = 0; c < controls.size(); ++c) {
+                    QJsonObject control = controls.at(c).toObject();
+                    const QString name = control.value(QStringLiteral("binding")).toObject()
+                        .value(QStringLiteral("property")).toObject()
+                        .value(QStringLiteral("name")).toString();
+                    const bool visible = name == QLatin1String("rxOutOnTx")
+                        ? sku.hasRxOutOnTx : name == QLatin1String("ext1OutOnTx")
+                        ? sku.hasExt1OutOnTx : name == QLatin1String("ext2OutOnTx")
+                        ? sku.hasExt2OutOnTx : name == QLatin1String("rxOutOverride")
+                        ? sku.hasRxBypassUi : true;
+                    if (!visible) {
+                        controls.removeAt(c--);
+                        continue;
+                    }
+                    if (name == QLatin1String("ext1OutOnTx")) {
+                        control.insert(QStringLiteral("label"), sku.ext1OutOnTxLabel);
+                    } else if (name == QLatin1String("ext2OutOnTx")) {
+                        control.insert(QStringLiteral("label"), sku.ext2OutOnTxLabel);
+                        control.insert(QStringLiteral("tooltip"), sku.ext2OutOnTxTooltip);
+                    }
+                    if (!SetupDescription::validateHardwarePropertyBinding(control, model)) {
+                        return {};
+                    }
+                    controls[c] = control;
+                }
+                section.insert(QStringLiteral("controls"), controls);
+                sections[s] = section;
+            }
+            page.insert(QStringLiteral("sections"), sections);
+            pages[p] = page;
+        }
+        root.insert(QStringLiteral("pages"), pages);
     }
     // General > Options is the only Task-43 control with a board-dependent
     // range. The desktop reads this same BoardCapabilities row.
@@ -282,10 +325,10 @@ bool SetupDescription::validateTransmitPropertyBinding(const QJsonObject& contro
     return expected != MirrorWireKind::Unsupported && property->kind == expected;
 }
 
-bool SetupDescription::validateHardwarePropertyBinding(const QJsonObject& control)
+bool SetupDescription::validateHardwarePropertyBinding(const QJsonObject& control, HPSDRModel model)
 {
-    // The first Hardware description slice deliberately has a closed scalar
-    // set. SKU-dependent relay labels/visibility need a separate projection.
+    // Closed scalar set: source binding, safety gate, and projected SKU text
+    // must agree before a description can be published.
     const QJsonObject binding = control.value(QStringLiteral("binding")).toObject();
     if (binding.size() != 1 || !binding.value(QStringLiteral("property")).isObject()
         || control.size() != 7
@@ -302,18 +345,36 @@ bool SetupDescription::validateHardwarePropertyBinding(const QJsonObject& contro
     const bool receive = name == QByteArrayLiteral("useTxAntennaForRx");
     const bool block2 = name == QByteArrayLiteral("blockTxAnt2");
     const bool block3 = name == QByteArrayLiteral("blockTxAnt3");
-    if (!receive && !block2 && !block3) {
+    const bool rxOut = name == QByteArrayLiteral("rxOutOnTx");
+    const bool ext1 = name == QByteArrayLiteral("ext1OutOnTx");
+    const bool ext2 = name == QByteArrayLiteral("ext2OutOnTx");
+    const bool override = name == QByteArrayLiteral("rxOutOverride");
+    if (!receive && !block2 && !block3 && !rxOut && !ext1 && !ext2 && !override) {
+        return false;
+    }
+    const SkuUiProfile sku = skuUiProfileFor(model);
+    if (model != HPSDRModel::FIRST
+        && ((rxOut && !sku.hasRxOutOnTx) || (ext1 && !sku.hasExt1OutOnTx)
+            || (ext2 && !sku.hasExt2OutOnTx) || (override && !sku.hasRxBypassUi))) {
         return false;
     }
     const QString id = QStringLiteral("hardware.antennaAlex.") + QString::fromUtf8(name);
     const QString label = receive ? QStringLiteral("Use TX antenna for RX")
         : block2 ? QStringLiteral("Block TX on Ant 2")
-                 : QStringLiteral("Block TX on Ant 3");
+        : block3 ? QStringLiteral("Block TX on Ant 3")
+        : rxOut ? QStringLiteral("RX Bypass on TX")
+        : ext1 ? sku.ext1OutOnTxLabel
+        : ext2 ? sku.ext2OutOnTxLabel
+               : QStringLiteral("Disable RX Bypass relay");
     const QString tooltip = receive
         ? QStringLiteral("Use the TX antenna for RX instead of the RX antenna.")
         : block2
           ? QStringLiteral("Prevents transmit assignments to Antenna Port 2. Use when Ant 2 is wired for receive only.")
-          : QStringLiteral("Prevents transmit assignments to Antenna Port 3. Use when Ant 3 is wired for receive only.");
+        : block3 ? QStringLiteral("Prevents transmit assignments to Antenna Port 3. Use when Ant 3 is wired for receive only.")
+        : rxOut ? QStringLiteral("Enable RX Bypass Out relay on transmit.")
+        : ext1 ? QStringLiteral("Route Ext 1 to receive path during transmit.")
+        : ext2 ? sku.ext2OutOnTxTooltip
+               : QStringLiteral("Disable the RX Bypass Out relay (chkDisableRXOut in Thetis).");
     if (control.value(QStringLiteral("id")) != QJsonValue(id)
         || control.value(QStringLiteral("label")) != QJsonValue(label)
         || control.value(QStringLiteral("tooltip")) != QJsonValue(tooltip)) {
@@ -322,7 +383,7 @@ bool SetupDescription::validateHardwarePropertyBinding(const QJsonObject& contro
     // hasAlexFilters is projected by this service, not repeated as a client
     // gate: that BoardCapabilities flag is absent from the station catalogue.
     QJsonObject expectedGate{{QStringLiteral("capability"), QStringLiteral("radioHardwareVersion")},
-                             {QStringLiteral("min"), receive ? 2 : 6}};
+                             {QStringLiteral("min"), receive ? 2 : rxOut ? 5 : 6}};
     if (!receive) {
         expectedGate.insert(QStringLiteral("offAir"), true);
     }
@@ -807,6 +868,14 @@ QJsonObject SetupDescription::category(const QString& id) const
 void SetupDescription::setBoardCapabilities(const BoardCapabilities& caps)
 {
     m_caps = caps;
+    m_model = HPSDRModel::FIRST;
+    rebuild();
+}
+
+void SetupDescription::setRadioContext(const BoardCapabilities& caps, HPSDRModel model)
+{
+    m_caps = caps;
+    m_model = model;
     rebuild();
 }
 
@@ -814,7 +883,7 @@ void SetupDescription::rebuild()
 {
     bool changed = false;
     const auto update = [this, &changed](const QString& id, QString& target) {
-        const QString description = loadCategory(id, m_caps);
+        const QString description = loadCategory(id, m_caps, m_model);
         if (description != target) {
             target = description;
             changed = true;

@@ -28,7 +28,8 @@ private slots:
         StepAttenuatorController attenuator;
         attenuator.setTickTimerEnabled(false);
         core.model->setStepAttController(&attenuator);
-        core.server->setupDescription()->setBoardCapabilities(core.model->boardCapabilities());
+        core.server->setupDescription()->setRadioContext(core.model->boardCapabilities(),
+                                                         core.model->hardwareProfile().model);
         Device phone(QStringLiteral("Setup iPhone"), QStringLiteral("phone"));
         core.pair(phone);
         QHash<QByteArray, int> features = kHolder;
@@ -43,7 +44,7 @@ private slots:
         QVERIFY(!hardware.isEmpty());
         const QJsonArray controls = hardware.value("pages").toArray().first().toObject()
             .value("sections").toArray().first().toObject().value("controls").toArray();
-        QCOMPARE(controls.size(), 3);
+        QCOMPARE(controls.size(), 6);
         const auto find = [&controls](const QString& id) {
             for (const QJsonValue& raw : controls) {
                 const QJsonObject control = raw.toObject();
@@ -53,8 +54,12 @@ private slots:
         };
         const QJsonObject rx = find(QStringLiteral("hardware.antennaAlex.useTxAntennaForRx"));
         const QJsonObject tx = find(QStringLiteral("hardware.antennaAlex.blockTxAnt2"));
+        const QJsonObject relay = find(QStringLiteral("hardware.antennaAlex.ext1OutOnTx"));
         QVERIFY(SetupDescriptionService::validateHardwarePropertyBinding(rx));
         QVERIFY(SetupDescriptionService::validateHardwarePropertyBinding(tx));
+        QVERIFY(SetupDescriptionService::validateHardwarePropertyBinding(
+            relay, core.model->hardwareProfile().model));
+        QCOMPARE(relay.value("gate").toObject().value("offAir"), QJsonValue(true));
         QVERIFY(!tx.value("gate").toObject().contains("transmit"));
         QCOMPARE(tx.value("gate").toObject().value("offAir"), QJsonValue(true));
 
@@ -81,8 +86,12 @@ private slots:
         const QJsonObject txResult = write(tx, true);
         QVERIFY2(txResult.value("accepted").toBool(),
                  qPrintable(txResult.value("reason").toString()));
+        const QJsonObject relayResult = write(relay, true);
+        QVERIFY2(relayResult.value("accepted").toBool(),
+                 qPrintable(relayResult.value("reason").toString()));
         QVERIFY(core.model->alexController().useTxAntForRx());
         QVERIFY(core.model->alexController().blockTxAnt2());
+        QVERIFY(core.model->alexController().ext1OutOnTx());
         QCOMPARE(mox->state(), MoxState::Rx);
         QCOMPARE(keying.count(), 0);
 
@@ -104,6 +113,11 @@ private slots:
         QCOMPARE(onAir.value("reason").toString(),
                  QStringLiteral("The radio is on the air. Try again when it stops."));
         QVERIFY(core.model->alexController().blockTxAnt2());
+        const QJsonObject relayOnAir = write(relay, false);
+        QVERIFY(!relayOnAir.value("accepted").toBool(true));
+        QCOMPARE(relayOnAir.value("reason").toString(),
+                 QStringLiteral("The radio is on the air. Try again when it stops."));
+        QVERIFY(core.model->alexController().ext1OutOnTx());
         mox->setMox(false);
         QTRY_COMPARE(mox->state(), MoxState::Rx);
 
@@ -115,7 +129,8 @@ private slots:
         info.boardType = HPSDRHW::HermesLite;
         core.model->setLastRadioInfoForTest(info);
         core.model->alexAntennaFacade()->bindController(nullptr);
-        core.server->setupDescription()->setBoardCapabilities(core.model->boardCapabilities());
+        core.server->setupDescription()->setRadioContext(core.model->boardCapabilities(),
+                                                         core.model->hardwareProfile().model);
         QVERIFY(core.server->setupDescription()->revision() > capturedRevision);
         QTRY_VERIFY(latest(app->received(), QStringLiteral("setup"),
                            QStringLiteral("hardware")).toString().isEmpty());

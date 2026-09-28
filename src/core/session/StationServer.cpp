@@ -2042,11 +2042,13 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     m_catalog->bind(radioModel);
     m_setupDescription = std::make_unique<SetupDescriptionService>();
     if (radioModel != nullptr) {
-        m_setupDescription->setBoardCapabilities(radioModel->boardCapabilities());
+        m_setupDescription->setRadioContext(radioModel->boardCapabilities(),
+                                            radioModel->hardwareProfile().model);
         connect(radioModel, &RadioModel::currentRadioChanged, this,
                 [this](const NereusSDR::RadioInfo&) {
                     if (m_radioModel && m_setupDescription) {
-                        m_setupDescription->setBoardCapabilities(m_radioModel->boardCapabilities());
+                        m_setupDescription->setRadioContext(m_radioModel->boardCapabilities(),
+                                                            m_radioModel->hardwareProfile().model);
                     }
                 });
     }
@@ -5780,7 +5782,8 @@ void StationServer::buildMirror()
     // to a peer at minor 11 (sendToPeer).
     m_catalog->refresh();
     m_mirror->watch(QByteArray(kCatalogKey), m_catalog.get());
-    m_setupDescription->setBoardCapabilities(m_radioModel->boardCapabilities());
+    m_setupDescription->setRadioContext(m_radioModel->boardCapabilities(),
+                                        m_radioModel->hardwareProfile().model);
     m_mirror->watch(QByteArray(kSetupDescriptionKey), m_setupDescription.get());
     // Parity Task 19 (recordStreamVersion 1): the Core's spot sources. Sent
     // only to a peer at minor 11 (sendToPeer).
