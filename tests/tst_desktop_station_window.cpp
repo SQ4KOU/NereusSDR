@@ -17,13 +17,16 @@
 #include "gui/widgets/VfoWidget.h"
 #include "gui/widgets/RxDashboard.h"
 #include "gui/SetupDialog.h"
+#include "gui/setup/DspSetupPages.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
+#include "models/NotchModel.h"
 
 #include <QLabel>
 #include <QMenu>
 #include <QPointer>
 #include <QPushButton>
+#include <QSpinBox>
 #include <QSslSocket>
 #include <QTcpServer>
 #include <QTemporaryDir>
@@ -80,6 +83,116 @@ QAction* actionNamed(QMenu* menu, const QString& name)
 class TstDesktopStationWindow final : public QObject {
     Q_OBJECT
 private slots:
+    void hostedSetupEditsOnlyDesktopReceiver()
+    {
+        if (!QSslSocket::supportsSsl()) { QSKIP("Qt reports no working TLS backend."); }
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+        MainWindow window({}, nullptr, MainWindow::ConnectionStartup::Deferred);
+        RadioModel* model = window.radioModel();
+        model->setBoardForTest(HPSDRHW::Saturn);
+        model->configureStreamPool(5, 5, 192000);
+        model->setConnectionStateForTest(ConnectionState::Connected);
+        const int aId = model->addSlice(QStringLiteral("pan-0"));
+        const int bId = model->addSlice(QStringLiteral("pan-0"));
+        const int cId = model->addSlice(QStringLiteral("pan-0"));
+        SliceModel* a = model->sliceById(aId);
+        SliceModel* b = model->sliceById(bId);
+        SliceModel* c = model->sliceById(cId);
+        QVERIFY(a && b && c);
+        DesktopStationController controller(model, optionsFor(settings, directory.path()));
+        window.setDesktopStationController(&controller);
+        QVERIFY(controller.start(true));
+        SliceOwnership* ownership = model->sliceOwnership();
+        ownership->setOwner(bId, QByteArrayLiteral("token:phone"));
+        QVERIFY(model->setActiveSliceByIdFor(QByteArrayLiteral("token:phone"), bId));
+        model->setTransmitHolder(QByteArrayLiteral("token:phone"));
+        QCOMPARE(model->activeSlice(), b);
+        QCOMPARE(ownership->activeFor(SliceOwnership::stationDevice()), aId);
+
+        SetupDialog* dialog = nullptr;
+        connect(&window, &MainWindow::setupDialogCreated, &window,
+                [&dialog](SetupDialog* created) { dialog = created; });
+        QVERIFY(QMetaObject::invokeMethod(&window, "createSetupDialog"));
+        QVERIFY(dialog);
+        dialog->selectPage(QStringLiteral("AGC/ALC"));
+        auto* agc = dialog->findChild<AgcAlcSetupPage*>();
+        QVERIFY(agc);
+        auto attack = [agc] {
+            for (QSpinBox* spin : agc->findChildren<QSpinBox*>()) {
+                if (spin->property("nereusSetupId").toString() == QStringLiteral("dsp.agcAlc.agcAttack")) {
+                    return spin;
+                }
+            }
+            return static_cast<QSpinBox*>(nullptr);
+        };
+        QVERIFY(attack());
+        attack()->setValue(37);
+        QCOMPARE(a->agcAttack(), 37);
+        QVERIFY(b->agcAttack() != 37);
+
+        QVERIFY(model->setActiveSliceByIdFor(SliceOwnership::stationDevice(), cId));
+        QCOMPARE(model->activeSlice(), b);
+        QVERIFY(attack());
+        attack()->setValue(53);
+        QCOMPARE(c->agcAttack(), 53);
+        QCOMPARE(a->agcAttack(), 37);
+        QVERIFY(b->agcAttack() != 53);
+
+        dialog->selectPage(QStringLiteral("TNF"));
+        auto* tnf = dialog->findChild<MnfSetupPage*>();
+        QVERIFY(tnf);
+        auto* add = tnf->findChild<QPushButton*>(QStringLiteral("btnMNFAdd"));
+        QVERIFY(add);
+        c->setFrequency(14074000.0);
+        b->setFrequency(7100000.0);
+        add->click();
+        QCOMPARE(model->notchModel()->notches().size(), 1);
+        QCOMPARE(model->notchModel()->notches().first().centerHz, c->frequency());
+        dialog->close();
+
+        // A flag shortcut names C explicitly. It must first select C for
+        // this desktop, even while B remains the Core's active receiver.
+        QVERIFY(model->setActiveSliceByIdFor(SliceOwnership::stationDevice(), aId));
+        QCOMPARE(model->activeSlice(), b);
+        VfoWidget* cFlag = flagFor(window, cId);
+        QVERIFY(cFlag);
+        dialog = nullptr;
+        QVERIFY(QMetaObject::invokeMethod(cFlag, "openSetupRequested"));
+        QCOMPARE(ownership->activeFor(SliceOwnership::stationDevice()), cId);
+        QVERIFY(dialog);
+        auto* flagAgc = dialog->findChild<AgcAlcSetupPage*>();
+        QVERIFY(flagAgc);
+        QSpinBox* flagAttack = nullptr;
+        for (QSpinBox* spin : flagAgc->findChildren<QSpinBox*>()) {
+            if (spin->property("nereusSetupId").toString()
+                == QStringLiteral("dsp.agcAlc.agcAttack")) {
+                flagAttack = spin;
+                break;
+            }
+        }
+        QVERIFY(flagAttack);
+        flagAttack->setValue(69);
+        QCOMPARE(c->agcAttack(), 69);
+        QVERIFY(b->agcAttack() != 69);
+
+        QPointer<QSpinBox> oldFlagAttack(flagAttack);
+        ownership->setOwner(cId, QByteArrayLiteral("token:phone"));
+        ownership->setOwner(aId, QByteArrayLiteral("token:phone"));
+        QCOMPARE(ownership->activeFor(SliceOwnership::stationDevice()), -1);
+        QVERIFY(oldFlagAttack.isNull());
+        dialog->selectPage(QStringLiteral("TNF"));
+        auto* emptyTnf = dialog->findChild<MnfSetupPage*>();
+        QVERIFY(emptyTnf);
+        auto* disabledAdd = emptyTnf->findChild<QPushButton*>(QStringLiteral("btnMNFAdd"));
+        QVERIFY(disabledAdd);
+        QVERIFY(!disabledAdd->isEnabled());
+        disabledAdd->click();
+        QCOMPARE(model->notchModel()->notches().size(), 1);
+        dialog->close();
+    }
+
     void foreignGlobalActiveNeverBecomesDesktopTarget()
     {
         if (!QSslSocket::supportsSsl()) { QSKIP("Qt reports no working TLS backend."); }

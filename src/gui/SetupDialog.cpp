@@ -294,6 +294,7 @@ Q_LOGGING_CATEGORY(lcSetupTiming, "nereus.setup.timing")
 SetupDialog::SetupDialog(RadioModel* model, QWidget* parent)
     : QDialog(parent), m_model(model)
 {
+    m_dspReceiverSelection = new DspReceiverSelection(this);
     m_transmitPermitted = model && model->ownsLocalDsp();
     m_transmitSettingsPermitted = m_transmitPermitted;
     m_transmitReason = tr("Remote transmit controls are not available from this Core yet.");
@@ -497,6 +498,18 @@ void SetupDialog::selectPage(const QString& label)
             }
         }
     }
+}
+
+void SetupDialog::setReceiverSelector(std::function<SliceModel*()> selector,
+                                      std::function<bool()> requiresOwnedReceiver)
+{
+    m_dspReceiverSelection->setSelector(std::move(selector),
+                                       std::move(requiresOwnedReceiver));
+}
+
+void SetupDialog::notifyReceiverSelectionChanged()
+{
+    m_dspReceiverSelection->notifyChanged(m_model);
 }
 
 bool SetupDialog::selectNavigationTarget(const QString& pageKey)
@@ -1540,14 +1553,26 @@ void SetupDialog::buildTree()
 
     // ── DSP ───────────────────────────────────────────────────────────────────
     QTreeWidgetItem* dsp = addCategory("DSP");
-    registerPage(dsp, "AGC/ALC", SetupScope::Core, [this] { return new AgcAlcSetupPage(m_model); });
+    registerPage(dsp, "AGC/ALC", SetupScope::Core, [this] {
+        return new AgcAlcSetupPage(m_model, nullptr, m_dspReceiverSelection);
+    });
     // R-R3-21: Core, not Mixed. Every control writes the active receiver
     // (mirrored to the Core) or chooses among the Core's own models.
-    registerPage(dsp, "NR/ANF", SetupScope::Core,   [this] { return new NrAnfSetupPage(m_model);  });
-    registerPage(dsp, "NB/SNB", SetupScope::Core,  [this] { return new NbSnbSetupPage(m_model);  });
-    registerPage(dsp, "CW", SetupScope::Core,      [this] { return new CwSetupPage(m_model);     });
-    registerPage(dsp, "AM/SAM", SetupScope::Core,  [this] { return new AmSamSetupPage(m_model);  });
-    registerPage(dsp, "FM", SetupScope::Core,      [this] { return new FmSetupPage(m_model);     });
+    registerPage(dsp, "NR/ANF", SetupScope::Core, [this] {
+        return new NrAnfSetupPage(m_model, nullptr, m_dspReceiverSelection);
+    });
+    registerPage(dsp, "NB/SNB", SetupScope::Core, [this] {
+        return new NbSnbSetupPage(m_model, nullptr, m_dspReceiverSelection);
+    });
+    registerPage(dsp, "CW", SetupScope::Core, [this] {
+        return new CwSetupPage(m_model, nullptr, m_dspReceiverSelection);
+    });
+    registerPage(dsp, "AM/SAM", SetupScope::Core, [this] {
+        return new AmSamSetupPage(m_model, nullptr, m_dspReceiverSelection);
+    });
+    registerPage(dsp, "FM", SetupScope::Core, [this] {
+        return new FmSetupPage(m_model, nullptr, m_dspReceiverSelection);
+    });
     // (DSP > "VOX/DEXP" placeholder removed in 3M-3a-iii Task 16 — the wired
     //  page lives at Transmit > "DEXP/VOX" (DexpVoxPage from Task 14).)
 
@@ -1569,7 +1594,9 @@ void SetupDialog::buildTree()
         return cfcPage;
     });
 
-    registerPage(dsp, "TNF", SetupScope::Core, [this] { return new MnfSetupPage(m_model); });
+    registerPage(dsp, "TNF", SetupScope::Core, [this] {
+        return new MnfSetupPage(m_model, nullptr, m_dspReceiverSelection);
+    });
     // Stage C2: user-customisable filter preset editor (10 slots × 12 modes).
     // iPhone app Task 19 (D40): the presets live on the Core ("filters/" is
     // Station scope), so in a remote window this page shows and edits the

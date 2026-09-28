@@ -152,6 +152,59 @@
 
 namespace NereusSDR {
 
+void DspReceiverSelection::setSelector(std::function<SliceModel*()> selector,
+                                       std::function<bool()> requiresOwnedReceiver)
+{
+    m_selector = std::move(selector);
+    m_requiresOwnedReceiver = std::move(requiresOwnedReceiver);
+    m_lastSelected = m_selector ? m_selector() : nullptr;
+    m_lastRestricted = restrictsReceiver();
+    emit changed();
+}
+
+bool DspReceiverSelection::restrictsReceiver() const
+{
+    return m_requiresOwnedReceiver && m_requiresOwnedReceiver();
+}
+
+SliceModel* DspReceiverSelection::selected(RadioModel* model) const
+{
+    return m_selector ? m_selector() : (model ? model->activeSlice() : nullptr);
+}
+
+void DspReceiverSelection::notifyChanged(RadioModel* model)
+{
+    SliceModel* now = selected(model);
+    const bool restricted = restrictsReceiver();
+    if (now == m_lastSelected && restricted == m_lastRestricted) { return; }
+    m_lastSelected = now;
+    m_lastRestricted = restricted;
+    emit changed();
+}
+
+ReceiverDspSetupPage::ReceiverDspSetupPage(const QString& title, RadioModel* model,
+                                           QWidget* parent, DspReceiverSelection* selection)
+    : SetupPage(title, model, parent), m_selection(selection)
+{}
+
+SliceModel* ReceiverDspSetupPage::selectedSlice()
+{
+    return m_selection ? m_selection->selected(model())
+                       : (model() ? model()->activeSlice() : nullptr);
+}
+
+void ReceiverDspSetupPage::watchReceiverSelection(std::function<void()> update)
+{
+    if (model()) {
+        connect(model(), &RadioModel::activeSliceChanged, this,
+                [update](int) { update(); });
+    }
+    if (m_selection) {
+        connect(m_selection, &DspReceiverSelection::changed, this,
+                [update] { update(); });
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Helper: disable every child widget inside a group box (NYI guard).
 // ─────────────────────────────────────────────────────────────────────────────
@@ -167,6 +220,7 @@ using SliceBindings = QList<QMetaObject::Connection>;
 // there is none) and returns them; when the active slice changes they are
 // dropped and bind() runs again for the new one.
 static void bindToActiveSlice(QObject* owner, RadioModel* model,
+                              DspReceiverSelection* selection,
                               std::function<SliceBindings(SliceModel*)> bind)
 {
     auto held = std::make_shared<SliceBindings>();
@@ -176,10 +230,18 @@ static void bindToActiveSlice(QObject* owner, RadioModel* model,
         }
         *held = bind(slice);
     };
-    rebind(model ? model->activeSlice() : nullptr);
+    const auto current = [model, selection] {
+        return selection ? selection->selected(model)
+                         : (model ? model->activeSlice() : nullptr);
+    };
+    rebind(current());
     if (model) {
         QObject::connect(model, &RadioModel::activeSliceChanged, owner,
-                         [model, rebind](int) { rebind(model->activeSlice()); });
+                         [current, rebind](int) { rebind(current()); });
+    }
+    if (selection) {
+        QObject::connect(selection, &DspReceiverSelection::changed, owner,
+                         [current, rebind] { rebind(current()); });
     }
 }
 
@@ -192,13 +254,14 @@ static void setSliceAvailable(QWidget* w, bool available, const QString& tip = Q
 
 // R-R3-21: a squelch threshold slider (dB) bound both ways to one setting of
 // the active slice; with no slice it says why it is off.
-static void bindSquelchThreshold(QObject* owner, RadioModel* model, QSlider* slider,
+static void bindSquelchThreshold(QObject* owner, RadioModel* model,
+                                 DspReceiverSelection* selection, QSlider* slider,
                                  QLabel* value,
                                  double (SliceModel::*getter)() const,
                                  void (SliceModel::*setter)(double),
                                  void (SliceModel::*changed)(double))
 {
-    bindToActiveSlice(owner, model, [=](SliceModel* slice) {
+    bindToActiveSlice(owner, model, selection, [=](SliceModel* slice) {
         SliceBindings conns;
         setSliceAvailable(slider, slice != nullptr);
         if (!slice) { return conns; }
@@ -227,14 +290,12 @@ static void bindSquelchThreshold(QObject* owner, RadioModel* model, QSlider* sli
 //   udAGCMaxGain, tbAGCHangThreshold, udALCDecay, udALCMaxGain,
 //   chkLevelerEnable, udLevelerThreshold, udLevelerDecay
 //
-AgcAlcSetupPage::AgcAlcSetupPage(RadioModel* model, QWidget* parent)
-    : SetupPage("AGC/ALC", model, parent)
+AgcAlcSetupPage::AgcAlcSetupPage(RadioModel* model, QWidget* parent,
+                                 DspReceiverSelection* selection)
+    : ReceiverDspSetupPage("AGC/ALC", model, parent, selection)
 {
     rebuildForActiveSlice();
-    if (model) {
-        connect(model, &RadioModel::activeSliceChanged, this,
-                [this](int) { rebuildForActiveSlice(); });
-    }
+    watchReceiverSelection([this] { rebuildForActiveSlice(); });
 }
 
 void AgcAlcSetupPage::rebuildForActiveSlice()
@@ -250,7 +311,7 @@ void AgcAlcSetupPage::rebuildForActiveSlice()
     m_txLevelerGrp = nullptr;
     m_txAlcGrp = nullptr;
     RadioModel* model = this->model();
-    SliceModel* slice = model ? model->activeSlice() : nullptr;
+    SliceModel* slice = selectedSlice();
     if (!slice) {
         // No active slice (disconnected) — show disabled placeholder
         QGroupBox* grp = addSection("RX1 AGC");
@@ -584,8 +645,9 @@ void AgcAlcSetupPage::updateCustomGating(AGCMode mode)
 // slice's values. Destroying the prior widgets disconnects their edits and
 // readbacks, so an in-progress gesture cannot retarget another receiver.
 //
-NrAnfSetupPage::NrAnfSetupPage(RadioModel* model, QWidget* parent)
-    : SetupPage("NR/ANF", model, parent)
+NrAnfSetupPage::NrAnfSetupPage(RadioModel* model, QWidget* parent,
+                               DspReceiverSelection* selection)
+    : ReceiverDspSetupPage("NR/ANF", model, parent, selection)
 {
     // Embed QTabWidget directly in the inherited contentLayout().
     // This is identical to HardwarePage's pattern (HardwarePage.cpp:90-95).
@@ -616,10 +678,7 @@ NrAnfSetupPage::NrAnfSetupPage(RadioModel* model, QWidget* parent)
     contentLayout()->addWidget(tabs, /*stretch=*/1);
 
     rebuildForActiveSlice();
-    if (model) {
-        connect(model, &RadioModel::activeSliceChanged, this,
-                [this](int) { rebuildForActiveSlice(); });
-    }
+    watchReceiverSelection([this] { rebuildForActiveSlice(); });
 }
 
 void NrAnfSetupPage::rebuildForActiveSlice()
@@ -633,7 +692,7 @@ void NrAnfSetupPage::rebuildForActiveSlice()
         tabs->removeTab(0);
         delete old;
     }
-    SliceModel* slice = model ? model->activeSlice() : nullptr;
+    SliceModel* slice = selectedSlice();
 
     // Helper: build a tab-page widget with a QVBoxLayout + scroll.
     // Returns {outer QWidget (used as tab), inner QVBoxLayout (for sections)}.
@@ -1672,8 +1731,9 @@ void NrAnfSetupPage::rebuildForActiveSlice()
 //   tbNB1Threshold, comboNB1Mode, tbNB2Threshold,
 //   tbSNBK1, tbSNBK2, udSNBOutputBW
 //
-NbSnbSetupPage::NbSnbSetupPage(RadioModel* model, QWidget* parent)
-    : SetupPage("NB/SNB", model, parent)
+NbSnbSetupPage::NbSnbSetupPage(RadioModel* model, QWidget* parent,
+                               DspReceiverSelection* selection)
+    : ReceiverDspSetupPage("NB/SNB", model, parent, selection)
 {
     // Sliders with inline live-value labels. Tooltips use Thetis's own user-
     // facing text (from setup.designer.cs ToolTip attributes [v2.10.3.13]).
@@ -1694,7 +1754,7 @@ NbSnbSetupPage::NbSnbSetupPage(RadioModel* model, QWidget* parent)
     // is that it targets the active slice, and it follows a change of active
     // slice while open (R-R3-21, bindToActiveSlice at the end). `slice` here
     // only seeds the controls' first values.
-    SliceModel* slice = model ? model->activeSlice() : nullptr;
+    SliceModel* slice = selectedSlice();
 
     // Helper: integer slider, live value label showing "value / max" with unit.
     // Returns the slider so caller can wire valueChanged.
@@ -1899,7 +1959,7 @@ NbSnbSetupPage::NbSnbSetupPage(RadioModel* model, QWidget* parent)
     // existed: the controls have nothing to address, so they are disabled
     // rather than silently dropping the operator's adjustments.
     const QString noSliceTip = tr("Connect to a radio to tune the noise blanker.");
-    bindToActiveSlice(this, model, [=](SliceModel* s) {
+    bindToActiveSlice(this, model, receiverSelection(), [=](SliceModel* s) {
         SliceBindings conns;
         nb1Grp->setEnabled(s != nullptr);
         snbGrp->setEnabled(s != nullptr);
@@ -1965,8 +2025,9 @@ NbSnbSetupPage::NbSnbSetupPage(RadioModel* model, QWidget* parent)
 //   udCWSemiBreakInDelay, tbCWSidetoneVolume,
 //   chkAPFEnable, udAPFFreq, udAPFBandwidth, tbAPFGain
 //
-CwSetupPage::CwSetupPage(RadioModel* model, QWidget* parent)
-    : SetupPage("CW", model, parent)
+CwSetupPage::CwSetupPage(RadioModel* model, QWidget* parent,
+                         DspReceiverSelection* selection)
+    : ReceiverDspSetupPage("CW", model, parent, selection)
 {
     // ── Keyer ─────────────────────────────────────────────────────────────────
     QGroupBox* keyerGrp = addSection("Keyer");
@@ -2083,7 +2144,8 @@ CwSetupPage::CwSetupPage(RadioModel* model, QWidget* parent)
     UnbuiltFeatures::hideLayoutUnlessBuilt(addLabeledSlider(apfLay, "Gain", apfGain),
                                            UnbuiltFeature::ApfParams);
 
-    bindToActiveSlice(this, model, [apfEnable, apfCenter, apfCenterValue](SliceModel* s) {
+    bindToActiveSlice(this, model, receiverSelection(),
+                      [apfEnable, apfCenter, apfCenterValue](SliceModel* s) {
         SliceBindings conns;
         setSliceAvailable(apfEnable, s != nullptr);
         setSliceAvailable(apfCenter, s != nullptr);
@@ -2184,8 +2246,9 @@ bool CwSetupPage::sidetoneRowVisibleForTest() const
 // 40200, 40326-40336 [v2.10.3.13-beta2].  NereusSDR is missing this
 // group entirely; tracked as a separate follow-up issue, not this PR.
 //
-AmSamSetupPage::AmSamSetupPage(RadioModel* model, QWidget* parent)
-    : SetupPage("AM/SAM", model, parent)
+AmSamSetupPage::AmSamSetupPage(RadioModel* model, QWidget* parent,
+                               DspReceiverSelection* selection)
+    : ReceiverDspSetupPage("AM/SAM", model, parent, selection)
 {
     // ── SAM ───────────────────────────────────────────────────────────────────
     QGroupBox* samGrp = addSection("SAM");
@@ -2217,7 +2280,7 @@ AmSamSetupPage::AmSamSetupPage(RadioModel* model, QWidget* parent)
     sqThresh->setSingleStep(ControlRanges::kAmsqThreshStepDb);
     auto* sqThreshValue = new QLabel;
     addLabeledSlider(sqLay, "AM Squelch Threshold", sqThresh, sqThreshValue);
-    bindSquelchThreshold(this, model, sqThresh, sqThreshValue,
+    bindSquelchThreshold(this, model, receiverSelection(), sqThresh, sqThreshValue,
                          &SliceModel::amsqThresh, &SliceModel::setAmsqThresh,
                          &SliceModel::amsqThreshChanged);
 
@@ -2240,8 +2303,9 @@ AmSamSetupPage::AmSamSetupPage(RadioModel* model, QWidget* parent)
 //   comboFMDeviation, tbFMSquelchThreshold, chkFMDeEmphasis,
 //   comboFMTXDeviation, tbFMMicGain, comboFMTXEmphasisPosition
 //
-FmSetupPage::FmSetupPage(RadioModel* model, QWidget* parent)
-    : SetupPage("FM", model, parent)
+FmSetupPage::FmSetupPage(RadioModel* model, QWidget* parent,
+                         DspReceiverSelection* selection)
+    : ReceiverDspSetupPage("FM", model, parent, selection)
 {
     // ── RX ────────────────────────────────────────────────────────────────────
     QGroupBox* rxGrp = addSection("RX");
@@ -2263,7 +2327,7 @@ FmSetupPage::FmSetupPage(RadioModel* model, QWidget* parent)
     squelchThresh->setSingleStep(ControlRanges::kFmsqThreshStepDb);
     auto* squelchThreshValue = new QLabel;
     addLabeledSlider(rxLay, "Squelch Threshold", squelchThresh, squelchThreshValue);
-    bindSquelchThreshold(this, model, squelchThresh,
+    bindSquelchThreshold(this, model, receiverSelection(), squelchThresh,
                          squelchThreshValue, &SliceModel::fmsqThresh,
                          &SliceModel::setFmsqThresh, &SliceModel::fmsqThreshChanged);
 
@@ -2611,8 +2675,9 @@ static constexpr double kMnfWidthStepHz = 1.0;
 // The prior placeholder carried a "Window" combo. No such control exists
 // upstream (there is no comboMNFWindow anywhere in Thetis v2.10.3.15) and the
 // bandpass window is out of scope, so it is dropped rather than wired.
-MnfSetupPage::MnfSetupPage(RadioModel* model, QWidget* parent)
-    : SetupPage("TNF", model, parent)
+MnfSetupPage::MnfSetupPage(RadioModel* model, QWidget* parent,
+                           DspReceiverSelection* selection)
+    : ReceiverDspSetupPage("TNF", model, parent, selection)
 {
     // Thetis captions this group "Multi Notch Filter" and names the tab
     // MNF (setup.designer.cs:44165, :44141 [v2.10.3.15]). NereusSDR says TNF
@@ -2690,7 +2755,7 @@ MnfSetupPage::MnfSetupPage(RadioModel* model, QWidget* parent)
         // is still in scope inside this lambda and would shadow the accessor.
         RadioModel* rm = SetupPage::model();
         if (!rm || !rm->notchModel()) { return; }
-        SliceModel* slice = rm->activeSlice();
+        SliceModel* slice = selectedSlice();
         if (!slice) { return; }
         // Thetis splits this into two clicks: btnMNFAdd opens an empty row and
         // btnVFOFreq fills it from VFOA ("Enter the Frequency from VFOA",
@@ -2721,8 +2786,11 @@ MnfSetupPage::MnfSetupPage(RadioModel* model, QWidget* parent)
 
     // The readout follows the active slice's channel, so it has to re-resolve
     // when the operator changes which slice that is.
-    connect(model, &RadioModel::activeSliceChanged, this,
-            [this](int) { refreshMinNotchWidth(); });
+    watchReceiverSelection([this] {
+        m_addBtn->setEnabled(selectedSlice() != nullptr);
+        refreshMinNotchWidth();
+    });
+    m_addBtn->setEnabled(selectedSlice() != nullptr);
 
     // ── Auto-increase ────────────────────────────────────────────────────────
     // From Thetis setup.designer.cs:44204 [v2.10.3.15] — chkMNFAutoIncrease.Text.
@@ -3030,7 +3098,7 @@ void MnfSetupPage::refreshMinNotchWidth()
                 : QStringLiteral("This Core does not say how narrow a notch it can make. "
                                  "Updating the Core may help."));
         };
-        SliceModel* slice = rm->activeSlice();
+        SliceModel* slice = selectedSlice();
         if (!slice) {
             show(0.0);
             return;
@@ -3044,8 +3112,13 @@ void MnfSetupPage::refreshMinNotchWidth()
     // UpdateMinimumNotchWidthRX [v2.10.3.15]). NereusSDR's notch list is
     // global, so the readout follows the active slice's channel and falls
     // back to the first pooled channel before any slice exists.
-    const int sliceIndex = rm->activeSlice() ? rm->activeSlice()->sliceIndex()
-                                             : WdspEngine::kFirstSliceChannelId;
+    SliceModel* slice = selectedSlice();
+    if (!slice && receiverSelection() && receiverSelection()->restrictsReceiver()) {
+        m_minWidthLbl->setText(QStringLiteral("--"));
+        return;
+    }
+    const int sliceIndex = slice ? slice->sliceIndex()
+                               : WdspEngine::kFirstSliceChannelId;
     RxChannel* ch = rm->rxChannelForSlice(sliceIndex);
     if (!ch) {
         m_minWidthLbl->setText(QStringLiteral("--"));
@@ -3097,8 +3170,11 @@ void NrAnfSetupPage::selectSubtab(NrSlot slot, int openerSliceId)
         case NrSlot::NNR:
             target = QStringLiteral("NNR");
             if (m_nnrControls && model()) {
-                SliceModel* opener = openerSliceId >= 0 ? model()->sliceById(openerSliceId)
-                                                        : model()->activeSlice();
+                SliceModel* opener = selectedSlice();
+                if ((!receiverSelection() || !receiverSelection()->restrictsReceiver())
+                    && openerSliceId >= 0) {
+                    opener = model()->sliceById(openerSliceId);
+                }
                 m_nnrControls->bindSlice(opener);
             }
             break;

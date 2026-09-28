@@ -6530,8 +6530,10 @@ review. Requires Task 47, Parts C and F, and Tasks 41, 42 and 71 to 77.
       six focused suites passed (27.62 s). MainWindow presentation/keying and TCI
       program admission are now wired in signed `abeb6ca53`/`5dfb27690` and the
       current coordinator integration. Actual-window ownership/menu/pan and
-      transmit-take regressions pass. Setup receiver selection remains open as
-      addendum G-79, and full reverse handover acceptance is recorded above.
+      transmit-take regressions pass. Hosted Setup receiver selection is built
+      in `9650e167d`; the integrated app/Core and seven focused suites pass
+      (4.24 s), including edits under a foreign transmit holder. Full reverse
+      handover acceptance remains recorded above.
 
 ## Task 49: The Remote Access page
 

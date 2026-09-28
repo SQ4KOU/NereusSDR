@@ -29,6 +29,8 @@
 namespace NereusSDR {
 
 class RadioModel;
+class SliceModel;
+class DspReceiverSelection;
 class SetupPage;
 class PaGainByBandPage;
 class PaWattMeterPage;
@@ -80,6 +82,11 @@ public:
     void selectPage(const QString& label);
     // The Remote Access page is lazy; apply the current runtime binder now or when built.
     void setRemoteStationPageBinder(std::function<void(RemoteStationPage*)> binder);
+    // Hosted desktop: receive controls follow this window's owned selection.
+    // Ordinary local and remote dialogs retain RadioModel::activeSlice().
+    void setReceiverSelector(std::function<SliceModel*()> selector,
+                             std::function<bool()> requiresOwnedReceiver = {});
+    void notifyReceiverSelectionChanged();
     // R-R3-49 (parity Task 8): an applet's right-click entry. "pgxlAdvanced",
     // "tgxlAdvanced" and "pgxlInterlock" open CAT & Network > 4O3A at their
     // own tab (Power Genius XL, Tuner Genius XL, General), "peripherals"
@@ -324,6 +331,7 @@ private:
     QWidget* wrapWithAudioBackendStrip(SetupPage* page);
 
     RadioModel*      m_model   = nullptr;
+    DspReceiverSelection* m_dspReceiverSelection = nullptr;
     QTreeWidget*     m_tree    = nullptr;
     QStackedWidget*  m_stack   = nullptr;
     QLabel*         m_transmitNotice = nullptr;

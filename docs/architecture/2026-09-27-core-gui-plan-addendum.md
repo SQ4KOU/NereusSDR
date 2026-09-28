@@ -1440,9 +1440,13 @@ colours for the same signal.
 - Ruling basis: JJ's approved hosted-window ownership rule requires the window's
   controls to operate its own selected receiver; the station-level transmit
   holder selection must remain unchanged.
-- Status: in progress in the desktop window lane. Add an explicit window receiver
-  selector and notification to Setup, and reproduce A-to-C editing while B
-  remains the station's active receiver. No additional DSP behavior is proposed.
+- Status: built in signed `9650e167d` and verified in trunk integration. Setup
+  now carries the window's receiver selector and ownership-change notification.
+  An actual-window AGC edit failed before the fix; A-to-C edits, TNF Add, flag
+  shortcuts and no-owned-receiver refusal now pass with B remaining globally
+  active. The app/Core build and seven focused suites pass (4.24 s). The merge
+  retains both the Remote Access binder and receiver selector. No DSP values or
+  station-level active-receiver semantics changed.
 - Plan: hosted desktop receiver ownership and Setup parity.
 
 ## How this addendum is kept
