@@ -2,6 +2,7 @@
 #include "gui/DesktopStationController.h"
 
 #include "core/AppSettings.h"
+#include "core/MoxController.h"
 #include "core/SliceOwnership.h"
 #include "core/safety/TransmitHolder.h"
 #include "core/session/DeviceSessionRegistry.h"
@@ -289,6 +290,64 @@ private slots:
                 [&](int, const QByteArray&, const QByteArray&) { delete controller; });
         QVERIFY(!controller->start(true));
         QVERIFY(alive.isNull());
+    }
+
+    void stopDuringStartEndsTxBeforeListenerCloses()
+    {
+        if (!QSslSocket::supportsSsl()) {
+            QSKIP("Qt reports no working TLS backend.");
+        }
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+        RadioModel model;
+        // This in-process model has no radio connection. Set the existing
+        // controller's TUNE flag so stopAllTx emits its completion signal.
+        model.moxController()->setTune(true);
+        QVERIFY(model.moxController()->isManualMox());
+        const StationHostOptions options = optionsFor(settings, directory.path());
+        DesktopStationController controller(&model, options);
+        QStringList order;
+        connect(&model, &RadioModel::transmitStopped, &controller,
+                [&](const QString&) { order.append(QStringLiteral("txStopped")); });
+        controller.setServerCreatedForTest([&](StationServer* server) {
+            connect(server, &StationServer::listeningChanged, &model, [&](bool listening) {
+                if (!listening) { order.append(QStringLiteral("listenerClosed")); }
+            });
+            // Open only loopback through the Host's existing test seam; no
+            // peer is admitted before the stop-during-start callback.
+            QVERIFY(server->listen(QHostAddress::LocalHost, options.remotePort));
+            controller.stop();
+        });
+        QVERIFY(!controller.start(true));
+        QCOMPARE(order, QStringList({QStringLiteral("txStopped"),
+                                     QStringLiteral("listenerClosed")}));
+        QVERIFY(!controller.enabled());
+    }
+
+    void runningHostEndsTxBeforeListenerCloses()
+    {
+        if (!QSslSocket::supportsSsl()) {
+            QSKIP("Qt reports no working TLS backend.");
+        }
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+        RadioModel model;
+        DesktopStationController controller(&model, optionsFor(settings, directory.path()));
+        QVERIFY(controller.start(true));
+        QStringList order;
+        connect(&model, &RadioModel::transmitStopped, &controller,
+                [&](const QString&) { order.append(QStringLiteral("txStopped")); });
+        connect(controller.server(), &StationServer::listeningChanged, &model,
+                [&](bool listening) {
+                    if (!listening) { order.append(QStringLiteral("listenerClosed")); }
+                });
+        model.moxController()->setTune(true);
+        QVERIFY(model.moxController()->isManualMox());
+        controller.stop();
+        QCOMPARE(order, QStringList({QStringLiteral("txStopped"),
+                                     QStringLiteral("listenerClosed")}));
     }
 
     void rejectedTuneCallbackCanDeleteController()

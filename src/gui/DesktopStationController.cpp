@@ -46,6 +46,9 @@ bool DesktopStationController::start(bool profileOwnershipEstablished)
     // A callback may delete the controller without deleting a Host whose own
     // start() is still running.
     auto host = std::make_unique<StationHost>(m_model.data(), m_options);
+#ifdef NEREUS_BUILD_TESTS
+    if (m_serverCreatedForTest) { host->setServerCreatedForTest(m_serverCreatedForTest); }
+#endif
     const QPointer<DesktopStationController> self(this);
     m_startingHost = host.get();
     m_stopDuringStart = false;
@@ -75,10 +78,9 @@ void DesktopStationController::stop()
     auto host = std::move(m_host);
     StationHost* const startingHost = m_startingHost;
     if (startingHost) {
+        // Latch the cancel before stopAllTx() can emit a reentrant callback.
         m_stopDuringStart = true;
-        startingHost->quiesce();
     }
-    if (!self) { return; }
     if (!host && !startingHost) {
         m_stopping = false;
         return;
@@ -88,6 +90,11 @@ void DesktopStationController::stop()
     // end before ingress closes. Ordinary button-off below is owner-scoped.
     if (model) {
         model->stopAllTx(QStringLiteral("The Core is closing."));
+    }
+    // Both Host lifetimes are owned by an active stack, even if stopAllTx()
+    // synchronously deleted this controller. Close ingress only after TX.
+    if (startingHost) {
+        startingHost->quiesce();
     }
     if (host) {
         host->stop();

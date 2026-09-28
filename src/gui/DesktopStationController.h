@@ -6,6 +6,7 @@
 #include <QObject>
 #include <QPointer>
 
+#include <functional>
 #include <memory>
 #include <optional>
 
@@ -50,6 +51,14 @@ public:
     RequestResult requestTune(bool on);
     RequestResult confirmTake(const TakeQuestion& shown);
 
+#ifdef NEREUS_BUILD_TESTS
+    // Forward the existing Host construction seam for in-process lifecycle tests.
+    void setServerCreatedForTest(std::function<void(StationServer*)> callback)
+    {
+        m_serverCreatedForTest = std::move(callback);
+    }
+#endif
+
 private:
     RequestResult request(Key key, bool on);
     RequestResult takeAndKey(Key key, std::optional<quint64> shownEpoch,
@@ -69,6 +78,9 @@ private:
     bool m_tuneRequested{false};
     bool m_stopDuringStart{false};
     bool m_stopping{false};
+#ifdef NEREUS_BUILD_TESTS
+    std::function<void(StationServer*)> m_serverCreatedForTest;
+#endif
 };
 
 } // namespace NereusSDR
