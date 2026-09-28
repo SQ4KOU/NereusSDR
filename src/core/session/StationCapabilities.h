@@ -228,6 +228,9 @@ struct StationCapabilities {
     /// so only at minor 11. 0: a window keeps today's behaviour and does
     /// not write `stepAtt`.
     int radioHardwareVersion = 0;
+    /// One-band Alex edits bound to the connected radio's canonical MAC.
+    /// Optional at minor 11 for a peer declaring radioAntennaRows 1.
+    int radioAntennaRowsVersion = 0;
     /// R-R3-47 / R-R3-22: 1 means the Core mirrors its Power Genius XL
     /// status as the read-only `amplifier` object. Sent after
     /// radioHardwareVersion in the same minor-11 block. 0: a window shows

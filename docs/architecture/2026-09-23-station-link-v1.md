@@ -896,6 +896,7 @@ change shows as surface drift and as a change to this table.
 | `setupDescriptionVersion` | 1 |
 | `miniDisplayVersion` | 1 |
 | `accessoryTxVersion` | 1 |
+| `radioAntennaRowsVersion` | 1 |
 
 <!-- /surface -->
 
@@ -991,6 +992,16 @@ When a feature is off, its version is 0:
   (HPF Bypass on TX, HPF Bypass on PureSignal, Disable 6m LNA on TX)
   taken from a window, on and off the air (section 8.1). A station no
   longer sends 6; 7 serves every earlier version's command and property.
+- `radioAntennaRowsVersion`: optional and appended after
+  `accessoryTxVersion` only at agreed minor 11 for a peer that declared
+  `radioAntennaRows` exactly 1, while the Core has a connected radio with
+  a canonical MAC and a bound Alex controller on an Alex-filter board,
+  and its existing complete antenna path offers `radioHardwareVersion`
+  6 or later. The Core applies that same readiness check to each new verb.
+  Version 1 adds `setAlexRxAntennaForRadio` and
+  `setAlexTxAntennaForRadio` (section 9.1). Missing, malformed and unknown
+  versions are unusable. Older peers receive byte-for-byte the previous
+  capability shape and keep the existing one-band verbs.
 - `remotePgxlControlVersion`, `remoteRfKitControlVersion`,
   `remoteTgxlControlVersion`: sent only at agreed minor 11, and 0 unless
   the Core owns its accessories. `remotePgxlControlVersion` 3 adds the
@@ -1706,7 +1717,8 @@ older window sees only the values it was built for.
 | 81 | `setupDescriptionVersion` | `i64` |
 | 82 | `miniDisplayVersion` | `i64` |
 | 83 | `accessoryTxVersion` | `i64` |
-| 84 | `coreBuildInfo` | `utf8` |
+| 84 | `radioAntennaRowsVersion` | `i64` |
+| 85 | `coreBuildInfo` | `utf8` |
 
 <!-- /surface -->
 
@@ -1988,7 +2000,7 @@ An enum property lists the values its domain allows.
 | 28 | `bandFollowAddress` | `utf8` | outbound |  |
 | 29 | `bandFollowPort` | `i64` | outbound |  |
 
-**SetupDescription** (11 properties)
+**SetupDescription** (12 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -2003,6 +2015,7 @@ An enum property lists the values its domain allows.
 | 8 | `test` | `utf8` | outbound |  |
 | 9 | `diagnostics` | `utf8` | outbound |  |
 | 10 | `revision` | `i64` | outbound |  |
+| 11 | `pa` | `utf8` | outbound |  |
 
 **SliceMarker** (14 properties)
 
@@ -2943,6 +2956,16 @@ antenna blocked for transmit cannot be a band's TX antenna." A current
 window changes one band's TX antenna with the `setAlexTxAntenna` command
 instead (section 6.3), so its edit cannot put back another band the Core
 changed; the whole-list write stays for a window that sends it.
+
+For a peer offered `radioAntennaRowsVersion` 1, the two `ForRadio` verbs
+carry the current radio's canonical MAC along with one band's existing
+antenna arguments. The Core checks the exact argument types and current
+connected MAC before it classifies a change, when a held confirmation
+resumes, and on the RadioModel owner thread immediately before applying
+the one-band Alex operation. An edit for another or disconnected radio
+changes nothing. The existing shared-setting questions, transmit holder
+rules, blocked-port refusal and same-band ordering still apply. Different
+bands remain independent; no whole-list replay is involved.
 
 After the whole batch, the station reads each property back. When the
 agreed minor is at least 5 (`kDspControlSessionProtocolMinor`) and the
@@ -3973,6 +3996,7 @@ refused.
 | `clearAccessoryFaults` | `device` utf8 | `accessoryDataVersion` | 1 | 11 |
 | `requestIoBoardProbe` | none | `radioHardwareVersion` | 2 | 11 |
 | `setAlexRxAntenna` | `band` i64, `antenna` i64, `rxOnly` bool | `radioHardwareVersion` | 3 | 11 |
+| `setAlexRxAntennaForRadio` | `mac` utf8, `band` i64, `antenna` i64, `rxOnly` bool | `radioAntennaRowsVersion` | 1 | 11 |
 | `setAlexBpfMode` | `chain` i64, `mode` i64 | `radioHardwareVersion` | 4 | 11 |
 | `tx.setTxSlice` | `sliceId` i64 | `remoteTxVersion` | 1 | 11 |
 | `tx.key` | `trigger` utf8 | `remoteTxVersion` | 1 | 11 |
@@ -3984,6 +4008,7 @@ refused.
 | `tx.take` | `holderEpoch` i64 (optional), `shownKeyed` bool (optional) | `remoteTxVersion` | 2 | 11 |
 | `tx.tunerTune` | `on` bool | `remoteTxVersion` | 2 | 11 |
 | `setAlexTxAntenna` | `band` i64, `antenna` i64 | `radioHardwareVersion` | 6 | 11 |
+| `setAlexTxAntennaForRadio` | `mac` utf8, `band` i64, `antenna` i64 | `radioAntennaRowsVersion` | 1 | 11 |
 | `requestIoBoardI2c` | `bus` i64, `address` i64, `register` i64, `write` bool, `value` i64 | `radioHardwareVersion` | 7 | 11 |
 | `setIoBoardOutput` | `pin` i64, `on` bool | `radioHardwareVersion` | 7 | 11 |
 | `dsp.filterResponse` | `sliceId` i64, `highResolution` bool | `dspInfoVersion` | 1 | 11 |

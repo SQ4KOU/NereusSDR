@@ -161,6 +161,7 @@
         {"id": "session-verbs-radio-hardware", "file": "sessions/verbs-radio-hardware.json", "kind": "session", "requires": {"radioHardwareVersion": 3}},
         {"id": "session-verbs-filter-policy", "file": "sessions/verbs-filter-policy.json", "kind": "session", "requires": {"radioHardwareVersion": 4}},
         {"id": "session-verbs-tx-antenna", "file": "sessions/verbs-tx-antenna.json", "kind": "session", "requires": {"radioHardwareVersion": 6}},
+        {"id": "session-verbs-radio-bound-antenna-rows", "file": "sessions/verbs-radio-bound-antenna-rows.json", "kind": "session", "requires": {"radioAntennaRowsVersion": 1}},
         {"id": "session-verbs-io-board", "file": "sessions/verbs-io-board.json", "kind": "session", "requires": {"radioHardwareVersion": 7}},
         {"id": "session-verbs-dsp-info", "file": "sessions/verbs-dsp-info.json", "kind": "session", "requires": {"dspInfoVersion": 1}},
         {"id": "session-verbs-records", "file": "sessions/verbs-records.json", "kind": "session", "requires": {"recordStreamVersion": 1}},

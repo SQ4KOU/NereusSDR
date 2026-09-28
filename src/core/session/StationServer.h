@@ -1586,6 +1586,8 @@ private:
     void sendToPeer(SessionTransport* transport, const SessionMessage& message);
     /// The capability descriptor `transport` is told.
     StationCapabilities buildCapabilitiesFor(SessionTransport* transport) const;
+    QString radioAntennaRowRefusal(SessionTransport* transport,
+                                   const SessionMessage& invoke) const;
     /// sessionHolder 1 in `transport`'s hello, with deviceAuth 1 (ruling
     /// 10.1: the one without the other is not declared).
     bool peerHoldsSessions(SessionTransport* transport) const;
