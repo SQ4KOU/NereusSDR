@@ -32,6 +32,8 @@
 //   2026-09-27: each end sets the DTLS MTU before it takes incoming
 //               records (R-R3-49). J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-27: real transmit-watch peer, candidate and frame tests;
+//               AI-assisted via OpenAI Codex for J.J. Boyd (KG4VCF).
 // =================================================================
 
 #include <QtTest>
@@ -63,6 +65,7 @@
 #include "core/security/DeviceStore.h"
 #include "core/security/StationIdentity.h"
 #include "core/session/DataChannelTransport.h"
+#include "core/session/RelayLeg.h"
 #include "core/session/RendezvousWire.h"
 #include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
@@ -139,6 +142,92 @@ struct OpenPair {
     }
 };
 
+class WatchSource final : public IceConfiguration::CandidateSource {
+public:
+    void start(std::function<void(const QString&)> add) override { m_add = std::move(add); }
+    void stop() override { m_add = {}; }
+    bool ready() const { return static_cast<bool>(m_add); }
+    void inject(const QString& candidate) { if (m_add) { m_add(candidate); } }
+
+private:
+    std::function<void(const QString&)> m_add;
+};
+
+IceConfiguration watchIce(const std::shared_ptr<WatchSource>& source)
+{
+    IceConfiguration ice = IceConfiguration::throughRendezvous({}, true, {}, {});
+    ice.setRelay(std::nullopt, 1);
+    ice.setCandidateSourceFactory(
+        [source](int lane, const QString& id, bool routed)
+            -> std::shared_ptr<IceConfiguration::CandidateSource> {
+            return lane == IceConfiguration::kControlLane && id.isEmpty() && !routed
+                ? source : nullptr;
+        }, true);
+    return ice;
+}
+
+QString loopbackFor(const QStringList& gathered)
+{
+    for (const QString& candidate : gathered) {
+        const QStringList fields = candidate.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+        if (fields.size() >= 8 && fields.at(4).contains(QLatin1Char('.'))
+            && fields.at(7) == QLatin1String("host")) {
+            bool ok = false;
+            const int port = fields.at(5).toInt(&ok);
+            if (ok && port > 0 && port <= 65535) {
+                return RelayLeg::candidateLine(IceConfiguration::kControlLane,
+                                               static_cast<quint16>(port));
+            }
+        }
+    }
+    return {};
+}
+
+struct WatchPair {
+    std::unique_ptr<DataChannelTransport> offerer = std::make_unique<DataChannelTransport>();
+    std::unique_ptr<DataChannelTransport> answerer = std::make_unique<DataChannelTransport>();
+    std::shared_ptr<WatchSource> offerSource = std::make_shared<WatchSource>();
+    std::shared_ptr<WatchSource> answerSource = std::make_shared<WatchSource>();
+    bool descriptionsAccepted = true;
+
+    bool open(const QString& certificate, const QString& key)
+    {
+        QObject::connect(offerer.get(), &DataChannelTransport::localDescription,
+                         answerer.get(), [this](const QString& sdp, const QString& type) {
+            descriptionsAccepted &= answerer->acceptDescription(sdp, type);
+        });
+        QObject::connect(answerer.get(), &DataChannelTransport::localDescription,
+                         offerer.get(), [this](const QString& sdp, const QString& type) {
+            descriptionsAccepted &= offerer->acceptDescription(sdp, type);
+        });
+        DataChannelTransport::Options answer;
+        answer.role = DataChannelTransport::Role::Answerer;
+        answer.purpose = DataChannelTransport::Purpose::TxWatch;
+        answer.maxIncomingBytes = DataChannelTransport::kMaxWatchFrameBytes;
+        answer.ice = watchIce(answerSource);
+        answer.certificatePemPath = certificate;
+        answer.privateKeyPemPath = key;
+        DataChannelTransport::Options offer = answer;
+        offer.role = DataChannelTransport::Role::Offerer;
+        offer.ice = watchIce(offerSource);
+        offer.certificatePemPath.clear();
+        offer.privateKeyPemPath.clear();
+        if (!answerer->start(answer) || !offerer->start(offer)) {
+            return false;
+        }
+        if (!waitFor([this] {
+                return descriptionsAccepted && offerSource->ready() && answerSource->ready()
+                    && !loopbackFor(offerer->localCandidatesForTest()).isEmpty()
+                    && !loopbackFor(answerer->localCandidatesForTest()).isEmpty();
+            }, 10000)) {
+            return false;
+        }
+        offerSource->inject(loopbackFor(answerer->localCandidatesForTest()));
+        answerSource->inject(loopbackFor(offerer->localCandidatesForTest()));
+        return waitFor([this] { return offerer->isOpen() && answerer->isOpen(); }, 15000);
+    }
+};
+
 } // namespace
 
 class TstDataChannelTransport : public QObject {
@@ -148,6 +237,162 @@ private slots:
     void initTestCase()
     {
         QStandardPaths::setTestModeEnabled(true);
+    }
+
+    void watchRequiresDedicatedIceAndRefusesOrdinaryCandidates()
+    {
+        DataChannelTransport::Options options;
+        options.purpose = DataChannelTransport::Purpose::TxWatch;
+        options.maxIncomingBytes = DataChannelTransport::kMaxWatchFrameBytes;
+        DataChannelTransport transport;
+        QVERIFY(!transport.start(options));
+        auto source = std::make_shared<WatchSource>();
+        IceConfiguration ice = watchIce(source);
+        options.ice = ice;
+        options.maxIncomingBytes = 34;
+        QVERIFY(!transport.start(options));
+        options.maxIncomingBytes = DataChannelTransport::kMaxWatchFrameBytes;
+        options.ice = IceConfiguration::throughRendezvous(
+            {QStringLiteral("stun:127.0.0.1:3478")}, true, {}, {});
+        QVERIFY(!transport.start(options));
+        options.ice = ice;
+        QVERIFY(transport.start(options));
+        QVERIFY(!transport.acceptCandidate(RelayLeg::candidateLine(1, 12345)));
+        QVERIFY(!transport.acceptCandidate(
+            QStringLiteral("candidate:host 1 UDP 1 127.0.0.1 12345 typ host")));
+        QVERIFY(!transport.gatherCandidates(ice));
+    }
+
+    void watchRejectsCandidatesEmbeddedInSdp()
+    {
+        auto offerSource = std::make_shared<WatchSource>();
+        auto answerSource = std::make_shared<WatchSource>();
+        DataChannelTransport offerer;
+        DataChannelTransport answerer;
+        QSignalSpy descriptions(&offerer, &DataChannelTransport::localDescription);
+        DataChannelTransport::Options options;
+        options.purpose = DataChannelTransport::Purpose::TxWatch;
+        options.maxIncomingBytes = DataChannelTransport::kMaxWatchFrameBytes;
+        options.ice = watchIce(offerSource);
+        QVERIFY(offerer.start(options));
+        options.role = DataChannelTransport::Role::Answerer;
+        options.ice = watchIce(answerSource);
+        QVERIFY(answerer.start(options));
+        QTRY_COMPARE(descriptions.count(), 1);
+        QString sdp = descriptions.first().first().toString();
+        QVERIFY(!sdp.contains(QLatin1String("a=candidate:")));
+        sdp.append(QStringLiteral(
+            "a=candidate:ordinary 1 UDP 1 127.0.0.1 12345 typ host\r\n"));
+        QVERIFY(!answerer.acceptDescription(sdp, QStringLiteral("offer")));
+    }
+
+    void watchUsesRealDtlsAndRawBoundedBinary()
+    {
+        Core core;
+        WatchPair pair;
+        QSignalSpy localOfferCandidates(pair.offerer.get(), &DataChannelTransport::localCandidate);
+        QSignalSpy localAnswerCandidates(pair.answerer.get(), &DataChannelTransport::localCandidate);
+        QSignalSpy binaryAtCore(pair.answerer.get(), &SessionTransport::binaryReceived);
+        QSignalSpy binaryAtDevice(pair.offerer.get(), &SessionTransport::binaryReceived);
+        QSignalSpy textAtCore(pair.answerer.get(), &SessionTransport::textReceived);
+        QVERIFY(pair.open(core.server->certificatePemPath(), core.server->privateKeyPemPath()));
+        QVERIFY(pair.descriptionsAccepted);
+        QCOMPARE(localOfferCandidates.count(), 0);
+        QCOMPARE(localAnswerCandidates.count(), 0);
+        QVERIFY(pair.offerer->selectedPath().has_value());
+        QVERIFY(pair.answerer->selectedPath().has_value());
+        QCOMPARE(pair.offerer->selectedPath()->remoteAddress, QStringLiteral("127.0.0.1"));
+        QCOMPARE(pair.answerer->selectedPath()->remoteAddress, QStringLiteral("127.0.0.1"));
+        QVERIFY(pair.offerer->carriesBinary());
+        QVERIFY(pair.answerer->carriesBinary());
+        QVERIFY(!pair.offerer->mediaIceConfiguration().has_value());
+        QCOMPARE(pair.offerer->peerCertificateSha256(),
+                 QByteArray::fromHex(core.server->certificateFingerprint()
+                                         .remove(QLatin1Char(':')).toLatin1()));
+        QCOMPARE(pair.answerer->peerCertificateSha256(), QByteArray());
+
+        const QByteArray attach = QByteArray(1, char(1)) + patterned(32);
+        const QByteArray ack = QByteArray::fromHex("0100");
+        const QByteArray heartbeat = QByteArray::fromHex("01000000010000000100000001");
+        QVERIFY(pair.offerer->sendBinary(attach));
+        QVERIFY(pair.answerer->sendBinary(ack));
+        QVERIFY(pair.offerer->sendBinary(heartbeat));
+        QTRY_COMPARE(binaryAtCore.count(), 2);
+        QTRY_COMPARE(binaryAtDevice.count(), 1);
+        QCOMPARE(binaryAtCore.at(0).at(0).toByteArray(), attach);
+        QCOMPARE(binaryAtCore.at(1).at(0).toByteArray(), heartbeat);
+        QCOMPARE(binaryAtDevice.at(0).at(0).toByteArray(), ack);
+        QCOMPARE(textAtCore.count(), 0);
+        pair.offerer->sendText(QByteArrayLiteral("{}"));
+        pair.offerer->ping();
+        QCOMPARE(pair.offerer->countsForTest().pingsSent, quint64(0));
+        QVERIFY(!pair.offerer->acceptCandidate(RelayLeg::candidateLine(1, 12345)));
+        QVERIFY(!pair.offerer->sendBinary(QByteArray(34, 'x')));
+        QTRY_VERIFY(!pair.offerer->isOpen());
+    }
+
+    void watchRejectsTextAndEmptyOnRealChannel()
+    {
+        Core core;
+        WatchPair pair;
+        QVERIFY(pair.open(core.server->certificatePemPath(), core.server->privateKeyPemPath()));
+        QVERIFY(pair.offerer->sendRawTextForTest(QByteArrayLiteral("not binary")));
+        QTRY_VERIFY(!pair.answerer->isOpen());
+
+        WatchPair emptyPair;
+        QVERIFY(emptyPair.open(core.server->certificatePemPath(), core.server->privateKeyPemPath()));
+        QVERIFY(emptyPair.offerer->sendRawFrameForTest(QByteArray()));
+        QTRY_VERIFY(!emptyPair.answerer->isOpen());
+
+        WatchPair oversizedPair;
+        QVERIFY(oversizedPair.open(core.server->certificatePemPath(), core.server->privateKeyPemPath()));
+        QVERIFY(oversizedPair.offerer->sendRawFrameForTest(QByteArray(34, 'x')));
+        QTRY_VERIFY(!oversizedPair.answerer->isOpen());
+    }
+
+    void watchRejectsExtraChannelsAndBoundedHeldFrames()
+    {
+        Core core;
+        WatchPair wrongLabel;
+        QVERIFY(wrongLabel.open(core.server->certificatePemPath(), core.server->privateKeyPemPath()));
+        QVERIFY(wrongLabel.offerer->openUnexpectedChannelForTest(QStringLiteral("control"), false));
+        QTRY_VERIFY(!wrongLabel.answerer->isOpen());
+
+        WatchPair wrongReliability;
+        QVERIFY(wrongReliability.open(core.server->certificatePemPath(), core.server->privateKeyPemPath()));
+        QVERIFY(wrongReliability.offerer->openUnexpectedChannelForTest(
+            QString::fromLatin1(DataChannelTransport::kTxWatchLabel), true));
+        QTRY_VERIFY(!wrongReliability.answerer->isOpen());
+
+        WatchPair held;
+        QVERIFY(held.open(core.server->certificatePemPath(), core.server->privateKeyPemPath()));
+        // No binary listener: the adapter may hold sixteen frames, then
+        // closes its own peer rather than retaining an unbounded backlog.
+        for (int i = 0; i < 17; ++i) {
+            if (!held.offerer->isOpen()) {
+                break;
+            }
+            held.offerer->sendBinary(QByteArray(1, char(i)));
+        }
+        QTRY_VERIFY(!held.answerer->isOpen());
+
+        WatchPair invalidSource;
+        QVERIFY(invalidSource.open(core.server->certificatePemPath(), core.server->privateKeyPemPath()));
+        invalidSource.offerSource->inject(
+            QStringLiteral("candidate:ordinary 1 UDP 1 127.0.0.1 12345 typ host"));
+        QTRY_VERIFY(!invalidSource.offerer->isOpen());
+    }
+
+    void watchOwnerDeletionCancelsCandidateSource()
+    {
+        Core core;
+        WatchPair pair;
+        QVERIFY(pair.open(core.server->certificatePemPath(), core.server->privateKeyPemPath()));
+        QPointer<DataChannelTransport> gone = pair.answerer.get();
+        QVERIFY(pair.offerer->sendBinary(QByteArray::fromHex("0100")));
+        pair.answerer.reset();
+        QVERIFY(gone.isNull());
+        QTRY_VERIFY_WITH_TIMEOUT(!pair.answerSource->ready(), 5000);
     }
 
     // ── The bytes ─────────────────────────────────────────────────────
@@ -258,6 +503,8 @@ private slots:
     {
         OpenPair pair;
         QVERIFY(pair.open());
+        QVERIFY(!pair.offerer->carriesBinary());
+        QVERIFY(!pair.offerer->sendBinary(QByteArray::fromHex("0100")));
         QSignalSpy atCore(pair.answerer.get(), &SessionTransport::textReceived);
         QSignalSpy atDevice(pair.offerer.get(), &SessionTransport::textReceived);
         pair.offerer->sendText(QByteArrayLiteral("{\"type\":\"hello\"}"));
