@@ -104,9 +104,11 @@ phone storage keys or Core settings writes. Each control has
 these three IDs, bindings, kinds, exact options/defaults, labels and tooltips.
 V1–V3 receive the old ten swatches without defaults, V4–V6 receive the old
 version-4 Appearance shape with ten defaults, and V7+ receive the new page.
-The existing whole-Setup on-air and session freshness lock still applies;
-the description adds no permission or capability gate. VFO Small Filter,
-Skins, and unused controls remain omitted. Phone rendering is owned by the
+These controls carry no off-air gate: only Setup controls carrying the
+offAir gate lock while the Core is keyed (G-61), and receive and display
+controls such as these stay live on air. The existing session freshness
+rule still applies; the description adds no permission or capability gate.
+VFO Small Filter, Skins, and unused controls remain omitted. Phone rendering is owned by the
 phone implementation and is not established by this Core publication.
 
 An optional `decimals` field on a `kind:readout` control is an integer from 0
