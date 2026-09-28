@@ -407,42 +407,37 @@ private slots:
         caps.stationIdentityVersion = 1;
         caps.deviceAdminVersion = 1;
         const QList<MirrorUpdate> updates = caps.toUpdates();
-        // iPhone app Task 14's pairingVersion follows it, then Task 19's
-        // stationCatalogVersion, Task 20's displayExtrasVersion and R-R3-49's
-        // transmitSettingsVersion, then R-IOS-27's bandSelectVersion, then
-        // parity Task 15's meterReadingsVersion, then parity Task 16's
-        // dspInfoVersion.
-        // Then parity Task 19's recordStreamVersion.
-        // Then parity Task 21's stationRadiosVersion.
-        // Then parity Task 28's txDisplayVersion, R-R3-21's displayClockVersion and
-        // the Task 28 fix wave's controlChannelVersion.
-        QCOMPARE(updates.at(updates.size() - 9).name, QByteArray("controlChannelVersion"));
-        // Then parity Task 32's txMonitorAudioVersion.
-        QCOMPARE(updates.at(updates.size() - 8).name, QByteArray("txMonitorAudioVersion"));
-        // Then iPhone plan Task 22 / parity Task 20's stationFreedvVersion.
-        QCOMPARE(updates.at(updates.size() - 7).name, QByteArray("stationFreedvVersion"));
-        // iPhone app plan Task 29: then mediaReplaceVersion,
-        // controlSwitchVersion and relayAllowed.
-        QCOMPARE(updates.at(updates.size() - 6).name, QByteArray("mediaReplaceVersion"));
-        QCOMPARE(updates.at(updates.size() - 5).name, QByteArray("controlSwitchVersion"));
-        QCOMPARE(updates.at(updates.size() - 4).name, QByteArray("relayAllowed"));
-        // Preserve supportBundleVersion, then append the unpublished floors.
-        QCOMPARE(updates.at(updates.size() - 3).name, QByteArray("supportBundleVersion"));
-        QCOMPARE(updates.at(updates.size() - 2).name, QByteArray("mediaTunnelVersion"));
-        QCOMPARE(updates.last().name, QByteArray("mediaRelayRoutingVersion"));
-        QCOMPARE(updates.at(updates.size() - 10).name, QByteArray("displayClockVersion"));
-        QCOMPARE(updates.at(updates.size() - 11).name, QByteArray("txDisplayVersion"));
-        QCOMPARE(updates.at(updates.size() - 12).name, QByteArray("stationRadiosVersion"));
-        QCOMPARE(updates.at(updates.size() - 13).name, QByteArray("recordStreamVersion"));
-        QCOMPARE(updates.at(updates.size() - 14).name, QByteArray("dspInfoVersion"));
-        QCOMPARE(updates.at(updates.size() - 15).name, QByteArray("meterReadingsVersion"));
-        QCOMPARE(updates.at(updates.size() - 16).name, QByteArray("bandSelectVersion"));
-        QCOMPARE(updates.at(updates.size() - 17).name, QByteArray("transmitSettingsVersion"));
-        QCOMPARE(updates.at(updates.size() - 18).name, QByteArray("displayExtrasVersion"));
-        QCOMPARE(updates.at(updates.size() - 19).name, QByteArray("stationCatalogVersion"));
-        QCOMPARE(updates.at(updates.size() - 20).name, QByteArray("pairingVersion"));
-        QCOMPARE(updates.at(updates.size() - 21).name, QByteArray("deviceAdminVersion"));
-        QCOMPARE(updates.at(updates.size() - 22).name, QByteArray("stationIdentityVersion"));
+        // Keep the original minor-11 entries contiguous and ordered. Locate
+        // the block by its first entry: later append-only capabilities must
+        // not make this assertion depend on the number of trailing entries.
+        const QList<QByteArray> originalBlock = {
+            "stationIdentityVersion", "deviceAdminVersion", "pairingVersion",
+            "stationCatalogVersion", "displayExtrasVersion", "transmitSettingsVersion",
+            "bandSelectVersion", "meterReadingsVersion", "dspInfoVersion",
+            "recordStreamVersion", "stationRadiosVersion", "txDisplayVersion",
+            "displayClockVersion", "controlChannelVersion", "txMonitorAudioVersion",
+            "stationFreedvVersion", "mediaReplaceVersion", "controlSwitchVersion",
+            "relayAllowed", "supportBundleVersion", "mediaTunnelVersion",
+            "mediaRelayRoutingVersion"};
+        auto indexOf = [&updates](const QByteArray& name) {
+            for (int i = 0; i < updates.size(); ++i) {
+                if (updates.at(i).name == name) { return i; }
+            }
+            return -1;
+        };
+        const int blockStart = indexOf(originalBlock.first());
+        QVERIFY(blockStart >= 0);
+        QVERIFY(blockStart + originalBlock.size() <= updates.size());
+        for (int i = 0; i < originalBlock.size(); ++i) {
+            QCOMPARE(updates.at(blockStart + i).name, originalBlock.at(i));
+        }
+        const int blockEnd = blockStart + originalBlock.size() - 1;
+        const int remoteIq = indexOf("remoteIqVersion");
+        const int txModMonitor = indexOf("txModMonitorVersion");
+        const int accessoryTx = indexOf("accessoryTxVersion");
+        QVERIFY(remoteIq > blockEnd);
+        QVERIFY(txModMonitor > remoteIq);
+        QVERIFY(accessoryTx > txModMonitor);
         QCOMPARE(StationCapabilities::fromUpdates(updates).deviceAdminVersion, 1);
 
         caps.radioIdentityEntries = false;

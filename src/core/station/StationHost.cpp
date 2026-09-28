@@ -4,6 +4,7 @@
 
 #include "core/AppSettings.h"
 #include "core/LogCategories.h"
+#include "core/SliceOwnership.h"
 #include "core/daemon/DaemonTelemetryController.h"
 #include "core/daemon/HostTelemetrySampler.h"
 #include "core/session/DeviceSessionRegistry.h"
@@ -107,7 +108,8 @@ void StationHost::stop()
 
 bool StationHost::start()
 {
-    if (!m_radioModel || !m_options.settings || m_started) {
+    if (!m_radioModel || !m_options.settings || m_started
+        || (m_options.hostingDevice && m_radioModel->role() != RadioModel::Role::Local)) {
         return false;
     }
     m_started = true;
@@ -148,6 +150,43 @@ bool StationHost::start()
     m_stationServer = std::make_unique<StationServer>(m_radioModel.data(),
                                                       *cfg.settings, cfg.securityDirectory,
                                                       nullptr, cfg.linkMajors);
+    if (cfg.hostingDevice) {
+        const QPointer<StationServer> server(m_stationServer.get());
+        const QPointer<RadioModel> model(m_radioModel);
+        const QByteArray& stationId = SliceOwnership::stationDevice();
+        server->deviceSessions()->registerHostingDevice(
+            stationId, cfg.hostingDevice->name, cfg.hostingDevice->shortName);
+        if (!server || !model) { return false; }
+        server->setStationDeviceWords(cfg.hostingDevice->name,
+                                      cfg.hostingDevice->shortName);
+        if (!server || !model) { return false; }
+        const QPointer<SliceOwnership> ownership(model->sliceOwnership());
+        if (ownership) {
+            const QList<int> adopted = ownership->adoptUnowned(stationId);
+            if (!server || !model || !ownership) { return false; }
+            if (!adopted.isEmpty()) {
+                const int active = ownership->activeFor(stationId);
+                if (!model) { return false; }
+                model->setActiveSliceByIdFor(stationId, active);
+            }
+        }
+        if (!server || !model) { return false; }
+        // The desktop may begin hosting before its radio has made Slice A.
+        // A later unscoped local slice is still the hosting window's, never
+        // a free slice for the first external peer to adopt.
+        connect(model.data(), &RadioModel::sliceAdded, server.data(),
+                [model, stationId](int) {
+                    if (!model) { return; }
+                    const QPointer<SliceOwnership> ownership(model->sliceOwnership());
+                    if (!ownership) { return; }
+                    const QList<int> adopted = ownership->adoptUnowned(stationId);
+                    if (!model || !ownership) { return; }
+                    if (!adopted.isEmpty()) {
+                        const int active = ownership->activeFor(stationId);
+                        if (model) { model->setActiveSliceByIdFor(stationId, active); }
+                    }
+                });
+    }
 #ifdef NEREUS_BUILD_TESTS
     if (m_serverCreatedForTest) { m_serverCreatedForTest(m_stationServer.get()); }
 #endif

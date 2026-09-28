@@ -37,8 +37,8 @@ class Config:
     # one fifth-device confirmation path. Core admission still limits the
     # admitted devices to four; these are transport sessions, not places.
     sessions_per_station: int = 9
-    # Both ends of all nine paths may share one public address group.
-    connections_per_address: int = 18
+    # Both primary and watch ends of all nine paths may share one address.
+    connections_per_address: int = 36
     max_pending: int = 64
     join_timeout_ms: int = 10000
     rejoin_ms: int = 30000
@@ -46,6 +46,9 @@ class Config:
     rate_bytes_per_second: int = 80000
     queue_frames: int = 64
     queue_bytes: int = 24576
+    watch_rate_bytes_per_second: int = 8000
+    watch_queue_frames: int = 16
+    watch_queue_bytes: int = 8192
     send_stall_ms: int = 10000
     ping_interval_seconds: int = 20
     ping_timeout_seconds: int = 20
@@ -67,6 +70,9 @@ _SECTIONS = {
         "rate_bytes_per_second",
         "queue_frames",
         "queue_bytes",
+        "watch_rate_bytes_per_second",
+        "watch_queue_frames",
+        "watch_queue_bytes",
         "send_stall_ms",
         "ping_interval_seconds",
         "ping_timeout_seconds",
@@ -105,6 +111,10 @@ def check(config: Config) -> None:
         raise ConfigError(f"queue_bytes: at least {MAX_MESSAGE_BYTES}")
     if config.rate_bytes_per_second < MAX_MESSAGE_BYTES:
         raise ConfigError(f"rate_bytes_per_second: at least {MAX_MESSAGE_BYTES}")
+    if config.watch_queue_bytes < MAX_MESSAGE_BYTES:
+        raise ConfigError(f"watch_queue_bytes: at least {MAX_MESSAGE_BYTES}")
+    if config.watch_rate_bytes_per_second < MAX_MESSAGE_BYTES:
+        raise ConfigError(f"watch_rate_bytes_per_second: at least {MAX_MESSAGE_BYTES}")
     if not config.socket.startswith("/") or len(config.socket.encode("utf-8")) > 100:
         raise ConfigError("socket: an absolute path of at most 100 bytes")
     if not isinstance(config.socket_mode, int) or not 0 <= config.socket_mode <= 0o777:

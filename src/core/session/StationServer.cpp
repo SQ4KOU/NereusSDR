@@ -8422,7 +8422,11 @@ bool StationServer::txWatchEligible(SessionTransport* transport) const
 {
     const auto it = m_peers.constFind(transport);
     const auto* switchable = qobject_cast<const SwitchableTransport*>(transport);
-    return it != m_peers.cend() && it->authenticated && it->snapshotComplete
+    const SessionTransport* carrying = switchable ? switchable->inner() : transport;
+    // Only a direct WSS primary proves this authority currently supplies the
+    // separate WSS route. Relay-only DTLS watch support is negotiated later.
+    const bool directWss = qobject_cast<const WebSocketTransport*>(carrying) != nullptr;
+    return directWss && it != m_peers.cend() && it->authenticated && it->snapshotComplete
         && !it->dropping && !it->txWatchPathChanging
         && !it->signedInWithToken && !it->deviceId.isEmpty()
         && it->sessionDeviceId == it->deviceId && it->sessionId != 0

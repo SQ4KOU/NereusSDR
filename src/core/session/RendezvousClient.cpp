@@ -392,6 +392,7 @@ void RendezvousClient::resetConnection()
     m_helloTimer->stop();
     m_pingTimer->stop();
     m_helloReceived = false;
+    m_watchRelayNegotiated = false;
     m_registered = false;
     m_introductionLive = false;
     m_mailboxOpen = false;
@@ -662,12 +663,15 @@ void RendezvousClient::handle(const RendezvousWire::Message& message)
         m_helloTimer->stop();
         m_helloNonce = message.nonce;
         m_stunUrls = message.stun;
+        m_watchRelayNegotiated = m_watchRelayEnabled && message.version >= 2
+            && message.watchRelayVersion == 1;
         emit connected();
         if (m_role == Role::Station) {
             RendezvousWire::Message registration;
             registration.kind = Kind::Register;
             registration.id = m_stationId;
             registration.publicKey = m_stationKey;
+            registration.watchRelayVersion = m_watchRelayNegotiated ? 1 : 0;
             send(registration);
             // Section 3: registering must finish within the service's own
             // handshake time; the hello timer covers it on this side
@@ -733,7 +737,8 @@ void RendezvousClient::handle(const RendezvousWire::Message& message)
         // Task 29 fix wave (rendezvous section 12.1): kept for the relay
         // leg; the token is never logged.
         RendezvousWire::RelayGrant grant{message.relayUrl, message.relayToken,
-                                         message.relayExpires};
+                                         message.relayExpires,
+                                         m_watchRelayNegotiated ? message.watchToken : QString()};
         if (m_role == Role::Station) {
             if (!m_answered.contains(message.intro)) {
                 return;
@@ -932,6 +937,7 @@ void RendezvousClient::sendPending()
                                                                             m_helloNonce))
                          : QByteArray();
         introduce.sdp = m_offer;
+        introduce.watchRelayVersion = m_watchRelayNegotiated ? 1 : 0;
         if (send(introduce)) {
             m_introductionLive = true;
             m_clientRelayGrant.reset();

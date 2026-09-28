@@ -1107,15 +1107,38 @@ colours for the same signal.
   four-device and replacement behavior. Lead implementation must size bounded
   relay admission for that contract, including temporary replacement paths;
   no permission to change a deployed service is inferred from this finding.
-- Status: built defaults for existing relay paths: nine logical sessions permit
-  four current paths, four reconnect introductions and a fifth-device question;
-  eighteen physical connections allow both ends to share one address group.
-  The global sixteen-session cap, queue bounds and rate limits are unchanged.
-  A loopback regression failed on the old third-session refusal, then proved all
-  nine pairs forward and the next station session is refused without displacing
-  them. All 148 focused relay/grant/queue/conformance tests passed (9.03 seconds).
-  No deployed service was changed. Proposed auxiliary watch sockets still need
-  their own bounded accounting and tests before that feature can ship.
+- Status: built bounded primary and auxiliary admission. Nine logical sessions
+  permit four current paths, four reconnect introductions and a fifth-device
+  question; thirty-six physical connections allow both primary and watch pairs
+  to share one address group. The global sixteen-session cap is unchanged.
+  Watch sockets require the same live primary pair, station, session and expiry;
+  they never create a logical session or extend its idle lifetime. Primary end
+  or replacement retires both watch legs. Separate bounded watch queues and
+  rates also charge the existing aggregate control budget.
+  Rendezvous negotiates purpose-separated watch grants only when explicitly
+  enabled and both peers declare version 1. Its default remains disabled;
+  enabled service hello uses protocol version 2. Old peers retain ordinary
+  version-1 primary grants. The integrated Python suite passed 478 tests
+  (23.03 seconds), including real loopback forwarding with service-issued grants.
+  C++ service negotiation is also built, disabled by default: explicit opt-in
+  and a version-2-or-newer service declaring watch version 1 are required. Unknown
+  future watch versions and older services retain ordinary primary behavior;
+  reconnect clears negotiated state. The integrated app/Core build and full
+  rendezvous client suite passed (64.42 seconds), with strict optional-field,
+  station/client negotiation and old-service reconnect regressions.
+  The C++ watch-purpose RelayLeg is built as a separate outer WebSocket with
+  one loopback UDP source, tag 3 only, no media/routed claims and a bounded
+  16-frame/8192-byte queue (`218dd70e`). Its integrated app/Core build and both
+  relay suites passed (11.66 seconds); ending the watch leaves primary forwarding
+  intact. A dedicated watch DTLS adapter is also built (`ff06a5ea`):
+  one reliable ordered binary channel, bounded 33-byte frames, separate peer,
+  no media or ordinary candidate trickle, and owned relay-loopback candidates
+  only. Real DTLS tests verify the presented Core certificate and raw watch
+  frames; the integrated app/Core build and four transport suites passed
+  (19.95 seconds). Those tests inject loopback candidates and do not yet prove
+  actual outer-WebSocket relay forwarding. No deployed service was changed.
+  Station-session watch signaling and restrictive-network acceptance remain
+  unfinished.
 - Plan: several-device capacity and restrictive-network relay access.
 
 ### G-67: Releasing an offline Core must preserve receiver edits and saved layouts
@@ -1135,6 +1158,58 @@ colours for the same signal.
   The integrated app/Core build and twelve focused tests passed (20.09 s).
   Desktop-to-background handover and live-device acceptance remain open.
 - Plan: station profile ownership and radio handover.
+
+### G-68: Capability-order test assumed newly added fields did not exist
+
+- Evidence: `tst_station_devices` found original capability entries by offsets
+  from the end of the list. Appending remote IQ, transmit modulation monitor and
+  accessory transmit capabilities made those offsets refer to different entries.
+- Ruling: within JJ's instruction to diagnose failures and suggest their actual
+  fix, the lead preserves the wire order and corrects the test's stale indexing.
+- Status: signed implementation `fc58c3ad` checks the original contiguous block
+  from its named first entry and verifies newer entries follow in order. No
+  production capability order was changed. The integrated app/Core build and
+  six focused suites passed (27.62 seconds).
+- Plan: several-device capability compatibility.
+
+### G-69: Desktop shutdown could close ingress before ending transmit
+
+- Evidence: the hosting controller's stop-during-start path called `quiesce`
+  before `stopAllTx`. A focused regression observed listener closure before the
+  transmit-stopped notification. A separate callback test also reproduced a
+  crash when listener shutdown deleted the controller on its own call stack.
+- Ruling: the approved desktop-hosting plan explicitly requires ending transmit
+  before shutdown. Lead correction preserves that order during startup as well
+  as ordinary operation and retains the host until synchronous callbacks return.
+- Status: signed implementations `987eb996` and `f7fd0b0b` fix callback lifetime
+  and order. The formerly failing order test, normal running-host order and
+  reentrant deletion tests pass in the integrated app/Core build and six focused
+  suites (27.62 seconds). These are in-process models without RF or a live window
+  relaunch. MainWindow hosting and reverse handover wiring remain open.
+- Plan: desktop hosting and station handover.
+
+### G-70: Auxiliary watch callbacks and route declarations need strict lifetime bounds
+
+- Evidence: new owner-deletion regressions reproduced a crash when watch
+  acknowledgement, eligibility, delivery or retirement callbacks destroyed the
+  Core helper. Review also found direct-watch eligibility checked that Core was
+  listening without checking the primary's actual transport, so a relay/DTLS
+  primary could be offered an unsupported direct route.
+- Ruling: lead implementation under JJ's unchanged transmit-safety requirement
+  must invalidate bindings before callbacks, check owner/generation afterward,
+  and advertise only a route currently implemented for that primary. This does
+  not change the 100 ms cadence or 400 ms cutoff.
+- Status: signed `f00b61e2` guards callback lifetime, primary drop and path moves.
+  Root integration additionally restricts direct watch eligibility to WSS
+  primaries. The real paired two-socket Core handshake, accepted heartbeats and
+  replay refusal passed on trunk. The integrated app/Core build and nine
+  focused suites passed (46.10 seconds) at concurrent lane load.
+  The direct client helper also verifies the fresh actual TLS certificate before
+  sending its ticket and guards synchronous socket errors that delete or replace
+  the helper (`d8f14ac1`). Its integrated app/Core build and two focused suites
+  passed (4.17 seconds). Production client wiring and the separate relay DTLS path
+  remain in progress.
+- Plan: independent transmit watch and restrictive-network liveness.
 
 ## How this addendum is kept
 
