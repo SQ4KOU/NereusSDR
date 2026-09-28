@@ -431,6 +431,7 @@
 #include <QObject>
 #include <QPointer>
 #include <QDeadlineTimer>
+#include <QElapsedTimer>
 #include <QSslConfiguration>
 #include <QString>
 
@@ -448,6 +449,7 @@
 #include "core/session/RecordStream.h"
 #include "core/session/SessionMessages.h"
 #include "core/session/StationCapabilities.h"
+#include "core/settings/SettingsBackupTransfer.h"
 #include "core/safety/StarvationPolicy.h"
 #include "core/safety/StationTxGate.h"
 #include "core/safety/TransmitHolder.h"
@@ -842,6 +844,10 @@ public:
     /// change the Core's radio, so a window test can reach the Core's
     /// answers (fix wave, I5).
     void setTokenSessionsMayChangeRadioForTest(bool may) { m_tokenSessionsMayChangeRadioForTest = may; }
+    /// Deterministic export expiry; caller drives cleanup after advancing time.
+    void setSettingsExportClockForTest(std::function<qint64()> clock)
+    { m_settingsExportNowForTest = std::move(clock); }
+    void expireSettingsExportsForTest() { expireSettingsExports(); }
 #endif
 
     /// See kDefaultAuthDeadlineMs. Values below 1 disable the deadline,
@@ -1447,6 +1453,11 @@ private:
     void onNewWebSocketConnection();
     void handleTxWatchTicket(SessionTransport* transport, const SessionMessage& message);
     void handleTxWatchRelay(SessionTransport* transport, const SessionMessage& message);
+    void handleSettingsExport(SessionTransport* transport, const SessionMessage& message,
+                              const QByteArray& wire);
+    bool settingsExportEligible(SessionTransport* transport) const;
+    void expireSettingsExports();
+    qint64 settingsExportNow() const;
     bool txWatchEligible(SessionTransport* transport) const;
     bool txWatchRelayEligible(SessionTransport* transport) const;
     bool txWatchRelayCapability(SessionTransport* transport) const;
@@ -2123,6 +2134,18 @@ private:
     bool m_mirrorBuilt = false;
 
     QHash<SessionTransport*, Peer> m_peers;
+    struct SettingsExportJob {
+        SettingsBackupTransferSource source;
+        QByteArray transferId;
+        qint64 nextOffset = 0;
+        qint64 bornMs = 0;
+        qint64 lastReadMs = 0;
+    };
+    // Session ID, never device ID: a replacement connection cannot inherit bytes.
+    QHash<quint64, SettingsExportJob> m_settingsExports;
+    QElapsedTimer m_settingsExportClock;
+    QTimer* m_settingsExportCleanup = nullptr;
+    std::function<qint64()> m_settingsExportNowForTest;
     /// iPhone app Task 76: the admitted session with this media epoch, or
     /// null; the earliest admitted of those live (the primary).
     SessionTransport* mediaSessionFor(quint64 epoch) const;

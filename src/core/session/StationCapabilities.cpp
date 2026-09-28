@@ -285,6 +285,9 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
         if (settingsHygieneVersion > 0) {
             updates.append(intEntry("settingsHygieneVersion", settingsHygieneVersion));
         }
+        if (settingsBackupVersion > 0) {
+            updates.append(intEntry("settingsBackupVersion", settingsBackupVersion));
+        }
         updates.append(intEntry("remoteIqVersion", remoteIqVersion));
         updates.append(intEntry("txModMonitorVersion", txModMonitorVersion));
         if (setupDescriptionVersion > 0) {
@@ -490,6 +493,7 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                    || u.name == "recordStreamVersion"
                    || u.name == "stationRadiosVersion"
                    || u.name == "settingsHygieneVersion"
+                   || u.name == "settingsBackupVersion"
                    || u.name == "txDisplayVersion"
                    || u.name == "displayClockVersion"
                    || u.name == "controlChannelVersion"
@@ -562,6 +566,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                     caps.stationRadiosVersion = version;
                 } else if (u.name == "settingsHygieneVersion") {
                     caps.settingsHygieneVersion = version;
+                } else if (u.name == "settingsBackupVersion") {
+                    caps.settingsBackupVersion = version;
                 } else if (u.name == "txDisplayVersion") {
                     caps.txDisplayVersion = version;
                 } else if (u.name == "displayClockVersion") {

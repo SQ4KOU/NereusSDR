@@ -369,6 +369,7 @@
 #include <QByteArray>
 #include <QDateTime>
 #include <QElapsedTimer>
+#include "core/settings/SettingsBackupTransfer.h"
 #include <QHash>
 #include <QList>
 #include <QObject>
@@ -1255,6 +1256,9 @@ public:
     /// least 1 on a ready session.
     bool stationRadiosAvailable() const override;
     bool settingsHygieneAvailable() const override;
+    bool settingsBackupExportAvailable() const override;
+    CommandOutcome requestSettingsBackupExport() override;
+    void cancelSettingsBackupExport(quint32 operationId = 0) override;
     CommandOutcome requestSettingsHygiene(const QByteArray& verb, const QString& mac) override;
     /// Fix wave (I5): this session signed in with this computer's own key.
     bool signedInWithDeviceKey() const override
@@ -1526,6 +1530,10 @@ private:
     /// operator through the RadioModel signal that already reaches
     /// MainWindow's toast for that kind of refusal.
     void handleCommandResult(const SessionMessage& message);
+    void handleSettingsBackupExportResult(const SessionMessage& message);
+    void requestNextSettingsBackupChunk();
+    void finishSettingsBackupExport(bool accepted, const QString& reason,
+                                    const QByteArray& xml = {}, bool cancelRemote = false);
 
     /// Shared tail of the five IStationLink overrides: send, remember,
     /// and turn "there is no session" into a sentence an operator can
@@ -1707,6 +1715,20 @@ private:
     int m_pingsAwaitingPong = 0;
 
     quint32 m_nextCommandId = 1;
+    struct SettingsBackupExportPending {
+        quint32 operationId = 0;
+        quint32 expectedCommandId = 0;
+        quint32 sessionEpoch = 0;
+        QByteArray expectedVerb;
+        QByteArray transferId;
+        SettingsBackupTransferAssembler assembler;
+    };
+    std::optional<SettingsBackupExportPending> m_settingsBackupExport;
+    // Cancellation before begin's reply still retires a server snapshot if
+    // that reply eventually supplies its transfer ID.
+    std::optional<QPair<quint32, quint32>> m_cancelledSettingsBackupBegin;
+    QTimer* m_settingsBackupReplyTimer = nullptr;
+    QTimer* m_settingsBackupOverallTimer = nullptr;
     quint32 m_nextPropertyWriteId = 1;
     // Zero marks an edit waiting for the coalescer; nonzero marks its most
     // recent sent batch. Both protect the value from an older answer.

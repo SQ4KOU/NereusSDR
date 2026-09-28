@@ -1675,10 +1675,11 @@ bool SessionMessages::decode(const QByteArray& wire, SessionMessage* out)
         break;
     case SessionMessageKind::CommandInvoke: {
         message.commandVerb = o.value(QStringLiteral("verb")).toString().toUtf8();
-        const bool dspCommand = message.commandVerb.startsWith("nnr.")
-            || message.commandVerb.startsWith("ps3.") || message.commandVerb.startsWith("dspAssets.");
+        const bool strictCommandId = message.commandVerb.startsWith("nnr.")
+            || message.commandVerb.startsWith("ps3.") || message.commandVerb.startsWith("dspAssets.")
+            || message.commandVerb.startsWith("station.settingsExport.");
         const double commandId = o.value(QStringLiteral("id")).toDouble(0.0);
-        if (dspCommand && (!o.value(QStringLiteral("id")).isDouble()
+        if (strictCommandId && (!o.value(QStringLiteral("id")).isDouble()
             || !std::isfinite(commandId) || commandId < 1.0 || commandId > 4294967295.0
             || std::floor(commandId) != commandId)) {
             return false;
@@ -1697,10 +1698,11 @@ bool SessionMessages::decode(const QByteArray& wire, SessionMessage* out)
     }
     case SessionMessageKind::CommandResult: {
         message.commandVerb = o.value(QStringLiteral("verb")).toString().toUtf8();
-        const bool dspCommand = message.commandVerb.startsWith("nnr.")
-            || message.commandVerb.startsWith("ps3.") || message.commandVerb.startsWith("dspAssets.");
+        const bool strictCommandId = message.commandVerb.startsWith("nnr.")
+            || message.commandVerb.startsWith("ps3.") || message.commandVerb.startsWith("dspAssets.")
+            || message.commandVerb.startsWith("station.settingsExport.");
         const double commandId = o.value(QStringLiteral("id")).toDouble(0.0);
-        if (dspCommand && (!o.value(QStringLiteral("id")).isDouble()
+        if (strictCommandId && (!o.value(QStringLiteral("id")).isDouble()
             || !std::isfinite(commandId) || commandId < 1.0 || commandId > 4294967295.0
             || std::floor(commandId) != commandId)) {
             return false;

@@ -23,7 +23,8 @@
 //                 kind, MirrorPolicy direction and MirrorEnumDomain values
 //   objectKeys    the object keys a station's snapshot creates, as
 //                 patterns (pan:<i>, slice:<id>), from a live session
-//   commands      SessionCommandDispatcher::verbSpecs()
+//   commands      SessionCommandDispatcher::verbSpecs() plus StationServer's
+//                 settingsExport family (handled before generic dispatch)
 //   settingsScope the SettingsScope rule tables
 //   telemetry     station.metrics.v1 field paths at each version
 //   mediaControl  each media.control operation in each direction, with its

@@ -436,6 +436,18 @@ private slots:
         QStandardPaths::setTestModeEnabled(true);
     }
 
+    void ordinaryControlBacklogIsObservable()
+    {
+        OpenPair pair;
+        QVERIFY(pair.open());
+        QCOMPARE(pair.answerer->backlogBytes(), 0);
+        // Stay within the desktop's existing 8 MiB message cap while
+        // queuing enough chunks to expose libdatachannel's send buffer.
+        pair.answerer->sendText(patterned(6 * 1024 * 1024));
+        QVERIFY2(pair.answerer->backlogBytes() > 0,
+                 "ordinary control must report the data channel's queued bytes");
+    }
+
     void watchRequiresDedicatedIceAndRefusesOrdinaryCandidates()
     {
         DataChannelTransport::Options options;
@@ -1249,6 +1261,31 @@ private slots:
 
     void aWholeSessionRunsOverTheChannel()
     {
+        // Keep bounded startup evidence for the intermittent opening failure.
+        // This does not extend the existing 15-second connection deadline.
+        struct StartupEvidence {
+            QElapsedTimer elapsed;
+            QMutex mutex;
+            QStringList lines;
+        };
+        const auto evidence = std::make_shared<StartupEvidence>();
+        evidence->elapsed.start();
+        DataChannelTransport::setLibraryLogForTest(
+            [evidence](quintptr thread, const QString& line) {
+                const QMutexLocker lock(&evidence->mutex);
+                if (evidence->lines.size() == 2000) evidence->lines.removeFirst();
+                evidence->lines.append(QStringLiteral("%1 ms thread %2 %3")
+                    .arg(evidence->elapsed.elapsed()).arg(thread).arg(line));
+            });
+        const auto restoreLogger = qScopeGuard([evidence]() {
+            DataChannelTransport::setLibraryLogForTest({});
+            if (QTest::currentTestFailed()) {
+                const QMutexLocker lock(&evidence->mutex);
+                for (const QString& line : std::as_const(evidence->lines)) {
+                    qWarning().noquote() << line;
+                }
+            }
+        });
         Core core;
         QTemporaryDir keyDir;
         auto key = std::make_shared<const ClientDeviceIdentity>(
@@ -1256,12 +1293,31 @@ private slots:
         QVERIFY(core.pairComputer(*key));
         auto* offerer = new DataChannelTransport();
         auto* answerer = new DataChannelTransport();
+        const QPointer<DataChannelTransport> offererLifetime(offerer);
+        const QPointer<DataChannelTransport> answererLifetime(answerer);
+        const auto releaseUnadopted = qScopeGuard([&]() {
+            if (offererLifetime && !offererLifetime->parent()) delete offererLifetime.data();
+            if (answererLifetime && !answererLifetime->parent()) delete answererLifetime.data();
+        });
+        QString offererFailure, answererFailure;
+        QObject startupObserver;
+        QObject::connect(offerer, &DataChannelTransport::failed, &startupObserver,
+                         [&](const QString& reason) { offererFailure = reason; });
+        QObject::connect(answerer, &DataChannelTransport::failed, &startupObserver,
+                         [&](const QString& reason) { answererFailure = reason; });
         QObject::connect(answerer, &DataChannelTransport::opened, core.server.get(),
                          [&core, answerer] { core.server->acceptTransport(answerer); });
         QVERIFY(startDataChannelPair(offerer, answerer, kClientCap, kStationCap,
                                      core.server->certificatePemPath(),
                                      core.server->privateKeyPemPath()));
-        QVERIFY(waitFor([offerer] { return offerer->isOpen(); }, 15000));
+        const qint64 openingStarted = evidence->elapsed.elapsed();
+        const bool opened = waitFor([offerer] { return offerer->isOpen(); }, 15000);
+        const QString openState = QStringLiteral("wait=%1ms offererOpen=%2 answererOpen=%3 "
+                                                "offererFailure=%4 answererFailure=%5")
+            .arg(evidence->elapsed.elapsed() - openingStarted).arg(offerer->isOpen())
+            .arg(answererLifetime && answererLifetime->isOpen())
+            .arg(offererFailure, answererFailure);
+        QVERIFY2(opened, qPrintable(openState));
         // The certificate the Core presented in DTLS is its own.
         QString hex = core.server->certificateFingerprint();
         hex.remove(QLatin1Char(':'));

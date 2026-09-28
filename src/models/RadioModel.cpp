@@ -8030,6 +8030,17 @@ void RadioModel::reportStationCommandFinished(quint32 commandId, bool accepted,
     emit stationCommandFinished(commandId, accepted, reason);
 }
 
+void RadioModel::reportStationSettingsBackupExportFinished(quint32 operationId, bool accepted,
+                                                            const QString& reason,
+                                                            const QByteArray& coreXml)
+{
+    if (m_role != Role::Remote) {
+        return;
+    }
+    emit stationSettingsBackupExportFinished(operationId, accepted, reason,
+                                             accepted ? coreXml : QByteArray());
+}
+
 void RadioModel::reportStationPgxlLanScan(quint32 commandId, bool accepted,
                                           const QString& reason, const QString& devicesJson)
 {
