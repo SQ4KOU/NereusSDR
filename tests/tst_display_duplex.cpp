@@ -658,6 +658,9 @@ private slots:
         two->m_peakBlobs.m_blobs.resize(3);
         two->m_peakBlobs.m_blobs[0].enabled = true;
         two->m_activePeakHold.setEnabled(true);
+        // Keyed, the trace runs only with "Update during TX" on (Thetis
+        // display.cs:5011 [v2.10.3.15]); this test is about the reset.
+        two->m_activePeakHold.setOnTx(true);
         two->m_activePeakHold.resize(8);
         two->m_activePeakHold.update(QVector<float>(8, -40.0f));
         QCOMPARE(two->m_activePeakHold.peak(0), -40.0f);
