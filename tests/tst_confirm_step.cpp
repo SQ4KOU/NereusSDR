@@ -251,7 +251,7 @@ struct SharedAdc {
     LoopbackTransport* appB = nullptr;
     quint32 nextWriteId = 900;
 
-    explicit SharedAdc(bool withB = true)
+    explicit SharedAdc(bool withB = true, bool permittedTransmitter = false)
     {
         stepAtt.setTickTimerEnabled(false);
         core.model->setStepAttController(&stepAtt);
@@ -259,7 +259,10 @@ struct SharedAdc {
         core.model->sliceById(0)->setFrequency(7074000.0);
         core.pair(a);
         core.pair(b);
-        appA = core.signIn(a);
+        if (permittedTransmitter) {
+            core.server->setRemoteTransmitAllowed(true);
+        }
+        appA = core.signIn(a, permittedTransmitter ? kTransmitter : kHolder);
         if (withB) {
             appB = core.signIn(b);
             core.model->sliceById(bSlice())->setFrequency(14074000.0);
@@ -1621,8 +1624,9 @@ private slots:
     // go straight to the Core's own answer.
     void theParityVerbsAndTheAlexTransmitSideAreOnTheList()
     {
-        SharedAdc s;
+        SharedAdc s(/*withB=*/true, /*permittedTransmitter=*/true);
         QVERIFY(admitted(s.appB));
+        QVERIFY(txPermitted(s.appA));
         s.core.model->enableStationAccessoryIdentity();
         const auto asks = [&](const QByteArray& verb, const QList<MirrorUpdate>& args,
                               quint32 id) {
@@ -1683,8 +1687,9 @@ private slots:
     // already in use asks nothing, and a tap on any other antenna asks.
     void theTunerAntennaQuestionNumbersAntennasAsTheButtonsDo()
     {
-        SharedAdc s;
+        SharedAdc s(/*withB=*/true, /*permittedTransmitter=*/true);
         QVERIFY(admitted(s.appB));
+        QVERIFY(txPermitted(s.appA));
         s.core.model->enableStationAccessoryIdentity();
         TunerModel* tuner = s.core.model->tunerModel();
         QVERIFY(tuner != nullptr);
@@ -1730,8 +1735,9 @@ private slots:
     // asks, and the question does not call the external antenna ANT2.
     void theRfKitAntennaQuestionNumbersAntennasAsTheButtonsDo()
     {
-        SharedAdc s;
+        SharedAdc s(/*withB=*/true, /*permittedTransmitter=*/true);
         QVERIFY(admitted(s.appB));
+        QVERIFY(txPermitted(s.appA));
         s.core.model->enableStationAccessoryIdentity();
         RfKitModel* rfKit = s.core.model->rfKitModel();
         QVERIFY(rfKit != nullptr);

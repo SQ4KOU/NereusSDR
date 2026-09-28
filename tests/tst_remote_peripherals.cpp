@@ -133,6 +133,8 @@
 #include "core/session/SessionMessages.h"
 #include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
+#include "core/security/ClientDeviceIdentity.h"
+#include "core/security/DeviceStore.h"
 #include "core/settings/SettingsProxy.h"
 #include "gui/applets/AmpApplet.h"
 #include "gui/applets/Rf2ksApplet.h"
@@ -1936,7 +1938,8 @@ void RemotePeripheralsTest::oneTciSwitchDrivesTheCoresStationServer()
     // The Core's own settings store: where its station TCI switch is kept
     // (StationTciController) and what the window's settings snapshot reads.
     StationServer server(&station, AppSettings::instance(), NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
-    QCOMPARE(server.stationTciVersion(), 1);
+    // Version 2 includes the Core's TCI client record stream and options.
+    QCOMPARE(server.stationTciVersion(), 2);
 
     auto window = std::make_unique<RadioModel>(RadioModel::Role::Remote);
     SettingsProxy proxy;
@@ -1957,6 +1960,8 @@ void RemotePeripheralsTest::oneTciSwitchDrivesTheCoresStationServer()
     server.acceptTransport(stationEnd);
     QVERIFY(completed.wait(5000) || !completed.isEmpty());
     QTRY_VERIFY(client->stationTciAvailable());
+    QCOMPARE(client->capabilities().stationTciVersion, 2);
+    QVERIFY(client->stationTciServerAvailable());
     window->reportStationLinkStateChanged();
 
     // On: the Core listens on this port; this window runs none of its own.
@@ -2255,12 +2260,14 @@ namespace {
 // the in-process loopback.
 struct CoreAndWindow {
     QTemporaryDir dir;
+    QTemporaryDir keyDir;
     RadioModel station;
     AppSettings stationSettings;
     StationServer server;
     RadioModel window{RadioModel::Role::Remote};
     SettingsProxy proxy;
     StationClient client{&window, &proxy};
+    bool pairedTransmitter{false};
     CoreAndWindow()
         : stationSettings(dir.filePath(QStringLiteral("station.settings")))
         , server((prepareStation(station), &station), stationSettings,
@@ -2279,12 +2286,35 @@ struct CoreAndWindow {
         core.setLastRadioInfoForTest(radio);
         core.setConnectionStateForTest(ConnectionState::Connected);
     }
+    bool pairTransmitWindow()
+    {
+        auto key = std::make_shared<const ClientDeviceIdentity>(
+            ClientDeviceIdentity::loadOrCreate(keyDir.path()));
+        if (!key->isValid()) { return false; }
+        PairedDevice record;
+        record.id = key->fingerprint();
+        record.publicKeySpki = key->publicKeySpki();
+        record.name = QStringLiteral("Desktop");
+        record.kind = QStringLiteral("computer");
+        if (!server.deviceStore()->add(record)) { return false; }
+        client.setDeviceIdentity(key, record.name);
+        server.setRemoteTransmitAllowed(true);
+        pairedTransmitter = true;
+        return true;
+    }
     LoopbackTransport* connect(QObject* owner)
     {
         auto* stationEnd = new LoopbackTransport(QStringLiteral("station-end"), owner);
         auto* clientEnd = new LoopbackTransport(QStringLiteral("client-end"), owner);
         stationEnd->linkTo(clientEnd);
-        client.startSession(clientEnd, server.token());
+        if (pairedTransmitter) {
+            QString pin = server.certificateFingerprint();
+            pin.remove(QLatin1Char(':'));
+            clientEnd->setPeerCertificateSha256(QByteArray::fromHex(pin.toLatin1()));
+            client.startSession(clientEnd, {}, {}, server.stationIdentity().fingerprint());
+        } else {
+            client.startSession(clientEnd, server.token());
+        }
         server.acceptTransport(stationEnd);
         return stationEnd;
     }
@@ -3424,14 +3454,15 @@ void RemotePeripheralsTest::localPagesAskBeforeNetworkSettings()
 // R-R3-49 / R-R3-47 (remoteTgxlControlVersion 2): in a remote window the
 // Tuner Genius applet's ANT 1/2/3 and OPERATE switch the Core's tuner
 // through the Core (the fake tuner records the local applet's own lines),
-// on a receive-only Core too; the buttons follow the tuner's report, not
+// from a paired window allowed to transmit; the buttons follow the tuner's report, not
 // the click; while the radio is on the air they are disabled with the
 // reason, and a request sent anyway is refused with it and reaches nothing.
-// TUNE keeps the remote transmit gate.
+// TUNE is kept outside this accessory-control case.
 void RemotePeripheralsTest::remoteWindowSwitchesTheTunerThroughTheCore()
 {
     AppSettings::instance().clear();
     CoreAndWindow cw;
+    QVERIFY(cw.pairTransmitWindow());
     RadioModel& station = cw.station;
     RadioModel& window = cw.window;
     station.smartSdrListener()->setListenEndpointForTesting(QHostAddress::LocalHost, 0);
@@ -3441,14 +3472,15 @@ void RemotePeripheralsTest::remoteWindowSwitchesTheTunerThroughTheCore()
     TunerApplet applet(&window, window.tunerModel());
     const QString transmitReason =
         QStringLiteral("Remote transmit controls are not available from this Core yet.");
-    applet.setTransmitPermitted(false, transmitReason);   // as MainWindow does
+    applet.setTransmitPermitted(false, transmitReason);   // do not key in this fixture
     QSignalSpy refused(&window, &RadioModel::accessoryRequestRefused);
 
     LoopbackTransport* stationEnd = cw.connect(this);
     QTRY_VERIFY(cw.client.tgxlControlAvailable());
     window.reportStationLinkStateChanged();
     QVERIFY(admitCoreTuner(station, tuner));
-    QVERIFY(station.receiveOnlyStationPolicy());
+    QTRY_VERIFY(cw.client.capabilities().txPermitted);
+    QVERIFY(!station.receiveOnlyStationPolicy());
     tuner.send(QStringLiteral("S0|state one_by_three=1 antA=1 operate=0 bypass=0"));
     QTRY_VERIFY(window.tunerModel()->hasAntennaSwitch());
     QTRY_COMPARE(window.tunerModel()->antennaA(), 1);
@@ -3497,10 +3529,7 @@ void RemotePeripheralsTest::remoteWindowSwitchesTheTunerThroughTheCore()
     // MOX click, then the radio's own PTT input.
     MoxController* const mox = station.moxController();
     QVERIFY(mox);
-    // Today's Core is receive-only, so its MOX pre-check refuses every key,
-    // a hardware PTT included. Lifting the pre-check stands in for a Core
-    // that can transmit (remote transmit, R4); the keying itself goes
-    // through the same MoxController path.
+    // Test-only logical keying: there is no connected radio or RF path.
     QVERIFY(!mox->isMox());
     mox->setMoxCheck({});
     const auto expectOnAir = [&] {
@@ -4046,6 +4075,7 @@ void RemotePeripheralsTest::remoteWindowOperatesTheAmpThroughTheCore()
 
     AppSettings::instance().clear();
     CoreAndWindow cw;
+    QVERIFY(cw.pairTransmitWindow());
     RadioModel& station = cw.station;
     RadioModel& window = cw.window;
     station.smartSdrListener()->setListenEndpointForTesting(QHostAddress::LocalHost, 0);
@@ -4058,6 +4088,7 @@ void RemotePeripheralsTest::remoteWindowOperatesTheAmpThroughTheCore()
     auto* tabOperate = page.findChild<QPushButton*>(QStringLiteral("remotePgxlOperateButton"));
     QVERIFY(tabOperate);
     QSignalSpy refused(&window, &RadioModel::accessoryRequestRefused);
+    QSignalSpy sliceRefused(&window, &RadioModel::sliceAddRejected);
     const auto operateLines = [&amp] {
         return amp.commands.filter(QRegularExpression(QStringLiteral("^operate")));
     };
@@ -4074,7 +4105,8 @@ void RemotePeripheralsTest::remoteWindowOperatesTheAmpThroughTheCore()
     QVERIFY(OperatorWording::isPlain(notConnected));
 
     QVERIFY(admitCoreAmp(station, amp));
-    QVERIFY(station.receiveOnlyStationPolicy());
+    QTRY_VERIFY(cw.client.capabilities().txPermitted);
+    QVERIFY(!station.receiveOnlyStationPolicy());
     amp.send(QStringLiteral("S0|status state=STANDBY"));
     QTRY_COMPARE(window.amplifierModel()->deviceState(), QStringLiteral("STANDBY"));
     QTRY_VERIFY(applet.operateButtonEnabledForTesting());
@@ -4106,7 +4138,7 @@ void RemotePeripheralsTest::remoteWindowOperatesTheAmpThroughTheCore()
     QVERIFY(!station.isTransmitting());
 
     // On the air (a MOX click, then the radio's own PTT input, through the
-    // Core's MoxController with its receive-only pre-check lifted): both
+    // Core's MoxController with test-only logical keying): both
     // wait with the reason; a request sent anyway reaches nothing.
     MoxController* const mox = station.moxController();
     QVERIFY(mox);
@@ -4127,6 +4159,8 @@ void RemotePeripheralsTest::remoteWindowOperatesTheAmpThroughTheCore()
         QCOMPARE(refused.last().at(0).toString(), QStringLiteral("pgxl"));
         QCOMPARE(refused.last().at(1).toString(), RadioModel::onAirReason());
         QTest::qWait(100);
+        QCOMPARE(refused.count(), refusedBefore + 1);
+        QVERIFY(sliceRefused.isEmpty());
         QCOMPARE(operateLines().size(), 2);
         if (keying == 0) { mox->setMox(false); } else { mox->onMicPttFromRadio(false); }
         QTRY_VERIFY(!window.isCoreOnAir());
@@ -4379,6 +4413,7 @@ void RemotePeripheralsTest::remoteWindowOperatesTheRfKitThroughTheCore()
     AppSettings::instance().setValue(QStringLiteral("RfKit_PollIntervalMs"),
                                      QStringLiteral("250"));
     CoreAndWindow cw;
+    QVERIFY(cw.pairTransmitWindow());
     RadioModel& station = cw.station;
     RadioModel& window = cw.window;
     FakeRfKit amp;
@@ -4411,7 +4446,8 @@ void RemotePeripheralsTest::remoteWindowOperatesTheRfKitThroughTheCore()
                                              &reason));
     QTRY_COMPARE_WITH_TIMEOUT(window.rfKitModel()->connectionPhase(),
                               RfKitModel::ConnectionPhase::Connected, 5000);
-    QVERIFY(station.receiveOnlyStationPolicy());
+    QTRY_VERIFY(cw.client.capabilities().txPermitted);
+    QVERIFY(!station.receiveOnlyStationPolicy());
     // The amp lists its antennas: 1 and 2 usable, 3 disabled, 4 not fitted.
     station.rfKitConnection()->injectJsonForTesting(QStringLiteral("/antennas"), QByteArray(
         R"({"antennas":[{"type":"INTERNAL","number":1,"state":"ACTIVE"},)"
@@ -4507,7 +4543,7 @@ void RemotePeripheralsTest::remoteWindowOperatesTheRfKitThroughTheCore()
              qPrintable(withRtt));
 
     // On the air (a MOX click, through the Core's MoxController with its
-    // receive-only pre-check lifted): the switches (OPERATE, the antennas
+    // test-only logical keying): the switches (OPERATE, the antennas
     // and TCI mode) wait with the reason, and a request sent anyway
     // reaches nothing. Parity mini-round (rulings a and b): Host, Port and
     // Save only save, so they stay live, as a local window's do, and the
@@ -5048,6 +5084,7 @@ void RemotePeripheralsTest::ampOperateWaitsForTheTunerAndAFaultedAmpGoesToStandb
     // words, and a request sent anyway is refused by the Core with them.
     AppSettings::instance().clear();
     CoreAndWindow cw;
+    QVERIFY(cw.pairTransmitWindow());
     RadioModel& station = cw.station;
     RadioModel& window = cw.window;
     station.smartSdrListener()->setListenEndpointForTesting(QHostAddress::LocalHost, 0);
@@ -5059,8 +5096,10 @@ void RemotePeripheralsTest::ampOperateWaitsForTheTunerAndAFaultedAmpGoesToStandb
     auto* tabOperate = page.findChild<QPushButton*>(QStringLiteral("remotePgxlOperateButton"));
     QVERIFY(tabOperate);
     QSignalSpy refused(&window, &RadioModel::accessoryRequestRefused);
+    QSignalSpy sliceRefused(&window, &RadioModel::sliceAddRejected);
     cw.connect(this);
     QTRY_VERIFY(cw.client.pgxlFullControlAvailable());
+    QTRY_VERIFY(cw.client.capabilities().txPermitted);
     window.reportStationLinkStateChanged();
     QVERIFY(admitCoreAmp(station, amp));
     amp.send(QStringLiteral("S0|status state=STANDBY"));
@@ -5076,6 +5115,8 @@ void RemotePeripheralsTest::ampOperateWaitsForTheTunerAndAFaultedAmpGoesToStandb
     QCOMPARE(refused.last().at(0).toString(), QStringLiteral("pgxl"));
     QCOMPARE(refused.last().at(1).toString(), tuning);
     QTest::qWait(100);
+    QCOMPARE(refused.count(), 1);
+    QVERIFY(sliceRefused.isEmpty());
     QVERIFY(amp.commands.filter(QRegularExpression(QStringLiteral("^operate"))).isEmpty());
     station.tunerModel()->applyStationValue(QByteArrayLiteral("isTuning"), false);
     QTRY_VERIFY(applet.operateButtonEnabledForTesting());
