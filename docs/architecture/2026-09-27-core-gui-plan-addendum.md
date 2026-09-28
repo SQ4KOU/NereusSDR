@@ -1126,8 +1126,12 @@ colours for the same signal.
   reconnect clears negotiated state. The integrated app/Core build and full
   rendezvous client suite passed (64.42 seconds), with strict optional-field,
   station/client negotiation and old-service reconnect regressions.
-  No deployed service was changed. Station-session watch signaling, separate
-  DTLS transport, and restrictive-network acceptance remain unfinished.
+  The C++ watch-purpose RelayLeg is built as a separate outer WebSocket with
+  one loopback UDP source, tag 3 only, no media/routed claims and a bounded
+  16-frame/8192-byte queue (`218dd70e`). Its integrated app/Core build and both
+  relay suites passed (11.66 seconds); ending the watch leaves primary forwarding
+  intact. No deployed service was changed. Station-session watch signaling,
+  separate DTLS transport and restrictive-network acceptance remain unfinished.
 - Plan: several-device capacity and restrictive-network relay access.
 
 ### G-67: Releasing an offline Core must preserve receiver edits and saved layouts
