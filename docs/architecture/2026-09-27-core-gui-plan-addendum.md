@@ -1251,6 +1251,9 @@ colours for the same signal.
   The lead corrected that test to locate the original named block and still
   check every entry's contiguous order. The explicitly rebuilt full display
   extras suite passes (2.83 s). No production ordering changed.
+  The same full run found matching tail assumptions in the Core log and
+  pairing suites. Both now anchor their original contiguous blocks by name;
+  their explicitly rebuilt complete suites pass together (10.66 s).
 - Plan: several-device capability compatibility.
 
 ### G-69: Desktop shutdown could close ingress before ending transmit

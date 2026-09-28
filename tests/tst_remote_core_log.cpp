@@ -180,10 +180,22 @@ private slots:
         caps.radioIdentityEntries = true;
         caps.supportBundleVersion = 1;
         const QList<MirrorUpdate> updates = caps.toUpdates();
-        QCOMPARE(updates.at(updates.size() - 3).name, QByteArray("supportBundleVersion"));
-        QCOMPARE(updates.at(updates.size() - 4).name, QByteArray("relayAllowed"));
-        QCOMPARE(updates.at(updates.size() - 2).name, QByteArray("mediaTunnelVersion"));
-        QCOMPARE(updates.last().name, QByteArray("mediaRelayRoutingVersion"));
+        // Later capabilities may follow this deployed contiguous block.
+        const QList<QByteArray> originalBlock{
+            "relayAllowed", "supportBundleVersion", "mediaTunnelVersion",
+            "mediaRelayRoutingVersion"};
+        qsizetype first = -1;
+        for (qsizetype i = 0; i < updates.size(); ++i) {
+            if (updates.at(i).name == originalBlock.first()) {
+                QVERIFY(first < 0);
+                first = i;
+            }
+        }
+        QVERIFY(first >= 0);
+        QVERIFY(first + originalBlock.size() <= updates.size());
+        for (qsizetype i = 0; i < originalBlock.size(); ++i) {
+            QCOMPARE(updates.at(first + i).name, originalBlock.at(i));
+        }
         QCOMPARE(StationCapabilities::fromUpdates(updates).supportBundleVersion, 1);
 
         std::unique_ptr<RadioModel> core = makeCore();
