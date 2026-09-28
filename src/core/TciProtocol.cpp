@@ -49,8 +49,11 @@
 //                window that forwards transmit leaves the trx answer to
 //                TciServer (the Core's verdict). NereusSDR-original. J.J.
 //                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - Desktop-host receiver-to-owned-slice mapping.
+//                NereusSDR-original, AI-assisted via OpenAI Codex.
 
 #include "TciProtocol.h"
+#include <QSet>
 
 #include <QHash>
 
@@ -59,6 +62,8 @@
 #include "TciVolume.h"
 #include "TciVfoCoalescer.h"
 #include "models/Band.h"  // bandFromFrequency + bandLabel for tx_frequency_thetis
+#include "models/RadioModel.h"
+#include "models/SliceModel.h"
 
 namespace NereusSDR {
 
@@ -172,8 +177,12 @@ QString TciProtocol::handleCommand(const QString& command)
             const auto query = kQueryArgs.constFind(name);
             bool ok = false;
             const int rx = args.at(0).trimmed().toInt(&ok);
+            if (m_receiverSliceMap && query != kQueryArgs.cend() && ok
+                && m_receiverSliceMap(rx) < 0) {
+                return {};
+            }
             if (query != kQueryArgs.cend() && args.size() > *query && ok
-                && !m_sliceWriteGate(trxToSlice(rx))) {
+                && !m_sliceWriteGate(receiverSlice(rx))) {
                 return handleSetCommand(name, args.mid(0, *query));
             }
         }
@@ -271,9 +280,40 @@ void TciProtocol::drainCoalescedNotifications()
 // signal fires on the same Qt thread.
 void TciProtocol::enqueueLocalBroadcast(const QString& frame)
 {
-    if (!frame.isEmpty()) {
+    if (frame.isEmpty()) { return; }
+    const int colon = frame.indexOf(QLatin1Char(':'));
+    if (colon < 0) { m_pendingNotifications.append(frame); return; }
+    static const QSet<QString> kSliceLines{
+        QStringLiteral("sql_enable"), QStringLiteral("sql_level"),
+        QStringLiteral("lock"), QStringLiteral("vfo_lock"),
+        QStringLiteral("rx_mute"), QStringLiteral("rit_enable"),
+        QStringLiteral("rit_offset"), QStringLiteral("xit_enable"),
+        QStringLiteral("xit_offset"), QStringLiteral("rx_balance"),
+        QStringLiteral("rx_nb_enable"), QStringLiteral("rx_nr_enable"),
+        QStringLiteral("rx_nr_enable_ex"), QStringLiteral("rx_anf_enable"),
+        QStringLiteral("rx_volume"), QStringLiteral("rx_apf_enable"),
+        QStringLiteral("rx_bin_enable"), QStringLiteral("modulation"),
+        QStringLiteral("rx_filter_band"), QStringLiteral("agc_mode"),
+        QStringLiteral("agc_gain"), QStringLiteral("split_enable")
+    };
+    if (!kSliceLines.contains(frame.left(colon))) {
         m_pendingNotifications.append(frame);
+        return;
     }
+    const int comma = frame.indexOf(QLatin1Char(','), colon + 1);
+    if (comma < 0) { return; }
+    bool ok = false;
+    const int sliceId = frame.mid(colon + 1, comma - colon - 1).toInt(&ok);
+    if (!m_receiverSliceMap) {
+        if (ok && sliceId >= 0 && sliceId < kExposedReceiverCount) {
+            m_pendingNotifications.append(frame);
+        }
+        return;
+    }
+    const int receiver = ok ? sliceReceiver(sliceId) : -1;
+    if (receiver < 0) { return; }
+    m_pendingNotifications.append(frame.left(colon + 1) + QString::number(receiver)
+                                  + frame.mid(comma));
 }
 
 // VFO push routes through the coalescer (Layer 3 of the Thetis 3-layer
@@ -285,6 +325,11 @@ void TciProtocol::enqueueLocalBroadcast(const QString& frame)
 // buildInitialRadioStateLines).
 void TciProtocol::enqueueLocalBroadcastVfo(int rxIndex, qint64 hz, bool isTxBound)
 {
+    rxIndex = sliceReceiver(rxIndex);
+    if (rxIndex < 0 || rxIndex >= kExposedReceiverCount) {
+        if (isTxBound) { enqueueLocalBroadcastTxFrequency(hz); }
+        return;
+    }
     // Task 12 (R-R3-49): if then vfo for each channel, both on the VFO gate.
     // From Thetis TCIServer.cs:1385-1398 [v2.10.3.15]:
     //   if (vfoData.sendIF) sendIF(vfoData.rx, vfoData.chan, (int)vfoData.offsetHz);
@@ -334,6 +379,8 @@ void TciProtocol::enqueueLocalBroadcastVfo(int rxIndex, qint64 hz, bool isTxBoun
 // [v2.10.3.15]). Both lines on the centre gate; both rendered at drain.
 void TciProtocol::enqueueLocalBroadcastCentre(int rxIndex)
 {
+    rxIndex = sliceReceiver(rxIndex);
+    if (rxIndex < 0 || rxIndex >= kExposedReceiverCount) { return; }
     const int centreGate = static_cast<int>(TciUpdateGap::Gate::Centre);
     m_vfoCoalescer.update(QStringLiteral("dds:%1").arg(rxIndex),
                           buildDdsLine(rxIndex, 0), centreGate);
@@ -503,6 +550,9 @@ QStringList TciProtocol::buildInitialRadioStateLines() const
     QMetaObject::invokeMethod(m_radio, "rx2Enabled",
                               Qt::DirectConnection,
                               Q_RETURN_ARG(bool, bRX2Enabled));
+    if (m_receiverSliceMap) {
+        bRX2Enabled = m_receiverSliceMap(1) >= 0;
+    }
 
     // Helper: read a qint64 RadioModel accessor via QMetaObject::invokeMethod.
     // Mirrors the query-path pattern at handleVfoCommand below (line ~1140).
@@ -513,7 +563,7 @@ QStringList TciProtocol::buildInitialRadioStateLines() const
         QMetaObject::invokeMethod(m_radio, "vfoHz",
                                   Qt::DirectConnection,
                                   Q_RETURN_ARG(qint64, hz),
-                                  Q_ARG(int, rx),
+                                  Q_ARG(int, receiverSlice(rx)),
                                   Q_ARG(int, chan));
         return hz;
     };
@@ -565,7 +615,7 @@ QStringList TciProtocol::buildInitialRadioStateLines() const
         QMetaObject::invokeMethod(m_radio, "mode",
                                   Qt::DirectConnection,
                                   Q_RETURN_ARG(QString, m),
-                                  Q_ARG(int, rx));
+                                  Q_ARG(int, receiverSlice(rx)));
         return m;
     };
     const QString modeUpper[2] = { readMode(0), readMode(1) };
@@ -577,7 +627,7 @@ QStringList TciProtocol::buildInitialRadioStateLines() const
         QMetaObject::invokeMethod(m_radio, "filterLow",
                                   Qt::DirectConnection,
                                   Q_RETURN_ARG(int, v),
-                                  Q_ARG(int, rx));
+                                  Q_ARG(int, receiverSlice(rx)));
         return v;
     };
     const auto readFilterHigh = [this](int rx) -> int {
@@ -585,7 +635,7 @@ QStringList TciProtocol::buildInitialRadioStateLines() const
         QMetaObject::invokeMethod(m_radio, "filterHigh",
                                   Qt::DirectConnection,
                                   Q_RETURN_ARG(int, v),
-                                  Q_ARG(int, rx));
+                                  Q_ARG(int, receiverSlice(rx)));
         return v;
     };
     const int filterLow[2]  = { readFilterLow(0),  readFilterLow(1)  };
@@ -626,7 +676,7 @@ QStringList TciProtocol::buildInitialRadioStateLines() const
         QMetaObject::invokeMethod(m_radio, "rxNr",
                                   Qt::DirectConnection,
                                   Q_RETURN_ARG(bool, on),
-                                  Q_ARG(int, rx));
+                                  Q_ARG(int, receiverSlice(rx)));
         if (!on) {
             return 0;  // collapse to Thetis "NR off" sentinel
         }
@@ -634,7 +684,7 @@ QStringList TciProtocol::buildInitialRadioStateLines() const
         QMetaObject::invokeMethod(m_radio, "rxNrIndex",
                                   Qt::DirectConnection,
                                   Q_RETURN_ARG(int, idx),
-                                  Q_ARG(int, rx));
+                                  Q_ARG(int, receiverSlice(rx)));
         return idx;
     };
     const int rx1nr = readRxNrSlot(0);
@@ -653,7 +703,7 @@ QStringList TciProtocol::buildInitialRadioStateLines() const
         QMetaObject::invokeMethod(m_radio, method,
                                   Qt::DirectConnection,
                                   Q_RETURN_ARG(int, v),
-                                  Q_ARG(int, rx));
+                                  Q_ARG(int, receiverSlice(rx)));
         return v;
     };
     const auto readBoolPerRx = [this](const char* method, int rx) -> bool {
@@ -661,7 +711,7 @@ QStringList TciProtocol::buildInitialRadioStateLines() const
         QMetaObject::invokeMethod(m_radio, method,
                                   Qt::DirectConnection,
                                   Q_RETURN_ARG(bool, v),
-                                  Q_ARG(int, rx));
+                                  Q_ARG(int, receiverSlice(rx)));
         return v;
     };
     const auto readQStringPerRx = [this](const char* method, int rx) -> QString {
@@ -669,7 +719,7 @@ QStringList TciProtocol::buildInitialRadioStateLines() const
         QMetaObject::invokeMethod(m_radio, method,
                                   Qt::DirectConnection,
                                   Q_RETURN_ARG(QString, v),
-                                  Q_ARG(int, rx));
+                                  Q_ARG(int, receiverSlice(rx)));
         return v;
     };
     const auto readDoublePerRxChan = [this](const char* method, int rx, int chan) -> double {
@@ -677,7 +727,7 @@ QStringList TciProtocol::buildInitialRadioStateLines() const
         QMetaObject::invokeMethod(m_radio, method,
                                   Qt::DirectConnection,
                                   Q_RETURN_ARG(double, v),
-                                  Q_ARG(int, rx),
+                                  Q_ARG(int, receiverSlice(rx)),
                                   Q_ARG(int, chan));
         return v;
     };
@@ -686,7 +736,7 @@ QStringList TciProtocol::buildInitialRadioStateLines() const
         QMetaObject::invokeMethod(m_radio, method,
                                   Qt::DirectConnection,
                                   Q_RETURN_ARG(double, v),
-                                  Q_ARG(int, rx));
+                                  Q_ARG(int, receiverSlice(rx)));
         return v;
     };
     const auto readIntGlobal = [this](const char* method) -> int {
@@ -803,6 +853,25 @@ QStringList TciProtocol::buildInitialRadioStateLines() const
     const bool xitOn = readBoolGlobal("xitEnable");
     const int  ritVal = readIntGlobal("ritOffset");
     const int  xitVal = readIntGlobal("xitOffset");
+    // The hosted desktop has several independent slice owners. Its TCI
+    // receivers read their own slices rather than the station-level active
+    // slice, which may belong to a phone.
+    const auto ritOnFor = [this, ritOn](int rx) {
+        const SliceModel* slice = mappedSlice(rx);
+        return slice ? slice->ritEnabled() : ritOn;
+    };
+    const auto xitOnFor = [this, xitOn](int rx) {
+        const SliceModel* slice = mappedSlice(rx);
+        return slice ? slice->xitEnabled() : xitOn;
+    };
+    const auto ritValFor = [this, ritVal](int rx) {
+        const SliceModel* slice = mappedSlice(rx);
+        return slice ? slice->ritHz() : ritVal;
+    };
+    const auto xitValFor = [this, xitVal](int rx) {
+        const SliceModel* slice = mappedSlice(rx);
+        return slice ? slice->xitHz() : xitVal;
+    };
 
     // VFO locks -- From Thetis TCIServer.cs:2595-2599 [v2.10.3.15] -- lock(0)
     // always emitted; lock(1) only when bRX2Enabled.  sendAllVFOLocks emits
@@ -1021,14 +1090,14 @@ QStringList TciProtocol::buildInitialRadioStateLines() const
     //rit/xit
 
     // From Thetis TCIServer.cs:2445-2452 [v2.10.3.13]
-    lines << buildRitEnableLine(0, ritOn);
-    lines << buildRitEnableLine(1, ritOn);
-    lines << buildXitEnableLine(0, xitOn);
-    lines << buildXitEnableLine(1, xitOn);
-    lines << buildRitOffsetLine(0, ritVal);
-    lines << buildRitOffsetLine(1, ritVal);
-    lines << buildXitOffsetLine(0, xitVal);
-    lines << buildXitOffsetLine(1, xitVal);
+    lines << buildRitEnableLine(0, ritOnFor(0));
+    lines << buildRitEnableLine(1, ritOnFor(1));
+    lines << buildXitEnableLine(0, xitOnFor(0));
+    lines << buildXitEnableLine(1, xitOnFor(1));
+    lines << buildRitOffsetLine(0, ritValFor(0));
+    lines << buildRitOffsetLine(1, ritValFor(1));
+    lines << buildXitOffsetLine(0, xitValFor(0));
+    lines << buildXitOffsetLine(1, xitValFor(1));
 
     // From Thetis TCIServer.cs:2453-2458 [v2.10.3.13]
     lines << buildLockLine(0, vfoALock);
@@ -1141,7 +1210,7 @@ qint64 TciProtocol::readVfoHzForRx(int rx, int chan) const
     QMetaObject::invokeMethod(m_radio, "vfoHz",
                               Qt::DirectConnection,
                               Q_RETURN_ARG(qint64, hz),
-                              Q_ARG(int, rx),
+                              Q_ARG(int, receiverSlice(rx)),
                               Q_ARG(int, chan));
     return hz;
 }
@@ -1155,7 +1224,7 @@ qint64 TciProtocol::readDdsHz(int rx) const
         && QMetaObject::invokeMethod(m_radio, "ddsHz",
                                      Qt::DirectConnection,
                                      Q_RETURN_ARG(qint64, hz),
-                                     Q_ARG(int, rx))) {
+                                     Q_ARG(int, receiverSlice(rx)))) {
         return hz;
     }
     return readVfoHzForRx(rx, 0);
@@ -1168,7 +1237,7 @@ QString TciProtocol::buildIfLineForRx(int rx, int chan) const
         QMetaObject::invokeMethod(m_radio, "ritHzForRx",
                                   Qt::DirectConnection,
                                   Q_RETURN_ARG(int, ritHz),
-                                  Q_ARG(int, rx));
+                                  Q_ARG(int, receiverSlice(rx)));
     }
     return buildIfLine(rx, chan,
                        ifOffsetHz(readVfoHzForRx(rx, chan), readDdsHz(rx), ritHz));
@@ -1600,6 +1669,31 @@ QString TciProtocol::buildStartStopLine(bool powerOn)
 int TciProtocol::sliceToTrx(int slice) { return slice; }
 int TciProtocol::trxToSlice(int trx) { return trx; }
 
+int TciProtocol::receiverSlice(int receiver) const
+{
+    if (!m_receiverSliceMap) { return receiver; }
+    const int mapped = m_receiverSliceMap(receiver);
+    // Init-burst reads of a vacant receiver must never fall back to a
+    // station-level active slice owned by somebody else.
+    return mapped >= 0 ? mapped : m_receiverSliceMap(0);
+}
+
+SliceModel* TciProtocol::mappedSlice(int receiver) const
+{
+    if (!m_receiverSliceMap) { return nullptr; }
+    auto* radio = qobject_cast<RadioModel*>(m_radio);
+    return radio ? radio->sliceById(receiverSlice(receiver)) : nullptr;
+}
+
+int TciProtocol::sliceReceiver(int sliceId) const
+{
+    if (!m_receiverSliceMap) { return sliceId; }
+    for (int receiver = 0; receiver < kExposedReceiverCount; ++receiver) {
+        if (m_receiverSliceMap(receiver) == sliceId) { return receiver; }
+    }
+    return -1;
+}
+
 void TciProtocol::resetDispatchCounters()
 {
     m_setDispatchCount = 0;
@@ -1823,7 +1917,7 @@ QString TciProtocol::handleVfoCommand(const QStringList& args)
         // Production RadioModel exposes setVfoHz as Q_INVOKABLE too (Phase 17+).
         QMetaObject::invokeMethod(m_radio, "setVfoHz",
                                   Qt::DirectConnection,
-                                  Q_ARG(int, rx),
+                                  Q_ARG(int, receiverSlice(rx)),
                                   Q_ARG(int, chan),
                                   Q_ARG(qint64, hz));
         // Phase 15: route through coalescer (Layer 3 of Thetis 3-layer throttle
@@ -1841,7 +1935,7 @@ QString TciProtocol::handleVfoCommand(const QStringList& args)
             QMetaObject::invokeMethod(m_radio, "vfoHz",
                                       Qt::DirectConnection,
                                       Q_RETURN_ARG(qint64, answered),
-                                      Q_ARG(int, rx),
+                                      Q_ARG(int, receiverSlice(rx)),
                                       Q_ARG(int, chan));
         }
         const QString vfoFrame = QStringLiteral("vfo:%1,%2,%3;").arg(rx).arg(chan).arg(answered);
@@ -1855,7 +1949,7 @@ QString TciProtocol::handleVfoCommand(const QStringList& args)
     QMetaObject::invokeMethod(m_radio, "vfoHz",
                               Qt::DirectConnection,
                               Q_RETURN_ARG(qint64, hz),
-                              Q_ARG(int, rx),
+                              Q_ARG(int, receiverSlice(rx)),
                               Q_ARG(int, chan));
     // From Thetis sendVFO at TCIServer.cs:2093 [v2.10.3.13] — format string.
     return QStringLiteral("vfo:%1,%2,%3;").arg(rx).arg(chan).arg(hz);
@@ -1887,7 +1981,7 @@ QString TciProtocol::handleVfoLockCommand(const QStringList& args)
         const bool locked = (boolStr == QStringLiteral("true"));
         QMetaObject::invokeMethod(m_radio, "setVfoLock",
                                   Qt::DirectConnection,
-                                  Q_ARG(int, rx),
+                                  Q_ARG(int, receiverSlice(rx)),
                                   Q_ARG(int, chan),
                                   Q_ARG(bool, locked));
         // From Thetis sendVFOLock at TCIServer.cs:1926-1930 [v2.10.3.13] — format.
@@ -1903,7 +1997,7 @@ QString TciProtocol::handleVfoLockCommand(const QStringList& args)
     QMetaObject::invokeMethod(m_radio, "vfoLock",
                               Qt::DirectConnection,
                               Q_RETURN_ARG(bool, locked),
-                              Q_ARG(int, rx),
+                              Q_ARG(int, receiverSlice(rx)),
                               Q_ARG(int, chan));
     // From Thetis sendVFOLock at TCIServer.cs:1926-1930 [v2.10.3.13] — format.
     return QStringLiteral("vfo_lock:%1,%2,%3;")
@@ -1937,7 +2031,7 @@ QString TciProtocol::handleLockCommand(const QStringList& args)
         const bool locked = (boolStr == QStringLiteral("true"));
         QMetaObject::invokeMethod(m_radio, "setLock",
                                   Qt::DirectConnection,
-                                  Q_ARG(int, rx),
+                                  Q_ARG(int, receiverSlice(rx)),
                                   Q_ARG(bool, locked));
         // From Thetis sendLock at TCIServer.cs:1921-1925 [v2.10.3.13] — format.
         m_pendingNotifications << QStringLiteral("lock:%1,%2;")
@@ -1952,7 +2046,7 @@ QString TciProtocol::handleLockCommand(const QStringList& args)
     QMetaObject::invokeMethod(m_radio, "lock",
                               Qt::DirectConnection,
                               Q_RETURN_ARG(bool, locked),
-                              Q_ARG(int, rx));
+                              Q_ARG(int, receiverSlice(rx)));
     // From Thetis sendLock at TCIServer.cs:1921-1925 [v2.10.3.13] — format.
     return QStringLiteral("lock:%1,%2;")
         .arg(rx)
@@ -1986,7 +2080,7 @@ QString TciProtocol::handleModulationCommand(const QStringList& args)
         QString currentMode;
         QMetaObject::invokeMethod(m_radio, "mode", Qt::DirectConnection,
                                   Q_RETURN_ARG(QString, currentMode),
-                                  Q_ARG(int, rx));
+                                  Q_ARG(int, receiverSlice(rx)));
         return QStringLiteral("modulation:%1,%2;").arg(rx).arg(currentMode.toUpper());
     }
 
@@ -2024,7 +2118,7 @@ QString TciProtocol::handleModulationCommand(const QStringList& args)
         }
 
         QMetaObject::invokeMethod(m_radio, "setMode", Qt::DirectConnection,
-                                  Q_ARG(int, rx), Q_ARG(QString, modeOut));
+                                  Q_ARG(int, receiverSlice(rx)), Q_ARG(QString, modeOut));
         // R-R3-42: in a remote window, answer with the mode the slice holds
         // now (see handleVfoCommand); the Core's answer follows through the
         // slice's mode broadcast.
@@ -2032,7 +2126,7 @@ QString TciProtocol::handleModulationCommand(const QStringList& args)
             QString held;
             QMetaObject::invokeMethod(m_radio, "mode", Qt::DirectConnection,
                                       Q_RETURN_ARG(QString, held),
-                                      Q_ARG(int, rx));
+                                      Q_ARG(int, receiverSlice(rx)));
             if (!held.isEmpty()) {
                 modeOut = held.toUpper();
             }
@@ -2069,9 +2163,9 @@ QString TciProtocol::handleRxFilterBandCommand(const QStringList& args)
         // From Thetis TCIServer.cs:4380-4384 [v2.10.3.13] — RX1FilterLow/High read.
         int low = 0, high = 0;
         QMetaObject::invokeMethod(m_radio, "filterLow", Qt::DirectConnection,
-                                  Q_RETURN_ARG(int, low), Q_ARG(int, rx));
+                                  Q_RETURN_ARG(int, low), Q_ARG(int, receiverSlice(rx)));
         QMetaObject::invokeMethod(m_radio, "filterHigh", Qt::DirectConnection,
-                                  Q_RETURN_ARG(int, high), Q_ARG(int, rx));
+                                  Q_RETURN_ARG(int, high), Q_ARG(int, receiverSlice(rx)));
         return QStringLiteral("rx_filter_band:%1,%2,%3;").arg(rx).arg(low).arg(high);
     }
 
@@ -2085,7 +2179,7 @@ QString TciProtocol::handleRxFilterBandCommand(const QStringList& args)
             return {};
         }
         QMetaObject::invokeMethod(m_radio, "setFilterBand", Qt::DirectConnection,
-                                  Q_ARG(int, rx), Q_ARG(int, low), Q_ARG(int, high));
+                                  Q_ARG(int, receiverSlice(rx)), Q_ARG(int, low), Q_ARG(int, high));
         // From Thetis sendFilterBand at TCIServer.cs:2349-2353 [v2.10.3.13] — format string.
         m_pendingNotifications << QStringLiteral("rx_filter_band:%1,%2,%3;")
                                       .arg(rx).arg(low).arg(high);
@@ -2235,7 +2329,7 @@ QString TciProtocol::handleSplitEnableCommand(const QStringList& args)
     QMetaObject::invokeMethod(m_radio, "split",
                               Qt::DirectConnection,
                               Q_RETURN_ARG(bool, split),
-                              Q_ARG(int, rx));
+                              Q_ARG(int, receiverSlice(rx)));
     // From Thetis sendSplit at TCIServer.cs:1878 [v2.10.3.13] — format string.
     return QStringLiteral("split_enable:%1,%2;")
         .arg(rx)
@@ -2314,7 +2408,7 @@ QString TciProtocol::handleRxMuteCommand(const QStringList& args)
         const bool muted = (boolStr == QStringLiteral("true"));
         QMetaObject::invokeMethod(m_radio, "setRxMute",
                                   Qt::DirectConnection,
-                                  Q_ARG(int, rx),
+                                  Q_ARG(int, receiverSlice(rx)),
                                   Q_ARG(bool, muted));
         // From Thetis sendMuteRX at TCIServer.cs:2165 [v2.10.3.13] — broadcast format.
         m_pendingNotifications << QStringLiteral("rx_mute:%1,%2;")
@@ -2329,7 +2423,7 @@ QString TciProtocol::handleRxMuteCommand(const QStringList& args)
     QMetaObject::invokeMethod(m_radio, "rxMute",
                               Qt::DirectConnection,
                               Q_RETURN_ARG(bool, muted),
-                              Q_ARG(int, rx));
+                              Q_ARG(int, receiverSlice(rx)));
     // From Thetis sendMuteRX at TCIServer.cs:2165 [v2.10.3.13] — format string.
     return QStringLiteral("rx_mute:%1,%2;")
         .arg(rx)
@@ -2354,7 +2448,7 @@ QString TciProtocol::handleRxNbEnableCommand(const QStringList& args)
         // Query path.
         bool en = false;
         QMetaObject::invokeMethod(m_radio, "rxNb", Qt::DirectConnection,
-                                  Q_RETURN_ARG(bool, en), Q_ARG(int, rx));
+                                  Q_RETURN_ARG(bool, en), Q_ARG(int, receiverSlice(rx)));
         return QStringLiteral("rx_nb_enable:%1,%2;")
             .arg(rx).arg(en ? QStringLiteral("true") : QStringLiteral("false"));
     }
@@ -2363,7 +2457,7 @@ QString TciProtocol::handleRxNbEnableCommand(const QStringList& args)
         // Set path.
         const bool en = args.at(1).trimmed().toLower() == QStringLiteral("true");
         QMetaObject::invokeMethod(m_radio, "setRxNb", Qt::DirectConnection,
-                                  Q_ARG(int, rx), Q_ARG(bool, en));
+                                  Q_ARG(int, receiverSlice(rx)), Q_ARG(bool, en));
         m_pendingNotifications << QStringLiteral("rx_nb_enable:%1,%2;")
             .arg(rx).arg(en ? QStringLiteral("true") : QStringLiteral("false"));
         return {};
@@ -2387,7 +2481,7 @@ QString TciProtocol::handleRxBinEnableCommand(const QStringList& args)
     if (args.size() == 1) {
         bool en = false;
         QMetaObject::invokeMethod(m_radio, "rxBin", Qt::DirectConnection,
-                                  Q_RETURN_ARG(bool, en), Q_ARG(int, rx));
+                                  Q_RETURN_ARG(bool, en), Q_ARG(int, receiverSlice(rx)));
         return QStringLiteral("rx_bin_enable:%1,%2;")
             .arg(rx).arg(en ? QStringLiteral("true") : QStringLiteral("false"));
     }
@@ -2395,7 +2489,7 @@ QString TciProtocol::handleRxBinEnableCommand(const QStringList& args)
     if (args.size() >= 2) {
         const bool en = args.at(1).trimmed().toLower() == QStringLiteral("true");
         QMetaObject::invokeMethod(m_radio, "setRxBin", Qt::DirectConnection,
-                                  Q_ARG(int, rx), Q_ARG(bool, en));
+                                  Q_ARG(int, receiverSlice(rx)), Q_ARG(bool, en));
         m_pendingNotifications << QStringLiteral("rx_bin_enable:%1,%2;")
             .arg(rx).arg(en ? QStringLiteral("true") : QStringLiteral("false"));
         return {};
@@ -2420,7 +2514,7 @@ QString TciProtocol::handleRxApfEnableCommand(const QStringList& args)
     if (args.size() == 1) {
         bool en = false;
         QMetaObject::invokeMethod(m_radio, "rxApf", Qt::DirectConnection,
-                                  Q_RETURN_ARG(bool, en), Q_ARG(int, rx));
+                                  Q_RETURN_ARG(bool, en), Q_ARG(int, receiverSlice(rx)));
         return QStringLiteral("rx_apf_enable:%1,%2;")
             .arg(rx).arg(en ? QStringLiteral("true") : QStringLiteral("false"));
     }
@@ -2428,7 +2522,7 @@ QString TciProtocol::handleRxApfEnableCommand(const QStringList& args)
     if (args.size() >= 2) {
         const bool en = args.at(1).trimmed().toLower() == QStringLiteral("true");
         QMetaObject::invokeMethod(m_radio, "setRxApf", Qt::DirectConnection,
-                                  Q_ARG(int, rx), Q_ARG(bool, en));
+                                  Q_ARG(int, receiverSlice(rx)), Q_ARG(bool, en));
         m_pendingNotifications << QStringLiteral("rx_apf_enable:%1,%2;")
             .arg(rx).arg(en ? QStringLiteral("true") : QStringLiteral("false"));
         return {};
@@ -2452,7 +2546,7 @@ QString TciProtocol::handleRxNfEnableCommand(const QStringList& args)
     if (args.size() == 1) {
         bool en = false;
         QMetaObject::invokeMethod(m_radio, "rxNf", Qt::DirectConnection,
-                                  Q_RETURN_ARG(bool, en), Q_ARG(int, rx));
+                                  Q_RETURN_ARG(bool, en), Q_ARG(int, receiverSlice(rx)));
         return QStringLiteral("rx_nf_enable:%1,%2;")
             .arg(rx).arg(en ? QStringLiteral("true") : QStringLiteral("false"));
     }
@@ -2460,7 +2554,7 @@ QString TciProtocol::handleRxNfEnableCommand(const QStringList& args)
     if (args.size() >= 2) {
         const bool en = args.at(1).trimmed().toLower() == QStringLiteral("true");
         QMetaObject::invokeMethod(m_radio, "setRxNf", Qt::DirectConnection,
-                                  Q_ARG(int, rx), Q_ARG(bool, en));
+                                  Q_ARG(int, receiverSlice(rx)), Q_ARG(bool, en));
         // No notification queued here.  From Thetis TCIServer.cs:3394-3398
         // [v2.10.3.15] the set branch sends nothing at all; the wire frames
         // come from TNFChangedHandlers -> OnTnfChanged (TCIServer.cs:6771,
@@ -2492,7 +2586,7 @@ QString TciProtocol::handleRxAnfEnableCommand(const QStringList& args)
     if (args.size() == 1) {
         bool en = false;
         QMetaObject::invokeMethod(m_radio, "rxAnf", Qt::DirectConnection,
-                                  Q_RETURN_ARG(bool, en), Q_ARG(int, rx));
+                                  Q_RETURN_ARG(bool, en), Q_ARG(int, receiverSlice(rx)));
         return QStringLiteral("rx_anf_enable:%1,%2;")
             .arg(rx).arg(en ? QStringLiteral("true") : QStringLiteral("false"));
     }
@@ -2500,7 +2594,7 @@ QString TciProtocol::handleRxAnfEnableCommand(const QStringList& args)
     if (args.size() >= 2) {
         const bool en = args.at(1).trimmed().toLower() == QStringLiteral("true");
         QMetaObject::invokeMethod(m_radio, "setRxAnf", Qt::DirectConnection,
-                                  Q_ARG(int, rx), Q_ARG(bool, en));
+                                  Q_ARG(int, receiverSlice(rx)), Q_ARG(bool, en));
         m_pendingNotifications << QStringLiteral("rx_anf_enable:%1,%2;")
             .arg(rx).arg(en ? QStringLiteral("true") : QStringLiteral("false"));
         return {};
@@ -2531,9 +2625,9 @@ QString TciProtocol::handleRxNrEnableCommand(const QStringList& args)
         bool en = false;
         int nrIndex = 1;
         QMetaObject::invokeMethod(m_radio, "rxNr", Qt::DirectConnection,
-                                  Q_RETURN_ARG(bool, en), Q_ARG(int, rx));
+                                  Q_RETURN_ARG(bool, en), Q_ARG(int, receiverSlice(rx)));
         QMetaObject::invokeMethod(m_radio, "rxNrIndex", Qt::DirectConnection,
-                                  Q_RETURN_ARG(int, nrIndex), Q_ARG(int, rx));
+                                  Q_RETURN_ARG(int, nrIndex), Q_ARG(int, receiverSlice(rx)));
         const QString enStr = en ? QStringLiteral("true") : QStringLiteral("false");
         // Also enqueue the extended form (Thetis emits both on query).
         m_pendingNotifications << QStringLiteral("rx_nr_enable_ex:%1,%2,%3;")
@@ -2545,7 +2639,7 @@ QString TciProtocol::handleRxNrEnableCommand(const QStringList& args)
         const bool en = args.at(1).trimmed().toLower() == QStringLiteral("true");
         // Default nr=1 for basic form (TCIServer.cs:4494 [v2.10.3.13]).
         QMetaObject::invokeMethod(m_radio, "setRxNr", Qt::DirectConnection,
-                                  Q_ARG(int, rx), Q_ARG(bool, en), Q_ARG(int, 1));
+                                  Q_ARG(int, receiverSlice(rx)), Q_ARG(bool, en), Q_ARG(int, 1));
         m_pendingNotifications << QStringLiteral("rx_nr_enable:%1,%2;")
             .arg(rx).arg(en ? QStringLiteral("true") : QStringLiteral("false"));
         return {};
@@ -2572,9 +2666,9 @@ QString TciProtocol::handleRxNrEnableExCommand(const QStringList& args)
         bool en = false;
         int nrIndex = 1;
         QMetaObject::invokeMethod(m_radio, "rxNr", Qt::DirectConnection,
-                                  Q_RETURN_ARG(bool, en), Q_ARG(int, rx));
+                                  Q_RETURN_ARG(bool, en), Q_ARG(int, receiverSlice(rx)));
         QMetaObject::invokeMethod(m_radio, "rxNrIndex", Qt::DirectConnection,
-                                  Q_RETURN_ARG(int, nrIndex), Q_ARG(int, rx));
+                                  Q_RETURN_ARG(int, nrIndex), Q_ARG(int, receiverSlice(rx)));
         const QString enStr = en ? QStringLiteral("true") : QStringLiteral("false");
         // Also enqueue the basic form (Thetis emits both on query).
         m_pendingNotifications << QStringLiteral("rx_nr_enable:%1,%2;")
@@ -2590,7 +2684,7 @@ QString TciProtocol::handleRxNrEnableExCommand(const QStringList& args)
         // nr range check: 1..4 per TCIServer.cs:4509 [v2.10.3.13].
         if (nrIndex < 1 || nrIndex > 4) { return {}; }
         QMetaObject::invokeMethod(m_radio, "setRxNr", Qt::DirectConnection,
-                                  Q_ARG(int, rx), Q_ARG(bool, en), Q_ARG(int, nrIndex));
+                                  Q_ARG(int, receiverSlice(rx)), Q_ARG(bool, en), Q_ARG(int, nrIndex));
         m_pendingNotifications << QStringLiteral("rx_nr_enable_ex:%1,%2,%3;")
             .arg(rx).arg(en ? QStringLiteral("true") : QStringLiteral("false"))
             .arg(nrIndex);
@@ -2620,7 +2714,7 @@ QString TciProtocol::handleAgcModeCommand(const QStringList& args)
     if (args.size() == 1) {
         QString mode;
         QMetaObject::invokeMethod(m_radio, "agcMode", Qt::DirectConnection,
-                                  Q_RETURN_ARG(QString, mode), Q_ARG(int, rx));
+                                  Q_RETURN_ARG(QString, mode), Q_ARG(int, receiverSlice(rx)));
         return QStringLiteral("agc_mode:%1,%2;").arg(rx).arg(mode);
     }
 
@@ -2644,7 +2738,7 @@ QString TciProtocol::handleAgcModeCommand(const QStringList& args)
             modeCanon = QStringLiteral("normal");
         }
         QMetaObject::invokeMethod(m_radio, "setAgcMode", Qt::DirectConnection,
-                                  Q_ARG(int, rx), Q_ARG(QString, modeCanon));
+                                  Q_ARG(int, receiverSlice(rx)), Q_ARG(QString, modeCanon));
         m_pendingNotifications << QStringLiteral("agc_mode:%1,%2;").arg(rx).arg(modeCanon);
         return {};
     }
@@ -2668,7 +2762,7 @@ QString TciProtocol::handleAgcGainCommand(const QStringList& args)
     if (args.size() == 1) {
         int gain = 0;
         QMetaObject::invokeMethod(m_radio, "agcGain", Qt::DirectConnection,
-                                  Q_RETURN_ARG(int, gain), Q_ARG(int, rx));
+                                  Q_RETURN_ARG(int, gain), Q_ARG(int, receiverSlice(rx)));
         return QStringLiteral("agc_gain:%1,%2;").arg(rx).arg(gain);
     }
 
@@ -2679,7 +2773,7 @@ QString TciProtocol::handleAgcGainCommand(const QStringList& args)
         // Clamp per TCIServer.cs:4686 [v2.10.3.13]: Math.Max(-20, Math.Min(120, gain)).
         gain = std::max(-20, std::min(120, gain));
         QMetaObject::invokeMethod(m_radio, "setAgcGain", Qt::DirectConnection,
-                                  Q_ARG(int, rx), Q_ARG(int, gain));
+                                  Q_ARG(int, receiverSlice(rx)), Q_ARG(int, gain));
         m_pendingNotifications << QStringLiteral("agc_gain:%1,%2;").arg(rx).arg(gain);
         return {};
     }
@@ -2703,7 +2797,7 @@ QString TciProtocol::handleSqlEnableCommand(const QStringList& args)
     if (args.size() == 1) {
         bool en = false;
         QMetaObject::invokeMethod(m_radio, "sqlEnable", Qt::DirectConnection,
-                                  Q_RETURN_ARG(bool, en), Q_ARG(int, rx));
+                                  Q_RETURN_ARG(bool, en), Q_ARG(int, receiverSlice(rx)));
         return QStringLiteral("sql_enable:%1,%2;")
             .arg(rx).arg(en ? QStringLiteral("true") : QStringLiteral("false"));
     }
@@ -2711,7 +2805,7 @@ QString TciProtocol::handleSqlEnableCommand(const QStringList& args)
     if (args.size() >= 2) {
         const bool en = args.at(1).trimmed().toLower() == QStringLiteral("true");
         QMetaObject::invokeMethod(m_radio, "setSqlEnable", Qt::DirectConnection,
-                                  Q_ARG(int, rx), Q_ARG(bool, en));
+                                  Q_ARG(int, receiverSlice(rx)), Q_ARG(bool, en));
         m_pendingNotifications << QStringLiteral("sql_enable:%1,%2;")
             .arg(rx).arg(en ? QStringLiteral("true") : QStringLiteral("false"));
         return {};
@@ -2736,7 +2830,7 @@ QString TciProtocol::handleSqlLevelCommand(const QStringList& args)
     if (args.size() == 1) {
         int level = 0;
         QMetaObject::invokeMethod(m_radio, "sqlLevel", Qt::DirectConnection,
-                                  Q_RETURN_ARG(int, level), Q_ARG(int, rx));
+                                  Q_RETURN_ARG(int, level), Q_ARG(int, receiverSlice(rx)));
         return QStringLiteral("sql_level:%1,%2;").arg(rx).arg(level);
     }
 
@@ -2747,7 +2841,7 @@ QString TciProtocol::handleSqlLevelCommand(const QStringList& args)
         // Clamp per TCIServer.cs:3330 [v2.10.3.13]: Math.Max(-140, Math.Min(0, level)).
         level = std::max(-140, std::min(0, level));
         QMetaObject::invokeMethod(m_radio, "setSqlLevel", Qt::DirectConnection,
-                                  Q_ARG(int, rx), Q_ARG(int, level));
+                                  Q_ARG(int, receiverSlice(rx)), Q_ARG(int, level));
         m_pendingNotifications << QStringLiteral("sql_level:%1,%2;").arg(rx).arg(level);
         return {};
     }
@@ -2773,16 +2867,18 @@ QString TciProtocol::handleRitEnableCommand(const QStringList& args)
 
     if (args.size() == 1) {
         bool en = false;
-        QMetaObject::invokeMethod(m_radio, "ritEnable", Qt::DirectConnection,
-                                  Q_RETURN_ARG(bool, en));
+        if (const SliceModel* slice = mappedSlice(rx)) { en = slice->ritEnabled(); }
+        else { QMetaObject::invokeMethod(m_radio, "ritEnable", Qt::DirectConnection,
+                                         Q_RETURN_ARG(bool, en)); }
         return QStringLiteral("rit_enable:%1,%2;")
             .arg(rx).arg(en ? QStringLiteral("true") : QStringLiteral("false"));
     }
 
     if (args.size() >= 2) {
         const bool en = args.at(1).trimmed().toLower() == QStringLiteral("true");
-        QMetaObject::invokeMethod(m_radio, "setRitEnable", Qt::DirectConnection,
-                                  Q_ARG(bool, en));
+        if (SliceModel* slice = mappedSlice(rx)) { slice->setRitEnabled(en); }
+        else { QMetaObject::invokeMethod(m_radio, "setRitEnable", Qt::DirectConnection,
+                                         Q_ARG(bool, en)); }
         m_pendingNotifications << QStringLiteral("rit_enable:%1,%2;")
             .arg(rx).arg(en ? QStringLiteral("true") : QStringLiteral("false"));
         return {};
@@ -2806,8 +2902,9 @@ QString TciProtocol::handleRitOffsetCommand(const QStringList& args)
 
     if (args.size() == 1) {
         int offset = 0;
-        QMetaObject::invokeMethod(m_radio, "ritOffset", Qt::DirectConnection,
-                                  Q_RETURN_ARG(int, offset));
+        if (const SliceModel* slice = mappedSlice(rx)) { offset = slice->ritHz(); }
+        else { QMetaObject::invokeMethod(m_radio, "ritOffset", Qt::DirectConnection,
+                                         Q_RETURN_ARG(int, offset)); }
         return QStringLiteral("rit_offset:%1,%2;").arg(rx).arg(offset);
     }
 
@@ -2815,8 +2912,9 @@ QString TciProtocol::handleRitOffsetCommand(const QStringList& args)
         bool ok2 = false;
         const int offset = args.at(1).trimmed().toInt(&ok2);
         if (!ok2) { return {}; }
-        QMetaObject::invokeMethod(m_radio, "setRitOffset", Qt::DirectConnection,
-                                  Q_ARG(int, offset));
+        if (SliceModel* slice = mappedSlice(rx)) { slice->setRitHz(offset); }
+        else { QMetaObject::invokeMethod(m_radio, "setRitOffset", Qt::DirectConnection,
+                                         Q_ARG(int, offset)); }
         m_pendingNotifications << QStringLiteral("rit_offset:%1,%2;").arg(rx).arg(offset);
         return {};
     }
@@ -2839,8 +2937,9 @@ QString TciProtocol::handleXitEnableCommand(const QStringList& args)
 
     if (args.size() == 1) {
         bool en = false;
-        QMetaObject::invokeMethod(m_radio, "xitEnable", Qt::DirectConnection,
-                                  Q_RETURN_ARG(bool, en));
+        if (const SliceModel* slice = mappedSlice(rx)) { en = slice->xitEnabled(); }
+        else { QMetaObject::invokeMethod(m_radio, "xitEnable", Qt::DirectConnection,
+                                         Q_RETURN_ARG(bool, en)); }
         return QStringLiteral("xit_enable:%1,%2;")
             .arg(rx).arg(en ? QStringLiteral("true") : QStringLiteral("false"));
     }
@@ -2854,8 +2953,9 @@ QString TciProtocol::handleXitEnableCommand(const QStringList& args)
 
     if (args.size() >= 2) {
         const bool en = args.at(1).trimmed().toLower() == QStringLiteral("true");
-        QMetaObject::invokeMethod(m_radio, "setXitEnable", Qt::DirectConnection,
-                                  Q_ARG(bool, en));
+        if (SliceModel* slice = mappedSlice(rx)) { slice->setXitEnabled(en); }
+        else { QMetaObject::invokeMethod(m_radio, "setXitEnable", Qt::DirectConnection,
+                                         Q_ARG(bool, en)); }
         m_pendingNotifications << QStringLiteral("xit_enable:%1,%2;")
             .arg(rx).arg(en ? QStringLiteral("true") : QStringLiteral("false"));
         return {};
@@ -2879,8 +2979,9 @@ QString TciProtocol::handleXitOffsetCommand(const QStringList& args)
 
     if (args.size() == 1) {
         int offset = 0;
-        QMetaObject::invokeMethod(m_radio, "xitOffset", Qt::DirectConnection,
-                                  Q_RETURN_ARG(int, offset));
+        if (const SliceModel* slice = mappedSlice(rx)) { offset = slice->xitHz(); }
+        else { QMetaObject::invokeMethod(m_radio, "xitOffset", Qt::DirectConnection,
+                                         Q_RETURN_ARG(int, offset)); }
         return QStringLiteral("xit_offset:%1,%2;").arg(rx).arg(offset);
     }
 
@@ -2893,8 +2994,9 @@ QString TciProtocol::handleXitOffsetCommand(const QStringList& args)
         bool ok2 = false;
         const int offset = args.at(1).trimmed().toInt(&ok2);
         if (!ok2) { return {}; }
-        QMetaObject::invokeMethod(m_radio, "setXitOffset", Qt::DirectConnection,
-                                  Q_ARG(int, offset));
+        if (SliceModel* slice = mappedSlice(rx)) { slice->setXitHz(offset); }
+        else { QMetaObject::invokeMethod(m_radio, "setXitOffset", Qt::DirectConnection,
+                                         Q_ARG(int, offset)); }
         m_pendingNotifications << QStringLiteral("xit_offset:%1,%2;").arg(rx).arg(offset);
         return {};
     }
@@ -2925,7 +3027,7 @@ QString TciProtocol::handleRxBalanceCommand(const QStringList& args)
         double bal = 0.0;
         QMetaObject::invokeMethod(m_radio, "rxBalance", Qt::DirectConnection,
                                   Q_RETURN_ARG(double, bal),
-                                  Q_ARG(int, rx), Q_ARG(int, chan));
+                                  Q_ARG(int, receiverSlice(rx)), Q_ARG(int, chan));
         return QStringLiteral("rx_balance:%1,%2,%3;")
             .arg(rx).arg(chan)
             .arg(QString::number(bal, 'f', 2));
@@ -2938,7 +3040,7 @@ QString TciProtocol::handleRxBalanceCommand(const QStringList& args)
         if (!ok3) { return {}; }
         bal = std::max(-40.0, std::min(40.0, bal));
         QMetaObject::invokeMethod(m_radio, "setRxBalance", Qt::DirectConnection,
-                                  Q_ARG(int, rx), Q_ARG(int, chan), Q_ARG(double, bal));
+                                  Q_ARG(int, receiverSlice(rx)), Q_ARG(int, chan), Q_ARG(double, bal));
         m_pendingNotifications << QStringLiteral("rx_balance:%1,%2,%3;")
             .arg(rx).arg(chan)
             .arg(QString::number(bal, 'f', 2));
@@ -3243,7 +3345,7 @@ QString TciProtocol::handleRxEnableCommand(const QStringList& args)
         // From Thetis TCIServer.cs:4438-4445 [v2.10.3.13] — sendRXEnable per rx.
         bool en = true;
         QMetaObject::invokeMethod(m_radio, "rxEnable", Qt::DirectConnection,
-                                  Q_RETURN_ARG(bool, en), Q_ARG(int, rx));
+                                  Q_RETURN_ARG(bool, en), Q_ARG(int, receiverSlice(rx)));
         return buildRxEnableLine(rx, en);
     }
 
@@ -3253,7 +3355,7 @@ QString TciProtocol::handleRxEnableCommand(const QStringList& args)
         // rx==0 is always enabled in Thetis; Phase 13 stores it but never forces off.
         const bool en = args.at(1).trimmed().toLower() == QStringLiteral("true");
         QMetaObject::invokeMethod(m_radio, "setRxEnable", Qt::DirectConnection,
-                                  Q_ARG(int, rx), Q_ARG(bool, en));
+                                  Q_ARG(int, receiverSlice(rx)), Q_ARG(bool, en));
         m_pendingNotifications << buildRxEnableLine(rx, en);
         return {};
     }
@@ -3278,14 +3380,14 @@ QString TciProtocol::handleRxCtunExCommand(const QStringList& args)
         // Query path.
         bool en = false;
         QMetaObject::invokeMethod(m_radio, "rxCtun", Qt::DirectConnection,
-                                  Q_RETURN_ARG(bool, en), Q_ARG(int, rx));
+                                  Q_RETURN_ARG(bool, en), Q_ARG(int, receiverSlice(rx)));
         return buildRxCtunExLine(rx, en);
     }
 
     // Set path.
     const bool en = args.at(1).trimmed().toLower() == QStringLiteral("true");
     QMetaObject::invokeMethod(m_radio, "setRxCtun", Qt::DirectConnection,
-                              Q_ARG(int, rx), Q_ARG(bool, en));
+                              Q_ARG(int, receiverSlice(rx)), Q_ARG(bool, en));
     m_pendingNotifications << buildRxCtunExLine(rx, en);
     return {};
 }
@@ -3375,15 +3477,15 @@ QString TciProtocol::handleCalibrationExCommand(const QStringList& args)
     double sixMeter = 0.0;
     double txDisplay = 0.0;
     QMetaObject::invokeMethod(m_radio, "calibrationMeter",     Qt::DirectConnection,
-                              Q_RETURN_ARG(double, meter),    Q_ARG(int, rx));
+                              Q_RETURN_ARG(double, meter),    Q_ARG(int, receiverSlice(rx)));
     QMetaObject::invokeMethod(m_radio, "calibrationDisplay",   Qt::DirectConnection,
-                              Q_RETURN_ARG(double, display),  Q_ARG(int, rx));
+                              Q_RETURN_ARG(double, display),  Q_ARG(int, receiverSlice(rx)));
     QMetaObject::invokeMethod(m_radio, "calibrationXvtr",      Qt::DirectConnection,
-                              Q_RETURN_ARG(double, xvtr),     Q_ARG(int, rx));
+                              Q_RETURN_ARG(double, xvtr),     Q_ARG(int, receiverSlice(rx)));
     QMetaObject::invokeMethod(m_radio, "calibrationSixMeter",  Qt::DirectConnection,
-                              Q_RETURN_ARG(double, sixMeter), Q_ARG(int, rx));
+                              Q_RETURN_ARG(double, sixMeter), Q_ARG(int, receiverSlice(rx)));
     QMetaObject::invokeMethod(m_radio, "calibrationTxDisplay", Qt::DirectConnection,
-                              Q_RETURN_ARG(double, txDisplay),Q_ARG(int, rx));
+                              Q_RETURN_ARG(double, txDisplay),Q_ARG(int, receiverSlice(rx)));
     m_pendingNotifications << buildCalibrationExLine(rx, meter, display, xvtr, sixMeter, txDisplay);
     return {};
 }

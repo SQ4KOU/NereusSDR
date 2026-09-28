@@ -1228,7 +1228,19 @@ colours for the same signal.
   retaining every release fence. The integrated app/Core build and six suites
   passed (29.31 seconds), including real paired WSS heartbeat delivery, primary
   close and reconnection, plus a DTLS primary rejecting a claimed direct route.
-  The separate relay owner and restrictive-network acceptance remain in progress.
+  The same client helper now accepts a dedicated watch DTLS offerer (`a18f349b`),
+  verifies its actual Core certificate before sending any ticket, and preserves
+  the bounded ack/frame/backlog and generation checks. Wrong-pin real-DTLS tests
+  observed zero ticket bytes. The integrated app/Core build and three suites
+  passed (17.36 seconds), including all direct WSS checks. Core relay ownership
+  is built in `2e75bf64` and `a63d210a`: pending construction is bounded and
+  revoked on primary replacement, path move, device revocation or the ten-second
+  deadline. An attached watch survives admission-grant expiry while its primary
+  remains valid, without permitting new admission. Lead integration rebuilt
+  app/Core and six named suites; all passed (35.13 seconds) at concurrent load
+  6.19/5.95/5.43. The watch uses real DTLS and relay sockets in a local protocol
+  fixture. Client integration, production Python RV acceptance and loaded loss
+  acceptance remain open.
 - Plan: independent transmit watch and restrictive-network liveness.
 
 ### G-71: Hosted desktop TCI must preserve ownership through callbacks and receiver remaps
@@ -1241,10 +1253,75 @@ colours for the same signal.
 - Ruling basis: JJ's standing instruction is “each gap is built as part of this
   effort.” These corrections preserve the already approved station-owned TCI
   receiver and program-key policy; they introduce no new operator preference.
-- Status: in progress. The worker is adding callback lifetime checks and focused
-  socket regressions, tracing safe audio retirement, and checking broadcast
-  mapping. No acceptance or live-radio result is claimed.
+- Status: built in signed implementation `46835b63` with lead integration
+  corrections. Program key requests recheck lifetime and ownership after
+  callbacks, receive remaps retire queued audio without blocking the DSP
+  producer, and broadcasts map physical owned slices to logical receivers.
+  Lead regressions additionally reproduced crashes when key release destroyed
+  the server: mode changes continued on a deleted object, and socket-close
+  processing lost its internal TCP object during parent destruction. Callers
+  now recheck lifetime and defer socket/listener destruction until the close
+  stack unwinds. All three stop/disable/disconnect reproductions pass. The
+  integrated app/Core build and nine TCI suites passed (8.95 seconds) under
+  concurrent lane load. Desktop runtime activation and live-radio acceptance
+  remain open; no RF was used.
 - Plan: desktop hosting and several-device ownership.
+
+### G-72: An open Rename dialog could bypass the transmit Setup lock
+
+- Evidence: a focused test opened Remote Access Rename, changed the live state
+  to transmitting while the dialog was open, then accepted the name. The new
+  page emitted the rename despite its controls being disabled.
+- JJ's ruling: “Lock Setup controls while transmitting (recommended).” This
+  applies to an action completing after a dialog has already opened as well.
+- Status: built. The page rechecks its lifetime, current permission and original
+  name when the dialog returns. The formerly failing test and all page actions
+  pass in the integrated app build (0.52 seconds); four offscreen states were
+  rendered and inspected. Action signal blockers now end before callbacks and
+  operator labels use plain text. Real hosting/service/device action wiring is
+  still in progress, so page presentation alone does not complete the plan.
+- Plan: Remote Access controls and Setup transmit locking.
+
+### G-73: A late heartbeat could renew an already expired transmit watch
+
+- Evidence: lead review found that heartbeat receipt updated the last-heard
+  time without checking the existing deadline. When a busy event loop dispatches
+  socket input before its overdue timer, a late heartbeat could keep a key on.
+  An injected-clock regression reproduced this on the session, media and
+  independent watch paths; nine expired-arrival rows failed before the fix.
+- Ruling basis: JJ requires findings under load to have a cause and a fix, and
+  every discovered gap to be built in this effort. This enforces the existing
+  approved rule of stopping after more than 400 ms without a valid heartbeat;
+  it changes neither that deadline nor the 100 ms send interval.
+- Status: built. Receipt checks elapsed time before accepting any packet and
+  stops an expired watch once; packets exactly at the deadline still count.
+  The regression and four adjacent suites passed after the app/Core rebuild
+  under concurrent lane load. This deterministically reproduces delayed timer
+  dispatch, not a measured guarantee about OS scheduling or physical RF release.
+  Restrictive-network acceptance and live-radio verification remain open.
+- Plan: remote transmit link-loss safety and restrictive-network liveness.
+
+### G-74: Remote settings export and import omit the Core's settings
+
+- Evidence: the working desktop at `86a1b20d` exported and imported its settings
+  XML in `ExportImportConfigPage`. At `11a1173a`, those handlers still copy only
+  `AppSettings::instance().filePath()` on the window's computer. They neither
+  export the Core's state nor restore it through a Core command. The frozen
+  parity scout found this, and the lead verified the handlers and existing
+  operator ruling. The disabled historical File > Profiles placeholder is not
+  evidence of an additional working feature lost in the split.
+- JJ's ruling: the remote-window parity plan's recorded Q1 decision says
+  “Settings import and export in a remote window carry both computers' settings,
+  and the Core applies its part through a radio reconnect.” The scope remains
+  this effort; the separate phone-local action question in G-50 does not waive
+  desktop remote parity.
+- Status: implementation open. Export must carry both parts in one file;
+  import must validate and restore them through their respective owners, apply
+  the Core part through the approved reconnect path, and enforce the plan's
+  transmit and other-device restrictions. Failure must preserve existing
+  settings. Acceptance needs a real remote round trip, persistence after
+  reconnect, refusal while busy, and invalid/failed-import preservation.
+- Plan: remote-window parity B6.1 and approved Q1.
 
 ## How this addendum is kept
 

@@ -94,6 +94,8 @@ private slots:
     void voxArmedIsWatchedAndStops();
     void watchingStartsWithAFresh400ms();
     void copiesAndOvertakenKeepalivesDoNotCount();
+    void lateKeepaliveCannotRescueExpiredWatch_data();
+    void lateKeepaliveCannotRescueExpiredWatch();
     void anOlderEpochDoesNotCount();
     void aKeyTheDeviceWasNeverAnsweredForTakesAnyEpoch();
     void theDevicesReleaseEndsTheWatchAtOnce();
@@ -230,6 +232,61 @@ void TestRemoteTxWatchdog::copiesAndOvertakenKeepalivesDoNotCount()
     // Neither moved the deadline: 400 ms after the one at 100 ms.
     rig.advanceTo(501);
     QCOMPARE(rig.stops.size(), size_t(1));
+}
+
+void TestRemoteTxWatchdog::lateKeepaliveCannotRescueExpiredWatch_data()
+{
+    QTest::addColumn<int>("path");
+    QTest::addColumn<qint64>("gapMs");
+    QTest::addColumn<quint64>("sequence");
+    QTest::addColumn<quint32>("epoch");
+    for (const auto path : {RemoteTxWatchdog::Path::Session,
+                            RemoteTxWatchdog::Path::TxChannel,
+                            RemoteTxWatchdog::Path::Auxiliary}) {
+        const QByteArray name = QByteArray::number(static_cast<int>(path));
+        QTest::newRow((name + "-at-deadline").constData())
+            << static_cast<int>(path) << qint64(400) << quint64(6) << quint32(4);
+        QTest::newRow((name + "-expired-new").constData())
+            << static_cast<int>(path) << qint64(401) << quint64(6) << quint32(4);
+        QTest::newRow((name + "-expired-copy").constData())
+            << static_cast<int>(path) << qint64(401) << quint64(5) << quint32(4);
+        QTest::newRow((name + "-expired-old-key").constData())
+            << static_cast<int>(path) << qint64(401) << quint64(6) << quint32(3);
+    }
+}
+
+void TestRemoteTxWatchdog::lateKeepaliveCannotRescueExpiredWatch()
+{
+    QFETCH(int, path);
+    QFETCH(qint64, gapMs);
+    QFETCH(quint64, sequence);
+    QFETCH(quint32, epoch);
+    Rig rig;
+    rig.watchdog.setKeyed(kPhone, true, 4);
+    rig.advanceTo(100);
+    QVERIFY(rig.watchdog.keepalive(kPhone, 5, 4, RemoteTxWatchdog::Path::Session));
+    QSignalSpy heard(&rig.watchdog, &RemoteTxWatchdog::keepaliveHeard);
+    QSignalSpy tripped(&rig.watchdog, &RemoteTxWatchdog::tripped);
+
+    // A busy event loop can dispatch socket input before its overdue timer.
+    // Move the clock without delivering that timer: arrival must check age.
+    rig.nowMs = 100 + gapMs;
+    const bool accepted = rig.watchdog.keepalive(
+        kPhone, sequence, epoch, static_cast<RemoteTxWatchdog::Path>(path));
+    const bool withinDeadline = gapMs <= RemoteTxWatchdog::kLinkLossDeadlineMs;
+    QCOMPARE(accepted, withinDeadline);
+    QCOMPARE(heard.count(), withinDeadline ? 1 : 0);
+    QCOMPARE(rig.stops.size(), withinDeadline ? size_t(0) : size_t(1));
+    QCOMPARE(rig.watchdog.isWatching(kPhone), withinDeadline);
+    if (!withinDeadline) {
+        QCOMPARE(tripped.count(), 1);
+        QCOMPARE(tripped.at(0).at(1).toBool(), false);
+        QCOMPARE(tripped.at(0).at(2).toLongLong(), gapMs);
+        QVERIFY(!rig.timerDue.has_value());
+        rig.watchdog.onTimer();
+        QVERIFY(!rig.watchdog.keepalive(kPhone, 7, 4, RemoteTxWatchdog::Path::Session));
+        QCOMPARE(rig.stops.size(), size_t(1));
+    }
 }
 
 void TestRemoteTxWatchdog::anOlderEpochDoesNotCount()

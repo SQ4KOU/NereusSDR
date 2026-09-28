@@ -160,6 +160,27 @@ private slots:
         QCOMPARE(watch->closes, 1);
     }
 
+    void liveBindingSurvivesTicketExpiryOnlyAfterAttach()
+    {
+        Rig rig;
+        QVERIFY(!rig.server.hasLiveBinding(&rig.primary, rig.generation));
+        QVERIFY(rig.issue());
+        QVERIFY(rig.server.hasLiveBinding(&rig.primary, rig.generation));
+        QVERIFY(!rig.server.hasLiveBinding(&rig.primary, rig.generation + 1));
+        Link* watch = rig.socket();
+        watch->binary(attach(ticket('a')));
+        QCOMPARE(watch->lastBinary, QByteArray::fromHex("0100"));
+        rig.time += TxWatchServer::kTicketLifetimeMs;
+        QVERIFY(rig.server.hasLiveBinding(&rig.primary, rig.generation));
+        watch->closeLink(QStringLiteral("closed synchronously"));
+        QVERIFY(!rig.server.hasLiveBinding(&rig.primary, rig.generation));
+        QCOMPARE(rig.server.bindingCount(), 0);
+
+        QVERIFY(rig.issue('b'));
+        rig.time += TxWatchServer::kTicketLifetimeMs;
+        QVERIFY(!rig.server.hasLiveBinding(&rig.primary, rig.generation));
+    }
+
     void pendingAndRateBounds()
     {
         Rig rig;
@@ -457,6 +478,15 @@ private slots:
             }
         }
         QVERIFY(advertised);
+
+        // A direct primary cannot obtain relay watch construction, even when
+        // it sends a syntactically valid relay command.
+        sendPrimary(SessionMessages::commandInvoke(
+            QByteArrayLiteral("tx.watchRelay"), 700,
+            {{0, "offer", MirrorWireKind::Utf8, QStringLiteral("offer")}}));
+        QVERIFY(QTest::qWaitFor([&]() { return !resultFor(700).isEmpty(); }, 5000));
+        QCOMPARE(resultFor(700).value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("A transmit watch relay path is unavailable for this session."));
 
         sendPrimary(SessionMessages::commandInvoke(QByteArrayLiteral("tx.watchTicket"), 701, {}));
         QVERIFY(QTest::qWaitFor([&]() { return !resultFor(701).isEmpty(); }, 5000));
