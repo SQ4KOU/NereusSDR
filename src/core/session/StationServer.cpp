@@ -2407,14 +2407,52 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
                     if (state == ConnectionState::Connected) {
                         return;
                     }
+                    // sendText can synchronously close a peer (or replace
+                    // its device's session). Copy identities before any
+                    // send, then re-find each original session. Neither a
+                    // QHash iterator nor an old disconnect may address a
+                    // replacement that joined inside a send callback.
+                    struct Target {
+                        QPointer<SessionTransport> transport;
+                        quint64 sessionId = 0;
+                    };
+                    QList<Target> targets;
                     for (auto it = m_peers.cbegin(); it != m_peers.cend(); ++it) {
-                        if (!it->authenticated || !it->snapshotComplete
-                            || it->agreedMinor < kRadioIdentitySessionProtocolMinor
-                            || it->features.value(QByteArrayLiteral("radioAntennaRows")) != 1) {
+                        if (it->authenticated && it->snapshotComplete
+                            && it->sessionId != 0
+                            && it->agreedMinor >= kRadioIdentitySessionProtocolMinor
+                            && it->features.value(QByteArrayLiteral("radioAntennaRows")) == 1) {
+                            targets.append({QPointer<SessionTransport>(it.key()), it->sessionId});
+                        }
+                    }
+                    const QPointer<StationServer> self(this);
+                    for (const Target& target : std::as_const(targets)) {
+                        if (!self || m_radioModel.isNull()
+                            || m_radioModel->connectionState() == ConnectionState::Connected) {
+                            return;
+                        }
+                        SessionTransport* const transport = target.transport.data();
+                        if (transport == nullptr) {
                             continue;
                         }
-                        send(it.key(), SessionMessages::capabilities(
-                            buildCapabilitiesFor(it.key()).toUpdates()));
+                        bool stillAdmitted = false;
+                        {
+                            const auto peer = m_peers.constFind(transport);
+                            stillAdmitted = peer != m_peers.cend()
+                                && peer->sessionId == target.sessionId
+                                && peer->authenticated && peer->snapshotComplete
+                                && !peer->dropping
+                                && peer->agreedMinor >= kRadioIdentitySessionProtocolMinor
+                                && peer->features.value(QByteArrayLiteral("radioAntennaRows")) == 1;
+                        }
+                        if (!stillAdmitted) {
+                            continue;
+                        }
+                        send(transport, SessionMessages::capabilities(
+                            buildCapabilitiesFor(transport).toUpdates()));
+                        if (!self) {
+                            return;
+                        }
                     }
                 });
         // iPhone app Task 71: every admitted session, each with its own

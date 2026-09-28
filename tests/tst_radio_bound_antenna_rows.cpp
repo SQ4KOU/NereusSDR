@@ -322,6 +322,68 @@ private slots:
         QFAIL("The offered version was not appended.");
     }
 
+    void withdrawalSurvivesSynchronousSessionReplacement()
+    {
+        StepAttenuatorController step;
+        Core core;
+        readyAlex(core, step);
+        Device a(QStringLiteral("A"), QStringLiteral("phone"));
+        Device b(QStringLiteral("B"), QStringLiteral("tablet"));
+        Device c(QStringLiteral("C"), QStringLiteral("computer"));
+        core.pair(a);
+        core.pair(b);
+        core.pair(c);
+        LoopbackTransport* first = core.signIn(a, kRows);
+        LoopbackTransport* second = core.signIn(b, kRows);
+        LoopbackTransport* third = core.signIn(c, kRows);
+        QVERIFY(admitted(first) && admitted(second) && admitted(third));
+
+        LoopbackTransport* closedApp = nullptr;
+        LoopbackTransport* replacement = nullptr;
+        const auto arm = [&](LoopbackTransport* app, const Device* device) {
+            LoopbackTransport* station = app->peerForTest();
+            QVERIFY(station != nullptr);
+            connect(station, &LoopbackTransport::outboundText, this,
+                    [&, app, station, device](const QByteArray& wire) {
+                        const QJsonObject message = QJsonDocument::fromJson(wire).object();
+                        if (closedApp != nullptr
+                            || message.value(QStringLiteral("type"))
+                                   != QStringLiteral("capabilities")) {
+                            return;
+                        }
+                        // A real transport can close inside sendText. Rejoin
+                        // the same device while the old broadcast is still
+                        // on the stack: it must receive only its own snapshot.
+                        closedApp = app;
+                        station->closeLink(QStringLiteral("callback closed its session"));
+                        replacement = core.signIn(*device, kRows);
+                    });
+        };
+        arm(first, &a);
+        arm(second, &b);
+        arm(third, &c);
+
+        core.model->setConnectionStateForTest(ConnectionState::Disconnected);
+        QVERIFY(closedApp != nullptr);
+        QVERIFY(replacement != nullptr);
+        QVERIFY(admitted(replacement));
+        for (LoopbackTransport* app : {first, second, third}) {
+            if (app == closedApp) {
+                continue;
+            }
+            QTRY_COMPARE(ofType(app->received(), QStringLiteral("capabilities")).size(), 2);
+            const QJsonObject withdrawal =
+                ofType(app->received(), QStringLiteral("capabilities")).last();
+            for (const QJsonValue& entry :
+                 withdrawal.value(QStringLiteral("properties")).toArray()) {
+                QVERIFY(entry.toObject().value(QStringLiteral("name")).toString()
+                        != QStringLiteral("radioAntennaRowsVersion"));
+            }
+        }
+        QCOMPARE(ofType(replacement->received(), QStringLiteral("capabilities")).size(), 1);
+        QVERIFY(!capability(replacement->received(), QStringLiteral("radioAntennaRowsVersion")));
+    }
+
     void anotherHolderOnAirStillBlocksTheBoundTxRow()
     {
         StepAttenuatorController step;
