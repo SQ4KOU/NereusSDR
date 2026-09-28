@@ -7,6 +7,7 @@
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
 #include "models/NotchModel.h"
+#include "models/Band.h"
 #include "core/accessories/AlexAntennaFacade.h"
 #include "core/session/TransmitStateFacade.h"
 #include "core/SkuUiProfile.h"
@@ -26,6 +27,82 @@ static void initializeSetupResources()
 
 namespace NereusSDR {
 namespace {
+
+QJsonObject expectedAntennaRowsTable(bool tx, HPSDRModel model)
+{
+    const SkuUiProfile sku = skuUiProfileFor(model);
+    QJsonArray columns;
+    for (int antenna = 1; antenna <= 3; ++antenna) {
+        const QString id = (tx ? QStringLiteral("tx%1") : QStringLiteral("rx%1"))
+                               .arg(antenna);
+        columns.append(QJsonObject{{QStringLiteral("id"), id},
+                                   {QStringLiteral("field"), tx ? QStringLiteral("tx")
+                                                               : QStringLiteral("rx")},
+                                   {QStringLiteral("antenna"), antenna},
+                                   {QStringLiteral("label"), tx ? QStringLiteral("Ant %1").arg(antenna)
+                                                                : QString::number(antenna)}});
+    }
+    if (!tx) {
+        for (int antenna = 1; antenna <= 3; ++antenna) {
+            columns.append(QJsonObject{{QStringLiteral("id"),
+                                        QStringLiteral("rxOnly%1").arg(antenna)},
+                                       {QStringLiteral("field"), QStringLiteral("rxOnly")},
+                                       {QStringLiteral("antenna"), antenna},
+                                       {QStringLiteral("label"), sku.rxOnlyLabels[antenna - 1]}});
+        }
+    }
+    QJsonArray rows;
+    for (int band = 0; band < AlexAntennaFacade::kBandCount; ++band) {
+        const QString label = bandLabel(static_cast<Band>(band));
+        QJsonArray cells;
+        for (const QJsonValue& rawColumn : columns) {
+            const QJsonObject column = rawColumn.toObject();
+            const int antenna = column.value(QStringLiteral("antenna")).toInt();
+            const QString field = column.value(QStringLiteral("field")).toString();
+            const QString tooltip = field == QLatin1String("tx")
+                ? QStringLiteral("TX Ant %1 for %2").arg(antenna).arg(label)
+                : field == QLatin1String("rx")
+                ? QStringLiteral("RX1 Ant %1 for %2").arg(antenna).arg(label)
+                : QStringLiteral("RX-only %1 for %2")
+                      .arg(sku.rxOnlyLabels[antenna - 1], label);
+            cells.append(QJsonObject{{QStringLiteral("column"), column.value(QStringLiteral("id"))},
+                                     {QStringLiteral("tooltip"), tooltip}});
+        }
+        rows.append(QJsonObject{{QStringLiteral("band"), band},
+                                {QStringLiteral("label"), label},
+                                {QStringLiteral("cells"), cells}});
+    }
+    QJsonObject gate{{QStringLiteral("capability"), QStringLiteral("radioAntennaRowsVersion")},
+                     {QStringLiteral("min"), 1}};
+    if (tx) { gate.insert(QStringLiteral("offAir"), true); }
+    QJsonObject control{{QStringLiteral("id"), tx ? QStringLiteral("hardware.antenna.txRows")
+                                                   : QStringLiteral("hardware.antenna.rxRows")},
+                        {QStringLiteral("label"), tx ? QStringLiteral("TX Antenna per Band")
+                                                      : QStringLiteral("RX1 / RX2 Antenna per Band")},
+                        {QStringLiteral("tooltip"), QString()},
+                        {QStringLiteral("kind"), QStringLiteral("table")},
+                        {QStringLiteral("binding"), QJsonObject{{QStringLiteral("antennaRows"),
+                            QJsonObject{{QStringLiteral("object"), QStringLiteral("alexAntennas")},
+                                        {QStringLiteral("mode"), tx ? QStringLiteral("tx")
+                                                                     : QStringLiteral("rx")}}}}},
+                        {QStringLiteral("applies"), QStringLiteral("live")},
+                        {QStringLiteral("requiresDescriptionVersion"), 6},
+                        {QStringLiteral("gate"), gate},
+                        {QStringLiteral("rows"), rows},
+                        {QStringLiteral("columns"), columns}};
+    if (!tx) {
+        control.insert(QStringLiteral("columnGroups"), QJsonArray{
+            QJsonObject{{QStringLiteral("label"), QStringLiteral("RX1")},
+                        {QStringLiteral("columns"), QJsonArray{QStringLiteral("rx1"),
+                                                                QStringLiteral("rx2"),
+                                                                QStringLiteral("rx3")}}},
+            QJsonObject{{QStringLiteral("label"), QStringLiteral("RX-only")},
+                        {QStringLiteral("columns"), QJsonArray{QStringLiteral("rxOnly1"),
+                                                                QStringLiteral("rxOnly2"),
+                                                                QStringLiteral("rxOnly3")}}}});
+    }
+    return control;
+}
 
 QJsonObject expectedSettingsHygienePanel()
 {
@@ -107,7 +184,9 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
          && !(id == QLatin1String("diagnostics")
               && root.value(QStringLiteral("version")) == QJsonValue(3))
          && !(id == QLatin1String("display")
-              && root.value(QStringLiteral("version")) == QJsonValue(4)))
+              && root.value(QStringLiteral("version")) == QJsonValue(4))
+         && !(id == QLatin1String("hardware")
+              && root.value(QStringLiteral("version")) == QJsonValue(6)))
         || root.value(QStringLiteral("category")).toObject()
                .value(QStringLiteral("id")).toString() != id
         || root.value(QStringLiteral("pages")).toArray().isEmpty()
@@ -115,6 +194,7 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
         return {};
     }
     QSet<QString> ids;
+    int antennaTables = 0;
     for (const QJsonValue& rawPage : root.value(QStringLiteral("pages")).toArray()) {
         const QJsonObject page = rawPage.toObject();
         const QString pageId = page.value(QStringLiteral("id")).toString();
@@ -148,12 +228,19 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                                     != QJsonValue(3)
                                 && !(id == QLatin1String("display")
                                      && control.value(QStringLiteral("requiresDescriptionVersion"))
-                                         == QJsonValue(4)))))
+                                         == QJsonValue(4))
+                                && !(id == QLatin1String("hardware")
+                                     && control.value(QStringLiteral("requiresDescriptionVersion"))
+                                         == QJsonValue(6)))))
                     || (control.value(QStringLiteral("kind")) == QJsonValue(QStringLiteral("table"))
-                        && (id != QLatin1String("dsp")
-                            || !SetupDescription::validateTnfTable(control)))
+                        && !((id == QLatin1String("dsp")
+                              && SetupDescription::validateTnfTable(control))
+                             || (id == QLatin1String("hardware")
+                                 && SetupDescription::validateAntennaRowsTable(control))))
                     || (control.value(QStringLiteral("kind")) != QJsonValue(QStringLiteral("table"))
-                        && control.value(QStringLiteral("binding")).toObject().contains(QStringLiteral("table")))
+                        && (control.value(QStringLiteral("binding")).toObject().contains(QStringLiteral("table"))
+                            || control.value(QStringLiteral("binding")).toObject()
+                                   .contains(QStringLiteral("antennaRows"))))
                     || !SetupDescription::validateSettingToggleEncoding(control)
                     || (id == QLatin1String("dsp")
                         && !control.value(QStringLiteral("binding")).toObject()
@@ -178,7 +265,8 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                         && !SetupDescription::validateTransmitPropertyBinding(control)
                         && !SetupDescription::validateTransmitSettingBinding(control))
                     || (id == QLatin1String("hardware")
-                        && !SetupDescription::validateHardwarePropertyBinding(control))
+                        && !SetupDescription::validateHardwarePropertyBinding(control)
+                        && !SetupDescription::validateAntennaRowsTable(control))
                     || (id == QLatin1String("pa")
                         && !SetupDescription::validatePaReadoutBinding(control)
                         && !SetupDescription::validatePaDriveReadoutBinding(control)
@@ -191,10 +279,15 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                         && !SetupDescription::validateCommandBinding(control))) {
                     return {};
                 }
+                if (id == QLatin1String("hardware")
+                    && control.value(QStringLiteral("kind")) == QJsonValue(QStringLiteral("table"))) {
+                    ++antennaTables;
+                }
                 ids.insert(controlId);
             }
         }
     }
+    if (id == QLatin1String("hardware") && antennaTables != 2) { return {}; }
     // This partial page is built only when the connected board has ALEX
     // filters. A board change must retire its old controls altogether.
     if (id == QLatin1String("hardware") && !caps.hasAlexFilters) {
@@ -225,6 +318,16 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                 QJsonArray controls = section.value(QStringLiteral("controls")).toArray();
                 for (int c = 0; c < controls.size(); ++c) {
                     QJsonObject control = controls.at(c).toObject();
+                    if (control.value(QStringLiteral("kind")) == QJsonValue(QStringLiteral("table"))) {
+                        const bool tx = control.value(QStringLiteral("id"))
+                            == QJsonValue(QStringLiteral("hardware.antenna.txRows"));
+                        control = expectedAntennaRowsTable(tx, model);
+                        if (!SetupDescription::validateAntennaRowsTable(control, model)) {
+                            return {};
+                        }
+                        controls[c] = control;
+                        continue;
+                    }
                     const QString name = control.value(QStringLiteral("binding")).toObject()
                         .value(QStringLiteral("property")).toObject()
                         .value(QStringLiteral("name")).toString();
@@ -951,6 +1054,28 @@ bool SetupDescription::validateSettingsHygienePanel(const QJsonObject& control)
     return control == expectedSettingsHygienePanel();
 }
 
+bool SetupDescription::validateAntennaRowsTable(const QJsonObject& control, HPSDRModel model)
+{
+    const QString id = control.value(QStringLiteral("id")).toString();
+    const bool tx = id == QLatin1String("hardware.antenna.txRows");
+    if (!tx && id != QLatin1String("hardware.antenna.rxRows")) { return false; }
+    if (control != expectedAntennaRowsTable(tx, model)) { return false; }
+    // The closed table maps the existing 14-value CSV mirrors to only the
+    // already admitted per-band verbs. No table-supplied command is parsed.
+    const MirrorSchema& schema = MirrorSchema::forMetaObject(
+        &AlexAntennaFacade::staticMetaObject);
+    const auto hasSource = [&schema](const QByteArray& name, MirrorWireKind kind) {
+        const MirrorProperty* property = schema.byName(name);
+        return property && property->kind == kind
+            && MirrorPolicy::hasExplicitEntry(QByteArrayLiteral("AlexAntennaFacade"), name);
+    };
+    return hasSource("txAntennas", MirrorWireKind::Utf8)
+        && hasSource("rxAntennas", MirrorWireKind::Utf8)
+        && hasSource("rxOnlyAntennas", MirrorWireKind::Utf8)
+        && hasSource("blockTxAnt2", MirrorWireKind::Bool)
+        && hasSource("blockTxAnt3", MirrorWireKind::Bool);
+}
+
 bool SetupDescription::validateTnfTable(const QJsonObject& control, QString* error)
 {
     const auto fail = [error](const QString& why) {
@@ -1073,7 +1198,8 @@ bool SetupDescription::validateTnfTable(const QJsonObject& control, QString* err
     return true;
 }
 
-QString SetupDescription::fitCategoryForVersion(const QString& description, int version)
+QString SetupDescription::fitCategoryForVersion(const QString& description, int version,
+                                                bool antennaRowsAvailable)
 {
     if (version < 1 || description.isEmpty()) { return {}; }
     const QJsonDocument document = QJsonDocument::fromJson(description.toUtf8());
@@ -1088,7 +1214,9 @@ QString SetupDescription::fitCategoryForVersion(const QString& description, int 
             QJsonArray controls;
             for (const QJsonValue& rawControl : section.value(QStringLiteral("controls")).toArray()) {
                 const QJsonObject control = rawControl.toObject();
-                if (control.value(QStringLiteral("requiresDescriptionVersion")).toInt(1) <= version) {
+                if (control.value(QStringLiteral("requiresDescriptionVersion")).toInt(1) <= version
+                    && (antennaRowsAvailable || !control.value(QStringLiteral("binding"))
+                            .toObject().contains(QStringLiteral("antennaRows")))) {
                     controls.append(rawControl);
                 }
             }
@@ -1104,9 +1232,11 @@ QString SetupDescription::fitCategoryForVersion(const QString& description, int 
     }
     if (pages.isEmpty()) { return {}; }
     category.insert(QStringLiteral("pages"), pages);
-    const bool display = category.value(QStringLiteral("category")).toObject()
-        .value(QStringLiteral("id")) == QJsonValue(QStringLiteral("display"));
-    category.insert(QStringLiteral("version"), qMin(version, display ? 4 : 3));
+    const QString id = category.value(QStringLiteral("category")).toObject()
+        .value(QStringLiteral("id")).toString();
+    category.insert(QStringLiteral("version"),
+                    qMin(version, id == QLatin1String("hardware") ? 6
+                                   : id == QLatin1String("display") ? 4 : 3));
     if (version >= 2 && category.value(QStringLiteral("category")).toObject()
             .value(QStringLiteral("id")) == QJsonValue(QStringLiteral("dsp"))) {
         category.insert(QStringLiteral("coverage"), QStringLiteral(

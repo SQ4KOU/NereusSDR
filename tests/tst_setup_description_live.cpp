@@ -21,6 +21,154 @@ using namespace NereusSDR;
 class SetupDescriptionLiveTest : public QObject {
     Q_OBJECT
 private slots:
+    void pairedV6AntennaTableRowsUseCurrentRadioCommands()
+    {
+        Core core;
+        StepAttenuatorController step;
+        step.setTickTimerEnabled(false);
+        core.model->setStepAttController(&step);
+        core.model->setBoardForTest(HPSDRHW::Hermes);
+        core.server->setupDescription()->setRadioContext(core.model->boardCapabilities(),
+                                                         core.model->hardwareProfile().model);
+        Device a(QStringLiteral("Antenna table iPhone A"), QStringLiteral("phone"));
+        Device b(QStringLiteral("Antenna table iPhone B"), QStringLiteral("phone"));
+        core.pair(a);
+        core.pair(b);
+        QHash<QByteArray, int> features = kHolder;
+        features.insert("setupDescription", 6);
+        features.insert("radioAntennaRows", 1);
+        auto* first = core.signIn(a, features);
+        QVERIFY(admitted(first));
+        QCOMPARE(capability(first->received(), QStringLiteral("setupDescriptionVersion")),
+                 std::optional<qint64>(6));
+        QCOMPARE(capability(first->received(), QStringLiteral("radioAntennaRowsVersion")),
+                 std::optional<qint64>(1));
+        const QJsonObject hardware = QJsonDocument::fromJson(latest(first->received(),
+            QStringLiteral("setup"), QStringLiteral("hardware")).toString().toUtf8()).object();
+        QCOMPARE(hardware.value("version"), QJsonValue(6));
+        const QJsonArray controls = hardware.value("pages").toArray().first().toObject()
+            .value("sections").toArray().first().toObject().value("controls").toArray();
+        const QJsonObject tx = controls.at(controls.size() - 2).toObject();
+        const QJsonObject rx = controls.last().toObject();
+        QVERIFY(SetupDescriptionService::validateAntennaRowsTable(tx,
+            core.model->hardwareProfile().model));
+        QVERIFY(SetupDescriptionService::validateAntennaRowsTable(rx,
+            core.model->hardwareProfile().model));
+        const QString mac = core.model->currentRadioMac();
+        QVERIFY(!mac.isEmpty());
+        const QJsonObject row = rx.value("rows").toArray().at(3).toObject();
+        const int band = row.value("band").toInt();
+        const QJsonObject rxColumn = rx.value("columns").toArray().at(1).toObject();
+        const QJsonObject onlyColumn = rx.value("columns").toArray().at(4).toObject();
+        QCOMPARE(rxColumn.value("field"), QJsonValue("rx"));
+        QCOMPARE(onlyColumn.value("field"), QJsonValue("rxOnly"));
+        const auto rxArgs = [&mac, band](const QJsonObject& column) {
+            return QList<MirrorUpdate>{
+                MirrorUpdate{0, "mac", MirrorWireKind::Utf8, mac},
+                MirrorUpdate{0, "band", MirrorWireKind::Int64, qlonglong(band)},
+                MirrorUpdate{0, "antenna", MirrorWireKind::Int64,
+                             qlonglong(column.value("antenna").toInt())},
+                MirrorUpdate{0, "rxOnly", MirrorWireKind::Bool,
+                             column.value("field") == QJsonValue("rxOnly")}};
+        };
+        const QJsonObject rxResult = core.invoke(first, "setAlexRxAntennaForRadio",
+                                                 rxArgs(rxColumn));
+        QVERIFY2(rxResult.value("accepted").toBool(),
+                 qPrintable(rxResult.value("reason").toString()));
+        QCOMPARE(core.model->alexController().rxAnt(Band::Band40m), 2);
+        QCOMPARE(core.model->alexController().rxAnt(Band::Band20m), 1);
+        QVERIFY(core.invoke(first, "setAlexRxAntennaForRadio", rxArgs(onlyColumn))
+                    .value("accepted").toBool());
+        QCOMPARE(core.model->alexController().rxOnlyAnt(Band::Band40m), 2);
+        const QJsonObject txColumn = tx.value("columns").toArray().at(2).toObject();
+        const auto txArgs = [&mac, band](const QJsonObject& column) {
+            return QList<MirrorUpdate>{
+                MirrorUpdate{0, "mac", MirrorWireKind::Utf8, mac},
+                MirrorUpdate{0, "band", MirrorWireKind::Int64, qlonglong(band)},
+                MirrorUpdate{0, "antenna", MirrorWireKind::Int64,
+                             qlonglong(column.value("antenna").toInt())}};
+        };
+        QVERIFY(core.invoke(first, "setAlexTxAntennaForRadio", txArgs(txColumn))
+                    .value("accepted").toBool());
+        QCOMPARE(core.model->alexController().txAnt(Band::Band40m), 3);
+        QCOMPARE(core.model->alexController().txAnt(Band::Band20m), 1);
+        auto* second = core.signIn(b, features);
+        QVERIFY(admitted(second));
+        QCOMPARE(capability(second->received(), QStringLiteral("radioAntennaRowsVersion")),
+                 std::optional<qint64>(1));
+        QTRY_COMPARE(latest(second->received(), QStringLiteral("alexAntennas"),
+                            QStringLiteral("rxAntennas")).toString(),
+                     core.model->alexAntennaFacade()->rxAntennas());
+        QTRY_COMPARE(latest(second->received(), QStringLiteral("alexAntennas"),
+                            QStringLiteral("rxOnlyAntennas")).toString(),
+                     core.model->alexAntennaFacade()->rxOnlyAntennas());
+        QTRY_COMPARE(latest(second->received(), QStringLiteral("alexAntennas"),
+                            QStringLiteral("txAntennas")).toString(),
+                     core.model->alexAntennaFacade()->txAntennas());
+        // A gesture derived from the published row and column while both
+        // paired devices are present follows the real shared-confirmation
+        // route, then reaches the already-connected second device's mirror.
+        const QJsonObject liveRow = rx.value("rows").toArray().at(5).toObject();
+        const QJsonObject liveColumn = rx.value("columns").toArray().at(2).toObject();
+        QCOMPARE(liveRow.value("label"), QJsonValue("20m"));
+        QCOMPARE(liveColumn.value("field"), QJsonValue("rx"));
+        const int asksBefore = ofType(first->received(), QStringLiteral("confirm.request")).size();
+        const QJsonObject pending = core.invoke(first, "setAlexRxAntennaForRadio",
+            {MirrorUpdate{0, "mac", MirrorWireKind::Utf8, mac},
+             MirrorUpdate{0, "band", MirrorWireKind::Int64,
+                          qlonglong(liveRow.value("band").toInt())},
+             MirrorUpdate{0, "antenna", MirrorWireKind::Int64,
+                          qlonglong(liveColumn.value("antenna").toInt())},
+             MirrorUpdate{0, "rxOnly", MirrorWireKind::Bool, false}});
+        QVERIFY(!pending.value("accepted").toBool(true));
+        QTRY_VERIFY(ofType(first->received(), QStringLiteral("confirm.request")).size()
+                    > asksBefore);
+        const QJsonObject question =
+            ofType(first->received(), QStringLiteral("confirm.request")).last();
+        const QJsonObject confirmed = core.invoke(first, "confirm.proceed",
+            {MirrorUpdate{0, "id", MirrorWireKind::Int64,
+                          qlonglong(question.value("id").toInteger())},
+             MirrorUpdate{0, "choice", MirrorWireKind::Int64, qlonglong(-1)}});
+        QVERIFY2(confirmed.value("accepted").toBool(),
+                 qPrintable(confirmed.value("reason").toString()));
+        QCOMPARE(core.model->alexController().rxAnt(Band::Band20m), 3);
+        QCOMPARE(core.model->alexController().rxAnt(Band::Band40m), 2);
+        QTRY_COMPARE(latest(second->received(), QStringLiteral("alexAntennas"),
+                            QStringLiteral("rxAntennas")).toString(),
+                     core.model->alexAntennaFacade()->rxAntennas());
+        core.model->alexControllerMutable().setBlockTxAnt3(true);
+        QVERIFY(!core.invoke(first, "setAlexTxAntennaForRadio", txArgs(txColumn))
+                     .value("accepted").toBool(true));
+        QCOMPARE(core.model->alexController().txAnt(Band::Band40m), 1);
+        QList<MirrorUpdate> wrong = rxArgs(rxColumn);
+        wrong[0].value = QStringLiteral("AA:BB:CC:DD:EE:99");
+        QVERIFY(!core.invoke(first, "setAlexRxAntennaForRadio", wrong)
+                     .value("accepted").toBool(true));
+        Device withoutRows(QStringLiteral("No row feature"), QStringLiteral("phone"));
+        core.pair(withoutRows);
+        QHash<QByteArray, int> noRows = kHolder;
+        noRows.insert("setupDescription", 6);
+        auto* older = core.signIn(withoutRows, noRows);
+        QVERIFY(admitted(older));
+        const QString noRowsHardware = latest(older->received(), QStringLiteral("setup"),
+                                               QStringLiteral("hardware")).toString();
+        QVERIFY(!noRowsHardware.isEmpty());
+        QVERIFY(!noRowsHardware.contains(QStringLiteral("hardware.antenna.txRows")));
+        QVERIFY(!noRowsHardware.contains(QStringLiteral("hardware.antenna.rxRows")));
+
+        const int capabilitiesBefore = ofType(first->received(), QStringLiteral("capabilities")).size();
+        core.model->setConnectionStateForTest(ConnectionState::Disconnected);
+        QTRY_VERIFY(ofType(first->received(), QStringLiteral("capabilities")).size()
+                    > capabilitiesBefore);
+        const QJsonObject withdrawn = ofType(first->received(), QStringLiteral("capabilities")).last();
+        for (const QJsonValue& value : withdrawn.value(QStringLiteral("properties")).toArray()) {
+            QVERIFY(value.toObject().value(QStringLiteral("name"))
+                    != QJsonValue(QStringLiteral("radioAntennaRowsVersion")));
+        }
+        QVERIFY(!core.invoke(first, "setAlexRxAntennaForRadio", rxArgs(rxColumn))
+                     .value("accepted").toBool(true));
+        QCOMPARE(core.model->alexController().rxAnt(Band::Band40m), 2);
+    }
     void pairedV4DisplaySettingsReachCoreAndNormalizeTracksCurrentDetector()
     {
         TxAnalyzer analyzer(TxAnalyzer::kTxDispId);

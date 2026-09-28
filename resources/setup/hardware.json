@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 6,
   "category": {
     "id": "hardware",
     "title": "Hardware Config",
@@ -21,63 +21,914 @@
               "label": "Block TX on Ant 2",
               "tooltip": "Prevents transmit assignments to Antenna Port 2. Use when Ant 2 is wired for receive only.",
               "kind": "toggle",
-              "binding": {"property": {"object": "alexAntennas", "name": "blockTxAnt2"}},
+              "binding": {
+                "property": {
+                  "object": "alexAntennas",
+                  "name": "blockTxAnt2"
+                }
+              },
               "applies": "live",
-              "gate": {"capability": "radioHardwareVersion", "min": 6, "offAir": true}
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 6,
+                "offAir": true
+              }
             },
             {
               "id": "hardware.antennaAlex.blockTxAnt3",
               "label": "Block TX on Ant 3",
               "tooltip": "Prevents transmit assignments to Antenna Port 3. Use when Ant 3 is wired for receive only.",
               "kind": "toggle",
-              "binding": {"property": {"object": "alexAntennas", "name": "blockTxAnt3"}},
+              "binding": {
+                "property": {
+                  "object": "alexAntennas",
+                  "name": "blockTxAnt3"
+                }
+              },
               "applies": "live",
-              "gate": {"capability": "radioHardwareVersion", "min": 6, "offAir": true}
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 6,
+                "offAir": true
+              }
             },
             {
               "id": "hardware.antennaAlex.rxOutOnTx",
               "label": "RX Bypass on TX",
               "tooltip": "Enable RX Bypass Out relay on transmit.",
               "kind": "toggle",
-              "binding": {"property": {"object": "alexAntennas", "name": "rxOutOnTx"}},
+              "binding": {
+                "property": {
+                  "object": "alexAntennas",
+                  "name": "rxOutOnTx"
+                }
+              },
               "applies": "live",
-              "gate": {"capability": "radioHardwareVersion", "min": 5, "offAir": true}
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 5,
+                "offAir": true
+              }
             },
             {
               "id": "hardware.antennaAlex.ext1OutOnTx",
               "label": "Ext 1 on Tx",
               "tooltip": "Route Ext 1 to receive path during transmit.",
               "kind": "toggle",
-              "binding": {"property": {"object": "alexAntennas", "name": "ext1OutOnTx"}},
+              "binding": {
+                "property": {
+                  "object": "alexAntennas",
+                  "name": "ext1OutOnTx"
+                }
+              },
               "applies": "live",
-              "gate": {"capability": "radioHardwareVersion", "min": 6, "offAir": true}
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 6,
+                "offAir": true
+              }
             },
             {
               "id": "hardware.antennaAlex.ext2OutOnTx",
               "label": "Ext 2 on Tx",
               "tooltip": "Enable RX 1 IN on Alex or Ext 2 on ANAN during transmit.",
               "kind": "toggle",
-              "binding": {"property": {"object": "alexAntennas", "name": "ext2OutOnTx"}},
+              "binding": {
+                "property": {
+                  "object": "alexAntennas",
+                  "name": "ext2OutOnTx"
+                }
+              },
               "applies": "live",
-              "gate": {"capability": "radioHardwareVersion", "min": 6, "offAir": true}
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 6,
+                "offAir": true
+              }
             },
             {
               "id": "hardware.antennaAlex.rxOutOverride",
               "label": "Disable RX Bypass relay",
               "tooltip": "Disable the RX Bypass Out relay (chkDisableRXOut in Thetis).",
               "kind": "toggle",
-              "binding": {"property": {"object": "alexAntennas", "name": "rxOutOverride"}},
+              "binding": {
+                "property": {
+                  "object": "alexAntennas",
+                  "name": "rxOutOverride"
+                }
+              },
               "applies": "live",
-              "gate": {"capability": "radioHardwareVersion", "min": 6, "offAir": true}
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 6,
+                "offAir": true
+              }
             },
             {
               "id": "hardware.antennaAlex.useTxAntennaForRx",
               "label": "Use TX antenna for RX",
               "tooltip": "Use the TX antenna for RX instead of the RX antenna.",
               "kind": "toggle",
-              "binding": {"property": {"object": "alexAntennas", "name": "useTxAntennaForRx"}},
+              "binding": {
+                "property": {
+                  "object": "alexAntennas",
+                  "name": "useTxAntennaForRx"
+                }
+              },
               "applies": "live",
-              "gate": {"capability": "radioHardwareVersion", "min": 2}
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 2
+              }
+            },
+            {
+              "id": "hardware.antenna.txRows",
+              "label": "TX Antenna per Band",
+              "tooltip": "",
+              "kind": "table",
+              "binding": {
+                "antennaRows": {
+                  "object": "alexAntennas",
+                  "mode": "tx"
+                }
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 6,
+              "gate": {
+                "capability": "radioAntennaRowsVersion",
+                "min": 1,
+                "offAir": true
+              },
+              "rows": [
+                {
+                  "band": 0,
+                  "label": "160m",
+                  "cells": [
+                    {
+                      "column": "tx1",
+                      "tooltip": "TX Ant 1 for 160m"
+                    },
+                    {
+                      "column": "tx2",
+                      "tooltip": "TX Ant 2 for 160m"
+                    },
+                    {
+                      "column": "tx3",
+                      "tooltip": "TX Ant 3 for 160m"
+                    }
+                  ]
+                },
+                {
+                  "band": 1,
+                  "label": "80m",
+                  "cells": [
+                    {
+                      "column": "tx1",
+                      "tooltip": "TX Ant 1 for 80m"
+                    },
+                    {
+                      "column": "tx2",
+                      "tooltip": "TX Ant 2 for 80m"
+                    },
+                    {
+                      "column": "tx3",
+                      "tooltip": "TX Ant 3 for 80m"
+                    }
+                  ]
+                },
+                {
+                  "band": 2,
+                  "label": "60m",
+                  "cells": [
+                    {
+                      "column": "tx1",
+                      "tooltip": "TX Ant 1 for 60m"
+                    },
+                    {
+                      "column": "tx2",
+                      "tooltip": "TX Ant 2 for 60m"
+                    },
+                    {
+                      "column": "tx3",
+                      "tooltip": "TX Ant 3 for 60m"
+                    }
+                  ]
+                },
+                {
+                  "band": 3,
+                  "label": "40m",
+                  "cells": [
+                    {
+                      "column": "tx1",
+                      "tooltip": "TX Ant 1 for 40m"
+                    },
+                    {
+                      "column": "tx2",
+                      "tooltip": "TX Ant 2 for 40m"
+                    },
+                    {
+                      "column": "tx3",
+                      "tooltip": "TX Ant 3 for 40m"
+                    }
+                  ]
+                },
+                {
+                  "band": 4,
+                  "label": "30m",
+                  "cells": [
+                    {
+                      "column": "tx1",
+                      "tooltip": "TX Ant 1 for 30m"
+                    },
+                    {
+                      "column": "tx2",
+                      "tooltip": "TX Ant 2 for 30m"
+                    },
+                    {
+                      "column": "tx3",
+                      "tooltip": "TX Ant 3 for 30m"
+                    }
+                  ]
+                },
+                {
+                  "band": 5,
+                  "label": "20m",
+                  "cells": [
+                    {
+                      "column": "tx1",
+                      "tooltip": "TX Ant 1 for 20m"
+                    },
+                    {
+                      "column": "tx2",
+                      "tooltip": "TX Ant 2 for 20m"
+                    },
+                    {
+                      "column": "tx3",
+                      "tooltip": "TX Ant 3 for 20m"
+                    }
+                  ]
+                },
+                {
+                  "band": 6,
+                  "label": "17m",
+                  "cells": [
+                    {
+                      "column": "tx1",
+                      "tooltip": "TX Ant 1 for 17m"
+                    },
+                    {
+                      "column": "tx2",
+                      "tooltip": "TX Ant 2 for 17m"
+                    },
+                    {
+                      "column": "tx3",
+                      "tooltip": "TX Ant 3 for 17m"
+                    }
+                  ]
+                },
+                {
+                  "band": 7,
+                  "label": "15m",
+                  "cells": [
+                    {
+                      "column": "tx1",
+                      "tooltip": "TX Ant 1 for 15m"
+                    },
+                    {
+                      "column": "tx2",
+                      "tooltip": "TX Ant 2 for 15m"
+                    },
+                    {
+                      "column": "tx3",
+                      "tooltip": "TX Ant 3 for 15m"
+                    }
+                  ]
+                },
+                {
+                  "band": 8,
+                  "label": "12m",
+                  "cells": [
+                    {
+                      "column": "tx1",
+                      "tooltip": "TX Ant 1 for 12m"
+                    },
+                    {
+                      "column": "tx2",
+                      "tooltip": "TX Ant 2 for 12m"
+                    },
+                    {
+                      "column": "tx3",
+                      "tooltip": "TX Ant 3 for 12m"
+                    }
+                  ]
+                },
+                {
+                  "band": 9,
+                  "label": "10m",
+                  "cells": [
+                    {
+                      "column": "tx1",
+                      "tooltip": "TX Ant 1 for 10m"
+                    },
+                    {
+                      "column": "tx2",
+                      "tooltip": "TX Ant 2 for 10m"
+                    },
+                    {
+                      "column": "tx3",
+                      "tooltip": "TX Ant 3 for 10m"
+                    }
+                  ]
+                },
+                {
+                  "band": 10,
+                  "label": "6m",
+                  "cells": [
+                    {
+                      "column": "tx1",
+                      "tooltip": "TX Ant 1 for 6m"
+                    },
+                    {
+                      "column": "tx2",
+                      "tooltip": "TX Ant 2 for 6m"
+                    },
+                    {
+                      "column": "tx3",
+                      "tooltip": "TX Ant 3 for 6m"
+                    }
+                  ]
+                },
+                {
+                  "band": 11,
+                  "label": "GEN",
+                  "cells": [
+                    {
+                      "column": "tx1",
+                      "tooltip": "TX Ant 1 for GEN"
+                    },
+                    {
+                      "column": "tx2",
+                      "tooltip": "TX Ant 2 for GEN"
+                    },
+                    {
+                      "column": "tx3",
+                      "tooltip": "TX Ant 3 for GEN"
+                    }
+                  ]
+                },
+                {
+                  "band": 12,
+                  "label": "WWV",
+                  "cells": [
+                    {
+                      "column": "tx1",
+                      "tooltip": "TX Ant 1 for WWV"
+                    },
+                    {
+                      "column": "tx2",
+                      "tooltip": "TX Ant 2 for WWV"
+                    },
+                    {
+                      "column": "tx3",
+                      "tooltip": "TX Ant 3 for WWV"
+                    }
+                  ]
+                },
+                {
+                  "band": 13,
+                  "label": "XVTR",
+                  "cells": [
+                    {
+                      "column": "tx1",
+                      "tooltip": "TX Ant 1 for XVTR"
+                    },
+                    {
+                      "column": "tx2",
+                      "tooltip": "TX Ant 2 for XVTR"
+                    },
+                    {
+                      "column": "tx3",
+                      "tooltip": "TX Ant 3 for XVTR"
+                    }
+                  ]
+                }
+              ],
+              "columns": [
+                {
+                  "id": "tx1",
+                  "field": "tx",
+                  "antenna": 1,
+                  "label": "Ant 1"
+                },
+                {
+                  "id": "tx2",
+                  "field": "tx",
+                  "antenna": 2,
+                  "label": "Ant 2"
+                },
+                {
+                  "id": "tx3",
+                  "field": "tx",
+                  "antenna": 3,
+                  "label": "Ant 3"
+                }
+              ]
+            },
+            {
+              "id": "hardware.antenna.rxRows",
+              "label": "RX1 / RX2 Antenna per Band",
+              "tooltip": "",
+              "kind": "table",
+              "binding": {
+                "antennaRows": {
+                  "object": "alexAntennas",
+                  "mode": "rx"
+                }
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 6,
+              "gate": {
+                "capability": "radioAntennaRowsVersion",
+                "min": 1
+              },
+              "rows": [
+                {
+                  "band": 0,
+                  "label": "160m",
+                  "cells": [
+                    {
+                      "column": "rx1",
+                      "tooltip": "RX1 Ant 1 for 160m"
+                    },
+                    {
+                      "column": "rx2",
+                      "tooltip": "RX1 Ant 2 for 160m"
+                    },
+                    {
+                      "column": "rx3",
+                      "tooltip": "RX1 Ant 3 for 160m"
+                    },
+                    {
+                      "column": "rxOnly1",
+                      "tooltip": "RX-only RX1 for 160m"
+                    },
+                    {
+                      "column": "rxOnly2",
+                      "tooltip": "RX-only RX2 for 160m"
+                    },
+                    {
+                      "column": "rxOnly3",
+                      "tooltip": "RX-only XVTR for 160m"
+                    }
+                  ]
+                },
+                {
+                  "band": 1,
+                  "label": "80m",
+                  "cells": [
+                    {
+                      "column": "rx1",
+                      "tooltip": "RX1 Ant 1 for 80m"
+                    },
+                    {
+                      "column": "rx2",
+                      "tooltip": "RX1 Ant 2 for 80m"
+                    },
+                    {
+                      "column": "rx3",
+                      "tooltip": "RX1 Ant 3 for 80m"
+                    },
+                    {
+                      "column": "rxOnly1",
+                      "tooltip": "RX-only RX1 for 80m"
+                    },
+                    {
+                      "column": "rxOnly2",
+                      "tooltip": "RX-only RX2 for 80m"
+                    },
+                    {
+                      "column": "rxOnly3",
+                      "tooltip": "RX-only XVTR for 80m"
+                    }
+                  ]
+                },
+                {
+                  "band": 2,
+                  "label": "60m",
+                  "cells": [
+                    {
+                      "column": "rx1",
+                      "tooltip": "RX1 Ant 1 for 60m"
+                    },
+                    {
+                      "column": "rx2",
+                      "tooltip": "RX1 Ant 2 for 60m"
+                    },
+                    {
+                      "column": "rx3",
+                      "tooltip": "RX1 Ant 3 for 60m"
+                    },
+                    {
+                      "column": "rxOnly1",
+                      "tooltip": "RX-only RX1 for 60m"
+                    },
+                    {
+                      "column": "rxOnly2",
+                      "tooltip": "RX-only RX2 for 60m"
+                    },
+                    {
+                      "column": "rxOnly3",
+                      "tooltip": "RX-only XVTR for 60m"
+                    }
+                  ]
+                },
+                {
+                  "band": 3,
+                  "label": "40m",
+                  "cells": [
+                    {
+                      "column": "rx1",
+                      "tooltip": "RX1 Ant 1 for 40m"
+                    },
+                    {
+                      "column": "rx2",
+                      "tooltip": "RX1 Ant 2 for 40m"
+                    },
+                    {
+                      "column": "rx3",
+                      "tooltip": "RX1 Ant 3 for 40m"
+                    },
+                    {
+                      "column": "rxOnly1",
+                      "tooltip": "RX-only RX1 for 40m"
+                    },
+                    {
+                      "column": "rxOnly2",
+                      "tooltip": "RX-only RX2 for 40m"
+                    },
+                    {
+                      "column": "rxOnly3",
+                      "tooltip": "RX-only XVTR for 40m"
+                    }
+                  ]
+                },
+                {
+                  "band": 4,
+                  "label": "30m",
+                  "cells": [
+                    {
+                      "column": "rx1",
+                      "tooltip": "RX1 Ant 1 for 30m"
+                    },
+                    {
+                      "column": "rx2",
+                      "tooltip": "RX1 Ant 2 for 30m"
+                    },
+                    {
+                      "column": "rx3",
+                      "tooltip": "RX1 Ant 3 for 30m"
+                    },
+                    {
+                      "column": "rxOnly1",
+                      "tooltip": "RX-only RX1 for 30m"
+                    },
+                    {
+                      "column": "rxOnly2",
+                      "tooltip": "RX-only RX2 for 30m"
+                    },
+                    {
+                      "column": "rxOnly3",
+                      "tooltip": "RX-only XVTR for 30m"
+                    }
+                  ]
+                },
+                {
+                  "band": 5,
+                  "label": "20m",
+                  "cells": [
+                    {
+                      "column": "rx1",
+                      "tooltip": "RX1 Ant 1 for 20m"
+                    },
+                    {
+                      "column": "rx2",
+                      "tooltip": "RX1 Ant 2 for 20m"
+                    },
+                    {
+                      "column": "rx3",
+                      "tooltip": "RX1 Ant 3 for 20m"
+                    },
+                    {
+                      "column": "rxOnly1",
+                      "tooltip": "RX-only RX1 for 20m"
+                    },
+                    {
+                      "column": "rxOnly2",
+                      "tooltip": "RX-only RX2 for 20m"
+                    },
+                    {
+                      "column": "rxOnly3",
+                      "tooltip": "RX-only XVTR for 20m"
+                    }
+                  ]
+                },
+                {
+                  "band": 6,
+                  "label": "17m",
+                  "cells": [
+                    {
+                      "column": "rx1",
+                      "tooltip": "RX1 Ant 1 for 17m"
+                    },
+                    {
+                      "column": "rx2",
+                      "tooltip": "RX1 Ant 2 for 17m"
+                    },
+                    {
+                      "column": "rx3",
+                      "tooltip": "RX1 Ant 3 for 17m"
+                    },
+                    {
+                      "column": "rxOnly1",
+                      "tooltip": "RX-only RX1 for 17m"
+                    },
+                    {
+                      "column": "rxOnly2",
+                      "tooltip": "RX-only RX2 for 17m"
+                    },
+                    {
+                      "column": "rxOnly3",
+                      "tooltip": "RX-only XVTR for 17m"
+                    }
+                  ]
+                },
+                {
+                  "band": 7,
+                  "label": "15m",
+                  "cells": [
+                    {
+                      "column": "rx1",
+                      "tooltip": "RX1 Ant 1 for 15m"
+                    },
+                    {
+                      "column": "rx2",
+                      "tooltip": "RX1 Ant 2 for 15m"
+                    },
+                    {
+                      "column": "rx3",
+                      "tooltip": "RX1 Ant 3 for 15m"
+                    },
+                    {
+                      "column": "rxOnly1",
+                      "tooltip": "RX-only RX1 for 15m"
+                    },
+                    {
+                      "column": "rxOnly2",
+                      "tooltip": "RX-only RX2 for 15m"
+                    },
+                    {
+                      "column": "rxOnly3",
+                      "tooltip": "RX-only XVTR for 15m"
+                    }
+                  ]
+                },
+                {
+                  "band": 8,
+                  "label": "12m",
+                  "cells": [
+                    {
+                      "column": "rx1",
+                      "tooltip": "RX1 Ant 1 for 12m"
+                    },
+                    {
+                      "column": "rx2",
+                      "tooltip": "RX1 Ant 2 for 12m"
+                    },
+                    {
+                      "column": "rx3",
+                      "tooltip": "RX1 Ant 3 for 12m"
+                    },
+                    {
+                      "column": "rxOnly1",
+                      "tooltip": "RX-only RX1 for 12m"
+                    },
+                    {
+                      "column": "rxOnly2",
+                      "tooltip": "RX-only RX2 for 12m"
+                    },
+                    {
+                      "column": "rxOnly3",
+                      "tooltip": "RX-only XVTR for 12m"
+                    }
+                  ]
+                },
+                {
+                  "band": 9,
+                  "label": "10m",
+                  "cells": [
+                    {
+                      "column": "rx1",
+                      "tooltip": "RX1 Ant 1 for 10m"
+                    },
+                    {
+                      "column": "rx2",
+                      "tooltip": "RX1 Ant 2 for 10m"
+                    },
+                    {
+                      "column": "rx3",
+                      "tooltip": "RX1 Ant 3 for 10m"
+                    },
+                    {
+                      "column": "rxOnly1",
+                      "tooltip": "RX-only RX1 for 10m"
+                    },
+                    {
+                      "column": "rxOnly2",
+                      "tooltip": "RX-only RX2 for 10m"
+                    },
+                    {
+                      "column": "rxOnly3",
+                      "tooltip": "RX-only XVTR for 10m"
+                    }
+                  ]
+                },
+                {
+                  "band": 10,
+                  "label": "6m",
+                  "cells": [
+                    {
+                      "column": "rx1",
+                      "tooltip": "RX1 Ant 1 for 6m"
+                    },
+                    {
+                      "column": "rx2",
+                      "tooltip": "RX1 Ant 2 for 6m"
+                    },
+                    {
+                      "column": "rx3",
+                      "tooltip": "RX1 Ant 3 for 6m"
+                    },
+                    {
+                      "column": "rxOnly1",
+                      "tooltip": "RX-only RX1 for 6m"
+                    },
+                    {
+                      "column": "rxOnly2",
+                      "tooltip": "RX-only RX2 for 6m"
+                    },
+                    {
+                      "column": "rxOnly3",
+                      "tooltip": "RX-only XVTR for 6m"
+                    }
+                  ]
+                },
+                {
+                  "band": 11,
+                  "label": "GEN",
+                  "cells": [
+                    {
+                      "column": "rx1",
+                      "tooltip": "RX1 Ant 1 for GEN"
+                    },
+                    {
+                      "column": "rx2",
+                      "tooltip": "RX1 Ant 2 for GEN"
+                    },
+                    {
+                      "column": "rx3",
+                      "tooltip": "RX1 Ant 3 for GEN"
+                    },
+                    {
+                      "column": "rxOnly1",
+                      "tooltip": "RX-only RX1 for GEN"
+                    },
+                    {
+                      "column": "rxOnly2",
+                      "tooltip": "RX-only RX2 for GEN"
+                    },
+                    {
+                      "column": "rxOnly3",
+                      "tooltip": "RX-only XVTR for GEN"
+                    }
+                  ]
+                },
+                {
+                  "band": 12,
+                  "label": "WWV",
+                  "cells": [
+                    {
+                      "column": "rx1",
+                      "tooltip": "RX1 Ant 1 for WWV"
+                    },
+                    {
+                      "column": "rx2",
+                      "tooltip": "RX1 Ant 2 for WWV"
+                    },
+                    {
+                      "column": "rx3",
+                      "tooltip": "RX1 Ant 3 for WWV"
+                    },
+                    {
+                      "column": "rxOnly1",
+                      "tooltip": "RX-only RX1 for WWV"
+                    },
+                    {
+                      "column": "rxOnly2",
+                      "tooltip": "RX-only RX2 for WWV"
+                    },
+                    {
+                      "column": "rxOnly3",
+                      "tooltip": "RX-only XVTR for WWV"
+                    }
+                  ]
+                },
+                {
+                  "band": 13,
+                  "label": "XVTR",
+                  "cells": [
+                    {
+                      "column": "rx1",
+                      "tooltip": "RX1 Ant 1 for XVTR"
+                    },
+                    {
+                      "column": "rx2",
+                      "tooltip": "RX1 Ant 2 for XVTR"
+                    },
+                    {
+                      "column": "rx3",
+                      "tooltip": "RX1 Ant 3 for XVTR"
+                    },
+                    {
+                      "column": "rxOnly1",
+                      "tooltip": "RX-only RX1 for XVTR"
+                    },
+                    {
+                      "column": "rxOnly2",
+                      "tooltip": "RX-only RX2 for XVTR"
+                    },
+                    {
+                      "column": "rxOnly3",
+                      "tooltip": "RX-only XVTR for XVTR"
+                    }
+                  ]
+                }
+              ],
+              "columns": [
+                {
+                  "id": "rx1",
+                  "field": "rx",
+                  "antenna": 1,
+                  "label": "1"
+                },
+                {
+                  "id": "rx2",
+                  "field": "rx",
+                  "antenna": 2,
+                  "label": "2"
+                },
+                {
+                  "id": "rx3",
+                  "field": "rx",
+                  "antenna": 3,
+                  "label": "3"
+                },
+                {
+                  "id": "rxOnly1",
+                  "field": "rxOnly",
+                  "antenna": 1,
+                  "label": "RX1"
+                },
+                {
+                  "id": "rxOnly2",
+                  "field": "rxOnly",
+                  "antenna": 2,
+                  "label": "RX2"
+                },
+                {
+                  "id": "rxOnly3",
+                  "field": "rxOnly",
+                  "antenna": 3,
+                  "label": "XVTR"
+                }
+              ],
+              "columnGroups": [
+                {
+                  "label": "RX1",
+                  "columns": [
+                    "rx1",
+                    "rx2",
+                    "rx3"
+                  ]
+                },
+                {
+                  "label": "RX-only",
+                  "columns": [
+                    "rxOnly1",
+                    "rxOnly2",
+                    "rxOnly3"
+                  ]
+                }
+              ]
             }
           ]
         }

@@ -43,9 +43,12 @@ public:
     static bool validateSettingToggleEncoding(const QJsonObject& control);
     static bool validateCommandBinding(const QJsonObject& control, QString* error = nullptr);
     static bool validateTnfTable(const QJsonObject& control, QString* error = nullptr);
+    static bool validateAntennaRowsTable(const QJsonObject& control,
+                                         HPSDRModel model = HPSDRModel::FIRST);
     static bool validateSettingsHygienePanel(const QJsonObject& control);
     /// Stateless per-session projection of a category string (empty if no ready pages).
-    static QString fitCategoryForVersion(const QString& description, int version);
+    static QString fitCategoryForVersion(const QString& description, int version,
+                                         bool antennaRowsAvailable = true);
     void setBoardCapabilities(const BoardCapabilities& caps);
     void setRadioContext(const BoardCapabilities& caps, HPSDRModel model);
     quint32 revision() const { return m_revision; }
