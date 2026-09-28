@@ -329,6 +329,30 @@ private slots:
         twoTone->setTxChannel(nullptr);
     }
 
+    // Review Minor 5: a new key during the tail ends the tail but not the
+    // end-of-over frame already queued: it plays out whole ahead of the new
+    // over's audio, as FreeDV's output FIFO does.
+    void newKeyLetsTheQueuedFrameFinish()
+    {
+        RealRig rig;
+        rig.key();
+        rig.model.moxController()->setMox(false);
+        QVERIFY(rig.model.endOfOverTailActive());
+        pump();
+        const int queued = rig.worker->radeAudioQueuedSamplesForTest();
+        QVERIFY(queued > 0);
+
+        rig.key();
+        QVERIFY(rig.model.mox());
+        QVERIFY(!rig.model.endOfOverTailActive());
+        pump();
+        QCOMPARE(rig.worker->radeAudioQueuedSamplesForTest(), queued);
+        QVERIFY(!rig.channel()->endOfOverQueued());   // the new over encodes
+        rig.tick(4);
+        QCOMPARE(rig.worker->radeAudioQueuedSamplesForTest(),
+                 queued - 4 * TxWorkerThread::kBlockFrames);
+    }
+
     // Review Important 1, case A: keyed in USB (the worker latched the WDSP
     // path), the slice switched to RADE while keyed, then released. The
     // live microphone path must not stay on the air for a tail.

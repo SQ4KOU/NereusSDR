@@ -6707,9 +6707,19 @@ void RadioModel::onEndOfOverTailChanged(bool active)
         }
     }
     if (!active) {
-        // However it ended, nothing of it may reach a later over: drop any
-        // queued RADE audio and let the channel encode the next over.
-        if (m_txWorker) {
+        // The channel encodes the next over again.
+        // Review Minor 5: a new key ended it. The end-of-over frame already
+        // queued plays out whole ahead of the new over, as FreeDV's does:
+        // RADETransmitStep::restartVocoder writes the EOO into the step's
+        // output FIFO and execute reads that FIFO in order ahead of any
+        // later modem samples, and freedv-gui drops PTT only once the EOO
+        // is queued and the output has drained, so a new over never cuts
+        // it (freedv-backend src/pipeline/RADETransmitStep.cpp:174-178,
+        // 233, 242, 265 [@f02e7e9]; freedv-gui src/ongui.cpp:1479-1523
+        // [@a4ae053]). Any other end (a stop, a block, a mode change, the
+        // bound) drops what is left of it.
+        const bool rekeyed = m_moxController != nullptr && m_moxController->isMox();
+        if (m_txWorker && !rekeyed) {
             QMetaObject::invokeMethod(m_txWorker.get(), "clearRadeAudio",
                                       Qt::QueuedConnection);
         }
