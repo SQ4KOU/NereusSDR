@@ -36,6 +36,10 @@
 //                 Display Cal and Volts/Amps Calibration follow the transmit
 //                 settings gate instead of the transmit permission.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - Volts/Amps Calibration takes Thetis's ranges and the
+//                 model's defaults (btnAmpDefault), and is disabled with its
+//                 reason where it cannot change the PA current reading.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // --- From setup.cs ---
@@ -370,7 +374,11 @@ CalibrationTab::CalibrationTab(RadioModel* model, QWidget* parent)
 
     // Source: Thetis udAmpSens setup.designer.cs:11672-11677 [v2.10.3.13];
     //         setup.cs:24255 udAmpSens_ValueChanged -> console.AmpSens.
-    m_ampSensSpin = makeSpinBox(-100.0, 100.0, 1.0, 0.1, 4, vaCalGroup);
+    //         Range from udAmpSens setup.designer.cs:11782-11807 [v2.10.3.15]:
+    //         0.001..5000, step 1. Three decimals (Thetis shows one) so the
+    //         ANAN-G2 defaults 66.23 and 0.001 show as they apply.
+    m_ampSensSpin = makeSpinBox(0.001, 5000.0, 120.0, 1.0, 3, vaCalGroup);
+    m_ampSensSpin->setRange(0.001, 5000.0);
     m_ampSensSpin->setToolTip(
         tr("Amp sensitivity for PA volts/amps calculation. Hardware-specific constant."));
     vaCalForm->addRow(tr("Sensitivity:"), m_ampSensSpin);
@@ -378,7 +386,9 @@ CalibrationTab::CalibrationTab(RadioModel* model, QWidget* parent)
     // Source: Thetis udAmpVoff setup.designer.cs:11672-11677 [v2.10.3.13];
     //         setup.cs:24247 udAmpVoff_ValueChanged -> console.AmpVoff.
     //         Default upstream is 360.0f (console.cs:24893 _amp_voff).
-    m_ampVoffSpin = makeSpinBox(-10.0, 10.0, 0.0, 0.01, 4, vaCalGroup);
+    //         Range from udAmpVoff setup.designer.cs:11812-11837 [v2.10.3.15]:
+    //         0..5000, step 1.
+    m_ampVoffSpin = makeSpinBox(0.0, 5000.0, 360.0, 1.0, 3, vaCalGroup);
     m_ampVoffSpin->setToolTip(
         tr("Amp voltage offset for PA volts/amps calculation. Hardware-specific constant."));
     vaCalForm->addRow(tr("Offset:"), m_ampVoffSpin);
@@ -512,9 +522,9 @@ CalibrationTab::CalibrationTab(RadioModel* model, QWidget* parent)
     });
     connect(m_ampDefaultBtn, &QPushButton::clicked, this, [this]() {
         if (!m_calCtrl) { return; }
-        // Restore to model defaults (1.0 sensitivity, 0.0 offset)
-        m_calCtrl->setPaCurrentSensitivity(1.0);
-        m_calCtrl->setPaCurrentOffset(0.0);
+        // From Thetis setup.cs:24346-24352 [v2.10.3.15] btnAmpDefault_Click:
+        // the radio model's factory values (GetDefaultVoltCalibration).
+        m_calCtrl->restoreDefaultVoltCalibration();
         m_calCtrl->save();
         syncFromController();
         emit settingChanged(QStringLiteral("cal/paDefaultRestored"), true);
@@ -593,8 +603,26 @@ void CalibrationTab::syncFromController()
 
 // -- populate ------------------------------------------------------------------
 
-void CalibrationTab::populate(const RadioInfo& info, const BoardCapabilities& /*caps*/)
+void CalibrationTab::populate(const RadioInfo& info, const BoardCapabilities& caps)
 {
+    // Volts/Amps Calibration changes the PA current reading only on a radio
+    // with a current sensor (Thetis HasAmps), and not on the HL2, whose
+    // reading uses a fixed sense chain (mi0bot convertToAmps, MI0BOT: HL2
+    // current). Elsewhere the values are shown, disabled, with the reason.
+    // The transmit-settings gate (setTransmitCalibrationPermitted) disables
+    // the group around them on its own.
+    QString ampsReason;
+    if (!caps.hasPaAmpsTelemetry) {
+        ampsReason = tr("This radio does not report PA current.");
+    } else if (m_model && m_model->hardwareProfile().model == HPSDRModel::HERMESLITE) {
+        ampsReason = tr("The Hermes Lite 2 reads its PA current with fixed scaling. "
+                        "These values do not change it.");
+    }
+    const bool ampsCalApplies = ampsReason.isEmpty();
+    HardwareTransmitGate::apply(m_ampSensSpin, ampsCalApplies, ampsReason);
+    HardwareTransmitGate::apply(m_ampVoffSpin, ampsCalApplies, ampsReason);
+    HardwareTransmitGate::apply(m_ampDefaultBtn, ampsCalApplies, ampsReason);
+
     // R-R3-46: a remote window has no connect of its own to load the
     // controller, so it reads the Core's radio's saved calibration here
     // (reading only: nothing is written back until an edit).

@@ -26,6 +26,11 @@
 //   2026-09-25 - R-R3-46 / R-R3-49 (remote-window parity Task 13):
 //                 loadTransmitCalibration. J.J. Boyd (KG4VCF), AI-assisted
 //                 via Anthropic Claude Code.
+//   2026-09-28 - The volt calibration (AmpVoff / AmpSens): Thetis's
+//                 defaults, clamps, per-model default and
+//                 initVoltsAmpsCalibration rule, now that the PA current
+//                 reading applies it. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 // --- From setup.cs ---
@@ -131,6 +136,7 @@
 #include "CalibrationController.h"
 
 #include "core/AppSettings.h"
+#include "core/HardwareProfile.h"
 
 namespace NereusSDR {
 
@@ -259,7 +265,34 @@ void CalibrationController::setTxDisplayOffsetDb(double db)
 
 // ── PA current calculation parameters ─────────────────────────────────────────
 
-// Source: console.cs:6691-6724 CalibratedPAPower — sensitivity constant [@501e3f5]
+namespace {
+
+// From Thetis console.cs:24949-24958 [v2.10.3.15] AmpSens:
+//   float tmp = value;
+//   if (tmp < 0.001f) tmp = 0.001f;
+double clampAmpSens(double sens)
+{
+    if (sens < 0.001) { sens = 0.001; }
+    return sens;
+}
+
+// From Thetis console.cs:24939-24947 [v2.10.3.15] AmpVoff:
+//   float tmp = value;
+//   if (tmp < 0) tmp = 0.0f;
+double clampAmpVoff(double voff)
+{
+    if (voff < 0) { voff = 0.0; }
+    return voff;
+}
+
+// Thetis's udAmpSens / udAmpVoff start at 1 (setup.designer.cs:11803-11807,
+// 11833-11837 [v2.10.3.15]); a loaded value marks the control set only when
+// it differs, since only then does ValueChanged fire (setup.cs:24353-24364).
+constexpr double kDesignerAmpValue = 1.0;
+
+} // namespace
+
+// Thetis AmpSens: the PA current reading's sensitivity (mV per amp).
 double CalibrationController::paCurrentSensitivity() const
 {
     return m_paCurrentSensitivity;
@@ -267,11 +300,17 @@ double CalibrationController::paCurrentSensitivity() const
 
 void CalibrationController::setPaCurrentSensitivity(double sens)
 {
+    // udAmpSens_ValueChanged (setup.cs:24359-24364 [v2.10.3.15]):
+    //   console.AmpSens = (float)udAmpSens.Value;
+    //   _bSensSet = true;
+    m_paCurrentSensitivitySet = true;
+    sens = clampAmpSens(sens);
     if (m_paCurrentSensitivity == sens) { return; }
     m_paCurrentSensitivity = sens;
     emit changed();
 }
 
+// Thetis AmpVoff: the PA current sensor's voltage offset (mV).
 double CalibrationController::paCurrentOffset() const
 {
     return m_paCurrentOffset;
@@ -279,8 +318,82 @@ double CalibrationController::paCurrentOffset() const
 
 void CalibrationController::setPaCurrentOffset(double offset)
 {
+    // udAmpVoff_ValueChanged (setup.cs:24353-24358 [v2.10.3.15]):
+    //   console.AmpVoff = (float)udAmpVoff.Value;
+    //   _bVoffSet = true;
+    m_paCurrentOffsetSet = true;
+    offset = clampAmpVoff(offset);
     if (m_paCurrentOffset == offset) { return; }
     m_paCurrentOffset = offset;
+    emit changed();
+}
+
+void CalibrationController::setHardwareModel(HPSDRModel model)
+{
+    m_hardwareModel = model;
+    // The model's defaults stand in until the operator sets a value, as
+    // initVoltsAmpsCalibration applies them at start-up (setup.cs:24365-24368
+    // [v2.10.3.15]); an edit made since is the operator's and is kept.
+    if (!m_paCurrentSensitivitySet && !m_paCurrentOffsetSet) {
+        applyModelVoltCalibration();
+    }
+}
+
+void CalibrationController::restoreDefaultVoltCalibration()
+{
+    // From Thetis setup.cs:24346-24352 [v2.10.3.15] btnAmpDefault_Click:
+    //   (float voff, float sens) = HardwareSpecific.GetDefaultVoltCalibration();
+    //   udAmpVoff.Value = (decimal)voff;
+    //   udAmpSens.Value = (decimal)sens;
+    const VoltCalibration c = defaultVoltCalibrationFor(m_hardwareModel);
+    setPaCurrentOffset(static_cast<double>(c.voff));
+    setPaCurrentSensitivity(static_cast<double>(c.sens));
+}
+
+void CalibrationController::applyModelVoltCalibration()
+{
+    // btnAmpDefault_Click's values, left unset so a later model (or a
+    // saved calibration) still decides; NereusSDR does not save them.
+    const VoltCalibration c = defaultVoltCalibrationFor(m_hardwareModel);
+    m_paCurrentSensitivitySet = false;
+    m_paCurrentOffsetSet = false;
+    const double sens = static_cast<double>(c.sens);
+    const double voff = static_cast<double>(c.voff);
+    if (m_paCurrentSensitivity == sens && m_paCurrentOffset == voff) {
+        return;
+    }
+    m_paCurrentSensitivity = sens;
+    m_paCurrentOffset = voff;
+    emit changed();
+}
+
+void CalibrationController::applyLoadedVoltCalibration(const QString& sensText,
+                                                       const QString& voffText)
+{
+    bool sensOk = false;
+    bool voffOk = false;
+    const double sens = sensText.toDouble(&sensOk);
+    const double voff = voffText.toDouble(&voffOk);
+    // getOptions restores the controls, then initVoltsAmpsCalibration
+    // (setup.cs:419 and 24365-24368 [v2.10.3.15]) applies the model's
+    // defaults unless both were set. Older NereusSDR builds saved
+    // sensitivity 1 and offset 0 without applying them; the sensitivity's
+    // 1 leaves both on the model's defaults, as Thetis would.
+    const bool sensSet = sensOk && sens != kDesignerAmpValue;
+    const bool voffSet = voffOk && voff != kDesignerAmpValue;
+    if (!sensSet || !voffSet) {
+        applyModelVoltCalibration();
+        return;
+    }
+    const double clampedSens = clampAmpSens(sens);
+    const double clampedVoff = clampAmpVoff(voff);
+    m_paCurrentSensitivitySet = true;
+    m_paCurrentOffsetSet = true;
+    if (m_paCurrentSensitivity == clampedSens && m_paCurrentOffset == clampedVoff) {
+        return;
+    }
+    m_paCurrentSensitivity = clampedSens;
+    m_paCurrentOffset = clampedVoff;
     emit changed();
 }
 
@@ -346,8 +459,8 @@ void CalibrationController::load()
     m_rx1_6mLnaOffset        = s.value(base + QStringLiteral("rx1_6mLna"),     QStringLiteral("0.0")).toDouble();
     m_rx2_6mLnaOffset        = s.value(base + QStringLiteral("rx2_6mLna"),     QStringLiteral("0.0")).toDouble();
     m_txDisplayOffsetDb      = s.value(base + QStringLiteral("txDisplayOffset"), QStringLiteral("0.0")).toDouble();
-    m_paCurrentSensitivity   = s.value(base + QStringLiteral("paSens"),        QStringLiteral("1.0")).toDouble();
-    m_paCurrentOffset        = s.value(base + QStringLiteral("paOffset"),      QStringLiteral("0.0")).toDouble();
+    applyLoadedVoltCalibration(s.value(base + QStringLiteral("paSens")).toString(),
+                               s.value(base + QStringLiteral("paOffset")).toString());
 
     // PA forward-power cal profile under hardware/<mac>/paCalibration/.
     // Source: Thetis console.cs:6691-6724 CalibratedPAPower [v2.10.3.13] —
@@ -394,10 +507,8 @@ void CalibrationController::loadTransmitCalibration()
     const QString base = QStringLiteral("hardware/%1/cal/").arg(m_mac);
     setTxDisplayOffsetDb(s.value(base + QStringLiteral("txDisplayOffset"),
                                  QStringLiteral("0.0")).toDouble());
-    setPaCurrentSensitivity(s.value(base + QStringLiteral("paSens"),
-                                    QStringLiteral("1.0")).toDouble());
-    setPaCurrentOffset(s.value(base + QStringLiteral("paOffset"),
-                               QStringLiteral("0.0")).toDouble());
+    applyLoadedVoltCalibration(s.value(base + QStringLiteral("paSens")).toString(),
+                               s.value(base + QStringLiteral("paOffset")).toString());
 }
 
 void CalibrationController::save()
@@ -429,8 +540,13 @@ void CalibrationController::save()
     store(base + QStringLiteral("rx1_6mLna"),       QString::number(m_rx1_6mLnaOffset),     QString::number(0.0));
     store(base + QStringLiteral("rx2_6mLna"),       QString::number(m_rx2_6mLnaOffset),     QString::number(0.0));
     store(base + QStringLiteral("txDisplayOffset"), QString::number(m_txDisplayOffsetDb),   QString::number(0.0));
-    store(base + QStringLiteral("paSens"),          QString::number(m_paCurrentSensitivity), QString::number(1.0));
-    store(base + QStringLiteral("paOffset"),        QString::number(m_paCurrentOffset),     QString::number(0.0));
+    // The volt calibration once the operator set either value (Thetis saves
+    // both controls, so the other one's default is kept with it); the
+    // model's defaults alone stay unsaved so they follow the model.
+    if (m_paCurrentSensitivitySet || m_paCurrentOffsetSet) {
+        store(base + QStringLiteral("paSens"),   QString::number(m_paCurrentSensitivity), QString());
+        store(base + QStringLiteral("paOffset"), QString::number(m_paCurrentOffset),      QString());
+    }
 
     // PA forward-power cal profile -- see load() for schema.
     // Source: Thetis console.cs:6691-6724 CalibratedPAPower [v2.10.3.13]

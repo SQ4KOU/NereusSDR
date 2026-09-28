@@ -41,6 +41,11 @@ private slots:
     void persistence_roundTrip();
     void saveWritesOnlyChangedKeys();
     void coreReloadsTheCalibrationAWindowSaved();
+    void voltCalibrationDefaultsFollowTheModel();
+    void unsetOrLegacyVoltCalibrationTakesTheModelDefaults();
+    void aSavedVoltCalibrationSurvivesAModelChange();
+    void theDefaultButtonRestoresTheModelDefaultsAndSavesThem();
+    void voltCalibrationSettersClampAsThetis();
 };
 
 void TstCalibrationController::defaults_allCorrect()
@@ -63,8 +68,11 @@ void TstCalibrationController::defaults_allCorrect()
     QCOMPARE(ctrl.rx2_6mLnaOffset(), 0.0);
     // Source: setup.cs:14325 udTXDisplayCalOffset default 0 [@501e3f5]
     QCOMPARE(ctrl.txDisplayOffsetDb(), 0.0);
-    QCOMPARE(ctrl.paCurrentSensitivity(), 1.0);
-    QCOMPARE(ctrl.paCurrentOffset(), 0.0);
+    // From Thetis console.cs:24937-24938 [v2.10.3.15]:
+    //   private float _amp_voff = 360.0f;
+    //   private float _amp_sens = 120.0f;
+    QCOMPARE(ctrl.paCurrentSensitivity(), 120.0);
+    QCOMPARE(ctrl.paCurrentOffset(), 360.0);
 }
 
 void TstCalibrationController::setFreqCorrectionFactor_emitsChanged()
@@ -176,9 +184,9 @@ void TstCalibrationController::setPaCurrentOffset_emitsChanged()
 {
     NereusSDR::CalibrationController ctrl;
     QSignalSpy spy(&ctrl, &NereusSDR::CalibrationController::changed);
-    ctrl.setPaCurrentOffset(-0.1);
+    ctrl.setPaCurrentOffset(0.5);
     QCOMPARE(spy.count(), 1);
-    QCOMPARE(ctrl.paCurrentOffset(), -0.1);
+    QCOMPARE(ctrl.paCurrentOffset(), 0.5);
 }
 
 void TstCalibrationController::persistence_roundTrip()
@@ -306,6 +314,111 @@ void TstCalibrationController::saveWritesOnlyChangedKeys()
     reader.load();
     QCOMPARE(reader.freqCorrectionFactor(), 1.000004);
     QCOMPARE(reader.txDisplayOffsetDb(), 0.5);
+}
+
+// Thetis sets the volt calibration from HardwareSpecific.GetDefaultVoltCalibration
+// for the radio's model (clsHardwareSpecific.cs:265-292 [v2.10.3.15]).
+void TstCalibrationController::voltCalibrationDefaultsFollowTheModel()
+{
+    NereusSDR::CalibrationController ctrl;
+    ctrl.setHardwareModel(NereusSDR::HPSDRModel::ANAN7000D);
+    QCOMPARE(ctrl.paCurrentSensitivity(), 88.0);
+    QCOMPARE(ctrl.paCurrentOffset(), 340.0);
+    QSignalSpy spy(&ctrl, &NereusSDR::CalibrationController::changed);
+    ctrl.setHardwareModel(NereusSDR::HPSDRModel::ANAN_G2);
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(ctrl.paCurrentSensitivity(), static_cast<double>(66.23f));
+    QCOMPARE(ctrl.paCurrentOffset(), static_cast<double>(0.001f));
+}
+
+// Thetis initVoltsAmpsCalibration (setup.cs:24365-24368 [v2.10.3.15]):
+//   if (!_bSensSet || !_bVoffSet) btnAmpDefault_Click(this, EventArgs.Empty);
+// A value counts as set once one other than the designer's 1 was loaded.
+// Older NereusSDR saved sensitivity 1 and offset 0, which never scaled the
+// reading; they take the model's defaults and are not written back.
+void TstCalibrationController::unsetOrLegacyVoltCalibrationTakesTheModelDefaults()
+{
+    const QString mac = QStringLiteral("00:11:22:33:44:AC");
+    NereusSDR::AppSettings& s = NereusSDR::AppSettings::instance();
+    s.clearHardwareValues(mac);
+    const auto clean = qScopeGuard([&s, mac] { s.clearHardwareValues(mac); });
+    const QString base = QStringLiteral("hardware/%1/cal/").arg(mac);
+    s.setValue(base + QStringLiteral("paSens"), QStringLiteral("1"));
+    s.setValue(base + QStringLiteral("paOffset"), QStringLiteral("0"));
+
+    NereusSDR::CalibrationController ctrl;
+    ctrl.setHardwareModel(NereusSDR::HPSDRModel::ANAN7000D);
+    ctrl.setMacAddress(mac);
+    ctrl.load();
+    QCOMPARE(ctrl.paCurrentSensitivity(), 88.0);
+    QCOMPARE(ctrl.paCurrentOffset(), 340.0);
+    ctrl.loadTransmitCalibration();
+    QCOMPARE(ctrl.paCurrentSensitivity(), 88.0);
+    QCOMPARE(ctrl.paCurrentOffset(), 340.0);
+    ctrl.save();
+    QCOMPARE(s.value(base + QStringLiteral("paSens")).toString(), QStringLiteral("1"));
+    QCOMPARE(s.value(base + QStringLiteral("paOffset")).toString(), QStringLiteral("0"));
+}
+
+void TstCalibrationController::aSavedVoltCalibrationSurvivesAModelChange()
+{
+    const QString mac = QStringLiteral("00:11:22:33:44:AD");
+    NereusSDR::AppSettings& s = NereusSDR::AppSettings::instance();
+    s.clearHardwareValues(mac);
+    const auto clean = qScopeGuard([&s, mac] { s.clearHardwareValues(mac); });
+    {
+        NereusSDR::CalibrationController ctrl;
+        ctrl.setHardwareModel(NereusSDR::HPSDRModel::ANAN8000D);
+        ctrl.setMacAddress(mac);
+        ctrl.load();
+        ctrl.setPaCurrentSensitivity(95.0);
+        ctrl.setPaCurrentOffset(300.0);
+        ctrl.setHardwareModel(NereusSDR::HPSDRModel::ANAN_G2);
+        QCOMPARE(ctrl.paCurrentSensitivity(), 95.0);
+        QCOMPARE(ctrl.paCurrentOffset(), 300.0);
+        ctrl.save();
+    }
+    NereusSDR::CalibrationController reader;
+    reader.setHardwareModel(NereusSDR::HPSDRModel::ANAN7000D);
+    reader.setMacAddress(mac);
+    reader.load();
+    QCOMPARE(reader.paCurrentSensitivity(), 95.0);
+    QCOMPARE(reader.paCurrentOffset(), 300.0);
+}
+
+// From Thetis setup.cs:24346-24352 [v2.10.3.15] btnAmpDefault_Click.
+void TstCalibrationController::theDefaultButtonRestoresTheModelDefaultsAndSavesThem()
+{
+    const QString mac = QStringLiteral("00:11:22:33:44:AE");
+    NereusSDR::AppSettings& s = NereusSDR::AppSettings::instance();
+    s.clearHardwareValues(mac);
+    const auto clean = qScopeGuard([&s, mac] { s.clearHardwareValues(mac); });
+    const QString base = QStringLiteral("hardware/%1/cal/").arg(mac);
+
+    NereusSDR::CalibrationController ctrl;
+    ctrl.setHardwareModel(NereusSDR::HPSDRModel::ANAN7000D);
+    ctrl.setMacAddress(mac);
+    ctrl.load();
+    ctrl.setPaCurrentSensitivity(95.0);
+    ctrl.setPaCurrentOffset(300.0);
+    ctrl.restoreDefaultVoltCalibration();
+    QCOMPARE(ctrl.paCurrentSensitivity(), 88.0);
+    QCOMPARE(ctrl.paCurrentOffset(), 340.0);
+    ctrl.save();
+    QCOMPARE(s.value(base + QStringLiteral("paSens")).toDouble(), 88.0);
+    QCOMPARE(s.value(base + QStringLiteral("paOffset")).toDouble(), 340.0);
+}
+
+// From Thetis console.cs:24939-24959 [v2.10.3.15] AmpVoff / AmpSens:
+//   if (tmp < 0) tmp = 0.0f;           (voff)
+//   if (tmp < 0.001f) tmp = 0.001f;    (sens)
+void TstCalibrationController::voltCalibrationSettersClampAsThetis()
+{
+    NereusSDR::CalibrationController ctrl;
+    ctrl.setPaCurrentOffset(-5.0);
+    QCOMPARE(ctrl.paCurrentOffset(), 0.0);
+    ctrl.setPaCurrentSensitivity(0.0);
+    QCOMPARE(ctrl.paCurrentSensitivity(), 0.001);
 }
 
 QTEST_MAIN(TstCalibrationController)

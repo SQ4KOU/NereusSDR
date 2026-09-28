@@ -21,6 +21,11 @@
 //   2026-09-25 - R-R3-46 / R-R3-49 (remote-window parity Task 13):
 //                 loadTransmitCalibration. J.J. Boyd (KG4VCF), AI-assisted
 //                 via Anthropic Claude Code.
+//   2026-09-28 - The volt calibration (AmpVoff / AmpSens) takes Thetis's
+//                 defaults, clamps and per-model default (setHardwareModel,
+//                 restoreDefaultVoltCalibration, initVoltsAmpsCalibration's
+//                 rule) now that the PA current reading applies it.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // --- From setup.cs ---
@@ -125,6 +130,7 @@
 
 #pragma once
 
+#include "core/HpsdrModel.h"
 #include "core/PaCalProfile.h"
 
 #include <QObject>
@@ -201,15 +207,26 @@ public:
     double txDisplayOffsetDb() const;
     void   setTxDisplayOffsetDb(double db);
 
-    // ── PA current calculation parameters ─────────────────────────────────────
-    // Source: console.cs:6691-6724 CalibratedPAPower — sensitivity and offset
-    //   are hardware constants that live in BoardCapabilities defaults; mirrored
-    //   here for live per-radio user override. [@501e3f5]
+    // ── PA current calculation parameters (Volts/Amps Calibration) ───────────
+    // Thetis AmpSens (sensitivity, mV per amp) and AmpVoff (sensor voltage
+    // offset, mV), which convertToAmps applies to the PA current reading
+    // (console.cs:24937-24975 [v2.10.3.15]; PaTelemetryScaling convertToAmps).
+    // The setters clamp as Thetis's: sensitivity >= 0.001, offset >= 0.
     double paCurrentSensitivity() const;
     void   setPaCurrentSensitivity(double sens);
 
     double paCurrentOffset() const;
     void   setPaCurrentOffset(double offset);
+
+    // The radio's model, whose factory volt calibration
+    // (defaultVoltCalibrationFor, Thetis GetDefaultVoltCalibration) applies
+    // while the operator has not set one. A saved calibration is kept.
+    void setHardwareModel(HPSDRModel model);
+    HPSDRModel hardwareModel() const noexcept { return m_hardwareModel; }
+
+    // Thetis btnAmpDefault_Click (setup.cs:24346-24352 [v2.10.3.15]): the
+    // model's defaults, which then count as set and are saved.
+    void restoreDefaultVoltCalibration();
 
     // ── PA forward-power calibration profile ──────────────────────────────────
     // Source: Thetis console.cs:6691-6724 CalibratedPAPower [v2.10.3.13] —
@@ -284,10 +301,22 @@ private:
     double m_rx2_6mLnaOffset{0.0};
     // Source: setup.cs:14325 udTXDisplayCalOffset default 0 [@501e3f5]
     double m_txDisplayOffsetDb{0.0};
-    // Source: console.cs:6691 CalibratedPAPower — default sensitivity/offset
-    //   values from PA current sensing circuit constants [@501e3f5]
-    double m_paCurrentSensitivity{1.0};
-    double m_paCurrentOffset{0.0};
+    // From Thetis console.cs:24937-24938 [v2.10.3.15]:
+    //   private float _amp_voff = 360.0f;
+    //   private float _amp_sens = 120.0f;
+    double m_paCurrentSensitivity{120.0};
+    double m_paCurrentOffset{360.0};
+    // Thetis _bSensSet / _bVoffSet (setup.cs:24344-24345 [v2.10.3.15]):
+    // whether the operator (or a saved value) set each one. Until both are
+    // set, the model's defaults apply and are not saved.
+    bool m_paCurrentSensitivitySet{false};
+    bool m_paCurrentOffsetSet{false};
+    HPSDRModel m_hardwareModel{HPSDRModel::FIRST};
+
+    // initVoltsAmpsCalibration's rule for values read from the settings.
+    void applyLoadedVoltCalibration(const QString& sensText, const QString& voffText);
+    // The model's defaults, marked as not set.
+    void applyModelVoltCalibration();
 
     // Source: console.cs:6691-6724 CalibratedPAPower — per-board cal table
     //   driving the FWD-power UI meter. Default-constructed `PaCalProfile`

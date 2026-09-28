@@ -1042,40 +1042,6 @@ double scalePaVolts(quint16 adcRaw, HPSDRModel model)
     }
 }
 
-// From Thetis console.cs:24916-24926 [@501e3f5] convertToAmps():
-//   float voff     = _amp_voff;        // default 360.0f
-//   float sens     = _amp_sens;        // default 120.0f
-//   float fwdvolts = (IOreading * 5000.0f) / 4095.0f;
-//   if (fwdvolts < 0) fwdvolts = 0;
-//   float amps = (fwdvolts - voff) / sens;
-//   if (amps < 0) amps = 0;
-//
-// _amp_voff and _amp_sens are user-tunable in Thetis Setup → PA Calibration;
-// NereusSDR will surface them through CalibrationController in a follow-up
-// (Phase 3P-G already lays the groundwork).  Defaults match Thetis 360/120.
-double scalePaAmps(quint16 adcRaw, HPSDRModel model)
-{
-    switch (model) {
-    case HPSDRModel::ORIONMKII:
-    case HPSDRModel::ANAN8000D:
-    case HPSDRModel::ANAN7000D:
-    case HPSDRModel::ANAN_G2E: //N1GP G2E added [Thetis console.cs:25007 v2.10.3.15 grouping]
-    case HPSDRModel::ANAN_G2:
-    case HPSDRModel::ANAN_G2_1K:
-    case HPSDRModel::ANVELINAPRO3: {
-        constexpr double kAmpVoff = 360.0;   // From Thetis console.cs:24893 [@501e3f5]
-        constexpr double kAmpSens = 120.0;   // From Thetis console.cs:24894 [@501e3f5]
-        double fwdvolts = (static_cast<double>(adcRaw) * 5000.0) / 4095.0;
-        if (fwdvolts < 0) { fwdvolts = 0; }
-        double amps = (fwdvolts - kAmpVoff) / kAmpSens;
-        if (amps < 0) { amps = 0; }
-        return amps;
-    }
-    default:
-        return 0.0;
-    }
-}
-
 // PA temperature: Thetis does not currently surface a per-board PA temp
 // scale in console.cs (no convertToTemp helper exists in v2.10.3.13).
 // HL2 reports temp via I2C (Phase 3P-E IoBoardHl2 mirror); ANAN family
@@ -7345,6 +7311,7 @@ void RadioModel::applyStationCapabilities(const NereusSDR::StationCapabilities& 
     // connect uses picks it; and a Core with no radio (Unknown board) gives
     // Unknown, never Hermes.
     m_hardwareProfile = ::NereusSDR::profileForStation(caps.board, caps.hpsdrModel);
+    m_calController.setHardwareModel(m_hardwareProfile.model);
     // Task 16: a Core running the HL2 receive-only kit shows receive only.
     applyRxOnly();
     // As a local connect does before its currentRadioChanged: display units
@@ -16518,13 +16485,26 @@ void RadioModel::handlePaTelemetry(quint16 fwdRaw, quint16 revRaw,
     // (Phase 1B).  Same Thetis-canonical math, same per-board triplet
     // table; reusing the public symbol keeps the future PaValuesPage Raw
     // FWD watts label and this telemetry handler in lockstep.  Remaining
-    // private helpers (scaleRevPowerWatts / scalePaVolts / scalePaAmps /
+    // private helpers (scaleRevPowerWatts / scalePaVolts /
     // scalePaTemperatureCelsius) stay file-scope until they get their
     // own public surface.
     const double fwdW   = NereusSDR::scaleFwdPowerWatts(model, fwdRaw);
     const double revW   = scaleRevPowerWatts(revRaw, model);
     const double paV    = scalePaVolts(userAdc0Raw, model);
-    const double paA    = scalePaAmps(userAdc1Raw, model);
+    // PA current: mi0bot convertToAmps (PaTelemetryScaling), with the
+    // operator's volt calibration (AmpVoff / AmpSens) on the boards that
+    // sense it. The HL2 reports its current on user ADC0:
+    // From mi0bot console.cs:24937-24947 [v2.10.3.13-beta2]:
+    //   if (HardwareSpecific.Model == HPSDRModel.HERMESLITE)       // MI0BOT: HL2 temperature & current
+    //   { _ampsQueue.Enqueue(NetworkIO.getUserADC0()); ... }
+    //   else { ... _ampsQueue.Enqueue(adc1); }
+    // Only boards with a current sensor (HasAmps) report it.
+    const quint16 ampsRaw = (model == HPSDRModel::HERMESLITE) ? userAdc0Raw : userAdc1Raw;
+    const double paA = boardCapabilities().hasPaAmpsTelemetry
+        ? NereusSDR::convertToAmps(model, static_cast<double>(ampsRaw),
+                                   m_calController.paCurrentOffset(),
+                                   m_calController.paCurrentSensitivity())
+        : 0.0;
     const double paTemp = scalePaTemperatureCelsius(0, model);
 
     // HL2 firmware overloads the C&C status frame's exciter_power AIN5
@@ -17421,6 +17401,23 @@ void RadioModel::crossBandForSlice(SliceModel* slice, Band newBand)
     // change re-routes the antennas (onMoxHardwareFlipped), and the kept
     // band governs only the receive side. With nobody else listening, the
     // crossing switches as it always has, and the kept band is forgotten.
+    //
+    // Parity (band crossing while keyed): Thetis re-runs the antenna
+    // selection on a VFO change with tx = _mox, so a crossing while the
+    // radio transmits puts the new band's transmit routing on the relays:
+    // From Thetis console.cs:31713-31717 [v2.10.3.15] txtVFOAFreq_LostFocus
+    //   undoXVTRantennaModify(0);
+    //   Alex.getAlex().UpdateAlexAntSelection(RX1Band, _mox, alex_ant_ctrl_enabled, false);
+    // NereusSDR sends it for the transmit slice (the band the relays
+    // transmit on); a receive slice's crossing sends nothing mid-TX, and
+    // its receive routing goes out when the radio returns to receive
+    // (onMoxHardwareFlipped), as the antennaChanged handler does while keyed.
+    const bool keyed = m_alexRoutingTx;
+    const bool txSliceCrossed = keyed && slice == txBoundSlice();
+    if (txSliceCrossed) {
+        m_alexRoutingTxBand = newBand;
+        applyAlexAntennaForBand(newBand, /*isTx=*/true);
+    }
     const Band applied = m_keptRxAntennaBand.value_or(oldBand);
     if (receiveAntennaDiffers(applied, newBand)) {
         const QList<QByteArray> listeners = devicesListeningThroughRelay(slice);
@@ -17437,8 +17434,11 @@ void RadioModel::crossBandForSlice(SliceModel* slice, Band newBand)
     m_keptRxAntennaBand.reset();
     // Phase 3P-I-a T10 — reapply per-band antenna on boundary
     // crossing. Thetis UpdateAlexAntSelection equivalent
-    // (HPSDR/Alex.cs:310 [@501e3f5]).
-    applyAlexAntennaForBand(newBand);
+    // (HPSDR/Alex.cs:310 [@501e3f5]). Keyed, the transmit routing went
+    // out above and the receive routing waits for the return to receive.
+    if (!keyed) {
+        applyAlexAntennaForBand(newBand);
+    }
     // Phase 3P-I-a T10 follow-up — refresh the slice's cached
     // rxAntenna/txAntenna labels from AlexController so the
     // VFO Flag and RxApplet buttons show the new band's value.
@@ -20973,6 +20973,9 @@ void RadioModel::applyHpsdrModel(HPSDRModel m, HPSDRHW board)
 {
     m_hardwareProfile = ::NereusSDR::profileForRadio(board, m);
     m_transmitModel.setHpsdrModel(m_hardwareProfile.model);
+    // The volt calibration's factory values follow the model (Thetis
+    // GetDefaultVoltCalibration).
+    m_calController.setHardwareModel(m_hardwareProfile.model);
     // Task 13: PollTXInhibit reads HardwareSpecific.Model on every pass
     // (console.cs:25855-25873 [v2.10.3.15]).
     m_txInhibit.setRadioModel(m_hardwareProfile.model);
@@ -23442,7 +23445,14 @@ void RadioModel::onMoxHardwareFlipped(bool isTx)
         // changed its stored TX antenna before becoming TX-bound.
         applyTxAntennaFromBoundSlice();
     }
-    applyAlexAntennaForBand(band, isTx);
+    // Key-down routes the transmit band; the return to receive routes the
+    // receive band, the one the last band crossing left on the relay
+    // (m_lastBand), which a receive slice may have moved while keyed:
+    // From Thetis console.cs:29117 and 29161-29169 [v2.10.3.15] HdwMOXChanged:
+    //   (tx)  Alex.getAlex().UpdateAlexAntSelection(_tx_band, _mox, alex_ant_ctrl_enabled, false);
+    //   (rx)  UpdateTRXAnt(); //[2.3.10.6]MW0LGE added
+    //         Alex.getAlex().UpdateAlexAntSelection(rx1_band, _mox, alex_ant_ctrl_enabled, false);
+    applyAlexAntennaForBand(isTx ? band : m_lastBand, isTx);
 
     // Steps 2 + 3 — wire bits.  Guard against null connection (no radio
     // connected, or mid-teardown).  applyAlexAntennaForBand already guards

@@ -16,6 +16,10 @@
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-09-28: defaultVoltCalibrationFor() ported from
+//                 GetDefaultVoltCalibration (clsHardwareSpecific.cs:265-292
+//                 [v2.10.3.15]) for the PA current calibration. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-23: profileForStation() added for remote windows (R-R3-46),
 //                 NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
@@ -359,6 +363,43 @@ QList<HPSDRModel> compatibleModels(HPSDRHW board)
     }
 
     return result;
+}
+
+VoltCalibration defaultVoltCalibrationFor(HPSDRModel model)
+{
+    // From Thetis clsHardwareSpecific.cs:265-292 [v2.10.3.15]:
+    // Adjacent upstream tag (HasAmps, clsHardwareSpecific.cs:260): //N1GP G2E added
+    //   switch (_model) {
+    //       case HPSDRModel.ANAN7000D:
+    //       case HPSDRModel.ANVELINAPRO3:
+    //       case HPSDRModel.REDPITAYA:
+    //           voff = 340.0f; sens = 88.0f; break;
+    //       case HPSDRModel.ANAN_G2: ...
+    //       case HPSDRModel.ANAN_G2_1K: ...
+    //       default: voff = 360.0f; sens = 120.0f; break;
+    //   }
+    VoltCalibration c;
+    switch (model) {
+        case HPSDRModel::ANAN7000D:
+        case HPSDRModel::ANVELINAPRO3:
+        case HPSDRModel::REDPITAYA:
+            c.voff = 340.0f;
+            c.sens = 88.0f;
+            break;
+        case HPSDRModel::ANAN_G2:
+            c.voff = 0.001f;                                // current sensor voltage offset
+            c.sens = 66.23f;                                // current reading sensitivity //0.001 to prevent /0 in the calcs
+            break;
+        case HPSDRModel::ANAN_G2_1K:                       // will need adjustment probably
+            c.voff = 0.001f;                                // current sensor voltage offset
+            c.sens = 66.23f;                                // current reading sensitivity //0.001 to prevent /0 in the calcs
+            break;
+        default:
+            c.voff = 360.0f;
+            c.sens = 120.0f;
+            break;
+    }
+    return c;
 }
 
 } // namespace NereusSDR
