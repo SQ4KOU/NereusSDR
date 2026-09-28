@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gui/SetupPage.h"
+#include "gui/setup/RemoteStationPage.h"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -220,19 +221,6 @@ private:
     QPushButton* m_learnButton{nullptr};
 
     void buildUI();
-};
-
-// ---------------------------------------------------------------------------
-// CAT & Network > Remote Access (the class keeps its name)
-// R-R3-38: route to the application-owned selector. Core credentials remain
-// in the OperatorLocal address book; this page no longer edits legacy keys.
-// ---------------------------------------------------------------------------
-class RemoteStationPage : public SetupPage {
-    Q_OBJECT
-public:
-    explicit RemoteStationPage(QWidget* parent = nullptr);
-signals:
-    void connectionsRequested();
 };
 
 // ---------------------------------------------------------------------------
