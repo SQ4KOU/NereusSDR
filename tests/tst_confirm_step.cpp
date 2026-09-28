@@ -38,6 +38,11 @@
 // snapshot.complete with secondsAgo from when they happened; graceEnded for
 // a device back after its 180 s.
 //
+// Slice control plan Task 1: a take whose slice was closed and whose id a
+// new slice of the same device took since is refused as changed and closes
+// nothing, whether the slice was offered (takeSlice) or shown closing with
+// a receiver (takeReceiver).
+//
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-09-25: original implementation for NereusSDR by J.J. Boyd
@@ -71,6 +76,10 @@
 //               the radio's PTT's frozen transmit receiver is not takeable
 //               (M5). J.J. Boyd (KG4VCF), with AI-assisted implementation
 //               via Anthropic Claude Code.
+//   2026-09-28: slice control and shared listening plan Task 1: takes
+//               whose slice id was reused by the same device's new slice.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -1337,6 +1346,101 @@ private slots:
         QCOMPARE(done.value(QStringLiteral("reason")).toString(),
                  QStringLiteral("That setting changed since you asked. Make the change again."));
         QCOMPARE(s.core.model->sliceById(0)->nbMode(), NbMode::Off);
+    }
+
+    // Slice control plan Task 1: A is offered B's slice 1; B closes it and
+    // makes a new slice, which takes id 1 in B's own name. The same letter
+    // and the same owner, but not the slice A was shown: refused as
+    // changed, and nothing closes.
+    void aSliceTakeWhoseSliceWasClosedAndMadeAgainForTheSameDeviceIsRefused()
+    {
+        Shared s(2, 2);
+        const QByteArray bKey = s.b.key.fingerprint();
+        QCOMPARE(s.core.model->sliceOwnership()->ownedBy(bKey), QList<int>{1});
+        const QJsonObject refused =
+            s.core.invoke(s.appA, "addSlice", {utf8("initialPanId", QString())});
+        QCOMPARE(refused.value(QStringLiteral("accepted")).toBool(true), false);
+        const QJsonObject ask = waitForLast(s.appA, QStringLiteral("confirm.request"), 0);
+        QCOMPARE(ask.value(QStringLiteral("kind")).toString(), QStringLiteral("takeSlice"));
+        QCOMPARE(ask.value(QStringLiteral("choices")).toArray().first().toObject()
+                     .value(QStringLiteral("sliceId")).toInt(),
+                 1);
+        const quint64 asked = s.core.model->sliceOwnership()->incarnation(1);
+
+        RadioModel* model = s.core.model.get();
+        const QString pan = model->sliceById(1)->panKey();
+        model->removeSlice(1);
+        int reused = -1;
+        {
+            const SliceOwnership::CreatorScope creator(model->sliceOwnership(), bKey);
+            reused = model->addSlice(pan);
+        }
+        QCOMPARE(reused, 1);
+        QCOMPARE(model->sliceOwnership()->mark(1).subject(), bKey);
+        const quint64 now = model->sliceOwnership()->incarnation(1);
+        QVERIFY(now != 0);
+        QVERIFY(now != asked);
+
+        const QJsonObject done = s.proceed(s.appA, ask.value(QStringLiteral("id")).toInteger(), 0);
+        QCOMPARE(done.value(QStringLiteral("accepted")).toBool(true), false);
+        QCOMPARE(done.value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("What this change reaches has changed. Make the change again."));
+        QCOMPARE(model->slices().size(), 2);
+        QCOMPARE(model->sliceOwnership()->ownedBy(bKey), QList<int>{1});
+        QCOMPARE(model->sliceOwnership()->incarnation(1), now);
+        QCOMPARE(model->sliceOwnership()->ownedBy(s.a.key.fingerprint()), QList<int>{0});
+        QTest::qWait(2 * StationServer::kDefaultDeltaFlushMs);
+        QCOMPARE(countOf(s.appB, QStringLiteral("notice")), 0);
+    }
+
+    // Slice control plan Task 1: the receiver choice showed B's slice 1
+    // closing; B closes it and makes a new slice on the same receiver,
+    // which takes id 1 in B's own name. Refused as changed; nothing closes.
+    void aReceiverTakeWhoseVictimWasClosedAndMadeAgainForTheSameDeviceIsRefused()
+    {
+        Shared s;
+        s.core.model->sliceById(1)->setFrequency(14074000.0);
+        const int bStream = streamOf(s.core, 1);
+        const QByteArray bKey = s.b.key.fingerprint();
+        QCOMPARE(s.core.invoke(s.appA, "addSliceOnPan",
+                               {utf8("panId", QStringLiteral("pan-a2"))})
+                     .value(QStringLiteral("accepted")).toBool(true), false);
+        const QJsonObject ask = waitForLast(s.appA, QStringLiteral("confirm.request"), 0);
+        QCOMPARE(ask.value(QStringLiteral("kind")).toString(), QStringLiteral("takeReceiver"));
+        int choice = -1;
+        for (const QJsonValue& value : ask.value(QStringLiteral("choices")).toArray()) {
+            const QJsonObject candidate = value.toObject();
+            if (candidate.value(QStringLiteral("streamIndex")).toInt() == bStream) {
+                choice = candidate.value(QStringLiteral("choice")).toInt();
+            }
+        }
+        QVERIFY(choice >= 0);
+        const quint64 asked = s.core.model->sliceOwnership()->incarnation(1);
+
+        RadioModel* model = s.core.model.get();
+        const QString pan = model->sliceById(1)->panKey();
+        model->removeSlice(1);
+        int reused = -1;
+        {
+            const SliceOwnership::CreatorScope creator(model->sliceOwnership(), bKey);
+            reused = model->addSlice(pan);
+        }
+        QCOMPARE(reused, 1);
+        model->sliceById(1)->setFrequency(14074000.0);
+        QCOMPARE(streamOf(s.core, 1), bStream);
+        const quint64 now = model->sliceOwnership()->incarnation(1);
+        QVERIFY(now != asked);
+
+        const QJsonObject done =
+            s.proceed(s.appA, ask.value(QStringLiteral("id")).toInteger(), choice);
+        QCOMPARE(done.value(QStringLiteral("accepted")).toBool(true), false);
+        QCOMPARE(done.value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("What this change reaches has changed. Make the change again."));
+        QCOMPARE(streamOf(s.core, 1), bStream);
+        QCOMPARE(model->sliceOwnership()->ownedBy(bKey), QList<int>{1});
+        QCOMPARE(model->sliceOwnership()->incarnation(1), now);
+        QTest::qWait(2 * StationServer::kDefaultDeltaFlushMs);
+        QCOMPARE(countOf(s.appB, QStringLiteral("notice")), 0);
     }
 
     void theSliceCapFullOffersTheSliceChooser()

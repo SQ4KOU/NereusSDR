@@ -17,11 +17,20 @@
 // station-level active slice following the most recent choice, or the
 // transmit holder's while one holds transmit.
 //
+// Slice control plan Task 1: each slice's incarnation, distinct from its
+// reusable id, never shared by two slices of one run and not repeated by a
+// Core started again with another boot nonce; each slice's control
+// revision, 1 when made and one higher for each change of owner.
+//
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-09-25: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), iPhone app plan Task 73 (R-IOS-02), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-28: slice control and shared listening plan Task 1: the
+//               incarnation and control revision cases. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -291,6 +300,141 @@ private slots:
         // A holder that owns no slice leaves the most recent choice.
         own.setTransmitHolder(QByteArrayLiteral("device-c"));
         QCOMPARE(own.stationActiveSlice(), 1);
+    }
+
+    // ── Incarnation and control revision (slice control plan Task 1) ──────
+
+    void aClosedIdMadeAgainForTheSameOwnerIsANewIncarnation()
+    {
+        SliceOwnership own;
+        add(own, 0, kA);
+        const SliceOwnership::SliceRef first = own.refOf(0);
+        QCOMPARE(first.sliceId, 0);
+        QVERIFY(first.incarnation != 0);
+        QCOMPARE(own.incarnation(0), first.incarnation);
+        QVERIFY(own.matches(first));
+
+        // Being removed, the slice is not live: no incarnation, no match.
+        own.beginRemove(0);
+        QCOMPARE(own.incarnation(0), quint64{0});
+        QCOMPARE(own.controlRevision(0), quint64{0});
+        QVERIFY(!own.matches(first));
+        own.endRemove(0);
+        QCOMPARE(own.refOf(0).incarnation, quint64{0});
+
+        // The same letter again, for the same owner.
+        add(own, 0, kA);
+        QCOMPARE(own.mark(0).owner, kA);
+        QVERIFY(own.incarnation(0) != 0);
+        QVERIFY(own.incarnation(0) != first.incarnation);
+        QVERIFY(!own.matches(first));
+        QVERIFY(own.matches(own.refOf(0)));
+        // A ref with no incarnation or for no slice never matches.
+        QVERIFY(!own.matches(SliceOwnership::SliceRef{}));
+        QVERIFY(!own.matches(SliceOwnership::SliceRef{0, 0}));
+        QVERIFY(!own.matches(SliceOwnership::SliceRef{5, own.incarnation(0)}));
+    }
+
+    void twoSlicesOfOneRunNeverShareAnIncarnation()
+    {
+        SliceOwnership own;
+        QSet<quint64> seen;
+        for (int round = 0; round < 200; ++round) {
+            for (int id = 0; id < 4; ++id) {
+                add(own, id, round % 2 == 0 ? kA : kB);
+                const quint64 value = own.incarnation(id);
+                QVERIFY(value != 0);
+                // Below 2^53: exact as a JSON number.
+                QVERIFY(value < (quint64{1} << 53));
+                QVERIFY2(!seen.contains(value), qPrintable(QString::number(value)));
+                seen.insert(value);
+            }
+            for (int id = 0; id < 4; ++id) {
+                own.beginRemove(id);
+                own.endRemove(id);
+            }
+        }
+        QCOMPARE(seen.size(), 800);
+    }
+
+    void aCoreStartedAgainWithANewNonceDoesNotRepeatTheLastRunsValues()
+    {
+        quint64 lastRunFirst = 0;
+        {
+            SliceOwnership lastRun(0x12345u, nullptr);
+            add(lastRun, 0, kA);
+            lastRunFirst = lastRun.incarnation(0);
+        }
+        SliceOwnership thisRun(0x54321u, nullptr);
+        add(thisRun, 0, kA);
+        QVERIFY(thisRun.incarnation(0) != 0);
+        QVERIFY(thisRun.incarnation(0) != lastRunFirst);
+        QCOMPARE(thisRun.incarnation(0) >> 32, quint64{0x54321u});
+        // Only the nonce's low 20 bits are used, so every value stays
+        // below 2^52.
+        SliceOwnership wide(0xFFFFFFFFu, nullptr);
+        add(wide, 0, kA);
+        QCOMPARE(wide.incarnation(0) >> 32, quint64{0xFFFFFu});
+        QVERIFY(wide.incarnation(0) < (quint64{1} << 52));
+        // A nonce of 0 still gives no incarnation of 0.
+        SliceOwnership zero(0u, nullptr);
+        add(zero, 0, kA);
+        QVERIFY(zero.incarnation(0) != 0);
+    }
+
+    void theControlRevisionRisesByOneForEachChangeOfOwner()
+    {
+        SliceOwnership own;
+        own.noteSliceAdded(0);
+        QCOMPARE(own.controlRevision(0), quint64{1});
+        QCOMPARE(own.controlRevision(3), quint64{0});
+        QSignalSpy spy(&own, &SliceOwnership::controlRevisionChanged);
+
+        // Adoption.
+        own.adoptUnowned(kA);
+        QCOMPARE(own.controlRevision(0), quint64{2});
+        QCOMPARE(spy.count(), 1);
+        QCOMPARE(spy.at(0).at(0).toInt(), 0);
+        QCOMPARE(spy.at(0).at(1).value<quint64>(), quint64{2});
+
+        // The same owner again is no change.
+        own.setOwner(0, kA);
+        own.setMark(0, SliceOwnership::Mark{kA, QByteArray()});
+        QCOMPARE(own.controlRevision(0), quint64{2});
+        QCOMPARE(spy.count(), 1);
+
+        // Hold, then return: twice.
+        own.hold(0, kA);
+        QCOMPARE(own.controlRevision(0), quint64{3});
+        QCOMPARE(own.returnHeld(kA), QList<int>{0});
+        QCOMPARE(own.controlRevision(0), quint64{4});
+        QCOMPARE(spy.count(), 3);
+
+        // Take (another owner) and release (no owner).
+        own.setOwner(0, kB);
+        QCOMPARE(own.controlRevision(0), quint64{5});
+        own.setOwner(0, QByteArray());
+        QCOMPARE(own.controlRevision(0), quint64{6});
+        QCOMPARE(spy.count(), 5);
+        QCOMPARE(spy.last().at(1).value<quint64>(), quint64{6});
+
+        // Held for one absent device, then for another: the station device
+        // owns it throughout, so only the first is a change of owner.
+        own.hold(0, kA);
+        QCOMPARE(own.controlRevision(0), quint64{7});
+        own.hold(0, kB);
+        QCOMPARE(own.mark(0).heldFor, kB);
+        QCOMPARE(own.controlRevision(0), quint64{7});
+        QCOMPARE(spy.count(), 6);
+
+        // Each slice counts on its own; a new incarnation starts at 1.
+        add(own, 1, kA);
+        QCOMPARE(own.controlRevision(1), quint64{1});
+        own.beginRemove(0);
+        own.endRemove(0);
+        add(own, 0, kA);
+        QCOMPARE(own.controlRevision(0), quint64{1});
+        QCOMPARE(spy.count(), 6);
     }
 };
 

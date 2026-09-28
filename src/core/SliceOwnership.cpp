@@ -14,9 +14,15 @@
 //   2026-09-25: iPhone app plan Task 74 (R-IOS-02, R-IOS-30): each
 //               receiver's anchor. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-28: slice control and shared listening plan Task 1: each
+//               slice's incarnation and control revision. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/SliceOwnership.h"
+
+#include <QRandomGenerator>
 
 namespace NereusSDR {
 
@@ -27,7 +33,13 @@ const QByteArray& SliceOwnership::stationDevice()
 }
 
 SliceOwnership::SliceOwnership(QObject* parent)
+    : SliceOwnership(QRandomGenerator::system()->bounded(quint32{1} << kNonceBits), parent)
+{
+}
+
+SliceOwnership::SliceOwnership(quint32 bootNonce, QObject* parent)
     : QObject(parent)
+    , m_incarnationBase(quint64{bootNonce & ((quint32{1} << kNonceBits) - 1)} << 32)
 {
 }
 
@@ -41,6 +53,13 @@ void SliceOwnership::noteSliceAdded(int sliceId)
     Mark mark;
     mark.owner = m_creator;
     m_marks.insert(sliceId, mark);
+    // Task 1 (slice control plan): a new incarnation, never 0 (the counter
+    // skips 0 should it ever wrap), and control revision 1.
+    if (++m_incarnationCounter == 0) {
+        m_incarnationCounter = 1;
+    }
+    m_incarnations.insert(sliceId, m_incarnationBase | m_incarnationCounter);
+    m_revisions.insert(sliceId, 1);
     // Task 74: bound before it was noted, it claimed its receiver for
     // nobody; it is the first there, so the receiver is its owner's.
     const auto stream = m_streamOf.constFind(sliceId);
@@ -71,6 +90,8 @@ void SliceOwnership::endRemove(int sliceId)
     m_removing.remove(sliceId);
     m_order.removeAll(sliceId);
     m_marks.remove(sliceId);
+    m_incarnations.remove(sliceId);
+    m_revisions.remove(sliceId);
     if (m_mostRecent == sliceId) {
         m_mostRecent = -1;
     }
@@ -103,6 +124,28 @@ bool SliceOwnership::isLive(int sliceId) const
 QList<int> SliceOwnership::liveSlices() const
 {
     return matching([](const Mark&) { return true; });
+}
+
+// ── Incarnation and control revision (slice control plan Task 1) ────────
+
+quint64 SliceOwnership::incarnation(int sliceId) const
+{
+    return isLive(sliceId) ? m_incarnations.value(sliceId, 0) : 0;
+}
+
+quint64 SliceOwnership::controlRevision(int sliceId) const
+{
+    return isLive(sliceId) ? m_revisions.value(sliceId, 0) : 0;
+}
+
+bool SliceOwnership::matches(const SliceRef& ref) const
+{
+    return ref.incarnation != 0 && incarnation(ref.sliceId) == ref.incarnation;
+}
+
+SliceOwnership::SliceRef SliceOwnership::refOf(int sliceId) const
+{
+    return SliceRef{sliceId, incarnation(sliceId)};
 }
 
 // ── Marks ───────────────────────────────────────────────────────────────
@@ -142,7 +185,16 @@ void SliceOwnership::setMark(int sliceId, const Mark& requested)
             m_anchor.insert(*stream, next.subject());
         }
     }
+    // Task 1 (slice control plan): each change of owner is one control
+    // revision; a change of heldFor alone is not.
+    quint64 revision = 0;
+    if (before.owner != next.owner) {
+        revision = ++m_revisions[sliceId];
+    }
     emit markChanged(sliceId, before.owner, before.heldFor);
+    if (revision != 0) {
+        emit controlRevisionChanged(sliceId, revision);
+    }
     emit activeChanged();
 }
 

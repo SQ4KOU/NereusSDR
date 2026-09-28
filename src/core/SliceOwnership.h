@@ -49,6 +49,21 @@
 // (a device's addSlice, its first slice at admission, a restored slice);
 // any other new slice has no owner.
 //
+// ---- Incarnation and control revision (slice control plan Task 1) ----
+//
+// A slice's id is its letter and is reused, lowest free first, once the
+// slice closes. Its incarnation is not: noteSliceAdded gives each slice a
+// value no other slice of this run had, kept until endRemove. It is a
+// 20-bit boot nonce, drawn at random when this object is made, shifted
+// left 32, plus a 32-bit counter, so it stays below 2^53 (exact as a JSON
+// number) and a Core started again does not repeat the last run's values.
+// A stored question or command names a slice by its SliceRef and acts only
+// while matches() holds, so it never reaches a reused letter.
+//
+// A slice's control revision starts at 1 and rises by one on each change
+// of mark().owner: adoption, hold, return, take, release. A command that
+// carries the revision it saw acts only on the assignment it saw.
+//
 // Single thread: RadioModel's.
 //
 // =================================================================
@@ -59,6 +74,10 @@
 //   2026-09-25: iPhone app plan Task 74 (R-IOS-02, R-IOS-30): each
 //               receiver's anchor (rulings 6.2, 6.3). J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-28: slice control and shared listening plan Task 1: each
+//               slice's incarnation and control revision. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -93,11 +112,31 @@ public:
         QByteArray subject() const { return heldFor.isEmpty() ? owner : heldFor; }
     };
 
+    /// One slice as it was when named: its reusable id and the incarnation
+    /// that id had then.
+    struct SliceRef {
+        int sliceId = -1;
+        quint64 incarnation = 0;
+
+        bool operator==(const SliceRef& other) const
+        {
+            return sliceId == other.sliceId && incarnation == other.incarnation;
+        }
+        bool operator!=(const SliceRef& other) const { return !(*this == other); }
+    };
+
     /// The station device's id. Never a paired device's id (those are 32
     /// raw bytes) or a token window's ("token:<n>").
     static const QByteArray& stationDevice();
 
+    /// The boot nonce's width: incarnations stay below 2^(32 + kNonceBits).
+    static constexpr int kNonceBits = 20;
+
+    /// Draws the boot nonce at random.
     explicit SliceOwnership(QObject* parent = nullptr);
+    /// With a given boot nonce (only its low kNonceBits bits are used), so
+    /// a test can stand for a Core started again.
+    SliceOwnership(quint32 bootNonce, QObject* parent);
 
     // ---- Lifecycle (RadioModel) ----
 
@@ -117,6 +156,18 @@ public:
     bool isLive(int sliceId) const;
     /// Every live slice, in creation order.
     QList<int> liveSlices() const;
+
+    // ---- Incarnation and control revision (slice control plan Task 1) ----
+
+    /// A live slice's incarnation; 0 when it is not live.
+    quint64 incarnation(int sliceId) const;
+    /// A live slice's control revision (1 when made, +1 on each change of
+    /// owner); 0 when it is not live.
+    quint64 controlRevision(int sliceId) const;
+    /// Whether `ref` names a live slice with the same incarnation.
+    bool matches(const SliceRef& ref) const;
+    /// `sliceId` with its incarnation; incarnation 0 when not live.
+    SliceRef refOf(int sliceId) const;
 
     // ---- Marks ----
 
@@ -194,6 +245,8 @@ signals:
     void markChanged(int sliceId, const QByteArray& oldOwner, const QByteArray& oldHeldFor);
     /// Some owner's active slice, or the station-level one, may have moved.
     void activeChanged();
+    /// A live slice's owner changed; `revision` is its new control revision.
+    void controlRevisionChanged(int sliceId, quint64 revision);
 
 private:
     QList<int> matching(const std::function<bool(const Mark&)>& test) const;
@@ -207,6 +260,13 @@ private:
     int m_mostRecent = -1;
     QByteArray m_transmitHolder;
     QByteArray m_creator;
+    // Task 1 (slice control plan): the boot nonce, already shifted, the
+    // last counter used, and each slice's incarnation and control revision
+    // (kept until endRemove).
+    quint64 m_incarnationBase = 0;
+    quint32 m_incarnationCounter = 0;
+    QHash<int, quint64> m_incarnations;
+    QHash<int, quint64> m_revisions;
     // Task 74: each slice's receiver, the slices on each receiver in the
     // order they arrived, and each receiver's anchor.
     QHash<int, int> m_streamOf;

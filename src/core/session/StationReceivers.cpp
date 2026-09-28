@@ -58,6 +58,11 @@
 //               takeTransmit questions and Take it back for transmit. J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-28: slice control and shared listening plan Task 1: a question
+//               keeps each slice it names, offers or shows closing with its
+//               incarnation, and a proceed whose slice id was reused by a
+//               new slice acts on nothing. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -212,6 +217,31 @@ QString sliceTakenReason(const QString& name, const QStringList& letters)
 }
 
 // "Receiver 1" for stream 0 (the several-devices design, 5.4 and 7.3).
+// Slice control plan Task 1: whether `refs` recorded `sliceId` with an
+// incarnation it no longer has (closed, or its id reused by a new slice).
+// A slice `refs` does not record has not changed by this test.
+bool incarnationChanged(const SliceOwnership* ownership,
+                        const QList<SliceOwnership::SliceRef>& refs, int sliceId)
+{
+    for (const SliceOwnership::SliceRef& ref : refs) {
+        if (ref.sliceId == sliceId) {
+            return !ownership->matches(ref);
+        }
+    }
+    return false;
+}
+
+void appendRefOnce(QList<SliceOwnership::SliceRef>* refs, const SliceOwnership* ownership,
+                   int sliceId)
+{
+    for (const SliceOwnership::SliceRef& ref : std::as_const(*refs)) {
+        if (ref.sliceId == sliceId) {
+            return;
+        }
+    }
+    refs->append(ownership->refOf(sliceId));
+}
+
 QString receiverLabel(int stream)
 {
     const int number = stream + 1;
@@ -835,6 +865,24 @@ void StationServer::sendQuestion(SessionTransport* transport, ConfirmStep::Quest
         prompt.forSettingsKey = QString::fromUtf8(question.original.objectKey);
     }
     question.namedSlices = slicesNamedBy(question);
+    // Slice control plan Task 1: each slice as it is now, so a proceed
+    // after its id was reused acts on nothing.
+    const SliceOwnership* ownership = m_radioModel->sliceOwnership();
+    question.namedRefs.clear();
+    for (int id : std::as_const(question.namedSlices)) {
+        question.namedRefs.append(ownership->refOf(id));
+    }
+    question.choiceRefs.clear();
+    const bool slicesOffered = question.kind == QLatin1String("takeSlice");
+    for (int target : std::as_const(question.choiceTargets)) {
+        question.choiceRefs.append(slicesOffered && target >= 0 ? ownership->refOf(target)
+                                                                : SliceOwnership::SliceRef{});
+    }
+    for (const QSet<int>& closes : std::as_const(question.shownChoices)) {
+        for (int id : closes) {
+            appendRefOnce(&question.shownRefs, ownership, id);
+        }
+    }
     m_confirm->ask(question);
     const SessionMessage request =
         SessionMessages::confirmRequest(prompt, QString::fromLatin1(kWaitingReason));
@@ -875,6 +923,7 @@ void StationServer::askPanMove(SessionTransport* transport, const SessionMessage
         question.shown.insert(QStringLiteral("%1|%2|%3").arg(QString::fromLatin1(d.device.toHex()))
                                   .arg(d.sliceId)
                                   .arg(ReceiverPlanner::effectName(d.effect)));
+        appendRefOnce(&question.shownRefs, m_radioModel->sliceOwnership(), d.sliceId);
     }
     SessionPrompt prompt;
     prompt.affected = receiverPlanner().affectedJson(check.named);
@@ -1418,6 +1467,13 @@ SessionMessage StationServer::answerConfirm(const SessionMessage& invoke, int id
             return refuse(changedSinceAskedReason(question->kind));
         }
     }
+    // Slice control plan Task 1: and still the same slice, not a new one
+    // made in the requester's name under the reused id.
+    for (const SliceOwnership::SliceRef& ref : question->namedRefs) {
+        if (!ownership->matches(ref)) {
+            return refuse(changedSinceAskedReason(question->kind));
+        }
+    }
     // Fix wave 2, Important 3 (rulings 7.4 and 8.11): a stored change
     // confirmed while a holder is on the air asks the freeze and the
     // on-air take rule again before anything of it applies.
@@ -1508,6 +1564,14 @@ SessionMessage StationServer::proceedPanMove(SessionTransport* transport,
         return SessionMessages::commandResult(invoke.commandVerb, invoke.commandId, false,
                                               QString::fromLatin1(kChangedReason), {});
     }
+    // Slice control plan Task 1: a slice shown under an id that a new
+    // slice has taken since: nothing moves or closes.
+    for (const ReceiverPlanner::Disturbed& d : check.named) {
+        if (incarnationChanged(m_radioModel->sliceOwnership(), question.shownRefs, d.sliceId)) {
+            return SessionMessages::commandResult(invoke.commandVerb, invoke.commandId, false,
+                                                  QString::fromLatin1(kChangedReason), {});
+        }
+    }
     if (check.kind == PanMoveCheck::Kind::Ask) {
         bool grew = false;
         for (const ReceiverPlanner::Disturbed& d : check.named) {
@@ -1535,11 +1599,13 @@ SessionMessage StationServer::proceedPanMove(SessionTransport* transport,
             }
             ConfirmStep::Question again = question;
             again.shown.clear();
+            again.shownRefs.clear();
             for (const ReceiverPlanner::Disturbed& d : check.named) {
                 again.shown.insert(QStringLiteral("%1|%2|%3")
                                        .arg(QString::fromLatin1(d.device.toHex()))
                                        .arg(d.sliceId)
                                        .arg(ReceiverPlanner::effectName(d.effect)));
+                appendRefOnce(&again.shownRefs, m_radioModel->sliceOwnership(), d.sliceId);
             }
             again.centreHz = check.centreHz;
             sendQuestion(transport, again, prompt);
@@ -1579,6 +1645,16 @@ SessionMessage StationServer::proceedTakeReceiver(SessionTransport* transport,
     for (const ReceiverPlanner::Choice& c : choices) {
         if (c.stream == target) {
             now = &c;
+        }
+    }
+    // Slice control plan Task 1: a closing slice shown under an id that a
+    // new slice has taken since: nothing closes.
+    if (now != nullptr) {
+        for (int id : now->closes) {
+            if (incarnationChanged(m_radioModel->sliceOwnership(), question.shownRefs, id)) {
+                return SessionMessages::commandResult(invoke.commandVerb, invoke.commandId, false,
+                                                      QString::fromLatin1(kChangedReason), {});
+            }
         }
     }
     const QSet<int> shown = question.shownChoices.value(choice);
@@ -1650,6 +1726,13 @@ SessionMessage StationServer::proceedTakeSlice(SessionTransport* transport,
     }
     const int target = question.choiceTargets.at(choice);
     const SliceOwnership* ownership = m_radioModel->sliceOwnership();
+    // Slice control plan Task 1: the slice offered was closed and a new
+    // one has its id, whoever it belongs to: nothing closes.
+    const SliceOwnership::SliceRef offered = question.choiceRefs.value(choice);
+    if (ownership->isLive(target) && offered.sliceId == target && !ownership->matches(offered)) {
+        return SessionMessages::commandResult(invoke.commandVerb, invoke.commandId, false,
+                                              QString::fromLatin1(kChangedReason), {});
+    }
     if (!ownership->isLive(target)
         || ownership->mark(target).subject() != question.shownOwners.value(choice)) {
         const QList<ReceiverPlanner::Choice> choices =
@@ -1827,6 +1910,17 @@ SessionMessage StationServer::proceedTakeBack(SessionTransport* transport,
     }
     const int target = question.choiceTargets.at(choice);
     const bool receiver = record->prompt.kind == QLatin1String("receiverTaken");
+    // Slice control plan Task 1: the taker's slice offered was closed and a
+    // new one has its id: nothing closes.
+    {
+        const SliceOwnership* ownership = m_radioModel->sliceOwnership();
+        const SliceOwnership::SliceRef offered = question.choiceRefs.value(choice);
+        if (!receiver && target >= 0 && ownership->isLive(target) && offered.sliceId == target
+            && !ownership->matches(offered)) {
+            return SessionMessages::commandResult(invoke.commandVerb, invoke.commandId, false,
+                                                  QString::fromLatin1(kChangedReason), {});
+        }
+    }
     QList<int> closes;
     if (receiver && target >= 0 && m_radioModel->streamAllocator().isStreamActive(target)) {
         for (int id : m_radioModel->slicesOnStream(target)) {
@@ -1841,6 +1935,12 @@ SessionMessage StationServer::proceedTakeBack(SessionTransport* transport,
         // The free slice went meanwhile.
         return SessionMessages::commandResult(invoke.commandVerb, invoke.commandId, false,
                                               QString::fromLatin1(kChangedReason), {});
+    }
+    for (int id : closes) {
+        if (incarnationChanged(m_radioModel->sliceOwnership(), question.shownRefs, id)) {
+            return SessionMessages::commandResult(invoke.commandVerb, invoke.commandId, false,
+                                                  QString::fromLatin1(kChangedReason), {});
+        }
     }
     const QSet<int> shown = question.shownChoices.value(choice);
     for (int id : closes) {

@@ -32,6 +32,12 @@
 // graceEnded and without Take it back. The Core keeps them until the device
 // returns, is revoked, or the Core restarts (nothing here is saved).
 //
+// Slice control plan Task 1: a slice id is reused once its slice closes,
+// so every slice a question names, offers or shows closing is also kept
+// with its incarnation (SliceOwnership::SliceRef). A proceed whose slice
+// has a different incarnation by then acts on nothing and is answered as
+// changed since asked.
+//
 // Times are the session registry's monotonic milliseconds (the one clock
 // convention, ruling 10.3): secondsAgo is measured when a notice is sent.
 //
@@ -49,6 +55,9 @@
 //               takeTransmit question's holder epoch and keyed state. J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-28: slice control and shared listening plan Task 1: each named,
+//               offered and shown slice's incarnation. J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -61,6 +70,7 @@
 #include <optional>
 
 #include "core/DeviceLayoutStore.h"
+#include "core/SliceOwnership.h"
 #include "core/session/SessionMessages.h"
 
 namespace NereusSDR {
@@ -119,6 +129,17 @@ public:
         /// written object, a `sliceId` argument, the slices in `moving`).
         /// Each must still be the requester's at proceed.
         QList<int> namedSlices;
+        /// Slice control plan Task 1: namedSlices with the incarnation each
+        /// had when asked, in the same order.
+        QList<SliceOwnership::SliceRef> namedRefs;
+        /// Slice control plan Task 1: per entry of choiceTargets, the
+        /// offered slice with its incarnation when asked (takeSlice); a
+        /// receiver choice or a free slice has sliceId -1.
+        QList<SliceOwnership::SliceRef> choiceRefs;
+        /// Slice control plan Task 1: every slice in `shown` (a pan move's
+        /// disturbed slices, each choice's closing slices) with its
+        /// incarnation when asked.
+        QList<SliceOwnership::SliceRef> shownRefs;
         /// takeTransmit (Task 77, ruling 8.7): the holder epoch and whether
         /// the holder was on the air when asked.
         quint64 holderEpoch = 0;
