@@ -210,8 +210,10 @@ private slots:
             "display.spectrumDefaults.panFill", "display.spectrumDefaults.fillAlpha",
             "display.spectrumDefaults.gradient", "display.spectrumDefaults.peakHold",
             "display.spectrumDefaults.peakDelay",
-            "display.spectrumPeaks.activePeakHold", "display.spectrumPeaks.activePeakHoldDropRate",
-            "display.spectrumPeaks.activePeakHoldFill", "display.spectrumPeaks.activePeakHoldColor",
+            "display.spectrumPeaks.activePeakHold", "display.spectrumPeaks.activePeakHoldTime",
+            "display.spectrumPeaks.activePeakHoldDropRate",
+            "display.spectrumPeaks.activePeakHoldFill", "display.spectrumPeaks.activePeakHoldOnTx",
+            "display.spectrumPeaks.activePeakHoldColor",
             "display.spectrumPeaks.peakBlobs", "display.spectrumPeaks.peakBlobCount",
             "display.spectrumPeaks.peakBlobInsideFilter", "display.spectrumPeaks.peakBlobHold",
             "display.spectrumPeaks.peakBlobHoldTime", "display.spectrumPeaks.peakBlobHoldDrop",
@@ -235,7 +237,7 @@ private slots:
             ControlRanges::kDisplaySpectrumAvgTimeDefaultMs,
             ControlRanges::kDisplayDecimationDefault,
             true, 70, false, false, 2000,
-            false, 6, false, "#FFD700FF", false, 3, false, false, 500, false, 6,
+            false, 2000, 6, false, false, "#FFD700FF", false, 3, false, false, 500, false, 6,
             "#FF4500FF", "#7FFF00FF",
             ControlRanges::kDisplayWaterfallDetectorDefault,
             ControlRanges::kDisplayWaterfallAveragingDefault,
@@ -273,14 +275,12 @@ private slots:
         QStringList peakTitles;
         for (const QGroupBox* group : peakGroups) { peakTitles << group->title(); }
         QCOMPARE(peakTitles, (QStringList{"Active Peak Hold", "Peak Blobs"}));
-        // The peak hold's Hold duration and Update during TX rows are built
-        // but change nothing on the desktop, so they carry no description id:
-        // thirteen of the page's fifteen rows are tagged.
+        // Every one of the page's fifteen rows is described.
         int taggedPeakRows = 0;
         for (QObject* object : peaks.findChildren<QObject*>()) {
             taggedPeakRows += object->property("nereusSetupId").isValid() ? 1 : 0;
         }
-        QCOMPARE(taggedPeakRows, 13);
+        QCOMPARE(taggedPeakRows, 15);
         for (int p = 0; p < pages.size(); ++p) {
             QWidget* native = p == 0 ? static_cast<QWidget*>(&spectrum)
                 : p == 1 ? static_cast<QWidget*>(&peaks)

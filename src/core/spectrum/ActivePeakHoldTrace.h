@@ -27,6 +27,12 @@
 //                 so the Core can run it for an app's display (iPhone app
 //                 Task 20, R-IOS-27). J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-28 - Hold time and the transmit gate ported from Thetis
+//                 display.cs [v2.10.3.15]: a refreshed peak holds for the
+//                 hold time before it falls, and while this receiver
+//                 transmits without "Also in TX" the trace neither updates,
+//                 decays nor draws. J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -82,9 +88,13 @@ namespace NereusSDR {
 
 /// Per-bin peak-hold trace with configurable decay and TX-state gating.
 ///
-/// State machine:
-///   - update(currentBins): if !txActive || onTx, raise peak[i] = max(peak[i], current[i])
-///   - tickFrame(fps): peak[i] -= dropDbPerSec / fps  (linear decay)
+/// State machine (Thetis display.cs:5011, 5333-5364 [v2.10.3.15]):
+///   - active(): enabled && (!txActive || onTx); an inactive trace neither
+///     updates, decays nor draws (bSpectralPeakHold false)
+///   - update(currentBins): where current[i] >= peak[i], peak[i] = current[i]
+///     and the bin's time is the current frame's
+///   - tickFrame(fps): a bin whose time is more than durationMs old falls by
+///     dropDbPerSec / fps, then the frame clock advances one frame
 ///   - clear(): reset peaks to -∞
 ///
 /// Rendered as a separate trace on SpectrumWidget (Q14.1: separate pass for
@@ -100,29 +110,37 @@ public:
     // ---- Configuration ----
 
     void setEnabled(bool e)             { m_enabled = e; }
-    // Hold duration before decay begins (ms). Currently stored for UI
-    // round-trip; actual hold timer deferred to per-bin age tracking
-    // (Task 2.5 follow-up). For now, decay is immediate (constant rate).
+    // Hold duration before decay begins (ms): a bin refreshed at frame time
+    // T falls only once the frame clock is more than this past T.
+    // From Thetis display.cs:746-750, 5360-5363 [v2.10.3.15]
+    // (SpectralPeakHoldDelayRX1; dElapsed > dSpectralPeakHoldDelay).
     void setDurationMs(int ms)          { m_durationMs = ms; }
     // From Thetis Display.cs:4697 [v2.10.3.13] m_dBmPerSecondPeakBlobFall = 6.0f
     // — reused as the default decay rate for the Active Peak Hold trace.
     void setDropDbPerSec(double r)      { m_dropDbPerSec = r; }
     void setFill(bool f)                { m_fill = f; }
-    // When true, the trace continues to update while TX is active.
-    // When false (default), peaks are frozen during TX.
-    // From Thetis display.cs m_bActivePeakHold / MOX interaction [v2.10.3.13].
+    // When true ("Also in TX"), the trace keeps running while this receiver
+    // transmits. When false (default), the trace is off while transmitting:
+    // no update, no decay, nothing drawn. From Thetis display.cs:4941-4945,
+    // 5011 [v2.10.3.15]:
+    //   bSpectralPeakHold = (!local_mox || _activePeakInTxRX1) && m_bSpectralPeakHoldRX1 && ...
     void setOnTx(bool o)                { m_onTx = o; }
+    // This receiver is transmitting (Thetis local_mox).
     void setTxActive(bool t)            { m_txActive = t; }
     bool txActive() const               { return m_txActive; }
+    bool onTx() const                   { return m_onTx; }
+    /// Enabled, and not switched off by transmitting.
+    bool active() const                 { return m_enabled && (!m_txActive || m_onTx); }
 
     // ---- Per-frame operations ----
 
-    /// Raise each peak bin to max(peak[i], currentBins[i]).
-    /// No-op when disabled or when TX is active and !onTx.
+    /// Raise each peak bin to max(peak[i], currentBins[i]) and stamp the
+    /// raised bins with the current frame's time. No-op when !active().
     void update(const QVector<float>& currentBins);
 
-    /// Decay all finite peaks by (dropDbPerSec / fps) dB.
-    /// No-op when disabled or fps <= 0.
+    /// Decay the finite peaks older than the hold time by
+    /// (dropDbPerSec / fps) dB, then advance the frame clock by one frame.
+    /// No-op when !active() or fps <= 0.
     void tickFrame(int fps);
 
     /// Reset all peaks to -infinity.
@@ -153,6 +171,10 @@ private:
     bool   m_onTx          = false;
     bool   m_txActive      = false;
     QVector<float> m_peaks;
+    // Frame time each bin was last raised (Thetis Maximums.Time), and the
+    // frame clock (Thetis local_frame_start), in ms.
+    QVector<double> m_peakTimesMs;
+    double m_frameMs       = 0.0;
 };
 
 }  // namespace NereusSDR

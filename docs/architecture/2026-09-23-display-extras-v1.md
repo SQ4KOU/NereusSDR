@@ -21,10 +21,19 @@ v1](2026-09-20-remote-media-control-v1.md), "Clarity re-tune"). The Core
 sends 2; everything below needs 1, so a client that compares the version as
 a minimum reads 2 as it read 1.
 
+Version 3 adds the optional `onTx` member of `activePeakHold` and makes the
+Core's peak hold behave as the desktop's now does (Thetis display.cs:5011,
+5333-5364 [v2.10.3.15]): a bin raised in a frame holds for `holdMs` before it
+falls, and while the endpoint's slice is transmitting (MOX on and it is the
+transmit slice) a trace without `onTx` true neither updates, falls nor is
+sent. `onTx` absent is true, so an app that never sends it sees its trace run
+through transmit as before. The Core sends 3; a client sends `onTx` only to
+a Core that sent 3.
+
 ## 1. Who may ask
 
 The Core advertises `displayExtrasVersion` in the minor-11 block of
-the capabilities message (station link section 6.3), 2 while media is
+the capabilities message (station link section 6.3), 3 while media is
 enabled and 0 otherwise. A client may put the fields of section 2 in a
 `subscribe` operation only when the Core it is connected to sent 1 and the
 session agreed minor 11. A Core that did not advertise it, or a subscription
@@ -51,7 +60,7 @@ request one the Core cannot read.
 | Field | Shape | Meaning |
 | --- | --- | --- |
 | `peakBlobs` | `{count, holdMs, fallDbPerSec, insideOnly}` | The top-N peak markers. `count` 1 to 20. `holdMs` 0 (no hold: markers follow each frame) or 100 to 60000. `fallDbPerSec` 0 (a marker disappears at the end of its hold) or 1 to 60 (it falls at this rate after the hold). `insideOnly` true keeps markers inside the slice's receive filter. Asks for the blob section. |
-| `activePeakHold` | `{enabled, holdMs, fallDbPerSec}` | The active peak hold trace. `holdMs` 100 to 60000 (carried for the desktop's round trip; the desktop's trace decays at once, and so does the Core's), `fallDbPerSec` 0.1 to 120. Asks for the peak hold section while `enabled`. |
+| `activePeakHold` | `{enabled, holdMs, fallDbPerSec[, onTx]}` | The active peak hold trace. `holdMs` 100 to 60000: a bin raised in a frame holds this long before it falls. `fallDbPerSec` 0.1 to 120. `onTx` (version 3, optional, true when absent): keep the trace running while the endpoint's slice transmits; when false the section is not sent while it transmits. Asks for the peak hold section while `enabled`. |
 | `noiseFloor` | `{enabled, shiftDb}` | The noise-floor line, moved by `shiftDb` (-12 to 12). Asks for the noise floor section while `enabled`. |
 | `waterfallLevels` | `{mode, lowDbm, highDbm, offsetDb}` | The waterfall's low and high levels. `mode` `"manual"` (the operator's `lowDbm` and `highDbm`, -400 to 100 each), `"agc"` (the desktop's follower on each line's minimum and maximum, 12 dB outside them), `"noiseFloorAgc"` (the line's 10th-percentile floor plus `offsetDb`, -60 to 60, and 60 dB above that) or `"clarity"` (Clarity, fed the Core's full-source noise floor, the same the `noise-floor` operation carries; the manual levels until Clarity first speaks). Asks for the levels section. |
 | `normalize` | boolean | Normalise to a 1 Hz bandwidth: every dBm moves by -10 log10(bin width), the bin width being the source's sample rate over its FFT size. |

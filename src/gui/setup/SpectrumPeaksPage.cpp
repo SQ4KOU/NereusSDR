@@ -21,6 +21,10 @@
 //                 references moved out of four tooltips into comments.
 //                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code.
+//   2026-09-28 - Hold duration and Update during TX now work (Thetis
+//                 display.cs [v2.10.3.15]) and are described too; the peak
+//                 hold tooltips say what it does. J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -351,15 +355,18 @@ void SpectrumPeaksPage::buildUI()
         QStringLiteral("Enable per-bin peak trace with decay"), m_aphGroup);
     m_aphEnable->setProperty("nereusSetupId", "display.spectrumPeaks.activePeakHold");
     m_aphEnable->setToolTip(QStringLiteral(
-        "Display a secondary trace showing the highest level ever seen at each "
-        "frequency bin. The trace decays downward at the configured rate once "
-        "the hold duration elapses."));
+        "Display a secondary trace of the highest recent level at each "
+        "frequency bin. Each bin holds its peak for the hold duration after "
+        "it was last raised, then falls at the drop rate."));
     aphForm->addRow(QString(), m_aphEnable);
 
     m_aphDurationMs = new QSpinBox(m_aphGroup);
     m_aphDurationMs->setRange(100, 60000);
     m_aphDurationMs->setSingleStep(100);
     m_aphDurationMs->setSuffix(QStringLiteral(" ms"));
+    // From Thetis display.cs:746-750 [v2.10.3.15] SpectralPeakHoldDelayRX1
+    // (setup.cs:20821-20825 udActivePeakHoldDurationRX1).
+    m_aphDurationMs->setProperty("nereusSetupId", "display.spectrumPeaks.activePeakHoldTime");
     m_aphDurationMs->setToolTip(QStringLiteral(
         "How long (ms) a peak bin is held at its maximum before starting to decay."));
     aphForm->addRow(QStringLiteral("Hold duration:"), m_aphDurationMs);
@@ -369,7 +376,7 @@ void SpectrumPeaksPage::buildUI()
     m_aphDropDbPerSec->setSuffix(QStringLiteral(" dB/s"));
     m_aphDropDbPerSec->setProperty("nereusSetupId", "display.spectrumPeaks.activePeakHoldDropRate");
     m_aphDropDbPerSec->setToolTip(QStringLiteral(
-        "Rate at which a held peak falls after the hold duration elapses."));
+        "Rate at which a held peak falls once its hold duration has passed."));
     aphForm->addRow(QStringLiteral("Drop rate:"), m_aphDropDbPerSec);
 
     m_aphFill = new QCheckBox(
@@ -381,9 +388,12 @@ void SpectrumPeaksPage::buildUI()
 
     m_aphOnTx = new QCheckBox(
         QStringLiteral("Update during TX"), m_aphGroup);
+    // From Thetis display.cs:4941-4945, 5011 [v2.10.3.15] ActivePeakInTxRX1
+    // (setup.cs:37288-37291 chkActivePeakRX1_tx, "Also in TX").
+    m_aphOnTx->setProperty("nereusSetupId", "display.spectrumPeaks.activePeakHoldOnTx");
     m_aphOnTx->setToolTip(QStringLiteral(
-        "Continue updating the peak trace while transmitting. "
-        "When off, the trace is frozen during TX."));
+        "Keep the peak trace running while this panadapter transmits. "
+        "When off, the trace is hidden and paused until transmit ends."));
     aphForm->addRow(QString(), m_aphOnTx);
 
     // Placeholder colour; setColor() is called in the constructor after buildUI().

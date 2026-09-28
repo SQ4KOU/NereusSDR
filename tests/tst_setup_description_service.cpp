@@ -1523,7 +1523,7 @@ private slots:
                     displayControls += section.toObject().value("controls").toArray().size();
                 }
             }
-            QCOMPARE(displayControls, expected >= 11 ? 46 : expected >= 10 ? 33 : expected >= 9 ? 29 : expected >= 8 ? 21 : expected >= 4 ? 14 : 11);
+            QCOMPARE(displayControls, expected >= 11 ? 48 : expected >= 10 ? 33 : expected >= 9 ? 29 : expected >= 8 ? 21 : expected >= 4 ? 14 : 11);
             QCOMPARE(display.value("pages").toArray().size(), expected >= 11 ? 5 : expected >= 8 ? 4 : 3);
             const QJsonObject appearance = QJsonDocument::fromJson(setupCategoryOnWire(
                 *core.app, "appearance", SessionMessageKind::ObjectCreate).toUtf8()).object();
@@ -1640,7 +1640,7 @@ private slots:
             QCOMPARE(display.value("version"),
                      QJsonValue(version >= 11 ? 11 : version >= 10 ? 10 : version >= 9 ? 9 : version >= 8 ? 8 : qMin(version, 4)));
             QCOMPARE(appearance.value("version"), QJsonValue(version >= 7 ? 7 : qMin(version, 4)));
-            QCOMPARE(controlsOf(display).size(), version < 4 ? 11 : version < 8 ? 14 : version < 9 ? 21 : version < 10 ? 29 : version < 11 ? 33 : 46);
+            QCOMPARE(controlsOf(display).size(), version < 4 ? 11 : version < 8 ? 14 : version < 9 ? 21 : version < 10 ? 29 : version < 11 ? 33 : 48);
             QCOMPARE(display.value("pages").toArray().size(), version < 8 ? 3 : version < 11 ? 4 : 5);
             QCOMPARE(controlsOf(appearance).size(), version < 7 ? 10 : 13);
             QCOMPARE(appearance.value("pages").toArray().size(), version < 7 ? 1 : 2);
@@ -1764,35 +1764,44 @@ private slots:
                 controls.append(raw);
             }
         }
-        QCOMPARE(sections.at(0).toObject().value("controls").toArray().size(), 4);
+        QCOMPARE(sections.at(0).toObject().value("controls").toArray().size(), 6);
         QCOMPARE(sections.at(1).toObject().value("controls").toArray().size(), 9);
         const QStringList ids{
-            "display.spectrumPeaks.activePeakHold", "display.spectrumPeaks.activePeakHoldDropRate",
-            "display.spectrumPeaks.activePeakHoldFill", "display.spectrumPeaks.activePeakHoldColor",
+            "display.spectrumPeaks.activePeakHold", "display.spectrumPeaks.activePeakHoldTime",
+            "display.spectrumPeaks.activePeakHoldDropRate",
+            "display.spectrumPeaks.activePeakHoldFill", "display.spectrumPeaks.activePeakHoldOnTx",
+            "display.spectrumPeaks.activePeakHoldColor",
             "display.spectrumPeaks.peakBlobs", "display.spectrumPeaks.peakBlobCount",
             "display.spectrumPeaks.peakBlobInsideFilter", "display.spectrumPeaks.peakBlobHold",
             "display.spectrumPeaks.peakBlobHoldTime", "display.spectrumPeaks.peakBlobHoldDrop",
             "display.spectrumPeaks.peakBlobFallRate", "display.spectrumPeaks.peakBlobColor",
             "display.spectrumPeaks.peakBlobTextColor"};
         const QStringList keys{
-            "DisplayActivePeakHoldEnabled", "DisplayActivePeakHoldDropDbPerSec",
-            "DisplayActivePeakHoldFill", "DisplayActivePeakHoldColor",
+            "DisplayActivePeakHoldEnabled", "DisplayActivePeakHoldDurationMs",
+            "DisplayActivePeakHoldDropDbPerSec",
+            "DisplayActivePeakHoldFill", "DisplayActivePeakHoldOnTx", "DisplayActivePeakHoldColor",
             "DisplayPeakBlobsEnabled", "DisplayPeakBlobsCount",
             "DisplayPeakBlobsInsideFilterOnly", "DisplayPeakBlobsHoldEnabled",
             "DisplayPeakBlobsHoldMs", "DisplayPeakBlobsHoldDrop",
             "DisplayPeakBlobsFallDbPerSec", "DisplayPeakBlobColor", "DisplayPeakBlobTextColor"};
         const QStringList kinds{
-            "toggle", "integer", "toggle", "colour", "toggle", "integer", "toggle",
-            "toggle", "integer", "toggle", "integer", "colour", "colour"};
+            "toggle", "integer", "integer", "toggle", "toggle", "colour", "toggle", "integer",
+            "toggle", "toggle", "integer", "toggle", "integer", "colour", "colour"};
         const QStringList applies{
-            "subscription", "subscription", "live", "live", "subscription", "subscription",
+            "subscription", "subscription", "subscription", "live", "subscription", "live",
             "subscription", "subscription", "subscription", "subscription", "subscription",
-            "live", "live"};
+            "subscription", "subscription", "live", "live"};
         const QList<QJsonValue> defaults{
-            false, 6, false, "#FFD700FF", false, 3, false, false, 500, false, 6,
+            false, 2000, 6, false, false, "#FFD700FF", false, 3, false, false, 500, false, 6,
             "#FF4500FF", "#7FFF00FF"};
         QCOMPARE(controls.size(), ids.size());
-        const QJsonObject gate{{"capability", "displayExtrasVersion"}, {"min", 1}};
+        // The peak hold's hold time and transmit switch need the Core that
+        // honours them (displayExtrasVersion 3); the rest need 1.
+        const auto gateFor = [&ids](int i) {
+            const bool three = ids.at(i).endsWith("activePeakHoldTime")
+                || ids.at(i).endsWith("activePeakHoldOnTx");
+            return QJsonObject{{"capability", "displayExtrasVersion"}, {"min", three ? 3 : 1}};
+        };
         for (int i = 0; i < controls.size(); ++i) {
             const QJsonObject control = controls.at(i).toObject();
             QCOMPARE(control.value("id"), QJsonValue(ids.at(i)));
@@ -1801,7 +1810,7 @@ private slots:
             QCOMPARE(control.value("applies"), QJsonValue(applies.at(i)));
             QCOMPARE(control.value("default"), defaults.at(i));
             QCOMPARE(control.value("requiresDescriptionVersion"), QJsonValue(11));
-            QCOMPARE(control.value("gate"), QJsonValue(gate));
+            QCOMPARE(control.value("gate"), QJsonValue(gateFor(i)));
             QVERIFY2(SetupDescriptionService::validateDisplayPhoneBinding(control),
                      qPrintable(ids.at(i)));
             const auto rejects = [&control, &ids, i](const QString& field, const QJsonValue& value) {
@@ -1839,10 +1848,7 @@ private slots:
                 rejects("min", 0);
             }
         }
-        // Built but without an effect on the desktop: never published.
         const QString source = service.display();
-        QVERIFY(!source.contains(QStringLiteral("DisplayActivePeakHoldDurationMs")));
-        QVERIFY(!source.contains(QStringLiteral("DisplayActivePeakHoldOnTx")));
 
         // Version 10 keeps its page list and its 33 controls exactly.
         const QJsonObject v10 = QJsonDocument::fromJson(
@@ -2037,7 +2043,7 @@ private slots:
                     }
                 }
             }
-            QCOMPARE(count, version >= 11 ? 46 : version >= 10 ? 33 : version >= 9 ? 29 : version >= 8 ? 21 : version >= 4 ? 14 : 11);
+            QCOMPARE(count, version >= 11 ? 48 : version >= 10 ? 33 : version >= 9 ? 29 : version >= 8 ? 21 : version >= 4 ? 14 : 11);
             QCOMPARE(optionSliders, version >= 4 ? 2 : 0);
         }
     }

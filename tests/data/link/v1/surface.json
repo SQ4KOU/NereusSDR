@@ -258,7 +258,7 @@
         {
             "kind": "i64",
             "name": "displayExtrasVersion",
-            "value": 2
+            "value": 3
         },
         {
             "kind": "i64",
@@ -3043,7 +3043,8 @@
                         [
                             "enabled",
                             "fallDbPerSec",
-                            "holdMs"
+                            "holdMs",
+                            "onTx"
                         ]
                     ],
                     "noiseFloor": [

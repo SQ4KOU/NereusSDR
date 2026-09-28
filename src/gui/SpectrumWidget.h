@@ -622,10 +622,15 @@ public:
     // trace (which would otherwise hide the peak trace behind a same-coloured
     // solid line).
     void setActivePeakHoldColor(const QColor& c);
-    // Called by RadioModel on MOX state change (MoxController::moxStateChanged).
+    // This pan transmitting, for the peak hold's transmit gate. setMoxOverlay
+    // drives it on every MOX edge (MoxDisplayController, local and remote).
     void setActivePeakHoldTxActive(bool tx);
 
     bool   activePeakHoldEnabled()    const { return m_activePeakHold.enabled(); }
+    /// Enabled and not switched off by this pan transmitting (Thetis
+    /// display.cs:5011 [v2.10.3.15] bSpectralPeakHold).
+    bool   activePeakHoldActive()     const { return m_activePeakHold.active(); }
+    bool   activePeakHoldOnTx()       const { return m_activePeakHold.onTx(); }
     int    activePeakHoldDurationMs() const { return m_activePeakHold.durationMs(); }
     double activePeakHoldDropDbPerSec() const { return m_activePeakHold.dropDbPerSec(); }
     bool   activePeakHoldFill()        const { return m_activePeakHold.fill(); }

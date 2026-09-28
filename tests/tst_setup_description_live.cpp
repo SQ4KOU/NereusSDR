@@ -47,7 +47,7 @@ private slots:
                 ++described;
             }
         }
-        QCOMPARE(described, 13);
+        QCOMPARE(described, 15);
         QHash<QByteArray, int> v10Features = kHolder;
         v10Features.insert("setupDescription", 10);
         auto* v10 = core.signIn(older, v10Features);

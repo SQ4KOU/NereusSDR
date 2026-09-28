@@ -232,8 +232,13 @@ bool parseDisplayExtrasRequest(const QJsonObject& subscribe, DisplayExtrasReques
     if (subscribe.contains(QStringLiteral("activePeakHold"))) {
         DisplayExtrasRequest::ActivePeakHold hold;
         // SpectrumWidget's setter bounds: 100..60000 ms, 0.1..120 dB/s.
-        if (!objectWithKeys(subscribe.value(QStringLiteral("activePeakHold")),
-                            {"enabled", "holdMs", "fallDbPerSec"}, object)
+        // onTx is optional (displayExtrasVersion 3); absent keeps it true.
+        const QJsonValue raw = subscribe.value(QStringLiteral("activePeakHold"));
+        const bool withOnTx = raw.isObject()
+            && raw.toObject().contains(QStringLiteral("onTx"));
+        if (!(withOnTx ? objectWithKeys(raw, {"enabled", "holdMs", "fallDbPerSec", "onTx"}, object)
+                       : objectWithKeys(raw, {"enabled", "holdMs", "fallDbPerSec"}, object))
+            || (withOnTx && !boolValue(object.value(QStringLiteral("onTx")), hold.onTx))
             || !boolValue(object.value(QStringLiteral("enabled")), hold.enabled)
             || !intIn(object.value(QStringLiteral("holdMs")), 100, 60000, hold.holdMs)
             || !numberIn(object.value(QStringLiteral("fallDbPerSec")), 0.1, 120.0,
@@ -509,6 +514,7 @@ DisplayExtrasProcessor::DisplayExtrasProcessor(const DisplayExtrasRequest& reque
     if (m_request.activePeakHold) {
         m_peakHold.setDurationMs(m_request.activePeakHold->holdMs);
         m_peakHold.setDropDbPerSec(m_request.activePeakHold->fallDbPerSec);
+        m_peakHold.setOnTx(m_request.activePeakHold->onTx);
         m_peakHold.setEnabled(m_request.activePeakHold->enabled);
     }
     if (m_request.waterfallLevels) {
@@ -592,7 +598,13 @@ DisplayExtrasFrame DisplayExtrasProcessor::process(const DisplayCodecFrame& fram
 
     // In SpectrumWidget::updateReducedSpectrumOverlays' order: the active
     // peak hold, the blobs, then the noise floor.
-    if (m_request.activePeakHold && m_request.activePeakHold->enabled && !trace.isEmpty()) {
+    // As SpectrumWidget::setMoxOverlay: the trace's transmit gate is this
+    // endpoint's slice transmitting (Thetis display.cs:5011 [v2.10.3.15]:
+    //   bSpectralPeakHold = (!local_mox || _activePeakInTxRX1) && m_bSpectralPeakHoldRX1 && ...).
+    // Off while transmitting without onTx: no section is sent, and the
+    // app draws no trace.
+    m_peakHold.setTxActive(inputs.transmitting);
+    if (m_request.activePeakHold && m_peakHold.active() && !trace.isEmpty()) {
         if (m_peakHold.size() != trace.size()) {
             m_peakHold.resize(trace.size());
         }

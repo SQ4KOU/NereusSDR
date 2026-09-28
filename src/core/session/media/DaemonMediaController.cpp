@@ -4478,6 +4478,9 @@ DisplayExtrasInputs DaemonMediaController::displayExtrasInputs(const EndpointEnt
             inputs.band = static_cast<int>(bandFromFrequency(slice->frequency()));
         }
         inputs.mox = m_radioModel->transmitModel().isMox();
+        if (const SliceModel* slice = m_radioModel->sliceById(entry.sliceId)) {
+            inputs.transmitting = inputs.mox && slice->isTxSlice();
+        }
     }
     return inputs;
 }

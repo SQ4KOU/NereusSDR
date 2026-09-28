@@ -2096,9 +2096,10 @@ void SpectrumWidget::setPeakHoldDelayMs(int ms)
 void SpectrumWidget::setActivePeakHoldEnabled(bool on)
 {
     m_activePeakHold.setEnabled(on);
-    if (!on) {
-        m_activePeakHold.clear();
-    }
+    // Off empties the trace; on starts it afresh, as Thetis's setter does
+    // (display.cs:460-470 [v2.10.3.15]:
+    //   if (m_bSpectralPeakHoldRX1) { ResetSpectrumPeaks(1); }).
+    m_activePeakHold.clear();
     // Force GPU overlay rebuild now — the per-frame nudge in updateSpectrum()
     // only fires once spectrum frames arrive, leaving a stale overlay between
     // the toggle and the next frame.  markOverlayDirty() is guarded for
@@ -4447,7 +4448,9 @@ void SpectrumWidget::drawSpectrum(QPainter& p, const QRect& specRect)
     // the live trace so the peak line sits on top.  From Thetis
     // Display.cs:5341 [v2.10.3.13] -- per-pixel peak.max_dBm, y mapped
     // via dbmToPixel.
-    if (m_activePeakHold.enabled() && m_activePeakHold.size() == n) {
+    // Thetis display.cs:5011 [v2.10.3.15]: while this pan transmits
+    // without "Also in TX" the trace is not drawn (bSpectralPeakHold).
+    if (m_activePeakHold.active() && m_activePeakHold.size() == n) {
         paintActivePeakHoldTrace(p, specRect);
     }
 
@@ -7163,6 +7166,10 @@ void SpectrumWidget::setMoxOverlay(bool isTx)
     // where both grids get written.
 
     m_moxOverlay = isTx;
+    // The active peak hold's transmit gate follows the same local_mox
+    // (Thetis display.cs:5011 [v2.10.3.15]:
+    //   bSpectralPeakHold = (!local_mox || _activePeakInTxRX1) && m_bSpectralPeakHoldRX1 && ...).
+    m_activePeakHold.setTxActive(isTx);
     // Parity Task 31: keyed with DUP on the axis stays the receiver's, and
     // so does its trace.
     if (m_remoteSpectrum && axisMoved) {
@@ -11367,7 +11374,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
 
             if ((m_activePeakHold.enabled() || m_peakBlobs.enabled()) &&
                 !m_renderedPixels.isEmpty()) {
-                if (m_activePeakHold.enabled() && m_activePeakHold.size() > 0) {
+                if (m_activePeakHold.active() && m_activePeakHold.size() > 0) {
                     paintActivePeakHoldTrace(pd, specRect);
                 }
                 if (m_peakBlobs.enabled() && !m_peakBlobs.blobs().isEmpty()) {

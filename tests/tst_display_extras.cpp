@@ -615,6 +615,77 @@ private slots:
         }
     }
 
+    // Version 3: onTx is optional, a bool, and true when absent.
+    void activePeakHoldOnTxParses()
+    {
+        const auto hold = [](const QJsonObject& members) {
+            QJsonObject subscribe;
+            subscribe.insert(QStringLiteral("activePeakHold"), members);
+            return subscribe;
+        };
+        QJsonObject base{{QStringLiteral("enabled"), true},
+                         {QStringLiteral("holdMs"), 500},
+                         {QStringLiteral("fallDbPerSec"), 6.0}};
+        DisplayExtrasRequest request;
+        QVERIFY(parseDisplayExtrasRequest(hold(base), request));
+        QVERIFY(request.activePeakHold->onTx);
+        QJsonObject off = base;
+        off.insert(QStringLiteral("onTx"), false);
+        QVERIFY(parseDisplayExtrasRequest(hold(off), request));
+        QVERIFY(!request.activePeakHold->onTx);
+        QCOMPARE(request.activePeakHold->holdMs, 500);
+        QJsonObject wrong = base;
+        wrong.insert(QStringLiteral("onTx"), 1);
+        DisplayExtrasRequest untouched;
+        QVERIFY(!parseDisplayExtrasRequest(hold(wrong), untouched));
+        QJsonObject extra = off;
+        extra.insert(QStringLiteral("other"), true);
+        QVERIFY(!parseDisplayExtrasRequest(hold(extra), untouched));
+    }
+
+    // Thetis display.cs:5011, 5359-5363 [v2.10.3.15], as the desktop: a
+    // raised bin holds for holdMs, and while the endpoint's slice transmits
+    // without onTx the trace is not updated, not decayed and not sent.
+    void thePeakHoldHoldsAndStopsWhileTheSliceTransmits()
+    {
+        DisplayExtrasRequest request;
+        request.activePeakHold = DisplayExtrasRequest::ActivePeakHold{true, 100, 25.0, false};
+        DisplayExtrasProcessor station(request);
+        DisplayCodecFrame frame;
+        frame.context = {1, 1, -180.0f, 0.0f, 4, 4, 0};
+        frame.traceDbm = {-40, -40, -40, -40};
+        frame.waterfallDbm = frame.traceDbm;
+        DisplayExtrasInputs inputs;
+        inputs.fps = 25;
+        DisplayExtrasFrame out = station.process(frame, inputs);
+        QCOMPARE(out.peakHoldDbm->first(), -40.0f);
+        frame.traceDbm = {-90, -90, -90, -90};
+        out = station.process(frame, inputs);   // 40 ms old
+        out = station.process(frame, inputs);   // 80 ms old
+        QCOMPARE(out.peakHoldDbm->first(), -40.0f);
+        out = station.process(frame, inputs);   // 120 ms old: 1 dB lower
+        QVERIFY(std::abs(out.peakHoldDbm->first() - -41.0f) < 1.0e-4f);
+
+        inputs.transmitting = true;
+        frame.traceDbm = {-10, -10, -10, -10};
+        out = station.process(frame, inputs);
+        QVERIFY(!out.peakHoldDbm.has_value());
+        inputs.transmitting = false;
+        frame.traceDbm = {-90, -90, -90, -90};
+        out = station.process(frame, inputs);
+        // Not raised by the transmit frame, and it did not fall meanwhile.
+        QVERIFY(std::abs(out.peakHoldDbm->first() - -42.0f) < 1.0e-4f);
+
+        DisplayExtrasRequest running = request;
+        running.activePeakHold->onTx = true;
+        DisplayExtrasProcessor keyed(running);
+        inputs.transmitting = true;
+        frame.traceDbm = {-10, -10, -10, -10};
+        out = keyed.process(frame, inputs);
+        QVERIFY(out.peakHoldDbm.has_value());
+        QCOMPARE(out.peakHoldDbm->first(), -10.0f);
+    }
+
     void aNewContextRestartsTheHoldAndTheBlobs()
     {
         DisplayExtrasRequest request;
@@ -922,12 +993,13 @@ private slots:
             QVERIFY(update.name != QByteArray("displayExtrasVersion"));
         }
         Harness harness;
-        // 2 (R-IOS-27, R-IOS-06): the extras and clarity-retune.
-        QCOMPARE(harness.server.displayExtrasVersion(), 2);
+        // 2 (R-IOS-27, R-IOS-06): the extras and clarity-retune; 3: the peak
+        // hold's hold time and activePeakHold.onTx.
+        QCOMPARE(harness.server.displayExtrasVersion(), 3);
         QVERIFY(!harness.server.displayExtrasAvailable()); // no session yet
         QVERIFY(harness.establishSession());
         QVERIFY(harness.server.displayExtrasAvailable());
-        QCOMPARE(harness.client.capabilities().displayExtrasVersion, 2);
+        QCOMPARE(harness.client.capabilities().displayExtrasVersion, 3);
         harness.finish();
     }
 

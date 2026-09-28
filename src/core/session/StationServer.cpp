@@ -3041,7 +3041,9 @@ int StationServer::displayExtrasVersion() const
 {
     // The extras travel on the media display channel, so they come with it.
     // 2 (R-IOS-27, R-IOS-06): also the clarity-retune operation.
-    return m_mediaEnabled ? 2 : 0;
+    // 3: activePeakHold.onTx, and the peak hold's hold time and transmit
+    // gate as the desktop's.
+    return m_mediaEnabled ? 3 : 0;
 }
 
 int StationServer::deviceAdminVersion() const
