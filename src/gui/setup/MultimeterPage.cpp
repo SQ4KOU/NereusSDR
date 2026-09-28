@@ -137,6 +137,7 @@ void MultimeterPage::buildUI()
         tr("Polling delay:"), 10, 2000,
         // From Thetis udDisplayMeterDelay default 100ms [v2.10.3.13]
         100);
+    m_delayMs->setProperty("nereusSetupId", "display.multimeter.pollingDelay");
     m_delayMs->setSuffix(QStringLiteral(" ms"));
     m_delayMs->setToolTip(tr("How often the meter values are read from WDSP (10–2000 ms). "
                               "Lower values give faster response; higher values reduce CPU load."));

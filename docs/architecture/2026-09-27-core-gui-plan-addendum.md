@@ -1702,8 +1702,16 @@ colours for the same signal.
   model checks passed. Each packaged executable reports product `0.5.2` and
   source `codex/checkpoint-b@21bbbd8e`, leaves the isolated CLI home empty,
   and passes the network-disabled startup observation. The Rock package is
-  staged without restarting JJ's active phone test. Installation timing is
-  pending; the recorded Pi 4 address is unreachable.
+  staged without restarting JJ's active phone test; Rock timing remains pending.
+  After JJ enabled his VPN, the intended Pi 4 at `10.0.252.47` was positively
+  identified and upgraded from the manifest-matched `0368ff16` to `21bbbd8e`.
+  Its installed binary/library/model hashes match the verified package, actual
+  `--build-info` reports the expected source, and the service is active with
+  zero restarts. It registered with the remote-access service, reconnected to
+  the HL2 at the unchanged 384 kHz rate, and received its first EP6 frame.
+  `/etc/nereusd.conf` is byte-for-byte unchanged. A root-only rollback copy
+  retains the previous installation. Physical iPhone reception and rendezvous
+  connection remain live acceptance checks; this install does not claim them.
 - Plan: truthful Core build provenance and phone About support.
 
 ### G-87: Hardware and PA descriptions omit built desktop controls and readouts
@@ -1991,8 +1999,17 @@ colours for the same signal.
 - Ruling basis: JJ requires cost-aware work and understanding slow verification.
   Align the intended compile environment or use a compatible header cache,
   preserving static-library linkage and platform-specific visibility semantics.
-- Status: observed in the real Linux build; exact target-definition diagnosis
-  and bounded repair remain. The active immutable build continues unchanged.
+- Status: signed `bcaf54cd` separates the library and test header donors,
+  preserving existing consumer definitions, linking, PIC/PIE and warning flags.
+  Exact GCC commands compile real Core, GUI and both kinds of test source with
+  `-Werror=invalid-pch`, and report that the intended header cache was used.
+  The lane's Mac app/Core build and two representative suites pass. Root
+  app/Core and nine explicitly rebuilt suites pass (58.15 s; observed load
+  10.05/10.69/14.27). Full Linux and Windows verification remain.
+  Measured source-compile probes improved, but are not a full CI speed claim.
+  The older immutable Linux build was deliberately stopped at 1810/2799
+  compile steps before tests, retaining its log and cache. Its replacement
+  will use the verified integrated source; no test result is claimed for it.
 - Plan: reliable, efficient full-suite builds across CI platforms.
 
 ### G-102: Trace and Fill colour is changed live but not saved
@@ -2034,8 +2051,13 @@ colours for the same signal.
   desktop parity in this effort. Publish exact existing behavior and ownership;
   do not describe hidden placeholders as working features. His accepted
   decimation range is 1-16, with calibration applied once in both windows.
-- Status: source inventory complete and first Core-owned description slice in
-  progress. The phone owner confirmed that literal PascalCase binding names
+- Status: signed `f2b24cf6` publishes the first fourteen Core-owned controls.
+  The lane's app/Core build and five complete suites pass (24.80 s), with a
+  strengthened paired-session fixture also passing. Root app/Core and nine
+  explicitly rebuilt suites pass (58.15 s), including complete link conformance.
+  Normalize has its exact V4 detector dependency; V1-V3 receive the
+  other eleven controls. Native TX Display availability stays unchanged.
+  The phone owner confirmed that literal PascalCase binding names
   map to its existing typed per-pan/current-band model and that explicit
   `#RRGGBBAA` colours suit its boundary conversions. The phone model already
   exists in its checkout; absence in the Core checkout did not mean unbuilt
@@ -2047,10 +2069,26 @@ colours for the same signal.
   apply live to the Core analyzer, without an invented RX subscription field.
   This clarifies the plan's overly broad subscription label. Remaining local
   controls, readouts, active-band grid context, 3D page and actions still need
-  exact publication and phone checks. Partial publication does not close this
-  gap.
+  exact publication and phone checks. The next lane publishes the ten built
+  Colors and Theme swatches using the agreed local keys and RGBA boundary;
+  Reset Colours and Meter Styles remain separate. Partial publication does
+  not close this gap.
 - Plan: phone Display/Appearance description and renderer dependencies, and
   remote-window parity.
+
+### G-104: Disconnect capability refresh can invalidate its peer iterator
+
+- Evidence: lead review of the new antenna capability withdrawal found a
+  direct iteration over `m_peers` while calling synchronous `sendText()`.
+  A receiving callback can close a session and erase that peer. Existing
+  broadcast helpers already copy their destinations for this reason.
+- Ruling basis: preserve session lifetime and truthful capability withdrawal;
+  this is a concrete implementation defect, with no new operator policy.
+- Status: correction in progress in the antenna lane. Copy guarded session
+  identities, revalidate before each send, and stop after Core destruction.
+  Regression coverage must close peers during withdrawal and prove that
+  surviving peers update without notifying stale replacement sessions.
+- Plan: radio-bound antenna commands and multi-device disconnect safety.
 
 ## How this addendum is kept
 
