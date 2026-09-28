@@ -126,17 +126,15 @@ void RemoteTransmitClient::keepaliveTick()
     }
     const quint64 sequence = ++m_keepaliveSequence;
     const quint32 epoch = keepaliveEpoch();
-    // Before the sender returns, the off may not even be queued on the
-    // primary. After a failed/refused off, no path can safely keep the old
-    // key alive until this session resets. Continue the one sequence.
-    if (m_releaseDispatches != 0 || m_releaseFailureSticky) {
+    // A command ID does not prove the off was queued: the transport can
+    // silently drop it. Until each off's own accepted Core result, neither
+    // heartbeat path may keep an old key alive. Continue one sequence.
+    if (m_releaseDispatches != 0 || m_pendingReleases != 0 || m_releaseFailureSticky) {
         return;
     }
-    // A sent off waits for its own accepted result. Until then only the
-    // ordered primary may carry heartbeats; this also gates a future aux.
     const QPointer<RemoteTransmitClient> self(this);
     const quint64 sessionGeneration = m_sessionGeneration;
-    if (m_pendingReleases == 0 && m_channelKeepalive) {
+    if (m_channelKeepalive) {
         const KeepaliveSender channel = m_channelKeepalive;
         const bool sent = channel(sequence, epoch);
         if (!self || m_sessionGeneration != sessionGeneration) { return; }
@@ -183,8 +181,8 @@ quint32 RemoteTransmitClient::send(const QByteArray& verb, const QList<MirrorUpd
     }
     const quint64 sessionGeneration = m_sessionGeneration;
     if (releaseIntent) {
-        // The sender can reenter the event loop. Neither heartbeat path is
-        // safe until it returns a command id that was queued on primary.
+        // The sender can reenter the event loop. Once it returns, the
+        // pending-off gate still waits for Core's own accepted result.
         ++m_releaseDispatches;
     }
     // Keep the callable alive if it synchronously destroys its owner.

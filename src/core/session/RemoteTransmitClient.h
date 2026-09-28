@@ -216,7 +216,8 @@ private:
     std::function<void(const Answer&)> m_programAnswer;
     /// Commands still waiting for their first answer.
     QHash<quint32, Pending> m_pending;
-    /// All sent off commands need their own accepted result. A failed or
+    /// Every off with an assigned ID needs its own accepted Core result;
+    /// the ID alone does not prove the transport sent it. A failed or
     /// refused off cannot be resolved by a different-mode off command.
     quint32 m_pendingReleases{0};
     quint32 m_releaseDispatches{0};

@@ -376,11 +376,12 @@ private slots:
         });
         tx->setVoxArmed(true);
         QSignalSpy answered(&h.client, &StationClient::commandResponse);
+        const int primaryBefore = primaryHeartbeats;
         tx->setTunerTune(false);
         const int independentBefore = independentHeartbeats;
         tx->keepaliveTick();
         QCOMPARE(independentHeartbeats, independentBefore);
-        QVERIFY(primaryHeartbeats > 0);
+        QCOMPARE(primaryHeartbeats, primaryBefore);
         QTRY_VERIFY(!commandsOf(h.stationLink, QStringLiteral("tx.tunerTune")).isEmpty());
         QTRY_VERIFY(!answered.isEmpty());
         bool acceptedOff = false;

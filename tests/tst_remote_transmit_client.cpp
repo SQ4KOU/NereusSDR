@@ -452,10 +452,15 @@ private slots:
 
         client.setScreenKey(false);
         QVERIFY(!client.keepaliveRunning());
+        const Sent firstOff = core.sent.last();
 
-        // A later key goes on counting.
+        // A later key still advances the sequence, but cannot send a
+        // heartbeat until the earlier release reaches Core.
         client.setScreenKey(true);
-        QCOMPARE(sent.last().sequence, quint64(3));
+        QCOMPARE(sent.last().sequence, quint64(2));
+        answerCopies(client, firstOff, true, QString(), {});
+        client.keepaliveTick();
+        QCOMPARE(sent.last().sequence, quint64(4));
         client.setScreenKey(false);
 
         // A new link starts again from 1.
@@ -484,6 +489,7 @@ private slots:
         QVERIFY(client.keepaliveRunning());
         client.setTune(false);
         QVERIFY(!client.keepaliveRunning());
+        answerCopies(client, core.sent.last(), true, QString(), {});
 
         client.setTwoTone(true);
         QVERIFY(client.keepaliveRunning());
@@ -533,7 +539,7 @@ private slots:
             paths.client.keepaliveTick();
         }
         QCOMPARE(paths.channelAccepted, channelBeforeRelease);
-        QVERIFY(paths.client.sessionKeepalivesSent() >= primaryBeforeRelease + 5);
+        QCOMPARE(paths.client.sessionKeepalivesSent(), primaryBeforeRelease);
         QCOMPARE(paths.stops, 1);
         QVERIFY(!paths.keyed);
     }
@@ -566,7 +572,38 @@ private slots:
             paths.client.keepaliveTick();
         }
         QCOMPARE(paths.channelAccepted, channelBeforeRelease);
-        QVERIFY(paths.client.sessionKeepalivesSent() >= primaryBeforeRelease + 5);
+        QCOMPARE(paths.client.sessionKeepalivesSent(), primaryBeforeRelease);
+        QCOMPARE(paths.stops, 1);
+        QVERIFY(!paths.keyed);
+    }
+
+    void assignedOffIdWithoutDeliveryCannotBeSustainedByPrimaryHeartbeats()
+    {
+        SplitTxPaths paths;
+        paths.watchdog.setVoxArmed(paths.device, true);
+        paths.client.setVoxArmed(true);
+        paths.client.setScreenKey(true);
+        paths.keyed = true;
+        paths.watchdog.setKeyed(paths.device, true, 7);
+        answerCopies(paths.client, paths.primary.sent.last(), true, QString(), epochValue(7));
+        paths.advanceTo(100);
+        paths.client.keepaliveTick();
+
+        paths.primaryDelivering = true;
+        paths.client.setScreenKey(false);
+        const Sent droppedOff = paths.primary.sent.last();
+        QCOMPARE(droppedOff.verb, QByteArrayLiteral("tx.unkey"));
+        QVERIFY(droppedOff.id != 0);  // StationClient can assign an ID before a silent drop.
+        // The fake transport never applies that command to the Core, but
+        // can deliver subsequent primary keepalives. Media also works.
+        const int primaryBefore = paths.primaryAccepted;
+        const int channelBefore = paths.channelAccepted;
+        for (qint64 at = 200; at <= 600; at += RemoteTxWatchdog::kKeepaliveIntervalMs) {
+            paths.advanceTo(at);
+            paths.client.keepaliveTick();
+        }
+        QCOMPARE(paths.primaryAccepted, primaryBefore);
+        QCOMPARE(paths.channelAccepted, channelBefore);
         QCOMPARE(paths.stops, 1);
         QVERIFY(!paths.keyed);
     }
@@ -585,9 +622,8 @@ private slots:
         const Sent heldRelease = paths.primary.sent.last();
         QCOMPARE(heldRelease.verb, QByteArrayLiteral("tx.unkey"));
         QVERIFY(!paths.client.keepaliveRunning());
-        // The old release stays queued on the primary path. A new press
-        // cannot overtake it there, but immediately restarts the local
-        // timer; the media TX path remains independently deliverable.
+        // A new press restarts the timer while the old release remains
+        // unresolved; neither path may sustain the old Core key.
         paths.client.setScreenKey(true);
         QCOMPARE(paths.primary.sent.last().verb, QByteArrayLiteral("tx.key"));
         QVERIFY(paths.client.keepaliveRunning());
@@ -599,7 +635,7 @@ private slots:
             paths.client.keepaliveTick();
         }
         QCOMPARE(paths.channelAccepted, channelBeforeRelease);
-        QVERIFY(paths.client.sessionKeepalivesSent() >= primaryBeforeRelease + 5);
+        QCOMPARE(paths.client.sessionKeepalivesSent(), primaryBeforeRelease);
         QCOMPARE(paths.stops, 1);
         QVERIFY(!paths.keyed);
     }
@@ -620,7 +656,7 @@ private slots:
         const quint64 sessionBefore = paths.client.sessionKeepalivesSent();
         paths.client.keepaliveTick();
         QCOMPARE(paths.client.channelKeepalivesSent(), channelBefore);
-        QCOMPARE(paths.client.sessionKeepalivesSent(), sessionBefore + 1);
+        QCOMPARE(paths.client.sessionKeepalivesSent(), sessionBefore);
 
         // Delivery of the held primary command is the point at which the
         // Core's key actually ends; the accepted result follows it.
@@ -662,11 +698,10 @@ private slots:
         client.setScreenKey(false);
         QCOMPARE(channelAtReentrantTick, beforeChannel);
         QCOMPARE(sessionAtReentrantTick, quint64(0));
-        // Once the sender has returned a queued command id, only the
-        // ordered primary can carry the following heartbeat.
+        // A returned command id alone still does not prove Core delivery.
         client.keepaliveTick();
         QCOMPARE(client.channelKeepalivesSent(), beforeChannel);
-        QCOMPARE(client.sessionKeepalivesSent(), quint64(1));
+        QCOMPARE(client.sessionKeepalivesSent(), quint64(0));
     }
 
     void senderResetCannotInsertAnOldSessionsOffResult()
