@@ -11,6 +11,7 @@
 #include "core/accessories/AlexAntennaFacade.h"
 #include "core/session/TransmitStateFacade.h"
 #include "core/SkuUiProfile.h"
+#include "core/ControlRanges.h"
 #include "core/settings/SettingsScope.h"
 
 #include <QFile>
@@ -219,7 +220,7 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
          && !(id == QLatin1String("diagnostics")
               && root.value(QStringLiteral("version")) == QJsonValue(3))
          && !(id == QLatin1String("display")
-              && root.value(QStringLiteral("version")) == QJsonValue(4))
+              && root.value(QStringLiteral("version")) == QJsonValue(8))
          && !(id == QLatin1String("appearance")
               && root.value(QStringLiteral("version")) == QJsonValue(7))
          && !(id == QLatin1String("pa")
@@ -279,7 +280,10 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                                          == QJsonValue(6))
                                 && !(id == QLatin1String("appearance")
                                      && control.value(QStringLiteral("requiresDescriptionVersion"))
-                                         == QJsonValue(7)))))
+                                         == QJsonValue(7))
+                                && !(id == QLatin1String("display")
+                                     && control.value(QStringLiteral("requiresDescriptionVersion"))
+                                         == QJsonValue(8)))))
                     || (control.value(QStringLiteral("kind")) == QJsonValue(QStringLiteral("table"))
                         && !((id == QLatin1String("dsp")
                               && SetupDescription::validateTnfTable(control))
@@ -304,7 +308,8 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                                .contains(QStringLiteral("setting"))
                         && !SetupDescription::validateDspSettingBinding(control))
                     || (id == QLatin1String("display")
-                        && !SetupDescription::validateDisplaySettingBinding(control))
+                        && !SetupDescription::validateDisplaySettingBinding(control)
+                        && !SetupDescription::validateDisplayPhoneBinding(control))
                     || (id == QLatin1String("dsp")
                         && control.value(QStringLiteral("binding")).toObject()
                                .contains(QStringLiteral("property"))
@@ -564,6 +569,85 @@ bool SetupDescription::validateDisplaySettingBinding(const QJsonObject& control)
         }
         return !control.contains(QStringLiteral("options"))
             && !control.contains(QStringLiteral("enabledWhen"));
+    }
+    return false;
+}
+
+bool SetupDescription::validateDisplayPhoneBinding(const QJsonObject& control)
+{
+    struct Spec {
+        const char* id;
+        const char* phone;
+        const char* kind;
+        const char* capability;
+        int capabilityVersion;
+        int defaultValue;
+        int minimum;
+        int maximum;
+        int step;
+        const char* unit;
+        QStringList choices;
+    };
+    static const Spec specs[] = {
+        {"display.spectrumDefaults.detector", "DisplaySpectrumDetector", "choice",
+         "remoteMediaVersion", 1, ControlRanges::kDisplaySpectrumDetectorDefault, 0, 0, 0, "",
+         {"Peak", "Rosenfell", "Average", "Sample", "RMS"}},
+        {"display.spectrumDefaults.averaging", "DisplaySpectrumAveraging", "choice",
+         "displayExtrasVersion", 1, ControlRanges::kDisplaySpectrumAveragingDefault, 0, 0, 0, "",
+         {"None", "Recursive", "Time Window", "Log Recursive"}},
+        {"display.spectrumDefaults.averageTime", "DisplaySpectrumAverageTimeMs", "integer",
+         "displayExtrasVersion", 1, ControlRanges::kDisplaySpectrumAvgTimeDefaultMs,
+         ControlRanges::kDisplayAvgTimeMinMs, ControlRanges::kDisplayAvgTimeMaxMs,
+         ControlRanges::kDisplayAvgTimeStepMs, "ms", {}},
+        {"display.spectrumDefaults.decimation", "decimation", "integer",
+         "spectrumGrantVersion", 2, ControlRanges::kDisplayDecimationDefault,
+         ControlRanges::kDisplayDecimationMin, ControlRanges::kDisplayDecimationMax,
+         ControlRanges::kDisplayDecimationStep, "", {}},
+        {"display.waterfallDefaults.detector", "DisplayWaterfallDetector", "choice",
+         "remoteMediaVersion", 1, ControlRanges::kDisplayWaterfallDetectorDefault, 0, 0, 0, "",
+         {"Peak", "Rosenfell", "Average", "Sample"}},
+        {"display.waterfallDefaults.averaging", "DisplayWaterfallAveraging", "choice",
+         "displayExtrasVersion", 1, ControlRanges::kDisplayWaterfallAveragingDefault, 0, 0, 0, "",
+         {"None", "Recursive", "Time Window", "Log Recursive"}},
+        {"display.waterfallDefaults.averageTime", "DisplayWaterfallAverageTimeMs", "integer",
+         "displayExtrasVersion", 1, ControlRanges::kDisplayWaterfallAvgTimeDefaultMs,
+         ControlRanges::kDisplayAvgTimeMinMs, ControlRanges::kDisplayAvgTimeMaxMs,
+         ControlRanges::kDisplayAvgTimeStepMs, "ms", {}}
+    };
+    const QJsonObject binding = control.value(QStringLiteral("binding")).toObject();
+    for (const Spec& spec : specs) {
+        if (control.value(QStringLiteral("id")) != QJsonValue(QLatin1String(spec.id))) {
+            continue;
+        }
+        if (binding != QJsonObject{{QStringLiteral("phone"), QLatin1String(spec.phone)}}
+            || control.value(QStringLiteral("kind")) != QJsonValue(QLatin1String(spec.kind))
+            || control.value(QStringLiteral("applies")) != QJsonValue(QStringLiteral("subscription"))
+            || control.value(QStringLiteral("requiresDescriptionVersion")) != QJsonValue(8)
+            || control.value(QStringLiteral("gate")) != QJsonValue(QJsonObject{
+                   {QStringLiteral("capability"), QLatin1String(spec.capability)},
+                   {QStringLiteral("min"), spec.capabilityVersion}})
+            || control.value(QStringLiteral("default")) != QJsonValue(spec.defaultValue)
+            || !control.value(QStringLiteral("label")).isString()
+            || control.value(QStringLiteral("label")).toString().isEmpty()
+            || !control.value(QStringLiteral("tooltip")).isString()) {
+            return false;
+        }
+        if (!spec.choices.isEmpty()) {
+            const QJsonArray options = control.value(QStringLiteral("options")).toArray();
+            if (control.size() != 10 || options.size() != spec.choices.size()) { return false; }
+            for (int i = 0; i < options.size(); ++i) {
+                if (options.at(i) != QJsonValue(QJsonObject{
+                        {QStringLiteral("value"), i},
+                        {QStringLiteral("label"), spec.choices.at(i)}})) { return false; }
+            }
+            return true;
+        }
+        const bool hasUnit = spec.unit[0] != '\0';
+        return control.size() == (hasUnit ? 13 : 12)
+            && control.value(QStringLiteral("min")) == QJsonValue(spec.minimum)
+            && control.value(QStringLiteral("max")) == QJsonValue(spec.maximum)
+            && control.value(QStringLiteral("step")) == QJsonValue(spec.step)
+            && (!hasUnit || control.value(QStringLiteral("unit")) == QJsonValue(QLatin1String(spec.unit)));
     }
     return false;
 }
@@ -1462,10 +1546,12 @@ QString SetupDescription::fitCategoryForVersion(const QString& description, int 
     const int ceiling = categoryId == QLatin1String("hardware") ? 6
         : categoryId == QLatin1String("pa") ? 5
         : categoryId == QLatin1String("appearance") ? 7
-        : categoryId == QLatin1String("display") ? 4 : 3;
+        : categoryId == QLatin1String("display") ? 8 : 3;
     category.insert(QStringLiteral("version"),
                     categoryId == QLatin1String("appearance") && version < 7
-                        ? qMin(version, 4) : qMin(version, ceiling));
+                        ? qMin(version, 4)
+                        : categoryId == QLatin1String("display") && version < 8
+                            ? qMin(version, 4) : qMin(version, ceiling));
     if (version >= 2 && category.value(QStringLiteral("category")).toObject()
             .value(QStringLiteral("id")) == QJsonValue(QStringLiteral("dsp"))) {
         category.insert(QStringLiteral("coverage"), QStringLiteral(

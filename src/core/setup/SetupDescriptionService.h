@@ -41,6 +41,7 @@ public:
     static bool validateAudioPropertyBinding(const QJsonObject& control);
     static bool validateDspSettingBinding(const QJsonObject& control);
     static bool validateDisplaySettingBinding(const QJsonObject& control);
+    static bool validateDisplayPhoneBinding(const QJsonObject& control);
     static bool validateAppearanceColourBinding(const QJsonObject& control);
     static bool validateAppearanceMeterStyleBinding(const QJsonObject& control);
     static bool validateSettingToggleEncoding(const QJsonObject& control);

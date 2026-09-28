@@ -1,5 +1,5 @@
 {
-  "version": 4,
+  "version": 8,
   "category": {
     "id": "display",
     "title": "Display",
@@ -113,6 +113,121 @@
               "step": 1,
               "unit": "fps",
               "default": 30
+            },
+            {
+              "id": "display.spectrumDefaults.detector",
+              "label": "Spectrum Detector:",
+              "tooltip": "Spectrum bin-reduction policy. Peak takes the maximum bin in each display pixel. Rosenfell alternates max/min for a classic spectrum look. Average takes the arithmetic mean. Sample takes the first bin. RMS computes root-mean-square power.",
+              "kind": "choice",
+              "binding": {"phone": "DisplaySpectrumDetector"},
+              "applies": "subscription",
+              "requiresDescriptionVersion": 8,
+              "options": [
+                {"value": 0, "label": "Peak"},
+                {"value": 1, "label": "Rosenfell"},
+                {"value": 2, "label": "Average"},
+                {"value": 3, "label": "Sample"},
+                {"value": 4, "label": "RMS"}
+              ],
+              "default": 0,
+              "gate": {"capability": "remoteMediaVersion", "min": 1}
+            },
+            {
+              "id": "display.spectrumDefaults.averaging",
+              "label": "Spectrum Averaging:",
+              "tooltip": "Spectrum frame-averaging mode. None shows raw FFT output per frame. Recursive exponentially smooths in linear power space. Time Window approximates a sliding average. Log Recursive smooths in the dB domain for a more natural look at low levels.",
+              "kind": "choice",
+              "binding": {"phone": "DisplaySpectrumAveraging"},
+              "applies": "subscription",
+              "requiresDescriptionVersion": 8,
+              "options": [
+                {"value": 0, "label": "None"},
+                {"value": 1, "label": "Recursive"},
+                {"value": 2, "label": "Time Window"},
+                {"value": 3, "label": "Log Recursive"}
+              ],
+              "default": 3,
+              "gate": {"capability": "displayExtrasVersion", "min": 1}
+            },
+            {
+              "id": "display.spectrumDefaults.averageTime",
+              "label": "Spectrum Avg Time:",
+              "tooltip": "Spectrum averaging time constant. Larger = heavier smoothing, slower response. Translates to a frame-by-frame alpha via α = exp(−1 / (fps × τ)) per Thetis.",
+              "kind": "integer",
+              "binding": {"phone": "DisplaySpectrumAverageTimeMs"},
+              "applies": "subscription",
+              "requiresDescriptionVersion": 8,
+              "min": 10, "max": 9999, "step": 10, "unit": "ms", "default": 30,
+              "gate": {"capability": "displayExtrasVersion", "min": 1}
+            },
+            {
+              "id": "display.spectrumDefaults.decimation",
+              "label": "Decimation:",
+              "tooltip": "Display decimation. Higher the number, the lower the resolution.",
+              "kind": "integer",
+              "binding": {"phone": "decimation"},
+              "applies": "subscription",
+              "requiresDescriptionVersion": 8,
+              "min": 1, "max": 16, "step": 1, "default": 1,
+              "gate": {"capability": "spectrumGrantVersion", "min": 2}
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "display.waterfallDefaults",
+      "title": "Waterfall Defaults",
+      "where": "phone",
+      "coverage": "partial",
+      "sections": [
+        {
+          "title": "Display",
+          "controls": [
+            {
+              "id": "display.waterfallDefaults.detector",
+              "label": "WF Detector:",
+              "tooltip": "Waterfall bin-reduction policy. Peak takes the maximum bin per pixel. Rosenfell alternates max/min. Average takes the arithmetic mean. Sample takes the first bin.",
+              "kind": "choice",
+              "binding": {"phone": "DisplayWaterfallDetector"},
+              "applies": "subscription",
+              "requiresDescriptionVersion": 8,
+              "options": [
+                {"value": 0, "label": "Peak"},
+                {"value": 1, "label": "Rosenfell"},
+                {"value": 2, "label": "Average"},
+                {"value": 3, "label": "Sample"}
+              ],
+              "default": 0,
+              "gate": {"capability": "remoteMediaVersion", "min": 1}
+            },
+            {
+              "id": "display.waterfallDefaults.averaging",
+              "label": "WF Averaging:",
+              "tooltip": "Waterfall frame-averaging mode. None shows raw FFT output per row. Recursive exponentially smooths in linear power space. Time Window approximates a sliding average. Log Recursive smooths in the dB domain for better low-signal visibility.",
+              "kind": "choice",
+              "binding": {"phone": "DisplayWaterfallAveraging"},
+              "applies": "subscription",
+              "requiresDescriptionVersion": 8,
+              "options": [
+                {"value": 0, "label": "None"},
+                {"value": 1, "label": "Recursive"},
+                {"value": 2, "label": "Time Window"},
+                {"value": 3, "label": "Log Recursive"}
+              ],
+              "default": 0,
+              "gate": {"capability": "displayExtrasVersion", "min": 1}
+            },
+            {
+              "id": "display.waterfallDefaults.averageTime",
+              "label": "WF Avg Time:",
+              "tooltip": "Waterfall averaging time constant. Independent from the spectrum averaging time. Larger = heavier smoothing. Translates to a frame-by-frame alpha via α = exp(−1 / (fps × τ)) per Thetis.",
+              "kind": "integer",
+              "binding": {"phone": "DisplayWaterfallAverageTimeMs"},
+              "applies": "subscription",
+              "requiresDescriptionVersion": 8,
+              "min": 10, "max": 9999, "step": 10, "unit": "ms", "default": 120,
+              "gate": {"capability": "displayExtrasVersion", "min": 1}
             }
           ]
         }

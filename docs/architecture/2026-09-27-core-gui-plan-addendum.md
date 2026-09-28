@@ -2122,7 +2122,14 @@ colours for the same signal.
   V1-V3 retain ten swatches without defaults; V4-V6 retain the previous
   Appearance V4 shape; V7 adds only the three new controls. Root app/Core and
   all seven rebuilt Setup, settings-scope and S-meter suites pass (9.12 s).
-  The phone renderer is still phone-owned work. Local Display controls,
+  Signed `12979352` adds seven existing RX subscription controls in Display
+  V8: spectrum/waterfall detector, averaging and time, plus decimation 1-16.
+  The phone owner confirmed all seven dispatch aliases map to its current
+  typed per-pan settings; they are not new keys or Core write permissions.
+  V1-V7 retain their exact 11/14-control projections and prior category
+  versions. Root reviewed the implementation and rebuilt app/Core plus all
+  five named Setup, catalogue and settings-scope suites: 5/5 pass (7.00 s).
+  The phone renderer is still phone-owned work. Other local Display controls,
   reset/copy actions and remaining derived/contextual controls remain open.
   The phone owner confirmed that literal PascalCase binding names
   map to its existing typed per-pan/current-band model and that explicit
@@ -2392,7 +2399,7 @@ colours for the same signal.
 - Ruling basis: JJ requires the cause and suggested fix at actual load.
   Preserve the amplitude contract and measure delivery and playback boundaries
   before choosing a production or fixture repair.
-- Status: the lead reproduced a fixture defect by delaying the operator's
+- Status: signed `ecbcbe90` fixes a fixture defect reproduced by delaying the operator's
   route until two seconds had already been rendered. The old assertion failed
   at 0.0374726 versus 0.0949995: playback first became audible at frame 107584,
   after the fixed 48000-frame skip, with zero feeder drops, trims or restarts.
