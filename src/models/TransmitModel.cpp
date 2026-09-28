@@ -274,6 +274,7 @@
 #include "TransmitModel.h"
 #include "core/AppSettings.h"
 #include "core/ParaEqCurve.h"
+#include "core/CfcProfile.h"
 #include "core/PaProfile.h"
 #include "core/PureSignal.h"
 #include "core/StepAttenuatorController.h"
@@ -282,6 +283,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonValue>
+#include <QScopedValueRollback>
 
 #include <algorithm>
 #include <array>
@@ -858,9 +860,16 @@ QString TransmitModel::settingRangeRefusal(const QByteArray& propertyName,
     // R-R3-49 (group A fix wave, M4): a parametric EQ curve the Core could
     // not load would leave its TX channel on the flat default curve. An
     // empty value is the saved "no curve" and loads the default, as the
-    // TX profile's blank value does. The TX EQ and CFC curves share the
-    // envelope and the curve JSON, so one loader checks both.
-    if (propertyName == "txEqParaEqData" || propertyName == "cfcParaEqData") {
+    // TX profile's blank value does. The curves share the gzip envelope,
+    // but CFC contains two widget JSON objects; each has its own loader.
+    if (propertyName == "cfcParaEqData") {
+        CfcProfile::Profile points;
+        if (value.toString().isEmpty() || CfcProfile::decode(value.toString(), points)) {
+            return {};
+        }
+        return QStringLiteral("The Core could not read that equalizer curve. Save the curve again and retry.");
+    }
+    if (propertyName == "txEqParaEqData") {
         const QString data = value.toString();
         ParaEqCurve::TxEqPoints points;
         if (data.isEmpty() || ParaEqCurve::loadTxEqPoints(data, points)) {
@@ -1002,19 +1011,57 @@ QString TransmitModel::settingRangeRefusal(const QByteArray& propertyName,
                 .arg(kTxEqFreqHzMin).arg(kTxEqFreqHzMax));
     }
     if (propertyName == "cfcCompressionJson") {
-        return bands(kCfcCompressionDbMin, kCfcCompressionDbMax,
+        const QString base = bands(kCfcCompressionDbMin, kCfcCompressionDbMax,
             QStringLiteral("Choose ten CFC compression levels, each from %1 to %2 dB.")
                 .arg(kCfcCompressionDbMin).arg(kCfcCompressionDbMax));
+        if (!base.isEmpty()) { return base; }
+        CfcProfile::Profile p;
+        if (!CfcProfile::decode(m_cfcParaEqData, p)) { return {}; }
+        if (p.f.size() != 10) {
+            return QStringLiteral("This CFC curve has five or eighteen bands. Update the app or use the full CFC controls.");
+        }
+        std::array<int, 10> values{};
+        tenValuesFromJson(value.toString(), values);
+        for (int i = 0; i < 10; ++i) { p.g[static_cast<std::size_t>(i)] = values[static_cast<std::size_t>(i)]; }
+        return CfcProfile::encode(p).isEmpty()
+            ? QStringLiteral("Those CFC values cannot form a complete curve.") : QString();
     }
     if (propertyName == "cfcEqFreqJson") {
-        return bands(kCfcEqFreqHzMin, kCfcEqFreqHzMax,
+        const QString base = bands(kCfcEqFreqHzMin, kCfcEqFreqHzMax,
             QStringLiteral("Choose ten CFC band centres, each from %1 to %2 Hz.")
                 .arg(kCfcEqFreqHzMin).arg(kCfcEqFreqHzMax));
+        if (!base.isEmpty()) { return base; }
+        CfcProfile::Profile p;
+        if (!CfcProfile::decode(m_cfcParaEqData, p)) { return {}; }
+        if (p.f.size() != 10) {
+            return QStringLiteral("This CFC curve has five or eighteen bands. Update the app or use the full CFC controls.");
+        }
+        std::array<int, 10> values{};
+        tenValuesFromJson(value.toString(), values);
+        for (int i = 0; i < 10; ++i) {
+            p.f[static_cast<std::size_t>(i)] = values[static_cast<std::size_t>(i)];
+            p.postF[static_cast<std::size_t>(i)] = values[static_cast<std::size_t>(i)];
+        }
+        p.minHz = p.f.front(); p.maxHz = p.f.back();
+        p.postMinHz = p.postF.front(); p.postMaxHz = p.postF.back();
+        return CfcProfile::encode(p).isEmpty()
+            ? QStringLiteral("Choose CFC band centres in increasing order within the curve range.") : QString();
     }
     if (propertyName == "cfcPostEqBandGainJson") {
-        return bands(kCfcPostEqBandGainDbMin, kCfcPostEqBandGainDbMax,
+        const QString base = bands(kCfcPostEqBandGainDbMin, kCfcPostEqBandGainDbMax,
             QStringLiteral("Choose ten CFC post-EQ band levels, each from %1 to %2 dB.")
                 .arg(kCfcPostEqBandGainDbMin).arg(kCfcPostEqBandGainDbMax));
+        if (!base.isEmpty()) { return base; }
+        CfcProfile::Profile p;
+        if (!CfcProfile::decode(m_cfcParaEqData, p)) { return {}; }
+        if (p.f.size() != 10) {
+            return QStringLiteral("This CFC curve has five or eighteen bands. Update the app or use the full CFC controls.");
+        }
+        std::array<int, 10> values{};
+        tenValuesFromJson(value.toString(), values);
+        for (int i = 0; i < 10; ++i) { p.e[static_cast<std::size_t>(i)] = values[static_cast<std::size_t>(i)]; }
+        return CfcProfile::encode(p).isEmpty()
+            ? QStringLiteral("Those CFC values cannot form a complete curve.") : QString();
     }
     // R-R3-49 (parity Task 5): the per-band power and tune power, each band
     // with its per-band setter's range (setPowerForBand 0 to 100 W;
@@ -2106,6 +2153,7 @@ void TransmitModel::loadFromSettings(const QString& mac)
 
     // ── CFC scalars (3M-3a-ii Batch 2) ────────────────────────────────────
     // Defaults from Thetis database.cs:4724-4733 [v2.10.3.13].
+    beginCfcProfileRestore();
     setCfcEnabled(s.value(pfx + QLatin1String("CFCEnabled"),
                            QStringLiteral("False")).toString() == QLatin1String("True"));
     setCfcPostEqEnabled(s.value(pfx + QLatin1String("CFCPostEqEnabled"),
@@ -2139,6 +2187,8 @@ void TransmitModel::loadFromSettings(const QString& mac)
     // CFC parametric-EQ blob — opaque string round-trip.
     setCfcParaEqData(s.value(pfx + QLatin1String("CFCParaEQData"),
                               QStringLiteral("")).toString());
+    endCfcProfileRestore();
+    emit cfcSettingsReloaded();
 
     // ── CPDR (3M-3a-ii Batch 2) ───────────────────────────────────────────
     // cpdrOn lives at hardware/<mac>/tx/cpdr/on — outside the per-profile
@@ -3323,6 +3373,8 @@ void TransmitModel::setCfcCompressionJson(const QString& json)
 {
     std::array<int, 10> values{};
     if (!tenValuesFromJson(json, values)) { return; }
+    if (!cfcProfileRestoreInProgress() && !m_projectingPairedCfc
+        && updatePairedCfcArray(CfcField::Compression, values)) { return; }
     for (int i = 0; i < 10; ++i) { setCfcCompression(i, values[static_cast<std::size_t>(i)]); }
 }
 
@@ -3330,6 +3382,8 @@ void TransmitModel::setCfcEqFreqJson(const QString& json)
 {
     std::array<int, 10> values{};
     if (!tenValuesFromJson(json, values)) { return; }
+    if (!cfcProfileRestoreInProgress() && !m_projectingPairedCfc
+        && updatePairedCfcArray(CfcField::Frequency, values)) { return; }
     for (int i = 0; i < 10; ++i) { setCfcEqFreq(i, values[static_cast<std::size_t>(i)]); }
 }
 
@@ -3337,7 +3391,56 @@ void TransmitModel::setCfcPostEqBandGainJson(const QString& json)
 {
     std::array<int, 10> values{};
     if (!tenValuesFromJson(json, values)) { return; }
+    if (!cfcProfileRestoreInProgress() && !m_projectingPairedCfc
+        && updatePairedCfcArray(CfcField::PostEqBandGain, values)) { return; }
     for (int i = 0; i < 10; ++i) { setCfcPostEqBandGain(i, values[static_cast<std::size_t>(i)]); }
+}
+
+bool TransmitModel::updatePairedCfcArray(CfcField field, const std::array<int, 10>& values)
+{
+    CfcProfile::Profile p;
+    if (!CfcProfile::decode(m_cfcParaEqData, p)) { return false; }
+    if (p.f.size() != 10) { return true; }
+    for (int i = 0; i < 10; ++i) {
+        const double value = values[static_cast<std::size_t>(i)];
+        if (field == CfcField::Frequency) {
+            p.f[static_cast<std::size_t>(i)] = value;
+            p.postF[static_cast<std::size_t>(i)] = value;
+        }
+        if (field == CfcField::Compression) { p.g[static_cast<std::size_t>(i)] = value; }
+        if (field == CfcField::PostEqBandGain) { p.e[static_cast<std::size_t>(i)] = value; }
+    }
+    if (field == CfcField::Frequency) {
+        p.minHz = p.f.front();
+        p.maxHz = p.f.back();
+        p.postMinHz = p.postF.front();
+        p.postMaxHz = p.postF.back();
+    }
+    const QString encoded = CfcProfile::encode(p);
+    if (!encoded.isEmpty()) { setCfcParaEqData(encoded); }
+    return true;
+}
+
+bool TransmitModel::updatePairedCfc(CfcField field, int index, double value)
+{
+    CfcProfile::Profile p;
+    if (!CfcProfile::decode(m_cfcParaEqData, p)) { return false; }
+    if (field == CfcField::Precomp) { p.precompDb = value; }
+    else if (field == CfcField::PostEqGlobal) { p.postEqGainDb = value; }
+    else {
+        if (p.f.size() != 10 || index < 0 || index >= 10) { return true; }
+        const auto k = static_cast<std::size_t>(index);
+        if (field == CfcField::Frequency) {
+            p.f[k] = value;
+            p.postF[k] = value;
+            if (index == 0) { p.minHz = value; p.postMinHz = value; }
+            if (index == 9) { p.maxHz = value; p.postMaxHz = value; }
+        } else if (field == CfcField::Compression) { p.g[k] = value; }
+        else if (field == CfcField::PostEqBandGain) { p.e[k] = value; }
+    }
+    const QString encoded = CfcProfile::encode(p);
+    if (!encoded.isEmpty()) { setCfcParaEqData(encoded); }
+    return true;
 }
 
 // ── R-R3-49 (parity Task 5): the per-band power and tune power ────────────
@@ -3453,6 +3556,8 @@ void TransmitModel::setCfcPrecompDb(int dB)
     // Clamp to Thetis Designer range per frmCFCConfig.Designer.cs:408-422
     // [v2.10.3.13]:  nudCFC_precomp.Maximum = 16, .Minimum = 0.
     const int clamped = std::clamp(dB, kCfcPrecompDbMin, kCfcPrecompDbMax);
+    if (!cfcProfileRestoreInProgress() && !m_projectingPairedCfc
+        && updatePairedCfc(CfcField::Precomp, -1, clamped)) { return; }
     if (clamped == m_cfcPrecompDb) { return; }
     m_cfcPrecompDb = clamped;
     persistOne(QStringLiteral("CFCPreComp"), QString::number(clamped));
@@ -3465,6 +3570,8 @@ void TransmitModel::setCfcPostEqGainDb(int dB)
     // [v2.10.3.13]:  nudCFC_posteqgain.Maximum = 24, .Minimum = -24
     // (encoded via decimal sign bit in the 4th int).
     const int clamped = std::clamp(dB, kCfcPostEqGainDbMin, kCfcPostEqGainDbMax);
+    if (!cfcProfileRestoreInProgress() && !m_projectingPairedCfc
+        && updatePairedCfc(CfcField::PostEqGlobal, -1, clamped)) { return; }
     if (clamped == m_cfcPostEqGainDb) { return; }
     m_cfcPostEqGainDb = clamped;
     persistOne(QStringLiteral("CFCPostEqGain"), QString::number(clamped));
@@ -3497,6 +3604,8 @@ void TransmitModel::setCfcEqFreq(int index, int hz)
     // Clamp to Thetis Designer range per frmCFCConfig.Designer.cs:267-286
     // [v2.10.3.13]:  nudCFC_f.Maximum = 20000, .Minimum = 0.
     const int clamped = std::clamp(hz, kCfcEqFreqHzMin, kCfcEqFreqHzMax);
+    if (!cfcProfileRestoreInProgress() && !m_projectingPairedCfc
+        && updatePairedCfc(CfcField::Frequency, index, clamped)) { return; }
     if (clamped == m_cfcEqFreqHz[static_cast<std::size_t>(index)]) { return; }
     m_cfcEqFreqHz[static_cast<std::size_t>(index)] = clamped;
     // Thetis TXProfile keys: CFCEqFreq0..CFCEqFreq9 (database.cs:4757-4766 [v2.10.3.13]).
@@ -3511,6 +3620,8 @@ void TransmitModel::setCfcCompression(int index, int dB)
     // Clamp to Thetis Designer range per frmCFCConfig.Designer.cs:217-236
     // [v2.10.3.13]:  nudCFC_c.Maximum = 16, .Minimum = 0.
     const int clamped = std::clamp(dB, kCfcCompressionDbMin, kCfcCompressionDbMax);
+    if (!cfcProfileRestoreInProgress() && !m_projectingPairedCfc
+        && updatePairedCfc(CfcField::Compression, index, clamped)) { return; }
     if (clamped == m_cfcCompressionDb[static_cast<std::size_t>(index)]) { return; }
     m_cfcCompressionDb[static_cast<std::size_t>(index)] = clamped;
     // Thetis TXProfile keys: CFCPreComp0..CFCPreComp9 (database.cs:4735-4744
@@ -3527,6 +3638,8 @@ void TransmitModel::setCfcPostEqBandGain(int index, int dB)
     // Clamp to Thetis Designer range per frmCFCConfig.Designer.cs:564-583
     // [v2.10.3.13]:  nudCFC_gain.Maximum = 24, .Minimum = -24.
     const int clamped = std::clamp(dB, kCfcPostEqBandGainDbMin, kCfcPostEqBandGainDbMax);
+    if (!cfcProfileRestoreInProgress() && !m_projectingPairedCfc
+        && updatePairedCfc(CfcField::PostEqBandGain, index, clamped)) { return; }
     if (clamped == m_cfcPostEqBandGainDb[static_cast<std::size_t>(index)]) { return; }
     m_cfcPostEqBandGainDb[static_cast<std::size_t>(index)] = clamped;
     // Thetis TXProfile keys: CFCPostEqGain0..CFCPostEqGain9 (database.cs:4746-4755 [v2.10.3.13]).
@@ -3538,12 +3651,46 @@ void TransmitModel::setCfcPostEqBandGain(int index, int dB)
 void TransmitModel::setCfcParaEqData(const QString& data)
 {
     if (data == m_cfcParaEqData) { return; }
+    const bool nestedProjection = m_projectingPairedCfc;
     // From Thetis database.cs:4768 [v2.10.3.13]: dr["CFCParaEQData"] = "".
     // Stored as opaque string for forward-compat round-trip with imported
     // Thetis profiles.  No validation.
     m_cfcParaEqData = data;
+    const quint64 generation = ++m_cfcProfileGeneration;
     persistOne(QStringLiteral("CFCParaEQData"), data);
-    emit cfcParaEqDataChanged(data);
+    CfcProfile::Profile paired;
+    if (!cfcProfileRestoreInProgress() && CfcProfile::decode(data, paired)) {
+        // The paired blob is authoritative. Keep the older integer mirrors
+        // useful to ten-band clients without writing back into the curve.
+        QScopedValueRollback<bool> projecting(m_projectingPairedCfc, true);
+        [&]() {
+            setCfcPrecompDb(static_cast<int>(std::lround(paired.precompDb)));
+            if (generation != m_cfcProfileGeneration) { return; }
+            setCfcPostEqGainDb(static_cast<int>(std::lround(paired.postEqGainDb)));
+            if (generation != m_cfcProfileGeneration) { return; }
+            if (paired.f.size() == 10) {
+                for (int i = 0; i < 10; ++i) {
+                    const auto k = static_cast<std::size_t>(i);
+                    setCfcEqFreq(i, static_cast<int>(std::lround(paired.f[k])));
+                    if (generation != m_cfcProfileGeneration) { return; }
+                    setCfcCompression(i, static_cast<int>(std::lround(paired.g[k])));
+                    if (generation != m_cfcProfileGeneration) { return; }
+                    setCfcPostEqBandGain(i, static_cast<int>(std::lround(paired.e[k])));
+                    if (generation != m_cfcProfileGeneration) { return; }
+                }
+            }
+        }();
+    }
+    // Nested writes notify only when the outer projection has released its
+    // guard, so DSP and mirrors see the final curve once.
+    if (!nestedProjection) { emit cfcParaEqDataChanged(m_cfcParaEqData); }
+}
+
+void TransmitModel::endCfcProfileRestore() noexcept
+{
+    if (m_cfcProfileRestoreDepth == 0) { return; }
+    --m_cfcProfileRestoreDepth;
+    if (m_cfcProfileRestoreDepth == 0) { emit cfcProfileRestored(); }
 }
 
 // ── CPDR ──────────────────────────────────────────────────────────────────

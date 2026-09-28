@@ -66,6 +66,7 @@
 #pragma once
 
 #include <QString>
+#include <limits>
 #include <optional>
 
 namespace NereusSDR {
@@ -74,9 +75,9 @@ namespace NereusSDR {
 // Compress_gzip / Decompress_gzip [v2.10.3.13].
 //
 // The Thetis ucParametricEq UserControl serializes its band/preamp
-// state as Newtonsoft JSON, then wraps that JSON in a gzip+base64url
-// envelope before stuffing it into the TXProfile CFCParaEQData /
-// TXParaEQData columns.  NereusSDR's ParametricEqWidget produces
+// state as Newtonsoft JSON. TXParaEQData wraps one widget JSON; CFCParaEQData
+// wraps two widget JSON objects joined by literal <SEP>. NereusSDR's
+// ParametricEqWidget produces
 // Thetis-compatible JSON via saveToJson(); this helper applies the
 // same envelope so:
 //
@@ -107,7 +108,8 @@ QString encode(const QString& payload);
 // all failure modes to nullopt so callers don't need to distinguish.
 //
 // From Thetis Common.cs:1764-1790 [v2.10.3.13].
-std::optional<QString> decode(const QString& blob);
+std::optional<QString> decode(const QString& blob,
+                              qsizetype maxDecodedBytes = std::numeric_limits<qsizetype>::max());
 
 }  // namespace ParaEqEnvelope
 

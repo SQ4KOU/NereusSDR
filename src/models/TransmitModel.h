@@ -654,6 +654,12 @@ public:
     /// has no range here). `propertyName` is the property's name on the
     /// link; the range is the setter's own.
     QString settingRangeRefusal(const QByteArray& propertyName, const QVariant& value) const;
+    bool cfcProfileRestoreInProgress() const noexcept { return m_cfcProfileRestoreDepth != 0; }
+    bool cfcProfileMutationInProgress() const noexcept {
+        return cfcProfileRestoreInProgress() || m_projectingPairedCfc;
+    }
+    void beginCfcProfileRestore() noexcept { ++m_cfcProfileRestoreDepth; }
+    void endCfcProfileRestore() noexcept;
 
     // ── R-R3-49 (parity Task 3): the Core's TX profiles on the link ───────
     //
@@ -2096,6 +2102,8 @@ public slots:
     QString filterDisplayText(DSPMode mode) const;
 
 signals:
+    void cfcProfileRestored();
+    void cfcSettingsReloaded();
     // ── TX filter bandwidth (Plan 4 D1) ────────────────────────────────────
     /// Emitted when filterLow or filterHigh changes.  Carries both values
     /// so subscribers don't need a second getter call.
@@ -2453,6 +2461,11 @@ signals:
     void twoToneDrivePowerSourceChanged(NereusSDR::DrivePowerSource source);
 
 private:
+    enum class CfcField { Frequency, Compression, PostEqBandGain, Precomp, PostEqGlobal };
+    // Returns true when a valid paired curve owns CFC, including when the
+    // requested legacy edit is invalid and must leave it unchanged.
+    bool updatePairedCfc(CfcField field, int index, double value);
+    bool updatePairedCfcArray(CfcField field, const std::array<int, 10>& values);
     bool m_mox{false};
     bool m_tune{false};
     int m_power{100};
@@ -2803,6 +2816,9 @@ private:
     // Opaque parametric-EQ blob.  database.cs:4768 [v2.10.3.13]:
     //   dr["CFCParaEQData"] = "";
     QString m_cfcParaEqData;
+    int m_cfcProfileRestoreDepth = 0;
+    bool m_projectingPairedCfc = false;
+    quint64 m_cfcProfileGeneration = 0;
 
     // CPDR.  cpdrOn is global console state (NOT in TXProfile) — Thetis
     // wires it via SetGeneralSetting(0, OtherButtonId.COMP, ...) at

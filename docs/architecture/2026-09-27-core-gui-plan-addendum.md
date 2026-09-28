@@ -971,8 +971,15 @@ colours for the same signal.
 - Ruling: JJ requires every gap found in this effort to be built. No separate
   ruling on CFC behavior has been requested or received; preserve the intended
   Thetis-derived controls while completing their Core apply path.
-- Status: OPEN. Source verified by the lead; variable-width model/DSP application,
-  persistence, remote atomic editing and regression coverage remain required.
+- Status: BUILT in signed `efbd90b`, integrated with the current Core and GUI.
+  The paired codec preserves independent compression/post-EQ frequency grids,
+  applies five/ten/eighteen bands and both Q arrays, and retains opaque saved
+  data with the legacy fallback. Ten-band compatibility edits preserve the
+  paired curves; incompatible old-width edits are refused. Profile restoration
+  and direct settings reload apply one final coherent CFC state, including
+  enabled flags; nested curve edits retain the newest value. The integrated
+  app/Core build and all five focused suites passed (7.28 seconds). Tests use
+  a TX-channel seam, with no physical RF or audio-device acceptance claimed.
 - Plan: complete DSP Setup parity and live Core application.
 
 ### G-61: Phone transmit Setup needs the desktop's on-air lock
@@ -1008,16 +1015,24 @@ colours for the same signal.
   No real service or radio configuration was changed.
 - Plan: station packaging and background-service manager.
 
-### G-63: Two mini-display tests missed the initial receive-context deadline under load
+### G-63: Mini-display tests missed the initial receive-context deadline under load
 
 - Evidence: the mini-display lane observed two five-second receive-setup waits
   fail before transmit assertions. Later full runs passed under concurrent builds,
-  but the failed runs predate the new setup-stage diagnostics.
+  and a further instrumented failure located the delay before the first FFT.
+  The session was ready at 53 ms and grants arrived at 56 ms; at 4592 ms
+  the source had published no FFT and completed no I/Q handoff after 174
+  synthetic submissions, with 86 dropped inputs. A handoff is counted after
+  feedIQ returns, so this does not distinguish a blocked first feed from
+  a worker that has not begun draining its queue.
 - Ruling: JJ requires the cause and a suggested fix for failures under load;
   increasing the deadline or treating a rerun as a fix is not authorized.
 - Status: OPEN cause. The lane is adding stage diagnostics and retaining the
   failures separately from the verified analyzer-ordering and display-lifetime
-  fixes. No deadline change or hardware acceptance is claimed.
+  fixes. After rebuilding every affected executable, nine suites passed in
+  91.94 seconds; that does not explain the prior failure. The next diagnostic
+  captures source queue state and a worker stack before the unchanged deadline.
+  No deadline change or hardware acceptance is claimed.
 - Plan: mini-spectrum display integration and tests at real load.
 
 ## How this addendum is kept

@@ -1015,6 +1015,7 @@ set(CORE_SOURCES
     src/core/MoxController.cpp
     src/core/MicProfileManager.cpp
     src/core/ParaEqEnvelope.cpp
+    src/core/CfcProfile.cpp
     src/core/ParaEqCurve.cpp
     src/core/ParaEqCurve.h
     src/core/TwoToneController.cpp
