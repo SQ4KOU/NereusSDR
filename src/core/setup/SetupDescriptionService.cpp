@@ -93,7 +93,7 @@ bool validDiagnosticsEnvelope(const QJsonObject& root)
 bool validAppearanceEnvelope(const QJsonObject& root)
 {
     const QJsonArray pages = root.value(QStringLiteral("pages")).toArray();
-    if (root.size() != 3 || root.value(QStringLiteral("version")) != QJsonValue(1)
+    if (root.size() != 3 || root.value(QStringLiteral("version")) != QJsonValue(4)
         || root.value(QStringLiteral("category")) != QJsonValue(QJsonObject{
             {QStringLiteral("id"), QStringLiteral("appearance")},
             {QStringLiteral("title"), QStringLiteral("Appearance")},
@@ -130,6 +130,8 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
          && !(id == QLatin1String("diagnostics")
               && root.value(QStringLiteral("version")) == QJsonValue(3))
          && !(id == QLatin1String("display")
+              && root.value(QStringLiteral("version")) == QJsonValue(4))
+         && !(id == QLatin1String("appearance")
               && root.value(QStringLiteral("version")) == QJsonValue(4))
          && !(id == QLatin1String("pa")
               && root.value(QStringLiteral("version")) == QJsonValue(5)))
@@ -1206,6 +1208,8 @@ QString SetupDescription::fitCategoryForVersion(const QString& description, int 
     const QJsonDocument document = QJsonDocument::fromJson(description.toUtf8());
     if (!document.isObject()) { return {}; }
     QJsonObject category = document.object();
+    const QString categoryId = category.value(QStringLiteral("category")).toObject()
+        .value(QStringLiteral("id")).toString();
     QJsonArray pages;
     for (const QJsonValue& rawPage : category.value(QStringLiteral("pages")).toArray()) {
         QJsonObject page = rawPage.toObject();
@@ -1214,9 +1218,16 @@ QString SetupDescription::fitCategoryForVersion(const QString& description, int 
             QJsonObject section = rawSection.toObject();
             QJsonArray controls;
             for (const QJsonValue& rawControl : section.value(QStringLiteral("controls")).toArray()) {
-                const QJsonObject control = rawControl.toObject();
+                QJsonObject control = rawControl.toObject();
                 if (control.value(QStringLiteral("requiresDescriptionVersion")).toInt(1) <= version) {
-                    controls.append(rawControl);
+                    if (version < 4 && (categoryId == QLatin1String("display")
+                                        || categoryId == QLatin1String("appearance"))) {
+                        control.remove(QStringLiteral("default"));
+                        if (control.value(QStringLiteral("kind")) == QJsonValue(QStringLiteral("decimal"))) {
+                            control.remove(QStringLiteral("decimals"));
+                        }
+                    }
+                    controls.append(control);
                 }
             }
             if (!controls.isEmpty()) {
@@ -1231,10 +1242,8 @@ QString SetupDescription::fitCategoryForVersion(const QString& description, int 
     }
     if (pages.isEmpty()) { return {}; }
     category.insert(QStringLiteral("pages"), pages);
-    const QString categoryId = category.value(QStringLiteral("category")).toObject()
-        .value(QStringLiteral("id")).toString();
     const int ceiling = categoryId == QLatin1String("pa") ? 5
-        : categoryId == QLatin1String("display") ? 4 : 3;
+        : categoryId == QLatin1String("display") || categoryId == QLatin1String("appearance") ? 4 : 3;
     category.insert(QStringLiteral("version"), qMin(version, ceiling));
     if (version >= 2 && category.value(QStringLiteral("category")).toObject()
             .value(QStringLiteral("id")) == QJsonValue(QStringLiteral("dsp"))) {

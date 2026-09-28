@@ -1,4 +1,4 @@
-# Setup description versions 1–4
+# Setup description versions 1–5
 
 The Core sends the desktop's built Setup pages as JSON strings on the read-only
 `setup` mirror object (`SetupDescription`). It has one string property per
@@ -81,8 +81,9 @@ the final alpha byte. This is ColorSwatchButton's phone-facing format; the
 desktop's own AppSettings uses Qt `HexArgb` (`#AARRGGBB`) and is not copied to
 the phone. Core accepts only the ten named IDs/phone keys and exact default
 colours. The hidden Waterfall Low Color row, Reset Colors action, and Meter
-Styles controls remain undescribed. This Appearance page needs no new
-description version or station settings permission.
+Styles controls remain undescribed. Appearance's source category is V4 so its
+RGBA defaults are sent only to V4+ peers; older projections retain all ten
+colour controls without `default`. No station settings permission is needed.
 
 An optional `decimals` field on a `kind:readout` control is an integer from 0
 through 6. It formats a finite numeric mirrored value with that many decimal
@@ -112,13 +113,16 @@ command or result binding. The actual peer must separately declare
 nothing. A V3 peer still receives the older controls with their existing
 semantics. The Core filters every control above the peer's negotiated
 description version, drops empty sections and pages, and caps an unknown
-future declaration at version 5. Display retains its version-4 ceiling;
-categories other than Display and PA retain their version-3 ceiling. No mirror
-field or ordinal changes.
+future declaration at version 5. Display and Appearance retain version-4
+ceilings; PA has a version-5 ceiling, and other categories retain their
+version-3 ceiling. No mirror field or ordinal changes.
 
-Version 5 adds only two optional PA Values telemetry readouts: `PA Current:`
-binds `telemetry.radio.paCurrentAmps` with two decimals and `A`, and
-`DC Voltage:` binds `telemetry.radio.supplyVolts` with one decimal and `V`.
+Version 5 adds only two optional PA Values telemetry readouts. The closed
+bindings are `{"telemetry":{"object":"radio","name":"paCurrentAmps"}}`
+for `PA Current:` (two decimals, A) and
+`{"telemetry":{"object":"radio","name":"supplyVolts"}}` for
+`DC Voltage:` (one decimal, V). No other telemetry object or field is a
+Setup binding.
 Both require `stationTelemetryVersion:4`, send no writes, and have no
 transmit-permission or off-air gate. The Core projects each row away when its
 board lacks the corresponding amps or volts telemetry; the whole PA category
@@ -139,6 +143,17 @@ running objects, and these keys are not RX subscription fields. All TX Display
 controls require `txDisplayVersion: 2`. They have no transmit-permission or
 off-air gate because the desktop changes display processing while on air.
 Absent, malformed, stale, or unavailable settings disable their controls.
+
+V4 adds `default` metadata to these exact Display and Appearance controls.
+Display toggles use JSON booleans; its numeric controls use JSON numbers,
+with choice defaults as integer ordinals and FFT option defaults as their
+actual integer values. Appearance colour defaults are eight-digit
+`#RRGGBBAA` strings. Display's Hz/bin `kind:"decimal"` has `decimals:2` in
+V4. For V1–V3 peers, the Core strips `default` from all Display and Appearance
+controls and strips `decimals` from `kind:"decimal"`; it retains the controls,
+their older bindings and gates, and all existing `kind:"readout"` decimals in
+other categories. This is a closed extension of those two published
+categories, not permission to add arbitrary default or precision fields.
 
 The two FFT-size controls are the only V4 `kind: "slider"` controls with an
 `options` array. Each option is exactly `{ "value": 4096 * 2^index,

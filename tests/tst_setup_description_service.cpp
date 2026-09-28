@@ -232,7 +232,7 @@ private slots:
     {
         SetupDescriptionService service;
         const QJsonObject appearance = service.category(QStringLiteral("appearance"));
-        QCOMPARE(appearance.value("version"), QJsonValue(1));
+        QCOMPARE(appearance.value("version"), QJsonValue(4));
         QCOMPARE(appearance.value("category").toObject().value("where"), QJsonValue("phone"));
         const QJsonArray pages = appearance.value("pages").toArray();
         QCOMPARE(pages.size(), 1);
@@ -1279,16 +1279,42 @@ private slots:
             QCOMPARE(displayControls, expected >= 4 ? 14 : 11);
             const QJsonObject appearance = QJsonDocument::fromJson(setupCategoryOnWire(
                 *core.app, "appearance", SessionMessageKind::ObjectCreate).toUtf8()).object();
-            QCOMPARE(appearance.value("version"), QJsonValue(expected));
+            QCOMPARE(appearance.value("version"), QJsonValue(qMin(expected, 4)));
             QCOMPARE(appearance.value("pages").toArray().first().toObject()
                          .value("sections").toArray().first().toObject()
                          .value("controls").toArray().size(), 10);
+            if (expected < 4) {
+                for (const QJsonObject& projected : {display, appearance}) {
+                    for (const QJsonValue& page : projected.value("pages").toArray()) {
+                        for (const QJsonValue& section : page.toObject().value("sections").toArray()) {
+                            for (const QJsonValue& raw : section.toObject().value("controls").toArray()) {
+                                const QJsonObject control = raw.toObject();
+                                QVERIFY(!control.contains("default"));
+                                if (control.value("kind") == QJsonValue("decimal")) {
+                                    QVERIFY(!control.contains("decimals"));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             const QString pa = setupCategoryOnWire(
                 *core.app, "pa", SessionMessageKind::ObjectCreate);
             QVERIFY(!pa.isEmpty());
-            QCOMPARE(QJsonDocument::fromJson(pa.toUtf8()).object().value("version").toInt(),
+            const QJsonObject paObject = QJsonDocument::fromJson(pa.toUtf8()).object();
+            QCOMPARE(paObject.value("version").toInt(),
                      qMin(expected, 5));
-            QCOMPARE(QJsonDocument::fromJson(pa.toUtf8()).object().value("pages").toArray().size(), 2);
+            QCOMPARE(paObject.value("pages").toArray().size(), 2);
+            for (const QJsonValue& page : paObject.value("pages").toArray()) {
+                for (const QJsonValue& section : page.toObject().value("sections").toArray()) {
+                    for (const QJsonValue& raw : section.toObject().value("controls").toArray()) {
+                        const QJsonObject control = raw.toObject();
+                        if (control.value("kind") == QJsonValue("readout")) {
+                            QVERIFY(control.value("decimals").isDouble());
+                        }
+                    }
+                }
+            }
             const QString diagnostics = setupCategoryOnWire(
                 *core.app, "diagnostics", SessionMessageKind::ObjectCreate);
             if (expected < 3) {
@@ -1335,6 +1361,57 @@ private slots:
         check(9, kSessionProtocolMinor, 5);
         check(2, quint16(kRadioIdentitySessionProtocolMinor - 1), 0);
         check(3, quint16(kRadioIdentitySessionProtocolMinor - 1), 0);
+    }
+
+    void v4MetadataDoesNotLeakIntoOlderProjectedControls()
+    {
+        SetupDescriptionService service;
+        const auto controlsOf = [](const QJsonObject& category) {
+            QJsonArray controls;
+            for (const QJsonValue& page : category.value("pages").toArray()) {
+                for (const QJsonValue& section : page.toObject().value("sections").toArray()) {
+                    for (const QJsonValue& control : section.toObject().value("controls").toArray()) {
+                        controls.append(control);
+                    }
+                }
+            }
+            return controls;
+        };
+        for (int version = 1; version <= 5; ++version) {
+            const QJsonObject display = QJsonDocument::fromJson(
+                SetupDescriptionService::fitCategoryForVersion(service.display(), version).toUtf8()).object();
+            const QJsonObject appearance = QJsonDocument::fromJson(
+                SetupDescriptionService::fitCategoryForVersion(service.appearance(), version).toUtf8()).object();
+            QCOMPARE(display.value("version"), QJsonValue(qMin(version, 4)));
+            QCOMPARE(appearance.value("version"), QJsonValue(qMin(version, 4)));
+            QCOMPARE(controlsOf(display).size(), version < 4 ? 11 : 14);
+            QCOMPARE(controlsOf(appearance).size(), 10);
+            for (const QJsonObject& category : {display, appearance}) {
+                for (const QJsonValue& raw : controlsOf(category)) {
+                    const QJsonObject control = raw.toObject();
+                    const QString kind = control.value("kind").toString();
+                    if (version < 4) {
+                        QVERIFY2(!control.contains("default"), qPrintable(control.value("id").toString()));
+                        if (kind == QLatin1String("decimal")) {
+                            QVERIFY(!control.contains("decimals"));
+                        }
+                    } else if (kind == QLatin1String("colour")) {
+                        const QString rgba = control.value("default").toString();
+                        QVERIFY(QRegularExpression(QStringLiteral("^#[0-9A-F]{8}$")).match(rgba).hasMatch());
+                    } else if (kind == QLatin1String("toggle")) {
+                        QVERIFY(control.value("default").isBool());
+                    } else {
+                        QVERIFY(control.value("default").isDouble());
+                        if (kind == QLatin1String("decimal")) {
+                            QCOMPARE(control.value("decimals"), QJsonValue(2));
+                        } else {
+                            const double ordinal = control.value("default").toDouble();
+                            QCOMPARE(std::floor(ordinal), ordinal);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     void displayDescriptionPublishesOnlyVersionFourFftOptions()
