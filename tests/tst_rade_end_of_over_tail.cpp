@@ -27,7 +27,13 @@
 //   abortEndsTheTailAtOnce        abortEndOfOverTail goes straight on.
 //   noTailWalksAsBefore           a function that starts no tail leaves the
 //                                 walk as it was (txAboutToEnd at once).
-// RadioModel:
+// RadioModel (the real tail: RadioModel's tail function, the slice's
+// RadeChannel, wireRadeChannel's lambda and a ticked TX worker):
+//   realTailStaysWithinResamplerBlock  r8brain is never given more than
+//                                 its block size (review Critical 1).
+//   modeSwitchedToRadeWhileKeyedSendsNoTail  keyed in USB, switched to RADE,
+//                                 released: no tail (the latched path).
+//   modeChangeDuringTailEndsIt    a mode change mid-tail ends it.
 //   permittedOnlyForRadeRelease   radeEndOfOverTailPermitted: keyed in RADE
 //                                 yes; USB, TUNE and after a stop no.
 //   tailKeepsRadioKeyedThenReleases  during the tail the radio's MOX stays
@@ -135,39 +141,6 @@ struct Ctrl {
         pump();
         QVERIFY(mox.isMox());
         QCOMPARE(mox.state(), MoxState::Tx);
-    }
-};
-
-// A local model on 20 m with a mock connection and a TX channel wrapper
-// with no WDSP channel behind it (as tst_radio_model_stop_all_tx), and the
-// Core's transmit state bound to it.
-struct Rig {
-    RadioModel model;
-    MockConnection conn;
-    TxChannel tx{WdspEngine::kTxChannelId};
-    TransmitState state;
-
-    explicit Rig(DSPMode mode)
-    {
-        AppSettings::instance().clear();
-        model.setCapsForTest(/*hasAlex=*/false);
-        model.injectConnectionForTest(&conn);
-        model.moxController()->setTimerIntervals(0, 0, 0, 0, 0, 0);
-        model.setTuneOffSettleMsForTest(0);
-        model.addSlice();
-        if (SliceModel* slice = model.activeSlice()) {
-            slice->setDspMode(mode);
-            slice->setFrequency(14'236'000.0);
-        }
-        model.injectTxChannelForTest(&tx);
-        model.wireTxChannelKeyingForTest();
-        state.bind(&model);
-    }
-    ~Rig()
-    {
-        model.injectTxChannelForTest(nullptr);
-        model.injectConnectionForTest(nullptr);
-        AppSettings::instance().clear();
     }
 };
 
@@ -280,6 +253,41 @@ private slots:
     }
 
     void cleanup() { AppSettings::instance().clear(); }
+
+    // Review Important 1, case A: keyed in USB (the worker latched the WDSP
+    // path), the slice switched to RADE while keyed, then released. The
+    // live microphone path must not stay on the air for a tail.
+    void modeSwitchedToRadeWhileKeyedSendsNoTail()
+    {
+        RealRig rig(DSPMode::USB);
+        rig.key();
+        QVERIFY(rig.model.mox());
+        QCOMPARE(rig.worker->currentTxPathForTest(), TxWorkerThread::TxPath::Wdsp);
+        rig.model.activeSlice()->setDspMode(DSPMode::RADE_U);
+        QVERIFY(rig.channel() != nullptr);
+
+        QSignalSpy tail(&rig.model, &RadioModel::endOfOverTailChanged);
+        rig.model.moxController()->setMox(false);
+        QVERIFY(!rig.model.endOfOverTailActive());
+        QCOMPARE(tail.count(), 0);
+        QTRY_COMPARE_WITH_TIMEOUT(rig.model.moxController()->state(), MoxState::Rx, 5000);
+    }
+
+    // Review Important 1, case B: RADE switched to another mode during the
+    // tail ends the tail at once; the rest of the EOO never goes out
+    // through the new mode's modulator.
+    void modeChangeDuringTailEndsIt()
+    {
+        RealRig rig;
+        rig.key();
+        QCOMPARE(rig.worker->currentTxPathForTest(), TxWorkerThread::TxPath::Rade);
+        rig.model.moxController()->setMox(false);
+        QVERIFY(rig.model.endOfOverTailActive());
+
+        rig.model.activeSlice()->setDspMode(DSPMode::USB);
+        QVERIFY(!rig.model.endOfOverTailActive());
+        QTRY_COMPARE_WITH_TIMEOUT(rig.model.moxController()->state(), MoxState::Rx, 5000);
+    }
 
     void tailRunsBeforeTeardown()
     {
@@ -467,17 +475,15 @@ private slots:
     void permittedOnlyForRadeRelease()
     {
         {
-            Rig rig(DSPMode::USB);
-            rig.model.moxController()->setMox(true);
-            pump();
+            RealRig rig(DSPMode::USB);
+            rig.key();
             QVERIFY(rig.model.mox());
             QVERIFY(!rig.model.radeEndOfOverTailPermitted());
         }
         {
-            Rig rig(DSPMode::RADE_U);
+            RealRig rig(DSPMode::RADE_U);
             QVERIFY(!rig.model.radeEndOfOverTailPermitted());  // not keyed
-            rig.model.moxController()->setMox(true);
-            pump();
+            rig.key();
             QVERIFY(rig.model.mox());
             QVERIFY(rig.tx.isRfGateOpen());
             QVERIFY(rig.model.radeEndOfOverTailPermitted());
@@ -485,7 +491,7 @@ private slots:
             QVERIFY(!rig.model.radeEndOfOverTailPermitted());
         }
         {
-            Rig rig(DSPMode::RADE_L);
+            RealRig rig(DSPMode::RADE_L);
             rig.model.setTune(true);
             pump();
             QVERIFY(rig.model.mox());
@@ -495,15 +501,11 @@ private slots:
 
     void tailKeepsRadioKeyedThenReleases()
     {
-        Rig rig(DSPMode::RADE_U);
-        // Stand in for the RADE channel: a tail starts whenever RadioModel
-        // would allow one.
+        RealRig rig;
         MoxController* mox = rig.model.moxController();
-        mox->setEndOfOverTail([&rig]() { return rig.model.radeEndOfOverTailPermitted(); });
         QSignalSpy tailChanged(&rig.model, &RadioModel::endOfOverTailChanged);
 
-        mox->setMox(true);
-        pump();
+        rig.key();
         QVERIFY(rig.state.keyed());
         rig.conn.log.clear();
 
@@ -517,7 +519,10 @@ private slots:
                  "the radio unkeyed before the end-of-over frame went out");
         QVERIFY(rig.tx.isRfGateOpen());
 
-        mox->onEndOfOverTailDone();
+        for (int i = 0; i < 2000 && rig.model.endOfOverTailActive(); ++i) {
+            rig.tick();
+            pump(2);
+        }
         QTRY_COMPARE_WITH_TIMEOUT(mox->state(), MoxState::Rx, 5000);
         pump();
         QVERIFY(!rig.model.endOfOverTailActive());
@@ -529,12 +534,9 @@ private slots:
 
     void stopAllTxSkipsTheTail()
     {
-        Rig rig(DSPMode::RADE_U);
+        RealRig rig;
         MoxController* mox = rig.model.moxController();
-        mox->setEndOfOverTail([&rig]() { return rig.model.radeEndOfOverTailPermitted(); });
-
-        mox->setMox(true);
-        pump();
+        rig.key();
         mox->setMox(false);
         pump();
         QVERIFY(rig.model.endOfOverTailActive());

@@ -5292,6 +5292,10 @@ private:
     void wireTxWorkerRade(TxWorkerThread* worker);
     // The tail ended (sent, timed out, stopped or cut by a new key).
     void onEndOfOverTailChanged(bool active);
+    // While a tail runs: the TX slice's dspModeChanged and the arbiter's
+    // txBoundSliceChanged, each ending it.
+    QMetaObject::Connection m_endOfOverTailModeWatch;
+    QMetaObject::Connection m_endOfOverTailSliceWatch;
 
     // R-R3-49 / R-R3-47: false, with the reason, when a window may not
     // switch the Core's Tuner Genius now (not the Core's tuner, the radio

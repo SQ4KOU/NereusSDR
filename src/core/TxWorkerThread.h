@@ -174,6 +174,11 @@ public:
     /// getbuffsize(48000) at cmsetup.c:106-110 [v2.10.3.13].
     static constexpr int kBlockFrames = 64;
 
+    /// RADE end-of-over callsigns: the TX path latched at the last MOX-on
+    /// (setCurrentTxPath). Read from the main thread; the worker reads the
+    /// same atomic.
+    TxPath currentTxPath() const { return m_currentTxPath.load(std::memory_order_acquire); }
+
 #ifdef NEREUS_BUILD_TESTS
     /// Test seam — drive one pump tick synchronously without standing up
     /// the QThread + semaphore wait infrastructure.  Drains one block

@@ -6617,6 +6617,12 @@ bool RadioModel::radeEndOfOverTailPermitted() const
     if (m_role == Role::Remote || m_transmitStopHold) {
         return false;
     }
+    // Review Important 1: the path the TX worker latched when this key
+    // began, not the slice's mode now. A slice switched to RADE while keyed
+    // in another mode still has the live microphone on the WDSP path.
+    if (!m_txWorker || m_txWorker->currentTxPath() != TxWorkerThread::TxPath::Rade) {
+        return false;
+    }
     if (m_txChannel == nullptr || !m_txChannel->isRfGateOpen()) {
         return false;
     }
@@ -6633,7 +6639,7 @@ bool RadioModel::radeEndOfOverTailPermitted() const
 
 bool RadioModel::startRadeEndOfOverTail()
 {
-    if (!radeEndOfOverTailPermitted() || !m_txWorker || m_wdspEngine == nullptr) {
+    if (!radeEndOfOverTailPermitted() || m_wdspEngine == nullptr) {
         return false;
     }
     SliceModel* const txSlice = txBoundSlice();
@@ -6657,6 +6663,30 @@ bool RadioModel::startRadeEndOfOverTail()
 
 void RadioModel::onEndOfOverTailChanged(bool active)
 {
+    // Review Important 1: a mode change on the transmitting slice, or the
+    // transmitter moving to another slice, ends the tail at once, so the
+    // rest of the EOO never goes out through another mode's modulator.
+    QObject::disconnect(m_endOfOverTailModeWatch);
+    QObject::disconnect(m_endOfOverTailSliceWatch);
+    if (active) {
+        if (SliceModel* const txSlice = txBoundSlice()) {
+            m_endOfOverTailModeWatch = connect(
+                txSlice, &SliceModel::dspModeChanged, this, [this]() {
+                    if (m_moxController) {
+                        m_moxController->abortEndOfOverTail();
+                    }
+                });
+        }
+        if (m_txSliceArbiter) {
+            m_endOfOverTailSliceWatch = connect(
+                m_txSliceArbiter, &TxSliceArbiter::txBoundSliceChanged, this,
+                [this](int, int) {
+                    if (m_moxController) {
+                        m_moxController->abortEndOfOverTail();
+                    }
+                });
+        }
+    }
     if (!active) {
         // However it ended, nothing of it may reach a later over: drop any
         // queued RADE audio and let the channel encode the next over.
