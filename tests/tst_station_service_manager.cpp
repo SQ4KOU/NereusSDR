@@ -18,6 +18,7 @@ private slots:
     void stopRefusesFailedStateQuery();
     void macReloadsIdleRegistration();
     void emptyDefaultProfileIsExplicit();
+    void pendingStateIsNotStopped();
 };
 
 struct Fixture {
@@ -33,6 +34,9 @@ struct Fixture {
     bool macLoaded = false;
     bool linuxPresent = false;
     bool queryFails = false;
+    QString linuxState;
+    QString windowsState;
+    QString macState;
 
     Fixture()
     {
@@ -85,7 +89,9 @@ struct Fixture {
             if (command == QStringLiteral("systemctl") && args.contains(QStringLiteral("show")))
                 return StationServiceCommandResult{0,
                     linuxPresent ? QStringLiteral("LoadState=loaded\nActiveState=%1\n")
-                                        .arg(active ? QStringLiteral("active") : QStringLiteral("inactive"))
+                                        .arg(linuxState.isEmpty()
+                                             ? (active ? QStringLiteral("active") : QStringLiteral("inactive"))
+                                             : linuxState)
                                  : QStringLiteral("LoadState=not-found\nActiveState=inactive\n")};
             if (command == QStringLiteral("systemctl") && args.contains(QStringLiteral("start"))) {
                 active = true;
@@ -97,7 +103,9 @@ struct Fixture {
                     ? QStringLiteral("PID\tStatus\tLabel\n-\t0\tcom.boydsoftprez.NereusSDR.station\n")
                     : QStringLiteral("PID\tStatus\tLabel\n")};
             if (command == QStringLiteral("launchctl") && args.contains(QStringLiteral("print")))
-                return StationServiceCommandResult{0, active ? QStringLiteral("state = running") : QStringLiteral("state = waiting")};
+                return StationServiceCommandResult{0, QStringLiteral("state = ")
+                    + (macState.isEmpty() ? (active ? QStringLiteral("running") : QStringLiteral("waiting"))
+                                          : macState)};
             if (command == QStringLiteral("launchctl") && args.contains(QStringLiteral("bootstrap"))) macLoaded = true;
             if (command == QStringLiteral("launchctl") && args.contains(QStringLiteral("bootout"))) {
                 macLoaded = false;
@@ -105,7 +113,8 @@ struct Fixture {
             }
             if (command == QStringLiteral("launchctl") && args.contains(QStringLiteral("kickstart"))) active = true;
             if (command == QStringLiteral("powershell.exe"))
-                return StationServiceCommandResult{0, taskExists ? (active ? QStringLiteral("4\n") : QStringLiteral("3\n"))
+                return StationServiceCommandResult{0, taskExists ? (windowsState.isEmpty()
+                    ? (active ? QStringLiteral("4\n") : QStringLiteral("3\n")) : windowsState)
                                                                : QStringLiteral("-1\n")};
             if (command == QStringLiteral("schtasks") && args.contains(QStringLiteral("/Create")))
                 taskExists = true;
@@ -287,6 +296,44 @@ void StationServiceManagerTest::emptyDefaultProfileIsExplicit()
     QFile file(manager.entryPath());
     QVERIFY(file.open(QIODevice::ReadOnly));
     QVERIFY(file.readAll().contains("\"--profile\" \"\""));
+}
+
+void StationServiceManagerTest::pendingStateIsNotStopped()
+{
+    for (const QString& state : {QStringLiteral("activating"), QStringLiteral("deactivating")}) {
+        Fixture f;
+        f.addConfig();
+        f.linuxPresent = true;
+        f.linuxState = state;
+        StationServiceManager manager(f.options(StationPlatform::Linux));
+        QVERIFY(!manager.stopBackground());
+        QVERIFY(manager.lastError().contains(QStringLiteral("changing state")));
+        QVERIFY(!manager.startBackground());
+        QVERIFY(!f.calls.join(QLatin1Char('\n')).contains(QStringLiteral("|start|")));
+        QVERIFY(!f.calls.join(QLatin1Char('\n')).contains(QStringLiteral("|stop|")));
+    }
+    {
+        Fixture f;
+        f.addConfig();
+        f.taskExists = true;
+        f.windowsState = QStringLiteral("2\n"); // TASK_STATE_QUEUED
+        StationServiceManager manager(f.options(StationPlatform::Windows));
+        QVERIFY(!manager.stopBackground());
+        QVERIFY(!manager.startBackground());
+        QVERIFY(manager.lastError().contains(QStringLiteral("changing state")));
+        QVERIFY(!f.calls.join(QLatin1Char('\n')).contains(QStringLiteral("/End")));
+        QVERIFY(!f.calls.join(QLatin1Char('\n')).contains(QStringLiteral("/Create")));
+    }
+    {
+        Fixture f;
+        f.addConfig();
+        f.macLoaded = true;
+        f.macState = QStringLiteral("spawning");
+        StationServiceManager manager(f.options(StationPlatform::MacOS));
+        QVERIFY(!manager.stopBackground());
+        QVERIFY(!manager.startBackground());
+        QVERIFY(!f.calls.join(QLatin1Char('\n')).contains(QStringLiteral("bootout")));
+    }
 }
 
 QTEST_GUILESS_MAIN(StationServiceManagerTest)

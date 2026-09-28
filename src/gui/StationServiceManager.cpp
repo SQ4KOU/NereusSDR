@@ -318,7 +318,8 @@ StationServiceManager::ServiceState StationServiceManager::probeState() const
             return ServiceState::Error;
         }
         if (output.contains(QStringLiteral("state = running"))) return ServiceState::Running;
-        if (output.contains(QStringLiteral("state = "))) return ServiceState::Stopped;
+        if (output.contains(QStringLiteral("state = waiting"))) return ServiceState::Stopped;
+        if (output.contains(QStringLiteral("state = "))) return ServiceState::Pending;
         return ServiceState::Error;
     }
     if (m_options.platform == StationPlatform::Linux) {
@@ -332,10 +333,11 @@ StationServiceManager::ServiceState StationServiceManager::probeState() const
         if (output.contains(QStringLiteral("LoadState=not-found"))) return ServiceState::Absent;
         if (!output.contains(QStringLiteral("LoadState=loaded"))) return ServiceState::Error;
         if (output.contains(QStringLiteral("ActiveState=active"))) return ServiceState::Running;
-        for (const QString& state : {QStringLiteral("inactive"), QStringLiteral("failed"),
-                                     QStringLiteral("activating"), QStringLiteral("deactivating")}) {
-            if (output.contains(QStringLiteral("ActiveState=") + state)) return ServiceState::Stopped;
-        }
+        if (output.contains(QStringLiteral("ActiveState=inactive"))
+            || output.contains(QStringLiteral("ActiveState=failed"))) return ServiceState::Stopped;
+        if (output.contains(QStringLiteral("ActiveState=activating"))
+            || output.contains(QStringLiteral("ActiveState=deactivating"))
+            || output.contains(QStringLiteral("ActiveState=reloading"))) return ServiceState::Pending;
         return ServiceState::Error;
     }
     if (!run(QStringLiteral("powershell.exe"),
@@ -346,8 +348,8 @@ StationServiceManager::ServiceState StationServiceManager::probeState() const
     const QString state = output.trimmed();
     if (state == QStringLiteral("-1")) return ServiceState::Absent;
     if (state == QStringLiteral("4")) return ServiceState::Running;
-    if (state == QStringLiteral("1") || state == QStringLiteral("2")
-        || state == QStringLiteral("3")) return ServiceState::Stopped;
+    if (state == QStringLiteral("2")) return ServiceState::Pending;
+    if (state == QStringLiteral("1") || state == QStringLiteral("3")) return ServiceState::Stopped;
     return ServiceState::Error;
 }
 
@@ -367,6 +369,10 @@ bool StationServiceManager::startBackground()
         fail(QStringLiteral("Could not check the background station state."));
         return false;
     }
+    if (initial == ServiceState::Pending) {
+        fail(QStringLiteral("The background station is changing state. Try again shortly."));
+        return false;
+    }
     if (!validateLaunch()) {
         return false;
     }
@@ -381,6 +387,10 @@ bool StationServiceManager::startBackground()
         const ServiceState current = probeState();
         if (current == ServiceState::Error) {
             fail(QStringLiteral("Could not check the background station state."));
+            return false;
+        }
+        if (current == ServiceState::Pending) {
+            fail(QStringLiteral("The background station is changing state. Try again shortly."));
             return false;
         }
         if (current == ServiceState::Running) return true;
@@ -426,6 +436,10 @@ bool StationServiceManager::stopBackground()
     const ServiceState state = probeState();
     if (state == ServiceState::Error) {
         fail(QStringLiteral("Could not check the background station state."));
+        return false;
+    }
+    if (state == ServiceState::Pending) {
+        fail(QStringLiteral("The background station is changing state. Try again shortly."));
         return false;
     }
     if (state != ServiceState::Running) {
