@@ -48,6 +48,7 @@
 #include "core/session/TransmitStateFacade.h"
 
 #include "core/MoxController.h"
+#include "core/PaTelemetryScaling.h"
 #include "core/RadioStatus.h"
 #include "core/TxSliceArbiter.h"
 #include "core/safety/SwrProtectionController.h"
@@ -197,6 +198,10 @@ void TransmitState::bind(RadioModel* model)
             refreshAdcRaw();
         }
     });
+    // A new board can use a different curve for the same ADC counts.
+    connect(model, &RadioModel::currentRadioChanged, this, [this](const RadioInfo&) {
+        refreshAdcRaw();
+    });
     refreshAdcRaw();
 
     // The model as it is now.
@@ -214,21 +219,30 @@ void TransmitState::unbind()
     m_pump->stop();
     m_clock = {};
     RadioModel* model = m_model.data();
-    if (model == nullptr) {
-        return;
+    if (model != nullptr) {
+        disconnect(model, nullptr, this, nullptr);
+        disconnect(&model->transmitModel(), nullptr, this, nullptr);
+        disconnect(&model->radioStatus(), nullptr, this, nullptr);
+        if (TxSliceArbiter* arbiter = model->txSliceArbiter()) {
+            disconnect(arbiter, nullptr, this, nullptr);
+        }
+        if (MoxController* mox = model->moxController()) {
+            disconnect(mox, nullptr, this, nullptr);
+        }
+        disconnect(&model->swrProt(), nullptr, this, nullptr);
     }
-    disconnect(model, nullptr, this, nullptr);
-    disconnect(&model->transmitModel(), nullptr, this, nullptr);
-    disconnect(&model->radioStatus(), nullptr, this, nullptr);
-    if (TxSliceArbiter* arbiter = model->txSliceArbiter()) {
-        disconnect(arbiter, nullptr, this, nullptr);
-    }
-    if (MoxController* mox = model->moxController()) {
-        disconnect(mox, nullptr, this, nullptr);
-    }
-    disconnect(&model->swrProt(), nullptr, this, nullptr);
     m_pump->setModel(nullptr);
     m_model = nullptr;
+    if (m_forwardAdcRaw != 0 || m_reflectedAdcRaw != 0
+        || m_forwardRawPowerWatts != 0 || m_forwardAdcVolts != 0
+        || m_reflectedAdcVolts != 0) {
+        m_forwardAdcRaw = 0;
+        m_reflectedAdcRaw = 0;
+        m_forwardRawPowerWatts = 0;
+        m_forwardAdcVolts = 0;
+        m_reflectedAdcVolts = 0;
+        emit adcRawChanged();
+    }
 }
 
 void TransmitState::refreshSwr()
@@ -254,11 +268,20 @@ void TransmitState::refreshAdcRaw()
     const RadioModel::PaRawAdc raw = m_model->paRawAdc();
     const qint64 forward = raw.forward;
     const qint64 reflected = raw.reflected;
-    if (forward == m_forwardAdcRaw && reflected == m_reflectedAdcRaw) {
+    const HPSDRModel model = m_model->hardwareProfile().model;
+    const double rawPower = scaleFwdPowerWatts(model, raw.forward);
+    const double forwardVolts = scaleFwdRevVoltage(model, raw.forward);
+    const double reflectedVolts = scaleFwdRevVoltage(model, raw.reflected);
+    if (forward == m_forwardAdcRaw && reflected == m_reflectedAdcRaw
+        && rawPower == m_forwardRawPowerWatts && forwardVolts == m_forwardAdcVolts
+        && reflectedVolts == m_reflectedAdcVolts) {
         return;
     }
     m_forwardAdcRaw = forward;
     m_reflectedAdcRaw = reflected;
+    m_forwardRawPowerWatts = rawPower;
+    m_forwardAdcVolts = forwardVolts;
+    m_reflectedAdcVolts = reflectedVolts;
     emit adcRawChanged();
 }
 
@@ -602,6 +625,15 @@ bool TransmitState::applyStationValue(const QByteArray& propertyName, const QVar
             emit adcRawChanged();
         }
         return true;
+    } else if (propertyName == "forwardRawPowerWatts" || propertyName == "forwardAdcVolts"
+               || propertyName == "reflectedAdcVolts") {
+        double& field = propertyName == "forwardRawPowerWatts" ? m_forwardRawPowerWatts
+            : propertyName == "forwardAdcVolts" ? m_forwardAdcVolts : m_reflectedAdcVolts;
+        if (value.toDouble() != field) {
+            field = value.toDouble();
+            emit adcRawChanged();
+        }
+        return true;
     } else if (propertyName == "keyedForSeconds") {
         state = value.toLongLong() != m_stationKeyedForSeconds;
         m_stationKeyedForSeconds = value.toLongLong();
@@ -683,9 +715,14 @@ void TransmitState::clearStationValues()
         emit timeOutChanged();
     }
     setMeters(TxMeterReadings{});
-    if (m_forwardAdcRaw != 0 || m_reflectedAdcRaw != 0) {
+    if (m_forwardAdcRaw != 0 || m_reflectedAdcRaw != 0
+        || m_forwardRawPowerWatts != 0 || m_forwardAdcVolts != 0
+        || m_reflectedAdcVolts != 0) {
         m_forwardAdcRaw = 0;
         m_reflectedAdcRaw = 0;
+        m_forwardRawPowerWatts = 0;
+        m_forwardAdcVolts = 0;
+        m_reflectedAdcVolts = 0;
         emit adcRawChanged();
     }
     if (m_highSwr || m_swrWindBackLatched) {

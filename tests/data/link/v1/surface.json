@@ -368,7 +368,7 @@
         {
             "kind": "i64",
             "name": "txReadingsVersion",
-            "value": 1
+            "value": 2
         },
         {
             "kind": "i64",
@@ -7211,6 +7211,24 @@
                     "kind": "f64",
                     "name": "compressionDb",
                     "ordinal": 33
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "forwardRawPowerWatts",
+                    "ordinal": 34
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "forwardAdcVolts",
+                    "ordinal": 35
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "reflectedAdcVolts",
+                    "ordinal": 36
                 }
             ]
         },

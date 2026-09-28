@@ -46,11 +46,14 @@
 //                          the radio's raw forward and reflected power
 //                          readings (the ADC counts of its last PA sample),
 //                          refreshed with the meters, keyed or not; a
-//                          window scales them as its own PA Values page
-//                          does (parity Task 33, txReadingsVersion 1)
+//                          older windows scale them as their own PA Values
+//                          page does (parity Task 33, txReadingsVersion 1)
 //   compressionDb          Thetis's COMP reading (max(-30, TXA_COMP_AV)), with
 //                          the meters, as the local Compression meters
 //                          show it (Task 33 follow-up, txReadingsVersion 1)
+//   forwardRawPowerWatts, forwardAdcVolts, reflectedAdcVolts
+//                          Core-scaled PA Values from the current radio's
+//                          model and raw ADC sample (txReadingsVersion 2)
 //
 // Updates: while keyed the meters are read ten times a second (the
 // transmit lane's cached readings; never a WDSP call on the event loop)
@@ -165,6 +168,10 @@ class TransmitState final : public QObject {
     Q_PROPERTY(qint64 reflectedAdcRaw READ reflectedAdcRaw NOTIFY adcRawChanged)
     // Task 33 follow-up (txReadingsVersion 1): the COMP reading, appended.
     Q_PROPERTY(double compressionDb READ compressionDb NOTIFY metersChanged)
+    // PA Values' existing Core scalers, evaluated beside the raw samples.
+    Q_PROPERTY(double forwardRawPowerWatts READ forwardRawPowerWatts NOTIFY adcRawChanged)
+    Q_PROPERTY(double forwardAdcVolts READ forwardAdcVolts NOTIFY adcRawChanged)
+    Q_PROPERTY(double reflectedAdcVolts READ reflectedAdcVolts NOTIFY adcRawChanged)
 
 public:
     // The link's stopReason values.
@@ -241,6 +248,9 @@ public:
     bool swrWindBackLatched() const { return m_swrWindBackLatched; }
     qint64 forwardAdcRaw() const { return m_forwardAdcRaw; }
     qint64 reflectedAdcRaw() const { return m_reflectedAdcRaw; }
+    double forwardRawPowerWatts() const { return m_forwardRawPowerWatts; }
+    double forwardAdcVolts() const { return m_forwardAdcVolts; }
+    double reflectedAdcVolts() const { return m_reflectedAdcVolts; }
 
     // ---- Parity Task 33: the txCfcCompression record ----
 
@@ -356,6 +366,9 @@ private:
     bool m_swrWindBackLatched{false};
     qint64 m_forwardAdcRaw{0};
     qint64 m_reflectedAdcRaw{0};
+    double m_forwardRawPowerWatts{0};
+    double m_forwardAdcVolts{0};
+    double m_reflectedAdcVolts{0};
     // Fix wave I4: the holder; a window's copies of the two durations.
     Holder m_holder;
     qint64 m_stationHolderForSeconds{0};

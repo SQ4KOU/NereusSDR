@@ -1762,7 +1762,15 @@ colours for the same signal.
   capability gate. It is the sixth PA readout, remains visible while keyed,
   and sends no write. Lead review and the combined app/Core build plus four
   explicitly rebuilt Setup/native PA suites pass (6.39 s; load before run
-  10.36/9.30/9.08). Derived readings and PA actions remain open.
+  10.36/9.30/9.08). Signed `69ecac959` now appends three outbound Core-scaled
+  readings: raw forward watts and forward/reverse ADC volts, gated by
+  `txReadingsVersion: 2`. They reuse existing hardware scaling and reset with
+  the session. Native and published PA values, same-count model changes and
+  client write refusal are covered. Root reviewed the implementation and the
+  combined app/Core build plus twelve full named suites pass (50.37 s;
+  starting load 20.16/18.00/15.08). This pass does not resolve the earlier
+  intermittent connection-open finding under G-57. Combined ADC overload,
+  peak/min/reset and the remaining PA actions are still open.
   Signed `e72fa12e` and lifetime follow-up `d9dc53cb` add authenticated,
   connected-radio-bound single-band RX/TX antenna commands. Capability
   withdrawal and confirmation revalidate the same radio and session; existing
@@ -2163,7 +2171,8 @@ colours for the same signal.
   same-radio connection, row editing, capability withdrawal and reconnect.
   The merged worker app/Core build and all four full Setup/row-command suites
   pass (30, 36, 15 and 10 tests). Root reviewed the change and reused that
-  tested merge; combined trunk verification follows PA readout integration.
+  tested merge. Combined trunk app/Core and all twelve rebuilt antenna, PA,
+  Setup and session suites pass (50.37 s; starting load 20.16/18.00/15.08).
   Existing Core identity/confirmation checks remain.
 - Plan: Hardware antenna description and session lifecycle parity.
 
@@ -2192,6 +2201,13 @@ colours for the same signal.
   reconnect/relaunch. An address remains an optional direct path. Missing,
   invalid or unavailable service targets must never fall back to starting
   a local Core. Existing trust and certificate checks remain mandatory.
+  V3 saved-target migration preserves existing trust and the old document
+  bytes initially. Subsequent forgets and edits also remove or update matching
+  older records, as the existing V1 compatibility rule requires, so downgrading
+  cannot restore forgotten credentials. Older lists gain no new V3 records;
+  addressless records cannot be represented there. Failed saves restore every
+  prior value. This narrows the lead's original blanket rollback-snapshot
+  proposal after inspecting the existing credential-removal invariant.
 - Status: approved mockup recorded and implementation resumed from signed
   `68245ce22`. Sol 6 high owns the desktop dialog/controller, addressless target storage
   and reconnect integration; Astra lead owns identity/lifetime review.
@@ -2219,6 +2235,22 @@ colours for the same signal.
   has received the same ruling for phone-owned presentation strings.
 - Plan: consistent desktop/Core/phone-facing wording without compatibility or
   attribution changes.
+
+### G-109: The wording test does not inventory the new antenna refusal paths
+
+- Evidence: American English verification passed seven of eight suites, but
+  `tst_station_reason_wording` reported five unlisted forwarding expressions
+  in StationServer, StationSharedSettings and SessionCommandDispatcher. The
+  new radio-bound antenna guards pass on existing human-readable reasons;
+  the test's explicit source inventory had not been extended for those paths.
+- Ruling basis: JJ requires discovered failures to be investigated and fixed.
+  This deterministic source-inventory failure is independent of spelling and
+  machine load; no wording exemption or scanner relaxation is needed.
+- Status: cause traced to the missing exact forwarding entries. The wording
+  worker owns the test-only inventory correction and must verify that each
+  forwarded reason's defining function remains scanned. Existing coverage
+  floors, production behavior and comments remain unchanged.
+- Plan: keep all Core refusal messages covered by the operator-wording check.
 
 ## How this addendum is kept
 

@@ -506,6 +506,8 @@ struct StationCapabilities {
     /// forward and reflected power readings) and the Core keeps the
     /// `txCfcCompression` record stream (the CFC bar chart). Sent right
     /// after txStateVersion and only with it.
+    /// 2 also carries Core-scaled PA raw forward watts and forward/reverse
+    /// voltage (outbound Float64), following the same raw sample cadence.
     int txReadingsVersion = 0;
 
     /// Whether the DAEMON currently holds a live radio connection. A

@@ -96,9 +96,17 @@ including when the source property happens to be writable. A readout without
 uses five `txState` scalars with `txReadingsVersion:1` and the selected Drive
 setpoint from `transmit.power` (Int64) with `transmitSettingsVersion:1`. Drive
 is a readout even though its mirrored source is writable; it sends no write.
-These fields imply no derived formula, peak/min tracker, or reset action.
+Three additional readouts use the Core's existing PA scaling of its current
+board's raw samples: `forwardRawPowerWatts` (W), `forwardAdcVolts` (V), and
+`reflectedAdcVolts` (V), all Float64 from `txState` with
+`txReadingsVersion:2`. They have two decimals and no transmit or off-air
+gate. Their IDs are `pa.values.forwardRawPower`, `pa.values.forwardVoltage`,
+and `pa.values.reflectedVoltage`. All Setup versions can carry these standard
+property readouts; the independent capability gate makes them unavailable
+with an older Core. There is no client formula, peak/min tracker, or reset
+action in these descriptions.
 `setup.pa` is appended after `setup.revision` in the fixed mirror schema and
-is empty on a board without an integrated PA or on an RX-only SKU. Its six
+is empty on a board without an integrated PA or on an RX-only SKU. Its nine
 readouts remain visible while the radio transmits; they require neither
 transmit permission nor an off-air gate. A peer without the negotiated
 Setup-description feature receives no `setup` mirror object.
