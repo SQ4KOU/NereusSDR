@@ -149,14 +149,34 @@ bool TxWatchClient::openDirect(const QUrl& verifiedPrimaryUrl,
         for (int i = 0; i < kTicketBytes; ++i) { attach[1 + i] = m_ticket.at(i); }
         m_ticket.fill('\0');
         m_ticket.clear();
-        if (socket->sendBinaryMessage(attach) != attach.size()) {
-            attach.fill('\0');
-            finish(QStringLiteral("watch ticket send failed"));
+        const qsizetype attachSize = attach.size();
+        const QPointer<TxWatchClient> self(this);
+        const quint64 revision = m_revision;
+        qint64 sent = -1;
+#ifdef NEREUS_BUILD_TESTS
+        const BinaryWriterForTesting writer = m_binaryWriterForTesting;
+        if (writer) {
+            sent = writer(socket, attach);
+        } else {
+            sent = socket->sendBinaryMessage(attach);
+        }
+#else
+        sent = socket->sendBinaryMessage(attach);
+#endif
+        attach.fill('\0');
+        // sendBinaryMessage may synchronously emit errorOccurred, whose
+        // closed handler can delete us or open a new socket. Never finish
+        // that newer attempt or arm its acknowledgement deadline here.
+        if (!self || self->m_revision != revision
+            || !self->current(socket, generation)) {
             return;
         }
-        attach.fill('\0');
-        if (current(socket, generation)) {
-            m_deadline->start(m_acknowledgementMs);
+        if (sent != attachSize) {
+            self->finish(QStringLiteral("watch ticket send failed"));
+            return;
+        }
+        if (!self->m_ready) {
+            self->m_deadline->start(self->m_acknowledgementMs);
         }
     });
     connect(socket, &QWebSocket::binaryMessageReceived, this,
@@ -194,6 +214,7 @@ bool TxWatchClient::openDirect(const QUrl& verifiedPrimaryUrl,
 
 bool TxWatchClient::sendKeepalive(quint64 sequence, quint32 epoch)
 {
+    const QPointer<TxWatchClient> self(this);
     QWebSocket* socket = m_socket.data();
     if (!m_ready || socket == nullptr
         || socket->state() != QAbstractSocket::ConnectedState) {
@@ -205,9 +226,29 @@ bool TxWatchClient::sendKeepalive(quint64 sequence, quint32 epoch)
 #ifdef NEREUS_BUILD_TESTS
     if (m_testBacklogBytes >= 0) { backlog = m_testBacklogBytes; }
 #endif
-    if (backlog > kMaxOutboundBacklog - frame.size()
-        || socket->sendBinaryMessage(frame) != frame.size()) {
+    if (backlog > kMaxOutboundBacklog - frame.size()) {
         finish(QStringLiteral("watch send backlog or failure"));
+        return false;
+    }
+    const quint64 generation = m_generation;
+    const quint64 revision = m_revision;
+    qint64 sent = -1;
+#ifdef NEREUS_BUILD_TESTS
+    const BinaryWriterForTesting writer = m_binaryWriterForTesting;
+    if (writer) {
+        sent = writer(socket, frame);
+    } else {
+        sent = socket->sendBinaryMessage(frame);
+    }
+#else
+    sent = socket->sendBinaryMessage(frame);
+#endif
+    if (!self || self->m_revision != revision
+        || !self->current(socket, generation) || !self->m_ready) {
+        return false;
+    }
+    if (sent != frame.size()) {
+        self->finish(QStringLiteral("watch send backlog or failure"));
         return false;
     }
     return true;
@@ -231,6 +272,11 @@ void TxWatchClient::finish(const QString& reason)
     m_socket = nullptr;
     if (socket != nullptr) {
         QObject::disconnect(socket, nullptr, this, nullptr);
+        // A closed handler can delete this client while the socket is
+        // emitting errorOccurred/disconnected. Detach the sender before
+        // emitting closed, so QObject's child teardown cannot delete it
+        // mid-signal.
+        socket->setParent(nullptr);
         socket->abort();
         socket->deleteLater();
     }

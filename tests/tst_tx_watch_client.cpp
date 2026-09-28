@@ -1,6 +1,7 @@
 // no-port-check: NereusSDR-original direct watch transport regression.
 #include <QtTest/QtTest>
 
+#include <QAbstractSocket>
 #include <QCryptographicHash>
 #include <QFile>
 #include <QHash>
@@ -279,6 +280,107 @@ private slots:
         QCOMPARE(closed.size(), 1);
         QCOMPARE(closed.at(0).at(0).toULongLong(), quint64(81));
         QVERIFY(!client.isReady());
+    }
+
+    void synchronousInitialSendFailureMayDeleteClient()
+    {
+        if (!QSslSocket::supportsSsl()) { QSKIP("TLS backend unavailable"); }
+        TlsWatchPeer peer;
+        QVERIFY(peer.listening);
+        QPointer<TxWatchClient> client = new TxWatchClient;
+        QObject::connect(client, &TxWatchClient::closed, client,
+                         [&client](quint64, const QString&) { delete client.data(); });
+        client->setBinaryWriterForTesting(
+            [](QWebSocket* socket, const QByteArray&) -> qint64 {
+                socket->errorOccurred(QAbstractSocket::NetworkError);
+                return -1;
+            });
+        QVERIFY(client->openDirect(peer.url(), peer.pin(), ticket(), 90));
+        QTRY_VERIFY_WITH_TIMEOUT(client.isNull(), 5000);
+        if (!peer.sockets.isEmpty()) {
+            QCOMPARE(peer.messages[peer.sockets.at(0)].size(), 0);
+        }
+    }
+
+    void synchronousInitialSendFailureCannotCloseReplacement()
+    {
+        if (!QSslSocket::supportsSsl()) { QSKIP("TLS backend unavailable"); }
+        TlsWatchPeer peer;
+        QVERIFY(peer.listening);
+        TxWatchClient client;
+        QSignalSpy ready(&client, &TxWatchClient::ready);
+        QObject::connect(&client, &TxWatchClient::closed, &client,
+                         [&](quint64 generation, const QString&) {
+            if (generation == 94) {
+                QVERIFY(client.openDirect(peer.url(), peer.pin(), ticket(), 95));
+            }
+        });
+        client.setBinaryWriterForTesting(
+            [&client](QWebSocket* socket, const QByteArray&) -> qint64 {
+                client.setBinaryWriterForTesting({});
+                socket->errorOccurred(QAbstractSocket::NetworkError);
+                return -1;
+            });
+        QVERIFY(client.openDirect(peer.url(), peer.pin(), ticket(), 94));
+        QTRY_COMPARE_WITH_TIMEOUT(peer.sockets.size(), 2, 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(peer.messages[peer.sockets.at(1)].size(), 1, 5000);
+        peer.sockets.at(1)->sendBinaryMessage(QByteArray::fromHex("0100"));
+        QTRY_COMPARE_WITH_TIMEOUT(ready.size(), 1, 5000);
+        QCOMPARE(ready.at(0).at(0).toULongLong(), quint64(95));
+        QVERIFY(client.isReady());
+    }
+
+    void synchronousKeepaliveSendFailureCannotCloseReplacement()
+    {
+        if (!QSslSocket::supportsSsl()) { QSKIP("TLS backend unavailable"); }
+        TlsWatchPeer peer;
+        QVERIFY(peer.listening);
+        TxWatchClient client;
+        QSignalSpy ready(&client, &TxWatchClient::ready);
+        QObject::connect(&client, &TxWatchClient::closed, &client,
+                         [&](quint64 generation, const QString&) {
+            if (generation == 91) {
+                QVERIFY(client.openDirect(peer.url(), peer.pin(), ticket(), 92));
+            }
+        });
+        QVERIFY(client.openDirect(peer.url(), peer.pin(), ticket(), 91));
+        QTRY_COMPARE_WITH_TIMEOUT(peer.sockets.size(), 1, 5000);
+        peer.sockets.at(0)->sendBinaryMessage(QByteArray::fromHex("0100"));
+        QTRY_COMPARE_WITH_TIMEOUT(ready.size(), 1, 5000);
+        client.setBinaryWriterForTesting(
+            [&client](QWebSocket* socket, const QByteArray&) -> qint64 {
+                client.setBinaryWriterForTesting({});
+                socket->errorOccurred(QAbstractSocket::NetworkError);
+                return -1;
+            });
+        QVERIFY(!client.sendKeepalive(2, 3));
+        QTRY_COMPARE_WITH_TIMEOUT(peer.sockets.size(), 2, 5000);
+        peer.sockets.at(1)->sendBinaryMessage(QByteArray::fromHex("0100"));
+        QTRY_COMPARE_WITH_TIMEOUT(ready.size(), 2, 5000);
+        QCOMPARE(ready.at(1).at(0).toULongLong(), quint64(92));
+        QCOMPARE(client.generation(), quint64(92));
+        QVERIFY(client.isReady());
+    }
+
+    void synchronousKeepaliveSendFailureMayDeleteClient()
+    {
+        if (!QSslSocket::supportsSsl()) { QSKIP("TLS backend unavailable"); }
+        TlsWatchPeer peer;
+        QVERIFY(peer.listening);
+        QPointer<TxWatchClient> client = new TxWatchClient;
+        QVERIFY(client->openDirect(peer.url(), peer.pin(), ticket(), 93));
+        QTRY_COMPARE_WITH_TIMEOUT(peer.sockets.size(), 1, 5000);
+        peer.sockets.at(0)->sendBinaryMessage(QByteArray::fromHex("0100"));
+        QTRY_VERIFY_WITH_TIMEOUT(client->isReady(), 5000);
+        QObject::connect(client, &TxWatchClient::closed, client,
+                         [&client](quint64, const QString&) { delete client.data(); });
+        client->setBinaryWriterForTesting(
+            [](QWebSocket* socket, const QByteArray&) -> qint64 {
+                socket->errorOccurred(QAbstractSocket::NetworkError);
+                return -1;
+            });
+        QVERIFY(!client->sendKeepalive(4, 5));
+        QVERIFY(client.isNull());
     }
 };
 

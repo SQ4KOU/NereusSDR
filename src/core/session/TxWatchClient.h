@@ -7,6 +7,9 @@
 #include <QString>
 #include <QUrl>
 
+#include <functional>
+#include <utility>
+
 class QTimer;
 class QWebSocket;
 
@@ -27,6 +30,11 @@ public:
     void setDeadlinesForTesting(int openingMs, int acknowledgementMs);
 #ifdef NEREUS_BUILD_TESTS
     void setBacklogBytesForTesting(qint64 bytes) { m_testBacklogBytes = bytes; }
+    using BinaryWriterForTesting = std::function<qint64(QWebSocket*, const QByteArray&)>;
+    void setBinaryWriterForTesting(BinaryWriterForTesting writer)
+    {
+        m_binaryWriterForTesting = std::move(writer);
+    }
 #endif
 
     bool openDirect(const QUrl& verifiedPrimaryUrl, const QByteArray& actualCorePinSha256,
@@ -57,6 +65,7 @@ private:
     int m_acknowledgementMs = 5000;
 #ifdef NEREUS_BUILD_TESTS
     qint64 m_testBacklogBytes = -1;
+    BinaryWriterForTesting m_binaryWriterForTesting;
 #endif
 };
 
