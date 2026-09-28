@@ -369,10 +369,25 @@ void TransmitState::refreshState()
     const TxSliceArbiter* arbiter = m_model->txSliceArbiter();
     const int txSliceId = arbiter != nullptr ? arbiter->txBoundSliceId() : -1;
     const RadioModel::KeyedBy keyedBy = m_model->keyedBy();
+    // RADE end-of-over callsigns (review Minor 3): keyedBy clears at the
+    // release, but the radio stays on the air through the TX to RX walk and
+    // an end-of-over tail. Until it is back in receive, who keyed stays the
+    // one this key had.
+    if (!keyed) {
+        m_heldKeyedByName.clear();
+        m_heldKeyedByKind.clear();
+        m_heldKeyedTrigger.clear();
+    } else if (!keyedBy.isEmpty()) {
+        m_heldKeyedByName = keyedBy.deviceName;
+        m_heldKeyedByKind = keyedBy.deviceKind;
+        m_heldKeyedTrigger = keyedBy.trigger;
+    }
+    const bool held = keyedBy.isEmpty();
     // Who keyed, only while keyed (keyedBy is empty while unkeyed).
-    const QString name = keyed ? keyedBy.deviceName : QString();
-    const QString kind = keyed ? keyedBy.deviceKind : QString();
-    const QString trigger = keyed ? QString::fromLatin1(keyedBy.trigger) : QString();
+    const QString name = !keyed ? QString() : held ? m_heldKeyedByName : keyedBy.deviceName;
+    const QString kind = !keyed ? QString() : held ? m_heldKeyedByKind : keyedBy.deviceKind;
+    const QString trigger = !keyed ? QString()
+        : QString::fromLatin1(held ? m_heldKeyedTrigger : keyedBy.trigger);
     const qint64 since = keyed ? m_keyedSinceMs : 0;
     const bool ending = m_model->endOfOverTailActive();
     if (keyed && !keyedBy.isEmpty()) {

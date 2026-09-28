@@ -77,7 +77,8 @@
 //               R-IOS-21), with AI-assisted implementation via Anthropic
 //               Claude Code.
 //   2026-09-28: RADE end-of-over callsigns: txEnding follows
-//               RadioModel::endOfOverTailActive. J.J. Boyd (KG4VCF),
+//               RadioModel::endOfOverTailActive; keyedBy* keep the key's
+//               holder until the radio is back in receive. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
 //   2026-09-26: Transmit group fix wave: I4 txState names the holder
 //               (holder fields, keyedForSeconds, txStateVersion 2); M3
@@ -383,6 +384,11 @@ private:
     bool m_keyStopped{false};
     QString m_lastKeyedByName;
     QString m_lastKeyedByKind;
+    // The keyedBy this key had, shown through the handover to receive and
+    // an end-of-over tail after keyedBy clears at the release.
+    QString m_heldKeyedByName;
+    QString m_heldKeyedByKind;
+    QByteArray m_heldKeyedTrigger;
 };
 
 } // namespace NereusSDR

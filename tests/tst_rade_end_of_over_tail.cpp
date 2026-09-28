@@ -270,6 +270,39 @@ private slots:
                  qPrintable(QStringLiteral("%1 samples queued").arg(queued)));
     }
 
+    // Review Minor 3: during the tail txState still says who keyed, though
+    // keyedBy clears at the release; it empties once back in receive.
+    void txStateShowsWhoKeyedDuringTail()
+    {
+        RealRig rig;
+        RadioModel::KeyedBy who;
+        who.deviceId = QByteArrayLiteral("device-1");
+        who.deviceName = QStringLiteral("Test phone");
+        who.deviceKind = QStringLiteral("phone");
+        who.trigger = QByteArrayLiteral("screen");
+        who.epoch = 1;
+        rig.model.setKeyedBy(who);
+        rig.key();
+        QCOMPARE(rig.state.keyedByName(), QStringLiteral("Test phone"));
+
+        rig.model.moxController()->setMox(false);
+        rig.model.setKeyedBy({});   // as RemoteKeying does at the release
+        pump();
+        QVERIFY(rig.state.txEnding());
+        QCOMPARE(rig.state.keyedByName(), QStringLiteral("Test phone"));
+        QCOMPARE(rig.state.keyedByKind(), QStringLiteral("phone"));
+        QCOMPARE(rig.state.keyedTrigger(), QStringLiteral("screen"));
+
+        for (int i = 0; i < 2000 && rig.model.endOfOverTailActive(); ++i) {
+            rig.tick();
+            pump(2);
+        }
+        QTRY_COMPARE_WITH_TIMEOUT(rig.model.moxController()->state(), MoxState::Rx, 5000);
+        pump();
+        QVERIFY(!rig.state.keyed());
+        QVERIFY(rig.state.keyedByName().isEmpty());
+    }
+
     // Review Important 1, case A: keyed in USB (the worker latched the WDSP
     // path), the slice switched to RADE while keyed, then released. The
     // live microphone path must not stay on the air for a tail.
