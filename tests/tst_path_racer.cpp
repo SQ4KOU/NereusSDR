@@ -41,6 +41,7 @@
 #include <QtTest>
 
 #include <QPointer>
+#include <QScopeGuard>
 #include <QSet>
 #include <QSignalSpy>
 #include <QTcpServer>
@@ -844,13 +845,32 @@ private slots:
                      /*controlChannelVersion=*/0);
         StationClient::ServiceRoute route = window.client->serviceRoute();
         int currentVersion = -1; // expired observation from the saved Core
-        route.currentControlChannelVersion = [&currentVersion] { return currentVersion; };
+        int routeChecks = 0;
+        route.currentControlChannelVersion = [&currentVersion, &routeChecks] {
+            ++routeChecks;
+            return currentVersion;
+        };
         window.client->setServiceRoute(route);
+        MediaIcePath direct;
+        direct.localType = QStringLiteral("srflx");
+        direct.remoteType = QStringLiteral("srflx");
+        direct.localAddress = QStringLiteral("198.51.100.6");
+        direct.remoteAddress = QStringLiteral("198.51.100.10");
+        DataChannelTransport::setSelectedPathOverrideForTest(
+            [direct](const DataChannelTransport*) {
+                return std::optional<MediaIcePath>(direct);
+            });
+        const auto clearSelectedPath = qScopeGuard([] {
+            DataChannelTransport::setSelectedPathOverrideForTest({});
+        });
         window.client->connectToStation(
             QUrl(QStringLiteral("wss://127.0.0.1:%1").arg(closedPort())), QString(), QString(),
             false, identityOf(core));
         QTRY_VERIFY_WITH_TIMEOUT(window.client->isHandshakeComplete(), 60000);
+        QVERIFY(routeChecks > 0);
         QCOMPARE(window.client->pathRank(), int(PathRacer::ServiceDirect));
+        QCOMPARE(window.outcomeFor(StationConnectionAttempt::Path::Service),
+                 StationConnectionAttempt::Outcome::Connected);
         window.client->disconnectFromStation(QStringLiteral("test done"));
     }
 };

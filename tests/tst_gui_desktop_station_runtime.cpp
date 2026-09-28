@@ -19,6 +19,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QCoreApplication>
+#include <QScopeGuard>
 #include <QSignalSpy>
 #include <QTcpServer>
 #include <QTemporaryDir>
@@ -46,6 +47,44 @@ bool writeConfig(const QString& path, int port)
         && file.write(QStringLiteral("remote_port = %1\nremote_bind = 127.0.0.1\n"
                                      "status_page = off\nrendezvous_servers =\n")
                           .arg(port).toUtf8()) > 0;
+}
+
+QByteArray fileBytes(const QString& path)
+{
+    QFile file(path);
+    return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray{};
+}
+
+QString preservedSettingsPath(const QString& path)
+{
+    return path + QStringLiteral(".runtime-test-original");
+}
+
+bool blockSettingsSave(const QString& path)
+{
+    const QString preserved = preservedSettingsPath(path);
+    if (!QFileInfo(path).isFile() || QFileInfo::exists(preserved)
+        || !QFile::rename(path, preserved)) {
+        return false;
+    }
+    if (QDir().mkdir(path)) {
+        QFile sentinel(QDir(path).filePath(QStringLiteral("save-blocker")));
+        if (sentinel.open(QIODevice::WriteOnly)
+            && sentinel.write("keep directory nonempty") > 0) {
+            return true;
+        }
+        sentinel.close();
+        QFile::remove(sentinel.fileName());
+        QDir().rmdir(path);
+    }
+    QFile::rename(preserved, path);
+    return false;
+}
+
+bool restoreSettingsFile(const QString& path)
+{
+    return QFile::remove(QDir(path).filePath(QStringLiteral("save-blocker")))
+        && QDir().rmdir(path) && QFile::rename(preservedSettingsPath(path), path);
 }
 }
 
@@ -105,7 +144,11 @@ private slots:
         service.profileDirectory = QFileInfo(settings.filePath()).absolutePath();
         service.homeDirectory = temp.filePath(QStringLiteral("home"));
         service.inheritActiveProfile = false;
-        service.runner = [](const QString&, const QStringList&) {
+        service.runner = [](const QString& program, const QStringList& args) {
+            if (program == QStringLiteral("systemctl")
+                && args.contains(QStringLiteral("is-enabled"))) {
+                return StationServiceCommandResult{1, {}};
+            }
             return StationServiceCommandResult{0, {}};
         };
         GuiDesktopStationRuntime runtime(&model, &settings, AppSettings::profileOverride(), true, service);
@@ -661,6 +704,10 @@ private slots:
         service.inheritActiveProfile = false;
         service.runner = [&commands](const QString& program, const QStringList& args) {
             commands << program + args.join(QLatin1Char(' '));
+            if (program == QStringLiteral("systemctl")
+                && args.contains(QStringLiteral("is-enabled"))) {
+                return StationServiceCommandResult{1, {}};
+            }
             return StationServiceCommandResult{0, {}};
         };
         RadioModel model;
@@ -674,7 +721,16 @@ private slots:
         QVERIFY(!runtime.setRunCore(true));
         QVERIFY(!runtime.prepareForRetirement(true, &reason));
         QVERIFY(runtime.backgroundStartWanted());
-        QVERIFY(commands.isEmpty()); // final service start belongs to the caller after unlock.
+        // Linux may probe is-enabled while constructing the runtime; final
+        // service start still belongs to the caller after unlock.
+        for (const QString& command : commands) {
+            QVERIFY2(!command.contains(QStringLiteral(" start ")),
+                     qPrintable(command));
+            QVERIFY2(!command.contains(QStringLiteral(" enable ")),
+                     qPrintable(command));
+            QVERIFY2(!command.contains(QStringLiteral(" disable ")),
+                     qPrintable(command));
+        }
         runtime.stop();
         QVERIFY(runtime.backgroundStartWanted());
     }
@@ -725,21 +781,25 @@ private slots:
         GuiDesktopStationRuntime runtime(&model, &settings, AppSettings::profileOverride(), true, service);
         QVERIFY(runtime.setRunCore(true));
         QVERIFY(runtime.setKeepRunning(true));
-        const QString directory = QFileInfo(settings.filePath()).absolutePath();
-        const QFileDevice::Permissions original = QFileInfo(directory).permissions();
-        struct RestorePermissions {
-            QString path;
-            QFileDevice::Permissions original;
-            ~RestorePermissions() { QFile::setPermissions(path, original); }
-        } restore{directory, original};
-        QVERIFY(QFile::setPermissions(directory,
-                QFileDevice::ReadOwner | QFileDevice::ExeOwner));
+        const QString settingsPath = settings.filePath();
+        const QByteArray originalBytes = fileBytes(settingsPath);
+        QVERIFY2(!originalBytes.isEmpty(), qPrintable(settingsPath));
+        QVERIFY(blockSettingsSave(settingsPath));
+        bool blocked = true;
+        const auto restoreOnFailure = qScopeGuard([&] {
+            if (blocked) { restoreSettingsFile(settingsPath); }
+        });
         QString reason;
         QVERIFY(!runtime.prepareForRetirement(true, &reason));
         QVERIFY(!reason.isEmpty());
         QVERIFY(!runtime.backgroundStartWanted());
         QVERIFY(!runtime.controller()->enabled());
-        QVERIFY(QFile::setPermissions(directory, original));
+        QVERIFY(QFileInfo(settingsPath).isDir());
+        QVERIFY(QFileInfo::exists(QDir(settingsPath).filePath(QStringLiteral("save-blocker"))));
+        QCOMPARE(fileBytes(preservedSettingsPath(settingsPath)), originalBytes);
+        QVERIFY(restoreSettingsFile(settingsPath));
+        blocked = false;
+        QCOMPARE(fileBytes(settingsPath), originalBytes);
         reason.clear();
         QVERIFY2(runtime.prepareForRetirement(true, &reason), qPrintable(reason));
         QVERIFY(runtime.backgroundStartWanted());

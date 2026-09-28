@@ -2071,9 +2071,10 @@ private slots:
         QVERIFY(notice != nullptr);
 
         // Mixed pages: how many Core controls each disables. Filter
-        // Presets, Spectrum Peaks, Waterfall Defaults, 3D View and Export /
-        // Import have no Core controls and are ThisComputer (R3 Setup fix
-        // wave, final review I4); so is VAX (R-R3-44).
+        // Presets, Spectrum Peaks, Waterfall Defaults and 3D View have no
+        // Core controls and are ThisComputer (R3 Setup fix wave, final
+        // review I4); so is VAX (R-R3-44). Export / Import remains a
+        // ThisComputer page, with a Core-dependent combined export action.
         const QMap<QString, int> coreControls{
             {QStringLiteral("Startup & Preferences"), 2}, // callsign, grid (R-R3-21)
             // General: Region, Network Watchdog (R-R3-49), Receive Only
@@ -2104,7 +2105,25 @@ private slots:
                 ++thisComputer;
                 QVERIFY2(page->isEnabled(), qPrintable(label));
                 QVERIFY2(notice->isHidden(), qPrintable(label));
-                QVERIFY2(gated.isEmpty(), qPrintable(label));
+                if (label == QStringLiteral("Export / Import")) {
+                    auto* const exportAll = page->findChild<QPushButton*>(
+                        QStringLiteral("exportAllSettingsButton"));
+                    auto* const importAll = page->findChild<QPushButton*>(
+                        QStringLiteral("importAllSettingsButton"));
+                    QVERIFY(exportAll != nullptr);
+                    QVERIFY(importAll != nullptr);
+                    QVERIFY(!exportAll->isEnabled());
+                    QCOMPARE(exportAll->accessibleDescription(), kStationReason);
+                    QCOMPARE(exportAll->toolTip(), kStationReason);
+                    QCOMPARE(gated, QList<QWidget*>{exportAll});
+                    // Combined import is not available in a remote window;
+                    // it has its own reason, independent of Core availability.
+                    QVERIFY(!importAll->isEnabled());
+                    QVERIFY(importAll->accessibleDescription().contains(
+                        QStringLiteral("not available yet")));
+                } else {
+                    QVERIFY2(gated.isEmpty(), qPrintable(label));
+                }
                 break;
             case SetupScope::Core:
                 ++core;
