@@ -220,7 +220,7 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
          && !(id == QLatin1String("diagnostics")
               && root.value(QStringLiteral("version")) == QJsonValue(3))
          && !(id == QLatin1String("display")
-              && root.value(QStringLiteral("version")) == QJsonValue(8))
+              && root.value(QStringLiteral("version")) == QJsonValue(9))
          && !(id == QLatin1String("appearance")
               && root.value(QStringLiteral("version")) == QJsonValue(7))
          && !(id == QLatin1String("pa")
@@ -283,7 +283,10 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                                          == QJsonValue(7))
                                 && !(id == QLatin1String("display")
                                      && control.value(QStringLiteral("requiresDescriptionVersion"))
-                                         == QJsonValue(8)))))
+                                         == QJsonValue(8))
+                                && !(id == QLatin1String("display")
+                                     && control.value(QStringLiteral("requiresDescriptionVersion"))
+                                         == QJsonValue(9)))))
                     || (control.value(QStringLiteral("kind")) == QJsonValue(QStringLiteral("table"))
                         && !((id == QLatin1String("dsp")
                               && SetupDescription::validateTnfTable(control))
@@ -575,6 +578,66 @@ bool SetupDescription::validateDisplaySettingBinding(const QJsonObject& control)
 
 bool SetupDescription::validateDisplayPhoneBinding(const QJsonObject& control)
 {
+    struct RendererSpec {
+        const char* id;
+        const char* key;
+        const char* label;
+        const char* tooltip;
+        const char* kind;
+        const char* applies;
+        int defaultValue;
+        int minimum;
+        int maximum;
+        int step;
+        const char* unit;
+    };
+    static constexpr RendererSpec rendererSpecs[] = {
+        {"display.spectrumDefaults.panFill", "DisplayPanFill", "Fill under trace",
+         "Check to fill the panadapter display line below the data.", "toggle", "live", 1, 0, 0, 0, ""},
+        {"display.spectrumDefaults.fillAlpha", "DisplayFftFillAlpha", "Fill Alpha:",
+         "Opacity of the fill area under the spectrum trace (0 = transparent, 100 = opaque).",
+         "slider", "live", 70, 0, 100, 1, "%"},
+        {"display.spectrumDefaults.gradient", "DisplayGradientEnabled", "Trace gradient",
+         "When checked, the spectrum trace line renders with the gradient color applied.",
+         "toggle", "live", 0, 0, 0, 0, ""},
+        {"display.spectrumDefaults.peakHold", "DisplayPeakHoldEnabled", "Peak hold",
+         "When enabled, the highest signal level seen at each frequency bin is held on the display.",
+         "toggle", "live", 0, 0, 0, 0, ""},
+        {"display.spectrumDefaults.peakDelay", "DisplayPeakHoldResetMs", "Peak Delay:",
+         "Time in milliseconds before a held peak begins to decay back toward the live trace.",
+         "integer", "live", 2000, 100, 10000, 100, "ms"},
+        {"display.waterfallDefaults.updatePeriod", "DisplayWfUpdatePeriodMs", "Update Period:",
+         "How often to update (scroll another pixel line) on the waterfall display.  Note that this is tamed by the FPS setting.",
+         "slider", "subscription", 30, 10, 500, 1, "ms"},
+        {"display.waterfallDefaults.stopOnTx", "WaterfallStopOnTx", "Stop on TX",
+         "Pause the waterfall while transmitting. Resumes automatically when TX ends.",
+         "toggle", "live", 0, 0, 0, 0, ""},
+        {"display.waterfallDefaults.opacity", "DisplayWfOpacity", "Opacity:",
+         "Waterfall opacity (0 = fully transparent, 100 = fully opaque). Blends the waterfall over the spectrum background.",
+         "slider", "live", 100, 0, 100, 1, "%"},
+    };
+    for (const RendererSpec& spec : rendererSpecs) {
+        if (control.value(QStringLiteral("id")) != QJsonValue(QLatin1String(spec.id))) {
+            continue;
+        }
+        const bool toggle = QLatin1String(spec.kind) == QLatin1String("toggle");
+        if (control.size() != (toggle ? 8 : 12)
+            || control.value(QStringLiteral("binding")) != QJsonValue(QJsonObject{
+                   {QStringLiteral("phone"), QLatin1String(spec.key)}})
+            || control.value(QStringLiteral("label")) != QJsonValue(QLatin1String(spec.label))
+            || control.value(QStringLiteral("tooltip")) != QJsonValue(QLatin1String(spec.tooltip))
+            || control.value(QStringLiteral("kind")) != QJsonValue(QLatin1String(spec.kind))
+            || control.value(QStringLiteral("applies")) != QJsonValue(QLatin1String(spec.applies))
+            || control.value(QStringLiteral("requiresDescriptionVersion")) != QJsonValue(9)
+            || control.value(QStringLiteral("default"))
+                != (toggle ? QJsonValue(spec.defaultValue != 0) : QJsonValue(spec.defaultValue))) {
+            return false;
+        }
+        return toggle || (control.value(QStringLiteral("min")) == QJsonValue(spec.minimum)
+            && control.value(QStringLiteral("max")) == QJsonValue(spec.maximum)
+            && control.value(QStringLiteral("step")) == QJsonValue(spec.step)
+            && control.value(QStringLiteral("unit")) == QJsonValue(QLatin1String(spec.unit)));
+    }
     struct Spec {
         const char* id;
         const char* phone;
@@ -1546,7 +1609,7 @@ QString SetupDescription::fitCategoryForVersion(const QString& description, int 
     const int ceiling = categoryId == QLatin1String("hardware") ? 6
         : categoryId == QLatin1String("pa") ? 5
         : categoryId == QLatin1String("appearance") ? 7
-        : categoryId == QLatin1String("display") ? 8 : 3;
+        : categoryId == QLatin1String("display") ? 9 : 3;
     category.insert(QStringLiteral("version"),
                     categoryId == QLatin1String("appearance") && version < 7
                         ? qMin(version, 4)

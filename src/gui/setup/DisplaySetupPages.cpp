@@ -890,6 +890,7 @@ void SpectrumDefaultsPage::buildUI()
                            + QLatin1Char(':'), m_decimationSpin);
 
     m_fillToggle = new QCheckBox(QStringLiteral("Fill under trace"), renderGroup);
+    m_fillToggle->setProperty("nereusSetupId", "display.spectrumDefaults.panFill");
     // Thetis: setup.designer.cs:33749 (chkDisplayPanFill)
     m_fillToggle->setToolTip(QStringLiteral("Check to fill the panadapter display line below the data."));
     connect(m_fillToggle, &QCheckBox::toggled, this, [this](bool on) {
@@ -902,6 +903,7 @@ void SpectrumDefaultsPage::buildUI()
     {
         auto row = makeSliderRow(0, 100, 70, QStringLiteral("%"), renderGroup);
         m_fillAlphaSlider = row.slider;
+        m_fillAlphaSlider->setProperty("nereusSetupId", "display.spectrumDefaults.fillAlpha");
         // Thetis: setup.designer.cs:3215 (tbDataFillAlpha) — no upstream tooltip; rewritten
         // Thetis original: (none)
         m_fillAlphaSlider->setToolTip(QStringLiteral("Opacity of the fill area under the spectrum trace (0 = transparent, 100 = opaque)."));
@@ -930,6 +932,7 @@ void SpectrumDefaultsPage::buildUI()
     }
 
     m_gradientToggle = new QCheckBox(QStringLiteral("Trace gradient"), renderGroup);
+    m_gradientToggle->setProperty("nereusSetupId", "display.spectrumDefaults.gradient");
     // Thetis: setup.designer.cs:53918 (chkDataLineGradient) — rewritten (grammar fix)
     // Thetis original: "The data line is also uses the gradient if checked"
     m_gradientToggle->setToolTip(QStringLiteral("When checked, the spectrum trace line renders with the gradient color applied."));
@@ -973,6 +976,7 @@ void SpectrumDefaultsPage::buildUI()
     }
 
     m_peakHoldToggle = new QCheckBox(QStringLiteral("Peak hold"), calGroup);
+    m_peakHoldToggle->setProperty("nereusSetupId", "display.spectrumDefaults.peakHold");
     // NereusSDR extension — no Thetis equivalent
     m_peakHoldToggle->setToolTip(QStringLiteral("When enabled, the highest signal level seen at each frequency bin is held on the display."));
     connect(m_peakHoldToggle, &QCheckBox::toggled, this, [this](bool on) {
@@ -983,6 +987,7 @@ void SpectrumDefaultsPage::buildUI()
     calForm->addRow(QString(), m_peakHoldToggle);
 
     m_peakHoldDelaySpin = new QSpinBox(calGroup);
+    m_peakHoldDelaySpin->setProperty("nereusSetupId", "display.spectrumDefaults.peakDelay");
     m_peakHoldDelaySpin->setRange(100, 10000);
     m_peakHoldDelaySpin->setSingleStep(100);
     m_peakHoldDelaySpin->setSuffix(QStringLiteral(" ms"));
@@ -1726,6 +1731,7 @@ void WaterfallDefaultsPage::buildUI()
     {
         auto row = makeSliderRow(10, 500, 50, QStringLiteral(" ms"), dispGroup);
         m_updatePeriodSlider = row.slider;
+        m_updatePeriodSlider->setProperty("nereusSetupId", "display.waterfallDefaults.updatePeriod");
         // Thetis: setup.designer.cs:34145 (udDisplayWaterfallUpdatePeriod)
         m_updatePeriodSlider->setToolTip(QStringLiteral("How often to update (scroll another pixel line) on the waterfall display.  Note that this is tamed by the FPS setting."));
         row.spin->setToolTip(QStringLiteral("How often to update (scroll another pixel line) on the waterfall display.  Note that this is tamed by the FPS setting."));
@@ -1751,6 +1757,7 @@ void WaterfallDefaultsPage::buildUI()
 
     // Task 2.8: Stop-on-TX.
     m_wfStopOnTx = new QCheckBox(QStringLiteral("Stop on TX"), dispGroup);
+    m_wfStopOnTx->setProperty("nereusSetupId", "display.waterfallDefaults.stopOnTx");
     m_wfStopOnTx->setToolTip(
         QStringLiteral("Pause the waterfall while transmitting. "
                        "Resumes automatically when TX ends."));
@@ -1764,6 +1771,7 @@ void WaterfallDefaultsPage::buildUI()
     {
         auto row = makeSliderRow(0, 100, 100, QStringLiteral("%"), dispGroup);
         m_opacitySlider = row.slider;
+        m_opacitySlider->setProperty("nereusSetupId", "display.waterfallDefaults.opacity");
         // Thetis: setup.designer.cs:2056 (tbRX1WaterfallOpacity) — rewritten
         // Thetis original: (none)
         m_opacitySlider->setToolTip(QStringLiteral("Waterfall opacity (0 = fully transparent, 100 = fully opaque). Blends the waterfall over the spectrum background."));

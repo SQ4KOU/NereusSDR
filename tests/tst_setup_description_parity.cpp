@@ -205,8 +205,12 @@ private slots:
             "display.spectrumDefaults.hzPerBinTarget", "display.spectrumDefaults.fps",
             "display.spectrumDefaults.detector", "display.spectrumDefaults.averaging",
             "display.spectrumDefaults.averageTime", "display.spectrumDefaults.decimation",
+            "display.spectrumDefaults.panFill", "display.spectrumDefaults.fillAlpha",
+            "display.spectrumDefaults.gradient", "display.spectrumDefaults.peakHold",
+            "display.spectrumDefaults.peakDelay",
             "display.waterfallDefaults.detector", "display.waterfallDefaults.averaging",
-            "display.waterfallDefaults.averageTime",
+            "display.waterfallDefaults.averageTime", "display.waterfallDefaults.updatePeriod",
+            "display.waterfallDefaults.stopOnTx", "display.waterfallDefaults.opacity",
             "display.multimeter.pollingDelay", "display.txDisplay.fftSize",
             "display.txDisplay.window", "display.txDisplay.panDetector",
             "display.txDisplay.panAveraging", "display.txDisplay.panAvTime",
@@ -219,9 +223,11 @@ private slots:
             ControlRanges::kDisplaySpectrumAveragingDefault,
             ControlRanges::kDisplaySpectrumAvgTimeDefaultMs,
             ControlRanges::kDisplayDecimationDefault,
+            true, 70, false, false, 2000,
             ControlRanges::kDisplayWaterfallDetectorDefault,
             ControlRanges::kDisplayWaterfallAveragingDefault,
             ControlRanges::kDisplayWaterfallAvgTimeDefaultMs,
+            30, false, 100,
             100, TxAnalyzer::kDefaultFftSize, TxAnalyzer::kDefaultWindowType,
             TxAnalyzer::kDefaultPanDetector, TxAnalyzer::kDefaultPanAveraging,
             TxAnalyzer::kDefaultPanAvTimeMs, TxAnalyzer::kDefaultPanNormalize,
@@ -253,13 +259,21 @@ private slots:
                     QVERIFY(SetupDescriptionService::validateDisplaySettingBinding(control)
                             || SetupDescriptionService::validateDisplayPhoneBinding(control));
                     compareControl(*native, control);
-                    if (control.value("binding").toObject().contains("phone")) {
+                    if (control.value("binding").toObject().contains("phone")
+                        && control.value("kind") != QJsonValue("toggle")) {
                         auto* const widget = qobject_cast<QWidget*>(
                             bySetupId(*native, control.value("id").toString()));
                         QVERIFY(widget != nullptr);
-                        auto* const form = qobject_cast<QFormLayout*>(widget->parentWidget()->layout());
+                        QWidget* field = widget;
+                        QFormLayout* form = nullptr;
+                        for (QWidget* parent = widget->parentWidget(); parent && !form;
+                             parent = parent->parentWidget()) {
+                            auto* candidate = qobject_cast<QFormLayout*>(parent->layout());
+                            if (candidate && candidate->labelForField(field)) { form = candidate; }
+                            else { field = parent; }
+                        }
                         QVERIFY(form != nullptr);
-                        auto* const label = qobject_cast<QLabel*>(form->labelForField(widget));
+                        auto* const label = qobject_cast<QLabel*>(form->labelForField(field));
                         QVERIFY(label != nullptr);
                         QCOMPARE(label->text(), control.value("label").toString());
                     }

@@ -1,5 +1,5 @@
 {
-  "version": 8,
+  "version": 9,
   "category": {
     "id": "display",
     "title": "Display",
@@ -170,6 +170,56 @@
               "requiresDescriptionVersion": 8,
               "min": 1, "max": 16, "step": 1, "default": 1,
               "gate": {"capability": "spectrumGrantVersion", "min": 2}
+            },
+            {
+              "id": "display.spectrumDefaults.panFill",
+              "label": "Fill under trace",
+              "tooltip": "Check to fill the panadapter display line below the data.",
+              "kind": "toggle",
+              "binding": {"phone": "DisplayPanFill"},
+              "applies": "live",
+              "requiresDescriptionVersion": 9,
+              "default": true
+            },
+            {
+              "id": "display.spectrumDefaults.fillAlpha",
+              "label": "Fill Alpha:",
+              "tooltip": "Opacity of the fill area under the spectrum trace (0 = transparent, 100 = opaque).",
+              "kind": "slider",
+              "binding": {"phone": "DisplayFftFillAlpha"},
+              "applies": "live",
+              "requiresDescriptionVersion": 9,
+              "min": 0, "max": 100, "step": 1, "unit": "%", "default": 70
+            },
+            {
+              "id": "display.spectrumDefaults.gradient",
+              "label": "Trace gradient",
+              "tooltip": "When checked, the spectrum trace line renders with the gradient color applied.",
+              "kind": "toggle",
+              "binding": {"phone": "DisplayGradientEnabled"},
+              "applies": "live",
+              "requiresDescriptionVersion": 9,
+              "default": false
+            },
+            {
+              "id": "display.spectrumDefaults.peakHold",
+              "label": "Peak hold",
+              "tooltip": "When enabled, the highest signal level seen at each frequency bin is held on the display.",
+              "kind": "toggle",
+              "binding": {"phone": "DisplayPeakHoldEnabled"},
+              "applies": "live",
+              "requiresDescriptionVersion": 9,
+              "default": false
+            },
+            {
+              "id": "display.spectrumDefaults.peakDelay",
+              "label": "Peak Delay:",
+              "tooltip": "Time in milliseconds before a held peak begins to decay back toward the live trace.",
+              "kind": "integer",
+              "binding": {"phone": "DisplayPeakHoldResetMs"},
+              "applies": "live",
+              "requiresDescriptionVersion": 9,
+              "min": 100, "max": 10000, "step": 100, "unit": "ms", "default": 2000
             }
           ]
         }
@@ -228,6 +278,36 @@
               "requiresDescriptionVersion": 8,
               "min": 10, "max": 9999, "step": 10, "unit": "ms", "default": 120,
               "gate": {"capability": "displayExtrasVersion", "min": 1}
+            },
+            {
+              "id": "display.waterfallDefaults.updatePeriod",
+              "label": "Update Period:",
+              "tooltip": "How often to update (scroll another pixel line) on the waterfall display.  Note that this is tamed by the FPS setting.",
+              "kind": "slider",
+              "binding": {"phone": "DisplayWfUpdatePeriodMs"},
+              "applies": "subscription",
+              "requiresDescriptionVersion": 9,
+              "min": 10, "max": 500, "step": 1, "unit": "ms", "default": 30
+            },
+            {
+              "id": "display.waterfallDefaults.stopOnTx",
+              "label": "Stop on TX",
+              "tooltip": "Pause the waterfall while transmitting. Resumes automatically when TX ends.",
+              "kind": "toggle",
+              "binding": {"phone": "WaterfallStopOnTx"},
+              "applies": "live",
+              "requiresDescriptionVersion": 9,
+              "default": false
+            },
+            {
+              "id": "display.waterfallDefaults.opacity",
+              "label": "Opacity:",
+              "tooltip": "Waterfall opacity (0 = fully transparent, 100 = fully opaque). Blends the waterfall over the spectrum background.",
+              "kind": "slider",
+              "binding": {"phone": "DisplayWfOpacity"},
+              "applies": "live",
+              "requiresDescriptionVersion": 9,
+              "min": 0, "max": 100, "step": 1, "unit": "%", "default": 100
             }
           ]
         }

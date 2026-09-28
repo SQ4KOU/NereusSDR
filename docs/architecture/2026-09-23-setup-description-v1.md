@@ -145,8 +145,8 @@ command or result binding. The actual peer must separately declare
 nothing. A V3 peer still receives the older controls with their existing
 semantics. The Core filters every control above the peer's negotiated
 description version, drops empty sections and pages, and caps an unknown
-future declaration at version 8. Hardware has a version-6 ceiling, PA a
-version-5 ceiling, Display a version-8 ceiling, and Appearance a version-7
+future declaration at version 9. Hardware has a version-6 ceiling, PA a
+version-5 ceiling, Display a version-9 ceiling, and Appearance a version-7
 ceiling with its prior version-4 projection for V4–V6; the other
 categories on this source retain version 3.
 No mirror field or ordinal changes.
@@ -233,6 +233,30 @@ version numbers (1–3, then 4), and omit the new Waterfall page. Native renderi
 behavior is unchanged; phone
 parsing and rendering require their own implementation.
 
+Version 9 appends eight phone-owned rendering controls to the existing partial
+Display pages, in native order after the V8 RX rows: Spectrum Defaults >
+Rendering has Fill under trace, Fill Alpha, Trace gradient, Peak hold, and Peak
+Delay; Waterfall Defaults > Display has Update Period, Stop on TX, and Opacity.
+Their closed `binding.phone` identities are the desktop's existing local keys:
+`DisplayPanFill`, `DisplayFftFillAlpha`, `DisplayGradientEnabled`,
+`DisplayPeakHoldEnabled`, `DisplayPeakHoldResetMs`, `DisplayWfUpdatePeriodMs`,
+`WaterfallStopOnTx`, and `DisplayWfOpacity`. These are phone-owned per-pan
+values, not Core settings writes or new persistence keys. The four toggles
+have native defaults true, false, false, false in that order. Fill Alpha is
+an integer percent 0–100, step 1, default 70; the phone's existing typed
+Double stores that percent divided by 100. Peak Delay is 100–10000 ms, step
+100, default 2000. Update Period is 10–500 ms, step 1, default 30; this is
+the one row with `applies:"subscription"` because the phone's existing
+subscriber derives frames per line from it. Opacity is integer percent
+0–100, step 1, default 100. The other seven have `applies:"live"` and
+affect phone rendering only. No new media field, setting, authority, or TX
+verb is defined. All eight require description version 9. V1–V8 projection
+retains its prior control counts and version, and V9 has 29 Display controls
+on the same four partial pages. The desktop renderer and native UI behavior
+remain unchanged. Phone generic V9 parsing and dispatch require separate
+phone work; its existing typed fields do not by themselves consume this
+description.
+
 V4 adds `default` metadata to these exact Display and Appearance controls.
 Display toggles use JSON booleans; its numeric controls use JSON numbers,
 with choice defaults as integer ordinals and FFT option defaults as their
@@ -261,9 +285,9 @@ to Average, Sample, or RMS enables it, and a change back to Peak or Rosenfell
 disables it. Core rejects any altered or extended dependency envelope.
 Normalize is stored with the existing exact `True`/`False` setting encoding.
 V1–V3 omit it. The other Display controls retain their existing numeric ranges
-or ordinal string choices. The category and all three pages remain partial;
+or ordinal string choices. The category and its pages remain partial;
 local colors, palettes, per-band tables, derived readouts, and actions are not
-described by this slice.
+described by the V4 slice. V9 adds the eight renderer rows described above.
 
 The phone uses a current-session settings snapshot and the current canonical
 radio MAC. Re-validate sends only that MAC to `station.validateSettings`;
