@@ -1894,6 +1894,7 @@ void WaterfallDefaultsPage::buildUI()
     m_showRxFilterToggle = new QCheckBox(QStringLiteral("Show RX filter on waterfall"), ovGroup);
     // Thetis: setup.designer.cs:3189 (chkShowRXFilterOnWaterfall) — rewritten
     // Thetis original: (none)
+    m_showRxFilterToggle->setProperty("nereusSetupId", "display.waterfallDefaults.showRxFilter");
     m_showRxFilterToggle->setToolTip(QStringLiteral("Overlay the current RX passband filter boundaries on the waterfall display."));
     connect(m_showRxFilterToggle, &QCheckBox::toggled, this, [this](bool on) {
         if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
@@ -1905,6 +1906,7 @@ void WaterfallDefaultsPage::buildUI()
     m_showTxFilterToggle = new QCheckBox(QStringLiteral("Show TX filter on RX waterfall"), ovGroup);
     // Thetis: setup.designer.cs:3187 (chkShowTXFilterOnRXWaterfall) — rewritten
     // Thetis original: (none)
+    m_showTxFilterToggle->setProperty("nereusSetupId", "display.waterfallDefaults.showTxFilter");
     m_showTxFilterToggle->setToolTip(QStringLiteral("Overlay the TX passband filter boundaries on the RX waterfall display."));
     connect(m_showTxFilterToggle, &QCheckBox::toggled, this, [this](bool on) {
         if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
@@ -1916,6 +1918,7 @@ void WaterfallDefaultsPage::buildUI()
     m_showRxZeroLineToggle = new QCheckBox(QStringLiteral("Show RX zero line on waterfall"), ovGroup);
     // Thetis: setup.designer.cs:3188 (chkShowRXZeroLineOnWaterfall) — rewritten
     // Thetis original: (none)
+    m_showRxZeroLineToggle->setProperty("nereusSetupId", "display.waterfallDefaults.showRxZeroLine");
     m_showRxZeroLineToggle->setToolTip(QStringLiteral("Draw a line on the waterfall at the RX center frequency (zero-beat reference)."));
     connect(m_showRxZeroLineToggle, &QCheckBox::toggled, this, [this](bool on) {
         if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
@@ -1927,6 +1930,7 @@ void WaterfallDefaultsPage::buildUI()
     m_showTxZeroLineToggle = new QCheckBox(QStringLiteral("Show TX zero line on waterfall"), ovGroup);
     // Thetis: setup.designer.cs:3242 (chkShowTXZeroLineOnWaterfall) — rewritten
     // Thetis original: (none)
+    m_showTxZeroLineToggle->setProperty("nereusSetupId", "display.waterfallDefaults.showTxZeroLine");
     m_showTxZeroLineToggle->setToolTip(QStringLiteral("Draw a line on the waterfall at the TX center frequency (zero-beat reference)."));
     connect(m_showTxZeroLineToggle, &QCheckBox::toggled, this, [this](bool on) {
         if (auto* w = model() ? model()->spectrumWidget() : nullptr) {

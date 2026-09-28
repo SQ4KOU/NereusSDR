@@ -1,5 +1,5 @@
 {
-  "version": 9,
+  "version": 10,
   "category": {
     "id": "display",
     "title": "Display",
@@ -308,6 +308,51 @@
               "applies": "live",
               "requiresDescriptionVersion": 9,
               "min": 0, "max": 100, "step": 1, "unit": "%", "default": 100
+            }
+          ]
+        },
+        {
+          "title": "Overlays",
+          "controls": [
+            {
+              "id": "display.waterfallDefaults.showRxFilter",
+              "label": "Show RX filter on waterfall",
+              "tooltip": "Overlay the current RX passband filter boundaries on the waterfall display.",
+              "kind": "toggle",
+              "binding": {"phone": "DisplayShowRxFilterOnWaterfall"},
+              "applies": "live",
+              "requiresDescriptionVersion": 10,
+              "default": false
+            },
+            {
+              "id": "display.waterfallDefaults.showTxFilter",
+              "label": "Show TX filter on RX waterfall",
+              "tooltip": "Overlay the TX passband filter boundaries on the RX waterfall display.",
+              "kind": "toggle",
+              "binding": {"phone": "DisplayShowTxFilterOnRxWaterfall"},
+              "applies": "live",
+              "requiresDescriptionVersion": 10,
+              "default": true
+            },
+            {
+              "id": "display.waterfallDefaults.showRxZeroLine",
+              "label": "Show RX zero line on waterfall",
+              "tooltip": "Draw a line on the waterfall at the RX center frequency (zero-beat reference).",
+              "kind": "toggle",
+              "binding": {"phone": "DisplayShowRxZeroLine"},
+              "applies": "live",
+              "requiresDescriptionVersion": 10,
+              "default": false
+            },
+            {
+              "id": "display.waterfallDefaults.showTxZeroLine",
+              "label": "Show TX zero line on waterfall",
+              "tooltip": "Draw a line on the waterfall at the TX center frequency (zero-beat reference).",
+              "kind": "toggle",
+              "binding": {"phone": "DisplayShowTxZeroLine"},
+              "applies": "live",
+              "requiresDescriptionVersion": 10,
+              "default": false
             }
           ]
         }

@@ -220,7 +220,7 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
          && !(id == QLatin1String("diagnostics")
               && root.value(QStringLiteral("version")) == QJsonValue(3))
          && !(id == QLatin1String("display")
-              && root.value(QStringLiteral("version")) == QJsonValue(9))
+              && root.value(QStringLiteral("version")) == QJsonValue(10))
          && !(id == QLatin1String("appearance")
               && root.value(QStringLiteral("version")) == QJsonValue(7))
          && !(id == QLatin1String("pa")
@@ -286,7 +286,10 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                                          == QJsonValue(8))
                                 && !(id == QLatin1String("display")
                                      && control.value(QStringLiteral("requiresDescriptionVersion"))
-                                         == QJsonValue(9)))))
+                                         == QJsonValue(9))
+                                && !(id == QLatin1String("display")
+                                     && control.value(QStringLiteral("requiresDescriptionVersion"))
+                                         == QJsonValue(10)))))
                     || (control.value(QStringLiteral("kind")) == QJsonValue(QStringLiteral("table"))
                         && !((id == QLatin1String("dsp")
                               && SetupDescription::validateTnfTable(control))
@@ -615,12 +618,30 @@ bool SetupDescription::validateDisplayPhoneBinding(const QJsonObject& control)
         {"display.waterfallDefaults.opacity", "DisplayWfOpacity", "Opacity:",
          "Waterfall opacity (0 = fully transparent, 100 = fully opaque). Blends the waterfall over the spectrum background.",
          "slider", "live", 100, 0, 100, 1, "%"},
+        {"display.waterfallDefaults.showRxFilter", "DisplayShowRxFilterOnWaterfall",
+         "Show RX filter on waterfall",
+         "Overlay the current RX passband filter boundaries on the waterfall display.",
+         "toggle", "live", 0, 0, 0, 0, ""},
+        {"display.waterfallDefaults.showTxFilter", "DisplayShowTxFilterOnRxWaterfall",
+         "Show TX filter on RX waterfall",
+         "Overlay the TX passband filter boundaries on the RX waterfall display.",
+         "toggle", "live", 1, 0, 0, 0, ""},
+        {"display.waterfallDefaults.showRxZeroLine", "DisplayShowRxZeroLine",
+         "Show RX zero line on waterfall",
+         "Draw a line on the waterfall at the RX center frequency (zero-beat reference).",
+         "toggle", "live", 0, 0, 0, 0, ""},
+        {"display.waterfallDefaults.showTxZeroLine", "DisplayShowTxZeroLine",
+         "Show TX zero line on waterfall",
+         "Draw a line on the waterfall at the TX center frequency (zero-beat reference).",
+         "toggle", "live", 0, 0, 0, 0, ""},
     };
     for (const RendererSpec& spec : rendererSpecs) {
         if (control.value(QStringLiteral("id")) != QJsonValue(QLatin1String(spec.id))) {
             continue;
         }
         const bool toggle = QLatin1String(spec.kind) == QLatin1String("toggle");
+        const int requiredVersion = QLatin1String(spec.id).startsWith(
+            QLatin1String("display.waterfallDefaults.show")) ? 10 : 9;
         if (control.size() != (toggle ? 8 : 12)
             || control.value(QStringLiteral("binding")) != QJsonValue(QJsonObject{
                    {QStringLiteral("phone"), QLatin1String(spec.key)}})
@@ -628,7 +649,7 @@ bool SetupDescription::validateDisplayPhoneBinding(const QJsonObject& control)
             || control.value(QStringLiteral("tooltip")) != QJsonValue(QLatin1String(spec.tooltip))
             || control.value(QStringLiteral("kind")) != QJsonValue(QLatin1String(spec.kind))
             || control.value(QStringLiteral("applies")) != QJsonValue(QLatin1String(spec.applies))
-            || control.value(QStringLiteral("requiresDescriptionVersion")) != QJsonValue(9)
+            || control.value(QStringLiteral("requiresDescriptionVersion")) != QJsonValue(requiredVersion)
             || control.value(QStringLiteral("default"))
                 != (toggle ? QJsonValue(spec.defaultValue != 0) : QJsonValue(spec.defaultValue))) {
             return false;
@@ -1609,7 +1630,7 @@ QString SetupDescription::fitCategoryForVersion(const QString& description, int 
     const int ceiling = categoryId == QLatin1String("hardware") ? 6
         : categoryId == QLatin1String("pa") ? 5
         : categoryId == QLatin1String("appearance") ? 7
-        : categoryId == QLatin1String("display") ? 9 : 3;
+        : categoryId == QLatin1String("display") ? 10 : 3;
     category.insert(QStringLiteral("version"),
                     categoryId == QLatin1String("appearance") && version < 7
                         ? qMin(version, 4)

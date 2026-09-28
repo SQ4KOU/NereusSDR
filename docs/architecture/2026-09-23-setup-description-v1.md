@@ -145,8 +145,8 @@ command or result binding. The actual peer must separately declare
 nothing. A V3 peer still receives the older controls with their existing
 semantics. The Core filters every control above the peer's negotiated
 description version, drops empty sections and pages, and caps an unknown
-future declaration at version 9. Hardware has a version-6 ceiling, PA a
-version-5 ceiling, Display a version-9 ceiling, and Appearance a version-7
+future declaration at version 10. Hardware has a version-6 ceiling, PA a
+version-5 ceiling, Display a version-10 ceiling, and Appearance a version-7
 ceiling with its prior version-4 projection for V4–V6; the other
 categories on this source retain version 3.
 No mirror field or ordinal changes.
@@ -256,6 +256,21 @@ on the same four partial pages. The desktop renderer and native UI behavior
 remain unchanged. Phone generic V9 parsing and dispatch require separate
 phone work; its existing typed fields do not by themselves consume this
 description.
+
+Version 10 appends four phone-owned Waterfall Defaults > Overlays toggles in
+native order: Show RX filter on waterfall, Show TX filter on RX waterfall,
+Show RX zero line on waterfall, and Show TX zero line on waterfall. Their
+`binding.phone` identities are `DisplayShowRxFilterOnWaterfall`,
+`DisplayShowTxFilterOnRxWaterfall`, `DisplayShowRxZeroLine`, and
+`DisplayShowTxZeroLine`. All four use `applies:"live"` and require description
+version 10. Their defaults are false, true, false, false; the TX filter's
+true default comes from the desktop renderer's persisted-load path, not its
+pre-load C++ member initializer. They remain per-pan operator-local renderer
+preferences, with no Core setting write, RX subscription field or new wire
+verb. V1–V9 projections retain their previous version numbers and 11/14/21/29
+control counts; V10 has 33 controls on the same four partial pages. The
+phone's typed settings and render paths already exist, but V10 descriptor
+parsing/dispatch and its TX-filter default correction are separately owned.
 
 V4 adds `default` metadata to these exact Display and Appearance controls.
 Display toggles use JSON booleans; its numeric controls use JSON numbers,

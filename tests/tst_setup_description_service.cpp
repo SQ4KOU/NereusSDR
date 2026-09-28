@@ -1516,14 +1516,14 @@ private slots:
             const QJsonObject display = QJsonDocument::fromJson(setupCategoryOnWire(
                 *core.app, "display", SessionMessageKind::ObjectCreate).toUtf8()).object();
             QCOMPARE(display.value("version"),
-                     QJsonValue(expected >= 9 ? 9 : expected >= 8 ? 8 : qMin(expected, 4)));
+                     QJsonValue(expected >= 10 ? 10 : expected >= 9 ? 9 : expected >= 8 ? 8 : qMin(expected, 4)));
             int displayControls = 0;
             for (const QJsonValue& page : display.value("pages").toArray()) {
                 for (const QJsonValue& section : page.toObject().value("sections").toArray()) {
                     displayControls += section.toObject().value("controls").toArray().size();
                 }
             }
-            QCOMPARE(displayControls, expected >= 9 ? 29 : expected >= 8 ? 21 : expected >= 4 ? 14 : 11);
+            QCOMPARE(displayControls, expected >= 10 ? 33 : expected >= 9 ? 29 : expected >= 8 ? 21 : expected >= 4 ? 14 : 11);
             QCOMPARE(display.value("pages").toArray().size(), expected >= 8 ? 4 : 3);
             const QJsonObject appearance = QJsonDocument::fromJson(setupCategoryOnWire(
                 *core.app, "appearance", SessionMessageKind::ObjectCreate).toUtf8()).object();
@@ -1611,7 +1611,8 @@ private slots:
         check(7, kSessionProtocolMinor, 7);
         check(8, kSessionProtocolMinor, 8);
         check(9, kSessionProtocolMinor, 9);
-        check(10, kSessionProtocolMinor, 9);
+        check(10, kSessionProtocolMinor, 10);
+        check(11, kSessionProtocolMinor, 10);
         check(2, quint16(kRadioIdentitySessionProtocolMinor - 1), 0);
         check(3, quint16(kRadioIdentitySessionProtocolMinor - 1), 0);
     }
@@ -1636,9 +1637,9 @@ private slots:
             const QJsonObject appearance = QJsonDocument::fromJson(
                 SetupDescriptionService::fitCategoryForVersion(service.appearance(), version).toUtf8()).object();
             QCOMPARE(display.value("version"),
-                     QJsonValue(version >= 9 ? 9 : version >= 8 ? 8 : qMin(version, 4)));
+                     QJsonValue(version >= 10 ? 10 : version >= 9 ? 9 : version >= 8 ? 8 : qMin(version, 4)));
             QCOMPARE(appearance.value("version"), QJsonValue(version >= 7 ? 7 : qMin(version, 4)));
-            QCOMPARE(controlsOf(display).size(), version < 4 ? 11 : version < 8 ? 14 : version < 9 ? 21 : 29);
+            QCOMPARE(controlsOf(display).size(), version < 4 ? 11 : version < 8 ? 14 : version < 9 ? 21 : version < 10 ? 29 : 33);
             QCOMPARE(display.value("pages").toArray().size(), version < 8 ? 3 : 4);
             QCOMPARE(controlsOf(appearance).size(), version < 7 ? 10 : 13);
             QCOMPARE(appearance.value("pages").toArray().size(), version < 7 ? 1 : 2);
@@ -1670,10 +1671,79 @@ private slots:
         }
     }
 
-    void displayV9PublishesClosedLocalRendererControls()
+    void displayV10PublishesFourClosedWaterfallOverlays()
     {
         SetupDescriptionService service;
         const QJsonObject display = service.category(QStringLiteral("display"));
+        QCOMPARE(display.value("version"), QJsonValue(10));
+        const QJsonArray sections = display.value("pages").toArray().at(1).toObject()
+            .value("sections").toArray();
+        QCOMPARE(sections.size(), 2);
+        QCOMPARE(sections.at(1).toObject().value("title"), QJsonValue("Overlays"));
+        const QJsonArray overlays = sections.at(1).toObject().value("controls").toArray();
+        QCOMPARE(overlays.size(), 4);
+        const QStringList ids{"display.waterfallDefaults.showRxFilter",
+                              "display.waterfallDefaults.showTxFilter",
+                              "display.waterfallDefaults.showRxZeroLine",
+                              "display.waterfallDefaults.showTxZeroLine"};
+        const QStringList keys{"DisplayShowRxFilterOnWaterfall",
+                               "DisplayShowTxFilterOnRxWaterfall",
+                               "DisplayShowRxZeroLine", "DisplayShowTxZeroLine"};
+        for (int i = 0; i < overlays.size(); ++i) {
+            const QJsonObject control = overlays.at(i).toObject();
+            QCOMPARE(control.value("id"), QJsonValue(ids.at(i)));
+            QCOMPARE(control.value("binding"), QJsonValue(QJsonObject{{"phone", keys.at(i)}}));
+            QCOMPARE(control.value("kind"), QJsonValue("toggle"));
+            QCOMPARE(control.value("applies"), QJsonValue("live"));
+            QCOMPARE(control.value("default"), QJsonValue(i == 1));
+            QCOMPARE(control.value("requiresDescriptionVersion"), QJsonValue(10));
+            QVERIFY(SetupDescriptionService::validateDisplayPhoneBinding(control));
+            const auto rejects = [&control](const QString& field, const QJsonValue& value) {
+                QJsonObject changed = control;
+                changed.insert(field, value);
+                QVERIFY(!SetupDescriptionService::validateDisplayPhoneBinding(changed));
+            };
+            rejects("binding", QJsonObject{{"setting", keys.at(i)}});
+            rejects("binding", QJsonObject{{"phone", "Unknown"}});
+            rejects("default", i != 1);
+            rejects("requiresDescriptionVersion", 9);
+            rejects("kind", "integer");
+            rejects("applies", "subscription");
+            rejects("min", 0);
+        }
+        const QJsonObject v9 = QJsonDocument::fromJson(
+            SetupDescriptionService::fitCategoryForVersion(service.display(), 9).toUtf8()).object();
+        QCOMPARE(v9.value("version"), QJsonValue(9));
+        QCOMPARE(v9.value("pages").toArray().at(1).toObject()
+                     .value("sections").toArray().size(), 1);
+        const auto countControls = [](const QJsonObject& category) {
+            int count = 0;
+            for (const QJsonValue& page : category.value("pages").toArray()) {
+                for (const QJsonValue& section : page.toObject().value("sections").toArray()) {
+                    count += section.toObject().value("controls").toArray().size();
+                }
+            }
+            return count;
+        };
+        QCOMPARE(countControls(v9), 29);
+        QCOMPARE(countControls(display), 33);
+        QJsonObject prior = display;
+        prior.insert("version", 9);
+        QJsonArray priorPages = prior.value("pages").toArray();
+        QJsonObject priorWaterfall = priorPages.at(1).toObject();
+        QJsonArray priorSections = priorWaterfall.value("sections").toArray();
+        priorSections.removeAt(1);
+        priorWaterfall.insert("sections", priorSections);
+        priorPages[1] = priorWaterfall;
+        prior.insert("pages", priorPages);
+        QCOMPARE(v9, prior);
+    }
+
+    void displayV9PublishesClosedLocalRendererControls()
+    {
+        SetupDescriptionService service;
+        const QJsonObject display = QJsonDocument::fromJson(
+            SetupDescriptionService::fitCategoryForVersion(service.display(), 9).toUtf8()).object();
         QCOMPARE(display.value("version"), QJsonValue(9));
         const QJsonArray pages = display.value("pages").toArray();
         QCOMPARE(pages.size(), 4);
@@ -1814,14 +1884,14 @@ private slots:
     {
         SetupDescriptionService service;
         const QJsonObject display = service.category(QStringLiteral("display"));
-        QCOMPARE(display.value("version"), QJsonValue(9));
+        QCOMPARE(display.value("version"), QJsonValue(10));
         QCOMPARE(display.value("pages").toArray().size(), 4);
         const QString source = service.display();
-        for (int version = 1; version <= 9; ++version) {
+        for (int version = 1; version <= 10; ++version) {
             const QJsonObject fitted = QJsonDocument::fromJson(
                 SetupDescriptionService::fitCategoryForVersion(source, version).toUtf8()).object();
             QCOMPARE(fitted.value("version"),
-                     QJsonValue(version >= 9 ? 9 : version >= 8 ? 8 : qMin(version, 4)));
+                     QJsonValue(version >= 10 ? 10 : version >= 9 ? 9 : version >= 8 ? 8 : qMin(version, 4)));
             int count = 0;
             int optionSliders = 0;
             for (const QJsonValue& page : fitted.value("pages").toArray()) {
@@ -1840,7 +1910,7 @@ private slots:
                     }
                 }
             }
-            QCOMPARE(count, version >= 9 ? 29 : version >= 8 ? 21 : version >= 4 ? 14 : 11);
+            QCOMPARE(count, version >= 10 ? 33 : version >= 9 ? 29 : version >= 8 ? 21 : version >= 4 ? 14 : 11);
             QCOMPARE(optionSliders, version >= 4 ? 2 : 0);
         }
     }
