@@ -1904,8 +1904,26 @@ colours for the same signal.
   reasons. Keep Reset unavailable. Avoid a general command/result scripting
   language for this one established operation.
 - Status: read-only source audit complete; phone informed of the existing
-  protocol and missing description. Contract and implementation pending.
+  protocol and missing description. The lead settled a closed V3 Settings
+  Validation panel with exact desktop actions and existing command semantics;
+  implementation is assigned. V1/V2 clients keep their prior empty Diagnostics
+  projection. This does not settle Reset or local file/log behavior.
 - Plan: phone Setup description and remote Settings Validation parity.
+
+### G-98: Audio compatibility tests reject independently negotiated start fields
+
+- Evidence: two audio tests hide one older audio capability but still advertise
+  mini-display, remote IQ, media tunnel and relay routing. Production correctly
+  includes those negotiated fields; old assertions expected only two or three
+  keys. The documented start contract and Core decoder agree with production.
+- Ruling basis: JJ requires compatibility verification with real audio coverage;
+  correct stale expectations without changing production behavior or deadlines.
+- Status: signed `8949ca83` checks the exact negotiated start and audio-control
+  shapes, including literal two-key start for minor 7. Existing decoded-audio,
+  mute, reconnect and context checks remain. App/Core and full integrated
+  remote-audio session suite pass (44.39 s). The Linux minor-7 peer-open failure
+  is separately confounded by G-91 and awaits the corrected-network run.
+- Plan: remote audio compatibility and meaningful CI evidence.
 
 ## How this addendum is kept
 

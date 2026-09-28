@@ -169,12 +169,36 @@ double toneAmplitude(const QVector<float>& samples, int channel, double hz,
     return frames > 0 ? 2.0 * std::hypot(cosine, sine) / frames : 0.0;
 }
 
-// R-R3-23: every media start and audio control this GUI sent has exactly
-// today's keys (no audioProfileVersion, no profile), and there was at least
-// one of each.
-bool onlyTodaysAudioControls(const QSignalSpy& coreControls)
+// R-R3-23: audio detail can be absent while newer, independent media
+// capabilities are present. Check the entire negotiated start shape after
+// removing only its fresh connection ID, and require the legacy audio
+// control shape separately.
+QJsonObject modernStartWithoutConnection(bool audioProfile)
 {
-    const QStringList startKeys{QStringLiteral("connectionId"), QStringLiteral("op")};
+    QJsonObject start{{QStringLiteral("op"), QStringLiteral("start")},
+                      {QStringLiteral("mediaRelayRoutingVersion"), 1},
+                      {QStringLiteral("mediaTunnelVersion"), 1},
+                      {QStringLiteral("miniDisplayVersion"), 1},
+                      {QStringLiteral("remoteIqVersion"), 1}};
+    if (audioProfile) { start.insert(QStringLiteral("audioProfileVersion"), 1); }
+    return start;
+}
+
+bool startMatches(const QJsonObject& control, const QJsonObject& expectedWithoutConnection)
+{
+    if (control.value(QStringLiteral("connectionId")).toString().isEmpty()) { return false; }
+    QJsonObject shape = control;
+    shape.remove(QStringLiteral("connectionId"));
+    if (shape != expectedWithoutConnection) {
+        qWarning() << "start shape" << shape << "expected" << expectedWithoutConnection;
+        return false;
+    }
+    return true;
+}
+
+bool onlyExpectedAudioControls(const QSignalSpy& coreControls,
+                               const QJsonObject& expectedStartWithoutConnection)
+{
     const QStringList audioKeys{QStringLiteral("connectionId"), QStringLiteral("enabled"),
                                 QStringLiteral("op"), QStringLiteral("revision")};
     int starts = 0;
@@ -186,7 +210,7 @@ bool onlyTodaysAudioControls(const QSignalSpy& coreControls)
         keys.sort();
         if (op == QLatin1String("start")) {
             ++starts;
-            if (keys != startKeys) { return false; }
+            if (!startMatches(control, expectedStartWithoutConnection)) { return false; }
         } else if (op == QLatin1String("audio")) {
             ++audio;
             if (keys != audioKeys) { return false; }
@@ -266,9 +290,9 @@ private slots:
         source.start();
         speaker.start();
 
-        // R-R3-23: a Core from before the lossless choice. This GUI sends it
-        // exactly today's media start and audio controls, and the rest of
-        // this test is today's session unchanged. R-R3-35: it also predates
+        // R-R3-23: this Core lacks the lossless choice but still advertises
+        // independent media features. Its start names those negotiated
+        // features, without audioProfileVersion. R-R3-35: it also predates
         // measured delay, so it is sent no clock probe.
         QSignalSpy coreControls(&h.server, &StationServer::mediaControlReceived);
         h.hideAudioProfile = true;
@@ -282,8 +306,12 @@ private slots:
         QVERIFY(remoteMedia.audioDetailNegotiated());
         QVERIFY(!remoteMedia.audioProfileNegotiated());
         QVERIFY(!remoteMedia.audioClockNegotiated());
+        QCOMPARE(h.client.capabilities().mediaRelayRoutingVersion, 1);
+        QCOMPARE(h.client.capabilities().mediaTunnelVersion, 1);
+        QCOMPARE(h.client.capabilities().miniDisplayVersion, 1);
+        QCOMPARE(h.client.capabilities().remoteIqVersion, 1);
         QTRY_VERIFY_WITH_TIMEOUT(!latestAudioContext(controls).isEmpty(), 15000);
-        QVERIFY(onlyTodaysAudioControls(coreControls));
+        QVERIFY(onlyExpectedAudioControls(coreControls, modernStartWithoutConnection(false)));
         const QJsonObject initial = latestAudioContext(controls);
         // Minor 8: the eight keys plus the profile Core actually encodes with.
         QCOMPARE(initial.size(), 9);
@@ -411,8 +439,9 @@ private slots:
                                  && channelEnergy(h.remoteBus->heard, 1, heardBeforeReconnect) > 0.5,
                                  15000);
         QCOMPARE(remoteErrors.count(), 0);
-        // Mute, resume and reconnect all kept today's controls.
-        QVERIFY(onlyTodaysAudioControls(coreControls));
+        // Mute, resume and reconnect kept the negotiated start and legacy
+        // audio-control shapes.
+        QVERIFY(onlyExpectedAudioControls(coreControls, modernStartWithoutConnection(false)));
         QCOMPARE(clockProbesIn(coreControls), 0);
         QVERIFY(!remoteMedia.audioDelay().measurable);
         QVERIFY(!remoteMedia.audioDelay().estimate);
@@ -440,6 +469,7 @@ private slots:
         DaemonMediaController daemonMedia(&h.server, &h.station);
         QSignalSpy remoteErrors(&remoteMedia, &RemoteMediaController::errorOccurred);
         QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+        QSignalSpy coreControls(&h.server, &StationServer::mediaControlReceived);
         AcceptedContexts accepted(remoteMedia);
         // A minor-7 Core reports no profile; the GUI says so rather than
         // naming one it assumes.
@@ -477,6 +507,10 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(latestAudioContext(controls)
                                      .value(QStringLiteral("enabled")).toBool(), 15000);
         QCOMPARE(latestAudioContext(controls).size(), 8);
+        // Minor 7 negotiated no optional start fields: exactly op and the
+        // fresh connectionId reach Core, with the legacy audio controls.
+        QVERIFY(onlyExpectedAudioControls(coreControls,
+                                          {{QStringLiteral("op"), QStringLiteral("start")}}));
 
         const int heardBefore = h.remoteBus->heard.size() / 2;
         QTRY_VERIFY_WITH_TIMEOUT(channelEnergy(h.remoteBus->heard, 0, heardBefore) > 0.5
@@ -953,8 +987,8 @@ private slots:
     }
 
     // R-R3-43: a Core from before receiver audio. No receiver request goes
-    // out, an app is told in plain words, and every control on the wire is
-    // exactly what this app sent such a Core before.
+    // out, an app is told in plain words, and no receiver-audio field is
+    // sent. Independent negotiated features still appear on the start.
     void hiddenReceiverAudioKeepsTodaysControls()
     {
         Harness h;
@@ -991,6 +1025,10 @@ private slots:
         QVERIFY(remoteMedia.audioProfileNegotiated());
         QVERIFY(!remoteMedia.receiverAudioNegotiated());
         QVERIFY(!remoteMedia.headphonesMixNegotiated());
+        QCOMPARE(h.client.capabilities().mediaRelayRoutingVersion, 1);
+        QCOMPARE(h.client.capabilities().mediaTunnelVersion, 1);
+        QCOMPARE(h.client.capabilities().miniDisplayVersion, 1);
+        QCOMPARE(h.client.capabilities().remoteIqVersion, 1);
         QTRY_COMPARE_WITH_TIMEOUT(remoteMedia.audioStatus().state,
                                   RemoteAudioStatus::State::Playing, 15000);
         QTRY_VERIFY(!app.stops().isEmpty()
@@ -1016,8 +1054,6 @@ private slots:
                                   RemoteAudioStatus::State::Playing, 10000);
         QTest::qWait(300);
 
-        const QStringList startKeys{QStringLiteral("audioProfileVersion"),
-                                    QStringLiteral("connectionId"), QStringLiteral("op")};
         const QStringList audioKeys{QStringLiteral("connectionId"), QStringLiteral("enabled"),
                                     QStringLiteral("op"), QStringLiteral("profile"),
                                     QStringLiteral("revision")};
@@ -1031,8 +1067,7 @@ private slots:
             keys.sort();
             if (op == QLatin1String("start")) {
                 ++starts;
-                QCOMPARE(keys, startKeys);
-                QCOMPARE(control.value(QStringLiteral("audioProfileVersion")).toInteger(), qint64{1});
+                QVERIFY(startMatches(control, modernStartWithoutConnection(true)));
             } else if (op == QLatin1String("audio")) {
                 ++audio;
                 QCOMPARE(keys, audioKeys);
