@@ -134,13 +134,22 @@ void RemoteTransmitClient::keepaliveTick()
     }
     // A sent off waits for its own accepted result. Until then only the
     // ordered primary may carry heartbeats; this also gates a future aux.
-    if (m_pendingReleases == 0 && m_channelKeepalive
-        && m_channelKeepalive(sequence, epoch)) {
-        ++m_channelKeepalives;
-        return;
+    const QPointer<RemoteTransmitClient> self(this);
+    const quint64 sessionGeneration = m_sessionGeneration;
+    if (m_pendingReleases == 0 && m_channelKeepalive) {
+        const KeepaliveSender channel = m_channelKeepalive;
+        const bool sent = channel(sequence, epoch);
+        if (!self || m_sessionGeneration != sessionGeneration) { return; }
+        if (sent) {
+            ++m_channelKeepalives;
+            return;
+        }
     }
-    if (m_sessionKeepalive && m_sessionKeepalive(sequence, epoch)) {
-        ++m_sessionKeepalives;
+    if (m_sessionKeepalive) {
+        const KeepaliveSender session = m_sessionKeepalive;
+        const bool sent = session(sequence, epoch);
+        if (!self || m_sessionGeneration != sessionGeneration) { return; }
+        if (sent) { ++m_sessionKeepalives; }
     }
 }
 
@@ -150,7 +159,11 @@ void RemoteTransmitClient::setAvailable(bool available)
         return;
     }
     m_available = available;
+    const QPointer<RemoteTransmitClient> self(this);
     reset();
+    if (!self || m_available != available) {
+        return;
+    }
     if (!available) {
         // The Core unkeys a device whose link drops and never keys it
         // again by itself; nothing here survives.
@@ -174,7 +187,13 @@ quint32 RemoteTransmitClient::send(const QByteArray& verb, const QList<MirrorUpd
         // safe until it returns a command id that was queued on primary.
         ++m_releaseDispatches;
     }
-    const quint32 id = m_available && m_sender ? m_sender(verb, arguments) : 0;
+    // Keep the callable alive if it synchronously destroys its owner.
+    const Sender sender = m_sender;
+    const QPointer<RemoteTransmitClient> self(this);
+    const quint32 id = m_available && sender ? sender(verb, arguments) : 0;
+    if (!self) {
+        return 0;
+    }
     if (m_sessionGeneration != sessionGeneration) {
         // The sender closed or replaced the session while reentering. The
         // reset retired this attempt; never insert its old command id.
@@ -204,9 +223,11 @@ void RemoteTransmitClient::setScreenKey(bool down)
         if (m_screen.phase != Phase::Idle) {
             return;  // already pressed
         }
+        const QPointer<RemoteTransmitClient> self(this);
         const quint32 id = send(QByteArrayLiteral("tx.key"),
                                 {utf8Argument("trigger", QString::fromLatin1(kScreenTrigger))},
                                 Kind::ScreenKey);
+        if (!self) { return; }
         if (id == 0) {
             emit refused(QString::fromLatin1(m_releaseFailureSticky ? kReleaseFailedReason
                                                                     : kNoLinkReason),
@@ -226,7 +247,9 @@ void RemoteTransmitClient::setScreenKey(bool down)
         if (m_program.phase == Phase::On) {
             const quint32 epoch = m_program.epoch;
             m_program = Key{};
+            const QPointer<RemoteTransmitClient> self(this);
             release(epoch != 0 ? epoch : kReleaseAnyEpoch);
+            if (!self) { return; }
             publish();
         } else if (m_coreTransmitting) {
             // MOX off while the Core transmits for no key of this window's
@@ -246,7 +269,9 @@ void RemoteTransmitClient::setScreenKey(bool down)
     if (m_program.phase == Phase::On) {
         m_program = Key{};
     }
+    const QPointer<RemoteTransmitClient> self(this);
     release(epoch);
+    if (!self) { return; }
     publish();
 }
 
@@ -259,8 +284,10 @@ void RemoteTransmitClient::release(quint32 epoch)
 
 void RemoteTransmitClient::setTune(bool on)
 {
+    const QPointer<RemoteTransmitClient> self(this);
     const quint32 id = send(QByteArrayLiteral("tx.tune"), {boolArgument("on", on)}, Kind::Tune,
                             /*releaseIntent=*/!on);
+    if (!self) { return; }
     m_tuneAsked = on && id != 0;
     if (id == 0 && on) {
         emit refused(QString::fromLatin1(m_releaseFailureSticky ? kReleaseFailedReason
@@ -274,9 +301,11 @@ void RemoteTransmitClient::setTunerTune(bool on)
 {
     // Answered as TUNE is (Kind::Tune): its carrier keeps this window's
     // keepalives going while it waits for the amplifier and while it is on.
+    const QPointer<RemoteTransmitClient> self(this);
     const quint32 id =
         send(QByteArrayLiteral("tx.tunerTune"), {boolArgument("on", on)}, Kind::Tune,
              /*releaseIntent=*/!on);
+    if (!self) { return; }
     m_tuneAsked = on && id != 0;
     if (id == 0 && on) {
         emit refused(QString::fromLatin1(m_releaseFailureSticky ? kReleaseFailedReason
@@ -288,9 +317,11 @@ void RemoteTransmitClient::setTunerTune(bool on)
 
 void RemoteTransmitClient::setTwoTone(bool on)
 {
+    const QPointer<RemoteTransmitClient> self(this);
     const quint32 id =
         send(QByteArrayLiteral("tx.twoTone"), {boolArgument("on", on)}, Kind::TwoTone,
              /*releaseIntent=*/!on);
+    if (!self) { return; }
     m_twoToneAsked = on && id != 0;
     if (id == 0 && on) {
         emit refused(QString::fromLatin1(m_releaseFailureSticky ? kReleaseFailedReason
@@ -309,9 +340,11 @@ void RemoteTransmitClient::keyForProgram(std::function<void(const Answer&)> answ
         if (answer) { answer(refusedAnswer); }
         return;
     }
+    const QPointer<RemoteTransmitClient> self(this);
     const quint32 id = send(QByteArrayLiteral("tx.key"),
                             {utf8Argument("trigger", QString::fromLatin1(kProgramTrigger))},
                             Kind::ProgramKey);
+    if (!self) { return; }
     if (id == 0) {
         Answer refusedAnswer;
         refusedAnswer.reason = QString::fromLatin1(m_releaseFailureSticky
@@ -334,7 +367,9 @@ void RemoteTransmitClient::unkeyForProgram(quint32 epoch)
     // go leaves it on: a manual key is the operator's until released
     // (MoxController's rule for a TCI release under a manual key).
     if (m_screen.phase == Phase::Idle && (wasOn || epoch != 0)) {
+        const QPointer<RemoteTransmitClient> self(this);
         release(epoch != 0 ? epoch : kReleaseAnyEpoch);
+        if (!self) { return; }
     }
     publish();
 }

@@ -30,6 +30,7 @@
 
 #include <QtTest>
 
+#include <QPointer>
 #include <QSignalSpy>
 
 #include "core/session/RemoteTransmitClient.h"
@@ -692,6 +693,90 @@ private slots:
         client.commandFinished(oldOffId, QByteArrayLiteral("tx.unkey"), false,
                                QStringLiteral("stale refusal"), {});
         QCOMPARE(refused.count(), 0);
+    }
+
+    void senderDeletingClientDoesNotResumeAKeyCall()
+    {
+        RemoteTransmitClient* raw = nullptr;
+        auto* client = new RemoteTransmitClient(
+            [&](const QByteArray&, const QList<MirrorUpdate>&) -> quint32 {
+                delete raw;
+                raw = nullptr;
+                return 100;
+            });
+        raw = client;
+        QPointer<RemoteTransmitClient> alive(client);
+        client->setAvailable(true);
+        client->setScreenKey(true);
+        QVERIFY(alive.isNull());
+    }
+
+    void senderDeletionStopsEveryTransmitCaller()
+    {
+        for (int scenario = 0; scenario < 7; ++scenario) {
+            RemoteTransmitClient* raw = nullptr;
+            bool deleteNext = false;
+            quint32 nextId = 100;
+            auto* client = new RemoteTransmitClient(
+                [&](const QByteArray&, const QList<MirrorUpdate>&) -> quint32 {
+                    const quint32 id = nextId++;
+                    if (deleteNext) {
+                        delete raw;
+                        raw = nullptr;
+                    }
+                    return id;
+                });
+            raw = client;
+            QPointer<RemoteTransmitClient> alive(client);
+            client->setAvailable(true);
+            if (scenario == 0) { client->setScreenKey(true); }
+            deleteNext = true;
+            switch (scenario) {
+            case 0: client->setScreenKey(false); break;
+            case 1: client->setTune(true); break;
+            case 2: client->setTune(false); break;
+            case 3: client->setTunerTune(true); break;
+            case 4: client->setTwoTone(true); break;
+            case 5: client->keyForProgram({}); break;
+            case 6: client->unkeyForProgram(7); break;
+            }
+            QVERIFY2(alive.isNull(), qPrintable(QStringLiteral("scenario %1").arg(scenario)));
+        }
+    }
+
+    void resetSignalDeletingClientDoesNotResumeAvailabilityCall()
+    {
+        Recorder core;
+        auto* client = new RemoteTransmitClient(core.sender());
+        QPointer<RemoteTransmitClient> alive(client);
+        client->setAvailable(true);
+        client->setScreenKey(true);
+        QObject::connect(client, &RemoteTransmitClient::micKeyDownChanged, client,
+                         [client](bool down) {
+                             if (!down) { delete client; }
+                         }, Qt::DirectConnection);
+        client->setAvailable(false);
+        QVERIFY(alive.isNull());
+    }
+
+    void availabilityHeartbeatCallbackCanDeleteClient()
+    {
+        Recorder core;
+        auto* client = new RemoteTransmitClient(core.sender());
+        QPointer<RemoteTransmitClient> alive(client);
+        bool primaryCalled = false;
+        client->setVoxArmed(true);
+        client->setSessionKeepalive([&](quint64, quint32) {
+            primaryCalled = true;
+            return true;
+        });
+        client->setChannelKeepalive([client](quint64, quint32) {
+            delete client;
+            return false;
+        });
+        client->setAvailable(true);  // Starts the VOX heartbeat immediately.
+        QVERIFY(alive.isNull());
+        QVERIFY(!primaryCalled);
     }
 
     void refusedUnknownOrWrongVerbReplyCannotLiftReleaseFence()
