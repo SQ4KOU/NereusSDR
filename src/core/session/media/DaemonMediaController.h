@@ -741,6 +741,7 @@ private:
     bool m_receiverAudioNegotiated{false};
     // Parity Task 28: this session's start declared txDisplayVersion.
     bool m_txDisplayNegotiated{false};
+    bool m_miniDisplayNegotiated{false};
     // Parity Task 31: the version it declared (3 and above: `duplex`), and
     // the device whose DUP this controller last told RadioModel is on.
     quint32 m_txDisplayDeclared{0};

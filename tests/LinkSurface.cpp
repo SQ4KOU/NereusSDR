@@ -487,7 +487,7 @@ std::optional<QList<QByteArray>> liveSessionWire(
     clientEnd->sendText(SessionMessages::encode(SessionMessages::hello(
         kSessionProtocolMajor, kSessionProtocolMinor, 0, QStringLiteral("link-surface"),
         {kSessionProtocolMajor}, {{"deviceAuth", 1}, {"sessionHolder", 1}, {"remoteTx", 1},
-                                  {"settingsHygiene", 1}, {"setupDescription", 1}})));
+                                  {"settingsHygiene", 1}, {"setupDescription", 1}, {"miniDisplay", 1}})));
     clientEnd->sendText(SessionMessages::encode(SessionMessages::authRequest(server.token())));
 
     // The loopback delivers on later event-loop turns, as a socket would.
@@ -520,6 +520,7 @@ QJsonArray captureCapabilities()
     caps.settingsHygieneVersion = 1;
     caps.remoteIqVersion = 1;
     caps.setupDescriptionVersion = 1;
+    caps.miniDisplayVersion = 1;
 
     // The values come from a live station with every feature a Core can
     // switch on: media, telemetry, an enforced display budget with its
@@ -949,6 +950,7 @@ QJsonObject guiToCoreOps()
     // DaemonMediaController.cpp handleStart: exactKeys {"op","connectionId"}
     // once each declared version key is removed.
     ops.insert(QStringLiteral("start"), declaredOp(kMedia, peer, {
+        {QStringLiteral("miniDisplayVersion"), {QStringLiteral("miniDisplayVersion")}},
         {QStringLiteral("audioProfileVersion"), {QStringLiteral("audioProfileVersion")}},
         {QStringLiteral("receiverAudioVersion"), {QStringLiteral("receiverAudioVersion")}},
         {QStringLiteral("remoteIqVersion"), {QStringLiteral("remoteIqVersion")}},
@@ -980,7 +982,8 @@ QJsonObject guiToCoreOps()
                            QStringLiteral("framesPerLine"), QStringLiteral("trace"),
                            QStringLiteral("waterfall"), QStringLiteral("minDbm"),
                            QStringLiteral("maxDbm"), QStringLiteral("wideSpanFactor")},
-        {{QStringLiteral("extendedView"), {QStringLiteral("remoteWidebandDisplayVersion")}},
+        {{QStringLiteral("displayRole"), {QStringLiteral("miniDisplayVersion")}},
+         {QStringLiteral("extendedView"), {QStringLiteral("remoteWidebandDisplayVersion")}},
          // Parity Task 17: spectrumGrantVersion 2.
          {QStringLiteral("decimation"), {QStringLiteral("spectrumGrantVersion")}},
          {QStringLiteral("peakBlobs"), {extras}},

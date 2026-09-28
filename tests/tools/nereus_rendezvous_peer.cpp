@@ -48,9 +48,11 @@
 //       exits 0 when the session was established, 1 otherwise.
 //
 // Plan Task 29 (R-IOS-16; the link document, section 21):
-//   core ... [--listen PORT] [--media]
+//   core ... [--listen PORT [--listen-loopback]] [--media]
 //       --listen: the Core's WebSocket on every address at PORT, for the
-//       direct path. --media: media on (a DaemonMediaController), a tone in
+//       direct path. --listen-loopback: bind that listener only to IPv4
+//       loopback (127.0.0.1); requires --listen. --media: media on
+//       (a DaemonMediaController), a tone in
 //       the Core's audio and synthetic I/Q in its display source, so a
 //       session's media carries real Opus audio and real display frames.
 //   session ... [--direct URL] [--upgrade-schedule-ms "A,B"]
@@ -415,6 +417,15 @@ int runClient(const QStringList& args)
 // control connection.
 int runCore(const QStringList& args)
 {
+    const bool listenRequested = args.contains(QStringLiteral("--listen"));
+    const bool listenLoopback = args.contains(QStringLiteral("--listen-loopback"));
+    bool listenPortOk = false;
+    const uint loopbackPort = option(args, QStringLiteral("--listen")).toUInt(&listenPortOk);
+    if (listenLoopback
+        && (!listenRequested || !listenPortOk || loopbackPort == 0 || loopbackPort > 65535)) {
+        std::fputs("core: --listen-loopback requires --listen PORT (1-65535)\n", stderr);
+        return 2;
+    }
     const QString dir = option(args, QStringLiteral("--dir"));
     bool ok = false;
     const QByteArray paired = StationIdentity::fromBase64Url(option(args, QStringLiteral("--paired")), &ok);
@@ -471,7 +482,8 @@ int runCore(const QStringList& args)
     server->setRelayAllowed(relayAllowed);
     const QString listen = option(args, QStringLiteral("--listen"));
     if (!listen.isEmpty()
-        && !server->listen(QHostAddress::Any, static_cast<quint16>(listen.toUInt()))) {
+        && !server->listen(listenLoopback ? QHostAddress::LocalHost : QHostAddress::Any,
+                           static_cast<quint16>(listen.toUInt()))) {
         std::fputs("core: could not listen\n", stderr);
         return 2;
     }

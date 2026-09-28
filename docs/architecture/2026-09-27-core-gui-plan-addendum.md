@@ -729,7 +729,11 @@ colours for the same signal.
   source-based design decision; no separate JJ ruling is claimed.
 - Status: OPEN. Read-only source contract records per-container slice identity,
   stream geometry, dBm reduction, lifetime and remote grant requirements. The
-  temporary hidden classification is not completion of this feature.
+  temporary hidden classification is not completion of this feature. Core now
+  negotiates a mini display role only with declaring peers and applies TX takeover
+  only to the actual transmitting slice. Surface/conformance/session checks and
+  the full TX-display suite pass. GUI and independent local/remote TX analyzer
+  wiring remain in progress; the visible feature stays gated.
 - Plan: remote-window parity container meters and filter display.
 
 ### G-47: Expected transmit silence falsely restarts relay media
@@ -873,8 +877,63 @@ colours for the same signal.
   is a proposal under review, not an approved protocol or an implemented fix.
 - Status: OPEN. Diagnosis is recorded in
   `~/.config/nereus/work/core-gui-r5-loss-diagnosis-report.md`; no production change
-  or deadline relaxation. The observed failure remains an R5 acceptance gap.
+  or deadline relaxation. Follow-up diagnostic cadence trials found two failures
+  in three 50 ms samples; three 25 ms samples passed 25 seconds each with maximum
+  received gaps of 249/277/282 ms. These short stochastic samples do not establish
+  an acceptance rate. The override was restored exactly afterward; production
+  remains 100 ms. A 25 ms TCP-floor cadence is another candidate for further
+  measurement before deciding whether a separate heartbeat path is needed.
+  The observed failure remains an R5 acceptance gap.
 - Plan: R5 direct-WSS/web-relay transmit under impaired networks.
+
+### G-56: PureSignal continuously occupied the display send window
+
+- Evidence: full media verification produced zero spectrum frames across 24
+  congested-window cycles despite fresh FFT frames. The IQ integration had changed
+  the sender to try PureSignal first every time, bypassing prior alternation.
+- Ruling: JJ requires diagnosing load failures and fixing plan gaps. Restore the
+  existing fairness contract; no deadline or assertion change is needed.
+- Status: built. The sender alternates PureSignal and spectrum with fallback,
+  preserves bounded IQ work and checks lifetime/peer/epoch after each callback.
+  The original regression, ten related cases and all 86 daemon checks pass
+  (full suite 37.75 s). App/Core/helper rebuild and TX-display suite pass.
+- Plan: shared display bandwidth, PureSignal and raw-IQ integration.
+
+### G-57: One protocol test failed while opening its encrypted connection
+
+- Evidence: accessory conformance had 212 passing cases and one spots fixture
+  failing before playback in DataChannelBridge start/open (15-second bound).
+  The message does not distinguish immediate start failure from handshake timeout.
+  Adjacent cases and a full rerun passed, but that does not establish a cause.
+- Ruling: JJ requires cause and suggested fix for load failures; no test deadline
+  increase or assertion waiver is authorized.
+- Status: OPEN. First and rerun logs are preserved in the accessory handback.
+  Better stage diagnostics and a bounded reproduction remain required.
+- Plan: integrated protocol reliability under real host load.
+
+### G-58: Setting-backed toggles need explicit boolean string encoding
+
+- Evidence: DSP cache and some General settings readers require the exact strings
+  True/False; a JSON boolean can be stored as lowercase true/false and read as off.
+  Five General toggles and two DSP cache toggles need round-trip verification.
+- Ruling: accurate Setup parity is required by JJ's goal. The lead proposes an
+  explicit descriptor encoding, preserving existing settings semantics rather
+  than changing every AppSettings reader. Phone compatibility review is underway.
+- Status: OPEN. Unsafe new DSP cache descriptors were withheld; existing General
+  descriptions must gain verified encoding. No completion claim for these controls.
+- Plan: Core Setup descriptions and phone renderer contract.
+
+### G-59: Direct phone tests needed an explicit loopback-only Core fixture
+
+- Evidence: the existing helper's --listen option bound every interface. The
+  phone team's direct fallback tests require a listener restricted to this Mac.
+- Ruling: authorized Core/phone integration testing; preserve the existing default
+  and add an explicit test-only binding option.
+- Status: built. --listen-loopback binds IPv4 127.0.0.1 and requires a valid port.
+  Four invalid-argument checks and live socket inspection passed with synthetic
+  media. A separately hashed immutable helper is being packaged; old fixtures
+  remain preserved. No RF or radio configuration was involved.
+- Plan: real Core/phone direct-connection interoperability.
 
 ## How this addendum is kept
 

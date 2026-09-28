@@ -1066,6 +1066,7 @@ public:
     // 11 and was told it, so its media start may declare it.
     int txDisplayVersion() const;
     bool txDisplayAvailable(quint64 epoch) const;
+    bool miniDisplayAvailable(quint64 epoch) const;
     // R-IOS-16 (iPhone app plan Task 28 fix wave, the safety review's
     // Important 5): controlChannelVersion. 1 when the Core has a bound
     // certificate, so it can answer an introduction through the remote

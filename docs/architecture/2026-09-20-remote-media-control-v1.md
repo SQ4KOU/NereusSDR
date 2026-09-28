@@ -510,7 +510,31 @@ session below minor 11, which is never told the capability) gets exactly
 today's behaviour: the operation goes where an unknown operation always
 has, and nothing is answered. `tst_display_extras` holds all of this.
 
+## Receiver mini display endpoints
+
+At agreed session minor 11, a GUI hello that declares `miniDisplay: 1`
+receives capability `miniDisplayVersion: 1` when media is available. The
+capability is omitted for a peer that did not declare the feature. A media
+`start` may then declare `miniDisplayVersion: 1`; another value, or a
+declaration without that capability, is refused. A `subscribe` on that media
+connection may add exactly `displayRole: "mini"`. An absent role remains a
+pan and keeps the existing request and response shapes. Any other role,
+non-string role, or mini role without the media-start declaration is refused.
+
+A mini is an ordinary revisioned display endpoint with its own endpoint ID,
+context generation, grant, budget charge and source lifecycle. Its `sliceId`
+identifies the receiver; two endpoints for the same slice may request
+different RF crops. The Core validates source coverage and grants the actual
+pixel count through the existing spectrum path. During TX, a pan keeps its
+existing shared-pan takeover rule. A mini follows TX only when its `sliceId`
+is the slice recorded at TX rise. Other minis keep receive frames while their
+receiver source remains available; without coverage they have no valid
+context to display. A changed role requires a newer subscription revision,
+which replaces the endpoint context and generation. Existing TX duplex,
+retirement, and endpoint limits apply.
+
 ## Transmit display
+
 
 Capability `txDisplayVersion=1` (remote-window parity Task 28, A11,
 R-R3-49) at agreed minor 11: while the Core's radio is keyed, the pan

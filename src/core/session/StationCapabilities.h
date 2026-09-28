@@ -388,6 +388,9 @@ struct StationCapabilities {
     /// Task 23: one dedicated ordered raw-I/Q media stream for a window's
     /// TCI apps, only after the media start declares this version.
     int remoteIqVersion = 0;
+    /// A media peer may declare version 1 and subscribe to a receiver-scoped
+    /// mini display with displayRole="mini". Absent means a normal pan.
+    int miniDisplayVersion = 0;
     /// R-IOS-26 / R-R3-49 (iPhone app plan Task 22, remote-window parity
     /// Task 20): 1 means the Core runs FreeDV Reporter itself, registered
     /// with its own callsign, grid square and message and listing its own

@@ -287,19 +287,22 @@ struct Harness {
         QTRY_VERIFY(server.mediaAvailable() && client.mediaAvailable());
     }
 
-    bool start(bool declare, int version = 1)
+    bool start(bool declare, int version = 1, bool mini = false)
     {
         QJsonObject start{{QStringLiteral("op"), QStringLiteral("start")},
                           {QStringLiteral("connectionId"), QLatin1String(kConnectionId)}};
         if (declare) {
             start.insert(QStringLiteral("txDisplayVersion"), version);
         }
+        if (mini) {
+            start.insert(QStringLiteral("miniDisplayVersion"), 1);
+        }
         return client.sendMediaControl(start, client.sessionEpoch());
     }
 
-    void startReadyPeer(bool declare, int version = 1)
+    void startReadyPeer(bool declare, int version = 1, bool mini = false)
     {
-        QVERIFY(start(declare, version));
+        QVERIFY(start(declare, version, mini));
         QTRY_VERIFY(mediaTransport);
         mediaTransport->becomeReady();
     }
@@ -366,6 +369,8 @@ private slots:
     void aDuplexEndpointKeepsTheReceiverWhileKeyed();
     void duplexIsReadOnlyFromAVersionThreePeer();
     void theCoreCalibratesTheKeyedDisplayAsThetis();
+    void miniRoleRequiresDeclarationAndExactValue();
+    void miniTakeoverFollowsTheTransmittingSliceAndRenewalResetsContext();
 };
 
 void TstRemoteTxDisplay::initTestCase()
@@ -387,6 +392,7 @@ void TstRemoteTxDisplay::capabilityFollowsTheAnalyzerAndTheMinor()
         Harness h;
         h.establishSession();
         QTRY_COMPARE(h.client.capabilities().txDisplayVersion, 3);
+        QCOMPARE(h.client.capabilities().miniDisplayVersion, 1);
         QCOMPARE(h.server.txDisplayVersion(), 3);
         h.finish();
     }
@@ -407,9 +413,11 @@ void TstRemoteTxDisplay::capabilityFollowsTheAnalyzerAndTheMinor()
     // block only.
     StationCapabilities caps;
     caps.txDisplayVersion = 1;
+    caps.miniDisplayVersion = 1;
     caps.radioIdentityEntries = false;
     for (const MirrorUpdate& update : caps.toUpdates()) {
         QVERIFY(update.name != "txDisplayVersion");
+        QVERIFY(update.name != "miniDisplayVersion");
     }
     caps.radioIdentityEntries = true;
     bool found = false;
@@ -424,7 +432,13 @@ void TstRemoteTxDisplay::capabilityFollowsTheAnalyzerAndTheMinor()
         previous = update.name;
     }
     QVERIFY(found);
+    QCOMPARE(caps.toUpdates().last().name, QByteArray("miniDisplayVersion"));
     QCOMPARE(StationCapabilities::fromUpdates(caps.toUpdates()).txDisplayVersion, 1);
+    QCOMPARE(StationCapabilities::fromUpdates(caps.toUpdates()).miniDisplayVersion, 1);
+    caps.miniDisplayVersion = 0;
+    for (const MirrorUpdate& update : caps.toUpdates()) {
+        QVERIFY(update.name != "miniDisplayVersion");
+    }
 }
 
 void TstRemoteTxDisplay::contextCodecCarriesTransmitOnlyWhenNegotiated()
@@ -1231,6 +1245,123 @@ void TstRemoteTxDisplay::theCoreCalibratesTheKeyedDisplayAsThetis()
     QVERIFY(decodedOne);
     QVERIFY(h.key(false));
     QTRY_VERIFY(!h.feed()->isKeyed());
+    h.finish();
+}
+
+void TstRemoteTxDisplay::miniRoleRequiresDeclarationAndExactValue()
+{
+    {
+        Harness h;
+        h.establishSession();
+        QTRY_COMPARE(h.client.capabilities().miniDisplayVersion, 1);
+        h.startReadyPeer(/*txDisplay=*/true, /*version=*/3);
+        const double centre = h.radio.streamCentreHz(h.slice()->streamIndex());
+        QJsonObject request = subscription(1, 1, h.sliceId, centre, 20000.0);
+        request.insert(QStringLiteral("displayRole"), QStringLiteral("mini"));
+        QVERIFY(h.send(request));
+        QTest::qWait(100);
+        QCOMPARE(h.controller->activeEndpointCount(), 0);
+        request.remove(QStringLiteral("displayRole"));
+        QVERIFY(h.send(request));
+        QTRY_COMPARE(h.controller->activeEndpointCount(), 1);
+        for (const QJsonValue& bad : {QJsonValue(QStringLiteral("pan")), QJsonValue(1),
+                                       QJsonValue(true), QJsonValue(QStringLiteral("unknown"))}) {
+            QJsonObject invalid = subscription(2, 1, h.sliceId, centre, 20000.0);
+            invalid.insert(QStringLiteral("displayRole"), bad);
+            QVERIFY(h.send(invalid));
+            QTest::qWait(30);
+            QCOMPARE(h.controller->activeEndpointCount(), 1);
+        }
+        h.finish();
+    }
+
+    Harness negotiated;
+    negotiated.establishSession();
+    QJsonObject invalidStart{{QStringLiteral("op"), QStringLiteral("start")},
+                             {QStringLiteral("connectionId"), QLatin1String(kConnectionId)},
+                             {QStringLiteral("txDisplayVersion"), 3},
+                             {QStringLiteral("miniDisplayVersion"), 2}};
+    QVERIFY(negotiated.send(invalidStart));
+    QTest::qWait(50);
+    QVERIFY(negotiated.mediaTransport.isNull());
+    negotiated.startReadyPeer(/*txDisplay=*/true, /*version=*/3, /*mini=*/true);
+    const double negotiatedCentre = negotiated.radio.streamCentreHz(
+        negotiated.slice()->streamIndex());
+    QJsonObject malformed = subscription(3, 1, negotiated.sliceId,
+                                         negotiatedCentre, 20000.0);
+    malformed.insert(QStringLiteral("displayRole"), 1);
+    QVERIFY(negotiated.send(malformed));
+    QTest::qWait(50);
+    QCOMPARE(negotiated.controller->activeEndpointCount(), 0);
+    malformed.insert(QStringLiteral("displayRole"), QStringLiteral("mini"));
+    QVERIFY(negotiated.send(malformed));
+    QTRY_COMPARE(negotiated.controller->activeEndpointCount(), 1);
+    negotiated.finish();
+}
+
+void TstRemoteTxDisplay::miniTakeoverFollowsTheTransmittingSliceAndRenewalResetsContext()
+{
+    Harness h;
+    h.slice()->setPanKey(QStringLiteral("shared-pan"));
+    h.spare()->setPanKey(QStringLiteral("shared-pan"));
+    h.establishSession();
+    h.startReadyPeer(/*txDisplay=*/true, /*version=*/3, /*mini=*/true);
+    QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+    const double txCentre = h.radio.streamCentreHz(h.slice()->streamIndex());
+    const double spareCentre = h.radio.streamCentreHz(h.spare()->streamIndex());
+    QVERIFY(h.send(subscription(1, 1, h.spareSliceId, spareCentre)));
+    QJsonObject spareMini = subscription(2, 1, h.spareSliceId, spareCentre, 20000.0);
+    spareMini.insert(QStringLiteral("displayRole"), QStringLiteral("mini"));
+    QVERIFY(h.send(spareMini));
+    QJsonObject txMini = subscription(3, 1, h.sliceId, txCentre, 20000.0);
+    txMini.insert(QStringLiteral("displayRole"), QStringLiteral("mini"));
+    QVERIFY(h.send(txMini));
+    QJsonObject secondCrop = subscription(4, 1, h.sliceId, txCentre + 5000.0, 10000.0);
+    secondCrop.insert(QStringLiteral("displayRole"), QStringLiteral("mini"));
+    QVERIFY(h.send(secondCrop));
+    QTRY_VERIFY([&] {
+        h.feedSlice(h.sliceId);
+        h.feedSlice(h.spareSliceId);
+        return lastContext(controls, 1) && lastContext(controls, 2)
+            && lastContext(controls, 3) && lastContext(controls, 4);
+    }());
+    // The grant aligns each crop to source bins, so accepted geometry is
+    // authoritative and the two contexts must remain distinct.
+    QVERIFY(lastContext(controls, 3)->value(QStringLiteral("spanHz")).toDouble()
+            > lastContext(controls, 4)->value(QStringLiteral("spanHz")).toDouble());
+    const quint32 oldGeneration = static_cast<quint32>(
+        lastContext(controls, 1)->value(QStringLiteral("contextGeneration")).toInteger());
+    QVERIFY(h.key(true));
+    QTRY_VERIFY(isTransmit(lastContext(controls, 1)) && isTransmit(lastContext(controls, 3))
+                && isTransmit(lastContext(controls, 4)));
+    QVERIFY(!h.controller->transmitDisplayActive(2));
+    QVERIFY(!isTransmit(lastContext(controls, 2)));
+    QVERIFY(h.controller->transmitDisplayActive(1));
+    QVERIFY(h.controller->transmitDisplayActive(3));
+    const int spareFrames = framesFor(h.mediaTransport->displays, 2, std::nullopt);
+    QTRY_VERIFY([&] { h.feedSlice(h.spareSliceId);
+        return framesFor(h.mediaTransport->displays, 2, std::nullopt) > spareFrames; }());
+
+    // A pan renewed as a mini loses its old TX viewer and context. Frames
+    // captured at the old generation cannot be labeled as the new mini.
+    QJsonObject changed = subscription(1, 2, h.spareSliceId, spareCentre, 20000.0);
+    changed.insert(QStringLiteral("displayRole"), QStringLiteral("mini"));
+    QVERIFY(h.send(changed));
+    QTRY_VERIFY(!h.controller->transmitDisplayActive(1));
+    QTRY_VERIFY([&] { h.feedSlice(h.spareSliceId); return lastContext(controls, 1)
+        && !isTransmit(lastContext(controls, 1))
+        && lastContext(controls, 1)->value(QStringLiteral("revision")).toInteger() == 2; }());
+    const quint32 newGeneration = static_cast<quint32>(
+        lastContext(controls, 1)->value(QStringLiteral("contextGeneration")).toInteger());
+    QVERIFY(newGeneration > oldGeneration);
+    QVERIFY(h.send(subscription(1, 1, h.spareSliceId, spareCentre)));
+    QTest::qWait(50);
+    QVERIFY(!h.controller->transmitDisplayActive(1));
+    const int oldFrames = framesFor(h.mediaTransport->displays, 1, oldGeneration);
+    QTRY_VERIFY([&] { h.feedSlice(h.spareSliceId);
+        return framesFor(h.mediaTransport->displays, 1, newGeneration) > 0; }());
+    QCOMPARE(framesFor(h.mediaTransport->displays, 1, oldGeneration), oldFrames);
+    QVERIFY(h.key(false));
     h.finish();
 }
 

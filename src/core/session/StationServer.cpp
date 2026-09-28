@@ -8461,6 +8461,15 @@ bool StationServer::txDisplayAvailable(quint64 epoch) const
         && txDisplayVersion() >= 1;
 }
 
+bool StationServer::miniDisplayAvailable(quint64 epoch) const
+{
+    SessionTransport* session = mediaSessionFor(epoch);
+    const auto it = m_peers.constFind(session);
+    return mediaAvailable(epoch) && it != m_peers.cend()
+        && it->agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && peerDeclares(session, QByteArrayLiteral("miniDisplay"), 1);
+}
+
 void StationServer::setStationRadios(StationRadios* radios)
 {
     if (!m_stationRadios.isNull()) {
@@ -8816,6 +8825,9 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             // R-IOS-13 / R-R3-49: the AM Mod Monitor's readings, appended
             // after remoteIqVersion by StationCapabilities::toUpdates().
             caps.txModMonitorVersion = txModMonitorVersion();
+            // Optional and last: old peers retain their exact descriptor.
+            caps.miniDisplayVersion = media && peerDeclares(
+                transport, QByteArrayLiteral("miniDisplay"), 1) ? 1 : 0;
             // iPhone app Task 71 (ruling 10.1): several devices at once, for
             // a peer that declared sessionHolder with deviceAuth; any other
             // peer is sent no entry, so its capabilities are today's.

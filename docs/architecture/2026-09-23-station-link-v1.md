@@ -893,6 +893,7 @@ change shows as surface drift and as a change to this table.
 | `remoteIqVersion` | 1 |
 | `txModMonitorVersion` | 1 |
 | `setupDescriptionVersion` | 1 |
+| `miniDisplayVersion` | 1 |
 
 <!-- /surface -->
 
@@ -1261,6 +1262,12 @@ When a feature is off, its version is 0:
   button) disabled with "This Core does not show the receiver while
   transmitting for this app. Updating the Core may help." and its
   transmitting pan behaves as DUP off.
+- `miniDisplayVersion`: at agreed minor 11, sent as 1 only to a peer whose
+  hello declared `miniDisplay: 1` while media is available. The peer may
+  declare version 1 in its media `start` and add `displayRole: "mini"` to a
+  display `subscribe`; absent role retains pan behavior. See the media
+  control document's "Receiver mini display endpoints". This capability is
+  appended after all existing minor-11 fields and omitted for old peers.
 - `displayClockVersion` (R-R3-21, R-R3-08): sent only at agreed minor 11,
   after `txDisplayVersion`, and 1 whenever media is on. At 1 every
   display frame's `producerTimestamp` and the `clock-echo`'s `t1`, `t2` and
@@ -1664,6 +1671,7 @@ older window sees only the values it was built for.
 | 78 | `remoteIqVersion` | `i64` |
 | 79 | `txModMonitorVersion` | `i64` |
 | 80 | `setupDescriptionVersion` | `i64` |
+| 81 | `miniDisplayVersion` | `i64` |
 
 <!-- /surface -->
 
@@ -4596,8 +4604,8 @@ Client to station:
 | `monitor-audio` | `txMonitorAudioVersion` | `connectionId`, `op`, `revision`, `route` | none | none |
 | `receiver-audio` | `receiverAudioVersion` | `connectionId`, `enabled`, `op`, `profile`, `revision`, `sliceId` | none | none |
 | `replace` | `mediaReplaceVersion` | `connectionId`, `op`, `replaces` | none | none |
-| `start` | `remoteMediaVersion` | `connectionId`, `op` | `audioProfileVersion` with audioProfileVersion; `headphonesMixVersion` with headphonesMixVersion; `mediaRelayRoutingVersion` with mediaRelayRoutingVersion; `mediaTunnelVersion` with mediaTunnelVersion; `receiverAudioVersion` with receiverAudioVersion; `remoteIqVersion` with remoteIqVersion; `remoteTxVersion` with remoteTxVersion; `txMonitorAudioVersion` with txMonitorAudioVersion | none |
-| `subscribe` | `remoteMediaVersion` | `centreHz`, `connectionId`, `endpointId`, `fftSize`, `fps`, `framesPerLine`, `maxDbm`, `minDbm`, `op`, `pixels`, `revision`, `sliceId`, `spanHz`, `tier`, `trace`, `waterfall`, `wideSpanFactor`, `windowType` | `activePeakHold` with displayExtrasVersion; `averageTimeMs` with displayExtrasVersion; `calibrationOffsetDb` with displayExtrasVersion; `decimation` with spectrumGrantVersion; `extendedView` with remoteWidebandDisplayVersion; `noiseFloor` with displayExtrasVersion; `normalize` with displayExtrasVersion; `peakBlobs` with displayExtrasVersion; `waterfallAverageTimeMs` with displayExtrasVersion; `waterfallLevels` with displayExtrasVersion | `activePeakHold`: {enabled, fallDbPerSec, holdMs}; `noiseFloor`: {enabled, shiftDb}; `peakBlobs`: {count, fallDbPerSec, holdMs, insideOnly}; `trace`: {averageAlpha, averageMode, detector}; `waterfall`: {averageAlpha, averageMode, detector}; `waterfallLevels`: {highDbm, lowDbm, mode, offsetDb} |
+| `start` | `remoteMediaVersion` | `connectionId`, `op` | `audioProfileVersion` with audioProfileVersion; `headphonesMixVersion` with headphonesMixVersion; `mediaRelayRoutingVersion` with mediaRelayRoutingVersion; `mediaTunnelVersion` with mediaTunnelVersion; `miniDisplayVersion` with miniDisplayVersion; `receiverAudioVersion` with receiverAudioVersion; `remoteIqVersion` with remoteIqVersion; `remoteTxVersion` with remoteTxVersion; `txMonitorAudioVersion` with txMonitorAudioVersion | none |
+| `subscribe` | `remoteMediaVersion` | `centreHz`, `connectionId`, `endpointId`, `fftSize`, `fps`, `framesPerLine`, `maxDbm`, `minDbm`, `op`, `pixels`, `revision`, `sliceId`, `spanHz`, `tier`, `trace`, `waterfall`, `wideSpanFactor`, `windowType` | `activePeakHold` with displayExtrasVersion; `averageTimeMs` with displayExtrasVersion; `calibrationOffsetDb` with displayExtrasVersion; `decimation` with spectrumGrantVersion; `displayRole` with miniDisplayVersion; `extendedView` with remoteWidebandDisplayVersion; `noiseFloor` with displayExtrasVersion; `normalize` with displayExtrasVersion; `peakBlobs` with displayExtrasVersion; `waterfallAverageTimeMs` with displayExtrasVersion; `waterfallLevels` with displayExtrasVersion | `activePeakHold`: {enabled, fallDbPerSec, holdMs}; `noiseFloor`: {enabled, shiftDb}; `peakBlobs`: {count, fallDbPerSec, holdMs, insideOnly}; `trace`: {averageAlpha, averageMode, detector}; `waterfall`: {averageAlpha, averageMode, detector}; `waterfallLevels`: {highDbm, lowDbm, mode, offsetDb} |
 | `unsubscribe` | `remoteMediaVersion` | `connectionId`, `endpointId`, `op` | `revision` with remoteDisplayBudgetVersion | none |
 
 Station to client:

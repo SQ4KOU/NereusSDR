@@ -399,6 +399,11 @@
             "kind": "i64",
             "name": "setupDescriptionVersion",
             "value": 1
+        },
+        {
+            "kind": "i64",
+            "name": "miniDisplayVersion",
+            "value": 1
         }
     ],
     "commands": [
@@ -2753,6 +2758,9 @@
                     "mediaTunnelVersion": [
                         "mediaTunnelVersion"
                     ],
+                    "miniDisplayVersion": [
+                        "miniDisplayVersion"
+                    ],
                     "receiverAudioVersion": [
                         "receiverAudioVersion"
                     ],
@@ -2785,6 +2793,9 @@
                     ],
                     "decimation": [
                         "spectrumGrantVersion"
+                    ],
+                    "displayRole": [
+                        "miniDisplayVersion"
                     ],
                     "extendedView": [
                         "remoteWidebandDisplayVersion"
