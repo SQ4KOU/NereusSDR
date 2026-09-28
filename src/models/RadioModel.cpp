@@ -6564,6 +6564,54 @@ bool RadioModel::endOfOverTailActive() const
 // keys nothing: MOX is already off when this runs, the hardware simply
 // stays keyed until the TX worker has taken the queued audio.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// wireTxWorkerRade: the TX worker's RADE connections, made where the worker is
+// created (and by installTxWorkerForTest).
+//
+// Phase 3R Task K2: mode-aware path swap on MOX-on. On every MOX-on
+// transition, read the TX-bound slice's DSPMode and post a TxPath swap to the
+// worker. DSPMode == RADE -> TxPath::Rade. Anything else -> TxPath::Wdsp (the
+// existing path). The moxStateChanged signal fires exactly once per MOX
+// transition at the END of the timer walk (MoxController.h:863-865
+// [v2.10.3.13 conceptual]); the RX path doesn't need a corresponding TxPath
+// flip because dispatchOneBlock is gated on the worker pump running anyway.
+// The worker is the connection's context, so the connection goes with it
+// (it used to capture the raw pointer with this model as context, and so
+// outlived a worker a disconnect destroyed).
+//
+// RADE end-of-over callsigns: radeAudioDrained ends the tail.
+// ---------------------------------------------------------------------------
+void RadioModel::wireTxWorkerRade(TxWorkerThread* worker)
+{
+    if (worker == nullptr || m_moxController == nullptr) {
+        return;
+    }
+    connect(m_moxController, &MoxController::moxStateChanged,
+            worker, [this, worker](bool active) {
+                if (!active) {
+                    return;   // released; pump will idle anyway
+                }
+                const SliceModel* const txSlice = txBoundSlice();
+                const DSPMode mode = txSlice ? txSlice->dspMode() : DSPMode::USB;
+                const bool isRade = (mode == DSPMode::RADE_U || mode == DSPMode::RADE_L);
+                worker->setCurrentTxPath(isRade ? TxWorkerThread::TxPath::Rade
+                                                : TxWorkerThread::TxPath::Wdsp);
+            });
+    connect(worker, &TxWorkerThread::radeAudioDrained, this, [this]() {
+        if (m_moxController) {
+            m_moxController->onEndOfOverTailDone();
+        }
+    });
+}
+
+#ifdef NEREUS_BUILD_TESTS
+void RadioModel::installTxWorkerForTest(std::unique_ptr<TxWorkerThread> worker)
+{
+    m_txWorker = std::move(worker);
+    wireTxWorkerRade(m_txWorker.get());
+}
+#endif
+
 bool RadioModel::radeEndOfOverTailPermitted() const
 {
     if (m_role == Role::Remote || m_transmitStopHold) {
@@ -15414,13 +15462,9 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
                     m_transmitModel.micSource() == MicSource::Vax);
 
                 m_txWorker = std::make_unique<TxWorkerThread>(this);
-                // RADE end-of-over callsigns: the tail's audio went out.
-                connect(m_txWorker.get(), &TxWorkerThread::radeAudioDrained,
-                        this, [this]() {
-                            if (m_moxController) {
-                                m_moxController->onEndOfOverTailDone();
-                            }
-                        });
+                // RADE: the TX path latch and the end-of-over tail's
+                // drained notice (wireTxWorkerRade).
+                wireTxWorkerRade(m_txWorker.get());
                 m_txWorker->setTxChannel(m_txChannel);
                 m_txWorker->setAudioEngine(m_audioEngine);
                 m_txWorker->setMicSource(m_txMicSource.get());
@@ -15592,40 +15636,8 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
                             });
                 }
 
-                // ── Phase 3R Task K2: mode-aware path swap on MOX-on ──
-                //
-                // On every MOX-on transition, read the TX-bound slice's
-                // DSPMode and post a TxPath swap to the worker.  DSPMode
-                // == RADE -> TxPath::Rade (scaffolded; full integration
-                // K-bench).  Anything else -> TxPath::Wdsp (the existing
-                // path).  The moxStateChanged signal fires exactly once
-                // per MOX transition at the END of the timer walk
-                // (MoxController.h:863-865 [v2.10.3.13 conceptual]); the
-                // RX path doesn't need a corresponding TxPath flip
-                // because dispatchOneBlock is gated on the worker pump
-                // running anyway.
-                if (m_moxController != nullptr && m_txWorker) {
-                    TxWorkerThread* worker = m_txWorker.get();
-                    connect(m_moxController, &MoxController::moxStateChanged,
-                            this, [this, worker](bool active) {
-                                if (!active) {
-                                    return;   // released; pump will idle anyway
-                                }
-                                const SliceModel* const txSlice =
-                                    txBoundSlice();
-                                const DSPMode mode =
-                                    txSlice ? txSlice->dspMode()
-                                            : DSPMode::USB;
-                                const bool isRade =
-                                    (mode == DSPMode::RADE_U
-                                     || mode == DSPMode::RADE_L);
-                                const TxWorkerThread::TxPath path =
-                                    isRade
-                                        ? TxWorkerThread::TxPath::Rade
-                                        : TxWorkerThread::TxPath::Wdsp;
-                                worker->setCurrentTxPath(path);
-                            });
-                }
+                // Phase 3R Task K2: the mode-aware path swap on MOX-on is
+                // in wireTxWorkerRade, connected with the worker above.
             }
 
             qCInfo(lcDsp) << "L.1: mic sources constructed (hasMicJack=" << hasMicJack

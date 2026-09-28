@@ -3670,6 +3670,12 @@ public:
     // open on a Disconnected state keys on a non-empty name, and a test has
     // no other way to give a local model one without a live connection.
     void setNameForTest(const QString& name) { m_name = name; }
+    // RADE end-of-over callsigns: a TX worker without a started pump (the
+    // test drives tickForTest), wired as the connect path wires its own.
+    void installTxWorkerForTest(std::unique_ptr<TxWorkerThread> worker);
+    TxWorkerThread* txWorkerMutableForTest() const { return m_txWorker.get(); }
+    // The 24 -> 48 kHz RADE TX resampler (null until the first modem block).
+    const Resampler* radeTxResamplerForTest() const { return m_radeTxResampler.get(); }
 
     // Test-only: inject board caps without a live radio connection.
     // Mirrors P1RadioConnection::setBoardForTest pattern.
@@ -5281,6 +5287,9 @@ private:
     // FreeDV Reporter uses, on the TX-bound slice's RADE channel and arms
     // the TX worker's drained notice. False (no tail) otherwise.
     bool startRadeEndOfOverTail();
+    // The TX worker's RADE connections: the path latch on MOX-on and the
+    // tail's drained notice. Called where the worker is created.
+    void wireTxWorkerRade(TxWorkerThread* worker);
     // The tail ended (sent, timed out, stopped or cut by a new key).
     void onEndOfOverTailChanged(bool active);
 

@@ -47,7 +47,12 @@
 #include <QSignalSpy>
 
 #include "core/AppSettings.h"
+#include "core/AudioEngine.h"
 #include "core/MoxController.h"
+#include "core/RadeChannel.h"
+#include "core/Resampler.h"
+#include "core/TxWorkerThread.h"
+#include "core/audio/TxMicSource.h"
 #include "core/RadioConnection.h"
 #include "core/TxChannel.h"
 #include "core/WdspEngine.h"
@@ -166,6 +171,70 @@ struct Rig {
     }
 };
 
+// The whole RADE transmit path with no radio behind it: RadioModel's own
+// tail function, the slice's RadeChannel (created, wired and started by
+// setDspMode as in the app), wireRadeChannel's txModemReady lambda and its
+// 24 -> 48 kHz resampler, and a TX worker the test ticks.
+struct RealRig {
+    MockConnection conn;
+    TxChannel tx{WdspEngine::kTxChannelId};
+    AudioEngine engine;
+    TxMicSource src;
+    RadioModel model;
+    TransmitState state;
+    TxWorkerThread* worker{nullptr};
+
+    explicit RealRig(DSPMode mode = DSPMode::RADE_U)
+    {
+        AppSettings::instance().clear();
+        model.setCapsForTest(/*hasAlex=*/false);
+        model.injectConnectionForTest(&conn);
+        model.moxController()->setTimerIntervals(0, 0, 0, 0, 0, 0);
+        model.setTuneOffSettleMsForTest(0);
+        model.injectTxChannelForTest(&tx);
+        model.wireTxChannelKeyingForTest();
+        auto w = std::make_unique<TxWorkerThread>();
+        w->setTxChannel(&tx);
+        w->setAudioEngine(&engine);
+        w->setMicSource(&src);
+        src.start();
+        worker = w.get();
+        model.installTxWorkerForTest(std::move(w));
+        model.addSlice();
+        if (SliceModel* slice = model.activeSlice()) {
+            slice->setFrequency(14'236'000.0);
+            slice->setDspMode(mode);
+        }
+        state.bind(&model);
+    }
+    ~RealRig()
+    {
+        src.stop();
+        model.injectTxChannelForTest(nullptr);
+        model.injectConnectionForTest(nullptr);
+        AppSettings::instance().clear();
+    }
+    RadeChannel* channel()
+    {
+        SliceModel* slice = model.activeSlice();
+        return slice ? model.wdspEngine()->radeChannel(slice->sliceIndex()) : nullptr;
+    }
+    // One worker block per call, as the pump runs.
+    void tick(int blocks = 1)
+    {
+        std::vector<float> mic(static_cast<size_t>(TxWorkerThread::kBlockFrames), 0.0f);
+        for (int i = 0; i < blocks; ++i) {
+            src.inbound(mic.data(), TxWorkerThread::kBlockFrames);
+            worker->tickForTest();
+        }
+    }
+    void key()
+    {
+        model.moxController()->setMox(true);
+        pump();
+    }
+};
+
 }  // namespace
 
 class TestRadeEndOfOverTail : public QObject {
@@ -173,6 +242,43 @@ class TestRadeEndOfOverTail : public QObject {
 
 private slots:
     void init() { AppSettings::instance().clear(); }
+
+    // Review Critical 1: the tail's modem block (about 15,000 frames at
+    // 24 kHz) goes through wireRadeChannel's 24 -> 48 kHz resampler, built
+    // for 4096; r8brain must never be handed more than that at once. Runs
+    // RadioModel's own tail function end to end.
+    void realTailStaysWithinResamplerBlock()
+    {
+        RealRig rig;
+        QVERIFY(rig.channel() != nullptr);
+        QVERIFY(rig.channel()->isActive());
+        rig.key();
+        QVERIFY(rig.model.mox());
+        QCOMPARE(rig.worker->currentTxPathForTest(), TxWorkerThread::TxPath::Rade);
+
+        QSignalSpy tail(&rig.model, &RadioModel::endOfOverTailChanged);
+        rig.model.moxController()->setMox(false);
+        QVERIFY(rig.model.endOfOverTailActive());
+        QVERIFY(rig.channel()->endOfOverQueued());
+        const Resampler* up = rig.model.radeTxResamplerForTest();
+        QVERIFY(up != nullptr);
+        QVERIFY2(up->largestInputBlock() <= up->maxBlockSamples(),
+                 qPrintable(QStringLiteral("r8brain was given %1 samples at once; built for %2")
+                                .arg(up->largestInputBlock())
+                                .arg(up->maxBlockSamples())));
+
+        // The queued audio reaches the worker and goes through the TX chain;
+        // the drained notice ends the tail and the radio unkeys.
+        pump();
+        for (int i = 0; i < 2000 && rig.model.endOfOverTailActive(); ++i) {
+            rig.tick();
+            pump(2);
+        }
+        QVERIFY(!rig.model.endOfOverTailActive());
+        QTRY_COMPARE_WITH_TIMEOUT(rig.model.moxController()->state(), MoxState::Rx, 5000);
+        QVERIFY(rig.conn.log.contains(QStringLiteral("MOX off")));
+    }
+
     void cleanup() { AppSettings::instance().clear(); }
 
     void tailRunsBeforeTeardown()
