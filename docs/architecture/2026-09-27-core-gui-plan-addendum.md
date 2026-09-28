@@ -1177,6 +1177,25 @@ colours for the same signal.
   relaunch. MainWindow hosting and reverse handover wiring remain open.
 - Plan: desktop hosting and station handover.
 
+### G-70: Auxiliary watch callbacks and route declarations need strict lifetime bounds
+
+- Evidence: new owner-deletion regressions reproduced a crash when watch
+  acknowledgement, eligibility, delivery or retirement callbacks destroyed the
+  Core helper. Review also found direct-watch eligibility checked that Core was
+  listening without checking the primary's actual transport, so a relay/DTLS
+  primary could be offered an unsupported direct route.
+- Ruling: lead implementation under JJ's unchanged transmit-safety requirement
+  must invalidate bindings before callbacks, check owner/generation afterward,
+  and advertise only a route currently implemented for that primary. This does
+  not change the 100 ms cadence or 400 ms cutoff.
+- Status: signed `f00b61e2` guards callback lifetime, primary drop and path moves.
+  Root integration additionally restricts direct watch eligibility to WSS
+  primaries. The real paired two-socket Core handshake, accepted heartbeats and
+  replay refusal passed on trunk. The integrated app/Core build and nine
+  focused suites passed (46.10 seconds) at concurrent lane load.
+  Direct client wiring and the separate relay DTLS path remain in progress.
+- Plan: independent transmit watch and restrictive-network liveness.
+
 ## How this addendum is kept
 
 New gaps are appended here as they are found, each with its own `G-` number (next available
