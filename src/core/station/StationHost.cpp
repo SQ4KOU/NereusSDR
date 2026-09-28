@@ -4,6 +4,7 @@
 
 #include "core/AppSettings.h"
 #include "core/LogCategories.h"
+#include "core/SliceOwnership.h"
 #include "core/daemon/DaemonTelemetryController.h"
 #include "core/daemon/HostTelemetrySampler.h"
 #include "core/session/DeviceSessionRegistry.h"
@@ -107,7 +108,8 @@ void StationHost::stop()
 
 bool StationHost::start()
 {
-    if (!m_radioModel || !m_options.settings || m_started) {
+    if (!m_radioModel || !m_options.settings || m_started
+        || (m_options.hostingDevice && m_radioModel->role() != RadioModel::Role::Local)) {
         return false;
     }
     m_started = true;
@@ -148,6 +150,32 @@ bool StationHost::start()
     m_stationServer = std::make_unique<StationServer>(m_radioModel.data(),
                                                       *cfg.settings, cfg.securityDirectory,
                                                       nullptr, cfg.linkMajors);
+    if (cfg.hostingDevice) {
+        const QByteArray& stationId = SliceOwnership::stationDevice();
+        m_stationServer->deviceSessions()->registerHostingDevice(
+            stationId, cfg.hostingDevice->name, cfg.hostingDevice->shortName);
+        m_stationServer->setStationDeviceWords(cfg.hostingDevice->name,
+                                               cfg.hostingDevice->shortName);
+        if (SliceOwnership* ownership = m_radioModel->sliceOwnership()) {
+            const QList<int> adopted = ownership->adoptUnowned(stationId);
+            if (!adopted.isEmpty()) {
+                m_radioModel->setActiveSliceByIdFor(stationId, ownership->activeFor(stationId));
+            }
+        }
+        // The desktop may begin hosting before its radio has made Slice A.
+        // A later unscoped local slice is still the hosting window's, never
+        // a free slice for the first external peer to adopt.
+        connect(m_radioModel.data(), &RadioModel::sliceAdded, m_stationServer.get(),
+                [model = m_radioModel, stationId](int) {
+                    if (!model) { return; }
+                    SliceOwnership* const ownership = model->sliceOwnership();
+                    if (!ownership) { return; }
+                    const QList<int> adopted = ownership->adoptUnowned(stationId);
+                    if (!adopted.isEmpty()) {
+                        model->setActiveSliceByIdFor(stationId, ownership->activeFor(stationId));
+                    }
+                });
+    }
 #ifdef NEREUS_BUILD_TESTS
     if (m_serverCreatedForTest) { m_serverCreatedForTest(m_stationServer.get()); }
 #endif

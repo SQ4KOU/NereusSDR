@@ -1,0 +1,256 @@
+// no-port-check: NereusSDR-original. Task 48 desktop hosting seam; no radio opened.
+#include "gui/DesktopStationController.h"
+
+#include "core/AppSettings.h"
+#include "core/SliceOwnership.h"
+#include "core/safety/TransmitHolder.h"
+#include "core/session/DeviceSessionRegistry.h"
+#include "core/session/StationServer.h"
+#include "models/RadioModel.h"
+
+#include <QPointer>
+#include <QSslSocket>
+#include <QTcpServer>
+#include <QTemporaryDir>
+#include <QtTest>
+
+#include <memory>
+
+using namespace NereusSDR;
+
+namespace {
+StationHostOptions optionsFor(AppSettings& settings, const QString& directory)
+{
+    StationHostOptions options;
+    options.settings = &settings;
+    options.securityDirectory = directory;
+    options.hostingDevice = StationHostOptions::HostingDevice{
+        QStringLiteral("Shack Mac mini"), QStringLiteral("Shack")};
+    options.remoteBind = QStringLiteral("127.0.0.1");
+    options.statusPage = false;
+    QTcpServer probe;
+    if (probe.listen(QHostAddress::LocalHost, 0)) {
+        options.remotePort = probe.serverPort();
+        probe.close();
+    }
+    return options;
+}
+}
+
+class TstDesktopStationController : public QObject {
+    Q_OBJECT
+private slots:
+    void requiresLocalModelAndProfileOwnership()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+        StationHostOptions options = optionsFor(settings, directory.path());
+        RadioModel local;
+        DesktopStationController controller(&local, options);
+        QVERIFY(controller.server() == nullptr);
+        QVERIFY(!controller.start(false));
+        QVERIFY(controller.host() == nullptr);
+        QVERIFY(!controller.enabled());
+
+        RadioModel remote(RadioModel::Role::Remote);
+        DesktopStationController remoteController(&remote, options);
+        QVERIFY(!remoteController.start(true));
+        QVERIFY(remoteController.host() == nullptr);
+
+        options.remotePort = 0;
+        DesktopStationController disabled(&local, options);
+        QVERIFY(!disabled.start(true));
+        QVERIFY(!disabled.enabled());
+        QVERIFY(disabled.server() == nullptr);
+
+        options = optionsFor(settings, directory.filePath(QStringLiteral("other-profile")));
+        DesktopStationController wrongProfile(&local, options);
+        QVERIFY(!wrongProfile.start(true));
+        QVERIFY(wrongProfile.server() == nullptr);
+    }
+
+    void borrowsLocalModelAndReportsActualListener()
+    {
+        if (!QSslSocket::supportsSsl()) {
+            QSKIP("Qt reports no working TLS backend.");
+        }
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+        RadioModel model;
+        QPointer<RadioModel> borrowed(&model);
+        DesktopStationController controller(&model, optionsFor(settings, directory.path()));
+        QVERIFY(controller.start(true));
+        QVERIFY(controller.host() != nullptr);
+        QVERIFY(controller.enabled());
+        QVERIFY(controller.server() != nullptr);
+        QCOMPARE(controller.server()->deviceSessions()->placesTaken(), 1);
+        controller.stop();
+        QVERIFY(!controller.enabled());
+        QVERIFY(controller.server() == nullptr);
+        QVERIFY(borrowed == &model);
+        controller.stop();
+    }
+
+    void occupiedPortDoesNotClaimToBeEnabled()
+    {
+        if (!QSslSocket::supportsSsl()) {
+            QSKIP("Qt reports no working TLS backend.");
+        }
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+        RadioModel model;
+        QTcpServer occupied;
+        QVERIFY(occupied.listen(QHostAddress::LocalHost, 0));
+        StationHostOptions options = optionsFor(settings, directory.path());
+        options.remotePort = occupied.serverPort();
+        DesktopStationController controller(&model, options);
+        QVERIFY(!controller.start(true));
+        QVERIFY(!controller.enabled());
+        QCOMPARE(controller.requestMox(true).state,
+                 DesktopStationController::RequestState::Refused);
+        controller.stop();
+    }
+
+    void modelDeathStopsBorrowingHost()
+    {
+        if (!QSslSocket::supportsSsl()) {
+            QSKIP("Qt reports no working TLS backend.");
+        }
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+        auto model = std::make_unique<RadioModel>();
+        DesktopStationController controller(model.get(), optionsFor(settings, directory.path()));
+        QVERIFY(controller.start(true));
+        model.reset();
+        QVERIFY(controller.host() == nullptr);
+        QVERIFY(!controller.enabled());
+        QCOMPARE(controller.requestTune(true).state,
+                 DesktopStationController::RequestState::Refused);
+    }
+
+    void holderQuestionNeverKeysAndStaleConfirmationCannotTake()
+    {
+        if (!QSslSocket::supportsSsl()) {
+            QSKIP("Qt reports no working TLS backend.");
+        }
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+        RadioModel model;
+        DesktopStationController controller(&model, optionsFor(settings, directory.path()));
+        QVERIFY(controller.start(true));
+        StationServer* const server = controller.server();
+        QVERIFY(server != nullptr);
+        QObject peerSession;
+        DeviceSessionRegistry::Entry peer;
+        peer.deviceId = QByteArray("token:desktop-test");
+        peer.kind = DeviceSessionRegistry::Kind::Token;
+        peer.name = QStringLiteral("Phone");
+        peer.shortName = QStringLiteral("Phone");
+        peer.deviceKind = QStringLiteral("phone");
+        QCOMPARE(server->deviceSessions()->admit(peer, &peerSession).admission,
+                 DeviceSessionRegistry::Admission::Admitted);
+        TransmitHolder* const holder = server->transmitHolder();
+        TransmitHolder::KeyRequest key;
+        key.deviceId = peer.deviceId;
+        QCOMPARE(holder->askKey(key).verdict, KeyingVerdict::Admit);
+        QVERIFY(holder->isHeldBy(peer.deviceId));
+
+        const auto asked = controller.requestMox(true);
+        QCOMPARE(asked.state, DesktopStationController::RequestState::Ask);
+        QVERIFY(asked.question.has_value());
+        QCOMPARE(asked.question->holderName, QStringLiteral("Phone"));
+        QCOMPARE(asked.question->holderEpoch, holder->epoch());
+        QVERIFY(!model.mox());
+        QVERIFY(holder->isHeldBy(peer.deviceId));
+
+        controller.requestMox(false); // invalidates the displayed question
+        QCOMPARE(controller.confirmTake(*asked.question).state,
+                 DesktopStationController::RequestState::Refused);
+        QVERIFY(holder->isHeldBy(peer.deviceId));
+        QVERIFY(!model.mox());
+
+        const auto tuneAsk = controller.requestTune(true);
+        QCOMPARE(tuneAsk.state, DesktopStationController::RequestState::Ask);
+        QVERIFY(tuneAsk.question.has_value());
+        QVERIFY(!model.isTune());
+        const auto confirming = controller.confirmTake(*tuneAsk.question);
+        QCOMPARE(confirming.state, DesktopStationController::RequestState::Pending);
+        QTRY_VERIFY(holder->isHeldBy(SliceOwnership::stationDevice()));
+
+        // A stale off from the desktop must never end a different holder's key.
+        holder->release(SliceOwnership::stationDevice(), QStringLiteral("test hand-back"));
+        QTRY_VERIFY(holder->state() == TransmitHolder::State::Unheld);
+        QCOMPARE(holder->askKey(key).verdict, KeyingVerdict::Admit);
+        controller.requestMox(false);
+        controller.requestTune(false);
+        QVERIFY(holder->isHeldBy(peer.deviceId));
+        controller.stop();
+    }
+
+    void shutdownInvalidatesQuestionWithoutKeying()
+    {
+        if (!QSslSocket::supportsSsl()) {
+            QSKIP("Qt reports no working TLS backend.");
+        }
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+        RadioModel model;
+        DesktopStationController controller(&model, optionsFor(settings, directory.path()));
+        QVERIFY(controller.start(true));
+        StationServer* const server = controller.server();
+        TransmitHolder* const holder = server->transmitHolder();
+        QObject peerSession;
+        DeviceSessionRegistry::Entry peer;
+        peer.deviceId = QByteArray("token:shutdown-test");
+        peer.kind = DeviceSessionRegistry::Kind::Token;
+        peer.name = QStringLiteral("Phone");
+        QCOMPARE(server->deviceSessions()->admit(peer, &peerSession).admission,
+                 DeviceSessionRegistry::Admission::Admitted);
+        TransmitHolder::KeyRequest key;
+        key.deviceId = peer.deviceId;
+        QCOMPARE(holder->askKey(key).verdict, KeyingVerdict::Admit);
+        const auto asked = controller.requestMox(true);
+        QCOMPARE(asked.state, DesktopStationController::RequestState::Ask);
+        QVERIFY(asked.question.has_value());
+        controller.stop();
+        QCOMPARE(controller.confirmTake(*asked.question).state,
+                 DesktopStationController::RequestState::Refused);
+        QVERIFY(!model.mox());
+        QVERIFY(controller.server() == nullptr);
+    }
+
+    void stopCanBeReenteredFromListenerClose()
+    {
+        if (!QSslSocket::supportsSsl()) {
+            QSKIP("Qt reports no working TLS backend.");
+        }
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+        RadioModel model;
+        DesktopStationController controller(&model, optionsFor(settings, directory.path()));
+        QVERIFY(controller.start(true));
+        StationServer* const server = controller.server();
+        int closes = 0;
+        connect(server, &StationServer::listeningChanged, &controller, [&](bool listening) {
+            if (!listening) {
+                ++closes;
+                controller.stop();
+            }
+        });
+        controller.stop();
+        QCoreApplication::processEvents();
+        QCOMPARE(closes, 1);
+        QVERIFY(controller.host() == nullptr);
+        QVERIFY(!controller.enabled());
+    }
+};
+
+QTEST_MAIN(TstDesktopStationController)
+#include "tst_desktop_station_controller.moc"
