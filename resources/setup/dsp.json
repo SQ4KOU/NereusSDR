@@ -1610,7 +1610,7 @@
       "id": "dsp.options",
       "title": "Options",
       "where": "station",
-      "coverage": "partial: cache toggles need an exact True/False setting codec; high-resolution filter graph control and rebuild timing readout are GUI render/runtime composites",
+      "coverage": "partial: high-resolution filter graph control and rebuild timing readout are GUI render/runtime composites",
       "sections": [
         {
           "title": "Buffer Size (IQcomp)",
@@ -2005,6 +2005,39 @@
                 "Linear Phase",
                 "Low Latency"
               ]
+            }
+          ]
+        },
+        {
+          "title": "Filter Impulse Cache",
+          "controls": [
+            {
+              "id": "dsp.options.DspOptionsCacheImpulse",
+              "label": "Enable WDSP impulse caching",
+              "tooltip": "Cache filter impulse responses in memory for faster channel rebuilds. Trades memory for first-rebuild latency. Takes effect on the next radio connect or channel rebuild.",
+              "kind": "toggle",
+              "binding": {
+                "setting": "DspOptionsCacheImpulse"
+              },
+              "applies": "live",
+              "valueEncoding": {
+                "true": "True",
+                "false": "False"
+              }
+            },
+            {
+              "id": "dsp.options.DspOptionsCacheImpulseSaveRestore",
+              "label": "Persist impulse cache to disk between sessions",
+              "tooltip": "Save the impulse cache to disk on shutdown and reload on next launch. Eliminates the first-rebuild cost after restarting NereusSDR. Warning: the cache file can become very large. Takes effect on the next radio connect or channel rebuild.",
+              "kind": "toggle",
+              "binding": {
+                "setting": "DspOptionsCacheImpulseSaveRestore"
+              },
+              "applies": "live",
+              "valueEncoding": {
+                "true": "True",
+                "false": "False"
+              }
             }
           ]
         }

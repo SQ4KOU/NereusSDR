@@ -50,7 +50,16 @@ by `classifySettingsKey`), `property` (a mirrored object and property),
 `command` (a station verb), or `phone` (a key the phone keeps locally). A
 station binding has `applies: "live"`; the only other value,
 `subscription`, is for display keys a client puts into its endpoint
-subscription. Optional gates are capability name/minimum version, transmit
+subscription. A `toggle` backed by a station `setting` requires exactly
+`"valueEncoding":{"true":"True","false":"False"}`. The five
+setting-backed toggles in `resources/setup/general.json` are the canonical
+fixture. The renderer may read a native boolean or a case-insensitive exact
+match of either mapped string from its current live settings value. A
+missing, stale or malformed value disables the control with a plain reason.
+An edit sends the exact mapped string to the settings proxy, never a JSON
+boolean or a value from another epoch. Property-backed toggles carry no
+`valueEncoding` and retain their mirrored boolean wire kind. Optional gates
+are capability name/minimum version, transmit
 permission, and a BoardCapabilities flag. A false board flag removes its
 control; a permission gate disables its control with the Core's reason.
 `availability: {"enabled": false, "reason": "…"}` keeps a built but currently

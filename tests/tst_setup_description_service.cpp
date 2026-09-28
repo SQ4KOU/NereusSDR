@@ -9,6 +9,7 @@
 #include "core/session/SessionMessages.h"
 #include "core/session/StationServer.h"
 #include "core/AppSettings.h"
+#include "core/settings/SettingsProxyServer.h"
 #include "core/ConnectionState.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -18,6 +19,7 @@
 #include "fakes/UpgradedCoreToken.h"
 
 #include <QJsonDocument>
+#include <QScopeGuard>
 #include <QTemporaryDir>
 
 #include <memory>
@@ -139,6 +141,132 @@ private slots:
         QVERIFY(schema.byName("revision"));
     }
 
+    void settingToggleEncodingIsExactAndPersistsAsReaderStrings()
+    {
+        SetupDescriptionService service;
+        const auto findControl = [&service](const QString& category, const QString& id) {
+            const QJsonObject root = service.category(category);
+            for (const QJsonValue& page : root.value(QStringLiteral("pages")).toArray()) {
+                for (const QJsonValue& section : page.toObject()
+                         .value(QStringLiteral("sections")).toArray()) {
+                    for (const QJsonValue& raw : section.toObject()
+                             .value(QStringLiteral("controls")).toArray()) {
+                        const QJsonObject control = raw.toObject();
+                        if (control.value(QStringLiteral("id")) == QJsonValue(id)) {
+                            return control;
+                        }
+                    }
+                }
+            }
+            return QJsonObject{};
+        };
+        const QStringList generalKeys = {
+            QStringLiteral("RxOnly"), QStringLiteral("NetworkWatchdogEnabled"),
+            QStringLiteral("MoxTimeOutEnabled"), QStringLiteral("PingTimeOutEnabled"),
+            QStringLiteral("RemoteMoxTimeOutEnabled")};
+        int generalCount = 0;
+        for (const QJsonValue& page : service.category(QStringLiteral("general"))
+                 .value(QStringLiteral("pages")).toArray()) {
+            for (const QJsonValue& section : page.toObject()
+                     .value(QStringLiteral("sections")).toArray()) {
+                for (const QJsonValue& raw : section.toObject()
+                         .value(QStringLiteral("controls")).toArray()) {
+                    const QJsonObject control = raw.toObject();
+                    if (control.value(QStringLiteral("kind")) != QJsonValue(QStringLiteral("toggle"))
+                        || !control.value(QStringLiteral("binding")).toObject()
+                                .contains(QStringLiteral("setting"))) {
+                        continue;
+                    }
+                    QVERIFY(generalKeys.contains(control.value(QStringLiteral("binding"))
+                        .toObject().value(QStringLiteral("setting")).toString()));
+                    QVERIFY(SetupDescriptionService::validateSettingToggleEncoding(control));
+                    ++generalCount;
+                }
+            }
+        }
+        QCOMPARE(generalCount, 5);
+
+        const QJsonObject watchdog = findControl(QStringLiteral("general"),
+            QStringLiteral("general.options.networkWatchdog"));
+        QVERIFY(!watchdog.isEmpty());
+        QJsonObject bad = watchdog;
+        bad.remove(QStringLiteral("valueEncoding"));
+        QVERIFY(!SetupDescriptionService::validateSettingToggleEncoding(bad));
+        bad = watchdog;
+        bad.insert(QStringLiteral("valueEncoding"), QJsonObject{
+            {QStringLiteral("true"), QStringLiteral("True")}});
+        QVERIFY(!SetupDescriptionService::validateSettingToggleEncoding(bad));
+        bad = watchdog;
+        bad.insert(QStringLiteral("valueEncoding"), QJsonObject{
+            {QStringLiteral("true"), QStringLiteral("true")},
+            {QStringLiteral("false"), QStringLiteral("False")}});
+        QVERIFY(!SetupDescriptionService::validateSettingToggleEncoding(bad));
+        bad = watchdog;
+        bad.insert(QStringLiteral("valueEncoding"), QJsonObject{
+            {QStringLiteral("true"), QStringLiteral("True")},
+            {QStringLiteral("false"), QStringLiteral("False")},
+            {QStringLiteral("fallback"), QStringLiteral("False")}});
+        QVERIFY(!SetupDescriptionService::validateSettingToggleEncoding(bad));
+        bad = findControl(QStringLiteral("dsp"),
+            QStringLiteral("dsp.agcAlc.autoAgcEnabled"));
+        QVERIFY(!bad.isEmpty());
+        bad.insert(QStringLiteral("valueEncoding"), watchdog.value(QStringLiteral("valueEncoding")));
+        QVERIFY(!SetupDescriptionService::validateSettingToggleEncoding(bad));
+
+        AppSettings& store = AppSettings::instance();
+        const QStringList keys = {QStringLiteral("NetworkWatchdogEnabled"),
+            QStringLiteral("DspOptionsCacheImpulse"),
+            QStringLiteral("DspOptionsCacheImpulseSaveRestore")};
+        QHash<QString, QVariant> oldValues;
+        for (const QString& key : keys) {
+            if (store.contains(key)) {
+                oldValues.insert(key, store.value(key));
+            }
+        }
+        const auto restore = qScopeGuard([&store, &keys, &oldValues] {
+            for (const QString& key : keys) {
+                if (oldValues.contains(key)) {
+                    store.setValue(key, oldValues.value(key));
+                } else {
+                    store.remove(key);
+                }
+            }
+        });
+        SettingsProxyServer server(store);
+        QSignalSpy changed(&server, &SettingsProxyServer::outboundValueChanged);
+        const QStringList ids = {QStringLiteral("general.options.networkWatchdog"),
+            QStringLiteral("dsp.options.DspOptionsCacheImpulse"),
+            QStringLiteral("dsp.options.DspOptionsCacheImpulseSaveRestore")};
+        for (const QString& id : ids) {
+            const QJsonObject control = findControl(id.startsWith(QStringLiteral("general."))
+                ? QStringLiteral("general") : QStringLiteral("dsp"), id);
+            QVERIFY2(!control.isEmpty(), qPrintable(id));
+            QVERIFY(SetupDescriptionService::validateSettingToggleEncoding(control));
+            const QString key = control.value(QStringLiteral("binding"))
+                .toObject().value(QStringLiteral("setting")).toString();
+            const QJsonObject encoding = control.value(QStringLiteral("valueEncoding")).toObject();
+            for (const bool on : {true, false}) {
+                const QString token = encoding.value(on ? QStringLiteral("true")
+                    : QStringLiteral("false")).toString();
+                QVERIFY(server.applyInboundWrite(key, token, QStringLiteral("phone-test")).accepted);
+                QCOMPARE(store.value(key).toString(), token);
+                QVERIFY(!changed.isEmpty());
+                const QList<QVariant> broadcast = changed.takeLast();
+                QCOMPARE(broadcast.at(0).toString(), key);
+                QCOMPARE(broadcast.at(1).metaType(), QMetaType::fromType<QString>());
+                QCOMPARE(broadcast.at(1).toString(), token);
+                if (key == QLatin1String("NetworkWatchdogEnabled")) {
+                    QCOMPARE(RadioModel::networkWatchdogSetting(), on);
+                } else {
+                    // WdspEngine::finishInitialization/shutdown read both
+                    // cache keys with this exact string comparison.
+                    QCOMPARE(store.value(key, QStringLiteral("False")).toString()
+                                 == QStringLiteral("True"), on);
+                }
+            }
+        }
+    }
+
     void boardRefreshOnlyMovesRevisionOnChange()
     {
         SetupDescriptionService service;
@@ -235,7 +363,7 @@ private slots:
         }
         QCOMPARE(count, 63);
         QCOMPARE(transmitCount, 14);
-        QCOMPARE(settingCount, 21);
+        QCOMPARE(settingCount, 23);
         QCOMPARE(notchCount, 1);
         QCOMPARE(readoutCount, 1);
         QJsonObject valid = pages.first().toObject().value("sections").toArray().first()

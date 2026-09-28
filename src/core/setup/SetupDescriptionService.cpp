@@ -64,6 +64,7 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps)
                 if (controlId.isEmpty() || ids.contains(controlId)
                     || control.value(QStringLiteral("label")).toString().isEmpty()
                     || !control.value(QStringLiteral("binding")).isObject()
+                    || !SetupDescription::validateSettingToggleEncoding(control)
                     || (id == QLatin1String("dsp")
                         && !control.value(QStringLiteral("binding")).toObject()
                                 .contains(QStringLiteral("property"))
@@ -127,6 +128,30 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps)
 }
 
 } // namespace
+
+bool SetupDescription::validateSettingToggleEncoding(const QJsonObject& control)
+{
+    const QJsonObject binding = control.value(QStringLiteral("binding")).toObject();
+    const bool settingToggle = control.value(QStringLiteral("kind"))
+            == QJsonValue(QStringLiteral("toggle"))
+        && binding.contains(QStringLiteral("setting"));
+    if (!settingToggle) {
+        return !control.contains(QStringLiteral("valueEncoding"));
+    }
+    // SettingsProxyServer broadcasts the stored QString. These keys' readers
+    // compare capitalized strings, so the wire value must use that spelling.
+    const QJsonValue key = binding.value(QStringLiteral("setting"));
+    const QJsonValue encoding = control.value(QStringLiteral("valueEncoding"));
+    if (binding.size() != 1 || !key.isString() || key.toString().isEmpty()
+        || classifySettingsKey(key.toString()) != SettingsScope::Station
+        || !encoding.isObject()) {
+        return false;
+    }
+    const QJsonObject values = encoding.toObject();
+    return values.size() == 2
+        && values.value(QStringLiteral("true")) == QJsonValue(QStringLiteral("True"))
+        && values.value(QStringLiteral("false")) == QJsonValue(QStringLiteral("False"));
+}
 
 bool SetupDescription::validateActiveSlicePropertyBinding(const QJsonObject& control)
 {
@@ -205,6 +230,11 @@ bool SetupDescription::validateDspSettingBinding(const QJsonObject& control)
         return false;
     }
     const QString kind = control.value(QStringLiteral("kind")).toString();
+    if (key == QLatin1String("DspOptionsCacheImpulse")
+        || key == QLatin1String("DspOptionsCacheImpulseSaveRestore")) {
+        return kind == QLatin1String("toggle")
+            && validateSettingToggleEncoding(control);
+    }
     if (kind != QLatin1String("choice")) {
         return false;
     }
