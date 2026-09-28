@@ -50,10 +50,11 @@ public:
     QString configPath() const;
 
 private:
+    enum class ServiceState { Absent, Stopped, Running, Error };
     bool validateLaunch();
     bool writeEntry(bool startAtLogin);
     bool run(const QString& program, const QStringList& args, QString* output = nullptr) const;
-    bool loaded() const;
+    ServiceState probeState() const;
     QString serviceName() const;
     void fail(const QString& error);
 

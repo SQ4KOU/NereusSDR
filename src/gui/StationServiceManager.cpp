@@ -22,6 +22,16 @@ namespace {
 
 constexpr auto kLabel = "com.boydsoftprez.NereusSDR.station";
 constexpr auto kWindowsTask = "NereusSDR Station";
+// The script contains no user-controlled text. Task Scheduler's numeric
+// TASK_STATE values are independent of the Windows display language.
+constexpr auto kWindowsStateScript =
+    "$ErrorActionPreference='Stop'; "
+    "try { $s=New-Object -ComObject 'Schedule.Service'; $s.Connect(); "
+    "$t=$s.GetFolder('\\').GetTask('NereusSDR Station'); "
+    "[Console]::Out.WriteLine([int]$t.State) } "
+    "catch { $e=$_.Exception; while ($e.InnerException) { $e=$e.InnerException }; "
+    "if ($e.HResult -eq -2147024894) { [Console]::Out.WriteLine(-1) } "
+    "else { exit 1 } }";
 
 StationServiceCommandResult runProcess(const QString& program, const QStringList& args)
 {
@@ -263,6 +273,7 @@ bool StationServiceManager::writeEntry(bool startAtLogin)
                       "<StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>"
                       "<AllowHardTerminate>true</AllowHardTerminate>"
                       "<StartWhenAvailable>true</StartWhenAvailable>"
+                      "<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>"
                       "<Enabled>true</Enabled><AllowStartOnDemand>true</AllowStartOnDemand>"
                       "</Settings><Actions Context=\"Author\"><Exec><Command>%2</Command>"
                       "<Arguments>%3</Arguments></Exec></Actions></Task>\n")
@@ -284,44 +295,77 @@ bool StationServiceManager::writeEntry(bool startAtLogin)
     return true;
 }
 
-bool StationServiceManager::loaded() const
+StationServiceManager::ServiceState StationServiceManager::probeState() const
 {
+    QString output;
     if (m_options.platform == StationPlatform::MacOS) {
-        return run(QStringLiteral("launchctl"), {QStringLiteral("list"), serviceName()});
+        if (!run(QStringLiteral("launchctl"), {QStringLiteral("list")}, &output)) {
+            return ServiceState::Error;
+        }
+        bool found = false;
+        for (const QString& line : output.split(QLatin1Char('\n'))) {
+            const QStringList fields = line.split(QRegularExpression(QStringLiteral("\\s+")),
+                                                  Qt::SkipEmptyParts);
+            if (!fields.isEmpty() && fields.last() == serviceName()) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) return ServiceState::Absent;
+        if (!run(QStringLiteral("launchctl"),
+                 {QStringLiteral("print"), QStringLiteral("gui/%1/%2")
+                                               .arg(m_options.userId, serviceName())}, &output)) {
+            return ServiceState::Error;
+        }
+        if (output.contains(QStringLiteral("state = running"))) return ServiceState::Running;
+        if (output.contains(QStringLiteral("state = "))) return ServiceState::Stopped;
+        return ServiceState::Error;
     }
     if (m_options.platform == StationPlatform::Linux) {
-        return run(QStringLiteral("systemctl"), {QStringLiteral("--user"), QStringLiteral("is-active"),
-                                                 QStringLiteral("--quiet"), QStringLiteral("nereusd.service")});
+        if (!run(QStringLiteral("systemctl"), {QStringLiteral("--user"), QStringLiteral("show"),
+                                                 QStringLiteral("nereusd.service"),
+                                                 QStringLiteral("--property=LoadState"),
+                                                 QStringLiteral("--property=ActiveState"),
+                                                 QStringLiteral("--no-pager")}, &output)) {
+            return ServiceState::Error;
+        }
+        if (output.contains(QStringLiteral("LoadState=not-found"))) return ServiceState::Absent;
+        if (!output.contains(QStringLiteral("LoadState=loaded"))) return ServiceState::Error;
+        if (output.contains(QStringLiteral("ActiveState=active"))) return ServiceState::Running;
+        for (const QString& state : {QStringLiteral("inactive"), QStringLiteral("failed"),
+                                     QStringLiteral("activating"), QStringLiteral("deactivating")}) {
+            if (output.contains(QStringLiteral("ActiveState=") + state)) return ServiceState::Stopped;
+        }
+        return ServiceState::Error;
     }
-    return run(QStringLiteral("schtasks"), {QStringLiteral("/Query"), QStringLiteral("/TN"),
-                                            serviceName()});
+    if (!run(QStringLiteral("powershell.exe"),
+             {QStringLiteral("-NoProfile"), QStringLiteral("-NonInteractive"),
+              QStringLiteral("-Command"), QString::fromLatin1(kWindowsStateScript)}, &output)) {
+        return ServiceState::Error;
+    }
+    const QString state = output.trimmed();
+    if (state == QStringLiteral("-1")) return ServiceState::Absent;
+    if (state == QStringLiteral("4")) return ServiceState::Running;
+    if (state == QStringLiteral("1") || state == QStringLiteral("2")
+        || state == QStringLiteral("3")) return ServiceState::Stopped;
+    return ServiceState::Error;
 }
 
 bool StationServiceManager::isBackgroundRunning() const
 {
-    if (m_options.platform == StationPlatform::MacOS) {
-        QString output;
-        return run(QStringLiteral("launchctl"),
-                   {QStringLiteral("print"), QStringLiteral("gui/%1/%2")
-                                                 .arg(m_options.userId, serviceName())}, &output)
-            && output.contains(QStringLiteral("state = running"));
-    }
-    if (m_options.platform == StationPlatform::Linux) {
-        return loaded();
-    }
-    QString output;
-    return run(QStringLiteral("schtasks"), {QStringLiteral("/Query"), QStringLiteral("/TN"),
-                                            serviceName(), QStringLiteral("/FO"),
-                                            QStringLiteral("LIST"), QStringLiteral("/V")}, &output)
-        && output.contains(QRegularExpression(QStringLiteral("Status\\s*:\\s*Running"),
-                                              QRegularExpression::CaseInsensitiveOption));
+    return probeState() == ServiceState::Running;
 }
 
 bool StationServiceManager::startBackground()
 {
     m_lastError.clear();
-    if (isBackgroundRunning()) {
+    const ServiceState initial = probeState();
+    if (initial == ServiceState::Running) {
         return true;
+    }
+    if (initial == ServiceState::Error) {
+        fail(QStringLiteral("Could not check the background station state."));
+        return false;
     }
     if (!validateLaunch()) {
         return false;
@@ -332,8 +376,22 @@ bool StationServiceManager::startBackground()
     }
     if (m_options.platform == StationPlatform::MacOS) {
         const QString domain = QStringLiteral("gui/%1").arg(m_options.userId);
-        if (!loaded() && !run(QStringLiteral("launchctl"),
-                              {QStringLiteral("bootstrap"), domain, entryPath()})) {
+        // launchd does not reload ProgramArguments on kickstart. Replace an
+        // idle registration so a changed binary/profile takes effect.
+        const ServiceState current = probeState();
+        if (current == ServiceState::Error) {
+            fail(QStringLiteral("Could not check the background station state."));
+            return false;
+        }
+        if (current == ServiceState::Running) return true;
+        if (current == ServiceState::Stopped
+            && !run(QStringLiteral("launchctl"),
+                    {QStringLiteral("bootout"), domain + QLatin1Char('/') + serviceName()})) {
+            fail(QStringLiteral("Could not reload the background station on macOS."));
+            return false;
+        }
+        if (!run(QStringLiteral("launchctl"),
+                 {QStringLiteral("bootstrap"), domain, entryPath()})) {
             fail(QStringLiteral("Could not register the background station with macOS."));
             return false;
         }
@@ -365,7 +423,12 @@ bool StationServiceManager::startBackground()
 bool StationServiceManager::stopBackground()
 {
     m_lastError.clear();
-    if (!isBackgroundRunning()) {
+    const ServiceState state = probeState();
+    if (state == ServiceState::Error) {
+        fail(QStringLiteral("Could not check the background station state."));
+        return false;
+    }
+    if (state != ServiceState::Running) {
         return true;
     }
     bool stopped = false;
@@ -391,7 +454,12 @@ bool StationServiceManager::setStartWithComputer(bool enabled)
     m_lastError.clear();
     if (!enabled) {
         if (m_options.platform == StationPlatform::Windows) {
-            const bool taskExists = loaded();
+            const ServiceState state = probeState();
+            if (state == ServiceState::Error) {
+                fail(QStringLiteral("Could not check the station login task."));
+                return false;
+            }
+            const bool taskExists = state != ServiceState::Absent;
             if (!taskExists && !QFileInfo::exists(entryPath())) {
                 m_startupMode = StartupMode::Disabled;
                 return true;

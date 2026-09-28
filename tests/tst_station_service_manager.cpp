@@ -15,6 +15,9 @@ private slots:
     void macLaunchAgentEscapesPathsAndKeepsServiceOwned();
     void linuxLingerFallbackAndDisable();
     void windowsTaskQuotesArgumentsAndDisablesLogin();
+    void stopRefusesFailedStateQuery();
+    void macReloadsIdleRegistration();
+    void emptyDefaultProfileIsExplicit();
 };
 
 struct Fixture {
@@ -27,6 +30,9 @@ struct Fixture {
     bool active = false;
     bool enabled = false;
     bool taskExists = false;
+    bool macLoaded = false;
+    bool linuxPresent = false;
+    bool queryFails = false;
 
     Fixture()
     {
@@ -58,6 +64,10 @@ struct Fixture {
         o.platform = platform;
         o.runner = [this](const QString& command, const QStringList& args) {
             calls << command + QLatin1Char(' ') + args.join(QLatin1Char('|'));
+            if (queryFails && ((command == QStringLiteral("powershell.exe"))
+                               || (command == QStringLiteral("launchctl") && args.contains(QStringLiteral("list")))
+                               || (command == QStringLiteral("systemctl") && args.contains(QStringLiteral("show")))))
+                return StationServiceCommandResult{1, QStringLiteral("query failed")};
             if (command == QStringLiteral("loginctl") && args.contains(QStringLiteral("show-user")))
                 return StationServiceCommandResult{0, alreadyLingered ? QStringLiteral("yes\n") : QStringLiteral("no\n")};
             if (command == QStringLiteral("loginctl"))
@@ -72,14 +82,31 @@ struct Fixture {
                 enabled = false;
                 return StationServiceCommandResult{0, {}};
             }
-            if (command == QStringLiteral("systemctl") && args.contains(QStringLiteral("is-active")))
-                return StationServiceCommandResult{active ? 0 : 1, {}};
+            if (command == QStringLiteral("systemctl") && args.contains(QStringLiteral("show")))
+                return StationServiceCommandResult{0,
+                    linuxPresent ? QStringLiteral("LoadState=loaded\nActiveState=%1\n")
+                                        .arg(active ? QStringLiteral("active") : QStringLiteral("inactive"))
+                                 : QStringLiteral("LoadState=not-found\nActiveState=inactive\n")};
+            if (command == QStringLiteral("systemctl") && args.contains(QStringLiteral("start"))) {
+                active = true;
+                linuxPresent = true;
+            }
+            if (command == QStringLiteral("systemctl") && args.contains(QStringLiteral("stop"))) active = false;
             if (command == QStringLiteral("launchctl") && args.contains(QStringLiteral("list")))
-                return StationServiceCommandResult{active ? 0 : 1, {}};
+                return StationServiceCommandResult{0, macLoaded
+                    ? QStringLiteral("PID\tStatus\tLabel\n-\t0\tcom.boydsoftprez.NereusSDR.station\n")
+                    : QStringLiteral("PID\tStatus\tLabel\n")};
             if (command == QStringLiteral("launchctl") && args.contains(QStringLiteral("print")))
                 return StationServiceCommandResult{0, active ? QStringLiteral("state = running") : QStringLiteral("state = waiting")};
-            if (command == QStringLiteral("schtasks") && args.contains(QStringLiteral("/Query")))
-                return StationServiceCommandResult{taskExists ? 0 : 1, active ? QStringLiteral("Status: Running") : QStringLiteral("Status: Ready")};
+            if (command == QStringLiteral("launchctl") && args.contains(QStringLiteral("bootstrap"))) macLoaded = true;
+            if (command == QStringLiteral("launchctl") && args.contains(QStringLiteral("bootout"))) {
+                macLoaded = false;
+                active = false;
+            }
+            if (command == QStringLiteral("launchctl") && args.contains(QStringLiteral("kickstart"))) active = true;
+            if (command == QStringLiteral("powershell.exe"))
+                return StationServiceCommandResult{0, taskExists ? (active ? QStringLiteral("4\n") : QStringLiteral("3\n"))
+                                                               : QStringLiteral("-1\n")};
             if (command == QStringLiteral("schtasks") && args.contains(QStringLiteral("/Create")))
                 taskExists = true;
             if (command == QStringLiteral("schtasks") && args.contains(QStringLiteral("/Run")))
@@ -185,6 +212,14 @@ void StationServiceManagerTest::windowsTaskQuotesArgumentsAndDisablesLogin()
     QXmlStreamReader taskXml(xml);
     while (!taskXml.atEnd()) taskXml.readNext();
     QVERIFY(!taskXml.hasError());
+    QXmlStreamReader semanticXml(xml);
+    QString timeLimit;
+    while (!semanticXml.atEnd()) {
+        semanticXml.readNext();
+        if (semanticXml.isStartElement() && semanticXml.name() == QStringLiteral("ExecutionTimeLimit"))
+            timeLimit = semanticXml.readElementText();
+    }
+    QCOMPARE(timeLimit, QStringLiteral("PT0S"));
     QVERIFY(f.calls.join(QLatin1Char('\n')).contains(QStringLiteral("schtasks /Create|/F|/TN|NereusSDR Station|/XML|")));
     QVERIFY(f.calls.join(QLatin1Char('\n')).contains(QStringLiteral("schtasks /Run|/TN|NereusSDR Station")));
     const qsizetype priorStartCalls = f.calls.size();
@@ -196,8 +231,62 @@ void StationServiceManagerTest::windowsTaskQuotesArgumentsAndDisablesLogin()
     QVERIFY(f.taskExists);
     QVERIFY(f.calls.join(QLatin1Char('\n')).contains(QStringLiteral("schtasks /Create|/F|/TN|NereusSDR Station|/XML|")));
     QVERIFY(manager.stopBackground());
+    QVERIFY(f.calls.join(QLatin1Char('\n')).contains(QStringLiteral("powershell.exe -NoProfile|-NonInteractive|-Command|")));
+    QVERIFY(!f.calls.join(QLatin1Char('\n')).contains(QStringLiteral("Status: Running")));
     QVERIFY(!f.active);
     QVERIFY(manager.stopBackground());
+}
+
+void StationServiceManagerTest::stopRefusesFailedStateQuery()
+{
+    for (const auto platform : {StationPlatform::MacOS, StationPlatform::Linux, StationPlatform::Windows}) {
+        Fixture f;
+        f.queryFails = true;
+        f.active = true;
+        f.macLoaded = true;
+        f.linuxPresent = true;
+        f.taskExists = true;
+        StationServiceManager manager(f.options(platform));
+        QVERIFY(!manager.stopBackground());
+        QVERIFY(manager.lastError().contains(QStringLiteral("check")));
+        const QString calls = f.calls.join(QLatin1Char('\n'));
+        QVERIFY(!calls.contains(QStringLiteral("bootout")));
+        QVERIFY(!calls.contains(QStringLiteral("|stop|")));
+        QVERIFY(!calls.contains(QStringLiteral("/End")));
+    }
+}
+
+void StationServiceManagerTest::macReloadsIdleRegistration()
+{
+    Fixture f;
+    f.addConfig();
+    f.macLoaded = true;
+    StationServiceManager manager(f.options(StationPlatform::MacOS));
+    QVERIFY(manager.startBackground());
+    const QString calls = f.calls.join(QLatin1Char('\n'));
+    const qsizetype bootout = calls.indexOf(QStringLiteral("launchctl bootout|"));
+    const qsizetype bootstrap = calls.indexOf(QStringLiteral("launchctl bootstrap|"));
+    const qsizetype kickstart = calls.indexOf(QStringLiteral("launchctl kickstart|"));
+    QVERIFY(bootout >= 0);
+    QVERIFY(bootstrap > bootout);
+    QVERIFY(kickstart > bootstrap);
+    const qsizetype previous = f.calls.size();
+    QVERIFY(manager.startBackground());
+    QVERIFY(!f.calls.mid(previous).join(QLatin1Char('\n')).contains(QStringLiteral("bootout")));
+}
+
+void StationServiceManagerTest::emptyDefaultProfileIsExplicit()
+{
+    Fixture f;
+    f.addConfig();
+    auto options = f.options(StationPlatform::Linux);
+    options.inheritActiveProfile = false;
+    options.profile.clear();
+    StationServiceManager manager(options);
+    QVERIFY(manager.startBackground());
+    QFile file(manager.entryPath());
+    QVERIFY(file.open(QIODevice::ReadOnly));
+    QVERIFY(file.readAll().contains("\"--profile\" \"\""));
 }
 
 QTEST_GUILESS_MAIN(StationServiceManagerTest)
