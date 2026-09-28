@@ -6216,11 +6216,12 @@ expiry while its exact primary route, generation and authority remain valid.
 Capabilities preserve that distinction. Primary end, replacement, revocation
 and path move retire pending construction before late callbacks can attach it.
 
-Direct client/Core attachment and Core relay ownership are built with real
-paired transport regressions. Client relay ownership integration, production
-RV opt-in and actual loaded loss acceptance remain in progress. The Core relay
-fixture uses a local relay protocol player; it does not prove acceptance by
-the production Python service or imply any radio transmission.
+Direct client/Core attachment and both relay owners are built with real
+paired transport regressions. Production RV opt-in and actual loaded loss
+acceptance remain in progress. The Core relay fixture uses a local relay
+protocol player; the client owner fixture uses a bounded command responder.
+Neither proves combined acceptance by the production Python service or
+implies any radio transmission.
 
 ### 18.8 The transmit state (`txState`)
 

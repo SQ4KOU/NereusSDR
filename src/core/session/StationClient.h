@@ -400,7 +400,9 @@ QT_END_NAMESPACE
 namespace NereusSDR {
 
 class ClientDeviceIdentity;
+class DataChannelTransport;
 class IceConfiguration;
+class RelayLeg;
 class RadioModel;
 class RendezvousDialer;
 class SessionTransport;
@@ -1063,6 +1065,8 @@ public:
     SessionTransport* transport() const;
     /// The separate direct WSS transmit watch has received Core's attach ack.
     bool directWatchReady() const;
+    /// Either independent watch route has received its attach ack.
+    bool transmitWatchReady() const;
 
     /// True when this attach either owes no certificate comparison (the
     /// non-TLS transport seam, or an explicit unpinned bench run) or has
@@ -1595,11 +1599,21 @@ private:
     RemoteTransmitClient* m_remoteTransmit = nullptr;
     void refreshRemoteTransmit();
     bool directWatchEligible() const;
+    bool relayWatchEligible(bool newAdmission) const;
+    void requestWatchAttempt();
+    void startRelayWatch();
+    void handleRelayWatchOffer(const QString& sdp, const QString& type,
+                               DataChannelTransport* peer, quint64 generation,
+                               quint32 sessionEpoch);
+    void handleRelayWatchResult(const SessionMessage& message);
+    void bindWatchClient(TxWatchClient* watch, quint64 generation, quint32 sessionEpoch);
     void requestDirectWatchTicket();
     void handleDirectWatchTicket(const SessionMessage& message);
     void retireDirectWatch();
     void retryDirectWatch(const QString& reason);
     QPointer<TxWatchClient> m_directWatch;
+    QPointer<DataChannelTransport> m_pendingWatchRelayPeer;
+    std::shared_ptr<RelayLeg> m_watchRelayLeg;
     QTimer* m_directWatchRetryTimer = nullptr;
     QTimer* m_directWatchTicketTimer = nullptr;
     QElapsedTimer m_directWatchClock;
@@ -1609,6 +1623,9 @@ private:
     quint64 m_directWatchTicketGeneration = 0;
     quint32 m_directWatchTicketSessionEpoch = 0;
     bool m_directWatchDeclared = false;
+    bool m_watchRelayDeclared = false;
+    bool m_watchIsRelay = false;
+    bool m_watchPreparing = false;
 
     /// iPhone app Task 18: this computer's device key and name, the paired
     /// Core's identity fingerprint this client trusts (latched across

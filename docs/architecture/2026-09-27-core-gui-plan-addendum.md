@@ -1256,8 +1256,14 @@ colours for the same signal.
   remains valid, without permitting new admission. Lead integration rebuilt
   app/Core and six named suites; all passed (35.13 seconds) at concurrent load
   6.19/5.95/5.43. The watch uses real DTLS and relay sockets in a local protocol
-  fixture. Client integration, production Python RV acceptance and loaded loss
-  acceptance remain open.
+  fixture. Client relay ownership is built in `81362264` and `c795e810`:
+  the actual paired StationClient owns offer/result correlation, the separate
+  relay leg and pinned DTLS attachment, release-safe heartbeat copying and
+  retirement/retry. Active watch readiness survives admission-grant expiry;
+  new admission does not. Its integrated app/Core build and seven named suites
+  passed (39.67 seconds) under concurrent load 9.17/9.21/7.35. The client test
+  uses a bounded command responder alongside real paired authentication, so
+  production Python RV acceptance and loaded loss acceptance remain open.
 - Plan: independent transmit watch and restrictive-network liveness.
 
 ### G-71: Hosted desktop TCI must preserve ownership through callbacks and receiver remaps
