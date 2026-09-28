@@ -56,6 +56,7 @@
 #include "core/AudioEngine.h"
 #include "core/MoxController.h"
 #include "core/RadeChannel.h"
+#include "core/RadeText.h"
 #include "core/Resampler.h"
 #include "core/TwoToneController.h"
 #include "core/TxWorkerThread.h"
@@ -351,6 +352,24 @@ private slots:
         rig.tick(4);
         QCOMPARE(rig.worker->radeAudioQueuedSamplesForTest(),
                  queued - 4 * TxWorkerThread::kBlockFrames);
+    }
+
+    // Review Minor 6: as FreeDV, the end-of-over frame carries the callsign
+    // only while FreeDV Reporter runs; otherwise it goes out with no
+    // callsign (zero data), as FreeDV's does with reporting off.
+    void callsignOnlyWhileFreedvReporterRuns()
+    {
+        for (const bool reporting : {false, true}) {
+            RealRig rig;
+            AppSettings::instance().setValue(QStringLiteral("User/Callsign"),
+                                             QStringLiteral("KG4VCF"));
+            rig.model.setFreedvReportingForTest(reporting);
+            rig.key();
+            rig.model.moxController()->setMox(false);
+            QVERIFY(rig.model.endOfOverTailActive());
+            QCOMPARE(rig.channel()->textChannel()->ourCallsign(),
+                     reporting ? QStringLiteral("KG4VCF") : QString());
+        }
     }
 
     // Review Important 1, case A: keyed in USB (the worker latched the WDSP

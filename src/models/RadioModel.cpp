@@ -6653,9 +6653,24 @@ bool RadioModel::startRadeEndOfOverTail()
     if (channel == nullptr || !channel->isActive()) {
         return false;
     }
-    // The callsign FreeDV Reporter registers with at the Core (FreeDV sends
-    // its reporting callsign; freedv-gui src/main.cpp:2648-2653 [@a4ae053]).
-    const QString callsign = SpotSourceHost::freedvCallsign();
+    // The callsign FreeDV Reporter registers with at the Core, and only
+    // while FreeDV Reporter runs, as FreeDV does:
+    // From freedv-gui src/main.cpp:2643-2653 [@a4ae053]
+    //   if (!wxGetApp().appConfiguration.reportingConfiguration.reportingEnabled)
+    //   { freedvInterface.setTextCallbackFn(...); }
+    //   else
+    //   {
+    //       strncpy(temp, ...reportingCallsign->ToUTF8(), 8); // One less than the size of temp to ensure we don't overwrite the null.
+    //       freedvInterface.setReliableText(temp);
+    //   }
+    // With reporting off FreeDV never sets the EOO data (freedv_interface.cpp
+    // creates no rade_text object then, :171-183), so its end-of-over frame
+    // carries librade's zero data; an empty callsign here writes the same
+    // zeros (RadeText::pushTxCallsign).
+    const bool reporting = m_freedvReportingForTest.has_value()
+        ? *m_freedvReportingForTest
+        : (m_spotSourceHost && m_spotSourceHost->isRunning(SpotSourceHost::kFreedvReporter));
+    const QString callsign = reporting ? SpotSourceHost::freedvCallsign() : QString();
     // queueEndOfOver emits txModemReady synchronously; wireRadeChannel's
     // lambda queues the samples to the worker, so the notice below lands
     // behind them.
