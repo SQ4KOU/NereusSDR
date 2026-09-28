@@ -51,8 +51,13 @@
 #include "core/TciServer.h"
 #include "core/TciBinaryFrame.h"
 #include "core/MoxController.h"
+#include "core/SliceOwnership.h"
+#include "core/TxSliceArbiter.h"
+#include "core/safety/TransmitHolder.h"
+#include "core/safety/TxRefusal.h"
 #include "core/safety/BandPlanGuard.h"
 #include "models/RadioModel.h"
+#include "models/SliceModel.h"
 
 using namespace NereusSDR;
 
@@ -89,7 +94,302 @@ private slots:
     void trx_false_during_operator_key_is_not_echoed();
     void trx_true_that_keys_nothing_is_not_echoed();
     void wsjtx_sequence_still_sees_trx_true_without_suffix();
+    void desktop_host_holder_and_program_ownership();
+    void desktop_host_owned_two_three_broadcasts_logical_receivers();
+    void desktop_host_reentrant_stop_cannot_take_audio();
+    void desktop_host_reentrant_destruction_releases_original_key();
 };
+
+void TestTciTxMutex::desktop_host_reentrant_destruction_releases_original_key()
+{
+    RadioModel radio;
+    const int owned = radio.addSlice(QStringLiteral("pan-0"));
+    radio.sliceOwnership()->setOwner(owned, SliceOwnership::stationDevice());
+    TransmitHolder holder;
+    radio.moxController()->setKeyingGate([&holder](PttMode source,
+                                                   const KeyerIdentity& keyer) {
+        return holder.askKey({keyer.deviceId, TransmitHolder::Source::Device,
+                              keyer.program, source == PttMode::Vox});
+    });
+    holder.transferTo(TransmitHolder::Holder{SliceOwnership::stationDevice()},
+                      QStringLiteral("test"), [](bool) {});
+    radio.setTransmitHolder(SliceOwnership::stationDevice());
+    QVERIFY(radio.txSliceArbiter()->bindForHolder(SliceOwnership::stationDevice(), owned));
+    QPointer<TciServer> server = new TciServer(&radio);
+    server->setDesktopHostMode(true);
+    QVERIFY(server->start(0));
+    QWebSocket app;
+    QSignalSpy connected(&app, &QWebSocket::connected);
+    app.open(QUrl(QStringLiteral("ws://127.0.0.1:%1").arg(server->port())));
+    QVERIFY(connected.wait(2000));
+    QTRY_COMPARE_WITH_TIMEOUT(server->clientCount(), 1, 3000);
+    QWebSocket* serverSocket = nullptr;
+    const auto sockets = server->clients();
+    for (auto it = sockets.cbegin(); it != sockets.cend(); ++it) {
+        if (it.key()->peerPort() == app.localPort()) { serverSocket = it.key(); }
+    }
+    QVERIFY(serverSocket);
+    const auto destroying = connect(radio.moxController(), &MoxController::moxChanging,
+        &radio, [&server](int, bool, bool on) {
+            if (on && server) { delete server.data(); }
+        });
+    emit serverSocket->textMessageReceived(QStringLiteral("trx:0,true,tci;"));
+    QVERIFY(server.isNull());
+    QTRY_VERIFY_WITH_TIMEOUT(!radio.mox(), 3000);
+    QObject::disconnect(destroying);
+    app.close();
+}
+
+void TestTciTxMutex::desktop_host_owned_two_three_broadcasts_logical_receivers()
+{
+    RadioModel radio;
+    for (int i = 0; i < 4; ++i) {
+        QCOMPARE(radio.addSlice(QStringLiteral("pan-0")), i);
+        radio.sliceOwnership()->setOwner(i, i < 2 ? QByteArray("phone")
+                                   : SliceOwnership::stationDevice());
+    }
+    TciServer server(&radio);
+    server.setDesktopHostMode(true);
+    QVERIFY(server.start(0));
+    QWebSocket app;
+    QSignalSpy connected(&app, &QWebSocket::connected);
+    QSignalSpy text(&app, &QWebSocket::textMessageReceived);
+    app.open(QUrl(QStringLiteral("ws://127.0.0.1:%1").arg(server.port())));
+    QVERIFY(connected.wait(2000));
+    QTRY_VERIFY_WITH_TIMEOUT(!text.isEmpty(), 3000);
+    text.clear();
+    radio.setLock(3, true);
+    QTest::qWait(200);
+    text.clear();
+    // This model signal is normally emitted by live RX reconfiguration.
+    // Emit it here to exercise the physical-to-logical broadcast seam.
+    emit radio.activeRxCountChanged(2);
+    const auto hasLine = [&text](const QString& line) {
+        for (const auto& call : text) {
+            if (call.at(0).toString().contains(line)) { return true; }
+        }
+        return false;
+    };
+    QTRY_VERIFY_WITH_TIMEOUT(hasLine(QStringLiteral("lock:1,true;")), 3000);
+    QVERIFY(!hasLine(QStringLiteral("lock:0,true;")));
+    app.close();
+    server.stop();
+}
+
+void TestTciTxMutex::desktop_host_reentrant_stop_cannot_take_audio()
+{
+    RadioModel radio;
+    const int owned = radio.addSlice(QStringLiteral("pan-0"));
+    radio.sliceOwnership()->setOwner(owned, SliceOwnership::stationDevice());
+    TransmitHolder holder;
+    radio.moxController()->setKeyingGate([&holder](PttMode source,
+                                                   const KeyerIdentity& keyer) {
+        return holder.askKey({keyer.deviceId, TransmitHolder::Source::Device,
+                              keyer.program, source == PttMode::Vox});
+    });
+    holder.transferTo(TransmitHolder::Holder{SliceOwnership::stationDevice()},
+                      QStringLiteral("test"), [](bool) {});
+    radio.setTransmitHolder(SliceOwnership::stationDevice());
+    QVERIFY(radio.txSliceArbiter()->bindForHolder(SliceOwnership::stationDevice(), owned));
+    TciServer server(&radio);
+    server.setDesktopHostMode(true);
+    QVERIFY(server.start(0));
+    QWebSocket app;
+    QSignalSpy connected(&app, &QWebSocket::connected);
+    QSignalSpy audio(&server, &TciServer::txAudioActiveClientChanged);
+    app.open(QUrl(QStringLiteral("ws://127.0.0.1:%1").arg(server.port())));
+    QVERIFY(connected.wait(2000));
+    const auto stopping = connect(radio.moxController(), &MoxController::moxChanging,
+                                  &server, [&server](int, bool, bool on) {
+                                      if (on) { server.stop(); }
+                                  });
+    app.sendTextMessage(QStringLiteral("trx:0,true,tci;"));
+    QTRY_VERIFY_WITH_TIMEOUT(!server.isRunning(), 3000);
+    QCOMPARE(server.activeTxClientCount(), 0);
+    for (const auto& call : audio) { QVERIFY(call.at(0).value<QWebSocket*>() == nullptr); }
+    QObject::disconnect(stopping);
+    app.close();
+}
+
+void TestTciTxMutex::desktop_host_holder_and_program_ownership()
+{
+    RadioModel radio;
+    const int foreignSlice = radio.addSlice(QStringLiteral("pan-0"));
+    const int ownSlice = radio.addSlice(QStringLiteral("pan-0"));
+    QCOMPARE(foreignSlice, 0);
+    QCOMPARE(ownSlice, 1);
+    radio.sliceOwnership()->setOwner(foreignSlice, QByteArray("phone"));
+    radio.sliceOwnership()->setOwner(ownSlice, SliceOwnership::stationDevice());
+    radio.sliceById(foreignSlice)->setFrequency(7074000.0);
+    radio.sliceById(ownSlice)->setFrequency(14074000.0);
+    radio.sliceById(foreignSlice)->setRitHz(100);
+    radio.sliceById(foreignSlice)->setXitHz(100);
+
+    TransmitHolder holder;
+    TransmitHolder::Hooks hooks;
+    hooks.describe = [](const QByteArray& id) -> std::optional<TransmitHolder::Words> {
+        if (id == "phone") {
+            return TransmitHolder::Words{QStringLiteral("Phone"), QStringLiteral("Phone"),
+                                         QStringLiteral("phone")};
+        }
+        return std::nullopt;
+    };
+    holder.setHooks(hooks);
+    radio.moxController()->setKeyingGate([&holder](PttMode source,
+                                                   const KeyerIdentity& keyer) {
+        return holder.askKey({keyer.deviceId, TransmitHolder::Source::Device,
+                              keyer.program, source == PttMode::Vox});
+    });
+    TciServer server(&radio);
+    server.setDesktopHostMode(true);
+    QVERIFY(server.start(0));
+    QWebSocket app;
+    QSignalSpy connected(&app, &QWebSocket::connected);
+    QSignalSpy text(&app, &QWebSocket::textMessageReceived);
+    QSignalSpy notices(&server, &TciServer::operatorNotice);
+    app.open(QUrl(QStringLiteral("ws://127.0.0.1:%1").arg(server.port())));
+    QVERIFY(connected.wait(2000));
+    const auto hasLine = [&text](const QString& line) {
+        for (const auto& call : text) {
+            if (call.at(0).toString().contains(line)) { return true; }
+        }
+        return false;
+    };
+    QTRY_VERIFY_WITH_TIMEOUT(hasLine(QStringLiteral("ready;")), 3000);
+    QVERIFY(hasLine(QStringLiteral("vfo:0,0,14074000;")));
+    QVERIFY(!hasLine(QStringLiteral("vfo:0,0,7074000;")));
+    app.sendTextMessage(QStringLiteral("vfo:0,0,14100000;"));
+    QTRY_COMPARE_WITH_TIMEOUT(radio.sliceById(ownSlice)->frequency(), 14100000.0, 3000);
+    QCOMPARE(radio.sliceById(foreignSlice)->frequency(), 7074000.0);
+    app.sendTextMessage(QStringLiteral("vfo:1,0,21000000;"));
+    QTest::qWait(100);
+    QCOMPARE(radio.sliceById(foreignSlice)->frequency(), 7074000.0);
+    QCOMPARE(radio.sliceById(ownSlice)->frequency(), 14100000.0);
+    app.sendTextMessage(QStringLiteral("rit_offset:0,500;"));
+    app.sendTextMessage(QStringLiteral("xit_offset:0,600;"));
+    QTRY_COMPARE_WITH_TIMEOUT(radio.sliceById(ownSlice)->ritHz(), 500, 3000);
+    QTRY_COMPARE_WITH_TIMEOUT(radio.sliceById(ownSlice)->xitHz(), 600, 3000);
+    QCOMPARE(radio.sliceById(foreignSlice)->ritHz(), 100);
+    QCOMPARE(radio.sliceById(foreignSlice)->xitHz(), 100);
+    const int broadcastMark = int(text.count());
+    radio.sliceById(foreignSlice)->setFrequency(7100000.0);
+    radio.sliceById(ownSlice)->setFrequency(14200000.0);
+    QTRY_VERIFY_WITH_TIMEOUT(hasLine(QStringLiteral("vfo:0,0,14200000;")), 3000);
+    for (int i = broadcastMark; i < text.count(); ++i) {
+        const QString frame = text.at(i).at(0).toString();
+        if (frame.startsWith(QStringLiteral("vfo:"))
+            || frame.startsWith(QStringLiteral("dds:"))) {
+            QVERIFY(!frame.contains(QStringLiteral("7100000")));
+        }
+    }
+
+    app.sendTextMessage(QStringLiteral("trx:0,true,tci;"));
+    QTRY_COMPARE_WITH_TIMEOUT(notices.count(), 1, 3000);
+    QVERIFY(hasLine(QStringLiteral("trx:0,false;")));
+    QVERIFY(!radio.mox());
+    QCOMPARE(server.activeTxClientCount(), 0);
+    QCOMPARE(holder.state(), TransmitHolder::State::Unheld);
+    QCOMPARE(notices.last().at(1).toString(), TxRefusals::programNeedsTransmit().text);
+
+    const auto foreign = holder.askKey({QByteArray("phone"),
+        TransmitHolder::Source::Device, false, false});
+    QCOMPARE(foreign.verdict, KeyingVerdict::Admit);
+    app.sendTextMessage(QStringLiteral("trx:0,true,tci;"));
+    QTRY_COMPARE_WITH_TIMEOUT(notices.count(), 2, 3000);
+    QCOMPARE(notices.last().at(1).toString(),
+             TxRefusals::otherDeviceHolds(QStringLiteral("Phone")).text);
+    QCOMPARE(server.activeTxClientCount(), 0);
+    QVERIFY(!radio.mox());
+    KeyerIdentity foreignKeyer;
+    foreignKeyer.deviceId = QByteArray("phone");
+    radio.moxController()->setMox(true, foreignKeyer);
+    QTRY_VERIFY_WITH_TIMEOUT(radio.mox(), 3000);
+    app.sendTextMessage(QStringLiteral("trx:0,false;"));
+    QTest::qWait(100);
+    QVERIFY(radio.mox());
+    radio.moxController()->setMox(false, foreignKeyer);
+    QTRY_VERIFY_WITH_TIMEOUT(!radio.mox(), 3000);
+
+    holder.onMoxReading(false);
+    holder.transferTo(TransmitHolder::Holder{SliceOwnership::stationDevice()},
+                      QStringLiteral("test"), [](bool) {});
+    QVERIFY(holder.isHeldBy(SliceOwnership::stationDevice()));
+    radio.setTransmitHolder(SliceOwnership::stationDevice());
+    QVERIFY(radio.txSliceArbiter()->bindForHolder(SliceOwnership::stationDevice(), ownSlice));
+    radio.moxController()->setMoxCheck([]() {
+        return safety::BandPlanGuard::MoxCheckResult{false, QStringLiteral("test block")};
+    });
+    app.sendTextMessage(QStringLiteral("trx:0,true,tci;"));
+    QTest::qWait(100);
+    QVERIFY(!radio.mox());
+    QCOMPARE(server.activeTxClientCount(), 0);
+    radio.moxController()->setMoxCheck({});
+    app.sendTextMessage(QStringLiteral("trx:0,true,tci;"));
+    QTRY_VERIFY_WITH_TIMEOUT(radio.mox(), 3000);
+    QCOMPARE(server.activeTxClientCount(), 1);
+    QCOMPARE(radio.moxController()->currentKeyer(), KeyerIdentity::station(PttMode::Tci));
+    QWebSocket replacement;
+    QSignalSpy replacementConnected(&replacement, &QWebSocket::connected);
+    replacement.open(QUrl(QStringLiteral("ws://127.0.0.1:%1").arg(server.port())));
+    QVERIFY(replacementConnected.wait(2000));
+    replacement.sendTextMessage(QStringLiteral("trx:0,false;"));
+    QTest::qWait(100);
+    QVERIFY(radio.mox());
+    QCOMPARE(server.activeTxClientCount(), 1);
+    app.sendTextMessage(QStringLiteral("trx:0,false;"));
+    QTRY_VERIFY_WITH_TIMEOUT(!radio.mox(), 3000);
+    QCOMPARE(server.activeTxClientCount(), 0);
+
+    QWebSocket* originalSession = nullptr;
+    QWebSocket* replacementSession = nullptr;
+    const auto sessions = server.clients();
+    for (auto it = sessions.cbegin(); it != sessions.cend(); ++it) {
+        if (it.key()->peerPort() == app.localPort()) { originalSession = it.key(); }
+        if (it.key()->peerPort() == replacement.localPort()) {
+            replacementSession = it.key();
+        }
+    }
+    QVERIFY(originalSession);
+    QVERIFY(replacementSession);
+    bool replacedDuringAudioSignal = false;
+    const auto replaceKey = connect(&server, &TciServer::txAudioActiveClientChanged,
+        &server, [&](QWebSocket* active) {
+            if (active != originalSession || replacedDuringAudioSignal) { return; }
+            replacedDuringAudioSignal = true;
+            // Real accepted server-side socket sessions, with synchronous
+            // callbacks at the exact audio-lock signal boundary.
+            emit originalSession->textMessageReceived(QStringLiteral("trx:0,false;"));
+            emit replacementSession->textMessageReceived(QStringLiteral("trx:0,true,tci;"));
+        });
+    app.sendTextMessage(QStringLiteral("trx:0,true,tci;"));
+    QTRY_VERIFY_WITH_TIMEOUT(replacedDuringAudioSignal, 3000);
+    QTRY_VERIFY_WITH_TIMEOUT(radio.mox(), 3000);
+    QCOMPARE(server.activeTxClientCount(), 1);
+    app.sendTextMessage(QStringLiteral("trx:0,false;"));
+    QTest::qWait(100);
+    QVERIFY(radio.mox());
+    QCOMPARE(server.activeTxClientCount(), 1);
+    QObject::disconnect(replaceKey);
+    replacement.sendTextMessage(QStringLiteral("trx:0,false;"));
+    QTRY_VERIFY_WITH_TIMEOUT(!radio.mox(), 3000);
+    QCOMPARE(server.activeTxClientCount(), 0);
+
+    radio.setMoxFromButton(true);
+    QTRY_VERIFY_WITH_TIMEOUT(radio.mox(), 3000);
+    app.sendTextMessage(QStringLiteral("trx:0,false;"));
+    QTest::qWait(100);
+    QVERIFY(radio.mox());
+    radio.setMoxFromButton(false);
+    QTRY_VERIFY_WITH_TIMEOUT(!radio.mox(), 3000);
+    app.sendTextMessage(QStringLiteral("trx:0,true,tci;"));
+    QTRY_VERIFY_WITH_TIMEOUT(radio.mox(), 3000);
+    QCOMPARE(server.activeTxClientCount(), 1);
+    app.close();
+    QTRY_VERIFY_WITH_TIMEOUT(!radio.mox(), 3000);
+    QTRY_COMPARE_WITH_TIMEOUT(server.activeTxClientCount(), 0, 3000);
+    replacement.close();
+    server.stop();
+}
 
 // R-R3-39: stopping the server while an app holds the TX audio releases it
 // as the app's disconnect does: txAudioActiveClientChanged(nullptr), so the

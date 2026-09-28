@@ -107,6 +107,8 @@
 //                                    R-IOS-03, R-IOS-13): the holder rule
 //                                    before the TX audio lock (ruling 8.14).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - Desktop-host TCI receiver ownership and holder admission.
+//                NereusSDR-original, AI-assisted via OpenAI Codex.
 
 #ifdef HAVE_WEBSOCKETS
 
@@ -124,6 +126,8 @@
 #include "models/NotchModel.h"  // TNF section 6.4: master notch enable broadcast.
 #include "models/TransmitModel.h"  // Phase 3J-1 closeout (review P2): MON / TUN broadcast wireup.
 #include "MoxController.h"         // Phase 3J-1 closeout (review P2): MOX broadcast wireup.
+#include "SliceOwnership.h"
+#include "core/safety/TxRefusal.h"
 #include "MicProfileManager.h"     // R-R3-49 (parity Task 3): a remote window's TX profiles.
 #include "TxSliceArbiter.h"        // Codex review round 6: tx_frequency follows the TX-bound slice.
 #include "AudioEngine.h"           // Phase 3J-1 closeout (review P1 #1): volume change broadcast.
@@ -164,6 +168,7 @@ void  destroy_resampleFV(void* ptr);
 #endif
 
 #include <QElapsedTimer>
+#include <QScopeGuard>
 #include <QHostAddress>
 #include <QTimer>
 #include <QWebSocket>
@@ -203,6 +208,7 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         m_sliceRxGainLinear[rx].store(1.0f, std::memory_order_release);
         m_sliceRxPeakAbs[rx].store(0.0f, std::memory_order_release);
     }
+    refreshLocalAudioReceiverMap();
 
     // ── Phase 3J-1 bench fix (2026-05-11): seed TCI compat-flag defaults ────
     //
@@ -403,6 +409,10 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         // reports the Core's reading it mirrors (fix wave).
         if (m_remoteWindow) {
             rx1Dbm = remoteReceiverLevelDbm();
+        } else if (m_desktopHostMode && m_model) {
+            if (const SliceModel* slice = m_model->sliceById(desktopSliceForReceiver(0))) {
+                rx1Dbm = slice->signalAverageDbm();
+            }
         } else if (m_model) {
             if (auto* wdsp = m_model->wdspEngine()) {
                 if (auto* rx = wdsp->rxChannel(0)) {
@@ -565,8 +575,8 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
 //   (b) RadioModel::rawIqData → TciServer::onRawIqDataReceived
 //       (Qt::QueuedConnection — marshals to main thread; see note below)
 //
-// This method is idempotent: if m_audioTapSources is non-empty the audio tap
-// is already connected; if m_iqTapConnected is true the IQ tap is already
+// This method is idempotent: already-tapped channels are skipped; if
+// m_iqTapConnected is true the IQ tap is already
 // connected.  The double-start guard in start() (m_server already non-null →
 // return false) prevents re-entry in production, but idempotency here is the
 // belt to the suspenders.
@@ -592,27 +602,33 @@ void TciServer::hookAudioAndIqTaps()
     // once it is, then hook audioFrameReady with Qt::DirectConnection so the
     // slot runs on the DSP thread and can push into AudioRingSpsc non-blockingly.
     //
-    // Idempotency guard: if m_audioTapSources is already non-empty, the tap is
-    // connected — skip to avoid double-signal.
-    if (m_audioTapSources.isEmpty()) {
+    // Idempotency guard: each connected channel is skipped. Ordinary local
+    // mode retains its original channel-0 tap; desktop hosting follows the
+    // station device's slices across the WDSP channel pool.
+    {
         WdspEngine* wdsp = m_model->wdspEngine();
         if (wdsp) {
             auto hookAudioTap = [this, wdsp]() {
-                RxChannel* rxCh = wdsp->rxChannel(0);
-                if (rxCh && !m_audioTapSources.contains(rxCh)) {
-                    connect(rxCh, &RxChannel::audioFrameReady,
-                            this, &TciServer::onAudioFrameReady,
-                            Qt::DirectConnection);
-                    // Phase 26 review finding #4: track so stop() can
-                    // explicitly disconnect before tearing down TciServer state.
-                    m_audioTapSources.append(rxCh);
-                    qCInfo(lcTci) << "TciServer: RX audio tap connected to RxChannel 0";
+                const int channelCount = m_desktopHostMode
+                    ? WdspEngine::kMaxSliceChannels : 1;
+                for (int channel = 0; channel < channelCount; ++channel) {
+                    RxChannel* rxCh = wdsp->rxChannel(channel);
+                    if (rxCh && !m_audioTapSources.contains(rxCh)) {
+                        connect(rxCh, &RxChannel::audioFrameReady,
+                                this, &TciServer::onAudioFrameReady,
+                                Qt::DirectConnection);
+                        // The DSP callback maps the physical channel to the
+                        // hosted station device's logical receiver atomically.
+                        m_audioTapSources.append(rxCh);
+                        qCInfo(lcTci) << "TciServer: RX audio tap connected to RxChannel"
+                                      << channel;
+                    }
                 }
             };
 
             if (wdsp->isInitialized()) {
                 hookAudioTap();
-            } else {
+            } else if (!m_wdspInitConn) {
                 // Phase 3J-1 bench fix (2026-05-10): use Qt::QueuedConnection so
                 // this lambda fires on the next event-loop tick rather than
                 // synchronously during emit.  Two listeners are registered on
@@ -633,6 +649,7 @@ void TciServer::hookAudioAndIqTaps()
                     if (init) {
                         hookAudioTap();
                         disconnect(m_wdspInitConn);
+                        m_wdspInitConn = {};
                     }
                 }, Qt::QueuedConnection);
             }
@@ -686,6 +703,7 @@ void TciServer::hookSliceBroadcasts()
         if (auto* slice = m_model->sliceById(index)) {
             wireSliceForBroadcast(slice, index);
         }
+        QTimer::singleShot(0, this, [this]() { hookAudioAndIqTaps(); });
     });
 
     // Codex review round 6, PR #293: a TX handoff changes tx_frequency
@@ -783,10 +801,11 @@ void TciServer::wireSliceForBroadcast(SliceModel* slice, int sliceId)
             return;
         }
     }
-    m_broadcastWiredSlices.append(QPointer<SliceModel>(slice));
-
     const bool exposed =
-        (sliceId >= 0 && sliceId < TciProtocol::kExposedReceiverCount);
+        (sliceId >= 0 && sliceId < TciProtocol::kExposedReceiverCount)
+        || (m_desktopHostMode && desktopReceiverForSlice(sliceId) >= 0);
+    if (!exposed) { return; }
+    m_broadcastWiredSlices.append(QPointer<SliceModel>(slice));
 
     // Helper: a string-format frame template used by most one-shot handlers.
     // Each connect() captures the sliceId by value so per-slice routing is
@@ -1206,6 +1225,11 @@ void TciServer::hookGlobalBroadcasts()
         // expectedMox is false.
         connect(mox, &MoxController::moxChanging, this,
                 [this](int /*rx*/, bool /*oldMox*/, bool newMox) {
+                    if (!newMox && m_desktopHostMode) {
+                        if (m_desktopKeyHeld) { ++m_desktopKeyGeneration; }
+                        m_desktopKeyHeld = false;
+                        m_desktopKeyClient = nullptr;
+                    }
                     if (newMox || m_txAudioActiveClient.isNull()) {
                         return;
                     }
@@ -1231,10 +1255,12 @@ void TciServer::hookGlobalBroadcasts()
                     // / sendTXEnable at TCIServer.cs:2515-2516 + 2618-2619
                     // [v2.10.3.15].  Re-emit both to mirror the init burst
                     // when MOX flips.
-                    bool rx2en = false;
-                    QMetaObject::invokeMethod(m_model, "rx2Enabled",
-                                              Qt::DirectConnection,
-                                              Q_RETURN_ARG(bool, rx2en));
+                    bool rx2en = m_desktopHostMode && desktopSliceForReceiver(1) >= 0;
+                    if (!m_desktopHostMode) {
+                        QMetaObject::invokeMethod(m_model, "rx2Enabled",
+                                                  Qt::DirectConnection,
+                                                  Q_RETURN_ARG(bool, rx2en));
+                    }
                     const QString notMox =
                         on ? QStringLiteral("false") : QStringLiteral("true");
                     m_protocol->enqueueLocalBroadcast(
@@ -1392,7 +1418,8 @@ void TciServer::hookGlobalBroadcasts()
     // initial state for the rx==1 lines that depend on bRX2Enabled.
     connect(m_model, &RadioModel::activeRxCountChanged, this,
             [this](int newCount) {
-                const bool en = (newCount >= 2);
+                const bool en = m_desktopHostMode
+                    ? desktopSliceForReceiver(1) >= 0 : (newCount >= 2);
                 const QString boolStr =
                     en ? QStringLiteral("true") : QStringLiteral("false");
                 bool mox = false;
@@ -1410,9 +1437,11 @@ void TciServer::hookGlobalBroadcasts()
                     QMetaObject::invokeMethod(m_model, "lock",
                                               Qt::DirectConnection,
                                               Q_RETURN_ARG(bool, lock1),
-                                              Q_ARG(int, 1));
+                                              Q_ARG(int, m_desktopHostMode
+                                                  ? desktopSliceForReceiver(1) : 1));
                     m_protocol->enqueueLocalBroadcast(
-                        QStringLiteral("lock:1,%1;")
+                        QStringLiteral("lock:%1,%2;")
+                            .arg(m_desktopHostMode ? desktopSliceForReceiver(1) : 1)
                             .arg(lock1 ? QStringLiteral("true")
                                         : QStringLiteral("false")));
                 }
@@ -1543,7 +1572,132 @@ QList<QHostAddress> TciServer::listenAddresses() const
 
 void TciServer::setSliceWriteGate(std::function<bool(int sliceId)> gate)
 {
-    m_protocol->setSliceWriteGate(std::move(gate));
+    m_externalSliceWriteGate = std::move(gate);
+    refreshSliceWriteGate();
+}
+
+void TciServer::refreshSliceWriteGate()
+{
+    if (!m_desktopHostMode && !m_externalSliceWriteGate) {
+        m_protocol->setSliceWriteGate({});
+        return;
+    }
+    m_protocol->setSliceWriteGate([this](int sliceId) {
+        const bool owned = !m_desktopHostMode || desktopReceiverForSlice(sliceId) >= 0;
+        return owned && (!m_externalSliceWriteGate || m_externalSliceWriteGate(sliceId));
+    });
+}
+
+int TciServer::desktopSliceForReceiver(int receiver) const
+{
+    if (!m_model || !m_model->sliceOwnership() || receiver < 0
+        || receiver >= TciProtocol::kExposedReceiverCount) { return -1; }
+    QList<int> owned = m_model->sliceOwnership()->ownedBy(SliceOwnership::stationDevice());
+    std::sort(owned.begin(), owned.end());
+    return receiver < owned.size() ? owned.at(receiver) : -1;
+}
+
+int TciServer::desktopReceiverForSlice(int sliceId) const
+{
+    for (int receiver = 0; receiver < TciProtocol::kExposedReceiverCount; ++receiver) {
+        if (desktopSliceForReceiver(receiver) == sliceId) { return receiver; }
+    }
+    return -1;
+}
+
+void TciServer::refreshLocalAudioReceiverMap()
+{
+    static_assert(kMaxPhysicalSlices == WdspEngine::kMaxSliceChannels);
+    std::array<int, kMaxPhysicalSlices> next{};
+    for (int sliceId = 0; sliceId < kMaxPhysicalSlices; ++sliceId) {
+        next[sliceId] = m_desktopHostMode ? desktopReceiverForSlice(sliceId)
+                                         : (sliceId < kMaxTciRxSlices ? sliceId : -1);
+    }
+    QMutexLocker guard(&m_localAudioMapMutex);
+    for (int rx = 0; rx < kMaxTciRxSlices; ++rx) {
+        int before = -1;
+        int after = -1;
+        for (int sliceId = 0; sliceId < kMaxPhysicalSlices; ++sliceId) {
+            if (m_appliedLocalAudioReceiverForSlice[sliceId] == rx) { before = sliceId; }
+            if (next[sliceId] == rx) { after = sliceId; }
+        }
+        if (before == after) { continue; }
+        // The main thread is the ring's only consumer. While the producer
+        // holds no lock, discard bytes from the old owner, including a
+        // partial block, and skip already collected history for every app.
+        while (m_audioRing[rx].popInto(
+                   reinterpret_cast<uint8_t*>(m_drainScratch.data()),
+                   static_cast<qint64>(kMaxDrainSamples) * sizeof(float)) > 0) {}
+        ++m_localAudioGeneration[rx];
+        for (auto it = m_clients.begin(); it != m_clients.end(); ++it) {
+            it.value()->audioReadFrame.insert(rx, m_rxFramesWritten[rx]);
+        }
+        m_sliceRxPeakAbs[rx].store(0.0f, std::memory_order_release);
+    }
+    for (int sliceId = 0; sliceId < kMaxPhysicalSlices; ++sliceId) {
+        m_appliedLocalAudioReceiverForSlice[sliceId] = next[sliceId];
+        m_localAudioReceiverForSlice[sliceId].store(next[sliceId], std::memory_order_release);
+    }
+}
+
+void TciServer::releaseDesktopProgramKey()
+{
+    if (!m_desktopHostMode || !m_desktopKeyHeld) { return; }
+    // Retire this app's ownership before setMox emits callbacks. A callback
+    // may synchronously start a newer key that this release must not erase.
+    ++m_desktopKeyGeneration;
+    m_desktopKeyHeld = false;
+    m_desktopKeyClient = nullptr;
+    QPointer<MoxController> mox = m_model ? m_model->moxController() : nullptr;
+    if (!mox) { return; }
+    const KeyerIdentity keyer = KeyerIdentity::station(PttMode::Tci);
+    if (mox->isMox() && mox->currentKeyer() == keyer) {
+        mox->setMox(false, keyer);
+    }
+}
+
+void TciServer::setDesktopHostMode(bool enabled)
+{
+    if (m_desktopHostMode == enabled) { return; }
+    ++m_desktopKeyGeneration;
+    if (m_desktopHostMode) { releaseDesktopProgramKey(); }
+    if (m_desktopHostMode && !enabled && m_model && m_model->wdspEngine()) {
+        auto* wdsp = m_model->wdspEngine();
+        for (int channel = 1; channel < WdspEngine::kMaxSliceChannels; ++channel) {
+            if (RxChannel* rxCh = wdsp->rxChannel(channel)) {
+                QObject::disconnect(rxCh, &RxChannel::audioFrameReady,
+                                    this, &TciServer::onAudioFrameReady);
+                m_audioTapSources.removeAll(rxCh);
+            }
+        }
+    }
+    QObject::disconnect(m_desktopOwnershipConnection);
+    m_desktopHostMode = enabled && !m_remoteWindow;
+    refreshLocalAudioReceiverMap();
+    m_protocol->setReceiverSliceMap(m_desktopHostMode
+        ? [this](int receiver) { return desktopSliceForReceiver(receiver); }
+        : std::function<int(int)>{});
+    refreshSliceWriteGate();
+    if (m_desktopHostMode) { hookAudioAndIqTaps(); }
+    if (m_desktopHostMode && m_model) {
+        for (SliceModel* slice : m_model->slices()) {
+            if (slice) { wireSliceForBroadcast(slice, slice->sliceIndex()); }
+        }
+        if (auto* ownership = m_model->sliceOwnership()) {
+            m_desktopOwnershipConnection = connect(ownership, &SliceOwnership::markChanged,
+                this, [this](int, const QByteArray&, const QByteArray&) {
+                    refreshLocalAudioReceiverMap();
+                    if (!m_desktopHostMode) { return; }
+                    for (int receiver = 0; receiver < TciProtocol::kExposedReceiverCount;
+                         ++receiver) {
+                        const int sliceId = desktopSliceForReceiver(receiver);
+                        if (SliceModel* slice = m_model->sliceById(sliceId)) {
+                            wireSliceForBroadcast(slice, sliceId);
+                        }
+                    }
+                });
+        }
+    }
 }
 
 void TciServer::setStationReceiveOnly(bool receiveOnly)
@@ -1554,6 +1708,10 @@ void TciServer::setStationReceiveOnly(bool receiveOnly)
 
 bool TciServer::start(const QHostAddress& bindAddress, quint16 port)
 {
+    if (m_desktopHostMode && desktopSliceForReceiver(0) < 0) {
+        qCWarning(lcTci) << "TciServer: desktop host has no station-owned receiver";
+        return false;
+    }
     if (m_server) {
         qCWarning(lcTci) << "TciServer::start called while already listening on port"
                          << m_server->serverPort();
@@ -1660,6 +1818,8 @@ bool TciServer::start(const QHostAddress& bindAddress, quint16 port)
 
 void TciServer::stop()
 {
+    ++m_desktopKeyGeneration;
+    releaseDesktopProgramKey();
     if (!m_server) { return; }
 
     // Phase 26 review finding #4: explicitly sever DSP-thread signal connections
@@ -1696,6 +1856,8 @@ void TciServer::stop()
         }
     }
     m_audioTapSources.clear();  // P2.3: reset so hookAudioAndIqTaps() re-arms
+    QObject::disconnect(m_wdspInitConn);
+    m_wdspInitConn = {};
 
     m_pingTimer->stop();
     m_drainTimer->stop();        // Phase 14: stop drain before disconnecting clients
@@ -1819,6 +1981,11 @@ void TciServer::onNewConnection()
     }
     while (server->hasPendingConnections()) {
         auto* ws = server->nextPendingConnection();
+        if (m_desktopHostMode && desktopSliceForReceiver(0) < 0) {
+            ws->close();
+            ws->deleteLater();
+            continue;
+        }
 
         // Phase 26 review finding #7: bound incoming binary (and text) frame
         // size against hostile or malformed frames from a misbehaving local
@@ -1957,7 +2124,17 @@ void TciServer::onClientDisconnected()
     if (it == m_clients.end()) { return; }
 
     qCInfo(lcTci) << "TciServer: client disconnected from" << it.value()->peer;
+    if (m_desktopHostMode) { ++m_desktopKeyGeneration; }
+    const QPointer<TciServer> self(this);
+    const QPointer<QWebSocket> client(ws);
     emit clientDisconnected(ws);
+    if (!self || !client) { return; }
+    it = m_clients.find(ws);
+    if (it == m_clients.end()) { return; }
+
+    if (m_desktopHostMode && m_desktopKeyClient.data() == ws) {
+        releaseDesktopProgramKey();
+    }
 
     // Phase 17: release TX audio mutex if this client held it.
     // QPointer auto-nulls when the socket is deleted (ws->deleteLater below),
@@ -2676,6 +2853,10 @@ void TciServer::onAudioFrameReady(int slice, const float* L, const float* R,
 {
     (void)srcRate;  // always 48000 per kWdspRxOutputRate in RxChannel.cpp
 
+    if (slice < 0 || slice >= kMaxPhysicalSlices) { return; }
+    if (!m_localAudioMapMutex.tryLock()) { return; }
+    const auto unlock = qScopeGuard([this] { m_localAudioMapMutex.unlock(); });
+    slice = m_localAudioReceiverForSlice[slice].load(std::memory_order_acquire);
     if (slice < 0 || slice >= kMaxTciRxSlices) { return; }
     if (!L || !R || n <= 0) { return; }
 
@@ -2825,6 +3006,7 @@ void TciServer::sendRxAudioBlock(QWebSocket* ws,
     // an earlier block of this client is still on the lane.
     if (DspControlThread* lane = rxAudioLane();
         lane != nullptr && (resampler || session.rxAudioBlocksOnLane > 0)) {
+        const quint64 generation = m_localAudioGeneration[rx];
         std::vector<float> block(m_drainScratch.begin(),
                                  m_drainScratch.begin() + totalSamples);
         ++session.rxAudioBlocksOnLane;
@@ -2844,13 +3026,14 @@ void TciServer::sendRxAudioBlock(QWebSocket* ws,
                     static_cast<int>(TciStreamType::RxAudioStream), channels, samples);
             },
             this,
-            [this, weakSession, socket, rx](QByteArray frame) {
+            [this, weakSession, socket, rx, generation](QByteArray frame) {
                 const std::shared_ptr<TciClientSession> live = weakSession.lock();
                 if (!live) {
                     return;   // the client has gone
                 }
                 --live->rxAudioBlocksOnLane;
                 if (!socket || !m_clients.contains(socket.data())
+                    || generation != m_localAudioGeneration[rx]
                     || !live->audioStreamEnabled.contains(rx)) {
                     return;
                 }
@@ -3797,10 +3980,136 @@ void TciServer::onTextMessageReceived(const QString& msg)
                         parts.at(2).trimmed().compare(QLatin1String("tci"),
                             Qt::CaseInsensitive) == 0);
 
-                    const bool wantsMox = (parts.at(1).trimmed().compare(
+                        const bool wantsMox = (parts.at(1).trimmed().compare(
                         QLatin1String("true"), Qt::CaseInsensitive) == 0);
 
-                    if (m_remoteWindow && forwardsRemoteTransmit()) {
+                        if (m_desktopHostMode) {
+                        const QString requested = parts.at(1).trimmed();
+                        if (requested.compare(QLatin1String("true"), Qt::CaseInsensitive) != 0
+                            && requested.compare(QLatin1String("false"), Qt::CaseInsensitive) != 0) {
+                            return;
+                        }
+                        bool rxOk = false;
+                        const int trxIdx = parts.at(0).trimmed().toInt(&rxOk);
+                        const quint64 requestGeneration = ++m_desktopKeyGeneration;
+                        if (wantsMox) { m_desktopLatestOnIntent = requestGeneration; }
+                        auto* mox = m_model ? m_model->moxController() : nullptr;
+                        const KeyerIdentity keyer = KeyerIdentity::station(PttMode::Tci);
+                        const QPointer<TciServer> self(this);
+                        const QPointer<QWebSocket> client(ws);
+                        const QPointer<MoxController> controller(mox);
+                        const auto liveClient = [this, self, client, session]() {
+                            return self && client && m_server
+                                && m_clients.value(client.data()) == session;
+                        };
+                        const auto answer = [liveClient, session, trxIdx](bool on) {
+                            if (!liveClient()) { return; }
+                            session->sendQueue.push(TciSendQueue::Priority::Control,
+                                QStringLiteral("trx:%1,%2;").arg(trxIdx)
+                                    .arg(on ? QStringLiteral("true") : QStringLiteral("false")));
+                        };
+                        if (!rxOk || desktopSliceForReceiver(trxIdx) < 0 || !mox) {
+                            if (rxOk) { answer(false); }
+                            return;
+                        }
+                        if (!wantsMox) {
+                            // A replacement app, a manual MOX, the radio PTT, and
+                            // another device's key are never this app's program key.
+                            if (m_desktopKeyClient.data() == ws) {
+                                releaseDesktopProgramKey();
+                            }
+                            answer(false);
+                            return;
+                        }
+                        if (mox->isMox()) {
+                            // Thetis handleTrxMessage: a second true while keyed
+                            // does nothing; it cannot take an existing audio lock.
+                            return;
+                        }
+                        const TxRefusal holderRefusal = mox->hasKeyingGate()
+                            ? mox->programKeyRefusal(keyer)
+                            : TxRefusals::programNeedsTransmit();
+                        if (!holderRefusal.isEmpty()) {
+                            raiseOperatorNotice(session->peer, holderRefusal.text);
+                            answer(false);
+                            return;
+                        }
+                        if (!m_model->txSliceArbiter()
+                            || desktopReceiverForSlice(
+                                   m_model->txSliceArbiter()->txBoundSliceId()) < 0) {
+                            raiseOperatorNotice(session->peer, TxRefusals::notReady().text);
+                            answer(false);
+                            return;
+                        }
+                        // The holder gate is checked again inside setMox. Only
+                        // its accepted station TCI key may acquire TX audio.
+                        // stop()/destruction can run synchronously inside
+                        // setMox. A transition away from this key means a
+                        // later key may own MOX, even if it uses TCI too.
+                        bool keyTransitionedAway = false;
+                        const auto observeKey = connect(mox, &MoxController::moxChanging,
+                            mox, [&keyTransitionedAway](int, bool, bool on) {
+                                if (!on) { keyTransitionedAway = true; }
+                            });
+                        mox->setMox(true, keyer);
+                        QObject::disconnect(observeKey);
+                        if (!self) {
+                            if (controller && !keyTransitionedAway
+                                && controller->isMox()
+                                && controller->currentKeyer() == keyer) {
+                                controller->setMox(false, keyer);
+                            }
+                            return;
+                        }
+                        if (!controller) { return; }
+                        if (requestGeneration != m_desktopKeyGeneration
+                            || !liveClient() || !m_desktopHostMode
+                            || !controller->isMox()
+                            || !(controller->currentKeyer() == keyer)) {
+                            // A callback may have stopped the server or
+                            // replaced the requesting connection during
+                            // setMox. Never grant its abandoned key audio.
+                            if (m_desktopLatestOnIntent == requestGeneration
+                                && controller->isMox()
+                                && controller->currentKeyer() == keyer
+                                && !m_desktopKeyHeld) {
+                                controller->setMox(false, keyer);
+                            }
+                            answer(false);
+                            return;
+                        }
+                        m_desktopKeyClient = ws;
+                        m_desktopKeyHeld = true;
+                        if (hasTciArg && m_txAudioActiveClient.isNull()) {
+                            m_txAudioActiveClient = ws;
+                            emit txAudioActiveClientChanged(ws);
+                            if (!self || !controller) { return; }
+                            if (requestGeneration != m_desktopKeyGeneration
+                                || !liveClient() || !m_desktopHostMode
+                                || !m_desktopKeyHeld
+                                || m_desktopKeyClient.data() != client.data()
+                                || m_txAudioActiveClient.data() != client.data()
+                                || !controller->isMox()
+                                || !(controller->currentKeyer() == keyer)) {
+                                if (requestGeneration == m_desktopKeyGeneration
+                                    && m_txAudioActiveClient.data() == client.data()) {
+                                    m_txAudioActiveClient = nullptr;
+                                    emit txAudioActiveClientChanged(nullptr);
+                                    if (!self) { return; }
+                                }
+                                if (requestGeneration == m_desktopKeyGeneration
+                                    && m_desktopKeyHeld
+                                    && m_desktopKeyClient.data() == client.data()) {
+                                    releaseDesktopProgramKey();
+                                }
+                                return;
+                            }
+                            startTxChrono(client.data(), trxIdx);
+                        }
+                        answer(true);
+                        broadcastPendingNotifications();
+                        return;
+                    } else if (m_remoteWindow && forwardsRemoteTransmit()) {
                         // Task 35: forwarded to the Core under the holder
                         // rule; the answer comes back later.
                         bool rxOk = false;
@@ -4409,8 +4718,12 @@ void TciServer::onRawIqDataReceived(int streamIndex, const QVector<float>& inter
     const int sampleRate = m_model->streamSampleRateHz(streamIndex);
     if (sampleRate < 48000 || sampleRate > 384000) { return; }
     for (SliceModel* slice : m_model->slices()) {
-        if (slice && slice->streamIndex() == streamIndex && slice->sliceIndex() <= 1) {
-            sendIqToSubscribers(slice->sliceIndex(), sampleRate, interleavedIQ);
+        if (slice && slice->streamIndex() == streamIndex) {
+            const int receiver = m_desktopHostMode
+                ? desktopReceiverForSlice(slice->sliceIndex()) : slice->sliceIndex();
+            if (receiver >= 0 && receiver < kMaxTciRxSlices) {
+                sendIqToSubscribers(receiver, sampleRate, interleavedIQ);
+            }
         }
     }
 }
@@ -4423,7 +4736,10 @@ int TciServer::publishedIqRate() const
     int rate = 0;
     if (!m_model) { return rate; }
     for (const SliceModel* slice : m_model->slices()) {
-        if (!slice || slice->sliceIndex() > 1) { continue; }
+        if (!slice || (m_desktopHostMode
+            ? desktopReceiverForSlice(slice->sliceIndex()) < 0 : slice->sliceIndex() > 1)) {
+            continue;
+        }
         const int stream = slice->streamIndex();
         if (stream < 0 || !m_model->streamActive(stream)) { continue; }
         const int accepted = m_model->streamSampleRateHz(stream);

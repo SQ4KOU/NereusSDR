@@ -63,11 +63,14 @@
 //                only after the Core admits the key; trx:N,false releases
 //                only this window's own key. NereusSDR-original. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+
 //   2026-09-25 - iPhone app plan Task 36 (R-IOS-13): through a remote
 //                window the lock holder's transmit audio goes to the Core
 //                on the window's microphone line (RemoteTransmit::audio).
 //                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-28 - Desktop-host TCI receiver ownership and holder admission.
+//                NereusSDR-original, AI-assisted via OpenAI Codex.
 
 #pragma once
 #ifdef HAVE_WEBSOCKETS
@@ -77,6 +80,7 @@
 #include <QHostAddress>
 #include <QObject>
 #include <QPointer>
+#include <QMutex>
 #include <QSet>
 #include <QVector>
 #include <array>
@@ -229,6 +233,10 @@ public:
     // change (TciProtocol::setSliceWriteGate). The Core's own server passes
     // the station device's; a server without one changes every slice.
     void setSliceWriteGate(std::function<bool(int sliceId)> gate);
+    // Explicit local hosting mode. Programs operate as the station device;
+    // receivers are its owned slices in ascending id order.
+    void setDesktopHostMode(bool enabled);
+    bool desktopHostMode() const { return m_desktopHostMode; }
     // Follow-up 1b (R-R3-48): while its owner retries a listener that could
     // not start, the per-try listen, start and stop lines go to debug; the
     // owner logs once per state change instead.
@@ -568,6 +576,18 @@ private:
     // R-R3-48: the other addresses' servers, same port, same clients table.
     QList<QWebSocketServer*> m_extraServers;
     bool m_stationReceiveOnly{false};
+    bool m_desktopHostMode{false};
+    QPointer<QWebSocket> m_desktopKeyClient;
+    bool m_desktopKeyHeld{false};
+    quint64 m_desktopKeyGeneration{0};
+    quint64 m_desktopLatestOnIntent{0};
+    QMetaObject::Connection m_desktopOwnershipConnection;
+    std::function<bool(int)> m_externalSliceWriteGate;
+    void refreshSliceWriteGate();
+    int desktopSliceForReceiver(int receiver) const;
+    int desktopReceiverForSlice(int sliceId) const;
+    void releaseDesktopProgramKey();
+    void refreshLocalAudioReceiverMap();
     bool m_quietListenAttempts{false};
     QHash<QWebSocket*, std::shared_ptr<TciClientSession>> m_clients;
     // Only admitted remote audio subscribers appear here (at most eight).
@@ -612,6 +632,15 @@ private:
     //
     // kMaxTciRxSlices: we support slice 0 and slice 1 (RX1 + RX2).
     static constexpr int kMaxTciRxSlices = 2;
+    // WdspEngine::kMaxSliceChannels is five. The DSP callback reads this
+    // atomic map without touching main-thread SliceOwnership state.
+    static constexpr int kMaxPhysicalSlices = 5;
+    std::array<std::atomic<int>, kMaxPhysicalSlices> m_localAudioReceiverForSlice{};
+    // The DSP callback uses tryLock so an ownership change can discard old
+    // receiver audio without ever waiting on the realtime thread.
+    QMutex m_localAudioMapMutex;
+    std::array<int, kMaxPhysicalSlices> m_appliedLocalAudioReceiverForSlice{};
+    std::array<quint64, kMaxTciRxSlices> m_localAudioGeneration{};
     std::array<AudioRingSpsc<131072>, kMaxTciRxSlices> m_audioRing;
 
     // R-R3-42: each 5 ms drain tick empties m_audioRing[rx] into this
