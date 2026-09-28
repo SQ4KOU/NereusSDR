@@ -886,7 +886,7 @@ change shows as surface drift and as a change to this table.
 | `sessionHolderVersion` | 1 |
 | `remoteTxVersion` | 2 |
 | `txStateVersion` | 2 |
-| `txReadingsVersion` | 2 |
+| `txReadingsVersion` | 3 |
 | `mediaTunnelVersion` | 1 |
 | `mediaRelayRoutingVersion` | 1 |
 | `settingsHygieneVersion` | 1 |
@@ -1514,6 +1514,12 @@ When a feature is off, its version is 0:
   the Core may help.", never a 0. At 2 the Core also sends its own scaled
   raw forward power (W) and forward/reverse ADC voltage (V), each as outbound
   f64. An older client using the version-1 fields keeps its existing behavior.
+  At 3 (A9, iPhone app plan Task 39) `txState` also carries the seven stage
+  readings a local window's container meters show, `eqDb`, `levelerDb`,
+  `levelerGainDb`, `cfcDb`, `cfcGainDb`, `alcGainDb` and `alcGroupDb`
+  (section 18.8). A window below 3 shows each of those meters disabled
+  with "This Core does not send this reading. Updating the Core may
+  help.", never hidden and never a 0.
 
 `txPermitted` (iPhone app plan Task 34) is true only for a session the
 station transmit gate permits (section 18.1): false until
@@ -2358,7 +2364,7 @@ An enum property lists the values its domain allows.
 | 84 | `twoToneDrivePowerSource` | `enum` | bidirectional | 0, 1, 2 |
 | 85 | `voxEnabled` | `bool` | bidirectional |  |
 
-**TransmitState** (34 properties)
+**TransmitState** (44 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -2396,6 +2402,16 @@ An enum property lists the values its domain allows.
 | 31 | `forwardAdcRaw` | `i64` | outbound |  |
 | 32 | `reflectedAdcRaw` | `i64` | outbound |  |
 | 33 | `compressionDb` | `f64` | outbound |  |
+| 34 | `forwardRawPowerWatts` | `f64` | outbound |  |
+| 35 | `forwardAdcVolts` | `f64` | outbound |  |
+| 36 | `reflectedAdcVolts` | `f64` | outbound |  |
+| 37 | `eqDb` | `f64` | outbound |  |
+| 38 | `levelerDb` | `f64` | outbound |  |
+| 39 | `levelerGainDb` | `f64` | outbound |  |
+| 40 | `cfcDb` | `f64` | outbound |  |
+| 41 | `cfcGainDb` | `f64` | outbound |  |
+| 42 | `alcGainDb` | `f64` | outbound |  |
+| 43 | `alcGroupDb` | `f64` | outbound |  |
 
 **TunerModel** (21 properties)
 
@@ -2666,6 +2682,9 @@ Notes on the keys:
   `reflectedAdcVolts` (f64) follow `compressionDb`. The Core evaluates the
   existing `PaTelemetryScaling` curves for its current hardware model and
   raw ADC samples; a client need not reproduce those board curves.
+  At `txReadingsVersion` 3, `eqDb`, `levelerDb`, `levelerGainDb`, `cfcDb`,
+  `cfcGainDb`, `alcGainDb` and `alcGroupDb` (f64) follow
+  `reflectedAdcVolts`.
 - **`catalog`.** The values the Core owns and an app draws its controls
   from (section 7.4). Both properties are `outbound`
   (`StationCatalog`): `json` (`utf8`), the catalogue, and `revision`
@@ -6383,6 +6402,7 @@ is refused as any outbound property's is.
 | `forwardAdcRaw`, `reflectedAdcRaw` | The radio's raw forward and reflected power readings (i64, the ADC counts of its last PA sample, transmitting or not; parity Task 33, `txReadingsVersion` 1; 0 before the first sample). Existing remote desktop windows scale these with the Core's `hpsdrModel` as their native PA Values page does |
 | `compressionDb` | The COMP reading (f64, dB; parity Task 33 follow-up, `txReadingsVersion` 1), as the Core's own Compression meters show it: Thetis's reading, the transmit channel's `TXA_COMP_AV` floored at -30 dB (console.cs:46979, dsp.cs:1013-1014 [v2.10.3.15]), so -30 with the speech processor off; -400, no reading, while the Core has no transmit channel. Read with the other meters |
 | `forwardRawPowerWatts`, `forwardAdcVolts`, `reflectedAdcVolts` | Core-scaled raw forward power (W) and forward/reverse ADC voltage (V), f64, `txReadingsVersion` 2. The Core calls the same `PaTelemetryScaling` functions as native PA Values with its current radio model, on the existing PA sample/meter cadence and radio change. All three are outbound only and reset with the session |
+| `eqDb`, `levelerDb`, `levelerGainDb`, `cfcDb`, `cfcGainDb`, `alcGainDb`, `alcGroupDb` | The seven stage readings a local window's container meters show (f64, dB; A9, `txReadingsVersion` 3), each Thetis's reading as its MOX branch works it from the transmit channel (console.cs:46971-46986 [v2.10.3.15]): EQ and Leveler `TXA_EQ_AV` and `TXA_LVLR_AV` floored at -30 dB, Leveler gain `TXA_LVLR_GAIN` negated and floored at 0, CFC `TXA_CFC_AV` floored at -30, CFC gain `TXA_CFC_GAIN` floored at 0, ALC gain `TXA_ALC_GAIN` plus 3 floored at -195, and ALC group `TXA_ALC_PK` floored at -30 plus `TXA_ALC_GAIN` plus 3 floored at 0. -400, no reading, while the Core has no transmit channel. Read and sent with the other meters, and reset with the session |
 
 The AM Mod Monitor's readings (peaks, holds, carrier, lamps and envelope
 trace) are not `txState` properties: they travel as the `txAmModulation`

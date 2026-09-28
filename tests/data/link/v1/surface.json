@@ -368,7 +368,7 @@
         {
             "kind": "i64",
             "name": "txReadingsVersion",
-            "value": 2
+            "value": 3
         },
         {
             "kind": "i64",
@@ -7229,6 +7229,48 @@
                     "kind": "f64",
                     "name": "reflectedAdcVolts",
                     "ordinal": 36
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "eqDb",
+                    "ordinal": 37
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "levelerDb",
+                    "ordinal": 38
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "levelerGainDb",
+                    "ordinal": 39
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "cfcDb",
+                    "ordinal": 40
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "cfcGainDb",
+                    "ordinal": 41
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "alcGainDb",
+                    "ordinal": 42
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "alcGroupDb",
+                    "ordinal": 43
                 }
             ]
         },

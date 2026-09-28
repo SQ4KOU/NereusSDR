@@ -1910,6 +1910,11 @@ void MainWindow::wireRemoteTransmitMeters()
         m_meterPoller->setRemoteTxReadingsAvailable([this]() {
             return m_stationClient != nullptr && m_stationClient->txReadingsAvailable();
         });
+        // A9 (iPhone app plan Task 39): the seven container stage meters,
+        // txReadingsVersion 3.
+        m_meterPoller->setRemoteTxStageReadingsAvailable([this]() {
+            return m_stationClient != nullptr && m_stationClient->txStageReadingsAvailable();
+        });
         m_meterPoller->setRemoteTransmitState(state, [this]() -> QString {
             if (m_stationClient == nullptr || !m_stationClient->isHandshakeComplete()) {
                 return tr("Connect to the Core to see transmit meters here.");

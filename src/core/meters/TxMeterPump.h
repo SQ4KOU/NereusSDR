@@ -20,6 +20,11 @@
 //                 worked from TxChannel::txMeter.
 //   compressionDb Thetis's COMP reading, worked the same way (parity
 //                 Task 33 follow-up, txReadingsVersion 1).
+//   eqDb, levelerDb, levelerGainDb, cfcDb, cfcGainDb, alcGainDb,
+//   alcGroupDb    Thetis's EQ, LEVELER, LVL_G, CFC_AV, CFC_G, ALC_G and
+//                 ALC_GROUP readings, worked the same way: the seven
+//                 container meters a remote window shows (A9,
+//                 txReadingsVersion 3).
 //
 // R-R3-39 (the plan's Task 32): TxChannel::txMeter returns the transmit
 // lane's last reading and asks the lane for a fresh one, so a poll here
@@ -40,6 +45,11 @@
 //   2026-09-27: Remote-window parity Task 33 follow-up (R-R3-49): the COMP
 //               reading (compressionDb). J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-28: A9 (iPhone app plan Task 39): the seven stage readings
+//               the container meters show (EQ, Leveler, Leveler gain, CFC,
+//               CFC gain, ALC gain, ALC group); readFrom. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QMetaType>
@@ -55,6 +65,7 @@ namespace NereusSDR {
 class RadioModel;
 class RadioStatus;
 class TxChannel;
+enum class TxMeterType : int;
 
 /// One set of the Core's transmit readings.
 struct TxMeterReadings {
@@ -71,6 +82,17 @@ struct TxMeterReadings {
     double micLevelDb{kNoReadingDb};
     /// Parity Task 33 follow-up: Thetis's COMP reading.
     double compressionDb{kNoReadingDb};
+    /// A9 (txReadingsVersion 3): Thetis's EQ, LEVELER, LVL_G, CFC_AV,
+    /// CFC_G, ALC_G and ALC_GROUP readings (thetisTxReading), what a local
+    /// window's container meters show for TxEq, TxLeveler, TxLevelerGain,
+    /// TxCfc, TxCfcGain, TxAlcGain and TxAlcGroup.
+    double eqDb{kNoReadingDb};
+    double levelerDb{kNoReadingDb};
+    double levelerGainDb{kNoReadingDb};
+    double cfcDb{kNoReadingDb};
+    double cfcGainDb{kNoReadingDb};
+    double alcGainDb{kNoReadingDb};
+    double alcGroupDb{kNoReadingDb};
 
     bool operator==(const TxMeterReadings& other) const = default;
 };
@@ -98,6 +120,10 @@ public:
     /// reading. Never calls WDSP on the caller's thread while `tx` has a
     /// transmit lane (TxChannel::txMeter).
     static TxMeterReadings read(const RadioStatus& status, const TxChannel* tx);
+    /// The same from `readRaw`, one GetTXAMeter reading per WDSP meter
+    /// (TxChannel::txMeter); an empty function is no transmit channel.
+    static TxMeterReadings readFrom(const RadioStatus& status,
+                                    const std::function<double(TxMeterType)>& readRaw);
 
     /// One reading now, from the source.
     TxMeterReadings readNow() const;

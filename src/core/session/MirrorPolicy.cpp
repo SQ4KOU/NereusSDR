@@ -142,6 +142,10 @@
 //   2026-09-27 - Parity Task 23 (R-R3-48, R-R3-42): StationTciModel's four
 //                 options Outbound (stationTciVersion 2). J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - A9 (iPhone app plan Task 39): TransmitState's seven stage
+//                 readings (eqDb .. alcGroupDb) Outbound (txReadingsVersion
+//                 3). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code.
 // =================================================================
 
 #include "core/session/MirrorPolicy.h"
@@ -920,6 +924,14 @@ const MirrorPolicy::Entry kEntries[] = {
     { "TransmitState", "forwardRawPowerWatts", MirrorDirection::Outbound },
     { "TransmitState", "forwardAdcVolts", MirrorDirection::Outbound },
     { "TransmitState", "reflectedAdcVolts", MirrorDirection::Outbound },
+    // A9 (txReadingsVersion 3): the container meters' stage readings.
+    { "TransmitState", "eqDb", MirrorDirection::Outbound },
+    { "TransmitState", "levelerDb", MirrorDirection::Outbound },
+    { "TransmitState", "levelerGainDb", MirrorDirection::Outbound },
+    { "TransmitState", "cfcDb", MirrorDirection::Outbound },
+    { "TransmitState", "cfcGainDb", MirrorDirection::Outbound },
+    { "TransmitState", "alcGainDb", MirrorDirection::Outbound },
+    { "TransmitState", "alcGroupDb", MirrorDirection::Outbound },
 
     // Normal PS3 configuration is distinct from operational arming/actions.
     { "PureSignalSettings", "autoCalEnabled", MirrorDirection::Bidirectional },

@@ -508,6 +508,9 @@ struct StationCapabilities {
     /// after txStateVersion and only with it.
     /// 2 also carries Core-scaled PA raw forward watts and forward/reverse
     /// voltage (outbound Float64), following the same raw sample cadence.
+    /// 3 also carries the seven stage readings a local window's container
+    /// meters show (eqDb, levelerDb, levelerGainDb, cfcDb, cfcGainDb,
+    /// alcGainDb, alcGroupDb; A9), read with the other meters.
     int txReadingsVersion = 0;
 
     /// Whether the DAEMON currently holds a live radio connection. A
