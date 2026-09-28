@@ -1047,6 +1047,65 @@ colours for the same signal.
   stack, so this does not exclude unrelated stalls or claim hardware acceptance.
 - Plan: mini-spectrum display integration and tests at real load.
 
+### G-64: The standalone Core package omits its DeepFilterNet model
+
+- Evidence: the DeepFilterNet model install rule in `CMakeLists.txt` belongs only
+  to the default component; `cmake --install --component nereusd` excludes it.
+  The proposed Pi image also disables DFNR because its prebuilt Rust archive has
+  no verified Pi 4 CPU baseline. The existing setup script prefers that archive.
+- Ruling: JJ's complete station objective authorizes correcting packaging. Lead
+  implementation decision: preserve the desktop install, add the daemon model
+  component, and build the image dependency from pinned source with explicit
+  Pi 4 CPU flags. No separate operator request to omit DFNR is claimed.
+- Status: in progress. Source review confirmed the missing component. The image
+  lane is adding the source build and package assertions. Artifact construction
+  and device boot remain unverified. The Rock's installed model was separately
+  staged and hash-verified; this packaging finding does not claim it is missing.
+- Plan: station binary packaging and small-computer image.
+
+### G-65: Independent heartbeats can outlive a delayed transmit-release command
+
+- Evidence: deterministic tests of `RemoteTransmitClient` and `RemoteTxWatchdog`
+  hold primary command delivery while permitting media heartbeats. The old key
+  remains alive through 600 ms after MOX/program release with VOX armed, or after
+  MOX release followed by an immediate new key request with VOX off. Three safety
+  assertions fail; seventeen existing/characterization cases pass. This is a
+  modeled transport split, not an observed RF event.
+- Ruling: JJ requires diagnosing load failures and preserving the safety cutoff.
+  Lead safety decision: while an off command is unresolved, send keepalives only
+  through the ordered primary command connection. A matching accepted off reply
+  is a delivery barrier, not proof that every newer key is off; the Core's
+  existing stale-epoch protection remains authoritative. A new key request alone
+  cannot release this restriction. No separate operator policy change is claimed.
+- Status: fix in progress. Keep the existing 100 ms cadence and 400 ms watchdog.
+  Tests cover delayed off commands, rapid rekey and stale replies before any new
+  independent heartbeat connection is added.
+- Plan: remote transmit safety and restrictive-network liveness.
+
+### G-66: Web relay limits still assume only two device sessions per Core
+
+- Evidence: `nereus_relay/config.py` and `relay.conf.sample` default to two
+  sessions per station and eight physical connections per address. The older
+  rendezvous design section 12.5 explicitly specifies two, while the newer
+  several-devices design requires four devices and a fifth-device replacement
+  handshake. TURN's allocation quota is a different limit and does not fix this.
+  Proposed independent watch sockets would also consume physical connection
+  capacity, even when attached to the same logical session.
+- Ruling: JJ's complete Core station and R5 objective includes the approved
+  four-device and replacement behavior. Lead implementation must size bounded
+  relay admission for that contract, including temporary replacement paths;
+  no permission to change a deployed service is inferred from this finding.
+- Status: built defaults for existing relay paths: nine logical sessions permit
+  four current paths, four reconnect introductions and a fifth-device question;
+  eighteen physical connections allow both ends to share one address group.
+  The global sixteen-session cap, queue bounds and rate limits are unchanged.
+  A loopback regression failed on the old third-session refusal, then proved all
+  nine pairs forward and the next station session is refused without displacing
+  them. All 148 focused relay/grant/queue/conformance tests passed (9.03 seconds).
+  No deployed service was changed. Proposed auxiliary watch sockets still need
+  their own bounded accounting and tests before that feature can ship.
+- Plan: several-device capacity and restrictive-network relay access.
+
 ## How this addendum is kept
 
 New gaps are appended here as they are found, each with its own `G-` number (next available

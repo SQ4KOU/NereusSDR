@@ -26,11 +26,14 @@ log_level = info
 # Sessions (one Core leg and one device leg each) at once.
 slots = 16
 # Sessions at once for any one Core (the grant carries an opaque value per
-# Core), as coturn's user-quota of 8 relays is about two sessions.
-sessions_per_station = 2
+# Core): four current paths, four reconnects and one fifth-device prompt.
+# These are transport sessions, separate from Core's four admitted devices
+# and from coturn's allocation quota. The global 16-session cap still applies.
+sessions_per_station = 9
 # Connections per address group (an IPv4 address, or an IPv6 /56), joined
-# or not, counted until each has closed (refused ones included).
-connections_per_address = 8
+# or not, counted until each has closed (refused ones included). Both ends
+# of all nine paths can share one address group.
+connections_per_address = 18
 # Connections that have not joined yet, in total. When a new one comes and
 # they are all taken, the one waiting longest is ended (full) to make room.
 max_pending = 64

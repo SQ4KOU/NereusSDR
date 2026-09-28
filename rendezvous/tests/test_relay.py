@@ -373,14 +373,43 @@ def test_the_oldest_waiting_connection_makes_room():
     asyncio.run(go())
 
 
+def test_default_limits_allow_four_devices_reconnects_and_fifth_device():
+    """Four old paths plus four reconnects and one replacement introduction.
+    All endpoints can share one address group; this tests transport admission,
+    not Core device authorization, which still admits only four devices.
+    """
+    async def go():
+        async with live_relay() as (relay, clock, uri):
+            pairs = []
+            for _ in range(9):
+                core_token, device_token, _ = grant_pair(station=STATION_A)
+                core, _ = await join(uri, core_token, "198.51.100.1")
+                device, ready = await join(uri, device_token, "198.51.100.1")
+                assert ready == bytes([TAG_READY, 1, 1])
+                assert await recv(core) == bytes([TAG_PEER, 1])
+                pairs.append((core, device))
+            assert relay.per_station[STATION_A] == 9
+            extra_token, _, _ = grant_pair(station=STATION_A)
+            extra = await connect(uri, "203.0.113.99")
+            await extra.send(bytes([TAG_JOIN]) + extra_token.encode())
+            await expect_end(extra, "tooManySessions")
+            for index, (core, device) in enumerate(pairs):
+                frame = bytes([TAG_CONTROL, index])
+                await device.send(frame)
+                assert await recv(core) == frame
+            assert len(relay.sessions) == 9
+
+    asyncio.run(go())
+
+
 def test_sessions_per_station_are_capped():
     """Anyone can get grants for a station they register themselves, so the
-    relay caps live sessions per station value (2 by default): a third for
+    relay caps live sessions per station value (configured as 2 here): a third for
     one station is refused, another station's is not, and a rejoin into a
     live session never is."""
 
     async def go():
-        async with live_relay() as (relay, clock, uri):
+        async with live_relay(sessions_per_station=2) as (relay, clock, uri):
             from relay_helpers import STATION_A, STATION_B
 
             legs = []

@@ -33,8 +33,12 @@ class Config:
     log_level: str = "info"
     # [limits]
     slots: int = 16
-    sessions_per_station: int = 2
-    connections_per_address: int = 8
+    # Four current paths, four simultaneous reconnect introductions, and
+    # one fifth-device confirmation path. Core admission still limits the
+    # admitted devices to four; these are transport sessions, not places.
+    sessions_per_station: int = 9
+    # Both ends of all nine paths may share one public address group.
+    connections_per_address: int = 18
     max_pending: int = 64
     join_timeout_ms: int = 10000
     rejoin_ms: int = 30000
