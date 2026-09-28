@@ -38,6 +38,9 @@ turn_ttl_seconds = 86400
 relay_url = wss://rv.nereussdr.com/v1/relay
 relay_secret_file =
 relay_ttl_seconds = 120
+# Enable only with a relay upgraded for purpose-separated watch legs. Both
+# endpoints must also explicitly declare support; old peers keep v1 grants.
+relay_watch_version = 0
 
 # debug, info, warning or error. Logs go to standard error only.
 log_level = info

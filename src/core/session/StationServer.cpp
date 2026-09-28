@@ -662,6 +662,7 @@
 #include "core/MoxController.h"
 #include "core/safety/BandPlanGuard.h"
 #include "core/safety/RemoteTxWatchdog.h"
+#include "core/session/TxWatchServer.h"
 #include "core/safety/TransmitHolder.h"
 #include "core/TwoToneController.h"
 #include "core/session/RemoteKeying.h"
@@ -718,6 +719,7 @@
 #include <QTimer>
 #include <QWebSocket>
 #include <QWebSocketServer>
+#include <QUrl>
 
 #include <algorithm>
 #include <array>
@@ -1577,6 +1579,17 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
         StationIdentity::loadOrCreate(m_securityDirectory));
     m_devices = std::make_unique<DeviceStore>(m_securityDirectory, m_tokens.get());
     m_deviceAuth = std::make_unique<DeviceAuthenticator>(*m_devices, *m_identity);
+    m_txWatchServer = std::make_unique<TxWatchServer>(
+        [this](SessionTransport* primary, quint64 sessionId, const QByteArray& deviceId,
+               quint64 generation) {
+            return txWatchBindingCurrent(primary, sessionId, deviceId, generation);
+        },
+        [this](const QByteArray& deviceId, quint64 sequence, quint32 epoch) {
+            if (m_txWatchdog) {
+                m_txWatchdog->keepalive(deviceId, sequence, epoch,
+                                        RemoteTxWatchdog::Path::Auxiliary);
+            }
+        }, this);
     // iPhone app Task 71 (R-IOS-02): who holds a place, and the mirrored
     // `connectedDevices` object that shows it.
     m_deviceSessions = std::make_unique<DeviceSessionRegistry>();
@@ -2772,6 +2785,9 @@ bool StationServer::listen(const QHostAddress& address, quint16 port)
 
 void StationServer::close()
 {
+    if (m_txWatchServer) {
+        m_txWatchServer->retireAll();
+    }
     const bool wasListening = isListening();
     const QList<SessionTransport*> transports = m_peers.keys();
     // Task 76: the sessions still to be ended are not sent new shares.
@@ -3156,6 +3172,19 @@ void StationServer::onNewWebSocketConnection()
         if (m_openingGate != nullptr) {
             m_openingGate->markOpened(socket);
         }
+        const QUrl request = socket->requestUrl();
+        if (request.path(QUrl::FullyEncoded) == QLatin1String(TxWatchServer::kPath)) {
+            // Branch before peer adoption. The wrapper installs both Qt
+            // frame and message caps before the event loop sees input.
+            auto* watch = new WebSocketTransport(socket, TxWatchServer::kAttachBytes);
+            if (request.hasQuery() || !request.userInfo().isEmpty()) {
+                watch->closeLink(QStringLiteral("invalid watch endpoint"));
+                watch->deleteLater();
+            } else {
+                m_txWatchServer->acceptTransport(watch, addressKey(watch->peerAddress()));
+            }
+            continue;
+        }
         // The cap goes on inside WebSocketTransport's constructor, which
         // runs here, inside the newConnection slot, before control returns
         // to the event loop -- so no frame on this socket has been
@@ -3268,6 +3297,7 @@ void StationServer::adoptTransport(SessionTransport* transport, bool mailbox, bo
 
     Peer peer;
     peer.transport = transport;
+    peer.txWatchGeneration = ++m_nextTxWatchGeneration;
     peer.description = transport->peerDescription();
     // iPhone app Task 12: this connection's own challenge, so a signature
     // made for another connection never verifies on this one.
@@ -3377,6 +3407,7 @@ void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
         return;
     }
     it->dropping = true;
+    it->txWatchGeneration = ++m_nextTxWatchGeneration;
     ++m_dropPeerDepth;
     auto finishDrop = qScopeGuard([this, self]() {
         if (!self) { return; }
@@ -3389,6 +3420,16 @@ void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
             drainHeld();
         }
     });
+    if (m_txWatchServer) {
+        m_txWatchServer->retire(transport, /*primaryEnded=*/true);
+    }
+    if (!self || !peerGuard) {
+        return;
+    }
+    it = m_peers.find(transport);
+    if (it == m_peers.end()) {
+        return;
+    }
     const QString description = it->description;
 
     if (it->heldSerial != 0) {
@@ -3808,6 +3849,10 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
 
     switch (message.kind) {
     case SessionMessageKind::CommandInvoke:
+        if (message.commandVerb == "tx.watchTicket") {
+            handleTxWatchTicket(transport, message);
+            break;
+        }
         // iPhone app plan Task 29 (link section 21.2): the ticket that lets
         // a new connection join this session; the Core's own, never the
         // dispatcher's.
@@ -8373,6 +8418,67 @@ void StationServer::handlePathTicket(SessionTransport* transport, const SessionM
          {1, "expiresInMs", MirrorWireKind::Int64, qlonglong(m_pathTicketLifetimeMs)}}));
 }
 
+bool StationServer::txWatchEligible(SessionTransport* transport) const
+{
+    const auto it = m_peers.constFind(transport);
+    const auto* switchable = qobject_cast<const SwitchableTransport*>(transport);
+    const SessionTransport* carrying = switchable ? switchable->inner() : transport;
+    // Only a direct WSS primary proves this authority currently supplies the
+    // separate WSS route. Relay-only DTLS watch support is negotiated later.
+    const bool directWss = qobject_cast<const WebSocketTransport*>(carrying) != nullptr;
+    return directWss && it != m_peers.cend() && it->authenticated && it->snapshotComplete
+        && !it->dropping && !it->txWatchPathChanging
+        && !it->signedInWithToken && !it->deviceId.isEmpty()
+        && it->sessionDeviceId == it->deviceId && it->sessionId != 0
+        && m_devices->find(it->deviceId).has_value()
+        && it->agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && peerDeclares(transport, QByteArrayLiteral("remoteTx"), 1)
+        && peerDeclares(transport, QByteArrayLiteral("txWatchPath"), 1)
+        && txDecisionFor(transport).permitted && isListening()
+        && (switchable == nullptr || !switchable->switching())
+        && m_wsServer != nullptr && m_txWatchServer != nullptr;
+}
+
+bool StationServer::txWatchBindingCurrent(SessionTransport* transport, quint64 sessionId,
+                                          const QByteArray& deviceId,
+                                          quint64 generation) const
+{
+    const auto it = m_peers.constFind(transport);
+    return it != m_peers.cend() && it->sessionId == sessionId
+        && it->deviceId == deviceId && it->txWatchGeneration == generation
+        && txWatchEligible(transport);
+}
+
+void StationServer::handleTxWatchTicket(SessionTransport* transport,
+                                        const SessionMessage& message)
+{
+    const auto answer = [this, transport, &message](bool accepted, const QString& reason,
+                                                   const QList<MirrorUpdate>& values = {}) {
+        send(transport, SessionMessages::commandResult(message.commandVerb, message.commandId,
+                                                       accepted, reason, {}, values));
+    };
+    if (!message.arguments.isEmpty()) {
+        answer(false, QStringLiteral("The watch ticket request was not understood."));
+        return;
+    }
+    if (!txWatchEligible(transport)) {
+        answer(false, QStringLiteral("A transmit watch path is unavailable for this session."));
+        return;
+    }
+    const Peer& peer = m_peers.value(transport);
+    const auto ticket = m_txWatchServer->issue(transport, peer.sessionId, peer.deviceId,
+                                               peer.txWatchGeneration,
+                                               m_deviceAuth->newChallenge());
+    if (!ticket) {
+        answer(false, QStringLiteral("A transmit watch ticket or path is already in use. Try again shortly."));
+        return;
+    }
+    answer(true, {},
+           {{0, "ticket", MirrorWireKind::Utf8, StationIdentity::toBase64Url(ticket->value)},
+            {1, "expiresInMs", MirrorWireKind::Int64, qlonglong(ticket->expiresInMs)},
+            {2, "path", MirrorWireKind::Utf8, ticket->path}});
+}
+
 void StationServer::handlePathJoin(SessionTransport* transport, const SessionMessage& message)
 {
     auto joining = m_peers.find(transport);
@@ -8463,19 +8569,71 @@ void StationServer::handlePathJoin(SessionTransport* transport, const SessionMes
     if (const auto* channel = qobject_cast<const DataChannelTransport*>(sessionSwitchable->inner())) {
         session->serviceIce = channel->iceConfiguration();
     }
+    // Invalidate before a callback can issue against the old connection,
+    // including when the path move later fails.
+    session->txWatchPathChanging = true;
+    session->txWatchGeneration = ++m_nextTxWatchGeneration;
+    const QPointer<StationServer> self(this);
+    const QPointer<SessionTransport> joiningGuard(transport);
+    const QPointer<SessionTransport> sessionGuard(sessionKey);
+    const QPointer<SwitchableTransport> joiningSwitchableGuard(joiningSwitchable);
+    const QPointer<SwitchableTransport> sessionSwitchableGuard(sessionSwitchable);
+    auto clearPathChanging = qScopeGuard([this, self, sessionKey]() {
+        if (!self) { return; }
+        auto current = m_peers.find(sessionKey);
+        if (current != m_peers.end()) {
+            current->txWatchPathChanging = false;
+        }
+    });
+    m_txWatchServer->retire(sessionKey);
+    if (!self || !joiningGuard || !sessionGuard || !joiningSwitchableGuard
+        || !sessionSwitchableGuard) {
+        return;
+    }
+    joining = m_peers.find(transport);
+    session = m_peers.find(sessionKey);
+    if (joining == m_peers.end() || session == m_peers.end()
+        || joining->dropping || session->dropping || sessionSwitchableGuard->switching()) {
+        return;
+    }
     // The joining connection stops being a peer of its own: its connect
     // deadline (the wrapper's child) goes with the wrapper, and the
     // connection itself becomes the session's.
-    SessionTransport* connection = joiningSwitchable->takeInner();
-    disconnect(joiningSwitchable, nullptr, this, nullptr);
+    SessionTransport* connection = joiningSwitchableGuard->takeInner();
+    const QPointer<SessionTransport> connectionGuard(connection);
+    if (!self || !joiningGuard || !sessionGuard || !joiningSwitchableGuard
+        || !sessionSwitchableGuard) {
+        return;
+    }
+    joining = m_peers.find(transport);
+    if (joining == m_peers.end()) {
+        if (connectionGuard) {
+            connectionGuard->closeLink(refusal);
+            if (connectionGuard) {
+                connectionGuard->deleteLater();
+            }
+        }
+        return;
+    }
+    disconnect(joiningSwitchableGuard, nullptr, this, nullptr);
     m_peers.erase(joining);
-    joiningSwitchable->deleteLater();
-    if (connection == nullptr || !sessionSwitchable->beginStationSwitch(connection)) {
-        if (connection != nullptr) {
-            connection->closeLink(refusal);
-            connection->deleteLater();
+    joiningSwitchableGuard->deleteLater();
+    const bool started = connectionGuard
+        && sessionSwitchableGuard->beginStationSwitch(connectionGuard);
+    if (!self) {
+        return;
+    }
+    if (!started) {
+        if (connectionGuard) {
+            connectionGuard->closeLink(refusal);
+            if (connectionGuard) {
+                connectionGuard->deleteLater();
+            }
         }
         qCWarning(lcStation) << "A session could not move to its new connection";
+        return;
+    }
+    if (!sessionGuard) {
         return;
     }
     session = m_peers.find(sessionKey);
@@ -8970,6 +9128,7 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             if (peerDeclares(transport, QByteArrayLiteral("remoteTx"), 1)) {
                 caps.remoteTxEntry = true;
                 caps.remoteTxVersion = remoteTxVersion();
+                caps.txWatchPathVersion = txWatchEligible(transport) ? 1 : 0;
                 // iPhone app plan Task 39: the `txState` object, with it.
                 caps.txStateVersion = txStateVersion();
                 // Parity Task 33: the transmit readings, right after it.

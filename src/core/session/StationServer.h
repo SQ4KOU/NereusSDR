@@ -491,6 +491,7 @@ class TransmitHolder;
 class TransmitState;
 class RemoteKeying;
 class RemoteTxWatchdog;
+class TxWatchServer;
 
 class StationServer : public QObject {
     Q_OBJECT
@@ -1410,6 +1411,9 @@ private:
         /// id, for the dispatcher's owner string station:<sessionId>.
         QPointer<MirrorView> view;
         quint64 sessionId = 0;
+        /// Changes before a primary path move, even if the move fails.
+        quint64 txWatchGeneration = 0;
+        bool txWatchPathChanging = false;
         /// iPhone app plan Task 34: the txPermitted this session was last
         /// sent, so a change is sent again and nothing else is.
         bool txPermittedSent = false;
@@ -1440,6 +1444,10 @@ private:
     };
 
     void onNewWebSocketConnection();
+    void handleTxWatchTicket(SessionTransport* transport, const SessionMessage& message);
+    bool txWatchEligible(SessionTransport* transport) const;
+    bool txWatchBindingCurrent(SessionTransport* transport, quint64 sessionId,
+                               const QByteArray& deviceId, quint64 generation) const;
     void onTransportText(SessionTransport* transport, const QByteArray& wire);
     void onTransportClosed(SessionTransport* transport);
     void onHeartbeatTick();
@@ -2093,6 +2101,8 @@ private:
     std::function<QByteArray(const QString&)> m_pairingHasher;
 
     QWebSocketServer* m_wsServer = nullptr;
+    std::unique_ptr<TxWatchServer> m_txWatchServer;
+    quint64 m_nextTxWatchGeneration = 0;
     StationOpeningGate* m_openingGate = nullptr;
     int m_openingDeadlineMs = kDefaultOpeningDeadlineMs;
     int m_maxOpenings = kMaxUnfinishedOpenings;

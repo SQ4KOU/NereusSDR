@@ -25,9 +25,14 @@
 //               web relay's leg (RelayLeg) and its per-connection candidate
 //               sources; the computer's own proxy settings (SystemProxy).
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-27: separate bounded transmit-watch DTLS channel; AI-assisted
+//               implementation via OpenAI Codex for J.J. Boyd (KG4VCF).
 // =================================================================
 
 #include "core/session/DataChannelTransport.h"
+#include "core/session/RelayLeg.h"
+
+#include <QDateTime>
 #include "core/session/CandidateSourceLease.h"
 
 #include "core/security/OpenSslErrorScope.h"
@@ -40,6 +45,7 @@
 #include <QMetaObject>
 #include <QThread>
 #include <QPointer>
+#include <QRegularExpression>
 #include <QTimer>
 #include <QtEndian>
 
@@ -182,9 +188,12 @@ constexpr std::size_t kMaxPendingEvents = 4096;
 } // namespace
 
 struct DataChannelTransport::Bridge {
-    explicit Bridge(DataChannelTransport* o, quint64 cap)
+    explicit Bridge(DataChannelTransport* o, quint64 cap, DataChannelTransport::Purpose purpose)
         : owner(o)
-        , maxPendingBytes(cap * DataChannelTransport::kMaxQueuedCaps)
+        , purpose(purpose)
+        , maxPendingBytes(purpose == Purpose::TxWatch
+                              ? DataChannelTransport::kMaxWatchQueuedBytes
+                              : cap * DataChannelTransport::kMaxQueuedCaps)
         , reassembler(cap)
     {
     }
@@ -195,8 +204,11 @@ struct DataChannelTransport::Bridge {
     bool drainPosted = false;
     bool overflowed = false;
     std::deque<Event> events;
+    const DataChannelTransport::Purpose purpose;
     const quint64 maxPendingBytes;
     quint64 pendingBytes = 0;
+    quint64 watchOutstandingBytes = 0;
+    qsizetype watchOutstandingFrames = 0;
     ControlFraming::Reassembler reassembler;
     std::shared_ptr<rtc::PeerConnection> peer;
     std::shared_ptr<rtc::DataChannel> channel;
@@ -212,16 +224,32 @@ struct DataChannelTransport::Bridge {
             return;
         }
         const quint64 bytes = static_cast<quint64>(event.bytes.size());
-        if (events.size() >= kMaxPendingEvents || pendingBytes + bytes > maxPendingBytes) {
+        const std::size_t eventLimit = purpose == Purpose::TxWatch
+            ? DataChannelTransport::kMaxWatchEvents : kMaxPendingEvents;
+        const bool watchMessage = purpose == Purpose::TxWatch
+            && event.kind == Event::Kind::Message;
+        const bool watchFramesFull = watchMessage
+            && (watchOutstandingFrames >= DataChannelTransport::kMaxWatchQueuedFrames
+                || watchOutstandingBytes + bytes > DataChannelTransport::kMaxWatchQueuedBytes);
+        if (events.size() >= eventLimit || pendingBytes + bytes > maxPendingBytes
+            || watchFramesFull) {
             if (!overflowed) {
                 overflowed = true;
                 events.clear();
                 pendingBytes = 0;
+                watchOutstandingBytes = 0;
+                watchOutstandingFrames = 0;
                 events.push_back({Event::Kind::Refused, {},
-                                  QStringLiteral("the control channel fell behind"), {}, 0});
+                                  purpose == Purpose::TxWatch
+                                      ? QStringLiteral("the watch channel fell behind")
+                                      : QStringLiteral("the control channel fell behind"), {}, 0});
             }
         } else if (!overflowed) {
             pendingBytes += bytes;
+            if (watchMessage) {
+                watchOutstandingBytes += bytes;
+                ++watchOutstandingFrames;
+            }
             events.push_back(std::move(event));
         }
         if (!drainPosted) {
@@ -237,6 +265,15 @@ struct DataChannelTransport::Bridge {
         std::lock_guard lock(mutex);
         postLocked(std::move(event));
     }
+
+    void watchDelivered(qsizetype bytes)
+    {
+        std::lock_guard lock(mutex);
+        if (watchOutstandingFrames > 0) {
+            --watchOutstandingFrames;
+            watchOutstandingBytes -= static_cast<quint64>(bytes);
+        }
+    }
 };
 
 namespace {
@@ -245,6 +282,21 @@ void onFrame(const std::weak_ptr<DataChannelTransport::Bridge>& weak, rtc::binar
 {
     const auto bridge = weak.lock();
     if (!bridge) {
+        return;
+    }
+    if (bridge->purpose == DataChannelTransport::Purpose::TxWatch) {
+        std::lock_guard lock(bridge->mutex);
+        if (bridge->cancelled || bridge->overflowed) {
+            return;
+        }
+        if (data.empty() || data.size() > DataChannelTransport::kMaxWatchFrameBytes) {
+            bridge->postLocked({Event::Kind::Refused, {},
+                                QStringLiteral("invalid watch frame size"), {}, 0});
+        } else {
+            bridge->postLocked({Event::Kind::Message,
+                                QByteArray(reinterpret_cast<const char*>(data.data()),
+                                           static_cast<qsizetype>(data.size())), {}, {}, 0});
+        }
         return;
     }
     const QByteArray frame(reinterpret_cast<const char*>(data.data()),
@@ -317,7 +369,9 @@ void bindChannel(const std::shared_ptr<rtc::DataChannel>& channel,
             std::lock_guard lock(bridge->mutex);
             if (!bridge->overflowed) {
                 bridge->postLocked({Event::Kind::Refused, {},
-                                    QStringLiteral("a text message on the control channel"), {},
+                                    bridge->purpose == DataChannelTransport::Purpose::TxWatch
+                                        ? QStringLiteral("a text message on the watch channel")
+                                        : QStringLiteral("a text message on the control channel"), {},
                                     0});
             }
         }
@@ -354,6 +408,37 @@ DataChannelTransport::~DataChannelTransport()
     stopPeer();
 }
 
+bool DataChannelTransport::setWatchRelayGrant(const WatchRelayGrant& grant)
+{
+    if (!m_started || m_closing || m_options.purpose != Purpose::Control || m_watchRelayGrant
+        || !grant.url.isValid() || grant.url.scheme() != QLatin1String("wss")
+        || grant.url.host().isEmpty() || grant.url.authority(QUrl::FullyEncoded).contains('@')
+        || grant.url.hasFragment() || grant.token.isEmpty()
+        || grant.token.toUtf8().size() > RendezvousWire::kMaxRelayTokenBytes
+        || grant.expires <= QDateTime::currentSecsSinceEpoch() || grant.primaryLeg.expired()) {
+        return false;
+    }
+    m_watchRelayGrant = grant;
+    return true;
+}
+
+bool DataChannelTransport::hasWatchRelayRoute() const
+{
+    if (!isOpen() || m_closing || m_options.purpose != Purpose::Control || !m_watchRelayGrant) {
+        return false;
+    }
+    const auto path = selectedPath();
+    const auto primary = m_watchRelayGrant->primaryLeg.lock();
+    return path && path->viaLoopbackShim() && primary
+        && primary->state() == RelayLeg::State::Joined && primary->peerPresent();
+}
+
+bool DataChannelTransport::canOpenWatchRelay() const
+{
+    return hasWatchRelayRoute()
+        && m_watchRelayGrant->expires > QDateTime::currentSecsSinceEpoch();
+}
+
 bool DataChannelTransport::start(const Options& options)
 {
     if (m_started || options.maxIncomingBytes == 0
@@ -361,8 +446,16 @@ bool DataChannelTransport::start(const Options& options)
             && options.certificatePemPath.isEmpty() != options.privateKeyPemPath.isEmpty())) {
         return false;
     }
+    if (options.purpose == Purpose::TxWatch
+        && (options.maxIncomingBytes != kMaxWatchFrameBytes || !options.ice
+            || options.ice->stunServer() || !options.ice->relayAllowed()
+            || !options.ice->relayKnown() || !options.ice->relayServers().isEmpty()
+            || !options.ice->hasCandidateSourceFactory()
+            || !options.ice->makeCandidateSource(IceConfiguration::kControlLane))) {
+        return false;
+    }
     m_options = options;
-    m_bridge = std::make_shared<Bridge>(this, options.maxIncomingBytes);
+    m_bridge = std::make_shared<Bridge>(this, options.maxIncomingBytes, options.purpose);
     const std::weak_ptr<Bridge> weak = m_bridge;
     // libdatachannel reads the PEM files while the peer is made, on this
     // thread, and its loop over further certificates in the file ends on a
@@ -379,9 +472,12 @@ bool DataChannelTransport::start(const Options& options)
     try {
         rtc::Configuration config;
         config.mtu = static_cast<std::size_t>(IMediaTransport::kConfiguredMtuBytes);
-        // Every chunk fits; a larger message from the far end is refused by
-        // the library before it is delivered.
-        config.maxMessageSize = static_cast<std::size_t>(ControlFraming::kMaxChunkBytes);
+        // Every control chunk fits; the library refuses larger ones. Admit
+        // malformed watch frames through SCTP up to the hard outbound bound,
+        // then reject them on the library callback before Qt queues.
+        config.maxMessageSize = options.purpose == Purpose::TxWatch
+            ? kMaxWatchOutboundBytes
+            : static_cast<std::size_t>(ControlFraming::kMaxChunkBytes);
         config.disableAutoNegotiation = true;
         config.enableIceTcp = false;
         config.iceServers.clear();
@@ -468,7 +564,9 @@ bool DataChannelTransport::start(const Options& options)
             }
             const rtc::Reliability reliability = channel->reliability();
             // Only the one reliable, ordered channel labelled "control".
-            const bool usable = channel->label() == DataChannelTransport::kLabel
+            const char* label = bridge->purpose == Purpose::TxWatch
+                ? DataChannelTransport::kTxWatchLabel : DataChannelTransport::kLabel;
+            const bool usable = channel->label() == label
                 && !reliability.unordered && !reliability.maxRetransmits
                 && !reliability.maxPacketLifeTime;
             bool take = false;
@@ -493,7 +591,8 @@ bool DataChannelTransport::start(const Options& options)
 
         if (options.role == Role::Offerer) {
             // Reliable and ordered: the library's defaults.
-            auto channel = peer->createDataChannel(kLabel);
+            auto channel = peer->createDataChannel(options.purpose == Purpose::TxWatch
+                                                       ? kTxWatchLabel : kLabel);
             {
                 std::lock_guard lock(m_bridge->mutex);
                 m_bridge->channel = channel;
@@ -541,6 +640,16 @@ bool DataChannelTransport::acceptDescription(const QString& sdp, const QString& 
             || description.mediaCount() != 1) {
             return false;
         }
+        if (m_options.purpose == Purpose::TxWatch) {
+            for (const QByteArray& line : sdpBytes.split('\n')) {
+                const QByteArray trimmed = line.trimmed().toLower();
+                if (trimmed.startsWith("a=candidate:")
+                    || trimmed.startsWith("a=remote-candidates:")
+                    || trimmed == "a=end-of-candidates") {
+                    return false;
+                }
+            }
+        }
         m_bridge->peer->setRemoteDescription(std::move(description));
         m_remoteDescriptionAccepted = true;
         if (m_options.role == Role::Answerer) {
@@ -548,7 +657,14 @@ bool DataChannelTransport::acceptDescription(const QString& sdp, const QString& 
             gatherIfReady();
         }
         for (const QString& candidate : std::exchange(m_pendingSourceCandidates, {})) {
-            acceptCandidate(candidate);
+            if (m_options.purpose == Purpose::TxWatch) {
+                if (!acceptOwnedWatchCandidate(candidate)) {
+                    closeLink(QStringLiteral("invalid watch candidate source"));
+                    return false;
+                }
+            } else {
+                acceptCandidate(candidate);
+            }
         }
         return true;
     } catch (const std::exception& error) {
@@ -560,6 +676,9 @@ bool DataChannelTransport::acceptDescription(const QString& sdp, const QString& 
 
 bool DataChannelTransport::acceptCandidate(const QString& candidate)
 {
+    if (m_options.purpose == Purpose::TxWatch) {
+        return false;
+    }
     if (!m_started || !m_bridge || !m_bridge->peer
         || m_acceptedCandidates >= IMediaTransport::kMaxRemoteCandidates) {
         return false;
@@ -596,9 +715,40 @@ bool DataChannelTransport::acceptCandidate(const QString& candidate)
     }
 }
 
+bool DataChannelTransport::acceptOwnedWatchCandidate(const QString& candidate)
+{
+    if (m_options.purpose != Purpose::TxWatch || !m_started || !m_bridge
+        || !m_bridge->peer || !m_remoteDescriptionAccepted
+        || m_acceptedCandidates >= kMaxWatchQueuedFrames) {
+        return false;
+    }
+    // RelayLeg's watch lane is the sole candidate source. Reject a source
+    // accidentally configured for ordinary host, STUN or TURN candidates.
+    static const QRegularExpression pattern(
+        QStringLiteral(R"(^candidate:wsrelay1 1 UDP [0-9]+ 127\.0\.0\.1 ([0-9]+) typ host$)"));
+    const QRegularExpressionMatch match = pattern.match(candidate);
+    if (!match.hasMatch() || candidate.toUtf8().size() > IMediaTransport::kMaxCandidateBytes) {
+        return false;
+    }
+    bool ok = false;
+    const int port = match.captured(1).toInt(&ok);
+    if (!ok || port < 1 || port > 65535) {
+        return false;
+    }
+    try {
+        rtc::Candidate parsed(candidate.toStdString(), std::string());
+        m_bridge->peer->addRemoteCandidate(std::move(parsed));
+        ++m_acceptedCandidates;
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
 bool DataChannelTransport::gatherCandidates(const IceConfiguration& configured)
 {
-    if (!m_started || !m_options.ice || m_gatherRequested) {
+    if (!m_started || !m_options.ice || m_gatherRequested
+        || m_options.purpose == Purpose::TxWatch) {
         return false;
     }
     m_gatherRequested = true;
@@ -611,7 +761,8 @@ bool DataChannelTransport::gatherCandidates(const IceConfiguration& configured)
 void DataChannelTransport::gatherIfReady()
 {
     if (!m_started || !m_bridge || !m_bridge->peer || !m_options.ice || !m_gatherRequested
-        || m_gatheringStarted || !m_bridge->peer->localDescription()) {
+        || m_gatheringStarted || !m_bridge->peer->localDescription()
+        || (m_options.purpose == Purpose::TxWatch && !m_localDescriptionEmitted)) {
         return;
     }
     m_gatheringStarted = true;
@@ -640,11 +791,24 @@ void DataChannelTransport::gatherIfReady()
             }
             // Before the remote description the agent takes no remote
             // candidate: held until it comes.
+            if (self->m_options.purpose == Purpose::TxWatch
+                && !self->acceptOwnedWatchCandidate(candidate)
+                && self->m_remoteDescriptionAccepted) {
+                self->closeLink(QStringLiteral("invalid watch candidate source"));
+                return;
+            }
             if (!self->m_remoteDescriptionAccepted) {
+                if (self->m_options.purpose == Purpose::TxWatch
+                    && self->m_pendingSourceCandidates.size() >= kMaxWatchQueuedFrames) {
+                    self->closeLink(QStringLiteral("watch candidate source fell behind"));
+                    return;
+                }
                 self->m_pendingSourceCandidates.append(candidate);
                 return;
             }
-            self->acceptCandidate(candidate);
+            if (self->m_options.purpose == Purpose::Control) {
+                self->acceptCandidate(candidate);
+            }
         });
     }
 }
@@ -691,7 +855,7 @@ std::optional<MediaIcePath> DataChannelTransport::selectedPath() const
 
 void DataChannelTransport::sendText(const QByteArray& wire)
 {
-    if (!isOpen() || wire.isEmpty()) {
+    if (m_options.purpose == Purpose::TxWatch || !isOpen() || wire.isEmpty()) {
         return;
     }
     std::shared_ptr<rtc::DataChannel> channel;
@@ -714,6 +878,54 @@ void DataChannelTransport::sendText(const QByteArray& wire)
     } catch (const std::exception& error) {
         qCWarning(lcControlChannel) << "A control message was not sent:" << error.what();
     }
+}
+
+bool DataChannelTransport::sendBinary(const QByteArray& message)
+{
+    if (m_options.purpose != Purpose::TxWatch || !isOpen()) {
+        return false;
+    }
+    if (message.isEmpty() || message.size() > kMaxWatchFrameBytes) {
+        closeLink(QStringLiteral("invalid outbound watch frame"));
+        return false;
+    }
+    std::shared_ptr<rtc::DataChannel> channel;
+    {
+        std::lock_guard lock(m_bridge->mutex);
+        channel = m_bridge->channel;
+    }
+    if (!channel) {
+        return false;
+    }
+    try {
+        if (channel->bufferedAmount() + static_cast<std::size_t>(message.size())
+            > kMaxWatchOutboundBytes) {
+            closeLink(QStringLiteral("watch outbound backlog exceeded"));
+            return false;
+        }
+        channel->send(reinterpret_cast<const std::byte*>(message.constData()),
+                      static_cast<std::size_t>(message.size()));
+        ++m_messagesSent;
+        ++m_chunksSent;
+        m_telemetry.acceptedPayloadBytes += static_cast<quint64>(message.size());
+        return true;
+    } catch (const std::exception&) {
+        closeLink(QStringLiteral("watch frame send failed"));
+        return false;
+    }
+}
+
+qint64 DataChannelTransport::backlogBytes() const
+{
+    if (m_options.purpose != Purpose::TxWatch || !m_bridge) {
+        return 0;
+    }
+    std::shared_ptr<rtc::DataChannel> channel;
+    {
+        std::lock_guard lock(m_bridge->mutex);
+        channel = m_bridge->channel;
+    }
+    return channel ? static_cast<qint64>(channel->bufferedAmount()) : 0;
 }
 
 void DataChannelTransport::setLibraryLogForTest(
@@ -753,9 +965,41 @@ bool DataChannelTransport::sendRawFrameForTest(const QByteArray& frame)
     }
 }
 
-void DataChannelTransport::ping()
+bool DataChannelTransport::sendRawTextForTest(const QByteArray& frame)
 {
     if (!isOpen()) {
+        return false;
+    }
+    std::shared_ptr<rtc::DataChannel> channel;
+    {
+        std::lock_guard lock(m_bridge->mutex);
+        channel = m_bridge->channel;
+    }
+    try {
+        return channel && channel->send(frame.toStdString());
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
+bool DataChannelTransport::openUnexpectedChannelForTest(const QString& label, bool unordered)
+{
+    if (!isOpen() || !m_bridge || !m_bridge->peer) {
+        return false;
+    }
+    try {
+        rtc::Reliability reliability;
+        reliability.unordered = unordered;
+        return static_cast<bool>(m_bridge->peer->createDataChannel(
+            label.toStdString(), rtc::DataChannelInit{reliability}));
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
+void DataChannelTransport::ping()
+{
+    if (m_options.purpose == Purpose::TxWatch || !isOpen()) {
         return;
     }
     std::shared_ptr<rtc::DataChannel> channel;
@@ -916,6 +1160,7 @@ DataChannelTransport::Counts DataChannelTransport::countsForTest() const
 
 void DataChannelTransport::drain()
 {
+    const QPointer<DataChannelTransport> self(this);
     std::deque<Event> events;
     if (m_bridge) {
         std::lock_guard lock(m_bridge->mutex);
@@ -924,16 +1169,25 @@ void DataChannelTransport::drain()
         m_bridge->pendingBytes = 0;
     }
     for (Event& event : events) {
-        if (!m_bridge || m_closedEmitted) {
+        if (!self || !m_bridge || m_closedEmitted
+            || (m_options.purpose == Purpose::TxWatch && m_closing)) {
             return;
         }
         switch (event.kind) {
         case Event::Kind::Description:
             emit localDescription(event.first, event.second);
+            if (!self) {
+                return;
+            }
+            m_localDescriptionEmitted = true;
             gatherIfReady();
             break;
         case Event::Kind::Candidate:
-            emit localCandidate(event.first);
+            if (m_options.purpose == Purpose::Control) {
+                emit localCandidate(event.first);
+            } else if (m_localCandidatesForTest.size() < IMediaTransport::kMaxRemoteCandidates) {
+                m_localCandidatesForTest.append(event.first);
+            }
             break;
         case Event::Kind::GatheringComplete:
             emit gatheringComplete();
@@ -947,16 +1201,23 @@ void DataChannelTransport::drain()
                 // Held, in order, until something listens: the Core sends
                 // its hello the moment its end opens, which can be before
                 // the device's end has been handed to its session.
-                const QMetaMethod signal = QMetaMethod::fromSignal(&SessionTransport::textReceived);
+                const QMetaMethod signal = m_options.purpose == Purpose::TxWatch
+                    ? QMetaMethod::fromSignal(&SessionTransport::binaryReceived)
+                    : QMetaMethod::fromSignal(&SessionTransport::textReceived);
                 if (!m_held.isEmpty() || !isSignalConnected(signal)) {
                     const quint64 bytes = static_cast<quint64>(event.bytes.size());
-                    if (m_heldBytes + bytes
-                        > m_options.maxIncomingBytes * kMaxQueuedCaps) {
+                    const quint64 heldLimit = m_options.purpose == Purpose::TxWatch
+                        ? kMaxWatchQueuedBytes : m_options.maxIncomingBytes * kMaxQueuedCaps;
+                    if (m_heldBytes + bytes > heldLimit
+                        || (m_options.purpose == Purpose::TxWatch
+                            && m_held.size() >= kMaxWatchQueuedFrames)) {
                         // Nobody is taking them: end rather than grow.
                         qCWarning(lcControlChannel)
                             << "Ending the control connection: messages waited for a "
                                "listener past the bound";
-                        closeLink(QStringLiteral("the control channel fell behind"));
+                        closeLink(m_options.purpose == Purpose::TxWatch
+                                      ? QStringLiteral("the watch channel fell behind")
+                                      : QStringLiteral("the control channel fell behind"));
                         return;
                     }
                     m_held.append(event.bytes);
@@ -964,7 +1225,12 @@ void DataChannelTransport::drain()
                     scheduleHeldDelivery();
                 } else {
                     ++m_messagesDelivered;
-                    emit textReceived(event.bytes);
+                    if (m_options.purpose == Purpose::TxWatch) {
+                        m_bridge->watchDelivered(event.bytes.size());
+                        emit binaryReceived(event.bytes);
+                    } else {
+                        emit textReceived(event.bytes);
+                    }
                 }
             }
             break;
@@ -996,13 +1262,19 @@ void DataChannelTransport::drain()
             }
             break;
         }
+        if (!self) {
+            return;
+        }
     }
 }
 
 void DataChannelTransport::connectNotify(const QMetaMethod& signal)
 {
     SessionTransport::connectNotify(signal);
-    if (signal == QMetaMethod::fromSignal(&SessionTransport::textReceived)) {
+    if ((m_options.purpose == Purpose::Control
+         && signal == QMetaMethod::fromSignal(&SessionTransport::textReceived))
+        || (m_options.purpose == Purpose::TxWatch
+            && signal == QMetaMethod::fromSignal(&SessionTransport::binaryReceived))) {
         scheduleHeldDelivery();
     }
 }
@@ -1019,12 +1291,23 @@ void DataChannelTransport::scheduleHeldDelivery()
 void DataChannelTransport::deliverHeld()
 {
     m_heldDeliveryPosted = false;
-    const QMetaMethod signal = QMetaMethod::fromSignal(&SessionTransport::textReceived);
+    const QMetaMethod signal = m_options.purpose == Purpose::TxWatch
+        ? QMetaMethod::fromSignal(&SessionTransport::binaryReceived)
+        : QMetaMethod::fromSignal(&SessionTransport::textReceived);
+    const QPointer<DataChannelTransport> self(this);
     while (!m_held.isEmpty() && isOpen() && isSignalConnected(signal)) {
         const QByteArray message = m_held.takeFirst();
         m_heldBytes -= static_cast<quint64>(message.size());
         ++m_messagesDelivered;
-        emit textReceived(message);
+        if (m_options.purpose == Purpose::TxWatch) {
+            m_bridge->watchDelivered(message.size());
+            emit binaryReceived(message);
+        } else {
+            emit textReceived(message);
+        }
+        if (!self) {
+            return;
+        }
     }
 }
 
@@ -1104,6 +1387,7 @@ bool lingerUntilClosed(const std::shared_ptr<rtc::PeerConnection>& peer,
 
 void DataChannelTransport::stopPeer(bool linger)
 {
+    m_watchRelayGrant.reset();
     if (!m_bridge) {
         return;
     }
@@ -1118,6 +1402,8 @@ void DataChannelTransport::stopPeer(bool linger)
         m_bridge->cancelled = true;
         m_bridge->events.clear();
         m_bridge->pendingBytes = 0;
+        m_bridge->watchOutstandingBytes = 0;
+        m_bridge->watchOutstandingFrames = 0;
         peer = std::move(m_bridge->peer);
         channel = std::move(m_bridge->channel);
     }

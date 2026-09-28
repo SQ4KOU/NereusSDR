@@ -6147,6 +6147,58 @@ AM, SAM, FM, DRM, RADE_U and RADE_L stop at once with "No microphone audio
 arrived from <device>, so the Core stopped transmitting." TUNE and
 two-tone use no microphone and are never stopped by it.
 
+#### Independent transmit watch (unpublished extension)
+
+A client declaring `remoteTx:1` and `txWatchPath:1` at minor 11 or newer can
+receive `txWatchPathVersion:1` after its authenticated snapshot is complete.
+This requires a paired device-key session, current transmit permission and a
+live direct WSS primary on a Core with the separate WSS route available.
+Token-only sessions and older peers receive no extension. This first version
+does not advertise a watch route for a relay/DTLS primary.
+
+On that primary, `tx.watchTicket` takes no arguments. An accepted command result
+contains `ticket` (utf8, canonical base64url of 32 random bytes), `expiresInMs`
+(i64, 10000) and `path` (utf8, `/tx-watch/v1`). The one-use ticket binds the exact
+primary, admitted paired device, logical session and connection generation.
+There is one pending ticket or active watch per primary and at most four per
+Core. Issuance is limited to once per second per primary. Matching consumes the
+ticket even if attachment fails; an unrelated guess cannot consume it.
+
+The client opens a NEW WSS connection on the verified primary's authority and
+fixed path. Before disclosing its ticket it checks the actual new TLS peer
+certificate SHA-256 against the current verified Core pin. Neither ticket nor
+pin goes in the URL, logs or rendezvous signaling. The first binary application
+message is byte 1 followed by 32 raw ticket bytes. Core acknowledges with `[1,0]`.
+Only the existing 13-byte channel keepalive format is then accepted. No hello,
+session command, text, settings or media passes through this socket.
+
+The Core branches this exact path before ordinary peer adoption, refusing query
+parameters and user information. Before returning to the event loop it limits
+messages and frames to 33 bytes. At most eight pending attachments (also eight
+per address group) may wait for five seconds. Accepted watches have a 20-frame
+burst/50-frame-per-second bound and 4 KiB outbound backlog bound. These sockets
+never take a device place or hold transmit independently.
+
+Primary end, revocation, replacement, or the start of a path move retires the
+watch and invalidates its ticket before callbacks can reuse it. A failed path
+move does not restore the old generation. Core rechecks the primary binding
+and permission for each heartbeat. Auxiliary loss alone never ends or replaces
+the primary; primary loss still stops its key immediately. The existing sequence,
+epoch and 400 ms rules apply, so duplicate or stale copies never revive a key.
+
+The client uses one 100 ms timer and the SAME sequence/epoch for its independent
+copy and ordinary media-or-primary copy. It must pause ALL heartbeat paths while
+any release is being dispatched or awaits its own accepted command result. A
+nonzero command number alone is not delivery proof. A failed/refused release
+remains fenced until session reset; an unrelated accepted off cannot clear it.
+Every continuation checks owner lifetime, connection generation and this fence.
+
+Core direct attachment and its real paired two-socket regression are built;
+production client wiring, separate relay DTLS transport and actual loaded loss
+acceptance are still in progress. Relay grants use rendezvous section 12.9 and
+are separate from this Core-authenticated ticket. No network acceptance or
+radio transmission is implied by the in-process tests.
+
 ### 18.8 The transmit state (`txState`)
 
 iPhone app plan Task 39 (D14, R-IOS-13, R-IOS-21; spec section 5.5 items 5

@@ -1550,7 +1550,7 @@ defaults. The message size is the wire's, not a setting.
 | Send queue per lane towards each leg | 64 messages or 24576 bytes (`queue_frames`, `queue_bytes`), the oldest dropped first | about 0.3 s at a lane's cap: a leg that falls behind loses its oldest datagrams, which SCTP sees as loss and congestion control answers, instead of a delay that grows without bound. The writer takes the lanes in turn; one leg reading slowly never holds up the other |
 | Write buffer past the queues | 8192 bytes (the websockets library's `write_limit`) | kept small because what has left the queue can no longer be dropped |
 | One message's send | 10 s (`send_stall_ms`) | a leg that stops reading is closed (1008) and its place waits for a rejoin |
-| Connections per address group | 18 (`connections_per_address`), joined or not, each counted from its arrival until it has closed, refused ones included | both ends of the nine transport paths above can share one public address group; groups as section 9.1. A refused or ended connection closes within 2 s (the close handshake's limit), so it cannot hold a place for long |
+| Connections per address group | 36 (`connections_per_address`), joined or not, each counted from its arrival until it has closed, refused ones included | both primary ends and both optional watch ends of the nine transport paths above can share one public address group; groups as section 9.1. A refused or ended connection closes within 2 s (the close handshake's limit), so it cannot hold a place for long |
 | Connections not yet joined, in total | 64 (`max_pending`) | a join takes one round trip. When a new connection comes and every waiting place is taken, the one waiting longest is ended (`full`) and the new one waits instead, so a few networks holding connections open cannot shut every join out |
 | Join | 10 s (`join_timeout_ms`) | `timeout` |
 | Rejoin, and the first join of the other side | 30 s (`rejoin_ms`) | a reset's reconnect is three round trips and a TLS handshake; ICE's consent freshness allows 30 s |
@@ -1801,3 +1801,84 @@ does the same with `app` and the device's leg on `device`.
 `test_relay_fixtures.py` also checks that each END code a conformant leg
 can meet (every code but `protocolError`, `timeout` and `badToken`) is
 played towards both the Core's leg and the device's.
+
+
+### 12.9 Optional independent transmit-watch relay
+
+This extension is additive. It supplies a separate physical WebSocket flow for
+an end-to-end encrypted, heartbeat-only connection. A relay grant does not
+sign into a Core, obtain a device place, hold transmit, or authorize a key.
+The Core requires a separate single-use attachment ticket inside its own
+verified TLS/DTLS connection. A main connection and its watch must not share
+one outer TCP flow. Core/client attachment and network-loss acceptance are
+separate requirements; service/relay tests alone do not establish them.
+
+**Negotiation and rollout.** `relay_watch_version` in `rendezvous.conf` defaults
+to `0`. Set it to `1` only after the corresponding relay supports this section.
+With both that setting and a relay secret, the service sends `hello.version: 2`
+and the optional integer `watchRelayVersion: 1`; otherwise its hello remains
+version 1 without the optional key. A supporting station includes
+`watchRelayVersion: 1` in `register`, and a supporting device includes it in
+`introduce`, only after seeing service version 2 and that declared capability.
+Unknown keys remain ignored; a known optional key of the wrong type is refused.
+Other declared watch versions do not negotiate version 1 implicitly.
+
+Only after an introduction is accepted with `turn: true`, and both endpoints
+explicitly declared watch version 1, does the service append `watchToken` to
+each existing `relay.grant`. Its normal `token`, URL, expiry, order and role
+remain unchanged. Each end receives only its own watch token. A disabled
+service, unsupported/older endpoint, unanswered introduction, or refused relay
+produces no watch token. No new message kind or second introduction is needed.
+The token stays out of URLs and logs, just like the normal grant.
+
+**Watch token grammar.** The primary token is unchanged from section 12.2.
+The watch token is a separate grammar and MAC domain:
+
+```
+payload = 0x02 || leg || 0x02 || session[16] || station[8] || expires[4, big-endian]
+mac = HMAC-SHA256(secret, "NereusSDR relay grant v2\n" || payload)
+token = base64url(payload || mac), without padding
+```
+
+The third byte is purpose 2 (watch); no other purpose is valid in this grammar.
+It is 63 raw bytes and 84 canonical base64url characters. Session, station and
+expiry match the primary grant exactly, and the role byte still identifies the
+Core or device. Primary verification accepts only v1; watch verification accepts
+only this v2 grammar. MAC comparison is constant-time. New relay admission
+explicitly selects the appropriate verifier rather than interpreting a watch
+token as permission to open a normal session.
+
+**Admission and retirement.** A watch JOIN requires an existing charged session
+with both primary legs present and nonclosing, with identical station and expiry.
+It never creates a session or consumes a second logical slot. Missing primary
+returns `peerGone`; mismatched grant binding returns `badToken`. As with primary
+rejoins, an already live session may accept its matching grant after the grant's
+initial-open expiry; an absent or ended session is never revived. One watch leg
+per side is stored separately from the primary legs. A same-side watch replacement
+replaces only that watch. Either primary leaving, replacement, session end or
+shutdown retires both watch legs and their queued data before callbacks can act.
+Watch disconnect alone leaves primary admission, rejoin and idle timers unchanged.
+
+**Frames and bounds.** JOIN/READY/PEER/END keep their existing framing. READY and
+PEER on a watch describe its watch counterpart. Only tag `0x03` followed by
+1 to 1500 bytes of opaque ICE/DTLS data is forwarded between watch legs. Tag 3
+remains reserved on primary legs; control/media tags or other data tags on a watch
+are protocol errors. The relay never reads an encrypted Core ticket or heartbeat.
+
+Watch sockets count against the existing pending, address and stalled-writer
+bounds. The physical address default is now 36: two primary and two watch ends
+for each of nine possible transport sessions, even behind one NAT. Logical caps
+remain nine per station and sixteen globally; the Core's four admitted device
+places remain separate. Watch-specific defaults are 8000 bytes/second, a burst
+of one second, and a receiving queue bounded by 16 frames or 8192 bytes with
+oldest-first dropping. Those rate buckets survive watch reconnects. Watch bytes
+also consume the existing sending-side control bucket, so they cannot bypass its
+80000 bytes/second aggregate limit. They count toward traffic statistics but
+never refresh primary idle time. Pending watch PEER notices are bounded at 16
+on a blocked writer, apart from its fixed READY/END/close overhead.
+
+Verification uses strict codec tests, real loopback service-issued grants and
+relay forwarding, adversarial binding/lifecycle cases, and deterministic resource
+limits. Existing v1 control and relay fixtures remain unchanged. No production
+rollout, Core attachment, TURN-free watch transport, or restrictive-network
+transmit-liveness result is implied by those tests.

@@ -125,6 +125,8 @@ enum class Direction {
 struct Message {
     Kind kind = Kind::Unknown;
 
+    int watchRelayVersion = 0;  // optional hello/register/introduce; zero means absent
+    QString watchToken;        // optional relay.grant; opaque, never logged
     int version = 0;            // hello
     QByteArray nonce;           // hello, challenge, introduction (32 bytes)
     QStringList stun;           // hello
@@ -161,6 +163,7 @@ struct RelayGrant {
     QString url;
     QString token;
     qint64 expires = 0;
+    QString watchToken; // Optional separate watch grant, never a primary token.
 };
 
 /// The kind's wire name ("mailbox.open"), empty for Unknown.

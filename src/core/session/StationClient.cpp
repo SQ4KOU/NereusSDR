@@ -319,6 +319,7 @@
 #include "core/session/SessionEndReasons.h"
 #include "core/session/SessionTransport.h"
 #include "core/session/SwitchableTransport.h"
+#include "core/session/TxWatchClient.h"
 #include "core/session/MediaTunnel.h"
 #include "core/session/TransmitStateFacade.h"
 #include "core/session/RemoteDevicesState.h"
@@ -686,6 +687,18 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
                           QVariant(static_cast<qint64>(epoch))}}));
         return true;
     });
+    m_remoteTransmit->setAuxiliaryKeepalive([this](quint64 sequence, quint32 epoch) {
+        TxWatchClient* watch = m_directWatch.data();
+        if (!directWatchEligible() || watch == nullptr || !watch->isReady()
+            || watch->generation() != m_directWatchGeneration) {
+            return false;
+        }
+        const QPointer<StationClient> self(this);
+        const quint32 sessionEpoch = m_sessionEpoch;
+        const bool sent = watch->sendKeepalive(sequence, epoch);
+        return self && self->m_sessionEpoch == sessionEpoch
+            && self->m_directWatch == watch && self->directWatchEligible() && sent;
+    });
     if (radioModel != nullptr) {
         connect(radioModel, &RadioModel::transmittingChanged, m_remoteTransmit,
                 &RemoteTransmitClient::setCoreTransmitting);
@@ -782,6 +795,20 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
     m_reconnectTimer = new QTimer(this);
     m_reconnectTimer->setSingleShot(true);
     connect(m_reconnectTimer, &QTimer::timeout, this, &StationClient::onReconnectTimeout);
+    m_directWatchClock.start();
+    m_directWatchRetryTimer = new QTimer(this);
+    m_directWatchRetryTimer->setSingleShot(true);
+    connect(m_directWatchRetryTimer, &QTimer::timeout, this,
+            &StationClient::requestDirectWatchTicket);
+    m_directWatchTicketTimer = new QTimer(this);
+    m_directWatchTicketTimer->setSingleShot(true);
+    connect(m_directWatchTicketTimer, &QTimer::timeout, this, [this]() {
+        if (m_directWatchTicketId == 0) { return; }
+        m_directWatchTicketId = 0;
+        m_directWatchTicketGeneration = 0;
+        m_directWatchTicketSessionEpoch = 0;
+        retryDirectWatch(QStringLiteral("watch ticket reply timed out"));
+    });
 
     // iPhone app plan Task 27: an address that is not the last to try gets
     // kCachedAddressOpenTimeoutMs to open before the next one is tried.
@@ -1488,6 +1515,10 @@ void StationClient::attachTransport(SessionTransport* transport, const QString& 
     if (transport == nullptr) {
         return;
     }
+    const QPointer<StationClient> watchSelf(this);
+    retireDirectWatch();
+    if (!watchSelf) { return; }
+    m_directWatchDeclared = false;
 
     // A directly adopted replacement link needs the same retirement as a
     // redial. Otherwise the previous authentication/snapshot flags remain
@@ -1733,6 +1764,9 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
         return;  // already reported for this attach
     }
     m_sessionActive = false;
+    const QPointer<StationClient> watchSelf(this);
+    retireDirectWatch();
+    if (!watchSelf) { return; }
     // iPhone app plan Task 29: a look for a better path belongs to the
     // session that ended.
     m_upgradeTimer->stop();
@@ -2420,7 +2454,11 @@ void StationClient::onTransportText(const QByteArray& wire)
         m_remoteDevices->setSelfDeviceId(thisDeviceWireId());
         emit transmitTakeAvailabilityChanged();
         refreshSettingsHygiene();
+        const QPointer<StationClient> watchSelf(this);
         emit stateSnapshotApplied();
+        if (watchSelf) {
+            watchSelf->requestDirectWatchTicket();
+        }
         break;
     }
     case SessionMessageKind::CommandResult:
@@ -2566,6 +2604,12 @@ void StationClient::handleHello(const SessionMessage& message)
 void StationClient::setDeviceIdentity(std::shared_ptr<const ClientDeviceIdentity> identity,
                                       const QString& deviceName, const QString& shortName)
 {
+    if (m_deviceIdentity != identity && m_sessionActive) {
+        const QPointer<StationClient> watchSelf(this);
+        retireDirectWatch();
+        if (!watchSelf) { return; }
+        m_directWatchDeclared = false;
+    }
     m_deviceIdentity = std::move(identity);
     m_deviceName = deviceName;
     m_deviceShortName = shortName;
@@ -2675,6 +2719,12 @@ bool StationClient::signIn(const SessionMessage& hello)
         // is asked before a change reaches another device, told what
         // another device did, and may take transmit.
         QHash<QByteArray, int> features = m_declaredFeatures;
+        m_directWatchDeclared = m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+            && qobject_cast<WebSocketTransport*>(transport()) != nullptr
+            && certificate.size() == 32;
+        if (m_directWatchDeclared) {
+            features.insert(QByteArrayLiteral("txWatchPath"), 1);
+        }
         if (m_declaresSessionHolder) {
             features.insert(QByteArrayLiteral("sessionHolder"), 1);
         }
@@ -2716,6 +2766,7 @@ bool StationClient::signIn(const SessionMessage& hello)
     // does not share the Core as a device (Task 78). A window test's
     // bench link says it does (setTokenSessionHolderForTest).
     QHash<QByteArray, int> features = m_declaredFeatures;
+    m_directWatchDeclared = false;
     m_declaredSessionHolder = false;
     if (!m_tokenSessionHolderIdForTest.isEmpty() && m_declaresSessionHolder
         && features.contains(QByteArrayLiteral("deviceAuth"))) {
@@ -2812,6 +2863,10 @@ void StationClient::handleCapabilities(const SessionMessage& message)
         }
     }
     m_capabilities = incoming;
+    if (!directWatchEligible()) {
+        retireDirectWatch();
+        if (!self || m_sessionEpoch != epoch) { return; }
+    }
     refreshRemoteTransmit();
     // iPhone app plan Task 78: a device that shares the Core accepts the
     // Core closing its last slice (a take), and shows an empty band that
@@ -2821,6 +2876,11 @@ void StationClient::handleCapabilities(const SessionMessage& message)
     }
     m_remoteDevices->setSelfDeviceId(thisDeviceWireId());
     emit transmitTakeAvailabilityChanged();
+    if (!self || m_sessionEpoch != epoch) { return; }
+    if (m_handshakeComplete) {
+        requestDirectWatchTicket();
+        if (!self || m_sessionEpoch != epoch) { return; }
+    }
 
     if (m_capabilities.effectiveMaxSlices < m_capabilities.boardMaxSlices) {
         qCInfo(lcStationClient)
@@ -5290,6 +5350,169 @@ bool StationClient::remoteTransmitAvailable() const
         && m_capabilities.remoteTxVersion >= 1;
 }
 
+bool StationClient::directWatchReady() const
+{
+    return m_directWatch != nullptr && m_directWatch->isReady()
+        && m_directWatch->generation() == m_directWatchGeneration
+        && directWatchEligible();
+}
+
+bool StationClient::directWatchEligible() const
+{
+    const auto* direct = qobject_cast<const WebSocketTransport*>(transport());
+    return remoteTransmitAvailable() && m_capabilities.txPermitted
+        && m_capabilities.txWatchPathVersion == 1 && m_directWatchDeclared
+        && m_signedInWithDeviceKey && m_stationIdentity.size() == 32
+        && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && !m_upgrade && (sessionTransport() == nullptr || !sessionTransport()->switching())
+        && direct != nullptr && direct->isOpen()
+        && direct->peerCertificateSha256().size() == 32
+        && m_connectedUrl.isValid() && m_connectedUrl.scheme() == QLatin1String("wss")
+        && !m_connectedUrl.host().isEmpty()
+        && !m_connectedUrl.authority(QUrl::FullyEncoded).contains('@');
+}
+
+void StationClient::retireDirectWatch()
+{
+    ++m_directWatchGeneration;
+    m_directWatchTicketId = 0;
+    m_directWatchTicketGeneration = 0;
+    m_directWatchTicketSessionEpoch = 0;
+    if (m_directWatchRetryTimer) { m_directWatchRetryTimer->stop(); }
+    if (m_directWatchTicketTimer) { m_directWatchTicketTimer->stop(); }
+    const QPointer<TxWatchClient> watch = m_directWatch;
+    m_directWatch = nullptr;
+    if (watch != nullptr) {
+        // A replacement must not deliver an old close into any callback.
+        watch->disconnect();
+        watch->close();
+        if (watch) { watch->deleteLater(); }
+    }
+}
+
+void StationClient::retryDirectWatch(const QString& reason)
+{
+    if (!directWatchEligible() || m_directWatchTicketId != 0 || m_directWatch != nullptr) {
+        return;
+    }
+    qCInfo(lcStationClient).noquote()
+        << "Independent transmit watch unavailable:" << reason
+        << "ordinary primary/media keepalives continue";
+    const qint64 since = m_directWatchClock.elapsed() - m_lastDirectWatchRequestMs;
+    m_directWatchRetryTimer->start(static_cast<int>(qMax<qint64>(1000, 1000 - since)));
+}
+
+void StationClient::requestDirectWatchTicket()
+{
+    if (!directWatchEligible() || m_directWatchTicketId != 0 || m_directWatch != nullptr
+        || m_directWatchRetryTimer->isActive()) {
+        return;
+    }
+    const qint64 now = m_directWatchClock.elapsed();
+    const qint64 since = now - m_lastDirectWatchRequestMs;
+    if (since < 1000) {
+        m_directWatchRetryTimer->start(static_cast<int>(1000 - since));
+        return;
+    }
+    m_lastDirectWatchRequestMs = now;
+    const quint32 id = m_nextCommandId++;
+    if (m_nextCommandId == 0) { ++m_nextCommandId; }
+    m_directWatchTicketId = id;
+    m_directWatchTicketGeneration = m_directWatchGeneration;
+    m_directWatchTicketSessionEpoch = m_sessionEpoch;
+    m_directWatchTicketTimer->start(10000);
+    send(SessionMessages::commandInvoke(QByteArrayLiteral("tx.watchTicket"), id, {}));
+}
+
+void StationClient::handleDirectWatchTicket(const SessionMessage& message)
+{
+    if (message.commandId == 0 || message.commandId != m_directWatchTicketId
+        || m_directWatchTicketGeneration != m_directWatchGeneration
+        || m_directWatchTicketSessionEpoch != m_sessionEpoch) {
+        return;
+    }
+    m_directWatchTicketId = 0;
+    m_directWatchTicketGeneration = 0;
+    m_directWatchTicketSessionEpoch = 0;
+    m_directWatchTicketTimer->stop();
+    if (!directWatchEligible()) { return; }
+    if (!message.accepted) {
+        retryDirectWatch(QStringLiteral("Core did not issue a watch ticket"));
+        return;
+    }
+    QString encoded;
+    QString path;
+    qint64 expires = -1;
+    bool ticketSeen = false;
+    bool pathSeen = false;
+    bool expirySeen = false;
+    bool valid = message.updates.size() == 3;
+    for (const MirrorUpdate& update : message.updates) {
+        if (update.name == "ticket" && !ticketSeen && update.kind == MirrorWireKind::Utf8
+            && update.value.typeId() == QMetaType::QString) {
+            ticketSeen = true;
+            encoded = update.value.toString();
+        } else if (update.name == "path" && !pathSeen && update.kind == MirrorWireKind::Utf8
+                   && update.value.typeId() == QMetaType::QString) {
+            pathSeen = true;
+            path = update.value.toString();
+        } else if (update.name == "expiresInMs" && !expirySeen
+                   && update.kind == MirrorWireKind::Int64
+                   && update.value.typeId() == QMetaType::LongLong) {
+            expirySeen = true;
+            expires = update.value.toLongLong();
+        } else {
+            valid = false;
+        }
+    }
+    bool canonical = false;
+    QByteArray rawTicket = StationIdentity::fromBase64Url(encoded, &canonical);
+    valid = valid && ticketSeen && pathSeen && expirySeen && canonical
+        && rawTicket.size() == 32 && encoded.size() == 43
+        && path == QStringLiteral("/tx-watch/v1") && expires == 10000;
+    if (!valid) {
+        rawTicket.fill('\0');
+        retryDirectWatch(QStringLiteral("Core watch ticket reply was malformed"));
+        return;
+    }
+    const QByteArray actualPin = transport()->peerCertificateSha256();
+    const QUrl authority = m_connectedUrl;
+    const quint64 generation = m_directWatchGeneration;
+    const quint32 sessionEpoch = m_sessionEpoch;
+    auto* watch = new TxWatchClient(this);
+    m_directWatch = watch;
+    connect(watch, &TxWatchClient::ready, this,
+            [this, watch, generation, sessionEpoch](quint64 reportedGeneration) {
+        if (m_directWatch != watch || m_directWatchGeneration != generation
+            || m_sessionEpoch != sessionEpoch || reportedGeneration != generation
+            || !directWatchEligible()) {
+            return;
+        }
+        qCInfo(lcStationClient) << "Independent direct transmit watch is ready";
+    });
+    connect(watch, &TxWatchClient::closed, this,
+            [this, watch, generation, sessionEpoch](quint64 reportedGeneration,
+                                                    const QString& reason) {
+        if (m_directWatch != watch || m_directWatchGeneration != generation
+            || m_sessionEpoch != sessionEpoch || reportedGeneration != generation) {
+            return;
+        }
+        m_directWatch = nullptr;
+        watch->disconnect(this);
+        watch->deleteLater();
+        retryDirectWatch(reason);
+    });
+    const QPointer<StationClient> self(this);
+    const bool opened = watch->openDirect(authority, actualPin, rawTicket, generation);
+    rawTicket.fill('\0');
+    if (self && !opened && self->m_directWatch == watch) {
+        self->retireDirectWatch();
+        if (self) {
+            self->retryDirectWatch(QStringLiteral("direct watch socket did not open"));
+        }
+    }
+}
+
 void StationClient::refreshRemoteTransmit()
 {
     if (m_remoteTransmit != nullptr) {
@@ -5299,6 +5522,10 @@ void StationClient::refreshRemoteTransmit()
 
 void StationClient::handleCommandResult(const SessionMessage& message)
 {
+    if (message.commandVerb == "tx.watchTicket") {
+        handleDirectWatchTicket(message);
+        return;
+    }
     if (message.commandVerb == "station.validateSettings"
         || message.commandVerb == "station.forgetSettings") {
         handleSettingsHygieneResult(message);
@@ -5359,7 +5586,8 @@ void StationClient::handleCommandResult(const SessionMessage& message)
         return;
     }
     if (message.commandVerb == "tx.key" || message.commandVerb == "tx.unkey"
-        || message.commandVerb == "tx.tune" || message.commandVerb == "tx.twoTone") {
+        || message.commandVerb == "tx.tune" || message.commandVerb == "tx.tunerTune"
+        || message.commandVerb == "tx.twoTone") {
         const QPointer<StationClient> self(this);
         if (m_remoteTransmit != nullptr) {
             m_remoteTransmit->commandFinished(message.commandId, message.commandVerb,
@@ -6531,6 +6759,9 @@ void StationClient::beginUpgrade(PathRacer::Ready ready)
         scheduleUpgrade(/*advance=*/false);
         return;
     }
+    const QPointer<StationClient> watchSelf(this);
+    retireDirectWatch();
+    if (!watchSelf) { return; }
     ready.transport->setParent(this);
     // The Core may close the new connection at its connect deadline, or on
     // a refused join; either gives the move up.
@@ -6569,6 +6800,7 @@ void StationClient::abandonUpgrade(const QString& why, bool reschedule)
     if (reschedule) {
         scheduleUpgrade(/*advance=*/true);
     }
+    retryDirectWatch(QStringLiteral("watch path move ended"));
 }
 
 void StationClient::onPathTicket(const SessionMessage& result)
@@ -6660,6 +6892,7 @@ void StationClient::onPathTicket(const SessionMessage& result)
         emit pathChanged();
         if (self) {
             scheduleUpgrade(/*advance=*/false);
+            requestDirectWatchTicket();
         }
     });
     connect(switchable, &SwitchableTransport::switchFailed, this,

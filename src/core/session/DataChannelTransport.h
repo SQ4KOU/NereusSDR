@@ -69,6 +69,8 @@
 //               web relay's leg (RelayLeg) and its per-connection candidate
 //               sources; the computer's own proxy settings (SystemProxy).
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-27: separate bounded transmit-watch DTLS channel; AI-assisted
+//               implementation via OpenAI Codex for J.J. Boyd (KG4VCF).
 // =================================================================
 
 #include "core/session/IceConfiguration.h"
@@ -80,6 +82,7 @@
 #include <QList>
 #include <QString>
 #include <QStringList>
+#include <QUrl>
 
 #include <functional>
 #include <memory>
@@ -88,6 +91,7 @@
 namespace NereusSDR {
 
 class CandidateSourceLease;
+class RelayLeg;
 
 /// The chunking and the heartbeat bytes of the control data channel, apart
 /// from any connection: what the transport runs and what the conformance
@@ -154,10 +158,17 @@ public:
         Offerer, ///< the device: makes the offer and the channel
         Answerer, ///< the Core: answers, presenting its own certificate
     };
+    enum class Purpose { Control, TxWatch };
 
     /// The channel's label (the link document, "Control over a data
     /// channel").
     static constexpr const char* kLabel = "control";
+    static constexpr const char* kTxWatchLabel = "tx-watch-v1";
+    static constexpr qsizetype kMaxWatchFrameBytes = 33;
+    static constexpr qsizetype kMaxWatchQueuedFrames = 16;
+    static constexpr qsizetype kMaxWatchQueuedBytes = 528;
+    static constexpr std::size_t kMaxWatchEvents = 64;
+    static constexpr std::size_t kMaxWatchOutboundBytes = 4096;
 
     /// NereusSDR's own bounds (the Task 28 safety review's Minor 3 and 7):
     ///
@@ -177,9 +188,13 @@ public:
 
     struct Options {
         Role role = Role::Offerer;
+        /// Control preserves the original framing and candidate rules.
+        /// TxWatch is a separate peer and one raw binary channel.
+        Purpose purpose = Purpose::Control;
         /// The inbound cap: StationServer::kMaxIncomingMessageBytes on the
         /// Core, StationClient::kMaxIncomingMessageBytes on a device. Zero
-        /// is refused, as WebSocketTransport requires a number.
+        /// is refused, as WebSocketTransport requires a number. TxWatch
+        /// requires exactly kMaxWatchFrameBytes.
         quint64 maxIncomingBytes = 0;
         /// Through the remote access service: one STUN server at once,
         /// gathering held until gatherCandidates() (or at start() when the
@@ -222,6 +237,21 @@ public:
     /// added; its STUN server is not changed. Once only.
     bool gatherCandidates(const IceConfiguration& configured);
 
+    /// Negotiated by this primary introduction only. The grant is opaque and
+    /// must never be logged or transferred to a replacement primary.
+    struct WatchRelayGrant {
+        QUrl url;
+        QString token;
+        qint64 expires = 0;
+        std::weak_ptr<RelayLeg> primaryLeg;
+    };
+    bool setWatchRelayGrant(const WatchRelayGrant& grant);
+    const std::optional<WatchRelayGrant>& watchRelayGrant() const { return m_watchRelayGrant; }
+    /// Existing admitted watch sessions may outlive their grant's admission
+    /// expiry. Both checks still require this exact live primary relay route.
+    bool hasWatchRelayRoute() const;
+    bool canOpenWatchRelay() const;
+
     /// The candidate pair the connection settled on, once it has.
     std::optional<MediaIcePath> selectedPath() const;
     /// Test seam (Task 29 step 2a re-review, Minor 7): when set, every
@@ -240,6 +270,9 @@ public:
     /// Options::ice (not through the service).
     std::optional<IceConfiguration> mediaIceConfiguration() const
     {
+        if (m_options.purpose == Purpose::TxWatch) {
+            return std::nullopt;
+        }
         return mediaIceFor(m_options.ice, selectedPath());
     }
     /// mediaIceConfiguration()'s rule, apart from any connection.
@@ -261,6 +294,9 @@ public:
 
     // ---- SessionTransport ----
     void sendText(const QByteArray& wire) override;
+    bool sendBinary(const QByteArray& message) override;
+    bool carriesBinary() const override { return m_options.purpose == Purpose::TxWatch; }
+    qint64 backlogBytes() const override;
     void ping() override;
     void closeLink(const QString& reason) override;
     bool isOpen() const override;
@@ -306,11 +342,16 @@ public:
     /// Test seam: the bytes of whole messages waiting for this object's
     /// thread (the bound is kMaxQueuedCaps times the inbound cap).
     quint64 pendingBytesForTest() const;
+    /// Gathered host candidates retained only for the local DTLS test shim;
+    /// watch mode never emits them through localCandidate.
+    QStringList localCandidatesForTest() const { return m_localCandidatesForTest; }
 
     /// Test seam: sends `frame` as one binary data-channel message exactly
     /// as given, to show what the far end does with frames a conforming
     /// sender never makes.
     bool sendRawFrameForTest(const QByteArray& frame);
+    bool sendRawTextForTest(const QByteArray& frame);
+    bool openUnexpectedChannelForTest(const QString& label, bool unordered);
 
     /// Test seam (R-R3-49): each line libdatachannel and libjuice log, at
     /// every level, goes to `sink` with the logging thread's id, on
@@ -351,18 +392,21 @@ private:
     void drain();
     void handleOpen();
     void gatherIfReady();
+    bool acceptOwnedWatchCandidate(const QString& candidate);
     /// Cancels the bridge and closes the connection; with `linger`, an open
     /// channel closes first and the peer after it (closeLink()).
     void stopPeer(bool linger = false);
     void finishClose();
 
     Options m_options;
+    std::optional<WatchRelayGrant> m_watchRelayGrant;
     std::shared_ptr<Bridge> m_bridge;
     bool m_started = false;
     bool m_open = false;
     bool m_closing = false;
     bool m_closedEmitted = false;
     bool m_remoteDescriptionAccepted = false;
+    bool m_localDescriptionEmitted = false;
     bool m_gatherRequested = false;
     bool m_gatheringStarted = false;
     QList<IceRelayServer> m_relays;
@@ -371,6 +415,7 @@ private:
     /// Step 2b: this connection's own candidate source on the control lane.
     std::shared_ptr<CandidateSourceLease> m_candidateSourceLease;
     QStringList m_pendingSourceCandidates;
+    QStringList m_localCandidatesForTest;
     quint32 m_nextPingId = 1;
     SessionTransportTelemetry m_telemetry;
     QElapsedTimer m_pongAge;

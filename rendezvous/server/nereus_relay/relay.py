@@ -42,8 +42,9 @@ log = logging.getLogger("nereus_relay")
 # Section 12.3: the frame's first byte.
 TAG_CONTROL = 0x01
 TAG_MEDIA = 0x02
-# The lanes the relay carries. A data tag from 3 to 0x7F is reserved: the
-# relay drops it (and counts it) rather than forwarding it (section 12.3).
+TAG_WATCH = 0x03
+# Primary lanes remain unchanged. Tags 3 through 0x7F are reserved on
+# primary legs; only a watch leg may carry tag 3.
 LANES = (TAG_CONTROL, TAG_MEDIA)
 DATA_TAG_MAX = 0x7F
 TAG_JOIN = 0x80
@@ -216,6 +217,13 @@ class Session:
             for lane in LANES
         }
         self.legs: Dict[int, Optional["Leg"]] = {relaygrant.LEG_CORE: None, relaygrant.LEG_DEVICE: None}
+        self.watch_legs: Dict[int, Optional["Leg"]] = {side: None for side in relaygrant.LEGS}
+        self.watch_buckets: Dict[int, TokenBucket] = {
+            side: TokenBucket(config.watch_rate_bytes_per_second, now_ms) for side in relaygrant.LEGS
+        }
+        self.watch_queues: Dict[int, DropOldestQueue] = {
+            side: DropOldestQueue(config.watch_queue_frames, config.watch_queue_bytes) for side in relaygrant.LEGS
+        }
         # A side that has not joined yet, or has left, has this long to come
         # (back); idleness counts only while both legs are present.
         self.away: Dict[int, Optional[TimerHandle]] = {relaygrant.LEG_CORE: None, relaygrant.LEG_DEVICE: None}
@@ -233,6 +241,9 @@ class Session:
         for lane in LANES:
             self.queues[(side, lane)].clear()
 
+    def clear_watch_side(self, side: int) -> None:
+        self.watch_queues[side].clear()
+
     def queued(self, side: int) -> bool:
         return any(len(self.queues[(side, lane)]) for lane in LANES)
 
@@ -247,6 +258,7 @@ class Leg:
         self.group = address_group(address)
         self.session: Optional[Session] = None
         self.side = 0
+        self.watch = False
         self.joined = False
         self.counted = False
         self.control: Deque[Any] = collections.deque()
@@ -264,6 +276,15 @@ class Leg:
     def send_control(self, frame: bytes) -> None:
         if self.closing:
             return
+        # A blocked watch writer can otherwise collect unbounded PEER notices
+        # as watch sockets repeatedly join and leave before the stall timer.
+        if self.watch and frame[0] == TAG_PEER and len(self.control) >= 16:
+            for old in self.control:
+                if isinstance(old, bytes) and old[0] == TAG_PEER:
+                    self.control.remove(old)
+                    break
+            else:
+                return
         self.control.append(frame)
         self.wake.set()
 
@@ -318,7 +339,13 @@ class Leg:
     def _next_data(self) -> Optional[Any]:
         """The next datagram for this leg, the lanes taken in turn."""
         session = self.session
-        if session is None or self.closing or session.legs.get(self.side) is not self:
+        if session is None or self.closing:
+            return None
+        if self.watch:
+            if session.watch_legs.get(self.side) is not self:
+                return None
+            return session.watch_queues[self.side].pop()
+        if session.legs.get(self.side) is not self:
             return None
         for i in range(len(LANES)):
             lane = LANES[(self.next_lane + i) % len(LANES)]
@@ -459,8 +486,20 @@ class Relay:
             self.per_group.pop(leg.group, None)
 
     def shutdown(self) -> None:
+        for session in list(self.sessions.values()):
+            self._retire_watches(session, "shuttingDown", CLOSE_GOING_AWAY)
         for leg in list(self.legs):
             leg.end("shuttingDown", close_code=CLOSE_GOING_AWAY)
+
+    def _retire_watches(self, session: Session, code: str, close_code: int = CLOSE_NORMAL) -> None:
+        # Remove ownership before calling end(): detach may run synchronously.
+        for side in relaygrant.LEGS:
+            watch = session.watch_legs[side]
+            session.watch_legs[side] = None
+            session.clear_watch_side(side)
+            if watch is not None:
+                watch.session = None
+                watch.end(code, close_code)
 
     def detach(self, leg: Leg) -> None:
         """Forget a connection's part in the relay. A joined leg leaves its
@@ -472,8 +511,20 @@ class Relay:
         self.waiting.pop(leg, None)
         session = leg.session
         leg.session = None
-        if session is None or session.ended or session.legs.get(leg.side) is not leg:
+        if session is None or session.ended:
             return
+        if leg.watch:
+            if session.watch_legs.get(leg.side) is not leg:
+                return
+            session.watch_legs[leg.side] = None
+            session.clear_watch_side(leg.side)
+            other_watch = session.watch_legs[other_side(leg.side)]
+            if other_watch is not None:
+                other_watch.send_control(bytes([TAG_PEER, 0]))
+            return
+        if session.legs.get(leg.side) is not leg:
+            return
+        self._retire_watches(session, "peerGone")
         session.legs[leg.side] = None
         session.clear_side(leg.side)
         log.info("relay session %s: %s leg left", short_session(session.sid), LEG_NAMES[leg.side])
@@ -500,6 +551,9 @@ class Relay:
         if tag == 0 or tag > DATA_TAG_MAX or len(frame) < 2:
             leg.end("protocolError")
             return
+        if leg.watch and (tag != TAG_WATCH or len(frame) > MAX_MESSAGE_BYTES):
+            leg.end("protocolError")
+            return
         self._forward(leg, tag, frame)
 
     def _forward(self, leg: Leg, tag: int, frame: Any) -> None:
@@ -507,6 +561,26 @@ class Relay:
         tag (above) and takes the length; the frame goes on as it came."""
         session = leg.session
         if session is None:
+            return
+        if leg.watch:
+            other_s = other_side(leg.side)
+            other = session.watch_legs[other_s]
+            if other is None or other.closing:
+                session.dropped_no_peer += 1
+                return
+            size = len(frame)
+            now = self.clock.now_ms()
+            if not session.watch_buckets[leg.side].allow(size, now):
+                session.dropped_rate += 1
+                return
+            if not session.buckets[(leg.side, TAG_CONTROL)].allow(size, now):
+                session.dropped_rate += 1
+                return
+            session.dropped_queue += session.watch_queues[other_s].push(frame)
+            other.wake.set()
+            session.forwarded_bytes += size
+            session.forwarded_frames += 1
+            self.data_use.add(size)
             return
         if tag not in LANES:
             session.dropped_unknown += 1
@@ -535,12 +609,43 @@ class Relay:
             token = token_bytes.decode("ascii")
         except UnicodeDecodeError:
             token = ""
-        grant = relaygrant.verify(self.config.relay_secret or b"", token)
+        secret = self.config.relay_secret or b""
+        grant = relaygrant.verify(secret, token)
+        if grant is None:
+            grant = relaygrant.verify_watch(secret, token)
         if grant is None:
             leg.end("badToken")
             return
         now_wall = self.clock.wall_seconds()
         session = self.sessions.get(grant.session)
+        if grant.purpose == relaygrant.PURPOSE_WATCH:
+            if session is None or session.ended or any(
+                session.legs[side] is None or session.legs[side].closing for side in relaygrant.LEGS
+            ):
+                leg.end("peerGone")
+                return
+            if session.station != grant.station or session.expires != grant.expires:
+                leg.end("badToken")
+                return
+            side = grant.leg
+            previous = session.watch_legs[side]
+            if previous is not None and previous is not leg:
+                session.watch_legs[side] = None
+                session.clear_watch_side(side)
+                previous.session = None
+                previous.end("replaced")
+            leg.cancel_timer()
+            self.waiting.pop(leg, None)
+            leg.joined = True
+            leg.watch = True
+            leg.session = session
+            leg.side = side
+            session.watch_legs[side] = leg
+            other = session.watch_legs[other_side(side)]
+            leg.send_control(bytes([TAG_READY, FRAME_VERSION, 1 if other is not None else 0]))
+            if other is not None:
+                other.send_control(bytes([TAG_PEER, 1]))
+            return
         if session is None:
             self._prune_spent(now_wall)
             if grant.session in self.spent:
@@ -565,6 +670,7 @@ class Relay:
         side = grant.leg
         previous = session.legs[side]
         if previous is not None and previous is not leg:
+            self._retire_watches(session, "replaced")
             # A leg that joins again while its older connection still looks
             # alive (a reset the relay has not seen yet) takes its place.
             previous.session = None
@@ -630,6 +736,7 @@ class Relay:
         if session.ended:
             return
         session.ended = True
+        self._retire_watches(session, code)
         self._stop_idle(session)
         for side in relaygrant.LEGS:
             timer = session.away[side]

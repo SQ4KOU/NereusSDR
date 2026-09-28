@@ -494,6 +494,21 @@ bool decode(Direction direction, const QByteArray& wire, Message* out, QString* 
     if (!readFields(direction, kind, object, &message, why)) {
         return false;
     }
+    // Section 12.9: validate recognized optional extensions strictly; unknown
+    // keys retain version-1 behavior. Zero/empty in Message means absent.
+    Reader optional(object, why);
+    if ((kind == Kind::Hello || kind == Kind::Register || kind == Kind::Introduce)
+        && object.contains(QStringLiteral("watchRelayVersion"))) {
+        qint64 version = 0;
+        if (!optional.whole("watchRelayVersion", 1, 65535, &version)) {
+            return false;
+        }
+        message.watchRelayVersion = static_cast<int>(version);
+    }
+    if (kind == Kind::RelayGrant && object.contains(QStringLiteral("watchToken"))
+        && !optional.relayToken("watchToken", &message.watchToken)) {
+        return false;
+    }
     if (out != nullptr) {
         *out = message;
     }
@@ -719,6 +734,20 @@ QByteArray encode(Direction direction, const Message& message)
         break;
     case Kind::Unknown:
         return {};
+    }
+    if ((message.kind == Kind::Hello || message.kind == Kind::Register
+         || message.kind == Kind::Introduce) && message.watchRelayVersion != 0) {
+        if (message.watchRelayVersion < 1 || message.watchRelayVersion > 65535) {
+            return {};
+        }
+        object.insert(QStringLiteral("watchRelayVersion"), message.watchRelayVersion);
+    }
+    if (message.kind == Kind::RelayGrant && !message.watchToken.isEmpty()) {
+        if (!fits(message.watchToken, 1, kMaxRelayTokenBytes)
+            || !isRelayToken(message.watchToken)) {
+            return {};
+        }
+        object.insert(QStringLiteral("watchToken"), message.watchToken);
     }
     QByteArray wire = QJsonDocument(object).toJson(QJsonDocument::Compact);
     // Section 2, the sender's rule: the whole message as sent. The

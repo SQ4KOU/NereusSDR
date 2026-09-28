@@ -76,6 +76,7 @@ public:
     /// Section 12.3's tags.
     static constexpr quint8 kTagControl = 0x01;
     static constexpr quint8 kTagMedia = 0x02;
+    static constexpr quint8 kTagWatch = 0x03;
     static constexpr quint8 kTagJoin = 0x80;
     static constexpr quint8 kTagReady = 0x81;
     static constexpr quint8 kTagPeer = 0x82;
@@ -86,6 +87,8 @@ public:
     /// relay's own).
     static constexpr int kQueueFrames = 64;
     static constexpr int kQueueBytes = 24576;
+    static constexpr int kWatchQueueFrames = 16;
+    static constexpr int kWatchQueueBytes = 8192;
     /// Written only while less than this waits in the socket (the relay's
     /// write limit), so the queues, not the socket, hold the backlog.
     static constexpr int kWriteLimitBytes = 8192;
@@ -115,6 +118,9 @@ public:
     /// connection that may use it), deleted on its thread's event loop.
     /// Null when the lanes cannot be bound.
     static std::shared_ptr<RelayLeg> create();
+    /// A separate watch-purpose socket and one loopback ICE lane. Its
+    /// control-lane candidate carries only tag-3 datagrams.
+    static std::shared_ptr<RelayLeg> createWatch();
     /// The factory for IceConfiguration::setCandidateSourceFactory: each
     /// call a new source on `leg`.
     static IceConfiguration::CandidateSourceFactory factoryFor(std::shared_ptr<RelayLeg> leg);
@@ -181,6 +187,8 @@ signals:
     void ended(const QString& code, const QString& words);
 
 private:
+    enum class Purpose { Primary, Watch };
+    explicit RelayLeg(Purpose purpose);
     struct Lane {
         QUdpSocket* socket = nullptr;
         QHostAddress agentAddress;
@@ -218,6 +226,7 @@ private:
     void dropSocket();
 
     std::array<Lane, 2> m_lanes;
+    Purpose m_purpose = Purpose::Primary;
     QHash<QByteArray, Route> m_routes;
     bool m_mediaRouted = false;
     bool m_mediaModeChosen = false;

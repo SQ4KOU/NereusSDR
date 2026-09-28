@@ -7741,6 +7741,7 @@ nereus_add_test(tst_slice_flag_presentation_lifetime)
 # that a restart does not accumulate slices from the previous run.
 nereus_add_test(tst_daemon_app)
 nereus_add_test(tst_station_host fakes/LoopbackTransport.cpp)
+nereus_add_test(tst_station_handover EXTRA_LABELS session)
 nereus_add_test(tst_desktop_station_controller)
 nereus_add_test(tst_receive_layout_store)
 nereus_add_test(tst_receive_layout_hydration)
@@ -7924,6 +7925,7 @@ nereus_add_test(tst_remote_keying
 # injected clock; and the watchdog on each path that exists, severed with
 # a key on (real time).
 nereus_add_test(tst_remote_tx_watchdog EXTRA_LABELS session)
+nereus_add_test(tst_tx_watch_server EXTRA_LABELS session)
 nereus_add_test(tst_starvation_policy EXTRA_LABELS session)
 nereus_add_test(tst_tx_link_loss_each_path
     fakes/LoopbackTransport.cpp
@@ -8111,6 +8113,9 @@ nereus_add_test(tst_station_telemetry
 nereus_add_test(tst_session_transport_telemetry
     EXTRA_LABELS session)
 
+nereus_add_test(tst_tx_watch_client EXTRA_LABELS session)
+nereus_add_test(tst_watch_relay_context EXTRA_LABELS session)
+nereus_add_test(tst_station_tx_watch_direct EXTRA_LABELS session)
 nereus_add_test(tst_station_session
     fakes/LoopbackTransport.cpp)
 # R-R3-49 (parity Task 1): a receive-only Core takes a transmit setting off

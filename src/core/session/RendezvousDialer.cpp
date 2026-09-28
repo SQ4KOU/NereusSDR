@@ -141,6 +141,10 @@ void RendezvousDialer::dial(const QList<QUrl>& servers, const QString& stationId
         // Task 29 step 2b: the leg opens at once (section 12.1).
         const std::optional<RendezvousWire::RelayGrant> grant = m_client->relayGrant();
         if (m_leg && grant) {
+            if (m_transport && !grant->watchToken.isEmpty()) {
+                m_transport->setWatchRelayGrant(
+                    {QUrl(grant->url), grant->watchToken, grant->expires, m_leg});
+            }
             m_leg->open(QUrl(grant->url), grant->token);
         }
     });

@@ -531,6 +531,93 @@ private slots:
         source->stop();
     }
 
+    void watchUsesItsOwnSocketAndOnlyTagThree()
+    {
+        RelayPlayer relay;
+        auto primary = RelayLeg::create();
+        auto watch = RelayLeg::createWatch();
+        QVERIFY(primary);
+        QVERIFY(watch);
+        QVERIFY(primary->lanePort(1) != watch->lanePort(1));
+        QCOMPARE(watch->lanePort(2), quint16(0));
+        QVERIFY(!watch->sourceFor(IceConfiguration::kMediaLane));
+        QVERIFY(!watch->sourceFor(IceConfiguration::kMediaLane,
+                                  QStringLiteral("11111111-1111-4111-8111-111111111111"), true));
+        QVERIFY(!watch->sourceFor(IceConfiguration::kControlLane, {}, true));
+        QVERIFY(!watch->sourceFor(IceConfiguration::kControlLane,
+                                  QStringLiteral("11111111-1111-4111-8111-111111111111")));
+        auto source = watch->sourceFor(IceConfiguration::kControlLane);
+        QVERIFY(source);
+        QString candidate;
+        source->start([&candidate](const QString& line) { candidate = line; });
+        QVERIFY(candidate.contains(QString::number(watch->lanePort(1))));
+
+        QUdpSocket primaryAgent;
+        QUdpSocket watchAgent;
+        QVERIFY(primaryAgent.bind(QHostAddress::LocalHost, 0));
+        QVERIFY(watchAgent.bind(QHostAddress::LocalHost, 0));
+        primary->setAgentForTest(1, QHostAddress::LocalHost, primaryAgent.localPort());
+        watch->setAgentForTest(1, QHostAddress::LocalHost, watchAgent.localPort());
+        primary->open(relay.url(), QStringLiteral("primary-secret"));
+        auto first = relay.waitForConnection();
+        QVERIFY(first);
+        watch->open(relay.url(), QStringLiteral("watch-secret"));
+        auto second = relay.waitForConnection();
+        QVERIFY(second);
+        QTRY_VERIFY(!first->received.isEmpty() && !second->received.isEmpty());
+        QCOMPARE(first->received.first(), QByteArray("\x80primary-secret", 15));
+        QCOMPARE(second->received.first(), QByteArray("\x80watch-secret", 13));
+
+        primaryAgent.writeDatagram("control", QHostAddress::LocalHost, primary->lanePort(1));
+        watchAgent.writeDatagram("heartbeat", QHostAddress::LocalHost, watch->lanePort(1));
+        QTRY_VERIFY(first->received.contains(QByteArray(1, '\x01') + "control"));
+        QTRY_VERIFY(second->received.contains(QByteArray("\x03heartbeat", 10)));
+        QCOMPARE(first->received.size(), 2);
+        QCOMPARE(second->received.size(), 2);
+
+        first->socket->sendBinaryMessage(QByteArray("\x03reserved", 9));
+        second->socket->sendBinaryMessage(QByteArray(1, '\x01') + "control");
+        second->socket->sendBinaryMessage(QByteArray("\x02media", 6));
+        QTRY_COMPARE(primary->droppedUnknownTag(), quint64(1));
+        QTRY_COMPARE(watch->droppedUnknownTag(), quint64(2));
+        QVERIFY(!primaryAgent.hasPendingDatagrams());
+        QVERIFY(!watchAgent.hasPendingDatagrams());
+
+        second->socket->sendBinaryMessage(QByteArray("\x03response", 9));
+        QTRY_VERIFY(watchAgent.hasPendingDatagrams());
+        QCOMPARE(watchAgent.receiveDatagram().data(), QByteArray("response"));
+        QVERIFY(!primaryAgent.hasPendingDatagrams());
+        second->socket->sendBinaryMessage(QByteArray("\x83replaced", 9));
+        second->socket->close();
+        QTRY_COMPARE(watch->state(), RelayLeg::State::Ended);
+        QCOMPARE(primary->state(), RelayLeg::State::Connecting);
+        primaryAgent.writeDatagram("still-live", QHostAddress::LocalHost, primary->lanePort(1));
+        QTRY_VERIFY(first->received.contains(QByteArray("\x01still-live", 11)));
+        source->stop();
+    }
+
+    void watchQueueHasItsOwnFrameAndByteBounds()
+    {
+        QTcpServer silent;
+        QVERIFY(silent.listen(QHostAddress::LocalHost));
+        auto watch = RelayLeg::createWatch();
+        QVERIFY(watch);
+        watch->open(QUrl(QStringLiteral("ws://127.0.0.1:%1/v1/relay").arg(silent.serverPort())),
+                    QStringLiteral("watch-secret"));
+        QTRY_VERIFY(silent.hasPendingConnections());
+        QUdpSocket agent;
+        QVERIFY(agent.bind(QHostAddress::LocalHost, 0));
+        for (int i = 0; i < RelayLeg::kWatchQueueFrames + 4; ++i) {
+            agent.writeDatagram(QByteArray(20, 'x'), QHostAddress::LocalHost, watch->lanePort(1));
+        }
+        QTRY_COMPARE(watch->droppedQueueFull(), quint64(4));
+        for (int i = 0; i < 6; ++i) {
+            agent.writeDatagram(QByteArray(1500, 'y'), QHostAddress::LocalHost, watch->lanePort(1));
+        }
+        QTRY_COMPARE(watch->droppedQueueFull(), quint64(21));
+        QCOMPARE(watch->datagramsSent(), quint64(0));
+    }
+
     void aLocalConnectProxyCarriesTheWebRelayLeg()
     {
         RelayPlayer relay;

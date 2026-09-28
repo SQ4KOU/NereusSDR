@@ -1229,6 +1229,7 @@ set(CORE_SOURCES
     # call further down).
     src/core/daemon/DaemonApp.cpp
     src/core/station/StationHost.cpp
+    src/core/station/StationHandover.cpp
     # iPhone app Task 17 (R-IOS-08): the Core's read-only status page, its
     # owner-only console socket and the console commands it answers.
     src/core/daemon/StationStatusPage.cpp
@@ -1343,6 +1344,7 @@ set(CORE_SOURCES
     src/core/session/StationCapabilities.cpp
     src/core/session/SettingsHygieneWire.cpp
     src/core/session/StationServer.cpp
+    src/core/session/TxWatchServer.cpp
     src/core/session/StationOpeningGate.cpp
     src/core/session/StationReceivers.cpp
     src/core/session/StationSharedSettings.cpp
@@ -1357,6 +1359,7 @@ set(CORE_SOURCES
     # nereus_apply_core_deps().
     src/core/session/DnsSdAdvertiser.cpp
     src/core/session/StationClient.cpp
+    src/core/session/TxWatchClient.cpp
     # R3 media transport, signalling, display, spectrum, and Opus building
     # blocks. IMediaTransport carries Q_OBJECT and is listed so AUTOMOC emits
     # its signal metadata.

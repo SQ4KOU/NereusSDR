@@ -8,6 +8,7 @@
 #include "core/audio/RealtimeAudioPriority.h"
 #include "core/RadioConnection.h"
 #include "core/mmio/ExternalVariableEngine.h"
+#include "core/station/StationHandover.h"
 
 // Generated into the build tree by cmake/NereusBuildTag.cmake, once per
 // build, so NEREUSSDR_BUILD_TAG names the commit actually being compiled
@@ -26,6 +27,8 @@
 #include <csignal>
 #include <QCommandLineParser>
 #include <QIcon>
+#include <QMessageBox>
+#include <QPushButton>
 #include <QStyleFactory>
 #include <QFile>
 #include <QStandardPaths>
@@ -252,6 +255,22 @@ int main(int argc, char* argv[])
     // task-9-report.md); this is now the first of two call sites.
     qRegisterMetaType<NereusSDR::RadioConnectionError>();
     qRegisterMetaType<NereusSDR::AudioDeviceConfig>();
+
+    // The raw pre-QApplication scale read above is read-only. All CoreInit,
+    // settings migrations, logs, identity and later GUI writers run only
+    // while this process owns the selected profile.
+    NereusSDR::StationHandover ownership(activeProfile);
+    QString handoverError;
+    while (!ownership.reclaimFromBackground(15000, &handoverError)) {
+        QMessageBox handover(QMessageBox::Warning, QStringLiteral("NereusSDR"),
+            QStringLiteral("NereusSDR could not take ownership of this station profile."));
+        handover.setInformativeText(handoverError);
+        QPushButton* const retry = handover.addButton(QStringLiteral("Retry"),
+                                                       QMessageBox::AcceptRole);
+        handover.addButton(QStringLiteral("Quit"), QMessageBox::RejectRole);
+        handover.exec();
+        if (handover.clickedButton() != retry) { return 1; }
+    }
 
     // Shared startup sequence (R1 Task 8): loads AppSettings, applies every
     // one-shot settings-schema migration, restores LogManager's category

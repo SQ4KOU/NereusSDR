@@ -81,7 +81,7 @@ bool StationControlCommands::isCommand(const QString& word)
 {
     static const QStringList words{QStringLiteral("status"), QStringLiteral("pairing"),
                                    QStringLiteral("devices"), QStringLiteral("token"),
-                                   QStringLiteral("reset")};
+                                   QStringLiteral("reset"), QStringLiteral("release")};
     return words.contains(word);
 }
 
@@ -97,6 +97,7 @@ QString StationControlCommands::usage()
         "  nereusd devices revoke <id>\n"
         "  nereusd token retire\n"
         "  nereusd reset --unclaimed --yes\n"
+        "  nereusd release\n"
         "On a packaged Core, run each with sudo and nothing else, for example sudo nereusd "
         "status. For a Core you started yourself, run each from the same account with the "
         "same --config and --profile it was started with.");
@@ -150,6 +151,10 @@ StationControlReply StationControlCommands::execute(const QStringList& args) con
     }
     if (first == QLatin1String("reset") && words.size() == 1) {
         return reset(unclaimed, yes);
+    }
+    if (first == QLatin1String("release") && words.size() == 1) {
+        return {false, QStringLiteral("This Core cannot hand back the radio through this "
+                                      "control socket.")};
     }
     return {false, QStringLiteral("Unknown command.\n") + usage()};
 }

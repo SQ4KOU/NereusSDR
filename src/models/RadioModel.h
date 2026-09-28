@@ -5153,6 +5153,7 @@ signals:
 
 private slots:
     void onConnectionStateChanged(NereusSDR::ConnectionState state);
+    void noteOfflineReceiverPropertyEdit();
 
     // ── #202 deep-fix: Audio.RadioVolume setter analogue ─────────────────────
     //
@@ -5624,6 +5625,13 @@ public:
     /// Core's session server changed (a device's saved slices).
     void requestSettingsSave() { scheduleSettingsSave(); }
     QString settingsSaveError() const { return m_settingsSaveError; }
+    // Release preflight: prove that the live receiver layout was staged and
+    // committed before a handover may destroy this model. Ordinary periodic
+    // saves retain their existing retry behavior.
+    bool saveForStationHandover(QString* error);
+    // Daemon startup calls this after its initial receiver seed, immediately
+    // before station ingress can mutate a pending/protected layout.
+    void beginStationHandoverEditTracking();
     void applyStationSettingsSaveError(const QString& reason);
     // R-R3-34: seed a validated local layout before any radio/DSP resources
     // exist. Preserves shared QObject identities, descriptor order and IDs.
@@ -6566,6 +6574,8 @@ private:
     // Settings save coalescing
     bool m_settingsSaveScheduled{false};
     bool m_receiveLayoutHydrating{false};
+    bool m_stationHandoverTrackSuppressedReceiverEdits{false};
+    bool m_stationHandoverSuppressedReceiverEdits{false};
     bool m_receiveLayoutPendingAdmission{false};
     bool m_receiveLayoutManaged{false};
     bool m_receiveLayoutOverridesCount{false};

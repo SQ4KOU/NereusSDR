@@ -1158,6 +1158,136 @@ private slots:
         QVERIFY2(QFile::exists(kSuite + QStringLiteral("/manifest.json")), qPrintable(kSuite));
     }
 
+    void watchRelayNegotiation_data()
+    {
+        QTest::addColumn<bool>("stationRole");
+        QTest::addColumn<bool>("enabled");
+        QTest::addColumn<int>("serviceVersion");
+        QTest::addColumn<int>("watchVersion");
+        QTest::addColumn<bool>("expected");
+        for (bool station : {false, true}) {
+            const QByteArray prefix = station ? "station-" : "client-";
+            QTest::newRow((prefix + "default-off").constData()) << station << false << 2 << 1 << false;
+            QTest::newRow((prefix + "old-service").constData()) << station << true << 1 << 0 << false;
+            QTest::newRow((prefix + "wrong-envelope").constData()) << station << true << 1 << 1 << false;
+            QTest::newRow((prefix + "future-watch").constData()) << station << true << 2 << 2 << false;
+            QTest::newRow((prefix + "negotiated").constData()) << station << true << 2 << 1 << true;
+        }
+    }
+
+    void watchRelayNegotiation()
+    {
+        QFETCH(bool, stationRole);
+        QFETCH(bool, enabled);
+        QFETCH(int, serviceVersion);
+        QFETCH(int, watchVersion);
+        QFETCH(bool, expected);
+        ServicePlayer player;
+        auto key = makeKey();
+        RendezvousClient endpoint;
+        endpoint.setServers({player.url()});
+        endpoint.setWatchRelayEnabled(enabled);
+        if (stationRole) {
+            endpoint.registerStation(key->spki(),
+                [key](const QByteArray& value) { return key->sign(value); },
+                [](const QByteArray&) { return QByteArray(); });
+        } else {
+            endpoint.introduce(Wire::rendezvousId(makeKey()->spki()), key->spki(),
+                [key](const QByteArray& value) { return key->sign(value); }, "offer");
+        }
+        QWebSocket* service = player.waitForConnection();
+        QVERIFY(service);
+        QJsonObject hello{{"type", "hello"}, {"version", serviceVersion},
+                          {"nonce", b64(randomBytes(32))}, {"stun", QJsonArray()}};
+        if (watchVersion) { hello.insert("watchRelayVersion", watchVersion); }
+        service->sendTextMessage(compact(hello));
+        const auto request = player.waitForMessage(service);
+        QVERIFY(request.has_value());
+        const auto sent = QJsonDocument::fromJson(request->toUtf8()).object();
+        QCOMPARE(sent.contains("watchRelayVersion"), expected);
+        if (expected) { QCOMPARE(sent["watchRelayVersion"].toInt(), 1); }
+        if (!stationRole) {
+            QSignalSpy granted(&endpoint, &RendezvousClient::relayGrantReceived);
+            service->sendTextMessage(compact(QJsonObject{
+                {"type", "relay.grant"}, {"url", "wss://example.invalid/relay"},
+                {"token", "primary"}, {"watchToken", "watch"}, {"expires", 1800000120}}));
+            QTRY_COMPARE(granted.size(), 1);
+            QVERIFY(endpoint.relayGrant());
+            QCOMPARE(endpoint.relayGrant()->token, QStringLiteral("primary"));
+            QCOMPARE(endpoint.relayGrant()->watchToken, expected ? QStringLiteral("watch") : QString());
+        }
+        endpoint.stop();
+        QVERIFY(!endpoint.relayGrant());
+        // A subsequent old-service connection must not inherit negotiation.
+        if (stationRole) {
+            endpoint.registerStation(key->spki(),
+                [key](const QByteArray& value) { return key->sign(value); },
+                [](const QByteArray&) { return QByteArray(); });
+        } else {
+            endpoint.connectToService();
+        }
+        QWebSocket* next = player.waitForConnection();
+        QVERIFY(next);
+        next->sendTextMessage(compact(QJsonObject{{"type", "hello"}, {"version", 1},
+            {"nonce", b64(randomBytes(32))}, {"stun", QJsonArray()}}));
+        if (!stationRole) {
+            QTRY_VERIFY(endpoint.isConnected());
+            endpoint.introduce(Wire::rendezvousId(makeKey()->spki()), key->spki(),
+                [key](const QByteArray& value) { return key->sign(value); }, "offer");
+        }
+        const auto nextRequest = player.waitForMessage(next);
+        QVERIFY(nextRequest.has_value());
+        QVERIFY(!QJsonDocument::fromJson(nextRequest->toUtf8()).object().contains("watchRelayVersion"));
+        endpoint.stop();
+    }
+
+    void watchGrantOptionalWireFields()
+    {
+        const auto roundTrip = [](Wire::Direction direction, const QJsonObject& input) {
+            Wire::Message decoded;
+            if (!Wire::decode(direction, compact(input).toUtf8(), &decoded)) {
+                return QJsonObject{};
+            }
+            return QJsonDocument::fromJson(Wire::encode(direction, decoded)).object();
+        };
+        const auto serviceClient = Wire::Direction::ServiceToClient;
+        QJsonObject hello{{"type", "hello"}, {"version", 2},
+                          {"nonce", b64(randomBytes(32))}, {"stun", QJsonArray()},
+                          {"watchRelayVersion", 1}};
+        QCOMPARE(roundTrip(serviceClient, hello), hello);
+        hello.remove("watchRelayVersion");
+        QCOMPARE(roundTrip(serviceClient, hello), hello);
+        const auto key = makeKey();
+        QJsonObject registration{{"type", "register"},
+                                 {"id", Wire::rendezvousId(key->spki())},
+                                 {"publicKey", b64(key->spki())}, {"watchRelayVersion", 1}};
+        QCOMPARE(roundTrip(Wire::Direction::StationToService, registration), registration);
+        QJsonObject introduction{{"type", "introduce"}, {"id", registration["id"]},
+                                 {"device", b64(randomBytes(32))},
+                                 {"deviceSignature", b64(randomBytes(64))},
+                                 {"offer", "offer"}, {"watchRelayVersion", 1}};
+        QCOMPARE(roundTrip(Wire::Direction::ClientToService, introduction), introduction);
+        QJsonObject grant{{"type", "relay.grant"}, {"url", "wss://example.invalid/relay"},
+                          {"token", "primary"}, {"expires", 1800000120},
+                          {"watchToken", "watch"}};
+        QCOMPARE(roundTrip(serviceClient, grant), grant);
+        grant.insert("from", b64(randomBytes(16)));
+        QCOMPARE(roundTrip(Wire::Direction::ServiceToStation, grant), grant);
+        for (const QJsonValue& bad : {QJsonValue(true), QJsonValue(0), QJsonValue(65536),
+                                     QJsonValue(1.5), QJsonValue("1"), QJsonValue()}) {
+            hello.insert("watchRelayVersion", bad);
+            Wire::Message decoded;
+            QVERIFY(!Wire::decode(serviceClient, compact(hello).toUtf8(), &decoded));
+        }
+        grant.remove("from");
+        for (const QJsonValue& bad : {QJsonValue(true), QJsonValue(""),
+                                     QJsonValue("not+base64"), QJsonValue()}) {
+            grant.insert("watchToken", bad);
+            Wire::Message decoded;
+            QVERIFY(!Wire::decode(serviceClient, compact(grant).toUtf8(), &decoded));
+        }
+    }
+
     // ── Crypto vectors (section 10.2) ───────────────────────────────────
 
     void base64urlVectors()

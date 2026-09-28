@@ -103,6 +103,8 @@ public:
     /// Shown when a press finds no link to the Core.
     static constexpr const char* kNoLinkReason =
         "This computer is not connected to the Core, so it cannot transmit.";
+    static constexpr const char* kReleaseFailedReason =
+        "The transmit release could not be confirmed. Reconnect to the Core before transmitting again.";
 
     explicit RemoteTransmitClient(Sender sender, QObject* parent = nullptr);
 
@@ -113,9 +115,16 @@ public:
     static constexpr int kKeepaliveIntervalMs = 100;
     /// The session's tx.keepalive (sent once, never three times).
     void setSessionKeepalive(KeepaliveSender sender) { m_sessionKeepalive = std::move(sender); }
-    /// The media connection's "tx" data channel; tried first. Unset, or
+    /// The media connection's "tx" data channel; tried first while no
+    /// release waits for its primary-session delivery barrier. Unset, or
     /// false (no channel open), the session carries it.
     void setChannelKeepalive(KeepaliveSender sender) { m_channelKeepalive = std::move(sender); }
+    /// Independent watch socket: one copy of this timer's sequence/epoch.
+    /// Its result never replaces the existing channel-or-primary copy.
+    void setAuxiliaryKeepalive(KeepaliveSender sender)
+    {
+        m_auxiliaryKeepalive = std::move(sender);
+    }
     /// The Core's VOX is on (the window's mirrored transmit.voxEnabled).
     void setVoxArmed(bool armed);
     /// Keepalives are going out now.
@@ -126,6 +135,7 @@ public:
     /// came up.
     quint64 channelKeepalivesSent() const { return m_channelKeepalives; }
     quint64 sessionKeepalivesSent() const { return m_sessionKeepalives; }
+    quint64 auxiliaryKeepalivesSent() const { return m_auxiliaryKeepalives; }
     /// One keepalive now (the timer's; public for tests).
     void keepaliveTick();
 
@@ -193,8 +203,14 @@ private:
         bool sawTransmitting{false};
     };
     enum class Kind { ScreenKey, ProgramKey, Release, Tune, TwoTone };
+    struct Pending {
+        Kind kind;
+        QByteArray verb;
+        bool releaseIntent;
+    };
 
-    quint32 send(const QByteArray& verb, const QList<MirrorUpdate>& arguments, Kind kind);
+    quint32 send(const QByteArray& verb, const QList<MirrorUpdate>& arguments, Kind kind,
+                 bool releaseIntent = false);
     void release(quint32 epoch);
     void reset();
     void publish();
@@ -206,17 +222,27 @@ private:
     Key m_program;
     std::function<void(const Answer&)> m_programAnswer;
     /// Commands still waiting for their first answer.
-    QHash<quint32, Kind> m_pending;
+    QHash<quint32, Pending> m_pending;
+    /// Every off with an assigned ID needs its own accepted Core result;
+    /// the ID alone does not prove the transport sent it. A failed or
+    /// refused off cannot be resolved by a different-mode off command.
+    quint32 m_pendingReleases{0};
+    quint32 m_releaseDispatches{0};
+    bool m_releaseFailureSticky{false};
+    bool m_releaseFailureNotified{false};
+    quint64 m_sessionGeneration{0};
     bool m_tuneAsked{false};
     // Task 37.
     bool m_twoToneAsked{false};
     bool m_voxArmed{false};
     KeepaliveSender m_sessionKeepalive;
     KeepaliveSender m_channelKeepalive;
+    KeepaliveSender m_auxiliaryKeepalive;
     QTimer m_keepaliveTimer;
     quint64 m_keepaliveSequence{0};
     quint64 m_channelKeepalives{0};
     quint64 m_sessionKeepalives{0};
+    quint64 m_auxiliaryKeepalives{0};
     void refreshKeepalive();
     /// The Core's `transmitting` as last heard.
     quint32 m_coreStopSerial{0};   // fix wave M7

@@ -368,6 +368,7 @@
 #include <QAbstractSocket>
 #include <QByteArray>
 #include <QDateTime>
+#include <QElapsedTimer>
 #include <QHash>
 #include <QList>
 #include <QObject>
@@ -408,6 +409,7 @@ class MediaTunnel;
 class RemoteDevicesState;
 class SettingsProxy;
 class TransmitState;
+class TxWatchClient;
 
 /// R-R3-21 / R-R3-23 / R-R3-38: how the last session ended, as far as it
 /// decides what a remote window offers next. Only an end that will not
@@ -1059,6 +1061,8 @@ public:
     /// accessors. A caller must not hold this across an event-loop turn:
     /// attachTransport() releases and deletes a superseded one.
     SessionTransport* transport() const;
+    /// The separate direct WSS transmit watch has received Core's attach ack.
+    bool directWatchReady() const;
 
     /// True when this attach either owes no certificate comparison (the
     /// non-TLS transport seam, or an explicit unpinned bench run) or has
@@ -1590,6 +1594,21 @@ private:
     /// Desktop remote transmit: owned (child).
     RemoteTransmitClient* m_remoteTransmit = nullptr;
     void refreshRemoteTransmit();
+    bool directWatchEligible() const;
+    void requestDirectWatchTicket();
+    void handleDirectWatchTicket(const SessionMessage& message);
+    void retireDirectWatch();
+    void retryDirectWatch(const QString& reason);
+    QPointer<TxWatchClient> m_directWatch;
+    QTimer* m_directWatchRetryTimer = nullptr;
+    QTimer* m_directWatchTicketTimer = nullptr;
+    QElapsedTimer m_directWatchClock;
+    qint64 m_lastDirectWatchRequestMs = -1000;
+    quint64 m_directWatchGeneration = 0;
+    quint32 m_directWatchTicketId = 0;
+    quint64 m_directWatchTicketGeneration = 0;
+    quint32 m_directWatchTicketSessionEpoch = 0;
+    bool m_directWatchDeclared = false;
 
     /// iPhone app Task 18: this computer's device key and name, the paired
     /// Core's identity fingerprint this client trusts (latched across

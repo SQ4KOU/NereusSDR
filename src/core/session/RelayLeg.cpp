@@ -104,6 +104,12 @@ RelayLeg::RelayLeg(QObject* parent)
     connect(m_connectTimer, &QTimer::timeout, this, &RelayLeg::connectNow);
 }
 
+RelayLeg::RelayLeg(Purpose purpose)
+    : RelayLeg(static_cast<QObject*>(nullptr))
+{
+    m_purpose = purpose;
+}
+
 RelayLeg::~RelayLeg()
 {
     m_state = State::Ended;
@@ -113,6 +119,19 @@ RelayLeg::~RelayLeg()
 std::shared_ptr<RelayLeg> RelayLeg::create()
 {
     auto* leg = new RelayLeg();
+    if (!leg->bindLanes()) {
+        delete leg;
+        return nullptr;
+    }
+    return std::shared_ptr<RelayLeg>(leg, [](RelayLeg* gone) {
+        gone->close();
+        gone->deleteLater();
+    });
+}
+
+std::shared_ptr<RelayLeg> RelayLeg::createWatch()
+{
+    auto* leg = new RelayLeg(Purpose::Watch);
     if (!leg->bindLanes()) {
         delete leg;
         return nullptr;
@@ -133,7 +152,8 @@ IceConfiguration::CandidateSourceFactory RelayLeg::factoryFor(std::shared_ptr<Re
 
 bool RelayLeg::bindLanes()
 {
-    for (size_t i = 0; i < m_lanes.size(); ++i) {
+    const size_t count = m_purpose == Purpose::Watch ? 1 : m_lanes.size();
+    for (size_t i = 0; i < count; ++i) {
         Lane& lane = m_lanes[i];
         if (lane.socket != nullptr) {
             continue;
@@ -154,7 +174,8 @@ bool RelayLeg::bindLanes()
 
 quint16 RelayLeg::lanePort(int lane) const
 {
-    if (lane < 1 || lane > static_cast<int>(m_lanes.size())) {
+    if (lane < 1 || lane > static_cast<int>(m_lanes.size())
+        || (m_purpose == Purpose::Watch && lane != kTagControl)) {
         return 0;
     }
     const Lane& entry = m_lanes[static_cast<size_t>(lane - 1)];
@@ -174,6 +195,10 @@ QString RelayLeg::candidateLine(int lane, quint16 port)
 std::shared_ptr<IceConfiguration::CandidateSource> RelayLeg::sourceFor(
     int lane, const QString& connectionId, bool routed)
 {
+    if (m_purpose == Purpose::Watch
+        && (lane != kTagControl || routed || !connectionId.isEmpty())) {
+        return nullptr;
+    }
     if (lane < 1 || lane > static_cast<int>(m_lanes.size())) {
         return nullptr;
     }
@@ -189,7 +214,7 @@ std::shared_ptr<IceConfiguration::CandidateSource> RelayLeg::sourceFor(
 
 quint64 RelayLeg::claimRoute(const QByteArray& id, quint16& port)
 {
-    if (id.size() != 16 || m_routes.contains(id) || m_routes.size() >= 3
+    if (m_purpose == Purpose::Watch || id.size() != 16 || m_routes.contains(id) || m_routes.size() >= 3
         || (m_mediaModeChosen && !m_mediaRouted)) {
         return 0;
     }
@@ -285,6 +310,9 @@ RelayLeg::Lane* RelayLeg::laneFor(int lane)
 
 quint64 RelayLeg::claimLane(int lane)
 {
+    if (m_purpose == Purpose::Watch && lane != kTagControl) {
+        return 0;
+    }
     Lane* entry = laneFor(lane);
     if (entry == nullptr || entry->claim != 0
         || (lane == kTagMedia && m_mediaModeChosen && m_mediaRouted)) {
@@ -315,6 +343,9 @@ void RelayLeg::releaseLane(int lane, quint64 claim)
 
 void RelayLeg::setAgentForTest(int lane, const QHostAddress& address, quint16 port)
 {
+    if (m_purpose == Purpose::Watch && lane != kTagControl) {
+        return;
+    }
     if (Lane* entry = laneFor(lane)) {
         entry->agentAddress = address;
         entry->agentPort = port;
@@ -481,7 +512,8 @@ void RelayLeg::onMessage(const QByteArray& message)
         return;
     }
     const auto tag = static_cast<quint8>(message.at(0));
-    if (tag == kTagControl || tag == kTagMedia) {
+    if ((m_purpose == Purpose::Primary && (tag == kTagControl || tag == kTagMedia))
+        || (m_purpose == Purpose::Watch && tag == kTagWatch)) {
         if (message.size() > kMaxDatagramBytes + 1) {
             ++m_droppedOversize;
             return;
@@ -502,7 +534,7 @@ void RelayLeg::onMessage(const QByteArray& message)
             ++m_delivered;
             return;
         }
-        Lane* lane = laneFor(tag);
+        Lane* lane = laneFor(tag == kTagWatch ? kTagControl : tag);
         if (payload.isEmpty() || payload.size() > kMaxDatagramBytes
             || lane == nullptr || lane->socket == nullptr) {
             if (tag == kTagMedia && m_mediaRouted) {
@@ -684,7 +716,7 @@ void RelayLeg::readLane(int lane)
         }
         QByteArray frame;
         frame.reserve(1 + payload.size());
-        frame.append(static_cast<char>(lane));
+        frame.append(static_cast<char>(m_purpose == Purpose::Watch ? kTagWatch : lane));
         frame.append(payload);
         enqueue(lane, frame);
     }
@@ -699,9 +731,11 @@ void RelayLeg::enqueue(int lane, const QByteArray& frame)
     }
     entry->queue.push_back(frame);
     entry->queuedBytes += static_cast<int>(frame.size());
-    // Bounded, the oldest dropped first (section 12.5).
-    while (static_cast<int>(entry->queue.size()) > kQueueFrames
-           || entry->queuedBytes > kQueueBytes) {
+    // Bounded, the oldest dropped first (sections 12.5 and 12.9).
+    const int frameLimit = m_purpose == Purpose::Watch ? kWatchQueueFrames : kQueueFrames;
+    const int byteLimit = m_purpose == Purpose::Watch ? kWatchQueueBytes : kQueueBytes;
+    while (static_cast<int>(entry->queue.size()) > frameLimit
+           || entry->queuedBytes > byteLimit) {
         entry->queuedBytes -= static_cast<int>(entry->queue.front().size());
         entry->queue.pop_front();
         ++m_droppedQueue;
