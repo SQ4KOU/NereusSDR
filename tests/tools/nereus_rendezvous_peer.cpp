@@ -128,6 +128,7 @@
 #include "core/session/RendezvousClient.h"
 #include "core/session/RendezvousWire.h"
 #include "core/session/StationClient.h"
+#include "core/session/TransmitStateFacade.h"
 #include "core/session/StationRendezvous.h"
 #include "core/session/StationServer.h"
 #include "core/session/media/DaemonMediaController.h"
@@ -503,6 +504,7 @@ int runCore(const QStringList& args)
         return 2;
     }
     if (args.contains(QStringLiteral("--media"))) {
+        const bool secondRx = args.contains(QStringLiteral("--second-rx"));
         model->setBoardForTest(HPSDRHW::Saturn);
         model->configureStreamPool(/*userDdcCount=*/5, /*maxSlices=*/5,
                                    /*defaultRateHz=*/192000);
@@ -510,13 +512,31 @@ int runCore(const QStringList& args)
         const int slice = model->addSlice();
         AudioEngine* engine = model->audioEngine();
         engine->setSliceStreaming(slice, true);
+        int listeningSlice = -1;
+        if (secondRx) {
+            listeningSlice = model->addSlice(QStringLiteral("harness-second-rx"));
+            const SliceModel* tx = model->sliceById(slice);
+            const SliceModel* rx = model->sliceById(listeningSlice);
+            if (!tx || !rx || tx->streamIndex() < 0 || rx->streamIndex() < 0
+                || tx->streamIndex() == rx->streamIndex()
+                || model->txBoundSlice() != tx) {
+                std::fputs("core: second RX did not get a distinct non-TX receiver\n", stderr);
+                return 2;
+            }
+            engine->setSliceStreaming(listeningSlice, true);
+            printLine({{QStringLiteral("event"), QStringLiteral("secondRxReady")},
+                       {QStringLiteral("txSlice"), slice},
+                       {QStringLiteral("txStream"), tx->streamIndex()},
+                       {QStringLiteral("listeningSlice"), listeningSlice},
+                       {QStringLiteral("listeningStream"), rx->streamIndex()}});
+        }
         server->setMediaEnabled(true);
         new DaemonMediaController(server, model, QCoreApplication::instance());
         // A 700 Hz tone in the Core's audio, 480 frames every 10 ms.
         auto* tone = new QTimer(QCoreApplication::instance());
         tone->setTimerType(Qt::PreciseTimer);
         auto frames = std::make_shared<qint64>(0);
-        QObject::connect(tone, &QTimer::timeout, engine, [engine, slice, frames] {
+        QObject::connect(tone, &QTimer::timeout, engine, [engine, slice, listeningSlice, frames] {
             constexpr int kFrames = 480;
             QVector<float> block(kFrames * 2);
             for (int frame = 0; frame < kFrames; ++frame) {
@@ -526,6 +546,16 @@ int runCore(const QStringList& args)
             }
             *frames += kFrames;
             engine->rxBlockReady(slice, block.constData(), kFrames);
+            if (listeningSlice >= 0) {
+                // The TX-bound slice is withdrawn during MOX. A distinct
+                // receiver supplies the actual remote-audio mix throughout.
+                for (int frame = 0; frame < kFrames; ++frame) {
+                    const double time = static_cast<double>(*frames - kFrames + frame) / 48000.0;
+                    const float value = static_cast<float>(0.25 * std::sin(2.0 * M_PI * 1100.0 * time));
+                    block[frame * 2] = block[frame * 2 + 1] = value;
+                }
+                engine->rxBlockReady(listeningSlice, block.constData(), kFrames);
+            }
         });
         tone->start(10);
         // Synthetic I/Q for the display, through RadioModel's own tap.
@@ -690,6 +720,42 @@ bool heardAudibleBlock(PacedAudioBus* bus, int& nextSample)
         }
     }
     return false;
+}
+
+struct KeyedAudibility {
+    int fullSeconds = 0;
+    int audibleSeconds = 0;
+    int audibleBlocks = 0;
+    int longestSilentMs = 0;
+};
+
+KeyedAudibility keyedAudibility(PacedAudioBus* bus, int startSample, int endSample)
+{
+    KeyedAudibility result;
+    if (!bus || endSample <= startSample) { return result; }
+    const QVector<float>& heard = bus->heard;
+    const int end = std::min(endSample, int(heard.size()));
+    int silentBlocks = 0;
+    int blocks = 0;
+    bool audibleThisSecond = false;
+    for (int sample = startSample; sample + 960 <= end; sample += 960) {
+        double energy = 0.0;
+        for (int frame = 0; frame < 480; ++frame) {
+            const double value = heard.at(sample + frame * 2);
+            energy += value * value;
+        }
+        const bool audible = energy / 480.0 >= 1e-6;
+        result.audibleBlocks += audible ? 1 : 0;
+        audibleThisSecond |= audible;
+        silentBlocks = audible ? 0 : silentBlocks + 1;
+        result.longestSilentMs = std::max(result.longestSilentMs, silentBlocks * 10);
+        if (++blocks % 100 == 0) {
+            ++result.fullSeconds;
+            result.audibleSeconds += audibleThisSecond ? 1 : 0;
+            audibleThisSecond = false;
+        }
+    }
+    return result;
 }
 
 // Plan Task 29: real media over a session, counting what decodes: a
@@ -864,6 +930,7 @@ int runSession(const QStringList& args)
     // media readiness (the transmit deadline's measurement).
     const int tuneMs = option(args, QStringLiteral("--tune-ms"), QStringLiteral("0")).toInt();
     const bool requireWatch = args.contains(QStringLiteral("--require-watch"));
+    const bool requireKeyedAudio = args.contains(QStringLiteral("--require-keyed-audio"));
     const int readyTimeoutMs = option(args, QStringLiteral("--ready-timeout-ms"),
                                       QStringLiteral("8000")).toInt();
     if (!schedule.isEmpty()) {
@@ -906,6 +973,7 @@ int runSession(const QStringList& args)
         qint64 readyAtMs = -1;
         qint64 watchReadyAtMs = -1;
         qint64 onAtMs = -1;
+        qint64 coreObservedOnAtMs = -1;
         qint64 offAtMs = -1;
         qint64 postAtMs = -1;
         quint64 audioBefore = 0;
@@ -915,6 +983,8 @@ int runSession(const QStringList& args)
         int displayAtOff = 0;
         int displayAfter = 0;
         int heardScanSample = 0;
+        int keyedStartSample = -1;
+        int keyedEndSample = -1;
         quint64 channelBefore = 0;
         quint64 channelAtOff = 0;
         quint64 sessionBefore = 0;
@@ -1006,7 +1076,8 @@ int runSession(const QStringList& args)
         watch->start();
     }
     const auto finish = [window, &clock, done, handshakes, rankBefore, moved, media, bus,
-                         follower, followIds, followRecovery, displayPresented, tuneWindow](
+                         follower, followIds, followRecovery, displayPresented, tuneWindow,
+                         requireKeyedAudio](
                             bool connected, const QString& reason) {
         if (*done) {
             return;
@@ -1091,6 +1162,15 @@ int runSession(const QStringList& args)
                 tuneWindow->watchReadyAtMs));
             result.insert(QStringLiteral("tuneKeyedMs"),
                           unkeyed ? static_cast<double>(tuneWindow->offAtMs - tuneWindow->onAtMs) : -1.0);
+            if (requireKeyedAudio) {
+                result.insert(QStringLiteral("tuneCoreObservedOnAtMs"),
+                              static_cast<double>(tuneWindow->coreObservedOnAtMs));
+                result.insert(QStringLiteral("tuneHeldAfterCoreObservedMs"),
+                              unkeyed && tuneWindow->coreObservedOnAtMs >= 0
+                                  ? static_cast<double>(tuneWindow->offAtMs
+                                                        - tuneWindow->coreObservedOnAtMs)
+                                  : -1.0);
+            }
             result.insert(QStringLiteral("tunePostWindowMs"),
                           postDone ? static_cast<double>(tuneWindow->postAtMs - tuneWindow->offAtMs) : -1.0);
             result.insert(QStringLiteral("tunePreAudioDecoded"),
@@ -1111,6 +1191,15 @@ int runSession(const QStringList& args)
             result.insert(QStringLiteral("tunePostAudio"), tuneWindow->postAudio);
             result.insert(QStringLiteral("tunePostDisplayReady"), tuneWindow->postDisplay);
             result.insert(QStringLiteral("tunePostHeard"), tuneWindow->postHeard);
+            if (requireKeyedAudio) {
+                const KeyedAudibility audible = keyedAudibility(
+                    bus, tuneWindow->keyedStartSample, tuneWindow->keyedEndSample);
+                result.insert(QStringLiteral("tuneKeyedAudioFullSeconds"), audible.fullSeconds);
+                result.insert(QStringLiteral("tuneKeyedAudioAudibleSeconds"), audible.audibleSeconds);
+                result.insert(QStringLiteral("tuneKeyedAudioAudibleBlocks"), audible.audibleBlocks);
+                result.insert(QStringLiteral("tuneKeyedAudioLongestSilentMs"),
+                              audible.longestSilentMs);
+            }
             result.insert(QStringLiteral("tuneKeyedChannelKeepalives"),
                           unkeyed ? static_cast<double>(tuneWindow->channelAtOff - tuneWindow->channelBefore) : 0.0);
             result.insert(QStringLiteral("tuneKeyedSessionKeepalives"),
@@ -1145,7 +1234,8 @@ int runSession(const QStringList& args)
     QObject::connect(window, &StationClient::handshakeComplete, window,
                      [window, model, finish, handshakes, rankBefore, moved, media, waitUpgradeMs,
                       mediaMs, followMs, tuneMs, follower, followRecovery, bus,
-                      displayPresented, tuneWindow, done, requireWatch, readyTimeoutMs, &clock] {
+                      displayPresented, tuneWindow, done, requireWatch, requireKeyedAudio,
+                      readyTimeoutMs, &clock] {
         ++*handshakes;
         if (*handshakes > 1) {
             return;
@@ -1193,8 +1283,9 @@ int runSession(const QStringList& args)
             readiness->setTimerType(Qt::PreciseTimer);
             const qint64 readyDeadlineMs = clock.elapsed() + readyTimeoutMs;
             QObject::connect(readiness, &QTimer::timeout, window,
-                             [window, readiness, readyDeadlineMs, tuneMs, finish, done,
-                              tuneWindow, bus, decodedAudio, displayed, requireWatch, &clock] {
+                             [window, model, readiness, readyDeadlineMs, tuneMs, finish, done,
+                              tuneWindow, bus, decodedAudio, displayed, requireWatch,
+                              requireKeyedAudio, &clock] {
                 if (*done) { readiness->stop(); return; }
                 const quint64 audio = decodedAudio();
                 const int display = displayed();
@@ -1227,16 +1318,20 @@ int runSession(const QStringList& args)
                                {QStringLiteral("displayPresented"), display},
                                {QStringLiteral("watchReady"), tuneWindow->watchReady}});
                     tuneWindow->onAtMs = clock.elapsed();
+                    if (bus != nullptr && !requireKeyedAudio) {
+                        tuneWindow->keyedStartSample = bus->heard.size();
+                    }
                     printLine({{QStringLiteral("event"), QStringLiteral("tune")},
                                {QStringLiteral("atEpochMs"), static_cast<double>(
                                     QDateTime::currentMSecsSinceEpoch())},
                                {QStringLiteral("on"), true}});
-                    transmit->setTune(true);
-                    QTimer::singleShot(tuneMs, Qt::PreciseTimer, window,
-                                       [window, finish, done, tuneWindow, bus,
-                                        decodedAudio, displayed, &clock] {
-                        if (*done) { return; }
+                    auto released = std::make_shared<bool>(false);
+                    const auto releaseTune = [window, finish, done, released, tuneWindow, bus,
+                                              decodedAudio, displayed, &clock](const QString& fault) {
+                        if (*done || *released) { return; }
+                        *released = true;
                         tuneWindow->offAtMs = clock.elapsed();
+                        if (bus != nullptr) { tuneWindow->keyedEndSample = bus->heard.size(); }
                         tuneWindow->watchReadyAtOff = window->transmitWatchReady();
                         tuneWindow->audioAtOff = decodedAudio();
                         tuneWindow->displayAtOff = displayed();
@@ -1255,7 +1350,7 @@ int runSession(const QStringList& args)
                                    {QStringLiteral("on"), false}});
                         QTimer::singleShot(5000, Qt::PreciseTimer, window,
                                            [finish, done, tuneWindow, bus,
-                                            decodedAudio, displayed, &clock] {
+                                            decodedAudio, displayed, fault, &clock] {
                             if (*done) { return; }
                             tuneWindow->postAtMs = clock.elapsed();
                             tuneWindow->audioAfter = decodedAudio();
@@ -1266,10 +1361,53 @@ int runSession(const QStringList& args)
                                 || heardAudibleBlock(bus, tuneWindow->heardScanSample);
                             const bool recovered = tuneWindow->postAudio
                                 && tuneWindow->postDisplay && tuneWindow->postHeard;
-                            finish(true, recovered ? QString()
-                                                   : QStringLiteral("Post-unkey media did not recover."));
+                            finish(true, !fault.isEmpty() ? fault
+                                          : recovered ? QString()
+                                                      : QStringLiteral("Post-unkey media did not recover."));
                         });
-                    });
+                    };
+                    if (requireKeyedAudio) {
+                        // txState is the authenticated Core-owned state mirror.
+                        // A command answer can precede its actual keyed state;
+                        // begin the hold only after both keyed and tuning rise.
+                        TransmitState* mirror = model->stationTransmitState();
+                        if (!mirror || window->capabilities().txStateVersion < 1
+                            || mirror->keyed()) {
+                            finish(true, QStringLiteral("Core transmit state unavailable before TUNE."));
+                            return;
+                        }
+                        auto observed = std::make_shared<bool>(false);
+                        const auto observeOn = [window, mirror, observed, tuneWindow,
+                                                releaseTune, bus, tuneMs, &clock] {
+                            if (*observed || !mirror->keyed() || !mirror->tuning()) { return; }
+                            *observed = true;
+                            tuneWindow->coreObservedOnAtMs = clock.elapsed();
+                            if (bus != nullptr) {
+                                tuneWindow->keyedStartSample = bus->heard.size();
+                            }
+                            printLine({{QStringLiteral("event"), QStringLiteral("tuneCoreObservedOn")},
+                                       {QStringLiteral("atEpochMs"), static_cast<double>(
+                                            QDateTime::currentMSecsSinceEpoch())}});
+                            QTimer::singleShot(tuneMs, Qt::PreciseTimer, window,
+                                               [releaseTune] { releaseTune({}); });
+                        };
+                        QObject::connect(mirror, &TransmitState::stateChanged, window, observeOn);
+                        // Even a lost state observation must end the logical
+                        // key. This bound is fixture cleanup, not a deadline
+                        // or production heartbeat change.
+                        QTimer::singleShot(tuneMs + 5000, Qt::PreciseTimer, window,
+                                           [released, releaseTune] {
+                            if (!*released) {
+                                releaseTune(QStringLiteral("Core TX-on state was not observed in time."));
+                            }
+                        });
+                        transmit->setTune(true);
+                        observeOn();
+                    } else {
+                        transmit->setTune(true);
+                        QTimer::singleShot(tuneMs, Qt::PreciseTimer, window,
+                                           [releaseTune] { releaseTune({}); });
+                    }
                     return;
                 }
                 if (clock.elapsed() >= readyDeadlineMs) {

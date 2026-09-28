@@ -466,7 +466,8 @@ EOF
     # This isolated fixture opts in only for the independent-watch acceptance
     # rows. Production's relay_watch_version default remains disabled.
     if [[ -z "$ONLY" || "$ONLY" == web-relay-deadline
-          || "$ONLY" == direct-wss-deadline ]]; then
+          || "$ONLY" == direct-wss-deadline
+          || "$ONLY" == web-relay-second-rx-deadline ]]; then
         printf 'relay_watch_version = 1\n' >> "$WORK/rendezvous.conf"
     fi
     ip netns exec h-rvsrv env PYTHONPATH="$SOURCE/rendezvous/server" \
@@ -1388,6 +1389,25 @@ if name.startswith('web-relay'):
     checks['separateWatchTrafficReachedCoreSocket'] = bool(
         set(client).isdisjoint(station) and client and station)
     checks['realMediaRelayTraffic'] = front.get('datagrams', {}).get('2', 0) > 0
+if name == 'web-relay-second-rx-deadline':
+    receivers = [e for e in core if e.get('event') == 'secondRxReady']
+    observed = [e for e in session if e.get('event') == 'tuneCoreObservedOn']
+    checks['distinctListeningReceiver'] = len(receivers) == 1 and (
+        receivers[0].get('txSlice') != receivers[0].get('listeningSlice')
+        and receivers[0].get('txStream') != receivers[0].get('listeningStream'))
+    checks['decodedAudioDuringKey'] = (
+        result.get('tuneKeyedAudioDecoded', 0) >= 500
+        and result.get('tuneAudioCounterReset') is False)
+    checks['heldAfterObservedCoreOn'] = (
+        len(observed) == 1 and len(tune) == 2
+        and tune[0].get('atEpochMs', 0) <= observed[0].get('atEpochMs', -1)
+        < tune[1].get('atEpochMs', 0)
+        and result.get('tuneHeldAfterCoreObservedMs', -1) >= 59900)
+    checks['audibleAudioThroughoutKey'] = (
+        result.get('tuneKeyedAudioFullSeconds', 0) >= 59
+        and result.get('tuneKeyedAudioAudibleSeconds')
+            == result.get('tuneKeyedAudioFullSeconds')
+        and result.get('tuneKeyedAudioLongestSilentMs', 100000) <= 1000)
 
 summary = {
     'scenario': name, 'seed': int(__import__('os').environ.get('DEADLINE_SEED', '0')),
@@ -1488,6 +1508,39 @@ if scenario direct-wss-deadline; then
         CORE_PORT=47910
         CORE_URL="wss://198.51.100.10:$CORE_PORT"
     done
+fi
+
+# A separate fixed-seed stress row for a production-supported second RX
+# receiver. The TX-bound slice withdraws on MOX; the other receiver keeps
+# remote Opus audio audible while watch and display traffic share the relay.
+# The four original deadline rows above are intentionally unchanged.
+if [[ "$ONLY" == web-relay-second-rx-deadline ]]; then
+    deadline_name=web-relay-second-rx-deadline
+    DEADLINE_SEED="${DEADLINE_SEED:-20261015}"
+    deadline_output="${DEADLINE_OUT:-$SOURCE/build-r5-linux/watch-acceptance}/$deadline_name-3-75-$DEADLINE_SEED"
+    mkdir -p "$deadline_output"
+    reset_rules
+    web_only natc
+    deadline_netem_add 3 75
+    start_core allow --media --second-rx --keyable
+    result="$(run_session cli --follow-media-ms 65000 --tune-ms 60000 \
+                           --require-watch --require-keyed-audio --ready-timeout-ms 20000)"
+    sleep 2
+    stats="$(grep '"event":"keepalives"' "$WORK/core.log" | tail -n 1 || true)"
+    say "MEASURE $deadline_name: $stats session=$result"
+    if ! deadline_check "$deadline_name" "$result"; then
+        say "FAIL $deadline_name: a strict Core-key, media or watch assertion failed"
+        FAILED=1
+    fi
+    if grep -q '"event":"tripped".*"linkClosed":false' "$WORK/core.log"; then
+        say "FAIL $deadline_name: Core stopped TUNE before requested release"
+        say "TRACE $deadline_name: $(deadline_trace)"
+        FAILED=1
+    fi
+    deadline_netem_stats
+    deadline_save_artifacts
+    in_ns inet tc qdisc del dev inet-natc root 2>/dev/null || true
+    stop_core
 fi
 
 # ── Plan Task 29 Step 1: the relay floor measurement ─────────────────
