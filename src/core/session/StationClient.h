@@ -391,6 +391,7 @@
 #include "core/session/StateMirror.h"
 #include "core/session/StationCapabilities.h"
 #include "core/session/SessionTransport.h"
+#include "core/session/TxWatchClient.h"
 #include "core/session/PathRacer.h"
 #include "core/session/IceConfiguration.h"
 
@@ -1006,6 +1007,9 @@ public:
     { m_coreOnThisComputerForTest = onThisComputer ? 1 : 0; }
     bool telemetryAvailable() const;
     std::optional<SessionTransportTelemetry> transportTelemetry() const;
+    /// Local auxiliary-watch bytes for this logical primary session. An
+    /// established session without a watch reports measured zero.
+    std::optional<AuxiliaryWatchTelemetry> auxiliaryWatchTelemetry() const;
     bool sendMediaControl(const QJsonObject& payload, quint32 expectedEpoch);
 
     /// R-R3-28. The media layer calls this once the media session it
@@ -1620,6 +1624,8 @@ private:
     void retireDirectWatch();
     void retryDirectWatch(const QString& reason);
     QPointer<TxWatchClient> m_directWatch;
+    // Final snapshots of retired attempts in the current primary epoch.
+    AuxiliaryWatchTelemetry m_retiredWatchTelemetry;
     QPointer<DataChannelTransport> m_pendingWatchRelayPeer;
     std::shared_ptr<RelayLeg> m_watchRelayLeg;
     QTimer* m_directWatchRetryTimer = nullptr;

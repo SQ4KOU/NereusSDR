@@ -346,8 +346,8 @@ private slots:
         QCOMPARE(controller.history().series(Metric::SpeakerBufferMs, now, 60).points.last().value, 25.0);
         QVERIFY(controller.detailText().contains(QStringLiteral("End-to-end audio latency is not measured")));
         QVERIFY(controller.detailText().contains(QStringLiteral("already included in total")));
-        QVERIFY(controller.detailText().contains(QStringLiteral("media transmit keepalive, and raw I/Q")));
-        QVERIFY(controller.detailText().contains(QStringLiteral("Separately routed transmit watch traffic is not counted")));
+        QVERIFY(controller.detailText().contains(QStringLiteral("media transmit keepalive, raw I/Q, and separate transmit watch")));
+        QVERIFY(controller.detailText().contains(QStringLiteral("separate transmit watch messages")));
 
         now += 1000;
         media->traffic.receivedDisplayPayloadBytes += 200000;

@@ -4,6 +4,7 @@
 #include "gui/RemoteAudioStatus.h"
 #include "core/session/StationTelemetry.h"
 #include "core/session/SessionTransport.h"
+#include "core/session/TxWatchClient.h"
 #include "core/session/media/RemoteAudioReceiver.h"
 #include "core/session/media/MediaPeer.h"
 #include <QElapsedTimer>
@@ -63,7 +64,8 @@ public:
     qint64 nowMs() const;
     QString bannerText() const;
     QString detailText() const;
-    // Also used by deterministic lifecycle tests with a monotonic clock.
+    // An injected clock makes sampling manually driven for deterministic
+    // lifecycle tests; the production clock keeps its automatic timer.
     void sampleNow();
     // R-R3-32 / R-R3-46 (parity Task 6): the remote window's model takes
     // the Core's PA readings from each current sample, and all of them
@@ -96,6 +98,7 @@ private:
     std::optional<SessionTransportTelemetry> m_transportBaseline;
     std::optional<RemoteAudioReceiverTelemetry> m_playbackBaseline;
     std::optional<MediaPeerTelemetry> m_mediaBaseline;
+    std::optional<AuxiliaryWatchTelemetry> m_watchBaseline;
     struct PlaybackEvents {
         quint64 underflows = 0, overflows = 0;
         qint64 sampledMs = 0;

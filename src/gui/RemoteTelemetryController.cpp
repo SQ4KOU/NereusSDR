@@ -79,7 +79,7 @@ RemoteTelemetryController::RemoteTelemetryController(
         });
     }
     sampleNow();
-    m_timer.start();
+    if (!m_now) { m_timer.start(); }
 }
 
 void RemoteTelemetryController::setPaReadingsTarget(RadioModel* model)
@@ -127,6 +127,7 @@ void RemoteTelemetryController::clearSession()
     m_station.reset();
     m_transportBaseline.reset();
     m_mediaBaseline.reset();
+    m_watchBaseline.reset();
     m_playbackBaseline.reset();
     m_playbackEventsBaseline.reset();
     m_lastTickMs = -1;
@@ -270,6 +271,18 @@ void RemoteTelemetryController::sampleNow()
     values[index(Metric::SessionPayloadRxKbps)] = m_view.controlRxKbps;
     values[index(Metric::SessionPayloadTxKbps)] = m_view.controlTxKbps;
 
+    const auto watch = m_client->auxiliaryWatchTelemetry();
+    const bool watchContinuous = watch && m_watchBaseline && elapsed > 0
+        && watch->receivedPayloadBytes >= m_watchBaseline->receivedPayloadBytes
+        && watch->submittedPayloadBytes >= m_watchBaseline->submittedPayloadBytes;
+    const auto watchRx = watchContinuous
+        ? rate(watch->receivedPayloadBytes, m_watchBaseline->receivedPayloadBytes, elapsed)
+        : std::nullopt;
+    const auto watchTx = watchContinuous
+        ? rate(watch->submittedPayloadBytes, m_watchBaseline->submittedPayloadBytes, elapsed)
+        : std::nullopt;
+    m_watchBaseline = watch;
+
     const auto media = m_traffic ? m_traffic()
         : m_media ? m_media->trafficTelemetry() : std::nullopt;
     const bool mediaContinuous = media && m_mediaBaseline
@@ -294,13 +307,13 @@ void RemoteTelemetryController::sampleNow()
         const auto txTx = rate(current.submittedTxPayloadBytes, previous.submittedTxPayloadBytes, elapsed);
         const auto iqRx = rate(current.receivedIqPayloadBytes, previous.receivedIqPayloadBytes, elapsed);
         const auto iqTx = rate(current.submittedIqPayloadBytes, previous.submittedIqPayloadBytes, elapsed);
-        if (displayRx && rtpRx && txRx && iqRx && m_view.controlRxKbps) {
+        if (displayRx && rtpRx && txRx && iqRx && watchRx && m_view.controlRxKbps) {
             m_view.coreGuiRxKbps = *m_view.controlRxKbps
-                + (*displayRx + *rtpRx + *txRx + *iqRx) * 8.0 / 1000.0;
+                + (*displayRx + *rtpRx + *txRx + *iqRx + *watchRx) * 8.0 / 1000.0;
         }
-        if (displayTx && rtpTx && txTx && iqTx && m_view.controlTxKbps) {
+        if (displayTx && rtpTx && txTx && iqTx && watchTx && m_view.controlTxKbps) {
             m_view.coreGuiTxKbps = *m_view.controlTxKbps
-                + (*displayTx + *rtpTx + *txTx + *iqTx) * 8.0 / 1000.0;
+                + (*displayTx + *rtpTx + *txTx + *iqTx + *watchTx) * 8.0 / 1000.0;
         }
         if (m_view.coreGuiRxKbps && m_view.coreGuiTxKbps) {
             m_view.coreGuiTotalKbps = *m_view.coreGuiRxKbps + *m_view.coreGuiTxKbps;
@@ -530,7 +543,7 @@ QString RemoteTelemetryController::detailText() const
     text << tr("Control traffic received %1 / sent %2 kbit/s").arg(number(m_view.controlRxKbps), number(m_view.controlTxKbps));
     text << tr("Traffic seen by this app: Core→app %1 / app→Core %2 / total %3 kbps.")
         .arg(number(m_view.coreGuiRxKbps), number(m_view.coreGuiTxKbps), number(m_view.coreGuiTotalKbps));
-    text << tr("Total includes control, display, audio, media transmit keepalive, and raw I/Q messages. Separately routed transmit watch traffic is not counted. Audio content received (Opus or lossless): %1 kbps, already included in total. No audio is sent to the Core in receive-only mode.")
+    text << tr("Total includes control, display, audio, media transmit keepalive, raw I/Q, and separate transmit watch messages. Audio content received (Opus or lossless): %1 kbps, already included in total. No audio is sent to the Core in receive-only mode.")
         .arg(number(m_view.audioPayloadRxKbps));
     text << tr("Audio packets received: %1 kbps, including packet headers and packets this computer later dropped. Audio content counts the sound in the packets it accepted, including duplicates.")
         .arg(number(m_view.audioRtpRxKbps));

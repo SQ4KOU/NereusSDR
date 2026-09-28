@@ -12,6 +12,7 @@
 #include "core/security/CertificateStore.h"
 #include "core/security/ClientDeviceIdentity.h"
 #include "core/security/DeviceStore.h"
+#include "core/safety/RemoteTxWatchdog.h"
 #include "core/session/DataChannelTransport.h"
 #include "core/session/IceConfiguration.h"
 #include "core/session/RelayLeg.h"
@@ -166,13 +167,12 @@ private slots:
         SettingsProxy proxy;
         StationClient client(&remote, &proxy);
         client.setDeviceIdentity(device, record.name);
-        client.startSession(offerer, QString(), QString(), server.stationIdentity().fingerprint());
-        server.acceptTransport(answerer);
-        QTRY_VERIFY_WITH_TIMEOUT(client.isHandshakeComplete(), 10000);
-        // The older Core fixture does not implement tx.watchRelay. Keep its
-        // authenticated primary, but substitute a bounded command responder.
-        QVERIFY(answerer->parent());
-        answerer->disconnect(answerer->parent());
+        // Substitute the bounded command responder after authentication but
+        // before the client's first watch attempt. Waiting for the handshake
+        // outside this signal can miss the command emitted immediately after.
+        QObject::connect(&client, &StationClient::handshakeComplete, &client, [answerer] {
+            if (answerer->parent()) { answerer->disconnect(answerer->parent()); }
+        });
         std::shared_ptr<RelayLeg> coreLeg;
         QPointer<DataChannelTransport> coreWatch;
         QList<QByteArray> watchFrames;
@@ -245,6 +245,11 @@ private slots:
             coreLeg->open(QUrl(QStringLiteral("wss://relay.example/ws")),
                           QStringLiteral("core-watch"));
         });
+        client.startSession(offerer, QString(), QString(), server.stationIdentity().fingerprint());
+        server.acceptTransport(answerer);
+        QTRY_VERIFY_WITH_TIMEOUT(client.isHandshakeComplete(), 10000);
+        QVERIFY(client.auxiliaryWatchTelemetry());
+        QCOMPARE(client.auxiliaryWatchTelemetry()->submittedPayloadBytes, quint64(0));
         StationCapabilities caps = client.capabilities();
         caps.txWatchPathVersion = caseId == 5 ? 0 : 1;
         if (caseId == 4) { caps.txPermitted = false; }
@@ -270,6 +275,8 @@ private slots:
             QVERIFY(client.isHandshakeComplete());
         } else {
             QTRY_VERIFY_WITH_TIMEOUT(client.transmitWatchReady(), 15000);
+            QCOMPARE(client.auxiliaryWatchTelemetry()->submittedPayloadBytes, quint64(33));
+            QCOMPARE(client.auxiliaryWatchTelemetry()->receivedPayloadBytes, quint64(2));
             QVERIFY(!client.directWatchReady());
             QTRY_COMPARE_WITH_TIMEOUT(watchFrames.size(), 1, 5000);
             QCOMPARE(watchFrames.first(), QByteArray(1, char(1)) + ticket);
@@ -281,6 +288,8 @@ private slots:
             client.remoteTransmit()->setVoxArmed(true); // logical watch only, no RF
             QTRY_VERIFY_WITH_TIMEOUT(watchFrames.size() >= 2, 3000);
             QCOMPARE(watchFrames.at(1).size(), 13);
+            QVERIFY(client.auxiliaryWatchTelemetry()->submittedPayloadBytes
+                    >= quint64(33 + RemoteTxWatchdog::kChannelKeepaliveBytes));
             if (caseId == 0) {
                 QTRY_VERIFY_WITH_TIMEOUT(!offerer->canOpenWatchRelay(), 9000);
                 QVERIFY(offerer->hasWatchRelayRoute());
@@ -290,6 +299,8 @@ private slots:
                 coreWatch->closeLink(QStringLiteral("test auxiliary loss"));
                 QTRY_VERIFY_WITH_TIMEOUT(!client.transmitWatchReady(), 3000);
                 QVERIFY(client.isHandshakeComplete());
+                QVERIFY(client.auxiliaryWatchTelemetry()->submittedPayloadBytes
+                        >= quint64(33 + RemoteTxWatchdog::kChannelKeepaliveBytes));
             }
             client.disconnectFromStation(QStringLiteral("test primary close"));
             QVERIFY(!client.transmitWatchReady());

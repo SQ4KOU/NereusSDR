@@ -17,6 +17,13 @@ namespace NereusSDR {
 
 class DataChannelTransport;
 
+// Owner-thread, local application-payload observations for one accepted
+// watch attempt. Counts survive close until the next accepted open.
+struct AuxiliaryWatchTelemetry {
+    quint64 receivedPayloadBytes = 0;
+    quint64 submittedPayloadBytes = 0;
+};
+
 // Owns one independent WSS or dedicated DTLS watch transport. The caller has already
 // authenticated the primary and supplies its current verified Core TLS digest,
 // a fresh Core ticket, and the immutable logical primary generation.
@@ -53,6 +60,8 @@ public:
     void close();
     bool isReady() const { return m_ready; }
     quint64 generation() const { return m_generation; }
+    // Neither direction is a delivery or wire-byte measurement.
+    AuxiliaryWatchTelemetry telemetry() const { return m_telemetry; }
     bool sendKeepalive(quint64 sequence, quint32 epoch);
 
 signals:
@@ -77,6 +86,7 @@ private:
     bool m_active = false;
     bool m_ready = false;
     bool m_attachSent = false;
+    AuxiliaryWatchTelemetry m_telemetry;
     int m_openingMs = 10000;
     int m_acknowledgementMs = 5000;
 #ifdef NEREUS_BUILD_TESTS

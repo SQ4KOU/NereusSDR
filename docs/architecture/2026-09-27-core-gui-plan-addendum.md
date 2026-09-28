@@ -2342,8 +2342,13 @@ colours for the same signal.
   passed with exact payload counts, restart resets and valid IQ arrival
   counted before the existing bounded-queue failure. Root reviewed production
   and tests; app/Core and all eight rebuilt media/portability suites pass
-  (28.80 s). The separate auxiliary watch remains open: Sol 6 high now
-  implements the lead's per-logical-session, fold-once lifetime contract.
+  (28.80 s). Auxiliary-watch commits db05be910 and e8fb6d402 are integrated
+  after root review and app/Core plus all six rebuilt watch/telemetry/
+  diagnostics suites passing (36.70 s). A real paired watch opens and retires
+  between graph samples; its 33-byte attach and validated 2-byte ACK survive
+  exactly once, and a same-primary retry adds its own counts. An explicit
+  test clock disables automatic sampling; production keeps its one-second
+  timer. No wire, permission, deadline, RF or delivery guarantee changed.
   Keep this separate from G-110's WebSocket overlap and physical network use.
 - Plan: complete Core/window application traffic observations for R5 and IQ.
 
@@ -2361,7 +2366,9 @@ colours for the same signal.
   service-action assertion; signed `d49ef4e48` now allows only the exact
   read-only systemctl query, rejecting all other platform commands. The full
   runtime suite passes, followed by root app/Core and all eight rebuilt
-  integration suites (28.80 s). Linux confirmation remains pending. The
+  integration suites (28.80 s). The rebuilt immutable 383984e5 Linux run
+  confirms the affected gating, path-racer and desktop-runtime suites pass.
+  Its separate relay-return failure is recorded in G-120. The
   completed 996-entry Linux run retains these failures against its older
   immutable source; it passed 989 entries and failed seven.
 - Plan: cross-platform Core/GUI verification.
@@ -2384,7 +2391,8 @@ colours for the same signal.
   Ordinary delivery and controlled mirror-first rows preserve forged-context
   refusal and reconnect/audio recovery checks. The controlled old assertion
   failed (16.98 s); after correction app/Core and the full audio-session
-  suite pass (47.62 s). Linux confirmation remains pending. No production
+  suite pass (47.62 s). The rebuilt immutable 383984e5 Linux run confirms
+  the full remote-audio-session suite passes (46.67 s). No production
   audio behavior, deadline or tolerance changed.
 - Plan: truthful audio status and load-sensitive protocol verification.
 
@@ -2530,6 +2538,21 @@ colours for the same signal.
   Evidence: core-gui-linux-relay-return-scout.md and
   core-gui-linux-383984e5-focused-build-and-test.log (116.99 s).
 - Plan: real-service R5 session and relay-release verification.
+
+### G-121: Full slice flags and the current RX badge stop labeling after D
+
+- Evidence: VfoWidget::setSliceIndex and RxApplet::setSliceIndex update
+  badge text only for IDs zero through three. The Core's stable slice ID
+  maps to a letter beyond D as well, and tabs/foreign labels use that
+  mapping. A real slice E can therefore retain A or a previous badge letter.
+- Ruling basis: the approved several-devices design requires Core-assigned
+  slice letters to agree across clients. JJ reiterated that the existing
+  Aether palette must be preserved; no new color or identity policy is needed.
+- Status: Sol 6 medium owns a separate follow-up after signed 561dd89c,
+  with E and D-to-E-to-B label/color regressions. Preserve the Core's exact
+  existing label mapping and color fallback. No ownership mutation or new
+  Take/Release interaction is included.
+- Plan: truthful slice identity throughout the desktop window.
 
 ## How this addendum is kept
 

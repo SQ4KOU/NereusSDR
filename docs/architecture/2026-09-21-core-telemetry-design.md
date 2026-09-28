@@ -60,8 +60,10 @@ transport boundary. Dedicated transmit-keepalive and raw I/Q application
 payload bytes were added to the same local media totals later. Receive counts
 precede bounded local queue drops. Outgoing media records validated submissions
 to the transport API, including queued or failed sends; it is not a
-delivery/wire-byte measurement. Separately routed auxiliary watch traffic is
-not part of these media-channel counters. Crypto, framing, ICE, VPN and lower
+delivery/wire-byte measurement. Separately routed authenticated watch attach,
+ACK and keepalive payload bytes join the GUI's total through a separate
+per-primary-session observation; they are not also counted as control text or
+media-channel bytes. Crypto, framing, ICE, VPN and lower
 network overhead are excluded. The separate audio graph
 shows raw received RTP and validated Opus payload as subsets already included
 in total. Opus validation occurs after the bounded media handoff, so locally
