@@ -1148,6 +1148,35 @@ colours for the same signal.
   Desktop-to-background handover and live-device acceptance remain open.
 - Plan: station profile ownership and radio handover.
 
+### G-68: Capability-order test assumed newly added fields did not exist
+
+- Evidence: `tst_station_devices` found original capability entries by offsets
+  from the end of the list. Appending remote IQ, transmit modulation monitor and
+  accessory transmit capabilities made those offsets refer to different entries.
+- Ruling: within JJ's instruction to diagnose failures and suggest their actual
+  fix, the lead preserves the wire order and corrects the test's stale indexing.
+- Status: signed implementation `fc58c3ad` checks the original contiguous block
+  from its named first entry and verifies newer entries follow in order. No
+  production capability order was changed. The integrated app/Core build and
+  six focused suites passed (27.62 seconds).
+- Plan: several-device capability compatibility.
+
+### G-69: Desktop shutdown could close ingress before ending transmit
+
+- Evidence: the hosting controller's stop-during-start path called `quiesce`
+  before `stopAllTx`. A focused regression observed listener closure before the
+  transmit-stopped notification. A separate callback test also reproduced a
+  crash when listener shutdown deleted the controller on its own call stack.
+- Ruling: the approved desktop-hosting plan explicitly requires ending transmit
+  before shutdown. Lead correction preserves that order during startup as well
+  as ordinary operation and retains the host until synchronous callbacks return.
+- Status: signed implementations `987eb996` and `f7fd0b0b` fix callback lifetime
+  and order. The formerly failing order test, normal running-host order and
+  reentrant deletion tests pass in the integrated app/Core build and six focused
+  suites (27.62 seconds). These are in-process models without RF or a live window
+  relaunch. MainWindow hosting and reverse handover wiring remain open.
+- Plan: desktop hosting and station handover.
+
 ## How this addendum is kept
 
 New gaps are appended here as they are found, each with its own `G-` number (next available

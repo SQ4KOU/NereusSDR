@@ -5,9 +5,13 @@
 #include "core/daemon/DaemonTelemetryController.h"
 #include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
+#include "core/session/ConnectedDevicesFacade.h"
+#include "core/session/DeviceSessionRegistry.h"
+#include "core/SliceOwnership.h"
 #include "core/settings/SettingsProxy.h"
 #include "core/station/StationHost.h"
 #include "fakes/LoopbackTransport.h"
+#include <QJsonDocument>
 #include "fakes/UpgradedCoreToken.h"
 #include "models/RadioModel.h"
 
@@ -41,6 +45,66 @@ StationHostOptions listenerOptions()
 class TstStationHost : public QObject {
     Q_OBJECT
 private slots:
+    void hostingDeviceIsFirstPlaceBeforeAnyListener()
+    {
+        if (!QSslSocket::supportsSsl()) {
+            QSKIP("Qt reports no working TLS backend.");
+        }
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+        RadioModel model;
+        const int unowned = model.addSlice(QStringLiteral("pan-0"));
+        const int foreign = model.addSlice(QStringLiteral("pan-0"));
+        QVERIFY(unowned >= 0 && foreign >= 0);
+        model.sliceOwnership()->setOwner(foreign, QByteArray("peer"));
+        StationHostOptions options = listenerOptions();
+        options.settings = &settings;
+        options.securityDirectory = directory.path();
+        options.hostingDevice = StationHostOptions::HostingDevice{
+            QStringLiteral("Shack Mac mini"), QStringLiteral("Shack")};
+        StationHost host(&model, options);
+        bool checkedBeforeListen = false;
+        host.setServerCreatedForTest([&](StationServer* server) {
+            QVERIFY(!server->isListening());
+            QCOMPARE(server->deviceSessions()->placesTaken(), 1);
+            const auto entry = server->deviceSessions()->entries().first();
+            QCOMPARE(entry.kind, DeviceSessionRegistry::Kind::Hosting);
+            QCOMPARE(entry.deviceId, SliceOwnership::stationDevice());
+            QCOMPARE(entry.name, QStringLiteral("Shack Mac mini"));
+            const QJsonArray visible = QJsonDocument::fromJson(
+                server->connectedDevices()->listJson().toUtf8()).array();
+            QCOMPARE(visible.size(), 1);
+            QVERIFY(visible.first().toObject().value(QStringLiteral("hostsCore")).toBool());
+            QVERIFY(!visible.first().toObject().value(QStringLiteral("revocable")).toBool());
+            QCOMPARE(model.sliceOwnership()->mark(unowned).owner,
+                     SliceOwnership::stationDevice());
+            QCOMPARE(model.sliceOwnership()->mark(foreign).owner, QByteArray("peer"));
+            checkedBeforeListen = true;
+        });
+        QVERIFY(host.start());
+        QVERIFY(checkedBeforeListen);
+        QVERIFY(host.listenerReady());
+        const int createdAfterListen = model.addSlice(QStringLiteral("pan-0"));
+        QVERIFY(createdAfterListen >= 0);
+        QCOMPARE(model.sliceOwnership()->mark(createdAfterListen).owner,
+                 SliceOwnership::stationDevice());
+        QObject first, second, third, fourth;
+        const QObject* sessions[] = {&first, &second, &third, &fourth};
+        for (int i = 0; i < 4; ++i) {
+            DeviceSessionRegistry::Entry device;
+            device.deviceId = QByteArray("device-") + QByteArray::number(i);
+            device.kind = DeviceSessionRegistry::Kind::Paired;
+            device.name = QStringLiteral("Phone %1").arg(i);
+            const auto admission = host.server()->deviceSessions()->admit(device, sessions[i]);
+            QCOMPARE(admission.admission, i < 3 ? DeviceSessionRegistry::Admission::Admitted
+                                                : DeviceSessionRegistry::Admission::Full);
+        }
+        QCOMPARE(host.server()->deviceSessions()->placesTaken(), 4);
+        host.stop();
+        QCOMPARE(model.sliceOwnership()->mark(foreign).owner, QByteArray("peer"));
+    }
+
     void borrowedModelSurvivesStopAndRestart()
     {
         RadioModel model;

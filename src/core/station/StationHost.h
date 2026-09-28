@@ -35,6 +35,10 @@ class StationRendezvous;
 class StationServer;
 
 struct StationHostOptions {
+    struct HostingDevice {
+        QString name;
+        QString shortName;
+    };
     // All fields are copied; neither construction nor option conversion loads
     // AppSettings or provisions identity. The caller must own the profile
     // before start(). Settings and StationRadios must outlive stop(). Normally
@@ -43,6 +47,9 @@ struct StationHostOptions {
     // the borrowed model or accessing it again.
     AppSettings* settings {nullptr};
     QString securityDirectory; // empty: CertificateStore's resolved profile directory
+    // A desktop window with no network session. Installed before the first
+    // listener or rendezvous path can admit an external device.
+    std::optional<HostingDevice> hostingDevice;
     StationRadios* stationRadios {nullptr};
     std::function<QString()> selectedRadioMac;
     QString coreName;

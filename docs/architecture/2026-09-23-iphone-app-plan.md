@@ -6519,6 +6519,11 @@ review. Requires Task 47, Parts C and F, and Tasks 41, 42 and 71 to 77.
 - [ ] **Step 3:** The window as the station device: its own slices, flags and audio, its
       MOX and TUNE through the take rules, and its TCI programs under the holder rule,
       with the hosting-desktop harness.
+      The reusable desktop controller is implemented in signed `fc58c3ad`,
+      `987eb996` and `f7fd0b0b`: hosting-device admission, ownership adoption,
+      holder confirmation and TX-first teardown. Integrated app/Core build and
+      six focused suites passed (27.62 s). MainWindow presentation/keying, TCI
+      program admission and reverse background handover are not yet wired.
 
 ## Task 49: The Remote Access page
 
