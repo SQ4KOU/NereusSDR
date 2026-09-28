@@ -418,6 +418,9 @@ bool DaemonApp::start(const DaemonConfig& cfg)
                                                  m_displayGovernorNowForTest,
                                                  m_acceptedDisplayChargeForTest);
 #endif
+    // The initial receiver seed is complete. From here a station client's
+    // edits must be tracked even if layout writeback awaits radio admission.
+    m_radioModel->beginStationHandoverEditTracking();
     m_stationHost->start();
 
     // Parity Task 19 (R-IOS-25; remote design section 6.4): the station's
@@ -541,6 +544,43 @@ void DaemonApp::stop()
     m_stepAttControllerConfigured = false;
 
     emit radioConnected(false);
+}
+
+void DaemonApp::beginStationRelease()
+{
+    if (m_radioModel) {
+#ifdef NEREUS_BUILD_TESTS
+        if (m_stopAllTxForTest) {
+            m_stopAllTxForTest();
+        } else
+#endif
+        {
+            m_radioModel->stopAllTx(QStringLiteral("The Core is handing back the radio."));
+        }
+    }
+    if (m_stationHost) { m_stationHost->quiesce(); }
+    m_radioRecoveryEnabled = false;
+    cancelRadioDiscovery();
+    if (m_radioRetryTimer) { m_radioRetryTimer->stop(); }
+}
+
+DaemonApp::StationReleaseResult DaemonApp::tryCompleteStationRelease(QString* reason)
+{
+    if (reason) { reason->clear(); }
+    if (m_radioConnectInProgress) { return StationReleaseResult::Pending; }
+    if (m_radioModel && !m_radioModel->saveForStationHandover(reason)) {
+        return StationReleaseResult::Failed;
+    }
+    stop();
+    QString saveError;
+    if (!AppSettings::instance().save(&saveError)) {
+        if (reason) {
+            *reason = QStringLiteral("The Core could not save its settings. Check its log and "
+                                     "try release again.");
+        }
+        return StationReleaseResult::Failed;
+    }
+    return StationReleaseResult::Stopped;
 }
 
 void DaemonApp::createTxAnalyzer()

@@ -22,6 +22,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QElapsedTimer>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -78,9 +79,12 @@ StationControlReply notReached(const QStringList& tried, QLocalSocket::LocalSock
 StationControlReply requestAt(const QString& path, const QStringList& args, int timeoutMs,
                               const QStringList& tried)
 {
+    QElapsedTimer deadline;
+    deadline.start();
+    const auto remaining = [&] { return qMax(0, timeoutMs - int(deadline.elapsed())); };
     QLocalSocket socket;
     socket.connectToServer(path);
-    if (!socket.waitForConnected(timeoutMs)) {
+    if (!socket.waitForConnected(remaining())) {
         return notReached(tried, socket.error());
     }
     const QByteArray line = QJsonDocument(QJsonObject{{QStringLiteral("args"),
@@ -88,12 +92,12 @@ StationControlReply requestAt(const QString& path, const QStringList& args, int 
                                 .toJson(QJsonDocument::Compact)
                             + '\n';
     socket.write(line);
-    if (!socket.waitForBytesWritten(timeoutMs)) {
+    if (!socket.waitForBytesWritten(remaining())) {
         return notReached(tried, socket.error());
     }
     QByteArray received;
     while (!received.contains('\n') && received.size() <= StationControlSocket::kMaxReplyBytes) {
-        if (socket.bytesAvailable() == 0 && !socket.waitForReadyRead(timeoutMs)) {
+        if (socket.bytesAvailable() == 0 && !socket.waitForReadyRead(remaining())) {
             break;
         }
         received += socket.readAll();
@@ -108,9 +112,11 @@ StationControlReply requestAt(const QString& path, const QStringList& args, int 
 
 } // namespace
 
-StationControlSocket::StationControlSocket(Handler handler, QObject* parent)
+StationControlSocket::StationControlSocket(Handler handler, QObject* parent,
+                                           AsyncHandler asyncHandler)
     : QObject(parent)
     , m_handler(std::move(handler))
+    , m_asyncHandler(std::move(asyncHandler))
 {
 }
 
@@ -254,6 +260,10 @@ void StationControlSocket::onNewConnection()
         if (socket == nullptr) {
             break;
         }
+        // QLocalServer owns pending sockets by default. A release closes
+        // and destroys the listener before dropping station.lock, but its
+        // accepted reply socket must outlive that listener.
+        socket->setParent(this);
         connect(socket, &QLocalSocket::disconnected, socket, &QObject::deleteLater);
         serve(socket);
     }
@@ -262,14 +272,14 @@ void StationControlSocket::onNewConnection()
 void StationControlSocket::serve(QLocalSocket* socket)
 {
     QPointer<QLocalSocket> guarded(socket);
-    QTimer::singleShot(kRequestTimeoutMs, socket, [guarded]() {
-        if (guarded) {
-            guarded->abort();
-            guarded->deleteLater();
-        }
+    QTimer* const parseDeadline = new QTimer(socket);
+    parseDeadline->setSingleShot(true);
+    connect(parseDeadline, &QTimer::timeout, socket, [guarded]() {
+        if (guarded) { guarded->abort(); }
     });
+    parseDeadline->start(kRequestTimeoutMs);
     auto buffer = std::make_shared<QByteArray>();
-    connect(socket, &QLocalSocket::readyRead, socket, [this, socket, buffer]() {
+    connect(socket, &QLocalSocket::readyRead, socket, [this, socket, buffer, parseDeadline]() {
         buffer->append(socket->readAll());
         const qsizetype end = buffer->indexOf('\n');
         if (end < 0) {
@@ -280,6 +290,7 @@ void StationControlSocket::serve(QLocalSocket* socket)
             return;
         }
         disconnect(socket, &QLocalSocket::readyRead, socket, nullptr);
+        parseDeadline->stop();
         StationControlReply reply;
         const QJsonDocument doc = QJsonDocument::fromJson(buffer->left(end));
         const QJsonValue args = doc.object().value(QStringLiteral("args"));
@@ -290,12 +301,21 @@ void StationControlSocket::serve(QLocalSocket* socket)
             for (const QJsonValue& value : args.toArray()) {
                 list << value.toString();
             }
+            if (m_asyncHandler && m_asyncHandler(list, socket)) { return; }
             reply = m_handler ? m_handler(list) : StationControlReply{};
         }
-        socket->write(encodeReply(reply));
-        socket->flush();
-        socket->disconnectFromServer();
+        sendReply(socket, reply);
     });
+}
+
+bool StationControlSocket::sendReply(QLocalSocket* socket, const StationControlReply& reply)
+{
+    if (!socket || socket->state() != QLocalSocket::ConnectedState) { return false; }
+    const QByteArray encoded = encodeReply(reply);
+    if (socket->write(encoded) != encoded.size()) { return false; }
+    socket->flush();
+    socket->disconnectFromServer();
+    return true;
 }
 
 StationControlReply StationControlSocket::request(const QString& path, const QStringList& args,

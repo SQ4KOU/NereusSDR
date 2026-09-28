@@ -238,6 +238,12 @@ public:
     /// What the console commands answer, without the socket (the same
     /// object startControlSocket() serves).
     StationControlReply runControlCommand(const QStringList& args);
+    enum class StationReleaseResult { Pending, Failed, Stopped };
+    // Called by the entry-point release coordinator. The first call unkeys
+    // before any other release work; completion is deferred past a nested
+    // WDSP connect stack and refuses to destroy unsaved model state.
+    void beginStationRelease();
+    StationReleaseResult tryCompleteStationRelease(QString* reason);
 
     /// The Core's label as the status page and console show it: its
     /// renamed label, or core_name, or this computer's name.
@@ -289,6 +295,15 @@ public:
     // R-R3-39 / R-IOS-03: the running RadioModel (nullptr before start() and
     // after stop()), so a test can key the model the daemon builds.
     RadioModel* radioModelForTest() const { return m_radioModel.get(); }
+    void setRadioConnectInProgressForTest(bool inProgress) {
+        m_radioConnectInProgress = inProgress;
+    }
+    void setStopAllTxForTest(std::function<void()> stop) {
+        m_stopAllTxForTest = std::move(stop);
+    }
+    void setDiscoveryProviderForTest(std::function<QList<RadioInfo>()> provider) {
+        m_discoveryProviderForTest = std::move(provider);
+    }
 
     void setStationListenRetryIntervalsForTest(int initialMs, int maximumMs)
     {
@@ -568,6 +583,7 @@ private:
     bool m_synchronousWdspForTest {false};
     // Install test audio devices before discovery can enter real DSP startup.
     std::function<void(RadioModel*)> m_radioInitializerForTest;
+    std::function<void()> m_stopAllTxForTest;
     std::optional<HPSDRHW> m_testBoard;
     QString m_testRadioMac;
 #endif

@@ -35,8 +35,8 @@
 //
 // With remote access off (remote_port = 0) the Core has no pairing and no
 // paired devices; the pairing, devices, token and reset commands say so
-// and change nothing. `nereusd release` is not here (iPhone app plan Task
-// 48 defines it).
+// and change nothing. `nereusd release` is recognized here; the daemon
+// entry point coordinates its asynchronous reply and handover.
 //
 // The replies are what the operator reads: plain words, "Core" for the
 // computer. They may carry the pairing code; nothing here logs it.
