@@ -2358,7 +2358,7 @@ An enum property lists the values its domain allows.
 | 84 | `twoToneDrivePowerSource` | `enum` | bidirectional | 0, 1, 2 |
 | 85 | `voxEnabled` | `bool` | bidirectional |  |
 
-**TransmitState** (34 properties)
+**TransmitState** (37 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -2396,6 +2396,9 @@ An enum property lists the values its domain allows.
 | 31 | `forwardAdcRaw` | `i64` | outbound |  |
 | 32 | `reflectedAdcRaw` | `i64` | outbound |  |
 | 33 | `compressionDb` | `f64` | outbound |  |
+| 34 | `forwardRawPowerWatts` | `f64` | outbound |  |
+| 35 | `forwardAdcVolts` | `f64` | outbound |  |
+| 36 | `reflectedAdcVolts` | `f64` | outbound |  |
 
 **TunerModel** (21 properties)
 
