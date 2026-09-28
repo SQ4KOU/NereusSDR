@@ -119,6 +119,7 @@
 #include "core/session/StationRendezvous.h"
 #include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
+#include "core/session/SwitchableTransport.h"
 #include "core/session/media/LibDataChannelMediaTransport.h"
 #include "core/settings/SettingsProxy.h"
 #include "gui/CoreTargetStore.h"
@@ -2933,25 +2934,47 @@ private slots:
         // computer the session opened on the relay in 2 of about 90 runs,
         // and the relay kept for media then was the rule working. Wait for
         // each end's control path to be the direct one the rule is about.
+        const quint64 epoch = core.server->mediaSessionEpoch();
+        QVERIFY(epoch != 0);
+        // This fixture has one authenticated session. Read its current inner
+        // channel, not the first DataChannelTransport child (an introduction
+        // can leave another transport alive during retirement).
+        const auto sessions = core.server->findChildren<SwitchableTransport*>(
+            QString(), Qt::FindDirectChildrenOnly);
+        QCOMPARE(sessions.size(), 1);
+        auto* carrying = sessions.first();
         const auto* windowChannel = qobject_cast<const DataChannelTransport*>(window.transport());
-        const auto* coreChannel = core.server->findChild<DataChannelTransport*>();
         QVERIFY(windowChannel != nullptr);
-        QVERIFY(coreChannel != nullptr);
-        QTRY_VERIFY_WITH_TIMEOUT(windowChannel->selectedPath().has_value()
-                                     && !windowChannel->selectedPath()->relayed()
-                                     && coreChannel->selectedPath().has_value()
-                                     && !coreChannel->selectedPath()->relayed(),
-                                 15000);
-        const std::optional<IceConfiguration> ice = window.sessionIceConfiguration();
-        QVERIFY(ice.has_value());
+        std::optional<MediaIcePath> windowPath;
+        std::optional<MediaIcePath> corePath;
+        std::optional<IceConfiguration> ice;
+        std::optional<IceConfiguration> coreIce;
+        const auto directWithoutOwnShim = [&] {
+            const auto* coreChannel = qobject_cast<const DataChannelTransport*>(carrying->inner());
+            windowPath = windowChannel->selectedPath();
+            corePath = coreChannel ? coreChannel->selectedPath() : std::nullopt;
+            ice = window.sessionIceConfiguration();
+            coreIce = core.server->sessionIceConfiguration(epoch);
+            return windowPath && corePath && !windowPath->relayed() && !corePath->relayed()
+                && !windowPath->viaLoopbackShim() && !corePath->viaLoopbackShim()
+                && ice && coreIce && ice->relayServers().isEmpty()
+                && coreIce->relayServers().isEmpty();
+        };
+        const auto pathState = [](const std::optional<MediaIcePath>& path) {
+            return path ? QStringLiteral("%1/%2 remote=%3:%4 relay=%5 ownShim=%6")
+                              .arg(path->localType, path->remoteType, path->remoteAddress)
+                              .arg(path->remotePort).arg(path->relayed())
+                              .arg(path->viaLoopbackShim())
+                        : QStringLiteral("none");
+        };
+        QTRY_VERIFY2_WITH_TIMEOUT(directWithoutOwnShim(),
+            qPrintable(QStringLiteral("window=%1 Core=%2 mediaTURN=%3/%4")
+                .arg(pathState(windowPath), pathState(corePath))
+                .arg(ice ? ice->relayServers().size() : -1)
+                .arg(coreIce ? coreIce->relayServers().size() : -1)), 15000);
         QVERIFY(ice->relayKnown());
         QVERIFY(ice->relayAllowed());
         QVERIFY(ice->stunServer().has_value());
-        QCOMPARE(ice->relayServers().size(), 0);
-        const quint64 epoch = core.server->mediaSessionEpoch();
-        const std::optional<IceConfiguration> coreIce = core.server->sessionIceConfiguration(epoch);
-        QVERIFY(coreIce.has_value());
-        QCOMPARE(coreIce->relayServers().size(), 0);
         QTRY_VERIFY_WITH_TIMEOUT(service.turnOutput().contains(QLatin1String("ALLOCATED 2")),
                                  10000);
 

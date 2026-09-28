@@ -20,6 +20,7 @@
 #include "RealtimeTestLoad.h"
 
 #include "core/session/media/LibDataChannelMediaTransport.h"
+#include "core/session/RelayLeg.h"
 #include "core/session/media/PcmAudioCodec.h"
 #include "core/session/media/RemoteIqCodec.h"
 
@@ -33,6 +34,7 @@
 
 #include <chrono>
 #include <cmath>
+#include <functional>
 #include <thread>
 
 using namespace NereusSDR;
@@ -40,6 +42,17 @@ using namespace NereusSDR;
 namespace {
 
 constexpr quint32 kTestAudioSsrc = 0x4e523301U;
+
+class RetainedCandidateSource final : public IceConfiguration::CandidateSource {
+public:
+    void start(std::function<void(const QString&)> add) override { m_add = std::move(add); }
+    void stop() override { m_add = {}; }
+    bool ready() const { return static_cast<bool>(m_add); }
+    std::function<void(const QString&)> callback() const { return m_add; }
+
+private:
+    std::function<void(const QString&)> m_add;
+};
 // R-R3-43: four receiver stream SSRCs, distinct from the main one.
 const QList<quint32> kTestReceiverSsrcs{0x4e523311U, 0x4e523322U, 0x4e523333U, 0x4e523344U};
 
@@ -272,6 +285,8 @@ private slots:
     void losslessRtpMapIsOfferedOnlyWhenAsked();
     void answerKeepsTheLosslessRtpMap_data();
     void answerKeepsTheLosslessRtpMap();
+    void ordinaryMediaHostOnLoopbackIsNotAnOwnedShim();
+    void retiredMediaSourceCannotMarkARestartedPeer();
     void losslessAudioCrossesRealEncryptedLoopback();
     void undeclaredStreamIsDeliveredByTheOneAudioLine();
     void receiverStreamsAreDeclaredOnlyWhenAsked();
@@ -1295,6 +1310,153 @@ void TestMediaTransport::answerKeepsTheLosslessRtpMap()
 // lossless stream at its own rate, 48 kHz x 2 x 16 bit = 1.536 Mbit/s of
 // payload, sent as the Core sends it: ten packets back to back per 40 ms
 // capture block. Every packet arrives intact and in order.
+void TestMediaTransport::ordinaryMediaHostOnLoopbackIsNotAnOwnedShim()
+{
+    LibDataChannelMediaTransport offerer(nullptr, LibDataChannelMediaTransport::CandidatePolicy::AnyIceType);
+    LibDataChannelMediaTransport answerer(nullptr, LibDataChannelMediaTransport::CandidatePolicy::AnyIceType);
+    QStringList offeredCandidates;
+    QStringList answeredCandidates;
+    bool descriptionsAccepted = true;
+    connect(&offerer, &IMediaTransport::localDescription, &answerer,
+            [&](const QString& sdp, const QString& type) {
+                descriptionsAccepted &= answerer.acceptDescription(sdp, type);
+            });
+    connect(&answerer, &IMediaTransport::localDescription, &offerer,
+            [&](const QString& sdp, const QString& type) {
+                descriptionsAccepted &= offerer.acceptDescription(sdp, type);
+            });
+    connect(&offerer, &IMediaTransport::localCandidate, &offerer,
+            [&](const QString& candidate, const QString&) { offeredCandidates.append(candidate); });
+    connect(&answerer, &IMediaTransport::localCandidate, &answerer,
+            [&](const QString& candidate, const QString&) { answeredCandidates.append(candidate); });
+    const auto loopbackFor = [](const QStringList& gathered) {
+        for (const QString& line : gathered) {
+            const QStringList fields = line.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+            if (fields.size() < 8 || !fields.at(4).contains(QLatin1Char('.'))
+                || fields.at(7) != QLatin1String("host")) {
+                continue;
+            }
+            bool parsed = false;
+            const int port = fields.at(5).toInt(&parsed);
+            if (parsed && port > 0 && port <= 65535) {
+                // The source is absent; a remote peer may call itself
+                // wsrelay without making this a locally owned shim.
+                return RelayLeg::candidateLine(IceConfiguration::kMediaLane,
+                                               static_cast<quint16>(port));
+            }
+        }
+        return QString();
+    };
+    IceConfiguration ice = IceConfiguration::throughRendezvous({}, true, {}, {});
+    ice.setRelay(std::nullopt, 1);
+    IMediaTransport::StartOptions device;
+    device.role = IMediaTransport::Role::Answerer;
+    device.localAudioSsrc = kTestAudioSsrc;
+    device.ice = ice;
+    IMediaTransport::StartOptions core = device;
+    core.role = IMediaTransport::Role::Offerer;
+    QVERIFY(answerer.start(device));
+    QVERIFY(offerer.start(core));
+    QTRY_VERIFY_WITH_TIMEOUT(descriptionsAccepted
+        && !loopbackFor(offeredCandidates).isEmpty()
+        && !loopbackFor(answeredCandidates).isEmpty(), 10000);
+    QVERIFY(offerer.acceptCandidate(loopbackFor(answeredCandidates), {}));
+    QVERIFY(answerer.acceptCandidate(loopbackFor(offeredCandidates), {}));
+    QTRY_VERIFY_WITH_TIMEOUT(offerer.isReady() && answerer.isReady(), 10000);
+    QVERIFY(offerer.selectedPath());
+    QVERIFY(answerer.selectedPath());
+    QVERIFY(MediaIcePath::loopbackEndpoint(offerer.selectedPath()->remoteAddress,
+                                           offerer.selectedPath()->remotePort));
+    QVERIFY(MediaIcePath::loopbackEndpoint(answerer.selectedPath()->remoteAddress,
+                                           answerer.selectedPath()->remotePort));
+    QVERIFY(!offerer.selectedPath()->viaLoopbackShim());
+    QVERIFY(!answerer.selectedPath()->viaLoopbackShim());
+}
+
+void TestMediaTransport::retiredMediaSourceCannotMarkARestartedPeer()
+{
+    LibDataChannelMediaTransport offerer(nullptr, LibDataChannelMediaTransport::CandidatePolicy::AnyIceType);
+    const auto oldSource = std::make_shared<RetainedCandidateSource>();
+    IceConfiguration firstIce = IceConfiguration::throughRendezvous({}, true, {}, {});
+    firstIce.setRelay(std::nullopt, 1);
+    firstIce.setCandidateSourceFactory(
+        [oldSource](int lane, const QString&, bool) -> std::shared_ptr<IceConfiguration::CandidateSource> {
+            return lane == IceConfiguration::kMediaLane ? oldSource : nullptr;
+        }, false);
+    IMediaTransport::StartOptions first;
+    first.role = IMediaTransport::Role::Offerer;
+    first.localAudioSsrc = kTestAudioSsrc;
+    first.ice = firstIce;
+    QVERIFY(offerer.start(first));
+    QTRY_VERIFY_WITH_TIMEOUT(oldSource->ready(), 10000);
+    const auto staleCallback = oldSource->callback();
+    QVERIFY(staleCallback);
+    offerer.stop();
+    QVERIFY(!offerer.selectedPath());
+    // A callback already queued by the old source can run after stop.
+    staleCallback(RelayLeg::candidateLine(IceConfiguration::kMediaLane, 65000));
+
+    LibDataChannelMediaTransport answerer(nullptr, LibDataChannelMediaTransport::CandidatePolicy::AnyIceType);
+    QStringList offeredCandidates;
+    QStringList answeredCandidates;
+    QString pendingAnswer;
+    bool descriptionAccepted = true;
+    connect(&offerer, &IMediaTransport::localDescription, &answerer,
+            [&](const QString& sdp, const QString& type) {
+                descriptionAccepted &= answerer.acceptDescription(sdp, type);
+            });
+    connect(&answerer, &IMediaTransport::localDescription, &offerer,
+            [&](const QString& sdp, const QString& type) {
+                QCOMPARE(type, QStringLiteral("answer"));
+                pendingAnswer = sdp;
+            });
+    connect(&offerer, &IMediaTransport::localCandidate, &offerer,
+            [&](const QString& candidate, const QString&) { offeredCandidates.append(candidate); });
+    connect(&answerer, &IMediaTransport::localCandidate, &answerer,
+            [&](const QString& candidate, const QString&) { answeredCandidates.append(candidate); });
+    const auto loopbackFor = [](const QStringList& gathered) {
+        for (const QString& line : gathered) {
+            const QStringList fields = line.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+            if (fields.size() < 8 || !fields.at(4).contains(QLatin1Char('.'))
+                || fields.at(7) != QLatin1String("host")) {
+                continue;
+            }
+            bool parsed = false;
+            const int port = fields.at(5).toInt(&parsed);
+            if (parsed && port > 0 && port <= 65535) {
+                return RelayLeg::candidateLine(IceConfiguration::kMediaLane,
+                                               static_cast<quint16>(port));
+            }
+        }
+        return QString();
+    };
+    IceConfiguration freshIce = IceConfiguration::throughRendezvous({}, true, {}, {});
+    freshIce.setRelay(std::nullopt, 1);
+    IMediaTransport::StartOptions device;
+    device.role = IMediaTransport::Role::Answerer;
+    device.localAudioSsrc = kTestAudioSsrc;
+    device.ice = freshIce;
+    IMediaTransport::StartOptions core = device;
+    core.role = IMediaTransport::Role::Offerer;
+    QVERIFY(answerer.start(device));
+    QVERIFY(offerer.start(core));
+    QTRY_VERIFY_WITH_TIMEOUT(descriptionAccepted && !pendingAnswer.isEmpty()
+        && !loopbackFor(offeredCandidates).isEmpty()
+        && !loopbackFor(answeredCandidates).isEmpty(), 10000);
+    const QString selectedCandidate = loopbackFor(answeredCandidates);
+    // The exact old callback arriving in a new generation must not turn
+    // the ordinary incoming host candidate into an owned source endpoint.
+    staleCallback(selectedCandidate);
+    QVERIFY(offerer.acceptDescription(pendingAnswer, QStringLiteral("answer")));
+    QVERIFY(offerer.acceptCandidate(selectedCandidate, {}));
+    QVERIFY(answerer.acceptCandidate(loopbackFor(offeredCandidates), {}));
+    QTRY_VERIFY_WITH_TIMEOUT(offerer.isReady() && answerer.isReady(), 10000);
+    QVERIFY(offerer.selectedPath());
+    QVERIFY(MediaIcePath::loopbackEndpoint(offerer.selectedPath()->remoteAddress,
+                                           offerer.selectedPath()->remotePort));
+    QVERIFY(!offerer.selectedPath()->viaLoopbackShim());
+}
+
 void TestMediaTransport::losslessAudioCrossesRealEncryptedLoopback()
 {
     LibDataChannelMediaTransport offerer;
@@ -1311,6 +1473,10 @@ void TestMediaTransport::losslessAudioCrossesRealEncryptedLoopback()
     QTRY_COMPARE_WITH_TIMEOUT(offerReady.count(), 1, 10000);
     QTRY_COMPARE_WITH_TIMEOUT(answerReady.count(), 1, 10000);
     QVERIFY(offerer.losslessAudioNegotiated());
+    QVERIFY(offerer.selectedPath());
+    QVERIFY(answerer.selectedPath());
+    QVERIFY(!offerer.selectedPath()->viaLoopbackShim());
+    QVERIFY(!answerer.selectedPath()->viaLoopbackShim());
 
     QList<QByteArray> received;
     connect(&answerer, &IMediaTransport::rtpReceived, this,

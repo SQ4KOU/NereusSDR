@@ -345,6 +345,10 @@ public:
     /// Gathered host candidates retained only for the local DTLS test shim;
     /// watch mode never emits them through localCandidate.
     QStringList localCandidatesForTest() const { return m_localCandidatesForTest; }
+    /// Candidate-source lifetime regression: a closed peer cannot accrue
+    /// another pending candidate or owned endpoint from its old lease.
+    qsizetype pendingSourceCandidateCountForTest() const { return m_pendingSourceCandidates.size(); }
+    qsizetype ownedShimEndpointCountForTest() const { return m_ownedShimEndpoints.size(); }
 
     /// Test seam: sends `frame` as one binary data-channel message exactly
     /// as given, to show what the far end does with frames a conforming
@@ -392,6 +396,7 @@ private:
     void drain();
     void handleOpen();
     void gatherIfReady();
+    bool admitCandidate(const QString& candidate, bool fromOwnedSource);
     bool acceptOwnedWatchCandidate(const QString& candidate);
     /// Cancels the bridge and closes the connection; with `linger`, an open
     /// channel closes first and the peer after it (closeLink()).
@@ -412,6 +417,7 @@ private:
     QList<IceRelayServer> m_relays;
     int m_acceptedCandidates = 0;
     QList<QPair<QString, quint16>> m_farEndRelays;
+    QList<QPair<QString, quint16>> m_ownedShimEndpoints;
     /// Step 2b: this connection's own candidate source on the control lane.
     std::shared_ptr<CandidateSourceLease> m_candidateSourceLease;
     QStringList m_pendingSourceCandidates;

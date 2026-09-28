@@ -31,6 +31,7 @@
 #include "core/session/IceConfiguration.h"
 
 #include <QByteArray>
+#include <QHostAddress>
 #include <QList>
 #include <QObject>
 #include <QPair>
@@ -52,6 +53,27 @@ struct MediaIcePath {
     /// The relay candidates (`typ relay`) the far end sent, as address and
     /// port.
     QList<QPair<QString, quint16>> farEndRelays;
+    /// The selected remote endpoint matches a loopback candidate admitted
+    /// from this transport's own CandidateSource, not merely a loopback IP.
+    bool ownedLoopbackShim = false;
+
+    static std::optional<QPair<QString, quint16>> loopbackEndpoint(const QString& address,
+                                                                    quint16 port)
+    {
+        if (port == 0) {
+            return std::nullopt;
+        }
+        const QHostAddress parsed(address);
+        bool ipv4 = false;
+        const quint32 v4 = parsed.toIPv4Address(&ipv4);
+        if (ipv4 && (v4 & 0xff000000U) == 0x7f000000U) {
+            return qMakePair(QHostAddress(v4).toString(), port);
+        }
+        if (parsed == QHostAddress::LocalHostIPv6) {
+            return qMakePair(QHostAddress(QHostAddress::LocalHostIPv6).toString(), port);
+        }
+        return std::nullopt;
+    }
 
     /// Through the relay: either candidate is a relay one, or the remote is
     /// at the address and port of a relay candidate the far end sent. The
@@ -66,13 +88,11 @@ struct MediaIcePath {
         }
         return remotePort != 0 && farEndRelays.contains(qMakePair(remoteAddress, remotePort));
     }
-    /// Task 29 step 2b: through this end's own loopback shim (the web
-    /// relay's leg, RelayLeg, or the direct link's media tunnel): the
-    /// remote is on this computer's loopback. No real peer is ever there.
+    /// Task 29 step 2b: through this end's own loopback shim (RelayLeg or
+    /// MediaTunnel). A genuine same-computer ICE peer may also be loopback.
     bool viaLoopbackShim() const
     {
-        return remoteAddress.startsWith(QLatin1String("127.")) || remoteAddress == QLatin1String("::1")
-            || remoteAddress == QLatin1String("::ffff:127.0.0.1");
+        return ownedLoopbackShim;
     }
 };
 
