@@ -5221,7 +5221,7 @@ maximum also equals `kMaximumSpectrumDisplayFramesPerSecond` in
 | `endpointPixels` | 1 to 4096 | pixels | DaemonMediaController.cpp handleSubscribe literal 1; SpectrumEndpoint::kMaxPixels |
 | `graceMs` | 180000 | ms | DeviceSessionRegistry::kGraceMs |
 | `heartbeatIntervalMs` | 20000 | ms | StationServer::kDefaultHeartbeatIntervalMs |
-| `lanAnnouncementMaxBytes` | 480 | bytes | kStationLanMaxSchema2DatagramBytes |
+| `lanAnnouncementMaxBytes` | 481 | bytes | kStationLanMaxSchema2DatagramBytes |
 | `maxDeviceSessions` | 4 | count | StationServer::kMaxDeviceSessions |
 | `maxDisplayEndpoints` | 8 | count | DaemonMediaController.cpp kMaxEndpoints |
 | `maxHandshakesPerAddress` | 2 | count | StationServer::kMaxHandshakesPerAddress |

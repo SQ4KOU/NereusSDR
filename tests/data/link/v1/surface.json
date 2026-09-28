@@ -2420,7 +2420,7 @@
         "lanAnnouncementMaxBytes": {
             "source": "kStationLanMaxSchema2DatagramBytes",
             "unit": "bytes",
-            "value": 480
+            "value": 481
         },
         "maxDeviceSessions": {
             "source": "StationServer::kMaxDeviceSessions",
