@@ -2440,11 +2440,96 @@ colours for the same signal.
   Harness cleanup removed its per-scenario logs, leaving no stack trace.
 - Ruling basis: JJ requires causes and fixes for failures at actual load.
   Preserve the original deadlines and full-session acceptance criteria.
-- Status: OPEN. Sol 6 medium owns an isolated, evidence-preserving reproduction
-  of session-direct against the same frozen 5c source/runtime. The independent
-  current-source Linux build continues. No live service, radio or host network
-  mutation is authorized by this investigation.
+- Status: source/artifact cause established in the retained independent
+  reproduction. The old EXCLUDE_FROM_ALL helper allocates 8104 bytes for
+  RadioModel, while the matching current Core requires 8136. The crash is
+  in QObjectPrivate::connectImpl from RadioModel construction. The root's
+  local all_tests build omitted this helper, leaving a stale binary beside
+  fresh libraries. CI's separate traversal job explicitly builds the helper.
+  Correct the local build recipe/dependency coverage, rebuild a matching
+  helper/runtime and rerun full-session traversal before closing this gap.
+  Evidence: core-gui-traversal-5c-triage-report.md. No live service, radio or
+  host network mutation occurred.
 - Plan: complete R5 full-session Linux traversal verification.
+
+### G-117: Desktop connection header does not identify the active route
+
+- Evidence: the running signed preview `7d929219` reports connection state,
+  traffic and timing, but not the selected direct/relay path or IP family.
+  Control and media may use different paths; RV discovery alone does not
+  establish either route. The source scout identifies the actual transport
+  peer and selected ICE pair as the evidence required for each channel.
+- JJ's ruling: put this information where "Core connected" appears and show
+  a mockup first. JJ rejected the first mockup's stacked header and inaccurate
+  surrounding app. Preserve the existing single-row header and app appearance.
+- Status: OPEN design review. The replacement preview is limited to the
+  existing header strip: a single-line connection/path readout with details
+  on activation. It was checked at desktop width against the running window;
+  opening/closing details was verified by keyboard. The previous invented
+  app shell and two-row alternative were removed. This is a mockup only;
+  do not implement the unapproved header design.
+- Plan: remote-window connection visibility and R5 operator diagnostics.
+
+### G-118: Slice ownership, takeover and dead-session release are unclear
+
+- Evidence: JJ sees this Mac twice and cannot identify which session owns
+  which slice or how to take/release one. Source confirms same-ID admission
+  replaces the older transport, while separate identities can share a name;
+  the live duplicate rows have not yet been identified. Paired link loss
+  retains slices for a 180-second reconnect grace period. The connected-device
+  list is read-only. Remote Take is offered only when an add/retune is blocked;
+  the hosting desktop bypasses that chooser entirely.
+- JJ's ruling: requested an explanation and discussion of creating, taking
+  and releasing slices. No new takeover/release interaction has been approved.
+- Status: OPEN. Recommend visible slice-specific actions and explicit owner,
+  this-window, hosting and away labels, preserving confirmations that name
+  every affected listener and the protection for an on-air transmit slice.
+  A release must not revoke pairing. Current Take frees capacity by closing
+  affected slices and applying the new request; a proposed Take over action
+  that preserves an existing slice's tuning and identity is a distinct,
+  unapproved operation. Decide exact release/transfer semantics before
+  implementing a new action. Read-only evidence is retained
+  in core-gui-slice-ownership-reconnect-scout.md.
+- Plan: several-devices UX and local/remote ownership parity.
+
+### G-119: Slice markers and RX badges do not consistently use Aether colors
+
+- Evidence: flags and slice tabs use the established A cyan, B magenta,
+  C green, D yellow palette. SpectrumWidget::drawSliceMarker hardcodes cyan
+  for every own slice, and the RX applet's current-letter badge remains blue.
+  The hosting desktop also hides foreign flags without populating the
+  documented dashed, owner-labeled foreign markers; hidden flags still
+  contribute own-style marker geometry. These surfaces are unchanged between
+  preview `7d929219` and trunk `4a6b7b05`.
+- JJ's ruling: "we have stable colors selected like in the iphone we used
+  the aether colors". Preserve that established palette and slice identity.
+  Ownership is separate from the slice color.
+- Status: source cause established; Sol 6 medium owns the isolated own-marker
+  and current-badge repair in nereus-small, based on signed trunk 4a6b7b05.
+  Hosting foreign-marker repair remains queued. Verify own marker/flag/tab
+  consistency and the hosting desktop's foreign
+  marker visibility with focused deterministic UI coverage. Preserve user
+  display settings such as the receive-filter fill and all attribution.
+- Plan: several-devices visual parity and truthful ownership presentation.
+
+### G-120: Linux service fixture expects relay removal on a loopback ICE path
+
+- Evidence: immutable Linux 383984e5 built app/Core and 23 affected targets;
+  22/23 named suites passed. The rendezvous service row expected no Core media
+  relay but received one. A Core log shows 127.0.0.1:49081. The test checks
+  non-relayed, while mediaIceFor also excludes loopback-shim paths; the
+  current shim classifier classifies all 127.* paths as shims. The exact
+  selected pair at the later failing assertion was not logged, so a path
+  change or late candidate classification is not excluded.
+- Ruling basis: JJ requires a cause and fix for failures at actual load;
+  preserve relay cleanup and reachability policy, with no deadline increase.
+- Status: OPEN. Sol 6 high completed a read-only scout. Next verify the
+  authenticated session's current inner path at the ICE query, preserving
+  the service's RELEASED 2 assertion; judge genuine loopback ICE versus
+  explicit RelayLeg shim provenance before any production policy change.
+  Evidence: core-gui-linux-relay-return-scout.md and
+  core-gui-linux-383984e5-focused-build-and-test.log (116.99 s).
+- Plan: real-service R5 session and relay-release verification.
 
 ## How this addendum is kept
 
