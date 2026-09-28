@@ -1130,8 +1130,15 @@ colours for the same signal.
   one loopback UDP source, tag 3 only, no media/routed claims and a bounded
   16-frame/8192-byte queue (`218dd70e`). Its integrated app/Core build and both
   relay suites passed (11.66 seconds); ending the watch leaves primary forwarding
-  intact. No deployed service was changed. Station-session watch signaling,
-  separate DTLS transport and restrictive-network acceptance remain unfinished.
+  intact. A dedicated watch DTLS adapter is also built (`ff06a5ea`):
+  one reliable ordered binary channel, bounded 33-byte frames, separate peer,
+  no media or ordinary candidate trickle, and owned relay-loopback candidates
+  only. Real DTLS tests verify the presented Core certificate and raw watch
+  frames; the integrated app/Core build and four transport suites passed
+  (19.95 seconds). Those tests inject loopback candidates and do not yet prove
+  actual outer-WebSocket relay forwarding. No deployed service was changed.
+  Station-session watch signaling and restrictive-network acceptance remain
+  unfinished.
 - Plan: several-device capacity and restrictive-network relay access.
 
 ### G-67: Releasing an offline Core must preserve receiver edits and saved layouts
