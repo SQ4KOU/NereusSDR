@@ -105,7 +105,9 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
     if ((root.value(QStringLiteral("version")).toInt() != 1
          && root.value(QStringLiteral("version")).toInt() != 2
          && !(id == QLatin1String("diagnostics")
-              && root.value(QStringLiteral("version")) == QJsonValue(3)))
+              && root.value(QStringLiteral("version")) == QJsonValue(3))
+         && !(id == QLatin1String("display")
+              && root.value(QStringLiteral("version")) == QJsonValue(4)))
         || root.value(QStringLiteral("category")).toObject()
                .value(QStringLiteral("id")).toString() != id
         || root.value(QStringLiteral("pages")).toArray().isEmpty()
@@ -134,13 +136,19 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                 if (controlId.isEmpty() || ids.contains(controlId)
                     || control.value(QStringLiteral("label")).toString().isEmpty()
                     || !control.value(QStringLiteral("binding")).isObject()
+                    || (id != QLatin1String("display")
+                        && (control.contains(QStringLiteral("options"))
+                            || control.contains(QStringLiteral("enabledWhen"))))
                     || (control.contains(QStringLiteral("requiresDescriptionVersion"))
                         && (root.value(QStringLiteral("version")).toInt()
                                 < control.value(QStringLiteral("requiresDescriptionVersion")).toInt()
                             || (control.value(QStringLiteral("requiresDescriptionVersion"))
                                     != QJsonValue(2)
                                 && control.value(QStringLiteral("requiresDescriptionVersion"))
-                                    != QJsonValue(3))))
+                                    != QJsonValue(3)
+                                && !(id == QLatin1String("display")
+                                     && control.value(QStringLiteral("requiresDescriptionVersion"))
+                                         == QJsonValue(4)))))
                     || (control.value(QStringLiteral("kind")) == QJsonValue(QStringLiteral("table"))
                         && (id != QLatin1String("dsp")
                             || !SetupDescription::validateTnfTable(control)))
@@ -160,6 +168,8 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                         && control.value(QStringLiteral("binding")).toObject()
                                .contains(QStringLiteral("setting"))
                         && !SetupDescription::validateDspSettingBinding(control))
+                    || (id == QLatin1String("display")
+                        && !SetupDescription::validateDisplaySettingBinding(control))
                     || (id == QLatin1String("dsp")
                         && control.value(QStringLiteral("binding")).toObject()
                                .contains(QStringLiteral("property"))
@@ -309,6 +319,72 @@ bool SetupDescription::validateSettingToggleEncoding(const QJsonObject& control)
     return values.size() == 2
         && values.value(QStringLiteral("true")) == QJsonValue(QStringLiteral("True"))
         && values.value(QStringLiteral("false")) == QJsonValue(QStringLiteral("False"));
+}
+
+bool SetupDescription::validateDisplaySettingBinding(const QJsonObject& control)
+{
+    struct Spec { const char* id; const char* key; const char* kind; bool tx; int version; };
+    static constexpr Spec specs[] = {
+        {"display.spectrumDefaults.fftSize", "DisplayFftSize", "slider", false, 4},
+        {"display.spectrumDefaults.window", "DisplayFftWindow", "choice", false, 1},
+        {"display.spectrumDefaults.hzPerBinTarget", "DisplayHzPerBinTarget", "decimal", false, 1},
+        {"display.spectrumDefaults.fps", "DisplaySpectrumFps", "slider", false, 1},
+        {"display.multimeter.pollingDelay", "MultimeterDelayMs", "integer", false, 1},
+        {"display.txDisplay.fftSize", "DisplayTxFftSize", "slider", true, 4},
+        {"display.txDisplay.window", "DisplayTxWindowType", "choice", true, 1},
+        {"display.txDisplay.panDetector", "DisplayTxPanDetector", "choice", true, 1},
+        {"display.txDisplay.panAveraging", "DisplayTxPanAveraging", "choice", true, 1},
+        {"display.txDisplay.panAvTime", "DisplayTxPanAvTimeMs", "integer", true, 1},
+        {"display.txDisplay.panNormalize", "DisplayTxPanNormalize", "toggle", true, 4},
+        {"display.txDisplay.wfDetector", "DisplayTxWfDetector", "choice", true, 1},
+        {"display.txDisplay.wfAveraging", "DisplayTxWfAveraging", "choice", true, 1},
+        {"display.txDisplay.wfAvTime", "DisplayTxWfAvTimeMs", "integer", true, 1},
+    };
+    const QString id = control.value(QStringLiteral("id")).toString();
+    const QJsonObject binding = control.value(QStringLiteral("binding")).toObject();
+    const QJsonObject gate = control.value(QStringLiteral("gate")).toObject();
+    for (const Spec& spec : specs) {
+        if (id != QLatin1String(spec.id)) { continue; }
+        if (binding.size() != 1 || binding.value(QStringLiteral("setting")) != QJsonValue(QLatin1String(spec.key))
+            || classifySettingsKey(QString::fromLatin1(spec.key)) != SettingsScope::Station
+            || control.value(QStringLiteral("kind")) != QJsonValue(QLatin1String(spec.kind))
+            || control.value(QStringLiteral("applies"))
+                != QJsonValue(spec.tx || id == QLatin1String("display.multimeter.pollingDelay")
+                                  ? QStringLiteral("live") : QStringLiteral("subscription"))
+            || (spec.tx ? gate != QJsonObject{{QStringLiteral("capability"), QStringLiteral("txDisplayVersion")},
+                                              {QStringLiteral("min"), 2}} : !gate.isEmpty())
+            || (spec.version == 4 ? control.value(QStringLiteral("requiresDescriptionVersion")) != QJsonValue(4)
+                                  : control.contains(QStringLiteral("requiresDescriptionVersion")))) {
+            return false;
+        }
+        if (id == QLatin1String("display.spectrumDefaults.fftSize")
+            || id == QLatin1String("display.txDisplay.fftSize")) {
+            const QJsonArray options = control.value(QStringLiteral("options")).toArray();
+            if (options.size() != 7 || control.contains(QStringLiteral("min"))
+                || control.contains(QStringLiteral("max")) || control.contains(QStringLiteral("step"))
+                || control.contains(QStringLiteral("enabledWhen"))
+                || control.value(QStringLiteral("default"))
+                    != QJsonValue(spec.tx ? 32768 : 4096)) { return false; }
+            for (int i = 0; i < 7; ++i) {
+                const int value = 4096 << i;
+                if (options.at(i) != QJsonValue(QJsonObject{
+                        {QStringLiteral("value"), value},
+                        {QStringLiteral("label"), QString::number(value)}})) { return false; }
+            }
+            return true;
+        }
+        if (id == QLatin1String("display.txDisplay.panNormalize")) {
+            return !control.contains(QStringLiteral("options"))
+                && control.value(QStringLiteral("default")) == QJsonValue(false)
+                && control.value(QStringLiteral("enabledWhen")) == QJsonValue(QJsonObject{
+                    {QStringLiteral("setting"), QStringLiteral("DisplayTxPanDetector")},
+                    {QStringLiteral("oneOf"), QJsonArray{QStringLiteral("2"), QStringLiteral("3"), QStringLiteral("4")}}})
+                && validateSettingToggleEncoding(control);
+        }
+        return !control.contains(QStringLiteral("options"))
+            && !control.contains(QStringLiteral("enabledWhen"));
+    }
+    return false;
 }
 
 bool SetupDescription::validateActiveSlicePropertyBinding(const QJsonObject& control)
@@ -1028,7 +1104,9 @@ QString SetupDescription::fitCategoryForVersion(const QString& description, int 
     }
     if (pages.isEmpty()) { return {}; }
     category.insert(QStringLiteral("pages"), pages);
-    category.insert(QStringLiteral("version"), qMin(version, 3));
+    const bool display = category.value(QStringLiteral("category")).toObject()
+        .value(QStringLiteral("id")) == QJsonValue(QStringLiteral("display"));
+    category.insert(QStringLiteral("version"), qMin(version, display ? 4 : 3));
     if (version >= 2 && category.value(QStringLiteral("category")).toObject()
             .value(QStringLiteral("id")) == QJsonValue(QStringLiteral("dsp"))) {
         category.insert(QStringLiteral("coverage"), QStringLiteral(

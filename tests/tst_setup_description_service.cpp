@@ -1133,11 +1133,21 @@ private slots:
             const QString dsp = setupCategoryOnWire(
                 *core.app, "dsp", SessionMessageKind::ObjectCreate);
             QVERIFY(!dsp.isEmpty());
+            const QJsonObject display = QJsonDocument::fromJson(setupCategoryOnWire(
+                *core.app, "display", SessionMessageKind::ObjectCreate).toUtf8()).object();
+            QCOMPARE(display.value("version"), QJsonValue(expected));
+            int displayControls = 0;
+            for (const QJsonValue& page : display.value("pages").toArray()) {
+                for (const QJsonValue& section : page.toObject().value("sections").toArray()) {
+                    displayControls += section.toObject().value("controls").toArray().size();
+                }
+            }
+            QCOMPARE(displayControls, expected == 4 ? 14 : 11);
             const QString pa = setupCategoryOnWire(
                 *core.app, "pa", SessionMessageKind::ObjectCreate);
             QVERIFY(!pa.isEmpty());
             QCOMPARE(QJsonDocument::fromJson(pa.toUtf8()).object().value("version").toInt(),
-                     expected);
+                     qMin(expected, 3));
             QCOMPARE(QJsonDocument::fromJson(pa.toUtf8()).object().value("pages").toArray().size(), 2);
             const QString diagnostics = setupCategoryOnWire(
                 *core.app, "diagnostics", SessionMessageKind::ObjectCreate);
@@ -1149,7 +1159,7 @@ private slots:
                 QCOMPARE(panel.value("pages").toArray().size(), 1);
             }
             const QJsonObject category = QJsonDocument::fromJson(dsp.toUtf8()).object();
-            QCOMPARE(category.value("version").toInt(), expected);
+            QCOMPARE(category.value("version").toInt(), qMin(expected, 3));
             bool hasTable = false;
             bool hasAdd = false;
             for (const QJsonValue& page : category.value("pages").toArray()) {
@@ -1174,15 +1184,100 @@ private slots:
             QTRY_VERIFY(!(general = setupCategoryOnWire(
                 *core.app, "general", SessionMessageKind::Delta)).isEmpty());
             QCOMPARE(QJsonDocument::fromJson(general.toUtf8()).object()
-                         .value("version").toInt(), expected);
+                         .value("version").toInt(), qMin(expected, 3));
         };
         check(0, kSessionProtocolMinor, 0);
         check(1, kSessionProtocolMinor, 1);
         check(2, kSessionProtocolMinor, 2);
         check(3, kSessionProtocolMinor, 3);
-        check(9, kSessionProtocolMinor, 3);
+        check(4, kSessionProtocolMinor, 4);
+        check(9, kSessionProtocolMinor, 4);
         check(2, quint16(kRadioIdentitySessionProtocolMinor - 1), 0);
         check(3, quint16(kRadioIdentitySessionProtocolMinor - 1), 0);
+    }
+
+    void displayDescriptionPublishesOnlyVersionFourFftOptions()
+    {
+        SetupDescriptionService service;
+        const QJsonObject display = service.category(QStringLiteral("display"));
+        QCOMPARE(display.value("version"), QJsonValue(4));
+        QCOMPARE(display.value("pages").toArray().size(), 3);
+        const QString source = service.display();
+        for (int version = 1; version <= 4; ++version) {
+            const QJsonObject fitted = QJsonDocument::fromJson(
+                SetupDescriptionService::fitCategoryForVersion(source, version).toUtf8()).object();
+            QCOMPARE(fitted.value("version"), QJsonValue(version));
+            int count = 0;
+            int optionSliders = 0;
+            for (const QJsonValue& page : fitted.value("pages").toArray()) {
+                for (const QJsonValue& section : page.toObject().value("sections").toArray()) {
+                    for (const QJsonValue& raw : section.toObject().value("controls").toArray()) {
+                        const QJsonObject control = raw.toObject();
+                        ++count;
+                        if (control.contains("options")) {
+                            ++optionSliders;
+                            QCOMPARE(control.value("kind"), QJsonValue("slider"));
+                            QVERIFY(!control.contains("min"));
+                            QVERIFY(!control.contains("max"));
+                            QVERIFY(!control.contains("step"));
+                        }
+                    }
+                }
+            }
+            QCOMPARE(count, version == 4 ? 14 : 11);
+            QCOMPARE(optionSliders, version == 4 ? 2 : 0);
+        }
+    }
+
+    void displayV4RejectsMalformedOptionsAndNormalizeDependency()
+    {
+        SetupDescriptionService service;
+        const QJsonArray pages = service.category(QStringLiteral("display")).value("pages").toArray();
+        const QJsonObject rxFft = pages.at(0).toObject().value("sections").toArray().at(0)
+            .toObject().value("controls").toArray().at(0).toObject();
+        QVERIFY(SetupDescriptionService::validateDisplaySettingBinding(rxFft));
+        const QJsonArray original = rxFft.value("options").toArray();
+        const auto rejects = [&rxFft](const QJsonArray& options) {
+            QJsonObject changed = rxFft;
+            changed.insert("options", options);
+            QVERIFY(!SetupDescriptionService::validateDisplaySettingBinding(changed));
+        };
+        rejects({});
+        QJsonArray duplicate = original;
+        duplicate[1] = duplicate[0];
+        rejects(duplicate);
+        QJsonArray reversed = original;
+        reversed[0] = original[1];
+        reversed[1] = original[0];
+        rejects(reversed);
+        QJsonArray unexpected = original;
+        unexpected[6] = QJsonObject{{"value", 524288}, {"label", "524288"}};
+        rejects(unexpected);
+        QJsonArray nonfinite = original;
+        nonfinite[0] = QJsonObject{{"value", QJsonValue()}, {"label", "4096"}};
+        rejects(nonfinite);
+        QJsonObject wrongDefault = rxFft;
+        wrongDefault.insert("default", 1024);
+        QVERIFY(!SetupDescriptionService::validateDisplaySettingBinding(wrongDefault));
+        QJsonObject numericRange = rxFft;
+        numericRange.insert("min", 4096);
+        QVERIFY(!SetupDescriptionService::validateDisplaySettingBinding(numericRange));
+
+        const QJsonObject normalize = pages.at(2).toObject().value("sections").toArray().at(1)
+            .toObject().value("controls").toArray().at(3).toObject();
+        QVERIFY(SetupDescriptionService::validateDisplaySettingBinding(normalize));
+        for (const QJsonObject& dependency : {
+                 QJsonObject{},
+                 QJsonObject{{"setting", "DisplayTxWfDetector"},
+                             {"oneOf", QJsonArray{"2", "3", "4"}}},
+                 QJsonObject{{"setting", "DisplayTxPanDetector"},
+                             {"oneOf", QJsonArray{"2", "4"}}},
+                 QJsonObject{{"setting", "DisplayTxPanDetector"},
+                             {"oneOf", QJsonArray{"2", "3", "4"}}, {"extra", true}}}) {
+            QJsonObject changed = normalize;
+            changed.insert("enabledWhen", dependency);
+            QVERIFY(!SetupDescriptionService::validateDisplaySettingBinding(changed));
+        }
     }
 
     void tnfTableRejectsMalformedSourcesAndActions()
