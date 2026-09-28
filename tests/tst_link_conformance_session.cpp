@@ -1032,6 +1032,7 @@ private slots:
     void sessionFixtures();
     void sessionFixturesOverADataChannel_data();
     void sessionFixturesOverADataChannel();
+    void aRejectedDataChannelStartReportsItsStage();
     void everyVerbIsInvokedRightAndWrong();
     void rightAndWrongLegsGetDifferentAnswers();
     void everyFixtureRunsOnTheStation();
@@ -1151,7 +1152,10 @@ QString TstLinkConformanceSession::run(const QString& id, const QJsonObject& fix
         return QStringLiteral("%1: the station has no certificate for a data channel").arg(id);
     }
     std::vector<std::unique_ptr<NereusSDR::Test::DataChannelBridge>> bridges;
-    const auto join = [&bridges, server, certificate, key](LoopbackTransport* joined) {
+    const auto join = [&bridges, server, certificate, key](LoopbackTransport* joined,
+                                                           QString* diagnostic = nullptr) {
+        QElapsedTimer elapsed;
+        elapsed.start();
         auto bridge = std::make_unique<NereusSDR::Test::DataChannelBridge>(
             joined, StationServer::kMaxIncomingMessageBytes,
             StationClient::kMaxIncomingMessageBytes, certificate, key,
@@ -1159,11 +1163,19 @@ QString TstLinkConformanceSession::run(const QString& id, const QJsonObject& fix
         NereusSDR::Test::DataChannelBridge* opened = bridge.get();
         bridges.push_back(std::move(bridge));
         // Real time: the DTLS and SCTP handshakes on this computer.
-        return opened->started()
+        const bool didOpen = opened->started()
             && NereusSDR::Test::waitFor([opened] { return opened->opened(); }, 15000);
+        if (!didOpen && diagnostic) {
+            *diagnostic = QStringLiteral("%1 elapsed=%2ms")
+                              .arg(opened->openDiagnostic())
+                              .arg(elapsed.elapsed());
+        }
+        return didOpen;
     };
-    if (!join(&client)) {
-        return QStringLiteral("%1: the data channel did not open").arg(id);
+    QString openDiagnostic;
+    if (!join(&client, &openDiagnostic)) {
+        return QStringLiteral("%1: the data channel did not open (%2)")
+            .arg(id, openDiagnostic);
     }
     LinkFixtures::setSettleCheck([&bridges] {
         for (const auto& bridge : bridges) {
@@ -1235,6 +1247,34 @@ void TstLinkConformanceSession::sessionFixturesOverADataChannel()
         QSKIP("NEREUS_LINK_MODE=loopback runs the in-process mode alone");
     }
     runFixtureRow(true);
+}
+
+void TstLinkConformanceSession::aRejectedDataChannelStartReportsItsStage()
+{
+    LoopbackTransport client(QStringLiteral("diagnostic-client"));
+    {
+        NereusSDR::Test::DataChannelBridge bridge(
+            &client, 0, StationClient::kMaxIncomingMessageBytes, {}, {},
+            [](DataChannelTransport*) {});
+        QVERIFY(!bridge.started());
+        QCOMPARE(bridge.openDiagnostic(),
+                 QStringLiteral("start(answerer=0,offerer=0) opened(answerer=0,offerer=0) "
+                                "failed(answerer=0,offerer=0)"));
+    }
+    {
+        NereusSDR::Test::DataChannelBridge bridge(
+            &client, StationServer::kMaxIncomingMessageBytes, 0, {}, {},
+            [](DataChannelTransport*) {});
+        QVERIFY(!bridge.started());
+        QCOMPARE(bridge.openDiagnostic(),
+                 QStringLiteral("start(answerer=1,offerer=0) opened(answerer=0,offerer=0) "
+                                "failed(answerer=0,offerer=0)"));
+        bridge.answerer()->failed(QStringLiteral("synthetic failure"));
+        bridge.offerer()->failed(QStringLiteral("synthetic failure"));
+        QCOMPARE(bridge.openDiagnostic(),
+                 QStringLiteral("start(answerer=1,offerer=0) opened(answerer=0,offerer=0) "
+                                "failed(answerer=1,offerer=1)"));
+    }
 }
 
 void TstLinkConformanceSession::runFixtureRow(bool overDataChannel)

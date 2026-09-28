@@ -907,8 +907,10 @@ colours for the same signal.
   Adjacent cases and a full rerun passed, but that does not establish a cause.
 - Ruling: JJ requires cause and suggested fix for load failures; no test deadline
   increase or assertion waiver is authorized.
-- Status: OPEN. First and rerun logs are preserved in the accessory handback.
-  Better stage diagnostics and a bounded reproduction remain required.
+- Status: OPEN cause. Signed fda40c1e adds stage diagnostics for both starts,
+  open callbacks and failure callbacks, with elapsed time and the unchanged
+  15-second bound. Three bounded lane conformance runs passed without reproducing
+  the failure; that is not a fix. First-failure logs remain preserved.
 - Plan: integrated protocol reliability under real host load.
 
 ### G-58: Setting-backed toggles need explicit boolean string encoding
