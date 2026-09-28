@@ -277,7 +277,11 @@ void RemoteTelemetryController::sampleNow()
         && media->traffic.receivedDisplayPayloadBytes >= m_mediaBaseline->traffic.receivedDisplayPayloadBytes
         && media->traffic.receivedRtpBytes >= m_mediaBaseline->traffic.receivedRtpBytes
         && media->traffic.submittedDisplayPayloadBytes >= m_mediaBaseline->traffic.submittedDisplayPayloadBytes
-        && media->traffic.submittedRtpBytes >= m_mediaBaseline->traffic.submittedRtpBytes;
+        && media->traffic.submittedRtpBytes >= m_mediaBaseline->traffic.submittedRtpBytes
+        && media->traffic.receivedTxPayloadBytes >= m_mediaBaseline->traffic.receivedTxPayloadBytes
+        && media->traffic.submittedTxPayloadBytes >= m_mediaBaseline->traffic.submittedTxPayloadBytes
+        && media->traffic.receivedIqPayloadBytes >= m_mediaBaseline->traffic.receivedIqPayloadBytes
+        && media->traffic.submittedIqPayloadBytes >= m_mediaBaseline->traffic.submittedIqPayloadBytes;
     if (mediaContinuous) {
         const auto& current = media->traffic;
         const auto& previous = m_mediaBaseline->traffic;
@@ -286,11 +290,17 @@ void RemoteTelemetryController::sampleNow()
         if (rtpRx) { m_view.audioRtpRxKbps = *rtpRx * 8.0 / 1000.0; }
         const auto displayTx = rate(current.submittedDisplayPayloadBytes, previous.submittedDisplayPayloadBytes, elapsed);
         const auto rtpTx = rate(current.submittedRtpBytes, previous.submittedRtpBytes, elapsed);
-        if (displayRx && rtpRx && m_view.controlRxKbps) {
-            m_view.coreGuiRxKbps = *m_view.controlRxKbps + (*displayRx + *rtpRx) * 8.0 / 1000.0;
+        const auto txRx = rate(current.receivedTxPayloadBytes, previous.receivedTxPayloadBytes, elapsed);
+        const auto txTx = rate(current.submittedTxPayloadBytes, previous.submittedTxPayloadBytes, elapsed);
+        const auto iqRx = rate(current.receivedIqPayloadBytes, previous.receivedIqPayloadBytes, elapsed);
+        const auto iqTx = rate(current.submittedIqPayloadBytes, previous.submittedIqPayloadBytes, elapsed);
+        if (displayRx && rtpRx && txRx && iqRx && m_view.controlRxKbps) {
+            m_view.coreGuiRxKbps = *m_view.controlRxKbps
+                + (*displayRx + *rtpRx + *txRx + *iqRx) * 8.0 / 1000.0;
         }
-        if (displayTx && rtpTx && m_view.controlTxKbps) {
-            m_view.coreGuiTxKbps = *m_view.controlTxKbps + (*displayTx + *rtpTx) * 8.0 / 1000.0;
+        if (displayTx && rtpTx && txTx && iqTx && m_view.controlTxKbps) {
+            m_view.coreGuiTxKbps = *m_view.controlTxKbps
+                + (*displayTx + *rtpTx + *txTx + *iqTx) * 8.0 / 1000.0;
         }
         if (m_view.coreGuiRxKbps && m_view.coreGuiTxKbps) {
             m_view.coreGuiTotalKbps = *m_view.coreGuiRxKbps + *m_view.coreGuiTxKbps;
@@ -520,11 +530,11 @@ QString RemoteTelemetryController::detailText() const
     text << tr("Control traffic received %1 / sent %2 kbit/s").arg(number(m_view.controlRxKbps), number(m_view.controlTxKbps));
     text << tr("Traffic seen by this app: Core→app %1 / app→Core %2 / total %3 kbps.")
         .arg(number(m_view.coreGuiRxKbps), number(m_view.coreGuiTxKbps), number(m_view.coreGuiTotalKbps));
-    text << tr("Total includes control, display and audio messages. Audio content received (Opus or lossless): %1 kbps, already included in total. No audio is sent to the Core in receive-only mode.")
+    text << tr("Total includes control, display, audio, media transmit keepalive, and raw I/Q messages. Separately routed transmit watch traffic is not counted. Audio content received (Opus or lossless): %1 kbps, already included in total. No audio is sent to the Core in receive-only mode.")
         .arg(number(m_view.audioPayloadRxKbps));
     text << tr("Audio packets received: %1 kbps, including packet headers and packets this computer later dropped. Audio content counts the sound in the packets it accepted, including duplicates.")
         .arg(number(m_view.audioRtpRxKbps));
-    text << tr("These counts exclude encryption, VPN and network overhead. Outgoing audio and display count what this app handed to the network, including queued or failed sends; that does not prove delivery.");
+    text << tr("These counts exclude encryption, VPN and network overhead. Outgoing media counts valid sends attempted through the transport, including queued or failed library sends; that does not prove delivery.");
     text << (m_view.coreRttAgeMs ? tr("Core RTT: round trip to the Core and back, measured %1 ms ago.").arg(*m_view.coreRttAgeMs)
         : tr("Core RTT: not measured recently."));
     text << (m_view.radio.rttMs && m_view.radio.rttAgeMs

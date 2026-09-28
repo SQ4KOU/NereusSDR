@@ -331,17 +331,23 @@ private slots:
         media->traffic.receivedRtpBytes = 10000;
         media->traffic.submittedDisplayPayloadBytes = 200;
         media->traffic.submittedRtpBytes = 300;
+        media->traffic.receivedTxPayloadBytes = 1000;
+        media->traffic.receivedIqPayloadBytes = 3000;
+        media->traffic.submittedTxPayloadBytes = 2000;
+        media->traffic.submittedIqPayloadBytes = 4000;
         playback.receivedAudioPayloadBytes = 9000; // subset, never add twice
         controller.sampleNow();
-        QCOMPARE(controller.current().coreGuiRxKbps, std::optional<double>(444.0));
-        QCOMPARE(controller.current().coreGuiTxKbps, std::optional<double>(4.0));
-        QCOMPARE(controller.current().coreGuiTotalKbps, std::optional<double>(448.0));
+        QCOMPARE(controller.current().coreGuiRxKbps, std::optional<double>(460.0));
+        QCOMPARE(controller.current().coreGuiTxKbps, std::optional<double>(28.0));
+        QCOMPARE(controller.current().coreGuiTotalKbps, std::optional<double>(488.0));
         QCOMPARE(controller.current().audioPayloadRxKbps, std::optional<double>(36.0));
         QCOMPARE(controller.current().audioRtpRxKbps, std::optional<double>(40.0));
-        QVERIFY(controller.bannerText().contains(QStringLiteral("Core ↓444.0 ↑4.0 total 448.0 kbps")));
+        QVERIFY(controller.bannerText().contains(QStringLiteral("Core ↓460.0 ↑28.0 total 488.0 kbps")));
         QCOMPARE(controller.history().series(Metric::SpeakerBufferMs, now, 60).points.last().value, 25.0);
         QVERIFY(controller.detailText().contains(QStringLiteral("End-to-end audio latency is not measured")));
         QVERIFY(controller.detailText().contains(QStringLiteral("already included in total")));
+        QVERIFY(controller.detailText().contains(QStringLiteral("media transmit keepalive, and raw I/Q")));
+        QVERIFY(controller.detailText().contains(QStringLiteral("Separately routed transmit watch traffic is not counted")));
 
         now += 1000;
         media->traffic.receivedDisplayPayloadBytes += 200000;
@@ -391,8 +397,9 @@ private slots:
         QVERIFY(!controller.current().coreGuiTotalKbps);
         now += 1000;
         media->traffic.receivedDisplayPayloadBytes = 1000;
+        media->traffic.receivedIqPayloadBytes = 100;
         controller.sampleNow();
-        QCOMPARE(controller.current().coreGuiTotalKbps, std::optional<double>(8.0));
+        QCOMPARE(controller.current().coreGuiTotalKbps, std::optional<double>(8.8));
         now += 1000;
         media->traffic.receivedDisplayPayloadBytes = 1; // counter reset, no negative rate
         controller.sampleNow();
@@ -401,6 +408,13 @@ private slots:
         controller.sampleNow();
         QCOMPARE(controller.current().coreGuiTotalKbps, std::optional<double>(0.0));
         QVERIFY(controller.history().series(Metric::CoreGuiTotalKbps, now, 60).points.last().breakBefore);
+        now += 1000;
+        media->traffic.receivedIqPayloadBytes = 1; // independent channel reset also gaps total
+        controller.sampleNow();
+        QVERIFY(!controller.current().coreGuiTotalKbps);
+        now += 1000;
+        controller.sampleNow();
+        QCOMPARE(controller.current().coreGuiTotalKbps, std::optional<double>(0.0));
         client.disconnectFromStation(QStringLiteral("done"));
         QVERIFY(!controller.current().coreGuiTotalKbps);
         QVERIFY(!controller.current().audioPayloadRxKbps);

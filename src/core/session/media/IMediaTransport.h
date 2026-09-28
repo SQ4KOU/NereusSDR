@@ -7,7 +7,7 @@
 //
 // One authenticated session's direct encrypted media peer. Authentication
 // and model ownership remain above this interface. Implementations carry
-// already-encoded display messages and raw RTP packets only.
+// already-encoded display, audio, transmit-keepalive, and raw I/Q payloads.
 //
 // Modification history (NereusSDR):
 //   2026-09-25: iPhone app plan Task 37 (R-IOS-13): the "tx" data channel
@@ -86,6 +86,13 @@ struct MediaTransportTelemetry {
     /// for one drain. Each discarded message was already counted in
     /// receivedDisplayPayloadBytes, which measures arrival, not use.
     quint64 displayMessagesDropped = 0;
+    // Application bytes on the dedicated keepalive and raw I/Q channels.
+    // Receive counts precede local queue drops; submit counts precede the
+    // library call and therefore do not prove delivery.
+    quint64 receivedTxPayloadBytes = 0;
+    quint64 submittedTxPayloadBytes = 0;
+    quint64 receivedIqPayloadBytes = 0;
+    quint64 submittedIqPayloadBytes = 0;
 };
 
 class IMediaTransport : public QObject {

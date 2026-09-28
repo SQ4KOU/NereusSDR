@@ -56,10 +56,13 @@ True end-to-end audio latency requires a separate timing contract.
 
 The first bandwidth increment uses GUI-local observations and requires no wire
 version bump: control text bytes plus display and raw RTP bytes at the media
-transport boundary. Receive counts precede bounded local queue drops. Outgoing
-media records validated submissions to the transport API, including queued or
-failed sends; it is not a delivery/wire-byte measurement. Crypto, framing,
-ICE, VPN and lower network overhead are excluded. The separate audio graph
+transport boundary. Dedicated transmit-keepalive and raw I/Q application
+payload bytes were added to the same local media totals later. Receive counts
+precede bounded local queue drops. Outgoing media records validated submissions
+to the transport API, including queued or failed sends; it is not a
+delivery/wire-byte measurement. Separately routed auxiliary watch traffic is
+not part of these media-channel counters. Crypto, framing, ICE, VPN and lower
+network overhead are excluded. The separate audio graph
 shows raw received RTP and validated Opus payload as subsets already included
 in total. Opus validation occurs after the bounded media handoff, so locally
 dropped-before-validation RTP remains visible in the RTP/total series only.

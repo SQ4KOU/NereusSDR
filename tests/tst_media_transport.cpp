@@ -285,6 +285,8 @@ private slots:
     void micLineCarriesLosslessWhenOffered();
     void micSsrcPreconditionsRefuseSilently();
     void dedicatedIqChannelPreservesOrder();
+    void dedicatedTxAndIqTelemetryCountsPayloadsAndResets();
+    void iqTelemetryCountsValidArrivalBeforeReceiveQueueFails();
 
 private:
     static void wireExchange(LibDataChannelMediaTransport& offerer,
@@ -380,6 +382,119 @@ void TestMediaTransport::dedicatedIqChannelPreservesOrder()
         QCOMPARE(decoded->sequence, quint32(index));
         QCOMPARE(decoded->generation, 9u);
     }
+    offerer.stop();
+    answerer.stop();
+}
+
+void TestMediaTransport::dedicatedTxAndIqTelemetryCountsPayloadsAndResets()
+{
+    LibDataChannelMediaTransport offerer;
+    LibDataChannelMediaTransport answerer;
+    wire(offerer, answerer);
+    IMediaTransport::StartOptions offered{IMediaTransport::Role::Offerer, kTestAudioSsrc};
+    IMediaTransport::StartOptions answered{IMediaTransport::Role::Answerer, kTestAudioSsrc};
+    offered.txChannel = answered.txChannel = true;
+    offered.iqChannel = answered.iqChannel = true;
+    QSignalSpy offerReady(&offerer, &IMediaTransport::ready);
+    QSignalSpy answerReady(&answerer, &IMediaTransport::ready);
+    QSignalSpy txReceived(&answerer, &IMediaTransport::txReceived);
+    QSignalSpy iqReceived(&answerer, &IMediaTransport::iqReceived);
+    QVERIFY(answerer.start(answered));
+    QVERIFY(offerer.start(offered));
+    QTRY_COMPARE_WITH_TIMEOUT(offerReady.size(), 1, 10000);
+    QTRY_COMPARE_WITH_TIMEOUT(answerReady.size(), 1, 10000);
+
+    const QByteArray tx = QByteArrayLiteral("watch-keepalive");
+    const auto iq = RemoteIqCodec::encode(1, 9, 1, {0.25f, -0.25f});
+    QVERIFY(iq);
+    QVERIFY(offerer.sendTx(tx));
+    const auto iqResult = offerer.submitIq(*iq);
+    QVERIFY(iqResult == IMediaTransport::DisplaySendResult::Sent
+            || iqResult == IMediaTransport::DisplaySendResult::Queued);
+    QTRY_COMPARE_WITH_TIMEOUT(txReceived.size(), 1, 5000);
+    QTRY_COMPARE_WITH_TIMEOUT(iqReceived.size(), 1, 5000);
+    QCOMPARE(txReceived.constFirst().constFirst().toByteArray(), tx);
+    QCOMPARE(iqReceived.constFirst().constFirst().toByteArray(), *iq);
+    const auto submitted = offerer.telemetry();
+    const auto received = answerer.telemetry();
+    QVERIFY(submitted && received);
+    QCOMPARE(submitted->submittedTxPayloadBytes, quint64(tx.size()));
+    QCOMPARE(submitted->submittedIqPayloadBytes, quint64(iq->size()));
+    QCOMPARE(received->receivedTxPayloadBytes, quint64(tx.size()));
+    QCOMPARE(received->receivedIqPayloadBytes, quint64(iq->size()));
+    QCOMPARE(submitted->receivedTxPayloadBytes, quint64(0));
+    QCOMPARE(received->submittedIqPayloadBytes, quint64(0));
+
+    QVERIFY(!offerer.sendTx({}));
+    QVERIFY(!offerer.sendTx(QByteArray(IMediaTransport::kMaxTxMessageBytes + 1, 'x')));
+    QCOMPARE(offerer.submitIq({}), IMediaTransport::DisplaySendResult::Refused);
+    QCOMPARE(offerer.submitIq(QByteArray(IMediaTransport::kMaxIqMessageBytes + 1, 'x')),
+             IMediaTransport::DisplaySendResult::Refused);
+    QCOMPARE(offerer.telemetry()->submittedTxPayloadBytes, submitted->submittedTxPayloadBytes);
+    QCOMPARE(offerer.telemetry()->submittedIqPayloadBytes, submitted->submittedIqPayloadBytes);
+
+    offerer.stop();
+    answerer.stop();
+    QVERIFY(!offerer.telemetry() && !answerer.telemetry());
+    QSignalSpy offerReadyAgain(&offerer, &IMediaTransport::ready);
+    QSignalSpy answerReadyAgain(&answerer, &IMediaTransport::ready);
+    QVERIFY(answerer.start(answered));
+    QVERIFY(offerer.start(offered));
+    QTRY_COMPARE_WITH_TIMEOUT(offerReadyAgain.size(), 1, 10000);
+    QTRY_COMPARE_WITH_TIMEOUT(answerReadyAgain.size(), 1, 10000);
+    QCOMPARE(offerer.telemetry()->submittedTxPayloadBytes, quint64(0));
+    QCOMPARE(offerer.telemetry()->submittedIqPayloadBytes, quint64(0));
+    QCOMPARE(answerer.telemetry()->receivedTxPayloadBytes, quint64(0));
+    QCOMPARE(answerer.telemetry()->receivedIqPayloadBytes, quint64(0));
+    offerer.stop();
+    answerer.stop();
+}
+
+void TestMediaTransport::iqTelemetryCountsValidArrivalBeforeReceiveQueueFails()
+{
+    LibDataChannelMediaTransport offerer;
+    LibDataChannelMediaTransport answerer;
+    wire(offerer, answerer);
+    IMediaTransport::StartOptions offered{IMediaTransport::Role::Offerer, kTestAudioSsrc};
+    IMediaTransport::StartOptions answered{IMediaTransport::Role::Answerer, kTestAudioSsrc};
+    offered.iqChannel = answered.iqChannel = true;
+    QSignalSpy offerReady(&offerer, &IMediaTransport::ready);
+    QSignalSpy answerReady(&answerer, &IMediaTransport::ready);
+    QSignalSpy iqReceived(&answerer, &IMediaTransport::iqReceived);
+    QSignalSpy iqErrors(&answerer, &IMediaTransport::iqErrorOccurred);
+    QVERIFY(answerer.start(answered));
+    QVERIFY(offerer.start(offered));
+    QTRY_COMPARE_WITH_TIMEOUT(offerReady.size(), 1, 10000);
+    QTRY_COMPARE_WITH_TIMEOUT(answerReady.size(), 1, 10000);
+
+    // With no Qt drain, the ninth valid frame exceeds the existing eight-
+    // message receive queue. The callback counter still measures its arrival.
+    quint64 bytes = 0;
+    for (quint32 sequence = 0; sequence < 9; ++sequence) {
+        const auto frame = RemoteIqCodec::encode(1, 9, sequence, {0.25f, -0.25f});
+        QVERIFY(frame);
+        QElapsedTimer waited;
+        waited.start();
+        while (offerer.iqBusy() && waited.elapsed() < 5000) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        QVERIFY(!offerer.iqBusy());
+        const auto result = offerer.submitIq(*frame);
+        QVERIFY(result == IMediaTransport::DisplaySendResult::Sent
+                || result == IMediaTransport::DisplaySendResult::Queued);
+        bytes += quint64(frame->size());
+    }
+    QElapsedTimer receivedWait;
+    receivedWait.start();
+    while (answerer.telemetry()->receivedIqPayloadBytes < bytes
+           && receivedWait.elapsed() < 5000) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    QCOMPARE(offerer.telemetry()->submittedIqPayloadBytes, bytes);
+    QCOMPARE(answerer.telemetry()->receivedIqPayloadBytes, bytes);
+    QCOMPARE(iqReceived.size(), 0);
+    QTRY_COMPARE_WITH_TIMEOUT(iqErrors.size(), 1, 5000);
+    QCOMPARE(iqReceived.size(), 0);
     offerer.stop();
     answerer.stop();
 }
