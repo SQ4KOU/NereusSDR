@@ -12,8 +12,13 @@
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-05-11  J.J. Boyd / KG4VCF  Phase 3R Task I4. Initial
-//                 implementation over librade's raw ASCII EOO helpers.
-//                 AI tooling: Anthropic Claude Code.
+//                 implementation. NereusSDR-native wrapper around
+//                 the third_party/rade callsign-over-EOO API
+//                 (rade_tx_set_eoo_callsign / rade_rx_get_eoo_callsign,
+//                 declared in third_party/rade/src/rade_api.h:120-145
+//                 [@b289102]; implemented in
+//                 third_party/rade/src/rade_api_nopy.c:159-201
+//                 [@b289102]). AI tooling: Anthropic Claude Code.
 //   2026-09-28  J.J. Boyd / KG4VCF  RADE end-of-over callsigns: FreeDV's
 //                 format through RadeTextCodec. AI tooling: Anthropic
 //                 Claude Code.

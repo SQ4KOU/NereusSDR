@@ -33,8 +33,23 @@
 // Modification history (NereusSDR):
 //   2026-05-11  J.J. Boyd / KG4VCF  Phase 3R Task I4. NereusSDR-native
 //                 wrapper around the third_party/rade library's
-//                 callsign-over-EOO channel. AI tooling: Anthropic Claude
-//                 Code.
+//                 callsign-over-EOO channel. Replaces the 18-line I1
+//                 forward stub. The Phase 3R review (logged at the
+//                 commit message and at
+//                 docs/attribution/aethersdr-reconciliation.md Phase 3R
+//                 Task I4) concluded that the original plan to port
+//                 freedv-gui's rade_text.c verbatim was not workable
+//                 because that source pulls in roughly 1500 lines of
+//                 codec2 dependencies absent from NereusSDR's tree;
+//                 the vendored third_party/rade library already
+//                 exposes a working callsign-over-EOO surface with no
+//                 extra dependencies, so the wrapper sits on that.
+//                 Public API (setOurCallsign / ourCallsign /
+//                 pushTxCallsign / processRxEooBits / textDecoded
+//                 signal) is NereusSDR-native shape with no upstream
+//                 counterpart. Wire-up into RadeChannel's processIq /
+//                 txEncode paths is deferred to Phase L per the plan.
+//                 AI tooling: Anthropic Claude Code.
 //   2026-09-28  J.J. Boyd / KG4VCF  RADE end-of-over callsigns: FreeDV's
 //                 format through RadeTextCodec instead of librade's raw
 //                 ASCII helpers, so NereusSDR and FreeDV stations decode
