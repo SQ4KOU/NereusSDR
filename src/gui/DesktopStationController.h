@@ -16,6 +16,7 @@ class RadioModel;
 class StationServer;
 
 class DesktopStationController final : public QObject {
+    Q_OBJECT
 public:
     enum class Key { Mox, Tune };
     enum class RequestState { Refused, NoChange, Pending, Ask };
@@ -47,6 +48,10 @@ public:
     StationServer* server() const;
     bool enabled() const;
 
+signals:
+    void hostingStateChanged(bool enabled);
+
+public:
     RequestResult requestMox(bool on);
     RequestResult requestTune(bool on);
     RequestResult confirmTake(const TakeQuestion& shown);

@@ -76,6 +76,12 @@ public:
         std::function<bool()> powerOn;
         std::function<bool()> powerCanToggle;
         std::function<void()> togglePower;
+        // Present only while this local window hosts the Core.
+        std::function<bool()> desktopHosting;
+        std::function<bool()> desktopMoxOn;
+        std::function<bool()> desktopTuneOn;
+        std::function<void(bool)> requestDesktopMox;
+        std::function<void(bool)> requestDesktopTune;
         // Remote windows: whether the Core takes this window's transmit
         // controls, and the reason shown when it does not.
         std::function<bool()> transmitPermitted;

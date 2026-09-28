@@ -1263,13 +1263,20 @@ void TxApplet::wireControls()
         // tuneRefused). Writing "TUNING..." here, after setTune returned,
         // painted a refused press as tuning: the refusal had already reset
         // the button inside this call.
-        m_model->setTune(on);
+        if (m_desktopTuneRequest) {
+            const QPointer<TxApplet> self(this);
+            m_desktopTuneRequest(on);
+            if (self) { syncDesktopKeyState(); }
+        } else {
+            m_model->setTune(on);
+        }
     });
 
     // Reverse: tuneRefused → uncheck TUN button + clear text.
     // From Thetis console.cs:30076 [v2.10.3.13]: guard conditions before
     // chkTUN.Checked = true (connection + power-on checks).
     connect(m_model, &RadioModel::tuneRefused, this, [this](const QString& /*reason*/) {
+        if (m_desktopTuneOn) { syncDesktopKeyState(); return; }
         QSignalBlocker b(m_tuneBtn);
         m_updatingFromModel = true;
         m_tuneBtn->setChecked(false);
@@ -1290,7 +1297,13 @@ void TxApplet::wireControls()
         // the way off, as chkMOX_Click does.
         connect(m_moxBtn, &QPushButton::toggled, this, [this](bool on) {
             if (m_updatingFromModel) { return; }
-            m_model->setMoxFromButton(on);
+            if (m_desktopMoxRequest) {
+                const QPointer<TxApplet> self(this);
+                m_desktopMoxRequest(on);
+                if (self) { syncDesktopKeyState(); }
+            } else {
+                m_model->setMoxFromButton(on);
+            }
         });
 
         // Reverse: MoxController::moxStateChanged → button checked state.
@@ -1299,6 +1312,7 @@ void TxApplet::wireControls()
         // the confirmed state, not the in-progress request.
         connect(mox, &MoxController::moxStateChanged,
                 this, [this](bool on) {
+            if (m_desktopMoxOn) { syncDesktopKeyState(); return; }
             QSignalBlocker b(m_moxBtn);
             m_updatingFromModel = true;
             m_moxBtn->setChecked(on);
@@ -1325,6 +1339,7 @@ void TxApplet::wireControls()
         // requests can be refused.
         connect(mox, &MoxController::moxRejected,
                 this, [this, mox](const QString& /*reason*/) {
+            if (m_desktopMoxOn) { syncDesktopKeyState(); return; }
             QSignalBlocker b(m_moxBtn);
             m_updatingFromModel = true;
             m_moxBtn->setChecked(mox->isMox());
@@ -1335,6 +1350,7 @@ void TxApplet::wireControls()
         // manualMoxChanged fires when setTune() sets/clears m_manualMox.
         connect(mox, &MoxController::manualMoxChanged,
                 this, [this](bool isManual) {
+            if (m_desktopTuneOn) { syncDesktopKeyState(); return; }
             QSignalBlocker b(m_tuneBtn);
             m_updatingFromModel = true;
             m_tuneBtn->setChecked(isManual);
@@ -1678,7 +1694,7 @@ void TxApplet::wireControls()
     // Status label refresh helper (shared by filterChanged and dspModeChanged).
     auto refreshFilterStatus = [this]() {
         if (!m_txFilterStatusLabel || !m_model) { return; }
-        SliceModel* slice = m_model->activeSlice();
+        SliceModel* slice = activeSliceForControls();
         const DSPMode mode = slice ? slice->dspMode() : DSPMode::USB;
         m_txFilterStatusLabel->setText(
             m_model->transmitModel().filterDisplayText(mode));
@@ -1717,7 +1733,7 @@ void TxApplet::wireControls()
 
     // Status label refresh on DSP mode change (symmetric ↔ asymmetric format).
     // Piggybacks on the same active-slice connect block used by K.2 above.
-    if (SliceModel* slice = m_model->activeSlice()) {
+    if (SliceModel* slice = activeSliceForControls()) {
         connect(slice, &SliceModel::dspModeChanged,
                 this, [refreshFilterStatus](DSPMode) {
             refreshFilterStatus();
@@ -1930,7 +1946,7 @@ void TxApplet::syncFromModel()
         m_txFilterHighSpin->setValue(tx.filterHigh());
     }
     if (m_txFilterStatusLabel) {
-        SliceModel* slice = m_model->activeSlice();
+        SliceModel* slice = activeSliceForControls();
         const DSPMode mode = slice ? slice->dspMode() : DSPMode::USB;
         m_txFilterStatusLabel->setText(tx.filterDisplayText(mode));
     }
@@ -1950,15 +1966,42 @@ void TxApplet::syncFromModel()
     // MOX / TUNE button state
     if (mox) {
         QSignalBlocker bm(m_moxBtn);
-        m_moxBtn->setChecked(mox->isMox());
+        m_moxBtn->setChecked(m_desktopMoxOn ? m_desktopMoxOn() : mox->isMox());
 
         QSignalBlocker bt(m_tuneBtn);
-        const bool isManual = mox->isManualMox();
+        const bool isManual = m_desktopTuneOn ? m_desktopTuneOn() : mox->isManualMox();
         m_tuneBtn->setChecked(isManual);
         m_tuneBtn->setText(isManual ? QStringLiteral("TUNING...") : QStringLiteral("TUNE"));
     }
 
     m_updatingFromModel = false;
+}
+
+void TxApplet::setDesktopKeyHandlers(std::function<void(bool)> mox,
+                                     std::function<void(bool)> tune,
+                                     std::function<bool()> moxOn,
+                                     std::function<bool()> tuneOn,
+                                     std::function<SliceModel*()> activeSlice)
+{
+    m_desktopMoxRequest = std::move(mox);
+    m_desktopTuneRequest = std::move(tune);
+    m_desktopMoxOn = std::move(moxOn);
+    m_desktopTuneOn = std::move(tuneOn);
+    m_desktopActiveSlice = std::move(activeSlice);
+    followActiveSliceMode();
+    syncFromModel();
+}
+
+void TxApplet::syncDesktopKeyState()
+{
+    if (!m_model || !m_model->moxController()) { return; }
+    const QSignalBlocker moxBlock(m_moxBtn);
+    const QSignalBlocker tuneBlock(m_tuneBtn);
+    m_moxBtn->setChecked(m_desktopMoxOn ? m_desktopMoxOn()
+                                       : m_model->moxController()->isMox());
+    const bool tuning = m_desktopTuneOn ? m_desktopTuneOn() : m_model->isTune();
+    m_tuneBtn->setChecked(tuning);
+    m_tuneBtn->setText(tuning ? QStringLiteral("TUNING...") : QStringLiteral("TUNE"));
 }
 
 // (Phase 3M-1b J.2 showVoxSettingsPopup removed in 3M-3a-iii Task 16 —
@@ -2106,9 +2149,15 @@ void TxApplet::updatePowerSliderLabels()
 Band TxApplet::txBand() const
 {
     if (!m_model) { return m_currentBand; }
-    SliceModel* slice = m_model->activeSlice();
+    SliceModel* slice = activeSliceForControls();
     if (!slice) { return m_currentBand; }
     return bandFromFrequency(slice->frequency());
+}
+
+SliceModel* TxApplet::activeSliceForControls() const
+{
+    return m_desktopActiveSlice ? m_desktopActiveSlice()
+                                : (m_model ? m_model->activeSlice() : nullptr);
 }
 
 void TxApplet::setCurrentBand(Band band)
@@ -2227,7 +2276,7 @@ void TxApplet::followActiveSliceMode()
 {
     disconnect(m_moxModeConnection);
     m_moxModeConnection = {};
-    SliceModel* slice = m_model ? m_model->activeSlice() : nullptr;
+    SliceModel* slice = activeSliceForControls();
     if (!slice) {
         return;
     }

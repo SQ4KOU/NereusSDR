@@ -187,6 +187,10 @@ ContainerButtonDispatcher::stateOf(Id id, int rxSource) const
             st.on = id == Id::Tun ? m_model->transmitModel().isTune()
                   : id == Id::Mox ? m_model->isTransmitting()
                                   : ps && ps->twoToneOn();
+        } else if (m_hooks.desktopHosting && m_hooks.desktopHosting()
+                   && (id == Id::Tun || id == Id::Mox)) {
+            st.on = id == Id::Tun ? (m_hooks.desktopTuneOn && m_hooks.desktopTuneOn())
+                                  : (m_hooks.desktopMoxOn && m_hooks.desktopMoxOn());
         } else if (id == Id::Tun) {
             st.on = m_model->isTune();
         } else if (id == Id::Mox) {
@@ -333,12 +337,22 @@ QString ContainerButtonDispatcher::click(Id id, int rxSource)
         break;
     case Id::Tun:
         // TxApplet's TUNE button (RadioModel::setTune).
-        m_model->setTune(turnOn);
+        if (m_hooks.desktopHosting && m_hooks.desktopHosting()
+            && m_hooks.requestDesktopTune) {
+            m_hooks.requestDesktopTune(turnOn);
+        } else {
+            m_model->setTune(turnOn);
+        }
         break;
     case Id::Mox:
         // TxApplet's MOX button: a manual key, with TUN and two-tone turned
         // off on the way off (RadioModel::setMoxFromButton, Task 7).
-        m_model->setMoxFromButton(turnOn);
+        if (m_hooks.desktopHosting && m_hooks.desktopHosting()
+            && m_hooks.requestDesktopMox) {
+            m_hooks.requestDesktopMox(turnOn);
+        } else {
+            m_model->setMoxFromButton(turnOn);
+        }
         break;
     case Id::TwoTon:
         // TxApplet's 2-TONE button (RadioModel::setTwoTone: the

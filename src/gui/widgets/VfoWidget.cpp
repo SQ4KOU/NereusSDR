@@ -2487,6 +2487,14 @@ void VfoWidget::setTxSlice(bool isTx)
     m_txBadge->setChecked(isTx && !m_inUseByRadio);
 }
 
+void VfoWidget::setStationPresentationAllowed(bool allowed)
+{
+    if (m_stationPresentationAllowed == allowed) { return; }
+    m_stationPresentationAllowed = allowed;
+    if (!allowed) { hide(); }
+    positionFloatingButtons();
+}
+
 bool VfoWidget::txSliceShown() const
 {
     return m_txBadge && m_txBadge->isChecked();
@@ -3167,7 +3175,8 @@ void VfoWidget::positionFloatingButtons()
             continue;
         }
         const bool isCloseBtn = (btn == m_closeBtn);
-        const bool show = isVisible() && (closeShown || !isCloseBtn);
+        const bool show = m_stationPresentationAllowed && isVisible()
+            && (closeShown || !isCloseBtn);
         if (isCloseBtn && !closeShown) {
             btn->hide();
             continue;  // don't advance btnY — next button takes the top slot
