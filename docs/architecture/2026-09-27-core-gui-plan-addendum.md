@@ -618,8 +618,13 @@ colours for the same signal.
 - Status: country ranges from signed `7ffcc419` are integrated: all 24 supported
   regions and 264 HF ranges independently match Thetis. Integrated app/Core build and
   both band-plan and TX-frequency suites pass (1.11 s). Unknown enum values fail closed.
-  Region activation still needs Core-owned validated settings and the filter-edge gate;
-  enabling the combo alone would be unsafe. Thetis's current `Init60mChannels` has only UK, US and
+  The filter-edge gate now follows Thetis: signed TX-chain filter edges for voice/
+  digital modes, carrier-only TUNE/CW, with XIT included. Malformed or out-of-range
+  stored regions are rejected before enum conversion. New regressions reproduced
+  eleven failures before the fix; four guard/filter suites pass and the corrected
+  XIT suite passes with explicit whole-passband expectations. Region activation
+  still needs validated Core writes and the remote capability gate; enabling the
+  combo alone would be unsafe. Thetis's current `Init60mChannels` has only UK, US and
   default cases, so missing extra country-channel arrays are not established; Nereus's
   explicit UK/Japan channelization is a native exception. The isolated parity lane is only
   disabling misleading interim UI and recording this gap. Ganymede and DisableHFPA remain

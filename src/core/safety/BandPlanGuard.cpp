@@ -1,3 +1,5 @@
+// 2026-09-27: shared TX filter geometry and validated band-edge admission.
+// J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 // =================================================================
 // src/core/safety/BandPlanGuard.cpp  (NereusSDR)
 // =================================================================
@@ -117,6 +119,7 @@ mw0lge@grange-lane.co.uk
 
 #include "core/safety/BandPlanGuard.h"
 #include <array>
+#include <limits>
 
 namespace NereusSDR::safety {
 
@@ -741,6 +744,47 @@ bool BandPlanGuard::isValidTxFreq(Region region, std::int64_t freqHz,
     return false;
 }
 
+bool BandPlanGuard::isValidTxPassband(Region region, std::int64_t freqHz, DSPMode mode,
+                                      int filterLowHz, int filterHighHz, bool extended,
+                                      bool ignoreFilter) const noexcept
+{
+    // From Thetis console.cs:6778-6814 [v2.10.3.15], CheckValidTXFreq.
+    if (extended) { return true; }
+    //MW0LGE_21d filter outside band, ignore option
+    const std::int64_t low = ignoreFilter ? 0 : filterLowHz;
+    const std::int64_t high = ignoreFilter ? 0 : filterHighHz;
+    if (mode == DSPMode::CWL || mode == DSPMode::CWU) {
+        return isValidTxFreq(region, freqHz, mode, false);
+    }
+    // NereusSDR-native arithmetic guard: invalid wire/state values cannot wrap.
+    const auto inRange = [&](std::int64_t offset) {
+        if ((offset > 0 && freqHz > std::numeric_limits<std::int64_t>::max() - offset)
+            || (offset < 0 && freqHz < std::numeric_limits<std::int64_t>::min() - offset)) {
+            return false;
+        }
+        return isValidTxFreq(region, freqHz + offset, mode, false);
+    };
+    switch (mode) {
+    case DSPMode::LSB:
+    case DSPMode::DIGL:
+    case DSPMode::USB:
+    case DSPMode::DIGU:
+    case DSPMode::DSB:
+    case DSPMode::AM:
+    case DSPMode::SAM:
+    case DSPMode::FM:
+    case DSPMode::SPEC:
+    // NereusSDR-native RADE modes use the TX chain's USB/LSB geometry.
+    case DSPMode::RADE_U:
+    case DSPMode::RADE_L:
+        return low <= high && inRange(low) && inRange(high);
+    case DSPMode::DRM:
+        return low <= high && inRange(low - 12000) && inRange(high - 12000);
+    default:
+        return false;
+    }
+}
+
 bool BandPlanGuard::isValidTxBand(Band rxBand, Band txBand,
                                   bool preventDifferentBand) const noexcept
 {
@@ -789,7 +833,8 @@ BandPlanGuard::MoxCheckResult
 BandPlanGuard::checkMoxAllowed(Region region, std::int64_t freqHz,
                                 DSPMode mode, Band rxBand, Band txBand,
                                 bool preventDifferentBand,
-                                bool extended) const noexcept
+                                bool extended, int filterLowHz, int filterHighHz,
+                                bool ignoreFilter) const noexcept
 {
     // Mode check first — cheaper and more directly user-facing.
     if (!isModeAllowedForTx(mode)) {
@@ -816,7 +861,8 @@ BandPlanGuard::checkMoxAllowed(Region region, std::int64_t freqHz,
     }
 
     // Frequency / band-edge check.
-    if (!isValidTxFreq(region, freqHz, mode, extended)) {
+    if (!isValidTxPassband(region, freqHz, mode, filterLowHz, filterHighHz,
+                           extended, ignoreFilter)) {
         return {false, QStringLiteral("Frequency outside TX-allowed range")};
     }
 

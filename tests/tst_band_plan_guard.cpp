@@ -1,5 +1,6 @@
 // no-port-check: test fixture asserting BandPlanGuard predicates against Thetis source rules
 #include <QtTest>
+#include <limits>
 #include "core/safety/BandPlanGuard.h"
 #include "core/WdspTypes.h"
 #include "models/Band.h"
@@ -11,6 +12,32 @@ class TestBandPlanGuard : public QObject
 {
     Q_OBJECT
 private slots:
+    void transmitPassbandHonorsTuneCwAndDrm()
+    {
+        BandPlanGuard guard;
+        QVERIFY(!guard.isValidTxPassband(Region::UnitedStates, 14349000,
+                    DSPMode::USB, 100, 2900, false));
+        QVERIFY(guard.isValidTxPassband(Region::UnitedStates, 14349000,
+                    DSPMode::USB, 100, 2900, false, true));
+        QVERIFY(guard.isValidTxPassband(Region::UnitedStates, 14349000,
+                    DSPMode::CWU, 100, 2900, false));
+        QVERIFY(!guard.isValidTxPassband(Region::UnitedStates, 14351000,
+                    DSPMode::CWU, -2900, -100, false));
+        QVERIFY(guard.isValidTxPassband(Region::UnitedStates, 14361000,
+                    DSPMode::DRM, 0, 1000, false));
+        QVERIFY(!guard.isValidTxPassband(Region::UnitedStates, 14361000,
+                    DSPMode::DRM, 0, 1001, false));
+        QVERIFY(!guard.isValidTxPassband(Region::UnitedStates, 14200000,
+                    DSPMode::USB, 2900, 100, false));
+        QVERIFY(!guard.isValidTxPassband(Region::UnitedStates,
+                    std::numeric_limits<std::int64_t>::max(),
+                    DSPMode::USB, 100, 2900, false));
+        QVERIFY(!guard.isValidTxPassband(Region::UnitedStates,
+                    std::numeric_limits<std::int64_t>::min(),
+                    DSPMode::LSB, -2900, -100, false));
+        QVERIFY(guard.isValidTxPassband(Region::UnitedStates, 4500000,
+                    DSPMode::USB, 100, 2900, true));
+    }
     void us60m_validChannelCenter_returnsTrue();
     void us60m_betweenChannels_returnsTrue();
     void us60m_usbDialChannel1_returnsTrue();

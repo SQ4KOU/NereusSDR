@@ -417,6 +417,77 @@ private slots:
         QCOMPARE(stateChangedSpy.count(), 0);
     }
 
+    void radioModelChecksTransmitFilterEdges_data()
+    {
+        QTest::addColumn<int>("mode");
+        QTest::addColumn<double>("carrier");
+        QTest::addColumn<bool>("allowed");
+        QTest::newRow("usb-upper-crossing") << int(DSPMode::USB) << 14349000.0 << false;
+        QTest::newRow("usb-upper-inside") << int(DSPMode::USB) << 14347000.0 << true;
+        QTest::newRow("lsb-lower-crossing") << int(DSPMode::LSB) << 14001000.0 << false;
+        QTest::newRow("lsb-lower-inside") << int(DSPMode::LSB) << 14003000.0 << true;
+        QTest::newRow("am-upper-crossing") << int(DSPMode::AM) << 14349000.0 << false;
+        QTest::newRow("am-lower-crossing") << int(DSPMode::AM) << 14001000.0 << false;
+        QTest::newRow("rade-upper-crossing") << int(DSPMode::RADE_U) << 14349000.0 << false;
+        QTest::newRow("rade-lower-crossing") << int(DSPMode::RADE_L) << 14001000.0 << false;
+    }
+
+    void radioModelChecksTransmitFilterEdges()
+    {
+        QFETCH(int, mode);
+        QFETCH(double, carrier);
+        QFETCH(bool, allowed);
+        RadioModel model;
+        model.configureStreamPool(5, 5, 192000);
+        model.moxController()->setTimerIntervals(0, 0, 0, 0, 0, 0);
+        model.installBandPlanMoxCheckForTest();
+        model.transmitModel().setMicSource(MicSource::Radio);
+        SliceModel* slice = model.sliceById(model.addSlice());
+        QVERIFY(slice);
+        slice->setDspMode(static_cast<DSPMode>(mode));
+        slice->setFrequency(carrier);
+        model.transmitModel().setFilterLow(100);
+        model.transmitModel().setFilterHigh(2900);
+        QSignalSpy rejected(model.moxController(), &MoxController::moxRejected);
+        model.moxController()->setMox(true);
+        QCoreApplication::processEvents();
+        QCOMPARE(model.moxController()->isMox(), allowed);
+        QCOMPARE(rejected.size(), allowed ? 0 : 1);
+        model.moxController()->setMox(false);
+        QCoreApplication::processEvents();
+    }
+
+    void invalidStoredRegionCannotWrapIntoAnAllowedRegion_data()
+    {
+        QTest::addColumn<QString>("region");
+        QTest::newRow("not-an-integer") << QStringLiteral("invalid");
+        QTest::newRow("fraction") << QStringLiteral("8.5");
+        QTest::newRow("positive-wrap") << QStringLiteral("264");
+        QTest::newRow("negative-wrap") << QStringLiteral("-248");
+        QTest::newRow("empty") << QString();
+    }
+
+    void invalidStoredRegionCannotWrapIntoAnAllowedRegion()
+    {
+        QFETCH(QString, region);
+        AppSettings::instance().setValue(QStringLiteral("BandPlanRegion"), region);
+        RadioModel model;
+        model.configureStreamPool(5, 5, 192000);
+        model.moxController()->setTimerIntervals(0, 0, 0, 0, 0, 0);
+        model.installBandPlanMoxCheckForTest();
+        model.transmitModel().setMicSource(MicSource::Radio);
+        SliceModel* slice = model.sliceById(model.addSlice());
+        QVERIFY(slice);
+        slice->setDspMode(DSPMode::USB);
+        slice->setFrequency(14200000.0);
+        QSignalSpy rejected(model.moxController(), &MoxController::moxRejected);
+        model.moxController()->setMox(true);
+        QCoreApplication::processEvents();
+        QVERIFY(!model.moxController()->isMox());
+        QCOMPARE(rejected.size(), 1);
+        QCOMPARE(rejected.at(0).at(0).toString(), QStringLiteral("The transmit region setting is invalid."));
+    }
+
     // The remote refusal is unchanged and still comes first.
     void remoteRefusalPrecedesPcMicAdmission()
     {

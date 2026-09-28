@@ -1,3 +1,5 @@
+// 2026-09-27: shared TX filter geometry and validated band-edge admission.
+// J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 // =================================================================
 // src/core/safety/BandPlanGuard.h  (NereusSDR)
 // =================================================================
@@ -182,6 +184,12 @@ public:
     bool isValidTxFreq(Region region, std::int64_t freqHz,
                        DSPMode mode, bool extended) const noexcept;
 
+    /// Thetis CheckValidTXFreq: signed filter offsets must both be in range;
+    /// TUNE ignores the filter and CW checks the carrier alone.
+    bool isValidTxPassband(Region region, std::int64_t freqHz, DSPMode mode,
+                           int filterLowHz, int filterHighHz, bool extended,
+                           bool ignoreFilter = false) const noexcept;
+
     /// Returns true iff TX-band == RX-band, OR \p preventDifferentBand
     /// is false. Mirrors _preventTXonDifferentBandToRXband check at
     /// console.cs:29401-29414 [2.9.0.7]MW0LGE.
@@ -221,7 +229,8 @@ public:
     MoxCheckResult checkMoxAllowed(Region region, std::int64_t freqHz,
                                    DSPMode mode, Band rxBand, Band txBand,
                                    bool preventDifferentBand,
-                                   bool extended) const noexcept;
+                                   bool extended, int filterLowHz = 0,
+                                   int filterHighHz = 0, bool ignoreFilter = false) const noexcept;
 };
 
 } // namespace NereusSDR::safety

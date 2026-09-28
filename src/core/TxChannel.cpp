@@ -1,3 +1,5 @@
+// 2026-09-27: shared TX filter geometry and validated band-edge admission.
+// J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 /*  TXA.c
 
 This file is part of a program that implements a Software-Defined Radio.
@@ -2216,7 +2218,8 @@ void TxChannel::applyPendingFilter()
 // CWL→LSB and CWU→USB upstream (MoxController G.4) before calling setTuneTone,
 // so reaching this function with a CW mode is unusual but handled safely.
 // ---------------------------------------------------------------------------
-void TxChannel::applyTxFilterForMode(int audioLowHz, int audioHighHz, DSPMode mode)
+std::pair<int, int> TxChannel::filterEdgesForMode(int audioLowHz, int audioHighHz,
+                                                DSPMode mode)
 {
     // Per deskhpsdr/transmitter.c:2136-2186 [@120188f] — tx_set_filter per-mode
     // IQ-space sign convention.  Same mapping as setTuneTone() lines 520-528.
@@ -2252,6 +2255,12 @@ void TxChannel::applyTxFilterForMode(int audioLowHz, int audioHighHz, DSPMode mo
         iqHigh = +audioHighHz;
     }
 
+    return {iqLow, iqHigh};
+}
+
+void TxChannel::applyTxFilterForMode(int audioLowHz, int audioHighHz, DSPMode mode)
+{
+    const auto [iqLow, iqHigh] = filterEdgesForMode(audioLowHz, audioHighHz, mode);
     // Signal first so QSignalSpy sees the values before the WDSP call.
     emit txFilterApplied(iqLow, iqHigh);
     setTxBandpass(iqLow, iqHigh);

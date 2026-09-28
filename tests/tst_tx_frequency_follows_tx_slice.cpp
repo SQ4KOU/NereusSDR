@@ -116,18 +116,20 @@ private slots:
 
     // Thetis console.cs:29440-29450 [v2.10.3.15] folds XIT into the
     // carrier before CheckValidTXFreq at :29486. A dial inside a band must
-    // not key when XIT moves the actual carrier outside its edge.
+    // not key when XIT moves the actual TX passband outside its edge.
     void moxGateChecksXitShiftedCarrier_data()
     {
         QTest::addColumn<double>("dialHz");
         QTest::addColumn<int>("xitHz");
         QTest::addColumn<bool>("xitEnabled");
         QTest::addColumn<bool>("allowed");
-        QTest::newRow("positive-outside") << 14'349'000.0 << 2'000 << true << false;
-        QTest::newRow("positive-inside") << 14'349'000.0 << 500 << true << true;
+        QTest::newRow("positive-outside") << 14'347'000.0 << 4'000 << true << false;
+        QTest::newRow("positive-inside") << 14'346'500.0 << 500 << true << true;
         QTest::newRow("negative-outside") << 14'001'000.0 << -2'000 << true << false;
         QTest::newRow("negative-inside") << 14'001'000.0 << -500 << true << true;
-        QTest::newRow("xit-disabled") << 14'349'000.0 << 2'000 << false << true;
+        QTest::newRow("xit-disabled") << 14'347'000.0 << 4'000 << false << true;
+        QTest::newRow("carrier-inside-filter-outside") << 14'349'000.0 << 500 << true << false;
+        QTest::newRow("disabled-xit-filter-outside") << 14'349'000.0 << 2'000 << false << false;
     }
 
     void moxGateChecksXitShiftedCarrier()
@@ -146,6 +148,8 @@ private slots:
         slice->setDspMode(DSPMode::USB);
         slice->setXitHz(xitHz);
         slice->setXitEnabled(xitEnabled);
+        model.transmitModel().setFilterLow(100);
+        model.transmitModel().setFilterHigh(2900);
         model.installBandPlanMoxCheckForTest();
 
         QSignalSpy rejected(model.moxController(), &MoxController::moxRejected);

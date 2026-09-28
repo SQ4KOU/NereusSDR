@@ -1,3 +1,5 @@
+// 2026-09-27: shared TX filter geometry and validated band-edge admission.
+// J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 // =================================================================
 // src/models/RadioModel.cpp  (NereusSDR)
 // =================================================================
@@ -16536,10 +16538,17 @@ void RadioModel::installBandPlanMoxCheck()
             return refused;
         }
 
+        bool regionOk = false;
         const int regionInt = AppSettings::instance()
             .value(QStringLiteral("BandPlanRegion"),
                    QString::number(static_cast<int>(safety::Region::UnitedStates)))
-            .toInt();
+            .toString().toInt(&regionOk);
+        // Validate before the uint8_t enum conversion: malformed settings must
+        // not become Australia (0), or wrap into another permitted region.
+        if (!regionOk || regionInt < static_cast<int>(safety::Region::Australia)
+            || regionInt > static_cast<int>(safety::Region::Germany)) {
+            return {false, QStringLiteral("The transmit region setting is invalid.")};
+        }
         const auto region = static_cast<safety::Region>(regionInt);
 
         const SliceModel* slice = txBoundSlice();
@@ -16554,11 +16563,17 @@ void RadioModel::installBandPlanMoxCheck()
         const DSPMode mode = slice->dspMode();
         const Band txBand = bandFromFrequency(static_cast<double>(freqHz));
 
+        // From Thetis console.cs:29486 [v2.10.3.15]: chkTUN.Checked
+        // ignores filter edges for the carrier-only tune check. Voice/digital
+        // keying checks the same signed passband used by the TX chain.
+        const auto [filterLow, filterHigh] = TxChannel::filterEdgesForMode(
+            m_transmitModel.filterLow(), m_transmitModel.filterHigh(), mode);
         const safety::BandPlanGuard::MoxCheckResult bandPlanResult =
             m_bandPlan.checkMoxAllowed(region, freqHz, mode,
                                        txBand, txBand,
                                        /*preventDifferentBand=*/false,
-                                       /*extended=*/false);
+                                       /*extended=*/false, filterLow, filterHigh,
+                                       /*ignoreFilter=*/m_isTuning);
         if (!bandPlanResult.ok) {
             return bandPlanResult;
         }

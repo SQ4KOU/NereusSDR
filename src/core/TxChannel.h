@@ -1,3 +1,5 @@
+// 2026-09-27: shared TX filter geometry and validated band-edge admission.
+// J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 /*  TXA.c
 
 This file is part of a program that implements a Software-Defined Radio.
@@ -361,6 +363,7 @@ warren@wpratt.com
 
 #pragma once
 
+#include <utility>
 #include <QByteArray>
 #include <QObject>
 #include <QString>
@@ -2626,6 +2629,11 @@ public:
     int lastPSFeedbackRateForTest()           const noexcept { return m_lastPSFeedbackRate; }
 
 #endif // NEREUS_BUILD_TESTS
+
+    /// Shared audio-to-IQ filter geometry, also used by the pre-key band guard.
+    /// This pure query uses the same mode mapping as the actual TX bandpass.
+    static std::pair<int, int> filterEdgesForMode(int audioLowHz, int audioHighHz,
+                                                 DSPMode mode);
 
 public slots:
     // ── Per-profile TX filter debounce (Plan 4 D8) ───────────────────────────
