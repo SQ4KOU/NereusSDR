@@ -63,6 +63,11 @@
 //               incarnation, and a proceed whose slice id was reused by a
 //               new slice acts on nothing. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-28: slice control and shared listening plan Task 2: a
+//               slice's change checks are SliceAccessPolicy::mayChange
+//               (changeRefusal), so a listener changes nothing. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -88,6 +93,7 @@
 #include "core/session/MirrorView.h"
 #include "core/session/ObjectRegistry.h"
 #include "core/session/ReceiverPlanner.h"
+#include "core/session/SliceAccessPolicy.h"
 #include "core/session/SessionCommandDispatcher.h"
 #include "core/session/SessionTransport.h"
 #include "models/Band.h"
@@ -421,7 +427,7 @@ bool StationServer::handleReceiverCommand(SessionTransport* transport, const Ses
         if (slice == nullptr) {
             return false;
         }
-        QString refusal = sliceRefusal(requester, sliceId);
+        QString refusal = changeRefusal(requester, sliceId);
         if (refusal.isEmpty()) {
             // Ruling 6.3: the pin holds the whole window, so it is the
             // anchor's.
@@ -466,7 +472,7 @@ StationServer::PanMoveCheck StationServer::checkPanMove(const QByteArray& reques
     }
     const SliceModel* slice = m_radioModel->sliceById(sliceId);
     const SliceOwnership* ownership = m_radioModel->sliceOwnership();
-    if (slice == nullptr || ownership->mark(sliceId).owner != requester) {
+    if (slice == nullptr || !SliceAccessPolicy::mayChange(*ownership, requester, sliceId)) {
         return check;
     }
     const int stream = slice->streamIndex();
@@ -540,7 +546,7 @@ bool StationServer::handleCentreMove(SessionTransport* transport, const SessionM
     if (slice == nullptr) {
         return false;
     }
-    const QString refusal = sliceRefusal(requester, sliceId);
+    const QString refusal = changeRefusal(requester, sliceId);
     if (!refusal.isEmpty()) {
         answerHere(transport, SessionMessages::commandResult(message.commandVerb,
                                                              message.commandId, false, refusal, {}));
@@ -716,7 +722,8 @@ bool StationServer::handleSliceRetune(SessionTransport* transport, const Session
     bool ok = false;
     const int sliceId = message.objectKey.mid(6).toInt(&ok);
     const SliceModel* slice = ok ? m_radioModel->sliceById(sliceId) : nullptr;
-    if (slice == nullptr || m_radioModel->sliceOwnership()->mark(sliceId).owner != requester) {
+    if (slice == nullptr
+        || !SliceAccessPolicy::mayChange(*m_radioModel->sliceOwnership(), requester, sliceId)) {
         return false;
     }
     const PanMoveCheck check = checkPanMove(requester, message);
@@ -1463,7 +1470,8 @@ SessionMessage StationServer::answerConfirm(const SessionMessage& invoke, int id
     // closed meanwhile may be another device's now under the same id.
     const SliceOwnership* ownership = m_radioModel->sliceOwnership();
     for (int sliceId : question->namedSlices) {
-        if (!ownership->isLive(sliceId) || ownership->mark(sliceId).owner != device) {
+        if (!ownership->isLive(sliceId)
+            || !SliceAccessPolicy::mayChange(*ownership, device, sliceId)) {
             return refuse(changedSinceAskedReason(question->kind));
         }
     }

@@ -347,6 +347,10 @@
 //                compression meters; the remote Max Bin source moved to
 //                MeterPoller::panMaxBinSource, unchanged. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - Slice control plan Task 2: the hosting desktop's own
+//               slices are the ones SliceAccessPolicy lets the station
+//               device change. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -627,6 +631,7 @@ warren@wpratt.com
 #include "core/BoardCapabilities.h"
 #include "core/TxSliceArbiter.h"  // Phase 3F Sub-Epic C Task 9: TX-handoff routing
 #include "core/SliceOwnership.h"
+#include "core/session/SliceAccessPolicy.h"
 #include "core/safety/TransmitHolder.h"
 #include "core/session/StationServer.h"
 #include "core/session/ConnectedDevicesFacade.h"
@@ -1510,8 +1515,11 @@ bool MainWindow::desktopSliceAllowed(int sliceId) const
 {
     if (!desktopHosting() || !m_radioModel || !m_radioModel->sliceOwnership()
         || !m_radioModel->sliceById(sliceId)) { return false; }
-    const SliceOwnership::Mark mark = m_radioModel->sliceOwnership()->mark(sliceId);
-    return mark.owner == SliceOwnership::stationDevice() && mark.heldFor.isEmpty();
+    // Slice control plan Task 2: a slice the station device may change as
+    // its own (not one it runs held for an absent device).
+    const SliceOwnership& ownership = *m_radioModel->sliceOwnership();
+    return SliceAccessPolicy::mayChange(ownership, SliceOwnership::stationDevice(), sliceId)
+        && !ownership.mark(sliceId).isHeld();
 }
 
 SliceModel* MainWindow::activeSliceForWindow() const
@@ -1711,9 +1719,9 @@ void MainWindow::refreshDesktopStationState()
     QVector<SliceModel*> visibleSlices;
     if (hosting && ownership) {
         for (SliceModel* slice : m_radioModel->slices()) {
-            if (slice && ownership->mark(slice->sliceIndex()).owner
-                    == SliceOwnership::stationDevice()
-                && ownership->mark(slice->sliceIndex()).heldFor.isEmpty()) {
+            // Slice control plan Task 2: SliceAccessPolicy, through
+            // desktopSliceAllowed.
+            if (slice && desktopSliceAllowed(slice->sliceIndex())) {
                 visibleSlices.append(slice);
             }
         }
@@ -3422,9 +3430,9 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
     });
     if (desktopHosting()) {
         SliceOwnership* ownership = m_radioModel->sliceOwnership();
-        const SliceOwnership::Mark mark = ownership->mark(sliceIndex);
-        const bool mine = mark.owner == SliceOwnership::stationDevice()
-            && mark.heldFor.isEmpty();
+        const bool mine =
+            SliceAccessPolicy::mayChange(*ownership, SliceOwnership::stationDevice(), sliceIndex)
+            && !ownership->mark(sliceIndex).isHeld();
         newFlag->setStationPresentationAllowed(mine);
         newFlag->setTxSlice(mine && desktopOwnsTransmit()
             && m_radioModel->txSliceArbiter()

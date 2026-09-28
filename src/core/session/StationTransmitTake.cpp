@@ -35,6 +35,11 @@
 //               with AI-assisted implementation via Anthropic Claude Code.
 //   2026-09-26: Task 77 fix wave (I2, I4, M6) by J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-28: slice control and shared listening plan Task 2: the TX
+//               marks and the holder's last slice follow
+//               SliceAccessPolicy::mayTransmitOn, never a listener. J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -55,6 +60,7 @@
 #include "core/session/DeviceSessionRegistry.h"
 #include "core/session/RemoteKeying.h"
 #include "core/session/SessionTransport.h"
+#include "core/session/SliceAccessPolicy.h"
 #include "core/session/TransmitStateFacade.h"
 #include "core/SliceOwnership.h"
 #include "core/TxSliceArbiter.h"
@@ -499,8 +505,8 @@ void StationServer::refreshTxMarks()
         if (slice == nullptr) {
             continue;
         }
-        const QByteArray subject = ownership->mark(slice->sliceIndex()).subject();
-        slice->setTxMarkAllowed(!holderId.isEmpty() && subject == holderId);
+        slice->setTxMarkAllowed(
+            SliceAccessPolicy::mayTransmitOn(*ownership, holderId, slice->sliceIndex()));
     }
 }
 
@@ -538,7 +544,7 @@ void StationServer::onSliceClosedForHolder(int sliceId)
         return;
     }
     const SliceOwnership* ownership = m_radioModel->sliceOwnership();
-    if (ownership->mark(sliceId).subject() != holder->deviceId) {
+    if (!SliceAccessPolicy::mayTransmitOn(*ownership, holder->deviceId, sliceId)) {
         return;
     }
     // Ruling 8.12: with another of its slices left, the arbiter moved the
@@ -546,7 +552,8 @@ void StationServer::onSliceClosedForHolder(int sliceId)
     // through a transfer to nobody, which unkeys first.
     for (SliceModel* slice : m_radioModel->slices()) {
         if (slice != nullptr && slice->sliceIndex() != sliceId
-            && ownership->mark(slice->sliceIndex()).subject() == holder->deviceId) {
+            && SliceAccessPolicy::mayTransmitOn(*ownership, holder->deviceId,
+                                                slice->sliceIndex())) {
             return;
         }
     }

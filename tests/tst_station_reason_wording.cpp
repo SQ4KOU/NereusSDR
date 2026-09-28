@@ -50,6 +50,10 @@
 // in use compare as they are ("slice removed", "slice stream binding
 // changed"). The last two are plain as written and are scanned anyway.
 //
+//   2026-09-28  J.J. Boyd / KG4VCF  Slice control plan Task 2:
+//                                    changeRefusal replaces sliceRefusal;
+//                                    a listener's refusal words scanned.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 4b (R-IOS-01,
@@ -717,7 +721,10 @@ const QList<ReasonSource>& reasonSources()
           // DeviceStore validates the replacement device's own name; the
           // takeover sentence uses describe(selection.deviceId) or the
           // registry's saved selection.name, both operator labels.
-          QStringLiteral("takerName")},
+          QStringLiteral("takerName"),
+          // Slice control plan Task 2: listenerChangeReason's slice letter
+          // (A to P); the controller's name beside it is `owner` above.
+          QStringLiteral("letter")},
          {// listen(): the Core's own setup error (m_lastError), for its
           // console and log; never sent to an app.
           QStringLiteral("CertificateStore::tlsBackendDiagnostic()"),
@@ -768,7 +775,7 @@ const QList<ReasonSource>& reasonSources()
           // iPhone app Task 73: functions of this file, their literals
           // scanned here (the owner's name is the operator's own word,
           // ruling 4.3).
-          QStringLiteral("sliceRefusal(requester, sliceId)"),
+          QStringLiteral("changeRefusal(requester, sliceId)"),
           QStringLiteral("ownedElsewhereReason(sliceId)"),
           // Fix wave I3: a slice's settings key; ownedElsewhereReason's
           // words, scanned here.
@@ -861,7 +868,7 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("stationFreezeRefusal(id)"),
           QStringLiteral("touches ? onAirWords(*holder) : TxRefusal{}"),
           // StationServer.cpp's slice refusal, scanned there.
-          QStringLiteral("sliceRefusal(requester, sliceId)"), QStringLiteral("refusal"),
+          QStringLiteral("changeRefusal(requester, sliceId)"), QStringLiteral("refusal"),
           // Today's refusals from the model, the allocator and the
           // dispatcher (scanned where they are written), with the holders'
           // names appended in this file's own sentence (holdersSentence).
@@ -944,7 +951,8 @@ const QList<ReasonSource>& reasonSources()
                          "alex->setRxAntForBand(Band(band), antenna)"),
           // A function of this file, its literal scanned here.
           QStringLiteral("notRepresentableReason()"),
-          // iPhone app Task 73: StationServer::sliceRefusal, scanned there.
+          // iPhone app Task 73: StationServer::changeRefusal (slice control plan
+          // Task 2; was sliceRefusal), scanned there.
           QStringLiteral("m_sliceAccess(m_requester, sliceId)"),
           // Fix wave 2: the same, re-run when a rate change is applied, and
           // StationSharedSettings' kTargetChangedReason, handed over with

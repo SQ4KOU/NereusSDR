@@ -5,6 +5,11 @@
 //
 // Phase 3F Sub-Epic C: TxSliceArbiter single-TX invariant.
 // See docs/architecture/2026-05-26-phase3f-multi-pan-multi-slice-design.md §6.
+// Modification history (NereusSDR):
+//   2026-09-28  J.J. Boyd / KG4VCF  Slice control plan Task 2: the
+//                                    arbiter's owner lookup is a transmit
+//                                    access check (setTransmitAccess).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 #include <QtTest/QtTest>
 #include <QSignalSpy>
@@ -560,8 +565,9 @@ private slots:
         arb.setSliceList(&slices);
         arb.syncToSliceList();
         const QHash<int, QByteArray> owners{{0, "phone"}, {1, "pad"}, {2, "pad"}};
-        arb.setOwnerLookup([owners](int id) { return owners.value(id); },
-                           [](const QByteArray&) { return -1; });
+        arb.setTransmitAccess(
+            [owners](const QByteArray& device, int id) { return owners.value(id) == device; },
+            [](const QByteArray&) { return -1; });
         QSignalSpy blocked(&arb, &TxSliceArbiter::handoffBlocked);
         QVERIFY(!arb.requestHandoff(1, QByteArrayLiteral("phone")));
         QCOMPARE(blocked.count(), 1);
@@ -596,8 +602,9 @@ private slots:
         arb.setSliceList(&slices);
         arb.syncToSliceList();
         const QHash<int, QByteArray> owners{{0, "phone"}, {1, "pad"}, {2, "pad"}, {3, "pad"}};
-        arb.setOwnerLookup([owners](int id) { return owners.value(id); },
-                           [](const QByteArray& owner) { return owner == "pad" ? 3 : 0; });
+        arb.setTransmitAccess(
+            [owners](const QByteArray& device, int id) { return owners.value(id) == device; },
+            [](const QByteArray& owner) { return owner == "pad" ? 3 : 0; });
         // Its chosen transmit slice, still its own.
         QVERIFY(arb.bindForHolder(QByteArrayLiteral("pad"), 2));
         QCOMPARE(arb.txBoundSliceId(), 2);
@@ -616,8 +623,9 @@ private slots:
         TxSliceArbiter arb;
         arb.setSliceList(&slices);
         const QHash<int, QByteArray> owners{{0, "phone"}, {1, "pad"}, {2, "pad"}};
-        arb.setOwnerLookup([owners](int id) { return owners.value(id); },
-                           [](const QByteArray& owner) { return owner == "pad" ? 2 : 0; });
+        arb.setTransmitAccess(
+            [owners](const QByteArray& device, int id) { return owners.value(id) == device; },
+            [](const QByteArray& owner) { return owner == "pad" ? 2 : 0; });
         arb.setHolderLookup([]() { return QByteArrayLiteral("pad"); });
         arb.syncToSliceList();
         QCOMPARE(arb.txBoundSliceId(), 2);
@@ -632,8 +640,8 @@ private slots:
         TxSliceArbiter arb;
         arb.setSliceList(&slices);
         arb.setRemote(true);
-        arb.setOwnerLookup([](int) { return QByteArrayLiteral("pad"); },
-                           [](const QByteArray&) { return 1; });
+        arb.setTransmitAccess([](const QByteArray& device, int) { return device == "pad"; },
+                              [](const QByteArray&) { return 1; });
         QVERIFY(!arb.bindForHolder(QByteArrayLiteral("pad"), 1));
         QVERIFY(!arb.requestHandoff(1, QByteArrayLiteral("pad")));
         QVERIFY(slices[0]->isTxSlice());

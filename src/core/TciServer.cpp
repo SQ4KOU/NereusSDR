@@ -109,6 +109,10 @@
 //                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-28 - Desktop-host TCI receiver ownership and holder admission.
 //                NereusSDR-original, AI-assisted via OpenAI Codex.
+//   2026-09-28 - Slice control plan Task 2: the hosting desktop's TCI
+//                receivers are the slices SliceAccessPolicy lets the
+//                station device change. NereusSDR-original. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 
 #ifdef HAVE_WEBSOCKETS
 
@@ -127,6 +131,7 @@
 #include "models/TransmitModel.h"  // Phase 3J-1 closeout (review P2): MON / TUN broadcast wireup.
 #include "MoxController.h"         // Phase 3J-1 closeout (review P2): MOX broadcast wireup.
 #include "SliceOwnership.h"
+#include "core/session/SliceAccessPolicy.h"
 #include "core/safety/TxRefusal.h"
 #include "MicProfileManager.h"     // R-R3-49 (parity Task 3): a remote window's TX profiles.
 #include "TxSliceArbiter.h"        // Codex review round 6: tx_frequency follows the TX-bound slice.
@@ -1592,7 +1597,16 @@ int TciServer::desktopSliceForReceiver(int receiver) const
 {
     if (!m_model || !m_model->sliceOwnership() || receiver < 0
         || receiver >= TciProtocol::kExposedReceiverCount) { return -1; }
-    QList<int> owned = m_model->sliceOwnership()->ownedBy(SliceOwnership::stationDevice());
+    // Slice control plan Task 2: the slices the station device may change
+    // (its own, and those it runs held for an absent device), never one it
+    // could only see or hear.
+    const SliceOwnership& ownership = *m_model->sliceOwnership();
+    QList<int> owned;
+    for (int sliceId : ownership.liveSlices()) {
+        if (SliceAccessPolicy::mayChange(ownership, SliceOwnership::stationDevice(), sliceId)) {
+            owned.append(sliceId);
+        }
+    }
     std::sort(owned.begin(), owned.end());
     return receiver < owned.size() ? owned.at(receiver) : -1;
 }

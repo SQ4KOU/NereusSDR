@@ -188,6 +188,11 @@
 //                                    worker thread) and
 //                                    support.setLogCategories.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  Slice control plan Task 2: the
+//                                    slice access check is the change
+//                                    predicate (SliceAccessPolicy), so a
+//                                    listener's verbs are refused.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -340,6 +345,9 @@ public:
     }
     /// The plain refusal for `requester` naming `sliceId`, or empty when it
     /// may: "That slice belongs to <owner>. It can be changed only there."
+    /// Slice control plan Task 2: the change predicate
+    /// (SliceAccessPolicy::mayChange through StationServer::changeRefusal),
+    /// so a device that only listens to a slice is refused too.
     using SliceAccess = std::function<QString(const QByteArray& requester, int sliceId)>;
     void setSliceAccess(SliceAccess access) { m_sliceAccess = std::move(access); }
 

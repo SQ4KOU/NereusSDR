@@ -7,6 +7,10 @@
 // coordination; it contains neither GUI nor radio control policy.
 //
 // Modification history (NereusSDR):
+//   2026-09-28: slice control and shared listening plan Task 2: ownsSlice
+//               split into controlsSlice, hearsSlice and seesSlice. J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 //   2026-09-27: iPhone app plan Task 29 (R-IOS-16): the media `replace`
 //               operation: a second peer beside the current one, audio on
 //               both across the move, displays on a keyframe, the old one
@@ -473,7 +477,11 @@ private:
     void acquireOwnerMix();
     void releaseOwnerMix();
     void refreshOwnerMixMask();
-    bool ownsSlice(int sliceId) const;
+    /// Slice control plan Task 2 (SliceAccessPolicy): whether this
+    /// session's device controls, may hear, or may see `sliceId`.
+    bool controlsSlice(int sliceId) const;
+    bool hearsSlice(int sliceId) const;
+    bool seesSlice(int sliceId) const;
     /// Every endpoint on `key` of every controller sharing the engines.
     template <typename Fn>
     void forEachSharedEndpoint(const MediaSourceKey& key, Fn&& fn);

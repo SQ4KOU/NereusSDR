@@ -233,6 +233,11 @@
 //               (txModMonitorVersion 1), answered by the station server
 //               beside the record streams. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  Slice control plan Task 2: the
+//                                    slice access check is the change
+//                                    predicate (SliceAccessPolicy), so a
+//                                    listener's verbs are refused.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -1613,6 +1618,8 @@ bool SessionCommandDispatcher::refusedForAnotherDevice(const SessionMessage& inv
     // or one held for a device, whatever receivers are in use (fix wave
     // C1). slice.selectBand and notch.addAtSlice (R-IOS-27) joined at the
     // checkpoint merge: a band button or +TNF acts on its own slice only.
+    // Slice control plan Task 2: "its own" is the change predicate, so a
+    // listener's verbs on a slice it hears are refused as well.
     static const QSet<QByteArray> kSliceVerbs{
         QByteArrayLiteral("removeSlice"), QByteArrayLiteral("setActiveSliceById"),
         QByteArrayLiteral("nnr.setDiagnostics"), QByteArrayLiteral("nnr.resetTuning"),

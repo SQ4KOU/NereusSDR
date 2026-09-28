@@ -15,6 +15,11 @@
 //                                    bindForHolder, the first bind among the
 //                                    holder's slices, the freeze. AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  Slice control plan Task 2: the owner
+//                                    lookup is a transmit access check, so
+//                                    a listened slice is never bound for
+//                                    its listener. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 #include "core/TxSliceArbiter.h"
 #include "models/SliceModel.h"
@@ -35,17 +40,18 @@ void TxSliceArbiter::setMoxController(MoxController* mox) { m_mox = mox; }
 // syncToSliceList() (RadioModel does it from addSlice / removeSlice).
 void TxSliceArbiter::setSliceList(QVector<SliceModel*>* slices) { m_slices = slices; }
 
-void TxSliceArbiter::setOwnerLookup(OwnerLookup owner, ActiveLookup active)
+void TxSliceArbiter::setTransmitAccess(TransmitAccess mayTransmit, ActiveLookup active)
 {
-    m_owner = std::move(owner);
+    m_mayTransmit = std::move(mayTransmit);
     m_active = std::move(active);
 }
 
 bool TxSliceArbiter::requestHandoff(int sliceId, const QByteArray& requester)
 {
     // iPhone app plan Task 77 (ruling 8.10): the holder's verb, for its own
-    // slices. A slice another owner has is refused before anything moves.
-    if (m_owner && m_owner(sliceId) != requester) {
+    // slices. A slice another owner has, or one the requester only listens
+    // to (slice control plan Task 2), is refused before anything moves.
+    if (m_mayTransmit && !m_mayTransmit(requester, sliceId)) {
         emit handoffBlocked(sliceId, QStringLiteral("That slice is another device's."));
         return false;
     }
@@ -54,16 +60,16 @@ bool TxSliceArbiter::requestHandoff(int sliceId, const QByteArray& requester)
 
 bool TxSliceArbiter::bindForHolder(const QByteArray& holder, int preferredSliceId)
 {
-    if (m_remote || !m_slices || holder.isEmpty() || !m_owner || isFrozen()) {
+    if (m_remote || !m_slices || holder.isEmpty() || !m_mayTransmit || isFrozen()) {
         return false;
     }
     int target = -1;
     if (preferredSliceId >= 0 && sliceWithId(preferredSliceId) != nullptr
-        && m_owner(preferredSliceId) == holder) {
+        && m_mayTransmit(holder, preferredSliceId)) {
         target = preferredSliceId;
     } else if (m_active) {
         const int active = m_active(holder);
-        if (active >= 0 && sliceWithId(active) != nullptr && m_owner(active) == holder) {
+        if (active >= 0 && sliceWithId(active) != nullptr && m_mayTransmit(holder, active)) {
             target = active;
         }
     }
@@ -173,10 +179,10 @@ void TxSliceArbiter::syncToSliceList()
     // slices, the first bind is among them: the restored id when it is
     // one of them, otherwise the holder's active slice.
     const QByteArray holder = m_holder ? m_holder() : QByteArray();
-    if (!holder.isEmpty() && m_owner) {
-        if (slice == nullptr || m_owner(slice->sliceIndex()) != holder) {
+    if (!holder.isEmpty() && m_mayTransmit) {
+        if (slice == nullptr || !m_mayTransmit(holder, slice->sliceIndex())) {
             const int active = m_active ? m_active(holder) : -1;
-            if (SliceModel* own = sliceWithId(active); own && m_owner(active) == holder) {
+            if (SliceModel* own = sliceWithId(active); own && m_mayTransmit(holder, active)) {
                 slice = own;
             }
         }

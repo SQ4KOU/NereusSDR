@@ -556,6 +556,11 @@
 //                txAmModulation / txAmModulationFeedback streams
 //                (stationModMonitorSnapshot). NereusSDR-original. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - Slice control plan Task 2: the transmit arbiter's access
+//                check, the holder's fallback on a close and
+//                setActiveSliceByIdFor ask SliceAccessPolicy.
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -890,6 +895,7 @@ warren@wpratt.com
 #include "core/StationRfKitController.h"
 #include "core/StationTciController.h"
 #include "core/SliceOwnership.h"
+#include "core/session/SliceAccessPolicy.h"
 #include "core/RfKitBandFollow.h"
 #include "core/PgxlStatusGauges.h"
 #include "models/AmplifierModel.h"
@@ -1854,8 +1860,13 @@ RadioModel::RadioModel(Role role, QObject* parent)
     // iPhone app plan Task 77 (ruling 8.13): whose each slice is, each
     // owner's active slice and who holds transmit, for tx.setTxSlice, the
     // bind at a change of holder and the first bind.
-    m_txSliceArbiter->setOwnerLookup(
-        [this](int sliceId) { return m_sliceOwnership->mark(sliceId).subject(); },
+    // Slice control plan Task 2: transmit follows SliceAccessPolicy (whose
+    // slice it is; a slice a device only listens to never carries its
+    // transmit).
+    m_txSliceArbiter->setTransmitAccess(
+        [this](const QByteArray& device, int sliceId) {
+            return SliceAccessPolicy::mayTransmitOn(*m_sliceOwnership, device, sliceId);
+        },
         [this](const QByteArray& owner) { return m_sliceOwnership->activeFor(owner); });
     m_txSliceArbiter->setHolderLookup([this]() { return m_sliceOwnership->transmitHolder(); });
 
@@ -11975,7 +11986,7 @@ void RadioModel::removeSliceImpl(int sliceId, bool persist)
                 for (int id : m_sliceOwnership->ownedBy(holder)) {
                     SliceModel* own = sliceById(id);
                     if (own != nullptr && own != victim
-                        && m_sliceOwnership->mark(id).subject() == holder) {
+                        && SliceAccessPolicy::mayTransmitOn(*m_sliceOwnership, holder, id)) {
                         fallback = own;
                         break;
                     }
@@ -13153,8 +13164,9 @@ void RadioModel::refreshFreedvReportedFrequency()
 
 bool RadioModel::setActiveSliceByIdFor(const QByteArray& owner, int sliceId)
 {
+    // Slice control plan Task 2: only a slice `owner` may change.
     if (role() != Role::Local || sliceById(sliceId) == nullptr
-        || m_sliceOwnership->mark(sliceId).owner != owner) {
+        || !SliceAccessPolicy::mayChange(*m_sliceOwnership, owner, sliceId)) {
         return false;
     }
     m_sliceOwnership->setActive(owner, sliceId);

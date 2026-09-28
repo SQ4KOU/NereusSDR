@@ -64,6 +64,17 @@
 // of mark().owner: adoption, hold, return, take, release. A command that
 // carries the revision it saw acts only on the assignment it saw.
 //
+// ---- Listeners (slice control plan Task 2) ----
+//
+// A slice's controller is its owner, mark().owner. Other devices may be
+// joined to it as listeners: they see and hear it but never change it.
+// listenersOf() names the controller first, then every other joined device
+// in join order; isListening() is true for each of them. Who may see, hear
+// or change a slice is decided by SliceAccessPolicy
+// (core/session/SliceAccessPolicy.h), never by comparing marks at a call
+// site. Task 3 adds how devices join and leave; until then nobody but the
+// controller is a listener outside a test.
+//
 // Single thread: RadioModel's.
 //
 // =================================================================
@@ -78,6 +89,10 @@
 //               slice's incarnation and control revision. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-28: slice control and shared listening plan Task 2: each
+//               slice's listener set (isListening, listenersOf). J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -168,6 +183,21 @@ public:
     bool matches(const SliceRef& ref) const;
     /// `sliceId` with its incarnation; incarnation 0 when not live.
     SliceRef refOf(int sliceId) const;
+
+    // ---- Listeners (slice control plan Task 2) ----
+
+    /// Whether `device` is joined to the slice: its controller, or another
+    /// device listening to it. False for an empty id and for a slice that
+    /// is neither live nor being removed.
+    bool isListening(const QByteArray& device, int sliceId) const;
+    /// The controller (when it has one) then every other joined device, in
+    /// join order; empty for a slice nobody is joined to.
+    QList<QByteArray> listenersOf(int sliceId) const;
+    /// Stands a listener set in for Task 3's join and leave, for tests of
+    /// the access rules: `devices` (the controller need not be named) are
+    /// the slice's listeners from now on. Ignored for a slice that is not
+    /// live.
+    void setListenersForTest(int sliceId, const QList<QByteArray>& devices);
 
     // ---- Marks ----
 
@@ -267,6 +297,9 @@ private:
     quint32 m_incarnationCounter = 0;
     QHash<int, quint64> m_incarnations;
     QHash<int, quint64> m_revisions;
+    // Task 2 (slice control plan): each slice's joined devices other than
+    // its controller, in join order (kept until endRemove).
+    QHash<int, QList<QByteArray>> m_listeners;
     // Task 74: each slice's receiver, the slices on each receiver in the
     // order they arrived, and each receiver's anchor.
     QHash<int, int> m_streamOf;

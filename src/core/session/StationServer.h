@@ -418,6 +418,11 @@
 //               Monitor's record streams (ModMonitorPublisher) and
 //               txModMonitor.reset. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-09-28: slice control and shared listening plan Task 2:
+//               changeRefusal, mediaSessionControlsSlice / HearsSlice /
+//               SeesSlice and listenerChangeReason (SliceAccessPolicy).
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/IceConfiguration.h"
@@ -907,12 +912,17 @@ public:
     bool displayExtrasAvailable() const;
     bool displayExtrasAvailable(quint64 epoch) const;
     /// iPhone app Task 76: the epochs of the media sessions live now, in
-    /// admission order; the device a media session is for; whether a slice
-    /// is that device's own (ruling 9.1: a device subscribes displays and
-    /// receiver streams only for its own slices, and hears only its own).
+    /// admission order; the device a media session is for. Slice control
+    /// plan Task 2 (SliceAccessPolicy): whether that device controls a
+    /// slice (its owner mix, raw I/Q, headphones), may hear it (receiver
+    /// streams) and may see it (display subscriptions). Until Task 3 lets
+    /// devices listen, all three read the same: the device's own slices
+    /// (ruling 9.1).
     QList<quint64> mediaSessionEpochs() const;
     QByteArray mediaSessionDevice(quint64 epoch) const;
-    bool mediaSessionOwnsSlice(quint64 epoch, int sliceId) const;
+    bool mediaSessionControlsSlice(quint64 epoch, int sliceId) const;
+    bool mediaSessionHearsSlice(quint64 epoch, int sliceId) const;
+    bool mediaSessionSeesSlice(quint64 epoch, int sliceId) const;
     /// The media session the PureSignal display goes to (the one whose
     /// ps3.subscribeDisplay was last accepted), or 0 for none known.
     quint64 ps3DisplaySubscriberEpoch() const { return m_ps3SubscriberEpoch; }
@@ -1697,9 +1707,10 @@ private:
     /// Ruling 5.6: whether `transport`'s view receives `message`'s slice or
     /// marker (any other message: yes).
     bool ownershipAllows(SessionTransport* transport, const SessionMessage& message) const;
-    /// Ruling 5.9: the plain refusal when `requester` names another
-    /// device's slice, else empty.
-    QString sliceRefusal(const QByteArray& requester, int sliceId) const;
+    /// Ruling 5.9, slice control plan Task 2: the plain refusal when
+    /// `requester` may not change `sliceId` (SliceAccessPolicy::mayChange:
+    /// another device's slice, or one it only listens to), else empty.
+    QString changeRefusal(const QByteArray& requester, int sliceId) const;
 
     // ── iPhone app plan Task 34: transmit ───────────────────────────────
     SessionPeerInfo peerInfoFor(SessionTransport* transport) const;
@@ -1761,6 +1772,10 @@ private:
     TxRefusal onAirPropertyRefusal(const QByteArray& requester, const QByteArray& objectKey,
                                    const QByteArray& property) const;
     QString ownedElsewhereReason(int sliceId) const;
+    /// Slice control plan Task 2: a listener's refusal ("Slice A is
+    /// controlled by <name>. Take control to change it."), for a window
+    /// that listens; Task 4 sends it.
+    QString listenerChangeReason(int sliceId) const;
     /// What `deviceId` owns, for connectedDevices.listeningOn.
     QJsonArray listeningOn(const QByteArray& deviceId) const;
     /// At most the board's maxSlices saved slices per device.

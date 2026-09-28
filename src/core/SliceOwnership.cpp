@@ -18,6 +18,9 @@
 //               slice's incarnation and control revision. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-28: slice control and shared listening plan Task 2: each
+//               slice's listener set. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/SliceOwnership.h"
@@ -60,6 +63,8 @@ void SliceOwnership::noteSliceAdded(int sliceId)
     }
     m_incarnations.insert(sliceId, m_incarnationBase | m_incarnationCounter);
     m_revisions.insert(sliceId, 1);
+    // Task 2 (slice control plan): a new slice has no listeners yet.
+    m_listeners.remove(sliceId);
     // Task 74: bound before it was noted, it claimed its receiver for
     // nobody; it is the first there, so the receiver is its owner's.
     const auto stream = m_streamOf.constFind(sliceId);
@@ -92,6 +97,7 @@ void SliceOwnership::endRemove(int sliceId)
     m_marks.remove(sliceId);
     m_incarnations.remove(sliceId);
     m_revisions.remove(sliceId);
+    m_listeners.remove(sliceId);
     if (m_mostRecent == sliceId) {
         m_mostRecent = -1;
     }
@@ -124,6 +130,53 @@ bool SliceOwnership::isLive(int sliceId) const
 QList<int> SliceOwnership::liveSlices() const
 {
     return matching([](const Mark&) { return true; });
+}
+
+// ── Listeners (slice control plan Task 2) ───────────────────────────────
+
+bool SliceOwnership::isListening(const QByteArray& device, int sliceId) const
+{
+    if (device.isEmpty() || !m_marks.contains(sliceId)) {
+        return false;
+    }
+    return m_marks.value(sliceId).owner == device
+        || m_listeners.value(sliceId).contains(device);
+}
+
+QList<QByteArray> SliceOwnership::listenersOf(int sliceId) const
+{
+    QList<QByteArray> listeners;
+    if (!m_marks.contains(sliceId)) {
+        return listeners;
+    }
+    const QByteArray controller = m_marks.value(sliceId).owner;
+    if (!controller.isEmpty()) {
+        listeners.append(controller);
+    }
+    for (const QByteArray& device : m_listeners.value(sliceId)) {
+        if (!device.isEmpty() && !listeners.contains(device)) {
+            listeners.append(device);
+        }
+    }
+    return listeners;
+}
+
+void SliceOwnership::setListenersForTest(int sliceId, const QList<QByteArray>& devices)
+{
+    if (!isLive(sliceId)) {
+        return;
+    }
+    QList<QByteArray> joined;
+    for (const QByteArray& device : devices) {
+        if (!device.isEmpty() && !joined.contains(device)) {
+            joined.append(device);
+        }
+    }
+    if (joined.isEmpty()) {
+        m_listeners.remove(sliceId);
+    } else {
+        m_listeners.insert(sliceId, joined);
+    }
 }
 
 // ── Incarnation and control revision (slice control plan Task 1) ────────

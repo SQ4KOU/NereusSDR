@@ -22,6 +22,11 @@
 //              bindForHolder; the first bind among the holder's slices;
 //              the freeze while the station device is keyed. J.J. Boyd
 //              (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 Slice control plan Task 2: the owner lookup becomes a
+//              transmit access check (RadioModel sets it to
+//              SliceAccessPolicy::mayTransmitOn), so a slice a device only
+//              listens to never carries its transmit. J.J. Boyd (KG4VCF),
+//              AI-assisted via Anthropic Claude Code.
 // =================================================================
 #pragma once
 
@@ -80,14 +85,16 @@ public:
     /// flags on SliceModel instances.
     void setSliceList(QVector<SliceModel*>* slices);
 
-    /// iPhone app plan Task 77 (ruling 8.13): who owns a slice (its
-    /// subject: the owner, or the device it is held for) and each owner's
-    /// active slice, beside the slice list (RadioModel sets both from its
-    /// SliceOwnership); and who holds transmit (empty while unheld).
-    using OwnerLookup = std::function<QByteArray(int sliceId)>;
+    /// iPhone app plan Task 77 (ruling 8.13), slice control plan Task 2:
+    /// whether a device may carry transmit on a slice (RadioModel:
+    /// SliceAccessPolicy::mayTransmitOn, whose slice it is, never a
+    /// listener's) and each owner's active slice, beside the slice list
+    /// (RadioModel sets both from its SliceOwnership); and who holds
+    /// transmit (empty while unheld).
+    using TransmitAccess = std::function<bool(const QByteArray& device, int sliceId)>;
     using ActiveLookup = std::function<int(const QByteArray& owner)>;
     using HolderLookup = std::function<QByteArray()>;
-    void setOwnerLookup(OwnerLookup owner, ActiveLookup active);
+    void setTransmitAccess(TransmitAccess mayTransmit, ActiveLookup active);
     void setHolderLookup(HolderLookup holder) { m_holder = std::move(holder); }
     /// Ruling 8.11: true while the station device is keyed; the flag then
     /// never moves (the Core's session server sets it).
@@ -178,7 +185,7 @@ private:
     bool                      m_remote {false};    // Remote-daemon R2 Task 5
     UnkeyGate*                m_unkeyGate {nullptr};   // Task 34
     int                       m_pendingHandoffId {-1}; // Task 34: waiting for the gate
-    OwnerLookup               m_owner;                 // Task 77
+    TransmitAccess            m_mayTransmit;           // Task 77, slice control Task 2
     ActiveLookup              m_active;                // Task 77
     HolderLookup              m_holder;                // Task 77
     FrozenLookup              m_frozen;                // Task 77, ruling 8.11

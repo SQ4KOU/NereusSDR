@@ -7958,6 +7958,17 @@ nereus_add_test(tst_transmit_state_facade
 # adoption, each owner's active slice and the station-level one), and each
 # device's closed slices kept for its return.
 nereus_add_test(tst_slice_ownership EXTRA_LABELS session)
+# Slice control and shared listening plan Task 2: who may see, hear and
+# change each slice (SliceAccessPolicy): the predicates, a listener's
+# writes, verbs and transmit refused at the Core, the station TCI server's
+# gate on a slice nobody controls, and a scan of src/ for owner comparisons
+# outside the policy.
+nereus_add_test(tst_slice_access_policy
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+target_link_libraries(tst_slice_access_policy PRIVATE Qt6::WebSockets Qt6::Network)
+target_compile_definitions(tst_slice_access_policy PRIVATE
+    NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 # iPhone app Task 74 (R-IOS-02, R-IOS-30): each receiver's anchor, and the
 # confirm step (a pan move, a take, Take it back, the readback, notices).
 nereus_add_test(tst_receiver_anchor EXTRA_LABELS session)

@@ -151,6 +151,10 @@
 //               without keying for the amplifier's sake tells the device
 //               why (notice tuneEnded). J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-28: slice control and shared listening plan Task 2:
+//               mediaSessionOwnsSlice is mediaSessionControlsSlice.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation
+//               via Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -366,7 +370,7 @@ struct MediaCore {
     int sliceOf(quint64 epoch) const
     {
         for (const SliceModel* slice : core.model->slices()) {
-            if (core.server->mediaSessionOwnsSlice(epoch, slice->sliceIndex())) {
+            if (core.server->mediaSessionControlsSlice(epoch, slice->sliceIndex())) {
                 return slice->sliceIndex();
             }
         }
@@ -3696,7 +3700,7 @@ private slots:
         DaemonMediaController* newController = nullptr;
         for (DaemonMediaController* controller : m.hub->controllers()) {
             if (controller->sessionEpoch() != epochA
-                && m.core.server->mediaSessionOwnsSlice(controller->sessionEpoch(), sliceA)) {
+                && m.core.server->mediaSessionControlsSlice(controller->sessionEpoch(), sliceA)) {
                 newController = controller;
             }
         }

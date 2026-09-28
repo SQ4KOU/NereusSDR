@@ -82,6 +82,11 @@
 //               external antenna in use is never the internal one tapped.
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-28: slice control and shared listening plan Task 2: a verb
+//               naming a slice the requester may not change
+//               (changeRefusal) is left to the dispatcher's refusal.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -1267,7 +1272,7 @@ bool StationServer::handleSharedSetting(SessionTransport* transport, const Sessi
     // own check (ruling 5.9), before anything is asked.
     if (message.kind == SessionMessageKind::CommandInvoke) {
         const int sliceId = intArgument(message.arguments, "sliceId");
-        if (sliceId >= 0 && !sliceRefusal(requester, sliceId).isEmpty()) {
+        if (sliceId >= 0 && !changeRefusal(requester, sliceId).isEmpty()) {
             return false;
         }
     }

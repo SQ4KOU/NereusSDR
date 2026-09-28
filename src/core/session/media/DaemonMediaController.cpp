@@ -61,6 +61,11 @@
 //   2026-09-27: iPhone app plan Task 29 (R-IOS-16): media `replace`: a
 //               second peer, audio sent on both, handed over on a keyframe.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28: slice control and shared listening plan Task 2:
+//               ownsSlice split into controlsSlice (owner mix, raw I/Q,
+//               headphones), hearsSlice (receiver streams) and seesSlice
+//               (display subscriptions). J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 // Modification history (NereusSDR):
@@ -650,7 +655,7 @@ DaemonMediaController::DaemonMediaController(StationServer* server,
         // device's view (ruling 5.8 sends it object.destroy), so its
         // displays retire as a removed slice's do (ruling 9.1).
         if (self && m_epoch != 0 && m_radioModel && m_radioModel->sliceById(sliceId) != nullptr
-            && !ownsSlice(sliceId)) {
+            && !seesSlice(sliceId)) {
             retireSliceDisplays(sliceId);
         }
     });
@@ -1370,9 +1375,23 @@ void DaemonMediaController::releaseOwnerMix()
     m_ownerMix = -1;
 }
 
-bool DaemonMediaController::ownsSlice(int sliceId) const
+// Slice control plan Task 2 (SliceAccessPolicy): the controller's (owner
+// mix membership until Task 6, raw I/Q, the headphones mix of its own
+// slices), a listener's too (receiver streams), and what it may show
+// (display subscriptions, ruling Q13).
+bool DaemonMediaController::controlsSlice(int sliceId) const
 {
-    return m_server && m_epoch != 0 && m_server->mediaSessionOwnsSlice(m_epoch, sliceId);
+    return m_server && m_epoch != 0 && m_server->mediaSessionControlsSlice(m_epoch, sliceId);
+}
+
+bool DaemonMediaController::hearsSlice(int sliceId) const
+{
+    return m_server && m_epoch != 0 && m_server->mediaSessionHearsSlice(m_epoch, sliceId);
+}
+
+bool DaemonMediaController::seesSlice(int sliceId) const
+{
+    return m_server && m_epoch != 0 && m_server->mediaSessionSeesSlice(m_epoch, sliceId);
 }
 
 void DaemonMediaController::refreshOwnerMixMask()
@@ -1384,7 +1403,7 @@ void DaemonMediaController::refreshOwnerMixMask()
     quint32 mask = 0;
     for (SliceModel* slice : m_radioModel->slices()) {
         const int id = slice ? slice->sliceIndex() : -1;
-        if (id >= 0 && id < 32 && ownsSlice(id)) {
+        if (id >= 0 && id < 32 && controlsSlice(id)) {
             mask |= 1u << id;
         }
     }
@@ -1395,7 +1414,7 @@ void DaemonMediaController::refreshOwnerMixMask()
     // A receiver stream of a slice no longer this device's stops.
     QList<int> lost;
     for (const auto& [sliceId, stream] : m_receiverStreams) {
-        if (stream.desiredEnabled && !ownsSlice(sliceId)) {
+        if (stream.desiredEnabled && !hearsSlice(sliceId)) {
             lost.append(sliceId);
         }
     }
@@ -2568,7 +2587,7 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
     }
     // Task 76 (ruling 9.1): a device subscribes displays only for its own
     // slices; its pans ride their receivers, shared or not.
-    if (!ownsSlice(sliceId)) {
+    if (!seesSlice(sliceId)) {
         return rejectAllocation(control, endpointId, revision,
                                 QStringLiteral("That slice belongs to another device."));
     }
@@ -3024,7 +3043,7 @@ bool DaemonMediaController::handleReceiverAudio(const QJsonObject& control)
     auto it = m_receiverStreams.find(sliceId);
     if (it == m_receiverStreams.end()) {
         if (!m_radioModel || m_radioModel->sliceById(sliceId) == nullptr
-            || !ownsSlice(sliceId)) {
+            || !hearsSlice(sliceId)) {
             // No such slice, or (Task 76, ruling 9.2) not this device's:
             // answer, but keep no entry, so requests for made-up slice ids
             // cannot grow this map.
@@ -3075,7 +3094,7 @@ bool DaemonMediaController::handleIqStream(const QJsonObject& control)
     const bool enabled = control.value(QStringLiteral("enabled")).toBool();
     auto it = m_iqStreams.find(sliceId);
     if (it == m_iqStreams.end()) {
-        if (!m_radioModel || !m_radioModel->sliceById(sliceId) || !ownsSlice(sliceId)) {
+        if (!m_radioModel || !m_radioModel->sliceById(sliceId) || !controlsSlice(sliceId)) {
             IqStream absent;
             absent.revision = revision;
             absent.generation = ++m_nextIqGeneration;
@@ -3144,7 +3163,7 @@ void DaemonMediaController::reconcileIqStream(int sliceId)
     bool budgetRefused = false;
     if (!stream.desired) {
         reason.clear();
-    } else if (!slice || !ownsSlice(sliceId) || stream.streamIndex < 0
+    } else if (!slice || !controlsSlice(sliceId) || stream.streamIndex < 0
                || !m_radioModel->streamActive(stream.streamIndex)) {
         reason = QStringLiteral("This receiver is not available on the Core.");
     } else if (stream.sampleRate < 48000 || stream.sampleRate > 384000) {
@@ -3286,7 +3305,7 @@ void DaemonMediaController::reconcileReceiverAudio(int sliceId)
     if (!stream.desiredEnabled) {
         blockedBy = RemoteAudioOffReason::ClientDisabled;
     } else if (!m_radioModel || m_radioModel->sliceById(sliceId) == nullptr
-               || !ownsSlice(sliceId)) {
+               || !hearsSlice(sliceId)) {
         // Gone, or (Task 76) no longer this device's.
         stream.desiredEnabled = false;
         blockedBy = RemoteAudioOffReason::SliceRemoved;
@@ -3623,7 +3642,7 @@ bool DaemonMediaController::anySliceOnHeadphones() const
     // its headphones is in that device's mix, not this one's.
     for (SliceModel* slice : m_radioModel->slices()) {
         if (slice && slice->outputRoute() == SliceModel::OutputRoute::Headphones
-            && ownsSlice(slice->sliceIndex())) {
+            && controlsSlice(slice->sliceIndex())) {
             return true;
         }
     }
