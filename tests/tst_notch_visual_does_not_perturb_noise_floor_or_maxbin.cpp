@@ -368,14 +368,17 @@ private slots:
         configure(off);
         off.setPeakBlobsEnabled(true);
         off.setNotchMarkers(oneNotch(200.0));
-        feed(off, 1);
+        // configure()'s view change resets the peaks, which then wait out
+        // the 500 ms display delay (Thetis display.cs:907-921, 859-877
+        // [v2.10.3.15]); the frames are identical.
+        feed(off, 40);
 
         SpectrumWidget on;
         configure(on);
         on.setPeakBlobsEnabled(true);
         on.setNotchMarkers(oneNotch(200.0));
         on.setVisualNotchEnabled(true);
-        feed(on, 1);
+        feed(on, 40);
 
         int   offEnabled = 0;
         float offTop     = -400.0f;

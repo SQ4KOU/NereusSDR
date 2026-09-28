@@ -16,15 +16,21 @@
 //                 view, the view left out with DUP on and swapped when DUP
 //                 changes while keyed. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-28 : Thetis's peak resets on every MOX edge and on the radio
+//                 connecting reach every pan of the window, local or
+//                 remote. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #include "gui/MoxDisplayController.h"
 
 #include "core/AppSettings.h"
+#include "core/ConnectionState.h"
 #include "core/MoxController.h"
 #include "core/session/StationCapabilities.h"
 #include "core/session/StationClient.h"
 #include "core/session/TransmitStateFacade.h"
+#include "gui/PanadapterApplet.h"
 #include "gui/PanadapterStack.h"
 #include "gui/SpectrumWidget.h"
 #include "gui/TxDisplaySource.h"
@@ -58,6 +64,35 @@ MoxDisplayController::MoxDisplayController(PanadapterStack* pans, RadioModel* mo
     if (model != nullptr) {
         connect(model, &RadioModel::stationTxDisplayVersionChanged, this,
                 &MoxDisplayController::applyDisplayDuplex);
+        // The radio coming on resets every receiver's peaks. From Thetis
+        // display.cs:818-823 [v2.10.3.15]:
+        //   private static void OnPowerChangeHander(bool oldPower, bool newPower)
+        //   {
+        //       if (newPower)
+        //       {
+        //            PurgeBuffers();
+        // (PurgeBuffers, display.cs:11630-11639 [v2.10.3.15], clears both
+        // receivers' buffers; clearBuffers, 2835-2837, starts with
+        // resetPeaksAndNoise.)
+        // A local radio and a Core's radio both report it here.
+        connect(model, &RadioModel::connectionStateChanged, this,
+                [this](ConnectionState state) {
+                    if (state == ConnectionState::Connected) {
+                        resetPeaksOnEveryPan();
+                    }
+                });
+    }
+}
+
+void MoxDisplayController::resetPeaksOnEveryPan()
+{
+    if (m_pans.isNull()) {
+        return;
+    }
+    for (PanadapterApplet* applet : m_pans->allApplets()) {
+        if (SpectrumWidget* sw = applet != nullptr ? applet->spectrumWidget() : nullptr) {
+            sw->resetPeaks();
+        }
     }
 }
 
@@ -161,6 +196,21 @@ void MoxDisplayController::setKeyed(bool keyed, int txSliceId)
         return;
     }
     m_keyed = keyed;
+    // A MOX edge resets every receiver's peaks, not only the transmitting
+    // one's. From Thetis display.cs:1582-1593 [v2.10.3.15] (Display.MOX):
+    //   if (value != _old_mox)
+    //   {
+    //       ...
+    //       PurgeBuffers();
+    // and console.cs:24243-24254 [v2.10.3.15] (the display thread; the
+    // block above it carries //MW0LGE_21g):
+    //   if (bLocalMox != bOldLocalMox)
+    //   {
+    //       // if the mox state is different, reset the analyzer to remove
+    //       // possibilty of tx data being in the rx buffers, and vice versa
+    //       ...
+    //       Display.PurgeBuffers();
+    resetPeaksOnEveryPan();
     if (keyed) {
         rise(txSliceId);
     } else {

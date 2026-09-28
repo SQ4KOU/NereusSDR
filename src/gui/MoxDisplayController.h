@@ -136,6 +136,9 @@ signals:
     void displayDuplexChanged(bool on);
 
 private:
+    // Every pan's peaks reset (SpectrumWidget::resetPeaks): Thetis's
+    // PurgeBuffers on a MOX edge and on the radio coming on.
+    void resetPeaksOnEveryPan();
     void rise(int txSliceId);
     void fall();
     // The transmit view's half of the rise and the fall, on the pan the

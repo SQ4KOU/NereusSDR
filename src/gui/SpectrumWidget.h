@@ -2347,6 +2347,14 @@ private:
     // Parity Task 31: a DUP change while keyed resets the blob maxima and
     // the active peak hold (Thetis display.cs:514-521 [v2.10.3.15]).
     void resetPeaksForDuplexChange();
+public:
+    /// Thetis's peak reset for one receiver (ResetBlobMaximums(rx, true) +
+    /// ResetSpectrumPeaks(rx)): the blobs and the active peak hold empty and
+    /// wait out the 500 ms display delay. applyViewWindow calls it on every
+    /// moved or resized view; MoxDisplayController on every MOX edge and on
+    /// the radio connecting.
+    void resetPeaks();
+private:
     void drawTxFilterWaterfallColumn(QPainter& p, const QRect& wfRect);
 
     // ---- Two-tone IMD overlay (Phase 3M-4 Task 12) ----

@@ -3446,13 +3446,16 @@ void SpectrumWidget::updateReducedSpectrumOverlays()
     // Parity Task 17: a remote pan's frames arrive at the Core's rate.
     const int fps = overlayFrameRate();
 
+    // Thetis's frame clock (m_dElapsedFrameStart) runs whether or not a
+    // feature is on, so a reset's 500 ms display delay (display.cs:859-877
+    // [v2.10.3.15]) passes while it is off too: both clocks tick every frame.
     if (m_activePeakHold.enabled()) {
         if (m_activePeakHold.size() != m_renderedPixels.size()) {
             m_activePeakHold.resize(m_renderedPixels.size());
         }
         m_activePeakHold.update(m_renderedPixels);
-        m_activePeakHold.tickFrame(fps);
     }
+    m_activePeakHold.tickFrame(fps);
 
     // Peak Blob detector -- pixel-space local maxima with hold/decay.
     // Filter-passband math becomes pixel-space: visible window is
@@ -3468,6 +3471,8 @@ void SpectrumWidget::updateReducedSpectrumOverlays()
                 m_vfoHz + m_filterLowHz, m_vfoHz + m_filterHighHz);
         }
         m_peakBlobs.update(m_renderedPixels, filterLowPx, filterHighPx);
+    }
+    {
         const int frameMs = (m_remoteSpectrum && m_remoteFps > 0)
             ? qMax(1, 1000 / m_remoteFps) : (intervalMs > 0 ? intervalMs : 33);
         m_peakBlobs.tickFrame(fps, frameMs);
@@ -7330,8 +7335,19 @@ void SpectrumWidget::resetPeaksForDuplexChange()
     //     }
     // Blob maxima: PeakBlobDetector; spectrum peaks: the active peak hold
     // trace (Thetis m_rx1_spectrumPeaks). One pan here, one receiver there.
+    resetPeaks();
+}
+
+void SpectrumWidget::resetPeaks()
+{
+    // Thetis's reset pair for one receiver, as every reset site calls it
+    // (display.cs:881-882 [v2.10.3.15] resetPeaksAndNoise):
+    //   ResetBlobMaximums(rx, true);
+    //   ResetSpectrumPeaks(rx);
+    // Both empty and hold their display back 500 ms (display.cs:859-877).
     m_peakBlobs.clearMaximums();
     m_activePeakHold.clear();
+    markOverlayDirty();
 }
 
 void SpectrumWidget::setDisplayDuplex(bool on)
@@ -9814,6 +9830,20 @@ void SpectrumWidget::applyViewWindow(double centreHz, double bandwidthHz)
     // setMoxOverlay's swap. Everything else routes through here.
     m_centerHz    = centreHz;
     m_bandwidthHz = bandwidthHz;
+
+    // A moved or resized view resets this pan's peaks, local or remote.
+    // From Thetis display.cs:907-921 [v2.10.3.15] (OnCentreFrequencyChanged,
+    // a new display centre):
+    //   ResetBlobMaximums(1, true);
+    //   ResetSpectrumPeaks(1);
+    // and display.cs:1214-1245 [v2.10.3.15] (RXDisplayLow / RXDisplayHigh,
+    // new display edges):
+    //   if (value != rx_display_low)
+    //   {
+    //       ResetBlobMaximums(1, true);
+    //       ResetSpectrumPeaks(1);
+    resetPeaks();
+
     if (m_remoteSpectrum) {
         // A gesture can precede the subscription observer by one tick.
         // Retire the old plane immediately so it cannot acquire new RF labels.

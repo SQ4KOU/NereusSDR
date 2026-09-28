@@ -700,6 +700,69 @@ private slots:
         QVERIFY(!two->m_moxOverlay);
     }
 
+    // Thetis resets every receiver's peaks on a MOX edge (display.cs:1582-1593,
+    // console.cs:24243-24254 [v2.10.3.15], PurgeBuffers) and when the radio
+    // comes on (display.cs:818-823 [v2.10.3.15]); every pan of the window
+    // does the same, the transmitting one and the others.
+    static void seedPeaks(SpectrumWidget* pan)
+    {
+        pan->m_activePeakHold = ActivePeakHoldTrace(8);
+        pan->m_activePeakHold.setEnabled(true);
+        pan->m_activePeakHold.setOnTx(true);
+        pan->m_activePeakHold.update(QVector<float>(8, -40.0f));
+        pan->m_peakBlobs.setEnabled(true);
+        pan->m_peakBlobs.m_blobs.resize(3);
+        pan->m_peakBlobs.m_blobs[0].enabled = true;
+    }
+    static bool wasReset(const SpectrumWidget* pan)
+    {
+        return std::isinf(pan->m_activePeakHold.peak(0))
+            && pan->m_activePeakHold.displayDelayed()
+            && pan->m_peakBlobs.m_blobs.isEmpty()
+            && pan->m_peakBlobs.displayDelayed();
+    }
+
+    void aMoxEdgeResetsEveryPansPeaks()
+    {
+        LocalWindow window;
+        SpectrumWidget* one = window.stack.spectrum(QStringLiteral("one"));
+        SpectrumWidget* two = window.pan();
+        for (SpectrumWidget* pan : {one, two}) { seedPeaks(pan); }
+        window.controller->setKeyed(true, window.txSliceId);
+        QVERIFY(wasReset(one));
+        QVERIFY(wasReset(two));
+        for (SpectrumWidget* pan : {one, two}) { seedPeaks(pan); }
+        window.controller->setKeyed(false, -1);
+        QVERIFY(wasReset(one));
+        QVERIFY(wasReset(two));
+    }
+
+    void theRadioComingOnResetsEveryPansPeaks()
+    {
+        LocalWindow window;
+        SpectrumWidget* one = window.stack.spectrum(QStringLiteral("one"));
+        SpectrumWidget* two = window.pan();
+        window.radio.setConnectionStateForTest(ConnectionState::Disconnected);
+        for (SpectrumWidget* pan : {one, two}) { seedPeaks(pan); }
+        window.radio.setConnectionStateForTest(ConnectionState::Connected);
+        QVERIFY(wasReset(one));
+        QVERIFY(wasReset(two));
+    }
+
+    void aRemoteWindowsMoxEdgeResetsEveryPansPeaks()
+    {
+        RemoteWindow window(/*withAnalyzer=*/true);
+        QVERIFY(window.connect());
+        SpectrumWidget* one = window.pan(QStringLiteral("one"));
+        SpectrumWidget* two = window.pan(QStringLiteral("two"));
+        QVERIFY(one != nullptr && two != nullptr);
+        for (SpectrumWidget* pan : {one, two}) { seedPeaks(pan); }
+        window.controller->setKeyed(true, window.txSliceId);
+        QVERIFY(wasReset(one));
+        QVERIFY(wasReset(two));
+        window.controller->setKeyed(false, -1);
+    }
+
     // ── DUP on, a remote window ────────────────────────────────────────────
 
     void remoteDuplexKeepsTheReceiveFramesWhileKeyed()
