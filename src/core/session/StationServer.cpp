@@ -7110,8 +7110,13 @@ void StationServer::sendToPeer(SessionTransport* transport, const SessionMessage
             SessionMessage fitted = message;
             const int declared = peer->features.value(QByteArrayLiteral("setupDescription"), 0);
             const int version = qMin(declared, 6);
+            // The table describes the supported board's static row shape.
+            // A disconnected radio withdraws the live row capability, but a
+            // paired peer that negotiated rows keeps this description across
+            // a later connection of the same board/SKU. Current radio/MAC
+            // checks still govern every row command.
             const bool antennaRowsAvailable =
-                buildCapabilitiesFor(transport).radioAntennaRowsVersion == 1;
+                peer->features.value(QByteArrayLiteral("radioAntennaRows")) == 1;
             for (MirrorUpdate& update : fitted.updates) {
                 if (update.name != "revision") {
                     update.value = SetupDescription::fitCategoryForVersion(

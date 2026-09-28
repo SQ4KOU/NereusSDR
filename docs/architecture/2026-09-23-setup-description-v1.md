@@ -113,6 +113,10 @@ Hardware Config > Antenna / ALEX page: `hardware.antenna.txRows` and
 omits both tables for a peer without the row feature and omits the whole
 partial Hardware page on a board without Alex filters. V1–V5 peers retain
 the scalar controls only. A description never grants an edit by itself.
+For a peer that declared the row feature, the supported board's static table
+shape remains described while its radio is disconnected. The live row
+capability is then absent; current-session capability, radio identity, and
+row-command checks must all allow an edit before a cell can be changed.
 
 Each table has the 14 `Band` rows from 160m through XVTR, in enum order.
 The TX columns are Ant 1/2/3 (`field: "tx"`). RX has three RX1 columns
