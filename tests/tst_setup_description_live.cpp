@@ -11,6 +11,8 @@
 #include "core/accessories/AlexAntennaFacade.h"
 #include "core/accessories/AlexController.h"
 #include "core/StepAttenuatorController.h"
+#include "core/TxAnalyzer.h"
+#include "core/meters/SliceMeterPump.h"
 #include "core/session/TransmitStateFacade.h"
 #include "MultiDeviceHarness.h"
 
@@ -19,6 +21,77 @@ using namespace NereusSDR;
 class SetupDescriptionLiveTest : public QObject {
     Q_OBJECT
 private slots:
+    void pairedV4DisplaySettingsReachCoreAndNormalizeTracksCurrentDetector()
+    {
+        TxAnalyzer analyzer(TxAnalyzer::kTxDispId);
+        Core core;
+        core.model->setTxAnalyzer(&analyzer);
+        core.server->setMediaEnabled(true);
+        Device phone(QStringLiteral("Display settings iPhone"), QStringLiteral("phone"));
+        core.pair(phone);
+        QHash<QByteArray, int> features = kHolder;
+        features.insert("setupDescription", 4);
+        LoopbackTransport* app = core.signIn(phone, features);
+        QVERIFY(admitted(app));
+        QCOMPARE(capability(app->received(), QStringLiteral("setupDescriptionVersion")),
+                 std::optional<qint64>(4));
+        QCOMPARE(capability(app->received(), QStringLiteral("txDisplayVersion")),
+                 std::optional<qint64>(3));
+        const QJsonObject display = QJsonDocument::fromJson(latest(app->received(),
+            QStringLiteral("setup"), QStringLiteral("display")).toString().toUtf8()).object();
+        QCOMPARE(display.value("version"), QJsonValue(4));
+        const QJsonObject normalize = display.value("pages").toArray().at(2).toObject()
+            .value("sections").toArray().at(1).toObject().value("controls").toArray().at(3).toObject();
+        QCOMPARE(normalize.value("enabledWhen").toObject().value("setting"),
+                 QJsonValue("DisplayTxPanDetector"));
+        QVERIFY(!normalize.value("gate").toObject().contains("offAir"));
+        QVERIFY(!normalize.value("gate").toObject().contains("transmit"));
+        const QJsonArray permitted = normalize.value("enabledWhen").toObject().value("oneOf").toArray();
+        const auto enabled = [&permitted](const QString& current) {
+            return !current.isEmpty() && permitted.contains(QJsonValue(current));
+        };
+        QVERIFY(!enabled({}));
+        QVERIFY(!enabled(QStringLiteral("invalid")));
+        QVERIFY(!enabled(QStringLiteral("1")));
+        QVERIFY(enabled(QStringLiteral("2")));
+        QVERIFY(enabled(QStringLiteral("3")));
+        QVERIFY(enabled(QStringLiteral("4")));
+
+        const auto write = [&core, app](const QString& key, const QString& value,
+                                        const QString& origin) {
+            app->sendText(SessionMessages::encode(SessionMessages::settingsWrite(key, value, origin)));
+            const bool observed = QTest::qWaitFor([&core, app, &key, &value, &origin] {
+                if (core.settings->value(key).toString() != value) { return false; }
+                for (const QJsonObject& item : ofType(app->received(), QStringLiteral("settings.value"))) {
+                    const QJsonArray properties = item.value("properties").toArray();
+                    if (item.value("key") == QJsonValue(key)
+                        && !properties.isEmpty()
+                        && properties.first().toObject().value("value") == QJsonValue(value)
+                        && item.value("origin") == QJsonValue(origin)) { return true; }
+                }
+                return false;
+            }, 5000);
+            if (!observed) {
+                qWarning() << "Display write not observed" << key << value
+                           << "stored" << core.settings->value(key)
+                           << "wire" << app->received().mid(qMax(0, app->received().size() - 5));
+            }
+            return observed;
+        };
+        QVERIFY(write(QStringLiteral("DisplayFftSize"), QStringLiteral("8192"), QStringLiteral("rx")));
+        QVERIFY(write(QStringLiteral("DisplayTxWindowType"), QStringLiteral("6"), QStringLiteral("tx")));
+        SliceMeterPump* pump = core.model->sliceMeterPump();
+        QVERIFY(pump != nullptr);
+        QVERIFY(write(QStringLiteral("MultimeterDelayMs"), QStringLiteral("180"), QStringLiteral("meter")));
+        QTRY_COMPARE(pump->intervalMs(), 180);
+        for (const QString& value : {QStringLiteral("0"), QStringLiteral("2"),
+                                     QStringLiteral("1")}) {
+            QVERIFY(write(QStringLiteral("DisplayTxPanDetector"), value,
+                          QStringLiteral("detector-") + value));
+            QCOMPARE(enabled(core.settings->value(QStringLiteral("DisplayTxPanDetector")).toString()),
+                     value == QLatin1String("2"));
+        }
+    }
     void pairedV3SettingsValidationPanelUsesExistingHygieneCapability()
     {
         Core core;

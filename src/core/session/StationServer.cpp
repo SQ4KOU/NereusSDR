@@ -7109,7 +7109,7 @@ void StationServer::sendToPeer(SessionTransport* transport, const SessionMessage
             && message.kind != SessionMessageKind::Schema) {
             SessionMessage fitted = message;
             const int declared = peer->features.value(QByteArrayLiteral("setupDescription"), 0);
-            const int version = qMin(declared, 3);
+            const int version = qMin(declared, 4);
             for (MirrorUpdate& update : fitted.updates) {
                 if (update.name != "revision") {
                     update.value = SetupDescription::fitCategoryForVersion(
@@ -9658,7 +9658,7 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             caps.stationCatalogVersion = stationCatalogVersion();
             caps.setupDescriptionVersion = peerDeclares(
                 transport, QByteArrayLiteral("setupDescription"), 1)
-                ? qMin(peer->features.value(QByteArrayLiteral("setupDescription")), 3) : 0;
+                ? qMin(peer->features.value(QByteArrayLiteral("setupDescription")), 4) : 0;
             // iPhone app Task 20: display extras.
             caps.displayExtrasVersion = media ? displayExtrasVersion() : 0;
             // R-R3-49 (parity Task 1): the transmit settings.

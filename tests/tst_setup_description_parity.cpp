@@ -3,6 +3,8 @@
 
 #include "core/setup/SetupDescriptionService.h"
 #include "core/AppSettings.h"
+#include "core/ControlRanges.h"
+#include "core/TxAnalyzer.h"
 #include "core/StepAttenuatorController.h"
 #include "core/settings/SettingsScope.h"
 #include "gui/setup/GeneralOptionsPage.h"
@@ -10,6 +12,8 @@
 #include "gui/setup/CatNetworkSetupPages.h"
 #include "gui/setup/DspSetupPages.h"
 #include "gui/setup/DspOptionsPage.h"
+#include "gui/setup/DisplaySetupPages.h"
+#include "gui/setup/MultimeterPage.h"
 #include "gui/setup/TransmitSetupPages.h"
 #include "gui/setup/TxProfileSetupPage.h"
 #include "gui/setup/hardware/AntennaAlexAntennaControlTab.h"
@@ -76,7 +80,19 @@ void compareControl(QWidget& page, const QJsonObject& control)
         QCOMPARE(spin->maximum(), control.value("max").toInt());
         QCOMPARE(spin->singleStep(), control.value("step").toInt());
     } else if (kind == "decimal" || kind == "slider") {
-        if (auto* spin = qobject_cast<QDoubleSpinBox*>(object)) {
+        if (kind == "slider" && control.contains("options")) {
+            auto* slider = qobject_cast<QSlider*>(object);
+            QVERIFY2(slider != nullptr, qPrintable(id));
+            const QJsonArray options = control.value("options").toArray();
+            QCOMPARE(slider->minimum(), 0);
+            QCOMPARE(slider->maximum(), options.size() - 1);
+            QCOMPARE(slider->singleStep(), 1);
+            for (int i = 0; i < options.size(); ++i) {
+                const int value = 4096 << i;
+                QCOMPARE(options.at(i).toObject().value("value"), QJsonValue(value));
+                QCOMPARE(options.at(i).toObject().value("label"), QJsonValue(QString::number(value)));
+            }
+        } else if (auto* spin = qobject_cast<QDoubleSpinBox*>(object)) {
             QCOMPARE(spin->minimum(), control.value("min").toDouble());
             QCOMPARE(spin->maximum(), control.value("max").toDouble());
             QCOMPARE(spin->singleStep(), control.value("step").toDouble());
@@ -161,6 +177,61 @@ void compareControl(QWidget& page, const QJsonObject& control)
 class SetupDescriptionParityTest : public QObject {
     Q_OBJECT
 private slots:
+    void describedDisplayScalarsMatchDesktopAndStayBoardIndependent()
+    {
+        RadioModel model;
+        SpectrumDefaultsPage spectrum(&model);
+        MultimeterPage multimeter(&model);
+        TxDisplayPage tx(&model);
+        SetupDescriptionService service;
+        const QJsonObject display = service.category(QStringLiteral("display"));
+        const QJsonArray pages = display.value("pages").toArray();
+        QCOMPARE(pages.size(), 3);
+        const QStringList expectedIds{
+            "display.spectrumDefaults.fftSize", "display.spectrumDefaults.window",
+            "display.spectrumDefaults.hzPerBinTarget", "display.spectrumDefaults.fps",
+            "display.multimeter.pollingDelay", "display.txDisplay.fftSize",
+            "display.txDisplay.window", "display.txDisplay.panDetector",
+            "display.txDisplay.panAveraging", "display.txDisplay.panAvTime",
+            "display.txDisplay.panNormalize", "display.txDisplay.wfDetector",
+            "display.txDisplay.wfAveraging", "display.txDisplay.wfAvTime"};
+        const QList<QJsonValue> expectedDefaults{
+            ControlRanges::kDisplayFftSizeDefault, ControlRanges::kDisplayFftWindowDefault,
+            ControlRanges::kDisplayHzPerBinTargetDefault, ControlRanges::kDisplaySpectrumFpsDefault,
+            100, TxAnalyzer::kDefaultFftSize, TxAnalyzer::kDefaultWindowType,
+            TxAnalyzer::kDefaultPanDetector, TxAnalyzer::kDefaultPanAveraging,
+            TxAnalyzer::kDefaultPanAvTimeMs, TxAnalyzer::kDefaultPanNormalize,
+            TxAnalyzer::kDefaultWfDetector, TxAnalyzer::kDefaultWfAveraging,
+            TxAnalyzer::kDefaultWfAvTimeMs};
+        QStringList actualIds;
+        QCOMPARE(pages.at(0).toObject().value("sections").toArray().at(0).toObject().value("title"),
+                 QJsonValue("Fast Fourier Transform"));
+        QCOMPARE(pages.at(0).toObject().value("sections").toArray().at(1).toObject().value("title"),
+                 QJsonValue("Rendering"));
+        QCOMPARE(pages.at(1).toObject().value("sections").toArray().at(0).toObject().value("title"),
+                 QJsonValue("Multimeter"));
+        QCOMPARE(pages.at(2).toObject().value("sections").toArray().at(1).toObject().value("title"),
+                 QJsonValue("Panadapter"));
+        QCOMPARE(pages.at(2).toObject().value("sections").toArray().at(2).toObject().value("title"),
+                 QJsonValue("Waterfall"));
+        for (int p = 0; p < pages.size(); ++p) {
+            QWidget* native = p == 0 ? static_cast<QWidget*>(&spectrum)
+                : p == 1 ? static_cast<QWidget*>(&multimeter) : static_cast<QWidget*>(&tx);
+            for (const QJsonValue& section : pages.at(p).toObject().value("sections").toArray()) {
+                for (const QJsonValue& raw : section.toObject().value("controls").toArray()) {
+                    const QJsonObject control = raw.toObject();
+                    QCOMPARE(control.value("default"), expectedDefaults.at(actualIds.size()));
+                    actualIds << control.value("id").toString();
+                    QVERIFY(SetupDescriptionService::validateDisplaySettingBinding(control));
+                    compareControl(*native, control);
+                }
+            }
+        }
+        QCOMPARE(actualIds, expectedIds);
+        model.setBoardForTest(HPSDRHW::HermesLite);
+        service.setRadioContext(model.boardCapabilities(), model.hardwareProfile().model);
+        QCOMPARE(service.category(QStringLiteral("display")), display);
+    }
     void settingsValidationPanelMatchesDesktopActions()
     {
         RadioModel model;
