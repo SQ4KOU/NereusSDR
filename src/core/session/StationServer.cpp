@@ -8268,6 +8268,15 @@ bool StationServer::txDisplayAvailable(quint64 epoch) const
         && txDisplayVersion() >= 1;
 }
 
+bool StationServer::miniDisplayAvailable(quint64 epoch) const
+{
+    SessionTransport* session = mediaSessionFor(epoch);
+    const auto it = m_peers.constFind(session);
+    return mediaAvailable(epoch) && it != m_peers.cend()
+        && it->agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && peerDeclares(session, QByteArrayLiteral("miniDisplay"), 1);
+}
+
 void StationServer::setStationRadios(StationRadios* radios)
 {
     if (!m_stationRadios.isNull()) {
@@ -8616,6 +8625,9 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             // Task 29 step 2b: the media tunnel, to a peer with media.
             caps.mediaTunnelVersion = media ? mediaTunnelVersion() : 0;
             caps.mediaRelayRoutingVersion = media ? 1 : 0;
+            // Optional and last: old peers retain their exact descriptor.
+            caps.miniDisplayVersion = media && peerDeclares(
+                transport, QByteArrayLiteral("miniDisplay"), 1) ? 1 : 0;
             // iPhone app Task 71 (ruling 10.1): several devices at once, for
             // a peer that declared sessionHolder with deviceAuth; any other
             // peer is sent no entry, so its capabilities are today's.

@@ -642,6 +642,7 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
     // says so and the Core answers with txPermitted and remoteTxVersion.
     m_declaredFeatures.insert(QByteArrayLiteral("remoteTx"), 1);
     m_declaredFeatures.insert(QByteArrayLiteral("settingsHygiene"), 1);
+    m_declaredFeatures.insert(QByteArrayLiteral("miniDisplay"), 1);
     // Each transmit verb goes out as the same command three times (the
     // copies rule); the Core acts on the first and answers every copy.
     m_remoteTransmit = new RemoteTransmitClient(

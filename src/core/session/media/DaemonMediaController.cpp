@@ -448,6 +448,7 @@ struct DaemonMediaController::EndpointEntry {
     // Parity Task 31: the subscribe's `duplex` (txDisplayVersion 3): while
     // keyed this endpoint keeps the receiver.
     bool duplex{false};
+    bool miniDisplay{false};
     std::unique_ptr<TxViewerLease> txViewer;
     QJsonObject txSentShape;
     bool txContextSent{false};
@@ -1671,6 +1672,17 @@ bool DaemonMediaController::handleStart(const QJsonObject& control)
         }
         declaredTxDisplay = txDisplayVersion;
     }
+    const bool declaresMiniDisplay = control.contains(QStringLiteral("miniDisplayVersion"));
+    if (declaresMiniDisplay) {
+        legacyShape.remove(QStringLiteral("miniDisplayVersion"));
+        quint32 version = 0;
+        if (!m_server || !m_server->miniDisplayAvailable(m_epoch)
+            || !exactUnsigned(control.value(QStringLiteral("miniDisplayVersion")),
+                              version, /*nonzero=*/true)
+            || version != 1) {
+            return false;
+        }
+    }
     if (!exactKeys(legacyShape, {"op", "connectionId"})
         || !canonicalConnectionId(control.value(QStringLiteral("connectionId")))) {
         return false;
@@ -1732,6 +1744,7 @@ bool DaemonMediaController::handleStart(const QJsonObject& control)
     m_monitorRoute = TxMonitorRoute::None;
     refreshTxMonitor();
     m_txDisplayNegotiated = declaresTxDisplay;
+    m_miniDisplayNegotiated = declaresMiniDisplay;
     // Task 29: what a replacement of this peer keeps.
     m_startOfferedLossless = offerLossless;
     m_startMicLine = declaresRemoteTx;
@@ -2424,8 +2437,15 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
     if (duplexPresent) {
         legacyShape.remove(QStringLiteral("duplex"));
     }
+    const bool rolePresent = control.contains(QStringLiteral("displayRole"));
+    if (rolePresent) {
+        legacyShape.remove(QStringLiteral("displayRole"));
+    }
     DisplayExtrasRequest extrasRequest;
-    if ((duplexPresent && (!m_txDisplayNegotiated || m_txDisplayDeclared < 3
+    if ((rolePresent && (!m_miniDisplayNegotiated
+                         || control.value(QStringLiteral("displayRole")).toString()
+                                != QLatin1String("mini")))
+        || (duplexPresent && (!m_txDisplayNegotiated || m_txDisplayDeclared < 3
                            || !control.value(QStringLiteral("duplex")).isBool()))
         || (txWindowPresent && (!m_txDisplayNegotiated
                              || !control.contains(QStringLiteral("txMinDbm"))
@@ -2723,6 +2743,7 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
         entry.txWindow = std::pair{static_cast<float>(txMinDbm), static_cast<float>(txMaxDbm)};
     }
     entry.duplex = duplexPresent && control.value(QStringLiteral("duplex")).toBool();
+    entry.miniDisplay = rolePresent;
     if (!extrasRequest.empty()) {
         entry.extras = std::make_unique<DisplayExtrasProcessor>(extrasRequest);
     }
@@ -2753,7 +2774,9 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
     // Parity Task 28: an endpoint showing the transmit display keeps its
     // place among the viewers, and its new request moves its view (a pan or
     // zoom on the transmitting pan moves the analyzer when it governs).
-    if (replaced.has_value() && replaced->txViewer && !m_endpoints.at(endpointId).duplex) {
+    if (replaced.has_value() && replaced->txViewer
+        && replaced->miniDisplay == m_endpoints.at(endpointId).miniDisplay
+        && !m_endpoints.at(endpointId).duplex) {
         EndpointEntry& current = m_endpoints.at(endpointId);
         current.txViewer = std::move(replaced->txViewer);
         current.endpoint.reset();
@@ -4714,6 +4737,11 @@ bool DaemonMediaController::endpointOnTransmitPan(const EndpointEntry& entry) co
     if (!m_radioModel || !m_txRiseRecorded) {
         return false;
     }
+    // From Thetis MeterManager.cs:5252-5265,43659-43666 [v2.10.3.15]:
+    // meter and mini MOX follows its receiver, while a pan can host several.
+    if (entry.miniDisplay) {
+        return entry.sliceId == m_txRiseSliceId;
+    }
     // The pan hosting the transmitting slice at the rise, as the window
     // takes it over (MoxDisplayController::rise records it and restores
     // THAT pan at the fall): the transmit slice, or a slice sharing its pan
@@ -5785,6 +5813,7 @@ void DaemonMediaController::clearSession()
     clearAllocationIdentity();
     // Parity Task 28: the next peer declares its own.
     m_txDisplayNegotiated = false;
+    m_miniDisplayNegotiated = false;
 }
 
 void DaemonMediaController::retirePeerKeepingSession()
