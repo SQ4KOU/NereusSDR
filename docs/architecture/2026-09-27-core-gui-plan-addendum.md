@@ -2337,6 +2337,78 @@ colours for the same signal.
   WebSocket overlap and from physical network usage.
 - Plan: complete Core/window application traffic observations for R5 and IQ.
 
+### G-112: Cross-platform test fixtures assume one service manager and one ICE path
+
+- Evidence: the immutable Linux `5c4ca88d` full run failed the disconnected
+  Setup page inventory, stale-negative route ranking, and three desktop
+  background-service assertions. The new combined export button legitimately
+  depends on Core access; a Linux service-status query is a read operation;
+  loopback ICE selection has floor rank; root can bypass a chmod write block.
+- Ruling basis: JJ requires failures to be explained and fixed at actual load.
+  Preserve production behavior and test the intended contracts explicitly.
+- Status: signed `48764cd41` fixes the three test fixtures and passes app/Core
+  plus four affected Mac suites (23.25 s). Lead review requires an exact
+  allowlist of the read-only service query before acceptance: checking only
+  start/enable/disable strings would miss other platform service mutations.
+  That bounded correction is assigned to the same worker. Root integration
+  and Linux confirmation remain pending; the original full-run failures stay
+  in the evidence.
+- Plan: cross-platform Core/GUI verification.
+
+### G-113: Audio status test requires acceptance of a legitimately superseded reply
+
+- Evidence: the Linux full run failed to observe an accepted RadioOffline
+  audio context. A controlled Mac reproduction mirrors the disconnected
+  radio before the already-published reply reaches the GUI. The trace shows
+  Core revision 1/generation 2 with radio-offline, GUI request revision 2,
+  Core revision 2/generation 3 with client-disabled, then delivery of both
+  replies. The GUI correctly rejects the older revision; the previous test
+  wrongly required its acceptance regardless of message order.
+- Ruling basis: JJ requires a cause and fix, without increasing deadlines.
+  Keep the current revision guard and prove both publication and current
+  window status through the actual Core/GUI session.
+- Status: root test-only correction verifies Core emits the valid explanation,
+  the GUI receives it, the newer reply matches the latest request, the window
+  shows RadioOffline, and a deliberately superseded reply is never accepted.
+  Ordinary delivery and controlled mirror-first rows preserve forged-context
+  refusal and reconnect/audio recovery checks. The controlled old assertion
+  failed (16.98 s); after correction app/Core and the full audio-session
+  suite pass (47.62 s). Linux confirmation remains pending. No production
+  audio behavior, deadline or tolerance changed.
+- Plan: truthful audio status and load-sensitive protocol verification.
+
+### G-114: Lossless remote VAX level differs during the loaded Linux test
+
+- Evidence: immutable Linux `5c4ca88d` reported remote slice-B amplitude
+  0.0898856 versus local 0.0950019, exceeding the existing 0.0005 lossless
+  tolerance. The fixture samples independently paced local and remote buffers
+  after a fixed frame offset. Its current log lacks render underrun and
+  phase-continuity evidence. A later mixed-stream row passing does not
+  explain the failure.
+- Ruling basis: JJ requires the cause and suggested fix at actual load.
+  Preserve the amplitude contract and measure delivery and playback boundaries
+  before choosing a production or fixture repair.
+- Status: OPEN investigation. In particular, PacedAudioBus's existing dry-frame
+  counter covers its optional wall-clock mode, but this row calls render()
+  directly; that counter cannot establish whether this row inserted silence.
+  Targeted evidence must cover the actual render path and receiver statistics.
+- Plan: local/remote VAX audio parity under real load.
+
+### G-115: Docker's read-only network settings prevent traversal setup
+
+- Evidence: the Linux full run's traversal harness exits before any scenario
+  when its private network namespace writes disable_ipv6. Read-only inspection
+  confirms `/proc/sys` is mounted read-only despite NET_ADMIN and SYS_ADMIN.
+- Ruling basis: JJ requires the actual traversal scenarios to run. Correct
+  this disposable test environment, preserving isolation and all assertions.
+- Status: a separate network-isolated disposable container with Docker's
+  systempaths=unconfined option successfully created a private network
+  namespace, set/read its IPv6 switch and removed it. This proves the setup
+  prerequisite only. The next traversal invocation must use that option;
+  the current immutable full run continues unchanged and retains its failure.
+  No host network settings, live service or radio were changed.
+- Plan: complete Linux remote-access traversal verification.
+
 ## How this addendum is kept
 
 New gaps are appended here as they are found, each with its own `G-` number (next available

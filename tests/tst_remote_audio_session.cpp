@@ -553,8 +553,16 @@ private slots:
         h.client.disconnectFromStation(QStringLiteral("test complete"));
     }
 
+    void minorEightReportsWhyAudioIsOffAndRefusesForgedContexts_data()
+    {
+        QTest::addColumn<bool>("mirrorFirst");
+        QTest::newRow("ordinary-delivery") << false;
+        QTest::newRow("mirrored-offline-before-context") << true;
+    }
+
     void minorEightReportsWhyAudioIsOffAndRefusesForgedContexts()
     {
+        QFETCH(bool, mirrorFirst);
         Harness h;
         RemoteMediaController remoteMedia(&h.client, &h.remote, nullptr);
         DaemonMediaController daemonMedia(&h.server, &h.station);
@@ -609,18 +617,100 @@ private slots:
                                  && channelEnergy(h.remoteBus->heard, 1, heardBefore) > 0.5,
                                  15000);
 
+        QStringList boundaryEvents;
+        QList<QJsonObject> sentContexts;
+        QList<QJsonObject> sentRequests;
+        bool mirroredBeforeDelivery = false;
+        const auto record = [&](const QString& direction, const QJsonObject& value) {
+            if (boundaryEvents.size() >= 32) { return; }
+            boundaryEvents.append(QStringLiteral("%1 revision=%2 generation=%3 enabled=%4 reason=%5")
+                .arg(direction).arg(value.value(QStringLiteral("revision")).toInteger())
+                .arg(value.value(QStringLiteral("generation")).toInteger())
+                .arg(value.value(QStringLiteral("enabled")).toBool())
+                .arg(value.value(QStringLiteral("reason")).toString()));
+        };
+        const auto sentConnection = connect(h.stationLink, &Test::LoopbackTransport::outboundText,
+            &remoteMedia, [&](const QByteArray& wire) {
+                SessionMessage message;
+                if (!SessionMessages::decode(wire, &message)
+                    || message.kind != SessionMessageKind::MediaControl
+                    || message.mediaPayload.value(QStringLiteral("op"))
+                        != QLatin1String("audio-context")) { return; }
+                if (sentContexts.size() < 32) { sentContexts.append(message.mediaPayload); }
+                record(QStringLiteral("Core sent"), message.mediaPayload);
+                if (mirrorFirst && !mirroredBeforeDelivery
+                    && message.mediaPayload.value(QStringLiteral("reason")).toString()
+                        == remoteAudioOffReasonToWire(RemoteAudioOffReason::RadioOffline)) {
+                    mirroredBeforeDelivery = true;
+                    h.remote.setConnectionStateForTest(ConnectionState::Disconnected);
+                }
+            });
+        const auto requestedConnection = connect(h.stationLink->peerForTest(),
+            &Test::LoopbackTransport::outboundText, &remoteMedia, [&](const QByteArray& wire) {
+                SessionMessage message;
+                if (!SessionMessages::decode(wire, &message)
+                    || message.kind != SessionMessageKind::MediaControl
+                    || message.mediaPayload.value(QStringLiteral("op"))
+                        != QLatin1String("audio")) { return; }
+                if (sentRequests.size() < 32) { sentRequests.append(message.mediaPayload); }
+                record(QStringLiteral("GUI requested"), message.mediaPayload);
+            });
+        const auto receivedConnection = connect(&h.client, &StationClient::mediaControlReceived,
+            &remoteMedia, [&](const QJsonObject& value, quint32) {
+                if (value.value(QStringLiteral("op")) == QLatin1String("audio-context")) {
+                    record(QStringLiteral("GUI received"), value);
+                }
+            });
+        const auto releaseObservers = qScopeGuard([&] {
+            disconnect(sentConnection);
+            disconnect(requestedConnection);
+            disconnect(receivedConnection);
+        });
+        const auto evidence = [&] { return boundaryEvents.join(QLatin1Char('\n')); };
+
         // The station radio drops with audio wanted. Core says why at once,
         // ahead of the GUI's own mirror of the radio state.
+        // Publication is immediate; queued delivery can follow the mirror's
+        // newer audio request, which must supersede this older reply.
         h.station.setConnectionStateForTest(ConnectionState::Disconnected);
-        QTRY_VERIFY_WITH_TIMEOUT(accepted.any([](const RemoteAudioContextMessage& context) {
-            return !context.enabled
-                && context.offReason == RemoteAudioOffReason::RadioOffline;
-        }), 5000);
+        std::optional<RemoteAudioContextMessage> offlineContext;
+        for (const QJsonObject& payload : sentContexts) {
+            const auto context = decodeRemoteAudioContext(payload, true, false);
+            if (context && !context->enabled
+                && context->offReason == RemoteAudioOffReason::RadioOffline) {
+                offlineContext = context;
+                break;
+            }
+        }
+        QVERIFY2(offlineContext.has_value(), qPrintable(evidence()));
+        QTRY_VERIFY2_WITH_TIMEOUT(([&] {
+            for (const QJsonObject& payload : audioContexts(controls)) {
+                const auto context = decodeRemoteAudioContext(payload, true, false);
+                if (context && context->generation == offlineContext->generation
+                    && context->revision == offlineContext->revision
+                    && context->offReason == RemoteAudioOffReason::RadioOffline) {
+                    return true;
+                }
+            }
+            return false;
+        })(), qPrintable(evidence()), 5000);
         // Once the GUI mirrors the offline radio it withdraws its own
         // request, and Core reports that choice.
         QTRY_VERIFY_WITH_TIMEOUT(!h.remote.isConnected(), 5000);
         QTRY_VERIFY_WITH_TIMEOUT(accepted.contexts.constLast().offReason
                                      == RemoteAudioOffReason::ClientDisabled, 5000);
+        QVERIFY2(!sentRequests.isEmpty(), qPrintable(evidence()));
+        QCOMPARE(accepted.contexts.constLast().revision,
+                 quint32(sentRequests.constLast().value(QStringLiteral("revision")).toInteger()));
+        QTRY_COMPARE_WITH_TIMEOUT(remoteMedia.audioStatus().state,
+                                  RemoteAudioStatus::State::RadioOffline, 5000);
+        if (mirrorFirst) {
+            QVERIFY(mirroredBeforeDelivery);
+            QVERIFY(accepted.contexts.constLast().revision > offlineContext->revision);
+            QVERIFY2(!accepted.any([&](const RemoteAudioContextMessage& context) {
+                return context.generation == offlineContext->generation;
+            }), qPrintable(evidence()));
+        }
 
         // The radio returns, and so does audio.
         const int heardBeforeReturn = h.remoteBus->heard.size() / 2;
