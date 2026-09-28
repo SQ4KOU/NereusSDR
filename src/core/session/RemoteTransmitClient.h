@@ -103,6 +103,8 @@ public:
     /// Shown when a press finds no link to the Core.
     static constexpr const char* kNoLinkReason =
         "This computer is not connected to the Core, so it cannot transmit.";
+    static constexpr const char* kReleaseFailedReason =
+        "The transmit release could not be confirmed. Reconnect to the Core before transmitting again.";
 
     explicit RemoteTransmitClient(Sender sender, QObject* parent = nullptr);
 
@@ -197,7 +199,6 @@ private:
     struct Pending {
         Kind kind;
         QByteArray verb;
-        quint64 issuanceGeneration;
         bool releaseIntent;
     };
 
@@ -215,10 +216,13 @@ private:
     std::function<void(const Answer&)> m_programAnswer;
     /// Commands still waiting for their first answer.
     QHash<quint32, Pending> m_pending;
-    quint64 m_issuanceGeneration{0};
-    /// Nonzero from local off intent until its latest accepted primary
-    /// command result. A failed send has no result and remains fenced.
-    quint64 m_releaseFenceGeneration{0};
+    /// All sent off commands need their own accepted result. A failed or
+    /// refused off cannot be resolved by a different-mode off command.
+    quint32 m_pendingReleases{0};
+    quint32 m_releaseDispatches{0};
+    bool m_releaseFailureSticky{false};
+    bool m_releaseFailureNotified{false};
+    quint64 m_sessionGeneration{0};
     bool m_tuneAsked{false};
     // Task 37.
     bool m_twoToneAsked{false};
