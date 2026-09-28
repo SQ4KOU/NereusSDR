@@ -10185,8 +10185,7 @@ bool RadioModel::moveSlicesToStream(const QList<int>& sliceIds, int stream, doub
     }
     const bool wasActive = m_streamAllocator.isStreamActive(stream);
     const int rateHz = wasActive ? m_streamAllocator.streamSampleRateHz(stream)
-                                 : (m_connectionSampleRateHz > 0 ? m_connectionSampleRateHz
-                                                                 : m_streamDefaultRateHz);
+                                 : newStreamSampleRateHz();
     const double halfWindow = static_cast<double>(rateHz) / 2.0;
     const double centre = wasActive ? m_streamAllocator.streamCentreHz(stream) : centreHz;
     for (const int id : sliceIds) {
@@ -10720,8 +10719,7 @@ void RadioModel::activateStreamAt(int streamIndex, double centreHz)
     const int rateForStream =
         (streamAlreadyLive && existingRateHz > 0)
             ? existingRateHz
-            : (m_connectionSampleRateHz > 0 ? m_connectionSampleRateHz
-                                            : m_streamDefaultRateHz);
+            : newStreamSampleRateHz();
 
     if (!streamAlreadyLive) {
         claimStreamEpoch(streamIndex);
