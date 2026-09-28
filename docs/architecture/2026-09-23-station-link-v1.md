@@ -1234,6 +1234,17 @@ When a feature is off, its version is 0:
   against an older Core disables these controls with a plain reason.
   Remote Reset to Defaults remains disabled until its operator-facing
   behavior is settled; version 1 does not accept a reset command.
+- `setupDescriptionVersion` 3: the `setupDescription` hello declaration is
+  negotiated at minor 11 and capped at 3. A peer declaring 1 or 2 retains
+  its earlier projected Setup description, including an empty Diagnostics
+  category. Version 3 adds only the closed Settings Validation panel in
+  `setup.diagnostics`; it does not confer Settings Hygiene authority. That
+  panel requires the separate `settingsHygiene:1` hello declaration and
+  `settingsHygieneVersion:1` capability. Its Re-validate and Forget actions
+  use only the existing `station.validateSettings` and
+  `station.forgetSettings` commands with the current canonical MAC. Reset is
+  visibly disabled, with no reset verb. The panel's result, lifetime,
+  confirmation and refusal rules are in the Setup-description contract.
 - `settingsBackupVersion`: optional minor-11 capability, 1 only for an
   authenticated enrolled-device-key peer that declared `settingsBackup` 1
   and a Core with a local radio model. It is advertised during capability

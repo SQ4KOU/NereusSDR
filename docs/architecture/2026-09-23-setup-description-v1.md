@@ -1,4 +1,4 @@
-# Setup description version 1
+# Setup description versions 1–3
 
 The Core sends the desktop's built Setup pages as JSON strings on the read-only
 `setup` mirror object (`SetupDescription`). It has one string property per
@@ -36,18 +36,22 @@ Collapsible Display. A desktop control has the dynamic QObject property
 An optional `coverage` field on a category or page is `partial` or a more
 specific pending scope. The renderer may show described controls but must not
 infer that omitted desktop controls are present. A category with no ready
-pages is sent as an empty string, not a page with empty controls. Task 43's
-Diagnostics file is held this way until its local file and log actions have a
-phone binding contract.
+pages is sent as an empty string, not a page with empty controls. Diagnostics
+publishes only its Settings Validation panel to version-3 peers; versions 1
+and 2 still receive an empty Diagnostics string. Its local file and log
+actions remain undescribed.
 
 Control `kind` is one of `toggle`, `integer`, `decimal`, `slider`, `choice`,
-`text`, `colour`, `button`, `readout` or `table`. Numeric controls carry
+`text`, `colour`, `button`, `readout` or `table`; version 3 also has the one
+closed `settingsHygiene` panel described below. Numeric controls carry
 `min`, `max`, `step` and, where shown, `unit`. Choices have an ordered `choices`
 array. A table has `rows`, `columns` and a cell kind. `tooltip` is the
 desktop's exact text, including an empty string when the desktop has none.
 Every control has exactly one `binding`: `setting` (an AppSettings key routed
 by `classifySettingsKey`), `property` (a mirrored object and property),
-`command` (a station verb), or `phone` (a key the phone keeps locally). A
+`command` (a station verb), or `phone` (a key the phone keeps locally). The
+version-3 Settings Validation panel instead has its one closed
+`settingsHygiene` binding; it does not extend those generic binding rules. A
 station binding has `applies: "live"`; the only other value,
 `subscription`, is for display keys a client puts into its endpoint
 subscription. A `toggle` backed by a station `setting` requires exactly
@@ -74,13 +78,43 @@ Missing, nonfinite, wrong-type, or stale-session values display unavailable,
 never zero or a cached value from another session. Readouts send no edits,
 including when the source property happens to be writable. A readout without
 `decimals` keeps the renderer's prior behavior. The PA Values partial page
-uses only five `txState` scalars with `txReadingsVersion:1`; no derived
-formula, peak/min tracker, or reset action is implied by this field.
+uses five `txState` scalars with `txReadingsVersion:1` and the selected Drive
+setpoint from `transmit.power` (Int64) with `transmitSettingsVersion:1`. Drive
+is a readout even though its mirrored source is writable; it sends no write.
+These fields imply no derived formula, peak/min tracker, or reset action.
 `setup.pa` is appended after `setup.revision` in the fixed mirror schema and
-is empty on a board without an integrated PA or on an RX-only SKU. Its five
+is empty on a board without an integrated PA or on an RX-only SKU. Its six
 readouts remain visible while the radio transmits; they require neither
 transmit permission nor an off-air gate. A peer without the negotiated
 Setup-description feature receives no `setup` mirror object.
+
+Version 3 adds one closed `kind:settingsHygiene` panel in Diagnostics >
+Settings Validation, with ID `diagnostics.settingsValidation.health`. Its
+`binding` is exactly `{"settingsHygiene":{"version":1}}` and its gate is
+`settingsHygieneVersion:1`. It describes the existing validation issue list
+and three desktop actions in order: Re-validate, Reset to Defaults (always
+disabled with the Core's reason), and Forget This Radio. It is not a generic
+command or result binding. The actual peer must separately declare
+`settingsHygiene:1` and receive that capability; a descriptor alone grants
+nothing. A V3 peer still receives the older controls with their existing
+semantics. The Core filters every control above the peer's negotiated
+description version, drops empty sections and pages, and caps an unknown
+future declaration at version 3. No mirror field or ordinal changes.
+
+The phone uses a current-session settings snapshot and the current canonical
+radio MAC. Re-validate sends only that MAC to `station.validateSettings`;
+Forget sends only that MAC to `station.forgetSettings`. Replies must match
+the request ID, session and MAC. `SettingsHygieneWire` accepts exactly two
+typed values (`mac`, `issuesJson`), up to 32 issues and 64 KiB of compact
+JSON with bounded fields. Render severity, summary and detail as plain text;
+missing, malformed, stale or refused replies are unavailable, never an empty
+healthy list. Revalidation is coalesced or serialized. Forget requires a
+paired-device key, is disabled while on air or busy, and starts with a
+default-cancel confirmation. After confirmation the client rechecks its
+session, MAC, pairing and on-air state; the Core checks authority again on
+dispatch. `fixActionId` is diagnostic text and never auto-executed. Reset
+remains disabled because its operator-facing semantics are unsettled. The
+panel does not describe Export / Import or Logs.
 
 On the ANAN-G2E only, the partial `PA Gain` page also describes the existing
 `transmit.paSettingsBypass` Boolean toggle. The Core projects that page away

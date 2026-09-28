@@ -1258,6 +1258,10 @@ colours for the same signal.
   The same full run found matching tail assumptions in the Core log and
   pairing suites. Both now anchor their original contiguous blocks by name;
   their explicitly rebuilt complete suites pass together (10.66 s).
+  Signed `a85c0cd1`, integrated in `f7e2f3287`, fixes the same assumption in
+  transmit settings, band selection and display-budget compatibility tests.
+  Four integrated suites pass (5.22 s), preserving the exact older-minor
+  descriptor bytes and strict ordering/types of the newer fields.
 - Plan: several-device capability compatibility.
 
 ### G-69: Desktop shutdown could close ingress before ending transmit
@@ -1322,7 +1326,11 @@ colours for the same signal.
   new admission does not. Its integrated app/Core build and seven named suites
   passed (39.67 seconds) under concurrent load 9.17/9.21/7.35. The client test
   uses a bounded command responder alongside real paired authentication, so
-  production Python RV acceptance and loaded loss acceptance remain open.
+  that initial test did not establish production Python RV or loaded-loss
+  acceptance. Subsequent actual-service namespace runs are recorded in G-55:
+  four impaired-network rows and a second-receiver row passed with the unchanged
+  heartbeat cadence and cutoff. Installed-service and live-phone acceptance
+  remain separate.
 - Plan: independent transmit watch and restrictive-network liveness.
 
 ### G-71: Hosted desktop TCI must preserve ownership through callbacks and receiver remaps
@@ -1735,6 +1743,12 @@ colours for the same signal.
   settings gate, including the receive-only Core exception. No Core authority
   or schema ordinal changed. Lead review and the app/Core build plus fourteen
   named integration suites pass (11.13 s). This remains a partial PA page.
+  Drive is now described in signed `9af39d292`: a readout of the selected
+  `transmit.power` value, not measured RF output, with its existing version-1
+  capability gate. It is the sixth PA readout, remains visible while keyed,
+  and sends no write. Lead review and the combined app/Core build plus four
+  explicitly rebuilt Setup/native PA suites pass (6.39 s; load before run
+  10.36/9.30/9.08). Derived readings and PA actions remain open.
 - Plan: Core Hardware Config/PA Setup description dependencies in the phone plan
   and remote-window Hardware/PA parity.
 
@@ -1812,7 +1826,17 @@ colours for the same signal.
   remaining independent findings can be collected. A bounded comparison using
   the exact same signed-source Linux binaries passed both previously failing
   ICE-gathering cases (464 ms) on the private internal interface; no code or
-  deadline changed. The full corrected-network run remains outstanding.
+  deadline changed. The original run finished with 951/991 passing; forty
+  nonpassing entries are individually classified in the progress evidence.
+  A full app/Core/all-tests rebuild and run of signed `3a2c73fa` is underway
+  on the private interface, with no test exclusions or changed limits.
+  A separate namespace preflight passed with NET_ADMIN/SYS_ADMIN capabilities
+  for the isolated traversal fixture; the old runner lacked those capabilities.
+  The exact audio-backoff binary also passed with the interface (12.528 s;
+  measured waits 2002/4004/4011 ms) and reproduced failure without it (46.903 s).
+  With no direct candidates, the fallback tunnel legitimately starts session
+  recovery after three seconds of silence, interrupting the direct-media
+  backoff sequence. The remedy is the required interface, not longer limits.
   This does not resolve G-57's separate macOS
   intermittent startup failure on a machine with usable interfaces.
 - Plan: full Linux verification and R5 network acceptance.
@@ -1903,9 +1927,130 @@ colours for the same signal.
   reply rejection, paired/off-air Forget confirmation and truthful unavailable
   reasons. Keep Reset unavailable. Avoid a general command/result scripting
   language for this one established operation.
-- Status: read-only source audit complete; phone informed of the existing
-  protocol and missing description. Contract and implementation pending.
+- Status: signed `9fad480b` publishes the closed V3 panel, with exact desktop
+  labels, existing command semantics and strict schema validation. App/Core and
+  twelve integrated suites pass (62.78 s), including real paired snapshot and
+  capability gates, older-version projection, desktop label parity and full
+  link conformance. V1/V2 clients keep their prior empty Diagnostics response.
+  Phone renderer and lifecycle implementation remain separate phone work; Core
+  publication alone is not phone parity. Reset and local file/log rulings remain
+  unchanged.
 - Plan: phone Setup description and remote Settings Validation parity.
+
+### G-98: Audio compatibility tests reject independently negotiated start fields
+
+- Evidence: two audio tests hide one older audio capability but still advertise
+  mini-display, remote IQ, media tunnel and relay routing. Production correctly
+  includes those negotiated fields; old assertions expected only two or three
+  keys. The documented start contract and Core decoder agree with production.
+- Ruling basis: JJ requires compatibility verification with real audio coverage;
+  correct stale expectations without changing production behavior or deadlines.
+- Status: signed `8949ca83` checks the exact negotiated start and audio-control
+  shapes, including literal two-key start for minor 7. Existing decoded-audio,
+  mute, reconnect and context checks remain. App/Core and full integrated
+  remote-audio session suite pass (44.39 s). The Linux minor-7 peer-open failure
+  is separately confounded by G-91 and awaits the corrected-network run.
+- Plan: remote audio compatibility and meaningful CI evidence.
+
+### G-99: Mirror-policy test omits the published Setup class
+
+- Evidence: production includes `SetupDescription` in its mirrored classes,
+  but the test inventory omits it. This reports both a class-list mismatch and
+  false stale-policy entries for the published Setup properties.
+- Ruling basis: JJ requires complete verification of the actual Core surface;
+  restore test coverage rather than suppressing policy checks.
+- Status: signed `a85c0cd1` adds the actual metaobject to the fixture. It also
+  corrects three remaining capability fixtures under G-68, preserving exact
+  original field order, kinds and older-minor wire equality. App/Core and all
+  four integrated suites pass (5.22 s); no older-client capability leak was
+  observed and no production wire changed. Updated Linux execution remains.
+- Plan: complete mirror-policy and older-peer compatibility verification.
+
+### G-100: Core refusal wording and its source scanner have drifted
+
+- Evidence: three transmit-watch close/refusal messages expose internal terms.
+  The reason scanner also mistakes a compared wire verb and a media helper's
+  slice ID for operator text, and lacks exact new forwarding/site records.
+- Ruling basis: preserve plain operator messages and meaningful future-source
+  checking without changing refusal, authority or timing behavior.
+- Status: signed `851846c0` corrects the three messages, traces individual
+  forwarded reasons to their scanned sources and adds scanner regressions for
+  real bad text. Root corrected a lane verification naming gap by rebuilding
+  the actual changed watch suite as well as both other watch suites. App/Core
+  and all twelve integration suites pass (62.78 s). Wire names, reason codes,
+  permissions and deadlines remain unchanged.
+- Plan: operator wording and complete Core refusal verification.
+
+### G-101: Linux build repeatedly rejects its shared precompiled header
+
+- Evidence: the signed `3a2c73fa` build reports that the Core precompiled header
+  cannot be reused for GUI sources because `RTC_STATIC` is not defined there.
+  CMake explicitly configures the GUI and test targets to reuse that header.
+  The compiler falls back to parsing headers normally; this is build overhead,
+  not evidence of a slow runtime test or a correctness failure.
+- Ruling basis: JJ requires cost-aware work and understanding slow verification.
+  Align the intended compile environment or use a compatible header cache,
+  preserving static-library linkage and platform-specific visibility semantics.
+- Status: observed in the real Linux build; exact target-definition diagnosis
+  and bounded repair remain. The active immutable build continues unchanged.
+- Plan: reliable, efficient full-suite builds across CI platforms.
+
+### G-102: Trace and Fill colour is changed live but not saved
+
+- Evidence: the Display/Appearance scout traced the built Colors & Theme
+  swatch to `SpectrumWidget::setFillColor()`. It schedules a settings save,
+  but `loadSettings()` and `saveSettings()` omit `m_fillColor`. The other nine
+  built appearance swatches have per-pan saved keys. Reopening the window
+  therefore loses this choice.
+- Ruling basis: JJ requires working desktop parity and every discovered gap
+  to be built in this effort. This is missing persistence in an existing
+  control, with no change to its colour or rendering defaults.
+- Status: built in signed `dc113a25`. `DisplayFillColor` uses the existing
+  Qt `#AARRGGBB` format, pan suffix and load-time pan-zero fallback. Lead review
+  and the integrated app/Core build plus six explicitly rebuilt display/Setup
+  suites pass (4.59 s; observed load before the run 89.89/47.60/29.83).
+  Tests cover alpha, independent overrides and invalid/default handling through
+  actual widget setters and save/load paths. As with the existing settings,
+  saving a pan writes all its current values; it can make inherited values
+  explicit. No property-by-property save policy change is claimed.
+  Implementation inspection also found that the shared colour reader bypasses
+  the existing pan-zero fallback. The documented July 30 behavior says that
+  untouched pans follow pan zero until given their own values. The fix restores
+  that behavior for the shared per-pan colour reader too; global
+  Peak colours remain global. The scout's initial claim that those existing
+  swatches already inherited was incorrect.
+- Plan: Display/Appearance parity and the phone's local colour descriptions.
+
+### G-103: Display and Appearance have no published Setup descriptions
+
+- Evidence: `StationCatalog` publishes eleven display controls and preset
+  palette stops, but neither `resources/setup/display.json` nor
+  `appearance.json` exists. The source scout mapped the built desktop pages,
+  Core settings, local per-pan and per-band keys, and subscription fields.
+  Catalogue controls do not substitute for Setup pages or settle phone-local
+  persistence. Colours currently use three explicit formats: catalogue
+  `#RRGGBB`, SpectrumWidget `#AARRGGBB`, and Peak swatches `#RRGGBBAA`.
+- Ruling basis: JJ includes every Core dependency of the phone plan and built
+  desktop parity in this effort. Publish exact existing behavior and ownership;
+  do not describe hidden placeholders as working features. His accepted
+  decimation range is 1-16, with calibration applied once in both windows.
+- Status: source inventory complete and first Core-owned description slice in
+  progress. The phone owner confirmed that literal PascalCase binding names
+  map to its existing typed per-pan/current-band model and that explicit
+  `#RRGGBBAA` colours suit its boundary conversions. The phone model already
+  exists in its checkout; absence in the Core checkout did not mean unbuilt
+  phone rendering. These are agreed implementation details, not a claimed
+  separate JJ ruling. Discrete FFT sliders use a negotiated version-4 ordered
+  numeric option contract matching StationCatalog, with actual sizes as values
+  and no arbitrary intermediate sizes; older projections omit them. The RX
+  quartet retains its existing subscription relationship. TX analyzer settings
+  apply live to the Core analyzer, without an invented RX subscription field.
+  This clarifies the plan's overly broad subscription label. Remaining local
+  controls, readouts, active-band grid context, 3D page and actions still need
+  exact publication and phone checks. Partial publication does not close this
+  gap.
+- Plan: phone Display/Appearance description and renderer dependencies, and
+  remote-window parity.
 
 ## How this addendum is kept
 

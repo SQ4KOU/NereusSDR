@@ -27,6 +27,69 @@ static void initializeSetupResources()
 namespace NereusSDR {
 namespace {
 
+QJsonObject expectedSettingsHygienePanel()
+{
+    return QJsonObject{
+        {QStringLiteral("id"), QStringLiteral("diagnostics.settingsValidation.health")},
+        {QStringLiteral("label"), QStringLiteral("Validation Issues")},
+        {QStringLiteral("tooltip"), QString()},
+        {QStringLiteral("kind"), QStringLiteral("settingsHygiene")},
+        {QStringLiteral("requiresDescriptionVersion"), 3},
+        {QStringLiteral("binding"), QJsonObject{{QStringLiteral("settingsHygiene"),
+            QJsonObject{{QStringLiteral("version"), 1}}}}},
+        {QStringLiteral("applies"), QStringLiteral("live")},
+        {QStringLiteral("gate"), QJsonObject{
+            {QStringLiteral("capability"), QStringLiteral("settingsHygieneVersion")},
+            {QStringLiteral("min"), 1}}},
+        {QStringLiteral("actions"), QJsonArray{
+            QJsonObject{{QStringLiteral("id"), QStringLiteral("validate")},
+                        {QStringLiteral("label"), QStringLiteral("Re-validate")}},
+            QJsonObject{{QStringLiteral("id"), QStringLiteral("reset")},
+                        {QStringLiteral("label"), QStringLiteral("Reset to Defaults")},
+                        {QStringLiteral("enabled"), false},
+                        {QStringLiteral("reason"), QStringLiteral(
+                            "Reset to defaults is not available on this Core.")}},
+            QJsonObject{{QStringLiteral("id"), QStringLiteral("forget")},
+                        {QStringLiteral("label"), QStringLiteral("Forget This Radio")},
+                        {QStringLiteral("paired"), true},
+                        {QStringLiteral("offAir"), true},
+                        {QStringLiteral("confirmation"), QJsonObject{
+                            {QStringLiteral("title"), QStringLiteral("Forget Radio")},
+                            {QStringLiteral("message"), QStringLiteral(
+                                "Forget all settings for this radio?")},
+                            {QStringLiteral("default"), QStringLiteral("cancel")}}}}}}};
+}
+
+bool validDiagnosticsEnvelope(const QJsonObject& root)
+{
+    const QJsonArray pages = root.value(QStringLiteral("pages")).toArray();
+    if (root.size() != 3 || root.value(QStringLiteral("version")) != QJsonValue(3)
+        || root.value(QStringLiteral("category")) != QJsonValue(QJsonObject{
+            {QStringLiteral("id"), QStringLiteral("diagnostics")},
+            {QStringLiteral("title"), QStringLiteral("Diagnostics")},
+            {QStringLiteral("where"), QStringLiteral("station")},
+            {QStringLiteral("coverage"), QStringLiteral("partial")}})
+        || pages.size() != 1) {
+        return false;
+    }
+    const QJsonObject page = pages.first().toObject();
+    const QJsonArray sections = page.value(QStringLiteral("sections")).toArray();
+    if (page.size() != 5
+        || page.value(QStringLiteral("id")) != QJsonValue(QStringLiteral("diagnostics.settingsValidation"))
+        || page.value(QStringLiteral("title")) != QJsonValue(QStringLiteral("Settings Validation"))
+        || page.value(QStringLiteral("where")) != QJsonValue(QStringLiteral("station"))
+        || page.value(QStringLiteral("coverage")) != QJsonValue(QStringLiteral("partial"))
+        || sections.size() != 1) {
+        return false;
+    }
+    const QJsonObject section = sections.first().toObject();
+    const QJsonArray controls = section.value(QStringLiteral("controls")).toArray();
+    return section.size() == 2
+        && section.value(QStringLiteral("title")) == QJsonValue(QStringLiteral("Validation Issues"))
+        && controls.size() == 1
+        && SetupDescription::validateSettingsHygienePanel(controls.first().toObject());
+}
+
 QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRModel model)
 {
     QFile resource(QStringLiteral(":/setup/%1.json").arg(id));
@@ -40,10 +103,13 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
     }
     QJsonObject root = document.object();
     if ((root.value(QStringLiteral("version")).toInt() != 1
-         && root.value(QStringLiteral("version")).toInt() != 2)
+         && root.value(QStringLiteral("version")).toInt() != 2
+         && !(id == QLatin1String("diagnostics")
+              && root.value(QStringLiteral("version")) == QJsonValue(3)))
         || root.value(QStringLiteral("category")).toObject()
                .value(QStringLiteral("id")).toString() != id
-        || root.value(QStringLiteral("pages")).toArray().isEmpty()) {
+        || root.value(QStringLiteral("pages")).toArray().isEmpty()
+        || (id == QLatin1String("diagnostics") && !validDiagnosticsEnvelope(root))) {
         return {};
     }
     QSet<QString> ids;
@@ -69,8 +135,12 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                     || control.value(QStringLiteral("label")).toString().isEmpty()
                     || !control.value(QStringLiteral("binding")).isObject()
                     || (control.contains(QStringLiteral("requiresDescriptionVersion"))
-                        && (root.value(QStringLiteral("version")).toInt() < 2
-                            || control.value(QStringLiteral("requiresDescriptionVersion")) != QJsonValue(2)))
+                        && (root.value(QStringLiteral("version")).toInt()
+                                < control.value(QStringLiteral("requiresDescriptionVersion")).toInt()
+                            || (control.value(QStringLiteral("requiresDescriptionVersion"))
+                                    != QJsonValue(2)
+                                && control.value(QStringLiteral("requiresDescriptionVersion"))
+                                    != QJsonValue(3))))
                     || (control.value(QStringLiteral("kind")) == QJsonValue(QStringLiteral("table"))
                         && (id != QLatin1String("dsp")
                             || !SetupDescription::validateTnfTable(control)))
@@ -101,9 +171,12 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                         && !SetupDescription::validateHardwarePropertyBinding(control))
                     || (id == QLatin1String("pa")
                         && !SetupDescription::validatePaReadoutBinding(control)
+                        && !SetupDescription::validatePaDriveReadoutBinding(control)
                         && !SetupDescription::validatePaBypassBinding(control))
                     || (id == QLatin1String("audio")
                         && !SetupDescription::validateAudioPropertyBinding(control))
+                    || (id == QLatin1String("diagnostics")
+                        && !SetupDescription::validateSettingsHygienePanel(control))
                     || (control.value(QStringLiteral("binding")).toObject().contains(QStringLiteral("command"))
                         && !SetupDescription::validateCommandBinding(control))) {
                     return {};
@@ -465,6 +538,34 @@ bool SetupDescription::validatePaReadoutBinding(const QJsonObject& control)
             == MirrorDirection::Outbound;
 }
 
+bool SetupDescription::validatePaDriveReadoutBinding(const QJsonObject& control)
+{
+    const QJsonObject binding = control.value(QStringLiteral("binding")).toObject();
+    const QJsonObject ref = binding.value(QStringLiteral("property")).toObject();
+    if (control.size() != 9 || binding.size() != 1 || ref.size() != 2
+        || ref != QJsonObject{{QStringLiteral("object"), QStringLiteral("transmit")},
+                              {QStringLiteral("name"), QStringLiteral("power")}}
+        || control.value(QStringLiteral("id")) != QJsonValue(QStringLiteral("pa.values.drive"))
+        || control.value(QStringLiteral("label")) != QJsonValue(QStringLiteral("Drive:"))
+        || control.value(QStringLiteral("tooltip")) != QJsonValue(QString())
+        || control.value(QStringLiteral("kind")) != QJsonValue(QStringLiteral("readout"))
+        || control.value(QStringLiteral("applies")) != QJsonValue(QStringLiteral("live"))
+        || control.value(QStringLiteral("gate")).toObject()
+            != QJsonObject{{QStringLiteral("capability"), QStringLiteral("transmitSettingsVersion")},
+                           {QStringLiteral("min"), 1}}
+        || control.value(QStringLiteral("decimals")) != QJsonValue(0)
+        || control.value(QStringLiteral("unit")) != QJsonValue(QStringLiteral("W"))) {
+        return false;
+    }
+    const QByteArray name = QByteArrayLiteral("power");
+    const MirrorProperty* property = MirrorSchema::forMetaObject(
+        &TransmitModel::staticMetaObject).byName(name);
+    return property && property->isWritable && property->kind == MirrorWireKind::Int64
+        && MirrorPolicy::hasExplicitEntry(QByteArrayLiteral("TransmitModel"), name)
+        && MirrorPolicy::directionFor(QByteArrayLiteral("TransmitModel"), name)
+            == MirrorDirection::Bidirectional;
+}
+
 bool SetupDescription::validatePaBypassBinding(const QJsonObject& control)
 {
     const QJsonObject binding = control.value(QStringLiteral("binding")).toObject();
@@ -767,6 +868,13 @@ bool SetupDescription::validateCommandBinding(const QJsonObject& control, QStrin
     return true;
 }
 
+bool SetupDescription::validateSettingsHygienePanel(const QJsonObject& control)
+{
+    // This panel is a fixed description of the existing two hygiene verbs,
+    // not a command binding or a new generic result/argument language.
+    return control == expectedSettingsHygienePanel();
+}
+
 bool SetupDescription::validateTnfTable(const QJsonObject& control, QString* error)
 {
     const auto fail = [error](const QString& why) {
@@ -920,7 +1028,7 @@ QString SetupDescription::fitCategoryForVersion(const QString& description, int 
     }
     if (pages.isEmpty()) { return {}; }
     category.insert(QStringLiteral("pages"), pages);
-    category.insert(QStringLiteral("version"), qMin(version, 2));
+    category.insert(QStringLiteral("version"), qMin(version, 3));
     if (version >= 2 && category.value(QStringLiteral("category")).toObject()
             .value(QStringLiteral("id")) == QJsonValue(QStringLiteral("dsp"))) {
         category.insert(QStringLiteral("coverage"), QStringLiteral(

@@ -2222,6 +2222,7 @@ PaValuesPage::PaValuesPage(RadioModel* model, QWidget* parent)
     // and the slider 0..100 maps directly to watts on most boards).
     m_driveLabel         = new MetricLabel(QStringLiteral("Drive"),
                                            QStringLiteral("0 W"), powerGroup);
+    m_driveLabel->setProperty("nereusSetupId", "pa.values.drive");
     powerForm->addRow(QStringLiteral("Forward (calibrated):"), m_fwdCalibratedLabel);
     powerForm->addRow(QStringLiteral("Forward (raw):"),        m_fwdRawLabel);
     powerForm->addRow(QStringLiteral("Reflected:"),            m_revPowerLabel);

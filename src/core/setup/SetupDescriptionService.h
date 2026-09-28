@@ -34,6 +34,7 @@ public:
     static bool validateHardwarePropertyBinding(const QJsonObject& control,
                                                 HPSDRModel model = HPSDRModel::FIRST);
     static bool validatePaReadoutBinding(const QJsonObject& control);
+    static bool validatePaDriveReadoutBinding(const QJsonObject& control);
     static bool validatePaBypassBinding(const QJsonObject& control);
     static bool validateTransmitSettingBinding(const QJsonObject& control);
     static bool validateAudioPropertyBinding(const QJsonObject& control);
@@ -41,6 +42,7 @@ public:
     static bool validateSettingToggleEncoding(const QJsonObject& control);
     static bool validateCommandBinding(const QJsonObject& control, QString* error = nullptr);
     static bool validateTnfTable(const QJsonObject& control, QString* error = nullptr);
+    static bool validateSettingsHygienePanel(const QJsonObject& control);
     /// Stateless per-session projection of a category string (empty if no ready pages).
     static QString fitCategoryForVersion(const QString& description, int version);
     void setBoardCapabilities(const BoardCapabilities& caps);
