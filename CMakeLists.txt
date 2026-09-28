@@ -1227,6 +1227,7 @@ set(CORE_SOURCES
     # on the same NereusCore target either way (see the add_library
     # call further down).
     src/core/daemon/DaemonApp.cpp
+    src/core/station/StationHost.cpp
     # iPhone app Task 17 (R-IOS-08): the Core's read-only status page, its
     # owner-only console socket and the console commands it answers.
     src/core/daemon/StationStatusPage.cpp

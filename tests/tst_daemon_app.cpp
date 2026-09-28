@@ -85,6 +85,7 @@
 #include "core/StepAttenuatorFacade.h"
 #define private public
 #include "core/daemon/DaemonApp.h"
+#include "core/station/StationHost.h"
 #undef private
 #include "core/daemon/DaemonConfig.h"
 #include "core/daemon/DisplayLoadInputs.h"
@@ -840,20 +841,20 @@ private slots:
         QVERIFY2(server->isListening(), qPrintable(server->lastError()));
         QCOMPARE(server->serverPort(), freePort);
         QCOMPARE(server->serverAddress(), QHostAddress(QHostAddress::LocalHost));
-        QVERIFY(app.m_stationAnnouncer);
-        QVERIFY(!app.m_stationAnnouncer->isActive()); // loopback never advertises LAN reachability.
+        QVERIFY(app.m_stationHost->m_stationAnnouncer);
+        QVERIFY(!app.m_stationHost->m_stationAnnouncer->isActive()); // loopback never advertises LAN reachability.
         QSignalSpy listening(server, &StationServer::listeningChanged);
         server->close();
         QCOMPARE(listening.count(), 1);
         QCOMPARE(listening.first().first().toBool(), false);
         QVERIFY(server->serverAddress().isNull());
-        QVERIFY(!app.m_stationAnnouncer->isActive());
+        QVERIFY(!app.m_stationHost->m_stationAnnouncer->isActive());
         QVERIFY(server->listen(QHostAddress::LocalHost, freePort));
         QCOMPARE(listening.count(), 2);
         QCOMPARE(listening.last().first().toBool(), true);
         QVERIFY(server->listen(QHostAddress::LocalHost, freePort));
         QCOMPARE(listening.count(), 2); // idempotent listen cannot restart announcements.
-        QVERIFY(!app.m_stationAnnouncer->isActive());
+        QVERIFY(!app.m_stationHost->m_stationAnnouncer->isActive());
         QVERIFY(server->displayBudgetLimits());
         QCOMPARE(server->displayBudgetLimits()->applicationBytesPerSecond, quint64{2000000});
         QCOMPARE(server->displayBudgetLimits()->spectrumSampleUnitsPerSecond, quint64{1000000});
@@ -970,9 +971,9 @@ private slots:
                      std::optional<DisplayBudgetLimits>(DisplayLoadGovernor::computedCeiling()));
             QVERIFY(!server->displayBudgetLimits()); // no minor-11 app attached
             QVERIFY(!server->buildCapabilities().displayBudget);
-            QVERIFY(app.m_displayGovernor);
-            QVERIFY(app.m_displayGovernorTimer);
-            QVERIFY(!app.m_displayGovernorTimer->isActive()); // no media session yet
+            QVERIFY(app.m_stationHost->m_displayGovernor);
+            QVERIFY(app.m_stationHost->m_displayGovernorTimer);
+            QVERIFY(!app.m_stationHost->m_displayGovernorTimer->isActive()); // no media session yet
             app.stop();
         }
         {
@@ -985,8 +986,8 @@ private slots:
             QVERIFY(server);
             QVERIFY(!server->configuredDisplayBudgetLimits());
             QVERIFY(!server->displayBudgetLimits());
-            QVERIFY(!app.m_displayGovernor);
-            QVERIFY(!app.m_displayGovernorTimer);
+            QVERIFY(!app.m_stationHost->m_displayGovernor);
+            QVERIFY(!app.m_stationHost->m_displayGovernorTimer);
             app.stop();
         }
     }
@@ -1027,7 +1028,7 @@ private slots:
 
         // Idle receivers: nothing measured, nothing changes.
         for (now = 0; now <= 30'000; now += 500) {
-            app.evaluateDisplayLoad();
+            app.m_stationHost->evaluateDisplayLoad();
         }
         QCOMPARE(server->displayBudgetLimits()->generation, quint32{1});
         QCOMPARE(server->displayBudgetReason(), DisplayBudgetReason::None);
@@ -1037,15 +1038,15 @@ private slots:
         idle = false;
         const qint64 start = now;
         for (; now < start + DisplayLoadGovernor::kBusyHoldMs; now += 500) {
-            app.evaluateDisplayLoad();
+            app.m_stationHost->evaluateDisplayLoad();
             QCOMPARE(server->displayBudgetLimits()->generation, quint32{1});
         }
-        app.evaluateDisplayLoad();
+        app.m_stationHost->evaluateDisplayLoad();
         QCOMPARE(server->displayBudgetLimits()->generation, quint32{2});
         QCOMPARE(server->displayBudgetReason(), DisplayBudgetReason::CoreBusy);
         QVERIFY(server->displayBudgetLimits()->spectrumSampleUnitsPerSecond
                 < accepted.spectrumSampleUnitsPerSecond);
-        QCOMPARE(app.m_displayGovernor->steps(), 1);
+        QCOMPARE(app.m_stationHost->m_displayGovernor->steps(), 1);
 
         // The media session ends: back to the ceiling, reason cleared.
         emit server->mediaSessionEnded(1);
@@ -1053,7 +1054,7 @@ private slots:
         QCOMPARE(server->displayBudgetLimits()->spectrumSampleUnitsPerSecond,
                  ceiling.spectrumSampleUnitsPerSecond);
         QCOMPARE(server->displayBudgetReason(), DisplayBudgetReason::None);
-        QCOMPARE(app.m_displayGovernor->steps(), 0);
+        QCOMPARE(app.m_stationHost->m_displayGovernor->steps(), 0);
         app.stop();
     }
 
@@ -1090,20 +1091,20 @@ private slots:
             DisplayBudgetLimits{ceiling.applicationBytesPerSecond,
                                 ceiling.spectrumSampleUnitsPerSecond, 10}));
         for (now = 0; now <= DisplayLoadGovernor::kBusyHoldMs; now += 500) {
-            app.evaluateDisplayLoad();
+            app.m_stationHost->evaluateDisplayLoad();
         }
         // The proposal at generation 2 was refused: nothing in force.
         QCOMPARE(server->displayBudgetLimits()->generation, quint32{10});
-        QCOMPARE(app.m_displayGovernor->steps(), 0);
-        QVERIFY(!app.m_displayGovernor->settling());
+        QCOMPARE(app.m_stationHost->m_displayGovernor->steps(), 0);
+        QVERIFY(!app.m_stationHost->m_displayGovernor->settling());
         // Busy on: the next proposal is generation 11 and is taken.
         for (; now <= 2 * DisplayLoadGovernor::kBusyHoldMs + 500; now += 500) {
-            app.evaluateDisplayLoad();
+            app.m_stationHost->evaluateDisplayLoad();
         }
         QCOMPARE(server->displayBudgetLimits()->generation, quint32{11});
         QCOMPARE(server->displayBudgetReason(), DisplayBudgetReason::CoreBusy);
-        QCOMPARE(app.m_displayGovernor->steps(), 1);
-        QCOMPARE(app.m_displayGovernor->limits(), *server->displayBudgetLimits());
+        QCOMPARE(app.m_stationHost->m_displayGovernor->steps(), 1);
+        QCOMPARE(app.m_stationHost->m_displayGovernor->limits(), *server->displayBudgetLimits());
         app.stop();
     }
 
@@ -1183,7 +1184,7 @@ private slots:
 
         StationServer* const server = app.stationServer();
         RadioModel* const model = app.m_radioModel.get();
-        DaemonMediaHub* const media = app.m_mediaHub.get();
+        DaemonMediaHub* const media = app.m_stationHost->m_mediaHub.get();
         QVERIFY(server != nullptr);
         QVERIFY(model != nullptr);
         QVERIFY(media != nullptr);
@@ -1199,14 +1200,14 @@ private slots:
         // schedule must progress 10 -> 20 -> 30 ms and remain capped there;
         // no production-duration sleep is needed to observe the backoff.
         QTRY_VERIFY_WITH_TIMEOUT(app.stationListenAttemptCountForTest() >= 3, 500);
-        QCOMPARE(app.m_stationListenRetryTimer->interval(), 30);
-        QCOMPARE(app.m_stationListenNextDelayMs, 30);
+        QCOMPARE(app.m_stationHost->m_stationListenRetryTimer->interval(), 30);
+        QCOMPARE(app.m_stationHost->m_stationListenNextDelayMs, 30);
         blocker.close();
 
         QTRY_VERIFY_WITH_TIMEOUT(app.stationListenerReady(), 1000);
         QCOMPARE(app.stationServer(), server);
         QCOMPARE(app.m_radioModel.get(), model);
-        QCOMPARE(app.m_mediaHub.get(), media);
+        QCOMPARE(app.m_stationHost->m_mediaHub.get(), media);
         QCOMPARE(server->stationIdentity().fingerprint(), identity);
         QVERIFY(model->slices() == slices);
         QCOMPARE(server->serverPort(), port);

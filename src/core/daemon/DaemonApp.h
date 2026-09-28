@@ -146,6 +146,7 @@ namespace NereusSDR {
 class RadioModel;
 class StationRadios;
 class StationServer;
+class StationHost;
 class StationLanAnnouncer;
 class DnsSdAdvertiser;
 class DaemonMediaController;
@@ -246,7 +247,7 @@ public:
     /// The status page's address for the operator; "" while it is off.
     QString statusPageAddress() const;
     /// The status page, while it runs; null otherwise.
-    StationStatusPage* statusPage() const { return m_statusPage.get(); }
+    StationStatusPage* statusPage() const;
     // How the Core's pairing window reads on the announcement and in
     // Bonjour's `pair` key. The announcement builds from it, so it is
     // compiled whether or not the tests are.
@@ -280,7 +281,7 @@ public:
     // first start(). Test-only for the same reason widebandThread() is:
     // production code never asks, because start()/stop() own the lifetime
     // and start() already logs whether the listener came up.
-    StationServer* stationServer() const { return m_stationServer.get(); }
+    StationServer* stationServer() const;
     /// Parity Task 21: the Core's radios and its choice of one (kept across
     /// a radio change's restart).
     StationRadios* stationRadios() const { return m_stationRadios.get(); }
@@ -295,15 +296,12 @@ public:
         m_stationListenRetryMaximumMs = maximumMs >= m_stationListenRetryInitialMs
             ? maximumMs : m_stationListenRetryInitialMs;
     }
-    int stationListenAttemptCountForTest() const
-    {
-        return m_stationListenAttemptCount;
-    }
+    int stationListenAttemptCountForTest() const;
     // iPhone app Task 16: the announcement and Bonjour record the Core last
     // built, whether or not they went out (a loopback listener sends
     // neither), and whether each is going out.
-    StationLanAnnouncement stationAnnouncementForTest() const { return m_stationAnnouncement; }
-    DnsSdRecord dnsSdRecordForTest() const { return m_dnsSdRecord; }
+    StationLanAnnouncement stationAnnouncementForTest() const;
+    DnsSdRecord dnsSdRecordForTest() const;
     bool stationAnnouncedForTest() const;
     bool dnsSdAdvertisedForTest() const;
     // Before start(): the Bonjour advertiser to use, so a test sees what
@@ -378,16 +376,6 @@ signals:
     void radioConnected(bool connected);
 
 private:
-    // R-R3-08/37/40: one display load evaluation, every
-    // ReceiverDspLoadSampler::kSampleIntervalMs while a media session runs.
-    void evaluateDisplayLoad();
-    // The measured inputs for one evaluation, from caches only.
-    DisplayLoadInputs gatherDisplayLoadInputs();
-    // Publishes a governor decision as the next display-budget generation.
-    // True when StationServer accepted it.
-    bool publishDisplayBudget(const std::optional<DisplayLoadDecision>& decision);
-    // R-R3-27/29: control remains available while discovery runs elsewhere.
-    void updateStationAnnouncement();
     void attemptRadioDiscovery();
     void finishRadioDiscovery(const QList<RadioInfo>& found);
     void scheduleRadioDiscovery();
@@ -420,19 +408,6 @@ private:
     // identity selection and before RadioModel::connectToRadio(): with
     // an empty radio_mac the MAC is not known until discovery answers.
     void applyConfigToSettings(const DaemonConfig& cfg, const QString& mac) const;
-
-    // Remote Daemon R2 Task 18: constructs and starts the wss control
-    // plane when cfg.remotePort is non-zero. Opt-in; a listener that
-    // cannot bind is logged, not fatal. See the definition.
-    void startStationServer(const DaemonConfig& cfg);
-    // iPhone app plan Task 27: registers the Core with the remote access
-    // service (cfg.rendezvousServers, in order; none: nothing) through
-    // StationRendezvous. Called from startStationServer() once the server
-    // exists.
-    void startRendezvous(const DaemonConfig& cfg);
-    void attemptStationServerListen();
-    void scheduleStationServerListenRetry();
-    void cancelStationServerListenRetry();
 
     // Gives the headless daemon the same core-owned RX attenuation,
     // preamp, overload and ATT-on-TX state that MainWindow wires in a
@@ -561,62 +536,15 @@ private:
     std::unique_ptr<StepAttenuatorController> m_stepAttController;
     bool m_stepAttControllerConfigured {false};
 
-    // Remote Daemon R2 Task 18: the wss control plane, constructed only
-    // when cfg.remotePort is non-zero (0 means "do not listen", the
-    // default -- see DaemonConfig.h). Destroyed FIRST in stop(), before
-    // the RadioModel: it owns a StateMirror and an ObjectRegistry holding
-    // QPointers to that model and every SliceModel under it, and it holds
-    // live peer sockets that must be told the station is going away while
-    // there is still a station to speak for.
-    std::unique_ptr<StationServer> m_stationServer;
-    /// iPhone app Task 17: before the server in stop(); reads it per request.
-    std::unique_ptr<StationStatusPage> m_statusPage;
-    /// iPhone app plan Task 27: the Core's connection to the remote access
-    /// service. Before the server in stop(): its callbacks reach the
-    /// server's identity key, device list and pairing window.
-    std::unique_ptr<StationRendezvous> m_rendezvous;
+    // The shared station owns all network/media sessions around this borrowed
+    // RadioModel. It is stopped and destroyed before m_radioModel.reset().
+    std::unique_ptr<StationHost> m_stationHost;
     std::unique_ptr<StationControlCommands> m_controlCommands;
     std::unique_ptr<StationControlSocket> m_controlSocket;
     QList<quint16> m_linkMajors;
-    std::unique_ptr<StationLanAnnouncer> m_stationAnnouncer;
-    // iPhone app Task 16 (D36): Bonjour beside the announcement.
-    std::unique_ptr<DnsSdAdvertiser> m_dnsSdAdvertiser;
-    StationLanAnnouncement m_stationAnnouncement;
-    DnsSdRecord m_dnsSdRecord;
-    std::optional<std::pair<quint16, DnsSdRecord>> m_dnsSdAttempt;
-    QTimer* m_stationListenRetryTimer {nullptr};
     int m_stationListenRetryInitialMs {1000};
     int m_stationListenRetryMaximumMs {30000};
-    int m_stationListenNextDelayMs {1000};
-    int m_stationListenAttemptCount {0};
-    QString m_stationListenBind;  // empty: every interface (iPhone app Task 12)
-    bool m_stationListenArmed {false};
-    quint16 m_stationListenPort {0};
-    /// Must be destroyed before StationServer/RadioModel: it owns queued
-    /// source, peer and endpoint work referring to both.
-    std::unique_ptr<DaemonMediaHub> m_mediaHub;
-    /// Destroyed before media/server/model so no timer or queued observation
-    /// can publish into a retiring session. iPhone app Task 76: one per
-    /// session that negotiated telemetry, by its media epoch.
-    std::map<quint64, std::unique_ptr<DaemonTelemetryController>> m_telemetryControllers;
-    void startSessionTelemetry(quint64 epoch);
-    void endSessionTelemetry(quint64 epoch);
-    /// Some media session has a display budget in force (the governor has
-    /// something to lower).
-    bool anyDisplayBudgetInForce() const;
-    /// R-R3-40: the Core's one host sampler, read by telemetry and the
-    /// display load governor alike.
-    std::shared_ptr<SharedHostSampler> m_hostSampler;
-    /// R-R3-08/37/40: present only with display_adaptive = on. Reads cached
-    /// load snapshots only, never under a DSP lock. Destroyed with the
-    /// media controller it reads.
-    std::unique_ptr<DisplayLoadGovernor> m_displayGovernor;
-    std::unique_ptr<QTimer> m_displayGovernorTimer;
-    QElapsedTimer m_displayGovernorClock;
-    /// ThreadPlacement's plan as of m_placementPlanRevision; refreshed (under
-    /// the registry's mutex) only when its revision moves.
-    PlacementPlan m_placementPlan;
-    std::optional<quint64> m_placementPlanRevision;
+    std::unique_ptr<DnsSdAdvertiser> m_testDnsSdAdvertiser;
     std::function<DisplayLoadInputs()> m_displayLoadInputsForTest;
     std::function<qint64()> m_displayGovernorNowForTest;
     std::function<DisplayBudgetCharge()> m_acceptedDisplayChargeForTest;
