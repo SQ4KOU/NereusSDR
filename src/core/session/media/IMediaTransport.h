@@ -414,6 +414,10 @@ signals:
     void micRtpReceived(const QByteArray& packet);
     /// Task 37: a message that arrived on the "tx" data channel.
     void txReceived(const QByteArray& message);
+    /// The connection is up and the display channel and audio line are
+    /// open. Reported before any message or packet that arrived with that
+    /// opening, so a handler of the first message finds isReady() true
+    /// (addendum G-127).
     void ready();
     void closed();
     /// The underlying peer connection entered a terminal transport-failure
