@@ -156,10 +156,11 @@ private slots:
             path.remoteAddress = QStringLiteral("127.0.0.1");
             return path;
         });
+        const qint64 grantExpires = QDateTime::currentSecsSinceEpoch()
+            + (caseId == 0 ? 7 : 120);
         QVERIFY(offerer->setWatchRelayGrant({QUrl(QStringLiteral("wss://relay.example/ws")),
                                              QStringLiteral("client-watch"),
-                                             QDateTime::currentSecsSinceEpoch() + 120,
-                                             primaryLeg}));
+                                             grantExpires, primaryLeg}));
         QVERIFY(offerer->canOpenWatchRelay());
         RadioModel remote(RadioModel::Role::Remote);
         SettingsProxy proxy;
@@ -280,6 +281,11 @@ private slots:
             client.remoteTransmit()->setVoxArmed(true); // logical watch only, no RF
             QTRY_VERIFY_WITH_TIMEOUT(watchFrames.size() >= 2, 3000);
             QCOMPARE(watchFrames.at(1).size(), 13);
+            if (caseId == 0) {
+                QTRY_VERIFY_WITH_TIMEOUT(!offerer->canOpenWatchRelay(), 9000);
+                QVERIFY(offerer->hasWatchRelayRoute());
+                QVERIFY(client.transmitWatchReady());
+            }
             if (caseId == 6) {
                 coreWatch->closeLink(QStringLiteral("test auxiliary loss"));
                 QTRY_VERIFY_WITH_TIMEOUT(!client.transmitWatchReady(), 3000);

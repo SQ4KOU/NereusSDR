@@ -807,8 +807,9 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
     connect(m_directWatchTicketTimer, &QTimer::timeout, this, [this]() {
         if (m_watchIsRelay && (m_watchPreparing || m_directWatchTicketId != 0
                                || (m_directWatch && !m_directWatch->isReady()))) {
+            const QPointer<StationClient> self(this);
             retireDirectWatch();
-            retryDirectWatch(QStringLiteral("watch attachment timed out"));
+            if (self) { retryDirectWatch(QStringLiteral("watch attachment timed out")); }
             return;
         }
         if (m_directWatchTicketId == 0) { return; }
