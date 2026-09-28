@@ -229,6 +229,10 @@
 //               disconnectStationTciClient, refused while the radio is on
 //               the air. J.J. Boyd (KG4VCF), with AI-assisted implementation
 //               via Anthropic Claude Code.
+//   2026-09-27: R-IOS-13 / R-R3-49: txModMonitor.reset in the verb table
+//               (txModMonitorVersion 1), answered by the station server
+//               beside the record streams. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -450,6 +454,8 @@ QString notRepresentableReason()
 //   spots.sendCommand, spots.clearAll
 //                          recordStreamVersion 1 (the window subscribes after
 //                          its snapshot; requestSpotSource)
+//   txModMonitor.reset     txModMonitorVersion 1 (the Mod Monitor's RESET in
+//                          a remote window; StationServer answers it)
 //   station.selectRadio, station.rescanRadios, station.setRadioModel,
 //   station.forgetRadio    stationRadiosVersion 1 (requestStationRadio)
 //   freedv.setMessage, freedv.sendQsy, freedv.setHidden
@@ -676,6 +682,10 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
         {"spots.sendCommand", {arg("source", kUtf8), arg("text", kUtf8)},
          "recordStreamVersion", 1, kRadioIdentitySessionProtocolMinor},
         {"spots.clearAll", {}, "recordStreamVersion", 1, kRadioIdentitySessionProtocolMinor},
+        // The AM Mod Monitor's RESET (R-IOS-13, R-R3-49): the Core's
+        // analyzer for a source, 0 TX I/Q or 1 PA feedback.
+        {"txModMonitor.reset", {arg("source", kInt)}, "txModMonitorVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
         // The Core's radio (R-IOS-18, R-R3-49, parity Task 21).
         {"station.selectRadio", {arg("mac", kUtf8)}, "stationRadiosVersion", 1,
          kRadioIdentitySessionProtocolMinor},
@@ -1077,7 +1087,8 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
     } else if (invoke.commandVerb == "dsp.filterResponse") {
         handleFilterResponse(invoke);
     } else if (invoke.commandVerb == "records.subscribe"
-               || invoke.commandVerb == "records.unsubscribe") {
+               || invoke.commandVerb == "records.unsubscribe"
+               || invoke.commandVerb == "txModMonitor.reset") {
         handleRecords(invoke);
     } else if (invoke.commandVerb == "station.selectRadio"
                || invoke.commandVerb == "station.rescanRadios"
@@ -3433,7 +3444,11 @@ void SessionCommandDispatcher::handleRecords(const SessionMessage& invoke)
         return;
     }
     emitResult(invoke.commandVerb, invoke.commandId, false,
-               QStringLiteral("This Core does not send its spots or console lines."), {});
+               invoke.commandVerb == "txModMonitor.reset"
+                   ? QStringLiteral("This Core does not send the modulation monitor. "
+                                    "Updating the Core may help.")
+                   : QStringLiteral("This Core does not send its spots or console lines."),
+               {});
 }
 
 // R-IOS-18 / R-R3-49 (parity Task 21, stationRadiosVersion 1): This Core's

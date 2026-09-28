@@ -901,6 +901,20 @@ Core may help."; MON itself still turns the Core's monitor on. The phone's
 rule is its own: `headphones` while its output is headphones and `none`
 otherwise.
 
+## AM Mod Monitor readings (not media)
+
+The AM Mod Monitor (R-IOS-13, R-R3-49; capability `txModMonitorVersion=1`)
+is not carried on the media connection. Its readings travel on the control
+session as the `txAmModulation` and `txAmModulationFeedback` record streams
+(station link sections 6.3 and 7.7), so a device needs no media start, no
+display subscription and no share of the display budget to watch it, and a
+device without media sees it too. The Core measures the transmit I/Q it
+sends its radio (or the PureSignal feedback), not what any media stream
+carries, while the radio is keyed in AM, SAM or DSB. Its envelope trace is
+not a display frame: it is at most 512 points per record, sent with the
+50 ms record flush, never on the audio clock. The transmit display (above)
+and the Mod Monitor are independent: either may run without the other.
+
 ## Microphone line (iPhone app plan Task 36)
 
 Capability `remoteTxVersion=1` (R-IOS-13), which the Core sends only to a

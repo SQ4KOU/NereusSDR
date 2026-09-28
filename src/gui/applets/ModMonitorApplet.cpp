@@ -2,6 +2,11 @@
 // src/gui/applets/ModMonitorApplet.cpp  (NereusSDR)
 // =================================================================
 // no-port-check: NereusSDR-original file.  See header.
+//
+// Modification history (NereusSDR):
+//   2026-09-27   R-IOS-13 / R-R3-49: the Core's readings in a remote
+//                window (txModMonitorVersion 1). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 #include "gui/applets/ModMonitorApplet.h"
 
@@ -177,6 +182,71 @@ ModMonitorApplet::ModMonitorApplet(RadioModel* model, QWidget* parent)
     loadSettings();
     m_timer.setInterval(kRefreshMs);
     connect(&m_timer, &QTimer::timeout, this, &ModMonitorApplet::tick);
+    // R-IOS-13 / R-R3-49: a remote window shows the Core's readings, and
+    // follows whether its Core sends them.
+    if (isRemoteWindow()) {
+        connect(m_model, &RadioModel::stationLinkStateChanged,
+                this, &ModMonitorApplet::updateRemoteAvailability);
+        updateRemoteAvailability();
+    }
+}
+
+bool ModMonitorApplet::isRemoteWindow() const
+{
+    return m_model && m_model->role() == RadioModel::Role::Remote;
+}
+
+QString ModMonitorApplet::notConnectedReason()
+{
+    return QStringLiteral("Connect to the Core to see the modulation monitor.");
+}
+
+QString ModMonitorApplet::unavailableReasonForTest() const
+{
+    return m_unavailableLabel && !m_available ? m_unavailableLabel->text() : QString();
+}
+
+void ModMonitorApplet::updateRemoteAvailability()
+{
+    if (!isRemoteWindow()) {
+        return;
+    }
+    const IStationLink* link = m_model->stationLink();
+    const bool ready = link != nullptr && link->stationLinkReady();
+    const bool available = ready && link->txModMonitorAvailable();
+    const QString reason = !ready ? notConnectedReason()
+                                  : IStationLink::modMonitorUnavailableReason();
+    const bool changed = available != m_available;
+    m_available = available;
+    m_body->setEnabled(available);
+    m_body->setToolTip(available ? QString() : reason);
+    m_unavailableLabel->setText(reason);
+    m_unavailableLabel->setVisible(!available);
+    if (!available) {
+        // No readings to show: blank, never "NO CARRIER".
+        applySnapshot(AmModulationAnalyzer::Snapshot{});
+        setLamp(m_carrierLamp, QStringLiteral("--"), Style::kInsetBg, Style::kTextInactive,
+                Style::kInsetBorder);
+    } else if (changed) {
+        // The feedback receiver is the Core's (ModMon/FbStream): show its.
+        const QSignalBlocker block(m_fbStreamSpin);
+        m_fbStreamSpin->setValue(AppSettings::instance()
+                                     .value(QString::fromLatin1(kKeyFbStream), QStringLiteral("1"))
+                                     .toInt());
+    }
+    if (isVisible()) {
+        watchOnCore(static_cast<int>(m_source));
+    }
+}
+
+void ModMonitorApplet::watchOnCore(int source)
+{
+    if (!isRemoteWindow()) {
+        return;
+    }
+    if (IStationLink* link = m_model->stationLink()) {
+        link->setModMonitorSource(source);
+    }
 }
 
 void ModMonitorApplet::buildUI()
@@ -186,7 +256,17 @@ void ModMonitorApplet::buildUI()
     root->setSpacing(0);
     // Title bar is added by AppletPanelWidget::wrapWithTitleBar.
 
+    // R-IOS-13 / R-R3-49: in a remote window whose Core does not send the
+    // readings, the reason, above the disabled controls.
+    m_unavailableLabel = new QLabel(this);
+    m_unavailableLabel->setWordWrap(true);
+    m_unavailableLabel->setStyleSheet(QString::fromLatin1(Style::kSecondaryLabelStyle));
+    m_unavailableLabel->setContentsMargins(4, 2, 4, 0);
+    m_unavailableLabel->setVisible(false);
+    root->addWidget(m_unavailableLabel);
+
     auto* body = new QWidget(this);
+    m_body = body;
     auto* vbox = new QVBoxLayout(body);
     vbox->setContentsMargins(4, 2, 4, 4);
     vbox->setSpacing(3);
@@ -402,7 +482,12 @@ void ModMonitorApplet::setSource(Source src)
     m_srcFbBtn->setChecked(src == Source::PaFeedback);
     AppSettings::instance().setValue(QString::fromLatin1(kKeySource),
                                      QString::number(static_cast<int>(src)));
-    if (m_model) {
+    if (isRemoteWindow()) {
+        // The Core's analyzer for this source; a remote model has none.
+        if (isVisible()) {
+            watchOnCore(static_cast<int>(src));
+        }
+    } else if (m_model) {
         m_model->setAmModFeedbackWanted(src == Source::PaFeedback);
     }
     resetPeaks();
@@ -410,7 +495,12 @@ void ModMonitorApplet::setSource(Source src)
 
 void ModMonitorApplet::resetPeaks()
 {
-    if (m_model) {
+    if (isRemoteWindow()) {
+        // RESET clears the Core's analyzer, as a local window's does its own.
+        if (IStationLink* link = m_model->stationLink(); link && link->txModMonitorAvailable()) {
+            link->requestModMonitorReset(static_cast<int>(m_source));
+        }
+    } else if (m_model) {
         if (auto* a = m_model->amModulationAnalyzer(static_cast<int>(m_source))) {
             a->reset();
         }
@@ -433,17 +523,28 @@ void ModMonitorApplet::showEvent(QShowEvent* e)
 {
     AppletWidget::showEvent(e);
     m_timer.start();
+    watchOnCore(static_cast<int>(m_source));
 }
 
 void ModMonitorApplet::hideEvent(QHideEvent* e)
 {
     m_timer.stop();
+    watchOnCore(-1);
     AppletWidget::hideEvent(e);
 }
 
 void ModMonitorApplet::tick()
 {
     if (!m_model) {
+        return;
+    }
+    if (isRemoteWindow()) {
+        // The Core's snapshot through the local display path; none while the
+        // Core sends none (nobody keyed in AM, SAM or DSB).
+        if (m_available) {
+            applySnapshot(m_model->stationModMonitorSnapshot(static_cast<int>(m_source))
+                              .value_or(AmModulationAnalyzer::Snapshot{}));
+        }
         return;
     }
     auto* a = m_model->amModulationAnalyzer(static_cast<int>(m_source));
@@ -466,6 +567,21 @@ void ModMonitorApplet::setLamp(QLabel* lamp, const QString& text,
 QString ModMonitorApplet::carrierLampTextForTest() const
 {
     return m_carrierLamp ? m_carrierLamp->text() : QString();
+}
+
+ModMonitorApplet::DisplayForTest ModMonitorApplet::displayForTest() const
+{
+    DisplayForTest d;
+    d.posBar = m_posGauge->value();
+    d.negBar = m_negGauge->value();
+    d.posText = m_posValue->text();
+    d.negText = m_negValue->text();
+    d.asymText = m_asymValue->text();
+    d.carrierText = m_carrierValue->text();
+    d.lampText = m_carrierLamp->text();
+    d.posLit = m_posLit;
+    d.negLit = m_negLit;
+    return d;
 }
 
 void ModMonitorApplet::applySnapshot(const AmModulationAnalyzer::Snapshot& s)
@@ -524,6 +640,7 @@ void ModMonitorApplet::applySnapshot(const AmModulationAnalyzer::Snapshot& s)
         setLamp(m_carrierLamp, QStringLiteral("CARRIER OK"), Style::kGreenBg, Style::kGreenText, Style::kGreenBorder);
     }
 
+    m_scopePoints = s.scope.size();
     m_scope->setTrace(s.scope);
 }
 

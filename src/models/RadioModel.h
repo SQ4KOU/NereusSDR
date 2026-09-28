@@ -353,6 +353,12 @@
 //                paRawAdcChanged, the radio's raw forward and reflected
 //                power readings the Core sends in txState; a remote window's
 //                stationTransmitState() and stationTxReadingsVersion().
+//   2026-09-27 - R-IOS-13 / R-R3-49 (txModMonitorVersion 1): the AM Mod
+//                Monitor in a remote window. setAmModTxTapEnabled (the
+//                Core feeds its TX analyzer only for a watching device),
+//                applyModMonitorSetting (the Core's feedback receiver,
+//                ModMon/FbStream), and a remote window's copy of the
+//                Core's readings (stationModMonitorSnapshot).
 //                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
 // =================================================================
@@ -416,6 +422,7 @@
 #include "core/Rf2ksConnection.h"
 #include "core/TgxlConnection.h"
 #include "core/FaultLog.h"
+#include "core/AmModulationAnalyzer.h"
 #include "core/session/IStationLink.h"
 #include "core/station/StationRadios.h"
 // Remote-daemon R2 Task 18: the handshake descriptor applyStationCapabilities()
@@ -511,7 +518,6 @@ class WidebandFftEngine;
 class MoxController;
 struct KeyerIdentity;
 class TxChannel;
-class AmModulationAnalyzer;
 // Phase 3F Sub-Epic J Task 11: forward decl for rxChannelForSlice()'s
 // return type (see below, near txChannel()).
 class RxChannel;
@@ -2830,6 +2836,25 @@ public:
     /// The applet sets this when its PA-feedback source is selected so the
     /// connection-thread I/Q fork only pays for the analysis when wanted.
     void setAmModFeedbackWanted(bool wanted);
+    bool amModFeedbackWanted() const { return m_amModFbWanted.load(); }
+    /// R-IOS-13 / R-R3-49: whether the TX I/Q tap feeds the TX analyzer.
+    /// True by default (a local window's applet reads it whenever it is
+    /// shown); the Core turns it off and on for a watching device
+    /// (ModMonitorPublisher), so with nobody watching the analyzer costs
+    /// nothing. Takes effect on the live transmit channel at once.
+    void setAmModTxTapEnabled(bool enabled);
+    bool amModTxTapEnabled() const { return m_amModTxTapEnabled.load(); }
+    /// The Core applies a window's ModMon/FbStream (the feedback receiver
+    /// the Mod Monitor's PA FB source listens to), or its removal (rx1),
+    /// at once. Ignores every other key.
+    void applyModMonitorSetting(const QString& key, const QVariant& value);
+    /// A remote window's copy of the Core's Mod Monitor readings for a
+    /// source (0 TX I/Q, 1 PA feedback), from the txAmModulation and
+    /// txAmModulationFeedback streams; nullopt while the Core sends none
+    /// (nobody keyed in AM, SAM or DSB, or not subscribed).
+    std::optional<AmModulationAnalyzer::Snapshot> stationModMonitorSnapshot(int source) const;
+    /// The Core's Mod Monitor readings leave this window.
+    void clearStationModMonitor();
 
     // Phase 3F Sub-Epic J Task 11: the one place GUI code may resolve a
     // slice's WDSP channel. Mirrors txChannel()'s shape. Added so MainWindow
@@ -6812,6 +6837,9 @@ private:
     std::atomic<int>  m_amModFbStream{1};
     std::atomic<bool> m_amModFbWanted{false};
     std::atomic<bool> m_amModMoxOn{false};
+    std::atomic<bool> m_amModTxTapEnabled{true};
+    // R-IOS-13 / R-R3-49: a remote window's copy of the Core's readings.
+    std::array<std::optional<AmModulationAnalyzer::Snapshot>, 2> m_stationModMonitor;
 
     // TX mic source — strategy interface for silence (3M-1a) or real mic (3M-1b).
     // Owned by RadioModel via unique_ptr. NullMicSource for 3M-1a; replaced with

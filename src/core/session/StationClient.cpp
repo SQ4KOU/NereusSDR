@@ -289,10 +289,16 @@
 //               web relay's leg (RelayLeg) and its per-connection candidate
 //               sources; the computer's own proxy settings (SystemProxy).
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-27: R-IOS-13 / R-R3-49 (txModMonitorVersion 1): the window's
+//               Mod Monitor subscribes to the Core's txAmModulation or
+//               txAmModulationFeedback stream while shown, again after each
+//               snapshot, and sends txModMonitor.reset. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SystemProxy.h"
 #include "core/session/StationClient.h"
+#include "core/session/ModMonitorRecord.h"
 
 #include "core/AppSettings.h"
 #include "core/session/SettingsHygieneWire.h"
@@ -1872,6 +1878,9 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
         // session.
         m_radioModel->noteStationSupportAvailabilityChanged();
     }
+    // R-IOS-13 / R-R3-49: that session's Mod Monitor subscription ended
+    // with it; the window's choice of source stays for the next.
+    m_modMonitorStream.clear();
 
     if (!m_settingsProxy.isNull()) {
         m_settingsProxy->setReady(false);
@@ -2340,6 +2349,13 @@ void StationClient::onTransportText(const QByteArray& wire)
         if (m_cfcCompressionWanted && txReadingsAvailable()) {
             sendCfcCompressionSubscription(true);
         }
+        // R-IOS-13 / R-R3-49: the Mod Monitor's stream, when the window
+        // shows it; a new snapshot is a new subscription.
+        m_modMonitorStream.clear();
+        if (!m_radioModel.isNull()) {
+            m_radioModel->clearStationModMonitor();
+        }
+        syncModMonitorSubscription();
         if (firstSnapshot) {
             qCInfo(lcStationClient) << "Session established with" << m_capabilities.stationName;
             // iPhone app plan Task 27: where the Core was reached, tried
@@ -2423,7 +2439,7 @@ void StationClient::onTransportText(const QByteArray& wire)
             }
             break;
         }
-        if ((spotSourcesAvailable() || stationRadiosAvailable() || stationTciServerAvailable())
+        if ((spotSourcesAvailable() || stationRadiosAvailable() || stationTciServerAvailable() || txModMonitorAvailable())
             && !m_radioModel.isNull()) {
             m_radioModel->applyStationRecordBatch(message.recordBatch);
         }
@@ -4576,6 +4592,60 @@ StationClient::CommandOutcome StationClient::requestFreedv(const QByteArray& ver
         return {false, QStringLiteral("This app does not know that FreeDV Reporter request.")};
     }
     return sendCommand(verb, -1, arguments, QStringLiteral("the FreeDV Reporter request"));
+}
+
+bool StationClient::txModMonitorAvailable() const
+{
+    return spotSourcesAvailable() && m_capabilities.txModMonitorVersion >= 1;
+}
+
+void StationClient::setModMonitorSource(int source)
+{
+    m_modMonitorSource = source == 0 || source == 1 ? source : -1;
+    syncModMonitorSubscription();
+}
+
+void StationClient::syncModMonitorSubscription()
+{
+    const QString wanted = txModMonitorAvailable()
+        ? ModMonitorRecord::streamName(m_modMonitorSource)
+        : QString();
+    if (wanted == m_modMonitorStream) {
+        return;
+    }
+    const auto streamArgument = [](const QString& stream) {
+        return MirrorUpdate{0, "stream", MirrorWireKind::Utf8, QVariant(stream)};
+    };
+    if (!m_modMonitorStream.isEmpty() && stationLinkReady()) {
+        invokeCommand("records.unsubscribe", {streamArgument(m_modMonitorStream)});
+    }
+    // The readings of a source the window no longer watches leave it.
+    if (!m_radioModel.isNull()) {
+        m_radioModel->clearStationModMonitor();
+    }
+    m_modMonitorStream = wanted;
+    if (!wanted.isEmpty()) {
+        invokeCommand("records.subscribe",
+                      {streamArgument(wanted),
+                       MirrorUpdate{0, "backlog", MirrorWireKind::Int64,
+                                    QVariant(static_cast<qlonglong>(ModMonitorRecord::kCapacity))}});
+    }
+}
+
+StationClient::CommandOutcome StationClient::requestModMonitorReset(int source)
+{
+    if (!txModMonitorAvailable()) {
+        return {false, stationLinkReady() ? modMonitorUnavailableReason()
+                                          : QStringLiteral("Not connected to the Core, so the "
+                                                           "reset was not sent.")};
+    }
+    if (source != 0 && source != 1) {
+        return {false, QStringLiteral("This app does not know that monitor source.")};
+    }
+    return sendCommand("txModMonitor.reset", -1,
+                       {MirrorUpdate{0, "source", MirrorWireKind::Int64,
+                                     QVariant(static_cast<qlonglong>(source))}},
+                       QStringLiteral("the modulation monitor reset"));
 }
 
 bool StationClient::stationRadiosAvailable() const

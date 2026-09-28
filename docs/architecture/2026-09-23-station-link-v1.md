@@ -869,6 +869,7 @@ change shows as surface drift and as a change to this table.
 | `mediaRelayRoutingVersion` | 1 |
 | `settingsHygieneVersion` | 1 |
 | `remoteIqVersion` | 1 |
+| `txModMonitorVersion` | 1 |
 
 <!-- /surface -->
 
@@ -1273,8 +1274,7 @@ When a feature is off, its version is 0:
 - `txMonitorAudioVersion` (remote-window parity Task 32, R-IOS-13,
   R-R3-49): sent only at agreed minor 11, after `controlChannelVersion` in
   the minor-11 block (`stationFreedvVersion`, then this block's Task 29
-  entries, `sessionHolderVersion` and the remote transmit entries follow
-  it), and 1 while media is on and
+  entries and the later minor-11 extensions follow it), and 1 while media is on and
   the Core runs its own
   radio model; 0 otherwise. At 1 a window may add `txMonitorAudioVersion`
   to its media `start` and then send `monitor-audio` with the route it
@@ -1295,9 +1295,10 @@ When a feature is off, its version is 0:
 - `stationFreedvVersion` (the iPhone app plan's Task 22 and remote-window
   parity Task 20, R-IOS-26, R-R3-49): sent only at agreed minor 11, after
   `txMonitorAudioVersion` in the minor-11 block (`mediaReplaceVersion`,
-  `controlSwitchVersion`, `relayAllowed`, `sessionHolderVersion` and the
-  remote transmit entries follow it), and 1 whenever
-  `recordStreamVersion` is 1 (the Core runs FreeDV Reporter itself); 0
+  `controlSwitchVersion`, `relayAllowed` and the later minor-11 extensions
+  follow it), and 1
+  whenever `recordStreamVersion` is 1 (the Core runs FreeDV Reporter
+  itself); 0
   otherwise. At 1 FreeDV Reporter is one of the Core's station sources
   (source name `freedvReporter`): the Core registers with its own
   callsign, grid square and status message, never its label (section
@@ -1351,6 +1352,21 @@ When a feature is off, its version is 0:
   off the air, as a window at the Core does both while keyed; the Core
   writes the bundle on a worker thread and logs through a queue no
   logging thread waits on, so neither can stall the radio.
+- `txModMonitorVersion` (R-IOS-13, R-R3-49; the iPhone app plan's Task 39,
+  parity row A10): sent only at agreed minor 11, appended after `remoteIqVersion`
+  and all earlier optional entries, preserving existing positions; 1 whenever `recordStreamVersion`
+  is 1 (the Core runs its own AM modulation analyzers); 0 otherwise. At 1
+  the Core sends the AM Mod Monitor's readings on the `txAmModulation`
+  (the transmit I/Q it sends its radio) and `txAmModulationFeedback` (the
+  PureSignal feedback receiver, the PA's output) record streams (section
+  7.7), takes `txModMonitor.reset` (section 9.1), and applies a window's
+  `ModMon/FbStream` (section 8.1). A window subscribes to one of the two
+  streams only while its Mod Monitor is shown, and again after each
+  snapshot. On a Core that sends 0 or no entry a window shows its Mod
+  Monitor, docked or popped out, disabled with "This Core does not send
+  the modulation monitor. Updating the Core may help.", its readings
+  blank; with no Core connected it says "Connect to the Core to see the
+  modulation monitor.".
 
 - `mediaTunnelVersion` (Task 29 step 2b): 1 when media is on, after every
   previously emitted minor-11 entry (including conditional transmit
@@ -1618,6 +1634,7 @@ older window sees only the values it was built for.
 | 76 | `mediaRelayRoutingVersion` | `i64` |
 | 77 | `settingsHygieneVersion` | `i64` |
 | 78 | `remoteIqVersion` | `i64` |
+| 79 | `txModMonitorVersion` | `i64` |
 
 <!-- /surface -->
 
@@ -3421,6 +3438,8 @@ keeps:
 | `coreLog` | 200 | With `supportBundleVersion` 1: one line of the Core's log as its log file has it (`[HH:mm:ss.zzz] INF: text`, addresses already shortened), `id` its number in the Core's log (rising): `line` (string). Keys, tokens and pairing codes are removed as the support bundle removes them. The Core reads its log every 250 ms while a peer follows the stream, and only then; its first backlog is the newest lines at the first subscribe |
 | `txCfcCompression` | 1 | With `txReadingsVersion` 1: the CFC display, one record, `id` `"0"`, replaced each time the Core reads new data: `atMs` (number, when the Core read it, in milliseconds on its own monotonic clock) and `binsDbTenths` (string: the 1025 values of the CFC compression display, each rounded to a tenth of a dB, as little-endian int16 tenths, in base64). Bin `i` is `i * 48000 / 1024` Hz; a chart draws the bins over its own frequency range as the local CFC dialog does (Thetis's frmCFCConfig `timerTick`: `binsPerHz` = 1025 / 48000). The Core reads the display every 50 ms, Thetis's interval, only while at least one peer subscribes and its radio is on the air with CFC on, and sends a record only when WDSP says new data is ready |
 | `stationRadios` | 64 | With `stationRadiosVersion` 1: one radio the Core can see, the Core's radio first, `id` its MAC in upper case: `id` and `mac` (strings, the same), `name` (string, as the radio reports itself), `model` (number, the `hpsdrModel` the Core runs it as: its saved override, else its board's), `address` (string, its IP address, empty when not known), `protocol` (number, 1 or 2) and `inUse` (boolean, true for the Core's radio). The list is what the Core's last scan found, with the Core's radio; a radio stays listed after it drops off until a scan misses it |
+| `txAmModulation` | 1 | With `txModMonitorVersion` 1: the AM Mod Monitor's readings of the transmit I/Q the Core sends its radio (its TX tap, `AmModulationAnalyzer`), one record, `id` `0`, present only while the radio is keyed in AM, SAM or DSB (the transmit slice's mode) and a peer subscribes: `atMs` (number, the Core's clock in ms since the epoch when it read them), `posPeakPct` and `negPeakPct` (numbers, the positive and negative peak modulation in percent since the Core's previous record: the largest of the reads it merged), `posHoldPct` and `negHoldPct` (numbers, the peaks held 1.5 s, then falling as the Core's analyzer lets them fall), `carrierLevel` (number, the carrier in linear envelope units, 0 to 1 at the radio's full scale), `carrierDbfs` (number, that in dB, -120 with no carrier), `carrierPresent`, `carrierLow` and `carrierHigh` (booleans: a carrier is measured, below 0.05, above 0.98), `scopeRateHz` (number, the rate of the scope's points) and `scopePctTenths` (string: the envelope trace, oldest first, each point's percent modulation in tenths as a little-endian int16, in base64; at most 512 points, a longer trace reduced by keeping the largest-magnitude point of each group). Asymmetry is `posHoldPct` minus `negHoldPct` |
+| `txAmModulationFeedback` | 1 | With `txModMonitorVersion` 1: the same record for the PureSignal feedback receiver (the PA's output as the radio samples it), on the receiver `ModMon/FbStream` names (section 8.1); present under the same rule, and measured only while PureSignal's feedback runs on the Core's radio |
 
 A peer asks with `records.subscribe {stream, backlog}` (section 9.1); the
 Core answers, then sends at once a `record.batch` with `reset` true
@@ -3446,6 +3465,26 @@ capacity; when it would, the waiting changes are dropped and the peer is
 sent a reset instead, carrying the newest records up to its backlog, so
 the oldest records are the ones lost, never queued without limit
 (`RecordStream`).
+
+**The AM Mod Monitor's streams** (`txModMonitorVersion` 1). The Core
+spends nothing on them until a peer subscribes: with no subscriber it
+reads neither analyzer and feeds neither (its TX tap is off the transmit
+channel and the feedback fork is off). While a peer subscribes to a
+stream, the Core reads that stream's analyzer every 33 ms (the Mod
+Monitor's own refresh) while the radio is keyed in AM, SAM or DSB, and
+upserts the one record; records go out in the 50 ms flush, so a record
+carries the largest window peaks of the reads since the last one sent. At
+the key, or when a stream is first watched during one, the Core starts
+the analyzer afresh. When the key ends, the mode leaves AM, SAM and DSB,
+or the last subscriber leaves, the Core stops feeding it and removes the
+record: a window then shows no carrier. `txModMonitor.reset {source}`
+(section 9.1; 0 `txAmModulation`, 1 `txAmModulationFeedback`) starts that
+analyzer afresh for everyone watching, as a local window's RESET does its
+own. A window watches one stream (its Mod Monitor's TX I/Q or PA FB
+choice), backlog 1, only while its Mod Monitor is shown, and again after
+each snapshot; it puts each record through the local Mod Monitor's own
+display (bars, holds, flashers, lamps), so it shows what a local window
+shows for the same I/Q, and drops the readings when the session ends.
 
 A window subscribes to `spots` (backlog 500) and to each station source's
 console (backlog 200) once its snapshot is complete, again on every
@@ -3564,6 +3603,7 @@ computer, never sent). `classifySettingsKey` (`SettingsScope.cpp`) decides:
 | 3. whole key | `RemoteMoxTimeOutEnabled` | station |
 | 3. whole key | `RemoteMoxTimeOutSeconds` | station |
 | 3. whole key | `RxOnly` | station |
+| 3. whole key | `ModMon/FbStream` | station |
 | 3. whole key | `DisableHfPa` | operatorLocal |
 | 3. whole key | `ExtendedTxAllowed` | operatorLocal |
 | 3. whole key | `PreventTxOnDifferentBandToRx` | operatorLocal |
@@ -3640,6 +3680,14 @@ Multimeter > Polling delay), or its removal, sets the Core's meter pump
 rate at once, clamped to 10 to 2000 ms (a removal returns the 100 ms
 default); it only changes how often the Core reads its meters, so it is
 taken on and off the air, as a local window changes it. At
+`txModMonitorVersion` 1 a taken `ModMon/FbStream` (the AM Mod Monitor's
+feedback receiver, `0` to `4`, rx1 by default), or its removal, sets the
+receiver the Core's feedback analyzer listens to at once, as the local
+applet's receiver box does; text that is not a number returns rx1. It
+changes only what the Core measures, never the radio, so it is taken on
+and off the air. The applet's other keys (`ModMon/Source`,
+`ModMon/PosFlashPct`, `ModMon/NegFlashPct`, `ModMon/VintageMeters`) are
+each window's own. At
 `txDisplayVersion` 2 a taken Setup > Display > TX Display analyzer key
 (`DisplayTxFftSize`, `DisplayTxWindowType`, `DisplayTxPanDetector`,
 `DisplayTxPanAveraging`, `DisplayTxPanAvTimeMs`, `DisplayTxPanNormalize`,
@@ -3893,6 +3941,7 @@ refused.
 | `confirm.cancel` | `id` i64 | `sessionHolderVersion` | 1 | 11 |
 | `notice.takeBack` | `id` i64 | `sessionHolderVersion` | 1 | 11 |
 | `session.pathTicket` | none | `controlSwitchVersion` | 1 | 11 |
+| `txModMonitor.reset` | `source` i64 | `txModMonitorVersion` | 1 | 11 |
 
 <!-- /surface -->
 
@@ -4111,6 +4160,18 @@ These command groups need a sentence beyond the table:
   bundle." and "The Core could not read this request.". A window shows a
   refusal in its Support dialog; a bundle it could not get is written
   with the reason in `core/unavailable.txt`.
+- **The AM Mod Monitor's reset** (R-IOS-13, R-R3-49, `txModMonitorVersion`
+  1). `txModMonitor.reset` (`source` i64: 0 the transmit I/Q, 1 the PA
+  feedback) starts the Core's analyzer for that source afresh (its carrier
+  estimate, peaks, hold and scope), the local Mod Monitor's RESET; every
+  device watching that stream sees it (section 7.7). It reaches neither
+  the radio nor the key, so it is answered on and off the air and is not
+  on the several-devices list (section 7.6). Refusals: "The Core could not
+  read this request." (a source other than 0 or 1, or a missing or wrong
+  argument), "This Core does not send the modulation monitor. Updating
+  the Core may help." without the feature, and "Update this app to see
+  the Core's modulation monitor." below minor 11. A window subscribes and
+  unsubscribes with `records.subscribe` and `records.unsubscribe` (above).
 - **The filter graph's curve** (parity Task 16, `dspInfoVersion` 1).
   `dsp.filterResponse` asks the Core for the high-resolution filter graph's
   curve for the receiver of `sliceId`, computed from that receiver's
@@ -6058,6 +6119,12 @@ is refused as any outbound property's is.
 | `swrWindBackLatched` | The protection's drive fold-back has latched; the border shows fold-back while this and `highSwr` are both true |
 | `forwardAdcRaw`, `reflectedAdcRaw` | The radio's raw forward and reflected power readings (i64, the ADC counts of its last PA sample, transmitting or not; parity Task 33, `txReadingsVersion` 1; 0 before the first sample). A window scales them exactly as its own PA Values page scales a local radio's (`PaTelemetryScaling`: raw forward power by `computeAlexFwdPower`, the forward and reflected RF voltage), with the Core's `hpsdrModel`; the Core sends the raw values, never a scaled one |
 | `compressionDb` | The COMP reading (f64, dB; parity Task 33 follow-up, `txReadingsVersion` 1), as the Core's own Compression meters show it: Thetis's reading, the transmit channel's `TXA_COMP_AV` floored at -30 dB (console.cs:46979, dsp.cs:1013-1014 [v2.10.3.15]), so -30 with the speech processor off; -400, no reading, while the Core has no transmit channel. Read with the other meters |
+
+The AM Mod Monitor's readings (peaks, holds, carrier, lamps and envelope
+trace) are not `txState` properties: they travel as the `txAmModulation`
+and `txAmModulationFeedback` record streams, to a peer that subscribes
+(`txModMonitorVersion` 1, section 7.7), whether or not it declared
+`remoteTx`.
 
 **When it is sent.** While keyed the Core reads the meters ten times a
 second, from the transmit lane's last readings (never a DSP call on its

@@ -169,6 +169,12 @@
 //                longer a window exception; the saved status messages
 //                (FreeDvReporter/SavedMessages) are recorded as Station.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-27 - R-IOS-13 / R-R3-49 (txModMonitorVersion 1): the AM Mod
+//                Monitor's feedback receiver (ModMon/FbStream) is the
+//                Core's (Station): it picks which of the Core's receivers
+//                the Core's feedback analyzer listens to. The applet's
+//                other ModMon/ keys stay each window's. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/settings/SettingsScope.h"
@@ -571,6 +577,15 @@ const Rule kWholeKeys[] = {
     // a radio in receive only that another window then keys. Until Task 16
     // it was pinned OperatorLocal below as a write-only setting.
     { "RxOnly", SettingsScope::Station },
+
+    // R-IOS-13 / R-R3-49 (txModMonitorVersion 1): the AM Mod Monitor's
+    // feedback receiver, the receiver stream carrying PureSignal feedback
+    // (HL2: rx1), which the Core's feedback analyzer listens to. A fact
+    // about the Core's radio, applied where the radio is
+    // (RadioModel::applyModMonitorSetting). Only this key: the applet's
+    // source, flasher thresholds and meter style (ModMon/Source,
+    // PosFlashPct, NegFlashPct, VintageMeters) are each window's.
+    { "ModMon/FbStream", SettingsScope::Station },
 
     // ---- Reviewed and deliberately pinned OperatorLocal --------------
     // Each of these has a name that reads as a TX-safety or station-

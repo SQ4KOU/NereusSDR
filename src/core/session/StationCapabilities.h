@@ -154,6 +154,9 @@
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-27 - R-R3-49 / R-R3-32 (parity Task 33): txReadingsVersion.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-27 - R-IOS-13 / R-R3-49: txModMonitorVersion, the AM Mod
+//                Monitor's readings. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -431,6 +434,14 @@ struct StationCapabilities {
     /// Version 1 prefixes relay tag-2 payloads with the media connection's
     /// 16-byte UUID, preserving independent generations during replacement.
     int mediaRelayRoutingVersion = 0;
+    /// R-IOS-13 / R-R3-49 (iPhone plan Task 39 row A10): 1 means the Core
+    /// sends its AM Mod Monitor readings on the txAmModulation and
+    /// txAmModulationFeedback record streams (to a subscribing peer, while
+    /// its radio is keyed in AM, SAM or DSB), takes txModMonitor.reset and
+    /// applies a window's ModMon/FbStream. Sent in the minor-11 block,
+    /// after remoteIqVersion and all earlier optional entries. 0: a window shows its
+    /// Mod Monitor disabled with the reason.
+    int txModMonitorVersion = 0;
     /// iPhone app Task 71 (R-IOS-02; the several-devices design, ruling
     /// 10.1): 1 means the Core admits up to four devices at once, sends the
     /// `connectedDevices` object and takes session.leave. Sent before the

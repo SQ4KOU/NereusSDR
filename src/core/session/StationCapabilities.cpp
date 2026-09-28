@@ -109,6 +109,9 @@
 //   2026-09-27 - R-R3-49 / R-R3-32 (parity Task 33): txReadingsVersion,
 //                right after txStateVersion and only with it. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-27 - R-IOS-13 / R-R3-49: txModMonitorVersion, after
+//                relayAllowed. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationCapabilities.h"
@@ -280,6 +283,7 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
             updates.append(intEntry("settingsHygieneVersion", settingsHygieneVersion));
         }
         updates.append(intEntry("remoteIqVersion", remoteIqVersion));
+        updates.append(intEntry("txModMonitorVersion", txModMonitorVersion));
     }
     return updates;
 }
@@ -484,6 +488,7 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                    || u.name == "supportBundleVersion"
                    || u.name == "mediaTunnelVersion"
                    || u.name == "mediaRelayRoutingVersion"
+                   || u.name == "txModMonitorVersion"
                    || u.name == "sessionHolderVersion"
                    || u.name == "remoteTxVersion"
                    || u.name == "txStateVersion"
@@ -559,6 +564,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                     caps.mediaTunnelVersion = version;
                 } else if (u.name == "mediaRelayRoutingVersion") {
                     caps.mediaRelayRoutingVersion = version;
+                } else if (u.name == "txModMonitorVersion") {
+                    caps.txModMonitorVersion = version;
                 } else {
                     caps.bandSelectVersion = version;
                 }

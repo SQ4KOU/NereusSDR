@@ -1404,6 +1404,10 @@ list(APPEND CORE_SOURCES
     src/core/session/StationCatalog.cpp
     # Parity Task 19 (R-IOS-25): the link's record streams.
     src/core/session/RecordStream.cpp
+    # R-IOS-13 / R-R3-49 (txModMonitorVersion 1): the AM Mod Monitor's
+    # readings on two record streams, and the Core's side that feeds them.
+    src/core/session/ModMonitorRecord.cpp
+    src/core/session/ModMonitorPublisher.cpp
     # Parity Task 21 (R-IOS-18): the Core's radios and its choice of one.
     src/core/station/StationRadios.cpp
     # iPhone app Task 71 (R-IOS-02): who holds a place on the Core, and the

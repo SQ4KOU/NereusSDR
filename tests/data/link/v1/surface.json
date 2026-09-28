@@ -389,6 +389,11 @@
             "kind": "i64",
             "name": "remoteIqVersion",
             "value": 1
+        },
+        {
+            "kind": "i64",
+            "name": "txModMonitorVersion",
+            "value": 1
         }
     ],
     "commands": [
@@ -2081,6 +2086,19 @@
             "capabilityVersion": 1,
             "minMinor": 11,
             "verb": "session.pathTicket"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "source",
+                    "optional": false
+                }
+            ],
+            "capability": "txModMonitorVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "txModMonitor.reset"
         }
     ],
     "limits": {
@@ -7132,7 +7150,8 @@
             "PingTimeOutHost",
             "RemoteMoxTimeOutEnabled",
             "RemoteMoxTimeOutSeconds",
-            "RxOnly"
+            "RxOnly",
+            "ModMon/FbStream"
         ],
         "stationPrefixes": [
             "hardware/",
