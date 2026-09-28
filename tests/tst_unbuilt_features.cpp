@@ -820,18 +820,6 @@ QMap<F, QList<Surface>> surfaces()
                                 }
                                 return false;
                             }}};
-    map[F::ContainerFilterDisplay] = {
-        Surface{QStringLiteral("container Filter Display render"), Host::Container,
-                [](Hosts& h) {
-                    for (const MeterItem* item : h.containerMeter()->items()) {
-                        if (qobject_cast<const FilterDisplayItem*>(item)) {
-                            return h.containerMeter()->shouldRender(item);
-                        }
-                    }
-                    return false;
-                }},
-        Surface{QStringLiteral("container Filter Display Add"), Host::Container,
-                [](Hosts& h) { return actionShown(h.containerDialog(), QStringLiteral("Filter Display")); }}};
     map[F::ContainerClickBox] = {
         Surface{QStringLiteral("container Click Box render"), Host::Container,
                 [](Hosts& h) {
@@ -938,23 +926,21 @@ private slots:
         QCOMPARE(map.size(), list.size());
     }
 
-    void enabledFilterDisplayIsVisibleInContainerAndAddMenu()
+    void builtFilterDisplayIsVisibleInLocalAndRemoteContainers()
     {
-        QVERIFY(!UnbuiltFeatures::isBuilt(F::ContainerFilterDisplay));
-        UnbuiltFeatures::setBuiltForTest(F::ContainerFilterDisplay, true);
-        const auto resetGate = qScopeGuard([] {
-            UnbuiltFeatures::setBuiltForTest(F::ContainerFilterDisplay, false);
-        });
+        QVERIFY(UnbuiltFeatures::isBuilt(F::ContainerFilterDisplay));
         GuiSessionCoordinator sessions;
-        Hosts hosts(sessions, false);
-        bool renders = false;
-        for (const MeterItem* item : hosts.containerMeter()->items()) {
-            if (qobject_cast<const FilterDisplayItem*>(item)) {
-                renders = hosts.containerMeter()->shouldRender(item);
+        for (bool remote : {false, true}) {
+            Hosts hosts(sessions, remote);
+            bool renders = false;
+            for (const MeterItem* item : hosts.containerMeter()->items()) {
+                if (qobject_cast<const FilterDisplayItem*>(item)) {
+                    renders = hosts.containerMeter()->shouldRender(item);
+                }
             }
+            QVERIFY(renders);
+            QVERIFY(actionShown(hosts.containerDialog(), QStringLiteral("Filter Display")));
         }
-        QVERIFY(renders);
-        QVERIFY(actionShown(hosts.containerDialog(), QStringLiteral("Filter Display")));
     }
 
     // Nothing on the list shows, in a local window or a remote one.

@@ -55,16 +55,16 @@ source switching, palette/frame behavior, budget and context rejection,
 actual in-process WDSP TX siphon output without RF, and reentrant FIR demand
 lifecycle.
 
-The production `ContainerFilterDisplay` gate remains closed pending the
-loaded Core FFT startup investigation. Tests explicitly enable that gate to
-exercise the implemented GUI path. A loaded `tst_remote_tx_display` run hit
-its existing five-second first-context wait even though the media peer was
-ready and both endpoints had grants: after 174 synthetic IQ submissions the
-source had no first FFT or completed input handoff. The test now records its
-source queue activation/generation and attempts a one-second worker stack
-sample if no first FFT exists at 3.8 seconds. Later runs passed without
-triggering a sample, so the cause remains open; neither the test deadline nor
-the synthetic IQ size was increased. The panel-header composition test
+The production `ContainerFilterDisplay` is enabled for local and remote
+containers. A deterministic regression reproduced the loaded startup failure:
+two 2052-float packets exceeded the 4096-float pending queue before a worker
+drain, causing both to be discarded. The source now retains the newest valid
+whole packet and resets FFT overlap across the discarded gap. Queue bounds and
+wait deadlines are unchanged. Shared-DDC fixtures feed each DDC once. Diagnostic
+queue state and worker sampling remain available for distinct future stalls.
+The regression compares the replacement spectrum with a clean reference after
+preloading a partial old FFT, so old and new samples cannot silently blend.
+The panel-header composition test
 repeats a synthetic full-FFT presentation on each existing Qt wait poll after
 revealing a newly bound item; a single immediate presentation could precede
 the producer's 30 fps cadence, and this change leaves the wait deadline and

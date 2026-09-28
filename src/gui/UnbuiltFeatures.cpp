@@ -238,8 +238,6 @@ const QList<Entry>& all()
          QStringLiteral("Setup > Transmit > Power: HF PA relay routing refresh is not ported")},
         {F::PbSnr, QStringLiteral("pb-snr"),
          QStringLiteral("Multimeter PBSNR binding has no producer")},
-        {F::ContainerFilterDisplay, QStringLiteral("container-filter-display"),
-         QStringLiteral("Container filter display awaits loaded FFT startup acceptance")},
         {F::ContainerClickBox, QStringLiteral("container-click-box"),
          QStringLiteral("Container click box has no host action routing")},
         {F::AudioBitDepth, QStringLiteral("audio-bit-depth"),
@@ -272,6 +270,7 @@ QString key(UnbuiltFeature feature)
 
 bool isBuilt(UnbuiltFeature feature)
 {
+    if (feature == UnbuiltFeature::ContainerFilterDisplay) { return true; }
     return builtForTest().contains(static_cast<int>(feature));
 }
 

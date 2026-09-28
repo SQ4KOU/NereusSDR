@@ -39,10 +39,7 @@ private slots:
 
     void sharedSliceFansOutAndIndependentSliceKeepsItsOwnCrop()
     {
-        UnbuiltFeatures::setBuiltForTest(UnbuiltFeature::ContainerFilterDisplay, true);
-        const auto resetGate = qScopeGuard([] {
-            UnbuiltFeatures::setBuiltForTest(UnbuiltFeature::ContainerFilterDisplay, false);
-        });
+        QVERIFY(UnbuiltFeatures::isBuilt(UnbuiltFeature::ContainerFilterDisplay));
         RadioDiscovery::clearHoldOffForTest();
         {
             RadioDiscovery discovery;

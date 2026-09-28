@@ -727,7 +727,7 @@ colours for the same signal.
 - Ruling: JJ's complete remote-window parity objective includes finishing this
   feature. Exact mini endpoint, detector and overlay implementation remains a lead
   source-based design decision; no separate JJ ruling is claimed.
-- Status: OPEN. Read-only source contract records per-container slice identity,
+- Status: built. Source contract records per-container slice identity,
   stream geometry, dBm reduction, lifetime and remote grant requirements. The
   temporary hidden classification is not completion of this feature. Core now
   negotiates a mini display role only with declaring peers and applies TX takeover
@@ -735,9 +735,11 @@ colours for the same signal.
   the full TX-display suite pass. GUI and independent local/remote TX analyzer
   wiring are now implemented in signed `29ebbf388`, including panel header/body
   fanout and a separate TX analyzer. The integrated app/Core build and nine
-  focused suites passed (74.86 seconds). The visible feature stays gated while
-  the source-queue overflow finding in G-63 is corrected and verified; this is
-  not final feature acceptance.
+  focused suites passed (74.86 seconds). The source-queue overflow fix in G-63
+  now permits production visibility in both local and remote containers. The
+  production-gate tests cover rendering and the Add menu without test overrides.
+  All ten affected integrated suites passed (71.57 seconds) with the gate open.
+  Physical radio acceptance remains separate from the automated checks.
 - Plan: remote-window parity container meters and filter display.
 
 ### G-47: Expected transmit silence falsely restarts relay media
@@ -1031,12 +1033,18 @@ colours for the same signal.
   a worker that has not begun draining its queue.
 - Ruling: JJ requires the cause and a suggested fix for failures under load;
   increasing the deadline or treating a rerun as a fix is not authorized.
-- Status: OPEN cause. The lane is adding stage diagnostics and retaining the
-  failures separately from the verified analyzer-ordering and display-lifetime
-  fixes. After rebuilding every affected executable, nine suites passed in
-  91.94 seconds; that does not explain the prior failure. The next diagnostic
-  captures source queue state and a worker stack before the unchanged deadline.
-  No deadline change or hardware acceptance is claimed.
+- Status: reproduced and fixed. Two 2052-float packets submitted before a worker
+  drain exceeded the 4096-float queue and discarded both inputs, matching the
+  observed near-one-drop-per-pair counts. A deterministic paused-worker test
+  failed on the old implementation. Overflow now discards the older pending
+  samples, retains the newest valid whole packet, and marks the FFT discontinuity.
+  The regression also compares output against a clean reference after a prior
+  partial FFT, proving samples are not joined across the gap. Oversized and
+  inactive inputs remain rejected; queue bounds and deadlines are unchanged.
+  The synthetic fixture now feeds shared DDCs once rather than once per slice.
+  Integrated source/TX-display suites passed (9.65 seconds); stage diagnostics
+  remain available for any distinct future stall. The original log had no worker
+  stack, so this does not exclude unrelated stalls or claim hardware acceptance.
 - Plan: mini-spectrum display integration and tests at real load.
 
 ## How this addendum is kept
