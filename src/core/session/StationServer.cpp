@@ -10157,10 +10157,12 @@ int StationServer::txReadingsVersion() const
 {
     // Parity Task 33 (R-R3-49, R-R3-32): the raw PA readings come from the
     // Core's own radio model, and the CFC display travels as a record
-    // stream, which a Core without record streams does not keep.
-    return m_recordStreams.find(QString::fromLatin1(TransmitState::kCfcStream))
+    // stream, which a Core without record streams does not keep. Version 2
+    // adds the Core-scaled PA values from that local radio's raw samples.
+    return !m_radioModel.isNull() && m_radioModel->role() != RadioModel::Role::Remote
+            && m_recordStreams.find(QString::fromLatin1(TransmitState::kCfcStream))
             != m_recordStreams.end()
-        ? 1
+        ? 2
         : 0;
 }
 

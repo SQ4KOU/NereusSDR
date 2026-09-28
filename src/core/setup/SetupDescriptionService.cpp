@@ -669,29 +669,41 @@ bool SetupDescription::validatePaReadoutBinding(const QJsonObject& control)
     if (control.size() != 9 || binding.size() != 1 || ref.size() != 2
         || ref.value(QStringLiteral("object")) != QJsonValue(QStringLiteral("txState"))
         || control.value(QStringLiteral("kind")) != QJsonValue(QStringLiteral("readout"))
-        || control.value(QStringLiteral("applies")) != QJsonValue(QStringLiteral("live"))
-        || gate != QJsonObject{{QStringLiteral("capability"), QStringLiteral("txReadingsVersion")},
-                               {QStringLiteral("min"), 1}}) {
+        || control.value(QStringLiteral("applies")) != QJsonValue(QStringLiteral("live"))) {
         return false;
     }
     const QByteArray name = ref.value(QStringLiteral("name")).toString().toUtf8();
+    const bool derivedPower = name == QByteArrayLiteral("forwardRawPowerWatts");
+    const bool volts = name == QByteArrayLiteral("forwardAdcVolts")
+        || name == QByteArrayLiteral("reflectedAdcVolts");
+    const bool derived = derivedPower || volts;
+    if (gate != QJsonObject{{QStringLiteral("capability"), QStringLiteral("txReadingsVersion")},
+                            {QStringLiteral("min"), derived ? 2 : 1}}) {
+        return false;
+    }
     const bool power = name == QByteArrayLiteral("forwardPowerWatts")
         || name == QByteArrayLiteral("reflectedPowerWatts");
     const bool swr = name == QByteArrayLiteral("swr");
     const bool raw = name == QByteArrayLiteral("forwardAdcRaw")
         || name == QByteArrayLiteral("reflectedAdcRaw");
-    if (!power && !swr && !raw) { return false; }
+    if (!power && !swr && !raw && !derived) { return false; }
     const QString id = name == QByteArrayLiteral("forwardPowerWatts")
         ? QStringLiteral("pa.values.forwardCalibrated")
+        : derivedPower ? QStringLiteral("pa.values.forwardRawPower")
         : name == QByteArrayLiteral("reflectedPowerWatts")
           ? QStringLiteral("pa.values.reflectedPower")
         : swr ? QStringLiteral("pa.values.swr")
+        : name == QByteArrayLiteral("forwardAdcVolts") ? QStringLiteral("pa.values.forwardVoltage")
+        : name == QByteArrayLiteral("reflectedAdcVolts") ? QStringLiteral("pa.values.reflectedVoltage")
         : name == QByteArrayLiteral("forwardAdcRaw")
           ? QStringLiteral("pa.values.forwardAdc") : QStringLiteral("pa.values.reflectedAdc");
     const QString label = name == QByteArrayLiteral("forwardPowerWatts")
         ? QStringLiteral("Forward (calibrated):")
+        : derivedPower ? QStringLiteral("Forward (raw):")
         : name == QByteArrayLiteral("reflectedPowerWatts") ? QStringLiteral("Reflected:")
         : swr ? QStringLiteral("SWR:")
+        : name == QByteArrayLiteral("forwardAdcVolts") ? QStringLiteral("FWD Voltage:")
+        : name == QByteArrayLiteral("reflectedAdcVolts") ? QStringLiteral("REV Voltage:")
         : name == QByteArrayLiteral("forwardAdcRaw") ? QStringLiteral("FWD ADC:")
                                                        : QStringLiteral("REV ADC:");
     const QJsonValue decimals = control.value(QStringLiteral("decimals"));
@@ -700,7 +712,8 @@ bool SetupDescription::validatePaReadoutBinding(const QJsonObject& control)
         || control.value(QStringLiteral("id")) != QJsonValue(id)
         || control.value(QStringLiteral("label")) != QJsonValue(label)
         || control.value(QStringLiteral("tooltip")) != QJsonValue(QString())
-        || control.value(QStringLiteral("unit")) != QJsonValue(power ? QStringLiteral("W") : QString())) {
+        || control.value(QStringLiteral("unit")) != QJsonValue(
+               power || derivedPower ? QStringLiteral("W") : volts ? QStringLiteral("V") : QString())) {
         return false;
     }
     const MirrorProperty* property = MirrorSchema::forMetaObject(

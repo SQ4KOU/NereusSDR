@@ -231,6 +231,7 @@ private slots:
 
     void capabilityComesRightAfterTxStateVersion();
     void coreSendsItsRawPaReadingsKeyedOrNot();
+    void corePublishesScaledPaReadings();
     void paValuesMatchesTheLocalPageOnTheSameInputs();
     void paValuesBelowVersion1ShowsEachUnavailable();
     void cfcChartDrawsTheCoresBinsAndStopsWhenClosed();
@@ -298,11 +299,19 @@ void TstRemoteTxReadings::capabilityComesRightAfterTxStateVersion()
 
     Session s(m_securityDir.path(), this);
     QVERIFY(s.connect());
-    QCOMPARE(s.server->txReadingsVersion(), 1);
-    QCOMPARE(s.client->capabilities().txReadingsVersion, 1);
+    QCOMPARE(s.server->txReadingsVersion(), 2);
+    QCOMPARE(s.client->capabilities().txReadingsVersion, 2);
     QVERIFY(s.client->txReadingsAvailable());
-    QCOMPARE(s.window.stationTxReadingsVersion(), 1);
+    QCOMPARE(s.window.stationTxReadingsVersion(), 2);
     QCOMPARE(s.window.stationTransmitState(), s.client->transmitState());
+
+    QTemporaryDir scratch;
+    QVERIFY(scratch.isValid());
+    AppSettings remoteSettings(scratch.filePath(QStringLiteral("NereusSDR.settings")));
+    RadioModel remote(RadioModel::Role::Remote);
+    StationServer relay(&remote, remoteSettings,
+                        NereusSDR::Test::seedUpgradedCoreToken(scratch.path()));
+    QCOMPARE(relay.txReadingsVersion(), 0);
 }
 
 // forwardAdcRaw and reflectedAdcRaw follow the radio's samples unkeyed, and
@@ -344,6 +353,64 @@ void TstRemoteTxReadings::coreSendsItsRawPaReadingsKeyedOrNot()
     QTRY_VERIFY(!s.core->isTransmitting());
 }
 
+void TstRemoteTxReadings::corePublishesScaledPaReadings()
+{
+    Session s(m_securityDir.path(), this);
+    QVERIFY(s.connect());
+    QCOMPARE(s.client->capabilities().txReadingsVersion, 2);
+    const double watts = scaleFwdPowerWatts(HPSDRModel::ANAN_G2, 2600);
+    const double forwardVolts = scaleFwdRevVoltage(HPSDRModel::ANAN_G2, 2600);
+    const double reflectedVolts = scaleFwdRevVoltage(HPSDRModel::ANAN_G2, 300);
+    TransmitState* const coreState = s.server->transmitState();
+    QSignalSpy changed(coreState, &TransmitState::adcRawChanged);
+    QObject::connect(coreState, &TransmitState::adcRawChanged, &s.window, [coreState, radio = s.core.get()]() {
+        const HPSDRModel model = radio->hardwareProfile().model;
+        QCOMPARE(coreState->forwardRawPowerWatts(), scaleFwdPowerWatts(
+            model, static_cast<quint16>(coreState->forwardAdcRaw())));
+        QCOMPARE(coreState->forwardAdcVolts(), scaleFwdRevVoltage(
+            model, static_cast<quint16>(coreState->forwardAdcRaw())));
+        QCOMPARE(coreState->reflectedAdcVolts(), scaleFwdRevVoltage(
+            model, static_cast<quint16>(coreState->reflectedAdcRaw())));
+    });
+    s.core->handlePaTelemetryForTest(2600, 300, 0, 0, 0, 0);
+    QCOMPARE(changed.size(), 1);
+    QTRY_COMPARE(s.client->transmitState()->property("forwardRawPowerWatts").toDouble(), watts);
+    QTRY_COMPARE(s.client->transmitState()->property("forwardAdcVolts").toDouble(), forwardVolts);
+    QTRY_COMPARE(s.client->transmitState()->property("reflectedAdcVolts").toDouble(), reflectedVolts);
+    s.core->handlePaTelemetryForTest(2600, 300, 0, 0, 0, 0);
+    QCOMPARE(changed.size(), 1);
+    s.core->setHpsdrModelForTest(HPSDRModel::HERMESLITE);
+    s.core->emitCurrentRadioChangedForTest();
+    QCOMPARE(changed.size(), 2);
+    QCOMPARE(coreState->forwardAdcRaw(), 2600);
+    QCOMPARE(coreState->forwardRawPowerWatts(),
+             scaleFwdPowerWatts(HPSDRModel::HERMESLITE, 2600));
+    QTRY_COMPARE(s.client->transmitState()->forwardRawPowerWatts(),
+                 coreState->forwardRawPowerWatts());
+    QVERIFY(coreState->forwardRawPowerWatts() != watts);
+    s.core->setHpsdrModelForTest(HPSDRModel::HERMES);
+    s.core->emitCurrentRadioChangedForTest();
+    QCOMPARE(changed.size(), 3);
+    QCOMPARE(coreState->forwardRawPowerWatts(), scaleFwdPowerWatts(HPSDRModel::HERMES, 2600));
+    QVERIFY(coreState->forwardRawPowerWatts() != watts);
+    s.core->handlePaTelemetryForTest(0, 0, 0, 0, 0, 0);
+    QCOMPARE(coreState->forwardRawPowerWatts(), 0.0);
+    QCOMPARE(coreState->forwardAdcVolts(), 0.0);
+    QCOMPARE(coreState->reflectedAdcVolts(), 0.0);
+    s.core->handlePaTelemetryForTest(1000, 200, 0, 0, 0, 0);
+    QVERIFY(coreState->forwardRawPowerWatts() > 0.0);
+    coreState->unbind();
+    QCOMPARE(coreState->forwardRawPowerWatts(), 0.0);
+    QCOMPARE(coreState->forwardAdcVolts(), 0.0);
+    QCOMPARE(coreState->reflectedAdcVolts(), 0.0);
+    coreState->bind(s.core.get());
+    QCOMPARE(coreState->forwardRawPowerWatts(), scaleFwdPowerWatts(HPSDRModel::HERMES, 1000));
+    s.client->transmitState()->clearStationValues();
+    QCOMPARE(s.client->transmitState()->forwardRawPowerWatts(), 0.0);
+    QCOMPARE(s.client->transmitState()->forwardAdcVolts(), 0.0);
+    QCOMPARE(s.client->transmitState()->reflectedAdcVolts(), 0.0);
+}
+
 // One set of radio samples feeds a local window's PA Values and, through the
 // Core, a remote window's: every value and the peak and minimum match.
 void TstRemoteTxReadings::paValuesMatchesTheLocalPageOnTheSameInputs()
@@ -375,8 +442,14 @@ void TstRemoteTxReadings::paValuesMatchesTheLocalPageOnTheSameInputs()
             && remotePage.swrTextForTest().section(QLatin1String("  ("), 0, 0)
                    == localPage.swrTextForTest().section(QLatin1String("  ("), 0, 0)
             && remotePage.fwdRawTextForTest() == localPage.fwdRawTextForTest()
+            && localPage.fwdRawTextForTest() == QString::number(
+                   s.server->transmitState()->forwardRawPowerWatts(), 'f', 2) + QStringLiteral(" W")
             && remotePage.fwdVoltageTextForTest() == localPage.fwdVoltageTextForTest()
+            && localPage.fwdVoltageTextForTest() == QString::number(
+                   s.server->transmitState()->forwardAdcVolts(), 'f', 2) + QStringLiteral(" V")
             && remotePage.revVoltageTextForTest() == localPage.revVoltageTextForTest()
+            && localPage.revVoltageTextForTest() == QString::number(
+                   s.server->transmitState()->reflectedAdcVolts(), 'f', 2) + QStringLiteral(" V")
             && remotePage.fwdAdcTextForTest() == localPage.fwdAdcTextForTest()
             && remotePage.revAdcTextForTest() == localPage.revAdcTextForTest();
     };

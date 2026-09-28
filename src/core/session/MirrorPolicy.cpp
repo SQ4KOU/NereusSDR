@@ -917,6 +917,9 @@ const MirrorPolicy::Entry kEntries[] = {
     { "TransmitState", "reflectedAdcRaw", MirrorDirection::Outbound },
     // Task 33 follow-up (txReadingsVersion 1): the COMP reading.
     { "TransmitState", "compressionDb", MirrorDirection::Outbound },
+    { "TransmitState", "forwardRawPowerWatts", MirrorDirection::Outbound },
+    { "TransmitState", "forwardAdcVolts", MirrorDirection::Outbound },
+    { "TransmitState", "reflectedAdcVolts", MirrorDirection::Outbound },
 
     // Normal PS3 configuration is distinct from operational arming/actions.
     { "PureSignalSettings", "autoCalEnabled", MirrorDirection::Bidirectional },

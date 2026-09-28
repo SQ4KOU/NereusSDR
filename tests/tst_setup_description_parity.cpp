@@ -354,11 +354,14 @@ private slots:
             .value("sections").toArray();
         QCOMPARE(sections.size(), 3);
         const QStringList expectedIds{QStringLiteral("pa.values.forwardCalibrated"),
+                                      QStringLiteral("pa.values.forwardRawPower"),
                                       QStringLiteral("pa.values.reflectedPower"),
                                       QStringLiteral("pa.values.swr"),
                                       QStringLiteral("pa.values.drive"),
                                       QStringLiteral("pa.values.paCurrent"),
                                       QStringLiteral("pa.values.dcVoltage"),
+                                      QStringLiteral("pa.values.forwardVoltage"),
+                                      QStringLiteral("pa.values.reflectedVoltage"),
                                       QStringLiteral("pa.values.forwardAdc"),
                                       QStringLiteral("pa.values.reflectedAdc")};
         QStringList actualIds;
@@ -391,7 +394,7 @@ private slots:
         QCOMPARE(actualIds, expectedIds);
         const QJsonArray power = sections.first().toObject().value("controls").toArray();
         const QJsonArray raw = sections.last().toObject().value("controls").toArray();
-        QCOMPARE(power.size(), 4);
+        QCOMPARE(power.size(), 5);
         QCOMPARE(raw.size(), 2);
         model.transmitModel().setPower(37);
         QCOMPARE(page.driveTextForTest(), QStringLiteral("37 W"));

@@ -886,7 +886,7 @@ change shows as surface drift and as a change to this table.
 | `sessionHolderVersion` | 1 |
 | `remoteTxVersion` | 2 |
 | `txStateVersion` | 2 |
-| `txReadingsVersion` | 1 |
+| `txReadingsVersion` | 2 |
 | `mediaTunnelVersion` | 1 |
 | `mediaRelayRoutingVersion` | 1 |
 | `settingsHygieneVersion` | 1 |
@@ -1503,7 +1503,7 @@ When a feature is off, its version is 0:
   the read-only `txState` object (section 18.8) to that peer; any other
   peer never sees it or its schema.
 - `txReadingsVersion` (remote-window parity Task 33, R-R3-49, R-R3-32):
-  sent right after `txStateVersion` and only with it. 1 on a Core with its
+  sent right after `txStateVersion` and only with it. 2 on a Core with its
   own radio model and record streams (`recordStreamVersion` 1), 0
   otherwise. At 1 `txState` also carries `forwardAdcRaw` and
   `reflectedAdcRaw`, the radio's raw forward and reflected power readings,
@@ -1511,7 +1511,9 @@ When a feature is off, its version is 0:
   the CFC bar chart's data (section 7.7). A window's PA Values page and
   CFC dialog show their transmit readings from these; on a Core that sends
   0 or no entry each shows "This Core does not send this reading. Updating
-  the Core may help.", never a 0.
+  the Core may help.", never a 0. At 2 the Core also sends its own scaled
+  raw forward power (W) and forward/reverse ADC voltage (V), each as outbound
+  f64. An older client using the version-1 fields keeps its existing behavior.
 
 `txPermitted` (iPhone app plan Task 34) is true only for a session the
 station transmit gate permits (section 18.1): false until
@@ -2660,6 +2662,10 @@ Notes on the keys:
   raw forward and reflected power readings, `forwardAdcRaw` and
   `reflectedAdcRaw` (i64), appended after `swrWindBackLatched`, and the COMP
   reading, `compressionDb` (f64), after them.
+  At `txReadingsVersion` 2, `forwardRawPowerWatts`, `forwardAdcVolts`, and
+  `reflectedAdcVolts` (f64) follow `compressionDb`. The Core evaluates the
+  existing `PaTelemetryScaling` curves for its current hardware model and
+  raw ADC samples; a client need not reproduce those board curves.
 - **`catalog`.** The values the Core owns and an app draws its controls
   from (section 7.4). Both properties are `outbound`
   (`StationCatalog`): `json` (`utf8`), the catalogue, and `revision`
@@ -6374,8 +6380,9 @@ is refused as any outbound property's is.
 | `keyedForSeconds` | How long the key now on has been on, in whole seconds on the Core's clock when this is sent (ruling 10.3); 0 while unkeyed. It supersedes `keyedSinceMs`, which a Core still sends |
 | `highSwr` | The Core's high-SWR protection has tripped (parity Task 28, appended after `stopEpoch`; sent by every Core that sends `txState`, whatever its `txDisplayVersion`): what the Core's own window hands its transmitting pan's high-SWR border |
 | `swrWindBackLatched` | The protection's drive fold-back has latched; the border shows fold-back while this and `highSwr` are both true |
-| `forwardAdcRaw`, `reflectedAdcRaw` | The radio's raw forward and reflected power readings (i64, the ADC counts of its last PA sample, transmitting or not; parity Task 33, `txReadingsVersion` 1; 0 before the first sample). A window scales them exactly as its own PA Values page scales a local radio's (`PaTelemetryScaling`: raw forward power by `computeAlexFwdPower`, the forward and reflected RF voltage), with the Core's `hpsdrModel`; the Core sends the raw values, never a scaled one |
+| `forwardAdcRaw`, `reflectedAdcRaw` | The radio's raw forward and reflected power readings (i64, the ADC counts of its last PA sample, transmitting or not; parity Task 33, `txReadingsVersion` 1; 0 before the first sample). Existing remote desktop windows scale these with the Core's `hpsdrModel` as their native PA Values page does |
 | `compressionDb` | The COMP reading (f64, dB; parity Task 33 follow-up, `txReadingsVersion` 1), as the Core's own Compression meters show it: Thetis's reading, the transmit channel's `TXA_COMP_AV` floored at -30 dB (console.cs:46979, dsp.cs:1013-1014 [v2.10.3.15]), so -30 with the speech processor off; -400, no reading, while the Core has no transmit channel. Read with the other meters |
+| `forwardRawPowerWatts`, `forwardAdcVolts`, `reflectedAdcVolts` | Core-scaled raw forward power (W) and forward/reverse ADC voltage (V), f64, `txReadingsVersion` 2. The Core calls the same `PaTelemetryScaling` functions as native PA Values with its current radio model, on the existing PA sample/meter cadence and radio change. All three are outbound only and reset with the session |
 
 The AM Mod Monitor's readings (peaks, holds, carrier, lamps and envelope
 trace) are not `txState` properties: they travel as the `txAmModulation`
