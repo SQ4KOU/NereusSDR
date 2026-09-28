@@ -354,6 +354,8 @@ private slots:
     void radioStatusIsOmittedForMinorTenPeer();
     void clientKeepsRadioStatusOnlyWhenNegotiated_data();
     void clientKeepsRadioStatusOnlyWhenNegotiated();
+    void clientKeepsRadioDiagnosticsOnlyWhenNegotiated_data();
+    void clientKeepsRadioDiagnosticsOnlyWhenNegotiated();
     void nnrLimitReachesMinorElevenPeerAndTryAgainClearsIt();
     void nnrLimitIsOmittedForMinorTenPeer();
     void minorTenWriteThatClearsTheLimitCarriesNoNnrLimit();
@@ -827,7 +829,7 @@ void TstStationSession::hostTelemetryReachesVersionTwoPeer()
     auto model = makeStationRadioModel(0);
     StationServer server(model.get(), settings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     server.setTelemetryEnabled(true);
-    QCOMPARE(server.buildCapabilities().stationTelemetryVersion, 5);
+    QCOMPARE(server.buildCapabilities().stationTelemetryVersion, 6);
     RadioModel remote(RadioModel::Role::Remote);
     SettingsProxy proxy;
     StationClient client(&remote, &proxy);
@@ -965,7 +967,7 @@ void TstStationSession::receiverLoadReachesVersionThreePeer()
     auto model = makeStationRadioModel(0);
     StationServer server(model.get(), settings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     server.setTelemetryEnabled(true);
-    QCOMPARE(server.buildCapabilities().stationTelemetryVersion, 5);
+    QCOMPARE(server.buildCapabilities().stationTelemetryVersion, 6);
     RadioModel remote(RadioModel::Role::Remote);
     SettingsProxy proxy;
     StationClient client(&remote, &proxy);
@@ -1118,7 +1120,8 @@ void TstStationSession::radioStatusIsOmittedForMinorTenPeer()
     QTemporaryDir settingsDir;
     AppSettings settings(settingsDir.filePath(QStringLiteral("radio-status-old.settings")));
     auto model = makeStationRadioModel(0);
-    StationServer server(model.get(), settings, m_securityDir.path());
+    StationServer server(model.get(), settings,
+                         NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     server.setTelemetryEnabled(true);
     auto* station = new LoopbackTransport(QStringLiteral("minor10-radio-station"), this);
     auto* peer = new LoopbackTransport(QStringLiteral("minor10-radio-client"), this);
@@ -1140,6 +1143,10 @@ void TstStationSession::radioStatusIsOmittedForMinorTenPeer()
     snapshot.radio.paTemperatureCelsius = 40.0;
     snapshot.radio.packetLossPercent = 1.0;
     snapshot.radio.udpPacketsSeen = 10;
+    snapshot.radio.connectionAgeMs = 12345;
+    snapshot.radio.radioUdpBasePort = 41024;
+    snapshot.radio.adcOverloads = QVector<StationAdcOverloadTelemetry>{
+        {0, 1, 100, true, 100}};
     QVERIFY(server.sendTelemetry(snapshot, server.sessionEpoch()));
     QByteArray wire;
     QTRY_VERIFY([&] {
@@ -1211,6 +1218,65 @@ void TstStationSession::clientKeepsRadioStatusOnlyWhenNegotiated()
     QCOMPARE(received.radio.paVolts.has_value(), kept);
     QCOMPARE(received.radio.jitterMs.has_value(), kept);
     QCOMPARE(received.radio.rxMbps, std::optional<double>(3.0));
+}
+
+void TstStationSession::clientKeepsRadioDiagnosticsOnlyWhenNegotiated_data()
+{
+    QTest::addColumn<int>("minor");
+    QTest::addColumn<int>("version");
+    QTest::addColumn<bool>("kept");
+    QTest::newRow("minor 11, version 6")
+        << int(kReceiverLoadSessionProtocolMinor) << 6 << true;
+    QTest::newRow("minor 11, version 5")
+        << int(kReceiverLoadSessionProtocolMinor) << 5 << false;
+    QTest::newRow("minor 10, version 6")
+        << int(kReceiverLoadSessionProtocolMinor - 1) << 6 << false;
+}
+
+void TstStationSession::clientKeepsRadioDiagnosticsOnlyWhenNegotiated()
+{
+    QFETCH(int, minor);
+    QFETCH(int, version);
+    QFETCH(bool, kept);
+    RadioModel remote(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&remote, &proxy);
+    QSignalSpy samples(&client, &StationClient::telemetryReceived);
+    auto* station = new LoopbackTransport(QStringLiteral("raw-diagnostics-station"), this);
+    auto* peer = new LoopbackTransport(QStringLiteral("raw-diagnostics-client"), this);
+    station->linkTo(peer);
+    client.startSession(peer, QStringLiteral("test-token"));
+    const auto send = [&](const SessionMessage& message) {
+        station->sendText(SessionMessages::encode(message));
+    };
+    send(SessionMessages::hello(kSessionProtocolMajor, static_cast<quint16>(minor), 6,
+                                QStringLiteral("station")));
+    send(SessionMessages::authResult(true, {}, false));
+    StationCapabilities caps;
+    caps.stationTelemetryVersion = version;
+    send(SessionMessages::capabilities(caps.toUpdates()));
+    send(SessionMessages::snapshotComplete());
+    QTRY_VERIFY(client.telemetryAvailable());
+    SessionMessage sample;
+    sample.kind = SessionMessageKind::StationTelemetry;
+    sample.telemetry.sequence = 1;
+    sample.telemetry.radio.connected = true;
+    sample.telemetry.radio.connectionAgeMs = 12345;
+    sample.telemetry.radio.radioUdpBasePort = 41024;
+    sample.telemetry.radio.adcOverloads = QVector<StationAdcOverloadTelemetry>{
+        {0, 1, 100, true, 100}};
+    send(sample);
+    QTRY_COMPARE(samples.count(), 1);
+    const StationRadioTelemetry& radio =
+        qvariant_cast<StationTelemetrySnapshot>(samples.first().at(0)).radio;
+    QCOMPARE(radio.connectionAgeMs.has_value(), kept);
+    QCOMPARE(radio.radioUdpBasePort.has_value(), kept);
+    QCOMPARE(radio.adcOverloads.has_value(), kept);
+    if (kept) {
+        QCOMPARE(radio.connectionAgeMs, std::optional<qint64>(12345));
+        QCOMPARE(radio.radioUdpBasePort, std::optional<qint64>(41024));
+        QCOMPARE(radio.adcOverloads->at(0).overloaded, std::optional<bool>(true));
+    }
 }
 
 // R-R3-40: a current GUI sees the Core's runtime NNR step-back and asks for

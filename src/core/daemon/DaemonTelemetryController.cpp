@@ -216,7 +216,7 @@ void DaemonTelemetryController::requestRadioObservation()
 
 void DaemonTelemetryController::onRadioObservation(
     quint64 requestId, double rxMbps, double txMbps, bool hasRtt,
-    qint64 rttMs, qint64 rttAgeMs)
+    qint64 rttMs, qint64 rttAgeMs, RadioDiagnosticsObservation diagnostics)
 {
     if (m_epoch == 0 || requestId == 0
         || requestId != m_outstandingRadioRequestId
@@ -229,6 +229,7 @@ void DaemonTelemetryController::onRadioObservation(
     RadioObservation observation;
     observation.rxMbps = rxMbps;
     observation.txMbps = txMbps;
+    observation.diagnostics = std::move(diagnostics);
     observation.requestedElapsedMs = m_radioRequestElapsedMs;
     if (hasRtt && rttMs >= 0 && rttAgeMs >= 0) {
         observation.rttMs = rttMs;
@@ -250,16 +251,50 @@ void DaemonTelemetryController::applyRadioObservation(
 
     const qint64 observationAgeMs = std::max<qint64>(
         0, sampledElapsedMs - m_radioObservation->requestedElapsedMs);
-    if (observationAgeMs > kSamplePeriodMs * kObservationStalePeriods) {
-        return;
+    const bool fresh = observationAgeMs <= kSamplePeriodMs * kObservationStalePeriods;
+    if (fresh) {
+        snapshot.radio.rxMbps = m_radioObservation->rxMbps;
+        snapshot.radio.txMbps = m_radioObservation->txMbps;
+        if (m_radioObservation->rttMs && m_radioObservation->rttAgeMs) {
+            snapshot.radio.rttMs = m_radioObservation->rttMs;
+            snapshot.radio.rttAgeMs = *m_radioObservation->rttAgeMs
+                + observationAgeMs;
+        }
+        if (m_radioObservation->diagnostics.radioUdpBasePort) {
+            snapshot.radio.radioUdpBasePort =
+                *m_radioObservation->diagnostics.radioUdpBasePort;
+        }
     }
 
-    snapshot.radio.rxMbps = m_radioObservation->rxMbps;
-    snapshot.radio.txMbps = m_radioObservation->txMbps;
-    if (m_radioObservation->rttMs && m_radioObservation->rttAgeMs) {
-        snapshot.radio.rttMs = m_radioObservation->rttMs;
-        snapshot.radio.rttAgeMs = *m_radioObservation->rttAgeMs
-            + observationAgeMs;
+    // A stale queued observation may retain historical transition counts,
+    // but it cannot claim a current overloaded/clear bit. Use request time
+    // (rather than reply time) so queuing only makes ages older.
+    constexpr qint64 kMaxExactJsonInteger = 9007199254740991LL;
+    const auto adjustedAge = [observationAgeMs](qint64 age) {
+        return age >= kMaxExactJsonInteger - observationAgeMs
+            ? kMaxExactJsonInteger : age + observationAgeMs;
+    };
+    const int adcCount = m_radioModel
+        ? std::clamp(m_radioModel->boardCapabilities().adcCount, 0, 3) : 0;
+    QVector<StationAdcOverloadTelemetry> adcs;
+    for (int adc = 0; adc < adcCount; ++adc) {
+        const RadioAdcOverloadObservation& status =
+            m_radioObservation->diagnostics.adcOverloads[adc];
+        if (!status.known) { continue; }
+        StationAdcOverloadTelemetry entry;
+        entry.adc = adc;
+        entry.eventsSinceConnection = status.eventsSinceConnection;
+        entry.statusAgeMs = adjustedAge(status.statusAgeMs);
+        if (fresh && *entry.statusAgeMs <= kSamplePeriodMs * kObservationStalePeriods) {
+            entry.overloaded = status.active;
+        }
+        if (status.lastOverloadAgeMs) {
+            entry.lastOverloadAgeMs = adjustedAge(*status.lastOverloadAgeMs);
+        }
+        adcs.append(entry);
+    }
+    if (!adcs.isEmpty()) {
+        snapshot.radio.adcOverloads = adcs;
     }
 }
 
@@ -274,6 +309,7 @@ void DaemonTelemetryController::applyRadioStatus(StationTelemetrySnapshot& snaps
     if (!snapshot.radio.connected || !m_radioModel || !m_radioConnection) {
         return;
     }
+    snapshot.radio.connectionAgeMs = m_radioModel->connectionAgeMs();
     const RadioModel::PaReadings pa = m_radioModel->paReadings();
     snapshot.radio.paVolts = pa.paVolts;
     snapshot.radio.supplyVolts = pa.supplyVolts;

@@ -59,6 +59,18 @@ public:
     void setMicXlr(bool) override {}
     void setWatchdogEnabled(bool) override {}
 
+    void markConnectedForDiagnostics(quint16 port)
+    {
+        m_radioInfo.port = port;
+        m_radioInfo.macAddress = QStringLiteral("AA:BB:CC:DD:EE:FF");
+        setState(ConnectionState::Connected);
+    }
+    void retireForDiagnostics() { setState(ConnectionState::LinkLost); }
+    void observeAdcsForDiagnostics(quint8 mask, quint8 bits)
+    {
+        observeAdcOverloads(mask, bits);
+    }
+
     // R-R3-32 (parity Task 6): drive the link counters as the receive path
     // would: `count` datagrams 1 ms apart on stream 0, one sequence error.
     void feedLinkStatsForTest(int count)
@@ -296,7 +308,7 @@ private slots:
         // 4 since remote-window parity Task 6 (the radio's PA readings and
         // link quality), 5 since Task 14 (the HL2 link); host telemetry came
         // with 2.
-        QCOMPARE(h.server.buildCapabilities().stationTelemetryVersion, 5);
+        QCOMPARE(h.server.buildCapabilities().stationTelemetryVersion, 6);
         QSignalSpy samples(&h.client, &StationClient::telemetryReceived);
         h.connectClient(this);
         QTRY_VERIFY(h.client.telemetryAvailable());
@@ -574,6 +586,206 @@ private slots:
         QVERIFY(snapshot.radio.hasNoRadioStatus());
     }
 
+    void radioDiagnosticsKeepConnectionEpochAcrossClientSessions()
+    {
+        SessionHarness h;
+        h.station.setBoardForTest(HPSDRHW::Saturn);
+        QCOMPARE(h.station.boardCapabilities().adcCount, 2);
+        qint64 nowMs = 0;
+        DaemonTelemetryController controller(
+            &h.server, &h.station, nullptr, nullptr, [&] { return nowMs; });
+        controller.disableAutomaticSamplingForTest();
+        h.server.setTelemetryEnabled(true);
+        NullRadioConnection connection;
+        connection.markConnectedForDiagnostics(41024);
+        connection.observeAdcsForDiagnostics(0x07, 0x07);
+        h.station.injectConnectionForTest(&connection);
+        QTest::qWait(15); // The Core connection predates the first client.
+        const qint64 beforeSessionAge = *h.station.connectionAgeMs();
+        QVERIFY(beforeSessionAge > 0);
+
+        QSignalSpy replies(&connection, &RadioConnection::telemetryObservationReady);
+        QSignalSpy samples(&h.client, &StationClient::telemetryReceived);
+        h.connectClient(this);
+        QTRY_VERIFY(h.client.telemetryAvailable());
+        QTRY_VERIFY(replies.count() >= 1);
+        QCoreApplication::sendPostedEvents(&controller, QEvent::MetaCall);
+        nowMs = 100;
+        controller.sampleNow();
+        QTRY_COMPARE(samples.count(), 1);
+        StationTelemetrySnapshot first = lastSnapshot(samples);
+        QVERIFY(first.radio.connected);
+        QVERIFY(first.radio.connectionAgeMs);
+        QVERIFY(*first.radio.connectionAgeMs >= beforeSessionAge);
+        QCOMPARE(first.radio.radioUdpBasePort, std::optional<qint64>(41024));
+        QVERIFY(first.radio.adcOverloads);
+        QCOMPARE(first.radio.adcOverloads->size(), 2); // board has no ADC2
+        QCOMPARE(first.radio.adcOverloads->at(0).eventsSinceConnection, 1);
+        QCOMPARE(first.radio.adcOverloads->at(0).overloaded, std::optional<bool>(true));
+
+        h.client.disconnectFromStation(QStringLiteral("new diagnostics session"));
+        QTRY_VERIFY(!controller.isCollecting());
+        const int repliesBeforeReconnect = replies.count();
+        h.connectClient(this);
+        QTRY_VERIFY(h.client.telemetryAvailable());
+        QTRY_VERIFY(replies.count() > repliesBeforeReconnect);
+        QCoreApplication::sendPostedEvents(&controller, QEvent::MetaCall);
+        QTest::qWait(5);
+        nowMs = 100; // New session clock starts again; connection age does not.
+        controller.sampleNow();
+        QTRY_COMPARE(samples.count(), 2);
+        const StationTelemetrySnapshot second = lastSnapshot(samples);
+        QCOMPARE(second.sequence, quint32{1});
+        QVERIFY(second.radio.connectionAgeMs);
+        QVERIFY(*second.radio.connectionAgeMs > *first.radio.connectionAgeMs);
+        QVERIFY(second.radio.adcOverloads);
+        QCOMPARE(second.radio.adcOverloads->at(0).eventsSinceConnection, 1);
+
+        h.station.setConnectionStateForTest(ConnectionState::LinkLost);
+        QVERIFY(!h.station.connectionAgeMs());
+        h.station.injectConnectionForTest(nullptr);
+        QVERIFY(!h.station.connectionAgeMs());
+        nowMs = 200;
+        controller.sampleNow();
+        QTRY_COMPARE(samples.count(), 3);
+        QVERIFY(lastSnapshot(samples).radio.hasNoRadioDiagnostics());
+
+        QElapsedTimer freshEpochEnclosure;
+        freshEpochEnclosure.start();
+        connection.retireForDiagnostics();
+        connection.markConnectedForDiagnostics(41024); // same MAC, same QObject
+        h.station.injectConnectionForTest(&connection);
+        const int repliesBeforeRadioReconnect = replies.count();
+        QTRY_VERIFY(replies.count() > repliesBeforeRadioReconnect);
+        QCoreApplication::sendPostedEvents(&controller, QEvent::MetaCall);
+        nowMs = 300;
+        controller.sampleNow();
+        QTRY_COMPARE(samples.count(), 4);
+        const StationTelemetrySnapshot freshRadio = lastSnapshot(samples);
+        QVERIFY(freshRadio.radio.connectionAgeMs);
+        QVERIFY(*freshRadio.radio.connectionAgeMs <= freshEpochEnclosure.elapsed());
+        QCOMPARE(freshRadio.radio.radioUdpBasePort, std::optional<qint64>(41024));
+        QVERIFY(!freshRadio.radio.adcOverloads); // old positive count retired
+        h.station.injectConnectionForTest(nullptr);
+    }
+
+    void secondClientSharesRadioAgeAndOverloadEpoch()
+    {
+        SessionHarness h;
+        h.station.setBoardForTest(HPSDRHW::Saturn);
+        h.server.setTelemetryEnabled(true);
+        NullRadioConnection connection;
+        connection.markConnectedForDiagnostics(41024);
+        connection.observeAdcsForDiagnostics(0x01, 0x01);
+        h.station.injectConnectionForTest(&connection);
+        QSignalSpy replies(&connection, &RadioConnection::telemetryObservationReady);
+        QSignalSpy started(&h.server, &StationServer::telemetrySessionStarted);
+        DaemonTelemetryController first(&h.server, &h.station, nullptr);
+        first.disableAutomaticSamplingForTest();
+        QSignalSpy firstSamples(&h.client, &StationClient::telemetryReceived);
+        h.connectClient(this);
+        QTRY_VERIFY(h.client.telemetryAvailable());
+        QTRY_VERIFY(replies.count() >= 1);
+        QCoreApplication::sendPostedEvents(&first, QEvent::MetaCall);
+        first.sampleNow();
+        QTRY_COMPARE(firstSamples.count(), 1);
+        const StationTelemetrySnapshot firstReading = lastSnapshot(firstSamples);
+        QVERIFY(firstReading.radio.adcOverloads);
+
+        RadioModel secondRemote(RadioModel::Role::Remote);
+        SettingsProxy secondProxy;
+        StationClient secondClient(&secondRemote, &secondProxy);
+        QSignalSpy secondSamples(&secondClient, &StationClient::telemetryReceived);
+        auto* stationLink = new LoopbackTransport(QStringLiteral("second-telemetry-station"), this);
+        auto* clientLink = new LoopbackTransport(QStringLiteral("second-telemetry-client"), this);
+        stationLink->linkTo(clientLink);
+        const int startedBeforeSecond = started.count();
+        secondClient.startSession(clientLink, h.server.token());
+        h.server.acceptTransport(stationLink);
+        QTRY_VERIFY(secondClient.telemetryAvailable());
+        QTRY_VERIFY(started.count() > startedBeforeSecond);
+        const quint64 secondEpoch = started.constLast().at(0).toULongLong();
+        DaemonTelemetryController second(&h.server, &h.station, nullptr);
+        second.disableAutomaticSamplingForTest();
+        second.bindToSession(secondEpoch);
+        const int repliesBeforeSecond = replies.count();
+        QTRY_VERIFY(replies.count() > repliesBeforeSecond);
+        QCoreApplication::sendPostedEvents(&second, QEvent::MetaCall);
+        second.sampleNow();
+        QTRY_COMPARE(secondSamples.count(), 1);
+        const StationTelemetrySnapshot secondReading = lastSnapshot(secondSamples);
+        QCOMPARE(secondReading.sequence, quint32{1});
+        QCOMPARE(secondReading.radio.radioUdpBasePort, std::optional<qint64>(41024));
+        QVERIFY(secondReading.radio.connectionAgeMs);
+        QVERIFY(firstReading.radio.connectionAgeMs);
+        QVERIFY(*secondReading.radio.connectionAgeMs >= *firstReading.radio.connectionAgeMs);
+        QVERIFY(secondReading.radio.adcOverloads);
+        QCOMPARE(secondReading.radio.adcOverloads->at(0).eventsSinceConnection, 1);
+        QCOMPARE(secondReading.radio.adcOverloads->at(0).overloaded,
+                 std::optional<bool>(true));
+        QVERIFY(h.client.telemetryAvailable()); // second admission did not retire first
+        h.station.injectConnectionForTest(nullptr);
+    }
+
+    void destroyedConnectionRetiresModelAgeBeforeStateNotification()
+    {
+        SessionHarness h;
+        auto* connection = new NullRadioConnection;
+        connection->markConnectedForDiagnostics(41024);
+        h.station.injectConnectionForTest(connection);
+        QVERIFY(h.station.connectionAgeMs());
+
+        delete connection;
+        QVERIFY(!h.station.connectionAgeMs());
+        h.station.injectConnectionForTest(nullptr);
+    }
+
+    void silentAdcStatusBecomesUnknownWithFreshConnectionReplies()
+    {
+        SessionHarness h;
+        h.station.setBoardForTest(HPSDRHW::Saturn);
+        qint64 nowMs = 0;
+        DaemonTelemetryController controller(
+            &h.server, &h.station, nullptr, nullptr, [&] { return nowMs; });
+        controller.disableAutomaticSamplingForTest();
+        h.server.setTelemetryEnabled(true);
+        NullRadioConnection connection;
+        connection.markConnectedForDiagnostics(41024);
+        connection.observeAdcsForDiagnostics(0x01, 0x01);
+        h.station.injectConnectionForTest(&connection);
+        QSignalSpy replies(&connection, &RadioConnection::telemetryObservationReady);
+        QSignalSpy samples(&h.client, &StationClient::telemetryReceived);
+        h.connectClient(this);
+        QTRY_VERIFY(h.client.telemetryAvailable());
+        QTRY_VERIFY(replies.count() >= 1);
+        QCoreApplication::sendPostedEvents(&controller, QEvent::MetaCall);
+        nowMs = 100;
+        controller.sampleNow();
+        QTRY_COMPARE(samples.count(), 1);
+        QCOMPARE(lastSnapshot(samples).radio.adcOverloads->at(0).overloaded,
+                 std::optional<bool>(true));
+
+        // No new status arrives, but the connection still answers telemetry
+        // requests. A new reply must not renew the old overload bit.
+        QTest::qWait(3100);
+        const int beforeFreshReply = replies.count();
+        nowMs = 3200;
+        controller.sampleNow();
+        QTRY_COMPARE(samples.count(), 2);
+        QTRY_VERIFY(replies.count() > beforeFreshReply);
+        QCoreApplication::sendPostedEvents(&controller, QEvent::MetaCall);
+        nowMs = 3300;
+        controller.sampleNow();
+        QTRY_COMPARE(samples.count(), 3);
+        const StationRadioTelemetry& radio = lastSnapshot(samples).radio;
+        QCOMPARE(radio.radioUdpBasePort, std::optional<qint64>(41024));
+        QVERIFY(radio.adcOverloads);
+        QCOMPARE(radio.adcOverloads->at(0).eventsSinceConnection, 1);
+        QVERIFY(!radio.adcOverloads->at(0).overloaded);
+        QVERIFY(*radio.adcOverloads->at(0).statusAgeMs > 3000);
+        h.station.injectConnectionForTest(nullptr);
+    }
+
     // R-R3-32 (remote-window parity Task 14): an HL2 Core's bandwidth
     // monitor (the one its HL2 I/O tab, Radio Status and Connection Quality
     // read) rides the sample at stationTelemetryVersion 5, and none rides
@@ -622,6 +834,7 @@ private slots:
     void queuedRadioReadsRejectAReplyFromTheReplacedConnection()
     {
         SessionHarness h;
+        h.station.setBoardForTest(HPSDRHW::Saturn);
         qint64 nowMs = 0;
         DaemonTelemetryController controller(
             &h.server, &h.station, nullptr, nullptr, [&] { return nowMs; });
@@ -630,6 +843,8 @@ private slots:
 
         ThreadConnection oldOwner(h.station);
         NullRadioConnection* const oldConnection = oldOwner.connection.data();
+        oldConnection->markConnectedForDiagnostics(40001);
+        oldConnection->observeAdcsForDiagnostics(0x01, 0x01);
         oldConnection->recordBytesReceived(125000); // 1 Mbps over 1 s.
         oldConnection->recordBytesSent(125000);
         oldOwner.moveToOwnerThread(false); // Leave stopped to hold the reply.
@@ -649,6 +864,8 @@ private slots:
         newOwner.moveToOwnerThread(true);
         QVERIFY(QMetaObject::invokeMethod(
             newConnection, [newConnection] {
+                newConnection->markConnectedForDiagnostics(40002);
+                newConnection->observeAdcsForDiagnostics(0x01, 0x00);
                 newConnection->recordBytesReceived(250000); // 2 Mbps over 1 s.
                 newConnection->recordBytesSent(375000);     // 3 Mbps over 1 s.
                 newConnection->notePingSent();
@@ -693,6 +910,11 @@ private slots:
         QVERIFY(snapshot.radio.rttMs);
         QVERIFY(snapshot.radio.rttAgeMs);
         QVERIFY(*snapshot.radio.rttAgeMs >= *snapshot.radio.rttMs);
+        QCOMPARE(snapshot.radio.radioUdpBasePort, std::optional<qint64>(40002));
+        QVERIFY(snapshot.radio.adcOverloads);
+        QCOMPARE(snapshot.radio.adcOverloads->at(0).eventsSinceConnection, 0);
+        QCOMPARE(snapshot.radio.adcOverloads->at(0).overloaded,
+                 std::optional<bool>(false));
 
         // Stop owner-thread replies and advance beyond three periods. The
         // last radio value becomes unavailable rather than being repeated as
@@ -708,6 +930,11 @@ private slots:
         QVERIFY(!stale.radio.txMbps);
         QVERIFY(!stale.radio.rttMs);
         QVERIFY(!stale.radio.rttAgeMs);
+        QVERIFY(!stale.radio.radioUdpBasePort);
+        QVERIFY(stale.radio.adcOverloads);
+        QCOMPARE(stale.radio.adcOverloads->at(0).eventsSinceConnection, 0);
+        QVERIFY(!stale.radio.adcOverloads->at(0).overloaded);
+        QVERIFY(*stale.radio.adcOverloads->at(0).statusAgeMs > 3000);
         newOwner.thread.start();
     }
 

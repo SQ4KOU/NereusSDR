@@ -305,6 +305,100 @@ bool encodeHl2Link(const StationRadioTelemetry& in, QJsonObject* radio)
     return true;
 }
 
+// V6 diagnostics are optional as a group. Every present entry is bounded and
+// its boolean describes a status observed within the last three seconds.
+bool decodeRadioDiagnostics(const QJsonObject& radio, StationRadioTelemetry* out)
+{
+    if (!optionalInteger(radio, QStringLiteral("connectionAgeMs"),
+                         &out->connectionAgeMs)
+        || !optionalInteger(radio, QStringLiteral("radioUdpBasePort"),
+                            &out->radioUdpBasePort)) {
+        return false;
+    }
+    if (out->radioUdpBasePort && (*out->radioUdpBasePort < 1
+                                  || *out->radioUdpBasePort > 65535)) {
+        return false;
+    }
+    const QString key = QStringLiteral("adcOverloads");
+    if (!radio.contains(key)) {
+        out->adcOverloads.reset();
+        return true;
+    }
+    if (!radio.value(key).isArray()) { return false; }
+    const QJsonArray entries = radio.value(key).toArray();
+    if (entries.size() > kMaxStationAdcOverloads) { return false; }
+    QVector<StationAdcOverloadTelemetry> decoded;
+    decoded.reserve(entries.size());
+    for (const QJsonValue& value : entries) {
+        if (!value.isObject()) { return false; }
+        const QJsonObject object = value.toObject();
+        qint64 adc = 0;
+        StationAdcOverloadTelemetry entry;
+        if (!integer(object.value(QStringLiteral("adc")), 2, &adc)
+            || !integer(object.value(QStringLiteral("eventsSinceConnection")),
+                        kMaxExactJsonInteger, &entry.eventsSinceConnection)
+            || !optionalInteger(object, QStringLiteral("statusAgeMs"),
+                                &entry.statusAgeMs)
+            || !optionalInteger(object, QStringLiteral("lastOverloadAgeMs"),
+                                &entry.lastOverloadAgeMs)) {
+            return false;
+        }
+        entry.adc = static_cast<int>(adc);
+        for (const StationAdcOverloadTelemetry& prior : decoded) {
+            if (prior.adc == entry.adc) { return false; }
+        }
+        const QString overloadedKey = QStringLiteral("overloaded");
+        if (object.contains(overloadedKey)) {
+            if (!object.value(overloadedKey).isBool()) { return false; }
+            entry.overloaded = object.value(overloadedKey).toBool();
+            if (!entry.statusAgeMs || *entry.statusAgeMs > 3000
+                || (*entry.overloaded && entry.eventsSinceConnection == 0)) {
+                return false;
+            }
+        }
+        if (entry.lastOverloadAgeMs
+            && (entry.eventsSinceConnection == 0
+                || (entry.statusAgeMs && *entry.lastOverloadAgeMs < *entry.statusAgeMs))) {
+            return false;
+        }
+        decoded.append(entry);
+    }
+    out->adcOverloads = decoded;
+    return true;
+}
+
+bool encodeRadioDiagnostics(const StationRadioTelemetry& in, QJsonObject* radio)
+{
+    if (in.connectionAgeMs) {
+        radio->insert(QStringLiteral("connectionAgeMs"), *in.connectionAgeMs);
+    }
+    if (in.radioUdpBasePort) {
+        radio->insert(QStringLiteral("radioUdpBasePort"), *in.radioUdpBasePort);
+    }
+    if (in.adcOverloads) {
+        if (in.adcOverloads->size() > kMaxStationAdcOverloads) { return false; }
+        QJsonArray entries;
+        for (const StationAdcOverloadTelemetry& entry : *in.adcOverloads) {
+            QJsonObject object{{QStringLiteral("adc"), entry.adc},
+                               {QStringLiteral("eventsSinceConnection"),
+                                entry.eventsSinceConnection}};
+            if (entry.statusAgeMs) {
+                object.insert(QStringLiteral("statusAgeMs"), *entry.statusAgeMs);
+            }
+            if (entry.overloaded) {
+                object.insert(QStringLiteral("overloaded"), *entry.overloaded);
+            }
+            if (entry.lastOverloadAgeMs) {
+                object.insert(QStringLiteral("lastOverloadAgeMs"),
+                              *entry.lastOverloadAgeMs);
+            }
+            entries.append(object);
+        }
+        radio->insert(QStringLiteral("adcOverloads"), entries);
+    }
+    return true;
+}
+
 bool encodeRadioStatus(const StationRadioTelemetry& in, QJsonObject* radio)
 {
     for (const auto& [name, member] : kRadioReals) {
@@ -370,13 +464,15 @@ bool StationTelemetryCodec::decode(const QJsonObject& object,
         || decoded.radio.rttMs.has_value() != decoded.radio.rttAgeMs.has_value()) {
         return false;
     }
-    if (!decodeRadioStatus(radio, &decoded.radio) || !decodeHl2Link(radio, &decoded.radio)) {
+    if (!decodeRadioStatus(radio, &decoded.radio) || !decodeHl2Link(radio, &decoded.radio)
+        || !decodeRadioDiagnostics(radio, &decoded.radio)) {
         return false;
     }
     if (!decoded.radio.connected && (decoded.radio.rxMbps || decoded.radio.txMbps
                                      || decoded.radio.rttMs
                                      || !decoded.radio.hasNoRadioStatus()
-                                     || !decoded.radio.hasNoHl2Link())) {
+                                     || !decoded.radio.hasNoHl2Link()
+                                     || !decoded.radio.hasNoRadioDiagnostics())) {
         return false;
     }
     for (const auto& [name, member] : kAudioRates) {
@@ -407,7 +503,8 @@ std::optional<QJsonObject> StationTelemetryCodec::encode(
     if (snapshot.radio.rttAgeMs) {
         radio.insert(QStringLiteral("rttAgeMs"), *snapshot.radio.rttAgeMs);
     }
-    if (!encodeRadioStatus(snapshot.radio, &radio) || !encodeHl2Link(snapshot.radio, &radio)) {
+    if (!encodeRadioStatus(snapshot.radio, &radio) || !encodeHl2Link(snapshot.radio, &radio)
+        || !encodeRadioDiagnostics(snapshot.radio, &radio)) {
         return std::nullopt;
     }
     QJsonObject audio{{QStringLiteral("active"), snapshot.audio.active},

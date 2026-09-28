@@ -9,6 +9,19 @@
 
 namespace NereusSDR {
 
+inline constexpr qsizetype kMaxStationAdcOverloads = 3;
+
+// One ADC's observed status on the current radio connection. A missing
+// overloaded value is unknown (including a status older than three seconds),
+// never an observed clear. The count is transitions into overload, not frames.
+struct StationAdcOverloadTelemetry {
+    int adc = 0; // 0..2, unique in one sample
+    qint64 eventsSinceConnection = 0;
+    std::optional<qint64> statusAgeMs;
+    std::optional<bool> overloaded;
+    std::optional<qint64> lastOverloadAgeMs;
+};
+
 // Units and ownership are part of the wire contract. An absent value has not
 // been measured; a present zero is an actual measurement. No field grants
 // admission, changes radio state or substitutes for heartbeat evidence.
@@ -50,6 +63,22 @@ struct StationRadioTelemetry {
     std::optional<double> hl2TxBytesPerSecond;
     std::optional<bool> hl2Throttled;
     std::optional<qint64> hl2SequenceGaps;
+
+    // Version 6, minor 11: monotonic age of the model's current connection,
+    // the live radio's outbound UDP base/control port, and parsed ADC status.
+    // P2 media roles use other ports. An absent ADC boolean is unknown.
+    std::optional<qint64> connectionAgeMs;
+    std::optional<qint64> radioUdpBasePort;
+    std::optional<QVector<StationAdcOverloadTelemetry>> adcOverloads;
+
+    bool hasNoRadioDiagnostics() const
+    {
+        return !connectionAgeMs && !radioUdpBasePort && !adcOverloads;
+    }
+    void clearRadioDiagnostics()
+    {
+        connectionAgeMs.reset(); radioUdpBasePort.reset(); adcOverloads.reset();
+    }
 
     // True when no version 5 field is present.
     bool hasNoHl2Link() const

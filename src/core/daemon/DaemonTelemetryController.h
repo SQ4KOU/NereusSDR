@@ -7,6 +7,7 @@
 #include "core/session/StationTelemetry.h"
 #include "core/session/media/DaemonMediaController.h"
 #include "core/ConnectionState.h"
+#include "core/RadioConnection.h"
 #include "models/ReceiverDspLoadSampler.h"
 
 #include <QElapsedTimer>
@@ -22,7 +23,6 @@
 
 namespace NereusSDR {
 
-class RadioConnection;
 class RadioModel;
 class StationServer;
 
@@ -85,7 +85,8 @@ private slots:
     void onSessionEnded(quint64 epoch);
     void onRadioConnectionStateChanged(ConnectionState state);
     void onRadioObservation(quint64 requestId, double rxMbps, double txMbps,
-                            bool hasRtt, qint64 rttMs, qint64 rttAgeMs);
+                            bool hasRtt, qint64 rttMs, qint64 rttAgeMs,
+                            RadioDiagnosticsObservation diagnostics);
 
 private:
     struct RadioObservation {
@@ -93,6 +94,7 @@ private:
         double txMbps = 0.0;
         std::optional<qint64> rttMs;
         std::optional<qint64> rttAgeMs;
+        RadioDiagnosticsObservation diagnostics;
         qint64 requestedElapsedMs = 0;
     };
 

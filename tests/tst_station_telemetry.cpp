@@ -143,6 +143,51 @@ private slots:
         radioField("fractional-rtt", "rttMs", 1.5);
         radioField("rtt-without-age", "rttAgeMs", QJsonValue(QJsonValue::Undefined));
         radioField("disconnected-with-current-rates", "connected", false);
+        radioField("negative-radio-connection-age", "connectionAgeMs", -1);
+        radioField("fractional-radio-connection-age", "connectionAgeMs", 1.5);
+        radioField("inexact-radio-connection-age", "connectionAgeMs", 9007199254740992.0);
+        radioField("zero-radio-udp-port", "radioUdpBasePort", 0);
+        radioField("fractional-radio-udp-port", "radioUdpBasePort", 1024.5);
+        radioField("oversized-radio-udp-port", "radioUdpBasePort", 65536);
+        radioField("adc-not-array", "adcOverloads", true);
+        radioField("adc-too-many", "adcOverloads", QJsonArray{
+            QJsonObject{{"adc", 0}, {"eventsSinceConnection", 0}},
+            QJsonObject{{"adc", 1}, {"eventsSinceConnection", 0}},
+            QJsonObject{{"adc", 2}, {"eventsSinceConnection", 0}},
+            QJsonObject{{"adc", 0}, {"eventsSinceConnection", 0}}});
+        radioField("duplicate-adc-index", "adcOverloads", QJsonArray{
+            QJsonObject{{"adc", 0}, {"eventsSinceConnection", 1}},
+            QJsonObject{{"adc", 0}, {"eventsSinceConnection", 2}}});
+        const auto oneAdc = [&](const char* name, QJsonObject entry) {
+            radioField(name, "adcOverloads", QJsonArray{entry});
+        };
+        oneAdc("adc-index-out-of-range", {{"adc", 3}, {"eventsSinceConnection", 0}});
+        oneAdc("adc-index-fractional", {{"adc", 0.5}, {"eventsSinceConnection", 0}});
+        oneAdc("adc-missing-count", {{"adc", 0}});
+        oneAdc("adc-negative-count", {{"adc", 0}, {"eventsSinceConnection", -1}});
+        oneAdc("adc-fractional-count", {{"adc", 0}, {"eventsSinceConnection", 1.5}});
+        oneAdc("adc-overloaded-not-boolean", {{"adc", 0}, {"eventsSinceConnection", 0},
+                                             {"statusAgeMs", 0}, {"overloaded", 1}});
+        oneAdc("adc-overloaded-without-status-age", {{"adc", 0},
+                {"eventsSinceConnection", 1}, {"overloaded", true}});
+        oneAdc("adc-overloaded-with-stale-status", {{"adc", 0},
+                {"eventsSinceConnection", 1}, {"statusAgeMs", 3001}, {"overloaded", true}});
+        oneAdc("adc-overloaded-without-event", {{"adc", 0},
+                {"eventsSinceConnection", 0}, {"statusAgeMs", 1}, {"overloaded", true}});
+        oneAdc("adc-last-overload-without-event", {{"adc", 0},
+                {"eventsSinceConnection", 0}, {"lastOverloadAgeMs", 1}});
+        oneAdc("adc-last-overload-newer-than-status", {{"adc", 0},
+                {"eventsSinceConnection", 1}, {"statusAgeMs", 100},
+                {"lastOverloadAgeMs", 50}});
+        oneAdc("adc-negative-status-age", {{"adc", 0},
+                {"eventsSinceConnection", 0}, {"statusAgeMs", -1}});
+        StationTelemetrySnapshot disconnectedSample = measured();
+        disconnectedSample.radio = {};
+        QJsonObject disconnected = *StationTelemetryCodec::encode(disconnectedSample);
+        QJsonObject disconnectedRadio = disconnected.value("radio").toObject();
+        disconnectedRadio.insert("adcOverloads", QJsonArray{});
+        disconnected.insert("radio", disconnectedRadio);
+        QTest::newRow("disconnected-even-empty-adc-array") << disconnected;
         auto audioField = [&](const char* name, const char* key, const QJsonValue& value) {
             QJsonObject audio = valid.value("audio").toObject();
             audio.insert(QString::fromLatin1(key), value);
@@ -162,6 +207,37 @@ private slots:
         QVERIFY(!StationTelemetryCodec::decode(payload, &previous));
         QCOMPARE(previous.sequence, 88u);
         QCOMPARE(previous.radio.rxMbps, std::optional<double>(7.25));
+    }
+
+    void radioDiagnosticsRoundTripPreservesUnknownAndMeasuredClear()
+    {
+        StationTelemetrySnapshot sample = measured();
+        sample.radio.connectionAgeMs = 123456;
+        sample.radio.radioUdpBasePort = 42000;
+        sample.radio.adcOverloads = QVector<StationAdcOverloadTelemetry>{
+            {0, 0, 25, false, std::nullopt},
+            {1, 2, 100, true, 100},
+            {2, 3, 4100, std::nullopt, 4200}};
+        const std::optional<QJsonObject> payload = StationTelemetryCodec::encode(sample);
+        QVERIFY(payload);
+        const QJsonObject radio = payload->value("radio").toObject();
+        QCOMPARE(radio.value("connectionAgeMs").toInteger(), 123456);
+        QCOMPARE(radio.value("radioUdpBasePort").toInteger(), 42000);
+        QCOMPARE(radio.value("adcOverloads").toArray().size(), 3);
+        const QJsonObject stale = radio.value("adcOverloads").toArray().at(2).toObject();
+        QVERIFY(!stale.contains("overloaded"));
+        StationTelemetrySnapshot decoded;
+        QVERIFY(StationTelemetryCodec::decode(*payload, &decoded));
+        QCOMPARE(decoded.radio.connectionAgeMs, std::optional<qint64>(123456));
+        QCOMPARE(decoded.radio.radioUdpBasePort, std::optional<qint64>(42000));
+        QVERIFY(decoded.radio.adcOverloads);
+        QCOMPARE(decoded.radio.adcOverloads->at(0).overloaded, std::optional<bool>(false));
+        QCOMPARE(decoded.radio.adcOverloads->at(1).eventsSinceConnection, 2);
+        QCOMPARE(decoded.radio.adcOverloads->at(2).statusAgeMs,
+                 std::optional<qint64>(4100));
+        QVERIFY(!decoded.radio.adcOverloads->at(2).overloaded);
+        decoded.radio.clearRadioDiagnostics();
+        QVERIFY(decoded.radio.hasNoRadioDiagnostics());
     }
 
     void encoderRefusesNonFiniteAndInconsistentValues()

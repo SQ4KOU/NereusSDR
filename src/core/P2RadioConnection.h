@@ -447,6 +447,8 @@ private slots:
     void onEstablishedSilenceTimeout();
 
 private:
+    int telemetryUdpBasePort() const override { return m_baseOutboundPort; }
+
     // --- Phase 3P-B: per-board codec chosen at connectToRadio() time ---
     std::unique_ptr<IP2Codec> m_codec;
     bool m_useLegacyP2Codec{false};
