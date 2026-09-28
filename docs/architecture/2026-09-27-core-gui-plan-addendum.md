@@ -2240,9 +2240,11 @@ colours for the same signal.
   pairing, an addressless saved Core, authenticated WebRelay connection,
   relaunch/reconnect and same-identity re-pairing. Cancel, service refusal,
   retry and shutdown cannot accidentally start a local Core. The previous
-  frozen preview remains under JJ's control; a signed, verified replacement
-  is being packaged. Live readiness still requires that replacement to open
-  with JJ's standing relaunch approval and his actual Core pairing test.
+  frozen preview remains under JJ's control. Signed `7d9292190` is now
+  packaged separately, with deep strict code-signature validation and a
+  manifest proving the GUI/private Core build identity and file hashes.
+  JJ's standing relaunch approval is pending for that ready replacement;
+  his actual Core pairing test remains to be performed.
 - Plan: approved rendezvous desktop-client flow and remote-window parity.
 
 ### G-108: App wording mixes American and British spellings
@@ -2267,8 +2269,8 @@ colours for the same signal.
   and its nine-suite root verification. The expanded audit found five more
   authored Setup help strings: signed `bfb09fd05` changes parameterised and
   greys to American spelling, with five worker suites passing (5.43 s);
-  root integration is pending. Compatibility keys, existing comments and
-  verbatim source text remain intact. The phone owner has the same ruling
+  root app/Core and all eight rebuilt integration suites pass (28.85 s).
+  Compatibility keys, existing comments and verbatim source text remain intact. The phone owner has the same ruling
   for phone-owned presentation strings.
 - Plan: consistent desktop/Core/phone-facing wording without compatibility or
   attribution changes.
@@ -2308,9 +2310,10 @@ colours for the same signal.
   real bidirectional binary delivery and exact UTF-8 text counts. The real
   loopback regression first failed on seven binary bytes counted as text,
   then passed; worker app/Core and all three affected full suites pass
-  (28.79 s). Root reviewed the actual changes; integration follows the
-  priority pairing preview. Dedicated DataChannelTransport watch binary
-  is separate and unchanged. The phone owner has the verified boundary.
+  (28.79 s). Root reviewed the actual changes; integrated app/Core and
+  all eight rebuilt traffic/Setup/wording suites pass (28.85 s), after
+  the priority pairing preview was packaged. Dedicated DataChannelTransport
+  watch binary is separate and unchanged. The phone owner has the boundary.
 - Plan: accurate Core/window bandwidth graphs and phone diagnostic dependencies.
 
 ### G-111: Newer payload channels are absent from the desktop traffic total
