@@ -55,6 +55,9 @@ public:
     void retireAll();
 
     int bindingCount() const { return m_bindings.size(); }
+    /// A pending ticket or attached auxiliary for this exact primary
+    /// generation. Admission-grant expiry does not retire either one.
+    bool hasLiveBinding(SessionTransport* primary, quint64 generation) const;
     int pendingSocketCount() const;
 
 private:

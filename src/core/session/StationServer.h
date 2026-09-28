@@ -1449,6 +1449,7 @@ private:
     void handleTxWatchRelay(SessionTransport* transport, const SessionMessage& message);
     bool txWatchEligible(SessionTransport* transport) const;
     bool txWatchRelayEligible(SessionTransport* transport) const;
+    bool txWatchRelayCapability(SessionTransport* transport) const;
     bool txWatchAuthorityCurrent(SessionTransport* transport) const;
     bool txWatchBindingCurrent(SessionTransport* transport, quint64 sessionId,
                                const QByteArray& deviceId, quint64 generation) const;

@@ -8486,6 +8486,24 @@ bool StationServer::txWatchRelayEligible(SessionTransport* transport) const
         && !certificatePemPath().isEmpty() && !privateKeyPemPath().isEmpty();
 }
 
+bool StationServer::txWatchRelayCapability(SessionTransport* transport) const
+{
+    if (txWatchRelayEligible(transport)) {
+        return true;
+    }
+    // The grant controls NEW admission. A binding issued before expiry still
+    // owns a usable route, including the already attached watch; withdrawing
+    // the capability here would make the client close that healthy channel.
+    const auto peer = m_peers.constFind(transport);
+    const auto* switchable = qobject_cast<const SwitchableTransport*>(transport);
+    const auto* carrying = qobject_cast<const DataChannelTransport*>(
+        switchable ? switchable->inner() : transport);
+    return peer != m_peers.cend() && txWatchAuthorityCurrent(transport)
+        && peerDeclares(transport, QByteArrayLiteral("txWatchRelay"), 1)
+        && carrying && carrying->hasWatchRelayRoute()
+        && m_txWatchServer->hasLiveBinding(transport, peer->txWatchGeneration);
+}
+
 bool StationServer::txWatchBindingCurrent(SessionTransport* transport, quint64 sessionId,
                                           const QByteArray& deviceId,
                                           quint64 generation) const
@@ -9386,7 +9404,7 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
                 caps.remoteTxEntry = true;
                 caps.remoteTxVersion = remoteTxVersion();
                 caps.txWatchPathVersion = (txWatchEligible(transport)
-                                           || txWatchRelayEligible(transport)) ? 1 : 0;
+                                           || txWatchRelayCapability(transport)) ? 1 : 0;
                 // iPhone app plan Task 39: the `txState` object, with it.
                 caps.txStateVersion = txStateVersion();
                 // Parity Task 33: the transmit readings, right after it.

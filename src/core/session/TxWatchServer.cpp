@@ -110,6 +110,14 @@ int TxWatchServer::pendingSocketCount() const
     return count;
 }
 
+bool TxWatchServer::hasLiveBinding(SessionTransport* primary, quint64 generation) const
+{
+    const auto binding = m_bindings.constFind(primary);
+    return binding != m_bindings.cend() && binding->generation == generation
+        && ((binding->auxiliary && binding->auxiliary->isOpen())
+            || (!binding->ticket.isEmpty() && now() < binding->deadlineMs));
+}
+
 bool TxWatchServer::acceptTransport(SessionTransport* auxiliary, const QString& addressGroup)
 {
     if (auxiliary == nullptr) {
