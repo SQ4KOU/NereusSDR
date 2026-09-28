@@ -208,6 +208,9 @@ public:
     /// asked for while one runs is refused (done(false) at once).
     void transferTo(std::optional<Holder> next, const QString& reason,
                     std::function<void(bool assigned)> done = {});
+    /// Synchronous final settlement of a device place. Nested calls keep
+    /// keys and new holders blocked until the outermost callback returns.
+    void runWithKeyingBlocked(const std::function<void()>& callback);
 
     /// Releases transmit when `deviceId` holds it (a transfer to nobody).
     /// Nothing when it does not.
@@ -239,6 +242,7 @@ signals:
     void changed();
 
 private:
+    int m_keyingBlockDepth = 0;
     void afterUnkey(quint64 generation);
     void assign(quint64 generation);
     void failTransfer(quint64 generation);

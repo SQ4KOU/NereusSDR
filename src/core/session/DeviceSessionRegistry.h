@@ -153,6 +153,12 @@ public:
         /// Admitted after the device's time ran out (read by Task 74's
         /// graceEnded); the record is cleared by this admission.
         std::optional<qint64> timeRanOutAtMs;
+        struct TakenPlace {
+            QByteArray byId;
+            QString byName;
+            qint64 atMs = 0;
+        };
+        std::optional<TakenPlace> placeTaken;
     };
 
     /// How a session ended.
@@ -187,6 +193,15 @@ public:
     /// time ran out (a revoke). Its live session, if any, is the caller's to
     /// end.
     void remove(const QByteArray& deviceId);
+    /// A fifth device took this place. No away grace; retain the event
+    /// until this device next signs in, is revoked, or the Core restarts.
+    void replace(const QByteArray& deviceId, const QByteArray& byId,
+                 const QString& byName);
+    std::optional<AdmitResult::TakenPlace> placeTakenBy(const QByteArray& deviceId) const;
+    quint32 revision() const { return m_revision; }
+    /// Task 41 ordering: away longest first, then present by actual last
+    /// command/write activity, with an on-air device last.
+    QList<Entry> replacementCandidates(const QByteArray& transmittingId = {}) const;
 
     /// Frees the place of every away device whose kGraceMs have passed and
     /// records that its time ran out. Returns their ids.
@@ -262,6 +277,8 @@ private:
     QElapsedTimer m_monotonic;
     QList<Entry> m_entries;
     QHash<QByteArray, qint64> m_timeRanOut;
+    QHash<QByteArray, AdmitResult::TakenPlace> m_placeTaken;
+    quint32 m_revision = 1;
     quint64 m_nextOrder = 1;
     quint64 m_nextToken = 1;
 };

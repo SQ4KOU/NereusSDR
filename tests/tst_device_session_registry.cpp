@@ -98,6 +98,7 @@ private slots:
 
     // ---- The redial arithmetic (design section 4.5) ----
     void redialsFallInsideTheGracePeriod();
+    void replacementCandidatesUseActualActivityAndRetainRecords();
 };
 
 void TstDeviceSessionRegistry::aFifthDeviceIsRefusedWhileFourHoldPlaces()
@@ -127,6 +128,43 @@ void TstDeviceSessionRegistry::aFifthDeviceIsRefusedWhileFourHoldPlaces()
         QVERIFY(registry.entry(id));
         QCOMPARE(registry.entry(id)->state, Registry::State::Listening);
     }
+}
+
+void TstDeviceSessionRegistry::replacementCandidatesUseActualActivityAndRetainRecords()
+{
+    Registry registry;
+    qint64 now = 0;
+    registry.setClock([&now]() { return now; });
+    Sessions sessions;
+    const QObject* a = sessions.make();
+    const QObject* b = sessions.make();
+    const Registry::AdmitResult first = registry.admit(paired("a"), a);
+    QVERIFY(!first.placeTaken);
+    registry.admit(paired("b"), b);
+    registry.admit(paired("c"), sessions.make());
+    const Registry::AdmitResult returnWithoutTake = registry.admit(paired("c"), sessions.make());
+    QVERIFY(!returnWithoutTake.placeTaken);
+    registry.registerHostingDevice("desk", QStringLiteral("Desk"), QStringLiteral("Desk"));
+    now = 1000;
+    registry.noteActivity("a");
+    now = 2000;
+    registry.noteActivity("b");
+    registry.sessionEnded("b", b, Registry::EndKind::Dropped);
+    QList<Registry::Entry> candidates = registry.replacementCandidates("c");
+    QCOMPARE(candidates.at(0).deviceId, QByteArray("b"));
+    QCOMPARE(candidates.last().deviceId, QByteArray("c"));
+    const quint32 before = registry.revision();
+    now = 3000;
+    registry.noteActivity("a");
+    QVERIFY(registry.revision() != before);
+    registry.replace("b", "new", QStringLiteral("Pat's iPad"));
+    QVERIFY(!registry.entry("b"));
+    QCOMPARE(registry.placeTakenBy("b")->byName, QStringLiteral("Pat's iPad"));
+    QCOMPARE(registry.admit(paired("b"), sessions.make()).placeTaken->byId,
+             QByteArray("new"));
+    QVERIFY(!registry.placeTakenBy("b"));
+    registry.remove("a");
+    QVERIFY(!registry.entry("a"));
 }
 
 void TstDeviceSessionRegistry::anAwayDeviceKeepsItsPlaceAgainstAFifth()

@@ -2242,6 +2242,11 @@
             "unit": "bytes",
             "value": 1048576
         },
+        "takeoverAnswerMs": {
+            "source": "StationServer::kTakeoverAnswerMs",
+            "unit": "ms",
+            "value": 60000
+        },
         "telemetryBytes": {
             "source": "kMaxStationTelemetryBytes",
             "unit": "bytes",
@@ -3193,7 +3198,10 @@
         "session.end": {
             "optional": [
                 "code",
-                "retryable"
+                "retryable",
+                "secondsAgo",
+                "takenOverBy",
+                "takenOverById"
             ],
             "required": [
                 "reason",
@@ -3203,6 +3211,40 @@
                 "code": "string",
                 "reason": "string",
                 "retryable": "boolean",
+                "secondsAgo": "number",
+                "takenOverBy": "string",
+                "takenOverById": "string",
+                "type": "string"
+            }
+        },
+        "session.held": {
+            "optional": [
+                "placeFreed",
+                "placeTaken"
+            ],
+            "required": [
+                "devices",
+                "revision",
+                "type"
+            ],
+            "types": {
+                "devices": "array",
+                "placeFreed": "object",
+                "placeTaken": "object",
+                "revision": "number",
+                "type": "string"
+            }
+        },
+        "session.takeover": {
+            "optional": [],
+            "required": [
+                "deviceId",
+                "revision",
+                "type"
+            ],
+            "types": {
+                "deviceId": "string",
+                "revision": "number",
                 "type": "string"
             }
         },

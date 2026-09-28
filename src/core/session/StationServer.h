@@ -501,6 +501,7 @@ public:
     /// (design addendum section 7), and without a flush cadence that is
     /// roughly 250 messages for one keypress.
     static constexpr int kDefaultDeltaFlushMs = 50;
+    static constexpr int kTakeoverAnswerMs = 60000;
 
     /// How long a connection has to complete the section 7.0 handshake
     /// before it is dropped. Without it, a peer that opens a socket and
@@ -1378,6 +1379,9 @@ private:
         /// or one whose device left on purpose or was revoked, frees or
         /// keeps its place by itself and must not be marked away.
         bool placeSettled = false;
+        bool dropping = false;
+        /// Authenticated paired peer waiting for a place, with no session.
+        quint64 heldSerial = 0;
         bool leaving = false;
         // iPhone app Task 73: admitted as a device that already held a place
         // (ruling 4.8), which keeps its slices as they are.
@@ -1545,6 +1549,48 @@ private:
     void noteActivity(SessionTransport* transport);
     /// Re-arms the grace timer for the next away device's end.
     void scheduleGraceCheck();
+    struct HeldQuestion {
+        QPointer<SessionTransport> transport;
+        QByteArray deviceId;
+        QString name;
+        QString shortName;
+        QString kind;
+        quint64 serial = 0;
+        qint64 deadlineMs = 0;
+    };
+    void holdForPlace(SessionTransport* transport, const QByteArray& deviceId,
+                      const QString& name, const QString& shortName, const QString& kind);
+    void sendHeld(SessionTransport* transport);
+    void refreshHeld();
+    void drainHeld();
+    void handleTakeover(SessionTransport* transport, const SessionMessage& message);
+    void finishTakeover(quint64 serial, const QByteArray& targetId,
+                        QPointer<SessionTransport> incumbentSession,
+                        const QObject* originalSession, bool originalLive, bool released);
+    QJsonArray heldCandidates() const;
+    bool m_settlingTakeover = false;
+    int m_dropPeerDepth = 0;
+    quint64 m_activeTakeoverSerial = 0;
+    quint64 m_takeoverHolderEpoch = 0;
+    bool m_takeoverRequiredUnkey = false;
+    QPointer<SessionTransport> m_reservedTransport;
+    bool m_slotReserved = false;
+    struct DeferredAdmission {
+        QPointer<SessionTransport> transport;
+        QString name;
+        QString shortName;
+        QString kind;
+    };
+    QList<DeferredAdmission> m_deferredAdmissions;
+    struct DeferredAuthRequest {
+        QPointer<SessionTransport> transport;
+        SessionMessage message;
+    };
+    QList<DeferredAuthRequest> m_deferredAuthRequests;
+    quint64 m_nextHeldSerial = 1;
+    quint32 m_heldRevision = 1;
+    QByteArray m_heldSignature;
+    QList<HeldQuestion> m_heldQueue;
 
     /// iPhone app Task 13 (R-IOS-08): ends every authenticated connection
     /// `matches` picks with session.end, not retryable, `reason` and

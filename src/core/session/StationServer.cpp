@@ -678,6 +678,7 @@
 #include "core/accessories/AlexAntennaFacade.h"
 #include "core/IoBoardHl2Facade.h"
 #include <QScopeGuard>
+#include <utility>
 #include "models/BandPlanManager.h"
 #include "core/AudioEngine.h"
 #include "models/RadioModel.h"
@@ -2511,6 +2512,22 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     });
     connect(m_deviceSessions.get(), &DeviceSessionRegistry::changed, this,
             &StationServer::scheduleGraceCheck);
+    connect(m_deviceSessions.get(), &DeviceSessionRegistry::changed, this, [this]() {
+        QMetaObject::invokeMethod(this, [this]() {
+            if (m_activeTakeoverSerial != 0 && !m_slotReserved
+                && m_deviceSessions->hasPlaceFree()) {
+                // A place freed independently while unkey was pending.
+                // Wait until the old session's slice cleanup has finished.
+                m_activeTakeoverSerial = 0;
+                m_settlingTakeover = false;
+            }
+            drainHeld();
+            refreshHeld();
+        }, Qt::QueuedConnection);
+    });
+    connect(m_connectedDevices.get(), &ConnectedDevicesFacade::connectedDevicesChanged,
+            this, [this]() { QMetaObject::invokeMethod(this, [this]() { refreshHeld(); },
+                                                  Qt::QueuedConnection); });
 }
 
 StationServer::~StationServer()
@@ -3240,14 +3257,36 @@ void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
                              bool sendSessionEnd, bool retryable, const QString& endCode)
 {
     auto it = m_peers.find(transport);
-    if (it == m_peers.end()) {
+    if (it == m_peers.end() || it->dropping) {
         return;
     }
+    it->dropping = true;
+    ++m_dropPeerDepth;
+    auto finishDrop = qScopeGuard([this]() {
+        if (--m_dropPeerDepth == 0) {
+            if (m_activeTakeoverSerial != 0 && !m_slotReserved
+                && m_deviceSessions->hasPlaceFree()) {
+                m_activeTakeoverSerial = 0;
+                m_settlingTakeover = false;
+            }
+            drainHeld();
+        }
+    });
     const QString description = it->description;
+
+    if (it->heldSerial != 0) {
+        const quint64 serial = it->heldSerial;
+        it->heldSerial = 0;
+        m_heldQueue.erase(std::remove_if(m_heldQueue.begin(), m_heldQueue.end(),
+                         [serial](const HeldQuestion& q) { return q.serial == serial; }),
+                         m_heldQueue.end());
+    }
 
     if (sendSessionEnd) {
         send(transport, SessionMessages::sessionEnd(reason, retryable, endCode));
     }
+    it = m_peers.find(transport);
+    if (it == m_peers.end()) return;
     // iPhone app Task 14: a code this connection took and did not pair
     // with is burned, however the connection ends (a wrong code, a device
     // that gave up after its own step 3, a dropped link, the deadline).
@@ -3519,6 +3558,21 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
     if (!SessionMessages::decode(wire, &message)) {
         dropPeer(transport, QStringLiteral("The Core could not read a message from this app."), true,
                  /*retryable=*/false, QString::fromLatin1(SessionEndCode::kProtocolError));
+        return;
+    }
+    if (it->heldSerial != 0) {
+        if (message.kind == SessionMessageKind::SessionTakeover
+            && peerHasSessionHolderVersion(transport)) {
+            handleTakeover(transport, message);
+        } else {
+            dropPeer(transport, QStringLiteral("The Core could not read a message from this app."),
+                     true, false, QString::fromLatin1(SessionEndCode::kProtocolError));
+        }
+        return;
+    }
+    if (message.kind == SessionMessageKind::SessionTakeover) {
+        dropPeer(transport, QStringLiteral("The Core could not read a message from this app."),
+                 true, false, QString::fromLatin1(SessionEndCode::kProtocolError));
         return;
     }
 
@@ -4101,6 +4155,13 @@ void StationServer::handleAuthRequest(SessionTransport* transport,
     if (it == m_peers.end()) {
         return;
     }
+    // Final cutover is synchronous but emits direct signals. A reentrant
+    // sign-in must wait before proof, auth.result or any admission work;
+    // the selected waiter owns the place until its settlement completes.
+    if (m_slotReserved && transport != m_reservedTransport) {
+        m_deferredAuthRequests.append({transport, message});
+        return;
+    }
     if (!it->helloReceived) {
         dropPeer(transport, QStringLiteral("This app sent its pairing token out of order."), true, /*retryable=*/false,
                  QString::fromLatin1(SessionEndCode::kProtocolError));
@@ -4330,8 +4391,27 @@ void StationServer::admit(SessionTransport* transport, const QString& name,
     device.name = name;
     device.shortName = shortName;
     device.deviceKind = kind;
+    // A synchronous registry/slice/end signal during final cutover cannot
+    // let another sign-in steal the selected waiter's temporarily free slot.
+    if (m_slotReserved && transport != m_reservedTransport) {
+        m_deferredAdmissions.append({transport, name, shortName, kind});
+        return;
+    }
     const QString description = it->description;
     const DeviceSessionRegistry::AdmitResult result = m_deviceSessions->admit(device, transport);
+    if (result.admission != DeviceSessionRegistry::Admission::Full) {
+        // A pending connection for this same key cannot keep a second
+        // question after a newer connection has acquired its place.
+        QPointer<SessionTransport> older;
+        for (const HeldQuestion& q : std::as_const(m_heldQueue)) {
+            if (q.deviceId == device.deviceId && q.transport != transport && q.transport) {
+                older = q.transport;
+                break;
+            }
+        }
+        if (older) dropPeer(older, QString::fromLatin1(kSameDeviceReason), true, false,
+                            QString::fromLatin1(SessionEndCode::kSameDevice));
+    }
 
     switch (result.admission) {
     case DeviceSessionRegistry::Admission::Full:
@@ -4340,8 +4420,9 @@ void StationServer::admit(SessionTransport* transport, const QString& name,
         // Task 41 a device that declared sessionHolder is asked the
         // fifth-device question instead; an older window keeps this.
         qCInfo(lcStation) << "Turning away" << description << ": every place on the Core is taken";
-        if (peerHoldsSessions(transport)) {
-            dropPeer(transport, QString::fromLatin1(kCoreFullReason), true, /*retryable=*/true);
+        if (device.kind == DeviceSessionRegistry::Kind::Paired
+            && peerHasSessionHolderVersion(transport)) {
+            holdForPlace(transport, device.deviceId, name, shortName, kind);
         } else {
             dropPeer(transport, QString::fromLatin1(kOlderWindowCoreFullReason), true,
                      /*retryable=*/true);
@@ -4417,6 +4498,390 @@ void StationServer::admit(SessionTransport* transport, const QString& name,
     if (m_peers.contains(transport)) {
         deliverAdmissionNotices(transport, result.timeRanOutAtMs);
     }
+    if (result.placeTaken && m_peers.contains(transport)) {
+        SessionPrompt notice;
+        notice.id = m_nextSessionId++;
+        notice.kind = QStringLiteral("placeTaken");
+        notice.secondsAgo = std::max<qint64>(0, (m_deviceSessions->now() - result.placeTaken->atMs) / 1000);
+        notice.byDeviceId = StationIdentity::toBase64Url(result.placeTaken->byId);
+        notice.byName = result.placeTaken->byName;
+        send(transport, SessionMessages::notice(notice,
+            QStringLiteral("Your place on the Core was taken.")));
+    }
+}
+
+void StationServer::holdForPlace(SessionTransport* transport, const QByteArray& deviceId,
+                                 const QString& name, const QString& shortName,
+                                 const QString& kind)
+{
+    const QPointer<StationServer> self(this);
+    auto peer = m_peers.find(transport);
+    if (peer == m_peers.end() || !peer->authenticated || peer->deviceId != deviceId
+        || !peerHasSessionHolderVersion(transport)) {
+        return;
+    }
+    HeldQuestion question;
+    question.transport = transport;
+    question.deviceId = deviceId;
+    question.name = name;
+    question.shortName = shortName;
+    question.kind = kind;
+    question.serial = m_nextHeldSerial++;
+    question.deadlineMs = m_deviceSessions->now() + kTakeoverAnswerMs;
+    int position = m_heldQueue.size();
+    SessionTransport* old = nullptr;
+    for (int i = 0; i < m_heldQueue.size(); ++i) {
+        if (m_heldQueue.at(i).deviceId == deviceId) {
+            position = i;
+            old = m_heldQueue.at(i).transport;
+            question.deadlineMs = m_heldQueue.at(i).deadlineMs;
+            break;
+        }
+    }
+    if (old) {
+        auto older = m_peers.find(old);
+        if (older != m_peers.end()) older->heldSerial = 0;
+        m_heldQueue[position] = question;
+    } else {
+        m_heldQueue.append(question);
+    }
+    peer = m_peers.find(transport);
+    if (peer == m_peers.end()) return;
+    peer->heldSerial = question.serial;
+    if (peer->authDeadline) peer->authDeadline->stop();
+    if (old) {
+        dropPeer(old, QString::fromLatin1(kSameDeviceReason), true, false,
+                 QString::fromLatin1(SessionEndCode::kSameDevice));
+        if (!self) return;
+    }
+    if (m_peers.contains(transport)) sendHeld(transport);
+    if (!self) return;
+    auto* answerTimer = new QTimer(this);
+    answerTimer->setSingleShot(true);
+    connect(answerTimer, &QTimer::timeout, this, [this, answerTimer, serial = question.serial]() {
+        answerTimer->deleteLater();
+        for (const HeldQuestion& q : std::as_const(m_heldQueue)) {
+            if (q.serial == serial && q.transport && m_deviceSessions->now() >= q.deadlineMs) {
+                dropPeer(q.transport, QString::fromLatin1(kCoreFullReason), true, false,
+                         QString::fromLatin1(SessionEndCode::kCoreFull));
+                return;
+            }
+        }
+    });
+    answerTimer->start(static_cast<int>(std::max<qint64>(0, question.deadlineMs - m_deviceSessions->now())));
+}
+
+QJsonArray StationServer::heldCandidates() const
+{
+    const QJsonArray connected = QJsonDocument::fromJson(m_connectedDevices->listJson().toUtf8()).array();
+    QHash<QString, QJsonObject> byId;
+    for (const QJsonValue& value : connected) {
+        const QJsonObject object = value.toObject();
+        byId.insert(object.value(QStringLiteral("deviceId")).toString(), object);
+    }
+    const auto holder = m_transmitHolder->holder();
+    const QByteArray onAir = holder && holder->keyed ? holder->deviceId : QByteArray();
+    QJsonArray ordered;
+    const qint64 now = m_deviceSessions->now();
+    for (const auto& entry : m_deviceSessions->replacementCandidates(onAir)) {
+        const QString wireId = entry.kind == DeviceSessionRegistry::Kind::Token
+            ? QString::fromLatin1(entry.deviceId)
+            : StationIdentity::toBase64Url(entry.deviceId);
+        QJsonObject object = byId.value(wireId);
+        if (object.isEmpty()) continue;
+        object.remove(QStringLiteral("paired"));
+        object.remove(QStringLiteral("hostsCore"));
+        object.remove(QStringLiteral("revocable"));
+        object.insert(QStringLiteral("replaceable"),
+                      entry.kind != DeviceSessionRegistry::Kind::Hosting);
+        object.insert(QStringLiteral("lastActivitySeconds"),
+                      onAir == entry.deviceId ? 0 : std::max<qint64>(0, (now - entry.lastActivityMs) / 1000));
+        QJsonArray listening;
+        for (const QJsonValue& sliceValue : object.value(QStringLiteral("listeningOn")).toArray()) {
+            QJsonObject slice = sliceValue.toObject();
+            const SliceModel* live = m_radioModel
+                ? m_radioModel->sliceById(slice.value(QStringLiteral("sliceId")).toInt(-1)) : nullptr;
+            if (live) slice.insert(QStringLiteral("frequencyHz"), live->frequency());
+            listening.append(slice);
+        }
+        object.insert(QStringLiteral("listeningOn"), listening);
+        if (object.contains(QStringLiteral("transmittingOn"))) {
+            QJsonObject slice = object.value(QStringLiteral("transmittingOn")).toObject();
+            const SliceModel* live = m_radioModel
+                ? m_radioModel->sliceById(slice.value(QStringLiteral("sliceId")).toInt(-1)) : nullptr;
+            if (live) slice.insert(QStringLiteral("frequencyHz"), live->frequency());
+            object.insert(QStringLiteral("transmittingOn"), slice);
+        }
+        QString from = QStringLiteral("relay");
+        if (entry.session) {
+            auto* live = const_cast<SessionTransport*>(qobject_cast<const SessionTransport*>(entry.session));
+            if (live && m_peers.contains(live) && !live->peerAddress().isEmpty()) {
+                from = live->peerAddress();
+            }
+        }
+        object.insert(QStringLiteral("from"), from);
+        ordered.append(object);
+    }
+    return ordered;
+}
+
+void StationServer::sendHeld(SessionTransport* transport)
+{
+    auto peer = m_peers.constFind(transport);
+    if (peer == m_peers.cend() || peer->heldSerial == 0) return;
+    const QJsonArray candidates = heldCandidates();
+    QJsonArray stable;
+    for (const QJsonValue& value : candidates) {
+        QJsonObject object = value.toObject();
+        for (const char* key : {"lastActivitySeconds", "connectedForSeconds",
+                                "awayForSeconds", "transmittingForSeconds"}) {
+            object.remove(QLatin1String(key));
+        }
+        stable.append(object);
+    }
+    QByteArray signature = QJsonDocument(stable).toJson(QJsonDocument::Compact);
+    signature += ':' + QByteArray::number(m_deviceSessions->revision());
+    if (signature != m_heldSignature) {
+        m_heldSignature = signature;
+        ++m_heldRevision;
+    }
+    std::optional<QJsonObject> taken;
+    std::optional<QJsonObject> freed;
+    if (const auto record = m_deviceSessions->placeTakenBy(peer->deviceId)) {
+        taken = QJsonObject{{QStringLiteral("byName"), record->byName},
+                            {QStringLiteral("byId"), StationIdentity::toBase64Url(record->byId)},
+                            {QStringLiteral("secondsAgo"),
+                             std::max<qint64>(0, (m_deviceSessions->now() - record->atMs) / 1000)}};
+    } else if (const auto at = m_deviceSessions->timeRanOutAtMs(peer->deviceId)) {
+        freed = QJsonObject{{QStringLiteral("secondsAgo"),
+                             std::max<qint64>(0, (m_deviceSessions->now() - *at) / 1000)}};
+    }
+    send(transport, SessionMessages::sessionHeld(candidates, m_heldRevision, taken, freed));
+}
+
+void StationServer::refreshHeld()
+{
+    const QPointer<StationServer> self(this);
+    const QList<HeldQuestion> questions = m_heldQueue;
+    for (const HeldQuestion& q : questions) {
+        if (q.transport && m_peers.contains(q.transport)
+            && m_peers.value(q.transport).heldSerial == q.serial) {
+            if (m_deviceSessions->now() >= q.deadlineMs) {
+                dropPeer(q.transport, QString::fromLatin1(kCoreFullReason), true, false,
+                         QString::fromLatin1(SessionEndCode::kCoreFull));
+            } else {
+                sendHeld(q.transport);
+            }
+            if (!self) return;
+        }
+    }
+}
+
+void StationServer::drainHeld()
+{
+    if (m_closing || m_settlingTakeover || m_slotReserved || m_dropPeerDepth > 0) return;
+    const QPointer<StationServer> self(this);
+    m_settlingTakeover = true;
+    while (m_deviceSessions->hasPlaceFree() && !m_heldQueue.isEmpty()) {
+        const HeldQuestion q = m_heldQueue.takeFirst();
+        if (!q.transport) continue;
+        auto peer = m_peers.find(q.transport);
+        if (peer == m_peers.end() || peer->heldSerial != q.serial) continue;
+        if (m_deviceSessions->now() >= q.deadlineMs) {
+            dropPeer(q.transport, QString::fromLatin1(kCoreFullReason), true, false,
+                     QString::fromLatin1(SessionEndCode::kCoreFull));
+            if (!self) return;
+            continue;
+        }
+        peer->heldSerial = 0;
+        admit(q.transport, q.name, q.shortName, q.kind);
+        if (!self) return;
+    }
+    m_settlingTakeover = false;
+    refreshHeld();
+}
+
+void StationServer::handleTakeover(SessionTransport* transport, const SessionMessage& message)
+{
+    const QPointer<StationServer> self(this);
+    auto peer = m_peers.constFind(transport);
+    if (peer == m_peers.cend() || peer->heldSerial == 0 || !peer->authenticated
+        || peer->deviceId.isEmpty() || !peerHasSessionHolderVersion(transport)) return;
+    const quint64 serial = peer->heldSerial;
+    auto question = std::find_if(m_heldQueue.cbegin(), m_heldQueue.cend(),
+                                 [serial](const HeldQuestion& q) { return q.serial == serial; });
+    if (question == m_heldQueue.cend()) return;
+    if (m_deviceSessions->now() >= question->deadlineMs || message.takeoverDeviceId.isEmpty()) {
+        dropPeer(transport, QString::fromLatin1(kCoreFullReason), true, false,
+                 QString::fromLatin1(SessionEndCode::kCoreFull));
+        return;
+    }
+    if (m_activeTakeoverSerial != 0) {
+        sendHeld(transport);
+        return;
+    }
+    // Rebuild before comparing: registry activity, holder state and a path
+    // move can invalidate what the app last displayed.
+    sendHeld(transport);
+    if (!self) return;
+    if (!m_peers.contains(transport) || m_peers.value(transport).heldSerial != serial) return;
+    if (message.heldRevision != m_heldRevision) return;
+    const QJsonArray candidates = heldCandidates();
+    bool selectable = false;
+    for (const QJsonValue& value : candidates) {
+        const QJsonObject candidate = value.toObject();
+        if (candidate.value(QStringLiteral("deviceId")).toString() == message.takeoverDeviceId) {
+            selectable = candidate.value(QStringLiteral("replaceable")).toBool();
+            break;
+        }
+    }
+    if (!selectable) {
+        sendHeld(transport);
+        return;
+    }
+    const QByteArray targetId = message.takeoverDeviceId.startsWith(QStringLiteral("token:"))
+        ? message.takeoverDeviceId.toLatin1()
+        : StationIdentity::fromBase64Url(message.takeoverDeviceId);
+    const auto target = m_deviceSessions->entry(targetId);
+    if (!target || target->kind == DeviceSessionRegistry::Kind::Hosting) {
+        sendHeld(transport);
+        return;
+    }
+    QPointer<SessionTransport> incumbent;
+    const bool originalLive = target->state == DeviceSessionRegistry::State::Listening;
+    const QObject* originalSession = target->session;
+    if (target->session) {
+        incumbent = const_cast<SessionTransport*>(qobject_cast<const SessionTransport*>(target->session));
+        if (!incumbent || !m_peers.contains(incumbent)) {
+            sendHeld(transport);
+            return;
+        }
+    }
+    // This state is established before transferTo: its completion may run
+    // inline, including after an immediate refusal of a competing transfer.
+    m_activeTakeoverSerial = serial;
+    m_settlingTakeover = true;
+    const auto holder = m_transmitHolder->holder();
+    m_takeoverRequiredUnkey = holder && holder->deviceId == targetId;
+    m_takeoverHolderEpoch = m_transmitHolder->epoch();
+    if (m_takeoverRequiredUnkey) {
+        m_transmitHolder->transferTo(std::nullopt,
+            QStringLiteral("A device is taking this place on the Core."),
+            [self = QPointer<StationServer>(this), serial, targetId, incumbent,
+             originalSession, originalLive](bool released) {
+                if (self) self->finishTakeover(serial, targetId, incumbent,
+                                               originalSession, originalLive, released);
+            });
+    } else {
+        finishTakeover(serial, targetId, incumbent, originalSession, originalLive, true);
+    }
+}
+
+void StationServer::finishTakeover(quint64 serial, const QByteArray& targetId,
+                                   QPointer<SessionTransport> incumbent,
+                                   const QObject* originalSession, bool originalLive,
+                                   bool released)
+{
+    if (m_activeTakeoverSerial != serial) return;
+    // The scoped barrier starts before any final read or callback-bearing
+    // mutation. New keys, takes and transfers to another holder cannot
+    // cross the cutover, while an unrelated holder is left alone.
+    const QPointer<StationServer> self(this);
+    m_transmitHolder->runWithKeyingBlocked([this, self, serial, targetId, incumbent,
+                                           originalSession, originalLive, released]() {
+        if (!self) return;
+        auto finish = qScopeGuard([this, self]() {
+            if (!self) return;
+            m_reservedTransport.clear();
+            m_slotReserved = false;
+            m_activeTakeoverSerial = 0;
+            m_settlingTakeover = false;
+            drainHeld();
+            if (!self) return;
+            const QList<DeferredAdmission> deferred = std::exchange(m_deferredAdmissions, {});
+            for (const DeferredAdmission& entry : deferred) {
+                if (entry.transport && m_peers.contains(entry.transport)) {
+                    admit(entry.transport, entry.name, entry.shortName, entry.kind);
+                    if (!self) return;
+                }
+            }
+            const QList<DeferredAuthRequest> authRequests =
+                std::exchange(m_deferredAuthRequests, {});
+            for (const DeferredAuthRequest& entry : authRequests) {
+                if (entry.transport && m_peers.contains(entry.transport)) {
+                    handleAuthRequest(entry.transport, entry.message);
+                    if (!self) return;
+                }
+            }
+            refreshHeld();
+        });
+        auto question = std::find_if(m_heldQueue.cbegin(), m_heldQueue.cend(),
+                                     [serial](const HeldQuestion& q) { return q.serial == serial; });
+        if (!released || question == m_heldQueue.cend() || !question->transport
+            || m_deviceSessions->now() >= question->deadlineMs) return;
+        const HeldQuestion selection = *question;
+        const QPointer<SessionTransport> taker = selection.transport;
+        const auto takerPeer = m_peers.constFind(taker);
+        if (takerPeer == m_peers.cend() || takerPeer->heldSerial != serial
+            || !takerPeer->authenticated || takerPeer->deviceId != selection.deviceId
+            || !peerHasSessionHolderVersion(taker)) return;
+        const auto target = m_deviceSessions->entry(targetId);
+        if (m_deviceSessions->hasPlaceFree() || !target
+            || target->kind == DeviceSessionRegistry::Kind::Hosting
+            || (originalLive && (!incumbent || target->session != originalSession
+                                 || target->state != DeviceSessionRegistry::State::Listening))
+            || (!originalLive && (target->session || target->state != DeviceSessionRegistry::State::Away))) return;
+        const auto holder = m_transmitHolder->holder();
+        if (m_transmitHolder->state() == TransmitHolder::State::Transferring
+            || (holder && holder->deviceId == targetId)
+            || m_transmitHolder->epoch() != m_takeoverHolderEpoch + (m_takeoverRequiredUnkey ? 1 : 0)) return;
+        const MoxController* mox = m_radioModel ? m_radioModel->moxController() : nullptr;
+        if (m_takeoverRequiredUnkey && mox && (mox->isMox() || mox->state() != MoxState::Rx)) return;
+        const auto takerWords = m_connectedDevices->describe(selection.deviceId);
+        const QString takerName = takerWords ? takerWords->name : selection.name;
+        const QString takerWireId = StationIdentity::toBase64Url(selection.deviceId);
+        const QString reason = QStringLiteral("%1 took this device's place on the Core.").arg(takerName);
+        m_reservedTransport = taker;
+        m_slotReserved = true;
+        // The replacement commits here, immediately before the first
+        // destructive target action. A disconnected taker after this point
+        // cannot restore the incumbent's slices or place.
+        saveTakenSlicesFor(targetId);
+        if (!self) return;
+        releaseDeviceSlices(targetId);
+        if (!self) return;
+        const auto afterSlices = m_deviceSessions->entry(targetId);
+        if (!afterSlices) return;
+        if (afterSlices->session != originalSession
+            && !(originalLive && afterSlices->state == DeviceSessionRegistry::State::Away
+                 && !afterSlices->session)) return;
+        if (incumbent && m_peers.contains(incumbent)) {
+            m_peers[incumbent].placeSettled = true;
+        }
+        m_deviceSessions->replace(targetId, selection.deviceId, takerName);
+        if (!self) return;
+        if (incumbent && m_peers.contains(incumbent)) {
+            SessionMessage end = SessionMessages::sessionEnd(
+                reason, false, QString::fromLatin1(SessionEndCode::kTakenOver));
+            end.takenOverBy = takerName;
+            end.takenOverById = takerWireId;
+            end.secondsAgo = 0;
+            send(incumbent, end);
+            if (!self) return;
+            if (m_peers.contains(incumbent)) dropPeer(incumbent, reason, false, false);
+            if (!self) return;
+        }
+        // The selected taker owns this free place throughout the signals
+        // above; retire its question immediately before ordinary admission.
+        auto current = std::find_if(m_heldQueue.begin(), m_heldQueue.end(),
+                                    [serial](const HeldQuestion& q) { return q.serial == serial; });
+        if (current == m_heldQueue.end() || !taker || !m_peers.contains(taker)
+            || m_peers.value(taker).heldSerial != serial) return;
+        const HeldQuestion selected = *current;
+        m_heldQueue.erase(current);
+        m_peers[taker].heldSerial = 0;
+        admit(taker, selected.name, selected.shortName, selected.kind);
+    });
 }
 
 // ── Pairing (iPhone app Task 14, R-IOS-08) ───────────────────────────────

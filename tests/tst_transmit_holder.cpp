@@ -130,6 +130,48 @@ class TstTransmitHolder : public QObject {
     Q_OBJECT
 
 private slots:
+    void synchronousCutoverBarrierRejectsReentrantKeyAndTake()
+    {
+        Rig rig;
+        int nested = 0;
+        rig.holder.runWithKeyingBlocked([&]() {
+            rig.holder.runWithKeyingBlocked([&]() {
+                ++nested;
+                QCOMPARE(rig.key("phone").verdict, KeyingVerdict::Refuse);
+                QCOMPARE(rig.holder.askTake("phone").verdict,
+                         TransmitHolder::TakeVerdict::Refuse);
+                bool transferred = true;
+                rig.holder.transferTo(Rig::device("phone"), QStringLiteral("reentrant"),
+                                      [&](bool ok) { transferred = ok; });
+                QVERIFY(!transferred);
+                QVERIFY(!rig.holder.holder());
+            });
+            QCOMPARE(rig.key("phone").verdict, KeyingVerdict::Refuse);
+        });
+        QCOMPARE(nested, 1);
+        QCOMPARE(rig.key("phone").verdict, KeyingVerdict::Admit);
+    }
+    void synchronousCutoverBarrierReleasesOnEarlyReturnAndException()
+    {
+        Rig rig;
+        rig.holder.runWithKeyingBlocked([&]() {
+            QCOMPARE(rig.key("phone").verdict, KeyingVerdict::Refuse);
+            return;
+        });
+        QCOMPARE(rig.key("phone").verdict, KeyingVerdict::Admit);
+        try {
+            rig.holder.runWithKeyingBlocked([]() { throw 7; });
+            QFAIL("The callback should have thrown");
+        } catch (int value) {
+            QCOMPARE(value, 7);
+        }
+        QCOMPARE(rig.key("phone").verdict, KeyingVerdict::Admit);
+    }
+    void synchronousCutoverBarrierToleratesHolderDeletion()
+    {
+        auto* holder = new TransmitHolder;
+        holder->runWithKeyingBlocked([&]() { delete holder; });
+    }
     // ---- The record ---------------------------------------------------------
 
     void itStartsUnheld()

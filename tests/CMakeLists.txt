@@ -7895,6 +7895,9 @@ nereus_add_test(tst_on_air_refusals
 nereus_add_test(tst_station_multi_session
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)
+nereus_add_test(tst_station_fifth_device
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
 # iPhone app plan Task 78 (R-IOS-02, R-IOS-07, R-IOS-30): the desktop
 # remote window's screens for several devices on one Core, driven against a
 # real Core over a loopback link with a second device; offscreen renders of

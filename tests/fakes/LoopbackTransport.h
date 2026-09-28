@@ -100,6 +100,7 @@ public:
     /// what the far end sends still arrives (one direction dead). Default
     /// false.
     void setDropsOutgoing(bool drops) { m_dropsOutgoing = drops; }
+    LoopbackTransport* peerForTest() const { return m_peer; }
 
     /// Every wire message this end has received, in arrival order.
     QList<QByteArray> received() const { return m_received; }
@@ -111,6 +112,10 @@ public:
 
     int pingsSeen() const { return m_pingsSeen; }
     QString closeReason() const { return m_closeReason; }
+
+signals:
+    /// Synchronous test seam for a callback during a station send.
+    void outboundText(const QByteArray& wire);
 
 private:
     void deliver(const QByteArray& wire);

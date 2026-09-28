@@ -494,7 +494,13 @@ private slots:
             QVERIFY2(admitted(four.last()), qPrintable(QString::number(i)));
         }
         LoopbackTransport* fifth = core.signIn(devices[4]);
-        verifyCoreFull(fifth);
+        QJsonObject held;
+        verifyHeld(fifth, &held);
+        fifth->sendText(SessionMessages::encode(SessionMessages::sessionTakeover(
+            QString(), static_cast<quint32>(held.value(QStringLiteral("revision")).toInteger()))));
+        const QJsonObject end = endOf(fifth);
+        QCOMPARE(end.value(QStringLiteral("code")).toString(), QStringLiteral("coreFull"));
+        QCOMPARE(end.value(QStringLiteral("retryable")).toBool(), false);
         QVERIFY(OperatorWording::isPlain(kCoreFull));
         for (LoopbackTransport* app : four) {
             QVERIFY(app->isOpen());
@@ -537,7 +543,7 @@ private slots:
         QTRY_COMPARE(core.sessions().entry(devices[0].key.fingerprint())->state,
                      DeviceSessionRegistry::State::Away);
         core.now = DeviceSessionRegistry::kGraceMs - 1000;
-        verifyCoreFull(core.signIn(devices[4]));
+        verifyHeld(core.signIn(devices[4]));
     }
 
     void aPairingConnectionIsNotCounted()

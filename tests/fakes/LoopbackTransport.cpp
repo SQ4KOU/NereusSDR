@@ -31,6 +31,8 @@ void LoopbackTransport::sendText(const QByteArray& wire)
     if (!m_open || m_peer.isNull() || m_severed || m_dropsOutgoing) {
         return;
     }
+    emit outboundText(wire);
+    if (!m_open || m_peer.isNull()) return;
     // Queued, not direct. A real socket never delivers inside the send
     // call, and a direct hop here would let a handshake reply run inside
     // the middle of the send that provoked it -- reentrancy the production
