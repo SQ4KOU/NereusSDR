@@ -9044,3 +9044,8 @@ if(_label_names)
     endforeach()
     message(STATUS "NereusSDR: per-label test targets: ${_label_names}")
 endif()
+
+# Task 47: packaged station discovery and injected OS-owned startup operations.
+nereus_add_test(tst_station_binary_locator CORE_ONLY)
+target_compile_definitions(tst_station_binary_locator PRIVATE NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+nereus_add_test(tst_station_service_manager)

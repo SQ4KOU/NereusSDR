@@ -1063,6 +1063,7 @@ set(CORE_SOURCES
     src/core/audio/CaptureAudioBus.cpp
     src/core/audio/CaptureSupervisor.cpp
     src/core/audio/CaptureHelperLocator.cpp
+    src/core/StationBinaryLocator.cpp
     src/core/audio/CompositeTxMicRouter.cpp
     src/core/audio/PortAudioBus.cpp
     src/core/audio/QAudioSinkAdapter.cpp
@@ -1548,6 +1549,7 @@ set(GUI_SOURCES
     src/gui/RemoteConnectionController.cpp
     src/gui/CoreTargetStore.cpp
     src/gui/StationStartupSelection.cpp
+    src/gui/StationServiceManager.cpp
     src/gui/StationLanSelection.cpp
     src/gui/GuiSessionCoordinator.cpp
     src/gui/GuiConnectionController.cpp
@@ -2007,6 +2009,8 @@ if(APPLE)
     # Network privacy can block connections to radios and Cores on the LAN
     # with no prompt, surfacing only as "Host unreachable".
     set(_nereus_lan_desc "NereusSDR connects to your radios and NereusSDR Core stations on your local network.")
+    configure_file(packaging/macos/NereusStation-Info.plist.in
+                   "${CMAKE_CURRENT_BINARY_DIR}/generated/NereusStation-Info.plist" @ONLY)
     add_custom_command(TARGET NereusSDR POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Frameworks"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:NereusCore>" "$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Frameworks/"
@@ -2015,6 +2019,12 @@ if(APPLE)
         COMMAND /bin/sh -c "/usr/libexec/PlistBuddy -c \"Set :NSLocalNetworkUsageDescription '${_nereus_lan_desc}'\" \"$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Info.plist\" 2>/dev/null || /usr/libexec/PlistBuddy -c \"Add :NSLocalNetworkUsageDescription string '${_nereus_lan_desc}'\" \"$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Info.plist\""
         COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Helpers"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:nereus-audio-capture>" "$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Helpers/"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Helpers/NereusStation.app/Contents/MacOS"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:nereusd>" "$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Helpers/NereusStation.app/Contents/MacOS/nereusd"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_BINARY_DIR}/generated/NereusStation-Info.plist" "$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Helpers/NereusStation.app/Contents/Info.plist"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Helpers/NereusStation.app/Contents/Resources/models/rnnoise"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_SOURCE_DIR}/third_party/rnnoise/models/Default_large.bin" "$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Helpers/NereusStation.app/Contents/Resources/models/rnnoise/"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_SOURCE_DIR}/third_party/rnnoise/models/Default_small.bin" "$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Helpers/NereusStation.app/Contents/Resources/models/rnnoise/"
         COMMENT "Stage private libraries and the capture helper, inject NSMicrophoneUsageDescription and NSLocalNetworkUsageDescription"
         VERBATIM
     )
@@ -2041,6 +2051,11 @@ endif()
 # --------------------------------------------------------------------------
 add_executable(nereusd src/server_main.cpp)
 target_link_libraries(nereusd PRIVATE NereusCore)
+add_dependencies(NereusSDR nereusd)
+if(APPLE)
+    set_target_properties(nereusd PROPERTIES
+        BUILD_RPATH "@executable_path/../../../../Frameworks")
+endif()
 
 # --------------------------------------------------------------------------
 # nereus-audio-capture -- private microphone helper process (R-R3-36; see
@@ -3077,8 +3092,9 @@ if(APPLE)
         COMMAND codesign --force --sign - "$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Frameworks/$<TARGET_FILE_NAME:NereusCore>"
         COMMAND codesign --force --sign - "$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Frameworks/$<TARGET_FILE_NAME:NereusSDRLib>"
         COMMAND codesign --force --sign - --entitlements "${CMAKE_CURRENT_SOURCE_DIR}/packaging/macos/app-entitlements.plist" "$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Helpers/nereus-audio-capture"
+        COMMAND codesign --force --sign - "$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Helpers/NereusStation.app"
         COMMAND codesign --force --sign - "$<TARGET_BUNDLE_DIR:NereusSDR>"
-        COMMENT "Sign the private libraries, the capture helper (with its entitlements) and then the app bundle"
+        COMMENT "Sign the private libraries, both helpers, and then the app bundle"
         VERBATIM
     )
 endif()

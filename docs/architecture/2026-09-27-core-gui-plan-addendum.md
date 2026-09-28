@@ -892,6 +892,13 @@ colours for the same signal.
   silence. Client production continued. A timer-only fix is rejected; separately
   delivered authenticated liveness needs an explicit contract and verification.
   The observed failure remains an R5 acceptance gap.
+  A separate diagnostic used two independent TLS sockets at the unchanged 100 ms
+  cadence for three 60-second samples. Every individual socket exceeded 400 ms;
+  combined newer-sequence delivery had maximum observed gaps of 273/354/152 ms.
+  This supports investigating independent delivery, not a product-fix claim: it
+  omitted application authentication, audio, relay framing and startup/end gaps.
+  Evidence and required protocol constraints are in
+  `~/.config/nereus/work/core-gui-r5-independent-flow-probe.md`.
 - Plan: R5 direct-WSS/web-relay transmit under impaired networks.
 
 ### G-56: PureSignal continuously occupied the display send window
@@ -991,10 +998,27 @@ colours for the same signal.
 - Ruling: JJ's goal includes a Core that keeps running after the desktop closes.
   No separate operator choice has been requested or received for these defects;
   the proposed fixes preserve that requirement and report query errors honestly.
-- Status: in progress in the packaging lane. Locale-independent state, explicit
-  unlimited runtime, query-error handling and idle definition refresh need tests
-  and lead integration. No real service or radio configuration was changed.
+- Status: built and integrated. Numeric Windows state, unlimited runtime,
+  query-error handling and idle macOS definition refresh are covered. Pending
+  states are refused explicitly rather than reported stopped. The Debian workflow
+  also uses proper source-control metadata and verified dependency extraction.
+  Integrated app/Core/helper build, two focused suites (1.01 s), strict macOS
+  bundle signature and bundled daemon help invocation passed. Linux/Windows
+  release artifacts and notarization still need their workflow verification.
+  No real service or radio configuration was changed.
 - Plan: station packaging and background-service manager.
+
+### G-63: Two mini-display tests missed the initial receive-context deadline under load
+
+- Evidence: the mini-display lane observed two five-second receive-setup waits
+  fail before transmit assertions. Later full runs passed under concurrent builds,
+  but the failed runs predate the new setup-stage diagnostics.
+- Ruling: JJ requires the cause and a suggested fix for failures under load;
+  increasing the deadline or treating a rerun as a fix is not authorized.
+- Status: OPEN cause. The lane is adding stage diagnostics and retaining the
+  failures separately from the verified analyzer-ordering and display-lifetime
+  fixes. No deadline change or hardware acceptance is claimed.
+- Plan: mini-spectrum display integration and tests at real load.
 
 ## How this addendum is kept
 
