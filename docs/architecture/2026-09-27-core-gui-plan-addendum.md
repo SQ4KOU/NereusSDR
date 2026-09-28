@@ -2474,6 +2474,14 @@ colours for the same signal.
   traversal-build-aggregate-probe/verification.log,
   traversal-383984e5-matched-session-direct/console.log
   and traversal-383984e5-matched-full/console.log.
+- Follow-up verification: with DEADLINE_OUT directed to writable scratch,
+  both web-relay and direct-WebSocket watch-deadline scenarios passed their
+  original 60-second synthetic-key checks at both 2% and 3% loss with 75 ms
+  delay. No false watchdog stop occurred. These are isolated fake-radio
+  tests, not physical RF or a claim of continuous keyed receive audio.
+  Evidence: traversal-383984e5-matched-web-relay-deadline and
+  traversal-383984e5-matched-direct-wss-deadline. The full generated Linux
+  aggregate graph still needs verification on the next signed snapshot.
 - Plan: complete R5 full-session Linux traversal verification.
 
 ### G-117: Desktop connection header does not identify the active route
@@ -2521,6 +2529,13 @@ colours for the same signal.
   unapproved operation. Decide exact release/transfer semantics before
   implementing a new action. Read-only evidence is retained
   in core-gui-slice-ownership-reconnect-scout.md.
+- Further discussion: JJ suggested showing every existing slice letter in
+  the TX applet, with a foreign-slice click showing information and a
+  takeover action, but explicitly said this is not yet the chosen design.
+  Compare slice transfer, slice release and freeing a shared hardware
+  receiver before implementing. Receive ownership must remain distinct
+  from selecting or taking transmit. A read-only investigation of the
+  actual duplicate desktop identities is in progress.
 - Plan: several-devices UX and local/remote ownership parity.
 
 ### G-119: Slice markers and RX badges do not consistently use Aether colors
@@ -2539,10 +2554,16 @@ colours for the same signal.
   561dd89c. The app/Core build and eight affected full offscreen suites passed
   together in the trunk (2.58 s), including painted B/C/D cues and existing
   E color fallback. Existing receive-filter fill and alpha settings are
-  retained. Sol 6 medium now owns the hosting foreign-marker repair in
-  codex/host-slice-ownership-markers, based on accepted signed 71921fd9;
-  its documented owner-labeled dashed presentation needs deterministic
-  host coverage. No new Take/Release behavior is authorized by this repair.
+  retained. Hosting foreign-marker repair from signed 53b916dd now passes
+  the trunk app/Core build and all four affected complete suites (4.74 s,
+  starting load 5.88/9.29/8.88). It uses authoritative ownership, presence
+  and TX state for the existing dashed owner-labeled markers, suppressing
+  foreign own-style marker, 3D shadow and offscreen-arrow cues. A real
+  raster regression exposed the separate arrow defect during lead review.
+  No new Take/Release behavior is authorized by this repair, and the running
+  preview has not been updated with it. Evidence:
+  core-gui-host-markers-root-build.log and
+  core-gui-host-markers-root-ctest.log.
   Evidence: core-gui-slice-colors-root-build.log and
   core-gui-slice-colors-root-ctest.log.
 - Plan: several-devices visual parity and truthful ownership presentation.
@@ -2603,7 +2624,31 @@ colours for the same signal.
   now retained under traversal-383984e5-matched-session-relayed. One passing
   retry does not establish the earlier failure's cause. No live rendezvous
   service or radio was changed.
+- Bounded follow-up: five focused runs returned both allocations, and a
+  replay of the original ten-scenario prelude also returned both. The
+  prelude failed a separate IPv6 assertion (G-123). The original one-return
+  failure remains unexplained; these passes do not close it. Coturn and
+  session logs are retained in the release-probe and release-prelude
+  directories, with core-gui-relay-release-bounded-probe.json summarizing
+  the five focused runs. No deadline or release assertion was relaxed.
 - Plan: R5 relay cleanup and real-service traversal acceptance.
+
+### G-123: Dual-stack traversal sometimes selects IPv4 despite IPv6 acceptance
+
+- Evidence: the unchanged ipv6-both scenario in the matching 383984e5
+  release-prelude run connects and echoes at 139 ms using the IPv4 pair
+  198.51.100.6 to 198.51.100.10, then fails its requirement for an IPv6 pair.
+  The preceding full run passed that requirement. The scenario enables
+  routed IPv6 alongside IPv4 NAT and denies relay; connectivity alone is
+  insufficient to satisfy its existing acceptance criterion.
+- Ruling basis: JJ requires causes and suggested fixes for failures at
+  actual load, without weakening assertions or waiting for a quiet machine.
+- Status: OPEN investigation. Preserve the selected-pair evidence and
+  investigate candidate availability, nomination and observation timing.
+  A source read shows the peer reports its path on its first echoed message;
+  that alone does not establish the failure's cause. Evidence:
+  traversal-383984e5-matched-release-prelude/console.log.
+- Plan: R5 IPv6 path preference and truthful route reporting.
 
 ## How this addendum is kept
 

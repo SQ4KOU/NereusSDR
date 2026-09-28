@@ -406,6 +406,84 @@ private slots:
         QCOMPARE(geo[1].flag, static_cast<const VfoWidget*>(flagB));
     }
 
+    void hidden_foreign_flag_has_no_own_marker_even_offscreen()
+    {
+        SpectrumWidget w;
+        placePan(w);
+        VfoWidget* own = w.addVfoWidget(0);
+        VfoWidget* foreign = w.addVfoWidget(1);
+        own->setFrequency(kSliceAHz);
+        foreign->setFrequency(kSliceBHz);
+        foreign->setStationPresentationAllowed(false);
+
+        const auto geo = w.sliceMarkerGeometry();
+        QCOMPARE(geo.size(), 1);
+        QCOMPARE(geo.first().flag, static_cast<const VfoWidget*>(own));
+        own->setStationPresentationAllowed(false);
+        QVERIFY(w.sliceMarkerGeometry().isEmpty());
+
+        SpectrumWidget emptyPan;
+        placePan(emptyPan);
+        emptyPan.setVfoFrequency(kSliceAHz);
+        emptyPan.setOwnSliceMarkerPresentationAllowed(false);
+        QVERIFY(emptyPan.sliceMarkerGeometry().isEmpty());
+    }
+
+    void hosted_offscreen_arrow_and_shadow_exclude_foreign_slice()
+    {
+        SpectrumWidget w;
+        w.resize(800, 400);
+        w.setFrequencyRange(kCentreHz, kSpanHz);
+        w.applyRemoteCtunState(true, true);
+        VfoWidget* own = w.addVfoWidget(0);
+        VfoWidget* foreign = w.addVfoWidget(1);
+        own->setFrequency(kSliceAHz);
+        own->setFilter(kUsbLowHz, kUsbHighHz);
+        foreign->setFrequency(kSliceBHz);
+        foreign->setFilter(kCwLowHz, kCwHighHz);
+        foreign->setStationPresentationAllowed(false);
+        w.setThreeDSliceDepth(true);
+        const auto bands = w.buildDssShadowBands();
+        QCOMPARE(bands.size(), 1);
+        QCOMPARE(bands.first().cue, VfoWidget::sliceColor(0));
+
+        constexpr double kOffscreenLeftHz = 14'000'000.0;
+        foreign->setFrequency(kOffscreenLeftHz);
+        w.setVfoFrequency(kOffscreenLeftHz);
+        w.setFrontSliceIndex(1);
+        w.setOwnSliceMarkerPresentationAllowed(false);
+        QImage noOwn(800, 400, QImage::Format_ARGB32_Premultiplied);
+        noOwn.fill(Qt::black);
+        {
+            QPainter painter(&noOwn);
+            w.drawOffScreenIndicatorForTest(painter, QRect(0, 0, 800, 180),
+                                            QRect(0, 200, 800, 180));
+        }
+        QCOMPARE(noOwn.pixel(8, 90), qRgb(0, 0, 0));
+
+        // A remains owned, but the stale front/pan VFO belongs to foreign B.
+        w.setOwnSliceMarkerPresentationAllowed(true);
+        QImage foreignSelected(800, 400, QImage::Format_ARGB32_Premultiplied);
+        foreignSelected.fill(Qt::black);
+        {
+            QPainter painter(&foreignSelected);
+            w.drawOffScreenIndicatorForTest(painter, QRect(0, 0, 800, 180),
+                                            QRect(0, 200, 800, 180));
+        }
+        QCOMPARE(foreignSelected.pixel(8, 90), qRgb(0, 0, 0));
+
+        own->setFrequency(kOffscreenLeftHz);
+        w.setFrontSliceIndex(0);
+        QImage ownSelected(800, 400, QImage::Format_ARGB32_Premultiplied);
+        ownSelected.fill(Qt::black);
+        {
+            QPainter painter(&ownSelected);
+            w.drawOffScreenIndicatorForTest(painter, QRect(0, 0, 800, 180),
+                                            QRect(0, 200, 800, 180));
+        }
+        QCOMPARE(ownSelected.pixel(8, 90), VfoWidget::sliceColor(0).rgb());
+    }
+
     // Single-slice pans are the common case and must be byte-identical to the
     // pre-fix behaviour: exactly one marker, at the pan VFO, with the pan's
     // filter.

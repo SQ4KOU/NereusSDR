@@ -1436,6 +1436,7 @@ public:
     };
     void setForeignSliceMarkers(const QVector<ForeignSliceMarker>& markers);
     const QVector<ForeignSliceMarker>& foreignSliceMarkers() const { return m_foreignMarkers; }
+    void setOwnSliceMarkerPresentationAllowed(bool allowed);
     /// The label's text: "B iPhone", "B iPhone TX".
     static QString foreignMarkerLabel(const ForeignSliceMarker& marker);
     /// What a click on the label says.
@@ -2246,6 +2247,7 @@ private:
     // Task 78: other devices' slices, after this window's own.
     void drawForeignMarkers(QPainter& p, const QRect& specRect, const QRect& wfRect);
     QVector<ForeignSliceMarker> m_foreignMarkers;
+    bool m_ownSliceMarkerPresentationAllowed{true};
     QHash<int, QRect> m_foreignLabelRects;
     void drawCursorInfo(QPainter& p, const QRect& specRect);
 
