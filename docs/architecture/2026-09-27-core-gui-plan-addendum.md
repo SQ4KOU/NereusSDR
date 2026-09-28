@@ -1763,6 +1763,12 @@ colours for the same signal.
   authority, transmit and blocked-port restrictions remain. Root app/Core and
   ten explicitly rebuilt suites pass (76.76 s; load 62.62/36.75/23.26).
   The V6 antenna table descriptions are still being implemented separately.
+  Signed `2954472b` adds PA Current and DC Voltage readouts from the existing
+  optional Core telemetry, with exact amps/supply-volts board projection and
+  no fabricated zero for an absent field. They require Setup V5 and telemetry
+  V4. Root app/Core and eleven explicitly rebuilt suites pass (55.01 s; load
+  8.03/15.18/18.17). Derived raw power/voltage readings are the next active
+  slice; temperature, overload presentation, peak/min and PA actions remain.
 - Plan: Core Hardware Config/PA Setup description dependencies in the phone plan
   and remote-window Hardware/PA parity.
 
@@ -2073,6 +2079,11 @@ colours for the same signal.
   explicitly rebuilt suites pass (58.15 s), including complete link conformance.
   Normalize has its exact V4 detector dependency; V1-V3 receive the
   other eleven controls. Native TX Display availability stays unchanged.
+  Signed `04a6da23` and compatibility follow-up `b0bf9d264` also publish all ten
+  built Colors & Theme swatches with exact native labels/tooltips and explicit
+  RGBA defaults in V4. Root app/Core and eleven full named suites pass
+  (55.01 s; load 8.03/15.18/18.17). Meter Styles, local Display controls,
+  reset/copy actions and remaining derived/contextual controls are still open.
   The phone owner confirmed that literal PascalCase binding names
   map to its existing typed per-pan/current-band model and that explicit
   `#RRGGBBAA` colours suit its boundary conversions. The phone model already
@@ -2117,12 +2128,15 @@ colours for the same signal.
   The pending Appearance colour defaults have the same compatibility issue.
 - Ruling basis: preserve negotiated older grammar and exact native behavior;
   this is a protocol compatibility repair, not permission to loosen parsing.
-- Status: correction pending. Keep new Display/Appearance defaults and decimal
-  control precision in V4, strip them from older projections, retain existing
-  readout precision, and test the exact older and current shapes. Update the
-  format document. The shared Hz/bin tooltip also needs plain punctuation in
-  both the native source and descriptor. The phone is holding this import;
-  it has not advertised Setup, so no shipped-client outage is claimed.
+- Status: built in signed `b0bf9d264`. New Display/Appearance defaults and
+  decimal-control precision stay in V4; older projections retain their eleven
+  Display and ten Appearance controls without that metadata. Existing readout
+  precision remains. A controlled regression failed on the V1 default leak,
+  then passed after the repair. Serialized paired V1-V5 coverage and the exact
+  shapes pass, as do all eleven root integration suites (55.01 s) after the
+  app/Core build. The format document and both native/descriptor Hz/bin
+  tooltips are corrected. The phone has not advertised Setup, so no
+  shipped-client outage is claimed; its parser import remains phone-owned.
 - Plan: complete Setup descriptions and strict phone compatibility.
 
 ## How this addendum is kept

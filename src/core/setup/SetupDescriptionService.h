@@ -35,11 +35,13 @@ public:
                                                 HPSDRModel model = HPSDRModel::FIRST);
     static bool validatePaReadoutBinding(const QJsonObject& control);
     static bool validatePaDriveReadoutBinding(const QJsonObject& control);
+    static bool validatePaTelemetryReadoutBinding(const QJsonObject& control);
     static bool validatePaBypassBinding(const QJsonObject& control);
     static bool validateTransmitSettingBinding(const QJsonObject& control);
     static bool validateAudioPropertyBinding(const QJsonObject& control);
     static bool validateDspSettingBinding(const QJsonObject& control);
     static bool validateDisplaySettingBinding(const QJsonObject& control);
+    static bool validateAppearanceColourBinding(const QJsonObject& control);
     static bool validateSettingToggleEncoding(const QJsonObject& control);
     static bool validateCommandBinding(const QJsonObject& control, QString* error = nullptr);
     static bool validateTnfTable(const QJsonObject& control, QString* error = nullptr);

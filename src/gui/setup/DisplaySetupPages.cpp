@@ -646,7 +646,7 @@ void SpectrumDefaultsPage::buildUI()
         "Set to 0 (\"Off\") to use the default bins-in-window behaviour "
         "(FFT replans on zoom). When > 0, the FFT size is fixed at "
         "sampleRate / target so the trace delivers the requested resolution "
-        "at any zoom level — handy for hunting narrow signals (CW, digital). "
+        "at any zoom level, which is handy for hunting narrow signals (CW, digital). "
         "Floor at the FFT slider value still applies (slider sets the "
         "minimum FFT size)."));
     connect(m_hzPerBinTargetSpin, qOverload<double>(&QDoubleSpinBox::valueChanged),

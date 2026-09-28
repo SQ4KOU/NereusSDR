@@ -8,6 +8,8 @@
 #include "core/StepAttenuatorController.h"
 #include "core/settings/SettingsScope.h"
 #include "gui/setup/GeneralOptionsPage.h"
+#include "gui/setup/AppearanceSetupPages.h"
+#include "gui/ColorSwatchButton.h"
 #include "gui/setup/GeneralSetupPages.h"
 #include "gui/setup/CatNetworkSetupPages.h"
 #include "gui/setup/DspSetupPages.h"
@@ -160,6 +162,11 @@ void compareControl(QWidget& page, const QJsonObject& control)
         }
     } else if (kind == "text") {
         QVERIFY2(qobject_cast<QLineEdit*>(object) != nullptr, qPrintable(id));
+    } else if (kind == "colour") {
+        auto* swatch = qobject_cast<ColorSwatchButton*>(object);
+        QVERIFY2(swatch != nullptr, qPrintable(id));
+        QCOMPARE(ColorSwatchButton::colorToHex(swatch->color()).toUpper(),
+                 control.value("default").toString());
     }
     if (auto* widget = qobject_cast<QWidget*>(object)) {
         QCOMPARE(widget->toolTip(), control.value("tooltip").toString());
@@ -232,6 +239,50 @@ private slots:
         service.setRadioContext(model.boardCapabilities(), model.hardwareProfile().model);
         QCOMPARE(service.category(QStringLiteral("display")), display);
     }
+    void describedAppearanceColoursMatchNativePage()
+    {
+        RadioModel model;
+        ColorsThemePage page(&model);
+        SetupDescriptionService service;
+        const QJsonObject appearance = service.category(QStringLiteral("appearance"));
+        QCOMPARE(appearance.value("category").toObject().value("where"), QJsonValue("phone"));
+        QCOMPARE(appearance.value("category").toObject().value("coverage"), QJsonValue("partial"));
+        const QJsonArray pages = appearance.value("pages").toArray();
+        QCOMPARE(pages.size(), 1);
+        QCOMPARE(pages.first().toObject().value("title"), QJsonValue("Colors & Theme"));
+        QCOMPARE(pages.first().toObject().value("where"), QJsonValue("phone"));
+        QCOMPARE(pages.first().toObject().value("coverage"), QJsonValue("partial"));
+        const QJsonArray sections = pages.first().toObject().value("sections").toArray();
+        QCOMPARE(sections.size(), 1);
+        QCOMPARE(sections.first().toObject().value("title"), QJsonValue("Spectrum"));
+        const QJsonArray described = sections.first().toObject().value("controls").toArray();
+        QCOMPARE(described.size(), 10);
+        const QStringList expectedKeys{
+            "DisplayFillColor", "DisplayGridColor", "DisplayGridFineColor",
+            "DisplayHGridColor", "DisplayGridTextColor", "DisplayBandEdgeColor",
+            "DisplayRxZeroLineColor", "DisplayTxZeroLineColor", "DisplayRxFilterColor",
+            "DisplayTxFilterColor"};
+        QStringList actualKeys;
+        for (const QJsonValue& raw : described) {
+            const QJsonObject control = raw.toObject();
+            actualKeys << control.value("binding").toObject().value("phone").toString();
+            QVERIFY(SetupDescriptionService::validateAppearanceColourBinding(control));
+            compareControl(page, control);
+            auto* swatch = qobject_cast<ColorSwatchButton*>(bySetupId(page,
+                control.value("id").toString()));
+            QVERIFY(swatch != nullptr);
+            auto* form = qobject_cast<QFormLayout*>(swatch->parentWidget()->layout());
+            QVERIFY(form != nullptr);
+            auto* label = qobject_cast<QLabel*>(form->labelForField(swatch));
+            QVERIFY(label != nullptr);
+            QCOMPARE(label->text(), control.value("label").toString());
+        }
+        QCOMPARE(actualKeys, expectedKeys);
+        QVERIFY(bySetupId(page, QStringLiteral("appearance.colorsTheme.waterfallLowColor")) == nullptr);
+        model.setBoardForTest(HPSDRHW::HermesLite);
+        service.setRadioContext(model.boardCapabilities(), model.hardwareProfile().model);
+        QCOMPARE(service.category(QStringLiteral("appearance")), appearance);
+    }
     void settingsValidationPanelMatchesDesktopActions()
     {
         RadioModel model;
@@ -301,11 +352,13 @@ private slots:
         QVERIFY(!pa.isEmpty());
         const QJsonArray sections = pa.value("pages").toArray().first().toObject()
             .value("sections").toArray();
-        QCOMPARE(sections.size(), 2);
+        QCOMPARE(sections.size(), 3);
         const QStringList expectedIds{QStringLiteral("pa.values.forwardCalibrated"),
                                       QStringLiteral("pa.values.reflectedPower"),
                                       QStringLiteral("pa.values.swr"),
                                       QStringLiteral("pa.values.drive"),
+                                      QStringLiteral("pa.values.paCurrent"),
+                                      QStringLiteral("pa.values.dcVoltage"),
                                       QStringLiteral("pa.values.forwardAdc"),
                                       QStringLiteral("pa.values.reflectedAdc")};
         QStringList actualIds;
@@ -320,7 +373,10 @@ private slots:
                 QVERIFY2(widget != nullptr, qPrintable(id));
                 QVERIFY(id == QLatin1String("pa.values.drive")
                             ? SetupDescriptionService::validatePaDriveReadoutBinding(control)
-                            : SetupDescriptionService::validatePaReadoutBinding(control));
+                            : (id == QLatin1String("pa.values.paCurrent")
+                               || id == QLatin1String("pa.values.dcVoltage"))
+                                ? SetupDescriptionService::validatePaTelemetryReadoutBinding(control)
+                                : SetupDescriptionService::validatePaReadoutBinding(control));
                 QCOMPARE(widget->toolTip(), control.value("tooltip").toString());
                 auto* group = qobject_cast<QGroupBox*>(widget->parentWidget());
                 QVERIFY(group != nullptr);
