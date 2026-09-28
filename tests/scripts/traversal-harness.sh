@@ -930,6 +930,14 @@ if scenario ipv6-both; then
     start_station deny
     result="$(run_client cli --require-ipv6)"
     check ipv6-both "$result" True False
+    # run_client preserves the final JSON even when the helper fails. A
+    # path observed at failure must not satisfy the preference assertion.
+    connected="$(field "$result" connected 2>/dev/null || echo None)"
+    reason="$(field "$result" reason 2>/dev/null || echo Invalid)"
+    if [[ "$connected" != True || "$reason" != None ]]; then
+        say "FAIL ipv6-both: preference observation did not succeed: $result"
+        FAILED=1
+    fi
     local_address="$(field "$result" localAddress 2>/dev/null || echo None)"
     remote_address="$(field "$result" remoteAddress 2>/dev/null || echo None)"
     if [[ "$local_address" == *:* && "$remote_address" == *:* ]]; then
