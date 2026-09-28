@@ -16,7 +16,8 @@
 //   - A remote window's station-source buttons are sent to the Core, its
 //     own listeners run here, and the Core's state shows through
 //     applyStationValue.
-//   - A spot's record carries the fields the link names.
+//   - A spot's record carries the fields the link names, with the mode the
+//     desktop's own resolver gives it (resolvedMode, recordStreamVersion 2).
 //   - The WSJT-X and SpotCollector settings are this computer's; the
 //     station sources' are the Core's.
 //
@@ -33,6 +34,8 @@
 //   2026-09-26: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-28: the spot record's resolvedMode (R-IOS-25). J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -49,6 +52,7 @@
 #include "core/WsjtxClient.h"
 #include "core/settings/SettingsScope.h"
 #include "models/Band.h"
+#include "models/SpotModeResolver.h"
 #include "models/SpotModel.h"
 
 using namespace NereusSDR;
@@ -251,13 +255,76 @@ private slots:
         spot.timestamp = QDateTime(QDate(2026, 9, 26), QTime(18, 24), QTimeZone::UTC);
         const QJsonObject f = SpotSourceHost::spotRecordFields(spot, nullptr);
         QCOMPARE(f.keys(), (QStringList{"band", "call", "comment", "dxccColour", "dxccPriority",
-                                        "frequencyHz", "mode", "source", "spotter", "timeUtc"}));
+                                        "frequencyHz", "mode", "resolvedMode", "source",
+                                        "spotter", "timeUtc"}));
         QCOMPARE(f.value("frequencyHz").toDouble(), 14025000.0);
         QCOMPARE(f.value("call").toString(), QStringLiteral("JA1ABC"));
         QCOMPARE(f.value("timeUtc").toString(), QStringLiteral("2026-09-26T18:24:00Z"));
         QCOMPARE(f.value("band").toInt(), static_cast<int>(Band::Band20m));
         QCOMPARE(f.value("dxccColour").toString(), QString());
         QCOMPARE(f.value("dxccPriority").toInt(), 0);
+        QCOMPARE(f.value("resolvedMode").toInt(), static_cast<int>(DSPMode::CWU));
+    }
+
+    // Spot resolved mode (R-IOS-25, recordStreamVersion 2): the record's
+    // resolvedMode is the desktop's own resolver's answer for the same spot,
+    // as the slice's dspMode number, and absent when it has none.
+    void aSpotRecordCarriesTheDesktopsResolvedMode_data()
+    {
+        QTest::addColumn<QString>("mode");
+        QTest::addColumn<QString>("comment");
+        QTest::addColumn<QString>("source");
+        QTest::addColumn<double>("mhz");
+        QTest::addColumn<int>("expected");  // -1: no resolvedMode
+
+        const auto row = [](const char* name, const char* mode, const char* comment,
+                            const char* source, double mhz, int expected) {
+            QTest::newRow(name) << QString::fromLatin1(mode) << QString::fromLatin1(comment)
+                                << QString::fromLatin1(source) << mhz << expected;
+        };
+        const auto m = [](DSPMode mode) { return static_cast<int>(mode); };
+        row("explicit CW, upper", "CW", "", "Cluster", 14.025, m(DSPMode::CWU));
+        row("explicit CW, lower", "CW", "", "Cluster", 7.010, m(DSPMode::CWL));
+        row("comment FT8", "", "FT8 -12 dB", "PSK", 14.074, m(DSPMode::DIGU));
+        row("comment RTTY last word", "", "TNX QSO RTTY", "Cluster", 14.085, m(DSPMode::DIGL));
+        row("band CW segment", "", "big signal", "Cluster", 14.0699, m(DSPMode::CWU));
+        // AetherSDR's band inference names DIGU for a digital segment, which
+        // its radio mode table does not map: no mode, as on the desktop.
+        row("band digital segment", "", "", "RBN", 14.0700, -1);
+        row("band phone, upper", "", "", "POTA", 14.250, m(DSPMode::USB));
+        row("band phone, lower", "", "", "POTA", 7.200, m(DSPMode::LSB));
+        row("SSB below 10 MHz", "SSB", "", "POTA", 3.800, m(DSPMode::LSB));
+        row("NFM is FM", "NFM", "", "Cluster", 29.600, m(DSPMode::FM));
+        row("FreeDV on 40 m", "", "", "FreeDV", 7.177, m(DSPMode::RADE_L));
+        row("FreeDV on 20 m", "", "", "FreeDV", 14.236, m(DSPMode::RADE_U));
+        row("unknown mode", "OTHR", "", "Cluster", 14.250, -1);
+        row("below the bands", "", "", "Cluster", 0.500, -1);
+    }
+
+    void aSpotRecordCarriesTheDesktopsResolvedMode()
+    {
+        QFETCH(QString, mode);
+        QFETCH(QString, comment);
+        QFETCH(QString, source);
+        QFETCH(double, mhz);
+        QFETCH(int, expected);
+        SpotData spot;
+        spot.index = 3;
+        spot.callsign = QStringLiteral("K1ABC");
+        spot.rxFreqMhz = mhz;
+        spot.txFreqMhz = mhz;
+        spot.mode = mode;
+        spot.comment = comment;
+        spot.source = source;
+        const std::optional<DSPMode> desktop = SpotModeResolver::dspModeForSpot(spot);
+        QCOMPARE(desktop ? static_cast<int>(*desktop) : -1, expected);
+        const QJsonObject f = SpotSourceHost::spotRecordFields(spot, nullptr);
+        if (expected < 0) {
+            QVERIFY(!f.contains(QStringLiteral("resolvedMode")));
+        } else {
+            QVERIFY(f.value(QStringLiteral("resolvedMode")).isDouble());
+            QCOMPARE(f.value(QStringLiteral("resolvedMode")).toInt(), expected);
+        }
     }
 
     void theListenersAreThisComputersAndTheRestTheCores()

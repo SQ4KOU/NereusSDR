@@ -556,6 +556,10 @@
 //                txAmModulation / txAmModulationFeedback streams
 //                (stationModMonitorSnapshot). NereusSDR-original. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - R-IOS-25 (spot resolved mode): a remote window keeps the
+//                Core's spot frequency to the hertz, so its spot click
+//                resolves the Core's mode. J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -4146,8 +4150,11 @@ void RadioModel::applyStationRecordBatch(const RecordBatch& batch)
                                                      Qt::ISODate);
         QMap<QString, QString> kvs;
         kvs[QStringLiteral("callsign")] = f.value(QStringLiteral("call")).toString();
-        kvs[QStringLiteral("rx_freq")] = QString::number(mhz, 'f', 4);
-        kvs[QStringLiteral("tx_freq")] = QString::number(mhz, 'f', 4);
+        // Spot resolved mode (R-IOS-25): the Core's whole hertz, so a click
+        // here resolves the mode a click at the Core does, even at a band
+        // segment's edge.
+        kvs[QStringLiteral("rx_freq")] = QString::number(mhz, 'f', 6);
+        kvs[QStringLiteral("tx_freq")] = QString::number(mhz, 'f', 6);
         const QString mode = f.value(QStringLiteral("mode")).toString();
         if (!mode.isEmpty()) {
             kvs[QStringLiteral("mode")] = mode;

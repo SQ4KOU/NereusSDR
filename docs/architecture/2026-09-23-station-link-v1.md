@@ -873,7 +873,7 @@ change shows as surface drift and as a change to this table.
 | `bandSelectVersion` | 1 |
 | `meterReadingsVersion` | 1 |
 | `dspInfoVersion` | 1 |
-| `recordStreamVersion` | 1 |
+| `recordStreamVersion` | 2 |
 | `stationRadiosVersion` | 0 |
 | `txDisplayVersion` | 0 |
 | `displayClockVersion` | 1 |
@@ -1199,7 +1199,18 @@ When a feature is off, its version is 0:
   computer runs its own WSJT-X and SpotCollector listeners. On a Core that
   sends 0 or no entry a window shows the station's sources' buttons
   disabled with "This Core does not run its spot sources for this app.
-  Updating the Core may help.". It is followed by `stationRadiosVersion`.
+  Updating the Core may help.". At 2 (spot resolved mode, the iPhone app
+  plan's Task 62) each `spots` record also carries `resolvedMode`
+  (section 7.7): the mode a click on that spot puts a slice in, as the
+  desktop picks it (`SpotModeResolver::dspModeForSpot`, the Core calling
+  the desktop's own resolver: the spot's own mode, else a mode word
+  first or last in its comment, else the band segment at its frequency;
+  a FreeDV spot is RADE on the band's default sideband). The Core sends
+  2 wherever it sent 1. Everything 1 brings is unchanged, and a record
+  from an older Core has no `resolvedMode`, so an app shows its Auto
+  mode for spots disabled there. This is a revision of the `spots`
+  record this capability defines, so it raises this version rather than
+  adding one (section 6.3). It is followed by `stationRadiosVersion`.
 - `stationRadiosVersion` (parity Task 21, the iPhone app plan's Task 25):
   sent only at agreed minor 11, after `recordStreamVersion` in the minor-11
   block (`sessionHolderVersion` and the remote transmit entries follow
@@ -1363,7 +1374,7 @@ When a feature is off, its version is 0:
   `txMonitorAudioVersion` in the minor-11 block (`mediaReplaceVersion`,
   `controlSwitchVersion`, `relayAllowed` and the later minor-11 extensions
   follow it), and 1
-  whenever `recordStreamVersion` is 1 (the Core runs FreeDV Reporter
+  whenever `recordStreamVersion` is at least 1 (the Core runs FreeDV Reporter
   itself); 0
   otherwise. At 1 FreeDV Reporter is one of the Core's station sources
   (source name `freedvReporter`): the Core registers with its own
@@ -1421,7 +1432,7 @@ When a feature is off, its version is 0:
 - `txModMonitorVersion` (R-IOS-13, R-R3-49; the iPhone app plan's Task 39,
   parity row A10): sent only at agreed minor 11, appended after `remoteIqVersion`
   and all earlier optional entries, preserving existing positions; 1 whenever `recordStreamVersion`
-  is 1 (the Core runs its own AM modulation analyzers); 0 otherwise. At 1
+  is at least 1 (the Core runs its own AM modulation analyzers); 0 otherwise. At 1
   the Core sends the AM Mod Monitor's readings on the `txAmModulation`
   (the transmit I/Q it sends its radio) and `txAmModulationFeedback` (the
   PureSignal feedback receiver, the PA's output) record streams (section
@@ -1504,7 +1515,7 @@ When a feature is off, its version is 0:
   peer never sees it or its schema.
 - `txReadingsVersion` (remote-window parity Task 33, R-R3-49, R-R3-32):
   sent right after `txStateVersion` and only with it. 2 on a Core with its
-  own radio model and record streams (`recordStreamVersion` 1), 0
+  own radio model and record streams (`recordStreamVersion` at least 1), 0
   otherwise. At 1 `txState` also carries `forwardAdcRaw` and
   `reflectedAdcRaw`, the radio's raw forward and reflected power readings,
   and `compressionDb`, the COMP reading (section 18.8), and the Core keeps the `txCfcCompression` record stream,
@@ -2358,7 +2369,7 @@ An enum property lists the values its domain allows.
 | 84 | `twoToneDrivePowerSource` | `enum` | bidirectional | 0, 1, 2 |
 | 85 | `voxEnabled` | `bool` | bidirectional |  |
 
-**TransmitState** (34 properties)
+**TransmitState** (37 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -2396,6 +2407,9 @@ An enum property lists the values its domain allows.
 | 31 | `forwardAdcRaw` | `i64` | outbound |  |
 | 32 | `reflectedAdcRaw` | `i64` | outbound |  |
 | 33 | `compressionDb` | `f64` | outbound |  |
+| 34 | `forwardRawPowerWatts` | `f64` | outbound |  |
+| 35 | `forwardAdcVolts` | `f64` | outbound |  |
+| 36 | `reflectedAdcVolts` | `f64` | outbound |  |
 
 **TunerModel** (21 properties)
 
@@ -3545,12 +3559,12 @@ Records that come and go (spots, console lines) travel as record streams,
 not as properties (parity Task 19; the iPhone app plan's Task 21; remote
 design section 6.1a). A stream is a list of records, each an `id` (a
 string, unique in its stream) with `fields` (a JSON object), newest last,
-bounded by the stream's capacity. With `recordStreamVersion` 1 the Core
-keeps:
+bounded by the stream's capacity. With `recordStreamVersion` 1 or later
+the Core keeps:
 
 | Stream | Capacity | Record |
 | --- | --- | --- |
-| `spots` | 500 | One spot the Core holds (its SpotModel: the station sources' spots, and FreeDV Reporter's once the Core runs it), `id` its index: `timeUtc` (string, ISO 8601 UTC), `frequencyHz` (number, whole Hz), `call`, `mode`, `source` (the source's label: `Cluster`, `RBN`, `POTA`, `PSK`, `FreeDV`), `spotter`, `comment` (strings), `band` (number, the Band as the catalogue's `bands` numbers it, 13 for GEN), `dxccColour` (string, `#rrggbb`, empty when the Core does not colour it) and `dxccPriority` (number: 4 a new DXCC entity, 3 a new band, 2 a new mode, 1 worked before, 0 not known or colouring off) |
+| `spots` | 500 | One spot the Core holds (its SpotModel: the station sources' spots, and FreeDV Reporter's once the Core runs it), `id` its index: `timeUtc` (string, ISO 8601 UTC), `frequencyHz` (number, whole Hz), `call`, `mode`, `source` (the source's label: `Cluster`, `RBN`, `POTA`, `PSK`, `FreeDV`), `spotter`, `comment` (strings), `band` (number, the Band as the catalogue's `bands` numbers it, 11 for GEN), `dxccColour` (string, `#rrggbb`, empty when the Core does not colour it) and `dxccPriority` (number: 4 a new DXCC entity, 3 a new band, 2 a new mode, 1 worked before, 0 not known or colouring off); with `recordStreamVersion` 2, `resolvedMode` (number, the slice's `dspMode` value 0 to 13 a click on the spot selects, as the desktop resolves it: `CWU` 4 or `CWL` 3 for CW by the 10 MHz rule, `USB` 1, `LSB` 0, `DIGU` 7, `DIGL` 9, `AM` 6, `SAM` 10, `FM` 5 (NFM too), `RADE_U` 12 or `RADE_L` 13 for a FreeDV spot; absent when the resolver has none: the spot or its comment names a mode it does not map, or names none and the spot is below 1.8 MHz or in a band's digital segment, whose inferred `DIGU` the resolver's table does not map) |
 | `spotConsole:<source>` | 200 | One console line of a station source (`dxCluster`, `rbn`, `pota`, `pskReporter`, and with `stationFreedvVersion` 1 `freedvReporter`), `id` a rising number: `line` (string). A command typed from any device shows as `> <command>` |
 | `freedvStations` | 1000 | With `stationFreedvVersion` 1: one station FreeDV Reporter lists, as the Core hears it, `id` its FreeDV Reporter session id: the FreeDV Reporter dialog's 14 columns, `callsign`, `gridSquare` (strings), `distanceKm` and `headingDeg` (numbers, from the Core's own grid square; 0 with `headingCardinal` empty while either grid square is not known), `headingCardinal` (string, `N` to `NNW`), `version` (string), `frequencyHz` (number, whole Hz, 0 not known), `txMode` (string), `status` (string: `Active`, `TX` or `RX Only`), `userMessage` (string), `lastTxUtc` (string, ISO 8601 UTC, empty when never), `lastRxCallsign`, `lastRxMode` (strings), `snrDb` (number, -99 not known) and `lastUpdateUtc` (string, ISO 8601 UTC, empty when not known); then `transmitting` (boolean), `receivingFrom` (string: whom its latest receive report heard, the last callsign it named, while that report stands; empty once a frequency change clears it), `messageChangedAtMs` (number, the Core's clock in ms since the epoch when `userMessage` last changed, 0 never) and `lastRxUtc` (string, ISO 8601 UTC, when its latest receive report came, empty when none stands). The list starts again (a reset) each time the Core's connection to FreeDV Reporter connects or ends |
 | `coreLog` | 200 | With `supportBundleVersion` 1: one line of the Core's log as its log file has it (`[HH:mm:ss.zzz] INF: text`, addresses already shortened), `id` its number in the Core's log (rising): `line` (string). Keys, tokens and pairing codes are removed as the support bundle removes them. The Core reads its log every 250 ms while a peer follows the stream, and only then; its first backlog is the newest lines at the first subscribe |

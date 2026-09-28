@@ -283,7 +283,7 @@
         {
             "kind": "i64",
             "name": "recordStreamVersion",
-            "value": 1
+            "value": 2
         },
         {
             "kind": "i64",

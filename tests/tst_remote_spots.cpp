@@ -13,6 +13,9 @@
 //   - The Core's console lines reach the window's Spot Hub consoles; a
 //     window's Connect reaches the Core, which connects from its own
 //     settings, and the Core's refusals reach the window's tab.
+//   - A remote window's click on a spot picks the mode a local window
+//     picks for the same spot, and the Core's record carries that mode as
+//     resolvedMode (recordStreamVersion 2) for the phone.
 //   - The window never opens its own cluster login; its own WSJT-X
 //     listener runs.
 //   - The Core starts its station sources with no window (nereusd's
@@ -33,10 +36,14 @@
 //   2026-09-26: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-28: the spot's resolved mode, the same in a remote window as
+//               in a local one and on the Core's record (R-IOS-25). J.J.
+//               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
 
+#include <QHash>
 #include <QJsonObject>
 #include <QLineEdit>
 #include <QPlainTextEdit>
@@ -44,6 +51,8 @@
 #include <QSignalSpy>
 #include <QSpinBox>
 #include <QTemporaryDir>
+
+#include <iterator>
 
 #include "core/AppSettings.h"
 #include "core/DxClusterClient.h"
@@ -60,6 +69,7 @@
 #include "fakes/UpgradedCoreToken.h"
 #include "gui/SpotHubDialog.h"
 #include "models/RadioModel.h"
+#include "models/SpotModeResolver.h"
 #include "models/SpotModel.h"
 #include "models/SpotTableModel.h"
 
@@ -171,9 +181,9 @@ private slots:
         addCoreSpot(*core, 1, QStringLiteral("JA1ABC"), 14.025);
         addCoreSpot(*core, 2, QStringLiteral("VK2XYZ"), 7.010);
         Session s(core.get(), m_securityDir.path(), this);
-        QCOMPARE(s.server->recordStreamVersion(), 1);
+        QCOMPARE(s.server->recordStreamVersion(), 2);
         QVERIFY(s.connect());
-        QCOMPARE(s.client->capabilities().recordStreamVersion, 1);
+        QCOMPARE(s.client->capabilities().recordStreamVersion, 2);
 
         // The backlog, then a new spot, a change and a removal.
         QTRY_COMPARE(calls(*s.window.spotModel()), (QStringList{"JA1ABC", "VK2XYZ"}));
@@ -195,6 +205,101 @@ private slots:
                   {QStringLiteral("source"), QStringLiteral("WSJT-X")}});
         core->spotModel()->clear();
         QTRY_COMPARE(calls(*s.window.spotModel()), QStringList{QStringLiteral("K1JT")});
+    }
+
+    // Spot resolved mode (R-IOS-25, recordStreamVersion 2): for the same
+    // spot, a remote window's left-click resolves the mode a local window
+    // (the Core's own model) resolves, and the Core's record says that mode
+    // as resolvedMode, the slice's dspMode number, or nothing.
+    void theWindowResolvesTheSameModeAsTheCore()
+    {
+        std::unique_ptr<RadioModel> core = makeCore();
+        struct Case {
+            const char* call;
+            const char* rxFreq;
+            const char* mode;
+            const char* comment;
+            const char* source;
+        };
+        const Case cases[] = {
+            {"JA1ABC", "14.0250", "CW", "", "Cluster"},
+            {"VK2XYZ", "7.0100", "", "CW big signal", "Cluster"},
+            {"G4ABC", "14.0740", "", "FT8 -12 dB", "PSK"},
+            {"W1AW", "14.0699", "", "", "RBN"},
+            // A Hz beyond the 100 Hz the local sources round to, either side
+            // of the CW segment's edge: the window keeps the Core's hertz.
+            {"K1EDGE", "14.069996", "", "", "Cluster"},
+            {"K2EDGE", "14.070004", "", "", "Cluster"},
+            {"N0PH", "14.2500", "", "", "POTA"},
+            {"N1PH", "7.2000", "SSB", "", "POTA"},
+            {"KF7DV", "7.1770", "", "", "FreeDV"},
+            {"KG7DV", "14.2360", "", "", "FreeDV"},
+            {"AA0NO", "14.2500", "OTHR", "", "Cluster"},
+            {"AB0NO", "0.5000", "", "", "Cluster"},
+        };
+        int index = 100;
+        for (const Case& c : cases) {
+            QMap<QString, QString> kvs;
+            kvs[QStringLiteral("callsign")] = QString::fromLatin1(c.call);
+            kvs[QStringLiteral("rx_freq")] = QString::fromLatin1(c.rxFreq);
+            kvs[QStringLiteral("tx_freq")] = QString::fromLatin1(c.rxFreq);
+            if (*c.mode != '\0') {
+                kvs[QStringLiteral("mode")] = QString::fromLatin1(c.mode);
+            }
+            kvs[QStringLiteral("comment")] = QString::fromLatin1(c.comment);
+            kvs[QStringLiteral("source")] = QString::fromLatin1(c.source);
+            core->spotModel()->applySpotStatus(index++, kvs);
+        }
+        Session s(core.get(), m_securityDir.path(), this);
+        QVERIFY(s.connect());
+        const int count = static_cast<int>(std::size(cases));
+        QTRY_COMPARE(static_cast<int>(s.window.spotModel()->spots().size()), count);
+
+        // The records the window was sent, by the Core's spot index.
+        QHash<QString, QJsonObject> records;
+        for (const QByteArray& wire : s.windowEnd->received()) {
+            SessionMessage message;
+            if (SessionMessages::decode(wire, &message)
+                && message.kind == SessionMessageKind::RecordBatch
+                && message.recordBatch.stream == QLatin1String("spots")) {
+                for (const RecordUpsert& u : message.recordBatch.upserts) {
+                    records.insert(u.id, u.fields);
+                }
+            }
+        }
+        QCOMPARE(records.size(), count);
+
+        int resolved = 0;
+        for (const SpotData& local : core->spotModel()->spots()) {
+            const SpotData* remote = nullptr;
+            for (const SpotData& w : s.window.spotModel()->spots()) {
+                if (w.callsign == local.callsign) {
+                    remote = &w;
+                }
+            }
+            QVERIFY2(remote != nullptr, qPrintable(local.callsign));
+            const std::optional<DSPMode> localMode = SpotModeResolver::dspModeForSpot(local);
+            QCOMPARE(SpotModeResolver::dspModeForSpot(*remote), localMode);
+            const QJsonObject fields = records.value(QString::number(local.index));
+            if (localMode) {
+                ++resolved;
+                QCOMPARE(fields.value(QStringLiteral("resolvedMode")).toInt(-1),
+                         static_cast<int>(*localMode));
+            } else {
+                QVERIFY2(!fields.contains(QStringLiteral("resolvedMode")),
+                         qPrintable(local.callsign));
+            }
+        }
+        QCOMPARE(resolved, count - 3);
+        // The edge pair falls on either side of the CW segment's edge (the
+        // digital segment above it has no mode, as on the desktop).
+        for (const SpotData& w : s.window.spotModel()->spots()) {
+            if (w.callsign == QLatin1String("K1EDGE")) {
+                QCOMPARE(SpotModeResolver::dspModeForSpot(w), std::optional<DSPMode>(DSPMode::CWU));
+            } else if (w.callsign == QLatin1String("K2EDGE")) {
+                QCOMPARE(SpotModeResolver::dspModeForSpot(w), std::optional<DSPMode>());
+            }
+        }
     }
 
     void anUnsubscribedWindowIsSentNothingMore()

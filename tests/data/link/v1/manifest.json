@@ -57,6 +57,7 @@
         {"id": "control-station-notice", "file": "control/station-notice.json", "kind": "control", "requires": {"sessionHolderVersion": 1}},
         {"id": "control-notice-take-back-not-bool", "file": "control/notice-take-back-not-bool.json", "kind": "control", "requires": {}},
         {"id": "control-station-record-batch", "file": "control/station-record-batch.json", "kind": "control", "requires": {"recordStreamVersion": 1}},
+        {"id": "control-station-record-batch-resolved-mode", "file": "control/station-record-batch-resolved-mode.json", "kind": "control", "requires": {"recordStreamVersion": 2}},
         {"id": "control-record-batch-upsert-without-id", "file": "control/record-batch-upsert-without-id.json", "kind": "control", "requires": {}},
         {"id": "control-client-path-join", "file": "control/client-path-join.json", "kind": "control", "requires": {"controlSwitchVersion": 1}},
         {"id": "control-client-path-switch", "file": "control/client-path-switch.json", "kind": "control", "requires": {"controlSwitchVersion": 1}},
