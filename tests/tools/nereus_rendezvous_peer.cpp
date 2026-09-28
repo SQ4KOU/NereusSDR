@@ -20,12 +20,15 @@
 //       to FILE once registered. Runs until killed.
 //   nereus_rendezvous_peer client --dir DIR --server URL --station-id ID
 //                          [--send-bytes N] [--timeout-ms T] [--ca FILE]
+//                          [--require-ipv6]
 //       Introduces itself with DIR's key, connects, sends one message of N
 //       bytes (default 60000, many 1000-byte datagrams) and waits for it to
 //       come back. Prints one JSON line
 //       {"connected":bool,"echoed":bool,"relayed":bool,"localType",
 //        "remoteType","localAddress","remoteAddress","ms","reason"} and
-//       exits 0 when the message came back, 1 otherwise.
+//       exits 0 when the message came back, 1 otherwise. With
+//       --require-ipv6, also waits up to 10 seconds after the echo for
+//       both selected-path addresses to be numeric IPv6 addresses.
 //
 //   nereus_rendezvous_peer device-key --dir DIR
 //       Prints the public key (base64url SPKI) of a desktop's device key in
@@ -97,12 +100,15 @@
 //               media (RemoteMediaController) played into a paced bus, to
 //               show media following a relay-to-direct move with no gap.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28: opt-in IPv6 preference observation for the traversal test.
+//               J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 // =================================================================
 
 #include <QCoreApplication>
 #include <QApplication>
 #include <QElapsedTimer>
 #include <QDateTime>
+#include <QHostAddress>
 #include <QUuid>
 #include <QFile>
 #include <QJsonDocument>
@@ -195,6 +201,16 @@ QJsonObject pathObject(const IMediaTransport& transport)
         object.insert(QStringLiteral("remoteAddress"), path->remoteAddress);
     }
     return object;
+}
+
+bool hasIpv6Pair(const QJsonObject& path)
+{
+    QHostAddress local;
+    QHostAddress remote;
+    return local.setAddress(path.value(QStringLiteral("localAddress")).toString())
+           && remote.setAddress(path.value(QStringLiteral("remoteAddress")).toString())
+           && local.protocol() == QAbstractSocket::IPv6Protocol
+           && remote.protocol() == QAbstractSocket::IPv6Protocol;
 }
 
 int runStation(const QStringList& args)
@@ -315,6 +331,7 @@ int runClient(const QStringList& args)
     const QString stationId = option(args, QStringLiteral("--station-id"));
     const int sendBytes = option(args, QStringLiteral("--send-bytes"), QStringLiteral("60000")).toInt();
     const int timeoutMs = option(args, QStringLiteral("--timeout-ms"), QStringLiteral("90000")).toInt();
+    const bool requireIpv6 = args.contains(QStringLiteral("--require-ipv6"));
     if (!key.isValid() || !RendezvousWire::isRendezvousId(stationId) || sendBytes < 1
         || sendBytes > IMediaTransport::kMaxDisplayMessageBytes) {
         std::fputs("client: an argument is not usable\n", stderr);
@@ -331,7 +348,10 @@ int runClient(const QStringList& args)
         message[index] = static_cast<char>(index * 31 + 7);
     }
     auto done = std::make_shared<bool>(false);
-    const auto finish = [offerer, &clock, done](bool connected, bool echoed, const QString& reason) {
+    auto firstEchoMs = std::make_shared<qint64>(-1);
+    auto firstEchoPath = std::make_shared<QJsonObject>();
+    const auto finish = [offerer, &clock, done, firstEchoMs, firstEchoPath,
+                         requireIpv6](bool connected, bool echoed, const QString& reason) {
         if (*done) {
             return;
         }
@@ -340,6 +360,10 @@ int runClient(const QStringList& args)
         result.insert(QStringLiteral("connected"), connected);
         result.insert(QStringLiteral("echoed"), echoed);
         result.insert(QStringLiteral("ms"), static_cast<double>(clock.elapsed()));
+        if (requireIpv6 && *firstEchoMs >= 0) {
+            result.insert(QStringLiteral("firstEchoMs"), static_cast<double>(*firstEchoMs));
+            result.insert(QStringLiteral("firstEchoPath"), *firstEchoPath);
+        }
         if (!reason.isEmpty()) {
             result.insert(QStringLiteral("reason"), reason);
         }
@@ -347,7 +371,10 @@ int runClient(const QStringList& args)
             result.insert(QStringLiteral("relayed"), false);
         }
         printLine(result);
-        QCoreApplication::exit(echoed ? 0 : 1);
+        QCoreApplication::exit(echoed && reason.isEmpty()
+                                       && (!requireIpv6 || hasIpv6Pair(result))
+                                   ? 0
+                                   : 1);
     };
     QObject::connect(client, &RendezvousClient::connected, client, [client, offerer, ice, &key,
                                                                       stationId] {
@@ -396,19 +423,61 @@ int runClient(const QStringList& args)
     QObject::connect(client, &RendezvousClient::unreachable, offerer,
                      [finish](const QString& reason) { finish(false, false, reason); });
     QObject::connect(offerer, &IMediaTransport::connectionFailed, offerer,
-                     [finish](const QString&) {
-        finish(false, false, QStringLiteral("The connection could not be made."));
+                     [finish, firstEchoMs](const QString&) {
+        finish(false, *firstEchoMs >= 0, QStringLiteral("The connection could not be made."));
     });
+    if (requireIpv6) {
+        QObject::connect(offerer, &IMediaTransport::closed, offerer, [finish, firstEchoMs] {
+            finish(false, *firstEchoMs >= 0, QStringLiteral("The connection closed."));
+        });
+    }
     QObject::connect(offerer, &IMediaTransport::ready, offerer, [offerer, message] {
         offerer->sendDisplay(message);
     });
     QObject::connect(offerer, &IMediaTransport::displayReceived, offerer,
-                     [finish, message](const QByteArray& echoed) {
-        finish(true, echoed == message, echoed == message ? QString()
-                                                          : QStringLiteral("The echo differed."));
+                     [finish, message, offerer, &clock, done, firstEchoMs, firstEchoPath,
+                      requireIpv6, timeoutMs](const QByteArray& echoed) {
+        if (*done || *firstEchoMs >= 0) {
+            return;
+        }
+        if (echoed != message) {
+            finish(true, false, QStringLiteral("The echo differed."));
+            return;
+        }
+        if (!requireIpv6) {
+            finish(true, true, QString());
+            return;
+        }
+        *firstEchoMs = clock.elapsed();
+        *firstEchoPath = pathObject(*offerer);
+        if (hasIpv6Pair(*firstEchoPath)) {
+            finish(true, true, QString());
+            return;
+        }
+        auto* poll = new QTimer(offerer);
+        poll->setInterval(25);
+        QObject::connect(poll, &QTimer::timeout, offerer,
+                         [finish, offerer, done, &clock, firstEchoMs, timeoutMs] {
+            if (*done) {
+                return;
+            }
+            if (clock.elapsed() > timeoutMs || clock.elapsed() - *firstEchoMs > 10000) {
+                finish(true, true, QStringLiteral("IPv6 preference was not observed in time."));
+            } else if (hasIpv6Pair(pathObject(*offerer))) {
+                finish(true, true, QString());
+            }
+        });
+        poll->start();
+        QTimer::singleShot(10000, Qt::PreciseTimer, offerer, [finish, done] {
+            if (!*done) {
+                finish(true, true, QStringLiteral("IPv6 preference was not observed in time."));
+            }
+        });
     });
-    QTimer::singleShot(timeoutMs, offerer, [finish, offerer] {
-        finish(offerer->isReady(), false, QStringLiteral("No echo in time."));
+    QTimer::singleShot(timeoutMs, Qt::PreciseTimer, offerer, [finish, offerer, firstEchoMs] {
+        finish(offerer->isReady(), *firstEchoMs >= 0,
+               *firstEchoMs >= 0 ? QStringLiteral("IPv6 preference was not observed in time.")
+                                 : QStringLiteral("No echo in time."));
     });
     client->connectToService();
     return QCoreApplication::exec();
