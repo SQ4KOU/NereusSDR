@@ -9,6 +9,7 @@
 #include "gui/setup/GeneralSetupPages.h"
 #include "gui/setup/CatNetworkSetupPages.h"
 #include "gui/setup/DspSetupPages.h"
+#include "gui/setup/DspOptionsPage.h"
 #include "gui/setup/TestTwoTonePage.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -66,6 +67,10 @@ void compareControl(QWidget& page, const QJsonObject& control)
             QCOMPARE(spin->minimum(), control.value("min").toDouble());
             QCOMPARE(spin->maximum(), control.value("max").toDouble());
             QCOMPARE(spin->singleStep(), control.value("step").toDouble());
+        } else if (auto* spin = qobject_cast<QSpinBox*>(object)) {
+            QCOMPARE(double(spin->minimum()), control.value("min").toDouble());
+            QCOMPARE(double(spin->maximum()), control.value("max").toDouble());
+            QCOMPARE(double(spin->singleStep()), control.value("step").toDouble());
         } else {
             auto* slider = qobject_cast<QSlider*>(object);
             QVERIFY2(slider != nullptr, qPrintable(id));
@@ -140,6 +145,13 @@ private slots:
         CatTciServerPage cat;
         NrAnfSetupPage nr(&model);
         NbSnbSetupPage nb(&model);
+        CwSetupPage cw(&model);
+        AmSamSetupPage am(&model);
+        FmSetupPage fm(&model);
+        CfcSetupPage cfc(&model);
+        AgcAlcSetupPage agc(&model);
+        MnfSetupPage tnf(&model);
+        DspOptionsPage dspOptions(&model);
         for (const QJsonValue& raw : controls(service.category(QStringLiteral("general")))) {
             const QJsonObject c = raw.toObject();
             QWidget& page = c.value("id").toString().startsWith("general.startup.")
@@ -153,11 +165,26 @@ private slots:
             compareControl(cat, raw.toObject());
         }
         const QJsonObject dsp = service.category(QStringLiteral("dsp"));
-        QCOMPARE(dsp.value("pages").toArray().size(), 2);
+        QCOMPARE(dsp.value("pages").toArray().size(), 9);
+        QStringList pageIds;
+        for (const QJsonValue& page : dsp.value("pages").toArray()) {
+            pageIds.append(page.toObject().value("id").toString());
+        }
+        QCOMPARE(pageIds, (QStringList{"dsp.agcAlc", "dsp.nrAnf", "dsp.nbSnb",
+                                       "dsp.cw", "dsp.amSam", "dsp.fm", "dsp.cfc",
+                                       "dsp.tnf", "dsp.options"}));
         for (const QJsonValue& raw : controls(dsp)) {
             const QJsonObject c = raw.toObject();
-            QWidget& page = c.value("id").toString().startsWith("dsp.nrAnf.")
-                ? static_cast<QWidget&>(nr) : static_cast<QWidget&>(nb);
+            const QString id = c.value("id").toString();
+            QWidget& page = id.startsWith("dsp.nrAnf.") ? static_cast<QWidget&>(nr)
+                : id.startsWith("dsp.agcAlc.") ? static_cast<QWidget&>(agc)
+                : id.startsWith("dsp.nbSnb.") ? static_cast<QWidget&>(nb)
+                : id.startsWith("dsp.cw.") ? static_cast<QWidget&>(cw)
+                : id.startsWith("dsp.amSam.") ? static_cast<QWidget&>(am)
+                : id.startsWith("dsp.fm.") ? static_cast<QWidget&>(fm)
+                : id.startsWith("dsp.options.") ? static_cast<QWidget&>(dspOptions)
+                : id.startsWith("dsp.tnf.") ? static_cast<QWidget&>(tnf)
+                : static_cast<QWidget&>(cfc);
             compareControl(page, c);
         }
     }
@@ -205,6 +232,33 @@ private slots:
             withoutSlice, QStringLiteral("dsp.nrAnf.nr1Taps")));
         QVERIFY(unavailable != nullptr);
         QVERIFY(!unavailable->isEnabledTo(&withoutSlice));
+    }
+
+    void agcEditsFollowTheSelectedSliceAndRetireOldWidgets()
+    {
+        RadioModel model;
+        QCOMPARE(model.addSlice(), 0);
+        QCOMPARE(model.addSlice(), 1);
+        SliceModel* first = model.sliceById(0);
+        SliceModel* second = model.sliceById(1);
+        QVERIFY(first != nullptr);
+        QVERIFY(second != nullptr);
+        QVERIFY(model.setActiveSliceById(0));
+        AgcAlcSetupPage page(&model);
+        auto attack = [&page]() {
+            return qobject_cast<QSpinBox*>(bySetupId(
+                page, QStringLiteral("dsp.agcAlc.agcAttack")));
+        };
+        QVERIFY(attack() != nullptr);
+        attack()->setValue(37);
+        QCOMPARE(first->agcAttack(), 37);
+        QPointer<QSpinBox> old(attack());
+        QVERIFY(model.setActiveSliceById(1));
+        QVERIFY(old.isNull());
+        QVERIFY(attack() != nullptr);
+        attack()->setValue(53);
+        QCOMPARE(second->agcAttack(), 53);
+        QCOMPARE(first->agcAttack(), 37);
     }
 };
 

@@ -860,8 +860,9 @@ colours for the same signal.
   gesture widgets and connections, retains the selected tab, and disables edits
   without a receiver. Integrated app/Core build and six Setup/NR suites passed
   (2.70 s), including A-to-B edits, removal fallback and old-widget destruction.
-  DSP descriptions now cover 51 controls across NR/ANF and NB/SNB; remaining
-  DSP pages and composite NNR controls are still explicitly incomplete.
+  The AGC/ALC page now also rebuilds on selected-receiver changes. DSP
+  descriptions cover nine pages with their implemented scalar controls; composite
+  NNR, CFC, TNF and Filter Presets work remains explicitly incomplete.
 - Plan: remote-window selected-receiver parity and Core DSP Setup descriptions.
 
 ### G-55: TCP relay loss can delay transmit keepalives beyond the safety cutoff
@@ -918,11 +919,16 @@ colours for the same signal.
 - Evidence: DSP cache and some General settings readers require the exact strings
   True/False; a JSON boolean can be stored as lowercase true/false and read as off.
   Five General toggles and two DSP cache toggles need round-trip verification.
-- Ruling: accurate Setup parity is required by JJ's goal. The lead proposes an
-  explicit descriptor encoding, preserving existing settings semantics rather
-  than changing every AppSettings reader. Phone compatibility review is underway.
-- Status: OPEN. Unsafe new DSP cache descriptors were withheld; existing General
-  descriptions must gain verified encoding. No completion claim for these controls.
+- Ruling: accurate Setup parity is required by JJ's goal. The lead selected an
+  explicit descriptor encoding, preserving existing settings semantics. The phone
+  team confirmed the exact True/False contract; this is an implementation choice
+  under the authorized goal, not a separate operator ruling.
+- Status: Core encoding built and verified. All seven controls use exact
+  valueEncoding; malformed/partial/unknown mappings are rejected. Integrated tests
+  write both directions through SettingsProxyServer, verify persisted strings and
+  receive-only, desktop/phone timeout, watchdog and cache readers. Six focused
+  suites pass (3.25 s), as does the app/Core build. Phone renderer work remains
+  phone-owned; this does not claim that UI is complete.
 - Plan: Core Setup descriptions and phone renderer contract.
 
 ### G-59: Direct phone tests needed an explicit loopback-only Core fixture
@@ -943,6 +949,7 @@ colours for the same signal.
 - Evidence: TxCfcDialog::pushCfcProfileToModel returns after the global gains
   when either curve has other than ten points. The visible five- and eighteen-band
   layouts therefore do not apply their per-band edits to the transmit model.
+  RadioModel also forwards empty Q vectors despite the visible per-band Q controls.
 - Ruling: JJ requires every gap found in this effort to be built. No separate
   ruling on CFC behavior has been requested or received; preserve the intended
   Thetis-derived controls while completing their Core apply path.

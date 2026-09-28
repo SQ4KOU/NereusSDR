@@ -111,7 +111,11 @@
               "binding": {
                 "setting": "RxOnly"
               },
-              "applies": "live"
+              "applies": "live",
+              "valueEncoding": {
+                "true": "True",
+                "false": "False"
+              }
             },
             {
               "id": "general.options.networkWatchdog",
@@ -121,7 +125,11 @@
               "binding": {
                 "setting": "NetworkWatchdogEnabled"
               },
-              "applies": "live"
+              "applies": "live",
+              "valueEncoding": {
+                "true": "True",
+                "false": "False"
+              }
             }
           ]
         },
@@ -175,7 +183,11 @@
               "binding": {
                 "setting": "MoxTimeOutEnabled"
               },
-              "applies": "live"
+              "applies": "live",
+              "valueEncoding": {
+                "true": "True",
+                "false": "False"
+              }
             },
             {
               "id": "general.options.moxTimeoutSeconds",
@@ -199,7 +211,11 @@
               "binding": {
                 "setting": "PingTimeOutEnabled"
               },
-              "applies": "live"
+              "applies": "live",
+              "valueEncoding": {
+                "true": "True",
+                "false": "False"
+              }
             },
             {
               "id": "general.options.pingTimeoutSeconds",
@@ -233,7 +249,11 @@
               "binding": {
                 "setting": "RemoteMoxTimeOutEnabled"
               },
-              "applies": "live"
+              "applies": "live",
+              "valueEncoding": {
+                "true": "True",
+                "false": "False"
+              }
             },
             {
               "id": "general.options.remoteTimeoutSeconds",

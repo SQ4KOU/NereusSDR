@@ -9,13 +9,17 @@
 #include "core/session/SessionMessages.h"
 #include "core/session/StationServer.h"
 #include "core/AppSettings.h"
+#include "core/settings/SettingsProxyServer.h"
 #include "core/ConnectionState.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
+#include "models/TransmitModel.h"
+#include "models/NotchModel.h"
 #include "fakes/LoopbackTransport.h"
 #include "fakes/UpgradedCoreToken.h"
 
 #include <QJsonDocument>
+#include <QScopeGuard>
 #include <QTemporaryDir>
 
 #include <memory>
@@ -137,6 +141,147 @@ private slots:
         QVERIFY(schema.byName("revision"));
     }
 
+    void settingToggleEncodingIsExactAndPersistsAsReaderStrings()
+    {
+        SetupDescriptionService service;
+        const auto findControl = [&service](const QString& category, const QString& id) {
+            const QJsonObject root = service.category(category);
+            for (const QJsonValue& page : root.value(QStringLiteral("pages")).toArray()) {
+                for (const QJsonValue& section : page.toObject()
+                         .value(QStringLiteral("sections")).toArray()) {
+                    for (const QJsonValue& raw : section.toObject()
+                             .value(QStringLiteral("controls")).toArray()) {
+                        const QJsonObject control = raw.toObject();
+                        if (control.value(QStringLiteral("id")) == QJsonValue(id)) {
+                            return control;
+                        }
+                    }
+                }
+            }
+            return QJsonObject{};
+        };
+        const QStringList generalKeys = {
+            QStringLiteral("RxOnly"), QStringLiteral("NetworkWatchdogEnabled"),
+            QStringLiteral("MoxTimeOutEnabled"), QStringLiteral("PingTimeOutEnabled"),
+            QStringLiteral("RemoteMoxTimeOutEnabled")};
+        int generalCount = 0;
+        for (const QJsonValue& page : service.category(QStringLiteral("general"))
+                 .value(QStringLiteral("pages")).toArray()) {
+            for (const QJsonValue& section : page.toObject()
+                     .value(QStringLiteral("sections")).toArray()) {
+                for (const QJsonValue& raw : section.toObject()
+                         .value(QStringLiteral("controls")).toArray()) {
+                    const QJsonObject control = raw.toObject();
+                    if (control.value(QStringLiteral("kind")) != QJsonValue(QStringLiteral("toggle"))
+                        || !control.value(QStringLiteral("binding")).toObject()
+                                .contains(QStringLiteral("setting"))) {
+                        continue;
+                    }
+                    QVERIFY(generalKeys.contains(control.value(QStringLiteral("binding"))
+                        .toObject().value(QStringLiteral("setting")).toString()));
+                    QVERIFY(SetupDescriptionService::validateSettingToggleEncoding(control));
+                    ++generalCount;
+                }
+            }
+        }
+        QCOMPARE(generalCount, 5);
+
+        const QJsonObject watchdog = findControl(QStringLiteral("general"),
+            QStringLiteral("general.options.networkWatchdog"));
+        QVERIFY(!watchdog.isEmpty());
+        QJsonObject bad = watchdog;
+        bad.remove(QStringLiteral("valueEncoding"));
+        QVERIFY(!SetupDescriptionService::validateSettingToggleEncoding(bad));
+        bad = watchdog;
+        bad.insert(QStringLiteral("valueEncoding"), QJsonObject{
+            {QStringLiteral("true"), QStringLiteral("True")}});
+        QVERIFY(!SetupDescriptionService::validateSettingToggleEncoding(bad));
+        bad = watchdog;
+        bad.insert(QStringLiteral("valueEncoding"), QJsonObject{
+            {QStringLiteral("true"), QStringLiteral("true")},
+            {QStringLiteral("false"), QStringLiteral("False")}});
+        QVERIFY(!SetupDescriptionService::validateSettingToggleEncoding(bad));
+        bad = watchdog;
+        bad.insert(QStringLiteral("valueEncoding"), QJsonObject{
+            {QStringLiteral("true"), QStringLiteral("True")},
+            {QStringLiteral("false"), QStringLiteral("False")},
+            {QStringLiteral("fallback"), QStringLiteral("False")}});
+        QVERIFY(!SetupDescriptionService::validateSettingToggleEncoding(bad));
+        bad = findControl(QStringLiteral("dsp"),
+            QStringLiteral("dsp.agcAlc.autoAgcEnabled"));
+        QVERIFY(!bad.isEmpty());
+        bad.insert(QStringLiteral("valueEncoding"), watchdog.value(QStringLiteral("valueEncoding")));
+        QVERIFY(!SetupDescriptionService::validateSettingToggleEncoding(bad));
+
+        AppSettings& store = AppSettings::instance();
+        const QStringList keys = {QStringLiteral("RxOnly"),
+            QStringLiteral("MoxTimeOutEnabled"), QStringLiteral("PingTimeOutEnabled"),
+            QStringLiteral("RemoteMoxTimeOutEnabled"), QStringLiteral("NetworkWatchdogEnabled"),
+            QStringLiteral("DspOptionsCacheImpulse"),
+            QStringLiteral("DspOptionsCacheImpulseSaveRestore")};
+        QHash<QString, QVariant> oldValues;
+        for (const QString& key : keys) {
+            if (store.contains(key)) {
+                oldValues.insert(key, store.value(key));
+            }
+        }
+        const auto restore = qScopeGuard([&store, &keys, &oldValues] {
+            for (const QString& key : keys) {
+                if (oldValues.contains(key)) {
+                    store.setValue(key, oldValues.value(key));
+                } else {
+                    store.remove(key);
+                }
+            }
+        });
+        SettingsProxyServer server(store);
+        QSignalSpy changed(&server, &SettingsProxyServer::outboundValueChanged);
+        const QStringList ids = {QStringLiteral("general.options.rxOnly"),
+            QStringLiteral("general.options.moxTimeoutEnabled"),
+            QStringLiteral("general.options.pingTimeoutEnabled"),
+            QStringLiteral("general.options.remoteTimeoutEnabled"),
+            QStringLiteral("general.options.networkWatchdog"),
+            QStringLiteral("dsp.options.DspOptionsCacheImpulse"),
+            QStringLiteral("dsp.options.DspOptionsCacheImpulseSaveRestore")};
+        for (const QString& id : ids) {
+            const QJsonObject control = findControl(id.startsWith(QStringLiteral("general."))
+                ? QStringLiteral("general") : QStringLiteral("dsp"), id);
+            QVERIFY2(!control.isEmpty(), qPrintable(id));
+            QVERIFY(SetupDescriptionService::validateSettingToggleEncoding(control));
+            const QString key = control.value(QStringLiteral("binding"))
+                .toObject().value(QStringLiteral("setting")).toString();
+            const QJsonObject encoding = control.value(QStringLiteral("valueEncoding")).toObject();
+            for (const bool on : {true, false}) {
+                const QString token = encoding.value(on ? QStringLiteral("true")
+                    : QStringLiteral("false")).toString();
+                QVERIFY(server.applyInboundWrite(key, token, QStringLiteral("phone-test")).accepted);
+                QCOMPARE(store.value(key).toString(), token);
+                QVERIFY(!changed.isEmpty());
+                const QList<QVariant> broadcast = changed.takeLast();
+                QCOMPARE(broadcast.at(0).toString(), key);
+                QCOMPARE(broadcast.at(1).metaType(), QMetaType::fromType<QString>());
+                QCOMPARE(broadcast.at(1).toString(), token);
+                if (key == QLatin1String("NetworkWatchdogEnabled")) {
+                    QCOMPARE(RadioModel::networkWatchdogSetting(), on);
+                } else if (key == QLatin1String("RxOnly")) {
+                    QCOMPARE(RadioModel::rxOnlySetting(), on);
+                } else if (key == QLatin1String("MoxTimeOutEnabled")) {
+                    QCOMPARE(RadioModel::txTimeOutSettingsFor(QStringLiteral("station")).moxEnabled, on);
+                } else if (key == QLatin1String("PingTimeOutEnabled")) {
+                    QCOMPARE(RadioModel::txTimeOutSettingsFor(QStringLiteral("station")).pingEnabled, on);
+                } else if (key == QLatin1String("RemoteMoxTimeOutEnabled")) {
+                    QCOMPARE(RadioModel::txTimeOutSettingsFor(QStringLiteral("phone")).moxEnabled, on);
+                    QCOMPARE(RadioModel::txTimeOutSettingsFor(QStringLiteral("tablet")).moxEnabled, on);
+                } else {
+                    // WdspEngine::finishInitialization/shutdown read both
+                    // cache keys with this exact string comparison.
+                    QCOMPARE(store.value(key, QStringLiteral("False")).toString()
+                                 == QStringLiteral("True"), on);
+                }
+            }
+        }
+    }
+
     void boardRefreshOnlyMovesRevisionOnChange()
     {
         SetupDescriptionService service;
@@ -172,10 +317,18 @@ private slots:
         SetupDescriptionService service;
         const QJsonArray pages = service.category(QStringLiteral("dsp"))
                                      .value(QStringLiteral("pages")).toArray();
-        QCOMPARE(pages.size(), 2);
+        QCOMPARE(pages.size(), 9);
         const MirrorSchema& sliceSchema = MirrorSchema::forMetaObject(
             &SliceModel::staticMetaObject);
+        const MirrorSchema& transmitSchema = MirrorSchema::forMetaObject(
+            &TransmitModel::staticMetaObject);
+        const MirrorSchema& notchSchema = MirrorSchema::forMetaObject(
+            &NotchModel::staticMetaObject);
         int count = 0;
+        int transmitCount = 0;
+        int settingCount = 0;
+        int notchCount = 0;
+        int readoutCount = 0;
         for (const QJsonValue& rawPage : pages) {
             for (const QJsonValue& rawSection : rawPage.toObject()
                      .value(QStringLiteral("sections")).toArray()) {
@@ -188,21 +341,46 @@ private slots:
                             rawControl.toObject(), &error), qPrintable(error));
                         continue;
                     }
+                    if (rawControl.toObject().value("binding").toObject()
+                            .contains("setting")) {
+                        QVERIFY(SetupDescriptionService::validateDspSettingBinding(
+                            rawControl.toObject()));
+                        ++settingCount;
+                        continue;
+                    }
                     const QJsonObject ref = rawControl.toObject().value("binding")
                         .toObject().value("property").toObject();
                     QVERIFY(SetupDescriptionService::validateActiveSlicePropertyBinding(
                         rawControl.toObject()));
-                    QCOMPARE(ref.value("object").toString(), QStringLiteral("slice:active"));
+                    const QString object = ref.value("object").toString();
+                    QVERIFY(object == QLatin1String("slice:active")
+                            || object == QLatin1String("transmit")
+                            || object == QLatin1String("notches"));
                     const QByteArray name = ref.value("name").toString().toUtf8();
-                    const MirrorProperty* property = sliceSchema.byName(name);
+                    const bool transmit = object == QLatin1String("transmit");
+                    const bool notch = object == QLatin1String("notches");
+                    const MirrorProperty* property = transmit ? transmitSchema.byName(name)
+                        : notch ? notchSchema.byName(name) : sliceSchema.byName(name);
                     QVERIFY2(property != nullptr, name.constData());
+                    if (rawControl.toObject().value("kind") == QJsonValue("readout")) {
+                        QVERIFY(!property->isWritable);
+                        ++readoutCount;
+                        continue;
+                    }
                     QVERIFY(property->isWritable);
-                    QVERIFY(MirrorPolicy::inboundAllowed("SliceModel", name));
-                    ++count;
+                    QVERIFY(MirrorPolicy::inboundAllowed(
+                        transmit ? "TransmitModel" : notch ? "NotchModel" : "SliceModel", name));
+                    if (transmit) { ++transmitCount; }
+                    else if (notch) { ++notchCount; }
+                    else { ++count; }
                 }
             }
         }
-        QCOMPARE(count, 50);
+        QCOMPARE(count, 63);
+        QCOMPARE(transmitCount, 14);
+        QCOMPARE(settingCount, 23);
+        QCOMPARE(notchCount, 1);
+        QCOMPARE(readoutCount, 1);
         QJsonObject valid = pages.first().toObject().value("sections").toArray().first()
             .toObject().value("controls").toArray().first().toObject();
         QJsonObject bad = valid;
@@ -215,6 +393,22 @@ private slots:
         bad = valid;
         bad.insert("binding", binding);
         QVERIFY(!SetupDescriptionService::validateActiveSlicePropertyBinding(bad));
+        QJsonObject options = pages.at(8).toObject().value("sections").toArray()
+            .first().toObject().value("controls").toArray().first().toObject();
+        QVERIFY(SetupDescriptionService::validateDspSettingBinding(options));
+        bad = options;
+        bad.insert("kind", "toggle");
+        QVERIFY(!SetupDescriptionService::validateDspSettingBinding(bad));
+        bad = options;
+        QJsonObject settingBinding = bad.value("binding").toObject();
+        settingBinding.insert("setting", "DspOptionsBufferSizeCwTx");
+        bad.insert("binding", settingBinding);
+        QVERIFY(!SetupDescriptionService::validateDspSettingBinding(bad));
+        bad = options;
+        QJsonArray wrongChoices = bad.value("choices").toArray();
+        wrongChoices[0] = "2048";
+        bad.insert("choices", wrongChoices);
+        QVERIFY(!SetupDescriptionService::validateDspSettingBinding(bad));
         ref.insert("name", "nr1Taps");
         ref.insert("object", "slice:0"); // must be late-bound to this device's selection
         binding.insert("property", ref);
@@ -276,7 +470,8 @@ private slots:
         older.setupDescriptionVersion = 1;
         const QList<MirrorUpdate> described = older.toUpdates();
         QCOMPARE(described.size(), legacyMinor11.size() + 1);
-        QCOMPARE(described.last().name, QByteArray("setupDescriptionVersion"));
+        QCOMPARE(described.at(described.size() - 2).name, QByteArray("setupDescriptionVersion"));
+        QCOMPARE(described.last().name, QByteArray("accessoryTxVersion"));
         QCOMPARE(StationCapabilities::fromUpdates(described).setupDescriptionVersion, 1);
     }
 

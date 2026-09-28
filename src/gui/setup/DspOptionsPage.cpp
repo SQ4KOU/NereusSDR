@@ -445,6 +445,7 @@ void DspOptionsPage::buildUI()
 
         outRx = makeCombo(g, items);
         outRx->setObjectName(keyPrefix + modeKey + QStringLiteral("Rx"));
+        outRx->setProperty("nereusSetupId", QStringLiteral("dsp.options.") + outRx->objectName());
         outRx->setToolTip(comboTooltip);
         loadCombo(outRx, keyPrefix + modeKey + QStringLiteral("Rx"), rxDef);
         wireComboWithLiveApply(outRx, comboMode,
@@ -454,6 +455,7 @@ void DspOptionsPage::buildUI()
         if (!txDef.isEmpty()) {
             outTx = makeCombo(g, items);
             outTx->setObjectName(keyPrefix + modeKey + QStringLiteral("Tx"));
+            outTx->setProperty("nereusSetupId", QStringLiteral("dsp.options.") + outTx->objectName());
             outTx->setToolTip(comboTooltip);
             loadCombo(outTx, keyPrefix + modeKey + QStringLiteral("Tx"), txDef);
             wireComboWithLiveApply(outTx, comboMode,
@@ -602,6 +604,7 @@ void DspOptionsPage::buildUI()
     auto* cacheLayout = new QVBoxLayout(cacheGroup);
 
     m_cacheImpulse = new QCheckBox(tr("Enable WDSP impulse caching"), cacheGroup);
+    m_cacheImpulse->setProperty("nereusSetupId", "dsp.options.DspOptionsCacheImpulse");
     m_cacheImpulse->setToolTip(
         tr("Cache filter impulse responses in memory for faster channel rebuilds. "
            "Trades memory for first-rebuild latency. "
@@ -609,6 +612,7 @@ void DspOptionsPage::buildUI()
 
     m_cacheImpulseSaveRestore = new QCheckBox(
         tr("Persist impulse cache to disk between sessions"), cacheGroup);
+    m_cacheImpulseSaveRestore->setProperty("nereusSetupId", "dsp.options.DspOptionsCacheImpulseSaveRestore");
     m_cacheImpulseSaveRestore->setToolTip(
         tr("Save the impulse cache to disk on shutdown and reload on next launch. "
            "Eliminates the first-rebuild cost after restarting NereusSDR. "

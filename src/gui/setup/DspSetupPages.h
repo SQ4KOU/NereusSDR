@@ -119,9 +119,13 @@ public:
 
 private:
     void updateCustomGating(AGCMode mode);
+    void rebuildForActiveSlice();
 
     QGroupBox*  m_txLevelerGrp{nullptr};
     QGroupBox*  m_txAlcGrp{nullptr};
+    bool m_txSettingsGateKnown{false};
+    bool m_txSettingsPermitted{false};
+    QString m_txSettingsReason;
 
     QComboBox*  m_agcModeCombo{nullptr};
     QSpinBox*   m_agcAttack{nullptr};
