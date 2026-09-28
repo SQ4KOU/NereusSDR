@@ -2392,10 +2392,18 @@ colours for the same signal.
 - Ruling basis: JJ requires the cause and suggested fix at actual load.
   Preserve the amplitude contract and measure delivery and playback boundaries
   before choosing a production or fixture repair.
-- Status: OPEN investigation. In particular, PacedAudioBus's existing dry-frame
-  counter covers its optional wall-clock mode, but this row calls render()
-  directly; that counter cannot establish whether this row inserted silence.
-  Targeted evidence must cover the actual render path and receiver statistics.
+- Status: the lead reproduced a fixture defect by delaying the operator's
+  route until two seconds had already been rendered. The old assertion failed
+  at 0.0374726 versus 0.0949995: playback first became audible at frame 107584,
+  after the fixed 48000-frame skip, with zero feeder drops, trims or restarts.
+  The test now captures equal fixed three-second local/remote windows after
+  playback begins, retaining the original one-second settling interval,
+  amplitude tolerance and all later silence/discontinuities. Both single and
+  mixed-slice delayed-route regressions pass, followed by app/Core and the
+  full VAX suite (45.12 s). No production behavior or deadlines changed.
+  The original Linux run lacked this trace, so its exact sample history is
+  not retrospectively established; Linux confirmation of the repair remains
+  pending. Evidence: core-gui-vax-startup-{probe-red,green-focused,green-ctest}.log.
 - Plan: local/remote VAX audio parity under real load.
 
 ### G-115: Docker's read-only network settings prevent traversal setup
@@ -2408,10 +2416,28 @@ colours for the same signal.
 - Status: a separate network-isolated disposable container with Docker's
   systempaths=unconfined option successfully created a private network
   namespace, set/read its IPv6 switch and removed it. This proves the setup
-  prerequisite only. The next traversal invocation must use that option;
-  the current immutable full run continues unchanged and retains its failure.
-  No host network settings, live service or radio were changed.
+  prerequisite only. The next run also exposed a missing /dev/net/tun;
+  an explicit device mapping passed the private namespace/TUN/nft probe.
+  With both corrections, the unchanged immutable 5c harness passed all eight
+  peer scenarios. Its first full-session helper then crashed (G-116).
+  The completed older full run retains its setup failure. No host network
+  settings, live service or radio were changed.
 - Plan: complete Linux remote-access traversal verification.
+
+### G-116: Linux traversal Core helper crashes before session registration
+
+- Evidence: after the corrected isolated container passed eight peer traversal
+  scenarios, its first session-direct Core helper exited with SIGSEGV before
+  writing its registration ID. The retained log ends after successful
+  PortAudio initialization; this is not proof that PortAudio caused the crash.
+  Harness cleanup removed its per-scenario logs, leaving no stack trace.
+- Ruling basis: JJ requires causes and fixes for failures at actual load.
+  Preserve the original deadlines and full-session acceptance criteria.
+- Status: OPEN. Sol 6 medium owns an isolated, evidence-preserving reproduction
+  of session-direct against the same frozen 5c source/runtime. The independent
+  current-source Linux build continues. No live service, radio or host network
+  mutation is authorized by this investigation.
+- Plan: complete R5 full-session Linux traversal verification.
 
 ## How this addendum is kept
 

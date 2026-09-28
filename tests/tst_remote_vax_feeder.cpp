@@ -1080,13 +1080,16 @@ private slots:
     void sliceBOnVax1PlaysAtTheLocalLevel_data()
     {
         QTest::addColumn<bool>("lossless");
-        QTest::newRow("opus") << false;
-        QTest::newRow("lossless") << true;
+        QTest::addColumn<bool>("delayedRoute");
+        QTest::newRow("opus") << false << false;
+        QTest::newRow("lossless") << true << false;
+        QTest::newRow("lossless-delayed-route") << true << true;
     }
 
     void sliceBOnVax1PlaysAtTheLocalLevel()
     {
         QFETCH(bool, lossless);
+        QFETCH(bool, delayedRoute);
         AppSettings::instance().setValue(
             QLatin1String(RemoteMediaController::kAudioProfileSettingKey),
             lossless ? QStringLiteral("Lossless") : QStringLiteral("Opus"));
@@ -1149,11 +1152,24 @@ private slots:
         QTest::qWait(200);
         QCOMPARE(receiverRequests(coreControls, h.sliceB).size(), 0);
 
+        if (delayedRoute) {
+            QTRY_VERIFY_WITH_TIMEOUT(remoteVax->heard.size() >= 2 * 48000 * 2, 20000);
+        }
+
         // The operator puts slice B on VAX 1 in the remote window.
         h.remote.sliceById(h.sliceB)->setVaxChannel(1);
         QCOMPARE(router.requestedSlice(1), h.sliceB);
-        QTRY_VERIFY_WITH_TIMEOUT(remoteVax->heard.size() >= 3 * 48000 * 2, 20000);
-        QTRY_VERIFY_WITH_TIMEOUT(stationVax->samples().size() >= 3 * 48000 * 2, 20000);
+        // Measure a fixed window after the stream starts. Connection setup
+        // and time before the operator routes audio are not playback samples.
+        // Keep the original one-second settling interval within this window;
+        // any subsequent silence or discontinuity still affects the level.
+        QTRY_VERIFY_WITH_TIMEOUT(router.feeder(1)->stats().state == RemoteVaxFeederStats::State::Playing
+                                 && router.feeder(1)->stats().writtenFrames > 0, 20000);
+        const qsizetype remoteStart = remoteVax->heard.size();
+        const qsizetype localStart = stationVax->samples().size();
+        constexpr qsizetype measurementSamples = 3 * 48000 * 2;
+        QTRY_VERIFY_WITH_TIMEOUT(remoteVax->heard.size() >= remoteStart + measurementSamples, 20000);
+        QTRY_VERIFY_WITH_TIMEOUT(stationVax->samples().size() >= localStart + measurementSamples, 20000);
         const QList<QJsonObject> requests = receiverRequests(coreControls, h.sliceB);
         QCOMPARE(requests.size(), 1);
         QCOMPARE(requests.constFirst().value(QStringLiteral("profile")).toString(),
@@ -1161,8 +1177,8 @@ private slots:
         QCOMPARE(router.feeder(1)->stats().state, RemoteVaxFeederStats::State::Playing);
 
         // The same level as the Core's own VAX 1 for the same signal.
-        const QVector<float> heard = remoteVax->heard;
-        const QVector<float> local = stationVax->samples();
+        const QVector<float> heard = remoteVax->heard.mid(remoteStart, measurementSamples);
+        const QVector<float> local = stationVax->samples().mid(localStart, measurementSamples);
         const int skip = 48000;  // past the start
         const double remoteB = Test::toneAmplitude(heard, 0, Test::RemoteAudioSessionHarness::kSliceBToneHz, skip);
         const double remoteA = Test::toneAmplitude(heard, 0, Test::RemoteAudioSessionHarness::kSliceAToneHz, skip);
@@ -1196,13 +1212,16 @@ private slots:
     void slicesAAndBOnVax1MixAsTheLocalVaxDoes_data()
     {
         QTest::addColumn<bool>("lossless");
-        QTest::newRow("opus") << false;
-        QTest::newRow("lossless") << true;
+        QTest::addColumn<bool>("delayedRoute");
+        QTest::newRow("opus") << false << false;
+        QTest::newRow("lossless") << true << false;
+        QTest::newRow("lossless-delayed-route") << true << true;
     }
 
     void slicesAAndBOnVax1MixAsTheLocalVaxDoes()
     {
         QFETCH(bool, lossless);
+        QFETCH(bool, delayedRoute);
         AppSettings::instance().setValue(
             QLatin1String(RemoteMediaController::kAudioProfileSettingKey),
             lossless ? QStringLiteral("Lossless") : QStringLiteral("Opus"));
@@ -1262,19 +1281,31 @@ private slots:
         const QString coreKey = QStringLiteral("harnesscore2");
         RemoteVaxRouter router(&h.remote, remoteEngine, coreKey);
         router.setReceiverAudio(sourceFor(remoteMedia));
+        if (delayedRoute) {
+            QTRY_VERIFY_WITH_TIMEOUT(remoteVax->heard.size() >= 2 * 48000 * 2, 20000);
+        }
         h.remote.sliceById(h.sliceA)->setVaxChannel(1);
         h.remote.sliceById(h.sliceB)->setVaxChannel(1);
         QList<int> both{h.sliceA, h.sliceB};
         std::sort(both.begin(), both.end());
         QCOMPARE(router.requestedSlices(1), both);
-        QTRY_VERIFY_WITH_TIMEOUT(remoteVax->heard.size() >= 3 * 48000 * 2, 20000);
-        QTRY_VERIFY_WITH_TIMEOUT(stationVax->samples().size() >= 3 * 48000 * 2, 20000);
+        // Measure a fixed window after the stream starts. Connection setup
+        // and time before the operator routes audio are not playback samples.
+        // Keep the original one-second settling interval within this window;
+        // any subsequent silence or discontinuity still affects the level.
+        QTRY_VERIFY_WITH_TIMEOUT(router.feeder(1)->stats().state == RemoteVaxFeederStats::State::Playing
+                                 && router.feeder(1)->stats().writtenFrames > 0, 20000);
+        const qsizetype remoteStart = remoteVax->heard.size();
+        const qsizetype localStart = stationVax->samples().size();
+        constexpr qsizetype measurementSamples = 3 * 48000 * 2;
+        QTRY_VERIFY_WITH_TIMEOUT(remoteVax->heard.size() >= remoteStart + measurementSamples, 20000);
+        QTRY_VERIFY_WITH_TIMEOUT(stationVax->samples().size() >= localStart + measurementSamples, 20000);
         QCOMPARE(receiverRequests(coreControls, h.sliceA).size(), 1);
         QCOMPARE(receiverRequests(coreControls, h.sliceB).size(), 1);
         QCOMPARE(router.feeder(1)->stats().state, RemoteVaxFeederStats::State::Playing);
 
-        const QVector<float> heard = remoteVax->heard;
-        const QVector<float> local = stationVax->samples();
+        const QVector<float> heard = remoteVax->heard.mid(remoteStart, measurementSamples);
+        const QVector<float> local = stationVax->samples().mid(localStart, measurementSamples);
         const int skip = 48000;
         using H = Test::RemoteAudioSessionHarness;
         const double remoteA = Test::toneAmplitude(heard, 0, H::kSliceAToneHz, skip);
