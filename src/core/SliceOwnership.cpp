@@ -21,11 +21,19 @@
 //   2026-09-28: slice control and shared listening plan Task 2: each
 //               slice's listener set. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-28: slice control and shared listening plan Task 3: joining
+//               and leaving, claims removal and each device's active
+//               receive slice. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/SliceOwnership.h"
 
 #include <QRandomGenerator>
+
+#include <algorithm>
+#include <iterator>
+#include <utility>
 
 namespace NereusSDR {
 
@@ -50,6 +58,7 @@ SliceOwnership::SliceOwnership(quint32 bootNonce, QObject* parent)
 
 void SliceOwnership::noteSliceAdded(int sliceId)
 {
+    const ActiveRxWatch watch(this);
     m_removing.remove(sliceId);
     m_order.removeAll(sliceId);
     m_order.append(sliceId);
@@ -63,8 +72,12 @@ void SliceOwnership::noteSliceAdded(int sliceId)
     }
     m_incarnations.insert(sliceId, m_incarnationBase | m_incarnationCounter);
     m_revisions.insert(sliceId, 1);
-    // Task 2 (slice control plan): a new slice has no listeners yet.
+    // Task 2 (slice control plan): a new slice has no listeners yet; Task 3:
+    // its controller, when it has one, is joined.
     m_listeners.remove(sliceId);
+    if (!mark.owner.isEmpty()) {
+        m_listeners.insert(sliceId, QList<QByteArray>{mark.owner});
+    }
     // Task 74: bound before it was noted, it claimed its receiver for
     // nobody; it is the first there, so the receiver is its owner's.
     const auto stream = m_streamOf.constFind(sliceId);
@@ -80,6 +93,7 @@ void SliceOwnership::beginRemove(int sliceId)
     if (!isLive(sliceId)) {
         return;
     }
+    const ActiveRxWatch watch(this);
     const QByteArray owner = m_marks.value(sliceId).owner;
     m_removing.insert(sliceId);
     if (m_mostRecent == sliceId) {
@@ -91,6 +105,7 @@ void SliceOwnership::beginRemove(int sliceId)
 
 void SliceOwnership::endRemove(int sliceId)
 {
+    const ActiveRxWatch watch(this);
     leaveStream(sliceId);
     m_removing.remove(sliceId);
     m_order.removeAll(sliceId);
@@ -98,6 +113,10 @@ void SliceOwnership::endRemove(int sliceId)
     m_incarnations.remove(sliceId);
     m_revisions.remove(sliceId);
     m_listeners.remove(sliceId);
+    // Task 3: a receive choice never carries over to the id made again.
+    for (auto it = m_chosenRx.begin(); it != m_chosenRx.end();) {
+        it = it.value() == sliceId ? m_chosenRx.erase(it) : std::next(it);
+    }
     if (m_mostRecent == sliceId) {
         m_mostRecent = -1;
     }
@@ -117,6 +136,7 @@ void SliceOwnership::setOrder(const QList<int>& sliceIds)
         }
     }
     if (order != m_order) {
+        const ActiveRxWatch watch(this);
         m_order = order;
         emit activeChanged();
     }
@@ -161,22 +181,187 @@ QList<QByteArray> SliceOwnership::listenersOf(int sliceId) const
     return listeners;
 }
 
-void SliceOwnership::setListenersForTest(int sliceId, const QList<QByteArray>& devices)
+// ── Membership and the active receive slice (slice control plan Task 3) ─
+
+bool SliceOwnership::join(const QByteArray& device, int sliceId)
 {
-    if (!isLive(sliceId)) {
-        return;
+    if (device.isEmpty() || !isLive(sliceId)) {
+        return false;
     }
-    QList<QByteArray> joined;
-    for (const QByteArray& device : devices) {
-        if (!device.isEmpty() && !joined.contains(device)) {
-            joined.append(device);
+    if (isListening(device, sliceId)) {
+        return true;
+    }
+    const ActiveRxWatch watch(this);
+    m_listeners[sliceId].append(device);
+    emit listenersChanged(sliceId);
+    return true;
+}
+
+bool SliceOwnership::leave(const QByteArray& device, int sliceId)
+{
+    if (device.isEmpty() || !isLive(sliceId) || m_marks.value(sliceId).owner == device) {
+        return false;
+    }
+    const auto joined = m_listeners.find(sliceId);
+    if (joined == m_listeners.end() || !joined->contains(device)) {
+        return false;
+    }
+    const ActiveRxWatch watch(this);
+    joined->removeAll(device);
+    if (joined->isEmpty()) {
+        m_listeners.erase(joined);
+    }
+    if (m_chosenRx.value(device, -1) == sliceId) {
+        m_chosenRx.remove(device);
+    }
+    emit listenersChanged(sliceId);
+    return true;
+}
+
+QList<int> SliceOwnership::joinedBy(const QByteArray& device) const
+{
+    QList<int> ids;
+    if (device.isEmpty()) {
+        return ids;
+    }
+    for (int id : m_order) {
+        if (isLive(id) && isListening(device, id)) {
+            ids.append(id);
         }
     }
-    if (joined.isEmpty()) {
-        m_listeners.remove(sliceId);
-    } else {
-        m_listeners.insert(sliceId, joined);
+    return ids;
+}
+
+int SliceOwnership::activeRxFor(const QByteArray& device) const
+{
+    if (device.isEmpty()) {
+        return -1;
     }
+    const auto chosen = m_chosenRx.constFind(device);
+    if (chosen != m_chosenRx.cend() && isLive(*chosen) && isListening(device, *chosen)) {
+        return *chosen;
+    }
+    const int controlled = activeFor(device);
+    if (controlled >= 0) {
+        return controlled;
+    }
+    const QList<int> joined = joinedBy(device);
+    return joined.isEmpty() ? -1 : joined.first();
+}
+
+bool SliceOwnership::setActiveRx(const QByteArray& device, int sliceId)
+{
+    if (device.isEmpty() || !isLive(sliceId) || !isListening(device, sliceId)) {
+        return false;
+    }
+    const ActiveRxWatch watch(this);
+    m_chosenRx.insert(device, sliceId);
+    return true;
+}
+
+SliceOwnership::ClaimsRemoved SliceOwnership::removeClaims(const QByteArray& device)
+{
+    ClaimsRemoved removed;
+    if (device.isEmpty()) {
+        return removed;
+    }
+    const ActiveRxWatch watch(this);
+    const QList<int> order = m_order;
+    for (int id : order) {
+        if (!isLive(id)) {
+            continue;
+        }
+        const Mark mark = m_marks.value(id);
+        const bool controls = (mark.owner == device && !mark.isHeld()) || mark.heldFor == device;
+        if (controls) {
+            changeMark(id, Mark{}, device);
+            removed.releasedControl.append(id);
+            continue;
+        }
+        const auto joined = m_listeners.find(id);
+        if (joined != m_listeners.end() && joined->contains(device)) {
+            joined->removeAll(device);
+            if (joined->isEmpty()) {
+                m_listeners.erase(joined);
+            }
+            emit listenersChanged(id);
+            removed.leftListening.append(id);
+        }
+    }
+    // It controls none now, so its active slice was already none.
+    m_chosenRx.remove(device);
+    m_chosen.remove(device);
+    return removed;
+}
+
+QList<int> SliceOwnership::unclaimed() const
+{
+    QList<int> ids;
+    for (int id : m_order) {
+        if (isLive(id) && m_marks.value(id).owner.isEmpty() && listenersOf(id).isEmpty()) {
+            ids.append(id);
+        }
+    }
+    return ids;
+}
+
+SliceOwnership::ActiveRxWatch::ActiveRxWatch(SliceOwnership* ownership)
+    : m_ownership(ownership)
+{
+    if (m_ownership->m_rxWatchDepth++ == 0) {
+        m_ownership->m_rxBefore = m_ownership->activeRxSnapshot();
+    }
+}
+
+SliceOwnership::ActiveRxWatch::~ActiveRxWatch()
+{
+    if (--m_ownership->m_rxWatchDepth != 0) {
+        return;
+    }
+    const QHash<QByteArray, int> before = std::exchange(m_ownership->m_rxBefore, {});
+    const QHash<QByteArray, int> after = m_ownership->activeRxSnapshot();
+    QList<QByteArray> devices = before.keys();
+    for (auto it = after.cbegin(); it != after.cend(); ++it) {
+        if (!before.contains(it.key())) {
+            devices.append(it.key());
+        }
+    }
+    std::sort(devices.begin(), devices.end());
+    for (const QByteArray& device : std::as_const(devices)) {
+        if (before.value(device, -1) != after.value(device, -1)) {
+            emit m_ownership->activeRxChanged(device);
+        }
+    }
+}
+
+QHash<QByteArray, int> SliceOwnership::activeRxSnapshot() const
+{
+    // Every device that could have an active receive slice: owners, those
+    // a slice is held for, joined devices and those with a choice.
+    QSet<QByteArray> devices;
+    for (auto it = m_marks.cbegin(); it != m_marks.cend(); ++it) {
+        devices.insert(it->owner);
+        devices.insert(it->heldFor);
+    }
+    for (auto it = m_listeners.cbegin(); it != m_listeners.cend(); ++it) {
+        for (const QByteArray& device : it.value()) {
+            devices.insert(device);
+        }
+    }
+    for (auto it = m_chosenRx.cbegin(); it != m_chosenRx.cend(); ++it) {
+        devices.insert(it.key());
+    }
+    for (auto it = m_chosen.cbegin(); it != m_chosen.cend(); ++it) {
+        devices.insert(it.key());
+    }
+    QHash<QByteArray, int> snapshot;
+    for (const QByteArray& device : std::as_const(devices)) {
+        const int id = activeRxFor(device);
+        if (id >= 0) {
+            snapshot.insert(device, id);
+        }
+    }
+    return snapshot;
 }
 
 // ── Incarnation and control revision (slice control plan Task 1) ────────
@@ -210,8 +395,13 @@ SliceOwnership::Mark SliceOwnership::mark(int sliceId) const
 
 void SliceOwnership::setMark(int sliceId, const Mark& requested)
 {
+    changeMark(sliceId, requested, QByteArray());
+}
+
+bool SliceOwnership::changeMark(int sliceId, const Mark& requested, const QByteArray& leaving)
+{
     if (!isLive(sliceId)) {
-        return;
+        return false;
     }
     Mark next = requested;
     if (next.isHeld()) {
@@ -219,9 +409,28 @@ void SliceOwnership::setMark(int sliceId, const Mark& requested)
     }
     const Mark before = m_marks.value(sliceId);
     if (before == next) {
-        return;
+        return false;
     }
+    const ActiveRxWatch watch(this);
+    const QList<QByteArray> listenersBefore = listenersOf(sliceId);
     m_marks.insert(sliceId, next);
+    // Task 3 (slice control plan): the new controller joins; nobody leaves
+    // on a change of owner (the former controller stays a listener). The
+    // station device running a slice held for another device does not join
+    // by the hold. Only a claims removal names a device that leaves here.
+    QList<QByteArray>& joined = m_listeners[sliceId];
+    if (!leaving.isEmpty()) {
+        joined.removeAll(leaving);
+        if (m_chosenRx.value(leaving, -1) == sliceId) {
+            m_chosenRx.remove(leaving);
+        }
+    }
+    if (!next.owner.isEmpty() && !next.isHeld() && !joined.contains(next.owner)) {
+        joined.append(next.owner);
+    }
+    if (joined.isEmpty()) {
+        m_listeners.remove(sliceId);
+    }
     // Task 74: the anchor goes with the slice to its new owner when it was
     // the old owner's only slice on the receiver.
     const auto stream = m_streamOf.constFind(sliceId);
@@ -248,7 +457,11 @@ void SliceOwnership::setMark(int sliceId, const Mark& requested)
     if (revision != 0) {
         emit controlRevisionChanged(sliceId, revision);
     }
+    if (listenersOf(sliceId) != listenersBefore) {
+        emit listenersChanged(sliceId);
+    }
     emit activeChanged();
+    return true;
 }
 
 void SliceOwnership::setOwner(int sliceId, const QByteArray& owner)
@@ -292,6 +505,7 @@ QList<int> SliceOwnership::unowned() const
 
 QList<int> SliceOwnership::returnHeld(const QByteArray& device)
 {
+    const ActiveRxWatch watch(this);
     const QList<int> ids = heldFor(device);
     for (int id : ids) {
         setOwner(id, device);
@@ -304,6 +518,7 @@ QList<int> SliceOwnership::adoptUnowned(const QByteArray& device)
     if (device.isEmpty()) {
         return {};
     }
+    const ActiveRxWatch watch(this);
     const QList<int> ids = unowned();
     const int wasActive = activeFor(QByteArray());
     for (int id : ids) {
@@ -338,7 +553,13 @@ void SliceOwnership::setActive(const QByteArray& owner, int sliceId)
     if (!isLive(sliceId) || m_marks.value(sliceId).owner != owner) {
         return;
     }
+    const ActiveRxWatch watch(this);
     m_chosen.insert(owner, sliceId);
+    // Task 3 (slice control plan): a controller's choice is also its
+    // receive choice.
+    if (!owner.isEmpty()) {
+        m_chosenRx.insert(owner, sliceId);
+    }
     m_mostRecent = sliceId;
     emit activeChanged();
 }

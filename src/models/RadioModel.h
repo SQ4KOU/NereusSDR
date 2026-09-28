@@ -361,6 +361,10 @@
 //                Core's readings (stationModMonitorSnapshot).
 //                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-28 - Slice control plan Task 3: setActiveRxFor, each
+//                device's active receive slice among the slices it has
+//                joined. NereusSDR-original. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -2059,6 +2063,14 @@ public:
     /// `owner` makes one of its own slices its active slice (ruling 5.10).
     /// False, changing nothing, when the slice is not `owner`'s. Local only.
     bool setActiveSliceByIdFor(const QByteArray& owner, int sliceId);
+
+    /// Slice control plan Task 3: `device` makes one of the slices it has
+    /// joined (controlled or listened) its active receive slice
+    /// (SliceOwnership::activeRxFor). When it controls the slice this is
+    /// also its active slice, as setActiveSliceByIdFor; a listened slice
+    /// never moves a slice's `active` or the station-level active slice.
+    /// False, changing nothing, when `device` has not joined it. Local only.
+    bool setActiveRxFor(const QByteArray& device, int sliceId);
 
     /// The device holding transmit, empty for none (Task 34 calls this).
     /// While one holds it, its active slice is the station-level one

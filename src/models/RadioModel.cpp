@@ -561,6 +561,10 @@
 //                setActiveSliceByIdFor ask SliceAccessPolicy.
 //                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-28 - Slice control plan Task 3: setActiveRxFor, each
+//                device's active receive slice among the slices it has
+//                joined. NereusSDR-original. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -13170,6 +13174,21 @@ bool RadioModel::setActiveSliceByIdFor(const QByteArray& owner, int sliceId)
         return false;
     }
     m_sliceOwnership->setActive(owner, sliceId);
+    applyActiveSlices();
+    return true;
+}
+
+bool RadioModel::setActiveRxFor(const QByteArray& device, int sliceId)
+{
+    // Slice control plan Task 3: any joined slice may be the device's
+    // receive focus; only one it may change is also its active slice.
+    if (role() != Role::Local || sliceById(sliceId) == nullptr
+        || !m_sliceOwnership->setActiveRx(device, sliceId)) {
+        return false;
+    }
+    if (SliceAccessPolicy::mayChange(*m_sliceOwnership, device, sliceId)) {
+        m_sliceOwnership->setActive(device, sliceId);
+    }
     applyActiveSlices();
     return true;
 }

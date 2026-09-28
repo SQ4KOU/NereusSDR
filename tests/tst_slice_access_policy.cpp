@@ -29,6 +29,11 @@
 //   2026-09-28: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), slice control and shared listening plan Task 2,
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-28: slice control and shared listening plan Task 3:
+//               listeners join through SliceOwnership::join (the test-only
+//               listener seam is gone); a change of owner keeps the former
+//               controller listening. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -240,7 +245,9 @@ private slots:
             SliceOwnership::CreatorScope scope(&ownership, kA);
             ownership.noteSliceAdded(0);
         }
-        ownership.setListenersForTest(0, {kB, kC, kB});
+        QVERIFY(ownership.join(kB, 0));
+        QVERIFY(ownership.join(kC, 0));
+        QVERIFY(ownership.join(kB, 0));   // already joined: no change
         QCOMPARE(ownership.listenersOf(0), (QList<QByteArray>{kA, kB, kC}));
         QVERIFY(ownership.isListening(kB, 0));
         QVERIFY(SliceAccessPolicy::maySee(ownership, kB, 0));
@@ -250,10 +257,12 @@ private slots:
         // The controller keeps all of it.
         QVERIFY(SliceAccessPolicy::mayChange(ownership, kA, 0));
         QVERIFY(SliceAccessPolicy::mayTransmitOn(ownership, kA, 0));
-        // An owner change leaves the listeners as they were.
+        // An owner change leaves the listeners as they were, and the
+        // former controller listening (Task 3).
         ownership.setOwner(0, kB);
-        QCOMPARE(ownership.listenersOf(0), (QList<QByteArray>{kB, kC}));
-        QVERIFY(!ownership.isListening(kA, 0));
+        QCOMPARE(ownership.listenersOf(0), (QList<QByteArray>{kB, kA, kC}));
+        QVERIFY(ownership.isListening(kA, 0));
+        QVERIFY(!SliceAccessPolicy::mayChange(ownership, kA, 0));
         QVERIFY(SliceAccessPolicy::mayChange(ownership, kB, 0));
         QVERIFY(!SliceAccessPolicy::mayChange(ownership, kC, 0));
     }
@@ -265,7 +274,7 @@ private slots:
         ownership.noteSliceAdded(1);
         ownership.noteSliceAdded(2);
         ownership.noteSliceAdded(3);
-        ownership.setListenersForTest(1, {kB});   // released, B still listens
+        QVERIFY(ownership.join(kB, 1));   // released, B still listens
         ownership.setOwner(2, kA);
         ownership.hold(3, kC);
         QVERIFY(SliceAccessPolicy::stationMayChangeUnclaimed(ownership, 0));
@@ -292,12 +301,12 @@ private slots:
             SliceOwnership::CreatorScope scope(&ownership, kA);
             ownership.noteSliceAdded(0);
         }
-        ownership.setListenersForTest(0, {kB});
+        QVERIFY(ownership.join(kB, 0));
         ownership.beginRemove(0);
         // Its removal still reaches whoever saw it.
         QVERIFY(SliceAccessPolicy::maySee(ownership, kB, 0));
         QVERIFY(SliceAccessPolicy::maySee(ownership, kA, 0));
-        ownership.setListenersForTest(0, {kC});   // not live: ignored
+        QVERIFY(!ownership.join(kC, 0));   // not live: refused
         QCOMPARE(ownership.listenersOf(0), (QList<QByteArray>{kA, kB}));
         ownership.endRemove(0);
         QVERIFY(ownership.listenersOf(0).isEmpty());
@@ -326,7 +335,7 @@ private slots:
             ownership.noteSliceAdded(id);
         }
         slices[1]->setTxSlice(true);
-        ownership.setListenersForTest(0, {kB});
+        QVERIFY(ownership.join(kB, 0));
         TxSliceArbiter arb;
         arb.setSliceList(&slices);
         arb.syncToSliceList();
@@ -360,7 +369,7 @@ private slots:
         QVERIFY(admitted(appB));
         SliceOwnership* ownership = core.model->sliceOwnership();
         QCOMPARE(ownership->mark(0).owner, a.key.fingerprint());
-        ownership->setListenersForTest(0, {b.key.fingerprint()});
+        QVERIFY(ownership->join(b.key.fingerprint(), 0));
         QVERIFY(ownership->isListening(b.key.fingerprint(), 0));
         SliceModel* hers = core.model->sliceById(0);
         const double frequency = hers->frequency();
@@ -482,7 +491,7 @@ private slots:
         QVERIFY(admitted(appA));
         QVERIFY(admitted(appB));
         QVERIFY(core.model->streamAllocator().streamCount() > 0);
-        core.model->sliceOwnership()->setListenersForTest(0, {b.key.fingerprint()});
+        QVERIFY(core.model->sliceOwnership()->join(b.key.fingerprint(), 0));
         SliceModel* slice = core.model->sliceById(0);
         const int stream = slice->streamIndex();
         QVERIFY(stream >= 0);
@@ -527,7 +536,7 @@ private slots:
         SliceOwnership* ownership = core.model->sliceOwnership();
         const QByteArray bKey = b.key.fingerprint();
         const int own = ownership->ownedBy(bKey).first();
-        ownership->setListenersForTest(0, {bKey});
+        QVERIFY(ownership->join(bKey, 0));
         TxSliceArbiter* arbiter = core.model->txSliceArbiter();
         // B holds transmit (its key, released), and its flag is on its own.
         MoxController* mox = core.model->moxController();
@@ -569,7 +578,7 @@ private slots:
         SliceOwnership* ownership = station.sliceOwnership();
         QVERIFY(ownership->mark(0).owner.isEmpty());
         QVERIFY(ownership->mark(1).owner.isEmpty());
-        ownership->setListenersForTest(1, {kB});
+        QVERIFY(ownership->join(kB, 1));
         station.enableStationTci(QStringLiteral("127.0.0.1"));
         QString reason;
         QVERIFY(station.setStationTciForStation(true, port, &reason));

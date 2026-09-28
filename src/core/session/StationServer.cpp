@@ -624,6 +624,10 @@
 //               SeesSlice, a listener's refusal words). J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-28: slice control and shared listening plan Task 3: a
+//               revoked device and a token window that has gone leave the
+//               slices whose owner they were. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -2003,6 +2007,10 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
             for (int sliceId : std::as_const(slices)) {
                 if (!closeSliceFor(sliceId, QByteArray())) {
                     ownership->setOwner(sliceId, QByteArray());
+                    // Slice control plan Task 3: a change of owner keeps
+                    // the former controller listening; a revoked device
+                    // leaves.
+                    ownership->leave(id, sliceId);
                 }
             }
         }
@@ -7889,6 +7897,9 @@ void StationServer::releaseDeviceSlices(const QByteArray& deviceId)
         }
         if (token) {
             ownership->setOwner(sliceId, QByteArray());
+            // Slice control plan Task 3: the window cannot come back, so
+            // it does not stay listening as a former controller would.
+            ownership->leave(deviceId, sliceId);
         } else {
             ownership->hold(sliceId, deviceId);
         }

@@ -155,6 +155,11 @@
 //               mediaSessionOwnsSlice is mediaSessionControlsSlice.
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation
 //               via Anthropic Claude Code.
+//   2026-09-28: slice control and shared listening plan Task 3: a
+//               display stays with a former controller, which keeps
+//               listening, and retires when its device's claims go.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -3864,9 +3869,12 @@ private slots:
         QCOMPARE(m.hub->sharedSpectrum()->source().activeSources().size(), 1);
     }
 
-    // Fix wave (ruling 9.1): a display on a slice that passes to another
-    // owner retires as a removed slice's does; the new owner's goes on.
-    void aDisplayRetiresWhenItsSlicePassesToAnotherOwner()
+    // Fix wave (ruling 9.1): a display on a slice its device can no longer
+    // see retires as a removed slice's does. Slice control plan Task 3: a
+    // slice passing to another controller leaves the former one listening,
+    // so its display goes on; a device whose claims are removed can no
+    // longer see the slices it controlled, and their displays retire.
+    void aDisplayRetiresWhenItsDeviceCanNoLongerSeeItsSlice()
     {
         MediaCore m(DisplayBudgetLimits{10'000'000, 1'000'000, 1});
         m.signInBoth();
@@ -3882,12 +3890,25 @@ private slots:
         QTRY_COMPARE(m.hub->controllerFor(m.epochOf(0))->activeEndpointCount(), 1);
         QTRY_COMPARE(m.hub->controllerFor(m.epochOf(1))->activeEndpointCount(), 1);
 
-        m.core.model->sliceOwnership()->setOwner(sliceA, m.b.key.fingerprint());
-        QTRY_COMPARE(m.hub->controllerFor(m.epochOf(0))->activeEndpointCount(), 0);
+        // A's slice passes to B: A still listens, so its display goes on.
+        SliceOwnership* ownership = m.core.model->sliceOwnership();
+        ownership->setOwner(sliceA, m.b.key.fingerprint());
+        QVERIFY(ownership->isListening(m.a.key.fingerprint(), sliceA));
+        QTest::qWait(50);
+        QCOMPARE(m.hub->controllerFor(m.epochOf(0))->activeEndpointCount(), 1);
+        QCOMPARE(m.hub->controllerFor(m.epochOf(1))->activeEndpointCount(), 1);
+
+        // B's claims go: its own slice's display retires; A, listening to
+        // the slice B controlled, keeps its display.
+        const SliceOwnership::ClaimsRemoved removed =
+            ownership->removeClaims(m.b.key.fingerprint());
+        QVERIFY(removed.releasedControl.contains(sliceB));
+        QVERIFY(removed.releasedControl.contains(sliceA));
+        QTRY_COMPARE(m.hub->controllerFor(m.epochOf(1))->activeEndpointCount(), 0);
         const auto retired = [&m]() {
             for (const QString& op : {QStringLiteral("allocation-result"), QStringLiteral("rejected")}) {
-                for (const QJsonObject& o : mediaOps(m.appA, op)) {
-                    if (o.value(QStringLiteral("endpointId")).toInteger() == 2
+                for (const QJsonObject& o : mediaOps(m.appB, op)) {
+                    if (o.value(QStringLiteral("endpointId")).toInteger() == 1
                         && o.value(QStringLiteral("reason")).toString()
                             == QLatin1String(kRetireReasonSliceRemoved)) {
                         return true;
@@ -3897,7 +3918,7 @@ private slots:
             return false;
         };
         QTRY_VERIFY(retired());
-        QCOMPARE(m.hub->controllerFor(m.epochOf(1))->activeEndpointCount(), 1);
+        QCOMPARE(m.hub->controllerFor(m.epochOf(0))->activeEndpointCount(), 1);
     }
 
     // The governor sees every device's display charge, PureSignal's once.

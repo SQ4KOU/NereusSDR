@@ -64,7 +64,7 @@
 // of mark().owner: adoption, hold, return, take, release. A command that
 // carries the revision it saw acts only on the assignment it saw.
 //
-// ---- Listeners (slice control plan Task 2) ----
+// ---- Listeners (slice control plan Tasks 2 and 3) ----
 //
 // A slice's controller is its owner, mark().owner. Other devices may be
 // joined to it as listeners: they see and hear it but never change it.
@@ -72,8 +72,26 @@
 // in join order; isListening() is true for each of them. Who may see, hear
 // or change a slice is decided by SliceAccessPolicy
 // (core/session/SliceAccessPolicy.h), never by comparing marks at a call
-// site. Task 3 adds how devices join and leave; until then nobody but the
-// controller is a listener outside a test.
+// site.
+//
+// Membership (Task 3): the controller is always joined. A new owner joins
+// when its mark is set, and the former one stays joined: a device leaves
+// only by leave() (stop listening, or after its control was cleared on a
+// release), by the slice closing, or by removeClaims(). The station device
+// running a slice held for an absent device is not joined by the hold, so
+// it is not left listening when the slice returns. Membership is never
+// persisted (listeners do not survive a Core restart).
+//
+// ---- The active receive slice (Task 3) ----
+//
+// Each device also has an active receive slice among the slices it has
+// joined (activeRxFor): its last choice while it is still joined to it,
+// else its controller-active slice (activeFor), else its first joined
+// slice. It is separate from activeFor: a listener's choice never moves
+// its owner's active slice, a slice's `active`, or the station-level
+// active slice, so it never moves a once-per-radio duty (Alex band
+// routing, the FreeDV report, the transmit binding). A controller's own
+// choice (setActive) is also its receive choice.
 //
 // Single thread: RadioModel's.
 //
@@ -93,6 +111,10 @@
 //               slice's listener set (isListening, listenersOf). J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-28: slice control and shared listening plan Task 3: joining
+//               and leaving, claims removal and each device's active
+//               receive slice. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -193,11 +215,45 @@ public:
     /// The controller (when it has one) then every other joined device, in
     /// join order; empty for a slice nobody is joined to.
     QList<QByteArray> listenersOf(int sliceId) const;
-    /// Stands a listener set in for Task 3's join and leave, for tests of
-    /// the access rules: `devices` (the controller need not be named) are
-    /// the slice's listeners from now on. Ignored for a slice that is not
-    /// live.
-    void setListenersForTest(int sliceId, const QList<QByteArray>& devices);
+
+    // ---- Membership and the active receive slice (Task 3) ----
+
+    /// `device` joins a live slice as a listener, after every device joined
+    /// before it. True when it is joined afterwards (already joined is no
+    /// change); false for an empty id or a slice that is not live.
+    bool join(const QByteArray& device, int sliceId);
+    /// `device` stops listening to a live slice. False, changing nothing,
+    /// when it is not joined, is the slice's controller (its control is
+    /// cleared first, as a release does), or the slice is not live. Its
+    /// receive choice of the slice lapses.
+    bool leave(const QByteArray& device, int sliceId);
+    /// Live slices `device` is joined to (controlled or listened), in
+    /// creation order.
+    QList<int> joinedBy(const QByteArray& device) const;
+    /// `device`'s active receive slice: its last choice while it is still
+    /// joined to it, else activeFor(device), else its first joined slice;
+    /// -1 when it has joined none.
+    int activeRxFor(const QByteArray& device) const;
+    /// `device` chose one of its joined slices to receive. False, changing
+    /// nothing, unless it is joined to that live slice. Never moves
+    /// activeFor, isActive or stationActiveSlice.
+    bool setActiveRx(const QByteArray& device, int sliceId);
+
+    /// What removeClaims() took from a device.
+    struct ClaimsRemoved {
+        /// Slices it controlled, or that were held for it: now without a
+        /// controller, and it has left them.
+        QList<int> releasedControl;
+        /// Slices it only listened to, which it has left.
+        QList<int> leftListening;
+    };
+    /// Every claim `device` has, in creation order: control of the slices
+    /// it owns or that are held for it is cleared, and it leaves every
+    /// slice it is joined to. Its active and receive choices are forgotten.
+    /// Slices are kept; closing those nobody is left on is the caller's.
+    ClaimsRemoved removeClaims(const QByteArray& device);
+    /// Live slices with no controller and no listener, in creation order.
+    QList<int> unclaimed() const;
 
     // ---- Marks ----
 
@@ -277,8 +333,32 @@ signals:
     void activeChanged();
     /// A live slice's owner changed; `revision` is its new control revision.
     void controlRevisionChanged(int sliceId, quint64 revision);
+    /// A live slice's listenersOf() changed (a join, a leave, a change of
+    /// controller). Not sent for a slice being made or removed.
+    void listenersChanged(int sliceId);
+    /// activeRxFor(device) now reads differently.
+    void activeRxChanged(const QByteArray& device);
 
 private:
+    /// Collects every device's activeRxFor before a change and signals
+    /// each one that differs after it; nested watches report once, at the
+    /// outermost.
+    class ActiveRxWatch {
+    public:
+        explicit ActiveRxWatch(SliceOwnership* ownership);
+        ~ActiveRxWatch();
+        ActiveRxWatch(const ActiveRxWatch&) = delete;
+        ActiveRxWatch& operator=(const ActiveRxWatch&) = delete;
+
+    private:
+        SliceOwnership* m_ownership;
+    };
+    QHash<QByteArray, int> activeRxSnapshot() const;
+    /// setMark's work: `leaving` (when not empty) leaves the slice in the
+    /// same change, before anything is signalled. False when nothing
+    /// changed.
+    bool changeMark(int sliceId, const Mark& requested, const QByteArray& leaving);
+
     QList<int> matching(const std::function<bool(const Mark&)>& test) const;
     QByteArray subjectOf(int sliceId) const { return m_marks.value(sliceId).subject(); }
     void leaveStream(int sliceId);
@@ -297,9 +377,14 @@ private:
     quint32 m_incarnationCounter = 0;
     QHash<int, quint64> m_incarnations;
     QHash<int, quint64> m_revisions;
-    // Task 2 (slice control plan): each slice's joined devices other than
-    // its controller, in join order (kept until endRemove).
+    // Tasks 2 and 3 (slice control plan): each slice's joined devices in
+    // join order, its controller included (kept until endRemove; the
+    // station device holding a slice for another device is not in it).
     QHash<int, QList<QByteArray>> m_listeners;
+    // Task 3: each device's receive choice, and the watch's state.
+    QHash<QByteArray, int> m_chosenRx;
+    int m_rxWatchDepth = 0;
+    QHash<QByteArray, int> m_rxBefore;
     // Task 74: each slice's receiver, the slices on each receiver in the
     // order they arrived, and each receiver's anchor.
     QHash<int, int> m_streamOf;
