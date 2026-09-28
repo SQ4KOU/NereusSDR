@@ -1742,6 +1742,9 @@ void MainWindow::refreshDesktopStationState()
     }
     refreshActiveSlicePresentation();
     refreshContainerControls();
+    for (SetupDialog* dialog : findChildren<SetupDialog*>()) {
+        dialog->notifyReceiverSelectionChanged();
+    }
 }
 
 void MainWindow::requestDesktopTransmit(bool tune, bool on)
@@ -3227,7 +3230,12 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
             slice->setDspMode(kQuickModes[index]);
         }
     });
-    connect(newFlag, &VfoWidget::openSetupRequested, this, [this]() {
+    connect(newFlag, &VfoWidget::openSetupRequested, this, [this, slice]() {
+        if (desktopHosting()) {
+            if (!desktopSliceAllowed(slice->sliceIndex())) { return; }
+            if (!m_radioModel->setActiveSliceByIdFor(SliceOwnership::stationDevice(),
+                                                      slice->sliceIndex())) { return; }
+        }
         auto* dialog = createSetupDialog();
         if (dialog == nullptr) {
             return;  // the gate refused and has already said why
@@ -3235,7 +3243,12 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
         dialog->selectPage(QStringLiteral("AGC/ALC"));
         dialog->show();
     });
-    connect(newFlag, &VfoWidget::openNbSetupRequested, this, [this]() {
+    connect(newFlag, &VfoWidget::openNbSetupRequested, this, [this, slice]() {
+        if (desktopHosting()) {
+            if (!desktopSliceAllowed(slice->sliceIndex())) { return; }
+            if (!m_radioModel->setActiveSliceByIdFor(SliceOwnership::stationDevice(),
+                                                      slice->sliceIndex())) { return; }
+        }
         auto* dialog = createSetupDialog();
         if (dialog == nullptr) {
             return;  // the gate refused and has already said why
@@ -3247,6 +3260,12 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
             [this](NereusSDR::NrSlot slot, int sliceId) {
         if (!m_radioModel->sliceById(sliceId)) {
             return;
+        }
+        if (desktopHosting()) {
+            if (!desktopSliceAllowed(sliceId)) { return; }
+            if (!m_radioModel->setActiveSliceByIdFor(SliceOwnership::stationDevice(), sliceId)) {
+                return;
+            }
         }
         auto* dialog = createSetupDialog();
         if (dialog == nullptr) {
@@ -12625,6 +12644,15 @@ SetupDialog* MainWindow::createSetupDialog()
     // and SettingsProxy sends nothing while it is not ready. In local
     // direct mode the settings are always available and nothing changes.
     auto* dialog = new SetupDialog(m_radioModel, this);
+    dialog->setReceiverSelector([this] { return activeSliceForWindow(); },
+                                [this] { return desktopHosting(); });
+    if (m_radioModel && m_radioModel->sliceOwnership()) {
+        SliceOwnership* ownership = m_radioModel->sliceOwnership();
+        connect(ownership, &SliceOwnership::activeChanged, dialog,
+                [dialog] { dialog->notifyReceiverSelectionChanged(); });
+        connect(ownership, &SliceOwnership::markChanged, dialog,
+                [dialog] { dialog->notifyReceiverSelectionChanged(); });
+    }
     dialog->setTransmitPermitted(transmitControlsPermitted(),
         tr("Remote transmit controls are not available from this Core yet."));
     // R-R3-49 (parity Task 1): the transmit settings that key nothing.
