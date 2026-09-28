@@ -67,6 +67,7 @@
 #include "core/session/media/DisplayCodec.h"
 #include "core/session/media/IReceiverPcmSink.h"
 #include "core/session/media/MediaPeer.h"
+#include "core/session/NetworkPathSnapshot.h"
 #include "core/session/media/RemoteAudioContext.h"
 #include "core/session/media/RemoteAudioReceiver.h"
 #include "core/session/media/RemoteSpectrumContext.h"
@@ -446,11 +447,14 @@ public:
     /// iPhone app plan Task 29: the media connection's id now, and whether
     /// a replacement is under way (for the window's diagnostics and tests).
     QString mediaConnectionId() const;
+    /// The active primary peer only, fenced to this client's current session.
+    std::optional<NetworkPathSnapshot> currentNetworkPath() const;
     bool replacingConnection() const;
     /// Copies of audio packets dropped while two connections carried them.
     quint64 duplicateAudioDropped() const;
 
 signals:
+    void networkPathChanged();
     void rawIqBlock(int sliceId, int sampleRateHz, const QVector<float>& samples);
     void rawIqRate(int sliceId, int sampleRateHz);
     void rawIqUnavailable(int sliceId, const QString& reason);

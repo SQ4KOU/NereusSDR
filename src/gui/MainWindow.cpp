@@ -1125,7 +1125,7 @@ MainWindow::MainWindow(const RemoteStationOptions& station, QWidget* parent,
         // 6. Click affordances.
         // The segment's mousePressEvent (TitleBar.cpp:382-387) routes
         // anywhere-click in the disconnected state to rttClicked so a
-        // single signal covers both "click for diagnostics" (when
+        // single signal covers both "click for routes" (when
         // connected) and "click to connect" (when disconnected). Branch
         // here on the live connection state to honor the "Click to
         // connect" affordance the segment paints — without this branch,
@@ -1133,16 +1133,17 @@ MainWindow::MainWindow(const RemoteStationOptions& station, QWidget* parent,
         // instead of opening the connection panel (Codex P2 review
         // against PR #158, MainWindow.cpp:482).
         connect(seg, &ConnectionSegment::rttClicked, this, [this]() {
+            if (!m_radioModel->ownsLocalDsp() && m_stationClient
+                && m_stationClient->isHandshakeComplete()) {
+                m_titleBar->connectionSegment()->showRoutePopup();
+                return;
+            }
             if (m_connectionPickerManaged) {
                 connectionRequestedByOperator();
                 return;
             }
             if (!m_radioModel->ownsLocalDsp()) {
-                if (m_stationClient && m_stationClient->isHandshakeComplete()) {
-                    openNetworkDiagnostics();
-                } else {
-                    connectionRequestedByOperator();
-                }
+                connectionRequestedByOperator();
                 return;
             }
             const auto state = m_radioModel->connectionState();
@@ -1161,6 +1162,10 @@ MainWindow::MainWindow(const RemoteStationOptions& station, QWidget* parent,
             // is the most relevant panel for pip trouble-shooting.
             openNetworkDiagnostics();
         });
+        connect(seg, &ConnectionSegment::diagnosticsRequested,
+                this, &MainWindow::openNetworkDiagnostics);
+        connect(seg, &ConnectionSegment::pathsRefreshRequested,
+                this, &MainWindow::refreshRemoteConnectionUi);
         connect(seg, &ConnectionSegment::contextMenuRequested,
                 this, &MainWindow::showSegmentContextMenu);
 
@@ -2353,9 +2358,13 @@ void MainWindow::ensureRemoteSession()
         m_remoteTelemetry->setPaReadingsTarget(m_radioModel);
         connect(m_remoteTelemetry, &RemoteTelemetryController::changed, this, [this] {
             if (m_titleBar) {
-                m_titleBar->connectionSegment()->setRemoteTelemetryText(m_remoteTelemetry->bannerText());
+                refreshRemoteConnectionUi();
             }
         });
+        connect(m_stationClient, &StationClient::pathChanged,
+                this, &MainWindow::refreshRemoteConnectionUi);
+        connect(m_remoteMedia, &RemoteMediaController::networkPathChanged,
+                this, &MainWindow::refreshRemoteConnectionUi);
         connect(m_remoteMedia, &RemoteMediaController::errorOccurred, this, [this](const QString& reason) {
             // The raw reason is for the log; the toast says it in user
             // words (R-R3-21, R-R3-23).
@@ -2686,6 +2695,43 @@ void MainWindow::refreshRemoteConnectionUi()
         segment->setState(m_remoteConnection->state());
         segment->setRemoteStatusText(m_remoteConnection->statusText());
         segment->setRemoteTelemetryText(m_remoteTelemetry ? m_remoteTelemetry->bannerText() : QString{});
+        const bool current = m_remoteConnection->state() == ConnectionState::Connected
+            && m_stationClient && m_stationClient->isHandshakeComplete();
+        if (current && m_remoteTelemetry) {
+            const RemoteTelemetryView& view = m_remoteTelemetry->current();
+            const auto number = [](std::optional<double> value) {
+                return value ? QString::number(*value, 'f', 1) : QStringLiteral("—");
+            };
+            const bool megabits = view.coreGuiTotalKbps && *view.coreGuiTotalKbps >= 1000.0;
+            const double divisor = megabits ? 1000.0 : 1.0;
+            const auto traffic = [divisor, &number](std::optional<double> value) {
+                return number(value ? std::optional<double>(*value / divisor) : std::nullopt);
+            };
+            const QStringList groups{
+                tr("Traffic ↓%1 ↑%2 %3")
+                    .arg(traffic(view.coreGuiRxKbps), traffic(view.coreGuiTxKbps),
+                         megabits ? tr("Mbps") : tr("kbps")),
+                tr("Audio %1 kbps %2")
+                    .arg(number(view.audioPayloadRxKbps),
+                         view.playbackActive ? QStringLiteral("▶")
+                         : view.playback.running ? QStringLiteral("…") : QStringLiteral("■")),
+                view.state == RemoteTelemetryView::State::Current && view.radio.connected
+                    ? tr("Radio ↓%1 ↑%2 Mbps")
+                          .arg(number(view.radio.rxMbps), number(view.radio.txMbps))
+                    : tr("Radio ↓— ↑— Mbps"),
+                tr("Core RTT %1ms")
+                    .arg(view.coreRttMs ? QString::number(*view.coreRttMs) : QStringLiteral("—"))};
+            segment->setRemoteMetrics(groups);
+            std::optional<NetworkPathSnapshot> control;
+            if (SessionTransport* transport = m_stationClient->transport()) {
+                control = transport->networkPathSnapshot();
+            }
+            segment->setRemotePaths(control,
+                                    m_remoteMedia ? m_remoteMedia->currentNetworkPath() : std::nullopt);
+        } else {
+            segment->setRemoteMetrics({});
+            segment->setRemotePaths(std::nullopt, std::nullopt);
+        }
     }
     if (m_stationBlock) {
         m_stationBlock->setRadioName(tr("Core %1").arg(m_remoteConnection->endpointText()));

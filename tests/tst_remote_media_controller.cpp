@@ -118,6 +118,7 @@ public:
     }
     bool sendRtp(const QByteArray&) override { return active; }
     bool isReady() const override { return active; }
+    std::optional<MediaIcePath> selectedPath() const override { return route; }
     std::optional<MediaTransportTelemetry> telemetry() const override { return traffic; }
     void activate() { active = true; emit ready(); }
     void deliver(const QByteArray& packet) { emit displayReceived(packet); }
@@ -130,6 +131,7 @@ public:
     QPointer<DisplayTransport> other;
     QList<QByteArray> displayPackets;
     std::optional<MediaTransportTelemetry> traffic;
+    std::optional<MediaIcePath> route;
 };
 
 // A backend that refuses to start, optionally saying why first, as
@@ -677,6 +679,20 @@ private slots:
         guiMedia->other = coreMedia;
         coreMedia->activate();
         guiMedia->activate();
+        QVERIFY(!gui.currentNetworkPath());
+        MediaIcePath selected;
+        selected.localType = QStringLiteral("host");
+        selected.remoteType = QStringLiteral("srflx");
+        selected.localAddress = QStringLiteral("2001:db8::8");
+        selected.localPort = 42000;
+        selected.remoteAddress = QStringLiteral("192.0.2.8");
+        selected.remotePort = 42001;
+        guiMedia->route = selected;
+        QTRY_VERIFY(gui.currentNetworkPath());
+        QCOMPARE(gui.currentNetworkPath()->localPort, quint16(42000));
+        QCOMPARE(gui.currentNetworkPath()->remoteAddress, QStringLiteral("192.0.2.8"));
+        guiMedia->route->remoteAddress = QStringLiteral("2001:db8::9");
+        QCOMPARE(gui.currentNetworkPath()->remoteAddress, QStringLiteral("2001:db8::9"));
         QCOMPARE(client.capabilities().psDisplayVersion, 1);
         PureSignalSessionFacade* coreFacade = station.pureSignalFacade();
         PureSignalSessionFacade* guiFacade = remote.pureSignalFacade();
@@ -721,6 +737,7 @@ private slots:
         QCoreApplication::processEvents();
         QCOMPARE(coreMedia->displayPackets.size(), expected.size());
         client.disconnectFromStation(QStringLiteral("test completed"));
+        QVERIFY(!gui.currentNetworkPath());
         QVERIFY(!guiFacade->displaySnapshot());
     }
 

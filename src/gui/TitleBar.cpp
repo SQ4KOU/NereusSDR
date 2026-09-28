@@ -61,6 +61,8 @@
 
 #include <QDateTime>
 #include <QHBoxLayout>
+#include <QFrame>
+#include <QKeyEvent>
 #include <QIcon>
 #include <QLabel>
 #include <QMenuBar>
@@ -73,6 +75,8 @@
 #include <QSize>
 #include <QSizePolicy>
 #include <QTimer>
+#include <QVBoxLayout>
+#include <QHostAddress>
 
 namespace NereusSDR {
 
@@ -101,6 +105,7 @@ ConnectionSegment::ConnectionSegment(QWidget* parent)
     setFixedHeight(30);
     setMinimumWidth(200);
     setCursor(Qt::PointingHandCursor);
+    setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
     setAttribute(Qt::WA_StyledBackground, true);
 
@@ -112,6 +117,37 @@ ConnectionSegment::ConnectionSegment(QWidget* parent)
         update();
     });
     m_pulseTimer.start();
+
+    m_routePopup = new QFrame(this, Qt::Popup);
+    m_routePopup->setObjectName(QStringLiteral("connectionRoutePopup"));
+    m_routePopup->setFocusPolicy(Qt::StrongFocus);
+    m_routePopup->setStyleSheet(QStringLiteral(
+        "QFrame#connectionRoutePopup { background: #101b2a; border: 1px solid #36506a; border-radius: 5px; }"
+        "QLabel { color: #c8d8e8; border: none; }"
+        "QPushButton { color: #66cce6; background: #1b3044; border: 1px solid #36506a; padding: 5px; }"));
+    auto* popupLayout = new QVBoxLayout(m_routePopup);
+    popupLayout->setContentsMargins(14, 12, 14, 12);
+    popupLayout->setSpacing(6);
+    auto* controlsHeading = new QLabel(tr("Controls"), m_routePopup);
+    popupLayout->addWidget(controlsHeading);
+    m_controlsRoute = new QLabel(m_routePopup);
+    m_controlsRoute->setObjectName(QStringLiteral("controlsRoute"));
+    m_controlsRoute->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    popupLayout->addWidget(m_controlsRoute);
+    auto* mediaHeading = new QLabel(tr("Audio/display"), m_routePopup);
+    popupLayout->addWidget(mediaHeading);
+    m_mediaRoute = new QLabel(m_routePopup);
+    m_mediaRoute->setObjectName(QStringLiteral("mediaRoute"));
+    m_mediaRoute->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    popupLayout->addWidget(m_mediaRoute);
+    auto* details = new QPushButton(tr("Open network diagnostics"), m_routePopup);
+    details->setObjectName(QStringLiteral("networkDiagnosticsButton"));
+    popupLayout->addWidget(details);
+    connect(details, &QPushButton::clicked, this, [this] {
+        m_routePopup->hide();
+        emit diagnosticsRequested();
+    });
+    updateRoutePopup();
 }
 
 void ConnectionSegment::setState(ConnectionState s)
@@ -120,6 +156,12 @@ void ConnectionSegment::setState(ConnectionState s)
         return;
     }
     m_state = s;
+    if (s != ConnectionState::Connected) {
+        m_controlPath.reset();
+        m_mediaPath.reset();
+        updateRoutePopup();
+        m_routePopup->hide();
+    }
 
     // Pulse while there is interesting transient state to show.
     if (s == ConnectionState::Connected   ||
@@ -159,8 +201,92 @@ void ConnectionSegment::setRemoteTelemetryText(const QString& text)
     if (m_remoteTelemetryText == text) { return; }
     m_remoteTelemetryText = text;
     setAccessibleName(remotePresentationText());
+    setAccessibleDescription(text);
     updateGeometry();
     update();
+}
+
+void ConnectionSegment::setRemoteMetrics(const QStringList& groups)
+{
+    if (m_remoteMetrics == groups) { return; }
+    m_remoteMetrics = groups;
+    setAccessibleName(remotePresentationText());
+    updateGeometry();
+    update();
+}
+
+namespace {
+QString endpointText(const QString& address, quint16 port)
+{
+    if (address.isEmpty() || port == 0) { return QObject::tr("unavailable"); }
+    QHostAddress numeric;
+    if (!numeric.setAddress(address)) { return QObject::tr("unavailable"); }
+    const QString ip = numeric.toString();
+    return numeric.protocol() == QAbstractSocket::IPv6Protocol
+        ? QStringLiteral("[%1]:%2").arg(ip).arg(port)
+        : QStringLiteral("%1:%2").arg(ip).arg(port);
+}
+}
+
+QString ConnectionSegment::routeText(const std::optional<NetworkPathSnapshot>& path)
+{
+    if (!path) { return tr("Path unavailable"); }
+    QString kind = tr("Path unavailable");
+    if (path->kind == NetworkPathSnapshot::Kind::Direct) { kind = tr("Direct"); }
+    if (path->kind == NetworkPathSnapshot::Kind::Relayed) { kind = tr("Via relay"); }
+    QString carrier;
+    switch (path->carrier) {
+    case NetworkPathSnapshot::Carrier::WebSocket: carrier = tr("WSS"); break;
+    case NetworkPathSnapshot::Carrier::WebRelay: carrier = tr("web relay"); break;
+    case NetworkPathSnapshot::Carrier::Ice: carrier = tr("ICE"); break;
+    }
+    const bool ice = path->endpoints == NetworkPathSnapshot::Endpoints::IceCandidates;
+    const QString endpoints = ice ? tr("ICE candidates") : tr("socket endpoints (may be a proxy hop)");
+    QString text = tr("%1 · %2 · %3\nLocal %4\nRemote %5")
+        .arg(kind, carrier, endpoints,
+             endpointText(path->localAddress, path->localPort),
+             endpointText(path->remoteAddress, path->remotePort));
+    if (ice && (!path->localCandidateType.isEmpty() || !path->remoteCandidateType.isEmpty())) {
+        text += tr("\nCandidate types: local %1, remote %2")
+            .arg(path->localCandidateType.isEmpty() ? tr("unavailable") : path->localCandidateType,
+                 path->remoteCandidateType.isEmpty() ? tr("unavailable") : path->remoteCandidateType);
+    }
+    if (path->mediaRidesControl) { text += tr("\nUses the control connection"); }
+    return text;
+}
+
+void ConnectionSegment::setRemotePaths(std::optional<NetworkPathSnapshot> controls,
+                                       std::optional<NetworkPathSnapshot> media)
+{
+    if (m_state != ConnectionState::Connected) {
+        controls.reset();
+        media.reset();
+    }
+    m_controlPath = std::move(controls);
+    m_mediaPath = std::move(media);
+    updateRoutePopup();
+}
+
+void ConnectionSegment::updateRoutePopup()
+{
+    m_controlsRoute->setText(routeText(m_controlPath));
+    m_mediaRoute->setText(routeText(m_mediaPath));
+    m_routePopup->adjustSize();
+}
+
+void ConnectionSegment::showRoutePopup()
+{
+    if (m_state != ConnectionState::Connected) { return; }
+    emit pathsRefreshRequested();
+    updateRoutePopup();
+    m_routePopup->move(mapToGlobal(QPoint(0, height() + 2)));
+    m_routePopup->show();
+    m_routePopup->setFocus();
+}
+
+QWidget* ConnectionSegment::routePopup() const
+{
+    return m_routePopup;
 }
 
 QSize ConnectionSegment::sizeHint() const
@@ -180,6 +306,9 @@ QSize ConnectionSegment::sizeHint() const
 
 QString ConnectionSegment::remotePresentationText() const
 {
+    if (!m_remoteMetrics.isEmpty() && m_state == ConnectionState::Connected) {
+        return m_remoteMetrics.join(QStringLiteral(" · "));
+    }
     if (m_remoteStatusText.isEmpty()) {
         return m_remoteTelemetryText;
     }
@@ -187,6 +316,29 @@ QString ConnectionSegment::remotePresentationText() const
         return m_remoteStatusText;
     }
     return m_remoteStatusText + QStringLiteral("  ·  ") + m_remoteTelemetryText;
+}
+
+QString ConnectionSegment::remoteTextForWidth(int pixels) const
+{
+    const QString full = remotePresentationText();
+    if (m_remoteMetrics.size() != 4 || m_state != ConnectionState::Connected) {
+        return full;
+    }
+    const QFontMetrics metrics(QFont(QStringLiteral("SF Mono"), 10, QFont::DemiBold));
+    if (metrics.horizontalAdvance(full) <= pixels) { return full; }
+    QStringList visible;
+    // Traffic and Core RTT identify the live link first; audio and Core-radio
+    // readings join when there is room. The full four groups remain in the
+    // accessible name even when a narrow window clips the row.
+    for (int index : {0, 3, 1, 2}) {
+        QStringList proposed = visible;
+        proposed << m_remoteMetrics.at(index);
+        if (metrics.horizontalAdvance(proposed.join(QStringLiteral(" · "))) <= pixels) {
+            visible = proposed;
+        }
+    }
+    return visible.isEmpty() ? metrics.elidedText(m_remoteMetrics.first(), Qt::ElideRight, pixels)
+                             : visible.join(QStringLiteral(" · "));
 }
 
 void ConnectionSegment::setRttMs(int ms)
@@ -329,7 +481,7 @@ void ConnectionSegment::paintEvent(QPaintEvent*)
     int x = dotRect.right() + 8;
     const int textY = height() / 2 + 4;
 
-    const QString remoteText = remotePresentationText();
+    const QString remoteText = remoteTextForWidth(width() - x - 6);
     if (!remoteText.isEmpty()) {
         p.setPen(QColor("#c8d8e8"));
         p.drawText(x, textY, p.fontMetrics().elidedText(
@@ -435,6 +587,17 @@ void ConnectionSegment::mousePressEvent(QMouseEvent* event)
         }
     }
     QWidget::mousePressEvent(event);
+}
+
+void ConnectionSegment::keyPressEvent(QKeyEvent* event)
+{
+    if ((event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter
+         || event->key() == Qt::Key_Space) && m_state == ConnectionState::Connected
+        && !m_remoteStatusText.isEmpty()) {
+        showRoutePopup();
+        return;
+    }
+    QWidget::keyPressEvent(event);
 }
 
 // =========================================================================
