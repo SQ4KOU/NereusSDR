@@ -44,13 +44,15 @@
 //   2026-09-28 : Addendum G-42 by J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code. Extended is the Core's
 //                 ExtendedTransmit setting; the old ExtendedTxAllowed is
-//                 ignored. Item 4: band plan refusals in operator words.
+//                 ignored (both keys restored by a scope guard). Item 4:
+//                 band plan refusals in operator words.
 // =================================================================
 
 // no-port-check: NereusSDR-original test file.
 
 #include <QtTest/QtTest>
 #include <QCoreApplication>
+#include <QScopeGuard>
 #include <QSignalSpy>
 
 #include "core/MoxController.h"
@@ -506,6 +508,28 @@ private slots:
             return on;
         };
         auto& settings = AppSettings::instance();
+        // Whatever the two keys held before this case, they hold again after
+        // it, pass or fail.
+        const QStringList keys{QStringLiteral("ExtendedTxAllowed"),
+                               QStringLiteral("ExtendedTransmit")};
+        QHash<QString, QVariant> before;
+        for (const QString& key : keys) {
+            if (settings.contains(key)) {
+                before.insert(key, settings.value(key));
+            }
+        }
+        const auto restore = qScopeGuard([&settings, &keys, &before] {
+            for (const QString& key : keys) {
+                if (before.contains(key)) {
+                    settings.setValue(key, before.value(key));
+                } else {
+                    settings.remove(key);
+                }
+            }
+        });
+        for (const QString& key : keys) {
+            settings.remove(key);
+        }
         // Off by default.
         QVERIFY(!keyed());
         // The old per-computer key is ignored.
