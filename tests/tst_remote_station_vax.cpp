@@ -1,0 +1,325 @@
+// no-port-check: NereusSDR-original. iPhone app plan Task 25 (R-IOS-18): a
+// remote window's VAX applet keeps this computer's own VAX channels
+// (R-R3-44) and, below them, shows the Core computer's in its "Station
+// computer" section, driven by the Core's `vax` object: its slices, levels,
+// mutes and device names, every control changing the Core's through the
+// object, its TX row disabled with the gate's reason while this device may
+// not transmit, and its meters subscribed only while the applet shows it.
+// Loopback link, no radio, no audio device opened.
+// =================================================================
+// Modification history (NereusSDR):
+//   2026-09-28  J.J. Boyd / KG4VCF  Created (iPhone app plan Task 25,
+//                                    R-IOS-18). AI-assisted via Anthropic
+//                                    Claude Code.
+// =================================================================
+
+#include <QtTest>
+
+#include <QApplication>
+#include <QCoreApplication>
+#include <QStyleFactory>
+#include <QDir>
+#include <QFile>
+#include <QLabel>
+#include <QPushButton>
+#include <QSignalSpy>
+#include <QTemporaryDir>
+
+#include <memory>
+
+#include "core/AppSettings.h"
+#include "core/AudioEngine.h"
+#include "core/ConnectionState.h"
+#include "core/HardwareProfile.h"
+#include "core/session/StationClient.h"
+#include "core/session/StationServer.h"
+#include "core/session/StationVaxFacade.h"
+#include "core/settings/SettingsProxy.h"
+#include "fakes/LoopbackTransport.h"
+#include "fakes/UpgradedCoreToken.h"
+#include "gui/applets/VaxApplet.h"
+#include "gui/styles/AppTheme.h"
+#include "gui/widgets/MeterSlider.h"
+#include "models/RadioModel.h"
+#include "models/SliceModel.h"
+
+#include "OperatorWording.h"
+
+using namespace NereusSDR;
+using NereusSDR::Test::LoopbackTransport;
+
+namespace {
+
+const QString kMac = QStringLiteral("AA:BB:CC:DD:EE:5B");
+
+std::unique_ptr<RadioModel> makeStationRadioModel()
+{
+    auto model = std::make_unique<RadioModel>();
+    model->setBoardForTest(HPSDRHW::Saturn);
+    model->setHpsdrModelForTest(HPSDRModel::ANAN_G2);
+    RadioInfo info;
+    info.macAddress = kMac;
+    info.name = QStringLiteral("Bench G2");
+    info.boardType = HPSDRHW::Saturn;
+    model->setLastRadioInfoForTest(info);
+    model->setConnectionStateForTest(ConnectionState::Connected);
+    model->addSlice(QStringLiteral("pan-0"));
+    return model;
+}
+
+// A Core the desktop hosts and one remote window, handshake complete.
+struct Session {
+    Session(const QString& securityDir, QObject* parent)
+        : settings(settingsDir.filePath(QStringLiteral("NereusSDR.settings")))
+    {
+        settings.setValue(QStringLiteral("SettingsSchemaVersion"), QStringLiteral("7"));
+        core = makeStationRadioModel();
+        server = std::make_unique<StationServer>(
+            core.get(), settings, NereusSDR::Test::seedUpgradedCoreToken(securityDir));
+        client = std::make_unique<StationClient>(&window, &proxy);
+        coreEnd = new LoopbackTransport(QStringLiteral("station-end"), parent);
+        windowEnd = new LoopbackTransport(QStringLiteral("client-end"), parent);
+        coreEnd->linkTo(windowEnd);
+    }
+    ~Session()
+    {
+        AppSettings::instance().setRemoteBackend(nullptr);
+        client.reset();
+        server.reset();
+    }
+    bool connect()
+    {
+        QSignalSpy completed(client.get(), &StationClient::handshakeComplete);
+        client->startSession(windowEnd, server->token());
+        server->acceptTransport(coreEnd);
+        return completed.wait(5000) || completed.count() == 1;
+    }
+    AudioEngine* coreAudio() const { return core->localAudioDevices(); }
+
+    QTemporaryDir settingsDir;
+    AppSettings settings;
+    std::unique_ptr<RadioModel> core;
+    std::unique_ptr<StationServer> server;
+    RadioModel window{RadioModel::Role::Remote};
+    SettingsProxy proxy;
+    std::unique_ptr<StationClient> client;
+    LoopbackTransport* coreEnd = nullptr;
+    LoopbackTransport* windowEnd = nullptr;
+};
+
+// The applet as MainWindow wires it in a remote window
+// (refreshRemoteStationVax and the stationLevelsWantedChanged connection).
+void wire(VaxApplet& applet, StationClient& client)
+{
+    QObject::connect(&applet, &VaxApplet::stationLevelsWantedChanged, &client,
+                     [&client](bool wanted) { client.setStationVaxLevelsWanted(wanted); });
+    const auto refresh = [&applet, &client]() {
+        applet.setStationVax(client.stationVax(), client.stationVaxHeld());
+        client.setStationVaxLevelsWanted(applet.stationLevelsWanted());
+    };
+    QObject::connect(&client, &StationClient::stationVaxAvailabilityChanged, &applet, refresh);
+    refresh();
+}
+
+} // namespace
+
+class TstRemoteStationVax : public QObject {
+    Q_OBJECT
+
+private slots:
+    void initTestCase()
+    {
+        QVERIFY(m_securityDir.isValid());
+        AppSettings::setProfileOverride(
+            QStringLiteral("remote-station-vax-%1").arg(QCoreApplication::applicationPid()));
+        AppSettings::instance().clear();
+        AppSettings::instance().setValue(QStringLiteral("SettingsSchemaVersion"),
+                                         QStringLiteral("7"));
+    }
+    void cleanupTestCase()
+    {
+        AppSettings::instance().setRemoteBackend(nullptr);
+        const QString path = AppSettings::instance().filePath();
+        QFile::remove(path);
+        QFile::remove(path + QStringLiteral(".bak"));
+    }
+
+    // A local window's applet has no "Station computer" section: its own
+    // rows are the station computer's.
+    void aLocalWindowShowsNoStationSection()
+    {
+        RadioModel local;
+        AudioEngine audio;
+        VaxApplet applet(&local, &audio);
+        applet.show();
+        QVERIFY(applet.stationSectionForTest() != nullptr);
+        QVERIFY(!applet.stationSectionForTest()->isVisibleTo(&applet));
+        QVERIFY(!applet.stationLevelsWanted());
+    }
+
+    // The window declares vax, holds the Core's object and shows the
+    // section with the Core's values, below its own rows.
+    void theSectionShowsTheCoresChannels()
+    {
+        Session s(m_securityDir.path(), this);
+        s.coreAudio()->setVaxRxGain(2, 0.4f);
+        s.coreAudio()->setVaxMuted(3, true);
+        s.core->sliceById(0)->setVaxChannel(2);
+        QVERIFY(s.connect());
+        QCOMPARE(s.client->capabilities().vaxVersion, 1);
+        QTRY_VERIFY(s.client->stationVaxHeld());
+
+        AudioEngine ownAudio;
+        VaxApplet applet(&s.window, &ownAudio);
+        wire(applet, *s.client);
+        QVERIFY(applet.stationSectionForTest()->isVisibleTo(&applet));
+        StationVax* copy = s.client->stationVax();
+        QTRY_COMPARE(copy->rxGain(2), 0.4);
+        QTRY_COMPARE(applet.stationRxMeterForTest(2)->gain(), 0.4f);
+        QVERIFY(applet.stationMuteButtonForTest(3)->isChecked());
+        QTRY_COMPARE(applet.stationTagsLabelForTest(2)->text(), QStringLiteral("Slice A"));
+        QCOMPARE(applet.stationDeviceLabelForTest(1)->text(), StationVax::deviceName(1));
+        // This computer's own channels are untouched (R-R3-44).
+        QCOMPARE(ownAudio.vaxRxGain(2), 1.0f);
+    }
+
+    // Each control changes the Core's channel through the object, and a
+    // change on the Core's computer reaches the section.
+    void theControlsChangeTheCoresChannels()
+    {
+        Session s(m_securityDir.path(), this);
+        QVERIFY(s.connect());
+        QTRY_VERIFY(s.client->stationVaxHeld());
+        AudioEngine ownAudio;
+        VaxApplet applet(&s.window, &ownAudio);
+        wire(applet, *s.client);
+
+        applet.stationRxMeterForTest(1)->setGain(0.3f);
+        emit applet.stationRxMeterForTest(1)->gainChanged(0.3f);
+        QTRY_COMPARE(s.coreAudio()->vaxRxGain(1), 0.3f);
+        applet.stationMuteButtonForTest(4)->setChecked(true);
+        QTRY_VERIFY(s.coreAudio()->vaxMuted(4));
+        // Saved on the Core under the applet's keys.
+        QCOMPARE(s.settings.value(StationVax::mutedKey(4)).toString(), QStringLiteral("True"));
+        QCOMPARE(ownAudio.vaxRxGain(1), 1.0f);
+        QVERIFY(!ownAudio.vaxMuted(4));
+
+        s.coreAudio()->setVaxRxGain(3, 0.6f);
+        s.coreAudio()->setVaxMuted(4, false);
+        QTRY_COMPARE(applet.stationRxMeterForTest(3)->gain(), 0.6f);
+        QTRY_VERIFY(!applet.stationMuteButtonForTest(4)->isChecked());
+    }
+
+    // The TX row: disabled with the gate's reason while this device may not
+    // transmit, and the Core refuses a write from it anyway.
+    void theTxRowFollowsTransmitPermission()
+    {
+        Session s(m_securityDir.path(), this);
+        QVERIFY(s.connect());
+        QTRY_VERIFY(s.client->stationVaxHeld());
+        QVERIFY(!s.client->capabilities().txPermitted);
+        AudioEngine ownAudio;
+        VaxApplet applet(&s.window, &ownAudio);
+        wire(applet, *s.client);
+        const QString reason = s.client->capabilities().txRefusalReason;
+        QVERIFY(!reason.isEmpty());
+        applet.setStationTransmitPermitted(false, reason);
+        QVERIFY(!applet.stationTxMeterForTest()->isEnabled());
+        QCOMPARE(applet.stationTxMeterForTest()->toolTip(), reason);
+        QVERIFY(OperatorWording::isPlain(reason));
+        // A write that got past the control is still refused by the Core.
+        s.coreAudio()->setVaxTxGain(1.0f);
+        s.client->stationVax()->setTxGain(0.2);
+        QTest::qWait(200);
+        QCOMPARE(s.coreAudio()->vaxTxGain(), 1.0f);
+
+        applet.setStationTransmitPermitted(true, QString());
+        QVERIFY(applet.stationTxMeterForTest()->isEnabled());
+    }
+
+    // The meters: subscribed only while the section is shown and the
+    // applet visible, and they draw what the Core reads.
+    void theMetersFollowTheAppletsVisibility()
+    {
+        Session s(m_securityDir.path(), this);
+        s.server->setVaxLevelReaderForTest([](double* rx, double* tx) {
+            rx[0] = 0.5;
+            rx[1] = 0.25;
+            rx[2] = 0.0;
+            rx[3] = 0.75;
+            *tx = 0.1;
+        });
+        QVERIFY(s.connect());
+        QTRY_VERIFY(s.client->stationVaxHeld());
+        AudioEngine ownAudio;
+        VaxApplet applet(&s.window, &ownAudio);
+        wire(applet, *s.client);
+        QVERIFY(!applet.stationLevelsWanted());
+        QTest::qWait(100);
+        QVERIFY(!s.server->vaxLevelsPollingForTest());
+
+        applet.show();
+        QVERIFY(applet.stationLevelsWanted());
+        QTRY_VERIFY(s.server->vaxLevelsPollingForTest());
+        s.server->pollVaxLevelsForTest();
+        QTRY_COMPARE(applet.stationRxMeterForTest(1)->level(), 0.5f);
+        QCOMPARE(applet.stationRxMeterForTest(4)->level(), 0.75f);
+        QCOMPARE(applet.stationTxMeterForTest()->level(), 0.1f);
+
+        applet.hide();
+        QVERIFY(!applet.stationLevelsWanted());
+        QTRY_VERIFY(!s.server->vaxLevelsPollingForTest());
+    }
+
+    // A Core that publishes no VAX devices (nereusd): no section.
+    void aHeadlessCoreShowsNoSection()
+    {
+        Session s(m_securityDir.path(), this);
+        s.coreAudio()->setVaxOutputsAllowed(false);
+        QVERIFY(s.connect());
+        QCOMPARE(s.client->capabilities().vaxVersion, 0);
+        QVERIFY(!s.client->stationVaxHeld());
+        AudioEngine ownAudio;
+        VaxApplet applet(&s.window, &ownAudio);
+        wire(applet, *s.client);
+        applet.show();
+        QVERIFY(!applet.stationSectionForTest()->isVisibleTo(&applet));
+        QVERIFY(!applet.stationLevelsWanted());
+    }
+
+    // Offscreen renders for the report: NEREUS_VAX_RENDER_DIR names where.
+    void rendersForTheReport()
+    {
+        const QString dir = qEnvironmentVariable("NEREUS_VAX_RENDER_DIR");
+        if (dir.isEmpty()) {
+            QSKIP("Set NEREUS_VAX_RENDER_DIR to save the renders.");
+        }
+        // As the app draws itself (main.cpp): Fusion and the dark palette.
+        QApplication::setStyle(QStyleFactory::create(QStringLiteral("Fusion")));
+        applyDarkPalette(*qApp);
+        Session s(m_securityDir.path(), this);
+        s.core->sliceById(0)->setVaxChannel(1);
+        s.coreAudio()->setVaxRxGain(2, 0.6f);
+        s.coreAudio()->setVaxMuted(3, true);
+        QVERIFY(s.connect());
+        QTRY_VERIFY(s.client->stationVaxHeld());
+        AudioEngine ownAudio;
+        VaxApplet without(&s.window, &ownAudio);
+        without.resize(300, without.sizeHint().height());
+        without.show();
+        QVERIFY(without.grab().save(QDir(dir).filePath(QStringLiteral("vax-applet-without-station.png"))));
+        VaxApplet with(&s.window, &ownAudio);
+        wire(with, *s.client);
+        with.setStationTransmitPermitted(false, s.client->capabilities().txRefusalReason);
+        with.resize(300, with.sizeHint().height());
+        with.show();
+        QTRY_COMPARE(with.stationTagsLabelForTest(1)->text(), QStringLiteral("Slice A"));
+        QVERIFY(with.grab().save(QDir(dir).filePath(QStringLiteral("vax-applet-with-station.png"))));
+    }
+
+private:
+    QTemporaryDir m_securityDir;
+};
+
+QTEST_MAIN(TstRemoteStationVax)
+#include "tst_remote_station_vax.moc"

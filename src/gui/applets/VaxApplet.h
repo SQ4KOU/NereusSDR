@@ -33,15 +33,22 @@
 //   2026-09-23: R-R3-44: setTransmitPermitted() for the TX row, so the
 //                 applet works in a remote window. J.J. Boyd (KG4VCF), with
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-28: iPhone app plan Task 25 (R-IOS-18): the "Station computer"
+//                 section, the Core computer's VAX channels through the
+//                 Core's `vax` object, below this computer's own. J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #pragma once
 
 #include "AppletWidget.h"
 
+#include <QPointer>
 #include <QString>
 
 class QPushButton;
+class QVBoxLayout;
 class QLabel;
 class QTimer;
 
@@ -49,6 +56,7 @@ namespace NereusSDR {
 
 class AudioEngine;
 class MeterSlider;
+class StationVax;
 
 // VAX applet — per-VAX-channel gain + mute + level meters.
 //
@@ -88,6 +96,48 @@ public:
     // (MainWindow::applyRemoteRoleGating). The receive rows are unaffected.
     void setTransmitPermitted(bool permitted, const QString& reason);
 
+    // iPhone app plan Task 25 (R-IOS-18): in a remote window, below this
+    // computer's own VAX channels (R-R3-44), the "Station computer" section
+    // shows the Core computer's VAX channels from the Core's `vax` object
+    // (StationClient::stationVax): its slices, levels, mutes, device names
+    // and transmit row, each control changing the Core's through the
+    // object. Shown only while `shown` (the Core sends the object); null
+    // hides it.
+    void setStationVax(StationVax* vax, bool shown);
+    /// The section's TX row follows this device's transmit permission, as
+    /// the Core takes the transmit level only from a device that may
+    /// transmit: disabled with the gate's reason otherwise.
+    void setStationTransmitPermitted(bool permitted, const QString& reason);
+    /// Whether the section's meters are wanted: the section is shown and
+    /// the applet is visible.
+    bool stationLevelsWanted() const { return m_stationLevelsWanted; }
+
+    // Test accessors for the section.
+    QWidget* stationSectionForTest() const { return m_stationSection; }
+    MeterSlider* stationRxMeterForTest(int channel) const
+    {
+        return channel >= 1 && channel <= kChannels ? m_stationRxMeter[channel - 1] : nullptr;
+    }
+    QPushButton* stationMuteButtonForTest(int channel) const
+    {
+        return channel >= 1 && channel <= kChannels ? m_stationMuteBtn[channel - 1] : nullptr;
+    }
+    QLabel* stationTagsLabelForTest(int channel) const
+    {
+        return channel >= 1 && channel <= kChannels ? m_stationTagsLbl[channel - 1] : nullptr;
+    }
+    QLabel* stationDeviceLabelForTest(int channel) const
+    {
+        return channel >= 1 && channel <= kChannels ? m_stationDeviceLbl[channel - 1] : nullptr;
+    }
+    MeterSlider* stationTxMeterForTest() const { return m_stationTxMeter; }
+    QLabel* stationTxTagsLabelForTest() const { return m_stationTxTagsLbl; }
+
+signals:
+    /// stationLevelsWanted() changed: MainWindow subscribes to the Core's
+    /// vaxLevels stream while it is true.
+    void stationLevelsWantedChanged(bool wanted);
+
 protected:
     // Start/stop the level-poll timer with visibility so a hidden applet
     // doesn't wake the audio thread 20×/s for nothing.
@@ -96,6 +146,10 @@ protected:
 
 private:
     void buildUi();
+    void buildStationSection(QWidget* body, QVBoxLayout* vbox);
+    void refreshStationValues();
+    void refreshStationLevels();
+    void updateStationLevelsWanted();
     void connectSliceTagsTracking();
     void updateTagsLabels();
     void pollLevels();
@@ -119,6 +173,18 @@ private:
 
     // 20 Hz level-meter poller. Reads AudioEngine::vaxRxLevel / vaxTxLevel.
     QTimer* m_levelTimer{nullptr};
+
+    // The "Station computer" section (iPhone app plan Task 25).
+    QPointer<StationVax> m_stationVax;
+    bool m_stationShown{false};
+    bool m_stationLevelsWanted{false};
+    QWidget*     m_stationSection{nullptr};
+    QPushButton* m_stationMuteBtn[kChannels]{};
+    MeterSlider* m_stationRxMeter[kChannels]{};
+    QLabel*      m_stationTagsLbl[kChannels]{};
+    QLabel*      m_stationDeviceLbl[kChannels]{};
+    MeterSlider* m_stationTxMeter{nullptr};
+    QLabel*      m_stationTxTagsLbl{nullptr};
 };
 
 } // namespace NereusSDR

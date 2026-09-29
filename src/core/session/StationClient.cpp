@@ -324,6 +324,7 @@
 #include "core/session/TxWatchClient.h"
 #include "core/session/media/IMediaTransport.h"
 #include "core/session/MediaTunnel.h"
+#include "core/session/StationVaxFacade.h"
 #include "core/session/TransmitStateFacade.h"
 #include "core/session/RemoteDevicesState.h"
 #include "core/settings/SettingsProxy.h"
@@ -615,6 +616,8 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
     if (!m_radioModel.isNull()) {
         m_radioModel->setStationTransmitState(m_transmitState);
     }
+    // iPhone app plan Task 25: the Core computer's VAX, unbound (a mirror).
+    m_stationVax = new StationVax(this);
     // iPhone app plan Task 78: who else is on the Core.
     m_remoteDevices = new RemoteDevicesState(this);
     connect(m_transmitState, &TransmitState::holderChanged, this,
@@ -657,6 +660,10 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
     m_declaredFeatures.insert(QByteArrayLiteral("coreBuildInfo"), 1);
     m_declaredFeatures.insert(QByteArrayLiteral("settingsBackup"), 1);
     m_declaredFeatures.insert(QByteArrayLiteral("radioAntennaRows"), 1);
+    // iPhone app plan Task 25 (R-IOS-18): the VAX applet's "Station
+    // computer" section shows the Core computer's VAX channels (the `vax`
+    // object); this window's own VAX channels stay its own (R-R3-44).
+    m_declaredFeatures.insert(QByteArrayLiteral("vax"), 1);
     m_settingsBackupReplyTimer = new QTimer(this);
     m_settingsBackupReplyTimer->setSingleShot(true);
     connect(m_settingsBackupReplyTimer, &QTimer::timeout, this, [this]() {
@@ -1971,6 +1978,13 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
     // can tell once its Core is gone; the last stop stays until the next
     // snapshot replaces it.
     m_transmitState->clearStationValues();
+    // iPhone app plan Task 25: the Core computer's VAX leaves the applet
+    // until the next snapshot sends it again.
+    m_stationVax->clearStationValues();
+    if (m_stationVaxHeld) {
+        m_stationVaxHeld = false;
+        emit stationVaxAvailabilityChanged();
+    }
     // Parity Task 19: the Core's spot sources read off, and its spots leave
     // this window, until the next snapshot sends them again.
     if (!m_radioModel.isNull()) {
@@ -2483,6 +2497,10 @@ void StationClient::onTransportText(const QByteArray& wire)
         if (m_cfcCompressionWanted && txReadingsAvailable()) {
             sendCfcCompressionSubscription(true);
         }
+        // iPhone app plan Task 25: the VAX meters shown across a reconnect.
+        if (m_stationVaxLevelsWanted && stationVaxAvailable()) {
+            sendStationVaxLevelsSubscription(true);
+        }
         // R-IOS-13 / R-R3-49: the Mod Monitor's stream, when the window
         // shows it; a new snapshot is a new subscription.
         m_modMonitorStream.clear();
@@ -2565,6 +2583,18 @@ void StationClient::onTransportText(const QByteArray& wire)
         break;
     // Parity Task 19 (R-IOS-25): a stream this window subscribed to.
     case SessionMessageKind::RecordBatch:
+        // iPhone app plan Task 25: the Core computer's VAX meters.
+        if (message.recordBatch.stream == QLatin1String(StationVax::kLevelsStream)) {
+            for (const RecordUpsert& u : message.recordBatch.upserts) {
+                double rx[StationVax::kChannels] = {};
+                for (int i = 0; i < StationVax::kChannels; ++i) {
+                    rx[i] = u.fields.value(QStringLiteral("ch%1Level").arg(i + 1)).toDouble();
+                }
+                m_stationVax->setStationLevels(
+                    rx, u.fields.value(QStringLiteral("txLevel")).toDouble());
+            }
+            break;
+        }
         // Parity Task 33: the Core's CFC display, its one record.
         if (message.recordBatch.stream == QLatin1String(TransmitState::kCfcStream)) {
             for (const RecordUpsert& u : message.recordBatch.upserts) {
@@ -3285,6 +3315,24 @@ void StationClient::handleCapabilities(const SessionMessage& message)
     } else {
         m_objects.remove(QByteArrayLiteral("txState"));
         m_transmitState->clearStationValues();
+    }
+
+    // iPhone app plan Task 25 (vaxVersion 1): the Core computer's VAX. Its
+    // levels and mutes a window changes through the object (sent on as
+    // property writes); against a Core that does not send it the key is
+    // not held and the copy reads idle.
+    const bool vaxHeld = stationVaxAvailable();
+    if (vaxHeld) {
+        m_objects.insert(QByteArrayLiteral("vax"), m_stationVax);
+        watchForOutbound(QByteArrayLiteral("vax"), m_stationVax);
+    } else {
+        m_objects.remove(QByteArrayLiteral("vax"));
+        m_outboundMirror->unwatch(QByteArrayLiteral("vax"));
+        m_stationVax->clearStationValues();
+    }
+    if (vaxHeld != m_stationVaxHeld) {
+        m_stationVaxHeld = vaxHeld;
+        emit stationVaxAvailabilityChanged();
     }
 
     const QList<PanadapterModel*> pans = m_radioModel->panadapters();
@@ -4009,6 +4057,13 @@ bool StationClient::applyClientOnlyProperty(QObject* target, const QByteArray& c
     if (className == "SpotSourceHost") {
         auto* spotSources = qobject_cast<SpotSourceHost*>(target);
         return spotSources != nullptr && spotSources->applyStationValue(propertyName, native);
+    }
+    // iPhone app plan Task 25: the Core computer's VAX slices, device names
+    // and transmit slice, plain state (its levels and mutes are writable
+    // and land through their setters).
+    if (className == "StationVax") {
+        auto* vax = qobject_cast<StationVax*>(target);
+        return vax != nullptr && vax->applyStationValue(propertyName, native);
     }
     // R-R3-48: a plain state apply; the switch changes only by command.
     if (className == "StationTciModel") {
@@ -4753,6 +4808,36 @@ void StationClient::setCfcCompressionWanted(bool wanted)
     m_cfcCompressionWanted = wanted;
     if (txReadingsAvailable()) {
         sendCfcCompressionSubscription(wanted);
+    }
+}
+
+bool StationClient::stationVaxAvailable() const
+{
+    return m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.vaxVersion >= 1;
+}
+
+void StationClient::setStationVaxLevelsWanted(bool wanted)
+{
+    if (m_stationVaxLevelsWanted == wanted) {
+        return;
+    }
+    m_stationVaxLevelsWanted = wanted;
+    if (stationVaxAvailable() && isHandshakeComplete()) {
+        sendStationVaxLevelsSubscription(wanted);
+    }
+}
+
+void StationClient::sendStationVaxLevelsSubscription(bool subscribe)
+{
+    const MirrorUpdate stream{0, "stream", MirrorWireKind::Utf8,
+                              QVariant(QString::fromLatin1(StationVax::kLevelsStream))};
+    if (subscribe) {
+        invokeCommand("records.subscribe",
+                      {stream, MirrorUpdate{0, "backlog", MirrorWireKind::Int64,
+                                            QVariant(static_cast<qlonglong>(1))}});
+    } else {
+        invokeCommand("records.unsubscribe", {stream});
     }
 }
 

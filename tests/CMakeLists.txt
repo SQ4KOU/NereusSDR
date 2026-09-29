@@ -8081,6 +8081,11 @@ nereus_add_test(tst_station_tools EXTRA_LABELS session)
 nereus_add_test(tst_station_vax
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)
+# iPhone app plan Task 25 (R-IOS-18): a remote window's VAX applet, its
+# "Station computer" section from the Core's `vax` object. Loopback only.
+nereus_add_test(tst_remote_station_vax
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS gui session)
 # iPhone app Task 14 (R-IOS-08, D37): the pairing code and its word list,
 # the pairing window (injected clock), and the SPAKE2+EE exchange with its
 # confirmation boxes.

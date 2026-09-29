@@ -10,6 +10,8 @@
 //   2026-09-28: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), iPhone app plan Task 25 (R-IOS-18), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-28: a remote window's copy. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationVaxFacade.h"
@@ -25,6 +27,17 @@
 #include <cmath>
 
 namespace NereusSDR {
+
+namespace {
+
+// A level as the applet saves it (three decimals), so a device reads 0.4
+// for the engine's float 0.4, not 0.4000000059604645.
+double thousandths(float level)
+{
+    return std::round(static_cast<double>(level) * 1000.0) / 1000.0;
+}
+
+} // namespace
 
 QString StationVax::rxGainKey(int channel)
 {
@@ -174,17 +187,96 @@ void StationVax::refreshSlices()
 
 double StationVax::rxGain(int channel) const
 {
-    return m_audio ? static_cast<double>(m_audio->vaxRxGain(channel)) : 1.0;
+    if (channel < 1 || channel > kChannels) {
+        return 1.0;
+    }
+    return m_audio ? thousandths(m_audio->vaxRxGain(channel)) : m_rxGain[channel - 1];
 }
 
 bool StationVax::muted(int channel) const
 {
-    return m_audio ? m_audio->vaxMuted(channel) : false;
+    if (channel < 1 || channel > kChannels) {
+        return false;
+    }
+    return m_audio ? m_audio->vaxMuted(channel) : m_muted[channel - 1];
 }
 
 double StationVax::txGain() const
 {
-    return m_audio ? static_cast<double>(m_audio->vaxTxGain()) : 1.0;
+    return m_audio ? thousandths(m_audio->vaxTxGain()) : m_txGainCopy;
+}
+
+QString StationVax::device(int channel) const
+{
+    if (channel < 1 || channel > kChannels) {
+        return {};
+    }
+    // The Core's own object names this computer's devices; a window's copy
+    // shows the names the Core sent.
+    return m_audio || m_model ? deviceName(channel) : m_devices[channel - 1];
+}
+
+bool StationVax::applyStationValue(const QByteArray& propertyName, const QVariant& value)
+{
+    static const char* const kSlices[] = {"ch1Slices", "ch2Slices", "ch3Slices", "ch4Slices"};
+    static const char* const kDevices[] = {"ch1Device", "ch2Device", "ch3Device", "ch4Device"};
+    for (int i = 0; i < kChannels; ++i) {
+        if (propertyName == kSlices[i]) {
+            if (m_slices[i] != value.toString()) {
+                m_slices[i] = value.toString();
+                emit slicesChanged();
+            }
+            return true;
+        }
+        if (propertyName == kDevices[i]) {
+            if (m_devices[i] != value.toString()) {
+                m_devices[i] = value.toString();
+                emit devicesChanged();
+            }
+            return true;
+        }
+    }
+    if (propertyName == "txSlice") {
+        if (m_txSlice != value.toString()) {
+            m_txSlice = value.toString();
+            emit slicesChanged();
+        }
+        return true;
+    }
+    return false;
+}
+
+void StationVax::clearStationValues()
+{
+    for (int i = 0; i < kChannels; ++i) {
+        m_slices[i].clear();
+        m_devices[i].clear();
+        m_rxGain[i] = 1.0;
+        m_muted[i] = false;
+        m_levels[i] = 0.0;
+    }
+    m_txSlice.clear();
+    m_txGainCopy = 1.0;
+    m_txLevel = 0.0;
+    emit slicesChanged();
+    emit devicesChanged();
+    emit gainsChanged();
+    emit mutesChanged();
+    emit levelsChanged();
+}
+
+void StationVax::setStationLevels(const double* rx, double tx)
+{
+    for (int i = 0; i < kChannels; ++i) {
+        m_levels[i] = rx[i];
+    }
+    m_txLevel = tx;
+    emit levelsChanged();
+}
+
+double StationVax::stationLevel(int channel) const
+{
+    return channel >= 1 && channel <= kChannels ? m_levels[channel - 1] : 0.0;
 }
 
 void StationVax::save(const QString& key, const QString& value)
@@ -198,7 +290,16 @@ void StationVax::save(const QString& key, const QString& value)
 
 void StationVax::setRxGain(int channel, double gain)
 {
-    if (channel < 1 || channel > kChannels || !m_audio) {
+    if (channel < 1 || channel > kChannels) {
+        return;
+    }
+    if (!m_audio) {
+        // A window's copy: the Core's value arriving, or this window's own
+        // change, which the link sends on.
+        if (m_rxGain[channel - 1] != gain) {
+            m_rxGain[channel - 1] = gain;
+            emit gainsChanged();
+        }
         return;
     }
     const float level = std::clamp(static_cast<float>(gain), 0.0f, 1.0f);
@@ -209,7 +310,14 @@ void StationVax::setRxGain(int channel, double gain)
 
 void StationVax::setMuted(int channel, bool on)
 {
-    if (channel < 1 || channel > kChannels || !m_audio) {
+    if (channel < 1 || channel > kChannels) {
+        return;
+    }
+    if (!m_audio) {
+        if (m_muted[channel - 1] != on) {
+            m_muted[channel - 1] = on;
+            emit mutesChanged();
+        }
         return;
     }
     // As the applet's Mute button does.
@@ -220,6 +328,10 @@ void StationVax::setMuted(int channel, bool on)
 void StationVax::setTxGain(double gain)
 {
     if (!m_audio) {
+        if (m_txGainCopy != gain) {
+            m_txGainCopy = gain;
+            emit gainsChanged();
+        }
         return;
     }
     const float level = std::clamp(static_cast<float>(gain), 0.0f, 1.0f);
