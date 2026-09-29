@@ -31,6 +31,8 @@
 //   2026-09-26  J.J. Boyd / KG4VCF  iPhone app plan Task 78 (R-IOS-07,
 //                                    R-IOS-02): connectedList().
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  modelListUnavailableReason().
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "gui/SetupPage.h"
@@ -62,6 +64,9 @@ public:
     /// Follow-up N1: a token sign-in that enrolled this computer's key.
     /// The Core takes the radio requests from the key's next sign-in.
     static QString reconnectToChangeRadioReason();
+    /// The Core did not send the models its radios can run as (a Core
+    /// older than the model list), so the model choice waits.
+    static QString modelListUnavailableReason();
 
     // For tests.
     QTreeWidget* radioList() const { return m_list; }

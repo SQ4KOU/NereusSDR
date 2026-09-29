@@ -294,6 +294,9 @@
 //               txAmModulationFeedback stream while shown, again after each
 //               snapshot, and sends txModMonitor.reset. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-09-29: The hello declares radioModels 1, so Manage Radios offers
+//               each radio the Core's own model list. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SystemProxy.h"
@@ -657,6 +660,10 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
     m_declaredFeatures.insert(QByteArrayLiteral("coreBuildInfo"), 1);
     m_declaredFeatures.insert(QByteArrayLiteral("settingsBackup"), 1);
     m_declaredFeatures.insert(QByteArrayLiteral("radioAntennaRows"), 1);
+    // Manage Radios offers the models the Core accepts for each radio's
+    // board, from the Core's own list (stationRadios' models, radioModels 1),
+    // never a guess from the model alone.
+    m_declaredFeatures.insert(QByteArrayLiteral("radioModels"), 1);
     m_settingsBackupReplyTimer = new QTimer(this);
     m_settingsBackupReplyTimer->setSingleShot(true);
     connect(m_settingsBackupReplyTimer, &QTimer::timeout, this, [this]() {

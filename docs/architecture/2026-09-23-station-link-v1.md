@@ -797,8 +797,10 @@ Core can see by its model, and offers the models that radio can run as. A
 peer that declares it at minor 11 is sent `radioModelsVersion` (section
 6.3) and, when that is 1, `modelLabel` and `models` on each `stationRadios`
 record (section 7.7); a peer that does not sees exactly the wire it was
-built for, with neither. The station does not declare it, and the
-desktop's remote window does not.
+built for, with neither. The station does not declare it. The desktop's
+remote window declares it too: its Manage Radios model choice is the
+record's `models`, and on a Core that sends none the choice is disabled
+with its reason.
 
 **`sessionHolder` 1** (iPhone app plan Task 71; the several-devices
 design, ruling 10.1): the Core admits up to four devices at once (section

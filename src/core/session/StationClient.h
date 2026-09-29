@@ -363,6 +363,8 @@
 //               setModMonitorSource() and requestModMonitorReset(), the AM
 //               Mod Monitor in a remote window. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-09-29: withholdFeatureForTest. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include <QAbstractSocket>
@@ -1282,6 +1284,9 @@ public:
     /// Test seam: a bench link cannot enrol its key either; a window test
     /// says this token sign-in did (follow-up N1).
     void setEnrolledDeviceKeyForTest(bool enrolled) { m_enrolledKeyForTest = enrolled ? 1 : 0; }
+    /// Test seam: the next hello leaves out `feature`, as a window built
+    /// before it did (a Core then answers as it would that window).
+    void withholdFeatureForTest(const QByteArray& feature) { m_declaredFeatures.remove(feature); }
 #endif
     /// Parity Task 21. Verbs station.selectRadio, station.rescanRadios,
     /// station.setRadioModel and station.forgetRadio.
