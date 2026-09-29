@@ -571,6 +571,11 @@
 //                announces it, and every held change of a slice, as
 //                sliceRequestHeldForListener. NereusSDR-original. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - Slice control fix wave (Important 4): txSliceSelected,
+//                emitted when the Core's own window selects a transmit
+//                slice (requestTxHandoffToSlice), so the session server
+//                records an explicit choice. NereusSDR-original. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -11259,7 +11264,11 @@ void RadioModel::clearNnrLimit(SliceModel* slice)
 bool RadioModel::requestTxHandoffToSlice(int sliceId)
 {
     if (m_txSliceArbiter == nullptr) { return false; }
-    return m_txSliceArbiter->requestHandoff(sliceId);
+    if (!m_txSliceArbiter->requestHandoff(sliceId)) {
+        return false;
+    }
+    emit txSliceSelected(sliceId);
+    return true;
 }
 
 int RadioModel::addSlice(const QString& initialPanId)

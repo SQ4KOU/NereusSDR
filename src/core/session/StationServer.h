@@ -1252,6 +1252,16 @@ public:
     {
         return m_chosenTxSlice.value(device, -1);
     }
+    /// Slice control fix wave (Important 4): the slice `device` last chose
+    /// for transmit itself (tx.setTxSlice, or the hosting desktop's own
+    /// selection for the station device), or -1. Never written by the
+    /// binding a holder gets by itself; cleared when control of the slice
+    /// passes from the device, when the slice closes and when the device
+    /// is removed. Task 11 refuses keying without it.
+    int explicitTxSliceFor(const QByteArray& device) const
+    {
+        return m_explicitTxSlice.value(device, -1);
+    }
     /// The Core's model (the conformance runner presses its radio's PTT).
     RadioModel* radioModel() const;
     /// Fix wave 2 (ruling 8.1): a desktop that hosts this Core names the
@@ -2030,6 +2040,9 @@ private:
     void onSliceClosedForHolder(int sliceId);
     /// Each device's chosen transmit slice (ruling 8.10), by device.
     QHash<QByteArray, int> m_chosenTxSlice;
+    /// Slice control fix wave (Important 4): each device's explicit
+    /// transmit choice (explicitTxSliceFor).
+    QHash<QByteArray, int> m_explicitTxSlice;
     /// The holder epoch the transmit slice was last bound for.
     quint64 m_txSliceBoundEpoch = 0;
     /// Section 7.3's refusal for an older window, naming who a change

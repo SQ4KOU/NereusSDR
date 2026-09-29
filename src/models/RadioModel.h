@@ -371,6 +371,11 @@
 //                announces it, and every held change of a slice, as
 //                sliceRequestHeldForListener. NereusSDR-original. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - Slice control fix wave (Important 4): txSliceSelected,
+//                emitted when the Core's own window selects a transmit
+//                slice (requestTxHandoffToSlice), so the session server
+//                records an explicit choice. NereusSDR-original. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1670,6 +1675,8 @@ public:
     /// Factored out of the MainWindow badge handler so both the pan TX badge
     /// and a test can reach it without standing up a MainWindow, the same way
     /// requestSliceSampleRate is.
+    /// Slice control fix wave (Important 4): an accepted request emits
+    /// txSliceSelected, the Core's own window's explicit transmit choice.
     bool requestTxHandoffToSlice(int sliceId);
 
     /// Phase 3F: hardware-capped user-facing slice count. Reads BoardCapabilities.maxSlices
@@ -4861,6 +4868,10 @@ signals:
     void settingsSaveErrorChanged(const QString& reason);
     void sliceAdded(int index);
     void sliceRemoved(int index);
+    /// Slice control fix wave (Important 4): the Core's own window chose
+    /// `sliceId` for transmit (requestTxHandoffToSlice accepted it). Never
+    /// emitted for a binding the transmitter gets by itself.
+    void txSliceSelected(int sliceId);
     // A restored shared slice may have changed many preferences silently.
     // Consumers must publish a complete snapshot, not duplicate sliceAdded.
     void receiveLayoutHydrated();

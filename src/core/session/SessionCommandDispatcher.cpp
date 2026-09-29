@@ -246,6 +246,11 @@
 //                                    controller others listen with (ruling
 //                                    Q6). AI-assisted via Anthropic Claude
 //                                    Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  Slice control fix wave (Important 4):
+//                                    TransmitAccess::txSliceChosen, a
+//                                    device's explicit tx.setTxSlice
+//                                    choice. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -1652,6 +1657,12 @@ void SessionCommandDispatcher::handleSetTxSlice(const SessionMessage& invoke)
         emitResult(invoke.commandVerb, invoke.commandId, false,
                    QStringLiteral("That slice is no longer on the Core."), {});
         return;
+    }
+    // Slice control fix wave (Important 4): the device's explicit choice.
+    // Without a requester the Core's own window chose, and RadioModel's
+    // txSliceSelected records it.
+    if (!m_requester.isEmpty() && m_transmitAccess.txSliceChosen) {
+        m_transmitAccess.txSliceChosen(m_requester, sliceId);
     }
     QList<QByteArray> affected;
     for (const SliceModel* slice : m_radioModel->slices()) {

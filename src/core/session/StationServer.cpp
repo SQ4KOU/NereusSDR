@@ -642,8 +642,11 @@
 //               a change of control clears the transmit selection of any
 //               holder whose flag is on the slice; a device that leaves,
 //               is revoked or stays away past its 180 s stops listening,
-//               and a slice kept only for it closes. J.J. Boyd (KG4VCF),
-//               with AI-assisted implementation via Anthropic Claude Code.
+//               and a slice kept only for it closes; a record of each
+//               device's explicit transmit choice, written only by
+//               tx.setTxSlice and the hosting desktop's own selection.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -2037,6 +2040,7 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
         }
         DeviceLayoutStore::forgetDevice(AppSettings::instance(), id);
         m_slicesNotRestored.remove(id);
+        m_explicitTxSlice.remove(id);
         // iPhone app Task 74 (7.4): its questions and waiting notices go.
         m_confirm->forgetDevice(id);
     });
@@ -2638,6 +2642,15 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
             for (auto it = m_takenNotChosenForTx.begin(); it != m_takenNotChosenForTx.end(); ++it) {
                 it->remove(sliceId);
             }
+            // Fix wave (Important 4): a closed slice is nobody's choice.
+            for (auto it = m_explicitTxSlice.begin(); it != m_explicitTxSlice.end();) {
+                it = it.value() == sliceId ? m_explicitTxSlice.erase(it) : std::next(it);
+            }
+        });
+        // Fix wave (Important 4): the hosting desktop's own selection is
+        // the station device's explicit choice.
+        connect(radioModel, &RadioModel::txSliceSelected, this, [this](int sliceId) {
+            m_explicitTxSlice.insert(SliceOwnership::stationDevice(), sliceId);
         });
         // The checks and the change behind slice.listen, slice.stopListening,
         // slice.takeControl and slice.release (and, in Task 10, the hosting
@@ -2697,6 +2710,11 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
             }
             const TxRefusal refusal = m_transmitHolder->keyRefusalFor(requester);
             return refusal.isEmpty() ? TxRefusals::notHolder() : refusal;
+        };
+        // Slice control fix wave (Important 4): only tx.setTxSlice writes
+        // a device's explicit transmit choice.
+        access.txSliceChosen = [this](const QByteArray& requester, int sliceId) {
+            m_explicitTxSlice.insert(requester, sliceId);
         };
         // Task 35: tx.key, tx.unkey, tx.tune and tx.twoTone.
         access.keying = [this](const RemoteKeying::Command& command, RemoteKeying::Reply reply) {
@@ -8320,6 +8338,9 @@ void StationServer::clearTransmitSelection(const QByteArray& former, int sliceId
     // Ruling Q8 (b): its remembered transmit choice no longer names it.
     if (!former.isEmpty() && m_chosenTxSlice.value(former, -1) == sliceId) {
         m_chosenTxSlice.remove(former);
+    }
+    if (!former.isEmpty() && m_explicitTxSlice.value(former, -1) == sliceId) {
+        m_explicitTxSlice.remove(former);
     }
     // Ruling Q8 (a), ruling 8.12's close path: while a device holds
     // transmit on this slice, the flag moves to another of the holder's

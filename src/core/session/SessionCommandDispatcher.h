@@ -202,6 +202,11 @@
 //                                    controller others listen with as a
 //                                    release (ruling Q6).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  Slice control fix wave (Important 4):
+//                                    TransmitAccess::txSliceChosen, a
+//                                    device's explicit tx.setTxSlice
+//                                    choice. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -386,6 +391,9 @@ public:
     struct TransmitAccess {
         std::function<TxRefusal(const QByteArray& requester)> onAir;
         std::function<TxRefusal(const QByteArray& requester)> txSlice;
+        /// Slice control fix wave (Important 4): tx.setTxSlice from
+        /// `requester` was accepted for `sliceId`, its explicit choice.
+        std::function<void(const QByteArray& requester, int sliceId)> txSliceChosen;
         std::function<void(const RemoteKeying::Command& command, RemoteKeying::Reply reply)>
             keying;
         /// Task 37 (R-IOS-13): tx.keepalive {sequence, epoch} from

@@ -783,6 +783,57 @@ private slots:
         QVERIFY(!mox->isMox());
     }
 
+    // Slice control fix wave (Important 4): the record of an explicit
+    // transmit choice is written only by tx.setTxSlice (and the hosting
+    // desktop's own selection), never by the binding a new holder gets by
+    // itself, and it goes when control of the slice passes.
+    void onlyAnExplicitSelectionMarksATransmitSliceChosen()
+    {
+        Core core;
+        allowTransmit(core);
+        core.model->configureStreamPool(5, 5, 192000);
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a, kSharesTx);
+        LoopbackTransport* appB = core.signIn(b, kSharesTx);
+        QVERIFY(admitted(appA) && admitted(appB));
+        SliceOwnership* ownership = core.model->sliceOwnership();
+        if (ownership->ownedBy(b.key.fingerprint()).isEmpty()) {
+            QVERIFY(accepted(core.invoke(appB, "addSlice", {utf8("initialPanId", QString())})));
+        }
+        const int mine = ownership->ownedBy(b.key.fingerprint()).first();
+        TxSliceArbiter* arbiter = core.model->txSliceArbiter();
+        QVERIFY(arbiter->txBoundSliceId() != mine);
+
+        // B keys: its hold binds its own slice by itself.
+        MoxController* mox = core.model->moxController();
+        mox->setMox(true, keyerFor(b));
+        mox->setMox(false, keyerFor(b));
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        QVERIFY(core.server->transmitHolder()->isHeldBy(b.key.fingerprint()));
+        QTRY_COMPARE(arbiter->txBoundSliceId(), mine);
+        QCOMPARE(core.server->explicitTxSliceFor(b.key.fingerprint()), -1);
+
+        // Its own selection is the record.
+        QVERIFY(accepted(core.invoke(appB, "tx.setTxSlice", {int64("sliceId", mine)})));
+        QCOMPARE(core.server->explicitTxSliceFor(b.key.fingerprint()), mine);
+
+        // Control of the slice passes: the record goes with it.
+        QTRY_VERIFY(holds(appA, accessKey(mine)));
+        const QJsonObject r =
+            core.invoke(appA, "slice.takeControl", revisionArgs(seenBy(appA, mine)));
+        QVERIFY2(accepted(r), qPrintable(reasonOf(r)));
+        QCOMPARE(core.server->explicitTxSliceFor(b.key.fingerprint()), -1);
+        QCOMPARE(core.server->explicitTxSliceFor(a.key.fingerprint()), -1);
+
+        // The hosting desktop's own selection is the station device's.
+        QCOMPARE(core.server->explicitTxSliceFor(SliceOwnership::stationDevice()), -1);
+        QVERIFY(core.model->requestTxHandoffToSlice(0));
+        QCOMPARE(core.server->explicitTxSliceFor(SliceOwnership::stationDevice()), 0);
+    }
+
     // The review's third-holder case: a device holding transmit with the
     // flag parked on a slice it does not control loses that selection when
     // another device takes the slice.
