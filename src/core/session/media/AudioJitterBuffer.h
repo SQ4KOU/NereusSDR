@@ -42,6 +42,13 @@ namespace NereusSDR {
 /// ordinary jitter never costs on-time audio. Shedding disarms once the
 /// hold is back at kHoldNs with no excess.
 ///
+/// Load findings 2: a consumer stall arms it too. A gap between ticks
+/// longer than kStallNs (the consumer did not wake: packets kept arriving
+/// on time and none was late) can leave a backlog standing that no late
+/// packet announces; shedding is armed at once (the hold was not deepened,
+/// so there is no easing to wait for) and sheds that excess by the same
+/// rule, then disarms the same way.
+///
 /// A fixed-hold queue (setAdaptive(false), the PCM sink's) never grows,
 /// rewinds or sheds: its consumer is paced by the hold alone, and a late
 /// packet there is only late.
@@ -71,6 +78,12 @@ public:
     /// R-R3-21: how much a standing excess sheds each time: one Opus
     /// interval, ten lossless ones.
     static constexpr qint64 kShedStepNs = 40'000'000;
+    /// Load findings 2: a gap between ticks longer than this is a consumer
+    /// stall, and arms shedding. The receive worker waits at most 2 ms for
+    /// work, and its steady runs in the test suites wake within 14 ms at a
+    /// load of 160; the stall that left 50 ms standing in
+    /// tst_remote_audio_receiver_wifi was a 39 ms gap.
+    static constexpr qint64 kStallNs = 20'000'000;
     /// The window at the deepest hold.
     static constexpr qint64 kMaxWindowNs = kWindowNs + (kMaxHoldNs - kHoldNs);
     /// R-R3-21. Late: behind the head (a copy of a packet that played, or
@@ -131,6 +144,8 @@ public:
     /// R-R3-21: eases the hold and sheds a standing excess, as takeReady()
     /// does first; for a consumer that may not reach takeReady() on a wake
     /// (the speaker's release is held back while the matcher is full).
+    /// Load findings 2: called on every wake, so a gap between calls longer
+    /// than kStallNs arms shedding (see the class comment).
     void tick(qint64 nowNs);
     /// R-R3-21: the intervals shed since the last call, oldest first (at
     /// most a window's worth kept), a missing one as an empty packet, so
@@ -186,6 +201,10 @@ private:
     std::deque<Released> m_released;
     qint64 m_holdNs{kHoldNs};
     std::optional<qint64> m_lastLateNs;
+    // Load findings 2: the last tick, and whether a gap between ticks has
+    // armed shedding.
+    std::optional<qint64> m_lastTickNs;
+    bool m_stallArmed{false};
     // Since when the queue has stood above its target, while armed.
     std::optional<qint64> m_excessSinceNs;
     std::vector<QByteArray> m_shedPackets;
