@@ -467,28 +467,38 @@ private slots:
         QVERIFY(rig.model->txInhibitReason().isEmpty());
     }
 
-    // The reason is set before the model reads inhibited, and inhibited
-    // clears before the reason does, so nothing reading the pair (a local
-    // button, a remote window) sees it inhibited with no reason and shows
-    // the generic words for a moment.
+    // The model sends the reason before it announces inhibited, and
+    // announces not-inhibited before it clears the reason. A remote window
+    // applies them in that order, so it never holds inhibited with no
+    // reason and shows the generic words for a moment. (The getters cannot
+    // show this locally: both read the monitor at once. The order of the
+    // signals, which the link follows, can.)
     void reasonNeverLagsTheInhibit()
     {
         Rig rig;
         feedGeneralRead(*rig.model, 0);
         RadioModel* m = rig.model.get();
-        bool sawGeneric = false;
-        const auto check = [m, &sawGeneric]() {
-            if (m->isTxInhibited() && m->txInhibitReason().isEmpty()) {
-                sawGeneric = true;
-            }
-        };
-        connect(m, &RadioModel::txInhibitedChanged, m, check);
-        connect(m, &RadioModel::txInhibitReasonChanged, m, check);
+        QStringList order;
+        connect(m, &RadioModel::txInhibitedChanged, m, [&order](bool on) {
+            order.append(on ? QStringLiteral("inhibited") : QStringLiteral("released"));
+        });
+        connect(m, &RadioModel::txInhibitReasonChanged, m, [&order](const QString& reason) {
+            order.append(reason.isEmpty() ? QStringLiteral("reason cleared")
+                                          : QStringLiteral("reason set"));
+        });
         feedGeneralRead(*m, 5);
         QVERIFY(m->isTxInhibited());
+        QVERIFY2(order.indexOf(QStringLiteral("reason set")) >= 0
+                     && order.indexOf(QStringLiteral("reason set"))
+                            < order.indexOf(QStringLiteral("inhibited")),
+                 qPrintable(order.join(QStringLiteral(", "))));
+        order.clear();
         feedGeneralRead(*m, 0);
         QVERIFY(!m->isTxInhibited());
-        QVERIFY(!sawGeneric);
+        QVERIFY2(order.indexOf(QStringLiteral("released")) >= 0
+                     && order.indexOf(QStringLiteral("released"))
+                            < order.indexOf(QStringLiteral("reason cleared")),
+                 qPrintable(order.join(QStringLiteral(", "))));
     }
 
     void disconnectClearsTheFault()
