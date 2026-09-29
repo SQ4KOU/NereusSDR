@@ -1,6 +1,10 @@
 // 2026-09-27: validate transmit-region writes and shared confirmations.
 // J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 // Modification history (NereusSDR):
+//   2026-09-29: Setup description version 15 (R-R3-49, R-IOS-18): PA Gain
+//               publishes its on-the-air lock per row, the transmitting band
+//               open to the transmit holder only. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 //   2026-09-29: The Core's TCI server settings (JJ's ruling of 2026-09-28,
 //               stationTciSettingsVersion 1). J.J. Boyd (KG4VCF), AI-assisted
 //               via Anthropic Claude Code.
@@ -2432,6 +2436,22 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
                                                             m_radioModel->currentRadioInfo());
                     }
                 });
+        // Setup description version 15 (R-R3-49, JJ's ruling: follow
+        // Thetis): on the air PA Gain publishes which rows are locked and
+        // why, with the transmitting band open to the transmit holder only.
+        const auto applyPaOnAir = [this](bool onAir) {
+            if (m_radioModel && m_setupDescription) {
+                m_setupDescription->setPaOnAirState(
+                    onAir, onAir ? m_radioModel->paOnAirBandIndex() : -1);
+            }
+        };
+        applyPaOnAir(radioModel->isCoreOnAir());
+        connect(radioModel, &RadioModel::coreOnAirChanged, this, applyPaOnAir);
+    }
+    if (m_transmitHolder) {
+        connect(m_transmitHolder.get(), &TransmitHolder::changed, this, [this]() {
+            if (m_setupDescription) { m_setupDescription->noteTransmitHolderChanged(); }
+        });
     }
     // Parity Task 19 (R-IOS-25): the record streams follow the Core's spots
     // and its spot sources' consoles from here on.
@@ -7742,7 +7762,11 @@ void StationServer::sendToPeer(SessionTransport* transport, const SessionMessage
             && message.kind != SessionMessageKind::Schema) {
             SessionMessage fitted = message;
             const int declared = peer->features.value(QByteArrayLiteral("setupDescription"), 0);
-            const int version = qMin(declared, 14);
+            const int version = qMin(declared, 15);
+            // Version 15: the transmit holder's own PA band stays live.
+            const QByteArray deviceId = peerInfoFor(transport).deviceId;
+            const bool holdsTransmit = m_transmitHolder && !deviceId.isEmpty()
+                && m_transmitHolder->isHeldBy(deviceId);
             // The table describes the supported board's static row shape.
             // A disconnected radio withdraws the live row capability, but a
             // paired peer that negotiated rows keeps this description across
@@ -7753,7 +7777,8 @@ void StationServer::sendToPeer(SessionTransport* transport, const SessionMessage
             for (MirrorUpdate& update : fitted.updates) {
                 if (update.name != "revision") {
                     update.value = SetupDescription::fitCategoryForVersion(
-                        update.value.toString(), version, antennaRowsAvailable);
+                        update.value.toString(), version, antennaRowsAvailable,
+                        holdsTransmit);
                 }
             }
             transport->sendText(encodeFor(transport, fitted));
@@ -10757,7 +10782,7 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             caps.stationCatalogVersion = stationCatalogVersion();
             caps.setupDescriptionVersion = peerDeclares(
                 transport, QByteArrayLiteral("setupDescription"), 1)
-                ? qMin(peer->features.value(QByteArrayLiteral("setupDescription")), 14) : 0;
+                ? qMin(peer->features.value(QByteArrayLiteral("setupDescription")), 15) : 0;
             // iPhone app Task 20: display extras.
             caps.displayExtrasVersion = media ? displayExtrasVersion() : 0;
             // R-R3-49 (parity Task 1): the transmit settings.

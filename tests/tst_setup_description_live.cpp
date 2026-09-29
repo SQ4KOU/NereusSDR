@@ -547,6 +547,90 @@ private slots:
         QCOMPARE(core.settings->value(paKey(active)).toString(), kept);
     }
 
+    // Version 15 (JJ's ruling, holder only): each paired device reads PA
+    // Gain's on-the-air lock for itself. The holder's transmitting band
+    // stays open; another device sees it locked with the plain reason; a
+    // version 14 device keeps the closed rows.
+    void onAirPaGainLockIsPublishedPerDevice()
+    {
+        Core core(true);
+        allowTransmit(core); // the slice is on 20 m (Band 5)
+        Device holderDevice(QStringLiteral("Lock holder iPhone"), QStringLiteral("phone"));
+        Device otherDevice(QStringLiteral("Lock other iPad"), QStringLiteral("tablet"));
+        Device olderDevice(QStringLiteral("Lock V14 iPhone"), QStringLiteral("phone"));
+        core.pair(holderDevice);
+        core.pair(otherDevice);
+        core.pair(olderDevice);
+        QHash<QByteArray, int> v15 = kTransmitter;
+        v15.insert("setupDescription", 15);
+        v15.insert("paProfiles", 1);
+        QHash<QByteArray, int> v14 = v15;
+        v14.insert("setupDescription", 14);
+        auto* holder = core.signIn(holderDevice, v15);
+        auto* other = core.signIn(otherDevice, v15);
+        auto* older = core.signIn(olderDevice, v14);
+        QVERIFY(admitted(holder) && admitted(other) && admitted(older));
+        QCOMPARE(capability(holder->received(), QStringLiteral("setupDescriptionVersion")),
+                 std::optional<qint64>(15));
+        QCOMPARE(capability(older->received(), QStringLiteral("setupDescriptionVersion")),
+                 std::optional<qint64>(14));
+
+        const auto table = [](LoopbackTransport* app) {
+            const QJsonObject pa = QJsonDocument::fromJson(latest(app->received(),
+                QStringLiteral("setup"), QStringLiteral("pa")).toString().toUtf8()).object();
+            for (const QJsonValue& page : pa.value("pages").toArray()) {
+                for (const QJsonValue& section : page.toObject().value("sections").toArray()) {
+                    for (const QJsonValue& raw : section.toObject().value("controls").toArray()) {
+                        if (raw.toObject().value("id") == QJsonValue("pa.gain.table")) {
+                            return raw.toObject();
+                        }
+                    }
+                }
+            }
+            return QJsonObject{};
+        };
+        const auto rowLock = [&table](LoopbackTransport* app, int band) {
+            for (const QJsonValue& row : table(app).value("rows").toArray()) {
+                if (row.toObject().value("band") == QJsonValue(band)) {
+                    return row.toObject().value("availability");
+                }
+            }
+            return QJsonValue(QStringLiteral("no row"));
+        };
+        const QJsonObject locked{{"enabled", false},
+                                 {"reason", RadioModel::paOnAirLockedReason()}};
+        const QJsonObject holderOnly{{"enabled", false},
+                                     {"reason", RadioModel::paHolderOnlyReason()}};
+        QVERIFY(!table(holder).isEmpty());
+        QCOMPARE(rowLock(holder, 5), QJsonValue(QJsonValue::Undefined));
+        const QJsonObject olderTable = table(older);
+        QVERIFY(SetupDescriptionService::validatePaV14Control(olderTable));
+
+        const QJsonObject key = core.invoke(holder, "tx.key",
+                                            {MirrorUpdate{0, "trigger", MirrorWireKind::Utf8,
+                                                          QStringLiteral("screen")}});
+        QVERIFY2(key.value(QStringLiteral("accepted")).toBool(),
+                 qPrintable(key.value(QStringLiteral("reason")).toString()));
+        QTRY_VERIFY(core.model->isCoreOnAir());
+
+        QTRY_COMPARE(rowLock(holder, 3), QJsonValue(locked));
+        QCOMPARE(rowLock(holder, 5), QJsonValue(QJsonValue::Undefined));
+        QTRY_COMPARE(rowLock(other, 3), QJsonValue(locked));
+        QCOMPARE(rowLock(other, 5), QJsonValue(holderOnly));
+        QVERIFY(!QJsonDocument(table(other)).toJson().contains("holderMayEdit"));
+        // The version 14 device's rows never change.
+        QCOMPARE(table(older), olderTable);
+
+        const QJsonObject unkey = core.invoke(holder, "tx.unkey", {int64("epoch", 1)});
+        QVERIFY2(unkey.value(QStringLiteral("accepted")).toBool(),
+                 qPrintable(unkey.value(QStringLiteral("reason")).toString()));
+        QTRY_VERIFY(!core.model->isCoreOnAir());
+        QTRY_COMPARE(rowLock(other, 5), QJsonValue(QJsonValue::Undefined));
+        QCOMPARE(rowLock(other, 3), QJsonValue(QJsonValue::Undefined));
+        QCOMPARE(rowLock(holder, 3), QJsonValue(QJsonValue::Undefined));
+        QCOMPARE(table(older), olderTable);
+    }
+
     void calibrationWritesOutsideTheirRangeAreRefusedWhole()
     {
         Core core;
