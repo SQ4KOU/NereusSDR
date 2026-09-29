@@ -16,8 +16,11 @@
 // Modification history (NereusSDR):
 //   2026-09-29 - RADE status on the slice: wireRadeChannel sets the slice's
 //                 radeSynced and radeFreqOffsetHz from its channel, and
-//                 clears radeSynced when the channel goes. J.J. Boyd
-//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//                 clears radeSynced when the channel goes. A closed
+//                 decoder also clears the model's synced-slice record, so
+//                 the next decoder's first lock reaches the flag and the
+//                 FreeDV reporter. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 //   2026-09-28 - RADE end-of-over callsigns: an operator's release in RADE
 //                 sends FreeDV's end-of-over frame with the station callsign
 //                 before the radio unkeys (startRadeEndOfOverTail,
@@ -13287,12 +13290,17 @@ void RadioModel::wireRadeChannel(int sliceId, RadeChannel* channel,
     // carries only the stable slice ID plus a unique generation; QObject
     // lifetime remains on this main-thread side.
     const quint64 ownerSerial = publishRadeRxTarget(sliceId, channel, slice);
+    // A closed decoder is no longer locked. Record the drop so the flag and
+    // the FreeDV reporter hear it, and so the next decoder's first lock on
+    // this slice (RadeChannel starts with m_synced false) is not dropped as
+    // a repeat by the de-dup in onRadeSyncChanged.
     connect(channel, &QObject::destroyed, this,
-            [this, ownerSerial]() {
+            [this, ownerSerial, sliceId]() {
                 if (m_txWorker) {
                     m_txWorker->setRadeChannel(nullptr);
                 }
                 clearRadeRxTarget(ownerSerial);
+                onRadeSyncChanged(sliceId, false);
             });
 }
 

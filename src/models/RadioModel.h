@@ -3792,6 +3792,8 @@ public:
     TxWorkerThread* txWorkerMutableForTest() const { return m_txWorker.get(); }
     // The 24 -> 48 kHz RADE TX resampler (null until the first modem block).
     const Resampler* radeTxResamplerForTest() const { return m_radeTxResampler.get(); }
+    // The FreeDV reporter bridge fed by radeSyncChanged / radeSnrChanged.
+    FreeDVRadeReporterBridge* radeReporterBridgeForTest() const { return m_radeReporterBridge.get(); }
 
     // Test-only: inject board caps without a live radio connection.
     // Mirrors P1RadioConnection::setBoardForTest pattern.

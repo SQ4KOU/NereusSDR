@@ -46,8 +46,11 @@
 #include <QtTest/QtTest>
 #include <QSignalSpy>
 
+#include "core/FreeDVRadeReporterBridge.h"
 #include "core/RadeChannel.h"
 #include "core/session/MirrorPolicy.h"
+#include "gui/MainWindow.h"
+#include "gui/widgets/VfoWidget.h"
 #include "models/RadioModel.h"
 #include "models/RxDecodeModel.h"
 #include "models/SliceModel.h"
@@ -114,6 +117,7 @@ private slots:
     // RADE status on the slice for the phone's VFO flag.
     void sliceRadeSyncedFollowsChannel();
     void sliceRadeSyncedClearsWhenChannelGoes();
+    void newDecoderFirstLockReachesFlagAndReporter();
     void sliceRadeFreqOffsetFollowsChannel();
     void sliceRadeSyncedClearsOnLeavingRade();
     void radeStatusPropertiesAreReadOnlyAndGated();
@@ -360,6 +364,53 @@ void TestRadeChannelModelWiring::sliceRadeSyncedClearsWhenChannelGoes()
     QCOMPARE(slice->radeSynced(), true);
 }
 
+// A decoder that closes while locked must not leave the slice recorded
+// as synced: the next decoder on the slice starts unsynced
+// (RadeChannel::m_synced false) and its first lock has to reach the VFO
+// flag and the FreeDV reporter, not be dropped as a repeat.
+void TestRadeChannelModelWiring::newDecoderFirstLockReachesFlagAndReporter()
+{
+    RadioModel model;
+    const int sliceId = model.addSlice();
+    SliceModel* slice = model.sliceById(sliceId);
+    QVERIFY(slice != nullptr);
+    FreeDVRadeReporterBridge* reporter = model.radeReporterBridgeForTest();
+    QVERIFY(reporter != nullptr);
+
+    VfoWidget flag;
+    flag.setSlice(slice);
+    flag.setRadeActive(true);
+    MainWindow::wireRadeFlagForTest(&model, &flag, sliceId);
+    QSignalSpy syncSpy(&model, &RadioModel::radeSyncChanged);
+
+    auto first = std::make_unique<TestableRadeChannel>();
+    model.wireRadeChannel(sliceId, first.get(), slice);
+    first->emitSyncChangedForTest(true);
+    first->emitSnrChangedForTest(7.0f);
+    QCOMPARE(syncSpy.count(), 1);
+    QCOMPARE(reporter->syncedForTest(), true);
+    QVERIFY(flag.snrLabelForTest()->text().contains(QStringLiteral("●")));
+
+    first.reset();
+    QCOMPARE(syncSpy.count(), 2);
+    QCOMPARE(syncSpy.at(1).at(0).toInt(), sliceId);
+    QCOMPARE(syncSpy.at(1).at(1).toBool(), false);
+    QCOMPARE(model.radeSynced(sliceId), false);
+    QCOMPARE(reporter->syncedForTest(), false);
+    QVERIFY(flag.snrLabelForTest()->text().contains(QStringLiteral("○")));
+
+    TestableRadeChannel second;
+    model.wireRadeChannel(sliceId, &second, slice);
+    second.emitSyncChangedForTest(true);
+    second.emitSnrChangedForTest(3.0f);
+    QCOMPARE(syncSpy.count(), 3);
+    QCOMPARE(syncSpy.at(2).at(1).toBool(), true);
+    QCOMPARE(model.radeSynced(sliceId), true);
+    QCOMPARE(reporter->syncedForTest(), true);
+    QVERIFY(flag.snrLabelForTest()->text().contains(QStringLiteral("●")));
+    QVERIFY(flag.snrLabelForTest()->text().contains(QStringLiteral("3dB")));
+}
+
 // The desktop flag appends the decoder's offset after the SNR
 // (VfoWidget::setRadeFreqOffset); the slice carries the same value in Hz,
 // sign included.
@@ -428,5 +479,5 @@ void TestRadeChannelModelWiring::radeStatusPropertiesAreReadOnlyAndGated()
     QVERIFY(meta.indexOfProperty("radeFreqOffsetHz") > meta.indexOfProperty("radeSynced"));
 }
 
-QTEST_GUILESS_MAIN(TestRadeChannelModelWiring)
+QTEST_MAIN(TestRadeChannelModelWiring)
 #include "tst_rade_channel_model_wiring.moc"
