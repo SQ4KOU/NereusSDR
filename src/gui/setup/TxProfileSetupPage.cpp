@@ -14,6 +14,10 @@
 //                 a remote window, each control on the version that brought
 //                 it. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //                 Code.
+//   2026-09-29 - R-R3-49 / R-IOS-18: Setup description version 14 ids on
+//                the profile choice, Save and Delete; Save's tooltip says
+//                "transmit settings". J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis-derived semantics are
@@ -99,6 +103,7 @@ void TxProfileSetupPage::buildUi()
     // but the canonical "Save" path is via the Save button).
     m_combo = new QComboBox(group);
     m_combo->setEditable(false);  // restrict edits to Save button path
+    m_combo->setProperty("nereusSetupId", "audio.txProfile.activeProfile");
     m_combo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     m_combo->setToolTip(QStringLiteral(
         "Active TX Profile.  Switching prompts to save unsaved changes."));
@@ -107,9 +112,11 @@ void TxProfileSetupPage::buildUi()
     // Save / Delete buttons row.
     auto* btnRow = new QHBoxLayout();
     m_saveBtn = new QPushButton(QStringLiteral("Save..."), group);
+    m_saveBtn->setProperty("nereusSetupId", "audio.txProfile.save");
     m_saveBtn->setToolTip(QStringLiteral(
-        "Save the current TransmitModel state under a profile name."));
+        "Save the current transmit settings under a profile name."));
     m_deleteBtn = new QPushButton(QStringLiteral("Delete"), group);
+    m_deleteBtn->setProperty("nereusSetupId", "audio.txProfile.delete");
     m_deleteBtn->setToolTip(QStringLiteral(
         "Delete the currently-selected profile."));
     btnRow->addWidget(m_saveBtn);
