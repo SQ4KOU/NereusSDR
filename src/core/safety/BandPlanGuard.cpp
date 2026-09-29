@@ -941,7 +941,8 @@ BandPlanGuard::checkMoxAllowed(Region region, std::int64_t freqHz,
     //   if (_preventTXonDifferentBandToRXband && ((!RX2Enabled && VFOBTX && RX1Band != TXBand) || ...
     //   // note RX2 enabled with a TXvfoB will always TX
     // Thetis compares the split TX band with the RX band; NereusSDR has no
-    // split, so rxBand is the band of another slice the same device has open
+    // split, so rxBand is the band of the device's active slice when the
+    // transmitting slice is not it, else the TX band
     // (RadioModel::installBandPlanMoxCheck picks it). The sentence names both.
     if (!isValidTxBand(rxBand, txBand, preventDifferentBand)) {
         return {false, QStringLiteral("Transmit would be on %1 while another slice you have open is on %2, and Setup "

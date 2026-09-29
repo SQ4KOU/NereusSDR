@@ -1108,8 +1108,9 @@ public:
     // _preventTXonDifferentBandToRXband; console.cs:20843 and
     // :29451-29465 [v2.10.3.15]) as one Core setting under Thetis's key
     // name (SettingsScope::Station), default off. The transmit gate reads
-    // it at every key and compares the transmitting slice's band with the
-    // other slices the same device has open (NereusSDR has no split).
+    // it at every key: when the transmitting slice is not its device's
+    // active slice, its band is compared with the active slice's (Thetis
+    // compares split TX with RX; NereusSDR has no split).
     // StationServer takes a device's change only with transmit permission
     // and off the air.
     static constexpr const char* kPreventTxOnDifferentBandKey = "PreventTxOnDifferentBandToRx";

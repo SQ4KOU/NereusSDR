@@ -145,7 +145,7 @@
             {
               "id": "general.options.preventDifferentBand",
               "label": "Prevent TX'ing on a different band to the RX band",
-              "tooltip": "Refuse to transmit when the transmitting slice is on a different band from another slice this device has open",
+              "tooltip": "Refuse to transmit when the transmitting slice is not your active slice and is on a different band from it",
               "kind": "toggle",
               "binding": {
                 "setting": "PreventTxOnDifferentBandToRx"

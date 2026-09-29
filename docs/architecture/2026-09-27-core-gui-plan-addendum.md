@@ -762,8 +762,10 @@ Thetis only enables ADC0 on every board; NereusSDR offers two ADCs on boards tha
   windows and the phone Setup description. The comparison changes with JJ's
   ruling: Thetis compares the TX VFO's band with RX1's and only in split
   (console.cs:29451-29465 [v2.10.3.15]); a station has no split, so the Core
-  refuses a key when the transmitting slice is on a different band from another
-  slice the same device has open, ignoring other devices' slices. It runs after
+  refuses a key only when the transmitting slice is not the device's active
+  (listening) slice and is on a different band from it. A slice parked on
+  another band does not block a key on the active slice, and other devices'
+  slices never count. It runs after
   the mode allow-list and before the US 60 m and band edge checks, as in Thetis,
   and keeps the band plan refusal code with a sentence naming both bands.
   Thetis's CWX StopEverything on this refusal and its `!calibrating` condition

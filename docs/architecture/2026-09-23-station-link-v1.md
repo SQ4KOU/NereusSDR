@@ -1382,11 +1382,13 @@ When a feature is off, its version is 0:
   [v2.10.3.15]). It was each app's own key and is now the station's: the
   Core's own saved value carries over, and a remote computer's old value
   is no longer read. The Core's transmit gate reads it at every key: while
-  it is "True" a key is refused when the slice about to transmit is on a
-  different band from another slice the same device has open (slices other
-  devices hold do not count). Thetis compares the TX VFO's band with RX1's
-  and only in split (console.cs:29451-29465 [v2.10.3.15]); a station has no
-  split, so the comparison is against the device's other slices. The
+  it is "True" a key is refused when the slice about to transmit is not
+  the device's active (listening) slice and is on a different band from it;
+  a key on the active slice is never refused, and other slices parked on
+  other bands, or held by other devices, do not count. Thetis refuses only
+  when it transmits split on VFO B and VFO B's band differs from the RX band
+  (console.cs:29451-29465 [v2.10.3.15]); a station has no split, so a
+  transmitting slice other than the active one stands for VFO B. The
   check runs after the mode allow-list and before the US 60 m and band
   edge checks, and its refusal keeps the band plan refusal (no new code)
   with the sentence "Transmit would be on <band> while another slice you

@@ -194,7 +194,8 @@ public:
     /// is false. Mirrors the _preventTXonDifferentBandToRXband check at
     /// Thetis console.cs:29451-29465 [v2.10.3.15] //MW0LGE [2.9.0.7].
     /// Thetis compares the split TX band with the RX band; NereusSDR passes
-    /// the band of another slice the same device has open as \p rxBand.
+    /// the band of the device's active slice as \p rxBand when the
+    /// transmitting slice is not it, else the TX band.
     bool isValidTxBand(Band rxBand, Band txBand,
                        bool preventDifferentBand) const noexcept;
 

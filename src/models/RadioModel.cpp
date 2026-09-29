@@ -605,6 +605,11 @@
 //   2026-09-29 - HL2 port part 1: rebindIoBoardSlice feeds the HL2 I/O
 //                board poll the TX VFO's mode and frequency. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Prevent transmitting on a different band matches Thetis
+//                (console.cs:29451-29465 [v2.10.3.15], JJ's ruling): only
+//                a transmitting slice that is not its device's active
+//                slice is compared, with the active slice. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -17370,47 +17375,63 @@ void RadioModel::installBandPlanMoxCheck()
         //MW0LGE_21d filter outside band, ignore option  [original inline comment from console.cs:6784]
         // From Thetis console.cs:29451-29465 [v2.10.3.15]
         //MW0LGE [2.9.0.7]
-        //   if (_preventTXonDifferentBandToRXband && ((!RX2Enabled && VFOBTX && RX1Band != TXBand) || ...
-        // Thetis compares the split TX band (VFO B) with the RX band, so it
-        // only fires in split. NereusSDR has no split (JJ's ruling
-        // 2026-09-29): the RX band is that of another slice the device
-        // about to transmit has open. Slices other devices hold do not
-        // count; the station window and slices held for an absent device
-        // are one device, the station device.
+        //   if (_preventTXonDifferentBandToRXband && ((!RX2Enabled && VFOBTX && RX1Band != TXBand) || (RX2Enabled && VFOBTX && RX2Band != TXBand)))
+        //   // note RX2 enabled with a TXvfoB will always TX
+        // Thetis refuses only when it transmits on VFO B (split, VFOBTX)
+        // and VFO B's band differs from the RX band it listens on. JJ's
+        // ruling (2026-09-29) matches that: NereusSDR has no split, and the
+        // counterpart of VFO B is a transmitting slice that is not its
+        // device's active (listening) slice. Only then is the active
+        // slice's band the RX band; a key on the active slice itself never
+        // refuses, however other slices are parked. Slices other devices
+        // hold do not count. A slice's device is its mark's subject
+        // (SliceOwnership::Mark::subject): a slice held for an absent
+        // device is that device's, not the station device's.
         const bool preventDifferentBand = preventTxOnDifferentBandSetting();
         Band rxBand = txBand;
         if (preventDifferentBand) {
-            const auto subjectOf = [this](int sliceId) {
-                QByteArray subject = m_sliceOwnership
-                    ? m_sliceOwnership->mark(sliceId).subject() : QByteArray();
-                if (subject.isEmpty()) {
-                    subject = SliceOwnership::stationDevice();
-                }
-                return subject;
+            // An ownerless slice (a desktop with no devices, or slices the
+            // Core made before any device adopted them) is operated by the
+            // station window, so it counts as the station device's.
+            const auto deviceOf = [this](int sliceId) {
+                const QByteArray subject = m_sliceOwnership->mark(sliceId).subject();
+                return subject.isEmpty() ? SliceOwnership::stationDevice() : subject;
             };
-            const QByteArray txSubject = subjectOf(slice->sliceIndex());
-            QList<int> others;
-            if (m_sliceOwnership) {
-                others = m_sliceOwnership->liveSlices();
+            const int txId = slice->sliceIndex();
+            const QByteArray device = deviceOf(txId);
+            // The device's active slice. The station device's is the most
+            // recent choice among its own and the ownerless slices; another
+            // device's is its own choice; slices held for an absent device
+            // are chosen by the station, which runs them. The first
+            // candidate that is the device's own is it, else its first
+            // slice in creation order (activeFor's own fallback).
+            QList<int> candidates;
+            if (device == SliceOwnership::stationDevice()) {
+                candidates = {m_sliceOwnership->stationActiveSlice(),
+                              m_sliceOwnership->activeFor(device),
+                              m_sliceOwnership->activeFor(QByteArray())};
             } else {
-                for (const SliceModel* s : m_slices) {
-                    if (s) {
-                        others.append(s->sliceIndex());
+                candidates = {m_sliceOwnership->activeFor(device),
+                              m_sliceOwnership->activeFor(SliceOwnership::stationDevice())};
+            }
+            int activeId = -1;
+            for (const int id : std::as_const(candidates)) {
+                if (id >= 0 && m_sliceOwnership->isLive(id) && deviceOf(id) == device) {
+                    activeId = id;
+                    break;
+                }
+            }
+            if (activeId < 0) {
+                for (const int id : m_sliceOwnership->liveSlices()) {
+                    if (deviceOf(id) == device) {
+                        activeId = id;
+                        break;
                     }
                 }
             }
-            for (const int otherId : others) {
-                if (otherId == slice->sliceIndex() || subjectOf(otherId) != txSubject) {
-                    continue;
-                }
-                const SliceModel* other = sliceById(otherId);
-                if (!other) {
-                    continue;
-                }
-                const Band otherBand = bandFromFrequency(other->frequency());
-                if (otherBand != txBand) {
-                    rxBand = otherBand;
-                    break;
+            if (activeId >= 0 && activeId != txId) {
+                if (const SliceModel* active = sliceById(activeId)) {
+                    rxBand = bandFromFrequency(active->frequency());
                 }
             }
         }

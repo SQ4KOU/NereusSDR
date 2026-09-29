@@ -421,11 +421,11 @@ void GeneralOptionsPage::refreshPreventDifferentBandAvailability()
            "Core to use it."),
         tr("Prevent transmitting on a different band is not available on this Core."));
     // Thetis's enabled tooltip (setup.designer.cs:9098-9107 [v2.10.3.15])
-    // says "the RX band"; NereusSDR has no split, so ours names the other
-    // slices this device has open.
+    // says "the RX band"; NereusSDR has no split, so ours names the active
+    // slice, the one this device listens on.
     m_chkPreventTXonDifferentBandToRX->setToolTip(
-        enabled ? tr("Refuse to transmit when the transmitting slice is on a different band "
-                     "from another slice this device has open")
+        enabled ? tr("Refuse to transmit when the transmitting slice is not your active slice "
+                     "and is on a different band from it")
                 : reason);
     m_chkPreventTXonDifferentBandToRX->setAccessibleDescription(reason);
 }
