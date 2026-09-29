@@ -10,10 +10,15 @@
 //   2026-09-28: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), slice control and shared listening plan Task 5,
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 17: listenerReason names the
+//               controller as StationServer::sliceHolderWords does. J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SliceAccessMirror.h"
 
+#include "core/session/DeviceSessionRegistry.h"
 #include "core/session/RemoteDevicesState.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -171,15 +176,25 @@ QString SliceAccessMirror::listenerReason(int sliceId) const
     if (controller.isEmpty()) {
         return QStringLiteral("Nobody controls slice %1. Take control to change it.").arg(letter);
     }
-    QString owner;
-    if (controller != QLatin1String(kStationDevice) && m_devices) {
-        if (const auto device = m_devices->connectedDevice(controller)) {
-            owner = device->name;
-        }
+    // Slice control plan Task 17: who controls it, as the Core names it
+    // (StationServer::sliceHolderWords): the device's name (the hosting
+    // desktop's too), the plain word for its kind when it has no name,
+    // "another device" when neither is known, and the Core only for the
+    // station device on a Core no desktop hosts.
+    std::optional<RemoteConnectedDevice> device;
+    if (m_devices) {
+        device = m_devices->connectedDevice(controller);
     }
-    if (owner.isEmpty()) {
-        return QStringLiteral("Slice %1 is controlled by the Core. Take control to change it.")
-            .arg(letter);
+    QString owner;
+    if (device && !device->name.isEmpty()) {
+        owner = device->name;
+    } else if (controller == QLatin1String(kStationDevice)) {
+        owner = QStringLiteral("the Core");
+    } else if (device && !device->kind.isEmpty()) {
+        const QString kind = DeviceSessionRegistry::kindWord(device->kind).toLower();
+        owner = QStringLiteral("a %1").arg(kind);
+    } else {
+        owner = QStringLiteral("another device");
     }
     return QStringLiteral("Slice %1 is controlled by %2. Take control to change it.")
         .arg(letter)

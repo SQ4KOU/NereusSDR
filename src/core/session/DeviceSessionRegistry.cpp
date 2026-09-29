@@ -14,6 +14,9 @@
 //   2026-09-29: slice control plan Task 8: away generations and
 //               isCurrentAbsence. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 17: numberNames leaves an empty
+//               name empty. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/DeviceSessionRegistry.h"
@@ -361,6 +364,11 @@ QHash<QByteArray, DeviceSessionRegistry::NumberedName> DeviceSessionRegistry::nu
     // "iPhone"s keeps its name; the second "iPhone" becomes "iPhone 3").
     const auto numberOne = [](const QString& base, QSet<QString>* used,
                               const QSet<QString>& reserved) {
+        // Slice control plan Task 17: no name is not a name to number; a
+        // second nameless device would read " 2".
+        if (base.isEmpty()) {
+            return base;
+        }
         if (!used->contains(base)) {
             used->insert(base);
             return base;

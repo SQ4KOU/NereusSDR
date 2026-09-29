@@ -446,6 +446,9 @@
 //               taken from another device and not chosen. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-29: slice control plan Task 17: sliceHolderWords(), who holds
+//               a slice as a refusal names it. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/IceConfiguration.h"
@@ -1903,6 +1906,11 @@ private:
     /// the air.
     TxRefusal onAirPropertyRefusal(const QByteArray& requester, const QByteArray& objectKey,
                                    const QByteArray& property) const;
+    /// Slice control plan Task 17: who holds a slice, as a refusal names
+    /// it: the device's name, "a phone" / "a tablet" / "a computer" for a
+    /// device with no name, "another device" for one the Core does not
+    /// know, and "the Core" for nobody or the station device.
+    QString sliceHolderWords(const QByteArray& device) const;
     QString ownedElsewhereReason(int sliceId) const;
     /// Slice control plan Task 2: a listener's refusal ("Slice A is
     /// controlled by <name>. Take control to change it."), for a window

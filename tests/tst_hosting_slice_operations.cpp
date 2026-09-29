@@ -24,6 +24,11 @@
 //   2026-09-29: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), slice control and shared listening plan Task 10,
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 17: the hosting desktop's refusal
+//               names who holds a slice as a remote window's does, and a
+//               remote window names the hosting desktop by its name.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -352,6 +357,102 @@ private slots:
         // Answered before select() returns: the window reads it at once.
         QCOMPARE(refused.count(), 1);
         QVERIFY(OperatorWording::isPlain(refused.first().at(0).toString()));
+    }
+
+    // Slice control plan Task 17: the hosting desktop's own refusal of a
+    // slice it does not hold names the holder as a remote window's does:
+    // the device's name, the plain word for its kind when it has no name,
+    // "another device" when the Core knows neither, the Core for nobody.
+    // A remote window refused a slice the hosting desktop holds reads the
+    // desktop's name, not the Core.
+    void theHostsRefusalNamesWhoHoldsTheSlice()
+    {
+        Core core;
+        core.model->configureStreamPool(5, 5, 192000);
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appB = core.signIn(b);
+        QVERIFY(admitted(appB));
+        startHosting(core);
+        QObject namelessSession;
+        QObject kindlessSession;
+        DeviceSessionRegistry::Entry nameless;
+        nameless.deviceId = QByteArrayLiteral("nameless-phone");
+        nameless.deviceKind = QStringLiteral("phone");
+        QCOMPARE(core.sessions().admit(nameless, &namelessSession).admission,
+                 DeviceSessionRegistry::Admission::Admitted);
+        DeviceSessionRegistry::Entry kindless;
+        kindless.deviceId = QByteArrayLiteral("kindless-device");
+        QCOMPARE(core.sessions().admit(kindless, &kindlessSession).admission,
+                 DeviceSessionRegistry::Admission::Admitted);
+        SliceOwnership* ownership = core.model->sliceOwnership();
+        const QByteArray station = SliceOwnership::stationDevice();
+        const int slice = core.model->addSlice(QStringLiteral("pan-0"));
+        QVERIFY(slice >= 0);
+        const int stationActive = ownership->activeFor(station);
+        // The window takes its notices, as HostingSliceActions does: the
+        // station device then shares slices like a remote window.
+        core.server->setStationNoticeHandler([](const SessionMessage&) {});
+
+        qint64 id = 700;
+        const auto hostRefusal = [&](const QByteArray& verb) {
+            SessionMessage answer;
+            bool answered = false;
+            core.server->invokeAsStationDevice(
+                SessionMessages::commandInvoke(verb, ++id, {int64("sliceId", slice)}),
+                [&](const SessionMessage& result) {
+                    answer = result;
+                    answered = true;
+                },
+                {});
+            if (!QTest::qWaitFor([&] { return answered; }) || answer.accepted) {
+                return QStringLiteral("answered=%1 accepted=%2")
+                    .arg(answered)
+                    .arg(answer.accepted);
+            }
+            return answer.reason;
+        };
+        const auto belongsTo = [](const QString& holder) {
+            return QStringLiteral("That slice belongs to %1. It can be changed only there.")
+                .arg(holder);
+        };
+        const QList<QPair<QByteArray, QString>> holders{
+            {QByteArray(), QStringLiteral("the Core")},
+            {a.key.fingerprint(), QStringLiteral("iPhone")},
+            {nameless.deviceId, QStringLiteral("a phone")},
+            {kindless.deviceId, QStringLiteral("another device")},
+            {QByteArrayLiteral("token:99"), QStringLiteral("another device")},
+        };
+        const QString letter = QString(QChar(QLatin1Char('A').unicode() + slice));
+        for (const auto& [holder, words] : holders) {
+            ownership->setOwner(slice, holder);
+            // Not listening: whose slice it is.
+            const QString reason = belongsTo(words);
+            QVERIFY(OperatorWording::isPlain(reason));
+            QCOMPARE(hostRefusal("removeSlice"), reason);
+            // Listening: who controls it.
+            QVERIFY(ownership->join(station, slice));
+            const QString controlled =
+                holder.isEmpty()
+                    ? QStringLiteral("Nobody controls slice %1. Take control to change it.")
+                          .arg(letter)
+                    : QStringLiteral("Slice %1 is controlled by %2. Take control to change it.")
+                          .arg(letter, words);
+            QVERIFY(OperatorWording::isPlain(controlled));
+            QCOMPARE(hostRefusal("removeSlice"), controlled);
+            ownership->leave(station, slice);
+            QVERIFY(core.model->sliceById(slice) != nullptr);
+            QCOMPARE(ownership->activeFor(station), stationActive);
+        }
+
+        // The hosting desktop holds it: a remote window reads its name.
+        ownership->setOwner(slice, station);
+        const QJsonObject remote = core.invoke(appB, "requestSliceSampleRate",
+                                               {int64("sliceId", slice), int64("rateHz", 96000)});
+        QVERIFY(!accepted(remote));
+        QCOMPARE(reasonOf(remote), belongsTo(kHostName));
     }
 
     // The window's Select waits for no event loop: the answer is in by the

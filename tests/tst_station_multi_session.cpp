@@ -169,6 +169,11 @@
 //               cases make their holds as a restored layout does. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-29: slice control plan Task 17: the refusal names who holds a
+//               slice from what the Core knows of it (a name, a kind word,
+//               another device; the Core only for nobody or the station)
+//               on every refusal path. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -2166,6 +2171,132 @@ private slots:
             SessionMessages::settingsWrite(sliceKey, QStringLiteral("21"), QStringLiteral("a-1"))));
         QTRY_COMPARE(core.settings->value(sliceKey).toString(), QStringLiteral("21"));
         QVERIFY(rejectFor(ownKey).isEmpty());
+    }
+
+    // Slice control plan Task 17: who a refusal says holds a slice. The
+    // Core only for a slice nobody holds or the station device holds;
+    // otherwise the device's name, the plain word for its kind when it has
+    // no name, and "another device" when the Core knows neither (a token
+    // window whose entry is gone). Every remote refusal path says the same:
+    // a property write, a marker write, a settings write and a verb; a
+    // listener that shares slices is told who controls it the same way.
+    void aRefusalNamesWhoHoldsTheSliceFromWhatTheCoreKnows()
+    {
+        Core core;
+        core.model->configureStreamPool(5, 5, 192000);
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        Device c(QStringLiteral("MacBook"), QStringLiteral("computer"));
+        core.pair(a);
+        core.pair(b);
+        core.pair(c);
+        // The named holder is paired, not signed in: the Core knows its
+        // name from its pairing, and the four places stay free for the rest.
+        LoopbackTransport* appB = core.signIn(b);
+        LoopbackTransport* appC = core.signIn(
+            c, {{"deviceAuth", 1}, {"sessionHolder", 1}, {"sliceAccess", 1}});
+        QVERIFY(admitted(appB));
+        QVERIFY(admitted(appC));
+        SliceOwnership* ownership = core.model->sliceOwnership();
+        const int slice = core.model->addSlice(QStringLiteral("pan-0"));
+        QVERIFY(slice >= 0);
+        QVERIFY(ownership->mark(slice).owner.isEmpty());
+        QVERIFY(ownership->join(c.key.fingerprint(), slice));
+        const QString letter = QString(QChar(QLatin1Char('A').unicode() + slice));
+
+        // Two devices the Core knows with no name: one of a known kind,
+        // one of none.
+        QObject namelessSession;
+        QObject kindlessSession;
+        DeviceSessionRegistry::Entry nameless;
+        nameless.deviceId = QByteArrayLiteral("nameless-tablet");
+        nameless.deviceKind = QStringLiteral("tablet");
+        QCOMPARE(core.sessions().admit(nameless, &namelessSession).admission,
+                 DeviceSessionRegistry::Admission::Admitted);
+        DeviceSessionRegistry::Entry kindless;
+        kindless.deviceId = QByteArrayLiteral("kindless-device");
+        QCOMPARE(core.sessions().admit(kindless, &kindlessSession).admission,
+                 DeviceSessionRegistry::Admission::Admitted);
+
+        qint64 writeId = 9100;
+        int settingsWrites = 0;
+        const QString sliceKey = QStringLiteral("Slice%1/AfGain").arg(slice);
+        core.settings->setValue(sliceKey, QStringLiteral("17"));
+        const auto check = [&](const QString& holder, const QString& controller) {
+            const QString reason =
+                QStringLiteral("That slice belongs to %1. It can be changed only there.")
+                    .arg(holder);
+            QVERIFY(OperatorWording::isPlain(reason));
+            const double frequency = core.model->sliceById(slice)->frequency();
+            // A property write to the slice.
+            const qint64 sliceWrite = ++writeId;
+            appB->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
+                "slice:" + QByteArray::number(slice), {f64("frequency", 7074000.0)}, sliceWrite)));
+            QTRY_VERIFY(!propertyResult(appB, sliceWrite).isEmpty());
+            QCOMPARE(propertyResult(appB, sliceWrite).value(QStringLiteral("results")).toArray()
+                         .first().toObject().value(QStringLiteral("reason")).toString(),
+                     reason);
+            // A write to its marker.
+            const qint64 markerWrite = ++writeId;
+            appB->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
+                "marker:" + QByteArray::number(slice), {f64("frequency", 7074000.0)},
+                markerWrite)));
+            QTRY_VERIFY(!propertyResult(appB, markerWrite).isEmpty());
+            QCOMPARE(propertyResult(appB, markerWrite).value(QStringLiteral("results")).toArray()
+                         .first().toObject().value(QStringLiteral("reason")).toString(),
+                     reason);
+            // A write to its settings key.
+            ++settingsWrites;
+            appB->sendText(SessionMessages::encode(SessionMessages::settingsWrite(
+                sliceKey, QStringLiteral("5"),
+                QStringLiteral("t17-%1").arg(settingsWrites))));
+            QTRY_COMPARE(ofType(appB->received(), QStringLiteral("settings.reject")).size(),
+                         settingsWrites);
+            QCOMPARE(ofType(appB->received(), QStringLiteral("settings.reject")).last()
+                         .value(QStringLiteral("reason")).toString(),
+                     reason);
+            // A verb that names it.
+            const QJsonObject verb = core.invoke(appB, "requestSliceSampleRate",
+                                                 {int64("sliceId", slice), int64("rateHz", 96000)});
+            QVERIFY(!verb.value(QStringLiteral("accepted")).toBool(true));
+            QCOMPARE(verb.value(QStringLiteral("reason")).toString(), reason);
+            // A listener that shares slices: who controls it.
+            const QJsonObject heard = core.invoke(appC, "requestSliceSampleRate",
+                                                  {int64("sliceId", slice), int64("rateHz", 96000)});
+            QVERIFY(!heard.value(QStringLiteral("accepted")).toBool(true));
+            QCOMPARE(heard.value(QStringLiteral("reason")).toString(), controller);
+            QVERIFY(OperatorWording::isPlain(controller));
+            QCOMPARE(core.model->sliceById(slice)->frequency(), frequency);
+            QCOMPARE(core.settings->value(sliceKey).toString(), QStringLiteral("17"));
+        };
+        const auto controlledBy = [&letter](const QString& who) {
+            return QStringLiteral("Slice %1 is controlled by %2. Take control to change it.")
+                .arg(letter, who);
+        };
+
+        // Nobody holds it.
+        check(QStringLiteral("the Core"),
+              QStringLiteral("Nobody controls slice %1. Take control to change it.").arg(letter));
+        QVERIFY(!QTest::currentTestFailed());
+        // The station device, on a Core no desktop hosts.
+        ownership->setOwner(slice, SliceOwnership::stationDevice());
+        check(QStringLiteral("the Core"), controlledBy(QStringLiteral("the Core")));
+        QVERIFY(!QTest::currentTestFailed());
+        // A device with a name.
+        ownership->setOwner(slice, a.key.fingerprint());
+        check(QStringLiteral("iPhone"), controlledBy(QStringLiteral("iPhone")));
+        QVERIFY(!QTest::currentTestFailed());
+        // A device with no name, of a known kind.
+        ownership->setOwner(slice, nameless.deviceId);
+        check(QStringLiteral("a tablet"), controlledBy(QStringLiteral("a tablet")));
+        QVERIFY(!QTest::currentTestFailed());
+        // A device with no name and no kind.
+        ownership->setOwner(slice, kindless.deviceId);
+        check(QStringLiteral("another device"), controlledBy(QStringLiteral("another device")));
+        QVERIFY(!QTest::currentTestFailed());
+        // A token window the Core no longer knows.
+        ownership->setOwner(slice, QByteArrayLiteral("token:99"));
+        check(QStringLiteral("another device"), controlledBy(QStringLiteral("another device")));
     }
 
     // Fix wave C1 (ruling 5.9): a sample rate, a C-Tune centre or pin

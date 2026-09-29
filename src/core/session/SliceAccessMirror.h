@@ -33,6 +33,9 @@
 //   2026-09-28: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), slice control and shared listening plan Task 5,
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 17: listenerReason names the
+//               controller as the Core does. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorSchema.h"
@@ -70,7 +73,8 @@ public:
 
     /// `radio` is the window's model, whose slices are marked read-only;
     /// `devices` names the controller in the listener words. Either may be
-    /// null (no marking, or the Core's own words for every controller).
+    /// null (no marking, or "another device" for every controller but the
+    /// station device).
     SliceAccessMirror(RadioModel* radio, RemoteDevicesState* devices,
                       QObject* parent = nullptr);
 

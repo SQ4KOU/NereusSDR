@@ -24,6 +24,9 @@
 //   2026-09-29: slice control plan Task 8: each away period's generation
 //               and isCurrentAbsence. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 17: a device with no name is never
+//               numbered into one. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -95,6 +98,7 @@ private slots:
 
     // ---- Names ----
     void namesAreNumberedByPairingOrder();
+    void aDeviceWithNoNameIsNeverNumberedIntoOne();
     void shortNamesAreNumberedOnTheirOwnCollisions();
     void aNumberNeverRepeatsAnotherDevicesName();
     void anUnusableShortNameFallsBackToTheKindsWord();
@@ -528,6 +532,23 @@ void TstDeviceSessionRegistry::namesAreNumberedByPairingOrder()
                                                QStringLiteral("Grant's")}});
     QCOMPARE(grant.value("g").name, QStringLiteral("Grant's iPhone"));
     QVERIFY(DeviceStore::isValidName(QStringLiteral("Grant's iPhone")));
+}
+
+// Slice control plan Task 17: two devices with no name stay nameless, so a
+// refusal that names who holds a slice falls back to the kind's word, never
+// to a bare number (" 2").
+void TstDeviceSessionRegistry::aDeviceWithNoNameIsNeverNumberedIntoOne()
+{
+    const auto numbered = Registry::numberNames({
+        {"a", QString(), QString()},
+        {"b", QString(), QString()},
+        {"c", QStringLiteral("iPhone"), QStringLiteral("Phone")},
+    });
+    QCOMPARE(numbered.value("a").name, QString());
+    QCOMPARE(numbered.value("b").name, QString());
+    QCOMPARE(numbered.value("a").shortName, QString());
+    QCOMPARE(numbered.value("b").shortName, QString());
+    QCOMPARE(numbered.value("c").name, QStringLiteral("iPhone"));
 }
 
 void TstDeviceSessionRegistry::shortNamesAreNumberedOnTheirOwnCollisions()

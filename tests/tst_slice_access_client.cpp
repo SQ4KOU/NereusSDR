@@ -23,6 +23,10 @@
 //                                    volume" (slice.setListenLevel) sets
 //                                    this device's level only. AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Task 17: the window's copy of the
+//                                    listener words names the controller
+//                                    as the Core does. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -447,6 +451,65 @@ private slots:
 
     // A refused verb is the Core's refusal, shown once through the
     // window's refusal path: a take with a control revision that changed.
+    // Slice control plan Task 17: the window's copy of the listener words
+    // names the controller as the Core's own refusal does: the device's
+    // name, the plain word for its kind when it has none, "another device"
+    // when neither is known, the Core only for the station device on a
+    // Core no desktop hosts. Each matches the Core's refusal of the same
+    // change.
+    void theHeldChangeNamesTheControllerAsTheCoreDoes()
+    {
+        Core core;
+        core.model->configureStreamPool(3, 5, 192000);
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"), QStringLiteral("iPad"));
+        core.pair(b);
+        LoopbackTransport* appB = core.signIn(b, kShares);
+        QVERIFY(admitted(appB));
+        const int shared = core.model->sliceOwnership()->ownedBy(b.key.fingerprint()).first();
+        QObject namelessSession;
+        QObject kindlessSession;
+        DeviceSessionRegistry::Entry nameless;
+        nameless.deviceId = QByteArrayLiteral("nameless-phone");
+        nameless.deviceKind = QStringLiteral("phone");
+        QCOMPARE(core.sessions().admit(nameless, &namelessSession).admission,
+                 DeviceSessionRegistry::Admission::Admitted);
+        DeviceSessionRegistry::Entry kindless;
+        kindless.deviceId = QByteArrayLiteral("kindless-device");
+        QCOMPARE(core.sessions().admit(kindless, &kindlessSession).admission,
+                 DeviceSessionRegistry::Admission::Admitted);
+
+        Window w;
+        QVERIFY(core.server->deviceStore()->add(w.record()));
+        QVERIFY(w.connectTo(core));
+        Answers answers(w.client);
+        QTRY_VERIFY(w.access().entry(shared).has_value());
+        const IStationLink::CommandOutcome sent =
+            w.client.requestListen(shared, w.access().entry(shared)->incarnation);
+        QVERIFY2(sent.sent, qPrintable(sent.reason));
+        const Answer answer = answers.waitFor(sent.commandId);
+        QVERIFY2(answer.accepted, qPrintable(answer.reason));
+        QTRY_VERIFY(w.remote.sliceById(shared) != nullptr);
+        SliceModel* listened = w.remote.sliceById(shared);
+        const QString letter = QString(QChar(QLatin1Char('A').unicode() + shared));
+        QCOMPARE(listened->readOnlyListenerReason(), controlledBy(letter, QStringLiteral("iPad")));
+
+        SliceOwnership* ownership = core.model->sliceOwnership();
+        const QList<QPair<QByteArray, QString>> controllers{
+            {nameless.deviceId, QStringLiteral("a phone")},
+            {kindless.deviceId, QStringLiteral("another device")},
+            {QByteArrayLiteral("token:99"), QStringLiteral("another device")},
+            {SliceOwnership::stationDevice(), QStringLiteral("the Core")},
+        };
+        for (const auto& [controller, words] : controllers) {
+            ownership->setOwner(shared, controller);
+            QVERIFY(ownership->join(w.key->fingerprint(), shared));
+            const QString expected = controlledBy(letter, words);
+            QVERIFY(OperatorWording::isPlain(expected));
+            QTRY_COMPARE(listened->readOnlyListenerReason(), expected);
+            QCOMPARE(w.access().listenerReason(shared), expected);
+        }
+    }
+
     void aRefusedVerbIsShownOnce()
     {
         Core core;

@@ -190,6 +190,9 @@
 //                                    notice to a closed slice's listeners
 //                                    (listenedClosedReason), forwarded.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Slice control plan Task 17: the kind
+//                                    word sliceHolderWords inserts.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -744,7 +747,10 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("letter"),
           // Slice control plan Task 4: the controller's or the taker's
           // name (the operator's own words, ruling 4.3) and the letter.
-          QStringLiteral("name, letter"), QStringLiteral("planDevice(taker).name, letter")},
+          QStringLiteral("name, letter"), QStringLiteral("planDevice(taker).name, letter"),
+          // Slice control plan Task 17: sliceHolderWords' kind word for a
+          // device with no name (DeviceSessionRegistry::kindWord, lowercase).
+          QStringLiteral("kind")},
          {// listen(): the Core's own setup error (m_lastError), for its
           // console and log; never sent to an app.
           QStringLiteral("CertificateStore::tlsBackendDiagnostic()"),
@@ -1269,7 +1275,9 @@ const QList<ReasonSource>& reasonSources()
         // letter (A to P) and the controller's name, the operator's own
         // word (ruling 4.3).
         {"src/core/session/SliceAccessMirror.cpp", {QStringLiteral("listenerReason")}, {}, 3,
-         {QStringLiteral("letter"), QStringLiteral("owner")}},
+         {QStringLiteral("letter"), QStringLiteral("owner"),
+          // Slice control plan Task 17: the controller's kind word.
+          QStringLiteral("kind")}},
         {"src/models/TunerModel.cpp", {QStringLiteral("applyMirroredValue")}, {}, 2},
         {"src/models/RadioModel.cpp",
          {QStringLiteral("applyMirroredValue"), QStringLiteral("setFourO3AEnabledForStation"),

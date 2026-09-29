@@ -676,6 +676,11 @@
 //               desktop's selection) clears the taken mark. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-29: slice control plan Task 17: sliceHolderWords() names who
+//               holds a slice in a refusal: the device's name, the plain
+//               word for its kind, or "another device"; the Core only for
+//               nobody or the station device. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -7647,20 +7652,39 @@ StationServer::SliceForms StationServer::sliceFormsFor(SessionTransport* transpo
     return forms;
 }
 
+QString StationServer::sliceHolderWords(const QByteArray& device) const
+{
+    // Slice control plan Task 17: who holds a slice, in a refusal. The Core
+    // only for a slice nobody holds or the station device holds; otherwise
+    // the device's name (the operator's own word, ruling 4.3), the plain
+    // word for its kind when it has none, and "another device" when the
+    // Core knows neither. kindWord reads an empty kind as a computer, so an
+    // empty kind is checked first.
+    if (device.isEmpty()) {
+        return QStringLiteral("the Core");
+    }
+    const std::optional<ConnectedDevicesFacade::DeviceWords> words =
+        m_connectedDevices->describe(device);
+    if (words && !words->name.isEmpty()) {
+        return words->name;
+    }
+    if (device == SliceOwnership::stationDevice()) {
+        return QStringLiteral("the Core");
+    }
+    if (words && !words->kind.isEmpty()) {
+        const QString kind = DeviceSessionRegistry::kindWord(words->kind).toLower();
+        return QStringLiteral("a %1").arg(kind);
+    }
+    return QStringLiteral("another device");
+}
+
 QString StationServer::ownedElsewhereReason(int sliceId) const
 {
-    QString owner;
-    if (m_radioModel) {
-        const QByteArray subject = m_radioModel->sliceOwnership()->mark(sliceId).subject();
-        if (const auto words = m_connectedDevices->describe(subject)) {
-            owner = words->name;
-        }
-    }
-    // The owner's name is the operator's own word (ruling 4.3), never held
+    // The holder's name is the operator's own word (ruling 4.3), never held
     // to the wording rules; the sentence around it is.
-    if (owner.isEmpty()) {
-        return QStringLiteral("That slice belongs to the Core. It can be changed only there.");
-    }
+    const QByteArray subject =
+        m_radioModel ? m_radioModel->sliceOwnership()->mark(sliceId).subject() : QByteArray();
+    const QString owner = sliceHolderWords(subject);
     return QStringLiteral("That slice belongs to %1. It can be changed only there.").arg(owner);
 }
 
@@ -7671,21 +7695,13 @@ QString StationServer::listenerChangeReason(int sliceId) const
     // The controller's name is the operator's own word (ruling 4.3), never
     // held to the wording rules; the sentence around it is.
     const QString letter = QString(QChar(QLatin1Char('A').unicode() + sliceId));
-    QString owner;
-    if (m_radioModel) {
-        const QByteArray controller = m_radioModel->sliceOwnership()->mark(sliceId).owner;
-        if (controller.isEmpty()) {
-            return QStringLiteral("Nobody controls slice %1. Take control to change it.")
-                .arg(letter);
-        }
-        if (const auto words = m_connectedDevices->describe(controller)) {
-            owner = words->name;
-        }
-    }
-    if (owner.isEmpty()) {
-        return QStringLiteral("Slice %1 is controlled by the Core. Take control to change it.")
+    const QByteArray controller =
+        m_radioModel ? m_radioModel->sliceOwnership()->mark(sliceId).owner : QByteArray();
+    if (m_radioModel && controller.isEmpty()) {
+        return QStringLiteral("Nobody controls slice %1. Take control to change it.")
             .arg(letter);
     }
+    const QString owner = sliceHolderWords(controller);
     return QStringLiteral("Slice %1 is controlled by %2. Take control to change it.")
         .arg(letter)
         .arg(owner);
