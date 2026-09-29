@@ -6,7 +6,8 @@
 //   2026-09-29: direct media fix wave: the silence fallback runs once per
 //               silence, only while the window wants audio, onto the
 //               tunnel alone, and a fallback that brings no media back
-//               asks for recovery (ReplaceKind)
+//               asks for recovery (ReplaceKind). J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 //   2026-09-29: the direct media ladder: upgradeToDirectConnection (a
 //               direct-only replace while media rides the tunnel, on the
 //               PathRacer::kUpgradeRetryMs steps, never keyed or with VOX

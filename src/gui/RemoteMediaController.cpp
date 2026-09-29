@@ -1,10 +1,15 @@
 // no-port-check: NereusSDR-original. Remote daemon R3 receive display wiring.
 // Modification history (NereusSDR):
+//   2026-09-29: direct media follow-up: a fallback the Core refuses while
+//               it transmits stays a fallback onto the tunnel alone when
+//               it is retried. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 //   2026-09-29: direct media fix wave: the silence fallback runs once per
 //               silence while the window wants audio (connected, not
 //               muted), replaces onto the tunnel alone, and asks for
 //               recovery when media stays away a window after it; the
-//               silence clock restarts on the return to receive
+//               silence clock restarts on the return to receive.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-29: the direct media ladder: a direct-only replace while media
 //               rides the tunnel, at the PathRacer::kUpgradeRetryMs steps;
 //               the no-packets fallback back to the tunnel on a silent
@@ -873,6 +878,9 @@ struct RemoteMediaController::Private {
     QTimer* retireTimer = nullptr;
     // Task 29 fix wave (Important 1): a move not yet followed by media.
     bool replacePending = false;
+    // The follow-up fix: the kind of the move waiting (a refused silence
+    // fallback stays a fallback onto the tunnel alone when it is retried).
+    ReplaceKind pendingReplaceKind = ReplaceKind::Normal;
     int replaceRearms = 0;
     // Task 29 step 2b: this media start declared the media tunnel.
     bool tunnelNegotiated = false;
@@ -2692,6 +2700,7 @@ void RemoteMediaController::stop()
     d->replaceDeadline->stop();
     d->retireTimer->stop();
     d->replacePending = false;
+    d->pendingReplaceKind = ReplaceKind::Normal;
     d->replaceRearms = 0;
     d->replaceRetry->stop();
     if (d->stallTimer) {
@@ -3116,6 +3125,7 @@ void RemoteMediaController::receiveReplacementControl(const QJsonObject& payload
         && payload.value(QStringLiteral("reason")).isString()) {
         const QString reason = payload.value(QStringLiteral("reason")).toString();
         const bool wasDirect = d->replacementDirect;
+        const bool wasFallback = d->replacementFallback;
         dropReplacement(reason.left(512));
         // The direct media ladder: a refused direct-only replace waits for
         // the next step of its own schedule; it never marks a move pending.
@@ -3128,6 +3138,8 @@ void RemoteMediaController::receiveReplacementControl(const QJsonObject& payload
         // it transmitting). Only that refusal: any other stays refused.
         if (reason == QLatin1String(DaemonMediaController::kReplaceTransmittingReason)) {
             d->replacePending = true;
+            d->pendingReplaceKind = wasFallback ? ReplaceKind::TunnelFallback
+                                                : ReplaceKind::Normal;
             d->replaceRetry->start();
         }
         return;
@@ -3232,6 +3244,7 @@ bool RemoteMediaController::replacePending() const
 void RemoteMediaController::markReplacePending()
 {
     d->replacePending = true;
+    d->pendingReplaceKind = ReplaceKind::Normal;
     d->replaceRearms = 0;
     tryPendingReplace();
 }
@@ -3270,7 +3283,7 @@ void RemoteMediaController::tryPendingReplace()
         return;
     }
     d->replaceStartFailed = false;
-    if (replaceConnection()) {
+    if (startReplacement(d->pendingReplaceKind)) {
         d->replacePending = false;
         d->replaceRetry->stop();
         return;

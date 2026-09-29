@@ -18,9 +18,15 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29: direct media follow-up: the tunnel-only transport's
+//               refusal checked with a remote description set, and a real
+//               tunnel-only replacement carrying media after the direct
+//               path it replaces is cut. J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
 //   2026-09-29: direct media fix wave: the stall test's bound anchored on
 //               the last message before the silence, without slack; an
-//               ordering barrier in place of a fixed wait.
+//               ordering barrier in place of a fixed wait. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-29: the direct media ladder: STUN in the first and direct-only
 //               configurations, media moving from the tunnel to a direct
 //               path, and one stall tick of slack in the stall test's lower
@@ -41,6 +47,7 @@
 #include <QWebSocketServer>
 
 #include <algorithm>
+#include <utility>
 #include <thread>
 
 #include "RealtimeTestLoad.h"
@@ -79,6 +86,108 @@ struct BinaryCount {
     ~BinaryCount() { QObject::disconnect(watch); }
 };
 
+
+// An RTP packet under `ssrc` (payload type 111, as the transport's audio).
+QByteArray tunnelRtpPacket(quint16 sequence, quint32 ssrc)
+{
+    QByteArray packet(15, char(0xa5));
+    packet[0] = char(0x80);
+    packet[1] = char(111);
+    packet[2] = char(sequence >> 8);
+    packet[3] = char(sequence & 0xff);
+    packet[8] = char(ssrc >> 24);
+    packet[9] = char(ssrc >> 16);
+    packet[10] = char(ssrc >> 8);
+    packet[11] = char(ssrc);
+    return packet;
+}
+
+// A direct UDP path the test can cut. Each end's first IPv4 host candidate
+// is rewritten to one of two loopback ports, so each end knows the other
+// only through the forwarder: datagrams on the Core-facing port go on to
+// the window, those on the window-facing port go on to the Core. cut()
+// drops everything from then on.
+class DirectPathForwarder final {
+public:
+    DirectPathForwarder() = default;
+    DirectPathForwarder(const DirectPathForwarder&) = delete;
+    DirectPathForwarder& operator=(const DirectPathForwarder&) = delete;
+
+    bool bind()
+    {
+        if (!m_coreFacing.bind(QHostAddress::LocalHost, 0)
+            || !m_windowFacing.bind(QHostAddress::LocalHost, 0)) {
+            return false;
+        }
+        QObject::connect(&m_coreFacing, &QUdpSocket::readyRead, &m_coreFacing, [this] {
+            pump(m_coreFacing, m_windowFacing, m_core, m_window);
+        });
+        QObject::connect(&m_windowFacing, &QUdpSocket::readyRead, &m_windowFacing, [this] {
+            pump(m_windowFacing, m_coreFacing, m_window, m_core);
+        });
+        return true;
+    }
+
+    quint16 windowFacingPort() const { return m_windowFacing.localPort(); }
+    void cut() { m_cut = true; }
+    quint64 dropped() const { return m_dropped; }
+
+    // The Core's candidate as the window is to see it (empty: not sent).
+    QString coreCandidate(const QString& candidate)
+    {
+        return rewrite(candidate, m_core, m_windowFacing.localPort());
+    }
+    // The window's candidate as the Core is to see it (empty: not sent).
+    QString windowCandidate(const QString& candidate)
+    {
+        return rewrite(candidate, m_window, m_coreFacing.localPort());
+    }
+
+private:
+    struct End {
+        bool advertised = false;
+        quint16 port = 0;
+        QHostAddress address;
+    };
+
+    static QString rewrite(const QString& candidate, End& end, quint16 through)
+    {
+        if (end.advertised) { return QString(); }
+        const QStringList fields = candidate.split(QLatin1Char(' '));
+        if (fields.size() < 8 || fields.at(7) != QLatin1String("host")) { return QString(); }
+        bool ipv4 = false;
+        QHostAddress(fields.at(4)).toIPv4Address(&ipv4);
+        if (!ipv4) { return QString(); }
+        end.advertised = true;
+        if (end.port == 0) {
+            end.port = fields.at(5).toUShort();
+            end.address = QHostAddress(QHostAddress::LocalHost);
+        }
+        return QStringLiteral("candidate:1 1 UDP 2122317823 127.0.0.1 %1 typ host").arg(through);
+    }
+
+    void pump(QUdpSocket& in, QUdpSocket& out, End& from, const End& to)
+    {
+        while (in.hasPendingDatagrams()) {
+            const QNetworkDatagram datagram = in.receiveDatagram();
+            if (m_cut || to.port == 0) {
+                ++m_dropped;
+                continue;
+            }
+            // Replies go back to where the end actually sends from.
+            from.address = datagram.senderAddress();
+            from.port = quint16(datagram.senderPort());
+            out.writeDatagram(datagram.data(), to.address, to.port);
+        }
+    }
+
+    QUdpSocket m_coreFacing;
+    QUdpSocket m_windowFacing;
+    End m_core;
+    End m_window;
+    bool m_cut = false;
+    quint64 m_dropped = 0;
+};
 } // namespace
 
 class TstMediaTunnel final : public QObject {
@@ -255,7 +364,9 @@ private slots:
 
     // The silence fallback's configuration: the tunnel's candidate alone.
     // The transport offers the far end no candidate of its own and takes
-    // none the far end signals, so ICE can only nominate the tunnel.
+    // none the far end signals, so ICE can only nominate the tunnel. The
+    // refusal is checked with the far end's description in place, where a
+    // transport without the rule takes the same candidates.
     void theTunnelOnlyTransportTakesNoOtherCandidate()
     {
         Test::LoopbackTransport local(QStringLiteral("local"));
@@ -271,18 +382,168 @@ private slots:
         QVERIFY(!MediaTunnel::iceFor(tunnel, std::nullopt).onlySourceCandidates());
 
         LibDataChannelMediaTransport transport;
+        LibDataChannelMediaTransport farEnd;
         QSignalSpy candidates(&transport, &IMediaTransport::localCandidate);
         QSignalSpy complete(&transport, &IMediaTransport::gatheringComplete);
+        QSignalSpy errors(&transport, &IMediaTransport::errorOccurred);
+        bool offerTaken = false;
+        bool answerTaken = false;
+        QList<QPair<QString, QString>> farCandidates;
+        QObject::connect(&transport, &IMediaTransport::localDescription, &farEnd,
+                         [&farEnd, &offerTaken](const QString& sdp, const QString& type) {
+                             offerTaken = farEnd.acceptDescription(sdp, type);
+                         });
+        QObject::connect(&farEnd, &IMediaTransport::localDescription, &transport,
+                         [&transport, &answerTaken](const QString& sdp, const QString& type) {
+                             answerTaken = transport.acceptDescription(sdp, type);
+                         });
+        QObject::connect(&farEnd, &IMediaTransport::localCandidate, &transport,
+                         [&farCandidates](const QString& candidate, const QString& mid) {
+                             farCandidates.append(qMakePair(candidate, mid));
+                         });
+        QVERIFY(farEnd.start({IMediaTransport::Role::Answerer, 0x5678}));
         IMediaTransport::StartOptions options{IMediaTransport::Role::Offerer, 0x1234};
         options.connectionId = QStringLiteral("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
         options.ice = ice;
         QVERIFY(transport.start(options));
         QTRY_VERIFY_WITH_TIMEOUT(complete.size() == 1, 10000);
+        QTRY_VERIFY_WITH_TIMEOUT(offerTaken && answerTaken && !farCandidates.isEmpty(), 10000);
         QCOMPARE(candidates.size(), 0);
+        // The far end's own host candidates, and a loopback one, with the
+        // answer in place: every one refused by the rule itself, not by an
+        // error from a transport that could not take a candidate yet.
+        for (const auto& far : std::as_const(farCandidates)) {
+            QVERIFY2(!transport.acceptCandidate(far.first, far.second), qPrintable(far.first));
+        }
         QVERIFY(!transport.acceptCandidate(
             QStringLiteral("candidate:1 1 UDP 2122317823 127.0.0.1 50123 typ host"),
-            QString()));
+            farCandidates.first().second));
+        QCOMPARE(errors.size(), 0);
         transport.stop();
+        farEnd.stop();
+    }
+
+    // The silence fallback end to end on real transports: media on a
+    // direct UDP pair, the pair cut so nothing more crosses it, then a
+    // tunnel-only connection on the same session link reaches connected
+    // and carries a media packet. The window answers, as in production.
+    void aTunnelOnlyReplacementCarriesMediaAfterTheDirectPathIsCut()
+    {
+        // The direct path: each end knows the other only as one of the
+        // forwarder's two loopback ports, so every datagram of the pair
+        // crosses the forwarder and cutting it cuts the pair.
+        DirectPathForwarder forwarder;
+        QVERIFY(forwarder.bind());
+        constexpr quint32 kCoreSsrc = 0x4e523401U;
+        constexpr quint32 kWindowSsrc = 0x4e523402U;
+        LibDataChannelMediaTransport directCore;
+        LibDataChannelMediaTransport directWindow;
+        QObject::connect(&directCore, &IMediaTransport::localDescription, &directWindow,
+                         [&directWindow](const QString& sdp, const QString& type) {
+                             QVERIFY(directWindow.acceptDescription(sdp, type));
+                         });
+        QObject::connect(&directWindow, &IMediaTransport::localDescription, &directCore,
+                         [&directCore](const QString& sdp, const QString& type) {
+                             QVERIFY(directCore.acceptDescription(sdp, type));
+                         });
+        QObject::connect(&directCore, &IMediaTransport::localCandidate, &directWindow,
+                         [&directWindow, &forwarder](const QString& candidate, const QString& mid) {
+                             const QString through = forwarder.coreCandidate(candidate);
+                             if (!through.isEmpty()) {
+                                 QVERIFY(directWindow.acceptCandidate(through, mid));
+                             }
+                         });
+        QObject::connect(&directWindow, &IMediaTransport::localCandidate, &directCore,
+                         [&directCore, &forwarder](const QString& candidate, const QString& mid) {
+                             const QString through = forwarder.windowCandidate(candidate);
+                             if (!through.isEmpty()) {
+                                 QVERIFY(directCore.acceptCandidate(through, mid));
+                             }
+                         });
+        QSignalSpy directCoreReady(&directCore, &IMediaTransport::ready);
+        QSignalSpy directWindowReady(&directWindow, &IMediaTransport::ready);
+        QSignalSpy directRtp(&directWindow, &IMediaTransport::rtpReceived);
+        QVERIFY(directWindow.start({IMediaTransport::Role::Answerer, kWindowSsrc}));
+        QVERIFY(directCore.start({IMediaTransport::Role::Offerer, kCoreSsrc}));
+        QTRY_VERIFY_WITH_TIMEOUT(directCoreReady.size() == 1 && directWindowReady.size() == 1,
+                                 20000);
+        const auto directPath = directWindow.selectedPath();
+        QVERIFY(directPath);
+        QVERIFY(!directPath->viaLoopbackShim());
+        QCOMPARE(directPath->remotePort, forwarder.windowFacingPort());
+        QVERIFY(directCore.sendRtp(tunnelRtpPacket(1, kCoreSsrc)));
+        QTRY_COMPARE_WITH_TIMEOUT(directRtp.size(), 1, 10000);
+
+        // Cut: the next packet goes into the forwarder and no further.
+        forwarder.cut();
+        const quint64 droppedBefore = forwarder.dropped();
+        QVERIFY(directCore.sendRtp(tunnelRtpPacket(2, kCoreSsrc)));
+        QTRY_VERIFY_WITH_TIMEOUT(forwarder.dropped() > droppedBefore, 10000);
+
+        // The replacement over the session link: the Core with its host
+        // candidates and the tunnel, the window with the tunnel's
+        // candidate alone, under one media generation.
+        Test::LoopbackTransport coreLink(QStringLiteral("core"));
+        Test::LoopbackTransport windowLink(QStringLiteral("window"));
+        coreLink.linkTo(&windowLink);
+        auto coreTunnel = MediaTunnel::create(&coreLink);
+        auto windowTunnel = MediaTunnel::create(&windowLink);
+        QVERIFY(coreTunnel && windowTunnel);
+        BinaryCount atWindow(&windowLink);
+        const QString id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        LibDataChannelMediaTransport core;
+        LibDataChannelMediaTransport window;
+        int coreCandidates = 0;
+        int refused = 0;
+        QObject::connect(&core, &IMediaTransport::localDescription, &window,
+                         [&window](const QString& sdp, const QString& type) {
+                             QVERIFY(window.acceptDescription(sdp, type));
+                         });
+        QObject::connect(&window, &IMediaTransport::localDescription, &core,
+                         [&core](const QString& sdp, const QString& type) {
+                             QVERIFY(core.acceptDescription(sdp, type));
+                         });
+        QObject::connect(&core, &IMediaTransport::localCandidate, &window,
+                         [&window, &coreCandidates, &refused](const QString& candidate,
+                                                              const QString& mid) {
+                             ++coreCandidates;
+                             if (!window.acceptCandidate(candidate, mid)) { ++refused; }
+                         });
+        QSignalSpy windowCandidates(&window, &IMediaTransport::localCandidate);
+        QSignalSpy windowErrors(&window, &IMediaTransport::errorOccurred);
+        QSignalSpy coreGathered(&core, &IMediaTransport::gatheringComplete);
+        QSignalSpy coreReady(&core, &IMediaTransport::ready);
+        QSignalSpy windowReady(&window, &IMediaTransport::ready);
+        QSignalSpy tunnelRtp(&window, &IMediaTransport::rtpReceived);
+        IMediaTransport::StartOptions windowOptions{IMediaTransport::Role::Answerer, kWindowSsrc};
+        windowOptions.connectionId = id;
+        windowOptions.ice = MediaTunnel::tunnelIceFor(windowTunnel);
+        IMediaTransport::StartOptions coreOptions{IMediaTransport::Role::Offerer, kCoreSsrc};
+        coreOptions.connectionId = id;
+        coreOptions.ice = MediaTunnel::iceFor(coreTunnel, std::nullopt);
+        QVERIFY(window.start(windowOptions));
+        QVERIFY(core.start(coreOptions));
+        QTRY_VERIFY_WITH_TIMEOUT(coreReady.size() == 1 && windowReady.size() == 1, 20000);
+        const auto tunnelPath = window.selectedPath();
+        QVERIFY(tunnelPath);
+        QVERIFY(tunnelPath->viaLoopbackShim());
+        QVERIFY(atWindow.messages > 0);
+        QVERIFY(core.sendRtp(tunnelRtpPacket(3, kCoreSsrc)));
+        QTRY_COMPARE_WITH_TIMEOUT(tunnelRtp.size(), 1, 10000);
+        QCOMPARE(tunnelRtp.at(0).at(0).toByteArray(), tunnelRtpPacket(3, kCoreSsrc));
+        // The window offered nothing of its own and took none of the Core's
+        // host candidates, each refused by the rule rather than an error.
+        QTRY_VERIFY_WITH_TIMEOUT(coreGathered.size() == 1, 10000);
+        QVERIFY(coreCandidates > 0);
+        QCOMPARE(refused, coreCandidates);
+        QCOMPARE(windowCandidates.size(), 0);
+        QCOMPARE(windowErrors.size(), 0);
+        // Nothing crossed the cut pair.
+        QCOMPARE(directRtp.size(), 1);
+        core.stop();
+        window.stop();
+        directCore.stop();
+        directWindow.stop();
     }
 
     // A direct-only replacement: STUN and host candidates, no tunnel and no

@@ -31,11 +31,15 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29: direct media follow-up: a fallback refused while the Core
+//               transmits is retried onto the tunnel alone. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-29: direct media fix wave: the silence fallback on the tunnel
 //               alone, once per silence, then recovery; none while muted
 //               or disconnected; the return to receive restarts the
 //               silence clock; a direct replace after a move onto the
 //               tunnel; ordering barriers in place of fixed waits.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-29: the direct media ladder: the direct-only replace (STUN and
 //               host candidates, no tunnel or relay), the older relay-leg
 //               refusal judged by the connection in use, the window's
@@ -1075,6 +1079,76 @@ private slots:
         g.now += 1;
         g.gui->checkMediaSilence();
         QCOMPARE(g.guiTransports.size(), 2);
+        g.core.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // A fallback the Core refuses because it went on the air as the replace
+    // arrived is tried again once it is back on receive, and the retry is
+    // still a fallback onto the tunnel alone, never a normal replace with
+    // STUN and host candidates.
+    void aFallbackRefusedWhileTransmittingStaysOnTheTunnelAlone()
+    {
+        GuiHarness g;
+        QVERIFY(g.connect(tunnelShimPath()));
+        MediaIcePath hostPath;
+        hostPath.remoteAddress = QStringLiteral("127.0.0.1");
+        g.feeding = false;
+        g.guiTransports.first()->path = hostPath;
+        g.audioOn(0);
+        MoxController* mox = g.core.radio.moxController();
+        mox->setTimerIntervals(0, 0, 0, 0, 0, 0);
+        g.core.radio.transmitModel().setMicSourceLocked(false);
+        g.core.radio.transmitModel().setMicSource(MicSource::Radio);
+        if (SliceModel* slice = g.core.radio.sliceById(g.core.slice)) {
+            slice->setDspMode(DSPMode::USB);
+            slice->setFrequency(14200000.0);
+        }
+        const TransmitState* tx = g.core.client.transmitState();
+        QVERIFY(tx != nullptr);
+        const auto onAir = [tx] { return tx->keyed() || tx->tuning() || tx->txEnding(); };
+        // The Core keys the moment the window's replace leaves it, so the
+        // Core reads that replace while it transmits.
+        Test::LoopbackTransport* windowLink = g.stationLink->peerForTest();
+        QVERIFY(windowLink != nullptr);
+        bool keyed = false;
+        const QMetaObject::Connection keyOnReplace = QObject::connect(
+            windowLink, &Test::LoopbackTransport::outboundText, windowLink,
+            [&keyed, mox](const QByteArray& wire) {
+                if (!keyed && wire.contains("\"replace\"")) {
+                    keyed = true;
+                    mox->setMox(true);
+                }
+            });
+        g.now += RemoteMediaController::kDirectMediaSilenceFallbackMs;
+        g.gui->checkMediaSilence();
+        QCOMPARE(g.guiTransports.size(), 2);
+        QVERIFY(g.guiTransports.at(1)->startOptions.ice->onlySourceCandidates());
+        QVERIFY(keyed);
+        QObject::disconnect(keyOnReplace);
+        // Refused while transmitting: the move waits, and the Core started
+        // no connection for it.
+        QTRY_VERIFY(g.gui->replacePending());
+        QCOMPARE(g.core.transports.size(), 1);
+        mox->setMox(false);
+        QTRY_VERIFY(!onAir());
+        QTRY_COMPARE_WITH_TIMEOUT(g.core.transports.size(), 2,
+                                  RemoteMediaController::kReplaceRetryMs + 5000);
+        QVERIFY(!g.gui->replacePending());
+        // Every connection the window started after the first, the retry
+        // included, has the tunnel's candidate alone (a refused one is
+        // already gone; the retry is live).
+        QVERIFY(g.guiTransports.size() >= 3);
+        QVERIFY(g.guiTransports.last());
+        for (int i = 1; i < g.guiTransports.size(); ++i) {
+            if (!g.guiTransports.at(i)) { continue; }
+            const IceConfiguration& ice = *g.guiTransports.at(i)->startOptions.ice;
+            QVERIFY2(ice.onlySourceCandidates(), qPrintable(QString::number(i)));
+            QVERIFY(!ice.stunServer().has_value());
+        }
+        QVERIFY(g.core.transports.at(1)->startOptions.ice->hasCandidateSourceFactory());
+        for (const QJsonObject& replace : g.replacesSent()) {
+            QCOMPARE(replace.size(), 3);
+        }
         g.core.client.disconnectFromStation(QStringLiteral("test complete"));
     }
 
