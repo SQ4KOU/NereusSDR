@@ -73,6 +73,12 @@
 //                 via Anthropic Claude Code. restoreSavedPower: the FIXED
 //                 source's stop turns the PWR slider limit back on before
 //                 restoring PWR (setup.cs:11196-11201 [v2.10.3.15]).
+//   2026-09-29 : PA on-air gate branch review, Important 1, by J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code. stopNow:
+//                 power off ends the test at once, with no settle wait, so
+//                 the FIXED restore lands before the connection's saves and
+//                 before the held transmit band is cleared (console.cs:27473,
+//                 27492 [v2.10.3.15]).
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis-derived activation
@@ -306,6 +312,13 @@ public slots:
     // for `keyer` (a remote device's two-tone). setActive(true) alone is
     // the station device's. Off ends it as setActive(false).
     void setActive(bool on, const NereusSDR::KeyerIdentity& keyer);
+    // Power off: end the test now, without the settle waits. A start still
+    // waiting on a release settle is dropped; a running test, or a stop
+    // waiting on its settle, is ended through the same stop steps (manual
+    // key off, TwoTone off, the FIXED power restore, generator off) before
+    // this returns. For the connection teardown, where no timer fires
+    // again before the saves run. No-op when nothing is running.
+    void stopNow();
 
 signals:
     // Emitted when m_active actually changes.  Subscribers should mirror

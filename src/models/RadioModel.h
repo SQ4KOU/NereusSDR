@@ -7076,11 +7076,17 @@ private:
     // m_savedPowerPct: power slider value (0-100) before the tune-power push.
     //   Cite: Thetis console.cs:30033 [v2.10.3.13] — PreviousPWR = ptbPWR.Value.
     //   //MW0LGE_22b  [original inline comment from console.cs:30033]
-    //   Restored to the connection on TUN-off so the slider snaps back.
+    //   Saved and restored only under the FIXED tune source
+    //   (console.cs:30094-30104 and 30180-30185 [v2.10.3.15]); see
+    //   m_tuneSetFixedPwr.
     // Default 100 matches TransmitModel::m_power default (TransmitModel.h).
     // G.4 fixup: changed from 50 (initial value mismatch with TransmitModel);
     // harmless after the cold-off guard in setTune(false) but kept for hygiene.
     int m_savedPowerPct{100};
+    // m_tuneSetFixedPwr: TUN-on took the FIXED branch (PWR limit off, PWR set
+    //   to the tune power), so TUN-off turns the limit back on and restores
+    //   m_savedPowerPct. Cleared by that restore.
+    bool m_tuneSetFixedPwr{false};
     //
     // m_isTuning: True while TUN is engaged (between setTune(true) and
     //   setTune(false)).  Used as the idempotent guard at the top of

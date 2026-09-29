@@ -322,6 +322,39 @@ void TwoToneController::setActive(bool on)
 }
 
 // ---------------------------------------------------------------------------
+// stopNow: power off. From Thetis console.cs:27473 and 27492 [v2.10.3.15]
+// (chkPower_CheckedChanged, power going off):
+//   SetupForm.TestIMD = false;
+//   ...
+//   chk2TONE.Checked = false;  // MW0LGE_21a
+// Thetis's stop waits 200 ms after console.MOX = false before its restore
+// (setup.cs:11190-11201 [v2.10.3.15]); its _tx_band is never cleared, so
+// the restore still lands in the held band after that wait. NereusSDR's
+// teardown saves the powers and clears the held band without running the
+// event loop again, so the stop's steps run here at once instead.
+// ---------------------------------------------------------------------------
+void TwoToneController::stopNow()
+{
+    if (m_rejectSettleTimer.isActive()) {
+        m_rejectSettleTimer.stop();
+        onRejectSettleElapsed();
+    }
+    if (!m_active && !m_activationInFlight) {
+        return;
+    }
+
+    m_moxReleaseSettleTimer.stop();
+    m_tuneReleaseSettleTimer.stop();
+    m_freq2DelayTimer.stop();
+    m_deactivationSettleTimer.stop();
+
+    if (m_moxController && m_moxController->isMox()) {
+        m_moxController->setMox(false);
+    }
+    continueDeactivation();
+}
+
+// ---------------------------------------------------------------------------
 // releaseMoxThenContinue: Stage 2 of activation (the TestIMD setter, after
 // chk2TONE_CheckedChanged has turned TUN off).
 // ---------------------------------------------------------------------------

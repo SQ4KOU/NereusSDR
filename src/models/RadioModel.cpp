@@ -675,6 +675,15 @@
 //                 gain for the held transmit band (setup.cs:11153
 //                 [v2.10.3.15]). J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-29 - PA on-air gate branch review, Important 1: the teardown
+//                 ends a two-tone test at once (TwoToneController::stopNow),
+//                 so the FIXED power restore lands in the held band before
+//                 the saves (console.cs:27473, 27492 [v2.10.3.15]). TUNE
+//                 under the FIXED source turns the PWR limit off and sets
+//                 PWR to the tune power, and TUN-off restores both, only
+//                 under FIXED (console.cs:30094-30104, 30180-30185
+//                 [v2.10.3.15]). J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -22087,7 +22096,7 @@ void RadioModel::teardownConnection()
     //   chkTUN.Enabled = false;
     //   chk2TONE.Checked = false;  // MW0LGE_21a
     // chkTUN.Checked = false runs chkTUN_CheckedChanged's TUN-off branch.
-    // Two-tone is released further down (m_twoToneController). NereusSDR
+    // Two-tone ends right after the TUN-off below (stopNow). NereusSDR
     // glue: the TUN-off completion runs at once, because the MoxController
     // timers that would deliver rxReady cannot fire during this teardown.
     // Task 7: no PTT source reports once the connection goes, so the levels
@@ -22121,6 +22130,20 @@ void RadioModel::teardownConnection()
     if (m_isTuning) {
         setTune(false);
         completeTuneOff();
+    }
+    // PA on-air gate branch review, Important 1: the two-tone test ends
+    // here, at once. From Thetis console.cs:27473 [v2.10.3.15]:
+    //   SetupForm.TestIMD = false;
+    // and console.cs:27492 [v2.10.3.15]:
+    //   chk2TONE.Checked = false;  // MW0LGE_21a
+    // The FIXED source's stop puts the PWR limit back on and PWR back to
+    // its saved value, into the held transmit band (setup.cs:11196-11201
+    // [v2.10.3.15]). Its 200 ms settle cannot fire during this teardown, so
+    // stopNow runs it now: before the saves below persist the band powers,
+    // and before m_txBandKnown is cleared. MOX is already off above. A start
+    // still waiting on its release settle is dropped the same way.
+    if (m_twoToneController) {
+        m_twoToneController->stopNow();
     }
     // Task 13: the radio's TX inhibit input goes with the radio. Nothing is
     // keyed by now (the PTT sources are cleared and MOX is off above), so
@@ -22341,11 +22364,8 @@ void RadioModel::teardownConnection()
         m_twoToneController->setTxChannel(nullptr);
         m_twoToneController->setSliceModel(nullptr);
         m_twoToneController->setPowerOn(false);
-        // If a two-tone test is currently running, force it off so the
-        // restored MOX-release doesn't hold over the disconnect.
-        if (m_twoToneController->isActive()) {
-            m_twoToneController->setActive(false);
-        }
+        // Ended above (stopNow); a no-op unless something restarted it.
+        m_twoToneController->stopNow();
     }
 
     // 3M-4 Task 7: tear down PureSignal before the TxChannel pointer dies.
@@ -23684,9 +23704,18 @@ void RadioModel::setTune(bool on)
         m_savedTxDspMode = txSlice ? txSlice->dspMode() : DSPMode::USB;
 
         // ── SAVE power slider value ────────────────────────────────────────────
-        // Cite: console.cs:30033 [v2.10.3.13]: PreviousPWR = ptbPWR.Value;
-        //   //MW0LGE_22b  [original inline comment from console.cs:30033]
-        m_savedPowerPct = m_transmitModel.power();
+        // From Thetis console.cs:30094-30096 [v2.10.3.15]:
+        //   // remember old power //MW0LGE_22b
+        //   if (_tuneDrivePowerSource == DrivePowerSource.FIXED)
+        //       PreviousPWR = ptbPWR.Value;
+        // Only the FIXED source sets PWR during TUNE, so only it saves and
+        // restores PWR (m_tuneSetFixedPwr, set with the PWR push below).
+        m_tuneSetFixedPwr = false;
+        const bool tuneFixedSource =
+            (m_transmitModel.tuneDrivePowerSource() == DrivePowerSource::Fixed);
+        if (tuneFixedSource) {
+            m_savedPowerPct = m_transmitModel.power();
+        }
 
         // ── COMPUTE tune-tone frequency (sign-selected by current DSP mode) ────
         // Cite: console.cs:30024-30037 [v2.10.3.13] — switch on Audio.TXDSPMode.
@@ -23786,6 +23815,11 @@ void RadioModel::setTune(bool on)
         // wrapper; the SWR controller stays slider-driven per upstream.
         const int tunePower = m_transmitModel.tunePowerForBand(currentBand);
 
+        // new_pwr of SetPowerUsingTargetDBM(..., true, true, false). Without
+        // a profile no drive is pushed; the FIXED case's new_pwr is then
+        // tune_power, as its switch sets it (console.cs:46766-46768
+        // [v2.10.3.15]: new_pwr = tune_power; bConstrain = false;).
+        int tuneNewPwr = m_transmitModel.tunePower();
         if (m_paProfileManager) {
             const PaProfile* activeProfile = m_paProfileManager->activeProfile();
             if (activeProfile) {
@@ -23801,6 +23835,7 @@ void RadioModel::setTune(bool on)
                     *activeProfile, currentBand, /*bSetPower=*/true,
                     /*bFromTune=*/true, /*bTwoTone=*/false,
                     m_hardwareProfile.model);
+                tuneNewPwr = result.newPower;
 
                 // #202 deep-fix: TXPostGenRun=0 case for new_pwr==0 during TUNE.
                 // Mirrors ramdor Thetis console.cs:46749-46752 [v2.10.3.15]:
@@ -23843,6 +23878,23 @@ void RadioModel::setTune(bool on)
             // push.  The downstream MoxController / setTuneTone path still
             // engages MOX + tone, but no drive byte is sent.  Safer than
             // sending stale wire bytes from a previous radio's profile.
+        }
+
+        // ── FIXED source: PWR shows the tune power ─────────────────────────────
+        // From Thetis console.cs:30099-30104 [v2.10.3.15]:
+        //   //
+        //   if (_tuneDrivePowerSource == DrivePowerSource.FIXED)
+        //   {
+        //       PWRSliderLimitEnabled = false;
+        //       PWR = new_pwr;
+        //   }
+        // (remember old power //MW0LGE_22b, console.cs:30094.) The drive does
+        // not move: TUN is on, so the PWR change takes the tune path, whose
+        // FIXED case drives tune_power unconstrained, the value just pushed.
+        if (tuneFixedSource) {
+            m_transmitModel.setPowerSliderLimitEnabled(false);
+            m_transmitModel.setPower(tuneNewPwr);
+            m_tuneSetFixedPwr = true;
         }
 
         // ── PUSH TUNE-ADJUSTED TX VFO (carrier-on-dial) ────────────────────────
@@ -24944,9 +24996,22 @@ void RadioModel::completeTuneOff()
     m_savedTxDspSliceId = -1;
 
     // ── RESTORE POWER ──────────────────────────────────────────────────────
-    // Cite: console.cs:30129-30132 [v2.10.3.13]:
-    //   if (_tuneDrivePowerSource == DrivePowerSource.FIXED) PWR = PreviousPWR;
-    //   //MW0LGE_22b  [original inline comment from console.cs:30033]
+    // From Thetis console.cs:30180-30185 [v2.10.3.15]:
+    //   //MW0LGE_22b
+    //   if (_tuneDrivePowerSource == DrivePowerSource.FIXED)
+    //   {
+    //       PWRSliderLimitEnabled = true;
+    //       PWR = PreviousPWR;
+    //   }
+    // m_tuneSetFixedPwr records that TUN-on took the FIXED branch, so the
+    // restore pairs with the save even if the source changed during TUNE.
+    // Another source never touched PWR, and a PWR change made during TUNE
+    // stays.
+    if (m_tuneSetFixedPwr) {
+        m_transmitModel.setPowerSliderLimitEnabled(true);
+        m_transmitModel.setPower(m_savedPowerPct);
+        m_tuneSetFixedPwr = false;
+    }
     //
     // Codex P1 follow-up to PR #178 — route the restore through the
     // calibrated dBm path, NOT the old linear formula.  Previously
@@ -24965,7 +25030,6 @@ void RadioModel::completeTuneOff()
     // bFromTune=false routes through txMode 0 (drive-slider source)
     // since TUN is now off and the user's saved drive-slider value
     // is the canonical post-restore source.
-    m_transmitModel.setPower(m_savedPowerPct);
     // txMode 0 saves PWR into power_by_band[(int)_tx_band]
     // (console.cs:46750-46752 [v2.10.3.15]); _tx_band held through the tune.
     const Band offBand = driveTxBand();
