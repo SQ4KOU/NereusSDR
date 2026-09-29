@@ -637,6 +637,9 @@
 //               (fitPeerOnlyProperties); every other peer's schema,
 //               snapshot and deltas stay as they were. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-09-28: Phone wire batch: logCategoryListVersion 1 and radio's
+//               logCategoryList the same way. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -1106,6 +1109,8 @@ struct PeerOnlyProperty {
 constexpr PeerOnlyProperty kPeerOnlyProperties[] = {
     // The Diversity dialog's sensitivity pattern (diversityPatternVersion 1).
     {"SliceModel", "slice:", true, "diversityPattern", "diversityPattern"},
+    // The Support dialog's categories with labels (logCategoryListVersion 1).
+    {"RadioModel", "radio", false, "logCategoryList", "logCategoryList"},
 };
 
 bool peerOnlyPropertyApplies(const PeerOnlyProperty& entry, const SessionMessage& message)
@@ -9894,6 +9899,10 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             // for a peer that declared diversityPattern 1.
             caps.diversityPatternVersion =
                 peerGetsFeatureProperties(transport, QByteArrayLiteral("diversityPattern")) ? 1 : 0;
+            // Phone wire batch: radio's logCategoryList, for a peer that
+            // declared logCategoryList 1.
+            caps.logCategoryListVersion =
+                peerGetsFeatureProperties(transport, QByteArrayLiteral("logCategoryList")) ? 1 : 0;
             if (peerDeclares(transport, QByteArrayLiteral("remoteTx"), 1)) {
                 caps.remoteTxEntry = true;
                 caps.remoteTxVersion = remoteTxVersion();

@@ -59,6 +59,11 @@ public:
     /// Turns on exactly the listed categories and off every other one; ids
     /// this process does not keep are ignored.
     void setEnabledList(const QStringList& ids);
+    /// Phone wire batch (logCategoryListVersion 1): every category the
+    /// Support dialog lists, in its order, with the label its checkbox
+    /// shows: compact JSON {"categories":[{"id":..,"label":..},..]} (the
+    /// Core's radio.logCategoryList).
+    QString categoryListJson() const;
 
     // --- Log File ---
     QString logFilePath() const;

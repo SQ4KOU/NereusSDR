@@ -159,8 +159,9 @@
 //   2026-09-27 - R-IOS-13 / R-R3-49: txModMonitorVersion, the AM Mod
 //                Monitor's readings. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
-//   2026-09-28 - Phone wire batch: diversityPatternVersion. J.J. Boyd
-//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - Phone wire batch: diversityPatternVersion and
+//                logCategoryListVersion. J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -246,6 +247,11 @@ struct StationCapabilities {
     /// on a Core with a radio model; any other peer's capabilities and
     /// slices are today's.
     int diversityPatternVersion = 0;
+    /// Phone wire batch: 1 means `radio` carries `logCategoryList`, every
+    /// logging category with its label. Sent after diversityPatternVersion,
+    /// only to a peer at minor 11 whose hello declared logCategoryList 1,
+    /// on a Core with a radio model; any other peer's are today's.
+    int logCategoryListVersion = 0;
     /// R-R3-47 / R-R3-22: 1 means the Core mirrors its Power Genius XL
     /// status as the read-only `amplifier` object. Sent after
     /// radioHardwareVersion in the same minor-11 block. 0: a window shows

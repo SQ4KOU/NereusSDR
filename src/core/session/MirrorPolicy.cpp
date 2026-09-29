@@ -153,8 +153,9 @@
 //                 Bidirectional (transmitSettingsVersion 10). J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-28 - Phone wire batch: SliceModel diversityPattern Outbound
-//                 (diversityPatternVersion 1). J.J. Boyd (KG4VCF),
-//                 AI-assisted via Anthropic Claude Code.
+//                 (diversityPatternVersion 1); RadioModel logCategoryList
+//                 ConstantSnapshot (logCategoryListVersion 1). J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorPolicy.h"
@@ -982,7 +983,7 @@ const MirrorPolicy::Entry kEntries[] = {
     { "PureSignalSettings", "hardwarePeakOverride", MirrorDirection::Bidirectional },
     { "PureSignalSettings", "lastLoadError", MirrorDirection::Outbound },
 
-    // ---- RadioModel (27 entries) ----
+    // ---- RadioModel (28 entries) ----
     { "RadioModel", "settingsSaveError", MirrorDirection::Outbound },
     { "RadioModel", "receiveLayoutRestoreState", MirrorDirection::Outbound },
     { "RadioModel", "receiveLayoutRestoreMessage", MirrorDirection::Outbound },
@@ -1030,6 +1031,10 @@ const MirrorPolicy::Entry kEntries[] = {
     // Core's enabled logging categories, Core to window only; changed with
     // support.setLogCategories.
     { "RadioModel", "logCategories", MirrorDirection::Outbound },
+    // Phone wire batch (logCategoryListVersion 1): the Support dialog's
+    // categories with their labels, fixed for the process; only to a peer
+    // that declared logCategoryList (StationServer::fitPeerOnlyProperties).
+    { "RadioModel", "logCategoryList", MirrorDirection::ConstantSnapshot },
 
     // ---- PanadapterModel (4 entries) ----
     { "PanadapterModel", "centerFrequency", MirrorDirection::Bidirectional },

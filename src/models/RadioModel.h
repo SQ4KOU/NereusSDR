@@ -361,6 +361,10 @@
 //                Core's readings (stationModMonitorSnapshot).
 //                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-28 - Phone wire batch: logCategoryList, the Support dialog's
+//                categories with their labels (logCategoryListVersion 1).
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -689,6 +693,13 @@ class RadioModel : public QObject {
     // a remote window holds the Core's (applyMirroredValue) and changes it
     // with support.setLogCategories. Core to window only.
     Q_PROPERTY(QString logCategories READ logCategories NOTIFY logCategoriesChanged)
+    // Phone wire batch (logCategoryListVersion 1): every logging category
+    // the Support dialog lists, with the label its checkbox shows
+    // (LogManager::categoryListJson), so a device names a category it was
+    // not built with. Fixed for the life of the process: CONSTANT, sent in
+    // the snapshot only, and only to a peer that declared logCategoryList.
+    // Declared last so every earlier property keeps its wire ordinal.
+    Q_PROPERTY(QString logCategoryList READ logCategoryList CONSTANT)
 
 
 public:
@@ -2741,6 +2752,8 @@ public:
 
     /// Remote-window parity Task 22 (R-R3-49): see the property.
     QString logCategories() const;
+    /// Phone wire batch: see the property. This process's categories.
+    QString logCategoryList() const;
     /// A remote window's copy of the Core's log (the `coreLog` stream),
     /// oldest first, at most kStationCoreLogLines. Followed only while a
     /// viewer holds it (the Support dialog, Setup > Diagnostics > Logs).

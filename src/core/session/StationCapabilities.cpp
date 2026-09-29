@@ -116,6 +116,10 @@
 //                vaxVersion, only for a peer that declared
 //                diversityPattern. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-28 - Phone wire batch: logCategoryListVersion, after
+//                diversityPatternVersion, only for a peer that declared
+//                logCategoryList. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationCapabilities.h"
@@ -360,6 +364,11 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
         if (diversityPatternVersion > 0) {
             updates.append(intEntry("diversityPatternVersion", diversityPatternVersion));
         }
+        // Phone wire batch: radio's logCategoryList, only for a peer that
+        // declared logCategoryList.
+        if (logCategoryListVersion > 0) {
+            updates.append(intEntry("logCategoryListVersion", logCategoryListVersion));
+        }
     }
     if (coreBuildInfo) {
         const QByteArray json = coreBuildInfo->toJson();
@@ -590,7 +599,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                    || u.name == "miniDisplayVersion"
                    || u.name == "radioAntennaRowsVersion"
                    || u.name == "vaxVersion"
-                   || u.name == "diversityPatternVersion") {
+                   || u.name == "diversityPatternVersion"
+                   || u.name == "logCategoryListVersion") {
             // R-R3-47 / R-R3-22 / R-R3-48: sent in the same block as the
             // four above.
             caps.radioIdentityEntries = true;
@@ -614,6 +624,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                     caps.vaxVersion = version;
                 } else if (u.name == "diversityPatternVersion") {
                     caps.diversityPatternVersion = version;
+                } else if (u.name == "logCategoryListVersion") {
+                    caps.logCategoryListVersion = version;
                 } else if (u.name == "stationIdentityVersion") {
                     caps.stationIdentityVersion = version;
                 } else if (u.name == "deviceAdminVersion") {

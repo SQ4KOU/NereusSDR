@@ -6955,6 +6955,9 @@ nereus_add_test(tst_diversity_dialog_persistence)
 # Phone wire batch: the Diversity dialog's sensitivity pattern
 # (core/DiversityPattern) and the slice's diversityPattern.
 nereus_add_test(tst_diversity_pattern)
+# Phone wire batch: radio's logCategoryList (the Support dialog's categories
+# with their labels).
+nereus_add_test(tst_log_category_list)
 
 # ── Tunable Notch Filter Task 2: RxChannel manual-notch wrappers ──────────
 # The Notch value type plus add / edit / delete / sync / count, the

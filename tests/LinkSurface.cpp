@@ -93,8 +93,11 @@
 //   2026-09-28  J.J. Boyd / KG4VCF  Phone wire batch: the capture declares
 //                                    diversityPattern, so
 //                                    diversityPatternVersion and the
-//                                    slice's diversityPattern are captured.
-//                                    AI-assisted via Anthropic Claude Code.
+//                                    slice's diversityPattern are captured;
+//                                    and logCategoryList, so
+//                                    logCategoryListVersion and radio's
+//                                    logCategoryList are. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "LinkSurface.h"
@@ -554,7 +557,10 @@ std::optional<QList<QByteArray>> liveSessionWire(
                                   {"vax", 1},
                                   // Phone wire batch: each slice's
                                   // diversityPattern.
-                                  {"diversityPattern", 1}})));
+                                  {"diversityPattern", 1},
+                                  // Phone wire batch: radio's
+                                  // logCategoryList.
+                                  {"logCategoryList", 1}})));
     clientEnd->sendText(SessionMessages::encode(SessionMessages::authRequest({}, block)));
 
     // The loopback delivers on later event-loop turns, as a socket would.
@@ -595,6 +601,8 @@ QJsonArray captureCapabilities()
     caps.vaxEntry = true;
     // Phone wire batch: sent to a peer that declared diversityPattern.
     caps.diversityPatternVersion = 1;
+    // Phone wire batch: sent to a peer that declared logCategoryList.
+    caps.logCategoryListVersion = 1;
 
     // The values come from a live station with every feature a Core can
     // switch on: media, telemetry, an enforced display budget with its

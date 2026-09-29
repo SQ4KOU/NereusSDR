@@ -784,6 +784,14 @@ built for, with neither. The station does not declare it. The desktop's
 remote window does not declare it either: its Diversity dialog draws the
 pattern itself from the same function.
 
+**`logCategoryList` 1** (phone wire batch): the client names the Core's
+logging categories by the labels the Core's Support dialog shows. A peer
+that declares it at minor 11 is sent `logCategoryListVersion` (section 6.3)
+and `radio`'s `logCategoryList` (section 7.1); a peer that does not sees
+exactly the wire it was built for, with neither. The station does not
+declare it, and the desktop's remote window does not: it lists its own
+build's categories.
+
 **`sessionHolder` 1** (iPhone app plan Task 71; the several-devices
 design, ruling 10.1): the Core admits up to four devices at once (section
 5.1). A client declares it only together with `deviceAuth` 1 or later, and
@@ -915,6 +923,7 @@ change shows as surface drift and as a change to this table.
 | `radioAntennaRowsVersion` | 1 |
 | `vaxVersion` | 1 |
 | `diversityPatternVersion` | 1 |
+| `logCategoryListVersion` | 1 |
 
 <!-- /surface -->
 
@@ -1038,6 +1047,14 @@ When a feature is off, its version is 0:
   entry nor the property. An app on a Core that sends no entry shows its
   pattern disabled with "This Core does not send the diversity pattern.
   Updating the Core may help."
+- `logCategoryListVersion` (phone wire batch): optional, sent only at
+  agreed minor 11 to a peer whose hello declared `logCategoryList` 1, while
+  the Core has a radio model, after `diversityPatternVersion` (or after the
+  entry before it when that is absent) and before `coreBuildInfo`. At 1
+  `radio` carries `logCategoryList` (section 7.1), every logging category
+  the Core keeps with its label. A peer that did not declare the feature
+  is sent neither this entry nor the property. An app on a Core that sends
+  no entry names each category by its id from `logCategories`.
 - `remotePgxlControlVersion`, `remoteRfKitControlVersion`,
   `remoteTgxlControlVersion`: sent only at agreed minor 11, and 0 unless
   the Core owns its accessories. `remotePgxlControlVersion` 3 adds the
@@ -1621,7 +1638,8 @@ identity entries from `hpsdrModel` onwards are present only at agreed minor
 `sessionHolder` (section 6.1); `remoteTxVersion` and the three
 `txRefusal` entries after it only for a peer that declared `remoteTx`;
 `diversityPatternVersion` only for a peer that declared
-`diversityPattern`. A client ignores a capability it does not know
+`diversityPattern`; `logCategoryListVersion` only for a peer that declared
+`logCategoryList`. A client ignores a capability it does not know
 (`StationCapabilities::fromUpdates`).
 
 **Each device's share of the display budget** (iPhone app plan Task 76; the
@@ -1795,7 +1813,8 @@ older window sees only the values it was built for.
 | 84 | `radioAntennaRowsVersion` | `i64` |
 | 85 | `vaxVersion` | `i64` |
 | 86 | `diversityPatternVersion` | `i64` |
-| 87 | `coreBuildInfo` | `utf8` |
+| 87 | `logCategoryListVersion` | `i64` |
+| 88 | `coreBuildInfo` | `utf8` |
 
 <!-- /surface -->
 
@@ -2010,7 +2029,7 @@ An enum property lists the values its domain allows.
 | 8 | `hardwarePeakOverride` | `f64` | bidirectional |  |
 | 9 | `lastLoadError` | `utf8` | outbound |  |
 
-**RadioModel** (27 properties)
+**RadioModel** (28 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -2041,6 +2060,7 @@ An enum property lists the values its domain allows.
 | 24 | `dspOptionsLastApplyMs` | `i64` | outbound |  |
 | 25 | `stationRadioWaiting` | `utf8` | outbound |  |
 | 26 | `logCategories` | `utf8` | outbound |  |
+| 27 | `logCategoryList` | `utf8` | constantSnapshot |  |
 
 **RfKitModel** (30 properties)
 
@@ -2848,6 +2868,21 @@ Notes on the keys:
   it on its logging checkboxes; the window's own logging is its own and
   never follows it. A window that does not know it ignores it, and clears
   its copy when the session ends.
+- **`radio`'s `logCategoryList`** (phone wire batch;
+  `logCategoryListVersion` 1). Constant snapshot, no WRITE, `utf8`,
+  declared last in `RadioModel`: every logging category the Core keeps, in
+  its Support dialog's order, with the label that dialog's checkbox shows,
+  as compact JSON `{"categories":[{"id":"nereus.discovery","label":"Discovery"},...]}`
+  (`LogManager::categoryListJson`). `id` is the id `logCategories` and
+  `support.setLogCategories` carry; `label` is plain operator words. The
+  list is fixed for the life of the Core process, so it travels in the
+  snapshot only, never in a delta; a Core with a new category lists it
+  under its own label, so an app shows a category it was not built with.
+  A reader ignores a key it does not know. A write is refused "The Core
+  sets this itself; it cannot be changed from here." Sent only to a peer
+  that declared `logCategoryList` 1. An app's Logs page lists these, each
+  on or off as `logCategories` says, and switches them with
+  `support.setLogCategories`.
 - **`transmit` at `transmitSettingsVersion` 2.** Each property carries its
   setter's type: `tunePower` (i64, the fixed tune power Setup uses, 0 to
   100 W, 0 to 99 on a Hermes Lite 2), `voxThresholdDb` (i64, -80 to 0 dB),
