@@ -80,6 +80,22 @@ public:
 
     /// The whole table, for the guard test.
     static const QList<Entry>& entries();
+
+    /// A property the Core sends only to a peer whose hello declared
+    /// `feature` at `minVersion` or higher; every other peer's schema,
+    /// snapshot and deltas leave it out (StationServer::sendToPeer). A
+    /// client that did not declare the feature must not count the missing
+    /// property as schema skew (StationClient::compareSchema).
+    struct FeatureGate {
+        const char* className;
+        const char* property;
+        const char* feature;
+        int minVersion;
+    };
+    static const QList<FeatureGate>& featureGates();
+    /// The gate for one property, or nullptr when every peer gets it.
+    static const FeatureGate* featureGateFor(const QByteArray& className,
+                                             const QByteArray& property);
 };
 
 } // namespace NereusSDR

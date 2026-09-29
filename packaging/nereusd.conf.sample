@@ -48,6 +48,9 @@ slice_count = 1
 # A headless Pi with no sound card is a supported configuration: opening
 # the device fails harmlessly, is logged, and the daemon keeps running
 # and demodulating with no local monitoring.
+# This is a starting value: it applies only while no speaker choice is
+# saved. Once a speaker device is picked from a window, that choice wins
+# across restarts and this line is ignored (the log says which applied).
 # Default: (unset -- platform default)
 audio_device =
 

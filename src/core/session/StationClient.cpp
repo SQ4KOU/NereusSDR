@@ -3534,6 +3534,15 @@ void StationClient::compareSchema(const QByteArray& className,
     }
     for (const QByteArray& name : localNames) {
         if (!stationNames.contains(name)) {
+            // A property the Core sends only to a peer that declared its
+            // link feature is expected to be missing when this client did
+            // not declare it (MirrorPolicy::featureGates); that is not skew.
+            const MirrorPolicy::FeatureGate* gate =
+                MirrorPolicy::featureGateFor(className, name);
+            if (gate != nullptr
+                && m_declaredFeatures.value(QByteArray(gate->feature)) < gate->minVersion) {
+                continue;
+            }
             m_schemaOnlyLocal.insert(skewKey(className, name));
             ++onlyLocal;
         }

@@ -1458,8 +1458,9 @@ connecting); R-R3-44 (VAX in a remote window).
   for this Core in `CoreTargetStore`, and the window honours it at launch.
 - **B6.9:** Hide feedback level and Swap red and blue PS-A feedback colours apply to the FB
   indicator at once in a remote window, and a click on the FB label updates the boxes.
-- **B6.10:** Reset all audio to defaults reopens the headphones, moves MON back and rebuilds
-  the VAX outputs, locally and remotely, with no restart.
+- **B6.10:** Reset all audio to defaults turns the headphones off (their default state),
+  moves MON back and rebuilds the VAX outputs, locally and remotely, with no restart. (JJ's
+  ruling, 2026-09-28: reset turns headphones off, as the code does; it does not reopen them.)
 - **Passing:** Radio Status and Settings Validation's Reset to defaults and Forget this
   radio pass the radio's MAC (the Core's in a remote window, through Task 21's verbs there);
   Uptime counts from the radio's connect; Send IQ to VAX loses its remote hard-disable, so the

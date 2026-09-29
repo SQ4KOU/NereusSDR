@@ -853,15 +853,30 @@ void DaemonApp::applyConfigToSettings(const DaemonConfig& cfg,
         }
     }
 
-    // Only written when set. An empty audio_device must not stamp an
-    // empty DeviceName over a value the operator configured some other
-    // way; leaving the key untouched lets
-    // AudioDeviceConfig::loadFromSettings keep whatever is already there,
-    // and a genuinely unset key resolves to the platform default inside
-    // AudioEngine::ensureSpeakersOpen().
+    // audio_device is a starting value too (G-16), exactly like the rate
+    // above: it seeds audio/Speakers/DeviceName only when no speaker choice
+    // is saved. A saved choice (a window's pick, or an earlier seed) wins
+    // across restarts. A saved empty name is a choice too: it is how a
+    // window saves "platform default" (AudioDeviceConfig::saveToSettings),
+    // so presence of the key, not a non-empty value, means "saved".
+    //
+    // An empty audio_device never writes: it must not stamp an empty
+    // DeviceName over anything, and a genuinely unset key resolves to the
+    // platform default inside AudioEngine::ensureSpeakersOpen().
     if (!cfg.audioDevice.isEmpty()) {
-        settings.setValue(QStringLiteral("audio/Speakers/DeviceName"),
-                          cfg.audioDevice);
+        const QString speakerKey = QStringLiteral("audio/Speakers/DeviceName");
+        if (settings.contains(speakerKey)) {
+            qCInfo(lcApp).noquote()
+                << QStringLiteral("DaemonApp: using the saved speaker device \"%1\" "
+                                  "(the config file's \"%2\" is only a starting value)")
+                       .arg(settings.value(speakerKey).toString(), cfg.audioDevice);
+        } else {
+            settings.setValue(speakerKey, cfg.audioDevice);
+            qCInfo(lcApp).noquote()
+                << QStringLiteral("DaemonApp: seeded the speaker device from the config "
+                                  "file: \"%1\"")
+                       .arg(cfg.audioDevice);
+        }
     }
 }
 

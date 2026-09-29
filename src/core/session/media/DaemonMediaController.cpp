@@ -2320,7 +2320,9 @@ QString DaemonMediaController::unkeyStatsLine(const QByteArray& deviceId,
         line << "; packets concealed " << rx.concealedPackets << ", recovered "
              << rx.recoveredPackets << ", late " << rx.latePackets << ", long gaps " << rx.longGaps
              << "; transmit I/Q ";
-        if (send.valid) {
+        if (send.valid && send.overflowOnly) {
+            line << "lost " << send.overflowSamples << " samples (no other counters)";
+        } else if (send.valid) {
             line << "frames " << send.framesSent << ", silence " << send.zeroPaddedSamples
                  << " samples, late wakes " << send.lateWakes << ", catch-up bursts "
                  << send.catchUpBursts << ", radio ran dry " << send.radioRanDry << ", lost "

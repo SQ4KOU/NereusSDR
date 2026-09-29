@@ -88,7 +88,9 @@ public:
     // Phase 3G-9b smooth-default recipe, RadioModel::applyClaritySmoothDefaults.
     virtual void setWfColorScheme(WfColorScheme scheme) = 0;
     virtual void setAverageMode(AverageMode mode) = 0;
-    virtual void setAverageAlpha(float alpha) = 0;
+    // Saved spectrum averaging time in ms (the Setup "Averaging Time"
+    // value); the display derives its averaging constant from it.
+    virtual void setSpectrumAverageTimeMs(int ms) = 0;
     virtual void setFillColor(const QColor& color) = 0;
     virtual void setPanFillEnabled(bool on) = 0;
     virtual void setWfAgcEnabled(bool on) = 0;

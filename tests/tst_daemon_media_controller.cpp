@@ -4454,6 +4454,16 @@ void TstDaemonMediaController::unkeyLineCarriesTheMicrophonePathsLatency()
                 .contains(QStringLiteral("send ring unknown")));
     QVERIFY(DaemonMediaController::unkeyStatsLine("phone-1", rx, nullptr, send)
                 .contains(QStringLiteral("microphone no feed")));
+
+    // G-07: a Protocol 1 connection keeps only the full-ring loss count.
+    RadioConnection::TxSendStats p1;
+    p1.valid = true;
+    p1.overflowOnly = true;
+    p1.overflowSamples = 7;
+    const QString p1Line = DaemonMediaController::unkeyStatsLine("phone-1", rx, nullptr, p1);
+    QVERIFY2(p1Line.contains(QStringLiteral("transmit I/Q lost 7 samples (no other counters)")),
+             qPrintable(p1Line));
+    QVERIFY2(!p1Line.contains(QStringLiteral("frames 0")), qPrintable(p1Line));
 }
 
 QTEST_MAIN(TstDaemonMediaController)
