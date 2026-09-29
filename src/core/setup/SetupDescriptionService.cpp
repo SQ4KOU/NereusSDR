@@ -112,18 +112,26 @@ constexpr char kAppearanceV12ResetColours[] =
 // TX Display Cal and N2ADR switch. Each row is closed as the version 12 rows
 // are. Rows marked rangeSource or carrying an empty value/copyText are the
 // resource's form; loadCategory fills them for the Core's radio.
+// The ten watt-meter points carry no offAir: Thetis gives the table no
+// transmit rule. Its boxes have no ValueChanged handler and the forward-power
+// reading reads them live with no MOX check:
+// From Thetis setup.cs:5437-5452 [v2.10.3.15] PA10W (ud100PA10W, ud10PA1W,
+// ud200PA20W).
+// The table corrects the reading only, and the Core takes a point on the
+// air and applies it once the radio is back on receive
+// (RadioModel::flushRemoteHardwareApply).
 constexpr char kPaV13Controls[] =
     R"json([)json"
-    R"json({"id":"pa.wattMeter.calPoint1","label":"Point 1","tooltip":"","kind":"decimal","binding":{"radioSetting":"paCalibration/calPoint1"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":6,"offAir":true},"requiresDescriptionVersion":13,"rangeSource":"board.paCalibration","unit":"W"},)json"
-    R"json({"id":"pa.wattMeter.calPoint2","label":"Point 2","tooltip":"","kind":"decimal","binding":{"radioSetting":"paCalibration/calPoint2"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":6,"offAir":true},"requiresDescriptionVersion":13,"rangeSource":"board.paCalibration","unit":"W"},)json"
-    R"json({"id":"pa.wattMeter.calPoint3","label":"Point 3","tooltip":"","kind":"decimal","binding":{"radioSetting":"paCalibration/calPoint3"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":6,"offAir":true},"requiresDescriptionVersion":13,"rangeSource":"board.paCalibration","unit":"W"},)json"
-    R"json({"id":"pa.wattMeter.calPoint4","label":"Point 4","tooltip":"","kind":"decimal","binding":{"radioSetting":"paCalibration/calPoint4"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":6,"offAir":true},"requiresDescriptionVersion":13,"rangeSource":"board.paCalibration","unit":"W"},)json"
-    R"json({"id":"pa.wattMeter.calPoint5","label":"Point 5","tooltip":"","kind":"decimal","binding":{"radioSetting":"paCalibration/calPoint5"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":6,"offAir":true},"requiresDescriptionVersion":13,"rangeSource":"board.paCalibration","unit":"W"},)json"
-    R"json({"id":"pa.wattMeter.calPoint6","label":"Point 6","tooltip":"","kind":"decimal","binding":{"radioSetting":"paCalibration/calPoint6"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":6,"offAir":true},"requiresDescriptionVersion":13,"rangeSource":"board.paCalibration","unit":"W"},)json"
-    R"json({"id":"pa.wattMeter.calPoint7","label":"Point 7","tooltip":"","kind":"decimal","binding":{"radioSetting":"paCalibration/calPoint7"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":6,"offAir":true},"requiresDescriptionVersion":13,"rangeSource":"board.paCalibration","unit":"W"},)json"
-    R"json({"id":"pa.wattMeter.calPoint8","label":"Point 8","tooltip":"","kind":"decimal","binding":{"radioSetting":"paCalibration/calPoint8"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":6,"offAir":true},"requiresDescriptionVersion":13,"rangeSource":"board.paCalibration","unit":"W"},)json"
-    R"json({"id":"pa.wattMeter.calPoint9","label":"Point 9","tooltip":"","kind":"decimal","binding":{"radioSetting":"paCalibration/calPoint9"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":6,"offAir":true},"requiresDescriptionVersion":13,"rangeSource":"board.paCalibration","unit":"W"},)json"
-    R"json({"id":"pa.wattMeter.calPoint10","label":"Point 10","tooltip":"","kind":"decimal","binding":{"radioSetting":"paCalibration/calPoint10"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":6,"offAir":true},"requiresDescriptionVersion":13,"rangeSource":"board.paCalibration","unit":"W"},)json"
+    R"json({"id":"pa.wattMeter.calPoint1","label":"Point 1","tooltip":"","kind":"decimal","binding":{"radioSetting":"paCalibration/calPoint1"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":6},"requiresDescriptionVersion":13,"rangeSource":"board.paCalibration","unit":"W"},)json"
+    R"json({"id":"pa.wattMeter.calPoint2","label":"Point 2","tooltip":"","kind":"decimal","binding":{"radioSetting":"paCalibration/calPoint2"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":6},"requiresDescriptionVersion":13,"rangeSource":"board.paCalibration","unit":"W"},)json"
+    R"json({"id":"pa.wattMeter.calPoint3","label":"Point 3","tooltip":"","kind":"decimal","binding":{"radioSetting":"paCalibration/calPoint3"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":6},"requiresDescriptionVersion":13,"rangeSource":"board.paCalibration","unit":"W"},)json"
+    R"json({"id":"pa.wattMeter.calPoint4","label":"Point 4","tooltip":"","kind":"decimal","binding":{"radioSetting":"paCalibration/calPoint4"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":6},"requiresDescriptionVersion":13,"rangeSource":"board.paCalibration","unit":"W"},)json"
+    R"json({"id":"pa.wattMeter.calPoint5","label":"Point 5","tooltip":"","kind":"decimal","binding":{"radioSetting":"paCalibration/calPoint5"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":6},"requiresDescriptionVersion":13,"rangeSource":"board.paCalibration","unit":"W"},)json"
+    R"json({"id":"pa.wattMeter.calPoint6","label":"Point 6","tooltip":"","kind":"decimal","binding":{"radioSetting":"paCalibration/calPoint6"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":6},"requiresDescriptionVersion":13,"rangeSource":"board.paCalibration","unit":"W"},)json"
+    R"json({"id":"pa.wattMeter.calPoint7","label":"Point 7","tooltip":"","kind":"decimal","binding":{"radioSetting":"paCalibration/calPoint7"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":6},"requiresDescriptionVersion":13,"rangeSource":"board.paCalibration","unit":"W"},)json"
+    R"json({"id":"pa.wattMeter.calPoint8","label":"Point 8","tooltip":"","kind":"decimal","binding":{"radioSetting":"paCalibration/calPoint8"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":6},"requiresDescriptionVersion":13,"rangeSource":"board.paCalibration","unit":"W"},)json"
+    R"json({"id":"pa.wattMeter.calPoint9","label":"Point 9","tooltip":"","kind":"decimal","binding":{"radioSetting":"paCalibration/calPoint9"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":6},"requiresDescriptionVersion":13,"rangeSource":"board.paCalibration","unit":"W"},)json"
+    R"json({"id":"pa.wattMeter.calPoint10","label":"Point 10","tooltip":"","kind":"decimal","binding":{"radioSetting":"paCalibration/calPoint10"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":6},"requiresDescriptionVersion":13,"rangeSource":"board.paCalibration","unit":"W"},)json"
     R"json({"id":"pa.wattMeter.showPaValues","label":"Show PA Values page","tooltip":"Toggle visibility of the PA Values page in Setup navigation.","kind":"toggle","binding":{"phone":"display/showPaValuesPage"},"applies":"live","requiresDescriptionVersion":13,"default":true},)json"
     R"json({"id":"pa.wattMeter.resetPaValues","label":"Reset PA Values","tooltip":"Reset peak/min tracking on the PA Values page.","kind":"button","binding":{"phone":"resetPaValues"},"applies":"live","requiresDescriptionVersion":13},)json"
     R"json({"id":"pa.values.paTemperature","label":"PA Temperature:","tooltip":"","kind":"readout","binding":{"telemetry":{"object":"radio","name":"paTemperatureCelsius"}},"applies":"live","gate":{"capability":"stationTelemetryVersion","min":4},"requiresDescriptionVersion":13,"decimals":1,"unit":"\u00b0C","temperatureUnit":"PaTempUnit"},)json"
@@ -2683,8 +2691,93 @@ bool SetupDescription::validateTnfTable(const QJsonObject& control, QString* err
     return true;
 }
 
+namespace {
+
+// Version 20 (R-R3-49, JJ's ruling: follow Thetis). Thetis locks the PA
+// profile controls while MOX is on (PAProfileEnableControls, setup.cs
+// 23479-23496 [v2.10.3.15]) and keeps only the transmitting band's cells
+// live (setAdjustingBand, setup.cs 23839-23852 [v2.10.3.15]). The Core
+// enforces that on its writes; the description publishes the same state
+// per control and per table row with the availability object the other
+// rows use.
+constexpr char kPaHolderMayEdit[] = "holderMayEdit";
+
+template <typename Fn>
+QJsonObject mapCategoryControls(QJsonObject category, Fn&& fn)
+{
+    QJsonArray pages = category.value(QStringLiteral("pages")).toArray();
+    for (int p = 0; p < pages.size(); ++p) {
+        QJsonObject page = pages.at(p).toObject();
+        QJsonArray sections = page.value(QStringLiteral("sections")).toArray();
+        for (int s = 0; s < sections.size(); ++s) {
+            QJsonObject section = sections.at(s).toObject();
+            QJsonArray controls = section.value(QStringLiteral("controls")).toArray();
+            for (int c = 0; c < controls.size(); ++c) {
+                controls[c] = fn(controls.at(c).toObject());
+            }
+            section.insert(QStringLiteral("controls"), controls);
+            sections[s] = section;
+        }
+        page.insert(QStringLiteral("sections"), sections);
+        pages[p] = page;
+    }
+    category.insert(QStringLiteral("pages"), pages);
+    return category;
+}
+
+QJsonObject lockedAvailability(const QString& reason)
+{
+    return QJsonObject{{QStringLiteral("enabled"), false},
+                       {QStringLiteral("reason"), reason}};
+}
+
+// The Core's PA description in its version 20 shape: the table's gate no
+// longer closes it off the air as a whole; on the air each row says why it
+// is locked, and the transmitting band's row is marked for the holder.
+QString paWithOnAirState(const QString& description, bool onAir, int transmittingBand)
+{
+    if (description.isEmpty()) { return description; }
+    const QJsonDocument document = QJsonDocument::fromJson(description.toUtf8());
+    if (!document.isObject()) { return description; }
+    const QJsonObject fitted = mapCategoryControls(document.object(),
+        [onAir, transmittingBand](QJsonObject control) {
+            const QString id = control.value(QStringLiteral("id")).toString();
+            if (!paV14Controls().contains(id)) { return control; }
+            if (id != QLatin1String("pa.gain.table")) {
+                if (onAir) {
+                    control.insert(QStringLiteral("availability"),
+                                   lockedAvailability(RadioModel::paOnAirLockedReason()));
+                }
+                return control;
+            }
+            QJsonObject gate = control.value(QStringLiteral("gate")).toObject();
+            gate.remove(QStringLiteral("offAir"));
+            control.insert(QStringLiteral("gate"), gate);
+            if (!onAir) { return control; }
+            QJsonArray rows = control.value(QStringLiteral("rows")).toArray();
+            for (int i = 0; i < rows.size(); ++i) {
+                QJsonObject row = rows.at(i).toObject();
+                if (transmittingBand >= 0
+                    && row.value(QStringLiteral("band")).toInt(-1) == transmittingBand) {
+                    row.insert(QStringLiteral("availability"),
+                               lockedAvailability(RadioModel::paHolderOnlyReason()));
+                    row.insert(QLatin1String(kPaHolderMayEdit), true);
+                } else {
+                    row.insert(QStringLiteral("availability"),
+                               lockedAvailability(RadioModel::paOnAirLockedReason()));
+                }
+                rows[i] = row;
+            }
+            control.insert(QStringLiteral("rows"), rows);
+            return control;
+        });
+    return QString::fromUtf8(QJsonDocument(fitted).toJson(QJsonDocument::Compact));
+}
+
+} // namespace
+
 QString SetupDescription::fitCategoryForVersion(const QString& description, int version,
-                                                bool antennaRowsAvailable)
+                                                bool antennaRowsAvailable, bool holdsTransmit)
 {
     if (version < 1 || description.isEmpty()) { return {}; }
     const QJsonDocument document = QJsonDocument::fromJson(description.toUtf8());
@@ -2775,6 +2868,28 @@ QString SetupDescription::fitCategoryForVersion(const QString& description, int 
         }
         category.remove(QStringLiteral("coverageV19"));
     }
+    if (categoryId == QLatin1String("pa")) {
+        category = mapCategoryControls(category, [version, holdsTransmit](QJsonObject control) {
+            const QString id = control.value(QStringLiteral("id")).toString();
+            const auto closed = paV14Controls().constFind(id);
+            if (closed == paV14Controls().constEnd()) { return control; }
+            // Before version 20 a peer keeps the closed version 14 rows.
+            if (version < 20) { return *closed; }
+            if (id != QLatin1String("pa.gain.table")) { return control; }
+            QJsonArray rows = control.value(QStringLiteral("rows")).toArray();
+            for (int i = 0; i < rows.size(); ++i) {
+                QJsonObject row = rows.at(i).toObject();
+                if (row.contains(QLatin1String(kPaHolderMayEdit))) {
+                    row.remove(QLatin1String(kPaHolderMayEdit));
+                    // The transmit holder edits its band live, as Thetis does.
+                    if (holdsTransmit) { row.remove(QStringLiteral("availability")); }
+                }
+                rows[i] = row;
+            }
+            control.insert(QStringLiteral("rows"), rows);
+            return control;
+        });
+    }
     // DSP changed at 15 and 19 (CFC's band editor): 15 to 18 see 15.
     const int ceiling = categoryId == QLatin1String("dsp") && version >= 19 ? 19
         : SetupDescriptionV15::isCategory(categoryId)
@@ -2783,7 +2898,9 @@ QString SetupDescription::fitCategoryForVersion(const QString& description, int 
         // rows) and 18 (HL2 Options' clock rows).
         : categoryId == QLatin1String("hardware") ? 18
         : categoryId == QLatin1String("transmit") ? 13
-        : categoryId == QLatin1String("pa") ? 14
+        // PA changed at 20 (PA Gain's on-the-air lock per row): 14 to 19
+        // see 14.
+        : categoryId == QLatin1String("pa") ? (version >= 20 ? 20 : 14)
         : categoryId == QLatin1String("appearance") ? 12
         : categoryId == QLatin1String("display") ? 12 : 3;
     // Appearance changed at 4, 7 and 12: versions 7-11 all see version 7.
@@ -2819,9 +2936,9 @@ QString SetupDescription::fitCategoryForVersion(const QString& description, int 
         }
         category.insert(QStringLiteral("pages"), fittedPages);
     }
-    // PA changed at 5, 13 and 14; hardware at 6, 13, 16, 17 and 18; transmit
-    // at 13; DSP, Transmit, Audio, Diagnostics and CAT & Network at 15; DSP at
-    // 19.
+    // PA changed at 5, 13, 14 and 20; hardware at 6, 13, 16, 17 and 18;
+    // transmit at 13; DSP, Transmit, Audio, Diagnostics and CAT & Network at
+    // 15; DSP at 19.
     if (version >= 2 && version < SetupDescriptionV15::kVersion
         && category.value(QStringLiteral("category")).toObject()
             .value(QStringLiteral("id")) == QJsonValue(QStringLiteral("dsp"))) {
@@ -2908,11 +3025,41 @@ void SetupDescription::rebuild()
     update(QStringLiteral("catNetwork"), m_catNetwork);
     update(QStringLiteral("test"), m_test);
     update(QStringLiteral("diagnostics"), m_diagnostics);
-    update(QStringLiteral("pa"), m_pa);
+    const QString pa = paWithOnAirState(loadCategory(QStringLiteral("pa"), m_caps, m_model,
+                                                     m_radioInfo),
+                                        m_paOnAir, m_paTransmittingBand);
+    if (pa != m_pa) {
+        m_pa = pa;
+        changed = true;
+    }
     if (changed) {
         ++m_revision;
         emit descriptionsChanged();
+        emit paDescriptionChanged();
     }
+}
+
+void SetupDescription::setPaOnAirState(bool onAir, int transmittingBand)
+{
+    const int band = onAir ? transmittingBand : -1;
+    if (onAir == m_paOnAir && band == m_paTransmittingBand) { return; }
+    m_paOnAir = onAir;
+    m_paTransmittingBand = band;
+    const QString pa = paWithOnAirState(loadCategory(QStringLiteral("pa"), m_caps, m_model,
+                                                     m_radioInfo),
+                                        m_paOnAir, m_paTransmittingBand);
+    if (pa == m_pa) { return; }
+    m_pa = pa;
+    ++m_revision;
+    emit paDescriptionChanged();
+}
+
+void SetupDescription::noteTransmitHolderChanged()
+{
+    // Off the air nothing depends on the holder.
+    if (!m_paOnAir) { return; }
+    ++m_revision;
+    emit paDescriptionChanged();
 }
 
 } // namespace NereusSDR

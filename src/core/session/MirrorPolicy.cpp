@@ -185,6 +185,11 @@
 //   2026-09-29 - transmitSettingsVersion 15: TransmitModel cfcProfile
 //                 Outbound and in featureGates. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - PA on-air gate review: TransmitModel powerByBandJson and
+//                 tunePowerByBandJson Outbound; the Core's RF and Tune
+//                 sliders own the per-band maps and a peer's write is
+//                 refused. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #include "core/session/MirrorPolicy.h"
@@ -538,8 +543,12 @@ const MirrorPolicy::Entry kEntries[] = {
     // R-R3-49 (parity Task 5, transmitSettingsVersion 5): Setup > Transmit >
     // Power's per-band power, DEXP/VOX and Test > Two-Tone IMD. None keys
     // the radio; the two-tone test itself stays in the keying set.
-    { "TransmitModel", "powerByBandJson", MirrorDirection::Bidirectional },
-    { "TransmitModel", "tunePowerByBandJson", MirrorDirection::Bidirectional },
+    // The per-band maps are the Core's own (PA on-air gate review): its RF
+    // and Tune sliders write them through `power` and tunePowerForTxBand,
+    // which pass the on-air gate. A whole-map write from a peer would skip
+    // that gate, so the Core refuses it. No Setup page writes the maps.
+    { "TransmitModel", "powerByBandJson", MirrorDirection::Outbound },
+    { "TransmitModel", "tunePowerByBandJson", MirrorDirection::Outbound },
     { "TransmitModel", "dexpAttackTimeMs", MirrorDirection::Bidirectional },
     { "TransmitModel", "dexpDetectorTauMs", MirrorDirection::Bidirectional },
     { "TransmitModel", "dexpExpansionRatioDb", MirrorDirection::Bidirectional },
@@ -1120,6 +1129,10 @@ const MirrorPolicy::Entry kEntries[] = {
     // held off (the HL2 I/O board's fault code); only to a peer that
     // declared txInhibitReason (StationServer::fitPeerOnlyProperties).
     { "RadioModel", "txInhibitReason", MirrorDirection::Outbound },
+    // PA on-air gate re-review, Important C (paTransmitBandVersion 1): the
+    // PA row the Core holds on the air, Core to window only; only to a peer
+    // that declared paTransmitBand (StationServer::fitPeerOnlyProperties).
+    { "RadioModel", "paTransmitBand", MirrorDirection::Outbound },
 
     // ---- PanadapterModel (4 entries) ----
     { "PanadapterModel", "centerFrequency", MirrorDirection::Bidirectional },
@@ -1200,6 +1213,10 @@ const QList<MirrorPolicy::FeatureGate>& MirrorPolicy::featureGates()
         // HL2 port part 2: why the Core's transmit is held off, to a peer
         // that declared txInhibitReason 1.
         {"RadioModel", "txInhibitReason", "txInhibitReason", 1},
+        // PA on-air gate re-review, Important C (paTransmitBandVersion 1):
+        // the PA row the Core holds on the air, to a peer that declared
+        // paTransmitBand 1 (StationServer::fitPeerOnlyProperties).
+        {"RadioModel", "paTransmitBand", "paTransmitBand", 1},
         // The phone's direct addresses (coreAddressesVersion 1): where a
         // device can dial this Core, to a device signed in with its own key
         // that declared coreAddresses 1 (StationServer::fitPeerOnlyProperties).

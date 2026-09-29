@@ -1,4 +1,4 @@
-# Setup description versions 1–19
+# Setup description versions 1–20
 
 The Core sends the desktop's built Setup pages as JSON strings on the read-only
 `setup` mirror object (`SetupDescription`). It has one string property per
@@ -165,8 +165,8 @@ command or result binding. The actual peer must separately declare
 nothing. A V3 peer still receives the older controls with their existing
 semantics. The Core filters every control above the peer's negotiated
 description version, drops empty sections and pages, and caps an unknown
-future declaration at version 19. PA has a version-14 ceiling (version 13
-for V13, version 5 for V5–V12) and Hardware a version-18 ceiling (version 17
+future declaration at version 20. PA has a version-20 ceiling (version 14
+for V14–V19, version 13 for V13, version 5 for V5–V12) and Hardware a version-18 ceiling (version 17
 for V17, version 16 for V16, version 13
 for V13–V15, version 6 for V6–V12; see Versions 16, 17 and 18); Display a version-12 ceiling, and
 Appearance a version-12 ceiling with its prior version-4 projection for
@@ -470,8 +470,10 @@ point: ANAN-10 class and the HL2 10 W except 11 and 12 W for points 9 and 10,
 ANAN-100 class 100 W except 110 and 120 W, ANAN-8000 class 100, 100, 100,
 120, 140, 200, 200, 200, 220 and 240 W), `step` 0.1, `decimals` 1, `unit`
 `W`, and `boardClass` (1 ANAN-10, 2 ANAN-100, 3 ANAN-8000). A model without a
-class removes the ten points. The gate is `transmitSettingsVersion:6` plus
-`offAir:true`, the desktop's own gate for this table.
+class removes the ten points. The gate is `transmitSettingsVersion:6`, the
+desktop's own gate for this table, with no `offAir`: Thetis gives the table
+no transmit rule (it corrects the forward-power reading only, and its boxes
+are read live with no MOX check).
 
 `binding.radioSetting` is new in version 13: a key under the connected
 radio. The renderer reads and writes `hardware/<MAC>/<radioSetting>` through
@@ -485,9 +487,9 @@ A point reads as its stored `calPoint<N>` while
 and as its `default` while that key is absent or `0`; another class disables
 the point with a plain reason (the table was saved for another model). An
 edit first writes `boardClass` when it is absent or `0`, then the point. The
-Core applies the table at once, and while the radio transmits it refuses the
-write and hands back its value (the settings proxy's off-air rule for these
-keys, as for the desktop's). A value outside the row's range, a
+Core takes a point on or off the air; a point written while the radio
+transmits reaches the meter once the radio is back on receive, as a remote
+desktop window's does. A value outside the row's range, a
 non-number, or a `boardClass` other than the Core's radio's is refused whole
 with the range in plain words (for example "Choose a calibration point from
 0 to 10 W."), and the Core hands back its value; nothing is clamped.
@@ -658,12 +660,19 @@ not start with "Default" or repeat one there), Copy (the active profile's
 values under a new name), Delete (never the last one; the radio's factory
 profile is then selected, as Thetis does), Reset Defaults (the active
 profile's factory values for its model), and the cell edits, each rounded
-to one decimal place and refused whole outside its column's range. Every
-verb is refused while the radio is on the air, and meets the gates the
-Core gives the desktop's own PA profile writes: a receive-only Core takes
-it from a peer offered transmit settings, and with remote transmit
-allowed only from a device that may transmit. A peer must declare
-`paProfiles:1` to get the object, the capability and the verbs.
+to one decimal place and refused whole outside its column's range. While the
+radio is on the air the Core follows Thetis: select, New, Copy, Delete,
+Reset Defaults and every other band's cells are refused ("Can't change
+while transmitting."), and the transmitting band's gain, adjusts, Max W
+and Use Max are taken live from the device that holds transmit only
+("Only the device that is transmitting can change this."); an Adjust edit
+moves the drive to that step, as `setup.cs:24212-24222 [v2.10.3.15]`
+does. Each verb also meets the gates the Core gives the desktop's own PA
+profile writes: a receive-only Core takes it from a peer offered transmit
+settings, and with remote transmit allowed only from a device that may
+transmit. A peer must declare `paProfiles:1` to get the object, the
+capability and the verbs.
+
 Version 15 describes the rest of Setup > DSP, Transmit, Audio, Diagnostics
 and CAT & Network (R-R3-49, R-IOS-18, R-IOS-27). Every new row has
 `requiresDescriptionVersion:15`. A peer that declares 15 or higher receives
@@ -1031,6 +1040,29 @@ to V18 peer receives DSP at version 15 without the row, with version 15's
 coverage text. A new transmit property (`cfcProfile`, ordinal 88), a new
 verb (`cfc.setProfile`) and `transmitSettingsVersion` 15 are defined in the
 link document; this version adds no other wire field.
+
+Version 20 publishes that on-the-air lock per control (R-R3-49, R-IOS-18).
+The table's gate becomes `{"capability":"paProfileVersion","min":1}` (no
+`offAir`; its `requiresDescriptionVersion` stays 14), and the profile
+choice and four buttons keep theirs. While the radio is on the air the
+Core adds the existing `availability` object:
+
+- the profile choice, New, Copy, Delete and Reset Defaults each carry
+  `{"enabled":false,"reason":"Can't change while transmitting."}`;
+- every table row (`{band, label}`) carries the same, except the row of
+  the band the radio transmits on. For the device that holds transmit
+  that row has no `availability` (it is live); every other peer gets
+  `{"enabled":false,"reason":"Only the device that is transmitting can
+  change this."}`. With no PA band for the transmit frequency every row
+  is locked.
+
+An absent `availability` means enabled, so off the air the rows carry
+none. A renderer disables what `availability` disables and shows its
+`reason`; it needs neither the transmit band nor the holder. Going on or
+off the air, and a change of the device holding transmit while on the
+air, advance `revision` and resend `pa` alone (`revision` and `pa` share
+their own notify). V19 and older peers keep the exact closed version-14
+rows, the table's `offAir` gate included.
 
 V4 adds `default` metadata to these exact Display and Appearance controls.
 Display toggles use JSON booleans; its numeric controls use JSON numbers,

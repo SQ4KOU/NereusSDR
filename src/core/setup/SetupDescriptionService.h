@@ -24,8 +24,10 @@ class SetupDescription final : public QObject {
     Q_PROPERTY(QString catNetwork READ catNetwork NOTIFY descriptionsChanged)
     Q_PROPERTY(QString test READ test NOTIFY descriptionsChanged)
     Q_PROPERTY(QString diagnostics READ diagnostics NOTIFY descriptionsChanged)
-    Q_PROPERTY(quint32 revision READ revision NOTIFY descriptionsChanged)
-    Q_PROPERTY(QString pa READ pa NOTIFY descriptionsChanged)
+    // Version 20: the revision and PA also change alone (the on-the-air
+    // lock), so they have their own notify and a key sends PA only.
+    Q_PROPERTY(quint32 revision READ revision NOTIFY paDescriptionChanged)
+    Q_PROPERTY(QString pa READ pa NOTIFY paDescriptionChanged)
 public:
     explicit SetupDescription(QObject* parent = nullptr);
 
@@ -67,8 +69,19 @@ public:
                                          HPSDRModel model = HPSDRModel::FIRST);
     static bool validateSettingsHygienePanel(const QJsonObject& control);
     /// Stateless per-session projection of a category string (empty if no ready pages).
+    /// Version 20: `holdsTransmit` is whether the peer holds transmit; on
+    /// the air it opens PA Gain's transmitting band for that peer alone.
     static QString fitCategoryForVersion(const QString& description, int version,
-                                         bool antennaRowsAvailable = true);
+                                         bool antennaRowsAvailable = true,
+                                         bool holdsTransmit = false);
+    /// Version 20 (R-R3-49, JJ's ruling: follow Thetis): the Core is on the
+    /// air (isCoreOnAir) and the PA band it transmits on
+    /// (RadioModel::paOnAirBandIndex, -1 for none). PA Gain's rows then
+    /// carry their lock and its reason.
+    void setPaOnAirState(bool onAir, int transmittingBand);
+    /// The device that holds transmit changed: on the air PA is sent again
+    /// so each peer's projection opens or locks the transmitting band.
+    void noteTransmitHolderChanged();
     void setBoardCapabilities(const BoardCapabilities& caps);
     void setRadioContext(const BoardCapabilities& caps, HPSDRModel model);
     /// Version 13: also the radio Radio Info describes (its name, protocol,
@@ -90,12 +103,17 @@ public:
 
 signals:
     void descriptionsChanged();
+    /// PA and the revision (version 20). Emitted with descriptionsChanged
+    /// on a rebuild, and alone for the on-the-air lock.
+    void paDescriptionChanged();
 
 private:
     void rebuild();
     BoardCapabilities m_caps{};
     HPSDRModel m_model = HPSDRModel::FIRST;
     RadioInfo m_radioInfo{};
+    bool m_paOnAir = false;
+    int m_paTransmittingBand = -1;
     quint32 m_revision = 0;
     QString m_general;
     QString m_hardware;

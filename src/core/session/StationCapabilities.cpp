@@ -451,6 +451,11 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
         if (txInhibitReasonVersion > 0) {
             updates.append(intEntry("txInhibitReasonVersion", txInhibitReasonVersion));
         }
+        // PA on-air gate re-review: radio's paTransmitBand, only for a peer
+        // that declared paTransmitBand.
+        if (paTransmitBandVersion > 0) {
+            updates.append(intEntry("paTransmitBandVersion", paTransmitBandVersion));
+        }
     }
     if (coreBuildInfo) {
         const QByteArray json = coreBuildInfo->toJson();
@@ -692,7 +697,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                    || u.name == "adcAttenuatorVersion"
                    || u.name == "paProfileVersion"
                    || u.name == "radeStatusVersion"
-                   || u.name == "txInhibitReasonVersion") {
+                   || u.name == "txInhibitReasonVersion"
+                   || u.name == "paTransmitBandVersion") {
             // R-R3-47 / R-R3-22 / R-R3-48: sent in the same block as the
             // four above.
             caps.radioIdentityEntries = true;
@@ -724,6 +730,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                     caps.logCategoryListVersion = version;
                 } else if (u.name == "radeStatusVersion") {
                     caps.radeStatusVersion = version;
+                } else if (u.name == "paTransmitBandVersion") {
+                    caps.paTransmitBandVersion = version;
                 } else if (u.name == "radioModelsVersion") {
                     caps.radioModelsEntry = true;
                     caps.radioModelsVersion = version;

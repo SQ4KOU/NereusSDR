@@ -43,6 +43,10 @@
 //                                    applets' settings are taken on the
 //                                    air; Tune Power is the holder's. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  PA on-air gate review: the per-band
+//                                    power maps are the Core's own and
+//                                    refuse a peer's write.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -256,6 +260,7 @@ private slots:
     void tunePowerCommandSetsTheTxBandAndSource();
     void tunePowerCommandRefusals();
     void coreBandChangeMovesTheTunePowerSlider();
+    void firstKnownTransmitBandRepaintsTheTuneSlider();
     void remoteTxAppletControlsReachTheCore();
     void remotePhoneCwControlsReachTheCore();
     void containerMonButtonTogglesTheCoresMon();
@@ -456,7 +461,11 @@ void TstTransmitModelProperties::task5PropertiesAreOnTheLinkUnderTheirGetters()
         QVERIFY2(prop, e.name);
         QCOMPARE(prop->kind, e.kind);
         QCOMPARE(prop->ordinal, ++ordinal);
-        QVERIFY2(MirrorPolicy::inboundAllowed("TransmitModel", e.name), e.name);
+        // The per-band power maps are the Core's own (PA on-air gate
+        // review): the Core refuses a peer's write of either.
+        const bool coreOwned = qstrcmp(e.name, "powerByBandJson") == 0
+                               || qstrcmp(e.name, "tunePowerByBandJson") == 0;
+        QCOMPARE(MirrorPolicy::inboundAllowed("TransmitModel", e.name), !coreOwned);
         QVERIFY(prop->isWritable);
     }
     // swrProtectFactor is the Core's runtime foldback (Thetis
@@ -893,6 +902,34 @@ void TstTransmitModelProperties::coreBandChangeMovesTheTunePowerSlider()
     QCOMPARE(coreTx.tunePowerForBand(Band::Band40m), 31);
     s.unkeyCore();
     QTRY_VERIFY(s.core->moxController()->state() == MoxState::Rx);
+}
+
+// PA on-air gate re-review, Minor: the first transmit band a local window
+// learns repaints the Tune Power slider with that band's tune power, even
+// when that value equals the one cached before the band was known.
+void TstTransmitModelProperties::firstKnownTransmitBandRepaintsTheTuneSlider()
+{
+    RadioModel model;
+    TransmitModel& tx = model.transmitModel();
+    tx.setTunePowerForBand(Band::Band40m, 30);
+    QCOMPARE(tx.tunePowerForBand(Band::Band20m), 50);
+    QVERIFY(!tx.tuneTxBandKnown());
+
+    TxApplet applet(&model);
+    applet.setCurrentBand(Band::Band40m);
+    QSlider* const slider = applet.tunePowerSlider();
+    QVERIFY(slider);
+    QCOMPARE(slider->value(), 30);
+
+    QSignalSpy shown(&tx, &TransmitModel::tunePowerForTxBandChanged);
+    tx.setTuneTxBand(Band::Band20m);
+    QCOMPARE(shown.count(), 1);
+    QCOMPARE(shown.at(0).at(0).toInt(), 50);
+    QCOMPARE(slider->value(), 50);
+
+    // Setting the same band again is not a change.
+    tx.setTuneTxBand(Band::Band20m);
+    QCOMPARE(shown.count(), 1);
 }
 
 void TstTransmitModelProperties::remoteTxAppletControlsReachTheCore()

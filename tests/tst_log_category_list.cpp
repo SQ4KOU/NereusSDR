@@ -63,11 +63,12 @@ private slots:
         QVERIFY(meta.property(index).isConstant());
         // Appended after every earlier property, so each keeps its wire
         // ordinal; it keeps its own (27) as later properties (txInhibitReason,
-        // then alexLpfBits) append after it.
+        // alexLpfBits, then paTransmitBand) append after it.
         QCOMPARE(index - meta.propertyOffset(), 27);
         QCOMPARE(meta.indexOfProperty("txInhibitReason"), index + 1);
         QCOMPARE(meta.indexOfProperty("alexLpfBits"), index + 2);
-        QCOMPARE(index, meta.propertyCount() - 3);
+        QCOMPARE(meta.indexOfProperty("paTransmitBand"), index + 3);
+        QCOMPARE(index, meta.propertyCount() - 4);
         RadioModel model;
         QCOMPARE(model.logCategoryList(), LogManager::instance().categoryListJson());
     }

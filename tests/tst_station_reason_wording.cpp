@@ -180,6 +180,9 @@
 //   2026-09-29  J.J. Boyd / KG4VCF  cfc.setProfile's refusals scanned
 //                                    (transmitSettingsVersion 15).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  The PA on-air gate's refusals scanned
+//                                    (Setup description version 20).
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-29  J.J. Boyd / KG4VCF  JJ's rule: a reason that says "yet"
 //                                    fails (it promises a future).
 //                                    AI-assisted via Anthropic Claude Code.
@@ -830,6 +833,10 @@ const QList<ReasonSource>& reasonSources()
           // words in StationServer.cpp, each scanned.
           QStringLiteral("transmitGateSettingRefusal(transport, key, &value)"),
           QStringLiteral("transmitGateSettingRefusal(transport, key, nullptr)"),
+          // R-R3-49 / R-IOS-27: a PA key's on-air refusal
+          // (paSettingOnAirRefusalFor), RadioModel::paSettingOnAirRefusal's
+          // words, scanned in RadioModel.cpp's entry.
+          QStringLiteral("pa"),
           // Desktop remote transmit: the same sentences, sent with
           // txPermitted in capabilities (txRefusalReason) and remembered.
           QStringLiteral("txRefusalOf(caps)"),
@@ -1370,7 +1377,13 @@ const QList<ReasonSource>& reasonSources()
           // board fault's reason, which txInhibitReason sends and the
           // desktop's transmit block shows.
           QStringLiteral("ioBoardFaultReason"), QStringLiteral("refreshTxInhibitReason"),
-          QStringLiteral("txInhibitReason")},
+          QStringLiteral("txInhibitReason"),
+          // R-R3-49 / R-IOS-27 (Setup description version 20): the PA
+          // on-air gate's refusals, for the paProfile verbs and a window's
+          // raw PA keys.
+          QStringLiteral("paOnAirLockedReason"), QStringLiteral("paHolderOnlyReason"),
+          QStringLiteral("paOnAirEditRefusal"), QStringLiteral("paValueRangeRefusal"),
+          QStringLiteral("paRowRangeRefusal"), QStringLiteral("paSettingOnAirRefusal")},
          {// This app's own branch in a remote window (role Remote), shown
           // through OperatorReasonText; never sent by the Core.
           "There is no station session."},
@@ -1420,7 +1433,17 @@ const QList<ReasonSource>& reasonSources()
                          "safety::TxInhibitMonitor::Source::IoBoardFault ? "
                          "ioBoardFaultReason(m_txInhibit.ioBoardFaultCode()) : QString()"),
           QStringLiteral("reason"), QStringLiteral("m_txInhibitReason"),
-          QStringLiteral("value.toString()")}},
+          QStringLiteral("value.toString()"),
+          // R-R3-49 / R-IOS-27: the PA on-air gate. paOnAirLockedReason,
+          // paHolderOnlyReason, paOnAirEditRefusal, paValueRangeRefusal
+          // and paRowRangeRefusal are functions of this file scanned here;
+          // each expression below passes one of their results on.
+          QStringLiteral("paOnAirEditRefusal(profileAction, request.band, "
+                         "request.requesterHoldsTransmit)"),
+          QStringLiteral("paOnAirEditRefusal(false, txBand, requesterHoldsTransmit)"),
+          QStringLiteral("refusal"),
+          QStringLiteral("paValueRangeRefusal(request.action, request.value)"),
+          QStringLiteral("rangeRefusal")}},
         // iPhone app plan Task 25 (R-IOS-18): a `vax` level outside 0 to 1,
         // in property.result.
         {"src/core/session/StationVaxFacade.cpp", {QStringLiteral("levelRefusal")}, {}, 1},

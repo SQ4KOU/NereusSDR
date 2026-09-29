@@ -1096,12 +1096,16 @@ private slots:
                 {"binding", QJsonObject{{"radioSetting",
                                          QStringLiteral("paCalibration/calPoint%1").arg(n)}}},
                 {"applies", "live"},
-                {"gate", QJsonObject{{"capability", "transmitSettingsVersion"}, {"min", 6},
-                                     {"offAir", true}}},
+                {"gate", QJsonObject{{"capability", "transmitSettingsVersion"}, {"min", 6}}},
                 {"requiresDescriptionVersion", 13}, {"unit", "W"},
                 {"min", 0}, {"max", maxima[i]}, {"step", 0.1}, {"decimals", 1},
                 {"default", n * 10.0}, {"boardClass", int(PaCalBoardClass::Anan100)}}));
             QVERIFY(!point.value("gate").toObject().contains("transmit"));
+            // Thetis gives the table no transmit rule (grp10WattMeterTrim's
+            // boxes have no MOX check; the table corrects the forward-power
+            // reading only), and the Core takes a point on the air, so the
+            // gate carries no offAir.
+            QVERIFY(!point.value("gate").toObject().contains("offAir"));
         }
         const QJsonArray local = wattSections.at(1).toObject().value("controls").toArray();
         QCOMPARE(local.size(), 2);
@@ -1273,6 +1277,117 @@ private slots:
         const QJsonArray g2eV13 = rowsOf(pageById(projectedCategory(service.pa(), 13), "pa.gain"));
         QCOMPARE(g2eV13.size(), 1);
         QCOMPARE(g2eV13.first().toObject().value("id"), QJsonValue("pa.gain.bypassPaSettings"));
+    }
+
+    // Version 20 (R-R3-49, R-IOS-18, JJ's ruling: follow Thetis): on the
+    // air PA Gain publishes which rows are locked, with the reason, through
+    // the rows' `availability`. The profile choice and its buttons and
+    // every band but the transmitting one are locked; the transmitting band
+    // opens only for the device that holds transmit. Version 19 and older
+    // keep the exact closed rows.
+    void paV20PublishesTheOnAirLockPerRow()
+    {
+        RadioModel radio;
+        radio.setHpsdrModelForTest(HPSDRModel::ANAN_G2);
+        SetupDescriptionService service;
+        service.setRadioContext(radio.boardCapabilities(), radio.hardwareProfile().model);
+        const QJsonObject locked{{"enabled", false},
+                                 {"reason", RadioModel::paOnAirLockedReason()}};
+        const QJsonObject holderOnly{{"enabled", false},
+                                     {"reason", RadioModel::paHolderOnlyReason()}};
+        const auto gainRows = [](const QString& pa, int version, bool holds) {
+            return rowsOf(pageById(QJsonDocument::fromJson(
+                SetupDescriptionService::fitCategoryForVersion(pa, version, true, holds)
+                    .toUtf8()).object(), "pa.gain"));
+        };
+
+        // Off the air: nothing is locked; the table's gate has no off-air
+        // part (the rows carry the lock instead).
+        const QJsonObject offAir = projectedCategory(service.pa(), 20);
+        QCOMPARE(offAir.value("version"), QJsonValue(20));
+        QJsonArray rows = gainRows(service.pa(), 20, false);
+        QCOMPARE(rows.size(), 6);
+        for (const QJsonValue& raw : rows) {
+            const QJsonObject control = raw.toObject();
+            QVERIFY(!control.contains("availability"));
+            QCOMPARE(control.value("requiresDescriptionVersion"), QJsonValue(14));
+            if (control.value("kind") == QJsonValue("table")) {
+                QCOMPARE(control.value("gate"), QJsonValue(QJsonObject{
+                    {"capability", "paProfileVersion"}, {"min", 1}}));
+                for (const QJsonValue& row : control.value("rows").toArray()) {
+                    QVERIFY(!row.toObject().contains("availability"));
+                }
+            } else {
+                QCOMPARE(control.value("gate"), QJsonValue(QJsonObject{
+                    {"capability", "paProfileVersion"}, {"min", 1}, {"offAir", true}}));
+            }
+        }
+
+        // On the air on 20 m (Band 5).
+        const quint32 before = service.revision();
+        QSignalSpy paSpy(&service, &SetupDescriptionService::paDescriptionChanged);
+        QSignalSpy allSpy(&service, &SetupDescriptionService::descriptionsChanged);
+        service.setPaOnAirState(true, 5);
+        QCOMPARE(paSpy.count(), 1);
+        QCOMPARE(allSpy.count(), 0);   // only PA is sent again
+        QVERIFY(service.revision() > before);
+        for (const bool holds : {false, true}) {
+            rows = gainRows(service.pa(), 20, holds);
+            QCOMPARE(rows.size(), 6);
+            for (int i = 0; i < 5; ++i) {
+                QCOMPARE(rows.at(i).toObject().value("availability"), QJsonValue(locked));
+            }
+            const QJsonArray bands = rows.last().toObject().value("rows").toArray();
+            QCOMPARE(bands.size(), 14);
+            for (const QJsonValue& raw : bands) {
+                const QJsonObject row = raw.toObject();
+                QCOMPARE(row.keys().contains("holderMayEdit"), false);
+                if (row.value("band") != QJsonValue(5)) {
+                    QCOMPARE(row.value("availability"), QJsonValue(locked));
+                } else if (holds) {
+                    QVERIFY(!row.contains("availability"));
+                } else {
+                    QCOMPARE(row.value("availability"), QJsonValue(holderOnly));
+                }
+            }
+        }
+        // Version 19 and older: the exact closed rows, as off the air.
+        for (const bool holds : {false, true}) {
+            for (const QJsonValue& raw : gainRows(service.pa(), 19, holds)) {
+                QVERIFY(SetupDescriptionService::validatePaV14Control(raw.toObject()));
+            }
+        }
+        QVERIFY(!SetupDescriptionService::fitCategoryForVersion(service.pa(), 19)
+                     .contains("availability"));
+
+        // A band with no PA values (-1): every band is locked.
+        service.setPaOnAirState(true, -1);
+        for (const QJsonValue& raw : gainRows(service.pa(), 20, true).last().toObject()
+                                         .value("rows").toArray()) {
+            QCOMPARE(raw.toObject().value("availability"), QJsonValue(locked));
+        }
+        service.setPaOnAirState(true, 5);
+
+        // A change of holder on the air sends PA again (each peer's
+        // projection resolves the transmitting band's row); off the air it
+        // changes nothing.
+        paSpy.clear();
+        const quint32 onAirRevision = service.revision();
+        service.noteTransmitHolderChanged();
+        QCOMPARE(paSpy.count(), 1);
+        QVERIFY(service.revision() > onAirRevision);
+        service.setPaOnAirState(false, -1);
+        QCOMPARE(paSpy.count(), 2);
+        for (const QJsonValue& raw : gainRows(service.pa(), 20, false)) {
+            QVERIFY(!QJsonDocument(raw.toObject()).toJson().contains("availability"));
+        }
+        const quint32 offRevision = service.revision();
+        service.noteTransmitHolderChanged();
+        QCOMPARE(paSpy.count(), 2);
+        QCOMPARE(service.revision(), offRevision);
+        // The same state again sends nothing.
+        service.setPaOnAirState(false, -1);
+        QCOMPARE(paSpy.count(), 2);
     }
 
     // Version 13: Hardware Config's Radio Info (the Core's radio, as the
@@ -3023,7 +3138,7 @@ private slots:
             QVERIFY(!pa.isEmpty());
             const QJsonObject paObject = QJsonDocument::fromJson(pa.toUtf8()).object();
             QCOMPARE(paObject.value("version").toInt(),
-                     expected >= 14 ? 14 : expected >= 13 ? 13 : qMin(expected, 5));
+                     expected >= 20 ? 20 : expected >= 14 ? 14 : expected >= 13 ? 13 : qMin(expected, 5));
             QCOMPARE(paObject.value("pages").toArray().size(), expected >= 13 ? 3 : 2);
             for (const QJsonValue& page : paObject.value("pages").toArray()) {
                 for (const QJsonValue& section : page.toObject().value("sections").toArray()) {
@@ -3096,7 +3211,8 @@ private slots:
         check(17, kSessionProtocolMinor, 17);
         check(18, kSessionProtocolMinor, 18);
         check(19, kSessionProtocolMinor, 19);
-        check(20, kSessionProtocolMinor, 19);
+        check(20, kSessionProtocolMinor, 20);
+        check(21, kSessionProtocolMinor, 20);
         check(2, quint16(kRadioIdentitySessionProtocolMinor - 1), 0);
         check(3, quint16(kRadioIdentitySessionProtocolMinor - 1), 0);
     }

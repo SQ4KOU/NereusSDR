@@ -12,6 +12,11 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29  J.J. Boyd / KG4VCF  PA on-air gate re-review: the capture
+//                                    declares paTransmitBand, so
+//                                    paTransmitBandVersion and radio's
+//                                    paTransmitBand are captured.
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-29  J.J. Boyd / KG4VCF  RADE status: the capture declares
 //                                    radeStatus, so radeStatusVersion and
 //                                    the slice's radeSynced and
@@ -632,7 +637,10 @@ std::optional<QList<QByteArray>> liveSessionWire(
                                   {"radeStatus", 1},
                                   // The Alex-1 low-pass in use: radio's
                                   // alexLpfBits.
-                                  {"alexLpf", 1}})));
+                                  {"alexLpf", 1},
+                                  // PA on-air gate re-review: radio's
+                                  // paTransmitBand.
+                                  {"paTransmitBand", 1}})));
     clientEnd->sendText(SessionMessages::encode(SessionMessages::authRequest({}, block)));
 
     // The loopback delivers on later event-loop turns, as a socket would.
@@ -698,6 +706,8 @@ QJsonArray captureCapabilities()
     caps.radeStatusVersion = 1;
     // HL2 port part 2: sent to a peer that declared txInhibitReason.
     caps.txInhibitReasonVersion = 1;
+    // PA on-air gate re-review: sent to a peer that declared paTransmitBand.
+    caps.paTransmitBandVersion = 1;
 
     // The values come from a live station with every feature a Core can
     // switch on: media, telemetry, an enforced display budget with its

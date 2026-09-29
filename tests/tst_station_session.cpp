@@ -1384,9 +1384,10 @@ void TstStationSession::featureGatesNameRealProperties()
 
 // The Core leaves a feature-gated property (MirrorPolicy::featureGates) out
 // for a window whose hello did not declare its feature. The desktop remote
-// window declares only radeStatus and txInhibitReason of them, so its
-// schema comparison must not count the other absences as skew: after the
-// whole snapshot it logs no schema skew and both skew sets are empty.
+// window declares only radeStatus, txInhibitReason, alexLpf and
+// paTransmitBand of them, so its schema comparison must not count the other
+// absences as skew: after the whole snapshot it logs no schema skew and both
+// skew sets are empty.
 void TstStationSession::remoteWindowSeesNoSchemaSkewFromTheCurrentCore()
 {
     QTemporaryDir settingsDir;
@@ -1416,10 +1417,11 @@ void TstStationSession::remoteWindowSeesNoSchemaSkewFromTheCurrentCore()
     // the gate rather than passing vacuously. The gated features it
     // declares (radeStatus: its VFO flag's RADE row; txInhibitReason: why
     // the Core's transmit is held; alexLpf: the Alex-1 tab's low-pass
-    // lamps) arrive.
+    // lamps; paTransmitBand: the PA row the Core holds on the air) arrive.
     const QSet<QByteArray> declaredGatedFeatures{QByteArrayLiteral("radeStatus"),
                                                  QByteArrayLiteral("txInhibitReason"),
-                                                 QByteArrayLiteral("alexLpf")};
+                                                 QByteArrayLiteral("alexLpf"),
+                                                 QByteArrayLiteral("paTransmitBand")};
     QSet<QByteArray> arrivedGatedFeatures;
     bool sawTransmitSchema = false;
     for (const QByteArray& wire : peer->received()) {

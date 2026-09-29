@@ -417,6 +417,20 @@
 //                 while the I2C tool waits on a read (mi0bot
 //                 SetI2CPollingPause [@c26a8a4]). J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - PA on-air gate re-review, item 5: TUNE-on drive, the
+//                 first-MOX seed (seedInitialAudioVolume) and the two-tone
+//                 start read the held transmit band (driveTxBand), as
+//                 Thetis reads _tx_band. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
+//   2026-09-29 - PA on-air gate re-review: paTransmitBand, the PA row the
+//                 Core holds on the air (paTransmitBandVersion 1), so a
+//                 remote window opens and locks the Core's row. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - PA on-air gate review: paOnAirBandIndex is the transmit
+//                 band (driveTxBand), held while keyed as Thetis's
+//                 _adjustingBand is; transmitBandChanged tells the PA page
+//                 and the station's PA publish. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -768,6 +782,13 @@ class RadioModel : public QObject {
     // to a peer that declared alexLpf. Declared after txInhibitReason so
     // every earlier property keeps its wire ordinal.
     Q_PROPERTY(int alexLpfBits READ alexLpfBits NOTIFY alexLpfBitsChanged)
+    // PA on-air gate re-review, Important C (paTransmitBandVersion 1): the
+    // PA row the Core holds on the air (paOnAirBandIndex, Thetis
+    // _adjustingBand), -1 when its transmit band has no PA values. Core to
+    // window only, and only to a peer that declared paTransmitBand; a
+    // window opens and locks this row, not its own slice's. Declared last
+    // so every earlier property keeps its wire ordinal.
+    Q_PROPERTY(int paTransmitBand READ paTransmitBand NOTIFY paTransmitBandChanged)
 
 
 public:
@@ -2760,6 +2781,43 @@ public:
     bool stationOnAirRefusal(QString* reason) const;
     // The sentence stationOnAirRefusal gives, for a window's own gate.
     static QString onAirReason();
+    // R-R3-49 / R-IOS-27 (JJ's ruling, follow Thetis): the PA Gain page's
+    // on-the-air lock (Thetis OnMoxChangeHandler, setup.cs:23826-23834
+    // [v2.10.3.15]). While the radio is on the air only the transmitting
+    // band's gain, drive-step adjust, max power and use-max change, and
+    // only from the device that holds transmit.
+    static QString paOnAirLockedReason();   // "Can't change while transmitting."
+    static QString paHolderOnlyReason();    // "Only the device that is transmitting ..."
+    // The PA band the radio transmits on (Thetis _adjustingBand): the
+    // transmit slice's band, else the last band, when it is 160 m..6 m or
+    // XVTR; -1 when that band has no PA values. A remote window whose Core
+    // sends paTransmitBand takes the Core's row.
+    int paOnAirBandIndex() const;
+    // The paTransmitBand property: paOnAirBandIndex().
+    int paTransmitBand() const;
+    // True while the PA Gain page's on-the-air lock holds: MOX (the
+    // controller's or the transmit model's), TUNE or the two-tone test.
+    // Unlike stationOnAirRefusal it ends when MOX drops, not after the
+    // controller's TX to RX handover: Thetis gates these edits on
+    // console.MOX alone (setup.cs:24210-24222 [v2.10.3.15]).
+    bool paOnAirNow() const;
+    // Why an on-the-air PA edit is refused, or empty when it is taken (and
+    // empty off the air). `profileAction`: select, new, copy, delete or
+    // reset. `band`: the PA row the edit changes. `requesterHoldsTransmit`:
+    // the device asking holds transmit.
+    QString paOnAirEditRefusal(bool profileAction, int band, bool requesterHoldsTransmit) const;
+    // The same rule for a window's raw PA profile keys
+    // (hardware/<mac>/pa/profile/...): on the air only a change to the
+    // active profile's transmitting band, from the device that holds
+    // transmit, is taken; the list, the active name, another profile, a
+    // remove (`value` null) and any other band are refused. Empty off the
+    // air and for every other key.
+    QString paSettingOnAirRefusal(const QString& key, const QString* value,
+                                  bool requesterHoldsTransmit) const;
+    // After such a change was stored: the Core's bank takes it at once and
+    // the drive follows it, as applyPaEditOnAir does for the verbs. Off the
+    // air (and for any other key) it does nothing: the PA reload does it.
+    void applyPaSettingOnAir(const QString& key, const QString& value);
     // iPhone app plan Task 77 fix round 3: the Power Genius's OPERATE and
     // STANDBY also wait while a Tuner Genius cycle runs (the Core's own
     // cycle, from its standby wait to its restore, or the tuner reporting
@@ -2807,7 +2865,8 @@ public:
     bool isCoreOnAir() const;
     // R-R3-49: the window's copy of the Core's `transmitting` goes back to
     // false when the session ends, so a Core that does not send it never
-    // inherits an old "on the air".
+    // inherits an old "on the air". Its TX inhibit and paTransmitBand go
+    // with it.
     void clearRemoteTransmittingState();
 
     // Phase 3F Sub-Epic C: TX-slice arbiter (single-TX invariant + RF-safe
@@ -3541,8 +3600,15 @@ public:
         int step = -1;     // drive step 0 (10%) .. 8 (90%)
         double value = 0.0;
         bool on = false;
+        // The device asking holds transmit (paOnAirEditRefusal).
+        bool requesterHoldsTransmit = false;
     };
     bool paProfileActionForStation(const PaProfileRequest& request, QString* reason);
+    // R-R3-49 / R-IOS-27: after a PA edit taken on the air, what Thetis
+    // does: a gain re-applies the drive; an adjust moves the drive (or the
+    // tune power) to the step being adjusted (setup.cs:24210-24222
+    // [v2.10.3.15]). Max power and use-max: nothing more.
+    void applyPaEditOnAir(PaProfileAction action, int step);
     // R-R3-49 (parity Task 3): the RADE applet's Reset vocoder. Clears the
     // RADE transmit vocoder of the active slice's RADE channel
     // (RadeChannel::resetTx), as the local button does. Keys nothing.
@@ -3952,6 +4018,9 @@ public:
     // directly after setting the connection state via
     // setConnectionStateForTest + setLastRadioInfoForTest.
     void applyPeripheralsForTest() { applyPeripheralsForCurrentMac(); }
+    // The first-MOX audioVolume seed, which connectToRadio runs only with a
+    // live WDSP TxChannel.
+    void seedInitialAudioVolumeForTest() { seedInitialAudioVolume(); }
     void teardownPeripheralsForTest() { teardownPeripherals(); }
     // R-R3-22: the FlexRadio beacon as connectToRadio leaves it, in a mode
     // that sends nothing (FlexRadioDiscoveryBroadcaster::setNoSendForTesting),
@@ -5134,8 +5203,14 @@ signals:
     void endOfOverTailChanged(bool active);
     // R-R3-49 (parity Task 1): isCoreOnAir() changed.
     void coreOnAirChanged(bool onAir);
+    // R-R3-49: the Core's transmit band (Thetis _tx_band, m_txBand) changed
+    // or became known or unknown. It holds while keyed, so paOnAirBandIndex
+    // follows this, not a slice's band.
+    void transmitBandChanged();
     // R-R3-32 (parity Task 6): paReadings() changed.
     void paReadingsChanged();
+    // paTransmitBand() changed (paTransmitBandVersion 1).
+    void paTransmitBandChanged(int band);
     // Parity Task 33: paRawAdc() changed.
     void paRawAdcChanged();
     // Parity Task 33: stationTxReadingsVersion() changed.
@@ -5551,6 +5626,19 @@ private slots:
     /// powers at or below 51 and carries the level in the post-gen tone
     /// magnitude instead, so a TUNE silences every following SSB transmit.
     void restoreNormalTxDrive();
+    /// Thetis ptbPWR_Scroll's power path (console.cs:28682-28692
+    /// [v2.10.3.15]): SetPowerUsingTargetDBM with bFromTune=false and no
+    /// TUNE or two-tone guard, so the transmit model's own tx mode picks
+    /// the tune or two-tone drive source while either runs. The drive half
+    /// of drivePowerScroll.
+    void applyDriveSliderPower();
+    /// All of Thetis ptbPWR_Scroll (console.cs:28682-28693 [v2.10.3.15]):
+    /// applyDriveSliderPower, then the per-band save
+    /// `power_by_band[(int)_tx_band] = ptbPWR.Value;` in every tx mode and
+    /// with or without a radio. The PWR setter (console.cs:18437-18448) runs
+    /// it, so TransmitModel::powerChanged does too. Only a model that owns
+    /// its radio saves; a remote window gets the Core's saved values.
+    void drivePowerScroll();
 
     // ── Phase 3J-2 H2: per-source spot-adapter slots ────────────────────────
     //
@@ -5639,6 +5727,20 @@ private:
     // R-R3-49 (parity Task 2): the transmit band for tunePowerForTxBand,
     // and the Core's transmit chain wiring (moved from connectToRadio()).
     void refreshTransmitTuneBand();
+    // The transmit slice's band, else m_lastBand: the band refreshTransmitTuneBand
+    // hands the TUNE path and applyTransmitBand.
+    Band transmitSliceBand() const;
+    // Port of Thetis's TXBand setter (console.cs:17511-17545 [v2.10.3.15]):
+    // on a transmit band change, saves PWR into the old band's slot and
+    // loads the new band's stored power into PWR. `initializing` is the
+    // connect-time call after the per-band store loads. Local role only.
+    void applyTransmitBand(Band band, bool initializing);
+    // m_txBand once known, else transmitSliceBand(): the band the drive math
+    // reads and saves PWR to (Thetis _tx_band).
+    Band driveTxBand() const;
+    // The first-MOX audioVolume seed: PWR's drive, pushed once the TxChannel
+    // exists so the first key is not silent (txSetup in connectToRadio).
+    void seedInitialAudioVolume();
     // R-R3-49 (parity Task 3): the Core's MicProfileManager's active profile
     // and list onto `transmit` (activeTxProfile, txProfilesJson).
     void publishTxProfiles();
@@ -6955,6 +7057,11 @@ private:
     // press, not via VFO tune, so this lambda only tracks; it does NOT
     // save or restore at the boundary.
     Band m_lastBand{Band::Band20m};
+    // Thetis's _tx_band (console.cs:17511 [v2.10.3.15]): the band PWR was
+    // last loaded for, which drivePowerScroll saves to. Unknown until
+    // applyTransmitBand first runs.
+    Band m_txBand{Band::Band20m};
+    bool m_txBandKnown{false};
     /// iPhone app Task 75 (ruling 5.11a): the band whose receive antenna the
     /// relay keeps while another device listens through it; empty when the
     /// relay follows m_lastBand as always.
@@ -7089,11 +7196,17 @@ private:
     // m_savedPowerPct: power slider value (0-100) before the tune-power push.
     //   Cite: Thetis console.cs:30033 [v2.10.3.13] — PreviousPWR = ptbPWR.Value.
     //   //MW0LGE_22b  [original inline comment from console.cs:30033]
-    //   Restored to the connection on TUN-off so the slider snaps back.
+    //   Saved and restored only under the FIXED tune source
+    //   (console.cs:30094-30104 and 30180-30185 [v2.10.3.15]); see
+    //   m_tuneSetFixedPwr.
     // Default 100 matches TransmitModel::m_power default (TransmitModel.h).
     // G.4 fixup: changed from 50 (initial value mismatch with TransmitModel);
     // harmless after the cold-off guard in setTune(false) but kept for hygiene.
     int m_savedPowerPct{100};
+    // m_tuneSetFixedPwr: TUN-on took the FIXED branch (PWR limit off, PWR set
+    //   to the tune power), so TUN-off turns the limit back on and restores
+    //   m_savedPowerPct. Cleared by that restore.
+    bool m_tuneSetFixedPwr{false};
     //
     // m_isTuning: True while TUN is engaged (between setTune(true) and
     //   setTune(false)).  Used as the idempotent guard at the top of
@@ -7769,6 +7882,14 @@ private:
     QString m_txInhibitReason;
     void refreshTxInhibitReason();
     static QString ioBoardFaultReason(quint8 code);
+    // On the Core: emit paTransmitBandChanged when paOnAirBandIndex moved.
+    void announcePaTransmitBand();
+    // PA on-air gate re-review, Important C: the Core's paTransmitBand as a
+    // remote window last heard it, and whether it has (an older Core never
+    // sends it). On the Core, the value last announced.
+    int m_stationPaTransmitBand{-1};
+    bool m_stationPaTransmitBandKnown{false};
+    int m_announcedPaTransmitBand{-2};
     // Remote-window parity Task 16: the Core's dspInfoVersion and
     // dspAssetVersion as a remote window last heard them; the last DSP
     // Options apply time; the filter curve.

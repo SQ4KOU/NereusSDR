@@ -369,10 +369,10 @@ public slots:
                                    const QString& unavailableReason = QString());
     static QString monitorOutputUnavailableReason();
     // R-R3-49 (group A fix wave, M3): whether an RF Power move also writes
-    // the per-band power and the tune drive source (powerByBandJson and
-    // tuneDrivePowerSource on the link), which a Core takes from
-    // transmitSettingsVersion 5. MainWindow supplies false for an older
-    // Core, which would refuse them on every move. Always true locally.
+    // the tune drive source (tuneDrivePowerSource on the link), which a Core
+    // takes from transmitSettingsVersion 5. MainWindow supplies false for an
+    // older Core, which would refuse it on every move. Always true locally.
+    // The per-band power is never written from a window: the Core owns it.
     void setPowerByBandPermitted(bool permitted) { m_powerByBandPermitted = permitted; }
     // R-R3-49 (parity Task 4): the CFC dialog (transmitSettingsVersion 4).
     // The EQ and CFC right-clicks open their dialogs in any window; this

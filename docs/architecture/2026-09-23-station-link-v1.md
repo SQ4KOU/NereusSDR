@@ -829,6 +829,17 @@ exactly the wire it was built for, without it. The station does not
 declare it. The desktop's remote window declares it: its lamps show the
 Core's low-pass.
 
+**`paTransmitBand` 1** (R-R3-49, the PA on-the-air lock): the client
+opens and locks the PA gain row the Core holds on the air. A peer that
+declares it at minor 11 is sent `paTransmitBandVersion` (section 6.3) and
+`radio`'s `paTransmitBand` (section 7.1); a peer that does not sees
+exactly the wire it was built for, with neither. The station does not
+declare it. The desktop's remote window declares it too: while the Core
+is on the air its PA Gain page opens the Core's held band and locks the
+rest, as a local window's does, even when the transmit slice is retuned
+to another band while keyed. On a Core that sends neither, the window
+opens the row for its own transmit slice's band, as before.
+
 **`txEqCurve` 2** (R-IOS-13, R-R3-49): the client also changes the curve,
 with `txEq.setCurve` and `txEq.resetCurve` (section 9.1). A peer that
 declares it at minor 11 is sent `txEqCurveVersion` 2 and `transmit`'s
@@ -1049,6 +1060,7 @@ change shows as surface drift and as a change to this table.
 | `paProfileVersion` | 1 |
 | `radeStatusVersion` | 1 |
 | `txInhibitReasonVersion` | 1 |
+| `paTransmitBandVersion` | 1 |
 
 <!-- /surface -->
 
@@ -1345,6 +1357,14 @@ When a feature is off, its version is 0:
   declare the feature is sent neither this entry nor the property. An app
   on a Core that sends no entry names a held transmit inhibit with its own
   general wording.
+- `paTransmitBandVersion` (R-R3-49, the PA on-the-air lock): optional,
+  sent only at agreed minor 11 to a peer whose hello declared
+  `paTransmitBand` 1, while the Core has a radio model, after
+  `txInhibitReasonVersion` (or after the last entry before it when that is
+  absent) and before `coreBuildInfo`. At 1 `radio` carries
+  `paTransmitBand` (section 7.1). A peer that did not declare the feature
+  is sent neither this entry nor the property. An app on a Core that sends
+  no entry opens the PA row for its own transmit slice's band.
 - `remotePgxlControlVersion`, `remoteRfKitControlVersion`,
   `remoteTgxlControlVersion`: sent only at agreed minor 11, and 0 unless
   the Core owns its accessories. `remotePgxlControlVersion` 3 adds the
@@ -1451,8 +1471,9 @@ When a feature is off, its version is 0:
   air too, as a local window changes them while transmitting (section
   7.3). At 5 it also covers Setup >
   Transmit > Power, Transmit > DEXP/VOX and Test > Two-Tone IMD: on
-  `transmit`, `tuneDrivePowerSource` becomes two-way, and
-  `powerByBandJson`, `tunePowerByBandJson`, `dexpAttackTimeMs`,
+  `transmit`, `tuneDrivePowerSource` becomes two-way,
+  `powerByBandJson` and `tunePowerByBandJson` are sent (the Core's own,
+  outbound), and `dexpAttackTimeMs`,
   `dexpDetectorTauMs`, `dexpExpansionRatioDb`, `dexpHighCutHz`,
   `dexpHysteresisRatioDb`, `dexpLookAheadEnabled`, `dexpLookAheadMs`,
   `dexpLowCutHz`, `dexpReleaseTimeMs`, `dexpSideChannelFilterEnabled`,
@@ -2021,7 +2042,8 @@ own key that declared `coreAddresses`; `adcAttenuatorVersion` only for
 a peer that declared `adcAttenuators`; `paProfileVersion` only for a
 peer that declared `paProfiles` (section 6.1); `radeStatusVersion` only
 for a peer that declared `radeStatus`; `txInhibitReasonVersion` only for a
-peer that declared `txInhibitReason` (section 6.1). A client ignores a capability it does not know
+peer that declared `txInhibitReason` (section 6.1); `paTransmitBandVersion` only for a
+peer that declared `paTransmitBand`. A client ignores a capability it does not know
 (`StationCapabilities::fromUpdates`).
 
 **Each device's share of the display budget** (iPhone app plan Task 76; the
@@ -2206,7 +2228,8 @@ older window sees only the values it was built for.
 | 95 | `paProfileVersion` | `i64` |
 | 96 | `radeStatusVersion` | `i64` |
 | 97 | `txInhibitReasonVersion` | `i64` |
-| 98 | `coreBuildInfo` | `utf8` |
+| 98 | `paTransmitBandVersion` | `i64` |
+| 99 | `coreBuildInfo` | `utf8` |
 
 <!-- /surface -->
 
@@ -2428,7 +2451,7 @@ An enum property lists the values its domain allows.
 | 8 | `hardwarePeakOverride` | `f64` | bidirectional |  |
 | 9 | `lastLoadError` | `utf8` | outbound |  |
 
-**RadioModel** (30 properties)
+**RadioModel** (31 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -2462,6 +2485,7 @@ An enum property lists the values its domain allows.
 | 27 | `logCategoryList` | `utf8` | constantSnapshot |  |
 | 28 | `txInhibitReason` | `utf8` | outbound |  |
 | 29 | `alexLpfBits` | `i64` | outbound |  |
+| 30 | `paTransmitBand` | `i64` | outbound |  |
 
 **RfKitModel** (30 properties)
 
@@ -2875,8 +2899,8 @@ An enum property lists the values its domain allows.
 | 61 | `txLevelerDecay` | `i64` | bidirectional |  |
 | 62 | `txAlcMaxGain` | `i64` | bidirectional |  |
 | 63 | `txAlcDecay` | `i64` | bidirectional |  |
-| 64 | `powerByBandJson` | `utf8` | bidirectional |  |
-| 65 | `tunePowerByBandJson` | `utf8` | bidirectional |  |
+| 64 | `powerByBandJson` | `utf8` | outbound |  |
+| 65 | `tunePowerByBandJson` | `utf8` | outbound |  |
 | 66 | `dexpAttackTimeMs` | `f64` | bidirectional |  |
 | 67 | `dexpDetectorTauMs` | `f64` | bidirectional |  |
 | 68 | `dexpExpansionRatioDb` | `f64` | bidirectional |  |
@@ -3356,7 +3380,7 @@ Notes on the keys:
   on or off as `logCategories` says, and switches them with
   `support.setLogCategories`.
 - **`radio`'s `txInhibitReason`** (HL2 I/O board fault;
-  `txInhibitReasonVersion` 1). Outbound, no WRITE, `utf8`, declared last in
+  `txInhibitReasonVersion` 1). Outbound, no WRITE, `utf8`, ordinal 28 in
   `RadioModel`: why the Core holds transmit off, in the words its own
   window shows, or empty when it gives no particular reason. It is set
   while a Hermes Lite 2 I/O board reports a fault, as "I/O Board: Fault
@@ -3370,6 +3394,22 @@ Notes on the keys:
   wording. A write is refused "The Core sets this itself; it cannot be
   changed from here." Sent only to a peer that declared `txInhibitReason`
   1; a window clears its copy when the session ends.
+- **`radio`'s `paTransmitBand`** (R-R3-49; `paTransmitBandVersion` 1).
+  Outbound, no WRITE, `i64`, declared last in `RadioModel`: the PA band
+  index (the PA Gain page's row order: 0 for 160 m through 10 for 6 m,
+  13 for the transverter row; -1 when the transmit band has no PA row,
+  such as general coverage) the Core's PA on-the-air lock holds
+  (`RadioModel::paOnAirBandIndex`). It is the Core's transmit band, which
+  holds while the radio is on the air: Thetis moves the band it adjusts
+  only from its TXBand setter, and that setter returns while MOX, so a
+  transmit slice retuned to another band while keyed does not move it.
+  It follows every change of the Core's transmit band. While the Core is
+  on the air, the PA row with this index is the one the Core accepts
+  edits for; the rest are refused with the on-the-air reason. A write is
+  refused "The Core sets this itself; it cannot be changed from here."
+  Sent only to a peer that declared `paTransmitBand` 1. A window clears
+  its copy when the session ends and falls back to its own transmit
+  slice's band.
 - **`transmit` at `transmitSettingsVersion` 2.** Each property carries its
   setter's type: `tunePower` (i64, the fixed tune power Setup uses, 0 to
   100 W, 0 to 99 on a Hermes Lite 2), `voxThresholdDb` (i64, -80 to 0 dB),
@@ -3441,12 +3481,21 @@ Notes on the keys:
   `17m`, `15m`, `12m`, `10m`, `6m`, `GEN`, `WWV`, `XVTR`, `2m`); the Core
   writes its keys in its own order, and a window reads it as an object. A
   peer without `band2mVersion` 1 is sent the 14 without `2m` (section
-  6.1). A write carries all 15 bands, or the 14 without `2m` (2 m then
-  keeps its value), each a whole number from 0 to 100 W (tune power 0
-  to 99 on a Hermes Lite 2); a map with another band missing, a key that is not
-  a band, or a value that is not a whole number or is out of range is
-  refused whole and changes nothing. A map the Core takes reads back as
-  the same object in the Core's key order, and is accepted.
+  6.1). Both maps are outbound: the Core's RF and Tune sliders own them,
+  through `power` and `tunePowerForTxBand`, which pass the Core's on-air
+  checks, so a peer's write of either map is refused ("The Core sets
+  this itself; it cannot be changed from here.") and changes nothing. No Setup page writes them.
+  A window built before this change still sends `powerByBandJson` when
+  its RF slider moves; each such write is refused, and its `power` write
+  for the same move is still taken, so the Core's power follows the
+  slider and the Core's own map reaches the window. With more than one
+  slice, such a window's recall for its own active slice can still send a
+  `power` read from another band's slot; the Core takes it as the power
+  of its transmit band, so the most it can change is that one band's
+  value. A current window and the phone send `power` only for an RF
+  slider move. The Core keeps each
+  value a whole number from 0 to 100 W (tune power 0 to 99 on a Hermes
+  Lite 2).
   `dexpAttackTimeMs` (f64, 2 to 100 ms), `dexpDetectorTauMs` (f64, 1 to 100
   ms), `dexpExpansionRatioDb` (f64, 0.0 to 30.0 dB), `dexpHighCutHz` and
   `dexpLowCutHz` (f64, 100 to 10000 Hz, the VOX trigger filter),

@@ -342,6 +342,10 @@
 //   2026-09-29 - transmitSettingsVersion 15: requestCfcProfile
 //                (cfc.setProfile). J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-29 - R-R3-49 / R-IOS-27: holdsTransmitHere() answers the
+//                IStationLink query, and a holder change reaches the
+//                window's model (reportTransmitHolderChanged). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/NetworkTrouble.h"
@@ -703,6 +707,10 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
     if (radioModel != nullptr) {
         radioModel->attachStation(this);
         radioModel->setStationDevices(m_remoteDevices);
+        // R-R3-49 / R-IOS-27: pages that follow who holds transmit (the
+        // PA Gain page's on-the-air lock) hear it through the model.
+        connect(this, &StationClient::transmitTakeAvailabilityChanged, radioModel,
+                &RadioModel::reportTransmitHolderChanged);
     }
 
     // iPhone app plan, desktop remote transmit (R-IOS-13, R-R3-42): this
@@ -736,6 +744,9 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
     // The Alex-1 Filters tab's lamps show the low-pass the Core's radio is
     // using (radio's alexLpfBits, radioHardwareVersion 10).
     m_declaredFeatures.insert(QByteArrayLiteral("alexLpf"), 1);
+    // PA on-air gate re-review, Important C: the PA pages open and lock
+    // the row the Core holds on the air (paTransmitBandVersion 1).
+    m_declaredFeatures.insert(QByteArrayLiteral("paTransmitBand"), 1);
     m_settingsBackupReplyTimer = new QTimer(this);
     m_settingsBackupReplyTimer->setSingleShot(true);
     connect(m_settingsBackupReplyTimer, &QTimer::timeout, this, [this]() {
@@ -4046,6 +4057,8 @@ bool StationClient::applyOne(QObject* target, const MirrorProperty& prop,
         QByteArrayLiteral("RadioModel.logCategories"),
         // HL2 port part 2: likewise the Core's TX inhibit reason.
         QByteArrayLiteral("RadioModel.txInhibitReason"),
+        // PA on-air gate re-review: likewise the Core's on-air PA row.
+        QByteArrayLiteral("RadioModel.paTransmitBand"),
         QByteArrayLiteral("SliceModel.minNotchWidthHz"),
         QByteArrayLiteral("SliceModel.signalStrengthDbm"),
         QByteArrayLiteral("SliceModel.signalPeakDbm"),

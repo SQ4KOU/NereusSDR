@@ -392,6 +392,12 @@ struct StationCapabilities {
     /// inhibit or none. Only for a peer at minor 11 that declared
     /// txInhibitReason 1, after radeStatusVersion.
     int txInhibitReasonVersion = 0;
+    /// PA on-air gate re-review, Important C: 1 means `radio` carries
+    /// `paTransmitBand`, the PA row the Core holds on the air. Sent after
+    /// radeStatusVersion, only to a peer at minor 11 whose hello declared
+    /// paTransmitBand 1, on a Core with a radio model; any other peer's
+    /// capabilities and radio object are today's.
+    int paTransmitBandVersion = 0;
     /// R-R3-47 / R-R3-22: 1 means the Core mirrors its Power Genius XL
     /// status as the read-only `amplifier` object. Sent after
     /// radioHardwareVersion in the same minor-11 block. 0: a window shows

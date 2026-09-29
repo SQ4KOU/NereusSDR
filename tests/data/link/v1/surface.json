@@ -486,6 +486,11 @@
             "value": 1
         },
         {
+            "kind": "i64",
+            "name": "paTransmitBandVersion",
+            "value": 1
+        },
+        {
             "kind": "utf8",
             "name": "coreBuildInfo",
             "value": "{\"productVersion\":\"0.5.2\",\"sourceTag\":\"link-surface@fixture\"}"
@@ -5106,6 +5111,12 @@
                     "kind": "i64",
                     "name": "alexLpfBits",
                     "ordinal": 29
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "paTransmitBand",
+                    "ordinal": 30
                 }
             ]
         },
@@ -7485,13 +7496,13 @@
                     "ordinal": 63
                 },
                 {
-                    "direction": "bidirectional",
+                    "direction": "outbound",
                     "kind": "utf8",
                     "name": "powerByBandJson",
                     "ordinal": 64
                 },
                 {
-                    "direction": "bidirectional",
+                    "direction": "outbound",
                     "kind": "utf8",
                     "name": "tunePowerByBandJson",
                     "ordinal": 65

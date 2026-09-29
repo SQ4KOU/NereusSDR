@@ -1,6 +1,10 @@
 // 2026-09-27: validate transmit-region writes and shared confirmations.
 // J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 // Modification history (NereusSDR):
+//   2026-09-29: Setup description version 20 (R-R3-49, R-IOS-18): PA Gain
+//               publishes its on-the-air lock per row, the transmitting band
+//               open to the transmit holder only. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 //   2026-09-29: The Core's TCI server settings (JJ's ruling of 2026-09-28,
 //               stationTciSettingsVersion 1). J.J. Boyd (KG4VCF), AI-assisted
 //               via Anthropic Claude Code.
@@ -767,6 +771,9 @@
 //               coreAddressesVersion 1, only to a device signed in with its
 //               own key that declared coreAddresses (peerGetsCoreAddresses).
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29: PA on-air gate review: the on-air PA publish also follows
+//               the Core's transmit band change. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 //   2026-09-28: R-R3-49 / R-IOS-18: Setup description version 13 (PA and
 //               Hardware Config); the description also carries the Core's
 //               radio for Radio Info. J.J. Boyd (KG4VCF), AI-assisted via
@@ -1273,6 +1280,8 @@ constexpr PeerOnlyProperty kPeerOnlyProperties[] = {
     {"RadioModel", "radio", false, "logCategoryList", "logCategoryList"},
     // Why the Core's transmit is held off (txInhibitReasonVersion 1).
     {"RadioModel", "radio", false, "txInhibitReason", "txInhibitReason"},
+    // The PA row the Core holds on the air (paTransmitBandVersion 1).
+    {"RadioModel", "radio", false, "paTransmitBand", "paTransmitBand"},
     // Where a device can dial this Core (coreAddressesVersion 1).
     {"StationDevicesFacade", "devices", false, "coreAddresses", "coreAddresses", true},
     // The RADE decoder's sync and frequency offset (radeStatusVersion 1).
@@ -2618,6 +2627,30 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
                                                             m_radioModel->currentRadioInfo());
                     }
                 });
+        // Setup description version 20 (R-R3-49, JJ's ruling: follow
+        // Thetis): on the air PA Gain publishes which rows are locked and
+        // why, with the transmitting band open to the transmit holder only.
+        const auto applyPaOnAir = [this](bool onAir) {
+            if (m_radioModel && m_setupDescription) {
+                m_setupDescription->setPaOnAirState(
+                    onAir, onAir ? m_radioModel->paOnAirBandIndex() : -1);
+            }
+        };
+        applyPaOnAir(radioModel->isCoreOnAir());
+        connect(radioModel, &RadioModel::coreOnAirChanged, this, applyPaOnAir);
+        // The open row is the Core's transmit band, which holds while keyed;
+        // a transmit band change while on the air (not through MOX) moves it.
+        connect(radioModel, &RadioModel::transmitBandChanged, this,
+                [this, applyPaOnAir]() {
+                    if (m_radioModel && m_radioModel->isCoreOnAir()) {
+                        applyPaOnAir(true);
+                    }
+                });
+    }
+    if (m_transmitHolder) {
+        connect(m_transmitHolder.get(), &TransmitHolder::changed, this, [this]() {
+            if (m_setupDescription) { m_setupDescription->noteTransmitHolderChanged(); }
+        });
     }
     // Parity Task 19 (R-IOS-25): the record streams follow the Core's spots
     // and its spot sources' consoles from here on.
@@ -3213,6 +3246,10 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
                 return {};
             }
             return TxRefusals::otherDeviceHolds(holder->name);
+        };
+        // R-R3-49 / R-IOS-27: the PA profile verbs on the air.
+        access.holdsTransmit = [this](const QByteArray& requester) {
+            return !requester.isEmpty() && m_transmitHolder->isHeldBy(requester);
         };
         access.accessory = [this](const QByteArray& requester) -> TxRefusal {
             SessionTransport* const transport = m_dispatchingTransport;
@@ -7180,6 +7217,20 @@ void StationServer::handleSettingsWrite(SessionTransport* transport,
                                                         restored.toString(), onAir));
         return;
     }
+    // R-R3-49 / R-IOS-27 (JJ's ruling): a PA profile key on the air is
+    // taken only for the active profile's transmitting band, from the
+    // device that holds transmit; the rest is refused, not held.
+    {
+        const QString value = message.updates.first().value.toString();
+        if (const QString pa = paSettingOnAirRefusalFor(transport, key, &value);
+            !pa.isEmpty()) {
+            const QVariant restored = m_settings.value(key);
+            qCWarning(lcStation) << "Refused remote settings write" << key << ":" << pa;
+            send(transport, SessionMessages::settingsReject(key, restored.isValid(),
+                                                            restored.toString(), pa));
+            return;
+        }
+    }
     // R-R3-49 (parity Task 5): a Power page key the page's own control
     // could not have written is refused, and the Core's value handed back.
     if (const QString range = powerPageKeyValueRefusal(key, message.updates.first().value);
@@ -7392,6 +7443,9 @@ bool StationServer::applySettingsWrite(SessionTransport* transport, const Sessio
     if (!m_radioModel.isNull()) {
         m_radioModel->scheduleRemoteDspOptionsApply(key);
         m_radioModel->scheduleRemoteHardwareApply(key);
+        // R-R3-49 / R-IOS-27: a PA change taken on the air reaches the
+        // Core's bank and drive now (the PA reload waits for receive).
+        m_radioModel->applyPaSettingOnAir(key, m_settings.value(key).toString());
         // R-R3-47 / R-R3-22: an accessory setting (interlock, output limit,
         // tune memory, antenna names, a fault history) reaches the Core's
         // live objects now, not at the next restart.
@@ -7492,6 +7546,14 @@ void StationServer::handleSettingsRemove(SessionTransport* transport, const Sess
         qCWarning(lcStation) << "Refused remote settings remove" << key << ":" << onAir;
         send(transport, SessionMessages::settingsReject(key, restored.isValid(),
                                                       restored.toString(), onAir));
+        return;
+    }
+    // R-R3-49 / R-IOS-27: a PA profile key is never removed on the air.
+    if (const QString pa = paSettingOnAirRefusalFor(transport, key, nullptr); !pa.isEmpty()) {
+        const QVariant restored = m_settings.value(key);
+        qCWarning(lcStation) << "Refused remote settings remove" << key << ":" << pa;
+        send(transport, SessionMessages::settingsReject(key, restored.isValid(),
+                                                        restored.toString(), pa));
         return;
     }
     // SettingsProxyServer has no remove path of its own: AppSettings::
@@ -7996,8 +8058,13 @@ void StationServer::sendToPeer(SessionTransport* transport, const SessionMessage
             // 16: Hardware's HL2 Options rows. 17: Hardware's Alex-1 low-pass
             // rows (radioHardwareVersion 10). 18: HL2 Options' clock rows
             // (radioHardwareVersion 11). 19: DSP > CFC's band editor
-            // (cfcProfile, cfc.setProfile).
-            const int version = qMin(declared, 19);
+            // (cfcProfile, cfc.setProfile). 20: PA Gain's on-the-air lock
+            // per row.
+            const int version = qMin(declared, 20);
+            // Version 20: the transmit holder's own PA band stays live.
+            const QByteArray deviceId = peerInfoFor(transport).deviceId;
+            const bool holdsTransmit = m_transmitHolder && !deviceId.isEmpty()
+                && m_transmitHolder->isHeldBy(deviceId);
             // The table describes the supported board's static row shape.
             // A disconnected radio withdraws the live row capability, but a
             // paired peer that negotiated rows keeps this description across
@@ -8008,7 +8075,8 @@ void StationServer::sendToPeer(SessionTransport* transport, const SessionMessage
             for (MirrorUpdate& update : fitted.updates) {
                 if (update.name != "revision") {
                     update.value = SetupDescription::fitCategoryForVersion(
-                        update.value.toString(), version, antennaRowsAvailable);
+                        update.value.toString(), version, antennaRowsAvailable,
+                        holdsTransmit);
                 }
             }
             transport->sendText(encodeFor(transport, fitted));
@@ -9946,6 +10014,19 @@ QString StationServer::transmitSettingOnAirRefusal(const QString& key) const
     return reason;
 }
 
+QString StationServer::paSettingOnAirRefusalFor(SessionTransport* transport,
+                                                const QString& key,
+                                                const QString* value) const
+{
+    if (m_radioModel.isNull()) {
+        return {};
+    }
+    const QByteArray requester = peerInfoFor(transport).deviceId;
+    const bool holds = !requester.isEmpty() && m_transmitHolder
+        && m_transmitHolder->isHeldBy(requester);
+    return m_radioModel->paSettingOnAirRefusal(key, value, holds);
+}
+
 bool StationServer::isTransmitGateSettingKey(const QString& key)
 {
     return key == QLatin1String(RadioModel::kExtendedTransmitKey)
@@ -11145,7 +11226,7 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             caps.stationCatalogVersion = stationCatalogVersion();
             caps.setupDescriptionVersion = peerDeclares(
                 transport, QByteArrayLiteral("setupDescription"), 1)
-                ? qMin(peer->features.value(QByteArrayLiteral("setupDescription")), 19) : 0;
+                ? qMin(peer->features.value(QByteArrayLiteral("setupDescription")), 20) : 0;
             // iPhone app Task 20: display extras.
             caps.displayExtrasVersion = media ? displayExtrasVersion() : 0;
             // R-R3-49 (parity Task 1): the transmit settings.
@@ -11243,6 +11324,10 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             // for a peer that declared radeStatus 1.
             caps.radeStatusVersion =
                 peerGetsFeatureProperties(transport, QByteArrayLiteral("radeStatus")) ? 1 : 0;
+            // PA on-air gate re-review, Important C: radio's paTransmitBand,
+            // for a peer that declared paTransmitBand 1.
+            caps.paTransmitBandVersion =
+                peerGetsFeatureProperties(transport, QByteArrayLiteral("paTransmitBand")) ? 1 : 0;
             if (peerDeclares(transport, QByteArrayLiteral("remoteTx"), 1)) {
                 caps.remoteTxEntry = true;
                 caps.remoteTxVersion = remoteTxVersion();

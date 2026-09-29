@@ -637,7 +637,8 @@ private slots:
 
     // ── Older windows keep today's wire ──────────────────────────────────
     // The lamp's source is read-only, reaches only a peer that declared
-    // alexLpf, and is declared last so no earlier property's ordinal moves.
+    // alexLpf, and is declared after every earlier property so no earlier
+    // property's ordinal moves.
     void lampSource_readOnlyGatedAndLast()
     {
         const QMetaObject& meta = RadioModel::staticMetaObject;
@@ -646,7 +647,10 @@ private slots:
         const QMetaProperty property = meta.property(index);
         QVERIFY(!property.isWritable());
         QVERIFY(property.hasNotifySignal());
-        QCOMPARE(index, meta.propertyCount() - 1);
+        // Only paTransmitBand (paTransmitBandVersion, appended after it)
+        // follows it.
+        QCOMPARE(index, meta.propertyCount() - 2);
+        QCOMPARE(meta.indexOfProperty("paTransmitBand"), meta.propertyCount() - 1);
         QCOMPARE(MirrorPolicy::directionFor(QByteArrayLiteral("RadioModel"), "alexLpfBits"),
                  MirrorDirection::Outbound);
         const MirrorPolicy::FeatureGate* gate =

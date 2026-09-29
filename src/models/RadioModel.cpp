@@ -49,6 +49,12 @@
 //                 the tune power, TX profile and RADE reset commands take
 //                 `takenOnAir`. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-29 - applyTransmitBand ports Thetis's TXBand setter
+//                 (console.cs:17511-17545 [v2.10.3.15]): the Core loads the
+//                 transmit band's stored power on a band change and at
+//                 connect, with or without a window, and the MOX-edge
+//                 restore saves PWR into the band as ptbPWR_Scroll does.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-27 - The MOX band-plan check uses the XIT-shifted TX carrier,
 //                 matching the TX chain and Thetis console.cs:29440-29486.
 //                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
@@ -683,6 +689,37 @@
 //                 10 MHz, Enable CL2 and CL2 frequency to the connection
 //                 (mi0bot setup.cs:21732-21756 [@c26a8a4]). J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - PA on-air gate review: paOnAirBandIndex is the transmit
+//                 band (driveTxBand), held while keyed as Thetis's
+//                 _adjustingBand is; transmitBandChanged tells the PA page
+//                 and the station's PA publish. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - PA on-air gate review: a disconnect forgets the transmit
+//                 band (the next band seen is an initializing pass), and
+//                 the connect-time tune-power refresh before the per-MAC
+//                 load is gone. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
+//   2026-09-29 - PA on-air gate re-review: paTransmitBand publishes the PA
+//                 row the Core holds on the air, and a remote window whose
+//                 Core sends it opens and locks that row. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - PA on-air gate re-review: a disconnect also forgets the
+//                 tune power's transmit band (clearTuneTxBand). J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Two-tone PA wiring (found bug): the two-tone controller
+//                 gets the PA profile manager, so the start drives the PA
+//                 gain for the held transmit band (setup.cs:11153
+//                 [v2.10.3.15]). J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
+//   2026-09-29 - PA on-air gate branch review, Important 1: the teardown
+//                 ends a two-tone test at once (TwoToneController::stopNow),
+//                 so the FIXED power restore lands in the held band before
+//                 the saves (console.cs:27473, 27492 [v2.10.3.15]). TUNE
+//                 under the FIXED source turns the PWR limit off and sets
+//                 PWR to the tune power, and TUN-off restores both, only
+//                 under FIXED (console.cs:30094-30104, 30180-30185
+//                 [v2.10.3.15]). J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -2468,6 +2505,13 @@ RadioModel::RadioModel(Role role, QObject* parent)
     // through its own TUN-off path first (console.cs:44805-44813
     // [v2.10.3.15]), so RadioModel stops counting TUN on at tune power.
     m_twoToneController->setTuneOffFn([this]() { setTune(false); });
+    // PA on-air gate re-review: the start drives Thetis TXBand, the band
+    // the drive math holds while keyed (driveTxBand).
+    m_twoToneController->setTxBandFn([this]() { return driveTxBand(); });
+    // Two-tone PA wiring: Thetis's start computes the drive through
+    // SetPowerUsingTargetDBM with the PA gain (setup.cs:11153 [v2.10.3.15],
+    // //MW0LGE_22b), so the controller needs the PA profile manager.
+    m_twoToneController->setPaProfileManager(m_paProfileManager);
 
     // R-R3-36: keep the generated-key record in step with two-tone's own
     // state, not only with MOX transitions. Two-tone can go live on a key
@@ -3648,10 +3692,39 @@ RadioModel::RadioModel(Role role, QObject* parent)
     // Pre-hotfix: ANAN-8000DLE 80m TUN at slider=50 produced wire_byte=127
     // (=> ~300W on a 200W radio).  Post-hotfix: wire_byte=49 (=> ~85W).
     // Ratio matches the band's 50.5 dB PA gain compensation.
-    // Body extracted to RadioModel::restoreNormalTxDrive so the MOX-edge
-    // restore below can share it. Behaviour on this path is unchanged.
+    // drivePowerScroll is shared with the MOX-edge restore below, which
+    // keeps upstream's TUNE and two-tone guard.
+    // The PWR setter (console.cs:18437-18448 [v2.10.3.15]) runs
+    // ptbPWR_Scroll whatever the tx mode, so a PWR change during TUNE or
+    // two-tone recomputes that mode's drive and saves the band's power.
+    // A PWR set before any transmit band is known (no slice yet, no
+    // connect) is a value set for the band the Core would transmit on, so
+    // that band becomes _tx_band and the save lands there. The MOX-edge
+    // restore, which sets nothing, saves nothing until a band is known.
     connect(&m_transmitModel, &TransmitModel::powerChanged, this,
-            [this](int /*power*/) { restoreNormalTxDrive(); });
+            [this](int /*power*/) {
+        if (ownsLocalDsp() && !m_txBandKnown) {
+            // The initializing TXBand pass for the adopted band, less the
+            // power load (this PWR set is the band's value): its limits,
+            // tune power and FM TX offset (console.cs:17539-17550
+            // [v2.10.3.15]).
+            m_txBand = transmitSliceBand();
+            m_txBandKnown = true;
+            emit transmitBandChanged();
+            m_transmitModel.setPowerLimit(
+                m_transmitModel.limitPowerForBand(m_txBand));
+            m_transmitModel.setTunePowerLimit(
+                m_transmitModel.limitTunePowerForBand(m_txBand));
+            m_transmitModel.setTuneTxBand(m_txBand);
+            m_transmitModel.setFmTxOffsetMhz(
+                m_transmitModel.fmTxOffsetForBandMhz(m_txBand));
+        }
+        drivePowerScroll();
+    });
+    // PA on-air gate re-review, Important C: the PA row the Core holds on
+    // the air reaches its windows (paTransmitBandVersion 1).
+    connect(this, &RadioModel::transmitBandChanged,
+            this, &RadioModel::announcePaTransmitBand);
 
     // From mi0bot console.cs:30272 [v2.10.3.13-beta2]: the drive byte is
     // recomputed through the normal path on every MOX-to-TX transition, so a
@@ -3929,6 +4002,23 @@ QString RadioModel::applyMirroredValue(const QByteArray& propertyName, const QVa
             if (m_remoteTxInhibited != value.toBool()) {
                 m_remoteTxInhibited = value.toBool();
                 emit txInhibitedChanged(m_remoteTxInhibited);
+            }
+            return {};
+        }
+        if (propertyName == "paTransmitBand") {
+            // PA on-air gate re-review, Important C: the PA row the Core
+            // holds on the air, observed (paTransmitBandVersion 1).
+            bool ok = false;
+            const int band = value.toInt(&ok);
+            if (!ok || band < -1 || band >= PaProfile::kBandCount) {
+                return QStringLiteral("Expected a band number.");
+            }
+            const int before = paOnAirBandIndex();
+            m_stationPaTransmitBand = band;
+            m_stationPaTransmitBandKnown = true;
+            if (paOnAirBandIndex() != before) {
+                emit paTransmitBandChanged(band);
+                emit transmitBandChanged();
             }
             return {};
         }
@@ -5428,6 +5518,278 @@ QString RadioModel::onAirReason()
     return QStringLiteral("The radio is on the air. Try again when it stops.");
 }
 
+QString RadioModel::paOnAirLockedReason()
+{
+    return QStringLiteral("Can't change while transmitting.");
+}
+
+QString RadioModel::paHolderOnlyReason()
+{
+    return QStringLiteral("Only the device that is transmitting can change this.");
+}
+
+int RadioModel::paOnAirBandIndex() const
+{
+    // PA on-air gate re-review, Important C: a remote window holds no
+    // transmit band of its own (m_txBand moves only on the Core), so it
+    // takes the row its Core reports (paTransmitBandVersion 1). An older
+    // Core never sends it and the window falls back as below.
+    if (m_role == Role::Remote && m_stationPaTransmitBandKnown) {
+        return m_stationPaTransmitBand;
+    }
+    // The band the Core transmits on: m_txBand (Thetis _tx_band) once known,
+    // the band the drive math reads (driveTxBand). It holds while keyed, as
+    // _adjustingBand does: that moves only in OnTXBandChanged, raised by the
+    // TXBand setter, which returns while MOX
+    // (//[2.10.3.6]MW0LGE no band change on TX fix). Before the first
+    // transmit band is known, and on a remote window whose Core sends no
+    // paTransmitBand, the transmit slice's band, else the last band.
+    const Band txBand = driveTxBand();
+    // From Thetis setup.cs:23836-23852 [v2.10.3.15] OnTXBandChanged / setAdjustingBand:
+    //   setAdjustingBand(newBand);
+    //   lblTXattBand.Text = newBand.ToString(); //[2.3.10.6]MW0LGE added (also in ATTOnTX)
+    //   if (!((b >= Band.B160M && b <= Band.B6M) || (b >= Band.VHF0 && b <= Band.VHF13)))
+    //       _adjustingBand = Band.FIRST; // MW0LGE_[2.9.0.7] reset
+    // NereusSDR's XVTR row stands for Thetis's VHF0..VHF13.
+    const bool adjustable = (txBand >= Band::Band160m && txBand <= Band::Band6m)
+                            || txBand == Band::XVTR;
+    const int index = static_cast<int>(txBand);
+    return (adjustable && index >= 0 && index < PaProfile::kBandCount) ? index : -1;
+}
+
+int RadioModel::paTransmitBand() const
+{
+    return paOnAirBandIndex();
+}
+
+// The Core's paTransmitBand follows transmitBandChanged: the transmit band
+// moves only through applyTransmitBand (held while keyed) and the
+// disconnect reset, and each emits it.
+void RadioModel::announcePaTransmitBand()
+{
+    if (m_role != Role::Local) { return; }
+    const int band = paOnAirBandIndex();
+    if (band == m_announcedPaTransmitBand) { return; }
+    m_announcedPaTransmitBand = band;
+    emit paTransmitBandChanged(band);
+}
+
+bool RadioModel::paOnAirNow() const
+{
+    // From Thetis setup.cs:23826-23834 [v2.10.3.15] OnMoxChangeHandler (the
+    // page's lock follows MOX) and setup.cs:24210-24222 [v2.10.3.15]
+    // nudAdjustGain_ValueChanged:
+    //   if (console.MOX)
+    // The next handler, OnTXBandChanged (ported in paOnAirBandIndex above),
+    // carries: //[2.3.10.6]MW0LGE added (also in ATTOnTX)
+    //   [original inline comment from setup.cs:23838]
+    // The lock and the live apply follow MOX itself: an edit in the
+    // controller's TX to RX handover after MOX drops is an off-air edit.
+    // TUNE and the two-tone test key MOX in Thetis, so they count too.
+    return mox() || m_transmitModel.isMox() || isTune() || m_transmitModel.isTune()
+        || m_transmitModel.isTwoToneActive()
+        || (m_twoToneController && m_twoToneController->isActive());
+}
+
+QString RadioModel::paOnAirEditRefusal(bool profileAction, int band,
+                                       bool requesterHoldsTransmit) const
+{
+    if (!paOnAirNow()) {
+        return {};
+    }
+    // From Thetis setup.cs:23479-23496 [v2.10.3.15] PAProfileEnableControls:
+    //   //prevent profile switch during a tx
+    //   //user can only tweak the NUD's
+    // From Thetis setup.cs:24169-24192 [v2.10.3.15] enabledAllPAnuds:
+    //   // ignore current band
+    //   if (b != _adjustingBand) c.Enabled = false;
+    const int txBand = paOnAirBandIndex();
+    if (profileAction || txBand < 0 || band != txBand) {
+        return paOnAirLockedReason();
+    }
+    // JJ's ruling: only the device that holds transmit changes the
+    // transmitting band's values while it transmits.
+    if (!requesterHoldsTransmit) {
+        return paHolderOnlyReason();
+    }
+    return {};
+}
+
+namespace {
+
+// Why a PA value is out of range, or empty when it is in range: the page's
+// spin boxes, which hold one decimal place. The phone verbs and a window's
+// raw profile key share these checks.
+//   gain   From Thetis setup.designer.cs:48537-48546 [v2.10.3.13] nudVHF1
+//          Maximum = 100, Minimum = 38.8 (and the 24 sibling boxes)
+//   adjust -10 .. 10 dB (PaGainByBandPage's drive-step matrix)
+//   max    From Thetis nudMaxPowerForBandPA [v2.10.3.13]: 0 .. 1500 W,
+//          one decimal (setup.designer.cs:47541)
+QString paValueRangeRefusal(RadioModel::PaProfileAction action, double value)
+{
+    const double rounded = std::round(value * 10.0) / 10.0;
+    const bool finite = std::isfinite(value);
+    switch (action) {
+    case RadioModel::PaProfileAction::SetGain:
+        if (!finite || rounded < 38.8 || rounded > 100.0) {
+            return QStringLiteral("Choose a PA gain from 38.8 to 100 dB.");
+        }
+        break;
+    case RadioModel::PaProfileAction::SetAdjust:
+        if (!finite || rounded < -10.0 || rounded > 10.0) {
+            return QStringLiteral("Choose a drive-step adjust from -10 to 10 dB.");
+        }
+        break;
+    case RadioModel::PaProfileAction::SetMaxPower:
+        if (!finite || rounded < 0.0 || rounded > 1500.0) {
+            return QStringLiteral("Choose a max power from 0 to 1500 W.");
+        }
+        break;
+    default:
+        break;
+    }
+    return {};
+}
+
+// The range refusal for PA row `band` of `incoming`, checking only the
+// values that differ from `current` (what the window changed).
+QString paRowRangeRefusal(const PaProfile& incoming, const PaProfile& current, int band)
+{
+    using Action = RadioModel::PaProfileAction;
+    const Band b = static_cast<Band>(band);
+    if (incoming.getGainForBand(b) != current.getGainForBand(b)) {
+        if (const QString r = paValueRangeRefusal(Action::SetGain, incoming.getGainForBand(b));
+            !r.isEmpty()) {
+            return r;
+        }
+    }
+    for (int step = 0; step < PaProfile::kDriveSteps; ++step) {
+        if (incoming.getAdjust(b, step) != current.getAdjust(b, step)) {
+            if (const QString r = paValueRangeRefusal(Action::SetAdjust,
+                                                      incoming.getAdjust(b, step));
+                !r.isEmpty()) {
+                return r;
+            }
+        }
+    }
+    if (incoming.getMaxPower(b) != current.getMaxPower(b)) {
+        return paValueRangeRefusal(Action::SetMaxPower, incoming.getMaxPower(b));
+    }
+    return {};
+}
+
+// hardware/<mac>/pa/<rest>: true, with <rest>, for a PA key of `mac`.
+bool paKeyRest(const QString& key, const QString& mac, QString* rest)
+{
+    const QString prefix = QStringLiteral("hardware/%1/pa/").arg(mac);
+    if (mac.isEmpty() || !key.startsWith(prefix, Qt::CaseInsensitive)) {
+        return false;
+    }
+    *rest = key.mid(prefix.size());
+    return true;
+}
+
+// True when `a` and `b` differ anywhere but PA row `band`.
+bool paProfilesDifferOutsideBand(const PaProfile& a, const PaProfile& b, int band)
+{
+    if (a.name() != b.name() || a.model() != b.model()
+        || a.isFactoryDefault() != b.isFactoryDefault()) {
+        return true;
+    }
+    for (int i = 0; i < PaProfile::kBandCount; ++i) {
+        if (i == band) {
+            continue;
+        }
+        const Band b0 = static_cast<Band>(i);
+        if (a.getGainForBand(b0) != b.getGainForBand(b0)
+            || a.getMaxPower(b0) != b.getMaxPower(b0)
+            || a.getMaxPowerUse(b0) != b.getMaxPowerUse(b0)) {
+            return true;
+        }
+        for (int step = 0; step < PaProfile::kDriveSteps; ++step) {
+            if (a.getAdjust(b0, step) != b.getAdjust(b0, step)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+} // namespace
+
+QString RadioModel::paSettingOnAirRefusal(const QString& key, const QString* value,
+                                          bool requesterHoldsTransmit) const
+{
+    QString rest;
+    if (!paKeyRest(key, currentRadioMac(), &rest) || !paOnAirNow()) {
+        return {};
+    }
+    // From Thetis setup.cs:23479-23496 [v2.10.3.15] PAProfileEnableControls:
+    //   //prevent profile switch during a tx
+    //   //user can only tweak the NUD's
+    // The list, the active name, another profile and a remove are the
+    // profile controls Thetis greys; only the active profile's values stay.
+    const PaProfileManager* const bank = m_paProfileManager;
+    const QString profilePrefix = QStringLiteral("profile/");
+    const QString name = rest.startsWith(profilePrefix) ? rest.mid(profilePrefix.size())
+                                                        : QString();
+    const int txBand = paOnAirBandIndex();
+    if (value == nullptr || bank == nullptr || bank->activeProfile() == nullptr
+        || name.isEmpty() || name != bank->activeProfileName() || txBand < 0) {
+        return paOnAirLockedReason();
+    }
+    PaProfile incoming;
+    if (!incoming.dataFromString(*value)) {
+        return paOnAirLockedReason();
+    }
+    // From Thetis setup.cs:24169-24192 [v2.10.3.15] enabledAllPAnuds:
+    //   // ignore current band
+    //   if (b != _adjustingBand) c.Enabled = false;
+    if (paProfilesDifferOutsideBand(incoming, *bank->activeProfile(), txBand)) {
+        return paOnAirLockedReason();
+    }
+    if (const QString refusal = paOnAirEditRefusal(false, txBand, requesterHoldsTransmit);
+        !refusal.isEmpty()) {
+        return refusal;
+    }
+    // The key's text is not clamped on the way in (PaProfile::dataFromString)
+    // and applyPaSettingOnAir drives the radio from it: the phone verbs'
+    // range checks apply here too.
+    return paRowRangeRefusal(incoming, *bank->activeProfile(), txBand);
+}
+
+void RadioModel::applyPaSettingOnAir(const QString& key, const QString& value)
+{
+    QString rest;
+    PaProfileManager* const bank = m_paProfileManager;
+    if (!paKeyRest(key, currentRadioMac(), &rest) || !paOnAirNow()
+        || bank == nullptr || bank->activeProfile() == nullptr
+        || rest != QStringLiteral("profile/") + bank->activeProfileName()) {
+        return;
+    }
+    const int txBand = paOnAirBandIndex();
+    PaProfile incoming;
+    if (txBand < 0 || !incoming.dataFromString(value)) {
+        return;
+    }
+    const PaProfile before = *bank->activeProfile();
+    if (!bank->saveProfile(bank->activeProfileName(), incoming)) {
+        return;
+    }
+    // What Thetis does after each value box's change on the transmitting
+    // band (applyPaEditOnAir): a gain re-applies the drive, an adjust moves
+    // the drive to its step. A window changes one box at a time.
+    const Band band = static_cast<Band>(txBand);
+    if (incoming.getGainForBand(band) != before.getGainForBand(band)) {
+        applyPaEditOnAir(PaProfileAction::SetGain, -1);
+    }
+    for (int step = 0; step < PaProfile::kDriveSteps; ++step) {
+        if (incoming.getAdjust(band, step) != before.getAdjust(band, step)) {
+            applyPaEditOnAir(PaProfileAction::SetAdjust, step);
+        }
+    }
+}
+
 bool RadioModel::stationOnAirRefusal(QString* reason) const
 {
     // On the air: MOX (the controller's or the transmit model's), TUNE, or
@@ -5706,8 +6068,20 @@ bool RadioModel::paProfileActionForStation(const PaProfileRequest& request, QStr
     if (m_role != Role::Local || bank == nullptr || bank->activeProfile() == nullptr) {
         return fail(QStringLiteral("The Core has no PA profiles for a radio."));
     }
-    if (stationOnAirRefusal(reason)) {
-        return false;
+    // R-R3-49 / R-IOS-27 (JJ's ruling, follow Thetis): on the air only the
+    // transmitting band's values, from the device that holds transmit.
+    const bool onAir = paOnAirNow();
+    if (onAir) {
+        const bool profileAction = request.action == PaProfileAction::Select
+            || request.action == PaProfileAction::New
+            || request.action == PaProfileAction::Copy
+            || request.action == PaProfileAction::Delete
+            || request.action == PaProfileAction::Reset;
+        const QString refusal = paOnAirEditRefusal(profileAction, request.band,
+                                                   request.requesterHoldsTransmit);
+        if (!refusal.isEmpty()) {
+            return fail(refusal);
+        }
     }
     const HPSDRModel model = m_hardwareProfile.model;
     const QString active = bank->activeProfileName();
@@ -5728,14 +6102,10 @@ bool RadioModel::paProfileActionForStation(const PaProfileRequest& request, QStr
         }
         return {};
     };
-    // The page's spin boxes, which hold one decimal place:
-    //   gain   From Thetis setup.designer.cs:48537-48546 [v2.10.3.13] nudVHF1
-    //          Maximum = 100, Minimum = 38.8 (and the 24 sibling boxes)
-    //   adjust -10 .. 10 dB (PaGainByBandPage's drive-step matrix)
-    //   max    From Thetis nudMaxPowerForBandPA [v2.10.3.13]: 0 .. 1500 W,
-    //          one decimal (setup.designer.cs:47541)
+    // The page's spin boxes, which hold one decimal place
+    // (paValueRangeRefusal).
     const double rounded = std::round(request.value * 10.0) / 10.0;
-    const bool finite = std::isfinite(request.value);
+    const QString rangeRefusal = paValueRangeRefusal(request.action, request.value);
     const bool bandOk = request.band >= 0 && request.band < PaProfile::kBandCount;
     const Band band = static_cast<Band>(bandOk ? request.band : 0);
 
@@ -5811,8 +6181,8 @@ bool RadioModel::paProfileActionForStation(const PaProfileRequest& request, QStr
     PaProfile edited = *bank->activeProfile();
     switch (request.action) {
     case PaProfileAction::SetGain:
-        if (!finite || rounded < 38.8 || rounded > 100.0) {
-            return fail(QStringLiteral("Choose a PA gain from 38.8 to 100 dB."));
+        if (!rangeRefusal.isEmpty()) {
+            return fail(rangeRefusal);
         }
         edited.setGainForBand(band, static_cast<float>(rounded));
         break;
@@ -5820,14 +6190,14 @@ bool RadioModel::paProfileActionForStation(const PaProfileRequest& request, QStr
         if (request.step < 0 || request.step >= PaProfile::kDriveSteps) {
             return fail(QStringLiteral("Choose a drive step from 10% to 90%."));
         }
-        if (!finite || rounded < -10.0 || rounded > 10.0) {
-            return fail(QStringLiteral("Choose a drive-step adjust from -10 to 10 dB."));
+        if (!rangeRefusal.isEmpty()) {
+            return fail(rangeRefusal);
         }
         edited.setAdjust(band, request.step, static_cast<float>(rounded));
         break;
     case PaProfileAction::SetMaxPower:
-        if (!finite || rounded < 0.0 || rounded > 1500.0) {
-            return fail(QStringLiteral("Choose a max power from 0 to 1500 W."));
+        if (!rangeRefusal.isEmpty()) {
+            return fail(rangeRefusal);
         }
         edited.setMaxPower(band, static_cast<float>(rounded));
         break;
@@ -5837,8 +6207,80 @@ bool RadioModel::paProfileActionForStation(const PaProfileRequest& request, QStr
     default:
         break;
     }
-    return bank->saveProfile(active, edited)
-        || fail(QStringLiteral("The Core did not save the PA profile."));
+    if (!bank->saveProfile(active, edited)) {
+        return fail(QStringLiteral("The Core did not save the PA profile."));
+    }
+    if (onAir) {
+        applyPaEditOnAir(request.action, request.step);
+    }
+    return true;
+}
+
+// R-R3-49 / R-IOS-27: what Thetis does after an on-the-air PA edit, for the
+// Core's phone verbs, a window's profile key and the local page alike.
+void RadioModel::applyPaEditOnAir(PaProfileAction action, int step)
+{
+    // Only while MOX is on (paOnAirNow): an edit made after MOX drops, in
+    // the controller's TX to RX handover, is an off-air edit.
+    if (!paOnAirNow()) {
+        return;
+    }
+    switch (action) {
+    case PaProfileAction::SetGain:
+        // From Thetis setup.cs:23351-23352 [v2.10.3.15] nudPAProfileGain_ValueChanged:
+        //   if (p.GetGainForBand(b) != fOld) console.PWR = console.PWR; // update the power, which causes these gain values to be queried
+        // The PWR setter runs ptbPWR_Scroll whatever the tx mode, so a gain
+        // edit during TUNE or the two-tone test recomputes their drive too,
+        // and saves the band's power as ptbPWR_Scroll does.
+        drivePowerScroll();
+        break;
+    case PaProfileAction::SetAdjust: {
+        if (step < 0 || step >= PaProfile::kDriveSteps) {
+            break;
+        }
+        // From Thetis setup.cs:24210-24222 [v2.10.3.15] nudAdjustGain_ValueChanged:
+        //   p.SetAdjust(_adjustingBand, nNumber / 10, (float)nud.Value);
+        //   if (console.MOX)
+        //   {
+        //       switch (console.TuneDrivePowerOrigin)
+        //       {
+        //           case DrivePowerSource.DRIVE_SLIDER:
+        //               console.PWR = nNumber + 10; // set drive to the value we are adjusting
+        //               break;
+        //           case DrivePowerSource.TUNE_SLIDER:
+        //               console.TunePWR = nNumber + 10;
+        //               break;
+        //       }
+        //   }
+        // nNumber is 0 for the 10% step, so the drive is (step + 1) * 10.
+        const int drive = (step + 1) * 10;
+        switch (m_transmitModel.tuneDrivePowerSource()) {
+        case DrivePowerSource::DriveSlider:
+            // The PWR setter runs ptbPWR_Scroll once, whatever the tx mode,
+            // and the adjust itself changed: at the same slider value the
+            // scroll still runs (setPower emits, and so scrolls, only on a
+            // change).
+            if (m_transmitModel.power() == drive) {
+                drivePowerScroll();
+            } else {
+                m_transmitModel.setPower(drive); // set drive to the value we are adjusting
+            }
+            break;
+        case DrivePowerSource::TuneSlider:
+            refreshTransmitTuneBand();
+            m_transmitModel.setTunePowerForTxBand(drive);
+            break;
+        case DrivePowerSource::Fixed:
+            break;
+        }
+        break;
+    }
+    default:
+        // Max power and use-max change Thetis's labels only
+        // (nudMaxPowerForBandPA_ValueChanged, setup.cs:24248-24262
+        // [v2.10.3.15]); the next drive computation reads them.
+        break;
+    }
 }
 
 bool RadioModel::resetRadeVocoderForStation(QString* reason, bool takenOnAir)
@@ -5862,16 +6304,131 @@ bool RadioModel::resetRadeVocoderForStation(QString* reason, bool takenOnAir)
     return true;
 }
 
-// The band the Core transmits on, as the TUNE path reads it (the transmit
-// slice's frequency, else the last band), for tunePowerForTxBand.
+// The band the Core transmits on (the transmit slice's frequency, else the
+// last band) through applyTransmitBand: PWR's band, and the TUNE path's for
+// tunePowerForTxBand.
 void RadioModel::refreshTransmitTuneBand()
 {
     if (m_role != Role::Local) {
         return;
     }
+    applyTransmitBand(transmitSliceBand(), /*initializing=*/false);
+}
+
+Band RadioModel::transmitSliceBand() const
+{
     const SliceModel* const txSlice = txBoundSlice();
-    m_transmitModel.setTuneTxBand(txSlice ? bandFromFrequency(txSlice->frequency())
-                                          : m_lastBand);
+    return txSlice ? bandFromFrequency(txSlice->frequency()) : m_lastBand;
+}
+
+// From Thetis console.cs:17511-17545 [v2.10.3.15] TXBand setter:
+//   //[2.10.3.6]MW0LGE no band change on TX fix
+//   if (MOX) return;
+//   Band old_band = _tx_band;
+//   if (initializing) old_band = value; // we cant use tx_band, because it is unset (GEN), unless we save it out it is irrelevant MW0LGE
+//   _tx_band = value;
+//   if (_tx_band != old_band || initializing)
+//   {
+//       int old_pwr = ptbPWR.Value;
+//       if (initializing) old_pwr = power_by_band[(int)old_band]; // ... MW0LGE
+//       power_by_band[(int)old_band] = old_pwr;
+//       ptbPWR.LimitValue = limitPower_by_band[(int)value];
+//       ptbTune.LimitValue = limitTunePower_by_band[(int)value]; //MW0LGE_22b
+//       PWR = power_by_band[(int)value];
+//       TunePWR = tunePower_by_band[(int)value]; //MW0LGE_22b
+//       // save FM TX Offset
+//       if (!initializing)
+//       {
+//           fm_tx_offset_by_band_mhz[(int)old_band] = fm_tx_offset_mhz;
+//       }
+//       FMTXOffsetMHz = fm_tx_offset_by_band_mhz[(int)value]; //MW0LGE_21k9
+//   }
+// TunePWR is TransmitModel::setTuneTxBand, inside the same MOX guard: a
+// retune while keyed (TUNE keys MOX) holds the tune power too.
+// The rest of the setter (the 60 m TX filter save and restore,
+// DisplayAriesTXAntenna and TXBandChangeHandlers) is not power and is not
+// ported here.
+void RadioModel::applyTransmitBand(Band band, bool initializing)
+{
+    if (m_role != Role::Local) {
+        return;
+    }
+    //[2.10.3.6]MW0LGE no band change on TX fix
+    if (m_moxController && m_moxController->isMox()) {
+        return;
+    }
+
+    // Upstream's _tx_band starts unset (GEN) and its first real value comes
+    // with initializing. The first band seen here is that value: PWR loads
+    // the band's stored power, so the next save (drivePowerScroll, the
+    // start-of-transmit restore) writes back what was loaded, never a PWR
+    // that belongs to no band. The connect-time call loads it again once
+    // the per-MAC store is in.
+    if (!m_txBandKnown) {
+        initializing = true;
+    }
+    Band oldBand = m_txBandKnown ? m_txBand : band;
+    if (initializing) {
+        oldBand = band; // we cant use tx_band, because it is unset (GEN), unless we save it out it is irrelevant MW0LGE
+    }
+    const bool bandMoved = !m_txBandKnown || m_txBand != band;
+    m_txBand = band;
+    m_txBandKnown = true;
+    // OnTXBandChanged (setup.cs:23835-23839 [v2.10.3.15]) moves the PA
+    // page's adjusting band (setAdjustingBand(newBand);
+    // lblTXattBand.Text = newBand.ToString(); //[2.3.10.6]MW0LGE added (also in ATTOnTX));
+    // paOnAirBandIndex readers follow this.
+    if (bandMoved) {
+        emit transmitBandChanged();
+    }
+
+    // From Thetis console.cs:17525-17528 [v2.10.3.15]:
+    //   Band lo_band = Band.FIRST;
+    //   if (tx_xvtr_index >= 0)
+    //       // Fix Penny O/C VHF control Vk4xv
+    //       lo_band = BandByFreq(XVTRForm.TranslateFreq(VFOAFreq), rx1_xvtr_index, current_region);
+    // lo_band is never read again in the setter, so the lookup changes
+    // nothing here. NereusSDR has no transverter form to translate through
+    // (the XVTR band is Band::XVTR, a per-band state slot of its own).
+
+    if (band == oldBand && !initializing) {
+        return;
+    }
+
+    // save values for old band
+    int oldPwr = m_transmitModel.power();
+    if (initializing) {
+        oldPwr = m_transmitModel.powerForBand(oldBand); // we cant use what is set on the trackbar if we are initialisting, becase it is irrelevent, old_band will = value at this point MW0LGE
+    }
+    m_transmitModel.setPowerForBand(oldBand, oldPwr);
+
+    // ptbPWR.LimitValue = limitPower_by_band[(int)value];
+    // ptbTune.LimitValue = limitTunePower_by_band[(int)value]; //MW0LGE_22b
+    m_transmitModel.setPowerLimit(m_transmitModel.limitPowerForBand(band));
+    m_transmitModel.setTunePowerLimit(
+        m_transmitModel.limitTunePowerForBand(band));
+
+    // PWR = power_by_band[(int)value]; powerChanged runs drivePowerScroll,
+    // which recomputes the drive and saves the same value to m_txBand.
+    // The PWR setter (console.cs:18437-18448 [v2.10.3.15]) runs
+    // ptbPWR_Scroll even when the value is unchanged, so the new band's
+    // limit and gain reach the drive; setPower only signals a change.
+    const int newPwr = m_transmitModel.powerForBand(band);
+    if (m_transmitModel.power() == newPwr) {
+        drivePowerScroll();
+    } else {
+        m_transmitModel.setPower(newPwr);
+    }
+    // TunePWR = tunePower_by_band[(int)value]; //MW0LGE_22b
+    m_transmitModel.setTuneTxBand(band);
+
+    // save FM TX Offset
+    if (!initializing) {
+        m_transmitModel.setFmTxOffsetForBandMhz(
+            oldBand, m_transmitModel.fmTxOffsetMhz());
+    }
+    m_transmitModel.setFmTxOffsetMhz(
+        m_transmitModel.fmTxOffsetForBandMhz(band)); //MW0LGE_21k9
 }
 
 // ---------------------------------------------------------------------------
@@ -7322,6 +7879,18 @@ void RadioModel::updateCoreOnAir()
 void RadioModel::clearRemoteTransmittingState()
 {
     if (m_role != Role::Remote) { return; }
+    // PA on-air gate re-review, Important C: the Core's PA row too, so the
+    // next Core (perhaps an older one that never sends it) starts from the
+    // window's own fallback.
+    if (m_stationPaTransmitBandKnown) {
+        const int before = paOnAirBandIndex();
+        m_stationPaTransmitBandKnown = false;
+        m_stationPaTransmitBand = -1;
+        if (paOnAirBandIndex() != before) {
+            emit paTransmitBandChanged(paOnAirBandIndex());
+            emit transmitBandChanged();
+        }
+    }
     // R-R3-49 (parity Task 6): the Core's TX inhibit too.
     if (m_remoteTxInhibited) {
         m_remoteTxInhibited = false;
@@ -15407,13 +15976,14 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
         // is what the issue #175 fix required.
         m_transmitModel.setMacAddress(info.macAddress);
         m_transmitModel.load();
-        // R-R3-49 (parity Task 2): the loaded tune power for the transmit band.
-        refreshTransmitTuneBand();
 
         // Load per-MAC mic/VOX/MON properties (15 properties, 3 excluded for safety).
         // Phase 3M-1b L.2. After setMacAddress so auto-persist uses the correct MAC.
         // voxEnabled, monEnabled, micMute are NOT loaded — always start at safe defaults.
         m_transmitModel.loadFromSettings(info.macAddress);
+        // The TXBand setter's initializing pass (console.cs:17511-17545
+        // [v2.10.3.15]): PWR takes the loaded power for the transmit band.
+        applyTransmitBand(transmitSliceBand(), /*initializing=*/true);
 
         // ── 3M-1c L.1: per-MAC MicProfileManager scope ────────────────────────
         //
@@ -16896,22 +17466,7 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
             // SetOutputPower + cmaster.CMSetTXOutputLevel
             // (audio.cs:262-271 + NetworkIO.cs:201-211 + cmaster.cs:
             // 1115-1119 [v2.10.3.13]).
-            if (m_paProfileManager) {
-                const PaProfile* prof = m_paProfileManager->activeProfile();
-                const SliceModel* const txSlice = txBoundSlice();
-                if (prof && txSlice) {
-                    const Band currentBand =
-                        bandFromFrequency(txSlice->frequency());
-                    (void)m_transmitModel.setPowerUsingTargetDbm(
-                        *prof, currentBand, /*bSetPower=*/true,
-                        /*bFromTune=*/false, /*bTwoTone=*/false,
-                        m_hardwareProfile.model);
-                    qCInfo(lcDsp)
-                        << "Initial audioVolume seed pumped — first MOX "
-                           "drive byte / IQ scalar now non-zero without "
-                           "requiring TUN priming";
-                }
-            }
+            seedInitialAudioVolume();
         };  // end of txSetup lambda
         txSetup();
 
@@ -21944,7 +22499,7 @@ void RadioModel::teardownConnection()
     //   chkTUN.Enabled = false;
     //   chk2TONE.Checked = false;  // MW0LGE_21a
     // chkTUN.Checked = false runs chkTUN_CheckedChanged's TUN-off branch.
-    // Two-tone is released further down (m_twoToneController). NereusSDR
+    // Two-tone ends right after the TUN-off below (stopNow). NereusSDR
     // glue: the TUN-off completion runs at once, because the MoxController
     // timers that would deliver rxReady cannot fire during this teardown.
     // Task 7: no PTT source reports once the connection goes, so the levels
@@ -21978,6 +22533,20 @@ void RadioModel::teardownConnection()
     if (m_isTuning) {
         setTune(false);
         completeTuneOff();
+    }
+    // PA on-air gate branch review, Important 1: the two-tone test ends
+    // here, at once. From Thetis console.cs:27473 [v2.10.3.15]:
+    //   SetupForm.TestIMD = false;
+    // and console.cs:27492 [v2.10.3.15]:
+    //   chk2TONE.Checked = false;  // MW0LGE_21a
+    // The FIXED source's stop puts the PWR limit back on and PWR back to
+    // its saved value, into the held transmit band (setup.cs:11196-11201
+    // [v2.10.3.15]). Its 200 ms settle cannot fire during this teardown, so
+    // stopNow runs it now: before the saves below persist the band powers,
+    // and before m_txBandKnown is cleared. MOX is already off above. A start
+    // still waiting on its release settle is dropped the same way.
+    if (m_twoToneController) {
+        m_twoToneController->stopNow();
     }
     // Task 13: the radio's TX inhibit input goes with the radio. Nothing is
     // keyed by now (the PTT sources are cleared and MOX is off above), so
@@ -22198,11 +22767,8 @@ void RadioModel::teardownConnection()
         m_twoToneController->setTxChannel(nullptr);
         m_twoToneController->setSliceModel(nullptr);
         m_twoToneController->setPowerOn(false);
-        // If a two-tone test is currently running, force it off so the
-        // restored MOX-release doesn't hold over the disconnect.
-        if (m_twoToneController->isActive()) {
-            m_twoToneController->setActive(false);
-        }
+        // Ended above (stopNow); a no-op unless something restarted it.
+        m_twoToneController->stopNow();
     }
 
     // 3M-4 Task 7: tear down PureSignal before the TxChannel pointer dies.
@@ -22390,6 +22956,20 @@ void RadioModel::teardownConnection()
     // TX routing (and the relay flags waited for a MOX edge) until the next
     // key-up.
     m_alexRoutingTx = false;
+
+    // PA on-air gate review, Minor 2: the transmit band belonged to the
+    // radio that went away. Forget it, so the next band seen (the slice
+    // after a retune, the connect-time pass) is an initializing TXBand pass
+    // (console.cs:17511-17545 [v2.10.3.15]) that loads that band's power
+    // and never saves the old radio's PWR into the old band.
+    if (m_txBandKnown) {
+        m_txBandKnown = false;
+        emit transmitBandChanged();
+    }
+    // PA on-air gate re-review: the tune power's transmit band goes with
+    // it, so the next band seen repaints the Tune Power slider as a first
+    // band does.
+    m_transmitModel.clearTuneTxBand();
 
     // Re-arm the discovery quiet period now that the protocol disconnect has
     // actually completed.  The arm at the top of this function starts the
@@ -22778,7 +23358,74 @@ void RadioModel::restoreNormalTxDrive()
     // the HL2 tune carve-out mid-tune.
     if (m_transmitModel.isTune())          { return; }
     if (m_transmitModel.isTwoToneActive()) { return; }
-    if (!m_connection)                     { return; }
+    // ptbPWR_Scroll, as upstream: the drive, and PWR saved into
+    // power_by_band[_tx_band]. applyTransmitBand keeps PWR equal to the
+    // transmit band's slot across band changes (and holds the band while
+    // keyed), so the save lands on the band PWR belongs to.
+    drivePowerScroll();
+}
+
+void RadioModel::drivePowerScroll()
+{
+    // From Thetis console.cs:28682-28693 [v2.10.3.15] ptbPWR_Scroll:
+    //   int new_pwr = setPowerFromDriveSlider(out bool bUseConstrain, e != EventArgs.Empty);
+    //   power_by_band[(int)_tx_band] = ptbPWR.Value;
+    // The save follows the drive whatever the tx mode; only
+    // `if (IsSetupFormNull) return;` guards it upstream, so no radio or
+    // profile is needed. setPowerForBand keeps the existing
+    // hardware/<mac>/powerByBand/<band> key.
+    applyDriveSliderPower();
+    if (!ownsLocalDsp()) { return; }
+    // _tx_band is m_txBand. Before applyTransmitBand first runs no band's
+    // power has been loaded into PWR, so there is nothing of a band's to save.
+    if (!m_txBandKnown) { return; }
+    m_transmitModel.setPowerForBand(m_txBand, m_transmitModel.power());
+}
+
+// The first-MOX audioVolume seed (bench 2026-05-11), run by the txSetup
+// lambda in connectToRadio once the TxChannel exists.
+void RadioModel::seedInitialAudioVolume()
+{
+    if (!m_paProfileManager) { return; }
+    const PaProfile* prof = m_paProfileManager->activeProfile();
+    const SliceModel* const txSlice = txBoundSlice();
+    if (prof && txSlice) {
+        // From Thetis console.cs:46750-46752 [v2.10.3.15]:
+        //   case 0: //normal
+        //       new_pwr = ptbPWR.Value;
+        //       power_by_band[(int)_tx_band] = new_pwr;
+        // with gbb = GainByBand(TXBand, new_pwr) (console.cs:46808): the
+        // held transmit band, not the slice's.
+        const Band currentBand = driveTxBand();
+        (void)m_transmitModel.setPowerUsingTargetDbm(
+            *prof, currentBand, /*bSetPower=*/true,
+            /*bFromTune=*/false, /*bTwoTone=*/false,
+            m_hardwareProfile.model);
+        qCInfo(lcDsp)
+            << "Initial audioVolume seed pumped: first MOX "
+               "drive byte / IQ scalar now non-zero without "
+               "requiring TUN priming";
+    }
+}
+
+// Thetis's _tx_band for the drive math (SetPowerUsingTargetDBM reads
+// power_by_band[(int)_tx_band] and GainByBand(TXBand, ...)): m_txBand, held
+// while keyed, else the band applyTransmitBand would take.
+Band RadioModel::driveTxBand() const
+{
+    return m_txBandKnown ? m_txBand : transmitSliceBand();
+}
+
+void RadioModel::applyDriveSliderPower()
+{
+    // From Thetis console.cs:28682-28692 [v2.10.3.15] ptbPWR_Scroll:
+    //   int new_pwr = setPowerFromDriveSlider(out bool bUseConstrain, e != EventArgs.Empty);
+    // From Thetis console.cs:46710-46716 [v2.10.3.15] setPowerFromDriveSlider:
+    //   nDrv = SetPowerUsingTargetDBM(out bool bConstrainOut, out double targetdBm, true, false, false);
+    // SetPowerUsingTargetDBM (console.cs:46724-46747 [v2.10.3.15]) takes
+    // txMode 1 while chkTUN is checked and 2 while chk2TONE is, so this
+    // recomputes the tune or two-tone drive with the new gain.
+    if (!m_connection) { return; }
 
     // Active-profile resolution. Without a loaded PaProfileManager (MAC scope
     // not set, or first-launch state before factory regen), activeProfile()
@@ -22788,11 +23435,15 @@ void RadioModel::restoreNormalTxDrive()
     const PaProfile* activeProfile = m_paProfileManager->activeProfile();
     if (!activeProfile)      { return; }
 
-    const SliceModel* const txSlice = txBoundSlice();
-    const Band currentBand = txSlice ? bandFromFrequency(txSlice->frequency())
-                                     : m_lastBand;
+    // From Thetis console.cs:46750-46752 [v2.10.3.15] SetPowerUsingTargetDBM:
+    //   case 0: //normal
+    //       new_pwr = ptbPWR.Value;
+    //       power_by_band[(int)_tx_band] = new_pwr;
+    // _tx_band, not the slice's band: a retune while keyed does not move it.
+    const Band currentBand = driveTxBand();
 
-    // txMode 0 (normal): bFromTune=false, bTwoTone=false. The wire byte and
+    // bFromTune=false, bTwoTone=false: txMode 0 unless TUNE or the two-tone
+    // test runs, whose own source the transmit model then reads. The wire byte and
     // IQ scalar pump happen inside pumpAudioVolume, wired to
     // TransmitModel::audioVolumeChanged, which setPowerUsingTargetDbm emits.
     const auto result = m_transmitModel.setPowerUsingTargetDbm(
@@ -23461,9 +24112,18 @@ void RadioModel::setTune(bool on)
         m_savedTxDspMode = txSlice ? txSlice->dspMode() : DSPMode::USB;
 
         // ── SAVE power slider value ────────────────────────────────────────────
-        // Cite: console.cs:30033 [v2.10.3.13]: PreviousPWR = ptbPWR.Value;
-        //   //MW0LGE_22b  [original inline comment from console.cs:30033]
-        m_savedPowerPct = m_transmitModel.power();
+        // From Thetis console.cs:30094-30096 [v2.10.3.15]:
+        //   // remember old power //MW0LGE_22b
+        //   if (_tuneDrivePowerSource == DrivePowerSource.FIXED)
+        //       PreviousPWR = ptbPWR.Value;
+        // Only the FIXED source sets PWR during TUNE, so only it saves and
+        // restores PWR (m_tuneSetFixedPwr, set with the PWR push below).
+        m_tuneSetFixedPwr = false;
+        const bool tuneFixedSource =
+            (m_transmitModel.tuneDrivePowerSource() == DrivePowerSource::Fixed);
+        if (tuneFixedSource) {
+            m_savedPowerPct = m_transmitModel.power();
+        }
 
         // ── COMPUTE tune-tone frequency (sign-selected by current DSP mode) ────
         // Cite: console.cs:30024-30037 [v2.10.3.13] — switch on Audio.TXDSPMode.
@@ -23545,9 +24205,15 @@ void RadioModel::setTune(bool on)
         //   wire = clamp(int(255 * tunePower/100 * swrProtect), 0, 255)
         // shipped K2GX's >300W on 200W radio.  This rewrite is the
         // K2GX safety fix proper.
-        const Band currentBand = txSlice
-                                    ? bandFromFrequency(txSlice->frequency())
-                                    : m_lastBand;
+        //
+        // The band is _tx_band, not the slice's: SetPowerUsingTargetDBM
+        // (console.cs:46762-46808 [v2.10.3.15]) takes ptbTune.Value, which
+        // the TXBand setter loaded (TunePWR = tunePower_by_band[(int)value]; //MW0LGE_22b),
+        // and gbb = GainByBand(TXBand, new_pwr). TXBand holds through a
+        // retune while keyed (//[2.10.3.6]MW0LGE no band change on TX fix)
+        // until the next band change, so a TUNE after that unkey drives
+        // the held band.
+        const Band currentBand = driveTxBand();
 
         // tunePower retained as a local for the SwrProtectionController
         // setters below — those setters drive the tune-bypass / alex_fwd
@@ -23557,6 +24223,11 @@ void RadioModel::setTune(bool on)
         // wrapper; the SWR controller stays slider-driven per upstream.
         const int tunePower = m_transmitModel.tunePowerForBand(currentBand);
 
+        // new_pwr of SetPowerUsingTargetDBM(..., true, true, false). Without
+        // a profile no drive is pushed; the FIXED case's new_pwr is then
+        // tune_power, as its switch sets it (console.cs:46766-46768
+        // [v2.10.3.15]: new_pwr = tune_power; bConstrain = false;).
+        int tuneNewPwr = m_transmitModel.tunePower();
         if (m_paProfileManager) {
             const PaProfile* activeProfile = m_paProfileManager->activeProfile();
             if (activeProfile) {
@@ -23572,6 +24243,7 @@ void RadioModel::setTune(bool on)
                     *activeProfile, currentBand, /*bSetPower=*/true,
                     /*bFromTune=*/true, /*bTwoTone=*/false,
                     m_hardwareProfile.model);
+                tuneNewPwr = result.newPower;
 
                 // #202 deep-fix: TXPostGenRun=0 case for new_pwr==0 during TUNE.
                 // Mirrors ramdor Thetis console.cs:46749-46752 [v2.10.3.15]:
@@ -23614,6 +24286,24 @@ void RadioModel::setTune(bool on)
             // push.  The downstream MoxController / setTuneTone path still
             // engages MOX + tone, but no drive byte is sent.  Safer than
             // sending stale wire bytes from a previous radio's profile.
+        }
+
+        // ── FIXED source: PWR shows the tune power ─────────────────────────────
+        // From Thetis console.cs:30099-30104 [v2.10.3.15]:
+        //   //
+        //   if (_tuneDrivePowerSource == DrivePowerSource.FIXED)
+        //   {
+        //       PWRSliderLimitEnabled = false;
+        //       PWR = new_pwr;
+        //   }
+        // (remember old power //MW0LGE_22b, console.cs:30094.) The drive does
+        // not move: TUN is on, so the PWR change takes the tune path, whose
+        // FIXED case drives tune_power unconstrained, the value just pushed.
+        if (tuneFixedSource) {
+            m_transmitModel.setPowerSliderLimitEnabled(false);
+            m_transmitModel.setPower(tuneNewPwr);
+            m_tuneSetFixedPwr = true;
+            // NereusSDR divergence (console.cs:30180-30185 [v2.10.3.15] re-reads the source at TUN-off): latched so a mid-TUNE source change cannot leave the limit off or restore a stale PreviousPWR.
         }
 
         // ── PUSH TUNE-ADJUSTED TX VFO (carrier-on-dial) ────────────────────────
@@ -24715,9 +25405,23 @@ void RadioModel::completeTuneOff()
     m_savedTxDspSliceId = -1;
 
     // ── RESTORE POWER ──────────────────────────────────────────────────────
-    // Cite: console.cs:30129-30132 [v2.10.3.13]:
-    //   if (_tuneDrivePowerSource == DrivePowerSource.FIXED) PWR = PreviousPWR;
-    //   //MW0LGE_22b  [original inline comment from console.cs:30033]
+    // From Thetis console.cs:30180-30185 [v2.10.3.15]:
+    //   //MW0LGE_22b
+    //   if (_tuneDrivePowerSource == DrivePowerSource.FIXED)
+    //   {
+    //       PWRSliderLimitEnabled = true;
+    //       PWR = PreviousPWR;
+    //   }
+    // m_tuneSetFixedPwr records that TUN-on took the FIXED branch, so the
+    // restore pairs with the save even if the source changed during TUNE.
+    // Another source never touched PWR, and a PWR change made during TUNE
+    // stays.
+    // NereusSDR divergence (console.cs:30180-30185 [v2.10.3.15] re-reads the source here): the latch keeps a mid-TUNE source change from leaving the limit off or restoring a stale PreviousPWR.
+    if (m_tuneSetFixedPwr) {
+        m_transmitModel.setPowerSliderLimitEnabled(true);
+        m_transmitModel.setPower(m_savedPowerPct);
+        m_tuneSetFixedPwr = false;
+    }
     //
     // Codex P1 follow-up to PR #178 — route the restore through the
     // calibrated dBm path, NOT the old linear formula.  Previously
@@ -24736,11 +25440,9 @@ void RadioModel::completeTuneOff()
     // bFromTune=false routes through txMode 0 (drive-slider source)
     // since TUN is now off and the user's saved drive-slider value
     // is the canonical post-restore source.
-    m_transmitModel.setPower(m_savedPowerPct);
-    const SliceModel* const txSlice = txBoundSlice();
-    const Band offBand = txSlice
-                            ? bandFromFrequency(txSlice->frequency())
-                            : m_lastBand;
+    // txMode 0 saves PWR into power_by_band[(int)_tx_band]
+    // (console.cs:46750-46752 [v2.10.3.15]); _tx_band held through the tune.
+    const Band offBand = driveTxBand();
     if (m_paProfileManager) {
         const PaProfile* activeProfile = m_paProfileManager->activeProfile();
         if (activeProfile) {

@@ -44,6 +44,16 @@
 //                (KG4VCF), AI-assisted via Anthropic Claude Code. A remote
 //                device's start asks and keys as that device
 //                (setActive(bool, const KeyerIdentity&)). NereusSDR-original.
+//   2026-09-29 : PA on-air gate re-review, item 5, by J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code. setTxBandFn:
+//                the PA-gain drive reads the held transmit band, as Thetis's
+//                GainByBand(TXBand, ...) does (console.cs:46808 [v2.10.3.15]).
+//   2026-09-29 : Two-tone PA wiring, by J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code. The start runs in Thetis order
+//                (setup.cs:11146-11170 [v2.10.3.15]): PA-gain drive before
+//                the key, PWR slider limit off for the FIXED source, TwoTone
+//                set before MOX with or without a PA profile. The stop and a
+//                refused key clear TwoTone, then restore PWR with the limit.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis-derived activation flow
@@ -160,6 +170,11 @@ void TwoToneController::setTuneActiveFn(std::function<bool()> fn)
 void TwoToneController::setTuneOffFn(std::function<void()> fn)
 {
     m_tuneOff = std::move(fn);
+}
+
+void TwoToneController::setTxBandFn(std::function<Band()> fn)
+{
+    m_txBand = std::move(fn);
 }
 
 void TwoToneController::setSettleDelaysMs(int moxReleaseMs, int tuneReleaseMs)
@@ -304,6 +319,39 @@ void TwoToneController::setActive(bool on)
         //   await Task.Delay(200); // MW0LGE_21a
         m_deactivationSettleTimer.start();
     }
+}
+
+// ---------------------------------------------------------------------------
+// stopNow: power off. From Thetis console.cs:27473 and 27492 [v2.10.3.15]
+// (chkPower_CheckedChanged, power going off):
+//   SetupForm.TestIMD = false;
+//   ...
+//   chk2TONE.Checked = false;  // MW0LGE_21a
+// Thetis's stop waits 200 ms after console.MOX = false before its restore
+// (setup.cs:11190-11201 [v2.10.3.15]); its _tx_band is never cleared, so
+// the restore still lands in the held band after that wait. NereusSDR's
+// teardown saves the powers and clears the held band without running the
+// event loop again, so the stop's steps run here at once instead.
+// ---------------------------------------------------------------------------
+void TwoToneController::stopNow()
+{
+    if (m_rejectSettleTimer.isActive()) {
+        m_rejectSettleTimer.stop();
+        onRejectSettleElapsed();
+    }
+    if (!m_active && !m_activationInFlight) {
+        return;
+    }
+
+    m_moxReleaseSettleTimer.stop();
+    m_tuneReleaseSettleTimer.stop();
+    m_freq2DelayTimer.stop();
+    m_deactivationSettleTimer.stop();
+
+    if (m_moxController && m_moxController->isMox()) {
+        m_moxController->setMox(false);
+    }
+    continueDeactivation();
 }
 
 // ---------------------------------------------------------------------------
@@ -477,38 +525,78 @@ void TwoToneController::continueActivation()
     //       console.radio.GetDSPTX(0).TXPostGenRun = 1;
     m_txChannel->setTxPostGenRun(true);
 
-    // ── Stage 7: DrivePowerSource handling.  From Thetis setup.cs:11109-
-    //     11120 [v2.10.3.13]:
+    // ── Stage 7: DrivePowerSource handling.  From Thetis setup.cs:11148-
+    //     11159 [v2.10.3.15]:
     //       //MW0LGE_22b
     //       // remember old power //MW0LGE_22b
     //       if (console.TwoToneDrivePowerOrigin == DrivePowerSource.FIXED)
     //           console.PreviousPWR = console.PWR;
     //       // set power
-    //       int new_pwr = console.SetPowerUsingTargetDBM(out bool bUseConstrain,
-    //                                                    out double targetdBm,
-    //                                                    true, true, true);
-    //       if (console.TwoToneDrivePowerOrigin == DrivePowerSource.FIXED) {
+    //       int new_pwr = console.SetPowerUsingTargetDBM(out bool bUseConstrain, out double targetdBm, true, true, true);
+    //       //
+    //       if (console.TwoToneDrivePowerOrigin == DrivePowerSource.FIXED)
+    //       {
     //           console.PWRSliderLimitEnabled = false;
     //           console.PWR = new_pwr;
     //       }
     //
-    // NereusSDR deviation: SetPowerUsingTargetDBM is a Thetis-internal helper
-    // that doesn't yet exist here.  The cleanest semantic match for "Fixed
-    // mode" is to use twoTonePower() (the Setup-page-fixed value) directly
-    // as the override.  See I.1 step 7 note.
+    // SetPowerUsingTargetDBM runs before console.TwoTone and console.MOX are
+    // set, so bFromTune=true with bTwoTone=true gives txMode 2
+    // (console.cs:46724-46747 [v2.10.3.15]), and bSetPower=true sets the
+    // drive: setPowerUsingTargetDbm emits audioVolumeChanged, which
+    // RadioModel pumps to the wire byte and the IQ scalar.  Its gain is
+    // GainByBand(TXBand, new_pwr) (console.cs:46808 [v2.10.3.15]): the
+    // transmit band RadioModel holds while keyed (setTxBandFn), else the
+    // slice's band.
+    //
+    // PR #212 follow-up bench fix (J.J. KG4VCF, 2026-05-07): pass the
+    // connected HPSDRModel so the HL2 audio-volume formula
+    // `(hl2Power * gbb/100) / 93.75` engages instead of the linear
+    // fallback when model defaults to FIRST.
+    //
+    // Without a PA profile (no manager, or none loaded yet) there is no
+    // drive to compute; new_pwr is then the source's own value, which is
+    // what the FIXED branch below needs.
     m_savedPwrValid = false;
-    if (m_tx->twoToneDrivePowerSource() == DrivePowerSource::Fixed) {
+    const bool fixedSource =
+        m_tx->twoToneDrivePowerSource() == DrivePowerSource::Fixed;
+    if (fixedSource) {
         m_savedPwr = m_tx->power();
         m_savedPwrValid = true;
-        m_tx->setPower(m_tx->twoTonePower());
+    }
+    int newPwr = m_tx->twoTonePower();
+    if (m_paProfileManager) {
+        if (const PaProfile* profile = m_paProfileManager->activeProfile()) {
+            Band band = m_slice
+                ? bandFromFrequency(m_slice->frequency())
+                : Band::Band20m;
+            if (m_txBand) {
+                band = m_txBand();
+            }
+            newPwr = m_tx->setPowerUsingTargetDbm(
+                *profile, band,
+                /*bSetPower=*/true,
+                /*bFromTune=*/true,
+                /*bTwoTone=*/true,
+                m_tx->hpsdrModel()).newPower;
+        }
+    }
+    if (fixedSource) {
+        // console.PWRSliderLimitEnabled = false; console.PWR = new_pwr;
+        // The PWR setter runs ptbPWR_Scroll (console.cs:18437 [v2.10.3.15]),
+        // RadioModel's powerChanged: txMode 0 here, so it drives new_pwr
+        // past the band's PWR limit and saves it in power_by_band.
+        m_tx->setPowerSliderLimitEnabled(false);
+        m_tx->setPower(newPwr);
     }
 
-    // ── Stage 8: engage MOX.  From Thetis setup.cs:11122-11131 [v2.10.3.13]:
+    // ── Stage 8: engage MOX.  From Thetis setup.cs:11162-11170 [v2.10.3.15]:
     //       console.ManualMox = true;
     //       console.TwoTone = true; // MW0LGE_21a
-    //       Audio.MOX = true;
+    //       Audio.MOX = true;//
     //       console.MOX = true;
-    //       if (!console.MOX) {
+    //       if (!console.MOX)
+    //       {
     //           chkTestIMD.Checked = false;
     //           return;
     //       }
@@ -524,6 +612,11 @@ void TwoToneController::continueActivation()
     // (setup.cs:11162 [v2.10.3.15]). While it is set no mic PTT, VOX, CAT or
     // TCI keys or releases (PollPTT, console.cs:25470 [v2.10.3.15]).
     m_moxController->setManualKey(true);
+    // console.TwoTone (chk2TONE.Checked) is TransmitModel's two-tone mirror:
+    // set before the key, whether or not a PA profile is loaded, so the
+    // drive math takes txMode 2 while keyed and RadioModel's MOX-edge
+    // restore leaves the two-tone drive on the air.
+    m_tx->setTwoToneActive(true);
     {
         const QScopedValueRollback<bool> keying(m_keyingMox, true);
         // Task 35: a remote device's two-tone keys as that device.
@@ -547,71 +640,6 @@ void TwoToneController::continueActivation()
     if (!m_activationInFlight) {
         // onMoxRejected fired synchronously; nothing more to do.
         return;
-    }
-
-    // ── Stage 8b: Phase 4B of #167 — PA-cal hotfix integration.
-    //
-    // From Thetis console.cs:46693-46708 [v2.10.3.13] — chk2TONE_CheckedChanged
-    // SetPowerUsingTargetDBM txMode=2 drive-source enum routing.  In Thetis,
-    // chk2TONE.Checked is the runtime mirror that drives txMode=2 inside
-    // SetPowerUsingTargetDBM (console.cs:46667-46668).  The wrapper invocation
-    // routes through the active drive-source enum (DriveSlider / TuneSlider /
-    // Fixed) and emits TransmitModel::audioVolumeChanged so RadioModel can
-    // pump audio_volume to TxChannel (iq_gain) + RadioConnection (wire_byte).
-    //
-    // Sequenced AFTER MOX engagement (Stage 8) so:
-    //   - if BandPlanGuard rejected MOX, we never emit audio_volume to the
-    //     wire (onMoxRejected has already fired and m_activationInFlight is
-    //     cleared above; we return early then).
-    //   - the MOX state is consistent with Thetis console.cs:11122-11125
-    //     ordering (ManualMox = TwoTone = MOX = true) before the wrapper
-    //     reads it.
-    //
-    // Skips when:
-    //   - m_paProfileManager is null (test seam + pre-RadioModel-wired state).
-    //   - activeProfile() returns null (manager exists but unloaded).
-    // In both cases the controller falls back to its pre-Phase-4B behaviour
-    // (TXPostGen + MOX + Fixed-mode setPower snapshot only).  This keeps the
-    // existing tst_two_tone_controller suite green and matches early-boot
-    // RadioModel state where the manager hasn't loaded yet.
-    if (m_paProfileManager) {
-        if (const PaProfile* profile = m_paProfileManager->activeProfile()) {
-            // Mark TransmitModel two-tone-active FIRST so the wrapper's
-            // txMode determination resolves to 2 (per console.cs:46667-46668
-            // [v2.10.3.13] — else if (chk2TONE.Checked) txMode = 2).
-            m_tx->setTwoToneActive(true);
-
-            // Resolve current TX band from the slice.  bandFromFrequency
-            // never returns Band::XVTR — XVTR slot is set explicitly by UI
-            // when transverter mode is active and isn't yet wired here
-            // (deferred per plan §"Open follow-ups").  GEN/SWL bands fall
-            // through to the sentinel fallback in computeAudioVolume
-            // (PaProfile::getGainForBand returns 1000.0f for Band::XVTR
-            // and out-of-range Bands → linear fallback in the math kernel).
-            const Band band = m_slice
-                ? bandFromFrequency(m_slice->frequency())
-                : Band::Band20m;
-
-            // From Thetis console.cs:46693-46708 [v2.10.3.13] —
-            // chk2TONE.Checked txMode=2 drive-source enum routing.  Caller
-            // composes wire_byte + iq_gain from result.audioVolume; that's
-            // RadioModel's job — see RadioModel.cpp connect block subscribing
-            // to TransmitModel::audioVolumeChanged.
-            //
-            // PR #212 follow-up bench fix (J.J. KG4VCF, 2026-05-07): pass the
-            // connected HPSDRModel so the HL2 audio-volume formula
-            // `(hl2Power * gbb/100) / 93.75` engages instead of the linear
-            // fallback when model defaults to FIRST.  Combined with the
-            // RadioModel audioVolumeChanged listener fix, this closes the
-            // 2-tone TX-amplitude gap that pinned txEnv at ~0.117 regardless
-            // of slider position (calcc LCOLLECT bins 8-15 never filled).
-            (void) m_tx->setPowerUsingTargetDbm(
-                *profile, band,
-                /*bSetPower=*/true,
-                /*bFromTune=*/false,
-                /*bTwoTone=*/true,
-                m_tx->hpsdrModel());
-        }
     }
 
     // ── Stage 9: Freq2Delay deferred Mag2.  From Thetis setup.cs:11134-11142
@@ -699,33 +727,31 @@ void TwoToneController::continueDeactivation()
     //   console.psform.TTgenON = false;
     //   console.radio.GetDSPTX(0).TXPostGenRun = 0;
 
-    if (m_txChannel) {
-        m_txChannel->setTxPostGenRun(false);
-    }
-
     // Receiver and transmit gaps plan, Task 7: console.ManualMox = false
     // after the release settle (setup.cs:11193 [v2.10.3.15]).
     if (m_moxController) {
         m_moxController->setManualKey(false);
     }
 
-    if (m_savedPwrValid && m_tx) {
-        m_tx->setPower(m_savedPwr);
-        m_savedPwrValid = false;
-    }
-
-    // Phase 4B of #167: clear the TransmitModel two-tone-active mirror.
-    // The next setPowerUsingTargetDbm call (e.g. from RadioModel's
-    // powerChanged lambda when MOX drops) will see m_twoToneActive=false
-    // and route through txMode=0 (normal mode), restoring the normal-mode
-    // audio_volume to the wire.  Phase 4B intentionally does NOT itself
-    // call setPowerUsingTargetDbm here — it would emit a "ghost" volume
-    // against now-stale 2-tone state.
-    //
-    // Cite: console.cs:11151-11177 [v2.10.3.13] — setActive(false) maps
-    //       console.TwoTone = false at line 11154.
+    // console.TwoTone = false; // MW0LGE_21a (setup.cs:11194 [v2.10.3.15]),
+    // before the FIXED power restore, so the PWR setter's scroll below
+    // takes txMode 0.  The controller does not itself call
+    // setPowerUsingTargetDbm on the stop, as Thetis's stop does not.
     if (m_tx) {
         m_tx->setTwoToneActive(false);
+    }
+
+    // //MW0LGE_22b (setup.cs:11196-11201 [v2.10.3.15]):
+    //   if (console.TwoToneDrivePowerOrigin == DrivePowerSource.FIXED)
+    //   {
+    //       console.PWRSliderLimitEnabled = true;
+    //       console.PWR = console.PreviousPWR;
+    //   }
+    restoreSavedPower();
+
+    // console.radio.GetDSPTX(0).TXPostGenRun = 0; (setup.cs:11205)
+    if (m_txChannel) {
+        m_txChannel->setTxPostGenRun(false);
     }
 
     if (m_active) {
@@ -811,19 +837,14 @@ void TwoToneController::onMoxRejected(const QString& reason)
     // again, re-entered here and raised a second message.
     m_rejectSettleTimer.start();
 
-    // Restore PWR if we had snapshotted it.
-    if (m_savedPwrValid && m_tx) {
-        m_tx->setPower(m_savedPwr);
-        m_savedPwrValid = false;
-    }
-
-    // Phase 4B of #167: clear the TransmitModel two-tone-active mirror in
-    // case it was set in continueActivation Stage 8b before MOX rejection
-    // landed.  Idempotent (TransmitModel::setTwoToneActive guards
-    // duplicates).
+    // chkTestIMD.Checked = false runs the stop branch (setup.cs:11194-11201
+    // [v2.10.3.15]): console.TwoTone = false; // MW0LGE_21a, then under
+    // FIXED the PWR limit back on and PWR restored.  continueActivation set
+    // TwoTone before the key.
     if (m_tx) {
         m_tx->setTwoToneActive(false);
     }
+    restoreSavedPower();
 
     m_activationInFlight = false;
 
@@ -835,6 +856,26 @@ void TwoToneController::onMoxRejected(const QString& reason)
         // optimistic-on highlight (TxApplet 2-TONE button toggle).
         emit twoToneActiveChanged(false);
     }
+}
+
+// ---------------------------------------------------------------------------
+// restoreSavedPower: the FIXED source's stop.  From Thetis setup.cs:11196-
+// 11201 [v2.10.3.15]:
+//   //MW0LGE_22b
+//   if (console.TwoToneDrivePowerOrigin == DrivePowerSource.FIXED)
+//   {
+//       console.PWRSliderLimitEnabled = true;
+//       console.PWR = console.PreviousPWR;
+//   }
+// ---------------------------------------------------------------------------
+void TwoToneController::restoreSavedPower()
+{
+    if (!m_savedPwrValid || !m_tx) {
+        return;
+    }
+    m_tx->setPowerSliderLimitEnabled(true);
+    m_tx->setPower(m_savedPwr);
+    m_savedPwrValid = false;
 }
 
 // ---------------------------------------------------------------------------
