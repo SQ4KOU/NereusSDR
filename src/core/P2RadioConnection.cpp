@@ -104,6 +104,10 @@
 //                 (whole corrected Hz, then integer Freq2PhaseWord;
 //                 NetworkIO.cs [v2.10.3.15]). J.J. Boyd (KG4VCF), AI-assisted
 //                 via Anthropic Claude Code.
+//   2026-09-29 - setActiveReceiverCount notes why its clamp stays on the
+//                board row (a wire value; Thetis keeps the radio's
+//                reported receiver count for its radio list only). J.J.
+//                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -1060,6 +1064,15 @@ void P2RadioConnection::setActiveReceiverCount(int count)
 
     // Clamp to board-reported maximum if caps are available.
     // kMaxRxStreams (12) is the wire-protocol ceiling; board caps may be lower.
+    //
+    // This is a wire value, so it stays on the board table rather than
+    // BoardCapsTable::effectiveReceiverCount. Thetis reads the radio's
+    // receiver count from discovery (From Thetis
+    // HPSDR/clsRadioDiscovery.cs:1194 [v2.10.3.15], r.NumRxs = data[20])
+    // and keeps it for its radio list only (From Thetis
+    // ucRadioList.cs:633 [v2.10.3.15], item.RadioNumRxs = radio.NumRxs);
+    // its DDC enables come from UpdateDDCs's per-model switch
+    // (console.cs:8537 [v2.10.3.15], quoted above).
     const int maxRx = m_caps ? m_caps->maxReceivers : kMaxRxStreams;
     const int clamped = qBound(1, count, maxRx);
     for (int i = 0; i < kMaxRxStreams; ++i) {

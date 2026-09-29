@@ -30,7 +30,10 @@ RadioInfoFacts radioInfoFacts(const RadioInfo& info, const BoardCapabilities& ca
     facts.protocol = info.protocol == ProtocolVersion::Protocol2
         ? QStringLiteral("Protocol 2") : QStringLiteral("Protocol 1");
     facts.adcCount = QString::number(caps.adcCount);
-    facts.maxRx = QString::number(caps.maxReceivers);
+    // The radio's own receiver count where it reported one, the board row's
+    // otherwise: the same count the stream pool is sized from.
+    facts.maxRx = QString::number(BoardCapsTable::effectiveReceiverCount(
+        caps, info.protocol, info.reportedReceivers));
     facts.firmware = info.firmwareVersion > 0 ? QString::number(info.firmwareVersion) : none;
     facts.mac = info.macAddress.isEmpty() ? none : info.macAddress;
     facts.ip = info.address.isNull() ? none : info.address.toString();

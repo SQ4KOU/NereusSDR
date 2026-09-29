@@ -27,6 +27,11 @@
 //                 ANAN-100D / ANAN-200D rows cover both protocols, by
 //                 J.J. Boyd (KG4VCF), with AI-assisted transformation via
 //                 Anthropic Claude Code.
+//   2026-09-29 - effectiveReceiverCount: the radio's reported receiver
+//                 count caps the row's maxReceivers on Protocol 2, the one
+//                 count the stream pool, Max RX and the live receiver count
+//                 clamp all read. J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
 //   2026-09-24 — HL2 preamp items take mi0bot's HERMES/HERMESLITE branch
 //                 (console.cs:41709-41718 [v2.10.3.13-beta2]): on/off plus
 //                 the Alex items when Alex is present. J.J. Boyd (KG4VCF),
@@ -1383,6 +1388,34 @@ int userDdcCountFor(const BoardCapabilities& caps, ProtocolVersion protocol) noe
         return std::min(caps.userDdcCount, kProtocol1UserStreams);
     }
     return caps.userDdcCount;
+}
+
+int userDdcCountFor(const BoardCapabilities& caps, ProtocolVersion protocol,
+                    int reportedReceivers) noexcept {
+    const int fromRow = userDdcCountFor(caps, protocol);
+    // Thetis reads the count (clsRadioDiscovery.cs:1194 [v2.10.3.15],
+    // r.NumRxs = data[20]) but sizes its DDCs from the model alone
+    // (console.cs:8228-8229 [v2.10.3.15], P1_rxcount = 5; nddc = 5; for
+    // the ANAN-G2). NereusSDR follows the radio's number instead
+    // (Radio-Authoritative Settings Policy), on Protocol 2 only.
+    // The cap is the one effective receiver count every reader shares.
+    if (protocol == ProtocolVersion::Protocol2 && reportedReceivers > 0) {
+        return std::min(fromRow,
+                        effectiveReceiverCount(caps, protocol, reportedReceivers));
+    }
+    return fromRow;
+}
+
+int effectiveReceiverCount(const BoardCapabilities& caps, ProtocolVersion protocol,
+                           int reportedReceivers) noexcept {
+    // The report is the radio's own number (Radio-Authoritative Settings
+    // Policy), read at clsRadioDiscovery.cs:1194 [v2.10.3.15]; see
+    // userDdcCountFor below. Protocol 1 keeps the row, as its stream pool
+    // does.
+    if (protocol == ProtocolVersion::Protocol2 && reportedReceivers > 0) {
+        return std::min(caps.maxReceivers, reportedReceivers);
+    }
+    return caps.maxReceivers;
 }
 
 std::vector<int> sampleRatesFor(const BoardCapabilities& caps,

@@ -38,6 +38,11 @@
 //   2026-09-29 - R-R3-49 / R-IOS-18: the sample rate box carries its
 //                 Setup description id (version 13). J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Max RX (label and support info) shows the radio's
+//                 reported receiver count where it gave one
+//                 (BoardCapsTable::effectiveReceiverCount, read in
+//                 radioInfoFacts), the count the stream pool uses. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================

@@ -1875,8 +1875,9 @@ private:
     QString deviceNameForStop(const QByteArray& deviceId) const;
     /// iPhone app plan Task 39: records on `txState` that the Core is
     /// stopping `deviceId`'s key for `stopReason` (TransmitState::kStop*),
-    /// when that device holds transmit and is on the air.
-    void noteHolderStopped(const QByteArray& deviceId, const char* stopReason);
+    /// when that device holds transmit and is on the air. Returns the stop's
+    /// words, or an empty string when that device was not on the air.
+    QString noteHolderStopped(const QByteArray& deviceId, const char* stopReason);
     /// Merge of Tasks 37 and 39: records on `txState` why the Core is about
     /// to stop transmitting (the watchdog's linkLost, the starvation's
     /// micStarved), in the words it stops with. Called before StopAllTx.

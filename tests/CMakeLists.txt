@@ -2264,6 +2264,12 @@ nereus_add_test(tst_slice_stream_allocator)
 # hardware-exhaustion rejection path.
 nereus_add_test(tst_stream_pool_binding)
 
+# The stream pool follows the receiver count the radio reports in discovery
+# (ANAN-G2 reporting 4 against the table's five user streams): no receiver
+# ceiling warning at connect, a plain refusal for a pan past the count, the
+# table value when nothing is reported, Protocol 1 unchanged.
+nereus_add_test(tst_reported_receiver_pool)
+
 # Task 8 (receiver and transmit gaps plan): a stopping WDSP receive channel is
 # fed until WDSP finishes its stop, so a draining stop takes a few blocks of
 # input instead of WDSP's 100 ms timeout, a no-drain stop can restart without

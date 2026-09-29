@@ -21,6 +21,12 @@
 //                 reply's top rate follows the board (384 kHz for the HL2,
 //                 192 kHz for the others) instead of 384 kHz for all.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - The HL2's receiver count is discovery byte 19, as mi0bot
+//                 reads it (clsRadioDiscovery.cs:1176 [v2.10.3.13-beta2]);
+//                 other Protocol 1 boards keep byte 20 (Thetis
+//                 clsRadioDiscovery.cs:1166 [v2.10.3.15]). J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.
 // =================================================================
 
 /*  clsRadioDiscovery.cs
@@ -319,11 +325,30 @@ bool RadioDiscovery::parseP1Reply(const QByteArray& bytes, const QHostAddress& s
     }
 
     // Optional extra fields (len > 20) — From Thetis parseDiscoveryReply P1 branch
+    //
+    // The receiver count's byte depends on the board. The HL2 carries it in
+    // byte 19; mi0bot reads it there in the HL2 case of its device switch:
+    //   From mi0bot clsRadioDiscovery.cs:1169-1176 [v2.10.3.13-beta2]
+    //     case HPSDRHW.HermesLite:
+    //         byte[] fixedIp = new byte[4];                   // MI0BOT: Extra info from discovery for HL2
+    //         ...
+    //         r.BetaVersion = data[21];
+    //         r.NumRxs = data[19];
+    // The bench capture's HL2 reply has byte 19 = 0x04 and byte 20 = 0x45
+    // (docs/protocols/openhpsdr-protocol1-capture-reference.md section 2.2),
+    // so byte 20 is not a receiver count on the HL2. (mi0bot's later len > 20
+    // block writes data[20] over NumRxs, which only its radio list shows;
+    // NereusSDR takes the HL2 case's byte, as the MI0BOT comment intends.)
+    // Every other Protocol 1 board carries it in byte 20:
+    //   From Thetis clsRadioDiscovery.cs:1166 [v2.10.3.15]
+    //     r.NumRxs = data[20];
+    // 0 means no report and keeps the board's own count.
     if (bytes.size() > 20) {
-        out.maxReceivers = static_cast<quint8>(bytes[20]);
-        if (out.maxReceivers <= 0) {
-            out.maxReceivers = RadioInfo::maxReceiversForBoard(out.boardType);
-        }
+        const int countByte = (out.boardType == HPSDRHW::HermesLite) ? 19 : 20;
+        out.reportedReceivers = static_cast<quint8>(bytes[countByte]);
+        out.maxReceivers = out.reportedReceivers > 0
+            ? out.reportedReceivers
+            : RadioInfo::maxReceiversForBoard(out.boardType);
     }
 
     // Populate derived capabilities
@@ -402,6 +427,11 @@ bool RadioDiscovery::parseP2Reply(const QByteArray& bytes, const QHostAddress& s
     // From Thetis: if (len > 20) — receivers count
     if (bytes.size() > 20) {
         int hwRx = static_cast<quint8>(bytes[20]);
+        // From Thetis clsRadioDiscovery.cs:1194 [v2.10.3.15]:
+        //   r.NumRxs = data[20];
+        // Kept apart from the fallback: RadioModel sizes the Protocol 2
+        // stream pool from the radio's own number when it gives one.
+        out.reportedReceivers = hwRx;
         out.maxReceivers = (hwRx > 0) ? hwRx : RadioInfo::maxReceiversForBoard(out.boardType);
     }
 

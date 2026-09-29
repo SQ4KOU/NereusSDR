@@ -730,6 +730,14 @@
 //               change the transmit settings (takesTransmitSettingsOnAir);
 //               the OC transmit pins and Region still wait. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29: Unkey drain review: a revoked device on the air is stopped
+//               with Stop All TX, so its unkey never waits for the send
+//               ring. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//               Code.
+//   2026-09-29: Unkey drain review: the same device connecting again while
+//               its older link was on the air is stopped with Stop All TX
+//               too. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//               Code.
 //   2026-09-29: The phone's direct addresses: devices' coreAddresses from
 //               a CoreAddressWatcher that follows the listener, with
 //               coreAddressesVersion 1, only to a device signed in with its
@@ -2323,7 +2331,15 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
         m_deviceSessions->remove(id);
         // iPhone app plan Task 39: a revoked device that was on the air is
         // stopped by the Core; recorded before the release unkeys it.
-        noteHolderStopped(id, TransmitState::kStopRevoked);
+        const QString stopText = noteHolderStopped(id, TransmitState::kStopRevoked);
+        // Unkey drain review (G-05): that stop is the Core's, so it is Stop
+        // All TX, as the watchdog's and the time-out's are. The release's
+        // own unkey (the unkey gate's normal unkey) is the operator's, and
+        // would hold the hardware keyed for the queued transmit audio, up
+        // to the send ring's length.
+        if (!stopText.isEmpty() && m_radioModel) {
+            m_radioModel->stopAllTx(stopText);
+        }
         // iPhone app plan Task 34 (ruling 8.15): a revoked device's hold
         // on transmit is released through a transfer to nobody.
         if (m_transmitHolder) {
@@ -5308,8 +5324,18 @@ void StationServer::admit(SessionTransport* transport, const QString& name,
             // over to the new connection, unkeyed.
             // iPhone app plan Task 39: its older link is gone; a key on it
             // is stopped by the Core.
-            noteHolderStopped(device.deviceId, TransmitState::kStopLinkLost);
+            const QString stopText =
+                noteHolderStopped(device.deviceId, TransmitState::kStopLinkLost);
             if (!self) { return; }
+            // Unkey drain review (G-05): that stop is the Core's, so it is
+            // Stop All TX, as a dropped link's is. The fence's own unkey (the
+            // unkey gate's normal unkey) is the operator's, and would hold
+            // the hardware keyed for the queued transmit audio, up to the
+            // send ring's length.
+            if (!stopText.isEmpty() && m_radioModel) {
+                m_radioModel->stopAllTx(stopText);
+                if (!self) { return; }
+            }
             m_transmitHolder->holderDropped(device.deviceId,
                                             QStringLiteral("This device connected again."));
             if (!self) { return; }
@@ -8388,17 +8414,17 @@ void StationServer::recordTransmitStop(const char* stopReason, const QString& te
     }
 }
 
-void StationServer::noteHolderStopped(const QByteArray& deviceId, const char* stopReason)
+QString StationServer::noteHolderStopped(const QByteArray& deviceId, const char* stopReason)
 {
     // Only a holder on the air is stopped; the first reason for its key
     // wins (TransmitState::recordStop).
     const std::optional<TransmitHolder::Holder> holder = m_transmitHolder->holder();
     if (m_transmitState == nullptr || !holder || holder->deviceId != deviceId) {
-        return;
+        return QString();
     }
     const bool onAir = holder->keyed || (m_radioModel && m_radioModel->isTransmitting());
     if (!onAir) {
-        return;
+        return QString();
     }
     const QByteArray code(stopReason);
     // A removed device is no longer in the store the holder's words are
@@ -8409,6 +8435,7 @@ void StationServer::noteHolderStopped(const QByteArray& deviceId, const char* st
         ? TransmitState::revokedText(name)
         : TransmitState::linkLostText(name);
     m_transmitState->recordStop(code, text);
+    return text;
 }
 
 std::optional<TransmitHolder::Holder> StationServer::onAirHolder() const

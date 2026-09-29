@@ -93,6 +93,12 @@ struct RadioInfo {
     int firmwareVersion{0};
     int adcCount{1};                     // Derived from boardType (1 or 2)
     int maxReceivers{4};                 // Board-dependent max simultaneous RX
+    // The receiver count the radio itself reported in discovery byte 20,
+    // or 0 when it reported none (a zero byte, a short reply, a radio typed
+    // in by hand or restored from the saved list). maxReceivers holds the
+    // table fallback in that case; this keeps the two apart so the stream
+    // pool can follow the radio's own number (Protocol 2).
+    int reportedReceivers{0};
 
     // Protocol
     ProtocolVersion protocol{ProtocolVersion::Protocol1};
