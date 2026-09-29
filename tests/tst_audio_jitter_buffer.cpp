@@ -522,6 +522,108 @@ private slots:
         QCOMPARE(queue.trimmedPackets(), quint64(0));
         QCOMPARE(queue.skippedIntervals(), quint64(0));
     }
+    // Load findings 2 (R-R3-21): a stall that leaves a standing excess with
+    // no late packet. Playout stops for 150 ms while packets keep arriving
+    // on time (a receive worker that did not wake), so the stream from then
+    // on plays that much later, and nothing ever arrives late. Before the
+    // fix the excess stood to the end (content 157 ms, heard delay 107 ms
+    // over its baseline, nothing shed). The
+    // excess above the hold plus the reserve is shed in the same 40 ms
+    // steps as after a late packet, and the delay comes back to the target;
+    // the ordinary jitter before the stall sheds nothing.
+    void aStallsStandingExcessIsShedWithoutALatePacket()
+    {
+        constexpr qint64 ms = 1'000'000;
+        AudioJitterBuffer queue;
+        queue.reset(0);
+        QRandomGenerator random(20260928);
+        SimulatedDevice device;
+        constexpr qint64 kStallAtMs = 10'000;
+        constexpr qint64 kStallMs = 150;
+        constexpr qint64 kRunMs = 20'000;
+        const auto arrival = [&](qint64 p) { return p * 40 + random.bounded(31); };
+        qint64 p = 0;
+        qint64 nextAt = arrival(p);
+        double baselineSum = 0.0;
+        int baselineCount = 0;
+        double endSum = 0.0;
+        int endCount = 0;
+        qint64 contentAtEnd = 0;
+        quint64 skippedBeforeStall = 0;
+        std::optional<qint64> firstShedMs;
+        for (qint64 t = 0; t <= kRunMs; ++t) {
+            while (t >= nextAt) {
+                QCOMPARE(queue.insert("p", quint32(p) * 1920u, t * ms), Admission::Accepted);
+                ++p;
+                nextAt = arrival(p);
+            }
+            if (t >= kStallAtMs && t < kStallAtMs + kStallMs) { continue; }
+            device.step(queue, t);
+            if (!queue.takeShedPackets().empty() && !firstShedMs) { firstShedMs = t; }
+            const double delayMs = double(queue.queuedSpanNs() / ms) + device.levelMs;
+            if (t >= 5'000 && t < kStallAtMs) { baselineSum += delayMs; ++baselineCount; }
+            if (t == kStallAtMs - 1) { skippedBeforeStall = queue.skippedIntervals(); }
+            if (t >= kRunMs - 1'000) { endSum += delayMs; ++endCount; }
+            if (t == kRunMs) {
+                contentAtEnd = queue.queuedSpanNs() + qint64((device.levelMs - 90.0) * double(ms));
+            }
+        }
+        const double baselineMs = baselineSum / baselineCount;
+        const double endMs = endSum / endCount;
+        const QString evidence =
+            QStringLiteral("baseline=%1 end=%2 contentAtEnd=%3 skipped=%4 beforeStall=%5 "
+                           "firstShed=%6 hold=%7")
+                .arg(baselineMs, 0, 'f', 1).arg(endMs, 0, 'f', 1).arg(contentAtEnd / ms)
+                .arg(queue.skippedIntervals()).arg(skippedBeforeStall)
+                .arg(firstShedMs.value_or(-1)).arg(queue.holdNs() / ms);
+        qInfo().noquote() << evidence;
+        QCOMPARE(queue.holdNs(), AudioJitterBuffer::kHoldNs);
+        QCOMPARE(skippedBeforeStall, quint64(0));
+        // Shed after the stall, in whole 40 ms steps, at most one a second.
+        QVERIFY2(firstShedMs && *firstShedMs >= kStallAtMs + AudioJitterBuffer::kShrinkIntervalNs / ms,
+                 qPrintable(evidence));
+        QVERIFY2(queue.skippedIntervals() >= 1, qPrintable(evidence));
+        // Back to the target, and the delay heard back near its baseline:
+        // within less than one shed step of it.
+        QVERIFY2(contentAtEnd <= AudioJitterBuffer::kHoldNs + AudioJitterBuffer::kShedReserveNs,
+                 qPrintable(evidence));
+        QVERIFY2(endMs < baselineMs + double(AudioJitterBuffer::kShedStepNs / ms),
+                 qPrintable(evidence));
+    }
+    // Load findings 2: only a stall arms it. The same standing excess with
+    // the consumer waking every millisecond (and wakes 20 ms apart, the
+    // stall bound itself) is left alone; one wake 21 ms late arms shedding,
+    // and the excess goes 40 ms at a time until the target holds.
+    void onlyAConsumerStallArmsSheddingWithoutALatePacket()
+    {
+        constexpr qint64 ms = 1'000'000;
+        AudioJitterBuffer queue;
+        queue.reset(0);
+        // A backlog standing downstream: 100 ms over the matcher's level,
+        // so the content stays over the target (hold plus reserve).
+        queue.setDownstreamExcessNs(100 * ms);
+        qint64 p = 0;
+        // Packets on time every 40 ms; the consumer wakes every stepMs and
+        // takes what is due (each take ticks the queue first).
+        const auto run = [&](qint64 fromMs, qint64 toMs, qint64 stepMs) {
+            for (qint64 t = fromMs; t < toMs; t += stepMs) {
+                while (p * 40 <= t) {
+                    QCOMPARE(queue.insert("p", quint32(p) * 1920u, t * ms), Admission::Accepted);
+                    ++p;
+                }
+                while (queue.takeReady(t * ms)) {}
+            }
+        };
+        run(0, 5'000, 1);
+        run(5'000, 8'000, AudioJitterBuffer::kStallNs / ms);
+        QCOMPARE(queue.skippedIntervals(), quint64(0));
+        QVERIFY(queue.takeShedPackets().empty());
+        // One wake 21 ms after the last.
+        run(8'001, 12'000, 1);
+        QVERIFY2(queue.skippedIntervals() >= 1,
+                 qPrintable(QString::number(queue.skippedIntervals())));
+        QCOMPARE(queue.takeShedPackets().size(), std::size_t(queue.skippedIntervals()));
+    }
     // R-R3-21 (re-review, M1's second half): running on demand under a
     // deepened hold, with the queue empty and the rate matcher about to run
     // dry, the interval is concealed now rather than at its later loss

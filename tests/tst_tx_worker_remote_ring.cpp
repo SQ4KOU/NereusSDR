@@ -446,6 +446,7 @@ private slots:
     void stalledIqDoesNotDelayTxWatchdog();
     void aMediaRestartKeepsTheHoldersSource();
     void releasedWhileWaitingItNeverKeys();
+    void aLineClosedWhileItsKeyWaitsIsRefusedAtOnce();
     void aLineLostMidKeyLeavesSilenceNotTheStationsMicrophone();
     void voxFromTheDevicesMicrophoneIsTheDevices();
 
@@ -763,7 +764,9 @@ void TestTxWorkerRemoteRing::keyWithoutMicrophoneAudioIsRefusedMicNotReady()
     waited.start();
     sendCommand(station.app, "tx.key", 3611, {utf8("trigger", QStringLiteral("screen"))});
     QTRY_VERIFY_WITH_TIMEOUT(!resultFor(station.app, 3611).isEmpty(), 5000);
-    QVERIFY2(waited.elapsed() >= RemoteMicConfig::kReadyDeadlineMs - 10,
+    // Load findings 2: a line that never sends is refused at the line's
+    // start bound.
+    QVERIFY2(waited.elapsed() >= RemoteMicConfig::kLineStartDeadlineMs - 10,
              qPrintable(QString::number(waited.elapsed())));
     const QJsonObject result = resultFor(station.app, 3611);
     QVERIFY(!result.value(QStringLiteral("accepted")).toBool(true));
@@ -1061,9 +1064,35 @@ void TestTxWorkerRemoteRing::releasedWhileWaitingItNeverKeys()
     for (int i = 0; i < 5; ++i) {
         station.sendMic();
     }
-    QTest::qWait(300);
+    // Load findings 3: past both of the key's wait bounds (the line's
+    // start, then its fill), so no timer of the ended wait can key.
+    QTest::qWait(RemoteMicConfig::kLineStartDeadlineMs + RemoteMicConfig::kReadyDeadlineMs + 50);
     QVERIFY(!station.core.model->moxController()->isMox());
     QVERIFY(!station.core.model->remoteMicInUse());
+}
+
+// Load findings 3 (review of the line-start wait): the device's line
+// closes while its key waits, after the line's first packet: the key is
+// refused at once (well inside the 1 s start bound), and never keys.
+void TestTxWorkerRemoteRing::aLineClosedWhileItsKeyWaitsIsRefusedAtOnce()
+{
+    Station station;
+    QVERIFY(station.startMedia(true));
+    sendCommand(station.app, "tx.key", 3651, {utf8("trigger", QStringLiteral("screen"))});
+    QTRY_VERIFY(station.core.model->remoteMicInUse());
+    // One 20 ms packet: the line has started, under its 30 ms target.
+    station.sendMic();
+    QVERIFY(resultFor(station.app, 3651).isEmpty());
+    QElapsedTimer closed;
+    closed.start();
+    station.transport->closeUnexpectedly();
+    QTRY_VERIFY(!resultFor(station.app, 3651).isEmpty());
+    QVERIFY2(closed.elapsed() < RemoteMicConfig::kLineStartDeadlineMs,
+             qPrintable(QString::number(closed.elapsed())));
+    const QJsonObject result = resultFor(station.app, 3651);
+    QVERIFY(!result.value(QStringLiteral("accepted")).toBool(true));
+    QCOMPARE(refusalCode(result), QString::fromLatin1(TxRefusals::kMicNotReady));
+    QVERIFY(!station.core.model->moxController()->isMox());
 }
 
 // The device's media drops while it is keyed on its line: the ring stays

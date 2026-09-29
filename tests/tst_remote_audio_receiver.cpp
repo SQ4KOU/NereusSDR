@@ -1238,6 +1238,7 @@ private slots:
             telemetry = receiver.telemetry();
             if (!receiver.isRunning()
                 || telemetry.decodedPackets + telemetry.startDiscardedPackets
+                           + telemetry.trimmedPackets
                     >= quint64(kTotal)) {
                 break;
             }
@@ -1256,9 +1257,16 @@ private slots:
         QVERIFY2(running && restarts.isEmpty(), qPrintable(evidence));
         QCOMPARE(errors.count(), 0);
         // Every packet is either discarded before playback or played; none
-        // is concealed or reported missing.
+        // is concealed or reported missing. Load findings 2: the backlog's
+        // tail left standing past the start (about 200 ms queued, the
+        // matcher full) is a standing excess; after a receive-worker stall
+        // (a loaded computer) it is shed 40 ms at a time once it has stood
+        // a second, and a packet so shed is counted trimmed.
         QVERIFY(telemetry.startDiscardedPackets > 0);
-        QCOMPARE(telemetry.decodedPackets + telemetry.startDiscardedPackets, quint64(kTotal));
+        QCOMPARE(telemetry.decodedPackets + telemetry.startDiscardedPackets
+                     + telemetry.trimmedPackets,
+                 quint64(kTotal));
+        QCOMPARE(telemetry.trimmedPackets, telemetry.skippedIntervals);
         QCOMPARE(telemetry.concealedPackets, quint64(0));
         QCOMPARE(telemetry.missingPackets, quint64(0));
         QCOMPARE(receiver.rateMatcherUnderflows(), 0);
@@ -2383,8 +2391,14 @@ private slots:
                      >= quint64(kTotal - dropped - largestBurst),
                  qPrintable(evidence));
         // Once the delay is back, on-time audio is not skipped: the jitter
-        // of the steady stretch is no standing excess.
-        QVERIFY2(telemetry.skippedIntervals == skippedBeforeLast3s, qPrintable(evidence));
+        // of the steady stretch is no standing excess. Load findings 2: a
+        // receive-worker stall (a wake gap over AudioJitterBuffer::kStallNs)
+        // now arms shedding, and the backlog it leaves is shed, rightly,
+        // whenever it comes; so this holds for a run without one (a 49 ms
+        // gap in the last 3 s at load 149 shed one interval there).
+        if (telemetry.maxWorkerWakeGapMs * 1e6 <= double(AudioJitterBuffer::kStallNs)) {
+            QVERIFY2(telemetry.skippedIntervals == skippedBeforeLast3s, qPrintable(evidence));
+        }
         // The first stall's packets came in late and deepened the hold.
         QVERIFY2(telemetry.latePackets > 0 && telemetry.linkInterruptions > 0, qPrintable(evidence));
         QVERIFY2(peakHoldMs > double(AudioJitterBuffer::kHoldNs) / 1e6 + 100.0,
@@ -2397,8 +2411,12 @@ private slots:
         QVERIFY2(baselineDelayMs > 0.0 && peakDelayMs > baselineDelayMs + 150.0,
                  qPrintable(evidence));
         // A receive-worker stall leaves its backlog standing with no late
-        // packet, which is not shed (see the report's follow-up); only a
-        // worker that kept waking is held to the delay's return.
+        // packet. Load findings 2: a stall (a wake gap over
+        // AudioJitterBuffer::kStallNs) arms shedding, and that excess is
+        // shed once it has stood a whole second, 40 ms a second; a worker
+        // stall of 50 ms or more can still come too near the end for it to
+        // be gone, so only a worker that kept waking is held to the
+        // delay's return.
         if (telemetry.maxWorkerWakeGapMs < 50.0) {
             QVERIFY2(endDelayMs > 0.0 && endDelayMs <= baselineDelayMs + 80.0,
                      qPrintable(evidence));

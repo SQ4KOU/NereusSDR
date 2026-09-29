@@ -23,6 +23,9 @@
 //   2026-09-26: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-28: Load findings 2: waitForOpen() ends at a failure and
+//               failureReasons() names it. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QCoreApplication>
@@ -30,6 +33,7 @@
 #include <QObject>
 #include <QPointer>
 #include <QString>
+#include <QStringList>
 
 #include <functional>
 
@@ -189,13 +193,19 @@ public:
         QObject::connect(m_offerer, &DataChannelTransport::opened, this,
                          [this]() { m_offererOpened = true; });
         QObject::connect(m_offerer, &DataChannelTransport::failed, this,
-                         [this](const QString&) { m_offererFailed = true; });
+                         [this](const QString& reason) {
+            m_offererFailed = true;
+            m_offererReason = structuralReason(reason);
+        });
         QObject::connect(m_answerer, &DataChannelTransport::opened, this, [this, accept]() {
             m_answererOpened = true;
             accept(m_answerer);
         });
         QObject::connect(m_answerer, &DataChannelTransport::failed, this,
-                         [this](const QString&) { m_answererFailed = true; });
+                         [this](const QString& reason) {
+            m_answererFailed = true;
+            m_answererReason = structuralReason(reason);
+        });
         m_started = startDataChannelPair(m_offerer, m_answerer, clientCap, stationCap,
                                          certificatePemPath, privateKeyPemPath, &m_start,
                                          std::move(observer));
@@ -213,6 +223,32 @@ public:
     /// Both ends opened (the station may have closed its end again at
     /// once, as it does a connection past its limit).
     bool opened() const { return m_offererOpened && m_answererOpened; }
+    /// Either end reported a failure before or after opening.
+    bool failed() const { return m_offererFailed || m_answererFailed; }
+
+    /// Load findings 2: runs the event loop until both ends open, either
+    /// end fails, or `ms` pass. A failure ends the wait at once, so it is
+    /// reported with its reason rather than as a silent timeout.
+    bool waitForOpen(int ms)
+    {
+        waitFor([this] { return opened() || failed(); }, ms);
+        return opened();
+    }
+
+    /// Load findings 2: each failed end's reason, as the transport gave it
+    /// when it is one of the transport's own sentences, else "library
+    /// error" (a library message may carry anything).
+    QString failureReasons() const
+    {
+        QStringList out;
+        if (m_answererFailed) {
+            out << QStringLiteral("answerer: %1").arg(m_answererReason);
+        }
+        if (m_offererFailed) {
+            out << QStringLiteral("offerer: %1").arg(m_offererReason);
+        }
+        return out.join(QStringLiteral("; "));
+    }
 
     /// Structural status only: never include SDP, candidate, key, or device identity.
     QString openDiagnostic() const
@@ -258,6 +294,22 @@ private:
     bool m_answererOpened = false;
     bool m_offererFailed = false;
     bool m_answererFailed = false;
+    QString m_offererReason;
+    QString m_answererReason;
+
+    static QString structuralReason(const QString& reason)
+    {
+        // DataChannelTransport's own failure sentences.
+        static const QStringList known{
+            QStringLiteral("the control connection could not be made"),
+            QStringLiteral("the control connection closed"),
+            QStringLiteral("the control connection closed before it opened"),
+            QStringLiteral("the control channel closed"),
+            QStringLiteral("an unexpected data channel was refused"),
+            QStringLiteral("oversized local description"),
+        };
+        return known.contains(reason) ? reason : QStringLiteral("library error");
+    }
 };
 
 } // namespace NereusSDR::Test
