@@ -347,6 +347,11 @@
 //                compression meters; the remote Max Bin source moved to
 //                MeterPoller::panMaxBinSource, unchanged. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - Parity Task 25: a container's filter right-click (a
+//                filter button or the VFO display) edits or resets that
+//                preset, as the VFO flag's and RX applet's do; a band-stack
+//                right-click says band stacking is not ready yet. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -654,6 +659,8 @@ warren@wpratt.com
 #include "meters/BandButtonItem.h"
 #include "meters/OtherButtonItem.h"
 #include "models/FilterPresetStore.h"
+#include "gui/styles/PopupMenuStyle.h"
+#include "gui/widgets/FilterPresetEditDialog.h"
 #include "core/SkuUiProfile.h"
 // Remote Daemon R2 Task 12: source-selector wiring below (setSourceSelector).
 #include "core/meters/SliceMeterPump.h"
@@ -11158,6 +11165,16 @@ void MainWindow::wireContainerControls(ContainerWidget* c)
             [this, c](int index) { onContainerModeClicked(c, index); });
     connect(c, &ContainerWidget::filterClicked, this,
             [this, c](int index) { onContainerFilterClicked(c, index); });
+    connect(c, &ContainerWidget::filterContextRequested, this,
+            [this, c](int index) { onContainerFilterContext(c, index); });
+    connect(c, &ContainerWidget::vfoFilterContextRequested, this,
+            [this, c]() { onContainerFilterContext(c, -1); });
+    // From Thetis MeterManager.cs:13216 and :14593 [v2.10.3.15]: a band
+    // button's or the VFO display's right-click opens console.PopupBandstack
+    // (console.cs:48529). Band stacking is not built in NereusSDR (the Band
+    // menu's entry waits for it too), so the right-click says so.
+    connect(c, &ContainerWidget::bandStackRequested, this,
+            [this](int) { showContainerButtonReason(containerBandStackReason()); });
     connect(c, &ContainerWidget::antennaSelected, this,
             [this, c](int index) { onContainerAntennaSelected(c, index); });
     connect(c, &ContainerWidget::tuneStepSelected, this,
@@ -11498,6 +11515,62 @@ void MainWindow::onContainerFilterClicked(ContainerWidget* c, int index)
     const QList<FilterPreset> presets = store->presetsForMode(slice->dspMode());
     if (index < 0 || index >= presets.size()) { return; }
     slice->setFilter(presets[index].low, presets[index].high);
+}
+
+QString MainWindow::containerBandStackReason()
+{
+    return tr("Band stacking is not ready yet.");
+}
+
+int MainWindow::containerFilterContextSlot(int index, int activePreset, int presetCount)
+{
+    const int slot = index >= 0 ? index : activePreset;
+    return slot >= 0 && slot < presetCount ? slot : -1;
+}
+
+void MainWindow::onContainerFilterContext(ContainerWidget* c, int index)
+{
+    SliceModel* slice = containerSlice(c);
+    FilterPresetStore* store = m_radioModel ? m_radioModel->filterPresetStore() : nullptr;
+    if (!slice || !store) { return; }
+    // From Thetis MeterManager.cs:7937-7945 [v2.10.3.15] (clsFilterButtonBox
+    // right-click) and :14607 (the VFO display): console.PopupFilterContextMenu,
+    // whose menu configures or resets the receiver's filters
+    // (console.cs:39843-39888). NereusSDR's filter buttons edit presets one
+    // at a time (the VFO flag's and RX applet's filter right-click, Stage
+    // C2), so a container's filter right-click offers the same two items
+    // for the preset it names.
+    const DSPMode mode = slice->dspMode();
+    const QList<FilterPreset> presets = store->presetsForMode(mode);
+    int active = -1;
+    for (int i = 0; i < presets.size(); ++i) {
+        // RxApplet::updateFilterButtons tolerance: 50 Hz per edge.
+        if (qAbs(slice->filterLow() - presets[i].low) <= 50
+            && qAbs(slice->filterHigh() - presets[i].high) <= 50) {
+            active = i;
+            break;
+        }
+    }
+    const int slot = containerFilterContextSlot(index, active, static_cast<int>(presets.size()));
+    if (slot < 0) {
+        showContainerButtonReason(index < 0
+            ? tr("This slice's filter is not one of this mode's presets, so there is no "
+                 "preset to edit.")
+            : tr("This mode has no preset on that button."));
+        return;
+    }
+    QMenu menu(this);
+    menu.setStyleSheet(QString::fromLatin1(kPopupMenu));
+    QAction* editAct = menu.addAction(tr("Edit this preset…"));
+    QAction* resetAct = menu.addAction(tr("Reset this preset"));
+    QAction* chosen = menu.exec(QCursor::pos());
+    if (chosen == editAct) {
+        auto* dlg = new FilterPresetEditDialog(store, mode, slot, this);
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+        dlg->exec();
+    } else if (chosen == resetAct) {
+        store->resetPreset(mode, slot);
+    }
 }
 
 void MainWindow::onContainerAntennaSelected(ContainerWidget* c, int index)

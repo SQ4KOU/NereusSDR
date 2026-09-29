@@ -21,6 +21,9 @@
 //   2026-09-24 - R-R3-49 / R-R3-21 fix wave: kFirstRxSource / kLastRxSource
 //                 (slices A to D). J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-28 - vfoFilterContextRequested: the VFO display's filter
+//                 right-click, apart from a filter button's. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  ucMeter.cs
@@ -316,6 +319,8 @@ signals:
     void modeClicked(int modeIndex);
     void filterClicked(int filterIndex);
     void filterContextRequested(int filterIndex);
+    /// The VFO display's filter right-click (it names no filter button).
+    void vfoFilterContextRequested();
     void antennaSelected(int index);
     void tuneStepSelected(int stepIndex);
     void otherButtonClicked(int buttonId);
