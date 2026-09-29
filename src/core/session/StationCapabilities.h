@@ -182,8 +182,11 @@ namespace NereusSDR {
 
 /// Remote parity on the air: from this transmitSettingsVersion the Core
 /// takes the transmit settings while its radio is on the air, as a local
-/// window does (the OC transmit pins and Region still wait). A window
-/// against an older Core keeps them disabled on the air with the reason.
+/// window does (the OC transmit pins and Region still wait). The DSP >
+/// Options TX and PA keys reach the TX channel and PA profiles once the
+/// radio is back on receive; the SWR protection keys apply at once, as the
+/// local page and Thetis apply them. A window against an older Core keeps
+/// them disabled on the air with the reason.
 inline constexpr int kTransmitSettingsOnAirVersion = 11;
 
 /// Optional identity of the Core executable, never radio firmware identity.
@@ -345,7 +348,8 @@ struct StationCapabilities {
     /// 9 also offers validated BandPlanRegion edits and the TX passband guard.
     /// 10 (iPhone app plan Task 40) adds `transmit.micMuted`, the mic mute.
     /// 11 (kTransmitSettingsOnAirVersion): the transmit settings a local
-    /// window changes while transmitting are taken on the air too.
+    /// window changes while transmitting are taken on the air too; the
+    /// on-air refusal above applies only below 11.
     int transmitSettingsVersion = 0;
     /// R-IOS-27, R-IOS-06: 1 means the Core takes `slice.selectBand`, which
     /// runs the desktop's band button on a slice (its saved frequency, mode

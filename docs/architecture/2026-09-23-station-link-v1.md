@@ -1225,8 +1225,9 @@ When a feature is off, its version is 0:
   (no TX applet, Phone/CW, TX EQ, CFC, PureSignal, Two-Tone or Setup
   transmit control is greyed under MOX, as in Thetis): every `transmit`
   property but the keying set, `stepAtt`'s three transmit settings, the DSP
-  > Options TX, Power and PA keys (their apply to the TX channel, SWR
-  protection or PA profiles still waits for receive), a `pureSignalSettings`
+  > Options TX, Power and PA keys (the DSP > Options TX and PA applies to
+  the TX channel and PA profiles wait for receive; the SWR protection keys
+  apply at once, as the local page and Thetis apply them), a `pureSignalSettings`
   write, and the commands `setTunePowerForTxBand`, `txProfile.select`,
   `txProfile.save`, `txProfile.delete`, `rade.resetVocoder`, the PureSignal
   arming verbs and `tx.twoTonePreset`. They are taken from the peers that
@@ -4157,7 +4158,7 @@ DSP > Options TX keys (`DspOptions<Setting><Mode>Tx`,
 the air, and below version 11 refuses a write or remove of one while it is
 on the air ("The radio is on the air. Try again when it stops."), handing
 back its own value. At 11 it takes them on the air as a local window does,
-and applies them once the radio is back on receive. At `transmitSettingsVersion` 5 the same holds for Setup >
+and applies them to the TX channel once the radio is back on receive. At `transmitSettingsVersion` 5 the same holds for Setup >
 Transmit > Power's SWR Protection keys (`SwrProtectionEnabled`,
 `SwrProtectionLimit`, `SwrTuneProtectionEnabled`, `TunePowerSwrIgnore`,
 `WindBackPowerSwr`) and External TX Inhibit keys

@@ -8841,7 +8841,8 @@ QString StationServer::transmitSettingOnAirRefusal(const QString& key) const
     // is on (setup.cs:21944 [v2.10.3.15] UpdateForHotSwitch). Since
     // transmitSettingsVersion 11 a receive-only Core follows the same rule:
     // the other keys on the list are taken on the air, as a local window
-    // takes them (their apply still waits for receive).
+    // takes them (the DSP > Options TX and PA applies wait for receive; the
+    // SWR protection keys apply at once).
     if (!isOcTransmitPinKey(key.toLower().split(QLatin1Char('/')))) {
         return reason;
     }
@@ -9719,10 +9720,13 @@ int StationServer::transmitSettingsVersion() const
     // as in Thetis), so the Core takes them on the air too, from a peer it
     // takes transmit settings from (takesTransmitSettingsOnAir): every
     // `transmit` property but the keying set, `stepAtt`'s ATT on TX
-    // settings, the DSP > Options TX, Power and PA keys (their apply still
-    // waits for receive), `pureSignalSettings`, and the commands
-    // setTunePowerForTxBand, txProfile.select / save / delete,
-    // rade.resetVocoder, the PureSignal arming verbs and tx.twoTonePreset.
+    // settings, the DSP > Options TX, Power and PA keys (the DSP > Options
+    // TX and PA applies wait for receive; the SWR protection keys apply at
+    // once, as the local page and Thetis apply them), `pureSignalSettings`,
+    // and the commands setTunePowerForTxBand, txProfile.save / delete,
+    // rade.resetVocoder, the PureSignal arming verbs and tx.twoTonePreset
+    // (the transmitter's own commands still the holder's while transmit is
+    // held, ruling 7.7).
     // Still off the air, as locally: the OC transmit pins (Thetis greys
     // them under MOX) and General > Region.
     return m_radioModel.isNull() ? 0 : kTransmitSettingsOnAirVersion;
