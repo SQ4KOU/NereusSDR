@@ -31,7 +31,8 @@ class SetupDescriptionLiveTest : public QObject {
 private slots:
     // Version 16: a phone that declares version 16 or later reads the HL2
     // Options rows on HL2 I/O, the stored-only ones disabled with their
-    // reason; a version 15 phone keeps version 13's Hardware.
+    // reason; a version 15 phone keeps version 13's Hardware. Version 17
+    // (the Alex-1 low-pass rows) keeps them, and is the cap.
     void pairedV16PhoneReadsHl2Options()
     {
         Core core;
@@ -51,7 +52,7 @@ private slots:
         };
         // {declared, capability sent back, Hardware version the phone reads}
         const QList<std::tuple<int, int, int>> declarations{
-            {16, 16, 16}, {99, 16, 16}, {15, 15, 13}};
+            {16, 16, 16}, {17, 17, 17}, {99, 17, 17}, {15, 15, 13}};
         for (const auto& [declared, granted, received] : declarations) {
             Device phone(QStringLiteral("HL2 V%1 iPhone").arg(declared), QStringLiteral("phone"));
             core.pair(phone);
@@ -65,8 +66,8 @@ private slots:
                 QStringLiteral("setup"), QStringLiteral("hardware")).toString().toUtf8()).object();
             QCOMPARE(hardware.value("version"), QJsonValue(received));
             const QJsonArray rows = hl2OptionsOf(hardware).value("controls").toArray();
-            QCOMPARE(rows.size(), received == 16 ? 9 : 0);
-            if (received == 16) {
+            QCOMPARE(rows.size(), received >= 16 ? 9 : 0);
+            if (received >= 16) {
                 const QJsonObject swap = rows.last().toObject();
                 QCOMPARE(swap.value("id"), QJsonValue("hardware.hl2Io.swapAudioChannels"));
                 QCOMPARE(swap.value("availability").toObject().value("enabled"),

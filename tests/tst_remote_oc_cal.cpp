@@ -626,7 +626,7 @@ void TstRemoteOcCal::hiddenAlexAndHl2ControlsKeepTheirSavedValues()
                                     QStringLiteral("alexLpfEnd_20m")}) {
             auto* w = page.findChild<QWidget*>(name);
             QVERIFY2(w != nullptr, qPrintable(name));
-            QVERIFY2(w->isHidden(), qPrintable(name));
+            QVERIFY2(!w->isHidden(), qPrintable(name));
         }
         QVERIFY(settings.save());
     }

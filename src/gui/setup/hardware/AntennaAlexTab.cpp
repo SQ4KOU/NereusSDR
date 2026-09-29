@@ -41,6 +41,10 @@
 //                (usesBpf1Preselector, console.cs:6827-6837): BPF1 with the
 //                switches, or Alex HPF with them. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - R-R3-46 / R-R3-49: the Alex-1 Filters tab's low-pass rows
+//                and 6m/ByPass on RX select the low-pass as Thetis's
+//                setAlexLPF does (radioHardwareVersion 10). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -210,8 +214,12 @@ void AntennaAlexTab::populate(const RadioInfo& info, const BoardCapabilities& ca
 void AntennaAlexTab::setTransmitPermitted(bool permitted, const QString& reason)
 {
     // Parity Task 12: Antenna Control's transmit half follows the Alex
-    // facade's transmit edit availability instead.
-    m_alex1Tab->setTransmitPermitted(permitted, reason);
+    // facade's transmit edit availability instead. radioHardwareVersion 10:
+    // the Alex-1 low-pass rows are no longer transmit-gated; they follow
+    // setLpfRowsAvailable, as the high-pass rows follow
+    // setHpfSwitchesAvailable.
+    Q_UNUSED(permitted);
+    Q_UNUSED(reason);
 }
 
 void AntennaAlexTab::setHpfSwitchesAvailable(bool available, const QString& reason)
@@ -223,6 +231,11 @@ void AntennaAlexTab::setHpfRowsAvailable(bool available, const QString& reason)
 {
     m_alex1Tab->setHpfRowsAvailable(available, reason);
     m_alex2FiltersTab->setHpfRowsAvailable(available, reason);
+}
+
+void AntennaAlexTab::setLpfRowsAvailable(bool available, const QString& reason)
+{
+    m_alex1Tab->setLpfRowsAvailable(available, reason);
 }
 
 // ── restoreSettings ───────────────────────────────────────────────────────────

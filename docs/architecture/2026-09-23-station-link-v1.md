@@ -821,6 +821,14 @@ the Core's sync, SNR and offset as a local window's do, and it keeps the
 last offset for each fresh SNR, since the Core sends the offset only when
 it moves.
 
+**`alexLpf` 1** (R-R3-46, R-R3-49): the client shows which Alex-1 low-pass
+filter the Core's radio is using, as the desktop's Alex-1 Filters tab
+lights one lamp. A peer that declares it is sent `radio`'s `alexLpfBits`
+(section 7.1, "The Alex-1 low-pass in use"); a peer that does not sees
+exactly the wire it was built for, without it. The station does not
+declare it. The desktop's remote window declares it: its lamps show the
+Core's low-pass.
+
 **`txEqCurve` 2** (R-IOS-13, R-R3-49): the client also changes the curve,
 with `txEq.setCurve` and `txEq.resetCurve` (section 9.1). A peer that
 declares it at minor 11 is sent `txEqCurveVersion` 2 and `transmit`'s
@@ -978,7 +986,7 @@ change shows as surface drift and as a change to this table.
 | `audioClockVersion` | 1 |
 | `receiverAudioVersion` | 1 |
 | `headphonesMixVersion` | 1 |
-| `radioHardwareVersion` | 9 |
+| `radioHardwareVersion` | 10 |
 | `remotePgxlControlVersion` | 4 |
 | `remoteRfKitControlVersion` | 4 |
 | `stationTciVersion` | 2 |
@@ -1145,6 +1153,27 @@ When a feature is off, its version is 0:
   of its receivers' `requestSliceSampleRate`, as before, and says so on
   the rate box ("This Core changes the sample rate of this window's
   receivers only. Updating the Core may help.").
+  10 adds the Alex-1 Filters tab's low-pass rows and "6m/ByPass on RX":
+  each row's Start and End (`hardware/<mac>/alex/lpf/<band>/start` and
+  `/end`, `<band>` one of `160m`, `80m`, `40m`, `20m`, `15m`, `10m`,
+  `6m`, in MHz) and the bypass (`alex/master/lpfBypass`, `True` or
+  `False`). The Core selects the low-pass from them as Thetis's
+  setAlexLPF does: the first row, in the order 20m, 40m, 80m, 160m, 6m,
+  10m, 15m, whose edges hold the transmit frequency (edges included),
+  and the 6m filter when none does; while not keyed with the bypass
+  checked, the receive word carries the 6m filter whatever the frequency.
+  An edge is stored, on and off the air, and takes effect at the next
+  selection (a tune, a key edge or the bypass), as Thetis's spinners do;
+  the bypass re-selects at once while not keyed. The rows are transmit
+  hardware, so a Core set to receive only takes them only from a peer
+  offered 10. The bypass is shown disabled with its reason on the radios
+  Thetis hides it on (ANAN-8000DLE, ANAN-7000DLE, ANAN-G2, ANAN-G2 1K and
+  Anvelina Pro 3), and is off there. A peer that declared `alexLpf` 1
+  (section 6.2) is sent the radio's `alexLpfBits` (section 7.1), the
+  low-pass in use. A window whose Core offers less than 10 shows the rows
+  and the bypass disabled with "This Core cannot change the low-pass
+  filter rows for this app. Updating the Core may help.". A station no
+  longer sends 9; 10 serves every earlier version's command and property.
 - `radioAntennaRowsVersion`: optional and appended after
   `accessoryTxVersion` only at agreed minor 11 for a peer that declared
   `radioAntennaRows` exactly 1, while the Core has a connected radio with
@@ -2371,7 +2400,7 @@ An enum property lists the values its domain allows.
 | 8 | `hardwarePeakOverride` | `f64` | bidirectional |  |
 | 9 | `lastLoadError` | `utf8` | outbound |  |
 
-**RadioModel** (29 properties)
+**RadioModel** (30 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -2404,6 +2433,7 @@ An enum property lists the values its domain allows.
 | 26 | `logCategories` | `utf8` | outbound |  |
 | 27 | `logCategoryList` | `utf8` | constantSnapshot |  |
 | 28 | `txInhibitReason` | `utf8` | outbound |  |
+| 29 | `alexLpfBits` | `i64` | outbound |  |
 
 **RfKitModel** (30 properties)
 
@@ -3500,6 +3530,14 @@ Notes on the keys:
   capability value gates them: an older client ignores the unknown
   properties (section 7.1's schema carries them), and a newer client
   reads the absence itself.
+- **The Alex-1 low-pass in use (`radio`).** `alexLpfBits` (int, outbound
+  only, read-only) is the Alex-1 low-pass the Core's radio connection
+  last selected, as Thetis's SetAlexLPFBits names them: 0x01 20m (30/20m
+  row), 0x02 40m (60/40m), 0x04 80m, 0x08 160m, 0x10 6m, 0x20 10m (12/10m),
+  0x40 15m (17/15m); -1 before any selection (no radio, or not yet
+  connected). It is sent only to a peer that declared `alexLpf` 1
+  (section 6.2). A window lights the lamp of the row it names and never
+  writes it; a raw write is refused.
 
 #### The TX EQ curve (`txEqCurve`)
 

@@ -800,19 +800,6 @@ QMap<F, QList<Surface>> surfaces()
     map[F::FrequencyCalibration] = {onPage(QStringLiteral("Hardware Config"),
                                            QStringLiteral("frequency calibration Start"),
                                            named(QStringLiteral("freqCalStartButton")))};
-    // Plan C5 and C6 (parity Task 13): nothing reads the Alex-1 LPF band
-    // edges in any window; the HL2 wire always carries its own timings.
-    map[F::AlexTxFilterOptions] = {
-        onPage(QStringLiteral("Hardware Config"), QStringLiteral("LPF band edges"),
-               [](QWidget* root) {
-                   for (QDoubleSpinBox* spin : root->findChildren<QDoubleSpinBox*>()) {
-                       if (spin->objectName().startsWith(QStringLiteral("alexLpf"))
-                           && shownWithin(spin, root)) {
-                           return true;
-                       }
-                   }
-                   return false;
-               })};
     map[F::GanymedeTrip] = {status(QStringLiteral("paStatusBadge"))};
     map[F::PbSnr] = {Surface{QStringLiteral("container PB SNR render"), Host::Container,
                             [](Hosts& h) {

@@ -31,6 +31,10 @@
 //   2026-09-29 - HL2 port part 1: Hl2TxTiming built (the TX buffer
 //                latency and PTT hang reach bank 17). J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - AlexTxFilterOptions leaves the list: the Alex-1 low-pass
+//                band edges and 6m/ByPass on RX select the low-pass
+//                (radioHardwareVersion 10). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -101,8 +105,6 @@ enum class UnbuiltFeature {
     FrequencyCalibration, // Setup > Hardware > Calibration: the frequency calibration Start button
     FmTones,          // CTCSS tone encode and tone squelch: the VFO flag's FM tone mode and tone
                       // choices (plan row fm-flag)
-    AlexTxFilterOptions, // Setup > Hardware > Alex-1 Filters: the LPF band edges (plan C5;
-                         // its high-pass switches are applied since plan Task 14)
     GanymedeTrip,     // Status PA badge: Andromeda/Ganymede CAT trip input is not ported
     PbSnr,            // Multimeter PBSNR binding has no producer
     ContainerFilterDisplay, // Feed implemented; gate awaits loaded FFT startup acceptance

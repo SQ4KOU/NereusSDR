@@ -189,6 +189,9 @@
 //   2026-09-29  J.J. Boyd / KG4VCF  R-R3-46 / R-R3-11:
 //                                    adcAttenuatorsAvailable(). AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-29 - R-R3-46 / R-R3-49: the Alex-1 Filters tab's low-pass rows
+//                and 6m/ByPass on RX (radioHardwareVersion 10). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QString>
@@ -553,6 +556,10 @@ public:
     // radioHardwareVersion 8: the Alex Filters tabs' receive filter rows.
     static QString alexHpfRowsUnavailableReason()
     { return QStringLiteral("This Core cannot change these filter rows for this app. Updating the Core may help."); }
+    // radioHardwareVersion 10: the Alex-1 Filters tab's low-pass rows and
+    // 6m/ByPass on RX.
+    static QString alexLpfRowsUnavailableReason()
+    { return QStringLiteral("This Core cannot change the low-pass filter rows for this app. Updating the Core may help."); }
     // Verb "requestIoBoardI2c" (radioHardwareVersion 7): one I2C read or
     // write on the Core's radio. The answer (a read's bytes in `value`)
     // arrives as RadioModel::reportStationIoBoardResult.

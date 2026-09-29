@@ -1,4 +1,4 @@
-# Setup description versions 1–16
+# Setup description versions 1–17
 
 The Core sends the desktop's built Setup pages as JSON strings on the read-only
 `setup` mirror object (`SetupDescription`). It has one string property per
@@ -165,9 +165,10 @@ command or result binding. The actual peer must separately declare
 nothing. A V3 peer still receives the older controls with their existing
 semantics. The Core filters every control above the peer's negotiated
 description version, drops empty sections and pages, and caps an unknown
-future declaration at version 16. PA has a version-14 ceiling (version 13
-for V13, version 5 for V5–V12) and Hardware a version-16 ceiling (version 13
-for V13–V15, version 6 for V6–V12); Display a version-12 ceiling, and
+future declaration at version 17. PA has a version-14 ceiling (version 13
+for V13, version 5 for V5–V12) and Hardware a version-17 ceiling (version 16
+for V16, version 13
+for V13–V15, version 6 for V6–V12; see Versions 16 and 17); Display a version-12 ceiling, and
 Appearance a version-12 ceiling with its prior version-4 projection for
 V4–V6 and version-7 projection for V7–V11. DSP, Transmit, Audio,
 Diagnostics and CAT & Network are version 15 to a V15 or later peer (see
@@ -607,9 +608,9 @@ Reset Defaults, per-band gain, drive-step adjusts and max power (the profile
 bank is serialized per profile and no closed profile state or command exists
 on the wire yet); New Cal (hidden on the desktop, as in Thetis); the
 auto-calibration sweep (it keys the radio from the desktop's own window);
-the ANAN-8000DLE title bar volts/amps box (the desktop's title bar); both
-Alex Filters tabs' LPF edges (hidden on the desktop too: the Core does not
-apply them yet, as nothing selects the transmit low-pass from them); OC Outputs; the rest of Calibration (frequency and level calibration,
+the ANAN-8000DLE title bar volts/amps box (the desktop's title bar); the
+Alex-1 Filters tab's LPF edges and 6m/ByPass on RX (described from version
+17, below); OC Outputs; the rest of Calibration (frequency and level calibration,
 6 m LNA offsets, the correction factors, Volts/Amps calibration and its log);
 HL2 Options (described in version 16); and the rest of HL2 I/O (register, state machine, I2C and
 bandwidth monitor views, probe and reset). No new wire field, verb or
@@ -912,6 +913,39 @@ so there is nothing to swap."). A board without the HL2 I/O board has no
 `hardware.hl2Io` page, so none of these rows. V13–V15 peers receive Hardware
 at version 13 without the section. No new wire field, verb or capability
 value is defined.
+
+Version 17 describes the Alex-1 Filters tab's low-pass rows (R-R3-46,
+R-R3-49). The Core applies them to its radio as Thetis's setAlexLPF selects
+the transmit low-pass (console.cs:7177-7243 [v2.10.3.15]), with capability
+`radioHardwareVersion` 10. A peer that declares 17 or higher receives
+Hardware as version 17; a V16 peer receives it as version 16, with no
+low-pass row, a V13 to V15 peer exactly as version 13, and V6 to V12 keep
+version 6. Every new row has `requiresDescriptionVersion:17`.
+
+`hardware.alex1Filters` gains an Alex LPF Bands section after its bank
+section, on every board that has the page. It holds seven rows in the
+desktop's order, each two decimals with ids
+`hardware.alex1Filters.lpf.<slug>.start` and `.end` (slugs `160m`, `80m`,
+`40m`, `20m`, `15m`, `10m`, `6m`), labelled with the desktop's row label
+(160m, 80m, 60/40m, 30/20m, 17/15m, 12/10m, 6m) and LPF Start or LPF End,
+bound to `radioSetting` `alex/lpf/<slug>/start|end`: each edge limited to
+its Thetis spinner's range (`codec::alex::kAlexLpfEdgeLimits`), step 0.001, six decimals, unit `MHz`, defaulting to Thetis's spinner
+values (0 to 2.5, 2.500001 to 5, 5.000001 to 8, 8.000001 to 16.5, 16.500001
+to 24, 24.000001 to 35.6, 35.600001 to 61.44). Their gate is
+`radioHardwareVersion:10` plus `transmit:true` and no off-air rule: they
+are the transmit low-pass table, so with remote transmit allowed the Core
+takes a write only from a session permitted to transmit, and it stores the
+edge on or off the air for the next selection, as Thetis's spinners do. The
+section ends with 6m/ByPass on RX (`hardware.alex1Filters.lpfBypass`,
+`radioSetting` `alex/master/lpfBypass`, a `True`/`False` toggle, default
+false, tooltip "Selects the 6m LPF during receive regardless of
+frequency.", gate `radioHardwareVersion:10` with no transmit flag and no
+off-air rule). On the ANAN-8000DLE, ANAN-7000DLE, ANAN-G2, ANAN-G2 1K and
+Anvelina Pro 3, where Thetis hides it, the row carries `availability`
+disabled with "This radio does not have the 6m low-pass bypass on
+receive." The low-pass in use is not a Setup row: a peer that declares
+`alexLpf` 1 reads it from `radio`'s `alexLpfBits` (link document section
+7.1). No other wire field changes.
 
 V4 adds `default` metadata to these exact Display and Appearance controls.
 Display toggles use JSON booleans; its numeric controls use JSON numbers,

@@ -738,7 +738,13 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("takerName"),
           // R-R3-49: a Watt Meter calibration point's maximum, a number of
           // watts (calibrationKeyValueRefusal).
-          QStringLiteral("spec.maximum")},
+          QStringLiteral("spec.maximum"),
+          // Review C1: alexLpfKeyValueRefusal's band name (160m to 6m),
+          // "start" or "end", and its two limits in MHz ("Choose the %1
+          // low-pass %2 from %3 to %4 MHz."), and the same band and edge
+          // in its refusal of a key written in another case.
+          QStringLiteral("band, edgeName, lowest, highest"),
+          QStringLiteral("band, edgeName")},
          {// listen(): the Core's own setup error (m_lastError), for its
           // console and log; never sent to an app.
           QStringLiteral("CertificateStore::tlsBackendDiagnostic()"),
@@ -1618,6 +1624,13 @@ const QList<AppSideReason>& appSideReasons()
         // log stream; tst_remote_core_log checks it is plain.
         {"src/core/session/IStationLink.h", "supportBundleUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},
+        // radioHardwareVersion 10 (Alex LPF rows): the Alex-1 tab's
+        // low-pass rows on an older Core, and the 6m/ByPass box on a
+        // board without the bypass (both disabled with the reason shown).
+        {"src/core/session/IStationLink.h", "alexLpfRowsUnavailableReason",
+         "a remote window's own reason when its Core cannot take the request"},
+        {"src/models/RadioModel.cpp", "lpfBypassUnavailableReason",
+         "the reason shown on the disabled 6m/ByPass box, not a Core refusal"},
         {"src/models/RadioModel.cpp", "stationSupportUnavailableReason",
          "a remote window's own reason its Core-side support controls are disabled"},
         {"src/models/RadioModel.h", "rxFilter0Reason",

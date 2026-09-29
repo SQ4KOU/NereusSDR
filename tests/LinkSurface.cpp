@@ -127,6 +127,9 @@
 //                                    coreAddressesVersion and devices'
 //                                    coreAddresses are captured.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  The capture declares alexLpf, so
+//                                    radio's alexLpfBits is captured.
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-28  J.J. Boyd / KG4VCF  R-R3-46 / R-R3-11: the capture
 //                                    declares adcAttenuators, so
 //                                    adcAttenuatorVersion and stepAtt's
@@ -626,7 +629,10 @@ std::optional<QList<QByteArray>> liveSessionWire(
                                   {"paProfiles", 1},
                                   // RADE status: each slice's radeSynced
                                   // and radeFreqOffsetHz.
-                                  {"radeStatus", 1}})));
+                                  {"radeStatus", 1},
+                                  // The Alex-1 low-pass in use: radio's
+                                  // alexLpfBits.
+                                  {"alexLpf", 1}})));
     clientEnd->sendText(SessionMessages::encode(SessionMessages::authRequest({}, block)));
 
     // The loopback delivers on later event-loop turns, as a socket would.

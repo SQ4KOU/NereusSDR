@@ -199,6 +199,9 @@
 //                 AI-assisted via Anthropic Claude Code.
 //   2026-09-29 - HL2 port part 2: txInhibitReasonVersion. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - R-R3-46 / R-R3-49: the Alex-1 Filters tab's low-pass rows
+//                and 6m/ByPass on RX (radioHardwareVersion 10). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -281,7 +284,10 @@ struct StationCapabilities {
     /// and the Alex tab's three transmit high-pass switches taken from a
     /// window (parity Task 14); 8 the Alex Filters tabs' receive filter
     /// rows (each row's bypass and edges, and Alex-2's master bypass),
-    /// applied to the Core's radio at once. Sent last in the same block as the three above,
+    /// applied to the Core's radio at once; 9 the radio's sample rate
+    /// (setRadioSampleRate); 10 the Alex-1 Filters tab's low-pass rows and
+    /// 6m/ByPass on RX, and radio's alexLpfBits to a peer that declared
+    /// alexLpf 1. Sent last in the same block as the three above,
     /// so only at minor 11. 0: a window keeps today's behaviour and does
     /// not write `stepAtt`.
     int radioHardwareVersion = 0;

@@ -29,6 +29,10 @@
 //                receive high-pass as Thetis's setAlexHPF /
 //                setBPF1ForOrionIISaturn / setAlex2HPF do (radioHardwareVersion
 //                8). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - R-R3-46 / R-R3-49: the Alex-1 Filters tab's low-pass rows
+//                and 6m/ByPass on RX select the low-pass as Thetis's
+//                setAlexLPF does (radioHardwareVersion 10). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -118,6 +122,8 @@ public:
     // bypass) follow whether the Core takes them, disabled with `reason`
     // when it does not. Always available locally.
     void setHpfRowsAvailable(bool available, const QString& reason);
+    // radioHardwareVersion 10: see AntennaAlexAlex1Tab::setLpfRowsAvailable.
+    void setLpfRowsAvailable(bool available, const QString& reason);
 
 signals:
     void settingChanged(const QString& key, const QVariant& value);

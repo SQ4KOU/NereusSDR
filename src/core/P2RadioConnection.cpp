@@ -696,7 +696,7 @@ void P2RadioConnection::connectToRadio(const RadioInfo& info)
         double freqMhz = m_rx[primaryDdc].frequency / 1.0e6;
         m_alex.hpfBits   = NereusSDR::codec::alex::computeRxPreselector(
             freqMhz, m_caps ? m_caps->board : HPSDRHW::Unknown, m_alexHpfEdges);
-        m_alex.lpfBitsRx = NereusSDR::codec::alex::computeLpf(freqMhz);
+        applyAlexLpf(freqMhz, /*freqIsTx=*/false);
     } else {
         // Same FIFO ordering as above, with a consequence the original fix did
         // not have to think about: setReceiverFrequency ran BEFORE us, and at
@@ -706,16 +706,16 @@ void P2RadioConnection::connectToRadio(const RadioInfo& info)
         // would correct it until the operator retuned by hand.  m_caps is
         // valid now, so redo the selection from the frequency already stored.
         //
-        // The LPF is deliberately not recomputed: it has one board-independent
-        // ladder (Thetis console.cs:7177-7270 [v2.10.3.15] has no
-        // HardwareSpecific branch), so what setReceiverFrequency computed for
-        // it is already correct.
+        // The low-pass is re-selected too: setReceiverFrequency ran before the
+        // saved rows and 6m/ByPass on RX reached this connection, and the
+        // selection reads both (setAlexLPF, console.cs:7177-7243 [v2.10.3.15]).
         // From Thetis console.cs:6827-6837 setAlex1HPF [v2.10.3.15]
         // Upstream inline attribution preserved verbatim (console.cs:6830):
         //    || (HardwareSpecific.Hardware == HPSDRHW.HermesC10))  //N1GP G2E added (HermesC10) //DK1HLM
         const double freqMhz = m_rx[primaryDdc].frequency / 1.0e6;
         m_alex.hpfBits = NereusSDR::codec::alex::computeRxPreselector(
             freqMhz, m_caps ? m_caps->board : HPSDRHW::Unknown, m_alexHpfEdges);
+        applyReceiveAlexLpf();
     }
     // The primary DDC's samplingRate is set by setSampleRate() which
     // RadioModel queues before connectToRadio in the FIFO (see
@@ -743,9 +743,10 @@ void P2RadioConnection::connectToRadio(const RadioInfo& info)
         // splits the two -- UpdateTXDDSFreq assigns the low-pass and the NCO
         // from tx_dds_freq_mhz in one call (console.cs:15464-15468
         // [v2.10.3.15]) -- so neither do we.
-        m_alex.lpfBitsTx = NereusSDR::codec::alex::computeLpf(
-            m_tx[0].frequency / 1.0e6);
     }
+    // Re-selected either way: an earlier setTxFrequency ran before the saved
+    // low-pass rows reached this connection.
+    applyAlexLpf(m_tx[0].frequency / 1.0e6, /*freqIsTx=*/true);
 
     // R-R3-32 (parity Task 6): the link counters start with the connection.
     m_linkStats.reset();
@@ -967,20 +968,59 @@ void P2RadioConnection::recomputeReceiveFilters()
     // them, as the rule's "higher of the two" passes RX2, or a third slice
     // on a higher band is filtered out. Where RX2 has its own front end
     // (rx2PreampPresent) RX1 still decides alone.
+    //
+    // RF-SAFETY: the gate is load-bearing. setAlexLPF writes BOTH words while
+    // keyed (SetAlexLPFBits `isMox || ...`), so a receive selection reaching
+    // it mid-transmission would put the receive frequency's low-pass on the
+    // transmitter. Thetis never calls it keyed; neither does this.
     if (!m_mox) {
-        bool rx2Live = false;
-        double rx2Mhz = 0.0;
-        for (int ddc = 0; ddc < kMaxRxStreams; ++ddc) {
-            if (ddc == rx1 || (m_liveSlotMask & (1u << ddc)) == 0) { continue; }
-            const int hz = m_rx[static_cast<size_t>(ddc)].frequency;
-            if (hz <= 0) { continue; }
-            rx2Live = true;
-            rx2Mhz = std::max(rx2Mhz, hz / 1e6);
-        }
-        m_alex.lpfBitsRx = NereusSDR::codec::alex::computeLpf(
-            NereusSDR::codec::alex::receiveLpfFrequencyMhz(
-                freqMhz, rx2Mhz, rx2Live, m_caps ? m_caps->rx2PreampPresent : false));
+        applyReceiveAlexLpf();
     }
+}
+
+// ---------------------------------------------------------------------------
+// applyReceiveAlexLpf: UpdateAlexTXFilter's receive-frequency selection
+// (see recomputeReceiveFilters for the rule). Unkeyed callers only.
+// ---------------------------------------------------------------------------
+void P2RadioConnection::applyReceiveAlexLpf()
+{
+    const int rx1 = rx1Ddc();
+    const int rx1Hz = m_rx[static_cast<size_t>(rx1)].frequency;
+    if (rx1Hz <= 0) {
+        return;
+    }
+    bool rx2Live = false;
+    double rx2Mhz = 0.0;
+    for (int ddc = 0; ddc < kMaxRxStreams; ++ddc) {
+        if (ddc == rx1 || (m_liveSlotMask & (1u << ddc)) == 0) { continue; }
+        const int hz = m_rx[static_cast<size_t>(ddc)].frequency;
+        if (hz <= 0) { continue; }
+        rx2Live = true;
+        rx2Mhz = std::max(rx2Mhz, hz / 1e6);
+    }
+    applyAlexLpf(NereusSDR::codec::alex::receiveLpfFrequencyMhz(
+                     rx1Hz / 1e6, rx2Mhz, rx2Live,
+                     m_caps ? m_caps->rx2PreampPresent : false),
+                 /*freqIsTx=*/false);
+}
+
+// ---------------------------------------------------------------------------
+// applyAlexLpf: Thetis's setAlexLPF on the two words.
+// From Thetis console.cs:7177-7243 [v2.10.3.15]
+//   if (!_mox && lpf_bypass) { NetworkIO.SetAlexLPFBits(0x10, false, _mox); ... }
+//   if (alexpresent && !initializing) { ... SetAlexLPFBits(bits, freqIsTX, _mox); }
+// Every Protocol 2 board carries the Alex words, so alexpresent holds.
+// ---------------------------------------------------------------------------
+void P2RadioConnection::applyAlexLpf(double freqMhz, bool freqIsTx)
+{
+    NereusSDR::codec::alex::AlexLpfMasks masks{
+        static_cast<quint8>(m_alex.lpfBitsRx), static_cast<quint8>(m_alex.lpfBitsTx)};
+    NereusSDR::codec::alex::setAlexLpf(masks, freqMhz, freqIsTx, m_mox,
+                                       m_alexLpfBypass, /*alexPresent=*/true,
+                                       m_alexLpfEdges);
+    m_alex.lpfBitsRx = masks.alex0;
+    m_alex.lpfBitsTx = masks.alex1;
+    publishAlexLpfBits(effectiveLpfBitsAlex0());
 }
 
 void P2RadioConnection::setTxFrequency(quint64 frequencyHz)
@@ -1008,9 +1048,12 @@ void P2RadioConnection::setTxFrequency(quint64 frequencyHz)
     // UpdateTXDDSFreq on both MOX edges (console.cs:29099 + 29148
     // HdwMOXChanged [v2.10.3.15]), so the transmit selection is kept live
     // whether the radio is keyed or not.
-    const int newLpfBitsTx =
-        NereusSDR::codec::alex::computeLpf(static_cast<double>(frequencyHz) / 1e6);
-    if (newLpfBitsTx != m_alex.lpfBitsTx) {
+    // setAlexLPF(tx_dds_freq_mhz, true) over the saved rows: Alex1 unkeyed,
+    // both words keyed, and 6m/ByPass on RX on Alex0 while unkeyed.
+    const int oldLpfBitsTx = m_alex.lpfBitsTx;
+    applyAlexLpf(static_cast<double>(frequencyHz) / 1e6, /*freqIsTx=*/true);
+    const int newLpfBitsTx = m_alex.lpfBitsTx;
+    if (newLpfBitsTx != oldLpfBitsTx) {
         // The one line that makes the transmit low-pass observable on a bench.
         // Logged on change only, so it marks the event rather than the
         // cadence. Same shape as setAlexRxBpf's line above.
@@ -1020,7 +1063,6 @@ void P2RadioConnection::setTxFrequency(quint64 frequencyHz)
                                      static_cast<double>(frequencyHz)))
                               << "tx=" << frequencyHz << "Hz";
     }
-    m_alex.lpfBitsTx = newLpfBitsTx;
 
     if (m_running) {
         sendCmdHighPriority();
@@ -1265,6 +1307,23 @@ void P2RadioConnection::setMox(bool enabled)
         m_moxOffGrace = QDeadlineTimer(
             std::chrono::milliseconds(kMoxOffGraceMs), Qt::PreciseTimer);
     }
+
+    // The low-pass on both MOX edges, as HdwMOXChanged re-drives it:
+    //   From Thetis console.cs:29097-29099 (key) and 29146-29148 (unkey)
+    //   [v2.10.3.15]
+    //     UpdateRX1DDSFreq();   // -> UpdateAlexTXFilter, if (!_mox) only
+    //     UpdateRX2DDSFreq();
+    //     UpdateTXDDSFreq();    // -> setAlexLPF(tx_dds_freq_mhz, true)
+    // Keyed, the transmit selection goes to both words; unkeyed, the receive
+    // selection returns to Alex0 and the transmit one stays on Alex1.
+    if (!m_mox) {
+        applyReceiveAlexLpf();
+    }
+    if (m_tx[0].frequency > 0) {  // Thetis's tx_dds_freq_mhz is always set
+        applyAlexLpf(m_tx[0].frequency / 1.0e6, /*freqIsTx=*/true);
+    }
+    publishAlexLpfBits(effectiveLpfBitsAlex0());
+
     if (m_running) {
         sendCmdHighPriority();  // immediate emit on state change for low latency
     }
@@ -1528,6 +1587,45 @@ void P2RadioConnection::setAlexHpfEdges(const codec::alex::AlexHpfEdges& edges)
     }
     RadioConnection::setAlexHpfEdges(edges);
     recomputeReceiveFilters();
+    if (m_running) {
+        sendCmdHighPriority();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// setAlexLpfEdges: the Alex-1 low-pass rows. Thetis's udAlex*LPF spinner
+// handlers only keep the rows contiguous; none re-selects the low-pass
+// (setup.cs:15888-15994 [v2.10.3.15]), so the rows are read by the next
+// selection (a retune, a key or an unkey), keyed or not.
+// ---------------------------------------------------------------------------
+void P2RadioConnection::setAlexLpfEdges(const codec::alex::AlexLpfEdges& edges)
+{
+    RadioConnection::setAlexLpfEdges(edges);
+}
+
+// ---------------------------------------------------------------------------
+// setAlexLpfBypass: 6m/ByPass on RX re-selects at once.
+//   From Thetis console.cs:18775-18790 [v2.10.3.15]
+//     lpf_bypass = value;
+//     if (chkPower.Checked)
+//     { double freq = VFOAFreq; if (_mox) freq = tx_dds_freq_mhz;
+//       setAlexLPF(freq, _mox); ... txtVFOAFreq_LostFocus(...) }
+// The LostFocus re-runs the receive selection, so unkeyed this is the
+// receive selection over the live receivers.
+// ---------------------------------------------------------------------------
+void P2RadioConnection::setAlexLpfBypass(bool on)
+{
+    if (on == m_alexLpfBypass) {
+        return;
+    }
+    RadioConnection::setAlexLpfBypass(on);
+    if (m_mox) {
+        if (m_tx[0].frequency > 0) {
+            applyAlexLpf(m_tx[0].frequency / 1.0e6, /*freqIsTx=*/true);
+        }
+    } else {
+        applyReceiveAlexLpf();
+    }
     if (m_running) {
         sendCmdHighPriority();
     }

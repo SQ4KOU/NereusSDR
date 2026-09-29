@@ -1468,7 +1468,12 @@ private slots:
             expected.insert("version", 13);
             QCOMPARE(projectedCategory(service.hardware(), version), expected);
         }
-        QCOMPARE(projectedCategory(service.hardware(), 17), current);
+        // Version 17 adds only the Alex-1 low-pass rows, which the HL2 has no
+        // Alex board for.
+        QJsonObject v17 = projectedCategory(service.hardware(), 17);
+        QCOMPARE(v17.value("version"), QJsonValue(17));
+        v17.insert("version", 16);
+        QCOMPARE(v17, current);
 
         // A radio without the HL2's I/O board has no HL2 I/O page.
         service.setRadioContext(BoardCapsTable::forBoard(HPSDRHW::Hermes),
@@ -1800,6 +1805,114 @@ private slots:
         QVERIFY(!v12.contains("alex1Filters"));
         QVERIFY(!v12.contains("alex2Filters"));
         QVERIFY(!v12.contains("sampleRate"));
+    }
+
+    // Version 17 (R-R3-46, R-R3-49): the Alex-1 tab's low-pass rows and
+    // 6m/ByPass on RX (radioHardwareVersion 10), in their own section after
+    // the high-pass or BPF1 rows, on every Alex board. The rows are closed;
+    // the bypass is disabled with the desktop's reason on the models Thetis
+    // forces it off for; an older peer keeps what it had (16 without the
+    // low-pass rows, 13 unchanged).
+    void hardwareV17DescribesAlexLpfRows()
+    {
+        RadioInfo info;
+        info.name = QStringLiteral("ANAN-100D");
+        info.macAddress = QStringLiteral("00:1C:C0:A2:12:34");
+        info.protocol = ProtocolVersion::Protocol2;
+        SetupDescriptionService service;
+        service.setRadioContext(BoardCapsTable::forBoard(HPSDRHW::Angelia),
+                                HPSDRModel::ANAN100D, info);
+
+        const QList<QJsonObject> rows = resourceRows(QStringLiteral("hardware"), 17);
+        QCOMPARE(rows.size(), 7 * 2 + 1);
+        for (const QJsonObject& row : rows) {
+            QVERIFY2(SetupDescriptionService::validateHardwareV13Control(row),
+                     qPrintable(row.value("id").toString()));
+            for (const QJsonObject& changed : mutationsOf(row)) {
+                QVERIFY2(!SetupDescriptionService::validateHardwareV13Control(changed),
+                         qPrintable(QJsonDocument(changed).toJson(QJsonDocument::Compact)));
+            }
+        }
+
+        const QJsonObject v17 = projectedCategory(service.hardware(), 17);
+        QCOMPARE(v17.value("version"), QJsonValue(17));
+        const QJsonArray sections = pageById(v17, "hardware.alex1Filters")
+            .value("sections").toArray();
+        QCOMPARE(sections.size(), 2);
+        QCOMPARE(sections.at(0).toObject().value("title"), QJsonValue("Alex HPF Bands"));
+        const QJsonObject lpf = sections.at(1).toObject();
+        QCOMPARE(lpf.value("title"), QJsonValue("Alex LPF Bands"));
+        const QJsonArray lpfRows = lpf.value("controls").toArray();
+        QCOMPARE(lpfRows.size(), 15);
+        const QStringList slugs{"160m", "80m", "40m", "20m", "15m", "10m", "6m"};
+        const QStringList labels{"160m", "80m", "60/40m", "30/20m", "17/15m", "12/10m", "6m"};
+        const codec::alex::AlexLpfEdges defaults = codec::alex::AlexLpfEdges::thetisDefaults();
+        for (int i = 0; i < 7; ++i) {
+            const QJsonObject start = lpfRows.at(2 * i).toObject();
+            const QJsonObject end = lpfRows.at(2 * i + 1).toObject();
+            QCOMPARE(start.value("id"),
+                     QJsonValue("hardware.alex1Filters.lpf." + slugs[i] + ".start"));
+            QCOMPARE(end.value("id"),
+                     QJsonValue("hardware.alex1Filters.lpf." + slugs[i] + ".end"));
+            QCOMPARE(start.value("label"), QJsonValue(labels[i] + " LPF Start"));
+            QCOMPARE(start.value("binding").toObject().value("radioSetting"),
+                     QJsonValue("alex/lpf/" + slugs[i] + "/start"));
+            QCOMPARE(end.value("binding").toObject().value("radioSetting"),
+                     QJsonValue("alex/lpf/" + slugs[i] + "/end"));
+            QCOMPARE(start.value("default").toDouble(), defaults.rows[size_t(i)].startMhz);
+            QCOMPARE(end.value("default").toDouble(), defaults.rows[size_t(i)].endMhz);
+            // Alex LPF review C1: each edge's range is its Thetis spinner's
+            // (setup.designer.cs [v2.10.3.15], codec::alex::kAlexLpfEdgeLimits),
+            // the one the Core enforces (StationServer alexLpfKeyValueRefusal).
+            const codec::alex::AlexLpfEdgeLimits& lim =
+                codec::alex::kAlexLpfEdgeLimits[size_t(i)];
+            QCOMPARE(start.value("min").toDouble(), lim.startMin);
+            QCOMPARE(start.value("max").toDouble(), lim.startMax);
+            QCOMPARE(end.value("min").toDouble(), lim.endMin);
+            QCOMPARE(end.value("max").toDouble(), lim.endMax);
+            QCOMPARE(start.value("gate").toObject().value("min"), QJsonValue(10));
+            QCOMPARE(start.value("gate").toObject().value("transmit"), QJsonValue(true));
+        }
+        const QJsonObject bypass = lpfRows.at(14).toObject();
+        QCOMPARE(bypass.value("id"), QJsonValue("hardware.alex1Filters.lpfBypass"));
+        QCOMPARE(bypass.value("label"), QJsonValue("6m/ByPass on RX"));
+        QCOMPARE(bypass.value("tooltip"),
+                 QJsonValue("Selects the 6m LPF during receive regardless of frequency."));
+        QVERIFY(!bypass.value("gate").toObject().contains("transmit"));
+        QVERIFY(!bypass.contains("availability"));
+
+        // A BPF-panel radio: the rows follow the BPF1 section; Thetis
+        // forces the bypass off on the G2 (setup.cs), so it is disabled
+        // with the desktop's reason.
+        info.name = QStringLiteral("ANAN-G2");
+        service.setRadioContext(BoardCapsTable::forBoard(HPSDRHW::Saturn),
+                                HPSDRModel::ANAN_G2, info);
+        const QJsonArray g2Sections = pageById(projectedCategory(service.hardware(), 17),
+                                               "hardware.alex1Filters")
+            .value("sections").toArray();
+        QCOMPARE(g2Sections.size(), 2);
+        QCOMPARE(g2Sections.at(0).toObject().value("title"), QJsonValue("Saturn BPF1 Bands"));
+        const QJsonObject g2Bypass = g2Sections.at(1).toObject().value("controls").toArray()
+            .at(14).toObject();
+        QCOMPARE(g2Bypass.value("id"), QJsonValue("hardware.alex1Filters.lpfBypass"));
+        QCOMPARE(g2Bypass.value("availability").toObject().value("enabled"), QJsonValue(false));
+        QCOMPARE(g2Bypass.value("availability").toObject().value("reason"),
+                 QJsonValue(RadioModel::lpfBypassUnavailableReason()));
+
+        // Older peers: exactly what they had.
+        const QJsonObject v13 = projectedCategory(service.hardware(), 13);
+        QCOMPARE(v13.value("version"), QJsonValue(13));
+        QVERIFY(!QJsonDocument(v13).toJson().contains("lpf"));
+        QCOMPARE(projectedCategory(service.hardware(), 14), v13);
+        QCOMPARE(projectedCategory(service.hardware(), 15), v13);
+        QJsonObject v16 = withoutRowsOf(projectedCategory(service.hardware(), 17), 17);
+        v16.insert("version", 16);
+        QCOMPARE(projectedCategory(service.hardware(), 16), v16);
+        QVERIFY(!QJsonDocument(projectedCategory(service.hardware(), 16)).toJson()
+                     .contains("lpf"));
+        QJsonObject expected = withoutRowsOf(v16, 16);
+        expected.insert("version", 13);
+        QCOMPARE(expected, v13);
     }
 
     void categoriesLoadAndMirrorAsStrings()
@@ -2756,7 +2869,8 @@ private slots:
         check(14, kSessionProtocolMinor, 14);
         check(15, kSessionProtocolMinor, 15);
         check(16, kSessionProtocolMinor, 16);
-        check(17, kSessionProtocolMinor, 16);
+        check(17, kSessionProtocolMinor, 17);
+        check(18, kSessionProtocolMinor, 17);
         check(2, quint16(kRadioIdentitySessionProtocolMinor - 1), 0);
         check(3, quint16(kRadioIdentitySessionProtocolMinor - 1), 0);
     }

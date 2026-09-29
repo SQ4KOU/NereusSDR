@@ -6,6 +6,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29 - R-R3-46 / R-R3-49: RadioModel alexLpfBits Outbound, gated
+//                 on alexLpf (radioHardwareVersion 10). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 //   2026-09-29 - RADE status: SliceModel radeSynced and radeFreqOffsetHz
 //                 Outbound, gated on radeStatus (radeStatusVersion 1).
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
@@ -1072,6 +1075,9 @@ const MirrorPolicy::Entry kEntries[] = {
     { "RadioModel", "bandOutputsByte", MirrorDirection::Outbound },
     { "RadioModel", "bandOutputsBand", MirrorDirection::Outbound },
     { "RadioModel", "bandOutputsKeyed", MirrorDirection::Outbound },
+    // radioHardwareVersion 10: the Alex-1 low-pass in use, read-only; only
+    // to a peer that declared alexLpf (StationServer::fitPeerOnlyProperties).
+    { "RadioModel", "alexLpfBits", MirrorDirection::Outbound },
     // R-R3-47: the Core's RF-Kit switch. A window changes it with the
     // setRfKitEnabled command; a raw write is refused.
     { "RadioModel", "rfKitEnabled", MirrorDirection::Outbound },
@@ -1192,6 +1198,9 @@ const QList<MirrorPolicy::FeatureGate>& MirrorPolicy::featureGates()
         // (StationServer::fitPeerOnlyProperties).
         {"SliceModel", "radeSynced", "radeStatus", 1},
         {"SliceModel", "radeFreqOffsetHz", "radeStatus", 1},
+        // radioHardwareVersion 10: radio's Alex-1 low-pass in use, to a peer
+        // that declared alexLpf 1 (StationServer::fitPeerOnlyProperties).
+        {"RadioModel", "alexLpfBits", "alexLpf", 1},
     };
     return gates;
 }

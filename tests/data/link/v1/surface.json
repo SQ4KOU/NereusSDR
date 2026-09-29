@@ -208,7 +208,7 @@
         {
             "kind": "i64",
             "name": "radioHardwareVersion",
-            "value": 9
+            "value": 10
         },
         {
             "kind": "i64",
@@ -5082,6 +5082,12 @@
                     "kind": "utf8",
                     "name": "txInhibitReason",
                     "ordinal": 28
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "alexLpfBits",
+                    "ordinal": 29
                 }
             ]
         },
