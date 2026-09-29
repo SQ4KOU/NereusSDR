@@ -237,6 +237,31 @@ bool incarnationChanged(const SliceOwnership* ownership,
     return false;
 }
 
+// Slice control fix wave: whether the question recorded `sliceId` with a
+// control revision it no longer has. Control that passed to another device
+// and back leaves the same controller but a listener nobody was shown.
+bool revisionChanged(const SliceOwnership* ownership, const ConfirmStep::Question& question,
+                     int sliceId)
+{
+    const auto it = question.askedRevisions.constFind(sliceId);
+    return it != question.askedRevisions.constEnd()
+        && ownership->controlRevision(sliceId) != it.value();
+}
+
+void recordRevisions(ConfirmStep::Question* question, const SliceOwnership* ownership)
+{
+    question->askedRevisions.clear();
+    for (const QList<SliceOwnership::SliceRef>* refs :
+         {&question->namedRefs, &question->choiceRefs, &question->shownRefs}) {
+        for (const SliceOwnership::SliceRef& ref : *refs) {
+            if (ref.sliceId >= 0 && ownership->isLive(ref.sliceId)) {
+                question->askedRevisions.insert(ref.sliceId,
+                                                ownership->controlRevision(ref.sliceId));
+            }
+        }
+    }
+}
+
 void appendRefOnce(QList<SliceOwnership::SliceRef>* refs, const SliceOwnership* ownership,
                    int sliceId)
 {
@@ -890,6 +915,7 @@ void StationServer::sendQuestion(SessionTransport* transport, ConfirmStep::Quest
             appendRefOnce(&question.shownRefs, ownership, id);
         }
     }
+    recordRevisions(&question, ownership);
     m_confirm->ask(question);
     const SessionMessage request =
         SessionMessages::confirmRequest(prompt, QString::fromLatin1(kWaitingReason));
@@ -1478,7 +1504,7 @@ SessionMessage StationServer::answerConfirm(const SessionMessage& invoke, int id
     // Slice control plan Task 1: and still the same slice, not a new one
     // made in the requester's name under the reused id.
     for (const SliceOwnership::SliceRef& ref : question->namedRefs) {
-        if (!ownership->matches(ref)) {
+        if (!ownership->matches(ref) || revisionChanged(ownership, *question, ref.sliceId)) {
             return refuse(changedSinceAskedReason(question->kind));
         }
     }
@@ -1587,7 +1613,10 @@ SessionMessage StationServer::proceedPanMove(SessionTransport* transport,
                                     .arg(QString::fromLatin1(d.device.toHex()))
                                     .arg(d.sliceId)
                                     .arg(ReceiverPlanner::effectName(d.effect));
-            grew = grew || !question.shown.contains(key);
+            // Slice control fix wave: control that changed hands and came
+            // back counts as grown; its listeners were never shown.
+            grew = grew || !question.shown.contains(key)
+                || revisionChanged(m_radioModel->sliceOwnership(), question, d.sliceId);
         }
         if (grew) {
             // A device or an effect the operator was not shown: ask again,
@@ -1669,9 +1698,12 @@ SessionMessage StationServer::proceedTakeReceiver(SessionTransport* transport,
     bool grew = now == nullptr || !now->takeable;
     if (now != nullptr) {
         for (int id : now->closes) {
+            // Slice control fix wave: control that changed hands and came
+            // back counts as grown; its listeners were never shown.
             grew = grew || !shown.contains(id)
                 || !question.shown.contains(shownVictimKey(
-                    choice, id, m_radioModel->sliceOwnership()->mark(id).subject()));
+                    choice, id, m_radioModel->sliceOwnership()->mark(id).subject()))
+                || revisionChanged(m_radioModel->sliceOwnership(), question, id);
         }
     }
     if (grew) {
@@ -1741,8 +1773,11 @@ SessionMessage StationServer::proceedTakeSlice(SessionTransport* transport,
         return SessionMessages::commandResult(invoke.commandVerb, invoke.commandId, false,
                                               QString::fromLatin1(kChangedReason), {});
     }
+    // Slice control fix wave: control that changed hands and came back
+    // asks again like an owner change; its listeners were never shown.
     if (!ownership->isLive(target)
-        || ownership->mark(target).subject() != question.shownOwners.value(choice)) {
+        || ownership->mark(target).subject() != question.shownOwners.value(choice)
+        || revisionChanged(ownership, question, target)) {
         const QList<ReceiverPlanner::Choice> choices =
             receiverPlanner().sliceChoices(question.device);
         if (!choices.isEmpty() && askTakeSlice(transport, question.original, choices)) {
@@ -1954,8 +1989,11 @@ SessionMessage StationServer::proceedTakeBack(SessionTransport* transport,
     for (int id : closes) {
         if (!shown.contains(id)
             || !question.shown.contains(shownVictimKey(
-                choice, id, m_radioModel->sliceOwnership()->mark(id).subject()))) {
-            // Something the operator was not shown: ask the other way again.
+                choice, id, m_radioModel->sliceOwnership()->mark(id).subject()))
+            || revisionChanged(m_radioModel->sliceOwnership(), question, id)) {
+            // Something the operator was not shown (slice control fix wave:
+            // including control that changed hands and came back): ask the
+            // other way again.
             const SessionMessage again =
                 askTakeBack(transport, invoke, static_cast<int>(question.noticeId));
             return again.reason == QLatin1String(kWaitingReason) ? askAgain(invoke) : again;

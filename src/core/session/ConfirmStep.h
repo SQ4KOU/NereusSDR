@@ -140,6 +140,11 @@ public:
         /// disturbed slices, each choice's closing slices) with its
         /// incarnation when asked.
         QList<SliceOwnership::SliceRef> shownRefs;
+        /// Slice control fix wave: the control revision of every slice in
+        /// namedRefs, choiceRefs and shownRefs when asked, by slice id. A
+        /// slice whose control changed hands meanwhile (even back again)
+        /// has listeners the operator was not shown.
+        QHash<int, quint64> askedRevisions;
         /// takeTransmit (Task 77, ruling 8.7): the holder epoch and whether
         /// the holder was on the air when asked.
         quint64 holderEpoch = 0;

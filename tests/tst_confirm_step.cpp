@@ -1393,6 +1393,44 @@ private slots:
         QCOMPARE(countOf(s.appB, QStringLiteral("notice")), 0);
     }
 
+    // Slice control fix wave (minor): A is offered B's slice 1; control of
+    // it passes to C and back to B. The same letter, incarnation and
+    // controller, but C now listens to it and was never shown: its control
+    // revision moved, so nothing closes and A is asked again.
+    void aSliceTakeWhoseSliceChangedHandsAndBackIsNotApplied()
+    {
+        Shared s(2, 2);
+        const QByteArray bKey = s.b.key.fingerprint();
+        const QByteArray cKey = s.c.key.fingerprint();
+        QCOMPARE(s.core.model->sliceOwnership()->ownedBy(bKey), QList<int>{1});
+        const QJsonObject refused =
+            s.core.invoke(s.appA, "addSlice", {utf8("initialPanId", QString())});
+        QCOMPARE(refused.value(QStringLiteral("accepted")).toBool(true), false);
+        const QJsonObject ask = waitForLast(s.appA, QStringLiteral("confirm.request"), 0);
+        QCOMPARE(ask.value(QStringLiteral("kind")).toString(), QStringLiteral("takeSlice"));
+        QCOMPARE(ask.value(QStringLiteral("choices")).toArray().first().toObject()
+                     .value(QStringLiteral("sliceId")).toInt(),
+                 1);
+        SliceOwnership* ownership = s.core.model->sliceOwnership();
+        const quint64 incarnation = ownership->incarnation(1);
+        const quint64 revision = ownership->controlRevision(1);
+
+        ownership->setOwner(1, cKey);
+        ownership->setOwner(1, bKey);
+        QCOMPARE(ownership->mark(1).subject(), bKey);
+        QCOMPARE(ownership->incarnation(1), incarnation);
+        QVERIFY(ownership->controlRevision(1) != revision);
+        QVERIFY(ownership->listenersOf(1).contains(cKey));
+
+        const QJsonObject done = s.proceed(s.appA, ask.value(QStringLiteral("id")).toInteger(), 0);
+        QCOMPARE(done.value(QStringLiteral("accepted")).toBool(true), false);
+        QCOMPARE(s.core.model->slices().size(), 2);
+        QVERIFY(s.core.model->sliceById(1) != nullptr);
+        QCOMPARE(ownership->ownedBy(bKey), QList<int>{1});
+        QVERIFY(ownership->listenersOf(1).contains(cKey));
+        QCOMPARE(countOf(s.appA, QStringLiteral("confirm.request")), 2);
+    }
+
     // Slice control plan Task 1: the receiver choice showed B's slice 1
     // closing; B closes it and makes a new slice on the same receiver,
     // which takes id 1 in B's own name. Refused as changed; nothing closes.
