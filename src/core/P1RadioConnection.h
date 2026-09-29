@@ -901,6 +901,8 @@ private:
         bool left{false};
     };
     std::vector<Hl2ClockSent> m_hl2ClockUnconfirmed;
+    // The I/O board's clear count last seen (hl2ClockCheckCleared).
+    quint64 m_hl2ClockClearSeen{0};
     // The first ep6 frame promotes Connecting to Connected; the HL2 clock
     // options that are on go to the radio then.
     void enterDataFlowing();
@@ -912,6 +914,7 @@ private:
     void hl2ClockPump();
     void hl2ClockConfirmSent();
     void hl2ClockMarkUnconfirmed();
+    bool hl2ClockCheckCleared();
 
     // mi0bot prn->i2c.delay: subframes until the next I2C frame may go
     // (composeSubframe).

@@ -409,6 +409,7 @@ mw0lge@grange-lane.co.uk
 
 #include <array>
 #include <algorithm>
+#include <atomic>
 #include <cstdlib>
 #include <cstring>    // memset
 #include <vector>
@@ -1662,6 +1663,10 @@ void P1RadioConnection::hl2ClockOnDataFlowing()
     }
     hl2ClockDropPending();
     hl2ClockMarkUnconfirmed();
+    // A clear while the link was down is covered by the marking above.
+    if (m_ioBoard) {
+        m_hl2ClockClearSeen = m_ioBoard->i2cClearCount();
+    }
     const bool sendExt = m_hl2Ext10MHz || m_hl2Ext10Incomplete;  // MI0BOT: HL2 external 10 MHz input
     const bool sendCl2 = m_hl2Cl2Enable || m_hl2Cl2Incomplete    // MI0BOT: HL2 CL2 clock output
                          || (sendExt && m_hl2Ext10Incomplete);
@@ -1721,10 +1726,16 @@ void P1RadioConnection::hl2ClockListDropped(const Hl2ClockSequence& seq)
 // it, and the option's list counts as finished.
 void P1RadioConnection::hl2ClockConfirmSent()
 {
-    if (m_hl2ClockUnconfirmed.empty()) {
+    if (!m_ioBoard) {
         return;
     }
-    const quint64 dequeued = m_ioBoard ? m_ioBoard->i2cDequeuedCount() : 0;
+    // The dequeued count is read before the clear count: writes a clear
+    // dropped then never pass for writes that left.
+    const quint64 dequeued = m_ioBoard->i2cDequeuedCount();
+    std::atomic_thread_fence(std::memory_order_acquire);
+    if (hl2ClockCheckCleared()) {
+        return;
+    }
     for (auto it = m_hl2ClockUnconfirmed.begin(); it != m_hl2ClockUnconfirmed.end();) {
         if (it->left) {
             if (it->kind == Hl2ClockKind::Ext10) {
@@ -1755,6 +1766,58 @@ void P1RadioConnection::hl2ClockMarkUnconfirmed()
         }
     }
     m_hl2ClockUnconfirmed.clear();
+}
+
+// The manual I2C tool's Clear Queue (IoBoardHl2::clearI2cQueue) drops
+// every write still in the queue, clock writes included. A cleared write
+// was never sent, so this is handled as a disconnect is: every list not
+// yet seen leaving the queue, and a list part way into it, is marked not
+// finished, and while the link is up both go again at once, a started
+// list from its first write. A list that did leave just before the clear
+// is sent again too; the queue cannot tell it from one the clear dropped.
+// Returns true when it sent lists again (hl2ClockRequest pumps them).
+bool P1RadioConnection::hl2ClockCheckCleared()
+{
+    if (!m_ioBoard) {
+        return false;
+    }
+    const quint64 clears = m_ioBoard->i2cClearCount();
+    if (clears == m_hl2ClockClearSeen) {
+        return false;
+    }
+    m_hl2ClockClearSeen = clears;
+    bool ext10 = false;
+    bool cl2 = false;
+    for (auto it = m_hl2ClockUnconfirmed.begin(); it != m_hl2ClockUnconfirmed.end();) {
+        if (it->left) {
+            ++it;
+            continue;
+        }
+        if (it->kind == Hl2ClockKind::Ext10) {
+            m_hl2Ext10Incomplete = true;
+            ext10 = true;
+        } else {
+            m_hl2Cl2Incomplete = true;
+            cl2 = true;
+        }
+        it = m_hl2ClockUnconfirmed.erase(it);
+    }
+    if (!m_hl2ClockPending.empty() && m_hl2ClockPending.front().next > 0) {
+        const Hl2ClockSequence started = m_hl2ClockPending.front();
+        m_hl2ClockPending.erase(m_hl2ClockPending.begin());
+        hl2ClockListDropped(started);
+        if (started.kind == Hl2ClockKind::Ext10) {
+            ext10 = true;
+        } else {
+            cl2 = true;
+        }
+    }
+    if (!(ext10 || cl2) || !isHl2() || state() != ConnectionState::Connected) {
+        return false;
+    }
+    // An External 10 MHz list that goes again takes its CL2 list with it.
+    hl2ClockRequest(ext10, cl2 || ext10);
+    return true;
 }
 
 // Queues the lists a change needs. A list already started stays at the
@@ -1850,6 +1913,10 @@ void P1RadioConnection::hl2ClockPump()
     }
     if (!m_ioBoard) {
         hl2ClockDropPending();
+        return;
+    }
+    // A clear sends the lists it dropped again (and pumps them itself).
+    if (hl2ClockCheckCleared()) {
         return;
     }
     while (!m_hl2ClockPending.empty()) {

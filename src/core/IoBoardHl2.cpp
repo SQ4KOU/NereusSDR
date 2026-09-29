@@ -209,16 +209,27 @@ quint64 IoBoardHl2::i2cEnqueuedCount() const
     return m_i2cEnqueuePos.load(std::memory_order_acquire);
 }
 
+quint64 IoBoardHl2::i2cClearCount() const
+{
+    return m_i2cClearCount.load(std::memory_order_acquire);
+}
+
 bool IoBoardHl2::i2cQueueIsEmpty() const { return i2cQueueDepth() == 0; }
 bool IoBoardHl2::i2cQueueIsFull() const  { return i2cQueueDepth() >= kMaxI2cQueue; }
 
 void IoBoardHl2::clearI2cQueue()
 {
     // Taken like the codec takes them, so a clear from the main thread is
-    // safe while the connection thread fills and empties the queue.
+    // safe while the connection thread fills and empties the queue. The
+    // clear count goes up before the first dequeue (the fence orders it
+    // ahead of them) and again after the last, so a writer that read it
+    // part way through still sees it change.
+    m_i2cClearCount.fetch_add(1, std::memory_order_seq_cst);
+    std::atomic_thread_fence(std::memory_order_seq_cst);
     I2cTxn discarded;
     while (dequeueI2c(discarded)) {
     }
+    m_i2cClearCount.fetch_add(1, std::memory_order_seq_cst);
     emit i2cQueueChanged();
 }
 

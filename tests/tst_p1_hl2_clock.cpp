@@ -658,6 +658,82 @@ private slots:
         QVERIFY(conn.hl2ClockIncompleteForTest(false));
     }
 
+    // The manual I2C tool's Clear Queue drops a clock list queued whole
+    // before it left: it never counts as sent, and goes again at once.
+    void clearedQueuedListIsResent()
+    {
+        P1RadioConnection conn;
+        IoBoardHl2 io;
+        setUpHl2(conn, io);
+        conn.simulateDataFlowingForTest();
+        conn.setHl2Clock(false, true, 116000);
+        QCOMPARE(conn.hl2ClockPendingForTest(), 0);   // all 10 writes queued
+        io.clearI2cQueue();
+        radioAnswers(conn);
+        QVERIFY(conn.hl2ClockIncompleteForTest(false));
+        QCOMPARE(drainClockWrites(io), cl2(0x00, 0xB0, 0x01, 0x05, 0x4B, 0xE0));
+        radioAnswers(conn);
+        QVERIFY(!conn.hl2ClockIncompleteForTest(false));
+        QCOMPARE(drainClockWrites(io), Writes{});
+    }
+
+    // A clear in the middle of a list: the writes already in the queue are
+    // gone, so the list starts again from its first write.
+    void clearedStartedListStartsAgain()
+    {
+        P1RadioConnection conn;
+        IoBoardHl2 io;
+        setUpHl2(conn, io);
+        conn.simulateDataFlowingForTest();
+        fillQueue(io);
+        conn.setHl2Clock(true, false, 116000);
+        IoBoardHl2::I2cTxn txn;
+        QVERIFY(io.dequeueI2c(txn));                  // room for one write
+        conn.hl2ClockPumpForTest();                    // the first goes in
+        QCOMPARE(conn.hl2ClockPendingForTest(), 23);
+        io.clearI2cQueue();
+        conn.hl2ClockPumpForTest();
+        QCOMPARE(drainClockWrites(io), concat(k10MhzEnable, kCl2Off));
+        radioAnswers(conn);
+        QVERIFY(!conn.hl2ClockIncompleteForTest(true));
+        QVERIFY(!conn.hl2ClockIncompleteForTest(false));
+    }
+
+    // A clear after a list's last write left the queue drops nothing of
+    // it; the list is not sent again.
+    void clearAfterListLeftResendsNothing()
+    {
+        P1RadioConnection conn;
+        IoBoardHl2 io;
+        setUpHl2(conn, io);
+        conn.simulateDataFlowingForTest();
+        conn.setHl2Clock(false, true, 116000);
+        QCOMPARE(drainClockWrites(io).size(), std::size_t(10));
+        conn.hl2ClockEp6ForTest();                     // the last write left
+        io.clearI2cQueue();
+        radioAnswers(conn);
+        QCOMPARE(drainClockWrites(io), Writes{});
+        QVERIFY(!conn.hl2ClockIncompleteForTest(false));
+    }
+
+    // A clear while the link is down is left to the next connect, which
+    // sends the list again; a later ep6 frame does not send it twice.
+    void clearWhileDisconnectedResentOnceAtConnect()
+    {
+        P1RadioConnection conn;
+        IoBoardHl2 io;
+        setUpHl2(conn, io);
+        conn.simulateDataFlowingForTest();
+        conn.setHl2Clock(false, true, 116000);
+        conn.disconnect();
+        io.clearI2cQueue();
+        conn.simulateDataFlowingForTest();
+        QCOMPARE(drainClockWrites(io), cl2(0x00, 0xB0, 0x01, 0x05, 0x4B, 0xE0));
+        radioAnswers(conn);
+        QCOMPARE(drainClockWrites(io), Writes{});
+        QVERIFY(!conn.hl2ClockIncompleteForTest(false));
+    }
+
     // The I/O board poll waits while clock writes are pending, as mi0bot
     // holds SetI2CPollingPause around WriteVersaClockAsync.
     void pollWaitsWhileClockWritesPending()
