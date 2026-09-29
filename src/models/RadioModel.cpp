@@ -2396,6 +2396,9 @@ RadioModel::RadioModel(Role role, QObject* parent)
     // through its own TUN-off path first (console.cs:44805-44813
     // [v2.10.3.15]), so RadioModel stops counting TUN on at tune power.
     m_twoToneController->setTuneOffFn([this]() { setTune(false); });
+    // PA on-air gate re-review: the start drives Thetis TXBand, the band
+    // the drive math holds while keyed (driveTxBand).
+    m_twoToneController->setTxBandFn([this]() { return driveTxBand(); });
 
     // R-R3-36: keep the generated-key record in step with two-tone's own
     // state, not only with MOX transitions. Two-tone can go live on a key
@@ -17125,22 +17128,7 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
             // SetOutputPower + cmaster.CMSetTXOutputLevel
             // (audio.cs:262-271 + NetworkIO.cs:201-211 + cmaster.cs:
             // 1115-1119 [v2.10.3.13]).
-            if (m_paProfileManager) {
-                const PaProfile* prof = m_paProfileManager->activeProfile();
-                const SliceModel* const txSlice = txBoundSlice();
-                if (prof && txSlice) {
-                    const Band currentBand =
-                        bandFromFrequency(txSlice->frequency());
-                    (void)m_transmitModel.setPowerUsingTargetDbm(
-                        *prof, currentBand, /*bSetPower=*/true,
-                        /*bFromTune=*/false, /*bTwoTone=*/false,
-                        m_hardwareProfile.model);
-                    qCInfo(lcDsp)
-                        << "Initial audioVolume seed pumped — first MOX "
-                           "drive byte / IQ scalar now non-zero without "
-                           "requiring TUN priming";
-                }
-            }
+            seedInitialAudioVolume();
         };  // end of txSetup lambda
         txSetup();
 
@@ -22957,6 +22945,32 @@ void RadioModel::drivePowerScroll()
     m_transmitModel.setPowerForBand(m_txBand, m_transmitModel.power());
 }
 
+// The first-MOX audioVolume seed (bench 2026-05-11), run by the txSetup
+// lambda in connectToRadio once the TxChannel exists.
+void RadioModel::seedInitialAudioVolume()
+{
+    if (!m_paProfileManager) { return; }
+    const PaProfile* prof = m_paProfileManager->activeProfile();
+    const SliceModel* const txSlice = txBoundSlice();
+    if (prof && txSlice) {
+        // From Thetis console.cs:46750-46752 [v2.10.3.15]:
+        //   case 0: //normal
+        //       new_pwr = ptbPWR.Value;
+        //       power_by_band[(int)_tx_band] = new_pwr;
+        // with gbb = GainByBand(TXBand, new_pwr) (console.cs:46808): the
+        // held transmit band, not the slice's.
+        const Band currentBand = driveTxBand();
+        (void)m_transmitModel.setPowerUsingTargetDbm(
+            *prof, currentBand, /*bSetPower=*/true,
+            /*bFromTune=*/false, /*bTwoTone=*/false,
+            m_hardwareProfile.model);
+        qCInfo(lcDsp)
+            << "Initial audioVolume seed pumped: first MOX "
+               "drive byte / IQ scalar now non-zero without "
+               "requiring TUN priming";
+    }
+}
+
 // Thetis's _tx_band for the drive math (SetPowerUsingTargetDBM reads
 // power_by_band[(int)_tx_band] and GainByBand(TXBand, ...)): m_txBand, held
 // while keyed, else the band applyTransmitBand would take.
@@ -23745,9 +23759,15 @@ void RadioModel::setTune(bool on)
         //   wire = clamp(int(255 * tunePower/100 * swrProtect), 0, 255)
         // shipped K2GX's >300W on 200W radio.  This rewrite is the
         // K2GX safety fix proper.
-        const Band currentBand = txSlice
-                                    ? bandFromFrequency(txSlice->frequency())
-                                    : m_lastBand;
+        //
+        // The band is _tx_band, not the slice's: SetPowerUsingTargetDBM
+        // (console.cs:46762-46808 [v2.10.3.15]) takes ptbTune.Value, which
+        // the TXBand setter loaded (TunePWR = tunePower_by_band[(int)value]; //MW0LGE_22b),
+        // and gbb = GainByBand(TXBand, new_pwr). TXBand holds through a
+        // retune while keyed (//[2.10.3.6]MW0LGE no band change on TX fix)
+        // until the next band change, so a TUNE after that unkey drives
+        // the held band.
+        const Band currentBand = driveTxBand();
 
         // tunePower retained as a local for the SwrProtectionController
         // setters below — those setters drive the tune-bypass / alex_fwd

@@ -974,6 +974,99 @@ private slots:
         QCOMPARE(model.paOnAirBandIndex(), band17);
     }
 
+    // Keys on 80 m, retunes the slice to 40 m while keyed and unkeys. The
+    // TXBand setter returned while MOX (//[2.10.3.6]MW0LGE no band change on
+    // TX fix), so _tx_band stays 80 m until the next band change. The 40 m
+    // row gets a gain of its own so a drive on the wrong band shows.
+    static void holdEightyWithSliceOnForty(RadioModel& model)
+    {
+        SliceModel* slice = model.activeSlice();
+        QVERIFY(slice != nullptr);
+        PaProfileManager* pm = model.paProfileManager();
+        PaProfile edited = *pm->activeProfile();
+        edited.setGainForBand(Band::Band40m, 40.5f);
+        QVERIFY(pm->saveProfile(pm->activeProfileName(), edited));
+
+        MoxController* mox = model.moxController();
+        mox->setMoxCheck({});
+        mox->setMox(true);
+        pump();
+        slice->setFrequency(7100000.0);
+        pump();
+        mox->setMox(false);
+        pump();
+        QCOMPARE(bandFromFrequency(slice->frequency()), Band::Band40m);
+        QCOMPARE(model.paOnAirBandIndex(), static_cast<int>(Band::Band80m));
+    }
+
+    // TUNE-on drive reads _tx_band. From Thetis console.cs:30098
+    // [v2.10.3.15] chkTUN_CheckedChanged:
+    //   // remember old power //MW0LGE_22b
+    //   ...
+    //   int new_pwr = SetPowerUsingTargetDBM(out bool bUseConstrain, out double targetdBm, true, true, false);
+    // SetPowerUsingTargetDBM (console.cs:46762-46808 [v2.10.3.15]) takes the
+    // tune slider's value (ptbTune, set to the TXBand's tune power) and
+    //   gbb = GainByBand(TXBand, new_pwr);
+    //   25 W at the 80m gain 50.5 dB: wire 33..35 (tuneEngage above).
+    //   60 W at the 40m gain 40.5 dB would be about 168.
+    void tuneOn_afterKeyedRetune_drivesTheHeldTxBand()
+    {
+        RadioModel model;
+        MockConnection* conn = nullptr;
+        setupModel(model, conn, HPSDRModel::ANAN8000D);
+        std::unique_ptr<MockConnection> connOwner(conn);
+        auto detach = qScopeGuard([&]{ model.injectConnectionForTest(nullptr); });
+        TransmitModel& tx = model.transmitModel();
+        tx.setTuneDrivePowerSource(DrivePowerSource::TuneSlider);
+        tx.setTunePowerForBand(Band::Band80m, 25);
+        tx.setTunePowerForBand(Band::Band40m, 60);
+        pump();
+        holdEightyWithSliceOnForty(model);
+        QCOMPARE(tx.tunePowerForTxBand(), 25);
+
+        conn->txDriveLog.clear();
+        model.setTune(true);
+        pump();
+        QVERIFY2(!conn->txDriveLog.isEmpty(), "TUN-on pushed no drive");
+        const int wireByte = conn->txDriveLog.last();
+        QVERIFY2(wireByte >= 33 && wireByte <= 35, qPrintable(QString::number(wireByte)));
+
+        model.setTune(false);
+        pump();
+    }
+
+    // The first-MOX seed is ptbPWR_Scroll's drive (setPowerFromDriveSlider,
+    // console.cs:46710-46716 [v2.10.3.15]), SetPowerUsingTargetDBM with
+    // (console.cs:46750-46752 [v2.10.3.15])
+    //   case 0: //normal
+    //       new_pwr = ptbPWR.Value;
+    //       power_by_band[(int)_tx_band] = new_pwr;
+    // and GainByBand(TXBand, new_pwr), so it drives the held transmit band.
+    //   100 W at the 80m gain 50.5 dB: wire 66..70 (pwrSlider tests above).
+    //   100 W at the 40m gain 40.5 dB would be about 217.
+    void firstMoxSeed_afterKeyedRetune_drivesTheHeldTxBand()
+    {
+        RadioModel model;
+        MockConnection* conn = nullptr;
+        setupModel(model, conn, HPSDRModel::ANAN8000D);
+        std::unique_ptr<MockConnection> connOwner(conn);
+        auto detach = qScopeGuard([&]{ model.injectConnectionForTest(nullptr); });
+        TransmitModel& tx = model.transmitModel();
+        tx.setPower(50);
+        pump();
+        tx.setPower(100);
+        pump();
+        holdEightyWithSliceOnForty(model);
+        QCOMPARE(tx.power(), 100);
+
+        conn->txDriveLog.clear();
+        model.seedInitialAudioVolumeForTest();
+        pump();
+        QVERIFY2(!conn->txDriveLog.isEmpty(), "the seed pushed no drive");
+        const int wireByte = conn->txDriveLog.last();
+        QVERIFY2(wireByte >= 66 && wireByte <= 70, qPrintable(QString::number(wireByte)));
+    }
+
     // The TXBand setter assigns the band's slider limits
     // (console.cs:17539-17540 [v2.10.3.15]:
     //   ptbPWR.LimitValue = limitPower_by_band[(int)value];

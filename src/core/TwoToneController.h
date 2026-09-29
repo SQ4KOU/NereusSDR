@@ -65,6 +65,10 @@
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 //                 setActive(bool, const KeyerIdentity&): a remote device's
 //                 two-tone asks and keys as that device. NereusSDR-original.
+//   2026-09-29 : PA on-air gate re-review, item 5, by J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code. setTxBandFn:
+//                 the PA-gain drive reads the held transmit band, as Thetis's
+//                 GainByBand(TXBand, ...) does (console.cs:46808 [v2.10.3.15]).
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis-derived activation
@@ -260,6 +264,12 @@ public:
     // [v2.10.3.15]). Unset: TUN is not turned off (a bare MOX release).
     void setTuneOffFn(std::function<void()> fn);
 
+    // setTxBandFn: RadioModel supplies the transmit band the drive math
+    // reads (Thetis TXBand, held while keyed). The start's
+    // SetPowerUsingTargetDBM uses GainByBand(TXBand, new_pwr)
+    // (console.cs:46808 [v2.10.3.15]). Unset: the slice's band.
+    void setTxBandFn(std::function<Band()> fn);
+
     // ── Test seam ──────────────────────────────────────────────────────────
     // Override the default settle / Freq2-delay timer durations.  FOR
     // TESTING ONLY — production code must use the kXxx defaults.
@@ -405,6 +415,7 @@ private:
     std::function<bool()> m_tuneActive;
     // Task 7 follow-up, item 6: see setTuneOffFn.
     std::function<void()> m_tuneOff;
+    std::function<Band()> m_txBand;
     // Stage 2 of activation (release MOX, then continueActivation).
     void releaseMoxThenContinue();
 };

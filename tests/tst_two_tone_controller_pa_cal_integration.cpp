@@ -343,6 +343,53 @@ private slots:
         QVERIFY(ctrl.isActive());
         QCOMPARE(audioSpy.count(), 0);
     }
+
+    // ── The start drives the transmit band RadioModel holds ─────────────
+    // Thetis's two-tone start (setup.cs:11153 [v2.10.3.15]):
+    //   // remember old power //MW0LGE_22b
+    //   ...
+    //   int new_pwr = console.SetPowerUsingTargetDBM(out bool bUseConstrain, out double targetdBm, true, true, true);
+    // SetPowerUsingTargetDBM's gain is GainByBand(TXBand, new_pwr)
+    // (console.cs:46808 [v2.10.3.15]). TXBand is held while keyed
+    // (//[2.10.3.6]MW0LGE no band change on TX fix), so after a keyed
+    // retune it is not the slice's band.
+    void start_usesTheHeldTransmitBand_notTheSlicesBand()
+    {
+        TransmitModel tx;
+        StubTxChannel tc(kTxChannelId);
+        MoxController mox;
+        SliceModel slice;
+        TwoToneController ctrl;
+        wireControllerForTest(ctrl, tx, tc, mox, slice);
+        slice.setFrequency(18100000.0);
+        QCOMPARE(bandFromFrequency(slice.frequency()), Band::Band17m);
+        ctrl.setTxBandFn([]() { return Band::Band20m; });
+
+        PaProfileManager mgr;
+        mgr.setMacAddress(QStringLiteral("AA:BB:CC:DD:EE:08"));
+        mgr.load(HPSDRModel::ANAN_G2);
+        PaProfile edited = *mgr.activeProfile();
+        edited.setGainForBand(Band::Band17m,
+                              edited.getGainForBand(Band::Band20m) - 10.0f);
+        QVERIFY(mgr.saveProfile(mgr.activeProfileName(), edited));
+        ctrl.setPaProfileManager(&mgr);
+
+        tx.setTwoToneDrivePowerSource(DrivePowerSource::DriveSlider);
+        tx.setPower(60);
+
+        QSignalSpy audioSpy(&tx, &TransmitModel::audioVolumeChanged);
+        ctrl.setActive(true);
+        for (int i = 0; i < 10; ++i) { QCoreApplication::processEvents(); }
+        QVERIFY(ctrl.isActive());
+        QVERIFY(audioSpy.count() >= 1);
+
+        const PaProfile* profile = mgr.activeProfile();
+        QVERIFY(profile != nullptr);
+        const double on20 = tx.computeAudioVolume(*profile, Band::Band20m, 60);
+        const double on17 = tx.computeAudioVolume(*profile, Band::Band17m, 60);
+        QVERIFY(!qFuzzyCompare(on20, on17));
+        QVERIFY(qFuzzyCompare(audioSpy.last().at(0).toDouble(), on20));
+    }
 };
 
 QTEST_MAIN(TestTwoToneControllerPaCalIntegration)

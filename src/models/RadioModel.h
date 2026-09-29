@@ -399,6 +399,11 @@
 //                 RadioModel logs through VoltsAmpsLog (Thetis console.cs
 //                 LogVA). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //                 Code.
+//   2026-09-29 - PA on-air gate re-review, item 5: TUNE-on drive, the
+//                 first-MOX seed (seedInitialAudioVolume) and the two-tone
+//                 start read the held transmit band (driveTxBand), as
+//                 Thetis reads _tx_band. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 //   2026-09-29 - PA on-air gate re-review: paTransmitBand, the PA row the
 //                 Core holds on the air (paTransmitBandVersion 1), so a
 //                 remote window opens and locks the Core's row. J.J. Boyd
@@ -3908,6 +3913,9 @@ public:
     // directly after setting the connection state via
     // setConnectionStateForTest + setLastRadioInfoForTest.
     void applyPeripheralsForTest() { applyPeripheralsForCurrentMac(); }
+    // The first-MOX audioVolume seed, which connectToRadio runs only with a
+    // live WDSP TxChannel.
+    void seedInitialAudioVolumeForTest() { seedInitialAudioVolume(); }
     void teardownPeripheralsForTest() { teardownPeripherals(); }
     // R-R3-22: the FlexRadio beacon as connectToRadio leaves it, in a mode
     // that sends nothing (FlexRadioDiscoveryBroadcaster::setNoSendForTesting),
@@ -5623,6 +5631,9 @@ private:
     // m_txBand once known, else transmitSliceBand(): the band the drive math
     // reads and saves PWR to (Thetis _tx_band).
     Band driveTxBand() const;
+    // The first-MOX audioVolume seed: PWR's drive, pushed once the TxChannel
+    // exists so the first key is not silent (txSetup in connectToRadio).
+    void seedInitialAudioVolume();
     // R-R3-49 (parity Task 3): the Core's MicProfileManager's active profile
     // and list onto `transmit` (activeTxProfile, txProfilesJson).
     void publishTxProfiles();

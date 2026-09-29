@@ -44,6 +44,10 @@
 //                (KG4VCF), AI-assisted via Anthropic Claude Code. A remote
 //                device's start asks and keys as that device
 //                (setActive(bool, const KeyerIdentity&)). NereusSDR-original.
+//   2026-09-29 : PA on-air gate re-review, item 5, by J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code. setTxBandFn:
+//                the PA-gain drive reads the held transmit band, as Thetis's
+//                GainByBand(TXBand, ...) does (console.cs:46808 [v2.10.3.15]).
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis-derived activation flow
@@ -160,6 +164,11 @@ void TwoToneController::setTuneActiveFn(std::function<bool()> fn)
 void TwoToneController::setTuneOffFn(std::function<void()> fn)
 {
     m_tuneOff = std::move(fn);
+}
+
+void TwoToneController::setTxBandFn(std::function<Band()> fn)
+{
+    m_txBand = std::move(fn);
 }
 
 void TwoToneController::setSettleDelaysMs(int moxReleaseMs, int tuneReleaseMs)
@@ -588,9 +597,22 @@ void TwoToneController::continueActivation()
             // through to the sentinel fallback in computeAudioVolume
             // (PaProfile::getGainForBand returns 1000.0f for Band::XVTR
             // and out-of-range Bands → linear fallback in the math kernel).
-            const Band band = m_slice
+            //
+            // RadioModel supplies Thetis TXBand (setTxBandFn). From Thetis
+            // setup.cs:11153 [v2.10.3.15]:
+            //   // remember old power //MW0LGE_22b
+            //   ...
+            //   int new_pwr = console.SetPowerUsingTargetDBM(out bool bUseConstrain, out double targetdBm, true, true, true);
+            // SetPowerUsingTargetDBM gains
+            // with GainByBand(TXBand, new_pwr) (console.cs:46808
+            // [v2.10.3.15]), and TXBand holds through a keyed retune.
+            // Without it, the slice's band as before.
+            Band band = m_slice
                 ? bandFromFrequency(m_slice->frequency())
                 : Band::Band20m;
+            if (m_txBand) {
+                band = m_txBand();
+            }
 
             // From Thetis console.cs:46693-46708 [v2.10.3.13] —
             // chk2TONE.Checked txMode=2 drive-source enum routing.  Caller
