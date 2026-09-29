@@ -105,8 +105,9 @@ good RADE-decoding station) on the same band.
    (User/Callsign), else the StationCallsign setting
    (SpotSourceHost::freedvCallsign), and start FreeDV Reporter at the
    Core. As in freedv-gui, the end-of-over frame carries that callsign
-   only while FreeDV Reporter runs; with it off the frame goes out with
-   no callsign.
+   only while FreeDV reporting is on (started and not stopped; a
+   connection error or a lost connection leaves it on); with it stopped
+   the frame goes out with no callsign.
 2. Switch the active slice to RADE mode.
 3. Open the RadeApplet; verify the MicProfileManager combo
    auto-selected RADE.

@@ -6661,7 +6661,7 @@ bool RadioModel::startRadeEndOfOverTail()
         return false;
     }
     // The callsign FreeDV Reporter registers with at the Core, and only
-    // while FreeDV Reporter runs, as FreeDV does:
+    // while the operator's FreeDV reporting is on, as FreeDV does:
     // From freedv-gui src/main.cpp:2643-2653 [@a4ae053]
     //   if (!wxGetApp().appConfiguration.reportingConfiguration.reportingEnabled)
     //   { freedvInterface.setTextCallbackFn(...); }
@@ -6670,13 +6670,18 @@ bool RadioModel::startRadeEndOfOverTail()
     //       strncpy(temp, ...reportingCallsign->ToUTF8(), 8); // One less than the size of temp to ensure we don't overwrite the null.
     //       freedvInterface.setReliableText(temp);
     //   }
-    // With reporting off FreeDV never sets the EOO data (freedv_interface.cpp
-    // creates no rade_text object then, :171-183), so its end-of-over frame
-    // carries librade's zero data; an empty callsign here writes the same
-    // zeros (RadeText::pushTxCallsign).
-    const bool reporting = m_freedvReportingForTest.has_value()
-        ? *m_freedvReportingForTest
-        : (m_spotSourceHost && m_spotSourceHost->isRunning(SpotSourceHost::kFreedvReporter));
+    // With reporting off FreeDV never sets the EOO data: it creates no
+    // rade_text object then (From freedv-gui src/freedv_interface.cpp:171-183
+    // [@a4ae053]), so its end-of-over frame carries librade's zero data; an
+    // empty callsign here writes the same zeros (RadeText::pushTxCallsign).
+    //
+    // FreeDV keys this on its reporting setting, not on the reporter's
+    // connection. NereusSDR has no separate setting: reporting is on from
+    // the operator's start (or the launch auto-start) until the operator
+    // stops it, which is every reporter state but Off. A connection error
+    // or a lost connection leaves it on, as the client keeps retrying.
+    const bool reporting = m_spotSourceHost
+        && m_spotSourceHost->freedvReporterState() != SpotSourceHost::kOff;
     const QString callsign = reporting ? SpotSourceHost::freedvCallsign() : QString();
     // queueEndOfOver emits txModemReady synchronously; wireRadeChannel's
     // lambda queues the samples to the worker, so the notice below lands

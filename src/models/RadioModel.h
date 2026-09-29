@@ -3673,9 +3673,6 @@ public:
     // RADE end-of-over callsigns: a TX worker without a started pump (the
     // test drives tickForTest), wired as the connect path wires its own.
     void installTxWorkerForTest(std::unique_ptr<TxWorkerThread> worker);
-    // Whether the RADE end-of-over frame counts FreeDV Reporter as running
-    // (it reads SpotSourceHost otherwise).
-    void setFreedvReportingForTest(bool on) { m_freedvReportingForTest = on; }
     TxWorkerThread* txWorkerMutableForTest() const { return m_txWorker.get(); }
     // The 24 -> 48 kHz RADE TX resampler (null until the first modem block).
     const Resampler* radeTxResamplerForTest() const { return m_radeTxResampler.get(); }
@@ -5303,8 +5300,6 @@ private:
     QMetaObject::Connection m_endOfOverTailModeWatch;
     // Set around teardownConnection's unkey: a disconnect sends no tail.
     bool m_refuseEndOfOverTail{false};
-    // Test override for FreeDV Reporter running (setFreedvReportingForTest).
-    std::optional<bool> m_freedvReportingForTest;
     QMetaObject::Connection m_endOfOverTailSliceWatch;
 
     // R-R3-49 / R-R3-47: false, with the reason, when a window may not

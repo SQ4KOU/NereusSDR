@@ -55,6 +55,7 @@
 
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
+#include "core/FreeDVReporterClient.h"
 #include "core/MoxController.h"
 #include "core/RadeChannel.h"
 #include "core/RadeText.h"
@@ -367,21 +368,48 @@ private slots:
     }
 
     // Review Minor 6: as FreeDV, the end-of-over frame carries the callsign
-    // only while FreeDV Reporter runs; otherwise it goes out with no
-    // callsign (zero data), as FreeDV's does with reporting off.
+    // only while the operator's FreeDV reporting is on; otherwise it goes
+    // out with no callsign (zero data), as FreeDV's does with reporting off.
+    void callsignOnlyWhileFreedvReporterRuns_data()
+    {
+        // How the Core's FreeDV Reporter client last reported itself, and
+        // whether the operator's reporting is on. Reporting is on from the
+        // start until the operator stops it, as FreeDV's reportingEnabled
+        // setting is; a connection error or a lost connection keeps it on.
+        QTest::addColumn<QString>("state");
+        QTest::addColumn<bool>("reporting");
+        QTest::newRow("never started") << QString() << false;
+        QTest::newRow("connecting") << QStringLiteral("lost") << true;
+        QTest::newRow("connected") << QStringLiteral("connected") << true;
+        QTest::newRow("connection error") << QStringLiteral("error") << true;
+        QTest::newRow("stopped") << QStringLiteral("stopped") << false;
+    }
+
     void callsignOnlyWhileFreedvReporterRuns()
     {
-        for (const bool reporting : {false, true}) {
-            RealRig rig;
-            AppSettings::instance().setValue(QStringLiteral("User/Callsign"),
-                                             QStringLiteral("KG4VCF"));
-            rig.model.setFreedvReportingForTest(reporting);
-            rig.key();
-            rig.model.moxController()->setMox(false);
-            QVERIFY(rig.model.endOfOverTailActive());
-            QCOMPARE(rig.channel()->textChannel()->ourCallsign(),
-                     reporting ? QStringLiteral("KG4VCF") : QString());
+        QFETCH(QString, state);
+        QFETCH(bool, reporting);
+        RealRig rig;
+        AppSettings::instance().setValue(QStringLiteral("User/Callsign"),
+                                         QStringLiteral("KG4VCF"));
+        FreeDVReporterClient* client = rig.model.freeDvReporter();
+        QVERIFY(client != nullptr);
+        if (state == QStringLiteral("lost")) {
+            emit client->connectionLost(1000);
+        } else if (state == QStringLiteral("connected")) {
+            emit client->connected();
+        } else if (state == QStringLiteral("error")) {
+            emit client->connected();
+            emit client->connectionError(QStringLiteral("refused"));
+        } else if (state == QStringLiteral("stopped")) {
+            emit client->connected();
+            emit client->disconnected();
         }
+        rig.key();
+        rig.model.moxController()->setMox(false);
+        QVERIFY(rig.model.endOfOverTailActive());
+        QCOMPARE(rig.channel()->textChannel()->ourCallsign(),
+                 reporting ? QStringLiteral("KG4VCF") : QString());
     }
 
     // Found in review: when an over ends with no tail (Stop All TX, TX
