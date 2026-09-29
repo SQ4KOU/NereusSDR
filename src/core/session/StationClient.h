@@ -375,6 +375,10 @@
 //               tx.setTxSlice for the TX applet's transmit-slice letters,
 //               answered on deviceCommandFinished. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 17: setTokenSliceAccessForTest,
+//               a remote window test's bench link declares sliceAccess
+//               with sessionHolder, as a device-key sign-in does.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QAbstractSocket>
@@ -1019,6 +1023,9 @@ public:
     /// numbered the token window with.
     void setTokenSessionHolderForTest(const QString& wireId)
     { m_tokenSessionHolderIdForTest = wireId; }
+    /// Test seam: with setTokenSessionHolderForTest, the bench link also
+    /// declares sliceAccess, as a device-key sign-in always does.
+    void setTokenSliceAccessForTest(bool declares) { m_tokenSliceAccessForTest = declares; }
     /// Test seam: an older window, which never declares sessionHolder.
     void setDeclaresSessionHolder(bool declares) { m_declaresSessionHolder = declares; }
 #endif
@@ -1636,6 +1643,7 @@ private:
     bool m_declaredSessionHolder = false;
     bool m_declaresSessionHolder = true;
     QString m_tokenSessionHolderIdForTest;
+    bool m_tokenSliceAccessForTest = false;
     RemoteDevicesState* m_remoteDevices = nullptr;
     SliceAccessMirror* m_sliceAccess = nullptr;
     QString m_radioChangeReason;

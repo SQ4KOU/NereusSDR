@@ -312,6 +312,10 @@
 //               tx.setTxSlice for the TX applet's transmit-slice letters,
 //               answered on deviceCommandFinished. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 17: a test's token bench link
+//               declares sliceAccess with sessionHolder when
+//               setTokenSliceAccessForTest asks. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SystemProxy.h"
@@ -2927,6 +2931,9 @@ bool StationClient::signIn(const SessionMessage& hello)
     if (!m_tokenSessionHolderIdForTest.isEmpty() && m_declaresSessionHolder
         && features.contains(QByteArrayLiteral("deviceAuth"))) {
         features.insert(QByteArrayLiteral("sessionHolder"), 1);
+        if (m_tokenSliceAccessForTest) {
+            features.insert(QByteArrayLiteral("sliceAccess"), 1);
+        }
         m_declaredSessionHolder = true;
     }
     send(SessionMessages::hello(m_agreedMajor, kSessionProtocolMinor, m_localSettingsSchema,

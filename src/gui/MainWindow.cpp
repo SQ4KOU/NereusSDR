@@ -408,6 +408,12 @@
 //               connect moved to buildStatusBar, where the dashboard
 //               exists. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //               Claude Code.
+//   2026-09-29 - Slice control plan Task 17: a slice's pan key naming a
+//               pan this window lacks gets that pan on panKeyChanged, as on
+//               sliceAdded, so a remote window's listened slice no longer
+//               stays on the active pan it was docked on before its pan key
+//               arrived. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -7034,8 +7040,18 @@ void MainWindow::buildUI()
                 // Slice control plan Task 16: a slice this window placed
                 // stays where it was placed when its controller moves it.
                 const QString placed = m_listenPlacement.value(idx);
-                m_panStack->moveSliceToPan(
-                    idx, !placed.isEmpty() && m_panStack->panadapter(placed) ? placed : newPanKey);
+                const QString dest =
+                    !placed.isEmpty() && m_panStack->panadapter(placed) ? placed : newPanKey;
+                // Slice control plan Task 17: a pan key naming a pan this
+                // window does not have gets that pan, as sliceAdded gives
+                // it. A remote window is sent a slice before its pan key,
+                // so sliceAdded docked it on the active pan; left there, a
+                // slice this window only listens to sat on the operator's
+                // pan and read as shown, so a listen never placed it.
+                if (!dest.isEmpty() && !m_panStack->panadapter(dest)) {
+                    m_panStack->addPanadapter(dest);
+                }
+                m_panStack->moveSliceToPan(idx, dest);
             }
             if (idx == 0) { return; }  // Slice A flag is the dedicated path
             if (m_panStack) {
