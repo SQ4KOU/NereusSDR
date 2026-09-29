@@ -633,6 +633,10 @@
 //               times a second while a peer subscribes. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-28: R-R3-46 / R-R3-11: adcAttenuatorVersion 1 and stepAtt's
+//               rx2AttenuationDb and rx2SliceMask only to a peer that
+//               declared adcAttenuators. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 //   2026-09-28: R-IOS-13 / R-R3-49: txEqCurveVersion 1 and transmit's
 //               read-only txEqCurve (the TX EQ parametric curve derived
 //               from txEqParaEqData) only to a peer at minor 11 whose hello
@@ -6448,7 +6452,8 @@ QList<SessionPropertyResult> StationServer::applyPropertyWrite(
         // R-IOS-13 / R-R3-49: a txEqParaEqData write moves txEqCurve too,
         // which only a peer that declared it is sent.
         if (fitNnrLimitToPeer(delta, m_peers.value(transport).agreedMinor)
-            && fitTxEqCurveToPeer(transport, delta)) {
+            && fitTxEqCurveToPeer(transport, delta)
+            && fitAdcAttenuatorsToPeer(transport, delta)) {
             send(transport, delta);
         }
     }
@@ -7112,6 +7117,11 @@ void StationServer::sendToPeer(SessionTransport* transport, const SessionMessage
         if (!fitTxEqCurveToPeer(transport, message)) {
             return;
         }
+        // R-R3-46 / R-R3-11: stepAtt's other-ADC attenuator only to a peer
+        // that declared adcAttenuators.
+        if (!fitAdcAttenuatorsToPeer(transport, message)) {
+            return;
+        }
         const auto peer = m_peers.constFind(transport);
         const quint16 minor = peer != m_peers.cend() ? peer->agreedMinor
                                                      : kSessionProtocolMinor;
@@ -7275,6 +7285,50 @@ bool StationServer::fitTxEqCurveToPeer(SessionTransport* transport,
             return update.name == kCurve;
         });
         // A delta that carried only the curve is not sent at all.
+        return before == 0 || !message.updates.isEmpty();
+    }
+    default:
+        return true;
+    }
+}
+
+// ── The other ADC's attenuator (R-R3-46, R-R3-11) ────────────────────────
+
+bool StationServer::peerGetsAdcAttenuators(SessionTransport* transport) const
+{
+    const auto peer = m_peers.constFind(transport);
+    return peer != m_peers.cend() && !m_radioModel.isNull()
+        && peer->agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && radioHardwareVersion() >= 1
+        && peerDeclares(transport, QByteArrayLiteral("adcAttenuators"), 1);
+}
+
+bool StationServer::fitAdcAttenuatorsToPeer(SessionTransport* transport,
+                                            SessionMessage& message) const
+{
+    if (!isStepAttMessage(message) || peerGetsAdcAttenuators(transport)) {
+        return true;
+    }
+    const auto added = [](const QByteArray& name) {
+        return name == "rx2AttenuationDb" || name == "rx2SliceMask";
+    };
+    switch (message.kind) {
+    case SessionMessageKind::Schema:
+        message.fields.removeIf([&added](const SessionSchemaField& field) {
+            return added(field.name);
+        });
+        return true;
+    case SessionMessageKind::ObjectCreate:
+        message.updates.removeIf([&added](const MirrorUpdate& update) {
+            return added(update.name);
+        });
+        return true;
+    case SessionMessageKind::Delta: {
+        const qsizetype before = message.updates.size();
+        message.updates.removeIf([&added](const MirrorUpdate& update) {
+            return added(update.name);
+        });
+        // A delta that carried only these is not sent at all.
         return before == 0 || !message.updates.isEmpty();
     }
     default:
@@ -9795,6 +9849,9 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             // R-IOS-13 / R-R3-49: transmit's read-only txEqCurve, to a peer
             // that declared txEqCurve 1.
             caps.txEqCurveVersion = peerGetsTxEqCurve(transport) ? 1 : 0;
+            // R-R3-46 / R-R3-11: stepAtt's other-ADC attenuator, to a peer
+            // that declared adcAttenuators 1.
+            caps.adcAttenuatorVersion = peerGetsAdcAttenuators(transport) ? 1 : 0;
             // R-R3-47 / R-R3-22: the Tuner Genius's own settings.
             caps.remoteTgxlControlVersion = tgxlControlVersion();
             // iPhone app Task 12 (R-IOS-08): device sign-in by key, last.

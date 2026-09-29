@@ -95,6 +95,12 @@
 //                                    txEqCurveVersion and transmit's
 //                                    txEqCurve are captured. AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  R-R3-46 / R-R3-11: the capture
+//                                    declares adcAttenuators, so
+//                                    adcAttenuatorVersion and stepAtt's
+//                                    rx2AttenuationDb and rx2SliceMask are
+//                                    captured. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include "LinkSurface.h"
@@ -551,7 +557,9 @@ std::optional<QList<QByteArray>> liveSessionWire(
                                   {"setupDescription", 1}, {"miniDisplay", 1},
                                   {"radioAntennaRows", 1},
                                   // iPhone app plan Task 25: the `vax` object.
-                                  {"vax", 1}, {"txEqCurve", 1}})));
+                                  {"vax", 1}, {"txEqCurve", 1},
+                                  // R-R3-46 / R-R3-11: stepAtt's other ADC.
+                                  {"adcAttenuators", 1}})));
     clientEnd->sendText(SessionMessages::encode(SessionMessages::authRequest({}, block)));
 
     // The loopback delivers on later event-loop turns, as a socket would.
@@ -592,6 +600,8 @@ QJsonArray captureCapabilities()
     caps.vaxEntry = true;
     // R-IOS-13 / R-R3-49: sent to a peer that declared txEqCurve.
     caps.txEqCurveVersion = 1;
+    // R-R3-46 / R-R3-11: sent to a peer that declared adcAttenuators.
+    caps.adcAttenuatorVersion = 1;
 
     // The values come from a live station with every feature a Core can
     // switch on: media, telemetry, an enforced display budget with its

@@ -33,6 +33,11 @@
 //                 makes no WDSP call; its reads keep the cache refreshed at
 //                 this timer's interval. J.J. Boyd (KG4VCF), with
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-28 -- R-R3-46 / R-R3-11: each slice's readings take the
+//                 offset of the ADC it is on (RadioModel::
+//                 rxMeterOffsetDbForSlice), not slice A's. J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -216,6 +221,8 @@ void SliceMeterPump::poll()
     // applies the meter cal only, see its comment in RadioModel.h):
     //   console.cs:21035 [v2.10.3.13]
     //   HardwareSpecific.Model == HPSDRModel.ANAN_G2_1K || HardwareSpecific.Model == HPSDRModel.REDPITAYA) //DH1KLM
+    // R-R3-46 / R-R3-11: slice A's (RX1's) offset, for Max Bin, which reads
+    // display channel 0; each slice's own below.
     const double rxOffsetDb = m_radioModel->rxMeterOffsetDb();
 
     // MaxBin is a single global reading (FFTEngine display channel 0 --
@@ -250,6 +257,13 @@ void SliceMeterPump::poll()
             continue;
         }
 
+        // R-R3-46 / R-R3-11: each slice's own receive offset, Thetis
+        // RXOffset(rx) for the receiver whose attenuator its ADC carries
+        // (RadioModel::rxMeterOffsetDbForSlice): a slice on the other ADC
+        // reads that ADC's attenuator, not slice A's.
+        const double sliceOffsetDb =
+            m_radioModel->rxMeterOffsetDbForSlice(slice->sliceIndex());
+
         // Read and publish both source readings on every RX tick.  The
         // selected signalStrengthDbm below remains the legacy analog-meter
         // view; publishing the sources independently lets a remote GUI make
@@ -260,7 +274,7 @@ void SliceMeterPump::poll()
         // attribution that we preserve verbatim per GPL inline-tag rule.
         // Display-side offset per console.cs:46824 [v2.10.3.13].
         const double signalPeakDbm =
-            ch->getMeter(RxMeterType::SignalPeak) + rxOffsetDb;
+            ch->getMeter(RxMeterType::SignalPeak) + sliceOffsetDb;
 
 
         // From Thetis Console/dsp.cs:957 [@501e3f5] (CalculateRXMeter):
@@ -269,7 +283,7 @@ void SliceMeterPump::poll()
         // attribution that we preserve verbatim per GPL inline-tag rule.
         // Display-side offset per console.cs:46828 [v2.10.3.13].
         const double signalAverageDbm =
-            ch->getMeter(RxMeterType::SignalAvg) + rxOffsetDb;
+            ch->getMeter(RxMeterType::SignalAvg) + sliceOffsetDb;
 
         // R-R3-39: the readings above come from the receive lane's cache,
         // and reading them asked the lane for a fresh one. Until the lane

@@ -19,6 +19,10 @@
 //   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 5): ATT on TX,
 //                                    its value and Force ATT.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  R-R3-46 / R-R3-11: rx2AttenuationDb
+//                                    and rx2SliceMask, the other ADC's own
+//                                    attenuator. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include "core/StepAttenuatorFacade.h"
@@ -106,6 +110,8 @@ void StepAttenuatorFacade::bindController(StepAttenuatorController* controller)
     follow(&C::attOnTxEnabledChanged);
     follow(&C::attOnTxValueChanged);
     follow(&C::forceAttWhenPsOffChanged);
+    follow(&C::rx2AttenuationChanged);
+    follow(&C::adcRoutingChanged);
     refresh();
 }
 
@@ -153,6 +159,8 @@ bool StepAttenuatorFacade::applyRemoteProperty(const QByteArray& property, const
         next.overloadAdc1 = value.toInt();
     } else if (property == "adcLinked") {
         next.adcLinked = value.toBool();
+    } else if (property == "rx2SliceMask") {
+        next.rx2SliceMask = value.toInt();
     } else {
         return false;
     }
@@ -443,6 +451,37 @@ void StepAttenuatorFacade::setForceAttWhenPsOff(bool on)
     publish(next);
 }
 
+void StepAttenuatorFacade::setRx2AttenuationDb(int dB)
+{
+    if (!beginEdit("rx2AttenuationDb")) {
+        return;
+    }
+    if (StepAttenuatorController* c = m_controller.data()) {
+        const int lo = c->minAttenuation();
+        const int hi = c->maxAttenuation();
+        const int kept = std::clamp(dB, lo, hi);
+        if (kept != dB) {
+            settle("rx2AttenuationDb",
+                   QStringLiteral("This radio's attenuator goes from %1 to %2 dB.").arg(lo).arg(hi));
+        }
+        c->setRx2Attenuation(kept);
+        refresh();
+        return;
+    }
+    Values next = m_values;
+    next.rx2AttenuationDb = dB;
+    publish(next);
+}
+
+void StepAttenuatorFacade::setAttenuationDbForSlice(int sliceId, int dB)
+{
+    if (sliceUsesRx2(sliceId)) {
+        setRx2AttenuationDb(dB);
+    } else {
+        setAttenuationDb(dB);
+    }
+}
+
 void StepAttenuatorFacade::refresh()
 {
     const StepAttenuatorController* c = m_controller.data();
@@ -468,6 +507,8 @@ void StepAttenuatorFacade::refresh()
     next.attOnTxEnabled = c->attOnTxEnabled();
     next.attOnTxValue = c->attOnTxValue();
     next.forceAttWhenPsOff = c->forceAttWhenPsOff();
+    next.rx2AttenuationDb = c->rx2AttenuatorDb();
+    next.rx2SliceMask = static_cast<int>(c->rx2SliceMask());
     publish(next);
 }
 
@@ -505,6 +546,10 @@ void StepAttenuatorFacade::publish(const Values& next)
     if (before.overloadAdc0 != next.overloadAdc0) { emit overloadAdc0Changed(next.overloadAdc0); }
     if (before.overloadAdc1 != next.overloadAdc1) { emit overloadAdc1Changed(next.overloadAdc1); }
     if (before.adcLinked != next.adcLinked) { emit adcLinkedChanged(next.adcLinked); }
+    if (before.rx2AttenuationDb != next.rx2AttenuationDb) {
+        emit rx2AttenuationDbChanged(next.rx2AttenuationDb);
+    }
+    if (before.rx2SliceMask != next.rx2SliceMask) { emit rx2SliceMaskChanged(next.rx2SliceMask); }
 }
 
 } // namespace NereusSDR

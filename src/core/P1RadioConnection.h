@@ -234,6 +234,7 @@ public slots:
     void restartStreamWithRate(int newSampleRate);
 
     void setAttenuator(int dB) override;
+    void setAttenuatorForAdc(int adc, int dB) override;
     void setPreamp(bool enabled) override;
     void setTxDrive(int level) override;
     void setMox(bool enabled) override;
@@ -990,6 +991,10 @@ public:
         applyBoardQuirks();
     }
     int currentAttenForTest() const { return m_stepAttn[0]; }
+    int currentAttenForAdcForTest(int adc) const
+    {
+        return adc >= 0 && adc < 3 ? m_stepAttn[adc] : -1;
+    }
     bool hl2ThrottledForTest() const { return m_hl2Throttled; }
     // Compress the silence-watchdog and reconnect-retry timeline so
     // tst_reconnect_on_silence does not sleep for 42 real seconds (which

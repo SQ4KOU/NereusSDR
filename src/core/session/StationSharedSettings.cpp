@@ -82,6 +82,10 @@
 //               external antenna in use is never the internal one tapped.
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-28: R-R3-46 / R-R3-11: a stepAtt attenuationDb write reaches
+//               slice A's ADC, rx2AttenuationDb the other ADC's (both while
+//               diversity links them). J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -488,24 +492,44 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
         };
 
         if (key == kStepAtt) {
+            // R-R3-46 / R-R3-11: attenuationDb is the attenuator of slice
+            // A's ADC, rx2AttenuationDb the other ADC's own; while diversity
+            // links them each reaches both.
+            const StepAttenuatorController* const att = model.stepAttController();
+            const int rx1Adc = att ? att->rx1Adc() : 0;
+            const int rx2Adc = att ? att->rx2Adc() : -1;
+            const bool attLinked = att && att->adcAttenuatorsLinked();
             for (const MirrorUpdate& u : message.updates) {
                 const QByteArray& n = u.name;
                 const bool adc1 = n == "rx1Preamp";
+                const bool rx2Att = n == "rx2AttenuationDb";
                 const bool known = n == "attenuationDb" || n == "enabled" || n == "preampMode"
-                    || adc1 || n.startsWith("autoAtt");
+                    || adc1 || rx2Att || n.startsWith("autoAtt");
                 if (!known) {
                     continue;
                 }
+                int wordsAdc = 0;
                 if (adc1) {
                     c.scope.adcs.insert(1);
+                    wordsAdc = 1;
+                } else if (n == "attenuationDb" || rx2Att) {
+                    const int own = rx2Att ? rx2Adc : rx1Adc;
+                    if (own >= 0) {
+                        c.scope.adcs.insert(own);
+                        wordsAdc = own;
+                    }
+                    if (attLinked && rx2Adc >= 0) {
+                        c.scope.adcs.insert(rx1Adc);
+                        c.scope.adcs.insert(rx2Adc);
+                    }
                 } else {
                     c.scope.adcs.insert(0);
                 }
                 if (!listed(u)) {
                     continue;
                 }
-                const QString adc = adcWords(adc1 ? 1 : 0);
-                if (n == "attenuationDb") {
+                const QString adc = adcWords(wordsAdc);
+                if (n == "attenuationDb" || rx2Att) {
                     words(QStringLiteral("Attenuator, %1").arg(adc),
                           currentWords(u, QStringLiteral(" dB")),
                           valueWords(u.value, u.kind, QStringLiteral(" dB")));

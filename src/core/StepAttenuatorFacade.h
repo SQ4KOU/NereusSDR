@@ -23,6 +23,10 @@
 // Wire values: preampMode is the PreampMode integer (0 Off .. 6 -50 dB);
 // autoAttMode is 0 Classic, 1 Adaptive; overloadAdc0/1 are 0 none,
 // 1 yellow, 2 red; both auto-attenuate times are whole seconds in ms.
+// rx2AttenuationDb is the attenuator of the ADC slice A is not on (Thetis
+// RX2's); rx2SliceMask has bit n set for each slice n on that ADC, which
+// reads and sets rx2AttenuationDb rather than attenuationDb (0: every slice
+// uses attenuationDb, one ADC in use or diversity linking both).
 //
 // =================================================================
 // Modification history (NereusSDR):
@@ -39,6 +43,11 @@
 //                                    attOnTxValue, forceAttWhenPsOff),
 //                                    transmitSettingsVersion 5.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  R-R3-46 / R-R3-11: the other ADC's own
+//                                    attenuator and the slices on it
+//                                    (rx2AttenuationDb, rx2SliceMask),
+//                                    adcAttenuatorVersion 1. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -89,6 +98,13 @@ class StepAttenuatorFacade final : public QObject {
                NOTIFY attOnTxValueChanged)
     Q_PROPERTY(bool forceAttWhenPsOff READ forceAttWhenPsOff WRITE setForceAttWhenPsOff
                NOTIFY forceAttWhenPsOffChanged)
+    // R-R3-46 / R-R3-11 (adcAttenuatorVersion 1): the attenuator of the ADC
+    // slice A is not on (Thetis RX2's) and the slices on that ADC. Sent only
+    // to a peer whose hello declared adcAttenuators 1. Declared last so the
+    // earlier ordinals stay put.
+    Q_PROPERTY(int rx2AttenuationDb READ rx2AttenuationDb WRITE setRx2AttenuationDb
+               NOTIFY rx2AttenuationDbChanged)
+    Q_PROPERTY(int rx2SliceMask READ rx2SliceMask NOTIFY rx2SliceMaskChanged)
 
 public:
     /// True when an edit may go ahead; otherwise false with a plain reason.
@@ -133,7 +149,8 @@ public:
     QString settleReason(const QByteArray& property) const;
 
     /// A remote window: a value the Core reports (minDb, maxDb,
-    /// autoAttApplied, overloadAdc0, overloadAdc1, adcLinked). False for any
+    /// autoAttApplied, overloadAdc0, overloadAdc1, adcLinked,
+    /// rx2SliceMask). False for any
     /// other name, and always false while bound.
     bool applyRemoteProperty(const QByteArray& property, const QVariant& value);
 
@@ -149,6 +166,20 @@ public:
     bool attOnTxEnabled() const { return m_values.attOnTxEnabled; }
     int attOnTxValue() const { return m_values.attOnTxValue; }
     bool forceAttWhenPsOff() const { return m_values.forceAttWhenPsOff; }
+    int rx2AttenuationDb() const { return m_values.rx2AttenuationDb; }
+    int rx2SliceMask() const { return m_values.rx2SliceMask; }
+    /// Whether slice `sliceId` reads and sets rx2AttenuationDb.
+    bool sliceUsesRx2(int sliceId) const
+    {
+        return sliceId >= 0 && sliceId < 32
+            && (static_cast<quint32>(m_values.rx2SliceMask) & (1u << sliceId)) != 0;
+    }
+    /// The attenuation slice `sliceId` hears, and its edit.
+    int attenuationDbForSlice(int sliceId) const
+    {
+        return sliceUsesRx2(sliceId) ? rx2AttenuationDb() : attenuationDb();
+    }
+    void setAttenuationDbForSlice(int sliceId, int dB);
     int minDb() const { return m_values.minDb; }
     int maxDb() const { return m_values.maxDb; }
     bool autoAttApplied() const { return m_values.autoAttApplied; }
@@ -168,6 +199,7 @@ public:
     void setAttOnTxEnabled(bool on);
     void setAttOnTxValue(int dB);
     void setForceAttWhenPsOff(bool on);
+    void setRx2AttenuationDb(int dB);
 
 signals:
     void enabledChanged(bool on);
@@ -188,6 +220,8 @@ signals:
     void overloadAdc0Changed(int level);
     void overloadAdc1Changed(int level);
     void adcLinkedChanged(bool linked);
+    void rx2AttenuationDbChanged(int dB);
+    void rx2SliceMaskChanged(int mask);
     /// An edit the gate refused, with its plain reason.
     void editRejected(const QString& reason);
     /// setWindowAvailability() changed the availability or its reason.
@@ -215,6 +249,8 @@ private:
         int overloadAdc0{0};
         int overloadAdc1{0};
         bool adcLinked{false};
+        int rx2AttenuationDb{0};
+        int rx2SliceMask{0};
     };
 
     /// Starts an edit of `property`: clears its settle reason and asks the

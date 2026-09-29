@@ -292,6 +292,9 @@ private:
     void applyRemoteStepAttAvailability();
     // Shows the object's values in the row (signals blocked).
     void showRemoteStepAttValues();
+    // R-R3-46 / R-R3-11: the S-ATT value of this slice's own ADC (the other
+    // ADC's own attenuator for a slice on it), local or remote.
+    void showStepAttValueForSlice();
     // Builds the RX1 preamp toggle (dual-ADC boards) into the OVL row once;
     // later calls return the existing one. R-R3-46: a remote window learns
     // its board only when the Core's radio arrives, so it builds it then.

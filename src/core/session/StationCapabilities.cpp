@@ -116,6 +116,10 @@
 //                radioAntennaRowsVersion, only for a peer that declared
 //                txEqCurve. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                Claude Code.
+//   2026-09-28 - R-R3-46 / R-R3-11: adcAttenuatorVersion, after
+//                txEqCurveVersion, only for a peer that declared
+//                adcAttenuators. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationCapabilities.h"
@@ -360,6 +364,11 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
         if (txEqCurveVersion > 0) {
             updates.append(intEntry("txEqCurveVersion", txEqCurveVersion));
         }
+        // R-R3-46 / R-R3-11: the other ADC's own attenuator on `stepAtt`,
+        // only for a peer that declared adcAttenuators.
+        if (adcAttenuatorVersion > 0) {
+            updates.append(intEntry("adcAttenuatorVersion", adcAttenuatorVersion));
+        }
     }
     if (coreBuildInfo) {
         const QByteArray json = coreBuildInfo->toJson();
@@ -590,7 +599,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                    || u.name == "miniDisplayVersion"
                    || u.name == "radioAntennaRowsVersion"
                    || u.name == "vaxVersion"
-                   || u.name == "txEqCurveVersion") {
+                   || u.name == "txEqCurveVersion"
+                   || u.name == "adcAttenuatorVersion") {
             // R-R3-47 / R-R3-22 / R-R3-48: sent in the same block as the
             // four above.
             caps.radioIdentityEntries = true;
@@ -614,6 +624,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                     caps.vaxVersion = version;
                 } else if (u.name == "txEqCurveVersion") {
                     caps.txEqCurveVersion = version;
+                } else if (u.name == "adcAttenuatorVersion") {
+                    caps.adcAttenuatorVersion = version;
                 } else if (u.name == "stationIdentityVersion") {
                     caps.stationIdentityVersion = version;
                 } else if (u.name == "deviceAdminVersion") {

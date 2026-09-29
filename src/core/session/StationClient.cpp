@@ -301,6 +301,10 @@
 //   2026-09-28: iPhone app plan Task 25: the Core's device verbs for the
 //               This Core page (requestDeviceAdmin). J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-09-28: R-R3-46 / R-R3-11: the hello declares adcAttenuators 1;
+//               without adcAttenuatorVersion every slice reads the Core's
+//               attenuationDb. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SystemProxy.h"
@@ -664,6 +668,10 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
     m_declaredFeatures.insert(QByteArrayLiteral("coreBuildInfo"), 1);
     m_declaredFeatures.insert(QByteArrayLiteral("settingsBackup"), 1);
     m_declaredFeatures.insert(QByteArrayLiteral("radioAntennaRows"), 1);
+    // R-R3-46 / R-R3-11: this window shows and sets the other ADC's own
+    // attenuator for the slices on it (stepAtt rx2AttenuationDb,
+    // rx2SliceMask; adcAttenuatorVersion 1).
+    m_declaredFeatures.insert(QByteArrayLiteral("adcAttenuators"), 1);
     m_settingsBackupReplyTimer = new QTimer(this);
     m_settingsBackupReplyTimer->setSingleShot(true);
     connect(m_settingsBackupReplyTimer, &QTimer::timeout, this, [this]() {
@@ -3167,6 +3175,11 @@ void StationClient::handleCapabilities(const SessionMessage& message)
         } else {
             m_objects.remove("stepAtt");
             m_outboundMirror->unwatch("stepAtt");
+        }
+        // R-R3-46 / R-R3-11: a Core that does not send the other ADC's
+        // attenuator leaves every slice on attenuationDb, as before.
+        if (m_capabilities.adcAttenuatorVersion < 1) {
+            stepAtt->applyRemoteProperty(QByteArrayLiteral("rx2SliceMask"), 0);
         }
     }
 

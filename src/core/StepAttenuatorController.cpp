@@ -311,12 +311,9 @@ void StepAttenuatorController::setBand(Band band)
         const int restoredDb = std::clamp(it->second.attDb, m_minAttDb, m_maxAttDb);
         if (restoredDb != m_attDb) {
             m_attDb = restoredDb;
-            if (m_bandRestoreToRadio && !m_isMox && m_connection) {
-                RadioConnection* conn = m_connection.get();
-                const int dBcopy = m_attDb;
-                QMetaObject::invokeMethod(conn, [conn, dBcopy]() {
-                    conn->setAttenuator(dBcopy);
-                });
+            if (m_bandRestoreToRadio && !m_isMox) {
+                // R-R3-46 / R-R3-11: to slice A's ADC (and the linked one).
+                sendRx1Attenuation(m_attDb);
             }
             emit attenuationChanged(m_attDb);
         }
@@ -371,15 +368,31 @@ void StepAttenuatorController::setAttenuation(int dB, int rx)
     // dispatch — a latent thread-safety hazard that surfaces as
     // delayed / paired-with-stale-reads on weaker memory models
     // (ARM64).
-    if (m_connection) {
-        RadioConnection* conn = m_connection.get();
-        const int dBcopy = dB;
-        QMetaObject::invokeMethod(conn, [conn, dBcopy]() {
-            conn->setAttenuator(dBcopy);
-        });
-    }
+    //
+    // R-R3-46 / R-R3-11: to the ADC slice A is on, as Thetis sends RX1's
+    // value to nRX1ADCinUse, and to the other ADC too while diversity links
+    // them (sendRx1Attenuation).
+    sendRx1Attenuation(dB);
 
     emit attenuationChanged(m_attDb);
+
+    // Two receivers in linked diversity keep one value: the other ADC's own
+    // value follows RX1's, as Thetis sets RX2AttenuatorData from RX1's.
+    // From Thetis console.cs:11080-11086 [v2.10.3.15]:
+    //   bool bRX1RX2diversity = m_bDiversityAttLinkForRX1andRX2 && (diversityForm != null && Diversity2 && diversityForm.EXTDIVOutput == 2); // if using diversity, and both rx's are linked, then we need to attenuate both
+    //   if (((nRX1ADCinUse == nRX2ADCinUse) || bRX1RX2diversity) && RX2AttenuatorData != _rx1_attenuator_data)
+    //   {
+    //       _setFromOtherAttenuator = true;
+    //       if (SetupForm.RX2EnableAtt != SetupForm.RX1EnableAtt) SetupForm.RX2EnableAtt = SetupForm.RX1EnableAtt;
+    //       RX2AttenuatorData = _rx1_attenuator_data;
+    //       _setFromOtherAttenuator = false;
+    // (NereusSDR keeps one enable for both, so the enable line has nothing
+    // to copy. Receivers on one ADC need no copy: they read one value.)
+    if (m_adcAttLinked && !m_isMox && m_rx2AttDb != m_attDb) {
+        m_rx2AttDb = m_attDb;
+        m_rx2BandAttDb[static_cast<int>(m_rx2Band)] = m_rx2AttDb;
+        emit rx2AttenuationChanged(m_rx2AttDb);
+    }
 
     // Issue #200 fix — mirror live RX value into the per-band slot when not
     // in MOX, so the band-state stays coherent with m_attDb.  Without this,
@@ -865,6 +878,17 @@ void StepAttenuatorController::onMoxHardwareFlipped(bool isTx)
                 m_savedRxAttDbValid = false;
             }
         }
+        // R-R3-46 / R-R3-11: an ADC whose attenuator moved while keyed
+        // (setAdcRouting holds its sends through MOX, when attenuatorDb()
+        // may hold the TX value) takes its receive value now.
+        if (m_adcSendsHeldForMox) {
+            m_adcSendsHeldForMox = false;
+            for (int adc = 0; adc < kMaxAdcs; ++adc) {
+                if (adc == m_rx1Adc || adc == m_rx2Adc) {
+                    sendAttenuatorToAdc(adc, attenuatorDbForAdc(adc));
+                }
+            }
+        }
     }
 }
 
@@ -1095,14 +1119,231 @@ void StepAttenuatorController::applyAttToHardware(int dB)
     // auto-attenuate convergence + classic / band-restore push path
     // (called from PureSignal::autoAttentionTick and the MOX-flip
     // restoration handlers); same thread-safety contract applies.
-    if (m_connection) {
-        RadioConnection* conn = m_connection.get();
-        const int dBcopy = dB;
-        QMetaObject::invokeMethod(conn, [conn, dBcopy]() {
-            conn->setAttenuator(dBcopy);
-        });
-    }
+    // R-R3-46 / R-R3-11: RX1's value, so to slice A's ADC.
+    sendRx1Attenuation(dB);
     emit attenuationChanged(m_attDb);
+}
+
+// --- Per-ADC receive attenuators (R-R3-46 / R-R3-11) ---
+//
+// See the header. Thetis sends each receiver's value to the ADC it is using:
+// From Thetis console.cs:11062-11064 [v2.10.3.15] (RX1AttenuatorData):
+//   if (nRX1ADCinUse == 0) NetworkIO.SetADC1StepAttenData(_rx1_attenuator_data);
+//   else if (nRX1ADCinUse == 1) NetworkIO.SetADC2StepAttenData(_rx1_attenuator_data);
+//   else if (nRX1ADCinUse == 2) NetworkIO.SetADC3StepAttenData(_rx1_attenuator_data);
+//   ...
+//   if (!_mox) //[2.10.3.9]MW0LGE note, this is not technically required for all radios except for the RedPitaya. See BODGE
+// and RX2AttenuatorData the same with its own value:
+// From Thetis console.cs:11228-11234 [v2.10.3.15]:
+//   if (nRX2ADCinUse == 0) NetworkIO.SetADC1StepAttenData(rx2_attenuator_data);
+//   else if (nRX2ADCinUse == 1) NetworkIO.SetADC2StepAttenData(rx2_attenuator_data);
+//   else if (nRX2ADCinUse == 2) NetworkIO.SetADC3StepAttenData(rx2_attenuator_data);
+//   }
+//   }
+//
+//   if (!_mox || (_mox && VFOATX)) //[2.10.3.9]MW0LGE we should be able to do this if txing on rx1
+//
+// Above 31 dB on an Alex board Thetis also switches the Alex attenuator and
+// sends the value + 2 (console.cs 11044-11056); NereusSDR's connections clamp
+// every board to its own step attenuator's range, so that branch has nothing
+// to act on here, for either value.
+
+bool StepAttenuatorController::adcUsesRx1Attenuator(int adc) const noexcept
+{
+    return m_adcAttLinked || adc < 0 || adc != m_rx2Adc || m_rx2Adc == m_rx1Adc;
+}
+
+int StepAttenuatorController::attenuatorDbForAdc(int adc) const noexcept
+{
+    return adcUsesRx1Attenuator(adc) ? m_attDb : m_rx2AttDb;
+}
+
+void StepAttenuatorController::setAttenuationForAdc(int adc, int dB)
+{
+    if (adcUsesRx1Attenuator(adc)) {
+        setAttenuation(dB);
+    } else {
+        setRx2Attenuation(dB);
+    }
+}
+
+StepAttenuatorController::AdcAttSnapshot StepAttenuatorController::adcAttSnapshot() const
+{
+    AdcAttSnapshot snap;
+    for (int adc = 0; adc < kMaxAdcs; ++adc) {
+        const auto i = static_cast<size_t>(adc);
+        snap.inUse[i] = adc == m_rx1Adc || adc == m_rx2Adc;
+        snap.dB[i] = attenuatorDbForAdc(adc);
+    }
+    return snap;
+}
+
+void StepAttenuatorController::sendAttenuatorToAdc(int adc, int dB)
+{
+    if (!m_connection || adc < 0 || adc >= kMaxAdcs) {
+        return;
+    }
+    // Marshalled to the connection thread, as every attenuator send here.
+    RadioConnection* conn = m_connection.get();
+    QMetaObject::invokeMethod(conn, [conn, adc, dB]() {
+        conn->setAttenuatorForAdc(adc, dB);
+    });
+}
+
+void StepAttenuatorController::sendAdcAttenuatorChanges(const AdcAttSnapshot& before)
+{
+    const AdcAttSnapshot after = adcAttSnapshot();
+    for (int adc = 0; adc < kMaxAdcs; ++adc) {
+        const auto i = static_cast<size_t>(adc);
+        if (!after.inUse[i]) {
+            continue;
+        }
+        if (!before.inUse[i] || before.dB[i] != after.dB[i]) {
+            sendAttenuatorToAdc(adc, after.dB[i]);
+        }
+    }
+}
+
+void StepAttenuatorController::sendRx1Attenuation(int dB)
+{
+    sendAttenuatorToAdc(m_rx1Adc, dB);
+    if (m_adcAttLinked && m_rx2Adc >= 0 && m_rx2Adc != m_rx1Adc) {
+        sendAttenuatorToAdc(m_rx2Adc, dB);
+    }
+}
+
+void StepAttenuatorController::sendRx2Attenuation()
+{
+    if (m_rx2Adc < 0 || m_rx2Adc == m_rx1Adc) {
+        return;
+    }
+    sendAttenuatorToAdc(m_rx2Adc, attenuatorDbForAdc(m_rx2Adc));
+}
+
+void StepAttenuatorController::setRx2Attenuation(int dB)
+{
+    // The same range as RX1's (the radio's own step attenuator).
+    dB = std::clamp(dB, m_minAttDb, m_maxAttDb);
+    // Linked (diversity): one value for both, set through RX1's, which
+    // copies it here (setAttenuation), as Thetis's RX2 setter sets RX1's.
+    // From Thetis console.cs:11246-11251 [v2.10.3.15] (RX2AttenuatorData):
+    //   bool bRX1RX2diversity = m_bDiversityAttLinkForRX1andRX2 && (diversityForm != null && Diversity2 && diversityForm.EXTDIVOutput == 2); // if using diversity, and both rx's are linked, then we need to attenuate both //MW0LGE_[2.9.0.6]
+    //   if (((nRX1ADCinUse == nRX2ADCinUse) || bRX1RX2diversity) && RX1AttenuatorData != rx2_attenuator_data)
+    //   {
+    //       _setFromOtherAttenuator = true;
+    //       if (SetupForm.RX1EnableAtt != SetupForm.RX2EnableAtt) SetupForm.RX1EnableAtt = SetupForm.RX2EnableAtt;
+    //       RX1AttenuatorData = rx2_attenuator_data;
+    if (m_adcAttLinked) {
+        setAttenuation(dB);
+        return;
+    }
+    if (m_rx2AttDb == dB) {
+        return;
+    }
+    m_rx2AttDb = dB;
+    sendRx2Attenuation();
+    // The band keeps the value it was set to (Thetis
+    // setRX2stepAttenuatorForBand(rx2_band, rx2_attenuator_data), guarded
+    // by !_mox as RX1's is here).
+    if (!m_isMox) {
+        m_rx2BandAttDb[static_cast<int>(m_rx2Band)] = m_rx2AttDb;
+    }
+    emit rx2AttenuationChanged(m_rx2AttDb);
+    scheduleSave();
+}
+
+void StepAttenuatorController::setRx2Band(Band band)
+{
+    if (m_rx2Band == band) {
+        return;
+    }
+    // As setBand: before this radio's settings are loaded the band is only
+    // noted; loadSettings restores the noted band's value.
+    if (m_loadedMac.isEmpty()) {
+        m_rx2Band = band;
+        return;
+    }
+    // Save the band left, restore the band entered (if it has a value).
+    // From Thetis console.cs:17479-17491 [v2.10.3.15] (RX2Band setter),
+    // after the transverter band lookup:
+    //   lo_band = BandByFreq(XVTRForm.TranslateFreq(VFOBFreq), rx2_xvtr_index, current_region);//MW0LGE use rx2_xvtr_index
+    //                                                                                          //MW0LGE this was changed in RX1Band but not here
+    //   if (!initializing && rx2_preamp_mode > PreampMode.FIRST)
+    //   {
+    //       rx2_preamp_by_band[(int)old_band] = rx2_preamp_mode;
+    //       setRX2stepAttenuatorForBand(old_band, rx2_attenuator_data);
+    //   }
+    //   ...
+    //       // save values for old band
+    //       ...
+    //       RX2PreampMode = rx2_preamp_by_band[(int)rx2_band];
+    //       RX2AttenuatorData = getRX2stepAttenuatorForBand(rx2_band);
+    //       int tmp = rx2_agct_by_band[(int)rx2_band]; //[2.10.3.6]MW0LGE see comment in RX1Band
+    // The other ADC's preamp is not kept per band here (NereusSDR's second
+    // ADC preamp is one switch, rx1Preamp).
+    m_rx2BandAttDb[static_cast<int>(m_rx2Band)] = m_rx2AttDb;
+    m_rx2Band = band;
+    const auto it = m_rx2BandAttDb.find(static_cast<int>(band));
+    if (it != m_rx2BandAttDb.end()) {
+        const int restoredDb = std::clamp(it->second, m_minAttDb, m_maxAttDb);
+        if (restoredDb != m_rx2AttDb) {
+            m_rx2AttDb = restoredDb;
+            emit rx2AttenuationChanged(m_rx2AttDb);
+        }
+    }
+    scheduleSave();
+}
+
+void StepAttenuatorController::setAdcRouting(int rx1Adc, int rx2Adc, Band rx2Band, bool linked,
+                                             quint32 rx2SliceMask)
+{
+    if (rx1Adc < 0 || rx1Adc >= kMaxAdcs) {
+        rx1Adc = 0;
+    }
+    if (rx2Adc < 0 || rx2Adc >= kMaxAdcs || rx2Adc == rx1Adc) {
+        rx2Adc = -1;
+    }
+    // Linking needs a second ADC to link to.
+    linked = linked && rx2Adc >= 0;
+    if (linked || rx2Adc < 0) {
+        rx2SliceMask = 0;
+    }
+
+    const AdcAttSnapshot before = adcAttSnapshot();
+    const bool moved = rx1Adc != m_rx1Adc || rx2Adc != m_rx2Adc || linked != m_adcAttLinked;
+    const bool maskMoved = rx2SliceMask != m_rx2SliceMask;
+    const bool linking = linked && !m_adcAttLinked;
+    m_rx1Adc = rx1Adc;
+    m_rx2Adc = rx2Adc;
+    m_adcAttLinked = linked;
+    m_rx2SliceMask = rx2SliceMask;
+
+    // The other ADC's attenuator follows its controlling slice's band. With
+    // no slice on it nothing controls it, so its band (and the band memory)
+    // stays where the last slice left it.
+    if (rx2Adc >= 0) {
+        setRx2Band(rx2Band);
+    }
+
+    // Diversity links the two ADCs: both take RX1's value from here on.
+    if (linking && m_rx2AttDb != m_attDb) {
+        m_rx2AttDb = m_attDb;
+        emit rx2AttenuationChanged(m_rx2AttDb);
+    }
+
+    // Send what moved: an ADC newly in use, or one whose value changed (a
+    // swap, a new controlling slice's band, the link). A band restore alone
+    // goes to the radio as RX1's does (setBandRestoreToRadio). Nothing goes
+    // while keyed, when attenuatorDb() may hold the TX value: the change is
+    // sent on the fall (onMoxHardwareFlipped).
+    if (m_isMox) {
+        m_adcSendsHeldForMox = m_adcSendsHeldForMox || moved || m_bandRestoreToRadio;
+    } else if (moved || m_bandRestoreToRadio) {
+        sendAdcAttenuatorChanges(before);
+    }
+    if (moved || maskMoved) {
+        emit adcRoutingChanged();
+    }
 }
 
 // --- Helpers ---
@@ -1146,6 +1387,9 @@ void StepAttenuatorController::setRadioConnection(RadioConnection* conn)
         m_adcOverflowConn = connect(conn, &RadioConnection::adcOverflow,
                                     this, &StepAttenuatorController::onAdcOverflow);
         m_tickTimer.start();
+        // R-R3-46 / R-R3-11: a new connection's other ADC starts at 0 dB;
+        // give it its own value now (nothing else would until it changes).
+        sendRx2Attenuation();
     } else {
         m_tickTimer.stop();
     }
@@ -1258,6 +1502,24 @@ void StepAttenuatorController::saveSettings(const QString& mac)
             QString::number(static_cast<int>(m_preampMode)));
     }
 
+    // R-R3-46 / R-R3-11: the other ADC's own value and band memory
+    // (Thetis rx2_step_attenuator_by_band, console.cs:3076-3079 [v2.10.3.15]).
+    s.setHardwareValue(mac, QStringLiteral("options/stepAtt/rx2Value"),
+                       QString::number(m_rx2AttDb));
+    for (const auto& [b, dB] : m_rx2BandAttDb) {
+        if (b < 0 || b >= static_cast<int>(Band::SwlFirst)) {
+            continue;
+        }
+        s.setHardwareValue(mac,
+            QStringLiteral("options/stepAtt/rx2Band/") + bandKeyName(static_cast<Band>(b)),
+            QString::number(dB));
+    }
+    if (static_cast<int>(m_rx2Band) < static_cast<int>(Band::SwlFirst)) {
+        s.setHardwareValue(mac,
+            QStringLiteral("options/stepAtt/rx2Band/") + bandKeyName(m_rx2Band),
+            QString::number(m_rx2AttDb));
+    }
+
     // Adaptive floor.
     s.setHardwareValue(mac, QStringLiteral("options/autoAtt/rx1AdaptiveFloor"),
                        QString::number(m_adaptiveFloorDb));
@@ -1297,6 +1559,7 @@ void StepAttenuatorController::loadSettings(const QString& mac)
     // switches radios would otherwise restore the previous radio's values
     // on this one and save them under this MAC.
     m_bandState.clear();
+    m_rx2BandAttDb.clear();
 
     auto& s = AppSettings::instance();
 
@@ -1355,6 +1618,24 @@ void StepAttenuatorController::loadSettings(const QString& mac)
     // radio itself clamps it (setBand does the same).
     m_attDb = std::clamp(m_attDb, m_minAttDb, m_maxAttDb);
 
+    // R-R3-46 / R-R3-11: the other ADC's own value and band memory.
+    m_rx2AttDb = s.hardwareValue(mac, QStringLiteral("options/stepAtt/rx2Value"), 0).toInt();
+    for (int b = 0; b < static_cast<int>(Band::SwlFirst); ++b) {
+        const QVariant v = s.hardwareValue(mac,
+            QStringLiteral("options/stepAtt/rx2Band/") + bandKeyName(static_cast<Band>(b)));
+        if (v.isValid()) {
+            m_rx2BandAttDb[b] = v.toInt();
+        }
+    }
+    if (const auto rx2It = m_rx2BandAttDb.find(static_cast<int>(m_rx2Band));
+        rx2It != m_rx2BandAttDb.end()) {
+        m_rx2AttDb = rx2It->second;
+    }
+    m_rx2AttDb = std::clamp(m_rx2AttDb, m_minAttDb, m_maxAttDb);
+    if (m_adcAttLinked) {
+        m_rx2AttDb = m_attDb;
+    }
+
     // Adaptive floor.
     m_adaptiveFloorDb = s.hardwareValue(mac, QStringLiteral("options/autoAtt/rx1AdaptiveFloor"),
                                         0).toInt();
@@ -1387,6 +1668,10 @@ void StepAttenuatorController::loadSettings(const QString& mac)
     emit attenuationChanged(m_attDb);
     emit preampModeChanged(m_preampMode);
     emit stepAttEnabledChanged(m_stepAttEnabled);
+    emit rx2AttenuationChanged(m_rx2AttDb);
+    // The other ADC in use takes its restored value now (its byte is not
+    // otherwise sent until the value changes).
+    sendRx2Attenuation();
     // R-R3-46: auto-attenuate mode, undo, undo delay and hold changed
     // silently above; a mirrored object re-reads everything here.
     emit settingsReloaded();

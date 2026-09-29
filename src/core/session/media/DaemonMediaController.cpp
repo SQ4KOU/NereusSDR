@@ -64,6 +64,10 @@
 //   2026-09-27: iPhone app plan Task 29 (R-IOS-16): media `replace`: a
 //               second peer, audio sent on both, handed over on a keyframe.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28: R-R3-46 / R-R3-11: each stream's frames take the
+//               receive offset of the ADC that stream is on
+//               (RadioModel::rxMeterOffsetDbForStream). J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // Modification history (NereusSDR):
@@ -3915,7 +3919,9 @@ void DaemonMediaController::onSourceFrame(const DaemonSpectrumFrame& sharedFrame
     // authoritative meter calibration here before either reducer quantizes it.
     // Reading it per frame keeps remote planes current across station preamp
     // and step-attenuator changes without reading RadioModel from the worker.
-    const double stationOffsetDb = m_radioModel->rxMeterOffsetDb();
+    // R-R3-46 / R-R3-11: the offset of the ADC this stream is on, so a pan
+    // on the other ADC reads that ADC's attenuator, not slice A's.
+    const double stationOffsetDb = m_radioModel->rxMeterOffsetDbForStream(key.streamIndex);
     if (!std::isfinite(stationOffsetDb)
         || !std::isfinite(sourceFrame->dbmOffset + stationOffsetDb)) {
         return;

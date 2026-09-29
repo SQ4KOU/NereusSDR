@@ -355,6 +355,10 @@
 //   2026-09-28 - Parity ruling C13: a remote window's Performance
 //                Overlay adds the Core's drops (wireSpectrumForPan).
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - R-R3-46 / R-R3-11: each pan's spectrum takes the
+//                 receive offset of the ADC its stream is on
+//                 (RadioModel::rxMeterOffsetDbForStream), not slice A's.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -5005,9 +5009,42 @@ void MainWindow::dispatchFftFrameToPans(int streamIndex,
             continue;
         }
         if (SpectrumWidget* sw = m_panStack->spectrum(panId)) {
+            // R-R3-46 / R-R3-11: the receive offset of this stream's ADC
+            // (unchanged values return early in setDbmCalOffset).
+            sw->setDbmCalOffset(
+                static_cast<float>(m_radioModel->rxMeterOffsetDbForStream(streamIndex)));
             sw->updateSpectrumLinear(streamIndex, binsLinear,
                                      windowEnb, dbmOffset);
         }
+    }
+}
+
+void MainWindow::pushSpectrumCalToPans()
+{
+    if (!m_radioModel) {
+        return;
+    }
+    // R-R3-46 / R-R3-11: each pan the router feeds takes its stream's ADC
+    // offset; a pan it feeds nothing (or no router yet) keeps slice A's.
+    QSet<SpectrumWidget*> placed;
+    if (m_panStack) {
+        if (auto* router = m_radioModel->fftRouter()) {
+            for (int stream = 0; stream < 5; ++stream) {
+                const auto offset =
+                    static_cast<float>(m_radioModel->rxMeterOffsetDbForStream(stream));
+                for (const QString& panId : router->pansForReceiver(stream)) {
+                    if (SpectrumWidget* sw = m_panStack->spectrum(panId)) {
+                        if (!placed.contains(sw)) {
+                            sw->setDbmCalOffset(offset);
+                            placed.insert(sw);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if (SpectrumWidget* active = activeSpectrumWidget(); active && !placed.contains(active)) {
+        active->setDbmCalOffset(static_cast<float>(m_radioModel->rxMeterOffsetDb()));
     }
 }
 
@@ -7432,19 +7469,20 @@ void MainWindow::populateDefaultMeter()
     // floor will still differ by 10*log10(NBP_BW/bin_BW) which is physics
     // (S-meter is passband-integrated; spectrum is per-bin) and matches
     // Thetis behavior.
+    //
+    // R-R3-46 / R-R3-11: each pan takes the offset of the ADC its stream is
+    // on (pushSpectrumCalToPans), so a pan on the other ADC reads that ADC's
+    // attenuator, not slice A's.
     if (activeSpectrumWidget() && m_radioModel) {
-        auto pushSpectrumCal = [this](double db) {
-            if (activeSpectrumWidget()) {
-                activeSpectrumWidget()->setDbmCalOffset(static_cast<float>(db));
-            }
-        };
         connect(m_radioModel, &RadioModel::rxMeterOffsetChanged,
-                this, pushSpectrumCal);
+                this, [this](double) { pushSpectrumCalToPans(); });
+        connect(m_radioModel, &RadioModel::rxAdcMeterOffsetsChanged,
+                this, &MainWindow::pushSpectrumCalToPans);
         // Initial push so the cal lands at startup before any controller
         // change. setStepAttController already calls the recompute lambda
         // once on attach, but that may have run before this connect was
         // wired -- push the current value here defensively.
-        pushSpectrumCal(m_radioModel->rxMeterOffsetDb());
+        pushSpectrumCalToPans();
     }
 
     // Refresh MaxBin's CTUN slice offset whenever the DDC center moves.

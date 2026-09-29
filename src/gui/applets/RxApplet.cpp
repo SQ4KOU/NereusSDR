@@ -50,6 +50,10 @@
 //                 no longer follows the transmit permission, and
 //                 setTransmitPermitted, which gated only it, is gone.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - R-R3-46 / R-R3-11: S-ATT shows and sets the attenuator of
+//                 the slice's own ADC (the other ADC's own value for a slice
+//                 on it), in a local and a remote window.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -280,8 +284,11 @@ void RxApplet::wireRemoteStepAtt()
     }
     // The window's edits: each is a property write the Core applies through
     // its own controller; the value it settles on comes back below.
+    // R-R3-46 / R-R3-11: the attenuator of this slice's own ADC.
     connect(m_stepAttSpin, QOverload<int>::of(&QSpinBox::valueChanged),
-            this, [stepAtt](int dB) { stepAtt->setAttenuationDb(dB); });
+            this, [this, stepAtt](int dB) {
+        stepAtt->setAttenuationDbForSlice(m_slice ? m_slice->sliceIndex() : 0, dB);
+    });
     connect(m_preampCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, [this, stepAtt](int idx) {
         if (idx < 0) { return; }  // guard during clear/repopulate
@@ -297,7 +304,9 @@ void RxApplet::wireRemoteStepAtt()
     for (auto signal : {&StepAttenuatorFacade::attenuationDbChanged,
                         &StepAttenuatorFacade::preampModeChanged,
                         &StepAttenuatorFacade::minDbChanged,
-                        &StepAttenuatorFacade::maxDbChanged}) {
+                        &StepAttenuatorFacade::maxDbChanged,
+                        &StepAttenuatorFacade::rx2AttenuationDbChanged,
+                        &StepAttenuatorFacade::rx2SliceMaskChanged}) {
         connect(stepAtt, signal, this, [this](int) { showRemoteStepAttValues(); });
     }
     connect(stepAtt, &StepAttenuatorFacade::windowAvailabilityChanged,
@@ -320,10 +329,7 @@ void RxApplet::showRemoteStepAttValues()
         QSignalBlocker blk(m_stepAttSpin);
         m_stepAttSpin->setRange(stepAtt->minDb(), stepAtt->maxDb());
     }
-    if (m_stepAttSpin) {
-        QSignalBlocker blk(m_stepAttSpin);
-        m_stepAttSpin->setValue(stepAtt->attenuationDb());
-    }
+    showStepAttValueForSlice();
     if (m_preampCombo) {
         const int at = m_preampCombo->findData(stepAtt->preampMode());
         if (at >= 0) {
@@ -341,6 +347,34 @@ void RxApplet::showRemoteStepAttValues()
     if (m_attStack) {
         m_attStack->setCurrentIndex(stepAtt->enabled() ? 1 : 0);
     }
+}
+
+void RxApplet::showStepAttValueForSlice()
+{
+    if (!m_stepAttSpin || !m_model) {
+        return;
+    }
+    // R-R3-46 / R-R3-11: a slice on the other ADC shows that ADC's own
+    // attenuator (Thetis RX2's), every other slice slice A's.
+    const int sliceId = m_slice ? m_slice->sliceIndex() : 0;
+    int dB = 0;
+    if (m_model->ownsLocalDsp()) {
+        const StepAttenuatorController* c = m_model->stepAttController();
+        if (!c) {
+            return;
+        }
+        const bool rx2 = sliceId >= 0 && sliceId < 32
+            && (c->rx2SliceMask() & (1u << sliceId)) != 0;
+        dB = rx2 ? c->rx2AttenuatorDb() : c->attenuatorDb();
+    } else {
+        const StepAttenuatorFacade* stepAtt = m_model->stepAttFacade();
+        if (!stepAtt) {
+            return;
+        }
+        dB = stepAtt->attenuationDbForSlice(sliceId);
+    }
+    QSignalBlocker blk(m_stepAttSpin);
+    m_stepAttSpin->setValue(dB);
 }
 
 void RxApplet::applyRemoteStepAttAvailability()
@@ -1387,6 +1421,8 @@ void RxApplet::setSlice(SliceModel* slice)
     m_slice = slice;
     connectSlice(m_slice);
     syncFromModel();
+    // R-R3-46 / R-R3-11: this slice's own ADC's attenuator.
+    showStepAttValueForSlice();
 }
 
 void RxApplet::setSliceIndex(int idx)
@@ -1827,9 +1863,16 @@ void RxApplet::connectSlice(SliceModel* s)
             attCtrl->setMaxAttenuation(maxDb);
         }
 
+        // R-R3-46 / R-R3-11: the attenuator of this slice's own ADC.
         connect(m_stepAttSpin, QOverload<int>::of(&QSpinBox::valueChanged),
-                this, [attCtrl](int val) {
-            attCtrl->setAttenuation(val);
+                this, [this, attCtrl](int val) {
+            const int sliceId = m_slice ? m_slice->sliceIndex() : 0;
+            if (sliceId >= 0 && sliceId < 32
+                && (attCtrl->rx2SliceMask() & (1u << sliceId)) != 0) {
+                attCtrl->setRx2Attenuation(val);
+            } else {
+                attCtrl->setAttenuation(val);
+            }
         });
 
         connect(m_preampCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
@@ -1840,10 +1883,11 @@ void RxApplet::connectSlice(SliceModel* s)
         });
 
         connect(attCtrl, &StepAttenuatorController::attenuationChanged,
-                this, [this](int dB) {
-            QSignalBlocker blk(m_stepAttSpin);
-            m_stepAttSpin->setValue(dB);
-        });
+                this, [this](int) { showStepAttValueForSlice(); });
+        connect(attCtrl, &StepAttenuatorController::rx2AttenuationChanged,
+                this, [this](int) { showStepAttValueForSlice(); });
+        connect(attCtrl, &StepAttenuatorController::adcRoutingChanged,
+                this, [this]() { showStepAttValueForSlice(); });
 
         connect(attCtrl, &StepAttenuatorController::preampModeChanged,
                 this, [this](PreampMode mode) {
@@ -1897,10 +1941,7 @@ void RxApplet::connectSlice(SliceModel* s)
 
         // Sync initial state from controller
         refreshAttLabel();
-        {
-            QSignalBlocker blk(m_stepAttSpin);
-            m_stepAttSpin->setValue(attCtrl->attenuatorDb());
-        }
+        showStepAttValueForSlice();
         {
             QSignalBlocker blk(m_preampCombo);
             int modeInt = static_cast<int>(attCtrl->preampMode());

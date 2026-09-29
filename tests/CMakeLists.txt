@@ -8434,6 +8434,12 @@ nereus_add_test(tst_remote_step_attenuator
 # restores and sends that band's values to a fake radio connection.
 nereus_add_test(tst_local_step_attenuator_band_restore)
 
+# R-R3-46 / R-R3-11: a step attenuator per receive ADC (Thetis RX1's and
+# RX2's, each sent to the ADC its receiver uses), each slice's and stream's
+# receive offset from its own ADC, one value for slices sharing an ADC and
+# for linked diversity, and the P1 bank 12 / P2 byte 1442 ADC1 wire.
+nereus_add_test(tst_per_adc_step_attenuator)
+
 # R-R3-16/17: a connect that never finishes setting up gives up and retries.
 # The GUI's handshake deadline against a silent Core, a Core blocked past the
 # deadline that recovers, the Core Connections status and Cancel, and Core's

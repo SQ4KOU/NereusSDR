@@ -162,6 +162,9 @@
 //   2026-09-28 - R-IOS-13 / R-R3-49: txEqCurveVersion, the read-only TX
 //                EQ curve on `transmit`. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-28 - R-R3-46 / R-R3-11: adcAttenuatorVersion, the other ADC's
+//                own attenuator on `stepAtt`. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -247,6 +250,14 @@ struct StationCapabilities {
     /// txEqCurve 1, after radioAntennaRowsVersion; that peer alone gets the
     /// property. 0 (absent): the peer sees today's wire.
     int txEqCurveVersion = 0;
+    /// R-R3-46 / R-R3-11: 1 means `stepAtt` carries rx2AttenuationDb (the
+    /// attenuator of the ADC slice A is not on, two-way) and rx2SliceMask
+    /// (the slices on that ADC). Sent at minor 11 only to a peer whose hello
+    /// declared adcAttenuators 1, after txEqCurveVersion, and only by a Core
+    /// that offers `stepAtt` (radioHardwareVersion 1 or more); that peer
+    /// alone gets the two properties. 0 (absent): the peer sees today's
+    /// wire, and every slice reads attenuationDb.
+    int adcAttenuatorVersion = 0;
     /// R-R3-47 / R-R3-22: 1 means the Core mirrors its Power Genius XL
     /// status as the read-only `amplifier` object. Sent after
     /// radioHardwareVersion in the same minor-11 block. 0: a window shows

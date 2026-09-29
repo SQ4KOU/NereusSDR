@@ -37,6 +37,12 @@
 //                 Thetis Display.TXAttenuatorOffset, set with every TX step
 //                 attenuation this controller applies. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-28: R-R3-46 / R-R3-11: a step attenuator per receive ADC, as
+//                 Thetis keeps RX1's and RX2's (console.cs:11027-11063,
+//                 11213-11251 [v2.10.3.15]): slice A's value on slice A's
+//                 ADC, the other ADC's own value following the band of the
+//                 first slice on it, both equal while diversity links them.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -188,6 +194,65 @@ public:
     // never calls this.  Not persisted, like the local toggle.
     bool rx1Preamp() const noexcept { return m_rx1Preamp; }
     void setRx1Preamp(bool on);
+
+    // ── A step attenuator per receive ADC (R-R3-46 / R-R3-11) ─────────────
+    //
+    // Thetis keeps one step attenuator per receiver and sends each to the
+    // ADC that receiver is using, RX1's here and RX2's alike:
+    // From Thetis console.cs:11021-11028 [v2.10.3.15] (RX1AttenuatorData),
+    // after the range check that ends
+    //   HardwareSpecific.Model != HPSDRModel.REDPITAYA) //DH1KLM
+    //   _rx1_attenuator_data = validateRX1StepAttData(_rx1_attenuator_data); //[2.10.3.9]MW0LGE validated
+    //
+    //   //MW0LGE_22b step atten
+    //   int nRX1DDCinUse = -1, nRX2DDCinUse = -1, sync1 = -1, sync2 = -1, psrx = -1, pstx = -1;
+    //   GetDDC(out nRX1DDCinUse, out nRX2DDCinUse, out sync1, out sync2, out psrx, out pstx);
+    //
+    //   int nRX1ADCinUse = GetADCInUse(nRX1DDCinUse); // (rx1)
+    //   int nRX2ADCinUse = GetADCInUse(nRX2DDCinUse); // (rx2)
+    // then NetworkIO.SetADC1/2/3StepAttenData(_rx1_attenuator_data) for
+    // nRX1ADCinUse 0/1/2 (console.cs 11062-11064), and RX2AttenuatorData
+    // the same with rx2_attenuator_data (console.cs 11228-11230). Two
+    // receivers on one ADC, or in linked diversity, keep one value:
+    // From Thetis console.cs:11080-11081 [v2.10.3.15]:
+    //   bool bRX1RX2diversity = m_bDiversityAttLinkForRX1andRX2 && (diversityForm != null && Diversity2 && diversityForm.EXTDIVOutput == 2); // if using diversity, and both rx's are linked, then we need to attenuate both
+    //   if (((nRX1ADCinUse == nRX2ADCinUse) || bRX1RX2diversity) && RX2AttenuatorData != _rx1_attenuator_data)
+    //
+    // NereusSDR has up to five slices on two receive ADCs. attenuatorDb()
+    // is Thetis's RX1 value: slice A's, sent to slice A's ADC. The other
+    // ADC in use has its own value, Thetis's RX2 value, with its own band
+    // memory (rx2_step_attenuator_by_band) following the band of the
+    // controlling slice on that ADC (RadioModel picks the lowest-numbered
+    // slice there; Thetis has only two receivers and no rule for more).
+    // Slices on one ADC share its value. While diversity links the two
+    // ADCs (Thetis's link is on unless "No ATT link" is ticked; NereusSDR's
+    // diversity always mixes both, EXTDIVOutput 2) both take RX1's value.
+    //
+    // rx1Adc: slice A's ADC. rx2Adc: the other ADC in use, or -1 when every
+    // slice is on slice A's ADC (the same ADC as rx1Adc reads as -1).
+    // rx2Band: the band the other ADC's attenuator follows (kept as it was
+    // while rx2Adc is -1: nothing controls it then). linked: the
+    // two ADCs share RX1's value (diversity). rx2SliceMask: bit n set when
+    // slice n is on the other ADC (so reads rx2AttenuatorDb); 0 while linked.
+    void setAdcRouting(int rx1Adc, int rx2Adc, Band rx2Band, bool linked,
+                       quint32 rx2SliceMask = 0);
+    quint32 rx2SliceMask() const noexcept { return m_rx2SliceMask; }
+    int rx1Adc() const noexcept { return m_rx1Adc; }
+    int rx2Adc() const noexcept { return m_rx2Adc; }
+    Band rx2Band() const noexcept { return m_rx2Band; }
+    bool adcAttenuatorsLinked() const noexcept { return m_adcAttLinked; }
+    // Thetis RX2AttenuatorData: the other ADC's own value (RX1's while
+    // linked). Clamped to the same range as RX1's.
+    int rx2AttenuatorDb() const noexcept { return m_rx2AttDb; }
+    void setRx2Attenuation(int dB);
+    // True when `adc` reads and is set through attenuatorDb() (slice A's
+    // ADC, an ADC not in use, or any ADC while linked); false for the other
+    // ADC in use, which reads rx2AttenuatorDb().
+    bool adcUsesRx1Attenuator(int adc) const noexcept;
+    // The receive attenuation on `adc`'s input.
+    int attenuatorDbForAdc(int adc) const noexcept;
+    // Set the attenuation of `adc`: RX1's or the other ADC's, as above.
+    void setAttenuationForAdc(int adc, int dB);
 
     // R-R3-46 / R-R3-11: save this radio's settings a short while after an
     // operator change, not only at teardown.  Off by default; the Core
@@ -385,7 +450,12 @@ public:
     void saveSettings(const QString& mac);
     void loadSettings(const QString& mac);
     // R-R3-46: also drops the band memory, which is the unloaded radio's.
-    void markSettingsUnloaded() { m_loadedMac.clear(); m_bandState.clear(); }
+    void markSettingsUnloaded()
+    {
+        m_loadedMac.clear();
+        m_bandState.clear();
+        m_rx2BandAttDb.clear();
+    }
     bool settingsLoaded() const { return !m_loadedMac.isEmpty(); }
 
     // --- Tick (public for testability) ---
@@ -481,6 +551,11 @@ signals:
     // by the Core's mirrored step attenuator, or by PureSignal).
     void attOnTxEnabledChanged(bool on);
     void forceAttWhenPsOffChanged(bool on);
+
+    // R-R3-46 / R-R3-11: the other ADC's own attenuation changed, or which
+    // ADC each value is on (setAdcRouting, the slice mask included) moved.
+    void rx2AttenuationChanged(int dB);
+    void adcRoutingChanged();
 
 private:
     static constexpr int kMaxAdcs = 3;
@@ -674,6 +749,33 @@ private:
 
     // ADC-linked state (both RX0 and RX1 share the same ADC).
     bool m_adcLinked{false};
+
+    // R-R3-46 / R-R3-11: the per-ADC receive attenuators (setAdcRouting).
+    int m_rx1Adc{0};
+    int m_rx2Adc{-1};
+    bool m_adcAttLinked{false};
+    quint32 m_rx2SliceMask{0};
+    Band m_rx2Band{Band::GEN};
+    int m_rx2AttDb{0};
+    // A routing or band change while keyed, sent on the fall.
+    bool m_adcSendsHeldForMox{false};
+    // Thetis rx2_step_attenuator_by_band: the other ADC's band memory.
+    std::unordered_map<int, int> m_rx2BandAttDb;
+    // What each receive ADC holds: in use, and its attenuation.
+    struct AdcAttSnapshot {
+        std::array<bool, kMaxAdcs> inUse{};
+        std::array<int, kMaxAdcs> dB{};
+    };
+    AdcAttSnapshot adcAttSnapshot() const;
+    // Send each ADC in use whose value or use differs from `before`.
+    void sendAdcAttenuatorChanges(const AdcAttSnapshot& before);
+    // Send RX1's value to slice A's ADC, and to the other ADC while linked.
+    void sendRx1Attenuation(int dB);
+    // Send the other ADC's own value to it (nothing while linked or unused).
+    void sendRx2Attenuation();
+    void sendAttenuatorToAdc(int adc, int dB);
+    // The other ADC's band follows its controlling slice (setAdcRouting).
+    void setRx2Band(Band band);
 
     // --- Helpers ---
     void applyClassicAutoAtt(int adc);

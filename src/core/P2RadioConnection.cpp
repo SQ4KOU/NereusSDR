@@ -1115,6 +1115,33 @@ void P2RadioConnection::setAttenuator(int dB)
     }
 }
 
+void P2RadioConnection::setAttenuatorForAdc(int adc, int dB)
+{
+    // R-R3-46 / R-R3-11: one ADC's receive step attenuator, sent in
+    // CmdHighPriority (bytes 1443 ADC0, 1442 ADC1), as Thetis sets it:
+    // From Thetis netInterface.c:860-868 [v2.10.3.15]:
+    //   void SetADC2StepAttenData(int data)
+    //   {
+    //       if (prn->adc[1].rx_step_attn != data)
+    //       {
+    //           prn->adc[1].rx_step_attn = data;
+    //           if (listenSock != INVALID_SOCKET && prn->sendHighPriority != 0)
+    //               CmdHighPriority();
+    if (adc == 0) {
+        setAttenuator(dB);
+        return;
+    }
+    if (adc < 1 || adc >= kMaxAdc) {
+        return;
+    }
+    const int minDb = m_caps ? m_caps->attenuator.minDb : 0;
+    const int maxDb = m_caps ? m_caps->attenuator.maxDb : 31;
+    m_adc[static_cast<size_t>(adc)].rxStepAttn = qBound(minDb, dB, maxDb);
+    if (m_running) {
+        sendCmdHighPriority();
+    }
+}
+
 void P2RadioConnection::setPreamp(bool enabled)
 {
     // From Thetis: prn->rx[0].preamp

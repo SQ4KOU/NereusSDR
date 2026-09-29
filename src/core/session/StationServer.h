@@ -422,6 +422,9 @@
 //               fitTxEqCurveToPeer(): transmit's txEqCurve and
 //               txEqCurveVersion only to a peer that declared txEqCurve.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28: R-R3-46 / R-R3-11: peerGetsAdcAttenuators() and
+//               fitAdcAttenuatorsToPeer(). J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/IceConfiguration.h"
@@ -1624,6 +1627,13 @@ private:
     /// for a peer that does not get it, so an older app sees today's wire.
     /// False when a delta has nothing left worth sending.
     bool fitTxEqCurveToPeer(SessionTransport* transport, SessionMessage& message) const;
+    /// R-R3-46 / R-R3-11: adcAttenuatorVersion 1 reaches `transport`
+    /// (minor 11, a Core offering `stepAtt`, adcAttenuators 1 declared).
+    bool peerGetsAdcAttenuators(SessionTransport* transport) const;
+    /// Takes stepAtt's rx2AttenuationDb and rx2SliceMask out of a schema,
+    /// object.create or delta for a peer that does not get them. False when
+    /// a delta has nothing left worth sending.
+    bool fitAdcAttenuatorsToPeer(SessionTransport* transport, SessionMessage& message) const;
     /// A command, property write or settings write from `transport`'s
     /// device (never a heartbeat).
     void noteActivity(SessionTransport* transport);

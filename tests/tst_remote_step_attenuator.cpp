@@ -13,7 +13,10 @@
 // at 61 dB with a plain reason; a Hermes Lite 2 reports -28..31 dB and
 // settles Adaptive to Classic; a band change on the Core restores that
 // band's attenuation and the window follows; overload on either ADC reaches
-// the window. No hardware; no audio device is opened by these objects.
+// the window; a slice on the other ADC shows and sets that ADC's own
+// attenuator through the window (adcAttenuatorVersion 1), and a peer that
+// did not declare adcAttenuators sees today's `stepAtt`. No hardware; no
+// audio device is opened by these objects.
 //
 // Modification history (NereusSDR):
 //   2026-09-23: created (R-R3-46, R-R3-11, R-R3-13), by J.J. Boyd (KG4VCF),
@@ -22,6 +25,10 @@
 //               second run in the same test sandbox passes too (R-R3-46),
 //               by J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-28: the other ADC's own attenuator on the window, and today's
+//               stepAtt for a peer that did not declare it (R-R3-46,
+//               R-R3-11), by J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 
 #include <QtTest/QtTest>
 
@@ -349,6 +356,114 @@ private slots:
         }
         QTRY_COMPARE(remote->overloadAdc0(), 0);
         QTRY_COMPARE(remote->overloadAdc1(), 0);
+    }
+
+    // R-R3-46 / R-R3-11: slice B on the other ADC reads and sets that ADC's
+    // own attenuator through the window; slice A keeps attenuationDb.
+    void aSliceOnTheOtherAdcShowsAndSetsItsOwnAttenuator()
+    {
+        auto s = join(HPSDRHW::Angelia, QStringLiteral("02:00:00:00:46:06"));
+        QVERIFY(s != nullptr);
+        QCOMPARE(s->client->capabilities().adcAttenuatorVersion, 1);
+        StepAttenuatorFacade* remote = s->remote();
+        StepAttenuatorController* controller = s->controller();
+
+        // Slice A (0) on ADC0, slice B (1) on ADC1.
+        controller->setAttenuation(20);
+        controller->setAdcRouting(0, 1, Band::Band40m, false, 1u << 1);
+        QTRY_COMPARE(remote->rx2SliceMask(), 2);
+        QVERIFY(!remote->sliceUsesRx2(0));
+        QVERIFY(remote->sliceUsesRx2(1));
+        QTRY_COMPARE(remote->attenuationDbForSlice(0), 20);
+        QCOMPARE(remote->attenuationDbForSlice(1), controller->rx2AttenuatorDb());
+
+        QSignalSpy results(s->client.get(), &StationClient::propertyWriteCompleted);
+        remote->setAttenuationDbForSlice(1, 12);
+        QTRY_VERIFY(lastResultFor(results, "rx2AttenuationDb").seen);
+        QVERIFY(lastResultFor(results, "rx2AttenuationDb").accepted);
+        QCOMPARE(controller->rx2AttenuatorDb(), 12);
+        QCOMPARE(controller->attenuatorDb(), 20);
+        QCOMPARE(remote->attenuationDbForSlice(1), 12);
+        QCOMPARE(remote->attenuationDbForSlice(0), 20);
+
+        // Back on one ADC: every slice reads attenuationDb again.
+        controller->setAdcRouting(0, -1, Band::Band40m, false);
+        QTRY_COMPARE(remote->rx2SliceMask(), 0);
+        QCOMPARE(remote->attenuationDbForSlice(1), 20);
+    }
+
+    // R-R3-46 / R-R3-11: a peer whose hello did not declare adcAttenuators
+    // gets today's stepAtt (no rx2AttenuationDb, no rx2SliceMask) and no
+    // adcAttenuatorVersion; one that did gets all three.
+    void onlyAPeerThatDeclaredItGetsTheOtherAdcsAttenuator()
+    {
+        auto s = join(HPSDRHW::Angelia, QStringLiteral("02:00:00:00:46:07"));
+        QVERIFY(s != nullptr);
+        for (const bool declares : {false, true}) {
+            auto* station = new LoopbackTransport(QStringLiteral("raw-station"), this);
+            auto* peer = new LoopbackTransport(QStringLiteral("raw-peer"), this);
+            station->linkTo(peer);
+            s->server->acceptTransport(station);
+            QHash<QByteArray, int> features;
+            if (declares) {
+                features.insert(QByteArrayLiteral("adcAttenuators"), 1);
+            }
+            peer->sendText(SessionMessages::encode(SessionMessages::hello(
+                kSessionProtocolMajor, kSessionProtocolMinor, 0, QStringLiteral("raw-peer"),
+                {kSessionProtocolMajor}, features)));
+            peer->sendText(SessionMessages::encode(SessionMessages::authRequest(s->server->token())));
+            QTRY_VERIFY(peer->receivedKinds().contains(QByteArrayLiteral("snapshot.complete")));
+
+            bool sawVersion = false;
+            bool sawSchemaField = false;
+            bool sawStepAtt = false;
+            bool sawValue = false;
+            for (const QByteArray& raw : peer->received()) {
+                SessionMessage m;
+                if (!SessionMessages::decode(raw, &m)) {
+                    continue;
+                }
+                if (m.kind == SessionMessageKind::Capabilities) {
+                    for (const MirrorUpdate& u : m.updates) {
+                        sawVersion = sawVersion || u.name == "adcAttenuatorVersion";
+                    }
+                } else if (m.kind == SessionMessageKind::Schema
+                           && m.className == "StepAttenuatorFacade") {
+                    for (const SessionSchemaField& f : m.fields) {
+                        sawSchemaField = sawSchemaField || f.name == "rx2AttenuationDb"
+                            || f.name == "rx2SliceMask";
+                    }
+                } else if (m.kind == SessionMessageKind::ObjectCreate && m.objectKey == "stepAtt") {
+                    sawStepAtt = true;
+                    for (const MirrorUpdate& u : m.updates) {
+                        sawValue = sawValue || u.name == "rx2AttenuationDb"
+                            || u.name == "rx2SliceMask";
+                    }
+                }
+            }
+            QVERIFY(sawStepAtt);
+            QCOMPARE(sawVersion, declares);
+            QCOMPARE(sawSchemaField, declares);
+            QCOMPARE(sawValue, declares);
+
+            // A later change reaches only the peer that declared it.
+            peer->clearReceived();
+            s->controller()->setRx2Attenuation(declares ? 9 : 7);
+            QCoreApplication::processEvents();
+            QTest::qWait(50);
+            bool sawDelta = false;
+            for (const QByteArray& raw : peer->received()) {
+                SessionMessage m;
+                if (SessionMessages::decode(raw, &m) && m.kind == SessionMessageKind::Delta
+                    && m.objectKey == "stepAtt") {
+                    for (const MirrorUpdate& u : m.updates) {
+                        sawDelta = sawDelta || u.name == "rx2AttenuationDb";
+                    }
+                }
+            }
+            QCOMPARE(sawDelta, declares);
+            station->closeLink(QStringLiteral("done"));
+        }
     }
 };
 

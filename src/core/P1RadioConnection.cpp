@@ -1350,6 +1350,37 @@ void P1RadioConnection::setAttenuator(int dB)
     }
     m_stepAttn[0] = dB;
 }
+
+void P1RadioConnection::setAttenuatorForAdc(int adc, int dB)
+{
+    // R-R3-46 / R-R3-11: ADC 0 is setAttenuator's, bank 11. ADC 1 and 2 go
+    // out in bank 12 (composeCcForBank case 12 and the codecs), from
+    // prn->adc[1..2].rx_step_attn, which Thetis sets with:
+    // From Thetis netInterface.c:860-868 [v2.10.3.15]:
+    //   void SetADC2StepAttenData(int data)
+    //   {
+    //       if (prn->adc[1].rx_step_attn != data)
+    //       {
+    //           prn->adc[1].rx_step_attn = data;
+    // Bank 12 has no early flush; the round-robin reaches it within one
+    // cycle of the banks.
+    if (adc == 0) {
+        setAttenuator(dB);
+        return;
+    }
+    if (adc < 1 || adc > 2) {
+        return;
+    }
+    // The same board range as ADC 0.
+    if (m_caps && m_caps->attenuator.present) {
+        if (dB > m_caps->attenuator.maxDb) { dB = m_caps->attenuator.maxDb; }
+        if (dB < m_caps->attenuator.minDb) { dB = m_caps->attenuator.minDb; }
+    } else if (m_caps && !m_caps->attenuator.present) {
+        dB = 0;
+    }
+    m_stepAttn[adc] = dB;
+}
+
 void P1RadioConnection::setPreamp(bool enabled)
 {
     // v0.4.1 hotfix — flush bank 11 on the next EP2 frame so the new

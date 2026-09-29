@@ -163,6 +163,7 @@
         {"id": "session-verbs-tx-profiles", "file": "sessions/verbs-tx-profiles.json", "kind": "session", "requires": {"transmitSettingsVersion": 3}},
         {"id": "session-verbs-band-select", "file": "sessions/verbs-band-select.json", "kind": "session", "requires": {"bandSelectVersion": 1}},
         {"id": "session-verbs-radio-hardware", "file": "sessions/verbs-radio-hardware.json", "kind": "session", "requires": {"radioHardwareVersion": 3}},
+        {"id": "session-adc-attenuators", "file": "sessions/adc-attenuators.json", "kind": "session", "requires": {"adcAttenuatorVersion": 1}},
         {"id": "session-verbs-filter-policy", "file": "sessions/verbs-filter-policy.json", "kind": "session", "requires": {"radioHardwareVersion": 4}},
         {"id": "session-verbs-tx-antenna", "file": "sessions/verbs-tx-antenna.json", "kind": "session", "requires": {"radioHardwareVersion": 6}},
         {"id": "session-verbs-radio-bound-antenna-rows", "file": "sessions/verbs-radio-bound-antenna-rows.json", "kind": "session", "requires": {"radioAntennaRowsVersion": 1}},
