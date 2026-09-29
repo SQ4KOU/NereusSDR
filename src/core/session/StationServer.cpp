@@ -644,6 +644,10 @@
 //               modelLabel and models only to a peer that declared
 //               radioModels 1 (fitRecordBatchToPeer). J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-09-28: Ruling 7.1a: a shared change applied at once tells its
+//               devices after it applied (tellAppliedNow; a radio change's
+//               on its restart turn). J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -2353,6 +2357,13 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
                 if (m_holdingRadioChange && !m_heldRadioChange && result.accepted
                     && result.commandVerb == "station.selectRadio") {
                     m_heldRadioChange = HeldRadioChange{key, result, false, {}};
+                    // Ruling 7.1a: a radio change applied at once tells
+                    // its devices when it answers.
+                    if (m_appliedNowRadio) {
+                        m_heldRadioChange->later = *m_appliedNowRadio;
+                        m_heldRadioChange->tellOnFinish = true;
+                        m_appliedNowRadio.reset();
+                    }
                     return;
                 }
                 SessionTransport* to = nullptr;
@@ -3030,7 +3041,7 @@ void StationServer::finishRadioChange(bool proceeded, const QString& refusal)
     if (to != nullptr && m_peers.contains(to)) {
         sendToPeer(to, answer);
     }
-    if (held.proceed) {
+    if (held.proceed || held.tellOnFinish) {
         if (proceeded) {
             tellSettingChanged(held.later.affected, held.later.sliceWords, held.later.change,
                                held.later.requester);
@@ -6129,9 +6140,13 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
     // leaves its shared receiver's window may be a pan move, asked first,
     // or a take once refused.
     if (handleSliceRetune(transport, message)) {
+        tellAppliedNow(false);
         return;
     }
-    applyPropertyWrite(transport, message, true, {});
+    const QList<SessionPropertyResult> results = applyPropertyWrite(transport, message, true, {});
+    // Ruling 7.1a: a change applied at once tells the devices it disturbed.
+    tellAppliedNow(std::any_of(results.cbegin(), results.cend(),
+                               [](const SessionPropertyResult& r) { return r.accepted; }));
 }
 
 QList<SessionPropertyResult> StationServer::applyPropertyWrite(
@@ -6580,7 +6595,8 @@ void StationServer::handleSettingsWrite(SessionTransport* transport,
     if (handleSharedSetting(transport, message)) {
         return;
     }
-    applySettingsWrite(transport, message, nullptr);
+    // Ruling 7.1a: a change applied at once tells the devices it disturbed.
+    tellAppliedNow(applySettingsWrite(transport, message, nullptr));
 }
 
 QString StationServer::bandPlanRefusal(const QString& key, const QVariant& value) const
@@ -6804,6 +6820,8 @@ void StationServer::handleSettingsRemove(SessionTransport* transport, const Sess
         return;
     }
     applySettingsRemove(message);
+    // Ruling 7.1a: a change applied at once tells the devices it disturbed.
+    tellAppliedNow(true);
 }
 
 void StationServer::applySettingsRemove(const SessionMessage& message)

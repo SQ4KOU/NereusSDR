@@ -977,30 +977,52 @@ device is told afterwards. The list grows with Part H's live-apply Core settings
 description naming the scope its control touches. Section 15 lists the additions for the
 operator.
 
+**Ruling 7.1a (the operator, 2026-09-28): two tiers.** Ruling 7.1's "asks first" now holds only
+for a change that can take another device's reception away or reaches the transmitter, and only
+when a **connected** device is disturbed:
+
+- **Asks first:** the sample rate (Protocol 1 and Protocol 2), the radio (`station.selectRadio`),
+  the receive antenna, the transmit antenna, PureSignal, diversity, 4O3A on or off, the
+  amplifier, the tuner and the RF-Kit amplifier's antenna, the transmit interlock and the power
+  cap. The transmitter's other Core settings (Receive Only, the transmit region, External TX
+  Inhibit), which the ruling does not name, keep asking.
+- **Applies at once and tells:** the attenuator, the preamp, the ADC1 preamp and the automatic
+  attenuator; a shared receiver's noise blanker; the notches; the receive DSP options; the
+  receive filter policy. Nobody is asked, an older window makes them too, and each disturbed
+  device is sent the `settingChanged` notice of 7.4 once the change has applied.
+- **Away devices are never asked about.** The question names only connected devices; a change
+  on an asking row that would disturb only away devices applies at once, and each away device
+  is told when it returns (7.4). An away device's slice a sample rate cannot keep closes and is
+  saved for its return, as a confirmed rate change closes it.
+
+A change touching rows of both tiers asks. The "Tier" column below is the table
+`StationServer::sharedTierOf` reads (`kSharedTiers`, `StationSharedSettings.cpp`), one table for
+both tiers; `classifyShared` marks which rows a change touches.
+
 The "Saved as" column gives each setting's keys and their scope in the link's settings table
 (the link, section 8): "Core scope" is a key the settings proxy shares with every device;
 "Core-owned" is a family that changes only through its object or verb (the link, lines
 1312-1333). Both are already shared: this design adds no scope.
 
-| Setting | Changed today through | Saved as | Touches |
-| --- | --- | --- | --- |
-| Sample rate, Protocol 1 | `requestSliceSampleRate` (`SessionCommandDispatcher.cpp:317`) | `hardware/<mac>/radioInfo/sampleRate`, Core scope (the link, line 1223; `RadioModel.cpp:18007`) | every receiver (`RadioModel.cpp:6277-6283`, `6476-6483`); stops the radio's data flow (`17886-17898`) |
-| Sample rate, Protocol 2 | the same verb | the same | that receiver (`RadioModel.cpp:6284-6287`) |
-| Attenuator, preamp | `stepAtt` (`attenuationDb`, `preampMode`, `enabled`, auto-attenuate) | `hardware/<mac>/options/stepAtt/...`, `.../autoAtt/...`, `.../preamp/...`, Core-owned (line 1324) | ADC0 (`P2RadioConnection.cpp:1127-1148`; `P1RadioConnection.cpp:1217-1245`) |
-| ADC1 preamp | `stepAtt.rx1Preamp` | the same family | ADC1 (`P2RadioConnection.cpp:1150-1160`) |
-| Receive antenna | a slice's `rxAntenna`; `alexAntennas` (`rxOutOverride`, Disable RX Bypass relay, joined at the checkpoint carry of 2026-09-25); `setAlexRxAntenna` | `hardware/<mac>/alex/antenna/...`, Core-owned (line 1325) | the ADC the relay feeds (every receiver on a 1-ADC board) and the receiver's other slices (`RadioModel.cpp:19061-19077`) |
-| Receive filter policy | `setAlexBpfMode` | saved for its radio (line 1437) | its chain's ADC |
-| PureSignal | `pureSignalSettings`, `transmit.pureSig`, `ps3.*` except two-tone | `hardware/<mac>/puresignal/...`, Core-owned (line 1327) | on a 1-ADC board every user receiver while the holder transmits (6.5); the transmitter |
-| Diversity | a slice's `diversityEnabled`, `diversityPhaseDeg`, `diversityGainDb` and `diversityFineNullEnabled` (the last three added by the fix wave after the group review of Tasks 71 to 76) | the `Slice` keys, Core scope (line 1224) | receiver 0 on a 2-ADC board (`P2CodecOrionMkII.cpp:1260-1289`); every receiver on a 1-ADC board (`P2CodecHermes.cpp:284-302`; `P1CodecStandard.cpp:927-941`) |
-| Noise blanker, shared receiver | a slice's `nbMode` and NB1/NB2 knobs | the `Slice` and `Nb` keys, Core scope (lines 1224, 1240) | that receiver's slices (`RadioModel.cpp:6737-6760`) |
-| Notches | `notch.*`, `notches.globalEnabled`, `notches.autoIncrease` | `NotchCount`, `Notch<N>...`, Core-owned (line 1323) | every slice whose passband holds the notch (one list for every slice: `RadioModel.cpp:5120-5135`; applied per channel, `RxChannel.cpp:1613`) |
-| Receive DSP options | `settings.write` (`RadioModel.cpp:18278-18290`) | `DspOptions...Rx`, Core scope (line 1239) | every receiver |
-| Transmit antenna | a slice's `txAntenna`; `alexAntennas` (`txAntennas`, `blockTxAnt2`, `blockTxAnt3`, `rxOutOnTx`, `ext1OutOnTx`, `ext2OutOnTx`); `setAlexTxAntenna` (these joined at the checkpoint carry of 2026-09-25); the Alex tab's transmit high-pass switches, `hardware/<mac>/alex/master/{hpfBypassOnTx,hpfBypassOnPs,disable6mLnaOnTx}` (joined at the trunk merge of remote transmit, 2026-09-26) | `hardware/<mac>/alex/antenna/...`, Core-owned (line 1325) | the transmitter (7.5) |
-| The amplifier | `amp.operate`, `amp.standby` (Task 42); `configurePgxl` and its settings verbs; `setPgxlOperate`, `setPgxlAddress`, `setRfKitOperate`, `setRfKitTciMode`, `setRfKitAddress` (joined at the checkpoint carry of 2026-09-25; the scans only listen and join no list) | `PGXL_...`, Core scope (line 1226) | the transmitter |
-| The tuner, the RF-Kit amplifier's antenna | `tuner.operate`, `tuner.bypass`, `tuner.antenna`, `rfkit.antenna` (Task 42); `configureTgxl`; `moveTgxlRelay`, `setTgxlAddress`, `setRfKitAntenna` (joined at the checkpoint carry of 2026-09-25) | `TGXL_...`, `RfKit_...`, Core scope (lines 1227-1228) | ADC0's receivers on a 2-ADC board, every receiver on a 1-ADC board, and the transmitter |
-| 4O3A on or off | `setFourO3AEnabled` (added by the fix wave after the group review of Tasks 71 to 76) | `hardware/<mac>/peripherals/FourO3A_Enabled`, saved for its radio (`RadioModel::peripheralValue`) | what the tuner touches: ADC0's receivers on a 2-ADC board, every receiver on a 1-ADC board, and the transmitter, since it connects or drops the amplifier and the tuner together |
-| Transmit interlock, power cap | `setTxInterlockPolicy`, `setPgxlPowerCap` | `PGXL_TxInterlockMode` and its three siblings (`src/core/TxInterlockPolicy.cpp:136-160`), `PGXL_PowerCapEnabled`, `PGXL_PowerCapW` (`src/core/StationAccessoryData.cpp:164-166`), Core scope | the transmitter |
-| The radio | `station.selectRadio` (Task 25, the plan, lines 2421-2425) | the Core's saved choice (Task 25) | every slice |
+| Setting | Changed today through | Saved as | Touches | Tier (7.1a) |
+| --- | --- | --- | --- | --- |
+| Sample rate, Protocol 1 | `requestSliceSampleRate` (`SessionCommandDispatcher.cpp:317`) | `hardware/<mac>/radioInfo/sampleRate`, Core scope (the link, line 1223; `RadioModel.cpp:18007`) | every receiver (`RadioModel.cpp:6277-6283`, `6476-6483`); stops the radio's data flow (`17886-17898`) | asks |
+| Sample rate, Protocol 2 | the same verb | the same | that receiver (`RadioModel.cpp:6284-6287`) | asks |
+| Attenuator, preamp | `stepAtt` (`attenuationDb`, `preampMode`, `enabled`, auto-attenuate) | `hardware/<mac>/options/stepAtt/...`, `.../autoAtt/...`, `.../preamp/...`, Core-owned (line 1324) | ADC0 (`P2RadioConnection.cpp:1127-1148`; `P1RadioConnection.cpp:1217-1245`) | tells |
+| ADC1 preamp | `stepAtt.rx1Preamp` | the same family | ADC1 (`P2RadioConnection.cpp:1150-1160`) | tells |
+| Receive antenna | a slice's `rxAntenna`; `alexAntennas` (`rxOutOverride`, Disable RX Bypass relay, joined at the checkpoint carry of 2026-09-25); `setAlexRxAntenna` | `hardware/<mac>/alex/antenna/...`, Core-owned (line 1325) | the ADC the relay feeds (every receiver on a 1-ADC board) and the receiver's other slices (`RadioModel.cpp:19061-19077`) | asks |
+| Receive filter policy | `setAlexBpfMode` | saved for its radio (line 1437) | its chain's ADC | tells |
+| PureSignal | `pureSignalSettings`, `transmit.pureSig`, `ps3.*` except two-tone | `hardware/<mac>/puresignal/...`, Core-owned (line 1327) | on a 1-ADC board every user receiver while the holder transmits (6.5); the transmitter | asks |
+| Diversity | a slice's `diversityEnabled`, `diversityPhaseDeg`, `diversityGainDb` and `diversityFineNullEnabled` (the last three added by the fix wave after the group review of Tasks 71 to 76) | the `Slice` keys, Core scope (line 1224) | receiver 0 on a 2-ADC board (`P2CodecOrionMkII.cpp:1260-1289`); every receiver on a 1-ADC board (`P2CodecHermes.cpp:284-302`; `P1CodecStandard.cpp:927-941`) | asks |
+| Noise blanker, shared receiver | a slice's `nbMode` and NB1/NB2 knobs | the `Slice` and `Nb` keys, Core scope (lines 1224, 1240) | that receiver's slices (`RadioModel.cpp:6737-6760`) | tells |
+| Notches | `notch.*`, `notches.globalEnabled`, `notches.autoIncrease` | `NotchCount`, `Notch<N>...`, Core-owned (line 1323) | every slice whose passband holds the notch (one list for every slice: `RadioModel.cpp:5120-5135`; applied per channel, `RxChannel.cpp:1613`) | tells |
+| Receive DSP options | `settings.write` (`RadioModel.cpp:18278-18290`) | `DspOptions...Rx`, Core scope (line 1239) | every receiver | tells |
+| Transmit antenna | a slice's `txAntenna`; `alexAntennas` (`txAntennas`, `blockTxAnt2`, `blockTxAnt3`, `rxOutOnTx`, `ext1OutOnTx`, `ext2OutOnTx`); `setAlexTxAntenna` (these joined at the checkpoint carry of 2026-09-25); the Alex tab's transmit high-pass switches, `hardware/<mac>/alex/master/{hpfBypassOnTx,hpfBypassOnPs,disable6mLnaOnTx}` (joined at the trunk merge of remote transmit, 2026-09-26) | `hardware/<mac>/alex/antenna/...`, Core-owned (line 1325) | the transmitter (7.5) | asks |
+| The amplifier | `amp.operate`, `amp.standby` (Task 42); `configurePgxl` and its settings verbs; `setPgxlOperate`, `setPgxlAddress`, `setRfKitOperate`, `setRfKitTciMode`, `setRfKitAddress` (joined at the checkpoint carry of 2026-09-25; the scans only listen and join no list) | `PGXL_...`, Core scope (line 1226) | the transmitter | asks |
+| The tuner, the RF-Kit amplifier's antenna | `tuner.operate`, `tuner.bypass`, `tuner.antenna`, `rfkit.antenna` (Task 42); `configureTgxl`; `moveTgxlRelay`, `setTgxlAddress`, `setRfKitAntenna` (joined at the checkpoint carry of 2026-09-25) | `TGXL_...`, `RfKit_...`, Core scope (lines 1227-1228) | ADC0's receivers on a 2-ADC board, every receiver on a 1-ADC board, and the transmitter | asks |
+| 4O3A on or off | `setFourO3AEnabled` (added by the fix wave after the group review of Tasks 71 to 76) | `hardware/<mac>/peripherals/FourO3A_Enabled`, saved for its radio (`RadioModel::peripheralValue`) | what the tuner touches: ADC0's receivers on a 2-ADC board, every receiver on a 1-ADC board, and the transmitter, since it connects or drops the amplifier and the tuner together | asks |
+| Transmit interlock, power cap | `setTxInterlockPolicy`, `setPgxlPowerCap` | `PGXL_TxInterlockMode` and its three siblings (`src/core/TxInterlockPolicy.cpp:136-160`), `PGXL_PowerCapEnabled`, `PGXL_PowerCapW` (`src/core/StationAccessoryData.cpp:164-166`), Core scope | the transmitter | asks |
+| The radio | `station.selectRadio` (Task 25, the plan, lines 2421-2425) | the Core's saved choice (Task 25) | every slice | asks |
 
 **Ruling 7.2.** The tuner and the RF-Kit amplifier's antenna switch count as touching ADC0 on a
 2-ADC board because they sit in the antenna path the transmitter shares, which feeds ADC0; the
@@ -2338,8 +2360,9 @@ Section 10.8 lists each name against the iPhone design's section 4.5.
 | `non-anchor-pan-move` | B moves its pan on A's receiver: B goes to a free receiver, nobody asked; with none free, the chooser | `station`, `app` |
 | `take-receiver` | every receiver held; the chooser with each receiver's slices and devices; proceed closes every other device's slice on the chosen receiver, the owners told with Take it back; Take it back asks the other way | `station`, `app` |
 | `take-slice` | the slice cap full with receivers free: the slice chooser | `station` |
-| `shared-setting-confirm` | a preamp change with another device on ADC0: `confirm.request` with `change`, each device's `state` and each slice's `mode`, `adc`, `streamIndex` and `effect`; proceed, its result carrying the readback; `notice` with who, what and `secondsAgo` | `station`, `app` |
+| `shared-setting-confirm` | a receive antenna change (ruling 7.1a: it asks) with another device on ADC0: `confirm.request` with `change`, each device's `state` and each slice's `mode`, `adc`, `streamIndex` and `effect`; proceed, its result carrying the readback; `notice` with who, what and `secondsAgo` | `station`, `app` |
 | `confirm-grew`, `confirm-target-changed` | the disturbed set grows, or the target changes, before proceed: a new request or a refusal, nothing applied | `station` |
+| `shared-setting-notice` | ruling 7.1a: a preamp change with another device on ADC0 applies at once, nobody asked; the other device gets `notice` `settingChanged` and the `delta` | `station` |
 | `on-air-refusals` | a pan move, a band change on a shared receiver, a rate change and a take against a keyed holder's transmit slice, and a tuner, amplifier or antenna change from another device while the holder is keyed, are refused with the on-air reason naming the holder (D60) | `station` |
 | `antenna-kept` | A crosses a band edge while B listens on the same ADC: the receive antenna stays, A gets `antennaKept`; with B gone, the next crossing switches | `station` |
 | `take-transmit`, `take-transmit-keyed` | the holder named; red when keyed; the unkey before the change; the new holder unkeyed; `tx.take {holderEpoch, shownKeyed}` taking at once, and asked again when the holder keyed since | `station`, `app` |

@@ -39,8 +39,8 @@
         {"from": "station", "message": {"type": "snapshot.complete"}},
         {"connect": "b"},
         {"from": "station", "message": {"key": "devices", "properties": [{"kind": "utf8", "name": "listJson", "ordinal": 0, "value": "$string"}, {"kind": "i64", "name": "revision", "ordinal": 1, "value": 4}, {"kind": "utf8", "name": "stationLabel", "ordinal": 2, "value": ""}, {"kind": "bool", "name": "claimed", "ordinal": 3, "value": true}, {"kind": "bool", "name": "tokenActive", "ordinal": 4, "value": false}, {"kind": "bool", "name": "keyBackupAcknowledged", "ordinal": 5, "value": false}, {"kind": "utf8", "name": "keyPath", "ordinal": 6, "value": "$string"}, {"kind": "bool", "name": "pairingWindowOpen", "ordinal": 7, "value": false}, {"kind": "utf8", "name": "pairingCode", "ordinal": 8, "value": ""}], "type": "delta"}},
-        {"from": "client", "role": "scripted", "message": {"type": "property.write", "key": "stepAtt", "writeId": 1341, "properties": [{"ordinal": 2, "name": "preampMode", "kind": "i64", "value": 1}]}},
-        {"from": "station", "message": {"key": "stepAtt", "results": [{"accepted": false, "hasValue": true, "property": "preampMode", "reason": "This change would affect Other device 1. Update NereusSDR to confirm changes that affect other devices.", "value": {"kind": "i64", "name": "preampMode", "ordinal": 2, "value": 0}}], "type": "property.result", "writeId": 1341}},
+        {"from": "client", "role": "scripted", "message": {"type": "property.write", "key": "alexAntennas", "writeId": 1341, "properties": [{"ordinal": 2, "name": "useTxAntennaForRx", "kind": "bool", "value": true}]}},
+        {"from": "station", "message": {"key": "alexAntennas", "results": [{"accepted": false, "hasValue": true, "property": "useTxAntennaForRx", "reason": "This change would affect Other device 1. Update NereusSDR to confirm changes that affect other devices.", "value": {"kind": "bool", "name": "useTxAntennaForRx", "ordinal": 2, "value": false}}], "type": "property.result", "writeId": 1341}},
         {"advanceMs": 50}
     ]
 }

@@ -128,6 +128,7 @@
         {"id": "session-older-window-taken-over", "file": "sessions/older-window-taken-over.json", "kind": "session", "requires": {"sessionHolderVersion": 1}},
         {"id": "session-older-window-no-slice", "file": "sessions/older-window-no-slice.json", "kind": "session", "requires": {"sessionHolderVersion": 1}},
         {"id": "session-shared-setting-confirm", "file": "sessions/shared-setting-confirm.json", "kind": "session", "requires": {"sessionHolderVersion": 1}},
+        {"id": "session-shared-setting-notice", "file": "sessions/shared-setting-notice.json", "kind": "session", "requires": {"sessionHolderVersion": 1}},
         {"id": "session-station-radio-confirm", "file": "sessions/station-radio-confirm.json", "kind": "session", "requires": {"sessionHolderVersion": 1, "stationRadiosVersion": 1}},
         {"id": "session-older-window-shared-setting", "file": "sessions/older-window-shared-setting.json", "kind": "session", "requires": {"sessionHolderVersion": 1}},
         {"id": "session-confirm-grew", "file": "sessions/confirm-grew.json", "kind": "session", "requires": {"sessionHolderVersion": 1}},

@@ -3502,30 +3502,45 @@ its transmit slice are refused instead (the several-devices design, ruling
 iPhone app plan Task 75 (the several-devices design, sections 7.1 to 7.4,
 rulings 5.11a, 6.1 and 7.1 to 7.8). Some settings belong to the radio,
 not to one slice, so a change to one reaches every slice that listens
-through what it touches, whoever owns it. A change on this list that
-would disturb another device's slices (or, once transmit has a holder,
-the holder, when it touches the transmitter) is held and asked, as
-section 7.5 describes, with `kind` `sharedSetting`; one that disturbs
-nobody, or sets the value already there, applies at once as before. The
-requester's own slices never count, nor do slices nobody owns.
+through what it touches, whoever owns it. The changes are in two tiers
+(the several-devices design, ruling 7.1a, the operator's ruling of
+2026-09-28), the last column below:
 
-| Change | Arrives as | What it reaches |
-| --- | --- | --- |
-| Sample rate | `requestSliceSampleRate` | Protocol 1: every receiver (the radio's data flow stops); Protocol 2: that receiver. Each other device's slice the narrower window leaves out moves to another receiver or, with none free, closes (the Core's own plan); it closes only once the change is certain, so a change refused after Confirm closes nothing and tells nobody |
-| Attenuator, preamp, automatic attenuator | `stepAtt` writes (`attenuationDb`, `enabled`, `preampMode`, `autoAtt...`) | ADC0's receivers |
-| ADC1 preamp | `stepAtt` `rx1Preamp` | ADC1's receivers |
-| Receive antenna | a slice's `rxAntenna`; `alexAntennas` `rxAntennas`, `rxOnlyAntennas`, `useTxAntennaForRx`; `setAlexRxAntenna` | every receiver on a 1-ADC board; on a 2-ADC board ADC0's (ANT1 to ANT3) and, for a receive-only input, ADC1's; a slice's own write also its receiver's other slices |
-| Receive filter policy | `setAlexBpfMode` | the receivers on that filter chain |
-| PureSignal | `pureSignalSettings` writes, `transmit` `pureSig`, `ps3.off`, `ps3.single`, `ps3.automatic`, `ps3.applyCurrent`, `ps3.restoreCorrection` | on a 1-ADC board every receiver, `pausesWhileTransmitting`; the transmitter |
-| Diversity | a slice's `diversityEnabled`, `diversityPhaseDeg`, `diversityGainDb`, `diversityFineNullEnabled` | receiver 0 on a 2-ADC board, every receiver on a 1-ADC board |
-| A shared receiver's noise blanker | a slice's `nbMode`, `nb1Threshold`, `nb1TransitionMs`, `nb1LeadMs`, `nb1LagMs`, `nb2Mode` | that receiver's slices |
-| Notches | `notch.add`, `notch.move`, `notch.setActive`, `notch.delete`; `notches` `globalEnabled`, `autoIncrease` | every slice whose passband overlaps the notch (the notches, for the two switches) |
-| Receive options | `settings.write` of the receive `DspOptions...Rx` keys (buffer size, filter size, filter type, per mode group) | every receiver |
-| Transmit antenna | a slice's `txAntenna` | the transmitter |
-| The amplifier, interlock, power limit | `amplifier` `operate`; `configurePgxl`, `disconnectPgxl`, `setPgxlConnectionSettings`, `setPgxlName`, `setPgxlHardware`, `setPgxlNetwork`, `savePgxlSettings`, `setTxInterlockPolicy`, `setPgxlPowerCap`, `configureRfKit`, `disconnectRfKit`, `setRfKitEnabled`; `settings.write` of `PGXL_...` | the transmitter |
-| 4O3A on or off | `setFourO3AEnabled` | as the tuner: ADC0's receivers on a 2-ADC board, every receiver on a 1-ADC board; the transmitter |
-| The tuner, the RF-Kit amplifier's antenna | `setTgxlAntenna`, `setTgxlOperate`, `setTgxlBypass`, `configureTgxl`, `disconnectTgxl`, `setTgxlName`, `setTgxlNetwork`, `saveTgxlSettings`; `settings.write` of `TGXL_...` and `RfKit_...` | ADC0's receivers on a 2-ADC board, every receiver on a 1-ADC board; the transmitter |
-| The radio | `station.selectRadio` (parity Task 21) | every receiver and the transmitter; `change` "Radio", the Core's radio's name, the chosen radio's name |
+- **Asks first.** A change that can take another device's reception away,
+  or reaches the transmitter, and would disturb another **connected**
+  device's slices (or, once transmit has a holder, the holder, when it
+  touches the transmitter) is held and asked, as section 7.5 describes,
+  with `kind` `sharedSetting`. Only connected devices are asked about:
+  `affected` never names an away device, and a change that would disturb
+  only away devices applies at once.
+- **Applies at once and tells.** A small adjustment applies at once, as
+  the requester's own change would, and each device it disturbs is told
+  (the notice below). Nobody is asked, and a window without
+  `sessionHolderVersion` 1 makes it too.
+
+Either way every disturbed device is told once the change has applied,
+an away device when it returns (section 7.5). One that disturbs nobody,
+or sets the value already there, applies at once as before and tells
+nobody. The requester's own slices never count, nor do slices nobody owns.
+A change that touches rows of both tiers at once asks.
+
+| Change | Arrives as | What it reaches | Tier |
+| --- | --- | --- | --- |
+| Sample rate | `requestSliceSampleRate` | Protocol 1: every receiver (the radio's data flow stops); Protocol 2: that receiver. Each other device's slice the narrower window leaves out moves to another receiver or, with none free, closes (the Core's own plan); it closes only once the change is certain, so a change refused after Confirm closes nothing and tells nobody | Asks first |
+| Attenuator, preamp, automatic attenuator | `stepAtt` writes (`attenuationDb`, `enabled`, `preampMode`, `autoAtt...`) | ADC0's receivers | Applies at once and tells |
+| ADC1 preamp | `stepAtt` `rx1Preamp` | ADC1's receivers | Applies at once and tells |
+| Receive antenna | a slice's `rxAntenna`; `alexAntennas` `rxAntennas`, `rxOnlyAntennas`, `useTxAntennaForRx`; `setAlexRxAntenna` | every receiver on a 1-ADC board; on a 2-ADC board ADC0's (ANT1 to ANT3) and, for a receive-only input, ADC1's; a slice's own write also its receiver's other slices | Asks first |
+| Receive filter policy | `setAlexBpfMode` | the receivers on that filter chain | Applies at once and tells |
+| PureSignal | `pureSignalSettings` writes, `transmit` `pureSig`, `ps3.off`, `ps3.single`, `ps3.automatic`, `ps3.applyCurrent`, `ps3.restoreCorrection` | on a 1-ADC board every receiver, `pausesWhileTransmitting`; the transmitter | Asks first |
+| Diversity | a slice's `diversityEnabled`, `diversityPhaseDeg`, `diversityGainDb`, `diversityFineNullEnabled` | receiver 0 on a 2-ADC board, every receiver on a 1-ADC board | Asks first |
+| A shared receiver's noise blanker | a slice's `nbMode`, `nb1Threshold`, `nb1TransitionMs`, `nb1LeadMs`, `nb1LagMs`, `nb2Mode` | that receiver's slices | Applies at once and tells |
+| Notches | `notch.add`, `notch.move`, `notch.setActive`, `notch.delete`; `notches` `globalEnabled`, `autoIncrease` | every slice whose passband overlaps the notch (the notches, for the two switches) | Applies at once and tells |
+| Receive options | `settings.write` of the receive `DspOptions...Rx` keys (buffer size, filter size, filter type, per mode group) | every receiver | Applies at once and tells |
+| Transmit antenna | a slice's `txAntenna` | the transmitter | Asks first |
+| The amplifier, interlock, power limit | `amplifier` `operate`; `configurePgxl`, `disconnectPgxl`, `setPgxlConnectionSettings`, `setPgxlName`, `setPgxlHardware`, `setPgxlNetwork`, `savePgxlSettings`, `setTxInterlockPolicy`, `setPgxlPowerCap`, `configureRfKit`, `disconnectRfKit`, `setRfKitEnabled`; `settings.write` of `PGXL_...` | the transmitter | Asks first |
+| 4O3A on or off | `setFourO3AEnabled` | as the tuner: ADC0's receivers on a 2-ADC board, every receiver on a 1-ADC board; the transmitter | Asks first |
+| The tuner, the RF-Kit amplifier's antenna | `setTgxlAntenna`, `setTgxlOperate`, `setTgxlBypass`, `configureTgxl`, `disconnectTgxl`, `setTgxlName`, `setTgxlNetwork`, `saveTgxlSettings`; `settings.write` of `TGXL_...` and `RfKit_...` | ADC0's receivers on a 2-ADC board, every receiver on a 1-ADC board; the transmitter | Asks first |
+| The radio | `station.selectRadio` (parity Task 21) | every receiver and the transmitter; `change` "Radio", the Core's radio's name, the chosen radio's name | Asks first |
 
 A verb naming another device's slice is refused first, as section 7.3
 says. The words of `change` are the Core's: "Attenuator, ADC 1", "0 dB",
@@ -3536,18 +3551,24 @@ amplifier and tuner", "Off", "On". A `settings.write` held this way is answered 
 `settings.reject` with "Waiting for you to confirm." and the Core's value
 (section 8.1), and its `confirm.request` carries `forSettingsKey`.
 
+A change that applies at once is answered as it always was (its
+`property.result`, `settings.value` or `command.result`), and its notices
+follow once it has applied: a sample rate's when its result arrives, the
+radio's when the Core answers it.
+
 On proceed the change applies as the original request would have, the
-answer carrying the readback (section 7.5), and each disturbed device is
-sent a `notice` of kind `settingChanged`: who, `change`, `secondsAgo`,
+answer carrying the readback (section 7.5). Whether asked or applied at
+once, each disturbed device is sent a `notice` of kind `settingChanged`: who, `change`, `secondsAgo`,
 the slices of its it reached (`slices`), `takeBack` false, and a
 `reason` such as "iPhone changed Attenuator, ADC 1 from 0 dB to 20 dB."
 followed, where a slice moved, closed or pauses, by "Your slice B moved
 to another receiver.", "Your slice B closed: no receiver was free." or
 "Your slice B pauses while the radio transmits.". A new write from the
 requester to the same thing cancels its open question. A window without
-`sessionHolderVersion` 1 is never asked: its change is refused "This
-change would affect <names>. Update NereusSDR to confirm changes that
-affect other devices.".
+`sessionHolderVersion` 1 is never asked: its change on a row that asks
+first is refused "This change would affect <names>. Update NereusSDR to
+confirm changes that affect other devices.", naming the connected devices
+it would disturb.
 
 **The receive antenna stays put.** Band tracking re-applies a band's
 receive antenna when a slice crosses into it. While another device has a
@@ -5946,10 +5967,11 @@ same on every machine.
 | `grace-expired` | Another device drops; after its 180 s its slice closes; it signs in again and `graceEnded` follows its `snapshot.complete`, `secondsAgo` from when its time ran out |
 | `older-window-taken-over` | A window without the feature holds the second receiver; this device takes it: the window's session ends `takenOver`, not retryable. Runs on the station alone |
 | `older-window-no-slice` | The slice cap full, a window without the feature signs in: `session.end` "All the radio's slices are in use. Try again when another device closes one.", retryable. Runs on the station alone |
-| `shared-setting-confirm` | iPhone app plan Task 75: another device's slice on the ADC this device's preamp feeds: the `stepAtt` write is answered "Waiting for you to confirm." with the Core's value, then a `confirm.request` `sharedSetting` with `change` "Preamp, ADC 1", "Off", "On" and `affected` naming the other device (`state` `listening`) and its slice's `mode`, `adc`, `streamIndex` and effect `changes`; `confirm.proceed` carries the readback (`objectKey`, `preampMode`), the other device is told (`notice` `settingChanged` with who, `change` and `secondsAgo`, no Take it back) and sent the `delta` |
+| `shared-setting-confirm` | iPhone app plan Task 75, ruling 7.1a: another device's slice on the HL2's one ADC, which the receive antenna relay feeds (a change that asks first): the `alexAntennas` `useTxAntennaForRx` write is answered "Waiting for you to confirm." with the Core's value, then a `confirm.request` `sharedSetting` with `change` "Receive on the transmit antenna", "Off", "On" and `affected` naming the other device (`state` `listening`) and its slice's `mode`, `adc`, `streamIndex` and effect `changes`; `confirm.proceed` carries the readback (`objectKey`, `useTxAntennaForRx`), the other device is told (`notice` `settingChanged` with who, `change` and `secondsAgo`, no Take it back) and sent the `delta` |
+| `shared-setting-notice` | Ruling 7.1a: the same two devices; this device's preamp (a change that applies at once): the `stepAtt` write is taken at once (`property.result` accepted, `preampMode` 1), nobody is asked, and the other device is told (`notice` `settingChanged`, "Preamp, ADC 1", "Off", "On") and sent the `delta`. Runs on the station alone |
 | `confirm-grew` | The same question; before it is answered the other device opens a second slice on the ADC: `confirm.proceed` is answered "Waiting for you to confirm." with `phase` `needsConfirmation` and a new `confirm.request` naming both its slices, nothing applied; `confirm.cancel` of the new one. Runs on the station alone |
-| `confirm-target-changed` | The same question; the other device changes the same preamp (asked, it goes ahead, this device is told `settingChanged`); this device's `confirm.proceed` is refused "That setting changed since you asked. Make the change again.", nothing more applied. Runs on the station alone |
-| `older-window-shared-setting` | A window without the feature changes the preamp while a device with the feature listens on the ADC: refused "This change would affect Other device 1. Update NereusSDR to confirm changes that affect other devices.", nothing applied, never asked. Runs on the station alone |
+| `confirm-target-changed` | The same question; the other device makes the same receive antenna change (asked, it goes ahead, this device is told `settingChanged`); this device's `confirm.proceed` is refused "That setting changed since you asked. Make the change again.", nothing more applied. Runs on the station alone |
+| `older-window-shared-setting` | A window without the feature makes the same receive antenna change while a device with the feature listens on the ADC: refused "This change would affect Other device 1. Update NereusSDR to confirm changes that affect other devices.", nothing applied, never asked. Runs on the station alone |
 | `antenna-kept` | An ANAN-G2 with ANT2 on 40 m and ANT3 on 80 m (`alexRxAntennas`); the other device's slice listens on the ADC on another receiver; this device tunes from 20 m to 40 m: the tuning goes ahead and this device is told `antennaKept`, "The antenna stays on ANT1 while Tablet B listens on it.", no `by` keys; the other device leaves, its slice closes, and this device's next crossing (to 80 m) switches the antenna (its slice's `rxAntenna` becomes ANT3), with no notice. Runs on the station alone |
 | `verbs-session-leave` | `session.leave` with an argument is refused, "The request to leave the Core was not understood."; without, it is accepted and the station closes the connection with no `session.end`. Runs on the station alone |
 | `heartbeat-answered`, `heartbeat-missed` | The heartbeat, above |

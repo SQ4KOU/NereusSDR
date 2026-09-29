@@ -401,9 +401,9 @@ private slots:
         QTRY_VERIFY(!ofType(appB->received(), QStringLiteral("notice")).isEmpty());
     }
 
-    // A shared setting asks with one dialog shape: Cancel sends
-    // confirm.cancel and changes nothing; Confirm sends confirm.proceed and
-    // the change lands.
+    // A shared setting that asks does so with one dialog shape: Cancel
+    // sends confirm.cancel and changes nothing; Confirm sends
+    // confirm.proceed and the change lands.
     void theSharedSettingQuestionCancelsOrConfirms()
     {
         Core core;
@@ -424,13 +424,24 @@ private slots:
         core.model->sliceById(bSlice)->setFrequency(14074000.0);
 
         MultiDeviceController controller(&w.client, &w.host);
+        // JJ's ruling 7.1a (2026-09-28): the attenuator applies at once and
+        // tells, with no dialog; diversity asks.
         StepAttenuatorFacade* facade = w.remote.stepAttFacade();
         QVERIFY(facade != nullptr);
         QTRY_VERIFY(w.client.mirroredObject("stepAtt") != nullptr);
         facade->setAttenuationDb(20);
+        QTRY_COMPARE(core.model->stepAttFacade()->attenuationDb(), 20);
+        QTRY_VERIFY(!ofType(appB->received(), QStringLiteral("notice")).isEmpty());
+        QVERIFY(!w.client.remoteDevices()->question().has_value());
+        const qsizetype toldBefore = ofType(appB->received(), QStringLiteral("notice")).size();
+
+        const int own = core.model->sliceOwnership()->ownedBy(w.key->fingerprint()).first();
+        QTRY_VERIFY(w.remote.sliceById(own) != nullptr);
+        SliceModel* mine = w.remote.sliceById(own);
+        mine->setDiversityGainDb(6.0);
         auto* ask = openDialogOf<ConfirmChangeDialog>(controller);
         QVERIFY(ask != nullptr);
-        QVERIFY2(ask->changeLabel()->text().contains(QStringLiteral("20 dB")),
+        QVERIFY2(ask->changeLabel()->text().contains(QStringLiteral("6 dB")),
                  qPrintable(ask->changeLabel()->text()));
         QVERIFY2(ask->affectedLabel()->text().contains(QStringLiteral("iPad")),
                  qPrintable(ask->affectedLabel()->text()));
@@ -438,14 +449,16 @@ private slots:
         QTest::mouseClick(ask->cancelButton(), Qt::LeftButton);
         QTRY_VERIFY(!w.client.remoteDevices()->question().has_value());
         QTest::qWait(50);
-        QCOMPARE(core.model->stepAttFacade()->attenuationDb(), 0);
+        QCOMPARE(core.model->sliceById(own)->diversityGainDb(), 0.0);
 
-        facade->setAttenuationDb(20);
+        mine->setDiversityGainDb(0.0);
+        QTest::qWait(50);
+        mine->setDiversityGainDb(6.0);
         auto* again = openDialogOf<ConfirmChangeDialog>(controller);
         QVERIFY(again != nullptr);
         QTest::mouseClick(again->confirmButton(), Qt::LeftButton);
-        QTRY_COMPARE(core.model->stepAttFacade()->attenuationDb(), 20);
-        QTRY_VERIFY(!ofType(appB->received(), QStringLiteral("notice")).isEmpty());
+        QTRY_COMPARE(core.model->sliceById(own)->diversityGainDb(), 6.0);
+        QTRY_VERIFY(ofType(appB->received(), QStringLiteral("notice")).size() > toldBefore);
     }
 
     // The chooser lists the receivers with their devices and slices, one
