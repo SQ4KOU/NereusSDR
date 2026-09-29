@@ -904,7 +904,7 @@ change shows as surface drift and as a change to this table.
 | `txReadingsVersion` | 3 |
 | `mediaTunnelVersion` | 1 |
 | `mediaRelayRoutingVersion` | 1 |
-| `settingsHygieneVersion` | 1 |
+| `settingsHygieneVersion` | 2 |
 | `settingsBackupVersion` | 1 |
 | `remoteIqVersion` | 1 |
 | `txModMonitorVersion` | 1 |
@@ -1289,8 +1289,16 @@ When a feature is off, its version is 0:
   256, 256, 1024 and 64 UTF-8 bytes respectively. A malformed response
   is unavailable rather than a valid empty issue list. A window built
   against an older Core disables these controls with a plain reason.
-  Remote Reset to Defaults remains disabled until its operator-facing
-  behavior is settled; version 1 does not accept a reset command.
+  Version 2 (G-38, JJ's ruling 2026-09-28) adds `station.repairSettings`
+  with the same `mac` argument and the same result values: it runs the
+  repair a local window's Repair Invalid Settings runs (out-of-range
+  values clamped to the board, settings for hardware the board does not
+  have removed, then re-validated). Like Forget it requires a paired-device
+  key sign-in and is refused on the air. A Core sends 2 only to a peer that
+  declared `settingsHygiene` 2 and 1 to a peer that declared 1; a peer
+  that declared 1 is refused `station.repairSettings`. A window on a Core
+  at version 1 keeps Repair Invalid Settings disabled with "Repair invalid
+  settings is not available on this Core. Updating the Core may help.".
 - `setupDescriptionVersion` 3: the `setupDescription` hello declaration is
   negotiated at minor 11 and capped at 3. A peer declaring 1 or 2 retains
   its earlier projected Setup description, including an empty Diagnostics
@@ -1299,8 +1307,10 @@ When a feature is off, its version is 0:
   panel requires the separate `settingsHygiene:1` hello declaration and
   `settingsHygieneVersion:1` capability. Its Re-validate and Forget actions
   use only the existing `station.validateSettings` and
-  `station.forgetSettings` commands with the current canonical MAC. Reset is
-  visibly disabled, with no reset verb. The panel's result, lifetime,
+  `station.forgetSettings` commands with the current canonical MAC. Its
+  Repair Invalid Settings action (formerly a disabled Reset to Defaults)
+  carries its own gate, `settingsHygieneVersion:2`, and uses
+  `station.repairSettings`; below that gate it is disabled with its reason. The panel's result, lifetime,
   confirmation and refusal rules are in the Setup-description contract.
 - `settingsBackupVersion`: optional minor-11 capability, 1 only for an
   authenticated enrolled-device-key peer that declared `settingsBackup` 1
@@ -4336,6 +4346,7 @@ refused.
 | `station.forgetRadio` | `mac` utf8 | `stationRadiosVersion` | 1 | 11 |
 | `station.validateSettings` | `mac` utf8 | `settingsHygieneVersion` | 1 | 11 |
 | `station.forgetSettings` | `mac` utf8 | `settingsHygieneVersion` | 1 | 11 |
+| `station.repairSettings` | `mac` utf8 | `settingsHygieneVersion` | 2 | 11 |
 | `freedv.setMessage` | `text` utf8 | `stationFreedvVersion` | 1 | 11 |
 | `freedv.sendQsy` | `callsign` utf8, `frequencyHz` i64 | `stationFreedvVersion` | 1 | 11 |
 | `freedv.setHidden` | `on` bool | `stationFreedvVersion` | 1 | 11 |

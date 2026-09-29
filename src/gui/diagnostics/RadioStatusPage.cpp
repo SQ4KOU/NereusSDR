@@ -625,8 +625,8 @@ void RadioStatusPage::buildHygieneCard(QFrame* card)
     auto* btnRow = new QHBoxLayout;
     btnRow->setSpacing(4);
 
-    m_resetBtn = new QPushButton(QStringLiteral("Reset to defaults"), card);
-    m_resetBtn->setStyleSheet(QStringLiteral(
+    m_repairBtn = new QPushButton(QStringLiteral("Repair invalid settings"), card);
+    m_repairBtn->setStyleSheet(QStringLiteral(
         "QPushButton { background: %1; border: 1px solid %2; border-radius: 3px;"
         " color: %3; font-size: 9px; padding: 2px 6px; }"
         "QPushButton:hover { background: %4; }"
@@ -634,7 +634,7 @@ void RadioStatusPage::buildHygieneCard(QFrame* card)
           QLatin1String(Style::kAmberBorder),
           QLatin1String(Style::kAmberText),
           QLatin1String(Style::kButtonHover)));
-    btnRow->addWidget(m_resetBtn);
+    btnRow->addWidget(m_repairBtn);
 
     m_forgetBtn = new QPushButton(QStringLiteral("Forget this radio"), card);
     m_forgetBtn->setStyleSheet(QStringLiteral(
@@ -653,11 +653,13 @@ void RadioStatusPage::buildHygieneCard(QFrame* card)
 
     // Wire buttons
     if (m_model) {
-        connect(m_resetBtn, &QPushButton::clicked, this, [this]() {
+        connect(m_repairBtn, &QPushButton::clicked, this, [this]() {
             const QString mac = m_model->currentRadioMac();
             auto reply = QMessageBox::warning(this,
-                QStringLiteral("Reset settings"),
-                QStringLiteral("Reset all settings for this radio to safe defaults?"),
+                QStringLiteral("Repair settings"),
+                QStringLiteral("Repair the settings that are invalid for this radio? Values "
+                               "outside its range are brought back into range, and settings "
+                               "for hardware it does not have are removed."),
                 QMessageBox::Ok | QMessageBox::Cancel, QMessageBox::Cancel);
             if (reply == QMessageBox::Ok) {
                 if (mac.isEmpty() || mac != m_model->currentRadioMac()) { return; }
@@ -666,6 +668,10 @@ void RadioStatusPage::buildHygieneCard(QFrame* card)
                 if (m_model->ownsLocalDsp()) {
                     m_model->settingsHygiene().resetSettingsToDefaults(
                         mac, m_model->boardCapabilities());
+                } else if (IStationLink* link = m_model->stationLink();
+                           link && link->settingsRepairAvailable()) {
+                    // G-38: the same repair, run on the Core.
+                    link->requestSettingsHygiene("station.repairSettings", mac);
                 }
             }
         });
@@ -947,9 +953,12 @@ void RadioStatusPage::setStationSettingsAvailable(bool available, const QString&
     gateStationControls({m_forgetBtn}, available && hygiene && paired,
         !hygiene ? IStationLink::settingsHygieneUnavailableReason() : paired ? reason
             : QStringLiteral("Pair this computer with the Core to forget its radio settings."));
-    const bool localReset = !m_model || m_model->ownsLocalDsp();
-    gateStationControls({m_resetBtn}, available && localReset,
-        localReset ? reason : QStringLiteral("Reset to defaults is not available on this Core."));
+    // G-38: Repair runs on the Core from a remote window, with Forget's gates.
+    const bool repair = !m_model || m_model->ownsLocalDsp()
+        || (link && link->settingsRepairAvailable());
+    gateStationControls({m_repairBtn}, available && repair && paired,
+        !repair ? IStationLink::settingsRepairUnavailableReason() : paired ? reason
+            : QStringLiteral("Pair this computer with the Core to repair its radio settings."));
 }
 
 } // namespace NereusSDR

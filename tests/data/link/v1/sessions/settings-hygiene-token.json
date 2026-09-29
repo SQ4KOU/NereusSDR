@@ -43,7 +43,7 @@
                 "peer": "$string",
                 "majors": "$majors",
                 "features": {
-                    "settingsHygiene": 1
+                    "settingsHygiene": 2
                 }
             }
         },
@@ -456,7 +456,7 @@
                         "kind": "i64",
                         "name": "settingsHygieneVersion",
                         "ordinal": 0,
-                        "value": 1
+                        "value": 2
                     },
                     {
                         "kind": "i64",
@@ -785,6 +785,37 @@
                 "reason": "Change the Core's radio from a paired device.",
                 "type": "command.result",
                 "verb": "station.forgetSettings"
+            }
+        },
+        {
+            "advanceMs": 50
+        },
+        {
+            "from": "client",
+            "role": "scripted",
+            "message": {
+                "type": "command.invoke",
+                "verb": "station.repairSettings",
+                "id": 2702,
+                "args": [
+                    {
+                        "ordinal": 0,
+                        "name": "mac",
+                        "kind": "utf8",
+                        "value": "AA:BB:CC:DD:EE:01"
+                    }
+                ]
+            }
+        },
+        {
+            "from": "station",
+            "message": {
+                "accepted": false,
+                "affected": [],
+                "id": 2702,
+                "reason": "Change the Core's radio from a paired device.",
+                "type": "command.result",
+                "verb": "station.repairSettings"
             }
         },
         {

@@ -125,7 +125,7 @@ private:
 
     // ── Settings hygiene card ─────────────────────────────────────────────
     QListWidget*  m_issueList{nullptr};
-    QPushButton*  m_resetBtn{nullptr};
+    QPushButton*  m_repairBtn{nullptr};
     QPushButton*  m_forgetBtn{nullptr};
 
     // ── Timers ────────────────────────────────────────────────────────────

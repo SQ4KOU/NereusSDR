@@ -557,6 +557,11 @@ public:
     static QString settingsHygieneUnavailableReason()
     { return QStringLiteral("This Core does not offer Settings Validation to this app. Updating the Core may help."); }
     virtual bool settingsHygieneAvailable() const { return false; }
+    /// G-38: Repair invalid settings (station.repairSettings) needs
+    /// settingsHygieneVersion 2; an older Core keeps the button disabled.
+    static QString settingsRepairUnavailableReason()
+    { return QStringLiteral("Repair invalid settings is not available on this Core. Updating the Core may help."); }
+    virtual bool settingsRepairAvailable() const { return false; }
     virtual CommandOutcome requestSettingsHygiene(const QByteArray& /*verb*/, const QString& /*mac*/)
     { return {false, settingsHygieneUnavailableReason()}; }
     /// Export only. Connect to RadioModel::stationSettingsBackupExportFinished

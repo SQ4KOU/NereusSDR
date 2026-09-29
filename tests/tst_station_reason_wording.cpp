@@ -1481,6 +1481,9 @@ const QList<AppSideReason>& appSideReasons()
          "a remote window's own reason when its Core cannot take the request"},
         {"src/core/session/IStationLink.h", "settingsHygieneUnavailableReason",
          "a remote window's own fallback when its Core cannot validate settings"},
+        // G-38: Repair invalid settings on a Core before settingsHygieneVersion 2.
+        {"src/core/session/IStationLink.h", "settingsRepairUnavailableReason",
+         "a remote window's own reason when its Core cannot repair settings"},
         {"src/core/session/IStationLink.h", "modMonitorUnavailableReason",
          "a remote window's own fallback when its Core cannot send modulation readings"},
         {"src/core/SettingsHygiene.h", "remoteUnavailableReason",

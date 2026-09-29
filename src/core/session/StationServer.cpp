@@ -4326,9 +4326,11 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
             }
         }
         if ((message.commandVerb == "station.validateSettings"
-             || message.commandVerb == "station.forgetSettings")
+             || message.commandVerb == "station.forgetSettings"
+             || message.commandVerb == "station.repairSettings")
             && (it->agreedMinor < kRadioIdentitySessionProtocolMinor
-                || !peerDeclares(transport, QByteArrayLiteral("settingsHygiene"), 1))) {
+                || !peerDeclares(transport, QByteArrayLiteral("settingsHygiene"),
+                                 message.commandVerb == "station.repairSettings" ? 2 : 1))) {
             send(transport, SessionMessages::commandResult(
                 message.commandVerb, message.commandId, false,
                 QStringLiteral("Update this app to use Settings Validation on this Core."), {}));
@@ -4388,7 +4390,8 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
                 StationRadios::pairedDeviceReason(), {}));
             break;
         }
-        if (message.commandVerb == "station.forgetSettings"
+        if ((message.commandVerb == "station.forgetSettings"
+             || message.commandVerb == "station.repairSettings")
             && !peerSeesPairingCode(transport)) {
             send(transport, SessionMessages::commandResult(
                 message.commandVerb, message.commandId, false,
@@ -9822,8 +9825,11 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             caps.recordStreamVersion = recordStreamVersion();
             // R-IOS-18 / R-R3-49 (parity Task 21): the Core's radio choice.
             caps.stationRadiosVersion = stationRadiosVersion();
-            caps.settingsHygieneVersion = peerDeclares(transport, QByteArrayLiteral("settingsHygiene"), 1)
-                && m_radioModel->role() == RadioModel::Role::Local ? 1 : 0;
+            // G-38: 2 adds station.repairSettings, for a peer that
+            // declared settingsHygiene 2; a peer that declared 1 keeps 1.
+            caps.settingsHygieneVersion = m_radioModel->role() != RadioModel::Role::Local ? 0
+                : peerDeclares(transport, QByteArrayLiteral("settingsHygiene"), 2) ? 2
+                : peerDeclares(transport, QByteArrayLiteral("settingsHygiene"), 1) ? 1 : 0;
             caps.settingsBackupVersion = peerSeesPairingCode(transport)
                 && peerDeclares(transport, QByteArrayLiteral("settingsBackup"), 1)
                 && m_radioModel->role() == RadioModel::Role::Local ? 1 : 0;

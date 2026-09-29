@@ -724,6 +724,9 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
          kRadioIdentitySessionProtocolMinor},
         {"station.forgetSettings", {arg("mac", kUtf8)}, "settingsHygieneVersion", 1,
          kRadioIdentitySessionProtocolMinor},
+        // G-38: Diagnostics' Repair invalid settings from a remote window.
+        {"station.repairSettings", {arg("mac", kUtf8)}, "settingsHygieneVersion", 2,
+         kRadioIdentitySessionProtocolMinor},
         // The Core's FreeDV Reporter (R-IOS-26, R-R3-49, iPhone plan Task
         // 22, parity Task 20).
         {"freedv.setMessage", {arg("text", kUtf8)}, "stationFreedvVersion", 1,
@@ -1235,7 +1238,8 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
                || invoke.commandVerb == "station.forgetRadio") {
         handleStationRadios(invoke);
     } else if (invoke.commandVerb == "station.validateSettings"
-               || invoke.commandVerb == "station.forgetSettings") {
+               || invoke.commandVerb == "station.forgetSettings"
+               || invoke.commandVerb == "station.repairSettings") {
         handleSettingsHygiene(invoke);
     } else if (invoke.commandVerb == "spots.connect" || invoke.commandVerb == "spots.disconnect"
                || invoke.commandVerb == "spots.sendCommand"
@@ -3745,6 +3749,10 @@ void SessionCommandDispatcher::handleSettingsHygiene(const SessionMessage& invok
     }
     if (invoke.commandVerb == "station.forgetSettings") {
         hygiene.forgetRadio(current);
+    } else if (invoke.commandVerb == "station.repairSettings") {
+        // G-38: the same repair a local window runs (Diagnostics' Repair
+        // invalid settings); it re-validates on its own.
+        hygiene.resetSettingsToDefaults(current, m_radioModel->boardCapabilities());
     } else {
         hygiene.validate(current, m_radioModel->boardCapabilities());
     }

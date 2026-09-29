@@ -383,7 +383,7 @@
         {
             "kind": "i64",
             "name": "settingsHygieneVersion",
-            "value": 1
+            "value": 2
         },
         {
             "kind": "i64",
@@ -1764,6 +1764,19 @@
             "capabilityVersion": 1,
             "minMinor": 11,
             "verb": "station.forgetSettings"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "mac",
+                    "optional": false
+                }
+            ],
+            "capability": "settingsHygieneVersion",
+            "capabilityVersion": 2,
+            "minMinor": 11,
+            "verb": "station.repairSettings"
         },
         {
             "arguments": [

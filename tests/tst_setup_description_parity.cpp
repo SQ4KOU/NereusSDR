@@ -629,7 +629,10 @@ private slots:
         }
         QCOMPARE(actions.at(2).toObject().value("confirmation").toObject()
                      .value("message"), QJsonValue("Forget all settings for this radio?"));
-        QVERIFY(!actions.at(1).toObject().value("enabled").toBool(true));
+        // G-38: Repair is enabled by its own gate, like Forget's rules.
+        QCOMPARE(actions.at(1).toObject().value("gate").toObject().value("min"), QJsonValue(2));
+        QCOMPARE(actions.at(1).toObject().value("paired"), QJsonValue(true));
+        QCOMPARE(actions.at(1).toObject().value("offAir"), QJsonValue(true));
     }
 
     void describedPaBypassMatchesG2eDesktopOnly()

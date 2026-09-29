@@ -1287,6 +1287,7 @@ public:
     /// least 1 on a ready session.
     bool stationRadiosAvailable() const override;
     bool settingsHygieneAvailable() const override;
+    bool settingsRepairAvailable() const override;
     bool settingsBackupExportAvailable() const override;
     CommandOutcome requestSettingsBackupExport() override;
     void cancelSettingsBackupExport(quint32 operationId = 0) override;

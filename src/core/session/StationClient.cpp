@@ -660,7 +660,8 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
     // window transmits through the Core (link section 18.6), so its hello
     // says so and the Core answers with txPermitted and remoteTxVersion.
     m_declaredFeatures.insert(QByteArrayLiteral("remoteTx"), 1);
-    m_declaredFeatures.insert(QByteArrayLiteral("settingsHygiene"), 1);
+    // G-38: 2 adds Repair invalid settings (station.repairSettings).
+    m_declaredFeatures.insert(QByteArrayLiteral("settingsHygiene"), 2);
     m_declaredFeatures.insert(QByteArrayLiteral("coreBuildInfo"), 1);
     m_declaredFeatures.insert(QByteArrayLiteral("settingsBackup"), 1);
     m_declaredFeatures.insert(QByteArrayLiteral("radioAntennaRows"), 1);
@@ -4909,6 +4910,11 @@ bool StationClient::settingsHygieneAvailable() const
         && m_capabilities.settingsHygieneVersion >= 1 && m_settingsSnapshotThisLink;
 }
 
+bool StationClient::settingsRepairAvailable() const
+{
+    return settingsHygieneAvailable() && m_capabilities.settingsHygieneVersion >= 2;
+}
+
 bool StationClient::settingsBackupExportAvailable() const
 {
     return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
@@ -5121,10 +5127,15 @@ StationClient::CommandOutcome StationClient::requestSettingsHygiene(
     if (target.isEmpty() || target != AppSettings::normalizedRadioMac(m_radioModel->currentRadioMac())) {
         return {false, QStringLiteral("No current radio matches this Settings Validation request.")};
     }
-    if (verb != "station.validateSettings" && verb != "station.forgetSettings") {
+    if (verb != "station.validateSettings" && verb != "station.forgetSettings"
+        && verb != "station.repairSettings") {
         return {false, QStringLiteral("This app does not know that Settings Validation request.")};
     }
-    if (verb == "station.forgetSettings" && !signedInWithDeviceKey()) {
+    if (verb == "station.repairSettings" && !settingsRepairAvailable()) {
+        return {false, settingsRepairUnavailableReason()};
+    }
+    if ((verb == "station.forgetSettings" || verb == "station.repairSettings")
+        && !signedInWithDeviceKey()) {
         return {false, StationRadios::pairedDeviceReason()};
     }
     if (verb != "station.validateSettings") {
@@ -6238,7 +6249,8 @@ void StationClient::handleCommandResult(const SessionMessage& message)
         return;
     }
     if (message.commandVerb == "station.validateSettings"
-        || message.commandVerb == "station.forgetSettings") {
+        || message.commandVerb == "station.forgetSettings"
+        || message.commandVerb == "station.repairSettings") {
         handleSettingsHygieneResult(message);
         return;
     }
