@@ -56,6 +56,9 @@
 //                                    reportRadioOffline(). AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Slice control plan Task 11 fix:
+//                                    txSliceCommands().
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -195,6 +198,8 @@ public:
     /// Every addSlice / addSliceOnPan command the Core received, as
     /// "<verb>:<pan>".
     QStringList addSliceCommands() const { return m_addSliceCommands; }
+    /// The slice id of every tx.setTxSlice command the Core received.
+    QList<int> txSliceCommands() const { return m_txSliceCommands; }
 
     // ---- The window ----
     MainWindow* window() const { return m_window.get(); }
@@ -230,6 +235,7 @@ private:
     bool m_holdNext = false;
     bool m_backendInstalled = false;
     QStringList m_addSliceCommands;
+    QList<int> m_txSliceCommands;
 };
 
 } // namespace NereusSDR::Test

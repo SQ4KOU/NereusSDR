@@ -14,6 +14,10 @@
 //                                    settings backend is installed and at
 //                                    each admission.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Slice control plan Task 11 fix: records
+//                                    the tx.setTxSlice commands the Core
+//                                    received.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "RemoteWindowHarness.h"
@@ -273,6 +277,14 @@ void RemoteWindowHarness::recordInbound(const QByteArray& wire)
     SessionMessage message;
     if (!SessionMessages::decode(wire, &message)
         || message.kind != SessionMessageKind::CommandInvoke) {
+        return;
+    }
+    if (message.commandVerb == "tx.setTxSlice") {
+        for (const MirrorUpdate& argument : message.arguments) {
+            if (argument.name == "sliceId") {
+                m_txSliceCommands << argument.value.toInt();
+            }
+        }
         return;
     }
     if (message.commandVerb != "addSlice" && message.commandVerb != "addSliceOnPan") {

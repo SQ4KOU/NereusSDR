@@ -63,6 +63,11 @@
 //                                    no sliceAccessVersion sends no slice
 //                                    access request and tunes as before.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Slice control plan Task 11 fix: the
+//                                    flag's TX button moves transmit on the
+//                                    Core (tx.setTxSlice) with the letter
+//                                    row's reasons.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -119,6 +124,8 @@
 #include "gui/TitleBar.h"
 #include "gui/applets/RadeApplet.h"
 #include "gui/applets/RxApplet.h"
+#include "core/TxSliceArbiter.h"
+#include "core/safety/TransmitHolder.h"
 #include "gui/setup/DeviceCard.h"
 #include "gui/setup/GeneralOptionsPage.h"
 #include "core/IoBoardHl2.h"
@@ -1667,6 +1674,77 @@ private slots:
         QApplication::sendEvent(flag, &wheel);
         QTRY_VERIFY(coreSlice->frequency() != before);
         QVERIFY(!windowModel->sliceById(0)->isReadOnlyListener());
+    }
+
+    // Slice control plan Task 11 fix: a remote window's flag TX button asks
+    // the Core with tx.setTxSlice exactly as the TX applet's letter row
+    // does, disabled with the same reason while the press cannot move
+    // transmit. Nothing keys: the Core has no radio.
+    void theFlagsTxButtonMovesTransmitLikeTheLetterRow()
+    {
+        RemoteWindowHarness::Options options;
+        options.stationSlices = 2;
+        RemoteWindowHarness h(options);
+        QVERIFY(h.start());
+        h.server().setRemoteTransmitAllowed(true);
+        StationClient* client = h.client();
+        QVERIFY(client);
+        client->setTokenSessionHolderForTest(QStringLiteral("token:1"));
+        h.startStartupConnection();
+        QTRY_VERIFY_WITH_TIMEOUT(client->stationLinkReady(), 10000);
+        QVERIFY(client->sessionHolderAvailable());
+        QVERIFY(client->remoteTransmitAvailable());
+        // The Core's radio is not on the air here, so it says transmit is
+        // permitted as a Core with its radio up would.
+        StationCapabilities granted = h.server().buildCapabilities();
+        granted.txPermitted = true;
+        h.pushCapabilities(granted);
+        QTRY_VERIFY(client->capabilities().txPermitted);
+        TxSliceArbiter* arbiter = h.station().txSliceArbiter();
+        QVERIFY(arbiter);
+
+        VfoWidget* flag = nullptr;
+        QTRY_VERIFY([&]() {
+            for (VfoWidget* candidate : h.window()->findChildren<VfoWidget*>()) {
+                if (candidate->sliceIndex() == 1) {
+                    flag = candidate;
+                    return true;
+                }
+            }
+            return false;
+        }());
+        auto* badge = flag->findChild<QPushButton*>(QStringLiteral("VfoTxBadge"));
+        QVERIFY(badge);
+        // The TX applet rebuilds its letters as the holder changes: find
+        // slice B's afresh each time.
+        const auto letterB = [&h]() {
+            return h.window()->findChild<QPushButton*>(QStringLiteral("TxSliceButtonB"));
+        };
+        QTRY_VERIFY(letterB() != nullptr);
+
+        // Not holding transmit: both are disabled with the same reason.
+        QVERIFY(!client->holdsTransmitHere());
+        QTRY_VERIFY(!badge->isEnabled());
+        QCOMPARE(badge->toolTip(), TxRefusals::notHolder().text);
+        QTRY_COMPARE(letterB()->toolTip(), badge->toolTip());
+
+        // Holding transmit (handed over on the Core; nothing keys): the
+        // flag's press sends the letter row's tx.setTxSlice, never a move
+        // on the window's own model.
+        TransmitHolder::Holder self;
+        self.deviceId = QByteArrayLiteral("token:1");
+        self.name = QStringLiteral("Bench window");
+        h.server().transmitHolder()->transferTo(self, QStringLiteral("test"));
+        QTRY_VERIFY(client->holdsTransmitHere());
+        QTRY_VERIFY(badge->isEnabled());
+        QTRY_VERIFY(letterB() && letterB()->isEnabled());
+        QCOMPARE(letterB()->toolTip(), QStringLiteral("Transmit on slice B"));
+        const int boundBefore = arbiter->txBoundSliceId();
+        QVERIFY(boundBefore != 1);
+        badge->click();
+        QTRY_COMPARE(h.txSliceCommands(), QList<int>({1}));
+        letterB()->click();
+        QTRY_COMPARE(h.txSliceCommands(), QList<int>({1, 1}));
     }
 };
 

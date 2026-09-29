@@ -63,6 +63,11 @@
 //                populatePanSlices takes the hosting actions, so a hosting
 //                window's empty pans get station-device slices. AI-assisted
 //                via Anthropic Claude Code.
+//   2026-09-29 - J.J. Boyd (KG4VCF). Slice control plan Task 11 fix:
+//                transmitSliceChoiceReason, requestTransmitSlice and
+//                refreshFlagTransmitGates, one path for the flag's TX button
+//                and the TX applet's letters. AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 
 //=================================================================
@@ -708,6 +713,19 @@ private slots:
     /// Desktop remote transmit (R-IOS-13): why this remote window may not
     /// transmit now, in the Core's words when the Core gave them.
     QString remoteTransmitReason() const;
+    /// Slice control plan Task 11 fix: why this window may not move
+    /// transmit to another slice now (empty when it may). One answer for
+    /// the flag's TX button and the TX applet's letters: a hosting window
+    /// must hold transmit; a remote window must hold it on the Core.
+    QString transmitSliceChoiceReason() const;
+    /// Moves transmit to slice `sliceId`: tx.setTxSlice from a remote
+    /// window, the arbiter here otherwise. Nothing while the reason above
+    /// is not empty.
+    void requestTransmitSlice(int sliceId);
+    /// Gives every flag's TX button the transmit permission and the reason
+    /// above.
+    void refreshFlagTransmitGates();
+    void applyFlagTransmitGate(VfoWidget* flag) const;
     /// Desktop remote transmit (R-R3-42): the TCI server forwards a
     /// program's transmit to the Core while the Core takes this window's
     /// keys, and not otherwise.

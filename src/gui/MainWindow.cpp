@@ -380,6 +380,10 @@
 //               controls (tx.setTxSlice from a remote window), and a hosting
 //               window's empty pans get station-device slices. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Slice control plan Task 11 fix: the flag's TX button moves
+//               transmit the way the TX applet's letters do (tx.setTxSlice
+//               from a remote window) with the same reasons. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -1857,20 +1861,17 @@ void MainWindow::refreshDesktopStationState()
             // transmit there (the arbiter drops MOX first, ruling 8.10).
             m_txApplet->setTransmitSliceChoices(
                 [this](int id) { return desktopSliceAllowed(id); },
-                [this](int id) {
-                    if (desktopOwnsTransmit() && m_radioModel) {
-                        m_radioModel->requestTxHandoffToSlice(id);
-                    }
-                },
-                [this]() {
-                    return desktopOwnsTransmit() ? QString() : TxRefusals::notHolder().text;
-                });
+                [this](int id) { requestTransmitSlice(id); },
+                [this]() { return transmitSliceChoiceReason(); });
         } else {
             m_txApplet->setDesktopKeyHandlers({}, {}, {}, {});
             m_txApplet->setTransmitSliceResolver({});
             m_txApplet->setTransmitSliceChoices({}, {}, {});
         }
     }
+    // Slice control plan Task 11 fix: the flags' TX buttons follow who
+    // holds transmit here, as the letters do.
+    refreshFlagTransmitGates();
     refreshActiveSlicePresentation();
     refreshContainerControls();
     for (SetupDialog* dialog : findChildren<SetupDialog*>()) {
@@ -2114,18 +2115,8 @@ void MainWindow::wireRemoteTransmitMeters()
                                                             : nullptr;
                 return !access || !access->entry(id).has_value() || access->controlledHere(id);
             },
-            [this](int id) {
-                if (m_stationClient) { m_stationClient->requestTxSlice(id); }
-            },
-            [this]() {
-                if (!m_stationClient) { return QString(); }
-                if (!m_stationClient->sessionHolderAvailable()
-                    || !m_stationClient->remoteTransmitAvailable()) {
-                    return tr("This Core does not offer moving transmit between slices to this app.");
-                }
-                return m_stationClient->holdsTransmitHere()
-                    ? QString() : TxRefusals::notHolder().text;
-            });
+            [this](int id) { requestTransmitSlice(id); },
+            [this]() { return transmitSliceChoiceReason(); });
         connect(state, &TransmitState::holderChanged, m_txApplet,
                 &TxApplet::refreshTransmitSliceChoices);
         connect(m_stationClient, &StationClient::handshakeComplete, m_txApplet,
@@ -3715,8 +3706,9 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
     // so its right-click antenna submenu builds AntennaPickerMenu with live
     // caps + alex + slice (instead of the stub ANT1/ANT2 list).
     newFlag->setRadioModel(m_radioModel);
-    newFlag->setTransmitPermitted(transmitControlsPermitted(),
-        tr("Remote transmit controls are not available from this Core yet."));
+    // Slice control plan Task 11 fix: the TX button also needs this
+    // window to be allowed to move transmit (transmitSliceChoiceReason).
+    applyFlagTransmitGate(newFlag);
     newFlag->setRxBypassPermitted(rxBypassPermitted(), rxBypassUnavailableReason());
     wireRadeFlagForTest(m_radioModel, newFlag, sliceIndex);
     if (TxSliceArbiter* arb = m_radioModel->txSliceArbiter()) {
@@ -3735,12 +3727,11 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
     }
 
     // --- Intent signals (Sub-Epic C T9 + Sub-Epic E T4 mirror) ---
+    // Slice control plan Task 11 fix: the TX applet's letters' path, so a
+    // remote window asks the Core (tx.setTxSlice) instead of moving its own
+    // model's arbiter, which binds nothing.
     connect(newFlag, &VfoWidget::txHandoffRequested, this,
-            [this](int idx) {
-        if (m_radioModel && m_radioModel->txSliceArbiter()) {
-            m_radioModel->requestTxHandoffToSlice(idx);
-        }
-    });
+            [this](int idx) { requestTransmitSlice(idx); });
     // Phase 3F Sub-Epic I closeout, defect G2: route to the slice's DDC
     // stream. This used to write SliceModel::setSampleRateHz, which stopped
     // reaching the wire once buildStreamConfigsForCodec began sourcing the
@@ -12626,8 +12617,7 @@ void MainWindow::wireSliceToSpectrum()
     // Phase 3F closeout — give Slice A's VfoWidget the RadioModel pointer so
     // contextMenuEvent builds AntennaPickerMenu instead of the stub fallback.
     vfo->setRadioModel(m_radioModel);
-    vfo->setTransmitPermitted(transmitControlsPermitted(),
-        tr("Remote transmit controls are not available from this Core yet."));
+    applyFlagTransmitGate(vfo);
     vfo->setRxBypassPermitted(rxBypassPermitted(), rxBypassUnavailableReason());
     connect(m_radioModel, &RadioModel::currentRadioChanged, vfo,
             [this, vfo]() {
@@ -13632,6 +13622,56 @@ QString MainWindow::remoteTransmitReason() const
     return tr("Remote transmit controls are not available from this Core yet.");
 }
 
+QString MainWindow::transmitSliceChoiceReason() const
+{
+    // Slice control plan Task 11 fix: the TX applet's letters and every
+    // flag's TX button give the same answer. A hosting window moves
+    // transmit while the station device holds it; a remote window asks the
+    // Core, which takes tx.setTxSlice only from its holder.
+    if (desktopHosting()) {
+        return desktopOwnsTransmit() ? QString() : TxRefusals::notHolder().text;
+    }
+    if (m_radioModel && !m_radioModel->ownsLocalDsp() && m_stationClient) {
+        if (!m_stationClient->sessionHolderAvailable()
+            || !m_stationClient->remoteTransmitAvailable()) {
+            return tr("This Core does not offer moving transmit between slices to this app.");
+        }
+        return m_stationClient->holdsTransmitHere() ? QString() : TxRefusals::notHolder().text;
+    }
+    return {};
+}
+
+void MainWindow::requestTransmitSlice(int sliceId)
+{
+    if (!m_radioModel || !transmitSliceChoiceReason().isEmpty()) {
+        return;
+    }
+    if (!m_radioModel->ownsLocalDsp()) {
+        if (m_stationClient) { m_stationClient->requestTxSlice(sliceId); }
+        return;
+    }
+    // The arbiter drops MOX before it moves transmit (ruling 8.10).
+    if (m_radioModel->txSliceArbiter()) {
+        m_radioModel->requestTxHandoffToSlice(sliceId);
+    }
+}
+
+void MainWindow::applyFlagTransmitGate(VfoWidget* flag) const
+{
+    if (!flag) { return; }
+    const bool transmit = transmitControlsPermitted();
+    const QString choice = transmitSliceChoiceReason();
+    flag->setTransmitPermitted(transmit && choice.isEmpty(),
+                               !transmit ? remoteTransmitReason() : choice);
+}
+
+void MainWindow::refreshFlagTransmitGates()
+{
+    for (VfoWidget* flag : m_vfoWidgetsBySlice) {
+        applyFlagTransmitGate(flag);
+    }
+}
+
 bool MainWindow::rxBypassPermitted() const
 {
     // Group B fix wave: a local window's BYPS writes this computer's
@@ -13815,7 +13855,7 @@ void MainWindow::applyRemoteRoleGating()
     const QString rxBypassReason = rxBypassUnavailableReason();
     for (VfoWidget* flag : m_vfoWidgetsBySlice) {
         if (flag) {
-            flag->setTransmitPermitted(transmitPermitted, transmitReason);
+            applyFlagTransmitGate(flag);
             flag->setRxBypassPermitted(rxBypass, rxBypassReason);
         }
     }
