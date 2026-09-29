@@ -30,6 +30,11 @@
 //                 requestRadioSampleRate); on an older Core, each of its
 //                 receivers, with the reason on the rate box. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Max RX (label and support info) shows the radio's
+//                 reported receiver count where it gave one
+//                 (BoardCapsTable::effectiveReceiverCount), the count the
+//                 stream pool uses. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -246,7 +251,11 @@ void RadioInfoTab::populate(const RadioInfo& info, const BoardCapabilities& caps
             ? QStringLiteral("Protocol 2")
             : QStringLiteral("Protocol 1"));
     m_adcCountLabel->setText(QString::number(caps.adcCount));
-    m_maxRxLabel->setText(QString::number(caps.maxReceivers));
+    // The radio's own receiver count where it reported one, the board row's
+    // otherwise: the same count the stream pool is sized from.
+    const int maxRx = BoardCapsTable::effectiveReceiverCount(
+        caps, info.protocol, info.reportedReceivers);
+    m_maxRxLabel->setText(QString::number(maxRx));
     m_firmwareLabel->setText(
         info.firmwareVersion > 0
             ? QString::number(info.firmwareVersion)
@@ -317,7 +326,7 @@ void RadioInfoTab::populate(const RadioInfo& info, const BoardCapabilities& caps
         .arg(m_boardLabel->text())
         .arg(m_protocolLabel->text())
         .arg(caps.adcCount)
-        .arg(caps.maxReceivers)
+        .arg(maxRx)
         .arg(m_firmwareLabel->text())
         .arg(m_macLabel->text())
         .arg(m_ipLabel->text())

@@ -615,6 +615,11 @@
 //                such wait and start none, and Stop All TX acts during one.
 //                NereusSDR-original. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - setActiveRxCountLive clamps to maxActiveRxCount, the
+//                radio's reported receiver count where it gave one (the
+//                stream pool's count, BoardCapsTable::
+//                effectiveReceiverCount). NereusSDR-original. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-29 - Stop All TX and the time-out also act while a release is
 //                still on the air (transmitReleaseInProgress: the TX
 //                channel's drain, the send ring's wait, mox_delay).
@@ -7669,6 +7674,16 @@ int RadioModel::receiverPoolCeiling(const RadioInfo& info, int poolStreams)
         return std::max(info.maxReceivers, poolStreams);
     }
     return info.maxReceivers;
+}
+
+int RadioModel::maxActiveRxCount() const
+{
+    if (!m_hardwareProfile.caps) {
+        return 1;
+    }
+    return BoardCapsTable::effectiveReceiverCount(*m_hardwareProfile.caps,
+                                                  m_lastRadioInfo.protocol,
+                                                  m_lastRadioInfo.reportedReceivers);
 }
 
 const BoardCapabilities& RadioModel::boardCapabilities() const
@@ -25055,8 +25070,8 @@ qint64 RadioModel::setActiveRxCountLive(int newCount)
         return -1;
     }
 
-    // Clamp to board capability.
-    const int maxRx = m_hardwareProfile.caps ? m_hardwareProfile.caps->maxReceivers : 1;
+    // Clamp to the radio's receiver count (its report, else the board row).
+    const int maxRx = maxActiveRxCount();
     const int clamped = qBound(1, newCount, maxRx);
     qCInfo(lcConnection) << "setActiveRxCountLive:" << m_connectionActiveRxCount
                          << "->" << clamped;

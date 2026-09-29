@@ -22,10 +22,21 @@
 // Modification history (NereusSDR):
 //   2026-09-29 - Written by J.J. Boyd (KG4VCF), with AI-assisted
 //                implementation via Anthropic Claude Code.
+//   2026-09-29 - The radio's receiver count readers: Max RX on the radio
+//                information tab (label and support text) and the live
+//                receiver count clamp read the same effective count as the
+//                stream pool, BoardCapsTable::effectiveReceiverCount. J.J.
+//                Boyd (KG4VCF), with AI-assisted implementation via
+//                Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
+#include <QApplication>
+#include <QClipboard>
+#include <QFormLayout>
 #include <QHostAddress>
+#include <QLabel>
+#include <QPushButton>
 #include <QRegularExpression>
 #include <QSignalSpy>
 
@@ -33,6 +44,7 @@
 #include "core/HpsdrModel.h"
 #include "core/RadioDiscovery.h"
 #include "core/ReceiverManager.h"
+#include "gui/setup/hardware/RadioInfoTab.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
@@ -95,6 +107,37 @@ int connectPool(RadioModel& model, const RadioInfo& info)
         }
     }
     return streams;
+}
+
+// The text beside "Max RX:" on the radio information tab.
+QString maxRxText(const RadioInfoTab& tab)
+{
+    for (const QFormLayout* form : tab.findChildren<QFormLayout*>()) {
+        for (int row = 0; row < form->rowCount(); ++row) {
+            const QLayoutItem* labelItem = form->itemAt(row, QFormLayout::LabelRole);
+            const QLayoutItem* fieldItem = form->itemAt(row, QFormLayout::FieldRole);
+            if (!labelItem || !fieldItem) { continue; }
+            const auto* label = qobject_cast<const QLabel*>(labelItem->widget());
+            const auto* field = qobject_cast<const QLabel*>(fieldItem->widget());
+            if (label && field && label->text() == QStringLiteral("Max RX:")) {
+                return field->text();
+            }
+        }
+    }
+    return {};
+}
+
+// The support text the Copy Support Info button puts on the clipboard.
+QString supportText(RadioInfoTab& tab)
+{
+    for (QPushButton* button : tab.findChildren<QPushButton*>()) {
+        if (button->text().contains(QStringLiteral("Support"), Qt::CaseInsensitive)) {
+            QGuiApplication::clipboard()->clear();
+            button->click();
+            return QGuiApplication::clipboard()->text();
+        }
+    }
+    return {};
 }
 
 } // namespace
@@ -253,6 +296,62 @@ private slots:
             QCOMPARE(connectPool(model, saved), 5);
             QCOMPARE(model.receiverManager()->receiverConfig(4).receiverIndex >= 0, true);
         }
+    }
+
+    // The one effective receiver count: min(table, reported) on Protocol 2,
+    // the table when the radio reports 0, and the table on Protocol 1.
+    void effective_receiver_count_is_the_one_helper()
+    {
+        const BoardCapabilities& g2 = BoardCapsTable::forBoard(HPSDRHW::Saturn);
+        QCOMPARE(g2.maxReceivers, 7);
+        QCOMPARE(BoardCapsTable::effectiveReceiverCount(g2, ProtocolVersion::Protocol2, 4), 4);
+        QCOMPARE(BoardCapsTable::effectiveReceiverCount(g2, ProtocolVersion::Protocol2, 0), 7);
+        QCOMPARE(BoardCapsTable::effectiveReceiverCount(g2, ProtocolVersion::Protocol2, 9), 7);
+        for (int reported : {0, 2, 4, 9}) {
+            QCOMPARE(BoardCapsTable::effectiveReceiverCount(g2, ProtocolVersion::Protocol1,
+                                                            reported),
+                     7);
+        }
+        // The stream pool never exceeds it.
+        for (const BoardCapabilities& caps : BoardCapsTable::all()) {
+            for (ProtocolVersion proto : {ProtocolVersion::Protocol1, ProtocolVersion::Protocol2}) {
+                for (int reported : {0, 1, 2, 4, 7, 9}) {
+                    QVERIFY(BoardCapsTable::userDdcCountFor(caps, proto, reported)
+                            <= BoardCapsTable::effectiveReceiverCount(caps, proto, reported));
+                }
+            }
+        }
+    }
+
+    // Max RX on the radio information tab shows the radio's count.
+    void radio_info_tab_max_rx_follows_the_report()
+    {
+        const BoardCapabilities& g2 = BoardCapsTable::forBoard(HPSDRHW::Saturn);
+        RadioInfoTab tab(nullptr);
+
+        tab.populate(parsedP2(HPSDRHW::Saturn, 4), g2);
+        QCOMPARE(maxRxText(tab), QStringLiteral("4"));
+        QVERIFY2(supportText(tab).contains(QStringLiteral("Max RX: 4\n")),
+                 qPrintable(supportText(tab)));
+
+        tab.populate(parsedP2(HPSDRHW::Saturn, 0), g2);
+        QCOMPARE(maxRxText(tab), QStringLiteral("7"));
+        QVERIFY2(supportText(tab).contains(QStringLiteral("Max RX: 7\n")),
+                 qPrintable(supportText(tab)));
+    }
+
+    // The live receiver count is clamped to the same count.
+    void live_receiver_count_clamp_follows_the_report()
+    {
+        RadioModel model;
+        model.setBoardForTest(HPSDRHW::Saturn);
+        QCOMPARE(model.maxActiveRxCount(), 7);
+
+        model.setLastRadioInfoForTest(parsedP2(HPSDRHW::Saturn, 4));
+        QCOMPARE(model.maxActiveRxCount(), 4);
+
+        model.setLastRadioInfoForTest(parsedP2(HPSDRHW::Saturn, 0));
+        QCOMPARE(model.maxActiveRxCount(), 7);
     }
 };
 

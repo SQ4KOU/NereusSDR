@@ -621,6 +621,18 @@ namespace BoardCapsTable {
     int userDdcCountFor(const BoardCapabilities& caps, ProtocolVersion protocol,
                         int reportedReceivers) noexcept;
 
+    // The radio's effective receiver count: the one number every reader of
+    // "how many receivers does this radio have" uses (Max RX on the radio
+    // information tab, the live receiver count clamp, and, through
+    // userDdcCountFor, the stream pool). On Protocol 2 a non-zero report
+    // (RadioInfo::reportedReceivers) caps the row's maxReceivers; 0 means no
+    // report and keeps the row. Protocol 1 keeps the row, as the stream pool
+    // does. The Protocol 2 wire enable seed does not read this: Thetis keeps
+    // the reported count for its radio list only (see
+    // P2RadioConnection::setActiveReceiverCount).
+    int effectiveReceiverCount(const BoardCapabilities& caps, ProtocolVersion protocol,
+                               int reportedReceivers) noexcept;
+
     // The sample rates the board offers over the protocol it is running
     // (plan Task 5, the operator's ruling of 2026-09-24, "follow thetis").
     // Thetis picks the list by protocol, not by board, and adds 384 kHz on

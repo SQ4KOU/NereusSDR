@@ -876,6 +876,11 @@ public:
     /// radio's default of 4) the pool's own size is the need.
     static int receiverPoolCeiling(const RadioInfo& info, int poolStreams);
 
+    /// The ceiling setActiveRxCountLive clamps a requested receiver count
+    /// to: BoardCapsTable::effectiveReceiverCount for the board profile and
+    /// the connected radio's report (1 before a board is known).
+    int maxActiveRxCount() const;
+
     /// Create a slice under the id the STATION chose rather than minting
     /// one locally. Role::Remote only.
     ///
