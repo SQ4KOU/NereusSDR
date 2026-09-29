@@ -9,13 +9,18 @@
 //
 // A real TxApplet on a RadioModel with no radio; the hosted cases run it
 // on a real Core (StationServer) with a second device signed in over a
-// loopback link. Nothing keys: MOX is only read.
+// loopback link. Nothing keys: MOX is only read, or set on a model with
+// no radio.
 //
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-09-29: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code. Slice control plan Task 11.
+//   2026-09-29: Task 11 fix: the transmit band holds while the Core
+//               transmits (Thetis's MOX gate on TXBand). The fake MOX here
+//               runs on a model with no radio, so nothing keys. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -226,6 +231,57 @@ private slots:
         model->sliceById(theirs)->setFrequency(21200000.0);
         QCOMPARE(applet.currentBand(), Band::Band40m);
         QCOMPARE(powerSlider(applet)->value(), 37);
+    }
+
+    // Thetis never changes the TX band while MOX is on (console.cs
+    // TXBand setter and SetTXBand, [2.10.3.6]MW0LGE): retuning the
+    // transmit slice while transmitting leaves the band, the RF power the
+    // slider writes and the Core's tune power where they were. Nothing
+    // re-evaluates on the unkey; the next retune carries the band.
+    void theBandHoldsWhileTransmitting()
+    {
+        RadioModel rm;
+        rm.setBoardForTest(HPSDRHW::HermesLite);
+        rm.setConnectionStateForTest(ConnectionState::Connected);
+        rm.configureStreamPool(4, 5, 192000);
+        const int a = rm.addSlice(QStringLiteral("pan-0"));
+        QVERIFY(a >= 0);
+        rm.sliceById(a)->setFrequency(7100000.0);
+        TransmitModel& tx = rm.transmitModel();
+        tx.setPowerForBand(Band::Band20m, 80);
+        tx.setPowerForBand(Band::Band40m, 37);
+        tx.setTunePowerForBand(Band::Band20m, 22);
+        tx.setTunePowerForBand(Band::Band40m, 11);
+        QVERIFY(rm.requestTxHandoffToSlice(a));
+        TxApplet applet(&rm);
+        QSlider* slider = powerSlider(applet);
+        QVERIFY(slider != nullptr);
+        QCOMPARE(applet.currentBand(), Band::Band40m);
+        QCOMPARE(slider->value(), 37);
+        QCOMPARE(tx.tunePowerForTxBand(), 11);
+
+        MoxController* mox = rm.moxController();
+        QVERIFY(mox != nullptr);
+        mox->setMox(true);
+        QTRY_VERIFY(rm.isTransmitting());
+
+        rm.sliceById(a)->setFrequency(14100000.0);
+        QCOMPARE(tx.tunePowerForTxBand(), 11);
+        QCOMPARE(applet.currentBand(), Band::Band40m);
+        QCOMPARE(slider->value(), 37);
+        slider->setValue(41);
+        QCOMPARE(tx.powerForBand(Band::Band40m), 41);
+        QCOMPARE(tx.powerForBand(Band::Band20m), 80);
+
+        mox->setMox(false);
+        QTRY_VERIFY(!rm.isTransmitting());
+        QCOMPARE(applet.currentBand(), Band::Band40m);
+        QCOMPARE(tx.tunePowerForTxBand(), 11);
+
+        rm.sliceById(a)->setFrequency(14150000.0);
+        QCOMPARE(applet.currentBand(), Band::Band20m);
+        QCOMPARE(slider->value(), 80);
+        QCOMPARE(tx.tunePowerForTxBand(), 22);
     }
 };
 

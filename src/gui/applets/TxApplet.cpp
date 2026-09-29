@@ -155,6 +155,10 @@
 //                followTransmitSlice), never a listened slice; the
 //                transmit-slice letter row. AI-assisted via Anthropic Claude
 //                Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Slice control plan Task 11 fix: ports
+//                Thetis's MOX gate on the TX band: the band (and the power
+//                the slider recalls and writes) holds while transmitting.
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -2230,6 +2234,9 @@ Band TxApplet::txBand() const
     if (!m_model) { return m_currentBand; }
     SliceModel* slice = transmitSlice();
     if (!slice) { return m_currentBand; }
+    // Slice control plan Task 11 fix: the band followTransmitSlice holds
+    // (Thetis's _tx_band), which a retune under MOX does not change.
+    if (m_txBandKnown && slice == m_followedTxSlice.data()) { return m_txBand; }
     return bandFromFrequency(slice->frequency());
 }
 
@@ -2370,12 +2377,19 @@ QString TxApplet::tooltipForMode(DSPMode mode)
 //     PWR = power_by_band[(int)value];
 //     TunePWR = tunePower_by_band[(int)value]; //MW0LGE_22b
 // setCurrentBand is that recall (tune power by m_currentBand, RF power by
-// txBand()). The setter's MOX gate
-// From Thetis console.cs:17517 [v2.10.3.15]
+// txBand()). Slice control plan Task 11 fix: the setter's MOX gate is
+// ported to the retune path. While this window's model says the radio
+// transmits (MOX, TUNE or two-tone; a remote window's is the Core's), a
+// retune of the transmit slice leaves m_txBand and the recall alone:
+// From Thetis console.cs:17517-17518 [v2.10.3.15]
 //     //[2.10.3.6]MW0LGE no band change on TX fix
 //     if (MOX) return;
-// is not ported here: the
-// applet never held that gate, and a keyed move unkeys first (ruling 8.10).
+// From Thetis console.cs:6512-6513 [v2.10.3.15]
+//     //[2.10.3.6]MW0LGE no band change on TX fix
+//     if (MOX) return;
+// Nothing re-evaluates on the unkey; the next retune carries the band, as
+// in Thetis. A move of the binding is not gated: a keyed move unkeys
+// first (ruling 8.10).
 void TxApplet::followTransmitSlice()
 {
     SliceModel* slice = transmitSlice();
@@ -2387,7 +2401,12 @@ void TxApplet::followTransmitSlice()
     m_followedTxSlice = slice;
     refreshTxFilterStatus();
     if (!slice) {
+        m_txBandKnown = false;
         return;
+    }
+    if (moved || !m_txBandKnown) {
+        m_txBand = bandFromFrequency(slice->frequency());
+        m_txBandKnown = true;
     }
     m_moxModeConnection = connect(slice, &SliceModel::dspModeChanged,
                                   this, [this](DSPMode mode) {
@@ -2396,7 +2415,10 @@ void TxApplet::followTransmitSlice()
     });
     m_txFreqConnection = connect(slice, &SliceModel::frequencyChanged,
                                  this, [this](double hz) {
+        if (m_model && m_model->isTransmitting()) { return; }
         const Band band = bandFromFrequency(hz);
+        m_txBand = band;
+        m_txBandKnown = true;
         if (band != m_currentBand) { setCurrentBand(band); }
     });
     onMoxModeChanged(slice->dspMode());

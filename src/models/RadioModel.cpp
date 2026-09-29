@@ -595,6 +595,10 @@
 //                the AF level, and an AF change republishes it; the mixer
 //                applies AF (JJ's ruling). NereusSDR-original. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Slice control plan Task 11 fix: the transmit band's tune
+//                power does not change while transmitting (Thetis's MOX
+//                gate on TXBand, console.cs [v2.10.3.15]). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -11856,7 +11860,21 @@ int RadioModel::addSliceImpl(int requestedId, const QString& initialPanId,
         if (slice == txBoundSlice()) {
             pushTxFrequencyFromTxSlice();
             // R-R3-49 (parity Task 2): the transmit band's tune power.
-            refreshTransmitTuneBand();
+            // Slice control plan Task 11 fix: the band holds while the
+            // Core transmits (MOX, TUNE or two-tone), as Thetis's TXBand
+            // setter and SetTXBand refuse a change under MOX:
+            // From Thetis console.cs:17517-17518 [v2.10.3.15]
+            //     //[2.10.3.6]MW0LGE no band change on TX fix
+            //     if (MOX) return;
+            // From Thetis console.cs:6512-6513 [v2.10.3.15]
+            //     //[2.10.3.6]MW0LGE no band change on TX fix
+            //     if (MOX) return;
+            // Nothing re-evaluates on the unkey; the next retune carries
+            // the band, as in Thetis. A move of the binding is not gated:
+            // the arbiter unkeys before it moves transmit (ruling 8.10).
+            if (!isTransmitting()) {
+                refreshTransmitTuneBand();
+            }
         }
     });
     connect(slice, &SliceModel::frequencyChanged, this, [this, slice](double freq) {

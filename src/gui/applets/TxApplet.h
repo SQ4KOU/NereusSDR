@@ -137,6 +137,9 @@
 //                one) and the transmit-slice letter row
 //                (setTransmitSliceChoices). AI-assisted via Anthropic Claude
 //                Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Slice control plan Task 11 fix: holds
+//                the transmit slice's band while transmitting (m_txBand).
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -560,6 +563,10 @@ private:
     QMetaObject::Connection m_moxModeConnection;
     QMetaObject::Connection m_txFreqConnection;
     QPointer<SliceModel> m_followedTxSlice;
+    // Slice control plan Task 11 fix: the followed transmit slice's band,
+    // held while transmitting (Thetis's _tx_band under its MOX gate).
+    Band m_txBand{Band::Band20m};
+    bool m_txBandKnown{false};
 
     // Canonical TX band derived from the transmit slice's frequency.  This
     // is the band the radio actually transmits on (RadioModel.cpp:903-905
