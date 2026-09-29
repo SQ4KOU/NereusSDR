@@ -54,6 +54,11 @@
 //                 the slice's own ADC (the other ADC's own value for a slice
 //                 on it), in a local and a remote window.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - R-R3-46 / R-R3-11: the ATT / S-ATT / A-ATT label and the
+//                 control shown follow the slice's own ADC's enable and
+//                 auto-attenuate; the preamp choice (slice A's input's) is
+//                 disabled with the reason for a slice on the other ADC.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -298,7 +303,9 @@ void RxApplet::wireRemoteStepAtt()
     // The Core's values.
     for (auto signal : {&StepAttenuatorFacade::enabledChanged,
                         &StepAttenuatorFacade::autoAttEnabledChanged,
-                        &StepAttenuatorFacade::rx1PreampChanged}) {
+                        &StepAttenuatorFacade::rx1PreampChanged,
+                        &StepAttenuatorFacade::rx2StepAttEnabledChanged,
+                        &StepAttenuatorFacade::rx2AutoAttEnabledChanged}) {
         connect(stepAtt, signal, this, [this](bool) { showRemoteStepAttValues(); });
     }
     for (auto signal : {&StepAttenuatorFacade::attenuationDbChanged,
@@ -341,11 +348,52 @@ void RxApplet::showRemoteStepAttValues()
         QSignalBlocker blk(m_rx1PreampToggle);
         m_rx1PreampToggle->setChecked(stepAtt->rx1Preamp());
     }
-    if (m_attLabel) {
-        m_attLabel->setText(remoteAttLabelText(stepAtt->enabled(), stepAtt->autoAttEnabled()));
+    refreshAttForSlice();
+}
+
+// R-R3-46 / R-R3-11: the ATT / S-ATT / A-ATT label and the control shown
+// follow the step attenuator of the slice's own ADC: slice A's (RX1's)
+// enable and auto-attenuate, or for a slice on the other ADC RX2's own
+// (Thetis _rx2_step_att_enabled, _auto_att_rx2), local and remote. The
+// preamp choice is slice A's input's (RX1's preamp mode); on the other ADC
+// it is disabled with that reason.
+void RxApplet::refreshAttForSlice()
+{
+    if (!m_model || !m_attLabel || !m_attStack) {
+        return;
     }
-    if (m_attStack) {
-        m_attStack->setCurrentIndex(stepAtt->enabled() ? 1 : 0);
+    const int sliceId = m_slice ? m_slice->sliceIndex() : 0;
+    bool rx2 = false;
+    bool stepOn = false;
+    bool autoOn = false;
+    if (m_model->ownsLocalDsp()) {
+        const StepAttenuatorController* c = m_model->stepAttController();
+        if (!c) {
+            return;
+        }
+        rx2 = sliceId >= 0 && sliceId < 32 && (c->rx2SliceMask() & (1u << sliceId)) != 0;
+        stepOn = rx2 ? c->rx2StepAttEnabled() : c->stepAttEnabled();
+        autoOn = rx2 ? c->rx2AutoAttEnabled() : c->autoAttEnabled();
+    } else {
+        const StepAttenuatorFacade* stepAtt = m_model->stepAttFacade();
+        if (!stepAtt) {
+            return;
+        }
+        rx2 = stepAtt->sliceUsesRx2(sliceId);
+        stepOn = rx2 ? stepAtt->rx2StepAttEnabled() : stepAtt->enabled();
+        autoOn = rx2 ? stepAtt->rx2AutoAttEnabled() : stepAtt->autoAttEnabled();
+    }
+    m_attLabel->setText(remoteAttLabelText(stepOn, autoOn));
+    m_attStack->setCurrentIndex(stepOn ? 1 : 0);
+    if (m_preampCombo) {
+        const bool remoteBlocked = !m_model->ownsLocalDsp() && m_model->stepAttFacade()
+            && !m_model->stepAttFacade()->windowAvailable();
+        if (!remoteBlocked) {
+            m_preampCombo->setEnabled(!rx2);
+            m_preampCombo->setToolTip(rx2
+                ? tr("The preamp setting here is for slice A's receiver input.")
+                : QString());
+        }
     }
 }
 
@@ -862,6 +910,7 @@ void RxApplet::buildUi()
         row->setContentsMargins(0, 0, 0, 0);
 
         m_attLabel = new QLabel(QStringLiteral("ATT"), this);
+        m_attLabel->setObjectName(QStringLiteral("RxAttLabel"));
         m_attLabel->setFixedWidth(34);
         m_attLabel->setStyleSheet(QStringLiteral(
             "QLabel { color: %1; font-size: 11px; }").arg(Style::kTitleText));
@@ -876,6 +925,7 @@ void RxApplet::buildUi()
         // at construction, not hardcoded. Matches Thetis SetComboPreampForHPSDR
         // console.cs:40755-40825 [@501e3f5] — per board at init time.
         m_preampCombo = new QComboBox(this);
+        m_preampCombo->setObjectName(QStringLiteral("RxPreampCombo"));
         {
             const HPSDRHW initBoard = m_model
                 ? m_model->hardwareProfile().effectiveBoard
@@ -1421,8 +1471,10 @@ void RxApplet::setSlice(SliceModel* slice)
     m_slice = slice;
     connectSlice(m_slice);
     syncFromModel();
-    // R-R3-46 / R-R3-11: this slice's own ADC's attenuator.
+    // R-R3-46 / R-R3-11: this slice's own ADC's attenuator, enable and
+    // auto-attenuate.
     showStepAttValueForSlice();
+    refreshAttForSlice();
 }
 
 void RxApplet::setSliceIndex(int idx)
@@ -1923,12 +1975,16 @@ void RxApplet::connectSlice(SliceModel* s)
                           : QStringLiteral("S-ATT");
         };
 
-        auto refreshAttLabel = [this, attCtrl, attLabelText]() {
-            const bool stepOn = attCtrl->stepAttEnabled();
-            const bool autoOn = attCtrl->autoAttEnabled();
-            m_attLabel->setText(attLabelText(stepOn, autoOn));
-            m_attStack->setCurrentIndex(stepOn ? 1 : 0);
-        };
+        // R-R3-46 / R-R3-11: the enable and auto-attenuate of the slice's
+        // own ADC (refreshAttForSlice).
+        Q_UNUSED(attLabelText);
+        auto refreshAttLabel = [this]() { refreshAttForSlice(); };
+        for (auto signal : {&StepAttenuatorController::rx2StepAttEnabledChanged,
+                            &StepAttenuatorController::rx2AutoAttEnabledChanged}) {
+            connect(attCtrl, signal, this, [refreshAttLabel](bool) { refreshAttLabel(); });
+        }
+        connect(attCtrl, &StepAttenuatorController::adcRoutingChanged,
+                this, [refreshAttLabel]() { refreshAttLabel(); });
 
         // React to step-att-enabled changes (ATT ↔ S-ATT/A-ATT mode switch)
         connect(attCtrl, &StepAttenuatorController::stepAttEnabledChanged,
