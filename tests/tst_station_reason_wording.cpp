@@ -1460,6 +1460,10 @@ const QList<AppSideReason>& appSideReasons()
          "a remote window's own reason the high-resolution filter graph is disabled"},
         {"src/models/RadioModel.cpp", "reportStationAccessoryRefusal",
          "a remote window passes the Core's refusal on to its own pages"},
+        // transmitSettingsVersion 11: why Disable HF PA is disabled on a
+        // radio without the switch, the window's own words.
+        {"src/models/RadioModel.cpp", "hfPaSwitchUnavailableReason",
+         "a window's own reason Disable HF PA is disabled on this radio"},
         {"src/core/session/IStationLink.h", "pgxlDeviceSettingsUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},
         {"src/core/session/IStationLink.h", "tgxlDeviceSettingsUnavailableReason",
@@ -1486,6 +1490,18 @@ const QList<AppSideReason>& appSideReasons()
          "a remote window's own reason when its Core cannot take the request"},
         {"src/core/session/IStationLink.h", "alexHpfSwitchesUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},
+        // radioHardwareVersion 8: the Alex Filters tabs' receive filter rows.
+        {"src/core/session/IStationLink.h", "alexHpfRowsUnavailableReason",
+         "a remote window's own reason when its Core cannot take the request"},
+        // iPhone app plan Task 25: This Core's device list on a Core that
+        // does not offer device administration to this window.
+        {"src/core/session/IStationLink.h", "deviceAdminUnavailableReason",
+         "a remote window's own reason when its Core cannot take the request"},
+        {"src/core/session/IStationLink.h", "pairedDeviceAdminReason",
+         "a remote window's own reason when its Core cannot take the request"},
+        // Parity ruling C4: the rate box on a Core without setRadioSampleRate.
+        {"src/core/session/IStationLink.h", "radioSampleRateUnavailableReason",
+         "a remote window's own reason when its Core cannot take the request"},
         // R-R3-49 (parity Task 16): the filter graph's curve.
         {"src/core/session/IStationLink.h", "filterResponseUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},
@@ -1501,6 +1517,9 @@ const QList<AppSideReason>& appSideReasons()
          "a remote window's own fallback when its Core cannot validate settings"},
         {"src/core/session/IStationLink.h", "modMonitorUnavailableReason",
          "a remote window's own fallback when its Core cannot send modulation readings"},
+        // R-IOS-26 / R-R3-49: 2 m as its own band.
+        {"src/core/session/IStationLink.h", "band2mUnavailableReason",
+         "a remote window's own reason when its Core does not have the 2 m band"},
         {"src/core/SettingsHygiene.h", "remoteUnavailableReason",
          "getter for desktop state set by StationClient and read by diagnostics pages"},
         {"src/core/station/StationRadios.h", "waitingReason",

@@ -49,6 +49,9 @@ qint64 AudioJitterBuffer::queuedSpanNs() const
 void AudioJitterBuffer::tick(qint64 nowNs)
 {
     if (!m_adaptive) { return; }
+    // Load findings 2: the consumer did not wake for longer than a stall.
+    if (m_lastTickNs && nowNs - *m_lastTickNs > kStallNs) { m_stallArmed = true; }
+    m_lastTickNs = nowNs;
     easeHold(nowNs);
     shedExcess(nowNs);
 }
@@ -58,9 +61,13 @@ void AudioJitterBuffer::shedExcess(qint64 nowNs)
     // Only after a late packet, once the link has been quiet as long as it
     // takes the hold to start easing: the delay a stall added (a rewind's
     // replayed intervals, a backlog released into the rate matcher) is
-    // then no longer wanted. A context that never saw a late packet sheds
-    // nothing, so a scheduling stall's backlog still plays whole.
-    if (!m_lastLateNs || nowNs - *m_lastLateNs < kShrinkQuietNs) {
+    // then no longer wanted. Load findings 2: or after a consumer stall (a
+    // gap between ticks), which can leave its backlog standing with no late
+    // packet; unless a late packet is recent, whose deeper hold is still
+    // wanted. A context with neither sheds nothing, so its ordinary jitter
+    // never costs on-time audio.
+    if ((!m_lastLateNs && !m_stallArmed)
+        || (m_lastLateNs && nowNs - *m_lastLateNs < kShrinkQuietNs)) {
         m_excessSinceNs.reset();
         return;
     }
@@ -70,7 +77,10 @@ void AudioJitterBuffer::shedExcess(qint64 nowNs)
     const qint64 content = queuedSpanNs() + m_downstreamExcessNs;
     if (m_packets.empty() || content <= target) {
         m_excessSinceNs.reset();
-        if (m_holdNs <= kHoldNs) { m_lastLateNs.reset(); } // paid: disarm
+        if (m_holdNs <= kHoldNs) { // paid: disarm
+            m_lastLateNs.reset();
+            m_stallArmed = false;
+        }
         return;
     }
     if (!m_excessSinceNs) {

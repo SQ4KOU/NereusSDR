@@ -520,6 +520,9 @@ private:
     // Pin Control, run by the Core's RadioModel.
     void handleRequestIoBoardI2c(const NereusSDR::SessionMessage& invoke);
     void handleSetIoBoardOutput(const NereusSDR::SessionMessage& invoke);
+    // Parity ruling C4 (radioHardwareVersion 8): the radio's sample rate,
+    // as a local window's Radio Info change makes it.
+    void handleSetRadioSampleRate(const NereusSDR::SessionMessage& invoke);
     // Parity Task 16 (dspInfoVersion 1): the filter graph's curve for a
     // slice's receiver (RadioModel::filterResponseForStation).
     void handleFilterResponse(const NereusSDR::SessionMessage& invoke);

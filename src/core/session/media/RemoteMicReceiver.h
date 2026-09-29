@@ -54,6 +54,11 @@
 //               past the radio's send ring), and the over's latency
 //               figures. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-28: Load findings 2 (R-IOS-13): the key's 250 ms fill wait
+//               runs from the line's first packet, with 1 s for that
+//               packet to come, so a line's cold start does not refuse
+//               every key. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/audio/AudioRingSpsc.h"
@@ -147,14 +152,25 @@ struct RemoteMicConfig {
     static constexpr int kMaxConcealFrames = kFramesPerMs * kMaxConcealMs;
 
     /// How long a keyed device's line may carry no audio before it counts
-    /// as starved, and how long a key waits for the buffer to fill.
+    /// as starved, and how long a key waits for the buffer to fill, counted
+    /// from the line's first packet in the wait.
     static constexpr int kStarvationMs = 250;
     static constexpr int kReadyDeadlineMs = 250;
+    /// Load findings 2 (R-IOS-13): how long a key waits for that first
+    /// packet. A device starts its line when the key is pressed (a window
+    /// opens its microphone only then), so the line's cold start (capture
+    /// open, encode, transport) comes before any fill and is timed apart
+    /// from it. A line that never delivers is refused at this bound, with
+    /// the same reason; a key comes at most kLineStartDeadlineMs plus
+    /// kReadyDeadlineMs after it arrives.
+    static constexpr int kLineStartDeadlineMs = 1000;
 
     static_assert(kMaxDepthMs < kStarvationMs,
                   "the transmit jitter buffer is shorter than the starvation deadline");
     static_assert(kTargetDepthMs < kReadyDeadlineMs,
                   "a key can reach the smallest target before its deadline");
+    static_assert(kReadyDeadlineMs < kLineStartDeadlineMs,
+                  "a line gets longer to start than to fill once started");
 };
 
 /// Whether an Opus payload carries in-band FEC for the frame before it
@@ -457,7 +473,11 @@ public:
 
     /// The key's wait (Task 36): calls done(true) as soon as the feed, in
     /// use, holds its target (RemoteMicFeed::targetFrames, 30 ms on a
-    /// steady link), or done(false) when it has not within 250 ms. A second wait replaces the first, which is never answered.
+    /// steady link), or done(false) when it has not within 250 ms of the
+    /// line's first packet in the wait, or when no packet has come within
+    /// 1 s (kLineStartDeadlineMs; load findings 2). The key never keys
+    /// without the line's audio in the feed. A second wait replaces the
+    /// first, which is never answered.
     void awaitReady(std::function<void(bool ready)> done);
     /// Ends a wait without answering it.
     void cancelWait();
@@ -487,6 +507,7 @@ private:
     void decodeL16(const QByteArray& packet, int missing);
     void writeAudio(const float* mono, int frames);
     void checkReady();
+    void refuseWaitAfter(int ms, bool onlyBeforeFirstPacket);
     void scheduleStarvationCheck(int ms);
     void checkStarvation();
     qint64 now() const;
@@ -507,6 +528,10 @@ private:
 
     std::function<void(bool)> m_waitDone;
     quint64 m_waitGeneration{0};
+    // Load findings 2: whether the waiting key's line has delivered its
+    // first packet (its fill deadline then runs), and when the wait began.
+    bool m_waitLineStarted{false};
+    qint64 m_waitStartedMs{0};
 
     bool m_feedWriter{true};
     bool m_watching{false};

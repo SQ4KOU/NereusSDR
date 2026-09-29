@@ -297,7 +297,7 @@ void TstRemoteHl2Io::remoteReadShowsTheRadiosBytes()
 {
     Session s(m_securityDir.path(), this);
     QVERIFY(s.connect());
-    QCOMPARE(s.client->capabilities().radioHardwareVersion, 7);
+    QCOMPARE(s.client->capabilities().radioHardwareVersion, 9);
     QVERIFY(s.client->radioHardwareAvailable(7));
     s.window.alexAntennaFacade()->setWindowAvailability(true, {});
     HardwarePage page(&s.window);

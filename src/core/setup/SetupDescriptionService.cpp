@@ -40,7 +40,7 @@ namespace {
 // Each control is its own raw string piece (MSVC limits one piece to 16 KB).
 constexpr char kDisplayV12Controls[] =
     R"json([)json"
-    R"json({"id":"display.spectrumDefaults.smoothDefaults","label":"Reset to Smooth Defaults","tooltip":"Overwrite this panadapter's spectrum and waterfall look with the NereusSDR smooth-default profile: Clarity Blue palette, log-recursive averaging, a white trace without fill, waterfall AGC on and a 30 ms waterfall update period. FFT size, frequency, band stack, and per-band grid ranges are not affected.","kind":"button","binding":{"phone":"smoothDefaults"},"applies":"live","requiresDescriptionVersion":12,"confirm":"This will overwrite your current Spectrum and Waterfall display settings with the NereusSDR smooth-default profile.\n\nYour FFT size, frequency, band stack, and per-band grid ranges are NOT affected.\n\nContinue?"},)json"
+    R"json({"id":"display.spectrumDefaults.smoothDefaults","label":"Reset to Smooth Defaults","tooltip":"Overwrite this panadapter's spectrum and waterfall look with the NereusSDR smooth-default profile: Clarity Blue palette, log-recursive averaging with a 650 ms averaging time, a white trace without fill, waterfall AGC on and a 30 ms waterfall update period. FFT size, frequency, band stack, and per-band grid ranges are not affected.","kind":"button","binding":{"phone":"smoothDefaults"},"applies":"live","requiresDescriptionVersion":12,"confirm":"This will overwrite your current Spectrum and Waterfall display settings with the NereusSDR smooth-default profile.\n\nYour FFT size, frequency, band stack, and per-band grid ranges are NOT affected.\n\nContinue?"},)json"
     R"json({"id":"display.spectrumDefaults.clarity","label":"Enable Clarity (adaptive waterfall tuning)","tooltip":"Clarity keeps the waterfall thresholds centered on the actual noise floor as band conditions and tuning change. Uses a 30th-percentile estimator with 3-second EWMA smoothing and a \u00b12 dB deadband. When off, thresholds are fixed at their last values.","kind":"toggle","binding":{"phone":"ClarityEnabled"},"applies":"subscription","requiresDescriptionVersion":12,"default":true,"gate":{"capability":"displayExtrasVersion","min":1}},)json"
     R"json({"id":"display.spectrumDefaults.showCursorFreq","label":"Show cursor frequency","tooltip":"Display the frequency at the cursor position (always in MHz). Same toggle as the on-spectrum overlay-panel Cursor Freq button.","kind":"toggle","binding":{"phone":"DisplayShowCursorFreq"},"applies":"live","requiresDescriptionVersion":12,"default":true},)json"
     R"json({"id":"display.spectrumDefaults.showBinWidth","label":"Show bin width","tooltip":"Display the current FFT bin width (sample rate / FFT size) in the spectrum corner.","kind":"toggle","binding":{"phone":"DisplayShowBinWidth"},"applies":"live","requiresDescriptionVersion":12,"default":false},)json"
@@ -215,7 +215,10 @@ QJsonObject expectedAntennaRowsTable(bool tx, HPSDRModel model)
         }
     }
     QJsonArray rows;
-    for (int band = 0; band < AlexAntennaFacade::kBandCount; ++band) {
+    // One row per entry of the antenna lists, in their order: 160m .. XVTR,
+    // then 2 m (R-IOS-26). A row carries its band's number (2 m is 27).
+    for (int slot = 0; slot < AlexAntennaFacade::kBandCount; ++slot) {
+        const int band = static_cast<int>(bandFromPerBandStateSlot(slot));
         const QString label = bandLabel(static_cast<Band>(band));
         QJsonArray cells;
         for (const QJsonValue& rawColumn : columns) {

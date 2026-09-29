@@ -6290,8 +6290,9 @@ void TstStationSession::coreOffersTheAttenuatorOnlyFromMinorEleven()
     // R-R3-46: 3, since the Core's Alex antennas and the hardware apply
     // step (2), and its I/O board and the per-band antenna verb (3, fix
     // wave) are behind it too; 4 with the filter policy verb (R-R3-46 /
-    // R-R3-21); 7 since parity Task 14.
-    QCOMPARE(StationCapabilities::fromUpdates(capabilitiesIn(current)).radioHardwareVersion, 7);
+    // R-R3-21); 7 since parity Task 14; 8 with the Alex Filters tabs'
+    // receive filter rows; 9 with setRadioSampleRate (parity ruling C4).
+    QCOMPARE(StationCapabilities::fromUpdates(capabilitiesIn(current)).radioHardwareVersion, 9);
     // Schema, object, the Core's change and the accepted write's echo.
     QVERIFY(aboutStepAtt(current) >= 3);
     QCOMPARE(currentResults.size(), 1);
@@ -6925,7 +6926,7 @@ void TstStationSession::windowBandAntennaEditKeepsTheCoresNewerBands()
     joinHardwareWindow(s, coreStore, this, m_securityDir.path());
     const auto cleanup = qScopeGuard([&s] { leaveHardwareSession(s); });
     if (QTest::currentTestFailed()) { return; }
-    QCOMPARE(s.client->capabilities().radioHardwareVersion, 7);
+    QCOMPARE(s.client->capabilities().radioHardwareVersion, 9);
     s.core->alexControllerMutable().setMacAddress(kHardwareMac);
     AlexAntennaFacade* window = s.window->alexAntennaFacade();
     QVERIFY(window->hasBandEditSender());
@@ -6975,7 +6976,7 @@ void TstStationSession::windowTxBandAntennaEditKeepsTheCoresNewerBands()
     joinHardwareWindow(s, coreStore, this, m_securityDir.path());
     const auto cleanup = qScopeGuard([&s] { leaveHardwareSession(s); });
     if (QTest::currentTestFailed()) { return; }
-    QCOMPARE(s.client->capabilities().radioHardwareVersion, 7);
+    QCOMPARE(s.client->capabilities().radioHardwareVersion, 9);
     QVERIFY(s.client->remoteTransmitAntennasAvailable());
     s.core->alexControllerMutable().setMacAddress(kHardwareMac);
     AlexAntennaFacade* window = s.window->alexAntennaFacade();
@@ -7070,7 +7071,7 @@ void TstStationSession::windowFilterPolicyReachesTheCore()
     joinHardwareWindow(s, coreStore, this, m_securityDir.path());
     const auto cleanup = qScopeGuard([&s] { leaveHardwareSession(s); });
     if (QTest::currentTestFailed()) { return; }
-    QCOMPARE(s.client->capabilities().radioHardwareVersion, 7);
+    QCOMPARE(s.client->capabilities().radioHardwareVersion, 9);
     QVERIFY(s.client->filterPolicyEditAvailable());
     QVERIFY(s.client->filterPolicyUnavailableReason().isEmpty());
     s.core->alexControllerMutable().setMacAddress(kHardwareMac);
@@ -7339,7 +7340,7 @@ void TstStationSession::windowShowsTheCoresIoBoard()
     joinHardwareWindow(s, settings, this, m_securityDir.path());
     const auto cleanup = qScopeGuard([&s] { leaveHardwareSession(s); });
     if (QTest::currentTestFailed()) { return; }
-    QCOMPARE(s.client->capabilities().radioHardwareVersion, 7);
+    QCOMPARE(s.client->capabilities().radioHardwareVersion, 9);
     const IoBoardHl2& windowBoard = s.window->ioBoard();
     QVERIFY(!windowBoard.isDetected());
 
@@ -7435,10 +7436,12 @@ void TstStationSession::windowOcMatrixFollowsTheCore()
 void TstStationSession::hardwareConfigRateGoesToEveryReceiver()
 {
     // R-R3-46 and parity ruling C4. In a remote window, Hardware Config >
-    // Radio Info's sample rate changes every one of the window's receivers
-    // now, without a reconnect (each receiver's own rate request, lowest id
-    // first), as a local window's live change moves every receiver, and is
-    // saved on the Core as that radio's default for its next connect.
+    // Radio Info's sample rate is the local window's change: one request
+    // for the whole radio (setRadioSampleRate, radioHardwareVersion 9),
+    // every receiver and the radio's own rate, without a reconnect; and it
+    // is saved on the Core as that radio's default for its next connect.
+    // (An older Core gets each receiver's own request instead:
+    // tst_remote_slice_commands.)
     QTemporaryDir dir;
     QVERIFY(dir.isValid());
     AppSettings settings(dir.filePath(QStringLiteral("rate.settings")));
@@ -7449,6 +7452,8 @@ void TstStationSession::hardwareConfigRateGoesToEveryReceiver()
     if (QTest::currentTestFailed()) { return; }
     QTRY_COMPARE(s.window->slices().size(), 3);
     QTRY_COMPARE(s.window->currentRadioInfo().macAddress, kHardwareMac);
+    QCOMPARE(s.client->capabilities().radioHardwareVersion, 9);
+    QVERIFY(s.window->radioSampleRateReachesEveryReceiver());
     s.window->alexAntennaFacade()->setWindowAvailability(true, {});
 
     RemoteSettingsScope scope(s.proxy.get());
@@ -7469,32 +7474,31 @@ void TstStationSession::hardwareConfigRateGoesToEveryReceiver()
 
     const QString key = QStringLiteral("hardware/%1/radioInfo/sampleRate").arg(kHardwareMac);
     QTRY_COMPARE(settings.value(key).toInt(), hz);
-    QList<int> expected;
-    for (SliceModel* slice : s.core->slices()) {
-        expected.append(slice->sliceIndex());
-    }
-    std::sort(expected.begin(), expected.end());
-    QList<int> requested;
+    QList<int> radioWide;
+    int perReceiver = 0;
     const auto collect = [&] {
-        requested.clear();
+        radioWide.clear();
+        perReceiver = 0;
         for (const QByteArray& wire : s.stationEnd->received()) {
             const SessionMessage m = decodeOrFail(wire);
-            if (m.kind != SessionMessageKind::CommandInvoke
-                || m.commandVerb != "requestSliceSampleRate") {
+            if (m.kind != SessionMessageKind::CommandInvoke) {
                 continue;
             }
-            int sliceId = -1;
-            int rateHz = 0;
-            for (const MirrorUpdate& argument : m.arguments) {
-                if (argument.name == "sliceId") { sliceId = argument.value.toInt(); }
-                if (argument.name == "rateHz") { rateHz = argument.value.toInt(); }
+            if (m.commandVerb == "requestSliceSampleRate") {
+                ++perReceiver;
+            } else if (m.commandVerb == "setRadioSampleRate") {
+                for (const MirrorUpdate& argument : m.arguments) {
+                    if (argument.name == "rateHz") { radioWide.append(argument.value.toInt()); }
+                }
             }
-            if (rateHz == hz) { requested.append(sliceId); }
         }
-        return requested.size() >= expected.size();
+        return !radioWide.isEmpty();
     };
     QTRY_VERIFY(collect());
-    QCOMPARE(requested, expected);
+    QTest::qWait(50);
+    collect();
+    QCOMPARE(radioWide, QList<int>{hz});
+    QCOMPARE(perReceiver, 0);
 }
 
 // ── iPhone app Task 18 (R-IOS-08, R-IOS-17) ─────────────────────────────

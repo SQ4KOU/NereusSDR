@@ -1223,6 +1223,10 @@ nereus_add_test(tst_board_capability_flag_wiring)
 
 # ── Issue #118: band-button auto-mode ────────────────────────────────────
 nereus_add_test(tst_band_from_name)
+# 2 m is its own band (JJ's ruling 2026-09-28; R-IOS-26, R-R3-49).
+nereus_add_test(tst_band_2m)
+nereus_add_test(tst_band_2m_stores)
+nereus_add_test(tst_band_link_fit EXTRA_LABELS session)
 nereus_add_test(tst_slice_has_settings_for)
 nereus_add_test(tst_band_defaults)
 nereus_add_test(tst_radio_model_band_click)
@@ -2067,6 +2071,16 @@ nereus_add_test(tst_hpf_bypass_on_tx)
 # reach the wire as Thetis's setAlexHPF / setBPF1ForOrionIISaturn apply them
 # (console.cs:6839-6962). NereusSDR-original tests: no Thetis port.
 nereus_add_test(tst_alex_hpf_switches)
+# Setup > Transmit > Power's "Disable HF PA" (transmitSettingsVersion 11)
+# reaches the wire as Thetis's DisablePA sends it (P1 bank 10 C3 bit 7 and the
+# HL2's C2 bit 3; P2 CmdGeneral byte 58 and the Alex T/R relay) and the SWR
+# protection's pass (console.cs:26109-26110). NereusSDR-original tests.
+nereus_add_test(tst_disable_hf_pa)
+# radioHardwareVersion 8: the Alex Filters tabs' receive filter rows (each
+# row's bypass and edges, the Alex-2 master bypass) select the receive
+# high-pass as Thetis's setAlexHPF / setBPF1ForOrionIISaturn / setAlex2HPF
+# do (console.cs:6839-7175). NereusSDR-original tests.
+nereus_add_test(tst_alex_hpf_rows)
 # Plan Task 14 fix wave, I1 and I2 (R-R3-49, remote parity): the HL2 I/O,
 # HL2 options and OC Outputs tabs show the band-output byte the connection
 # composed (RadioModel::bandOutputsByte), locally and in a remote window
@@ -4568,6 +4582,13 @@ target_compile_definitions(tst_p2_mic_boost_wire PRIVATE NEREUS_BUILD_TESTS)
 nereus_add_test(tst_p1_line_in_wire)
 target_compile_definitions(tst_p1_line_in_wire PRIVATE NEREUS_BUILD_TESTS)
 
+# HL2 bank 0 C3 bits 3 and 4 (Band Volts, Disable PS Sync) follow the saved
+# HL2 options, both off by default; other P1 boards keep Thetis's dither and
+# random on. Source: mi0bot Console/setup.cs:2843-2848, 13376-13390 [@c26a8a4];
+# Thetis Console/setup.cs:296-298 [v2.10.3.15].
+nereus_add_test(tst_p1_hl2_band_volts_ps_sync fakes/P1FakeRadio.cpp)
+target_compile_definitions(tst_p1_hl2_band_volts_ps_sync PRIVATE NEREUS_BUILD_TESTS)
+
 # ── Phase 3M-1b Task G.2: P2 line_in wire-byte snapshot ──────────────────────
 # 10 tests pin the line_in bit (CmdTx byte 50 bit 0 = 0x01) in
 # P2RadioConnection::setLineIn():
@@ -4979,6 +5000,12 @@ nereus_add_test(tst_metric_label)
 # CPU survives PA updates, clearing both hides row one, PA label override.
 nereus_add_test(tst_system_tile)
 
+# Parity ruling C9: the System tile's CPU row in a remote window cycles
+# between this computer's CPU and the Core's, pins either, holds on a hot
+# reading in the warning colour, and shows this computer only (with the
+# reason) when the Core's reading is unavailable.
+nereus_add_test(tst_cpu_row_cycler)
+
 # ── Shell-Chrome Redesign sub-PR-1: StationBlock widget ───────────────────
 # 5 tests: default/setRadioName/empty-name appearance switching, click +
 # right-click signal emission gated on appearance.
@@ -5219,6 +5246,11 @@ nereus_add_test(tst_spectrum_reducer)
 # from its geometry; anything else leaking back into the reduction path
 # fails here instead of shipping two different spectra.
 nereus_add_test(tst_spectrum_reducer_widget_parity)
+
+# Reset to Smooth Defaults sets and saves the spectrum averaging time
+# (650 ms, the March 0.05 new-frame weight at 30 FPS) instead of a
+# transient averaging constant.
+nereus_add_test(tst_clarity_smooth_defaults)
 
 # R1 Task 4 -- guard test for the ISpectrumSink extraction.  Walks src/core
 # and src/models and fails on any include that reaches into src/gui or into
@@ -6321,28 +6353,30 @@ nereus_add_test(tst_rade_channel)
 # CDSPResampler24 has nontrivial internal latency.
 nereus_add_test(tst_resampler)
 
-# ── Phase 3R Task I4: RadeText (callsign-over-EOO wrapper) ────────────────
-# Pins the five contracts of the thin Qt6 wrapper around the
-# third_party/rade callsign-over-EOO channel
-# (rade_tx_set_eoo_callsign / rade_rx_get_eoo_callsign, declared in
-# third_party/rade/src/rade_api.h:120-145 [@b289102]):
-#   constructsAndIsEmpty             fresh wrapper has empty ourCallsign
-#   setOurCallsignStoresValue        getter returns the value the setter
-#                                    stashed; lower / upper / empty all
-#                                    round-trip unchanged
-#   pushTxNullRadeIsNoOp             pushTxCallsign(nullptr) is safe
-#                                    (RadeChannel's m_rade is null
-#                                    between stop() and start())
-#   pushTxEmptyCallsignIsNoOp        pushTxCallsign on an empty stash
-#                                    must not clobber rade_tx.eoo_bits
-#   roundTripDecodesEncodedCallsign  setOurCallsign + pushTxCallsign +
-#                                    processRxEooBits emits
-#                                    textDecoded("KG4VCF") once
-# The headline test does a bit-level round-trip (no OFDM mod/demod)
-# because the wrapper only sits on set_eoo_callsign / get_eoo_callsign;
-# the full OFDM round-trip is exercised separately by the upstream
-# third_party/rade/src/rade_callsign_test.c executable.
+# ── RADE end-of-over callsigns: RadeText + FreeDV's format ────────────────
+# tst_rade_text: the RadeText wrapper writes FreeDV's EOO data into librade
+# (float for float against freedv-backend vectors), writes zeros with no
+# callsign, emits a FreeDV station's callsign and nothing for an empty or
+# rejected one, and a callsign survives librade's modem end to end
+# (rade_tx frames, rade_tx_eoo, the real leg only, rade_rx).
 nereus_add_test(tst_rade_text)
+
+# tst_rade_text_codec: RadeTextCodec (the port of freedv-backend's
+# rade_text + LDPC(112,56)) encodes exactly what FreeDV encodes and accepts
+# or rejects exactly what FreeDV accepts or rejects. The vectors in
+# tests/data/rade_text/freedv_backend_vectors.h come from the upstream code
+# itself (scripts/gen-rade-text-vectors.sh).
+nereus_add_test(tst_rade_text_codec)
+
+# tst_rade_end_of_over_tail: the transmit safety boundary around the RADE
+# end-of-over tail. MoxController sends the tail only on an operator's
+# release (never on a key, never under TX inhibit, the PA trip or
+# receive-only), keeps the hardware keyed and MOX off while it runs, bounds
+# it at 1 s, ends it on a new key or a stop; RadioModel permits it only for
+# a RADE release, reports it as txEnding, and stopAllTx stops a running one
+# at once.
+nereus_add_test(tst_rade_end_of_over_tail)
+target_compile_definitions(tst_rade_end_of_over_tail PRIVATE NEREUS_BUILD_TESTS)
 
 # ── Phase 3R Task I5: RadeChannel -> RadioModel slot graph wiring ─────────
 # Pins the six contracts RadioModel::wireRadeChannel(sliceId, channel, slice)
@@ -6971,6 +7005,12 @@ nereus_add_test(tst_rx_channel_ext_div_wrappers)
 # Source: NereusSDR-original test infrastructure.
 # Design: docs/architecture/2026-05-26-phase3f-sub-epic-g-diversity-plan.md Task 2.
 nereus_add_test(tst_diversity_dialog_persistence)
+# Phone wire batch: the Diversity dialog's sensitivity pattern
+# (core/DiversityPattern) and the slice's diversityPattern.
+nereus_add_test(tst_diversity_pattern)
+# Phone wire batch: radio's logCategoryList (the Support dialog's categories
+# with their labels).
+nereus_add_test(tst_log_category_list)
 
 # ── Tunable Notch Filter Task 2: RxChannel manual-notch wrappers ──────────
 # The Notch value type plus add / edit / delete / sync / count, the
@@ -7543,6 +7583,11 @@ nereus_add_test(tst_settings_backup_window)
 # way tst_setup_dialog_lazy_pages needs it.
 nereus_add_test(tst_remote_gui_gating)
 target_compile_definitions(tst_remote_gui_gating PRIVATE NEREUS_BUILD_TESTS)
+# Load findings 3: about 10 s on a quiet machine, past the 120 s limit in a
+# loaded full run; three entries of the same binary (the limit is not
+# raised; groups in the test's main()).
+nereus_split_test(tst_remote_gui_gating
+    ENV NEREUS_REMOTE_GUI_GATING_GROUP GROUPS setup containers)
 nereus_add_test(tst_remote_connection_controls fakes/LoopbackTransport.cpp)
 # R-R3-38 (R3 completion Task 5): the stop message of a remote window.
 nereus_add_test(tst_remote_core_stop_notice)
@@ -8131,6 +8176,11 @@ nereus_add_test(tst_station_pairing
 add_dependencies(tst_station_pairing nereus_pairing_peer)
 target_compile_definitions(tst_station_pairing PRIVATE
     NEREUS_PAIRING_PEER="$<TARGET_FILE:nereus_pairing_peer>")
+# Load findings 3: about 13 s on a quiet machine, past the 120 s limit in a
+# loaded full run; three entries of the same binary (the limit is not
+# raised; groups in the test's main()).
+nereus_split_test(tst_station_pairing
+    ENV NEREUS_STATION_PAIRING_GROUP GROUPS code peer)
 
 # iPhone app Task 17 (R-IOS-08): the Core's read-only status page on
 # loopback (the code only while unclaimed, nothing for a peer elsewhere, 404
@@ -8336,10 +8386,43 @@ if(TEST tst_link_conformance_session)
     set_property(TEST tst_link_conformance_session_connectable APPEND PROPERTY ENVIRONMENT
         "NEREUS_LINK_CONNECTABLE=only" "NEREUS_LINK_MODE=loopback")
     # iPhone app plan Task 28 (R-IOS-16): the first entry runs every other
-    # fixture over both transports (the in-process pipe and the control data
-    # channel), so it gets more time; the connectable fixture over the data
-    # channel runs in its own process, as the in-process one does.
+    # fixture, and it got more time for running them over both transports
+    # (the in-process pipe and the control data channel); the connectable
+    # fixture over the data channel runs in its own process, as the
+    # in-process one does.
+    # Load findings 3: the two transports are now two entries of the same
+    # binary, the first NEREUS_LINK_MODE=loopback (and every other check),
+    # tst_link_conformance_session_datachannel NEREUS_LINK_MODE=datachannel,
+    # each within the same 300 s (at load 198 to 281 both together took
+    # 397 s; the limit is not raised).
     set_tests_properties(tst_link_conformance_session PROPERTIES TIMEOUT 300)
+    set_property(TEST tst_link_conformance_session APPEND PROPERTY ENVIRONMENT
+        "NEREUS_LINK_MODE=loopback")
+    add_test(NAME tst_link_conformance_session_datachannel COMMAND tst_link_conformance_session)
+    set_tests_properties(tst_link_conformance_session_datachannel PROPERTIES
+        LABELS "${_lcs_labels}"
+        TIMEOUT 300)
+    if(_lcs_env_mod)
+        set_property(TEST tst_link_conformance_session_datachannel
+            PROPERTY ENVIRONMENT_MODIFICATION ${_lcs_env_mod})
+    endif()
+    if(NEREUS_TESTS_OFFSCREEN AND CMAKE_VERSION VERSION_LESS 3.22)
+        set_property(TEST tst_link_conformance_session_datachannel APPEND PROPERTY ENVIRONMENT
+            "QT_QPA_PLATFORM=offscreen")
+    endif()
+    if(NOT WIN32)
+        set(_lcs_dcall_home
+            "${CMAKE_CURRENT_BINARY_DIR}/test-home/tst_link_conformance_session_datachannel")
+        file(MAKE_DIRECTORY "${_lcs_dcall_home}")
+        set_property(TEST tst_link_conformance_session_datachannel APPEND PROPERTY
+            ENVIRONMENT "HOME=${_lcs_dcall_home}")
+        if(APPLE)
+            set_property(TEST tst_link_conformance_session_datachannel APPEND
+                PROPERTY ENVIRONMENT "CFFIXED_USER_HOME=${_lcs_dcall_home}")
+        endif()
+    endif()
+    set_property(TEST tst_link_conformance_session_datachannel APPEND PROPERTY
+        ENVIRONMENT "NEREUS_LINK_CONNECTABLE=skip" "NEREUS_LINK_MODE=datachannel")
     add_test(NAME tst_link_conformance_session_connectable_datachannel
         COMMAND tst_link_conformance_session)
     set_tests_properties(tst_link_conformance_session_connectable_datachannel PROPERTIES
@@ -8399,7 +8482,8 @@ if(TEST tst_link_conformance_session)
         endif()
     endif()
     foreach(_lcs_entry tst_link_conformance_session tst_link_conformance_session_connectable
-            tst_link_conformance_session_connectable_datachannel)
+            tst_link_conformance_session_connectable_datachannel
+            tst_link_conformance_session_datachannel)
         set_property(TEST ${_lcs_entry} APPEND PROPERTY ENVIRONMENT "NEREUS_LINK_REALTIME=skip")
     endforeach()
     set_property(TEST tst_link_conformance_session_realtime APPEND PROPERTY ENVIRONMENT
@@ -8538,6 +8622,9 @@ nereus_add_test(tst_remote_audio_clock)
 # one hour, not both; on a Linux aarch64 host both hours took 347 s alone
 # and were aborted by that watchdog, and 267 s at the end of a full run.
 # TIMEOUT 700 is about twice the slowest (Linux, alone) measurement.
+# Load findings 3: one hour row still passed QtTest's 300 s watchdog above
+# load 200, so each hour now runs as four quarter-hour rows carrying one
+# simulation on; the watchdog bounds a quarter. TIMEOUT unchanged.
 if(TEST tst_remote_audio_clock)
     set_tests_properties(tst_remote_audio_clock PROPERTIES TIMEOUT 700 PROCESSORS 2)
 endif()

@@ -22,6 +22,8 @@
 //                change is saved for the radio at once. NereusSDR-original
 //                (the per-ADC BPF policy has no Thetis equivalent). J.J.
 //                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - 2 m as its own band (R-IOS-26, R-R3-49). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 // === Verbatim Thetis Console/HPSDR/Alex.cs header (lines 1-23) ===
@@ -202,14 +204,14 @@ void AlexController::recomputeBpf(int adc)
 // Source: HPSDR/Alex.cs:setTxAnt / TxAnt[] accessor [@501e3f5]
 int AlexController::txAnt(Band band) const
 {
-    const int b = int(band);
+    const int b = perBandStateSlot(band);
     return (b >= 0 && b < kBandCount) ? m_txAnt[b] : 1;
 }
 
 // Source: HPSDR/Alex.cs:setRxAnt / RxAnt[] accessor [@501e3f5]
 int AlexController::rxAnt(Band band) const
 {
-    const int b = int(band);
+    const int b = perBandStateSlot(band);
     return (b >= 0 && b < kBandCount) ? m_rxAnt[b] : 1;
 }
 
@@ -218,7 +220,7 @@ int AlexController::rxAnt(Band band) const
 // default; returning 1 would silently activate the RX-bypass relay.
 int AlexController::rxOnlyAnt(Band band) const
 {
-    const int b = int(band);
+    const int b = perBandStateSlot(band);
     return (b >= 0 && b < kBandCount) ? m_rxOnlyAnt[b] : 0;
 }
 
@@ -228,7 +230,7 @@ int AlexController::rxOnlyAnt(Band band) const
 //            Block-TX safety guards added for UI contract.
 void AlexController::setTxAnt(Band band, int ant)
 {
-    const int b = int(band);
+    const int b = perBandStateSlot(band);
     if (b < 0 || b >= kBandCount) { return; }
     const int newAnt = clampAnt(ant);
     // Block-TX safety: reject TX assignment to a blocked port.
@@ -242,7 +244,7 @@ void AlexController::setTxAnt(Band band, int ant)
 // Original: "if(ant>3){ant=1;} idx=(int)band-(int)Band.B160M; RxAnt[idx]=ant;"
 void AlexController::setRxAnt(Band band, int ant)
 {
-    const int b = int(band);
+    const int b = perBandStateSlot(band);
     if (b < 0 || b >= kBandCount) { return; }
     const int newAnt = clampAnt(ant);
     if (m_rxAnt[b] == newAnt) { return; }
@@ -256,7 +258,7 @@ void AlexController::setRxAnt(Band band, int ant)
 // Uses clampRxOnlyAnt (allows 0) instead of clampAnt — fix for 3P-I-b T3.3.
 void AlexController::setRxOnlyAnt(Band band, int ant)
 {
-    const int b = int(band);
+    const int b = perBandStateSlot(band);
     if (b < 0 || b >= kBandCount) { return; }
     const int newAnt = clampRxOnlyAnt(ant);
     if (m_rxOnlyAnt[b] == newAnt) { return; }
@@ -283,7 +285,7 @@ void AlexController::setBlockTxAnt2(bool on)
         for (int b = 0; b < kBandCount; ++b) {
             if (m_txAnt[b] == 2) {
                 m_txAnt[b] = 1;
-                emit antennaChanged(Band(b));
+                emit antennaChanged(bandFromPerBandStateSlot(b));
             }
         }
     }
@@ -301,7 +303,7 @@ void AlexController::setBlockTxAnt3(bool on)
         for (int b = 0; b < kBandCount; ++b) {
             if (m_txAnt[b] == 3) {
                 m_txAnt[b] = 1;
-                emit antennaChanged(Band(b));
+                emit antennaChanged(bandFromPerBandStateSlot(b));
             }
         }
     }
@@ -326,7 +328,7 @@ void AlexController::setAntennasTo1(bool force)
     for (int b = 0; b < kBandCount; ++b) {
         m_txAnt[b] = 1;
         m_rxAnt[b] = 1;
-        emit antennaChanged(Band(b));
+        emit antennaChanged(bandFromPerBandStateSlot(b));
     }
 }
 
@@ -413,7 +415,7 @@ void AlexController::load()
     auto& s = AppSettings::instance();
     const QString base = persistenceKey();
     for (int b = 0; b < kBandCount; ++b) {
-        const QString slug = bandKeyName(Band(b));
+        const QString slug = bandKeyName(bandFromPerBandStateSlot(b));
         m_txAnt[b]     = s.value(QStringLiteral("%1/%2/tx").arg(base, slug),     QStringLiteral("1")).toInt();
         m_rxAnt[b]     = s.value(QStringLiteral("%1/%2/rx").arg(base, slug),     QStringLiteral("1")).toInt();
         m_rxOnlyAnt[b] = s.value(QStringLiteral("%1/%2/rxonly").arg(base, slug), QStringLiteral("0")).toInt();
@@ -441,7 +443,7 @@ void AlexController::load()
     emit ext2OutOnTxChanged(m_ext2OutOnTx);
     emit rxOutOverrideChanged(m_rxOutOverride);
     emit useTxAntForRxChanged(m_useTxAntForRx);
-    for (int b = 0; b < kBandCount; ++b) { emit antennaChanged(Band(b)); }
+    for (int b = 0; b < kBandCount; ++b) { emit antennaChanged(bandFromPerBandStateSlot(b)); }
 }
 
 void AlexController::save()
@@ -450,7 +452,7 @@ void AlexController::save()
     auto& s = AppSettings::instance();
     const QString base = persistenceKey();
     for (int b = 0; b < kBandCount; ++b) {
-        const QString slug = bandKeyName(Band(b));
+        const QString slug = bandKeyName(bandFromPerBandStateSlot(b));
         s.setValue(QStringLiteral("%1/%2/tx").arg(base, slug),     QString::number(m_txAnt[b]));
         s.setValue(QStringLiteral("%1/%2/rx").arg(base, slug),     QString::number(m_rxAnt[b]));
         s.setValue(QStringLiteral("%1/%2/rxonly").arg(base, slug), QString::number(m_rxOnlyAnt[b]));

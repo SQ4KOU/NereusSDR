@@ -994,6 +994,10 @@ set(CORE_SOURCES
     src/core/TxChannel.cpp
     src/core/RadeChannel.cpp
     src/core/RadeText.cpp
+    # RADE end-of-over callsigns: FreeDV's callsign format (freedv-backend
+    # rade_text + LDPC(112,56) port).
+    src/core/RadeTextCodec.cpp
+    src/core/RadeLdpc.cpp
     src/core/Resampler.cpp
     src/core/PsFeedbackChannel.cpp
     src/core/PureSignal.cpp
@@ -1024,6 +1028,10 @@ set(CORE_SOURCES
     src/core/CfcProfile.cpp
     src/core/ParaEqCurve.cpp
     src/core/ParaEqCurve.h
+    # Phone wire batch: the Diversity dialog's sensitivity pattern, drawn by
+    # DiversityRadarWidget and sent on each slice.
+    src/core/DiversityPattern.cpp
+    src/core/DiversityPattern.h
     src/core/TwoToneController.cpp
     src/core/TxSliceArbiter.cpp
     src/core/TxSliceArbiter.h
@@ -1414,6 +1422,7 @@ list(APPEND CORE_SOURCES
     src/core/session/StationDevicesFacade.cpp
     # iPhone app Task 19 (R-IOS-06): the mirrored `catalog` object.
     src/core/session/StationCatalog.cpp
+    src/core/session/BandLinkFit.cpp
     # R-R3-49 / R-IOS-18: the Core's PA Gain profiles for a phone.
     src/core/session/PaProfilesFacade.cpp
     # iPhone app Task 25 (D41): the unbuilt features list the catalogue's
@@ -1637,6 +1646,7 @@ set(GUI_SOURCES
     src/gui/widgets/MetricLabel.cpp
     src/gui/widgets/MetricLabel.h
     src/gui/widgets/SystemTile.cpp
+    src/gui/widgets/CpuRowCycler.cpp
     src/gui/chrome/ChromeFoldPlan.cpp
     src/gui/chrome/ChromeBarController.cpp
     src/gui/chrome/ChromeBarItems.cpp

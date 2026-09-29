@@ -507,7 +507,10 @@ private slots:
         QVERIFY(segment->remotePresentationText().contains(QStringLiteral("Radio")));
         QVERIFY(segment->remotePresentationText().contains(QStringLiteral("Core RTT")));
         const QFontMetrics headerMetrics(QFont(QStringLiteral("SF Mono"), 10, QFont::DemiBold));
-        QVERIFY2(segment->width() >= headerMetrics.horizontalAdvance(segment->remotePresentationText()) + 34,
+        // Load findings 3: the segment takes its width from the layout pass
+        // after the text changes (and the readings keep changing it), so
+        // the width is checked once the layout has settled on the text.
+        QTRY_VERIFY2(segment->width() >= headerMetrics.horizontalAdvance(segment->remotePresentationText()) + 34,
                  qPrintable(QStringLiteral("segment %1, text %2")
                                 .arg(segment->width())
                                 .arg(headerMetrics.horizontalAdvance(segment->remotePresentationText()))));
@@ -521,7 +524,7 @@ private slots:
         QVERIFY(controls->text().contains(QStringLiteral("Remote")));
         h.remoteModel()->audioEngine()->setMasterMuted(true);
         QTRY_VERIFY(segment->remotePresentationText().contains(QStringLiteral("Audio muted")));
-        QVERIFY2(segment->width() >= headerMetrics.horizontalAdvance(segment->remotePresentationText()) + 34,
+        QTRY_VERIFY2(segment->width() >= headerMetrics.horizontalAdvance(segment->remotePresentationText()) + 34,
                  qPrintable(QStringLiteral("muted segment %1, text %2")
                                 .arg(segment->width())
                                 .arg(headerMetrics.horizontalAdvance(segment->remotePresentationText()))));
@@ -1352,7 +1355,7 @@ private slots:
         // R-R3-46 fix wave (radioHardwareVersion 3): the HL2 I/O board tab
         // shows the Core's board, whose readings arrive on the Core after a
         // probe. (4 since the filter policy verb, R-R3-46 / R-R3-21.)
-        QCOMPARE(h.client()->capabilities().radioHardwareVersion, 7);
+        QCOMPARE(h.client()->capabilities().radioHardwareVersion, 9);
         auto* ioTab = hardware->findChild<Hl2IoBoardTab*>();
         QVERIFY(ioTab);
         const auto statusText = [ioTab]() {

@@ -46,6 +46,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-28  J.J. Boyd / KG4VCF  Parity ruling C4: setRadioSampleRate
+//                                    (radioHardwareVersion 9). AI-assisted
+//                                    via Anthropic Claude Code.
 //   2026-08-04  J.J. Boyd / KG4VCF  Remote daemon R2 Task 4: station-link
 //                                    seam. AI-assisted transformation via
 //                                    Anthropic Claude Code.
@@ -167,6 +170,13 @@
 //                                    device verbs (deviceAdminAvailable,
 //                                    pairingAvailable, requestDeviceAdmin).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - 2 m as its own band (R-IOS-26, R-R3-49). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - R-R3-46 / R-R3-49: the Alex Filters tabs' receive filter rows
+//                (per-row bypass and edges, Alex-2 master bypass) select the
+//                receive high-pass as Thetis's setAlexHPF /
+//                setBPF1ForOrionIISaturn / setAlex2HPF do (radioHardwareVersion
+//                8). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QString>
@@ -226,6 +236,9 @@ public:
     /// memory, exactly as a band button at the Core does. The defaults
     /// refuse, for links that did not negotiate it.
     virtual bool bandSelectAvailable() const { return false; }
+    /// R-IOS-26 / R-R3-49: the Core knows 2 m as its own band. Empty when
+    /// it does; otherwise the plain reason a 2 m control cannot reach it.
+    virtual QString band2mUnavailableReason() const { return {}; }
     virtual CommandOutcome requestSelectBand(int /*sliceId*/, int /*band*/)
     { return { false, QStringLiteral("This Core cannot change bands for this app. Updating the Core may help.") }; }
 
@@ -505,6 +518,9 @@ public:
     { return QStringLiteral("This Core cannot reach its radio's I2C bus for this app. Updating the Core may help."); }
     static QString alexHpfSwitchesUnavailableReason()
     { return QStringLiteral("This Core cannot change these high-pass switches for this app. Updating the Core may help."); }
+    // radioHardwareVersion 8: the Alex Filters tabs' receive filter rows.
+    static QString alexHpfRowsUnavailableReason()
+    { return QStringLiteral("This Core cannot change these filter rows for this app. Updating the Core may help."); }
     // Verb "requestIoBoardI2c" (radioHardwareVersion 7): one I2C read or
     // write on the Core's radio. The answer (a read's bytes in `value`)
     // arrives as RadioModel::reportStationIoBoardResult.
@@ -515,6 +531,16 @@ public:
     // I/O board outputs on or off.
     virtual CommandOutcome requestIoBoardOutput(int /*pin*/, bool /*on*/)
     { return { false, ioBoardI2cUnavailableReason() }; }
+
+    // Parity ruling C4, verb "setRadioSampleRate" (radioHardwareVersion 9):
+    // the radio's sample rate, as a local window's Radio Info change makes
+    // it (every receiver and the radio's own rate). The default refuses; a
+    // window then asks each of its receivers instead.
+    virtual bool radioSampleRateAvailable() const { return false; }
+    static QString radioSampleRateUnavailableReason()
+    { return QStringLiteral("This Core changes the sample rate of this window's receivers only. Updating the Core may help."); }
+    virtual CommandOutcome requestRadioSampleRate(int /*rateHz*/)
+    { return { false, radioSampleRateUnavailableReason() }; }
 
     // R-R3-49 (parity Task 16): verb "dsp.filterResponse" (dspInfoVersion
     // 1), the filter graph's curve for a slice's receiver on the Core. The

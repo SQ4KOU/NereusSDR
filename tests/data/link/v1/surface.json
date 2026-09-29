@@ -208,7 +208,7 @@
         {
             "kind": "i64",
             "name": "radioHardwareVersion",
-            "value": 7
+            "value": 9
         },
         {
             "kind": "i64",
@@ -263,7 +263,7 @@
         {
             "kind": "i64",
             "name": "transmitSettingsVersion",
-            "value": 10
+            "value": 11
         },
         {
             "kind": "i64",
@@ -429,6 +429,26 @@
             "kind": "i64",
             "name": "txEqCurveVersion",
             "value": 1
+        },
+        {
+            "kind": "i64",
+            "name": "band2mVersion",
+            "value": 1
+        },
+        {
+            "kind": "i64",
+            "name": "diversityPatternVersion",
+            "value": 1
+        },
+        {
+            "kind": "i64",
+            "name": "logCategoryListVersion",
+            "value": 1
+        },
+        {
+            "kind": "i64",
+            "name": "radioModelsVersion",
+            "value": 0
         },
         {
             "kind": "i64",
@@ -1714,6 +1734,19 @@
             "capabilityVersion": 7,
             "minMinor": 11,
             "verb": "setIoBoardOutput"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "rateHz",
+                    "optional": false
+                }
+            ],
+            "capability": "radioHardwareVersion",
+            "capabilityVersion": 9,
+            "minMinor": 11,
+            "verb": "setRadioSampleRate"
         },
         {
             "arguments": [
@@ -4899,6 +4932,12 @@
                     "kind": "utf8",
                     "name": "logCategories",
                     "ordinal": 26
+                },
+                {
+                    "direction": "constantSnapshot",
+                    "kind": "utf8",
+                    "name": "logCategoryList",
+                    "ordinal": 27
                 }
             ]
         },
@@ -5298,7 +5337,8 @@
                         23,
                         24,
                         25,
-                        26
+                        26,
+                        27
                     ],
                     "kind": "enum",
                     "name": "band",
@@ -5461,7 +5501,8 @@
                         23,
                         24,
                         25,
-                        26
+                        26,
+                        27
                     ],
                     "kind": "enum",
                     "name": "band",
@@ -6329,6 +6370,12 @@
                     "kind": "f64",
                     "name": "minNotchWidthHz",
                     "ordinal": 149
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "diversityPattern",
+                    "ordinal": 150
                 }
             ]
         },
@@ -7863,7 +7910,6 @@
             }
         ],
         "operatorLocalKeys": [
-            "DisableHfPa",
             "ExtendedTxAllowed",
             "PreventTxOnDifferentBandToRx"
         ],
@@ -7906,6 +7952,7 @@
             "TxInhibitMonitorEnabled",
             "TxInhibitMonitorReversed",
             "WindBackPowerSwr",
+            "DisableHfPa",
             "MultimeterDelayMs",
             "NetworkWatchdogEnabled",
             "MoxTimeOutEnabled",

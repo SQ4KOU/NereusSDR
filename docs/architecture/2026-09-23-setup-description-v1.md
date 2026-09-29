@@ -170,7 +170,11 @@ shape remains described while its radio is disconnected. The live row
 capability is then absent; current-session capability, radio identity, and
 row-command checks must all allow an edit before a cell can be changed.
 
-Each table has the 14 `Band` rows from 160m through XVTR, in enum order.
+Each table has one row per antenna-list entry, in the lists' order: the
+14 `Band` rows from 160m through XVTR, in enum order, then 2 m (band 27,
+R-IOS-26) for a peer that declared `band2m` 1. Each row carries its band
+number, so a row's list entry is its position, not its band number. A peer
+without `band2m` is sent the 14 rows (station link section 6.1).
 The TX columns are Ant 1/2/3 (`field: "tx"`). RX has three RX1 columns
 (`field: "rx"`, labels 1/2/3) and three RX-only columns
 (`field: "rxOnly"`, labels from the current Core SKU). The RX table's
@@ -178,8 +182,8 @@ required `columnGroups` are exactly RX1 over rx1/rx2/rx3 and RX-only over
 rxOnly1/rxOnly2/rxOnly3; TX has no column groups. Each row's `cells` carry
 the native button tooltips in column order. These are fixed display and
 source facts, not a command-template language. The source is the existing
-three 14-integer CSV mirrors `txAntennas`, `rxAntennas`, and
-`rxOnlyAntennas`; RX-only value 0 means no button selected. The blocked
+three 15-integer CSV mirrors `txAntennas`, `rxAntennas`, and
+`rxOnlyAntennas` (14 for a peer without `band2m`, 2 m last); RX-only value 0 means no button selected. The blocked
 TX-port mirrors disable columns 2 and 3. A phone checks all values,
 capability, canonical connected MAC and session freshness together, then
 uses only the existing `setAlexTxAntennaForRadio` or

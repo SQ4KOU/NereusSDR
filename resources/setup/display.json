@@ -19,7 +19,7 @@
             {
               "id": "display.spectrumDefaults.smoothDefaults",
               "label": "Reset to Smooth Defaults",
-              "tooltip": "Overwrite this panadapter's spectrum and waterfall look with the NereusSDR smooth-default profile: Clarity Blue palette, log-recursive averaging, a white trace without fill, waterfall AGC on and a 30 ms waterfall update period. FFT size, frequency, band stack, and per-band grid ranges are not affected.",
+              "tooltip": "Overwrite this panadapter's spectrum and waterfall look with the NereusSDR smooth-default profile: Clarity Blue palette, log-recursive averaging with a 650 ms averaging time, a white trace without fill, waterfall AGC on and a 30 ms waterfall update period. FFT size, frequency, band stack, and per-band grid ranges are not affected.",
               "kind": "button",
               "binding": {
                 "phone": "smoothDefaults"

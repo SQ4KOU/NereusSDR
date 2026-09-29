@@ -10,6 +10,18 @@
 // J.J. Boyd (KG4VCF), AI-assisted implementation via OpenAI Codex.
 // 2026-09-28: Parity ruling C12: a window's per-band grid write reaches the
 // Core's pans. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - R-R3-49 / R-R3-46: Setup > Transmit > Power's Disable HF PA
+//                applied (Thetis DisablePA and hf_tr_relay,
+//                transmitSettingsVersion 11). J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
+//   2026-09-28 - R-R3-46 / R-R3-49: the Alex Filters tabs' receive filter rows
+//                (per-row bypass and edges, Alex-2 master bypass) select the
+//                receive high-pass as Thetis's setAlexHPF /
+//                setBPF1ForOrionIISaturn / setAlex2HPF do (radioHardwareVersion
+//                8). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-28: Parity ruling C4: radioHardwareVersion 9, setRadioSampleRate
+// for a paired device, off the air. J.J. Boyd (KG4VCF), AI-assisted via
+// Anthropic Claude Code.
 //   2026-09-28: R-R3-49 (lead's ruling): a calibration settings write
 //               outside its control's range (the Watt Meter points and
 //               their class, TX Display Cal, the correction factors, the
@@ -653,6 +665,25 @@
 //               declared txEqCurve 1; every other peer's schema, snapshot
 //               and deltas stay as they were. J.J. Boyd (KG4VCF), AI-assisted
 //               via Anthropic Claude Code.
+//   2026-09-28 - 2 m as its own band (R-IOS-26, R-R3-49). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28: Phone wire batch: diversityPatternVersion 1 and each
+//               slice's read-only diversityPattern only to a peer at minor
+//               11 whose hello declared diversityPattern 1
+//               (fitPeerOnlyProperties); every other peer's schema,
+//               snapshot and deltas stay as they were. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
+//   2026-09-28: Phone wire batch: logCategoryListVersion 1 and radio's
+//               logCategoryList the same way. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
+//   2026-09-28: Phone wire batch: radioModelsVersion 1 and stationRadios'
+//               modelLabel and models only to a peer that declared
+//               radioModels 1 (fitRecordBatchToPeer). J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
+//   2026-09-28: Ruling 7.1a: a shared change applied at once tells its
+//               devices after it applied (tellAppliedNow; a radio change's
+//               on its restart turn). J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 //   2026-09-28: R-R3-49 / R-IOS-18: Setup description version 13 (PA and
 //               Hardware Config); the description also carries the Core's
 //               radio for Radio Info. J.J. Boyd (KG4VCF), AI-assisted via
@@ -660,6 +691,7 @@
 // =================================================================
 
 #include "core/session/StationServer.h"
+#include "core/session/BandLinkFit.h"
 
 #include "core/TxSliceArbiter.h"
 #include "core/session/DataChannelTransport.h"
@@ -1125,6 +1157,50 @@ bool isVaxMessage(const SessionMessage& message)
         || (message.kind == SessionMessageKind::Schema && message.className == "StationVax");
 }
 
+// Phone wire batch: properties on an object every peer already gets that go
+// only to a peer at kRadioIdentitySessionProtocolMinor whose hello declared
+// `feature` 1 (StationServer::fitPeerOnlyProperties). Every other peer's
+// schema, snapshot and deltas stay exactly as they were.
+struct PeerOnlyProperty {
+    const char* className;
+    const char* objectKey;   // the key, or its prefix when keyIsPrefix
+    bool keyIsPrefix;
+    const char* property;
+    const char* feature;
+};
+
+constexpr PeerOnlyProperty kPeerOnlyProperties[] = {
+    // The Diversity dialog's sensitivity pattern (diversityPatternVersion 1).
+    {"SliceModel", "slice:", true, "diversityPattern", "diversityPattern"},
+    // The Support dialog's categories with labels (logCategoryListVersion 1).
+    {"RadioModel", "radio", false, "logCategoryList", "logCategoryList"},
+};
+
+// Phone wire batch: record fields that go only to a peer at
+// kRadioIdentitySessionProtocolMinor whose hello declared `feature` 1
+// (StationServer::fitRecordBatchToPeer).
+struct PeerOnlyRecordField {
+    const char* stream;
+    const char* field;
+    const char* feature;
+};
+
+constexpr PeerOnlyRecordField kPeerOnlyRecordFields[] = {
+    // Each radio's model label and the models it can run as
+    // (radioModelsVersion 1).
+    {"stationRadios", "modelLabel", "radioModels"},
+    {"stationRadios", "models", "radioModels"},
+};
+
+bool peerOnlyPropertyApplies(const PeerOnlyProperty& entry, const SessionMessage& message)
+{
+    if (message.kind == SessionMessageKind::Schema) {
+        return message.className == entry.className;
+    }
+    return entry.keyIsPrefix ? message.objectKey.startsWith(entry.objectKey)
+                             : message.objectKey == entry.objectKey;
+}
+
 // iPhone app Task 13: why a connection ends when its device is removed, and
 // when the token it signed in with is retired (Task 12's pairing text).
 constexpr const char* kDeviceRemovedReason = "This device was removed from the Core.";
@@ -1375,9 +1451,11 @@ bool isTransmitHardwareKey(const QString& rawKey)
 // the Core's own transmitting. Taken while the radio is off the air.
 bool isPowerPageTransmitKey(const QString& key)
 {
+    // transmitSettingsVersion 11: and "Disable HF PA" (DisableHfPa).
     return RadioModel::isSwrProtectionSettingKey(key)
         || key == QLatin1String("TxInhibitMonitorEnabled")
-        || key == QLatin1String("TxInhibitMonitorReversed");
+        || key == QLatin1String("TxInhibitMonitorReversed")
+        || key == QLatin1String(RadioModel::kDisableHfPaKey);
 }
 
 // R-R3-46 / R-R3-49 (parity Task 6): Setup > PA's keys, the PA profiles
@@ -1568,7 +1646,32 @@ bool sameJsonObject(const QVariant& a, const QVariant& b)
 {
     const QJsonDocument left = QJsonDocument::fromJson(a.toString().toUtf8());
     const QJsonDocument right = QJsonDocument::fromJson(b.toString().toUtf8());
-    return left.isObject() && right.isObject() && left == right;
+    if (!left.isObject() || !right.isObject()) {
+        return false;
+    }
+    // R-IOS-26 / R-R3-49: a per-band watts map written without "2m" (a
+    // peer built before 2 m, or one writing the 14 it knows) keeps 2 m's
+    // value; the Core's map then matches it without its "2m" key.
+    QJsonObject kept = left.object();
+    if (!right.object().contains(QLatin1String("2m"))) {
+        kept.remove(QLatin1String("2m"));
+    }
+    return kept == right.object();
+}
+
+// R-IOS-26 / R-R3-49: a per-band antenna list written with the 14 entries
+// of a peer built before 2 m keeps 2 m's entry (AlexAntennaFacade::decode);
+// the Core's 15-entry list then matches it without its last entry.
+bool sameAntennaListWithout2m(const QVariant& actual, const QVariant& written)
+{
+    QStringList kept = actual.toString().split(QLatin1Char(','));
+    const QStringList sent = written.toString().split(QLatin1Char(','));
+    if (kept.size() != BandLinkFit::kListEntriesWithout2m + 1
+        || sent.size() != BandLinkFit::kListEntriesWithout2m) {
+        return false;
+    }
+    kept.removeLast();
+    return kept == sent;
 }
 
 // R-R3-46 / R-R3-49 (parity Task 14, radioHardwareVersion 7): the Alex
@@ -2431,6 +2534,13 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
                 if (m_holdingRadioChange && !m_heldRadioChange && result.accepted
                     && result.commandVerb == "station.selectRadio") {
                     m_heldRadioChange = HeldRadioChange{key, result, false, {}};
+                    // Ruling 7.1a: a radio change applied at once tells
+                    // its devices when it answers.
+                    if (m_appliedNowRadio) {
+                        m_heldRadioChange->later = *m_appliedNowRadio;
+                        m_heldRadioChange->tellOnFinish = true;
+                        m_appliedNowRadio.reset();
+                    }
                     return;
                 }
                 SessionTransport* to = nullptr;
@@ -2500,6 +2610,12 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
                     // console.RXOnly does at once (setup.cs:6498
                     // [v2.10.3.15]: console.RXOnly = chkGeneralRXOnly.Checked).
                     m_radioModel->applyRxOnlySetting(on);
+                } else if (key == QLatin1String(RadioModel::kDisableHfPaKey)) {
+                    // transmitSettingsVersion 11: Disable HF PA reaches the
+                    // Core's radio and SWR protection at once, as Thetis's
+                    // console.HFTRRelay does (setup.cs:16750-16754
+                    // [v2.10.3.15]).
+                    m_radioModel->applyDisableHfPaSetting(value);
                 }
             });
     // Whole-branch review, Important 4. A removal has its own signal and
@@ -2554,6 +2670,10 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
                 } else if (key == QLatin1String("RxOnly") && m_radioModel) {
                     // Task 16: Receive Only defaults off.
                     m_radioModel->applyRxOnlySetting(false);
+                } else if (key == QLatin1String(RadioModel::kDisableHfPaKey) && m_radioModel) {
+                    // Disable HF PA defaults off (console.cs:10891
+                    // [v2.10.3.15] hf_tr_relay = false).
+                    m_radioModel->applyDisableHfPaSetting(QVariant());
                 }
             });
 
@@ -3108,7 +3228,7 @@ void StationServer::finishRadioChange(bool proceeded, const QString& refusal)
     if (to != nullptr && m_peers.contains(to)) {
         sendToPeer(to, answer);
     }
-    if (held.proceed) {
+    if (held.proceed || held.tellOnFinish) {
         if (proceeded) {
             tellSettingChanged(held.later.affected, held.later.sliceWords, held.later.change,
                                held.later.requester);
@@ -3142,6 +3262,20 @@ bool StationServer::peerDeclares(SessionTransport* peer, const QByteArray& featu
         return false;
     }
     return it->features.value(feature) >= minVersion;
+}
+
+bool StationServer::peerKnows2m(SessionTransport* peer) const
+{
+    const auto it = m_peers.constFind(peerKey(peer));
+    return it != m_peers.constEnd() && it->agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && peerDeclares(peer, QByteArray(BandLinkFit::kFeature), 1);
+}
+
+QByteArray StationServer::encodeFor(SessionTransport* transport,
+                                    const SessionMessage& message) const
+{
+    const QByteArray wire = SessionMessages::encode(message);
+    return peerKnows2m(transport) ? wire : BandLinkFit::forPeerWithout2m(wire);
 }
 
 quint16 StationServer::serverPort() const
@@ -4539,6 +4673,24 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
                 message.commandVerb, message.commandId, false,
                 StationRadios::pairedDeviceReason(), {}));
             break;
+        }
+        // Parity ruling C4 (radioHardwareVersion 8): the radio's sample
+        // rate is a radio-wide change, so like the Core's radio verbs it is
+        // for a paired device, and like the transmit region it waits while
+        // the radio is on the air, whoever holds transmit (the change stops
+        // the radio's data flow).
+        if (message.commandVerb == "setRadioSampleRate") {
+            QString refusal;
+            if (!peerSeesPairingCode(transport) && !m_tokenSessionsMayChangeRadioForTest) {
+                refusal = QStringLiteral("Change the radio's sample rate from a paired device.");
+            } else if (!m_radioModel.isNull()) {
+                m_radioModel->stationOnAirRefusal(&refusal);
+            }
+            if (!refusal.isEmpty()) {
+                send(transport, SessionMessages::commandResult(
+                    message.commandVerb, message.commandId, false, refusal, {}));
+                break;
+            }
         }
         {
             // A revoke of the requester's own device, or a token session
@@ -6231,9 +6383,13 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
     // leaves its shared receiver's window may be a pan move, asked first,
     // or a take once refused.
     if (handleSliceRetune(transport, message)) {
+        tellAppliedNow(false);
         return;
     }
-    applyPropertyWrite(transport, message, true, {});
+    const QList<SessionPropertyResult> results = applyPropertyWrite(transport, message, true, {});
+    // Ruling 7.1a: a change applied at once tells the devices it disturbed.
+    tellAppliedNow(std::any_of(results.cbegin(), results.cend(),
+                               [](const SessionPropertyResult& r) { return r.accepted; }));
 }
 
 QList<SessionPropertyResult> StationServer::applyPropertyWrite(
@@ -6552,8 +6708,11 @@ QList<SessionPropertyResult> StationServer::applyPropertyWrite(
         result.reason = refusals.value(update.name);
         const bool sameMap = message.objectKey == QByteArray(kTransmitKey) && result.hasValue
             && sameJsonObject(result.value.value, update.value);
+        const bool sameList = alexWrite && result.hasValue
+            && sameAntennaListWithout2m(result.value.value, update.value);
         if (result.reason.isEmpty()
-            && (!result.hasValue || (result.value.value != update.value && !sameMap))) {
+            && (!result.hasValue
+                || (result.value.value != update.value && !sameMap && !sameList))) {
             // R-R3-46: the attenuator says in plain words why it kept
             // another value (its range, what this radio offers).
             if (stepAttWrite && !m_radioModel.isNull()) {
@@ -6596,9 +6755,13 @@ QList<SessionPropertyResult> StationServer::applyPropertyWrite(
         // choosing a model clears it), so they are fitted to this peer too.
         SessionMessage delta = SessionMessages::delta(message.objectKey, corrections);
         // R-IOS-13 / R-R3-49: a txEqParaEqData write moves txEqCurve too,
-        // which only a peer that declared it is sent.
+        // which only a peer that declared it is sent. Phone wire batch: a
+        // write's side effects can move a declared feature's property (a
+        // slice's frequency moves its diversityPattern), which only a peer
+        // that declared it is sent.
         if (fitNnrLimitToPeer(delta, m_peers.value(transport).agreedMinor)
-            && fitTxEqCurveToPeer(transport, delta)) {
+            && fitTxEqCurveToPeer(transport, delta)
+            && fitPeerOnlyProperties(transport, delta)) {
             send(transport, delta);
         }
     }
@@ -6693,7 +6856,8 @@ void StationServer::handleSettingsWrite(SessionTransport* transport,
     if (handleSharedSetting(transport, message)) {
         return;
     }
-    applySettingsWrite(transport, message, nullptr);
+    // Ruling 7.1a: a change applied at once tells the devices it disturbed.
+    tellAppliedNow(applySettingsWrite(transport, message, nullptr));
 }
 
 QString StationServer::bandPlanRefusal(const QString& key, const QVariant& value) const
@@ -6920,6 +7084,8 @@ void StationServer::handleSettingsRemove(SessionTransport* transport, const Sess
         return;
     }
     applySettingsRemove(message);
+    // Ruling 7.1a: a change applied at once tells the devices it disturbed.
+    tellAppliedNow(true);
 }
 
 void StationServer::applySettingsRemove(const SessionMessage& message)
@@ -7153,7 +7319,7 @@ void StationServer::send(SessionTransport* transport, const SessionMessage& mess
     if (transport == nullptr) {
         return;
     }
-    transport->sendText(SessionMessages::encode(message));
+    transport->sendText(encodeFor(transport, message));
 }
 
 bool StationServer::peerSeesPairingCode(SessionTransport* transport) const
@@ -7270,8 +7436,11 @@ void StationServer::sendToPeer(SessionTransport* transport, const SessionMessage
     case SessionMessageKind::ObjectCreate:
     case SessionMessageKind::Delta: {
         // R-IOS-13 / R-R3-49: transmit's txEqCurve only to a peer that
-        // declared it; every other peer gets today's transmit.
-        if (!fitTxEqCurveToPeer(transport, message)) {
+        // declared it; every other peer gets today's transmit. Phone wire
+        // batch: a declared feature's properties only to a peer that
+        // declared it; every other peer gets today's object.
+        if (!fitTxEqCurveToPeer(transport, message)
+            || !fitPeerOnlyProperties(transport, message)) {
             return;
         }
         const auto peer = m_peers.constFind(transport);
@@ -7378,7 +7547,7 @@ void StationServer::sendToPeer(SessionTransport* transport, const SessionMessage
                         update.value.toString(), version, antennaRowsAvailable);
                 }
             }
-            transport->sendText(SessionMessages::encode(fitted));
+            transport->sendText(encodeFor(transport, fitted));
             return;
         }
         // Parity Task 19: nor the spot sources to an older app.
@@ -7389,18 +7558,18 @@ void StationServer::sendToPeer(SessionTransport* transport, const SessionMessage
         if (!needsNnrFit(message, minor)) {
             // Most messages carry no NNR field: send them as they are.
             if (worthSendingAfterNnrFit(message)) {
-                transport->sendText(SessionMessages::encode(message));
+                transport->sendText(encodeFor(transport, message));
             }
             return;
         }
         SessionMessage fitted = message;
         if (fitNnrLimitToPeer(fitted, minor)) {
-            transport->sendText(SessionMessages::encode(fitted));
+            transport->sendText(encodeFor(transport, fitted));
         }
         return;
     }
     default:
-        transport->sendText(SessionMessages::encode(message));
+        transport->sendText(encodeFor(transport, message));
         return;
     }
 }
@@ -7476,6 +7645,64 @@ bool StationServer::fitTxEqCurveToPeer(SessionTransport* transport,
     default:
         return true;
     }
+}
+
+// ── Properties for a declaring peer only (phone wire batch) ─────────────
+
+bool StationServer::peerGetsFeatureProperties(SessionTransport* transport,
+                                              const QByteArray& feature) const
+{
+    const auto peer = m_peers.constFind(transport);
+    return peer != m_peers.cend() && !m_radioModel.isNull()
+        && peer->agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && peerDeclares(transport, feature, 1);
+}
+
+bool StationServer::fitPeerOnlyProperties(SessionTransport* transport,
+                                          SessionMessage& message) const
+{
+    const qsizetype before = message.updates.size();
+    for (const PeerOnlyProperty& entry : kPeerOnlyProperties) {
+        if (!peerOnlyPropertyApplies(entry, message)
+            || peerGetsFeatureProperties(transport, QByteArray(entry.feature))) {
+            continue;
+        }
+        const QByteArray name(entry.property);
+        switch (message.kind) {
+        case SessionMessageKind::Schema:
+            message.fields.removeIf([&name](const SessionSchemaField& field) {
+                return field.name == name;
+            });
+            break;
+        case SessionMessageKind::ObjectCreate:
+        case SessionMessageKind::Delta:
+            message.updates.removeIf([&name](const MirrorUpdate& update) {
+                return update.name == name;
+            });
+            break;
+        default:
+            break;
+        }
+    }
+    // A delta that carried only such properties is not sent at all.
+    return message.kind != SessionMessageKind::Delta || before == 0
+        || !message.updates.isEmpty();
+}
+
+RecordBatch StationServer::fitRecordBatchToPeer(SessionTransport* transport,
+                                                RecordBatch batch) const
+{
+    for (const PeerOnlyRecordField& entry : kPeerOnlyRecordFields) {
+        if (batch.stream != QLatin1String(entry.stream)
+            || peerGetsFeatureProperties(transport, QByteArray(entry.feature))) {
+            continue;
+        }
+        const QString field = QString::fromLatin1(entry.field);
+        for (RecordUpsert& upsert : batch.upserts) {
+            upsert.fields.remove(field);
+        }
+    }
+    return batch;
 }
 
 // ── Slice ownership (iPhone app Task 73) ─────────────────────────────────
@@ -8866,7 +9093,11 @@ bool StationServer::isTransmitSettingKeyTakenOnAir(const QString& key)
 {
     // R-R3-46 / R-R3-49 (parity Task 13): the keys Thetis changes while
     // transmitting (isTransmitHardwareKeyTakenOnAir).
-    return isTransmitHardwareKeyTakenOnAir(key.toLower().split(QLatin1Char('/')));
+    // transmitSettingsVersion 11: and "Disable HF PA", which Thetis applies
+    // with no MOX check (setup.cs:16750-16754 [v2.10.3.15]
+    // chkHFTRRelay_CheckedChanged: console.HFTRRelay = chkHFTRRelay.Checked).
+    return key == QLatin1String(RadioModel::kDisableHfPaKey)
+        || isTransmitHardwareKeyTakenOnAir(key.toLower().split(QLatin1Char('/')));
 }
 
 bool StationServer::transmitSettingsOffered(SessionTransport* transport) const
@@ -9794,7 +10025,10 @@ int StationServer::transmitSettingsVersion() const
     // 10: the mic mute, `transmit.micMuted` (iPhone app plan Task 40),
     // under the same gates as the mic level; muting sets the Core's mic
     // preamp to 0.0 as Thetis's chkMicMute does.
-    return m_radioModel.isNull() ? 0 : 10;
+    // 11: Setup > Transmit > Power's "Disable HF PA" (DisableHfPa), taken on
+    // and off the air as Thetis applies it, and applied to the Core's
+    // connection (the DisablePA bit) and SWR protection at once.
+    return m_radioModel.isNull() ? 0 : 11;
 }
 
 bool StationServer::pureSignalArmingOffered(SessionTransport* transport) const
@@ -9884,7 +10118,17 @@ int StationServer::radioHardwareVersion() const
     // air (they reach the N2ADR filter board in the transmit path); a read
     // and the three switches are not (Thetis sets the switches with no MOX
     // check).
-    return m_radioModel->ioBoardFacade()->isBound() ? 7 : 2;
+    //
+    // 8: the Alex Filters tabs' receive filter rows (hardware/<mac>/alex/hpf,
+    // alex/bpf1 and alex2/hpf: each row's Bypass, Start and End; and
+    // alex2/master/bypass55MhzBpf), applied to the Core's radio at once
+    // (RadioModel::savedAlexHpfEdges through the "alex" reload), on and off
+    // the air, as Thetis's per-row setters re-select the high-pass with no
+    // MOX check (console.cs:18823-19040 [v2.10.3.15]).
+    // 9 (parity ruling C4): the radio's sample rate from a window
+    // (setRadioSampleRate), every receiver and the radio's own rate, as a
+    // local window's Radio Info change; for a paired device, off the air.
+    return m_radioModel->ioBoardFacade()->isBound() ? 9 : 2;
 }
 
 QString StationServer::radioAntennaRowRefusal(SessionTransport* transport,
@@ -9979,6 +10223,9 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             // A radio-bound row needs the complete existing antenna path,
             // an Alex board, and an exactly named connected radio.
             const QString currentMac = m_radioModel->currentRadioMac();
+            // R-IOS-26 / R-R3-49: 2 m as its own band, for a peer that
+            // declared band2m (any other is sent none, and sees 2 m as GEN).
+            caps.band2mVersion = peerKnows2m(transport) ? 1 : 0;
             caps.radioAntennaRowsVersion = peer->features.value(
                     QByteArrayLiteral("radioAntennaRows")) == 1
                 && m_radioModel->role() == RadioModel::Role::Local
@@ -10074,6 +10321,21 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             if (peerDeclares(transport, QByteArrayLiteral("vax"), 1)) {
                 caps.vaxEntry = true;
                 caps.vaxVersion = vaxVersion();
+            }
+            // Phone wire batch: each slice's diversityPattern, after vax,
+            // for a peer that declared diversityPattern 1.
+            caps.diversityPatternVersion =
+                peerGetsFeatureProperties(transport, QByteArrayLiteral("diversityPattern")) ? 1 : 0;
+            // Phone wire batch: radio's logCategoryList, for a peer that
+            // declared logCategoryList 1.
+            caps.logCategoryListVersion =
+                peerGetsFeatureProperties(transport, QByteArrayLiteral("logCategoryList")) ? 1 : 0;
+            // Phone wire batch: stationRadios' modelLabel and models, for a
+            // peer that declared radioModels 1, on a Core that keeps the
+            // radio list.
+            if (peerGetsFeatureProperties(transport, QByteArrayLiteral("radioModels"))) {
+                caps.radioModelsEntry = true;
+                caps.radioModelsVersion = stationRadiosVersion() >= 1 ? 1 : 0;
             }
             if (peerDeclares(transport, QByteArrayLiteral("remoteTx"), 1)) {
                 caps.remoteTxEntry = true;
@@ -10346,7 +10608,9 @@ void StationServer::flushRecordStreams()
             // (dropPeer unsubscribes it before it goes).
             auto* transport = static_cast<SessionTransport*>(const_cast<void*>(subscriber));
             if (m_peers.contains(transport)) {
-                send(transport, SessionMessages::recordBatch(batch));
+                // Phone wire batch: a declared feature's fields only to a
+                // peer that declared it.
+                send(transport, SessionMessages::recordBatch(fitRecordBatchToPeer(transport, batch)));
             }
         }
     }
@@ -10423,7 +10687,7 @@ void StationServer::handleRecordsCommand(SessionTransport* transport, const Sess
     const int wanted = static_cast<int>(std::min<qint64>(backlog, it->second->capacity()));
     const RecordBatch first = it->second->subscribe(transport, wanted);
     answer(true, QString());
-    send(transport, SessionMessages::recordBatch(first));
+    send(transport, SessionMessages::recordBatch(fitRecordBatchToPeer(transport, first)));
     if (m_modMonitor) {
         m_modMonitor->subscriptionsChanged();
     }

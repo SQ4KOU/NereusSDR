@@ -275,18 +275,42 @@ private slots:
         const PlacementPlan plan =
             planThreadPlacement(topology, demand({0, 1}, true, true));
         QVERIFY(plan.active);
+        // G-06: RX1's worker, the DSP thread, then the transmit roles,
+        // then the further receivers.
         QCOMPARE(plan.cpuFor(ThreadRole::RxWorker, 0), 4);
         QCOMPARE(plan.cpuFor(ThreadRole::DspThread), 5);
-        QCOMPARE(plan.cpuFor(ThreadRole::RxWorker, 1), 6);
-        QCOMPARE(plan.cpuFor(ThreadRole::TxWorker, 5), 7);
+        QCOMPARE(plan.cpuFor(ThreadRole::TxWorker, 5), 6);
+        QCOMPARE(plan.cpuFor(ThreadRole::RxWorker, 1), 7);
         QCOMPARE(plan.housekeeping, (QList<int>{0, 1, 2, 3}));
         QCOMPARE(plan.signalPool, (QList<int>{4, 5, 6, 7}));
 
-        // A fifth busy thread has no fast core left and runs on 0-3.
+        // A fifth busy thread: the transmit pump comes before the second
+        // receiver, which has no fast core left and runs on 0-3.
         const PlacementPlan full =
             planThreadPlacement(topology, demand({0, 1}, true, true, true));
-        QCOMPARE(full.cpuFor(ThreadRole::TxWorkerThread), -1);
+        QCOMPARE(full.cpuFor(ThreadRole::TxWorkerThread), 7);
+        QCOMPARE(full.cpuFor(ThreadRole::RxWorker, 1), -1);
         QCOMPARE(full.housekeeping, (QList<int>{0, 1, 2, 3}));
+    }
+
+    // G-06: the three transmit roles, in order, come before every receive
+    // worker after the first. Eight equal cores reserve six (N-2).
+    void transmitRolesComeBeforeFurtherReceivers()
+    {
+        SysfsFixture f;
+        f.online("0-7");
+        PlacementDemand d = demand({0, 1, 2}, true, true, true);
+        d.txIqSender = true;
+        const PlacementPlan plan = planThreadPlacement(f.read(), d);
+        QVERIFY(plan.active);
+        QCOMPARE(plan.signalPool, (QList<int>{7, 6, 5, 4, 3, 2}));
+        QCOMPARE(plan.cpuFor(ThreadRole::RxWorker, 0), 7);
+        QCOMPARE(plan.cpuFor(ThreadRole::DspThread), 6);
+        QCOMPARE(plan.cpuFor(ThreadRole::TxWorker, 5), 5);
+        QCOMPARE(plan.cpuFor(ThreadRole::TxWorkerThread), 4);
+        QCOMPARE(plan.cpuFor(ThreadRole::TxIqSender), 3);
+        QCOMPARE(plan.cpuFor(ThreadRole::RxWorker, 1), 2);
+        QCOMPARE(plan.cpuFor(ThreadRole::RxWorker, 2), -1);
     }
 
     void raspberryPiReservesTheTopTwoCores()
@@ -541,8 +565,9 @@ private slots:
         QCOMPARE(lastNice(calls, 200), kDspNice);
         QCOMPARE(lastCpus(calls, 102), QList<int>{6});
 
-        // Transmit worker and pump: the worker gets 7 while transmitting;
-        // the pump, with no fast core left, runs on housekeeping at normal
+        // Transmit worker and pump (G-06): while transmitting they come
+        // before the second receiver, so the worker takes 6 and the pump 7,
+        // and RX1, with no fast core left, runs on housekeeping at normal
         // priority, level with spectrum and networking there.
         current = 105;
         placement.onWdspThreadStarted(kWdspThreadTxMain, 5);
@@ -552,21 +577,23 @@ private slots:
         placement.registerCurrentThread(ThreadRole::TxWorkerThread);
         QCOMPARE(lastNice(calls, 300), 0);
         placement.setChannelActive(ThreadRole::TxWorker, 5, true);
-        QCOMPARE(lastCpus(calls, 105), QList<int>{7});
+        QCOMPARE(lastCpus(calls, 105), QList<int>{6});
         QCOMPARE(lastNice(calls, 105), kDspNice);
-        QCOMPARE(lastCpus(calls, 300), hk);
-        QCOMPARE(lastNice(calls, 300), 0);
+        QCOMPARE(lastCpus(calls, 300), QList<int>{7});
+        QCOMPARE(lastNice(calls, 300), kDspNice);
+        QCOMPARE(lastCpus(calls, 102), hk);
+        QCOMPARE(lastNice(calls, 102), 0);
 
-        // RX0 stops: back to housekeeping at normal priority; the rest
-        // move up.
+        // RX0 stops: back to housekeeping at normal priority. RX1 is now
+        // the first receive worker, so it takes 4 and the rest follow.
         placement.setChannelActive(ThreadRole::RxWorker, 0, false);
         QCOMPARE(lastCpus(calls, 101), hk);
         QCOMPARE(lastNice(calls, 101), 0);
         QCOMPARE(lastCpus(calls, 102), QList<int>{4});
+        QCOMPARE(lastNice(calls, 102), kDspNice);
         QCOMPARE(lastCpus(calls, 200), QList<int>{5});
         QCOMPARE(lastCpus(calls, 105), QList<int>{6});
         QCOMPARE(lastCpus(calls, 300), QList<int>{7});
-        // With a core of its own, the pump is raised.
         QCOMPARE(lastNice(calls, 300), kDspNice);
 
         // Transmit ends.
@@ -575,6 +602,7 @@ private slots:
         QCOMPARE(lastNice(calls, 105), 0);
         QCOMPARE(lastCpus(calls, 300), hk);
         QCOMPARE(lastNice(calls, 300), 0);
+        QCOMPARE(lastCpus(calls, 102), QList<int>{4});
 
         // Channel 1 closes: its thread is forgotten, never touched again.
         placement.forgetChannel(1);

@@ -292,7 +292,7 @@
                         "kind": "i64",
                         "name": "radioHardwareVersion",
                         "ordinal": 0,
-                        "value": 7
+                        "value": 9
                     },
                     {
                         "kind": "i64",
@@ -358,7 +358,7 @@
                         "kind": "i64",
                         "name": "transmitSettingsVersion",
                         "ordinal": 0,
-                        "value": 10
+                        "value": 11
                     },
                     {
                         "kind": "i64",

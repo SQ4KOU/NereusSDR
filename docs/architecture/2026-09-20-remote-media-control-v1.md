@@ -978,12 +978,15 @@ last by Opus loss concealment, the last from the arriving packet's in-band
 FEC (Opus codes FEC only for frames its voice detector calls active; for
 any other frame the decoder conceals); a lost L16 packet is 4 ms of
 silence. A gap longer than 60 ms inserts nothing. The decoded audio goes to
-the transmit jitter buffer, WDSP rmatch run on the transmit pump's thread,
-which matches the sender's clock to the radio's in both directions: its
-ring targets 60 ms (rmatch holds it half full) and never exceeds 120 ms
-(beyond that the oldest audio is dropped and counted). After every change
-of use the buffer starts empty and the pump hears silence until it holds
-60 ms, then the audio.
+the transmit jitter buffer on the transmit pump's thread, with WDSP rmatch
+at a ratio the buffer sets matching the sender's clock to the radio's in
+both directions. Its target is one packet plus a margin that starts at
+10 ms (30 ms for the phone's 20 ms packets), grows only with the jitter
+measured in the packets' arrivals, eases back while the link is steady, and
+never exceeds 120 ms (beyond that the oldest audio is dropped and counted);
+a standing excess is shed only in silence. After every change of use the
+buffer starts empty and the pump hears silence until it holds its target,
+then the audio.
 
 **When the transmitter takes it.** The transmitter's microphone is the line
 while the device whose media carries it is keyed (its own key, its
@@ -995,9 +998,10 @@ as any microphone does.
 
 **Keying on a filled buffer.** A `tx.key` from a device whose media carries
 the line, in a mode that transmits the microphone (every mode but CWL and
-CWU), keys once the line's buffer holds its 60 ms target; if it has not
-within 250 ms it is refused `micNotReady` (the link document, sections 18.3
-and 18.6). TUNE and two-tone use no microphone and key at once, and a
+CWU), keys once the line's buffer holds its target (30 ms on a steady link); if it has not
+within 250 ms of the line's first packet after the key, or no packet has
+come within 1 s of the key, it is refused `micNotReady` (the link document,
+sections 18.3 and 18.6). TUNE and two-tone use no microphone and key at once, and a
 device without the line keys with the Core's own source, as before.
 
 **Starvation.** While the device is keyed on its line, 250 ms without audio

@@ -247,6 +247,11 @@
 //               passes; the station's timers fire on the clock alone).
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-28: Load findings 2: a fixture's data channel that fails
+//               ends its open wait at once with the failure's reason, and
+//               one that stalls names the stage it stalled at; the 15 s
+//               bound is unchanged. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -302,6 +307,10 @@ using NereusSDR::Test::LinkVirtualClock;
 using NereusSDR::Test::LoopbackTransport;
 
 namespace {
+
+// How long a fixture's data channel has to open (the DTLS and SCTP
+// handshakes on this computer, in real time).
+constexpr int kOpenBoundMs = 15000;
 
 const QStringList kSetupKeys{
     QStringLiteral("radio"),           QStringLiteral("slices"),
@@ -1034,6 +1043,7 @@ private slots:
     void sessionFixturesOverADataChannel_data();
     void sessionFixturesOverADataChannel();
     void aRejectedDataChannelStartReportsItsStage();
+    void aFailedDataChannelEndsTheOpenWaitWithItsReason();
     void everyVerbIsInvokedRightAndWrong();
     void rightAndWrongLegsGetDifferentAnswers();
     void everyFixtureRunsOnTheStation();
@@ -1094,6 +1104,14 @@ void TstLinkConformanceSession::init()
         && qstrcmp(QTest::currentTestFunction(), "sessionFixtures") != 0
         && qstrcmp(QTest::currentTestFunction(), "sessionFixturesOverADataChannel") != 0) {
         QSKIP("NEREUS_LINK_REALTIME=only runs the real-time fixtures alone");
+    }
+    // Load findings 3: the data-channel fixtures run as their own ctest
+    // entry (NEREUS_LINK_MODE=datachannel), the in-process ones and every
+    // other check in the first (NEREUS_LINK_MODE=loopback), so neither
+    // carries the other's time.
+    if (modeSelection() == ModeSelection::DataChannel
+        && qstrcmp(QTest::currentTestFunction(), "sessionFixturesOverADataChannel") != 0) {
+        QSKIP("NEREUS_LINK_MODE=datachannel runs the data-channel fixtures alone");
     }
 }
 
@@ -1165,21 +1183,28 @@ QString TstLinkConformanceSession::run(const QString& id, const QJsonObject& fix
             nullptr, evidence.observer());
         NereusSDR::Test::DataChannelBridge* opened = bridge.get();
         bridges.push_back(std::move(bridge));
-        // Real time: the DTLS and SCTP handshakes on this computer.
-        const bool didOpen = opened->started()
-            && NereusSDR::Test::waitFor([opened] { return opened->opened(); }, 15000);
+        // Real time: the DTLS and SCTP handshakes on this computer. Load
+        // findings 2: a failure at either end ends the wait at once and is
+        // reported with its reason; a stall is reported with the stage it
+        // stalled at.
+        const bool didOpen = opened->started() && opened->waitForOpen(kOpenBoundMs);
         if (!didOpen && diagnostic) {
-            *diagnostic = QStringLiteral("%1 elapsed=%2ms")
-                              .arg(opened->openDiagnostic())
+            const QString what = !opened->started()
+                ? QStringLiteral("did not start")
+                : opened->failed()
+                    ? QStringLiteral("failed before it opened (%1)").arg(opened->failureReasons())
+                    : QStringLiteral("did not open within %1 ms, stalled at %2")
+                          .arg(kOpenBoundMs).arg(evidence.lastLibraryStage());
+            *diagnostic = QStringLiteral("%1 (%2 elapsed=%3ms")
+                              .arg(what, opened->openDiagnostic())
                               .arg(elapsed.elapsed())
-                + QLatin1Char('\n') + evidence.diagnostic();
+                + QLatin1Char('\n') + evidence.diagnostic() + QLatin1Char(')');
         }
         return didOpen;
     };
     QString openDiagnostic;
     if (!join(&client, &openDiagnostic)) {
-        return QStringLiteral("%1: the data channel did not open (%2)")
-            .arg(id, openDiagnostic);
+        return QStringLiteral("%1: the data channel %2").arg(id, openDiagnostic);
     }
     LinkFixtures::setSettleCheck([&bridges] {
         for (const auto& bridge : bridges) {
@@ -1279,6 +1304,27 @@ void TstLinkConformanceSession::aRejectedDataChannelStartReportsItsStage()
                  QStringLiteral("start(answerer=1,offerer=0) opened(answerer=0,offerer=0) "
                                 "failed(answerer=1,offerer=1)"));
     }
+}
+
+// Load findings 2: a channel that fails before it opens ends the open wait
+// at once and names its reason; a library's own message is not repeated.
+void TstLinkConformanceSession::aFailedDataChannelEndsTheOpenWaitWithItsReason()
+{
+    LoopbackTransport client(QStringLiteral("diagnostic-client"));
+    NereusSDR::Test::DataChannelBridge bridge(
+        &client, StationServer::kMaxIncomingMessageBytes, StationClient::kMaxIncomingMessageBytes,
+        {}, {}, [](DataChannelTransport*) {});
+    QVERIFY(bridge.started());
+    emit bridge.offerer()->failed(QStringLiteral("the control connection could not be made"));
+    emit bridge.answerer()->failed(QStringLiteral("a message from the library, 10.0.0.1"));
+    QElapsedTimer waited;
+    waited.start();
+    QVERIFY(!bridge.waitForOpen(kOpenBoundMs));
+    QVERIFY2(waited.elapsed() < 1000, qPrintable(QString::number(waited.elapsed())));
+    QVERIFY(bridge.failed());
+    QCOMPARE(bridge.failureReasons(),
+             QStringLiteral("answerer: library error; "
+                            "offerer: the control connection could not be made"));
 }
 
 void TstLinkConformanceSession::runFixtureRow(bool overDataChannel)

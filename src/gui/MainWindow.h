@@ -53,6 +53,8 @@
 //   2026-09-28 - J.J. Boyd (KG4VCF). Parity Task 25: the container filter
 //                and band-stack right-clicks. AI-assisted via Anthropic
 //                Claude Code.
+//   2026-09-28 - J.J. Boyd (KG4VCF). Parity ruling C9: m_cpuRowCycler and
+//                refreshCpuRow. AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -104,6 +106,7 @@
 // Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
 //============================================================================================//
 
+#include "gui/widgets/CpuRowCycler.h"
 #include <functional>
 #include <memory>
 #include <map>
@@ -1498,6 +1501,10 @@ private:
     // updated via 0.8 * prev + 0.2 * new (matches Thetis console.cs:26224).
     bool   m_cpuShowSystem{true};
     double m_cpuSmoothedPct{0.0};
+    // Parity ruling C9: a remote window's CPU row, this computer's and the
+    // Core's (CpuRowCycler); its source persisted as "CpuRowSource".
+    CpuRowCycler m_cpuRowCycler;
+    void refreshCpuRow(qint64 elapsedMs);
     // Process-CPU delta state (getrusage). Reset on toggle so the next
     // reading starts fresh rather than reporting accumulated cross-mode delta.
     qint64 m_cpuProcPrevWallUs{0};

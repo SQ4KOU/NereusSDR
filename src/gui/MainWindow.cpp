@@ -352,9 +352,20 @@
 //                preset, as the VFO flag's and RX applet's do; a band-stack
 //                right-click says band stacking is not ready yet. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - Parity ruling C9: a remote window's System tile CPU row
+//                shows this computer's CPU and the Core's, cycling every
+//                3 s, pinned from its right-click, held in the warning
+//                colour on a reading above 80%. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 //   2026-09-28 - Parity ruling C13: a remote window's Performance
 //                Overlay adds the Core's drops (wireSpectrumForPan).
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - 2 m as its own band (R-IOS-26, R-R3-49). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - R-R3-49 / R-R3-46: Setup > Transmit > Power's Disable HF PA
+//                applied (Thetis DisablePA and hf_tr_relay,
+//                transmitSettingsVersion 11). J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -9087,6 +9098,9 @@ void MainWindow::buildMenuBar()
             { "12m",              Band::Band12m  },
             { "10m",              Band::Band10m  },
             { "6m",               Band::Band6m   },
+            // R-IOS-26: 2 m is its own band, after 6 m in Thetis's HF band
+            // group (MeterManager.cs GetBandGroupFromBand [v2.10.3.15]).
+            { "2m",               Band::Band2m   },
         };
         for (const auto& entry : hfBands) {
             const Band band = entry.band;
@@ -10536,6 +10550,10 @@ void MainWindow::buildStatusBar()
                           .value(QStringLiteral("CpuShowSystem"),
                                  QStringLiteral("True"))
                           .toString() == QStringLiteral("True"));
+    // Parity ruling C9: a remote window's CPU row source.
+    m_cpuRowCycler.setSource(CpuRowCycler::sourceFromKey(
+        AppSettings::instance().value(QStringLiteral("CpuRowSource"),
+                                      QStringLiteral("Cycle")).toString()));
 
     m_cpuTimer = new QTimer(this);
     connect(m_cpuTimer, &QTimer::timeout, this, [this]() {
@@ -10544,7 +10562,7 @@ void MainWindow::buildStatusBar()
         // Thetis smoothing: smoothed = smoothed*0.8 + new*0.2
         m_cpuSmoothedPct = m_cpuSmoothedPct * 0.8 + pct * 0.2;
         if (m_systemTile) {
-            m_systemTile->setCpuPercent(m_cpuSmoothedPct);
+            refreshCpuRow(m_cpuTimer->interval());
             // CPU's digit count varies (0-100%), so its row can change
             // width tick to tick. Cheap: relayout() no-ops unless the
             // computed rung actually changes (ChromeBarController::relayout).
@@ -12446,8 +12464,38 @@ void MainWindow::onCpuMenuRequested(const QPoint& localPos)
     appAct->setCheckable(true);
     appAct->setChecked(!m_cpuShowSystem);
 
+    // Parity ruling C9: a remote window's row shows this computer's CPU and
+    // the Core's; cycle between them, or pin either.
+    QAction* cycleAct = nullptr;
+    QAction* thisAct = nullptr;
+    QAction* coreAct = nullptr;
+    if (m_radioModel && !m_radioModel->ownsLocalDsp()) {
+        menu.addSeparator();
+        const CpuRowCycler::Source source = m_cpuRowCycler.source();
+        cycleAct = menu.addAction(tr("Cycle"));
+        cycleAct->setCheckable(true);
+        cycleAct->setChecked(source == CpuRowCycler::Source::Cycle);
+        thisAct = menu.addAction(tr("This computer"));
+        thisAct->setCheckable(true);
+        thisAct->setChecked(source == CpuRowCycler::Source::ThisComputer);
+        coreAct = menu.addAction(tr("Core"));
+        coreAct->setCheckable(true);
+        coreAct->setChecked(source == CpuRowCycler::Source::Core);
+    }
+
     QAction* chosen = menu.exec(m_systemTile->mapToGlobal(localPos));
     if (!chosen) { return; }
+
+    if (chosen == cycleAct || chosen == thisAct || chosen == coreAct) {
+        const CpuRowCycler::Source source = chosen == thisAct ? CpuRowCycler::Source::ThisComputer
+            : chosen == coreAct ? CpuRowCycler::Source::Core
+                                : CpuRowCycler::Source::Cycle;
+        m_cpuRowCycler.setSource(source);
+        AppSettings::instance().setValue(QStringLiteral("CpuRowSource"),
+                                         CpuRowCycler::sourceKey(source));
+        refreshCpuRow(0);
+        return;
+    }
 
     const bool newSys = (chosen == sysAct);
     if (newSys == m_cpuShowSystem) { return; }
@@ -12470,6 +12518,28 @@ void MainWindow::onCpuMenuRequested(const QPoint& localPos)
     // once the timer is running; 0% is the closest equivalent to a
     // reset-to-placeholder display until the next timer tick.
     m_systemTile->setCpuPercent(0.0);
+    refreshCpuRow(0);
+}
+
+void MainWindow::refreshCpuRow(qint64 elapsedMs)
+{
+    if (!m_systemTile) { return; }
+    if (!m_radioModel || m_radioModel->ownsLocalDsp()) {
+        m_systemTile->setCpuPercent(m_cpuSmoothedPct);
+        return;
+    }
+    // Parity ruling C9: in a remote window, this computer's CPU and the
+    // Core's, each labelled, cycling, pinned or held on a hot reading.
+    m_cpuRowCycler.setThisComputer(m_cpuSmoothedPct);
+    QString reason = QStringLiteral("The Core's CPU reading is not current.");
+    std::optional<double> core;
+    if (m_remoteTelemetry) {
+        core = RemoteTelemetryController::coreCpuPercent(m_remoteTelemetry->current(),
+                                                         m_cpuShowSystem, &reason);
+    }
+    m_cpuRowCycler.setCore(core, reason);
+    m_cpuRowCycler.advance(elapsedMs);
+    m_systemTile->setCpuRow(m_cpuRowCycler.row());
 }
 
 double MainWindow::readProcessCpuPercent()
@@ -12865,7 +12935,8 @@ SetupDialog* MainWindow::createSetupDialog()
         // R-R3-49 (parity Task 6): and version 6, Setup > PA.
         // R-R3-49 (parity Task 13): and version 8, Hardware Config's OC
         // transmit pins, pin actions and transmit calibration.
-        for (const int version : {2, 3, 4, 5, 6, 8}) {
+        // And version 11, Transmit > Power's "Disable HF PA".
+        for (const int version : {2, 3, 4, 5, 6, 8, 11}) {
             dialog->setTransmitSettingsPermitted(transmitSettingsPermitted(version),
                                                  transmitSettingsReason(version), version);
         }
@@ -13295,6 +13366,8 @@ void MainWindow::applyRemoteRoleGating()
         // R-R3-49 (parity Task 13): Hardware Config's OC transmit pins, pin
         // actions and transmit calibration came with version 8.
         dialog->setTransmitSettingsPermitted(settingsAt(8), settingsReasonAt(8), 8);
+        // Transmit > Power's "Disable HF PA" came with version 11.
+        dialog->setTransmitSettingsPermitted(settingsAt(11), settingsReasonAt(11), 11);
         dialog->setStationSettingsAvailable(stationAvailable, stationSettingsReason());
     }
     // Parity Task 19 (B7.2): and the Spot Hub's Core settings and sources.

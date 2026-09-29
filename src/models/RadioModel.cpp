@@ -14,6 +14,14 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-28 - RADE end-of-over callsigns: an operator's release in RADE
+//                 sends FreeDV's end-of-over frame with the station callsign
+//                 before the radio unkeys (startRadeEndOfOverTail,
+//                 onEndOfOverTailChanged); the Core's stops skip it.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - Phone wire batch: logCategoryList, the Support dialog's
+//                 categories with their labels. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 //   2026-09-27 - The MOX band-plan check uses the XIT-shifted TX carrier,
 //                 matching the TX chain and Thetis console.cs:29440-29486.
 //                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
@@ -560,10 +568,28 @@
 //                Core's spot frequency to the hertz, so its spot click
 //                resolves the Core's mode. J.J. Boyd (KG4VCF), AI-assisted
 //                via Anthropic Claude Code.
+//   2026-09-28 - Parity ruling C4: requestRadioSampleRate,
+//                radioSampleRateReachesEveryReceiver and
+//                changeRadioSampleRate. NereusSDR-original. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-28 - Parity ruling C12: applyPanGridSetting; a remote
 //                window's pans take the Core's per-band grid range.
 //                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-28 - R-R3-49 / R-R3-46: Setup > Transmit > Power's Disable HF PA
+//                applied (Thetis DisablePA and hf_tr_relay,
+//                transmitSettingsVersion 11). J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
+//   2026-09-28 - R-R3-46 / R-R3-49: the Alex Filters tabs' receive filter rows
+//                (per-row bypass and edges, Alex-2 master bypass) select the
+//                receive high-pass as Thetis's setAlexHPF /
+//                setBPF1ForOrionIISaturn / setAlex2HPF do (radioHardwareVersion
+//                8). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - HL2 Band Volts and Disable PS Sync: on a Hermes Lite 2,
+//                bank 0 C3 bits 3 and 4 follow the saved HL2 options (off by
+//                default), as mi0bot setup.cs:2843-2848 and 13376-13390
+//                [@c26a8a4] do; other boards keep Thetis's dither and random
+//                on. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-28 - R-R3-49 (found bug): the Protocol 1 connection gets the
 //                 calibration controller too, for the frequency correction.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
@@ -828,6 +854,7 @@ warren@wpratt.com
 #include "models/FilterPresetStore.h"
 #include "core/accessories/N2adrPreset.h"
 #include "core/codec/AlexFilterMap.h"  // Phase 3F: per-ADC BPF -> HPF bits
+#include "core/AlexSettingsKeys.h"
 #include "core/TxChannel.h"
 // 3M-1c TX pump architecture redesign — dedicated worker thread for
 // TX DSP pump (replaces D.1/E.1/L.4 chain).
@@ -1919,6 +1946,21 @@ RadioModel::RadioModel(Role role, QObject* parent)
     // is gone before this key's own hardwareFlipped(true) is queued.
     connect(m_moxController, &MoxController::txAboutToBegin,
             this, [this]() { m_transmitStopHold = false; });
+
+    // RADE end-of-over callsigns: an operator's release in RADE sends
+    // FreeDV's end-of-over frame before the TX→RX walk (at most
+    // MoxController::kEndOfOverTailMaxMs). The Core's stops never wait for
+    // it (stopTransmitNow aborts it).
+    m_moxController->setEndOfOverTail([this]() { return startRadeEndOfOverTail(); });
+    connect(m_moxController, &MoxController::endOfOverTailChanged,
+            this, &RadioModel::onEndOfOverTailChanged);
+    // Every unkey reaches the TX channel's drain (after a tail, or at once
+    // without one: Stop All TX, TX inhibit, the time-out). Whatever RADE
+    // audio the over left, queued for the worker or held in the TX
+    // resamplers and encoder, is dropped there so it never starts the next
+    // over.
+    connect(m_moxController, &MoxController::txDrainRequested,
+            this, &RadioModel::dropRadeTxAudio);
 
     // R-IOS-13 (2026-09-27): every key (MOX, TUNE, a remote key, VOX,
     // two-tone) goes through txAboutToBegin before the hardware flip and
@@ -4247,6 +4289,13 @@ QString RadioModel::logCategories() const
         return m_remoteLogCategories;
     }
     return LogManager::instance().enabledList();
+}
+
+QString RadioModel::logCategoryList() const
+{
+    // Phone wire batch: the categories this process keeps, as the Support
+    // dialog lists them.
+    return LogManager::instance().categoryListJson();
 }
 
 QString RadioModel::stationSupportUnavailableReason() const
@@ -6698,6 +6747,236 @@ bool RadioModel::isTransmitting() const
     return m_transmitting;
 }
 
+bool RadioModel::endOfOverTailActive() const
+{
+    return m_role != Role::Remote && m_moxController != nullptr
+        && m_moxController->isEndOfOverTailActive();
+}
+
+// ---------------------------------------------------------------------------
+// wireTxWorkerRade: the TX worker's RADE connections, made where the worker is
+// created (and by installTxWorkerForTest).
+//
+// Phase 3R Task K2: mode-aware path swap on MOX-on. On every MOX-on
+// transition, read the TX-bound slice's DSPMode and post a TxPath swap to the
+// worker. DSPMode == RADE -> TxPath::Rade. Anything else -> TxPath::Wdsp (the
+// existing path). The moxStateChanged signal fires exactly once per MOX
+// transition at the END of the timer walk (MoxController.h:863-865
+// [v2.10.3.13 conceptual]); the RX path doesn't need a corresponding TxPath
+// flip because dispatchOneBlock is gated on the worker pump running anyway.
+// The worker is the connection's context, so the connection goes with it
+// (it used to capture the raw pointer with this model as context, and so
+// outlived a worker a disconnect destroyed).
+//
+// RADE end-of-over callsigns: radeAudioDrained ends the tail.
+// ---------------------------------------------------------------------------
+void RadioModel::wireTxWorkerRade(TxWorkerThread* worker)
+{
+    if (worker == nullptr || m_moxController == nullptr) {
+        return;
+    }
+    connect(m_moxController, &MoxController::moxStateChanged,
+            worker, [this, worker](bool active) {
+                if (!active) {
+                    return;   // released; pump will idle anyway
+                }
+                const SliceModel* const txSlice = txBoundSlice();
+                const DSPMode mode = txSlice ? txSlice->dspMode() : DSPMode::USB;
+                const bool isRade = (mode == DSPMode::RADE_U || mode == DSPMode::RADE_L);
+                worker->setCurrentTxPath(isRade ? TxWorkerThread::TxPath::Rade
+                                                : TxWorkerThread::TxPath::Wdsp);
+            });
+    connect(worker, &TxWorkerThread::radeAudioDrained, this, [this]() {
+        if (m_moxController) {
+            m_moxController->onEndOfOverTailDone();
+        }
+    });
+}
+
+#ifdef NEREUS_BUILD_TESTS
+void RadioModel::installTxWorkerForTest(std::unique_ptr<TxWorkerThread> worker)
+{
+    m_txWorker = std::move(worker);
+    wireTxWorkerRade(m_txWorker.get());
+}
+#endif
+
+// ---------------------------------------------------------------------------
+// RADE end-of-over callsigns: the tail. NereusSDR-original sequencing of
+// FreeDV's end of an over: once the operator lets go, the EOO frame (with
+// the callsign rade_text encodes) and 200 ms of silence go out, then PTT
+// drops (freedv-gui src/ongui.cpp:1479-1523 and
+// src/pipeline/TxRxThread.cpp:808-847 [@a4ae053]; RadeChannel::
+// queueEndOfOver carries the RADETransmitStep port).
+//
+// Only an operator's release: never after the Core's stops (the hold
+// stopTransmitNow sets, or a closed RF gate), never for TUNE or two-tone,
+// and only while the transmitter runs RADE on the TX-bound slice. The tail
+// keys nothing: MOX is already off when this runs, the hardware simply
+// stays keyed until the TX worker has taken the queued audio.
+// ---------------------------------------------------------------------------
+bool RadioModel::radeEndOfOverTailPermitted() const
+{
+    if (m_role == Role::Remote || m_transmitStopHold || m_refuseEndOfOverTail) {
+        return false;
+    }
+    // Review Important 1: the path the TX worker latched when this key
+    // began, not the slice's mode now. A slice switched to RADE while keyed
+    // in another mode still has the live microphone on the WDSP path.
+    if (!m_txWorker || m_txWorker->currentTxPath() != TxWorkerThread::TxPath::Rade) {
+        return false;
+    }
+    if (m_txChannel == nullptr || !m_txChannel->isRfGateOpen()) {
+        return false;
+    }
+    if (m_isTuning || m_pendingTuneOff || m_transmitModel.isTwoToneActive()) {
+        return false;
+    }
+    // Review Minor 4: two-tone's own walk releases MOX before it keys (and
+    // again when it stops); neither release ends an over.
+    if (m_twoToneController
+        && (m_twoToneController->isActive() || m_twoToneController->isActivationInFlight())) {
+        return false;
+    }
+    const SliceModel* const txSlice = txBoundSlice();
+    if (txSlice == nullptr) {
+        return false;
+    }
+    const DSPMode mode = txSlice->dspMode();
+    return mode == DSPMode::RADE_U || mode == DSPMode::RADE_L;
+}
+
+bool RadioModel::startRadeEndOfOverTail()
+{
+    if (!radeEndOfOverTailPermitted() || m_wdspEngine == nullptr) {
+        return false;
+    }
+    SliceModel* const txSlice = txBoundSlice();
+    RadeChannel* const channel = m_wdspEngine->radeChannel(txSlice->sliceIndex());
+    if (channel == nullptr || !channel->isActive()) {
+        return false;
+    }
+    // The callsign FreeDV Reporter registers with at the Core, and only
+    // while the operator's FreeDV reporting is on, as FreeDV does:
+    // From freedv-gui src/main.cpp:2643-2653 [@a4ae053]
+    //   if (!wxGetApp().appConfiguration.reportingConfiguration.reportingEnabled)
+    //   { freedvInterface.setTextCallbackFn(...); }
+    //   else
+    //   {
+    //       strncpy(temp, ...reportingCallsign->ToUTF8(), 8); // One less than the size of temp to ensure we don't overwrite the null.
+    //       freedvInterface.setReliableText(temp);
+    //   }
+    // With reporting off FreeDV never sets the EOO data: it creates no
+    // rade_text object then (From freedv-gui src/freedv_interface.cpp:171-183
+    // [@a4ae053]), so its end-of-over frame carries librade's zero data; an
+    // empty callsign here writes the same zeros (RadeText::pushTxCallsign).
+    //
+    // FreeDV keys this on its reporting setting, not on the reporter's
+    // connection. NereusSDR has no separate setting: reporting is on from
+    // the operator's start (or the launch auto-start) until the operator
+    // stops it, which is every reporter state but Off. A connection error
+    // or a lost connection leaves it on, as the client keeps retrying.
+    const bool reporting = m_spotSourceHost
+        && m_spotSourceHost->freedvReporterState() != SpotSourceHost::kOff;
+    const QString callsign = reporting ? SpotSourceHost::freedvCallsign() : QString();
+    // queueEndOfOver emits txModemReady synchronously; wireRadeChannel's
+    // lambda queues the samples to the worker, so the notice below lands
+    // behind them.
+    if (!channel->queueEndOfOver(callsign)) {
+        return false;
+    }
+    // Review Minor 1: the 24 -> 48 kHz stage holds back its latency too
+    // (about 70 ms); push that much silence through it so the worker gets
+    // all of the EOO and the 200 ms of silence behind it.
+    if (m_radeTxResampler) {
+        const std::vector<float> zeros(
+            static_cast<size_t>(m_radeTxResampler->latencyInputSamples()), 0.0f);
+        const QByteArray flushed =
+            m_radeTxResampler->process(zeros.data(), static_cast<int>(zeros.size()));
+        if (!flushed.isEmpty()) {
+            QMetaObject::invokeMethod(m_txWorker.get(), "setRadeAudioBlock",
+                                      Qt::QueuedConnection, Q_ARG(QByteArray, flushed));
+        }
+    }
+    QMetaObject::invokeMethod(m_txWorker.get(), "armRadeAudioDrainedNotice",
+                              Qt::QueuedConnection);
+    return true;
+}
+
+void RadioModel::dropRadeTxAudio()
+{
+    if (m_txWorker) {
+        QMetaObject::invokeMethod(m_txWorker.get(), "clearRadeAudio",
+                                  Qt::QueuedConnection);
+    }
+    m_radeTxResampler.reset();
+    m_radeTxResamplerHwRate = 0;
+    if (m_wdspEngine != nullptr) {
+        if (SliceModel* const txSlice = txBoundSlice()) {
+            if (RadeChannel* const channel = m_wdspEngine->radeChannel(txSlice->sliceIndex())) {
+                channel->dropTxAudio();
+            }
+        }
+    }
+}
+
+void RadioModel::onEndOfOverTailChanged(bool active)
+{
+    // Review Important 1: a mode change on the transmitting slice, or the
+    // transmitter moving to another slice, ends the tail at once, so the
+    // rest of the EOO never goes out through another mode's modulator.
+    QObject::disconnect(m_endOfOverTailModeWatch);
+    QObject::disconnect(m_endOfOverTailSliceWatch);
+    if (active) {
+        if (SliceModel* const txSlice = txBoundSlice()) {
+            m_endOfOverTailModeWatch = connect(
+                txSlice, &SliceModel::dspModeChanged, this, [this]() {
+                    if (m_moxController) {
+                        m_moxController->abortEndOfOverTail();
+                    }
+                });
+        }
+        if (m_txSliceArbiter) {
+            m_endOfOverTailSliceWatch = connect(
+                m_txSliceArbiter, &TxSliceArbiter::txBoundSliceChanged, this,
+                [this](int, int) {
+                    if (m_moxController) {
+                        m_moxController->abortEndOfOverTail();
+                    }
+                });
+        }
+    }
+    if (!active) {
+        // The channel encodes the next over again.
+        // Review Minor 5: a new key ended it. The end-of-over frame already
+        // queued plays out whole ahead of the new over, as FreeDV's does:
+        // RADETransmitStep::restartVocoder writes the EOO into the step's
+        // output FIFO and execute reads that FIFO in order ahead of any
+        // later modem samples, and freedv-gui drops PTT only once the EOO
+        // is queued and the output has drained, so a new over never cuts
+        // it (freedv-backend src/pipeline/RADETransmitStep.cpp:174-178,
+        // 233, 242, 265 [@f02e7e9]; freedv-gui src/ongui.cpp:1479-1523
+        // [@a4ae053]). Any other end (a stop, a block, a mode change, the
+        // bound) drops what is left of it.
+        const bool rekeyed = m_moxController != nullptr && m_moxController->isMox();
+        if (m_txWorker && !rekeyed) {
+            QMetaObject::invokeMethod(m_txWorker.get(), "clearRadeAudio",
+                                      Qt::QueuedConnection);
+        }
+        if (m_wdspEngine != nullptr) {
+            if (SliceModel* const txSlice = txBoundSlice()) {
+                if (RadeChannel* const channel =
+                        m_wdspEngine->radeChannel(txSlice->sliceIndex())) {
+                    if (channel->endOfOverQueued()) {
+                        channel->dropTxAudio();
+                    }
+                }
+            }
+        }
+    }
+    emit endOfOverTailChanged(active);
+}
+
 bool RadioModel::pureSignalOperationPermitted() const
 {
     // R-R3-49 (parity Task 7, transmitSettingsVersion 7). Arming PureSignal
@@ -8177,6 +8456,73 @@ bool RadioModel::applySwrProtectionSetting(const QString& key, const QVariant& v
         return true;
     }
     return false;
+}
+
+// ── Setup > Transmit > Power: "Disable HF PA" ───────────────────────────────
+//
+// The box was saved and read by nothing. Thetis hands it to the console,
+// whose setter re-runs the VFO A update at once:
+//   From Thetis setup.cs:16750-16754 [v2.10.3.15]
+//     private void chkHFTRRelay_CheckedChanged(object sender, EventArgs e)
+//     { if (initializing) return; console.HFTRRelay = chkHFTRRelay.Checked; }
+//   From Thetis console.cs:10891-10901 [v2.10.3.15]
+//     public bool HFTRRelay
+//     { set { hf_tr_relay = value; if (!initializing) txtVFOAFreq_LostFocus(this, EventArgs.Empty); } }
+// and that update sends DisablePA with it while the radio is on HF, which
+// with no transverter bands in NereusSDR is always:
+//   From Thetis console.cs:31619-31630 [v2.10.3.15] (txtVFOAFreq_LostFocus)
+//     if (rx1_xvtr_index < 0)
+//     { ... if (hf_tr_relay) NetworkIO.DisablePA(1); else NetworkIO.DisablePA(0);
+// The same flag lets a high SWR pass the protection:
+//   From Thetis console.cs:26109-26110 [v2.10.3.15] (PollPAPWR)
+//     if (tx_xvtr_index >= 0 || hf_tr_relay) swr_pass = true;
+//   Upstream inline attribution preserved verbatim (console.cs:26113):
+//     if (HardwareSpecific.Model == HPSDRModel.ANAN8000D)        // K2UE idea:  try to determine if Hi-Z or Lo-Z load
+// Thetis runs the handler once at start-up (setup.cs:2866 [v2.10.3.15]), so the saved
+// value applies from the first packet; here the connect path calls this.
+
+bool RadioModel::hfPaSwitchAvailable(HPSDRModel model) noexcept
+{
+    // From Thetis setup.cs:6321-6334 [v2.10.3.15]
+    //   if (HardwareSpecific.Model == HPSDRModel.HERMES ||
+    //      (HardwareSpecific.Model == HPSDRModel.HPSDR))
+    //   { ... chkHFTRRelay.Checked = false; chkHFTRRelay.Enabled = false; chkHFTRRelay.Visible = false; }
+    //   else { ... chkHFTRRelay.Visible = true; chkHFTRRelay.Enabled = true; }
+    // mi0bot leaves the box as it is on the Hermes Lite 2 (shown), and routes
+    // its DisablePA through the HL2's PA enable (mi0bot setup.cs:6449-6466
+    // [@c26a8a4]).
+    return model != HPSDRModel::HERMES && model != HPSDRModel::HPSDR;
+}
+
+QString RadioModel::hfPaSwitchUnavailableReason()
+{
+    return QStringLiteral("This radio cannot switch off its HF PA from here.");
+}
+
+void RadioModel::applyDisableHfPaSetting()
+{
+    applyDisableHfPaSetting(AppSettings::instance().value(QLatin1String(kDisableHfPaKey)));
+}
+
+void RadioModel::applyDisableHfPaSetting(const QVariant& value)
+{
+    if (!ownsLocalDsp()) {
+        return;
+    }
+    // Default off: console.cs:10891 [v2.10.3.15] hf_tr_relay = false.
+    const bool saved = value.isValid() && value.toString() == QStringLiteral("True");
+    // Thetis unchecks the box on a radio that does not offer it
+    // (setup.cs:6325), so there it is off whatever was saved; the saved
+    // value is kept for a radio that does.
+    const bool disabled = saved && hfPaSwitchAvailable(m_hardwareProfile.model);
+    m_swrProt.setHfPaDisabled(disabled);
+    if (m_connection == nullptr) {
+        return;
+    }
+    RadioConnection* conn = m_connection;
+    QMetaObject::invokeMethod(conn, [conn, disabled]() {
+        conn->setPaDisabled(disabled);
+    });
 }
 
 void RadioModel::reportStationSettingChanged(const QString& key)
@@ -10551,6 +10897,54 @@ void RadioModel::requestSliceSampleRateClosing(int sliceId, int rateHz,
                 "stayed on their existing DDC windows.")
                 .arg(rateHz / 1000));
     }
+}
+
+void RadioModel::requestRadioSampleRate(int rateHz)
+{
+    // Parity ruling C4. NereusSDR-original: Thetis has one window.
+    if (m_role != Role::Remote) {
+        setSampleRateLiveAsync(rateHz);
+        return;
+    }
+    if (m_station == nullptr) {
+        emit sliceRetuneRejected(
+            -1, noStationReason(QStringLiteral("the sample-rate change to %1 kHz")
+                                    .arg(rateHz / 1000)));
+        return;
+    }
+    if (m_station->radioSampleRateAvailable()) {
+        const IStationLink::CommandOutcome outcome = m_station->requestRadioSampleRate(rateHz);
+        if (!outcome.sent) {
+            emit sliceRetuneRejected(-1, outcome.reason);
+        }
+        return;
+    }
+    // An older Core: each of this window's receivers, lowest id first. On
+    // Protocol 1 the first moves the whole radio and the rest find it at
+    // the rate; on Protocol 2 each moves its receiver.
+    QList<int> ids;
+    for (SliceModel* slice : std::as_const(m_slices)) {
+        if (slice != nullptr) {
+            ids.append(slice->sliceIndex());
+        }
+    }
+    std::sort(ids.begin(), ids.end());
+    for (int id : std::as_const(ids)) {
+        requestSliceSampleRate(id, rateHz);
+    }
+}
+
+bool RadioModel::radioSampleRateReachesEveryReceiver() const
+{
+    if (m_role != Role::Remote) {
+        return true;
+    }
+    return m_station != nullptr && m_station->radioSampleRateAvailable();
+}
+
+void RadioModel::changeRadioSampleRate(int rateHz, std::function<void(bool)> onFinished)
+{
+    requestSampleRateChange({rateHz, true, std::move(onFinished)});
 }
 
 RadioModel::SampleRateReach RadioModel::planSampleRateReach(
@@ -13100,12 +13494,10 @@ void RadioModel::onRadeTextDecoded(int sliceId, const QString& callsign,
         }
     }
 
-    // I4 Option B (the third_party/rade callsign-over-EOO channel)
-    // does not carry a grid square; RadeText emits textDecoded with
-    // callsign only. Phase L wires RadeText::textDecoded(callsign)
-    // through the channel as rxTextDecoded(callsign, "") (empty
-    // grid). Future text-channel revs may add grid; the payload
-    // string accommodates both forms.
+    // FreeDV's end-of-over frame carries a callsign and no grid square;
+    // RadeChannel forwards RadeText::textDecoded(callsign) as
+    // rxTextDecoded(callsign, "") (empty grid). The payload string
+    // accommodates both forms.
     if (!grid.isEmpty()) {
         decode.payload = QStringLiteral("%1 %2").arg(callsign, grid);
     } else {
@@ -14314,7 +14706,8 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
         m_pennyLaneController.load();
 
         // Load per-MAC HL2 Options (9 mi0bot tpHL2Options knobs).
-        // Phase 3L commit #9.  Wire-format emission deferred to follow-up PR.
+        // Phase 3L commit #9. Band Volts and Disable PS Sync reach the wire
+        // (P1RadioConnection, wired below); the others are not sent yet.
         m_hl2Options.setMacAddress(info.macAddress);
         m_hl2Options.load();
 
@@ -15593,6 +15986,9 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
                     m_transmitModel.micSource() == MicSource::Vax);
 
                 m_txWorker = std::make_unique<TxWorkerThread>(this);
+                // RADE: the TX path latch and the end-of-over tail's
+                // drained notice (wireTxWorkerRade).
+                wireTxWorkerRade(m_txWorker.get());
                 m_txWorker->setTxChannel(m_txChannel);
                 m_txWorker->setAudioEngine(m_audioEngine);
                 m_txWorker->setMicSource(m_txMicSource.get());
@@ -15764,40 +16160,8 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
                             });
                 }
 
-                // ── Phase 3R Task K2: mode-aware path swap on MOX-on ──
-                //
-                // On every MOX-on transition, read the TX-bound slice's
-                // DSPMode and post a TxPath swap to the worker.  DSPMode
-                // == RADE -> TxPath::Rade (scaffolded; full integration
-                // K-bench).  Anything else -> TxPath::Wdsp (the existing
-                // path).  The moxStateChanged signal fires exactly once
-                // per MOX transition at the END of the timer walk
-                // (MoxController.h:863-865 [v2.10.3.13 conceptual]); the
-                // RX path doesn't need a corresponding TxPath flip
-                // because dispatchOneBlock is gated on the worker pump
-                // running anyway.
-                if (m_moxController != nullptr && m_txWorker) {
-                    TxWorkerThread* worker = m_txWorker.get();
-                    connect(m_moxController, &MoxController::moxStateChanged,
-                            this, [this, worker](bool active) {
-                                if (!active) {
-                                    return;   // released; pump will idle anyway
-                                }
-                                const SliceModel* const txSlice =
-                                    txBoundSlice();
-                                const DSPMode mode =
-                                    txSlice ? txSlice->dspMode()
-                                            : DSPMode::USB;
-                                const bool isRade =
-                                    (mode == DSPMode::RADE_U
-                                     || mode == DSPMode::RADE_L);
-                                const TxWorkerThread::TxPath path =
-                                    isRade
-                                        ? TxWorkerThread::TxPath::Rade
-                                        : TxWorkerThread::TxPath::Wdsp;
-                                worker->setCurrentTxPath(path);
-                            });
-                }
+                // Phase 3R Task K2: the mode-aware path swap on MOX-on is
+                // in wireTxWorkerRade, connected with the worker above.
             }
 
             qCInfo(lcDsp) << "L.1: mic sources constructed (hasMicJack=" << hasMicJack
@@ -15953,6 +16317,22 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
     if (auto* p1 = qobject_cast<class P1RadioConnection*>(m_connection)) {
         m_bwMonitor.reset();
         p1->setBandwidthMonitor(&m_bwMonitor);
+    }
+
+    // HL2 Band Volts and Disable PS Sync (bank 0 C3 bits 3 and 4 on a Hermes
+    // Lite 2), from the saved HL2 options loaded above, before the
+    // connection thread starts; later changes follow on that thread.
+    // From mi0bot Console/setup.cs:2843-2848, 13376-13390 [@c26a8a4]:
+    //   chkHL2BandVolts_CheckedChanged(this, e);        // MI0BOT: HL2 option page now doesn't share ditter and random
+    //   // MI0BOT: Control band volts for the HL2
+    //   // MI0BOT: Control power supply sync for the HL2
+    if (auto* p1 = qobject_cast<class P1RadioConnection*>(m_connection)) {
+        p1->setHl2BandVolts(m_hl2Options.bandVolts());
+        p1->setHl2PsSync(m_hl2Options.psSync());
+        connect(&m_hl2Options, &Hl2OptionsModel::bandVoltsChanged,
+                p1, &P1RadioConnection::setHl2BandVolts);
+        connect(&m_hl2Options, &Hl2OptionsModel::psSyncChanged,
+                p1, &P1RadioConnection::setHl2PsSync);
     }
 
     // Per-MAC P1 ADC routing override (Thetis `P1_adc_cntrl`).
@@ -19263,7 +19643,25 @@ void RadioModel::republishAlexAdcSlices()
     // pairs because this grouping step, not AlexController itself, was
     // comparing the wrong filter identity.
     const bool ocFilterPath = boardCapabilities().hasIoBoardHl2;
-    auto addToChain = [&bands, &preselectors, &counts, &lowestHz, alexBoard,
+    // Each chain's selection with the Alex tab's receive filter rows
+    // (applyAlexHpfSwitchSettings). Chain 1 is the Alex-2 bank on the radios
+    // Thetis sets it for, over its own rows and master bypass:
+    //   From Thetis console.cs:15435-15444 [v2.10.3.15] (UpdateRX2DDSFreq)
+    //     ... HardwareSpecific.Model == HPSDRModel.REDPITAYA) //DH1KLM
+    //     {
+    //         setAlex2HPF(rx2_dds_freq_mhz);
+    //   Upstream inline attribution preserved verbatim (console.cs:15449):
+    //                case HPSDRModel.ANAN_G2E: //N1GP G2E added
+    // (codec::alex::usesAlex2Hpf). Every other chain takes the Alex-1 rows
+    // for the board's ladder, as before.
+    const bool alex2Chain = codec::alex::usesAlex2Hpf(m_hardwareProfile.model);
+    const codec::alex::AlexHpfEdges edges = m_alexHpfEdges;
+    const auto preselectorFor = [alexBoard, alex2Chain, edges](int chain, double hz) {
+        return (chain == 1 && alex2Chain)
+            ? codec::alex::computeAlex2Hpf(hz / 1.0e6, edges)
+            : codec::alex::computeRxPreselector(hz / 1.0e6, alexBoard, edges);
+    };
+    auto addToChain = [&bands, &preselectors, &counts, &lowestHz, &preselectorFor,
                         ocFilterPath, this](
                           int chain, Band band, double hz) {
         if (chain < 0 || chain >= kAdcCount) { return; }
@@ -19290,7 +19688,7 @@ void RadioModel::republishAlexAdcSlices()
             physicalFilter = m_ocMatrix.maskFor(band, /*tx=*/false);
         }
         if (physicalFilter == 0) {
-            physicalFilter = codec::alex::computeRxPreselector(hz / 1.0e6, alexBoard);
+            physicalFilter = preselectorFor(chain, hz);
         }
 
         // Compatibility is a property of the relay selection, not the Band
@@ -19366,9 +19764,7 @@ void RadioModel::republishAlexAdcSlices()
         AlexController::SwitchBypass chain0Switch = AlexController::SwitchBypass::None;
         if (boardCapabilities().hasAlexFilters) {
             static constexpr quint8 k6mBpfLna = 0x40;
-            const bool on6mLna = counts[0] > 0
-                && codec::alex::computeRxPreselector(lowestHz[0] / 1.0e6, alexBoard)
-                       == k6mBpfLna;
+            const bool on6mLna = counts[0] > 0 && preselectorFor(0, lowestHz[0]) == k6mBpfLna;
             const NereusSDR::CodecContext radioState = currentCodecContext();
             const bool keyed = radioState.mox;
             if (m_alexHpfBypassSwitch) {
@@ -19405,7 +19801,7 @@ void RadioModel::republishAlexAdcSlices()
     // prbpfilter2's HPF nibble.
     // Upstream inline attribution preserved verbatim (console.cs:15441):
     //   HardwareSpecific.Model == HPSDRModel.REDPITAYA) //DH1KLM
-    auto hpfBitsFor = [this, &counts, &lowestHz, chainCount](int adc) -> int {
+    auto hpfBitsFor = [this, &counts, &lowestHz, &preselectorFor, chainCount](int adc) -> int {
         // Defect D4. A board that does not drive this chain never gets a word
         // composed for it, whatever the slice grouping says. chainForStream
         // already folds every stream onto chain 0 on such a board, so this is
@@ -19441,8 +19837,9 @@ void RadioModel::republishAlexAdcSlices()
         // From Thetis console.cs:6827-6837 setAlex1HPF [v2.10.3.15]
         // Upstream inline attribution preserved verbatim (console.cs:6830):
         //    || (HardwareSpecific.Hardware == HPSDRHW.HermesC10))  //N1GP G2E added (HermesC10) //DK1HLM
-        return int(codec::alex::computeRxPreselector(lowestHz[adc] / 1.0e6,
-                                                     boardCapabilities().board));
+        // With the Alex tab's rows, and on chain 1 the Alex-2 bank where
+        // Thetis sets it (preselectorFor above).
+        return int(preselectorFor(adc, lowestHz[adc]));
     };
 
     AlexRxBpf bpf;
@@ -20795,8 +21192,18 @@ void RadioModel::teardownConnection()
     // (its manual key is cleared further down with the session's TUN
     // state). The TX-to-RX walk's hardware flip runs now, while the
     // connection is still live, so the radio gets the MOX bit off.
+    // RADE end-of-over callsigns (review Important 2): no end-of-over tail
+    // on a disconnect. The unkey walks as it did before the tail existed,
+    // so the amplifier's UNKEY (txAboutToEnd) and the TX channel's drain
+    // run inside this setMox(false), while the TX channel is still wired.
+    // A tail already running (the operator released, then disconnected
+    // within it) is not touched by setMox(false), since MOX is already off;
+    // end it here too, for the same reason.
     if (m_moxController) {
+        m_refuseEndOfOverTail = true;
         m_moxController->setMox(false);
+        m_moxController->abortEndOfOverTail();
+        m_refuseEndOfOverTail = false;
     }
     if (m_isTuning) {
         setTune(false);
@@ -21142,6 +21549,8 @@ void RadioModel::teardownConnection()
     // Task 33: nothing reports a TX drain any more.
     if (m_moxController) {
         m_moxController->setAwaitsTxDrain(false);
+        // Nor an end-of-over tail.
+        m_moxController->abortEndOfOverTail();
     }
 
     // Shutdown WDSP (destroys all channels, saves cache)
@@ -21240,9 +21649,13 @@ void RadioModel::applyClaritySmoothDefaults()
     // 2. Spectrum averaging mode — log-recursive for heavy smoothing.
     sw->setAverageMode(AverageMode::Logarithmic);
 
-    // 3. Averaging alpha — very slow exponential (~500 ms perceived smoothing
-    //    at 30 FPS). See waterfall-tuning.md §3.
-    sw->setAverageAlpha(0.05f);
+    // 3. Averaging time: 650 ms, saved like any Setup averaging-time edit.
+    //    The March recipe gave each new frame a 5 % weight; the averager
+    //    keeps the back-multiplier exp(-1 / (fps * tau)) (DisplayFollowers
+    //    averageAlphaForTimeMs), and at 30 FPS 650 ms gives 0.950, a 5 %
+    //    new-frame weight. A bare alpha was lost on the next frame-rate or
+    //    time change. See waterfall-tuning.md section 3.
+    sw->setSpectrumAverageTimeMs(650);
 
     // 4. Trace colour — pure white, thin, sits cleanly in front of the
     //    waterfall without competing. Visual target: 2026-04-14 reference.
@@ -21449,6 +21862,9 @@ void RadioModel::onConnectionStateChanged(ConnectionState state)
         // Plan Task 14 and its fix wave: and the Alex tab's saved high-pass
         // switches.
         applyAlexHpfSwitchSettings();
+        // And Setup > Transmit > Power's "Disable HF PA", which Thetis
+        // applies from start-up (setup.cs:2866 [v2.10.3.15]).
+        applyDisableHfPaSetting();
         // RF-SAFETY: and the transmit low-pass, for the same reason. A fresh
         // P2RadioConnection starts with m_alex.lpfBitsTx at its 6 m default
         // and only setTxFrequency ever moves it, so without a push here the
@@ -21873,6 +22289,13 @@ void RadioModel::stopTransmitNow(const QString& reason)
         });
     }
 
+    // RADE end-of-over callsigns: a stop never waits for an end-of-over
+    // tail. One under way ends here, after the gate has closed and MOX off
+    // is queued, so the walk goes on to its drain and hardware release.
+    if (m_moxController) {
+        m_moxController->abortEndOfOverTail();
+    }
+
     qCInfo(lcConnection).noquote() << "Transmit stopped at once:" << reason;
 }
 
@@ -21916,7 +22339,10 @@ void RadioModel::stopAllTx(const QString& message)
     const bool twoToneOn = m_twoToneController
         && (m_twoToneController->isActive()
             || m_twoToneController->isActivationInFlight());
-    if (!moxOn && !manualMoxOn && !tuneOn && !twoToneOn) {
+    // RADE end-of-over callsigns: the radio is still on the air during an
+    // end-of-over tail (MOX is already off), so a stop then stops it too.
+    const bool tailOn = endOfOverTailActive();
+    if (!moxOn && !manualMoxOn && !tuneOn && !twoToneOn && !tailOn) {
         return;
     }
 
@@ -24952,9 +25378,15 @@ void RadioModel::scheduleRemoteHardwareApply(const QString& key)
                || rest.compare(QLatin1String("alex/master/disable6mLnaOnRx"),
                                Qt::CaseInsensitive) == 0
                || rest.compare(QLatin1String("alex/master/disable6mLnaOnTx"),
+                               Qt::CaseInsensitive) == 0
+               || rest.startsWith(QLatin1String("alex/hpf/"), Qt::CaseInsensitive)
+               || rest.startsWith(QLatin1String("alex/bpf1/"), Qt::CaseInsensitive)
+               || rest.startsWith(QLatin1String("alex2/hpf/"), Qt::CaseInsensitive)
+               || rest.compare(QLatin1String("alex2/master/bypass55MhzBpf"),
                                Qt::CaseInsensitive) == 0) {
         // Plan Task 14 and its fix wave: the Alex tab's high-pass switches,
-        // applied to the connection.
+        // applied to the connection. radioHardwareVersion 8: and its
+        // receive filter rows (savedAlexHpfEdges).
         reload = QStringLiteral("alex");
     } else {
         return;
@@ -25128,7 +25560,10 @@ void RadioModel::flushRemoteHardwareApply()
 // ---------------------------------------------------------------------------
 void RadioModel::applyAlexHpfSwitchSettings()
 {
-    // The 6 m LNA gain offset reads the LNA and bypass switches.
+    // The 6 m LNA gain offset reads the LNA and bypass switches, and the
+    // Alex HPF and BPF1 6 m rows' bypass (savedAlexHpfEdges' keys below), so
+    // a row change reaches the meters and the spectrum at once, not at the
+    // next band change.
     refreshRxMeterOffset();
     if (!ownsLocalDsp() || m_connection == nullptr) {
         return;
@@ -25149,12 +25584,18 @@ void RadioModel::applyAlexHpfSwitchSettings()
     const bool lnaOffRx = flag("alex/master/disable6mLnaOnRx", "False");
     // Default True: chkDisable6mLNAonTX.Checked = true (setup.designer.cs).
     const bool lnaOffTx = flag("alex/master/disable6mLnaOnTx", "True");
+    // And the tab's receive filter rows: each row's edges and bypass, and
+    // the Alex-2 master bypass (savedAlexHpfEdges).
+    const codec::alex::AlexHpfEdges edges = savedAlexHpfEdges(mac);
+    const bool edgesChanged = !(edges == m_alexHpfEdges);
+    m_alexHpfEdges = edges;
     RadioConnection* conn = m_connection;
-    QMetaObject::invokeMethod(conn, [conn, onTx, onPs, bypass, lnaOffRx, lnaOffTx]() {
+    QMetaObject::invokeMethod(conn, [conn, onTx, onPs, bypass, lnaOffRx, lnaOffTx, edges]() {
         conn->setHpfBypassOnTx(onTx);
         conn->setHpfBypassOnPs(onPs);
         conn->setAlexHpfBypass(bypass);
         conn->setDisable6mLna(lnaOffRx, lnaOffTx);
+        conn->setAlexHpfEdges(edges);
     });
     // Re-review N4: the two receive-side switches also decide what the
     // chain reports (republishAlexAdcSlices), so the WIDE badge and
@@ -25162,7 +25603,10 @@ void RadioModel::applyAlexHpfSwitchSettings()
     // sent for the chains are the same as before.
     // Task 14 follow-up 2: the three keyed switches as well, for the bypass
     // they put on the wire while keyed.
-    if (bypass != m_alexHpfBypassSwitch || lnaOffRx != m_alexDisable6mLnaOnRxSwitch
+    // The rows decide each chain's selection there too. (The 6 m LNA gain
+    // offset they also decide is refreshed at the top.)
+    if (edgesChanged || bypass != m_alexHpfBypassSwitch
+        || lnaOffRx != m_alexDisable6mLnaOnRxSwitch
         || onTx != m_alexHpfBypassOnTxSwitch || onPs != m_alexHpfBypassOnPsSwitch
         || lnaOffTx != m_alexDisable6mLnaOnTxSwitch) {
         m_alexHpfBypassSwitch = bypass;
@@ -25172,6 +25616,67 @@ void RadioModel::applyAlexHpfSwitchSettings()
         m_alexDisable6mLnaOnTxSwitch = lnaOffTx;
         republishAlexAdcSlices();
     }
+}
+
+// ---------------------------------------------------------------------------
+// savedAlexHpfEdges: the Alex tab's receive filter rows for one radio.
+//
+// Thetis reads each row's edges from the Setup spinners and each row's
+// bypass from its check box at every selection (console.cs:6839-7175
+// [v2.10.3.15]: setAlexHPF, setBPF1ForOrionIISaturn, setAlex2HPF), and the
+// check boxes reach the console through their setters:
+//   From Thetis setup.cs:15497-15501 [v2.10.3.15]
+//     private void chkAlex1_5BPHPF_CheckedChanged(object sender, EventArgs e)
+//     { if (initializing) return; console.Alex1_5BPHPFBypass = chkAlex1_5BPHPF.Checked; }
+//   From Thetis setup.cs:18320-18323 [v2.10.3.15]
+//     private void chkBPF1_1_5BP_CheckedChanged(object sender, EventArgs e)
+//     { console.BPF1_1_5BPBypass = chkBPF1_1_5BP.Checked; }
+//   From Thetis setup.cs:15533-15537 [v2.10.3.15]
+//     console.Alex21_5BPHPFBypass = chkAlex21_5BPHPF.Checked;
+//   From Thetis setup.cs:15395-15398 [v2.10.3.15]
+//     private void chkAlex2HPFBypass_CheckedChanged(object sender, EventArgs e)
+//     { console.Alex2HPFBypass = chkAlex2HPFBypass.Checked; }
+// The tabs save them per radio (AntennaAlexAlex1Tab, AntennaAlexAlex2Tab):
+// hardware/<mac>/alex/hpf, alex/bpf1 and alex2/hpf, each row
+// <slug>/{enabled,start,end} ("enabled" is the row's Bypass box), and
+// alex2/master/bypass55MhzBpf. A value never saved is Thetis's default.
+// ---------------------------------------------------------------------------
+codec::alex::AlexHpfEdges RadioModel::savedAlexHpfEdges(const QString& mac)
+{
+    codec::alex::AlexHpfEdges edges = codec::alex::AlexHpfEdges::thetisDefaults();
+    if (mac.isEmpty()) {
+        return edges;
+    }
+    auto& settings = AppSettings::instance();
+    const auto readRows = [&settings, &mac](const QString& prefix,
+                                            codec::alex::AlexHpfRows& rows) {
+        for (size_t i = 0; i < rows.size(); ++i) {
+            const QString slug = QString::fromLatin1(alexKeys::kPreselectorSlugs[i]);
+            const QString base = QStringLiteral("%1/%2/").arg(prefix, slug);
+            codec::alex::AlexHpfRow& row = rows[i];
+            bool ok = false;
+            const double start = settings.hardwareValue(
+                mac, base + QLatin1String(alexKeys::kLeafStart), QString()).toString().toDouble(&ok);
+            if (ok) {
+                row.startMhz = start;
+            }
+            const double end = settings.hardwareValue(
+                mac, base + QLatin1String(alexKeys::kLeafEnd), QString()).toString().toDouble(&ok);
+            if (ok) {
+                row.endMhz = end;
+            }
+            row.bypass = settings.hardwareValue(
+                mac, base + QLatin1String(alexKeys::kLeafEnabled), QStringLiteral("False"))
+                .toString() == QStringLiteral("True");
+        }
+    };
+    readRows(QLatin1String(alexKeys::kAlex1HpfPrefix), edges.hpf);
+    readRows(QLatin1String(alexKeys::kAlex1Bpf1Prefix), edges.bpf1);
+    readRows(QStringLiteral("alex2/hpf"), edges.alex2);
+    edges.alex2Bypass = settings.hardwareValue(
+        mac, QStringLiteral("alex2/master/bypass55MhzBpf"), QStringLiteral("False"))
+        .toString() == QStringLiteral("True");
+    return edges;
 }
 
 // Group B fix wave (group A's follow-ups): work a window's change left

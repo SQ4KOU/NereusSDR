@@ -47,6 +47,20 @@
 //                 which mi0bot never reads (networkproto1.c:478-493
 //                 [@c26a8a4]). J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-28 - R-R3-49 / R-R3-46: Setup > Transmit > Power's Disable HF PA
+//                applied (Thetis DisablePA and hf_tr_relay,
+//                transmitSettingsVersion 11). J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
+//   2026-09-28 - R-R3-46 / R-R3-49: the Alex Filters tabs' receive filter rows
+//                (per-row bypass and edges, Alex-2 master bypass) select the
+//                receive high-pass as Thetis's setAlexHPF /
+//                setBPF1ForOrionIISaturn / setAlex2HPF do (radioHardwareVersion
+//                8). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - HL2 Band Volts and Disable PS Sync: on a Hermes Lite 2,
+//                bank 0 C3 bits 3 and 4 follow the saved HL2 options (off by
+//                default), as mi0bot setup.cs:2843-2848 and 13376-13390
+//                [@c26a8a4] do; other boards keep Thetis's dither and random
+//                on. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-28 - R-R3-49 (found bug): the VFO frequencies sent carry the
 //                 calibration correction factor, as Thetis NetworkIO.VFOfreq
 //                 does on Protocol 1 [v2.10.3.15] (setCalibrationController,
@@ -750,10 +764,27 @@ void P1RadioConnection::connectToRadio(const RadioInfo& info)
              ? m_hardwareProfile.caps
              : &BoardCapsTable::forBoard(info.boardType);
 
-    // Initialize per-ADC state from profile
+    // Initialize per-ADC state from profile.
+    // Dither and random: Thetis turns both on for every board
+    //   Thetis Console/setup.cs:296-298 [v2.10.3.15]
+    //     //MW0LGE_21k8 initialise these
+    //     chkMercDither.Checked = true;
+    //     chkMercRandom.Checked = true;
+    // but on a Hermes Lite 2 the same two bits (bank 0 C3 bits 3 and 4) are
+    // the HL2 options Band Volts and Disable PS Sync, restored from the HL2
+    // option page instead, both off unless the operator turned them on
+    //   mi0bot Console/setup.cs:2843-2848 [@c26a8a4]
+    //     if (HPSDRModel.HERMESLITE == HardwareSpecific.Model)
+    //     {
+    //         chkHL2BandVolts_CheckedChanged(this, e);        // MI0BOT: HL2 option page now doesn't share ditter and random
+    //         chkHL2PsSync_CheckedChanged(this, e);
+    //     }
+    // The Thetis HL2 capture shows bank 0 C3 = 0x00
+    // (docs/protocols/openhpsdr-protocol1-capture-reference.md, bank 0 table).
+    const bool hl2 = isHl2();
     for (int i = 0; i < 3; ++i) {
-        m_dither[i] = true;
-        m_random[i] = true;
+        m_dither[i] = hl2 ? m_hl2BandVolts : true;
+        m_random[i] = hl2 ? m_hl2PsSync : true;
         m_rxPreamp[i] = false;
         m_stepAttn[i] = 0;
     }
@@ -1033,9 +1064,10 @@ void P1RadioConnection::recomputeReceiveFilters(int changedSlot)
     if ((changedSlot < 0 || changedSlot == m_rx1Slot) && rx1Hz != 0
         && (   (fcaps && fcaps->hasAlexFilters)
             || m_hardwareProfile.model == HPSDRModel::HERMESLITE)) {
+        // With the Alex tab's saved rows (setAlexHpfEdges).
         m_alexHpfBits = codec::alex::computeRxPreselector(
             double(rx1Hz) / 1e6,
-            fcaps ? fcaps->board : HPSDRHW::Unknown);
+            fcaps ? fcaps->board : HPSDRHW::Unknown, m_alexHpfEdges);
     }
 
     // ── The receive-derived low-pass ────────────────────────────────────
@@ -1356,6 +1388,62 @@ void P1RadioConnection::setAttenuator(int dB)
     }
     m_stepAttn[0] = dB;
 }
+// ---------------------------------------------------------------------------
+// setHl2BandVolts / setHl2PsSync
+//
+// The HL2 option page's Band Volts and Disable PS Sync. mi0bot sends them as
+// the ADC dither and random bits (bank 0 C3 bits 3 and 4), which the HL2
+// reads as these two options:
+//   mi0bot Console/setup.cs:13376-13390 [@c26a8a4]
+//     // MI0BOT: Control band volts for the HL2
+//     private void chkHL2BandVolts_CheckedChanged(object sender, System.EventArgs e)
+//     {
+//         if (initializing) return;
+//         int v = chkHL2BandVolts.Checked ? 1 : 0;
+//         NetworkIO.SetADCDither(v);
+//     }
+//     // MI0BOT: Control power supply sync for the HL2
+//     private void chkHL2PsSync_CheckedChanged(object sender, System.EventArgs e)
+//     {
+//         if (initializing) return;
+//         int v = chkHL2PsSync.Checked ? 1 : 0;
+//         NetworkIO.SetADCRandom(v);
+//     }
+//   mi0bot ChannelMaster/netInterface.c:435-456 [@c26a8a4]: SetADCDither /
+//     SetADCRandom set adc[0..2].dither / .random and send the frame (CmdRx).
+//   mi0bot ChannelMaster/networkproto1.c:950-953 [@c26a8a4] (WriteMainLoop_HL2):
+//     C3 = ... | ((prn->adc[0].dither << 3) & 0b00001000) |
+//          ((prn->adc[0].random << 4) & 0b00010000) | ...
+// On an HL2 the change reaches the wire on the next frame; on any other board
+// only the stored value changes (it is never sent there).
+// ---------------------------------------------------------------------------
+bool P1RadioConnection::isHl2() const
+{
+    return m_hardwareProfile.model == HPSDRModel::HERMESLITE;
+}
+
+void P1RadioConnection::setHl2BandVolts(bool on)
+{
+    m_hl2BandVolts = on;
+    if (isHl2()) {
+        for (bool& bit : m_dither) {
+            bit = on;
+        }
+        m_forceBank0Next = true;
+    }
+}
+
+void P1RadioConnection::setHl2PsSync(bool on)
+{
+    m_hl2PsSync = on;
+    if (isHl2()) {
+        for (bool& bit : m_random) {
+            bit = on;
+        }
+        m_forceBank0Next = true;
+    }
+}
+
 void P1RadioConnection::setPreamp(bool enabled)
 {
     // v0.4.1 hotfix — flush bank 11 on the next EP2 frame so the new
@@ -1497,6 +1585,8 @@ void P1RadioConnection::setMox(bool enabled)
     // rationale.  At P1's 48 kHz wire rate, 20 ms cushion = 960 samples.
     if (enabled) {
         m_txIqPrimePending.store(true, std::memory_order_release);
+        // G-07: the full-ring loss count runs per key, as on Protocol 2.
+        m_txIqOverflowSamples.store(0, std::memory_order_relaxed);
     }
     m_mox = enabled;
 }
@@ -1728,6 +1818,22 @@ void P1RadioConnection::setWatchdogEnabled(bool enabled)
 }
 
 // ---------------------------------------------------------------------------
+// txSendStats — G-07
+//
+// The transmit diagnostics' view of this path (the Core's "Transmit ended"
+// line). Protocol 1 counts only what a full ring refused; the send-timing
+// counters are Protocol 2's sender thread's.
+// ---------------------------------------------------------------------------
+RadioConnection::TxSendStats P1RadioConnection::txSendStats() const
+{
+    TxSendStats st;
+    st.valid = true;
+    st.overflowOnly = true;
+    st.overflowSamples = m_txIqOverflowSamples.load(std::memory_order_relaxed);
+    return st;
+}
+
+// ---------------------------------------------------------------------------
 // sendTxIq — 3M-1a Task E.2
 //
 // Porting from deskhpsdr/src/old_protocol.c:2373-2459 [@120188f]
@@ -1825,8 +1931,11 @@ void P1RadioConnection::sendTxIq(const float* iq, int n)
         // Ring-buffer full: drop sample, matching deskhpsdr overflow path.
         // acquire: see the latest fetch_sub from the connection thread so we
         // don't overfill after a drain.
+        // The rest of the block is dropped, never written over unread
+        // slots; the loss is counted below (G-07).
         if (m_txIqCount.load(std::memory_order_acquire) >= kTxIqBufSamples) {
-            qCDebug(lcConnection) << "P1 TX I/Q ring buffer overflow — dropping sample";
+            qCDebug(lcConnection) << "P1 TX I/Q ring buffer overflow: dropping"
+                                  << (n - k) << "samples";
             break;
         }
 
@@ -1866,6 +1975,11 @@ void P1RadioConnection::sendTxIq(const float* iq, int n)
         // is observed by the connection thread's acquire load.
         m_txIqCount.fetch_add(1, std::memory_order_release);
         ++pushedSamples;
+    }
+
+    if (pushedSamples < n) {
+        m_txIqOverflowSamples.fetch_add(static_cast<quint64>(n - pushedSamples),
+                                        std::memory_order_relaxed);
     }
 
     if (pushedSamples > 0 && m_mox) {
@@ -1983,6 +2097,43 @@ void P1RadioConnection::setTrxRelay(bool enabled)
         return;  // idempotent — flush flag already set above
     }
     m_trxRelay = enabled;
+}
+
+// ---------------------------------------------------------------------------
+// setPaDisabled: "Disable HF PA" (Setup > Transmit > Power). Thetis's
+// DisablePA sets tx[0].pa, which WriteMainLoop sends as bank 10 C3 bit 7
+// (on the HL2 also bank 10 C2 bit 3, through EnableApolloTuner(!bit)).
+//   From Thetis ChannelMaster/netInterface.c:623-631 [v2.10.3.15]
+//     void DisablePA(int bit)
+//     { if (prn->tx[0].pa != bit) { prn->tx[0].pa = bit; ... } }
+//   From mi0bot ChannelMaster/netInterface.c:623-634 [@c26a8a4]
+//     if (HPSDRModel == HPSDRModel_HERMESLITE)
+//         EnableApolloTuner(!bit);	// MI0BOT: This call used on HL2 to enable/disable PA
+// Bank 10 goes out on the next frame, as setTrxRelay flushes it.
+// ---------------------------------------------------------------------------
+void P1RadioConnection::setPaDisabled(bool disabled)
+{
+    m_forceBank10Next = true;
+    RadioConnection::setPaDisabled(disabled);
+}
+
+// ---------------------------------------------------------------------------
+// setAlexHpfEdges: the Alex tab's receive filter rows. Thetis's per-row
+// bypass setters re-select the high-pass at once:
+//   From Thetis console.cs:18823-18833 [v2.10.3.15]
+//     public bool Alex1_5BPHPFBypass
+//     { ... set { alex1_5bphpf_bypass = value; double freq = VFOAFreq; setAlex1HPF(freq); } }
+// and an edge is read by the next selection; here both re-select from the
+// frequency RX1 is on now. Bank 10 carries the word in its rotation.
+// ---------------------------------------------------------------------------
+void P1RadioConnection::setAlexHpfEdges(const codec::alex::AlexHpfEdges& edges)
+{
+    if (edges == m_alexHpfEdges) {
+        return;
+    }
+    RadioConnection::setAlexHpfEdges(edges);
+    recomputeReceiveFilters(-1);
+    m_forceBank10Next = true;
 }
 
 // ---------------------------------------------------------------------------
@@ -2718,6 +2869,7 @@ CodecContext P1RadioConnection::buildCodecContext() const
     ctx.txDrive        = m_txDrive;
     ctx.paEnabled      = m_paEnabled;
     ctx.trxRelay       = m_trxRelay;
+    ctx.txPaDisabled   = m_paDisabled;  // "Disable HF PA" (setPaDisabled)
     ctx.p1MicBoost     = m_micBoost;
     ctx.p1LineIn       = m_lineIn;
     ctx.p1MicTipRing   = m_micTipRing;
@@ -3979,7 +4131,10 @@ void P1RadioConnection::composeCcForBankLegacy(int bankIdx, quint8 out[5]) const
         // From Thetis ChannelMaster/networkproto1.c:581 [v2.10.3.13]
         //   C2 = ((prn->mic.mic_boost & 1) | ((prn->mic.line_in & 1) << 1) | ... | 0b01000000) & 0x7f;
         out[2] = static_cast<quint8>((m_micBoost ? 0x01 : 0x00) | (m_lineIn ? 0x02 : 0x00) | 0x40); // 3M-1b G.1+G.2
-        out[3] = effectiveAlexHpfBits() | (m_trxRelay ? 0x00 : 0x80); // 3M-1a E.4
+        // Bit 7 is also Thetis's DisablePA bit ("Disable HF PA",
+        // networkproto1.c:586 [v2.10.3.15]: ((prn->tx[0].pa & 1) << 7)).
+        out[3] = effectiveAlexHpfBits()
+               | ((!m_trxRelay || m_paDisabled) ? 0x80 : 0x00); // 3M-1a E.4
         // C4 is the Alex0 low-pass word: transmit selection while keyed,
         // receive selection while not (networkproto1.c:587-590 +
         // netInterface.c:705-717 [v2.10.3.15]).

@@ -587,7 +587,7 @@ public:
     // [v2.10.3.13]. The bare alpha setter is kept only for callers not yet
     // migrated; it overwrites the spectrum alpha and is clobbered on the
     // next time-spin or fps change.
-    void setAverageAlpha(float alpha) override;
+    void setAverageAlpha(float alpha);
     float averageAlpha() const { return m_spectrumAverageAlpha; }
 
     // Per-side averaging time constants (milliseconds, ms→τ via /1000).
@@ -597,7 +597,7 @@ public:
     // From Thetis specHPSDR.cs:351-380 [v2.10.3.13] — AvTau / AvTauWF.
     // From Thetis setup.cs udDisplayAVGTime_ValueChanged (default 30 ms)
     // and udDisplayAVTimeWF_ValueChanged (default 120 ms).
-    void setSpectrumAverageTimeMs(int ms);
+    void setSpectrumAverageTimeMs(int ms) override;
     int  spectrumAverageTimeMs() const { return m_spectrumAverageTimeMs; }
     void setWaterfallAverageTimeMs(int ms);
     int  waterfallAverageTimeMs() const { return m_waterfallAverageTimeMs; }

@@ -155,6 +155,14 @@
 //   2026-09-28 - R-IOS-13 / R-R3-49: TransmitModel txEqCurve Outbound
 //                 (txEqCurveVersion 1). J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-29 - Merge of the phone wire batch: SliceModel diversityPattern
+//                 and RadioModel logCategoryList join featureGates, so a
+//                 window that did not declare them sees no schema skew.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - Phone wire batch: SliceModel diversityPattern Outbound
+//                 (diversityPatternVersion 1); RadioModel logCategoryList
+//                 ConstantSnapshot (logCategoryListVersion 1). J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-29 - R-R3-49 / R-IOS-18: paProfileVersion and the read-only
 //                 paProfiles object (PaProfilesFacade). J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
@@ -222,7 +230,7 @@ namespace {
 // WRITE. Listing them keeps the table total, so the guard can name a
 // newly added property instead of silently accepting it.
 const MirrorPolicy::Entry kEntries[] = {
-    // ---- SliceModel (150 entries) ----
+    // ---- SliceModel (151 entries) ----
     { "SliceModel", "frequency", MirrorDirection::Bidirectional },
     { "SliceModel", "dspMode", MirrorDirection::Bidirectional },
     { "SliceModel", "filterLow", MirrorDirection::Bidirectional },
@@ -417,6 +425,10 @@ const MirrorPolicy::Entry kEntries[] = {
     // R-R3-49 (parity Task 16, dspInfoVersion 1): the Core's channel's
     // minimum notch width (RadioModel::refreshSliceMinNotchWidths).
     { "SliceModel", "minNotchWidthHz", MirrorDirection::Outbound },
+    // Diversity pattern for the phone (diversityPatternVersion 1): the
+    // Diversity dialog's sensitivity pattern, read-only; only to a peer that
+    // declared diversityPattern (StationServer::fitPeerOnlyProperties).
+    { "SliceModel", "diversityPattern", MirrorDirection::Outbound },
 
     // ---- TransmitModel (87 entries) ----
     // iPhone app plan Task 35 (R-IOS-13): MOX and TUNE travel from the
@@ -989,7 +1001,7 @@ const MirrorPolicy::Entry kEntries[] = {
     { "PureSignalSettings", "hardwarePeakOverride", MirrorDirection::Bidirectional },
     { "PureSignalSettings", "lastLoadError", MirrorDirection::Outbound },
 
-    // ---- RadioModel (27 entries) ----
+    // ---- RadioModel (28 entries) ----
     { "RadioModel", "settingsSaveError", MirrorDirection::Outbound },
     { "RadioModel", "receiveLayoutRestoreState", MirrorDirection::Outbound },
     { "RadioModel", "receiveLayoutRestoreMessage", MirrorDirection::Outbound },
@@ -1037,6 +1049,10 @@ const MirrorPolicy::Entry kEntries[] = {
     // Core's enabled logging categories, Core to window only; changed with
     // support.setLogCategories.
     { "RadioModel", "logCategories", MirrorDirection::Outbound },
+    // Phone wire batch (logCategoryListVersion 1): the Support dialog's
+    // categories with their labels, fixed for the process; only to a peer
+    // that declared logCategoryList (StationServer::fitPeerOnlyProperties).
+    { "RadioModel", "logCategoryList", MirrorDirection::ConstantSnapshot },
 
     // ---- PanadapterModel (4 entries) ----
     { "PanadapterModel", "centerFrequency", MirrorDirection::Bidirectional },
@@ -1094,6 +1110,36 @@ const QList<MirrorPolicy::Entry>& MirrorPolicy::entries()
 {
     static const QList<Entry> all(std::begin(kEntries), std::end(kEntries));
     return all;
+}
+
+const QList<MirrorPolicy::FeatureGate>& MirrorPolicy::featureGates()
+{
+    static const QList<FeatureGate> gates{
+        // R-IOS-13 / R-R3-49 (txEqCurveVersion 1): the read-only TX EQ
+        // curve, to a peer that declared txEqCurve 1
+        // (StationServer::fitTxEqCurveToPeer).
+        {"TransmitModel", "txEqCurve", "txEqCurve", 1},
+        // Phone wire batch (diversityPatternVersion 1): each slice's
+        // Diversity dialog pattern, to a peer that declared
+        // diversityPattern 1 (StationServer::fitPeerOnlyProperties).
+        {"SliceModel", "diversityPattern", "diversityPattern", 1},
+        // Phone wire batch (logCategoryListVersion 1): radio's logging
+        // categories with their labels, to a peer that declared
+        // logCategoryList 1 (StationServer::fitPeerOnlyProperties).
+        {"RadioModel", "logCategoryList", "logCategoryList", 1},
+    };
+    return gates;
+}
+
+const MirrorPolicy::FeatureGate* MirrorPolicy::featureGateFor(const QByteArray& className,
+                                                              const QByteArray& property)
+{
+    for (const FeatureGate& gate : featureGates()) {
+        if (className == gate.className && property == gate.property) {
+            return &gate;
+        }
+    }
+    return nullptr;
 }
 
 } // namespace NereusSDR

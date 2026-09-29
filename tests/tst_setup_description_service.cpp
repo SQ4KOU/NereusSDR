@@ -379,8 +379,10 @@ private slots:
                              controls.last().toObject()};
         };
         const auto [tx, rx] = tables();
-        QCOMPARE(tx.value("rows").toArray().size(), 14);
-        QCOMPARE(rx.value("rows").toArray().size(), 14);
+        // 160m .. XVTR, then 2 m (R-IOS-26).
+        QCOMPARE(tx.value("rows").toArray().size(), 15);
+        QCOMPARE(rx.value("rows").toArray().size(), 15);
+        QCOMPARE(tx.value("rows").toArray().last().toObject().value("band"), QJsonValue(27));
         QCOMPARE(tx.value("columns").toArray().size(), 3);
         QCOMPARE(rx.value("columns").toArray().size(), 6);
         QVERIFY(!tx.contains("columnGroups"));

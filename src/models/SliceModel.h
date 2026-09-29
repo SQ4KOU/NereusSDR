@@ -11,6 +11,10 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-28: diversityPattern, the Diversity dialog's sensitivity
+//               pattern as the Core sends it (core/DiversityPattern),
+//               declared last. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 //   2026-09-27: Match NR2/NR4 controls and defaults to Thetis v2.10.3.15.
 //               J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 //               (R-IOS-06, R-IOS-27).
@@ -560,6 +564,13 @@ private:
     // window's notch width presets, trace dent and TNF page read it.
     // Outbound, no WRITE.
     Q_PROPERTY(double minNotchWidthHz READ minNotchWidthHz NOTIFY minNotchWidthHzChanged)
+    // The Diversity dialog's sensitivity pattern for this slice, as its
+    // radar draws it from the slice's frequency, diversity phase and gain
+    // (DiversityPattern::wireJson; the station link document, "The
+    // diversity pattern"). Outbound, no WRITE, sent only to a peer that
+    // declared diversityPattern (diversityPatternVersion 1). Declared last
+    // so every earlier property keeps its wire ordinal.
+    Q_PROPERTY(QString diversityPattern READ diversityPattern NOTIFY diversityPatternChanged)
 
 public:
     // Receive-layout admission bounds: general receive defaults, not a
@@ -709,6 +720,9 @@ public:
     double agcAverageDb() const { return m_agcAverageDb; }
     // Parity Task 16: see the minNotchWidthHz Q_PROPERTY. Change-only.
     double minNotchWidthHz() const { return m_minNotchWidthHz; }
+    /// See the diversityPattern Q_PROPERTY. Computed from the slice's
+    /// frequency, diversity phase and gain at each read.
+    QString diversityPattern() const;
     void setMinNotchWidthHz(double hz);
     void setAdcPeakDbfs(double dbfs);
     void setAdcAverageDbfs(double dbfs);
@@ -1332,6 +1346,8 @@ signals:
     void agcAverageDbChanged(double db);
     // Parity Task 16: minNotchWidthHz changed.
     void minNotchWidthHzChanged(double hz);
+    /// The frequency, diversity phase or gain moved the pattern.
+    void diversityPatternChanged(const QString& pattern);
     void stationAutoAgcNoiseFloorChanged();
     void dspModeChanged(NereusSDR::DSPMode mode);
     void filterChanged(int low, int high);
@@ -1508,6 +1524,10 @@ private:
     double  m_agcAverageDb{-400.0};
     // Parity Task 16: 0 until a channel (or the Core) gives one.
     double  m_minNotchWidthHz{0.0};
+    // The diversityPattern last read or announced, so an input change that
+    // leaves the rounded pattern as it was announces nothing.
+    mutable QString m_diversityPatternLast;
+    void noteDiversityPatternInputs();
     double  m_stationAutoAgcNoiseFloorDbm{-200.0};
     bool    m_stationAutoAgcNoiseFloorValid{false};
     quint64 m_stationAutoAgcNoiseFloorGeneration{0};

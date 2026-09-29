@@ -36,6 +36,43 @@ SmartSdrApiListener::SmartSdrApiListener(QObject* parent)
     m_periodicTimer.setInterval(1000);
     connect(&m_periodicTimer, &QTimer::timeout,
             this, &SmartSdrApiListener::onPeriodicTick);
+
+    // G-20: one repeat of the interlock state, 400 ms after it is sent.
+    m_interlockRepeat.setSingleShot(true);
+    // Precise: a coarse timer may fire up to 5 % (20 ms) early.
+    m_interlockRepeat.setTimerType(Qt::PreciseTimer);
+    m_interlockRepeat.setInterval(kInterlockRepeatMs);
+    connect(&m_interlockRepeat, &QTimer::timeout,
+            this, &SmartSdrApiListener::onInterlockRepeat);
+}
+
+void SmartSdrApiListener::armInterlockRepeat(const QByteArray& frame)
+{
+    m_interlockRepeatFrame = frame;
+    m_interlockRepeat.start();
+}
+
+void SmartSdrApiListener::cancelInterlockRepeat()
+{
+    m_interlockRepeat.stop();
+    m_interlockRepeatFrame.clear();
+}
+
+void SmartSdrApiListener::onInterlockRepeat()
+{
+    // G-20: the FLEX repeats the current interlock state once, 400 ms
+    // after it first sends it. Any state change before now cancelled this.
+    const QByteArray frame = m_interlockRepeatFrame;
+    m_interlockRepeatFrame.clear();
+    if (frame.isEmpty()) {
+        return;
+    }
+    for (auto jt = m_clients.cbegin(); jt != m_clients.cend(); ++jt) {
+        QTcpSocket* sock = jt.key();
+        if (sock && sock->isOpen()) { sock->write(frame); }
+    }
+    qCInfo(lcSmartSdr).noquote() << "TX" << QString::fromUtf8(frame).trimmed()
+                                 << "(repeated after" << kInterlockRepeatMs << "ms)";
 }
 
 bool SmartSdrApiListener::start()
@@ -142,6 +179,7 @@ void SmartSdrApiListener::stop()
     // interlock state after the operator toggled 4O3A off in Setup.
     m_periodicTimer.stop();
     m_pttAckTimeout.stop();
+    cancelInterlockRepeat();
     closeServers();
 
     // Disconnect signals from each socket so the dangling deleteLater()
@@ -324,6 +362,8 @@ void SmartSdrApiListener::setInterlockTransmitting(bool transmitting,
                 QTcpSocket* sock = jt.key();
                 if (sock && sock->isOpen()) { sock->write(frame); }
             }
+            // G-20: sent again in 400 ms unless every amp acks first.
+            armInterlockRepeat(frame);
             qCInfo(lcSmartSdr) << "TX S0|interlock state=PTT_REQUESTED"
                                << "tx_client_handle=0x" << m_localClientHandle
                                << "reason=" << reasonField
@@ -361,6 +401,8 @@ void SmartSdrApiListener::setInterlockTransmitting(bool transmitting,
                 QTcpSocket* sock = jt.key();
                 if (sock && sock->isOpen()) { sock->write(frame); }
             }
+            // G-20: sent again in 400 ms unless the state changes first.
+            armInterlockRepeat(frame);
             qCInfo(lcSmartSdr) << "TX S0|interlock state=TRANSMITTING"
                                << "source=" << wireSource
                                << "(no registered amp interlocks)";
@@ -389,6 +431,9 @@ void SmartSdrApiListener::setInterlockTransmitting(bool transmitting,
         // initiator name is the one recorded for the in-flight TX (TUNE
         // path) or the first PGXL-class amp's name (MIC/MOX path).
         m_pttAckTimeout.stop();
+        // G-20: the un-key is a state change; the keyed state is not
+        // repeated after it.
+        cancelInterlockRepeat();
         const QString initiator = m_lastTuneInitiator.isEmpty()
             ? initiatingAmpName(QStringLiteral("MIC"))
             : m_lastTuneInitiator;
@@ -420,6 +465,9 @@ void SmartSdrApiListener::advanceToTransmittingIfReady()
     // the source, then schedule broadcastTransmitting() 30 ms in the
     // future per pcap T+167.704 -> T+167.734.
     m_pttAckTimeout.stop();
+    // G-20: every amp acked, so PTT_REQUESTED is not repeated;
+    // TRANSMITTING arms its own repeat when it is sent.
+    cancelInterlockRepeat();
     const QString source = m_pttPendingSource;
     m_pttPendingSource.clear();
 
@@ -456,6 +504,8 @@ void SmartSdrApiListener::broadcastTransmitting(const QString& source)
         QTcpSocket* sock = jt.key();
         if (sock && sock->isOpen()) { sock->write(frame); }
     }
+    // G-20: sent again in 400 ms unless the state changes first.
+    armInterlockRepeat(frame);
     qCInfo(lcSmartSdr) << "TX S0|interlock state=TRANSMITTING"
                        << "source=" << source
                        << "amplifier=" << ampHandles.join(QLatin1Char(','))
@@ -647,6 +697,9 @@ void SmartSdrApiListener::onPttAckTimeout()
         }
     }
     if (m_pttPendingSource.isEmpty()) { return; }
+    // G-20: the wait for acks is over; PTT_REQUESTED is not repeated after
+    // this. TRANSMITTING arms its own repeat when it is sent.
+    cancelInterlockRepeat();
     const QString source = m_pttPendingSource;
     m_pttPendingSource.clear();
     QTimer::singleShot(30, this, [this, source]() {

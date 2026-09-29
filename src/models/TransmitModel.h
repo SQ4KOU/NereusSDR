@@ -277,6 +277,8 @@
 //                 declared txEqCurve (txEqCurveVersion 1). NereusSDR-
 //                 original. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code.
+//   2026-09-28 - 2 m as its own band (R-IOS-26, R-R3-49). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 #pragma once
 
@@ -475,7 +477,7 @@ public:
     // setPowerUsingTargetDbm txMode 0 branch writes back into
     // m_powerByBand[band] via setPower side-effect.)
     //
-    // HF amateur + GEN/WWV/XVTR only (Band::SwlFirst == 14).  Phase 3L
+    // HF amateur + GEN/WWV/XVTR and 2 m (the per-band state slots).  Phase 3L
     // SWL bands inherit ham-band values — no separate per-SWL TX power.
 
     /// Return the normal-mode power value (watts) for the given band.
@@ -1254,8 +1256,9 @@ public:
     // so the earlier ordinals stay put, each under its setter's name and
     // its getter's type. The per-band power and tune power go on the link
     // as a compact JSON object of whole watts keyed by band (bandKeyName:
-    // "160m" .. "6m", "GEN", "WWV", "XVTR"), all 14 bands in every write
-    // (refused whole otherwise). None keys the radio: the two-tone
+    // "160m" .. "6m", "GEN", "WWV", "XVTR", "2m"), all 15 bands in every
+    // write, or the 14 without "2m" from a peer built before 2 m (which
+    // keeps 2 m's value); refused whole otherwise. None keys the radio: the two-tone
     // settings are read when a two-tone test starts, which stays with
     // remote transmit (twoToneActive is in the keying set).
     Q_PROPERTY(QString powerByBandJson       READ powerByBandJson       WRITE setPowerByBandJson
@@ -2530,9 +2533,9 @@ private:
     // (#175 Task 6); Thetis has no equivalent polymorphic clamp.
     // Initialised to 50W per band in the constructor
     // (Thetis console.cs:1819-1820 [v2.10.3.13]).
-    // HF amateur + GEN/WWV/XVTR only (Band::SwlFirst == 14).  Phase 3L
+    // HF amateur + GEN/WWV/XVTR and 2 m (the per-band state slots).  Phase 3L
     // SWL bands inherit ham-band values — no separate per-SWL TX power.
-    std::array<int, static_cast<std::size_t>(Band::SwlFirst)> m_tunePowerByBand{};
+    std::array<int, static_cast<std::size_t>(kPerBandStateCount)> m_tunePowerByBand{};  // per-band state slots (2 m at 14)
     // R-R3-49 (parity Task 2): the transmit band and its tune power.
     // m_tuneTxBandKnown is false until RadioModel sets the band (always, on
     // a window), so a window's own per-band copy never overwrites the
@@ -2550,7 +2553,7 @@ private:
     // 50 W per band (Thetis safety-first).  Used as the slider source for
     // the dBm compensator (Phase 3A scaffolding for #167 Phase 3C math
     // kernel).  Initialised in the constructor.
-    std::array<int, static_cast<std::size_t>(Band::SwlFirst)> m_powerByBand{};
+    std::array<int, static_cast<std::size_t>(kPerBandStateCount)> m_powerByBand{};  // per-band state slots (2 m at 14)
 
     // ── ATT-on-TX-on-power-change safety state (#167 Phase 3A) ────────────
     // From Thetis console.cs:29285-29310 [v2.10.3.13].  Defaults match

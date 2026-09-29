@@ -6,6 +6,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-28  J.J. Boyd / KG4VCF  Parity ruling C4: setRadioSampleRate
+//                                    (radioHardwareVersion 9). AI-assisted
+//                                    via Anthropic Claude Code.
 //   2026-09-27  J.J. Boyd / KG4VCF  Task 24: Core-owned Settings Hygiene
 //                                    commands and current-radio guards.
 //                                    AI-assisted implementation via Codex.
@@ -233,6 +236,8 @@
 //               (txModMonitorVersion 1), answered by the station server
 //               beside the record streams. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-28 - 2 m as its own band (R-IOS-26, R-R3-49). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-29 - R-R3-49 / R-IOS-18 (paProfileVersion 1): the paProfile
 //                 verbs (handlePaProfile). J.J. Boyd (KG4VCF), AI-assisted
 //                 via Anthropic Claude Code.
@@ -453,6 +458,7 @@ QString notRepresentableReason()
 //   requestIoBoardI2c, setIoBoardOutput
 //                          radioHardwareVersion 7 (requestIoBoardI2c,
 //                          requestIoBoardOutput)
+//   setRadioSampleRate     radioHardwareVersion 9 (requestRadioSampleRate)
 //   dsp.filterResponse     dspInfoVersion 1 (requestFilterResponse)
 //   records.subscribe, records.unsubscribe, spots.connect, spots.disconnect,
 //   spots.sendCommand, spots.clearAll
@@ -713,6 +719,10 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
          "radioHardwareVersion", 7, kRadioIdentitySessionProtocolMinor},
         {"setIoBoardOutput", {arg("pin", kInt), arg("on", kBool)}, "radioHardwareVersion", 7,
          kRadioIdentitySessionProtocolMinor},
+        // Parity ruling C4: the radio's sample rate, every receiver and the
+        // radio's own rate, as a local window's Radio Info change.
+        {"setRadioSampleRate", {arg("rateHz", kInt)}, "radioHardwareVersion", 9,
+         kRadioIdentitySessionProtocolMinor},
         // The filter graph's curve (R-R3-49, parity Task 16).
         {"dsp.filterResponse", {arg("sliceId", kInt), arg("highResolution", kBool)},
          "dspInfoVersion", 1, kRadioIdentitySessionProtocolMinor},
@@ -881,8 +891,10 @@ QString SessionCommandDispatcher::radioAntennaRowRefusal(const SessionMessage& i
                    || rxOnly.typeId() != QMetaType::Bool))) {
         return QStringLiteral("The Core could not read this request.");
     }
-    if (band < 0 || band >= AlexAntennaFacade::kBandCount) {
-        return QStringLiteral("The Core keeps antennas for 14 bands.");
+    // A band number: 160m .. XVTR (0-13) or 2 m (27, R-IOS-26).
+    if (band < 0 || band >= static_cast<int>(Band::Count)
+        || !hasPerBandState(static_cast<Band>(band))) {
+        return QStringLiteral("The Core keeps antennas for 160 m to 6 m, 2 m, GEN, WWV and XVTR.");
     }
     // The shared-setting classifier reads this row before the facade's
     // setter. Reject an unusable port here so no other device is asked to
@@ -1253,6 +1265,8 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         handleRequestIoBoardI2c(invoke);
     } else if (invoke.commandVerb == "setIoBoardOutput") {
         handleSetIoBoardOutput(invoke);
+    } else if (invoke.commandVerb == "setRadioSampleRate") {
+        handleSetRadioSampleRate(invoke);
     } else if (invoke.commandVerb == "dsp.filterResponse") {
         handleFilterResponse(invoke);
     } else if (invoke.commandVerb == "records.subscribe"
@@ -3544,9 +3558,11 @@ void SessionCommandDispatcher::handleSetAlexRxAntenna(const SessionMessage& invo
                    QStringLiteral("The Core has no antenna settings ready."), {});
         return;
     }
-    if (band < 0 || band >= AlexAntennaFacade::kBandCount) {
+    // A band number: 160m .. XVTR (0-13) or 2 m (27, R-IOS-26).
+    if (band < 0 || band >= static_cast<int>(Band::Count)
+        || !hasPerBandState(static_cast<Band>(band))) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
-                   QStringLiteral("The Core keeps antennas for 14 bands."), {});
+                   QStringLiteral("The Core keeps antennas for 160 m to 6 m, 2 m, GEN, WWV and XVTR."), {});
         return;
     }
     const bool receiveOnly = rxOnly.toBool();
@@ -3582,9 +3598,11 @@ void SessionCommandDispatcher::handleSetAlexTxAntenna(const SessionMessage& invo
                    QStringLiteral("The Core has no antenna settings ready."), {});
         return;
     }
-    if (band < 0 || band >= AlexAntennaFacade::kBandCount) {
+    // A band number: 160m .. XVTR (0-13) or 2 m (27, R-IOS-26).
+    if (band < 0 || band >= static_cast<int>(Band::Count)
+        || !hasPerBandState(static_cast<Band>(band))) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
-                   QStringLiteral("The Core keeps antennas for 14 bands."), {});
+                   QStringLiteral("The Core keeps antennas for 160 m to 6 m, 2 m, GEN, WWV and XVTR."), {});
         return;
     }
     const QString reason = alex->setTxAntForBand(Band(band), antenna);
@@ -3974,6 +3992,77 @@ void SessionCommandDispatcher::handleSetIoBoardOutput(const SessionMessage& invo
                                        refusal = reason;
                                    });
     emitResult(invoke.commandVerb, invoke.commandId, accepted, refusal, {});
+}
+
+// Parity ruling C4 (radioHardwareVersion 8): a remote window's Setup >
+// Hardware > Radio Info sample rate, the change a local window makes
+// (RadioModel::setSampleRateLiveAsync): every receiver and the radio's own
+// rate, which new receivers take. StationServer has already refused a
+// window signed in with the pairing token and a radio on the air, and the
+// confirm step has asked the other devices. Like requestSliceSampleRate it
+// runs on a later turn, and answers when the change has finished, naming
+// the slices whose rate moved.
+void SessionCommandDispatcher::handleSetRadioSampleRate(const SessionMessage& invoke)
+{
+    int rateHz = 0;
+    if (!hasExactlyArguments(invoke.arguments, { "rateHz" })
+        || findIntArgument(invoke.arguments, "rateHz", &rateHz) != ArgumentStatus::Ok) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The Core could not read this request."), {});
+        return;
+    }
+    const QVector<int> allowed = m_radioModel->allowedStreamSampleRates();
+    if (allowed.isEmpty()) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The radio is not connected, so its sample rate cannot change."),
+                   {});
+        return;
+    }
+    if (!allowed.contains(rateHz)) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("This radio cannot run at that sample rate."), {});
+        return;
+    }
+    const QByteArray verb = invoke.commandVerb;
+    const quint32 commandId = invoke.commandId;
+    const QString owner = m_sessionOwner;
+    const QPointer<SessionCommandDispatcher> self(this);
+    const QPointer<RadioModel> radioModel(m_radioModel);
+    QMetaObject::invokeMethod(
+        m_radioModel,
+        [self, radioModel, verb, commandId, rateHz, owner]() {
+            if (self.isNull() || radioModel.isNull()) {
+                return;
+            }
+            QHash<int, int> before;
+            for (SliceModel* slice : radioModel->slices()) {
+                if (slice != nullptr) {
+                    before.insert(slice->sliceIndex(), slice->sampleRateHz());
+                }
+            }
+            radioModel->changeRadioSampleRate(
+                rateHz, [self, radioModel, verb, commandId, owner, before](bool ok) {
+                    if (self.isNull() || radioModel.isNull()) {
+                        return;
+                    }
+                    if (!ok) {
+                        self->emitResultAs(owner, SessionMessages::commandResult(
+                            verb, commandId, false,
+                            QStringLiteral("The sample rate did not change. Try again."), {}));
+                        return;
+                    }
+                    QList<QByteArray> affected;
+                    for (SliceModel* slice : radioModel->slices()) {
+                        if (slice != nullptr
+                            && before.value(slice->sliceIndex(), -1) != slice->sampleRateHz()) {
+                            affected.append(ObjectRegistry::keyForSlice(slice->sliceIndex()));
+                        }
+                    }
+                    self->emitResultAs(owner, SessionMessages::commandResult(
+                        verb, commandId, true, QString(), affected));
+                });
+        },
+        Qt::QueuedConnection);
 }
 
 // R-R3-46 / R-R3-21 (radioHardwareVersion 4): one receive filter chain's

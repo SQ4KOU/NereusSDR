@@ -80,8 +80,7 @@ struct ReducerConfig {
     /// alpha = exp(-1 / (fps * tau)) (specHPSDR.cs:351-380 [v2.10.3.13]).
     /// This field held the alpha, not the tau, so it was named averageTau
     /// for one release and is now named for what it carries, matching the
-    /// sibling abstraction this same epic added (ISpectrumSink::
-    /// setAverageAlpha).
+    /// widget's own setAverageAlpha.
     double averageAlpha  {0.12};
 };
 

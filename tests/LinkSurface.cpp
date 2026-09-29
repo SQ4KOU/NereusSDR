@@ -94,6 +94,14 @@
 //                                    declares txEqCurve, so
 //                                    txEqCurveVersion and transmit's
 //                                    txEqCurve are captured. AI-assisted
+//   2026-09-28  J.J. Boyd / KG4VCF  Phone wire batch: the capture declares
+//                                    diversityPattern, so
+//                                    diversityPatternVersion and the
+//                                    slice's diversityPattern are captured;
+//                                    and logCategoryList, so
+//                                    logCategoryListVersion and radio's
+//                                    logCategoryList are; and radioModels,
+//                                    so radioModelsVersion is. AI-assisted
 //                                    via Anthropic Claude Code.
 //   2026-09-29  J.J. Boyd / KG4VCF  R-R3-49 / R-IOS-18: and paProfiles, so
 //                                    paProfileVersion and the `paProfiles`
@@ -547,7 +555,8 @@ std::optional<QList<QByteArray>> liveSessionWire(
     // and sessionHolder (iPhone app Task 71), so `connectedDevices` and
     // sessionHolderVersion are too; and remoteTx (iPhone app plan Task 34),
     // so remoteTxVersion is; and vax (iPhone app plan Task 25), so the
-    // `vax` object and vaxVersion are.
+    // `vax` object and vaxVersion are; and band2m (R-IOS-26), so
+    // band2mVersion is.
     clientEnd->sendText(SessionMessages::encode(SessionMessages::hello(
         kSessionProtocolMajor, kSessionProtocolMinor, 0, QStringLiteral("link-surface"),
         {kSessionProtocolMajor}, {{"deviceAuth", 1}, {"sessionHolder", 1}, {"remoteTx", 1},
@@ -556,7 +565,16 @@ std::optional<QList<QByteArray>> liveSessionWire(
                                   {"setupDescription", 1}, {"miniDisplay", 1},
                                   {"radioAntennaRows", 1},
                                   // iPhone app plan Task 25: the `vax` object.
-                                  {"vax", 1}, {"txEqCurve", 1},
+                                  {"vax", 1}, {"txEqCurve", 1}, {"band2m", 1},
+                                  // Phone wire batch: each slice's
+                                  // diversityPattern.
+                                  {"diversityPattern", 1},
+                                  // Phone wire batch: radio's
+                                  // logCategoryList.
+                                  {"logCategoryList", 1},
+                                  // Phone wire batch: stationRadios' model
+                                  // labels and choices.
+                                  {"radioModels", 1},
                                   // R-R3-49 / R-IOS-18: the `paProfiles` object.
                                   {"paProfiles", 1}})));
     clientEnd->sendText(SessionMessages::encode(SessionMessages::authRequest({}, block)));
@@ -599,6 +617,14 @@ QJsonArray captureCapabilities()
     caps.vaxEntry = true;
     // R-IOS-13 / R-R3-49: sent to a peer that declared txEqCurve.
     caps.txEqCurveVersion = 1;
+    // R-IOS-26 / R-R3-49: sent to a peer that declared band2m.
+    caps.band2mVersion = 1;
+    // Phone wire batch: sent to a peer that declared diversityPattern.
+    caps.diversityPatternVersion = 1;
+    // Phone wire batch: sent to a peer that declared logCategoryList.
+    caps.logCategoryListVersion = 1;
+    // Phone wire batch: sent to a peer that declared radioModels.
+    caps.radioModelsEntry = true;
     // R-R3-49 / R-IOS-18: sent to a peer that declared paProfiles.
     caps.paProfileVersion = 1;
 

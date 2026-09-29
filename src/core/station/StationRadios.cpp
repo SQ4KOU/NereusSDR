@@ -14,6 +14,9 @@
 //   2026-09-26  J.J. Boyd / KG4VCF  Created (parity Task 21, R-IOS-18,
 //                                    R-R3-38, R-R3-49). AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  Phone wire batch: modelLabel and
+//                                    models on each record. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "core/station/StationRadios.h"
@@ -21,6 +24,8 @@
 #include "core/AppSettings.h"
 #include "core/HardwareProfile.h"
 #include "core/HpsdrModel.h"
+
+#include <QJsonArray>
 
 namespace NereusSDR {
 
@@ -42,6 +47,15 @@ bool sameMac(const QString& a, const QString& b)
 
 QJsonObject StationRadioEntry::toFields() const
 {
+    // Phone wire batch: each choice as {model, label}.
+    QJsonArray choices;
+    for (int m : models) {
+        choices.append(QJsonObject{
+            {QStringLiteral("model"), m},
+            {QStringLiteral("label"),
+             QString::fromLatin1(displayName(static_cast<HPSDRModel>(m)))},
+        });
+    }
     return QJsonObject{
         {QStringLiteral("id"), id},
         {QStringLiteral("name"), name},
@@ -50,6 +64,8 @@ QJsonObject StationRadioEntry::toFields() const
         {QStringLiteral("address"), address},
         {QStringLiteral("protocol"), protocol},
         {QStringLiteral("inUse"), inUse},
+        {QStringLiteral("modelLabel"), modelLabel},
+        {QStringLiteral("models"), choices},
     };
 }
 
@@ -72,13 +88,22 @@ std::optional<StationRadioEntry> StationRadioEntry::fromFields(const QString& id
     e.address = fields.value(QStringLiteral("address")).toString();
     e.protocol = fields.value(QStringLiteral("protocol")).toInt();
     e.inUse = fields.value(QStringLiteral("inUse")).toBool();
+    // Phone wire batch: absent for a peer that did not declare radioModels.
+    e.modelLabel = fields.value(QStringLiteral("modelLabel")).toString();
+    for (const QJsonValue& choice : fields.value(QStringLiteral("models")).toArray()) {
+        const QJsonValue m = choice.toObject().value(QStringLiteral("model"));
+        if (m.isDouble()) {
+            e.models.append(m.toInt());
+        }
+    }
     return e;
 }
 
 bool StationRadioEntry::operator==(const StationRadioEntry& other) const
 {
     return id == other.id && name == other.name && model == other.model && mac == other.mac
-        && address == other.address && protocol == other.protocol && inUse == other.inUse;
+        && address == other.address && protocol == other.protocol && inUse == other.inUse
+        && modelLabel == other.modelLabel && models == other.models;
 }
 
 // ── The choice order ─────────────────────────────────────────────────────
@@ -280,6 +305,16 @@ QList<StationRadioEntry> StationRadios::entries() const
         e.address = info.address.isNull() ? QString() : info.address.toString();
         e.protocol = info.protocol == ProtocolVersion::Protocol2 ? 2 : 1;
         e.inUse = inUse;
+        // Phone wire batch: the label Setup shows for the model (displayName,
+        // HpsdrModel.h, Thetis enums.cs), and the models the board can run
+        // as: compatibleModels (HardwareProfile.cpp), the board check of
+        // Thetis NetworkIO.cs:160-176 [v2.10.3.15], which the model combo
+        // offers and setModel() below enforces.
+        //   //[2.10.3.9]MW0LGE added board check, issue icon shown in setup
+        e.modelLabel = QString::fromLatin1(displayName(static_cast<HPSDRModel>(e.model)));
+        for (HPSDRModel m : compatibleModels(info.boardType)) {
+            e.models.append(static_cast<int>(m));
+        }
         return e;
     };
     if (m_hasCurrent) {

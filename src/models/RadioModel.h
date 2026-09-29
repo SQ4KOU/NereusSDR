@@ -9,6 +9,11 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-28 - RADE end-of-over callsigns: endOfOverTailActive /
+//                 endOfOverTailChanged, startRadeEndOfOverTail and
+//                 onEndOfOverTailChanged (FreeDV's end-of-over frame after
+//                 an operator's release). J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
@@ -361,6 +366,19 @@
 //                Core's readings (stationModMonitorSnapshot).
 //                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-28 - R-R3-49 / R-R3-46: Setup > Transmit > Power's Disable HF PA
+//                applied (Thetis DisablePA and hf_tr_relay,
+//                transmitSettingsVersion 11). J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
+//   2026-09-28 - R-R3-46 / R-R3-49: the Alex Filters tabs' receive filter rows
+//                (per-row bypass and edges, Alex-2 master bypass) select the
+//                receive high-pass as Thetis's setAlexHPF /
+//                setBPF1ForOrionIISaturn / setAlex2HPF do (radioHardwareVersion
+//                8). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - Phone wire batch: logCategoryList, the Support dialog's
+//                categories with their labels (logCategoryListVersion 1).
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 //   2026-09-29 - R-R3-49 / R-IOS-18: PA Gain's profiles for a remote client
 //                 (paProfileActionForStation; the page's ids, plain tooltips,
 //                 the adjust tooltip's stray %, and the Default profile found
@@ -701,6 +719,13 @@ class RadioModel : public QObject {
     // a remote window holds the Core's (applyMirroredValue) and changes it
     // with support.setLogCategories. Core to window only.
     Q_PROPERTY(QString logCategories READ logCategories NOTIFY logCategoriesChanged)
+    // Phone wire batch (logCategoryListVersion 1): every logging category
+    // the Support dialog lists, with the label its checkbox shows
+    // (LogManager::categoryListJson), so a device names a category it was
+    // not built with. Fixed for the life of the process: CONSTANT, sent in
+    // the snapshot only, and only to a peer that declared logCategoryList.
+    // Declared last so every earlier property keeps its wire ordinal.
+    Q_PROPERTY(QString logCategoryList READ logCategoryList CONSTANT)
 
 
 public:
@@ -1016,6 +1041,25 @@ public:
     // remote window's model calls it for each Core setting that arrives.
     void applyPanGridSetting(const QString& key);
     static bool isSwrProtectionSettingKey(const QString& key);
+
+    // Setup > Transmit > Power's "Disable HF PA" (DisableHfPa, Thetis
+    // chkHFTRRelay -> console.HFTRRelay), applied at once: the connection's
+    // DisablePA bit (RadioConnection::setPaDisabled) and the SWR
+    // protection's pass (SwrProtectionController::setHfPaDisabled). Thetis
+    // offers the box on every radio except the Hermes and the Atlas kit
+    // (hfPaSwitchAvailable); on those it is off. The local page calls it
+    // after saving, the connect path on connect, and the Core for a
+    // change to the Core's settings, from a window or the Core itself
+    // (StationServer). A model with no radio of its own (a remote window)
+    // does nothing.
+    static constexpr const char* kDisableHfPaKey = "DisableHfPa";
+    static bool hfPaSwitchAvailable(HPSDRModel model) noexcept;
+    static QString hfPaSwitchUnavailableReason();
+    // Reads this computer's saved value.
+    void applyDisableHfPaSetting();
+    // `value` is the saved string; an invalid QVariant (the key removed)
+    // applies the default, off.
+    void applyDisableHfPaSetting(const QVariant& value);
 
     // Task 13: External TX Inhibit (Setup > Transmit > Power, grpExtTXInhibit)
     // is a Core setting: the gate sits where the radio is. The setters save
@@ -1878,6 +1922,25 @@ public:
     /// relayed onto sliceRetuneRejected by
     /// reportStationRetuneRejected().
     void requestSliceSampleRate(int sliceId, int rateHz);
+
+    /// Parity ruling C4: Setup > Hardware > Radio Info's sample rate, from
+    /// any window. A local model changes the whole radio at once
+    /// (setSampleRateLiveAsync: every receiver and the radio's own rate,
+    /// which new receivers take). A remote model sends the Core the same
+    /// change (verb setRadioSampleRate, radioHardwareVersion 9); on an older
+    /// Core it sends each of this window's receivers' own rate request
+    /// (requestSliceSampleRate), lowest id first, as before. A refusal
+    /// comes back as sliceRetuneRejected(-1, reason).
+    void requestRadioSampleRate(int rateHz);
+    /// Parity ruling C4: true when requestRadioSampleRate reaches every
+    /// receiver and the radio's own rate: always on a local model, and on a
+    /// remote one whose Core offers setRadioSampleRate.
+    bool radioSampleRateReachesEveryReceiver() const;
+    /// Parity ruling C4, the Core's half of setRadioSampleRate: the local
+    /// window's change (setSampleRateLiveAsync), with `onFinished(ok)`
+    /// called once when it has finished (at once, ok, for the rate the
+    /// radio is at; ok false with no connection or WDSP not ready).
+    void changeRadioSampleRate(int rateHz, std::function<void(bool)> onFinished);
     /// requestSliceSampleRate on the Core with `closing` closed through
     /// `close` only once the change is certain (setStreamSampleRateClosing).
     void requestSliceSampleRateClosing(int sliceId, int rateHz, const QSet<int>& closing,
@@ -2549,6 +2612,16 @@ public:
     // holds the Core's value as it last heard it.
     bool isTransmitting() const;
 
+    // RADE end-of-over callsigns: the radio is sending FreeDV's end-of-over
+    // frame after an operator's release (MoxController's end-of-over tail).
+    // The Core's value; TransmitState sends it as txEnding.
+    bool endOfOverTailActive() const;
+    // Whether an unkey now may send the RADE end-of-over tail: the Core's
+    // own release (not after one of its stops, the RF gate still open), not
+    // TUNE or two-tone, and the TX-bound slice in RADE. The tail also needs
+    // the slice's running RADE channel and the TX worker.
+    bool radeEndOfOverTailPermitted() const;
+
     // R-R3-49 (parity Task 1): the Core's one on-the-air refusal. True,
     // with "The radio is on the air. Try again when it stops." in `reason`,
     // while the radio is keyed (MoxController from any source, through its
@@ -2760,6 +2833,8 @@ public:
 
     /// Remote-window parity Task 22 (R-R3-49): see the property.
     QString logCategories() const;
+    /// Phone wire batch: see the property. This process's categories.
+    QString logCategoryList() const;
     /// A remote window's copy of the Core's log (the `coreLog` stream),
     /// oldest first, at most kStationCoreLogLines. Followed only while a
     /// viewer holds it (the Support dialog, Setup > Diagnostics > Logs).
@@ -3615,6 +3690,11 @@ public:
     // remote window) does nothing: its save goes to the Core, which applies
     // it there.
     void applyAlexHpfSwitchSettings();
+    // The Alex tab's receive filter rows saved for `mac` (the high-pass
+    // ladder, the band-pass bank and the Alex-2 bank: each row's edges and
+    // bypass, and the Alex-2 master bypass), each default Thetis's.
+    static codec::alex::AlexHpfEdges savedAlexHpfEdges(const QString& mac);
+    const codec::alex::AlexHpfEdges& alexHpfEdges() const noexcept { return m_alexHpfEdges; }
     // Task 14's name for the same apply, kept for its callers.
     void applyHpfBypassOnTxSetting() { applyAlexHpfSwitchSettings(); }
 
@@ -3699,6 +3779,12 @@ public:
     // open on a Disconnected state keys on a non-empty name, and a test has
     // no other way to give a local model one without a live connection.
     void setNameForTest(const QString& name) { m_name = name; }
+    // RADE end-of-over callsigns: a TX worker without a started pump (the
+    // test drives tickForTest), wired as the connect path wires its own.
+    void installTxWorkerForTest(std::unique_ptr<TxWorkerThread> worker);
+    TxWorkerThread* txWorkerMutableForTest() const { return m_txWorker.get(); }
+    // The 24 -> 48 kHz RADE TX resampler (null until the first modem block).
+    const Resampler* radeTxResamplerForTest() const { return m_radeTxResampler.get(); }
 
     // Test-only: inject board caps without a live radio connection.
     // Mirrors P1RadioConnection::setBoardForTest pattern.
@@ -4849,6 +4935,8 @@ signals:
     void rfKitEnabledChanged(bool enabled);
     // R-R3-49: isTransmitting() changed.
     void transmittingChanged(bool transmitting);
+    // RADE end-of-over callsigns: endOfOverTailActive() changed.
+    void endOfOverTailChanged(bool active);
     // R-R3-49 (parity Task 1): isCoreOnAir() changed.
     void coreOnAirChanged(bool onAir);
     // R-R3-32 (parity Task 6): paReadings() changed.
@@ -5304,6 +5392,27 @@ private slots:
 
 private:
     void updateAutoAgc();
+
+    // RADE end-of-over callsigns (MoxController::setEndOfOverTail). Starts
+    // the tail when this release is an operator's and the transmitter runs
+    // RADE: queues the end-of-over frame, carrying the station callsign
+    // FreeDV Reporter uses, on the TX-bound slice's RADE channel and arms
+    // the TX worker's drained notice. False (no tail) otherwise.
+    bool startRadeEndOfOverTail();
+    // The TX worker's RADE connections: the path latch on MOX-on and the
+    // tail's drained notice. Called where the worker is created.
+    void wireTxWorkerRade(TxWorkerThread* worker);
+    // The tail ended (sent, timed out, stopped or cut by a new key).
+    void onEndOfOverTailChanged(bool active);
+    // At every unkey's drain: the RADE TX audio the over left (the worker's
+    // queue, the 24 -> 48 kHz resampler, the channel's encoder state).
+    void dropRadeTxAudio();
+    // While a tail runs: the TX slice's dspModeChanged and the arbiter's
+    // txBoundSliceChanged, each ending it.
+    QMetaObject::Connection m_endOfOverTailModeWatch;
+    // Set around teardownConnection's unkey: a disconnect sends no tail.
+    bool m_refuseEndOfOverTail{false};
+    QMetaObject::Connection m_endOfOverTailSliceWatch;
 
     // R-R3-49 / R-R3-47: false, with the reason, when a window may not
     // switch the Core's Tuner Genius now (not the Core's tuner, the radio
@@ -6688,6 +6797,10 @@ private:
     bool m_alexHpfBypassOnTxSwitch{false};
     bool m_alexHpfBypassOnPsSwitch{true};
     bool m_alexDisable6mLnaOnTxSwitch{true};
+    // The Alex tab's receive filter rows as last applied
+    // (applyAlexHpfSwitchSettings): the chain decisions select each chain's
+    // high-pass from them, as the connection does.
+    codec::alex::AlexHpfEdges m_alexHpfEdges{codec::alex::AlexHpfEdges::thetisDefaults()};
 
 #ifdef NEREUS_BUILD_TESTS
     std::optional<BoardCapabilities> m_testWidebandCaps;

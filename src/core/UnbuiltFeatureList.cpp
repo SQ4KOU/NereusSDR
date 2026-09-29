@@ -157,8 +157,6 @@ const QList<Entry>& all()
          QStringLiteral("Setup > Hardware > HL2 Options: TX buffer latency, PTT hang")},
         {F::GanymedeTrip, QStringLiteral("ganymede-trip"),
          QStringLiteral("Status PA badge: Andromeda/Ganymede CAT trip input is not ported")},
-        {F::DisableHfPa, QStringLiteral("disable-hf-pa"),
-         QStringLiteral("Setup > Transmit > Power: HF PA relay routing refresh is not ported")},
         {F::PbSnr, QStringLiteral("pb-snr"),
          QStringLiteral("Multimeter PBSNR binding has no producer")},
         {F::ContainerClickBox, QStringLiteral("container-click-box"),

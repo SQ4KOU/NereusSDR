@@ -36,6 +36,10 @@
 //   2026-09-26  J.J. Boyd / KG4VCF  Created (parity Task 21, R-IOS-18,
 //                                    R-R3-38, R-R3-49). AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  Phone wire batch: each radio's model
+//                                    label and the models it can run as
+//                                    (modelLabel, models). AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QJsonObject>
@@ -62,6 +66,13 @@ struct StationRadioEntry {
     QString address;   // IP address, empty when not known
     int protocol = 1;  // OpenHPSDR protocol 1 or 2
     bool inUse = false; // the Core's radio now
+    // Phone wire batch (radioModelsVersion 1): the model's name as Setup
+    // shows it (displayName), and every model this radio's board can run
+    // as, in the model combo's order (compatibleModels of its board), the
+    // list station.setRadioModel accepts. Sent only to a peer that declared
+    // radioModels (StationServer strips them for any other).
+    QString modelLabel;
+    QList<int> models;
 
     QJsonObject toFields() const;
     static std::optional<StationRadioEntry> fromFields(const QString& id,

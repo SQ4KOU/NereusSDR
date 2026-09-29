@@ -410,15 +410,17 @@ PlacementPlan planThreadPlacement(const CpuTopology& topology,
     QList<int> rx = demand.rxChannels;
     std::sort(rx.begin(), rx.end());
     rx.erase(std::unique(rx.begin(), rx.end()), rx.end());
+    // G-06: the first receive worker, the DSP thread, the three transmit
+    // roles, then the further receive workers. While transmitting, the
+    // transmit path (worker, pump, I/Q sender) must not lose its core to a
+    // second or third receiver; those demand cores only for as long as
+    // transmit does not.
     QList<RoleAssignment> order;
     if (!rx.isEmpty()) {
         order.append({ThreadRole::RxWorker, rx.first(), -1});
     }
     if (demand.dspThread) {
         order.append({ThreadRole::DspThread, -1, -1});
-    }
-    for (int i = 1; i < rx.size(); ++i) {
-        order.append({ThreadRole::RxWorker, rx.at(i), -1});
     }
     if (demand.txWorker) {
         order.append({ThreadRole::TxWorker, -1, -1});
@@ -428,6 +430,9 @@ PlacementPlan planThreadPlacement(const CpuTopology& topology,
     }
     if (demand.txIqSender) {
         order.append({ThreadRole::TxIqSender, -1, -1});
+    }
+    for (int i = 1; i < rx.size(); ++i) {
+        order.append({ThreadRole::RxWorker, rx.at(i), -1});
     }
     int next = 0;
     for (RoleAssignment& a : order) {

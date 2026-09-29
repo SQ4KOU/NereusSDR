@@ -525,6 +525,24 @@
                       "tooltip": "TX Ant 3 for XVTR"
                     }
                   ]
+                },
+                {
+                  "band": 27,
+                  "label": "2m",
+                  "cells": [
+                    {
+                      "column": "tx1",
+                      "tooltip": "TX Ant 1 for 2m"
+                    },
+                    {
+                      "column": "tx2",
+                      "tooltip": "TX Ant 2 for 2m"
+                    },
+                    {
+                      "column": "tx3",
+                      "tooltip": "TX Ant 3 for 2m"
+                    }
+                  ]
                 }
               ],
               "columns": [
@@ -983,6 +1001,36 @@
                     {
                       "column": "rxOnly3",
                       "tooltip": "RX-only XVTR for XVTR"
+                    }
+                  ]
+                },
+                {
+                  "band": 27,
+                  "label": "2m",
+                  "cells": [
+                    {
+                      "column": "rx1",
+                      "tooltip": "RX1 Ant 1 for 2m"
+                    },
+                    {
+                      "column": "rx2",
+                      "tooltip": "RX1 Ant 2 for 2m"
+                    },
+                    {
+                      "column": "rx3",
+                      "tooltip": "RX1 Ant 3 for 2m"
+                    },
+                    {
+                      "column": "rxOnly1",
+                      "tooltip": "RX-only RX1 for 2m"
+                    },
+                    {
+                      "column": "rxOnly2",
+                      "tooltip": "RX-only RX2 for 2m"
+                    },
+                    {
+                      "column": "rxOnly3",
+                      "tooltip": "RX-only XVTR for 2m"
                     }
                   ]
                 }

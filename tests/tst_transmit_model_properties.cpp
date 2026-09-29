@@ -388,15 +388,17 @@ void TstTransmitModelProperties::coreOffersTransmitSettingsVersion4()
     // calibration); 4 is within it.
     Session s(m_securityDir.path(), this);
     QVERIFY(s.connect());
-    QCOMPARE(s.server->buildCapabilities().transmitSettingsVersion, 10);
-    QCOMPARE(s.client->capabilities().transmitSettingsVersion, 10);
+    QCOMPARE(s.server->buildCapabilities().transmitSettingsVersion, 11);
+    QCOMPARE(s.client->capabilities().transmitSettingsVersion, 11);
     QVERIFY(s.client->transmitSettingsAvailable(4));
     QVERIFY(s.client->transmitSettingsAvailable(7));
     QVERIFY(s.client->transmitSettingsAvailable(8));
     QVERIFY(s.client->transmitSettingsAvailable(9));
     // 10 since iPhone app plan Task 40's mic mute (micMuted).
     QVERIFY(s.client->transmitSettingsAvailable(10));
-    QVERIFY(!s.client->transmitSettingsAvailable(11));
+    // 11 since hardware parity batch B's Disable HF PA (DisableHfPa).
+    QVERIFY(s.client->transmitSettingsAvailable(11));
+    QVERIFY(!s.client->transmitSettingsAvailable(12));
 }
 
 // R-R3-49 (parity Task 5): the version 5 properties, after txAlcDecay in

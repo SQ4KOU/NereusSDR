@@ -174,6 +174,7 @@
 #include "Band.h"
 #include "core/AppSettings.h"
 #include "core/ControlRanges.h"
+#include "core/DiversityPattern.h"
 #include "core/LogCategories.h"
 #include "core/RadeChannel.h"
 #include "core/WdspEngine.h"
@@ -282,6 +283,7 @@ void SliceModel::applyFrequency(double freq)
     if (!qFuzzyCompare(m_frequency, freq)) {
         m_frequency = freq;
         emit frequencyChanged(freq);
+        noteDiversityPatternInputs();
 
         // Phase 3P-II Task 64: emit bandChanged on band boundary cross.
         // Uses Band::bandFromFrequency (IARU Region 2, GEN fallback).
@@ -1004,6 +1006,7 @@ void SliceModel::setDiversityPhaseDeg(double deg)
     if (m_diversityPhaseDeg != deg) {
         m_diversityPhaseDeg = deg;
         emit diversityPhaseDegChanged(deg);
+        noteDiversityPatternInputs();
     }
 }
 
@@ -1012,6 +1015,23 @@ void SliceModel::setDiversityGainDb(double db)
     if (m_diversityGainDb != db) {
         m_diversityGainDb = db;
         emit diversityGainDbChanged(db);
+        noteDiversityPatternInputs();
+    }
+}
+
+QString SliceModel::diversityPattern() const
+{
+    m_diversityPatternLast = DiversityPattern::wireJson(m_frequency, m_diversityPhaseDeg,
+                                                        m_diversityGainDb);
+    return m_diversityPatternLast;
+}
+
+void SliceModel::noteDiversityPatternInputs()
+{
+    const QString previous = m_diversityPatternLast;
+    const QString now = diversityPattern();
+    if (now != previous) {
+        emit diversityPatternChanged(now);
     }
 }
 

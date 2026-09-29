@@ -372,6 +372,10 @@
 //               pairingAvailable() and requestDeviceAdmin() for the This
 //               Core page. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //               Claude Code.
+//   2026-09-28 - 2 m as its own band (R-IOS-26, R-R3-49). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29: withholdFeatureForTest. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include <QAbstractSocket>
@@ -1139,6 +1143,12 @@ public:
     CommandOutcome requestActiveSlice(int sliceId) override;
     // Parity Task 18 (B3.1): slice.selectBand for a named slice.
     bool bandSelectAvailable() const override;
+    /// R-IOS-26 / R-R3-49: the Core knows 2 m as its own band
+    /// (band2mVersion 1 at minor 11). Without it a 2 m band button, menu
+    /// entry or antenna row cannot reach the Core, and says why.
+    bool station2mAvailable() const;
+    static QString station2mUnavailableReason();
+    QString band2mUnavailableReason() const override;
     CommandOutcome requestSelectBand(int sliceId, int band) override;
     CommandOutcome requestSliceSampleRate(int sliceId, int rateHz) override;
     CommandOutcome requestStreamCtunPinned(int sliceId, bool pinned) override;
@@ -1245,6 +1255,10 @@ public:
                                      int value) override;
     /// Parity Task 14 (radioHardwareVersion 7). Verb "setIoBoardOutput".
     CommandOutcome requestIoBoardOutput(int pin, bool on) override;
+    /// Parity ruling C4: the Core offers setRadioSampleRate
+    /// (radioHardwareVersion 9).
+    bool radioSampleRateAvailable() const override;
+    CommandOutcome requestRadioSampleRate(int rateHz) override;
     /// Parity Task 16 (dspInfoVersion 1). Verb "dsp.filterResponse". The
     /// answer goes to RadioModel::reportStationFilterResponse.
     CommandOutcome requestFilterResponse(int sliceId, bool highResolution) override;
@@ -1304,6 +1318,9 @@ public:
     /// Test seam: a bench link cannot enrol its key either; a window test
     /// says this token sign-in did (follow-up N1).
     void setEnrolledDeviceKeyForTest(bool enrolled) { m_enrolledKeyForTest = enrolled ? 1 : 0; }
+    /// Test seam: the next hello leaves out `feature`, as a window built
+    /// before it did (a Core then answers as it would that window).
+    void withholdFeatureForTest(const QByteArray& feature) { m_declaredFeatures.remove(feature); }
 #endif
     /// iPhone app plan Task 25: minor 11, deviceAdminVersion (or
     /// pairingVersion) at least 1, and this session signed in with this

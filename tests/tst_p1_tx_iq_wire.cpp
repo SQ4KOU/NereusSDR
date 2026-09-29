@@ -365,6 +365,41 @@ private slots:
         // 960 zero cushion samples + the 1 real sample just pushed.
         QCOMPARE(conn.txIqBufferedSamplesForTest(), 961);
     }
+
+    // G-07: a full ring drops the rest of the block cleanly (nothing unread
+    // is overwritten, the count never passes capacity) and the loss is
+    // counted where the transmit diagnostics read the send path's health
+    // (RadioConnection::txSendStats, the Core's "Transmit ended" line).
+    // The count runs per key, as on Protocol 2.
+    void overflowDropsCleanlyAndIsCounted() {
+        P1RadioConnection conn;
+        constexpr int kCapacity = 126 * 32;   // 4032 samples, ~84 ms at 48 kHz
+
+        QVERIFY(conn.txSendStats().valid);
+        QCOMPARE(conn.txSendStats().overflowSamples, quint64(0));
+
+        std::vector<float> quarter(static_cast<size_t>(kCapacity) * 2, 0.25f);
+        conn.sendTxIq(quarter.data(), kCapacity);
+        QCOMPARE(conn.txIqBufferedSamplesForTest(), kCapacity);
+        QCOMPARE(conn.txSendStats().overflowSamples, quint64(0));
+
+        // 100 more full-scale samples: none fits.
+        std::vector<float> full(100 * 2, 1.0f);
+        conn.sendTxIq(full.data(), 100);
+        QCOMPARE(conn.txIqBufferedSamplesForTest(), kCapacity);
+        QCOMPARE(conn.txSendStats().overflowSamples, quint64(100));
+
+        // The oldest unread sample is still the first 0.25 one:
+        // (long)(0.25 * 32767 + 0.5) = 8192 = 0x2000.
+        const QByteArray frame = conn.sendTxIqAndCapture(full.data(), 1);
+        QCOMPARE(conn.txSendStats().overflowSamples, quint64(101));
+        QCOMPARE(quint8(frame[20]), quint8(0x20));
+        QCOMPARE(quint8(frame[21]), quint8(0x00));
+
+        // A new key starts the count again.
+        conn.setMox(true);
+        QCOMPARE(conn.txSendStats().overflowSamples, quint64(0));
+    }
 };
 
 QTEST_APPLESS_MAIN(TestP1TxIqWire)

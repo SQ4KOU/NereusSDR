@@ -162,6 +162,20 @@
 //   2026-09-28 - R-IOS-13 / R-R3-49: txEqCurveVersion, the read-only TX
 //                EQ curve on `transmit`. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-28 - R-IOS-26 / R-R3-49: band2mVersion, 2 m as its own band.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - R-R3-49 / R-R3-46: Setup > Transmit > Power's Disable HF PA
+//                applied (Thetis DisablePA and hf_tr_relay,
+//                transmitSettingsVersion 11). J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
+//   2026-09-28 - R-R3-46 / R-R3-49: the Alex Filters tabs' receive filter rows
+//                (per-row bypass and edges, Alex-2 master bypass) select the
+//                receive high-pass as Thetis's setAlexHPF /
+//                setBPF1ForOrionIISaturn / setAlex2HPF do (radioHardwareVersion
+//                8). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - Phone wire batch: diversityPatternVersion,
+//                logCategoryListVersion and radioModelsVersion. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-29 - R-R3-49 / R-IOS-18: paProfileVersion and the read-only
 //                 paProfiles object (PaProfilesFacade). J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
@@ -230,7 +244,9 @@ struct StationCapabilities {
     /// (one band's TX antenna; parity mini-round); 7 the I/O board's
     /// requestIoBoardI2c and setIoBoardOutput commands, `ioBoard` outputs
     /// and the Alex tab's three transmit high-pass switches taken from a
-    /// window (parity Task 14). Sent last in the same block as the three above,
+    /// window (parity Task 14); 8 the Alex Filters tabs' receive filter
+    /// rows (each row's bypass and edges, and Alex-2's master bypass),
+    /// applied to the Core's radio at once. Sent last in the same block as the three above,
     /// so only at minor 11. 0: a window keeps today's behaviour and does
     /// not write `stepAtt`.
     int radioHardwareVersion = 0;
@@ -250,12 +266,37 @@ struct StationCapabilities {
     /// txEqCurve 1, after radioAntennaRowsVersion; that peer alone gets the
     /// property. 0 (absent): the peer sees today's wire.
     int txEqCurveVersion = 0;
+    /// R-IOS-26 / R-R3-49: 1 means the Core knows 2 m as its own band
+    /// (Band 27, BandLinkFit.h) and sends it to this peer. Optional and
+    /// last at minor 11, for a peer that declared band2m 1. 0: the Core
+    /// sends 2 m as GEN and the per-band lists without it, and a window
+    /// sends neither band 27 nor a 2 m list entry.
+    int band2mVersion = 0;
+    /// Phone wire batch: 1 means every slice carries `diversityPattern`,
+    /// the Diversity dialog's sensitivity pattern. Sent after vaxVersion,
+    /// only to a peer at minor 11 whose hello declared diversityPattern 1,
+    /// on a Core with a radio model; any other peer's capabilities and
+    /// slices are today's.
+    int diversityPatternVersion = 0;
+    /// Phone wire batch: 1 means `radio` carries `logCategoryList`, every
+    /// logging category with its label. Sent after diversityPatternVersion,
+    /// only to a peer at minor 11 whose hello declared logCategoryList 1,
+    /// on a Core with a radio model; any other peer's are today's.
+    int logCategoryListVersion = 0;
+    /// Phone wire batch: 1 means each `stationRadios` record carries
+    /// `modelLabel` and `models` (the models that radio can run as). Sent
+    /// after logCategoryListVersion, only to a peer at minor 11 whose hello
+    /// declared radioModels 1 (radioModelsEntry), 0 on a Core that keeps no
+    /// radio list (stationRadiosVersion 0); any other peer's capabilities
+    /// and records are today's.
+    bool radioModelsEntry = false;
+    int radioModelsVersion = 0;
     /// R-R3-49 / R-IOS-18: 1 means the Core sends its PA Gain profiles on
     /// the read-only `paProfiles` object and takes the paProfile verbs
     /// (select, new, copy, delete, reset, setGain, setAdjust, setMaxPower,
     /// setUseMax), each gated as the Core gates the desktop's own PA profile
     /// writes. Only for a peer at minor 11 that declared paProfiles 1, after
-    /// txEqCurveVersion.
+    /// radioModelsVersion.
     int paProfileVersion = 0;
     /// R-R3-47 / R-R3-22: 1 means the Core mirrors its Power Genius XL
     /// status as the read-only `amplifier` object. Sent after
@@ -341,6 +382,8 @@ struct StationCapabilities {
     /// transmit settings stay greyed and say the Core cannot take them.
     /// 9 also offers validated BandPlanRegion edits and the TX passband guard.
     /// 10 (iPhone app plan Task 40) adds `transmit.micMuted`, the mic mute.
+    /// 11 offers Transmit > Power's "Disable HF PA" (DisableHfPa),
+    /// taken on and off the air and applied to the radio at once.
     int transmitSettingsVersion = 0;
     /// R-IOS-27, R-IOS-06: 1 means the Core takes `slice.selectBand`, which
     /// runs the desktop's band button on a slice (its saved frequency, mode

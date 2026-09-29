@@ -123,13 +123,13 @@ private slots:
         a.setRxAnt(Band::Band40m, 2);
         QSignalSpy spy(&a, &AlexController::antennaChanged);
         a.setAntennasTo1(true);
-        // setAntennasTo1 unconditionally emits for each band in the
-        // 14-band ham range (Band160m..XVTR) regardless of prior value,
+        // setAntennasTo1 unconditionally emits for each band with antennas
+        // of its own (Band160m..XVTR and 2 m) regardless of prior value,
         // matching the "applies to all in-memory values" documented
         // behavior in AlexController.cpp.  SWL bands (Band::SwlFirst..
         // SwlLast, Phase 3L Band enum extension) inherit ham antenna
         // routing — they are NOT iterated by setAntennasTo1.
-        QCOMPARE(spy.count(), 14);
+        QCOMPARE(spy.count(), 15);
     }
 
     // Phase 3P-I-a bench fix — Block-TX toggle retroactively clamps
@@ -307,8 +307,9 @@ private slots:
         AlexAntennaFacade f;
         f.bindController(&a);
         QVERIFY(f.isBound());
-        QCOMPARE(f.rxAntennas(), QStringLiteral("1,1,1,1,1,1,1,1,1,1,1,1,1,1"));
-        QCOMPARE(f.rxOnlyAntennas(), QStringLiteral("0,0,0,0,0,0,0,0,0,0,0,0,0,0"));
+        // 15 entries: 160m .. XVTR, then 2 m.
+        QCOMPARE(f.rxAntennas(), QStringLiteral("1,1,1,1,1,1,1,1,1,1,1,1,1,1,1"));
+        QCOMPARE(f.rxOnlyAntennas(), QStringLiteral("0,0,0,0,0,0,0,0,0,0,0,0,0,0,0"));
 
         QSignalSpy changed(&a, &AlexController::antennaChanged);
         f.setRxAnt(Band::Band40m, 2);
@@ -339,7 +340,7 @@ private slots:
         f.setRxAntennas(QStringLiteral("2,2"));
         QCOMPARE(a.rxAnt(Band::Band160m), 3);  // a short list changes nothing
         QCOMPARE(f.settleReason("rxAntennas"),
-                 QStringLiteral("The Core keeps one antenna for each of its 14 bands."));
+                 QStringLiteral("The Core keeps one antenna for each of its bands."));
 
         f.setRxOnlyAntennas(QStringLiteral("-1,0,0,0,0,0,0,0,0,0,0,0,0,0"));
         QCOMPARE(a.rxOnlyAnt(Band::Band160m), 0);
@@ -392,6 +393,15 @@ private slots:
         QVERIFY(f.applyRemoteProperty("txAntennas",
                                       QStringLiteral("2,2,2,2,2,2,2,2,2,2,2,2,2,3")));
         QCOMPARE(f.txAnt(Band::XVTR), 3);
+        // A Core that knows 2 m sends 15 entries, 2 m's last; a 14-entry
+        // list (above, a Core built before 2 m) keeps 2 m's value.
+        QCOMPARE(f.txAnt(Band::Band2m), 1);
+        QVERIFY(f.applyRemoteProperty("txAntennas",
+                                      QStringLiteral("2,2,2,2,2,2,2,2,2,2,2,2,2,3,3")));
+        QCOMPARE(f.txAnt(Band::Band2m), 3);
+        QVERIFY(f.applyRemoteProperty("txAntennas",
+                                      QStringLiteral("1,1,1,1,1,1,1,1,1,1,1,1,1,1")));
+        QCOMPARE(f.txAnt(Band::Band2m), 3);
         QVERIFY(f.applyRemoteProperty("blockTxAnt3", true));
         QVERIFY(f.blockTxAnt3());
         QVERIFY(!f.applyRemoteProperty("rxAntennas", QStringLiteral("3,3")));

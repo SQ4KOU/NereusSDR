@@ -127,9 +127,9 @@ struct PlacementPlan {
 /// the rest.
 ///
 /// Dedicated cores go, in order, to the first active receive worker (lowest
-/// channel), the DSP thread, the other active receive workers, the transmit
-/// worker, the transmit pump, then the transmit I/Q sender. A role left
-/// without a core runs on the housekeeping cores.
+/// channel), the DSP thread, the transmit worker, the transmit pump, the
+/// transmit I/Q sender, then the other active receive workers (G-06). A
+/// role left without a core runs on the housekeeping cores.
 PlacementPlan planThreadPlacement(const CpuTopology& topology,
                                   const PlacementDemand& demand);
 

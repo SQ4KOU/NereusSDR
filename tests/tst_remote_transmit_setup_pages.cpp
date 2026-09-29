@@ -316,7 +316,10 @@ void TstRemoteTransmitSetupPages::swrProtectionKeysApplyToTheCoresController()
     QVERIFY(StationServer::isTransmitSettingKeyAcceptedOffAir(QStringLiteral("SwrProtectionEnabled")));
     QVERIFY(StationServer::isTransmitSettingKeyAcceptedOffAir(QStringLiteral("TxInhibitMonitorEnabled")));
     QVERIFY(StationServer::isTransmitSettingKeyAcceptedOffAir(QStringLiteral("TxInhibitMonitorReversed")));
-    QVERIFY(!StationServer::isTransmitSettingKeyAcceptedOffAir(QStringLiteral("DisableHfPa")));
+    // transmitSettingsVersion 11: Disable HF PA, taken on and off the air
+    // as Thetis applies it (no MOX check).
+    QVERIFY(StationServer::isTransmitSettingKeyAcceptedOffAir(QStringLiteral("DisableHfPa")));
+    QVERIFY(StationServer::isTransmitSettingKeyTakenOnAir(QStringLiteral("DisableHfPa")));
 
     s.proxy.setValue(QStringLiteral("SwrProtectionEnabled"), QStringLiteral("True"));
     QTRY_VERIFY(swr.isEnabled());
@@ -548,8 +551,18 @@ void TstRemoteTransmitSetupPages::version5SettingsReachTheCore()
     QCOMPARE(coreTx.tunePowerForBand(Band::Band160m), 15);
     QCOMPARE(coreTx.tunePowerForBand(Band::Band20m), 10);
     // The Core's whole map, in its own key order.
+    // The writes above carry the 14 bands of a peer built before 2 m; the
+    // Core keeps 2 m's value, and its map has all 15 (R-IOS-26).
     const QJsonObject map = QJsonDocument::fromJson(coreTx.powerByBandJson().toUtf8()).object();
-    QCOMPARE(map.size(), 14);
+    QCOMPARE(map.size(), 15);
+    QCOMPARE(map.value(QStringLiteral("2m")).toInt(), coreTx.powerForBand(Band::Band2m));
+    // A write with all 15 bands sets 2 m's own power.
+    QString with2m = bandMap(50, {{QStringLiteral("40m"), 33}, {QStringLiteral("XVTR"), 7}});
+    with2m.insert(with2m.size() - 1, QStringLiteral(",\"2m\":44"));
+    r = s.writeTransmit("powerByBandJson", MirrorWireKind::Utf8, with2m);
+    QVERIFY2(r.accepted, qPrintable(r.reason));
+    QCOMPARE(coreTx.powerForBand(Band::Band2m), 44);
+    QCOMPARE(coreTx.powerForBand(Band::GEN), 50);
     QCOMPARE(map.value(QStringLiteral("40m")).toInt(), 33);
     // A Core-side band change reaches the window.
     coreTx.setPowerForBand(Band::Band30m, 27);
@@ -601,17 +614,17 @@ void TstRemoteTransmitSetupPages::version5WritesOutOfRangeAreRefused()
         {"twoToneFreq2Delay", MirrorWireKind::Int64, 1001,
          QStringLiteral("Choose a second tone delay from 0 to 1000 ms.")},
         {"powerByBandJson", MirrorWireKind::Utf8, bandMap(50, {{QStringLiteral("40m"), 101}}),
-         QStringLiteral("Choose a power from 0 to 100 W for each of the 14 bands.")},
+         QStringLiteral("Choose a power from 0 to 100 W for each band.")},
         {"powerByBandJson", MirrorWireKind::Utf8, QStringLiteral("{\"40m\":10}"),
-         QStringLiteral("Choose a power from 0 to 100 W for each of the 14 bands.")},
+         QStringLiteral("Choose a power from 0 to 100 W for each band.")},
         {"powerByBandJson", MirrorWireKind::Utf8,
          bandMap(50, {{QStringLiteral("40m"), 10}}).replace(QStringLiteral("\"40m\":10"),
                                                              QStringLiteral("\"40m\":10.5")),
-         QStringLiteral("Choose a power from 0 to 100 W for each of the 14 bands.")},
+         QStringLiteral("Choose a power from 0 to 100 W for each band.")},
         {"powerByBandJson", MirrorWireKind::Utf8, QStringLiteral("[10]"),
-         QStringLiteral("Choose a power from 0 to 100 W for each of the 14 bands.")},
+         QStringLiteral("Choose a power from 0 to 100 W for each band.")},
         {"tunePowerByBandJson", MirrorWireKind::Utf8, bandMap(20, {{QStringLiteral("20m"), -1}}),
-         QStringLiteral("Choose a tune power from 0 to 100 W for each of the 14 bands.")},
+         QStringLiteral("Choose a tune power from 0 to 100 W for each band.")},
     };
     for (const auto& b : bad) {
         const QVariant before = coreTx.property(b.name.constData());
@@ -732,10 +745,15 @@ void TstRemoteTransmitSetupPages::remotePowerPageShowsAndChangesTheCoresValues()
     QVERIFY(!swrOn->isEnabled());
     QCOMPARE(swrOn->toolTip(), IStationLink::transmitSettingsUnavailableReason());
     QVERIFY(!attOnTx->isEnabled() && !maxPower->isEnabled() && !fixed->isEnabled());
-    // Disable HF PA writes nothing either window reads; it is left as it is.
-    QVERIFY(hfPa->isEnabled());
+    // Disable HF PA follows version 11, closed until the dialog pushes it.
+    QVERIFY(!hfPa->isEnabled());
+    QCOMPARE(hfPa->toolTip(), IStationLink::transmitSettingsUnavailableReason());
     page.setTransmitSettingsPermittedAt(5, true, QString());
     QVERIFY(swrOn->isEnabled() && attOnTx->isEnabled() && maxPower->isEnabled());
+    QVERIFY(!hfPa->isEnabled());
+    page.setTransmitSettingsPermittedAt(11, true, QString());
+    QVERIFY(hfPa->isEnabled());
+    QCOMPARE(hfPa->toolTip(), QStringLiteral("Disables HF PA."));
 
     // The Core's values.
     QVERIFY(swrOn->isChecked());
@@ -773,6 +791,11 @@ void TstRemoteTransmitSetupPages::remotePowerPageShowsAndChangesTheCoresValues()
     inhibitReverse->setChecked(true);
     QTRY_COMPARE(s.settings.value(QStringLiteral("TxInhibitMonitorReversed")).toString(),
                  QStringLiteral("True"));
+    // Disable HF PA reaches the Core's SWR protection (and its radio).
+    QVERIFY(!swr.hfPaDisabled());
+    hfPa->setChecked(true);
+    QTRY_VERIFY(swr.hfPaDisabled());
+    QCOMPARE(s.settings.value(QStringLiteral("DisableHfPa")).toString(), QStringLiteral("True"));
 
     // The Core's own changes show on the page.
     s.stepAtt.setAttOnTxValue(25);
@@ -781,6 +804,8 @@ void TstRemoteTransmitSetupPages::remotePowerPageShowsAndChangesTheCoresValues()
     QTRY_COMPARE(maxPower->value(), 44);
     s.settings.setValue(QStringLiteral("WindBackPowerSwr"), QStringLiteral("False"));
     QTRY_VERIFY(!windBack->isChecked());
+    s.settings.setValue(QStringLiteral("DisableHfPa"), QStringLiteral("False"));
+    QTRY_VERIFY(!hfPa->isChecked());
 
     // On the air the change is refused and the box goes back to the Core's.
     s.keyCore();
@@ -788,6 +813,11 @@ void TstRemoteTransmitSetupPages::remotePowerPageShowsAndChangesTheCoresValues()
     swrTune->setChecked(false);
     QTRY_VERIFY(swrTune->isChecked());
     QVERIFY(swr.disableOnTune());
+    // Disable HF PA is taken on the air, as Thetis applies it.
+    hfPa->setChecked(true);
+    QTRY_VERIFY(swr.hfPaDisabled());
+    hfPa->setChecked(false);
+    QTRY_VERIFY(!swr.hfPaDisabled());
     s.unkeyCore();
     QTRY_VERIFY(!s.window.isCoreOnAir());
     QTRY_COMPARE(s.core->moxController()->state(), MoxState::Rx);

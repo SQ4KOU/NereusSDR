@@ -117,7 +117,9 @@ struct DaemonConfig {
     int     sliceCount   {1};                  // see header comment: the
                                                 // board-specific ceiling is
                                                 // applied later, by R1 Task 10
-    QString audioDevice;                       // empty = platform default
+    QString audioDevice;                       // empty = platform default;
+                                               // seeds only when no speaker
+                                               // choice is saved (G-16)
 
     // ── The wss control plane (R2 Task 18; defaults since iPhone app Task 12) ──
     //

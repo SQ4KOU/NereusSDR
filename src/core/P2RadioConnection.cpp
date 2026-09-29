@@ -85,6 +85,17 @@
 //                 buffer, which sheds a standing excess only in silence; the key-on cushion is the
 //                 radio's target lead plus one frame (16.25 ms, was 20 ms), so no standing 5 ms
 //                 stays in the ring. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - 2 m as its own band (R-IOS-26, R-R3-49). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - R-R3-49 / R-R3-46: Setup > Transmit > Power's Disable HF PA
+//                applied (Thetis DisablePA and hf_tr_relay,
+//                transmitSettingsVersion 11). J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
+//   2026-09-28 - R-R3-46 / R-R3-49: the Alex Filters tabs' receive filter rows
+//                (per-row bypass and edges, Alex-2 master bypass) select the
+//                receive high-pass as Thetis's setAlexHPF /
+//                setBPF1ForOrionIISaturn / setAlex2HPF do (radioHardwareVersion
+//                8). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-28 - R-R3-49: the corrected phase word is Thetis's to the count
 //                 (whole corrected Hz, then integer Freq2PhaseWord;
 //                 NetworkIO.cs [v2.10.3.15]). J.J. Boyd (KG4VCF), AI-assisted
@@ -676,7 +687,7 @@ void P2RadioConnection::connectToRadio(const RadioInfo& info)
         m_rx[primaryDdc].frequency = 3865000;   // 80m LSB — first-boot default only
         double freqMhz = m_rx[primaryDdc].frequency / 1.0e6;
         m_alex.hpfBits   = NereusSDR::codec::alex::computeRxPreselector(
-            freqMhz, m_caps ? m_caps->board : HPSDRHW::Unknown);
+            freqMhz, m_caps ? m_caps->board : HPSDRHW::Unknown, m_alexHpfEdges);
         m_alex.lpfBitsRx = NereusSDR::codec::alex::computeLpf(freqMhz);
     } else {
         // Same FIFO ordering as above, with a consequence the original fix did
@@ -696,7 +707,7 @@ void P2RadioConnection::connectToRadio(const RadioInfo& info)
         //    || (HardwareSpecific.Hardware == HPSDRHW.HermesC10))  //N1GP G2E added (HermesC10) //DK1HLM
         const double freqMhz = m_rx[primaryDdc].frequency / 1.0e6;
         m_alex.hpfBits = NereusSDR::codec::alex::computeRxPreselector(
-            freqMhz, m_caps ? m_caps->board : HPSDRHW::Unknown);
+            freqMhz, m_caps ? m_caps->board : HPSDRHW::Unknown, m_alexHpfEdges);
     }
     // The primary DDC's samplingRate is set by setSampleRate() which
     // RadioModel queues before connectToRadio in the FIFO (see
@@ -904,7 +915,7 @@ void P2RadioConnection::recomputeReceiveFilters()
     // From Thetis console.cs:6827-6837 setAlex1HPF [v2.10.3.15]
     const double freqMhz = rx1Hz / 1e6;
     m_alex.hpfBits = NereusSDR::codec::alex::computeRxPreselector(
-        freqMhz, m_caps ? m_caps->board : HPSDRHW::Unknown);
+        freqMhz, m_caps ? m_caps->board : HPSDRHW::Unknown, m_alexHpfEdges);
 
     // RF-SAFETY: a receive frequency selects the RECEIVE low-pass only. It
     // must never reach m_alex.lpfBitsTx, which is the transmit low-pass.
@@ -1424,6 +1435,55 @@ void P2RadioConnection::setAlexHpfBypass(bool on)
         return;
     }
     RadioConnection::setAlexHpfBypass(on);
+    if (m_running) {
+        sendCmdHighPriority();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// setPaDisabled: "Disable HF PA" (Setup > Transmit > Power). Thetis's
+// DisablePA sets tx[0].pa and sends CmdGeneral, whose byte 58 is (!pa):
+//   From Thetis ChannelMaster/netInterface.c:623-631 [v2.10.3.15]
+//     void DisablePA(int bit)
+//     {
+//         if (prn->tx[0].pa != bit)
+//         {
+//             prn->tx[0].pa = bit;
+//             if (listenSock != INVALID_SOCKET)
+//                 CmdGeneral();
+//   From Thetis ChannelMaster/network.c:903-904 [v2.10.3.15]
+//     // Bits - PA, Apollo, Mercury, Clock source
+//     packetbuf[58] = (!prn->tx[0].pa) & 0x01;
+// The same flag leaves the Alex T/R relay open while keyed
+// (P2CodecOrionMkII::buildAlex0, netInterface.c:378 SetTRXrelay), which goes
+// out with the next high-priority packet, as Thetis's does.
+// ---------------------------------------------------------------------------
+void P2RadioConnection::setPaDisabled(bool disabled)
+{
+    RadioConnection::setPaDisabled(disabled);
+    const int bit = disabled ? 1 : 0;
+    if (m_tx[0].pa == bit) {
+        return;
+    }
+    m_tx[0].pa = bit;
+    if (m_running && m_socket) {
+        sendCmdGeneral();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// setAlexHpfEdges: the Alex tab's receive filter rows, re-selected and sent
+// at once, as Thetis's per-row bypass setters re-select the high-pass
+// (console.cs:18823-18833 Alex1_5BPHPFBypass { ... setAlex1HPF(freq); }
+// [v2.10.3.15]).
+// ---------------------------------------------------------------------------
+void P2RadioConnection::setAlexHpfEdges(const codec::alex::AlexHpfEdges& edges)
+{
+    if (edges == m_alexHpfEdges) {
+        return;
+    }
+    RadioConnection::setAlexHpfEdges(edges);
+    recomputeReceiveFilters();
     if (m_running) {
         sendCmdHighPriority();
     }
@@ -3467,10 +3527,15 @@ CodecContext P2RadioConnection::buildCodecContext() const
     // explicitly handles XVTR with a known LO offset, revisit this gate.
     {
         const Band txBand = bandFromFrequency(static_cast<double>(m_tx[0].frequency));
-        const bool txInBand = (txBand != Band::GEN && txBand != Band::WWV);
+        // 2 m (R-IOS-26) stays out of band here, as it was while 2 m fell
+        // into GEN: Thetis's IsOKToTX takes HF rows only and 2 m is a VHF
+        // row, so no drive goes out on 2 m.
+        const bool txInBand = (txBand != Band::GEN && txBand != Band::WWV
+                               && txBand != Band::Band2m);
         ctx.p2DriveLevel = txInBand ? m_tx[0].driveLevel : 0;
     }
     ctx.p2TxPa           = m_tx[0].pa;
+    ctx.txPaDisabled     = m_tx[0].pa != 0;  // "Disable HF PA": the T/R relay (buildAlex0)
     ctx.p2TxSamplingRate = m_tx[0].samplingRate;
     ctx.p2TxPhaseShift   = m_tx[0].phaseShift;
 
@@ -3808,7 +3873,11 @@ void P2RadioConnection::composeCmdHighPriorityLegacy(char buf[kBufLen]) const
     // explicitly handles XVTR with a known LO offset, revisit this gate.
     {
         const Band txBand = bandFromFrequency(static_cast<double>(m_tx[0].frequency));
-        const bool txInBand = (txBand != Band::GEN && txBand != Band::WWV);
+        // 2 m (R-IOS-26) stays out of band here, as it was while 2 m fell
+        // into GEN: Thetis's IsOKToTX takes HF rows only and 2 m is a VHF
+        // row, so no drive goes out on 2 m.
+        const bool txInBand = (txBand != Band::GEN && txBand != Band::WWV
+                               && txBand != Band::Band2m);
         buf[345] = static_cast<char>(txInBand ? m_tx[0].driveLevel : 0);
     }
 

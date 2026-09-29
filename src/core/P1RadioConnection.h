@@ -21,6 +21,20 @@
 //                 AI-assisted via Anthropic Claude Code.
 //   2026-09-25 - R-R3-32 (remote-window parity Task 6): m_ep6SeqPrimed.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - R-R3-49 / R-R3-46: Setup > Transmit > Power's Disable HF PA
+//                applied (Thetis DisablePA and hf_tr_relay,
+//                transmitSettingsVersion 11). J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
+//   2026-09-28 - R-R3-46 / R-R3-49: the Alex Filters tabs' receive filter rows
+//                (per-row bypass and edges, Alex-2 master bypass) select the
+//                receive high-pass as Thetis's setAlexHPF /
+//                setBPF1ForOrionIISaturn / setAlex2HPF do (radioHardwareVersion
+//                8). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - HL2 Band Volts and Disable PS Sync: on a Hermes Lite 2,
+//                bank 0 C3 bits 3 and 4 follow the saved HL2 options (off by
+//                default), as mi0bot setup.cs:2843-2848 and 13376-13390
+//                [@c26a8a4] do; other boards keep Thetis's dither and random
+//                on. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-28 - R-R3-49 (found bug): the VFO frequencies sent carry the
 //                 calibration correction factor, as Thetis NetworkIO.VFOfreq
 //                 does on Protocol 1 [v2.10.3.15] (setCalibrationController,
@@ -251,7 +265,16 @@ public slots:
     void setAlexRxBpf(AlexRxBpf bpf) override;
     void setWatchdogEnabled(bool enabled) override;
     void sendTxIq(const float* iq, int n) override;
+    // G-07: Protocol 1 keeps only the full-ring loss count
+    // (TxSendStats::overflowOnly); the rest of the counters are Protocol 2's.
+    TxSendStats txSendStats() const override;
     void setTrxRelay(bool enabled) override;
+    // "Disable HF PA": bank 10 C3 bit 7 (and the HL2's C2 bit 3), on the
+    // next frame (RadioConnection::setPaDisabled).
+    void setPaDisabled(bool disabled) override;
+    // The Alex tab's receive filter rows: the high-pass is re-selected at
+    // once (RadioConnection::setAlexHpfEdges).
+    void setAlexHpfEdges(const codec::alex::AlexHpfEdges& edges) override;
     void setTxStepAttenuation(int dB) override;
     void setMicBoost(bool on) override;
     void setLineIn(bool on) override;
@@ -262,6 +285,14 @@ public slots:
     void setPuresignalRun(bool run) override;
     void setMicPTTDisabled(bool disabled) override;
     void setMicXlr(bool xlrJack) override;
+
+    // HL2 only: the Band Volts and Disable PS Sync options, which a Hermes
+    // Lite 2 takes in bank 0 C3 bits 3 and 4 (the ADC dither and random bits
+    // on every other board). Stored for the next connect; on an HL2 already
+    // connected they reach the wire on the next frame. Ignored on any other
+    // board. From mi0bot Console/setup.cs:13376-13390 [@c26a8a4].
+    void setHl2BandVolts(bool on);
+    void setHl2PsSync(bool on);
 
     // Set the P1-only per-DDC ADC routing word (Thetis `P1_adc_cntrl`).
     //
@@ -741,6 +772,12 @@ private:
     // Per-ADC state — initialized from HardwareProfile at connect time
     bool    m_dither[3]{true, true, true};
     bool    m_random[3]{true, true, true};
+    // The HL2 options behind bank 0 C3 bits 3 and 4 on a Hermes Lite 2
+    // (setHl2BandVolts / setHl2PsSync), off until the saved options arrive.
+    bool    m_hl2BandVolts{false};
+    bool    m_hl2PsSync{false};
+    // The radio is run as a Hermes Lite 2 (HPSDRModel::HERMESLITE).
+    bool    isHl2() const;
     bool    m_rxPreamp[3]{};
     int     m_stepAttn[3]{};      // per-ADC step attenuator (0-31)
     int     m_txStepAttn{0};
@@ -835,8 +872,10 @@ private:
     // [@120188f] (old_protocol_iq_samples / TXRING_AUDIO_SAMPLE_BYTES).
     //
     // One EP2 frame carries 2×63 = 126 samples.  kTxIqBufSamples is sized
-    // to match deskhpsdr's TXRING_MAX_BLOCKS×126 (32 blocks) giving ~21 msec
-    // of headroom at 48 kHz before the producer stalls.
+    // to match deskhpsdr's TXRING_MAX_BLOCKS×126 (32 blocks): 4032 samples,
+    // ~84 ms at the 48 kHz wire rate, before the ring is full.  A full ring
+    // drops the rest of the producer's block (nothing unread is
+    // overwritten) and counts it in m_txIqOverflowSamples (G-07).
     // Source: deskhpsdr/src/old_protocol.c:460-461 [@120188f]
     //   TXRING_AUDIO_FRAMES_PER_BLOCK 126
     //   TXRING_MAX_BLOCKS             32
@@ -861,6 +900,9 @@ private:
     std::atomic<int> m_txIqWritePos{0};  // audio thread writes; relaxed store
     std::atomic<int> m_txIqReadPos{0};   // connection thread writes; relaxed store
     std::atomic<int> m_txIqCount{0};     // both threads: fetch_add (audio, release) / fetch_sub (conn)
+    // G-07: samples a full ring refused since the last key, reported as
+    // TxSendStats::overflowSamples.  Audio thread adds; any thread reads.
+    std::atomic<quint64> m_txIqOverflowSamples{0};
 
     // TX I/Q ring pre-prime flag.  setMox(true) sets it on the connection
     // thread; sendTxIq consumes it on the TX worker thread (single-writer
