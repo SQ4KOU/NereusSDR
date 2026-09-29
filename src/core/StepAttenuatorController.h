@@ -107,6 +107,7 @@
 
 #include <array>
 #include <unordered_map>
+#include <vector>
 
 namespace NereusSDR {
 
@@ -253,6 +254,21 @@ public:
     int attenuatorDbForAdc(int adc) const noexcept;
     // Set the attenuation of `adc`: RX1's or the other ADC's, as above.
     void setAttenuationForAdc(int adc, int dB);
+
+    // RX2's own step attenuator enable and auto-attenuate settings, as
+    // Thetis keeps them apart from RX1's (_rx2_step_att_enabled,
+    // _auto_att_rx2, _auto_att_undo_rx2, _auto_att_hold_delay_rx2), saved
+    // for the radio. On one ADC (or linked) the two enables are one, as
+    // Thetis's Setup mirrors them. RX2's step attenuator off: its slices
+    // read the second preamp's offset and RX2 auto-attenuate does nothing.
+    bool rx2StepAttEnabled() const noexcept { return m_rx2StepAttEnabled; }
+    void setRx2StepAttEnabled(bool on);
+    bool rx2AutoAttEnabled() const noexcept { return m_rx2AutoAttEnabled; }
+    void setRx2AutoAttEnabled(bool on);
+    bool rx2AutoAttUndo() const noexcept { return m_rx2AutoUndoEnabled; }
+    void setRx2AutoAttUndo(bool on);
+    int rx2AutoUndoDelaySec() const noexcept { return m_rx2AutoUndoDelaySec; }
+    void setRx2AutoUndoDelaySec(int sec);
 
     // R-R3-46 / R-R3-11: save this radio's settings a short while after an
     // operator change, not only at teardown.  Off by default; the Core
@@ -556,6 +572,10 @@ signals:
     // ADC each value is on (setAdcRouting, the slice mask included) moved.
     void rx2AttenuationChanged(int dB);
     void adcRoutingChanged();
+    void rx2StepAttEnabledChanged(bool on);
+    void rx2AutoAttEnabledChanged(bool on);
+    void rx2AutoAttUndoChanged(bool on);
+    void rx2AutoUndoDelayChanged(int seconds);
 
 private:
     static constexpr int kMaxAdcs = 3;
@@ -779,9 +799,19 @@ private:
     // Thetis's RX2 auto-attenuate on the other ADC in use (tick()).
     void runRx2AutoAtt(bool overloaded);
     // Drop the other ADC's auto-attenuate state, restoring its value.
-    void clearRx2AutoAtt(bool restore);
-    int m_rx2ClassicSavedAttDb{-1};
+    // RX2's auto-attenuate history (Thetis _historic_attenuator_readings_rx2):
+    // the value before each raise, unwound one per undo.
+    std::vector<int> m_rx2AutoAttHistory;
     qint64 m_rx2LastAutoAttTimeMs{0};
+    // RX2's own enable and auto-attenuate settings (Thetis
+    // _rx2_step_att_enabled, _auto_att_rx2, _auto_att_undo_rx2,
+    // _auto_att_hold_delay_rx2).
+    bool m_rx2StepAttEnabled{true};
+    bool m_rx2AutoAttEnabled{false};
+    bool m_rx2AutoUndoEnabled{false};
+    int m_rx2AutoUndoDelaySec{5};
+    // Whether RX2 is on an ADC of its own (not slice A's, not linked).
+    bool rx2OnItsOwnAdc() const noexcept;
 
     // --- Helpers ---
     void applyClassicAutoAtt(int adc);

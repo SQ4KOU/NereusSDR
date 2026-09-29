@@ -7310,7 +7310,9 @@ bool StationServer::fitAdcAttenuatorsToPeer(SessionTransport* transport,
         return true;
     }
     const auto added = [](const QByteArray& name) {
-        return name == "rx2AttenuationDb" || name == "rx2SliceMask";
+        return name == "rx2AttenuationDb" || name == "rx2SliceMask"
+            || name == "rx2StepAttEnabled" || name == "rx2AutoAttEnabled"
+            || name == "rx2AutoAttUndo" || name == "rx2AutoAttUndoDelayMs";
     };
     switch (message.kind) {
     case SessionMessageKind::Schema:

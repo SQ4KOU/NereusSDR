@@ -23,6 +23,9 @@
 //                                    and rx2SliceMask, the other ADC's own
 //                                    attenuator. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  R-R3-46 / R-R3-11: RX2's own enable
+//                                    and auto-attenuate settings.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/StepAttenuatorFacade.h"
@@ -112,6 +115,10 @@ void StepAttenuatorFacade::bindController(StepAttenuatorController* controller)
     follow(&C::forceAttWhenPsOffChanged);
     follow(&C::rx2AttenuationChanged);
     follow(&C::adcRoutingChanged);
+    follow(&C::rx2StepAttEnabledChanged);
+    follow(&C::rx2AutoAttEnabledChanged);
+    follow(&C::rx2AutoAttUndoChanged);
+    follow(&C::rx2AutoUndoDelayChanged);
     refresh();
 }
 
@@ -473,6 +480,70 @@ void StepAttenuatorFacade::setRx2AttenuationDb(int dB)
     publish(next);
 }
 
+void StepAttenuatorFacade::setRx2StepAttEnabled(bool on)
+{
+    if (!beginEdit("rx2StepAttEnabled")) {
+        return;
+    }
+    if (StepAttenuatorController* c = m_controller.data()) {
+        c->setRx2StepAttEnabled(on);
+        refresh();
+        return;
+    }
+    Values next = m_values;
+    next.rx2StepAttEnabled = on;
+    publish(next);
+}
+
+void StepAttenuatorFacade::setRx2AutoAttEnabled(bool on)
+{
+    if (!beginEdit("rx2AutoAttEnabled")) {
+        return;
+    }
+    if (StepAttenuatorController* c = m_controller.data()) {
+        c->setRx2AutoAttEnabled(on);
+        refresh();
+        return;
+    }
+    Values next = m_values;
+    next.rx2AutoAttEnabled = on;
+    publish(next);
+}
+
+void StepAttenuatorFacade::setRx2AutoAttUndo(bool on)
+{
+    if (!beginEdit("rx2AutoAttUndo")) {
+        return;
+    }
+    if (StepAttenuatorController* c = m_controller.data()) {
+        c->setRx2AutoAttUndo(on);
+        refresh();
+        return;
+    }
+    Values next = m_values;
+    next.rx2AutoAttUndo = on;
+    publish(next);
+}
+
+void StepAttenuatorFacade::setRx2AutoAttUndoDelayMs(int ms)
+{
+    if (!beginEdit("rx2AutoAttUndoDelayMs")) {
+        return;
+    }
+    if (StepAttenuatorController* c = m_controller.data()) {
+        const int seconds = wholeSeconds(ms);
+        if (seconds * 1000 != ms) {
+            settle("rx2AutoAttUndoDelayMs", timeSettleReason());
+        }
+        c->setRx2AutoUndoDelaySec(seconds);
+        refresh();
+        return;
+    }
+    Values next = m_values;
+    next.rx2AutoAttUndoDelayMs = ms;
+    publish(next);
+}
+
 void StepAttenuatorFacade::setAttenuationDbForSlice(int sliceId, int dB)
 {
     if (sliceUsesRx2(sliceId)) {
@@ -509,6 +580,10 @@ void StepAttenuatorFacade::refresh()
     next.forceAttWhenPsOff = c->forceAttWhenPsOff();
     next.rx2AttenuationDb = c->rx2AttenuatorDb();
     next.rx2SliceMask = static_cast<int>(c->rx2SliceMask());
+    next.rx2StepAttEnabled = c->rx2StepAttEnabled();
+    next.rx2AutoAttEnabled = c->rx2AutoAttEnabled();
+    next.rx2AutoAttUndo = c->rx2AutoAttUndo();
+    next.rx2AutoAttUndoDelayMs = c->rx2AutoUndoDelaySec() * 1000;
     publish(next);
 }
 
@@ -550,6 +625,18 @@ void StepAttenuatorFacade::publish(const Values& next)
         emit rx2AttenuationDbChanged(next.rx2AttenuationDb);
     }
     if (before.rx2SliceMask != next.rx2SliceMask) { emit rx2SliceMaskChanged(next.rx2SliceMask); }
+    if (before.rx2StepAttEnabled != next.rx2StepAttEnabled) {
+        emit rx2StepAttEnabledChanged(next.rx2StepAttEnabled);
+    }
+    if (before.rx2AutoAttEnabled != next.rx2AutoAttEnabled) {
+        emit rx2AutoAttEnabledChanged(next.rx2AutoAttEnabled);
+    }
+    if (before.rx2AutoAttUndo != next.rx2AutoAttUndo) {
+        emit rx2AutoAttUndoChanged(next.rx2AutoAttUndo);
+    }
+    if (before.rx2AutoAttUndoDelayMs != next.rx2AutoAttUndoDelayMs) {
+        emit rx2AutoAttUndoDelayMsChanged(next.rx2AutoAttUndoDelayMs);
+    }
 }
 
 } // namespace NereusSDR

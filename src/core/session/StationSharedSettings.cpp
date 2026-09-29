@@ -502,7 +502,9 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
             for (const MirrorUpdate& u : message.updates) {
                 const QByteArray& n = u.name;
                 const bool adc1 = n == "rx1Preamp";
-                const bool rx2Att = n == "rx2AttenuationDb";
+                // RX2's value, enable and auto-attenuate settings reach RX2's ADC.
+                const bool rx2Att = n == "rx2AttenuationDb" || n == "rx2StepAttEnabled"
+                    || n.startsWith("rx2AutoAtt");
                 const bool known = n == "attenuationDb" || n == "enabled" || n == "preampMode"
                     || adc1 || rx2Att || n.startsWith("autoAtt");
                 if (!known) {
@@ -529,11 +531,11 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
                     continue;
                 }
                 const QString adc = adcWords(wordsAdc);
-                if (n == "attenuationDb" || rx2Att) {
+                if (n == "attenuationDb" || n == "rx2AttenuationDb") {
                     words(QStringLiteral("Attenuator, %1").arg(adc),
                           currentWords(u, QStringLiteral(" dB")),
                           valueWords(u.value, u.kind, QStringLiteral(" dB")));
-                } else if (n == "enabled") {
+                } else if (n == "enabled" || n == "rx2StepAttEnabled") {
                     words(QStringLiteral("Attenuator, %1").arg(adc), currentWords(u, {}),
                           valueWords(u.value, u.kind));
                 } else if (n == "preampMode") {

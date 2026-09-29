@@ -386,6 +386,19 @@ private slots:
         QCOMPARE(remote->attenuationDbForSlice(1), 12);
         QCOMPARE(remote->attenuationDbForSlice(0), 20);
 
+        // RX2's own enable and auto-attenuate settings reach the Core.
+        remote->setRx2StepAttEnabled(false);
+        QTRY_VERIFY(!controller->rx2StepAttEnabled());
+        QVERIFY(controller->stepAttEnabled());
+        remote->setRx2AutoAttEnabled(true);
+        remote->setRx2AutoAttUndo(true);
+        remote->setRx2AutoAttUndoDelayMs(7000);
+        QTRY_VERIFY(controller->rx2AutoAttEnabled());
+        QTRY_VERIFY(controller->rx2AutoAttUndo());
+        QTRY_COMPARE(controller->rx2AutoUndoDelaySec(), 7);
+        controller->setRx2AutoAttUndo(false);
+        QTRY_VERIFY(!remote->rx2AutoAttUndo());
+
         // Back on one ADC: every slice reads attenuationDb again.
         controller->setAdcRouting(0, -1, Band::Band40m, false);
         QTRY_COMPARE(remote->rx2SliceMask(), 0);
@@ -431,7 +444,8 @@ private slots:
                            && m.className == "StepAttenuatorFacade") {
                     for (const SessionSchemaField& f : m.fields) {
                         sawSchemaField = sawSchemaField || f.name == "rx2AttenuationDb"
-                            || f.name == "rx2SliceMask";
+                            || f.name == "rx2SliceMask" || f.name == "rx2StepAttEnabled"
+                            || f.name == "rx2AutoAttEnabled";
                     }
                 } else if (m.kind == SessionMessageKind::ObjectCreate && m.objectKey == "stepAtt") {
                     sawStepAtt = true;

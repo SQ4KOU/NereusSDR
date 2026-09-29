@@ -4427,6 +4427,8 @@ void RadioModel::setStepAttController(StepAttenuatorController* c)
                 this, [this](int) { emit rxAdcMeterOffsetsChanged(); });
         connect(c, &StepAttenuatorController::rx1PreampChanged,
                 this, [this](bool) { emit rxAdcMeterOffsetsChanged(); });
+        connect(c, &StepAttenuatorController::rx2StepAttEnabledChanged,
+                this, [this](bool) { emit rxAdcMeterOffsetsChanged(); });
         connect(c, &StepAttenuatorController::adcRoutingChanged,
                 this, &RadioModel::rxAdcMeterOffsetsChanged);
         // Initial emit so subscribers seed their cache with the current
@@ -8208,11 +8210,11 @@ double RadioModel::rxPreampOffsetDbForAdc(int adc) const
     //       {
     //           fOffset = _rx2_step_att_enabled ? (float)rx2_attenuator_data : rx2_preamp_offset[(int)rx2_preamp_mode];
     //       }
-    // NereusSDR keeps one step attenuator enable for both. The second ADC's
-    // preamp is one switch (rx1Preamp): rx2_preamp_offset HPSDR_ON 0 dB,
-    // HPSDR_OFF 20 dB (console.cs:2011-2013 [v2.10.3.15]), the same two
-    // entries rxPreampOffsetDbFor holds for RX1.
-    if (m_stepAttController->stepAttEnabled()) {
+    // RX2 has its own step attenuator enable (_rx2_step_att_enabled). The
+    // second ADC's preamp is one switch (rx1Preamp): rx2_preamp_offset
+    // HPSDR_ON 0 dB, HPSDR_OFF 20 dB (console.cs:2011-2013 [v2.10.3.15]), the
+    // same two entries rxPreampOffsetDbFor holds for RX1.
+    if (m_stepAttController->rx2StepAttEnabled()) {
         return static_cast<double>(m_stepAttController->attenuatorDbForAdc(adc));
     }
     const PreampMode rx2Preamp = m_stepAttController->rx1Preamp() ? PreampMode::On : PreampMode::Off;

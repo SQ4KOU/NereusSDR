@@ -22,6 +22,7 @@
 // =================================================================
 
 #include <QtTest/QtTest>
+#include <QSignalSpy>
 
 #include "core/AppSettings.h"
 #include "core/ConnectionState.h"
@@ -441,6 +442,11 @@ private slots:
         ctrl.setAdcRouting(0, 1, Band::Band20m, false, 1u << 1);
         ctrl.setAutoAttMode(AutoAttMode::Classic);
         ctrl.setAutoAttEnabled(true);
+        // RX2 has its own auto-attenuate settings (Thetis _auto_att_rx2,
+        // _auto_att_undo_rx2, _auto_att_hold_delay_rx2).
+        ctrl.setRx2AutoAttEnabled(true);
+        ctrl.setRx2AutoAttUndo(true);
+        ctrl.setRx2AutoUndoDelaySec(0);
         radio.sends.clear();
 
         const auto overload = [&ctrl](int adc) {
@@ -479,6 +485,111 @@ private slots:
         QCOMPARE(ctrl.attenuatorDb(), 0);
         QCOMPARE(ctrl.rx2AttenuatorDb(), 0);
         ctrl.setRadioConnection(nullptr);
+    }
+
+    // RX2 has its own step attenuator enable (Thetis _rx2_step_att_enabled):
+    // off, slice B's offset is the second preamp's (Thetis rx2_preamp_offset,
+    // HPSDR_OFF 20 dB); slice A keeps RX1's.
+    void rx2HasItsOwnStepAttEnable()
+    {
+        G2Station s(QStringLiteral("02:00:00:00:ad:0b"));
+        QVERIFY(s.sliceA && s.sliceB);
+        s.route(0, 1);
+        QVERIFY(s.ctrl.rx2StepAttEnabled());
+        s.ctrl.setAttenuation(6);
+        s.ctrl.setRx2Attenuation(12);
+        const double cal = s.model.rxMeterCalOffsetDb();
+        QCOMPARE(s.model.rxMeterOffsetDbForSlice(s.sliceB->sliceIndex()), cal + 12.0);
+
+        QSignalSpy changed(&s.ctrl, &StepAttenuatorController::rx2StepAttEnabledChanged);
+        s.ctrl.setRx2StepAttEnabled(false);
+        QCOMPARE(changed.count(), 1);
+        QVERIFY(s.ctrl.stepAttEnabled());  // RX1's is its own on another ADC
+        QCOMPARE(s.model.rxMeterOffsetDbForSlice(s.sliceB->sliceIndex()), cal + 20.0);
+        QCOMPARE(s.model.rxMeterOffsetDbForSlice(s.sliceA->sliceIndex()), cal + 6.0);
+    }
+
+    // Receivers on one ADC keep one enable, as Thetis Setup mirrors
+    // chkRX2StepAtt and chkHermesStepAttenuator when the ADCs are the same.
+    void onOneAdcTheTwoEnablesMoveTogether()
+    {
+        StepAttenuatorController ctrl;
+        loadController(ctrl, QStringLiteral("02:00:00:00:ad:0c"));
+        ctrl.setAdcRouting(0, -1, Band::Band20m, false);
+        ctrl.setRx2StepAttEnabled(false);
+        QVERIFY(!ctrl.stepAttEnabled());
+        ctrl.setStepAttEnabled(true);
+        QVERIFY(ctrl.rx2StepAttEnabled());
+        // A second ADC in use: each is its own.
+        ctrl.setAdcRouting(0, 1, Band::Band20m, false);
+        ctrl.setRx2StepAttEnabled(false);
+        QVERIFY(ctrl.stepAttEnabled());
+        // Back on one ADC: RX2's follows RX1's (Thetis updateAttenuationInfo).
+        ctrl.setAdcRouting(0, -1, Band::Band20m, false);
+        QVERIFY(ctrl.rx2StepAttEnabled());
+    }
+
+    // RX2's auto-attenuate runs on its own settings: RX1's off does not stop
+    // it, and with its undo off the raised value stays when the overload
+    // clears (Thetis restores only with _auto_att_undo_rx2).
+    void rx2AutoAttenuateHasItsOwnSettings()
+    {
+        StepAttenuatorController ctrl;
+        loadController(ctrl, QStringLiteral("02:00:00:00:ad:0d"));
+        ctrl.setAdcRouting(0, 1, Band::Band20m, false, 1u << 1);
+        QVERIFY(!ctrl.autoAttEnabled());
+        QVERIFY(!ctrl.rx2AutoAttEnabled());
+        QVERIFY(!ctrl.rx2AutoAttUndo());
+        QCOMPARE(ctrl.rx2AutoUndoDelaySec(), 5);
+        ctrl.setRx2AutoAttEnabled(true);
+        const auto overload = [&ctrl](int adc) {
+            for (int i = 0; i < 4; ++i) {
+                ctrl.onAdcOverflow(adc);
+                ctrl.tick();
+            }
+        };
+        overload(1);
+        const int raised = ctrl.rx2AttenuatorDb();
+        QVERIFY(raised > 0);
+        ctrl.tick();
+        QCOMPARE(ctrl.rx2AttenuatorDb(), raised);  // undo off: kept
+        // RX1's auto-attenuate is off: ADC0's overload moves nothing.
+        overload(0);
+        QCOMPARE(ctrl.attenuatorDb(), 0);
+
+        ctrl.setRx2AutoAttUndo(true);
+        ctrl.setRx2AutoUndoDelaySec(0);
+        overload(1);
+        QVERIFY(ctrl.rx2AttenuatorDb() > raised);
+        ctrl.tick();
+        QCOMPARE(ctrl.rx2AttenuatorDb(), raised);  // undo on: put back
+    }
+
+    // RX2's enable and auto-attenuate settings are saved for the radio.
+    void rx2SettingsSurviveARestart()
+    {
+        const QString mac = QStringLiteral("02:00:00:00:ad:0e");
+        startFromNothing(mac);
+        {
+            StepAttenuatorController ctrl;
+            ctrl.setTickTimerEnabled(false);
+            ctrl.loadSettings(mac);
+            ctrl.setAdcRouting(0, 1, Band::Band20m, false);
+            ctrl.setRx2StepAttEnabled(false);
+            ctrl.setRx2AutoAttEnabled(true);
+            ctrl.setRx2AutoAttUndo(true);
+            ctrl.setRx2AutoUndoDelaySec(9);
+            ctrl.saveSettings(mac);
+        }
+        StepAttenuatorController ctrl;
+        ctrl.setTickTimerEnabled(false);
+        ctrl.setAdcRouting(0, 1, Band::Band20m, false);
+        ctrl.loadSettings(mac);
+        QVERIFY(!ctrl.rx2StepAttEnabled());
+        QVERIFY(ctrl.stepAttEnabled());
+        QVERIFY(ctrl.rx2AutoAttEnabled());
+        QVERIFY(ctrl.rx2AutoAttUndo());
+        QCOMPARE(ctrl.rx2AutoUndoDelaySec(), 9);
     }
 
     // Controller sends: slice A's value only to slice A's ADC, the other

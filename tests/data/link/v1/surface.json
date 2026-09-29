@@ -6614,6 +6614,30 @@
                     "kind": "i64",
                     "name": "rx2SliceMask",
                     "ordinal": 19
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "rx2StepAttEnabled",
+                    "ordinal": 20
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "rx2AutoAttEnabled",
+                    "ordinal": 21
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "rx2AutoAttUndo",
+                    "ordinal": 22
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "rx2AutoAttUndoDelayMs",
+                    "ordinal": 23
                 }
             ]
         },

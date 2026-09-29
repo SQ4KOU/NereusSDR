@@ -23,6 +23,8 @@
 // Wire values: preampMode is the PreampMode integer (0 Off .. 6 -50 dB);
 // autoAttMode is 0 Classic, 1 Adaptive; overloadAdc0/1 are 0 none,
 // 1 yellow, 2 red; both auto-attenuate times are whole seconds in ms.
+// rx2StepAttEnabled, rx2AutoAttEnabled, rx2AutoAttUndo and
+// rx2AutoAttUndoDelayMs are RX2's own enable and auto-attenuate settings.
 // rx2AttenuationDb is the attenuator of the ADC slice A is not on (Thetis
 // RX2's); rx2SliceMask has bit n set for each slice n on that ADC, which
 // reads and sets rx2AttenuationDb rather than attenuationDb (0: every slice
@@ -47,6 +49,10 @@
 //                                    attenuator and the slices on it
 //                                    (rx2AttenuationDb, rx2SliceMask),
 //                                    adcAttenuatorVersion 1. AI-assisted via
+//                                    Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  R-R3-46 / R-R3-11: rx2StepAttEnabled,
+//                                    rx2AutoAttEnabled, rx2AutoAttUndo,
+//                                    rx2AutoAttUndoDelayMs. AI-assisted via
 //                                    Anthropic Claude Code.
 // =================================================================
 
@@ -105,6 +111,17 @@ class StepAttenuatorFacade final : public QObject {
     Q_PROPERTY(int rx2AttenuationDb READ rx2AttenuationDb WRITE setRx2AttenuationDb
                NOTIFY rx2AttenuationDbChanged)
     Q_PROPERTY(int rx2SliceMask READ rx2SliceMask NOTIFY rx2SliceMaskChanged)
+    // RX2's own step attenuator enable and auto-attenuate settings (Thetis
+    // _rx2_step_att_enabled, _auto_att_rx2, _auto_att_undo_rx2,
+    // _auto_att_hold_delay_rx2; the delay in whole seconds, carried in ms).
+    Q_PROPERTY(bool rx2StepAttEnabled READ rx2StepAttEnabled WRITE setRx2StepAttEnabled
+               NOTIFY rx2StepAttEnabledChanged)
+    Q_PROPERTY(bool rx2AutoAttEnabled READ rx2AutoAttEnabled WRITE setRx2AutoAttEnabled
+               NOTIFY rx2AutoAttEnabledChanged)
+    Q_PROPERTY(bool rx2AutoAttUndo READ rx2AutoAttUndo WRITE setRx2AutoAttUndo
+               NOTIFY rx2AutoAttUndoChanged)
+    Q_PROPERTY(int rx2AutoAttUndoDelayMs READ rx2AutoAttUndoDelayMs
+               WRITE setRx2AutoAttUndoDelayMs NOTIFY rx2AutoAttUndoDelayMsChanged)
 
 public:
     /// True when an edit may go ahead; otherwise false with a plain reason.
@@ -168,6 +185,10 @@ public:
     bool forceAttWhenPsOff() const { return m_values.forceAttWhenPsOff; }
     int rx2AttenuationDb() const { return m_values.rx2AttenuationDb; }
     int rx2SliceMask() const { return m_values.rx2SliceMask; }
+    bool rx2StepAttEnabled() const { return m_values.rx2StepAttEnabled; }
+    bool rx2AutoAttEnabled() const { return m_values.rx2AutoAttEnabled; }
+    bool rx2AutoAttUndo() const { return m_values.rx2AutoAttUndo; }
+    int rx2AutoAttUndoDelayMs() const { return m_values.rx2AutoAttUndoDelayMs; }
     /// Whether slice `sliceId` reads and sets rx2AttenuationDb.
     bool sliceUsesRx2(int sliceId) const
     {
@@ -200,6 +221,10 @@ public:
     void setAttOnTxValue(int dB);
     void setForceAttWhenPsOff(bool on);
     void setRx2AttenuationDb(int dB);
+    void setRx2StepAttEnabled(bool on);
+    void setRx2AutoAttEnabled(bool on);
+    void setRx2AutoAttUndo(bool on);
+    void setRx2AutoAttUndoDelayMs(int ms);
 
 signals:
     void enabledChanged(bool on);
@@ -222,6 +247,10 @@ signals:
     void adcLinkedChanged(bool linked);
     void rx2AttenuationDbChanged(int dB);
     void rx2SliceMaskChanged(int mask);
+    void rx2StepAttEnabledChanged(bool on);
+    void rx2AutoAttEnabledChanged(bool on);
+    void rx2AutoAttUndoChanged(bool on);
+    void rx2AutoAttUndoDelayMsChanged(int ms);
     /// An edit the gate refused, with its plain reason.
     void editRejected(const QString& reason);
     /// setWindowAvailability() changed the availability or its reason.
@@ -251,6 +280,10 @@ private:
         bool adcLinked{false};
         int rx2AttenuationDb{0};
         int rx2SliceMask{0};
+        bool rx2StepAttEnabled{true};
+        bool rx2AutoAttEnabled{false};
+        bool rx2AutoAttUndo{false};
+        int rx2AutoAttUndoDelayMs{5000};
     };
 
     /// Starts an edit of `property`: clears its settle reason and asks the
