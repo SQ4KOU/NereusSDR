@@ -384,6 +384,14 @@
 //               transmit the way the TX applet's letters do (tx.setTxSlice
 //               from a remote window) with the same reasons. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Slice control plan Task 15 (rulings U5, U6, U7): the RX
+//               applet's tabs list the slices this window controls and the
+//               shown slices it listens to, each saying who controls it; a
+//               listened tab holds the applet's shared controls with the
+//               controller named, offers Take control, and selecting it
+//               moves this window's RX (bottom bar, flag focus) without
+//               moving the active or transmit slice. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -1603,29 +1611,131 @@ SliceModel* MainWindow::activeSliceForWindow() const
     return nullptr;
 }
 
+SliceModel* MainWindow::windowRxSlice() const
+{
+    if (!m_radioModel) { return nullptr; }
+    if (desktopHosting()) {
+        // SliceOwnership::activeRxFor: the station device's receive focus,
+        // a controlled slice or one it listens to.
+        if (SliceOwnership* ownership = m_radioModel->sliceOwnership()) {
+            const int rx = ownership->activeRxFor(SliceOwnership::stationDevice());
+            if (desktopSliceAllowed(rx) || desktopListensTo(rx)) {
+                return m_radioModel->sliceById(rx);
+            }
+        }
+        return activeSliceForWindow();
+    }
+    // A remote window that shares slices: the slice whose access entry
+    // names this device in activeRx (the Core's selectRx answer).
+    if (m_stationClient && m_stationClient->remoteSliceAccessAvailable()) {
+        if (const SliceAccessMirror* access = m_stationClient->sliceAccess()) {
+            const QString self = access->selfDeviceId();
+            for (SliceModel* slice : m_radioModel->slices()) {
+                if (!slice) { continue; }
+                const std::optional<SliceAccessMirror::Entry> entry =
+                    access->entry(slice->sliceIndex());
+                if (entry && entry->activeRx.contains(self)) { return slice; }
+            }
+        }
+    }
+    return m_radioModel->activeSlice();
+}
+
+bool MainWindow::sliceShownInWindow(int sliceId) const
+{
+    if (!m_panStack) { return true; }
+    for (PanadapterApplet* pan : m_panStack->allApplets()) {
+        if (pan && pan->associatedSlices().contains(sliceId)) { return true; }
+    }
+    return false;
+}
+
+void MainWindow::refreshRxAppletSlices()
+{
+    if (!m_rxApplet || !m_radioModel) { return; }
+    // Who controls each slice, as the chooser and the flags say it.
+    QList<SliceChooser::Row> rows;
+    StationServer* server = desktopHosting() && m_desktopStationController
+        ? m_desktopStationController->server() : nullptr;
+    const bool remoteShared = !desktopHosting() && m_stationClient
+        && m_stationClient->remoteDevices() && m_stationClient->remoteSliceAccessAvailable();
+    if (server) {
+        rows = SliceChooser::rowsForHostingDesktop(*m_radioModel, *server);
+    } else if (remoteShared) {
+        rows = SliceChooser::rowsForRemoteWindow(*m_radioModel, m_stationClient->sliceAccess(),
+                                                 *m_stationClient->remoteDevices());
+    }
+    QHash<int, VfoWidget::SliceAccess> access;
+    for (const SliceChooser::Row& row : rows) {
+        access.insert(row.sliceId, SliceChooser::flagAccessFor(row));
+    }
+    // Ruling U7: a tab for each slice this window controls, and for each
+    // slice it listens to that it shows.
+    QVector<SliceModel*> tabs;
+    for (SliceModel* slice : m_radioModel->slices()) {
+        if (!slice) { continue; }
+        const int id = slice->sliceIndex();
+        bool tab = false;
+        if (desktopHosting()) {
+            tab = desktopSliceAllowed(id) || (desktopListensTo(id) && sliceShownInWindow(id));
+        } else if (remoteShared) {
+            for (const SliceChooser::Row& row : std::as_const(rows)) {
+                if (row.sliceId != id) { continue; }
+                tab = row.controller == SliceChooser::Controller::ThisWindow
+                    || (row.listeningHere && sliceShownInWindow(id));
+                break;
+            }
+        } else {
+            tab = true;
+        }
+        if (tab) { tabs.append(slice); }
+    }
+    SliceModel* rx = windowRxSlice();
+    if (rx && !tabs.contains(rx)) {
+        rx = desktopHosting() ? activeSliceForWindow() : m_radioModel->activeSlice();
+        if (rx && !tabs.contains(rx)) { rx = nullptr; }
+    }
+    const int rxId = rx ? rx->sliceIndex() : -1;
+    // The access first, so a listened slice is never bound with its
+    // controls live.
+    m_rxApplet->setSliceTabAccess(access);
+    m_rxApplet->setSliceAccess(access.value(rxId));
+    m_rxApplet->updateSliceButtons(tabs, rxId);
+    m_rxApplet->setSlice(rx);
+    if (rx) { m_rxApplet->setSliceIndex(rxId); }
+    // The bottom bar and the flag focus follow the same slice.
+    if (m_rxDashboard && m_rxDashboard->slice() != windowRxSlice()) {
+        refreshActiveSlicePresentation();
+    }
+}
+
 void MainWindow::refreshActiveSlicePresentation()
 {
-    SliceModel* slice = activeSliceForWindow();
+    // Slice control plan Task 15: the bottom bar, the flag focus and the
+    // meters follow this window's RX slice, which may be one it listens to;
+    // the menu checks below follow the slice it controls.
+    SliceModel* rx = windowRxSlice();
     if (m_rxDashboard) {
-        m_rxDashboard->bindSlice(slice);
-        if (slice) { m_rxDashboard->setSliceLetter(slice->sliceLetter()); }
+        m_rxDashboard->bindSlice(rx);
+        if (rx) { m_rxDashboard->setSliceLetter(rx->sliceLetter()); }
     }
-    if (m_panStack && slice) {
-        m_panStack->setActiveSliceOnHostingPan(slice->sliceIndex());
+    if (m_panStack && rx) {
+        m_panStack->setActiveSliceOnHostingPan(rx->sliceIndex());
         if (desktopHosting()) {
             for (PanadapterApplet* pan : m_panStack->allApplets()) {
-                if (pan && pan->associatedSlices().contains(slice->sliceIndex())) {
+                if (pan && pan->associatedSlices().contains(rx->sliceIndex())) {
                     m_panStack->setActivePan(pan->panId());
                     break;
                 }
             }
         }
     }
-    if (m_meterPoller && slice) {
-        if (RxChannel* channel = m_radioModel->rxChannelForSlice(slice->sliceIndex())) {
+    if (m_meterPoller && rx) {
+        if (RxChannel* channel = m_radioModel->rxChannelForSlice(rx->sliceIndex())) {
             m_meterPoller->setRxChannel(channel);
         }
     }
+    SliceModel* slice = activeSliceForWindow();
     if (m_anfAction) {
         const QSignalBlocker block(m_anfAction);
         m_anfAction->setChecked(slice && slice->anfEnabled());
@@ -1817,32 +1927,9 @@ void MainWindow::refreshDesktopStationState()
         }
     }
 #endif
-    SliceOwnership* ownership = m_radioModel->sliceOwnership();
-    SliceModel* windowActive = activeSliceForWindow();
-    const int activeId = hosting && windowActive ? windowActive->sliceIndex() : -1;
-    QVector<SliceModel*> visibleSlices;
-    if (hosting && ownership) {
-        for (SliceModel* slice : m_radioModel->slices()) {
-            // Slice control plan Task 2: SliceAccessPolicy, through
-            // desktopSliceAllowed.
-            if (slice && desktopSliceAllowed(slice->sliceIndex())) {
-                visibleSlices.append(slice);
-            }
-        }
-    }
     refreshDesktopFlags();
-    if (m_rxApplet) {
-        if (hosting) {
-            m_rxApplet->updateSliceButtons(visibleSlices, activeId);
-            SliceModel* active = m_radioModel->sliceById(activeId);
-            m_rxApplet->setSlice(active);
-            if (active) { m_rxApplet->setSliceIndex(activeId); }
-        } else {
-            m_rxApplet->updateSliceButtons(m_radioModel->slices(),
-                m_radioModel->activeSlice() ? m_radioModel->activeSlice()->sliceIndex() : -1);
-            m_rxApplet->setSlice(m_radioModel->activeSlice());
-        }
-    }
+    // Slice control plan Task 15: the RX applet's tabs and bound slice.
+    refreshRxAppletSlices();
     if (m_txApplet) {
         if (hosting) {
             m_txApplet->setDesktopKeyHandlers(
@@ -2257,6 +2344,7 @@ void MainWindow::ensureSliceChooser()
             if (VfoWidget* flag = m_vfoWidgetsBySlice.value(id)) {
                 flag->setSliceAccessPending(QString());
             }
+            if (m_rxApplet) { m_rxApplet->setSliceAccessPending(QString()); }
             if (!words.isEmpty()) { showToast(words, ToastSeverity::Info, 4000); }
         });
     }
@@ -2346,6 +2434,8 @@ void MainWindow::refreshSliceChooser()
         }
         flag->setSliceAccess(access);
     }
+    // Slice control plan Task 15: the RX applet's tabs say the same.
+    refreshRxAppletSlices();
 }
 
 void MainWindow::runFlagAccessAction(SliceChooserAction action, int sliceId)
@@ -2362,11 +2452,15 @@ void MainWindow::runFlagAccessAction(SliceChooserAction action, int sliceId)
     VfoWidget* flag = m_vfoWidgetsBySlice.value(sliceId);
     m_flagRequestSlice = sliceId;
     if (flag) { flag->setSliceAccessPending(tr("Asking the Core…")); }
+    // Task 15: the RX applet's tab menu sends the same requests and waits
+    // with the flag.
+    if (m_rxApplet) { m_rxApplet->setSliceAccessPending(tr("Asking the Core…")); }
     runSliceChooserAction(action, sliceId);
     if (m_flagRequestSlice == sliceId && !m_sliceChooser->isPending()) {
         // Nothing was sent and nothing answered: do not leave it waiting.
         m_flagRequestSlice = -1;
         if (flag) { flag->setSliceAccessPending(QString()); }
+        if (m_rxApplet) { m_rxApplet->setSliceAccessPending(QString()); }
     }
 }
 
@@ -6443,7 +6537,9 @@ void MainWindow::buildUI()
     // current. See design §4.2.
     auto rebindDashboard = [this]() {
         if (!m_rxDashboard || !m_radioModel) { return; }
-        SliceModel* s = activeSliceForWindow();
+        // Slice control plan Task 15: this window's RX slice, which may be
+        // one it listens to.
+        SliceModel* s = windowRxSlice();
         m_rxDashboard->bindSlice(s);
         // Slice control plan Task 13: the picker's words and an open
         // chooser follow every change of this window's slices.
@@ -8317,30 +8413,38 @@ void MainWindow::populateDefaultMeter()
     auto refreshSliceTabs = [this]() {
         if (m_rxApplet && m_radioModel) {
             if (desktopHosting()) { refreshDesktopStationState(); return; }
-            m_rxApplet->updateSliceButtons(
-                m_radioModel->slices(),
-                m_radioModel->activeSlice()
-                    ? m_radioModel->activeSlice()->sliceIndex()
-                    : -1);
+            // Slice control plan Task 15: the tabs, their access and the
+            // bound slice come from one place.
+            refreshRxAppletSlices();
         }
     };
 
     connect(m_radioModel, &RadioModel::activeSliceChanged, this,
-            [this](int sliceIndex) {
+            [this](int) {
         if (!m_radioModel) { return; }
         if (desktopHosting()) { refreshDesktopStationState(); return; }
-        SliceModel* active = m_radioModel->activeSlice();
-        // Rebind the RX applet to the new active slice + refresh its badge.
-        if (m_rxApplet) {
-            m_rxApplet->setSlice(active);
-            if (active) { m_rxApplet->setSliceIndex(active->sliceIndex()); }
-        }
-        // Refresh the tab row highlight (uses sliceIndex param for the
-        // checked state even if activeSlice() is briefly stale).
-        if (m_rxApplet) {
-            m_rxApplet->updateSliceButtons(m_radioModel->slices(), sliceIndex);
-        }
+        // Rebind the RX applet to this window's RX slice, refresh its badge
+        // and the tab row highlight (Slice control plan Task 15).
+        refreshRxAppletSlices();
     });
+    // Slice control plan Task 15: a listened tab's Take control, Release and
+    // Stop listening run as the flag's menu does, with its wait and answer.
+    connect(m_rxApplet, &RxApplet::takeControlRequested, this,
+            [this](int id) { runFlagAccessAction(SliceChooserAction::TakeControl, id); });
+    connect(m_rxApplet, &RxApplet::releaseRequested, this,
+            [this](int id) { runFlagAccessAction(SliceChooserAction::Release, id); });
+    connect(m_rxApplet, &RxApplet::stopListeningRequested, this,
+            [this](int id) { runFlagAccessAction(SliceChooserAction::StopListening, id); });
+    // The station device's receive focus moves on a listened tab or flag
+    // without moving the active slice, so nothing else signals it.
+    if (SliceOwnership* ownership = m_radioModel->sliceOwnership()) {
+        connect(ownership, &SliceOwnership::activeRxChanged, this,
+                [this](const QByteArray& device) {
+            if (device != SliceOwnership::stationDevice() || !desktopHosting()) { return; }
+            refreshRxAppletSlices();
+            refreshActiveSlicePresentation();
+        });
+    }
 
     // Keep the tab row in sync with the slice population.
     connect(m_radioModel, &RadioModel::sliceAdded, this,

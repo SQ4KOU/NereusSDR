@@ -54,6 +54,9 @@
 //                listened flag's "Your volume" (setFlagListenVolume,
 //                listenVolumeFor, m_remoteListenVolumes). AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-29 - J.J. Boyd (KG4VCF). Slice control plan Task 15:
+//                windowRxSlice, refreshRxAppletSlices, sliceShownInWindow.
+//                AI-assisted via Anthropic Claude Code.
 //   2026-09-29 - J.J. Boyd (KG4VCF). Slice control plan Task 10: the
 //                hosting desktop's slice requests run as the station device
 //                (m_hostingSlices, hostingSlices(), selectSliceForWindow,
@@ -1202,6 +1205,15 @@ private:
     // handoff, MOX state).
     void refreshDesktopFlags();
     SliceModel* activeSliceForWindow() const;
+    // Slice control plan Task 15: the slice this window's RX area follows
+    // (bottom bar, flag focus, RX applet). A listened slice may be it; the
+    // active slice (menus, transmit) never moves with it.
+    SliceModel* windowRxSlice() const;
+    // Slice control plan Task 15 (ruling U7): the RX applet's tabs, one per
+    // slice this window controls or listens to and shows, each saying who
+    // controls it; the applet binds windowRxSlice() with its access.
+    void refreshRxAppletSlices();
+    bool sliceShownInWindow(int sliceId) const;
     void refreshActiveSlicePresentation();
     bool desktopOwnsTransmit() const;
     void requestDesktopTransmit(bool tune, bool on);

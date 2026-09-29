@@ -10,6 +10,7 @@
 #include "core/session/StationServer.h"
 #include "gui/containers/ContainerWidget.h"
 #include "gui/meters/OtherButtonItem.h"
+#include "gui/applets/RxApplet.h"
 #include "gui/applets/TxApplet.h"
 #include "gui/multidevice/TakeTransmitDialog.h"
 #include "gui/SpectrumWidget.h"
@@ -29,6 +30,7 @@
 #include <QPushButton>
 #include <QSignalSpy>
 #include <QSpinBox>
+#include <QToolButton>
 #include <QWheelEvent>
 #include <QApplication>
 #include <QSslSocket>
@@ -82,6 +84,17 @@ QAction* actionNamed(QMenu* menu, const QString& name)
     }
     return nullptr;
 }
+
+QToolButton* sliceTabFor(RxApplet& applet, QChar letter)
+{
+    for (QToolButton* tab : applet.findChildren<QToolButton*>()) {
+        if (tab->isCheckable() && tab->text() == QString(letter)
+            && tab->toolTip().startsWith(QStringLiteral("Slice %1").arg(letter))) {
+            return tab;
+        }
+    }
+    return nullptr;
+}
 }
 
 class TstDesktopStationWindow final : public QObject {
@@ -115,6 +128,13 @@ private slots:
         QCOMPARE(dashboard->modeText(), QStringLiteral("CWU"));
 
         ownership->setOwner(aId, QByteArrayLiteral("token:phone"));
+        // Slice control plan Task 3: the former controller stays a listener,
+        // so the bottom bar follows A as a listened slice (ruling U7).
+        QVERIFY(ownership->isListening(SliceOwnership::stationDevice(), aId));
+        QCOMPARE(dashboard->slice(), a);
+        // It clears once the desktop neither controls nor listens to a slice.
+        QVERIFY(ownership->leave(SliceOwnership::stationDevice(), aId));
+        QVERIFY(ownership->leave(SliceOwnership::stationDevice(), bId));
         QCOMPARE(dashboard->slice(), nullptr);
         QCOMPARE(dashboard->modeText(), QStringLiteral("–"));
         QVERIFY(dashboard->sliceLetter().isNull());
@@ -608,6 +628,108 @@ private slots:
         QVERIFY(flagB->stationPresentationAllowed());
         QVERIFY(flagB->isListening());
         QVERIFY(spectrum->foreignSliceMarkers().isEmpty());
+        controller.stop();
+    }
+
+    // Slice control plan Task 15 (rulings U5, U6, U7): the RX applet has a
+    // tab for the slice this window listens to, saying who controls it;
+    // selecting it moves this window's RX (the applet, the bottom bar and
+    // the flag focus) and never the active slice, the TX slice or the
+    // holder; the applet holds its shared controls with the controller
+    // named; Stop listening from the applet leaves the slice.
+    void hostRxAppletFollowsAListenedTab()
+    {
+        if (!QSslSocket::supportsSsl()) { QSKIP("Qt reports no working TLS backend."); }
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+        MainWindow window({}, nullptr, MainWindow::ConnectionStartup::Deferred);
+        RadioModel* model = window.radioModel();
+        model->setBoardForTest(HPSDRHW::Saturn);
+        model->configureStreamPool(5, 5, 192000);
+        model->setConnectionStateForTest(ConnectionState::Connected);
+        const int aId = model->addSlice(QStringLiteral("pan-0"));
+        const int bId = model->addSlice(QStringLiteral("pan-0"));
+        SliceModel* a = model->sliceById(aId);
+        SliceModel* b = model->sliceById(bId);
+        QVERIFY(a && b);
+        DesktopStationController controller(model, optionsFor(settings, directory.path()));
+        window.setDesktopStationController(&controller);
+        QVERIFY(controller.start(true));
+        StationServer* server = controller.server();
+        QVERIFY(server);
+        QObject phoneSession;
+        DeviceSessionRegistry::Entry phone;
+        phone.deviceId = QByteArrayLiteral("phone-device-id-for-rx-applet-01");
+        phone.kind = DeviceSessionRegistry::Kind::Paired;
+        phone.name = QStringLiteral("Living room iPhone");
+        phone.shortName = QStringLiteral("iPhone");
+        phone.deviceKind = QStringLiteral("phone");
+        QCOMPARE(server->deviceSessions()->admit(phone, &phoneSession).admission,
+                 DeviceSessionRegistry::Admission::Admitted);
+        SliceOwnership* ownership = model->sliceOwnership();
+        const QByteArray station = SliceOwnership::stationDevice();
+        ownership->setOwner(bId, phone.deviceId);
+        QVERIFY(ownership->isListening(station, bId));
+
+        RxApplet* applet = window.findChild<RxApplet*>();
+        QVERIFY(applet);
+        QToolButton* tabA = sliceTabFor(*applet, QLatin1Char('A'));
+        QToolButton* tabB = sliceTabFor(*applet, QLatin1Char('B'));
+        QVERIFY(tabA && tabB);
+        QVERIFY(tabB->isEnabled());
+        QVERIFY(tabB->toolTip().contains(QStringLiteral("Listening")));
+        QVERIFY(tabB->toolTip().contains(QStringLiteral("iPhone")));
+        QCOMPARE(applet->slice(), a);
+        QVERIFY(!applet->isListening());
+
+        const int activeBefore = ownership->activeFor(station);
+        QCOMPARE(activeBefore, aId);
+        TxSliceArbiter* arbiter = model->txSliceArbiter();
+        QVERIFY(arbiter);
+        const int txBefore = arbiter->txBoundSliceId();
+        const TransmitHolder::State holderBefore = server->transmitHolder()->state();
+        QSignalSpy freq(b, &SliceModel::frequencyChanged);
+        QSignalSpy mode(b, &SliceModel::dspModeChanged);
+        QSignalSpy af(b, &SliceModel::afGainChanged);
+        QSignalSpy mute(b, &SliceModel::mutedChanged);
+
+        tabB->click();
+        QCOMPARE(ownership->activeRxFor(station), bId);
+        QCOMPARE(ownership->activeFor(station), activeBefore);
+        QCOMPARE(arbiter->txBoundSliceId(), txBefore);
+        QCOMPARE(server->transmitHolder()->state(), holderBefore);
+        QCOMPARE(applet->slice(), b);
+        QVERIFY(applet->isListening());
+        QVERIFY(applet->sliceAccess().heldReason.contains(QStringLiteral("iPhone")));
+        RxDashboard* dashboard = window.findChild<RxDashboard*>();
+        QVERIFY(dashboard);
+        QCOMPARE(dashboard->slice(), b);
+        PanadapterApplet* pan = window.findChild<PanadapterStack*>()->panadapter(
+            QStringLiteral("pan-0"));
+        QVERIFY(pan);
+        QCOMPARE(pan->activeSliceIndex(), bId);
+        QCOMPARE(freq.count(), 0);
+        QCOMPARE(mode.count(), 0);
+        QCOMPARE(af.count(), 0);
+        QCOMPARE(mute.count(), 0);
+
+        // Back to the slice this window controls.
+        tabA->click();
+        QCOMPARE(ownership->activeRxFor(station), aId);
+        QCOMPARE(applet->slice(), a);
+        QVERIFY(!applet->isListening());
+        QCOMPARE(dashboard->slice(), a);
+
+        // Stop listening from the applet: the Core answers, nothing is left
+        // waiting, and the applet keeps the slice this window controls.
+        tabB->click();
+        QCOMPARE(applet->slice(), b);
+        emit applet->stopListeningRequested(bId);
+        QVERIFY(!ownership->isListening(station, bId));
+        QCOMPARE(applet->slice(), a);
+        QVERIFY(!applet->isListening());
+        QCOMPARE(dashboard->slice(), a);
         controller.stop();
     }
 

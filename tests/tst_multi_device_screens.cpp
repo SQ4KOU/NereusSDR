@@ -68,6 +68,7 @@
 #include "gui/MainWindow.h"
 #include "gui/PanadapterApplet.h"
 #include "gui/SpectrumWidget.h"
+#include "gui/applets/RxApplet.h"
 #include "gui/multidevice/ConfirmChangeDialog.h"
 #include "gui/multidevice/ConnectedDevicesList.h"
 #include "gui/multidevice/DeviceWords.h"
@@ -682,6 +683,39 @@ private slots:
         QVERIFY(qAbs(mine.level - 0.25) < 1e-9);
         QVERIFY(!mine.muted);
         QCOMPARE(flag.afSliderForTest()->value(), 25);
+    }
+
+    // Slice control plan Task 15 (rulings U5, U6, U7): the RX applet on a
+    // slice this window listens to. Tabs A (controlled here) and B
+    // (listened); B's shared controls are shown disabled with the reason
+    // naming the controlling device, and the applet has no volume or mute.
+    void theRxAppletOnAListenedSliceShowsWhoControlsIt()
+    {
+        SliceModel a(0);
+        SliceModel b(1);
+        b.setFrequency(14225000.0);
+        b.setDspMode(DSPMode::USB);
+        RxApplet applet(&b, nullptr);
+        VfoWidget::SliceAccess controlled;
+        controlled.state = VfoWidget::SliceAccess::State::Controlled;
+        controlled.line = QStringLiteral("You control this slice");
+        VfoWidget::SliceAccess listened;
+        listened.state = VfoWidget::SliceAccess::State::Listening;
+        listened.line = QStringLiteral("Listening · controlled by iPad");
+        listened.heldReason = QStringLiteral("iPad controls this slice");
+        applet.setSliceTabAccess({{0, controlled}, {1, listened}});
+        applet.setSliceAccess(listened);
+        applet.updateSliceButtons({&a, &b}, 1);
+        QVERIFY(applet.isListening());
+        const QList<QWidget*> held = applet.heldControlsForTest();
+        QVERIFY(!held.isEmpty());
+        for (QWidget* control : held) {
+            QVERIFY(!control->isEnabled());
+            QCOMPARE(control->toolTip(), listened.heldReason);
+        }
+        QVERIFY(applet.sliceTabToolTipForTest(1).contains(QStringLiteral("iPad")));
+        applet.resize(300, applet.sizeHint().height());
+        saveShot(&applet, QStringLiteral("task15-rx-applet-listening"), false);
     }
 
     // A window whose last slice another device takes stays connected with

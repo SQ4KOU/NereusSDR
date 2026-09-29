@@ -23,6 +23,14 @@
 //                 passband match follows setTransmitSettingsPermitted and
 //                 says why when it cannot. J.J. Boyd (KG4VCF), with
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-29 - Slice control plan Task 15: the applet carries the bound
+//                 slice's access. On a slice another device controls, every
+//                 shared tuning and DSP control is disabled with the reason
+//                 naming that device and never writes the slice; the tabs
+//                 say who controls each slice, and the tab and badge menus
+//                 offer Take control, Stop listening and Release. J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.
 // =================================================================
 
 //=================================================================
@@ -132,8 +140,10 @@
 #include "core/SkuUiProfile.h"
 #include "core/WdspTypes.h"
 #include "gui/widgets/TriBtn.h"
+#include "gui/widgets/VfoWidget.h"
 #include "models/Band.h"
 
+#include <QHash>
 #include <QList>
 #include <QPushButton>
 #include <QStringList>
@@ -149,6 +159,7 @@ class QPaintEvent;
 class QGridLayout;
 class QHBoxLayout;
 class QLabel;
+class QMenu;
 class QSlider;
 class QSpinBox;
 class QStackedWidget;
@@ -194,6 +205,8 @@ public:
 
     // Attach to a different slice (or nullptr to detach).
     void setSlice(SliceModel* slice);
+    // Slice control plan Task 15: the slice the applet shows and edits.
+    SliceModel* slice() const { return m_slice; }
 
     // Set the slice letter badge (0=A, 1=B, and so on).
     void setSliceIndex(int idx);
@@ -213,6 +226,30 @@ public:
 
     // Set the antenna list shown in the RX/TX antenna menus.
     void setAntennaList(const QStringList& ants);
+
+    // Slice control plan Task 15: who controls the bound slice, from this
+    // window's point of view (the flag's SliceAccess). Listening disables
+    // every shared tuning and DSP control with heldReason as its tooltip
+    // and the applet never writes the slice; Controlled and Unshared
+    // restore them. The attenuator and preamp row is the radio's, not the
+    // slice's, and is not held.
+    void setSliceAccess(const VfoWidget::SliceAccess& access);
+    const VfoWidget::SliceAccess& sliceAccess() const { return m_sliceAccess; }
+    bool isListening() const
+    {
+        return m_sliceAccess.state == VfoWidget::SliceAccess::State::Listening;
+    }
+    // The access of every slice with a tab, keyed by slice id: the tab
+    // tooltips say who controls each slice, and the tab and badge menus
+    // offer the matching access actions.
+    void setSliceTabAccess(const QHash<int, VfoWidget::SliceAccess>& access);
+    // While a Take control, Stop listening or Release request waits on the
+    // Core, the access actions are disabled with this text; empty clears it.
+    void setSliceAccessPending(const QString& pending);
+    // Adds the access actions for slice `sliceId` to `menu`: Take control
+    // and Stop listening on a listened slice, Release on a controlled one,
+    // nothing on an unshared one.
+    void populateSliceMenu(QMenu& menu, int sliceId);
 
 public slots:
     // Phase 3P-I-a T16 — gate ANT buttons on caps.hasAlex + antenna count.
@@ -255,6 +292,11 @@ public:
     // Issue #174: verifies the mi0bot-Thetis console.cs:21342-21365
     // [v2.10.3.13-beta2] HL2 A-ATT label flip on auto-att toggle.
     QString attLabelTextForTest() const;
+
+    // Slice control plan Task 15: the controls held while listening, and a
+    // slice tab's tooltip.
+    QList<QWidget*> heldControlsForTest() const { return listeningHeldControls(); }
+    QString sliceTabToolTipForTest(int sliceId) const;
 private:
 #endif
 
@@ -268,6 +310,12 @@ signals:
     // R-R3-49 (parity Task 1): a Shift-click could not also set the TX
     // passband; `reason` is plain words for the operator.
     void transmitSettingRefused(const QString& reason);
+    // Slice control plan Task 15: the access actions of the tab and badge
+    // menus, carrying the slice id. MainWindow runs them against the Core
+    // the same way as the flag's.
+    void takeControlRequested(int sliceId);
+    void releaseRequested(int sliceId);
+    void stopListeningRequested(int sliceId);
 
 private:
     void buildUi();
@@ -298,6 +346,18 @@ private:
     void ensureRx1PreampToggle();
 
     static QString formatFilterWidth(int low, int high);
+
+    // Slice control plan Task 15: hold or restore every shared control for
+    // the current access, and the list of those controls.
+    void applySliceAccess();
+    void holdForListening(QWidget* control);
+    QList<QWidget*> listeningHeldControls() const;
+    void showSliceMenu(int sliceId, QWidget* anchor, const QPoint& pos);
+
+    VfoWidget::SliceAccess             m_sliceAccess;
+    QHash<int, VfoWidget::SliceAccess> m_tabAccess;
+    QString                            m_accessPending;
+    int                                m_badgeSliceId = 0;  // the badge's slice id
 
     // ── Model ──────────────────────────────────────────────────────────────
     SliceModel*      m_slice = nullptr;

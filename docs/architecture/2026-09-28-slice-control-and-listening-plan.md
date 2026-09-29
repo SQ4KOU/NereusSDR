@@ -1407,21 +1407,34 @@ Acceptance:
 Verification: `tst_multi_device_screens`, the Task 6 media tests,
 `tst_remote_window_harness` captures.
 
-## Task 15: RX applet tabs, listener gating and local volume and mute (BLOCKED on U5)
+## Task 15: RX applet tabs and listener gating
 
-Implements: design full-window proposal bullet 3.
-Depends on: Tasks 14a and 14b and JJ's ruling. Model tier: opus.
+Implements: design full-window bullet 3; JJ's rulings U5, U6 and U7
+(2026-09-28). U7 supersedes the earlier plan for tabs of hidden joined
+slices: a device hears only slices it can see, so every joined slice is
+visible and there are no hidden-slice tabs. U5 keeps volume and mute on the
+existing surfaces; the RX applet gains no volume or mute.
+Depends on: Task 14. Model tier: opus.
 
 Today: RX applet tabs list only station-owned slices on a hosting window, via `RxApplet::updateSliceButtons` (`RxApplet.cpp:1411`)
 (`MainWindow.cpp:1711-1740`); its controls write `SliceModel` directly
 (for example the mode combo at `RxApplet.cpp:614-619`); its mute button was removed, VfoWidget is the mute surface (`RxApplet.cpp:1190`, `:1605`).
 
-Change (as ruled): tabs for every joined slice including hidden ones;
-shared tuning and DSP disabled for a listener with the controller named;
-local volume and mute bound to the listen level; Take control reachable.
+Change (as ruled): tabs for every slice this device controls or listens
+to; shared tuning and DSP disabled for a listened slice with "<device>
+controls this slice" (U6); Take control reachable from a listened tab.
 
-Acceptance: to be written from the ruling; at minimum no listener edit
-reaches `SliceModel` or the wire.
+Acceptance:
+- Tabs list exactly the slices this device controls or listens to; a
+  slice not joined here has no tab.
+- After a layout change stops listening to a slice (U7, Task 16), its tab
+  goes away; no tab ever exists for a slice this device cannot see.
+- On a listened tab every shared tuning and DSP control is disabled and
+  says "<device> controls this slice"; a signal spy shows no `SliceModel`
+  write and no wire message from any of them; Take control is reachable.
+- The RX applet has no volume or mute control (U5; `RxApplet.cpp:1190-1191`).
+- Selecting a listened tab changes window RX (bottom bar, flag focus) and
+  never changes the transmit selection or the holder.
 
 Verification: `tst_rx_applet_*`, `tst_multi_device_screens` captures.
 

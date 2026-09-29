@@ -92,19 +92,23 @@ The proposed mapping is:
   control from Listening and names the current controller. A visible slice
   not joined here remains distinguishable as a foreign marker. The same
   details/actions are reachable from the flag and bottom chooser.
-- The RX applet shows tabs for this device's joined slices, including those
-  whose display is currently hidden. Listening disables shared tuning/DSP
-  edits, while per-device volume/mute and Take control remain available.
-  These controls are proposals; current RX applet audio plumbing does not
-  yet provide the required local listener mix.
+- The RX applet shows tabs for this device's joined slices. Under U7 every
+  joined slice is visible in one of this device's pans, so there are no
+  tabs for hidden joined slices. Listening disables shared tuning and DSP
+  edits, with the controller named and Take control reachable. Volume and
+  mute stay on the existing AF slider and mute (U5), which Task 14b made
+  each listener's own level in the audio mixer; the RX applet has no volume
+  or mute (the flag and title bar are the audio surfaces).
 - TX remains explicitly bound to the selected transmit slice even when a
   different slice is selected for receive. The current active-RX-dependent
   TX applet bindings need a safety audit when implementing this mapping.
 - If a slice is already visible, focus its existing pane, including a
   floating pane. If unseen, prefer an empty pane; otherwise offer a named
-  destination or another pane. Replacing or hiding a view retains listening
-  until the operator explicitly leaves. A new view of an existing slice
-  does not create a new physical receiver or change shared tuning.
+  destination or another pane. A new view of an existing slice does not
+  create a physical receiver or change shared tuning. Replacing or hiding a
+  view no longer retains listening: U7 supersedes the earlier proposal that
+  listening continue until an explicit leave, and the earlier proposal of
+  RX applet tabs for hidden joined slices.
 
 The full-window interactive proposal is
 `nereus-multi-pan-slice-flow.html` in this chat's visualization directory.

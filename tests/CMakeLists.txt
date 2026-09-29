@@ -7966,6 +7966,12 @@ nereus_add_test(tst_slice_chooser
 # with that reason, never writes the slice, and offers Take control and
 # Stop listening; a controlled flag offers Release. No radio, no RF.
 nereus_add_test(tst_vfo_widget_slice_access EXTRA_LABELS gui)
+
+# Slice control plan Task 15: the RX applet holds every shared slice control
+# on a listened slice, with the reason naming the controlling device, never
+# writes that slice, and offers Take control from its tab menus.
+nereus_add_test(tst_rx_applet_slice_access EXTRA_LABELS gui)
+target_compile_definitions(tst_rx_applet_slice_access PRIVATE NEREUS_BUILD_TESTS)
 # Slice control and shared listening plan Task 5: the remote window's side
 # of listening to and taking a slice (SliceAccessMirror, the four verbs, a
 # listened slice held read-only, the refusals and the controlTaken notice
