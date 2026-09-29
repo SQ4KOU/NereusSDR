@@ -162,6 +162,8 @@
 //   2026-09-28 - R-IOS-13 / R-R3-49: txEqCurveVersion, the read-only TX
 //                EQ curve on `transmit`. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-28 - R-IOS-13 / R-R3-49: txEqCurveVersion 2 (the curve verbs).
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -245,7 +247,9 @@ struct StationCapabilities {
     /// parametric curve the Core derives from txEqParaEqData as documented,
     /// read-only JSON. Sent at minor 11 only to a peer whose hello declared
     /// txEqCurve 1, after radioAntennaRowsVersion; that peer alone gets the
-    /// property. 0 (absent): the peer sees today's wire.
+    /// property. 0 (absent): the peer sees today's wire. 2, to a peer that
+    /// declared txEqCurve 2: also the txEq.setCurve and txEq.resetCurve
+    /// verbs, applied as that peer's txEqParaEqData write.
     int txEqCurveVersion = 0;
     /// R-R3-47 / R-R3-22: 1 means the Core mirrors its Power Genius XL
     /// status as the read-only `amplifier` object. Sent after

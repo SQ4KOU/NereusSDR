@@ -8092,6 +8092,12 @@ nereus_add_test(tst_station_tools EXTRA_LABELS session)
 nereus_add_test(tst_station_vax
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)
+# R-IOS-13 / R-R3-49 (txEqCurveVersion 2): txEq.setCurve and
+# txEq.resetCurve from a device that declared txEqCurve 2, as its own
+# txEqParaEqData write. Loopback only, no RF, no audio device.
+nereus_add_test(tst_tx_eq_set_curve
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
 # iPhone app Task 14 (R-IOS-08, D37): the pairing code and its word list,
 # the pairing window (injected clock), and the SPAKE2+EE exchange with its
 # confirmation boxes.

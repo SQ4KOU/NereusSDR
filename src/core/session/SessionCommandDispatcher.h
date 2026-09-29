@@ -188,6 +188,10 @@
 //                                    worker thread) and
 //                                    support.setLogCategories.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  R-IOS-13 / R-R3-49: txEq.setCurve and
+//                                    txEq.resetCurve (txEqCurveVersion 2)
+//                                    through TxEqCurveAccess. AI-assisted
+//                                    via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -406,6 +410,11 @@ public:
     /// answers them (and sends the backlog) through this; true when it did.
     using RecordAccess = std::function<bool(const NereusSDR::SessionMessage& invoke)>;
     void setRecordAccess(RecordAccess access) { m_recordAccess = std::move(access); }
+    /// R-IOS-13 / R-R3-49 (txEqCurveVersion 2): txEq.setCurve and
+    /// txEq.resetCurve are the asking connection's txEqParaEqData write,
+    /// so the station server applies and answers them; true when it did.
+    using TxEqCurveAccess = std::function<bool(const NereusSDR::SessionMessage& invoke)>;
+    void setTxEqCurveAccess(TxEqCurveAccess access) { m_txEqCurveAccess = std::move(access); }
     /// Parity Task 21 (R-IOS-18): the Core's radios (nereusd), for the
     /// station.selectRadio, station.rescanRadios, station.setRadioModel and
     /// station.forgetRadio verbs.
@@ -505,6 +514,9 @@ private:
     // rade.resetVocoder on the Core's RADE channel.
     void handleTxProfile(const NereusSDR::SessionMessage& invoke);
     void handleRadeResetVocoder(const NereusSDR::SessionMessage& invoke);
+    // R-IOS-13 / R-R3-49 (txEqCurveVersion 2): txEq.setCurve and
+    // txEq.resetCurve, through TxEqCurveAccess.
+    void handleTxEqCurve(const NereusSDR::SessionMessage& invoke);
     void handleRequestIoBoardProbe(const NereusSDR::SessionMessage& invoke);
     // R-R3-46 fix wave (radioHardwareVersion 3): one band's RX or RX-only
     // antenna, applied through the Core's AlexAntennaFacade.
@@ -556,6 +568,7 @@ private:
     SliceAccess m_sliceAccess;
     ConfirmAnswer m_confirmAnswer;
     RecordAccess m_recordAccess;
+    TxEqCurveAccess m_txEqCurveAccess;
     SupportInputs m_supportInputs;
     // Parity Task 22: one bundle is made at a time.
     bool m_supportBundleRunning = false;

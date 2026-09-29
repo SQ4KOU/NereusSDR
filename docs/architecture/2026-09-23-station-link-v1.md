@@ -783,6 +783,13 @@ was built for, with neither. The station does not declare it. The
 desktop's remote window does not declare it either: its TX EQ dialog reads
 `txEqParaEqData` itself.
 
+**`txEqCurve` 2** (R-IOS-13, R-R3-49): the client also changes the curve,
+with `txEq.setCurve` and `txEq.resetCurve` (section 9.1). A peer that
+declares it at minor 11 is sent `txEqCurveVersion` 2 and `transmit`'s
+`txEqCurve` as at 1; one that declares 1 is sent exactly what it was sent
+before. The desktop's remote window declares neither: its TX EQ dialog
+writes `txEqParaEqData` itself.
+
 **`sessionHolder` 1** (iPhone app plan Task 71; the several-devices
 design, ruling 10.1): the Core admits up to four devices at once (section
 5.1). A client declares it only together with `deviceAuth` 1 or later, and
@@ -913,7 +920,7 @@ change shows as surface drift and as a change to this table.
 | `accessoryTxVersion` | 1 |
 | `radioAntennaRowsVersion` | 1 |
 | `vaxVersion` | 1 |
-| `txEqCurveVersion` | 1 |
+| `txEqCurveVersion` | 2 |
 
 <!-- /surface -->
 
@@ -1039,6 +1046,12 @@ When a feature is off, its version is 0:
   the feature is sent neither this entry nor the property. An app on a
   Core that sends no entry shows the curve disabled with "This Core does
   not send the TX EQ curve. Updating the Core may help."
+  At 2, sent to a peer whose hello declared `txEqCurve` 2 (a peer that
+  declared 1 is sent 1), the Core also takes `txEq.setCurve` and
+  `txEq.resetCurve` from that peer (section 9.1): an app changes the
+  curve in the same shape it reads it. An app on a Core that sends 1
+  shows the curve read-only with "This Core cannot change the TX EQ curve
+  from here. Updating the Core may help."
 - `remotePgxlControlVersion`, `remoteRfKitControlVersion`,
   `remoteTgxlControlVersion`: sent only at agreed minor 11, and 0 unless
   the Core owns its accessories. `remotePgxlControlVersion` 3 adds the
@@ -3020,7 +3033,9 @@ side-effect `delta` that follows its `property.result`.
 - **Read-only.** `txEqCurve` is outbound. A write to it is refused as any
   outbound property is ("The Core sets this itself; it cannot be changed
   from here."). Version 1 has no write path. The curve is changed at the
-  Core, or by writing `txEqParaEqData`.
+  Core, or by writing `txEqParaEqData`. At version 2 an app changes it
+  with `txEq.setCurve` and `txEq.resetCurve` ("Changing the curve",
+  below).
 - **Who gets it.** Only a peer at agreed minor 11 whose hello declared
   `txEqCurve` 1. Its `TransmitModel` schema, its `transmit` snapshot and
   its deltas carry the field. Every other peer's carry none of it, and a
@@ -3132,6 +3147,55 @@ At 2400 Hz the one point's bell gives its 4 dB, and the preamp takes 2.5
 dB off. `tst_para_eq_curve` holds these values. The same points saved out
 of order, for example 600 Hz before 598 Hz, come back sorted with the
 second moved to 603 Hz.
+
+**Changing the curve** (`txEqCurveVersion` 2). `txEq.setCurve`
+(`curveJson` utf8) takes a curve in the shape above: `parametric`,
+`preampDb`, `minHz`, `maxHz` and `points`, each point with `frequencyHz`,
+`gainDb` and `q`. Any other key (`state` included) is ignored, so an app
+may send back the curve it was shown with its edits. The Core takes what
+the local TX EQ dialog lets an operator choose (Thetis's TX EQ panel) and
+refuses anything else whole, changing nothing:
+
+| What | The dialog's choice | Refused with |
+| --- | --- | --- |
+| The JSON | an object with the keys above, `parametric` a boolean and every other value a number | "The TX EQ curve was not understood." |
+| Points | 5, 10 or 18 (the 5-band, 10-band and 18-band buttons; there is no adding or removing a single point) | "Choose a curve of 5, 10 or 18 points." |
+| `minHz`, `maxHz` | 0 to 20000 Hz (Low and High), `maxHz` at least 1000 Hz above `minHz` once each is rounded to 0.001 Hz | "Choose a low and a high end from 0 to 20000 Hz, the high end at least 1000 Hz above the low end." |
+| `preampDb` | -24 to 24 dB | "Choose a curve preamp from -24 to 24 dB." |
+| `frequencyHz` | `minHz` to `maxHz` | "Choose each point's frequency between the curve's low and high ends." |
+| `gainDb` | -24 to 24 dB | "Choose each point's gain from -24 to 24 dB." |
+| `q` | 0.2 to 20 | "Choose each point's Q from 0.2 to 20." |
+
+A curve it takes is rounded as a saved curve is read (the frequencies and
+ends to 0.001 Hz, the gains and the preamp to 0.1 dB, Q to 0.01, round half
+to even) and put in the order above: sorted, the first point moved to
+`minHz` and the last to `maxHz`, the rest spaced. So an app that moves the
+first or last point away from an end sees it back at the end, as in the
+dialog, where the two end points are fixed to the range. The Core saves
+the result as Thetis saves the panel's points (`SaveToJsonFromPoints`, then
+gzip and base64url) and writes it to `txEqParaEqData`, so the desktop
+dialog, TX profiles and Thetis-format settings keep the one saved curve.
+
+`txEq.resetCurve` (no arguments) is the dialog's Reset button, which is
+not Thetis's defaults: the preamp goes to 0 and every point to 0 dB with
+Q 4, evenly spread from `minHz` to `maxHz`, keeping the curve's number of
+points, its range and `parametric`. On a Core whose `txEqParaEqData` is
+empty or unreadable the dialog holds the defaults above (ten points, 0 to
+4000 Hz), so its Reset gives that flat curve, saved.
+
+Each is that peer's own write of `txEqParaEqData` (section 7.3), under
+every rule such a write meets: a receive-only Core takes it from a peer
+offered `transmitSettingsVersion`; a Core that allows remote transmit takes
+it from a session permitted to transmit; the on-air rules for `transmit`
+writes apply; it never keys. A refused write is refused with that write's
+reason ("The radio is on the air. Try again when it stops.", "Transmit
+configuration is unavailable on this receive-only Core.", or the transmit
+gate's words). A taken one is followed first by the side-effect `delta`
+carrying the new `txEqParaEqData` and `txEqCurve`, then by an accepted
+`command.result` whose `curve` (utf8) is the `txEqCurve` the Core now
+holds. Every other peer that gets `txEqCurve` gets the same `delta`. The
+active TX profile is not saved by either verb: as with an edit in the
+local dialog, `txProfile.save` saves it.
 
 ### 7.2 Deltas
 
@@ -4282,6 +4346,8 @@ refused.
 | `txProfile.save` | `name` utf8 | `transmitSettingsVersion` | 3 | 11 |
 | `txProfile.delete` | `name` utf8 | `transmitSettingsVersion` | 3 | 11 |
 | `rade.resetVocoder` | none | `transmitSettingsVersion` | 3 | 11 |
+| `txEq.setCurve` | `curveJson` utf8 | `txEqCurveVersion` | 2 | 11 |
+| `txEq.resetCurve` | none | `txEqCurveVersion` | 2 | 11 |
 | `configureRfKit` | `host` utf8, `port` i64 | `remoteRfKitControlVersion` | 2 | 11 |
 | `disconnectRfKit` | none | `remoteRfKitControlVersion` | 2 | 11 |
 | `setRfKitEnabled` | `enabled` bool | `remoteRfKitControlVersion` | 2 | 11 |
@@ -4791,6 +4857,19 @@ These command groups need a sentence beyond the table:
   understood." and "The request to reset the RADE vocoder was not
   understood." A peer below agreed minor 11 gets "Update this app to
   change transmit profiles on this Core."
+- **The TX EQ curve.** `txEq.setCurve` (`curveJson`) and
+  `txEq.resetCurve` (no arguments) change the TX EQ dialog's parametric
+  curve, and are its Reset, from a peer offered `txEqCurveVersion` 2
+  (section 7.1, "Changing the curve"). Each is that peer's own write of
+  `transmit`'s `txEqParaEqData` and meets every rule that write meets
+  (section 7.3); its answer carries that write's reason when refused, and
+  `curve`, the curve the Core kept in the `txEqCurve` form, when taken.
+  Other refusals: the curve's own ("Choose a curve of 5, 10 or 18
+  points." and the rest, section 7.1), "The request to reset the TX EQ
+  curve was not understood." (a reset with arguments), "The Core cannot
+  change its transmit settings." (a Core with no radio model of its own).
+  A peer not offered version 2 gets "Update this app to change the TX EQ
+  curve on this Core."
 - **PureSignal arming.** `ps3.single` (Single Cal), `ps3.automatic`
   (Automatic, and PS-A on), `ps3.applyCurrent` (Apply current correction)
   and `ps3.restoreCorrection` (Restore a saved correction) arm PureSignal
@@ -5988,6 +6067,7 @@ same on every machine.
 | `connect-deadline` | No `auth.request` within 30000 ms: `session.end` "This app did not finish connecting to the Core in time.", `retryable` true |
 | `property-write` | A write and its `property.result` and side-effect `delta`; a refused outbound property and an unknown one; a write without a `writeId` answered by `delta`; a write to a slice's signal strength refused as outbound; on the receive-only Core, a `transmit` write of `power` taken off the air and a write of `mox` and `voxEnabled` refused with the receive-only reason; at `transmitSettingsVersion` 2, a write of `cpdrLevelDb` taken, and `micGainDb` and `monitorVolume` out of range refused with their ranges beside a write of the outbound `tunePowerForTxBand`; at `transmitSettingsVersion` 3, a write of `micBoost` and `lineInBoost` taken, and `lineInBoost` out of range refused with its range beside a write of the outbound `activeTxProfile`; at `transmitSettingsVersion` 4, a write of `txEqBandsJson`, `txEqUseLegacy` and `txLevelerDecay` taken, and a nine-value `txEqBandsJson`, a `cfcCompressionJson` with a value out of range and `txAlcDecay` out of range each refused whole with its range |
 | `tx-eq-curve` | `txEqCurveVersion` 1 (the client declares `txEqCurve` 1): the capability after `accessoryTxVersion`, `txEqCurve` last in the `TransmitModel` schema and, in the `transmit` snapshot, the flat default curve (`state` `default`) for the static station's empty `txEqParaEqData`; a write of the worked example's `txEqParaEqData` (section 7.1, "The TX EQ curve") taken, then the side-effect `delta` carrying its `txEqCurve` (`state` `saved`); a write to `txEqCurve` refused as outbound, the curve unchanged |
+| `tx-eq-set-curve` | `txEqCurveVersion` 2 (the client declares `txEqCurve` 2): the capability at 2; `txEq.setCurve` with the link document's worked example sent back as it was shown, but out of order and unrounded, taken: the side-effect `delta` carrying the new `txEqParaEqData` and the worked example's `txEqCurve`, then the accepted `command.result` whose `curve` is that `txEqCurve`; a four-point curve refused whole "Choose a curve of 5, 10 or 18 points." with nothing sent after; `txEq.resetCurve` taken, the `delta` and a `curve` of five flat points spread from 50 to 3000 Hz, preamp 0 |
 | `settings-write` | A station-scoped write echoed with its origin; an operator-local write rejected; a removal sent as `settings.value` with no entry; on the receive-only Core, a DSP > Options TX key and a PA forward-power table key (`paCalibration/calPoint1`, version 6) taken off the air, an OC transmit pin (`oc/tx/20m/pin3`), an OC pin action (`oc/actions/pin1/action`) and TX Display Cal (`cal/txDisplayOffset`) taken off the air (version 8), and a transmit hardware key refused |
 | `unknown-verb` | `command.result` refused, "The Core does not know this request. Updating the Core may help."; the connection stays up |
 | `unknown-kind` | `session.end` "The Core could not read a message from this app.", `retryable` false, `code` `protocolError` |

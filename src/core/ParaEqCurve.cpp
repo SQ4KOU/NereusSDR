@@ -43,6 +43,13 @@
 //                 LoadFromJson share, so the Core and ParametricEqWidget
 //                 read a saved curve by one parser. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - R-IOS-13 / R-R3-49 (txEqCurveVersion 2):
+//                 txEqPointsFromCurveJson (an app's curve checked against
+//                 the TX panel's choices), saveToJsonFromPoints
+//                 (SaveToJsonFromPoints), txEqParaEqDataFromPoints (the
+//                 ParaEQTXData getter) and resetTxEqPoints (the panel's
+//                 Reset, ResetPoints). J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 // --- From ucParametricEq.cs ---
@@ -420,6 +427,196 @@ QString txEqCurveJson(const QString& paraEqData)
     }
     root.insert(QStringLiteral("points"), list);
     return QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact));
+}
+
+// NereusSDR-original (R-IOS-13, R-R3-49, txEqCurveVersion 2): the curve an
+// app sends, in the txEqCurve shape, checked against what the TX EQ panel
+// lets an operator choose (the limits in ParaEqCurve.h, each from eqform.cs
+// [v2.10.3.15]) and refused whole otherwise, then read as PointsFromJson
+// reads a saved curve (ucParametricEq.cs:1434-1452 [v2.10.3.15]: frequency
+// to 3 places, gain and preamp to 1, Q to 2) and ordered as the panel
+// orders it (txEqDisplayPoints).
+bool txEqPointsFromCurveJson(const QString& curveJson, TxEqPoints& out, QString* refusal)
+{
+    const auto refuse = [refusal](const QString& why) {
+        if (refusal) { *refusal = why; }
+        return false;
+    };
+    const QString notUnderstood = QStringLiteral("The TX EQ curve was not understood.");
+
+    QJsonParseError perr;
+    const QJsonDocument doc = QJsonDocument::fromJson(curveJson.toUtf8(), &perr);
+    if (perr.error != QJsonParseError::NoError || !doc.isObject()) {
+        return refuse(notUnderstood);
+    }
+    const QJsonObject o = doc.object();
+    const QJsonValue parametric = o.value(QStringLiteral("parametric"));
+    const QJsonValue preamp = o.value(QStringLiteral("preampDb"));
+    const QJsonValue minValue = o.value(QStringLiteral("minHz"));
+    const QJsonValue maxValue = o.value(QStringLiteral("maxHz"));
+    const QJsonValue pointsValue = o.value(QStringLiteral("points"));
+    if (!parametric.isBool() || !preamp.isDouble() || !minValue.isDouble()
+        || !maxValue.isDouble() || !pointsValue.isArray()) {
+        return refuse(notUnderstood);
+    }
+    const QJsonArray points = pointsValue.toArray();
+    std::vector<double> f;
+    std::vector<double> g;
+    std::vector<double> q;
+    for (const QJsonValue& value : points) {
+        if (!value.isObject()) { return refuse(notUnderstood); }
+        const QJsonObject p = value.toObject();
+        const QJsonValue pf = p.value(QStringLiteral("frequencyHz"));
+        const QJsonValue pg = p.value(QStringLiteral("gainDb"));
+        const QJsonValue pq = p.value(QStringLiteral("q"));
+        if (!pf.isDouble() || !pg.isDouble() || !pq.isDouble()) {
+            return refuse(notUnderstood);
+        }
+        f.push_back(pf.toDouble());
+        g.push_back(pg.toDouble());
+        q.push_back(pq.toDouble());
+    }
+
+    const int count = static_cast<int>(f.size());
+    if (std::find(std::begin(kTxEqBandCounts), std::end(kTxEqBandCounts), count)
+        == std::end(kTxEqBandCounts)) {
+        return refuse(QStringLiteral("Choose a curve of 5, 10 or 18 points."));
+    }
+    const double minHz = minValue.toDouble();
+    const double maxHz = maxValue.toDouble();
+    const auto finite = [](double v) { return !std::isnan(v) && !std::isinf(v); };
+    const double minRounded = roundDigits(minHz, 3);
+    const double maxRounded = roundDigits(maxHz, 3);
+    if (!finite(minHz) || !finite(maxHz) || minHz < kTxEqRangeLowestHz
+        || maxHz > kTxEqRangeHighestHz
+        || maxRounded - minRounded < kTxEqMinRangeSpreadHz) {
+        return refuse(QStringLiteral("Choose a low and a high end from 0 to 20000 Hz, the "
+                                     "high end at least 1000 Hz above the low end."));
+    }
+    const double preampDb = preamp.toDouble();
+    if (!finite(preampDb) || preampDb < kTxEqPreampMinDb || preampDb > kTxEqPreampMaxDb) {
+        return refuse(QStringLiteral("Choose a curve preamp from -24 to 24 dB."));
+    }
+    for (int i = 0; i < count; ++i) {
+        const auto k = static_cast<std::size_t>(i);
+        if (!finite(f[k]) || f[k] < minHz || f[k] > maxHz) {
+            return refuse(QStringLiteral("Choose each point's frequency between the curve's "
+                                         "low and high ends."));
+        }
+        if (!finite(g[k]) || g[k] < kTxEqDbMin || g[k] > kTxEqDbMax) {
+            return refuse(QStringLiteral("Choose each point's gain from -24 to 24 dB."));
+        }
+        if (!finite(q[k]) || q[k] < kTxEqQMin || q[k] > kTxEqQMax) {
+            return refuse(QStringLiteral("Choose each point's Q from 0.2 to 20."));
+        }
+    }
+
+    TxEqPoints r;
+    r.parametricEq = parametric.toBool();
+    r.preampDb     = roundDigits(preampDb, 1);
+    r.minHz        = minRounded;
+    r.maxHz        = maxRounded;
+    r.bandCount    = count;
+    r.f.resize(f.size());
+    r.g.resize(g.size());
+    r.q.resize(q.size());
+    for (std::size_t k = 0; k < f.size(); ++k) {
+        r.f[k] = clamp(roundDigits(f[k], 3), r.minHz, r.maxHz);
+        r.g[k] = roundDigits(g[k], 1);
+        r.q[k] = roundDigits(q[k], 2);
+    }
+    out = txEqDisplayPoints(r);
+    return true;
+}
+
+// From Thetis ucParametricEq.cs:1353-1390 [v2.10.3.15] (SaveToJsonFromPoints),
+// with the TX panel's _db_min/_db_max/_q_min/_q_max (eqform.cs:959-970).
+// Json.NET's indented form of EqJsonState; key order is not significant to
+// either reader, and Qt writes the keys sorted (as ParametricEqWidget's
+// saveToJson does).
+QString saveToJsonFromPoints(const TxEqPoints& points)
+{
+    //   if (F == null || G == null || Q == null) return null;
+    //   if (F.Length < 2) return null;
+    //   if (G.Length != F.Length) return null;
+    //   if (Q.Length != F.Length) return null;
+    if (points.f.size() < 2 || points.g.size() != points.f.size()
+        || points.q.size() != points.f.size()) {
+        return {};
+    }
+    const double minHz = points.minHz;
+    const double maxHz = points.maxHz;
+    if (std::isnan(minHz) || std::isinf(minHz)) { return {}; }
+    if (std::isnan(maxHz) || std::isinf(maxHz)) { return {}; }
+    if (maxHz <= minHz) { return {}; }
+
+    QJsonObject state;
+    state.insert(QStringLiteral("parametric_eq"), points.parametricEq);
+    state.insert(QStringLiteral("global_gain_db"),
+                 roundDigits(clamp(points.preampDb, kTxEqDbMin, kTxEqDbMax), 1));
+    state.insert(QStringLiteral("frequency_min_hz"), roundDigits(minHz, 3));
+    state.insert(QStringLiteral("frequency_max_hz"), roundDigits(maxHz, 3));
+    state.insert(QStringLiteral("band_count"), static_cast<int>(points.f.size()));
+
+    QJsonArray pts;
+    for (std::size_t i = 0; i < points.f.size(); ++i) {
+        double frequencyHz = roundDigits(clamp(points.f[i], minHz, maxHz), 3);
+        //   pts[0].FrequencyHz = Math.Round(frequency_min_hz, 3);
+        //   pts[pts.Count - 1].FrequencyHz = Math.Round(frequency_max_hz, 3);
+        if (i == 0) { frequencyHz = roundDigits(minHz, 3); }
+        if (i == points.f.size() - 1) { frequencyHz = roundDigits(maxHz, 3); }
+        pts.append(QJsonObject{
+            {QStringLiteral("frequency_hz"), frequencyHz},
+            {QStringLiteral("gain_db"), roundDigits(clamp(points.g[i], kTxEqDbMin, kTxEqDbMax), 1)},
+            {QStringLiteral("q"), roundDigits(clamp(points.q[i], kTxEqQMin, kTxEqQMax), 2)}});
+    }
+    state.insert(QStringLiteral("points"), pts);
+    return QString::fromUtf8(QJsonDocument(state).toJson(QJsonDocument::Indented));
+}
+
+// From Thetis eqform.cs:3268-3275 [v2.10.3.15] (ParaEQTXData's getter):
+//   string json = ucParametricEq1.SaveToJsonFromPoints(...);
+//   string comp = Common.Compress_gzip(json);
+QString txEqParaEqDataFromPoints(const TxEqPoints& points)
+{
+    const QString json = saveToJsonFromPoints(points);
+    if (json.isEmpty()) { return {}; }
+    return ParaEqEnvelope::encode(json);
+}
+
+// From Thetis eqform.cs:3083-3088 [v2.10.3.15] (btnParaEQReset_Click):
+//   ucParametricEq1.SelectedIndex = -1;
+//   ucParametricEq1.GlobalGainDb = 0;
+//   ucParametricEq1.ResetPoints();
+// and ucParametricEq.cs:1041-1046, 3163-3197 [v2.10.3.15] (ResetPoints,
+// resetPointsDefault): _band_count points, evenly spread over the current
+// range, 0 dB, Q 4, then enforceOrdering(true).
+TxEqPoints resetTxEqPoints(const TxEqPoints& current)
+{
+    TxEqPoints r;
+    r.parametricEq = current.parametricEq;
+    r.preampDb     = 0.0;
+    r.minHz        = current.minHz;
+    r.maxHz        = current.maxHz;
+
+    int count = static_cast<int>(current.f.size());
+    if (count < 2) { count = 2; }
+    r.bandCount = count;
+
+    double span = r.maxHz - r.minHz;
+    if (span <= 0.0) { span = 1.0; }
+
+    r.f.resize(static_cast<std::size_t>(count));
+    r.g.resize(static_cast<std::size_t>(count));
+    r.q.resize(static_cast<std::size_t>(count));
+    for (int i = 0; i < count; ++i) {
+        const double t = static_cast<double>(i) / static_cast<double>(count - 1);
+        const auto k = static_cast<std::size_t>(i);
+        r.f[k] = r.minHz + t * span;
+        r.g[k] = 0.0;
+        r.q[k] = kTxEqDefaultQ;
+    }
+    return txEqDisplayPoints(r);
 }
 
 // From Thetis eqform.cs:3041-3072 [v2.10.3.15] (sendTXDspUpdate):

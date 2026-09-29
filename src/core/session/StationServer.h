@@ -422,6 +422,11 @@
 //               fitTxEqCurveToPeer(): transmit's txEqCurve and
 //               txEqCurveVersion only to a peer that declared txEqCurve.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28: R-IOS-13 / R-R3-49: txEqCurveVersionFor() (2 to a peer
+//               that declared txEqCurve 2) and handleTxEqCurveCommand():
+//               txEq.setCurve and txEq.resetCurve applied as the peer's
+//               txEqParaEqData write. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/IceConfiguration.h"
@@ -1508,6 +1513,10 @@ private:
     // R-IOS-13 / R-R3-49: the Mod Monitor's two streams and txModMonitor.reset.
     void setUpModMonitorStreams();
     void handleModMonitorReset(SessionTransport* transport, const SessionMessage& message);
+    // R-IOS-13 / R-R3-49 (txEqCurveVersion 2): txEq.setCurve and
+    // txEq.resetCurve, applied as this peer's txEqParaEqData write
+    // (applyPropertyWrite), so every rule that write meets applies.
+    void handleTxEqCurveCommand(SessionTransport* transport, const SessionMessage& message);
     void handleRecordsCommand(SessionTransport* transport, const SessionMessage& message);
     void scheduleRecordFlush();
     void flushRecordStreams();
@@ -1620,6 +1629,10 @@ private:
     /// R-IOS-13 / R-R3-49: txEqCurveVersion 1 reaches `transport` (minor
     /// 11, a radio model, and txEqCurve 1 declared in its hello).
     bool peerGetsTxEqCurve(SessionTransport* transport) const;
+    /// The txEqCurveVersion `transport` is offered: 0 when it does not get
+    /// the curve, else its declared txEqCurve up to 2 (2 adds
+    /// txEq.setCurve and txEq.resetCurve).
+    int txEqCurveVersionFor(SessionTransport* transport) const;
     /// Takes transmit's txEqCurve out of a schema, object.create or delta
     /// for a peer that does not get it, so an older app sees today's wire.
     /// False when a delta has nothing left worth sending.

@@ -233,6 +233,10 @@
 //               (txModMonitorVersion 1), answered by the station server
 //               beside the record streams. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-28: R-IOS-13 / R-R3-49: txEq.setCurve and txEq.resetCurve
+//               (txEqCurveVersion 2), applied by the station server as its
+//               txEqParaEqData write (TxEqCurveAccess). J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -455,6 +459,10 @@ QString notRepresentableReason()
 //   spots.sendCommand, spots.clearAll
 //                          recordStreamVersion 1 (the window subscribes after
 //                          its snapshot; requestSpotSource)
+//   txEq.setCurve, txEq.resetCurve
+//                          txEqCurveVersion 2, to a peer whose hello declared
+//                          txEqCurve 2 (StationServer applies them as its
+//                          txEqParaEqData write)
 //   txModMonitor.reset     txModMonitorVersion 1 (the Mod Monitor's RESET in
 //                          a remote window; StationServer answers it)
 //   station.selectRadio, station.rescanRadios, station.setRadioModel,
@@ -585,6 +593,11 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
          kRadioIdentitySessionProtocolMinor},
         {"rade.resetVocoder", {}, "transmitSettingsVersion", 3,
          kRadioIdentitySessionProtocolMinor},
+        // The TX EQ panel's curve from an app (R-IOS-13, R-R3-49,
+        // txEqCurveVersion 2).
+        {"txEq.setCurve", {arg("curveJson", kUtf8)}, "txEqCurveVersion", 2,
+         kRadioIdentitySessionProtocolMinor},
+        {"txEq.resetCurve", {}, "txEqCurveVersion", 2, kRadioIdentitySessionProtocolMinor},
         // The Core's RF-Kit RF2K-S and the station TCI server (R-R3-47,
         // R-R3-48).
         {"configureRfKit", {arg("host", kUtf8), arg("port", kInt)},
@@ -1193,6 +1206,8 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         handleTxProfile(invoke);
     } else if (invoke.commandVerb == "rade.resetVocoder") {
         handleRadeResetVocoder(invoke);
+    } else if (invoke.commandVerb == "txEq.setCurve" || invoke.commandVerb == "txEq.resetCurve") {
+        handleTxEqCurve(invoke);
     } else if (invoke.commandVerb == "requestIoBoardProbe") {
         handleRequestIoBoardProbe(invoke);
     } else if (invoke.commandVerb == "setAlexRxAntenna") {
@@ -3344,6 +3359,22 @@ void SessionCommandDispatcher::handleTxProfile(const SessionMessage& invoke)
         return;
     }
     emitResult(verb, invoke.commandId, true, QString(), {});
+}
+
+// R-IOS-13 / R-R3-49 (txEqCurveVersion 2): the TX EQ panel's curve and its
+// Reset from an app. The write is the asking connection's, under every
+// rule a txEqParaEqData write from it meets, so the station server applies
+// it (TxEqCurveAccess). Without one (a dispatcher on its own) there is
+// nothing to apply it through.
+void SessionCommandDispatcher::handleTxEqCurve(const SessionMessage& invoke)
+{
+    if (m_txEqCurveAccess && m_txEqCurveAccess(invoke)) {
+        return;
+    }
+    emitResult(invoke.commandVerb, invoke.commandId, false,
+               QStringLiteral("This Core cannot change the TX EQ curve from here. "
+                              "Updating the Core may help."),
+               {});
 }
 
 // R-R3-49 (parity Task 3): the RADE applet's Reset vocoder, on the Core's

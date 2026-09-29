@@ -639,6 +639,12 @@
 //               declared txEqCurve 1; every other peer's schema, snapshot
 //               and deltas stay as they were. J.J. Boyd (KG4VCF), AI-assisted
 //               via Anthropic Claude Code.
+//   2026-09-28: R-IOS-13 / R-R3-49: txEqCurveVersion 2 to a peer that
+//               declared txEqCurve 2, with txEq.setCurve and
+//               txEq.resetCurve applied as that peer's txEqParaEqData write
+//               (the same gates, the Core's rounding and ordering, the
+//               settled curve in the result). J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -657,6 +663,7 @@
 #include "core/BoardCapabilities.h"
 #include "core/DxccColorProvider.h"
 #include "core/HardwareProfile.h"
+#include "core/ParaEqCurve.h"
 #include "core/SpotSourceHost.h"
 #include "core/LogSink.h"
 #include "core/SupportBundle.h"
@@ -2244,6 +2251,16 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
         } else {
             handleRecordsCommand(m_dispatchingTransport, invoke);
         }
+        m_resultSentInDispatch = true;
+        return true;
+    });
+    // R-IOS-13 / R-R3-49 (txEqCurveVersion 2): the TX EQ curve verbs are
+    // the asking connection's txEqParaEqData write.
+    m_dispatcher->setTxEqCurveAccess([this](const SessionMessage& invoke) {
+        if (m_dispatchingTransport == nullptr) {
+            return false;
+        }
+        handleTxEqCurveCommand(m_dispatchingTransport, invoke);
         m_resultSentInDispatch = true;
         return true;
     });
@@ -4251,6 +4268,15 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
                 it->agreedMinor < kRadioIdentitySessionProtocolMinor
                     ? QStringLiteral("Update this app to change the tune power on this Core.")
                     : QStringLiteral("This Core cannot change its transmit settings."), {}));
+            break;
+        }
+        // R-IOS-13 / R-R3-49: the TX EQ curve verbs came with
+        // txEqCurveVersion 2, for a peer whose hello declared txEqCurve 2.
+        if ((message.commandVerb == "txEq.setCurve" || message.commandVerb == "txEq.resetCurve")
+            && txEqCurveVersionFor(transport) < 2) {
+            send(transport, SessionMessages::commandResult(
+                message.commandVerb, message.commandId, false,
+                QStringLiteral("Update this app to change the TX EQ curve on this Core."), {}));
             break;
         }
         // R-IOS-27, R-IOS-06: a slice's band buttons came with
@@ -7248,6 +7274,96 @@ bool StationServer::peerGetsTxEqCurve(SessionTransport* transport) const
         && peerDeclares(transport, QByteArrayLiteral("txEqCurve"), 1);
 }
 
+int StationServer::txEqCurveVersionFor(SessionTransport* transport) const
+{
+    if (!peerGetsTxEqCurve(transport)) {
+        return 0;
+    }
+    const auto peer = m_peers.constFind(transport);
+    return std::min(2, peer->features.value(QByteArrayLiteral("txEqCurve")));
+}
+
+// txEq.setCurve {curveJson} and txEq.resetCurve {}: the curve an app chose,
+// or the panel's Reset, as the txEqParaEqData value the dialog would save
+// (ParaEqCurve), written as this peer's own property write. The receive-only,
+// transmit-permission, holder and on-air rules, the Core's range check and
+// the echo rule (ruling 5.7) are that write's; its side-effect delta brings
+// this peer the new txEqParaEqData and txEqCurve. The result carries the
+// curve the Core kept (`curve`, the txEqCurve form).
+void StationServer::handleTxEqCurveCommand(SessionTransport* transport,
+                                           const SessionMessage& message)
+{
+    const auto answer = [this, transport, &message](bool accepted, const QString& reason,
+                                                    const QList<MirrorUpdate>& values = {}) {
+        send(transport, SessionMessages::commandResult(message.commandVerb, message.commandId,
+                                                       accepted, reason, {}, values));
+    };
+    if (m_radioModel.isNull() || m_radioModel->role() != RadioModel::Role::Local) {
+        answer(false, QStringLiteral("The Core cannot change its transmit settings."));
+        return;
+    }
+    const bool reset = message.commandVerb == "txEq.resetCurve";
+    ParaEqCurve::TxEqPoints points;
+    if (reset) {
+        if (!message.arguments.isEmpty()) {
+            answer(false, QStringLiteral("The request to reset the TX EQ curve was not understood."));
+            return;
+        }
+        points = ParaEqCurve::resetTxEqPoints(ParaEqCurve::txEqPointsFromParaEqData(
+            m_radioModel->transmitModel().txEqParaEqData()));
+    } else {
+        const bool readable = message.arguments.size() == 1
+            && message.arguments.first().name == "curveJson"
+            && message.arguments.first().kind == MirrorWireKind::Utf8;
+        if (!readable) {
+            answer(false, QStringLiteral("The TX EQ curve was not understood."));
+            return;
+        }
+        QString refusal;
+        if (!ParaEqCurve::txEqPointsFromCurveJson(message.arguments.first().value.toString(),
+                                                  points, &refusal)) {
+            answer(false, refusal);
+            return;
+        }
+    }
+    const QString data = ParaEqCurve::txEqParaEqDataFromPoints(points);
+    if (data.isEmpty()) {
+        answer(false, QStringLiteral("The Core could not save this TX EQ curve."));
+        return;
+    }
+
+    MirrorUpdate update;
+    update.name = QByteArrayLiteral("txEqParaEqData");
+    update.kind = MirrorWireKind::Utf8;
+    update.value = data;
+    for (const MirrorUpdate& known : m_mirror->snapshot(QByteArray(kTransmitKey))) {
+        if (known.name == update.name) {
+            update.ordinal = known.ordinal;
+            break;
+        }
+    }
+    // No writeId: the property result is this command's, and the written
+    // value comes back in the side-effect delta with the curve.
+    const SessionMessage write =
+        SessionMessages::propertyWrite(QByteArray(kTransmitKey), {update});
+    const QList<SessionPropertyResult> results =
+        applyPropertyWrite(transport, write, /*answer=*/false, {});
+    QString reason = QStringLiteral("The Core did not change the TX EQ curve.");
+    bool accepted = false;
+    for (const SessionPropertyResult& result : results) {
+        if (result.property == update.name) {
+            accepted = result.accepted;
+            reason = result.reason;
+        }
+    }
+    if (!accepted) {
+        answer(false, reason);
+        return;
+    }
+    answer(true, QString(),
+           {{0, "curve", MirrorWireKind::Utf8, m_radioModel->transmitModel().txEqCurve()}});
+}
+
 bool StationServer::fitTxEqCurveToPeer(SessionTransport* transport,
                                        SessionMessage& message) const
 {
@@ -9793,8 +9909,9 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
                 && !currentMac.isEmpty()
                 && AppSettings::normalizedRadioMac(currentMac) == currentMac ? 1 : 0;
             // R-IOS-13 / R-R3-49: transmit's read-only txEqCurve, to a peer
-            // that declared txEqCurve 1.
-            caps.txEqCurveVersion = peerGetsTxEqCurve(transport) ? 1 : 0;
+            // that declared txEqCurve 1; 2, with txEq.setCurve and
+            // txEq.resetCurve, to one that declared 2.
+            caps.txEqCurveVersion = txEqCurveVersionFor(transport);
             // R-R3-47 / R-R3-22: the Tuner Genius's own settings.
             caps.remoteTgxlControlVersion = tgxlControlVersion();
             // iPhone app Task 12 (R-IOS-08): device sign-in by key, last.

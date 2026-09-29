@@ -41,6 +41,13 @@
 //   2026-09-28 - R-IOS-13 / R-R3-49 (follow-up): readCurveJson, the
 //                 parser the Core and ParametricEqWidget share. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - R-IOS-13 / R-R3-49 (txEqCurveVersion 2): an app's curve
+//                 checked against the TX panel's choices
+//                 (txEqPointsFromCurveJson), SaveToJsonFromPoints as the
+//                 ParaEQTXData getter saves it, and the panel's Reset
+//                 (ResetPoints), for txEq.setCurve and txEq.resetCurve.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code.
 // =================================================================
 
 // --- From ucParametricEq.cs ---
@@ -286,6 +293,54 @@ TxEqPoints txEqDisplayPoints(const TxEqPoints& points);
 /// {"state":"unavailable"} for a non-empty value the Core cannot read.
 /// "default" is an empty value: the flat curve Thetis puts in its place.
 QString txEqCurveJson(const QString& paraEqData);
+
+// ── Editing the curve from an app (txEq.setCurve, txEqCurveVersion 2) ──
+//
+// What the TX EQ panel lets an operator choose, from Thetis eqform.cs
+// [v2.10.3.15]: the 5-band, 10-band and 18-band buttons (radParaEQ_5/10/18,
+// cs:517-541, applied by radParaEQ_CheckedChanged cs:3127-3139); Low and
+// High from 0 to 20000 Hz (udParaEQ_low/high, cs:567-606) kept at least
+// 1000 Hz apart (nudParaEQ_low/high_ValueChanged, cs:3543-3546,
+// 3563-3566); a point's frequency from 0 to 20000 Hz (nudParaEQ_f,
+// cs:803-812), its gain from -24 to 24 dB (nudParaEQ_gain, cs:883-892),
+// its Q from 0.2 to 20 (nudParaEQ_q, cs:843-852); the preamp from -24 to
+// 24 dB (nudParaEQ_preamp, cs:696-705).
+inline constexpr int    kTxEqBandCounts[] = {5, 10, 18};
+inline constexpr double kTxEqRangeLowestHz  = 0.0;
+inline constexpr double kTxEqRangeHighestHz = 20000.0;
+inline constexpr double kTxEqMinRangeSpreadHz = 1000.0;
+inline constexpr double kTxEqPreampMinDb = -24.0;
+inline constexpr double kTxEqPreampMaxDb =  24.0;
+
+/// A curve an app sent in the txEqCurve shape ({"parametric", "preampDb",
+/// "minHz", "maxHz", "points":[{"frequencyHz", "gainDb", "q"}]}; any other
+/// key, "state" included, is ignored), checked against the panel's
+/// choices above and read as the Core keeps it: each value rounded as
+/// Thetis's PointsFromJson rounds (frequency 0.001 Hz, gain and preamp
+/// 0.1 dB, Q 0.01) and the points ordered as the panel orders them
+/// (txEqDisplayPoints). False, with the reason in plain words and `out`
+/// left alone, for a curve the panel could not hold.
+bool txEqPointsFromCurveJson(const QString& curveJson, TxEqPoints& out, QString* refusal);
+
+/// ucParametricEq.SaveToJsonFromPoints with the TX panel's limits: the JSON
+/// eqform's ParaEQTXData getter saves for these points (each clamped and
+/// rounded, the first and last at the range's ends). Empty where Thetis
+/// returns null (fewer than two points, mismatched arrays, a range that is
+/// not finite or not increasing).
+QString saveToJsonFromPoints(const TxEqPoints& points);
+
+/// What txEqParaEqData holds for these points, as the ParaEQTXData getter
+/// saves them: saveToJsonFromPoints in the gzip and base64url envelope.
+/// Empty where saveToJsonFromPoints is.
+QString txEqParaEqDataFromPoints(const TxEqPoints& points);
+
+/// The panel's Reset button (eqform.cs btnParaEQReset_Click): the preamp
+/// to 0 and the points reset as ucParametricEq.ResetPoints does, flat at
+/// 0 dB with Q 4, evenly spread over the panel's current range, keeping its
+/// band count and Use Q Factors. `current` is what the panel holds
+/// (txEqPointsFromParaEqData). Not GetDefaults: the range and band count
+/// stay the operator's.
+TxEqPoints resetTxEqPoints(const TxEqPoints& current);
 
 /// The arrays Thetis hands WDSP's SetTXAEQProfile(channel, nfreqs, F, G, Q):
 /// nfreqs = F.size() - 1; F[0] = 0 and G[0] = the preamp; Q[0] = 0, and

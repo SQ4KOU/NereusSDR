@@ -112,6 +112,13 @@ private slots:
     void curveOrdersPointsAsThePanelDraws();
     void curveOfAnUnreadableValueIsUnavailable();
     void transmitModelCurveFollowsTheBlob();
+    // txEqCurveVersion 2: an app's curve (txEq.setCurve) and the Reset.
+    void appCurveRoundTripsToTheSameCurve();
+    void appCurveIsRoundedAndOrderedAsTheCoreKeepsIt();
+    void appCurveRefusedWholeWithTheRange_data();
+    void appCurveRefusedWholeWithTheRange();
+    void savedJsonIsWhatThetisSaves();
+    void resetKeepsRangeBandCountAndUseQ();
 };
 
 // setTXEQProfile: preamp 3, gains {-12,-12,-12,-1,1,4,9,12,-10,-10},
@@ -363,6 +370,264 @@ void TestParaEqCurve::transmitModelCurveFollowsTheBlob()
     tx.setTxEqParaEqData(QString());
     QCOMPARE(spy.count(), 3);
     QCOMPARE(tx.txEqCurve(), ParaEqCurve::txEqCurveJson(QString()));
+}
+
+// The link document's worked example sent back as an app would send it
+// (the txEqCurve it was shown, "state" and all): saved, it reads as the
+// same curve.
+void TestParaEqCurve::appCurveRoundTripsToTheSameCurve()
+{
+    const QString worked = QStringLiteral(
+        "{\"maxHz\":3000,\"minHz\":50,\"parametric\":true,\"points\":["
+        "{\"frequencyHz\":50,\"gainDb\":-6,\"q\":1.5},"
+        "{\"frequencyHz\":300,\"gainDb\":3,\"q\":2},"
+        "{\"frequencyHz\":1200,\"gainDb\":-1.5,\"q\":4},"
+        "{\"frequencyHz\":2400,\"gainDb\":4,\"q\":3},"
+        "{\"frequencyHz\":3000,\"gainDb\":0,\"q\":1}],"
+        "\"preampDb\":-2.5,\"state\":\"saved\"}");
+    ParaEqCurve::TxEqPoints points;
+    QString refusal;
+    QVERIFY2(ParaEqCurve::txEqPointsFromCurveJson(worked, points, &refusal), qPrintable(refusal));
+    const QString data = ParaEqCurve::txEqParaEqDataFromPoints(points);
+    QVERIFY(!data.isEmpty());
+    QCOMPARE(ParaEqCurve::txEqCurveJson(data), worked);
+    // The flat default an app was shown ("default") saves as a curve, each
+    // frequency rounded to 0.001 Hz as the save rounds it.
+    const QString defaults = ParaEqCurve::txEqCurveJson(QString());
+    QVERIFY2(ParaEqCurve::txEqPointsFromCurveJson(defaults, points, &refusal), qPrintable(refusal));
+    const QJsonObject saved = QJsonDocument::fromJson(
+        ParaEqCurve::txEqCurveJson(ParaEqCurve::txEqParaEqDataFromPoints(points)).toUtf8()).object();
+    QCOMPARE(saved.value(QStringLiteral("state")).toString(), QStringLiteral("saved"));
+    const QJsonArray pts = saved.value(QStringLiteral("points")).toArray();
+    QCOMPARE(pts.size(), 10);
+    QCOMPARE(pts[1].toObject().value(QStringLiteral("frequencyHz")).toDouble(), 444.444);
+    QCOMPARE(pts[9].toObject().value(QStringLiteral("frequencyHz")).toDouble(), 4000.0);
+}
+
+// Out of order, unrounded, the ends off the range's ends: rounded as
+// PointsFromJson rounds (F 3 places, G and preamp 1, Q 2), sorted, the
+// first and last moved to the ends, the rest 5 Hz apart.
+void TestParaEqCurve::appCurveIsRoundedAndOrderedAsTheCoreKeepsIt()
+{
+    const QString sent = QStringLiteral(
+        "{\"parametric\":false,\"preampDb\":3.14159,\"minHz\":100.00049,\"maxHz\":2100,"
+        "\"points\":["
+        "{\"frequencyHz\":900,\"gainDb\":1.26,\"q\":2.346},"
+        "{\"frequencyHz\":150,\"gainDb\":-3,\"q\":4},"
+        "{\"frequencyHz\":2000,\"gainDb\":6,\"q\":1},"
+        "{\"frequencyHz\":898,\"gainDb\":2,\"q\":3},"
+        "{\"frequencyHz\":1500.12345,\"gainDb\":-0.04,\"q\":19.999}]}");
+    ParaEqCurve::TxEqPoints points;
+    QString refusal;
+    QVERIFY2(ParaEqCurve::txEqPointsFromCurveJson(sent, points, &refusal), qPrintable(refusal));
+    const QString want = QStringLiteral(
+        "{\"maxHz\":2100,\"minHz\":100,\"parametric\":false,\"points\":["
+        "{\"frequencyHz\":100,\"gainDb\":-3,\"q\":4},"
+        "{\"frequencyHz\":898,\"gainDb\":2,\"q\":3},"
+        "{\"frequencyHz\":903,\"gainDb\":1.3,\"q\":2.35},"
+        "{\"frequencyHz\":1500.123,\"gainDb\":-0,\"q\":20},"
+        "{\"frequencyHz\":2100,\"gainDb\":6,\"q\":1}],"
+        "\"preampDb\":3.1,\"state\":\"saved\"}");
+    const QString curve =
+        ParaEqCurve::txEqCurveJson(ParaEqCurve::txEqParaEqDataFromPoints(points));
+    // -0.04 rounds to -0 (as .NET's Math.Round does); JSON prints it 0 or
+    // -0, so compare the parsed documents.
+    QCOMPARE(QJsonDocument::fromJson(curve.toUtf8()), QJsonDocument::fromJson(want.toUtf8()));
+    // What the Core keeps is what it ordered: saving it again changes
+    // nothing.
+    ParaEqCurve::TxEqPoints again;
+    QVERIFY(ParaEqCurve::txEqPointsFromCurveJson(curve, again, &refusal));
+    QCOMPARE(ParaEqCurve::txEqCurveJson(ParaEqCurve::txEqParaEqDataFromPoints(again)), curve);
+}
+
+void TestParaEqCurve::appCurveRefusedWholeWithTheRange_data()
+{
+    QTest::addColumn<QString>("sent");
+    QTest::addColumn<QString>("reason");
+    const QString notUnderstood = QStringLiteral("The TX EQ curve was not understood.");
+    const QString count = QStringLiteral("Choose a curve of 5, 10 or 18 points.");
+    const QString range = QStringLiteral("Choose a low and a high end from 0 to 20000 Hz, the "
+                                         "high end at least 1000 Hz above the low end.");
+    const QString preamp = QStringLiteral("Choose a curve preamp from -24 to 24 dB.");
+    const QString freq = QStringLiteral("Choose each point's frequency between the curve's "
+                                        "low and high ends.");
+    const QString gain = QStringLiteral("Choose each point's gain from -24 to 24 dB.");
+    const QString q = QStringLiteral("Choose each point's Q from 0.2 to 20.");
+    const auto curve = [](const QString& head, int n, const QString& point) {
+        QStringList pts;
+        for (int i = 0; i < n; ++i) {
+            pts.append(point.arg(100 + i * 100));
+        }
+        return QStringLiteral("{%1,\"points\":[%2]}").arg(head, pts.join(QLatin1Char(',')));
+    };
+    const QString head = QStringLiteral(
+        "\"parametric\":true,\"preampDb\":0,\"minHz\":0,\"maxHz\":4000");
+    const QString good = QStringLiteral("{\"frequencyHz\":%1,\"gainDb\":0,\"q\":4}");
+    QTest::newRow("not JSON") << QStringLiteral("{\"parametric\":") << notUnderstood;
+    QTest::newRow("an array") << QStringLiteral("[]") << notUnderstood;
+    QTest::newRow("no parametric") << curve(QStringLiteral("\"preampDb\":0,\"minHz\":0,"
+                                                           "\"maxHz\":4000"), 5, good)
+                                   << notUnderstood;
+    QTest::newRow("parametric as a number")
+        << curve(QStringLiteral("\"parametric\":1,\"preampDb\":0,\"minHz\":0,\"maxHz\":4000"),
+                 5, good) << notUnderstood;
+    QTest::newRow("range as text")
+        << curve(QStringLiteral("\"parametric\":true,\"preampDb\":0,\"minHz\":\"0\","
+                                "\"maxHz\":4000"), 5, good) << notUnderstood;
+    QTest::newRow("a point without q")
+        << curve(head, 5, QStringLiteral("{\"frequencyHz\":%1,\"gainDb\":0}")) << notUnderstood;
+    QTest::newRow("a point that is not an object")
+        << QStringLiteral("{%1,\"points\":[1,2,3,4,5]}").arg(head) << notUnderstood;
+    QTest::newRow("2 points") << curve(head, 2, good) << count;
+    QTest::newRow("4 points") << curve(head, 4, good) << count;
+    QTest::newRow("11 points") << curve(head, 11, good) << count;
+    QTest::newRow("256 points") << curve(QStringLiteral(
+        "\"parametric\":true,\"preampDb\":0,\"minHz\":0,\"maxHz\":20000"), 256, good)
+                                << count;
+    QTest::newRow("low end below 0")
+        << curve(QStringLiteral("\"parametric\":true,\"preampDb\":0,\"minHz\":-1,\"maxHz\":4000"),
+                 5, good) << range;
+    QTest::newRow("high end above 20000")
+        << curve(QStringLiteral("\"parametric\":true,\"preampDb\":0,\"minHz\":0,"
+                                "\"maxHz\":20000.5"), 5, good) << range;
+    QTest::newRow("ends 999 Hz apart")
+        << curve(QStringLiteral("\"parametric\":true,\"preampDb\":0,\"minHz\":0,\"maxHz\":999"),
+                 5, good) << range;
+    QTest::newRow("high end below low end")
+        << curve(QStringLiteral("\"parametric\":true,\"preampDb\":0,\"minHz\":4000,\"maxHz\":0"),
+                 5, good) << range;
+    QTest::newRow("preamp 24.1")
+        << curve(QStringLiteral("\"parametric\":true,\"preampDb\":24.1,\"minHz\":0,"
+                                "\"maxHz\":4000"), 5, good) << preamp;
+    QTest::newRow("preamp -30")
+        << curve(QStringLiteral("\"parametric\":true,\"preampDb\":-30,\"minHz\":0,"
+                                "\"maxHz\":4000"), 5, good) << preamp;
+    QTest::newRow("a point above the high end")
+        << curve(QStringLiteral("\"parametric\":true,\"preampDb\":0,\"minHz\":0,"
+                                "\"maxHz\":1000"), 18, good) << freq;
+    QTest::newRow("a point below the low end")
+        << curve(QStringLiteral("\"parametric\":true,\"preampDb\":0,\"minHz\":150,"
+                                "\"maxHz\":4000"), 5, good) << freq;
+    QTest::newRow("gain 24.5")
+        << curve(head, 5, QStringLiteral("{\"frequencyHz\":%1,\"gainDb\":24.5,\"q\":4}")) << gain;
+    QTest::newRow("gain -25")
+        << curve(head, 10, QStringLiteral("{\"frequencyHz\":%1,\"gainDb\":-25,\"q\":4}")) << gain;
+    QTest::newRow("q 0.1")
+        << curve(head, 18, QStringLiteral("{\"frequencyHz\":%1,\"gainDb\":0,\"q\":0.1}")) << q;
+    QTest::newRow("q 21")
+        << curve(head, 5, QStringLiteral("{\"frequencyHz\":%1,\"gainDb\":0,\"q\":21}")) << q;
+}
+
+void TestParaEqCurve::appCurveRefusedWholeWithTheRange()
+{
+    QFETCH(QString, sent);
+    QFETCH(QString, reason);
+    ParaEqCurve::TxEqPoints points;
+    points.preampDb = 7.0;  // left alone on a refusal
+    QString refusal;
+    QVERIFY(!ParaEqCurve::txEqPointsFromCurveJson(sent, points, &refusal));
+    QCOMPARE(refusal, reason);
+    QCOMPARE(points.preampDb, 7.0);
+    QVERIFY(points.f.size() == ParaEqCurve::TxEqPoints{}.f.size());
+}
+
+// SaveToJsonFromPoints (ucParametricEq.cs:1353-1390): band_count is the
+// point count, values clamped and rounded, the first and last at the
+// range's ends; fewer than two points or a range that does not rise saves
+// nothing (Thetis returns null).
+void TestParaEqCurve::savedJsonIsWhatThetisSaves()
+{
+    ParaEqCurve::TxEqPoints p;
+    p.parametricEq = true;
+    p.preampDb = 30.0;
+    p.minHz = 10.00049;
+    p.maxHz = 2000.0;
+    p.f = {40.0, 700.12345, 5000.0};
+    p.g = {-30.0, 1.25, 2.0};
+    p.q = {0.1, 3.456, 50.0};
+    const QJsonObject o = QJsonDocument::fromJson(
+        ParaEqCurve::saveToJsonFromPoints(p).toUtf8()).object();
+    QCOMPARE(o.value(QStringLiteral("band_count")).toInt(), 3);
+    QCOMPARE(o.value(QStringLiteral("parametric_eq")).toBool(), true);
+    QCOMPARE(o.value(QStringLiteral("global_gain_db")).toDouble(), 24.0);
+    QCOMPARE(o.value(QStringLiteral("frequency_min_hz")).toDouble(), 10.0);
+    QCOMPARE(o.value(QStringLiteral("frequency_max_hz")).toDouble(), 2000.0);
+    const QJsonArray pts = o.value(QStringLiteral("points")).toArray();
+    QCOMPARE(pts.size(), 3);
+    QCOMPARE(pts[0].toObject().value(QStringLiteral("frequency_hz")).toDouble(), 10.0);
+    QCOMPARE(pts[0].toObject().value(QStringLiteral("gain_db")).toDouble(), -24.0);
+    QCOMPARE(pts[0].toObject().value(QStringLiteral("q")).toDouble(), 0.2);
+    QCOMPARE(pts[1].toObject().value(QStringLiteral("frequency_hz")).toDouble(), 700.123);
+    QCOMPARE(pts[1].toObject().value(QStringLiteral("gain_db")).toDouble(), 1.2);  // half to even
+    QCOMPARE(pts[1].toObject().value(QStringLiteral("q")).toDouble(), 3.46);
+    QCOMPARE(pts[2].toObject().value(QStringLiteral("frequency_hz")).toDouble(), 2000.0);
+    QCOMPARE(pts[2].toObject().value(QStringLiteral("q")).toDouble(), 20.0);
+
+    ParaEqCurve::TxEqPoints one = p;
+    one.f = {40.0};
+    one.g = {0.0};
+    one.q = {4.0};
+    QVERIFY(ParaEqCurve::saveToJsonFromPoints(one).isEmpty());
+    ParaEqCurve::TxEqPoints falling = p;
+    falling.maxHz = falling.minHz;
+    QVERIFY(ParaEqCurve::saveToJsonFromPoints(falling).isEmpty());
+    ParaEqCurve::TxEqPoints mismatched = p;
+    mismatched.q = {4.0};
+    QVERIFY(ParaEqCurve::saveToJsonFromPoints(mismatched).isEmpty());
+    QVERIFY(ParaEqCurve::txEqParaEqDataFromPoints(mismatched).isEmpty());
+}
+
+// The panel's Reset (eqform.cs:3083-3088, ResetPoints): preamp 0, the band
+// count, range and Use Q Factors kept, points evenly spread at 0 dB, Q 4.
+// Not GetDefaults' ten points from 0 to 4000 Hz.
+void TestParaEqCurve::resetKeepsRangeBandCountAndUseQ()
+{
+    const QString worked = ParaEqEnvelope::encode(curveJson(5, true, -2.5, 50.0, 3000.0, {
+        {50, -6, 1.5}, {300, 3, 2}, {1200, -1.5, 4}, {2400, 4, 3}, {3000, 0, 1}}));
+    const ParaEqCurve::TxEqPoints reset =
+        ParaEqCurve::resetTxEqPoints(ParaEqCurve::txEqPointsFromParaEqData(worked));
+    QCOMPARE(ParaEqCurve::txEqCurveJson(ParaEqCurve::txEqParaEqDataFromPoints(reset)),
+             QStringLiteral("{\"maxHz\":3000,\"minHz\":50,\"parametric\":true,\"points\":["
+                            "{\"frequencyHz\":50,\"gainDb\":0,\"q\":4},"
+                            "{\"frequencyHz\":787.5,\"gainDb\":0,\"q\":4},"
+                            "{\"frequencyHz\":1525,\"gainDb\":0,\"q\":4},"
+                            "{\"frequencyHz\":2262.5,\"gainDb\":0,\"q\":4},"
+                            "{\"frequencyHz\":3000,\"gainDb\":0,\"q\":4}],"
+                            "\"preampDb\":0,\"state\":\"saved\"}"));
+
+    // Eighteen points with Use Q Factors off stay eighteen, off.
+    QList<Pt> eighteen;
+    for (int i = 0; i < 18; ++i) {
+        eighteen.append({200.0 + i * 100.0, (i % 5) - 2.0, 2.0});
+    }
+    const QString qOff =
+        ParaEqEnvelope::encode(curveJson(18, false, 5.0, 200.0, 1900.0, eighteen));
+    const ParaEqCurve::TxEqPoints resetQOff =
+        ParaEqCurve::resetTxEqPoints(ParaEqCurve::txEqPointsFromParaEqData(qOff));
+    QCOMPARE(resetQOff.f.size(), std::size_t(18));
+    QCOMPARE(resetQOff.bandCount, 18);
+    QCOMPARE(resetQOff.parametricEq, false);
+    QCOMPARE(resetQOff.preampDb, 0.0);
+    QCOMPARE(resetQOff.f.front(), 200.0);
+    QCOMPARE(resetQOff.f.back(), 1900.0);
+    QCOMPARE(resetQOff.f[1], 300.0);
+    for (std::size_t i = 0; i < 18; ++i) {
+        QCOMPARE(resetQOff.g[i], 0.0);
+        QCOMPARE(resetQOff.q[i], 4.0);
+    }
+
+    // What the panel holds for an empty value is GetDefaults, so its Reset
+    // is that flat curve, saved (each frequency to 0.001 Hz).
+    const QString resetDefault = ParaEqCurve::txEqCurveJson(ParaEqCurve::txEqParaEqDataFromPoints(
+        ParaEqCurve::resetTxEqPoints(ParaEqCurve::txEqPointsFromParaEqData(QString()))));
+    ParaEqCurve::TxEqPoints shownDefault;
+    QString refusal;
+    QVERIFY(ParaEqCurve::txEqPointsFromCurveJson(ParaEqCurve::txEqCurveJson(QString()),
+                                                 shownDefault, &refusal));
+    QCOMPARE(resetDefault, ParaEqCurve::txEqCurveJson(
+                               ParaEqCurve::txEqParaEqDataFromPoints(shownDefault)));
+    QVERIFY2(resetDefault.contains(QStringLiteral("\"frequencyHz\":444.444,")),
+             qPrintable(resetDefault));
 }
 
 QTEST_MAIN(TestParaEqCurve)

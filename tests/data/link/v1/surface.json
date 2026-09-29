@@ -428,7 +428,7 @@
         {
             "kind": "i64",
             "name": "txEqCurveVersion",
-            "value": 1
+            "value": 2
         },
         {
             "kind": "utf8",
@@ -967,6 +967,27 @@
             "capabilityVersion": 3,
             "minMinor": 11,
             "verb": "rade.resetVocoder"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "curveJson",
+                    "optional": false
+                }
+            ],
+            "capability": "txEqCurveVersion",
+            "capabilityVersion": 2,
+            "minMinor": 11,
+            "verb": "txEq.setCurve"
+        },
+        {
+            "arguments": [
+            ],
+            "capability": "txEqCurveVersion",
+            "capabilityVersion": 2,
+            "minMinor": 11,
+            "verb": "txEq.resetCurve"
         },
         {
             "arguments": [
