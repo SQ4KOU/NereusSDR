@@ -54,6 +54,10 @@
 //                 register (6) as each poll reads it, lit pins red while
 //                 on the air, in a local window and a remote one alike.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - The Hermes Lite Options boxes carry the ids of the rows
+//                 the Setup description gives them (version 16), so a
+//                 test holds the two alike. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 //=================================================================
@@ -258,6 +262,7 @@ void Hl2OptionsTab::buildHermesLiteOptions(QWidget* parent)
                             Hl2OptionsModel::kTxLatencyMaxMs);
     m_udTxLatency->setSuffix(tr(" ms"));
     m_udTxLatency->setObjectName(QStringLiteral("hl2TxBufferLatency"));
+    m_udTxLatency->setProperty("nereusSetupId", "hardware.hl2Io.txLatency");
     grid->addWidget(m_udTxLatency, row, 1);
     ++row;
 
@@ -269,6 +274,7 @@ void Hl2OptionsTab::buildHermesLiteOptions(QWidget* parent)
                           Hl2OptionsModel::kPttHangMaxMs);
     m_udPttHang->setSuffix(tr(" ms"));
     m_udPttHang->setObjectName(QStringLiteral("hl2PttHang"));
+    m_udPttHang->setProperty("nereusSetupId", "hardware.hl2Io.pttHang");
     grid->addWidget(m_udPttHang, row, 1);
     ++row;
 
@@ -283,6 +289,7 @@ void Hl2OptionsTab::buildHermesLiteOptions(QWidget* parent)
         tr("NereusSDR does not change the radio's clock settings.");
     m_chkCl2Enable = new QCheckBox(tr("Enable CL2"), parent);
     m_chkCl2Enable->setObjectName(QStringLiteral("hl2Cl2Enable"));
+    m_chkCl2Enable->setProperty("nereusSetupId", "hardware.hl2Io.cl2Enable");
     m_chkCl2Enable->setEnabled(false);
     m_chkCl2Enable->setToolTip(clockReason);
     grid->addWidget(m_chkCl2Enable, row, 0);
@@ -291,6 +298,9 @@ void Hl2OptionsTab::buildHermesLiteOptions(QWidget* parent)
                           Hl2OptionsModel::kCl2FreqMaxMHz);
     m_udCl2Freq->setSuffix(tr(" MHz"));
     m_udCl2Freq->setObjectName(QStringLiteral("hl2Cl2Freq"));
+    m_udCl2Freq->setProperty("nereusSetupId", "hardware.hl2Io.cl2Freq");
+    // The row label the Setup description gives the box beside Enable CL2.
+    m_udCl2Freq->setAccessibleName(tr("CL2 frequency"));
     m_udCl2Freq->setEnabled(false);
     m_udCl2Freq->setToolTip(clockReason);
     grid->addWidget(m_udCl2Freq, row, 1);
@@ -299,6 +309,7 @@ void Hl2OptionsTab::buildHermesLiteOptions(QWidget* parent)
     // From mi0bot setup.designer.cs:11178+ chkExt10MHz [v2.10.3.13-beta2]
     m_chkExt10MHz = new QCheckBox(tr("External 10 MHz reference"), parent);
     m_chkExt10MHz->setObjectName(QStringLiteral("hl2Ext10MHz"));
+    m_chkExt10MHz->setProperty("nereusSetupId", "hardware.hl2Io.ext10MHz");
     m_chkExt10MHz->setEnabled(false);
     m_chkExt10MHz->setToolTip(clockReason);
     grid->addWidget(m_chkExt10MHz, row, 0, 1, 2);
@@ -307,6 +318,7 @@ void Hl2OptionsTab::buildHermesLiteOptions(QWidget* parent)
     // From mi0bot setup.designer.cs:11258 chkDisconnectReset
     m_chkDisconnectReset = new QCheckBox(tr("Reset on Ethernet disconnect"), parent);
     m_chkDisconnectReset->setObjectName(QStringLiteral("hl2DisconnectReset"));
+    m_chkDisconnectReset->setProperty("nereusSetupId", "hardware.hl2Io.disconnectReset");
     grid->addWidget(m_chkDisconnectReset, row, 0, 1, 2);
     ++row;
 
@@ -318,6 +330,7 @@ void Hl2OptionsTab::buildHermesLiteOptions(QWidget* parent)
     // supply sync for the HL2). Spelled out so it cannot read as PureSignal.
     m_chkPsSync = new QCheckBox(tr("Disable power supply sync"), parent);
     m_chkPsSync->setObjectName(QStringLiteral("hl2DisablePsSync"));
+    m_chkPsSync->setProperty("nereusSetupId", "hardware.hl2Io.psSync");
     m_chkPsSync->setToolTip(tr("Stops the radio synchronizing its power supply clock."));
     grid->addWidget(m_chkPsSync, row, 0, 1, 2);
     ++row;
@@ -325,6 +338,7 @@ void Hl2OptionsTab::buildHermesLiteOptions(QWidget* parent)
     // From mi0bot setup.designer.cs:11305-11313 chkHL2BandVolts
     m_chkBandVolts = new QCheckBox(tr("Band Volts (PWM out 0–3.3 V)"), parent);
     m_chkBandVolts->setObjectName(QStringLiteral("hl2BandVolts"));
+    m_chkBandVolts->setProperty("nereusSetupId", "hardware.hl2Io.bandVolts");
     grid->addWidget(m_chkBandVolts, row, 0, 1, 2);
     ++row;
 
@@ -335,6 +349,7 @@ void Hl2OptionsTab::buildHermesLiteOptions(QWidget* parent)
     // so the option is stored and shown disabled with the reason.
     m_chkSwapAudio = new QCheckBox(tr("Swap audio channels"), parent);
     m_chkSwapAudio->setObjectName(QStringLiteral("hl2SwapAudioChannels"));
+    m_chkSwapAudio->setProperty("nereusSetupId", "hardware.hl2Io.swapAudioChannels");
     m_chkSwapAudio->setEnabled(false);
     m_chkSwapAudio->setToolTip(
         tr("NereusSDR does not send the radio audio of its own, so there is nothing to swap."));

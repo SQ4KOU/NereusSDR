@@ -165,9 +165,9 @@ command or result binding. The actual peer must separately declare
 nothing. A V3 peer still receives the older controls with their existing
 semantics. The Core filters every control above the peer's negotiated
 description version, drops empty sections and pages, and caps an unknown
-future declaration at version 14. PA has a version-14 ceiling (version 13
-for V13, version 5 for V5–V12) and Hardware a version-13 ceiling (version 6
-for V6–V12); Transmit a version-13 ceiling (version 3 for V3–V12, with
+future declaration at version 16. PA has a version-14 ceiling (version 13
+for V13, version 5 for V5–V12) and Hardware a version-16 ceiling (version 13
+for V13–V15, version 6 for V6–V12); Transmit a version-13 ceiling (version 3 for V3–V12, with
 the Power page's earlier coverage text); Display a version-12 ceiling, and
 Appearance a version-12 ceiling with its prior version-4 projection for
 V4–V6 and version-7 projection for V7–V11; the other categories on this
@@ -577,7 +577,7 @@ the ANAN-8000DLE title bar volts/amps box (the desktop's title bar); the
 Alex-1 Filters tab's five switches above its rows (HPF Bypass, on TX and
 on PureSignal feedback, and the two 6 m LNA boxes) and both tabs' LPF edges (the LPF edges stay hidden on the desktop too); OC Outputs; the rest of Calibration (frequency and level calibration,
 6 m LNA offsets, the correction factors, Volts/Amps calibration and its log);
-HL2 Options; and the rest of HL2 I/O (register, state machine, I2C and
+HL2 Options (described in version 16); and the rest of HL2 I/O (register, state machine, I2C and
 bandwidth monitor views, probe and reset). No new wire field, verb or
 capability value is defined.
 
@@ -628,6 +628,38 @@ Core gives the desktop's own PA profile writes: a receive-only Core takes
 it from a peer offered transmit settings, and with remote transmit
 allowed only from a device that may transmit. A peer must declare
 `paProfiles:1` to get the object, the capability and the verbs.
+
+Version 16 describes the HL2 Options tab's Hermes Lite Options on the
+Hermes Lite 2's HL2 I/O page (`hardware.hl2Io`), as a second section after
+Configuration. The integrator renumbers it if trunk's own next version lands
+first. Every row has `requiresDescriptionVersion:16`, `applies:"live"`, the
+gate `{"capability":"transmitSettingsVersion","min":8}` and a closed
+`{"radioSetting":"hl2/<key>"}` binding, written as the desktop's own tab
+writes `hardware/<mac>/hl2/<key>`, and is accepted only as the exact object
+in `resources/setup/hardware.json`. The two transmit timing rows also carry
+`"transmit":true` in their gate, since the Core treats those keys as
+transmit hardware settings. In the desktop's order:
+
+- `hardware.hl2Io.txLatency`, TX buffer latency, integer 0..70 ms, default 20.
+- `hardware.hl2Io.pttHang`, PTT hang, integer 0..30 ms, default 12.
+- `hardware.hl2Io.cl2Enable`, Enable CL2, toggle, default off.
+- `hardware.hl2Io.cl2Freq`, CL2 frequency, integer 1..200 MHz, default 116.
+- `hardware.hl2Io.ext10MHz`, External 10 MHz reference, toggle, default off.
+- `hardware.hl2Io.disconnectReset`, Reset on Ethernet disconnect, toggle.
+- `hardware.hl2Io.psSync`, Disable power supply sync, toggle.
+- `hardware.hl2Io.bandVolts`, Band Volts (PWM out 0–3.3 V), toggle.
+- `hardware.hl2Io.swapAudioChannels`, Swap audio channels, toggle.
+
+Toggles use `valueEncoding` True/False and default off. Four rows the Core
+stores but does not send to the radio carry `availability {enabled:false,
+reason}`, and the desktop tab, a remote window and the phone show them
+disabled with that reason: Enable CL2, CL2 frequency and External 10 MHz
+reference ("NereusSDR does not change the radio's clock settings.") and
+Swap audio channels ("NereusSDR does not send the radio audio of its own,
+so there is nothing to swap."). A board without the HL2 I/O board has no
+`hardware.hl2Io` page, so none of these rows. V13–V15 peers receive Hardware
+at version 13 without the section. No new wire field, verb or capability
+value is defined.
 
 V4 adds `default` metadata to these exact Display and Appearance controls.
 Display toggles use JSON booleans; its numeric controls use JSON numbers,

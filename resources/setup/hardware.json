@@ -1,5 +1,5 @@
 {
-  "version": 13,
+  "version": 16,
   "category": {
     "id": "hardware",
     "title": "Hardware Config",
@@ -2358,6 +2358,209 @@
               },
               "requiresDescriptionVersion": 13,
               "default": true
+            }
+          ]
+        },
+        {
+          "title": "Hermes Lite Options",
+          "controls": [
+            {
+              "id": "hardware.hl2Io.txLatency",
+              "label": "TX buffer latency:",
+              "tooltip": "",
+              "kind": "integer",
+              "binding": {
+                "radioSetting": "hl2/txLatencyMs"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 8,
+                "transmit": true
+              },
+              "requiresDescriptionVersion": 16,
+              "min": 0,
+              "max": 70,
+              "step": 1,
+              "unit": "ms",
+              "default": 20
+            },
+            {
+              "id": "hardware.hl2Io.pttHang",
+              "label": "PTT hang:",
+              "tooltip": "",
+              "kind": "integer",
+              "binding": {
+                "radioSetting": "hl2/pttHangMs"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 8,
+                "transmit": true
+              },
+              "requiresDescriptionVersion": 16,
+              "min": 0,
+              "max": 30,
+              "step": 1,
+              "unit": "ms",
+              "default": 12
+            },
+            {
+              "id": "hardware.hl2Io.cl2Enable",
+              "label": "Enable CL2",
+              "tooltip": "",
+              "kind": "toggle",
+              "binding": {
+                "radioSetting": "hl2/cl2Enable"
+              },
+              "valueEncoding": {
+                "true": "True",
+                "false": "False"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 16,
+              "default": false,
+              "availability": {
+                "enabled": false,
+                "reason": "NereusSDR does not change the radio's clock settings."
+              }
+            },
+            {
+              "id": "hardware.hl2Io.cl2Freq",
+              "label": "CL2 frequency",
+              "tooltip": "",
+              "kind": "integer",
+              "binding": {
+                "radioSetting": "hl2/cl2FreqMHz"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 16,
+              "min": 1,
+              "max": 200,
+              "step": 1,
+              "unit": "MHz",
+              "default": 116,
+              "availability": {
+                "enabled": false,
+                "reason": "NereusSDR does not change the radio's clock settings."
+              }
+            },
+            {
+              "id": "hardware.hl2Io.ext10MHz",
+              "label": "External 10 MHz reference",
+              "tooltip": "",
+              "kind": "toggle",
+              "binding": {
+                "radioSetting": "hl2/ext10MHz"
+              },
+              "valueEncoding": {
+                "true": "True",
+                "false": "False"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 16,
+              "default": false,
+              "availability": {
+                "enabled": false,
+                "reason": "NereusSDR does not change the radio's clock settings."
+              }
+            },
+            {
+              "id": "hardware.hl2Io.disconnectReset",
+              "label": "Reset on Ethernet disconnect",
+              "tooltip": "",
+              "kind": "toggle",
+              "binding": {
+                "radioSetting": "hl2/disconnectReset"
+              },
+              "valueEncoding": {
+                "true": "True",
+                "false": "False"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 16,
+              "default": false
+            },
+            {
+              "id": "hardware.hl2Io.psSync",
+              "label": "Disable power supply sync",
+              "tooltip": "Stops the radio synchronizing its power supply clock.",
+              "kind": "toggle",
+              "binding": {
+                "radioSetting": "hl2/psSync"
+              },
+              "valueEncoding": {
+                "true": "True",
+                "false": "False"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 16,
+              "default": false
+            },
+            {
+              "id": "hardware.hl2Io.bandVolts",
+              "label": "Band Volts (PWM out 0–3.3 V)",
+              "tooltip": "",
+              "kind": "toggle",
+              "binding": {
+                "radioSetting": "hl2/bandVolts"
+              },
+              "valueEncoding": {
+                "true": "True",
+                "false": "False"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 16,
+              "default": false
+            },
+            {
+              "id": "hardware.hl2Io.swapAudioChannels",
+              "label": "Swap audio channels",
+              "tooltip": "",
+              "kind": "toggle",
+              "binding": {
+                "radioSetting": "hl2/swapAudioChannels"
+              },
+              "valueEncoding": {
+                "true": "True",
+                "false": "False"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 16,
+              "default": false,
+              "availability": {
+                "enabled": false,
+                "reason": "NereusSDR does not send the radio audio of its own, so there is nothing to swap."
+              }
             }
           ]
         }

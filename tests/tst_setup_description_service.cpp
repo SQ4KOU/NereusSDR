@@ -1237,6 +1237,84 @@ private slots:
         QCOMPARE(projectedCategory(service.hardware(), 14), current);
     }
 
+    // Version 16: the HL2 Options rows on HL2 I/O, in the desktop tab's
+    // order. The four the Core does not send the radio are described
+    // disabled with the desktop's reason. Versions 13 to 15 are unchanged.
+    void hardwareV16DescribesHl2Options()
+    {
+        SetupDescriptionService service;
+        service.setRadioContext(BoardCapsTable::forBoard(HPSDRHW::HermesLite),
+                                HPSDRModel::HERMESLITE, RadioInfo{});
+        const QJsonObject current = projectedCategory(service.hardware(), 16);
+        QCOMPARE(current.value("version"), QJsonValue(16));
+        const QJsonArray sections = pageById(current, "hardware.hl2Io")
+            .value("sections").toArray();
+        QCOMPARE(sections.size(), 2);
+        QCOMPARE(sections.at(0).toObject().value("title"), QJsonValue("Configuration"));
+        const QJsonObject options = sections.at(1).toObject();
+        QCOMPARE(options.value("title"), QJsonValue("Hermes Lite Options"));
+        const QJsonArray rows = options.value("controls").toArray();
+        QStringList ids;
+        for (const QJsonValue& row : rows) { ids << row.toObject().value("id").toString(); }
+        QCOMPARE(ids, (QStringList{
+            "hardware.hl2Io.txLatency", "hardware.hl2Io.pttHang", "hardware.hl2Io.cl2Enable",
+            "hardware.hl2Io.cl2Freq", "hardware.hl2Io.ext10MHz", "hardware.hl2Io.disconnectReset",
+            "hardware.hl2Io.psSync", "hardware.hl2Io.bandVolts",
+            "hardware.hl2Io.swapAudioChannels"}));
+        const QString clock = QStringLiteral("NereusSDR does not change the radio's clock settings.");
+        const QHash<QString, QString> reasons{
+            {"hardware.hl2Io.cl2Enable", clock},
+            {"hardware.hl2Io.cl2Freq", clock},
+            {"hardware.hl2Io.ext10MHz", clock},
+            {"hardware.hl2Io.swapAudioChannels", QStringLiteral(
+                "NereusSDR does not send the radio audio of its own, so there is nothing to swap.")}};
+        for (const QJsonValue& raw : rows) {
+            const QJsonObject row = raw.toObject();
+            const QString id = row.value("id").toString();
+            QVERIFY2(row.value("binding").toObject().value("radioSetting").toString()
+                         .startsWith("hl2/"), qPrintable(id));
+            if (reasons.contains(id)) {
+                QCOMPARE(row.value("availability"), QJsonValue(QJsonObject{
+                    {"enabled", false}, {"reason", reasons.value(id)}}));
+            } else {
+                QVERIFY2(!row.contains("availability"), qPrintable(id));
+            }
+            // TX latency and PTT hang are transmit settings the Core
+            // refuses from a receive-only device.
+            QCOMPARE(row.value("gate").toObject().value("transmit").toBool(),
+                     id == "hardware.hl2Io.txLatency" || id == "hardware.hl2Io.pttHang");
+            if (row.value("kind") == QJsonValue("toggle")) {
+                QVERIFY(SetupDescriptionService::validateSettingToggleEncoding(row));
+            }
+        }
+
+        // Every resource row is closed.
+        const QList<QJsonObject> resource = resourceRows(QStringLiteral("hardware"), 16);
+        QCOMPARE(resource.size(), 9);
+        for (const QJsonObject& row : resource) {
+            QVERIFY2(SetupDescriptionService::validateHardwareV16Control(row),
+                     qPrintable(row.value("id").toString()));
+            QVERIFY(!SetupDescriptionService::validateHardwareV13Control(row));
+            for (const QJsonObject& changed : mutationsOf(row)) {
+                QVERIFY2(!SetupDescriptionService::validateHardwareV16Control(changed),
+                         qPrintable(QJsonDocument(changed).toJson(QJsonDocument::Compact)));
+            }
+        }
+
+        // Versions 13 to 15 see exactly version 13's category.
+        for (int version = 13; version <= 15; ++version) {
+            QJsonObject expected = withoutRowsOf(current, 16);
+            expected.insert("version", 13);
+            QCOMPARE(projectedCategory(service.hardware(), version), expected);
+        }
+        QCOMPARE(projectedCategory(service.hardware(), 17), current);
+
+        // A radio without the HL2's I/O board has no HL2 I/O page.
+        service.setRadioContext(BoardCapsTable::forBoard(HPSDRHW::Hermes),
+                                HPSDRModel::ANAN100, RadioInfo{});
+        QVERIFY(pageById(projectedCategory(service.hardware(), 16), "hardware.hl2Io").isEmpty());
+    }
+
     // Version 13 (R-R3-49): Transmit > Power's "Disable HF PA", which the
     // Core applies on and off the air (transmitSettingsVersion 11), in its
     // own PA Control section after External TX Inhibit, as the desktop page
@@ -2383,7 +2461,9 @@ private slots:
         check(12, kSessionProtocolMinor, 12);
         check(13, kSessionProtocolMinor, 13);
         check(14, kSessionProtocolMinor, 14);
-        check(15, kSessionProtocolMinor, 14);
+        check(15, kSessionProtocolMinor, 15);
+        check(16, kSessionProtocolMinor, 16);
+        check(17, kSessionProtocolMinor, 16);
         check(2, quint16(kRadioIdentitySessionProtocolMinor - 1), 0);
         check(3, quint16(kRadioIdentitySessionProtocolMinor - 1), 0);
     }

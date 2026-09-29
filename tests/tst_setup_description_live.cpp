@@ -1,6 +1,8 @@
 // no-port-check: NereusSDR-original live-apply checks for described settings.
 #include <QtTest>
 
+#include <tuple>
+
 #include "core/AppSettings.h"
 #include "core/PaTelemetryScaling.h"
 #include "core/PaCalProfile.h"
@@ -26,6 +28,52 @@ using namespace NereusSDR;
 class SetupDescriptionLiveTest : public QObject {
     Q_OBJECT
 private slots:
+    // Version 16: a phone that declares version 16 or later reads the HL2
+    // Options rows on HL2 I/O, the stored-only ones disabled with their
+    // reason; a version 15 phone keeps version 13's Hardware.
+    void pairedV16PhoneReadsHl2Options()
+    {
+        Core core;
+        core.server->setupDescription()->setRadioContext(core.model->boardCapabilities(),
+                                                         core.model->hardwareProfile().model,
+                                                         core.model->currentRadioInfo());
+        const auto hl2OptionsOf = [](const QJsonObject& hardware) {
+            QJsonObject options;
+            for (const QJsonValue& page : hardware.value("pages").toArray()) {
+                for (const QJsonValue& section : page.toObject().value("sections").toArray()) {
+                    if (section.toObject().value("title") == QJsonValue("Hermes Lite Options")) {
+                        options = section.toObject();
+                    }
+                }
+            }
+            return options;
+        };
+        // {declared, capability sent back, Hardware version the phone reads}
+        const QList<std::tuple<int, int, int>> declarations{
+            {16, 16, 16}, {99, 16, 16}, {15, 15, 13}};
+        for (const auto& [declared, granted, received] : declarations) {
+            Device phone(QStringLiteral("HL2 V%1 iPhone").arg(declared), QStringLiteral("phone"));
+            core.pair(phone);
+            QHash<QByteArray, int> features = kHolder;
+            features.insert("setupDescription", declared);
+            auto* peer = core.signIn(phone, features);
+            QVERIFY(admitted(peer));
+            QCOMPARE(capability(peer->received(), QStringLiteral("setupDescriptionVersion")),
+                     std::optional<qint64>(granted));
+            const QJsonObject hardware = QJsonDocument::fromJson(latest(peer->received(),
+                QStringLiteral("setup"), QStringLiteral("hardware")).toString().toUtf8()).object();
+            QCOMPARE(hardware.value("version"), QJsonValue(received));
+            const QJsonArray rows = hl2OptionsOf(hardware).value("controls").toArray();
+            QCOMPARE(rows.size(), received == 16 ? 9 : 0);
+            if (received == 16) {
+                const QJsonObject swap = rows.last().toObject();
+                QCOMPARE(swap.value("id"), QJsonValue("hardware.hl2Io.swapAudioChannels"));
+                QCOMPARE(swap.value("availability").toObject().value("enabled"),
+                         QJsonValue(false));
+            }
+        }
+    }
+
     // Version 13 (R-R3-49, R-IOS-18): a paired phone reads PA and Hardware
     // Config's new rows while a version 12 phone keeps its projection, and
     // the described radio settings reach the Core through the gates the
