@@ -442,9 +442,9 @@ void PhoneCwApplet::buildPhonePage(QWidget* page)
         m_procSlider->setStyleSheet(NereusSDR::Style::sliderHStyle());
         m_procSlider->setAccessibleName(QStringLiteral("CPDR speech compressor level (dB)"));
         m_procSlider->setObjectName(QStringLiteral("PhoneCwProcSlider"));
+        // Range 0..20 dB matches Thetis ptbCPDR.
         m_procSlider->setToolTip(QStringLiteral(
-            "CPDR speech compressor level (dB).  Range 0..20 dB matches "
-            "Thetis ptbCPDR."));
+            "CPDR speech compressor level (dB).  Range 0..20 dB."));
         procVbox->addWidget(m_procSlider);
 
         row->addWidget(procGroup, 1);

@@ -36,7 +36,21 @@
 //     well under the governor's line of work, so a step-back is the Rock 5C
 //     symptom below);
 //   - the overload reads at least kOverloadMinLoad in every corroborated
-//     interval and steps back within kTicks.
+//     interval in which the worker never waited a block period for input
+//     (a fed interval), and steps back within kTicks.
+//
+// The test keeps its own record of the conditions each claim needs, instead
+// of assuming a quiet machine. A busy machine can preempt the feeder, which
+// stands in for the radio, long enough that the worker waits for input: at
+// load averages of 17 to 120 on an 18-core Mac, one interval of the overload
+// read 0.897 (worker CPU 0.868), correctly, as the worker sat idle waiting
+// for input for about a tenth of it (block-hook gaps of 8 to 24 ms were
+// seen at that load). So the overload's floor is held in the fed intervals (from
+// the block hook's edges: the longest stretch of the interval outside any
+// block). And a busy machine can leave few corroborated intervals in 20, so
+// each case samples past kTicks, up to kMaxTicks, until it has the
+// kMinCorroborated intervals its claims need. On a quiet machine every
+// interval qualifies and each case still runs kTicks.
 //
 // The feeder stands in for the radio, whose packets arrive in real time
 // however busy the computer is. It runs at the priority RxDspWorker, the
@@ -63,6 +77,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <functional>
 #include <numbers>
 #include <thread>
 #include <vector>
@@ -111,6 +126,9 @@ constexpr auto kSampleInterval = std::chrono::milliseconds(ReceiverDspLoadSample
 // NnrLoadGovernor's kNnrStepDownHoldMs (2 s) at the line; kNnrStepSettleMs
 // (5 s) only delays a second step, which no case waits for.
 constexpr int kTicks = 20;
+// The most intervals a case samples while waiting for the intervals its
+// claims need (about 30 s).
+constexpr int kMaxTicks = 60;
 // Corroborated intervals (busy share within the tolerance of the CPU share)
 // each case needs before its CPU claims count. A block start stamped before
 // the worker waits for its buffer left none of 20 in the frame-like and
@@ -130,6 +148,8 @@ constexpr int kUniformDelayUs = 900;
 constexpr double kUniformCpuTolerance = 0.10;   // relative, busy share and CPU
 // Real overload: 1400 us of a 1333 us block.
 constexpr int kOverloadDelayUs = 1400;
+// One DSP block period at the Core's settings: 64 samples at 48 kHz.
+constexpr qint64 kBlockPeriodNs = qint64(kDspSize) * 1'000'000'000LL / kDspRate;
 constexpr double kOverloadMinLoad = 0.95;
 constexpr double kOverloadCpuTolerance = 0.10;  // absolute, busy share and CPU
 // A reading that is right agrees with the busy-share reference to within
@@ -232,6 +252,28 @@ double busyShare(qint64 fromNs, qint64 toNs)
     return toNs > fromNs ? double(busy) / double(toNs - fromNs) : 0.0;
 }
 
+// The longest stretch of [fromNs, toNs] the worker spent outside any block:
+// waiting for its input (or for the DSP lock, which nothing else takes here).
+qint64 longestWaitNs(qint64 fromNs, qint64 toNs)
+{
+    std::vector<BlockSpan> spans;
+    {
+        QMutexLocker lock(&g_blocksMutex);
+        spans = g_blocks;
+    }
+    qint64 cursor = fromNs;
+    qint64 longest = 0;
+    for (const BlockSpan& b : spans) {
+        const qint64 end = b.endNs < 0 ? toNs : b.endNs;
+        if (end <= fromNs || b.startNs >= toNs) {
+            continue;
+        }
+        longest = std::max(longest, b.startNs - cursor);
+        cursor = std::max(cursor, end);
+    }
+    return std::max(longest, toNs - cursor);
+}
+
 bool haveWorkerAfter(int starts)
 {
     QMutexLocker lock(&g_workerMutex);
@@ -304,6 +346,8 @@ struct Sample {
     double cpuShare{0.0};
     // The busy share from the block hook over the same interval.
     double busyShare{0.0};
+    // The longest the worker waited outside a block in the interval.
+    qint64 longestWaitNs{0};
     qint64 maxBlockUs{0};
     bool steppedBack{false};
 };
@@ -314,9 +358,12 @@ struct Run {
 };
 
 // Samples kSampleInterval apart through the real sampler and the real
-// step-back governor (a receiver running Premium NNR) for `ticks` intervals.
-// The first reading only seeds the sampler and sets the governor's time base.
-Run sampleFor(int ticks)
+// step-back governor (a receiver running Premium NNR) for `ticks` intervals,
+// and on past them, up to kMaxTicks, until `needed` intervals satisfy
+// `qualifies`. The first reading only seeds the sampler and sets the
+// governor's time base.
+Run sampleFor(int ticks, const std::function<bool(const Sample&)>& qualifies = {},
+              int needed = 0)
 {
     ReceiverDspLoadSampler sampler;
     NnrLoadGovernor governor;
@@ -337,7 +384,11 @@ Run sampleFor(int ticks)
     qint64 previousReadNs = reading.readNs;
     governor.observe(kSlice, monotonicMs(), receiver);
 
-    for (int tick = 0; tick < ticks; ++tick) {
+    int qualifying = 0;
+    for (int tick = 0; tick < kMaxTicks; ++tick) {
+        if (tick >= ticks && (!qualifies || qualifying >= needed)) {
+            break;
+        }
         next += kSampleInterval;
         std::this_thread::sleep_until(next);
         reading = readChannel();
@@ -356,6 +407,7 @@ Run sampleFor(int ticks)
         const qint64 fromNs = previousReadNs;
         const qint64 toNs = reading.readNs;
         sample.cpuShare = toNs > fromNs ? double(cpu - previousCpu) / double(toNs - fromNs) : 0.0;
+        sample.longestWaitNs = longestWaitNs(fromNs, toNs);
         sample.busyShare = busyShare(fromNs, toNs);
         if (snapshot) {
             sample.load = snapshot->load;
@@ -375,6 +427,9 @@ Run sampleFor(int ticks)
             ++run.stepBacks;
             receiver.limit = *stepped;
         }
+        if (qualifies && qualifies(sample)) {
+            ++qualifying;
+        }
         run.samples.push_back(sample);
         previousCpu = cpu;
         previousReadNs = reading.readNs;
@@ -392,9 +447,10 @@ bool corroborated(const Sample& s, double tolerance)
 void logRun(const char* name, const Run& run)
 {
     for (const Sample& s : run.samples) {
-        qInfo("%s t=%.1fs load=%.3f busy=%.3f cpu=%.3f max_block_us=%lld%s%s", name,
-              s.atSeconds, s.load, s.busyShare, s.cpuShare,
+        qInfo("%s t=%.1fs load=%.3f busy=%.3f cpu=%.3f max_block_us=%lld longest_wait_us=%lld%s%s",
+              name, s.atSeconds, s.load, s.busyShare, s.cpuShare,
               static_cast<long long>(s.maxBlockUs),
+              static_cast<long long>(s.longestWaitNs / 1000),
               s.idle ? " idle" : "", s.steppedBack ? " STEP-BACK" : "");
     }
 }
@@ -492,7 +548,9 @@ private slots:
     {
         WDSPSetTestPeriodicDelayUs(kChannel, kFrameDelayUs, kFrameEvery);
         std::this_thread::sleep_for(kSettle);
-        const Run run = sampleFor(kTicks);
+        const Run run = sampleFor(kTicks, [](const Sample& s) {
+            return corroborated(s, kFrameCpuTolerance);
+        }, kMinCorroborated);
         logRun("frame-like", run);
         QVERIFY(run.samples.size() >= std::size_t(kTicks) - 2);
         int corroboratedIntervals = 0;
@@ -529,7 +587,9 @@ private slots:
     {
         WDSPSetTestProcessDelayUs(kChannel, kUniformDelayUs);
         std::this_thread::sleep_for(kSettle);
-        const Run run = sampleFor(kTicks);
+        const Run run = sampleFor(kTicks, [](const Sample& s) {
+            return corroborated(s, kUniformCpuTolerance * s.cpuShare);
+        }, kMinCorroborated);
         logRun("uniform-900us", run);
         QVERIFY(run.samples.size() >= std::size_t(kTicks) - 2);
         int corroboratedIntervals = 0;
@@ -564,7 +624,12 @@ private slots:
     {
         WDSPSetTestProcessDelayUs(kChannel, kOverloadDelayUs);
         std::this_thread::sleep_for(kSettle);
-        const Run run = sampleFor(kTicks);
+        // Fed: the worker never waited a whole block period for input, so
+        // the interval was the overload the case sets up.
+        const auto fed = [](const Sample& s) { return s.longestWaitNs < kBlockPeriodNs; };
+        const Run run = sampleFor(kTicks, [fed](const Sample& s) {
+            return corroborated(s, kOverloadCpuTolerance) && fed(s);
+        }, kMinCorroborated);
         logRun("overload-1400us", run);
         QVERIFY(run.samples.size() >= std::size_t(kTicks) - 2);
         int corroboratedIntervals = 0;
@@ -574,21 +639,30 @@ private slots:
                      qPrintable(QStringLiteral("load %1 vs worker busy share %2 at %3 s")
                                     .arg(s.load).arg(s.busyShare).arg(s.atSeconds)));
             if (corroborated(s, kOverloadCpuTolerance)) {
-                ++corroboratedIntervals;
                 QVERIFY2(std::abs(s.load - s.cpuShare) <= kOverloadCpuTolerance,
                          qPrintable(QStringLiteral("load %1 vs worker CPU %2 at %3 s")
                                         .arg(s.load).arg(s.cpuShare).arg(s.atSeconds)));
-                QVERIFY2(s.load >= kOverloadMinLoad,
-                         qPrintable(QStringLiteral("load %1 at %2 s (worker CPU %3)")
-                                        .arg(s.load).arg(s.atSeconds).arg(s.cpuShare)));
+                if (fed(s)) {
+                    ++corroboratedIntervals;
+                    QVERIFY2(s.load >= kOverloadMinLoad,
+                             qPrintable(QStringLiteral("load %1 at %2 s (worker CPU %3, "
+                                                       "longest wait %4 us)")
+                                            .arg(s.load).arg(s.atSeconds).arg(s.cpuShare)
+                                            .arg(s.longestWaitNs / 1000)));
+                }
             }
         }
         QVERIFY2(corroboratedIntervals >= kMinCorroborated,
                  qPrintable(QStringLiteral("%1 of %2 intervals had the busy share within %3 of the "
-                                           "worker's CPU")
+                                           "worker's CPU and the worker fed throughout")
                                 .arg(corroboratedIntervals).arg(run.samples.size())
                                 .arg(kOverloadCpuTolerance)));
-        QVERIFY2(run.stepBacks >= 1, "a real overload must step back");
+        // Within kTicks, however long the case sampled after.
+        const bool steppedInTime = std::any_of(
+            run.samples.begin(),
+            run.samples.begin() + std::min<std::ptrdiff_t>(kTicks, std::ptrdiff_t(run.samples.size())),
+            [](const Sample& s) { return s.steppedBack; });
+        QVERIFY2(steppedInTime, "a real overload must step back");
     }
 
     // A worker stuck inside one long block reads as fully busy.
