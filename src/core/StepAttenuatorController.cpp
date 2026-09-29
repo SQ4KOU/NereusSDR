@@ -1669,6 +1669,30 @@ void StepAttenuatorController::loadSettings(const QString& mac)
     emit preampModeChanged(m_preampMode);
     emit stepAttEnabledChanged(m_stepAttEnabled);
     emit rx2AttenuationChanged(m_rx2AttDb);
+    // R-R3-46 / R-R3-11: the restored values reach the radio now, as Thetis
+    // sends the stored band values when it starts, by setting each through
+    // its property with `initializing` briefly cleared (the setters return
+    // early while it is set):
+    // From Thetis console.cs:2174-2179 [v2.10.3.15] (InitConsole):
+    //   initializing = false;
+    //   RX1PreampMode = rx1_preamp_by_band[(int)rx1_band];
+    //   RX1AttenuatorData = getRX1stepAttenuatorForBand(rx1_band);
+    //   RX2PreampMode = rx2_preamp_by_band[(int)rx2_band];
+    //   RX2AttenuatorData = getRX2stepAttenuatorForBand(rx2_band);
+    //   initializing = true;
+    // (SetupForHPSDRModel's SetComboPreampForHPSDR, console.cs 40891-40897,
+    // does the same for a model change.) Without this slice A's restored
+    // attenuation and preamp were not sent until they next changed. The
+    // second ADC's preamp is not held per band here (rx1Preamp), so there
+    // is no stored value of it to send.
+    if (m_connection && !m_isMox) {
+        RadioConnection* conn = m_connection.get();
+        const bool preampOn = (m_preampMode != PreampMode::Off);
+        QMetaObject::invokeMethod(conn, [conn, preampOn]() {
+            conn->setPreamp(preampOn);
+        });
+        sendRx1Attenuation(m_attDb);
+    }
     // The other ADC in use takes its restored value now (its byte is not
     // otherwise sent until the value changes).
     sendRx2Attenuation();

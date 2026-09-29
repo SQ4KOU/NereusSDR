@@ -58,6 +58,7 @@ public:
     }
 
     Sends sends;
+    QList<bool> preamp;
 
     void init() override {}
     void connectToRadio(const NereusSDR::RadioInfo&) override {}
@@ -68,7 +69,7 @@ public:
     void setSampleRate(int) override {}
     void setAttenuator(int dB) override { sends.append({0, dB}); }
     void setAttenuatorForAdc(int adc, int dB) override { sends.append({adc, dB}); }
-    void setPreamp(bool) override {}
+    void setPreamp(bool on) override { preamp.append(on); }
     void setTxDrive(int) override {}
     void sendTxIq(const float*, int) override {}
     void setWatchdogEnabled(bool) override {}
@@ -395,6 +396,36 @@ private slots:
         ctrl.setAdcRouting(0, 1, Band::Band40m, false);
         QCOMPARE(ctrl.rx2AttenuatorDb(), 14);
         QCOMPARE(radio.sends, (Sends{{1, 14}}));
+        ctrl.setRadioConnection(nullptr);
+    }
+
+    // Slice A's attenuation and preamp restored at connect reach the radio
+    // then, as Thetis sends RX1's (and RX2's) stored values when the radio
+    // starts (console.cs InitConsole, 2175-2178, and SetComboPreampForHPSDR).
+    void theValuesRestoredAtConnectReachTheRadio()
+    {
+        const QString mac = QStringLiteral("02:00:00:00:ad:09");
+        startFromNothing(mac);
+        {
+            StepAttenuatorController ctrl;
+            ctrl.setTickTimerEnabled(false);
+            ctrl.setMaxAttenuation(31);
+            ctrl.loadSettings(mac);
+            ctrl.setAttenuation(17);
+            ctrl.setPreampMode(PreampMode::On);
+            ctrl.saveSettings(mac);
+        }
+        StepAttenuatorController ctrl;
+        ctrl.setTickTimerEnabled(false);
+        ctrl.setMaxAttenuation(31);
+        RecordingConnection radio;
+        ctrl.setRadioConnection(&radio);
+        radio.sends.clear();
+        radio.preamp.clear();
+        ctrl.loadSettings(mac);
+        QCOMPARE(ctrl.attenuatorDb(), 17);
+        QVERIFY(radio.sends.contains(QPair<int, int>(0, 17)));
+        QCOMPARE(radio.preamp, QList<bool>{true});
         ctrl.setRadioConnection(nullptr);
     }
 
