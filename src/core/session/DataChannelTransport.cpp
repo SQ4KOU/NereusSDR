@@ -27,6 +27,10 @@
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-27: separate bounded transmit-watch DTLS channel; AI-assisted
 //               implementation via OpenAI Codex for J.J. Boyd (KG4VCF).
+//   2026-09-28: setLibraryLogForTest() moved out of the product class to
+//               DataChannelLibraryLogTestHook (test builds only), no
+//               behavior change. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/DataChannelTransport.h"
@@ -972,20 +976,6 @@ qint64 DataChannelTransport::backlogBytes() const
         channel = m_bridge->channel;
     }
     return channel ? static_cast<qint64>(channel->bufferedAmount()) : 0;
-}
-
-void DataChannelTransport::setLibraryLogForTest(
-    std::function<void(quintptr thread, const QString& line)> sink)
-{
-    if (!sink) {
-        rtc::InitLogger(rtc::LogLevel::None);
-        return;
-    }
-    rtc::InitLogger(rtc::LogLevel::Verbose,
-                    [sink = std::move(sink)](rtc::LogLevel, const std::string& line) {
-        sink(reinterpret_cast<quintptr>(QThread::currentThreadId()),
-             QString::fromStdString(line));
-    });
 }
 
 bool DataChannelTransport::sendRawFrameForTest(const QByteArray& frame)

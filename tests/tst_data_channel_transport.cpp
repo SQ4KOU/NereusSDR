@@ -78,6 +78,7 @@
 #include "core/security/DeviceStore.h"
 #include "core/security/StationIdentity.h"
 #include "core/session/DataChannelTransport.h"
+#include "core/session/DataChannelLibraryLogTestHook.h"
 #include "core/session/RelayLeg.h"
 #include "core/session/RendezvousWire.h"
 #include "core/session/StationClient.h"
@@ -952,14 +953,14 @@ private slots:
     {
         QMutex mutex;
         QList<QPair<quintptr, QString>> lines;
-        DataChannelTransport::setLibraryLogForTest([&](quintptr thread, const QString& line) {
+        testhooks::setDataChannelLibraryLog([&](quintptr thread, const QString& line) {
             const QMutexLocker lock(&mutex);
             lines.append({thread, line});
         });
-        const auto logOff = qScopeGuard([] { DataChannelTransport::setLibraryLogForTest({}); });
+        const auto logOff = qScopeGuard([] { testhooks::setDataChannelLibraryLog({}); });
         OpenPair pair;
         QVERIFY(pair.open());
-        DataChannelTransport::setLibraryLogForTest({});
+        testhooks::setDataChannelLibraryLog({});
 
         const QMutexLocker lock(&mutex);
         int kept = 0;
@@ -995,14 +996,14 @@ private slots:
     {
         QMutex mutex;
         QList<QPair<quintptr, QString>> lines;
-        DataChannelTransport::setLibraryLogForTest([&](quintptr thread, const QString& line) {
+        testhooks::setDataChannelLibraryLog([&](quintptr thread, const QString& line) {
             const QMutexLocker lock(&mutex);
             lines.append({thread, line});
         });
-        const auto logOff = qScopeGuard([] { DataChannelTransport::setLibraryLogForTest({}); });
+        const auto logOff = qScopeGuard([] { testhooks::setDataChannelLibraryLog({}); });
         OpenPair pair;
         QVERIFY(pair.open());
-        DataChannelTransport::setLibraryLogForTest({});
+        testhooks::setDataChannelLibraryLog({});
 
         const QMutexLocker lock(&mutex);
         // A DTLS start on a thread, waiting for its MTU line.
@@ -1492,7 +1493,7 @@ private slots:
         };
         const auto evidence = std::make_shared<StartupEvidence>();
         evidence->elapsed.start();
-        DataChannelTransport::setLibraryLogForTest(
+        testhooks::setDataChannelLibraryLog(
             [evidence](quintptr thread, const QString& line) {
                 const QString stage = safeRtcStage(line);
                 if (stage.isEmpty()) return;
@@ -1502,7 +1503,7 @@ private slots:
                     .arg(evidence->elapsed.elapsed()).arg(thread).arg(stage));
             });
         const auto restoreLogger = qScopeGuard([evidence]() {
-            DataChannelTransport::setLibraryLogForTest({});
+            testhooks::setDataChannelLibraryLog({});
             if (QTest::currentTestFailed()) {
                 const QMutexLocker lock(&evidence->mutex);
                 for (const QString& line : std::as_const(evidence->pairEvents)) {
