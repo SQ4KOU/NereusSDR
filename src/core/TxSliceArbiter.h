@@ -32,8 +32,8 @@
 //              checked again when the gate answers, against the holder and
 //              the device that asked, and dropped when the slice is no
 //              longer theirs; pendingHandoffSliceId names the waiting
-//              target. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
-//              Claude Code.
+//              target, and pendingHandoffChanged announces it. J.J. Boyd
+//              (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 #pragma once
 
@@ -184,6 +184,8 @@ private:
     /// Whether a waiting move to `sliceId` may still land when the gate
     /// answers: the slice is still the holder's and the asker's.
     bool pendingMayLand(int sliceId, const QByteArray& requester) const;
+    /// Sets the waiting move's target; pendingHandoffChanged when it differs.
+    void setPending(int sliceId, const QByteArray& requester);
     /// Moves the flag to `target` (the handoff's last step).
     void flipTo(SliceModel* target);
     SliceModel* sliceWithId(int sliceId) const;
@@ -191,6 +193,10 @@ private:
 signals:
     /// Emitted after handoff completes. oldId may be -1 on initial bind.
     void txBoundSliceChanged(int oldId, int newId);
+
+    /// Slice control fix wave: pendingHandoffSliceId() changed (-1 when no
+    /// move waits any more), so what reads it as transmitting refreshes.
+    void pendingHandoffChanged(int sliceId);
 
     /// Emitted when a handoff request is rejected (slice doesn't exist, etc.).
     void handoffBlocked(int requestedId, QString reason);

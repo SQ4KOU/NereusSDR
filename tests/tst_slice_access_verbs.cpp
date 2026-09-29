@@ -757,6 +757,9 @@ private slots:
         QVERIFY(accepted(core.invoke(appA, "tx.setTxSlice", {int64("sliceId", 0)})));
         QCOMPARE(arbiter->pendingHandoffSliceId(), 0);
         QCOMPARE(arbiter->txBoundSliceId(), second);
+        // Fix wave (minor): the listener reads A0 as on the air while the
+        // move waits, with no change of holder to announce it.
+        QTRY_COMPARE(accessOf(appB, 0, "onAir").toBool(false), true);
 
         // B cannot take A0 meanwhile, and A cannot release it to B.
         const Seen seen = seenBy(appB, 0);
@@ -773,6 +776,7 @@ private slots:
         QTRY_COMPARE(mox->state(), MoxState::Rx);
         QTRY_COMPARE(arbiter->txBoundSliceId(), 0);
         QCOMPARE(arbiter->pendingHandoffSliceId(), -1);
+        QTRY_COMPARE(accessOf(appB, 0, "onAir").toBool(true), false);
 
         // Now B takes it, idle: the flag leaves the slice B took.
         r = core.invoke(appB, "slice.takeControl", revisionArgs(seenBy(appB, 0)));

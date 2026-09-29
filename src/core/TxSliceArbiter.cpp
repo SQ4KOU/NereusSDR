@@ -22,16 +22,16 @@
 //                                    Anthropic Claude Code.
 //   2026-09-28  J.J. Boyd / KG4VCF  Slice control fix wave (Critical 1): a
 //                                    move waiting for the unkey gate is
-//                                    checked again before the flag lands.
-//                                    AI-assisted via Anthropic Claude Code.
+//                                    checked again before the flag lands,
+//                                    and pendingHandoffChanged announces
+//                                    the waiting target. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 #include "core/TxSliceArbiter.h"
 #include "models/SliceModel.h"
 #include "core/MoxController.h"
 #include "core/AppSettings.h"
 #include "core/safety/UnkeyGate.h"
-
-#include <utility>
 
 namespace NereusSDR {
 
@@ -277,8 +277,7 @@ bool TxSliceArbiter::requestHandoffFrom(int sliceId, const QByteArray& requester
 
     if (target->isTxSlice()) {
         m_txBoundSliceId = sliceId;
-        m_pendingHandoffId = -1;   // a waiting move to elsewhere is dropped
-        m_pendingRequester.clear();
+        setPending(-1, QByteArray());   // a waiting move to elsewhere is dropped
         return true;  // already TX-bound, no-op
     }
 
@@ -293,14 +292,13 @@ bool TxSliceArbiter::requestHandoffFrom(int sliceId, const QByteArray& requester
     const bool keyed = m_mox && (m_mox->isMox() || m_mox->state() != MoxState::Rx);
     if (keyed && m_unkeyGate) {
         const bool alreadyWaiting = m_pendingHandoffId >= 0;
-        m_pendingHandoffId = sliceId;
-        m_pendingRequester = requester;
+        setPending(sliceId, requester);
         if (!alreadyWaiting) {
             m_unkeyGate->unkey(QStringLiteral("The transmit slice moved."), this,
                                [this](UnkeyOutcome) {
                 const int pending = m_pendingHandoffId;
-                const QByteArray requester = std::exchange(m_pendingRequester, QByteArray());
-                m_pendingHandoffId = -1;
+                const QByteArray requester = m_pendingRequester;
+                setPending(-1, QByteArray());
                 SliceModel* next = sliceWithId(pending);
                 if (!next || next->isTxSlice()) {
                     return;
@@ -326,6 +324,16 @@ bool TxSliceArbiter::requestHandoffFrom(int sliceId, const QByteArray& requester
     }
     flipTo(target);
     return true;
+}
+
+void TxSliceArbiter::setPending(int sliceId, const QByteArray& requester)
+{
+    m_pendingRequester = requester;
+    if (m_pendingHandoffId == sliceId) {
+        return;
+    }
+    m_pendingHandoffId = sliceId;
+    emit pendingHandoffChanged(sliceId);
 }
 
 SliceModel* TxSliceArbiter::sliceWithId(int sliceId) const

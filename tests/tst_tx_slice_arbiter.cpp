@@ -550,9 +550,12 @@ private slots:
         arb.setHolderLookup([]() { return QByteArrayLiteral("A"); });
         QSignalSpy moved(&arb, &TxSliceArbiter::txBoundSliceChanged);
         QSignalSpy blocked(&arb, &TxSliceArbiter::handoffBlocked);
+        QSignalSpy pending(&arb, &TxSliceArbiter::pendingHandoffChanged);
 
         QVERIFY(arb.requestHandoff(1, QByteArrayLiteral("A")));
         QCOMPARE(arb.pendingHandoffSliceId(), 1);
+        QCOMPARE(pending.count(), 1);
+        QCOMPARE(pending.last().at(0).toInt(), 1);
         controller.insert(1, QByteArrayLiteral("B"));   // taken while the key ended
         QCOMPARE(bounds.size(), 1);
         QTest::ignoreMessage(QtWarningMsg, QRegularExpression(QStringLiteral("unkey was not confirmed")));
@@ -564,6 +567,8 @@ private slots:
         QCOMPARE(arb.pendingHandoffSliceId(), -1);
         QCOMPARE(blocked.count(), 1);
         QCOMPARE(blocked.first().at(0).toInt(), 1);
+        QCOMPARE(pending.count(), 2);
+        QCOMPARE(pending.last().at(0).toInt(), -1);
     }
 
     // The holder at the answer counts too: the local window's move (no

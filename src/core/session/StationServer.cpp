@@ -644,9 +644,11 @@
 //               is revoked or stays away past its 180 s stops listening,
 //               and a slice kept only for it closes; a record of each
 //               device's explicit transmit choice, written only by
-//               tx.setTxSlice and the hosting desktop's own selection.
-//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
-//               Anthropic Claude Code.
+//               tx.setTxSlice and the hosting desktop's own selection;
+//               each slice's onAir refreshed on every MOX step and when a
+//               transmit move starts or stops waiting. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -1854,6 +1856,13 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
                 m_transmitHolder->setKeyed(false);
             }
             m_transmitHolder->onMoxReading(on);
+            // Slice control fix wave (minor): each slice's onAir reads MOX
+            // itself (a key walking down, a move waiting for the unkey),
+            // so it is refreshed on every MOX step, not only when the
+            // holder changes.
+            if (m_sliceAccessSet) {
+                m_sliceAccessSet->refresh();
+            }
             // Task 77 (ruling 8.1): the station device's take (the radio's
             // PTT, the Core's own keys, its VOX) no longer ends with its
             // key: the station holds transmit, unkeyed, until a device
@@ -2813,6 +2822,13 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
             // Ruling 8.11: the flag never moves while the station device
             // is keyed.
             arbiter->setFrozen([this]() { return stationFrozenSlice() >= 0; });
+            // Slice control fix wave: a move waiting for the unkey makes its
+            // slice read as on the air (sliceTransmitting).
+            connect(arbiter, &TxSliceArbiter::pendingHandoffChanged, this, [this](int) {
+                if (m_sliceAccessSet) {
+                    m_sliceAccessSet->refresh();
+                }
+            });
             // Ruling 8.10: the holder's choice is remembered for the next
             // time it holds transmit; connectedDevices.transmittingOn.
             connect(arbiter, &TxSliceArbiter::txBoundSliceChanged, this,
