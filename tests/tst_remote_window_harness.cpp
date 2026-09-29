@@ -507,7 +507,10 @@ private slots:
         QVERIFY(segment->remotePresentationText().contains(QStringLiteral("Radio")));
         QVERIFY(segment->remotePresentationText().contains(QStringLiteral("Core RTT")));
         const QFontMetrics headerMetrics(QFont(QStringLiteral("SF Mono"), 10, QFont::DemiBold));
-        QVERIFY2(segment->width() >= headerMetrics.horizontalAdvance(segment->remotePresentationText()) + 34,
+        // Load findings 3: the segment takes its width from the layout pass
+        // after the text changes (and the readings keep changing it), so
+        // the width is checked once the layout has settled on the text.
+        QTRY_VERIFY2(segment->width() >= headerMetrics.horizontalAdvance(segment->remotePresentationText()) + 34,
                  qPrintable(QStringLiteral("segment %1, text %2")
                                 .arg(segment->width())
                                 .arg(headerMetrics.horizontalAdvance(segment->remotePresentationText()))));
@@ -521,7 +524,7 @@ private slots:
         QVERIFY(controls->text().contains(QStringLiteral("Remote")));
         h.remoteModel()->audioEngine()->setMasterMuted(true);
         QTRY_VERIFY(segment->remotePresentationText().contains(QStringLiteral("Audio muted")));
-        QVERIFY2(segment->width() >= headerMetrics.horizontalAdvance(segment->remotePresentationText()) + 34,
+        QTRY_VERIFY2(segment->width() >= headerMetrics.horizontalAdvance(segment->remotePresentationText()) + 34,
                  qPrintable(QStringLiteral("muted segment %1, text %2")
                                 .arg(segment->width())
                                 .arg(headerMetrics.horizontalAdvance(segment->remotePresentationText()))));

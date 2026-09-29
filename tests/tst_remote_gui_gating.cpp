@@ -149,6 +149,8 @@
 
 #include <QtTest/QtTest>
 
+#include "TestFunctionGroups.h"
+
 #include "OperatorWording.h"
 #include "gui/RemoteAudioStatus.h"
 
@@ -4939,5 +4941,38 @@ private slots:
     }
 };
 
-QTEST_MAIN(TstRemoteGuiGating)
+int main(int argc, char** argv)
+{
+    QApplication app(argc, argv);
+    app.setAttribute(Qt::AA_Use96Dpi, true);
+    TstRemoteGuiGating test;
+    QTEST_SET_MAIN_SOURCE_PATH
+    // Load findings 3: about 10 s on a quiet machine, past ctest's 120 s
+    // under a loaded full run (the limit is not raised). The Setup sweeps
+    // and the container and menu cases run as their own ctest entries,
+    // tst_remote_gui_gating_setup and tst_remote_gui_gating_containers
+    // (tests/CMakeLists.txt); the rest as tst_remote_gui_gating.
+    const std::optional<QStringList> arguments = NereusSDR::TestFunctionGroups::arguments(
+        test.metaObject(), app.arguments(), "NEREUS_REMOTE_GUI_GATING_GROUP",
+        {{QStringLiteral("setup"),
+          {QStringLiteral("everySetupPageRealizesAgainstARemoteModel"),
+           QStringLiteral("everyRemoteSetupPageIsEitherLocalDspFreeOrDisabled"),
+           QStringLiteral("aThisComputerPageThatReachesLocalDspFailsTheSweep"),
+           QStringLiteral("theSameSweepAgainstALocalModelDisablesNothing"),
+           QStringLiteral("coreSetupPagesWaitForTheCoresSettingsNotAnySnapshot"),
+           QStringLiteral("coreScopedHiddenGroupsHideInAConnectedRemoteWindow"),
+           QStringLiteral("buildingCoreAndMixedPagesSendsTheCoreNothing"),
+           QStringLiteral("remoteHardwareConfigFollowsTheCore"),
+           QStringLiteral("disconnectedRemoteSetupPerPageTable"),
+           QStringLiteral("remoteDevicesPageWorksOnThisComputer")}},
+         {QStringLiteral("containers"),
+          {QStringLiteral("toolsMenuTestEntriesAreDisabledInARemoteSession"),
+           QStringLiteral("aContainerOnASliceThatClosesShowsNoneOfIt"),
+           QStringLiteral("containerPeakAndVaxButtonsFollowChangesMadeElsewhere"),
+           QStringLiteral("containerButtonsActOnTheirOwnSliceLocallyAndRemotely"),
+           QStringLiteral("localWindowDisconnectStillOpensConnections"),
+           QStringLiteral("vaxFirstRunCheckRunsInRemoteAndLocalWindows")}}});
+    return arguments ? QTest::qExec(&test, *arguments) : 1;
+}
+
 #include "tst_remote_gui_gating.moc"

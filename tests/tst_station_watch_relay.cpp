@@ -597,19 +597,24 @@ private slots:
         QTRY_VERIFY(latest(SessionMessageKind::SnapshotComplete).kind
                     == SessionMessageKind::SnapshotComplete);
         QVERIFY(primary->canOpenWatchRelay());
-        bool advertised = false;
-        for (const SessionMessage& message : messages) {
-            if (message.kind != SessionMessageKind::Capabilities) {
-                continue;
-            }
-            for (const MirrorUpdate& update : message.updates) {
-                if (update.name == QByteArrayLiteral("txWatchPathVersion")
-                    && update.value.toInt() == 1) {
-                    advertised = true;
+        // Load findings 3: the watch path is published by its own
+        // capability update, which can come after the snapshot; wait for
+        // it rather than read it at SnapshotComplete.
+        const auto advertised = [&messages]() {
+            for (const SessionMessage& message : messages) {
+                if (message.kind != SessionMessageKind::Capabilities) {
+                    continue;
+                }
+                for (const MirrorUpdate& update : message.updates) {
+                    if (update.name == QByteArrayLiteral("txWatchPathVersion")
+                        && update.value.toInt() == 1) {
+                        return true;
+                    }
                 }
             }
-        }
-        QVERIFY(advertised);
+            return false;
+        };
+        QTRY_VERIFY(advertised());
 
         sendPrimary(SessionMessages::commandInvoke(QByteArrayLiteral("tx.watchRelay"), 800,
             {{0, "offer", MirrorWireKind::Utf8,
@@ -701,7 +706,11 @@ private slots:
         station.setRemoteTransmitAllowed(true);
         sendPrimary(SessionMessages::commandInvoke(QByteArrayLiteral("tx.watchRelay"), 805,
             {{0, "offer", MirrorWireKind::Utf8, offer}}));
-        QTRY_VERIFY(latest(SessionMessageKind::CommandResult, 805).commandId == 805);
+        // Load findings 3: the same bound 802 and 803 wait under, the
+        // product's own ticket lifetime (the refusal itself is immediate;
+        // the time is the command's trip over the primary's data channel).
+        QTRY_VERIFY_WITH_TIMEOUT(latest(SessionMessageKind::CommandResult, 805).commandId == 805,
+                                 TxWatchServer::kTicketLifetimeMs);
         QCOMPARE(latest(SessionMessageKind::CommandResult, 805).reason,
                  QStringLiteral("The Core cannot relay the transmit watch connection for this device."));
         QCOMPARE(lastWatchVersion(), 1);

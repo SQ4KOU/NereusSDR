@@ -251,6 +251,14 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(client.isHandshakeComplete(), 10000);
         QVERIFY(client.auxiliaryWatchTelemetry());
         QCOMPARE(client.auxiliaryWatchTelemetry()->submittedPayloadBytes, quint64(0));
+        // Load findings 3: the Core sends this session its capabilities
+        // again once the snapshot is complete (txPermitted can be true only
+        // from then, StationServer::publishTxPermitted), with its own
+        // txWatchPathVersion 0. Under load that publication could land
+        // after the capabilities this test sends below and put the watch
+        // path back to 0, so the client never started a watch attempt
+        // (offers 0 at load 342). Wait for it before sending ours.
+        QTRY_VERIFY_WITH_TIMEOUT(client.capabilities().txPermitted, 10000);
         StationCapabilities caps = client.capabilities();
         caps.txWatchPathVersion = caseId == 5 ? 0 : 1;
         if (caseId == 4) { caps.txPermitted = false; }

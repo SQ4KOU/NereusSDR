@@ -7557,6 +7557,11 @@ nereus_add_test(tst_settings_backup_window)
 # way tst_setup_dialog_lazy_pages needs it.
 nereus_add_test(tst_remote_gui_gating)
 target_compile_definitions(tst_remote_gui_gating PRIVATE NEREUS_BUILD_TESTS)
+# Load findings 3: about 10 s on a quiet machine, past the 120 s limit in a
+# loaded full run; three entries of the same binary (the limit is not
+# raised; groups in the test's main()).
+nereus_split_test(tst_remote_gui_gating
+    ENV NEREUS_REMOTE_GUI_GATING_GROUP GROUPS setup containers)
 nereus_add_test(tst_remote_connection_controls fakes/LoopbackTransport.cpp)
 # R-R3-38 (R3 completion Task 5): the stop message of a remote window.
 nereus_add_test(tst_remote_core_stop_notice)
@@ -8145,6 +8150,11 @@ nereus_add_test(tst_station_pairing
 add_dependencies(tst_station_pairing nereus_pairing_peer)
 target_compile_definitions(tst_station_pairing PRIVATE
     NEREUS_PAIRING_PEER="$<TARGET_FILE:nereus_pairing_peer>")
+# Load findings 3: about 13 s on a quiet machine, past the 120 s limit in a
+# loaded full run; three entries of the same binary (the limit is not
+# raised; groups in the test's main()).
+nereus_split_test(tst_station_pairing
+    ENV NEREUS_STATION_PAIRING_GROUP GROUPS code peer)
 
 # iPhone app Task 17 (R-IOS-08): the Core's read-only status page on
 # loopback (the code only while unclaimed, nothing for a peer elsewhere, 404
@@ -8350,10 +8360,43 @@ if(TEST tst_link_conformance_session)
     set_property(TEST tst_link_conformance_session_connectable APPEND PROPERTY ENVIRONMENT
         "NEREUS_LINK_CONNECTABLE=only" "NEREUS_LINK_MODE=loopback")
     # iPhone app plan Task 28 (R-IOS-16): the first entry runs every other
-    # fixture over both transports (the in-process pipe and the control data
-    # channel), so it gets more time; the connectable fixture over the data
-    # channel runs in its own process, as the in-process one does.
+    # fixture, and it got more time for running them over both transports
+    # (the in-process pipe and the control data channel); the connectable
+    # fixture over the data channel runs in its own process, as the
+    # in-process one does.
+    # Load findings 3: the two transports are now two entries of the same
+    # binary, the first NEREUS_LINK_MODE=loopback (and every other check),
+    # tst_link_conformance_session_datachannel NEREUS_LINK_MODE=datachannel,
+    # each within the same 300 s (at load 198 to 281 both together took
+    # 397 s; the limit is not raised).
     set_tests_properties(tst_link_conformance_session PROPERTIES TIMEOUT 300)
+    set_property(TEST tst_link_conformance_session APPEND PROPERTY ENVIRONMENT
+        "NEREUS_LINK_MODE=loopback")
+    add_test(NAME tst_link_conformance_session_datachannel COMMAND tst_link_conformance_session)
+    set_tests_properties(tst_link_conformance_session_datachannel PROPERTIES
+        LABELS "${_lcs_labels}"
+        TIMEOUT 300)
+    if(_lcs_env_mod)
+        set_property(TEST tst_link_conformance_session_datachannel
+            PROPERTY ENVIRONMENT_MODIFICATION ${_lcs_env_mod})
+    endif()
+    if(NEREUS_TESTS_OFFSCREEN AND CMAKE_VERSION VERSION_LESS 3.22)
+        set_property(TEST tst_link_conformance_session_datachannel APPEND PROPERTY ENVIRONMENT
+            "QT_QPA_PLATFORM=offscreen")
+    endif()
+    if(NOT WIN32)
+        set(_lcs_dcall_home
+            "${CMAKE_CURRENT_BINARY_DIR}/test-home/tst_link_conformance_session_datachannel")
+        file(MAKE_DIRECTORY "${_lcs_dcall_home}")
+        set_property(TEST tst_link_conformance_session_datachannel APPEND PROPERTY
+            ENVIRONMENT "HOME=${_lcs_dcall_home}")
+        if(APPLE)
+            set_property(TEST tst_link_conformance_session_datachannel APPEND
+                PROPERTY ENVIRONMENT "CFFIXED_USER_HOME=${_lcs_dcall_home}")
+        endif()
+    endif()
+    set_property(TEST tst_link_conformance_session_datachannel APPEND PROPERTY
+        ENVIRONMENT "NEREUS_LINK_CONNECTABLE=skip" "NEREUS_LINK_MODE=datachannel")
     add_test(NAME tst_link_conformance_session_connectable_datachannel
         COMMAND tst_link_conformance_session)
     set_tests_properties(tst_link_conformance_session_connectable_datachannel PROPERTIES
@@ -8413,7 +8456,8 @@ if(TEST tst_link_conformance_session)
         endif()
     endif()
     foreach(_lcs_entry tst_link_conformance_session tst_link_conformance_session_connectable
-            tst_link_conformance_session_connectable_datachannel)
+            tst_link_conformance_session_connectable_datachannel
+            tst_link_conformance_session_datachannel)
         set_property(TEST ${_lcs_entry} APPEND PROPERTY ENVIRONMENT "NEREUS_LINK_REALTIME=skip")
     endforeach()
     set_property(TEST tst_link_conformance_session_realtime APPEND PROPERTY ENVIRONMENT
@@ -8552,6 +8596,9 @@ nereus_add_test(tst_remote_audio_clock)
 # one hour, not both; on a Linux aarch64 host both hours took 347 s alone
 # and were aborted by that watchdog, and 267 s at the end of a full run.
 # TIMEOUT 700 is about twice the slowest (Linux, alone) measurement.
+# Load findings 3: one hour row still passed QtTest's 300 s watchdog above
+# load 200, so each hour now runs as four quarter-hour rows carrying one
+# simulation on; the watchdog bounds a quarter. TIMEOUT unchanged.
 if(TEST tst_remote_audio_clock)
     set_tests_properties(tst_remote_audio_clock PROPERTIES TIMEOUT 700 PROCESSORS 2)
 endif()

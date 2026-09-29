@@ -67,6 +67,8 @@
 
 #include <QtTest>
 
+#include "TestFunctionGroups.h"
+
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -1606,5 +1608,35 @@ private slots:
     }
 };
 
-QTEST_GUILESS_MAIN(TstStationPairing)
+int main(int argc, char** argv)
+{
+    QCoreApplication app(argc, argv);
+    TstStationPairing test;
+    QTEST_SET_MAIN_SOURCE_PATH
+    // Load findings 3: about 13 s on a quiet machine, past ctest's 120 s
+    // under a loaded full run (the limit is not raised). The wrong-code and
+    // code-handling cases and the pairing peer's cases run as their own
+    // ctest entries, tst_station_pairing_code and tst_station_pairing_peer
+    // (tests/CMakeLists.txt); the rest as tst_station_pairing.
+    const std::optional<QStringList> arguments = NereusSDR::TestFunctionGroups::arguments(
+        test.metaObject(), app.arguments(), "NEREUS_STATION_PAIRING_GROUP",
+        {{QStringLiteral("code"),
+          {QStringLiteral("anExchangeInFlightDoesNotPairOnceTheWindowHasClosed"),
+           QStringLiteral("aWrongCodeFailsOnTheDevicesSideAndBurns"),
+           QStringLiteral("aWrongCodeFailsOnTheCoresSideAndTheWaitDoubles"),
+           QStringLiteral("wrongCodesThroughTheServicePauseOnlyTheService"),
+           QStringLiteral("aConnectionThroughTheServiceCannotPair"),
+           QStringLiteral("leavingAfterTheCoreCommittedBurnsTheCode"),
+           QStringLiteral("theCodeGoesToOneExchangeAtATime"),
+           QStringLiteral("thePairingCodeNeverReachesTheLog"),
+           QStringLiteral("theCodeIsHashedOffTheEventLoop")}},
+         {QStringLiteral("peer"),
+          {QStringLiteral("thePeerPairsByCode"),
+           QStringLiteral("thePeerRefusesAWrongCode"),
+           QStringLiteral("thePeerPairsByOneTap"),
+           QStringLiteral("thePeerRefusesOneTapWhenClaimedOrDenied"),
+           QStringLiteral("thePeerPairsByCodeWhenReopened")}}});
+    return arguments ? QTest::qExec(&test, *arguments) : 1;
+}
+
 #include "tst_station_pairing.moc"

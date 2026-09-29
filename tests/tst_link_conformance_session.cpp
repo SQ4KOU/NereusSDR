@@ -1105,6 +1105,14 @@ void TstLinkConformanceSession::init()
         && qstrcmp(QTest::currentTestFunction(), "sessionFixturesOverADataChannel") != 0) {
         QSKIP("NEREUS_LINK_REALTIME=only runs the real-time fixtures alone");
     }
+    // Load findings 3: the data-channel fixtures run as their own ctest
+    // entry (NEREUS_LINK_MODE=datachannel), the in-process ones and every
+    // other check in the first (NEREUS_LINK_MODE=loopback), so neither
+    // carries the other's time.
+    if (modeSelection() == ModeSelection::DataChannel
+        && qstrcmp(QTest::currentTestFunction(), "sessionFixturesOverADataChannel") != 0) {
+        QSKIP("NEREUS_LINK_MODE=datachannel runs the data-channel fixtures alone");
+    }
 }
 
 void TstLinkConformanceSession::cleanupTestCase()
