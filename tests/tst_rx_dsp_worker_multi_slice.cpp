@@ -784,6 +784,9 @@ private slots:
 
         record.lifecycle.clear();
         model.removeSlice(targetId);
+        // Load findings 3: the stop runs on the receive lane too; compare
+        // once the lane has run it.
+        QVERIFY(model.waitForReceiveLaneForTest());
         QCOMPARE(record.lifecycle, QStringList({
             QStringLiteral("clear"),
             QStringLiteral("run0"),
@@ -794,6 +797,8 @@ private slots:
 
         record.lifecycle.clear();
         remaining->setDiversityEnabled(true);
+        // Wait for the lane, so "nothing ran" is not read before it could.
+        QVERIFY(model.waitForReceiveLaneForTest());
         QVERIFY(record.lifecycle.isEmpty());
         QCOMPARE(record.runStops, 1);
         QCOMPARE(record.destroys, 1);
