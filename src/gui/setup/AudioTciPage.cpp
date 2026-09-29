@@ -141,6 +141,7 @@ void AudioTciPage::buildFormatGroup()
     // Channel count
     m_channelsCombo = new QComboBox(group);
     m_channelsCombo->setStyleSheet(QString::fromLatin1(Style::kComboStyle));
+    m_channelsCombo->setObjectName(QStringLiteral("tciStreamChannelsCombo"));
     m_channelsCombo->addItem(tr("Mono"),   1);
     m_channelsCombo->addItem(tr("Stereo"), 2);
     m_channelsCombo->setToolTip(
@@ -159,7 +160,9 @@ void AudioTciPage::buildFormatGroup()
     });
     form->addRow(tr("Channels:"), m_channelsCombo);
     // R-R3-49: the stream channel count is not applied yet; hidden until it is.
-    UnbuiltFeatures::hideUnlessBuilt(m_channelsCombo, UnbuiltFeature::TciExtras);
+    // Not built yet: in view, disabled, with the reason.
+    UnbuiltFeatures::disableUnlessBuilt(m_channelsCombo, UnbuiltFeature::TciExtras,
+                                        UnbuiltFeatures::notBuiltReason());
 
     // Block size (shared key with CatTciServerPage Group 4)
     m_blockSizeSpin = new QSpinBox(group);
@@ -217,7 +220,6 @@ void AudioTciPage::buildTxDirectionGroup()
         AppSettings::instance().setValue(QStringLiteral("TciTxChannel"), text);
     });
     form->addRow(tr("TX channel:"), m_txChannelCombo);
-    UnbuiltFeatures::hideUnlessBuilt(m_txChannelCombo, UnbuiltFeature::TciExtras);
 
     // TX stream buffering
     m_txBufferingSpin = new QSpinBox(group);

@@ -94,6 +94,18 @@ int indexIn(QLayout* layout, const QWidget* widget, const QLayout* inner)
 
 } // namespace
 
+void disableUnlessBuilt(QWidget* widget, UnbuiltFeature feature, const QString& reason)
+{
+    if (widget == nullptr || isBuilt(feature)) { return; }
+    widget->setEnabled(false);
+    widget->setToolTip(reason);
+}
+
+QString notBuiltReason()
+{
+    return QStringLiteral("Not built yet. NereusSDR's TCI server does not use this option.");
+}
+
 void hideUnlessBuilt(QWidget* widget, UnbuiltFeature feature)
 {
     if (widget == nullptr || isBuilt(feature)) { return; }

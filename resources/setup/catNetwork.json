@@ -436,6 +436,10 @@
               "gate": {
                 "capability": "stationTciSettingsVersion",
                 "min": 1
+              },
+              "availability": {
+                "enabled": false,
+                "reason": "Not built yet. NereusSDR's TCI server does not use this option."
               }
             },
             {
@@ -461,6 +465,10 @@
               "gate": {
                 "capability": "stationTciSettingsVersion",
                 "min": 1
+              },
+              "availability": {
+                "enabled": false,
+                "reason": "Not built yet. NereusSDR's TCI server does not use this option."
               }
             },
             {
@@ -486,6 +494,10 @@
               "gate": {
                 "capability": "stationTciSettingsVersion",
                 "min": 1
+              },
+              "availability": {
+                "enabled": false,
+                "reason": "Not built yet. NereusSDR's TCI server does not use this option."
               }
             }
           ]
