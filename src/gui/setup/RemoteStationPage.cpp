@@ -284,11 +284,12 @@ void RemoteStationPage::rebuildDevices()
                     tr("%1 joined this Core with its pairing token. While the Core accepts "
                        "that token, %1 could join again, so the Core stops accepting it "
                        "first.\n\n"
-                       "After that, the pairing token no longer lets anyone join or connect, "
-                       "and anything connected with it now is disconnected. Paired devices "
-                       "keep working, and new devices pair with a code from Add a device.")
+                       "This is permanent: the pairing token will never again let anyone "
+                       "join or connect, and anything connected with it now is "
+                       "disconnected. Paired devices keep working, and new devices pair with "
+                       "a code from Add a device.")
                         .arg(name),
-                    tr("Stop Accepting the Token and Remove"));
+                    tr("Stop Accepting the Pairing Token and Remove"));
                 // The question runs the event loop: the list may change.
                 if (!self || generation != m_deviceGeneration || !goAhead) { return; }
                 emit revokeStoppingPairingTokenRequested(id);

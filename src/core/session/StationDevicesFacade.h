@@ -161,10 +161,14 @@ public:
     /// Slice control plan Task 8b: removes a computer that joined with the
     /// pairing token while the token still works, by first stopping the
     /// token (retireToken) and then removing it (revoke), as one action.
-    /// Every guard of both is checked before anything changes, so when
-    /// either would refuse nothing changes: the token keeps working and the
-    /// device stays paired. The Core is never left without a paired device
-    /// (Fix wave R1-I1). Any other device is removed as revoke() removes it.
+    /// Every guard of both is checked before anything changes, so a refusal
+    /// by a guard changes nothing: the token keeps working and the device
+    /// stays paired. The Core is never left without a paired device (Fix
+    /// wave R1-I1). One failure is left after the token has stopped: the
+    /// device list cannot be written. Then the token stays stopped (which
+    /// cannot be undone), the device stays paired, and the Core stays
+    /// claimed; a plain revoke() can remove it afterwards. Any other device
+    /// is removed as revoke() removes it.
     DeviceAdminResult retireTokenAndRevoke(const QString& id);
     /// Task 8b: whether removing `id` needs the pairing token stopped first
     /// (a computer that joined with the token, while the token works).

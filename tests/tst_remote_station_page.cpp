@@ -241,7 +241,8 @@ private slots:
         QVERIFY(asked.contains(QStringLiteral("MacBook-Pro (radxa_5c_r3)")));
         QVERIFY(asked.contains(QStringLiteral("stops accepting")));
         QVERIFY(asked.contains(QStringLiteral("Paired devices keep working")));
-        QVERIFY(!goAheadWords.isEmpty());
+        QVERIFY(asked.contains(QStringLiteral("This is permanent")));
+        QVERIFY(goAheadWords.contains(QStringLiteral("Pairing Token")));
         QCOMPARE(stopping.size(), 0);
         QCOMPARE(revoke.size(), 0);
 
