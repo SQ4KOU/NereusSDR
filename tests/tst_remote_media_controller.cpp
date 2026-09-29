@@ -62,6 +62,7 @@
 #include "core/AudioDeviceConfig.h"
 #include "core/AudioEngine.h"
 #include "core/ClarityController.h"
+#include "core/session/SliceAccessMirror.h"
 #include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
 #include "core/settings/SettingsProxy.h"
@@ -1594,6 +1595,109 @@ private slots:
         // still be visible before the new source/context is established.
         QTRY_VERIFY_WITH_TIMEOUT(feed() && replacement->streamCtunPinned(), 5000);
         QTRY_VERIFY(widget->ctunEnabled());
+        client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // Slice control plan Task 14a (carried from Task 8): a C-Tune pin the
+    // Core refused is not asked again on its own. Each fresh picture from
+    // the Core used to re-send the saved preference, so a window the Core
+    // keeps refusing (a listener, say) asked on every tune. A C-Tune gesture,
+    // a new stream lifetime, or a change in who controls the slice may ask
+    // again.
+    void ctunRefusalIsNotResentOnAFreshPicture()
+    {
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
+        RadioModel station;
+        station.setBoardForTest(HPSDRHW::Saturn);
+        station.configureStreamPool(5, 5, 192000);
+        station.setConnectionStateForTest(ConnectionState::Connected);
+        const int sliceId = station.addSlice();
+        auto* sourceSlice = station.sliceById(sliceId);
+        QVERIFY(sourceSlice);
+        const int stream = sourceSlice->streamIndex();
+        QVERIFY(stream >= 0);
+        const double centre = station.streamCentreHz(stream);
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
+        server.setMediaEnabled(true);
+        QPointer<DisplayTransport> sourceMedia;
+        DaemonMediaController daemon(&server, &station, nullptr,
+            [&sourceMedia](QObject* owner) -> IMediaTransport* {
+                sourceMedia = new DisplayTransport(owner);
+                return sourceMedia;
+            });
+        RadioModel remote(RadioModel::Role::Remote);
+        remote.audioEngine()->setMasterMuted(true);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        PanadapterStack stack;
+        auto* first = stack.addPanadapter(QStringLiteral("first"));
+        stack.setActivePan(QStringLiteral("first"));
+        first->setActiveSliceIndex(sliceId);
+        auto* widget = first->spectrumWidget();
+        widget->setDisplayWindowPreservingHistory(centre, 48000);
+        widget->setVfoFrequency(centre);
+        widget->setCtunEnabled(true);
+        widget->setWfAgcEnabled(false);
+        stack.resize(600, 400);
+        stack.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&stack));
+        QPointer<DisplayTransport> sinkMedia;
+        RemoteMediaController gui(&client, &remote, &stack, nullptr,
+            [&sinkMedia](QObject* owner) -> IMediaTransport* {
+                sinkMedia = new DisplayTransport(owner);
+                return sinkMedia;
+            });
+        auto* stationLink = new Test::LoopbackTransport(QStringLiteral("station"));
+        auto* clientLink = new Test::LoopbackTransport(QStringLiteral("client"));
+        stationLink->linkTo(clientLink);
+        client.startSession(clientLink, server.token());
+        server.acceptTransport(stationLink);
+        QTRY_VERIFY(sourceMedia && sinkMedia);
+        sourceMedia->other = sinkMedia;
+        sourceMedia->activate();
+        sinkMedia->activate();
+        QVector<float> iq(2048, 0.001f);
+        const auto feed = [&] {
+            QMetaObject::invokeMethod(&station, "rawIqDataForStream", Qt::DirectConnection,
+                Q_ARG(int, stream), Q_ARG(QVector<float>, iq));
+            return !widget->renderedPixels().isEmpty();
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(feed(), 5000);
+        QTRY_VERIFY(sourceSlice->streamCtunPinned());
+        QTRY_VERIFY(widget->ctunEnabled());
+        SliceModel* mirrored = remote.sliceById(sliceId);
+        QVERIFY(mirrored);
+        const quint64 epoch = mirrored->streamEpoch();
+
+        // The Core refuses the pin; then its picture moves (a fresh context).
+        QSignalSpy pinResults(&client, &StationClient::streamCtunPinFinished);
+        emit client.streamCtunPinFinished(sliceId, epoch, true, false);
+        QCOMPARE(pinResults.size(), 1);
+        const auto moveCoreCentre = [&](double hz) {
+            QVERIFY(station.requestStreamCentre(sliceId, hz));
+            QTRY_VERIFY_WITH_TIMEOUT(feed() && widget->ddcCenterFrequency() == hz, 5000);
+        };
+        moveCoreCentre(centre + 1000);
+        for (int i = 0; i < 6; ++i) { QTest::qWait(50); feed(); }
+        QCOMPARE(pinResults.size(), 1);  // Not asked again.
+
+        // A C-Tune gesture asks again.
+        widget->ctunEnabledChanged(true);
+        QTRY_COMPARE(pinResults.size(), 2);
+        QVERIFY(pinResults.last().at(3).toBool());
+
+        // A change in who controls the slice lets a refused pin be asked
+        // again on the next fresh picture.
+        emit client.streamCtunPinFinished(sliceId, epoch, true, false);
+        QCOMPARE(pinResults.size(), 3);
+        moveCoreCentre(centre + 2000);
+        for (int i = 0; i < 6; ++i) { QTest::qWait(50); feed(); }
+        QCOMPARE(pinResults.size(), 3);
+        emit client.sliceAccess()->changed(sliceId);
+        moveCoreCentre(centre + 3000);
+        QTRY_COMPARE(pinResults.size(), 4);
+        QVERIFY(pinResults.last().at(3).toBool());
         client.disconnectFromStation(QStringLiteral("test complete"));
     }
 
