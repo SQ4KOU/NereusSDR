@@ -565,6 +565,10 @@
 //                Core's spot frequency to the hertz, so its spot click
 //                resolves the Core's mode. J.J. Boyd (KG4VCF), AI-assisted
 //                via Anthropic Claude Code.
+//   2026-09-28 - Parity ruling C4: requestRadioSampleRate,
+//                radioSampleRateReachesEveryReceiver and
+//                changeRadioSampleRate. NereusSDR-original. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-28 - Parity ruling C12: applyPanGridSetting; a remote
 //                window's pans take the Core's per-band grid range.
 //                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
@@ -10688,6 +10692,54 @@ void RadioModel::requestSliceSampleRateClosing(int sliceId, int rateHz,
                 "stayed on their existing DDC windows.")
                 .arg(rateHz / 1000));
     }
+}
+
+void RadioModel::requestRadioSampleRate(int rateHz)
+{
+    // Parity ruling C4. NereusSDR-original: Thetis has one window.
+    if (m_role != Role::Remote) {
+        setSampleRateLiveAsync(rateHz);
+        return;
+    }
+    if (m_station == nullptr) {
+        emit sliceRetuneRejected(
+            -1, noStationReason(QStringLiteral("the sample-rate change to %1 kHz")
+                                    .arg(rateHz / 1000)));
+        return;
+    }
+    if (m_station->radioSampleRateAvailable()) {
+        const IStationLink::CommandOutcome outcome = m_station->requestRadioSampleRate(rateHz);
+        if (!outcome.sent) {
+            emit sliceRetuneRejected(-1, outcome.reason);
+        }
+        return;
+    }
+    // An older Core: each of this window's receivers, lowest id first. On
+    // Protocol 1 the first moves the whole radio and the rest find it at
+    // the rate; on Protocol 2 each moves its receiver.
+    QList<int> ids;
+    for (SliceModel* slice : std::as_const(m_slices)) {
+        if (slice != nullptr) {
+            ids.append(slice->sliceIndex());
+        }
+    }
+    std::sort(ids.begin(), ids.end());
+    for (int id : std::as_const(ids)) {
+        requestSliceSampleRate(id, rateHz);
+    }
+}
+
+bool RadioModel::radioSampleRateReachesEveryReceiver() const
+{
+    if (m_role != Role::Remote) {
+        return true;
+    }
+    return m_station != nullptr && m_station->radioSampleRateAvailable();
+}
+
+void RadioModel::changeRadioSampleRate(int rateHz, std::function<void(bool)> onFinished)
+{
+    requestSampleRateChange({rateHz, true, std::move(onFinished)});
 }
 
 RadioModel::SampleRateReach RadioModel::planSampleRateReach(

@@ -9,6 +9,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-28  J.J. Boyd / KG4VCF  Parity ruling C4: setRadioSampleRate
+//                                    (radioHardwareVersion 9). AI-assisted
+//                                    via Anthropic Claude Code.
 //   2026-09-27  J.J. Boyd / KG4VCF  Task 24: negotiated remote Settings
 //                                    Validation refresh and reply lifetime.
 //                                    AI-assisted implementation via Codex.
@@ -4704,6 +4707,20 @@ StationClient::CommandOutcome StationClient::requestIoBoardI2c(int bus, int addr
                          intArgument("register", reg), boolArgument("write", write),
                          intArgument("value", value) },
                        QStringLiteral("the I2C request"));
+}
+
+bool StationClient::radioSampleRateAvailable() const
+{
+    return radioHardwareAvailable(9);
+}
+
+StationClient::CommandOutcome StationClient::requestRadioSampleRate(int rateHz)
+{
+    if (!radioSampleRateAvailable()) {
+        return IStationLink::requestRadioSampleRate(rateHz);
+    }
+    return sendCommand("setRadioSampleRate", -1, { intArgument("rateHz", rateHz) },
+                       QStringLiteral("the sample-rate change to %1 kHz").arg(rateHz / 1000));
 }
 
 bool StationClient::dspInfoAvailable() const

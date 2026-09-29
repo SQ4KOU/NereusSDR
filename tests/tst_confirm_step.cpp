@@ -2493,6 +2493,122 @@ private slots:
                     .endsWith(QStringLiteral("Your slice B closed: no receiver was free.")));
     }
 
+    // Parity ruling C4: setRadioSampleRate (radioHardwareVersion 9) is a
+    // remote window's Radio Info sample rate, the change a local window
+    // makes (RadioModel::setSampleRateLive's path): every receiver and the
+    // radio's own rate, which new receivers take. Alone on the Core it
+    // applies at once.
+    void aRadioSampleRateChangeMovesEveryReceiverAndTheRadiosRate()
+    {
+        Core core;
+        core.model->configureStreamPool(2, 5, 192000);
+        core.model->sliceById(0)->setFrequency(7074000.0);
+        Device a;
+        core.pair(a);
+        LoopbackTransport* appA = core.signIn(a);
+        QVERIFY(admitted(appA));
+        const int second = core.model->addSlice(QStringLiteral("pan-a2"));
+        core.model->sliceById(second)->setFrequency(14074000.0);
+        const int first = streamOf(core, 0);
+        const int other = streamOf(core, second);
+        QVERIFY(first >= 0 && other >= 0 && first != other);
+        WdspEngine* wdsp = core.model->wdspEngine();
+        wdsp->m_initialized = true;  // friend access (NEREUS_BUILD_TESTS)
+        P1RadioConnection conn;
+        conn.restartStreamWithRate(192000);
+        core.model->injectConnectionForTest(&conn);
+        const auto detach = qScopeGuard([&core] { core.model->injectConnectionForTest(nullptr); });
+        // The radio's rate as a connect leaves it.
+        QVERIFY(core.model->setSampleRateLive(192000) >= 0);
+        QCOMPARE(core.model->connectionSampleRateHz(), 192000);
+
+        const QJsonObject done =
+            core.invoke(appA, "setRadioSampleRate", {int64("rateHz", 96000)});
+        QVERIFY2(done.value(QStringLiteral("accepted")).toBool(false),
+                 QJsonDocument(done).toJson().constData());
+        QTRY_COMPARE(core.model->connectionSampleRateHz(), 96000);
+        QCOMPARE(core.model->streamAllocator().streamSampleRateHz(first), 96000);
+        QCOMPARE(core.model->streamAllocator().streamSampleRateHz(other), 96000);
+        QTRY_COMPARE(static_cast<quint8>(conn.captureBank0ForTest().at(1)), quint8(1));
+
+        // The rate it is at: accepted, nothing moves.
+        const QJsonObject same =
+            core.invoke(appA, "setRadioSampleRate", {int64("rateHz", 96000)});
+        QVERIFY(same.value(QStringLiteral("accepted")).toBool(false));
+        QVERIFY(same.value(QStringLiteral("affected")).toArray().isEmpty());
+
+        // A rate this radio cannot run, and a request it cannot read.
+        const QJsonObject odd =
+            core.invoke(appA, "setRadioSampleRate", {int64("rateHz", 12345)});
+        QVERIFY(!odd.value(QStringLiteral("accepted")).toBool(true));
+        QCOMPARE(odd.value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("This radio cannot run at that sample rate."));
+        const QJsonObject unread =
+            core.invoke(appA, "setRadioSampleRate", {int64("rate", 96000)});
+        QCOMPARE(unread.value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("The Core could not read this request."));
+        QCOMPARE(core.model->connectionSampleRateHz(), 96000);
+    }
+
+    // Parity ruling C4 and ruling 7.1: a radio-wide rate disturbs every
+    // other device's slices, so it is asked of them first, then applies to
+    // every receiver and they are told.
+    void aRadioSampleRateChangeIsAskedOfTheOtherDevices()
+    {
+        Shared s(1);
+        WdspEngine* wdsp = s.core.model->wdspEngine();
+        wdsp->m_initialized = true;  // friend access (NEREUS_BUILD_TESTS)
+        P1RadioConnection conn;
+        conn.restartStreamWithRate(192000);
+        s.core.model->injectConnectionForTest(&conn);
+        const auto detach = qScopeGuard([&s] { s.core.model->injectConnectionForTest(nullptr); });
+        QVERIFY(s.core.model->setSampleRateLive(192000) >= 0);
+
+        const QJsonObject held =
+            s.core.invoke(s.appA, "setRadioSampleRate", {int64("rateHz", 96000)});
+        QCOMPARE(held.value(QStringLiteral("reason")).toString(), kWaiting);
+        const QJsonObject ask = waitForLast(s.appA, QStringLiteral("confirm.request"), 0);
+        const QJsonObject change = ask.value(QStringLiteral("change")).toObject();
+        QCOMPARE(change.value(QStringLiteral("label")).toString(), QStringLiteral("Sample rate"));
+        QCOMPARE(change.value(QStringLiteral("from")).toString(), QStringLiteral("192 kHz"));
+        QCOMPARE(change.value(QStringLiteral("to")).toString(), QStringLiteral("96 kHz"));
+        const QJsonObject slice = ask.value(QStringLiteral("affected")).toArray().first().toObject()
+                                      .value(QStringLiteral("slices")).toArray().first().toObject();
+        QCOMPARE(slice.value(QStringLiteral("sliceId")).toInt(), 1);
+        QCOMPARE(s.core.model->connectionSampleRateHz(), 192000);
+
+        const QJsonObject done = s.proceed(s.appA, ask.value(QStringLiteral("id")).toInteger());
+        QVERIFY2(done.value(QStringLiteral("accepted")).toBool(false),
+                 QJsonDocument(done).toJson().constData());
+        QTRY_COMPARE(s.core.model->connectionSampleRateHz(), 96000);
+        QCOMPARE(s.core.model->streamAllocator().streamSampleRateHz(s.receiver()), 96000);
+        const QJsonObject told = waitForLast(s.appB, QStringLiteral("notice"), 0);
+        QCOMPARE(told.value(QStringLiteral("kind")).toString(), QStringLiteral("settingChanged"));
+        QVERIFY(told.value(QStringLiteral("reason")).toString().startsWith(
+            QStringLiteral("iPhone changed Sample rate from 192 kHz to 96 kHz.")));
+    }
+
+    // Parity ruling C4: like the Core's other radio-wide changes, the rate
+    // waits while the radio is on the air.
+    void aRadioSampleRateChangeWaitsOffTheAir()
+    {
+        Shared s(2, 5, kTransmitter);
+        allowTransmit(s.core);
+        s.core.model->sliceById(1)->setDspMode(DSPMode::USB);
+        s.core.model->sliceById(1)->setFrequency(14200000.0);
+        QVERIFY(s.core.model->txSliceArbiter()->requestHandoff(1));
+        MoxController* mox = s.core.model->moxController();
+        mox->setMox(true, keyerFor(s.b));
+        QTRY_COMPARE(mox->state(), MoxState::Tx);
+        const QJsonObject refused =
+            s.core.invoke(s.appA, "setRadioSampleRate", {int64("rateHz", 96000)});
+        QVERIFY(!refused.value(QStringLiteral("accepted")).toBool(true));
+        QCOMPARE(refused.value(QStringLiteral("reason")).toString(), kRadioOnAir);
+        QCOMPARE(countOf(s.appA, QStringLiteral("confirm.request")), 0);
+        mox->setMox(false, keyerFor(s.b));
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+    }
+
     // Fix wave 2 (Important 4): the proceed confirms closing B's slice 1.
     // Before the change runs on its later turn, B closes slice 1 and A's
     // new slice takes id 1. The change is refused as changed and closes

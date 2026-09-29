@@ -614,10 +614,11 @@ struct Core {
         return connect(app, SessionMessages::authRequest(server->token())) ? app : nullptr;
     }
 
-    QJsonObject invoke(LoopbackTransport* app, const QByteArray& verb)
+    QJsonObject invoke(LoopbackTransport* app, const QByteArray& verb,
+                       const QList<MirrorUpdate>& arguments = {})
     {
         const quint32 id = nextCommandId++;
-        app->sendText(SessionMessages::encode(SessionMessages::commandInvoke(verb, id, {})));
+        app->sendText(SessionMessages::encode(SessionMessages::commandInvoke(verb, id, arguments)));
         const auto find = [app, id]() {
             for (const QJsonObject& o : ofType(app->received(), QStringLiteral("command.result"))) {
                 if (o.value(QStringLiteral("id")).toInteger() == id) {
@@ -1266,6 +1267,16 @@ private slots:
             QCOMPARE(refused.value(QStringLiteral("reason")).toString(), why);
         }
         QCOMPARE(rescans, 0);
+        // Parity ruling C4: the radio's sample rate, a radio-wide change, is
+        // for a paired device too.
+        const QString rateWhy =
+            QStringLiteral("Change the radio's sample rate from a paired device.");
+        QVERIFY2(OperatorWording::isPlain(rateWhy), qPrintable(rateWhy));
+        const QJsonObject rate = core.invoke(
+            token, "setRadioSampleRate",
+            {MirrorUpdate{0, "rateHz", MirrorWireKind::Int64, QVariant(qlonglong(96000))}});
+        QVERIFY(!rate.value(QStringLiteral("accepted")).toBool(true));
+        QCOMPARE(rate.value(QStringLiteral("reason")).toString(), rateWhy);
 
         // A device signed in with its own key (a desktop window after its
         // enrolment, or the phone) is unaffected.

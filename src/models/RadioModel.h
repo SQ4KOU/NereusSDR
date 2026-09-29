@@ -1899,6 +1899,25 @@ public:
     /// relayed onto sliceRetuneRejected by
     /// reportStationRetuneRejected().
     void requestSliceSampleRate(int sliceId, int rateHz);
+
+    /// Parity ruling C4: Setup > Hardware > Radio Info's sample rate, from
+    /// any window. A local model changes the whole radio at once
+    /// (setSampleRateLiveAsync: every receiver and the radio's own rate,
+    /// which new receivers take). A remote model sends the Core the same
+    /// change (verb setRadioSampleRate, radioHardwareVersion 9); on an older
+    /// Core it sends each of this window's receivers' own rate request
+    /// (requestSliceSampleRate), lowest id first, as before. A refusal
+    /// comes back as sliceRetuneRejected(-1, reason).
+    void requestRadioSampleRate(int rateHz);
+    /// Parity ruling C4: true when requestRadioSampleRate reaches every
+    /// receiver and the radio's own rate: always on a local model, and on a
+    /// remote one whose Core offers setRadioSampleRate.
+    bool radioSampleRateReachesEveryReceiver() const;
+    /// Parity ruling C4, the Core's half of setRadioSampleRate: the local
+    /// window's change (setSampleRateLiveAsync), with `onFinished(ok)`
+    /// called once when it has finished (at once, ok, for the rate the
+    /// radio is at; ok false with no connection or WDSP not ready).
+    void changeRadioSampleRate(int rateHz, std::function<void(bool)> onFinished);
     /// requestSliceSampleRate on the Core with `closing` closed through
     /// `close` only once the change is certain (setStreamSampleRateClosing).
     void requestSliceSampleRateClosing(int sliceId, int rateHz, const QSet<int>& closing,

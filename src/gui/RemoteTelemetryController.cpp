@@ -558,6 +558,28 @@ QStringList RemoteTelemetryController::performanceOverlayLines(const RemoteTelem
     return lines;
 }
 
+std::optional<double> RemoteTelemetryController::coreCpuPercent(const RemoteTelemetryView& view,
+                                                                bool system, QString* reason)
+{
+    if (reason) { reason->clear(); }
+    if (view.state == RemoteTelemetryView::State::Unsupported) {
+        if (reason) {
+            *reason = QStringLiteral("This Core does not report its CPU. Updating the Core may help.");
+        }
+        return std::nullopt;
+    }
+    if (view.state != RemoteTelemetryView::State::Current) {
+        if (reason) { *reason = QStringLiteral("The Core's CPU reading is not current."); }
+        return std::nullopt;
+    }
+    const std::optional<double> value =
+        system ? view.coreHost.systemCpuPercent : view.coreHost.processCpuPercent;
+    if (!value && reason) {
+        *reason = QStringLiteral("This Core does not measure its CPU.");
+    }
+    return value;
+}
+
 QString RemoteTelemetryController::detailText() const
 {
     if (m_view.state == RemoteTelemetryView::State::Disconnected) { return tr("No current measurements while disconnected."); }

@@ -67,6 +67,32 @@ void SystemTile::setCpuPercent(double percent)
     m_cpuRow->setValue(QString::asprintf("%.0f%%", percent));
 }
 
+void SystemTile::setCpuRow(const CpuRowCycler::Row& row)
+{
+    m_cpuRow->setLabel(row.label);
+    m_cpuRow->setValue(QString::asprintf("%.0f%%", row.percent));
+    m_cpuRow->setToolTip(row.toolTip);
+    if (m_cpuWarning != row.warning) {
+        m_cpuWarning = row.warning;
+        m_cpuRow->setWarning(row.warning);
+    }
+}
+
+QString SystemTile::cpuRowLabel() const
+{
+    return m_cpuRow->label();
+}
+
+QString SystemTile::cpuRowToolTip() const
+{
+    return m_cpuRow->toolTip();
+}
+
+QString SystemTile::cpuRowStyleSheet() const
+{
+    return m_cpuRow->valueStyleSheet();
+}
+
 void SystemTile::setPaLabel(const QString& label)
 {
     m_paRow->setLabel(label);

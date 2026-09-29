@@ -1636,6 +1636,7 @@ set(GUI_SOURCES
     src/gui/widgets/MetricLabel.cpp
     src/gui/widgets/MetricLabel.h
     src/gui/widgets/SystemTile.cpp
+    src/gui/widgets/CpuRowCycler.cpp
     src/gui/chrome/ChromeFoldPlan.cpp
     src/gui/chrome/ChromeBarController.cpp
     src/gui/chrome/ChromeBarItems.cpp

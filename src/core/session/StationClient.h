@@ -1253,6 +1253,10 @@ public:
                                      int value) override;
     /// Parity Task 14 (radioHardwareVersion 7). Verb "setIoBoardOutput".
     CommandOutcome requestIoBoardOutput(int pin, bool on) override;
+    /// Parity ruling C4: the Core offers setRadioSampleRate
+    /// (radioHardwareVersion 9).
+    bool radioSampleRateAvailable() const override;
+    CommandOutcome requestRadioSampleRate(int rateHz) override;
     /// Parity Task 16 (dspInfoVersion 1). Verb "dsp.filterResponse". The
     /// answer goes to RadioModel::reportStationFilterResponse.
     CommandOutcome requestFilterResponse(int sliceId, bool highResolution) override;

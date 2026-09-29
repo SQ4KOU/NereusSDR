@@ -19,6 +19,9 @@
 //                receive high-pass as Thetis's setAlexHPF /
 //                setBPF1ForOrionIISaturn / setAlex2HPF do (radioHardwareVersion
 //                8). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-28: Parity ruling C4: radioHardwareVersion 9, setRadioSampleRate
+// for a paired device, off the air. J.J. Boyd (KG4VCF), AI-assisted via
+// Anthropic Claude Code.
 // =================================================================
 // src/core/session/StationServer.cpp  (NereusSDR)
 // =================================================================
@@ -4457,6 +4460,24 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
                 message.commandVerb, message.commandId, false,
                 StationRadios::pairedDeviceReason(), {}));
             break;
+        }
+        // Parity ruling C4 (radioHardwareVersion 8): the radio's sample
+        // rate is a radio-wide change, so like the Core's radio verbs it is
+        // for a paired device, and like the transmit region it waits while
+        // the radio is on the air, whoever holds transmit (the change stops
+        // the radio's data flow).
+        if (message.commandVerb == "setRadioSampleRate") {
+            QString refusal;
+            if (!peerSeesPairingCode(transport) && !m_tokenSessionsMayChangeRadioForTest) {
+                refusal = QStringLiteral("Change the radio's sample rate from a paired device.");
+            } else if (!m_radioModel.isNull()) {
+                m_radioModel->stationOnAirRefusal(&refusal);
+            }
+            if (!refusal.isEmpty()) {
+                send(transport, SessionMessages::commandResult(
+                    message.commandVerb, message.commandId, false, refusal, {}));
+                break;
+            }
         }
         {
             // A revoke of the requester's own device, or a token session
@@ -9768,7 +9789,10 @@ int StationServer::radioHardwareVersion() const
     // (RadioModel::savedAlexHpfEdges through the "alex" reload), on and off
     // the air, as Thetis's per-row setters re-select the high-pass with no
     // MOX check (console.cs:18823-19040 [v2.10.3.15]).
-    return m_radioModel->ioBoardFacade()->isBound() ? 8 : 2;
+    // 9 (parity ruling C4): the radio's sample rate from a window
+    // (setRadioSampleRate), every receiver and the radio's own rate, as a
+    // local window's Radio Info change; for a paired device, off the air.
+    return m_radioModel->ioBoardFacade()->isBound() ? 9 : 2;
 }
 
 QString StationServer::radioAntennaRowRefusal(SessionTransport* transport,

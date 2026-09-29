@@ -208,7 +208,7 @@
         {
             "kind": "i64",
             "name": "radioHardwareVersion",
-            "value": 8
+            "value": 9
         },
         {
             "kind": "i64",
@@ -1577,6 +1577,19 @@
             "capabilityVersion": 7,
             "minMinor": 11,
             "verb": "setIoBoardOutput"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "rateHz",
+                    "optional": false
+                }
+            ],
+            "capability": "radioHardwareVersion",
+            "capabilityVersion": 9,
+            "minMinor": 11,
+            "verb": "setRadioSampleRate"
         },
         {
             "arguments": [
