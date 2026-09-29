@@ -83,6 +83,35 @@ private slots:
         QCOMPARE(settings.value(QStringLiteral("BandPlanRegion")).toInt(), 8);
     }
 
+    // The three IARU entries read "IARU Region 1/2/3" (display text only).
+    // The saved BandPlanRegion value stays the entry's number, so a value
+    // saved before the rename still selects the same entry, and picking one
+    // saves the same number as before.
+    void iaruRegionsShowTheirNameAndKeepTheSavedNumber()
+    {
+        auto& settings = AppSettings::instance();
+        const QStringList names{QStringLiteral("IARU Region 1"),
+                                QStringLiteral("IARU Region 2"),
+                                QStringLiteral("IARU Region 3")};
+        for (int i = 0; i < names.size(); ++i) {
+            const int saved = 20 + i;
+            settings.setValue(QStringLiteral("BandPlanRegion"), QString::number(saved));
+            RadioModel model;
+            GeneralOptionsPage page(&model);
+            auto* region = page.findChild<QComboBox*>(QStringLiteral("comboFRSRegion"));
+            QVERIFY(region);
+            QCOMPARE(region->count(), 24);
+            QCOMPARE(region->itemText(saved), names.at(i));
+            QCOMPARE(region->currentIndex(), saved);
+            QCOMPARE(region->currentText(), names.at(i));
+            region->setCurrentIndex(8);
+            region->setCurrentIndex(saved);
+            QCOMPARE(settings.value(QStringLiteral("BandPlanRegion")).toString(),
+                     QString::number(saved));
+        }
+        settings.setValue(QStringLiteral("BandPlanRegion"), QStringLiteral("8"));
+    }
+
     void invalidStoredRegionNeedsAnExplicitSelection()
     {
         auto& settings = AppSettings::instance();
