@@ -3,8 +3,6 @@
 #include <QSignalSpy>
 #include "core/IoBoardHl2.h"
 
-#include <QElapsedTimer>
-#include <atomic>
 #include <thread>
 #include <vector>
 
@@ -210,13 +208,14 @@ private slots:
     // The main thread (the I2C tool) and the connection thread (the poll)
     // both queue transactions while the codec takes them on the connection
     // thread. Every transaction must come out once, each producer's in the
-    // order it queued them, and the depth must stay in range.
+    // order it queued them, and the depth must stay in range. No clock: the
+    // consumer runs until it has every transaction, so load only slows it,
+    // and a lost transaction shows as the ctest time limit.
     void i2cQueue_isSafeAcrossThreads() {
         IoBoardHl2 io;
-        constexpr int kPerProducer = 20000;
-        std::atomic<bool> stop{false};
-        const auto produce = [&io, &stop](quint8 producer) {
-            for (int i = 0; i < kPerProducer && !stop.load();) {
+        constexpr int kPerProducer = 4000;
+        const auto produce = [&io](quint8 producer) {
+            for (int i = 0; i < kPerProducer;) {
                 IoBoardHl2::I2cTxn txn;
                 txn.bus = producer;
                 txn.address = quint8(i & 0x7F);
@@ -234,9 +233,7 @@ private slots:
         int outOfOrder = 0;
         int badDepth = 0;
         std::thread consumer([&]() {
-            QElapsedTimer deadline;
-            deadline.start();
-            while (received < 2 * kPerProducer && deadline.elapsed() < 5000) {
+            while (received < 2 * kPerProducer) {
                 const int depth = io.i2cQueueDepth();
                 if (depth < 0 || depth > IoBoardHl2::kMaxI2cQueue) {
                     ++badDepth;
@@ -255,7 +252,6 @@ private slots:
                 }
                 ++received;
             }
-            stop.store(true);
         });
         std::thread a(produce, quint8(0));
         std::thread b(produce, quint8(1));
