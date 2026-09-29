@@ -400,9 +400,10 @@ private slots:
     // ── Group A fix wave, M3: an older Core takes `power` alone ─────────────
     //
     // A remote window on a Core below transmitSettingsVersion 5 must not
-    // write powerByBandJson or tuneDrivePowerSource, which that Core
-    // refuses; on version 5 or later it writes both. (A local window leaves
-    // the band slot to RadioModel.)
+    // write tuneDrivePowerSource, which that Core refuses; on version 5 or
+    // later it writes that too. It never writes powerByBandJson: the Core
+    // is the table's only writer (it saves PWR into the transmit band's
+    // slot itself), so the window sends the power setting alone.
     void slider_withoutPowerByBand_writesPowerOnly()
     {
         RadioModel rm(RadioModel::Role::Remote);
@@ -423,7 +424,7 @@ private slots:
         applet.setPowerByBandPermitted(true);
         slider->setValue(33);
         QCOMPARE(tx.power(), 33);
-        QCOMPARE(tx.powerForBand(Band::Band20m), 33);
+        QCOMPARE(tx.powerForBand(Band::Band20m), band20Before);
         QCOMPARE(tx.tuneDrivePowerSource(), DrivePowerSource::DriveSlider);
     }
 };

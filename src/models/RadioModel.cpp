@@ -3564,8 +3564,19 @@ RadioModel::RadioModel(Role role, QObject* parent)
     // The PWR setter (console.cs:18437-18448 [v2.10.3.15]) runs
     // ptbPWR_Scroll whatever the tx mode, so a PWR change during TUNE or
     // two-tone recomputes that mode's drive and saves the band's power.
+    // A PWR set before any transmit band is known (no slice yet, no
+    // connect) is a value set for the band the Core would transmit on, so
+    // that band becomes _tx_band and the save lands there. The MOX-edge
+    // restore, which sets nothing, saves nothing until a band is known.
     connect(&m_transmitModel, &TransmitModel::powerChanged, this,
-            [this](int /*power*/) { drivePowerScroll(); });
+            [this](int /*power*/) {
+        if (ownsLocalDsp() && !m_txBandKnown) {
+            m_txBand = transmitSliceBand();
+            m_txBandKnown = true;
+            m_transmitModel.setTuneTxBand(m_txBand);
+        }
+        drivePowerScroll();
+    });
 
     // From mi0bot console.cs:30272 [v2.10.3.13-beta2]: the drive byte is
     // recomputed through the normal path on every MOX-to-TX transition, so a
@@ -6092,16 +6103,14 @@ bool RadioModel::resetRadeVocoderForStation(QString* reason, bool takenOnAir)
 }
 
 // The band the Core transmits on (the transmit slice's frequency, else the
-// last band): PWR's band through applyTransmitBand, and the TUNE path's for
+// last band) through applyTransmitBand: PWR's band, and the TUNE path's for
 // tunePowerForTxBand.
 void RadioModel::refreshTransmitTuneBand()
 {
     if (m_role != Role::Local) {
         return;
     }
-    const Band band = transmitSliceBand();
-    applyTransmitBand(band, /*initializing=*/false);
-    m_transmitModel.setTuneTxBand(band);
+    applyTransmitBand(transmitSliceBand(), /*initializing=*/false);
 }
 
 Band RadioModel::transmitSliceBand() const
@@ -6125,7 +6134,8 @@ Band RadioModel::transmitSliceBand() const
 //       ptbTune.LimitValue = limitTunePower_by_band[(int)value]; //MW0LGE_22b
 //       PWR = power_by_band[(int)value];
 //       TunePWR = tunePower_by_band[(int)value]; //MW0LGE_22b
-// TunePWR goes through TransmitModel::setTuneTxBand (refreshTransmitTuneBand).
+// TunePWR is TransmitModel::setTuneTxBand, inside the same MOX guard: a
+// retune while keyed (TUNE keys MOX) holds the tune power too.
 // Not ported here: the slider limits (NereusSDR has no per-band PWR limit
 // store), the XVTR lo_band lookup ("Fix Penny O/C VHF control Vk4xv") and
 // the FM TX offset save that follow in the setter.
@@ -6140,9 +6150,14 @@ void RadioModel::applyTransmitBand(Band band, bool initializing)
     }
 
     // Upstream's _tx_band starts unset (GEN) and its first real value comes
-    // with initializing; here the first band seen is only recorded, so a
-    // slice added before connect does not move PWR. The connect-time
-    // initializing call loads it.
+    // with initializing. The first band seen here is that value: PWR loads
+    // the band's stored power, so the next save (drivePowerScroll, the
+    // start-of-transmit restore) writes back what was loaded, never a PWR
+    // that belongs to no band. The connect-time call loads it again once
+    // the per-MAC store is in.
+    if (!m_txBandKnown) {
+        initializing = true;
+    }
     Band oldBand = m_txBandKnown ? m_txBand : band;
     if (initializing) {
         oldBand = band; // we cant use tx_band, because it is unset (GEN), unless we save it out it is irrelevant MW0LGE
@@ -6164,6 +6179,8 @@ void RadioModel::applyTransmitBand(Band band, bool initializing)
     // PWR = power_by_band[(int)value]; powerChanged runs drivePowerScroll,
     // which recomputes the drive and saves the same value to m_txBand.
     m_transmitModel.setPower(m_transmitModel.powerForBand(band));
+    // TunePWR = tunePower_by_band[(int)value]; //MW0LGE_22b
+    m_transmitModel.setTuneTxBand(band);
 }
 
 // ---------------------------------------------------------------------------
@@ -22787,10 +22804,18 @@ void RadioModel::drivePowerScroll()
     // hardware/<mac>/powerByBand/<band> key.
     applyDriveSliderPower();
     if (!ownsLocalDsp()) { return; }
-    // _tx_band is m_txBand once applyTransmitBand has run, else the band it
-    // would take (the transmit slice's, else m_lastBand).
-    m_transmitModel.setPowerForBand(m_txBandKnown ? m_txBand : transmitSliceBand(),
-                                    m_transmitModel.power());
+    // _tx_band is m_txBand. Before applyTransmitBand first runs no band's
+    // power has been loaded into PWR, so there is nothing of a band's to save.
+    if (!m_txBandKnown) { return; }
+    m_transmitModel.setPowerForBand(m_txBand, m_transmitModel.power());
+}
+
+// Thetis's _tx_band for the drive math (SetPowerUsingTargetDBM reads
+// power_by_band[(int)_tx_band] and GainByBand(TXBand, ...)): m_txBand, held
+// while keyed, else the band applyTransmitBand would take.
+Band RadioModel::driveTxBand() const
+{
+    return m_txBandKnown ? m_txBand : transmitSliceBand();
 }
 
 void RadioModel::applyDriveSliderPower()
@@ -22812,9 +22837,12 @@ void RadioModel::applyDriveSliderPower()
     const PaProfile* activeProfile = m_paProfileManager->activeProfile();
     if (!activeProfile)      { return; }
 
-    const SliceModel* const txSlice = txBoundSlice();
-    const Band currentBand = txSlice ? bandFromFrequency(txSlice->frequency())
-                                     : m_lastBand;
+    // From Thetis console.cs:46750-46752 [v2.10.3.15] SetPowerUsingTargetDBM:
+    //   case 0: //normal
+    //       new_pwr = ptbPWR.Value;
+    //       power_by_band[(int)_tx_band] = new_pwr;
+    // _tx_band, not the slice's band: a retune while keyed does not move it.
+    const Band currentBand = driveTxBand();
 
     // bFromTune=false, bTwoTone=false: txMode 0 unless TUNE or the two-tone
     // test runs, whose own source the transmit model then reads. The wire byte and
@@ -24762,10 +24790,9 @@ void RadioModel::completeTuneOff()
     // since TUN is now off and the user's saved drive-slider value
     // is the canonical post-restore source.
     m_transmitModel.setPower(m_savedPowerPct);
-    const SliceModel* const txSlice = txBoundSlice();
-    const Band offBand = txSlice
-                            ? bandFromFrequency(txSlice->frequency())
-                            : m_lastBand;
+    // txMode 0 saves PWR into power_by_band[(int)_tx_band]
+    // (console.cs:46750-46752 [v2.10.3.15]); _tx_band held through the tune.
+    const Band offBand = driveTxBand();
     if (m_paProfileManager) {
         const PaProfile* activeProfile = m_paProfileManager->activeProfile();
         if (activeProfile) {

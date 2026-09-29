@@ -5594,6 +5594,9 @@ private:
     // loads the new band's stored power into PWR. `initializing` is the
     // connect-time call after the per-band store loads. Local role only.
     void applyTransmitBand(Band band, bool initializing);
+    // m_txBand once known, else transmitSliceBand(): the band the drive math
+    // reads and saves PWR to (Thetis _tx_band).
+    Band driveTxBand() const;
     // R-R3-49 (parity Task 3): the Core's MicProfileManager's active profile
     // and list onto `transmit` (activeTxProfile, txProfilesJson).
     void publishTxProfiles();

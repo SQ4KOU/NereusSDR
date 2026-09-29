@@ -840,6 +840,82 @@ private slots:
         mox->setMox(false);
         pump();
     }
+
+    // A Core whose first transmit band has a stored power loads it (the
+    // TXBand setter's initializing pass, console.cs:17511-17545
+    // [v2.10.3.15]); the start-of-transmit save then writes that value back,
+    // never a PWR that was not loaded for the band.
+    void firstTransmitBand_loadsStoredPower_keyUnkeyKeepsIt()
+    {
+        AppSettings::instance().clear();
+        RadioModel model;
+        model.setCapsForTest(/*hasAlex=*/false);
+        model.setHpsdrModelForTest(HPSDRModel::ANAN8000D);
+        auto* conn = new MockConnection();
+        std::unique_ptr<MockConnection> connOwner(conn);
+        model.injectConnectionForTest(conn);
+        auto detach = qScopeGuard([&]{ model.injectConnectionForTest(nullptr); });
+        model.moxController()->setTimerIntervals(0, 0, 0, 0, 0, 0);
+        if (PaProfileManager* pm = model.paProfileManager()) {
+            pm->setMacAddress(QStringLiteral("AABBCCDDEEFF"));
+            pm->load(HPSDRModel::ANAN8000D);
+        }
+        TransmitModel& tx = model.transmitModel();
+        tx.setPowerForBand(Band::Band20m, 30);
+
+        model.addSlice();
+        SliceModel* slice = model.activeSlice();
+        QVERIFY(slice != nullptr);
+        QCOMPARE(bandFromFrequency(slice->frequency()), Band::Band20m);
+        pump();
+        QCOMPARE(tx.power(), 30);
+
+        MoxController* mox = model.moxController();
+        mox->setMoxCheck({});
+        mox->setMox(true);
+        pump();
+        QCOMPARE(tx.power(), 30);
+        QCOMPARE(tx.powerForBand(Band::Band20m), 30);
+        mox->setMox(false);
+        pump();
+        QCOMPARE(tx.power(), 30);
+        QCOMPARE(tx.powerForBand(Band::Band20m), 30);
+    }
+
+    // The TXBand setter returns while MOX (//[2.10.3.6]MW0LGE no band change
+    // on TX fix), so TunePWR = tunePower_by_band[value] //MW0LGE_22b does not
+    // run either: a retune while keyed keeps the transmit band's tune power.
+    void keyedRetune_holdsTunePower()
+    {
+        RadioModel model;
+        MockConnection* conn = nullptr;
+        setupModel(model, conn, HPSDRModel::ANAN8000D);
+        std::unique_ptr<MockConnection> connOwner(conn);
+        auto detach = qScopeGuard([&]{ model.injectConnectionForTest(nullptr); });
+        TransmitModel& tx = model.transmitModel();
+        SliceModel* slice = model.activeSlice();
+        QVERIFY(slice != nullptr);
+        tx.setTunePowerForBand(Band::Band80m, 20);
+        tx.setTunePowerForBand(Band::Band40m, 60);
+        pump();
+        QCOMPARE(tx.tunePowerForTxBand(), 20);
+
+        MoxController* mox = model.moxController();
+        mox->setMoxCheck({});
+        mox->setMox(true);
+        pump();
+        slice->setFrequency(7100000.0);
+        pump();
+        QCOMPARE(tx.tunePowerForTxBand(), 20);
+        mox->setMox(false);
+        pump();
+        QCOMPARE(tx.tunePowerForTxBand(), 20);
+
+        // The next band change after unkey loads the new band's tune power.
+        slice->setFrequency(7150000.0);
+        pump();
+        QCOMPARE(tx.tunePowerForTxBand(), 60);
+    }
 };
 
 QTEST_MAIN(TestRadioModelDrivePath)

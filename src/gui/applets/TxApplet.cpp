@@ -1158,35 +1158,22 @@ void TxApplet::wireControls()
         updatePowerSliderLabels();
         if (m_updatingFromModel) { return; }
         tx.setPower(val);
-        // Per-band write: matches Thetis ptbPWR_Scroll at console.cs:28642
-        // [v2.10.3.13] (`power_by_band[(int)_tx_band] = ptbPWR.Value;`).
-        // Without this, the per-band slot only updates indirectly via the
-        // setPowerUsingTargetDbm txMode-0 side-effect (TransmitModel.cpp:825),
-        // which is gated on connected radio + loaded PA profile + !TUNE.
-        // Result: slider moves while disconnected (or before profiles load)
-        // never persist across restart.  setPowerForBand auto-persists to
-        // hardware/<mac>/powerByBand/<band> when m_persistMac is non-empty.
-        //
-        // Source the band from the active slice (the canonical TX band per
-        // RadioModel.cpp:903-905), NOT m_currentBand.  m_currentBand tracks
-        // UI state and is fed by both PanadapterModel::bandChanged AND
-        // SliceModel::frequencyChanged, so it can drift to the panadapter
-        // band on CTUN pans without slice retune — writing through it would
-        // silently corrupt other bands' stored values.  txBand() falls back
-        // to m_currentBand when the active slice is unavailable.
-        // R-R3-49 (group A fix wave, M3): a remote window writes the band
-        // slot and the drive source only to a Core that takes them
-        // (transmitSettingsVersion 5); an older Core takes `power` alone.
-        // A local window leaves the band slot to RadioModel, which saves PWR
-        // into its transmit band on powerChanged (drivePowerScroll, the
-        // ptbPWR_Scroll port); saving here too could pick a different band
-        // (this applet's active slice) from the one that transmits.
+        // The per-band slot (Thetis ptbPWR_Scroll, console.cs:28682-28693
+        // [v2.10.3.15]: `power_by_band[(int)_tx_band] = ptbPWR.Value;`) has
+        // one writer: RadioModel on the radio's side, which saves PWR into
+        // its transmit band on powerChanged (drivePowerScroll). A local
+        // window leaves it there; a remote window sends the power setting
+        // alone and the Core saves it. Writing the slot here too could pick
+        // a different band (this applet's active slice) from the one that
+        // transmits.
         if (m_model && m_model->role() == RadioModel::Role::Local) {
             tx.setTuneDrivePowerSource(DrivePowerSource::DriveSlider);
             return;
         }
+        // R-R3-49 (group A fix wave, M3): a Core below
+        // transmitSettingsVersion 5 refuses tuneDrivePowerSource and takes
+        // `power` alone.
         if (!m_powerByBandPermitted) { return; }
-        tx.setPowerForBand(txBand(), val);
         // Symmetric to the tune-slider auto-switch above: touching the RF
         // Power slider restores the tune source to DriveSlider so the
         // setPowerUsingTargetDbm txMode 1 branch reads tx.power() during
