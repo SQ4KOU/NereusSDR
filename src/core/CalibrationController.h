@@ -29,6 +29,11 @@
 //   2026-09-28 - 6 m LNA gain offsets default to Thetis's 13 dB where
 //                 nothing is stored (JJ's ruling: match Thetis). J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - R-R3-49 (found bug): Log Volts/Amps to VALog.txt works:
+//                 the controller reads the box (logVoltsAmps), the station's
+//                 RadioModel logs through VoltsAmpsLog (Thetis console.cs
+//                 LogVA). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code.
 // =================================================================
 
 // --- From setup.cs ---
@@ -269,6 +274,14 @@ public:
     // PA forward-power table that waits for receive.
     void loadTransmitCalibration();
 
+    // R-R3-49: Volts/Amps Calibration's "Log Volts/Amps to VALog.txt"
+    // (Thetis chkLogVoltsAmps, setup.cs:27627 [v2.10.3.15]), as the
+    // Calibration tab stores it (hardware/<mac>/paCalibration/cal/
+    // logVoltsAmps, "true"/"false" or "True"/"False"). load() and
+    // loadTransmitCalibration() read it; RadioModel writes the log.
+    bool logVoltsAmps() const { return m_logVoltsAmps; }
+    void setLogVoltsAmps(bool on);
+
 signals:
     // Emitted after any setter changes state. P2RadioConnection listens so
     // it can reapply effectiveFreqCorrectionFactor() on the next frequency command.
@@ -285,7 +298,12 @@ signals:
     // `changed()` also fires.
     void paCalProfileChanged();
 
+    // R-R3-49: the Volts/Amps log was turned on or off.
+    void logVoltsAmpsChanged(bool on);
+
 private:
+    void readLogVoltsAmps();
+    bool m_logVoltsAmps{false};
     // Source: setup.cs:5137 udHPSDRFreqCorrectFactor default 1.0 [@501e3f5]
     double m_freqCorrectionFactor{1.0};
     // Source: setup.cs:22701 btnHPSDRFreqCalReset10MHz → value = 1.0 [@501e3f5]

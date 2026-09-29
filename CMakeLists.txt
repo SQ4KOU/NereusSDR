@@ -954,6 +954,8 @@ set(CORE_SOURCES
     src/core/SampleRateCatalog.cpp
     # R-R3-49 / R-IOS-18: Radio Info's text, for the tab and the Setup description.
     src/core/RadioInfoFacts.cpp
+    # R-R3-49: Calibration's Volts/Amps log (Thetis console.cs LogVA).
+    src/core/VoltsAmpsLog.cpp
     src/core/SkuUiProfile.cpp
     src/core/HardwareProfile.cpp
     src/core/LogCategories.cpp

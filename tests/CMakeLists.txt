@@ -2041,6 +2041,10 @@ nereus_add_test(tst_p1_alex_lpf_word_source)
 # (Thetis NetworkIO.VFOfreq).
 nereus_add_test(tst_p1_frequency_correction)
 
+# R-R3-49: Setup > Hardware Config > Calibration's Volts/Amps log (Thetis
+# console.cs LogVA and its reading loop).
+nereus_add_test(tst_volts_amps_log)
+
 # Phase 3F section 16.3.2: with slice A closed, the live receiver in the lowest
 # frame slot stands in for Thetis's RX1 as the source of the Protocol 1
 # receive filters (high-pass, receive low-pass, OC outputs / the HL2's N2ADR

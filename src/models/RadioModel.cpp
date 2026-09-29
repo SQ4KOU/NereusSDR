@@ -572,6 +572,11 @@
 //                 the adjust tooltip's stray %, and the Default profile found
 //                 by its real name after a delete). J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - R-R3-49 (found bug): Log Volts/Amps to VALog.txt works:
+//                 the controller reads the box (logVoltsAmps), the station's
+//                 RadioModel logs through VoltsAmpsLog (Thetis console.cs
+//                 LogVA). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code.
 // =================================================================
 
 //=================================================================
@@ -799,6 +804,7 @@ warren@wpratt.com
 #include "core/CfcProfile.h"
 #include "core/PaProfile.h"
 #include "core/PaProfileManager.h"
+#include "core/VoltsAmpsLog.h"
 #include "core/PaTelemetryScaling.h"
 #include "core/AlexSettingsKeys.h"
 #include "models/PureSignalSettings.h"
@@ -919,6 +925,8 @@ warren@wpratt.com
 
 #include <algorithm>
 #include <array>
+#include <QFileInfo>
+#include <QDir>
 #include <cmath>
 #include <condition_variable>
 #include <functional>
@@ -2194,6 +2202,35 @@ RadioModel::RadioModel(Role role, QObject* parent)
     // the coupling lower — TransmitModel stays a pure data + math model
     // with no manager dependencies.
     m_paProfileManager = new PaProfileManager(this);
+
+    // R-R3-49: Calibration's "Log Volts/Amps to VALog.txt", on the station
+    // that reads the radio (Thetis console.cs LogVA), into VALog.txt beside
+    // the settings file. It turns itself off after an hour, and says so in
+    // the stored box every window reads.
+    m_voltsAmpsLog = new VoltsAmpsLog(this);
+    if (m_role != Role::Remote) {
+        m_voltsAmpsLog->setFilePath(
+            QFileInfo(AppSettings::instance().filePath()).dir().filePath(QStringLiteral("VALog.txt")));
+        connect(&m_calController, &CalibrationController::logVoltsAmpsChanged, this,
+                [this](bool on) {
+            m_voltsAmpsLog->setEnabled(on, QCoreApplication::applicationVersion(),
+                                       QCoreApplication::applicationName() + QLatin1Char(' ')
+                                           + QCoreApplication::applicationVersion(),
+                                       m_calController.paCurrentOffset(),
+                                       m_calController.paCurrentSensitivity());
+        });
+        connect(m_voltsAmpsLog, &VoltsAmpsLog::expired, this, [this]() {
+            // From Thetis console.cs:24862-24866 [v2.10.3.15]:
+            //   if (!IsSetupFormNull) SetupForm.LogVA = false;
+            m_calController.setLogVoltsAmps(false);
+            const QString mac = currentRadioMac();
+            if (!mac.isEmpty()) {
+                AppSettings::instance().setValue(
+                    QStringLiteral("hardware/%1/paCalibration/cal/logVoltsAmps").arg(mac),
+                    QStringLiteral("False"));
+            }
+        });
+    }
 
     // ── 3M-1c Phase L.2: TwoToneController ────────────────────────────────────
     //
@@ -16781,6 +16818,17 @@ void RadioModel::handlePaTelemetry(quint16 fwdRaw, quint16 revRaw,
                                    m_calController.paCurrentSensitivity())
         : 0.0;
     const double paTemp = scalePaTemperatureCelsius(0, model);
+    // R-R3-49: the Volts/Amps log, on the boards that read both. Thetis's
+    // reading loop runs while HasVolts && HasAmps:
+    // From Thetis console.cs:24808 [v2.10.3.15] readMKIIPAVoltsAmps
+    //   // MW0LGE_21k9c
+    //   // MW0LGE [2.9.0.7] changed volts to 150
+    //   //G8NJJ need similar code for Saturn here, but rates from Ssaturn will be different
+    //   while (chkPower.Checked && HardwareSpecific.HasVolts && HardwareSpecific.HasAmps)
+    if (m_voltsAmpsLog && boardCapabilities().hasPaVoltsTelemetry
+        && boardCapabilities().hasPaAmpsTelemetry) {
+        m_voltsAmpsLog->sample(userAdc0Raw, userAdc1Raw, paV, paA);
+    }
 
     // HL2 firmware overloads the C&C status frame's exciter_power AIN5
     // field to carry the FPGA on-die temperature ADC reading; the value
@@ -24876,7 +24924,11 @@ void RadioModel::scheduleRemoteHardwareApply(const QString& key)
         reload = QStringLiteral("n2adr");
     } else if (rest.compare(QLatin1String("cal/txDisplayOffset"), Qt::CaseInsensitive) == 0
                || rest.compare(QLatin1String("cal/paSens"), Qt::CaseInsensitive) == 0
-               || rest.compare(QLatin1String("cal/paOffset"), Qt::CaseInsensitive) == 0) {
+               || rest.compare(QLatin1String("cal/paOffset"), Qt::CaseInsensitive) == 0
+               || rest.compare(QLatin1String("paCalibration/cal/logVoltsAmps"),
+                               Qt::CaseInsensitive) == 0) {
+        // R-R3-49: and the Volts/Amps log box (Thetis turns it on or off at
+        // once, keyed or not; loadTransmitCalibration reads it).
         // R-R3-46 / R-R3-49 (parity Task 13): TX Display Cal and Volts/Amps
         // Calibration, taken on the air as Thetis takes them, apply at once
         // without the PA forward-power table's wait for receive.

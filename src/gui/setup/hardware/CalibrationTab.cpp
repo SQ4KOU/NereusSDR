@@ -50,6 +50,11 @@
 //   2026-09-29 - R-R3-49 (lead's ruling): the correction factors take
 //                 Thetis's 0..65 (was 0..2). J.J. Boyd (KG4VCF), AI-assisted
 //                 via Anthropic Claude Code.
+//   2026-09-29 - R-R3-49 (found bug): Log Volts/Amps to VALog.txt works:
+//                 the controller reads the box (logVoltsAmps), the station's
+//                 RadioModel logs through VoltsAmpsLog (Thetis console.cs
+//                 LogVA). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code.
 // =================================================================
 
 // --- From setup.cs ---
@@ -441,6 +446,7 @@ CalibrationTab::CalibrationTab(RadioModel* model, QWidget* parent)
     // Upstream inline attribution preserved verbatim (console.cs:27453):
     //   chkVFOBLock.Enabled = false; //[2.10.3.7]MW0LGE
     m_logVoltsAmpsCheck = new QCheckBox(tr("Log Volts/Amps to VALog.txt"), vaCalGroup);
+    m_logVoltsAmpsCheck->setObjectName(QStringLiteral("logVoltsAmpsCheck"));
     vaCalForm->addRow(m_logVoltsAmpsCheck);
 
     mainLayout->addWidget(vaCalGroup);
@@ -566,8 +572,21 @@ CalibrationTab::CalibrationTab(RadioModel* model, QWidget* parent)
     });
     connect(m_logVoltsAmpsCheck, &QCheckBox::toggled, this, [this](bool checked) {
         // Source: console.cs:27460-27463 chkLogVoltsAmps_CheckedChanged -> console.LogVA [@501e3f5]
+        // R-R3-49 (found bug): nothing read the box. The station's
+        // controller now logs (RadioModel's VoltsAmpsLog); a remote
+        // window's change reaches the Core as the stored key.
+        if (!m_updatingFromModel && m_calCtrl) {
+            m_calCtrl->setLogVoltsAmps(checked);
+        }
         emit settingChanged(QStringLiteral("cal/logVoltsAmps"), checked);
     });
+    if (m_calCtrl) {
+        // The log turns itself off after an hour; the box follows.
+        connect(m_calCtrl, &CalibrationController::logVoltsAmpsChanged, this, [this](bool on) {
+            QSignalBlocker blocker(m_logVoltsAmpsCheck);
+            m_logVoltsAmpsCheck->setChecked(on);
+        });
+    }
 
     // Sync from controller if already available
     if (m_calCtrl) {
@@ -631,6 +650,12 @@ void CalibrationTab::syncFromController()
     {
         QSignalBlocker sb8(m_ampVoffSpin);
         m_ampVoffSpin->setValue(m_calCtrl->paCurrentOffset());
+    }
+
+    {
+        // R-R3-49: the Volts/Amps log box, as stored.
+        QSignalBlocker sb9(m_logVoltsAmpsCheck);
+        m_logVoltsAmpsCheck->setChecked(m_calCtrl->logVoltsAmps());
     }
 
     m_updatingFromModel = false;

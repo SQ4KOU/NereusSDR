@@ -366,6 +366,11 @@
 //                 the adjust tooltip's stray %, and the Default profile found
 //                 by its real name after a delete). J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - R-R3-49 (found bug): Log Volts/Amps to VALog.txt works:
+//                 the controller reads the box (logVoltsAmps), the station's
+//                 RadioModel logs through VoltsAmpsLog (Thetis console.cs
+//                 LogVA). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code.
 // =================================================================
 
 //=================================================================
@@ -500,6 +505,8 @@
 #include <mutex>   // R-R3-39 RxWorkerTarget
 #include <optional>
 #include <vector>
+
+namespace NereusSDR { class VoltsAmpsLog; }
 
 namespace NereusSDR {
 
@@ -3931,6 +3938,8 @@ public:
     // the existing on*ForTest pattern (setConnectionStateForTest /
     // onConnectedForTest / setLastBandForTest).  Production code reaches
     // the same handler via the lambda installed in wireConnectionSignals.
+    // R-R3-49: Calibration's Volts/Amps log, to point it at a test file.
+    VoltsAmpsLog* voltsAmpsLogForTest() const { return m_voltsAmpsLog; }
     void handlePaTelemetryForTest(quint16 fwdRaw, quint16 revRaw,
                                   quint16 exciterRaw, quint16 userAdc0Raw,
                                   quint16 userAdc1Raw, quint16 supplyRaw) {
@@ -6346,6 +6355,8 @@ private:
     // MAC and load() are called on connect. Backs CalibrationTab UI and
     // P2RadioConnection::hzToPhaseWord(). Phase 3P-G.
     CalibrationController m_calController;
+    // R-R3-49: Calibration's Volts/Amps log (parented to this).
+    VoltsAmpsLog* m_voltsAmpsLog{nullptr};
 
     // Slices and panadapters (client-managed)
     QList<SliceModel*> m_slices;
