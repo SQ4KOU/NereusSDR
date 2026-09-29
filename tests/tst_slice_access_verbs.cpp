@@ -791,6 +791,35 @@ private slots:
     // transmit choice is written only by tx.setTxSlice (and the hosting
     // desktop's own selection), never by the binding a new holder gets by
     // itself, and it goes when control of the slice passes.
+    // Slice control fix wave, round 2: the explicit transmit choice goes
+    // whenever the slice leaves the device's control, however it leaves
+    // (here a plain change of owner, as a layout restore, a token release
+    // or a revoke makes), not only by take and release.
+    void anExplicitTransmitChoiceGoesWhenTheSliceLeavesTheDevicesControl()
+    {
+        Core core;
+        allowTransmit(core);
+        core.model->configureStreamPool(5, 5, 192000);
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(b);
+        LoopbackTransport* appB = core.signIn(b, kSharesTx);
+        QVERIFY(admitted(appB));
+        SliceOwnership* ownership = core.model->sliceOwnership();
+        if (ownership->ownedBy(b.key.fingerprint()).isEmpty()) {
+            QVERIFY(accepted(core.invoke(appB, "addSlice", {utf8("initialPanId", QString())})));
+        }
+        const int mine = ownership->ownedBy(b.key.fingerprint()).first();
+        MoxController* mox = core.model->moxController();
+        mox->setMox(true, keyerFor(b));
+        mox->setMox(false, keyerFor(b));
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        QVERIFY(accepted(core.invoke(appB, "tx.setTxSlice", {int64("sliceId", mine)})));
+        QCOMPARE(core.server->explicitTxSliceFor(b.key.fingerprint()), mine);
+
+        ownership->setOwner(mine, {});
+        QCOMPARE(core.server->explicitTxSliceFor(b.key.fingerprint()), -1);
+    }
+
     void onlyAnExplicitSelectionMarksATransmitSliceChosen()
     {
         Core core;

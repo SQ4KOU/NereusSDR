@@ -8198,6 +8198,19 @@ void StationServer::onSliceOwnerChanged(int sliceId, const QByteArray& oldOwner,
             it->remove(sliceId);
         }
     }
+    // Slice control fix wave, round 2: an explicit transmit choice goes
+    // whenever the slice leaves that device's control, however it left
+    // (a layout restore, a token release and a revoke as well as take and
+    // release).
+    {
+        const SliceOwnership& ownership = *m_radioModel->sliceOwnership();
+        for (auto it = m_explicitTxSlice.begin(); it != m_explicitTxSlice.end();) {
+            it = it.value() == sliceId
+                    && !SliceAccessPolicy::mayChange(ownership, it.key(), sliceId)
+                ? m_explicitTxSlice.erase(it)
+                : std::next(it);
+        }
+    }
     // The markers name the new owner before any view is given one.
     m_markers->refreshOwners();
     // Task 77 (ruling 5.4a): the TX mark follows the owner.
