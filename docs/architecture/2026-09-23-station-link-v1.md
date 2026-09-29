@@ -6174,12 +6174,15 @@ sentence. A client shows the sentence as sent and may offer the fix.
 | `otherDeviceHolds` | <holder> has the transmitter. Take it to stop the transmission. (`tx.unkey`, or TUNE or two-tone off, from a device that does not hold transmit) | `takeTransmit` |
 | `keyEnded` | The Core already stopped this transmission. Key again to transmit. | |
 | `noTransmitSlice` | There is no slice to transmit on. Add a slice first. (every key while the Core has no slice) | |
+| `chooseTransmitSlice` | You took this slice from another device. Choose it for transmit first with its TX button. (a key whose transmit binding would land on a slice this device took from another device and has not chosen with `tx.setTxSlice`, or the hosting desktop's TX button, while it has no other slice it may transmit on) | |
 
 `changingHands` and `stopNotConfirmed` are the several-devices design's two
 sentences without codes; `keyEnded` answers a copy of a key the Core has
 already stopped (section 18.6); `holderOnAir` is ruling 7.4's; `notHolder` answers
 `tx.setTxSlice` while nobody holds transmit, a case the design does not
-settle.
+settle. `chooseTransmitSlice` is the slice control plan's ruling Q8(c):
+a lone window or phone keying on its own slice is never refused for not
+having sent `tx.setTxSlice`.
 
 ### 18.4 While the holder is on the air
 

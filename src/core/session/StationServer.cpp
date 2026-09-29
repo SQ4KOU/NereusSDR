@@ -670,6 +670,12 @@
 //               same dispatcher, checks and confirm step as a remote
 //               device's. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 11: the keying gate refuses a key
+//               on a slice taken from another device and not chosen, and
+//               only an explicit choice (tx.setTxSlice, the hosting
+//               desktop's selection) clears the taken mark. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -1873,6 +1879,19 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
             request.source = keyer.isStation() && source == PttMode::Mic
                                  ? TransmitHolder::Source::RadioPtt
                                  : TransmitHolder::Source::Device;
+            // Slice control plan Task 11 (ruling Q8): a key that would land
+            // on a slice the device took from another device and has not
+            // chosen, with no other slice it may transmit on, is refused.
+            // The radio's own PTT transmits where the flag is (ruling 8.11).
+            // Asked after the holder's own refusals, so another device's
+            // hold is still named first.
+            if (request.source == TransmitHolder::Source::Device
+                && m_transmitHolder->keyRefusalFor(request.deviceId, request.program).isEmpty()) {
+                if (const TxRefusal taken = takenSliceKeyRefusal(request.deviceId);
+                    !taken.isEmpty()) {
+                    return {KeyingVerdict::Refuse, taken};
+                }
+            }
             const quint64 epochBefore = m_transmitHolder->epoch();
             const KeyingAnswer answer = m_transmitHolder->askKey(request);
             // Fix wave 2, Important 2: a take whose key never starts (a
@@ -2720,6 +2739,8 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
         // the station device's explicit choice.
         connect(radioModel, &RadioModel::txSliceSelected, this, [this](int sliceId) {
             m_explicitTxSlice.insert(SliceOwnership::stationDevice(), sliceId);
+            // Task 11: a slice it took is its transmit slice once chosen.
+            m_takenNotChosenForTx[SliceOwnership::stationDevice()].remove(sliceId);
         });
         // The checks and the change behind slice.listen, slice.stopListening,
         // slice.takeControl and slice.release (and, in Task 10, the hosting
@@ -2784,6 +2805,10 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
         // a device's explicit transmit choice.
         access.txSliceChosen = [this](const QByteArray& requester, int sliceId) {
             m_explicitTxSlice.insert(requester, sliceId);
+            // Slice control plan Task 11 (ruling Q8): a slice it took is its
+            // transmit slice once it chooses it here, never by a binding
+            // it got by itself.
+            m_takenNotChosenForTx[requester].remove(sliceId);
         };
         // Task 35: tx.key, tx.unkey, tx.tune and tx.twoTone.
         access.keying = [this](const RemoteKeying::Command& command, RemoteKeying::Reply reply) {
@@ -2898,9 +2923,9 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
                             && SliceAccessPolicy::mayTransmitOn(
                                 *m_radioModel->sliceOwnership(), holder->deviceId, newId)) {
                             m_chosenTxSlice.insert(holder->deviceId, newId);
-                            // Slice control plan Task 4 (ruling Q8): a slice
-                            // it took is its transmit slice once chosen.
-                            m_takenNotChosenForTx[holder->deviceId].remove(newId);
+                            // Slice control plan Task 11: the taken mark goes
+                            // only on an explicit choice (txSliceChosen,
+                            // txSliceSelected), never on this binding.
                         }
                         m_connectedDevices->refresh();
                         if (m_sliceAccessSet) {

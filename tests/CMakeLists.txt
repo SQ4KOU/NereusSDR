@@ -2968,6 +2968,16 @@ nereus_add_test(tst_tx_applet_tune_wiring)
 # console.cs:17513 [v2.10.3.13].
 nereus_add_test(tst_tx_applet_rf_power_per_band)
 
+# ── Slice control plan Task 11 (Q15, U8): TX applet follows transmit ─────────
+# The TX band and per-band power follow the transmit-bound slice, never the
+# active or a listened one; the letter row offers only controlled slices.
+# The hosted case runs a real Core with a second device over loopback. No
+# radio, no RF.
+nereus_add_test(tst_tx_applet_binding
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+target_compile_definitions(tst_tx_applet_binding PRIVATE NEREUS_BUILD_TESTS)
+
 # ── R-R3-21: TUNE button follows the true Tune state ─────────────────────────
 # Drives a real TxApplet: a band-plan-refused press leaves the button
 # unchecked and reading "TUNE"; an accepted press reads "TUNING..." and

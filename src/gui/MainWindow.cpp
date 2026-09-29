@@ -374,6 +374,12 @@
 //               device (HostingSliceActions), with a remote device's checks,
 //               questions and notices. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-09-29 - Slice control plan Task 11: the TX applet follows the
+//               transmit-bound slice (its band, per-band power and every
+//               transmit control), offers a letter per slice this window
+//               controls (tx.setTxSlice from a remote window), and a hosting
+//               window's empty pans get station-device slices. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -1542,13 +1548,32 @@ bool MainWindow::desktopHosting() const
 
 bool MainWindow::desktopSliceAllowed(int sliceId) const
 {
-    if (!desktopHosting() || !m_radioModel || !m_radioModel->sliceOwnership()
-        || !m_radioModel->sliceById(sliceId)) { return false; }
+    return desktopHosting() && stationControlsSlice(m_radioModel, sliceId);
+}
+
+bool MainWindow::stationControlsSlice(const RadioModel* model, int sliceId)
+{
+    if (!model || !model->sliceOwnership() || !model->sliceById(sliceId)) { return false; }
     // Slice control plan Task 2: a slice the station device may change as
     // its own (not one it runs held for an absent device).
-    const SliceOwnership& ownership = *m_radioModel->sliceOwnership();
+    const SliceOwnership& ownership = *model->sliceOwnership();
     return SliceAccessPolicy::mayChange(ownership, SliceOwnership::stationDevice(), sliceId)
         && !ownership.mark(sliceId).isHeld();
+}
+
+SliceModel* MainWindow::stationTransmitSlice(RadioModel* model)
+{
+    if (!model || !model->sliceOwnership()) { return nullptr; }
+    if (TxSliceArbiter* arbiter = model->txSliceArbiter()) {
+        SliceModel* bound = arbiter->txBoundSlice();
+        if (bound && stationControlsSlice(model, bound->sliceIndex())) { return bound; }
+    }
+    const int chosen = model->sliceOwnership()->activeFor(SliceOwnership::stationDevice());
+    if (stationControlsSlice(model, chosen)) { return model->sliceById(chosen); }
+    for (SliceModel* slice : model->slices()) {
+        if (slice && stationControlsSlice(model, slice->sliceIndex())) { return slice; }
+    }
+    return nullptr;
 }
 
 bool MainWindow::desktopListensTo(int sliceId) const
@@ -1821,15 +1846,29 @@ void MainWindow::refreshDesktopStationState()
                 [this](bool on) { requestDesktopTransmit(true, on); },
                 [this] { return desktopOwnsTransmit() && m_radioModel
                     && m_radioModel->moxController() && m_radioModel->moxController()->isMox(); },
-                [this] { return desktopOwnsTransmit() && m_radioModel && m_radioModel->isTune(); },
-                [this] {
-                    return activeSliceForWindow();
+                [this] { return desktopOwnsTransmit() && m_radioModel && m_radioModel->isTune(); });
+            // Slice control plan Task 11: the TX applet's band, per-band
+            // power and every transmit control follow the slice transmit is
+            // bound to, never a slice this window only listens to.
+            m_txApplet->setTransmitSliceResolver([this]() -> SliceModel* {
+                return desktopHosting() ? stationTransmitSlice(m_radioModel) : nullptr;
+            });
+            // U8: one letter per slice this window controls. A press moves
+            // transmit there (the arbiter drops MOX first, ruling 8.10).
+            m_txApplet->setTransmitSliceChoices(
+                [this](int id) { return desktopSliceAllowed(id); },
+                [this](int id) {
+                    if (desktopOwnsTransmit() && m_radioModel) {
+                        m_radioModel->requestTxHandoffToSlice(id);
+                    }
+                },
+                [this]() {
+                    return desktopOwnsTransmit() ? QString() : TxRefusals::notHolder().text;
                 });
-            if (SliceModel* active = m_radioModel->sliceById(activeId)) {
-                m_txApplet->setCurrentBand(bandFromFrequency(active->frequency()));
-            }
         } else {
             m_txApplet->setDesktopKeyHandlers({}, {}, {}, {});
+            m_txApplet->setTransmitSliceResolver({});
+            m_txApplet->setTransmitSliceChoices({}, {}, {});
         }
     }
     refreshActiveSlicePresentation();
@@ -2057,6 +2096,45 @@ void MainWindow::wireRemoteTransmitMeters()
     connect(state, &TransmitState::holderChanged, this, &MainWindow::applyRemoteRoleGating);
     connect(m_stationClient, &StationClient::handshakeComplete, this, showHolder);
     showHolder();
+    // Slice control plan Task 11 (U8): the TX applet follows the slice the
+    // Core marks for transmit, offers a letter per slice this window
+    // controls, and a press asks the Core with tx.setTxSlice (the Core
+    // drops MOX before it moves transmit, ruling 8.10).
+    if (m_txApplet) {
+        m_txApplet->setTransmitSliceResolver([this]() -> SliceModel* {
+            if (!m_radioModel) { return nullptr; }
+            for (SliceModel* slice : m_radioModel->slices()) {
+                if (slice && slice->isTxSlice()) { return slice; }
+            }
+            return m_radioModel->activeSlice();
+        });
+        m_txApplet->setTransmitSliceChoices(
+            [this](int id) {
+                SliceAccessMirror* access = m_stationClient ? m_stationClient->sliceAccess()
+                                                            : nullptr;
+                return !access || !access->entry(id).has_value() || access->controlledHere(id);
+            },
+            [this](int id) {
+                if (m_stationClient) { m_stationClient->requestTxSlice(id); }
+            },
+            [this]() {
+                if (!m_stationClient) { return QString(); }
+                if (!m_stationClient->sessionHolderAvailable()
+                    || !m_stationClient->remoteTransmitAvailable()) {
+                    return tr("This Core does not offer moving transmit between slices to this app.");
+                }
+                return m_stationClient->holdsTransmitHere()
+                    ? QString() : TxRefusals::notHolder().text;
+            });
+        connect(state, &TransmitState::holderChanged, m_txApplet,
+                &TxApplet::refreshTransmitSliceChoices);
+        connect(m_stationClient, &StationClient::handshakeComplete, m_txApplet,
+                &TxApplet::refreshTransmitSliceChoices);
+        if (SliceAccessMirror* access = m_stationClient->sliceAccess()) {
+            connect(access, &SliceAccessMirror::changed, m_txApplet,
+                    [this](int) { if (m_txApplet) { m_txApplet->refreshTransmitSliceChoices(); } });
+        }
+    }
 }
 
 void MainWindow::wireRemoteDevices()
@@ -8342,59 +8420,10 @@ void MainWindow::populateDefaultMeter()
         txApplet->setPureSignal(ps);
     }
 
-    // 3M-1a H.1-H.4 fixup: wire panadapter band changes to TxApplet so
-    // the per-band Tune Power slider tracks the active band.
-    // Without this, m_currentBand stays at Band::Band20m permanently.
-    if (!m_radioModel->panadapters().isEmpty()) {
-        PanadapterModel* pan0 = m_radioModel->panadapters().first();
-        connect(pan0, &PanadapterModel::bandChanged,
-                txApplet, &TxApplet::setCurrentBand);
-        // Push the initial band immediately so the slider shows the right value.
-        txApplet->setCurrentBand(pan0->band());
-    }
-
-    // 3M-1a (2026-04-27): also track every SLICE'S frequency.  The
-    // panadapter band only changes when its center crosses a band
-    // boundary, but the user's slice can sit on a different band entirely
-    // (e.g. the slice loaded at 7.241 MHz while the panadapter center is
-    // still on 14 MHz from a prior session). Without this wire,
-    // TxApplet's m_currentBand lags the slice → the TUN-power slider
-    // writes to the wrong band's stored value (or no-ops on the
-    // m_currentBand-default band — bench-confirmed 2026-04-27 with the
-    // slider only working on 20m even after retuning to 40m).
-    //
-    // Pattern matches AntennaAlexAlex2Tab.cpp:408-425 — subscribe to
-    // every current slice AND every future-added slice (slices are
-    // created by addSlice() AFTER MainWindow construction, so a single-
-    // shot activeSlice() check at construction returns null and never
-    // wires up).
-    {
-        auto subscribeToSlice = [this, txApplet](SliceModel* slice) {
-            if (!slice) { return; }
-            connect(slice, &SliceModel::frequencyChanged,
-                    txApplet, [this, txApplet, slice](double freq) {
-                        if (desktopHosting() && (!m_radioModel->sliceOwnership()
-                            || m_radioModel->sliceOwnership()->activeFor(
-                                SliceOwnership::stationDevice()) != slice->sliceIndex())) { return; }
-                        txApplet->setCurrentBand(bandFromFrequency(freq));
-                    });
-            // Push the slice's current band immediately — overrides the
-            // panadapter initial when the slice is on a different band.
-            if (!desktopHosting() || (m_radioModel->sliceOwnership()
-                && m_radioModel->sliceOwnership()->activeFor(
-                    SliceOwnership::stationDevice()) == slice->sliceIndex())) {
-                txApplet->setCurrentBand(bandFromFrequency(slice->frequency()));
-            }
-        };
-        for (SliceModel* slice : m_radioModel->slices()) {
-            subscribeToSlice(slice);
-        }
-        connect(m_radioModel, &RadioModel::sliceAdded, txApplet,
-                [this, subscribeToSlice](int index) {
-                    subscribeToSlice(
-                        sliceForAddedIdForTest(m_radioModel, index));
-                });
-    }
+    // Slice control plan Task 11: TxApplet follows the transmit-bound
+    // slice's band itself (TxApplet::followTransmitSlice), so the per-band
+    // Tune Power and power sliders read that slice's band, never the
+    // panadapter's or a listened slice's.
 
     // PhoneCwApplet — Phone + CW pages, NYI
     m_phoneCwApplet = new PhoneCwApplet(m_radioModel, nullptr);
@@ -14553,18 +14582,26 @@ void MainWindow::populateEmptyPans(bool operatorRequested)
     }
 
     populatePanSlices(m_radioModel, ids, operatorRequested,
-                      m_stationClient && m_stationClient->isHandshakeComplete());
+                      m_stationClient && m_stationClient->isHandshakeComplete(),
+                      hostingSlices());
 }
 
 void MainWindow::populatePanSlices(RadioModel* model, const QStringList& panIds,
-                                  bool operatorRequested, bool snapshotReady)
+                                  bool operatorRequested, bool snapshotReady,
+                                  HostingSliceActions* hosting)
 {
     if (!model) { return; }
     // Restoring a client layout is never permission to create station slices.
     // Capabilities report radio connectivity before slice snapshot hydration.
     if (!model->ownsLocalDsp() && (!operatorRequested || !snapshotReady)) { return; }
     for (const QString& emptyPan : model->pansWithoutSlices(panIds)) {
-        model->addSliceOnPan(emptyPan);
+        // Slice control plan Task 11: a hosting window's new slice is the
+        // station device's, asked for the way its +RX asks.
+        if (hosting) {
+            hosting->addOnPan(emptyPan);
+        } else {
+            model->addSliceOnPan(emptyPan);
+        }
     }
 }
 

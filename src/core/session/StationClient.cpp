@@ -308,6 +308,10 @@
 //   2026-09-29: slice control plan Task 14b: requestListenLevel sends
 //               slice.setListenLevel for a listened flag's "Your volume".
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 11: requestTxSlice sends
+//               tx.setTxSlice for the TX applet's transmit-slice letters,
+//               answered on deviceCommandFinished. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SystemProxy.h"
@@ -6337,13 +6341,15 @@ void StationClient::handleCommandResult(const SessionMessage& message)
     }
     // Slice control plan Task 5: the four slice access verbs are answered
     // where the window's several-devices refusals are shown; Task 14b adds
-    // a listened slice's own volume (slice.setListenLevel).
+    // a listened slice's own volume (slice.setListenLevel), Task 11 the
+    // transmit slice's choice (tx.setTxSlice).
     if (message.commandVerb == "tx.take" || message.commandVerb == "confirm.proceed"
         || message.commandVerb == "confirm.cancel" || message.commandVerb == "notice.takeBack"
         || message.commandVerb == "session.leave" || message.commandVerb == "slice.listen"
         || message.commandVerb == "slice.stopListening"
         || message.commandVerb == "slice.takeControl" || message.commandVerb == "slice.release"
-        || message.commandVerb == "slice.setListenLevel") {
+        || message.commandVerb == "slice.setListenLevel"
+        || message.commandVerb == "tx.setTxSlice") {
         m_pendingCommands.remove(message.commandId);
         emit deviceCommandFinished(message.commandVerb, message.commandId, message.accepted,
                                    message.reason, awaiting);
@@ -7125,6 +7131,19 @@ quint32 StationClient::requestTakeTransmit(bool shown, qint64 holderEpoch, bool 
                                  QVariant(shownKeyed)});
     }
     return invokeCommand(QByteArrayLiteral("tx.take"), args);
+}
+
+quint32 StationClient::requestTxSlice(int sliceId)
+{
+    // tx.setTxSlice came with remoteTxVersion 1 (iPhone app plan Task 34);
+    // the Core answers notHolder while this window does not hold transmit.
+    if (!sessionHolderAvailable() || !remoteTransmitAvailable() || sliceId < 0) {
+        return 0;
+    }
+    return invokeCommand(
+        QByteArrayLiteral("tx.setTxSlice"),
+        {MirrorUpdate{0, QByteArrayLiteral("sliceId"), MirrorWireKind::Int64,
+                      QVariant(static_cast<qint64>(sliceId))}});
 }
 
 quint32 StationClient::proceedQuestion(qint64 id, qint64 choice)

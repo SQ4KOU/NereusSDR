@@ -149,6 +149,12 @@
 //                Pwr and SWR bars fall at the Core's unkey as a local
 //                window's do at its own. AI-assisted via Anthropic Claude
 //                Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Slice control plan Task 11 (Q15, U8):
+//                the TX band, per-band power, MOX mode tooltip and TX filter
+//                status follow the transmit slice (setTransmitSliceResolver,
+//                followTransmitSlice), never a listened slice; the
+//                transmit-slice letter row. AI-assisted via Anthropic Claude
+//                Code.
 // =================================================================
 
 //=================================================================
@@ -269,6 +275,7 @@
 #include "core/session/PureSignalSessionFacade.h"
 #include "core/TwoToneController.h"
 #include "core/TxChannel.h"
+#include "core/TxSliceArbiter.h"
 #include "models/PureSignalSettings.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -537,6 +544,13 @@ void TxApplet::buildUI()
         row->addWidget(m_moxBtn, 1);
 
         vbox->addLayout(row);
+
+        // Slice control plan Task 11 (U8): which slice transmits, one letter
+        // per slice this window controls; the checked one is the transmit
+        // slice (refreshTransmitSliceChoices fills it).
+        m_txSliceRow = new QHBoxLayout;
+        m_txSliceRow->setSpacing(2);
+        vbox->addLayout(m_txSliceRow);
 
         // Fix wave I4: who holds transmit on the Core, in a remote window
         // (setTransmitHolderText). Empty, and so not shown, otherwise.
@@ -1371,9 +1385,30 @@ void TxApplet::wireControls()
         // Task 16 fix wave (M3): the MOX tooltip, and the receive-only lock
         // over it, follow the active slice when it changes, not only the
         // slice that was active here.
-        followActiveSliceMode();
+        // Slice control plan Task 11 (Q15): the transmit slice, not the
+        // active one; re-followed whenever either may have moved.
+        followTransmitSlice();
+        refreshTransmitSliceChoices();
         connect(m_model, &RadioModel::activeSliceChanged,
-                this, [this](int) { followActiveSliceMode(); });
+                this, [this](int) { followTransmitSlice(); });
+        if (TxSliceArbiter* arbiter = m_model->txSliceArbiter()) {
+            connect(arbiter, &TxSliceArbiter::txBoundSliceChanged, this, [this](int, int) {
+                followTransmitSlice();
+                refreshTransmitSliceChoices();
+            });
+        }
+        // A remote window's flag arrives mirrored from the Core onto the
+        // slice, so each slice's own flag change re-follows too.
+        watchTransmitFlags();
+        connect(m_model, &RadioModel::sliceAdded, this, [this](int) {
+            watchTransmitFlags();
+            followTransmitSlice();
+            refreshTransmitSliceChoices();
+        });
+        connect(m_model, &RadioModel::sliceRemoved, this, [this](int) {
+            followTransmitSlice();
+            refreshTransmitSliceChoices();
+        });
         // Task 16: receive only turning on or off, or its reason changing
         // (a radio with no transmitter).
         connect(m_model, &RadioModel::rxOnlyChanged, this, [this](bool) {
@@ -1692,13 +1727,7 @@ void TxApplet::wireControls()
     // Model → UI: TransmitModel::filterChanged(int,int) → QSignalBlocker on
     //             both spinboxes, then setValue + refresh status label.
     // Status label refresh helper (shared by filterChanged and dspModeChanged).
-    auto refreshFilterStatus = [this]() {
-        if (!m_txFilterStatusLabel || !m_model) { return; }
-        SliceModel* slice = activeSliceForControls();
-        const DSPMode mode = slice ? slice->dspMode() : DSPMode::USB;
-        m_txFilterStatusLabel->setText(
-            m_model->transmitModel().filterDisplayText(mode));
-    };
+    auto refreshFilterStatus = [this]() { refreshTxFilterStatus(); };
 
     if (m_txFilterLowSpin) {
         connect(m_txFilterLowSpin, QOverload<int>::of(&QSpinBox::valueChanged),
@@ -1731,16 +1760,9 @@ void TxApplet::wireControls()
         refreshFilterStatus();
     });
 
-    // Status label refresh on DSP mode change (symmetric ↔ asymmetric format).
-    // Piggybacks on the same active-slice connect block used by K.2 above.
-    if (SliceModel* slice = activeSliceForControls()) {
-        connect(slice, &SliceModel::dspModeChanged,
-                this, [refreshFilterStatus](DSPMode) {
-            refreshFilterStatus();
-        });
-        // Set initial status label text.
-        refreshFilterStatus();
-    }
+    // Status label refresh on DSP mode change (symmetric ↔ asymmetric format)
+    // rides followTransmitSlice's connection (slice control plan Task 11).
+    refreshFilterStatus();
 
     // ── Phase 3M-1c J.2 ─ 2-TONE button wiring ───────────────────────────────
     // toggled → TwoToneController::setActive.  Echo-guarded.
@@ -1945,11 +1967,7 @@ void TxApplet::syncFromModel()
         QSignalBlocker bHi(m_txFilterHighSpin);
         m_txFilterHighSpin->setValue(tx.filterHigh());
     }
-    if (m_txFilterStatusLabel) {
-        SliceModel* slice = activeSliceForControls();
-        const DSPMode mode = slice ? slice->dspMode() : DSPMode::USB;
-        m_txFilterStatusLabel->setText(tx.filterDisplayText(mode));
-    }
+    refreshTxFilterStatus();
 
     // Mic-source badge (J.3 Phase 3M-1b; extended to 3-way in Phase 3M-VAX-toggle)
     if (m_micSourceBadge) {
@@ -1980,16 +1998,77 @@ void TxApplet::syncFromModel()
 void TxApplet::setDesktopKeyHandlers(std::function<void(bool)> mox,
                                      std::function<void(bool)> tune,
                                      std::function<bool()> moxOn,
-                                     std::function<bool()> tuneOn,
-                                     std::function<SliceModel*()> activeSlice)
+                                     std::function<bool()> tuneOn)
 {
     m_desktopMoxRequest = std::move(mox);
     m_desktopTuneRequest = std::move(tune);
     m_desktopMoxOn = std::move(moxOn);
     m_desktopTuneOn = std::move(tuneOn);
-    m_desktopActiveSlice = std::move(activeSlice);
-    followActiveSliceMode();
     syncFromModel();
+}
+
+void TxApplet::setTransmitSliceResolver(std::function<SliceModel*()> resolver)
+{
+    m_transmitSliceResolver = std::move(resolver);
+    followTransmitSlice();
+    refreshTransmitSliceChoices();
+}
+
+void TxApplet::setTransmitSliceChoices(std::function<bool(int)> controlled,
+                                       std::function<void(int)> choose,
+                                       std::function<QString()> unavailableReason)
+{
+    m_txSliceControlled = std::move(controlled);
+    m_txSliceChoose = std::move(choose);
+    m_txSliceUnavailable = std::move(unavailableReason);
+    refreshTransmitSliceChoices();
+}
+
+void TxApplet::refreshTransmitSliceChoices()
+{
+    if (!m_txSliceRow) { return; }
+    for (QPushButton* button : std::as_const(m_txSliceButtons)) {
+        m_txSliceRow->removeWidget(button);
+        button->deleteLater();
+    }
+    m_txSliceButtons.clear();
+    if (!m_model) { return; }
+    const SliceModel* current = transmitSlice();
+    const QString reason = m_txSliceUnavailable ? m_txSliceUnavailable() : QString();
+    const QString btnStyle = Style::buttonBaseStyle()
+        + QStringLiteral("QPushButton { padding: 2px; }") + Style::greenCheckedStyle();
+    for (SliceModel* slice : m_model->slices()) {
+        if (!slice) { continue; }
+        const int id = slice->sliceIndex();
+        // U8: only the slices this window controls, never one it listens to.
+        if (m_txSliceControlled && !m_txSliceControlled(id)) { continue; }
+        auto* button = new QPushButton(slice->sliceLetter(), this);
+        button->setObjectName(QStringLiteral("TxSliceButton%1").arg(slice->sliceLetter()));
+        button->setCheckable(true);
+        button->setChecked(slice == current);
+        button->setFixedHeight(20);
+        button->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+        button->setStyleSheet(btnStyle);
+        button->setProperty("sliceId", id);
+        button->setAccessibleName(QStringLiteral("Transmit on slice %1").arg(slice->sliceLetter()));
+        // Disabled, never hidden: the reason is the tooltip.
+        button->setEnabled(reason.isEmpty());
+        button->setToolTip(reason.isEmpty()
+            ? QStringLiteral("Transmit on slice %1").arg(slice->sliceLetter()) : reason);
+        connect(button, &QPushButton::clicked, this, [this, button, id](bool) {
+            // The model's answer checks the row; the press alone does not.
+            if (button) { button->setChecked(transmitSlice()
+                                             && transmitSlice()->sliceIndex() == id); }
+            if (m_txSliceChoose) {
+                m_txSliceChoose(id);
+            } else if (m_model) {
+                // Ruling 8.10: the arbiter drops MOX before it moves the flag.
+                m_model->requestTxHandoffToSlice(id);
+            }
+        });
+        m_txSliceRow->addWidget(button, 1);
+        m_txSliceButtons.append(button);
+    }
 }
 
 void TxApplet::syncDesktopKeyState()
@@ -2149,15 +2228,23 @@ void TxApplet::updatePowerSliderLabels()
 Band TxApplet::txBand() const
 {
     if (!m_model) { return m_currentBand; }
-    SliceModel* slice = activeSliceForControls();
+    SliceModel* slice = transmitSlice();
     if (!slice) { return m_currentBand; }
     return bandFromFrequency(slice->frequency());
 }
 
-SliceModel* TxApplet::activeSliceForControls() const
+SliceModel* TxApplet::transmitSlice() const
 {
-    return m_desktopActiveSlice ? m_desktopActiveSlice()
-                                : (m_model ? m_model->activeSlice() : nullptr);
+    if (m_transmitSliceResolver) { return m_transmitSliceResolver(); }
+    if (!m_model) { return nullptr; }
+    if (TxSliceArbiter* arbiter = m_model->txSliceArbiter()) {
+        if (SliceModel* bound = arbiter->txBoundSlice()) { return bound; }
+    }
+    // A remote window's flag is mirrored from the Core onto the slice.
+    for (SliceModel* slice : m_model->slices()) {
+        if (slice && slice->isTxSlice()) { return slice; }
+    }
+    return m_model->activeSlice();
 }
 
 void TxApplet::setCurrentBand(Band band)
@@ -2272,17 +2359,75 @@ QString TxApplet::tooltipForMode(DSPMode mode)
 // ---------------------------------------------------------------------------
 // Wires the active slice's dspModeChanged to onMoxModeChanged, dropping the
 // previous slice's connection, and sets the tooltip from its mode.
-void TxApplet::followActiveSliceMode()
+// Slice control plan Task 11 (Q15): the TX band follows the transmit slice's
+// frequency, as Thetis sets TXBand from the transmit VFO:
+// From Thetis console.cs:35753 [v2.10.3.15]
+//     TXBand = BandByFreq(VFOBFreq, tx_xvtr_index, current_region);
+// and its setter recalls the band's power and tune power:
+// From Thetis console.cs:17542 [v2.10.3.15]
+//     // initialisting, becase it is irrelevent, old_band will = value at this point MW0LGE
+//     ptbTune.LimitValue = limitTunePower_by_band[(int)value]; //MW0LGE_22b
+//     PWR = power_by_band[(int)value];
+//     TunePWR = tunePower_by_band[(int)value]; //MW0LGE_22b
+// setCurrentBand is that recall (tune power by m_currentBand, RF power by
+// txBand()). The setter's MOX gate
+// From Thetis console.cs:17517 [v2.10.3.15]
+//     //[2.10.3.6]MW0LGE no band change on TX fix
+//     if (MOX) return;
+// is not ported here: the
+// applet never held that gate, and a keyed move unkeys first (ruling 8.10).
+void TxApplet::followTransmitSlice()
 {
+    SliceModel* slice = transmitSlice();
+    const bool moved = slice != m_followedTxSlice.data();
     disconnect(m_moxModeConnection);
     m_moxModeConnection = {};
-    SliceModel* slice = activeSliceForControls();
+    disconnect(m_txFreqConnection);
+    m_txFreqConnection = {};
+    m_followedTxSlice = slice;
+    refreshTxFilterStatus();
     if (!slice) {
         return;
     }
     m_moxModeConnection = connect(slice, &SliceModel::dspModeChanged,
-                                  this, &TxApplet::onMoxModeChanged);
+                                  this, [this](DSPMode mode) {
+        onMoxModeChanged(mode);
+        refreshTxFilterStatus();
+    });
+    m_txFreqConnection = connect(slice, &SliceModel::frequencyChanged,
+                                 this, [this](double hz) {
+        const Band band = bandFromFrequency(hz);
+        if (band != m_currentBand) { setCurrentBand(band); }
+    });
     onMoxModeChanged(slice->dspMode());
+    if (moved) {
+        setCurrentBand(bandFromFrequency(slice->frequency()));
+    }
+}
+
+void TxApplet::watchTransmitFlags()
+{
+    if (!m_model) { return; }
+    for (SliceModel* slice : m_model->slices()) {
+        if (slice) {
+            connect(slice, &SliceModel::txSliceChanged, this,
+                    &TxApplet::onSliceTransmitFlagChanged, Qt::UniqueConnection);
+        }
+    }
+}
+
+void TxApplet::onSliceTransmitFlagChanged(bool)
+{
+    followTransmitSlice();
+    refreshTransmitSliceChoices();
+}
+
+void TxApplet::refreshTxFilterStatus()
+{
+    if (!m_txFilterStatusLabel || !m_model) { return; }
+    SliceModel* slice = transmitSlice();
+    const DSPMode mode = slice ? slice->dspMode() : DSPMode::USB;
+    m_txFilterStatusLabel->setText(m_model->transmitModel().filterDisplayText(mode));
 }
 
 void TxApplet::onMoxModeChanged(DSPMode mode)

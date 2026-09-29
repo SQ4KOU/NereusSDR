@@ -441,6 +441,11 @@
 //               as a remote device's, answered through callbacks. J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 11: transmitPreferenceFor() and
+//               takenSliceKeyRefusal(), the keying refusal on a slice
+//               taken from another device and not chosen. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/IceConfiguration.h"
@@ -2094,6 +2099,17 @@ private:
     /// slice goes to its chosen transmit slice, else its active slice (not
     /// for the radio's own PTT, which transmits where the flag is).
     void bindTransmitSliceForHolder();
+    /// Slice control plan Task 11: the slice `device`'s binding prefers
+    /// when it holds transmit: its remembered choice, unless that is a
+    /// slice it took and has not chosen, then its active slice, then its
+    /// first other slice it may transmit on. -1 lets the arbiter pick.
+    int transmitPreferenceFor(const QByteArray& device) const;
+    /// Slice control plan Task 11 (ruling Q8, narrow reading): the refusal
+    /// for a key from `device` that would land on a slice it took control
+    /// of from another device and has not chosen, when it has no other
+    /// slice it may transmit on; empty otherwise. A holder bound on such a
+    /// slice with another of its own is moved there first (unkeyed only).
+    TxRefusal takenSliceKeyRefusal(const QByteArray& device);
     /// Ruling 8.12: the holder's last slice closed: transmit is released.
     void onSliceClosedForHolder(int sliceId);
     /// Each device's chosen transmit slice (ruling 8.10), by device.

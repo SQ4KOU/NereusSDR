@@ -32,6 +32,9 @@
 //   2026-09-26: iPhone app plan Task 77 fix wave, I3: radioOnAir. J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 11: chooseTransmitSlice. J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 #pragma once
 
@@ -82,6 +85,10 @@ inline constexpr char kNotHolder[] = "notHolder";
 inline constexpr char kKeyEnded[] = "keyEnded";
 /// Slice control plan Task 7: a key on a Core with no slice.
 inline constexpr char kNoTransmitSlice[] = "noTransmitSlice";
+/// Slice control plan Task 11 (ruling Q8): a key that would land on a slice
+/// the device took control of from another device and has not chosen for
+/// transmit, with no other slice it may transmit on.
+inline constexpr char kChooseTransmitSlice[] = "chooseTransmitSlice";
 
 // ---- Fixes ----------------------------------------------------------------
 inline constexpr char kFixTakeTransmit[] = "takeTransmit";
@@ -127,6 +134,9 @@ TxRefusal changingHands();
 /// Slice control plan Task 7: every key while the Core has no slice to
 /// transmit on.
 TxRefusal noTransmitSlice();
+/// Slice control plan Task 11: a key on a slice taken from another device
+/// and not chosen for transmit (the TX button on the slice chooses it).
+TxRefusal chooseTransmitSlice();
 /// Every key after a transfer that ended with MOX still on, until it
 /// reads off.
 TxRefusal stopNotConfirmed();

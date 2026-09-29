@@ -32,6 +32,9 @@
 //   2026-09-29: slice control plan Task 10: the hosting desktop's Add at
 //               full capacity asks with the remote window's chooser. J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 11: a hosting window's empty pan
+//               gets a station-device slice. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -62,6 +65,7 @@
 #include "core/session/TransmitStateFacade.h"
 #include "core/settings/SettingsProxy.h"
 #include "gui/HostingSliceActions.h"
+#include "gui/MainWindow.h"
 #include "gui/PanadapterApplet.h"
 #include "gui/SpectrumWidget.h"
 #include "gui/multidevice/ConfirmChangeDialog.h"
@@ -563,6 +567,47 @@ private slots:
         }
         QVERIFY(onNewPan);
         delete dialog;
+    }
+
+    // Slice control plan Task 11: a hosting window filling its empty pans
+    // (MainWindow::populatePanSlices, the path a layout change and connect
+    // take) asks as the station device, so the new slice is the station's
+    // and the other device's slice is left as it was.
+    void aHostingWindowsEmptyPanGetsAStationSlice()
+    {
+        Core core;
+        core.model->configureStreamPool(4, 5, 192000);
+        core.model->sliceById(0)->setFrequency(7074000.0);
+        const QByteArray& station = SliceOwnership::stationDevice();
+        core.server->deviceSessions()->registerHostingDevice(station, QStringLiteral("Mac"),
+                                                              QStringLiteral("Mac"));
+        core.server->setStationDeviceWords(QStringLiteral("Mac"), QStringLiteral("Mac"));
+        SliceOwnership* ownership = core.model->sliceOwnership();
+        ownership->adoptUnowned(station);
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"), QStringLiteral("iPad"));
+        core.pair(b);
+        LoopbackTransport* appB = core.signIn(
+            b, {{"deviceAuth", 1}, {"sessionHolder", 1}, {"sliceAccess", 1}});
+        QVERIFY(admitted(appB));
+        const QByteArray bKey = b.key.fingerprint();
+        const int bSlice = ownership->ownedBy(bKey).first();
+        core.model->sliceById(bSlice)->setFrequency(14074000.0);
+        const QString bPan = core.model->sliceById(bSlice)->panKey();
+        const int stationBefore = ownership->ownedBy(station).size();
+
+        HostingSliceActions host(core.server.get(), core.model.get());
+        MainWindow::populatePanSlices(core.model.get(), {QStringLiteral("pan-host-2")},
+                                      false, false, &host);
+        QTRY_COMPARE(ownership->ownedBy(station).size(), stationBefore + 1);
+        bool onNewPan = false;
+        for (int id : ownership->ownedBy(station)) {
+            onNewPan = onNewPan
+                       || core.model->sliceById(id)->panKey() == QStringLiteral("pan-host-2");
+        }
+        QVERIFY(onNewPan);
+        QCOMPARE(ownership->ownedBy(bKey), QList<int>{bSlice});
+        QCOMPARE(core.model->sliceById(bSlice)->panKey(), bPan);
+        QCOMPARE(core.model->sliceById(bSlice)->frequency(), 14074000.0);
     }
 
     // Slice control plan Task 14b (ruling U5): the hosting desktop listens

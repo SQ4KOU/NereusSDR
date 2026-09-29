@@ -26,6 +26,9 @@
 //   2026-09-29: slice control plan Task 7: noTransmitSlice. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-29: slice control plan Task 11: chooseTransmitSlice. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/safety/TxRefusal.h"
@@ -162,6 +165,13 @@ TxRefusal noTransmitSlice()
 {
     return make(kNoTransmitSlice,
                 QStringLiteral("There is no slice to transmit on. Add a slice first."));
+}
+
+TxRefusal chooseTransmitSlice()
+{
+    return make(kChooseTransmitSlice,
+                QStringLiteral("You took this slice from another device. Choose it for "
+                               "transmit first with its TX button."));
 }
 
 TxRefusal stopNotConfirmed()

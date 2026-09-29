@@ -59,6 +59,10 @@
 //                (m_hostingSlices, hostingSlices(), selectSliceForWindow,
 //                addSliceForWindow, closeSliceForWindow). AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-29 - J.J. Boyd (KG4VCF). Slice control plan Task 11:
+//                populatePanSlices takes the hosting actions, so a hosting
+//                window's empty pans get station-device slices. AI-assisted
+//                via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -318,8 +322,21 @@ public:
     /// AetherSDR, unless Auto mode is off in the Spot Hub.
     static void applySpotModeToSlice(RadioModel* model, SliceModel* slice, int spotIndex);
     // Shared startup/operator boundary, exercised without booting MainWindow.
+    // Slice control plan Task 11: while this window hosts, `hosting` makes
+    // each new slice the station device's (HostingSliceActions::addOnPan),
+    // never an unowned one.
     static void populatePanSlices(RadioModel* model, const QStringList& panIds,
-                                  bool operatorRequested, bool snapshotReady);
+                                  bool operatorRequested, bool snapshotReady,
+                                  HostingSliceActions* hosting = nullptr);
+    /// Slice control plan Task 2: a slice the station device may change as
+    /// its own (not one it listens to, nor one it runs held for an absent
+    /// device). desktopSliceAllowed is this while the window hosts.
+    static bool stationControlsSlice(const RadioModel* model, int sliceId);
+    /// Slice control plan Task 11: the slice a hosting window's TX applet
+    /// follows: the transmit-bound slice when the station controls it,
+    /// else the station's own active slice, else its first slice. Never a
+    /// slice it only listens to.
+    static SliceModel* stationTransmitSlice(RadioModel* model);
 
     // Narrow composition seams used by deletion-gap regressions. Runtime
     // call sites use these same helpers so stable-ID lookup cannot diverge

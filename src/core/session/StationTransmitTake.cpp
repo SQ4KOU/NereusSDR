@@ -48,6 +48,10 @@
 //   2026-09-29: slice control plan Task 10: requesters are read through
 //               peerFor, so the station device is one. J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 11: transmitPreferenceFor (the
+//               binding's preference, shared with the keying gate) and
+//               takenSliceKeyRefusal. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -536,37 +540,96 @@ void StationServer::bindTransmitSliceForHolder()
     if (!holder || holder->source == TransmitHolder::Source::RadioPtt) {
         return;
     }
-    int preferred = m_chosenTxSlice.value(holder->deviceId, -1);
+    m_radioModel->txSliceArbiter()->bindForHolder(holder->deviceId,
+                                                  transmitPreferenceFor(holder->deviceId));
+}
+
+int StationServer::transmitPreferenceFor(const QByteArray& device) const
+{
+    int preferred = m_chosenTxSlice.value(device, -1);
+    if (m_radioModel.isNull()) {
+        return preferred;
+    }
     // Slice control plan Task 4 (ruling Q8): a slice the holder took
     // control of is its transmit slice only once it chooses it
     // (tx.setTxSlice). The binding goes to another of its slices instead:
     // its choice, else its active slice, else its first. With only taken
     // slices it keeps today's binding, so transmit never lands on a slice
-    // that is not the holder's.
-    const QSet<int> taken = m_takenNotChosenForTx.value(holder->deviceId);
-    if (!taken.isEmpty()) {
-        const SliceOwnership* ownership = m_radioModel->sliceOwnership();
-        const auto usable = [&](int id) {
-            return id >= 0 && !taken.contains(id) && m_radioModel->sliceById(id) != nullptr
-                && SliceAccessPolicy::mayTransmitOn(*ownership, holder->deviceId, id);
-        };
-        if (!usable(preferred)) {
-            int other = ownership->activeFor(holder->deviceId);
-            if (!usable(other)) {
-                other = -1;
-                for (int id : ownership->ownedBy(holder->deviceId)) {
-                    if (usable(id)) {
-                        other = id;
-                        break;
-                    }
-                }
-            }
-            if (other >= 0) {
-                preferred = other;
-            }
+    // that is not the holder's (Task 11 then refuses its key).
+    const QSet<int> taken = m_takenNotChosenForTx.value(device);
+    if (taken.isEmpty()) {
+        return preferred;
+    }
+    const SliceOwnership* ownership = m_radioModel->sliceOwnership();
+    const auto usable = [&](int id) {
+        return id >= 0 && !taken.contains(id) && m_radioModel->sliceById(id) != nullptr
+            && SliceAccessPolicy::mayTransmitOn(*ownership, device, id);
+    };
+    if (usable(preferred)) {
+        return preferred;
+    }
+    if (const int active = ownership->activeFor(device); usable(active)) {
+        return active;
+    }
+    for (int id : ownership->ownedBy(device)) {
+        if (usable(id)) {
+            return id;
         }
     }
-    m_radioModel->txSliceArbiter()->bindForHolder(holder->deviceId, preferred);
+    return preferred;
+}
+
+TxRefusal StationServer::takenSliceKeyRefusal(const QByteArray& device)
+{
+    if (device.isEmpty() || m_radioModel.isNull() || m_radioModel->txSliceArbiter() == nullptr
+        || !m_transmitHolder) {
+        return {};
+    }
+    const QSet<int> taken = m_takenNotChosenForTx.value(device);
+    if (taken.isEmpty()) {
+        return {};
+    }
+    const SliceOwnership* ownership = m_radioModel->sliceOwnership();
+    TxSliceArbiter* arbiter = m_radioModel->txSliceArbiter();
+    const auto mayTransmit = [&](int id) {
+        return id >= 0 && m_radioModel->sliceById(id) != nullptr
+            && SliceAccessPolicy::mayTransmitOn(*ownership, device, id);
+    };
+    const bool holds = m_transmitHolder->isHeldBy(device);
+    // Where the key lands: the holder's bound slice; a new holder's
+    // binding (bindTransmitSliceForHolder, as TxSliceArbiter::bindForHolder
+    // picks), or where the flag is when that binds nothing.
+    int landing = arbiter->txBoundSliceId();
+    if (!holds) {
+        const int preferred = transmitPreferenceFor(device);
+        const int active = ownership->activeFor(device);
+        if (mayTransmit(preferred)) {
+            landing = preferred;
+        } else if (mayTransmit(active)) {
+            landing = active;
+        }
+    }
+    if (!taken.contains(landing)) {
+        return {};
+    }
+    int other = -1;
+    for (int id : ownership->ownedBy(device)) {
+        if (mayTransmit(id) && !taken.contains(id)) {
+            other = id;
+            break;
+        }
+    }
+    if (other < 0) {
+        return TxRefusals::chooseTransmitSlice();
+    }
+    // It has a slice of its own it may transmit on: an unkeyed holder's
+    // flag moves there before the key (a new holder's binding goes there
+    // by itself).
+    MoxController* mox = m_radioModel->moxController();
+    if (holds && (mox == nullptr || !mox->isMox())) {
+        arbiter->bindForHolder(device, transmitPreferenceFor(device));
+    }
+    return {};
 }
 
 void StationServer::onSliceClosedForHolder(int sliceId)

@@ -371,6 +371,10 @@
 //   2026-09-29: slice control plan Task 14b: requestListenLevel
 //               (slice.setListenLevel), a listened flag's "Your volume".
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 11: requestTxSlice sends
+//               tx.setTxSlice for the TX applet's transmit-slice letters,
+//               answered on deviceCommandFinished. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QAbstractSocket>
@@ -992,6 +996,11 @@ public:
     /// at once when nothing changed. Returns the command id, 0 when it
     /// could not be sent.
     quint32 requestTakeTransmit(bool shown, qint64 holderEpoch, bool shownKeyed);
+    /// Slice control plan Task 11 (U8): `tx.setTxSlice {sliceId}`, the
+    /// holder's choice of the slice it transmits on (ruling 8.10: a keyed
+    /// move unkeys first). The answer arrives on deviceCommandFinished.
+    /// Returns the command id, 0 when it could not be sent.
+    quint32 requestTxSlice(int sliceId);
     /// `confirm.proceed {id, choice}` (-1 for a question with no choices).
     quint32 proceedQuestion(qint64 id, qint64 choice);
     /// `confirm.cancel {id}`.

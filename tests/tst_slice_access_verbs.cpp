@@ -19,6 +19,10 @@
 //   2026-09-29: slice.setListenLevel and the Q4 seeding, slice control
 //               plan Task 6. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //               Claude Code.
+//   2026-09-29: the keying refusal on a slice taken and not chosen, and
+//               receive selection leaving transmit alone, slice control
+//               plan Task 11. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -904,6 +908,171 @@ private slots:
         QCOMPARE(core.server->explicitTxSliceFor(SliceOwnership::stationDevice()), -1);
         QVERIFY(core.model->requestTxHandoffToSlice(0));
         QCOMPARE(core.server->explicitTxSliceFor(SliceOwnership::stationDevice()), 0);
+    }
+
+    // ── Keying on a slice taken from another device (Task 11, ruling Q8) ──
+    // A key is refused only when it would land on a slice the device took
+    // control of from another device and has not chosen for transmit, and
+    // it has no other slice it may transmit on. No radio: the fake MOX.
+
+    void aLoneDeviceKeysOnItsOwnSliceWithoutChoosingIt()
+    {
+        Core core;
+        allowTransmit(core);
+        core.model->configureStreamPool(5, 5, 192000);
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(b);
+        LoopbackTransport* appB = core.signIn(b, kSharesTx);
+        QVERIFY(admitted(appB));
+        SliceOwnership* ownership = core.model->sliceOwnership();
+        if (ownership->ownedBy(b.key.fingerprint()).isEmpty()) {
+            QVERIFY(accepted(core.invoke(appB, "addSlice", {utf8("initialPanId", QString())})));
+        }
+        const int mine = ownership->ownedBy(b.key.fingerprint()).first();
+        MoxController* mox = core.model->moxController();
+        mox->setMox(true, keyerFor(b));
+        QTRY_COMPARE(mox->state(), MoxState::Tx);
+        QCOMPARE(core.model->txSliceArbiter()->txBoundSliceId(), mine);
+        QCOMPARE(core.server->explicitTxSliceFor(b.key.fingerprint()), -1);
+        mox->setMox(false, keyerFor(b));
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+    }
+
+    void aKeyOnATakenSliceIsRefusedUntilTheDeviceChoosesIt()
+    {
+        Core core;
+        allowTransmit(core);
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a, kSharesTx);
+        LoopbackTransport* appB = core.signIn(b, kSharesTx);
+        QVERIFY(admitted(appA) && admitted(appB));
+        SliceOwnership* ownership = core.model->sliceOwnership();
+        QCOMPARE(ownership->mark(0).owner, a.key.fingerprint());
+        for (int id : ownership->ownedBy(b.key.fingerprint())) {
+            QVERIFY(accepted(core.invoke(appB, "removeSlice", {int64("sliceId", id)})));
+        }
+        QTRY_VERIFY(holds(appB, accessKey(0)));
+        QJsonObject r = core.invoke(appB, "slice.takeControl", revisionArgs(seenBy(appB, 0)));
+        QVERIFY2(accepted(r), qPrintable(reasonOf(r)));
+        QCOMPARE(ownership->ownedBy(b.key.fingerprint()), QList<int>{0});
+        MoxController* mox = core.model->moxController();
+        TxSliceArbiter* arbiter = core.model->txSliceArbiter();
+
+        // B keys on the slice it took and never chose: refused, plainly,
+        // and it takes nothing.
+        mox->setMox(true, keyerFor(b));
+        QVERIFY(!mox->isMox());
+        QCOMPARE(QString::fromLatin1(mox->lastRefusal().code),
+                 QString::fromLatin1(TxRefusals::kChooseTransmitSlice));
+        const QString words = TxRefusals::chooseTransmitSlice().text;
+        QVERIFY2(OperatorWording::isPlain(words), qPrintable(words));
+        QVERIFY(words.contains(QStringLiteral("TX button")));
+        QVERIFY(!core.server->transmitHolder()->isHeldBy(b.key.fingerprint()));
+
+        // Holding transmit binds it there by itself, which is not a choice.
+        QVERIFY(accepted(core.invoke(appB, "tx.take")));
+        QTRY_VERIFY(core.server->transmitHolder()->isHeldBy(b.key.fingerprint()));
+        QTRY_COMPARE(arbiter->txBoundSliceId(), 0);
+        mox->setMox(true, keyerFor(b));
+        QVERIFY(!mox->isMox());
+        QCOMPARE(QString::fromLatin1(mox->lastRefusal().code),
+                 QString::fromLatin1(TxRefusals::kChooseTransmitSlice));
+
+        // Its own choice: the same key now transmits.
+        QVERIFY(accepted(core.invoke(appB, "tx.setTxSlice", {int64("sliceId", 0)})));
+        mox->setMox(true, keyerFor(b));
+        QTRY_COMPARE(mox->state(), MoxState::Tx);
+        QCOMPARE(arbiter->txBoundSliceId(), 0);
+        mox->setMox(false, keyerFor(b));
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        Q_UNUSED(appA);
+    }
+
+    void aDeviceWithAnotherSliceItMayTransmitOnKeysThere()
+    {
+        Core core;
+        allowTransmit(core);
+        core.model->configureStreamPool(5, 5, 192000);
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a, kSharesTx);
+        LoopbackTransport* appB = core.signIn(b, kSharesTx);
+        QVERIFY(admitted(appA) && admitted(appB));
+        SliceOwnership* ownership = core.model->sliceOwnership();
+        for (int id : ownership->ownedBy(b.key.fingerprint())) {
+            QVERIFY(accepted(core.invoke(appB, "removeSlice", {int64("sliceId", id)})));
+        }
+        QTRY_VERIFY(holds(appB, accessKey(0)));
+        QJsonObject r = core.invoke(appB, "slice.takeControl", revisionArgs(seenBy(appB, 0)));
+        QVERIFY2(accepted(r), qPrintable(reasonOf(r)));
+        MoxController* mox = core.model->moxController();
+        TxSliceArbiter* arbiter = core.model->txSliceArbiter();
+        // B holds transmit with only the taken slice: bound there.
+        QVERIFY(accepted(core.invoke(appB, "tx.take")));
+        QTRY_VERIFY(core.server->transmitHolder()->isHeldBy(b.key.fingerprint()));
+        QTRY_COMPARE(arbiter->txBoundSliceId(), 0);
+
+        // It adds a slice of its own: its key goes there, not to the one
+        // it took.
+        QVERIFY(accepted(core.invoke(appB, "addSlice", {utf8("initialPanId", QString())})));
+        int own = -1;
+        for (int id : ownership->ownedBy(b.key.fingerprint())) {
+            if (id != 0) {
+                own = id;
+            }
+        }
+        QVERIFY(own >= 0);
+        core.model->sliceById(own)->setDspMode(DSPMode::USB);
+        core.model->sliceById(own)->setFrequency(14250000.0);
+        mox->setMox(true, keyerFor(b));
+        QTRY_COMPARE(mox->state(), MoxState::Tx);
+        QCOMPARE(arbiter->txBoundSliceId(), own);
+        mox->setMox(false, keyerFor(b));
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        Q_UNUSED(appA);
+    }
+
+    // Task 11: selecting a listened slice for receive never moves transmit.
+    void selectingAListenedSliceForReceiveLeavesTransmitAlone()
+    {
+        Core core;
+        allowTransmit(core);
+        core.model->configureStreamPool(5, 5, 192000);
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a, kSharesTx);
+        LoopbackTransport* appB = core.signIn(b, kSharesTx);
+        QVERIFY(admitted(appA) && admitted(appB));
+        SliceOwnership* ownership = core.model->sliceOwnership();
+        if (ownership->ownedBy(b.key.fingerprint()).isEmpty()) {
+            QVERIFY(accepted(core.invoke(appB, "addSlice", {utf8("initialPanId", QString())})));
+        }
+        const int mine = ownership->ownedBy(b.key.fingerprint()).first();
+        MoxController* mox = core.model->moxController();
+        TxSliceArbiter* arbiter = core.model->txSliceArbiter();
+        mox->setMox(true, keyerFor(b));
+        mox->setMox(false, keyerFor(b));
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        QVERIFY(accepted(core.invoke(appB, "tx.setTxSlice", {int64("sliceId", mine)})));
+        const quint64 epoch = core.server->transmitHolder()->epoch();
+
+        QTRY_VERIFY(holds(appB, accessKey(0)));
+        QVERIFY(accepted(core.invoke(appB, "slice.listen", refArgs(seenBy(appB, 0)))));
+        QVERIFY(accepted(core.invoke(appB, "setActiveSliceById", {int64("sliceId", 0)})));
+        QCOMPARE(arbiter->txBoundSliceId(), mine);
+        QCOMPARE(core.server->chosenTxSliceForTest(b.key.fingerprint()), mine);
+        QCOMPARE(core.server->explicitTxSliceFor(b.key.fingerprint()), mine);
+        QVERIFY(core.server->transmitHolder()->isHeldBy(b.key.fingerprint()));
+        QCOMPARE(core.server->transmitHolder()->epoch(), epoch);
+        QVERIFY(!mox->isMox());
+        Q_UNUSED(appA);
     }
 
     // The review's third-holder case: a device holding transmit with the
