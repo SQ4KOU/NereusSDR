@@ -560,6 +560,10 @@
 //                Core's spot frequency to the hertz, so its spot click
 //                resolves the Core's mode. J.J. Boyd (KG4VCF), AI-assisted
 //                via Anthropic Claude Code.
+//   2026-09-28 - Parity ruling C12: applyPanGridSetting; a remote
+//                window's pans take the Core's per-band grid range.
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -7988,7 +7992,19 @@ bool RadioModel::applySwrProtectionSetting(const QString& key, const QVariant& v
 void RadioModel::reportStationSettingChanged(const QString& key)
 {
     if (m_role == Role::Remote) {
+        // Parity ruling C12: the Core's per-band grid reaches this window's
+        // pans (empty key: a whole snapshot).
+        applyPanGridSetting(key);
         emit stationSettingChanged(key);
+    }
+}
+
+void RadioModel::applyPanGridSetting(const QString& key)
+{
+    for (PanadapterModel* pan : std::as_const(m_panadapters)) {
+        if (pan != nullptr) {
+            pan->applyStationGridSetting(key);
+        }
     }
 }
 
@@ -13668,6 +13684,12 @@ int RadioModel::addPanadapter()
     auto* pan = new PanadapterModel(this);
     int index = m_panadapters.size();
     m_panadapters.append(pan);
+    // Parity ruling C12: a remote window's pan takes the Core's per-band
+    // range through the pan's mirrored dBm floor and ceiling; it never
+    // pushes its own on a band crossing.
+    if (m_role == Role::Remote) {
+        pan->setFollowsBandGrid(false);
+    }
 
     // PanadapterModel::bandChanged fires when the pan center crosses a band
     // boundary. In NereusSDR's design m_lastBand tracks the VFO, not the pan

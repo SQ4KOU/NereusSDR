@@ -48,6 +48,7 @@
 
 namespace NereusSDR {
 
+class AppSettings;
 class RadioModel;
 class IStationLink;
 
@@ -113,10 +114,18 @@ public:
 
     void setStationSettingsAvailable(bool available, const QString& reason) override;
 
+    /// The connected radio's own settings (everything kept under
+    /// hardware/<mac>/) as a settings XML holding nothing else, or empty
+    /// with `error` set. In a remote window `settings` reads the Core's
+    /// values through its settings proxy.
+    static QByteArray connectedRadioXml(const AppSettings& settings, const QString& mac,
+                                        QString* error = nullptr);
+
 protected:
     // The native picker and message boxes live at the page boundary so the
     // export transaction can be exercised without a modal desktop dialog.
     virtual QString chooseExportDestination(bool remote);
+    virtual QString chooseRadioExportDestination(const QString& mac);
     virtual void showExportResult(bool success, const QString& text);
     void closeEvent(QCloseEvent* event) override;
     void hideEvent(QHideEvent* event) override;
@@ -160,6 +169,7 @@ private:
     void buildUI();
     bool remoteWindow() const;
     bool exportAllowed(QString* reason) const;
+    bool radioExportAllowed(QString* reason) const;
     void refreshExportAvailability();
     void onLinkStateChanged();
     void onExportCompleted(quint32 operationId, bool accepted, const QString& reason,

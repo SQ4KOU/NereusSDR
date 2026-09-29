@@ -996,6 +996,13 @@ public:
     // calls it for a window's accepted write or removal (StationServer).
     // Any other key, or no analyzer, does nothing.
     void applyRemoteTxDisplaySetting(const QString& key);
+    // Parity ruling C12: a per-band grid dB max or min (DisplayGridMax_ /
+    // DisplayGridMin_, the Core's settings) changed; every pan re-reads
+    // that band (PanadapterModel::applyStationGridSetting). The Core calls
+    // it for a window's accepted write or removal (StationServer), so its
+    // pan on that band takes the new range and the window sees it; a
+    // remote window's model calls it for each Core setting that arrives.
+    void applyPanGridSetting(const QString& key);
     static bool isSwrProtectionSettingKey(const QString& key);
 
     // Task 13: External TX Inhibit (Setup > Transmit > Power, grpExtTXInhibit)

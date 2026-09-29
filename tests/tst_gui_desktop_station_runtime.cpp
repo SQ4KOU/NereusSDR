@@ -1,5 +1,6 @@
 // no-port-check: NereusSDR-original desktop Core runtime tests; temporary profile only.
 #include "gui/GuiDesktopStationRuntime.h"
+#include "core/session/RemoteDevicesState.h"
 #include "core/AppSettings.h"
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
@@ -180,12 +181,58 @@ private slots:
         QVERIFY(runtime.setRunCore(true));
         QVERIFY(runtime.controller()->enabled());
         QCOMPARE(settings.value(QStringLiteral("DesktopCore/Run")).toBool(), true);
+        // iPhone app plan Tasks 49 and 78 item 8: the reach line says what
+        // is true now, not a placeholder.
+        QTRY_VERIFY2(runtime.state().reachabilityText.startsWith(QStringLiteral("Listening on ")),
+                     qPrintable(runtime.state().reachabilityText));
+        QVERIFY(!runtime.state().reachabilityText.contains(QStringLiteral("not verified")));
+        // Task 78 item 8: this desktop holds its place and is listed as the
+        // window that runs the Core.
+        QTRY_COMPARE(runtime.connectedDevices()->connectedDevices().size(), 1);
+        const RemoteConnectedDevice self = runtime.connectedDevices()->connectedDevices().first();
+        QVERIFY(self.hostsCore);
+        QCOMPARE(runtime.connectedDevices()->selfDeviceId(), self.deviceId);
+        QCOMPARE(runtime.connectedDevices()->deviceLimit(), 4);
         QTcpServer occupied;
         QVERIFY(!occupied.listen(QHostAddress::LocalHost, port));
         QVERIFY(runtime.setRunCore(false));
         QVERIFY(!runtime.controller()->enabled());
         QVERIFY(occupied.listen(QHostAddress::LocalHost, port));
         QCOMPARE(settings.value(QStringLiteral("DesktopCore/Run")).toBool(), false);
+        QVERIFY(runtime.connectedDevices()->connectedDevices().isEmpty());
+    }
+
+    // iPhone app plan Tasks 49 and 78 item 8: the reach line from the
+    // Core's listener, Bonjour and the remote access service.
+    void reachLineSaysHowDevicesFindTheCore()
+    {
+        StationReach reach;
+        reach.listening = true;
+        reach.bonjourAvailable = true;
+        reach.bonjourActive = true;
+        reach.serviceConfigured = true;
+        reach.serviceRegistered = true;
+        reach.serviceHost = QStringLiteral("rv.example.net");
+        QCOMPARE(GuiDesktopStationRuntime::reachText(QString(), 50055, reach),
+                 QStringLiteral("Listening on every network on this computer, port 50055. "
+                                "Devices on this network find it by Bonjour. Registered with the "
+                                "remote access service at rv.example.net, so paired devices reach "
+                                "it away from this network."));
+        reach.serviceRegistered = false;
+        reach.bonjourActive = false;
+        QCOMPARE(GuiDesktopStationRuntime::reachText(QStringLiteral("10.0.0.5"), 50055, reach),
+                 QStringLiteral("Listening on 10.0.0.5, port 50055. Not announced by Bonjour yet. "
+                                "Not registered with the remote access service at rv.example.net "
+                                "yet."));
+        reach.bonjourAvailable = false;
+        reach.serviceConfigured = false;
+        reach.listening = false;
+        reach.listenerRetryPending = true;
+        const QString text = GuiDesktopStationRuntime::reachText(QString(), 50055, reach);
+        QVERIFY(text.startsWith(QStringLiteral("Port 50055 on every network on this computer is "
+                                               "not open yet; trying again.")));
+        QVERIFY(text.contains(QStringLiteral("Bonjour is not available on this computer")));
+        QVERIFY(text.endsWith(QStringLiteral("paired devices reach it only on this network.")));
     }
 
     void blockedPortCannotRetryAfterRejectedRunIntent()

@@ -1552,6 +1552,7 @@ set(GUI_SOURCES
     src/gui/multidevice/TakeTransmitDialog.cpp
     src/gui/multidevice/ConfirmChangeDialog.cpp
     src/gui/multidevice/TakeReceiverDialog.cpp
+    src/gui/multidevice/ReplaceDeviceDialog.cpp
     src/gui/multidevice/NoticeCard.cpp
     src/gui/multidevice/ConnectedDevicesList.cpp
     src/gui/multidevice/MultiDeviceController.cpp

@@ -47,6 +47,10 @@
 //                disabled with a reason. The waterfall levels, palette, low
 //                colour and gradient stay the window's own. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - Parity ruling C12: Grid & Scales' per-band dB Max and
+//                dB Min show the Core's value as it arrives in a remote
+//                window. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 
 //=================================================================
@@ -2283,6 +2287,16 @@ void GridScalesPage::buildUI()
     if (auto* pan = firstPan(model())) {
         connect(pan, &PanadapterModel::bandChanged,
                 this, [this, pan](Band) { applyBandSlot(pan); });
+        // Parity ruling C12: in a remote window the per-band values are the
+        // Core's; when one arrives (or a whole snapshot) the spinboxes show
+        // it. The pan has re-read the band before this signal.
+        connect(model(), &RadioModel::stationSettingChanged, this,
+                [this, pan](const QString& key) {
+            if (key.isEmpty() || key.startsWith(QLatin1String("DisplayGridMax_"))
+                || key.startsWith(QLatin1String("DisplayGridMin_"))) {
+                applyBandSlot(pan);
+            }
+        });
     }
 
     // --- Section: Labels ---

@@ -1,6 +1,7 @@
 // no-port-check: NereusSDR-original. R3 Core session presentation and actions.
 #include "RemoteConnectionController.h"
 #include "core/AppSettings.h"
+#include "core/session/RemoteDevicesState.h"
 #include "core/session/RendezvousClient.h"
 #include "core/session/StationClient.h"
 #include "gui/OperatorReasonText.h"
@@ -13,6 +14,7 @@
 #include <QDialogButtonBox>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLocale>
 #include <QSignalBlocker>
 #include <QPushButton>
 #include <QTimer>
@@ -88,6 +90,10 @@ RemoteConnectionController::RemoteConnectionController(
     });
     // iPhone app Task 18: once this computer's key is enrolled with the
     // Core, a later Connect signs in by key as well.
+    // iPhone app plan Task 78 item 7 (G-53): the Core is full and asks
+    // which device this window replaces; the status line says so.
+    connect(client->remoteDevices(), &RemoteDevicesState::heldChanged, this,
+            &RemoteConnectionController::changed);
     connect(client, &StationClient::stationIdentityLearned, this,
             [this](const QByteArray& identity) { m_options.identityFingerprint = identity; });
     connect(client, &StationClient::reconnectScheduled, this,
@@ -150,7 +156,11 @@ QString RemoteConnectionController::statusText() const
     switch (state()) {
     case ConnectionState::Connected: return tr("Core connected");
     case ConnectionState::Connecting:
-    case ConnectionState::Probing: return tr("Connecting to Core");
+    case ConnectionState::Probing:
+        if (m_client && m_client->remoteDevices()->held()) {
+            return tr("Core full, choose a device to replace");
+        }
+        return tr("Connecting to Core");
     case ConnectionState::LinkLost:
         // The Core restarted to change its radio: a reconnect, not a fault.
         if (m_client && !m_client->radioChangeReason().isEmpty()) {
@@ -267,12 +277,25 @@ QString RemoteConnectionController::stopText() const
     switch (stopNotice()) {
     case CoreStopNotice::None: return {};
     case CoreStopNotice::TakenOver: {
-        // The Core names the other app by its network address only; it
-        // sends no device name (station link section 12.4).
-        const QString by = m_client->lastEndReport().takenOverBy;
-        const QString what = by.isEmpty()
-            ? tr("Another app connected to the Core and took over.")
-            : tr("Another app at %1 connected to the Core and took over.").arg(by);
+        // iPhone app plan Task 78 item 3 (G-53): a Core that let a fifth
+        // device take this window's place names it and says when. An
+        // older Core names the other app by its network address only.
+        const StationEndReport report = m_client->lastEndReport();
+        const QString at = report.endedAt.isValid()
+            ? QLocale().toString(report.endedAt.time(), QLocale::ShortFormat)
+            : QString();
+        QString what;
+        if (!report.takenOverByName.isEmpty()) {
+            what = at.isEmpty()
+                ? tr("%1 took this window's place on the Core.").arg(report.takenOverByName)
+                : tr("%1 took this window's place on the Core at %2.")
+                      .arg(report.takenOverByName, at);
+        } else if (!report.takenOverBy.isEmpty()) {
+            what = tr("Another app at %1 connected to the Core and took over.")
+                       .arg(report.takenOverBy);
+        } else {
+            what = tr("Another app connected to the Core and took over.");
+        }
         return what + QLatin1Char(' ') + noRetry + QLatin1Char(' ')
              + tr("Take it back to use the Core here again.");
     }
@@ -316,8 +339,10 @@ bool RemoteConnectionController::updateThisAppHelps() const
 
 void RemoteConnectionController::takeBack()
 {
-    // R-R3-38: connects again, which takes the Core back at once. Part G
-    // of the iPhone plan makes this ask the other device first.
+    // R-R3-38: connects again. A full Core then asks which device this
+    // window replaces, starting on the one that took its place (iPhone
+    // app plan Task 78 item 3, G-53); nothing is taken without that
+    // choice.
     connectToStation();
 }
 

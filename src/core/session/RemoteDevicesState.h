@@ -11,11 +11,15 @@
 // declared `sessionHolder` 1 (the link document, sections 7.1 and 7.5):
 //
 //   connectedDevices   who holds a place now (listJson), the device limit
-//   devices            the paired devices (listJson only; nothing else of
-//                      that object is kept here, its pairing code least)
+//   devices            the paired devices (listJson) and the Core's own
+//                      facts a This Core page shows (label, key backup,
+//                      pairing window and its code). The code is a secret:
+//                      kept for the page to show, never logged
 //   marker:<id>        another device's slice, read only
 //   confirm.request    the Core's one open question for this window
 //   notice             what another device did, or this window's own state
+//   session.held       the Core is full: which device this window replaces
+//                      (the link document, section 5.1 step 4; G-53)
 //
 // Plain state for the window's screens to draw; nothing here is ever
 // written back. The questions' answers and Take it back go out through
@@ -28,6 +32,12 @@
 //   2026-09-26: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), iPhone app plan Task 78 (R-IOS-02, R-IOS-07,
 //               R-IOS-30), with AI-assisted implementation via Anthropic
+//               Claude Code.
+//   2026-09-28: session.held (the fifth-device choice, iPhone app plan
+//               Task 78 item 7, G-53) and a slice's frequency; the devices
+//               object's Core facts (iPhone app plan Task 25's This Core
+//               page). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
 // =================================================================
 
@@ -50,6 +60,9 @@ struct RemoteDeviceSlice {
     QString letter;
     int band = -1;
     int mode = -1;
+    /// Sent in session.held's entries (the slice's frequency now); 0 when
+    /// the Core does not say.
+    double frequencyHz = 0.0;
 };
 
 /// One entry of `connectedDevices`' list (the link document, section 7.1).
@@ -79,7 +92,26 @@ struct RemotePairedDevice {
     QString shortName;
     QString kind;
     QString lastSeen;
+    /// ISO 8601 UTC, "" when the Core does not say.
+    QString pairedAt;
     bool connected = false;
+};
+
+/// The `devices` object's facts about the Core itself (StationDevicesFacade;
+/// iPhone app plan Task 25, the This Core page).
+struct RemoteCoreDevicesInfo {
+    /// False until the Core sent the object.
+    bool received = false;
+    QString stationLabel;
+    bool claimed = false;
+    bool tokenActive = false;
+    bool keyBackupAcknowledged = false;
+    /// Where the Core's key file is, on the Core's computer.
+    QString keyPath;
+    bool pairingWindowOpen = false;
+    /// Sent only to a window signed in with this computer's key; "" to any
+    /// other. Never logged.
+    QString pairingCode;
 };
 
 /// A `marker:<id>`: another device's slice, as the Core sends it.
@@ -101,6 +133,37 @@ struct RemoteSliceMarker {
 
     /// 'A' + sliceId.
     QString letter() const;
+};
+
+/// One device a held window may replace (session.held's `devices`): a
+/// connectedDevices entry plus `replaceable` (false for the desktop that
+/// hosts the Core) and `from` (its address, or "relay").
+struct RemoteHeldEntry {
+    RemoteConnectedDevice device;
+    bool replaceable = false;
+    QString from;
+};
+
+/// session.held: the Core is full and asks which device this window takes
+/// the place of (the link document, section 5.1 step 4). The entries come
+/// in the Core's order: away devices first, longest away first, then by
+/// how long each has been idle, the one on the air last.
+struct RemoteHeldList {
+    QList<RemoteHeldEntry> entries;
+    quint32 revision = 0;
+    /// placeTaken: another device took this window's place earlier.
+    QString placeTakenByName;
+    QString placeTakenById;
+    std::optional<qint64> placeTakenSecondsAgo;
+    /// placeFreed: this window's place was freed after its time away ran
+    /// out, this many seconds ago.
+    std::optional<qint64> placeFreedSecondsAgo;
+    /// The entry to start on: the device that took this window's place,
+    /// when it is still there and can be replaced; empty for the first
+    /// replaceable entry.
+    QString preselectId;
+    /// This computer's clock when it arrived.
+    QDateTime receivedAt;
 };
 
 /// A `confirm.request` or a `notice`, with its reason and when it arrived.
@@ -157,6 +220,13 @@ public:
     void setSelfDeviceId(const QString& id) { m_selfDeviceId = id; }
     QString selfDeviceId() const { return m_selfDeviceId; }
     QList<RemotePairedDevice> pairedDevices() const { return m_paired; }
+    RemoteCoreDevicesInfo coreInfo() const { return m_coreInfo; }
+
+    /// session.held arrived (it replaces any list still shown).
+    void setHeld(const RemoteHeldList& held);
+    /// The question was answered, or the session moved on or ended.
+    void clearHeld();
+    std::optional<RemoteHeldList> held() const { return m_held; }
 
     /// The session ended: everything here was that session's.
     void clear();
@@ -164,12 +234,24 @@ public:
     /// Parsers, public for tests.
     static QList<RemoteConnectedDevice> parseConnectedList(const QString& listJson);
     static QList<RemotePairedDevice> parsePairedList(const QString& listJson);
+    static RemoteConnectedDevice parseConnectedDevice(const QJsonObject& entry);
+    /// session.held's fields; `preselectHint` names the device to start on
+    /// when the Core sends no placeTaken (the device that took this
+    /// window's place, from the end that stopped it).
+    static RemoteHeldList parseHeld(const QJsonArray& devices, quint32 revision,
+                                    const std::optional<QJsonObject>& placeTaken,
+                                    const std::optional<QJsonObject>& placeFreed,
+                                    const QString& preselectHint = QString());
 
 signals:
     void markersChanged();
     void connectedDevicesChanged();
     void pairedDevicesChanged();
+    /// coreInfo() changed.
+    void coreInfoChanged();
     void questionChanged();
+    /// session.held arrived, or its question closed.
+    void heldChanged();
     /// A new notice arrived (its id), after noticesChanged.
     void noticeArrived(qint64 id);
     void noticesChanged();
@@ -178,9 +260,11 @@ private:
     QMap<int, RemoteSliceMarker> m_markers;
     QList<RemoteConnectedDevice> m_connected;
     QList<RemotePairedDevice> m_paired;
+    RemoteCoreDevicesInfo m_coreInfo;
     int m_deviceLimit = 0;
     QString m_selfDeviceId;
     std::optional<RemotePrompt> m_question;
+    std::optional<RemoteHeldList> m_held;
     QList<RemotePrompt> m_notices;
 };
 

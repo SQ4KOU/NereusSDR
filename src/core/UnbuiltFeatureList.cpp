@@ -131,8 +131,6 @@ const QList<Entry>& all()
          QStringLiteral("Setup > DSP > AM/SAM maximum squelch tail")},
         {F::FmDeviation, QStringLiteral("fm-dev"),
          QStringLiteral("Setup > DSP > FM deviation and de-emphasis")},
-        {F::ExportRadio, QStringLiteral("export-radio"),
-         QStringLiteral("Setup > Diagnostics > Export / Import: Export Connected Radio")},
         // The table's fm-tx and fm-repeater rows both wait for FM transmit:
         // one feature, one entry.
         {F::FmTransmit, QStringLiteral("fm-tx"),

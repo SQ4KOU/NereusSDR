@@ -1076,8 +1076,7 @@ private slots:
             {"src/gui/diagnostics/DiagnosticsPhaseHPages.cpp", true,
              {"QT_LOGGING_TO_CONSOLE", "follow-up phase"},
              {"The 60 s history graph is not shown yet.",
-              "Exporting one radio's settings is not available yet. Use 'Export All "
-              "Settings' for now."}},
+              "Connect a radio to export its settings."}},
             // Fix wave item 2: the VFO flag's tooltips carried Thetis and
             // WDSP file cites and WDSP function names; the cites are
             // comments beside the strings now.

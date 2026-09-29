@@ -8717,6 +8717,16 @@ nereus_add_test(tst_remote_tx_display_settings
     EXTRA_LABELS session)
 target_compile_definitions(tst_remote_tx_display_settings PRIVATE NEREUS_BUILD_TESTS)
 
+# Parity ruling C12: Setup > Display > Grid & Scales' per-band dB max and
+# min are the Core's. A window's write reaches the Core's pan at once; a
+# remote window's pan never pushes its own values on a band crossing and
+# re-reads a band when the Core's value arrives; a local pan is unchanged.
+# Loopback only, no radio, no audio device.
+nereus_add_test(tst_remote_pan_grid
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+target_compile_definitions(tst_remote_pan_grid PRIVATE NEREUS_BUILD_TESTS)
+
 # Remote-window parity Task 32 (R-IOS-13, R-R3-49): the transmit monitor
 # goes to the device that holds transmit. The owner mixes with fake devices
 # and recording taps (route, level, another device, the Core's own outputs

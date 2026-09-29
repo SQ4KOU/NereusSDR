@@ -7775,7 +7775,9 @@
             "Nb",
             "Snb",
             "Rade",
-            "filters/"
+            "filters/",
+            "DisplayGridMax_",
+            "DisplayGridMin_"
         ]
     },
     "telemetry": {

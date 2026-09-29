@@ -163,6 +163,10 @@
 //                                    Monitor's availability, source and
 //                                    RESET (txModMonitorVersion 1).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  iPhone app plan Task 25: the Core's
+//                                    device verbs (deviceAdminAvailable,
+//                                    pairingAvailable, requestDeviceAdmin).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QString>
@@ -536,6 +540,20 @@ public:
     static QString stationRadiosUnavailableReason()
     { return QStringLiteral("This Core does not let this app change its radio. Updating the Core may help."); }
     virtual bool stationRadiosAvailable() const { return false; }
+    // iPhone app plan Task 25 (the This Core page in a remote window;
+    // deviceAdminVersion 1, pairingVersion 1): the Core's paired devices.
+    // `verb` is devices.revoke (`id`, the device's wire id),
+    // station.acknowledgeKeyBackup, pairing.open or pairing.close; the
+    // answer comes back as RadioModel::stationCommandFinished. The Core
+    // takes them from a window signed in with this computer's own key.
+    static QString deviceAdminUnavailableReason()
+    { return QStringLiteral("This Core does not let this app manage its devices. Updating the Core may help."); }
+    static QString pairedDeviceAdminReason()
+    { return QStringLiteral("Manage the Core's devices from a paired device."); }
+    virtual bool deviceAdminAvailable() const { return false; }
+    virtual bool pairingAvailable() const { return false; }
+    virtual CommandOutcome requestDeviceAdmin(const QByteArray& /*verb*/, const QString& /*id*/)
+    { return { false, deviceAdminUnavailableReason() }; }
     static QString settingsHygieneUnavailableReason()
     { return QStringLiteral("This Core does not offer Settings Validation to this app. Updating the Core may help."); }
     virtual bool settingsHygieneAvailable() const { return false; }

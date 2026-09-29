@@ -175,6 +175,10 @@
 //                the Core's feedback analyzer listens to. The applet's
 //                other ModMon/ keys stay each window's. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - Parity ruling C12: the per-band grid dB max and min
+//                (DisplayGridMax_ / DisplayGridMin_) are the Core's
+//                (Station). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 
 #include "core/settings/SettingsScope.h"
@@ -464,6 +468,15 @@ const Rule kPrefixes[] = {
     // Core's catalogue sends them to an app. A window running its radio
     // locally has no remote backend, so nothing changes for it.
     { "filters/", SettingsScope::Station },
+
+    // Parity ruling C12 (remote-window parity plan, 2026-09-24): Setup >
+    // Display > Grid & Scales' per-band dB max and min
+    // (PanadapterModel's DisplayGridMax_<band> / DisplayGridMin_<band>)
+    // live on the Core. The Core's pan applies them on a band crossing and
+    // its range reaches every window, so every window shows and edits the
+    // Core's values. The rest of the Display* family stays local.
+    { "DisplayGridMax_", SettingsScope::Station },
+    { "DisplayGridMin_", SettingsScope::Station },
 };
 
 // ---- 3. Whole-key rules ---------------------------------------------------

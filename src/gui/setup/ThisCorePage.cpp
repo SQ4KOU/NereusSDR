@@ -16,6 +16,10 @@
 //   2026-09-26  J.J. Boyd / KG4VCF  iPhone app plan Task 78 (R-IOS-07,
 //                                    R-IOS-02): the Connected now list.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  iPhone app plan Task 25: the Core's
+//                                    paired devices (Revoke, Add a device)
+//                                    and its identity and key backup line.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "gui/setup/ThisCorePage.h"
@@ -24,10 +28,13 @@
 #include "core/HardwareProfile.h"
 #include "core/HpsdrModel.h"
 #include "core/session/IStationLink.h"
+#include "core/session/RemoteDevicesState.h"
 #include "core/station/StationRadios.h"
 #include "models/RadioModel.h"
 
 #include <QComboBox>
+#include <QDateTime>
+#include <QLocale>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QHeaderView>
@@ -41,6 +48,14 @@ namespace NereusSDR {
 namespace {
 
 constexpr int kMacRole = Qt::UserRole + 1;
+
+// An ISO 8601 time from the Core, in this computer's words.
+QString when(const QString& iso)
+{
+    const QDateTime parsed = QDateTime::fromString(iso, Qt::ISODate);
+    return parsed.isValid() ? QLocale().toString(parsed.toLocalTime(), QLocale::ShortFormat)
+                            : QObject::tr("Never");
+}
 
 } // namespace
 
@@ -129,6 +144,81 @@ ThisCorePage::ThisCorePage(RadioModel* model, QWidget* parent)
     m_connectedList->setDevices(m_radioModel ? m_radioModel->stationDevices() : nullptr);
     connectedLayout->addWidget(m_connectedList);
 
+    // iPhone app plan Task 25 (the chosen Option A: This Core holds the
+    // devices list): the Core's paired devices, each with Revoke, and Add
+    // a device, which opens the Core's pairing window and shows its code.
+    QGroupBox* pairedSection = addSection(tr("Paired devices"));
+    auto* pairedLayout = qobject_cast<QVBoxLayout*>(pairedSection->layout());
+    if (pairedLayout == nullptr) {
+        pairedLayout = new QVBoxLayout(pairedSection);
+    }
+    m_pairedRows = new QWidget(pairedSection);
+    m_pairedRows->setObjectName(QStringLiteral("thisCorePairedRows"));
+    m_pairedLayout = new QVBoxLayout(m_pairedRows);
+    m_pairedLayout->setContentsMargins(0, 0, 0, 0);
+    pairedLayout->addWidget(m_pairedRows);
+    m_pairingCode = new QLabel(pairedSection);
+    m_pairingCode->setObjectName(QStringLiteral("thisCorePairingCode"));
+    m_pairingCode->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_pairingCode->setTextFormat(Qt::PlainText);
+    pairedLayout->addWidget(m_pairingCode);
+    m_pairingInstruction = new QLabel(
+        tr("Enter this code on your device to pair it with this Core."), pairedSection);
+    m_pairingInstruction->setWordWrap(true);
+    pairedLayout->addWidget(m_pairingInstruction);
+    m_addDevice = new QPushButton(tr("Add a device"), pairedSection);
+    m_addDevice->setObjectName(QStringLiteral("thisCoreAddDevice"));
+    pairedLayout->addWidget(m_addDevice, 0, Qt::AlignLeft);
+
+    QGroupBox* identitySection = addSection(tr("Core identity"));
+    auto* identityLayout = qobject_cast<QVBoxLayout*>(identitySection->layout());
+    if (identityLayout == nullptr) {
+        identityLayout = new QVBoxLayout(identitySection);
+    }
+    m_coreName = new QLabel(identitySection);
+    m_coreName->setObjectName(QStringLiteral("thisCoreName"));
+    m_coreName->setTextFormat(Qt::PlainText);
+    m_coreName->setWordWrap(true);
+    identityLayout->addWidget(m_coreName);
+    m_keyBackup = new QLabel(identitySection);
+    m_keyBackup->setObjectName(QStringLiteral("thisCoreKeyBackup"));
+    m_keyBackup->setTextFormat(Qt::PlainText);
+    m_keyBackup->setWordWrap(true);
+    m_keyBackup->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    identityLayout->addWidget(m_keyBackup);
+    m_keyBackupDone = new QPushButton(tr("I've backed it up"), identitySection);
+    m_keyBackupDone->setObjectName(QStringLiteral("thisCoreKeyBackupDone"));
+    identityLayout->addWidget(m_keyBackupDone, 0, Qt::AlignLeft);
+    m_devicesStatus = new QLabel(identitySection);
+    m_devicesStatus->setObjectName(QStringLiteral("thisCoreDevicesStatus"));
+    m_devicesStatus->setWordWrap(true);
+    identityLayout->addWidget(m_devicesStatus);
+
+    connect(m_addDevice, &QPushButton::clicked, this,
+            [this]() { sendDeviceAdmin("pairing.open"); });
+    connect(m_keyBackupDone, &QPushButton::clicked, this,
+            [this]() { sendDeviceAdmin("station.acknowledgeKeyBackup"); });
+    if (RemoteDevicesState* devices = m_radioModel ? m_radioModel->stationDevices() : nullptr) {
+        connect(devices, &RemoteDevicesState::pairedDevicesChanged, this,
+                &ThisCorePage::rebuildDevices);
+        connect(devices, &RemoteDevicesState::coreInfoChanged, this,
+                &ThisCorePage::rebuildDevices);
+        connect(devices, &RemoteDevicesState::connectedDevicesChanged, this,
+                &ThisCorePage::rebuildDevices);
+    }
+    if (m_radioModel != nullptr) {
+        connect(m_radioModel, &RadioModel::stationCommandFinished, this,
+                [this](quint32 commandId, bool accepted, const QString& reason) {
+            if (commandId == 0 || commandId != m_devicesCommandId) {
+                return;
+            }
+            m_devicesCommandId = 0;
+            m_devicesStatus->setText(accepted ? QString() : reason);
+        });
+        connect(m_radioModel, &RadioModel::stationLinkStateChanged, this,
+                &ThisCorePage::rebuildDevices);
+    }
+
     if (m_radioModel != nullptr) {
         connect(m_radioModel, &RadioModel::stationRadiosChanged, this,
                 &ThisCorePage::rebuildList);
@@ -147,6 +237,7 @@ ThisCorePage::ThisCorePage(RadioModel* model, QWidget* parent)
                 &ThisCorePage::refreshControls);
     }
     rebuildList();
+    rebuildDevices();
 }
 
 void ThisCorePage::setStationSettingsAvailable(bool available, const QString& reason)
@@ -154,6 +245,127 @@ void ThisCorePage::setStationSettingsAvailable(bool available, const QString& re
     m_stationAvailable = available;
     m_stationReason = reason;
     refreshControls();
+    rebuildDevices();
+}
+
+QString ThisCorePage::devicesUnavailableReason() const
+{
+    if (!m_stationAvailable) {
+        return m_stationReason.isEmpty() ? tr("Connect to the Core to change these.")
+                                         : m_stationReason;
+    }
+    IStationLink* link = m_radioModel != nullptr ? m_radioModel->stationLink() : nullptr;
+    if (link == nullptr || !link->stationLinkReady()) {
+        return tr("Connect to the Core to change these.");
+    }
+    if (!link->deviceAdminAvailable()) {
+        return link->signedInWithDeviceKey() ? IStationLink::deviceAdminUnavailableReason()
+                                             : IStationLink::pairedDeviceAdminReason();
+    }
+    return {};
+}
+
+void ThisCorePage::rebuildDevices()
+{
+    while (QLayoutItem* item = m_pairedLayout->takeAt(0)) {
+        if (QWidget* widget = item->widget()) {
+            widget->hide();
+            widget->deleteLater();
+        }
+        delete item;
+    }
+    RemoteDevicesState* devices = m_radioModel ? m_radioModel->stationDevices() : nullptr;
+    const QString why = devicesUnavailableReason();
+    const bool usable = why.isEmpty();
+    const RemoteCoreDevicesInfo info = devices ? devices->coreInfo() : RemoteCoreDevicesInfo{};
+    const QList<RemotePairedDevice> paired =
+        devices ? devices->pairedDevices() : QList<RemotePairedDevice>{};
+    const QString selfId = devices ? devices->selfDeviceId() : QString();
+    const auto gate = [](QWidget* w, bool enabled, const QString& reason) {
+        w->setEnabled(enabled);
+        w->setToolTip(enabled ? QString() : reason);
+    };
+    for (const RemotePairedDevice& device : paired) {
+        auto* row = new QWidget(m_pairedRows);
+        auto* layout = new QHBoxLayout(row);
+        layout->setContentsMargins(0, 2, 0, 2);
+        const bool self = !selfId.isEmpty() && device.id == selfId;
+        QString name = device.name;
+        if (self) {
+            name += tr(" (this window)");
+        }
+        const QString seen = device.connected ? tr("Connected now") : when(device.lastSeen);
+        auto* label = new QLabel(tr("%1\nPaired: %2 · Last seen: %3")
+                                     .arg(name, when(device.pairedAt), seen),
+                                 row);
+        label->setTextFormat(Qt::PlainText);
+        label->setWordWrap(true);
+        layout->addWidget(label, 1);
+        auto* revoke = new QPushButton(tr("Revoke"), row);
+        revoke->setObjectName(QStringLiteral("thisCoreRevoke"));
+        revoke->setProperty("deviceId", device.id);
+        // The Core refuses the last device while no pairing token works,
+        // and this window cannot revoke the key it is signed in with.
+        const bool last = paired.size() <= 1 && !info.tokenActive;
+        const QString reason = !usable ? why
+            : self ? tr("This is this computer. Revoke it from another paired device or on "
+                        "the Core's computer.")
+            : last ? tr("The Core keeps its last paired device.")
+                   : QString();
+        gate(revoke, reason.isEmpty(), reason);
+        connect(revoke, &QPushButton::clicked, this, [this, id = device.id]() {
+            sendDeviceAdmin("devices.revoke", id);
+        });
+        layout->addWidget(revoke);
+        m_pairedLayout->addWidget(row);
+    }
+    if (paired.isEmpty()) {
+        m_pairedLayout->addWidget(new QLabel(
+            devices && info.received ? tr("No paired devices.") : why.isEmpty()
+                ? tr("The Core has not sent its paired devices.") : why,
+            m_pairedRows));
+    }
+    const bool showCode = info.pairingWindowOpen && !info.pairingCode.isEmpty();
+    m_pairingCode->setText(tr("Pairing code: %1").arg(info.pairingCode));
+    m_pairingCode->setVisible(showCode);
+    m_pairingInstruction->setVisible(showCode);
+    IStationLink* link = m_radioModel != nullptr ? m_radioModel->stationLink() : nullptr;
+    const bool pairing = usable && link != nullptr && link->pairingAvailable();
+    gate(m_addDevice, pairing && !showCode,
+         !usable ? why : showCode ? tr("The pairing code is shown below the list.")
+                                  : IStationLink::deviceAdminUnavailableReason());
+
+    m_coreName->setText(info.stationLabel.isEmpty()
+                            ? tr("No Core name")
+                            : tr("Core name: %1").arg(info.stationLabel));
+    if (info.keyBackupAcknowledged) {
+        m_keyBackup->setText(tr("The Core's key is backed up."));
+    } else if (!info.keyPath.isEmpty()) {
+        m_keyBackup->setText(tr("Back up the Core key file on the Core's computer: %1")
+                                 .arg(info.keyPath));
+    } else {
+        m_keyBackup->setText(tr("Back up this Core's key when it is available."));
+    }
+    m_keyBackupDone->setVisible(!info.keyBackupAcknowledged);
+    gate(m_keyBackupDone, usable && !info.keyPath.isEmpty(),
+         !usable ? why : tr("The Core key is not available yet."));
+}
+
+void ThisCorePage::sendDeviceAdmin(const QByteArray& verb, const QString& id)
+{
+    IStationLink* link = m_radioModel != nullptr ? m_radioModel->stationLink() : nullptr;
+    if (link == nullptr) {
+        m_devicesStatus->setText(tr("Connect to the Core to change these."));
+        return;
+    }
+    const IStationLink::CommandOutcome outcome = link->requestDeviceAdmin(verb, id);
+    if (!outcome.sent) {
+        m_devicesCommandId = 0;
+        m_devicesStatus->setText(outcome.reason);
+        return;
+    }
+    m_devicesCommandId = outcome.commandId;
+    m_devicesStatus->clear();
 }
 
 QString ThisCorePage::reconnectToChangeRadioReason()

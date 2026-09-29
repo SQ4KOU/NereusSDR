@@ -18,6 +18,8 @@
 //                       takeReceiver / takeSlice: TakeReceiverDialog;
 //                       each answers confirm.proceed or confirm.cancel
 //   notice              a NoticeCard on the band, Take it back when offered
+//   session.held        the Core is full: ReplaceDeviceDialog, answered
+//                       with session.takeover (Task 78 item 7, G-53)
 //   markers             foreignMarkers() for each panadapter
 //
 // Nothing here keys the radio: a take never keys (the link document,
@@ -28,6 +30,9 @@
 //   2026-09-26: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), iPhone app plan Task 78 (R-IOS-02, R-IOS-30), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-28: the fifth-device choice (Task 78 item 7, G-53). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "gui/SpectrumWidget.h"
@@ -85,6 +90,7 @@ signals:
 
 private:
     void onQuestionChanged();
+    void onHeldChanged();
     void onNoticesChanged();
     void onCommandFinished(const QByteArray& verb, quint32 commandId, bool accepted,
                            const QString& reason, bool awaitingConfirmation);
@@ -97,6 +103,8 @@ private:
     QPointer<QDialog> m_dialog;
     /// The question the open dialog answers (0 for the window's own ask).
     qint64 m_dialogQuestionId = 0;
+    /// The open dialog is the fifth-device choice.
+    bool m_dialogIsHeld = false;
     QHash<qint64, QPointer<NoticeCard>> m_cards;
 };
 

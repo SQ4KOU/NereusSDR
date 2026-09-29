@@ -83,6 +83,11 @@
 //                 transmit calibration (RX1Offset), and a change while keyed
 //                 swaps the view and resets the blob maxima and active peaks.
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-28 J.J. Boyd / KG4VCF - parity ruling C13: the performance
+//                 overlay's lines come from perfOverlayLines(), which in a
+//                 remote window adds the Core's drops after this computer's
+//                 counters, each group headed. AI-assisted via Anthropic
+//                 Claude Code.
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
@@ -3373,6 +3378,69 @@ void SpectrumWidget::setShowFps(bool on)
     m_fpsDisplayValue = 0.0f;
     scheduleSettingsSave();
     markOverlayDirty();
+}
+
+void SpectrumWidget::setCorePerfLinesProvider(std::function<QStringList()> provider)
+{
+    m_corePerfLinesProvider = std::move(provider);
+    if (m_showPerfOverlay) {
+        markOverlayDirty();
+        update();
+    }
+}
+
+QStringList SpectrumWidget::perfOverlayLines() const
+{
+    // Reads the cached snapshot non-destructively; the 1 Hz poll timer is
+    // the sole snapshotAndClearDeltas() consumer.
+    const auto stats = PerfMonitor::instance().lastSnapshot();
+    QStringList lines;
+    lines << QStringLiteral("paint  avg %1 max %2 ms")
+                .arg(stats.paintMsAvg, 0, 'f', 1)
+                .arg(stats.paintMsMax, 0, 'f', 1)
+          << QStringLiteral("gap    avg %1 max %2 ms")
+                .arg(stats.gapMsAvg, 0, 'f', 1)
+                .arg(stats.gapMsMax, 0, 'f', 1)
+          << QStringLiteral("fft    avg %1 max %2 ms")
+                .arg(stats.fftMsAvg, 0, 'f', 1)
+                .arg(stats.fftMsMax, 0, 'f', 1)
+          << QStringLiteral("ovly   avg %1 max %2 ms")
+                .arg(stats.ovlyMsAvg, 0, 'f', 1)
+                .arg(stats.ovlyMsMax, 0, 'f', 1)
+          << QStringLiteral("audio  fill avg %1 min %2 ms (%3 samp)")
+                .arg(stats.audioFillAvgMs, 0, 'f', 1)
+                .arg(stats.audioFillMinMs, 0, 'f', 1)
+                .arg(stats.audioFillSamples)
+          << QStringLiteral("audio  underruns %1 (+%2/s)")
+                .arg(stats.audioUnderrunsTotal)
+                .arg(stats.audioUnderrunsDelta)
+          << QStringLiteral("udp    drops %1 (+%2/s)")
+                .arg(stats.udpDropsTotal)
+                .arg(stats.udpDropsDelta)
+          << QStringLiteral("tx iq  underruns %1 (+%2/s)")
+                .arg(stats.txIqUnderrunsTotal)
+                .arg(stats.txIqUnderrunsDelta)
+          << QStringLiteral("tx iq  produced  %1 (+%2/s)")
+                .arg(stats.txIqProducedTotal)
+                .arg(stats.txIqProducedDelta)
+          << QStringLiteral("mem    %1 MB%2")
+                .arg(stats.memFootprintMb, 0, 'f', 0)
+                .arg(stats.memCompressing
+                     ? QStringLiteral(" COMPRESSING")
+                     : QString{})
+          << QStringLiteral("mlock  %1 regions / %2 MB pinned")
+                .arg(memoryLockStats().regionsLocked)
+                .arg(memoryLockStats().bytesLocked
+                     / (1024.0 * 1024.0), 0, 'f', 1);
+    // Parity ruling C13: in a remote window the Core's drops follow this
+    // computer's counters, each group headed.
+    const QStringList core =
+        m_corePerfLinesProvider ? m_corePerfLinesProvider() : QStringList{};
+    if (!core.isEmpty()) {
+        lines.prepend(QStringLiteral("this computer:"));
+        lines << core;
+    }
+    return lines;
 }
 
 void SpectrumWidget::setShowPerfOverlay(bool on)
@@ -11420,44 +11488,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
                 // delta counters).
                 const auto stats =
                     PerfMonitor::instance().lastSnapshot();
-                QStringList lines;
-                lines << QStringLiteral("paint  avg %1 max %2 ms")
-                            .arg(stats.paintMsAvg, 0, 'f', 1)
-                            .arg(stats.paintMsMax, 0, 'f', 1)
-                      << QStringLiteral("gap    avg %1 max %2 ms")
-                            .arg(stats.gapMsAvg, 0, 'f', 1)
-                            .arg(stats.gapMsMax, 0, 'f', 1)
-                      << QStringLiteral("fft    avg %1 max %2 ms")
-                            .arg(stats.fftMsAvg, 0, 'f', 1)
-                            .arg(stats.fftMsMax, 0, 'f', 1)
-                      << QStringLiteral("ovly   avg %1 max %2 ms")
-                            .arg(stats.ovlyMsAvg, 0, 'f', 1)
-                            .arg(stats.ovlyMsMax, 0, 'f', 1)
-                      << QStringLiteral("audio  fill avg %1 min %2 ms (%3 samp)")
-                            .arg(stats.audioFillAvgMs, 0, 'f', 1)
-                            .arg(stats.audioFillMinMs, 0, 'f', 1)
-                            .arg(stats.audioFillSamples)
-                      << QStringLiteral("audio  underruns %1 (+%2/s)")
-                            .arg(stats.audioUnderrunsTotal)
-                            .arg(stats.audioUnderrunsDelta)
-                      << QStringLiteral("udp    drops %1 (+%2/s)")
-                            .arg(stats.udpDropsTotal)
-                            .arg(stats.udpDropsDelta)
-                      << QStringLiteral("tx iq  underruns %1 (+%2/s)")
-                            .arg(stats.txIqUnderrunsTotal)
-                            .arg(stats.txIqUnderrunsDelta)
-                      << QStringLiteral("tx iq  produced  %1 (+%2/s)")
-                            .arg(stats.txIqProducedTotal)
-                            .arg(stats.txIqProducedDelta)
-                      << QStringLiteral("mem    %1 MB%2")
-                            .arg(stats.memFootprintMb, 0, 'f', 0)
-                            .arg(stats.memCompressing
-                                 ? QStringLiteral(" COMPRESSING")
-                                 : QString{})
-                      << QStringLiteral("mlock  %1 regions / %2 MB pinned")
-                            .arg(memoryLockStats().regionsLocked)
-                            .arg(memoryLockStats().bytesLocked
-                                 / (1024.0 * 1024.0), 0, 'f', 1);
+                const QStringList lines = perfOverlayLines();
                 QFont pf = p.font();
                 pf.setPixelSize(11);
                 pf.setFamily(QStringLiteral("Menlo"));
