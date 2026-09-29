@@ -1042,10 +1042,11 @@ private slots:
             QStringList shown;
         } sites[] = {
             {"src/core/safety/BandPlanGuard.cpp", true,
-             {"coming in Phase", "RX/TX band mismatch \u2014"},
+             {"coming in Phase", "RX/TX band mismatch", "TX-allowed range",
+              "Mode not supported for TX"},
              {"CW transmit is not available yet", "FM transmit is not available yet",
               "DRM transmit is not available yet",
-              "RX/TX band mismatch: cross-band TX disabled"}},
+              "Transmit is on a different band from receive, and Setup is set to prevent that."}},
             {"src/gui/applets/TxApplet.cpp", true,
              {"coming in Phase"},
              {"CW transmit is not available yet", "FM transmit is not available yet",

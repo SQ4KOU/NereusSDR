@@ -17,6 +17,10 @@
 // Modification history (NereusSDR):
 //   2026-09-27: Completed the 24 country HF range tables from Thetis
 //                v2.10.3.15 @3759d096 with AI assistance via OpenAI Codex.
+//   2026-09-28: Addendum G-42 item 4: each band plan refusal says what is
+//                wrong in the operator's words, after Thetis's MOX messages
+//                (console.cs:29452-29530 [v2.10.3.15]). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 //   2026-04-25 — Ported to C++20/Qt6 for NereusSDR by J.J. Boyd
 //                (KG4VCF), with AI-assisted transformation via
 //                Anthropic Claude Code.
@@ -668,6 +672,60 @@ static bool isUs60mModeAllowed(DSPMode mode) noexcept
            mode == DSPMode::DIGU;     // console.cs:29423
 }
 
+// Addendum G-42 item 4: the region as General Options names it (the
+// comboFRSRegion list above), for a refusal the operator reads.
+QString regionWords(Region region)
+{
+    switch (region) {
+    case Region::Australia:     return QStringLiteral("Australia");
+    case Region::Europe:        return QStringLiteral("Europe");
+    case Region::India:         return QStringLiteral("India");
+    case Region::Italy:         return QStringLiteral("Italy");
+    case Region::Israel:        return QStringLiteral("Israel");
+    case Region::Japan:         return QStringLiteral("Japan");
+    case Region::Spain:         return QStringLiteral("Spain");
+    case Region::UnitedKingdom: return QStringLiteral("United Kingdom");
+    case Region::UnitedStates:  return QStringLiteral("United States");
+    case Region::Norway:        return QStringLiteral("Norway");
+    case Region::Denmark:       return QStringLiteral("Denmark");
+    case Region::Sweden:        return QStringLiteral("Sweden");
+    case Region::Latvia:        return QStringLiteral("Latvia");
+    case Region::Slovakia:      return QStringLiteral("Slovakia");
+    case Region::Bulgaria:      return QStringLiteral("Bulgaria");
+    case Region::Greece:        return QStringLiteral("Greece");
+    case Region::Hungary:       return QStringLiteral("Hungary");
+    case Region::Netherlands:   return QStringLiteral("Netherlands");
+    case Region::France:        return QStringLiteral("France");
+    case Region::Russia:        return QStringLiteral("Russia");
+    case Region::Region1:       return QStringLiteral("Region1");
+    case Region::Region2:       return QStringLiteral("Region2");
+    case Region::Region3:       return QStringLiteral("Region3");
+    case Region::Germany:       return QStringLiteral("Germany");
+    }
+    return QStringLiteral("your region");
+}
+
+// The modes a US 60 m refusal can name: the transmit modes the mode list
+// admits other than USB and DIGU.
+QString modeWords(DSPMode mode)
+{
+    switch (mode) {
+    case DSPMode::LSB:    return QStringLiteral("LSB");
+    case DSPMode::DIGL:   return QStringLiteral("DIGL");
+    case DSPMode::AM:     return QStringLiteral("AM");
+    case DSPMode::SAM:    return QStringLiteral("SAM");
+    case DSPMode::DSB:    return QStringLiteral("DSB");
+    case DSPMode::RADE_U: return QStringLiteral("RADE-U");
+    case DSPMode::RADE_L: return QStringLiteral("RADE-L");
+    default:              return QStringLiteral("This mode");
+    }
+}
+
+QString mhzWords(std::int64_t freqHz)
+{
+    return QString::number(static_cast<double>(freqHz) / 1e6, 'f', 6);
+}
+
 static bool isInChannel(std::int64_t freqHz, const ChannelEntry& ch) noexcept
 {
     const auto half = ch.bwHz / 2;
@@ -854,21 +912,54 @@ BandPlanGuard::checkMoxAllowed(Region region, std::int64_t freqHz,
                 reason = QStringLiteral("DRM transmit is not available yet");
                 break;
             default:
-                reason = QStringLiteral("Mode not supported for TX");
+                reason = QStringLiteral("This mode cannot transmit.");
                 break;
         }
         return {false, reason};
     }
 
+    // Addendum G-42 item 4: each refusal below says what is wrong, after
+    // Thetis's MOX messages, in the operator's words.
+    // From Thetis console.cs:29467-29484 [v2.10.3.15]:
+    //   if (_tx_band == Band.B60M && current_region == FRSRegion.US && !extended)
+    //   ... default: MessageBox.Show(... + " mode is not allowed on 60M band." ...
+    if (!extended && region == Region::UnitedStates && txBand == Band::Band60m
+        && !isUs60mModeAllowed(mode)) {
+        return {false, QStringLiteral("%1 is not allowed on 60 m in the United States.")
+                           .arg(modeWords(mode))};
+    }
+
     // Frequency / band-edge check.
     if (!isValidTxPassband(region, freqHz, mode, filterLowHz, filterHighHz,
                            extended, ignoreFilter)) {
-        return {false, QStringLiteral("Frequency outside TX-allowed range")};
+        // From Thetis console.cs:29486-29528 [v2.10.3.15]: the US 60 m
+        // filter limit when the carrier itself may transmit; the carrier for
+        // CW and TUNE; the carrier with the TX filter edges otherwise.
+        //   if (_tx_band == Band.B60M && current_region == FRSRegion.US &&
+        //       checkValidTXFreq_local(current_region, freq) && !extended)
+        if (region == Region::UnitedStates && txBand == Band::Band60m
+            && isValidTxFreq(region, freqHz, mode, false)) {
+            return {false, QStringLiteral("The transmit filter is wider than the 2.8 kHz "
+                                          "allowed on 60 m in the United States.")};
+        }
+        const bool carrierOnly = ignoreFilter || mode == DSPMode::CWL || mode == DSPMode::CWU
+            || (filterLowHz == 0 && filterHighHz == 0);
+        if (carrierOnly) {
+            return {false, QStringLiteral("%1 MHz is outside the transmit bands for your "
+                                          "region (%2).")
+                               .arg(mhzWords(freqHz), regionWords(region))};
+        }
+        return {false, QStringLiteral("%1 MHz with the transmit filter from %2 to %3 Hz "
+                                      "reaches outside the transmit bands for your region "
+                                      "(%4).")
+                           .arg(mhzWords(freqHz)).arg(filterLowHz).arg(filterHighHz)
+                           .arg(regionWords(region))};
     }
 
     // Band-mismatch check.
     if (!isValidTxBand(rxBand, txBand, preventDifferentBand)) {
-        return {false, QStringLiteral("RX/TX band mismatch: cross-band TX disabled")};
+        return {false, QStringLiteral("Transmit is on a different band from receive, and "
+                                      "Setup is set to prevent that.")};
     }
 
     return {true, QString()};

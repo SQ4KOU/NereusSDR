@@ -149,6 +149,9 @@
 //                Pwr and SWR bars fall at the Core's unkey as a local
 //                window's do at its own. AI-assisted via Anthropic Claude
 //                Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  Addendum G-42 item 4: the tooltip for a
+//                mode that cannot transmit matches the refusal's words.
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -2258,7 +2261,7 @@ QString TxApplet::tooltipForMode(DSPMode mode)
 
     case DSPMode::SPEC:
     default:
-        return QStringLiteral("Mode not supported for TX");
+        return QStringLiteral("This mode cannot transmit.");
     }
 }
 

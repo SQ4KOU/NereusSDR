@@ -6264,7 +6264,7 @@ sentence. A client shows the sentence as sent and may offer the fix.
 | `notReady` | Update this app to transmit through this Core. | |
 | `notReady` | Pair this device with the Core to transmit through it. | |
 | `stationReceiveOnly` | This Core is set to receive only. | |
-| `bandPlan` | The band plan's own sentence (for example "Frequency outside TX-allowed range"), or "The band plan does not allow transmitting here." | |
+| `bandPlan` | The band plan's own sentence (for example "14.360000 MHz is outside the transmit bands for your region (United States)." or "AM is not allowed on 60 m in the United States."), or "The band plan does not allow transmitting here." | |
 | `interlock` | The radio's transmit inhibit input is holding transmit off. | |
 | `interlock` | The transmit interlock is holding transmit off. Check it in Setup. | |
 | `ampStandby` | The amplifier is in standby. Operate it, or change the interlock in Setup. | `operateAmp` |

@@ -16875,7 +16875,7 @@ void RadioModel::installBandPlanMoxCheck()
 
         const SliceModel* slice = txBoundSlice();
         if (!slice) {
-            return {false, QStringLiteral("No TX-bound slice")};
+            return {false, QStringLiteral("No slice is set to transmit.")};
         }
 
         // Thetis console.cs:29440-29450 [v2.10.3.15] adds XIT to the TX

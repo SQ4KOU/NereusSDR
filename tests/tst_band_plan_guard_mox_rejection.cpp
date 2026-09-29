@@ -13,7 +13,7 @@
 //   3. LSB mode (allowed) → MOX engages normally; moxRejected NOT emitted.
 //   4. No MoxCheckFn installed → setMox(true) succeeds (backwards-compat).
 //   5. setMox(false) is never rejected — release path bypasses BandPlanGuard.
-//   6. SPEC mode → moxRejected("Mode not supported for TX"); MOX stays Rx.
+//   6. SPEC mode → moxRejected("This mode cannot transmit."); MOX stays Rx.
 //   7. Rejection: no state advance, no phase signals (txAboutToBegin not emitted).
 //   8. After rejection, setMox(true) with CW can be re-attempted; still rejects.
 //
@@ -44,7 +44,7 @@
 //   2026-09-28 : Addendum G-42 by J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code. Extended is the Core's
 //                 ExtendedTransmit setting; the old ExtendedTxAllowed is
-//                 ignored.
+//                 ignored. Item 4: band plan refusals in operator words.
 // =================================================================
 
 // no-port-check: NereusSDR-original test file.
@@ -265,7 +265,7 @@ private slots:
         QVERIFY(!ctrl.isMox());
     }
 
-    // ── 6. SPEC mode → moxRejected("Mode not supported for TX") ───────────────
+    // ── 6. SPEC mode → moxRejected("This mode cannot transmit.") ──────────────
 
     void spec_setMox_emitsMoxRejected()
     {
@@ -280,7 +280,7 @@ private slots:
 
         QCOMPARE(rejectedSpy.count(), 1);
         QCOMPARE(rejectedSpy.at(0).at(0).toString(),
-                 QStringLiteral("Mode not supported for TX"));
+                 QStringLiteral("This mode cannot transmit."));
         QVERIFY(!ctrl.isMox());
     }
 
@@ -358,7 +358,9 @@ private slots:
 
         QCOMPARE(rejectedSpy.count(), 1);
         QCOMPARE(rejectedSpy.at(0).at(0).toString(),
-                 QStringLiteral("Frequency outside TX-allowed range"));
+                 QStringLiteral("4.500000 MHz with the transmit filter from 100 to 2900 Hz "
+                                "reaches outside the transmit bands for your region "
+                                "(United States)."));
         QVERIFY(!model.moxController()->isMox());
 
         a->setFrequency(4'500'000.0);
@@ -405,7 +407,9 @@ private slots:
         QCoreApplication::processEvents();
         QCOMPARE(rejectedSpy.count(), 1);
         QCOMPARE(rejectedSpy.at(0).at(0).toString(),
-                 QStringLiteral("Frequency outside TX-allowed range"));
+                 QStringLiteral("4.500000 MHz with the transmit filter from 100 to 2900 Hz "
+                                "reaches outside the transmit bands for your region "
+                                "(United States)."));
 
         a->setFrequency(14'200'000.0);
         model.moxController()->setMox(true);
@@ -639,7 +643,7 @@ private slots:
     void tooltipForMode_spec_returnsNotSupported()
     {
         const QString tip = TxApplet::tooltipForMode(DSPMode::SPEC);
-        QCOMPARE(tip, QStringLiteral("Mode not supported for TX"));
+        QCOMPARE(tip, QStringLiteral("This mode cannot transmit."));
     }
 };
 
