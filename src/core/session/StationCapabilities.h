@@ -159,6 +159,10 @@
 //   2026-09-27 - R-IOS-13 / R-R3-49: txModMonitorVersion, the AM Mod
 //                Monitor's readings. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-28 - R-R3-49 / R-R3-46: Setup > Transmit > Power's Disable HF PA
+//                applied (Thetis DisablePA and hf_tr_relay,
+//                transmitSettingsVersion 11). J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -315,6 +319,8 @@ struct StationCapabilities {
     /// transmit settings stay greyed and say the Core cannot take them.
     /// 9 also offers validated BandPlanRegion edits and the TX passband guard.
     /// 10 (iPhone app plan Task 40) adds `transmit.micMuted`, the mic mute.
+    /// 11 offers Transmit > Power's "Disable HF PA" (DisableHfPa),
+    /// taken on and off the air and applied to the radio at once.
     int transmitSettingsVersion = 0;
     /// R-IOS-27, R-IOS-06: 1 means the Core takes `slice.selectBand`, which
     /// runs the desktop's band button on a slice (its saved frequency, mode

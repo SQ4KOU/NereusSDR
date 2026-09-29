@@ -85,6 +85,10 @@
 //                 buffer, which sheds a standing excess only in silence; the key-on cushion is the
 //                 radio's target lead plus one frame (16.25 ms, was 20 ms), so no standing 5 ms
 //                 stays in the ring. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - R-R3-49 / R-R3-46: Setup > Transmit > Power's Disable HF PA
+//                applied (Thetis DisablePA and hf_tr_relay,
+//                transmitSettingsVersion 11). J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -1422,6 +1426,37 @@ void P2RadioConnection::setAlexHpfBypass(bool on)
     RadioConnection::setAlexHpfBypass(on);
     if (m_running) {
         sendCmdHighPriority();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// setPaDisabled: "Disable HF PA" (Setup > Transmit > Power). Thetis's
+// DisablePA sets tx[0].pa and sends CmdGeneral, whose byte 58 is (!pa):
+//   From Thetis ChannelMaster/netInterface.c:623-631 [v2.10.3.15]
+//     void DisablePA(int bit)
+//     {
+//         if (prn->tx[0].pa != bit)
+//         {
+//             prn->tx[0].pa = bit;
+//             if (listenSock != INVALID_SOCKET)
+//                 CmdGeneral();
+//   From Thetis ChannelMaster/network.c:903-904 [v2.10.3.15]
+//     // Bits - PA, Apollo, Mercury, Clock source
+//     packetbuf[58] = (!prn->tx[0].pa) & 0x01;
+// The same flag leaves the Alex T/R relay open while keyed
+// (P2CodecOrionMkII::buildAlex0, netInterface.c:378 SetTRXrelay), which goes
+// out with the next high-priority packet, as Thetis's does.
+// ---------------------------------------------------------------------------
+void P2RadioConnection::setPaDisabled(bool disabled)
+{
+    RadioConnection::setPaDisabled(disabled);
+    const int bit = disabled ? 1 : 0;
+    if (m_tx[0].pa == bit) {
+        return;
+    }
+    m_tx[0].pa = bit;
+    if (m_running && m_socket) {
+        sendCmdGeneral();
     }
 }
 
@@ -3467,6 +3502,7 @@ CodecContext P2RadioConnection::buildCodecContext() const
         ctx.p2DriveLevel = txInBand ? m_tx[0].driveLevel : 0;
     }
     ctx.p2TxPa           = m_tx[0].pa;
+    ctx.txPaDisabled     = m_tx[0].pa != 0;  // "Disable HF PA": the T/R relay (buildAlex0)
     ctx.p2TxSamplingRate = m_tx[0].samplingRate;
     ctx.p2TxPhaseShift   = m_tx[0].phaseShift;
 

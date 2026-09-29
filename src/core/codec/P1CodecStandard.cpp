@@ -25,6 +25,10 @@
 //                cmaster.cs headers below were missing although UpdateDDCs
 //                logic already lived here. J.J. Boyd (KG4VCF), AI-assisted
 //                via Anthropic Claude Code.
+//   2026-09-28 - R-R3-49 / R-R3-46: Setup > Transmit > Power's Disable HF PA
+//                applied (Thetis DisablePA and hf_tr_relay,
+//                transmitSettingsVersion 11). J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 // =================================================================
 //
 // === Verbatim Thetis ChannelMaster/networkproto1.c header (lines 1-45) ===
@@ -444,7 +448,11 @@ void P1CodecStandard::bank10(const CodecContext& ctx, quint8 out[5]) const
     // From Thetis ChannelMaster/networkproto1.c:581 [v2.10.3.13]
     //   C2 = ((prn->mic.mic_boost & 1) | ((prn->mic.line_in & 1) << 1) | ... | 0b01000000) & 0x7f;
     out[2] = quint8((ctx.p1MicBoost ? 0x01 : 0x00) | (ctx.p1LineIn ? 0x02 : 0x00) | 0x40);
-    out[3] = quint8(ctx.alexHpfBits | (ctx.trxRelay ? 0x00 : 0x80));  // T/R relay engaged (INVERTED: 1 = disabled)
+    // Bit 7 is also Thetis's DisablePA bit ("Disable HF PA"):
+    // From Thetis ChannelMaster/networkproto1.c:583-586 [v2.10.3.15]
+    //   C3 = ... | ((prbpfilter->_6M_preamp & 1) << 6) | ((prn->tx[0].pa & 1) << 7);
+    const bool bit7 = !ctx.trxRelay || ctx.txPaDisabled;
+    out[3] = quint8(ctx.alexHpfBits | (bit7 ? 0x80 : 0x00));  // T/R relay engaged (INVERTED: 1 = disabled)
     out[4] = quint8(ctx.alexLpfBits);
 }
 

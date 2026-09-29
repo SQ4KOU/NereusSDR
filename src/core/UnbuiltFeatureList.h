@@ -21,6 +21,10 @@
 //                 isBuilt() and the test seams moved here from
 //                 src/gui/UnbuiltFeatures.{h,cpp} unchanged. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - R-R3-49 / R-R3-46: Setup > Transmit > Power's Disable HF PA
+//                applied (Thetis DisablePA and hf_tr_relay,
+//                transmitSettingsVersion 11). J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -96,7 +100,6 @@ enum class UnbuiltFeature {
                          // its high-pass switches are applied since plan Task 14)
     Hl2TxTiming,      // Setup > Hardware > HL2 Options: TX buffer latency, PTT hang (plan C6)
     GanymedeTrip,     // Status PA badge: Andromeda/Ganymede CAT trip input is not ported
-    DisableHfPa,      // Setup > Transmit > Power: HF PA relay routing refresh is not ported
     PbSnr,            // Multimeter PBSNR binding has no producer
     ContainerFilterDisplay, // Feed implemented; gate awaits loaded FFT startup acceptance
     ContainerClickBox, // Container click box has no host action routing

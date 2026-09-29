@@ -869,7 +869,7 @@ change shows as surface drift and as a change to this table.
 | `pairingVersion` | 1 |
 | `stationCatalogVersion` | 1 |
 | `displayExtrasVersion` | 3 |
-| `transmitSettingsVersion` | 10 |
+| `transmitSettingsVersion` | 11 |
 | `bandSelectVersion` | 1 |
 | `meterReadingsVersion` | 1 |
 | `dspInfoVersion` | 1 |
@@ -1168,6 +1168,16 @@ When a feature is off, its version is 0:
   unmuting restores the mic level, as Thetis's setAudioMicGain does
   (console.cs:28856-28868 [v2.10.3.15]). It is never saved: the mic starts
   in use after every Core start.
+  Version 11 offers Transmit > Power's Disable HF PA: `DisableHfPa` ("True" or
+  "False", any other value refused) becomes a station setting, taken on and
+  off the air as Thetis applies it with no MOX check. The Core applies it
+  to its radio at once: the PA disable bit (Protocol 1 bank 10 C3 bit 7,
+  and C2 bit 3 cleared on the Hermes Lite 2; Protocol 2 general packet
+  byte 58 cleared, and the Alex T/R relay left open while keyed) and its
+  SWR protection, which a high SWR no longer trips. On a Hermes or an
+  Atlas kit it stays off whatever is saved, and a window shows the box
+  disabled with the reason. A window whose Core offers less than 11 shows
+  the box disabled with the transmit settings reason.
 - `bandSelectVersion`: sent only at agreed minor 11, and 0 on a
   station with no radio model. At 1 the Core takes `slice.selectBand`
   (section 9.1), a device's band button for a slice, for the bands the
@@ -3772,6 +3782,7 @@ computer, never sent). `classifySettingsKey` (`SettingsScope.cpp`) decides:
 | 3. whole key | `TxInhibitMonitorEnabled` | station |
 | 3. whole key | `TxInhibitMonitorReversed` | station |
 | 3. whole key | `WindBackPowerSwr` | station |
+| 3. whole key | `DisableHfPa` | station |
 | 3. whole key | `MultimeterDelayMs` | station |
 | 3. whole key | `NetworkWatchdogEnabled` | station |
 | 3. whole key | `MoxTimeOutEnabled` | station |
@@ -3783,7 +3794,6 @@ computer, never sent). `classifySettingsKey` (`SettingsScope.cpp`) decides:
 | 3. whole key | `RemoteMoxTimeOutSeconds` | station |
 | 3. whole key | `RxOnly` | station |
 | 3. whole key | `ModMon/FbStream` | station |
-| 3. whole key | `DisableHfPa` | operatorLocal |
 | 3. whole key | `ExtendedTxAllowed` | operatorLocal |
 | 3. whole key | `PreventTxOnDifferentBandToRx` | operatorLocal |
 

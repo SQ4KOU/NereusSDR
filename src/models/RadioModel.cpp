@@ -560,6 +560,10 @@
 //                Core's spot frequency to the hertz, so its spot click
 //                resolves the Core's mode. J.J. Boyd (KG4VCF), AI-assisted
 //                via Anthropic Claude Code.
+//   2026-09-28 - R-R3-49 / R-R3-46: Setup > Transmit > Power's Disable HF PA
+//                applied (Thetis DisablePA and hf_tr_relay,
+//                transmitSettingsVersion 11). J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -7983,6 +7987,73 @@ bool RadioModel::applySwrProtectionSetting(const QString& key, const QVariant& v
         return true;
     }
     return false;
+}
+
+// ── Setup > Transmit > Power: "Disable HF PA" ───────────────────────────────
+//
+// The box was saved and read by nothing. Thetis hands it to the console,
+// whose setter re-runs the VFO A update at once:
+//   From Thetis setup.cs:16750-16754 [v2.10.3.15]
+//     private void chkHFTRRelay_CheckedChanged(object sender, EventArgs e)
+//     { if (initializing) return; console.HFTRRelay = chkHFTRRelay.Checked; }
+//   From Thetis console.cs:10891-10901 [v2.10.3.15]
+//     public bool HFTRRelay
+//     { set { hf_tr_relay = value; if (!initializing) txtVFOAFreq_LostFocus(this, EventArgs.Empty); } }
+// and that update sends DisablePA with it while the radio is on HF, which
+// with no transverter bands in NereusSDR is always:
+//   From Thetis console.cs:31619-31630 [v2.10.3.15] (txtVFOAFreq_LostFocus)
+//     if (rx1_xvtr_index < 0)
+//     { ... if (hf_tr_relay) NetworkIO.DisablePA(1); else NetworkIO.DisablePA(0);
+// The same flag lets a high SWR pass the protection:
+//   From Thetis console.cs:26109-26110 [v2.10.3.15] (PollPAPWR)
+//     if (tx_xvtr_index >= 0 || hf_tr_relay) swr_pass = true;
+//   Upstream inline attribution preserved verbatim (console.cs:26113):
+//     if (HardwareSpecific.Model == HPSDRModel.ANAN8000D)        // K2UE idea:  try to determine if Hi-Z or Lo-Z load
+// Thetis runs the handler once at start-up (setup.cs:2866 [v2.10.3.15]), so the saved
+// value applies from the first packet; here the connect path calls this.
+
+bool RadioModel::hfPaSwitchAvailable(HPSDRModel model) noexcept
+{
+    // From Thetis setup.cs:6321-6334 [v2.10.3.15]
+    //   if (HardwareSpecific.Model == HPSDRModel.HERMES ||
+    //      (HardwareSpecific.Model == HPSDRModel.HPSDR))
+    //   { ... chkHFTRRelay.Checked = false; chkHFTRRelay.Enabled = false; chkHFTRRelay.Visible = false; }
+    //   else { ... chkHFTRRelay.Visible = true; chkHFTRRelay.Enabled = true; }
+    // mi0bot leaves the box as it is on the Hermes Lite 2 (shown), and routes
+    // its DisablePA through the HL2's PA enable (mi0bot setup.cs:6449-6466
+    // [@c26a8a4]).
+    return model != HPSDRModel::HERMES && model != HPSDRModel::HPSDR;
+}
+
+QString RadioModel::hfPaSwitchUnavailableReason()
+{
+    return QStringLiteral("This radio cannot switch off its HF PA from here.");
+}
+
+void RadioModel::applyDisableHfPaSetting()
+{
+    applyDisableHfPaSetting(AppSettings::instance().value(QLatin1String(kDisableHfPaKey)));
+}
+
+void RadioModel::applyDisableHfPaSetting(const QVariant& value)
+{
+    if (!ownsLocalDsp()) {
+        return;
+    }
+    // Default off: console.cs:10891 [v2.10.3.15] hf_tr_relay = false.
+    const bool saved = value.isValid() && value.toString() == QStringLiteral("True");
+    // Thetis unchecks the box on a radio that does not offer it
+    // (setup.cs:6325), so there it is off whatever was saved; the saved
+    // value is kept for a radio that does.
+    const bool disabled = saved && hfPaSwitchAvailable(m_hardwareProfile.model);
+    m_swrProt.setHfPaDisabled(disabled);
+    if (m_connection == nullptr) {
+        return;
+    }
+    RadioConnection* conn = m_connection;
+    QMetaObject::invokeMethod(conn, [conn, disabled]() {
+        conn->setPaDisabled(disabled);
+    });
 }
 
 void RadioModel::reportStationSettingChanged(const QString& key)
@@ -21223,6 +21294,9 @@ void RadioModel::onConnectionStateChanged(ConnectionState state)
         // Plan Task 14 and its fix wave: and the Alex tab's saved high-pass
         // switches.
         applyAlexHpfSwitchSettings();
+        // And Setup > Transmit > Power's "Disable HF PA", which Thetis
+        // applies from start-up (setup.cs:2866 [v2.10.3.15]).
+        applyDisableHfPaSetting();
         // RF-SAFETY: and the transmit low-pass, for the same reason. A fresh
         // P2RadioConnection starts with m_alex.lpfBitsTx at its 6 m default
         // and only setTxFrequency ever moves it, so without a push here the

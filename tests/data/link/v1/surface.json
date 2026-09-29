@@ -263,7 +263,7 @@
         {
             "kind": "i64",
             "name": "transmitSettingsVersion",
-            "value": 10
+            "value": 11
         },
         {
             "kind": "i64",
@@ -7568,7 +7568,6 @@
             }
         ],
         "operatorLocalKeys": [
-            "DisableHfPa",
             "ExtendedTxAllowed",
             "PreventTxOnDifferentBandToRx"
         ],
@@ -7611,6 +7610,7 @@
             "TxInhibitMonitorEnabled",
             "TxInhibitMonitorReversed",
             "WindBackPowerSwr",
+            "DisableHfPa",
             "MultimeterDelayMs",
             "NetworkWatchdogEnabled",
             "MoxTimeOutEnabled",

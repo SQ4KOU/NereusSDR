@@ -196,9 +196,12 @@
 //               AI-assisted implementation via Anthropic Claude Code.
 //               The HL2 display now takes mi0bot's integer division, so
 //               a stored value between steps shows as mi0bot shows it.
+//   2026-09-28 - R-R3-49 / R-R3-46: Setup > Transmit > Power's Disable HF PA
+//                applied (Thetis DisablePA and hf_tr_relay,
+//                transmitSettingsVersion 11). J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 // =================================================================
 #include "TransmitSetupPages.h"
-#include "gui/UnbuiltFeatures.h"
 #include "gui/StyleConstants.h"
 #include "core/AppSettings.h"
 #include "core/MicProfileManager.h"
@@ -259,6 +262,7 @@ void PowerPage::buildUI()
         connect(model(), &RadioModel::currentRadioChanged, this,
                 [this](const NereusSDR::RadioInfo&) {
             applyHpsdrModel(model()->hardwareProfile().model);
+            applyHfPaGate();
         });
         applyHpsdrModel(model()->hardwareProfile().model);
     }
@@ -276,7 +280,9 @@ void PowerPage::buildUI()
                     [this](const QString& key, const QVariant&) { refreshStationKeys(key); });
         }
         setTransmitSettingsPermittedAt(5, false, QString());
+        setTransmitSettingsPermittedAt(11, false, QString());
     }
+    applyHfPaGate();
 
     // TODO(future): Thetis Transmit tab also has these groups not yet
     // covered by NereusSDR. Tracked separately from this PR; pre-existing
@@ -723,6 +729,13 @@ void PowerPage::applyFixedTuneSpinGate()
 void PowerPage::setTransmitSettingsPermittedAt(int version, bool permitted,
                                                const QString& reason)
 {
+    if (version == 11) {
+        m_hfPaPermitted = permitted;
+        m_hfPaReason = reason.isEmpty() ? IStationLink::transmitSettingsUnavailableReason()
+                                        : reason;
+        applyHfPaGate();
+        return;
+    }
     if (version != 5) {
         return;
     }
@@ -754,6 +767,7 @@ void PowerPage::refreshStationKeys(const QString& key)
     box(m_chkWindBackPowerSWR, "WindBackPowerSwr");
     box(m_chkTXInhibit, "TxInhibitMonitorEnabled");
     box(m_chkTXInhibitReverse, "TxInhibitMonitorReversed");
+    box(m_chkHFTRRelay, RadioModel::kDisableHfPaKey);
     if (m_udSwrProtectionLimit
         && (key.isEmpty() || key == QLatin1String("SwrProtectionLimit"))) {
         const QSignalBlocker b(m_udSwrProtectionLimit);
@@ -1021,14 +1035,41 @@ void PowerPage::buildHfPaGroup()
     // From Thetis setup.designer.cs:5789 [v2.10.3.13]
     m_chkHFTRRelay->setToolTip(tr("Disables HF PA."));
     m_chkHFTRRelay->setChecked(
-        s.value(QStringLiteral("DisableHfPa"), QStringLiteral("False")).toString() == QStringLiteral("True"));
-    connect(m_chkHFTRRelay, &QCheckBox::toggled, this, [](bool on) {
-        AppSettings::instance().setValue(QStringLiteral("DisableHfPa"), on ? QStringLiteral("True") : QStringLiteral("False"));
+        s.value(QLatin1String(RadioModel::kDisableHfPaKey), QStringLiteral("False")).toString()
+        == QStringLiteral("True"));
+    // Applied at once, as Thetis does (setup.cs:16750-16754 [v2.10.3.15]:
+    // console.HFTRRelay = chkHFTRRelay.Checked); a remote window's save goes
+    // to the Core, which applies it there (StationServer).
+    connect(m_chkHFTRRelay, &QCheckBox::toggled, this, [this](bool on) {
+        AppSettings::instance().setValue(QLatin1String(RadioModel::kDisableHfPaKey),
+                                         on ? QStringLiteral("True") : QStringLiteral("False"));
+        if (model() && model()->ownsLocalDsp()) {
+            model()->applyDisableHfPaSetting();
+        }
     });
     layout->addWidget(m_chkHFTRRelay);
 
     contentLayout()->addWidget(group);
-    UnbuiltFeatures::hideUnlessBuilt(group, UnbuiltFeature::DisableHfPa);
+}
+
+// "Disable HF PA" is disabled with its reason, never hidden: in a remote
+// window until the Core takes it (transmitSettingsVersion 11), and on a
+// radio that has no such switch, where Thetis hides the box
+// (setup.cs:6321-6327 [v2.10.3.15]; RadioModel::hfPaSwitchAvailable).
+void PowerPage::applyHfPaGate()
+{
+    if (!m_chkHFTRRelay) {
+        return;
+    }
+    const bool available = !model()
+        || RadioModel::hfPaSwitchAvailable(model()->hardwareProfile().model);
+    const bool open = m_hfPaPermitted && available;
+    m_chkHFTRRelay->setEnabled(open);
+    const QString reason = !m_hfPaPermitted ? m_hfPaReason
+        : !available                        ? RadioModel::hfPaSwitchUnavailableReason()
+                                            : QString();
+    m_chkHFTRRelay->setToolTip(open ? tr("Disables HF PA.") : reason);
+    m_chkHFTRRelay->setAccessibleDescription(reason);
 }
 
 // ---------------------------------------------------------------------------

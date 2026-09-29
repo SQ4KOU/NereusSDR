@@ -361,6 +361,10 @@
 //                Core's readings (stationModMonitorSnapshot).
 //                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-28 - R-R3-49 / R-R3-46: Setup > Transmit > Power's Disable HF PA
+//                applied (Thetis DisablePA and hf_tr_relay,
+//                transmitSettingsVersion 11). J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -997,6 +1001,25 @@ public:
     // Any other key, or no analyzer, does nothing.
     void applyRemoteTxDisplaySetting(const QString& key);
     static bool isSwrProtectionSettingKey(const QString& key);
+
+    // Setup > Transmit > Power's "Disable HF PA" (DisableHfPa, Thetis
+    // chkHFTRRelay -> console.HFTRRelay), applied at once: the connection's
+    // DisablePA bit (RadioConnection::setPaDisabled) and the SWR
+    // protection's pass (SwrProtectionController::setHfPaDisabled). Thetis
+    // offers the box on every radio except the Hermes and the Atlas kit
+    // (hfPaSwitchAvailable); on those it is off. The local page calls it
+    // after saving, the connect path on connect, and the Core for a
+    // change to the Core's settings, from a window or the Core itself
+    // (StationServer). A model with no radio of its own (a remote window)
+    // does nothing.
+    static constexpr const char* kDisableHfPaKey = "DisableHfPa";
+    static bool hfPaSwitchAvailable(HPSDRModel model) noexcept;
+    static QString hfPaSwitchUnavailableReason();
+    // Reads this computer's saved value.
+    void applyDisableHfPaSetting();
+    // `value` is the saved string; an invalid QVariant (the key removed)
+    // applies the default, off.
+    void applyDisableHfPaSetting(const QVariant& value);
 
     // Task 13: External TX Inhibit (Setup > Transmit > Power, grpExtTXInhibit)
     // is a Core setting: the gate sits where the radio is. The setters save

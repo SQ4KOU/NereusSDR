@@ -347,6 +347,10 @@
 //                compression meters; the remote Max Bin source moved to
 //                MeterPoller::panMaxBinSource, unchanged. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - R-R3-49 / R-R3-46: Setup > Transmit > Power's Disable HF PA
+//                applied (Thetis DisablePA and hf_tr_relay,
+//                transmitSettingsVersion 11). J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -12778,7 +12782,8 @@ SetupDialog* MainWindow::createSetupDialog()
         // R-R3-49 (parity Task 6): and version 6, Setup > PA.
         // R-R3-49 (parity Task 13): and version 8, Hardware Config's OC
         // transmit pins, pin actions and transmit calibration.
-        for (const int version : {2, 3, 4, 5, 6, 8}) {
+        // And version 11, Transmit > Power's "Disable HF PA".
+        for (const int version : {2, 3, 4, 5, 6, 8, 11}) {
             dialog->setTransmitSettingsPermitted(transmitSettingsPermitted(version),
                                                  transmitSettingsReason(version), version);
         }
@@ -13208,6 +13213,8 @@ void MainWindow::applyRemoteRoleGating()
         // R-R3-49 (parity Task 13): Hardware Config's OC transmit pins, pin
         // actions and transmit calibration came with version 8.
         dialog->setTransmitSettingsPermitted(settingsAt(8), settingsReasonAt(8), 8);
+        // Transmit > Power's "Disable HF PA" came with version 11.
+        dialog->setTransmitSettingsPermitted(settingsAt(11), settingsReasonAt(11), 11);
         dialog->setStationSettingsAvailable(stationAvailable, stationSettingsReason());
     }
     // Parity Task 19 (B7.2): and the Spot Hub's Core settings and sources.

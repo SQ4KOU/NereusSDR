@@ -8,6 +8,10 @@
 //                                    AI-assisted implementation via Codex.
 // 2026-09-27: Preserve final pairing output through connection drain.
 // J.J. Boyd (KG4VCF), AI-assisted implementation via OpenAI Codex.
+//   2026-09-28 - R-R3-49 / R-R3-46: Setup > Transmit > Power's Disable HF PA
+//                applied (Thetis DisablePA and hf_tr_relay,
+//                transmitSettingsVersion 11). J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 // =================================================================
 // src/core/session/StationServer.cpp  (NereusSDR)
 // =================================================================
@@ -1316,9 +1320,11 @@ bool isTransmitHardwareKey(const QString& rawKey)
 // the Core's own transmitting. Taken while the radio is off the air.
 bool isPowerPageTransmitKey(const QString& key)
 {
+    // transmitSettingsVersion 11: and "Disable HF PA" (DisableHfPa).
     return RadioModel::isSwrProtectionSettingKey(key)
         || key == QLatin1String("TxInhibitMonitorEnabled")
-        || key == QLatin1String("TxInhibitMonitorReversed");
+        || key == QLatin1String("TxInhibitMonitorReversed")
+        || key == QLatin1String(RadioModel::kDisableHfPaKey);
 }
 
 // R-R3-46 / R-R3-49 (parity Task 6): Setup > PA's keys, the PA profiles
@@ -2340,6 +2346,12 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
                     // console.RXOnly does at once (setup.cs:6498
                     // [v2.10.3.15]: console.RXOnly = chkGeneralRXOnly.Checked).
                     m_radioModel->applyRxOnlySetting(on);
+                } else if (key == QLatin1String(RadioModel::kDisableHfPaKey)) {
+                    // transmitSettingsVersion 11: Disable HF PA reaches the
+                    // Core's radio and SWR protection at once, as Thetis's
+                    // console.HFTRRelay does (setup.cs:16750-16754
+                    // [v2.10.3.15]).
+                    m_radioModel->applyDisableHfPaSetting(value);
                 }
             });
     // Whole-branch review, Important 4. A removal has its own signal and
@@ -2394,6 +2406,10 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
                 } else if (key == QLatin1String("RxOnly") && m_radioModel) {
                     // Task 16: Receive Only defaults off.
                     m_radioModel->applyRxOnlySetting(false);
+                } else if (key == QLatin1String(RadioModel::kDisableHfPaKey) && m_radioModel) {
+                    // Disable HF PA defaults off (console.cs:10891
+                    // [v2.10.3.15] hf_tr_relay = false).
+                    m_radioModel->applyDisableHfPaSetting(QVariant());
                 }
             });
 
@@ -8546,7 +8562,11 @@ bool StationServer::isTransmitSettingKeyTakenOnAir(const QString& key)
 {
     // R-R3-46 / R-R3-49 (parity Task 13): the keys Thetis changes while
     // transmitting (isTransmitHardwareKeyTakenOnAir).
-    return isTransmitHardwareKeyTakenOnAir(key.toLower().split(QLatin1Char('/')));
+    // transmitSettingsVersion 11: and "Disable HF PA", which Thetis applies
+    // with no MOX check (setup.cs:16750-16754 [v2.10.3.15]
+    // chkHFTRRelay_CheckedChanged: console.HFTRRelay = chkHFTRRelay.Checked).
+    return key == QLatin1String(RadioModel::kDisableHfPaKey)
+        || isTransmitHardwareKeyTakenOnAir(key.toLower().split(QLatin1Char('/')));
 }
 
 bool StationServer::transmitSettingsOffered(SessionTransport* transport) const
@@ -9474,7 +9494,10 @@ int StationServer::transmitSettingsVersion() const
     // 10: the mic mute, `transmit.micMuted` (iPhone app plan Task 40),
     // under the same gates as the mic level; muting sets the Core's mic
     // preamp to 0.0 as Thetis's chkMicMute does.
-    return m_radioModel.isNull() ? 0 : 10;
+    // 11: Setup > Transmit > Power's "Disable HF PA" (DisableHfPa), taken on
+    // and off the air as Thetis applies it, and applied to the Core's
+    // connection (the DisablePA bit) and SWR protection at once.
+    return m_radioModel.isNull() ? 0 : 11;
 }
 
 bool StationServer::pureSignalArmingOffered(SessionTransport* transport) const

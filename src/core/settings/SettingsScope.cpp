@@ -175,6 +175,10 @@
 //                the Core's feedback analyzer listens to. The applet's
 //                other ModMon/ keys stay each window's. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - R-R3-49 / R-R3-46: Setup > Transmit > Power's Disable HF PA
+//                applied (Thetis DisablePA and hf_tr_relay,
+//                transmitSettingsVersion 11). J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 // =================================================================
 
 #include "core/settings/SettingsScope.h"
@@ -547,6 +551,11 @@ const Rule kWholeKeys[] = {
     { "TxInhibitMonitorEnabled", SettingsScope::Station },
     { "TxInhibitMonitorReversed", SettingsScope::Station },
     { "WindBackPowerSwr", SettingsScope::Station },
+    // Setup > Transmit > Power's "Disable HF PA": the radio's DisablePA bit
+    // and the SWR protection's pass, applied where the radio is
+    // (RadioModel::applyDisableHfPaSetting). Until transmitSettingsVersion
+    // 11 it was pinned OperatorLocal below as a write-only setting.
+    { "DisableHfPa", SettingsScope::Station },
 
     // MeterPoller's S-meter sample cadence (MultimeterPage.cpp: Thetis
     // udDisplayMeterDelay default 100 ms) -- how often the daemon
@@ -593,8 +602,8 @@ const Rule kWholeKeys[] = {
     // exists to get right -- and each was checked, not guessed. Fix
     // round 1 (review) confirmed this narrower and stronger than
     // originally claimed: grepping the quoted literal for each of the
-    // five (three since R-R3-49 wired NetworkWatchdogEnabled and Task 16
-    // wired RxOnly, above)
+    // five (two since R-R3-49 wired NetworkWatchdogEnabled, Task 16
+    // wired RxOnly and transmitSettingsVersion 11 wired DisableHfPa, above)
     // across src/core and src/models (not just the same-named
     // identifier -- an earlier pass's cruder grep matched things like
     // HPSDRHW::HermesLiteRxOnly, BoardCapabilities::isRxOnlySku, and the
@@ -607,7 +616,6 @@ const Rule kWholeKeys[] = {
     // rather than left to the bare default below, so that a future
     // audit that DOES wire one of these into real enforcement trips over
     // an explicit line to change instead of a silent default.
-    { "DisableHfPa", SettingsScope::OperatorLocal },
     { "ExtendedTxAllowed", SettingsScope::OperatorLocal },
     { "PreventTxOnDifferentBandToRx", SettingsScope::OperatorLocal },
 };

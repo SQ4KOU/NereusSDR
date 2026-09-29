@@ -1444,6 +1444,10 @@ const QList<AppSideReason>& appSideReasons()
          "a remote window's own reason the high-resolution filter graph is disabled"},
         {"src/models/RadioModel.cpp", "reportStationAccessoryRefusal",
          "a remote window passes the Core's refusal on to its own pages"},
+        // transmitSettingsVersion 11: why Disable HF PA is disabled on a
+        // radio without the switch, the window's own words.
+        {"src/models/RadioModel.cpp", "hfPaSwitchUnavailableReason",
+         "a window's own reason Disable HF PA is disabled on this radio"},
         {"src/core/session/IStationLink.h", "pgxlDeviceSettingsUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},
         {"src/core/session/IStationLink.h", "tgxlDeviceSettingsUnavailableReason",

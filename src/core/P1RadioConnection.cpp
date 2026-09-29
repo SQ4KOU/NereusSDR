@@ -47,6 +47,10 @@
 //                 which mi0bot never reads (networkproto1.c:478-493
 //                 [@c26a8a4]). J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-28 - R-R3-49 / R-R3-46: Setup > Transmit > Power's Disable HF PA
+//                applied (Thetis DisablePA and hf_tr_relay,
+//                transmitSettingsVersion 11). J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -1980,6 +1984,24 @@ void P1RadioConnection::setTrxRelay(bool enabled)
 }
 
 // ---------------------------------------------------------------------------
+// setPaDisabled: "Disable HF PA" (Setup > Transmit > Power). Thetis's
+// DisablePA sets tx[0].pa, which WriteMainLoop sends as bank 10 C3 bit 7
+// (on the HL2 also bank 10 C2 bit 3, through EnableApolloTuner(!bit)).
+//   From Thetis ChannelMaster/netInterface.c:623-631 [v2.10.3.15]
+//     void DisablePA(int bit)
+//     { if (prn->tx[0].pa != bit) { prn->tx[0].pa = bit; ... } }
+//   From mi0bot ChannelMaster/netInterface.c:623-634 [@c26a8a4]
+//     if (HPSDRModel == HPSDRModel_HERMESLITE)
+//         EnableApolloTuner(!bit);	// MI0BOT: This call used on HL2 to enable/disable PA
+// Bank 10 goes out on the next frame, as setTrxRelay flushes it.
+// ---------------------------------------------------------------------------
+void P1RadioConnection::setPaDisabled(bool disabled)
+{
+    m_forceBank10Next = true;
+    RadioConnection::setPaDisabled(disabled);
+}
+
+// ---------------------------------------------------------------------------
 // setMicBoost (3M-1b G.1)
 //
 // Sets the hardware mic-jack 20 dB boost preamp bit.
@@ -2684,6 +2706,7 @@ CodecContext P1RadioConnection::buildCodecContext() const
     ctx.txDrive        = m_txDrive;
     ctx.paEnabled      = m_paEnabled;
     ctx.trxRelay       = m_trxRelay;
+    ctx.txPaDisabled   = m_paDisabled;  // "Disable HF PA" (setPaDisabled)
     ctx.p1MicBoost     = m_micBoost;
     ctx.p1LineIn       = m_lineIn;
     ctx.p1MicTipRing   = m_micTipRing;
@@ -3944,7 +3967,10 @@ void P1RadioConnection::composeCcForBankLegacy(int bankIdx, quint8 out[5]) const
         // From Thetis ChannelMaster/networkproto1.c:581 [v2.10.3.13]
         //   C2 = ((prn->mic.mic_boost & 1) | ((prn->mic.line_in & 1) << 1) | ... | 0b01000000) & 0x7f;
         out[2] = static_cast<quint8>((m_micBoost ? 0x01 : 0x00) | (m_lineIn ? 0x02 : 0x00) | 0x40); // 3M-1b G.1+G.2
-        out[3] = effectiveAlexHpfBits() | (m_trxRelay ? 0x00 : 0x80); // 3M-1a E.4
+        // Bit 7 is also Thetis's DisablePA bit ("Disable HF PA",
+        // networkproto1.c:586 [v2.10.3.15]: ((prn->tx[0].pa & 1) << 7)).
+        out[3] = effectiveAlexHpfBits()
+               | ((!m_trxRelay || m_paDisabled) ? 0x80 : 0x00); // 3M-1a E.4
         // C4 is the Alex0 low-pass word: transmit selection while keyed,
         // receive selection while not (networkproto1.c:587-590 +
         // netInterface.c:705-717 [v2.10.3.15]).

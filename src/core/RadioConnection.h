@@ -517,6 +517,20 @@ public slots:
     virtual void setAlexHpfBypass(bool on) { m_alexHpfBypass = on; }
     bool alexHpfBypass() const noexcept { return m_alexHpfBypass; }
 
+    /// "Disable HF PA" (Setup > Transmit > Power, Thetis chkHFTRRelay):
+    /// Thetis's NetworkIO.DisablePA, the radio's PA switched off.
+    ///   From Thetis ChannelMaster/netInterface.c:623-631 [v2.10.3.15]
+    ///     void DisablePA(int bit)
+    ///     { if (prn->tx[0].pa != bit) { prn->tx[0].pa = bit; ... CmdGeneral(); } }
+    /// P1: bank 10 C3 bit 7 (networkproto1.c:586), and on the HL2 bank 10
+    /// C2 bit 3 cleared (mi0bot netInterface.c:628-629). P2: CmdGeneral byte
+    /// 58 clear (network.c:904), and the Alex T/R relay left open while
+    /// keyed (netInterface.c:378 SetTRXrelay). RadioModel hands it the
+    /// saved setting (applyDisableHfPaSetting). Default false, as Thetis
+    /// (netInterface.c:1522 prn->tx[i].pa = 0).
+    virtual void setPaDisabled(bool disabled) { m_paDisabled = disabled; }
+    bool paDisabled() const noexcept { return m_paDisabled; }
+
     /// Hardware mic-jack PTT disable flag (Orion/ANAN front-panel PTT).
     ///
     /// Parameter and wire convention match Thetis NetworkIO.SetMicPTT exactly:
@@ -1007,6 +1021,10 @@ protected:
     // "HPF Bypass" (setAlexHpfBypass). Written and read on the connection
     // thread.
     bool m_alexHpfBypass{false};
+
+    // "Disable HF PA" (setPaDisabled), Thetis prn->tx[0].pa. Written and read
+    // on the connection thread.
+    bool m_paDisabled{false};
 
     // "Disable 6m LNA on RX / TX" (setDisable6mLna). Written and read on the
     // connection thread.

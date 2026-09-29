@@ -45,6 +45,10 @@
 //               the Core; the Core's refusal stays the backstop. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-28 - R-R3-49 / R-R3-46: Setup > Transmit > Power's Disable HF PA
+//                applied (Thetis DisablePA and hf_tr_relay,
+//                transmitSettingsVersion 11). J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -149,6 +153,10 @@ private:
     void buildSwrProtectionGroup();
     void buildExternalTxInhibitGroup();
     void buildHfPaGroup();
+    // "Disable HF PA": open while the Core takes it (transmitSettingsVersion
+    // 11; always locally) on a radio that offers it
+    // (RadioModel::hfPaSwitchAvailable), otherwise disabled with the reason.
+    void applyHfPaGate();
 
     // Issue #175 Task 8 helper — flip enabled state on the Fixed-mode
     // spinbox so it tracks the active drive source.
@@ -221,6 +229,9 @@ private:
     // R-R3-49 (parity Task 5): the version 5 gate (always open locally).
     bool             m_settingsPermitted{true};
     QString          m_settingsReason;
+    // The version 11 gate ("Disable HF PA"; always open locally).
+    bool             m_hfPaPermitted{true};
+    QString          m_hfPaReason;
     DrivePowerSource m_tuneSource{DrivePowerSource::TuneSlider};
 };
 
