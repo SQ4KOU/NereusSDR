@@ -3,6 +3,9 @@
 // no-port-check: NereusSDR-original. Remote daemon R3 receive display wiring.
 //
 // Modification history (NereusSDR):
+//   2026-09-29: kDirectMediaSilenceFallbackMs 3000 -> 5000 ms, as JJ
+//               ruled. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 //   2026-09-29: direct media: audioRestartPendingForTest, so a test can see an
 //               audio restart waiting on its backoff step. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
@@ -484,7 +487,9 @@ public:
     /// direct-only schedule starts over. It runs once per silence; if media
     /// has not returned this long after that replace finishes, the window
     /// asks for recovery (recoveryRequested) instead of replacing again.
-    static constexpr int kDirectMediaSilenceFallbackMs = 3000;
+    /// 5000 ms by JJ's ruling (2026-09-29): long enough that a short gap on
+    /// a working direct path does not move media.
+    static constexpr int kDirectMediaSilenceFallbackMs = 5000;
     bool replacePending() const;
     /// iPhone app plan Task 29: the media connection's id now, and whether
     /// a replacement is under way (for the window's diagnostics and tests).

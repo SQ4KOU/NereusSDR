@@ -262,14 +262,14 @@ and waits for the next. A new media start begins the schedule again.
 **Falling back when a direct path goes quiet.** On a direct path (not the
 tunnel, not a relay) with receive audio wanted, when no audio or display
 packet arrives for `RemoteMediaController::kDirectMediaSilenceFallbackMs`
-(3000 ms) while the control session still runs, the window sends the
+(5000 ms) while the control session still runs, the window sends the
 normal three-field `replace` and starts the direct schedule again at its
 first step. That replace's new connection offers the tunnel alone
 (`MediaTunnel::tunnelIceFor`): the tunnel's candidate only, no STUN server
 and no host candidates, and it takes none the Core signals, so ICE can only
 nominate the tunnel. Nothing changes on the wire or at the Core. The
 fallback runs once per silence: only a media packet arms it again. If no
-media has arrived one window (3000 ms) after the fallback finished,
+media has arrived one window (5000 ms) after the fallback finished,
 whether it moved media or failed, the window asks for recovery (a new
 media start). Receive audio is wanted when this window's radio is
 connected and it is not muted; the silence while the Core transmits is
