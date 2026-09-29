@@ -345,6 +345,21 @@ private:
     void    advanceToTransmittingIfReady();
     void    onPttAckTimeout();
 
+    // G-20 (JJ's ruling, 2026-09-28): the FLEX sends its interlock state
+    // again 400 ms after it first sends it (captures: TRANSMITTING at
+    // 541.718 then 542.118, 547.503/547.903, 167.735/168.134; PTT_REQUESTED
+    // 216.788/217.188 while an amp had not acked). armInterlockRepeat()
+    // records a PTT_REQUESTED or TRANSMITTING frame just broadcast and
+    // sends it once more after kInterlockRepeatMs; a state change first
+    // (the advance to TRANSMITTING, the un-key, stop()) cancels it. Only
+    // the accessories' view changes, never the radio's transmitter.
+    static constexpr int kInterlockRepeatMs = 400;
+    QTimer     m_interlockRepeat;
+    QByteArray m_interlockRepeatFrame;
+    void armInterlockRepeat(const QByteArray& frame);
+    void cancelInterlockRepeat();
+    void onInterlockRepeat();
+
     // 2026-05-21 4o3a-lan-ptt-pcap-divergence.md §8 C4: actual emission
     // of the canonical TRANSMITTING S-frame + RF-flow gate release.
     // Wrapped by both the success path (advanceToTransmittingIfReady)
