@@ -68,6 +68,11 @@ public:
     // View > Performance Overlay, headed as the Core's; one line saying so
     // when no current readings are in.
     static QStringList performanceOverlayLines(const RemoteTelemetryView& view);
+    // Parity ruling C9: the Core's CPU for the System tile (its system
+    // share when `system`, else its own process's), or nullopt with the
+    // plain reason in `reason`.
+    static std::optional<double> coreCpuPercent(const RemoteTelemetryView& view, bool system,
+                                                QString* reason);
     // An injected clock makes sampling manually driven for deterministic
     // lifecycle tests; the production clock keeps its automatic timer.
     void sampleNow();

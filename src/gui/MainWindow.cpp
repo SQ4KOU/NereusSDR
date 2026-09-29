@@ -352,6 +352,11 @@
 //                preset, as the VFO flag's and RX applet's do; a band-stack
 //                right-click says band stacking is not ready yet. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - Parity ruling C9: a remote window's System tile CPU row
+//                shows this computer's CPU and the Core's, cycling every
+//                3 s, pinned from its right-click, held in the warning
+//                colour on a reading above 80%. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 //   2026-09-28 - Parity ruling C13: a remote window's Performance
 //                Overlay adds the Core's drops (wireSpectrumForPan).
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
@@ -10536,6 +10541,10 @@ void MainWindow::buildStatusBar()
                           .value(QStringLiteral("CpuShowSystem"),
                                  QStringLiteral("True"))
                           .toString() == QStringLiteral("True"));
+    // Parity ruling C9: a remote window's CPU row source.
+    m_cpuRowCycler.setSource(CpuRowCycler::sourceFromKey(
+        AppSettings::instance().value(QStringLiteral("CpuRowSource"),
+                                      QStringLiteral("Cycle")).toString()));
 
     m_cpuTimer = new QTimer(this);
     connect(m_cpuTimer, &QTimer::timeout, this, [this]() {
@@ -10544,7 +10553,7 @@ void MainWindow::buildStatusBar()
         // Thetis smoothing: smoothed = smoothed*0.8 + new*0.2
         m_cpuSmoothedPct = m_cpuSmoothedPct * 0.8 + pct * 0.2;
         if (m_systemTile) {
-            m_systemTile->setCpuPercent(m_cpuSmoothedPct);
+            refreshCpuRow(m_cpuTimer->interval());
             // CPU's digit count varies (0-100%), so its row can change
             // width tick to tick. Cheap: relayout() no-ops unless the
             // computed rung actually changes (ChromeBarController::relayout).
@@ -12446,8 +12455,38 @@ void MainWindow::onCpuMenuRequested(const QPoint& localPos)
     appAct->setCheckable(true);
     appAct->setChecked(!m_cpuShowSystem);
 
+    // Parity ruling C9: a remote window's row shows this computer's CPU and
+    // the Core's; cycle between them, or pin either.
+    QAction* cycleAct = nullptr;
+    QAction* thisAct = nullptr;
+    QAction* coreAct = nullptr;
+    if (m_radioModel && !m_radioModel->ownsLocalDsp()) {
+        menu.addSeparator();
+        const CpuRowCycler::Source source = m_cpuRowCycler.source();
+        cycleAct = menu.addAction(tr("Cycle"));
+        cycleAct->setCheckable(true);
+        cycleAct->setChecked(source == CpuRowCycler::Source::Cycle);
+        thisAct = menu.addAction(tr("This computer"));
+        thisAct->setCheckable(true);
+        thisAct->setChecked(source == CpuRowCycler::Source::ThisComputer);
+        coreAct = menu.addAction(tr("Core"));
+        coreAct->setCheckable(true);
+        coreAct->setChecked(source == CpuRowCycler::Source::Core);
+    }
+
     QAction* chosen = menu.exec(m_systemTile->mapToGlobal(localPos));
     if (!chosen) { return; }
+
+    if (chosen == cycleAct || chosen == thisAct || chosen == coreAct) {
+        const CpuRowCycler::Source source = chosen == thisAct ? CpuRowCycler::Source::ThisComputer
+            : chosen == coreAct ? CpuRowCycler::Source::Core
+                                : CpuRowCycler::Source::Cycle;
+        m_cpuRowCycler.setSource(source);
+        AppSettings::instance().setValue(QStringLiteral("CpuRowSource"),
+                                         CpuRowCycler::sourceKey(source));
+        refreshCpuRow(0);
+        return;
+    }
 
     const bool newSys = (chosen == sysAct);
     if (newSys == m_cpuShowSystem) { return; }
@@ -12470,6 +12509,28 @@ void MainWindow::onCpuMenuRequested(const QPoint& localPos)
     // once the timer is running; 0% is the closest equivalent to a
     // reset-to-placeholder display until the next timer tick.
     m_systemTile->setCpuPercent(0.0);
+    refreshCpuRow(0);
+}
+
+void MainWindow::refreshCpuRow(qint64 elapsedMs)
+{
+    if (!m_systemTile) { return; }
+    if (!m_radioModel || m_radioModel->ownsLocalDsp()) {
+        m_systemTile->setCpuPercent(m_cpuSmoothedPct);
+        return;
+    }
+    // Parity ruling C9: in a remote window, this computer's CPU and the
+    // Core's, each labelled, cycling, pinned or held on a hot reading.
+    m_cpuRowCycler.setThisComputer(m_cpuSmoothedPct);
+    QString reason = QStringLiteral("The Core's CPU reading is not current.");
+    std::optional<double> core;
+    if (m_remoteTelemetry) {
+        core = RemoteTelemetryController::coreCpuPercent(m_remoteTelemetry->current(),
+                                                         m_cpuShowSystem, &reason);
+    }
+    m_cpuRowCycler.setCore(core, reason);
+    m_cpuRowCycler.advance(elapsedMs);
+    m_systemTile->setCpuRow(m_cpuRowCycler.row());
 }
 
 double MainWindow::readProcessCpuPercent()

@@ -4956,6 +4956,12 @@ nereus_add_test(tst_metric_label)
 # CPU survives PA updates, clearing both hides row one, PA label override.
 nereus_add_test(tst_system_tile)
 
+# Parity ruling C9: the System tile's CPU row in a remote window cycles
+# between this computer's CPU and the Core's, pins either, holds on a hot
+# reading in the warning colour, and shows this computer only (with the
+# reason) when the Core's reading is unavailable.
+nereus_add_test(tst_cpu_row_cycler)
+
 # ── Shell-Chrome Redesign sub-PR-1: StationBlock widget ───────────────────
 # 5 tests: default/setRadioName/empty-name appearance switching, click +
 # right-click signal emission gated on appearance.

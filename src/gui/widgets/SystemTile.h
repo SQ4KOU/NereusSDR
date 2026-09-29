@@ -8,6 +8,8 @@
 #include <QString>
 #include <QWidget>
 
+#include "gui/widgets/CpuRowCycler.h"
+
 namespace NereusSDR {
 
 class MetricLabel;
@@ -42,6 +44,13 @@ public:
     QString paRowText() const;
     /// Row-two value text.
     QString cpuRowText() const;
+    /// Parity ruling C9: row two as a remote window's cycler says it:
+    /// its label ("CPU" or "Core"), value, warning colour and tooltip.
+    void setCpuRow(const CpuRowCycler::Row& row);
+    QString cpuRowLabel() const;
+    bool cpuRowWarning() const noexcept { return m_cpuWarning; }
+    QString cpuRowToolTip() const;
+    QString cpuRowStyleSheet() const;
     /// False when the board publishes neither volts nor temperature.
     bool hasPaRow() const noexcept { return m_hasVolts || m_hasTemp; }
 
@@ -64,6 +73,7 @@ private:
     double m_volts{0.0};
     double m_celsius{0.0};
     QString m_paSourceNote;
+    bool m_cpuWarning{false};
 };
 
 } // namespace NereusSDR

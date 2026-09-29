@@ -76,6 +76,7 @@
 #include "gui/widgets/RxDashboard.h"
 #include "gui/widgets/StatusBadge.h"
 #include "gui/widgets/StatusToast.h"
+#include "gui/widgets/SystemTile.h"
 #include "gui/widgets/VfoWidget.h"
 #include "models/Band.h"
 #include "models/FilterPresetStore.h"
@@ -682,6 +683,26 @@ private slots:
                  QStringLiteral("Band stacking is not ready yet."));
         store->resetPreset(DSPMode::USB, 2);
         store->resetPreset(DSPMode::USB, 4);
+        QVERIFY(sessions.replace({}, false));
+    }
+
+    // Parity ruling C9: a remote window's CPU row names its source; with no
+    // Core reading it shows this computer's CPU and says why. A local
+    // window's row is unchanged.
+    void remoteCpuRowShowsThisComputerWithTheReason()
+    {
+        GuiSessionCoordinator sessions;
+        QVERIFY(sessions.replace(remoteCore(), false));
+        auto* tile = sessions.window()->findChild<SystemTile*>();
+        QVERIFY(tile != nullptr);
+        QTRY_COMPARE(tile->cpuRowToolTip(), QStringLiteral("The Core's CPU reading is not current."));
+        QCOMPARE(tile->cpuRowLabel(), QStringLiteral("CPU"));
+        QVERIFY(sessions.replace({}, false));
+        auto* local = sessions.window()->findChild<SystemTile*>();
+        QVERIFY(local != nullptr);
+        QTest::qWait(1200);
+        QCOMPARE(local->cpuRowLabel(), QStringLiteral("CPU"));
+        QVERIFY(local->cpuRowToolTip().isEmpty());
         QVERIFY(sessions.replace({}, false));
     }
 
