@@ -65,6 +65,12 @@
 //   2026-09-29: scoped review: a hosting desktop's own Extended waits
 //               while another device holds transmit. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-09-29: different-band transmit matches Thetis (JJ's ruling): the
+//               window's key on its active slice is not blocked by a slice
+//               parked on another band, and its key or TUNE on a slice that
+//               is not its active one, on another band, is refused with the
+//               Core's band plan reason. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -74,6 +80,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QPushButton>
+#include <QScopeGuard>
 #include <QSlider>
 #include <QSignalSpy>
 #include <QWebSocket>
@@ -86,8 +93,10 @@
 #include "core/AudioEngine.h"
 #include "core/IAudioBus.h"
 #include "core/MoxController.h"
+#include "core/SliceOwnership.h"
 #include "core/TciBinaryFrame.h"
 #include "core/TciServer.h"
+#include "core/TxSliceArbiter.h"
 #include "core/safety/TransmitHolder.h"
 #include "core/safety/TxRefusal.h"
 #include "core/meters/TxMeterPump.h"
@@ -646,6 +655,77 @@ private slots:
         QVERIFY(!h.station.moxController()->isMox());
         QVERIFY(!window.mox->isChecked());
         QVERIFY(!h.client.remoteTransmit()->micKeyDown());
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // JJ's ruling (2026-09-29), as Thetis: with the Core's Prevent
+    // transmitting on a different band on, the window's slice B parked on
+    // 40 m does not block a key on its active slice A on 20 m; a key or
+    // TUNE on B while A stays the active slice is refused with the Core's
+    // band plan reason.
+    void aDifferentBandKeyFromTheWindowIsRefusedByTheCore()
+    {
+        auto& settings = AppSettings::instance();
+        const QString key = QStringLiteral("PreventTxOnDifferentBandToRx");
+        const auto restore = qScopeGuard([&settings, &key] { settings.remove(key); });
+        settings.setValue(key, QStringLiteral("True"));
+        Test::RemoteAudioSessionHarness h;
+        h.pairWindow = true;
+        h.makeTransmitReady();
+        h.openFakeMicrophoneLine();   // fix wave C1: no media here
+        h.connectSession();
+        QTRY_VERIFY(h.client.capabilities().txPermitted);
+        WindowControls window(h);
+        window.follow(h.client);
+        h.station.installBandPlanMoxCheckForTest();
+        const QByteArray device = h.windowKey->fingerprint();
+        SliceOwnership* const owners = h.station.sliceOwnership();
+        TxSliceArbiter* const arbiter = h.station.txSliceArbiter();
+        QTRY_COMPARE(owners->mark(h.sliceA).subject(), device);
+        QTRY_COMPARE(owners->mark(h.sliceB).subject(), device);
+        SliceModel* const b = h.station.sliceById(h.sliceB);
+        QVERIFY(b);
+        b->setDspMode(DSPMode::LSB);
+        b->setFrequency(7150000.0);
+        owners->setActive(device, h.sliceA);
+        MoxController* const coreMox = h.station.moxController();
+        QSignalSpy refused(&h.remote, &RadioModel::remoteTransmitRefused);
+        QSignalSpy refusedCodes(h.client.remoteTransmit(), &RemoteTransmitClient::refused);
+
+        // Slice A 20 m active, slice B parked on 40 m: A transmits.
+        window.mox->click();
+        QTRY_VERIFY(coreMox->isMox());
+        QCOMPARE(arbiter->txBoundSliceId(), h.sliceA);
+        window.mox->click();
+        QTRY_VERIFY(!coreMox->isMox());
+        QTRY_VERIFY(!h.remote.isTransmitting());
+        QCOMPARE(refused.count(), 0);
+
+        // The window's transmit moves to its own B; A stays active.
+        QTRY_COMPARE(coreMox->state(), MoxState::Rx);
+        QVERIFY(arbiter->requestHandoff(h.sliceB, device));
+        QCOMPARE(arbiter->txBoundSliceId(), h.sliceB);
+        const QString reason = QStringLiteral(
+            "Transmit would be on 40 m while another slice you have open is on 20 m, "
+            "and Setup is set to prevent transmitting on a different band.");
+
+        // The key is refused with the Core's reason.
+        window.mox->click();
+        QTRY_COMPARE(refused.count(), 1);
+        QCOMPARE(refused.last().first().toString(), reason);
+        QCOMPARE(refusedCodes.last().at(1).toString(), QStringLiteral("bandPlan"));
+        QVERIFY(!coreMox->isMox());
+        QTRY_VERIFY(!window.mox->isChecked());
+        QCOMPARE(arbiter->txBoundSliceId(), h.sliceB);
+
+        // TUNE is refused the same way.
+        window.tune->click();
+        QTRY_COMPARE(refused.count(), 2);
+        QCOMPARE(refused.last().first().toString(), reason);
+        QCOMPARE(refusedCodes.last().at(1).toString(), QStringLiteral("bandPlan"));
+        QVERIFY(!coreMox->isMox());
+        QVERIFY(!h.station.isTune());
+        QTRY_VERIFY(!window.tune->isChecked());
         h.client.disconnectFromStation(QStringLiteral("test complete"));
     }
 

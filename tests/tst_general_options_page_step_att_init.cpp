@@ -14,6 +14,13 @@
 // constructor that pulls m_ctrl->stepAttEnabled() and m_ctrl->attenuatorDb()
 // into the widgets (signals blocked so the read does not loop back to the
 // controller). These tests pin that behaviour.
+//
+// Modification history (NereusSDR):
+//   2026-09-29 : Different-band transmit matches Thetis (JJ's ruling) by
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code: the enabled tooltip names the active slice, and a
+//                 Core older than transmitSettingsVersion 14 shows the box
+//                 disabled with its reason.
 
 #include <QtTest/QtTest>
 #include <QApplication>
@@ -24,6 +31,7 @@
 
 #include "core/AppSettings.h"
 #include "core/StepAttenuatorController.h"
+#include "core/session/IStationLink.h"
 #include "gui/setup/GeneralOptionsPage.h"
 #include "models/RadioModel.h"
 
@@ -49,6 +57,21 @@ GeneralOptionsPage* makePageWithController(RadioModel& model,
     auto* page = new GeneralOptionsPage(&model, qobject_cast<QWidget*>(parent));
     return page;
 }
+
+// A link to a Core that offers transmit settings up to `version`, to a
+// device it permits to transmit.
+class TransmitSettingsLink final : public IStationLink {
+public:
+    int version{0};
+    CommandOutcome requestAddSlice(const QString&) override { return {}; }
+    CommandOutcome requestAddSliceOnPan(const QString&) override { return {}; }
+    CommandOutcome requestRemoveSlice(int) override { return {}; }
+    CommandOutcome requestActiveSlice(int) override { return {}; }
+    CommandOutcome requestSliceSampleRate(int, int) override { return {}; }
+    bool stationLinkReady() const override { return true; }
+    bool transmitSettingsAvailable(int minVersion) const override { return version >= minVersion; }
+    bool transmitSettingsPermitted() const override { return true; }
+};
 
 }  // namespace
 
@@ -142,8 +165,8 @@ private slots:
         QVERIFY(prevent->isChecked());
         QVERIFY(prevent->isEnabled());
         QCOMPARE(prevent->toolTip(), QStringLiteral(
-            "Refuse to transmit when the transmitting slice is on a different band from "
-            "another slice this device has open"));
+            "Refuse to transmit when the transmitting slice is not your active slice and "
+            "is on a different band from it"));
         prevent->setChecked(false);
         QCOMPARE(settings.value(key).toString(), QStringLiteral("False"));
 
@@ -163,6 +186,37 @@ private slots:
         model.reportTransmitGateSettingChanged(key);
         QVERIFY(!prevent->isChecked());
         settings.remove(key);
+    }
+
+    // A remote window on a Core older than transmitSettingsVersion 14 shows
+    // the box disabled with why (disabled, never hidden); a Core with it
+    // makes the box usable.
+    void preventDifferentBandOnAnOlderCoreSaysWhy()
+    {
+        RadioModel model(RadioModel::Role::Remote);
+        TransmitSettingsLink link;
+        link.version = 13;
+        model.attachStation(&link);
+        {
+            GeneralOptionsPage page(&model);
+            auto* prevent = page.findChild<QCheckBox*>(
+                QStringLiteral("chkPreventTXonDifferentBandToRX"));
+            QVERIFY(prevent);
+            page.setStationSettingsAvailable(true, QString());
+            QVERIFY(!prevent->isHidden());
+            QVERIFY(!prevent->isEnabled());
+            const QString olderCore = QStringLiteral(
+                "This Core does not have Prevent transmitting on a different band. Update "
+                "the Core to use it.");
+            QCOMPARE(prevent->toolTip(), olderCore);
+            QCOMPARE(prevent->accessibleDescription(), olderCore);
+
+            link.version = 14;
+            page.setStationSettingsAvailable(true, QString());
+            QVERIFY(prevent->isEnabled());
+            QVERIFY(prevent->accessibleDescription().isEmpty());
+        }
+        model.detachStation();
     }
 
     void invalidStoredRegionNeedsAnExplicitSelection()

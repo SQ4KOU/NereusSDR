@@ -50,6 +50,10 @@
 //                 AI-assisted via Anthropic Claude Code. The Core's
 //                 PreventTxOnDifferentBandToRx compares the transmitting
 //                 slice with the same device's other slices.
+//   2026-09-29 : Different-band transmit matches Thetis (JJ's ruling) by
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code: only a transmitting slice that is not its device's
+//                 active slice is compared, with the active slice.
 // =================================================================
 
 // no-port-check: NereusSDR-original test file.
@@ -550,15 +554,17 @@ private slots:
         QVERIFY(!keyed());
     }
 
-    // JJ's ruling (2026-09-29): Thetis's "Prevent TX'ing on a different
+    // JJ's rulings (2026-09-29): Thetis's "Prevent TX'ing on a different
     // band to the RX band" (_preventTXonDifferentBandToRXband, default off,
     // console.cs:29451-29465 [v2.10.3.15]) is one Core setting,
-    // PreventTxOnDifferentBandToRx. Thetis compares the TX band with the RX
-    // band in split; NereusSDR has no split, so a key is refused when the
-    // transmitting slice is on a different band from another slice the
-    // same device has open. Slices another device holds do not count. Only
-    // exactly "True" turns it on.
-    void preventDifferentBandComparesTheSameDevicesOtherSlices()
+    // PreventTxOnDifferentBandToRx, and it matches Thetis: Thetis refuses
+    // only when it transmits on VFO B (split) and VFO B's band differs
+    // from the RX band. NereusSDR has no split; the counterpart is a
+    // transmitting slice that is not its device's active (listening) slice
+    // while on a different band from it. A second slice parked on another
+    // band never blocks a key on the active slice. Only exactly "True"
+    // turns it on.
+    void preventDifferentBandComparesWithTheDevicesActiveSlice()
     {
         auto& settings = AppSettings::instance();
         const QString key = QStringLiteral("PreventTxOnDifferentBandToRx");
@@ -580,6 +586,15 @@ private slots:
         b->setDspMode(DSPMode::LSB);
         b->setFrequency(7'150'000.0);
         QVERIFY(model.setActiveSliceById(aId));
+        SliceOwnership* const owners = model.sliceOwnership();
+        TxSliceArbiter* const arbiter = model.txSliceArbiter();
+        MoxController* const mox = model.moxController();
+        // The flag moves at once only when the walk back to receive is done.
+        const auto transmitOn = [arbiter, mox](int sliceId) {
+            return QTest::qWaitFor([mox] { return mox->state() == MoxState::Rx; }, 2000)
+                && arbiter->requestHandoff(sliceId) && arbiter->txBoundSliceId() == sliceId;
+        };
+        QVERIFY(transmitOn(aId));
 
         QSignalSpy rejected(model.moxController(), &MoxController::moxRejected);
         const auto keyed = [&model]() {
@@ -591,10 +606,12 @@ private slots:
             return on;
         };
         const QString refusal = QStringLiteral(
-            "Transmit would be on 20 m while another slice you have open is on 40 m, "
+            "Transmit would be on 40 m while another slice you have open is on 20 m, "
             "and Setup is set to prevent transmitting on a different band.");
 
-        // Off (Thetis's default): never refuses.
+        // Off (Thetis's default): never refuses, not even the parked slice.
+        QVERIFY(keyed());
+        QVERIFY(transmitOn(bId));
         QVERIFY(keyed());
         settings.setValue(key, QStringLiteral("true"));
         QVERIFY(keyed());
@@ -602,39 +619,85 @@ private slots:
         QVERIFY(keyed());
         QCOMPARE(rejected.size(), 0);
 
-        // On: the other slice on 40 m refuses, naming both bands.
+        // On. These slices have no owner, as on a desktop with no devices:
+        // the station window operates them, so they are one device.
         settings.setValue(key, QStringLiteral("True"));
+        QVERIFY(owners->mark(aId).owner.isEmpty());
+        QVERIFY(owners->mark(bId).owner.isEmpty());
+
+        // Slice A 20 m active, slice B parked on 40 m: A transmits.
+        QVERIFY(transmitOn(aId));
+        QVERIFY(keyed());
+        QCOMPARE(rejected.size(), 0);
+
+        // B transmits while A is the active slice on 20 m: refused,
+        // naming both bands.
+        QVERIFY(transmitOn(bId));
         QVERIFY(!keyed());
         QCOMPARE(rejected.size(), 1);
         QCOMPARE(rejected.at(0).at(0).toString(), refusal);
 
-        // Same band: keys.
+        // B on A's band: keys.
         b->setFrequency(14'250'000.0);
         QVERIFY(keyed());
-        QCOMPARE(rejected.size(), 1);
         b->setFrequency(7'150'000.0);
 
-        // The station's own slices count whether marked or not.
-        model.sliceOwnership()->setOwner(bId, SliceOwnership::stationDevice());
+        // B made active: it transmits where it listens, A parked on 20 m.
+        QVERIFY(model.setActiveSliceById(bId));
+        QVERIFY(keyed());
+        QCOMPARE(rejected.size(), 1);
+        QVERIFY(model.setActiveSliceById(aId));
+
+        // The station's own slices and ownerless ones are one device.
+        owners->setOwner(bId, SliceOwnership::stationDevice());
         QVERIFY(!keyed());
         QCOMPARE(rejected.size(), 2);
-
-        // Another device's slice does not count.
-        model.sliceOwnership()->setOwner(aId, SliceOwnership::stationDevice());
-        model.sliceOwnership()->setOwner(bId, QByteArrayLiteral("phone"));
-        QVERIFY(keyed());
-        QCOMPARE(rejected.size(), 2);
-
-        // Both slices the phone's: its other slice counts.
-        model.sliceOwnership()->setOwner(aId, QByteArrayLiteral("phone"));
+        owners->setOwner(aId, SliceOwnership::stationDevice());
+        owners->setActive(SliceOwnership::stationDevice(), aId);
         QVERIFY(!keyed());
         QCOMPARE(rejected.size(), 3);
-        QCOMPARE(rejected.at(2).at(0).toString(), refusal);
+
+        // Another device's active slice does not count: the phone's A on
+        // 20 m, the station's B transmitting where it listens.
+        owners->setOwner(aId, QByteArrayLiteral("phone"));
+        owners->setActive(QByteArrayLiteral("phone"), aId);
+        QVERIFY(keyed());
+        QCOMPARE(rejected.size(), 3);
+
+        // Both the phone's: its active A on 20 m refuses B, and A itself
+        // transmits.
+        owners->setOwner(bId, QByteArrayLiteral("phone"));
+        owners->setActive(QByteArrayLiteral("phone"), aId);
+        QVERIFY(!keyed());
+        QCOMPARE(rejected.size(), 4);
+        QCOMPARE(rejected.at(3).at(0).toString(), refusal);
+        QVERIFY(transmitOn(aId));
+        QVERIFY(keyed());
+        QVERIFY(transmitOn(bId));
+
+        // Slices held for the absent phone are the phone's (the mark's
+        // subject), not the station device's: the station runs them, and
+        // its choice among them is the phone's active slice.
+        owners->hold(aId, QByteArrayLiteral("phone"));
+        owners->hold(bId, QByteArrayLiteral("phone"));
+        owners->setActive(SliceOwnership::stationDevice(), aId);
+        QVERIFY(!keyed());
+        QCOMPARE(rejected.size(), 5);
+        owners->setActive(SliceOwnership::stationDevice(), bId);
+        QVERIFY(keyed());
+        // A held for the phone does not stand for the station's own B.
+        owners->setActive(SliceOwnership::stationDevice(), aId);
+        owners->setOwner(bId, SliceOwnership::stationDevice());
+        QVERIFY(keyed());
+        QCOMPARE(rejected.size(), 5);
 
         // Off again: never refuses.
+        owners->hold(bId, QByteArrayLiteral("phone"));
+        QVERIFY(!keyed());
+        QCOMPARE(rejected.size(), 6);
         settings.remove(key);
         QVERIFY(keyed());
-        QCOMPARE(rejected.size(), 3);
+        QCOMPARE(rejected.size(), 6);
     }
 
     // Thetis checks the different band first, before the US 60 m mode rule
@@ -661,7 +724,10 @@ private slots:
         QVERIFY(a && b);
         b->setDspMode(DSPMode::LSB);
         b->setFrequency(7'150'000.0);
-        QVERIFY(model.setActiveSliceById(aId));
+        // A transmits while B, the active slice, listens on 40 m.
+        QVERIFY(model.txSliceArbiter()->requestHandoff(aId));
+        QCOMPARE(model.txSliceArbiter()->txBoundSliceId(), aId);
+        QVERIFY(model.setActiveSliceById(bId));
         QSignalSpy rejected(model.moxController(), &MoxController::moxRejected);
         const auto refusal = [&]() {
             model.moxController()->setMox(true);
