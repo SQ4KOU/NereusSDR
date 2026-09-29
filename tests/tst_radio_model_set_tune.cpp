@@ -260,6 +260,32 @@ class TestRadioModelSetTune : public QObject {
     void clearSettings() { AppSettings::instance().clear(); }
 
 private slots:
+    // PA on-air gate review, Minor 2: a disconnect forgets the transmit band.
+    // The next band the model sees is an initializing pass (it loads that
+    // band's stored power and saves nothing), so a retune after a disconnect
+    // never writes the PWR of the radio that went away into the old band.
+    void disconnectForgetsTheTransmitBand()
+    {
+        RadioModel model;
+        MockConnection* conn = nullptr;
+        SliceModel* slice = nullptr;
+        setupRefusalRig(model, conn, slice);   // 20 m, 80 % drive
+        std::unique_ptr<MockConnection> connOwner(conn);
+        QVERIFY(slice != nullptr);
+        TransmitModel& tx = model.transmitModel();
+        QCOMPARE(model.paOnAirBandIndex(), static_cast<int>(Band::Band20m));
+        QCOMPARE(tx.powerForBand(Band::Band20m), 80);
+
+        QSignalSpy txBand(&model, &RadioModel::transmitBandChanged);
+        model.disconnectFromRadio();
+        QCOMPARE(txBand.count(), 1);
+
+        tx.setPowerForBand(Band::Band20m, 33);
+        slice->setFrequency(7'100'000.0);
+        QCOMPARE(tx.powerForBand(Band::Band20m), 33);
+        QCOMPARE(tx.power(), tx.powerForBand(Band::Band40m));
+    }
+
     void initTestCase() { clearSettings(); }
     void init()          { clearSettings(); }
     void cleanup()       { clearSettings(); }

@@ -658,6 +658,11 @@
 //                 _adjustingBand is; transmitBandChanged tells the PA page
 //                 and the station's PA publish. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - PA on-air gate review: a disconnect forgets the transmit
+//                 band (the next band seen is an initializing pass), and
+//                 the connect-time tune-power refresh before the per-MAC
+//                 load is gone. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -15583,8 +15588,6 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
         // is what the issue #175 fix required.
         m_transmitModel.setMacAddress(info.macAddress);
         m_transmitModel.load();
-        // R-R3-49 (parity Task 2): the loaded tune power for the transmit band.
-        refreshTransmitTuneBand();
 
         // Load per-MAC mic/VOX/MON properties (15 properties, 3 excluded for safety).
         // Phase 3M-1b L.2. After setMacAddress so auto-persist uses the correct MAC.
@@ -22469,6 +22472,16 @@ void RadioModel::teardownConnection()
     // TX routing (and the relay flags waited for a MOX edge) until the next
     // key-up.
     m_alexRoutingTx = false;
+
+    // PA on-air gate review, Minor 2: the transmit band belonged to the
+    // radio that went away. Forget it, so the next band seen (the slice
+    // after a retune, the connect-time pass) is an initializing TXBand pass
+    // (console.cs:17511-17545 [v2.10.3.15]) that loads that band's power
+    // and never saves the old radio's PWR into the old band.
+    if (m_txBandKnown) {
+        m_txBandKnown = false;
+        emit transmitBandChanged();
+    }
 
     // Re-arm the discovery quiet period now that the protocol disconnect has
     // actually completed.  The arm at the top of this function starts the
