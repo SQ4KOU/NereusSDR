@@ -54,6 +54,9 @@
 //   2026-09-28: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), slice control and shared listening plan Task 4,
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-28: fix wave for the Tasks 1-4 review by J.J. Boyd (KG4VCF):
+//               a take clears the transmit selection of the slice for any
+//               holder. AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/SliceOwnership.h"
@@ -93,7 +96,9 @@ public:
         /// away, the Core's own position), or empty when it can.
         std::function<QString(const QByteArray& controller, int sliceId)> cannotHandOff;
         /// Ruling Q8: clears `former`'s transmit selection of the slice
-        /// before control passes from it.
+        /// before control passes from it (`former` is empty for a slice
+        /// with no controller), and that of any device holding transmit
+        /// with the flag on the slice.
         std::function<void(const QByteArray& former, int sliceId)> clearTransmitSelection;
         /// Ruling Q8: `taker` took the slice; its transmit binding does not
         /// pick the slice up by itself.

@@ -27,6 +27,13 @@
 //              SliceAccessPolicy::mayTransmitOn), so a slice a device only
 //              listens to never carries its transmit. J.J. Boyd (KG4VCF),
 //              AI-assisted via Anthropic Claude Code.
+//   2026-09-28 Slice control plan, fix wave for the Tasks 1-4 review
+//              (Critical 1): a handoff waiting for the unkey gate is
+//              checked again when the gate answers, against the holder and
+//              the device that asked, and dropped when the slice is no
+//              longer theirs; pendingHandoffSliceId names the waiting
+//              target. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//              Claude Code.
 // =================================================================
 #pragma once
 
@@ -80,6 +87,11 @@ public:
     void setUnkeyGate(UnkeyGate* gate) { m_unkeyGate = gate; }
     /// A handoff is waiting for the unkey gate.
     bool isHandoffPending() const { return m_pendingHandoffId >= 0; }
+    /// The slice a handoff waiting for the unkey gate moves the flag to,
+    /// or -1. The Core counts it as transmitting while it waits, so its
+    /// control cannot pass before the flag lands (slice control fix wave,
+    /// Critical 1).
+    int pendingHandoffSliceId() const { return m_pendingHandoffId; }
 
     /// Inject the slice list owner (RadioModel) so arbiter can flip txSlice
     /// flags on SliceModel instances.
@@ -166,6 +178,12 @@ public slots:
     bool requestHandoff(int sliceId);
 
 private:
+    /// requestHandoff with the device that asked (empty for the Core's own
+    /// window), remembered while the move waits for the unkey gate.
+    bool requestHandoffFrom(int sliceId, const QByteArray& requester);
+    /// Whether a waiting move to `sliceId` may still land when the gate
+    /// answers: the slice is still the holder's and the asker's.
+    bool pendingMayLand(int sliceId, const QByteArray& requester) const;
     /// Moves the flag to `target` (the handoff's last step).
     void flipTo(SliceModel* target);
     SliceModel* sliceWithId(int sliceId) const;
@@ -185,6 +203,7 @@ private:
     bool                      m_remote {false};    // Remote-daemon R2 Task 5
     UnkeyGate*                m_unkeyGate {nullptr};   // Task 34
     int                       m_pendingHandoffId {-1}; // Task 34: waiting for the gate
+    QByteArray                m_pendingRequester;      // who asked for the waiting move
     TransmitAccess            m_mayTransmit;           // Task 77, slice control Task 2
     ActiveLookup              m_active;                // Task 77
     HolderLookup              m_holder;                // Task 77

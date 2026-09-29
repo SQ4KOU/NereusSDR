@@ -234,8 +234,10 @@ SliceAccessController::Result SliceAccessController::takeControl(const QByteArra
     }
     // Ruling Q8: the former controller's transmit selection of the slice is
     // cleared first, so no moment has the new controller's slice flagged
-    // for the old one's transmit.
-    if (!former.isEmpty() && m_hooks.clearTransmitSelection) {
+    // for the old one's transmit. Slice control fix wave: for a slice with
+    // no controller too, since whoever holds transmit with the flag parked
+    // on it loses that selection (the hook's third-holder case).
+    if (m_hooks.clearTransmitSelection) {
         m_hooks.clearTransmitSelection(former, sliceId);
     }
     // One mark change: the taker joins, the former controller stays joined

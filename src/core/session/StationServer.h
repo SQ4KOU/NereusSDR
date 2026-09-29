@@ -1758,13 +1758,17 @@ private:
     QString wireIdOf(const QByteArray& device) const;
     /// Slice control plan Task 4: the slice is the transmit slice while a
     /// holder is on the air (or MOX has not yet read off), or the one the
-    /// station freeze holds.
+    /// station freeze holds; fix wave (Critical 1): or the slice a transmit
+    /// move waits for the unkey gate to land on.
     bool sliceTransmitting(int sliceId) const;
     /// Slice control plan Task 4 (ruling Q7): why control of `sliceId`
     /// cannot pass from `controller`, or empty.
     QString handOffRefusal(const QByteArray& controller, int sliceId) const;
     /// Slice control plan Task 4 (ruling Q8): `former`'s transmit selection
-    /// of `sliceId` cleared before control passes from it.
+    /// of `sliceId` cleared before control passes from it (`former` may be
+    /// empty for a slice with no controller); fix wave: whoever holds
+    /// transmit with the flag on `sliceId` loses that selection, not only
+    /// `former`.
     void clearTransmitSelection(const QByteArray& former, int sliceId);
     /// Slice control plan Task 4: closes a slice nobody is on (false: the
     /// Core's last slice stays).

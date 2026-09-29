@@ -717,6 +717,116 @@ private slots:
         QCOMPARE(ownership->mark(0).owner, b.key.fingerprint());
     }
 
+    // Slice control fix wave (Critical 1): a transmit move waiting for the
+    // unkey counts as transmitting on the slice it lands on, so control of
+    // that slice cannot pass before the flag lands, and the former
+    // controller's transmit never ends up on another device's slice.
+    void aTransmitMoveWaitingForTheUnkeyHoldsItsSlice()
+    {
+        Core core;
+        allowTransmit(core);
+        const int second = addCoHostedSlice(*core.model);
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a, kSharesTx);
+        LoopbackTransport* appB = core.signIn(b, kSharesTx);
+        QVERIFY(admitted(appA) && admitted(appB));
+        const SliceOwnership* ownership = core.model->sliceOwnership();
+        QCOMPARE(ownership->mark(0).owner, a.key.fingerprint());
+        QCOMPARE(ownership->mark(second).owner, a.key.fingerprint());
+        QTRY_VERIFY(holds(appB, accessKey(0)));
+        QVERIFY(accepted(core.invoke(appB, "slice.listen", refArgs(seenBy(appB, 0)))));
+        MoxController* mox = core.model->moxController();
+        TxSliceArbiter* arbiter = core.model->txSliceArbiter();
+        // A holds transmit on its second slice and keys there.
+        mox->setMox(true, keyerFor(a));
+        mox->setMox(false, keyerFor(a));
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        QVERIFY(accepted(core.invoke(appA, "tx.setTxSlice", {int64("sliceId", second)})));
+        QCOMPARE(arbiter->txBoundSliceId(), second);
+        mox->setMox(true, keyerFor(a));
+        QTRY_COMPARE(mox->state(), MoxState::Tx);
+        // The key's end is held (its walk stalls, the gate's bound never
+        // fires), so the move below waits.
+        mox->setTimerIntervals(0, 0, 0, 0, 600000, 0);
+        core.model->unkeyGate()->setScheduler([](int, QObject*, std::function<void()>) {});
+
+        // A moves its transmit to A0 while keyed: the move waits.
+        QVERIFY(accepted(core.invoke(appA, "tx.setTxSlice", {int64("sliceId", 0)})));
+        QCOMPARE(arbiter->pendingHandoffSliceId(), 0);
+        QCOMPARE(arbiter->txBoundSliceId(), second);
+
+        // B cannot take A0 meanwhile, and A cannot release it to B.
+        const Seen seen = seenBy(appB, 0);
+        QJsonObject r = core.invoke(appB, "slice.takeControl", revisionArgs(seen));
+        QVERIFY(!accepted(r));
+        QCOMPARE(reasonOf(r), QStringLiteral("Slice A is transmitting. Take control once it stops."));
+        r = core.invoke(appA, "slice.release", revisionArgs(seen));
+        QVERIFY(!accepted(r));
+        QCOMPARE(reasonOf(r), QStringLiteral("Slice A is transmitting. Release it once it stops."));
+        QCOMPARE(ownership->mark(0).owner, a.key.fingerprint());
+
+        // The key ends; the flag lands on A0, still A's.
+        mox->setTimerIntervals(0, 0, 0, 0, 0, 0);
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        QTRY_COMPARE(arbiter->txBoundSliceId(), 0);
+        QCOMPARE(arbiter->pendingHandoffSliceId(), -1);
+
+        // Now B takes it, idle: the flag leaves the slice B took.
+        r = core.invoke(appB, "slice.takeControl", revisionArgs(seenBy(appB, 0)));
+        QVERIFY2(accepted(r), qPrintable(reasonOf(r)));
+        QCOMPARE(ownership->mark(0).owner, b.key.fingerprint());
+        QCOMPARE(arbiter->txBoundSliceId(), second);
+        QVERIFY(core.server->transmitHolder()->isHeldBy(a.key.fingerprint()));
+        QVERIFY(!mox->isMox());
+    }
+
+    // The review's third-holder case: a device holding transmit with the
+    // flag parked on a slice it does not control loses that selection when
+    // another device takes the slice.
+    void takingASliceClearsAnotherHoldersSelectionOfIt()
+    {
+        Core core;
+        allowTransmit(core);
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        Device c(QStringLiteral("Mac"), QStringLiteral("computer"));
+        core.pair(a);
+        core.pair(b);
+        core.pair(c);
+        LoopbackTransport* appA = core.signIn(a, kSharesTx);
+        LoopbackTransport* appB = core.signIn(b, kSharesTx);
+        LoopbackTransport* appC = core.signIn(c, kSharesTx);
+        QVERIFY(admitted(appA) && admitted(appB) && admitted(appC));
+        SliceOwnership* ownership = core.model->sliceOwnership();
+        QCOMPARE(ownership->mark(0).owner, a.key.fingerprint());
+        // C gives up its own slices, so its transmit binds nowhere of its
+        // own and the flag stays parked on A0.
+        for (int id : ownership->ownedBy(c.key.fingerprint())) {
+            QVERIFY(accepted(core.invoke(appC, "removeSlice", {int64("sliceId", id)})));
+        }
+        QVERIFY(ownership->ownedBy(c.key.fingerprint()).isEmpty());
+        TxSliceArbiter* arbiter = core.model->txSliceArbiter();
+        QCOMPARE(arbiter->txBoundSliceId(), 0);
+        MoxController* mox = core.model->moxController();
+        mox->setMox(true, keyerFor(c));
+        mox->setMox(false, keyerFor(c));
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        QVERIFY(core.server->transmitHolder()->isHeldBy(c.key.fingerprint()));
+        QCOMPARE(arbiter->txBoundSliceId(), 0);
+
+        QTRY_VERIFY(holds(appB, accessKey(0)));
+        const QJsonObject r =
+            core.invoke(appB, "slice.takeControl", revisionArgs(seenBy(appB, 0)));
+        QVERIFY2(accepted(r), qPrintable(reasonOf(r)));
+        QCOMPARE(ownership->mark(0).owner, b.key.fingerprint());
+        // C controls no slice to move to: its transmit is released.
+        QTRY_VERIFY(!core.server->transmitHolder()->isHeldBy(c.key.fingerprint()));
+        QVERIFY(!mox->isMox());
+    }
+
     // ── Release ──────────────────────────────────────────────────────────
 
     void aReleasedSliceStaysForItsListenerWhoIsNotGivenControl()

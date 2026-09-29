@@ -637,6 +637,11 @@
 //               listener's refusal words, and a lone device adopting only
 //               unclaimed slices. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-28: slice control fix wave for the Tasks 1-4 review: a slice a
+//               transmit move waits to land on counts as transmitting, and
+//               a change of control clears the transmit selection of any
+//               holder whose flag is on the slice. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -8224,6 +8229,13 @@ bool StationServer::sliceTransmitting(int sliceId) const
     if (stationFrozenSlice() == sliceId) {
         return true;
     }
+    // Slice control fix wave (Critical 1): the slice a transmit move waits
+    // to land on (the unkey gate) counts as transmitting, so its control
+    // cannot pass before the flag lands there.
+    if (const TxSliceArbiter* arbiter = m_radioModel->txSliceArbiter();
+        arbiter != nullptr && arbiter->pendingHandoffSliceId() == sliceId) {
+        return true;
+    }
     const SliceModel* txSlice = m_radioModel->txBoundSlice();
     if (txSlice == nullptr || txSlice->sliceIndex() != sliceId) {
         return false;
@@ -8265,34 +8277,44 @@ QString StationServer::handOffRefusal(const QByteArray& controller, int sliceId)
 
 void StationServer::clearTransmitSelection(const QByteArray& former, int sliceId)
 {
-    if (m_radioModel.isNull() || former.isEmpty()) {
+    if (m_radioModel.isNull()) {
         return;
     }
     // Ruling Q8 (b): its remembered transmit choice no longer names it.
-    if (m_chosenTxSlice.value(former, -1) == sliceId) {
+    if (!former.isEmpty() && m_chosenTxSlice.value(former, -1) == sliceId) {
         m_chosenTxSlice.remove(former);
     }
-    // Ruling Q8 (a), ruling 8.12's close path: while it holds transmit on
-    // this slice, the flag moves to another of its slices; with none,
-    // transmit is released to nobody. Never keyed here: a take or a
-    // release of a transmitting slice was refused before this.
+    // Ruling Q8 (a), ruling 8.12's close path: while a device holds
+    // transmit on this slice, the flag moves to another of the holder's
+    // slices; with none, transmit is released to nobody. Never keyed here:
+    // a take or a release of a transmitting slice was refused before this.
+    // Slice control fix wave (the review's third-holder case): the holder
+    // need not be the former controller. A device holding transmit with the
+    // flag parked on this slice loses that selection as well, the taker
+    // included (taking control grants no transmit). The radio's own PTT
+    // keeps ruling 8.11: it transmits where the flag is.
     const SliceModel* txSlice = m_radioModel->txBoundSlice();
-    if (!m_transmitHolder || !m_transmitHolder->isHeldBy(former) || txSlice == nullptr
-        || txSlice->sliceIndex() != sliceId) {
+    if (!m_transmitHolder || txSlice == nullptr || txSlice->sliceIndex() != sliceId) {
         return;
     }
+    const std::optional<TransmitHolder::Holder> holder = m_transmitHolder->holder();
+    if (!holder || holder->deviceId.isEmpty()
+        || holder->source == TransmitHolder::Source::RadioPtt) {
+        return;
+    }
+    const QByteArray holderId = holder->deviceId;
     const SliceOwnership* ownership = m_radioModel->sliceOwnership();
     TxSliceArbiter* arbiter = m_radioModel->txSliceArbiter();
     for (SliceModel* slice : m_radioModel->slices()) {
         if (slice != nullptr && slice->sliceIndex() != sliceId && arbiter != nullptr
-            && SliceAccessPolicy::mayTransmitOn(*ownership, former, slice->sliceIndex())) {
-            if (arbiter->requestHandoff(slice->sliceIndex(), former)) {
+            && SliceAccessPolicy::mayTransmitOn(*ownership, holderId, slice->sliceIndex())) {
+            if (arbiter->requestHandoff(slice->sliceIndex(), holderId)) {
                 return;
             }
         }
     }
     qCInfo(lcStation) << "Control of the transmit slice passed; transmit is released";
-    m_transmitHolder->release(former,
+    m_transmitHolder->release(holderId,
                               QStringLiteral("The device holding transmit no longer controls "
                                              "its transmit slice."));
 }

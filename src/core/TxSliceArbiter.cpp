@@ -20,12 +20,18 @@
 //                                    a listened slice is never bound for
 //                                    its listener. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  Slice control fix wave (Critical 1): a
+//                                    move waiting for the unkey gate is
+//                                    checked again before the flag lands.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 #include "core/TxSliceArbiter.h"
 #include "models/SliceModel.h"
 #include "core/MoxController.h"
 #include "core/AppSettings.h"
 #include "core/safety/UnkeyGate.h"
+
+#include <utility>
 
 namespace NereusSDR {
 
@@ -55,7 +61,22 @@ bool TxSliceArbiter::requestHandoff(int sliceId, const QByteArray& requester)
         emit handoffBlocked(sliceId, QStringLiteral("That slice is another device's."));
         return false;
     }
-    return requestHandoff(sliceId);
+    return requestHandoffFrom(sliceId, requester);
+}
+
+bool TxSliceArbiter::pendingMayLand(int sliceId, const QByteArray& requester) const
+{
+    // Slice control fix wave (Critical 1): control of the slice may have
+    // passed while the move waited for the unkey. The flag lands only on a
+    // slice the holder, and the device that asked, may still transmit on.
+    if (!m_mayTransmit) {
+        return true;
+    }
+    const QByteArray holder = m_holder ? m_holder() : QByteArray();
+    if (!holder.isEmpty() && !m_mayTransmit(holder, sliceId)) {
+        return false;
+    }
+    return requester.isEmpty() || m_mayTransmit(requester, sliceId);
 }
 
 bool TxSliceArbiter::bindForHolder(const QByteArray& holder, int preferredSliceId)
@@ -214,6 +235,11 @@ void TxSliceArbiter::syncToSliceList()
 
 bool TxSliceArbiter::requestHandoff(int sliceId)
 {
+    return requestHandoffFrom(sliceId, QByteArray());
+}
+
+bool TxSliceArbiter::requestHandoffFrom(int sliceId, const QByteArray& requester)
+{
     // Remote-daemon R2 Task 5: same reasoning as syncToSliceList() above.
     // A local operator TX-slice click funnels through here; on a remote
     // client that click is a later task's job to forward to the daemon
@@ -252,6 +278,7 @@ bool TxSliceArbiter::requestHandoff(int sliceId)
     if (target->isTxSlice()) {
         m_txBoundSliceId = sliceId;
         m_pendingHandoffId = -1;   // a waiting move to elsewhere is dropped
+        m_pendingRequester.clear();
         return true;  // already TX-bound, no-op
     }
 
@@ -267,14 +294,27 @@ bool TxSliceArbiter::requestHandoff(int sliceId)
     if (keyed && m_unkeyGate) {
         const bool alreadyWaiting = m_pendingHandoffId >= 0;
         m_pendingHandoffId = sliceId;
+        m_pendingRequester = requester;
         if (!alreadyWaiting) {
             m_unkeyGate->unkey(QStringLiteral("The transmit slice moved."), this,
                                [this](UnkeyOutcome) {
                 const int pending = m_pendingHandoffId;
+                const QByteArray requester = std::exchange(m_pendingRequester, QByteArray());
                 m_pendingHandoffId = -1;
-                if (SliceModel* next = sliceWithId(pending); next && !next->isTxSlice()) {
-                    flipTo(next);
+                SliceModel* next = sliceWithId(pending);
+                if (!next || next->isTxSlice()) {
+                    return;
                 }
+                // Slice control fix wave (Critical 1): checked again now,
+                // so a slice another device took while the key ended never
+                // carries this holder's transmit.
+                if (!pendingMayLand(pending, requester)) {
+                    emit handoffBlocked(pending,
+                                        QStringLiteral("Another device controls that slice now, "
+                                                       "so the transmit slice did not move."));
+                    return;
+                }
+                flipTo(next);
             });
         }
         return true;
