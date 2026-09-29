@@ -157,8 +157,11 @@ private slots:
         model.moxController()->setMox(true);
         QCOMPARE(rejected.isEmpty(), allowed);
         if (!allowed) {
-            QCOMPARE(rejected.first().first().toString(),
-                     QStringLiteral("Frequency outside TX-allowed range"));
+            // Addendum G-42 item 4: the refusal names the carrier (with XIT)
+            // and the filter, in the operator's words.
+            QVERIFY(rejected.first().first().toString().endsWith(
+                QStringLiteral(" reaches outside the transmit bands for your region "
+                               "(United States).")));
             QVERIFY(!model.moxController()->isMox());
         }
         model.moxController()->setMox(false);

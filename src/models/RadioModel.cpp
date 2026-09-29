@@ -17255,7 +17255,7 @@ void RadioModel::installBandPlanMoxCheck()
 
         const SliceModel* slice = txBoundSlice();
         if (!slice) {
-            return {false, QStringLiteral("No TX-bound slice")};
+            return {false, QStringLiteral("No slice is set to transmit.")};
         }
 
         // Thetis console.cs:29440-29450 [v2.10.3.15] adds XIT to the TX
@@ -17270,11 +17270,21 @@ void RadioModel::installBandPlanMoxCheck()
         // keying checks the same signed passband used by the TX chain.
         const auto [filterLow, filterHigh] = TxChannel::filterEdgesForMode(
             m_transmitModel.filterLow(), m_transmitModel.filterHigh(), mode);
+        // From Thetis console.cs:6780-6781 [v2.10.3.15] (CheckValidTXFreq):
+        //   if (extended || tx_xvtr_index > -1)
+        //       return true;
+        // `extended` is the Core's ExtendedTransmit (JJ's ruling
+        // 2026-09-28), read at every key. NereusSDR has no transverter
+        // transmit path yet (UnbuiltFeature::Transverters), so
+        // tx_xvtr_index > -1 has no counterpart to pass.
+        const bool extended = extendedTransmitSetting();
+        // The filter edges below are skipped for TUNE (bIgnoreFilter):
+        //MW0LGE_21d filter outside band, ignore option  [original inline comment from console.cs:6784]
         const safety::BandPlanGuard::MoxCheckResult bandPlanResult =
             m_bandPlan.checkMoxAllowed(region, freqHz, mode,
                                        txBand, txBand,
                                        /*preventDifferentBand=*/false,
-                                       /*extended=*/false, filterLow, filterHigh,
+                                       extended, filterLow, filterHigh,
                                        /*ignoreFilter=*/m_isTuning);
         if (!bandPlanResult.ok) {
             return bandPlanResult;
@@ -23868,6 +23878,22 @@ void RadioModel::applyTxKeyBlock()
 // start (setup.cs:740 [v2.10.3.15]); NereusSDR keeps it as the Core's
 // "RxOnly" setting.
 // ---------------------------------------------------------------------------
+bool RadioModel::extendedTransmitSetting()
+{
+    // Exactly "True" turns it on; anything else, or no value, is off.
+    return AppSettings::instance()
+               .value(QString::fromLatin1(kExtendedTransmitKey), QStringLiteral("False"))
+               .toString()
+           == QStringLiteral("True");
+}
+
+void RadioModel::reportTransmitGateSettingChanged(const QString& key)
+{
+    if (key == QLatin1String(kExtendedTransmitKey)) {
+        emit transmitGateSettingChanged(key);
+    }
+}
+
 bool RadioModel::rxOnlySetting()
 {
     return AppSettings::instance()

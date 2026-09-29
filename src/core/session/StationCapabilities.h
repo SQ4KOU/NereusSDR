@@ -374,6 +374,8 @@ struct StationCapabilities {
     /// 10 (iPhone app plan Task 40) adds `transmit.micMuted`, the mic mute.
     /// 11 offers Transmit > Power's "Disable HF PA" (DisableHfPa),
     /// taken on and off the air and applied to the radio at once.
+    /// 12 (addendum G-42) adds the Core's Extended transmit setting,
+    /// `ExtendedTransmit`, taken with transmit permission and off the air.
     int transmitSettingsVersion = 0;
     /// R-IOS-27, R-IOS-06: 1 means the Core takes `slice.selectBand`, which
     /// runs the desktop's band button on a slice (its saved frequency, mode

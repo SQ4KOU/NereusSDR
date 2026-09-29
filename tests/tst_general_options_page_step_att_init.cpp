@@ -83,6 +83,46 @@ private slots:
         QCOMPARE(settings.value(QStringLiteral("BandPlanRegion")).toInt(), 8);
     }
 
+    // Addendum G-42 (JJ's ruling 2026-09-28): Extended shows and changes
+    // the Core's ExtendedTransmit (this computer's own radio here). An old
+    // saved ExtendedTxAllowed neither shows nor is changed, and the box
+    // waits for receive.
+    void extendedIsTheCoresSettingAndWaitsForReceive()
+    {
+        auto& settings = AppSettings::instance();
+        settings.setValue(QStringLiteral("ExtendedTxAllowed"), QStringLiteral("True"));
+        settings.remove(QStringLiteral("ExtendedTransmit"));
+        RadioModel model;
+        GeneralOptionsPage page(&model);
+        auto* extended = page.findChild<QCheckBox*>(QStringLiteral("chkExtended"));
+        QVERIFY(extended);
+        QVERIFY(!extended->isChecked());
+        QVERIFY(extended->isEnabled());
+        QCOMPARE(extended->toolTip(), QStringLiteral("Enable extended TX (out of band)"));
+        extended->setChecked(true);
+        QCOMPARE(settings.value(QStringLiteral("ExtendedTransmit")).toString(), QStringLiteral("True"));
+        QCOMPARE(settings.value(QStringLiteral("ExtendedTxAllowed")).toString(), QStringLiteral("True"));
+
+        model.transmitModel().setMox(true);
+        QVERIFY(!extended->isEnabled());
+        QCOMPARE(extended->toolTip(), RadioModel::onAirReason());
+        extended->setChecked(false); // A stale/programmatic edit is refused too.
+        QCOMPARE(settings.value(QStringLiteral("ExtendedTransmit")).toString(), QStringLiteral("True"));
+        QVERIFY(extended->isChecked());
+        model.transmitModel().setMox(false);
+        QVERIFY(extended->isEnabled());
+        extended->setChecked(false);
+        QCOMPARE(settings.value(QStringLiteral("ExtendedTransmit")).toString(), QStringLiteral("False"));
+
+        // Another page on the same model (the Core's own window) follows a
+        // change a device made on the Core.
+        settings.setValue(QStringLiteral("ExtendedTransmit"), QStringLiteral("True"));
+        model.reportTransmitGateSettingChanged(QStringLiteral("ExtendedTransmit"));
+        QVERIFY(extended->isChecked());
+        settings.remove(QStringLiteral("ExtendedTransmit"));
+        settings.remove(QStringLiteral("ExtendedTxAllowed"));
+    }
+
     void invalidStoredRegionNeedsAnExplicitSelection()
     {
         auto& settings = AppSettings::instance();

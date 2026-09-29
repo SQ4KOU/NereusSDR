@@ -13,7 +13,7 @@
 //   3. LSB mode (allowed) → MOX engages normally; moxRejected NOT emitted.
 //   4. No MoxCheckFn installed → setMox(true) succeeds (backwards-compat).
 //   5. setMox(false) is never rejected — release path bypasses BandPlanGuard.
-//   6. SPEC mode → moxRejected("Mode not supported for TX"); MOX stays Rx.
+//   6. SPEC mode → moxRejected("This mode cannot transmit."); MOX stays Rx.
 //   7. Rejection: no state advance, no phase signals (txAboutToBegin not emitted).
 //   8. After rejection, setMox(true) with CW can be re-attempted; still rejects.
 //
@@ -41,12 +41,18 @@
 //                 Anthropic Claude Code. The RadioModel band-plan case keys
 //                 from the radio mic; new cases pin the pre-check order
 //                 (remote, band plan, PC microphone).
+//   2026-09-28 : Addendum G-42 by J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code. Extended is the Core's
+//                 ExtendedTransmit setting; the old ExtendedTxAllowed is
+//                 ignored (both keys restored by a scope guard). Item 4:
+//                 band plan refusals in operator words.
 // =================================================================
 
 // no-port-check: NereusSDR-original test file.
 
 #include <QtTest/QtTest>
 #include <QCoreApplication>
+#include <QScopeGuard>
 #include <QSignalSpy>
 
 #include "core/MoxController.h"
@@ -261,7 +267,7 @@ private slots:
         QVERIFY(!ctrl.isMox());
     }
 
-    // ── 6. SPEC mode → moxRejected("Mode not supported for TX") ───────────────
+    // ── 6. SPEC mode → moxRejected("This mode cannot transmit.") ──────────────
 
     void spec_setMox_emitsMoxRejected()
     {
@@ -276,7 +282,7 @@ private slots:
 
         QCOMPARE(rejectedSpy.count(), 1);
         QCOMPARE(rejectedSpy.at(0).at(0).toString(),
-                 QStringLiteral("Mode not supported for TX"));
+                 QStringLiteral("This mode cannot transmit."));
         QVERIFY(!ctrl.isMox());
     }
 
@@ -354,7 +360,9 @@ private slots:
 
         QCOMPARE(rejectedSpy.count(), 1);
         QCOMPARE(rejectedSpy.at(0).at(0).toString(),
-                 QStringLiteral("Frequency outside TX-allowed range"));
+                 QStringLiteral("4.500000 MHz with the transmit filter from 100 to 2900 Hz "
+                                "reaches outside the transmit bands for your region "
+                                "(United States)."));
         QVERIFY(!model.moxController()->isMox());
 
         a->setFrequency(4'500'000.0);
@@ -401,7 +409,9 @@ private slots:
         QCoreApplication::processEvents();
         QCOMPARE(rejectedSpy.count(), 1);
         QCOMPARE(rejectedSpy.at(0).at(0).toString(),
-                 QStringLiteral("Frequency outside TX-allowed range"));
+                 QStringLiteral("4.500000 MHz with the transmit filter from 100 to 2900 Hz "
+                                "reaches outside the transmit bands for your region "
+                                "(United States)."));
 
         a->setFrequency(14'200'000.0);
         model.moxController()->setMox(true);
@@ -455,6 +465,84 @@ private slots:
         QCOMPARE(rejected.size(), allowed ? 0 : 1);
         model.moxController()->setMox(false);
         QCoreApplication::processEvents();
+    }
+
+    // Addendum G-42 (JJ's ruling 2026-09-28): Extended is one Core
+    // setting, ExtendedTransmit, read at every key. Thetis's
+    // CheckValidTXFreq returns true while it is on (console.cs:6780
+    // [v2.10.3.15]), past the band edges, the filter edges and the US 60 m
+    // mode rule. An old saved ExtendedTxAllowed never turns it on, and
+    // only exactly "True" does.
+    void extendedTransmitIsTheCoresSettingAndTheOldKeyIsIgnored_data()
+    {
+        QTest::addColumn<int>("mode");
+        QTest::addColumn<double>("carrier");
+        QTest::newRow("usb-carrier-above-20m") << int(DSPMode::USB) << 14360000.0;
+        QTest::newRow("usb-filter-edge-above-20m") << int(DSPMode::USB) << 14349000.0;
+        QTest::newRow("lsb-filter-edge-below-20m") << int(DSPMode::LSB) << 14001000.0;
+        QTest::newRow("am-on-us-60m") << int(DSPMode::AM) << 5357000.0;
+    }
+
+    void extendedTransmitIsTheCoresSettingAndTheOldKeyIsIgnored()
+    {
+        QFETCH(int, mode);
+        QFETCH(double, carrier);
+        RadioModel model;
+        model.configureStreamPool(5, 5, 192000);
+        model.moxController()->setTimerIntervals(0, 0, 0, 0, 0, 0);
+        model.installBandPlanMoxCheckForTest();
+        model.transmitModel().setMicSource(MicSource::Radio);
+        SliceModel* slice = model.sliceById(model.addSlice());
+        QVERIFY(slice);
+        slice->setDspMode(static_cast<DSPMode>(mode));
+        slice->setFrequency(carrier);
+        model.transmitModel().setFilterLow(100);
+        model.transmitModel().setFilterHigh(2900);
+
+        const auto keyed = [&model]() {
+            model.moxController()->setMox(true);
+            QCoreApplication::processEvents();
+            const bool on = model.moxController()->isMox();
+            model.moxController()->setMox(false);
+            QCoreApplication::processEvents();
+            return on;
+        };
+        auto& settings = AppSettings::instance();
+        // Whatever the two keys held before this case, they hold again after
+        // it, pass or fail.
+        const QStringList keys{QStringLiteral("ExtendedTxAllowed"),
+                               QStringLiteral("ExtendedTransmit")};
+        QHash<QString, QVariant> before;
+        for (const QString& key : keys) {
+            if (settings.contains(key)) {
+                before.insert(key, settings.value(key));
+            }
+        }
+        const auto restore = qScopeGuard([&settings, &keys, &before] {
+            for (const QString& key : keys) {
+                if (before.contains(key)) {
+                    settings.setValue(key, before.value(key));
+                } else {
+                    settings.remove(key);
+                }
+            }
+        });
+        for (const QString& key : keys) {
+            settings.remove(key);
+        }
+        // Off by default.
+        QVERIFY(!keyed());
+        // The old per-computer key is ignored.
+        settings.setValue(QStringLiteral("ExtendedTxAllowed"), QStringLiteral("True"));
+        QVERIFY(!keyed());
+        settings.setValue(QStringLiteral("ExtendedTransmit"), QStringLiteral("true"));
+        QVERIFY(!keyed());
+        settings.setValue(QStringLiteral("ExtendedTransmit"), QStringLiteral("True"));
+        QVERIFY(keyed());
+        settings.setValue(QStringLiteral("ExtendedTransmit"), QStringLiteral("False"));
+        QVERIFY(!keyed());
+        settings.remove(QStringLiteral("ExtendedTransmit"));
+        QVERIFY(!keyed());
     }
 
     void invalidStoredRegionCannotWrapIntoAnAllowedRegion_data()
@@ -579,7 +667,7 @@ private slots:
     void tooltipForMode_spec_returnsNotSupported()
     {
         const QString tip = TxApplet::tooltipForMode(DSPMode::SPEC);
-        QCOMPARE(tip, QStringLiteral("Mode not supported for TX"));
+        QCOMPARE(tip, QStringLiteral("This mode cannot transmit."));
     }
 };
 

@@ -47,6 +47,8 @@ private slots:
     // ── checkMoxAllowed: freq/band reject on allowed mode ─────────────────
     void usb_outOfBandFreq_returnsFreqReject();
     void lsb_crossBandTx_returnsBandReject();
+    void refusalsSayWhatIsWrong_data();
+    void refusalsSayWhatIsWrong();
 };
 
 // ---------------------------------------------------------------------------
@@ -224,7 +226,7 @@ void TestBandPlanGuardModeAllowList::spec_checkMox_reasonIsNotSupported()
     auto r = guard.checkMoxAllowed(kRegion, kValidHz, DSPMode::SPEC,
                                    kBand20m, kBand20m, false, false);
     QVERIFY(!r.ok);
-    QCOMPARE(r.reason, QStringLiteral("Mode not supported for TX"));
+    QCOMPARE(r.reason, QStringLiteral("This mode cannot transmit."));
 }
 
 // ---------------------------------------------------------------------------
@@ -262,7 +264,8 @@ void TestBandPlanGuardModeAllowList::usb_outOfBandFreq_returnsFreqReject()
     auto r = guard.checkMoxAllowed(kRegion, 14'500'000, DSPMode::USB,
                                    kBand20m, kBand20m, false, false);
     QVERIFY(!r.ok);
-    QCOMPARE(r.reason, QStringLiteral("Frequency outside TX-allowed range"));
+    QCOMPARE(r.reason, QStringLiteral(
+        "14.500000 MHz is outside the transmit bands for your region (United States)."));
 }
 
 void TestBandPlanGuardModeAllowList::lsb_crossBandTx_returnsBandReject()
@@ -272,7 +275,77 @@ void TestBandPlanGuardModeAllowList::lsb_crossBandTx_returnsBandReject()
     auto r = guard.checkMoxAllowed(kRegion, kValidHz, DSPMode::LSB,
                                    kBand20m, Band::Band40m, /*preventDifferentBand=*/true, false);
     QVERIFY(!r.ok);
-    QCOMPARE(r.reason, QStringLiteral("RX/TX band mismatch: cross-band TX disabled"));
+    QCOMPARE(r.reason, QStringLiteral(
+        "Transmit is on a different band from receive, and Setup is set to prevent that."));
+}
+
+// Addendum G-42 item 4: each band plan refusal says what is wrong in the
+// operator's words, following Thetis's messages (console.cs:29452-29530
+// [v2.10.3.15]): the filter edges, the carrier, the US 60 m mode rule and
+// the US 60 m 2.8 kHz filter limit.
+void TestBandPlanGuardModeAllowList::refusalsSayWhatIsWrong_data()
+{
+    QTest::addColumn<qint64>("hz");
+    QTest::addColumn<int>("mode");
+    QTest::addColumn<int>("band");
+    QTest::addColumn<int>("low");
+    QTest::addColumn<int>("high");
+    QTest::addColumn<bool>("tune");
+    QTest::addColumn<int>("region");
+    QTest::addColumn<QString>("reason");
+    QTest::newRow("usb-filter-edge") << qint64(14'349'000) << int(DSPMode::USB)
+        << int(Band::Band20m) << 100 << 2900 << false << int(Region::UnitedStates)
+        << QStringLiteral("14.349000 MHz with the transmit filter from 100 to 2900 Hz "
+                          "reaches outside the transmit bands for your region (United States).");
+    QTest::newRow("lsb-filter-edge") << qint64(14'001'000) << int(DSPMode::LSB)
+        << int(Band::Band20m) << -2900 << -100 << false << int(Region::UnitedStates)
+        << QStringLiteral("14.001000 MHz with the transmit filter from -2900 to -100 Hz "
+                          "reaches outside the transmit bands for your region (United States).");
+    QTest::newRow("tune-carrier") << qint64(14'360'000) << int(DSPMode::USB)
+        << int(Band::Band20m) << 100 << 2900 << true << int(Region::UnitedStates)
+        << QStringLiteral("14.360000 MHz is outside the transmit bands for your region "
+                          "(United States).");
+    QTest::newRow("europe-carrier") << qint64(7'250'000) << int(DSPMode::USB)
+        << int(Band::Band40m) << 0 << 0 << false << int(Region::Europe)
+        << QStringLiteral("7.250000 MHz is outside the transmit bands for your region (Europe).");
+    // The three IARU regions in operator words, not the settings' Region1-3.
+    QTest::newRow("iaru-region-1") << qint64(7'250'000) << int(DSPMode::USB)
+        << int(Band::Band40m) << 0 << 0 << false << int(Region::Region1)
+        << QStringLiteral("7.250000 MHz is outside the transmit bands for your region "
+                          "(IARU Region 1).");
+    QTest::newRow("iaru-region-3") << qint64(7'350'000) << int(DSPMode::USB)
+        << int(Band::Band40m) << 0 << 0 << false << int(Region::Region3)
+        << QStringLiteral("7.350000 MHz is outside the transmit bands for your region "
+                          "(IARU Region 3).");
+    QTest::newRow("us-60m-mode") << qint64(5'357'000) << int(DSPMode::AM)
+        << int(Band::Band60m) << -2900 << 2900 << false << int(Region::UnitedStates)
+        << QStringLiteral("AM is not allowed on 60 m in the United States.");
+    QTest::newRow("us-60m-filter") << qint64(5'499'000) << int(DSPMode::USB)
+        << int(Band::Band60m) << 100 << 2900 << false << int(Region::UnitedStates)
+        << QStringLiteral("The transmit filter is wider than the 2.8 kHz allowed on 60 m "
+                          "in the United States.");
+}
+
+void TestBandPlanGuardModeAllowList::refusalsSayWhatIsWrong()
+{
+    QFETCH(qint64, hz);
+    QFETCH(int, mode);
+    QFETCH(int, band);
+    QFETCH(int, low);
+    QFETCH(int, high);
+    QFETCH(bool, tune);
+    QFETCH(int, region);
+    QFETCH(QString, reason);
+    BandPlanGuard guard;
+    const auto r = guard.checkMoxAllowed(static_cast<Region>(region), hz,
+                                         static_cast<DSPMode>(mode), static_cast<Band>(band),
+                                         static_cast<Band>(band), false, false, low, high, tune);
+    QVERIFY(!r.ok);
+    QCOMPARE(r.reason, reason);
+    // Extended lets each of them through (console.cs:6780 [v2.10.3.15]).
+    QVERIFY(guard.checkMoxAllowed(static_cast<Region>(region), hz, static_cast<DSPMode>(mode),
+                                  static_cast<Band>(band), static_cast<Band>(band), false,
+                                  /*extended=*/true, low, high, tune).ok);
 }
 
 QTEST_GUILESS_MAIN(TestBandPlanGuardModeAllowList)

@@ -309,6 +309,9 @@
 //   2026-09-29: The hello declares radioModels 1, so Manage Radios offers
 //               each radio the Core's own model list. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-09-29: addendum G-42: transmitSettingsPermitted and
+//               transmitPermissionReason. J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SystemProxy.h"
@@ -6736,6 +6739,24 @@ bool StationClient::transmitSettingsAvailable(int minVersion) const
     // settings while its radio is off the air.
     return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
         && m_capabilities.transmitSettingsVersion >= std::max(minVersion, 1);
+}
+
+bool StationClient::transmitSettingsPermitted() const
+{
+    // Addendum G-42: the Core's own verdict for this session (the station
+    // transmit gate), sent again whenever it changes (publishTxPermitted).
+    return isHandshakeComplete() && remoteTransmitAvailable() && m_capabilities.txPermitted;
+}
+
+QString StationClient::transmitPermissionReason() const
+{
+    if (transmitSettingsPermitted()) {
+        return {};
+    }
+    if (remoteTransmitAvailable() && !m_capabilities.txRefusalReason.isEmpty()) {
+        return m_capabilities.txRefusalReason;
+    }
+    return IStationLink::transmitPermissionReason();
 }
 
 bool StationClient::pureSignalArmingOffered() const

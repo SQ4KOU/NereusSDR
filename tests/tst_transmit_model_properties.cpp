@@ -388,8 +388,8 @@ void TstTransmitModelProperties::coreOffersTransmitSettingsVersion4()
     // calibration); 4 is within it.
     Session s(m_securityDir.path(), this);
     QVERIFY(s.connect());
-    QCOMPARE(s.server->buildCapabilities().transmitSettingsVersion, 11);
-    QCOMPARE(s.client->capabilities().transmitSettingsVersion, 11);
+    QCOMPARE(s.server->buildCapabilities().transmitSettingsVersion, 12);
+    QCOMPARE(s.client->capabilities().transmitSettingsVersion, 12);
     QVERIFY(s.client->transmitSettingsAvailable(4));
     QVERIFY(s.client->transmitSettingsAvailable(7));
     QVERIFY(s.client->transmitSettingsAvailable(8));
@@ -398,7 +398,9 @@ void TstTransmitModelProperties::coreOffersTransmitSettingsVersion4()
     QVERIFY(s.client->transmitSettingsAvailable(10));
     // 11 since hardware parity batch B's Disable HF PA (DisableHfPa).
     QVERIFY(s.client->transmitSettingsAvailable(11));
-    QVERIFY(!s.client->transmitSettingsAvailable(12));
+    // 12 since addendum G-42 (the Core's Extended transmit setting).
+    QVERIFY(s.client->transmitSettingsAvailable(12));
+    QVERIFY(!s.client->transmitSettingsAvailable(13));
 }
 
 // R-R3-49 (parity Task 5): the version 5 properties, after txAlcDecay in

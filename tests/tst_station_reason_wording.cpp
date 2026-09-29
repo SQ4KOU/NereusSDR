@@ -169,6 +169,10 @@
 //   2026-09-26  J.J. Boyd / KG4VCF  D79 (R-IOS-11, R-R3-49): the Core's
 //                                    unknown band plan refusal forwards.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  Addendum G-42: the Extended transmit
+//                                    setting's refusal forwards, and the
+//                                    window's transmitPermissionReason.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -791,6 +795,12 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("TxRefusals::appCannotTransmit()"),
           QStringLiteral("refusal.text"),
           QStringLiteral("decision.refusal.text"),
+          // Addendum G-42: the Extended transmit setting's refusal, which
+          // returns the transmit gate's sentence (TxRefusal.cpp), the
+          // on-air sentence (RadioModel::onAirReason) or its own literal
+          // words in StationServer.cpp, each scanned.
+          QStringLiteral("transmitGateSettingRefusal(transport, key, &value)"),
+          QStringLiteral("transmitGateSettingRefusal(transport, key, nullptr)"),
           // Desktop remote transmit: the same sentences, sent with
           // txPermitted in capabilities (txRefusalReason) and remembered.
           QStringLiteral("txRefusalOf(caps)"),
@@ -1447,6 +1457,12 @@ const QList<AppSideReason>& appSideReasons()
          "a remote window's own reason the high-resolution filter graph is disabled"},
         {"src/models/RadioModel.cpp", "reportStationAccessoryRefusal",
          "a remote window passes the Core's refusal on to its own pages"},
+        // Addendum G-42 (scoped review): stores the Core's holder test,
+        // whose words are TxRefusals::otherDeviceHolds (scanned there).
+        {"src/models/RadioModel.h", "setOtherDeviceHoldsRefusal",
+         "stores a probe the Core installs, not text"},
+        {"src/models/RadioModel.h", "otherDeviceHoldsRefusal",
+         "returns what that probe says"},
         // transmitSettingsVersion 11: why Disable HF PA is disabled on a
         // radio without the switch, the window's own words.
         {"src/models/RadioModel.cpp", "hfPaSwitchUnavailableReason",
@@ -1469,6 +1485,10 @@ const QList<AppSideReason>& appSideReasons()
          "a remote window's own reason when its Core cannot take the request"},
         {"src/core/session/IStationLink.h", "transmitSettingsUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},
+        // Addendum G-42: the window's own words when the Core gave none for
+        // why this device may not change Extended transmit.
+        {"src/core/session/IStationLink.h", "transmitPermissionReason",
+         "a remote window's own fallback when its Core does not say why it may not transmit"},
         {"src/core/session/IStationLink.h", "filterPolicyUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},
         // R-R3-46 (parity Task 14): HL2 Options' I2C tool and Pin Control,

@@ -937,7 +937,7 @@ change shows as surface drift and as a change to this table.
 | `pairingVersion` | 1 |
 | `stationCatalogVersion` | 1 |
 | `displayExtrasVersion` | 4 |
-| `transmitSettingsVersion` | 11 |
+| `transmitSettingsVersion` | 12 |
 | `bandSelectVersion` | 1 |
 | `meterReadingsVersion` | 1 |
 | `dspInfoVersion` | 1 |
@@ -1329,6 +1329,20 @@ When a feature is off, its version is 0:
   Atlas kit it stays off whatever is saved, and a window shows the box
   disabled with the reason. A window whose Core offers less than 11 shows
   the box disabled with the transmit settings reason.
+  Version 12 (addendum G-42) adds General
+  Options' Extended as the Core's settings key `ExtendedTransmit` ("True" or
+  "False"; absent means off). The Core's transmit gate reads it at every
+  key: while it is "True" the band, filter-edge and US 60 m mode checks are
+  skipped, as Thetis's CheckValidTXFreq returns true while Extended is on
+  (console.cs:6780 [v2.10.3.15]). A `settings.write` or `settings.remove`
+  of it is taken only from a session the station transmit gate permits
+  (otherwise refused with that gate's words, for example "This Core is set
+  to receive only."), never while the radio is on the air ("The radio is
+  on the air. Try again when it stops."), and a write that is neither
+  "True" nor "False" is refused "Extended transmit is either on or off."
+  The Core's value reaches every device as `settings.value`. The older
+  per-device key `ExtendedTxAllowed` stays each app's own
+  (`settings.reject`, as before) and never turns Extended on.
 - `bandSelectVersion`: sent only at agreed minor 11, and 0 on a
   station with no radio model. At 1 the Core takes `slice.selectBand`
   (section 9.1), a device's band button for a slice, for the bands the
@@ -4223,6 +4237,7 @@ computer, never sent). `classifySettingsKey` (`SettingsScope.cpp`) decides:
 | 3. whole key | `audio/DspBlockSize` | station |
 | 3. whole key | `BandPlanName` | station |
 | 3. whole key | `BandPlanRegion` | station |
+| 3. whole key | `ExtendedTransmit` | station |
 | 3. whole key | `Region` | station |
 | 3. whole key | `CWPitch` | station |
 | 3. whole key | `Nr3ModelPath` | station |
@@ -6509,7 +6524,7 @@ sentence. A client shows the sentence as sent and may offer the fix.
 | `notReady` | Update this app to transmit through this Core. | |
 | `notReady` | Pair this device with the Core to transmit through it. | |
 | `stationReceiveOnly` | This Core is set to receive only. | |
-| `bandPlan` | The band plan's own sentence (for example "Frequency outside TX-allowed range"), or "The band plan does not allow transmitting here." | |
+| `bandPlan` | The band plan's own sentence (for example "14.360000 MHz is outside the transmit bands for your region (United States)." or "AM is not allowed on 60 m in the United States."), or "The band plan does not allow transmitting here." | |
 | `interlock` | The radio's transmit inhibit input is holding transmit off. | |
 | `interlock` | The transmit interlock is holding transmit off. Check it in Setup. | |
 | `ampStandby` | The amplifier is in standby. Operate it, or change the interlock in Setup. | `operateAmp` |

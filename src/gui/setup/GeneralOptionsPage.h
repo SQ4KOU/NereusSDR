@@ -1,5 +1,7 @@
 // 2026-09-27: activate the validated Core transmit-region control.
 // J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+// 2026-09-28: Extended is the Core's ExtendedTransmit setting (addendum
+// G-42). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 // src/gui/setup/GeneralOptionsPage.h  (NereusSDR)
 // =================================================================
@@ -156,6 +158,12 @@ private slots:
 private:
     void refreshRegionAvailability();
     bool regionEditAvailable();
+    // Addendum G-42: Extended shows the Core's ExtendedTransmit and is
+    // usable where the Core takes the change (this computer's own radio
+    // off the air, or a Core at transmitSettingsVersion 12 off the air).
+    void refreshExtendedAvailability();
+    bool extendedEditAvailable();
+    void syncExtendedFromSetting();
     bool m_regionSettingsAvailable{false};
     QString m_regionSettingsReason;
     void buildHardwareConfigGroup();

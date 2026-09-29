@@ -58,9 +58,17 @@
 //   2026-09-27: R-R3-49 load round: the presses that set up transmit go
 //               through pressMoxUntilKeyed(). J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-29: addendum G-42: General Options' Extended follows this
+//               window's transmit permission, disabled with the Core's
+//               reason rather than refused after a tick. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29: scoped review: a hosting desktop's own Extended waits
+//               while another device holds transmit. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
+#include <QCheckBox>
 
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -81,6 +89,7 @@
 #include "core/TciBinaryFrame.h"
 #include "core/TciServer.h"
 #include "core/safety/TransmitHolder.h"
+#include "core/safety/TxRefusal.h"
 #include "core/meters/TxMeterPump.h"
 #include "core/safety/TxTimeOutTimer.h"
 #include "core/session/RemoteTransmitClient.h"
@@ -96,6 +105,7 @@
 #include "gui/meters/MeterPoller.h"
 #include "gui/meters/MeterWidget.h"
 #include "gui/containers/ContainerButtonDispatcher.h"
+#include "gui/setup/GeneralOptionsPage.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
@@ -397,6 +407,81 @@ private slots:
         QVERIFY(acceptedOff);
         tx->keepaliveTick();
         QCOMPARE(independentHeartbeats, independentBefore + 1);
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // Addendum G-42: the Core takes an Extended transmit change only from a
+    // window it permits to transmit. The window's box follows that: live
+    // while permitted, and disabled with the Core's own reason while not,
+    // so a tick is never sent to be refused and snap back.
+    void extendedFollowsThisWindowsTransmitPermission()
+    {
+        Test::RemoteAudioSessionHarness h;
+        h.pairWindow = true;
+        h.makeTransmitReady();
+        h.openFakeMicrophoneLine();
+        h.connectSession();
+        QTRY_VERIFY(h.client.capabilities().txPermitted);
+        GeneralOptionsPage page(&h.remote);
+        page.setStationSettingsAvailable(true, QString());
+        auto* extended = page.findChild<QCheckBox*>(QStringLiteral("chkExtended"));
+        QVERIFY(extended != nullptr);
+        QTRY_VERIFY(extended->isEnabled());
+        QCOMPARE(extended->toolTip(), QStringLiteral("Enable extended TX (out of band)"));
+
+        h.server.setRemoteTransmitAllowed(false);
+        QTRY_VERIFY(!h.client.capabilities().txPermitted);
+        QTRY_VERIFY(!extended->isEnabled());
+        QVERIFY(!extended->isHidden());
+        QCOMPARE(extended->toolTip(), QStringLiteral("This Core is set to receive only."));
+        QCOMPARE(extended->accessibleDescription(),
+                 QStringLiteral("This Core is set to receive only."));
+        // A programmatic tick while disabled goes nowhere.
+        extended->setChecked(true);
+        QVERIFY(!extended->isChecked());
+        QVERIFY(!AppSettings::instance().contains(QStringLiteral("ExtendedTransmit")));
+
+        h.server.setRemoteTransmitAllowed(true);
+        QTRY_VERIFY(h.client.capabilities().txPermitted);
+        QTRY_VERIFY(extended->isEnabled());
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // Scoped review (addendum G-42): on a desktop that hosts the Core, the
+    // Core's own window may not change Extended while another device holds
+    // transmit, as the Core refuses that device's peers (the station
+    // transmit gate). The box is disabled with the holder's sentence, and a
+    // programmatic tick changes nothing. It comes back when transmit is
+    // released. No RF: the holder is taken without a key.
+    void hostsOwnExtendedWaitsWhileAnotherDeviceHolds()
+    {
+        Test::RemoteAudioSessionHarness h;
+        h.pairWindow = true;
+        h.makeTransmitReady();
+        h.openFakeMicrophoneLine();
+        h.connectSession();
+        QTRY_VERIFY(h.client.capabilities().txPermitted);
+        QVERIFY(h.station.ownsLocalDsp());
+        AppSettings::instance().remove(QStringLiteral("ExtendedTransmit"));
+        GeneralOptionsPage page(&h.station);
+        auto* extended = page.findChild<QCheckBox*>(QStringLiteral("chkExtended"));
+        QVERIFY(extended != nullptr);
+        QVERIFY(extended->isEnabled());
+
+        TransmitHolder* holder = h.server.transmitHolder();
+        TransmitHolder::KeyRequest take;
+        take.deviceId = QByteArrayLiteral("another-device");
+        QCOMPARE(holder->askKey(take).verdict, KeyingVerdict::Admit);
+        QVERIFY(holder->holder().has_value());
+        const QString held = TxRefusals::otherDeviceHolds(holder->holder()->name).text;
+        QTRY_VERIFY(!extended->isEnabled());
+        QCOMPARE(extended->toolTip(), held);
+        extended->setChecked(true);
+        QVERIFY(!extended->isChecked());
+        QVERIFY(!AppSettings::instance().contains(QStringLiteral("ExtendedTransmit")));
+
+        holder->release(QByteArrayLiteral("another-device"), QStringLiteral("test"));
+        QTRY_VERIFY(extended->isEnabled());
         h.client.disconnectFromStation(QStringLiteral("test complete"));
     }
 

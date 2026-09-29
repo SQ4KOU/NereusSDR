@@ -1,5 +1,10 @@
 // 2026-09-27: activate the validated Core transmit-region control.
 // J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+// 2026-09-28: Extended is the Core's ExtendedTransmit setting (addendum
+// G-42); the old per-computer ExtendedTxAllowed is ignored. J.J. Boyd
+// (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-29: a hosting desktop's Extended waits while another device
+// holds transmit. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 // src/gui/setup/GeneralOptionsPage.cpp  (NereusSDR)
 // =================================================================
@@ -201,7 +206,10 @@ GeneralOptionsPage::GeneralOptionsPage(RadioModel* model, QWidget* parent)
 
     m_regionSettingsAvailable = model && model->ownsLocalDsp();
     if (model) {
-        const auto refresh = [this]() { refreshRegionAvailability(); };
+        const auto refresh = [this]() {
+            refreshRegionAvailability();
+            refreshExtendedAvailability();
+        };
         connect(model, &RadioModel::coreOnAirChanged, this, refresh);
         connect(model, &RadioModel::stationLinkStateChanged, this, refresh);
         connect(model, &RadioModel::transmittingChanged, this, refresh);
@@ -210,6 +218,32 @@ GeneralOptionsPage::GeneralOptionsPage(RadioModel* model, QWidget* parent)
         connect(&model->transmitModel(), &TransmitModel::twoToneActiveChanged, this, refresh);
     }
     refreshRegionAvailability();
+    refreshExtendedAvailability();
+    // Addendum G-42: every device shows the Core's Extended. A remote
+    // window hears the Core's change (stationSettingChanged, empty for a
+    // whole snapshot) and its own refused write; the Core's own page hears
+    // a device's change it took (transmitGateSettingChanged).
+    if (model) {
+        const auto follow = [this](const QString& key) {
+            if (key.isEmpty() || key == QLatin1String(RadioModel::kExtendedTransmitKey)) {
+                syncExtendedFromSetting();
+                refreshExtendedAvailability();
+            }
+        };
+        connect(model, &RadioModel::stationSettingChanged, this, follow);
+        connect(model, &RadioModel::transmitGateSettingChanged, this, follow);
+        connect(model, &RadioModel::transmitHolderChanged, this,
+                [this]() { refreshExtendedAvailability(); });
+    }
+    if (auto* proxy = dynamic_cast<SettingsProxy*>(AppSettings::instance().remoteBackend())) {
+        connect(proxy, &SettingsProxy::valueRejected, this,
+                [this](const QString& key, const QVariant&) {
+            if (key == QLatin1String(RadioModel::kExtendedTransmitKey)) {
+                syncExtendedFromSetting();
+                refreshExtendedAvailability();
+            }
+        });
+    }
 
     // Task 16: the Receive Only checkbox follows the model's receive-only
     // state (Thetis console.RXOnly keeps SetupForm.RXOnly in step,
@@ -258,6 +292,7 @@ void GeneralOptionsPage::setStationSettingsAvailable(bool available, const QStri
 {
     m_regionSettingsAvailable = available;
     m_regionSettingsReason = reason;
+    refreshExtendedAvailability();
     // R-R3-49: the Network Watchdog is the Core's setting too; so is
     // Receive Only (Task 16). The radio-has-no-transmitter lock sits on top
     // of the Core's gate, so it is taken off first and put back after.
@@ -299,6 +334,58 @@ void GeneralOptionsPage::refreshRegionAvailability()
     }
     m_comboFRSRegion->setToolTip(enabled ? tr("Select Region for your location") : reason);
     m_comboFRSRegion->setAccessibleDescription(reason);
+}
+
+bool GeneralOptionsPage::extendedEditAvailable()
+{
+    const RadioModel* radio = model();
+    if (!radio || !m_regionSettingsAvailable) { return false; }
+    // Scoped review: a desktop hosting the Core waits, as the Core's other
+    // devices do, while another device holds transmit.
+    if (radio->ownsLocalDsp()) {
+        return !radio->stationOnAirRefusal(nullptr) && radio->otherDeviceHoldsRefusal().isEmpty();
+    }
+    const IStationLink* link = radio->stationLink();
+    // The Core takes the change only from a device it permits to transmit,
+    // so without that the box is disabled rather than refused after a tick.
+    return link && link->transmitSettingsAvailable(12) && link->transmitSettingsPermitted()
+        && !radio->isCoreOnAir();
+}
+
+void GeneralOptionsPage::syncExtendedFromSetting()
+{
+    if (!m_chkExtended) { return; }
+    const QSignalBlocker blocked(m_chkExtended);
+    m_chkExtended->setChecked(RadioModel::extendedTransmitSetting());
+}
+
+void GeneralOptionsPage::refreshExtendedAvailability()
+{
+    if (!m_chkExtended) { return; }
+    const bool enabled = extendedEditAvailable();
+    m_chkExtended->setEnabled(enabled);
+    QString reason;
+    if (!enabled) {
+        const RadioModel* radio = model();
+        const bool onAir = radio && (radio->ownsLocalDsp()
+            ? radio->stationOnAirRefusal(nullptr) : radio->isCoreOnAir());
+        const IStationLink* link = radio ? radio->stationLink() : nullptr;
+        const bool olderCore = radio && !radio->ownsLocalDsp() && m_regionSettingsAvailable
+            && link && !link->transmitSettingsAvailable(12);
+        const bool notPermitted = radio && !radio->ownsLocalDsp() && link
+            && !link->transmitSettingsPermitted();
+        reason = !m_regionSettingsAvailable && !m_regionSettingsReason.isEmpty()
+            ? m_regionSettingsReason
+            : onAir ? RadioModel::onAirReason()
+            : radio && radio->ownsLocalDsp() && !radio->otherDeviceHoldsRefusal().isEmpty()
+              ? radio->otherDeviceHoldsRefusal()
+            : olderCore ? tr("This Core does not have Extended transmit. Update the Core to use it.")
+            : notPermitted ? link->transmitPermissionReason()
+            : tr("Extended transmit is not available on this Core.");
+    }
+    // From Thetis setup.designer.cs:8121 [v2.10.3.15] (the enabled tooltip).
+    m_chkExtended->setToolTip(enabled ? tr("Enable extended TX (out of band)") : reason);
+    m_chkExtended->setAccessibleDescription(reason);
 }
 
 QString GeneralOptionsPage::timeOutNeedsNewerCoreText()
@@ -502,15 +589,28 @@ void GeneralOptionsPage::buildHardwareConfigGroup()
     m_chkExtended = new QCheckBox(tr("Extended"), group);
     m_chkExtended->setObjectName(QStringLiteral("chkExtended"));
     m_chkExtended->setProperty("nereusSetupId", "general.options.extended");
-    m_chkExtended->setToolTip(QStringLiteral("Enable extended TX (out of band)"));
     m_chkExtended->setEnabled(false);
-    m_chkExtended->setToolTip(tr("Extended transmit is not available on this Core."));
-    // The current Core gate passes extended=false. A stale saved true must
-    // not appear effective or be silently activated by a future migration.
-    m_chkExtended->setChecked(false);
-    connect(m_chkExtended, &QCheckBox::toggled, this, [](bool on) {
-        AppSettings::instance().setValue(QStringLiteral("ExtendedTxAllowed"),
+    // Addendum G-42 (JJ's ruling 2026-09-28): the box shows and changes
+    // the Core's ExtendedTransmit, which the Core's transmit gate reads.
+    // The old per-computer ExtendedTxAllowed is never read, so a stale
+    // saved tick neither shows nor turns Extended on.
+    syncExtendedFromSetting();
+    connect(m_chkExtended, &QCheckBox::toggled, this, [this](bool on) {
+        if (!extendedEditAvailable()) {
+            syncExtendedFromSetting();
+            refreshExtendedAvailability();
+            return;
+        }
+        // From Thetis setup.cs:19251-19260 [v2.10.3.15] (ChkExtended_CheckedChanged):
+        //   console.Extended = chkExtended.Checked;
+        // Its //MW0LGE_21d BandStackManager.RegionReset() has no NereusSDR
+        // counterpart: the band stack does not follow the region.
+        AppSettings::instance().setValue(QString::fromLatin1(RadioModel::kExtendedTransmitKey),
                                           on ? QStringLiteral("True") : QStringLiteral("False"));
+        if (RadioModel* radio = model()) {
+            radio->reportTransmitGateSettingChanged(
+                QString::fromLatin1(RadioModel::kExtendedTransmitKey));
+        }
     });
     vbox->addWidget(m_chkExtended);
 

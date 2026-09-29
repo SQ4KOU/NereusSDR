@@ -735,6 +735,22 @@ Thetis only enables ADC0 on every board; NereusSDR offers two ADCs on boards tha
   the absent-producer classifications under G-21;
   the alleged missing TX-inhibit reader was a false positive, since production
   `attachRadioInput` is wired.
+- Ruling (JJ, 2026-09-28 night): Extended transmit is one Core-owned station
+  setting, default off; any old saved `ExtendedTxAllowed` is ignored and never
+  turns it on; changing it needs transmit permission and is refused while anyone
+  is transmitting; every device shows the same state. "Prevent TX on a different
+  band" becomes a Core setting too, default off; the Thetis filter-edge check
+  stays; every refusal gives a plain reason on every device.
+- Settings migration (Extended): the Core's setting is a new key,
+  `ExtendedTransmit` (`SettingsScope::Station`, "True"/"False", absent = off),
+  read by `RadioModel::installBandPlanMoxCheck` at every key. The old
+  `ExtendedTxAllowed` stays `OperatorLocal`, is never read and is not copied
+  forward on any computer or Core, so the operator ticks Extended again. A
+  device's write or removal needs the station transmit gate's permission and is
+  refused on the air; `transmitSettingsVersion` 12 offers it and General
+  Options' Extended box (local window, remote window, phone Setup description)
+  shows and changes the Core's value. No transverter transmit path exists yet,
+  so Thetis's `tx_xvtr_index > -1` bypass has no counterpart.
 - Plan: remote-window parity Setup and transmit gate safety.
 
 ### G-43: Transmit frequency guard omits XIT offset

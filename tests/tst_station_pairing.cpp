@@ -63,6 +63,12 @@
 //                                    recordStreamVersion and the record
 //                                    streams. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  thePeerRefusesAWrongCode: the retry
+//                                    wait is checked inside the product's
+//                                    window less the exchange's own time,
+//                                    not as an exact 5000 (failed at load
+//                                    35 with 4999). AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -1557,9 +1563,20 @@ private slots:
         parts[1] = words.at((words.indexOf(parts.at(1)) + 1) % words.size());
         Device device;
         DeviceSide side(device);
+        // The next code follows kFirstRetryMs after the burn, and the peer
+        // reports what is left of that wait when it answers. The peer is
+        // another process, so there is no clock to hold still: the answer
+        // is inside the window the product promises, less no more than the
+        // time this exchange took (a loaded machine lets milliseconds pass).
+        QElapsedTimer exchange;
+        exchange.start();
         const Outcome outcome = side.code(link, parts.join(QLatin1Char('-')));
+        const qint64 took = exchange.elapsed();
         verifyPlainRefusal(outcome);
-        QCOMPARE(outcome.retryAfterMs, qint64(5000));
+        QVERIFY2(outcome.retryAfterMs <= PairingWindow::kFirstRetryMs
+                     && outcome.retryAfterMs >= PairingWindow::kFirstRetryMs - took,
+                 qPrintable(QStringLiteral("retryAfterMs %1, exchange took %2 ms")
+                                .arg(outcome.retryAfterMs).arg(took)));
         QVERIFY(link.ended());
         QCOMPARE(link.done().value(QStringLiteral("paired")).toBool(true), false);
     }
