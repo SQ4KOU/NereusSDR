@@ -1,6 +1,9 @@
 // Modification history (NereusSDR):
 // 2026-09-27: Cover queued and synchronous final connection closure.
 // J.J. Boyd (KG4VCF), AI-assisted implementation via OpenAI Codex.
+// 2026-09-29: Pin that a remote window logs no schema skew from the
+// current Core and that every feature-gate row names a real property.
+// J.J. Boyd (KG4VCF), AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 // tests/tst_station_session.cpp  (NereusSDR)
 // =================================================================
@@ -104,6 +107,10 @@
 #include "core/IoBoardHl2.h"
 #include "core/IoBoardHl2Facade.h"
 #include "core/session/MirrorPolicy.h"
+#include "core/session/MirrorSchema.h"
+#include "core/session/StationDevicesFacade.h"
+#include "models/SliceModel.h"
+#include "models/TransmitModel.h"
 #include "core/accessories/AlexAntennaFacade.h"
 #include "core/accessories/AlexController.h"
 #include "gui/setup/HardwarePage.h"
@@ -359,6 +366,8 @@ private slots:
     void clientKeepsRadioDiagnosticsOnlyWhenNegotiated_data();
     void clientKeepsRadioDiagnosticsOnlyWhenNegotiated();
     void nnrLimitReachesMinorElevenPeerAndTryAgainClearsIt();
+    void featureGatesNameRealProperties();
+    void remoteWindowSeesNoSchemaSkewFromTheCurrentCore();
     void nnrLimitIsOmittedForMinorTenPeer();
     void minorTenWriteThatClearsTheLimitCarriesNoNnrLimit();
     void minorTenPeerReadsWhyInNnrStatus();
@@ -1337,6 +1346,104 @@ void TstStationSession::nnrLimitReachesMinorElevenPeerAndTryAgainClearsIt()
                    && line.contains(QStringLiteral("nnr"))), qPrintable(line));
     }
     client.disconnectFromStation(QStringLiteral("nnr limit complete"));
+}
+
+// Every row of MirrorPolicy::featureGates names a property its class still
+// declares, so the remote window's schema comparison skips a real name and a
+// renamed property cannot leave a stale row behind.
+void TstStationSession::featureGatesNameRealProperties()
+{
+    const QHash<QByteArray, const QMetaObject*> classes{
+        { QByteArrayLiteral("TransmitModel"), &TransmitModel::staticMetaObject },
+        { QByteArrayLiteral("SliceModel"), &SliceModel::staticMetaObject },
+        { QByteArrayLiteral("RadioModel"), &RadioModel::staticMetaObject },
+        { QByteArrayLiteral("StationDevicesFacade"), &StationDevicesFacade::staticMetaObject },
+    };
+    QVERIFY(!MirrorPolicy::featureGates().isEmpty());
+    for (const MirrorPolicy::FeatureGate& gate : MirrorPolicy::featureGates()) {
+        const QByteArray className(gate.className);
+        QVERIFY2(classes.contains(className), gate.className);
+        bool declared = false;
+        for (const MirrorProperty& prop :
+             MirrorSchema::forMetaObject(classes.value(className)).properties()) {
+            declared = declared || prop.name == gate.property;
+        }
+        QVERIFY2(declared, qPrintable(className + '.' + gate.property));
+        QVERIFY(MirrorPolicy::featureGateFor(className, QByteArray(gate.property)) == &gate);
+        QVERIFY(gate.minVersion >= 1);
+    }
+}
+
+// The Core leaves a feature-gated property (MirrorPolicy::featureGates) out
+// for a window whose hello did not declare its feature. The desktop remote
+// window declares only radeStatus of them, so its schema comparison must
+// not count the other absences as skew: after the whole snapshot it logs no
+// schema skew and both skew sets are empty.
+void TstStationSession::remoteWindowSeesNoSchemaSkewFromTheCurrentCore()
+{
+    QTemporaryDir settingsDir;
+    AppSettings settings(settingsDir.filePath(QStringLiteral("no-skew.settings")));
+    auto model = makeStationRadioModel(0);
+    QVERIFY(!model->slices().isEmpty());
+    const int sliceId = model->slices().first()->sliceIndex();
+    StationServer server(model.get(), settings,
+                         NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
+    RadioModel remote(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&remote, &proxy);
+    QStringList lines;
+    LogCapture capture(&lines);
+    auto* station = new LoopbackTransport(QStringLiteral("no-skew-station"), this);
+    auto* peer = new LoopbackTransport(QStringLiteral("no-skew-client"), this);
+    station->linkTo(peer);
+    client.startSession(peer, server.token());
+    server.acceptTransport(station);
+    QTRY_VERIFY(client.stationLinkReady());
+    QTRY_VERIFY(remote.sliceById(sliceId) != nullptr);
+    QTRY_VERIFY(client.mirroredObject(QByteArrayLiteral("transmit")) != nullptr);
+    QTest::qWait(200);
+
+    // The gated properties of features this window did not declare really
+    // were left out of what it received, so the comparison below exercised
+    // the gate rather than passing vacuously. The one gated feature it
+    // declares (radeStatus: its VFO flag's RADE row) arrives.
+    const QSet<QByteArray> declaredGatedFeatures{QByteArrayLiteral("radeStatus")};
+    QSet<QByteArray> arrivedGatedFeatures;
+    bool sawTransmitSchema = false;
+    for (const QByteArray& wire : peer->received()) {
+        const SessionMessage message = decodeOrFail(wire);
+        if (message.kind != SessionMessageKind::Schema) {
+            continue;
+        }
+        for (const MirrorPolicy::FeatureGate& gate : MirrorPolicy::featureGates()) {
+            if (MirrorSchema::shortClassName(message.className) != gate.className) {
+                continue;
+            }
+            for (const SessionSchemaField& field : message.fields) {
+                if (field.name != gate.property) {
+                    continue;
+                }
+                QVERIFY2(declaredGatedFeatures.contains(QByteArray(gate.feature)),
+                         qPrintable(QByteArray(gate.className) + '.' + gate.property));
+                arrivedGatedFeatures.insert(QByteArray(gate.feature));
+            }
+        }
+        sawTransmitSchema = sawTransmitSchema
+            || MirrorSchema::shortClassName(message.className) == "TransmitModel";
+    }
+    QVERIFY(sawTransmitSchema);
+    QCOMPARE(arrivedGatedFeatures, declaredGatedFeatures);
+
+    QVERIFY2(client.schemaNamesOnlyLocal().isEmpty(),
+             qPrintable(QStringList(client.schemaNamesOnlyLocal().cbegin(),
+                                    client.schemaNamesOnlyLocal().cend()).join(u' ')));
+    QVERIFY2(client.schemaNamesOnlyOnStation().isEmpty(),
+             qPrintable(QStringList(client.schemaNamesOnlyOnStation().cbegin(),
+                                    client.schemaNamesOnlyOnStation().cend()).join(u' ')));
+    for (const QString& line : std::as_const(lines)) {
+        QVERIFY2(!line.contains(QStringLiteral("schema skew")), qPrintable(line));
+    }
+    client.disconnectFromStation(QStringLiteral("no skew complete"));
 }
 
 // A minor-10 GUI never sees nnrLimit (schema, object, delta), so it has
