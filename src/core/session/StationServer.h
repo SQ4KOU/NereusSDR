@@ -1705,6 +1705,10 @@ private:
     /// Rulings 4.11, 4.12: a device's slices when its 180 s end or it
     /// leaves (a token window: when its session ends).
     void releaseDeviceSlices(const QByteArray& deviceId);
+    /// Slice control fix wave (Important 2): `deviceId` leaves every slice
+    /// it listens to without controlling (revoke, leave, the end of its
+    /// 180 s); a slice nobody is on afterwards closes.
+    void leaveListenedSlices(const QByteArray& deviceId);
     /// Fix wave 2: at the end of an away device's 180 s, the slices other
     /// devices took from it (kept by its waiting Take it back notices) are
     /// saved in its DeviceLayoutStore, so its next admission restores them.

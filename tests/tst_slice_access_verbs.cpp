@@ -827,6 +827,118 @@ private slots:
         QVERIFY(!mox->isMox());
     }
 
+    // ── Leaving the Core (fix wave, Important 2) ────────────────────────
+    // A device that leaves, is revoked or stays away past its 180 s stops
+    // listening too. A slice kept only for it closes, with its receiver.
+
+    // A and B on the Core: A controls A0 and A1, B listens to both, then A
+    // releases A0, which stays for B alone. Returns A0's receiver stream.
+    int listenerKeepsAReleasedSlice(Core& core, const Device& a, const Device& b,
+                                    LoopbackTransport** appA, LoopbackTransport** appB)
+    {
+        core.model->configureStreamPool(5, 5, 192000);
+        core.model->sliceById(0)->setFrequency(14200000.0);
+        *appA = core.signIn(a, kShares);
+        if (!admitted(*appA)) {
+            return -1;
+        }
+        const QJsonObject added = core.invoke(*appA, "addSlice", {utf8("initialPanId", QString())});
+        if (!accepted(added)) {
+            return -1;
+        }
+        core.model->sliceById(0)->setFrequency(7074000.0);
+        *appB = core.signIn(b, kShares);
+        if (!admitted(*appB)) {
+            return -1;
+        }
+        const bool seen = QTest::qWaitFor(
+            [&]() { return holds(*appB, accessKey(0)) && holds(*appB, accessKey(1)); }, 5000);
+        if (!seen
+            || !accepted(core.invoke(*appB, "slice.listen", refArgs(seenBy(*appB, 0))))
+            || !accepted(core.invoke(*appB, "slice.listen", refArgs(seenBy(*appB, 1))))
+            || !accepted(core.invoke(*appA, "slice.release", revisionArgs(seenBy(*appA, 0))))) {
+            return -1;
+        }
+        return core.model->sliceById(0)->streamIndex();
+    }
+
+    void aDeviceThatLeavesStopsListening()
+    {
+        Core core;
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = nullptr;
+        LoopbackTransport* appB = nullptr;
+        const int stream = listenerKeepsAReleasedSlice(core, a, b, &appA, &appB);
+        QVERIFY(stream >= 0);
+        const SliceOwnership* ownership = core.model->sliceOwnership();
+        QVERIFY(ownership->mark(0).owner.isEmpty());
+        QCOMPARE(ownership->listenersOf(0), QList<QByteArray>{b.key.fingerprint()});
+        QCOMPARE(ownership->listenersOf(1),
+                 (QList<QByteArray>{a.key.fingerprint(), b.key.fingerprint()}));
+
+        QVERIFY(accepted(core.invoke(appB, "session.leave")));
+        QTRY_VERIFY(!appB->isOpen());
+        // A0 was kept only for B: it closes, and its receiver is free.
+        QTRY_VERIFY(core.model->sliceById(0) == nullptr);
+        QVERIFY(!core.model->streamAllocator().isStreamActive(stream));
+        // A1 stays A's, with B gone from it.
+        QCOMPARE(ownership->listenersOf(1), QList<QByteArray>{a.key.fingerprint()});
+        QVERIFY(ownership->joinedBy(b.key.fingerprint()).isEmpty());
+    }
+
+    void aDeviceAwayPastItsGraceStopsListening()
+    {
+        Core core;
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = nullptr;
+        LoopbackTransport* appB = nullptr;
+        const int stream = listenerKeepsAReleasedSlice(core, a, b, &appA, &appB);
+        QVERIFY(stream >= 0);
+        const SliceOwnership* ownership = core.model->sliceOwnership();
+
+        appB->closeLink(QStringLiteral("lost"));
+        QTRY_VERIFY(core.sessions().entry(b.key.fingerprint()).has_value()
+                    && core.sessions().entry(b.key.fingerprint())->state
+                        == DeviceSessionRegistry::State::Away);
+        // Away within its 180 s: still listening.
+        QCOMPARE(ownership->listenersOf(0), QList<QByteArray>{b.key.fingerprint()});
+        QVERIFY(core.model->sliceById(0) != nullptr);
+
+        core.now += DeviceSessionRegistry::kGraceMs + 1;
+        core.sessions().expireAway();
+        QTRY_VERIFY(core.model->sliceById(0) == nullptr);
+        QVERIFY(!core.model->streamAllocator().isStreamActive(stream));
+        QCOMPARE(ownership->listenersOf(1), QList<QByteArray>{a.key.fingerprint()});
+        QVERIFY(ownership->joinedBy(b.key.fingerprint()).isEmpty());
+    }
+
+    void aRevokedDeviceStopsListening()
+    {
+        Core core;
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = nullptr;
+        LoopbackTransport* appB = nullptr;
+        const int stream = listenerKeepsAReleasedSlice(core, a, b, &appA, &appB);
+        QVERIFY(stream >= 0);
+        const SliceOwnership* ownership = core.model->sliceOwnership();
+
+        const QJsonObject revoked = core.invoke(appA, "devices.revoke", {utf8("id", b.id())});
+        QVERIFY2(accepted(revoked), qPrintable(reasonOf(revoked)));
+        QTRY_VERIFY(core.model->sliceById(0) == nullptr);
+        QVERIFY(!core.model->streamAllocator().isStreamActive(stream));
+        QCOMPARE(ownership->listenersOf(1), QList<QByteArray>{a.key.fingerprint()});
+        QVERIFY(ownership->joinedBy(b.key.fingerprint()).isEmpty());
+    }
+
     // ── Release ──────────────────────────────────────────────────────────
 
     void aReleasedSliceStaysForItsListenerWhoIsNotGivenControl()

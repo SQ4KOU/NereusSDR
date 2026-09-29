@@ -640,8 +640,10 @@
 //   2026-09-28: slice control fix wave for the Tasks 1-4 review: a slice a
 //               transmit move waits to land on counts as transmitting, and
 //               a change of control clears the transmit selection of any
-//               holder whose flag is on the slice. J.J. Boyd (KG4VCF), with
-//               AI-assisted implementation via Anthropic Claude Code.
+//               holder whose flag is on the slice; a device that leaves,
+//               is revoked or stays away past its 180 s stops listening,
+//               and a slice kept only for it closes. J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -2029,6 +2031,9 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
                     ownership->leave(id, sliceId);
                 }
             }
+            // Slice control fix wave (Important 2): and the slices it only
+            // listened to.
+            leaveListenedSlices(id);
         }
         DeviceLayoutStore::forgetDevice(AppSettings::instance(), id);
         m_slicesNotRestored.remove(id);
@@ -8103,7 +8108,39 @@ void StationServer::releaseDeviceSlices(const QByteArray& deviceId)
         }
         if (!self) return;
     }
+    // Slice control fix wave (Important 2): a device gone for good (it
+    // left, or its 180 s ended) stops listening to the slices it did not
+    // control, so none is kept, receiver and all, for a listener that is
+    // not there.
+    leaveListenedSlices(deviceId);
+    if (!self) return;
     m_connectedDevices->refresh();
+}
+
+void StationServer::leaveListenedSlices(const QByteArray& deviceId)
+{
+    const QPointer<StationServer> self(this);
+    if (m_radioModel.isNull() || deviceId.isEmpty()) {
+        return;
+    }
+    SliceOwnership* ownership = m_radioModel->sliceOwnership();
+    const QList<int> joined = ownership->joinedBy(deviceId);
+    for (int sliceId : joined) {
+        const SliceOwnership::Mark mark = ownership->mark(sliceId);
+        // Its own slices (controlled, or held for it) are the caller's.
+        if (mark.owner == deviceId || mark.heldFor == deviceId) {
+            continue;
+        }
+        ownership->leave(deviceId, sliceId);
+        if (!self || !m_radioModel) return;
+        // A slice nobody is on any more closes, as a stop listening leaves
+        // it (the Core's last slice stays).
+        if (ownership->isLive(sliceId) && ownership->mark(sliceId).owner.isEmpty()
+            && ownership->listenersOf(sliceId).isEmpty()) {
+            closeSliceNobodyIsOn(sliceId);
+            if (!self || !m_radioModel) return;
+        }
+    }
 }
 
 void StationServer::onSliceOwnerChanged(int sliceId, const QByteArray& oldOwner,
