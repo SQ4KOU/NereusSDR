@@ -28,6 +28,10 @@
 //                                    the wire and works the same one out of
 //                                    txEqParaEqData. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  R-IOS-13 / R-R3-49 (JJ's TX EQ
+//                                    ruling): the TX EQ group is taken on
+//                                    the air; the other groups still wait.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -627,6 +631,10 @@ void TstRemoteTxEqCfc::levelerAndAlcRoundTrip()
     QCOMPARE(s.txChannel.lastTxAlcDecayMsForTest(), 25);
 }
 
+// JJ's TX EQ ruling (2026-09-28): the TX EQ dialog's settings are taken on
+// the air, as a local window changes them while transmitting; CFC, the
+// phase rotator, CESSB, the leveler and ALC still wait for the radio to
+// stop.
 void TstRemoteTxEqCfc::eachGroupIsRefusedOnTheAir()
 {
     Session s(m_securityDir.path(), this);
@@ -636,20 +644,49 @@ void TstRemoteTxEqCfc::eachGroupIsRefusedOnTheAir()
     s.keyCore();
     QTRY_VERIFY(s.window.isCoreOnAir());
 
-    const struct {
+    struct Write {
         QByteArray name;
         MirrorWireKind kind;
         QVariant value;
-    } writes[] = {
-        {"txEqUseLegacy", MirrorWireKind::Bool, false},
-        {"txEqPreamp", MirrorWireKind::Int64, 5},
+    };
+    const QString curve = ParaEqEnvelope::encode(QStringLiteral(
+        "{\"band_count\":5,\"frequency_max_hz\":3000,\"frequency_min_hz\":50,"
+        "\"global_gain_db\":-2.5,\"parametric_eq\":true,\"points\":["
+        "{\"frequency_hz\":50,\"gain_db\":-6,\"q\":1.5},{\"frequency_hz\":300,\"gain_db\":3,\"q\":2},"
+        "{\"frequency_hz\":1200,\"gain_db\":-1.5,\"q\":4},{\"frequency_hz\":2400,\"gain_db\":4,\"q\":3},"
+        "{\"frequency_hz\":3000,\"gain_db\":0,\"q\":1}]}"));
+    const Write taken[] = {
+        {"txEqEnabled", MirrorWireKind::Bool, !coreTx.txEqEnabled()},
+        {"txEqUseLegacy", MirrorWireKind::Bool, !coreTx.txEqUseLegacy()},
+        {"txEqPreamp", MirrorWireKind::Int64, coreTx.txEqPreamp() == 5 ? 6 : 5},
         {"txEqBandsJson", MirrorWireKind::Utf8, QStringLiteral("[1,1,1,1,1,1,1,1,1,1]")},
         {"txEqFreqsJson", MirrorWireKind::Utf8, QStringLiteral("[20,63,125,250,500,1000,2000,4000,8000,16000]")},
-        {"txEqNc", MirrorWireKind::Int64, 1024},
-        {"txEqMp", MirrorWireKind::Bool, true},
-        {"txEqCtfmode", MirrorWireKind::Int64, 1},
-        {"txEqWintype", MirrorWireKind::Int64, 1},
-        {"txEqParaEqData", MirrorWireKind::Utf8, QStringLiteral("x")},
+        {"txEqNc", MirrorWireKind::Int64, coreTx.txEqNc() == 1024 ? 2048 : 1024},
+        {"txEqMp", MirrorWireKind::Bool, !coreTx.txEqMp()},
+        {"txEqCtfmode", MirrorWireKind::Int64, coreTx.txEqCtfmode() == 1 ? 0 : 1},
+        {"txEqWintype", MirrorWireKind::Int64, coreTx.txEqWintype() == 1 ? 0 : 1},
+        {"txEqParaEqData", MirrorWireKind::Utf8, curve},
+    };
+    for (const Write& w : taken) {
+        const SessionPropertyResult r = s.writeTransmit(w.name, w.kind, w.value);
+        QVERIFY2(r.accepted, qPrintable(QString::fromUtf8(w.name) + QStringLiteral(": ") + r.reason));
+    }
+    QCOMPARE(coreTx.txEqParaEqData(), curve);
+    QCOMPARE(coreTx.txEqBand(0), 1);
+    // An unreadable curve is still refused for what it is, not for the air.
+    {
+        const SessionPropertyResult r =
+            s.writeTransmit("txEqParaEqData", MirrorWireKind::Utf8, QStringLiteral("x"));
+        QVERIFY(!r.accepted);
+        QVERIFY(r.reason != kOnAir);
+        QCOMPARE(coreTx.txEqParaEqData(), curve);
+    }
+    // The window's own change reaches the Core on the air.
+    const int band = coreTx.txEqBand(2);
+    windowTx.setTxEqBand(2, band == 5 ? 6 : 5);
+    QTRY_COMPARE(coreTx.txEqBand(2), band == 5 ? 6 : 5);
+
+    const Write refused[] = {
         {"cfcCompressionJson", MirrorWireKind::Utf8, QStringLiteral("[1,1,1,1,1,1,1,1,1,1]")},
         {"cfcEqFreqJson", MirrorWireKind::Utf8, QStringLiteral("[1,2,3,4,5,6,7,8,9,10]")},
         {"cfcPostEqBandGainJson", MirrorWireKind::Utf8, QStringLiteral("[1,1,1,1,1,1,1,1,1,1]")},
@@ -667,7 +704,7 @@ void TstRemoteTxEqCfc::eachGroupIsRefusedOnTheAir()
         {"txAlcMaxGain", MirrorWireKind::Int64, 60},
         {"txAlcDecay", MirrorWireKind::Int64, 30},
     };
-    for (const auto& w : writes) {
+    for (const Write& w : refused) {
         const QVariant before = coreTx.property(w.name.constData());
         const SessionPropertyResult r = s.writeTransmit(w.name, w.kind, w.value);
         QVERIFY2(!r.accepted, w.name.constData());
@@ -675,9 +712,6 @@ void TstRemoteTxEqCfc::eachGroupIsRefusedOnTheAir()
         QCOMPARE(coreTx.property(w.name.constData()), before);
     }
     // The window's own change settles back on the Core's value.
-    const int band = coreTx.txEqBand(2);
-    windowTx.setTxEqBand(2, band == 5 ? 6 : 5);
-    QTRY_COMPARE(windowTx.txEqBand(2), band);
     const int stages = coreTx.phaseRotatorStages();
     windowTx.setPhaseRotatorStages(stages == 3 ? 4 : 3);
     QTRY_COMPARE(windowTx.phaseRotatorStages(), stages);

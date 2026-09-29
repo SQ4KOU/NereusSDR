@@ -10,6 +10,10 @@
 //   2026-09-28  J.J. Boyd / KG4VCF  Created (R-IOS-13 / R-R3-49,
 //                                    txEqCurveVersion 2). AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  JJ's TX EQ ruling: the curve is taken
+//                                    while the radio is on the air; RF
+//                                    Power still waits. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -26,6 +30,7 @@
 #include "core/AppSettings.h"
 #include "core/ConnectionState.h"
 #include "core/HardwareProfile.h"
+#include "core/MoxController.h"
 #include "core/ParaEqCurve.h"
 #include "core/ParaEqEnvelope.h"
 #include "core/session/SessionMessages.h"
@@ -402,6 +407,50 @@ private slots:
         }, 3000));
         QCOMPARE(result.reason, writeReason);
         QCOMPARE(m_core->transmitModel().txEqParaEqData(), before);
+    }
+
+    // JJ's TX EQ ruling (2026-09-28): a local window changes the TX EQ
+    // while transmitting, so the Core takes the curve on the air too, from
+    // a device it takes transmit settings from; RF Power still waits.
+    void theCurveIsTakenOnTheAir()
+    {
+        Device phone(m_server.get(), this, {{"txEqCurve", 2}});
+        QVERIFY(phone.ready());
+        MoxController* const mox = m_core->moxController();
+        QVERIFY(mox);
+        mox->setMoxCheck({});
+        mox->setMox(true);
+        QTRY_VERIFY(mox->state() == MoxState::Tx);
+
+        const SessionMessage set = phone.setCurve(kWorkedSent);
+        QVERIFY2(set.accepted, qPrintable(set.reason));
+        QCOMPARE(m_core->transmitModel().txEqCurve(), kWorked);
+        const SessionMessage reset = phone.invoke(QByteArrayLiteral("txEq.resetCurve"), {});
+        QVERIFY2(reset.accepted, qPrintable(reset.reason));
+        QCOMPARE(m_core->transmitModel().txEqCurve(), kWorkedReset);
+
+        const int power = m_core->transmitModel().power();
+        const quint32 writeId = 4343;
+        phone.app->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
+            QByteArrayLiteral("transmit"),
+            {MirrorUpdate{1, "power", MirrorWireKind::Int64,
+                          QVariant(qlonglong(power == 21 ? 22 : 21))}},
+            writeId)));
+        QString reason;
+        QVERIFY(QTest::qWaitFor([&]() {
+            for (const SessionMessage& message : phone.messages()) {
+                if (message.kind == SessionMessageKind::PropertyResult
+                    && message.writeId == writeId && !message.propertyResults.isEmpty()) {
+                    reason = message.propertyResults.first().reason;
+                    return true;
+                }
+            }
+            return false;
+        }, 3000));
+        QCOMPARE(reason, QStringLiteral("The radio is on the air. Try again when it stops."));
+        QCOMPARE(m_core->transmitModel().power(), power);
+        mox->setMox(false);
+        QTRY_VERIFY(mox->state() == MoxState::Rx);
     }
 
 private:

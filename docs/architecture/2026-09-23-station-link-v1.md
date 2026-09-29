@@ -1153,7 +1153,10 @@ When a feature is off, its version is 0:
   `phaseRotatorEnabled`, `phaseRotatorFreqHz`, `phaseRotatorStages`,
   `phaseReverseEnabled`, `cessbOn`, `txLevelerMaxGain`, `txLevelerDecay`,
   `txAlcMaxGain` and `txAlcDecay`, each refused outside its range and a
-  band array refused whole (section 7.3). At 5 it also covers Setup >
+  band array refused whole (section 7.3). The TX EQ dialog's settings
+  (`txEqEnabled` and the nine `txEq` properties above) are taken on the
+  air too, as a local window changes them while transmitting (section
+  7.3). At 5 it also covers Setup >
   Transmit > Power, Transmit > DEXP/VOX and Test > Two-Tone IMD: on
   `transmit`, `tuneDrivePowerSource` becomes two-way, and
   `powerByBandJson`, `tunePowerByBandJson`, `dexpAttackTimeMs`,
@@ -3186,8 +3189,8 @@ empty or unreadable the dialog holds the defaults above (ten points, 0 to
 Each is that peer's own write of `txEqParaEqData` (section 7.3), under
 every rule such a write meets: a receive-only Core takes it from a peer
 offered `transmitSettingsVersion`; a Core that allows remote transmit takes
-it from a session permitted to transmit; the on-air rules for `transmit`
-writes apply; it never keys. A refused write is refused with that write's
+it from a session permitted to transmit; like the local dialog's edits it
+is taken while the radio is on the air (section 7.3); it never keys. A refused write is refused with that write's
 reason ("The radio is on the air. Try again when it stops.", "Transmit
 configuration is unavailable on this receive-only Core.", or the transmit
 gate's words). A taken one is followed first by the side-effect `delta`
@@ -3224,7 +3227,11 @@ configuration is unavailable on this receive-only Core."), any
 `transmit` property on a receive-only station from a peer below agreed
 minor 11 (it was never offered `transmitSettingsVersion`; the same
 reason), any other `transmit` property on a receive-only station while
-its radio is on the air ("The radio is on the air. Try again when it stops.": keyed through
+its radio is on the air, except the TX EQ dialog's settings (`txEqEnabled`,
+`txEqUseLegacy`, `txEqPreamp`, `txEqBandsJson`, `txEqFreqsJson`, `txEqNc`,
+`txEqMp`, `txEqCtfmode`, `txEqWintype` and `txEqParaEqData`), which a local
+window changes while transmitting and the Core takes on the air too
+("The radio is on the air. Try again when it stops.": keyed through
 its `MoxController` from any source, a hardware PTT included, until the
 hand-back to receive ends; TUNE on; or the two-tone test running), a
 `transmit` setting outside its setter's range, with the range ("Choose a

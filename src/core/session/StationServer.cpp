@@ -645,6 +645,11 @@
 //               (the same gates, the Core's rounding and ordering, the
 //               settled curve in the result). J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-09-28: R-IOS-13 / R-R3-49 (JJ's TX EQ ruling): a receive-only
+//               Core takes the TX EQ dialog's ten settings on the air, as a
+//               local window changes them while transmitting
+//               (isTxEqSettingTakenOnAir). J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -1244,6 +1249,21 @@ constexpr const char* kPropertyNeverKeysReason = "Use the transmit button.";
 bool isTransmitKeyingProperty(const QByteArray& name)
 {
     return name == "mox" || name == "tune" || name == "voxEnabled" || name == "twoToneActive";
+}
+
+// R-IOS-13 / R-R3-49 (remote parity, JJ's TX EQ ruling 2026-09-28): the
+// TX EQ dialog's settings, which a local window changes while the radio is
+// on the air (Thetis's eqform has no MOX check; NereusSDR's TxEqDialog and
+// the TX applet's EQ button are never greyed locally). A receive-only Core
+// takes them on the air too, from a peer offered the transmit settings;
+// every other transmit setting still waits for the radio to stop. They key
+// nothing.
+bool isTxEqSettingTakenOnAir(const QByteArray& name)
+{
+    return name == "txEqEnabled" || name == "txEqUseLegacy" || name == "txEqPreamp"
+        || name == "txEqBandsJson" || name == "txEqFreqsJson" || name == "txEqNc"
+        || name == "txEqMp" || name == "txEqCtfmode" || name == "txEqWintype"
+        || name == "txEqParaEqData";
 }
 
 // R-IOS-01: the one reason for a write to a property MirrorPolicy marks
@@ -6247,7 +6267,8 @@ QList<SessionPropertyResult> StationServer::applyPropertyWrite(
             refusals.insert(update.name, QStringLiteral("The Core does not have this setting, or not in this form."));
             continue;
         }
-        if (transmitSettingsWrite && !settingsOnAirRefusal.isEmpty()) {
+        if (transmitSettingsWrite && !settingsOnAirRefusal.isEmpty()
+            && !isTxEqSettingTakenOnAir(update.name)) {
             refusals.insert(update.name, settingsOnAirRefusal);
             continue;
         }
