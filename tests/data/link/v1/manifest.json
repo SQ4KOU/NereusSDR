@@ -116,6 +116,7 @@
         {"id": "session-on-air-refusals", "file": "sessions/on-air-refusals.json", "kind": "session", "requires": {"remoteTxVersion": 1, "sessionHolderVersion": 1}},
         {"id": "session-two-devices", "file": "sessions/two-devices.json", "kind": "session", "requires": {"sessionHolderVersion": 1}},
         {"id": "session-slice-access", "file": "sessions/slice-access.json", "kind": "session", "requires": {"sliceAccessVersion": 1}},
+        {"id": "session-slice-listen-level", "file": "sessions/slice-listen-level.json", "kind": "session", "requires": {"sliceAccessVersion": 1}},
         {"id": "session-foreign-write-refused", "file": "sessions/foreign-write-refused.json", "kind": "session", "requires": {"sessionHolderVersion": 1}},
         {"id": "session-held-for-device", "file": "sessions/held-for-device.json", "kind": "session", "requires": {"sessionHolderVersion": 1}},
         {"id": "session-share-receiver", "file": "sessions/share-receiver.json", "kind": "session", "requires": {"sessionHolderVersion": 1}},
