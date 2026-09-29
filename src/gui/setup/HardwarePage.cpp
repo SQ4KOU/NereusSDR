@@ -33,6 +33,11 @@
 //                 Options' I2C tool and Pin Control and the Alex-1 tab's three
 //                 transmit high-pass switches follow radioHardwareVersion 7.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - R-R3-46 / R-R3-49: the Alex Filters tabs' receive filter rows
+//                (per-row bypass and edges, Alex-2 master bypass) select the
+//                receive high-pass as Thetis's setAlexHPF /
+//                setBPF1ForOrionIISaturn / setAlex2HPF do (radioHardwareVersion
+//                8). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -421,6 +426,12 @@ void HardwarePage::applyTransmitHardwareGates()
     if (m_antennaAlexTab) {
         m_antennaAlexTab->setHpfSwitchesAvailable(
             hardwareOffered, IStationLink::alexHpfSwitchesUnavailableReason());
+        // radioHardwareVersion 8: the receive filter rows, which the Core
+        // applies to its radio at once (RadioModel::savedAlexHpfEdges). No
+        // on-air rule: Thetis's per-row setters have no MOX check.
+        m_antennaAlexTab->setHpfRowsAvailable(
+            !m_remote || (link != nullptr && link->radioHardwareAvailable(8)),
+            IStationLink::alexHpfRowsUnavailableReason());
     }
 }
 

@@ -21,6 +21,11 @@
 //                setAlexHPF / setBPF1ForOrionIISaturn apply them. Plan
 //                Task 14 fix wave (R-R3-49). J.J. Boyd (KG4VCF), with
 //                AI-assisted transformation via Anthropic Claude Code.
+//   2026-09-28 - R-R3-46 / R-R3-49: the Alex Filters tabs' receive filter rows
+//                (per-row bypass and edges, Alex-2 master bypass) select the
+//                receive high-pass as Thetis's setAlexHPF /
+//                setBPF1ForOrionIISaturn / setAlex2HPF do (radioHardwareVersion
+//                8). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 // === Verbatim Thetis console.cs header (lines 1-50) ===
@@ -78,6 +83,10 @@
 
 #include "AlexFilterMap.h"
 
+#include <cmath>
+#include <initializer_list>
+#include <utility>
+
 namespace NereusSDR::codec::alex {
 
 // From Thetis console.cs:6830-6942 [@501e3f5]
@@ -87,13 +96,10 @@ namespace NereusSDR::codec::alex {
 // Decision rationale: spec §6.3.1
 quint8 computeHpf(double freqMhz)
 {
-    if (freqMhz < 1.5)  { return 0x20; }    // bypass
-    if (freqMhz < 6.5)  { return 0x10; }    // 1.5 MHz HPF
-    if (freqMhz < 9.5)  { return 0x08; }    // 6.5 MHz HPF
-    if (freqMhz < 13.0) { return 0x04; }    // 9.5 MHz HPF
-    if (freqMhz < 20.0) { return 0x01; }    // 13 MHz HPF
-    if (freqMhz < 50.0) { return 0x02; }    // 20 MHz HPF
-    return 0x40;                             // 6m preamp
+    // The ladder with the spinners' shipped edges (AlexHpfEdges::
+    // thetisDefaults): below 1.8 MHz and above 61.44 MHz no row holds the
+    // frequency, and Thetis sends the bypass.
+    return selectAlexHpfRow(freqMhz, AlexHpfEdges::thetisDefaults().hpf);
 }
 
 // From Thetis console.cs:6953-7067 setBPF1ForOrionIISaturn [v2.10.3.15]
@@ -136,14 +142,11 @@ quint8 computeHpf(double freqMhz)
 // bound.  Thetis is the port source, so the 61.44 ceiling is honoured here.
 quint8 computeBpf1(double freqMhz)
 {
-    if (freqMhz < 1.5)    { return 0x20; }   // below the bank: bypass
-    if (freqMhz < 2.1)    { return 0x10; }   // 160m BPF
-    if (freqMhz < 5.5)    { return 0x08; }   // 80/60m BPF
-    if (freqMhz < 11.0)   { return 0x04; }   // 40/30m BPF
-    if (freqMhz < 22.0)   { return 0x01; }   // 20/17/15m BPF
-    if (freqMhz < 35.0)   { return 0x02; }   // 12/10m BPF
-    if (freqMhz <= 61.44) { return 0x40; }   // 6m BPF + LNA
-    return 0x20;                              // above the bank: bypass
+    // The bank with the spinners' shipped edges (AlexHpfEdges::
+    // thetisDefaults). Frequencies are whole hertz, so Thetis's
+    // `>= Start && <= End` over the one-hertz gaps between rows gives the
+    // crossovers above.
+    return selectAlexHpfRow(freqMhz, AlexHpfEdges::thetisDefaults().bpf1);
 }
 
 // From Thetis console.cs:6827-6837 setAlex1HPF [v2.10.3.15], original C#:
@@ -191,6 +194,134 @@ quint8 computeRxPreselector(double freqMhz, NereusSDR::HPSDRHW board)
 {
     return usesBpf1Preselector(board) ? computeBpf1(freqMhz)
                                       : computeHpf(freqMhz);
+}
+
+// ---------------------------------------------------------------------------
+// The Alex tab's rows (see the declaration for the Thetis lines).
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Each row's selection, in Thetis's row order.
+// From Thetis console.cs:6857-6944 [v2.10.3.15] (setAlexHPF) and
+// console.cs:6972-7059 (setBPF1ForOrionIISaturn), console.cs:7081-7168
+// (setAlex2HPF): SetAlexHPFBits(0x10), (0x08), (0x04), (0x01), (0x02),
+// (0x40) for the 1.5, 6.5, 9.5, 13, 20 MHz and 6 m BPF/LNA rows.
+constexpr std::array<quint8, kAlexHpfRowCount> kRowBits = {
+    0x10, 0x08, 0x04, 0x01, 0x02, 0x40,
+};
+constexpr quint8 kBypassBits = 0x20;
+
+qint64 toHz(double mhz) noexcept
+{
+    return static_cast<qint64>(std::llround(mhz * 1.0e6));
+}
+
+AlexHpfRows rows(std::initializer_list<std::pair<double, double>> edges) noexcept
+{
+    AlexHpfRows out{};
+    int i = 0;
+    for (const auto& [start, end] : edges) {
+        out[static_cast<size_t>(i)].startMhz = start;
+        out[static_cast<size_t>(i)].endMhz = end;
+        ++i;
+    }
+    return out;
+}
+
+} // namespace
+
+// The spinners' shipped values, decoded from setup.designer.cs [v2.10.3.15]:
+//   udAlex1_5HPFStart :23832 = 1.8   udAlex1_5HPFEnd :23873 =  6.499999
+//   udAlex6_5HPFStart :23914 = 6.5   udAlex6_5HPFEnd :23955 =  9.499999
+//   udAlex9_5HPFStart :23996 = 9.5   udAlex9_5HPFEnd :24037 = 12.999999
+//   udAlex13HPFStart  :24291 = 13    udAlex13HPFEnd  :24097 = 19.999999
+//   udAlex20HPFStart  :24127 = 20    udAlex20HPFEnd  :24067 = 49.999999
+//   udAlex6BPFStart   :24343 = 50    udAlex6BPFEnd   :24384 = 61.44
+//   ud1_5BPF1Start    :24982 = 1.5   ud1_5BPF1End    :25023 =  2.099999
+//   ud6_5BPF1Start    :25064 = 2.1   ud6_5BPF1End    :25105 =  5.499999
+//   ud9_5BPF1Start    :25146 = 5.5   ud9_5BPF1End    :25187 = 10.999999
+//   ud13BPF1Start     :25440 = 11    ud13BPF1End     :25247 = 21.999999
+//   ud20BPF1Start     :25277 = 22    ud20BPF1End     :25217 = 34.999999
+//   ud6BPF1Start      :25481 = 35    ud6BPF1End      :25522 = 61.44
+//   udAlex21_5HPFStart:26891 = 1.5   udAlex21_5HPFEnd:26861 =  2.099999
+//   udAlex26_5HPFStart:26831 = 2.1   udAlex26_5HPFEnd:26801 =  5.499999
+//   udAlex29_5HPFStart:26771 = 5.5   udAlex29_5HPFEnd:26741 = 10.999999
+//   udAlex213HPFStart :26621 = 11    udAlex213HPFEnd :26681 = 21.999999
+//   udAlex220HPFStart :26651 = 22    udAlex220HPFEnd :26711 = 34.999999
+//   udAlex26BPFStart  :26483 = 35    udAlex26BPFEnd  :26513 = 61.44
+// Every per-row bypass and the Alex-2 master default unchecked
+// (console.cs:18808 alex2_hpf_bypass = false, 18823 alex1_5bphpf_bypass =
+// false and the rest).
+AlexHpfEdges AlexHpfEdges::thetisDefaults() noexcept
+{
+    AlexHpfEdges e;
+    e.hpf = rows({{1.8, 6.499999}, {6.5, 9.499999}, {9.5, 12.999999},
+                  {13.0, 19.999999}, {20.0, 49.999999}, {50.0, 61.44}});
+    e.bpf1 = rows({{1.5, 2.099999}, {2.1, 5.499999}, {5.5, 10.999999},
+                   {11.0, 21.999999}, {22.0, 34.999999}, {35.0, 61.44}});
+    e.alex2 = e.bpf1;
+    return e;
+}
+
+// From Thetis console.cs:6857-6870 [v2.10.3.15] (setAlexHPF, the first row;
+// every row and the other two functions have the same shape)
+//   if ((decimal)freq >= SetupForm.udAlex1_5HPFStart.Value && // 1.5 MHz HPF
+//        (decimal)freq <= SetupForm.udAlex1_5HPFEnd.Value)
+//   {
+//       if (alex1_5bphpf_bypass)
+//       {
+//           NetworkIO.SetAlexHPFBits(0x20); // Bypass HPF
+//           SetupForm.radBPHPFled.Checked = true;
+//       }
+//       else
+//       {
+//           NetworkIO.SetAlexHPFBits(0x10);
+// and no row:
+// From Thetis console.cs:6946-6950 [v2.10.3.15]
+//   else
+//   {
+//       NetworkIO.SetAlexHPFBits(0x20); // Bypass HPF
+quint8 selectAlexHpfRow(double freqMhz, const AlexHpfRows& rows) noexcept
+{
+    const qint64 hz = toHz(freqMhz);
+    for (size_t i = 0; i < rows.size(); ++i) {
+        const AlexHpfRow& row = rows[i];
+        if (hz >= toHz(row.startMhz) && hz <= toHz(row.endMhz)) {
+            return row.bypass ? kBypassBits : kRowBits[i];
+        }
+    }
+    return kBypassBits;
+}
+
+quint8 computeRxPreselector(double freqMhz, NereusSDR::HPSDRHW board,
+                            const AlexHpfEdges& edges) noexcept
+{
+    return selectAlexHpfRow(freqMhz, usesBpf1Preselector(board) ? edges.bpf1 : edges.hpf);
+}
+
+quint8 computeAlex2Hpf(double freqMhz, const AlexHpfEdges& edges) noexcept
+{
+    if (edges.alex2Bypass) {
+        return kBypassBits;
+    }
+    return selectAlexHpfRow(freqMhz, edges.alex2);
+}
+
+bool usesAlex2Hpf(NereusSDR::HPSDRModel model) noexcept
+{
+    switch (model) {
+        case NereusSDR::HPSDRModel::ORIONMKII:
+        case NereusSDR::HPSDRModel::ANAN7000D:
+        case NereusSDR::HPSDRModel::ANAN8000D:
+        case NereusSDR::HPSDRModel::ANAN_G2:
+        case NereusSDR::HPSDRModel::ANAN_G2_1K:
+        case NereusSDR::HPSDRModel::ANVELINAPRO3:
+        case NereusSDR::HPSDRModel::REDPITAYA:  //DH1KLM
+            return true;
+        default:
+            return false;
+    }
 }
 
 // From Thetis console.cs:7168-7234 [@501e3f5]
@@ -270,7 +401,8 @@ quint8 applyAlex1HpfSwitches(quint8 selected, NereusSDR::HPSDRHW board,
     //         if (alex6bphpf_bypass || disable_6m_lna_on_rx || (_mox && disable_6m_lna_on_tx))
     //         {
     //             NetworkIO.SetAlexHPFBits(0x20); // Bypass HPF
-    // The per-row 6 m bypass (alex6bphpf_bypass) is not handled here.
+    // The per-row 6 m bypass (alex6bphpf_bypass) is the row's own, applied
+    // where the row is selected (selectAlexHpfRow).
     static constexpr quint8 k6mBpfLna = 0x40;
     if (selected == k6mBpfLna
         && (switches.disable6mLnaOnRx || (keyed && switches.disable6mLnaOnTx))) {

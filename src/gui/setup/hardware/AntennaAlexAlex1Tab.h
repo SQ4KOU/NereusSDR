@@ -22,6 +22,11 @@
 //                7), with no on-air rule in either window, as Thetis sets them
 //                with no MOX check. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-28 - R-R3-46 / R-R3-49: the Alex Filters tabs' receive filter rows
+//                (per-row bypass and edges, Alex-2 master bypass) select the
+//                receive high-pass as Thetis's setAlexHPF /
+//                setBPF1ForOrionIISaturn / setAlex2HPF do (radioHardwareVersion
+//                8). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -137,6 +142,13 @@ public:
     // Thetis's setters apply them at once with no MOX check
     // (console.cs:18719-18803 [v2.10.3.15]).
     void setHpfSwitchesAvailable(bool available, const QString& reason);
+
+    // radioHardwareVersion 8: the HPF and BPF1 rows (Bypass, Start, End)
+    // follow whether the Core takes them, disabled with `reason` when it
+    // does not. Always available locally. No on-air rule: Thetis's per-row
+    // setters apply at once with no MOX check (console.cs:18823-19040
+    // [v2.10.3.15]).
+    void setHpfRowsAvailable(bool available, const QString& reason);
 
     // Test seam — returns whether the Saturn BPF1 groupbox is visible.
     // Always compiled (NEREUS_BUILD_TESTS is set on NereusSDRLib globally). Used by

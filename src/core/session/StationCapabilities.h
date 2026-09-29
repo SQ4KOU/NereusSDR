@@ -163,6 +163,11 @@
 //                applied (Thetis DisablePA and hf_tr_relay,
 //                transmitSettingsVersion 11). J.J. Boyd (KG4VCF), AI-assisted
 //                via Anthropic Claude Code.
+//   2026-09-28 - R-R3-46 / R-R3-49: the Alex Filters tabs' receive filter rows
+//                (per-row bypass and edges, Alex-2 master bypass) select the
+//                receive high-pass as Thetis's setAlexHPF /
+//                setBPF1ForOrionIISaturn / setAlex2HPF do (radioHardwareVersion
+//                8). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -228,7 +233,9 @@ struct StationCapabilities {
     /// (one band's TX antenna; parity mini-round); 7 the I/O board's
     /// requestIoBoardI2c and setIoBoardOutput commands, `ioBoard` outputs
     /// and the Alex tab's three transmit high-pass switches taken from a
-    /// window (parity Task 14). Sent last in the same block as the three above,
+    /// window (parity Task 14); 8 the Alex Filters tabs' receive filter
+    /// rows (each row's bypass and edges, and Alex-2's master bypass),
+    /// applied to the Core's radio at once. Sent last in the same block as the three above,
     /// so only at minor 11. 0: a window keeps today's behaviour and does
     /// not write `stepAtt`.
     int radioHardwareVersion = 0;

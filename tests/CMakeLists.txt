@@ -2064,6 +2064,11 @@ nereus_add_test(tst_alex_hpf_switches)
 # HL2's C2 bit 3; P2 CmdGeneral byte 58 and the Alex T/R relay) and the SWR
 # protection's pass (console.cs:26109-26110). NereusSDR-original tests.
 nereus_add_test(tst_disable_hf_pa)
+# radioHardwareVersion 8: the Alex Filters tabs' receive filter rows (each
+# row's bypass and edges, the Alex-2 master bypass) select the receive
+# high-pass as Thetis's setAlexHPF / setBPF1ForOrionIISaturn / setAlex2HPF
+# do (console.cs:6839-7175). NereusSDR-original tests.
+nereus_add_test(tst_alex_hpf_rows)
 # Plan Task 14 fix wave, I1 and I2 (R-R3-49, remote parity): the HL2 I/O,
 # HL2 options and OC Outputs tabs show the band-output byte the connection
 # composed (RadioModel::bandOutputsByte), locally and in a remote window

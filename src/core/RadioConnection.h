@@ -531,6 +531,18 @@ public slots:
     virtual void setPaDisabled(bool disabled) { m_paDisabled = disabled; }
     bool paDisabled() const noexcept { return m_paDisabled; }
 
+    /// The Alex tab's receive filter rows (Setup > Hardware > Alex-1 and
+    /// Alex-2 Filters): each row's edges and per-row bypass for the
+    /// high-pass ladder, the band-pass bank and the Alex-2 bank, and the
+    /// Alex-2 master bypass (codec::alex::AlexHpfEdges). Thetis selects the
+    /// receive high-pass from these (console.cs:6839-7175 [v2.10.3.15]
+    /// setAlexHPF / setBPF1ForOrionIISaturn / setAlex2HPF). RadioModel
+    /// hands it the saved rows; each protocol re-selects at once, as
+    /// Thetis's per-row bypass setters do (console.cs:18823-18833
+    /// Alex1_5BPHPFBypass { ... setAlex1HPF(freq); }).
+    virtual void setAlexHpfEdges(const codec::alex::AlexHpfEdges& edges) { m_alexHpfEdges = edges; }
+    const codec::alex::AlexHpfEdges& alexHpfEdges() const noexcept { return m_alexHpfEdges; }
+
     /// Hardware mic-jack PTT disable flag (Orion/ANAN front-panel PTT).
     ///
     /// Parameter and wire convention match Thetis NetworkIO.SetMicPTT exactly:
@@ -1025,6 +1037,11 @@ protected:
     // "Disable HF PA" (setPaDisabled), Thetis prn->tx[0].pa. Written and read
     // on the connection thread.
     bool m_paDisabled{false};
+
+    // The Alex tab's receive filter rows (setAlexHpfEdges), Thetis's
+    // shipped values until RadioModel hands the saved ones. Written and read
+    // on the connection thread.
+    codec::alex::AlexHpfEdges m_alexHpfEdges{codec::alex::AlexHpfEdges::thetisDefaults()};
 
     // "Disable 6m LNA on RX / TX" (setDisable6mLna). Written and read on the
     // connection thread.

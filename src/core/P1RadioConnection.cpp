@@ -51,6 +51,11 @@
 //                applied (Thetis DisablePA and hf_tr_relay,
 //                transmitSettingsVersion 11). J.J. Boyd (KG4VCF), AI-assisted
 //                via Anthropic Claude Code.
+//   2026-09-28 - R-R3-46 / R-R3-49: the Alex Filters tabs' receive filter rows
+//                (per-row bypass and edges, Alex-2 master bypass) select the
+//                receive high-pass as Thetis's setAlexHPF /
+//                setBPF1ForOrionIISaturn / setAlex2HPF do (radioHardwareVersion
+//                8). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -1031,9 +1036,10 @@ void P1RadioConnection::recomputeReceiveFilters(int changedSlot)
     if ((changedSlot < 0 || changedSlot == m_rx1Slot) && rx1Hz != 0
         && (   (fcaps && fcaps->hasAlexFilters)
             || m_hardwareProfile.model == HPSDRModel::HERMESLITE)) {
+        // With the Alex tab's saved rows (setAlexHpfEdges).
         m_alexHpfBits = codec::alex::computeRxPreselector(
             double(rx1Hz) / 1e6,
-            fcaps ? fcaps->board : HPSDRHW::Unknown);
+            fcaps ? fcaps->board : HPSDRHW::Unknown, m_alexHpfEdges);
     }
 
     // ── The receive-derived low-pass ────────────────────────────────────
@@ -1999,6 +2005,25 @@ void P1RadioConnection::setPaDisabled(bool disabled)
 {
     m_forceBank10Next = true;
     RadioConnection::setPaDisabled(disabled);
+}
+
+// ---------------------------------------------------------------------------
+// setAlexHpfEdges: the Alex tab's receive filter rows. Thetis's per-row
+// bypass setters re-select the high-pass at once:
+//   From Thetis console.cs:18823-18833 [v2.10.3.15]
+//     public bool Alex1_5BPHPFBypass
+//     { ... set { alex1_5bphpf_bypass = value; double freq = VFOAFreq; setAlex1HPF(freq); } }
+// and an edge is read by the next selection; here both re-select from the
+// frequency RX1 is on now. Bank 10 carries the word in its rotation.
+// ---------------------------------------------------------------------------
+void P1RadioConnection::setAlexHpfEdges(const codec::alex::AlexHpfEdges& edges)
+{
+    if (edges == m_alexHpfEdges) {
+        return;
+    }
+    RadioConnection::setAlexHpfEdges(edges);
+    recomputeReceiveFilters(-1);
+    m_forceBank10Next = true;
 }
 
 // ---------------------------------------------------------------------------

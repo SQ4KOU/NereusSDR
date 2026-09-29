@@ -1474,6 +1474,9 @@ const QList<AppSideReason>& appSideReasons()
          "a remote window's own reason when its Core cannot take the request"},
         {"src/core/session/IStationLink.h", "alexHpfSwitchesUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},
+        // radioHardwareVersion 8: the Alex Filters tabs' receive filter rows.
+        {"src/core/session/IStationLink.h", "alexHpfRowsUnavailableReason",
+         "a remote window's own reason when its Core cannot take the request"},
         // R-R3-49 (parity Task 16): the filter graph's curve.
         {"src/core/session/IStationLink.h", "filterResponseUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},

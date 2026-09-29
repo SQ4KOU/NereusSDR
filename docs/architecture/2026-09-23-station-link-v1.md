@@ -858,7 +858,7 @@ change shows as surface drift and as a change to this table.
 | `audioClockVersion` | 1 |
 | `receiverAudioVersion` | 1 |
 | `headphonesMixVersion` | 1 |
-| `radioHardwareVersion` | 7 |
+| `radioHardwareVersion` | 8 |
 | `remotePgxlControlVersion` | 4 |
 | `remoteRfKitControlVersion` | 4 |
 | `stationTciVersion` | 2 |
@@ -992,6 +992,19 @@ When a feature is off, its version is 0:
   (HPF Bypass on TX, HPF Bypass on PureSignal, Disable 6m LNA on TX)
   taken from a window, on and off the air (section 8.1). A station no
   longer sends 6; 7 serves every earlier version's command and property.
+  8 adds the Alex Filters tabs' receive filter rows: each row's Bypass,
+  Start and End for the Alex-1 high-pass ladder (`hardware/<mac>/alex/hpf/`),
+  the Alex-1 band-pass bank (`alex/bpf1/`) and the Alex-2 bank
+  (`alex2/hpf/`), and the Alex-2 master bypass
+  (`alex2/master/bypass55MhzBpf`). The Core applies them to its radio at
+  once, on and off the air, as Thetis's per-row setters re-select the
+  high-pass with no MOX check: the receive high-pass is the first row whose
+  edges hold the frequency (its bypass sends 0x20), and no row gives the
+  bypass. A value never saved is Thetis's shipped default, so on the
+  high-pass ladder a frequency below 1.8 MHz is bypassed. A window whose
+  Core offers less than 8 shows the rows disabled with the reason. A
+  station no longer sends 7; 8 serves every earlier version's command and
+  property.
 - `radioAntennaRowsVersion`: optional and appended after
   `accessoryTxVersion` only at agreed minor 11 for a peer that declared
   `radioAntennaRows` exactly 1, while the Core has a connected radio with

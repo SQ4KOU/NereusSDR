@@ -365,6 +365,11 @@
 //                applied (Thetis DisablePA and hf_tr_relay,
 //                transmitSettingsVersion 11). J.J. Boyd (KG4VCF), AI-assisted
 //                via Anthropic Claude Code.
+//   2026-09-28 - R-R3-46 / R-R3-49: the Alex Filters tabs' receive filter rows
+//                (per-row bypass and edges, Alex-2 master bypass) select the
+//                receive high-pass as Thetis's setAlexHPF /
+//                setBPF1ForOrionIISaturn / setAlex2HPF do (radioHardwareVersion
+//                8). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -3601,6 +3606,11 @@ public:
     // remote window) does nothing: its save goes to the Core, which applies
     // it there.
     void applyAlexHpfSwitchSettings();
+    // The Alex tab's receive filter rows saved for `mac` (the high-pass
+    // ladder, the band-pass bank and the Alex-2 bank: each row's edges and
+    // bypass, and the Alex-2 master bypass), each default Thetis's.
+    static codec::alex::AlexHpfEdges savedAlexHpfEdges(const QString& mac);
+    const codec::alex::AlexHpfEdges& alexHpfEdges() const noexcept { return m_alexHpfEdges; }
     // Task 14's name for the same apply, kept for its callers.
     void applyHpfBypassOnTxSetting() { applyAlexHpfSwitchSettings(); }
 
@@ -6670,6 +6680,10 @@ private:
     bool m_alexHpfBypassOnTxSwitch{false};
     bool m_alexHpfBypassOnPsSwitch{true};
     bool m_alexDisable6mLnaOnTxSwitch{true};
+    // The Alex tab's receive filter rows as last applied
+    // (applyAlexHpfSwitchSettings): the chain decisions select each chain's
+    // high-pass from them, as the connection does.
+    codec::alex::AlexHpfEdges m_alexHpfEdges{codec::alex::AlexHpfEdges::thetisDefaults()};
 
 #ifdef NEREUS_BUILD_TESTS
     std::optional<BoardCapabilities> m_testWidebandCaps;

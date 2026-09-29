@@ -12,6 +12,11 @@
 //                applied (Thetis DisablePA and hf_tr_relay,
 //                transmitSettingsVersion 11). J.J. Boyd (KG4VCF), AI-assisted
 //                via Anthropic Claude Code.
+//   2026-09-28 - R-R3-46 / R-R3-49: the Alex Filters tabs' receive filter rows
+//                (per-row bypass and edges, Alex-2 master bypass) select the
+//                receive high-pass as Thetis's setAlexHPF /
+//                setBPF1ForOrionIISaturn / setAlex2HPF do (radioHardwareVersion
+//                8). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 // src/core/session/StationServer.cpp  (NereusSDR)
 // =================================================================
@@ -9587,7 +9592,14 @@ int StationServer::radioHardwareVersion() const
     // air (they reach the N2ADR filter board in the transmit path); a read
     // and the three switches are not (Thetis sets the switches with no MOX
     // check).
-    return m_radioModel->ioBoardFacade()->isBound() ? 7 : 2;
+    //
+    // 8: the Alex Filters tabs' receive filter rows (hardware/<mac>/alex/hpf,
+    // alex/bpf1 and alex2/hpf: each row's Bypass, Start and End; and
+    // alex2/master/bypass55MhzBpf), applied to the Core's radio at once
+    // (RadioModel::savedAlexHpfEdges through the "alex" reload), on and off
+    // the air, as Thetis's per-row setters re-select the high-pass with no
+    // MOX check (console.cs:18823-19040 [v2.10.3.15]).
+    return m_radioModel->ioBoardFacade()->isBound() ? 8 : 2;
 }
 
 QString StationServer::radioAntennaRowRefusal(SessionTransport* transport,

@@ -25,6 +25,11 @@
 //                7), with no on-air rule in either window, as Thetis sets them
 //                with no MOX check. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-28 - R-R3-46 / R-R3-49: the Alex Filters tabs' receive filter rows
+//                (per-row bypass and edges, Alex-2 master bypass) select the
+//                receive high-pass as Thetis's setAlexHPF /
+//                setBPF1ForOrionIISaturn / setAlex2HPF do (radioHardwareVersion
+//                8). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 //=================================================================
@@ -482,6 +487,10 @@ AntennaAlexAlex1Tab::AntennaAlexAlex1Tab(RadioModel* model, QWidget* parent)
         hpfFormLayout->addRow(tr(band.label), rowWidget);
 
         const QString slug = QString::fromLatin1(band.slug);
+        // radioHardwareVersion 8: named for the tests and the remote gate.
+        w.bypass->setObjectName(QStringLiteral("alexHpfBypass_%1").arg(slug));
+        w.start->setObjectName(QStringLiteral("alexHpfStart_%1").arg(slug));
+        w.end->setObjectName(QStringLiteral("alexHpfEnd_%1").arg(slug));
         const QString enabledKey = QStringLiteral("alex/hpf/%1/enabled").arg(slug);
         const QString startKey   = QStringLiteral("alex/hpf/%1/start").arg(slug);
         const QString endKey     = QStringLiteral("alex/hpf/%1/end").arg(slug);
@@ -604,6 +613,9 @@ AntennaAlexAlex1Tab::AntennaAlexAlex1Tab(RadioModel* model, QWidget* parent)
         bpf1FormLayout->addRow(tr(band.label), rowWidget);
 
         const QString slug = QString::fromLatin1(band.slug);
+        w.bypass->setObjectName(QStringLiteral("alexBpf1Bypass_%1").arg(slug));
+        w.start->setObjectName(QStringLiteral("alexBpf1Start_%1").arg(slug));
+        w.end->setObjectName(QStringLiteral("alexBpf1End_%1").arg(slug));
         const QString enabledKey = QStringLiteral("alex/bpf1/%1/enabled").arg(slug);
         const QString startKey   = QStringLiteral("alex/bpf1/%1/start").arg(slug);
         const QString endKey     = QStringLiteral("alex/bpf1/%1/end").arg(slug);
@@ -921,6 +933,13 @@ void AntennaAlexAlex1Tab::onHpfCheckChanged(bool checked, const QString& setting
             m_currentMac, settingsKey, checked ? QStringLiteral("True") : QStringLiteral("False"));
         AppSettings::instance().save();
     }
+    // radioHardwareVersion 8: the receive filter rows reach the radio at
+    // once, as Thetis's per-row bypass setters re-select the high-pass
+    // (console.cs:18823-18833 [v2.10.3.15]). In a remote window the save
+    // goes to the Core, which applies it (scheduleRemoteHardwareApply).
+    if (m_model) {
+        m_model->applyAlexHpfSwitchSettings();
+    }
     emit settingChanged(settingsKey, checked);
 }
 
@@ -929,6 +948,13 @@ void AntennaAlexAlex1Tab::onHpfSpinChanged(double value, const QString& settings
     if (!m_currentMac.isEmpty()) {
         AppSettings::instance().setHardwareValue(m_currentMac, settingsKey, value);
         AppSettings::instance().save();
+    }
+    // radioHardwareVersion 8: the receive filter rows reach the radio at
+    // once, as Thetis's per-row bypass setters re-select the high-pass
+    // (console.cs:18823-18833 [v2.10.3.15]). In a remote window the save
+    // goes to the Core, which applies it (scheduleRemoteHardwareApply).
+    if (m_model) {
+        m_model->applyAlexHpfSwitchSettings();
     }
     emit settingChanged(settingsKey, value);
 }
@@ -949,6 +975,13 @@ void AntennaAlexAlex1Tab::onBpf1CheckChanged(bool checked, const QString& settin
             m_currentMac, settingsKey, checked ? QStringLiteral("True") : QStringLiteral("False"));
         AppSettings::instance().save();
     }
+    // radioHardwareVersion 8: the receive filter rows reach the radio at
+    // once, as Thetis's per-row bypass setters re-select the high-pass
+    // (console.cs:18823-18833 [v2.10.3.15]). In a remote window the save
+    // goes to the Core, which applies it (scheduleRemoteHardwareApply).
+    if (m_model) {
+        m_model->applyAlexHpfSwitchSettings();
+    }
     emit settingChanged(settingsKey, checked);
 }
 
@@ -957,6 +990,13 @@ void AntennaAlexAlex1Tab::onBpf1SpinChanged(double value, const QString& setting
     if (!m_currentMac.isEmpty()) {
         AppSettings::instance().setHardwareValue(m_currentMac, settingsKey, value);
         AppSettings::instance().save();
+    }
+    // radioHardwareVersion 8: the receive filter rows reach the radio at
+    // once, as Thetis's per-row bypass setters re-select the high-pass
+    // (console.cs:18823-18833 [v2.10.3.15]). In a remote window the save
+    // goes to the Core, which applies it (scheduleRemoteHardwareApply).
+    if (m_model) {
+        m_model->applyAlexHpfSwitchSettings();
     }
     emit settingChanged(settingsKey, value);
 }
@@ -974,6 +1014,17 @@ void AntennaAlexAlex1Tab::setHpfSwitchesAvailable(bool available, const QString&
     for (QWidget* w : std::initializer_list<QWidget*>{
              m_hpfBypassOnTx, m_hpfBypassOnPs, m_disable6mLnaOnTx}) {
         HardwareTransmitGate::apply(w, available, reason);
+    }
+}
+
+void AntennaAlexAlex1Tab::setHpfRowsAvailable(bool available, const QString& reason)
+{
+    for (const std::vector<HpfRowWidgets>* rows : {&m_hpfRows, &m_bpf1Rows}) {
+        for (const HpfRowWidgets& row : *rows) {
+            for (QWidget* w : std::initializer_list<QWidget*>{row.bypass, row.start, row.end}) {
+                HardwareTransmitGate::apply(w, available, reason);
+            }
+        }
     }
 }
 
