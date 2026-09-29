@@ -146,10 +146,16 @@ constexpr double kFrameCpuTolerance = 0.10;     // absolute, busy share and CPU
 // Uniform load well under real time: 900 us of a 1333 us block.
 constexpr int kUniformDelayUs = 900;
 constexpr double kUniformCpuTolerance = 0.10;   // relative, busy share and CPU
-// Real overload: 1400 us of a 1333 us block.
-constexpr int kOverloadDelayUs = 1400;
 // One DSP block period at the Core's settings: 64 samples at 48 kHz.
 constexpr qint64 kBlockPeriodNs = qint64(kDspSize) * 1'000'000'000LL / kDspRate;
+// Real overload: two block periods of work in every block (2666 us of a
+// 1333 us block), so the worker falls behind by a block every block. By the
+// end of kSettle it has about 375 blocks (a second of work) queued, and a
+// feeder the machine holds off for less than that never leaves it waiting
+// for input. At 1400 us (5% over) it had about 40 queued blocks, and a
+// busy machine's feeder stall of tens of ms drained them: the worker then
+// waited for input and read under 0.95 in overload intervals.
+constexpr int kOverloadDelayUs = int(2 * kBlockPeriodNs / 1000);
 constexpr double kOverloadMinLoad = 0.95;
 constexpr double kOverloadCpuTolerance = 0.10;  // absolute, busy share and CPU
 // A reading that is right agrees with the busy-share reference to within
@@ -650,7 +656,7 @@ private slots:
         const Run run = sampleFor(kTicks, [fed](const Sample& s) {
             return corroborated(s, kOverloadCpuTolerance) && fed(s);
         }, kMinCorroborated);
-        logRun("overload-1400us", run);
+        logRun("overload-2x", run);
         QVERIFY(run.samples.size() >= std::size_t(kTicks) - 2);
         int corroboratedIntervals = 0;
         for (const Sample& s : run.samples) {
