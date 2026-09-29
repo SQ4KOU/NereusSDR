@@ -38,6 +38,11 @@
 //                 register + 3 on the left, C4 at the register on the right)
 //                 with its per-box tooltips. J.J. Boyd (KG4VCF), AI-assisted
 //                 via Anthropic Claude Code.
+//   2026-09-29 - Swap audio channels, Enable CL2, CL2 frequency and
+//                 External 10 MHz are stored but not sent to the radio, so
+//                 they show disabled with a plain reason; the "wire
+//                 emission" warnings are gone. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 //   2026-09-29 - HL2 port part 1: the TX buffer latency and PTT hang
 //                 reach the radio (bank 17), so their rows are shown again.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
@@ -270,22 +275,38 @@ void Hl2OptionsTab::buildHermesLiteOptions(QWidget* parent)
     // From mi0bot setup.designer.cs:11166-11176 chkCl2Enable +
     // :11142-11164 udCl2Freq [v2.10.3.13-beta2] — range 1..200 MHz,
     // default 116.
+    //
+    // The clock options (CL2, CL2 frequency, External 10 MHz) are stored
+    // but NereusSDR does not send them to the radio, so they show disabled
+    // with the reason rather than enabled as if they worked.
+    const QString clockReason =
+        tr("NereusSDR does not change the radio's clock settings.");
     m_chkCl2Enable = new QCheckBox(tr("Enable CL2"), parent);
+    m_chkCl2Enable->setObjectName(QStringLiteral("hl2Cl2Enable"));
+    m_chkCl2Enable->setEnabled(false);
+    m_chkCl2Enable->setToolTip(clockReason);
     grid->addWidget(m_chkCl2Enable, row, 0);
     m_udCl2Freq = new QSpinBox(parent);
     m_udCl2Freq->setRange(Hl2OptionsModel::kCl2FreqMinMHz,
                           Hl2OptionsModel::kCl2FreqMaxMHz);
     m_udCl2Freq->setSuffix(tr(" MHz"));
+    m_udCl2Freq->setObjectName(QStringLiteral("hl2Cl2Freq"));
+    m_udCl2Freq->setEnabled(false);
+    m_udCl2Freq->setToolTip(clockReason);
     grid->addWidget(m_udCl2Freq, row, 1);
     ++row;
 
     // From mi0bot setup.designer.cs:11178+ chkExt10MHz [v2.10.3.13-beta2]
     m_chkExt10MHz = new QCheckBox(tr("External 10 MHz reference"), parent);
+    m_chkExt10MHz->setObjectName(QStringLiteral("hl2Ext10MHz"));
+    m_chkExt10MHz->setEnabled(false);
+    m_chkExt10MHz->setToolTip(clockReason);
     grid->addWidget(m_chkExt10MHz, row, 0, 1, 2);
     ++row;
 
     // From mi0bot setup.designer.cs:11258 chkDisconnectReset
     m_chkDisconnectReset = new QCheckBox(tr("Reset on Ethernet disconnect"), parent);
+    m_chkDisconnectReset->setObjectName(QStringLiteral("hl2DisconnectReset"));
     grid->addWidget(m_chkDisconnectReset, row, 0, 1, 2);
     ++row;
 
@@ -303,11 +324,20 @@ void Hl2OptionsTab::buildHermesLiteOptions(QWidget* parent)
 
     // From mi0bot setup.designer.cs:11305-11313 chkHL2BandVolts
     m_chkBandVolts = new QCheckBox(tr("Band Volts (PWM out 0–3.3 V)"), parent);
+    m_chkBandVolts->setObjectName(QStringLiteral("hl2BandVolts"));
     grid->addWidget(m_chkBandVolts, row, 0, 1, 2);
     ++row;
 
     // From mi0bot setup.designer.cs:11343 chkSwapAudioChannels
+    // mi0bot swaps the left and right audio it sends the radio over P1
+    // (networkproto1.c:1231-1239 [@c26a8a4]). NereusSDR sends the radio no
+    // audio of its own over P1 (the audio bytes of each TX frame are zero),
+    // so the option is stored and shown disabled with the reason.
     m_chkSwapAudio = new QCheckBox(tr("Swap audio channels"), parent);
+    m_chkSwapAudio->setObjectName(QStringLiteral("hl2SwapAudioChannels"));
+    m_chkSwapAudio->setEnabled(false);
+    m_chkSwapAudio->setToolTip(
+        tr("NereusSDR does not send the radio audio of its own, so there is nothing to swap."));
     grid->addWidget(m_chkSwapAudio, row, 0, 1, 2);
     ++row;
 
@@ -320,9 +350,6 @@ void Hl2OptionsTab::buildHermesLiteOptions(QWidget* parent)
                     if (m_syncing) { return; }
                     if (m_options) {
                         (m_options->*setter)(on);
-                        qCWarning(lcHl2Options).nospace()
-                            << "wire emission TBD Phase 3L follow-up "
-                               "(toggle " << (on ? "ON" : "OFF") << ")";
                     }
                 });
     };
@@ -332,8 +359,6 @@ void Hl2OptionsTab::buildHermesLiteOptions(QWidget* parent)
                     if (m_syncing) { return; }
                     if (m_options) {
                         (m_options->*setter)(v);
-                        qCWarning(lcHl2Options).nospace()
-                            << "wire emission TBD Phase 3L follow-up (value=" << v << ")";
                     }
                 });
     };
