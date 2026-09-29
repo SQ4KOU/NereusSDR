@@ -1126,6 +1126,11 @@ private:
     // while another device controls it (not one held for an absent device).
     // Its flag shows, read-only, in place of a foreign marker.
     bool desktopListensTo(int sliceId) const;
+    // Slice control plan Task 14a: while hosting, each flag's presentation
+    // and TX badge. The one place the host's badge rule lives; it runs on
+    // every change sliceOnAir depends on (holder, TX slice, pending
+    // handoff, MOX state).
+    void refreshDesktopFlags();
     SliceModel* activeSliceForWindow() const;
     void refreshActiveSlicePresentation();
     bool desktopOwnsTransmit() const;

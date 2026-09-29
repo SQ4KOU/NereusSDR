@@ -1,6 +1,7 @@
 // no-port-check: NereusSDR-original. Desktop host presentation over a borrowed local model.
 #include "gui/MainWindow.h"
 
+#include "core/TxSliceArbiter.h"
 #include "core/AppSettings.h"
 #include "core/SliceOwnership.h"
 #include "core/TciServer.h"
@@ -561,6 +562,38 @@ private slots:
         QCOMPARE(af.count(), 0);
         QCOMPARE(mute.count(), 0);
         QCOMPARE(b->frequency(), before);
+
+        // The phone keys on B, then moves transmit to its other slice C.
+        // Only the TX slice changed, and C is on the air, so C's listened
+        // flag turns red and B's clears; this window's own A stays clear.
+        const int cId = model->addSlice(QStringLiteral("pan-0"));
+        ownership->setOwner(cId, phone.deviceId);
+        VfoWidget* flagC = flagFor(window, cId);
+        QVERIFY(flagC);
+        QVERIFY(flagC->isListening());
+        TxSliceArbiter* arbiter = model->txSliceArbiter();
+        QVERIFY(arbiter);
+        TransmitHolder::KeyRequest key;
+        key.deviceId = phone.deviceId;
+        QCOMPARE(server->transmitHolder()->askKey(key).verdict, KeyingVerdict::Admit);
+        server->transmitHolder()->setKeyed(true);
+        if (arbiter->txBoundSliceId() != bId) {
+            QVERIFY(arbiter->requestHandoff(bId, phone.deviceId));
+        }
+        QCOMPARE(arbiter->txBoundSliceId(), bId);
+        QVERIFY(server->sliceOnAir(bId));
+        QVERIFY(flagB->txSliceShown());
+        QVERIFY(!flagC->txSliceShown());
+        QVERIFY(arbiter->requestHandoff(cId, phone.deviceId));
+        QCOMPARE(arbiter->txBoundSliceId(), cId);
+        QVERIFY(server->sliceOnAir(cId));
+        QVERIFY(flagC->txSliceShown());
+        QVERIFY(!flagB->txSliceShown());
+        QVERIFY(!flagA->txSliceShown());
+        server->transmitHolder()->release(phone.deviceId, QStringLiteral("test release"));
+        QVERIFY(!server->sliceOnAir(cId));
+        QVERIFY(!flagC->txSliceShown());
+        model->removeSlice(cId);
 
         // Stop listening from the flag: the Core answers, nothing is left
         // waiting, and the slice is the phone's marker again.

@@ -1693,6 +1693,32 @@ void MainWindow::setDesktopStationController(DesktopStationController* controlle
     refreshDesktopStationState();
 }
 
+void MainWindow::refreshDesktopFlags()
+{
+    if (!m_radioModel || m_radioModel->role() != RadioModel::Role::Local) { return; }
+    const bool hosting = desktopHosting();
+    StationServer* server = hosting ? m_desktopStationController->server() : nullptr;
+    SliceOwnership* ownership = m_radioModel->sliceOwnership();
+    const int txId = m_radioModel->txSliceArbiter()
+        ? m_radioModel->txSliceArbiter()->txBoundSliceId() : -1;
+    for (auto it = m_vfoWidgetsBySlice.constBegin(); it != m_vfoWidgetsBySlice.constEnd(); ++it) {
+        if (VfoWidget* flag = it.value()) {
+            const int id = it.key();
+            const bool mine = !hosting
+                || (ownership && m_radioModel->sliceById(id) && desktopSliceAllowed(id));
+            // Slice control plan Task 14a: a slice this window listens to
+            // keeps its flag (held read-only by its slice access); its TX
+            // badge is red while the slice is on the air.
+            const bool listened = hosting && !mine && desktopListensTo(id);
+            flag->setStationPresentationAllowed(mine || listened);
+            if (hosting) {
+                flag->setTxSlice(mine ? (desktopOwnsTransmit() && id == txId)
+                                      : (listened && server && server->sliceOnAir(id)));
+            } else { flag->setTxSlice(id == txId); }
+        }
+    }
+}
+
 void MainWindow::refreshDesktopStationState()
 {
     if (!m_radioModel || m_radioModel->role() != RadioModel::Role::Local) { return; }
@@ -1749,23 +1775,7 @@ void MainWindow::refreshDesktopStationState()
             }
         }
     }
-    const int txId = m_radioModel->txSliceArbiter()
-        ? m_radioModel->txSliceArbiter()->txBoundSliceId() : -1;
-    for (auto it = m_vfoWidgetsBySlice.constBegin(); it != m_vfoWidgetsBySlice.constEnd(); ++it) {
-        if (VfoWidget* flag = it.value()) {
-            const bool mine = !hosting || std::any_of(visibleSlices.cbegin(), visibleSlices.cend(),
-                [id = it.key()](const SliceModel* slice) { return slice->sliceIndex() == id; });
-            // Slice control plan Task 14a: a slice this window listens to
-            // keeps its flag (held read-only by its slice access); its TX
-            // badge is red while the slice is on the air.
-            const bool listened = hosting && !mine && desktopListensTo(it.key());
-            flag->setStationPresentationAllowed(mine || listened);
-            if (hosting) {
-                flag->setTxSlice(mine ? (desktopOwnsTransmit() && it.key() == txId)
-                                      : (listened && server && server->sliceOnAir(it.key())));
-            } else { flag->setTxSlice(it.key() == txId); }
-        }
-    }
+    refreshDesktopFlags();
     if (m_rxApplet) {
         if (hosting) {
             m_rxApplet->updateSliceButtons(visibleSlices, activeId);
@@ -7196,14 +7206,17 @@ void MainWindow::buildUI()
     if (TxSliceArbiter* arb = m_radioModel->txSliceArbiter()) {
         connect(arb, &TxSliceArbiter::txBoundSliceChanged, this,
                 [this](int oldId, int newId) {
-            for (auto it = m_vfoWidgetsBySlice.constBegin();
-                 it != m_vfoWidgetsBySlice.constEnd(); ++it) {
-                VfoWidget* flag = it.value();
-                if (flag) {
-                    flag->setTxSlice(desktopHosting()
-                        ? (desktopOwnsTransmit() && flag->stationPresentationAllowed()
-                           && flag->sliceIndex() == newId)
-                        : flag->sliceIndex() == newId);
+            // Slice control plan Task 14a: while hosting, the badge follows
+            // refreshDesktopFlags' rule (a listened slice on the air is red
+            // too); this used to set its own rule over it.
+            if (desktopHosting()) {
+                refreshDesktopFlags();
+            } else {
+                for (auto it = m_vfoWidgetsBySlice.constBegin();
+                     it != m_vfoWidgetsBySlice.constEnd(); ++it) {
+                    if (VfoWidget* flag = it.value()) {
+                        flag->setTxSlice(flag->sliceIndex() == newId);
+                    }
                 }
             }
             // oldId < 0 is the arbiter's initial bind (TxSliceArbiter::
@@ -7219,6 +7232,15 @@ void MainWindow::buildUI()
                           .arg(QChar(QLatin1Char('A' + newId))),
                       ToastSeverity::Info, 2000);
         });
+        // A handoff waiting for the unkey gate counts its slice as on the
+        // air (StationServer::sliceTransmitting).
+        connect(arb, &TxSliceArbiter::pendingHandoffChanged, this,
+                [this](int) { if (desktopHosting()) { refreshDesktopFlags(); } });
+    }
+    // The TX slice stays on the air until MOX reads off after its key ends.
+    if (MoxController* mox = m_radioModel->moxController()) {
+        connect(mox, &MoxController::moxStateChanged, this,
+                [this](bool) { if (desktopHosting()) { refreshDesktopFlags(); } });
     }
 
     // MOX transition fast-attack trigger — Thetis display.cs:889-892:
