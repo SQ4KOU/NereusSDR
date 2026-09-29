@@ -40,6 +40,9 @@
 //                remote window, and is disabled with the reason when there
 //                is no radio. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-29 - R-R3-49 / R-IOS-18: Setup description version 14 ids on
+//                the readouts. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 
 #include "DiagnosticsPhaseHPages.h"
@@ -111,6 +114,11 @@ void ConnectionQualityPage::buildUI()
     addRow(QStringLiteral("EP2 bytes sent:"),      m_ep2BytesLabel);
     addRow(QStringLiteral("LAN PHY throttle:"),    m_throttleLabel);
     addRow(QStringLiteral("EP6 sequence gaps:"),   m_seqGapLabel);
+    // Setup description version 14: the readouts' ids.
+    m_ep6BytesLabel->setProperty("nereusSetupId", "diagnostics.connectionQuality.ep6");
+    m_ep2BytesLabel->setProperty("nereusSetupId", "diagnostics.connectionQuality.ep2");
+    m_throttleLabel->setProperty("nereusSetupId", "diagnostics.connectionQuality.throttle");
+    m_seqGapLabel->setProperty("nereusSetupId", "diagnostics.connectionQuality.sequenceGaps");
 
     auto* histGroup = addSection(QStringLiteral("60 s History"));
     auto* histLayout = qobject_cast<QVBoxLayout*>(histGroup->layout());

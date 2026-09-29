@@ -25,6 +25,9 @@
 //                Core's HL2 link in a remote window and said so;
 //                unavailable, never 0, when absent. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - R-R3-49 / R-IOS-18: Setup description version 14 ids on
+//                the readouts. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 
 #include "RadioStatusPage.h"
@@ -184,6 +187,19 @@ RadioStatusPage::RadioStatusPage(RadioModel* model, QWidget* parent)
 
     scroll->setWidget(cardsContainer);
     outer->addWidget(scroll);
+
+    // Setup description version 14: the readouts' ids.
+    const std::pair<QLabel*, const char*> readouts[] = {
+        {m_radioLabel, "radio"}, {m_uptimeLabel, "uptime"}, {m_firmwareLabel, "firmware"},
+        {m_modeLabel, "mode"}, {m_paTemperatureLabel, "paTemperature"},
+        {m_paCurrentLabel, "paCurrent"}, {m_paVoltageLabel, "paVoltage"},
+        {m_forwardLabel, "forward"}, {m_reflectedLabel, "reflected"}, {m_swrLabel, "swr"},
+        {m_bwEp6Label, "ep6"}, {m_bwEp2Label, "ep2"}, {m_bwThrottleLabel, "throttle"},
+        {m_bwSeqGapLabel, "sequenceGaps"}};
+    for (const auto& [label, id] : readouts) {
+        label->setProperty("nereusSetupId",
+                           QStringLiteral("diagnostics.radioStatus.") + QLatin1String(id));
+    }
 
     // ── Wire signals if model present ─────────────────────────────────────
     if (m_model) {
