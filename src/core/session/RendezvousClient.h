@@ -117,16 +117,20 @@ public:
     /// Core that has the hello gets as long again to be registered, or it
     /// leaves that connection and reconnects (fix wave I3).
     static constexpr int kHelloTimeoutMs = 10000;
-    /// A registered Core pings the service this often, and reconnects when
-    /// two pings in a row go unanswered: the service's own ping interval
-    /// (section 9.2), so a connection a NAT dropped is noticed. On TCP a
-    /// pong is never lost on its own, only held behind a stalled path, so
-    /// this leaves a connection that has carried no pong for 40 to 60 s. The
-    /// service already leaves one silent for 20 to 40 s (a pong 20 s late),
-    /// so a longer tolerance here would keep nothing: it would only leave
-    /// the Core longer on a connection the service has closed.
+    /// A registered Core pings the service this often, and reconnects when a
+    /// ping is still unanswered at the next tick. These are the service's
+    /// own timers: it pings every 20 s and closes a connection whose pong is
+    /// 20 s late (rendezvous/server/nereus_rendezvous/config.py
+    /// ping_interval_seconds = 20, ping_timeout_seconds = 20; section 9.2).
+    /// With one ping allowed outstanding for one 20 s interval, the Core
+    /// leaves a path that has carried no pong for 20 to 40 s, the same
+    /// window in which the service gives up on it. On TCP a pong is never
+    /// lost on its own, only held behind a stalled path, so a longer
+    /// tolerance keeps nothing: until G-08 the Core allowed two missed
+    /// pongs (40 to 60 s), which only left it up to 20 s longer on a
+    /// connection the service had already closed.
     static constexpr int kPingIntervalMs = 20000;
-    static constexpr int kMaxMissedPongs = 2;
+    static constexpr int kMaxMissedPongs = 1;
     /// The most candidates the Core sends for one introduction (section
     /// 9.1's per-side cap).
     static constexpr int kMaxCandidatesPerIntroduction = 64;

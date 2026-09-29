@@ -1705,16 +1705,15 @@ private slots:
     }
 
     // Task 28 tail (R-IOS-16), the Rock's registrations: a registered Core
-    // pings every kPingIntervalMs and leaves the connection only when two
-    // pings in a row go unanswered. On a lossy path (LossyLink: shortened
-    // interval, the same rule) one lost pong, and pongs held for 5% or 15%
-    // of the interval (1 s and 3 s of the real 20 s), keep the registration
-    // and the one connection.
+    // pings every kPingIntervalMs and leaves the connection when a ping is
+    // still unanswered at the next tick, the service's own rule (G-08). On
+    // a lossy path (LossyLink: shortened interval, the same rule) pongs
+    // held for 5% or 15% of the interval (1 s and 3 s of the real 20 s)
+    // keep the registration and the one connection.
     void aLostOrLatePongKeepsTheRegistration_data()
     {
         QTest::addColumn<int>("dropped");
         QTest::addColumn<int>("delayPercent");
-        QTest::newRow("one pong lost") << 1 << 0;
         QTest::newRow("every pong 5% late") << 0 << 5;
         QTest::newRow("every pong 15% late") << 0 << 15;
     }
@@ -1753,10 +1752,11 @@ private slots:
     }
 
     // Task 28 tail (R-IOS-16), and the ping case the comment above names: a
-    // path that carries no pong (two lost in a row, or none at all) is
-    // found at the third tick after the last pong, the Core leaves that
-    // connection before it opens the next, and it registers again once
-    // pongs come back.
+    // path that carries no pong is found at the second tick after the last
+    // pong (one ping unanswered for a whole interval, the service's own
+    // 20 s ping and 20 s timeout, G-08), the Core leaves that connection
+    // before it opens the next, and it registers again once pongs come
+    // back.
     void aCoreThatHearsNoPongsLeavesThatConnectionFirst()
     {
         constexpr int kIntervalMs = 400;
@@ -1785,11 +1785,13 @@ private slots:
         QElapsedTimer silent;
         silent.start();
         QTRY_COMPARE_WITH_TIMEOUT(lost.size(), 1, 20 * kIntervalMs);
-        // Two ticks with a ping outstanding, then the third ends it: never
-        // before two intervals of silence.
-        QVERIFY2(silent.elapsed() >= 2 * kIntervalMs - kIntervalMs / 10,
+        // One tick sends a ping, the next finds it unanswered and ends the
+        // connection: never before one interval of silence, and after only
+        // one lost pong (it took two before G-08, 20 s later than the
+        // service gives up on the same path).
+        QVERIFY2(silent.elapsed() >= kIntervalMs - kIntervalMs / 10,
                  qPrintable(QStringLiteral("left after %1 ms").arg(silent.elapsed())));
-        QCOMPARE(link.pongsDropped(), 2);
+        QCOMPARE(link.pongsDropped(), 1);
 
         link.setDropAllPongs(false);
         QWebSocket* second = player.waitForConnection();
