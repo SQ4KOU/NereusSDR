@@ -936,12 +936,16 @@ private slots:
                 {"binding", QJsonObject{{"radioSetting",
                                          QStringLiteral("paCalibration/calPoint%1").arg(n)}}},
                 {"applies", "live"},
-                {"gate", QJsonObject{{"capability", "transmitSettingsVersion"}, {"min", 6},
-                                     {"offAir", true}}},
+                {"gate", QJsonObject{{"capability", "transmitSettingsVersion"}, {"min", 6}}},
                 {"requiresDescriptionVersion", 13}, {"unit", "W"},
                 {"min", 0}, {"max", maxima[i]}, {"step", 0.1}, {"decimals", 1},
                 {"default", n * 10.0}, {"boardClass", int(PaCalBoardClass::Anan100)}}));
             QVERIFY(!point.value("gate").toObject().contains("transmit"));
+            // Thetis gives the table no transmit rule (grp10WattMeterTrim's
+            // boxes have no MOX check; the table corrects the forward-power
+            // reading only), and the Core takes a point on the air, so the
+            // gate carries no offAir.
+            QVERIFY(!point.value("gate").toObject().contains("offAir"));
         }
         const QJsonArray local = wattSections.at(1).toObject().value("controls").toArray();
         QCOMPARE(local.size(), 2);

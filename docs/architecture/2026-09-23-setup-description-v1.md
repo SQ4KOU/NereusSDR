@@ -465,8 +465,10 @@ point: ANAN-10 class and the HL2 10 W except 11 and 12 W for points 9 and 10,
 ANAN-100 class 100 W except 110 and 120 W, ANAN-8000 class 100, 100, 100,
 120, 140, 200, 200, 200, 220 and 240 W), `step` 0.1, `decimals` 1, `unit`
 `W`, and `boardClass` (1 ANAN-10, 2 ANAN-100, 3 ANAN-8000). A model without a
-class removes the ten points. The gate is `transmitSettingsVersion:6` plus
-`offAir:true`, the desktop's own gate for this table.
+class removes the ten points. The gate is `transmitSettingsVersion:6`, the
+desktop's own gate for this table, with no `offAir`: Thetis gives the table
+no transmit rule (it corrects the forward-power reading only, and its boxes
+are read live with no MOX check).
 
 `binding.radioSetting` is new in version 13: a key under the connected
 radio. The renderer reads and writes `hardware/<MAC>/<radioSetting>` through
@@ -480,9 +482,9 @@ A point reads as its stored `calPoint<N>` while
 and as its `default` while that key is absent or `0`; another class disables
 the point with a plain reason (the table was saved for another model). An
 edit first writes `boardClass` when it is absent or `0`, then the point. The
-Core applies the table at once, and while the radio transmits it refuses the
-write and hands back its value (the settings proxy's off-air rule for these
-keys, as for the desktop's). A value outside the row's range, a
+Core takes a point on or off the air; a point written while the radio
+transmits reaches the meter once the radio is back on receive, as a remote
+desktop window's does. A value outside the row's range, a
 non-number, or a `boardClass` other than the Core's radio's is refused whole
 with the range in plain words (for example "Choose a calibration point from
 0 to 10 W."), and the Core hands back its value; nothing is clamped.

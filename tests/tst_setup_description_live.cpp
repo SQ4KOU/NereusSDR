@@ -82,6 +82,9 @@ private slots:
         }
         QCOMPARE(point.value("label"), QJsonValue("3 W"));
         QCOMPARE(point.value("boardClass"), QJsonValue(int(PaCalBoardClass::Anan10)));
+        // The Core takes a point on the air (below), so the gate says so.
+        QCOMPARE(point.value("gate"), QJsonValue(QJsonObject{
+            {"capability", "transmitSettingsVersion"}, {"min", 6}}));
 
         QHash<QByteArray, int> v12Features = kHolder;
         v12Features.insert("setupDescription", 12);

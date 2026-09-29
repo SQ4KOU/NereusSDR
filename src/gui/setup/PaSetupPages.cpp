@@ -2122,9 +2122,10 @@ void PaWattMeterPage::setTransmitSettingsPermittedAt(int version, bool permitted
                                                      const QString& reason)
 {
     // R-R3-46 / R-R3-49 (parity Task 6): the PA forward-power table
-    // (hardware/<mac>/paCalibration/...) is taken by the Core while its
-    // radio is off the air. Show PA Values and Reset PA Values are this
-    // window's own.
+    // (hardware/<mac>/paCalibration/...) is taken by the Core on or off the
+    // air, as Thetis has no transmit rule for it; a point changed while the
+    // radio transmits reaches the meter once it is back on receive. Show PA
+    // Values and Reset PA Values are this window's own.
     if (version != 6 || !m_paCalGroup) {
         return;
     }
