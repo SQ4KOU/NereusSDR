@@ -695,19 +695,52 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                 pages.removeAt(p--);
                 continue;
             }
-            // Version 13: the Alex-1 Filters tab shows its Saturn BPF1 Bands
-            // only on boards whose preselector is the BPF1 bank, as
-            // AntennaAlexTab::populate does (OrionMKII for the ANAN-7000DLE /
-            // 8000DLE, Saturn, Saturn MkII and the ANAN-G2E's HermesC10).
-            // From Thetis console.cs:6827-6837 [v2.10.3.15] //N1GP G2E added (HermesC10) //DK1HLM
-            if (pageId == QJsonValue(QStringLiteral("hardware.alex1Filters"))
-                && !codec::alex::usesBpf1Preselector(caps.board)) {
+            // Version 13: the Alex-1 Filters tab shows either the Alex HPF
+            // Bands or the Saturn BPF1 Bands, by model, as
+            // AntennaAlexTab::populate does. The five HPF / 6 m LNA switches
+            // go with whichever section is shown, first.
+            // From Thetis setup.cs:6336-6360 [v2.10.3.15]:
+            //   HardwareSpecific.Model != HPSDRModel.ANAN_G2E && //N1GP G2E added
+            //   HardwareSpecific.Model != HPSDRModel.REDPITAYA)//DH1KLM
+            //   { panelBPFControl.Visible = false; panelAlex1HPFControl.Visible = true; ... }
+            // From Thetis setup.cs:20208-20220 [v2.10.3.15] (7000D; the other
+            //   BPF-panel cases match): panelAlex1HPFControl.Visible = false;
+            //   panelBPFControl.Visible = true; switches moved to panelBPFControl.
+            if (pageId == QJsonValue(QStringLiteral("hardware.alex1Filters"))) {
+                const bool bpfPanel = skuUiProfileFor(model).hasBpfPanel;
+                const QString hpfTitle = QStringLiteral("Alex HPF Bands");
+                const QString bpf1Title = QStringLiteral("Saturn BPF1 Bands");
                 QJsonObject page = pages.at(p).toObject();
                 QJsonArray sections = page.value(QStringLiteral("sections")).toArray();
+                QJsonArray switchRows;
                 for (int s = 0; s < sections.size(); ++s) {
-                    if (sections.at(s).toObject().value(QStringLiteral("title"))
-                        == QJsonValue(QStringLiteral("Saturn BPF1 Bands"))) {
+                    QJsonObject section = sections.at(s).toObject();
+                    const QString title = section.value(QStringLiteral("title")).toString();
+                    if (bpfPanel && title == hpfTitle) {
+                        const QJsonArray rows = section.value(QStringLiteral("controls")).toArray();
+                        for (const QJsonValue& row : rows) {
+                            const QString id = row.toObject().value(QStringLiteral("id")).toString();
+                            if (!id.startsWith(QStringLiteral("hardware.alex1Filters.hpf."))) {
+                                switchRows.append(row);
+                            }
+                        }
                         sections.removeAt(s--);
+                    } else if (!bpfPanel && title == bpf1Title) {
+                        sections.removeAt(s--);
+                    }
+                }
+                if (bpfPanel) {
+                    for (int s = 0; s < sections.size(); ++s) {
+                        QJsonObject section = sections.at(s).toObject();
+                        if (section.value(QStringLiteral("title")).toString() != bpf1Title) {
+                            continue;
+                        }
+                        QJsonArray rows = switchRows;
+                        for (const QJsonValue& row : section.value(QStringLiteral("controls")).toArray()) {
+                            rows.append(row);
+                        }
+                        section.insert(QStringLiteral("controls"), rows);
+                        sections[s] = section;
                     }
                 }
                 page.insert(QStringLiteral("sections"), sections);

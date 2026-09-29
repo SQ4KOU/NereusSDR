@@ -1,6 +1,7 @@
 // no-port-check: smoke test for Alex-1 Filters sub-sub-tab UI construction + persistence
 #include <QtTest/QtTest>
 #include <QApplication>
+#include <QGroupBox>
 
 #include "core/BoardCapabilities.h"
 #include "core/HpsdrModel.h"
@@ -82,33 +83,75 @@ private slots:
         QVERIFY(tab.isSaturnBpf1Visible());
     }
 
-    // The ANAN-7000DLE and 8000DLE (OrionMKII) drive the BPF1 bank too, so
-    // AntennaAlexTab::populate shows its rows on both.
-    // From Thetis console.cs:6827-6837 [v2.10.3.15]: setAlex1HPF sends
-    // OrionMKII, Saturn and HermesC10 to setBPF1ForOrionIISaturn
-    // (//N1GP G2E added (HermesC10) //DK1HLM); setup.cs
-    // 20208-20209 and 20260-20261 [v2.10.3.15] show panelBPFControl on the
-    // 7000D and 8000D.
-    void dleBoards_populateShowsBpf1Column()
+    // Thetis swaps the Alex-1 tab's panels by model: on the 7000D, 8000D,
+    // AnvelinaPro3, G2E, G2, G2-1K and RedPitaya it hides the Alex HPF panel,
+    // shows the BPF panel and moves the five switches into it; on every
+    // other model the HPF panel shows with the switches and BPF is hidden.
+    // From Thetis setup.cs:6336-6360 [v2.10.3.15] (//N1GP G2E added, //DH1KLM)
+    // and setup.cs:20208-20220 [v2.10.3.15] for the 7000D (8000D 20260-20272).
+    // (console.cs:6827-6837 [v2.10.3.15] routes the filters by board:
+    // //N1GP G2E added (HermesC10) //DK1HLM.)
+    static QString switchGroupTitle(AntennaAlexAlex1Tab& tab)
     {
-        for (const HPSDRModel dle : {HPSDRModel::ANAN7000D, HPSDRModel::ANAN8000D}) {
+        auto* box = tab.findChild<QWidget*>(QStringLiteral("alexHpfBypassOnPs"));
+        for (QWidget* up = box ? box->parentWidget() : nullptr; up; up = up->parentWidget()) {
+            if (auto* group = qobject_cast<QGroupBox*>(up)) {
+                return group->title();
+            }
+        }
+        return {};
+    }
+
+    void bpfPanelModels_populateSwapsHpfForBpf1()
+    {
+        const HPSDRModel bpfModels[] = {
+            HPSDRModel::ANAN7000D, HPSDRModel::ANAN8000D, HPSDRModel::ANVELINAPRO3,
+            HPSDRModel::ANAN_G2E, HPSDRModel::ANAN_G2, HPSDRModel::ANAN_G2_1K,
+            HPSDRModel::REDPITAYA};
+        for (const HPSDRModel sku : bpfModels) {
             RadioModel model;
+            model.setHpsdrModelForTest(sku);
             AntennaAlexTab tab(&model);
             RadioInfo info;
-            info.boardType = boardForModel(dle);
-            QCOMPARE(info.boardType, HPSDRHW::OrionMKII);
+            info.boardType = boardForModel(sku);
             tab.populate(info, BoardCapsTable::forBoard(info.boardType));
             auto* alex1 = tab.findChild<AntennaAlexAlex1Tab*>();
             QVERIFY(alex1);
-            QVERIFY(alex1->isSaturnBpf1Visible());
+            QVERIFY2(alex1->isSaturnBpf1Visible(), qPrintable(QString::number(int(sku))));
+            QVERIFY2(!alex1->isAlexHpfVisible(), qPrintable(QString::number(int(sku))));
+            QCOMPARE(switchGroupTitle(*alex1), QStringLiteral("Saturn BPF1 Bands"));
         }
-        // A board on the high-pass ladder keeps the rows hidden.
+        // The plain OrionMKII model and the HPF-ladder models keep the HPF
+        // panel, with the switches in it, and hide BPF.
+        for (const HPSDRModel sku : {HPSDRModel::ORIONMKII, HPSDRModel::ANAN200D,
+                                     HPSDRModel::ANAN100D, HPSDRModel::ANAN100}) {
+            RadioModel model;
+            model.setHpsdrModelForTest(sku);
+            AntennaAlexTab tab(&model);
+            RadioInfo info;
+            info.boardType = boardForModel(sku);
+            tab.populate(info, BoardCapsTable::forBoard(info.boardType));
+            auto* alex1 = tab.findChild<AntennaAlexAlex1Tab*>();
+            QVERIFY(alex1);
+            QVERIFY2(!alex1->isSaturnBpf1Visible(), qPrintable(QString::number(int(sku))));
+            QVERIFY2(alex1->isAlexHpfVisible(), qPrintable(QString::number(int(sku))));
+            QCOMPARE(switchGroupTitle(*alex1), QStringLiteral("Alex HPF Bands"));
+        }
+    }
+
+    // The swap goes back: a later populate for an HPF model returns the
+    // switches to the HPF panel.
+    void bpfPanel_swapIsReversible()
+    {
         RadioModel model;
-        AntennaAlexTab tab(&model);
-        RadioInfo info;
-        info.boardType = HPSDRHW::Orion;
-        tab.populate(info, BoardCapsTable::forBoard(info.boardType));
-        QVERIFY(!tab.findChild<AntennaAlexAlex1Tab*>()->isSaturnBpf1Visible());
+        AntennaAlexAlex1Tab tab(&model);
+        tab.updateBoardCapabilities(true);
+        QVERIFY(!tab.isAlexHpfVisible());
+        QCOMPARE(switchGroupTitle(tab), QStringLiteral("Saturn BPF1 Bands"));
+        tab.updateBoardCapabilities(false);
+        QVERIFY(tab.isAlexHpfVisible());
+        QVERIFY(!tab.isSaturnBpf1Visible());
+        QCOMPARE(switchGroupTitle(tab), QStringLiteral("Alex HPF Bands"));
     }
 
     // restoreSettings with empty MAC is a no-op (no crash).

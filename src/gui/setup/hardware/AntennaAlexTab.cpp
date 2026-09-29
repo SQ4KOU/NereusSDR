@@ -37,6 +37,10 @@
 //   2026-09-29 - The BPF1 rows follow codec::alex::usesBpf1Preselector, so
 //                the ANAN-7000DLE / 8000DLE (OrionMKII) show them as Thetis
 //                does. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - The Alex-1 panels follow Thetis's model list
+//                (SkuUiProfile::hasBpfPanel, setup.cs:6336-6360): BPF1 with
+//                the switches, or Alex HPF with them. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -91,7 +95,7 @@
 
 #include "core/BoardCapabilities.h"
 #include "core/HpsdrModel.h"
-#include "core/codec/AlexFilterMap.h"
+#include "core/SkuUiProfile.h"
 #include "models/RadioModel.h"
 
 #include <QTabWidget>
@@ -165,15 +169,19 @@ void AntennaAlexTab::populate(const RadioInfo& info, const BoardCapabilities& ca
     // internally by AntennaAlexAntennaControlTab via AlexController.
     // Phase 3P-F Task 3: removed old placeholder table gating code.
 
-    // Show the BPF1 column on every board whose receive preselector is the
-    // BPF1 bank: OrionMKII (ANAN-7000DLE / 8000DLE), Saturn (ANAN-G2 /
-    // G2-1K), SaturnMKII (G2 MkII revision) and HermesC10 (ANAN-G2E).
-    // From Thetis console.cs:6827-6837 [v2.10.3.15] //N1GP G2E added (HermesC10) //DK1HLM:
-    //   setAlex1HPF dispatches setBPF1ForOrionIISaturn for OrionMKII || Saturn || HermesC10.
+    // Show the BPF1 group, with the five HPF / 6 m LNA switches, in place of
+    // the Alex HPF group on Thetis's BPF-panel models (SkuUiProfile::hasBpfPanel:
+    // 7000D, 8000D, AnvelinaPro3, G2E, G2, G2-1K, RedPitaya). Thetis gates the
+    // panels by model, not board.
+    // From Thetis setup.cs:6336-6360 [v2.10.3.15]:
+    //   HardwareSpecific.Model != HPSDRModel.ANAN_G2E && //N1GP G2E added
+    //   HardwareSpecific.Model != HPSDRModel.REDPITAYA)//DH1KLM
+    //   { panelBPFControl.Visible = false; panelAlex1HPFControl.Visible = true; ... }
     // From Thetis setup.cs:20208-20209 and 20260-20261 [v2.10.3.15]: the
     //   7000D and 8000D show panelBPFControl.
-    const bool usesBpf1 = codec::alex::usesBpf1Preselector(caps.board);
-    m_alex1Tab->updateBoardCapabilities(usesBpf1);
+    const bool bpfPanel = m_model
+        && skuUiProfileFor(m_model->hardwareProfile().model).hasBpfPanel;
+    m_alex1Tab->updateBoardCapabilities(bpfPanel);
 
     // Gate Alex-2 board status on caps.hasAlex2 (Phase 3P-I-b T8).
     // From Thetis setup.cs:6228-6264 [v2.10.3.13]: tpAlex2FilterControl

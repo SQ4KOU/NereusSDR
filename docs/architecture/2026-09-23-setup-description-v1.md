@@ -533,9 +533,10 @@ radio is on the air, and for a rate outside the list.
 Two pages follow Antenna / ALEX, both `where:"station"` and partial:
 Alex-1 Filters (`hardware.alex1Filters`, on every board with ALEX filters)
 and Alex-2 Filters (`hardware.alex2Filters`, only where the board has
-Alex-2). Alex-1 Filters has Alex HPF Bands and, only on boards whose
-receive preselector is the BPF1 bank (the ANAN-7000DLE and 8000DLE, Saturn,
-Saturn MkII and the ANAN-G2E, the desktop's own gate), Saturn BPF1 Bands; Alex-2
+Alex-2). Alex-1 Filters has one bank section, chosen by model as Thetis
+does (setup.cs:6336-6360 [v2.10.3.15], the desktop's own gate): Saturn BPF1
+Bands on the ANAN-7000DLE, 8000DLE, Anvelina Pro 3, ANAN-G2E, G2, G2-1K and
+Red Pitaya, and Alex HPF Bands on every other model; Alex-2
 Filters has Alex-2 HPF Bands, whose first row is ByPass / 55 MHz BPF
 (master) (`hardware.alex2Filters.bypass55MhzBpf`, `radioSetting`
 `alex2/master/bypass55MhzBpf`). Each bank has six rows in the desktop's
@@ -550,7 +551,7 @@ defaulting to Thetis's spinner values. Every row has the gate
 `radioHardwareVersion:8` and no off-air rule: the Core applies a change to
 its radio at once, on or off the air, as Thetis's setters do.
 
-Alex HPF Bands opens with the tab's five switches above its rows, in the
+The shown bank section opens with the tab's five switches above its rows, in the
 desktop's order: HPF Bypass (master), HPF Bypass on TX, HPF Bypass on
 PureSignal feedback, Disable 6m LNA on TX and Disable 6m LNA on RX (ids
 `hardware.alex1Filters.hpfBypass`, `.hpfBypassOnTx`, `.hpfBypassOnPs`,

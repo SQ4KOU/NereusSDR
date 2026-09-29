@@ -27,6 +27,7 @@
 #include "gui/setup/hardware/Hl2IoBoardTab.h"
 #include "gui/setup/hardware/RadioInfoTab.h"
 #include "core/PaCalProfile.h"
+#include "core/SkuUiProfile.h"
 #include "core/RadioDiscovery.h"
 #include "gui/setup/PaSetupPages.h"
 #include "gui/widgets/MetricLabel.h"
@@ -972,16 +973,32 @@ private slots:
     // Version 13 (R-R3-46, R-R3-49): every Alex receive filter row the
     // Core describes is the desktop tab's row: its group, its row label with
     // Bypass / Start / End, its box's range, step, decimals and Thetis
-    // default, on the ANAN-G2 (both Alex-1 banks and Alex-2).
+    // default. On the ANAN-G2 the Alex-1 tab shows BPF1 with the five
+    // switches; on a plain Orion MKII it shows Alex HPF with them.
+    // From Thetis setup.cs:6336-6360 [v2.10.3.15]:
+    //   HardwareSpecific.Model != HPSDRModel.ANAN_G2E && //N1GP G2E added
+    //   HardwareSpecific.Model != HPSDRModel.REDPITAYA)//DH1KLM
+    void describedAlexFilterRowsMatchNativeTabs_data()
+    {
+        QTest::addColumn<int>("model");
+        QTest::addColumn<int>("board");
+        QTest::newRow("ANAN-G2") << int(HPSDRModel::ANAN_G2) << int(HPSDRHW::Saturn);
+        QTest::newRow("Orion MKII") << int(HPSDRModel::ORIONMKII) << int(HPSDRHW::OrionMKII);
+    }
+
     void describedAlexFilterRowsMatchNativeTabs()
     {
+        QFETCH(int, model);
+        QFETCH(int, board);
+        const auto sku = static_cast<HPSDRModel>(model);
         AppSettings::instance().clear();
-        RadioModel model;
-        model.setHpsdrModelForTest(HPSDRModel::ANAN_G2);
-        AntennaAlexAlex1Tab alex1(&model);
-        AntennaAlexAlex2Tab alex2(&model);
+        RadioModel radio;
+        radio.setHpsdrModelForTest(sku);
+        AntennaAlexAlex1Tab alex1(&radio);
+        AntennaAlexAlex2Tab alex2(&radio);
+        alex1.updateBoardCapabilities(skuUiProfileFor(sku).hasBpfPanel);
         SetupDescriptionService service;
-        service.setRadioContext(BoardCapsTable::forBoard(HPSDRHW::Saturn), HPSDRModel::ANAN_G2);
+        service.setRadioContext(BoardCapsTable::forBoard(static_cast<HPSDRHW>(board)), sku);
         const QJsonObject hardware = projectedCategory(service.hardware(), 13);
         int compared = 0;
         for (const QJsonValue& rawPage : hardware.value("pages").toArray()) {
@@ -1059,9 +1076,9 @@ private slots:
                 }
             }
         }
-        // The Alex-1 tab's five switches, three banks of six rows of three,
-        // and the Alex-2 master.
-        QCOMPARE(compared, 5 + 3 * 6 * 3 + 1);
+        // The Alex-1 tab's five switches, its one shown bank and Alex-2's
+        // (six rows of three each), and the Alex-2 master.
+        QCOMPARE(compared, 5 + 2 * 6 * 3 + 1);
     }
 
     void describedHardwareAntennaScalarsMatchDesktop_data()

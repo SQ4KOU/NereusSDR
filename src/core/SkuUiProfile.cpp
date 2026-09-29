@@ -13,6 +13,10 @@
 //   2026-09-28 - Share the per-SKU Ext 2 relay tooltip with the desktop and
 //                 Setup description. J.J. Boyd (KG4VCF), with AI-assisted
 //                 transformation via OpenAI Codex.
+//   2026-09-29 - hasBpfPanel: the models whose Alex-1 Filters tab shows the
+//                 BPF panel (with the five switches) in place of the Alex HPF
+//                 panel, as Thetis setup.cs:6336-6360 does. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -227,6 +231,30 @@ SkuUiProfile skuUiProfileFor(HPSDRModel sku)
     case HPSDRModel::FIRST:
     case HPSDRModel::LAST:
         // Sentinel values — same pattern as HardwareProfile.cpp:197-199.
+        break;
+    }
+
+    // Alex-1 Filters: every model outside this list gets the Alex HPF panel
+    // with the five HPF / 6 m LNA switches; these show the BPF panel and the
+    // per-model cases move the switches into it (7000D setup.cs:20208-20220,
+    // 8000D 20260-20272, G2 20313, G2_1K 20364, AnvelinaPro3 20415,
+    // RedPitaya 20466, G2E 19930). ANAN200D is in the list but its case never
+    // swaps the panels, so it keeps the HPF panel here.
+    // From Thetis setup.cs:6336-6360 [v2.10.3.15]:
+    //   HardwareSpecific.Model != HPSDRModel.ANAN_G2E && //N1GP G2E added
+    //   HardwareSpecific.Model != HPSDRModel.REDPITAYA)//DH1KLM
+    //   { panelBPFControl.Visible = false; panelAlex1HPFControl.Visible = true; ... }
+    switch (sku) {
+    case HPSDRModel::ANAN7000D:
+    case HPSDRModel::ANAN8000D:
+    case HPSDRModel::ANVELINAPRO3:
+    case HPSDRModel::ANAN_G2E:   //N1GP G2E added
+    case HPSDRModel::ANAN_G2:
+    case HPSDRModel::ANAN_G2_1K:
+    case HPSDRModel::REDPITAYA:  //DH1KLM
+        p.hasBpfPanel = true;
+        break;
+    default:
         break;
     }
 

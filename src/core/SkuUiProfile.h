@@ -18,6 +18,10 @@
 //   2026-09-28 - Share the per-SKU Ext 2 relay tooltip with the desktop and
 //                 Setup description. J.J. Boyd (KG4VCF), with AI-assisted
 //                 transformation via OpenAI Codex.
+//   2026-09-29 - hasBpfPanel: the models whose Alex-1 Filters tab shows the
+//                 BPF panel (with the five switches) in place of the Alex HPF
+//                 panel, as Thetis setup.cs:6336-6360 does. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -90,6 +94,9 @@ struct SkuUiProfile {
     bool                    hasRxOutOnTx    {false};
     bool                    hasRxBypassUi   {false};  // chkDisableRXOut
     bool                    hasAntennaTab   {true};   // false on HL2
+    // Alex-1 filters: the BPF panel (with the five HPF/LNA switches) in
+    // place of the Alex HPF panel. Thetis setup.cs:6336-6360 [v2.10.3.15].
+    bool                    hasBpfPanel     {false};
     std::array<QString, 3>  rxOnlyLabels    {QStringLiteral("RX1"),
                                              QStringLiteral("RX2"),
                                              QStringLiteral("XVTR")};

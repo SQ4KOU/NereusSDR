@@ -42,6 +42,10 @@
 //   2026-09-29 - The BPF1 column shows on the ANAN-7000DLE / 8000DLE too
 //                (comments only here; the gate is in AntennaAlexTab).
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - updateBoardCapabilities swaps the Alex HPF group for the
+//                BPF1 group and moves the five switches with it, as Thetis
+//                setup.cs:6336-6360 and the per-model cases do. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 //=================================================================
@@ -376,7 +380,9 @@ AntennaAlexAlex1Tab::AntennaAlexAlex1Tab(RadioModel* model, QWidget* parent)
     // ── Column 1: Alex HPF Bands ──────────────────────────────────────────────
     // Source: Thetis panelAlex1HPFControl (setup.designer.cs:23635-24420) [@501e3f5]
     auto* hpfGroup = new QGroupBox(tr("Alex HPF Bands"), content);
+    m_hpfGroup = hpfGroup;
     auto* hpfVBox  = new QVBoxLayout(hpfGroup);
+    m_hpfVBox = hpfVBox;
     hpfVBox->setContentsMargins(8, 8, 8, 8);
     hpfVBox->setSpacing(4);
 
@@ -594,11 +600,11 @@ AntennaAlexAlex1Tab::AntennaAlexAlex1Tab(RadioModel* model, QWidget* parent)
 
     // ── Column 3: Saturn BPF1 Bands ───────────────────────────────────────────
     // Source: spec §7; same band-edge shape as Alex HPF.
-    // Shown only on boards whose preselector is the BPF1 bank
-    // (codec::alex::usesBpf1Preselector: OrionMKII, Saturn, SaturnMKII,
-    // HermesC10); AntennaAlexTab::populate sets it.
+    // Shown in place of the Alex HPF group on Thetis's BPF-panel models
+    // (SkuUiProfile::hasBpfPanel); AntennaAlexTab::populate sets it.
     m_bpf1Group = new QGroupBox(tr("Saturn BPF1 Bands"), content);
     auto* bpf1VBox = new QVBoxLayout(m_bpf1Group);
+    m_bpf1VBox = bpf1VBox;
     bpf1VBox->setContentsMargins(8, 8, 8, 8);
     bpf1VBox->setSpacing(4);
 
@@ -858,12 +864,36 @@ QString AntennaAlexAlex1Tab::imdWarningText()
 
 // ── updateBoardCapabilities ───────────────────────────────────────────────────
 
-// Shows/hides the BPF1 column based on the connected board.
-// Gate: codec::alex::usesBpf1Preselector (OrionMKII, Saturn, SaturnMKII,
-// HermesC10), decided in AntennaAlexTab::populate.
-void AntennaAlexAlex1Tab::updateBoardCapabilities(bool isSaturnBoard)
+// Shows the BPF1 group in place of the Alex HPF group on Thetis's BPF-panel
+// models (SkuUiProfile::hasBpfPanel, decided in AntennaAlexTab::populate) and
+// moves the five HPF / 6 m LNA switches into whichever group is shown.
+// From Thetis setup.cs:6336-6360 [v2.10.3.15]: other models get
+//   panelBPFControl.Visible = false; panelAlex1HPFControl.Visible = true;
+//   and the switches reparented to panelAlex1HPFControl.
+//   HardwareSpecific.Model != HPSDRModel.ANAN_G2E && //N1GP G2E added
+//   HardwareSpecific.Model != HPSDRModel.REDPITAYA)//DH1KLM
+// From Thetis setup.cs:20208-20220 [v2.10.3.15] (7000D; the other BPF-panel
+//   cases match): panelAlex1HPFControl.Visible = false;
+//   panelBPFControl.Visible = true; the switches reparented to panelBPFControl.
+void AntennaAlexAlex1Tab::updateBoardCapabilities(bool bpfPanel)
 {
-    m_bpf1Group->setVisible(isSaturnBoard);
+    m_bpf1Group->setVisible(bpfPanel);
+    m_hpfGroup->setVisible(!bpfPanel);
+
+    QVBoxLayout* target = bpfPanel ? m_bpf1VBox : m_hpfVBox;
+    QGroupBox* parent = bpfPanel ? m_bpf1Group : m_hpfGroup;
+    // BPF1 keeps its note label first; the switches follow it.
+    int at = bpfPanel ? 1 : 0;
+    for (QCheckBox* chk : { m_hpfBypass, m_hpfBypassOnTx, m_hpfBypassOnPs,
+                             m_disable6mLnaOnTx, m_disable6mLnaOnRx }) {
+        if (chk->parentWidget() != parent) {
+            const bool hidden = chk->isHidden();
+            chk->setParent(parent);
+            target->insertWidget(at, chk);
+            chk->setHidden(hidden);
+        }
+        ++at;
+    }
 }
 
 // ── restoreSettings ───────────────────────────────────────────────────────────
@@ -1104,6 +1134,11 @@ void AntennaAlexAlex1Tab::onMasterCheckChanged(bool checked, const QString& sett
 bool AntennaAlexAlex1Tab::isSaturnBpf1Visible() const
 {
     return m_bpf1Group && !m_bpf1Group->isHidden();
+}
+
+bool AntennaAlexAlex1Tab::isAlexHpfVisible() const
+{
+    return m_hpfGroup && !m_hpfGroup->isHidden();
 }
 
 // Phase 3M-4 Task 11 — IMD warning dialog auto-confirm seam for tests.

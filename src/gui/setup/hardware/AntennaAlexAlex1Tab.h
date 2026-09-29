@@ -27,6 +27,10 @@
 //                receive high-pass as Thetis's setAlexHPF /
 //                setBPF1ForOrionIISaturn / setAlex2HPF do (radioHardwareVersion
 //                8). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - updateBoardCapabilities swaps Alex HPF Bands for Saturn
+//                BPF1 Bands with the five switches (Thetis setup.cs:6336-6360);
+//                isAlexHpfVisible() for the tests. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -102,6 +106,7 @@ class QDoubleSpinBox;
 class QFrame;
 class QGroupBox;
 class QLabel;
+class QVBoxLayout;
 
 namespace NereusSDR {
 
@@ -112,7 +117,8 @@ class RadioModel;
 // Three columns:
 //   1. Alex HPF Bands — 5 master toggles + 6 HPF rows (bypass + Start/End)
 //   2. Alex LPF Bands — 7 LPF rows (Start/End, no master toggles)
-//   3. Saturn BPF1 Bands — same as HPF column, gated on Saturn/SaturnMKII board
+//   3. Saturn BPF1 Bands — same as HPF column; on Thetis's BPF-panel models it
+//      replaces column 1 and takes the 5 master toggles (updateBoardCapabilities)
 //
 // Per-MAC persistence under hardware/<mac>/alex/{hpf,lpf,bpf1}/<band>/{enabled,start,end}
 // and hardware/<mac>/alex/master/{hpfBypass,...}.
@@ -123,9 +129,13 @@ class AntennaAlexAlex1Tab : public QWidget {
 public:
     explicit AntennaAlexAlex1Tab(RadioModel* model, QWidget* parent = nullptr);
 
-    // Call when board capabilities are known. Shows/hides Saturn BPF1 column.
-    // From Thetis: BPF1 panel always visible in Thetis; we gate on Saturn/SaturnMKII.
-    void updateBoardCapabilities(bool isSaturnBoard);
+    // Call when the model is known. bpfPanel (SkuUiProfile::hasBpfPanel)
+    // shows Saturn BPF1 Bands in place of Alex HPF Bands and moves the five
+    // switches into it; false does the reverse.
+    // From Thetis setup.cs:6336-6360 [v2.10.3.15]:
+    //   HardwareSpecific.Model != HPSDRModel.ANAN_G2E && //N1GP G2E added
+    //   HardwareSpecific.Model != HPSDRModel.REDPITAYA)//DH1KLM
+    void updateBoardCapabilities(bool bpfPanel);
 
     // Populate controls from AppSettings for the given MAC address.
     // Call when a radio is connected.
@@ -154,6 +164,8 @@ public:
     // Always compiled (NEREUS_BUILD_TESTS is set on NereusSDRLib globally). Used by
     // tst_alex1_filters_tab to verify the Saturn/non-Saturn capability gate.
     bool isSaturnBpf1Visible() const;
+    // True when the Alex HPF Bands group is shown (not on BPF-panel models).
+    bool isAlexHpfVisible() const;
 
     // Live-LED test seams — mirrors AntennaAlexAlex2Tab.
     // Returns the index of the currently-highlighted HPF / LPF row, or -1
@@ -268,6 +280,9 @@ private:
 
     // Column 3 — Saturn BPF1 rows (same 6-row shape as HPF)
     QGroupBox*                 m_bpf1Group{nullptr};
+    QGroupBox*                 m_hpfGroup{nullptr};
+    QVBoxLayout*               m_hpfVBox{nullptr};
+    QVBoxLayout*               m_bpf1VBox{nullptr};
     std::vector<HpfRowWidgets> m_bpf1Rows;
 
     // Live-LED indicators, one per HPF/LPF row (same ordering as
