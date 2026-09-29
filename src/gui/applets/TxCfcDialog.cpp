@@ -44,6 +44,14 @@
 //                 drawCompressionBins, shared by the local timer and a remote
 //                 window's copy of the Core's CFC display. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Setup publication (CFC band editor): in a remote window
+//                 pushCfcProfileToModel sends the whole band table as the
+//                 Core's cfc.setProfile command with the revision last seen,
+//                 one at a time with the newest edit held, and holds the
+//                 model sync until the Core answers; a refusal shows in
+//                 TxCfcProfileReason. An older Core keeps the property
+//                 write. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 
 //=================================================================
@@ -105,6 +113,8 @@
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QHideEvent>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QLabel>
 #include <QPushButton>
 #include <QRadioButton>
@@ -221,8 +231,16 @@ void TxCfcDialog::setSettingsPermitted(bool permitted, const QString& reason)
     // R-R3-49 (parity Task 4). Every control is a direct child of the
     // dialog (the layouts own none of them).
     for (QWidget* child : findChildren<QWidget*>(QString(), Qt::FindDirectChildrenOnly)) {
-        if (child == m_settingsReasonLabel || child == m_barChartReasonLabel) { continue; }
+        if (child == m_settingsReasonLabel || child == m_barChartReasonLabel
+            || child == m_profileReasonLabel) {
+            continue;
+        }
         child->setEnabled(permitted);
+    }
+    if (!permitted) {
+        // A Core that cannot take a change will not answer an edit waiting
+        // on it either; the next edit starts fresh.
+        clearStationProfileInFlight();
     }
     if (m_settingsReasonLabel) {
         m_settingsReasonLabel->setText(permitted ? QString() : reason);
@@ -260,6 +278,14 @@ void TxCfcDialog::buildUi()
     m_settingsReasonLabel->setWordWrap(true);
     m_settingsReasonLabel->setVisible(false);
     leftCol->addWidget(m_settingsReasonLabel);
+
+    // Setup publication (CFC band editor): why the Core did not take the
+    // last change in a remote window.
+    m_profileReasonLabel = new QLabel(this);
+    m_profileReasonLabel->setObjectName(QStringLiteral("TxCfcProfileReason"));
+    m_profileReasonLabel->setWordWrap(true);
+    m_profileReasonLabel->setVisible(false);
+    leftCol->addWidget(m_profileReasonLabel);
 
     // ── Top edit row (above ucCFC_comp) ──────────────────────────────────
     // From Thetis frmCFCConfig.Designer.cs:30-65 [v2.10.3.13] — labels
@@ -821,9 +847,85 @@ void TxCfcDialog::pushCfcProfileToModel()
         + m_postEqWidget->saveToJson());
     CfcProfile::Profile candidate;
     if (!CfcProfile::decode(encoded, candidate)) { return; }
+    if (m_stationProfileSend && m_stationProfileAvailable && m_stationProfileAvailable()) {
+        // A Core that takes the table whole: send it as one command rather
+        // than writing the blob, so its values change together or not at all.
+        m_pendingProfileJson = CfcProfile::publishedJson(candidate, QStringLiteral("saved"));
+        m_profilePending = true;
+        sendPendingStationProfile();
+        return;
+    }
+    clearStationProfileInFlight();
     m_updatingFromModel = true;
     m_tm->setCfcParaEqData(encoded);
     m_updatingFromModel = false;
+}
+
+void TxCfcDialog::setStationProfileSender(StationProfileAvailable available,
+                                          StationProfileSender send)
+{
+    m_stationProfileAvailable = std::move(available);
+    m_stationProfileSend = std::move(send);
+    clearStationProfileInFlight();
+}
+
+void TxCfcDialog::clearStationProfileInFlight()
+{
+    m_profileCommandId = 0;
+    m_profilePending = false;
+    m_pendingProfileJson.clear();
+}
+
+void TxCfcDialog::showProfileReason(const QString& reason)
+{
+    if (!m_profileReasonLabel) { return; }
+    m_profileReasonLabel->setText(reason);
+    m_profileReasonLabel->setVisible(!reason.isEmpty());
+}
+
+void TxCfcDialog::sendPendingStationProfile()
+{
+    if (!m_profilePending || m_profileCommandId != 0 || !m_stationProfileSend || !m_tm) {
+        return;
+    }
+    // The revision of the table this window last saw; the Core refuses the
+    // change when its own table has moved on since.
+    const QJsonObject seen = QJsonDocument::fromJson(m_tm->cfcProfile().toUtf8()).object();
+    const QString expectedRevision = seen.value(QStringLiteral("revision")).toString();
+    const QString json = m_pendingProfileJson;
+    m_profilePending = false;
+    m_pendingProfileJson.clear();
+    const StationProfileSend outcome = m_stationProfileSend(json, expectedRevision);
+    if (!outcome.sent) {
+        showProfileReason(outcome.reason);
+        syncFromModel();
+        return;
+    }
+    // A link that does not number its commands cannot tell its answer
+    // apart; nothing is held for it.
+    m_profileCommandId = outcome.commandId;
+}
+
+void TxCfcDialog::onStationCommandFinished(quint32 commandId, bool accepted,
+                                           const QString& reason)
+{
+    if (commandId == 0 || commandId != m_profileCommandId) { return; }
+    m_profileCommandId = 0;
+    if (!accepted) {
+        // The edits held behind it were made on the same table; show the
+        // Core's values and why, and let the operator try again.
+        m_profilePending = false;
+        m_pendingProfileJson.clear();
+        showProfileReason(reason);
+        syncFromModel();
+        return;
+    }
+    showProfileReason(QString());
+    if (m_profilePending) {
+        sendPendingStationProfile();
+        return;
+    }
+    syncFromModel();
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1283,6 +1385,10 @@ void TxCfcDialog::syncFromModel()
 
     // Avoid re-entrant model writes during an in-flight pushCfcProfileToModel.
     if (m_updatingFromModel || m_tm->cfcProfileMutationInProgress()) { return; }
+    // Setup publication (CFC band editor): while this window's change is
+    // with the Core, its answer resyncs; an echo before then would put the
+    // older table back under the operator's hands.
+    if (m_profileCommandId != 0 || m_profilePending) { return; }
 
     m_updatingFromModel = true;
 

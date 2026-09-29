@@ -836,6 +836,17 @@ declares it at minor 11 is sent `txEqCurveVersion` 2 and `transmit`'s
 before. The desktop's remote window declares neither: its TX EQ dialog
 writes `txEqParaEqData` itself.
 
+**`cfcProfile` 1** (R-R3-49, `transmitSettingsVersion` 15): the client
+reads the CFC dialog's band editor in the form section 7.1 documents ("The
+CFC band editor"). A peer that declares it at minor 11 is sent
+`transmit`'s `cfcProfile`; a peer that does not sees exactly the wire it
+was built for, without it. Changing the editor needs no declaration:
+`cfc.setProfile` is taken from any peer at minor 11 offered
+`transmitSettingsVersion` 15. The station does not declare it. The
+desktop's remote window does not declare it either: it derives the same
+form from `cfcParaEqData` itself, and its CFC dialog sends
+`cfc.setProfile` on a Core that offers version 15.
+
 **`coreAddresses` 1** (the phone's direct addresses, 2026-09-29): the
 client dials the Core at the addresses the Core itself reports, so a phone
 away from home can reach a Core's global IPv6 address directly. A peer
@@ -997,7 +1008,7 @@ change shows as surface drift and as a change to this table.
 | `pairingVersion` | 1 |
 | `stationCatalogVersion` | 1 |
 | `displayExtrasVersion` | 4 |
-| `transmitSettingsVersion` | 14 |
+| `transmitSettingsVersion` | 15 |
 | `bandSelectVersion` | 1 |
 | `meterReadingsVersion` | 1 |
 | `dspInfoVersion` | 1 |
@@ -1567,6 +1578,13 @@ When a feature is off, its version is 0:
   different band is either on or off." A window whose Core offers less
   than 14 shows the box disabled with "This Core does not have Prevent
   transmitting on a different band. Update the Core to use it."
+  Version 15 adds the CFC dialog's band editor: `transmit`'s read-only
+  `cfcProfile` (to a peer that declared `cfcProfile` 1) and the command
+  `cfc.setProfile`, which applies every band's frequency, compression,
+  post-EQ gain and Q, the range, the pre-compression and the post-EQ gain
+  at once, against the revision the app last saw (section 7.1, "The CFC
+  band editor"). A window on a Core that offers less than 15 keeps writing
+  `cfcParaEqData` and the two gains as property writes, as before.
 - `bandSelectVersion`: sent only at agreed minor 11, and 0 on a
   station with no radio model. At 1 the Core takes `slice.selectBand`
   (section 9.1), a device's band button for a slice, for the bands the
@@ -2789,7 +2807,7 @@ An enum property lists the values its domain allows.
 | 22 | `rx2AutoAttUndo` | `bool` | bidirectional |  |
 | 23 | `rx2AutoAttUndoDelayMs` | `i64` | bidirectional |  |
 
-**TransmitModel** (88 properties)
+**TransmitModel** (89 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -2881,6 +2899,7 @@ An enum property lists the values its domain allows.
 | 85 | `voxEnabled` | `bool` | bidirectional |  |
 | 86 | `micMuted` | `bool` | bidirectional |  |
 | 87 | `txEqCurve` | `utf8` | outbound |  |
+| 88 | `cfcProfile` | `utf8` | outbound |  |
 
 **TransmitState** (44 properties)
 
@@ -3485,6 +3504,12 @@ Notes on the keys:
   curve of the TX EQ dialog, read from `txEqParaEqData` into a documented
   form, below ("The TX EQ curve"). Sent only to a peer that declared
   `txEqCurve` 1.
+- **`transmit`'s `cfcProfile`** (R-R3-49; `transmitSettingsVersion`
+  15). Outbound, `utf8`, declared after `txEqCurve` in `TransmitModel`:
+  the CFC dialog's band editor, read from `cfcParaEqData` (or, when that is
+  empty or unreadable, the ten-band values) into a documented form, below
+  ("The CFC band editor"). Sent only to a peer that declared `cfcProfile`
+  1.
 - **Whose each slice is** (iPhone app plan Task 73; the several-devices
   design, rulings 5.1 to 5.6). With several devices on one Core every
   slice has an owner: the device that made it, the device that adopted it
@@ -3726,6 +3751,105 @@ carrying the new `txEqParaEqData` and `txEqCurve`, then by an accepted
 holds. Every other peer that gets `txEqCurve` gets the same `delta`. The
 active TX profile is not saved by either verb: as with an edit in the
 local dialog, `txProfile.save` saves it.
+
+#### The CFC band editor (`cfcProfile`)
+
+R-R3-49; `transmitSettingsVersion` 15. `cfcParaEqData` holds the CFC
+dialog's two curves (compression and post-EQ) as Thetis saves them: gzip,
+then base64url, of Thetis's own JSON for each curve joined by `<SEP>`
+(frmCFCConfig.cs:492-557 [v2.10.3.15]). `transmit`'s `cfcProfile` is the
+band editor in a form NereusSDR owns and documents here, one row per band,
+so an app shows and edits it without gzip or Thetis's JSON. The Core
+derives it every time `cfcParaEqData`, `cfcPrecompDb`, `cfcPostEqGainDb`
+or the ten-band values change (`CfcProfile::publishedJson`,
+`CfcProfile.cpp`) and sends it in the same delta.
+
+- **Read-only.** `cfcProfile` is outbound; a write to it is refused as any
+  outbound property is. It is changed with `cfc.setProfile` (below), at
+  the Core, or by writing `cfcParaEqData`.
+- **Who gets it.** Only a peer at agreed minor 11 whose hello declared
+  `cfcProfile` 1. Every other peer's schema, snapshot and deltas carry
+  none of it.
+- **What it is.** One JSON object, compact, keys in sorted order. Key
+  order is not significant; a reader ignores a key it does not know.
+
+| Key | JSON type | Units and range | Meaning |
+| --- | --- | --- | --- |
+| `state` | string | `saved` or `legacy` | `saved`: `cfcParaEqData` holds curves the Core reads. `legacy`: it is empty or unreadable, and the keys hold the ten-band values an older profile keeps, shown as the desktop dialog shows them. An app treats a value it does not know as `legacy` |
+| `revision` | string | 16 hex digits | The first 16 hex digits of the SHA-256 of this object's compact JSON without `revision` and `state`. Equal values give an equal revision on every host. `cfc.setProfile` takes it back as `expectedRevision` |
+| `parametric` | boolean | | The dialog's Use Q check box (both curves, frmCFCConfig.cs:378 [v2.10.3.15]). True: each band is a bell of width Q. False: straight lines, and the Qs are unused |
+| `minHz` | number | Hz, 0 to 20000 | The range's low end (the dialog's Low) |
+| `maxHz` | number | Hz, 0 to 20000, at least 1000 above `minHz` | The range's high end (the dialog's High) |
+| `precompDb` | number | dB, 0 to 16, in 0.1 dB steps | The pre-compression (`cfcPrecompDb`, which carries it rounded to a whole dB) |
+| `postEqGainDb` | number | dB, -24 to 24, in 0.1 dB steps | The post-EQ gain (`cfcPostEqGainDb`, rounded to a whole dB) |
+| `bands` | array | 5, 10 or 18 rows | The bands, lowest frequency first (the dialog's 5, 10 and 18-band buttons) |
+
+Each band:
+
+| Key | JSON type | Units and range | Meaning |
+| --- | --- | --- | --- |
+| `frequencyHz` | number | Hz, `minHz` to `maxHz`, in 0.001 Hz steps | The band's centre, one frequency for both curves (frmCFCConfig.cs:217-230 [v2.10.3.15]). The first band sits at `minHz` and the last at `maxHz` |
+| `compressionDb` | number | dB, 0 to 16, in 0.1 dB steps | The band's compression |
+| `compressionQ` | number | 0.2 to 20, in 0.01 steps | The compression bell's Q (used when `parametric` is true) |
+| `postEqGainDb` | number | dB, -24 to 24, in 0.1 dB steps | The band's post-EQ gain |
+| `postEqQ` | number | 0.2 to 20, in 0.01 steps | The post-EQ bell's Q (used when `parametric` is true) |
+
+The ranges are the dialog's own controls (frmCFCConfig.Designer.cs
+[v2.10.3.15]: Low and High 440-458 and 625-643, a band's frequency
+261-274, compression 210-224, post-EQ gain 557-571, the Qs 112-130 and
+595-613, pre-compression 401-415, post-EQ gain 330-344), and Low and
+High are kept 1000 Hz apart as the dialog keeps them
+(frmCFCConfig.cs:120-140 [v2.10.3.15]). A `legacy` editor has ten bands,
+Q 4, `parametric` true and the range 0 to 4000 Hz widened to cover every
+band (frmCFCConfig.cs:89-99 [v2.10.3.15]).
+
+**Changing the editor** (`transmitSettingsVersion` 15). `cfc.setProfile`
+(`profileJson` utf8, `expectedRevision` utf8) takes an editor in the
+shape above: `bands`, `minHz`, `maxHz`, `parametric`, `precompDb` and
+`postEqGainDb`, each band with all five keys. Any other key (`state` and
+`revision` included) is ignored, so an app may send back the editor it
+was shown with its edits. The Core first compares `expectedRevision` with
+its own `cfcProfile`'s `revision`; when they differ it refuses "The CFC
+settings changed on the Core. Check the new values and try again." and
+changes nothing, so an app never overwrites a change it has not seen. It
+then takes what the local CFC dialog lets an operator choose and refuses
+anything else whole, changing nothing:
+
+| What | The dialog's choice | Refused with |
+| --- | --- | --- |
+| The command | the two arguments above, both utf8 | "The CFC settings were not understood." |
+| The JSON | an object with the keys above, `parametric` a boolean and every other value a number | "The CFC settings were not understood." |
+| Bands | 5, 10 or 18 | "Choose 5, 10 or 18 bands." |
+| `minHz`, `maxHz` | 0 to 20000 Hz, `maxHz` at least 1000 Hz above `minHz` once each is rounded to 0.001 Hz | "Choose a low and a high end from 0 to 20000 Hz, the high end at least 1000 Hz above the low end." |
+| `precompDb` | 0 to 16 dB | "Choose a pre-compression from 0 to 16 dB." |
+| `postEqGainDb` | -24 to 24 dB | "Choose a post-EQ gain from -24 to 24 dB." |
+| `frequencyHz` | 0 to 20000 Hz; a band between the first and last strictly inside the range | "Choose each band's frequency between the low and high ends." |
+| Band order | each band above the one before it, once rounded | "Keep each band's frequency above the one before it." |
+| `compressionDb` | 0 to 16 dB | "Choose each band's compression from 0 to 16 dB." |
+| `postEqGainDb` (a band's) | -24 to 24 dB | "Choose each band's post-EQ gain from -24 to 24 dB." |
+| `compressionQ`, `postEqQ` | 0.2 to 20 | "Choose each Q from 0.2 to 20." |
+
+An editor it takes is rounded as the Core keeps it (frequencies and ends
+to 0.001 Hz, dB to 0.1, Q to 0.01), the first band moved to `minHz` and
+the last to `maxHz` as the dialog keeps its end bands, and one frequency
+and the Use Q choice applied to both curves. Unlike `txEq.setCurve` the
+bands are not sorted: an editor out of order is refused. The Core saves
+it as the dialog saves (`CfcProfile::encode`) and writes it to
+`cfcParaEqData`, so the desktop dialog, TX profiles and Thetis-format
+settings keep the one saved value; `cfcPrecompDb`, `cfcPostEqGainDb` and
+the ten-band values follow from that write as they do from the dialog's.
+
+It is that peer's own write of `cfcParaEqData` (section 7.3), under every
+rule such a write meets: a receive-only Core takes it from a peer offered
+`transmitSettingsVersion`; a Core that allows remote transmit takes it
+from a session permitted to transmit; like the local dialog's edits it is
+taken while the radio is on the air; it never keys. A refused write is
+refused with that write's reason. A taken one is followed first by the
+side-effect `delta` carrying the new `cfcParaEqData`, `cfcPrecompDb`,
+`cfcPostEqGainDb`, any ten-band values that moved and, to a peer that
+declared `cfcProfile` 1, `cfcProfile`; then by an accepted
+`command.result` whose `profile` (utf8) is the `cfcProfile` the Core now
+holds. The active TX profile is not saved: `txProfile.save` saves it.
 
 ### 7.2 Deltas
 
@@ -5017,6 +5141,7 @@ refused.
 | `rade.resetVocoder` | none | `transmitSettingsVersion` | 3 | 11 |
 | `txEq.setCurve` | `curveJson` utf8 | `txEqCurveVersion` | 2 | 11 |
 | `txEq.resetCurve` | none | `txEqCurveVersion` | 2 | 11 |
+| `cfc.setProfile` | `profileJson` utf8, `expectedRevision` utf8 | `transmitSettingsVersion` | 15 | 11 |
 | `paProfile.select` | `name` utf8 | `paProfileVersion` | 1 | 11 |
 | `paProfile.new` | `name` utf8 | `paProfileVersion` | 1 | 11 |
 | `paProfile.copy` | `name` utf8 | `paProfileVersion` | 1 | 11 |
@@ -5584,6 +5709,19 @@ These command groups need a sentence beyond the table:
   change its transmit settings." (a Core with no radio model of its own).
   A peer not offered version 2 gets "Update this app to change the TX EQ
   curve on this Core."
+- **The CFC band editor.** `cfc.setProfile` (`profileJson`,
+  `expectedRevision`) applies the CFC dialog's whole band editor at once
+  from a peer offered `transmitSettingsVersion` 15 (section 7.1, "The CFC
+  band editor"). It is that peer's own write of `transmit`'s
+  `cfcParaEqData` and meets every rule that write meets (section 7.3); its
+  answer carries that write's reason when refused, and `profile`, the
+  editor the Core kept in the `cfcProfile` form, when taken. Other
+  refusals: a revision the Core has moved past ("The CFC settings changed
+  on the Core. Check the new values and try again."), the editor's own
+  ("Choose 5, 10 or 18 bands." and the rest, section 7.1), "The Core
+  cannot change its transmit settings." (a Core with no radio model of its
+  own, or one that offers less than 15). A peer below agreed minor 11 gets
+  "Update this app to change the CFC settings on this Core."
 - **PureSignal arming.** `ps3.single` (Single Cal), `ps3.automatic`
   (Automatic, and PS-A on), `ps3.applyCurrent` (Apply current correction)
   and `ps3.restoreCorrection` (Restore a saved correction) arm PureSignal
@@ -6803,6 +6941,7 @@ same on every machine.
 | `property-write` | A write and its `property.result` and side-effect `delta`; a refused outbound property and an unknown one; a write without a `writeId` answered by `delta`; a write to a slice's signal strength refused as outbound; on the receive-only Core, a `transmit` write of `power` taken off the air and a write of `mox` and `voxEnabled` refused with the receive-only reason; at `transmitSettingsVersion` 2, a write of `cpdrLevelDb` taken, and `micGainDb` and `monitorVolume` out of range refused with their ranges beside a write of the outbound `tunePowerForTxBand`; at `transmitSettingsVersion` 3, a write of `micBoost` and `lineInBoost` taken, and `lineInBoost` out of range refused with its range beside a write of the outbound `activeTxProfile`; at `transmitSettingsVersion` 4, a write of `txEqBandsJson`, `txEqUseLegacy` and `txLevelerDecay` taken, and a nine-value `txEqBandsJson`, a `cfcCompressionJson` with a value out of range and `txAlcDecay` out of range each refused whole with its range |
 | `tx-eq-curve` | `txEqCurveVersion` 1 (the client declares `txEqCurve` 1): the capability after `accessoryTxVersion`, `txEqCurve` last in the `TransmitModel` schema and, in the `transmit` snapshot, the flat default curve (`state` `default`) for the static station's empty `txEqParaEqData`; a write of the worked example's `txEqParaEqData` (section 7.1, "The TX EQ curve") taken, then the side-effect `delta` carrying its `txEqCurve` (`state` `saved`); a write to `txEqCurve` refused as outbound, the curve unchanged |
 | `tx-eq-set-curve` | `txEqCurveVersion` 2 (the client declares `txEqCurve` 2): the capability at 2; `txEq.setCurve` with the link document's worked example sent back as it was shown, but out of order and unrounded, taken: the side-effect `delta` carrying the new `txEqParaEqData` and the worked example's `txEqCurve`, then the accepted `command.result` whose `curve` is that `txEqCurve`; a four-point curve refused whole "Choose a curve of 5, 10 or 18 points." with nothing sent after; `txEq.resetCurve` taken, the `delta` and a `curve` of five flat points spread from 50 to 3000 Hz, preamp 0 |
+| `cfc-set-profile` | `transmitSettingsVersion` 15 (the client declares `cfcProfile` 1): `cfcProfile` last in the `TransmitModel` schema at ordinal 88 and in the `transmit` snapshot; `cfc.setProfile` with a 5-band profile and the snapshot's revision taken: the side-effect `delta` carrying the new `cfcPostEqGainDb`, `cfcPrecompDb`, `cfcParaEqData` and `cfcProfile`, then the accepted `command.result` whose `profile` is the stored profile; the same profile sent again with the old revision refused "The CFC settings changed on the Core. Check the new values and try again." with nothing sent; a misnamed argument refused "The CFC settings were not understood." |
 | `settings-write` | A station-scoped write echoed with its origin; an operator-local write rejected; a removal sent as `settings.value` with no entry; on the receive-only Core, a DSP > Options TX key and a PA forward-power table key (`paCalibration/calPoint1`, version 6) taken off the air, an OC transmit pin (`oc/tx/20m/pin3`), an OC pin action (`oc/actions/pin1/action`) and TX Display Cal (`cal/txDisplayOffset`) taken off the air (version 8), and a transmit hardware key refused |
 | `unknown-verb` | `command.result` refused, "The Core does not know this request. Updating the Core may help."; the connection stays up |
 | `unknown-kind` | `session.end` "The Core could not read a message from this app.", `retryable` false, `code` `protocolError` |

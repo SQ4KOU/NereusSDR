@@ -195,6 +195,9 @@
 //   2026-09-29 - R-R3-46 / R-R3-49: the Alex-1 Filters tab's low-pass rows
 //                and 6m/ByPass on RX (radioHardwareVersion 10). J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  requestCfcProfile
+//                                    (transmitSettingsVersion 15).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QString>
@@ -533,6 +536,12 @@ public:
     /// R-R3-49 (parity Task 3): the RADE applet's Reset vocoder; the Core
     /// clears its RADE transmit vocoder. Keys nothing. Refused on the air.
     virtual CommandOutcome requestRadeResetVocoder()
+    { return { false, transmitSettingsUnavailableReason() }; }
+    /// transmitSettingsVersion 15: the CFC dialog's band editor. The Core
+    /// applies `profileJson` (the published cfcProfile form) at once when
+    /// `expectedRevision` is still its profile's revision; the saved values
+    /// come back on the mirrored `transmit` object.
+    virtual CommandOutcome requestCfcProfile(const QString&, const QString&)
     { return { false, transmitSettingsUnavailableReason() }; }
 
     virtual CommandOutcome requestApplyNnrModels(quint32)

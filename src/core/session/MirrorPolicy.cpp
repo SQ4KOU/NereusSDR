@@ -182,6 +182,9 @@
 //   2026-09-29 - HL2 port part 2: RadioModel txInhibitReason Outbound and
 //                 in featureGates (txInhibitReasonVersion 1). J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - transmitSettingsVersion 15: TransmitModel cfcProfile
+//                 Outbound and in featureGates. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorPolicy.h"
@@ -566,6 +569,11 @@ const MirrorPolicy::Entry kEntries[] = {
     // derives from txEqParaEqData, read-only; only to a peer that declared
     // txEqCurve (StationServer::fitTxEqCurveToPeer).
     { "TransmitModel", "txEqCurve", MirrorDirection::Outbound },
+    // transmitSettingsVersion 15: the CFC dialog's band editor the Core
+    // derives from cfcParaEqData (or the ten-band values), read-only; only
+    // to a peer that declared cfcProfile (StationServer::fitPeerOnlyProperties).
+    // An app changes it with cfc.setProfile.
+    { "TransmitModel", "cfcProfile", MirrorDirection::Outbound },
 
     // ---- TunerModel (21 entries) ----
     { "TunerModel", "relayC1", MirrorDirection::Outbound },
@@ -1178,6 +1186,9 @@ const QList<MirrorPolicy::FeatureGate>& MirrorPolicy::featureGates()
         // curve, to a peer that declared txEqCurve 1
         // (StationServer::fitTxEqCurveToPeer).
         {"TransmitModel", "txEqCurve", "txEqCurve", 1},
+        // transmitSettingsVersion 15: the CFC band editor, to a peer that
+        // declared cfcProfile 1 (StationServer::fitPeerOnlyProperties).
+        {"TransmitModel", "cfcProfile", "cfcProfile", 1},
         // Phone wire batch (diversityPatternVersion 1): each slice's
         // Diversity dialog pattern, to a peer that declared
         // diversityPattern 1 (StationServer::fitPeerOnlyProperties).

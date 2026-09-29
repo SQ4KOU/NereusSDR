@@ -141,6 +141,7 @@
         {"id": "session-property-write", "file": "sessions/property-write.json", "kind": "session", "requires": {"propertyResultVersion": 1}},
         {"id": "session-tx-eq-curve", "file": "sessions/tx-eq-curve.json", "kind": "session", "requires": {"txEqCurveVersion": 1}},
         {"id": "session-tx-eq-set-curve", "file": "sessions/tx-eq-set-curve.json", "kind": "session", "requires": {"txEqCurveVersion": 2}},
+        {"id": "session-cfc-set-profile", "file": "sessions/cfc-set-profile.json", "kind": "session", "requires": {"transmitSettingsVersion": 15}},
         {"id": "session-settings-write", "file": "sessions/settings-write.json", "kind": "session", "requires": {}},
         {"id": "session-settings-band-plan", "file": "sessions/settings-band-plan.json", "kind": "session", "requires": {"stationCatalogVersion": 1}},
         {"id": "session-unknown-verb", "file": "sessions/unknown-verb.json", "kind": "session", "requires": {}},

@@ -339,6 +339,9 @@
 //                takes the Core's alexLpfBits, so the Alex-1 Filters tab's
 //                lamps show the Core's low-pass (radioHardwareVersion 10).
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - transmitSettingsVersion 15: requestCfcProfile
+//                (cfc.setProfile). J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/NetworkTrouble.h"
@@ -5877,6 +5880,21 @@ StationClient::CommandOutcome StationClient::requestTunePowerForTxBand(int watts
     }
     return sendCommand("setTunePowerForTxBand", -1, { intArgument("watts", watts) },
                        QStringLiteral("the tune power"));
+}
+
+// transmitSettingsVersion 15: the CFC dialog's band editor, applied by the
+// Core at once against the revision the window last saw. A Core below 15
+// is not asked; the dialog writes the CFC properties one by one instead.
+StationClient::CommandOutcome StationClient::requestCfcProfile(const QString& profileJson,
+                                                               const QString& expectedRevision)
+{
+    if (!transmitSettingsAvailable(kTransmitSettingsCfcProfileVersion)) {
+        return IStationLink::requestCfcProfile(profileJson, expectedRevision);
+    }
+    return sendCommand("cfc.setProfile", -1,
+                       { stringArgument("profileJson", profileJson),
+                         stringArgument("expectedRevision", expectedRevision) },
+                       QStringLiteral("the CFC settings"));
 }
 
 // R-R3-49 (parity Task 3): the TX profile combos, Setup > Audio > TX

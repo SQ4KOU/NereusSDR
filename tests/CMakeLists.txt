@@ -8222,6 +8222,12 @@ nereus_add_test(tst_station_vax
 nereus_add_test(tst_tx_eq_set_curve
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)
+# transmitSettingsVersion 15: cfc.setProfile, the CFC band editor applied
+# whole against an expected revision, as the device's own cfcParaEqData
+# write. Loopback only, no RF, no audio device.
+nereus_add_test(tst_cfc_set_profile
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
 # iPhone app Task 14 (R-IOS-08, D37): the pairing code and its word list,
 # the pairing window (injected clock), and the SPAKE2+EE exchange with its
 # confirmation boxes.

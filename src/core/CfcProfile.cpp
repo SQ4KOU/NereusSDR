@@ -4,6 +4,9 @@
 // Modification history (NereusSDR): 2026-09-27 J.J. Boyd (KG4VCF),
 // AI-assisted via OpenAI Codex: bounded Core codec for the existing
 // CFCParaEQData format.
+// 2026-09-29 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code:
+// publishedJson / revision / fromPublishedJson / legacyProfile for the
+// cfc.setProfile verb (transmitSettingsVersion 15).
 /*  frmCFCConfig.cs
 
 This file is part of a program that implements a Software-Defined Radio.
@@ -51,7 +54,9 @@ mw0lge@grange-lane.co.uk
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonParseError>
+#include <QCryptographicHash>
 
+#include <algorithm>
 #include <cmath>
 
 namespace NereusSDR::CfcProfile {
@@ -166,4 +171,206 @@ QString encode(const Profile& p)
     Profile check;
     return decode(blob, check) ? blob : QString();
 }
+
+namespace {
+// .NET Math.Round(value, digits), as ucParametricEq's PointsFromJson rounds
+// a saved curve (ucParametricEq.cs:1434-1452 [v2.10.3.15]).
+double roundDigits(double value, int digits)
+{
+    const double power10 = std::pow(10.0, digits);
+    return std::nearbyint(value * power10) / power10;
+}
+
+QJsonObject publishedObject(const Profile& p)
+{
+    QJsonArray bands;
+    for (std::size_t i = 0; i < p.f.size(); ++i) {
+        bands.append(QJsonObject{{QStringLiteral("frequencyHz"), p.f[i]},
+                                 {QStringLiteral("compressionDb"), p.g[i]},
+                                 {QStringLiteral("compressionQ"), p.qg[i]},
+                                 {QStringLiteral("postEqGainDb"), p.e[i]},
+                                 {QStringLiteral("postEqQ"), p.qe[i]}});
+    }
+    return QJsonObject{{QStringLiteral("bands"), bands},
+                       {QStringLiteral("minHz"), p.minHz},
+                       {QStringLiteral("maxHz"), p.maxHz},
+                       {QStringLiteral("parametric"), p.usesQ()},
+                       {QStringLiteral("precompDb"), p.precompDb},
+                       {QStringLiteral("postEqGainDb"), p.postEqGainDb}};
+}
+} // namespace
+
+// NereusSDR-original (transmitSettingsVersion 15).
+QString revision(const Profile& p)
+{
+    const QByteArray canonical = QJsonDocument(publishedObject(p)).toJson(QJsonDocument::Compact);
+    return QString::fromLatin1(
+        QCryptographicHash::hash(canonical, QCryptographicHash::Sha256).toHex().left(16));
+}
+
+// NereusSDR-original (transmitSettingsVersion 15).
+QString publishedJson(const Profile& p, const QString& state)
+{
+    QJsonObject root = publishedObject(p);
+    root.insert(QStringLiteral("revision"), revision(p));
+    root.insert(QStringLiteral("state"), state);
+    return QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact));
+}
+
+// NereusSDR-original (R-R3-49, transmitSettingsVersion 15): the band
+// editor an app sends, checked against the CFC dialog's choices (the
+// limits in CfcProfile.h, each from frmCFCConfig [v2.10.3.15]) and refused
+// whole otherwise.
+bool fromPublishedJson(const QString& text, Profile& out, QString* refusal)
+{
+    const auto refuse = [refusal](const QString& why) {
+        if (refusal) { *refusal = why; }
+        return false;
+    };
+    const QString notUnderstood = QStringLiteral("The CFC settings were not understood.");
+    const auto finite = [](double v) { return std::isfinite(v); };
+
+    QJsonParseError perr;
+    const QJsonDocument doc = QJsonDocument::fromJson(text.toUtf8(), &perr);
+    if (perr.error != QJsonParseError::NoError || !doc.isObject()) {
+        return refuse(notUnderstood);
+    }
+    const QJsonObject o = doc.object();
+    const QJsonValue bandsValue = o.value(QStringLiteral("bands"));
+    const QJsonValue minValue = o.value(QStringLiteral("minHz"));
+    const QJsonValue maxValue = o.value(QStringLiteral("maxHz"));
+    const QJsonValue parametric = o.value(QStringLiteral("parametric"));
+    const QJsonValue precomp = o.value(QStringLiteral("precompDb"));
+    const QJsonValue postGain = o.value(QStringLiteral("postEqGainDb"));
+    if (!bandsValue.isArray() || !minValue.isDouble() || !maxValue.isDouble()
+        || !parametric.isBool() || !precomp.isDouble() || !postGain.isDouble()) {
+        return refuse(notUnderstood);
+    }
+    const QJsonArray bands = bandsValue.toArray();
+    struct Row { double f, g, qg, e, qe; };
+    std::vector<Row> rows;
+    for (const QJsonValue& value : bands) {
+        if (!value.isObject()) { return refuse(notUnderstood); }
+        const QJsonObject b = value.toObject();
+        const QJsonValue f = b.value(QStringLiteral("frequencyHz"));
+        const QJsonValue g = b.value(QStringLiteral("compressionDb"));
+        const QJsonValue qg = b.value(QStringLiteral("compressionQ"));
+        const QJsonValue e = b.value(QStringLiteral("postEqGainDb"));
+        const QJsonValue qe = b.value(QStringLiteral("postEqQ"));
+        if (!f.isDouble() || !g.isDouble() || !qg.isDouble() || !e.isDouble() || !qe.isDouble()) {
+            return refuse(notUnderstood);
+        }
+        rows.push_back({f.toDouble(), g.toDouble(), qg.toDouble(), e.toDouble(), qe.toDouble()});
+    }
+
+    const int count = static_cast<int>(rows.size());
+    if (std::find(std::begin(kBandCounts), std::end(kBandCounts), count) == std::end(kBandCounts)) {
+        return refuse(QStringLiteral("Choose 5, 10 or 18 bands."));
+    }
+    const double minHz = minValue.toDouble();
+    const double maxHz = maxValue.toDouble();
+    const double minRounded = finite(minHz) ? roundDigits(minHz, 3) : 0.0;
+    const double maxRounded = finite(maxHz) ? roundDigits(maxHz, 3) : 0.0;
+    if (!finite(minHz) || !finite(maxHz) || minHz < kFrequencyMinHz || maxHz > kFrequencyMaxHz
+        || maxRounded - minRounded < kMinRangeSpreadHz) {
+        return refuse(QStringLiteral("Choose a low and a high end from 0 to 20000 Hz, the "
+                                     "high end at least 1000 Hz above the low end."));
+    }
+    const double precompDb = precomp.toDouble();
+    if (!finite(precompDb) || precompDb < kCompressionMinDb || precompDb > kCompressionMaxDb) {
+        return refuse(QStringLiteral("Choose a pre-compression from 0 to 16 dB."));
+    }
+    const double postEqGainDb = postGain.toDouble();
+    if (!finite(postEqGainDb) || postEqGainDb < kPostEqGainMinDb || postEqGainDb > kPostEqGainMaxDb) {
+        return refuse(QStringLiteral("Choose a post-EQ gain from -24 to 24 dB."));
+    }
+
+    Profile r;
+    r.minHz = r.postMinHz = minRounded;
+    r.maxHz = r.postMaxHz = maxRounded;
+    r.precompDb = roundDigits(precompDb, 1);
+    r.postEqGainDb = roundDigits(postEqGainDb, 1);
+    r.compParametric = r.eqParametric = parametric.toBool();
+    double previous = minRounded;
+    for (int i = 0; i < count; ++i) {
+        const Row& row = rows[static_cast<std::size_t>(i)];
+        if (!finite(row.f) || row.f < kFrequencyMinHz || row.f > kFrequencyMaxHz) {
+            return refuse(QStringLiteral("Choose each band's frequency between the low and "
+                                         "high ends."));
+        }
+        if (!finite(row.g) || row.g < kCompressionMinDb || row.g > kCompressionMaxDb) {
+            return refuse(QStringLiteral("Choose each band's compression from 0 to 16 dB."));
+        }
+        if (!finite(row.e) || row.e < kPostEqGainMinDb || row.e > kPostEqGainMaxDb) {
+            return refuse(QStringLiteral("Choose each band's post-EQ gain from -24 to 24 dB."));
+        }
+        if (!finite(row.qg) || !finite(row.qe) || row.qg < kQMin || row.qg > kQMax
+            || row.qe < kQMin || row.qe > kQMax) {
+            return refuse(QStringLiteral("Choose each Q from 0.2 to 20."));
+        }
+        // The first band sits at the low end and the last at the high end,
+        // as the dialog keeps them; each band between lies inside the
+        // range, above the one before it.
+        double hz = roundDigits(row.f, 3);
+        if (i == 0) {
+            hz = minRounded;
+        } else if (i == count - 1) {
+            hz = maxRounded;
+            if (hz <= previous) {
+                return refuse(QStringLiteral("Keep each band's frequency above the one before it."));
+            }
+        } else {
+            if (hz <= minRounded || hz >= maxRounded) {
+                return refuse(QStringLiteral("Choose each band's frequency between the low and "
+                                             "high ends."));
+            }
+            if (hz <= previous) {
+                return refuse(QStringLiteral("Keep each band's frequency above the one before it."));
+            }
+        }
+        previous = hz;
+        r.f.push_back(hz);
+        r.postF.push_back(hz);
+        r.g.push_back(roundDigits(row.g, 1));
+        r.e.push_back(roundDigits(row.e, 1));
+        r.qg.push_back(roundDigits(row.qg, 2));
+        r.qe.push_back(roundDigits(row.qe, 2));
+    }
+    out = std::move(r);
+    return true;
+}
+
+// NereusSDR-original: what TxCfcDialog::seedWidgetsFromTransmitModel shows
+// for the ten-band values (its 0..4000 Hz default range from
+// frmCFCConfig.cs:89-99 [v2.10.3.15], widened to cover every band).
+Profile legacyProfile(const std::array<int, 10>& frequencyHz,
+                      const std::array<int, 10>& compressionDb,
+                      const std::array<int, 10>& postEqGainDb,
+                      int precompDb, int postEqGainDbGlobal)
+{
+    Profile p;
+    double lowest = kFrequencyMaxHz;
+    double highest = 0.0;
+    for (int hz : frequencyHz) {
+        lowest = std::min(lowest, static_cast<double>(hz));
+        highest = std::max(highest, static_cast<double>(hz));
+    }
+    p.minHz = p.postMinHz = std::min(0.0, lowest);
+    p.maxHz = p.postMaxHz = std::max(4000.0, highest);
+    p.precompDb = precompDb;
+    p.postEqGainDb = postEqGainDbGlobal;
+    for (std::size_t i = 0; i < frequencyHz.size(); ++i) {
+        double hz = frequencyHz[i];
+        if (i == 0) { hz = p.minHz; }
+        if (i + 1 == frequencyHz.size()) { hz = p.maxHz; }
+        p.f.push_back(hz);
+        p.postF.push_back(hz);
+        p.g.push_back(compressionDb[i]);
+        p.e.push_back(postEqGainDb[i]);
+        p.qg.push_back(4.0);
+        p.qe.push_back(4.0);
+    }
+    return p;
+}
+
 } // namespace NereusSDR::CfcProfile

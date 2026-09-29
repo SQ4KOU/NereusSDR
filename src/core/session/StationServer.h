@@ -460,6 +460,9 @@
 //   2026-09-28: R-R3-46 / R-R3-11: peerGetsAdcAttenuators() and
 //               fitAdcAttenuatorsToPeer(). J.J. Boyd (KG4VCF), AI-assisted
 //               via Anthropic Claude Code.
+//   2026-09-29: transmitSettingsVersion 15: handleCfcProfileCommand()
+//               (cfc.setProfile). J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/IceConfiguration.h"
@@ -1593,6 +1596,10 @@ private:
     // txEq.resetCurve, applied as this peer's txEqParaEqData write
     // (applyPropertyWrite), so every rule that write meets applies.
     void handleTxEqCurveCommand(SessionTransport* transport, const SessionMessage& message);
+    // transmitSettingsVersion 15: cfc.setProfile, the CFC band editor
+    // applied at once against an expected revision, as the asking
+    // connection's cfcParaEqData write.
+    void handleCfcProfileCommand(SessionTransport* transport, const SessionMessage& message);
     void handleRecordsCommand(SessionTransport* transport, const SessionMessage& message);
     void scheduleRecordFlush();
     void flushRecordStreams();

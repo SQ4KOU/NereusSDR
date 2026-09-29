@@ -60,6 +60,12 @@
 //               sends Enable CL2, CL2 frequency and External 10 MHz to its
 //               radio) and Setup description version 18. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29: transmitSettingsVersion 15: transmit's cfcProfile only to
+//               a peer that declared cfcProfile 1, and cfc.setProfile
+//               (handleCfcProfileCommand), the CFC band editor applied at
+//               once against an expected revision as the peer's own
+//               cfcParaEqData write. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 // src/core/session/StationServer.cpp  (NereusSDR)
 // =================================================================
@@ -788,6 +794,7 @@
 #include "core/BoardCapabilities.h"
 #include "core/DxccColorProvider.h"
 #include "core/HardwareProfile.h"
+#include "core/CfcProfile.h"
 #include "core/ParaEqCurve.h"
 #include "core/SpotSourceHost.h"
 #include "core/LogSink.h"
@@ -1274,6 +1281,8 @@ constexpr PeerOnlyProperty kPeerOnlyProperties[] = {
     // The Alex-1 low-pass in use, for the Alex tab's lamps (alexLpf 1,
     // radioHardwareVersion 10).
     {"RadioModel", "radio", false, "alexLpfBits", "alexLpf"},
+    // The CFC dialog's band editor (transmitSettingsVersion 15).
+    {"TransmitModel", "transmit", false, "cfcProfile", "cfcProfile"},
 };
 
 // Phone wire batch: record fields that go only to a peer at
@@ -2768,6 +2777,16 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
             return false;
         }
         handleTxEqCurveCommand(m_dispatchingTransport, invoke);
+        m_resultSentInDispatch = true;
+        return true;
+    });
+    // transmitSettingsVersion 15: cfc.setProfile is the asking
+    // connection's cfcParaEqData write.
+    m_dispatcher->setCfcProfileAccess([this](const SessionMessage& invoke) {
+        if (m_dispatchingTransport == nullptr) {
+            return false;
+        }
+        handleCfcProfileCommand(m_dispatchingTransport, invoke);
         m_resultSentInDispatch = true;
         return true;
     });
@@ -4823,6 +4842,18 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
                 message.commandVerb, message.commandId, false,
                 it->agreedMinor < kRadioIdentitySessionProtocolMinor
                     ? QStringLiteral("Update this app to change the tune power on this Core.")
+                    : QStringLiteral("This Core cannot change its transmit settings."), {}));
+            break;
+        }
+        // transmitSettingsVersion 15: the CFC band editor's command, in the
+        // minor-11 block.
+        if (message.commandVerb == "cfc.setProfile"
+            && (it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                || transmitSettingsVersion() < kTransmitSettingsCfcProfileVersion)) {
+            send(transport, SessionMessages::commandResult(
+                message.commandVerb, message.commandId, false,
+                it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                    ? QStringLiteral("Update this app to change the CFC settings on this Core.")
                     : QStringLiteral("This Core cannot change its transmit settings."), {}));
             break;
         }
@@ -8169,6 +8200,98 @@ bool StationServer::fitTxEqCurveToPeer(SessionTransport* transport,
     }
 }
 
+// transmitSettingsVersion 15: cfc.setProfile {profileJson, expectedRevision}.
+// The CFC dialog's whole band editor from an app, applied at once as the
+// cfcParaEqData value the dialog would save (CfcProfile::encode), written as
+// this peer's own property write, so the receive-only, transmit-permission,
+// holder and on-air rules and the echo rule are that write's. A revision the
+// Core has moved past is refused before anything changes. The side-effect
+// delta brings this peer the new cfcParaEqData, its ten-band values and
+// cfcProfile; the result carries the profile the Core kept (`profile`).
+void StationServer::handleCfcProfileCommand(SessionTransport* transport,
+                                            const SessionMessage& message)
+{
+    const auto answer = [this, transport, &message](bool accepted, const QString& reason,
+                                                    const QList<MirrorUpdate>& values = {}) {
+        send(transport, SessionMessages::commandResult(message.commandVerb, message.commandId,
+                                                       accepted, reason, {}, values));
+    };
+    if (m_radioModel.isNull() || m_radioModel->role() != RadioModel::Role::Local) {
+        answer(false, QStringLiteral("The Core cannot change its transmit settings."));
+        return;
+    }
+    QString profileJson;
+    QString expectedRevision;
+    bool haveProfile = false;
+    bool haveRevision = false;
+    for (const MirrorUpdate& argument : message.arguments) {
+        if (argument.kind != MirrorWireKind::Utf8) {
+            continue;
+        }
+        if (argument.name == "profileJson") {
+            profileJson = argument.value.toString();
+            haveProfile = true;
+        } else if (argument.name == "expectedRevision") {
+            expectedRevision = argument.value.toString();
+            haveRevision = true;
+        }
+    }
+    if (message.arguments.size() != 2 || !haveProfile || !haveRevision) {
+        answer(false, QStringLiteral("The CFC settings were not understood."));
+        return;
+    }
+    const QString current = m_radioModel->transmitModel().cfcProfile();
+    const QString currentRevision = QJsonDocument::fromJson(current.toUtf8()).object()
+                                        .value(QStringLiteral("revision")).toString();
+    if (expectedRevision != currentRevision) {
+        answer(false, QStringLiteral("The CFC settings changed on the Core. "
+                                     "Check the new values and try again."));
+        return;
+    }
+    CfcProfile::Profile profile;
+    QString refusal;
+    if (!CfcProfile::fromPublishedJson(profileJson, profile, &refusal)) {
+        answer(false, refusal);
+        return;
+    }
+    const QString data = CfcProfile::encode(profile);
+    if (data.isEmpty()) {
+        answer(false, QStringLiteral("The Core could not save these CFC settings."));
+        return;
+    }
+
+    MirrorUpdate update;
+    update.name = QByteArrayLiteral("cfcParaEqData");
+    update.kind = MirrorWireKind::Utf8;
+    update.value = data;
+    for (const MirrorUpdate& known : m_mirror->snapshot(QByteArray(kTransmitKey))) {
+        if (known.name == update.name) {
+            update.ordinal = known.ordinal;
+            break;
+        }
+    }
+    // No writeId: the property result is this command's, and the written
+    // value comes back in the side-effect delta with the profile.
+    const SessionMessage write =
+        SessionMessages::propertyWrite(QByteArray(kTransmitKey), {update});
+    const QList<SessionPropertyResult> results =
+        applyPropertyWrite(transport, write, /*answer=*/false, {});
+    QString reason = QStringLiteral("The Core did not change the CFC settings.");
+    bool accepted = false;
+    for (const SessionPropertyResult& result : results) {
+        if (result.property == update.name) {
+            accepted = result.accepted;
+            reason = result.reason;
+        }
+    }
+    if (!accepted) {
+        answer(false, reason);
+        return;
+    }
+    answer(true, QString(),
+           {{0, "profile", MirrorWireKind::Utf8, m_radioModel->transmitModel().cfcProfile()}});
+}
+
 // ── Properties for a declaring peer only (phone wire batch) ─────────────
 
 bool StationServer::peerGetsFeatureProperties(SessionTransport* transport,
@@ -10737,7 +10860,12 @@ int StationServer::transmitSettingsVersion() const
     // on a different band from it (Thetis console.cs:29451-29465
     // [v2.10.3.15] refuses only split TX on another band); changed only
     // with transmit permission and off the air, as Extended.
-    return m_radioModel.isNull() ? 0 : kTransmitSettingsDifferentBandVersion;
+    // 15: the CFC dialog's band editor, transmit's read-only cfcProfile (to
+    // a peer that declared cfcProfile 1), and cfc.setProfile, which applies
+    // every band's frequency, compression, post-EQ gain and Q, the range,
+    // the pre-compression and the post-EQ gain at once against the
+    // revision the app last saw, as the peer's own cfcParaEqData write.
+    return m_radioModel.isNull() ? 0 : kTransmitSettingsCfcProfileVersion;
 }
 
 bool StationServer::takesTransmitSettingsOnAir(SessionTransport* transport) const

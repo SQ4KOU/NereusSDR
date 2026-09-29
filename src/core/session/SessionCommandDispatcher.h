@@ -200,6 +200,10 @@
 //   2026-09-29 - R-R3-49 / R-IOS-18 (paProfileVersion 1): the paProfile
 //                 verbs (handlePaProfile). J.J. Boyd (KG4VCF), AI-assisted
 //                 via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  cfc.setProfile
+//                                    (transmitSettingsVersion 15) through
+//                                    CfcProfileAccess. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -430,6 +434,11 @@ public:
     /// so the station server applies and answers them; true when it did.
     using TxEqCurveAccess = std::function<bool(const NereusSDR::SessionMessage& invoke)>;
     void setTxEqCurveAccess(TxEqCurveAccess access) { m_txEqCurveAccess = std::move(access); }
+    /// transmitSettingsVersion 15: cfc.setProfile is the asking
+    /// connection's cfcParaEqData write, so the station server applies and
+    /// answers it; true when it did.
+    using CfcProfileAccess = std::function<bool(const NereusSDR::SessionMessage& invoke)>;
+    void setCfcProfileAccess(CfcProfileAccess access) { m_cfcProfileAccess = std::move(access); }
     /// Parity Task 21 (R-IOS-18): the Core's radios (nereusd), for the
     /// station.selectRadio, station.rescanRadios, station.setRadioModel and
     /// station.forgetRadio verbs.
@@ -539,6 +548,8 @@ private:
     // R-IOS-13 / R-R3-49 (txEqCurveVersion 2): txEq.setCurve and
     // txEq.resetCurve, through TxEqCurveAccess.
     void handleTxEqCurve(const NereusSDR::SessionMessage& invoke);
+    // transmitSettingsVersion 15: cfc.setProfile, through CfcProfileAccess.
+    void handleCfcProfile(const NereusSDR::SessionMessage& invoke);
     void handleRequestIoBoardProbe(const NereusSDR::SessionMessage& invoke);
     // R-R3-46 fix wave (radioHardwareVersion 3): one band's RX or RX-only
     // antenna, applied through the Core's AlexAntennaFacade.
@@ -594,6 +605,7 @@ private:
     ConfirmAnswer m_confirmAnswer;
     RecordAccess m_recordAccess;
     TxEqCurveAccess m_txEqCurveAccess;
+    CfcProfileAccess m_cfcProfileAccess;
     SupportInputs m_supportInputs;
     // Parity Task 22: one bundle is made at a time.
     bool m_supportBundleRunning = false;

@@ -33,6 +33,12 @@
 //                                    the air; since transmitSettingsVersion
 //                                    13 every group is.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Setup publication (CFC band editor):
+//                                    the remote dialog sends the table as
+//                                    cfc.setProfile, shows a stale refusal,
+//                                    and keeps the property write for an
+//                                    older Core.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -284,6 +290,39 @@ QString pairedCfcBlob(int count, bool useQ = true)
                                   + curve(-7.0, -3.0, 6.0));
 }
 
+// What a window sent: the cfc.setProfile commands and the cfcParaEqData
+// property writes among the messages the Core end received.
+struct CfcTraffic {
+    int commands = 0;
+    int propertyWrites = 0;
+};
+
+CfcTraffic cfcTraffic(const LoopbackTransport* coreEnd)
+{
+    CfcTraffic traffic;
+    for (const QByteArray& wire : coreEnd->received()) {
+        SessionMessage message;
+        if (!SessionMessages::decode(wire, &message)) { continue; }
+        if (message.kind == SessionMessageKind::CommandInvoke
+            && message.commandVerb == "cfc.setProfile") {
+            ++traffic.commands;
+        }
+        if (message.kind == SessionMessageKind::PropertyWrite) {
+            for (const MirrorUpdate& update : message.updates) {
+                if (update.name == "cfcParaEqData") { ++traffic.propertyWrites; }
+            }
+        }
+    }
+    return traffic;
+}
+
+int coreBandCount(const TransmitModel& tx)
+{
+    CfcProfile::Profile profile;
+    return CfcProfile::decode(tx.cfcParaEqData(), profile)
+        ? static_cast<int>(profile.f.size()) : 0;
+}
+
 QList<QSpinBox*> groupSpins(QWidget* page, const QString& title)
 {
     for (QGroupBox* group : page->findChildren<QGroupBox*>()) {
@@ -328,6 +367,9 @@ private slots:
     void profileSwitchRestoresOnlyCoherentCfcCurve();
     void settingsReloadAppliesFinalCfcEnableAndCurveTogether();
     void reentrantCfcProjectionKeepsNewestCurve();
+    void remoteCfcDialogSendsTheTableAsOneCommand();
+    void remoteCfcDialogShowsAStaleRefusal();
+    void remoteCfcDialogKeepsThePropertyWriteForAnOlderCore();
 
 private:
     QTemporaryDir m_securityDir;
@@ -1452,6 +1494,117 @@ void TstRemoteTxEqCfc::parametricEqPushesAreCoalescedToTheTick()
     tx.setTxEqBand(3, 7);
     QCOMPARE(channel.txEqProfilePushCountForTest(), before + 3);
     core->injectTxChannelForTest(nullptr);
+}
+
+// Setup publication (CFC band editor): a Core at transmitSettingsVersion
+// 15 takes the dialog's table as one cfc.setProfile command, never as a
+// cfcParaEqData write; the 5 and 18-band tables reach it whole; and the
+// Core's own change shows in the open dialog.
+void TstRemoteTxEqCfc::remoteCfcDialogSendsTheTableAsOneCommand()
+{
+    Session s(m_securityDir.path(), this);
+    QVERIFY(s.connect());
+    TransmitModel& coreTx = s.core->transmitModel();
+    TxApplet applet(&s.window);
+    applet.setTxProcessingPermitted(true);
+    applet.requestOpenCfcDialog();
+    TxCfcDialog* dlg = applet.cfcDialog();
+    QVERIFY(dlg && dlg->isVisible());
+    s.coreEnd->clearReceived();
+
+    dlg->precompSpin()->setValue(11.0);
+    QTRY_COMPARE(coreTx.cfcPrecompDb(), 11);
+    QTRY_COMPARE(s.txChannel.lastTxCfcPrecompDbForTest(), 11.0);
+
+    dlg->bands18Radio()->setChecked(true);
+    QTRY_COMPARE(coreBandCount(coreTx), 18);
+    QTRY_COMPARE(s.window.transmitModel().cfcParaEqData(), coreTx.cfcParaEqData());
+    dlg->bands5Radio()->setChecked(true);
+    QTRY_COMPARE(coreBandCount(coreTx), 5);
+    // Several quick edits: the newest one wins, one command at a time.
+    dlg->postEqGainSpin()->setValue(-2.0);
+    dlg->postEqGainSpin()->setValue(-3.0);
+    dlg->postEqGainSpin()->setValue(-4.0);
+    QTRY_COMPARE(coreTx.cfcPostEqGainDb(), -4);
+    QTRY_COMPARE(s.window.transmitModel().cfcProfile(), coreTx.cfcProfile());
+
+    const CfcTraffic traffic = cfcTraffic(s.coreEnd);
+    QVERIFY(traffic.commands >= 4);
+    QCOMPARE(traffic.propertyWrites, 0);
+    QVERIFY(!dlg->profileReasonLabel()->isVisibleTo(dlg));
+
+    // A change made at the Core shows in the open dialog, 18 bands and all.
+    coreTx.setCfcParaEqData(pairedCfcBlob(18));
+    QTRY_VERIFY(dlg->bands18Radio()->isChecked());
+    QTRY_COMPARE(dlg->precompSpin()->value(), 6.0);
+    QCOMPARE(dlg->compWidget()->bandCount(), 18);
+    coreTx.setCfcPrecompDb(2);
+    QTRY_COMPARE(dlg->precompSpin()->value(), 2.0);
+    dlg->hide();
+}
+
+// A change made from a table the Core has since moved past is refused with
+// the reason, and the dialog shows the Core's values again.
+void TstRemoteTxEqCfc::remoteCfcDialogShowsAStaleRefusal()
+{
+    Session s(m_securityDir.path(), this);
+    QVERIFY(s.connect());
+    TransmitModel& coreTx = s.core->transmitModel();
+    TxApplet applet(&s.window);
+    applet.setTxProcessingPermitted(true);
+    applet.requestOpenCfcDialog();
+    TxCfcDialog* dlg = applet.cfcDialog();
+    QVERIFY(dlg);
+    QTRY_COMPARE(s.window.transmitModel().cfcProfile(), coreTx.cfcProfile());
+
+    // The Core changes, and before the window hears of it the dialog sends
+    // an edit made on the table it last saw.
+    coreTx.setCfcPrecompDb(7);
+    dlg->postEqGainSpin()->setValue(-9.0);
+    QTRY_COMPARE(dlg->profileReasonLabel()->text(),
+                 QStringLiteral("The CFC settings changed on the Core. "
+                                "Check the new values and try again."));
+    QVERIFY(dlg->profileReasonLabel()->isVisibleTo(dlg));
+    QVERIFY(coreTx.cfcPostEqGainDb() != -9);
+    QTRY_COMPARE(dlg->precompSpin()->value(), 7.0);
+    QCOMPARE(dlg->postEqGainSpin()->value(), static_cast<double>(coreTx.cfcPostEqGainDb()));
+
+    // The next edit, made on the Core's table, goes through and clears it.
+    dlg->postEqGainSpin()->setValue(-9.0);
+    QTRY_COMPARE(coreTx.cfcPostEqGainDb(), -9);
+    QTRY_VERIFY(!dlg->profileReasonLabel()->isVisibleTo(dlg));
+    dlg->hide();
+}
+
+// A Core before transmitSettingsVersion 15 has no cfc.setProfile; the
+// dialog keeps writing cfcParaEqData as before.
+void TstRemoteTxEqCfc::remoteCfcDialogKeepsThePropertyWriteForAnOlderCore()
+{
+    Session s(m_securityDir.path(), this);
+    QVERIFY(s.connect());
+    s.client->setTransmitSettingsVersionForTest(kTransmitSettingsCfcProfileVersion - 1);
+    QVERIFY(!s.client->transmitSettingsAvailable(kTransmitSettingsCfcProfileVersion));
+    QVERIFY(s.client->transmitSettingsAvailable(13));
+    const IStationLink::CommandOutcome direct =
+        s.client->requestCfcProfile(QStringLiteral("{}"), QString());
+    QVERIFY(!direct.sent);
+
+    TransmitModel& coreTx = s.core->transmitModel();
+    TxApplet applet(&s.window);
+    applet.setTxProcessingPermitted(true);
+    applet.requestOpenCfcDialog();
+    TxCfcDialog* dlg = applet.cfcDialog();
+    QVERIFY(dlg);
+    s.coreEnd->clearReceived();
+
+    dlg->precompSpin()->setValue(12.0);
+    QTRY_COMPARE(coreTx.cfcPrecompDb(), 12);
+    dlg->bands18Radio()->setChecked(true);
+    QTRY_COMPARE(coreBandCount(coreTx), 18);
+    const CfcTraffic traffic = cfcTraffic(s.coreEnd);
+    QCOMPARE(traffic.commands, 0);
+    QVERIFY(traffic.propertyWrites >= 2);
+    dlg->hide();
 }
 
 QTEST_MAIN(TstRemoteTxEqCfc)

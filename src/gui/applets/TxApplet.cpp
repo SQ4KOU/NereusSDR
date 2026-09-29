@@ -157,6 +157,11 @@
 //                board's fault code, say), as Thetis's TXInhibit setter
 //                does. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //                Code.
+//   2026-09-29 - Setup publication (CFC band editor): in a remote window
+//                the CFC dialog sends its band table as the Core's
+//                cfc.setProfile command when the Core takes it, and hears
+//                that command's answer. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -274,6 +279,7 @@
 #include "core/PureSignal.h"
 #include "core/RadioStatus.h"
 #include "core/session/IStationLink.h"
+#include "core/session/StationCapabilities.h"
 #include "core/session/PureSignalSessionFacade.h"
 #include "core/TwoToneController.h"
 #include "core/TxChannel.h"
@@ -2532,6 +2538,33 @@ void TxApplet::requestOpenCfcDialog()
             &m_model->transmitModel(),
             m_model->txChannel(),
             host ? host : static_cast<QWidget*>(this));
+        // Setup publication (CFC band editor): a remote window sends the
+        // whole table to a Core that takes it, and hears the answer.
+        if (m_model->stationLink()) {
+            QPointer<RadioModel> model(m_model);
+            m_cfcDialog->setStationProfileSender(
+                [model] {
+                    IStationLink* link = model ? model->stationLink() : nullptr;
+                    return link && link->transmitSettingsAvailable(
+                                       kTransmitSettingsCfcProfileVersion);
+                },
+                [model](const QString& profileJson, const QString& expectedRevision) {
+                    TxCfcDialog::StationProfileSend result;
+                    IStationLink* link = model ? model->stationLink() : nullptr;
+                    if (!link) {
+                        result.reason = IStationLink::transmitSettingsUnavailableReason();
+                        return result;
+                    }
+                    const IStationLink::CommandOutcome outcome =
+                        link->requestCfcProfile(profileJson, expectedRevision);
+                    result.sent = outcome.sent;
+                    result.reason = outcome.reason;
+                    result.commandId = outcome.commandId;
+                    return result;
+                });
+            connect(m_model, &RadioModel::stationCommandFinished,
+                    m_cfcDialog, &TxCfcDialog::onStationCommandFinished);
+        }
     } else {
         // Connection may have come up since the dialog was created.
         // Refresh the TxChannel pointer so the bar chart timer can poll WDSP.
