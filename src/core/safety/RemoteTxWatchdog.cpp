@@ -171,7 +171,7 @@ void RemoteTxWatchdog::trip(const QByteArray& deviceId, bool linkClosed)
     qCWarning(lcDsp).noquote() << "Transmit watchdog:"
                                << (linkClosed ? "the link closed" : "no keepalive for")
                                << (linkClosed ? QString() : QStringLiteral("%1 ms").arg(silentMs))
-                               << "from" << QString::fromLatin1(deviceId)
+                               << "from" << QString::fromLatin1(deviceId.toHex())
                                << "-" << message;
     const QPointer<RemoteTxWatchdog> self(this);
     if (m_hooks.stop) {
