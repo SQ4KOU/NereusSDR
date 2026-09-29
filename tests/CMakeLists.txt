@@ -7939,6 +7939,13 @@ nereus_add_test(tst_zero_slice_core)
 nereus_add_test(tst_slice_claims_expiry
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)
+# Slice control and shared listening plan Task 13: the bottom RX area's
+# all-slice chooser: rows and actions per state, waiting for the Core,
+# the empty window, narrow widths, the row builders. Offscreen renders
+# (NEREUS_TASK78_SHOTS). No radio, no RF.
+nereus_add_test(tst_slice_chooser
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS gui)
 # Slice control and shared listening plan Task 5: the remote window's side
 # of listening to and taking a slice (SliceAccessMirror, the four verbs, a
 # listened slice held read-only, the refusals and the controlTaken notice

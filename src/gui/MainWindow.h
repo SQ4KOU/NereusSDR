@@ -150,6 +150,7 @@ class FftEnginePool;
 class TxAnalyzer;
 class SpectrumWidget;
 class SliceModel;
+class SliceChooser;
 class VfoWidget;
 class PanadapterModel;
 // Phase 3F Sub-Epic D: forward declarations for the multi-pan layout
@@ -902,6 +903,12 @@ private:
     void refreshRemoteDeviceScreens();
     void refreshForeignMarkers();
     void refreshTakeReceiverOffer();
+    // Slice control plan Task 13: the bottom RX area's all-slice chooser.
+    enum class SliceChooserAction { Listen, TakeControl, Release, StopListening, Select, NewSlice };
+    void openSliceChooser();
+    void refreshSliceChooser();
+    void runSliceChooserAction(SliceChooserAction action, int sliceId);
+    void finishSliceChooserRequest(bool accepted, const QString& reason);
     void onPanTakeTransmitRequested(const QString& panId);
     void buildUI();
     void buildMenuBar();
@@ -1534,6 +1541,11 @@ private:
     // slice is active, not a fixed slice(0) -- see the rebindDashboard
     // lambda in buildStatusBar().
     RxDashboard* m_rxDashboard{nullptr};
+    // Slice control plan Task 13: the chooser (a popup), the request it
+    // waits on (the verb, or "addSlice"), and the words for its success.
+    QPointer<SliceChooser> m_sliceChooser;
+    QByteArray m_sliceChooserVerb;
+    QString m_sliceChooserSuccess;
 
     // Phase 3M-4 Task 10: PSA bottom-banner indicator pair (FB + PS labels).
     // Inserted between m_rxDashboard and m_stationBlock per design doc §4 #5

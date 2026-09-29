@@ -1234,6 +1234,9 @@ public:
     /// and release checks, for the hosting desktop's own window as for a
     /// device's command (Task 10). Never null on a Core with a radio model.
     SliceAccessController* sliceAccessController() const { return m_sliceAccessController; }
+    /// Slice control plan Task 13: whether `sliceId` is transmitting now, as
+    /// the take and release checks read it (the hosting desktop's chooser).
+    bool sliceOnAir(int sliceId) const { return sliceTransmitting(sliceId); }
 
     // ── iPhone app plan Task 34: transmit (R-IOS-02, R-IOS-03, R-IOS-13) ──
 

@@ -357,6 +357,11 @@
 //   2026-09-29 - Slice control plan Task 8b: a window run with a profile
 //               names the profile when it signs in to a Core. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Slice control plan Task 13: the bottom RX area's picker
+//               opens the all-slice chooser (SliceChooser): listen in, take
+//               control, release, stop listening, select RX and a new slice,
+//               each waiting for the Core's answer. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -605,6 +610,9 @@ warren@wpratt.com
 #include "models/SliceModel.h"
 #include "widgets/VfoWidget.h"
 #include "widgets/RxDashboard.h"
+#include "SliceChooser.h"
+#include "core/session/SliceAccessController.h"
+#include "core/session/SliceAccessMirror.h"
 #include "widgets/AntennaSwitchToast.h"
 #include "widgets/StatusToast.h"
 #include "widgets/FilterPolicyDialog.h"
@@ -2097,6 +2105,198 @@ void MainWindow::refreshForeignMarkers()
     }
 }
 
+// ── Slice control plan Task 13: the bottom RX area's slice chooser ──────
+
+void MainWindow::openSliceChooser()
+{
+    if (!m_rxDashboard || !m_radioModel) {
+        return;
+    }
+    if (!m_sliceChooser) {
+        m_sliceChooser = new SliceChooser(this);
+        m_sliceChooser->setWindowFlag(Qt::Popup, true);
+        connect(m_sliceChooser, &SliceChooser::closeRequested, m_sliceChooser, &QWidget::hide);
+        connect(m_sliceChooser, &SliceChooser::listenRequested, this,
+                [this](int id) { runSliceChooserAction(SliceChooserAction::Listen, id); });
+        connect(m_sliceChooser, &SliceChooser::takeControlRequested, this,
+                [this](int id) { runSliceChooserAction(SliceChooserAction::TakeControl, id); });
+        connect(m_sliceChooser, &SliceChooser::releaseRequested, this,
+                [this](int id) { runSliceChooserAction(SliceChooserAction::Release, id); });
+        connect(m_sliceChooser, &SliceChooser::stopListeningRequested, this,
+                [this](int id) { runSliceChooserAction(SliceChooserAction::StopListening, id); });
+        connect(m_sliceChooser, &SliceChooser::selectRequested, this,
+                [this](int id) { runSliceChooserAction(SliceChooserAction::Select, id); });
+        connect(m_sliceChooser, &SliceChooser::newSliceRequested, this,
+                [this]() { runSliceChooserAction(SliceChooserAction::NewSlice, -1); });
+    }
+    refreshSliceChooser();
+    m_sliceChooser->adjustSize();
+    // Above the picker, inside the window.
+    QWidget* picker = m_rxDashboard->chooserButton();
+    const QPoint anchor = picker->mapToGlobal(QPoint(0, 0));
+    const QSize size = m_sliceChooser->sizeHint().expandedTo(QSize(360, 0));
+    m_sliceChooser->resize(size);
+    m_sliceChooser->move(anchor.x(), anchor.y() - size.height() - 4);
+    m_sliceChooser->show();
+    m_sliceChooser->raise();
+}
+
+void MainWindow::refreshSliceChooser()
+{
+    if (!m_radioModel) {
+        return;
+    }
+    QList<SliceChooser::Row> rows;
+    bool shared = false;
+    StationServer* server = desktopHosting() && m_desktopStationController
+        ? m_desktopStationController->server() : nullptr;
+    if (server) {
+        rows = SliceChooser::rowsForHostingDesktop(*m_radioModel, *server);
+        shared = true;
+    } else if (m_stationClient && m_stationClient->remoteDevices()) {
+        rows = SliceChooser::rowsForRemoteWindow(*m_radioModel, m_stationClient->sliceAccess(),
+                                                 *m_stationClient->remoteDevices());
+        shared = m_stationClient->remoteSliceAccessAvailable();
+    } else {
+        rows = SliceChooser::rowsForRemoteWindow(*m_radioModel, nullptr, RemoteDevicesState());
+    }
+    if (m_rxDashboard && shared) {
+        m_rxDashboard->setChooserState(SliceChooser::bannerState(rows));
+    }
+    if (m_sliceChooser) {
+        m_sliceChooser->setInventory(rows);
+        m_sliceChooser->setNoRoomForNewSlice(
+            m_radioModel->slices().size() >= m_radioModel->sliceCapForDevices());
+    }
+}
+
+void MainWindow::finishSliceChooserRequest(bool accepted, const QString& reason)
+{
+    const QString words = accepted ? m_sliceChooserSuccess : reason;
+    m_sliceChooserVerb.clear();
+    m_sliceChooserSuccess.clear();
+    refreshSliceChooser();
+    if (m_sliceChooser) {
+        m_sliceChooser->showResult(words);
+    }
+}
+
+void MainWindow::runSliceChooserAction(SliceChooserAction action, int sliceId)
+{
+    if (!m_radioModel || !m_sliceChooser || !m_sliceChooserVerb.isEmpty()) {
+        return;
+    }
+    const QString letter = QString(QChar(QLatin1Char('A').unicode() + std::max(0, sliceId)));
+    if (action == SliceChooserAction::Select) {
+        const bool asked = desktopHosting()
+            ? m_radioModel->setActiveSliceByIdFor(SliceOwnership::stationDevice(), sliceId)
+            : m_radioModel->setActiveSliceById(sliceId);
+        refreshSliceChooser();
+        m_sliceChooser->showResult(asked
+            ? tr("The bottom RX area now follows slice %1.").arg(letter)
+            : tr("Slice %1 cannot be selected here now.").arg(letter));
+        return;
+    }
+    if (action == SliceChooserAction::NewSlice) {
+        m_sliceChooserVerb = QByteArrayLiteral("addSlice");
+        m_sliceChooserSuccess = tr("A new slice is ready.");
+        m_sliceChooser->setPending(tr("Asking the Core for a new slice…"));
+        if (m_panStack) {
+            m_radioModel->addSliceOnPan(m_panStack->activePanId());
+        } else {
+            m_radioModel->addSlice(QString());
+        }
+        return;
+    }
+    QString success;
+    switch (action) {
+    case SliceChooserAction::Listen:
+        success = tr("Listening to slice %1.").arg(letter);
+        break;
+    case SliceChooserAction::TakeControl:
+        success = tr("You control slice %1. Tuning is unchanged. Select transmit separately.")
+                      .arg(letter);
+        break;
+    case SliceChooserAction::Release:
+        success = tr("You released slice %1.").arg(letter);
+        break;
+    case SliceChooserAction::StopListening:
+        success = tr("You stopped listening to slice %1.").arg(letter);
+        break;
+    default:
+        break;
+    }
+    // The hosting desktop: the Core's own checks, answered at once (Task 10
+    // moves these onto the same validated operations as a device's).
+    StationServer* server = desktopHosting() && m_desktopStationController
+        ? m_desktopStationController->server() : nullptr;
+    if (server && server->sliceAccessController()) {
+        SliceAccessController* access = server->sliceAccessController();
+        SliceOwnership* ownership = m_radioModel->sliceOwnership();
+        const QByteArray self = SliceOwnership::stationDevice();
+        const SliceOwnership::SliceRef ref = ownership->refOf(sliceId);
+        const quint64 revision = ownership->controlRevision(sliceId);
+        SliceAccessController::Result result;
+        switch (action) {
+        case SliceChooserAction::Listen:        result = access->listen(self, ref); break;
+        case SliceChooserAction::TakeControl:   result = access->takeControl(self, ref, revision); break;
+        case SliceChooserAction::Release:       result = access->release(self, ref, revision); break;
+        case SliceChooserAction::StopListening: result = access->stopListening(self, ref); break;
+        default: break;
+        }
+        m_sliceChooserSuccess = success;
+        m_sliceChooserVerb = QByteArrayLiteral("hosting");
+        finishSliceChooserRequest(result.accepted, result.reason);
+        refreshForeignMarkers();
+        refreshDesktopStationState();
+        return;
+    }
+    // A remote window: the Core's slice verbs; the answer comes back on
+    // deviceCommandFinished.
+    if (!m_stationClient) {
+        // A window on its own: its slices are all its own.
+        if (action == SliceChooserAction::Release) {
+            m_radioModel->removeSlice(sliceId);
+            refreshSliceChooser();
+            m_sliceChooser->showResult(success);
+        }
+        return;
+    }
+    const std::optional<SliceAccessMirror::Entry> entry =
+        m_stationClient->sliceAccess() ? m_stationClient->sliceAccess()->entry(sliceId)
+                                       : std::nullopt;
+    IStationLink::CommandOutcome outcome;
+    const quint64 incarnation = entry ? entry->incarnation : 0;
+    const quint64 revision = entry ? entry->controlRevision : 0;
+    switch (action) {
+    case SliceChooserAction::Listen:
+        m_sliceChooserVerb = QByteArrayLiteral("slice.listen");
+        outcome = m_stationClient->requestListen(sliceId, incarnation);
+        break;
+    case SliceChooserAction::TakeControl:
+        m_sliceChooserVerb = QByteArrayLiteral("slice.takeControl");
+        outcome = m_stationClient->requestTakeControl(sliceId, incarnation, revision);
+        break;
+    case SliceChooserAction::Release:
+        m_sliceChooserVerb = QByteArrayLiteral("slice.release");
+        outcome = m_stationClient->requestRelease(sliceId, incarnation, revision);
+        break;
+    case SliceChooserAction::StopListening:
+        m_sliceChooserVerb = QByteArrayLiteral("slice.stopListening");
+        outcome = m_stationClient->requestStopListening(sliceId, incarnation);
+        break;
+    default:
+        break;
+    }
+    if (!outcome.sent) {
+        m_sliceChooserSuccess.clear();
+        finishSliceChooserRequest(false, outcome.reason);
+        return;
+    }
+    m_sliceChooserSuccess = success;
+    m_sliceChooser->setPending(tr("Asking the Core…"));
+}
+
 void MainWindow::refreshTakeReceiverOffer()
 {
     if (m_panStack == nullptr || m_radioModel == nullptr) {
@@ -2259,6 +2459,24 @@ void MainWindow::ensureRemoteSession()
                                                AppSettings::profileOverride()),
                                            ClientDeviceIdentity::machineShortName(
                                                AppSettings::profileOverride()));
+        // Slice control plan Task 13: the chooser's answers and inventory.
+        connect(m_stationClient, &StationClient::deviceCommandFinished, this,
+                [this](const QByteArray& verb, quint32, bool accepted, const QString& reason,
+                       bool) {
+                    if (!m_sliceChooserVerb.isEmpty() && verb == m_sliceChooserVerb) {
+                        finishSliceChooserRequest(accepted, reason);
+                    }
+                });
+        if (SliceAccessMirror* access = m_stationClient->sliceAccess()) {
+            connect(access, &SliceAccessMirror::changed, this,
+                    [this](int) { refreshSliceChooser(); });
+        }
+        if (RemoteDevicesState* devices = m_stationClient->remoteDevices()) {
+            connect(devices, &RemoteDevicesState::markersChanged, this,
+                    [this]() { refreshSliceChooser(); });
+            connect(devices, &RemoteDevicesState::connectedDevicesChanged, this,
+                    [this]() { refreshSliceChooser(); });
+        }
         // iPhone app plan Task 39: the Core's transmit meters.
         wireRemoteTransmitMeters();
         // iPhone app plan Task 78: several devices on one Core.
@@ -5826,6 +6044,9 @@ void MainWindow::buildUI()
         if (!m_rxDashboard || !m_radioModel) { return; }
         SliceModel* s = activeSliceForWindow();
         m_rxDashboard->bindSlice(s);
+        // Slice control plan Task 13: the picker's words and an open
+        // chooser follow every change of this window's slices.
+        refreshSliceChooser();
         if (!s) { return; }
         // Use SliceModel::sliceLetter(), do NOT derive the letter here.
         // It is already derived from sliceIndex() upstream. It previously
@@ -5840,6 +6061,33 @@ void MainWindow::buildUI()
     connect(m_radioModel, &RadioModel::activeSliceChanged, this,
             [rebindDashboard]() { rebindDashboard(); });
     rebindDashboard();
+
+    // Slice control plan Task 13: the picker opens the chooser; a new slice
+    // it asked for is answered by the slice or by the refusal.
+    connect(m_rxDashboard, &RxDashboard::chooserRequested, this, [this]() {
+        if (m_sliceChooser && m_sliceChooser->isVisible()) {
+            m_sliceChooser->hide();
+        } else {
+            openSliceChooser();
+        }
+    });
+    connect(m_radioModel, &RadioModel::sliceAdded, this, [this](int) {
+        if (m_sliceChooserVerb == "addSlice") {
+            finishSliceChooserRequest(true, QString());
+        }
+    });
+    connect(m_radioModel, &RadioModel::sliceAddRejected, this, [this](const QString& reason) {
+        if (m_sliceChooserVerb == "addSlice") {
+            finishSliceChooserRequest(false, reason);
+        }
+    });
+    connect(m_radioModel, &RadioModel::sliceRemoved, this, [this](int) { refreshSliceChooser(); });
+    if (SliceOwnership* ownership = m_radioModel->sliceOwnership()) {
+        connect(ownership, &SliceOwnership::markChanged, this,
+                [this](int, const QByteArray&, const QByteArray&) { refreshSliceChooser(); });
+        connect(ownership, &SliceOwnership::listenersChanged, this,
+                [this](int) { refreshSliceChooser(); });
+    }
 
     // Phase 3F: the status overlay's per-slice triggers. Topology changes
     // reach the overlay through rebuildFftRouting, but a retune or a mode

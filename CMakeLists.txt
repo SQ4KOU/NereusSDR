@@ -1646,6 +1646,8 @@ set(GUI_SOURCES
     src/gui/widgets/OverflowChip.h
     src/gui/widgets/RxDashboard.cpp
     src/gui/widgets/RxDashboard.h
+    src/gui/SliceChooser.cpp
+    src/gui/SliceChooser.h
     src/gui/widgets/StationBlock.cpp
     src/gui/widgets/StationBlock.h
     src/gui/widgets/SpectrumStatusOverlay.cpp

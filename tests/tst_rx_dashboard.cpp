@@ -128,7 +128,7 @@ private slots:
         QCOMPARE(d.slice(), nullptr);
         QVERIFY(d.sliceLetter().isNull());
         QCOMPARE(d.modeText(), QStringLiteral("–"));
-        QVERIFY(d.findChild<QLabel*>()->isHidden());
+        QVERIFY(d.findChild<QLabel*>(QStringLiteral("rxSliceTag"))->isHidden());
         for (int rung = 5; rung <= 9; ++rung) {
             QVERIFY(!d.badgeForRung(rung)->isClickable());
             bool unavailable = false;
@@ -150,7 +150,7 @@ private slots:
         QCOMPARE(d.slice(), &c);
         QCOMPARE(d.sliceLetter(), QLatin1Char('C'));
         QCOMPARE(d.modeText(), QStringLiteral("AM"));
-        QVERIFY(!d.findChild<QLabel*>()->isHidden());
+        QVERIFY(!d.findChild<QLabel*>(QStringLiteral("rxSliceTag"))->isHidden());
         QVERIFY(d.badgeForRung(9)->isClickable());
     }
 
