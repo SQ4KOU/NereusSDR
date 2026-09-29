@@ -9,6 +9,12 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29 - Radio Status PTT source: a remote window reads a key from
+//                 a device that does not hold transmit as Remote, as the
+//                 Core's window does; both keep the key's source through a
+//                 RADE end-of-over tail; a radio with no station running
+//                 reads the key's own source (TCI, CAT, PTT, VOX).
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-28 - RADE end-of-over callsigns: endOfOverTailActive /
 //                 endOfOverTailChanged, startRadeEndOfOverTail and
 //                 onEndOfOverTailChanged (FreeDV's end-of-over frame after
@@ -6453,6 +6459,12 @@ private:
     NereusSDR::NbMode m_nbSavedMode{NereusSDR::NbMode::Off};
     // iPhone app plan Task 35.
     KeyedBy m_keyedBy;
+    // The Radio Status page: the last key's trigger and whether a device
+    // keyed it, kept through a RADE end-of-over tail (Local only).
+    QString m_radioStatusKeyTrigger;
+    bool m_radioStatusKeyFromDevice{false};
+    // Remote: a refresh of the page's key is queued for the delta in.
+    bool m_radioStatusPttRefreshQueued{false};
     // iPhone app plan Task 38: the transmit time-out (Local only; Qt
     // parent this) and the last reason the Core stopped a transmission.
     TxTimeOutTimer* m_txTimeOut{nullptr};
