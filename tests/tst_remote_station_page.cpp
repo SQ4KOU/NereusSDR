@@ -1,6 +1,10 @@
 // no-port-check: NereusSDR-original Remote Access presentation contract.
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "gui/setup/RemoteStationPage.h"
+#include "gui/GuiDesktopStationRuntime.h"
+#include "core/session/RemoteDevicesState.h"
+#include "gui/multidevice/ConnectedDevicesList.h"
+#include <QTreeWidget>
 
 #include <QCheckBox>
 #include <QDir>
@@ -235,6 +239,43 @@ private slots:
         state.keyBackupAcknowledged = true;
         page.setState(state);
         screenshot(page, QStringLiteral("04-backup-acknowledged.png"));
+        // iPhone app plan Tasks 49 and 78 item 8: the reach line as the
+        // runtime words it for a Core that is fully reachable.
+        NereusSDR::StationReach reach;
+        reach.listening = true;
+        reach.bonjourAvailable = true;
+        reach.bonjourActive = true;
+        reach.serviceConfigured = true;
+        reach.serviceRegistered = true;
+        reach.serviceHost = QStringLiteral("rv.nereussdr.com");
+        state.reachabilityText = NereusSDR::GuiDesktopStationRuntime::reachText(QString(), 50055, reach);
+        page.setState(state);
+        screenshot(page, QStringLiteral("05-reach.png"));
+        // Task 78 item 8: who is connected now, this desktop first.
+        QCOMPARE(page.connectedList()->emptyLabel()->text(),
+                 QStringLiteral("Run a Core on this computer to see who is connected."));
+        NereusSDR::RemoteDevicesState devices;
+        NereusSDR::MirrorUpdate list;
+        list.name = QByteArrayLiteral("listJson");
+        list.value = QStringLiteral(
+            "[{\"deviceId\":\"host\",\"name\":\"Shack Mac mini\",\"shortName\":\"Mac mini\","
+            "\"hostsCore\":true,\"state\":\"listening\",\"connectedForSeconds\":5400,"
+            "\"listeningOn\":[{\"sliceId\":0,\"letter\":\"A\",\"band\":5}]},"
+            "{\"deviceId\":\"phone\",\"name\":\"Jo's iPhone\",\"shortName\":\"iPhone\","
+            "\"state\":\"transmitting\",\"holdsTransmit\":true,\"connectedForSeconds\":900,"
+            "\"transmittingForSeconds\":75,\"transmittingOn\":{\"sliceId\":1,\"letter\":\"B\","
+            "\"band\":5}}]");
+        NereusSDR::MirrorUpdate limit;
+        limit.name = QByteArrayLiteral("deviceLimit");
+        limit.value = 4;
+        devices.setSelfDeviceId(QStringLiteral("host"));
+        devices.applyObject(QByteArrayLiteral("connectedDevices"), {list, limit});
+        page.setConnectedDevices(&devices);
+        QCOMPARE(page.connectedList()->tree()->topLevelItemCount(), 2);
+        QVERIFY(page.connectedList()->tree()->topLevelItem(0)->text(0).endsWith(
+            QStringLiteral("(this window)")));
+        screenshot(page, QStringLiteral("06-connected-now.png"));
+        page.setConnectedDevices(nullptr);
     }
 };
 QTEST_MAIN(RemoteStationPageTest)

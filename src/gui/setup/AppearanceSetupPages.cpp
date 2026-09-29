@@ -70,7 +70,7 @@ void ColorsThemePage::buildUI()
     // one picker because SpectrumWidget currently shares one colour for line and fill.
     m_traceFillColorBtn->setToolTip(QStringLiteral(
         "Click to choose the spectrum trace line and fill color. "
-        "QColorDialog lets you adjust alpha for the fill opacity."));
+        "The color picker lets you adjust alpha for the fill opacity."));  // a QColorDialog
     specForm->addRow(QStringLiteral("Trace & Fill Color:"), m_traceFillColorBtn);
 
     // Grid Color — moved from Display → Grid & Scales "Colors" group (G9).

@@ -142,6 +142,19 @@
 //   2026-09-27 - Parity Task 23 (R-R3-48, R-R3-42): StationTciModel's four
 //                 options Outbound (stationTciVersion 2). J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - A9 (iPhone app plan Task 39): TransmitState's seven stage
+//                 readings (eqDb .. alcGroupDb) Outbound (txReadingsVersion
+//                 3). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code.
+//   2026-09-28 - iPhone app plan Task 25: StationVax, the `vax` object
+//                 (vaxVersion 1). J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
+//   2026-09-28 - iPhone app plan Task 40: TransmitModel micMuted
+//                 Bidirectional (transmitSettingsVersion 10). J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - R-IOS-13 / R-R3-49: TransmitModel txEqCurve Outbound
+//                 (txEqCurveVersion 1). J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorPolicy.h"
@@ -402,7 +415,7 @@ const MirrorPolicy::Entry kEntries[] = {
     // minimum notch width (RadioModel::refreshSliceMinNotchWidths).
     { "SliceModel", "minNotchWidthHz", MirrorDirection::Outbound },
 
-    // ---- TransmitModel (86 entries) ----
+    // ---- TransmitModel (87 entries) ----
     // iPhone app plan Task 35 (R-IOS-13): MOX and TUNE travel from the
     // Core only. A remote device keys with the transmit verbs (tx.key,
     // tx.tune), which pass the Core's gates; a property write never keys
@@ -511,6 +524,12 @@ const MirrorPolicy::Entry kEntries[] = {
     // VOX. A write is the permitted sessions' only (the station transmit
     // gate), and the Core turns VOX off at every change of holder.
     { "TransmitModel", "voxEnabled", MirrorDirection::Bidirectional },
+    // iPhone app plan Task 40 (transmitSettingsVersion 10): the mic mute.
+    { "TransmitModel", "micMuted", MirrorDirection::Bidirectional },
+    // R-IOS-13 / R-R3-49 (txEqCurveVersion 1): the TX EQ curve the Core
+    // derives from txEqParaEqData, read-only; only to a peer that declared
+    // txEqCurve (StationServer::fitTxEqCurveToPeer).
+    { "TransmitModel", "txEqCurve", MirrorDirection::Outbound },
 
     // ---- TunerModel (21 entries) ----
     { "TunerModel", "relayC1", MirrorDirection::Outbound },
@@ -708,6 +727,28 @@ const MirrorPolicy::Entry kEntries[] = {
     { "StationTciModel", "emulateSunSdr2Pro", MirrorDirection::Outbound },
     { "StationTciModel", "cwluBecomesCw", MirrorDirection::Outbound },
     { "StationTciModel", "sendInitialState", MirrorDirection::Outbound },
+
+    // iPhone app plan Task 25 (vaxVersion 1): the station computer's VAX.
+    // The slices, device names and transmit slice are the Core's; the
+    // levels and mutes a device may change (StationServer checks them).
+    { "StationVax", "ch1Slices", MirrorDirection::Outbound },
+    { "StationVax", "ch2Slices", MirrorDirection::Outbound },
+    { "StationVax", "ch3Slices", MirrorDirection::Outbound },
+    { "StationVax", "ch4Slices", MirrorDirection::Outbound },
+    { "StationVax", "ch1RxGain", MirrorDirection::Bidirectional },
+    { "StationVax", "ch2RxGain", MirrorDirection::Bidirectional },
+    { "StationVax", "ch3RxGain", MirrorDirection::Bidirectional },
+    { "StationVax", "ch4RxGain", MirrorDirection::Bidirectional },
+    { "StationVax", "ch1Muted", MirrorDirection::Bidirectional },
+    { "StationVax", "ch2Muted", MirrorDirection::Bidirectional },
+    { "StationVax", "ch3Muted", MirrorDirection::Bidirectional },
+    { "StationVax", "ch4Muted", MirrorDirection::Bidirectional },
+    { "StationVax", "ch1Device", MirrorDirection::Outbound },
+    { "StationVax", "ch2Device", MirrorDirection::Outbound },
+    { "StationVax", "ch3Device", MirrorDirection::Outbound },
+    { "StationVax", "ch4Device", MirrorDirection::Outbound },
+    { "StationVax", "txSlice", MirrorDirection::Outbound },
+    { "StationVax", "txGain", MirrorDirection::Bidirectional },
 
     // iPhone app Task 43: the station authors every Setup description.
     { "SetupDescription", "general", MirrorDirection::Outbound },
@@ -920,6 +961,14 @@ const MirrorPolicy::Entry kEntries[] = {
     { "TransmitState", "forwardRawPowerWatts", MirrorDirection::Outbound },
     { "TransmitState", "forwardAdcVolts", MirrorDirection::Outbound },
     { "TransmitState", "reflectedAdcVolts", MirrorDirection::Outbound },
+    // A9 (txReadingsVersion 3): the container meters' stage readings.
+    { "TransmitState", "eqDb", MirrorDirection::Outbound },
+    { "TransmitState", "levelerDb", MirrorDirection::Outbound },
+    { "TransmitState", "levelerGainDb", MirrorDirection::Outbound },
+    { "TransmitState", "cfcDb", MirrorDirection::Outbound },
+    { "TransmitState", "cfcGainDb", MirrorDirection::Outbound },
+    { "TransmitState", "alcGainDb", MirrorDirection::Outbound },
+    { "TransmitState", "alcGroupDb", MirrorDirection::Outbound },
 
     // Normal PS3 configuration is distinct from operational arming/actions.
     { "PureSignalSettings", "autoCalEnabled", MirrorDirection::Bidirectional },

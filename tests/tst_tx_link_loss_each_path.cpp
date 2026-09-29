@@ -17,11 +17,14 @@
 //   - the media connection's "tx" data channel on a direct pair (real
 //     DTLS/SCTP between two libdatachannel peers on this machine), severed
 //     at the Core's end with the session still up;
-//   - through TURN over UDP, and through the relay floor: the Part E
-//     transports (the plan's Tasks 27 to 29) are not built yet. Those rows
-//     are skipped with the reason until the Part E harness lands; the
-//     watchdog takes their keepalives through the same call
-//     (RemoteTxWatchdog::keepalive) and its rules do not change.
+//   - through TURN over UDP, and through the relay floor: the transports
+//     (the plan's Tasks 27 to 29) are built, but this file cannot yet sever
+//     either path with the key held (the fake TURN server and the stand-in
+//     relay have no way to stop forwarding a live session, and this file's
+//     session runs over the loopback link, not the service). Those rows are
+//     skipped with that reason; the watchdog takes their keepalives through
+//     the same call (RemoteTxWatchdog::keepalive) and its rules do not
+//     change.
 //
 // Also here, with the same real Core and window: VOX a device armed goes
 // off with its session and its link, and the Core never keys from its own
@@ -50,6 +53,10 @@
 //               join and before its barrier rides across the move with its
 //               keepalives in order and the watchdog quiet; a move and its
 //               station deadline never key and never drop a held key.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28: the TURN and relay-floor rows' skip reasons name what they
+//               still need (a session through the service that can be
+//               severed with the key held), not transports that now exist.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
@@ -435,14 +442,29 @@ private slots:
 
     void turnUdpSeveredStopsWithin500ms()
     {
-        QSKIP("Through TURN over UDP: the rendezvous and relay transports (iPhone app plan "
-              "Tasks 27 to 29) and the Part E harness are not built yet.");
+        // The transports are built (Tasks 27 to 29) and the service runs on
+        // this computer (RendezvousTestHarness with fake_turn_server.py), but
+        // nothing here can yet cut a live TURN path: the fake TURN server
+        // relays every allocation until it exits, and this file's session
+        // (RemoteAudioSessionHarness) runs over the loopback link, not the
+        // service. The Docker traversal harness keys over its paths only to
+        // measure false stops (web-relay-deadline, direct-wss-deadline), not
+        // to sever one with the key held.
+        QSKIP("Through TURN over UDP: needs a keyable Core and window session through the "
+              "service on a relayed pair, and a way to stop the fake TURN server relaying "
+              "that pair while the key is held.");
     }
 
     void relayFloorSeveredStopsWithin500ms()
     {
-        QSKIP("Through the relay floor: the relay transport (iPhone app plan Tasks 27 to 29) "
-              "and the Part E harness are not built yet.");
+        // The relay leg is built (RelayLeg, Task 29 step 2b) and
+        // tst_relay_session runs a whole session over it through a stand-in
+        // relay, but that stand-in is private to that test and forwards
+        // until it is destroyed, so nothing can cut the floor while a key
+        // is held; this file's session does not use the service.
+        QSKIP("Through the relay floor: needs a keyable Core and window session over the web "
+              "relay leg, and a shared stand-in relay that can stop forwarding while the key "
+              "is held.");
     }
 
     // ---- VOX a device armed -------------------------------------------------

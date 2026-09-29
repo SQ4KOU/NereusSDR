@@ -768,6 +768,21 @@ The desktop's remote window declares it (desktop remote transmit): its
 MOX, TUNE, two-tone, microphone, VOX and TCI programs transmit through the
 Core, and its transmit meters read `txState`.
 
+**`vax` 1** (iPhone app plan Task 25, R-IOS-18): the client shows the VAX
+channels of the computer the Core runs on (its VAX tool). A peer that
+declares it at minor 11 is sent `vaxVersion` (section 6.3) and, when that is
+1, the `vax` object (section 7.1). The station does not declare it, and the
+desktop's remote window does not: its VAX applet runs that computer's own
+VAX channels (R-R3-44).
+
+**`txEqCurve` 1** (R-IOS-13, R-R3-49): the client reads the TX EQ
+parametric curve in the form section 7.1 documents ("The TX EQ curve"). A
+peer that declares it at minor 11 is sent `txEqCurveVersion` (section 6.3)
+and `transmit`'s `txEqCurve`; a peer that does not sees exactly the wire it
+was built for, with neither. The station does not declare it. The
+desktop's remote window does not declare it either: its TX EQ dialog reads
+`txEqParaEqData` itself.
+
 **`sessionHolder` 1** (iPhone app plan Task 71; the several-devices
 design, ruling 10.1): the Core admits up to four devices at once (section
 5.1). A client declares it only together with `deviceAuth` 1 or later, and
@@ -869,24 +884,24 @@ change shows as surface drift and as a change to this table.
 | `pairingVersion` | 1 |
 | `stationCatalogVersion` | 1 |
 | `displayExtrasVersion` | 4 |
-| `transmitSettingsVersion` | 9 |
+| `transmitSettingsVersion` | 10 |
 | `bandSelectVersion` | 1 |
 | `meterReadingsVersion` | 1 |
 | `dspInfoVersion` | 1 |
-| `recordStreamVersion` | 1 |
+| `recordStreamVersion` | 2 |
 | `stationRadiosVersion` | 0 |
 | `txDisplayVersion` | 0 |
 | `displayClockVersion` | 1 |
 | `controlChannelVersion` | 1 |
 | `txMonitorAudioVersion` | 1 |
-| `stationFreedvVersion` | 1 |
+| `stationFreedvVersion` | 2 |
 | `mediaReplaceVersion` | 1 |
 | `controlSwitchVersion` | 1 |
 | `supportBundleVersion` | 1 |
 | `sessionHolderVersion` | 1 |
 | `remoteTxVersion` | 2 |
 | `txStateVersion` | 2 |
-| `txReadingsVersion` | 2 |
+| `txReadingsVersion` | 3 |
 | `mediaTunnelVersion` | 1 |
 | `mediaRelayRoutingVersion` | 1 |
 | `settingsHygieneVersion` | 1 |
@@ -897,6 +912,8 @@ change shows as surface drift and as a change to this table.
 | `miniDisplayVersion` | 1 |
 | `accessoryTxVersion` | 1 |
 | `radioAntennaRowsVersion` | 1 |
+| `vaxVersion` | 1 |
+| `txEqCurveVersion` | 1 |
 
 <!-- /surface -->
 
@@ -1002,6 +1019,26 @@ When a feature is off, its version is 0:
   `setAlexTxAntennaForRadio` (section 9.1). Missing, malformed and unknown
   versions are unusable. Older peers receive byte-for-byte the previous
   capability shape and keep the existing one-band verbs.
+- `vaxVersion` (iPhone app plan Task 25, R-IOS-18): optional and appended
+  after `radioAntennaRowsVersion`, only at agreed minor 11 for a peer
+  whose hello declared `vax` 1; any other peer receives the previous
+  capability shape. 1 on a Core whose own audio engine publishes VAX
+  devices (a Core the desktop hosts) and keeps record streams, 0 otherwise
+  (nereusd publishes none, R-R3-44). At 1 the Core sends that peer the `vax`
+  object (section 7.1), takes its writes (section 7.3), and keeps the
+  `vaxLevels` record stream (section 7.7).
+- `txEqCurveVersion` (R-IOS-13, R-R3-49): optional, sent only at agreed
+  minor 11 to a peer whose hello declared `txEqCurve` 1, while the Core
+  has a radio model, after `vaxVersion` (after `radioAntennaRowsVersion`
+  or `accessoryTxVersion` when those are absent) and before
+  `coreBuildInfo`.
+  At 1, `transmit` carries `txEqCurve`, the TX EQ dialog's parametric
+  curve as read-only JSON (section 7.1, "The TX EQ curve"). The Core
+  derives it from `txEqParaEqData`, which stays as it is. There is no
+  write: the curve is changed at the Core. A peer that did not declare
+  the feature is sent neither this entry nor the property. An app on a
+  Core that sends no entry shows the curve disabled with "This Core does
+  not send the TX EQ curve. Updating the Core may help."
 - `remotePgxlControlVersion`, `remoteRfKitControlVersion`,
   `remoteTgxlControlVersion`: sent only at agreed minor 11, and 0 unless
   the Core owns its accessories. `remotePgxlControlVersion` 3 adds the
@@ -1158,7 +1195,16 @@ When a feature is off, its version is 0:
   checks the complete signed TX passband (including XIT), and refuses writes
   and removals while on air, including at shared-setting confirmation. Removing
   the key restores United States (8). Legacy `Region` text is not migrated.
-  Extended transmit is not enabled by this capability.
+  Extended transmit is not enabled by this capability. Version 10 (iPhone
+  app plan Task 40) adds `transmit.micMuted` (bool, bidirectional, appended
+  after `voxEnabled`): true while the Core's mic is muted, the inverse of
+  Thetis's chkMicMute, whose checked state means the mic is in use. A write
+  takes the same gates as `micGainDb` (a permitted session on a transmit
+  Core, on or off the air; a receive-only Core's settings writer off the
+  air only) and never keys. Muting sets the Core's mic preamp to 0.0 and
+  unmuting restores the mic level, as Thetis's setAudioMicGain does
+  (console.cs:28856-28868 [v2.10.3.15]). It is never saved: the mic starts
+  in use after every Core start.
 - `bandSelectVersion`: sent only at agreed minor 11, and 0 on a
   station with no radio model. At 1 the Core takes `slice.selectBand`
   (section 9.1), a device's band button for a slice, for the bands the
@@ -1199,7 +1245,18 @@ When a feature is off, its version is 0:
   computer runs its own WSJT-X and SpotCollector listeners. On a Core that
   sends 0 or no entry a window shows the station's sources' buttons
   disabled with "This Core does not run its spot sources for this app.
-  Updating the Core may help.". It is followed by `stationRadiosVersion`.
+  Updating the Core may help.". At 2 (spot resolved mode, the iPhone app
+  plan's Task 62) each `spots` record also carries `resolvedMode`
+  (section 7.7): the mode a click on that spot puts a slice in, as the
+  desktop picks it (`SpotModeResolver::dspModeForSpot`, the Core calling
+  the desktop's own resolver: the spot's own mode, else a mode word
+  first or last in its comment, else the band segment at its frequency;
+  a FreeDV spot is RADE on the band's default sideband). The Core sends
+  2 wherever it sent 1. Everything 1 brings is unchanged, and a record
+  from an older Core has no `resolvedMode`, so an app shows its Auto
+  mode for spots disabled there. This is a revision of the `spots`
+  record this capability defines, so it raises this version rather than
+  adding one (section 6.3). It is followed by `stationRadiosVersion`.
 - `stationRadiosVersion` (parity Task 21, the iPhone app plan's Task 25):
   sent only at agreed minor 11, after `recordStreamVersion` in the minor-11
   block (`sessionHolderVersion` and the remote transmit entries follow
@@ -1362,8 +1419,8 @@ When a feature is off, its version is 0:
   parity Task 20, R-IOS-26, R-R3-49): sent only at agreed minor 11, after
   `txMonitorAudioVersion` in the minor-11 block (`mediaReplaceVersion`,
   `controlSwitchVersion`, `relayAllowed` and the later minor-11 extensions
-  follow it), and 1
-  whenever `recordStreamVersion` is 1 (the Core runs FreeDV Reporter
+  follow it), and 2
+  whenever `recordStreamVersion` is at least 1 (the Core runs FreeDV Reporter
   itself); 0
   otherwise. At 1 FreeDV Reporter is one of the Core's station sources
   (source name `freedvReporter`): the Core registers with its own
@@ -1377,8 +1434,17 @@ When a feature is off, its version is 0:
   `freedvReporterHidden`; section 7.1), and takes `spots.connect` and
   `spots.disconnect` for `freedvReporter` and `freedv.setMessage`,
   `freedv.sendQsy` and `freedv.setHidden` (section 9.1). A window
-  subscribes to the two streams only when it sees 1, and runs no FreeDV
-  Reporter connection of its own. On a Core that sends 0 or no entry a
+  subscribes to the two streams only when it sees at least 1, and runs no
+  FreeDV Reporter connection of its own. At 2 (the iPhone app plan's Task
+  63) each `freedvStations` record also carries `band` (section 7.7): the
+  band the desktop's FreeDV Reporter band filter finds for the station's
+  frequency (`Band::bandFromFrequency`, the Core calling the desktop's own
+  lookup), numbered as the `spots` record numbers its band. Everything 1
+  brings is unchanged, and a record from an older Core has no `band`, so
+  an app shows its band filter and "follow the radio" by band disabled
+  there. This is a revision of the `freedvStations` record this
+  capability defines, so it raises this version rather than adding one
+  (section 6.3). On a Core that sends 0 or no entry a
   window shows its FreeDV tab's Start and "Hide my station" and the FreeDV
   Reporter dialog's Send QSY, Send and Clear disabled with "This Core does
   not run FreeDV Reporter for this app. Updating the Core may help.".
@@ -1421,7 +1487,7 @@ When a feature is off, its version is 0:
 - `txModMonitorVersion` (R-IOS-13, R-R3-49; the iPhone app plan's Task 39,
   parity row A10): sent only at agreed minor 11, appended after `remoteIqVersion`
   and all earlier optional entries, preserving existing positions; 1 whenever `recordStreamVersion`
-  is 1 (the Core runs its own AM modulation analyzers); 0 otherwise. At 1
+  is at least 1 (the Core runs its own AM modulation analyzers); 0 otherwise. At 1
   the Core sends the AM Mod Monitor's readings on the `txAmModulation`
   (the transmit I/Q it sends its radio) and `txAmModulationFeedback` (the
   PureSignal feedback receiver, the PA's output) record streams (section
@@ -1504,7 +1570,7 @@ When a feature is off, its version is 0:
   peer never sees it or its schema.
 - `txReadingsVersion` (remote-window parity Task 33, R-R3-49, R-R3-32):
   sent right after `txStateVersion` and only with it. 2 on a Core with its
-  own radio model and record streams (`recordStreamVersion` 1), 0
+  own radio model and record streams (`recordStreamVersion` at least 1), 0
   otherwise. At 1 `txState` also carries `forwardAdcRaw` and
   `reflectedAdcRaw`, the radio's raw forward and reflected power readings,
   and `compressionDb`, the COMP reading (section 18.8), and the Core keeps the `txCfcCompression` record stream,
@@ -1514,6 +1580,12 @@ When a feature is off, its version is 0:
   the Core may help.", never a 0. At 2 the Core also sends its own scaled
   raw forward power (W) and forward/reverse ADC voltage (V), each as outbound
   f64. An older client using the version-1 fields keeps its existing behavior.
+  At 3 (A9, iPhone app plan Task 39) `txState` also carries the seven stage
+  readings a local window's container meters show, `eqDb`, `levelerDb`,
+  `levelerGainDb`, `cfcDb`, `cfcGainDb`, `alcGainDb` and `alcGroupDb`
+  (section 18.8). A window below 3 shows each of those meters disabled
+  with "This Core does not send this reading. Updating the Core may
+  help.", never hidden and never a 0.
 
 `txPermitted` (iPhone app plan Task 34) is true only for a session the
 station transmit gate permits (section 18.1): false until
@@ -1547,7 +1619,9 @@ The display budget entries (`displayApplicationBytesPerSecond`,
 usable budget, and `displayBudgetReason` only at agreed minor 11. The radio
 identity entries from `hpsdrModel` onwards are present only at agreed minor
 11, and `sessionHolderVersion`, last, only for a peer that declared
-`sessionHolder` (section 6.1); `remoteTxVersion` and the three
+`sessionHolder` (section 6.1); `vaxVersion` only for a peer that declared
+`vax` (section 6.1); `txEqCurveVersion` only for a peer that
+declared `txEqCurve` (section 6.1); `remoteTxVersion` and the three
 `txRefusal` entries after it only for a peer that declared `remoteTx`. A client ignores a capability it does not know
 (`StationCapabilities::fromUpdates`).
 
@@ -1720,7 +1794,9 @@ older window sees only the values it was built for.
 | 82 | `miniDisplayVersion` | `i64` |
 | 83 | `accessoryTxVersion` | `i64` |
 | 84 | `radioAntennaRowsVersion` | `i64` |
-| 85 | `coreBuildInfo` | `utf8` |
+| 85 | `vaxVersion` | `i64` |
+| 86 | `txEqCurveVersion` | `i64` |
+| 87 | `coreBuildInfo` | `utf8` |
 
 <!-- /surface -->
 
@@ -2244,6 +2320,29 @@ An enum property lists the values its domain allows.
 | 7 | `cwluBecomesCw` | `bool` | outbound |  |
 | 8 | `sendInitialState` | `bool` | outbound |  |
 
+**StationVax** (18 properties)
+
+| Ordinal | Property | Wire kind | Direction | Enum values |
+| --- | --- | --- | --- | --- |
+| 0 | `ch1Slices` | `utf8` | outbound |  |
+| 1 | `ch2Slices` | `utf8` | outbound |  |
+| 2 | `ch3Slices` | `utf8` | outbound |  |
+| 3 | `ch4Slices` | `utf8` | outbound |  |
+| 4 | `ch1RxGain` | `f64` | bidirectional |  |
+| 5 | `ch2RxGain` | `f64` | bidirectional |  |
+| 6 | `ch3RxGain` | `f64` | bidirectional |  |
+| 7 | `ch4RxGain` | `f64` | bidirectional |  |
+| 8 | `ch1Muted` | `bool` | bidirectional |  |
+| 9 | `ch2Muted` | `bool` | bidirectional |  |
+| 10 | `ch3Muted` | `bool` | bidirectional |  |
+| 11 | `ch4Muted` | `bool` | bidirectional |  |
+| 12 | `ch1Device` | `utf8` | outbound |  |
+| 13 | `ch2Device` | `utf8` | outbound |  |
+| 14 | `ch3Device` | `utf8` | outbound |  |
+| 15 | `ch4Device` | `utf8` | outbound |  |
+| 16 | `txSlice` | `utf8` | outbound |  |
+| 17 | `txGain` | `f64` | bidirectional |  |
+
 **StepAttenuatorFacade** (18 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
@@ -2267,7 +2366,7 @@ An enum property lists the values its domain allows.
 | 16 | `attOnTxValue` | `i64` | bidirectional |  |
 | 17 | `forceAttWhenPsOff` | `bool` | bidirectional |  |
 
-**TransmitModel** (86 properties)
+**TransmitModel** (88 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -2357,8 +2456,10 @@ An enum property lists the values its domain allows.
 | 83 | `twoToneFreq2Delay` | `i64` | bidirectional |  |
 | 84 | `twoToneDrivePowerSource` | `enum` | bidirectional | 0, 1, 2 |
 | 85 | `voxEnabled` | `bool` | bidirectional |  |
+| 86 | `micMuted` | `bool` | bidirectional |  |
+| 87 | `txEqCurve` | `utf8` | outbound |  |
 
-**TransmitState** (37 properties)
+**TransmitState** (44 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -2399,6 +2500,13 @@ An enum property lists the values its domain allows.
 | 34 | `forwardRawPowerWatts` | `f64` | outbound |  |
 | 35 | `forwardAdcVolts` | `f64` | outbound |  |
 | 36 | `reflectedAdcVolts` | `f64` | outbound |  |
+| 37 | `eqDb` | `f64` | outbound |  |
+| 38 | `levelerDb` | `f64` | outbound |  |
+| 39 | `levelerGainDb` | `f64` | outbound |  |
+| 40 | `cfcDb` | `f64` | outbound |  |
+| 41 | `cfcGainDb` | `f64` | outbound |  |
+| 42 | `alcGainDb` | `f64` | outbound |  |
+| 43 | `alcGroupDb` | `f64` | outbound |  |
 
 **TunerModel** (21 properties)
 
@@ -2454,6 +2562,7 @@ destroyed during the session.
 | `devices` | `StationDevicesFacade` |
 | `connectedDevices` | `ConnectedDevicesFacade` |
 | `txState` | `TransmitState` |
+| `vax` | `StationVax` |
 | `catalog` | `StationCatalog` |
 | `setup` | `SetupDescription` |
 | `spotSources` | `SpotSourceHost` |
@@ -2669,6 +2778,24 @@ Notes on the keys:
   `reflectedAdcVolts` (f64) follow `compressionDb`. The Core evaluates the
   existing `PaTelemetryScaling` curves for its current hardware model and
   raw ADC samples; a client need not reproduce those board curves.
+  At `txReadingsVersion` 3, `eqDb`, `levelerDb`, `levelerGainDb`, `cfcDb`,
+  `cfcGainDb`, `alcGainDb` and `alcGroupDb` (f64) follow
+  `reflectedAdcVolts`.
+- **`vax`** (iPhone app plan Task 25, R-IOS-18; `StationVax`,
+  `vaxVersion` 1): the VAX channels of the computer the Core runs on, as its
+  VAX applet shows them (`VaxApplet.cpp`). Sent only at agreed minor 11 to a
+  peer whose hello declared `vax` 1, on a Core with `vaxVersion` 1. For
+  each channel 1 to 4: `ch<N>Slices` (`utf8`, outbound), the letters of the
+  slices whose VAX channel it is, in slice order (`AB`), empty when none;
+  `ch<N>RxGain` (`f64`, bidirectional), its receive level, 0 to 1;
+  `ch<N>Muted` (`bool`, bidirectional); `ch<N>Device` (`utf8`, outbound),
+  the device name the applet shows. Then `txSlice` (`utf8`, outbound), the
+  transmit slice's letter, empty when none, and `txGain` (`f64`,
+  bidirectional), the level of VAX used as the microphone, 0 to 1. The
+  Core sends the four groups channel by channel within each group (the
+  four `Slices`, then the four `RxGain`, and so on). A change made on that
+  computer (its applet) reaches every such peer. The meters travel as the
+  `vaxLevels` record stream (section 7.7), not as properties.
 - **`catalog`.** The values the Core owns and an app draws its controls
   from (section 7.4). Both properties are `outbound`
   (`StationCatalog`): `json` (`utf8`), the catalogue, and `revision`
@@ -2818,6 +2945,11 @@ Notes on the keys:
   takes them from a peer offered `transmitSettingsVersion` while its radio
   is off the air (section 7.3). Changing `attOnTxValue` with ATT on TX on
   sets the radio's TX attenuator; it keys nothing.
+- **`transmit`'s `txEqCurve`** (R-IOS-13, R-R3-49; `txEqCurveVersion`
+  1). Outbound, `utf8`, declared last in `TransmitModel`: the parametric
+  curve of the TX EQ dialog, read from `txEqParaEqData` into a documented
+  form, below ("The TX EQ curve"). Sent only to a peer that declared
+  `txEqCurve` 1.
 - **Whose each slice is** (iPhone app plan Task 73; the several-devices
   design, rulings 5.1 to 5.6). With several devices on one Core every
   slice has an owner: the device that made it, the device that adopted it
@@ -2873,6 +3005,133 @@ Notes on the keys:
   capability value gates them: an older client ignores the unknown
   properties (section 7.1's schema carries them), and a newer client
   reads the absence itself.
+
+#### The TX EQ curve (`txEqCurve`)
+
+R-IOS-13, R-R3-49; `txEqCurveVersion` 1. `txEqParaEqData` holds the TX EQ
+dialog's parametric curve as Thetis saves it: gzip, then base64url, of
+Thetis's own JSON. `transmit`'s `txEqCurve` is the same curve in a form
+NereusSDR owns and documents here, so an app draws it without gzip or
+Thetis's JSON. The Core derives it from `txEqParaEqData` every time that
+changes (`ParaEqCurve::txEqCurveJson`, `ParaEqCurve.cpp`) and sends it in
+the same delta. The writer of `txEqParaEqData` gets the new curve in the
+side-effect `delta` that follows its `property.result`.
+
+- **Read-only.** `txEqCurve` is outbound. A write to it is refused as any
+  outbound property is ("The Core sets this itself; it cannot be changed
+  from here."). Version 1 has no write path. The curve is changed at the
+  Core, or by writing `txEqParaEqData`.
+- **Who gets it.** Only a peer at agreed minor 11 whose hello declared
+  `txEqCurve` 1. Its `TransmitModel` schema, its `transmit` snapshot and
+  its deltas carry the field. Every other peer's carry none of it, and a
+  delta that would carry only the curve is not sent to them.
+- **What it is.** One JSON object, compact. Key order is not significant.
+  The Core writes the keys in sorted order. A reader ignores a key it does
+  not know.
+
+| Key | JSON type | Units and range | Meaning |
+| --- | --- | --- | --- |
+| `state` | string | `saved`, `default` or `unavailable` | What `txEqParaEqData` holds (below). Always present. An app treats a value it does not know as `unavailable` |
+| `parametric` | boolean | | The dialog's Use Q Factors. True: each point is a bell of width `q`. False: straight lines between the points, and `q` is unused |
+| `preampDb` | number | dB, -24 to 24, in 0.1 dB steps | The curve's preamp (Thetis's global gain), added to the whole curve |
+| `minHz` | number | Hz, finite, below `maxHz` | The curve's low end. The dialog's Low offers 0 to 20000 Hz |
+| `maxHz` | number | Hz, finite, above `minHz` | The curve's high end. The dialog's High offers 0 to 20000 Hz |
+| `points` | array | 2 to 256 points | The curve's points, in the order below. The dialog offers 5, 10 and 18 bands |
+
+Each point:
+
+| Key | JSON type | Units and range | Meaning |
+| --- | --- | --- | --- |
+| `frequencyHz` | number | Hz, `minHz` to `maxHz`, in 0.001 Hz steps (a point moved for spacing may fall between) | The point's centre |
+| `gainDb` | number | dB, -24 to 24, in 0.1 dB steps | The point's gain |
+| `q` | number | 0.2 to 20, in 0.01 steps | The bell's Q (used when `parametric` is true) |
+
+- **`state`.**
+  - `saved`: `txEqParaEqData` holds a curve, shown as the dialog shows it.
+  - `default`: `txEqParaEqData` is empty, as every factory TX profile
+    saves it. The keys hold the flat curve the Core applies in its place,
+    Thetis's defaults: ten points from 0 to 4000 Hz, point `i` (0 to 9) at
+    (`i` / 9) × 4000 Hz as a double (444.4444444444444 for point 1), each
+    0 dB with Q 4, `parametric` true, `preampDb` 0. The desktop dialog
+    shows the same.
+  - `unavailable`: `txEqParaEqData` holds a value the Core cannot read as
+    a curve. The object is `{"state":"unavailable"}` and nothing else. The
+    Core applies the flat default curve in its place, as Thetis does, and
+    the desktop dialog shows it. An app shows the curve as unavailable,
+    not as that default, since the saved value is not what the operator
+    chose. A write of such a value is refused (section 7.1, `transmit` at
+    `transmitSettingsVersion` 4), so it arises only from a value saved at
+    the Core.
+- **How a saved curve is read.** As Thetis's transmit path reads it
+  (`PointsFromJson`): each value clamped to the ranges above, the
+  frequency rounded to 0.001 Hz, the gain and the preamp to 0.1 dB and Q to
+  0.01, with round half to even. The first point is moved to `minHz`, the
+  last to `maxHz`. A field missing from the saved JSON reads as 0 (false
+  for Use Q Factors), as Thetis's JSON reader leaves it; a Q of 0 then
+  clamps to 0.2. The desktop dialog loads the value through the same
+  reader, so it always shows exactly `txEqCurve`.
+- **Ordering.** The points are in the order the dialog draws them
+  (Thetis's panel ordering, with the TX panel's settings):
+  1. Sorted by `frequencyHz`, lowest first. Two points at the same
+     frequency keep their saved order.
+  2. Each point clamped into `minHz` to `maxHz`, then the first point set
+     to `minHz` and the last to `maxHz`.
+  3. With three points or more, the points between are kept a spacing
+     `s` apart: `s` is 5 Hz, or (`maxHz` - `minHz`) / (count - 1) when
+     that is smaller. Point `i` (1 to count - 2) is first clamped into
+     `minHz` + `s` × `i` to `maxHz` - `s` × (count - 1 - `i`). Then,
+     lowest first, a point closer than `s` above the one before it moves
+     up to it plus `s`. Then, highest first, a point closer than `s` below
+     the one after it moves down to it minus `s`. Last, the first and last
+     are set to `minHz` and `maxHz` again.
+
+  An app draws the points as sent and never reorders them. The Core hands
+  WDSP the saved order without the spacing. For every curve the dialog or
+  Thetis saved, the two are the same.
+- **Drawing it.** The dialog's line at frequency `f`, from `minHz` to
+  `maxHz` on a -24 to 24 dB scale, is the response at `f` plus
+  `preampDb`:
+  - `parametric` false: at or below the first point, its `gainDb`; at or
+    above the last, its `gainDb`; between two neighbouring points, a
+    straight line between their gains.
+  - `parametric` true: the sum over the points of
+    `gainDb` × exp(-0.5 × ((`f` - `frequencyHz`) / σ)²), where
+    σ = `w` / 2.3548200450309493 and `w` = (`maxHz` - `minHz`) / (`q` × 3),
+    never less than (`maxHz` - `minHz`) / 6000.
+- **Whether it is on the air.** The curve is the dialog's parametric
+  panel whatever the other settings say. It reaches the transmitter when
+  `txEqEnabled` is true and `txEqUseLegacy` is false. With `txEqUseLegacy`
+  true the ten-band legacy EQ (`txEqPreamp`, `txEqBandsJson`,
+  `txEqFreqsJson`) reaches it instead.
+
+**Worked example.** A five-band curve saved by the dialog, Use Q Factors
+on. `txEqParaEqData` is gzip, then base64url, of this JSON:
+
+```json
+{"band_count":5,"frequency_max_hz":3000,"frequency_min_hz":50,
+ "global_gain_db":-2.5,"parametric_eq":true,
+ "points":[{"frequency_hz":50,"gain_db":-6,"q":1.5},
+           {"frequency_hz":300,"gain_db":3,"q":2},
+           {"frequency_hz":1200,"gain_db":-1.5,"q":4},
+           {"frequency_hz":2400,"gain_db":4,"q":3},
+           {"frequency_hz":3000,"gain_db":0,"q":1}]}
+```
+
+`txEqCurve` is (one line on the wire, wrapped here):
+
+```json
+{"maxHz":3000,"minHz":50,"parametric":true,"points":[
+ {"frequencyHz":50,"gainDb":-6,"q":1.5},{"frequencyHz":300,"gainDb":3,"q":2},
+ {"frequencyHz":1200,"gainDb":-1.5,"q":4},{"frequencyHz":2400,"gainDb":4,"q":3},
+ {"frequencyHz":3000,"gainDb":0,"q":1}],"preampDb":-2.5,"state":"saved"}
+```
+
+The line the dialog draws, to 0.01 dB: -7.04 dB at 50 Hz, -3.51 dB at
+300 Hz, -4.00 dB at 1200 Hz, 1.50 dB at 2400 Hz and -2.50 dB at 3000 Hz.
+At 2400 Hz the one point's bell gives its 4 dB, and the preamp takes 2.5
+dB off. `tst_para_eq_curve` holds these values. The same points saved out
+of order, for example 600 Hz before 598 Hz, come back sorted with the
+second moved to 603 Hz.
 
 ### 7.2 Deltas
 
@@ -3048,6 +3307,20 @@ transmit-side settings keys are written only by a session `txPermitted`
 allows (refused otherwise with the gate's sentence); while another
 device's holder is on the air, a change to the transmit path is refused
 with the on-air sentence (section 18.4).
+
+**The `vax` object** (iPhone app plan Task 25, `vaxVersion` 1). The Core
+takes a write of `ch<N>RxGain`, `ch<N>Muted` or `txGain` only from a peer
+that declared `vax` 1, on a Core at `vaxVersion` 1 (otherwise "Update this
+app to change VAX on the Core's computer."). A level outside 0 to 1, or not
+a number, is refused "A VAX level goes from 0 to 1." `txGain` is taken only
+from a peer the station transmit gate permits (section 18.1) and is
+otherwise refused with the gate's reason. A receive level and a mute apply
+at once, on or off the air, as the applet's controls do; none keys the
+radio. Each accepted write is applied to the Core's audio engine and saved
+under the applet's own keys (`audio/Vax<N>/RxGain` and `audio/Vax<N>/Muted`
+as `0.000`-style and `True`/`False` text, `audio/TxGain`), so the applet on
+that computer shows it and it outlives a restart. The other properties are
+the Core's.
 
 ### 7.5 Receivers several devices share
 
@@ -3536,9 +3809,21 @@ Hz/bin target holds the bin width at or below the target at any zoom
 is the sample rate over the size the Core grants (its spectrum context's
 `grantedFftSize`), which may be less than asked.
 
-`offered` is the Core's: an item is listed as offered once the desktop has
-built it (CWX, Memory Manager, CAT Control and Transverters are not yet),
-and an app shows only offered items, in their place. The two catalogue
+`offered` is the Core's (iPhone app plan Task 25, D41). It starts from
+the unbuilt features list the desktop hides by (`UnbuiltFeatureList.h`:
+CWX, Memory Manager, CAT Control and Transverters are not offered until
+built), then follows the radio and the Core: Spot Hub, FreeDV Reporter,
+TX Equalizer, Network Diagnostics, Support Bundle, Manage Radios and
+Protocol Info always; PureSignal when the radio has it (the board's
+`hasPureSignal`); Diversity when it has a diversity receiver
+(`hasDiversityReceiver`); TCI Server when the Core runs its own station
+TCI server (a Core with `stationTciVersion` 1 or later, whether or not the
+server is switched on, so an app can switch it on); VAX Audio when the
+station computer publishes VAX devices (a Core the desktop hosts; a
+headless Core publishes none); Antenna Setup when the radio has Alex and
+at least three antenna inputs, the desktop's own rule. The catalogue's
+revision moves when the radio or the station TCI server's state changes.
+An app shows only offered items, in their place. The two catalogue
 fixtures (section 16.3) hold an ANAN-G2's and a Hermes Lite 2's catalogue
 in full.
 
@@ -3548,17 +3833,18 @@ Records that come and go (spots, console lines) travel as record streams,
 not as properties (parity Task 19; the iPhone app plan's Task 21; remote
 design section 6.1a). A stream is a list of records, each an `id` (a
 string, unique in its stream) with `fields` (a JSON object), newest last,
-bounded by the stream's capacity. With `recordStreamVersion` 1 the Core
-keeps:
+bounded by the stream's capacity. With `recordStreamVersion` 1 or later
+the Core keeps:
 
 | Stream | Capacity | Record |
 | --- | --- | --- |
-| `spots` | 500 | One spot the Core holds (its SpotModel: the station sources' spots, and FreeDV Reporter's once the Core runs it), `id` its index: `timeUtc` (string, ISO 8601 UTC), `frequencyHz` (number, whole Hz), `call`, `mode`, `source` (the source's label: `Cluster`, `RBN`, `POTA`, `PSK`, `FreeDV`), `spotter`, `comment` (strings), `band` (number, the Band as the catalogue's `bands` numbers it, 13 for GEN), `dxccColour` (string, `#rrggbb`, empty when the Core does not colour it) and `dxccPriority` (number: 4 a new DXCC entity, 3 a new band, 2 a new mode, 1 worked before, 0 not known or colouring off) |
+| `spots` | 500 | One spot the Core holds (its SpotModel: the station sources' spots, and FreeDV Reporter's once the Core runs it), `id` its index: `timeUtc` (string, ISO 8601 UTC), `frequencyHz` (number, whole Hz), `call`, `mode`, `source` (the source's label: `Cluster`, `RBN`, `POTA`, `PSK`, `FreeDV`), `spotter`, `comment` (strings), `band` (number, the Band as the catalogue's `bands` numbers it, 11 for GEN), `dxccColour` (string, `#rrggbb`, empty when the Core does not colour it) and `dxccPriority` (number: 4 a new DXCC entity, 3 a new band, 2 a new mode, 1 worked before, 0 not known or colouring off); with `recordStreamVersion` 2, `resolvedMode` (number, the slice's `dspMode` value 0 to 13 a click on the spot selects, as the desktop resolves it: `CWU` 4 or `CWL` 3 for CW by the 10 MHz rule, `USB` 1, `LSB` 0, `DIGU` 7, `DIGL` 9, `AM` 6, `SAM` 10, `FM` 5 (NFM too), `RADE_U` 12 or `RADE_L` 13 for a FreeDV spot; absent when the resolver has none: the spot or its comment names a mode it does not map, or names none and the spot is below 1.8 MHz or in a band's digital segment, whose inferred `DIGU` the resolver's table does not map) |
 | `spotConsole:<source>` | 200 | One console line of a station source (`dxCluster`, `rbn`, `pota`, `pskReporter`, and with `stationFreedvVersion` 1 `freedvReporter`), `id` a rising number: `line` (string). A command typed from any device shows as `> <command>` |
-| `freedvStations` | 1000 | With `stationFreedvVersion` 1: one station FreeDV Reporter lists, as the Core hears it, `id` its FreeDV Reporter session id: the FreeDV Reporter dialog's 14 columns, `callsign`, `gridSquare` (strings), `distanceKm` and `headingDeg` (numbers, from the Core's own grid square; 0 with `headingCardinal` empty while either grid square is not known), `headingCardinal` (string, `N` to `NNW`), `version` (string), `frequencyHz` (number, whole Hz, 0 not known), `txMode` (string), `status` (string: `Active`, `TX` or `RX Only`), `userMessage` (string), `lastTxUtc` (string, ISO 8601 UTC, empty when never), `lastRxCallsign`, `lastRxMode` (strings), `snrDb` (number, -99 not known) and `lastUpdateUtc` (string, ISO 8601 UTC, empty when not known); then `transmitting` (boolean), `receivingFrom` (string: whom its latest receive report heard, the last callsign it named, while that report stands; empty once a frequency change clears it), `messageChangedAtMs` (number, the Core's clock in ms since the epoch when `userMessage` last changed, 0 never) and `lastRxUtc` (string, ISO 8601 UTC, when its latest receive report came, empty when none stands). The list starts again (a reset) each time the Core's connection to FreeDV Reporter connects or ends |
+| `freedvStations` | 1000 | With `stationFreedvVersion` 1: one station FreeDV Reporter lists, as the Core hears it, `id` its FreeDV Reporter session id: the FreeDV Reporter dialog's 14 columns, `callsign`, `gridSquare` (strings), `distanceKm` and `headingDeg` (numbers, from the Core's own grid square; 0 with `headingCardinal` empty while either grid square is not known), `headingCardinal` (string, `N` to `NNW`), `version` (string), `frequencyHz` (number, whole Hz, 0 not known), `txMode` (string), `status` (string: `Active`, `TX` or `RX Only`), `userMessage` (string), `lastTxUtc` (string, ISO 8601 UTC, empty when never), `lastRxCallsign`, `lastRxMode` (strings), `snrDb` (number, -99 not known) and `lastUpdateUtc` (string, ISO 8601 UTC, empty when not known); then `transmitting` (boolean), `receivingFrom` (string: whom its latest receive report heard, the last callsign it named, while that report stands; empty once a frequency change clears it), `messageChangedAtMs` (number, the Core's clock in ms since the epoch when `userMessage` last changed, 0 never) and `lastRxUtc` (string, ISO 8601 UTC, when its latest receive report came, empty when none stands); with `stationFreedvVersion` 2, `band` (number, the Band as the `spots` record numbers it: 0 160 m, 1 80 m, 2 60 m, 3 40 m, 4 30 m, 5 20 m, 6 17 m, 7 15 m, 8 12 m, 9 10 m, 10 6 m, 11 GEN for a frequency outside those bands, 2 m included, 12 WWV within 5 kHz of 2.5, 5, 10, 15, 20 or 25 MHz; each band's edges belong to it; absent while `frequencyHz` is 0). The list starts again (a reset) each time the Core's connection to FreeDV Reporter connects or ends |
 | `coreLog` | 200 | With `supportBundleVersion` 1: one line of the Core's log as its log file has it (`[HH:mm:ss.zzz] INF: text`, addresses already shortened), `id` its number in the Core's log (rising): `line` (string). Keys, tokens and pairing codes are removed as the support bundle removes them. The Core reads its log every 250 ms while a peer follows the stream, and only then; its first backlog is the newest lines at the first subscribe |
 | `txCfcCompression` | 1 | With `txReadingsVersion` 1: the CFC display, one record, `id` `"0"`, replaced each time the Core reads new data: `atMs` (number, when the Core read it, in milliseconds on its own monotonic clock) and `binsDbTenths` (string: the 1025 values of the CFC compression display, each rounded to a tenth of a dB, as little-endian int16 tenths, in base64). Bin `i` is `i * 48000 / 1024` Hz; a chart draws the bins over its own frequency range as the local CFC dialog does (Thetis's frmCFCConfig `timerTick`: `binsPerHz` = 1025 / 48000). The Core reads the display every 50 ms, Thetis's interval, only while at least one peer subscribes and its radio is on the air with CFC on, and sends a record only when WDSP says new data is ready |
 | `stationRadios` | 64 | With `stationRadiosVersion` 1: one radio the Core can see, the Core's radio first, `id` its MAC in upper case: `id` and `mac` (strings, the same), `name` (string, as the radio reports itself), `model` (number, the `hpsdrModel` the Core runs it as: its saved override, else its board's), `address` (string, its IP address, empty when not known), `protocol` (number, 1 or 2) and `inUse` (boolean, true for the Core's radio). The list is what the Core's last scan found, with the Core's radio; a radio stays listed after it drops off until a scan misses it |
+| `vaxLevels` | 1 | With `vaxVersion` 1: the VAX meters of the computer the Core runs on, one record, `id` `"0"`: `ch1Level` to `ch4Level` and `txLevel` (numbers, 0 to 1, each rounded to a thousandth, as the applet's meters read them: `AudioEngine::vaxRxLevel` and `vaxTxLevel`) and `atMs` (number, the Core's clock in milliseconds when it read them). The Core reads the meters 5 times a second, only while at least one peer subscribes (a device with its VAX tool open), and sends a record only when a meter moved |
 | `txAmModulation` | 1 | With `txModMonitorVersion` 1: the AM Mod Monitor's readings of the transmit I/Q the Core sends its radio (its TX tap, `AmModulationAnalyzer`), one record, `id` `0`, present only while the radio is keyed in AM, SAM or DSB (the transmit slice's mode) and a peer subscribes: `atMs` (number, the Core's clock in ms since the epoch when it read them), `posPeakPct` and `negPeakPct` (numbers, the positive and negative peak modulation in percent since the Core's previous record: the largest of the reads it merged), `posHoldPct` and `negHoldPct` (numbers, the peaks held 1.5 s, then falling as the Core's analyzer lets them fall), `carrierLevel` (number, the carrier in linear envelope units, 0 to 1 at the radio's full scale), `carrierDbfs` (number, that in dB, -120 with no carrier), `carrierPresent`, `carrierLow` and `carrierHigh` (booleans: a carrier is measured, below 0.05, above 0.98), `scopeRateHz` (number, the rate of the scope's points) and `scopePctTenths` (string: the envelope trace, oldest first, each point's percent modulation in tenths as a little-endian int16, in base64; at most 512 points, a longer trace reduced by keeping the largest-magnitude point of each group). Asymmetry is `posHoldPct` minus `negHoldPct` |
 | `txAmModulationFeedback` | 1 | With `txModMonitorVersion` 1: the same record for the PureSignal feedback receiver (the PA's output as the radio samples it), on the receiver `ModMon/FbStream` names (section 8.1); present under the same rule, and measured only while PureSignal's feedback runs on the Core's radio |
 
@@ -3678,6 +3964,8 @@ computer, never sent). `classifySettingsKey` (`SettingsScope.cpp`) decides:
 | 2. prefix | `Snb` | station |
 | 2. prefix | `Rade` | station |
 | 2. prefix | `filters/` | station |
+| 2. prefix | `DisplayGridMax_` | station |
+| 2. prefix | `DisplayGridMin_` | station |
 | 2. prefix | `Tci` | operatorLocal |
 | 2. prefix | `radios/` | operatorLocal |
 | 2. prefix | `ConnectionTargets/` | operatorLocal |
@@ -3870,6 +4158,20 @@ several-devices design, table 7.1, "Transmit antenna"). From an older
 peer they stay refused with the transmit reason, and a window whose Core
 does not offer 7 shows them disabled with "This Core cannot change these
 high-pass switches for this app. Updating the Core may help."
+
+Setup > Display > Grid & Scales' dB Max and dB Min per band,
+`DisplayGridMax_<band>` and `DisplayGridMin_<band>` (`<band>` the band's
+key name, `20m`, `GEN`), are station-scoped (parity ruling C12): the
+Core's per-band values win. A taken key, or its removal, reaches the
+Core's panadapters at once (`RadioModel::applyPanGridSetting`); a pan on
+that band takes the new range (a removal returns the band's default,
+-40 and -140 dB), which reaches every window through the pan's mirrored
+`dBmFloor` and `dBmCeiling`. A window's pan never applies its own per-band
+values on a band crossing; the Core's pan applies its own and the window
+shows them. A window re-reads a band when its key arrives, and every band
+on a snapshot. The change is to the display only, so it is taken on and
+off the air, as a local window changes it. The rest of the `Display`
+family, `DisplayGridStep` included, stays each window's own.
 
 ### 8.2 Keys the Core owns by code
 
@@ -4994,7 +5296,7 @@ listener bound to loopback only is neither announced nor advertised
 `dnsSdInterfaceForListener` in `DnsSdAdvertiser.cpp`). Discovery is never
 trust: a client pins what it finds (section 3.2) or pairs (section 3.6).
 
-Both carry the same five facts about the Core, and both change when one
+Both carry the same six facts about the Core, and both change when one
 does (`DaemonApp::updateStationAnnouncement`):
 
 - **identity**: the identity fingerprint, SHA-256 of the identity key
@@ -5017,6 +5319,14 @@ does (`DaemonApp::updateStationAnnouncement`):
   signed-in devices alone (`connectedDevices`, section 7.1). A Core
   reached through the rendezvous or the relay has no announcement, so its
   count shows only after sign-in.
+- **radio** (iPhone app plan Task 25, R-IOS-16): the station's radio,
+  `connected` while it is connected (the same as Radio connected),
+  `waiting` while the station waits for a radio to be chosen (it sees
+  none, or more than one with nothing saved to pick between them;
+  `StationRadios::choose`, `RadioModel::stationRadioWaiting`), and
+  `offline` otherwise. A list shows "Waiting for a radio" before a device
+  connects. A Core reached through the rendezvous or the relay says so only
+  after sign-in (the `stationRadios` stream).
 
 ### 14.1 The LAN announcement
 
@@ -5031,8 +5341,9 @@ does (`DaemonApp::updateStationAnnouncement`):
   (`kStationLanCacheTtlMs`);
 - a listener takes datagrams of at most 512 bytes
   (`kStationLanMaxDatagramBytes`); with the fields below a schema-2
-  datagram is at most 480 (`kStationLanMaxSchema2DatagramBytes`; 479 before
-  the device count), so no field is ever cut short.
+  datagram is at most 481 (`kStationLanMaxSchema2DatagramBytes`; 479 before
+  the device count, 480 before the radio state), so no field is ever cut
+  short.
 
 A station sends schema 2 only (`kStationLanAnnouncementSchema`). A listener
 reads schema 1 and schema 2, so a Core from before schema 2 is still found.
@@ -5057,6 +5368,7 @@ The datagram is binary, in this order; schema 1 ends after the radio MAC:
 | Label | that many bytes | schema 2: ASCII letters, digits, `/`, `_` and `-` (a callsign of up to 32, `/`, a suffix of up to 32) |
 | Pairing | 1 byte | schema 2: 0 `closed`, 1 `click`, 2 `code` |
 | Devices connected | 1 byte | schema 2, appended by iPhone app plan Task 71: 0 to 4 (`kStationLanMaxDevicesConnected`), the places taken; a station always sends it. A reader that never sees it (a datagram from an older Core) takes the count as not known and shows none |
+| Radio | 1 byte | schema 2, appended by iPhone app plan Task 25 after Devices connected, which it needs: 0 `offline`, 1 `connected`, 2 `waiting` (`StationLanRadio`); 1 exactly when Radio connected is 1, and a datagram where they disagree is refused. A station always sends it. A reader that never sees it (an older Core), or sees a value it does not know (a later Core's state), takes the state as not known and lists the Core as before |
 
 **Schema 2 extends by appending.** A reader ignores any bytes after the
 schema-2 fields it knows. It still refuses a datagram that is too short
@@ -5076,18 +5388,23 @@ the fields schema 1 carries; it never clears the identity, label, claimed
 state or pairing (`StationLanCache::ingest`).
 
 A schema-1 datagram for an endpoint that already sent schema 2 does not
-clear its device count either.
+clear its device count either, and keeps its radio state while schema 1's
+Radio connected agrees with it; when it no longer does, the state is not
+known.
 
 The conformance vectors `media/lan-announcement.bin` (schema 1),
 `media/lan-announcement-2.bin` (schema 2, from a Core before the device
 count) and `media/lan-announcement-2-devices.bin` (the same datagram with
-the count, 2) (section 16.4) are datagrams the
+the count, 2), `media/lan-announcement-2-radio.bin` (the same datagram
+with the radio state, `connected`) and `media/lan-announcement-2-waiting.bin`
+(the same Core waiting for a radio: no radio name, the unknown MAC,
+`waiting`) (section 16.4) are datagrams the
 station's own encoder wrote, with their decoded fields, `schema` among
-them, in the `.expect.json` beside each (`devicesConnected` only where the
-datagram carries it). `media/lan-announcement-2-trailing.bin` is the
-`lan-announcement-2-devices` datagram with five bytes appended after the
-count, as a later field would be; its expectation holds the same fields
-and `ignoredTrailingBytes` 5. `tst_link_conformance_media`
+them, in the `.expect.json` beside each (`devicesConnected` and `radio`
+only where the datagram carries them). `media/lan-announcement-2-trailing.bin`
+is the `lan-announcement-2-radio` datagram with five bytes appended after
+the radio state, as a later field would be; its expectation holds the same
+fields and `ignoredTrailingBytes` 5. `tst_link_conformance_media`
 decodes each and encodes the fields again, so a change to this layout
 fails there until the vectors, and this table, move with it.
 
@@ -5108,7 +5425,7 @@ The station registers one DNS-SD service:
   Bonjour renames it when another service holds the name, so a client reads
   the Core's label from the TXT record's `name`, not from the instance
   name;
-- a TXT record of six entries, in this order:
+- a TXT record of seven entries, in this order:
 
 | Key | Value |
 | --- | --- |
@@ -5118,6 +5435,7 @@ The station registers one DNS-SD service:
 | `pair` | `click`, `code` or `closed` |
 | `name` | the label, possibly empty; at most 65 characters |
 | `devices` | iPhone app plan Task 71: `0` to `4`, how many devices hold a place on the Core (section 14); `0` on a Core no device has claimed. `v` stays `1`: an older client ignores the key |
+| `radio` | iPhone app plan Task 25: `connected`, `offline` or `waiting`, the station's radio (section 14). `v` stays `1`: an older client ignores the key, and a client takes a value it does not know as not known |
 
 A client ignores a key it does not know, so a newer station still lists,
 and treats a record whose `v` is not `1` as one it cannot read. `id` names
@@ -5136,7 +5454,7 @@ themselves (`DnsSdAdvertiser::unavailableText`).
 
 The conformance vector `media/dnssd-txt.bin` (section 16.4) is the TXT
 record the station's encoder writes for the Core of
-`media/lan-announcement-2-devices.bin`, each entry preceded by its length in one
+`media/lan-announcement-2-radio.bin`, each entry preceded by its length in one
 byte (RFC 6763 section 6.1), with the service type and the entries as
 strings in `media/dnssd-txt.expect.json`.
 
@@ -5167,7 +5485,7 @@ maximum also equals `kMaximumSpectrumDisplayFramesPerSecond` in
 | `endpointPixels` | 1 to 4096 | pixels | DaemonMediaController.cpp handleSubscribe literal 1; SpectrumEndpoint::kMaxPixels |
 | `graceMs` | 180000 | ms | DeviceSessionRegistry::kGraceMs |
 | `heartbeatIntervalMs` | 20000 | ms | StationServer::kDefaultHeartbeatIntervalMs |
-| `lanAnnouncementMaxBytes` | 480 | bytes | kStationLanMaxSchema2DatagramBytes |
+| `lanAnnouncementMaxBytes` | 481 | bytes | kStationLanMaxSchema2DatagramBytes |
 | `maxDeviceSessions` | 4 | count | StationServer::kMaxDeviceSessions |
 | `maxDisplayEndpoints` | 8 | count | DaemonMediaController.cpp kMaxEndpoints |
 | `maxHandshakesPerAddress` | 2 | count | StationServer::kMaxHandshakesPerAddress |
@@ -5669,6 +5987,7 @@ same on every machine.
 | `path-join-unknown-ticket` | A new connection's `hello` followed by `path.join` with a ticket no session holds gets `session.end` "The Core did not move the connection here.", `code` `protocolError`, `retryable` false, then the close. A move itself needs two connections, which a fixture does not script; `tst_session_transport_switch` holds the station and the desktop to it |
 | `connect-deadline` | No `auth.request` within 30000 ms: `session.end` "This app did not finish connecting to the Core in time.", `retryable` true |
 | `property-write` | A write and its `property.result` and side-effect `delta`; a refused outbound property and an unknown one; a write without a `writeId` answered by `delta`; a write to a slice's signal strength refused as outbound; on the receive-only Core, a `transmit` write of `power` taken off the air and a write of `mox` and `voxEnabled` refused with the receive-only reason; at `transmitSettingsVersion` 2, a write of `cpdrLevelDb` taken, and `micGainDb` and `monitorVolume` out of range refused with their ranges beside a write of the outbound `tunePowerForTxBand`; at `transmitSettingsVersion` 3, a write of `micBoost` and `lineInBoost` taken, and `lineInBoost` out of range refused with its range beside a write of the outbound `activeTxProfile`; at `transmitSettingsVersion` 4, a write of `txEqBandsJson`, `txEqUseLegacy` and `txLevelerDecay` taken, and a nine-value `txEqBandsJson`, a `cfcCompressionJson` with a value out of range and `txAlcDecay` out of range each refused whole with its range |
+| `tx-eq-curve` | `txEqCurveVersion` 1 (the client declares `txEqCurve` 1): the capability after `accessoryTxVersion`, `txEqCurve` last in the `TransmitModel` schema and, in the `transmit` snapshot, the flat default curve (`state` `default`) for the static station's empty `txEqParaEqData`; a write of the worked example's `txEqParaEqData` (section 7.1, "The TX EQ curve") taken, then the side-effect `delta` carrying its `txEqCurve` (`state` `saved`); a write to `txEqCurve` refused as outbound, the curve unchanged |
 | `settings-write` | A station-scoped write echoed with its origin; an operator-local write rejected; a removal sent as `settings.value` with no entry; on the receive-only Core, a DSP > Options TX key and a PA forward-power table key (`paCalibration/calPoint1`, version 6) taken off the air, an OC transmit pin (`oc/tx/20m/pin3`), an OC pin action (`oc/actions/pin1/action`) and TX Display Cal (`cal/txDisplayOffset`) taken off the air (version 8), and a transmit hardware key refused |
 | `unknown-verb` | `command.result` refused, "The Core does not know this request. Updating the Core may help."; the connection stays up |
 | `unknown-kind` | `session.end` "The Core could not read a message from this app.", `retryable` false, `code` `protocolError` |
@@ -5721,8 +6040,10 @@ processors; its vectors hold decoders to the reference PCM instead.
 | `nrsc1` | `lan-announcement`: one schema-1 LAN announcement datagram, as a Core from before schema 2 sends it (section 14.1) | none | `schema` 1, `controlPort`, `fingerprint`, `coreName`, `radioName`, `radioMac`, `radioConnected`, exact |
 | `nrsc1` | `lan-announcement-2`: one schema-2 LAN announcement datagram, from a claimed Core whose pairing window was reopened (section 14.1) | none | `schema` 2, the fields above, `claimed` true, `identity` (base64url of the 32 bytes, no padding), `label` `KG4VCF/shack`, `pairing` `code`, exact |
 | `nrsc1` | `lan-announcement-2-devices`: the `lan-announcement-2` datagram with the device count byte, 2, appended after Pairing (section 14.1) | none | The fields of `lan-announcement-2` and `devicesConnected` 2, exact |
-| `nrsc1` | `lan-announcement-2-trailing`: the `lan-announcement-2-devices` datagram with five bytes appended after its known fields, which a reader ignores (section 14.1) | none | The same fields as `lan-announcement-2-devices`, and `ignoredTrailingBytes` 5: the vector's last five bytes are not decoded, and the encoder writes the bytes before them, exact |
-| `dnssd-txt` | `dnssd-txt`: the Bonjour TXT record of the Core of `lan-announcement-2-devices` (section 14.2) | none | `serviceType` `_nereus-station._tcp` and `txt`, the entries as strings (`v`, `id`, `claimed`, `pair`, `name`, `devices`); the bytes are those entries in that order, exact |
+| `nrsc1` | `lan-announcement-2-radio`: the `lan-announcement-2-devices` datagram with the radio state byte, 1 (`connected`), appended after the count (section 14.1) | none | The fields of `lan-announcement-2-devices` and `radio` `connected`, exact |
+| `nrsc1` | `lan-announcement-2-waiting`: the same Core waiting for a radio to be chosen: Radio connected 0, no radio name, MAC `00:00:00:00:00:00`, radio state 2 (section 14.1) | none | The fields of `lan-announcement-2-devices` with `radioConnected` false, `radioName` empty, that MAC, and `radio` `waiting`, exact |
+| `nrsc1` | `lan-announcement-2-trailing`: the `lan-announcement-2-radio` datagram with five bytes appended after its known fields, which a reader ignores (section 14.1) | none | The same fields as `lan-announcement-2-radio`, and `ignoredTrailingBytes` 5: the vector's last five bytes are not decoded, and the encoder writes the bytes before them, exact |
+| `dnssd-txt` | `dnssd-txt`: the Bonjour TXT record of the Core of `lan-announcement-2-radio` (section 14.2) | none | `serviceType` `_nereus-station._tcp` and `txt`, the entries as strings (`v`, `id`, `claimed`, `pair`, `name`, `devices`, `radio`); the bytes are those entries in that order, exact |
 | `ps3d` | `ps3d-frame`: one PureSignal display chunk, eight points and four correction points | none | Every header field and the eight value lists; `tolerance` `{"absolute": 0}`, because the values travel as IEEE-754 binary64 |
 | `nsdc1` | `nsdc1-full`: frame 1, a keyframe | none | `disposition` `accepted`, `reason` `none`, `keyframe` (the header's keyframe flag), the context (`endpointId`, `contextGeneration`, `minDbm`, `maxDbm`), `encoderSequence`, `producerTimestamp`, `waterfallAdvance` and the reconstructed `traceDbm`, `waterfallDbm` and `wideDbm` rows; `tolerance` `{"dbm": 0.01}` |
 | `nsdc1` | `nsdc1-delta`: frame 2, a delta | `nsdc1-full` | As above, `keyframe` false |
@@ -6386,6 +6707,7 @@ is refused as any outbound property's is.
 | `forwardAdcRaw`, `reflectedAdcRaw` | The radio's raw forward and reflected power readings (i64, the ADC counts of its last PA sample, transmitting or not; parity Task 33, `txReadingsVersion` 1; 0 before the first sample). Existing remote desktop windows scale these with the Core's `hpsdrModel` as their native PA Values page does |
 | `compressionDb` | The COMP reading (f64, dB; parity Task 33 follow-up, `txReadingsVersion` 1), as the Core's own Compression meters show it: Thetis's reading, the transmit channel's `TXA_COMP_AV` floored at -30 dB (console.cs:46979, dsp.cs:1013-1014 [v2.10.3.15]), so -30 with the speech processor off; -400, no reading, while the Core has no transmit channel. Read with the other meters |
 | `forwardRawPowerWatts`, `forwardAdcVolts`, `reflectedAdcVolts` | Core-scaled raw forward power (W) and forward/reverse ADC voltage (V), f64, `txReadingsVersion` 2. The Core calls the same `PaTelemetryScaling` functions as native PA Values with its current radio model, on the existing PA sample/meter cadence and radio change. All three are outbound only and reset with the session |
+| `eqDb`, `levelerDb`, `levelerGainDb`, `cfcDb`, `cfcGainDb`, `alcGainDb`, `alcGroupDb` | The seven stage readings a local window's container meters show (f64, dB; A9, `txReadingsVersion` 3), each Thetis's reading as its MOX branch works it from the transmit channel (console.cs:46971-46986 [v2.10.3.15]): EQ and Leveler `TXA_EQ_AV` and `TXA_LVLR_AV` floored at -30 dB, Leveler gain `TXA_LVLR_GAIN` negated and floored at 0, CFC `TXA_CFC_AV` floored at -30, CFC gain `TXA_CFC_GAIN` floored at 0, ALC gain `TXA_ALC_GAIN` plus 3 floored at -195, and ALC group `TXA_ALC_PK` floored at -30 plus `TXA_ALC_GAIN` plus 3 floored at 0. -400, no reading, while the Core has no transmit channel. Read and sent with the other meters, and reset with the session |
 
 The AM Mod Monitor's readings (peaks, holds, carrier, lamps and envelope
 trace) are not `txState` properties: they travel as the `txAmModulation`

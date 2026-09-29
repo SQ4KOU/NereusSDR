@@ -556,6 +556,14 @@
 //                txAmModulation / txAmModulationFeedback streams
 //                (stationModMonitorSnapshot). NereusSDR-original. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - R-IOS-25 (spot resolved mode): a remote window keeps the
+//                Core's spot frequency to the hertz, so its spot click
+//                resolves the Core's mode. J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
+//   2026-09-28 - Parity ruling C12: applyPanGridSetting; a remote
+//                window's pans take the Core's per-band grid range.
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 //   2026-09-28 - R-R3-49 (found bug): the Protocol 1 connection gets the
 //                 calibration controller too, for the frequency correction.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
@@ -787,6 +795,7 @@ warren@wpratt.com
 #include "core/PaProfile.h"
 #include "core/PaProfileManager.h"
 #include "core/PaTelemetryScaling.h"
+#include "core/AlexSettingsKeys.h"
 #include "models/PureSignalSettings.h"
 #include "core/dsp/DspAssetService.h"
 #include "core/session/PureSignalSessionFacade.h"
@@ -1039,40 +1048,6 @@ double scalePaVolts(quint16 adcRaw, HPSDRModel model)
         double volts = (static_cast<double>(adcRaw) / 4095.0) * 5.0;
         volts *= volt_div;
         return volts;
-    }
-    default:
-        return 0.0;
-    }
-}
-
-// From Thetis console.cs:24916-24926 [@501e3f5] convertToAmps():
-//   float voff     = _amp_voff;        // default 360.0f
-//   float sens     = _amp_sens;        // default 120.0f
-//   float fwdvolts = (IOreading * 5000.0f) / 4095.0f;
-//   if (fwdvolts < 0) fwdvolts = 0;
-//   float amps = (fwdvolts - voff) / sens;
-//   if (amps < 0) amps = 0;
-//
-// _amp_voff and _amp_sens are user-tunable in Thetis Setup → PA Calibration;
-// NereusSDR will surface them through CalibrationController in a follow-up
-// (Phase 3P-G already lays the groundwork).  Defaults match Thetis 360/120.
-double scalePaAmps(quint16 adcRaw, HPSDRModel model)
-{
-    switch (model) {
-    case HPSDRModel::ORIONMKII:
-    case HPSDRModel::ANAN8000D:
-    case HPSDRModel::ANAN7000D:
-    case HPSDRModel::ANAN_G2E: //N1GP G2E added [Thetis console.cs:25007 v2.10.3.15 grouping]
-    case HPSDRModel::ANAN_G2:
-    case HPSDRModel::ANAN_G2_1K:
-    case HPSDRModel::ANVELINAPRO3: {
-        constexpr double kAmpVoff = 360.0;   // From Thetis console.cs:24893 [@501e3f5]
-        constexpr double kAmpSens = 120.0;   // From Thetis console.cs:24894 [@501e3f5]
-        double fwdvolts = (static_cast<double>(adcRaw) * 5000.0) / 4095.0;
-        if (fwdvolts < 0) { fwdvolts = 0; }
-        double amps = (fwdvolts - kAmpVoff) / kAmpSens;
-        if (amps < 0) { amps = 0; }
-        return amps;
     }
     default:
         return 0.0;
@@ -4149,8 +4124,11 @@ void RadioModel::applyStationRecordBatch(const RecordBatch& batch)
                                                      Qt::ISODate);
         QMap<QString, QString> kvs;
         kvs[QStringLiteral("callsign")] = f.value(QStringLiteral("call")).toString();
-        kvs[QStringLiteral("rx_freq")] = QString::number(mhz, 'f', 4);
-        kvs[QStringLiteral("tx_freq")] = QString::number(mhz, 'f', 4);
+        // Spot resolved mode (R-IOS-25): the Core's whole hertz, so a click
+        // here resolves the mode a click at the Core does, even at a band
+        // segment's edge.
+        kvs[QStringLiteral("rx_freq")] = QString::number(mhz, 'f', 6);
+        kvs[QStringLiteral("tx_freq")] = QString::number(mhz, 'f', 6);
         const QString mode = f.value(QStringLiteral("mode")).toString();
         if (!mode.isEmpty()) {
             kvs[QStringLiteral("mode")] = mode;
@@ -4436,13 +4414,10 @@ void RadioModel::setStepAttController(StepAttenuatorController* c)
     // actually changed from the cached value, so we don't fire redundant
     // updates on every controller tick.
     if (c) {
-        auto recompute = [this]() {
-            const double v = rxMeterOffsetDb();
-            if (!qFuzzyCompare(1.0 + v, 1.0 + m_lastEmittedRxMeterOffsetDb)) {
-                m_lastEmittedRxMeterOffsetDb = v;
-                emit rxMeterOffsetChanged(v);
-            }
-        };
+        auto recompute = [this]() { refreshRxMeterOffset(); };
+        // The 6 m LNA gain offset (Setup > Calibration) is part of it too.
+        connect(&m_calController, &CalibrationController::changed,
+                this, &RadioModel::refreshRxMeterOffset, Qt::UniqueConnection);
         connect(c, &StepAttenuatorController::attenuationChanged,
                 this, [recompute](int) { recompute(); });
         connect(c, &StepAttenuatorController::preampModeChanged,
@@ -4532,6 +4507,8 @@ void RadioModel::syncStepAttenuatorToReceiveSlice()
     // transmit-bound slice then sets.
     if (SliceModel* const receive = sliceById(kStepAttReceiveSliceId)) {
         m_stepAttController->setBand(receive->band());
+        // The 6 m LNA gain offset follows the receive band.
+        refreshRxMeterOffset();
     }
     if (SliceModel* const tx = txBoundSlice()) {
         m_stepAttController->setTxBand(tx->band());
@@ -7348,6 +7325,7 @@ void RadioModel::applyStationCapabilities(const NereusSDR::StationCapabilities& 
     // connect uses picks it; and a Core with no radio (Unknown board) gives
     // Unknown, never Hermes.
     m_hardwareProfile = ::NereusSDR::profileForStation(caps.board, caps.hpsdrModel);
+    m_calController.setHardwareModel(m_hardwareProfile.model);
     // Task 16: a Core running the HL2 receive-only kit shows receive only.
     applyRxOnly();
     // As a local connect does before its currentRadioChanged: display units
@@ -8017,7 +7995,19 @@ bool RadioModel::applySwrProtectionSetting(const QString& key, const QVariant& v
 void RadioModel::reportStationSettingChanged(const QString& key)
 {
     if (m_role == Role::Remote) {
+        // Parity ruling C12: the Core's per-band grid reaches this window's
+        // pans (empty key: a whole snapshot).
+        applyPanGridSetting(key);
         emit stationSettingChanged(key);
+    }
+}
+
+void RadioModel::applyPanGridSetting(const QString& key)
+{
+    for (PanadapterModel* pan : std::as_const(m_panadapters)) {
+        if (pan != nullptr) {
+            pan->applyStationGridSetting(key);
+        }
     }
 }
 
@@ -8081,7 +8071,7 @@ void RadioModel::reportStationRetuneRejected(int sliceId, const QString& reason)
 //                                         : preamp_offset[preamp_mode]
 //   RXCalibrationOffset(1) = _rx1_meter_cal_offset
 //                            (+ _rx1_xvtr_gain_offset deferred to XVTR epic)
-//                            (+ _rx1_6m_gain_offset   deferred to 6m epic)
+//                            + _rx1_6m_gain_offset (rx6mGainOffsetDb)
 //
 // _rx1_meter_cal_offset defaults to rxMeterCalOffsetDefaultFor(model)
 // (clsHardwareSpecific.cs:395-411 port) unless the user has saved an
@@ -8116,7 +8106,10 @@ double RadioModel::rxMeterOffsetDb() const
         ? static_cast<float>(userOverride)
         : factoryDefault;
 
-    return rxPreampOffsetDb() + static_cast<double>(meterCalOffset);
+    // RXCalibrationOffset(1) (console.cs:21062-21067 [v2.10.3.15]):
+    //   fOffset = _rx1_meter_cal_offset + _rx1_xvtr_gain_offset + _rx1_6m_gain_offset;
+    // The XVTR term rides the transverter work.
+    return rxPreampOffsetDb() + static_cast<double>(meterCalOffset) + rx6mGainOffsetDb();
 }
 
 double RadioModel::rxPreampOffsetDb() const
@@ -8146,6 +8139,93 @@ double RadioModel::rxPreampOffsetDb() const
     }
 
     return static_cast<double>(preampOffset);
+}
+
+double RadioModel::rx6mGainOffsetDb() const
+{
+    // A remote window's readings already carry the Core's offset.
+    if (m_role == Role::Remote) {
+        return 0.0;
+    }
+    // Thetis RX1_6mGainOffset, set in txtVFOAFreq_LostFocus:
+    // From Thetis console.cs:31754-31771 [v2.10.3.15]:
+    //   if (HardwareSpecific.Model == HPSDRModel.ANAN7000D || HardwareSpecific.Model == HPSDRModel.ANAN8000D ||
+    //       HardwareSpecific.Model == HPSDRModel.ANVELINAPRO3 || HardwareSpecific.Model == HPSDRModel.ANAN_G2 ||
+    //       HardwareSpecific.Model == HPSDRModel.ANAN_G2_1K || HardwareSpecific.Model == HPSDRModel.REDPITAYA) //DH1KLM
+    //   {
+    //       if (alexpresent && rx1_band == Band.B6M && // chksr button was hidden and always unchecked. This has become the 2TON button MW0LGE_21a
+    //          ((!disable_6m_lna_on_rx && !bpf1_6bp_bypass && !alex_hpf_bypass)))
+    //           RX1_6mGainOffset = -RX6mGainOffset_RX1;
+    //       else RX1_6mGainOffset = 0;
+    //   }
+    //   else
+    //   {
+    //       if (alexpresent && rx1_band == Band.B6M &&
+    //          ((!disable_6m_lna_on_rx && !alex6bphpf_bypass && !alex_hpf_bypass)) &&
+    //           HardwareSpecific.Model != HPSDRModel.ANAN10 &&
+    //           HardwareSpecific.Model != HPSDRModel.ANAN10E)
+    //           RX1_6mGainOffset = -RX6mGainOffset_RX1;
+    //       else RX1_6mGainOffset = 0;
+    //   }
+    // rx1_band: the receive band the step attenuator follows (slice A's,
+    // the RX1 equivalent; followReceiveSliceWithStepAttenuator).
+    // alexpresent: the board's Alex (BoardCapabilities::hasAlex, the
+    // chkAlexPresent state Thetis sets per model).
+    const Band rx1Band = m_stepAttController ? m_stepAttController->currentBand() : m_lastBand;
+    if (rx1Band != Band::Band6m || !boardCapabilities().hasAlex) {
+        return 0.0;
+    }
+    // The switches as saved by Setup > Hardware > Antenna/Filters > Alex:
+    // disable_6m_lna_on_rx (chkDisable6mLNAonRX), alex_hpf_bypass
+    // (chkAlexHPFBypass), and the 6 m rows' bypass, alex6bphpf_bypass
+    // (chkAlex6BPHPF, the Alex HPF 6 m row) and bpf1_6bp_bypass
+    // (chkBPF1_6BP, the BPF1 6 m row). The rows are read from their saved
+    // keys directly: the connection does not apply them yet.
+    const QString mac = currentRadioMac();
+    const auto flag = [&mac](const QString& key) {
+        if (mac.isEmpty()) {
+            return false;
+        }
+        return AppSettings::instance()
+                   .hardwareValue(mac, key, QStringLiteral("False"))
+                   .toString() == QStringLiteral("True");
+    };
+    const bool disable6mLnaOnRx = flag(QStringLiteral("alex/master/disable6mLnaOnRx"));
+    const bool alexHpfBypass = flag(QStringLiteral("alex/master/hpfBypass"));
+    const HPSDRModel model = m_hardwareProfile.model;
+    bool lnaInCircuit = false;
+    switch (model) {
+        case HPSDRModel::ANAN7000D:
+        case HPSDRModel::ANAN8000D:
+        case HPSDRModel::ANVELINAPRO3:
+        case HPSDRModel::ANAN_G2:
+        case HPSDRModel::ANAN_G2_1K:
+        case HPSDRModel::REDPITAYA: { //DH1KLM
+            const bool bpf1SixMeterBypass = flag(QStringLiteral("%1/%2/%3").arg(
+                QLatin1String(alexKeys::kAlex1Bpf1Prefix), QLatin1String(alexKeys::kPreselector6mBP),
+                QLatin1String(alexKeys::kLeafEnabled)));
+            lnaInCircuit = !disable6mLnaOnRx && !bpf1SixMeterBypass && !alexHpfBypass;
+            break;
+        }
+        default: {
+            const bool alexSixMeterBypass = flag(QStringLiteral("%1/%2/%3").arg(
+                QLatin1String(alexKeys::kAlex1HpfPrefix), QLatin1String(alexKeys::kPreselector6mBP),
+                QLatin1String(alexKeys::kLeafEnabled)));
+            lnaInCircuit = !disable6mLnaOnRx && !alexSixMeterBypass && !alexHpfBypass
+                && model != HPSDRModel::ANAN10 && model != HPSDRModel::ANAN10E;
+            break;
+        }
+    }
+    return lnaInCircuit ? -m_calController.rx1_6mLnaOffset() : 0.0;
+}
+
+void RadioModel::refreshRxMeterOffset()
+{
+    const double v = rxMeterOffsetDb();
+    if (!qFuzzyCompare(1.0 + v, 1.0 + m_lastEmittedRxMeterOffsetDb)) {
+        m_lastEmittedRxMeterOffsetDb = v;
+        emit rxMeterOffsetChanged(v);
+    }
 }
 
 double RadioModel::keyedDisplayOffsetDb(bool displayDuplex) const
@@ -13607,6 +13687,12 @@ int RadioModel::addPanadapter()
     auto* pan = new PanadapterModel(this);
     int index = m_panadapters.size();
     m_panadapters.append(pan);
+    // Parity ruling C12: a remote window's pan takes the Core's per-band
+    // range through the pan's mirrored dBm floor and ceiling; it never
+    // pushes its own on a band crossing.
+    if (m_role == Role::Remote) {
+        pan->setFollowsBandGrid(false);
+    }
 
     // PanadapterModel::bandChanged fires when the pan center crosses a band
     // boundary. In NereusSDR's design m_lastBand tracks the VFO, not the pan
@@ -16524,13 +16610,26 @@ void RadioModel::handlePaTelemetry(quint16 fwdRaw, quint16 revRaw,
     // (Phase 1B).  Same Thetis-canonical math, same per-board triplet
     // table; reusing the public symbol keeps the future PaValuesPage Raw
     // FWD watts label and this telemetry handler in lockstep.  Remaining
-    // private helpers (scaleRevPowerWatts / scalePaVolts / scalePaAmps /
+    // private helpers (scaleRevPowerWatts / scalePaVolts /
     // scalePaTemperatureCelsius) stay file-scope until they get their
     // own public surface.
     const double fwdW   = NereusSDR::scaleFwdPowerWatts(model, fwdRaw);
     const double revW   = scaleRevPowerWatts(revRaw, model);
     const double paV    = scalePaVolts(userAdc0Raw, model);
-    const double paA    = scalePaAmps(userAdc1Raw, model);
+    // PA current: mi0bot convertToAmps (PaTelemetryScaling), with the
+    // operator's volt calibration (AmpVoff / AmpSens) on the boards that
+    // sense it. The HL2 reports its current on user ADC0:
+    // From mi0bot console.cs:24937-24947 [v2.10.3.13-beta2]:
+    //   if (HardwareSpecific.Model == HPSDRModel.HERMESLITE)       // MI0BOT: HL2 temperature & current
+    //   { _ampsQueue.Enqueue(NetworkIO.getUserADC0()); ... }
+    //   else { ... _ampsQueue.Enqueue(adc1); }
+    // Only boards with a current sensor (HasAmps) report it.
+    const quint16 ampsRaw = (model == HPSDRModel::HERMESLITE) ? userAdc0Raw : userAdc1Raw;
+    const double paA = boardCapabilities().hasPaAmpsTelemetry
+        ? NereusSDR::convertToAmps(model, static_cast<double>(ampsRaw),
+                                   m_calController.paCurrentOffset(),
+                                   m_calController.paCurrentSensitivity())
+        : 0.0;
     const double paTemp = scalePaTemperatureCelsius(0, model);
 
     // HL2 firmware overloads the C&C status frame's exciter_power AIN5
@@ -17427,6 +17526,23 @@ void RadioModel::crossBandForSlice(SliceModel* slice, Band newBand)
     // change re-routes the antennas (onMoxHardwareFlipped), and the kept
     // band governs only the receive side. With nobody else listening, the
     // crossing switches as it always has, and the kept band is forgotten.
+    //
+    // Parity (band crossing while keyed): Thetis re-runs the antenna
+    // selection on a VFO change with tx = _mox, so a crossing while the
+    // radio transmits puts the new band's transmit routing on the relays:
+    // From Thetis console.cs:31713-31717 [v2.10.3.15] txtVFOAFreq_LostFocus
+    //   undoXVTRantennaModify(0);
+    //   Alex.getAlex().UpdateAlexAntSelection(RX1Band, _mox, alex_ant_ctrl_enabled, false);
+    // NereusSDR sends it for the transmit slice (the band the relays
+    // transmit on); a receive slice's crossing sends nothing mid-TX, and
+    // its receive routing goes out when the radio returns to receive
+    // (onMoxHardwareFlipped), as the antennaChanged handler does while keyed.
+    const bool keyed = m_alexRoutingTx;
+    const bool txSliceCrossed = keyed && slice == txBoundSlice();
+    if (txSliceCrossed) {
+        m_alexRoutingTxBand = newBand;
+        applyAlexAntennaForBand(newBand, /*isTx=*/true);
+    }
     const Band applied = m_keptRxAntennaBand.value_or(oldBand);
     if (receiveAntennaDiffers(applied, newBand)) {
         const QList<QByteArray> listeners = devicesListeningThroughRelay(slice);
@@ -17443,8 +17559,11 @@ void RadioModel::crossBandForSlice(SliceModel* slice, Band newBand)
     m_keptRxAntennaBand.reset();
     // Phase 3P-I-a T10 — reapply per-band antenna on boundary
     // crossing. Thetis UpdateAlexAntSelection equivalent
-    // (HPSDR/Alex.cs:310 [@501e3f5]).
-    applyAlexAntennaForBand(newBand);
+    // (HPSDR/Alex.cs:310 [@501e3f5]). Keyed, the transmit routing went
+    // out above and the receive routing waits for the return to receive.
+    if (!keyed) {
+        applyAlexAntennaForBand(newBand);
+    }
     // Phase 3P-I-a T10 follow-up — refresh the slice's cached
     // rxAntenna/txAntenna labels from AlexController so the
     // VFO Flag and RxApplet buttons show the new band's value.
@@ -20979,6 +21098,11 @@ void RadioModel::applyHpsdrModel(HPSDRModel m, HPSDRHW board)
 {
     m_hardwareProfile = ::NereusSDR::profileForRadio(board, m);
     m_transmitModel.setHpsdrModel(m_hardwareProfile.model);
+    // The volt calibration's factory values follow the model (Thetis
+    // GetDefaultVoltCalibration).
+    m_calController.setHardwareModel(m_hardwareProfile.model);
+    // The 6 m LNA gain offset depends on the model.
+    refreshRxMeterOffset();
     // Task 13: PollTXInhibit reads HardwareSpecific.Model on every pass
     // (console.cs:25855-25873 [v2.10.3.15]).
     m_txInhibit.setRadioModel(m_hardwareProfile.model);
@@ -23448,7 +23572,14 @@ void RadioModel::onMoxHardwareFlipped(bool isTx)
         // changed its stored TX antenna before becoming TX-bound.
         applyTxAntennaFromBoundSlice();
     }
-    applyAlexAntennaForBand(band, isTx);
+    // Key-down routes the transmit band; the return to receive routes the
+    // receive band, the one the last band crossing left on the relay
+    // (m_lastBand), which a receive slice may have moved while keyed:
+    // From Thetis console.cs:29117 and 29161-29169 [v2.10.3.15] HdwMOXChanged:
+    //   (tx)  Alex.getAlex().UpdateAlexAntSelection(_tx_band, _mox, alex_ant_ctrl_enabled, false);
+    //   (rx)  UpdateTRXAnt(); //[2.3.10.6]MW0LGE added
+    //         Alex.getAlex().UpdateAlexAntSelection(rx1_band, _mox, alex_ant_ctrl_enabled, false);
+    applyAlexAntennaForBand(isTx ? band : m_lastBand, isTx);
 
     // Steps 2 + 3 — wire bits.  Guard against null connection (no radio
     // connected, or mid-teardown).  applyAlexAntennaForBand already guards
@@ -24720,6 +24851,9 @@ void RadioModel::flushRemoteHardwareApply()
             m_calController.setPaCalProfile(
                 PaCalProfile::defaults(paCalBoardClassFor(m_hardwareProfile.model)));
         }
+        // load() is silent about its scalar values; the 6 m LNA gain offset
+        // is part of the receive calibration the Core sends.
+        refreshRxMeterOffset();
         observe(QStringLiteral("cal"));
     }
     // R-R3-46 / R-R3-49 (parity Task 13): TX Display Cal and Volts/Amps
@@ -24792,6 +24926,8 @@ void RadioModel::flushRemoteHardwareApply()
 // ---------------------------------------------------------------------------
 void RadioModel::applyAlexHpfSwitchSettings()
 {
+    // The 6 m LNA gain offset reads the LNA and bypass switches.
+    refreshRxMeterOffset();
     if (!ownsLocalDsp() || m_connection == nullptr) {
         return;
     }

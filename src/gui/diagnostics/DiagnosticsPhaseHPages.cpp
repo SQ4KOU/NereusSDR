@@ -35,6 +35,11 @@
 //                Core's HL2 link in a remote window and said so;
 //                unavailable, never 0, when absent. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - Export Connected Radio is built (G-74, B6.1): it saves
+//                the connected radio's own settings, the Core's in a
+//                remote window, and is disabled with the reason when there
+//                is no radio. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 #include "DiagnosticsPhaseHPages.h"
@@ -307,6 +312,11 @@ ExportImportConfigPage::ExportImportConfigPage(RadioModel* model, QWidget* paren
                 &ExportImportConfigPage::onExportCompleted);
         connect(m_model, &RadioModel::stationLinkStateChanged, this,
                 &ExportImportConfigPage::onLinkStateChanged);
+        // Export Connected Radio follows the radio coming and going.
+        connect(m_model, &RadioModel::connectionStateChanged, this,
+                [this] { refreshExportAvailability(); });
+        connect(m_model, &RadioModel::currentRadioChanged, this,
+                [this] { refreshExportAvailability(); });
     }
     refreshExportAvailability();
 }
@@ -371,18 +381,17 @@ void ExportImportConfigPage::buildUI()
 
     auto* radioGroup = addSection(QStringLiteral("Per-Radio Configuration"));
     auto* radioLayout = qobject_cast<QVBoxLayout*>(radioGroup->layout());
-    m_radioSummaryLabel = new QLabel(
-        QStringLiteral("Per-radio export will copy only the hardware/<mac>/* "
-                       "subtree for the connected radio."));
-    m_radioSummaryLabel->setWordWrap(true);
-    m_radioSummaryLabel->setStyleSheet(QStringLiteral("color: #888;"));
-    radioLayout->addWidget(m_radioSummaryLabel);
-    m_exportRadioBtn = new QPushButton(QStringLiteral("Export Connected Radio…"));
-    radioLayout->addWidget(m_exportRadioBtn);
-    // R-R3-49 (export-radio): exporting one radio's settings is not built;
-    // the group is hidden until it is. The button's code stays.
     radioGroup->setObjectName(QStringLiteral("exportRadioGroup"));
-    UnbuiltFeatures::hideUnlessBuilt(radioGroup, UnbuiltFeature::ExportRadio);
+    m_exportRadioBtn = new QPushButton(QStringLiteral("Export Connected Radio…"));
+    m_exportRadioBtn->setObjectName(QStringLiteral("exportRadioButton"));
+    auto* radioRow = new QHBoxLayout;
+    radioRow->addWidget(m_exportRadioBtn);
+    radioRow->addStretch();
+    radioLayout->addLayout(radioRow);
+    m_radioSummaryLabel = new QLabel;
+    m_radioSummaryLabel->setObjectName(QStringLiteral("exportRadioExplanation"));
+    m_radioSummaryLabel->setWordWrap(true);
+    radioLayout->addWidget(m_radioSummaryLabel);
 
     connect(m_exportAllBtn,   &QPushButton::clicked, this,
             &ExportImportConfigPage::onExportAllClicked);
@@ -539,6 +548,64 @@ void ExportImportConfigPage::refreshExportAvailability()
     m_importExplanation->setText(importText);
     m_importAllBtn->setToolTip(importText);
     m_importAllBtn->setAccessibleDescription(importText);
+
+    QString radioReason;
+    const bool radioAllowed = radioExportAllowed(&radioReason);
+    m_exportRadioBtn->setEnabled(radioAllowed);
+    const QString radioText = !radioAllowed ? radioReason
+        : remote ? tr("Saves only the Core's settings for its connected radio (its hardware, "
+                      "antenna, filter and amplifier settings) to a file.")
+                 : tr("Saves only the settings kept for the connected radio (its hardware, "
+                      "antenna, filter and amplifier settings) to a file.");
+    m_radioSummaryLabel->setText(radioText);
+    m_exportRadioBtn->setToolTip(radioText);
+    m_exportRadioBtn->setAccessibleDescription(radioText);
+}
+
+bool ExportImportConfigPage::radioExportAllowed(QString* reason) const
+{
+    if (reason) { reason->clear(); }
+    const bool remote = remoteWindow();
+    if (!m_model || m_model->currentRadioMac().isEmpty()) {
+        if (reason) {
+            *reason = remote ? tr("The Core has no radio connected. Connect one to export "
+                                  "its settings.")
+                             : tr("Connect a radio to export its settings.");
+        }
+        return false;
+    }
+    if (remote && !m_stationSettingsAvailable) {
+        if (reason) {
+            *reason = m_stationUnavailableReason.isEmpty()
+                ? tr("The Core's settings are not available yet.")
+                : m_stationUnavailableReason;
+        }
+        return false;
+    }
+    return true;
+}
+
+QByteArray ExportImportConfigPage::connectedRadioXml(const AppSettings& settings,
+                                                     const QString& mac, QString* error)
+{
+    if (error) { error->clear(); }
+    if (mac.isEmpty()) {
+        if (error) { *error = tr("Connect a radio to export its settings."); }
+        return {};
+    }
+    const QMap<QString, QVariant> values = settings.hardwareValues(mac);
+    if (values.isEmpty()) {
+        if (error) { *error = tr("No settings are saved for the connected radio yet."); }
+        return {};
+    }
+    // A store that holds this radio's keys and nothing else, serialized
+    // the way every settings file is. It is never saved to its path.
+    AppSettings radioOnly(QString{});
+    const QString prefix = QStringLiteral("hardware/%1/").arg(mac);
+    for (auto it = values.cbegin(); it != values.cend(); ++it) {
+        radioOnly.setValue(prefix + it.key(), it.value());
+    }
+    return radioOnly.exportLocalXml(error);
 }
 
 void ExportImportConfigPage::setStationSettingsAvailable(bool available, const QString& reason)
@@ -563,6 +630,16 @@ QString ExportImportConfigPage::chooseExportDestination(bool remote)
                : QStringLiteral("NereusSDR.settings.xml"),
         remote ? tr("Nereus settings backup (*.nereus-settings)")
                : tr("XML (*.xml *.settings)"));
+}
+
+QString ExportImportConfigPage::chooseRadioExportDestination(const QString& mac)
+{
+    QString name = mac;
+    name.replace(QLatin1Char(':'), QLatin1Char('-'));
+    return QFileDialog::getSaveFileName(
+        this, tr("Export Connected Radio"),
+        QStringLiteral("NereusSDR radio %1.nereus-radio").arg(name),
+        tr("Nereus radio settings (*.nereus-radio)"));
 }
 
 void ExportImportConfigPage::showExportResult(bool success, const QString& text)
@@ -685,10 +762,40 @@ void ExportImportConfigPage::onImportAllClicked()
 
 void ExportImportConfigPage::onExportRadioClicked()
 {
-    QMessageBox::information(
-        this, QStringLiteral("Per-Radio Export"),
-        QStringLiteral("Exporting one radio's settings is not available yet. "
-                       "Use 'Export All Settings' for now."));
+    QString reason;
+    if (!radioExportAllowed(&reason)) {
+        showExportResult(false, reason);
+        return;
+    }
+    const QPointer<ExportImportConfigPage> guard(this);
+    const QPointer<RadioModel> selectedModel(m_model);
+    const QString mac = m_model->currentRadioMac();
+    const QString destination = chooseRadioExportDestination(mac);
+    if (!guard || destination.isEmpty()) { return; }
+    // The native picker pumps events: the radio may have gone or changed.
+    if (!selectedModel || m_model != selectedModel || m_model->currentRadioMac() != mac
+        || !radioExportAllowed(&reason)) {
+        showExportResult(false, reason.isEmpty()
+            ? tr("The connected radio changed. Try the export again.") : reason);
+        return;
+    }
+    // In a remote window AppSettings reads the Core's values for this
+    // radio through the settings proxy, which holds the connected radio's
+    // settings; no command to the Core is needed.
+    const QByteArray xml = connectedRadioXml(AppSettings::instance(), mac, &reason);
+    if (xml.isEmpty()) {
+        showExportResult(false, reason.isEmpty()
+            ? tr("Could not read the connected radio's settings.") : reason);
+        return;
+    }
+    QSaveFile file(destination);
+    if (!file.open(QIODevice::WriteOnly) || file.write(xml) != xml.size() || !file.commit()) {
+        showExportResult(false, tr("Could not save the radio's settings to %1: %2")
+            .arg(destination, file.errorString()));
+        return;
+    }
+    showExportResult(true, tr("The connected radio's settings were exported to:\n%1")
+        .arg(destination));
 }
 
 // ── LogsPage ─────────────────────────────────────────────────────────────────

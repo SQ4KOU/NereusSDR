@@ -31,6 +31,10 @@
 //                 (console.cs:41709-41718 [v2.10.3.13-beta2]): on/off plus
 //                 the Alex items when Alex is present. J.J. Boyd (KG4VCF),
 //                 with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-28 — HL2 row reports PA current (mi0bot HasAmps,
+//                 clsHardwareSpecific.cs:258-270 [v2.10.3.13-beta2]).
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code.
 // =================================================================
 
 /*  clsHardwareSpecific.cs
@@ -1017,6 +1021,13 @@ const BoardCapabilities kHermesLite = {
     .hasApollo        = false,  // HL2 has no Apollo port; not in RadioModelChanged() switch
     .hasAlex          = false,  // HL2 has no Alex board slot (ocOutputCount=0, hasAlexFilters=false)
     .hasPennyLane     = false,  // HL2 has no OC ext-ctrl; uses IoBoardHl2 for I2C accessories
+    // From mi0bot clsHardwareSpecific.cs:258-270 [v2.10.3.13-beta2] HasAmps:
+    //   ... _model == HPSDRModel.REDPITAYA ||
+    //       _model == HPSDRModel.HERMESLITE;
+    // The HL2 reports its PA current on user ADC0 (convertToAmps' HL2
+    // branch). Its HasVolts entry is left off: mi0bot's poll never fills
+    // the volts queue for the HL2, so its PA volts read 0.
+    .hasPaAmpsTelemetry = true,
     .minFirmwareVersion = 0,   // floor check removed; see file header
     .knownGoodFirmware  = 0,
     .displayName      = "Hermes Lite 2",

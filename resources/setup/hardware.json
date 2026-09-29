@@ -223,7 +223,7 @@
             {
               "id": "hardware.antennaAlex.rxOutOverride",
               "label": "Disable RX Bypass relay",
-              "tooltip": "Disable the RX Bypass Out relay (chkDisableRXOut in Thetis).",
+              "tooltip": "Disable the RX Bypass Out relay.",
               "kind": "toggle",
               "binding": {
                 "property": {

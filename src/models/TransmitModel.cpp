@@ -269,6 +269,10 @@
 //                 header below complete the GPL attribution.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //                 Code.
+//   2026-09-28 - R-IOS-13 / R-R3-49: txEqCurve, the read-only curve
+//                 derived from txEqParaEqData (ParaEqCurve::txEqCurveJson)
+//                 whenever the blob changes. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "TransmitModel.h"
@@ -359,6 +363,10 @@ TransmitModel::TransmitModel(QObject* parent)
     //   tunePower_by_band = new int[(int)Band.LAST];
     //   for (int i = 0; i < (int)Band.LAST; i++) tunePower_by_band[i] = 50;
     m_tunePowerByBand.fill(50);
+
+    // R-IOS-13 / R-R3-49: txEqCurve for the empty blob a new model starts
+    // with (the flat curve Thetis applies in its place).
+    m_txEqCurve = ParaEqCurve::txEqCurveJson(m_txEqParaEqData);
 
     // Initialise per-band normal-mode power to 50W (#167 Phase 3A).
     // From Thetis console.cs:1813-1814 [v2.10.3.13]:
@@ -454,6 +462,35 @@ void TransmitModel::loadFromSettings()
 
 // ── Mic gain (3M-1b C.1) ──────────────────────────────────────────────────
 
+// iPhone app plan Task 40: the whole of Thetis's setAudioMicGain, so the mic
+// mute silences the mic whichever window or device sets it.
+// From Thetis console.cs:28856-28868 [v2.10.3.15]:
+//   private void setAudioMicGain(double gain_db)
+//   {
+//       if (chkMicMute.Checked) // although it is called chkMicMute, checked = mic in use
+//       {
+//           Audio.MicPreamp = Math.Pow(10.0, gain_db / 20.0); // convert to scalar
+//           _mic_muted = false;
+//       }
+//       else
+//       {
+//           Audio.MicPreamp = 0.0;
+//           _mic_muted = true;
+//       }
+//   }
+namespace {
+
+// The mic preamp setAudioMicGain sets: 10^(gainDb/20) with the mic in use,
+// 0.0 while it is muted.
+double micPreampFor(bool micInUse, int gainDb)
+{
+    // although it is called chkMicMute, checked = mic in use  [original inline comment from console.cs:28858]
+    return micInUse ? std::pow(10.0, gainDb / 20.0) // convert to scalar
+                    : 0.0;
+}
+
+} // namespace
+
 void TransmitModel::setMicGainDb(int dB)
 {
     // Clamp to range per Thetis console.cs:19151-19171 [v2.10.3.13].
@@ -463,15 +500,14 @@ void TransmitModel::setMicGainDb(int dB)
     if (clamped == m_micGainDb) { return; }  // idempotent guard
 
     m_micGainDb = clamped;
-    // Porting from Thetis console.cs:28805-28817 [v2.10.3.13]:
-    //   Audio.MicPreamp = Math.Pow(10.0, gain_db / 20.0); // convert to scalar
-    m_micPreampLinear = std::pow(10.0, clamped / 20.0);
+    m_micPreampLinear = micPreampFor(m_micMute, m_micGainDb);
 
     persistOne(QStringLiteral("MicGain"), QString::number(m_micGainDb));  // L.2 auto-persist
 
     emit micGainDbChanged(m_micGainDb);
     emit micPreampChanged(m_micPreampLinear);
 }
+
 
 // ── Mic-jack flag properties (3M-1b C.2) ─────────────────────────────────────
 //
@@ -492,6 +528,21 @@ void TransmitModel::setMicMute(bool on)
     if (on == m_micMute) { return; }  // idempotent guard
     m_micMute = on;
     emit micMuteChanged(on);
+    // Thetis chkMicMute_CheckedChanged runs ptbMic_Scroll, which sets the
+    // preamp through setAudioMicGain.
+    // From Thetis console.cs:28845-28846 [v2.10.3.15] (ptbMic_Scroll):
+    //   //[2.10.3.9]MW0LGE fix for when mic is disabled
+    //   setAudioMicGain((double)ptbMic.Value);
+    const double preamp = micPreampFor(m_micMute, m_micGainDb);
+    if (preamp != m_micPreampLinear) {
+        m_micPreampLinear = preamp;
+        emit micPreampChanged(m_micPreampLinear);
+    }
+}
+
+void TransmitModel::setMicMuted(bool muted)
+{
+    setMicMute(!muted);
 }
 
 void TransmitModel::setMicBoost(bool on)
@@ -3309,6 +3360,12 @@ void TransmitModel::setTxEqParaEqData(const QString& data)
     m_txEqParaEqData = data;
     persistOne(QStringLiteral("TXParaEQData"), data);
     emit txEqParaEqDataChanged(data);
+    // R-IOS-13 / R-R3-49: the read-only curve follows the blob.
+    const QString curve = ParaEqCurve::txEqCurveJson(data);
+    if (curve != m_txEqCurve) {
+        m_txEqCurve = curve;
+        emit txEqCurveChanged(m_txEqCurve);
+    }
 }
 
 // ── R-R3-49 (parity Task 4): the Legacy EQ box and the link's arrays ─────

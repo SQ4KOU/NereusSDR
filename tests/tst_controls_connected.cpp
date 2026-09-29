@@ -75,6 +75,7 @@
 #include "gui/setup/HardwarePage.h"
 #include "gui/widgets/RxDashboard.h"
 #include "gui/widgets/StatusBadge.h"
+#include "gui/widgets/StatusToast.h"
 #include "gui/widgets/VfoWidget.h"
 #include "models/Band.h"
 #include "models/FilterPresetStore.h"
@@ -96,6 +97,14 @@ QList<QAction*> actionsByText(const QObject* root, const QString& text)
         if (action->text() == text) { found.append(action); }
     }
     return found;
+}
+
+bool toastShown(const QWidget* window, const QString& message)
+{
+    for (StatusToast* toast : window->findChildren<StatusToast*>()) {
+        if (toast->message() == message) { return true; }
+    }
+    return false;
 }
 
 QAction* actionByText(const QObject* root, const QString& text)
@@ -577,6 +586,105 @@ private slots:
         QVERIFY(sessions.replace({}, false));
     }
 
+    // A container's filter right-click offers what the VFO flag's and RX
+    // applet's filter buttons offer: edit or reset the preset it names.
+    // The VFO display's names the slice's current preset.
+    void containerFilterRightClickEditsItsPreset()
+    {
+        QCOMPARE(MainWindow::containerFilterContextSlot(2, -1, 10), 2);
+        QCOMPARE(MainWindow::containerFilterContextSlot(-1, 4, 10), 4);
+        QCOMPARE(MainWindow::containerFilterContextSlot(-1, -1, 10), -1);
+        QCOMPARE(MainWindow::containerFilterContextSlot(5, 0, 3), -1);
+
+        GuiSessionCoordinator sessions;
+        QVERIFY(sessions.replace({}, false));
+        MainWindow* window = sessions.window();
+        RadioModel* model = window->radioModel();
+        SliceModel* slice = ensureSlice(model);
+        QVERIFY(slice != nullptr);
+        ContainerManager* cm = model->containerManager();
+        ContainerWidget* container = cm->createContainer(1, DockMode::OverlayDocked);
+        QVERIFY(container != nullptr);
+        auto* meter = new MeterWidget();
+        container->setContent(meter);
+        meter->addItem(new FilterButtonItem());
+        slice->setDspMode(DSPMode::USB);
+        FilterPresetStore* store = model->filterPresetStore();
+        const FilterPreset original = store->presetsForMode(DSPMode::USB)[2];
+        FilterPreset edited = original;
+        edited.high = original.high + 300;
+        store->setPreset(DSPMode::USB, 2, edited);
+        QCOMPARE(store->presetsForMode(DSPMode::USB)[2].high, original.high + 300);
+
+        // Right-click on F3: the menu's reset puts the preset back.
+        QStringList seen;
+        const auto answer = [&seen](const QString& pick) {
+            auto* poll = new QTimer;
+            poll->setInterval(10);
+            QObject::connect(poll, &QTimer::timeout, poll, [poll, &seen, pick] {
+                auto* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget());
+                if (!menu) { return; }
+                poll->stop();
+                poll->deleteLater();
+                seen.clear();
+                for (QAction* action : menu->actions()) {
+                    seen << action->text();
+                }
+                for (QAction* action : menu->actions()) {
+                    if (action->text() == pick) {
+                        menu->setActiveAction(action);
+                        QTest::keyClick(menu, Qt::Key_Return);
+                        return;
+                    }
+                }
+                menu->close();
+            });
+            poll->start();
+        };
+        // Let the new container's deferred show and activation settle: a
+        // popup closes when the active window changes under it.
+        QTest::qWait(300);
+        answer(QStringLiteral("Reset this preset"));
+        emit container->filterContextRequested(2);
+        QCOMPARE(seen, (QStringList{QStringLiteral("Edit this preset…"),
+                                    QStringLiteral("Reset this preset")}));
+        QCOMPARE(store->presetsForMode(DSPMode::USB)[2].high, original.high);
+
+        // The VFO display's right-click: the slice's current preset.
+        slice->setFilter(store->presetsForMode(DSPMode::USB)[4].low,
+                         store->presetsForMode(DSPMode::USB)[4].high);
+        FilterPreset edited4 = store->presetsForMode(DSPMode::USB)[4];
+        const int high4 = edited4.high;
+        edited4.high += 200;
+        store->setPreset(DSPMode::USB, 4, edited4);
+        slice->setFilter(edited4.low, edited4.high);
+        answer(QStringLiteral("Reset this preset"));
+        emit container->vfoFilterContextRequested();
+        QCOMPARE(store->presetsForMode(DSPMode::USB)[4].high, high4);
+
+        // A filter that is no preset: no menu, only the reason.
+        seen.clear();
+        slice->setFilter(1234, 1500);
+        answer(QString());  // closes a menu, should one open
+        emit container->vfoFilterContextRequested();
+        QVERIFY2(seen.isEmpty(), qPrintable(seen.join(QLatin1Char(','))));
+        QVERIFY(QApplication::activePopupWidget() == nullptr);
+        QVERIFY(toastShown(window, QStringLiteral(
+            "This slice's filter is not one of this mode's presets, so there is no "
+            "preset to edit.")));
+
+        // Band stacking is not built: a band button's or the VFO display's
+        // band-stack right-click says so rather than doing nothing.
+        qDeleteAll(window->findChildren<StatusToast*>());
+        emit container->bandStackRequested(5);
+        QVERIFY(toastShown(window, MainWindow::containerBandStackReason()));
+        QCOMPARE(MainWindow::containerBandStackReason(),
+                 QStringLiteral("Band stacking is not ready yet."));
+        store->resetPreset(DSPMode::USB, 2);
+        store->resetPreset(DSPMode::USB, 4);
+        QVERIFY(sessions.replace({}, false));
+    }
+
     // A meter item added while the window runs gets the saved Multimeter
     // unit, decimal and history duration, the saved high-resolution filter
     // graph, and the active slice's state, without opening Setup.
@@ -706,7 +814,11 @@ private slots:
     }
 
     // Status badges: the dashboard's open the flag tab holding the
-    // setting; the rest have nothing to open and keep the arrow.
+    // setting; the rest have nothing to open and keep the arrow. The
+    // dashboard's open something only while the window has a slice to
+    // describe: with none (a fresh window) they are cleared and inert, as
+    // "Clear RX banner when the desktop has no owned slice" (9925ed9a8)
+    // made them, so they keep the arrow until a slice is active.
     void badgesShowTheHandOnlyWhereAClickOpensSomething()
     {
         GuiSessionCoordinator sessions;
@@ -721,11 +833,25 @@ private slots:
         QVERIFY(dash != nullptr);
         const QList<StatusBadge*> badges = dash->findChildren<StatusBadge*>();
         QCOMPARE(badges.size(), 7);
+        QSignalSpy spy(dash, SIGNAL(badgeClicked(NereusSDR::RxDashboard::Badge)));
+        QVERIFY2(spy.isValid(), "the dashboard reports no badge clicks");
+
+        // No slice: nothing to open, the arrow, and a click does nothing.
+        QVERIFY(window->radioModel()->activeSlice() == nullptr);
+        QVERIFY(dash->slice() == nullptr);
+        for (StatusBadge* badge : badges) {
+            QCOMPARE(badge->cursor().shape(), Qt::ArrowCursor);
+        }
+        QTest::mouseClick(badges.first(), Qt::LeftButton);
+        QCOMPARE(spy.count(), 0);
+
+        // A slice: every dashboard badge opens its flag tab.
+        SliceModel* slice = ensureSlice(window->radioModel());
+        QVERIFY(slice != nullptr);
+        QTRY_COMPARE(dash->slice(), slice);
         for (StatusBadge* badge : badges) {
             QCOMPARE(badge->cursor().shape(), Qt::PointingHandCursor);
         }
-        QSignalSpy spy(dash, SIGNAL(badgeClicked(NereusSDR::RxDashboard::Badge)));
-        QVERIFY2(spy.isValid(), "the dashboard reports no badge clicks");
         QTest::mouseClick(badges.first(), Qt::LeftButton);
         QCOMPARE(spy.count(), 1);
         QVERIFY(sessions.replace({}, false));

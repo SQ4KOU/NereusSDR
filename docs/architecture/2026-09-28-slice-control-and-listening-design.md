@@ -1,11 +1,17 @@
 # Slice control and shared listening
 
-Status: six behavior rulings and the bottom-RX chooser area approved by JJ
-on September 28, 2026. Full-window flags, applets and multiple-pan behavior
-remain under visual review. This document
-describes the required behavior; it does not claim that the new commands
-or sharing support exist. The Core/GUI implementation belongs in the
-current PR; the matching iPhone UI belongs in the phone's dependent PR.
+Status: approved design, implementation in progress. JJ approved the six
+behavior rulings and the bottom-RX chooser area on September 28, 2026, and
+ruled the full-window behavior (flags, applets, multiple pans, placement,
+layout changes and the TX applet letters, U1 to U8) the same day; see
+"Full-window behavior (ruled)" below. Implementation follows
+`2026-09-28-slice-control-and-listening-plan.md`. Its Task 1 (slice
+incarnation and control revision) is complete on its lane in signed
+`efb398303`, not yet merged to the trunk; nothing else in this document is
+built. This document describes the required behavior; it does not claim
+that the new commands or sharing support exist. The Core/GUI implementation
+belongs in the current PR; the matching iPhone UI belongs in the phone's
+dependent PR.
 
 ## What the operator should be able to do
 
@@ -57,7 +63,9 @@ listening. The Mac can then leave or take control again.
 Selecting another slice on this device changes the active receive focus
 and the bottom banner. It does not release previously joined slices or
 change the device's transmit selection. Release and Stop listening are
-explicit actions. Controller-only edits are disabled for a listener, with
+explicit actions; the one automatic stop is a layout change that removes
+the only pan showing a listened slice (U7 below), because a device hears
+only slices it can see. Controller-only edits are disabled for a listener, with
 the controller named and Take control reachable.
 
 When the last available slice or hardware receiver is in use, the chooser
@@ -74,47 +82,100 @@ only claims the device still has; it cannot steal back transferred control.
 Expiry acts on the matching absence generation, so an old timer cannot
 release a replacement session's work. Explicit leave releases immediately.
 
-## Full-window proposal under review
+## Full-window behavior (ruled September 28, 2026)
 
 The September 28 scout distinguishes window RX focus from each pan's own
 selected slice. Existing flag and RX-tab selection updates window RX;
-pan-background selection currently updates display focus only. Spectrum
-actions target the emitting pan's slice. The shared-listener change must
-preserve an explicit target for every control instead of making other pans
-silently tune the bottom banner's selection.
+pan-background selection updates display focus only. Spectrum actions
+target the emitting pan's slice. The shared-listener change preserves an
+explicit target for every control instead of making other pans silently
+tune the bottom banner's selection.
 
-The proposed mapping is:
+JJ ruled each open window question on September 28, 2026. His words are
+quoted exactly as the crew ledger records them; the "Ruled behavior" text
+is the lead's recorded reading of each answer.
+
+- **U1, placing an unseen slice.** JJ: "1 your recommendation but maybe
+  not a floating pan but a layout that fits in the single window". Ruled
+  behavior: an unseen slice goes into the main window. A main-window pan
+  already showing it comes forward; else an empty main-window pan takes it;
+  else the main window grows to a pan layout that fits in the single
+  window, or asks for a named destination. Placing a slice never opens a
+  new floating pan, never creates a physical receiver and never changes
+  shared tuning. The lead confirmed on 2026-09-28: ask only when no larger
+  single-window layout fits, and growing the layout to place a slice adds
+  no new slice to any other empty pan.
+- **U2, a slice already in a floating pan.** JJ: "1 your recommendation".
+  Ruled behavior: that floater comes to the front and the main window's RX
+  switches to the slice. Nothing moves and no second copy is made.
+- **U3, pan background click.** JJ: "1 your recommendation". Ruled
+  behavior: it keeps today's display-only meaning (keyboard and scroll
+  focus). Slices are chosen by flag or tab.
+- **U4, same-pan stacking.** JJ: "1 your recommendation". Ruled behavior:
+  today's rule stays, the selected slice's flag on top. Listened slices keep
+  their Aether color, with "Listening · controlled by ..." text.
+- **U5, volume and mute.** JJ: "1 your recommendation". Ruled behavior: the
+  existing AF slider and mute on any slice, controlled or listened, change
+  only what this device hears; on a listened slice the slider is labeled
+  "Your volume". Nobody's volume or mute changes anyone else's audio, the
+  controller's included. The controller's AF therefore becomes per-device
+  as well, not only a listener's.
+- **U6, flag wording and actions.** JJ: "1 your wording sounds fine".
+  Ruled behavior: a controlled flag reads "You control" (menu: Release); a
+  listened flag reads "Listening · controlled by <device>" (menu: Take
+  control, Stop listening), with tuning disabled and the reason "<device>
+  controls this slice"; "TX" shows as today, red on air.
+- **U7, layout changes.** JJ: "stop listening to slices, its confusinf to
+  hear slices you have no visual referance to". Ruled behavior: a listened
+  slice that loses its pan in a layout change stops being listened to on
+  this device, with a plain notice. The principle: a device hears only
+  slices it can see. Controlled slices keep today's rehoming into a
+  remaining pan, so every slice a device hears stays visible.
+- **U8, TX applet letters.** JJ: "2 but for only slices tgat are activatyed
+  show in the applet". Ruled behavior: the TX applet shows a row of slice
+  letter buttons, only for slices active on this device, read as the slices
+  this device controls (the only ones it may transmit on). Pressing one
+  selects it for transmit with the existing `tx.setTxSlice` behavior, the
+  same for every client: while keyed it unkeys through the unkey gate, then
+  moves (ruling 8.10). An earlier record of this ruling added "idle only;
+  refused on air"; that was the lead's addition, not JJ's words, and is
+  withdrawn (lead correction, 2026-09-28).
+
+The resulting mapping:
 
 - The bottom chooser inventories all slices. Inspecting a row performs no
   receive or transmit operation. A flag, joined RX tab or explicit Select
-  RX focuses that slice, its visible pan, the RX applet and the bottom bar.
-- A joined flag retains its Aether letter/color. Text distinguishes You
-  control from Listening and names the current controller. A visible slice
-  not joined here remains distinguishable as a foreign marker. The same
-  details/actions are reachable from the flag and bottom chooser.
-- The RX applet shows tabs for this device's joined slices, including those
-  whose display is currently hidden. Listening disables shared tuning/DSP
-  edits, while per-device volume/mute and Take control remain available.
-  These controls are proposals; current RX applet audio plumbing does not
-  yet provide the required local listener mix.
-- TX remains explicitly bound to the selected transmit slice even when a
-  different slice is selected for receive. The current active-RX-dependent
-  TX applet bindings need a safety audit when implementing this mapping.
-- If a slice is already visible, focus its existing pane, including a
-  floating pane. If unseen, prefer an empty pane; otherwise offer a named
-  destination or another pane. Replacing or hiding a view retains listening
-  until the operator explicitly leaves. A new view of an existing slice
-  does not create a new physical receiver or change shared tuning.
+  RX focuses that slice, its visible pan (placed per U1 or raised per U2),
+  the RX applet and the bottom bar.
+- A joined flag retains its Aether letter and color and carries the U6
+  text naming the current controller. A visible slice not joined here
+  remains a distinguishable foreign marker. The same details and actions
+  are reachable from the flag and the bottom chooser.
+- The RX applet shows tabs for this device's joined slices. Under U7 every
+  joined slice is visible in one of this device's pans, so there are no
+  tabs for hidden joined slices. Listening disables shared tuning and DSP
+  edits, with the controller named and Take control reachable. Volume and
+  mute stay on the existing AF slider and mute (U5); the RX applet has none
+  today (the flag and title bar are the audio surfaces), and the current
+  audio plumbing does not yet provide the per-device mix U5 needs.
+- TX stays explicitly bound to the selected transmit slice even when a
+  different slice is selected for receive. The TX applet's letter row (U8)
+  selects among this device's controlled slices through the existing
+  transmit-slice behavior (while keyed it unkeys, then moves). The current
+  active-RX-dependent TX applet bindings need a safety audit when this is
+  implemented.
+- A new view of an existing slice does not create a physical receiver or
+  change shared tuning. Replacing or hiding a view no longer retains
+  listening: U7 supersedes the earlier proposal that listening continue
+  until an explicit leave, and the earlier proposal of RX applet tabs for
+  hidden joined slices.
 
-The full-window interactive proposal is
-`nereus-multi-pan-slice-flow.html` in this chat's visualization directory.
-It was based on actual offscreen Qt two-pan captures recorded in
-`core-gui-multi-pan-reference-report.md`. Preview interactions cover
-inspection, listening, intact handoff, independent TX, changing RX and
-placing/revisiting a hidden slice. It is design evidence, not product
-implementation. Placement, floating focus, background-click semantics,
-same-pan flag stacking and the exact local-audio presentation still need
-JJ's full-flow review. The six approved Core policies remain settled.
+The full-window interactive proposal, `nereus-multi-pan-slice-flow.html` in
+this chat's visualization directory, was built from actual offscreen Qt
+two-pan captures recorded in `core-gui-multi-pan-reference-report.md`. It
+is design evidence, not product implementation, and it predates the
+rulings: its placement of an unseen slice and its retained hidden audio are
+superseded by U1 and U7, and it has no TX applet letter row (U8).
 
 ## Core boundaries and invariants
 
@@ -153,7 +214,14 @@ using it for fan-out. Preserve bounded audio resources, clear admission
 failures, reconnect/session fencing, and remote audio clock behavior. DSP
 callback code must never traverse mutable listener collections or QObject
 state. Host speakers and remote playback must obey the same per-device
-listening policy without one device muting another.
+listening policy without one device muting another. Under U5 this covers the
+controller too: the controller's AF slider and mute set only the
+controller's own hearing, and a handoff carries no device's level to
+another. A listener's audio never depends on the controller's AF, including
+AF at zero: the listener feed is taken before the controller's AF (before
+WDSP's panel gain, or an equivalent that never divides by the AF), and the
+controller's own path stays as it is today (lead ruling 2026-09-28, U5 over
+the earlier Q2).
 
 Zero physical slices is a supported idle Core state. Audit all last-slice
 guards and first-slice indexing, active RX/TX fallbacks, saved layout,
@@ -183,6 +251,15 @@ or displacing a current user when an absent device returns.
   feedback and equivalent action semantics, including zero-owned states.
   Verify the real desktop layout offscreen before an authorized preview
   launch; the HTML mockup alone is not implementation evidence.
+- The full-window rulings hold: an unseen slice is placed in the main
+  window without a new floating pan, receiver or tuning change (U1); a
+  floating slice's pan comes forward without moving (U2); a background
+  click changes display focus only (U3); stacking and wording follow U4 and
+  U6; every volume and mute is per-device, the controller's included (U5);
+  a layout change that hides a listened slice stops listening there with a
+  notice, and every slice a device hears is visible (U7); the TX applet
+  letter row lists only this device's controlled slices and selects through
+  the existing transmit-slice behavior (U8).
 
 Use the current lane reports and addendum as the work record. G-125's
 bounded Add preflight is a separate repair and does not establish general

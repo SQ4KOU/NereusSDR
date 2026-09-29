@@ -14,6 +14,7 @@
 #include "gui/RemoteAudioStatus.h"
 #include "gui/RemoteMediaController.h"
 #include "gui/RemoteTelemetryController.h"
+#include "gui/SpectrumWidget.h"
 #include "gui/setup/hardware/Hl2IoBoardTab.h"
 #include "gui/diagnostics/DiagnosticsPhaseHPages.h"
 #include "gui/diagnostics/RadioStatusPage.h"
@@ -1059,6 +1060,46 @@ private slots:
         QCOMPARE(breaks(series), breaksBefore + 1);
         QCOMPARE(series.points.last().value, 90.0);
         client.disconnectFromStation(QStringLiteral("done"));
+    }
+
+    // Parity ruling C13: the Performance Overlay in a remote window shows
+    // the Core's drops after this computer's counters, each group headed;
+    // a missing reading is "-", never 0; no current readings say so.
+    void performanceOverlayShowsTheCoresDrops()
+    {
+        RemoteTelemetryView view;
+        QCOMPARE(RemoteTelemetryController::performanceOverlayLines(view),
+                 QStringList{QStringLiteral("the Core: no current readings")});
+        view.state = RemoteTelemetryView::State::Stale;
+        QCOMPARE(RemoteTelemetryController::performanceOverlayLines(view).size(), 1);
+
+        view.state = RemoteTelemetryView::State::Current;
+        view.radio.packetLossPercent = 0.25;
+        view.coreAudio.sourceDropsPerSecond = 1.5;
+        QCOMPARE(RemoteTelemetryController::performanceOverlayLines(view),
+                 (QStringList{QStringLiteral("the Core:"),
+                              QStringLiteral("radio  lost 0.25% (5 s) gap - ms"),
+                              QStringLiteral("audio  drops 1.5/s not sent -/s")}));
+        view.radio.packetGapMs = 12.0;
+        view.radio.hl2SequenceGaps = 3;
+        view.coreAudio.sendRejectedPerSecond = 0.0;
+        QCOMPARE(RemoteTelemetryController::performanceOverlayLines(view),
+                 (QStringList{QStringLiteral("the Core:"),
+                              QStringLiteral("radio  lost 0.25% (5 s) gap 12.0 ms"),
+                              QStringLiteral("radio  sequence gaps 3"),
+                              QStringLiteral("audio  drops 1.5/s not sent 0.0/s")}));
+
+        SpectrumWidget spectrum;
+        const QStringList local = spectrum.perfOverlayLines();
+        QVERIFY(!local.isEmpty());
+        QVERIFY(!local.contains(QStringLiteral("this computer:")));
+        spectrum.setCorePerfLinesProvider(
+            [view] { return RemoteTelemetryController::performanceOverlayLines(view); });
+        const QStringList remote = spectrum.perfOverlayLines();
+        QCOMPARE(remote.first(), QStringLiteral("this computer:"));
+        QCOMPARE(remote.mid(1, local.size()).size(), local.size());
+        QCOMPARE(remote.mid(1 + local.size()),
+                 RemoteTelemetryController::performanceOverlayLines(view));
     }
 };
 

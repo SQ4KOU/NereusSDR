@@ -1,5 +1,6 @@
 // no-port-check: NereusSDR-original Core relay watch integration tests.
 #include <QtTest>
+#include <QScopeGuard>
 
 #include "core/AppSettings.h"
 #include "core/safety/RemoteTxWatchdog.h"
@@ -544,9 +545,16 @@ private slots:
                                            1024 * 1024, StationServer::kMaxIncomingMessageBytes,
                                            station.certificatePemPath(), station.privateKeyPemPath()));
         QTRY_VERIFY(client->isOpen() && primary->isOpen());
+        // The grant's expiry is read against a clock this test moves, so the
+        // expiry below is the event the test waits on, not eight seconds of
+        // a loaded machine's time.
+        qint64 nowSecs = QDateTime::currentSecsSinceEpoch();
+        DataChannelTransport::setWatchRelayClockForTest([&nowSecs]() { return nowSecs; });
+        const auto restoreClock = qScopeGuard(
+            []() { DataChannelTransport::setWatchRelayClockForTest({}); });
         DataChannelTransport::WatchRelayGrant grant{
             QUrl(QStringLiteral("wss://relay.example/v1/relay")),
-            QStringLiteral("core-watch"), QDateTime::currentSecsSinceEpoch() + 8, primaryLeg};
+            QStringLiteral("core-watch"), nowSecs + 8, primaryLeg};
         QVERIFY(primary->setWatchRelayGrant(grant));
         DataChannelTransport::setSelectedPathOverrideForTest(
             [primary](const DataChannelTransport* channel) -> std::optional<MediaIcePath> {
@@ -681,22 +689,32 @@ private slots:
             return -1; // no descriptor yet
         };
         QCOMPARE(lastWatchVersion(), 1);
-        station.setHeartbeatIntervalMs(100);
-        QTRY_VERIFY_WITH_TIMEOUT(!primary->canOpenWatchRelay(), 10000);
+        // The grant expires: no new watch may open, and the route the
+        // attached watch uses stays.
+        nowSecs = grant.expires;
+        QVERIFY(!primary->canOpenWatchRelay());
         QVERIFY(primary->hasWatchRelayRoute());
-        QTest::qWait(300); // several capability publication ticks after expiry
-        QCOMPARE(lastWatchVersion(), 1);
+        // A capability publication after the expiry (the heartbeat's, run
+        // here at once) keeps the watch path advertised for the live
+        // binding. The 805 answer, on the same channel after it, is the
+        // barrier: anything the publication sent has arrived by then.
+        station.setRemoteTransmitAllowed(true);
         sendPrimary(SessionMessages::commandInvoke(QByteArrayLiteral("tx.watchRelay"), 805,
             {{0, "offer", MirrorWireKind::Utf8, offer}}));
         QTRY_VERIFY(latest(SessionMessageKind::CommandResult, 805).commandId == 805);
         QCOMPARE(latest(SessionMessageKind::CommandResult, 805).reason,
                  QStringLiteral("The Core cannot relay the transmit watch connection for this device."));
+        QCOMPARE(lastWatchVersion(), 1);
         watchdog->setKeyed(record.id, true, 10);
         QVERIFY(watch.sendBinary(RemoteTxWatchdog::channelKeepalive(2, 10)));
         QTRY_COMPARE(heard.size(), 2);
         QVERIFY(watch.isOpen());
         watchdog->setKeyed(record.id, false);
         primaryLeg->close();
+        // The route is gone; the next publication (run here at once, as the
+        // heartbeat would) withdraws the watch path.
+        QTRY_VERIFY(!primary->hasWatchRelayRoute());
+        station.setRemoteTransmitAllowed(true);
         QTRY_COMPARE(lastWatchVersion(), 0);
         QVERIFY(watch.sendBinary(RemoteTxWatchdog::channelKeepalive(2, 9)));
         QTRY_VERIFY(!watch.isOpen());

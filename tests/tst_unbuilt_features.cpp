@@ -753,10 +753,8 @@ QMap<F, QList<Surface>> surfaces()
                                   named(QStringLiteral("fmRxDeviationCombo"))),
                            onPage(QStringLiteral("FM"), QStringLiteral("de-emphasis"),
                                   named(QStringLiteral("fmDeEmphasisButton")))};
-    // Fix wave I3: the review's unfinished controls (plan rows export-radio,
-    // fm-tx, fm-repeater and ddc-routing).
-    map[F::ExportRadio] = {onPage(QStringLiteral("Export / Import"), QStringLiteral("Export Connected Radio"),
-                                  named(QStringLiteral("exportRadioGroup")))};
+    // Fix wave I3: the review's unfinished controls (plan rows fm-tx,
+    // fm-repeater and ddc-routing; export-radio is built since 2026-09-28).
     const auto flagButton = [](const QString& name) {
         // The FM controls sit on the flag's FM mode page, not shown in USB:
         // the control's own hidden flag is the surface.

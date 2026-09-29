@@ -263,7 +263,7 @@
         {
             "kind": "i64",
             "name": "transmitSettingsVersion",
-            "value": 9
+            "value": 10
         },
         {
             "kind": "i64",
@@ -283,7 +283,7 @@
         {
             "kind": "i64",
             "name": "recordStreamVersion",
-            "value": 1
+            "value": 2
         },
         {
             "kind": "i64",
@@ -313,7 +313,7 @@
         {
             "kind": "i64",
             "name": "stationFreedvVersion",
-            "value": 1
+            "value": 2
         },
         {
             "kind": "i64",
@@ -368,7 +368,7 @@
         {
             "kind": "i64",
             "name": "txReadingsVersion",
-            "value": 2
+            "value": 3
         },
         {
             "kind": "i64",
@@ -418,6 +418,16 @@
         {
             "kind": "i64",
             "name": "radioAntennaRowsVersion",
+            "value": 1
+        },
+        {
+            "kind": "i64",
+            "name": "vaxVersion",
+            "value": 1
+        },
+        {
+            "kind": "i64",
+            "name": "txEqCurveVersion",
             "value": 1
         },
         {
@@ -2420,7 +2430,7 @@
         "lanAnnouncementMaxBytes": {
             "source": "kStationLanMaxSchema2DatagramBytes",
             "unit": "bytes",
-            "value": 480
+            "value": 481
         },
         "maxDeviceSessions": {
             "source": "StationServer::kMaxDeviceSessions",
@@ -6366,6 +6376,118 @@
                 }
             ]
         },
+        "StationVax": {
+            "properties": [
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "ch1Slices",
+                    "ordinal": 0
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "ch2Slices",
+                    "ordinal": 1
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "ch3Slices",
+                    "ordinal": 2
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "ch4Slices",
+                    "ordinal": 3
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "ch1RxGain",
+                    "ordinal": 4
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "ch2RxGain",
+                    "ordinal": 5
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "ch3RxGain",
+                    "ordinal": 6
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "ch4RxGain",
+                    "ordinal": 7
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "ch1Muted",
+                    "ordinal": 8
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "ch2Muted",
+                    "ordinal": 9
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "ch3Muted",
+                    "ordinal": 10
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "ch4Muted",
+                    "ordinal": 11
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "ch1Device",
+                    "ordinal": 12
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "ch2Device",
+                    "ordinal": 13
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "ch3Device",
+                    "ordinal": 14
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "ch4Device",
+                    "ordinal": 15
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "txSlice",
+                    "ordinal": 16
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "txGain",
+                    "ordinal": 17
+                }
+            ]
+        },
         "StepAttenuatorFacade": {
             "properties": [
                 {
@@ -7005,6 +7127,18 @@
                     "kind": "bool",
                     "name": "voxEnabled",
                     "ordinal": 85
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "micMuted",
+                    "ordinal": 86
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "txEqCurve",
+                    "ordinal": 87
                 }
             ]
         },
@@ -7231,6 +7365,48 @@
                     "kind": "f64",
                     "name": "reflectedAdcVolts",
                     "ordinal": 36
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "eqDb",
+                    "ordinal": 37
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "levelerDb",
+                    "ordinal": 38
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "levelerGainDb",
+                    "ordinal": 39
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "cfcDb",
+                    "ordinal": 40
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "cfcGainDb",
+                    "ordinal": 41
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "alcGainDb",
+                    "ordinal": 42
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "alcGroupDb",
+                    "ordinal": 43
                 }
             ]
         },
@@ -7449,6 +7625,10 @@
             "key": "txState"
         },
         {
+            "class": "StationVax",
+            "key": "vax"
+        },
+        {
             "class": "StationCatalog",
             "key": "catalog"
         },
@@ -7595,7 +7775,9 @@
             "Nb",
             "Snb",
             "Rade",
-            "filters/"
+            "filters/",
+            "DisplayGridMax_",
+            "DisplayGridMin_"
         ]
     },
     "telemetry": {

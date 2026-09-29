@@ -50,6 +50,9 @@
 //   2026-09-27 - J.J. Boyd (KG4VCF). iPhone plan Task 22 / parity Task 20:
 //                refreshFreedvReporterAvailability. AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-28 - J.J. Boyd (KG4VCF). Parity Task 25: the container filter
+//                and band-stack right-clicks. AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 
 //=================================================================
@@ -204,6 +207,12 @@ class MainWindow : public QMainWindow {
     Q_OBJECT
 
 public:
+    /// The preset a container's filter right-click edits, or -1 when the
+    /// slice's filter is none of its mode's presets.
+    static int containerFilterContextSlot(int index, int activePreset, int presetCount);
+    /// What a container's band-stack right-click says while band stacking
+    /// is not built.
+    static QString containerBandStackReason();
     enum class ConnectionStartup { Automatic, Deferred };
     explicit MainWindow(QWidget* parent = nullptr);
 
@@ -850,6 +859,11 @@ private slots:
     SliceModel* containerSlice(const class ContainerWidget* container) const;
     void onContainerModeClicked(class ContainerWidget* container, int index);
     void onContainerFilterClicked(class ContainerWidget* container, int index);
+    /// A container's filter right-click: edit or reset that preset, as the
+    /// VFO flag's and RX applet's filter buttons offer. `index` -1 is the
+    /// VFO display's, which means the slice's current preset.
+    void onContainerFilterContext(class ContainerWidget* container, int index);
+
     void onContainerAntennaSelected(class ContainerWidget* container, int index);
     void onContainerTuneStepSelected(class ContainerWidget* container, int index);
     void onContainerFrequencyStep(class ContainerWidget* container, int64_t deltaHz);

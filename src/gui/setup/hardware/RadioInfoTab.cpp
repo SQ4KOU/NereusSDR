@@ -24,6 +24,10 @@
 //   2026-09-25 - Receiver and transmit gaps plan, Task 5: the support info's
 //                 top sample rate is the protocol's, not the board row's.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - Parity ruling C4: a remote window's rate change goes to
+//                 every one of its receivers, as a local window's live
+//                 change does. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 //   2026-09-28 - R-R3-49 / R-IOS-18: the identity text and the support
 //                 info come from radioInfoFacts, which the Core's Setup
 //                 description publishes too; each readout and the copy
@@ -88,6 +92,8 @@
 #include "gui/ComboStyle.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
+
+#include <algorithm>
 
 #include <QCheckBox>
 #include <QClipboard>
@@ -320,19 +326,26 @@ void RadioInfoTab::onSampleRateChanged(int index)
         // unreachable from the UI; codex post-merge review flagged as P2.
         //
         // R-R3-46: a remote window's radio is the Core's. The rate saved
-        // above stays the Core's default for that radio (its next connect);
-        // the Core's first receiver changes now, without a reconnect,
-        // through the same request the receiver's own rate menu sends.
+        // above stays the Core's default for that radio (its next connect).
+        // Parity ruling C4: every one of this window's receivers changes
+        // now, without a reconnect, as a local window's live change moves
+        // every receiver, each through the request the receiver's own rate
+        // menu sends (lowest id first). On Protocol 1 the first request
+        // already moves the whole radio and the rest find it at the rate;
+        // on Protocol 2 each moves its receiver. Another device's
+        // receivers are that device's to change (the several-devices
+        // design, ruling 5.9), and a change that disturbs one is asked of
+        // it by the Core's confirm step.
         if (m_model && !m_model->ownsLocalDsp()) {
-            const QList<SliceModel*> slices = m_model->slices();
-            SliceModel* first = nullptr;
-            for (SliceModel* slice : slices) {
-                if (slice && (first == nullptr || slice->sliceIndex() < first->sliceIndex())) {
-                    first = slice;
+            QList<int> ids;
+            for (SliceModel* slice : m_model->slices()) {
+                if (slice != nullptr) {
+                    ids.append(slice->sliceIndex());
                 }
             }
-            if (first != nullptr) {
-                m_model->requestSliceSampleRate(first->sliceIndex(), rate);
+            std::sort(ids.begin(), ids.end());
+            for (int id : std::as_const(ids)) {
+                m_model->requestSliceSampleRate(id, rate);
             }
         } else if (m_model) {
             // R-R3-39: the change runs on the receive lane; this returns at

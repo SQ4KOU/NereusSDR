@@ -371,6 +371,9 @@ ConnectionTargetRow GuiConnectionController::lanCoreRow(const StationLanEndpoint
         // or by its name when it sends none.
         tr("%1 (advertised)").arg(advertised.displayName()),
         advertised.radioConnected ? tr("%1 (advertised online)").arg(advertised.radioName)
+            // iPhone app plan Task 25 (R-IOS-16): a Core waiting for a radio
+            // to be chosen says so, as the phone's list does.
+            : advertised.radio == StationLanRadio::Waiting ? tr("Waiting for a radio")
             : tr("%1 (advertised offline)").arg(advertised.radioName.isEmpty() ? tr("Radio") : advertised.radioName),
         endpointText(endpoint.url()), QString(),
         matches.size() < 2, false, false};

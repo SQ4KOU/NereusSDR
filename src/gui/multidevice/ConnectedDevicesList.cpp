@@ -106,6 +106,12 @@ QStringList ConnectedDevicesList::rowFor(const RemoteConnectedDevice& device, bo
             slices.isEmpty() ? QStringLiteral("none") : slices.join(QStringLiteral(", ")), tx};
 }
 
+void ConnectedDevicesList::setNoCoreText(const QString& text)
+{
+    m_noCoreText = text;
+    rebuild();
+}
+
 QString ConnectedDevicesList::notSentText()
 {
     return QStringLiteral("The Core has not said who is connected. It says so to a computer "
@@ -116,13 +122,16 @@ void ConnectedDevicesList::rebuild()
 {
     m_tree->clear();
     if (!m_devices) {
-        m_empty->setText(QStringLiteral("Connect to the Core to see who is connected."));
+        m_empty->setText(m_noCoreText.isEmpty()
+                             ? QStringLiteral("Connect to the Core to see who is connected.")
+                             : m_noCoreText);
         m_empty->setVisible(true);
         return;
     }
     const QList<RemoteConnectedDevice> connected = m_devices->connectedDevices();
     if (connected.isEmpty()) {
-        m_empty->setText(ConnectedDevicesList::notSentText());
+        m_empty->setText(m_noCoreText.isEmpty() ? ConnectedDevicesList::notSentText()
+                                                : m_noCoreText);
         m_empty->setVisible(true);
         return;
     }

@@ -312,6 +312,9 @@ constexpr Entry kEntries[] = {
     // iPhone app Task 71: the device count appended to schema 2.
     {"Station LAN announcement has an invalid device count.", nullptr,
      "A Core announcement on this network could not be read, so that Core is not listed."},
+    // iPhone app plan Task 25: the radio state appended after the count.
+    {"Station LAN announcement has an invalid radio state.", nullptr,
+     "A Core announcement on this network could not be read, so that Core is not listed."},
     {"Station LAN announcement schema 1 cannot carry the Core's identity.", nullptr,
      "A Core announcement on this network could not be read, so that Core is not listed."},
     {"Station LAN announcement is too large.", nullptr,

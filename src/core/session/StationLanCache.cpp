@@ -75,6 +75,13 @@ bool StationLanCache::ingest(const QByteArray& bytes, const QHostAddress& source
             merged.label = existing.announcement.label;
             merged.pairing = existing.announcement.pairing;
             merged.devicesConnected = existing.announcement.devicesConnected;
+            // iPhone app plan Task 25 (R-IOS-16): the radio state it last
+            // sent, while schema 1's Radio connected agrees with it; when it
+            // no longer does, the state is not known.
+            const std::optional<StationLanRadio> known = existing.announcement.radio;
+            if (known && ((*known == StationLanRadio::Connected) == merged.radioConnected)) {
+                merged.radio = known;
+            }
         }
         const bool changed = existing.announcement != merged;
         existing.announcement = std::move(merged);

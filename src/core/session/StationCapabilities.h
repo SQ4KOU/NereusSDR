@@ -159,6 +159,9 @@
 //   2026-09-27 - R-IOS-13 / R-R3-49: txModMonitorVersion, the AM Mod
 //                Monitor's readings. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-28 - R-IOS-13 / R-R3-49: txEqCurveVersion, the read-only TX
+//                EQ curve on `transmit`. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -231,6 +234,19 @@ struct StationCapabilities {
     /// One-band Alex edits bound to the connected radio's canonical MAC.
     /// Optional at minor 11 for a peer declaring radioAntennaRows 1.
     int radioAntennaRowsVersion = 0;
+    /// iPhone app plan Task 25 (R-IOS-18): 1 means the Core sends the `vax`
+    /// object (the station computer's VAX channels) and keeps the
+    /// `vaxLevels` record stream. Sent last in the minor-11 block, only to a
+    /// peer whose hello declared vax 1 (vaxEntry), so every other peer's
+    /// capabilities are today's.
+    bool vaxEntry = false;
+    int vaxVersion = 0;
+    /// R-IOS-13 / R-R3-49: 1 means `transmit` carries txEqCurve, the TX EQ
+    /// parametric curve the Core derives from txEqParaEqData as documented,
+    /// read-only JSON. Sent at minor 11 only to a peer whose hello declared
+    /// txEqCurve 1, after radioAntennaRowsVersion; that peer alone gets the
+    /// property. 0 (absent): the peer sees today's wire.
+    int txEqCurveVersion = 0;
     /// R-R3-47 / R-R3-22: 1 means the Core mirrors its Power Genius XL
     /// status as the read-only `amplifier` object. Sent after
     /// radioHardwareVersion in the same minor-11 block. 0: a window shows
@@ -314,6 +330,7 @@ struct StationCapabilities {
     /// same minor-11 block, after displayExtrasVersion. 0: a window's
     /// transmit settings stay greyed and say the Core cannot take them.
     /// 9 also offers validated BandPlanRegion edits and the TX passband guard.
+    /// 10 (iPhone app plan Task 40) adds `transmit.micMuted`, the mic mute.
     int transmitSettingsVersion = 0;
     /// R-IOS-27, R-IOS-06: 1 means the Core takes `slice.selectBand`, which
     /// runs the desktop's band button on a slice (its saved frequency, mode
@@ -508,6 +525,9 @@ struct StationCapabilities {
     /// after txStateVersion and only with it.
     /// 2 also carries Core-scaled PA raw forward watts and forward/reverse
     /// voltage (outbound Float64), following the same raw sample cadence.
+    /// 3 also carries the seven stage readings a local window's container
+    /// meters show (eqDb, levelerDb, levelerGainDb, cfcDb, cfcGainDb,
+    /// alcGainDb, alcGroupDb; A9), read with the other meters.
     int txReadingsVersion = 0;
 
     /// Whether the DAEMON currently holds a live radio connection. A

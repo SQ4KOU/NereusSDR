@@ -90,6 +90,11 @@
 //                                    txMonitorAudioVersion, monitor-audio
 //                                    and monitor-audio-context. AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  R-IOS-13 / R-R3-49: the capture
+//                                    declares txEqCurve, so
+//                                    txEqCurveVersion and transmit's
+//                                    txEqCurve are captured. AI-assisted
+//                                    via Anthropic Claude Code.
 // =================================================================
 
 #include "LinkSurface.h"
@@ -144,6 +149,7 @@
 #include "core/session/StationDevicesFacade.h"
 #include "core/session/ConnectedDevicesFacade.h"
 #include "core/session/SliceMarker.h"
+#include "core/session/StationVaxFacade.h"
 #include "core/session/TransmitStateFacade.h"
 #include "core/setup/SetupDescriptionService.h"
 #include "core/SliceOwnership.h"
@@ -535,14 +541,17 @@ std::optional<QList<QByteArray>> liveSessionWire(
     // `devices` object (iPhone app Task 13) is among what the Core sends;
     // and sessionHolder (iPhone app Task 71), so `connectedDevices` and
     // sessionHolderVersion are too; and remoteTx (iPhone app plan Task 34),
-    // so remoteTxVersion is.
+    // so remoteTxVersion is; and vax (iPhone app plan Task 25), so the
+    // `vax` object and vaxVersion are.
     clientEnd->sendText(SessionMessages::encode(SessionMessages::hello(
         kSessionProtocolMajor, kSessionProtocolMinor, 0, QStringLiteral("link-surface"),
         {kSessionProtocolMajor}, {{"deviceAuth", 1}, {"sessionHolder", 1}, {"remoteTx", 1},
                                   {"settingsHygiene", 1}, {"coreBuildInfo", 1},
                                   {"settingsBackup", 1},
                                   {"setupDescription", 1}, {"miniDisplay", 1},
-                                  {"radioAntennaRows", 1}})));
+                                  {"radioAntennaRows", 1},
+                                  // iPhone app plan Task 25: the `vax` object.
+                                  {"vax", 1}, {"txEqCurve", 1}})));
     clientEnd->sendText(SessionMessages::encode(SessionMessages::authRequest({}, block)));
 
     // The loopback delivers on later event-loop turns, as a socket would.
@@ -579,6 +588,10 @@ QJsonArray captureCapabilities()
     caps.setupDescriptionVersion = 1;
     caps.miniDisplayVersion = 1;
     caps.radioAntennaRowsVersion = 1;
+    // iPhone app plan Task 25: sent to a peer that declared vax.
+    caps.vaxEntry = true;
+    // R-IOS-13 / R-R3-49: sent to a peer that declared txEqCurve.
+    caps.txEqCurveVersion = 1;
 
     // The values come from a live station with every feature a Core can
     // switch on: media, telemetry, an enforced display budget with its
@@ -1656,7 +1669,8 @@ QList<const QMetaObject*> LinkSurface::mirroredMetaObjects()
             &SpotSourceHost::staticMetaObject,
             &ConnectedDevicesFacade::staticMetaObject,
             &SliceMarker::staticMetaObject,
-            &TransmitState::staticMetaObject};
+            &TransmitState::staticMetaObject,
+            &StationVax::staticMetaObject};
 }
 
 QJsonObject LinkSurface::capture()

@@ -36,6 +36,13 @@
 //                 Display Cal and Volts/Amps Calibration follow the transmit
 //                 settings gate instead of the transmit permission.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - Volts/Amps Calibration takes Thetis's ranges and the
+//                 model's defaults (btnAmpDefault), and is disabled with its
+//                 reason where it cannot change the PA current reading.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - 6 m LNA spins take Thetis's 0..25 dB, step 1 and 13 dB;
+//                 Rx2's is disabled with its reason. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 //   2026-09-28 - R-R3-49 (found bug): TX Display Cal holds Thetis's
 //                 -100..100 dB (was -50..50) and carries its Setup
 //                 description id (R-IOS-18). J.J. Boyd (KG4VCF), AI-assisted
@@ -268,13 +275,26 @@ CalibrationTab::CalibrationTab(RadioModel* model, QWidget* parent)
     levelCalForm->addRow(tr("Level (dBm):"), m_levelCalLevelSpin);
 
     // Source: setup.cs:17243-17248 ud6mLNAGainOffset -> console.RX6mGainOffset_RX1 [@501e3f5]
-    m_rx1LnaSpin = makeSpinBox(-30.0, 30.0, 0.0, 0.1, 1, levelCalGroup);
+    // From Thetis setup.designer.cs:12089-12116 [v2.10.3.15]: 0..25 dB,
+    // step 1, one decimal, 13 dB.
+    m_rx1LnaSpin = makeSpinBox(0.0, 25.0, 13.0, 1.0, 1, levelCalGroup);
+    m_rx1LnaSpin->setObjectName(QStringLiteral("rx1SixMeterLnaSpin"));
     m_rx1LnaSpin->setSuffix(tr(" dB"));
     levelCalForm->addRow(tr("Rx1 6m LNA:"), m_rx1LnaSpin);
 
     // Source: setup.cs:18315-18317 ud6mRx2LNAGainOffset -> console.RX6mGainOffset_RX2 [@501e3f5]
-    m_rx2LnaSpin = makeSpinBox(-30.0, 30.0, 0.0, 0.1, 1, levelCalGroup);
+    // From Thetis setup.designer.cs:12047-12074 [v2.10.3.15]: 0..25 dB,
+    // step 1, one decimal, 13 dB. Thetis applies it to RX2's own receive
+    // calibration (RXCalibrationOffset(2), console.cs:21068-21075 //DH1KLM); NereusSDR
+    // has one receive calibration for the station, which the Rx1 value
+    // enters, so this one is shown disabled with the reason.
+    m_rx2LnaSpin = makeSpinBox(0.0, 25.0, 13.0, 1.0, 1, levelCalGroup);
+    m_rx2LnaSpin->setObjectName(QStringLiteral("rx2SixMeterLnaSpin"));
     m_rx2LnaSpin->setSuffix(tr(" dB"));
+    m_rx2LnaSpin->setEnabled(false);
+    m_rx2LnaSpin->setToolTip(
+        tr("Not used yet: every receiver shares the Rx1 calibration until "
+           "each receiver has a calibration of its own."));
     levelCalForm->addRow(tr("Rx2 6m LNA:"), m_rx2LnaSpin);
 
     auto* levelBtnRow = new QHBoxLayout;
@@ -379,7 +399,11 @@ CalibrationTab::CalibrationTab(RadioModel* model, QWidget* parent)
 
     // Source: Thetis udAmpSens setup.designer.cs:11672-11677 [v2.10.3.13];
     //         setup.cs:24255 udAmpSens_ValueChanged -> console.AmpSens.
-    m_ampSensSpin = makeSpinBox(-100.0, 100.0, 1.0, 0.1, 4, vaCalGroup);
+    //         Range from udAmpSens setup.designer.cs:11782-11807 [v2.10.3.15]:
+    //         0.001..5000, step 1. Three decimals (Thetis shows one) so the
+    //         ANAN-G2 defaults 66.23 and 0.001 show as they apply.
+    m_ampSensSpin = makeSpinBox(0.001, 5000.0, 120.0, 1.0, 3, vaCalGroup);
+    m_ampSensSpin->setRange(0.001, 5000.0);
     m_ampSensSpin->setToolTip(
         tr("Amp sensitivity for PA volts/amps calculation. Hardware-specific constant."));
     vaCalForm->addRow(tr("Sensitivity:"), m_ampSensSpin);
@@ -387,7 +411,9 @@ CalibrationTab::CalibrationTab(RadioModel* model, QWidget* parent)
     // Source: Thetis udAmpVoff setup.designer.cs:11672-11677 [v2.10.3.13];
     //         setup.cs:24247 udAmpVoff_ValueChanged -> console.AmpVoff.
     //         Default upstream is 360.0f (console.cs:24893 _amp_voff).
-    m_ampVoffSpin = makeSpinBox(-10.0, 10.0, 0.0, 0.01, 4, vaCalGroup);
+    //         Range from udAmpVoff setup.designer.cs:11812-11837 [v2.10.3.15]:
+    //         0..5000, step 1.
+    m_ampVoffSpin = makeSpinBox(0.0, 5000.0, 360.0, 1.0, 3, vaCalGroup);
     m_ampVoffSpin->setToolTip(
         tr("Amp voltage offset for PA volts/amps calculation. Hardware-specific constant."));
     vaCalForm->addRow(tr("Offset:"), m_ampVoffSpin);
@@ -521,9 +547,9 @@ CalibrationTab::CalibrationTab(RadioModel* model, QWidget* parent)
     });
     connect(m_ampDefaultBtn, &QPushButton::clicked, this, [this]() {
         if (!m_calCtrl) { return; }
-        // Restore to model defaults (1.0 sensitivity, 0.0 offset)
-        m_calCtrl->setPaCurrentSensitivity(1.0);
-        m_calCtrl->setPaCurrentOffset(0.0);
+        // From Thetis setup.cs:24346-24352 [v2.10.3.15] btnAmpDefault_Click:
+        // the radio model's factory values (GetDefaultVoltCalibration).
+        m_calCtrl->restoreDefaultVoltCalibration();
         m_calCtrl->save();
         syncFromController();
         emit settingChanged(QStringLiteral("cal/paDefaultRestored"), true);
@@ -602,8 +628,26 @@ void CalibrationTab::syncFromController()
 
 // -- populate ------------------------------------------------------------------
 
-void CalibrationTab::populate(const RadioInfo& info, const BoardCapabilities& /*caps*/)
+void CalibrationTab::populate(const RadioInfo& info, const BoardCapabilities& caps)
 {
+    // Volts/Amps Calibration changes the PA current reading only on a radio
+    // with a current sensor (Thetis HasAmps), and not on the HL2, whose
+    // reading uses a fixed sense chain (mi0bot convertToAmps, MI0BOT: HL2
+    // current). Elsewhere the values are shown, disabled, with the reason.
+    // The transmit-settings gate (setTransmitCalibrationPermitted) disables
+    // the group around them on its own.
+    QString ampsReason;
+    if (!caps.hasPaAmpsTelemetry) {
+        ampsReason = tr("This radio does not report PA current.");
+    } else if (m_model && m_model->hardwareProfile().model == HPSDRModel::HERMESLITE) {
+        ampsReason = tr("The Hermes Lite 2 reads its PA current with fixed scaling. "
+                        "These values do not change it.");
+    }
+    const bool ampsCalApplies = ampsReason.isEmpty();
+    HardwareTransmitGate::apply(m_ampSensSpin, ampsCalApplies, ampsReason);
+    HardwareTransmitGate::apply(m_ampVoffSpin, ampsCalApplies, ampsReason);
+    HardwareTransmitGate::apply(m_ampDefaultBtn, ampsCalApplies, ampsReason);
+
     // R-R3-46: a remote window has no connect of its own to load the
     // controller, so it reads the Core's radio's saved calibration here
     // (reading only: nothing is written back until an edit).

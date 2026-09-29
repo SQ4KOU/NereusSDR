@@ -47,6 +47,10 @@
 //                disabled with a reason. The waterfall levels, palette, low
 //                colour and gradient stay the window's own. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - Parity ruling C12: Grid & Scales' per-band dB Max and
+//                dB Min show the Core's value as it arrives in a remote
+//                window. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 
 //=================================================================
@@ -447,7 +451,7 @@ void SpectrumDefaultsPage::buildUI()
         "NereusSDR smooth-default profile: Clarity Blue palette, "
         "log-recursive averaging, a white trace without fill, waterfall AGC "
         "on and a 30 ms waterfall update period. FFT size, frequency, band "
-        "stack, and per-band grid slots are not affected."));
+        "stack, and per-band grid ranges are not affected."));
     connect(resetBtn, &QPushButton::clicked, this, [this]() {
         const auto rc = QMessageBox::question(
             this,
@@ -456,7 +460,7 @@ void SpectrumDefaultsPage::buildUI()
                 "This will overwrite your current Spectrum and Waterfall "
                 "display settings with the NereusSDR smooth-default profile.\n\n"
                 "Your FFT size, frequency, band stack, and per-band grid "
-                "slots are NOT affected.\n\n"
+                "ranges are NOT affected.\n\n"
                 "Continue?"),
             QMessageBox::Yes | QMessageBox::No,
             QMessageBox::No);
@@ -631,7 +635,7 @@ void SpectrumDefaultsPage::buildUI()
         "FFT window function. Rectangular has the narrowest main lobe but "
         "the worst sidelobes. Blackman-Harris (4T or 7T) gives strong "
         "sidelobe rejection. Flat-Top is best for amplitude calibration. "
-        "Kaiser is parameterized (KaiserPi shape parameter)."));
+        "Kaiser is parameterized (Kaiser Pi shape parameter)."));
     fftGrid->addWidget(windowPrefix,  3, 0);
     fftGrid->addWidget(m_windowCombo, 3, 1, 1, 3);  // span cols 1-3
 
@@ -657,7 +661,7 @@ void SpectrumDefaultsPage::buildUI()
         "Auto-zoom override: target a constant Hz/bin regardless of zoom. "
         "Set to 0 (\"Off\") to use the default bins-in-window behavior "
         "(FFT replans on zoom). When > 0, the FFT size is fixed at "
-        "sampleRate / target so the trace delivers the requested resolution "
+        "sample rate / target so the trace delivers the requested resolution "
         "at any zoom level, which is handy for hunting narrow signals (CW, digital). "
         "Floor at the FFT slider value still applies (slider sets the "
         "minimum FFT size)."));
@@ -871,10 +875,11 @@ void SpectrumDefaultsPage::buildUI()
     m_averagingTimeSpin->setSingleStep(ControlRanges::kDisplayAvgTimeStepMs);
     m_averagingTimeSpin->setSuffix(QStringLiteral(" ms"));
     m_averagingTimeSpin->setValue(ControlRanges::kDisplaySpectrumAvgTimeDefaultMs);
+    // The alpha formula is Thetis's.
     m_averagingTimeSpin->setToolTip(QStringLiteral(
         "Spectrum averaging time constant. Larger = heavier smoothing, "
         "slower response. Translates to a frame-by-frame alpha via "
-        "α = exp(−1 / (fps × τ)) per Thetis."));
+        "α = exp(−1 / (fps × τ))."));
     connect(m_averagingTimeSpin, qOverload<int>(&QSpinBox::valueChanged),
             this, [this](int ms) {
         if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
@@ -1920,10 +1925,11 @@ void WaterfallDefaultsPage::buildUI()
     m_waterfallAvgTimeSpin->setSingleStep(ControlRanges::kDisplayAvgTimeStepMs);
     m_waterfallAvgTimeSpin->setSuffix(QStringLiteral(" ms"));
     m_waterfallAvgTimeSpin->setValue(ControlRanges::kDisplayWaterfallAvgTimeDefaultMs);
+    // The alpha formula is Thetis's.
     m_waterfallAvgTimeSpin->setToolTip(QStringLiteral(
         "Waterfall averaging time constant. Independent from the spectrum "
         "averaging time. Larger = heavier smoothing. Translates to a "
-        "frame-by-frame alpha via α = exp(−1 / (fps × τ)) per Thetis."));
+        "frame-by-frame alpha via α = exp(−1 / (fps × τ))."));
     connect(m_waterfallAvgTimeSpin, qOverload<int>(&QSpinBox::valueChanged),
             this, [this](int ms) {
         if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
@@ -2281,6 +2287,16 @@ void GridScalesPage::buildUI()
     if (auto* pan = firstPan(model())) {
         connect(pan, &PanadapterModel::bandChanged,
                 this, [this, pan](Band) { applyBandSlot(pan); });
+        // Parity ruling C12: in a remote window the per-band values are the
+        // Core's; when one arrives (or a whole snapshot) the spinboxes show
+        // it. The pan has re-read the band before this signal.
+        connect(model(), &RadioModel::stationSettingChanged, this,
+                [this, pan](const QString& key) {
+            if (key.isEmpty() || key.startsWith(QLatin1String("DisplayGridMax_"))
+                || key.startsWith(QLatin1String("DisplayGridMin_"))) {
+                applyBandSlot(pan);
+            }
+        });
     }
 
     // --- Section: Labels ---
@@ -2880,11 +2896,12 @@ void TxDisplayPage::buildUI()
     m_txPanAvTimeSpin->setRange(1, 9999);
     m_txPanAvTimeSpin->setSingleStep(1);
     m_txPanAvTimeSpin->setSuffix(QStringLiteral(" ms"));
+    // Internally divided by 1000 to drive the WDSP exponential
+    // back-multiplier.
     m_txPanAvTimeSpin->setToolTip(QStringLiteral(
         "TX panadapter averaging time constant in milliseconds. Larger "
         "values give smoother traces at the cost of slower response to "
-        "transients. Internally divided by 1000 to drive the WDSP "
-        "exponential back-multiplier."));
+        "transients."));
     panForm->addRow(QStringLiteral("Time:"), m_txPanAvTimeSpin);
 
     // Normalize (Pan) — chkDispTXNormalize.

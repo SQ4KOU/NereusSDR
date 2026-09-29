@@ -28,6 +28,10 @@
 //               web relay's leg (RelayLeg) and its per-connection candidate
 //               sources; the computer's own proxy settings (SystemProxy).
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28: addendum G-127: a drain settles readiness before it
+//               delivers what it collected, so a message that arrives with
+//               the display channel's opening is reported after ready().
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/media/LibDataChannelMediaTransport.h"
@@ -1595,6 +1599,25 @@ void LibDataChannelMediaTransport::drainCallbacks()
         return;
     }
 
+    // G-127: readiness is settled before anything this drain collected is
+    // delivered. Under load one drain can find the display channel just
+    // opened and the first message on it together; delivered first, the
+    // message reached a transport that was not yet ready, so a reply to it
+    // (the traversal echo) was refused and never sent.
+    const bool nowReady = d->peer
+        && d->peer->state() == rtc::PeerConnection::State::Connected
+        && d->display && d->display->isOpen()
+        && d->audio && d->audio->isOpen();
+    if (nowReady && !d->ready) {
+        d->ready = true;
+        emit ready();
+        if (!isCurrentGeneration()) {
+            return;
+        }
+    } else if (!nowReady) {
+        d->ready = false;
+    }
+
     for (const rtc::binary& message : displayMessages) {
         emit displayReceived(toByteArray(message));
         if (!isCurrentGeneration()) {
@@ -1632,23 +1655,6 @@ void LibDataChannelMediaTransport::drainCallbacks()
         if (!isCurrentGeneration()) {
             return;
         }
-    }
-
-    if (!isCurrentGeneration()) {
-        return;
-    }
-    const bool nowReady = d->peer
-        && d->peer->state() == rtc::PeerConnection::State::Connected
-        && d->display && d->display->isOpen()
-        && d->audio && d->audio->isOpen();
-    if (nowReady && !d->ready) {
-        d->ready = true;
-        emit ready();
-        if (!isCurrentGeneration()) {
-            return;
-        }
-    } else if (!nowReady) {
-        d->ready = false;
     }
 }
 

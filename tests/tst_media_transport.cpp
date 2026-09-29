@@ -15,6 +15,11 @@
 // answerer's microphone to the offerer alone. J.J. Boyd (KG4VCF),
 // AI-assisted via Anthropic Claude Code.
 //
+// 2026-09-28: addendum G-127: ready() precedes a message that reaches the
+// answerer together with its display channel's opening, and a reply from
+// that message's handler is taken. J.J. Boyd (KG4VCF), AI-assisted via
+// Anthropic Claude Code.
+//
 // =================================================================
 
 #include "RealtimeTestLoad.h"
@@ -30,11 +35,13 @@
 #include <QRegularExpression>
 #include <QSet>
 #include <QSignalSpy>
+#include <QTimer>
 #include <QtTest>
 
 #include <chrono>
 #include <cmath>
 #include <functional>
+#include <optional>
 #include <thread>
 
 using namespace NereusSDR;
@@ -277,6 +284,7 @@ private slots:
     void stopCancelsOldCallbacksAndRecreates();
     void signalRestartDropsRemainingOldGenerationMedia();
     void deletionFromReceivedSignalIsSafe();
+    void readyPrecedesMessagesThatArriveWithIt();
     void offerDescribesTheRealEncoder_data();
     void offerDescribesTheRealEncoder();
     void answererAcceptsNewAndOldCoreOffers_data();
@@ -1064,6 +1072,78 @@ void TestMediaTransport::deletionFromReceivedSignalIsSafe()
     QTRY_VERIFY_WITH_TIMEOUT(answerer.isNull(), 5000);
 
     offerer.stop();
+}
+
+
+// G-127: a message can reach the answerer's library before the answerer's
+// owner thread has seen its display channel open. Its next drain then finds
+// both. The answerer reports ready first, so whoever handles the message
+// (the traversal echo, or any reply) finds the transport ready and can send.
+// The answerer's one drain timer is held from the end of its gathering until
+// the offerer's message has arrived, which is the interleaving the traversal
+// harness met under load.
+void TestMediaTransport::readyPrecedesMessagesThatArriveWithIt()
+{
+    LibDataChannelMediaTransport offerer;
+    LibDataChannelMediaTransport answerer;
+    wire(offerer, answerer);
+    const QList<QTimer*> drainTimers =
+        answerer.findChildren<QTimer*>(QString(), Qt::FindDirectChildrenOnly);
+    QCOMPARE(drainTimers.size(), 1);
+    QTimer* const answererDrain = drainTimers.constFirst();
+
+    QSignalSpy offerReady(&offerer, &IMediaTransport::ready);
+    QSignalSpy answerReady(&answerer, &IMediaTransport::ready);
+    QSignalSpy echoes(&offerer, &IMediaTransport::displayReceived);
+    bool held = false;
+    connect(&answerer, &IMediaTransport::gatheringComplete, &answerer,
+            [answererDrain, &held] {
+                answererDrain->stop();
+                held = true;
+            });
+    QStringList order;
+    bool readyAtReceipt = false;
+    std::optional<IMediaTransport::DisplaySendResult> echoResult;
+    connect(&answerer, &IMediaTransport::ready, &answerer,
+            [&order] { order << QStringLiteral("ready"); });
+    connect(&answerer, &IMediaTransport::displayReceived, &answerer,
+            [&answerer, &order, &readyAtReceipt, &echoResult](const QByteArray& message) {
+                order << QStringLiteral("display");
+                readyAtReceipt = answerer.isReady();
+                echoResult = answerer.submitDisplay(message);
+            });
+
+    QVERIFY(answerer.start({IMediaTransport::Role::Answerer, kTestAudioSsrc}));
+    QVERIFY(offerer.start({IMediaTransport::Role::Offerer, kTestAudioSsrc}));
+    QTRY_VERIFY_WITH_TIMEOUT(held, 10000);
+    // The offerer becomes ready without the answerer's owner thread: its
+    // display channel opens on the answerer library's acknowledgement.
+    QTRY_COMPARE_WITH_TIMEOUT(offerReady.count(), 1, 10000);
+    QCOMPARE(answerReady.count(), 0);
+
+    // The traversal helper's payload: 60000 bytes, many SCTP fragments.
+    QByteArray message(60000, Qt::Uninitialized);
+    for (qsizetype index = 0; index < message.size(); ++index) {
+        message[index] = static_cast<char>(index * 31 + 7);
+    }
+    QVERIFY(offerer.sendDisplay(message));
+    QTRY_COMPARE_WITH_TIMEOUT(answerer.telemetry()->receivedDisplayPayloadBytes,
+                              quint64(message.size()), 10000);
+    QCOMPARE(answerReady.count(), 0);
+    QVERIFY(order.isEmpty());
+
+    answererDrain->start();
+    QTRY_COMPARE_WITH_TIMEOUT(order.size(), 2, 10000);
+    QCOMPARE(order, (QStringList{QStringLiteral("ready"), QStringLiteral("display")}));
+    QVERIFY(readyAtReceipt);
+    QVERIFY(echoResult.has_value());
+    QVERIFY(*echoResult == IMediaTransport::DisplaySendResult::Sent
+            || *echoResult == IMediaTransport::DisplaySendResult::Queued);
+    QTRY_COMPARE_WITH_TIMEOUT(echoes.count(), 1, 10000);
+    QCOMPARE(echoes.at(0).at(0).toByteArray(), message);
+
+    offerer.stop();
+    answerer.stop();
 }
 
 

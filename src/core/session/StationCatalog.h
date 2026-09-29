@@ -50,6 +50,11 @@
 //               `noiseReduction` key (R-IOS-06, R-IOS-27). J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-28: iPhone app plan Task 25 (D41): the tools' and Radio
+//               items' `offered` follow the radio and the Core (Inputs'
+//               stationTciServer and vaxDevices, the board, the unbuilt
+//               features list). J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/BoardCapabilities.h"
@@ -107,6 +112,14 @@ public:
         /// The Core's own band plan (BandPlanManager::activePlanName()),
         /// the one plan marked `active`.
         QString activeBandPlanName;
+        /// iPhone app plan Task 25 (D41): the Core runs its own station
+        /// TCI server (RadioModel::stationTciController()), so the TCI
+        /// Server tool is offered.
+        bool stationTciServer = false;
+        /// The station computer publishes VAX devices (a Core the desktop
+        /// hosts; a headless Core publishes none, R-R3-44), so the VAX
+        /// Audio tool is offered.
+        bool vaxDevices = false;
     };
 
     explicit StationCatalog(QObject* parent = nullptr);

@@ -2965,6 +2965,10 @@ target_compile_definitions(tst_compression_reading PRIVATE NEREUS_BUILD_TESTS)
 # Derived from Thetis clsHardwareSpecific.cs:395-411 + console.cs:1991-2001
 # + console.cs:21040 RXOffset(rx) [v2.10.3.13].
 nereus_add_test(tst_rx_meter_offset)
+# The RX1 6 m LNA gain offset in the station's receive calibration
+# (Thetis txtVFOAFreq_LostFocus / RXCalibrationOffset).
+nereus_add_test(tst_rx_6m_lna_offset)
+target_compile_definitions(tst_rx_6m_lna_offset PRIVATE NEREUS_BUILD_TESTS)
 
 # ── Phase 3M-1a H.3: TxApplet wiring model-layer contracts ───────────────────
 # Verifies TransmitModel::setPower/tunePowerForBand round-trips, powerChanged
@@ -8083,6 +8087,15 @@ nereus_add_test(tst_setup_description_parity EXTRA_LABELS gui)
 nereus_add_test(tst_setup_description_live fakes/LoopbackTransport.cpp EXTRA_LABELS core)
 target_compile_definitions(tst_station_catalog PRIVATE
     NEREUS_LINK_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/data/link/v1")
+# iPhone app plan Task 25 (D41, R-IOS-18): the catalogue's Tools and Radio
+# items follow the radio, the Core and the unbuilt features list. No radio,
+# no listening socket, no audio device.
+nereus_add_test(tst_station_tools EXTRA_LABELS session)
+# iPhone app plan Task 25 (R-IOS-18): the `vax` object and the vaxLevels
+# stream, over a loopback link. No radio, no audio device opened.
+nereus_add_test(tst_station_vax
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
 # iPhone app Task 14 (R-IOS-08, D37): the pairing code and its word list,
 # the pairing window (injected clock), and the SPAKE2+EE exchange with its
 # confirmation boxes.
@@ -8707,6 +8720,16 @@ nereus_add_test(tst_remote_tx_display_settings
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)
 target_compile_definitions(tst_remote_tx_display_settings PRIVATE NEREUS_BUILD_TESTS)
+
+# Parity ruling C12: Setup > Display > Grid & Scales' per-band dB max and
+# min are the Core's. A window's write reaches the Core's pan at once; a
+# remote window's pan never pushes its own values on a band crossing and
+# re-reads a band when the Core's value arrives; a local pan is unchanged.
+# Loopback only, no radio, no audio device.
+nereus_add_test(tst_remote_pan_grid
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+target_compile_definitions(tst_remote_pan_grid PRIVATE NEREUS_BUILD_TESTS)
 
 # Remote-window parity Task 32 (R-IOS-13, R-R3-49): the transmit monitor
 # goes to the device that holds transmit. The owner mixes with fake devices

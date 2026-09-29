@@ -336,6 +336,9 @@ bool StationHost::start()
             this, update);
     connect(m_radioModel.data(), &RadioModel::infoChanged,
             this, update);
+    // iPhone app plan Task 25: waiting for a radio choice, or no longer.
+    connect(m_radioModel.data(), &RadioModel::stationRadioWaitingChanged,
+            this, update);
     // iPhone app Task 71: the device count follows the places taken.
     connect(m_stationServer->deviceSessions(), &DeviceSessionRegistry::placesTakenChanged,
             this, update);
@@ -646,6 +649,13 @@ void StationHost::updateStationAnnouncement()
     // iPhone app Task 71 (ruling 10.4): how many devices hold a place, 0 on
     // a Core no device has claimed. A number only, never who.
     announcement.devicesConnected = m_stationServer->devicesConnectedForDiscovery();
+    // iPhone app plan Task 25 (R-IOS-16): the radio connected, offline, or
+    // waiting for a choice (StationRadios' reason, RadioModel's
+    // stationRadioWaiting), so a list says "Waiting for a radio" before a
+    // device connects.
+    announcement.radio = announcement.radioConnected ? StationLanRadio::Connected
+        : m_radioModel->stationRadioWaiting().isEmpty() ? StationLanRadio::Offline
+                                                         : StationLanRadio::Waiting;
     m_stationAnnouncement = announcement;
     m_stationAnnouncer->update(m_stationServer->serverAddress(), announcement);
 
@@ -657,6 +667,7 @@ void StationHost::updateStationAnnouncement()
     record.claimed = announcement.claimed;
     record.pairing = announcement.pairing;
     record.devicesConnected = announcement.devicesConnected.value_or(0);
+    record.radio = announcement.radio.value_or(StationLanRadio::Offline);
     const std::optional<quint32> where = dnsSdInterfaceForListener(m_stationServer->serverAddress());
     if (!where || !m_dnsSdAdvertiser) {
         if (m_dnsSdAdvertiser) { m_dnsSdAdvertiser->stop(); }
@@ -756,6 +767,27 @@ void StationHost::cancelStationServerListenRetry()
     m_stationListenNextDelayMs = m_stationListenRetryInitialMs;
 }
 
+
+StationReach StationHost::reach() const
+{
+    StationReach reach;
+    reach.listening = listenerReady();
+    reach.listenerRetryPending = listenerRetryPending();
+    if (m_dnsSdAdvertiser) {
+        reach.bonjourAvailable = m_dnsSdAdvertiser->isAvailable();
+        reach.bonjourActive = m_dnsSdAdvertiser->isActive();
+    }
+    const QList<QUrl> servers = RendezvousClient::serverUrls(m_options.rendezvousServers);
+    reach.serviceConfigured = !servers.isEmpty();
+    if (m_rendezvous && m_rendezvous->client()) {
+        reach.serviceRegistered = m_rendezvous->client()->isRegistered();
+        reach.serviceHost = m_rendezvous->client()->currentServer().host();
+    }
+    if (reach.serviceHost.isEmpty() && !servers.isEmpty()) {
+        reach.serviceHost = servers.first().host();
+    }
+    return reach;
+}
 
 bool StationHost::listenerReady() const
 {

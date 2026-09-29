@@ -27,6 +27,9 @@
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-27: separate bounded transmit-watch DTLS channel; AI-assisted
 //               implementation via OpenAI Codex for J.J. Boyd (KG4VCF).
+//   2026-09-28: setWatchRelayClockForTest, the clock a watch relay grant's
+//               expiry is read against. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/DataChannelTransport.h"
@@ -408,6 +411,21 @@ DataChannelTransport::~DataChannelTransport()
     stopPeer();
 }
 
+namespace {
+DataChannelTransport::WatchRelayClock& watchRelayClock()
+{
+    static DataChannelTransport::WatchRelayClock clock;
+    return clock;
+}
+
+// The time a watch relay grant's expiry is compared with: the test's clock
+// when one is set, else the wall clock.
+qint64 watchRelayNowSecs()
+{
+    return watchRelayClock() ? watchRelayClock()() : QDateTime::currentSecsSinceEpoch();
+}
+} // namespace
+
 bool DataChannelTransport::setWatchRelayGrant(const WatchRelayGrant& grant)
 {
     if (!m_started || m_closing || m_options.purpose != Purpose::Control || m_watchRelayGrant
@@ -415,7 +433,7 @@ bool DataChannelTransport::setWatchRelayGrant(const WatchRelayGrant& grant)
         || grant.url.host().isEmpty() || grant.url.authority(QUrl::FullyEncoded).contains('@')
         || grant.url.hasFragment() || grant.token.isEmpty()
         || grant.token.toUtf8().size() > RendezvousWire::kMaxRelayTokenBytes
-        || grant.expires <= QDateTime::currentSecsSinceEpoch() || grant.primaryLeg.expired()) {
+        || grant.expires <= watchRelayNowSecs() || grant.primaryLeg.expired()) {
         return false;
     }
     m_watchRelayGrant = grant;
@@ -436,7 +454,7 @@ bool DataChannelTransport::hasWatchRelayRoute() const
 bool DataChannelTransport::canOpenWatchRelay() const
 {
     return hasWatchRelayRoute()
-        && m_watchRelayGrant->expires > QDateTime::currentSecsSinceEpoch();
+        && m_watchRelayGrant->expires > watchRelayNowSecs();
 }
 
 bool DataChannelTransport::start(const Options& options)
@@ -848,6 +866,11 @@ DataChannelTransport::SelectedPathOverride& selectedPathOverride()
     return override;
 }
 } // namespace
+
+void DataChannelTransport::setWatchRelayClockForTest(WatchRelayClock clock)
+{
+    watchRelayClock() = std::move(clock);
+}
 
 void DataChannelTransport::setSelectedPathOverrideForTest(SelectedPathOverride override)
 {

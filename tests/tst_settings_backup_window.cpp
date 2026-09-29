@@ -5,6 +5,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QLabel>
 #include <QPushButton>
 #include <QScopeGuard>
 #include <QTemporaryDir>
@@ -13,7 +14,9 @@
 #include <memory>
 
 #include "core/AppSettings.h"
+#include "core/RadioDiscovery.h"
 #include "core/session/IStationLink.h"
+#include "core/settings/ISettingsBackend.h"
 #include "core/settings/SettingsBackup.h"
 #include "gui/diagnostics/DiagnosticsPhaseHPages.h"
 #include "models/RadioModel.h"
@@ -95,10 +98,17 @@ public:
     QString destination;
     std::function<void()> whileChoosing;
     QList<QPair<bool, QString>> messages;
+    QString radioPickerMac;
 
 protected:
     QString chooseExportDestination(bool) override
     {
+        if (whileChoosing) { whileChoosing(); }
+        return destination;
+    }
+    QString chooseRadioExportDestination(const QString& mac) override
+    {
+        radioPickerMac = mac;
         if (whileChoosing) { whileChoosing(); }
         return destination;
     }
@@ -111,6 +121,57 @@ protected:
 QPushButton* exportButton(ExportImportConfigPage& page)
 {
     return page.findChild<QPushButton*>(QStringLiteral("exportAllSettingsButton"));
+}
+
+QPushButton* radioButton(ExportImportConfigPage& page)
+{
+    return page.findChild<QPushButton*>(QStringLiteral("exportRadioButton"));
+}
+
+QString radioExplanation(ExportImportConfigPage& page)
+{
+    auto* label = page.findChild<QLabel*>(QStringLiteral("exportRadioExplanation"));
+    return label ? label->text() : QString();
+}
+
+// The keys a saved settings file holds.
+QStringList savedKeys(const QString& path)
+{
+    AppSettings saved(path);
+    saved.load();
+    QStringList keys = saved.allKeys();
+    keys.sort();
+    return keys;
+}
+
+// A remote window's settings proxy: it answers every hardware/ key from
+// what the Core sent.
+class CoreHardwareBackend final : public ISettingsBackend {
+public:
+    QMap<QString, QString> core;
+    bool handlesKey(const QString& key) const override
+    {
+        return key.startsWith(QStringLiteral("hardware/"));
+    }
+    QVariant value(const QString& key, const QVariant& fallback) const override
+    {
+        return core.contains(key) ? QVariant(core.value(key)) : fallback;
+    }
+    void setValue(const QString& key, const QVariant& val) override
+    {
+        core.insert(key, val.toString());
+    }
+    bool contains(const QString& key) const override { return core.contains(key); }
+    void remove(const QString& key) override { core.remove(key); }
+    QStringList handledKeys() const override { return core.keys(); }
+};
+
+RadioInfo radioWithMac(const QString& mac)
+{
+    RadioInfo info;
+    info.name = QStringLiteral("ANAN-G2");
+    info.macAddress = mac;
+    return info;
 }
 
 } // namespace
@@ -464,6 +525,124 @@ private slots:
         localPage.destination.clear();
         exportButton(localPage)->click();
         QCOMPARE(fileBytes(dir.filePath(QStringLiteral("local.xml"))), xml);
+    }
+
+    // Export Connected Radio saves the connected radio's settings and
+    // nothing else; with no radio it is disabled with the reason.
+    void exportConnectedRadioSavesOnlyThatRadio()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString mac = QStringLiteral("00:1C:C0:A2:10:5E");
+        const QString other = QStringLiteral("00:1C:C0:A2:10:99");
+        AppSettings& settings = AppSettings::instance();
+        settings.setHardwareValue(mac, QStringLiteral("radioInfo/sampleRate"), 192000);
+        settings.setHardwareValue(mac, QStringLiteral("antennas/rx1"), 2);
+        settings.setHardwareValue(other, QStringLiteral("radioInfo/sampleRate"), 48000);
+        settings.setValue(QStringLiteral("RadioExportWindowSentinel"), QStringLiteral("window"));
+        const auto cleanup = qScopeGuard([&] {
+            settings.clearHardwareValues(mac);
+            settings.clearHardwareValues(other);
+            settings.remove(QStringLiteral("RadioExportWindowSentinel"));
+        });
+
+        RadioModel local;
+        ProbePage page(&local);
+        page.destination = dir.filePath(QStringLiteral("radio.nereus-radio"));
+        QPushButton* const button = radioButton(page);
+        QVERIFY(button != nullptr);
+        QVERIFY(!button->isHidden());
+        QVERIFY(!button->isEnabled());
+        QCOMPARE(radioExplanation(page), QStringLiteral("Connect a radio to export its settings."));
+        QCOMPARE(button->toolTip(), radioExplanation(page));
+
+        local.setLastRadioInfoForTest(radioWithMac(mac));
+        local.setConnectionStateForTest(ConnectionState::Connected);
+        QVERIFY(button->isEnabled());
+        QVERIFY(radioExplanation(page).startsWith(
+            QStringLiteral("Saves only the settings kept for the connected radio")));
+        button->click();
+        QCOMPARE(page.radioPickerMac, mac);
+        QCOMPARE(page.messages.size(), 1);
+        QVERIFY(page.messages.last().first);
+        const QString prefix = QStringLiteral("hardware/%1/").arg(mac);
+        QCOMPARE(savedKeys(page.destination),
+                 (QStringList{prefix + QStringLiteral("antennas/rx1"),
+                              prefix + QStringLiteral("radioInfo/sampleRate")}));
+        {
+            AppSettings saved(page.destination);
+            saved.load();
+            QCOMPARE(saved.hardwareValue(mac, QStringLiteral("radioInfo/sampleRate")).toInt(),
+                     192000);
+        }
+
+        // The radio goes while the picker is open: nothing is written.
+        const QString gonePath = dir.filePath(QStringLiteral("gone.nereus-radio"));
+        page.destination = gonePath;
+        page.whileChoosing = [&] { local.setConnectionStateForTest(ConnectionState::Disconnected); };
+        button->click();
+        page.whileChoosing = nullptr;
+        QVERIFY(!QFileInfo::exists(gonePath));
+        QVERIFY(!page.messages.last().first);
+        QVERIFY(!button->isEnabled());
+    }
+
+    void remoteExportConnectedRadioSavesTheCoresValues()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString mac = QStringLiteral("00:1C:C0:A2:20:01");
+        AppSettings& settings = AppSettings::instance();
+        // A stale local copy the Core's values replace.
+        settings.setValue(QStringLiteral("hardware/%1/radioInfo/sampleRate").arg(mac),
+                          QStringLiteral("48000"));
+        CoreHardwareBackend backend;
+        backend.core.insert(QStringLiteral("hardware/%1/radioInfo/sampleRate").arg(mac),
+                            QStringLiteral("384000"));
+        backend.core.insert(QStringLiteral("hardware/%1/alex/master/rxAnt").arg(mac),
+                            QStringLiteral("3"));
+        settings.setRemoteBackend(&backend);
+        const auto cleanup = qScopeGuard([&] {
+            settings.setRemoteBackend(nullptr);
+            settings.clearHardwareValues(mac);
+        });
+
+        RadioModel remote(RadioModel::Role::Remote);
+        BackupLink link;
+        link.model = &remote;
+        remote.attachStation(&link);
+        ProbePage page(&remote);
+        page.setStationSettingsAvailable(true, {});
+        QPushButton* const button = radioButton(page);
+        QVERIFY(!button->isEnabled());
+        QCOMPARE(radioExplanation(page),
+                 QStringLiteral("The Core has no radio connected. Connect one to export its "
+                                "settings."));
+
+        remote.setLastRadioInfoForTest(radioWithMac(mac));
+        remote.setStationConnectionState(ConnectionState::Connected);
+        QVERIFY(button->isEnabled());
+        QVERIFY(radioExplanation(page).startsWith(
+            QStringLiteral("Saves only the Core's settings for its connected radio")));
+
+        // The Core's settings unavailable: disabled with that reason.
+        page.setStationSettingsAvailable(false, QStringLiteral("The Core's settings are loading."));
+        QVERIFY(!button->isEnabled());
+        QCOMPARE(radioExplanation(page), QStringLiteral("The Core's settings are loading."));
+        page.setStationSettingsAvailable(true, {});
+
+        page.destination = dir.filePath(QStringLiteral("core-radio.nereus-radio"));
+        button->click();
+        QVERIFY(page.messages.last().first);
+        QCOMPARE(link.requests, 0);  // no command to the Core
+        AppSettings saved(page.destination);
+        saved.load();
+        QCOMPARE(saved.hardwareValue(mac, QStringLiteral("radioInfo/sampleRate")).toString(),
+                 QStringLiteral("384000"));
+        QCOMPARE(saved.hardwareValue(mac, QStringLiteral("alex/master/rxAnt")).toString(),
+                 QStringLiteral("3"));
+        QCOMPARE(saved.allKeys().size(), 2);
+        remote.detachStation();
     }
 };
 

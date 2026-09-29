@@ -996,6 +996,13 @@ public:
     // calls it for a window's accepted write or removal (StationServer).
     // Any other key, or no analyzer, does nothing.
     void applyRemoteTxDisplaySetting(const QString& key);
+    // Parity ruling C12: a per-band grid dB max or min (DisplayGridMax_ /
+    // DisplayGridMin_, the Core's settings) changed; every pan re-reads
+    // that band (PanadapterModel::applyStationGridSetting). The Core calls
+    // it for a window's accepted write or removal (StationServer), so its
+    // pan on that band takes the new range and the window sees it; a
+    // remote window's model calls it for each Core setting that arrives.
+    void applyPanGridSetting(const QString& key);
     static bool isSwrProtectionSettingKey(const QString& key);
 
     // Task 13: External TX Inhibit (Setup > Transmit > Power, grpExtTXInhibit)
@@ -3349,10 +3356,10 @@ public:
     // (when step-att enabled) and preamp_offset[mode] (when disabled).
     //
     // RXCalibrationOffset (console.cs:21022) sums per-radio meter cal +
-    // XVTR + 6m offsets.  NereusSDR currently applies only the per-radio
-    // meter cal (defaults from rxMeterCalOffsetDefaultFor() and the user
-    // override AppSettings key RX1_MeterCalOffsetDb); XVTR/6m offsets
-    // ride a future XVTR/transverter epic.
+    // XVTR + 6m offsets.  NereusSDR applies the per-radio meter cal
+    // (defaults from rxMeterCalOffsetDefaultFor() and the user override
+    // AppSettings key RX1_MeterCalOffsetDb) and the RX1 6 m LNA gain offset
+    // (rx6mGainOffsetDb); the XVTR offset rides a future transverter epic.
     //
     // Consumed by MeterPoller::pollSMeter and MeterPoller::poll for the
     // SignalPeak / SignalAvg / SIGNAL_MAX_BIN bindings only; matches
@@ -3368,6 +3375,13 @@ public:
     // RXPreampOffset(1) (console.cs:21029-21037 [v2.10.3.15]); the rest is
     // the receive calibration. 0 on a Remote model.
     double rxPreampOffsetDb() const;
+    // The RX1 6 m LNA gain offset's part of rxMeterOffsetDb(), Thetis
+    // RX1_6mGainOffset: minus Setup > Calibration's Rx1 6m LNA on 6 m, when
+    // the radio has an Alex and the 6 m LNA is in circuit, else 0. 0 on a
+    // Remote model.
+    double rx6mGainOffsetDb() const;
+    // Recompute rxMeterOffsetDb() and emit rxMeterOffsetChanged if it moved.
+    void refreshRxMeterOffset();
     // Parity Task 31 (A11): the display's calibration while keyed, Thetis
     // RX1Offset (display.cs:4820-4850 [v2.10.3.15]) for the transmitting
     // receiver: the TX Display Cal Offset, plus with display duplex on the
@@ -3663,6 +3677,7 @@ public:
         // Plan Task 15: profileForRadio, as connectToRadio builds it.
         m_hardwareProfile = ::NereusSDR::profileForRadio(
             board, defaultModelForBoard(board));
+        m_calController.setHardwareModel(m_hardwareProfile.model);
         applyRxOnly();   // Task 16: the kit runs receive only
     }
 

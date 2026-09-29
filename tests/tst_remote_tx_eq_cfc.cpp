@@ -23,6 +23,11 @@
 //                                    (seedUpgradedCoreToken), as Part C's
 //                                    paired-device sign-in requires.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  R-IOS-13 / R-R3-49: a window that did
+//                                    not declare txEqCurve gets no curve on
+//                                    the wire and works the same one out of
+//                                    txEqParaEqData. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -313,6 +318,7 @@ private slots:
     void txaFlushedTellsPureSignalOnTheMainThread();
     void parametricEqPushesAreCoalescedToTheTick();
     void unreadableCurveIsRefusedWithAReason();
+    void txEqCurveOnlyToAPeerThatDeclaredIt();
     void pairedCfcReachesWdspAndRejectsLegacyWidthMismatch();
     void profileSwitchRestoresOnlyCoherentCfcCurve();
     void settingsReloadAppliesFinalCfcEnableAndCurveTogether();
@@ -1162,6 +1168,34 @@ void TstRemoteTxEqCfc::unreadableCurveIsRefusedWithAReason()
         QVERIFY2(empty.accepted, qPrintable(name + ' ' + empty.reason));
         QCOMPARE(coreTx.property(name.constData()).toString(), QString());
     }
+}
+
+// R-IOS-13 / R-R3-49: today's desktop window declares no txEqCurve, so its
+// capabilities, TransmitModel schema, transmit snapshot and deltas carry no
+// txEqCurve and no txEqCurveVersion, even after a curve write moves the
+// Core's curve; its own TransmitModel works out the same curve from the
+// mirrored txEqParaEqData. The declaring side is session-tx-eq-curve.
+void TstRemoteTxEqCfc::txEqCurveOnlyToAPeerThatDeclaredIt()
+{
+    Session s(m_securityDir.path(), this);
+    QVERIFY(s.connect());
+    const QString blob = flatParametricBlob(3.0);
+    const SessionPropertyResult ok =
+        s.writeTransmit(QByteArrayLiteral("txEqParaEqData"), MirrorWireKind::Utf8, blob);
+    QVERIFY2(ok.accepted, qPrintable(ok.reason));
+    QCOMPARE(s.core->transmitModel().txEqCurve(), ParaEqCurve::txEqCurveJson(blob));
+    QVERIFY(s.core->transmitModel().txEqCurve().contains(QStringLiteral("\"state\":\"saved\"")));
+    // A change made at the Core reaches the window as a delta (the
+    // window's own write above is answered only by its property.result).
+    const QString atCore = flatParametricBlob(-4.0);
+    s.core->transmitModel().setTxEqParaEqData(atCore);
+    QTRY_COMPARE(s.window.transmitModel().txEqParaEqData(), atCore);
+    for (const QByteArray& wire : s.windowEnd->received()) {
+        QVERIFY2(!wire.contains("txEqCurve"), wire.left(200).constData());
+    }
+    QCOMPARE(s.client->capabilities().txEqCurveVersion, 0);
+    // The window derives the same curve itself.
+    QCOMPARE(s.window.transmitModel().txEqCurve(), s.core->transmitModel().txEqCurve());
 }
 
 void TstRemoteTxEqCfc::pairedCfcReachesWdspAndRejectsLegacyWidthMismatch()

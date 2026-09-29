@@ -4,7 +4,7 @@
 //
 // Ported from Thetis source:
 //   Project Files/Source/Console/ucParametricEq.cs (the response curve,
-//   PointsFromJson and GetDefaults) and
+//   PointsFromJson, GetDefaults and enforceOrdering) and
 //   Project Files/Source/Console/eqform.cs (the TX EQ panel's widget
 //   limits, ParaEQTXData's setter, sendTXDspUpdate and setTXEQProfile),
 //   original licences from Thetis source are included below.
@@ -31,6 +31,16 @@
 //                 The ten-point sampling, the widget-load port and the
 //                 point ordering it needed are gone. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - R-IOS-13 / R-R3-49: the panel's point ordering
+//                 (ucParametricEq enforceOrdering with the TX panel's
+//                 reorder and 5 Hz spacing) and txEqCurveJson, the
+//                 NereusSDR-owned, read-only form of the saved curve the
+//                 Core sends as transmit.txEqCurve (station link document,
+//                 "The TX EQ curve"). J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
+//   2026-09-28 - R-IOS-13 / R-R3-49 (follow-up): readCurveJson, the
+//                 parser the Core and ParametricEqWidget share. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // --- From ucParametricEq.cs ---
@@ -135,6 +145,9 @@ inline constexpr double kTxEqDbMin = -24.0;   // cs:960
 inline constexpr double kTxEqDbMax =  24.0;   // cs:959
 inline constexpr double kTxEqQMin  =   0.2;   // cs:970
 inline constexpr double kTxEqQMax  =  20.0;   // cs:969
+// ucParametricEq1.MinPointSpacingHz = 5D and AllowPointReorder = true.
+// From Thetis eqform.cs:966, 946 [v2.10.3.15].
+inline constexpr double kTxEqMinPointSpacingHz = 5.0;
 
 // ucParametricEq.GetDefaults' default arguments, as eqform's
 // ParaEQTXData setter calls it for a value it cannot load. From Thetis
@@ -217,6 +230,25 @@ struct TxEqPoints {
     int    bandCount    = kTxEqDefaultBandCount;
 };
 
+/// A saved curve's JSON as Thetis's EqJsonState holds it after
+/// JsonConvert.DeserializeObject: unclamped, unrounded, missing fields at
+/// their C# defaults (0, false).
+struct CurveJson {
+    int    bandCount      = 0;
+    bool   parametricEq   = false;
+    double globalGainDb   = 0.0;
+    double frequencyMinHz = 0.0;
+    double frequencyMaxHz = 0.0;
+    std::vector<double> f;
+    std::vector<double> g;
+    std::vector<double> q;
+};
+
+/// The deserialise-and-check block ucParametricEq's PointsFromJson and
+/// LoadFromJson share: false where both refuse the value. The one parser
+/// the Core (pointsFromJson) and ParametricEqWidget::loadFromJson use.
+bool readCurveJson(const QString& json, CurveJson& out);
+
 /// ucParametricEq.PointsFromJson with the TX panel's limits: the points of
 /// a saved curve's JSON, each clamped and rounded as Thetis does, in the
 /// saved order, the first and last locked to the range's ends. False,
@@ -235,6 +267,25 @@ bool loadTxEqPoints(const QString& paraEqData, TxEqPoints& out);
 /// eqform.cs ParaEQTXData's setter: the saved value's points, or
 /// GetDefaults' when it holds none (a blank or broken value).
 TxEqPoints txEqPointsFromParaEqData(const QString& paraEqData);
+
+/// The points as the TX EQ panel draws them: ucParametricEq's
+/// enforceOrdering(true) with the panel's reorder on and its 5 Hz point
+/// spacing. Sorted by frequency (a tie keeps the saved order), every point
+/// inside the range, the first at minHz and the last at maxHz, and the
+/// points between at least the spacing apart (less when the range is too
+/// narrow for it). Thetis runs this when the panel loads a curve
+/// (eqform.cs setParaEQData, SetPointsData), so the panel shows these even
+/// where the saved order differs.
+TxEqPoints txEqDisplayPoints(const TxEqPoints& points);
+
+/// What transmit.txEqCurve says for a txEqParaEqData value, as compact
+/// JSON (NereusSDR-owned; the station link document's "The TX EQ curve"):
+///   {"state":"saved"|"default", "parametric":bool, "preampDb":f,
+///    "minHz":f, "maxHz":f, "points":[{"frequencyHz":f,"gainDb":f,"q":f}]}
+/// with the points as the panel draws them (txEqDisplayPoints), or
+/// {"state":"unavailable"} for a non-empty value the Core cannot read.
+/// "default" is an empty value: the flat curve Thetis puts in its place.
+QString txEqCurveJson(const QString& paraEqData);
 
 /// The arrays Thetis hands WDSP's SetTXAEQProfile(channel, nfreqs, F, G, Q):
 /// nfreqs = F.size() - 1; F[0] = 0 and G[0] = the preamp; Q[0] = 0, and

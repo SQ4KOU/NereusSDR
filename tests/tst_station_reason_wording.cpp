@@ -1346,6 +1346,9 @@ const QList<ReasonSource>& reasonSources()
           // stationOnAirRefusal's reason (onAirReason, scanned here).
           QStringLiteral("unreachable"), QStringLiteral("ioBoardNoAnswerReason()"),
           QStringLiteral("onAir")}},
+        // iPhone app plan Task 25 (R-IOS-18): a `vax` level outside 0 to 1,
+        // in property.result.
+        {"src/core/session/StationVaxFacade.cpp", {QStringLiteral("levelRefusal")}, {}, 1},
         // R-R3-49 (parity Task 2): a transmit setting's range, in
         // property.result and setTunePowerForTxBand's command.result. The
         // inserts are the setters' own range numbers.

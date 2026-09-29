@@ -175,10 +175,13 @@ private slots:
         QCOMPARE(older->pairing, StationLanPairing::Closed);
         QCOMPARE(older->displayName(), QStringLiteral("Rock 5C"));
 
-        // Every field at its limit: 480 bytes (iPhone app Task 71: with the
-        // device count), and a label is never cut.
+        // Every field at its limit: 481 bytes (iPhone app Task 71: with the
+        // device count; iPhone app plan Task 25: and the radio state), and a
+        // label is never cut.
         StationLanAnnouncement largest = valueV2();
         largest.devicesConnected = kStationLanMaxDevicesConnected;
+        largest.radio = largest.radioConnected ? StationLanRadio::Connected
+                                               : StationLanRadio::Waiting;
         largest.coreName = QString(kStationLanMaxCoreNameBytes, QLatin1Char('C'));
         largest.radioName = QString(kStationLanMaxRadioNameBytes, QLatin1Char('R'));
         largest.label = QString(32, QLatin1Char('K')) + QLatin1Char('/')
@@ -232,11 +235,21 @@ private slots:
         countedSource.devicesConnected = 1;
         const QByteArray counted = wire(countedSource);
         QCOMPARE(counted, encoded + '\x01');
-        const auto extended = decodeStationLanAnnouncement(encoded + QByteArray("\x01\x02\x03", 3), &error);
+        // iPhone app plan Task 25: so is the radio state, the byte after the
+        // count, which agrees with Radio connected; the bytes after it are
+        // ignored.
+        QVERIFY(countedSource.radioConnected);
+        const auto extended = decodeStationLanAnnouncement(encoded + QByteArray("\x01\x01\x03", 3), &error);
         QVERIFY2(extended, qPrintable(error));
-        QCOMPARE(*extended, countedSource);
+        StationLanAnnouncement statedSource = countedSource;
+        statedSource.radio = StationLanRadio::Connected;
+        QCOMPARE(*extended, statedSource);
+        // A state that disagrees with Radio connected is refused.
+        QVERIFY(!decodeStationLanAnnouncement(encoded + QByteArray("\x01\x02", 2), &error));
+        QCOMPARE(error, QStringLiteral("Station LAN announcement has an invalid radio state."));
         QVERIFY(decodeStationLanAnnouncement(
-            counted + QByteArray(kStationLanMaxDatagramBytes - counted.size(), '\x7f'), &error));
+            counted + '\x01' + QByteArray(kStationLanMaxDatagramBytes - counted.size() - 1, '\x7f'),
+            &error));
         QVERIFY(!decodeStationLanAnnouncement(
             counted + QByteArray(kStationLanMaxDatagramBytes - counted.size() + 1, '\x7f'), &error));
         QCOMPARE(error, QStringLiteral("Station LAN announcement is too large."));

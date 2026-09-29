@@ -142,7 +142,8 @@ void MultimeterPage::buildUI()
         100);
     m_delayMs->setProperty("nereusSetupId", "display.multimeter.pollingDelay");
     m_delayMs->setSuffix(QStringLiteral(" ms"));
-    m_delayMs->setToolTip(tr("How often the meter values are read from WDSP (10–2000 ms). "
+    // The meter values are read from WDSP at this interval.
+    m_delayMs->setToolTip(tr("How often the meter values are updated (10–2000 ms). "
                               "Lower values give faster response; higher values reduce CPU load."));
 
     m_peakHoldMs = addLabeledSpinner(

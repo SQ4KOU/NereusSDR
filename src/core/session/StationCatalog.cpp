@@ -45,19 +45,28 @@
 //   2026-09-27: `shown.endSnap`, and the tune keys' rounding from mi0bot's
 //               HL2 tune readouts (PowerShownRule). J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-28: iPhone app plan Task 25 (D41): each tool's and Radio
+//               item's `offered` from the unbuilt features list and the
+//               radio and Core it runs (PureSignal present, a diversity
+//               receiver, the station TCI server, VAX devices, antenna
+//               control). J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationCatalog.h"
 
+#include "core/AudioEngine.h"
 #include "core/ControlRanges.h"
 #include "core/HardwareProfile.h"
 #include "core/SampleRateCatalog.h"
 #include "core/SkuUiProfile.h"
+#include "core/UnbuiltFeatureList.h"
 #include "core/spectrum/WaterfallPalettes.h"
 #include "models/BandGrid.h"
 #include "models/BandPlanManager.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
+#include "models/StationTciModel.h"
 
 #include <QColor>
 #include <QJsonArray>
@@ -701,65 +710,109 @@ QJsonArray sliceColoursArray(const StationCatalog::Inputs& inputs)
 
 // The desktop's Tools menu, in its order, without MIDI Mapping and Macro
 // Buttons (D42). `where` is where the tool works: at the Core, or on both
-// the Core and the device. Offered means built on the desktop: CWX, the
-// Memory Manager and CAT Control are hidden there until built
-// (UnbuiltFeature::Cwx, Memories, Cat). iPhone app Task 25 adds the rules
-// that follow the radio and the Core (PureSignal present, a second
-// receiver, a running TCI server, VAX devices).
+// the Core and the device. iPhone app plan Task 25 (D41): `offered` starts
+// from the unbuilt features list the desktop hides by (CWX, the Memory
+// Manager and CAT Control stay unoffered until built), then follows the
+// radio and the Core: PureSignal when the radio has it, Diversity when it
+// has a diversity receiver, TCI Server when the Core runs its own station
+// TCI server, VAX Audio when the station computer publishes VAX devices.
+// The rest are always offered.
+enum class Offer {
+    Always,
+    PureSignal,
+    Diversity,
+    StationTci,
+    Vax,
+    AntennaControl,
+    Cwx,
+    Memories,
+    Cat,
+    Transverters,
+};
+
 struct ToolEntry {
     const char* id;
     const char* label;
     const char* where;
-    bool offered;
+    Offer offer;
 };
 constexpr ToolEntry kTools[] = {
-    {"spotHub", "Spot Hub", "both", true},
-    {"freedvReporter", "FreeDV Reporter", "station", true},
-    {"txEqualizer", "TX Equalizer", "station", true},
-    {"pureSignal", "PureSignal", "station", true},
-    {"diversity", "Diversity", "station", true},
-    {"cwx", "CWX", "station", false},
-    {"memoryManager", "Memory Manager", "station", false},
-    {"catControl", "CAT Control", "station", false},
-    {"tciServer", "TCI Server", "station", true},
-    {"vaxAudio", "VAX Audio", "station", true},
-    {"networkDiagnostics", "Network Diagnostics", "both", true},
-    {"supportBundle", "Support Bundle", "both", true},
+    {"spotHub", "Spot Hub", "both", Offer::Always},
+    {"freedvReporter", "FreeDV Reporter", "station", Offer::Always},
+    {"txEqualizer", "TX Equalizer", "station", Offer::Always},
+    {"pureSignal", "PureSignal", "station", Offer::PureSignal},
+    {"diversity", "Diversity", "station", Offer::Diversity},
+    {"cwx", "CWX", "station", Offer::Cwx},
+    {"memoryManager", "Memory Manager", "station", Offer::Memories},
+    {"catControl", "CAT Control", "station", Offer::Cat},
+    {"tciServer", "TCI Server", "station", Offer::StationTci},
+    {"vaxAudio", "VAX Audio", "station", Offer::Vax},
+    {"networkDiagnostics", "Network Diagnostics", "both", Offer::Always},
+    {"supportBundle", "Support Bundle", "both", Offer::Always},
 };
 
-// The desktop's Radio menu items an app lists, in its order. Transverters
-// is hidden there until built (UnbuiltFeature::Transverters).
+// The desktop's Radio menu items an app lists, in its order. Antenna Setup
+// follows the desktop's own rule (antenna controls shown only with Alex and
+// at least three antenna inputs); Transverters waits for the unbuilt
+// features list (UnbuiltFeature::Transverters).
 struct RadioItemEntry {
     const char* id;
     const char* label;
-    bool offered;
+    Offer offer;
 };
 constexpr RadioItemEntry kRadioItems[] = {
-    {"manageRadios", "Manage Radios", true},
-    {"antennaSetup", "Antenna Setup", true},
-    {"transverters", "Transverters", false},
-    {"protocolInfo", "Protocol Info", true},
+    {"manageRadios", "Manage Radios", Offer::Always},
+    {"antennaSetup", "Antenna Setup", Offer::AntennaControl},
+    {"transverters", "Transverters", Offer::Transverters},
+    {"protocolInfo", "Protocol Info", Offer::Always},
 };
 
-QJsonArray toolsArray()
+bool offered(Offer offer, const StationCatalog::Inputs& inputs)
+{
+    switch (offer) {
+    case Offer::Always:
+        return true;
+    case Offer::PureSignal:
+        return inputs.board.hasPureSignal;
+    case Offer::Diversity:
+        return inputs.board.hasDiversityReceiver;
+    case Offer::StationTci:
+        return inputs.stationTciServer;
+    case Offer::Vax:
+        return inputs.vaxDevices;
+    case Offer::AntennaControl:
+        return inputs.board.hasAlex && inputs.board.antennaInputCount >= 3;
+    case Offer::Cwx:
+        return UnbuiltFeatures::isBuilt(UnbuiltFeature::Cwx);
+    case Offer::Memories:
+        return UnbuiltFeatures::isBuilt(UnbuiltFeature::Memories);
+    case Offer::Cat:
+        return UnbuiltFeatures::isBuilt(UnbuiltFeature::Cat);
+    case Offer::Transverters:
+        return UnbuiltFeatures::isBuilt(UnbuiltFeature::Transverters);
+    }
+    return false;
+}
+
+QJsonArray toolsArray(const StationCatalog::Inputs& inputs)
 {
     QJsonArray tools;
     for (const ToolEntry& tool : kTools) {
         tools.append(QJsonObject{{QStringLiteral("id"), QString::fromLatin1(tool.id)},
                                  {QStringLiteral("label"), QString::fromLatin1(tool.label)},
                                  {QStringLiteral("where"), QString::fromLatin1(tool.where)},
-                                 {QStringLiteral("offered"), tool.offered}});
+                                 {QStringLiteral("offered"), offered(tool.offer, inputs)}});
     }
     return tools;
 }
 
-QJsonArray radioItemsArray()
+QJsonArray radioItemsArray(const StationCatalog::Inputs& inputs)
 {
     QJsonArray items;
     for (const RadioItemEntry& item : kRadioItems) {
         items.append(QJsonObject{{QStringLiteral("id"), QString::fromLatin1(item.id)},
                                  {QStringLiteral("label"), QString::fromLatin1(item.label)},
-                                 {QStringLiteral("offered"), item.offered}});
+                                 {QStringLiteral("offered"), offered(item.offer, inputs)}});
     }
     return items;
 }
@@ -816,8 +869,8 @@ QJsonObject StationCatalog::build(const Inputs& inputs)
         {QStringLiteral("bands"), bandsArray()},
         {QStringLiteral("palettes"), palettesArray()},
         {QStringLiteral("sliceColours"), sliceColoursArray(inputs)},
-        {QStringLiteral("tools"), toolsArray()},
-        {QStringLiteral("radioItems"), radioItemsArray()},
+        {QStringLiteral("tools"), toolsArray(inputs)},
+        {QStringLiteral("radioItems"), radioItemsArray(inputs)},
         // Filled by iPhone app Task 23.
         {QStringLiteral("audio"), QJsonObject{}},
     };
@@ -856,6 +909,13 @@ StationCatalog::Inputs StationCatalog::inputsFrom(const RadioModel& model)
     }
     inputs.defaultBandPlanName = QString::fromLatin1(BandPlanManager::kDefaultPlanName);
     inputs.activeBandPlanName = model.bandPlanManager().activePlanName();
+    // iPhone app plan Task 25 (D41): the Core's own station TCI server, and
+    // the VAX devices of a Core whose audio engine publishes them (a
+    // headless Core's does not, AudioEngine::vaxOutputsAllowed).
+    inputs.stationTciServer = model.stationTciController() != nullptr;
+    // localAudioDevices() has no const form; it is only read here.
+    const AudioEngine* audio = const_cast<RadioModel&>(model).localAudioDevices();
+    inputs.vaxDevices = audio != nullptr && audio->vaxOutputsAllowed();
     return inputs;
 }
 
@@ -867,6 +927,9 @@ void StationCatalog::bind(RadioModel* model)
             disconnect(store, nullptr, this, nullptr);
         }
         disconnect(&m_model->bandPlanManagerMutable(), nullptr, this, nullptr);
+        if (StationTciModel* tci = m_model->stationTciModel()) {
+            disconnect(tci, nullptr, this, nullptr);
+        }
     }
     m_model = model;
     if (model == nullptr) {
@@ -883,6 +946,11 @@ void StationCatalog::bind(RadioModel* model)
     connect(&model->bandPlanManagerMutable(), &BandPlanManager::planChanged, this,
             &StationCatalog::scheduleRefresh);
     connect(model, &RadioModel::currentRadioChanged, this, &StationCatalog::scheduleRefresh);
+    // iPhone app plan Task 25: the station TCI server can start after the
+    // catalogue binds (RadioModel::enableStationTci publishes its state).
+    if (StationTciModel* tci = model->stationTciModel()) {
+        connect(tci, &StationTciModel::stateChanged, this, &StationCatalog::scheduleRefresh);
+    }
     refresh();
 }
 

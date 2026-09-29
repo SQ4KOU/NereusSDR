@@ -46,8 +46,16 @@
 //                                    model fed from the Core's stream.
 //                                    NereusSDR-original additions.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  R-IOS-26 (stationFreedvVersion 2): the
+//                                    record's `band`, from the desktop's
+//                                    own Band::bandFromFrequency (called,
+//                                    not copied). NereusSDR-original
+//                                    addition. AI-assisted via Anthropic
+//                                    Claude Code.
 
 #include "FreeDVStationModel.h"
+
+#include "models/Band.h"
 
 #include <QDateTime>
 #include <QTimeZone>
@@ -230,7 +238,7 @@ QJsonObject FreeDVStationModel::recordFields(const FreeDVStation& info,
     // receivingFrom: whom the station reported hearing, while its latest
     // receive report stands (a frequency change clears it).
     const QString receivingFrom = info.lastRxDate.isValid() ? info.lastRxCallsign : QString();
-    return QJsonObject{
+    QJsonObject fields{
         {QStringLiteral("callsign"), info.callsign},
         {QStringLiteral("gridSquare"), info.gridSquare},
         {QStringLiteral("distanceKm"), info.distanceKm},
@@ -251,6 +259,15 @@ QJsonObject FreeDVStationModel::recordFields(const FreeDVStation& info,
         {QStringLiteral("messageChangedAtMs"), static_cast<double>(messageChangedAtMs)},
         {QStringLiteral("lastRxUtc"), utcText(info.lastRxDate)},
     };
+    // stationFreedvVersion 2 (R-IOS-26): the station's band, as the desktop's
+    // band filter finds it for this frequency (Band::bandFromFrequency),
+    // numbered as the spots record numbers its band. None while the
+    // frequency is not known: the desktop lists such a station under All only.
+    if (info.frequencyHz > 0) {
+        fields.insert(QStringLiteral("band"),
+                      static_cast<int>(bandFromFrequency(static_cast<double>(info.frequencyHz))));
+    }
+    return fields;
 }
 
 FreeDVStation FreeDVStationModel::stationFromRecord(const QString& sid, const QJsonObject& fields)

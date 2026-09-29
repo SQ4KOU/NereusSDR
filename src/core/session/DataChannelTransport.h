@@ -251,6 +251,11 @@ public:
     /// expiry. Both checks still require this exact live primary relay route.
     bool hasWatchRelayRoute() const;
     bool canOpenWatchRelay() const;
+    /// Test seam: the clock (seconds since the epoch) a watch relay grant's
+    /// expiry is read against, so a test moves time past the expiry rather
+    /// than waiting it out. Empty function: the wall clock.
+    using WatchRelayClock = std::function<qint64()>;
+    static void setWatchRelayClockForTest(WatchRelayClock clock);
 
     /// The candidate pair the connection settled on, once it has.
     std::optional<MediaIcePath> selectedPath() const;

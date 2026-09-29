@@ -21,6 +21,9 @@
 //                 cursors instead of Qt's drawn four-way move cursor, which
 //                 crashed Qt 6.11.0 on macOS. J.J. Boyd (KG4VCF), AI-assisted
 //                 via Anthropic Claude Code.
+//   2026-09-28 - The VFO display's filter right-click goes out as
+//                 vfoFilterContextRequested. J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 // =================================================================
 
 /*  ucMeter.cs
@@ -799,7 +802,7 @@ void ContainerWidget::wireInteractiveItem(MeterItem* item)
         connect(vfo, &VfoDisplayItem::bandStackRequested,
                 this, &ContainerWidget::bandStackRequested);
         connect(vfo, &VfoDisplayItem::filterContextRequested,
-                this, &ContainerWidget::filterContextRequested);
+                this, [this](int) { emit vfoFilterContextRequested(); });
     }
 }
 

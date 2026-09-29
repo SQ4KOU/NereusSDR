@@ -731,14 +731,30 @@ private slots:
         checkDesktopValues(hl2, HPSDRModel::HERMESLITE, ProtocolVersion::Protocol1);
     }
 
-    // ...and differ exactly where the radios do: the board and the RF power
-    // gauge its PA rating scales.
+    // ...and differ exactly where the radios do: the board, the RF power
+    // gauge its PA rating scales, and (iPhone app plan Task 25, D41) the
+    // Diversity tool and Antenna Setup, which the G2 has and the HL2 lacks.
     void fixturesDifferOnlyWhereTheRadiosDo()
     {
         const QJsonObject g2 = catalogInFixture(QStringLiteral("catalog-anan-g2.json"));
         const QJsonObject hl2 = catalogInFixture(QStringLiteral("catalog-hermes-lite-2.json"));
         QCOMPARE(differingKeys(g2, hl2),
-                 (QSet<QString>{QStringLiteral("board"), QStringLiteral("meters")}));
+                 (QSet<QString>{QStringLiteral("board"), QStringLiteral("meters"),
+                                QStringLiteral("tools"), QStringLiteral("radioItems")}));
+        const auto offeredDiffers = [&g2, &hl2](const QString& key) {
+            QStringList ids;
+            const QJsonArray a = g2.value(key).toArray();
+            const QJsonArray b = hl2.value(key).toArray();
+            for (int i = 0; i < a.size() && i < b.size(); ++i) {
+                if (a.at(i).toObject() != b.at(i).toObject()) {
+                    ids << a.at(i).toObject().value(QStringLiteral("id")).toString();
+                }
+            }
+            return ids;
+        };
+        QCOMPARE(offeredDiffers(QStringLiteral("tools")), QStringList{QStringLiteral("diversity")});
+        QCOMPARE(offeredDiffers(QStringLiteral("radioItems")),
+                 QStringList{QStringLiteral("antennaSetup")});
         QCOMPARE(differingKeys(g2.value(QStringLiteral("meters")).toObject(),
                                hl2.value(QStringLiteral("meters")).toObject()),
                  (QSet<QString>{QStringLiteral("rfPower")}));

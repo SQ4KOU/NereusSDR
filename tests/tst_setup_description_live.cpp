@@ -1041,8 +1041,9 @@ private slots:
         features.insert("setupDescription", 1);
         LoopbackTransport* app = core.signIn(phone, features);
         QVERIFY(admitted(app));
+        // A9 (iPhone app plan Task 39): 3 adds the stage readings.
         QCOMPARE(capability(app->received(), QStringLiteral("txReadingsVersion")),
-                 std::optional<qint64>(2));
+                 std::optional<qint64>(3));
         const QJsonObject pa = QJsonDocument::fromJson(latest(app->received(),
             QStringLiteral("setup"), QStringLiteral("pa")).toString().toUtf8()).object();
         QVERIFY(!pa.isEmpty());

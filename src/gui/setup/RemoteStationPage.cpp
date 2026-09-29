@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "gui/setup/RemoteStationPage.h"
 #include "gui/StyleConstants.h"
+#include "gui/multidevice/ConnectedDevicesList.h"
 
 #include <QCheckBox>
 #include <QGroupBox>
@@ -123,6 +124,15 @@ RemoteStationPage::RemoteStationPage(QWidget* parent)
     m_backupAcknowledged->setAutoDefault(false);
     backupLayout->addWidget(m_backupAcknowledged, 0, Qt::AlignLeft);
 
+    // iPhone app plan Task 78 item 8 (R-IOS-07): who is connected to this
+    // Core now, below the rest of the page.
+    QGroupBox* connected = addSection(tr("Connected now"));
+    QVBoxLayout* connectedLayout = qobject_cast<QVBoxLayout*>(connected->layout());
+    m_connectedList = new ConnectedDevicesList(connected);
+    m_connectedList->setObjectName(QStringLiteral("remoteAccessConnectedNow"));
+    m_connectedList->setNoCoreText(tr("Run a Core on this computer to see who is connected."));
+    connectedLayout->addWidget(m_connectedList);
+
     connect(m_runCore, &QCheckBox::clicked, this, [this](bool value) {
         {
             QSignalBlocker blocker(m_runCore);
@@ -174,6 +184,11 @@ void RemoteStationPage::setState(const State& state)
     m_keepRunning->setChecked(state.keepRunning);
     m_startWithComputer->setChecked(state.startWithComputer);
     refresh();
+}
+
+void RemoteStationPage::setConnectedDevices(RemoteDevicesState* devices)
+{
+    m_connectedList->setDevices(devices);
 }
 
 void RemoteStationPage::applyGate(QWidget* control, bool allowed, const QString& reason)

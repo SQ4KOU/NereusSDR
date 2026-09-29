@@ -1412,6 +1412,9 @@ list(APPEND CORE_SOURCES
     src/core/session/StationDevicesFacade.cpp
     # iPhone app Task 19 (R-IOS-06): the mirrored `catalog` object.
     src/core/session/StationCatalog.cpp
+    # iPhone app Task 25 (D41): the unbuilt features list the catalogue's
+    # tools read (the desktop's hide helpers stay in src/gui).
+    src/core/UnbuiltFeatureList.cpp
     src/core/setup/SetupDescriptionService.cpp
     # Parity Task 19 (R-IOS-25): the link's record streams.
     src/core/session/RecordStream.cpp
@@ -1428,6 +1431,8 @@ list(APPEND CORE_SOURCES
     # iPhone app plan Task 39 (D14, R-IOS-13, R-IOS-21): the mirrored
     # `txState` object (TransmitState).
     src/core/session/TransmitStateFacade.cpp
+    # iPhone app plan Task 25 (R-IOS-18): the mirrored `vax` object.
+    src/core/session/StationVaxFacade.cpp
     # iPhone app plan Task 35 (R-IOS-13): keying from a remote device.
     src/core/session/RemoteKeying.cpp
     # iPhone app plan, desktop remote transmit (R-IOS-13, R-R3-42): the
@@ -1549,6 +1554,7 @@ set(GUI_SOURCES
     src/gui/multidevice/TakeTransmitDialog.cpp
     src/gui/multidevice/ConfirmChangeDialog.cpp
     src/gui/multidevice/TakeReceiverDialog.cpp
+    src/gui/multidevice/ReplaceDeviceDialog.cpp
     src/gui/multidevice/NoticeCard.cpp
     src/gui/multidevice/ConnectedDevicesList.cpp
     src/gui/multidevice/MultiDeviceController.cpp

@@ -266,7 +266,7 @@ void OcOutputsTab::buildUserDigOutGroup()
     // so bit 0 is the lowest pin index.
     for (int bit = 0; bit < kUserDigOutBits; ++bit) {
         auto* cb = new QCheckBox(tr("Pin %1").arg(bit + 1), m_userDigOutGroup);
-        cb->setToolTip(tr("Toggle bit %1 of user_dig_out (Pin %2 on the "
+        cb->setToolTip(tr("Toggle bit %1 of User Dig Out (Pin %2 on the "
                            "Penny / Penny-Lane companion board).")
                            .arg(bit).arg(bit + 1));
         m_userDigOutChecks[static_cast<std::size_t>(bit)] = cb;

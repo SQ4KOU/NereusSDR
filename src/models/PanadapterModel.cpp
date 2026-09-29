@@ -16,6 +16,11 @@
 //                 floor, one store for every pan, reach every pan's model
 //                 when one changes. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-28 - Parity ruling C12: a band crossing applies the per-band
+//                 grid only on a pan that follows it (not a remote
+//                 window's), and applyStationGridSetting re-reads a band's
+//                 dB max and min when the setting changes. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -209,7 +214,9 @@ void PanadapterModel::setBand(Band b)
         return;
     }
     m_band = b;
-    applyBandGrid(b);
+    if (m_followsBandGrid) {
+        applyBandGrid(b);
+    }
     emit bandChanged(b);
 }
 
@@ -360,6 +367,27 @@ void PanadapterModel::loadPerBandGridFromSettings()
         if (step > 0) { m_gridStep = step; }
     } else {
         m_gridStep = kDefaultGridStep;
+    }
+}
+
+void PanadapterModel::applyStationGridSetting(const QString& key)
+{
+    // NereusSDR-original (parity ruling C12): no Thetis equivalent; Thetis
+    // has one window per radio.
+    auto& s = AppSettings::instance();
+    const auto reload = [this, &s](Band b) {
+        BandGridSettings& slot = m_perBandGrid[b];
+        slot.dbMax = s.value(gridMaxKey(b), kThetisDefaultDbMax).toInt();
+        slot.dbMin = s.value(gridMinKey(b), kThetisDefaultDbMin).toInt();
+        if (b == m_band && m_followsBandGrid) {
+            applyBandGrid(b);
+        }
+    };
+    for (int i = 0; i < static_cast<int>(Band::SwlFirst); ++i) {
+        const Band b = static_cast<Band>(i);
+        if (key.isEmpty() || key == gridMaxKey(b) || key == gridMinKey(b)) {
+            reload(b);
+        }
     }
 }
 

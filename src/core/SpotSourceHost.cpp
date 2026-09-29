@@ -147,6 +147,18 @@
 //                                    freedv_reporter.cpp:3280-3304
 //                                    [@77e793a], with ongui.cpp's header.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  Spot resolved mode (R-IOS-25,
+//                                    recordStreamVersion 2): each spot
+//                                    record carries resolvedMode, the
+//                                    desktop's own answer from
+//                                    SpotModeResolver::dspModeForSpot
+//                                    (ported from AetherSDR
+//                                    src/core/SpotModeResolver.{h,cpp}
+//                                    [@1e0718ad], Copyright (C) 2024-2026
+//                                    Jeremy (KK7GWY) / AetherSDR
+//                                    contributors, GPLv3), called here and
+//                                    not copied. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include "core/SpotSourceHost.h"
@@ -162,6 +174,7 @@
 #include "core/SpotCollectorClient.h"
 #include "core/WsjtxClient.h"
 #include "models/Band.h"
+#include "models/SpotModeResolver.h"
 #include "models/SpotModel.h"
 
 #include <QDateTime>
@@ -273,7 +286,7 @@ QJsonObject SpotSourceHost::spotRecordFields(const SpotData& spot, const DxccCol
             colour = c.name();
         }
     }
-    return QJsonObject{
+    QJsonObject fields{
         {QStringLiteral("timeUtc"), when.toUTC().toString(Qt::ISODate)},
         {QStringLiteral("frequencyHz"), static_cast<double>(hz)},
         {QStringLiteral("call"), spot.callsign},
@@ -285,6 +298,14 @@ QJsonObject SpotSourceHost::spotRecordFields(const SpotData& spot, const DxccCol
         {QStringLiteral("dxccColour"), colour},
         {QStringLiteral("dxccPriority"), priority},
     };
+    // Spot resolved mode (R-IOS-25, recordStreamVersion 2): the mode a click
+    // on this spot puts a slice in, as the desktop's own resolver (ported
+    // from AetherSDR SpotModeResolver [@1e0718ad]) picks it, as the slice's
+    // dspMode number. Absent when it has none.
+    if (const std::optional<DSPMode> mode = SpotModeResolver::dspModeForSpot(spot)) {
+        fields.insert(QStringLiteral("resolvedMode"), static_cast<int>(*mode));
+    }
+    return fields;
 }
 
 QString SpotSourceHost::readOnlyReason()

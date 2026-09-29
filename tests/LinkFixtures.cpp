@@ -1882,6 +1882,23 @@ StationLanAnnouncement LinkMediaVectors::lanAnnouncement2Devices()
     return value;
 }
 
+StationLanAnnouncement LinkMediaVectors::lanAnnouncement2Radio()
+{
+    StationLanAnnouncement value = lanAnnouncement2Devices();
+    value.radio = StationLanRadio::Connected;
+    return value;
+}
+
+StationLanAnnouncement LinkMediaVectors::lanAnnouncement2Waiting()
+{
+    StationLanAnnouncement value = lanAnnouncement2Devices();
+    value.radioConnected = false;
+    value.radioName.clear();
+    value.radioMac = QStringLiteral("00:00:00:00:00:00");
+    value.radio = StationLanRadio::Waiting;
+    return value;
+}
+
 QByteArray LinkMediaVectors::lanAnnouncementTrailingBytes()
 {
     // Shaped like a future field: a tag, a length and three bytes.
@@ -1907,6 +1924,9 @@ QJsonObject LinkMediaVectors::toJson(const StationLanAnnouncement& value)
         if (value.devicesConnected) {
             json.insert(QStringLiteral("devicesConnected"), *value.devicesConnected);
         }
+        if (value.radio) {
+            json.insert(QStringLiteral("radio"), stationLanRadioName(*value.radio));
+        }
     }
     return json;
 }
@@ -1923,8 +1943,9 @@ bool LinkMediaVectors::fromJson(const QJsonObject& json, StationLanAnnouncement*
     const int schema = json.value(QStringLiteral("schema")).toInt(-1);
     const QString problem = expectKeys(
         json, schema == kStationLanAnnouncementSchema2 ? schemaOne + schemaTwo : schemaOne,
-        schema == kStationLanAnnouncementSchema2 ? QStringList{QStringLiteral("devicesConnected")}
-                                                 : QStringList{},
+        schema == kStationLanAnnouncementSchema2
+            ? QStringList{QStringLiteral("devicesConnected"), QStringLiteral("radio")}
+            : QStringList{},
         QStringLiteral("announcement expect"));
     if (!problem.isEmpty()) {
         *error = problem;
@@ -1970,13 +1991,24 @@ bool LinkMediaVectors::fromJson(const QJsonObject& json, StationLanAnnouncement*
             }
             value->devicesConnected = static_cast<int>(count);
         }
+        // iPhone app plan Task 25: absent is a Core from before the state.
+        value->radio.reset();
+        if (json.contains(QStringLiteral("radio"))) {
+            const auto radio =
+                stationLanRadioFromName(json.value(QStringLiteral("radio")).toString());
+            if (!radio) {
+                *error = QStringLiteral("radio is not offline, connected or waiting");
+                return false;
+            }
+            value->radio = *radio;
+        }
     }
     return true;
 }
 
 DnsSdRecord LinkMediaVectors::dnsSdRecord()
 {
-    const StationLanAnnouncement announcement = lanAnnouncement2Devices();
+    const StationLanAnnouncement announcement = lanAnnouncement2Radio();
     DnsSdRecord record;
     record.instanceName = dnsSdInstanceName(announcement.displayName());
     record.label = announcement.label;
@@ -1984,6 +2016,7 @@ DnsSdRecord LinkMediaVectors::dnsSdRecord()
     record.claimed = announcement.claimed;
     record.pairing = announcement.pairing;
     record.devicesConnected = announcement.devicesConnected.value_or(0);
+    record.radio = announcement.radio.value_or(StationLanRadio::Offline);
     return record;
 }
 

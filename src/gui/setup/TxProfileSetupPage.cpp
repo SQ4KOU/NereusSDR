@@ -168,8 +168,9 @@ void TxProfileSetupPage::buildUi()
                               TransmitModel::kAmCarrierLevelMax);
         carrierSpin->setSuffix(QStringLiteral(" %"));
         carrierSpin->setStyleSheet(QString::fromLatin1(Style::kSpinBoxStyle));
+        // 100 % = full carrier, as in Thetis.
         carrierSpin->setToolTip(QStringLiteral(
-            "AM / SAM / DSB carrier level (%).  100 % = full carrier, as in Thetis.  "
+            "AM / SAM / DSB carrier level (%).  100 % = full carrier.  "
             "In AM the TX filter is symmetric: +/- High cutoff around the carrier."));
         carrierSpin->setValue(m_tx->amCarrierLevel());
         filterForm->addRow(QStringLiteral("AM carrier level:"), carrierSpin);

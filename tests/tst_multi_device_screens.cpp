@@ -24,6 +24,12 @@
 //               (KG4VCF), iPhone app plan Task 78 (R-IOS-02, R-IOS-07,
 //               R-IOS-30), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-28: the fifth-device choice and the named takeover on the stop
+//               panel (Task 78 items 3 and 7, G-53). J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-28: This Core manages the Core's devices (iPhone app plan Task
+//               25). J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -55,6 +61,10 @@
 #include "gui/multidevice/DeviceWords.h"
 #include "gui/multidevice/MultiDeviceController.h"
 #include "gui/multidevice/NoticeCard.h"
+#include "gui/multidevice/ReplaceDeviceDialog.h"
+#include "gui/RemoteConnectionController.h"
+#include "gui/setup/ThisCorePage.h"
+#include "core/session/StationDevicesFacade.h"
 #include "gui/multidevice/TakeReceiverDialog.h"
 #include "gui/multidevice/TakeTransmitDialog.h"
 #include "gui/widgets/SpectrumStatusOverlay.h"
@@ -91,8 +101,9 @@ struct Window {
 
     QString id() const { return StationIdentity::toBase64Url(key->fingerprint()); }
 
-    // Signs in to `core` with this computer's key, as a paired window does.
-    bool connectTo(Core& core)
+    // Starts signing in to `core` with this computer's key and returns
+    // without waiting (a full Core asks which device to replace first).
+    void startTo(Core& core)
     {
         auto* station = new LoopbackTransport(QStringLiteral("station"));
         auto* peer = new LoopbackTransport(QStringLiteral("window"));
@@ -102,6 +113,12 @@ struct Window {
         client.startSession(peer, QString(), QString(),
                             core.server->stationIdentity().fingerprint());
         core.server->acceptTransport(station);
+    }
+
+    // Signs in to `core` with this computer's key, as a paired window does.
+    bool connectTo(Core& core)
+    {
+        startTo(core);
         return QTest::qWaitFor([this]() { return client.isHandshakeComplete(); }, 5000);
     }
 };
@@ -695,6 +712,259 @@ private slots:
     }
 
     // Every state rendered offscreen (NEREUS_TASK78_SHOTS keeps them).
+    // Task 78 item 7 (G-53): a window that reaches a Core with four
+    // devices on it is asked which one it replaces. Cancel leaves the Core
+    // as it is; a choice lets the window in and the replaced device is told
+    // who took its place.
+    void aFullCoreAsksWhichDeviceToReplace()
+    {
+        Core core;
+        Device devices[4];
+        QList<LoopbackTransport*> apps;
+        for (int i = 0; i < 4; ++i) {
+            devices[i].name = QStringLiteral("Phone %1").arg(i + 1);
+            core.pair(devices[i]);
+            apps.append(core.signIn(devices[i]));
+            QVERIFY(admitted(apps.last()));
+        }
+        Window w;
+        QVERIFY(core.server->deviceStore()->add(w.record()));
+        MultiDeviceController controller(&w.client, &w.host);
+        RemoteConnectionController connection(&w.client, &w.remote, RemoteStationOptions{});
+
+        // Cancel: the Core stays full and says so.
+        w.startTo(core);
+        auto* first = openDialogOf<ReplaceDeviceDialog>(controller);
+        QVERIFY(first != nullptr);
+        QCOMPARE(connection.statusText(), QStringLiteral("Core full, choose a device to replace"));
+        QVERIFY(!w.client.isHandshakeComplete());
+        first->cancelButton()->click();
+        QTRY_VERIFY(!w.client.isConnectionActive());
+        QVERIFY(!w.client.remoteDevices()->held());
+        QCOMPARE(core.sessions().placesTaken(), 4);
+        for (LoopbackTransport* app : std::as_const(apps)) {
+            QVERIFY(app->isOpen());
+        }
+
+        // A choice: the list is the Core's four, each in plain words, and
+        // the pick starts on the first that can be replaced.
+        w.startTo(core);
+        auto* dialog = openDialogOf<ReplaceDeviceDialog>(controller);
+        QVERIFY(dialog != nullptr);
+        QCOMPARE(dialog->deviceList()->count(), 4);
+        QCOMPARE(dialog->deviceList()->currentRow(), 0);
+        for (int i = 0; i < dialog->deviceList()->count(); ++i) {
+            QVERIFY(OperatorWording::isPlain(dialog->deviceList()->item(i)->text()));
+        }
+        QVERIFY(OperatorWording::isPlain(dialog->intro()->text()));
+        QCOMPARE(dialog->replaceButton()->text(), QStringLiteral("Replace"));
+        dialog->deviceList()->setCurrentRow(1);
+        const QString target = dialog->pickedDeviceId();
+        QVERIFY(!target.isEmpty());
+        dialog->replaceButton()->click();
+        QTRY_VERIFY(w.client.isHandshakeComplete());
+        QVERIFY(!w.client.remoteDevices()->held());
+        QVERIFY(controller.openDialog() == nullptr);
+
+        LoopbackTransport* replaced = nullptr;
+        for (int i = 0; i < 4; ++i) {
+            if (devices[i].id() == target) {
+                replaced = apps.at(i);
+            }
+        }
+        QVERIFY(replaced != nullptr);
+        const QJsonObject end = endOf(replaced);
+        QCOMPARE(end.value(QStringLiteral("code")).toString(), QStringLiteral("takenOver"));
+        QCOMPARE(end.value(QStringLiteral("takenOverById")).toString(), w.id());
+        QCOMPARE(core.sessions().placesTaken(), 4);
+    }
+
+    // Task 78 item 3 (G-53): the stop panel names the device that took this
+    // window's place and when; Take it back reconnects into the list with
+    // that device already picked.
+    void theStopPanelNamesTheTakerAndTakeItBackStartsOnIt()
+    {
+        Core core;
+        Window w;
+        QVERIFY(core.server->deviceStore()->add(w.record()));
+        QVERIFY(w.connectTo(core));
+        Device others[3];
+        for (int i = 0; i < 3; ++i) {
+            others[i].name = QStringLiteral("Tablet %1").arg(i + 1);
+            core.pair(others[i]);
+            QVERIFY(admitted(core.signIn(others[i])));
+        }
+        Device fifth(QStringLiteral("Jo's iPhone"), QStringLiteral("phone"), QStringLiteral("iPhone"));
+        core.pair(fifth);
+        LoopbackTransport* app = core.signIn(fifth);
+        QJsonObject held;
+        verifyHeld(app, &held);
+        RemoteConnectionController connection(&w.client, &w.remote, RemoteStationOptions{});
+        app->sendText(SessionMessages::encode(SessionMessages::sessionTakeover(
+            w.id(), static_cast<quint32>(held.value(QStringLiteral("revision")).toInteger()))));
+        QTRY_VERIFY(admitted(app));
+        QTRY_VERIFY(!w.client.isConnectionActive());
+
+        const StationEndReport report = w.client.lastEndReport();
+        QCOMPARE(report.kind, StationEndReport::Kind::TakenOver);
+        QCOMPARE(report.takenOverByName, QStringLiteral("Jo's iPhone"));
+        QCOMPARE(report.takenOverById, fifth.id());
+        QVERIFY(report.endedAt.isValid());
+        QVERIFY(qAbs(report.endedAt.secsTo(QDateTime::currentDateTime())) < 60);
+        QCOMPARE(connection.stopNotice(), CoreStopNotice::TakenOver);
+        const QString at = QLocale().toString(report.endedAt.time(), QLocale::ShortFormat);
+        QVERIFY2(connection.stopText().startsWith(
+                     QStringLiteral("Jo's iPhone took this window's place on the Core at %1.").arg(at)),
+                 qPrintable(connection.stopText()));
+        QVERIFY(OperatorWording::isPlain(connection.stopText()));
+        QVERIFY(connection.offersTakeBack());
+        CoreStopBanner banner(&connection, &w.host);
+        banner.refresh();
+        saveShot(&banner, QStringLiteral("stop-panel-named-takeover"));
+
+        // Take it back: the Core is full, so it asks, starting on the taker.
+        MultiDeviceController controller(&w.client, &w.host);
+        w.startTo(core);
+        auto* dialog = openDialogOf<ReplaceDeviceDialog>(controller);
+        QVERIFY(dialog != nullptr);
+        QCOMPARE(dialog->pickedDeviceId(), fifth.id());
+        QVERIFY2(dialog->intro()->text().startsWith(
+                     QStringLiteral("Jo's iPhone took this window's place just now.")),
+                 qPrintable(dialog->intro()->text()));
+        saveShot(dialog, QStringLiteral("replace-device-take-it-back"));
+        dialog->replaceButton()->click();
+        QTRY_VERIFY(w.client.isHandshakeComplete());
+        QCOMPARE(endOf(app).value(QStringLiteral("code")).toString(), QStringLiteral("takenOver"));
+    }
+
+    // iPhone app plan Task 25: a remote window's This Core page lists the
+    // Core's paired devices, revokes one, opens pairing and shows its code,
+    // and records the key backup, through the Core's own verbs.
+    void theThisCorePageManagesTheCoresDevices()
+    {
+        Core core;
+        Window w;
+        QVERIFY(core.server->deviceStore()->add(w.record()));
+        Device phone(QStringLiteral("Jo's iPhone"), QStringLiteral("phone"), QStringLiteral("iPhone"));
+        core.pair(phone);
+        LoopbackTransport* app = core.signIn(phone);
+        QVERIFY(admitted(app));
+        ThisCorePage page(&w.remote);
+        page.resize(760, 900);
+        QVERIFY(!page.addDeviceButton()->isEnabled());
+        QVERIFY(OperatorWording::isPlain(page.devicesUnavailableReason()));
+        QVERIFY(w.connectTo(core));
+        page.setStationSettingsAvailable(true, QString());
+        QTRY_VERIFY(w.client.deviceAdminAvailable());
+        QTRY_COMPARE(page.pairedRows()->findChildren<QPushButton*>(
+                         QStringLiteral("thisCoreRevoke")).size(), 2);
+        QVERIFY(page.devicesUnavailableReason().isEmpty());
+        QPushButton* ownRevoke = nullptr;
+        QPushButton* phoneRevoke = nullptr;
+        for (QPushButton* b : page.pairedRows()->findChildren<QPushButton*>(
+                 QStringLiteral("thisCoreRevoke"))) {
+            if (b->property("deviceId").toString() == w.id()) { ownRevoke = b; }
+            if (b->property("deviceId").toString() == phone.id()) { phoneRevoke = b; }
+        }
+        QVERIFY(ownRevoke != nullptr && phoneRevoke != nullptr);
+        QVERIFY(!ownRevoke->isEnabled());
+        QVERIFY(OperatorWording::isPlain(ownRevoke->toolTip()));
+        QVERIFY(phoneRevoke->isEnabled());
+        QCOMPARE(page.coreNameLabel()->text(), QStringLiteral("No Core name"));
+        QVERIFY(!page.keyBackupButton()->isHidden());
+        saveShot(&page, QStringLiteral("this-core-devices"), false);
+
+        // Add a device: the Core opens pairing and the page shows its code.
+        page.addDeviceButton()->click();
+        QTRY_VERIFY(!page.pairingCodeLabel()->isHidden());
+        QVERIFY(page.pairingCodeLabel()->text().startsWith(QStringLiteral("Pairing code: ")));
+        QVERIFY(page.pairingCodeLabel()->text().size() > QStringLiteral("Pairing code: ").size());
+        QVERIFY(!page.addDeviceButton()->isEnabled());
+        saveShot(&page, QStringLiteral("this-core-pairing-code"), false);
+
+        // Revoke: the Core drops the phone and it leaves the list. The rows
+        // were rebuilt when the pairing window opened, so find it again.
+        phoneRevoke = nullptr;
+        for (QPushButton* b : page.pairedRows()->findChildren<QPushButton*>(
+                 QStringLiteral("thisCoreRevoke"))) {
+            if (b->property("deviceId").toString() == phone.id()) { phoneRevoke = b; }
+        }
+        QVERIFY(phoneRevoke != nullptr);
+        phoneRevoke->click();
+        QTRY_VERIFY(!app->isOpen());
+        QVERIFY(!core.server->deviceStore()->find(phone.key.fingerprint()));
+        QTRY_COMPARE(page.pairedRows()->findChildren<QPushButton*>(
+                         QStringLiteral("thisCoreRevoke")).size(), 1);
+        QVERIFY(page.devicesStatusLabel()->text().isEmpty());
+
+        // The key backup, recorded on the Core.
+        QVERIFY(page.keyBackupButton()->isEnabled());
+        page.keyBackupButton()->click();
+        QTRY_COMPARE(page.keyBackupLabel()->text(), QStringLiteral("The Core's key is backed up."));
+        QVERIFY(core.server->devicesFacade()->keyBackupAcknowledged());
+        QVERIFY(page.keyBackupButton()->isHidden());
+    }
+
+    // The fifth-device list's words: the desktop that runs the Core is shown
+    // and cannot be chosen, the one on the air turns the button red, and a
+    // place freed after time away is said.
+    void theReplaceListShowsTheHostAndTurnsRedOnTheAir()
+    {
+        const auto entry = [](const QString& id, const QString& name, const QString& state,
+                              bool replaceable) {
+            RemoteHeldEntry e;
+            e.device.deviceId = id;
+            e.device.name = name;
+            e.device.shortName = name.section(QLatin1Char(' '), -1);
+            e.device.state = state;
+            e.device.connectedForSeconds = 3900;
+            e.device.lastActivitySeconds = 420;
+            e.device.awayForSeconds = state == QStringLiteral("away") ? 95 : 0;
+            e.device.transmittingForSeconds = state == QStringLiteral("transmitting") ? 130 : 0;
+            RemoteDeviceSlice slice;
+            slice.sliceId = 1;
+            slice.letter = QStringLiteral("B");
+            slice.band = static_cast<int>(Band::Band20m);
+            slice.frequencyHz = 14074000.0;
+            if (state == QStringLiteral("transmitting")) {
+                e.device.holdsTransmit = true;
+                e.device.transmittingOn = slice;
+            } else if (state == QStringLiteral("listening")) {
+                e.device.listeningOn = {slice};
+            }
+            e.replaceable = replaceable;
+            return e;
+        };
+        RemoteHeldList held;
+        held.revision = 3;
+        held.placeFreedSecondsAgo = 200;
+        held.entries = {entry(QStringLiteral("a"), QStringLiteral("Jo's iPad"), QStringLiteral("away"), true),
+                        entry(QStringLiteral("h"), QStringLiteral("Shack Mac mini"), QStringLiteral("listening"), false),
+                        entry(QStringLiteral("l"), QStringLiteral("Den MacBook"), QStringLiteral("listening"), true),
+                        entry(QStringLiteral("t"), QStringLiteral("Jo's iPhone"), QStringLiteral("transmitting"), true)};
+        ReplaceDeviceDialog dialog(held);
+        QVERIFY(dialog.intro()->text().startsWith(
+            QStringLiteral("This window's place was freed after 3 minutes away, 3 minutes ago.")));
+        QCOMPARE(dialog.pickedDeviceId(), QStringLiteral("a"));
+        QVERIFY(!(dialog.deviceList()->item(1)->flags() & Qt::ItemIsEnabled));
+        QVERIFY(dialog.deviceList()->item(1)->text().contains(
+            QStringLiteral("Runs the Core, so it cannot be replaced.")));
+        QVERIFY(dialog.deviceList()->item(3)->text().contains(
+            QStringLiteral("On the air for 2 minutes on slice B 20m 14.074 MHz")));
+        for (int i = 0; i < dialog.deviceList()->count(); ++i) {
+            QVERIFY(OperatorWording::isPlain(dialog.deviceList()->item(i)->text()));
+        }
+        saveShot(&dialog, QStringLiteral("replace-device-list"));
+        dialog.deviceList()->setCurrentRow(3);
+        QCOMPARE(dialog.replaceButton()->text(), QStringLiteral("Unkey and replace"));
+        QVERIFY(!dialog.replaceButton()->styleSheet().isEmpty());
+        saveShot(&dialog, QStringLiteral("replace-device-on-the-air"));
+        // A newer list keeps the pick.
+        held.revision = 4;
+        dialog.setHeld(held);
+        QCOMPARE(dialog.pickedDeviceId(), QStringLiteral("t"));
+    }
+
     void screenshots()
     {
         // The dialogs.

@@ -12,6 +12,10 @@
 //   2026-09-27  J.J. Boyd / KG4VCF  Remote-window parity Task 33 (R-R3-49,
 //                                    R-R3-32, R-IOS-13). AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  A9 (iPhone app plan Task 39): the seven
+//                                    container stage meters
+//                                    (txReadingsVersion 3). AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -243,6 +247,9 @@ private slots:
     void maxBinReadsTheSlicesOwnPanAsALocalWindowDoes();
     void cfcBinsRoundTripToATenth();
     void pumpWorksTheCompressionReadingAsThetis();
+    void pumpWorksTheStageReadingsAsALocalWindow();
+    void remoteStageMetersMatchALocalWindow();
+    void coreSendsItsStageReadingsKeyed();
     void newWordingIsPlain();
 
 private:
@@ -299,10 +306,11 @@ void TstRemoteTxReadings::capabilityComesRightAfterTxStateVersion()
 
     Session s(m_securityDir.path(), this);
     QVERIFY(s.connect());
-    QCOMPARE(s.server->txReadingsVersion(), 2);
-    QCOMPARE(s.client->capabilities().txReadingsVersion, 2);
+    QCOMPARE(s.server->txReadingsVersion(), 3);
+    QCOMPARE(s.client->capabilities().txReadingsVersion, 3);
     QVERIFY(s.client->txReadingsAvailable());
-    QCOMPARE(s.window.stationTxReadingsVersion(), 2);
+    QVERIFY(s.client->txStageReadingsAvailable());
+    QCOMPARE(s.window.stationTxReadingsVersion(), 3);
     QCOMPARE(s.window.stationTransmitState(), s.client->transmitState());
 
     QTemporaryDir scratch;
@@ -357,7 +365,7 @@ void TstRemoteTxReadings::corePublishesScaledPaReadings()
 {
     Session s(m_securityDir.path(), this);
     QVERIFY(s.connect());
-    QCOMPARE(s.client->capabilities().txReadingsVersion, 2);
+    QCOMPARE(s.client->capabilities().txReadingsVersion, 3);
     const double watts = scaleFwdPowerWatts(HPSDRModel::ANAN_G2, 2600);
     const double forwardVolts = scaleFwdRevVoltage(HPSDRModel::ANAN_G2, 2600);
     const double reflectedVolts = scaleFwdRevVoltage(HPSDRModel::ANAN_G2, 300);
@@ -953,6 +961,163 @@ void TstRemoteTxReadings::pumpWorksTheCompressionReadingAsThetis()
     // A window's transmit meters: only the eight readings txState does not
     // carry stay disabled, and Compression is no longer one of them.
     QVERIFY(!MeterPoller::remoteTxBindingsNotSent().contains(MeterBinding::TxComp));
+}
+
+namespace {
+
+// The seven stage readings, each binding with its `txState` name.
+struct StageReading {
+    int bindingId;
+    const char* name;
+    double TxMeterReadings::*field;
+};
+const StageReading kStageReadings[] = {
+    { MeterBinding::TxEq,          "eqDb",          &TxMeterReadings::eqDb },
+    { MeterBinding::TxLeveler,     "levelerDb",     &TxMeterReadings::levelerDb },
+    { MeterBinding::TxLevelerGain, "levelerGainDb", &TxMeterReadings::levelerGainDb },
+    { MeterBinding::TxCfc,         "cfcDb",         &TxMeterReadings::cfcDb },
+    { MeterBinding::TxCfcGain,     "cfcGainDb",     &TxMeterReadings::cfcGainDb },
+    { MeterBinding::TxAlcGain,     "alcGainDb",     &TxMeterReadings::alcGainDb },
+    { MeterBinding::TxAlcGroup,    "alcGroupDb",    &TxMeterReadings::alcGroupDb },
+};
+
+// A distinct GetTXAMeter reading for each WDSP meter, inside every floor.
+double rawStageMeter(TxMeterType meter)
+{
+    return -1.25 - 0.75 * static_cast<int>(meter);
+}
+
+} // namespace
+
+// A9: the Core works each stage reading exactly as a local window's poll
+// works its own transmit channel's (MeterPoller::txReadingForBinding).
+void TstRemoteTxReadings::pumpWorksTheStageReadingsAsALocalWindow()
+{
+    RadioStatus status;
+    const TxMeterReadings none = TxMeterPump::read(status, nullptr);
+    for (const StageReading& stage : kStageReadings) {
+        QCOMPARE(none.*stage.field, TxMeterReadings::kNoReadingDb);
+    }
+    const std::function<double(TxMeterType)> readRaw = rawStageMeter;
+    const TxMeterReadings readings = TxMeterPump::readFrom(status, readRaw);
+    for (const StageReading& stage : kStageReadings) {
+        QCOMPARE(readings.*stage.field, MeterPoller::txReadingForBinding(stage.bindingId, readRaw));
+        QVERIFY2(readings.*stage.field != TxMeterReadings::kNoReadingDb, stage.name);
+    }
+    // The ones already sent read the same through readFrom.
+    QCOMPARE(readings.alcDb, MeterPoller::txReadingForBinding(MeterBinding::TxAlc, readRaw));
+    QCOMPARE(readings.micLevelDb, MeterPoller::txReadingForBinding(MeterBinding::TxMic, readRaw));
+    QCOMPARE(readings.compressionDb,
+             MeterPoller::txReadingForBinding(MeterBinding::TxComp, readRaw));
+
+    // A window's copy takes each by name and drops it with the session.
+    TransmitState state;
+    QSignalSpy meters(&state, &TransmitState::metersChanged);
+    double value = -2.0;
+    for (const StageReading& stage : kStageReadings) {
+        QVERIFY(state.applyStationValue(stage.name, value));
+        QCOMPARE(state.property(stage.name).toDouble(), value);
+        QCOMPARE(state.meters().*stage.field, value);
+        value -= 1.5;
+    }
+    QCOMPARE(meters.size(), static_cast<int>(std::size(kStageReadings)));
+    state.clearStationValues();
+    for (const StageReading& stage : kStageReadings) {
+        QCOMPARE(state.property(stage.name).toDouble(), TxMeterReadings::kNoReadingDb);
+    }
+}
+
+// A9: a remote window's seven container meters show what a local window's
+// show for the same transmit channel readings, and a Core below
+// txReadingsVersion 3 leaves each disabled with the reason, never hidden.
+void TstRemoteTxReadings::remoteStageMetersMatchALocalWindow()
+{
+    // Local: this window's own transmit channel readings.
+    MeterWidget localMeters;
+    QHash<int, TextItem*> localItems;
+    MeterPoller localPoller;
+    // Remote: the Core's txState, as the window's StationClient applies it.
+    RadioModel window(RadioModel::Role::Remote);
+    window.setStationConnectionState(ConnectionState::Connected);
+    QVERIFY(window.addSliceWithStationId(0) >= 0);
+    window.setActiveSlice(0);
+    TransmitState state;
+    RemoteMeters remote(window, state);
+    MeterWidget remoteMeters;
+    remoteMeters.resize(200, 200);
+    QHash<int, TextItem*> remoteItems;
+    for (const StageReading& stage : kStageReadings) {
+        auto* localItem = new TextItem(&localMeters);
+        localItem->setBindingId(stage.bindingId);
+        localMeters.addItem(localItem);
+        localItems.insert(stage.bindingId, localItem);
+        auto* remoteItem = new TextItem(&remoteMeters);
+        remoteItem->setBindingId(stage.bindingId);
+        remoteMeters.addItem(remoteItem);
+        remoteItems.insert(stage.bindingId, remoteItem);
+    }
+    localPoller.addTarget(&localMeters);
+    remote.poller.addTarget(&remoteMeters);
+
+    // A Core at txReadingsVersion 2: each is disabled with the reason.
+    bool stages = false;
+    remote.poller.setRemoteTxStageReadingsAvailable([&stages]() { return stages; });
+    tick(remote.poller);
+    for (const StageReading& stage : kStageReadings) {
+        QCOMPARE(remoteMeters.bindingUnavailableReason(stage.bindingId),
+                 TransmitState::txReadingNotSentText());
+    }
+    QCOMPARE(remoteMeters.items().size(), static_cast<int>(std::size(kStageReadings)));
+
+    // A Core at 3: available, and keyed they read the Core's values.
+    stages = true;
+    tick(remote.poller);
+    for (const StageReading& stage : kStageReadings) {
+        QVERIFY2(remoteMeters.bindingUnavailableReason(stage.bindingId).isEmpty(), stage.name);
+    }
+    // One GetTXAMeter reading for every WDSP meter, as the local poll's
+    // test hand-out takes it (handOutTxReadingForTest).
+    constexpr double kRaw = -7.5;
+    const TxMeterReadings core = TxMeterPump::readFrom(
+        RadioStatus{}, [](TxMeterType) { return kRaw; });
+    QVERIFY(state.applyStationValue("keyed", true));
+    for (const StageReading& stage : kStageReadings) {
+        QVERIFY(state.applyStationValue(stage.name, core.*stage.field));
+        localPoller.handOutTxReadingForTest(stage.bindingId, kRaw);
+    }
+    tick(remote.poller);
+    for (const StageReading& stage : kStageReadings) {
+        QVERIFY2(localItems.value(stage.bindingId)->value() != TxMeterReadings::kNoReadingDb,
+                 stage.name);
+        QVERIFY2(remoteItems.value(stage.bindingId)->value()
+                     == localItems.value(stage.bindingId)->value(),
+                 qPrintable(QStringLiteral("%1: %2 / %3")
+                                .arg(QLatin1String(stage.name))
+                                .arg(remoteItems.value(stage.bindingId)->value())
+                                .arg(localItems.value(stage.bindingId)->value())));
+    }
+}
+
+// A9: over the link, keyed, the window's copy follows the Core's stage
+// readings as its pump reads them.
+void TstRemoteTxReadings::coreSendsItsStageReadingsKeyed()
+{
+    Session s(m_securityDir.path(), this);
+    const std::function<double(TxMeterType)> readRaw = rawStageMeter;
+    const TxMeterReadings expected = TxMeterPump::readFrom(RadioStatus{}, readRaw);
+    s.server->transmitState()->meterPump()->setSource([expected]() { return expected; });
+    QVERIFY(s.connect());
+    QVERIFY(s.client->txStageReadingsAvailable());
+    TransmitState* windowTx = s.client->transmitState();
+    s.keyCore();
+    QTRY_VERIFY(s.core->isTransmitting());
+    for (const StageReading& stage : kStageReadings) {
+        QTRY_COMPARE(windowTx->property(stage.name).toDouble(), expected.*stage.field);
+        QCOMPARE(s.server->transmitState()->property(stage.name).toDouble(),
+                 expected.*stage.field);
+    }
+    s.unkeyCore();
+    QTRY_VERIFY(!s.core->isTransmitting());
 }
 
 void TstRemoteTxReadings::newWordingIsPlain()

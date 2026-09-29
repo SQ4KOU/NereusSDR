@@ -282,13 +282,9 @@ public:
     // ATT-on-TX master enable (Thetis _m_bATTonTX, console.cs:19041 [v2.10.3.13]).
     // When false, TX ATT is cleared to 0 dB on MOX-on.
     // R-R3-49 (parity Task 5): emits attOnTxEnabledChanged on a change.
-    void setAttOnTxEnabled(bool on)
-    {
-        if (m_attOnTxEnabled == on) { return; }
-        m_attOnTxEnabled = on;
-        emit attOnTxEnabledChanged(on);
-        scheduleSave();  // R-R3-49 (group A fix wave, M6): saved at once on the Core
-    }
+    // G-04: a change applies to the radio at once, keyed or not, as the
+    // Thetis ATTOnTX setter does (console.cs:19071-19094 [v2.10.3.15]).
+    void setAttOnTxEnabled(bool on);
     bool attOnTxEnabled() const noexcept { return m_attOnTxEnabled; }
 
     // Force-31-dB when PS-A is off (Thetis _forceATTwhenPSAoff,

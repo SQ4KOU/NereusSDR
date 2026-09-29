@@ -69,6 +69,24 @@ struct StationHostOptions {
     bool relayAllowed {true};
 };
 
+/// How devices can reach a running Core (iPhone app plan Tasks 49 and 78
+/// item 8): the listener, Bonjour on this network and the remote access
+/// service, as they stand now.
+struct StationReach {
+    bool listening {false};
+    bool listenerRetryPending {false};
+    /// Bonjour can run on this computer.
+    bool bonjourAvailable {false};
+    /// The Core is advertised by Bonjour now.
+    bool bonjourActive {false};
+    /// A remote access service is set up for this Core.
+    bool serviceConfigured {false};
+    /// The Core is registered with it now.
+    bool serviceRegistered {false};
+    /// The service's host name (the one in use, else the first set up).
+    QString serviceHost;
+};
+
 class StationHost : public QObject {
     Q_OBJECT
 public:
@@ -89,6 +107,7 @@ public:
     StationRadioStatus radioStatus() const;
     QString statusPageAddress() const;
     bool listenerReady() const;
+    StationReach reach() const;
     bool listenerRetryPending() const;
     int listenAttemptCount() const { return m_stationListenAttemptCount; }
     static QHostAddress listenerAddressFor(const QString& bind);

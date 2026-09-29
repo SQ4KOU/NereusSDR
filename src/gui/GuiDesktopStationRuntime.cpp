@@ -6,6 +6,8 @@
 #include "core/ConnectionState.h"
 #include "core/security/DeviceStore.h"
 #include "core/security/StationIdentity.h"
+#include "core/session/ConnectedDevicesFacade.h"
+#include "core/session/RemoteDevicesState.h"
 #include "core/session/StationDevicesFacade.h"
 #include "core/session/StationServer.h"
 #include "core/station/StationHost.h"
@@ -443,6 +445,7 @@ void GuiDesktopStationRuntime::bindPage(RemoteStationPage* page)
             [this] { addDevice(); });
     connect(page, &RemoteStationPage::keyBackupAcknowledgedRequested, this,
             [this] { acknowledgeKeyBackup(); });
+    page->setConnectedDevices(connectedDevices());
     page->setState(m_state);
 }
 
@@ -467,14 +470,12 @@ void GuiDesktopStationRuntime::updateState()
     next.startWithComputer = m_startWithComputer;
     next.stationName = m_controller && m_controller->host()
         ? m_controller->host()->coreLabel() : QString();
+    StationHost* host = m_controller ? m_controller->host() : nullptr;
     if (!next.runCore) {
         next.reachabilityText = tr("No Core listener is open from this window.");
     } else {
-        const QString bind = m_config.remoteBind.isEmpty()
-            ? tr("all configured interfaces") : m_config.remoteBind;
-        next.reachabilityText = tr("Listener open on %1, port %2. LAN discovery and remote "
-                                   "registration are not verified here.")
-                                    .arg(bind).arg(m_config.remotePort);
+        next.reachabilityText = reachText(m_config.remoteBind, m_config.remotePort,
+                                          host ? host->reach() : StationReach{});
     }
     if (next.startWithComputer) {
         switch (m_service->startupMode()) {
@@ -493,6 +494,27 @@ void GuiDesktopStationRuntime::updateState()
         }
     }
     StationServer* server = m_controller ? m_controller->server() : nullptr;
+    // Task 78 item 8: who holds a place on this Core now. Only the
+    // connected list: the paired devices have their own section.
+    if (ConnectedDevicesFacade* connected = server && next.runCore
+            ? server->connectedDevices() : nullptr) {
+        const QString listJson = connected->listJson();
+        QString hostId;
+        for (const RemoteConnectedDevice& device :
+             RemoteDevicesState::parseConnectedList(listJson)) {
+            if (device.hostsCore) { hostId = device.deviceId; }
+        }
+        connectedDevices()->setSelfDeviceId(hostId);
+        MirrorUpdate list;
+        list.name = QByteArrayLiteral("listJson");
+        list.value = listJson;
+        MirrorUpdate limit;
+        limit.name = QByteArrayLiteral("deviceLimit");
+        limit.value = connected->deviceLimit();
+        connectedDevices()->applyObject(QByteArrayLiteral("connectedDevices"), {list, limit});
+    } else {
+        connectedDevices()->clear();
+    }
     StationDevicesFacade* facade = server ? server->devicesFacade() : nullptr;
     if (facade) {
         next.stationName = facade->stationLabel().isEmpty()
@@ -527,6 +549,47 @@ void GuiDesktopStationRuntime::updateState()
         else { (*it)->setState(m_state); ++it; }
     }
     emit stateChanged();
+}
+
+RemoteDevicesState* GuiDesktopStationRuntime::connectedDevices()
+{
+    if (!m_hostDevices) {
+        m_hostDevices = new RemoteDevicesState(this);
+    }
+    return m_hostDevices;
+}
+
+QString GuiDesktopStationRuntime::reachText(const QString& bind, int port,
+                                           const StationReach& reach)
+{
+    const QString where = bind.isEmpty() ? tr("every network on this computer") : bind;
+    QString text;
+    if (reach.listening) {
+        text = tr("Listening on %1, port %2.").arg(where).arg(port);
+    } else if (reach.listenerRetryPending) {
+        text = tr("Port %1 on %2 is not open yet; trying again.").arg(port).arg(where);
+    } else {
+        text = tr("Not listening on %1, port %2.").arg(where).arg(port);
+    }
+    if (reach.bonjourActive) {
+        text += tr(" Devices on this network find it by Bonjour.");
+    } else if (!reach.bonjourAvailable) {
+        text += tr(" Bonjour is not available on this computer, so devices on this network "
+                   "need its address.");
+    } else {
+        text += tr(" Not announced by Bonjour yet.");
+    }
+    if (!reach.serviceConfigured) {
+        text += tr(" No remote access service is set up, so paired devices reach it only "
+                   "on this network.");
+    } else if (reach.serviceRegistered) {
+        text += tr(" Registered with the remote access service at %1, so paired devices "
+                   "reach it away from this network.").arg(reach.serviceHost);
+    } else {
+        text += tr(" Not registered with the remote access service at %1 yet.")
+                    .arg(reach.serviceHost);
+    }
+    return text;
 }
 
 bool GuiDesktopStationRuntime::sameState(const RemoteStationPage::State& a,

@@ -46,6 +46,8 @@
 
 #include <QtTest/QtTest>
 
+#include <algorithm>
+
 #include <QByteArray>
 #include <QCryptographicHash>
 #include <QFile>
@@ -442,7 +444,7 @@ private slots:
     void windowShowsTheCoresIoBoard();
     void windowForgetsTheIoBoardOfACoreThatDoesNotOfferIt();
     void windowOcMatrixFollowsTheCore();
-    void hardwareConfigRx1RateGoesToTheCoresFirstReceiver();
+    void hardwareConfigRateGoesToEveryReceiver();
     // R-R3-46 / R-R3-21 (radioHardwareVersion 4): the filter policy dialog.
     void windowFilterPolicyReachesTheCore();
     void windowFilterPolicyWaitsForACoreThatOffersIt();
@@ -6421,9 +6423,10 @@ struct HardwareSession {
 const QString kHardwareMac = QStringLiteral("AA:BB:CC:DD:EE:01");  // makeStationRadioModel's
 
 void joinHardwareWindow(HardwareSession& s, AppSettings& serverSettings, QObject* owner,
-                        const QString& securityDir, bool alexBoard = false)
+                        const QString& securityDir, bool alexBoard = false,
+                        int extraSlices = 0)
 {
-    s.core = makeStationRadioModel(0);
+    s.core = makeStationRadioModel(extraSlices);
     if (alexBoard) {
         s.core->setBoardForTest(HPSDRHW::Hermes);
     }
@@ -7429,20 +7432,22 @@ void TstStationSession::windowOcMatrixFollowsTheCore()
     QCOMPARE(s.proxy->value(pin, QString()).toString(), QStringLiteral("True"));
 }
 
-void TstStationSession::hardwareConfigRx1RateGoesToTheCoresFirstReceiver()
+void TstStationSession::hardwareConfigRateGoesToEveryReceiver()
 {
-    // R-R3-46. In a remote window, Hardware Config > Radio Info's RX1
-    // sample rate changes the Core's first receiver now, without a
-    // reconnect (the receiver's own rate request), and is saved on the Core
-    // as that radio's default for its next connect.
+    // R-R3-46 and parity ruling C4. In a remote window, Hardware Config >
+    // Radio Info's sample rate changes every one of the window's receivers
+    // now, without a reconnect (each receiver's own rate request, lowest id
+    // first), as a local window's live change moves every receiver, and is
+    // saved on the Core as that radio's default for its next connect.
     QTemporaryDir dir;
     QVERIFY(dir.isValid());
     AppSettings settings(dir.filePath(QStringLiteral("rate.settings")));
     HardwareSession s;
-    joinHardwareWindow(s, settings, this, m_securityDir.path());
+    joinHardwareWindow(s, settings, this, m_securityDir.path(), /*alexBoard=*/false,
+                       /*extraSlices=*/2);
     const auto cleanup = qScopeGuard([&s] { leaveHardwareSession(s); });
     if (QTest::currentTestFailed()) { return; }
-    QTRY_VERIFY(!s.window->slices().isEmpty());
+    QTRY_COMPARE(s.window->slices().size(), 3);
     QTRY_COMPARE(s.window->currentRadioInfo().macAddress, kHardwareMac);
     s.window->alexAntennaFacade()->setWindowAvailability(true, {});
 
@@ -7464,26 +7469,32 @@ void TstStationSession::hardwareConfigRx1RateGoesToTheCoresFirstReceiver()
 
     const QString key = QStringLiteral("hardware/%1/radioInfo/sampleRate").arg(kHardwareMac);
     QTRY_COMPARE(settings.value(key).toInt(), hz);
-    SessionMessage request;
-    QTRY_VERIFY([&] {
+    QList<int> expected;
+    for (SliceModel* slice : s.core->slices()) {
+        expected.append(slice->sliceIndex());
+    }
+    std::sort(expected.begin(), expected.end());
+    QList<int> requested;
+    const auto collect = [&] {
+        requested.clear();
         for (const QByteArray& wire : s.stationEnd->received()) {
             const SessionMessage m = decodeOrFail(wire);
-            if (m.kind == SessionMessageKind::CommandInvoke
-                && m.commandVerb == "requestSliceSampleRate") {
-                request = m;
-                return true;
+            if (m.kind != SessionMessageKind::CommandInvoke
+                || m.commandVerb != "requestSliceSampleRate") {
+                continue;
             }
+            int sliceId = -1;
+            int rateHz = 0;
+            for (const MirrorUpdate& argument : m.arguments) {
+                if (argument.name == "sliceId") { sliceId = argument.value.toInt(); }
+                if (argument.name == "rateHz") { rateHz = argument.value.toInt(); }
+            }
+            if (rateHz == hz) { requested.append(sliceId); }
         }
-        return false;
-    }());
-    int sliceId = -1;
-    int rateHz = 0;
-    for (const MirrorUpdate& argument : request.arguments) {
-        if (argument.name == "sliceId") { sliceId = argument.value.toInt(); }
-        if (argument.name == "rateHz") { rateHz = argument.value.toInt(); }
-    }
-    QCOMPARE(sliceId, s.core->slices().first()->sliceIndex());
-    QCOMPARE(rateHz, hz);
+        return requested.size() >= expected.size();
+    };
+    QTRY_VERIFY(collect());
+    QCOMPARE(requested, expected);
 }
 
 // ── iPhone app Task 18 (R-IOS-08, R-IOS-17) ─────────────────────────────

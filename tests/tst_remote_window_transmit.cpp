@@ -904,9 +904,19 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(daemonMedia.micReceiver() != nullptr, 5000);
         QTRY_VERIFY(h.client.capabilities().txPermitted);
 
-        // This window takes transmit with a press, and lets go.
-        QVERIFY(pressMoxUntilKeyed(h));
-        h.remote.setMoxFromButton(false);
+        // This window takes transmit with a TUNE press, and lets go. The
+        // case is about the program's key; how the window came to hold
+        // transmit is not. TUNE needs no microphone, so the setup does not
+        // depend on the Core's 250 ms wait for a microphone line that the
+        // window starts only with a voice key: on a loaded computer (load
+        // 200 to 350 on an 18-core Mac) five MOX presses in a row were
+        // refused that way, each starting the line from cold. That race is
+        // reported as a product finding (2026-09-28); the MOX cases below
+        // still meet it. Holding transmit keeps the window's line running,
+        // so the program's key below meets a running line either way.
+        h.remote.setTune(true);
+        QTRY_VERIFY(h.station.moxController()->isMox());
+        h.remote.setTune(false);
         QTRY_VERIFY(!h.station.moxController()->isMox());
         QVERIFY(h.server.transmitHolder()->isHeldBy(h.windowKey->fingerprint()));
 
