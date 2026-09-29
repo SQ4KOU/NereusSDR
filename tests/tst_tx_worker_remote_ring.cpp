@@ -763,7 +763,9 @@ void TestTxWorkerRemoteRing::keyWithoutMicrophoneAudioIsRefusedMicNotReady()
     waited.start();
     sendCommand(station.app, "tx.key", 3611, {utf8("trigger", QStringLiteral("screen"))});
     QTRY_VERIFY_WITH_TIMEOUT(!resultFor(station.app, 3611).isEmpty(), 5000);
-    QVERIFY2(waited.elapsed() >= RemoteMicConfig::kReadyDeadlineMs - 10,
+    // Load findings 2: a line that never sends is refused at the line's
+    // start bound.
+    QVERIFY2(waited.elapsed() >= RemoteMicConfig::kLineStartDeadlineMs - 10,
              qPrintable(QString::number(waited.elapsed())));
     const QJsonObject result = resultFor(station.app, 3611);
     QVERIFY(!result.value(QStringLiteral("accepted")).toBool(true));

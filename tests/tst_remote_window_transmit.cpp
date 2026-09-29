@@ -181,7 +181,10 @@ void attachMicrophone(Test::RemoteAudioSessionHarness& h, float amplitude)
 // 24 runs at load 91; at load 82 to 130 the key was answered 52 to 133 ms
 // after it was sent). The refusal tells the operator to wait a moment and
 // try again, so after exactly that refusal the press is made again, up to
-// kMaxPresses; any other refusal, or no answer, fails.
+// kMaxPresses; any other refusal, or no answer, fails. Load findings 2
+// (2026-09-28): the Core's 250 ms now runs from the line's first packet,
+// with 1 s for that packet to come, so the line's cold start no longer
+// counts against the fill; the retry stays for a refusal that still comes.
 constexpr int kMaxPresses = 5;
 bool pressMoxUntilKeyed(Test::RemoteAudioSessionHarness& h)
 {

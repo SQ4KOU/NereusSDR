@@ -6013,7 +6013,7 @@ sentence. A client shows the sentence as sent and may offer the fix.
 | `swr` | The SWR is over the interlock's limit. Check the antenna, or change the interlock in Setup. | |
 | `otherDeviceHolds` | <holder> has the transmitter. | `takeTransmit` |
 | `programNeedsTransmit` | A program can transmit only while this device has transmit. Take transmit here first. | `takeTransmit` |
-| `micNotReady` | Microphone is not ready. Check Audio settings and retry. (the Core's own microphone); This device's microphone is not connected to the Core yet. Wait a moment and try again. (a remote voice key with no microphone line, section 18.6); No sound has reached the Core from this device's microphone yet. Wait a moment and try again. (a remote key whose line carried no sound within 250 ms, section 18.6) | |
+| `micNotReady` | Microphone is not ready. Check Audio settings and retry. (the Core's own microphone); This device's microphone is not connected to the Core yet. Wait a moment and try again. (a remote voice key with no microphone line, section 18.6); No sound has reached the Core from this device's microphone yet. Wait a moment and try again. (a remote key whose line sent nothing within 1 s, or did not fill within 250 ms of its first packet, section 18.6) | |
 | `changingHands` | Transmit is changing hands. Try again in a moment. | |
 | `stopNotConfirmed` | The radio did not confirm it stopped transmitting. | |
 | `holderOnAir` | <short name> is on the air. Try again when they stop. ("The radio is on the air. Try again when it stops." while the radio's own PTT, or the Core's own keys, hold transmit) | `takeTransmit` |
@@ -6214,8 +6214,10 @@ carries the microphone line (its media `start` carried `remoteTxVersion`;
 remote media control document, Microphone line) sends its microphone while
 it transmits. Its `tx.key`, in a mode that transmits the microphone (every
 mode but CWL and CWU), is answered once the line's buffer holds its 60 ms
-target, and then keys; when the buffer has not filled within 250 ms the key
-is refused `micNotReady`, "No sound has reached the Core from this device's
+target, and then keys. A device starts its line with the key, so the 250 ms
+for the buffer to fill runs from the line's first packet after the key
+arrives; when the buffer has not filled within 250 ms of that packet, or no
+packet has come within 1 s of the key, the key is refused `micNotReady`, "No sound has reached the Core from this device's
 microphone yet. Wait a moment and try again." The holder's own refusals come first, at once.
 Copies of a waiting key, and a new `tx.key` from the same device, get the
 waiting key's answer; a `tx.unkey` from the device while its key waits

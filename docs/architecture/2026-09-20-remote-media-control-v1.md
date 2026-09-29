@@ -996,8 +996,9 @@ as any microphone does.
 **Keying on a filled buffer.** A `tx.key` from a device whose media carries
 the line, in a mode that transmits the microphone (every mode but CWL and
 CWU), keys once the line's buffer holds its 60 ms target; if it has not
-within 250 ms it is refused `micNotReady` (the link document, sections 18.3
-and 18.6). TUNE and two-tone use no microphone and key at once, and a
+within 250 ms of the line's first packet after the key, or no packet has
+come within 1 s of the key, it is refused `micNotReady` (the link document,
+sections 18.3 and 18.6). TUNE and two-tone use no microphone and key at once, and a
 device without the line keys with the Core's own source, as before.
 
 **Starvation.** While the device is keyed on its line, 250 ms without audio

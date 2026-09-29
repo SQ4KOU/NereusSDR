@@ -17,6 +17,10 @@
 //               shedding a standing excess only in silence, and the
 //               over's latency figures. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-28: Load findings 2 (R-IOS-13): the key's fill wait runs from
+//               the line's first packet, with its own bound for that
+//               packet. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/media/RemoteMicReceiver.h"
@@ -796,6 +800,14 @@ void RemoteMicReceiver::submit(const QByteArray& packet)
     if (m_stats.framesWritten != writtenBefore) {
         checkReady();
     }
+    // Load findings 2 (R-IOS-13): the waiting key's line has started; the
+    // buffer now has kReadyDeadlineMs to fill.
+    if (m_waitDone && !m_waitLineStarted) {
+        m_waitLineStarted = true;
+        qCInfo(lcAudio) << "Remote microphone: the line's first packet came"
+                        << now() - m_waitStartedMs << "ms into the key's wait";
+        refuseWaitAfter(RemoteMicConfig::kReadyDeadlineMs, false);
+    }
 }
 
 void RemoteMicReceiver::decodeOpus(const QByteArray& payload, int missing)
@@ -893,18 +905,35 @@ void RemoteMicReceiver::writeAudio(const float* mono, int frames)
 void RemoteMicReceiver::awaitReady(std::function<void(bool ready)> done)
 {
     m_waitDone = std::move(done);
+    m_waitLineStarted = false;
+    m_waitStartedMs = now();
     const quint64 generation = ++m_waitGeneration;
     checkReady();
     if (!m_waitDone || generation != m_waitGeneration) {
         return;
     }
+    // Load findings 2 (R-IOS-13): the device starts its line with the key,
+    // so the fill deadline waits for the line's first packet (submit()); a
+    // line that sends nothing is refused here.
+    refuseWaitAfter(RemoteMicConfig::kLineStartDeadlineMs, true);
+}
+
+void RemoteMicReceiver::refuseWaitAfter(int ms, bool onlyBeforeFirstPacket)
+{
+    const quint64 generation = m_waitGeneration;
     QPointer<RemoteMicReceiver> self(this);
-    m_scheduler(RemoteMicConfig::kReadyDeadlineMs, [self, generation]() {
-        if (self.isNull() || generation != self->m_waitGeneration || !self->m_waitDone) {
+    m_scheduler(ms, [self, generation, onlyBeforeFirstPacket]() {
+        if (self.isNull() || generation != self->m_waitGeneration || !self->m_waitDone
+            || (onlyBeforeFirstPacket && self->m_waitLineStarted)) {
             return;
+        }
+        if (onlyBeforeFirstPacket) {
+            qCInfo(lcAudio) << "Remote microphone: no packet on the line within"
+                            << RemoteMicConfig::kLineStartDeadlineMs << "ms of the key";
         }
         std::function<void(bool)> done = std::move(self->m_waitDone);
         self->m_waitDone = nullptr;
+        ++self->m_waitGeneration;
         done(false);
     });
 }
