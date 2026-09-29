@@ -43,6 +43,10 @@
 //                                    applets' settings are taken on the
 //                                    air; Tune Power is the holder's. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  PA on-air gate review: the per-band
+//                                    power maps are the Core's own and
+//                                    refuse a peer's write.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -451,7 +455,11 @@ void TstTransmitModelProperties::task5PropertiesAreOnTheLinkUnderTheirGetters()
         QVERIFY2(prop, e.name);
         QCOMPARE(prop->kind, e.kind);
         QCOMPARE(prop->ordinal, ++ordinal);
-        QVERIFY2(MirrorPolicy::inboundAllowed("TransmitModel", e.name), e.name);
+        // The per-band power maps are the Core's own (PA on-air gate
+        // review): the Core refuses a peer's write of either.
+        const bool coreOwned = qstrcmp(e.name, "powerByBandJson") == 0
+                               || qstrcmp(e.name, "tunePowerByBandJson") == 0;
+        QCOMPARE(MirrorPolicy::inboundAllowed("TransmitModel", e.name), !coreOwned);
         QVERIFY(prop->isWritable);
     }
     // swrProtectFactor is the Core's runtime foldback (Thetis

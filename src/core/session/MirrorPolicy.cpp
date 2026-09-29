@@ -176,6 +176,11 @@
 //   2026-09-29 - R-R3-49 / R-IOS-18: paProfileVersion and the read-only
 //                 paProfiles object (PaProfilesFacade). J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - PA on-air gate review: TransmitModel powerByBandJson and
+//                 tunePowerByBandJson Outbound; the Core's RF and Tune
+//                 sliders own the per-band maps and a peer's write is
+//                 refused. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #include "core/session/MirrorPolicy.h"
@@ -529,8 +534,12 @@ const MirrorPolicy::Entry kEntries[] = {
     // R-R3-49 (parity Task 5, transmitSettingsVersion 5): Setup > Transmit >
     // Power's per-band power, DEXP/VOX and Test > Two-Tone IMD. None keys
     // the radio; the two-tone test itself stays in the keying set.
-    { "TransmitModel", "powerByBandJson", MirrorDirection::Bidirectional },
-    { "TransmitModel", "tunePowerByBandJson", MirrorDirection::Bidirectional },
+    // The per-band maps are the Core's own (PA on-air gate review): its RF
+    // and Tune sliders write them through `power` and tunePowerForTxBand,
+    // which pass the on-air gate. A whole-map write from a peer would skip
+    // that gate, so the Core refuses it. No Setup page writes the maps.
+    { "TransmitModel", "powerByBandJson", MirrorDirection::Outbound },
+    { "TransmitModel", "tunePowerByBandJson", MirrorDirection::Outbound },
     { "TransmitModel", "dexpAttackTimeMs", MirrorDirection::Bidirectional },
     { "TransmitModel", "dexpDetectorTauMs", MirrorDirection::Bidirectional },
     { "TransmitModel", "dexpExpansionRatioDb", MirrorDirection::Bidirectional },

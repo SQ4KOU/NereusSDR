@@ -1385,8 +1385,9 @@ When a feature is off, its version is 0:
   air too, as a local window changes them while transmitting (section
   7.3). At 5 it also covers Setup >
   Transmit > Power, Transmit > DEXP/VOX and Test > Two-Tone IMD: on
-  `transmit`, `tuneDrivePowerSource` becomes two-way, and
-  `powerByBandJson`, `tunePowerByBandJson`, `dexpAttackTimeMs`,
+  `transmit`, `tuneDrivePowerSource` becomes two-way,
+  `powerByBandJson` and `tunePowerByBandJson` are sent (the Core's own,
+  outbound), and `dexpAttackTimeMs`,
   `dexpDetectorTauMs`, `dexpExpansionRatioDb`, `dexpHighCutHz`,
   `dexpHysteresisRatioDb`, `dexpLookAheadEnabled`, `dexpLookAheadMs`,
   `dexpLowCutHz`, `dexpReleaseTimeMs`, `dexpSideChannelFilterEnabled`,
@@ -2775,8 +2776,8 @@ An enum property lists the values its domain allows.
 | 61 | `txLevelerDecay` | `i64` | bidirectional |  |
 | 62 | `txAlcMaxGain` | `i64` | bidirectional |  |
 | 63 | `txAlcDecay` | `i64` | bidirectional |  |
-| 64 | `powerByBandJson` | `utf8` | bidirectional |  |
-| 65 | `tunePowerByBandJson` | `utf8` | bidirectional |  |
+| 64 | `powerByBandJson` | `utf8` | outbound |  |
+| 65 | `tunePowerByBandJson` | `utf8` | outbound |  |
 | 66 | `dexpAttackTimeMs` | `f64` | bidirectional |  |
 | 67 | `dexpDetectorTauMs` | `f64` | bidirectional |  |
 | 68 | `dexpExpansionRatioDb` | `f64` | bidirectional |  |
@@ -3325,12 +3326,16 @@ Notes on the keys:
   `17m`, `15m`, `12m`, `10m`, `6m`, `GEN`, `WWV`, `XVTR`, `2m`); the Core
   writes its keys in its own order, and a window reads it as an object. A
   peer without `band2mVersion` 1 is sent the 14 without `2m` (section
-  6.1). A write carries all 15 bands, or the 14 without `2m` (2 m then
-  keeps its value), each a whole number from 0 to 100 W (tune power 0
-  to 99 on a Hermes Lite 2); a map with another band missing, a key that is not
-  a band, or a value that is not a whole number or is out of range is
-  refused whole and changes nothing. A map the Core takes reads back as
-  the same object in the Core's key order, and is accepted.
+  6.1). Both maps are outbound: the Core's RF and Tune sliders own them,
+  through `power` and `tunePowerForTxBand`, which pass the Core's on-air
+  checks, so a peer's write of either map is refused ("The Core sets
+  this itself; it cannot be changed from here.") and changes nothing. No Setup page writes them.
+  A window built before this change still sends `powerByBandJson` when
+  its RF slider moves; each such write is refused, and its `power` write
+  for the same move is still taken, so the Core's power follows the
+  slider and the Core's own map reaches the window. The Core keeps each
+  value a whole number from 0 to 100 W (tune power 0 to 99 on a Hermes
+  Lite 2).
   `dexpAttackTimeMs` (f64, 2 to 100 ms), `dexpDetectorTauMs` (f64, 1 to 100
   ms), `dexpExpansionRatioDb` (f64, 0.0 to 30.0 dB), `dexpHighCutHz` and
   `dexpLowCutHz` (f64, 100 to 10000 Hz, the VOX trigger filter),
