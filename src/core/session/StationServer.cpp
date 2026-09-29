@@ -650,6 +650,12 @@
 //               local window changes them while transmitting
 //               (isTxEqSettingTakenOnAir). J.J. Boyd (KG4VCF), AI-assisted
 //               via Anthropic Claude Code.
+//   2026-09-29: Remote parity on the air (transmitSettingsVersion 11):
+//               every transmit setting a local window takes while
+//               transmitting is taken on the air from a peer that may
+//               change the transmit settings (takesTransmitSettingsOnAir);
+//               the OC transmit pins and Region still wait. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -1249,21 +1255,6 @@ constexpr const char* kPropertyNeverKeysReason = "Use the transmit button.";
 bool isTransmitKeyingProperty(const QByteArray& name)
 {
     return name == "mox" || name == "tune" || name == "voxEnabled" || name == "twoToneActive";
-}
-
-// R-IOS-13 / R-R3-49 (remote parity, JJ's TX EQ ruling 2026-09-28): the
-// TX EQ dialog's settings, which a local window changes while the radio is
-// on the air (Thetis's eqform has no MOX check; NereusSDR's TxEqDialog and
-// the TX applet's EQ button are never greyed locally). A receive-only Core
-// takes them on the air too, from a peer offered the transmit settings;
-// every other transmit setting still waits for the radio to stop. They key
-// nothing.
-bool isTxEqSettingTakenOnAir(const QByteArray& name)
-{
-    return name == "txEqEnabled" || name == "txEqUseLegacy" || name == "txEqPreamp"
-        || name == "txEqBandsJson" || name == "txEqFreqsJson" || name == "txEqNc"
-        || name == "txEqMp" || name == "txEqCtfmode" || name == "txEqWintype"
-        || name == "txEqParaEqData";
 }
 
 // R-IOS-01: the one reason for a write to a property MirrorPolicy marks
@@ -4454,6 +4445,9 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
             // R-R3-49 (parity Task 7): whether this peer may arm PureSignal
             // off the air, set per dispatch like the owner (checkpoint join).
             m_dispatcher->setPureSignalArmingOffered(pureSignalArmingOffered(transport));
+            // Remote parity on the air (transmitSettingsVersion 11): whether
+            // this peer's transmit-setting commands are taken on the air.
+            m_dispatcher->setTransmitSettingsOnAir(takesTransmitSettingsOnAir(transport));
             // iPhone app Task 73 (rulings 5.9, 5.10): and for this device,
             // whose slices it may name and whose active slice it sets.
             m_dispatcher->setRequester(m_peers.value(transport).sessionDeviceId);
@@ -4484,6 +4478,7 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
             sendHeldQuestions();
             m_dispatcher->setRequester({});
             m_dispatcher->setPureSignalArmingOffered(false);
+            m_dispatcher->setTransmitSettingsOnAir(false);
             m_dispatcher->setSessionOwner({});
             m_dispatchingTransport = nullptr;
             // iPhone app Task 71: a result still owed (it arrives on a later
@@ -6145,8 +6140,10 @@ QList<SessionPropertyResult> StationServer::applyPropertyWrite(
     const bool pureSignalSettingsWrite = message.objectKey == "pureSignalSettings";
     const bool pureSignalSettingsLive = pureSignalSettingsWrite
         && pureSignalArmingOffered(transport);
+    // Version 11: taken on the air too, from a peer that may change the
+    // transmit settings, as the local PureSignal dialog takes it keyed.
     QString pureSignalOnAir;
-    if (pureSignalSettingsLive) {
+    if (pureSignalSettingsLive && !takesTransmitSettingsOnAir(transport)) {
         m_radioModel->stationOnAirRefusal(&pureSignalOnAir);
     }
     const QPointer<PureSignal> hydrating = pureSignalSettingsWrite && !pureSignalSettingsLive
@@ -6211,16 +6208,11 @@ QList<SessionPropertyResult> StationServer::applyPropertyWrite(
     const bool receiveOnlyTransmitWrite = message.objectKey == QByteArray(kTransmitKey)
         && !m_radioModel.isNull() && m_radioModel->receiveOnlyStationPolicy();
     // R-R3-49 (parity Task 1): a peer offered transmitSettingsVersion 1 may
-    // change a transmit setting on a receive-only Core; it waits while the
-    // radio is on the air (the Core's one on-air refusal), read once for the
-    // batch before anything in it is applied. Any other peer is refused
-    // every `transmit` write, as before.
+    // change a transmit setting on a receive-only Core. Any other peer is
+    // refused every `transmit` write, as before. Since version 11 it is
+    // taken on the air too, as a local window takes it while transmitting.
     const bool transmitSettingsWrite = receiveOnlyTransmitWrite
         && transmitSettingsOffered(transport);
-    QString settingsOnAirRefusal;
-    if (transmitSettingsWrite) {
-        m_radioModel->stationOnAirRefusal(&settingsOnAirRefusal);
-    }
     // R-R3-25: the tuner's operate, bypass and antenna, and the amplifier's
     // operate, on a receive-only Core.
     const bool receiveOnlyStation = !m_radioModel.isNull()
@@ -6237,12 +6229,8 @@ QList<SessionPropertyResult> StationServer::applyPropertyWrite(
     const bool amplifierWrite = message.objectKey == QByteArray(kAmplifierKey);
     // R-R3-49 (parity Task 5): `stepAtt`'s ATT on TX, its value and Force
     // ATT are transmit settings (transmitSettingsVersion 5). A receive-only
-    // Core takes them from a peer offered the transmit settings, off the
-    // air only; the on-air check is read once for the batch.
-    QString stepAttOnAir;
-    if (stepAttWrite && receiveOnlyStation) {
-        m_radioModel->stationOnAirRefusal(&stepAttOnAir);
-    }
+    // Core takes them from a peer offered the transmit settings, on the
+    // air too since version 11 (the local Setup page takes them keyed).
     // R-IOS-01: the class MirrorPolicy's direction table is keyed by.
     QByteArray outboundClass;
     if (const QObject* target = m_mirror->watchedObject(message.objectKey)) {
@@ -6265,11 +6253,6 @@ QList<SessionPropertyResult> StationServer::applyPropertyWrite(
         const auto known = previous.constFind(update.name);
         if (known == previous.cend() || known->kind != update.kind) {
             refusals.insert(update.name, QStringLiteral("The Core does not have this setting, or not in this form."));
-            continue;
-        }
-        if (transmitSettingsWrite && !settingsOnAirRefusal.isEmpty()
-            && !isTxEqSettingTakenOnAir(update.name)) {
-            refusals.insert(update.name, settingsOnAirRefusal);
             continue;
         }
         if (transmitObjectWrite && (update.name == "mox" || update.name == "tune")) {
@@ -6336,10 +6319,6 @@ QList<SessionPropertyResult> StationServer::applyPropertyWrite(
         if (stepAttWrite && StepAttenuatorFacade::isTransmitSetting(update.name)) {
             if (receiveOnlyStation && !transmitSettingsOffered(transport)) {
                 refusals.insert(update.name, QString::fromLatin1(kReceiveOnlyTransmitReason));
-                continue;
-            }
-            if (!stepAttOnAir.isEmpty()) {
-                refusals.insert(update.name, stepAttOnAir);
                 continue;
             }
             const QString range = m_radioModel->stepAttFacade()
@@ -8856,15 +8835,14 @@ QString StationServer::transmitSettingOnAirRefusal(const QString& key) const
     if (isTransmitSettingKeyTakenOnAir(key)) {
         return reason;
     }
-    // Trunk merge of remote transmit (join c): with remote transmit
-    // allowed, a permitted session writes the transmit settings (the
-    // station transmit gate), and the on-air rule is the change's, not the
-    // holder's: the OC transmit pins wait while the radio is on the air,
-    // whoever holds transmit, as Thetis greys them while MOX is on
-    // (setup.cs:21944 [v2.10.3.15] UpdateForHotSwitch). The other keys on
-    // the off-air list keep the transmit lane's rule there.
-    if (!m_radioModel->receiveOnlyStationPolicy()
-        && !isOcTransmitPinKey(key.toLower().split(QLatin1Char('/')))) {
+    // Trunk merge of remote transmit (join c): the on-air rule is the
+    // change's, not the holder's: the OC transmit pins wait while the radio
+    // is on the air, whoever holds transmit, as Thetis greys them while MOX
+    // is on (setup.cs:21944 [v2.10.3.15] UpdateForHotSwitch). Since
+    // transmitSettingsVersion 11 a receive-only Core follows the same rule:
+    // the other keys on the list are taken on the air, as a local window
+    // takes them (their apply still waits for receive).
+    if (!isOcTransmitPinKey(key.toLower().split(QLatin1Char('/')))) {
         return reason;
     }
     m_radioModel->stationOnAirRefusal(&reason);
@@ -9735,7 +9713,32 @@ int StationServer::transmitSettingsVersion() const
     // 10: the mic mute, `transmit.micMuted` (iPhone app plan Task 40),
     // under the same gates as the mic level; muting sets the Core's mic
     // preamp to 0.0 as Thetis's chkMicMute does.
-    return m_radioModel.isNull() ? 0 : 10;
+    // 11: remote parity on the air. A local window changes its transmit
+    // settings while transmitting (no TX applet, Phone/CW, TX EQ, CFC,
+    // PureSignal, Two-Tone or Setup transmit control is greyed under MOX,
+    // as in Thetis), so the Core takes them on the air too, from a peer it
+    // takes transmit settings from (takesTransmitSettingsOnAir): every
+    // `transmit` property but the keying set, `stepAtt`'s ATT on TX
+    // settings, the DSP > Options TX, Power and PA keys (their apply still
+    // waits for receive), `pureSignalSettings`, and the commands
+    // setTunePowerForTxBand, txProfile.select / save / delete,
+    // rade.resetVocoder, the PureSignal arming verbs and tx.twoTonePreset.
+    // Still off the air, as locally: the OC transmit pins (Thetis greys
+    // them under MOX) and General > Region.
+    return m_radioModel.isNull() ? 0 : kTransmitSettingsOnAirVersion;
+}
+
+bool StationServer::takesTransmitSettingsOnAir(SessionTransport* transport) const
+{
+    // The permission a transmit setting needs, unchanged by the air: a
+    // receive-only Core's peer offered the transmit settings, or a session
+    // the station transmit gate permits.
+    if (m_radioModel.isNull() || transmitSettingsVersion() < kTransmitSettingsOnAirVersion) {
+        return false;
+    }
+    return m_radioModel->receiveOnlyStationPolicy()
+        ? transmitSettingsOffered(peerKey(transport))
+        : txDecisionFor(transport).permitted;
 }
 
 bool StationServer::pureSignalArmingOffered(SessionTransport* transport) const

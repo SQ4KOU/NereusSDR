@@ -14,6 +14,10 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29 - Remote parity on the air (transmitSettingsVersion 11):
+//                 the tune power, TX profile and RADE reset commands take
+//                 `takenOnAir`. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 //   2026-09-27 - The MOX band-plan check uses the XIT-shifted TX carrier,
 //                 matching the TX chain and Thetis console.cs:29440-29486.
 //                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
@@ -5131,16 +5135,17 @@ bool RadioModel::refuseLocalAccessorySwitchOnAir(const QString& device, bool sta
 // R-R3-49 (parity Task 2, transmitSettingsVersion 2): the TX applet's Tune
 // Power slider from a window. The Core does what the local slider does
 // (TxApplet.cpp): the tune power for its transmit band, and the tune drive
-// source to the tune slider. Refused while the radio is on the air and
-// outside the tune power range. Keys nothing. NereusSDR-original.
+// source to the tune slider. Refused outside the tune power range, and
+// while the radio is on the air unless `takenOnAir` (version 11, as the
+// local slider moves keyed). Keys nothing. NereusSDR-original.
 // ---------------------------------------------------------------------------
-bool RadioModel::setTunePowerForTxBandForStation(int watts, QString* reason)
+bool RadioModel::setTunePowerForTxBandForStation(int watts, QString* reason, bool takenOnAir)
 {
     if (m_role != Role::Local) {
         if (reason) { *reason = QStringLiteral("The Core cannot change its transmit settings."); }
         return false;
     }
-    if (stationOnAirRefusal(reason)) {
+    if (!takenOnAir && stationOnAirRefusal(reason)) {
         return false;
     }
     const QString range = m_transmitModel.settingRangeRefusal(
@@ -5227,13 +5232,14 @@ void RadioModel::mirrorTxProfilesFromStation()
     });
 }
 
-bool RadioModel::selectTxProfileForStation(const QString& name, QString* reason)
+bool RadioModel::selectTxProfileForStation(const QString& name, QString* reason,
+                                           bool takenOnAir)
 {
     if (m_role != Role::Local || m_micProfileMgr == nullptr) {
         if (reason) { *reason = QStringLiteral("The Core cannot change its transmit settings."); }
         return false;
     }
-    if (stationOnAirRefusal(reason)) {
+    if (!takenOnAir && stationOnAirRefusal(reason)) {
         return false;
     }
     if (!m_micProfileMgr->profileNames().contains(name)) {
@@ -5248,13 +5254,14 @@ bool RadioModel::selectTxProfileForStation(const QString& name, QString* reason)
     return true;
 }
 
-bool RadioModel::saveTxProfileForStation(const QString& name, QString* reason)
+bool RadioModel::saveTxProfileForStation(const QString& name, QString* reason,
+                                         bool takenOnAir)
 {
     if (m_role != Role::Local || m_micProfileMgr == nullptr) {
         if (reason) { *reason = QStringLiteral("The Core cannot change its transmit settings."); }
         return false;
     }
-    if (stationOnAirRefusal(reason)) {
+    if (!takenOnAir && stationOnAirRefusal(reason)) {
         return false;
     }
     // TxProfileSetupPage::onSaveClicked: a blank name saves nothing.
@@ -5274,13 +5281,14 @@ bool RadioModel::saveTxProfileForStation(const QString& name, QString* reason)
     return true;
 }
 
-bool RadioModel::deleteTxProfileForStation(const QString& name, QString* reason)
+bool RadioModel::deleteTxProfileForStation(const QString& name, QString* reason,
+                                           bool takenOnAir)
 {
     if (m_role != Role::Local || m_micProfileMgr == nullptr) {
         if (reason) { *reason = QStringLiteral("The Core cannot change its transmit settings."); }
         return false;
     }
-    if (stationOnAirRefusal(reason)) {
+    if (!takenOnAir && stationOnAirRefusal(reason)) {
         return false;
     }
     const QStringList names = m_micProfileMgr->profileNames();
@@ -5303,13 +5311,13 @@ bool RadioModel::deleteTxProfileForStation(const QString& name, QString* reason)
     return true;
 }
 
-bool RadioModel::resetRadeVocoderForStation(QString* reason)
+bool RadioModel::resetRadeVocoderForStation(QString* reason, bool takenOnAir)
 {
     if (m_role != Role::Local) {
         if (reason) { *reason = QStringLiteral("The Core cannot change its transmit settings."); }
         return false;
     }
-    if (stationOnAirRefusal(reason)) {
+    if (!takenOnAir && stationOnAirRefusal(reason)) {
         return false;
     }
     // RadeApplet::onResetVocoderClicked: the active slice's RADE channel.

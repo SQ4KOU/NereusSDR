@@ -14,6 +14,11 @@
 //                                    (seedUpgradedCoreToken), as Part C's
 //                                    paired-device sign-in requires.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Remote parity on the air
+//                                    (transmitSettingsVersion 11): the
+//                                    microphone settings and Reset vocoder
+//                                    are taken keyed. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -205,7 +210,7 @@ private slots:
     void txProfilePageGatesEachControlOnItsVersion();
     void setupOpensTxProfileWithoutRemoteTransmit();
     void microphoneSettingsReachTheCore();
-    void microphoneSettingsAreRefusedOnTheAir();
+    void microphoneSettingsAreTakenOnTheAir();
     void txInputPageGatesTheMicrophoneOnVersion3();
 
 private:
@@ -407,12 +412,14 @@ void TstRemoteTxProfiles::radeResetVocoderRefusals()
     RadeChannel* const channel =
         s.core->wdspEngine()->createRadeChannel(coreSlice->sliceIndex());
     QVERIFY(channel);
+    // Remote parity on the air (transmitSettingsVersion 11): the local
+    // applet's Reset vocoder works keyed, so the Core takes it keyed.
     s.keyCore();
     QTRY_VERIFY(s.core->moxController()->isMox());
+    const qsizetype toasts = toast.count();
     rade.resetVocoderButtonForTest()->click();
-    QTRY_VERIFY(toast.count() >= 2);
-    QCOMPARE(toast.last().at(0).toString(), kOnAir);
-    QCOMPARE(channel->resetTxCountForTest(), 0);
+    QTRY_COMPARE(channel->resetTxCountForTest(), 1);
+    QCOMPARE(toast.count(), toasts);
     s.unkeyCore();
 
     // An argument the verb does not take.
@@ -433,7 +440,7 @@ void TstRemoteTxProfiles::radeResetVocoderRefusals()
         }
         return false;
     }());
-    QCOMPARE(channel->resetTxCountForTest(), 0);
+    QCOMPARE(channel->resetTxCountForTest(), 1);   // the one taken on the air above
     s.core->wdspEngine()->destroyRadeChannel(coreSlice->sliceIndex());
 }
 
@@ -646,7 +653,7 @@ void TstRemoteTxProfiles::microphoneSettingsReachTheCore()
     QVERIFY(!s.core->moxController()->isMox());
 }
 
-void TstRemoteTxProfiles::microphoneSettingsAreRefusedOnTheAir()
+void TstRemoteTxProfiles::microphoneSettingsAreTakenOnTheAir()
 {
     Session s(m_securityDir.path(), this);
     QVERIFY(s.connect());
@@ -654,27 +661,23 @@ void TstRemoteTxProfiles::microphoneSettingsAreRefusedOnTheAir()
     const bool before = coreTx.micBoost();
     s.keyCore();
     QTRY_VERIFY(s.core->moxController()->isMox());
-    for (const QByteArray name : {QByteArrayLiteral("micBoost"), QByteArrayLiteral("micXlr"),
+    // Remote parity on the air (transmitSettingsVersion 11): Setup > Audio
+    // > TX Input changes them while a local window transmits.
+    for (const QByteArray name : {QByteArrayLiteral("micXlr"),
                                   QByteArrayLiteral("micTipRing"), QByteArrayLiteral("micBias"),
                                   QByteArrayLiteral("micPttDisabled"),
                                   QByteArrayLiteral("lineIn")}) {
         const SessionPropertyResult result =
             s.writeTransmit(name, MirrorWireKind::Bool, QVariant(true));
-        QVERIFY2(!result.accepted, name.constData());
-        QCOMPARE(result.reason, kOnAir);
+        QVERIFY2(result.accepted, qPrintable(QString::fromUtf8(name) + QStringLiteral(": ")
+                                             + result.reason));
     }
-    QCOMPARE(s.writeTransmit("lineInBoost", MirrorWireKind::Float64, QVariant(3.0)).reason,
-             kOnAir);
-    // The window's own change settles back on the Core's value.
-    s.window.transmitModel().setMicBoost(!before);
-    QTRY_COMPARE(s.window.transmitModel().micBoost(), before);
-    QCOMPARE(coreTx.micBoost(), before);
-    s.unkeyCore();
-    // Off the air once the hand-back to receive is over.
-    QTRY_VERIFY(!s.core->stationOnAirRefusal(nullptr));
-    QTRY_VERIFY(!s.window.isCoreOnAir());
+    QVERIFY(s.writeTransmit("lineInBoost", MirrorWireKind::Float64, QVariant(3.0)).accepted);
+    // The window's own change reaches the Core too.
     s.window.transmitModel().setMicBoost(!before);
     QTRY_COMPARE(coreTx.micBoost(), !before);
+    s.unkeyCore();
+    QTRY_VERIFY(!s.window.isCoreOnAir());
 }
 
 void TstRemoteTxProfiles::txInputPageGatesTheMicrophoneOnVersion3()

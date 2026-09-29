@@ -427,6 +427,8 @@
 //               txEq.setCurve and txEq.resetCurve applied as the peer's
 //               txEqParaEqData write. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-09-29: takesTransmitSettingsOnAir() (transmitSettingsVersion 11).
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/IceConfiguration.h"
@@ -1165,6 +1167,12 @@ public:
     // R-R3-49 (parity Task 7): the peer was offered transmitSettingsVersion
     // 7: it arms PureSignal and changes pureSignalSettings off the air.
     bool pureSignalArmingOffered(SessionTransport* transport) const;
+    /// Remote parity on the air (transmitSettingsVersion 11): whether a
+    /// transmit setting from `transport` is taken while the radio is on the
+    /// air: on a receive-only Core from a peer offered the transmit
+    /// settings, otherwise from a session the station transmit gate
+    /// permits.
+    bool takesTransmitSettingsOnAir(SessionTransport* transport) const;
     // R-R3-49 (parity Task 1): the one list of transmit settings keys a
     // receive-only Core takes while its radio is off the air (today the
     // DSP > Options TX keys, DspOptions<Setting><Mode>Tx). Every other

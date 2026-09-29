@@ -169,6 +169,10 @@
 //   2026-09-26  J.J. Boyd / KG4VCF  D79 (R-IOS-11, R-R3-49): the Core's
 //                                    unknown band plan refusal forwards.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  txEq.setCurve's refusals scanned; the
+//                                    This Core page's two device reasons
+//                                    named on the app side. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -1349,6 +1353,10 @@ const QList<ReasonSource>& reasonSources()
         // R-R3-49 (parity Task 2): a transmit setting's range, in
         // property.result and setTunePowerForTxBand's command.result. The
         // inserts are the setters' own range numbers.
+        // R-IOS-13 / R-R3-49 (txEqCurveVersion 2): txEq.setCurve's refusals.
+        {"src/core/ParaEqCurve.cpp", {QStringLiteral("txEqPointsFromCurveJson")}, {}, 7, {},
+         // refuse(why): each literal handed to it is scanned here.
+         {QStringLiteral("why")}},
         {"src/models/TransmitModel.cpp", {QStringLiteral("settingRangeRefusal")}, {}, 7,
          {QStringLiteral("hi"), QStringLiteral("kVoxThresholdDbMin"),
           QStringLiteral("kVoxThresholdDbMax"), QStringLiteral("kVoxHangTimeMsMin"),
@@ -1483,6 +1491,12 @@ const QList<AppSideReason>& appSideReasons()
          "a remote window's own fallback when its Core cannot validate settings"},
         {"src/core/session/IStationLink.h", "modMonitorUnavailableReason",
          "a remote window's own fallback when its Core cannot send modulation readings"},
+        // Remote-window parity (This Core page's devices): the window's own
+        // words when its Core cannot manage devices, or not from here.
+        {"src/core/session/IStationLink.h", "deviceAdminUnavailableReason",
+         "a remote window's own reason when its Core cannot take the request"},
+        {"src/core/session/IStationLink.h", "pairedDeviceAdminReason",
+         "a remote window's own reason when it is not signed in as a paired device"},
         {"src/core/SettingsHygiene.h", "remoteUnavailableReason",
          "getter for desktop state set by StationClient and read by diagnostics pages"},
         {"src/core/station/StationRadios.h", "waitingReason",

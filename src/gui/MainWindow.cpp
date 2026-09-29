@@ -11,11 +11,11 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
-//   2026-09-28 - J.J. Boyd (KG4VCF). R-IOS-13 / R-R3-49 (JJ's TX EQ
-//                ruling): the TX EQ dialog and the TX applet's EQ button
-//                stay live while the Core's radio is on the air, as in a
-//                local window (txEqSettingsPermitted). AI-assisted via
-//                Anthropic Claude Code.
+//   2026-09-29 - J.J. Boyd (KG4VCF). Remote parity on the air: the
+//                transmit settings stay live while the Core's radio is on
+//                the air on a Core at transmitSettingsVersion 11, as in a
+//                local window; against an older Core they stay disabled
+//                with the reason. AI-assisted via Anthropic Claude Code.
 //   2026-09-27 - J.J. Boyd (KG4VCF). Parity Task 23 control UI: the TCI
 //                 status and log identify the Core and this window.
 //                 AI-assisted implementation via OpenAI Codex.
@@ -13109,22 +13109,15 @@ QString MainWindow::rxBypassUnavailableReason() const
 bool MainWindow::transmitSettingsPermitted(int minVersion) const
 {
     // R-R3-49 (parity Task 1): the Core decides; this only says whether a
-    // change is worth sending. The Core still refuses one that races a key.
+    // change is worth sending. Remote parity on the air: a Core at
+    // transmitSettingsVersion 11 takes them while its radio is on the air,
+    // as a local window does; an older Core refuses them then, so they
+    // wait (shown disabled with the reason) rather than snap back.
     return m_radioModel && (m_radioModel->ownsLocalDsp()
         || (m_stationClient && m_stationClient->isHandshakeComplete()
             && m_stationClient->transmitSettingsAvailable(minVersion)
-            && !m_radioModel->isCoreOnAir()));
-}
-
-bool MainWindow::txEqSettingsPermitted(int minVersion) const
-{
-    // R-IOS-13 / R-R3-49 (JJ's TX EQ ruling): the TX EQ dialog and the EQ
-    // button are live on the air in a local window (Thetis's eqform has no
-    // MOX check), and the Core takes their writes then, so only the Core's
-    // offer counts here.
-    return m_radioModel && (m_radioModel->ownsLocalDsp()
-        || (m_stationClient && m_stationClient->isHandshakeComplete()
-            && m_stationClient->transmitSettingsAvailable(minVersion)));
+            && (m_stationClient->transmitSettingsAvailable(kTransmitSettingsOnAirVersion)
+                || !m_radioModel->isCoreOnAir())));
 }
 
 QString MainWindow::transmitSettingsReason(int minVersion) const
@@ -13204,14 +13197,6 @@ void MainWindow::applyRemoteRoleGating()
     // CFC and AGC/ALC's TX Leveler and ALC came with version 4.
     bool processingPermitted = transmitSettingsPermitted(4);
     QString processingReason = transmitSettingsReason(4);
-    // R-IOS-13 / R-R3-49 (JJ's TX EQ ruling): the TX EQ dialog (version 4)
-    // and the EQ button (version 2) stay live on the air, as locally.
-    bool txEqDialogPermitted = txEqSettingsPermitted(4);
-    QString txEqDialogReason = txEqDialogPermitted
-        ? QString() : IStationLink::transmitSettingsUnavailableReason();
-    bool txEqButtonPermitted = txEqSettingsPermitted(2);
-    QString txEqButtonReason = txEqButtonPermitted
-        ? QString() : IStationLink::transmitSettingsUnavailableReason();
     // Fix wave 2 (M8): VOX listens to this computer's microphone line to
     // the Core; without one it is shown disabled with the reason (the
     // Core's refusal of arming it stays the backstop).
@@ -13239,21 +13224,18 @@ void MainWindow::applyRemoteRoleGating()
             if (chainPermitted) { chainPermitted = false; chainReason = holderReason; }
             if (profilePermitted) { profilePermitted = false; profileReason = holderReason; }
             if (processingPermitted) { processingPermitted = false; processingReason = holderReason; }
-            if (txEqDialogPermitted) { txEqDialogPermitted = false; txEqDialogReason = holderReason; }
-            if (txEqButtonPermitted) { txEqButtonPermitted = false; txEqButtonReason = holderReason; }
         }
         if (voxLine && !m_stationClient->holdsTransmitHere()) {
             voxLine = false;
             voxReason = holderReason.isEmpty() ? TxRefusals::notHolder().text : holderReason;
         }
     }
-    TxEqDialog::setSettingsPermitted(txEqDialogPermitted, txEqDialogReason);
+    TxEqDialog::setSettingsPermitted(processingPermitted, processingReason);
     if (m_txApplet) {
         m_txApplet->setTransmitPermitted(transmitPermitted, transmitReason);
         m_txApplet->setVoxPermitted(voxLine, voxReason);
         m_txApplet->setTransmitSettingsPermitted(settingsPermitted, settingsReason);
         m_txApplet->setTransmitChainSettingsPermitted(chainPermitted, chainReason);
-        m_txApplet->setTxEqButtonPermitted(txEqButtonPermitted, txEqButtonReason);
         // Parity Task 32: the MON output pair needs a Core that sends MON.
         m_txApplet->setMonitorOutputPermitted(
             m_stationClient == nullptr

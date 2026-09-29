@@ -237,6 +237,11 @@
 //               (txEqCurveVersion 2), applied by the station server as its
 //               txEqParaEqData write (TxEqCurveAccess). J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-29: Remote parity on the air (transmitSettingsVersion 11): the
+//               transmit-setting commands, PureSignal arming and
+//               tx.twoTonePreset are taken on the air from a peer that may
+//               change the transmit settings. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -959,6 +964,7 @@ void SessionCommandDispatcher::resetSessionState()
     // (setPureSignalArmingOffered); a Core with no session offers none. A
     // Tuner Genius or Power Genius scan still due is dropped.
     m_pureSignalArmingOffered = false;
+    m_transmitSettingsOnAir = false;
     ++m_sessionGeneration;
 }
 
@@ -1064,7 +1070,9 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
     }
     if (invoke.commandVerb == "tx.twoTonePreset") {
         QString onAir;
-        if (m_radioModel->stationOnAirRefusal(&onAir)) {
+        // Version 11: taken on the air from a peer that may change the
+        // transmit settings, as the local Two-Tone page's presets are.
+        if (!m_transmitSettingsOnAir && m_radioModel->stationOnAirRefusal(&onAir)) {
             emitResult(invoke.commandVerb, invoke.commandId, false, onAir, {});
             return;
         }
@@ -1774,7 +1782,9 @@ void SessionCommandDispatcher::handlePureSignalAction(const SessionMessage& invo
             return;
         }
     }
-    if (arming) {
+    // Version 11: arming is taken on the air from a peer that may change
+    // the transmit settings, as the local PureSignal dialog arms keyed.
+    if (arming && !m_transmitSettingsOnAir) {
         QString onAir;
         if (m_radioModel->stationOnAirRefusal(&onAir)) {
             emitResult(invoke.commandVerb, invoke.commandId, false, onAir, {});
@@ -3310,7 +3320,7 @@ void SessionCommandDispatcher::handleTunePowerForTxBand(const SessionMessage& in
         return;
     }
     QString reason;
-    if (!m_radioModel->setTunePowerForTxBandForStation(watts, &reason)) {
+    if (!m_radioModel->setTunePowerForTxBandForStation(watts, &reason, m_transmitSettingsOnAir)) {
         emitResult(verb, invoke.commandId, false,
                    reason.isEmpty() ? QStringLiteral("The Core did not change the tune power.")
                                     : reason, {});
@@ -3322,8 +3332,9 @@ void SessionCommandDispatcher::handleTunePowerForTxBand(const SessionMessage& in
 // R-R3-49 (parity Task 3, transmitSettingsVersion 3): the TX profile
 // combos and Setup > Audio > TX Profile, through the Core's own
 // MicProfileManager as the local controls use it. The Core's active profile
-// and list come back on `transmit`. Refused while the radio is on the air;
-// nothing changes then. Keys nothing.
+// and list come back on `transmit`. Refused while the radio is on the air
+// unless the peer may change the transmit settings (version 11); nothing
+// changes then. Keys nothing.
 void SessionCommandDispatcher::handleTxProfile(const SessionMessage& invoke)
 {
     const QByteArray& verb = invoke.commandVerb;
@@ -3346,11 +3357,11 @@ void SessionCommandDispatcher::handleTxProfile(const SessionMessage& invoke)
     QString reason;
     bool done = false;
     if (verb == "txProfile.select") {
-        done = m_radioModel->selectTxProfileForStation(name, &reason);
+        done = m_radioModel->selectTxProfileForStation(name, &reason, m_transmitSettingsOnAir);
     } else if (verb == "txProfile.save") {
-        done = m_radioModel->saveTxProfileForStation(name, &reason);
+        done = m_radioModel->saveTxProfileForStation(name, &reason, m_transmitSettingsOnAir);
     } else {
-        done = m_radioModel->deleteTxProfileForStation(name, &reason);
+        done = m_radioModel->deleteTxProfileForStation(name, &reason, m_transmitSettingsOnAir);
     }
     if (!done) {
         emitResult(verb, invoke.commandId, false,
@@ -3387,7 +3398,7 @@ void SessionCommandDispatcher::handleRadeResetVocoder(const SessionMessage& invo
         return;
     }
     QString reason;
-    if (!m_radioModel->resetRadeVocoderForStation(&reason)) {
+    if (!m_radioModel->resetRadeVocoderForStation(&reason, m_transmitSettingsOnAir)) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
                    reason.isEmpty() ? QStringLiteral("The Core did not reset the RADE vocoder.")
                                     : reason, {});

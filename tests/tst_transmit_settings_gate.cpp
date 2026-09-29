@@ -28,8 +28,14 @@
 //                                    recordStreamVersion and the record
 //                                    streams. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Remote parity on the air
+//                                    (transmitSettingsVersion 11): the
+//                                    transmit settings and DSP > Options
+//                                    TX keys are taken on the air.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
+#include <tuple>
 #include <QtTest/QtTest>
 #include <QCoreApplication>
 #include <QFile>
@@ -41,6 +47,7 @@
 #include "core/AppSettings.h"
 #include "core/ConnectionState.h"
 #include "core/HardwareProfile.h"
+#include "core/MicProfileManager.h"
 #include "core/MoxController.h"
 #include "core/TwoToneController.h"
 #include "core/TxChannel.h"
@@ -138,6 +145,29 @@ struct Session {
         return found;
     }
 
+    // A command the way any app sends it, and the Core's answer.
+    SessionMessage invoke(const QByteArray& verb, const QList<MirrorUpdate>& arguments)
+    {
+        const quint32 id = ++m_nextWriteId;
+        windowEnd->sendText(SessionMessages::encode(
+            SessionMessages::commandInvoke(verb, id, arguments)));
+        SessionMessage found;
+        found.reason = QStringLiteral("no command.result arrived");
+        static_cast<void>(QTest::qWaitFor([&] {
+            for (const QByteArray& wire : windowEnd->received()) {
+                SessionMessage message;
+                if (SessionMessages::decode(wire, &message)
+                    && message.kind == SessionMessageKind::CommandResult
+                    && message.commandId == id) {
+                    found = message;
+                    return true;
+                }
+            }
+            return false;
+        }, 3000));
+        return found;
+    }
+
     QTemporaryDir settingsDir;
     AppSettings settings;
     std::unique_ptr<RadioModel> core;
@@ -164,10 +194,11 @@ private slots:
     void olderAppIsNotOfferedTransmitSettings();
     void keyingSetStaysRefusedOnAndOffTheAir();
     void settingAppliedOffTheAirAndReturnsToTheWindow();
-    void settingRefusedWhileOnTheAir();
+    void settingTakenWhileOnTheAir();
+    void settingVerbsTakenWhileOnTheAir();
     void onAirRefusalIsTheTgxlRefusal();
     void dspOptionsTxKeyTakenOffTheAirAndApplied();
-    void dspOptionsTxKeyRefusedWhileOnTheAir();
+    void dspOptionsTxKeyTakenOnTheAirAndAppliedAtTheUnkey();
     void dspOptionsTxApplyWaitsForTheUnkey();
     void dspOptionsTxApplyWaitsForTwoToneToEnd();
     void paReloadWaitsWhileOnTheAir();
@@ -209,9 +240,11 @@ void TstTransmitSettingsGate::coreOffersTransmitSettingsVersion()
     // 5 since parity Task 5 (Power, DEXP/VOX, Two-Tone IMD), 6 since
     // parity Task 6 (Setup > PA), 7 since parity Task 7 (PureSignal arming),
     // 8 since parity Task 13 (Hardware Config's OC transmit pins and
-    // transmit calibration), 10 since iPhone app plan Task 40 (micMuted).
-    QCOMPARE(s.server->buildCapabilities().transmitSettingsVersion, 10);
-    QCOMPARE(s.client->capabilities().transmitSettingsVersion, 10);
+    // transmit calibration), 10 since iPhone app plan Task 40 (micMuted),
+    // 11 since the transmit settings are taken on the air as a local
+    // window takes them.
+    QCOMPARE(s.server->buildCapabilities().transmitSettingsVersion, 11);
+    QCOMPARE(s.client->capabilities().transmitSettingsVersion, 11);
     QVERIFY(s.client->transmitSettingsAvailable());
     QVERIFY(s.client->transmitSettingsAvailable(1));
     QVERIFY(s.client->transmitSettingsAvailable(2));
@@ -223,7 +256,8 @@ void TstTransmitSettingsGate::coreOffersTransmitSettingsVersion()
     QVERIFY(s.client->transmitSettingsAvailable(8));
     QVERIFY(s.client->transmitSettingsAvailable(9));
     QVERIFY(s.client->transmitSettingsAvailable(10));
-    QVERIFY(!s.client->transmitSettingsAvailable(11));
+    QVERIFY(s.client->transmitSettingsAvailable(11));
+    QVERIFY(!s.client->transmitSettingsAvailable(12));
     QVERIFY(StationServer::isTransmitSettingKeyAcceptedOffAir(
         QStringLiteral("DspOptionsBufferSizePhoneTx")));
     QVERIFY(StationServer::isTransmitSettingKeyAcceptedOffAir(
@@ -405,32 +439,38 @@ void TstTransmitSettingsGate::settingAppliedOffTheAirAndReturnsToTheWindow()
     QCOMPARE(coreTx.power(), again);
 }
 
-void TstTransmitSettingsGate::settingRefusedWhileOnTheAir()
+// Remote parity (both ways): a local window changes its transmit settings
+// while transmitting (no TX applet, Phone/CW, TX EQ, CFC or Setup transmit
+// control is greyed under MOX, as in Thetis), so a receive-only Core takes
+// them on the air too, from a peer offered the transmit settings. They key
+// nothing; the keying set stays refused (keyingSetStaysRefusedOnAndOffTheAir).
+void TstTransmitSettingsGate::settingTakenWhileOnTheAir()
 {
     Session s(m_securityDir.path(), this);
     QVERIFY(s.connect());
     TransmitModel& coreTx = s.core->transmitModel();
     TransmitModel& windowTx = s.window.transmitModel();
-    const int settled = coreTx.power();
-    const int requested = settled == 21 ? 22 : 21;
+    int next = coreTx.power() == 21 ? 22 : 21;
 
-    const auto expectRefused = [&](const char* how) {
+    const auto expectTaken = [&](const char* how) {
         const SessionPropertyResult result =
             s.writeTransmit(QByteArrayLiteral("power"), MirrorWireKind::Int64,
-                            QVariant(qlonglong(requested)));
-        QVERIFY2(!result.accepted, how);
-        QCOMPARE(result.reason, kOnAir);
-        QCOMPARE(coreTx.power(), settled);
-        // The window's own write settles back on the Core's value.
-        windowTx.setPower(requested);
-        QTest::qWait(150);
-        QCOMPARE(coreTx.power(), settled);
-        QTRY_COMPARE(windowTx.power(), settled);
+                            QVariant(qlonglong(next)));
+        QVERIFY2(result.accepted, qPrintable(QString::fromLatin1(how) + QStringLiteral(": ")
+                                             + result.reason));
+        QCOMPARE(coreTx.power(), next);
+        next = next == 21 ? 22 : 21;
+        // The window's own write reaches the Core too. (The raw write above
+        // is not echoed to this window, ruling 5.7, so its own value is
+        // moved to one it does not hold.)
+        const int own = windowTx.power() == 40 ? 41 : 40;
+        windowTx.setPower(own);
+        QTRY_COMPARE(coreTx.power(), own);
     };
 
     // TUNE (the Core's transmit model), before the pre-check is lifted.
     coreTx.setTune(true);
-    expectRefused("tune");
+    expectTaken("tune");
     if (QTest::currentTestFailed()) { return; }
     coreTx.setTune(false);
 
@@ -440,15 +480,32 @@ void TstTransmitSettingsGate::settingRefusedWhileOnTheAir()
     // MOX through the Core's MoxController.
     mox->setMox(true);
     QTRY_VERIFY(mox->state() == MoxState::Tx);
-    expectRefused("mox");
+    expectTaken("mox");
     if (QTest::currentTestFailed()) { return; }
+    // Other transmit settings of every group, keyed.
+    for (const auto& [name, kind, value] :
+         {std::tuple<QByteArray, MirrorWireKind, QVariant>{"monEnabled", MirrorWireKind::Bool,
+                                                           !coreTx.monEnabled()},
+          {"voxThresholdDb", MirrorWireKind::Int64, qlonglong(-40)},
+          {"txLevelerOn", MirrorWireKind::Bool, !coreTx.txLevelerOn()},
+          {"cfcEnabled", MirrorWireKind::Bool, !coreTx.cfcEnabled()},
+          {"tunePower", MirrorWireKind::Int64, qlonglong(coreTx.tunePower() == 10 ? 11 : 10)},
+          {"txAlcDecay", MirrorWireKind::Int64, qlonglong(coreTx.txAlcDecay() == 20 ? 21 : 20)},
+          {"micBoost", MirrorWireKind::Bool, !coreTx.micBoost()}}) {
+        const SessionPropertyResult result = s.writeTransmit(name, kind, value);
+        QVERIFY2(result.accepted, qPrintable(QString::fromUtf8(name) + QStringLiteral(": ")
+                                             + result.reason));
+    }
+    // The keying set is still refused keyed.
+    QCOMPARE(s.writeTransmit(QByteArrayLiteral("mox"), MirrorWireKind::Bool, false).reason,
+             kReceiveOnly);
     mox->setMox(false);
     QTRY_VERIFY(mox->state() == MoxState::Rx);
 
     // A hardware PTT press.
     mox->onMicPttFromRadio(true);
     QVERIFY(mox->isMox());
-    expectRefused("hardware ptt");
+    expectTaken("hardware ptt");
     if (QTest::currentTestFailed()) { return; }
     mox->onMicPttFromRadio(false);
     QTRY_VERIFY(mox->state() == MoxState::Rx);
@@ -462,37 +519,45 @@ void TstTransmitSettingsGate::settingRefusedWhileOnTheAir()
         twoTone->setSettleDelaysMs(0, 0);
         twoTone->setActive(true);
         QTRY_VERIFY(twoTone->isActive());
-        expectRefused("two-tone");
+        expectTaken("two-tone");
         if (QTest::currentTestFailed()) { return; }
         twoTone->setActive(false);
         QTRY_VERIFY(!twoTone->isActive());
         QTRY_VERIFY(mox->state() == MoxState::Rx);
         twoTone->setTxChannel(nullptr);
     }
+}
 
-    // The TX to RX handover: MOX is off but the controller is still
-    // walking back to receive.
-    mox->setTimerIntervals(0, 0, 0, /*keyUpMs=*/300, /*pttOutMs=*/300, 0);
+// The TX applet's Tune Power slider and the TX profile combo change while
+// a local window transmits, so their commands are taken on the air too.
+void TstTransmitSettingsGate::settingVerbsTakenWhileOnTheAir()
+{
+    Session s(m_securityDir.path(), this);
+    s.core->scopeTxProfiles(QStringLiteral("AA:BB:CC:DD:EE:01"));
+    QVERIFY(s.connect());
+    MoxController* const mox = s.core->moxController();
+    mox->setMoxCheck({});
     mox->setMox(true);
     QTRY_VERIFY(mox->state() == MoxState::Tx);
-    mox->setMox(false);
-    QVERIFY(!mox->isMox());
-    QVERIFY(mox->state() != MoxState::Rx);
-    {
-        const SessionPropertyResult result =
-            s.writeTransmit(QByteArrayLiteral("power"), MirrorWireKind::Int64,
-                            QVariant(qlonglong(requested)));
-        QVERIFY(!result.accepted);
-        QCOMPARE(result.reason, kOnAir);
-    }
-    QTRY_VERIFY_WITH_TIMEOUT(mox->state() == MoxState::Rx, 2000);
+    // (txProfile.select is also the holder's while transmit is held,
+    // ruling 7.7: with the Core's own MOX keyed it is refused by that rule,
+    // not the air, and is left out here.)
 
-    // Off the air again: taken.
-    const SessionPropertyResult result =
-        s.writeTransmit(QByteArrayLiteral("power"), MirrorWireKind::Int64,
-                        QVariant(qlonglong(requested)));
-    QVERIFY2(result.accepted, qPrintable(result.reason));
-    QCOMPARE(coreTx.power(), requested);
+    const SessionMessage tune = s.invoke(
+        QByteArrayLiteral("setTunePowerForTxBand"),
+        {MirrorUpdate{0, "watts", MirrorWireKind::Int64, QVariant(qlonglong(3))}});
+    QVERIFY2(tune.accepted, qPrintable(tune.reason));
+    const SessionMessage save = s.invoke(
+        QByteArrayLiteral("txProfile.save"),
+        {MirrorUpdate{0, "name", MirrorWireKind::Utf8, QVariant(QStringLiteral("On air"))}});
+    QVERIFY2(save.accepted, qPrintable(save.reason));
+    QVERIFY(s.core->micProfileManager()->profileNames().contains(QStringLiteral("On air")));
+    const SessionMessage remove = s.invoke(
+        QByteArrayLiteral("txProfile.delete"),
+        {MirrorUpdate{0, "name", MirrorWireKind::Utf8, QVariant(QStringLiteral("On air"))}});
+    QVERIFY2(remove.accepted, qPrintable(remove.reason));
+    mox->setMox(false);
+    QTRY_VERIFY(mox->state() == MoxState::Rx);
 }
 
 void TstTransmitSettingsGate::onAirRefusalIsTheTgxlRefusal()
@@ -545,7 +610,10 @@ void TstTransmitSettingsGate::dspOptionsTxKeyTakenOffTheAirAndApplied()
     QCOMPARE(rejected.count(), 0);
 }
 
-void TstTransmitSettingsGate::dspOptionsTxKeyRefusedWhileOnTheAir()
+// A local window's DSP > Options TX combos change while transmitting; the
+// Core takes the key on the air too and applies it to the TX channel once
+// the radio is back on receive (dspOptionsTxApplyWaitsForTheUnkey's rule).
+void TstTransmitSettingsGate::dspOptionsTxKeyTakenOnTheAirAndAppliedAtTheUnkey()
 {
     const QString txKey = QStringLiteral("DspOptionsFilterSizePhoneTx");
     Session s(m_securityDir.path(), this);
@@ -555,6 +623,9 @@ void TstTransmitSettingsGate::dspOptionsTxKeyRefusedWhileOnTheAir()
         [&txApplies](DSPMode mode) { txApplies.append(mode); });
     QVERIFY(s.connect());
     QVERIFY(s.proxy.ready());
+    SliceModel* txSlice = s.core->txBoundSlice();
+    QVERIFY(txSlice);
+    txSlice->setDspMode(DSPMode::USB);
 
     MoxController* const mox = s.core->moxController();
     mox->setMoxCheck({});
@@ -562,25 +633,16 @@ void TstTransmitSettingsGate::dspOptionsTxKeyRefusedWhileOnTheAir()
     QTRY_VERIFY(mox->state() == MoxState::Tx);
 
     QSignalSpy rejected(&s.proxy, &SettingsProxy::valueRejected);
-    QSignalSpy toast(&s.window, &RadioModel::sliceAddRejected);
     s.proxy.setValue(txKey, QStringLiteral("8192"));
-    QTRY_COMPARE(rejected.count(), 1);
-    QCOMPARE(rejected.first().at(0).toString(), txKey);
-    QCOMPARE(rejected.first().at(1).toString(), QStringLiteral("4096"));
-    QCOMPARE(s.settings.value(txKey).toString(), QStringLiteral("4096"));
-    QCOMPARE(s.proxy.value(txKey, QString()).toString(), QStringLiteral("4096"));
-    QCOMPARE(toast.count(), 1);
-    QCOMPARE(toast.first().at(0).toString(), kOnAir);
-
-    s.proxy.remove(txKey);
-    QTRY_COMPARE(rejected.count(), 2);
-    QVERIFY(s.settings.contains(txKey));
-    QCOMPARE(s.proxy.value(txKey, QString()).toString(), QStringLiteral("4096"));
-    QTest::qWait(120);
+    QTRY_COMPARE(s.settings.value(txKey).toString(), QStringLiteral("8192"));
+    QTest::qWait(150);
+    QCOMPARE(rejected.count(), 0);
     QVERIFY(txApplies.isEmpty());
 
     mox->setMox(false);
     QTRY_VERIFY(mox->state() == MoxState::Rx);
+    QTRY_COMPARE(txApplies.size(), 1);
+    QCOMPARE(txApplies.first(), DSPMode::USB);
 }
 
 // Group A fix wave, I2: a TX DSP > Options write accepted off the air

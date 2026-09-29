@@ -30,7 +30,8 @@
 //                                    Anthropic Claude Code.
 //   2026-09-28  J.J. Boyd / KG4VCF  R-IOS-13 / R-R3-49 (JJ's TX EQ
 //                                    ruling): the TX EQ group is taken on
-//                                    the air; the other groups still wait.
+//                                    the air; since transmitSettingsVersion
+//                                    11 every group is.
 //                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
@@ -631,10 +632,9 @@ void TstRemoteTxEqCfc::levelerAndAlcRoundTrip()
     QCOMPARE(s.txChannel.lastTxAlcDecayMsForTest(), 25);
 }
 
-// JJ's TX EQ ruling (2026-09-28): the TX EQ dialog's settings are taken on
-// the air, as a local window changes them while transmitting; CFC, the
-// phase rotator, CESSB, the leveler and ALC still wait for the radio to
-// stop.
+// Remote parity on the air: the TX EQ, CFC, phase rotator, CESSB, leveler
+// and ALC settings are taken while the radio is on the air, as a local
+// window changes them while transmitting (transmitSettingsVersion 11).
 void TstRemoteTxEqCfc::eachGroupIsRefusedOnTheAir()
 {
     Session s(m_securityDir.path(), this);
@@ -686,14 +686,13 @@ void TstRemoteTxEqCfc::eachGroupIsRefusedOnTheAir()
     windowTx.setTxEqBand(2, band == 5 ? 6 : 5);
     QTRY_COMPARE(coreTx.txEqBand(2), band == 5 ? 6 : 5);
 
-    const Write refused[] = {
+    const Write alsoTaken[] = {
         {"cfcCompressionJson", MirrorWireKind::Utf8, QStringLiteral("[1,1,1,1,1,1,1,1,1,1]")},
         {"cfcEqFreqJson", MirrorWireKind::Utf8, QStringLiteral("[1,2,3,4,5,6,7,8,9,10]")},
         {"cfcPostEqBandGainJson", MirrorWireKind::Utf8, QStringLiteral("[1,1,1,1,1,1,1,1,1,1]")},
         {"cfcPostEqEnabled", MirrorWireKind::Bool, true},
         {"cfcPostEqGainDb", MirrorWireKind::Int64, 3},
         {"cfcPrecompDb", MirrorWireKind::Int64, 3},
-        {"cfcParaEqData", MirrorWireKind::Utf8, QStringLiteral("x")},
         {"phaseRotatorEnabled", MirrorWireKind::Bool, true},
         {"phaseRotatorFreqHz", MirrorWireKind::Int64, 500},
         {"phaseRotatorStages", MirrorWireKind::Int64, 4},
@@ -704,23 +703,17 @@ void TstRemoteTxEqCfc::eachGroupIsRefusedOnTheAir()
         {"txAlcMaxGain", MirrorWireKind::Int64, 60},
         {"txAlcDecay", MirrorWireKind::Int64, 30},
     };
-    for (const Write& w : refused) {
-        const QVariant before = coreTx.property(w.name.constData());
+    for (const Write& w : alsoTaken) {
         const SessionPropertyResult r = s.writeTransmit(w.name, w.kind, w.value);
-        QVERIFY2(!r.accepted, w.name.constData());
-        QCOMPARE(r.reason, kOnAir);
-        QCOMPARE(coreTx.property(w.name.constData()), before);
+        QVERIFY2(r.accepted, qPrintable(QString::fromUtf8(w.name) + QStringLiteral(": ") + r.reason));
     }
-    // The window's own change settles back on the Core's value.
+    QCOMPARE(coreTx.txAlcDecay(), 30);
+    // The window's own change reaches the Core on the air too.
     const int stages = coreTx.phaseRotatorStages();
     windowTx.setPhaseRotatorStages(stages == 3 ? 4 : 3);
-    QTRY_COMPARE(windowTx.phaseRotatorStages(), stages);
-
-    // Taken again once the radio is off the air.
+    QTRY_COMPARE(coreTx.phaseRotatorStages(), stages == 3 ? 4 : 3);
     s.unkeyCore();
     QTRY_VERIFY(!s.window.isCoreOnAir());
-    QVERIFY(s.writeTransmit("txAlcDecay", MirrorWireKind::Int64, 30).accepted);
-    QCOMPARE(coreTx.txAlcDecay(), 30);
 }
 
 // B5.1: Tools > TX Equalizer in a remote window shows the Core's values and

@@ -27,13 +27,7 @@
 //   6. CFC.click() flips TransmitModel::cfcEnabled.
 //   7. Model→UI: setCfcEnabled(true) checks CFC button.
 //   8. CFC right-click triggers requestOpenCfcDialog (single instance).
-//   9. The EQ button has its own gate: the chain gate (LEV, CFC) closing
-//      on the air leaves it live; setTxEqButtonPermitted greys it with the
-//      reason and gives its tooltip back.
 //
-// Modification history (NereusSDR):
-//   2026-09-28  J.J. Boyd / KG4VCF  Test 9 (R-IOS-13 / R-R3-49, JJ's TX
-//                EQ ruling). AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -248,32 +242,6 @@ private slots:
             }
         }
         QCOMPARE(dialogCount, 1);
-    }
-
-    // ── 9. The EQ button's own gate (JJ's TX EQ ruling, 2026-09-28): a
-    //      remote window keeps it live on the air, as a local one does.
-    void eqButton_hasItsOwnGate()
-    {
-        RadioModel rm;
-        TxApplet applet(&rm);
-        auto* lev = applet.findChild<QPushButton*>(QStringLiteral("TxLevButton"));
-        auto* eq = applet.findChild<QPushButton*>(QStringLiteral("TxEqButton"));
-        QVERIFY(lev && eq);
-        const QString tip = eq->toolTip();
-        const QString onAir = QStringLiteral("The radio is on the air. Try again when it stops.");
-
-        applet.setTransmitChainSettingsPermitted(false, onAir);
-        QVERIFY(!lev->isEnabled());
-        QVERIFY(eq->isEnabled());
-        QCOMPARE(eq->toolTip(), tip);
-
-        const QString why = QStringLiteral("This Core cannot change its transmit settings.");
-        applet.setTxEqButtonPermitted(false, why);
-        QVERIFY(!eq->isEnabled());
-        QCOMPARE(eq->toolTip(), why);
-        applet.setTxEqButtonPermitted(true);
-        QVERIFY(eq->isEnabled());
-        QCOMPARE(eq->toolTip(), tip);
     }
 };
 

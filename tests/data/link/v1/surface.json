@@ -263,7 +263,7 @@
         {
             "kind": "i64",
             "name": "transmitSettingsVersion",
-            "value": 10
+            "value": 11
         },
         {
             "kind": "i64",

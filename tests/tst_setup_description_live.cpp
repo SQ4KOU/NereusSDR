@@ -774,7 +774,7 @@ private slots:
         LoopbackTransport* app = core.signIn(settingsPhone, features);
         QVERIFY(admitted(app));
         QCOMPARE(capability(app->received(), QStringLiteral("transmitSettingsVersion")),
-                 std::optional<qint64>(9));
+                 std::optional<qint64>(11));
         const QJsonObject pa = QJsonDocument::fromJson(latest(app->received(),
             QStringLiteral("setup"), QStringLiteral("pa")).toString().toUtf8()).object();
         QCOMPARE(pa.value("pages").toArray().size(), 2);
@@ -832,16 +832,17 @@ private slots:
         allowTransmit(core);
         // allowTransmit configures a logical no-socket key but also turns
         // off receive-only station policy. Restore the daemon-style settings
-        // exception before checking its on-air refusal.
+        // exception before checking it on the air.
         core.model->setReceiveOnlyStationPolicy(true);
         MoxController* mox = core.model->moxController();
         mox->setMoxCheck({});
         mox->setMox(true); // logical test state, no radio transport
         QTRY_COMPARE(mox->state(), MoxState::Tx);
+        // Remote parity on the air (transmitSettingsVersion 11): the local
+        // PA page changes it while transmitting, so the Core takes it.
         const QJsonObject onAir = write(app, false);
-        QVERIFY(!onAir.value("accepted").toBool(true));
-        QCOMPARE(onAir.value("reason"), QStringLiteral("The radio is on the air. Try again when it stops."));
-        QCOMPARE(core.model->transmitModel().paSettingsBypass(), true);
+        QVERIFY(onAir.value("accepted").toBool(false));
+        QCOMPARE(core.model->transmitModel().paSettingsBypass(), false);
         mox->setMox(false);
         QTRY_COMPARE(mox->state(), MoxState::Rx);
         QVERIFY(!core.model->tune());
@@ -950,7 +951,7 @@ private slots:
         LoopbackTransport* app = core.signIn(phone, features);
         QVERIFY(admitted(app));
         QCOMPARE(capability(app->received(), QStringLiteral("transmitSettingsVersion")),
-                 std::optional<qint64>(9));
+                 std::optional<qint64>(11));
         const QJsonObject pa = QJsonDocument::fromJson(latest(app->received(),
             QStringLiteral("setup"), QStringLiteral("pa")).toString().toUtf8()).object();
         const QJsonArray power = pa.value("pages").toArray().last().toObject()

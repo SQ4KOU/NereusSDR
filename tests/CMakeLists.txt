@@ -7541,6 +7541,12 @@ nereus_add_test(tst_remote_core_stop_notice)
 nereus_add_test(tst_remote_tx_widgets)
 nereus_add_test(tst_remote_tx_presentation fakes/LoopbackTransport.cpp)
 target_compile_definitions(tst_remote_tx_presentation PRIVATE NEREUS_BUILD_TESTS)
+# R-IOS-13 / R-R3-49 (remote parity on the air): a real remote MainWindow
+# holding transmit and keyed (TUNE) keeps its transmit settings live, as a
+# local window does, on a Core that takes them on the air; against an older
+# Core they show disabled with the on-air reason. Loopback, no RF.
+nereus_add_test(tst_remote_window_on_air_settings fakes/LoopbackTransport.cpp)
+target_compile_definitions(tst_remote_window_on_air_settings PRIVATE NEREUS_BUILD_TESTS)
 # R-R3-49 / R-R3-46 (remote-window parity Task 12): the transmit antennas
 # and relays from a remote window (Antenna Control and the flag's BYPS), on
 # and off the air, and the routing and P1 / P2 bytes the Core then sends

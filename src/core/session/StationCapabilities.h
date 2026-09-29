@@ -164,6 +164,9 @@
 //                Anthropic Claude Code.
 //   2026-09-28 - R-IOS-13 / R-R3-49: txEqCurveVersion 2 (the curve verbs).
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - kTransmitSettingsOnAirVersion (transmitSettingsVersion
+//                11). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                Code.
 // =================================================================
 
 #include <QByteArray>
@@ -176,6 +179,12 @@
 #include "core/session/media/DisplayBudget.h"
 
 namespace NereusSDR {
+
+/// Remote parity on the air: from this transmitSettingsVersion the Core
+/// takes the transmit settings while its radio is on the air, as a local
+/// window does (the OC transmit pins and Region still wait). A window
+/// against an older Core keeps them disabled on the air with the reason.
+inline constexpr int kTransmitSettingsOnAirVersion = 11;
 
 /// Optional identity of the Core executable, never radio firmware identity.
 struct CoreBuildInfo {
@@ -335,6 +344,8 @@ struct StationCapabilities {
     /// transmit settings stay greyed and say the Core cannot take them.
     /// 9 also offers validated BandPlanRegion edits and the TX passband guard.
     /// 10 (iPhone app plan Task 40) adds `transmit.micMuted`, the mic mute.
+    /// 11 (kTransmitSettingsOnAirVersion): the transmit settings a local
+    /// window changes while transmitting are taken on the air too.
     int transmitSettingsVersion = 0;
     /// R-IOS-27, R-IOS-06: 1 means the Core takes `slice.selectBand`, which
     /// runs the desktop's band button on a slice (its saved frequency, mode

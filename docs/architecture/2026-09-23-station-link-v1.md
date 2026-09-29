@@ -891,7 +891,7 @@ change shows as surface drift and as a change to this table.
 | `pairingVersion` | 1 |
 | `stationCatalogVersion` | 1 |
 | `displayExtrasVersion` | 4 |
-| `transmitSettingsVersion` | 10 |
+| `transmitSettingsVersion` | 11 |
 | `bandSelectVersion` | 1 |
 | `meterReadingsVersion` | 1 |
 | `dspInfoVersion` | 1 |
@@ -1220,7 +1220,22 @@ When a feature is off, its version is 0:
   air only) and never keys. Muting sets the Core's mic preamp to 0.0 and
   unmuting restores the mic level, as Thetis's setAudioMicGain does
   (console.cs:28856-28868 [v2.10.3.15]). It is never saved: the mic starts
-  in use after every Core start.
+  in use after every Core start. Version 11 (remote parity on the air)
+  takes on the air everything a local window changes while transmitting
+  (no TX applet, Phone/CW, TX EQ, CFC, PureSignal, Two-Tone or Setup
+  transmit control is greyed under MOX, as in Thetis): every `transmit`
+  property but the keying set, `stepAtt`'s three transmit settings, the DSP
+  > Options TX, Power and PA keys (their apply to the TX channel, SWR
+  protection or PA profiles still waits for receive), a `pureSignalSettings`
+  write, and the commands `setTunePowerForTxBand`, `txProfile.select`,
+  `txProfile.save`, `txProfile.delete`, `rade.resetVocoder`, the PureSignal
+  arming verbs and `tx.twoTonePreset`. They are taken from the peers that
+  may change them off the air (a receive-only Core's peer offered the
+  transmit settings; a permitted session on a Core that allows remote
+  transmit) and key nothing. Still refused on the air, as in a local
+  window: the OC transmit pins (Thetis greys them under MOX) and General
+  Region. A window on an older Core keeps its transmit settings disabled on
+  the air with "The radio is on the air. Try again when it stops."
 - `bandSelectVersion`: sent only at agreed minor 11, and 0 on a
   station with no radio model. At 1 the Core takes `slice.selectBand`
   (section 9.1), a device's band button for a slice, for the bands the
@@ -3226,14 +3241,12 @@ receive-only station, whether or not the station mirrors them ("Transmit
 configuration is unavailable on this receive-only Core."), any
 `transmit` property on a receive-only station from a peer below agreed
 minor 11 (it was never offered `transmitSettingsVersion`; the same
-reason), any other `transmit` property on a receive-only station while
-its radio is on the air, except the TX EQ dialog's settings (`txEqEnabled`,
-`txEqUseLegacy`, `txEqPreamp`, `txEqBandsJson`, `txEqFreqsJson`, `txEqNc`,
-`txEqMp`, `txEqCtfmode`, `txEqWintype` and `txEqParaEqData`), which a local
-window changes while transmitting and the Core takes on the air too
-("The radio is on the air. Try again when it stops.": keyed through
+reason), on a Core below `transmitSettingsVersion` 11 any other
+`transmit` property on a receive-only station while its radio is on the
+air ("The radio is on the air. Try again when it stops.": keyed through
 its `MoxController` from any source, a hardware PTT included, until the
-hand-back to receive ends; TUNE on; or the two-tone test running), a
+hand-back to receive ends; TUNE on; or the two-tone test running; at 11
+they are taken on the air as a local window takes them), a
 `transmit` setting outside its setter's range, with the range ("Choose a
 tune power from 0 to 100 W.", "Choose a VOX level from -80 to 0 dB.",
 "Choose a VOX delay from 1 to 2000 ms.", "Choose a monitor level from 0.0
@@ -3267,8 +3280,9 @@ refused whole: "Choose a power from 0 to 100 W for each of the 14 bands.",
 Lite 2 says "Choose a tune power from 0 to 99." and "Choose a tune power
 from 0 to 99 for each of the 14 bands."), `stepAtt`'s `attOnTxEnabled`,
 `attOnTxValue` and `forceAttWhenPsOff` on a receive-only station from a
-peer not offered `transmitSettingsVersion` (the receive-only reason) or
-while its radio is on the air (the on-air reason), and `attOnTxValue`
+peer not offered `transmitSettingsVersion` (the receive-only reason) or,
+below version 11, while its radio is on the air (the on-air reason), and
+`attOnTxValue`
 outside the Core's range ("Choose an ATT on TX value from 0 to 31 dB.", on
 a Hermes Lite 2 from -28), a `pureSignalSettings` write from a peer
 offered `transmitSettingsVersion` 7 while the radio is on the air (the
@@ -4140,9 +4154,10 @@ station ("Transmit configuration is unavailable on this receive-only
 Core."). At `transmitSettingsVersion` 1 a receive-only station takes the
 DSP > Options TX keys (`DspOptions<Setting><Mode>Tx`,
 `StationServer::isTransmitSettingKeyAcceptedOffAir`) while its radio is off
-the air, and refuses a write or remove of one while it is on the air ("The
-radio is on the air. Try again when it stops."), handing back its own
-value. At `transmitSettingsVersion` 5 the same holds for Setup >
+the air, and below version 11 refuses a write or remove of one while it is
+on the air ("The radio is on the air. Try again when it stops."), handing
+back its own value. At 11 it takes them on the air as a local window does,
+and applies them once the radio is back on receive. At `transmitSettingsVersion` 5 the same holds for Setup >
 Transmit > Power's SWR Protection keys (`SwrProtectionEnabled`,
 `SwrProtectionLimit`, `SwrTuneProtectionEnabled`, `TunePowerSwrIgnore`,
 `WindBackPowerSwr`) and External TX Inhibit keys
@@ -4833,8 +4848,11 @@ These command groups need a sentence beyond the table:
   transmits on and sets the tune drive source to the tune slider, so TUNE
   uses that power. The Core reports both on `transmit`
   (`tunePowerForTxBand`, `tuneDrivePowerSource`). It keys nothing, so a
-  receive-only Core takes it, but it is refused while the radio is on the
-  air ("The radio is on the air. Try again when it stops."), outside the
+  receive-only Core takes it. Below `transmitSettingsVersion` 11 it is
+  refused while the radio is on the air ("The radio is on the air. Try
+  again when it stops."); at 11 it is taken on the air from a peer that may
+  change the transmit settings, as the local slider moves keyed. It is
+  refused outside the
   tune power range ("Choose a tune power from 0 to 100 W.", or "Choose a
   tune power from 0 to 99." on a Hermes Lite 2), and when not understood
   ("The request to change the tune power was not understood."). A peer
@@ -4852,9 +4870,11 @@ These command groups need a sentence beyond the table:
   active profile and list on `transmit` (`activeTxProfile`,
   `txProfilesJson`). `rade.resetVocoder` (no arguments) clears the RADE
   transmit vocoder of the Core's active slice, as the RADE applet's Reset
-  vocoder does. None keys the radio, so a receive-only Core takes them,
-  but each is refused while the radio is on the air ("The radio is on the
-  air. Try again when it stops."). The other refusals: "There is no
+  vocoder does. None keys the radio, so a receive-only Core takes them.
+  Below `transmitSettingsVersion` 11 each is refused while the radio is on
+  the air ("The radio is on the air. Try again when it stops."); at 11 each
+  is taken on the air from a peer that may change the transmit settings, as
+  the local profile combo and Reset vocoder work keyed. The other refusals: "There is no
   transmit profile called <name>." (select and delete), "Give the transmit
   profile a name." (save with a blank name), "The Core has no radio to
   keep transmit profiles for." (save before the Core has a radio), "It is
@@ -4885,7 +4905,9 @@ These command groups need a sentence beyond the table:
   only while the radio transmits. A Core at `transmitSettingsVersion` 7
   takes them from a peer at agreed minor 11 while its radio is off the air
   and refuses them while it is on the air ("The radio is on the air. Try
-  again when it stops."). Any other peer gets "PureSignal cannot be run
+  again when it stops."); at version 11 it takes them on the air too from a
+  peer that may change the transmit settings, as the local PureSignal
+  dialog arms keyed. Any other peer gets "PureSignal cannot be run
   from a remote window yet." as before, and so does `ps3.twoTone` with
   `enabled` true from every peer: the two-tone test keys the radio and
   waits for remote transmit. `ps3.off`, `ps3.twoTone` with `enabled` false

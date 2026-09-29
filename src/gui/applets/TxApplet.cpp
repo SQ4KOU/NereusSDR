@@ -149,11 +149,6 @@
 //                Pwr and SWR bars fall at the Core's unkey as a local
 //                window's do at its own. AI-assisted via Anthropic Claude
 //                Code.
-//   2026-09-28  J.J. Boyd / KG4VCF  R-IOS-13 / R-R3-49 (JJ's TX EQ
-//                ruling): the EQ button has its own gate
-//                (setTxEqButtonPermitted), live on the air in a remote
-//                window as in a local one. AI-assisted via Anthropic Claude
-//                Code.
 // =================================================================
 
 //=================================================================
@@ -353,7 +348,6 @@ TxApplet::TxApplet(RadioModel* model, QWidget* parent)
         setTransmitPermitted(false);
         setTransmitSettingsPermitted(false);
         setTransmitChainSettingsPermitted(false);
-        setTxEqButtonPermitted(false);
         setTxProfilePermitted(false);
         setTxProcessingPermitted(false);
     }
@@ -2688,19 +2682,12 @@ void TxApplet::setTransmitChainSettingsPermitted(bool permitted,
                              static_cast<QWidget*>(m_monBtn),
                              static_cast<QWidget*>(m_monitorVolumeSlider),
                              static_cast<QWidget*>(m_levBtn),
+                             static_cast<QWidget*>(m_eqBtn),
                              static_cast<QWidget*>(m_cfcBtn)}) {
         gateTransmitControl(control, permitted, reason);
     }
     // Parity Task 32: the MON output pair also needs a Core that sends MON.
     applyMonitorOutputGate();
-}
-
-void TxApplet::setTxEqButtonPermitted(bool permitted, const QString& unavailableReason)
-{
-    gateTransmitControl(m_eqBtn, permitted,
-                        unavailableReason.isEmpty()
-                            ? IStationLink::transmitSettingsUnavailableReason()
-                            : unavailableReason);
 }
 
 // Remote-window parity Task 32 (R-IOS-13, R-R3-49): where MON plays is this

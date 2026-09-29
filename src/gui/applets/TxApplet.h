@@ -131,11 +131,6 @@
 //                Pwr and SWR bars fall at the Core's unkey as a local
 //                window's do at its own. AI-assisted via Anthropic Claude
 //                Code.
-//   2026-09-28  J.J. Boyd / KG4VCF  R-IOS-13 / R-R3-49 (JJ's TX EQ
-//                ruling): the EQ button has its own gate
-//                (setTxEqButtonPermitted), live on the air in a remote
-//                window as in a local one. AI-assisted via Anthropic Claude
-//                Code.
 // =================================================================
 
 //=================================================================
@@ -354,19 +349,12 @@ public slots:
                                       const QString& unavailableReason = QString());
     // R-R3-49 (parity Task 2): the rest of this applet's transmit settings
     // (Tune Power, the VOX level and delay, MON and its level, the MON
-    // output pair, LEV, CFC; the EQ button has setTxEqButtonPermitted),
-    // live while the Core takes them
+    // output pair, LEV, EQ, CFC), live while the Core takes them
     // (transmitSettingsVersion 2) and its radio is off the air. The VOX
     // button, TUNE, MOX, 2-Tone, PS-A and the profile stay on
     // setTransmitPermitted.
     void setTransmitChainSettingsPermitted(bool permitted,
                                            const QString& unavailableReason = QString());
-    // R-IOS-13 / R-R3-49 (JJ's TX EQ ruling): the EQ button, on its own
-    // gate because a remote window keeps it live while the Core's radio is
-    // on the air (a local window's EQ button is never greyed). Its
-    // right-click still opens the TX EQ dialog.
-    void setTxEqButtonPermitted(bool permitted,
-                                const QString& unavailableReason = QString());
     // R-R3-49 (parity Task 3): the profile combo. In a remote window it
     // lists the Core's profiles and selects through the Core
     // (transmitSettingsVersion 3), live while its radio is off the air.

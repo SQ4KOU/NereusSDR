@@ -361,6 +361,9 @@
 //                Core's readings (stationModMonitorSnapshot).
 //                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-29 - Remote parity on the air: the five station transmit
+//                commands take `takenOnAir` (transmitSettingsVersion 11).
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -3273,7 +3276,11 @@ public:
     // and the tune drive source to the tune slider, as the local slider
     // does. Refused, changing nothing, while the radio is on the air and
     // outside the tune power range.
-    bool setTunePowerForTxBandForStation(int watts, QString* reason);
+    /// Remote parity on the air (transmitSettingsVersion 11): with
+    /// `takenOnAir` (the peer may change the transmit settings) these five
+    /// are taken while the radio is on the air, as the local controls are;
+    /// otherwise they wait for it to stop, as before.
+    bool setTunePowerForTxBandForStation(int watts, QString* reason, bool takenOnAir = false);
     // R-R3-49 (parity Task 3, transmitSettingsVersion 3): a window's TX
     // profile combos and Setup > Audio > TX Profile. Select applies the
     // profile as the local combo does; save stores the Core's current
@@ -3283,14 +3290,17 @@ public:
     // and delete for a name the Core does not have. The Core's active
     // profile and list come back on `transmit` (activeTxProfile,
     // txProfilesJson). None keys the radio.
-    bool selectTxProfileForStation(const QString& name, QString* reason);
-    bool saveTxProfileForStation(const QString& name, QString* reason);
-    bool deleteTxProfileForStation(const QString& name, QString* reason);
+    bool selectTxProfileForStation(const QString& name, QString* reason,
+                                   bool takenOnAir = false);
+    bool saveTxProfileForStation(const QString& name, QString* reason,
+                                 bool takenOnAir = false);
+    bool deleteTxProfileForStation(const QString& name, QString* reason,
+                                   bool takenOnAir = false);
     // R-R3-49 (parity Task 3): the RADE applet's Reset vocoder. Clears the
     // RADE transmit vocoder of the active slice's RADE channel
     // (RadeChannel::resetTx), as the local button does. Keys nothing.
     // Refused while the radio is on the air and with no RADE channel.
-    bool resetRadeVocoderForStation(QString* reason);
+    bool resetRadeVocoderForStation(QString* reason, bool takenOnAir = false);
     // R-R3-49 (parity Task 3): scope the TX profile bank to a radio's MAC and
     // load it, as a connect does (empty: no radio), then publish the
     // profiles on `transmit`. The Core only; a window mirrors the Core's.

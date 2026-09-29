@@ -192,6 +192,9 @@
 //                                    txEq.resetCurve (txEqCurveVersion 2)
 //                                    through TxEqCurveAccess. AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  setTransmitSettingsOnAir
+//                                    (transmitSettingsVersion 11).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -283,6 +286,13 @@ public:
     /// the radio is off the air. False for every other peer, and again
     /// whenever the session owner changes.
     void setPureSignalArmingOffered(bool offered) { m_pureSignalArmingOffered = offered; }
+    /// Remote parity on the air (transmitSettingsVersion 11): the session's
+    /// peer may change the transmit settings, so setTunePowerForTxBand,
+    /// txProfile.*, rade.resetVocoder, the PureSignal arming verbs and
+    /// tx.twoTonePreset are taken from it while the radio is on the air, as
+    /// a local window takes them. False for every other peer and between
+    /// dispatches.
+    void setTransmitSettingsOnAir(bool taken) { m_transmitSettingsOnAir = taken; }
 
     /// Cancels every DSP-asset job `owner` started (its session ended).
     void endSessionOwner(const QString& owner);
@@ -443,6 +453,7 @@ signals:
 private:
     Ps3DisplayAdmissionHandler m_ps3DisplayAdmission;
     bool m_pureSignalArmingOffered = false;
+    bool m_transmitSettingsOnAir = false;
     void handleAddSlice(const NereusSDR::SessionMessage& invoke);
     void handleRemoveSlice(const NereusSDR::SessionMessage& invoke);
     void handleRequestSliceSampleRate(const NereusSDR::SessionMessage& invoke);

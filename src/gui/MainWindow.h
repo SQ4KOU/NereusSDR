@@ -53,10 +53,9 @@
 //   2026-09-28 - J.J. Boyd (KG4VCF). Parity Task 25: the container filter
 //                and band-stack right-clicks. AI-assisted via Anthropic
 //                Claude Code.
-//   2026-09-28 - J.J. Boyd (KG4VCF). R-IOS-13 / R-R3-49 (JJ's TX EQ
-//                ruling): the TX EQ dialog and the TX applet's EQ button
-//                stay live while the Core's radio is on the air, as in a
-//                local window (txEqSettingsPermitted). AI-assisted via
+//   2026-09-29 - J.J. Boyd (KG4VCF). Remote parity on the air:
+//                transmitSettingsPermitted follows a Core at
+//                transmitSettingsVersion 11 on the air. AI-assisted via
 //                Anthropic Claude Code.
 // =================================================================
 
@@ -702,18 +701,14 @@ private slots:
     /// settings that key nothing (RF Power, TX filter, DSP > Options TX):
     /// always in local direct mode; in a remote window while the handshake
     /// is complete, the Core offers transmitSettingsVersion at least
-    /// `minVersion` and its radio is not on the air (RadioModel::isCoreOnAir).
+    /// `minVersion`, and its radio is not on the air (RadioModel::isCoreOnAir)
+    /// or the Core takes them on the air (kTransmitSettingsOnAirVersion).
     bool transmitSettingsPermitted(int minVersion = 1) const;
     /// Why not, in plain words: the on-the-air reason while the Core's
     /// radio is on the air, otherwise the Core reason
     /// (IStationLink::transmitSettingsUnavailableReason). Empty when
     /// permitted.
     QString transmitSettingsReason(int minVersion = 1) const;
-    /// R-IOS-13 / R-R3-49 (JJ's TX EQ ruling): whether this window may
-    /// change the TX EQ's settings (the TX EQ dialog, the EQ button). As
-    /// transmitSettingsPermitted, but on the air too: a local window
-    /// changes them while transmitting, and the Core takes them then.
-    bool txEqSettingsPermitted(int minVersion) const;
     /// R-R3-49 (parity Task 7): whether this window may arm PureSignal
     /// (PS-A): always in local direct mode; in a remote window with remote
     /// transmit, or on a Core at transmitSettingsVersion 7 while its radio

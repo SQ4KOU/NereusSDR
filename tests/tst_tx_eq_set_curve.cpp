@@ -11,9 +11,9 @@
 //                                    txEqCurveVersion 2). AI-assisted via
 //                                    Anthropic Claude Code.
 //   2026-09-28  J.J. Boyd / KG4VCF  JJ's TX EQ ruling: the curve is taken
-//                                    while the radio is on the air; RF
-//                                    Power still waits. AI-assisted via
-//                                    Anthropic Claude Code.
+//                                    while the radio is on the air, and
+//                                    RF Power too at version 11.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -411,7 +411,8 @@ private slots:
 
     // JJ's TX EQ ruling (2026-09-28): a local window changes the TX EQ
     // while transmitting, so the Core takes the curve on the air too, from
-    // a device it takes transmit settings from; RF Power still waits.
+    // a device it takes transmit settings from; since
+    // transmitSettingsVersion 11 so is RF Power, as locally.
     void theCurveIsTakenOnTheAir()
     {
         Device phone(m_server.get(), this, {{"txEqCurve", 2}});
@@ -447,8 +448,8 @@ private slots:
             }
             return false;
         }, 3000));
-        QCOMPARE(reason, QStringLiteral("The radio is on the air. Try again when it stops."));
-        QCOMPARE(m_core->transmitModel().power(), power);
+        QVERIFY2(reason.isEmpty(), qPrintable(reason));
+        QCOMPARE(m_core->transmitModel().power(), power == 21 ? 22 : 21);
         mox->setMox(false);
         QTRY_VERIFY(mox->state() == MoxState::Rx);
     }

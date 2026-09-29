@@ -301,6 +301,9 @@
 //   2026-09-28: iPhone app plan Task 25: the Core's device verbs for the
 //               This Core page (requestDeviceAdmin). J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - R-IOS-13 / R-R3-49: the txEqCurve a window did not
+//                declare is not counted as schema skew. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SystemProxy.h"
@@ -3523,6 +3526,13 @@ void StationClient::compareSchema(const QByteArray& className,
         }
     }
     for (const QByteArray& name : localNames) {
+        // R-IOS-13 / R-R3-49: the Core sends transmit's txEqCurve only to a
+        // peer that declared txEqCurve; for this window its absence is the
+        // wire it asked for, not skew.
+        if (className == "TransmitModel" && name == "txEqCurve"
+            && !m_declaredFeatures.contains(QByteArrayLiteral("txEqCurve"))) {
+            continue;
+        }
         if (!stationNames.contains(name)) {
             m_schemaOnlyLocal.insert(skewKey(className, name));
             ++onlyLocal;
