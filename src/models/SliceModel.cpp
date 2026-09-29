@@ -8,6 +8,10 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29 - radeSynced and radeFreqOffsetHz, the RADE decoder's sync
+//                 and frequency offset; sync clears on leaving a RADE
+//                 sideband. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
@@ -356,6 +360,12 @@ void SliceModel::setDspMode(DSPMode mode)
         if (isRade(oldMode) && !m_lastRadeRxCallsign.isEmpty()) {
             m_lastRadeRxCallsign.clear();
             emit lastRadeRxCallsignChanged(m_lastRadeRxCallsign);
+        }
+        // The same two cases end the old decoder (it is destroyed below),
+        // and the VFO flag drops its sync dot (VfoWidget::setRadeActive):
+        // the next decoder reports its own sync.
+        if (isRade(oldMode)) {
+            setRadeSynced(false);
         }
 
         // 2026-05-12 bench: stop the idle-clear timer when leaving
@@ -1017,6 +1027,24 @@ void SliceModel::setDiversityGainDb(double db)
         emit diversityGainDbChanged(db);
         noteDiversityPatternInputs();
     }
+}
+
+void SliceModel::setRadeSynced(bool synced)
+{
+    if (m_radeSynced == synced) {
+        return;
+    }
+    m_radeSynced = synced;
+    emit radeSyncedChanged(synced);
+}
+
+void SliceModel::setRadeFreqOffsetHz(double hz)
+{
+    if (m_radeFreqOffsetHz == hz) {
+        return;
+    }
+    m_radeFreqOffsetHz = hz;
+    emit radeFreqOffsetHzChanged(hz);
 }
 
 QString SliceModel::diversityPattern() const

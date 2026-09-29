@@ -11,6 +11,10 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29 - J.J. Boyd (KG4VCF). A regained RADE lock repaints the VFO
+//                flag from the slice's SNR, which a remote window's Core
+//                does not resend when it is unchanged. AI-assisted via
+//                Anthropic Claude Code.
 //   2026-09-29 - J.J. Boyd (KG4VCF). Remote parity on the air: the
 //                transmit settings stay live while the Core's radio is on
 //                the air on a Core at transmitSettingsVersion 13, as in a
@@ -2846,10 +2850,19 @@ void MainWindow::wireRadeFlagForTest(RadioModel* model, VfoWidget* flag,
     if (!model || !flag) { return; }
     const QPointer<VfoWidget> flagRef(flag);
     connect(model, &RadioModel::radeSyncChanged, flag,
-            [flagRef, sliceId](int changedSliceId, bool synced) {
+            [flagRef, model, sliceId](int changedSliceId, bool synced) {
         if (!flagRef || changedSliceId != sliceId) { return; }
         if (!synced) {
             flagRef->setRadeSynced(false);
+            return;
+        }
+        // A local decoder's next SNR tick repaints the lock. A remote
+        // window's Core sends the SNR only when it moves, so a lock
+        // regained at the same SNR repaints from the slice's value here.
+        if (SliceModel* slice = model->sliceById(sliceId)) {
+            if (!std::isnan(slice->snrDb())) {
+                flagRef->setRadeSnrLabel(static_cast<float>(slice->snrDb()));
+            }
         }
     });
     connect(model, &RadioModel::radeFreqOffsetChanged, flag,

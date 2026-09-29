@@ -11,6 +11,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29: radeSynced and radeFreqOffsetHz, the RADE decoder's sync and
+//               frequency offset as the VFO flag shows them, declared last.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-28: diversityPattern, the Diversity dialog's sensitivity
 //               pattern as the Core sends it (core/DiversityPattern),
 //               declared last. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
@@ -571,6 +574,15 @@ private:
     // declared diversityPattern (diversityPatternVersion 1). Declared last
     // so every earlier property keeps its wire ordinal.
     Q_PROPERTY(QString diversityPattern READ diversityPattern NOTIFY diversityPatternChanged)
+    // The RADE decoder's sync and frequency offset in Hz, the two values the
+    // VFO flag's RADE row shows beside snrDb (VfoWidget::setRadeSynced and
+    // setRadeFreqOffset); set from the slice's RadeChannel
+    // (RadioModel::wireRadeChannel). Outbound, no WRITE, sent only to a peer
+    // that declared radeStatus (radeStatusVersion 1; the station link
+    // document, "The RADE status"). Declared last so every earlier property
+    // keeps its wire ordinal.
+    Q_PROPERTY(bool radeSynced READ radeSynced NOTIFY radeSyncedChanged)
+    Q_PROPERTY(double radeFreqOffsetHz READ radeFreqOffsetHz NOTIFY radeFreqOffsetHzChanged)
 
 public:
     // Receive-layout admission bounds: general receive defaults, not a
@@ -723,6 +735,14 @@ public:
     /// See the diversityPattern Q_PROPERTY. Computed from the slice's
     /// frequency, diversity phase and gain at each read.
     QString diversityPattern() const;
+    /// See the radeSynced / radeFreqOffsetHz Q_PROPERTYs. False and 0
+    /// until the slice's RADE decoder reports; radeSynced is false again
+    /// when the slice leaves its RADE sideband and when its decoder goes.
+    bool radeSynced() const { return m_radeSynced; }
+    double radeFreqOffsetHz() const { return m_radeFreqOffsetHz; }
+    /// Change-only; the slice's RadeChannel is the writer.
+    void setRadeSynced(bool synced);
+    void setRadeFreqOffsetHz(double hz);
     void setMinNotchWidthHz(double hz);
     void setAdcPeakDbfs(double dbfs);
     void setAdcAverageDbfs(double dbfs);
@@ -1348,6 +1368,10 @@ signals:
     void minNotchWidthHzChanged(double hz);
     /// The frequency, diversity phase or gain moved the pattern.
     void diversityPatternChanged(const QString& pattern);
+    /// The RADE decoder gained or lost sync.
+    void radeSyncedChanged(bool synced);
+    /// The RADE decoder reported a new frequency offset (Hz).
+    void radeFreqOffsetHzChanged(double hz);
     void stationAutoAgcNoiseFloorChanged();
     void dspModeChanged(NereusSDR::DSPMode mode);
     void filterChanged(int low, int high);
@@ -1527,6 +1551,10 @@ private:
     // The diversityPattern last read or announced, so an input change that
     // leaves the rounded pattern as it was announces nothing.
     mutable QString m_diversityPatternLast;
+    // The RADE decoder's sync and frequency offset (radeSynced,
+    // radeFreqOffsetHz).
+    bool    m_radeSynced{false};
+    double  m_radeFreqOffsetHz{0.0};
     void noteDiversityPatternInputs();
     double  m_stationAutoAgcNoiseFloorDbm{-200.0};
     bool    m_stationAutoAgcNoiseFloorValid{false};

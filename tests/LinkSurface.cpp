@@ -12,6 +12,11 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29  J.J. Boyd / KG4VCF  RADE status: the capture declares
+//                                    radeStatus, so radeStatusVersion and
+//                                    the slice's radeSynced and
+//                                    radeFreqOffsetHz are captured.
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 1 (R-IOS-01): link
 //                                    surface capture. AI-assisted
 //                                    transformation via Anthropic Claude
@@ -611,7 +616,10 @@ std::optional<QList<QByteArray>> liveSessionWire(
                                   // R-R3-46 / R-R3-11: stepAtt's other ADC.
                                   {"adcAttenuators", 1},
                                   // R-R3-49 / R-IOS-18: the `paProfiles` object.
-                                  {"paProfiles", 1}})));
+                                  {"paProfiles", 1},
+                                  // RADE status: each slice's radeSynced
+                                  // and radeFreqOffsetHz.
+                                  {"radeStatus", 1}})));
     clientEnd->sendText(SessionMessages::encode(SessionMessages::authRequest({}, block)));
 
     // The loopback delivers on later event-loop turns, as a socket would.
@@ -673,6 +681,8 @@ QJsonArray captureCapabilities()
     caps.adcAttenuatorVersion = 1;
     // R-R3-49 / R-IOS-18: sent to a peer that declared paProfiles.
     caps.paProfileVersion = 1;
+    // RADE status: sent to a peer that declared radeStatus.
+    caps.radeStatusVersion = 1;
 
     // The values come from a live station with every feature a Core can
     // switch on: media, telemetry, an enforced display budget with its

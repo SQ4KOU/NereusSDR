@@ -17,6 +17,20 @@
 //   2026-09-29: The Core's TCI server settings (JJ's ruling of 2026-09-28,
 //               stationTciSettingsVersion 1). J.J. Boyd (KG4VCF), AI-assisted
 //               via Anthropic Claude Code.
+//   2026-09-29 - A remote window's RADE status comes from the Core through
+//                 its slices (radeStatus 1): each slice's radeSynced,
+//                 radeFreqOffsetHz and snrDb reach radeSyncChanged,
+//                 radeFreqOffsetChanged and radeSnrChanged, so the VFO flag
+//                 and the RADE applet show them as a local window's do. The
+//                 window does not report to FreeDV Reporter; the Core does.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - RADE status on the slice: wireRadeChannel sets the slice's
+//                 radeSynced and radeFreqOffsetHz from its channel, and
+//                 clears radeSynced when the channel goes. A closed
+//                 decoder also clears the model's synced-slice record, so
+//                 the next decoder's first lock reaches the flag and the
+//                 FreeDV reporter. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 //   2026-09-28 - RADE end-of-over callsigns: an operator's release in RADE
 //                 sends FreeDV's end-of-over frame with the station callsign
 //                 before the radio unkeys (startRadeEndOfOverTail,
@@ -3351,12 +3365,17 @@ RadioModel::RadioModel(Role role, QObject* parent)
     m_radeReporterBridge = std::make_unique<FreeDVRadeReporterBridge>(
         m_freeDvReporter.get(), m_pskReporter.get(), this);
     m_radeReporterBridge->setReportingEnabled(true);
-    connect(this, &RadioModel::radeSyncChanged,
-            m_radeReporterBridge.get(),
-            &FreeDVRadeReporterBridge::onRadeSyncChanged);
-    connect(this, &RadioModel::radeSnrChanged,
-            m_radeReporterBridge.get(),
-            &FreeDVRadeReporterBridge::onRadeSnrChanged);
+    // A remote window's RADE status is the Core's, and the Core reports
+    // it; the window reporting the same reception again would count it
+    // twice.
+    if (m_role == Role::Local) {
+        connect(this, &RadioModel::radeSyncChanged,
+                m_radeReporterBridge.get(),
+                &FreeDVRadeReporterBridge::onRadeSyncChanged);
+        connect(this, &RadioModel::radeSnrChanged,
+                m_radeReporterBridge.get(),
+                &FreeDVRadeReporterBridge::onRadeSnrChanged);
+    }
     if (m_moxController) {
         connect(m_moxController, &MoxController::moxStateChanged,
                 m_radeReporterBridge.get(),
@@ -12355,6 +12374,21 @@ int RadioModel::addSliceImpl(int requestedId, const QString& initialPanId,
         // mirrored both ways; the Core saves and restores it, so a remote
         // window writes nothing of its own.
         slice->setOutputRoutePersisted(false);
+        // A remote window runs no RADE decoder. The Core's sync, offset and
+        // SNR arrive on the slice (radeStatus 1) and leave here as the same
+        // signals a local decoder's wiring emits, so the VFO flag and the
+        // RADE applet follow them unchanged. The Core sends a value only
+        // when it moves, where a local decoder repeats the offset on every
+        // tick; the flag keeps the last offset for that reason.
+        connect(slice, &SliceModel::radeSyncedChanged, this, [this, slice](bool synced) {
+            emit radeSyncChanged(slice->sliceIndex(), synced);
+        });
+        connect(slice, &SliceModel::radeFreqOffsetHzChanged, this, [this, slice](double hz) {
+            emit radeFreqOffsetChanged(slice->sliceIndex(), static_cast<float>(hz));
+        });
+        connect(slice, &SliceModel::snrDbChanged, this, [this, slice](double db) {
+            emit radeSnrChanged(slice->sliceIndex(), static_cast<float>(db));
+        });
     }
     // Phase 3F: stamp the owning pan id BEFORE the sliceAdded() emit below,
     // so the MainWindow handler routes the new VfoWidget to the correct
@@ -13587,13 +13621,31 @@ void RadioModel::wireRadeChannel(int sliceId, RadeChannel* channel,
                 onRadeTextDecoded(sliceId, callsign, grid);
             });
     // Phase 3R L2: freq-offset re-emit for the RadeApplet readout. The
-    // codec emits only on actual offset change so no model-side de-dup
-    // is needed; the captured sliceId routes the per-channel emission
-    // into the multi-slice signal surface.
+    // codec sends the offset on every processIq tick while locked, right
+    // after the SNR, whether or not it changed (RadeChannel::processIq);
+    // the flag re-appends it to each fresh SNR text. It is re-emitted
+    // here without de-dup; the slice's setRadeFreqOffsetHz keeps the
+    // mirrored value change-only. The captured sliceId routes the
+    // per-channel emission into the multi-slice signal surface.
     connect(channel, &RadeChannel::freqOffsetChanged, this,
             [this, sliceId](float hz) {
                 emit radeFreqOffsetChanged(sliceId, hz);
             });
+
+    // RADE status for a remote VFO flag (radeStatusVersion 1): the slice
+    // carries the sync and offset this channel reports, the readings the
+    // desktop flag shows. Taken from the channel itself rather than from
+    // onRadeSyncChanged, whose per-slice memory outlives the channel: a
+    // replacement channel starts unsynced and reports its own first lock.
+    // The slice is the context, so a removed slice drops the connections.
+    connect(channel, &RadeChannel::syncChanged, slice,
+            &SliceModel::setRadeSynced);
+    connect(channel, &RadeChannel::freqOffsetChanged, slice,
+            [slice](float hz) {
+                slice->setRadeFreqOffsetHz(static_cast<double>(hz));
+            });
+    connect(channel, &QObject::destroyed, slice,
+            [slice]() { slice->setRadeSynced(false); });
 
     // Return decoded RADE speech through RxDspWorker so AudioEngine has one
     // serialized producer for ordinary and RADE RX blocks. The QPointers and
@@ -13746,17 +13798,27 @@ void RadioModel::wireRadeChannel(int sliceId, RadeChannel* channel,
     // carries only the stable slice ID plus a unique generation; QObject
     // lifetime remains on this main-thread side.
     const quint64 ownerSerial = publishRadeRxTarget(sliceId, channel, slice);
+    // A closed decoder is no longer locked. Record the drop so the flag and
+    // the FreeDV reporter hear it, and so the next decoder's first lock on
+    // this slice (RadeChannel starts with m_synced false) is not dropped as
+    // a repeat by the de-dup in onRadeSyncChanged.
     connect(channel, &QObject::destroyed, this,
-            [this, ownerSerial]() {
+            [this, ownerSerial, sliceId]() {
                 if (m_txWorker) {
                     m_txWorker->setRadeChannel(nullptr);
                 }
                 clearRadeRxTarget(ownerSerial);
+                onRadeSyncChanged(sliceId, false);
             });
 }
 
 bool RadioModel::radeSynced(int sliceId) const
 {
+    if (m_role == Role::Remote) {
+        // The Core's value, mirrored onto the slice (radeStatus 1).
+        const SliceModel* slice = sliceById(sliceId);
+        return slice != nullptr && slice->radeSynced();
+    }
     return m_radeSyncedSlices.value(sliceId, false);
 }
 

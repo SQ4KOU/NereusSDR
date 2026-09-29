@@ -476,6 +476,11 @@
             "value": 1
         },
         {
+            "kind": "i64",
+            "name": "radeStatusVersion",
+            "value": 1
+        },
+        {
             "kind": "utf8",
             "name": "coreBuildInfo",
             "value": "{\"productVersion\":\"0.5.2\",\"sourceTag\":\"link-surface@fixture\"}"
@@ -6504,6 +6509,18 @@
                     "kind": "utf8",
                     "name": "diversityPattern",
                     "ordinal": 150
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "radeSynced",
+                    "ordinal": 151
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "radeFreqOffsetHz",
+                    "ordinal": 152
                 }
             ]
         },

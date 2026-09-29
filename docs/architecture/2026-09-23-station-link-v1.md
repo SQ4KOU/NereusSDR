@@ -810,6 +810,17 @@ remote window declares it too: its Manage Radios model choice is the
 record's `models`, and on a Core that sends none the choice is disabled
 with its reason.
 
+**`radeStatus` 1** (RADE on the phone's VFO flag): the client shows the
+RADE decoder's sync and frequency offset as the desktop's VFO flag does
+(section 7.1, "The RADE status"). A peer that declares it at minor 11 is
+sent `radeStatusVersion` (section 6.3) and each slice's `radeSynced` and
+`radeFreqOffsetHz`; a peer that does not sees exactly the wire it was
+built for, with none of them. The station does not declare it. The
+desktop's remote window declares it too: its VFO flag and RADE applet show
+the Core's sync, SNR and offset as a local window's do, and it keeps the
+last offset for each fresh SNR, since the Core sends the offset only when
+it moves.
+
 **`txEqCurve` 2** (R-IOS-13, R-R3-49): the client also changes the curve,
 with `txEq.setCurve` and `txEq.resetCurve` (section 9.1). A peer that
 declares it at minor 11 is sent `txEqCurveVersion` 2 and `transmit`'s
@@ -1010,6 +1021,7 @@ change shows as surface drift and as a change to this table.
 | `stationTciSettingsVersion` | 1 |
 | `adcAttenuatorVersion` | 1 |
 | `paProfileVersion` | 1 |
+| `radeStatusVersion` | 1 |
 
 <!-- /surface -->
 
@@ -1259,6 +1271,14 @@ When a feature is off, its version is 0:
   the reason the Core gives the desktop's own PA profile writes on a
   receive-only Core or to a device that may not transmit, and for a value
   outside its range. None keys the radio.
+- `radeStatusVersion` (RADE on the phone's VFO flag): optional, sent only
+  at agreed minor 11 to a peer whose hello declared `radeStatus` 1, while
+  the Core has a radio model, after `paProfileVersion` (or after the
+  last entry before it when that is absent) and before `coreBuildInfo`. At 1
+  every `slice:<id>` carries `radeSynced` and `radeFreqOffsetHz` (section
+  7.1, "The RADE status"). A peer that did not declare the feature is sent
+  neither this entry nor the properties. An app on a Core that sends no
+  entry shows the RADE row from `snrDb` alone, as it did before.
 - `remotePgxlControlVersion`, `remoteRfKitControlVersion`,
   `remoteTgxlControlVersion`: sent only at agreed minor 11, and 0 unless
   the Core owns its accessories. `remotePgxlControlVersion` 3 adds the
@@ -1903,7 +1923,8 @@ declared `txEqCurve` (section 6.1); `remoteTxVersion` and the three
 `radioModels`; `coreAddressesVersion` only for a device signed in with its
 own key that declared `coreAddresses`; `adcAttenuatorVersion` only for
 a peer that declared `adcAttenuators`; `paProfileVersion` only for a
-peer that declared `paProfiles` (section 6.1). A client ignores a capability it does not know
+peer that declared `paProfiles` (section 6.1); `radeStatusVersion` only
+for a peer that declared `radeStatus`. A client ignores a capability it does not know
 (`StationCapabilities::fromUpdates`).
 
 **Each device's share of the display budget** (iPhone app plan Task 76; the
@@ -2086,7 +2107,8 @@ older window sees only the values it was built for.
 | 93 | `stationTciSettingsVersion` | `i64` |
 | 94 | `adcAttenuatorVersion` | `i64` |
 | 95 | `paProfileVersion` | `i64` |
-| 96 | `coreBuildInfo` | `utf8` |
+| 96 | `radeStatusVersion` | `i64` |
+| 97 | `coreBuildInfo` | `utf8` |
 
 <!-- /surface -->
 
@@ -2412,7 +2434,7 @@ An enum property lists the values its domain allows.
 | 12 | `streamIndex` | `i64` | outbound |  |
 | 13 | `psPaused` | `bool` | outbound |  |
 
-**SliceModel** (151 properties)
+**SliceModel** (153 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -2567,6 +2589,8 @@ An enum property lists the values its domain allows.
 | 148 | `agcAverageDb` | `f64` | outbound |  |
 | 149 | `minNotchWidthHz` | `f64` | outbound |  |
 | 150 | `diversityPattern` | `utf8` | outbound |  |
+| 151 | `radeSynced` | `bool` | outbound |  |
+| 152 | `radeFreqOffsetHz` | `f64` | outbound |  |
 
 **SpotSourceHost** (11 properties)
 
@@ -2963,6 +2987,11 @@ Notes on the keys:
   the sensitivity pattern the Diversity dialog draws for the slice, below
   ("The diversity pattern"). Sent only to a peer that declared
   `diversityPattern` 1.
+- **`slice:<id>` RADE status.** `radeSynced` (bool) and `radeFreqOffsetHz`
+  (f64), outbound, no WRITE, declared after `diversityPattern` in
+  `SliceModel`; `radeStatusVersion` 1. The RADE decoder's sync and its
+  frequency offset in Hz, below ("The RADE status"). Sent only to a peer
+  that declared `radeStatus` 1.
 - **`slice:<id>` ADC and AGC readings.** `adcPeakDbfs`, `adcAverageDbfs`,
   `agcGainDb`, `agcPeakDb` and `agcAverageDb` (f64, outbound, no WRITE;
   parity Task 15) are the Core's receive meters for the slice's receiver,
@@ -3827,6 +3856,58 @@ orientation setting; bearing 0 is the radar's north.
 **Worked example.** Slice at 14.2 MHz, `diversityPhaseDeg` 0,
 `diversityGainDb` 0: `points[0]` (north) is 1, `points[30]` (east) 0.518,
 `points[60]` (south) 0.069 and `points[90]` (west) 0.518.
+
+#### The RADE status (`radeSynced`, `radeFreqOffsetHz`)
+
+`radeStatusVersion` 1. While a slice is in RADE (`dspMode` `RADE_U` or
+`RADE_L`) the desktop's VFO flag shows one RADE row built from the RADE
+decoder: the last speaker's callsign (or "RADE"), a sync dot, the SNR and
+the frequency offset (`VfoWidget::setRadeSynced`, `setRadeSnrLabel`,
+`setRadeFreqOffset`). The slice already carries `lastRadeRxCallsign` and
+`snrDb`; these two carry the rest, from the same decoder readings the
+desktop's flag reads (`RadeChannel::syncChanged` and
+`freqOffsetChanged`, from `rade_sync()` and `rade_freq_offset()`).
+
+- **`radeSynced`** (bool). True while the slice's RADE decoder holds
+  sync. It follows the decoder's own changes, and is false while the
+  slice is not in RADE, after a RADE sideband change, and whenever the
+  slice's decoder is replaced, until the new decoder reports sync. The
+  Core keeps `snrDb` as it was when sync is lost (its end-of-over reports
+  read it); the desktop's flag stops showing it at that moment, and an
+  app does the same by reading `radeSynced`.
+- **`radeFreqOffsetHz`** (f64, Hz). The decoder's frequency offset,
+  signed, as reported. The decoder reports it only while it holds sync,
+  so after sync is lost this holds the last value; it is 0 until the
+  first report.
+- **Read-only.** A write of either is refused as any outbound property is
+  ("The Core sets this itself; it cannot be changed from here.").
+- **When they are sent.** When they change, no faster than the decoder
+  reports (each value it reports is one the desktop's flag repaints for),
+  in the same `delta` as `snrDb` when they change together.
+- **Who gets them.** Only a peer at agreed minor 11 whose hello declared
+  `radeStatus` 1. Its `SliceModel` schema, its slice snapshots and its
+  deltas carry the fields. Every other peer's carry none of them, and a
+  delta that would carry only these is not sent to them.
+
+**Showing them as the desktop's flag does.** The row shows only while the
+slice is in RADE. The prefix is `lastRadeRxCallsign`, or "RADE" while it
+is empty.
+
+| State | Row |
+| --- | --- |
+| `radeSynced` true and `snrDb` a number | prefix, a filled dot, the SNR, then the offset: `KG4VCF ● 12dB +38Hz` |
+| otherwise | prefix, a hollow dot, three hyphens: `RADE ○ ---` |
+
+- **SNR.** `snrDb` cut to a whole number toward zero, then `dB` with no
+  space (12.9 shows `12dB`, -3.7 shows `-3dB`).
+- **Offset.** One space after the SNR, then `+` when `radeFreqOffsetHz` is
+  0 or more (a negative number carries its own `-`), the offset cut to a
+  whole number toward zero, then `Hz` with no space (38.7 shows `+38Hz`,
+  -12.4 shows `-12Hz`, and -0.4 shows `0Hz`: no sign, since it is below 0
+  but cuts to 0).
+- **Dot color.** Filled: yellow `#e0e040` when the SNR shown is below 5 dB
+  (compared before cutting), green `#00ff88` from 5 dB up. Hollow: gray
+  `#505050`.
 
 **The `vax` object** (iPhone app plan Task 25, `vaxVersion` 1). The Core
 takes a write of `ch<N>RxGain`, `ch<N>Muted` or `txGain` only from a peer

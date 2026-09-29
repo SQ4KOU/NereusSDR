@@ -52,6 +52,17 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29  J.J. Boyd / KG4VCF  A write's corrections treat a value
+//                                    that is not a number as unchanged
+//                                    when it was not a number before
+//                                    (sameSettledValue). AI-assisted via
+//                                    Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  RADE status: radeStatusVersion 1 and
+//                                    each slice's radeSynced and
+//                                    radeFreqOffsetHz only to a peer that
+//                                    declared radeStatus 1
+//                                    (fitPeerOnlyProperties). AI-assisted
+//                                    via Anthropic Claude Code.
 //   2026-08-08  J.J. Boyd / KG4VCF  Remote daemon R2 Task 18: the daemon
 //                                    half of the wss session. AI-assisted
 //                                    transformation via Anthropic Claude
@@ -834,6 +845,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <array>
+#include <cmath>
 #include <QLoggingCategory>
 #include <QNetworkInterface>
 #include <QRegularExpression>
@@ -1221,6 +1233,9 @@ constexpr PeerOnlyProperty kPeerOnlyProperties[] = {
     {"RadioModel", "radio", false, "logCategoryList", "logCategoryList"},
     // Where a device can dial this Core (coreAddressesVersion 1).
     {"StationDevicesFacade", "devices", false, "coreAddresses", "coreAddresses", true},
+    // The RADE decoder's sync and frequency offset (radeStatusVersion 1).
+    {"SliceModel", "slice:", true, "radeSynced", "radeStatus"},
+    {"SliceModel", "slice:", true, "radeFreqOffsetHz", "radeStatus"},
 };
 
 // Phone wire batch: record fields that go only to a peer at
@@ -1683,6 +1698,19 @@ QString calibrationKeyValueRefusal(const QString& key, const QVariant& value, HP
             ? QString() : QStringLiteral("The Core expected this box to be on or off.");
     }
     return {};
+}
+
+// A write's corrections compare each settled value with the one before the
+// write. A double that is not a number (a slice's SNR before a RADE decoder
+// locks) never equals itself as a QVariant, so without this it read as
+// changed and went back to the writer after every write.
+bool sameSettledValue(const QVariant& a, const QVariant& b)
+{
+    if (a.typeId() == QMetaType::Double && b.typeId() == QMetaType::Double
+        && std::isnan(a.toDouble()) && std::isnan(b.toDouble())) {
+        return true;
+    }
+    return a == b;
 }
 
 // R-R3-49 (parity Task 5): true when both values are the same JSON object.
@@ -6849,7 +6877,7 @@ QList<SessionPropertyResult> StationServer::applyPropertyWrite(
     QList<MirrorUpdate> corrections;
     for (const auto& value : settled) {
         const bool changed = !previous.contains(value.name)
-            || previous.value(value.name).value != value.value;
+            || !sameSettledValue(previous.value(value.name).value, value.value);
         if ((requested.contains(value.name) && (!negotiated || message.writeId == 0))
             || (changed && !requested.contains(value.name))) {
             corrections.append(value);
@@ -10777,6 +10805,10 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             // The phone's direct addresses: devices' coreAddresses, for a
             // device signed in with its own key that declared coreAddresses 1.
             caps.coreAddressesVersion = peerGetsCoreAddresses(transport) ? 1 : 0;
+            // RADE status: each slice's radeSynced and radeFreqOffsetHz,
+            // for a peer that declared radeStatus 1.
+            caps.radeStatusVersion =
+                peerGetsFeatureProperties(transport, QByteArrayLiteral("radeStatus")) ? 1 : 0;
             if (peerDeclares(transport, QByteArrayLiteral("remoteTx"), 1)) {
                 caps.remoteTxEntry = true;
                 caps.remoteTxVersion = remoteTxVersion();

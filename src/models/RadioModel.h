@@ -3868,6 +3868,8 @@ public:
     TxWorkerThread* txWorkerMutableForTest() const { return m_txWorker.get(); }
     // The 24 -> 48 kHz RADE TX resampler (null until the first modem block).
     const Resampler* radeTxResamplerForTest() const { return m_radeTxResampler.get(); }
+    // The FreeDV reporter bridge fed by radeSyncChanged / radeSnrChanged.
+    FreeDVRadeReporterBridge* radeReporterBridgeForTest() const { return m_radeReporterBridge.get(); }
 
     // Test-only: inject board caps without a live radio connection.
     // Mirrors P1RadioConnection::setBoardForTest pattern.
@@ -5351,8 +5353,8 @@ signals:
 
     // Phase 3R Task L2: RADE carrier-frequency offset re-emit. Wired
     // alongside the I5 trio for the RadeApplet freq-offset readout.
-    // No model-side de-dup: the codec already coalesces by emitting
-    // only on actual offset change.
+    // Sent on every codec tick while locked, changed or not
+    // (RadeChannel::processIq), and re-emitted here without de-dup.
     void radeFreqOffsetChanged(int sliceId, float hz);
 
     // Phase 3P-II: PGXL amplifier presence / state / meter signals.

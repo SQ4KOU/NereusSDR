@@ -828,6 +828,11 @@ private:
     QString m_lastRadeCallsign;
     float   m_lastRadeSnrDb{std::numeric_limits<float>::quiet_NaN()};
     bool    m_lastRadeSynced{false};
+    // The decoder's last frequency offset, re-appended to each fresh SNR
+    // text. A local decoder sends it on every tick right after the SNR; a
+    // remote window's Core sends it only when it moves, so without this an
+    // SNR change alone would drop it from the flag. NaN = none yet.
+    float   m_lastRadeFreqOffsetHz{std::numeric_limits<float>::quiet_NaN()};
 
     // Slot wired to SliceModel::snrDbChanged. Updates m_snrValue text
     // + stylesheet color (grey/yellow/green) based on NaN-state and the
