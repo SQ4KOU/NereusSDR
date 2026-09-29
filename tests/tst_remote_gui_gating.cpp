@@ -145,6 +145,11 @@
 //                 box is disabled only on a Core that does not send its
 //                 curve, with that reason. J.J. Boyd (KG4VCF), with
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Remote parity on the air
+//                                    (transmitSettingsVersion 13): the
+//                                    transmit settings stay live keyed;
+//                                    Region still waits. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -4324,9 +4329,10 @@ private slots:
 
             // R-R3-49 (parity Task 1): the TX applet's RF Power follows the
             // transmit settings gate. The Core offers transmitSettingsVersion
-            // 1 and its radio is off the air, so it is live; keying the
-            // Core's radio greys it with the on-air reason within a delta,
-            // and it comes back when the radio stops.
+            // 1 and its radio is off the air, so it is live. Remote parity
+            // on the air (transmitSettingsVersion 13): keying the Core's
+            // radio leaves it live, as in a local window; General Region
+            // still waits for the radio to stop.
             auto* const txApplet = window->findChild<TxApplet*>();
             QVERIFY(txApplet != nullptr);
             QVERIFY(client->transmitSettingsAvailable());
@@ -4381,13 +4387,9 @@ private slots:
             QTRY_VERIFY(!extendedBox->isEnabled());
             QCOMPARE(extendedBox->toolTip(),
                      QStringLiteral("The radio is on the air. Try again when it stops."));
-            QTRY_VERIFY(!txApplet->rfPowerSlider()->isEnabled());
-            QCOMPARE(txApplet->rfPowerSlider()->toolTip(),
-                     QStringLiteral("The radio is on the air. Try again when it stops."));
+            QVERIFY(txApplet->rfPowerSlider()->isEnabled());
             for (QWidget* w : std::initializer_list<QWidget*>{txApplet->tunePowerSlider(), lev, proc}) {
-                QTRY_VERIFY(!w->isEnabled());
-                QCOMPARE(w->toolTip(),
-                         QStringLiteral("The radio is on the air. Try again when it stops."));
+                QVERIFY(w->isEnabled());
             }
             // R-R3-49 (parity Task 3): the TX profile combos and RADE's Reset
             // vocoder follow the transmit settings gate too.
@@ -4396,9 +4398,7 @@ private slots:
             for (QWidget* w : std::initializer_list<QWidget*>{
                      rade->profileComboForTest(), rade->resetVocoderButtonForTest(),
                      txApplet->profileCombo()}) {
-                QTRY_VERIFY(!w->isEnabled());
-                QCOMPARE(w->toolTip(),
-                         QStringLiteral("The radio is on the air. Try again when it stops."));
+                QVERIFY(w->isEnabled());
             }
             coreMox->setMox(false);
             QTRY_VERIFY(!window->radioModel()->isCoreOnAir());
@@ -4807,17 +4807,18 @@ private slots:
             QTRY_COMPARE(box.buttons->buttonState(Id::Mon), !mon);
             station.transmitModel().setMonEnabled(mon);
             QTRY_COMPARE(box.buttons->buttonState(Id::Mon), mon);
-            // On the air it greys with the on-air reason and changes nothing.
+            // Remote parity on the air (transmitSettingsVersion 13): on the
+            // air it stays live and toggles the Core's MON, as locally.
             station.moxController()->setMoxCheck({});
             station.moxController()->setMox(true);
-            const QString onAir = QStringLiteral("The radio is on the air. Try again when it stops.");
-            QTRY_VERIFY(!box.buttons->isButtonAvailable(Id::Mon));
-            QCOMPARE(box.buttons->buttonUnavailableReason(box.buttons->indexOf(Id::Mon)), onAir);
-            // R-R3-49 (parity Task 7): and PS-A waits too.
-            QTRY_COMPARE(box.buttons->buttonUnavailableReason(box.buttons->indexOf(Id::PsA)),
-                         onAir);
+            QTRY_VERIFY(window->radioModel()->isCoreOnAir());
+            QVERIFY(box.buttons->isButtonAvailable(Id::Mon));
+            // R-R3-49 (parity Task 7): PS-A keeps its own reason, not the air.
+            QCOMPARE(box.buttons->buttonUnavailableReason(box.buttons->indexOf(Id::PsA)),
+                     QStringLiteral("PureSignal needs a connected radio that supports it."));
             emit box.container->otherButtonClicked(int(Id::Mon));
-            QCOMPARE(station.transmitModel().monEnabled(), mon);
+            QTRY_COMPARE(station.transmitModel().monEnabled(), !mon);
+            station.transmitModel().setMonEnabled(mon);
             station.moxController()->setMox(false);
             QTRY_VERIFY(station.moxController()->state() == MoxState::Rx);
             QTRY_VERIFY(box.buttons->isButtonAvailable(Id::Mon));

@@ -678,6 +678,23 @@
 //               desktop's own Extended waits while another device holds
 //               transmit. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //               Claude Code.
+//   2026-09-28: R-IOS-13 / R-R3-49: txEqCurveVersion 2 to a peer that
+//               declared txEqCurve 2, with txEq.setCurve and
+//               txEq.resetCurve applied as that peer's txEqParaEqData write
+//               (the same gates, the Core's rounding and ordering, the
+//               settled curve in the result). J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
+//   2026-09-28: R-IOS-13 / R-R3-49 (JJ's TX EQ ruling): a receive-only
+//               Core takes the TX EQ dialog's ten settings on the air, as a
+//               local window changes them while transmitting
+//               (isTxEqSettingTakenOnAir). J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
+//   2026-09-29: Remote parity on the air (transmitSettingsVersion 13):
+//               every transmit setting a local window takes while
+//               transmitting is taken on the air from a peer that may
+//               change the transmit settings (takesTransmitSettingsOnAir);
+//               the OC transmit pins and Region still wait. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -697,6 +714,7 @@
 #include "core/BoardCapabilities.h"
 #include "core/DxccColorProvider.h"
 #include "core/HardwareProfile.h"
+#include "core/ParaEqCurve.h"
 #include "core/SpotSourceHost.h"
 #include "core/LogSink.h"
 #include "core/SupportBundle.h"
@@ -2367,6 +2385,16 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
         } else {
             handleRecordsCommand(m_dispatchingTransport, invoke);
         }
+        m_resultSentInDispatch = true;
+        return true;
+    });
+    // R-IOS-13 / R-R3-49 (txEqCurveVersion 2): the TX EQ curve verbs are
+    // the asking connection's txEqParaEqData write.
+    m_dispatcher->setTxEqCurveAccess([this](const SessionMessage& invoke) {
+        if (m_dispatchingTransport == nullptr) {
+            return false;
+        }
+        handleTxEqCurveCommand(m_dispatchingTransport, invoke);
         m_resultSentInDispatch = true;
         return true;
     });
@@ -4408,6 +4436,15 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
                     : QStringLiteral("This Core cannot change its transmit settings."), {}));
             break;
         }
+        // R-IOS-13 / R-R3-49: the TX EQ curve verbs came with
+        // txEqCurveVersion 2, for a peer whose hello declared txEqCurve 2.
+        if ((message.commandVerb == "txEq.setCurve" || message.commandVerb == "txEq.resetCurve")
+            && txEqCurveVersionFor(transport) < 2) {
+            send(transport, SessionMessages::commandResult(
+                message.commandVerb, message.commandId, false,
+                QStringLiteral("Update this app to change the TX EQ curve on this Core."), {}));
+            break;
+        }
         // R-IOS-27, R-IOS-06: a slice's band buttons came with
         // bandSelectVersion 1, in the minor-11 block.
         if (message.commandVerb == "slice.selectBand"
@@ -4584,6 +4621,9 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
             // R-R3-49 (parity Task 7): whether this peer may arm PureSignal
             // off the air, set per dispatch like the owner (checkpoint join).
             m_dispatcher->setPureSignalArmingOffered(pureSignalArmingOffered(transport));
+            // Remote parity on the air (transmitSettingsVersion 13): whether
+            // this peer's transmit-setting commands are taken on the air.
+            m_dispatcher->setTransmitSettingsOnAir(takesTransmitSettingsOnAir(transport));
             // iPhone app Task 73 (rulings 5.9, 5.10): and for this device,
             // whose slices it may name and whose active slice it sets.
             m_dispatcher->setRequester(m_peers.value(transport).sessionDeviceId);
@@ -4614,6 +4654,7 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
             sendHeldQuestions();
             m_dispatcher->setRequester({});
             m_dispatcher->setPureSignalArmingOffered(false);
+            m_dispatcher->setTransmitSettingsOnAir(false);
             m_dispatcher->setSessionOwner({});
             m_dispatchingTransport = nullptr;
             // iPhone app Task 71: a result still owed (it arrives on a later
@@ -6279,8 +6320,10 @@ QList<SessionPropertyResult> StationServer::applyPropertyWrite(
     const bool pureSignalSettingsWrite = message.objectKey == "pureSignalSettings";
     const bool pureSignalSettingsLive = pureSignalSettingsWrite
         && pureSignalArmingOffered(transport);
+    // Version 13: taken on the air too, from a peer that may change the
+    // transmit settings, as the local PureSignal dialog takes it keyed.
     QString pureSignalOnAir;
-    if (pureSignalSettingsLive) {
+    if (pureSignalSettingsLive && !takesTransmitSettingsOnAir(transport)) {
         m_radioModel->stationOnAirRefusal(&pureSignalOnAir);
     }
     const QPointer<PureSignal> hydrating = pureSignalSettingsWrite && !pureSignalSettingsLive
@@ -6345,16 +6388,11 @@ QList<SessionPropertyResult> StationServer::applyPropertyWrite(
     const bool receiveOnlyTransmitWrite = message.objectKey == QByteArray(kTransmitKey)
         && !m_radioModel.isNull() && m_radioModel->receiveOnlyStationPolicy();
     // R-R3-49 (parity Task 1): a peer offered transmitSettingsVersion 1 may
-    // change a transmit setting on a receive-only Core; it waits while the
-    // radio is on the air (the Core's one on-air refusal), read once for the
-    // batch before anything in it is applied. Any other peer is refused
-    // every `transmit` write, as before.
+    // change a transmit setting on a receive-only Core. Any other peer is
+    // refused every `transmit` write, as before. Since version 13 it is
+    // taken on the air too, as a local window takes it while transmitting.
     const bool transmitSettingsWrite = receiveOnlyTransmitWrite
         && transmitSettingsOffered(transport);
-    QString settingsOnAirRefusal;
-    if (transmitSettingsWrite) {
-        m_radioModel->stationOnAirRefusal(&settingsOnAirRefusal);
-    }
     // R-R3-25: the tuner's operate, bypass and antenna, and the amplifier's
     // operate, on a receive-only Core.
     const bool receiveOnlyStation = !m_radioModel.isNull()
@@ -6371,12 +6409,8 @@ QList<SessionPropertyResult> StationServer::applyPropertyWrite(
     const bool amplifierWrite = message.objectKey == QByteArray(kAmplifierKey);
     // R-R3-49 (parity Task 5): `stepAtt`'s ATT on TX, its value and Force
     // ATT are transmit settings (transmitSettingsVersion 5). A receive-only
-    // Core takes them from a peer offered the transmit settings, off the
-    // air only; the on-air check is read once for the batch.
-    QString stepAttOnAir;
-    if (stepAttWrite && receiveOnlyStation) {
-        m_radioModel->stationOnAirRefusal(&stepAttOnAir);
-    }
+    // Core takes them from a peer offered the transmit settings, on the
+    // air too since version 13 (the local Setup page takes them keyed).
     // R-IOS-01: the class MirrorPolicy's direction table is keyed by.
     QByteArray outboundClass;
     if (const QObject* target = m_mirror->watchedObject(message.objectKey)) {
@@ -6399,10 +6433,6 @@ QList<SessionPropertyResult> StationServer::applyPropertyWrite(
         const auto known = previous.constFind(update.name);
         if (known == previous.cend() || known->kind != update.kind) {
             refusals.insert(update.name, QStringLiteral("The Core does not have this setting, or not in this form."));
-            continue;
-        }
-        if (transmitSettingsWrite && !settingsOnAirRefusal.isEmpty()) {
-            refusals.insert(update.name, settingsOnAirRefusal);
             continue;
         }
         if (transmitObjectWrite && (update.name == "mox" || update.name == "tune")) {
@@ -6469,10 +6499,6 @@ QList<SessionPropertyResult> StationServer::applyPropertyWrite(
         if (stepAttWrite && StepAttenuatorFacade::isTransmitSetting(update.name)) {
             if (receiveOnlyStation && !transmitSettingsOffered(transport)) {
                 refusals.insert(update.name, QString::fromLatin1(kReceiveOnlyTransmitReason));
-                continue;
-            }
-            if (!stepAttOnAir.isEmpty()) {
-                refusals.insert(update.name, stepAttOnAir);
                 continue;
             }
             const QString range = m_radioModel->stepAttFacade()
@@ -7472,6 +7498,96 @@ bool StationServer::peerGetsTxEqCurve(SessionTransport* transport) const
     return peer != m_peers.cend() && !m_radioModel.isNull()
         && peer->agreedMinor >= kRadioIdentitySessionProtocolMinor
         && peerDeclares(transport, QByteArrayLiteral("txEqCurve"), 1);
+}
+
+int StationServer::txEqCurveVersionFor(SessionTransport* transport) const
+{
+    if (!peerGetsTxEqCurve(transport)) {
+        return 0;
+    }
+    const auto peer = m_peers.constFind(transport);
+    return std::min(2, peer->features.value(QByteArrayLiteral("txEqCurve")));
+}
+
+// txEq.setCurve {curveJson} and txEq.resetCurve {}: the curve an app chose,
+// or the panel's Reset, as the txEqParaEqData value the dialog would save
+// (ParaEqCurve), written as this peer's own property write. The receive-only,
+// transmit-permission, holder and on-air rules, the Core's range check and
+// the echo rule (ruling 5.7) are that write's; its side-effect delta brings
+// this peer the new txEqParaEqData and txEqCurve. The result carries the
+// curve the Core kept (`curve`, the txEqCurve form).
+void StationServer::handleTxEqCurveCommand(SessionTransport* transport,
+                                           const SessionMessage& message)
+{
+    const auto answer = [this, transport, &message](bool accepted, const QString& reason,
+                                                    const QList<MirrorUpdate>& values = {}) {
+        send(transport, SessionMessages::commandResult(message.commandVerb, message.commandId,
+                                                       accepted, reason, {}, values));
+    };
+    if (m_radioModel.isNull() || m_radioModel->role() != RadioModel::Role::Local) {
+        answer(false, QStringLiteral("The Core cannot change its transmit settings."));
+        return;
+    }
+    const bool reset = message.commandVerb == "txEq.resetCurve";
+    ParaEqCurve::TxEqPoints points;
+    if (reset) {
+        if (!message.arguments.isEmpty()) {
+            answer(false, QStringLiteral("The request to reset the TX EQ curve was not understood."));
+            return;
+        }
+        points = ParaEqCurve::resetTxEqPoints(ParaEqCurve::txEqPointsFromParaEqData(
+            m_radioModel->transmitModel().txEqParaEqData()));
+    } else {
+        const bool readable = message.arguments.size() == 1
+            && message.arguments.first().name == "curveJson"
+            && message.arguments.first().kind == MirrorWireKind::Utf8;
+        if (!readable) {
+            answer(false, QStringLiteral("The TX EQ curve was not understood."));
+            return;
+        }
+        QString refusal;
+        if (!ParaEqCurve::txEqPointsFromCurveJson(message.arguments.first().value.toString(),
+                                                  points, &refusal)) {
+            answer(false, refusal);
+            return;
+        }
+    }
+    const QString data = ParaEqCurve::txEqParaEqDataFromPoints(points);
+    if (data.isEmpty()) {
+        answer(false, QStringLiteral("The Core could not save this TX EQ curve."));
+        return;
+    }
+
+    MirrorUpdate update;
+    update.name = QByteArrayLiteral("txEqParaEqData");
+    update.kind = MirrorWireKind::Utf8;
+    update.value = data;
+    for (const MirrorUpdate& known : m_mirror->snapshot(QByteArray(kTransmitKey))) {
+        if (known.name == update.name) {
+            update.ordinal = known.ordinal;
+            break;
+        }
+    }
+    // No writeId: the property result is this command's, and the written
+    // value comes back in the side-effect delta with the curve.
+    const SessionMessage write =
+        SessionMessages::propertyWrite(QByteArray(kTransmitKey), {update});
+    const QList<SessionPropertyResult> results =
+        applyPropertyWrite(transport, write, /*answer=*/false, {});
+    QString reason = QStringLiteral("The Core did not change the TX EQ curve.");
+    bool accepted = false;
+    for (const SessionPropertyResult& result : results) {
+        if (result.property == update.name) {
+            accepted = result.accepted;
+            reason = result.reason;
+        }
+    }
+    if (!accepted) {
+        answer(false, reason);
+        return;
+    }
+    answer(true, QString(),
+           {{0, "curve", MirrorWireKind::Utf8, m_radioModel->transmitModel().txEqCurve()}});
 }
 
 bool StationServer::fitTxEqCurveToPeer(SessionTransport* transport,
@@ -9010,15 +9126,15 @@ QString StationServer::transmitSettingOnAirRefusal(const QString& key) const
     if (isTransmitSettingKeyTakenOnAir(key)) {
         return reason;
     }
-    // Trunk merge of remote transmit (join c): with remote transmit
-    // allowed, a permitted session writes the transmit settings (the
-    // station transmit gate), and the on-air rule is the change's, not the
-    // holder's: the OC transmit pins wait while the radio is on the air,
-    // whoever holds transmit, as Thetis greys them while MOX is on
-    // (setup.cs:21944 [v2.10.3.15] UpdateForHotSwitch). The other keys on
-    // the off-air list keep the transmit lane's rule there.
-    if (!m_radioModel->receiveOnlyStationPolicy()
-        && !isOcTransmitPinKey(key.toLower().split(QLatin1Char('/')))) {
+    // Trunk merge of remote transmit (join c): the on-air rule is the
+    // change's, not the holder's: the OC transmit pins wait while the radio
+    // is on the air, whoever holds transmit, as Thetis greys them while MOX
+    // is on (setup.cs:21944 [v2.10.3.15] UpdateForHotSwitch). Since
+    // transmitSettingsVersion 13 a receive-only Core follows the same rule:
+    // the other keys on the list are taken on the air, as a local window
+    // takes them (the DSP > Options TX and PA applies wait for receive; the
+    // SWR protection keys apply at once).
+    if (!isOcTransmitPinKey(key.toLower().split(QLatin1Char('/')))) {
         return reason;
     }
     m_radioModel->stationOnAirRefusal(&reason);
@@ -9930,7 +10046,35 @@ int StationServer::transmitSettingsVersion() const
     // changed only with transmit permission and off the air (addendum
     // G-42). An older peer's ExtendedTxAllowed stays its own and is
     // ignored.
-    return m_radioModel.isNull() ? 0 : 12;
+    // 13: remote parity on the air. A local window changes its transmit
+    // settings while transmitting (no TX applet, Phone/CW, TX EQ, CFC,
+    // PureSignal, Two-Tone or Setup transmit control is greyed under MOX,
+    // as in Thetis), so the Core takes them on the air too, from a peer it
+    // takes transmit settings from (takesTransmitSettingsOnAir): every
+    // `transmit` property but the keying set, `stepAtt`'s ATT on TX
+    // settings, the DSP > Options TX, Power and PA keys (the DSP > Options
+    // TX and PA applies wait for receive; the SWR protection keys apply at
+    // once, as the local page and Thetis apply them), `pureSignalSettings`,
+    // and the commands setTunePowerForTxBand, txProfile.save / delete,
+    // rade.resetVocoder, the PureSignal arming verbs and tx.twoTonePreset
+    // (the transmitter's own commands still the holder's while transmit is
+    // held, ruling 7.7).
+    // Still off the air, as locally: the OC transmit pins (Thetis greys
+    // them under MOX) and General > Region.
+    return m_radioModel.isNull() ? 0 : kTransmitSettingsOnAirVersion;
+}
+
+bool StationServer::takesTransmitSettingsOnAir(SessionTransport* transport) const
+{
+    // The permission a transmit setting needs, unchanged by the air: a
+    // receive-only Core's peer offered the transmit settings, or a session
+    // the station transmit gate permits.
+    if (m_radioModel.isNull() || transmitSettingsVersion() < kTransmitSettingsOnAirVersion) {
+        return false;
+    }
+    return m_radioModel->receiveOnlyStationPolicy()
+        ? transmitSettingsOffered(peerKey(transport))
+        : txDecisionFor(transport).permitted;
 }
 
 bool StationServer::pureSignalArmingOffered(SessionTransport* transport) const
@@ -10138,8 +10282,9 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
                 && !currentMac.isEmpty()
                 && AppSettings::normalizedRadioMac(currentMac) == currentMac ? 1 : 0;
             // R-IOS-13 / R-R3-49: transmit's read-only txEqCurve, to a peer
-            // that declared txEqCurve 1.
-            caps.txEqCurveVersion = peerGetsTxEqCurve(transport) ? 1 : 0;
+            // that declared txEqCurve 1; 2, with txEq.setCurve and
+            // txEq.resetCurve, to one that declared 2.
+            caps.txEqCurveVersion = txEqCurveVersionFor(transport);
             // R-R3-47 / R-R3-22: the Tuner Genius's own settings.
             caps.remoteTgxlControlVersion = tgxlControlVersion();
             // iPhone app Task 12 (R-IOS-08): device sign-in by key, last.

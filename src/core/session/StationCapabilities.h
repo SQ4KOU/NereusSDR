@@ -176,6 +176,11 @@
 //   2026-09-28 - Phone wire batch: diversityPatternVersion,
 //                logCategoryListVersion and radioModelsVersion. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - R-IOS-13 / R-R3-49: txEqCurveVersion 2 (the curve verbs).
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - kTransmitSettingsOnAirVersion (transmitSettingsVersion
+//                13). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                Code.
 // =================================================================
 
 #include <QByteArray>
@@ -188,6 +193,15 @@
 #include "core/session/media/DisplayBudget.h"
 
 namespace NereusSDR {
+
+/// Remote parity on the air: from this transmitSettingsVersion the Core
+/// takes the transmit settings while its radio is on the air, as a local
+/// window does (the OC transmit pins and Region still wait). The DSP >
+/// Options TX and PA keys reach the TX channel and PA profiles once the
+/// radio is back on receive; the SWR protection keys apply at once, as the
+/// local page and Thetis apply them. A window against an older Core keeps
+/// them disabled on the air with the reason.
+inline constexpr int kTransmitSettingsOnAirVersion = 13;
 
 /// Optional identity of the Core executable, never radio firmware identity.
 struct CoreBuildInfo {
@@ -261,7 +275,9 @@ struct StationCapabilities {
     /// parametric curve the Core derives from txEqParaEqData as documented,
     /// read-only JSON. Sent at minor 11 only to a peer whose hello declared
     /// txEqCurve 1, after radioAntennaRowsVersion; that peer alone gets the
-    /// property. 0 (absent): the peer sees today's wire.
+    /// property. 0 (absent): the peer sees today's wire. 2, to a peer that
+    /// declared txEqCurve 2: also the txEq.setCurve and txEq.resetCurve
+    /// verbs, applied as that peer's txEqParaEqData write.
     int txEqCurveVersion = 0;
     /// R-IOS-26 / R-R3-49: 1 means the Core knows 2 m as its own band
     /// (Band 27, BandLinkFit.h) and sends it to this peer. Optional and
@@ -376,6 +392,9 @@ struct StationCapabilities {
     /// taken on and off the air and applied to the radio at once.
     /// 12 (addendum G-42) adds the Core's Extended transmit setting,
     /// `ExtendedTransmit`, taken with transmit permission and off the air.
+    /// 13 (kTransmitSettingsOnAirVersion): the transmit settings a local
+    /// window changes while transmitting are taken on the air too; the
+    /// on-air refusal above applies only below 13.
     int transmitSettingsVersion = 0;
     /// R-IOS-27, R-IOS-06: 1 means the Core takes `slice.selectBand`, which
     /// runs the desktop's band button on a slice (its saved frequency, mode

@@ -238,6 +238,20 @@
 //               AI-assisted implementation via Anthropic Claude Code.
 //   2026-09-28 - 2 m as its own band (R-IOS-26, R-R3-49). J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28: R-IOS-13 / R-R3-49: txEq.setCurve and txEq.resetCurve
+//               (txEqCurveVersion 2), applied by the station server as its
+//               txEqParaEqData write (TxEqCurveAccess). J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-29: Remote parity on the air (transmitSettingsVersion 13): the
+//               transmit-setting commands, PureSignal arming and
+//               tx.twoTonePreset are taken on the air from a peer that may
+//               change the transmit settings. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-29: setTunePowerForTxBand, txProfile.save / delete and
+//               rade.resetVocoder are the holder's while transmit is held
+//               (refusedForTheHolder, ruling 7.7), as txProfile.select was.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -461,6 +475,10 @@ QString notRepresentableReason()
 //   spots.sendCommand, spots.clearAll
 //                          recordStreamVersion 1 (the window subscribes after
 //                          its snapshot; requestSpotSource)
+//   txEq.setCurve, txEq.resetCurve
+//                          txEqCurveVersion 2, to a peer whose hello declared
+//                          txEqCurve 2 (StationServer applies them as its
+//                          txEqParaEqData write)
 //   txModMonitor.reset     txModMonitorVersion 1 (the Mod Monitor's RESET in
 //                          a remote window; StationServer answers it)
 //   station.selectRadio, station.rescanRadios, station.setRadioModel,
@@ -591,6 +609,11 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
          kRadioIdentitySessionProtocolMinor},
         {"rade.resetVocoder", {}, "transmitSettingsVersion", 3,
          kRadioIdentitySessionProtocolMinor},
+        // The TX EQ panel's curve from an app (R-IOS-13, R-R3-49,
+        // txEqCurveVersion 2).
+        {"txEq.setCurve", {arg("curveJson", kUtf8)}, "txEqCurveVersion", 2,
+         kRadioIdentitySessionProtocolMinor},
+        {"txEq.resetCurve", {}, "txEqCurveVersion", 2, kRadioIdentitySessionProtocolMinor},
         // The Core's RF-Kit RF2K-S and the station TCI server (R-R3-47,
         // R-R3-48).
         {"configureRfKit", {arg("host", kUtf8), arg("port", kInt)},
@@ -961,6 +984,7 @@ void SessionCommandDispatcher::resetSessionState()
     // (setPureSignalArmingOffered); a Core with no session offers none. A
     // Tuner Genius or Power Genius scan still due is dropped.
     m_pureSignalArmingOffered = false;
+    m_transmitSettingsOnAir = false;
     ++m_sessionGeneration;
 }
 
@@ -1066,7 +1090,9 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
     }
     if (invoke.commandVerb == "tx.twoTonePreset") {
         QString onAir;
-        if (m_radioModel->stationOnAirRefusal(&onAir)) {
+        // Version 13: taken on the air from a peer that may change the
+        // transmit settings, as the local Two-Tone page's presets are.
+        if (!m_transmitSettingsOnAir && m_radioModel->stationOnAirRefusal(&onAir)) {
             emitResult(invoke.commandVerb, invoke.commandId, false, onAir, {});
             return;
         }
@@ -1208,6 +1234,8 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         handleTxProfile(invoke);
     } else if (invoke.commandVerb == "rade.resetVocoder") {
         handleRadeResetVocoder(invoke);
+    } else if (invoke.commandVerb == "txEq.setCurve" || invoke.commandVerb == "txEq.resetCurve") {
+        handleTxEqCurve(invoke);
     } else if (invoke.commandVerb == "requestIoBoardProbe") {
         handleRequestIoBoardProbe(invoke);
     } else if (invoke.commandVerb == "setAlexRxAntenna") {
@@ -1281,6 +1309,23 @@ void SessionCommandDispatcher::emitRefusal(const QByteArray& verb, quint32 comma
         verb, commandId, false, refusal.text, {},
         {{0, "refusalCode", MirrorWireKind::Utf8, QString::fromUtf8(refusal.code)},
          {0, "refusalFix", MirrorWireKind::Utf8, QString::fromUtf8(refusal.fix)}}));
+}
+
+bool SessionCommandDispatcher::refusedForTheHolder(const QByteArray& verb, quint32 commandId)
+{
+    // Ruling 7.7 (iPhone app plan Task 77): a change to the transmitter's
+    // own settings from a device that does not hold transmit, while another
+    // does, is refused with the holder's name (the Core's rule,
+    // TransmitAccess::transmitter). True when it answered.
+    if (!m_transmitAccess.transmitter) {
+        return false;
+    }
+    const TxRefusal refusal = m_transmitAccess.transmitter(m_requester);
+    if (refusal.isEmpty()) {
+        return false;
+    }
+    emitRefusal(verb, commandId, refusal);
+    return true;
 }
 
 bool SessionCommandDispatcher::refusedWhileOnAir(const SessionMessage& invoke)
@@ -1777,7 +1822,9 @@ void SessionCommandDispatcher::handlePureSignalAction(const SessionMessage& invo
             return;
         }
     }
-    if (arming) {
+    // Version 13: arming is taken on the air from a peer that may change
+    // the transmit settings, as the local PureSignal dialog arms keyed.
+    if (arming && !m_transmitSettingsOnAir) {
         QString onAir;
         if (m_radioModel->stationOnAirRefusal(&onAir)) {
             emitResult(invoke.commandVerb, invoke.commandId, false, onAir, {});
@@ -3312,8 +3359,13 @@ void SessionCommandDispatcher::handleTunePowerForTxBand(const SessionMessage& in
                    QStringLiteral("The request to change the tune power was not understood."), {});
         return;
     }
+    // Ruling 7.7: the transmitter's own settings are the holder's while
+    // transmit is held (as txProfile.select), on the air or not.
+    if (refusedForTheHolder(verb, invoke.commandId)) {
+        return;
+    }
     QString reason;
-    if (!m_radioModel->setTunePowerForTxBandForStation(watts, &reason)) {
+    if (!m_radioModel->setTunePowerForTxBandForStation(watts, &reason, m_transmitSettingsOnAir)) {
         emitResult(verb, invoke.commandId, false,
                    reason.isEmpty() ? QStringLiteral("The Core did not change the tune power.")
                                     : reason, {});
@@ -3325,8 +3377,9 @@ void SessionCommandDispatcher::handleTunePowerForTxBand(const SessionMessage& in
 // R-R3-49 (parity Task 3, transmitSettingsVersion 3): the TX profile
 // combos and Setup > Audio > TX Profile, through the Core's own
 // MicProfileManager as the local controls use it. The Core's active profile
-// and list come back on `transmit`. Refused while the radio is on the air;
-// nothing changes then. Keys nothing.
+// and list come back on `transmit`. Refused while the radio is on the air
+// unless the peer may change the transmit settings (version 13); nothing
+// changes then. Keys nothing.
 void SessionCommandDispatcher::handleTxProfile(const SessionMessage& invoke)
 {
     const QByteArray& verb = invoke.commandVerb;
@@ -3337,23 +3390,19 @@ void SessionCommandDispatcher::handleTxProfile(const SessionMessage& invoke)
                    QStringLiteral("The request for the transmit profile was not understood."), {});
         return;
     }
-    // iPhone app plan Task 77 (ruling 7.7): selecting a transmit profile
-    // is the holder's while transmit is held.
-    if (verb == "txProfile.select" && m_transmitAccess.transmitter) {
-        if (const TxRefusal refusal = m_transmitAccess.transmitter(m_requester);
-            !refusal.isEmpty()) {
-            emitRefusal(verb, invoke.commandId, refusal);
-            return;
-        }
+    // iPhone app plan Task 77 (ruling 7.7): selecting, saving or deleting a
+    // transmit profile is the holder's while transmit is held.
+    if (refusedForTheHolder(verb, invoke.commandId)) {
+        return;
     }
     QString reason;
     bool done = false;
     if (verb == "txProfile.select") {
-        done = m_radioModel->selectTxProfileForStation(name, &reason);
+        done = m_radioModel->selectTxProfileForStation(name, &reason, m_transmitSettingsOnAir);
     } else if (verb == "txProfile.save") {
-        done = m_radioModel->saveTxProfileForStation(name, &reason);
+        done = m_radioModel->saveTxProfileForStation(name, &reason, m_transmitSettingsOnAir);
     } else {
-        done = m_radioModel->deleteTxProfileForStation(name, &reason);
+        done = m_radioModel->deleteTxProfileForStation(name, &reason, m_transmitSettingsOnAir);
     }
     if (!done) {
         emitResult(verb, invoke.commandId, false,
@@ -3362,6 +3411,22 @@ void SessionCommandDispatcher::handleTxProfile(const SessionMessage& invoke)
         return;
     }
     emitResult(verb, invoke.commandId, true, QString(), {});
+}
+
+// R-IOS-13 / R-R3-49 (txEqCurveVersion 2): the TX EQ panel's curve and its
+// Reset from an app. The write is the asking connection's, under every
+// rule a txEqParaEqData write from it meets, so the station server applies
+// it (TxEqCurveAccess). Without one (a dispatcher on its own) there is
+// nothing to apply it through.
+void SessionCommandDispatcher::handleTxEqCurve(const SessionMessage& invoke)
+{
+    if (m_txEqCurveAccess && m_txEqCurveAccess(invoke)) {
+        return;
+    }
+    emitResult(invoke.commandVerb, invoke.commandId, false,
+               QStringLiteral("This Core cannot change the TX EQ curve from here. "
+                              "Updating the Core may help."),
+               {});
 }
 
 // R-R3-49 (parity Task 3): the RADE applet's Reset vocoder, on the Core's
@@ -3373,8 +3438,12 @@ void SessionCommandDispatcher::handleRadeResetVocoder(const SessionMessage& invo
                    QStringLiteral("The request to reset the RADE vocoder was not understood."), {});
         return;
     }
+    // Ruling 7.7: the holder's while transmit is held.
+    if (refusedForTheHolder(invoke.commandVerb, invoke.commandId)) {
+        return;
+    }
     QString reason;
-    if (!m_radioModel->resetRadeVocoderForStation(&reason)) {
+    if (!m_radioModel->resetRadeVocoderForStation(&reason, m_transmitSettingsOnAir)) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
                    reason.isEmpty() ? QStringLiteral("The Core did not reset the RADE vocoder.")
                                     : reason, {});

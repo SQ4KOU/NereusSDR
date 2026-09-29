@@ -439,6 +439,13 @@
 //               Extended transmit setting taken only with transmit
 //               permission, off the air, as True or False. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28: R-IOS-13 / R-R3-49: txEqCurveVersionFor() (2 to a peer
+//               that declared txEqCurve 2) and handleTxEqCurveCommand():
+//               txEq.setCurve and txEq.resetCurve applied as the peer's
+//               txEqParaEqData write. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
+//   2026-09-29: takesTransmitSettingsOnAir() (transmitSettingsVersion 13).
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/IceConfiguration.h"
@@ -1184,6 +1191,12 @@ public:
     // R-R3-49 (parity Task 7): the peer was offered transmitSettingsVersion
     // 7: it arms PureSignal and changes pureSignalSettings off the air.
     bool pureSignalArmingOffered(SessionTransport* transport) const;
+    /// Remote parity on the air (transmitSettingsVersion 13): whether a
+    /// transmit setting from `transport` is taken while the radio is on the
+    /// air: on a receive-only Core from a peer offered the transmit
+    /// settings, otherwise from a session the station transmit gate
+    /// permits.
+    bool takesTransmitSettingsOnAir(SessionTransport* transport) const;
     // R-R3-49 (parity Task 1): the one list of transmit settings keys a
     // receive-only Core takes while its radio is off the air (today the
     // DSP > Options TX keys, DspOptions<Setting><Mode>Tx). Every other
@@ -1541,6 +1554,10 @@ private:
     // R-IOS-13 / R-R3-49: the Mod Monitor's two streams and txModMonitor.reset.
     void setUpModMonitorStreams();
     void handleModMonitorReset(SessionTransport* transport, const SessionMessage& message);
+    // R-IOS-13 / R-R3-49 (txEqCurveVersion 2): txEq.setCurve and
+    // txEq.resetCurve, applied as this peer's txEqParaEqData write
+    // (applyPropertyWrite), so every rule that write meets applies.
+    void handleTxEqCurveCommand(SessionTransport* transport, const SessionMessage& message);
     void handleRecordsCommand(SessionTransport* transport, const SessionMessage& message);
     void scheduleRecordFlush();
     void flushRecordStreams();
@@ -1653,6 +1670,10 @@ private:
     /// R-IOS-13 / R-R3-49: txEqCurveVersion 1 reaches `transport` (minor
     /// 11, a radio model, and txEqCurve 1 declared in its hello).
     bool peerGetsTxEqCurve(SessionTransport* transport) const;
+    /// The txEqCurveVersion `transport` is offered: 0 when it does not get
+    /// the curve, else its declared txEqCurve up to 2 (2 adds
+    /// txEq.setCurve and txEq.resetCurve).
+    int txEqCurveVersionFor(SessionTransport* transport) const;
     /// Takes transmit's txEqCurve out of a schema, object.create or delta
     /// for a peer that does not get it, so an older app sees today's wire.
     /// False when a delta has nothing left worth sending.

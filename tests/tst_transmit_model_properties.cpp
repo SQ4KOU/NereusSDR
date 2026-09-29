@@ -38,6 +38,11 @@
 //                                    (seedUpgradedCoreToken), as Part C's
 //                                    paired-device sign-in requires.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Remote parity on the air
+//                                    (transmitSettingsVersion 13): the
+//                                    applets' settings are taken on the
+//                                    air; Tune Power is the holder's. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -245,7 +250,7 @@ private slots:
     void task5PropertiesAreOnTheLinkUnderTheirGetters();
     void eachSettingRoundTripsToTheCoreTxChain();
     void outOfRangeWritesAreRefusedWithTheRange();
-    void eachSettingIsRefusedOnTheAir();
+    void eachSettingIsTakenOnTheAir();
     void keyingSetStaysRefused();
     void connectingNeverWritesTheWindowDefaults();
     void tunePowerCommandSetsTheTxBandAndSource();
@@ -388,8 +393,8 @@ void TstTransmitModelProperties::coreOffersTransmitSettingsVersion4()
     // calibration); 4 is within it.
     Session s(m_securityDir.path(), this);
     QVERIFY(s.connect());
-    QCOMPARE(s.server->buildCapabilities().transmitSettingsVersion, 12);
-    QCOMPARE(s.client->capabilities().transmitSettingsVersion, 12);
+    QCOMPARE(s.server->buildCapabilities().transmitSettingsVersion, 13);
+    QCOMPARE(s.client->capabilities().transmitSettingsVersion, 13);
     QVERIFY(s.client->transmitSettingsAvailable(4));
     QVERIFY(s.client->transmitSettingsAvailable(7));
     QVERIFY(s.client->transmitSettingsAvailable(8));
@@ -400,7 +405,10 @@ void TstTransmitModelProperties::coreOffersTransmitSettingsVersion4()
     QVERIFY(s.client->transmitSettingsAvailable(11));
     // 12 since addendum G-42 (the Core's Extended transmit setting).
     QVERIFY(s.client->transmitSettingsAvailable(12));
-    QVERIFY(!s.client->transmitSettingsAvailable(13));
+    // 13 since the transmit settings are taken on the air as a local
+    // window takes them.
+    QVERIFY(s.client->transmitSettingsAvailable(13));
+    QVERIFY(!s.client->transmitSettingsAvailable(14));
 }
 
 // R-R3-49 (parity Task 5): the version 5 properties, after txAlcDecay in
@@ -658,7 +666,7 @@ void TstTransmitModelProperties::outOfRangeWritesAreRefusedWithTheRange()
     QVERIFY(anan.settingRangeRefusal("tunePower", QVariant(100)).isEmpty());
 }
 
-void TstTransmitModelProperties::eachSettingIsRefusedOnTheAir()
+void TstTransmitModelProperties::eachSettingIsTakenOnTheAir()
 {
     Session s(m_securityDir.path(), this);
     QVERIFY(s.connect());
@@ -687,26 +695,28 @@ void TstTransmitModelProperties::eachSettingIsRefusedOnTheAir()
          QVariant(qlonglong(coreTx.amCarrierLevel() == 60 ? 61 : 60))},
         {"dexpEnabled", MirrorWireKind::Bool, QVariant(!coreTx.dexpEnabled())},
         {"micGainDb", MirrorWireKind::Int64, QVariant(qlonglong(coreTx.micGainDb() == 2 ? 3 : 2))},
-        // iPhone app plan Task 40: a receive-only Core's mic mute waits
-        // with the other settings.
+        // iPhone app plan Task 40: a receive-only Core's mic mute follows
+        // the other settings.
         {"micMuted", MirrorWireKind::Bool, QVariant(!coreTx.micMuted())},
     };
+    // Remote parity on the air (transmitSettingsVersion 13): a local
+    // window's applets change these while transmitting; so does the Core.
     for (const auto& c : cases) {
-        const QVariant before = coreTx.property(c.name);
         const SessionPropertyResult result = s.writeTransmit(c.name, c.kind, c.value);
-        QVERIFY2(!result.accepted, c.name);
-        QCOMPARE(result.reason, kOnAir);
-        QCOMPARE(coreTx.property(c.name), before);
+        QVERIFY2(result.accepted, qPrintable(QString::fromLatin1(c.name)
+                                             + QStringLiteral(": ") + result.reason));
+        QCOMPARE(coreTx.property(c.name).toString(), c.value.toString());
     }
-    // The window's own change settles back on the Core's value.
+    // The window's own change reaches the Core too. (The raw writes above
+    // are not echoed to this window, ruling 5.7, so a setting they did not
+    // touch is used.)
     TransmitModel& windowTx = s.window.transmitModel();
-    const bool lev = coreTx.txLevelerOn();
-    windowTx.setTxLevelerOn(!lev);
-    QTest::qWait(150);
-    QCOMPARE(coreTx.txLevelerOn(), lev);
-    QTRY_COMPARE(windowTx.txLevelerOn(), lev);
+    const int decay = coreTx.txAlcDecay() == 20 ? 21 : 20;
+    windowTx.setTxAlcDecay(decay);
+    QTRY_COMPARE(coreTx.txAlcDecay(), decay);
 
-    // And the Tune Power command.
+    // The Tune Power command is the transmitter's own setting: while the
+    // Core's own key holds transmit it is the holder's (ruling 7.7).
     const int band = coreTx.tunePowerForTxBand();
     const SessionMessage refused = s.invoke("setTunePowerForTxBand", {intArg("watts", 11)});
     QVERIFY(!refused.accepted);
@@ -715,10 +725,6 @@ void TstTransmitModelProperties::eachSettingIsRefusedOnTheAir()
 
     s.unkeyCore();
     QTRY_VERIFY(s.core->moxController()->state() == MoxState::Rx);
-    const SessionPropertyResult taken =
-        s.writeTransmit("txLevelerOn", MirrorWireKind::Bool, QVariant(!lev));
-    QVERIFY2(taken.accepted, qPrintable(taken.reason));
-    QCOMPARE(coreTx.txLevelerOn(), !lev);
 }
 
 void TstTransmitModelProperties::keyingSetStaysRefused()
@@ -873,8 +879,8 @@ void TstTransmitModelProperties::coreBandChangeMovesTheTunePowerSlider()
     QTRY_COMPARE(s.window.transmitModel().tunePowerForTxBand(), 31);
     QCOMPARE(slider->value(), 31);
 
-    // On the air the Core refuses a change that races the gate; the slider
-    // goes back to the Core's value.
+    // While the Core's own key holds transmit the command is the holder's
+    // (ruling 7.7); the slider goes back to the Core's value.
     s.keyCore();
     QTRY_VERIFY(s.core->moxController()->state() == MoxState::Tx);
     slider->setValue(12);

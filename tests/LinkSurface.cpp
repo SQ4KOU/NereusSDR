@@ -103,6 +103,11 @@
 //                                    logCategoryList are; and radioModels,
 //                                    so radioModelsVersion is. AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  R-IOS-13 / R-R3-49: the capture
+//                                    declares txEqCurve 2, so
+//                                    txEqCurveVersion is captured at 2 (the
+//                                    curve verbs). AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "LinkSurface.h"
@@ -560,7 +565,7 @@ std::optional<QList<QByteArray>> liveSessionWire(
                                   {"setupDescription", 1}, {"miniDisplay", 1},
                                   {"radioAntennaRows", 1},
                                   // iPhone app plan Task 25: the `vax` object.
-                                  {"vax", 1}, {"txEqCurve", 1}, {"band2m", 1},
+                                  {"vax", 1}, {"txEqCurve", 2}, {"band2m", 1},
                                   // Phone wire batch: each slice's
                                   // diversityPattern.
                                   {"diversityPattern", 1},
@@ -608,8 +613,9 @@ QJsonArray captureCapabilities()
     caps.radioAntennaRowsVersion = 1;
     // iPhone app plan Task 25: sent to a peer that declared vax.
     caps.vaxEntry = true;
-    // R-IOS-13 / R-R3-49: sent to a peer that declared txEqCurve.
-    caps.txEqCurveVersion = 1;
+    // R-IOS-13 / R-R3-49: sent to a peer that declared txEqCurve; 2 with
+    // the curve verbs.
+    caps.txEqCurveVersion = 2;
     // R-IOS-26 / R-R3-49: sent to a peer that declared band2m.
     caps.band2mVersion = 1;
     // Phone wire batch: sent to a peer that declared diversityPattern.

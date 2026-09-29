@@ -188,6 +188,15 @@
 //                                    worker thread) and
 //                                    support.setLogCategories.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  R-IOS-13 / R-R3-49: txEq.setCurve and
+//                                    txEq.resetCurve (txEqCurveVersion 2)
+//                                    through TxEqCurveAccess. AI-assisted
+//                                    via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  setTransmitSettingsOnAir
+//                                    (transmitSettingsVersion 13).
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  refusedForTheHolder (ruling 7.7).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -279,6 +288,13 @@ public:
     /// the radio is off the air. False for every other peer, and again
     /// whenever the session owner changes.
     void setPureSignalArmingOffered(bool offered) { m_pureSignalArmingOffered = offered; }
+    /// Remote parity on the air (transmitSettingsVersion 13): the session's
+    /// peer may change the transmit settings, so setTunePowerForTxBand,
+    /// txProfile.*, rade.resetVocoder, the PureSignal arming verbs and
+    /// tx.twoTonePreset are taken from it while the radio is on the air, as
+    /// a local window takes them. False for every other peer and between
+    /// dispatches.
+    void setTransmitSettingsOnAir(bool taken) { m_transmitSettingsOnAir = taken; }
 
     /// Cancels every DSP-asset job `owner` started (its session ended).
     void endSessionOwner(const QString& owner);
@@ -406,6 +422,11 @@ public:
     /// answers them (and sends the backlog) through this; true when it did.
     using RecordAccess = std::function<bool(const NereusSDR::SessionMessage& invoke)>;
     void setRecordAccess(RecordAccess access) { m_recordAccess = std::move(access); }
+    /// R-IOS-13 / R-R3-49 (txEqCurveVersion 2): txEq.setCurve and
+    /// txEq.resetCurve are the asking connection's txEqParaEqData write,
+    /// so the station server applies and answers them; true when it did.
+    using TxEqCurveAccess = std::function<bool(const NereusSDR::SessionMessage& invoke)>;
+    void setTxEqCurveAccess(TxEqCurveAccess access) { m_txEqCurveAccess = std::move(access); }
     /// Parity Task 21 (R-IOS-18): the Core's radios (nereusd), for the
     /// station.selectRadio, station.rescanRadios, station.setRadioModel and
     /// station.forgetRadio verbs.
@@ -434,6 +455,7 @@ signals:
 private:
     Ps3DisplayAdmissionHandler m_ps3DisplayAdmission;
     bool m_pureSignalArmingOffered = false;
+    bool m_transmitSettingsOnAir = false;
     void handleAddSlice(const NereusSDR::SessionMessage& invoke);
     void handleRemoveSlice(const NereusSDR::SessionMessage& invoke);
     void handleRequestSliceSampleRate(const NereusSDR::SessionMessage& invoke);
@@ -504,7 +526,13 @@ private:
     // save and delete through the Core's MicProfileManager, and
     // rade.resetVocoder on the Core's RADE channel.
     void handleTxProfile(const NereusSDR::SessionMessage& invoke);
+    // Ruling 7.7: refuses `verb` with the holder's name when the requester
+    // does not hold transmit and another device does. True when it answered.
+    bool refusedForTheHolder(const QByteArray& verb, quint32 commandId);
     void handleRadeResetVocoder(const NereusSDR::SessionMessage& invoke);
+    // R-IOS-13 / R-R3-49 (txEqCurveVersion 2): txEq.setCurve and
+    // txEq.resetCurve, through TxEqCurveAccess.
+    void handleTxEqCurve(const NereusSDR::SessionMessage& invoke);
     void handleRequestIoBoardProbe(const NereusSDR::SessionMessage& invoke);
     // R-R3-46 fix wave (radioHardwareVersion 3): one band's RX or RX-only
     // antenna, applied through the Core's AlexAntennaFacade.
@@ -559,6 +587,7 @@ private:
     SliceAccess m_sliceAccess;
     ConfirmAnswer m_confirmAnswer;
     RecordAccess m_recordAccess;
+    TxEqCurveAccess m_txEqCurveAccess;
     SupportInputs m_supportInputs;
     // Parity Task 22: one bundle is made at a time.
     bool m_supportBundleRunning = false;

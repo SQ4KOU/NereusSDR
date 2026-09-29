@@ -849,16 +849,17 @@ private slots:
         allowTransmit(core);
         // allowTransmit configures a logical no-socket key but also turns
         // off receive-only station policy. Restore the daemon-style settings
-        // exception before checking its on-air refusal.
+        // exception before checking it on the air.
         core.model->setReceiveOnlyStationPolicy(true);
         MoxController* mox = core.model->moxController();
         mox->setMoxCheck({});
         mox->setMox(true); // logical test state, no radio transport
         QTRY_COMPARE(mox->state(), MoxState::Tx);
+        // Remote parity on the air (transmitSettingsVersion 13): the local
+        // PA page changes it while transmitting, so the Core takes it.
         const QJsonObject onAir = write(app, false);
-        QVERIFY(!onAir.value("accepted").toBool(true));
-        QCOMPARE(onAir.value("reason"), QStringLiteral("The radio is on the air. Try again when it stops."));
-        QCOMPARE(core.model->transmitModel().paSettingsBypass(), true);
+        QVERIFY(onAir.value("accepted").toBool(false));
+        QCOMPARE(core.model->transmitModel().paSettingsBypass(), false);
         mox->setMox(false);
         QTRY_COMPARE(mox->state(), MoxState::Rx);
         QVERIFY(!core.model->tune());

@@ -173,6 +173,10 @@
 //                                    setting's refusal forwards, and the
 //                                    window's transmitPermissionReason.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  txEq.setCurve's refusals scanned; the
+//                                    This Core page's two device reasons
+//                                    named on the app side. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -1359,6 +1363,10 @@ const QList<ReasonSource>& reasonSources()
         // R-R3-49 (parity Task 2): a transmit setting's range, in
         // property.result and setTunePowerForTxBand's command.result. The
         // inserts are the setters' own range numbers.
+        // R-IOS-13 / R-R3-49 (txEqCurveVersion 2): txEq.setCurve's refusals.
+        {"src/core/ParaEqCurve.cpp", {QStringLiteral("txEqPointsFromCurveJson")}, {}, 7, {},
+         // refuse(why): each literal handed to it is scanned here.
+         {QStringLiteral("why")}},
         {"src/models/TransmitModel.cpp", {QStringLiteral("settingRangeRefusal")}, {}, 7,
          {QStringLiteral("hi"), QStringLiteral("kVoxThresholdDbMin"),
           QStringLiteral("kVoxThresholdDbMax"), QStringLiteral("kVoxHangTimeMsMin"),

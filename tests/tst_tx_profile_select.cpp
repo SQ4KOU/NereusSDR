@@ -18,6 +18,10 @@
 //                                    (seedUpgradedCoreToken), as Part C's
 //                                    paired-device sign-in requires.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Save and Delete are the holder's while
+//                                    transmit is held (ruling 7.7); the
+//                                    Core's own key holds it here.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -414,6 +418,7 @@ void TstTxProfileSelect::saveRefusals()
     QVERIFY(!result.accepted);
     QCOMPARE(result.reason, QStringLiteral("Give the transmit profile a name."));
 
+    // The Core's own key holds transmit: Save is the holder's (ruling 7.7).
     s.keyCore();
     QTRY_VERIFY(s.core->moxController()->isMox());
     result = s.invoke("txProfile.save", {nameArg(QStringLiteral("On Air"))});
@@ -459,6 +464,7 @@ void TstTxProfileSelect::deleteRefusals()
     QVERIFY(!result.accepted);
     QCOMPARE(result.reason, QStringLiteral("There is no transmit profile called Nope."));
 
+    // The Core's own key holds transmit: Delete is the holder's (ruling 7.7).
     s.keyCore();
     QTRY_VERIFY(s.core->moxController()->isMox());
     result = s.invoke("txProfile.delete", {nameArg(QStringLiteral("AM"))});

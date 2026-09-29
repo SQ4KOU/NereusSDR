@@ -28,6 +28,11 @@
 //                                    with the reason while this computer
 //                                    has no microphone line to the Core.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Remote parity on the air
+//                                    (transmitSettingsVersion 13): the
+//                                    Power page, ATT on TX and version 5
+//                                    settings are taken on the air.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -261,13 +266,13 @@ private slots:
     void cleanup();
 
     void swrProtectionKeysApplyToTheCoresController();
-    void powerPageKeysWaitWhileOnTheAir();
+    void powerPageKeysTakenOnTheAir();
     void powerPageKeysOutOfRangeAreRefused();
     void attOnTxSettingsReachTheCoresStepAttenuator();
-    void attOnTxSettingsAreRefusedOnTheAirAndOutOfRange();
+    void attOnTxSettingsAreTakenOnTheAirAndRefusedOutOfRange();
     void version5SettingsReachTheCore();
     void version5WritesOutOfRangeAreRefused();
-    void version5WritesAreRefusedOnTheAir();
+    void version5WritesAreTakenOnTheAir();
     void remotePowerPageShowsAndChangesTheCoresValues();
     void remoteDexpPageChangesTheCoreAndVoxWaitsForTransmit();
     void remoteTwoTonePageChangesTheCore();
@@ -347,7 +352,7 @@ void TstRemoteTransmitSetupPages::swrProtectionKeysApplyToTheCoresController()
     QVERIFY2(nothingKeyed(s, &keyed), qPrintable(keyed));
 }
 
-void TstRemoteTransmitSetupPages::powerPageKeysWaitWhileOnTheAir()
+void TstRemoteTransmitSetupPages::powerPageKeysTakenOnTheAir()
 {
     Session s(m_securityDir.path(), this);
     QVERIFY(s.connect());
@@ -355,24 +360,24 @@ void TstRemoteTransmitSetupPages::powerPageKeysWaitWhileOnTheAir()
     s.proxy.setValue(QStringLiteral("SwrProtectionEnabled"), QStringLiteral("False"));
     QTRY_VERIFY(!swr.isEnabled());
 
+    // Remote parity on the air (transmitSettingsVersion 13): the local page
+    // changes them while transmitting, so the Core takes them keyed.
     s.keyCore();
     QTRY_VERIFY(s.window.isCoreOnAir());
     QSignalSpy rejected(&s.proxy, &SettingsProxy::valueRejected);
-    for (const QString& key : {QStringLiteral("SwrProtectionEnabled"),
-                               QStringLiteral("TxInhibitMonitorEnabled"),
-                               QStringLiteral("TxInhibitMonitorReversed")}) {
-        const QString before = s.settings.value(key, QStringLiteral("False")).toString();
-        s.proxy.setValue(key, QStringLiteral("True"));
-        QTRY_COMPARE(settingsRejectReason(s.windowEnd, key), kOnAir);
-        QCOMPARE(s.settings.value(key, QStringLiteral("False")).toString(), before);
-    }
-    QVERIFY(!swr.isEnabled());
-    QCOMPARE(rejected.count(), 3);
-
-    s.unkeyCore();
-    QTRY_VERIFY(!s.window.isCoreOnAir());
     s.proxy.setValue(QStringLiteral("SwrProtectionEnabled"), QStringLiteral("True"));
     QTRY_VERIFY(swr.isEnabled());
+    QCOMPARE(rejected.count(), 0);
+    // External TX Inhibit is the transmitter's own setting (the shared
+    // settings rule): while another device, here the Core's own key, holds
+    // transmit on the air, this device's change waits for it, as before.
+    s.proxy.setValue(QStringLiteral("TxInhibitMonitorEnabled"), QStringLiteral("True"));
+    QTest::qWait(150);
+    QCOMPARE(s.settings.value(QStringLiteral("TxInhibitMonitorEnabled"),
+                              QStringLiteral("False")).toString(),
+             QStringLiteral("False"));
+    s.unkeyCore();
+    QTRY_VERIFY(!s.window.isCoreOnAir());
 }
 
 void TstRemoteTransmitSetupPages::powerPageKeysOutOfRangeAreRefused()
@@ -428,7 +433,7 @@ void TstRemoteTransmitSetupPages::attOnTxSettingsReachTheCoresStepAttenuator()
     QVERIFY2(nothingKeyed(s, &keyed), qPrintable(keyed));
 }
 
-void TstRemoteTransmitSetupPages::attOnTxSettingsAreRefusedOnTheAirAndOutOfRange()
+void TstRemoteTransmitSetupPages::attOnTxSettingsAreTakenOnTheAirAndRefusedOutOfRange()
 {
     Session s(m_securityDir.path(), this);
     QVERIFY(s.connect());
@@ -447,23 +452,24 @@ void TstRemoteTransmitSetupPages::attOnTxSettingsAreRefusedOnTheAirAndOutOfRange
     QTRY_VERIFY(s.window.isCoreOnAir());
     const bool enabled = s.stepAtt.attOnTxEnabled();
     const bool force = s.stepAtt.forceAttWhenPsOff();
+    // Taken on the air (version 13), as the local page takes them keyed;
+    // the range still holds.
     r = s.write(stepAtt, "attOnTxEnabled", MirrorWireKind::Bool, !enabled);
-    QVERIFY(!r.accepted);
-    QCOMPARE(r.reason, kOnAir);
+    QVERIFY2(r.accepted, qPrintable(r.reason));
     r = s.write(stepAtt, "forceAttWhenPsOff", MirrorWireKind::Bool, !force);
-    QCOMPARE(r.reason, kOnAir);
+    QVERIFY2(r.accepted, qPrintable(r.reason));
     r = s.write(stepAtt, "attOnTxValue", MirrorWireKind::Int64, 9);
-    QCOMPARE(r.reason, kOnAir);
-    QCOMPARE(s.stepAtt.attOnTxEnabled(), enabled);
-    QCOMPARE(s.stepAtt.forceAttWhenPsOff(), force);
-    QCOMPARE(s.stepAtt.attOnTxValue(), 0);
+    QVERIFY2(r.accepted, qPrintable(r.reason));
+    QCOMPARE(s.stepAtt.attOnTxEnabled(), !enabled);
+    QCOMPARE(s.stepAtt.forceAttWhenPsOff(), !force);
+    QCOMPARE(s.stepAtt.attOnTxValue(), 9);
+    r = s.write(stepAtt, "attOnTxValue", MirrorWireKind::Int64, 32);
+    QCOMPARE(r.reason, QStringLiteral("Choose an ATT on TX value from 0 to 31 dB."));
     // The receive attenuator itself is not a transmit setting.
     QVERIFY(s.write(stepAtt, "attenuationDb", MirrorWireKind::Int64, 6).accepted);
 
     s.unkeyCore();
     QTRY_VERIFY(!s.window.isCoreOnAir());
-    QVERIFY(s.write(stepAtt, "attOnTxValue", MirrorWireKind::Int64, 9).accepted);
-    QCOMPARE(s.stepAtt.attOnTxValue(), 9);
 }
 
 // B5.12, B5.14, B5.16: each version 5 `transmit` property a window sets
@@ -654,7 +660,7 @@ void TstRemoteTransmitSetupPages::version5WritesOutOfRangeAreRefused()
     QVERIFY(!s.writeTransmit("twoToneDrivePowerSource", MirrorWireKind::Enum, 7).accepted);
 }
 
-void TstRemoteTransmitSetupPages::version5WritesAreRefusedOnTheAir()
+void TstRemoteTransmitSetupPages::version5WritesAreTakenOnTheAir()
 {
     Session s(m_securityDir.path(), this);
     QVERIFY(s.connect());
@@ -691,22 +697,20 @@ void TstRemoteTransmitSetupPages::version5WritesAreRefusedOnTheAir()
         {"twoToneFreq2Delay", MirrorWireKind::Int64, 10},
         {"twoToneDrivePowerSource", MirrorWireKind::Enum, 2},
     };
+    // Taken on the air (version 13), as the local pages take them keyed.
     for (const auto& w : writes) {
-        const QVariant before = coreTx.property(w.name.constData());
         const SessionPropertyResult r = s.writeTransmit(w.name, w.kind, w.value);
-        QVERIFY2(!r.accepted, w.name.constData());
-        QCOMPARE(r.reason, kOnAir);
-        QCOMPARE(coreTx.property(w.name.constData()), before);
+        QVERIFY2(r.accepted, qPrintable(QString::fromUtf8(w.name) + QStringLiteral(": ")
+                                        + r.reason));
     }
-    // The window's own change settles back on the Core's value.
-    const int freq1 = coreTx.twoToneFreq1();
-    windowTx.setTwoToneFreq1(freq1 == 1234 ? 1235 : 1234);
-    QTRY_COMPARE(windowTx.twoToneFreq1(), freq1);
+    QCOMPARE(coreTx.twoTonePower(), 20);
+    // The window's own change reaches the Core too.
+    const int freq1 = coreTx.twoToneFreq1() == 1234 ? 1235 : 1234;
+    windowTx.setTwoToneFreq1(freq1);
+    QTRY_COMPARE(coreTx.twoToneFreq1(), freq1);
 
     s.unkeyCore();
     QTRY_VERIFY(!s.window.isCoreOnAir());
-    QVERIFY(s.writeTransmit("twoTonePower", MirrorWireKind::Int64, 20).accepted);
-    QCOMPARE(coreTx.twoTonePower(), 20);
 }
 
 // B5.12: Setup > Transmit > Power in a remote window shows the Core's values
@@ -807,12 +811,12 @@ void TstRemoteTransmitSetupPages::remotePowerPageShowsAndChangesTheCoresValues()
     s.settings.setValue(QStringLiteral("DisableHfPa"), QStringLiteral("False"));
     QTRY_VERIFY(!hfPa->isChecked());
 
-    // On the air the change is refused and the box goes back to the Core's.
+    // On the air the change is taken, as on a local page (version 13).
     s.keyCore();
     QTRY_VERIFY(s.window.isCoreOnAir());
     swrTune->setChecked(false);
-    QTRY_VERIFY(swrTune->isChecked());
-    QVERIFY(swr.disableOnTune());
+    QTRY_VERIFY(!swr.disableOnTune());
+    QVERIFY(!swrTune->isChecked());
     // Disable HF PA is taken on the air, as Thetis applies it.
     hfPa->setChecked(true);
     QTRY_VERIFY(swr.hfPaDisabled());

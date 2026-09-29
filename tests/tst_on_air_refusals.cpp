@@ -36,6 +36,10 @@
 //               radio's PTT takes transmit; the station keeps it after its
 //               key. J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-29: the Tune Power command, TX profile save and delete and the
+//               RADE vocoder reset are the holder's while transmit is held.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -188,6 +192,62 @@ private slots:
                          {int64("sliceId", far), f64("centreHz", 7150000.0)}).reason != kOnAir);
         QVERIFY(refusedOnAir(d.invoke("pad", "requestStreamCentre",
                                       {int64("sliceId", 0), f64("centreHz", 14150000.0)})));
+    }
+
+    // Ruling 7.7 (scoped review of transmitSettingsVersion 13): the
+    // transmitter's own settings are the holder's while transmit is held,
+    // on the air or not. txProfile.select always followed it; the Tune
+    // Power command, TX profile save and delete and the RADE vocoder reset
+    // follow it too now that the air no longer refuses them.
+    void theTransmittersOwnSettingsAreTheHolders()
+    {
+        Dispatch d;
+        SessionCommandDispatcher::TransmitAccess access;
+        access.transmitter = [](const QByteArray& requester) -> TxRefusal {
+            return requester == "phone" ? TxRefusal{}
+                                        : TxRefusals::otherDeviceHolds(QStringLiteral("iPhone"));
+        };
+        d.dispatcher.setTransmitAccess(access);
+        const QString holds = TxRefusals::otherDeviceHolds(QStringLiteral("iPhone")).text;
+        const QList<Verb> verbs{
+            {"setTunePowerForTxBand", {int64("watts", 5)}},
+            {"txProfile.select", {utf8("name", QStringLiteral("Default"))}},
+            {"txProfile.save", {utf8("name", QStringLiteral("Mine"))}},
+            {"txProfile.delete", {utf8("name", QStringLiteral("Mine"))}},
+            {"rade.resetVocoder", {}},
+        };
+        for (const Verb& verb : verbs) {
+            const SessionMessage other = d.invoke("pad", verb.name, verb.arguments);
+            QVERIFY2(!other.accepted && other.reason == holds,
+                     qPrintable(QString::fromLatin1(verb.name) + QStringLiteral(": ")
+                                + other.reason));
+            const SessionMessage own = d.invoke("phone", verb.name, verb.arguments);
+            QVERIFY2(own.reason != holds, verb.name.constData());
+        }
+    }
+
+    // transmitSettingsVersion 13: the holder's own Tune Power change is
+    // taken while the radio is on the air when the Core says the peer may
+    // change the transmit settings; without that, the air refuses it.
+    void theHoldersTunePowerIsTakenOnTheAir()
+    {
+        Dispatch d;
+        SessionCommandDispatcher::TransmitAccess access;
+        access.transmitter = [](const QByteArray& requester) -> TxRefusal {
+            return requester == "phone" ? TxRefusal{}
+                                        : TxRefusals::otherDeviceHolds(QStringLiteral("iPhone"));
+        };
+        d.dispatcher.setTransmitAccess(access);
+        d.model.transmitModel().setTune(true);
+        QVERIFY(d.model.stationOnAirRefusal(nullptr));
+        d.dispatcher.setTransmitSettingsOnAir(false);
+        SessionMessage result = d.invoke("phone", "setTunePowerForTxBand", {int64("watts", 5)});
+        QCOMPARE(result.reason, RadioModel::onAirReason());
+        d.dispatcher.setTransmitSettingsOnAir(true);
+        result = d.invoke("phone", "setTunePowerForTxBand", {int64("watts", 5)});
+        QVERIFY2(result.accepted, qPrintable(result.reason));
+        QCOMPARE(d.model.transmitModel().tunePowerForTxBand(), 5);
+        d.model.transmitModel().setTune(false);
     }
 
     // ---- The Core, two devices over the loopback -------------------------------

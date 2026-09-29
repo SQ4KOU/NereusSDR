@@ -302,7 +302,7 @@ void TstRemoteOcCal::keysAreOnTheListAtVersion8()
 
     Session s(m_securityDir.path(), this, /*coreUsesProcessSettings=*/false);
     QVERIFY(s.connect());
-    QCOMPARE(s.client->capabilities().transmitSettingsVersion, 12);
+    QCOMPARE(s.client->capabilities().transmitSettingsVersion, 13);
     QVERIFY(s.client->transmitSettingsAvailable(8));
     const IStationLink* link = s.window.stationLink();
     QVERIFY(link != nullptr && link->transmitSettingsAvailable(8));

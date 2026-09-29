@@ -11,6 +11,11 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29 - J.J. Boyd (KG4VCF). Remote parity on the air: the
+//                transmit settings stay live while the Core's radio is on
+//                the air on a Core at transmitSettingsVersion 13, as in a
+//                local window; against an older Core they stay disabled
+//                with the reason. AI-assisted via Anthropic Claude Code.
 //   2026-09-27 - J.J. Boyd (KG4VCF). Parity Task 23 control UI: the TCI
 //                 status and log identify the Core and this window.
 //                 AI-assisted implementation via OpenAI Codex.
@@ -13175,11 +13180,15 @@ QString MainWindow::rxBypassUnavailableReason() const
 bool MainWindow::transmitSettingsPermitted(int minVersion) const
 {
     // R-R3-49 (parity Task 1): the Core decides; this only says whether a
-    // change is worth sending. The Core still refuses one that races a key.
+    // change is worth sending. Remote parity on the air: a Core at
+    // transmitSettingsVersion 13 takes them while its radio is on the air,
+    // as a local window does; an older Core refuses them then, so they
+    // wait (shown disabled with the reason) rather than snap back.
     return m_radioModel && (m_radioModel->ownsLocalDsp()
         || (m_stationClient && m_stationClient->isHandshakeComplete()
             && m_stationClient->transmitSettingsAvailable(minVersion)
-            && !m_radioModel->isCoreOnAir()));
+            && (m_stationClient->transmitSettingsAvailable(kTransmitSettingsOnAirVersion)
+                || !m_radioModel->isCoreOnAir())));
 }
 
 QString MainWindow::transmitSettingsReason(int minVersion) const

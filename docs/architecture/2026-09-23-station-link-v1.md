@@ -810,6 +810,13 @@ remote window declares it too: its Manage Radios model choice is the
 record's `models`, and on a Core that sends none the choice is disabled
 with its reason.
 
+**`txEqCurve` 2** (R-IOS-13, R-R3-49): the client also changes the curve,
+with `txEq.setCurve` and `txEq.resetCurve` (section 9.1). A peer that
+declares it at minor 11 is sent `txEqCurveVersion` 2 and `transmit`'s
+`txEqCurve` as at 1; one that declares 1 is sent exactly what it was sent
+before. The desktop's remote window declares neither: its TX EQ dialog
+writes `txEqParaEqData` itself.
+
 **`sessionHolder` 1** (iPhone app plan Task 71; the several-devices
 design, ruling 10.1): the Core admits up to four devices at once (section
 5.1). A client declares it only together with `deviceAuth` 1 or later, and
@@ -937,7 +944,7 @@ change shows as surface drift and as a change to this table.
 | `pairingVersion` | 1 |
 | `stationCatalogVersion` | 1 |
 | `displayExtrasVersion` | 4 |
-| `transmitSettingsVersion` | 12 |
+| `transmitSettingsVersion` | 13 |
 | `bandSelectVersion` | 1 |
 | `meterReadingsVersion` | 1 |
 | `dspInfoVersion` | 1 |
@@ -966,7 +973,7 @@ change shows as surface drift and as a change to this table.
 | `accessoryTxVersion` | 1 |
 | `radioAntennaRowsVersion` | 1 |
 | `vaxVersion` | 1 |
-| `txEqCurveVersion` | 1 |
+| `txEqCurveVersion` | 2 |
 | `band2mVersion` | 1 |
 | `diversityPatternVersion` | 1 |
 | `logCategoryListVersion` | 1 |
@@ -1116,6 +1123,12 @@ When a feature is off, its version is 0:
   the feature is sent neither this entry nor the property. An app on a
   Core that sends no entry shows the curve disabled with "This Core does
   not send the TX EQ curve. Updating the Core may help."
+  At 2, sent to a peer whose hello declared `txEqCurve` 2 (a peer that
+  declared 1 is sent 1), the Core also takes `txEq.setCurve` and
+  `txEq.resetCurve` from that peer (section 9.1): an app changes the
+  curve in the same shape it reads it. An app on a Core that sends 1
+  shows the curve read-only with "This Core cannot change the TX EQ curve
+  from here. Updating the Core may help."
 - `band2mVersion`: optional and appended after
   `txEqCurveVersion` (after `radioAntennaRowsVersion` when the others are
   absent), only at agreed minor 11 for a peer that
@@ -1254,7 +1267,10 @@ When a feature is off, its version is 0:
   `phaseRotatorEnabled`, `phaseRotatorFreqHz`, `phaseRotatorStages`,
   `phaseReverseEnabled`, `cessbOn`, `txLevelerMaxGain`, `txLevelerDecay`,
   `txAlcMaxGain` and `txAlcDecay`, each refused outside its range and a
-  band array refused whole (section 7.3). At 5 it also covers Setup >
+  band array refused whole (section 7.3). The TX EQ dialog's settings
+  (`txEqEnabled` and the nine `txEq` properties above) are taken on the
+  air too, as a local window changes them while transmitting (section
+  7.3). At 5 it also covers Setup >
   Transmit > Power, Transmit > DEXP/VOX and Test > Two-Tone IMD: on
   `transmit`, `tuneDrivePowerSource` becomes two-way, and
   `powerByBandJson`, `tunePowerByBandJson`, `dexpAttackTimeMs`,
@@ -1343,6 +1359,23 @@ When a feature is off, its version is 0:
   The Core's value reaches every device as `settings.value`. The older
   per-device key `ExtendedTxAllowed` stays each app's own
   (`settings.reject`, as before) and never turns Extended on.
+  Version 13 (remote parity on the air)
+  takes on the air everything a local window changes while transmitting
+  (no TX applet, Phone/CW, TX EQ, CFC, PureSignal, Two-Tone or Setup
+  transmit control is greyed under MOX, as in Thetis): every `transmit`
+  property but the keying set, `stepAtt`'s three transmit settings, the DSP
+  > Options TX, Power and PA keys (the DSP > Options TX and PA applies to
+  the TX channel and PA profiles wait for receive; the SWR protection keys
+  apply at once, as the local page and Thetis apply them), a `pureSignalSettings`
+  write, and the commands `setTunePowerForTxBand`, `txProfile.select`,
+  `txProfile.save`, `txProfile.delete`, `rade.resetVocoder`, the PureSignal
+  arming verbs and `tx.twoTonePreset`. They are taken from the peers that
+  may change them off the air (a receive-only Core's peer offered the
+  transmit settings; a permitted session on a Core that allows remote
+  transmit) and key nothing. Still refused on the air, as in a local
+  window: the OC transmit pins (Thetis greys them under MOX) and General
+  Region. A window on an older Core keeps its transmit settings disabled on
+  the air with "The radio is on the air. Try again when it stops."
 - `bandSelectVersion`: sent only at agreed minor 11, and 0 on a
   station with no radio model. At 1 the Core takes `slice.selectBand`
   (section 9.1), a device's band button for a slice, for the bands the
@@ -3200,7 +3233,9 @@ side-effect `delta` that follows its `property.result`.
 - **Read-only.** `txEqCurve` is outbound. A write to it is refused as any
   outbound property is ("The Core sets this itself; it cannot be changed
   from here."). Version 1 has no write path. The curve is changed at the
-  Core, or by writing `txEqParaEqData`.
+  Core, or by writing `txEqParaEqData`. At version 2 an app changes it
+  with `txEq.setCurve` and `txEq.resetCurve` ("Changing the curve",
+  below).
 - **Who gets it.** Only a peer at agreed minor 11 whose hello declared
   `txEqCurve` 1. Its `TransmitModel` schema, its `transmit` snapshot and
   its deltas carry the field. Every other peer's carry none of it, and a
@@ -3313,6 +3348,55 @@ dB off. `tst_para_eq_curve` holds these values. The same points saved out
 of order, for example 600 Hz before 598 Hz, come back sorted with the
 second moved to 603 Hz.
 
+**Changing the curve** (`txEqCurveVersion` 2). `txEq.setCurve`
+(`curveJson` utf8) takes a curve in the shape above: `parametric`,
+`preampDb`, `minHz`, `maxHz` and `points`, each point with `frequencyHz`,
+`gainDb` and `q`. Any other key (`state` included) is ignored, so an app
+may send back the curve it was shown with its edits. The Core takes what
+the local TX EQ dialog lets an operator choose (Thetis's TX EQ panel) and
+refuses anything else whole, changing nothing:
+
+| What | The dialog's choice | Refused with |
+| --- | --- | --- |
+| The JSON | an object with the keys above, `parametric` a boolean and every other value a number | "The TX EQ curve was not understood." |
+| Points | 5, 10 or 18 (the 5-band, 10-band and 18-band buttons; there is no adding or removing a single point) | "Choose a curve of 5, 10 or 18 points." |
+| `minHz`, `maxHz` | 0 to 20000 Hz (Low and High), `maxHz` at least 1000 Hz above `minHz` once each is rounded to 0.001 Hz | "Choose a low and a high end from 0 to 20000 Hz, the high end at least 1000 Hz above the low end." |
+| `preampDb` | -24 to 24 dB | "Choose a curve preamp from -24 to 24 dB." |
+| `frequencyHz` | `minHz` to `maxHz` | "Choose each point's frequency between the curve's low and high ends." |
+| `gainDb` | -24 to 24 dB | "Choose each point's gain from -24 to 24 dB." |
+| `q` | 0.2 to 20 | "Choose each point's Q from 0.2 to 20." |
+
+A curve it takes is rounded as a saved curve is read (the frequencies and
+ends to 0.001 Hz, the gains and the preamp to 0.1 dB, Q to 0.01, round half
+to even) and put in the order above: sorted, the first point moved to
+`minHz` and the last to `maxHz`, the rest spaced. So an app that moves the
+first or last point away from an end sees it back at the end, as in the
+dialog, where the two end points are fixed to the range. The Core saves
+the result as Thetis saves the panel's points (`SaveToJsonFromPoints`, then
+gzip and base64url) and writes it to `txEqParaEqData`, so the desktop
+dialog, TX profiles and Thetis-format settings keep the one saved curve.
+
+`txEq.resetCurve` (no arguments) is the dialog's Reset button, which is
+not Thetis's defaults: the preamp goes to 0 and every point to 0 dB with
+Q 4, evenly spread from `minHz` to `maxHz`, keeping the curve's number of
+points, its range and `parametric`. On a Core whose `txEqParaEqData` is
+empty or unreadable the dialog holds the defaults above (ten points, 0 to
+4000 Hz), so its Reset gives that flat curve, saved.
+
+Each is that peer's own write of `txEqParaEqData` (section 7.3), under
+every rule such a write meets: a receive-only Core takes it from a peer
+offered `transmitSettingsVersion`; a Core that allows remote transmit takes
+it from a session permitted to transmit; like the local dialog's edits it
+is taken while the radio is on the air (section 7.3); it never keys. A refused write is refused with that write's
+reason ("The radio is on the air. Try again when it stops.", "Transmit
+configuration is unavailable on this receive-only Core.", or the transmit
+gate's words). A taken one is followed first by the side-effect `delta`
+carrying the new `txEqParaEqData` and `txEqCurve`, then by an accepted
+`command.result` whose `curve` (utf8) is the `txEqCurve` the Core now
+holds. Every other peer that gets `txEqCurve` gets the same `delta`. The
+active TX profile is not saved by either verb: as with an edit in the
+local dialog, `txProfile.save` saves it.
+
 ### 7.2 Deltas
 
 The station collects property changes and sends them at most every 50 ms
@@ -3339,10 +3423,12 @@ receive-only station, whether or not the station mirrors them ("Transmit
 configuration is unavailable on this receive-only Core."), any
 `transmit` property on a receive-only station from a peer below agreed
 minor 11 (it was never offered `transmitSettingsVersion`; the same
-reason), any other `transmit` property on a receive-only station while
-its radio is on the air ("The radio is on the air. Try again when it stops.": keyed through
+reason), on a Core below `transmitSettingsVersion` 13 any other
+`transmit` property on a receive-only station while its radio is on the
+air ("The radio is on the air. Try again when it stops.": keyed through
 its `MoxController` from any source, a hardware PTT included, until the
-hand-back to receive ends; TUNE on; or the two-tone test running), a
+hand-back to receive ends; TUNE on; or the two-tone test running; at 13
+they are taken on the air as a local window takes them), a
 `transmit` setting outside its setter's range, with the range ("Choose a
 tune power from 0 to 100 W.", "Choose a VOX level from -80 to 0 dB.",
 "Choose a VOX delay from 1 to 2000 ms.", "Choose a monitor level from 0.0
@@ -3376,8 +3462,9 @@ refused whole: "Choose a power from 0 to 100 W for each band.",
 Lite 2 says "Choose a tune power from 0 to 99." and "Choose a tune power
 from 0 to 99 for each band."), `stepAtt`'s `attOnTxEnabled`,
 `attOnTxValue` and `forceAttWhenPsOff` on a receive-only station from a
-peer not offered `transmitSettingsVersion` (the receive-only reason) or
-while its radio is on the air (the on-air reason), and `attOnTxValue`
+peer not offered `transmitSettingsVersion` (the receive-only reason) or,
+below version 13, while its radio is on the air (the on-air reason), and
+`attOnTxValue`
 outside the Core's range ("Choose an ATT on TX value from 0 to 31 dB.", on
 a Hermes Lite 2 from -28), a `pureSignalSettings` write from a peer
 offered `transmitSettingsVersion` 7 while the radio is on the air (the
@@ -4328,9 +4415,10 @@ station ("Transmit configuration is unavailable on this receive-only
 Core."). At `transmitSettingsVersion` 1 a receive-only station takes the
 DSP > Options TX keys (`DspOptions<Setting><Mode>Tx`,
 `StationServer::isTransmitSettingKeyAcceptedOffAir`) while its radio is off
-the air, and refuses a write or remove of one while it is on the air ("The
-radio is on the air. Try again when it stops."), handing back its own
-value. At `transmitSettingsVersion` 5 the same holds for Setup >
+the air, and below version 13 refuses a write or remove of one while it is
+on the air ("The radio is on the air. Try again when it stops."), handing
+back its own value. At 13 it takes them on the air as a local window does,
+and applies them to the TX channel once the radio is back on receive. At `transmitSettingsVersion` 5 the same holds for Setup >
 Transmit > Power's SWR Protection keys (`SwrProtectionEnabled`,
 `SwrProtectionLimit`, `SwrTuneProtectionEnabled`, `TunePowerSwrIgnore`,
 `WindBackPowerSwr`) and External TX Inhibit keys
@@ -4541,6 +4629,8 @@ refused.
 | `txProfile.save` | `name` utf8 | `transmitSettingsVersion` | 3 | 11 |
 | `txProfile.delete` | `name` utf8 | `transmitSettingsVersion` | 3 | 11 |
 | `rade.resetVocoder` | none | `transmitSettingsVersion` | 3 | 11 |
+| `txEq.setCurve` | `curveJson` utf8 | `txEqCurveVersion` | 2 | 11 |
+| `txEq.resetCurve` | none | `txEqCurveVersion` | 2 | 11 |
 | `configureRfKit` | `host` utf8, `port` i64 | `remoteRfKitControlVersion` | 2 | 11 |
 | `disconnectRfKit` | none | `remoteRfKitControlVersion` | 2 | 11 |
 | `setRfKitEnabled` | `enabled` bool | `remoteRfKitControlVersion` | 2 | 11 |
@@ -5044,8 +5134,13 @@ These command groups need a sentence beyond the table:
   transmits on and sets the tune drive source to the tune slider, so TUNE
   uses that power. The Core reports both on `transmit`
   (`tunePowerForTxBand`, `tuneDrivePowerSource`). It keys nothing, so a
-  receive-only Core takes it, but it is refused while the radio is on the
-  air ("The radio is on the air. Try again when it stops."), outside the
+  receive-only Core takes it. Below `transmitSettingsVersion` 13 it is
+  refused while the radio is on the air ("The radio is on the air. Try
+  again when it stops."); at 13 it is taken on the air from a peer that may
+  change the transmit settings, as the local slider moves keyed. Like
+  `txProfile.select` it is the holder's while transmit is held (ruling
+  7.7): from another device it is refused with the holder's words. It is
+  refused outside the
   tune power range ("Choose a tune power from 0 to 100 W.", or "Choose a
   tune power from 0 to 99." on a Hermes Lite 2), and when not understood
   ("The request to change the tune power was not understood."). A peer
@@ -5063,9 +5158,14 @@ These command groups need a sentence beyond the table:
   active profile and list on `transmit` (`activeTxProfile`,
   `txProfilesJson`). `rade.resetVocoder` (no arguments) clears the RADE
   transmit vocoder of the Core's active slice, as the RADE applet's Reset
-  vocoder does. None keys the radio, so a receive-only Core takes them,
-  but each is refused while the radio is on the air ("The radio is on the
-  air. Try again when it stops."). The other refusals: "There is no
+  vocoder does. None keys the radio, so a receive-only Core takes them.
+  Below `transmitSettingsVersion` 13 each is refused while the radio is on
+  the air ("The radio is on the air. Try again when it stops."); at 13 each
+  is taken on the air from a peer that may change the transmit settings, as
+  the local profile combo and Reset vocoder work keyed. Each is the
+  holder's while transmit is held (ruling 7.7): from a device that does not
+  hold it, while another does (the Core's own key included), it is refused
+  with the holder's words. The other refusals: "There is no
   transmit profile called <name>." (select and delete), "Give the transmit
   profile a name." (save with a blank name), "The Core has no radio to
   keep transmit profiles for." (save before the Core has a radio), "It is
@@ -5075,6 +5175,19 @@ These command groups need a sentence beyond the table:
   understood." and "The request to reset the RADE vocoder was not
   understood." A peer below agreed minor 11 gets "Update this app to
   change transmit profiles on this Core."
+- **The TX EQ curve.** `txEq.setCurve` (`curveJson`) and
+  `txEq.resetCurve` (no arguments) change the TX EQ dialog's parametric
+  curve, and are its Reset, from a peer offered `txEqCurveVersion` 2
+  (section 7.1, "Changing the curve"). Each is that peer's own write of
+  `transmit`'s `txEqParaEqData` and meets every rule that write meets
+  (section 7.3); its answer carries that write's reason when refused, and
+  `curve`, the curve the Core kept in the `txEqCurve` form, when taken.
+  Other refusals: the curve's own ("Choose a curve of 5, 10 or 18
+  points." and the rest, section 7.1), "The request to reset the TX EQ
+  curve was not understood." (a reset with arguments), "The Core cannot
+  change its transmit settings." (a Core with no radio model of its own).
+  A peer not offered version 2 gets "Update this app to change the TX EQ
+  curve on this Core."
 - **PureSignal arming.** `ps3.single` (Single Cal), `ps3.automatic`
   (Automatic, and PS-A on), `ps3.applyCurrent` (Apply current correction)
   and `ps3.restoreCorrection` (Restore a saved correction) arm PureSignal
@@ -5083,7 +5196,9 @@ These command groups need a sentence beyond the table:
   only while the radio transmits. A Core at `transmitSettingsVersion` 7
   takes them from a peer at agreed minor 11 while its radio is off the air
   and refuses them while it is on the air ("The radio is on the air. Try
-  again when it stops."). Any other peer gets "PureSignal cannot be run
+  again when it stops."); at version 13 it takes them on the air too from a
+  peer that may change the transmit settings, as the local PureSignal
+  dialog arms keyed. Any other peer gets "PureSignal cannot be run
   from a remote window yet." as before, and so does `ps3.twoTone` with
   `enabled` true from every peer: the two-tone test keys the radio and
   waits for remote transmit. `ps3.off`, `ps3.twoTone` with `enabled` false
@@ -6273,6 +6388,7 @@ same on every machine.
 | `connect-deadline` | No `auth.request` within 30000 ms: `session.end` "This app did not finish connecting to the Core in time.", `retryable` true |
 | `property-write` | A write and its `property.result` and side-effect `delta`; a refused outbound property and an unknown one; a write without a `writeId` answered by `delta`; a write to a slice's signal strength refused as outbound; on the receive-only Core, a `transmit` write of `power` taken off the air and a write of `mox` and `voxEnabled` refused with the receive-only reason; at `transmitSettingsVersion` 2, a write of `cpdrLevelDb` taken, and `micGainDb` and `monitorVolume` out of range refused with their ranges beside a write of the outbound `tunePowerForTxBand`; at `transmitSettingsVersion` 3, a write of `micBoost` and `lineInBoost` taken, and `lineInBoost` out of range refused with its range beside a write of the outbound `activeTxProfile`; at `transmitSettingsVersion` 4, a write of `txEqBandsJson`, `txEqUseLegacy` and `txLevelerDecay` taken, and a nine-value `txEqBandsJson`, a `cfcCompressionJson` with a value out of range and `txAlcDecay` out of range each refused whole with its range |
 | `tx-eq-curve` | `txEqCurveVersion` 1 (the client declares `txEqCurve` 1): the capability after `accessoryTxVersion`, `txEqCurve` last in the `TransmitModel` schema and, in the `transmit` snapshot, the flat default curve (`state` `default`) for the static station's empty `txEqParaEqData`; a write of the worked example's `txEqParaEqData` (section 7.1, "The TX EQ curve") taken, then the side-effect `delta` carrying its `txEqCurve` (`state` `saved`); a write to `txEqCurve` refused as outbound, the curve unchanged |
+| `tx-eq-set-curve` | `txEqCurveVersion` 2 (the client declares `txEqCurve` 2): the capability at 2; `txEq.setCurve` with the link document's worked example sent back as it was shown, but out of order and unrounded, taken: the side-effect `delta` carrying the new `txEqParaEqData` and the worked example's `txEqCurve`, then the accepted `command.result` whose `curve` is that `txEqCurve`; a four-point curve refused whole "Choose a curve of 5, 10 or 18 points." with nothing sent after; `txEq.resetCurve` taken, the `delta` and a `curve` of five flat points spread from 50 to 3000 Hz, preamp 0 |
 | `settings-write` | A station-scoped write echoed with its origin; an operator-local write rejected; a removal sent as `settings.value` with no entry; on the receive-only Core, a DSP > Options TX key and a PA forward-power table key (`paCalibration/calPoint1`, version 6) taken off the air, an OC transmit pin (`oc/tx/20m/pin3`), an OC pin action (`oc/actions/pin1/action`) and TX Display Cal (`cal/txDisplayOffset`) taken off the air (version 8), and a transmit hardware key refused |
 | `unknown-verb` | `command.result` refused, "The Core does not know this request. Updating the Core may help."; the connection stays up |
 | `unknown-kind` | `session.end` "The Core could not read a message from this app.", `retryable` false, `code` `protocolError` |
