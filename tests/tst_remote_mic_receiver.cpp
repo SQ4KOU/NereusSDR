@@ -227,9 +227,10 @@ private slots:
     void senderOffTheRadiosClockRunsTenMinutesKeyed_data();
     void senderOffTheRadiosClockRunsTenMinutesKeyed();
     void keyWaitIsAnsweredOnceTheBufferFills();
-    void keyWaitIsRefusedAfter250msWithoutAudio();
+    void keyWaitIsRefusedWhenTheLineNeverSends();
     void keyWaitFillsFromALateFirstPacket();
     void keyWaitRefusesALineThatStartsThenStops();
+    void keyWaitEndedAfterItsFirstPacketIsAnsweredOnlyByTheEnd();
     void starvationIsSignalledOnlyWhileWatched();
     // R-IOS-13 (2026-09-27): the small adaptive buffer.
     void steadyPacketsHoldTheSmallestTargetWithoutUnderrun();
@@ -755,9 +756,9 @@ void TestRemoteMicReceiver::keyWaitIsAnsweredOnceTheBufferFills()
 }
 
 // Load findings 2 (R-IOS-13): a line that never sends a packet is refused
-// once the line's own start bound passes (the name keeps the case's
-// history; the 250 ms fill wait runs from the first packet).
-void TestRemoteMicReceiver::keyWaitIsRefusedAfter250msWithoutAudio()
+// once the line's own start bound passes (the 250 ms fill wait runs from
+// the first packet).
+void TestRemoteMicReceiver::keyWaitIsRefusedWhenTheLineNeverSends()
 {
     FakeTime time;
     RemoteMicFeed feed;
@@ -840,6 +841,50 @@ void TestRemoteMicReceiver::keyWaitRefusesALineThatStartsThenStops()
     QCOMPARE(answers, QList<bool>{false});
     QVERIFY(!receiver.isWaiting());
     time.advanceTo(5000);
+    QCOMPARE(answers, QList<bool>{false});
+}
+
+// Load findings 3 (review of the line-start wait): once the line's first
+// packet has armed the 250 ms fill timer, a cancelled wait is never
+// answered, and a line that stops answers its waiting key false at once;
+// neither timer answers afterwards.
+void TestRemoteMicReceiver::keyWaitEndedAfterItsFirstPacketIsAnsweredOnlyByTheEnd()
+{
+    FakeTime time;
+    RemoteMicFeed feed;
+    RemoteMicReceiver receiver(&feed, nullptr, time.clock(), time.scheduler());
+    RemoteMicEncoder encoder;
+    QVERIFY(receiver.start(kMicSsrc, false));
+    feed.setInUse(true);
+    const std::vector<float> frame = toneFrame(0, 0.3f);
+    QList<bool> answers;
+    const qint64 pastBothBounds =
+        RemoteMicConfig::kLineStartDeadlineMs + RemoteMicConfig::kReadyDeadlineMs + 100;
+
+    // Cancelled after the first packet.
+    receiver.awaitReady([&answers](bool ready) { answers.append(ready); });
+    time.advanceTo(100);
+    receiver.submit(encoder.encode(frame.data(), 0, 0, kMicSsrc));
+    QVERIFY(receiver.isWaiting());
+    receiver.cancelWait();
+    QVERIFY(!receiver.isWaiting());
+    time.advanceTo(100 + pastBothBounds);
+    QVERIFY(answers.isEmpty());
+
+    // The line stops after the first packet: false at once, and only once.
+    // A new over: the feed's change of use empties it, so one packet is
+    // again under the target.
+    feed.setInUse(false);
+    feed.setInUse(true);
+    const qint64 waitAt = 100 + pastBothBounds;
+    receiver.awaitReady([&answers](bool ready) { answers.append(ready); });
+    time.advanceTo(waitAt + 50);
+    receiver.submit(encoder.encode(frame.data(), 1, 960, kMicSsrc));
+    QVERIFY(answers.isEmpty());
+    receiver.stop();
+    QCOMPARE(answers, QList<bool>{false});
+    QVERIFY(!receiver.isWaiting());
+    time.advanceTo(waitAt + 50 + pastBothBounds);
     QCOMPARE(answers, QList<bool>{false});
 }
 

@@ -801,7 +801,10 @@ void RemoteMicReceiver::submit(const QByteArray& packet)
         checkReady();
     }
     // Load findings 2 (R-IOS-13): the waiting key's line has started; the
-    // buffer now has kReadyDeadlineMs to fill.
+    // buffer now has kReadyDeadlineMs to fill. A trailing packet of the
+    // previous over, still in flight at a quick re-press, starts this clock
+    // too; the cost is at most the old cold-start refusal, never a key
+    // without audio (review of the line-start wait).
     if (m_waitDone && !m_waitLineStarted) {
         m_waitLineStarted = true;
         qCInfo(lcAudio) << "Remote microphone: the line's first packet came"

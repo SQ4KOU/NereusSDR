@@ -6213,8 +6213,8 @@ values.
 carries the microphone line (its media `start` carried `remoteTxVersion`;
 remote media control document, Microphone line) sends its microphone while
 it transmits. Its `tx.key`, in a mode that transmits the microphone (every
-mode but CWL and CWU), is answered once the line's buffer holds its 60 ms
-target, and then keys. A device starts its line with the key, so the 250 ms
+mode but CWL and CWU), is answered once the line's buffer holds its target
+(30 ms on a steady link, remote media control document), and then keys. A device starts its line with the key, so the 250 ms
 for the buffer to fill runs from the line's first packet after the key
 arrives; when the buffer has not filled within 250 ms of that packet, or no
 packet has come within 1 s of the key, the key is refused `micNotReady`, "No sound has reached the Core from this device's
@@ -6275,7 +6275,7 @@ a keepalive every 100 ms. The Core stops transmitting once more than
 400 ms pass without one from it (the link-loss deadline). A keyed device's
 microphone line counts as starved after 250 ms without audio (the
 starvation deadline). The Core's transmit buffer for the line targets
-60 ms and never holds more than 120 ms. A client's first reconnect comes
+30 ms on a steady link and never holds more than 120 ms. A client's first reconnect comes
 1000 ms after a loss. So 120 < 250 < 400 < 1000: starvation is handled
 before the link counts as lost, and the Core has stopped before any
 reconnect (`RemoteTxWatchdog`, `RemoteMicConfig`, checked at compile time).
