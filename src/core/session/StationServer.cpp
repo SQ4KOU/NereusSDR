@@ -4920,8 +4920,11 @@ void StationServer::handleAuthRequest(SessionTransport* transport,
         // lastSeen and lastAddress, on every authenticated connection, and
         // the short name the device sent this time (Part C fix wave: it
         // replaces the stored one when usable; outside the signed transcript).
+        // Slice control plan Task 8b: and its name, as it sends it now (a
+        // window run with a profile names the profile).
         m_devices->touch(deviceId, address,
-                         message.device ? message.device->shortName : QString());
+                         message.device ? message.device->shortName : QString(),
+                         message.device ? message.device->name : QString());
         if (const std::optional<PairedDevice> paired = m_devices->find(deviceId)) {
             name = paired->name;
             shortName = paired->shortName;

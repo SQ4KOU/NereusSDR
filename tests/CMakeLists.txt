@@ -7587,6 +7587,9 @@ target_compile_definitions(tst_gui_connection_controller PRIVATE
 # iPhone app Task 18 (R-IOS-08): the desktop pairs with a Core. Its own
 # device key, one tap and the code against a real StationServer over the
 # loopback (IPv4 and IPv6), every refusal, then a sign-in by key.
+# Slice control and shared listening plan Task 8b: this computer's names
+# carry its profile, and the default profile's names are today's.
+nereus_add_test(tst_client_device_identity)
 nereus_add_test(tst_station_pairing_client fakes/LoopbackTransport.cpp)
 target_compile_definitions(tst_station_pairing_client PRIVATE
     NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")

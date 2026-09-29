@@ -16,6 +16,9 @@
 //               per-address handshake cap and 0600 on load. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic Claude
 //               Code.
+//   2026-09-29: slice control plan Task 8b: touch() keeps a signed-in
+//               device's current name too. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/security/DeviceStore.h"
@@ -351,7 +354,7 @@ std::optional<PairedDevice> DeviceStore::find(const QByteArray& id) const
 }
 
 void DeviceStore::touch(const QByteArray& id, const QString& address,
-                        const QString& shortName)
+                        const QString& shortName, const QString& name)
 {
     if (!m_valid) {
         return;
@@ -363,6 +366,9 @@ void DeviceStore::touch(const QByteArray& id, const QString& address,
             device.lastAddress = address;
             if (isValidShortName(shortName)) {
                 device.shortName = shortName;
+            }
+            if (!name.isEmpty() && isValidName(name)) {
+                device.name = name;
             }
             if (save(next)) {
                 m_devices = next;

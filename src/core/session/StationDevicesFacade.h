@@ -79,6 +79,9 @@
 //   2026-09-25: iPhone app Task 71 (R-IOS-02): numbered names and
 //               shortName in listJson. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 8b: retireTokenAndRevoke. J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -155,6 +158,17 @@ public:
     void setPairingWindow(PairingWindow* window);
 
     DeviceAdminResult revoke(const QString& id);
+    /// Slice control plan Task 8b: removes a computer that joined with the
+    /// pairing token while the token still works, by first stopping the
+    /// token (retireToken) and then removing it (revoke), as one action.
+    /// Every guard of both is checked before anything changes, so when
+    /// either would refuse nothing changes: the token keeps working and the
+    /// device stays paired. The Core is never left without a paired device
+    /// (Fix wave R1-I1). Any other device is removed as revoke() removes it.
+    DeviceAdminResult retireTokenAndRevoke(const QString& id);
+    /// Task 8b: whether removing `id` needs the pairing token stopped first
+    /// (a computer that joined with the token, while the token works).
+    bool revokeStopsPairingToken(const QString& id) const;
     DeviceAdminResult rename(const QString& label);
     DeviceAdminResult acknowledgeKeyBackup();
     DeviceAdminResult retireToken();

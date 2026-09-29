@@ -354,6 +354,9 @@
 //   2026-09-29 - Slice control plan Task 7: no "TX > Slice" notice when
 //               the last slice closed and no slice transmits. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Slice control plan Task 8b: a window run with a profile
+//               names the profile when it signs in to a Core. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -2249,9 +2252,13 @@ void MainWindow::ensureRemoteSession()
         // sign-in to a Core with an identity enrols the key (the link
         // document, section 3.5). The Core lists it by the machine's name,
         // and its short name is the short host name (Part C fix wave).
+        // Slice control plan Task 8b: a profile other than the default is
+        // its own device, so its name carries the profile.
         m_stationClient->setDeviceIdentity(ClientDeviceIdentity::forThisProfile(),
-                                           ClientDeviceIdentity::machineName(),
-                                           ClientDeviceIdentity::machineShortName());
+                                           ClientDeviceIdentity::machineName(
+                                               AppSettings::profileOverride()),
+                                           ClientDeviceIdentity::machineShortName(
+                                               AppSettings::profileOverride()));
         // iPhone app plan Task 39: the Core's transmit meters.
         wireRemoteTransmitMeters();
         // iPhone app plan Task 78: several devices on one Core.

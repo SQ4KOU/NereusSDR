@@ -781,7 +781,8 @@ StationPairingClient* GuiConnectionController::pairingClient()
 {
     if (!m_pairing) {
         m_pairing = std::make_unique<StationPairingClient>(
-            ClientDeviceIdentity::forThisProfile(), ClientDeviceIdentity::machineName());
+            ClientDeviceIdentity::forThisProfile(),
+            ClientDeviceIdentity::machineName(AppSettings::profileOverride()));
         connect(m_pairing.get(), &StationPairingClient::paired,
                 this, &GuiConnectionController::onPaired);
         connect(m_pairing.get(), &StationPairingClient::failed,

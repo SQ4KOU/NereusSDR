@@ -390,6 +390,19 @@ bool GuiDesktopStationRuntime::revokeDevice(const QByteArray& id)
     return true;
 }
 
+bool GuiDesktopStationRuntime::revokeDeviceStoppingPairingToken(const QByteArray& id)
+{
+    QString reason;
+    if (!actionAllowed(&reason)) { fail(reason); return false; }
+    StationDevicesFacade* facade = m_controller->server()
+        ? m_controller->server()->devicesFacade() : nullptr;
+    if (!facade) { fail(tr("Run a Core on this computer first.")); return false; }
+    const DeviceAdminResult result = facade->retireTokenAndRevoke(QString::fromLatin1(id));
+    if (!result.accepted) { fail(result.reason); return false; }
+    updateState();
+    return true;
+}
+
 bool GuiDesktopStationRuntime::addDevice()
 {
     QString reason;
@@ -439,6 +452,8 @@ void GuiDesktopStationRuntime::bindPage(RemoteStationPage* page)
             [this](const QString& name) { renameStation(name); });
     connect(page, &RemoteStationPage::revokeRequested, this,
             [this](const QByteArray& id) { revokeDevice(id); });
+    connect(page, &RemoteStationPage::revokeStoppingPairingTokenRequested, this,
+            [this](const QByteArray& id) { revokeDeviceStoppingPairingToken(id); });
     connect(page, &RemoteStationPage::addDeviceRequested, this,
             [this] { addDevice(); });
     connect(page, &RemoteStationPage::keyBackupAcknowledgedRequested, this,
@@ -515,8 +530,20 @@ void GuiDesktopStationRuntime::updateState()
             const QByteArray raw = StationIdentity::fromBase64Url(QString::fromLatin1(row.id), &ok);
             const std::optional<PairedDevice> paired = ok && store
                 ? store->find(raw) : std::nullopt;
-            row.revocable = paired && !lastWithNoToken
-                && !(paired->enrolledThroughToken && facade->tokenActive());
+            // Fix wave R1-I1: the last device of a Core with no token keeps
+            // it claimed. Slice control plan Task 8b: a computer that joined
+            // with the token, while the token works, is removed by stopping
+            // the token first, which needs another paired device to keep
+            // the Core claimed.
+            row.removalStopsPairingToken =
+                paired && paired->enrolledThroughToken && facade->tokenActive();
+            const bool lastWayIn = lastWithNoToken
+                || (row.removalStopsPairingToken && list.size() <= 1);
+            row.revocable = paired && !lastWayIn;
+            if (paired && lastWayIn) {
+                row.revokeReason = tr("Pair another device first, or reset this Core from its "
+                                      "own computer.");
+            }
             next.devices.append(row);
         }
     }
@@ -544,7 +571,9 @@ bool GuiDesktopStationRuntime::sameState(const RemoteStationPage::State& a,
         const auto& x = a.devices.at(i);
         const auto& y = b.devices.at(i);
         if (x.id != y.id || x.name != y.name || x.pairedText != y.pairedText
-            || x.lastSeenText != y.lastSeenText || x.revocable != y.revocable) { return false; }
+            || x.lastSeenText != y.lastSeenText || x.revocable != y.revocable
+            || x.removalStopsPairingToken != y.removalStopsPairingToken
+            || x.revokeReason != y.revokeReason) { return false; }
     }
     return true;
 }
