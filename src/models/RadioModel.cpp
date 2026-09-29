@@ -23895,6 +23895,7 @@ void RadioModel::setTune(bool on)
             m_transmitModel.setPowerSliderLimitEnabled(false);
             m_transmitModel.setPower(tuneNewPwr);
             m_tuneSetFixedPwr = true;
+            // NereusSDR divergence (console.cs:30180-30185 [v2.10.3.15] re-reads the source at TUN-off): latched so a mid-TUNE source change cannot leave the limit off or restore a stale PreviousPWR.
         }
 
         // ── PUSH TUNE-ADJUSTED TX VFO (carrier-on-dial) ────────────────────────
@@ -25007,6 +25008,7 @@ void RadioModel::completeTuneOff()
     // restore pairs with the save even if the source changed during TUNE.
     // Another source never touched PWR, and a PWR change made during TUNE
     // stays.
+    // NereusSDR divergence (console.cs:30180-30185 [v2.10.3.15] re-reads the source here): the latch keeps a mid-TUNE source change from leaving the limit off or restoring a stale PreviousPWR.
     if (m_tuneSetFixedPwr) {
         m_transmitModel.setPowerSliderLimitEnabled(true);
         m_transmitModel.setPower(m_savedPowerPct);
