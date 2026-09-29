@@ -1,5 +1,11 @@
 // no-port-check: NereusSDR-original. Remote daemon R3 receive display wiring.
 // Modification history (NereusSDR):
+//   2026-09-29: the direct media ladder: a direct-only replace while media
+//               rides the tunnel, at the PathRacer::kUpgradeRetryMs steps;
+//               the no-packets fallback back to the tunnel on a silent
+//               direct path; the older relay-leg check judges the
+//               connection in use. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 //   2026-09-29: JJ's ruling of 2026-09-28: waterfall AGC and NF-AGC use the
 //               Core's display-extras levels, as the phone does, so the dBm
 //               window no longer follows them (no new request as AGC
@@ -869,6 +875,19 @@ struct RemoteMediaController::Private {
     // Step 2b: when audio last came, and the check for a stall.
     QElapsedTimer lastAudio;
     QTimer* stallTimer = nullptr;
+    // The direct media ladder: whether the connection in use and the one
+    // being started route over the tunnel's own framing (the older relay
+    // leg refusal judges the connection in use), and whether the one being
+    // started is a direct-only replace.
+    bool currentRouted = false;
+    bool replacementRouted = false;
+    bool replacementDirect = false;
+    // The direct media ladder: the next direct-only replace while media
+    // rides the tunnel (PathRacer::kUpgradeRetryMs steps), and when a media
+    // packet last came (allocationClock; -1 before the first).
+    QTimer* directUpgrade = nullptr;
+    int directUpgradeStep = 0;
+    qint64 lastMediaMs = -1;
     bool txSilenceSuppressed = false;
     bool coreTransmitting() const
     {
@@ -1334,6 +1353,9 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
         // Keep the media connection and display alive; the independent TX
         // keepalive watchdog continues to enforce its own deadline. Path
         // tracking above must continue even during TX.
+        const QPointer<RemoteMediaController> self(this);
+        updateDirectUpgrade(viaTunnel);
+        if (!self || !d->peer) { return; }
         if (d->coreTransmitting()) { return; }
         if (slowPath && d->lastAudio.elapsed() > kMediaStallMs) {
             qCInfo(lcRemoteMedia) << "No audio from the Core for" << d->lastAudio.elapsed()
@@ -1341,8 +1363,17 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
             d->lastAudio.invalidate();
             requestRecovery(d->epoch, QStringLiteral("Audio from the Core stopped. Starting "
                                                      "audio and display again."));
+            return;
         }
+        // The direct media ladder: a direct path that went silent goes back
+        // to the connection that includes the tunnel.
+        checkMediaSilence();
     });
+    // The direct media ladder: the next direct-only replace.
+    d->directUpgrade = new QTimer(this);
+    d->directUpgrade->setSingleShot(true);
+    connect(d->directUpgrade, &QTimer::timeout, this,
+            &RemoteMediaController::runDirectUpgradeStep);
     // Task 29 fix wave (Important 1): a pending replacement is tried until
     // it can start.
     d->replaceRetry = new QTimer(this);
@@ -2647,6 +2678,14 @@ void RemoteMediaController::stop()
         d->stallTimer->stop();
     }
     d->lastAudio.invalidate();
+    if (d->directUpgrade) {
+        d->directUpgrade->stop();
+    }
+    d->directUpgradeStep = 0;
+    d->lastMediaMs = -1;
+    d->currentRouted = false;
+    d->replacementRouted = false;
+    d->replacementDirect = false;
     d->txSilenceSuppressed = false;
     if (d->client) {
         d->client->setMediaTunnelInUse(false);
@@ -2903,6 +2942,16 @@ quint64 RemoteMediaController::duplicateAudioDropped() const
 
 bool RemoteMediaController::replaceConnection()
 {
+    return startReplacement(false);
+}
+
+bool RemoteMediaController::upgradeToDirectConnection()
+{
+    return startReplacement(true);
+}
+
+bool RemoteMediaController::startReplacement(bool direct)
+{
     if (!d->client || !d->client->mediaAvailable() || !d->peer || !d->peer->isReady()
         || d->replacement || d->retiring || d->epoch != d->client->sessionEpoch()
         || d->client->capabilities().mediaReplaceVersion < 1 || d->logicalSsrcs.isEmpty()) {
@@ -2916,6 +2965,31 @@ bool RemoteMediaController::replaceConnection()
     }
     if (d->model && d->model->isTransmitting()) {
         return false;
+    }
+    // The direct media ladder: a direct-only replace only to a Core that
+    // takes one, and never while this window is keyed or has VOX armed or
+    // the Core is on the air (a refused one is not tried again until the
+    // next step).
+    if (direct) {
+        const bool voxArmed = d->voxArmed && d->client->capabilities().txPermitted;
+        if (!d->client->mediaDirectAvailable() || d->holdsTransmit || d->micKeyDown || voxArmed
+            || d->coreTransmitting()) {
+            return false;
+        }
+    }
+    std::optional<IceConfiguration> nextIce;
+    if (direct) {
+        nextIce = d->client->mediaDirectIceConfiguration();
+    } else {
+        nextIce = mediaIceConfiguration();
+    }
+    // A raw tag-2 relay leg in use has one agent destination: a new
+    // connection without the tunnel's own framing would redirect it.
+    if (direct && !d->currentRouted) {
+        const auto path = d->peer->selectedPath();
+        if (path && path->viaLoopbackShim() && (!nextIce || !nextIce->mediaRouting())) {
+            return false;
+        }
     }
     const QString id = QUuid::createUuid().toString(QUuid::WithoutBraces);
     auto* peer = new MediaPeer(this, d->factory);
@@ -2954,7 +3028,9 @@ bool RemoteMediaController::replaceConnection()
     connect(peer, &MediaPeer::errorOccurred, this, [this, current](const QString& reason) {
         if (current()) { dropReplacement(reason); }
     });
-    peer->setIceConfiguration(mediaIceConfiguration());
+    d->replacementRouted = nextIce && nextIce->mediaRouting();
+    d->replacementDirect = direct;
+    peer->setIceConfiguration(nextIce);
     const QPointer<MediaPeer> started(peer);
     const bool ok = peer->start(IMediaTransport::Role::Answerer, id,
                                 IMediaTransport::kDefaultAudioTargetBitrate,
@@ -2981,12 +3057,18 @@ bool RemoteMediaController::replaceConnection()
     d->dual->start(d->dualClock.elapsed());
     d->dualTimer->start();
     d->replaceDeadline->start(d->descriptionDeadlineMs + IceConfiguration::kConnectDeadlineMs);
-    qCInfo(lcRemoteMedia) << "Moving audio and display to a new connection";
+    qCInfo(lcRemoteMedia) << (direct ? "Trying audio and display on a direct connection"
+                                     : "Moving audio and display to a new connection");
     const QPointer<RemoteMediaController> self(this);
-    d->client->sendMediaControl({{QStringLiteral("op"), QStringLiteral("replace")},
-                                 {QStringLiteral("connectionId"), id},
-                                 {QStringLiteral("replaces"), d->connectionId}},
-                                d->epoch);
+    QJsonObject replace{{QStringLiteral("op"), QStringLiteral("replace")},
+                        {QStringLiteral("connectionId"), id},
+                        {QStringLiteral("replaces"), d->connectionId}};
+    // The direct media ladder: only a direct-only replace names the field;
+    // every other replace stays the three fields an older Core expects.
+    if (direct) {
+        replace.insert(QStringLiteral("mediaDirectVersion"), 1);
+    }
+    d->client->sendMediaControl(replace, d->epoch);
     return self && d->replacement == peer;
 }
 
@@ -3002,7 +3084,13 @@ void RemoteMediaController::receiveReplacementControl(const QJsonObject& payload
     if (op == QLatin1String("rejected") && payload.value(QStringLiteral("endpointId")).toDouble() == 0
         && payload.value(QStringLiteral("reason")).isString()) {
         const QString reason = payload.value(QStringLiteral("reason")).toString();
+        const bool wasDirect = d->replacementDirect;
         dropReplacement(reason.left(512));
+        // The direct media ladder: a refused direct-only replace waits for
+        // the next step of its own schedule; it never marks a move pending.
+        if (wasDirect) {
+            return;
+        }
         // Task 29 fix wave (Important 1), re-review: a Core that went on the
         // air just as the replacement arrived refused it; try again once it
         // is back on receive (tryPendingReplace waits while the window sees
@@ -3040,6 +3128,11 @@ void RemoteMediaController::promoteReplacement()
     disconnect(next, nullptr, this, nullptr);
     d->replacement = nullptr;
     d->peer = next;
+    // The direct media ladder: the connection in use is now the new one,
+    // and its silence is counted from here.
+    d->currentRouted = std::exchange(d->replacementRouted, false);
+    d->replacementDirect = false;
+    d->lastMediaMs = d->allocationClock();
     emit networkPathChanged();
     d->connectionId = d->replacementId;
     d->replacementId.clear();
@@ -3122,7 +3215,9 @@ void RemoteMediaController::tryPendingReplace()
     }
     // A raw tag-2 relay leg has one agent destination. Replacing it would
     // redirect the live connection before the new one can take over.
-    if (d->peer && !d->relayRoutingNegotiated) {
+    // The direct media ladder: judged by the connection in use (a tunnel
+    // start routes over the tunnel's framing without the relay's).
+    if (d->peer && !d->currentRouted) {
         const auto path = d->peer->selectedPath();
         const auto nextIce = mediaIceConfiguration();
         if (path && path->viaLoopbackShim() && (!nextIce || !nextIce->mediaRouting())) {
@@ -3164,6 +3259,8 @@ void RemoteMediaController::dropReplacement(const QString& why)
     }
     d->replacement = nullptr;
     d->replacementId.clear();
+    d->replacementRouted = false;
+    d->replacementDirect = false;
     for (const quint32 ssrc : audioSsrcsOf(peer)) {
         d->toLogical.remove(ssrc);
     }
@@ -3176,6 +3273,100 @@ void RemoteMediaController::dropReplacement(const QString& why)
     d->dualNew = nullptr;
     qCInfo(lcRemoteMedia).noquote()
         << QStringLiteral("Audio and display stay on their connection: %1").arg(why.left(256));
+}
+
+int RemoteMediaController::directUpgradeDelayMs() const
+{
+    if (!d->directUpgrade->isActive()) {
+        return -1;
+    }
+    return d->directUpgrade->interval();
+}
+
+void RemoteMediaController::updateDirectUpgrade(bool viaTunnel)
+{
+    // The direct media ladder: while media rides the tunnel to a Core that
+    // takes a direct-only replace, one is tried at each step of
+    // PathRacer::kUpgradeRetryMs (the last step repeats).
+    if (!viaTunnel || !d->client || !d->client->mediaDirectAvailable()
+        || d->client->capabilities().mediaReplaceVersion < 1) {
+        d->directUpgrade->stop();
+        return;
+    }
+    if (d->directUpgrade->isActive() || d->replacement) {
+        return;
+    }
+    const int last = int(PathRacer::kUpgradeRetryMs.size()) - 1;
+    d->directUpgrade->start(PathRacer::kUpgradeRetryMs.at(
+        std::size_t(std::min(d->directUpgradeStep, last))));
+}
+
+void RemoteMediaController::runDirectUpgradeStep()
+{
+    d->directUpgrade->stop();
+    if (!d->peer) {
+        return;
+    }
+    const auto onTunnel = [this] {
+        const std::optional<MediaIcePath> path = d->peer->selectedPath();
+        return d->tunnelNegotiated && path && path->viaLoopbackShim();
+    };
+    if (!onTunnel()) {
+        updateDirectUpgrade(false);
+        return;
+    }
+    const int last = int(PathRacer::kUpgradeRetryMs.size()) - 1;
+    const QPointer<RemoteMediaController> self(this);
+    // A move already waiting, or one under way, goes first.
+    if (!d->replacePending && !d->replacement && !d->retiring) {
+        upgradeToDirectConnection();
+        if (!self) { return; }
+    }
+    d->directUpgradeStep = std::min(d->directUpgradeStep + 1, last);
+    if (!d->peer || d->replacement) {
+        return; // the replacement's end, or the next stall tick, re-arms it
+    }
+    updateDirectUpgrade(onTunnel());
+}
+
+void RemoteMediaController::checkMediaSilence()
+{
+    // The direct media ladder: a direct path whose media stopped for
+    // kDirectMediaSilenceFallbackMs while control still runs goes back to a
+    // connection that includes the tunnel (the normal replace), and the
+    // direct-only schedule starts over. The Core keyed follows the existing
+    // link-loss path instead (its own starvation rule), so nothing here
+    // runs while it transmits.
+    if (!d->client || !d->peer || !d->peer->isReady() || d->replacement || d->retiring
+        || d->epoch != d->client->sessionEpoch() || !d->client->mediaAvailable()
+        || !d->client->mediaDirectAvailable()
+        || d->client->capabilities().mediaReplaceVersion < 1) {
+        return;
+    }
+    const bool wanted = d->model && !d->model->audioEngine()->masterMuted();
+    if (!wanted || !d->lastAudio.isValid() || d->coreTransmitting()) {
+        return;
+    }
+    const std::optional<MediaIcePath> path = d->peer->selectedPath();
+    const int rank = d->client->pathRank();
+    if (!path || path->viaLoopbackShim() || rank == PathRacer::ServiceRelayed
+        || rank == PathRacer::Floor) {
+        return; // the tunnel and relays have the stall rule
+    }
+    const qint64 now = d->allocationClock();
+    if (d->lastMediaMs < 0) {
+        d->lastMediaMs = now;
+        return;
+    }
+    if (now - d->lastMediaMs < kDirectMediaSilenceFallbackMs) {
+        return;
+    }
+    qCInfo(lcRemoteMedia) << "No audio or display from the Core for" << (now - d->lastMediaMs)
+                          << "ms on a direct path; moving back to the tunnel";
+    d->lastMediaMs = now;
+    d->directUpgradeStep = 0;
+    d->directUpgrade->stop();
+    replaceConnection();
 }
 
 void RemoteMediaController::connectPeer(MediaPeer* peer, quint32 epoch)
@@ -3280,6 +3471,7 @@ void RemoteMediaController::routeRtp(const QByteArray& arrived, const MediaPeer*
 {
     // Step 2b: the stall rule's clock.
     d->lastAudio.start();
+    d->lastMediaMs = d->allocationClock();
     if (d->stallTimer && !d->stallTimer->isActive()) {
         d->stallTimer->start();
     }
@@ -3377,7 +3569,16 @@ void RemoteMediaController::start()
     // The window pings faster once media rides the tunnel (step 2b; the
     // stall check sets it when ICE has settled on the tunnel's pair).
     d->client->setMediaTunnelInUse(false);
-    peer->setIceConfiguration(mediaIceConfiguration());
+    const auto startIce = mediaIceConfiguration();
+    // The direct media ladder: a new media start begins its direct-only
+    // schedule at the first step.
+    d->currentRouted = startIce && startIce->mediaRouting();
+    d->replacementRouted = false;
+    d->replacementDirect = false;
+    d->directUpgrade->stop();
+    d->directUpgradeStep = 0;
+    d->lastMediaMs = -1;
+    peer->setIceConfiguration(startIce);
     const bool started = peer->start(IMediaTransport::Role::Answerer, d->connectionId,
                                      IMediaTransport::kDefaultAudioTargetBitrate,
                                      /*offerLosslessAudio=*/false, receiverAudioNegotiated(),
@@ -5799,6 +6000,8 @@ void RemoteMediaController::requestKeyframe(quint32 endpointId)
 
 void RemoteMediaController::receiveDisplay(const QByteArray& packet)
 {
+    // The direct media ladder: a display packet is media too.
+    d->lastMediaMs = d->allocationClock();
     if (packet.startsWith("PS3D")) {
         if (!d->client || !d->model || d->client->capabilities().psDisplayVersion != 1
             || !d->model->pureSignalFacade()->ampViewSubscribed()) {

@@ -1,6 +1,9 @@
 // 2026-09-27: validate transmit-region writes and shared confirmations.
 // J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 // Modification history (NereusSDR):
+//   2026-09-29: the direct media ladder: the Core's STUN server on every
+//               media connection, mediaStunUrls and mediaDirectVersion.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-29: The Core's TCI server settings (JJ's ruling of 2026-09-28,
 //               stationTciSettingsVersion 1). J.J. Boyd (KG4VCF), AI-assisted
 //               via Anthropic Claude Code.
@@ -10292,7 +10295,63 @@ std::optional<IceConfiguration> StationServer::mediaTunnelIceConfiguration(quint
     if (!it->mediaTunnel) {
         return std::nullopt;
     }
-    return MediaTunnel::iceFor(it->mediaTunnel);
+    return MediaTunnel::iceFor(it->mediaTunnel, mediaStunServer());
+}
+
+void StationServer::setMediaStun(const QStringList& urls, const HostFamilies& families)
+{
+    // Only STUN: a TURN URL (and anything else) never leaves this Core in
+    // mediaStunUrls. No credentials ride a STUN URL.
+    QStringList kept;
+    for (const QString& url : urls) {
+        if ((url.startsWith(QLatin1String("stun:")) || url.startsWith(QLatin1String("stuns:")))
+            && !url.contains(QLatin1Char('@')) && !url.contains(QLatin1Char('?'))
+            && url.size() <= 512 && !kept.contains(url)) {
+            kept.append(url);
+        }
+    }
+    const bool changed = kept != m_mediaStunUrls;
+    m_mediaStunUrls = kept;
+    m_mediaStunFamilies = families;
+    if (!changed) {
+        return;
+    }
+    for (auto it = m_peers.begin(); it != m_peers.end(); ++it) {
+        if (!it->authenticated || !it->snapshotComplete) {
+            continue;
+        }
+        const StationCapabilities caps = buildCapabilitiesFor(it.key());
+        if (caps.mediaDirectVersion < 1) {
+            continue;
+        }
+        it->txPermittedSent = caps.txPermitted;
+        it->txWatchPathVersionSent = caps.txWatchPathVersion;
+        it->txRefusalSent = txRefusalOf(caps);
+        send(it.key(), SessionMessages::capabilities(caps.toUpdates()));
+    }
+}
+
+std::optional<IceServerAddress> StationServer::mediaStunServer() const
+{
+    if (m_mediaStunUrls.isEmpty()) {
+        return std::nullopt;
+    }
+    return IceConfiguration::throughRendezvous(m_mediaStunUrls, /*relayAllowed=*/false,
+                                               IceConfiguration::localAddressFamilies(),
+                                               m_mediaStunFamilies)
+        .stunServer();
+}
+
+bool StationServer::mediaDirectAvailable(quint64 epoch) const
+{
+    SessionTransport* session = mediaSessionFor(epoch);
+    return session != nullptr && mediaAvailable(epoch) && mediaDirectVersion() >= 1
+        && peerDeclares(session, QByteArrayLiteral("mediaDirect"), 1);
+}
+
+IceConfiguration StationServer::mediaDirectIceConfiguration() const
+{
+    return MediaTunnel::directIceFor(mediaStunServer());
 }
 
 bool StationServer::txMonitorAudioAvailable(quint64 epoch) const
@@ -10811,6 +10870,14 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             // Task 29 step 2b: the media tunnel, to a peer with media.
             caps.mediaTunnelVersion = media ? mediaTunnelVersion() : 0;
             caps.mediaRelayRoutingVersion = media ? 1 : 0;
+            // The direct media ladder: the direct-only replace and the
+            // Core's STUN servers, only to a peer whose hello declared
+            // mediaDirect 1 (after coreBuildInfo on the wire); any other
+            // peer's capabilities are today's.
+            if (media && peerDeclares(transport, QByteArrayLiteral("mediaDirect"), 1)) {
+                caps.mediaDirectVersion = mediaDirectVersion();
+                caps.mediaStunUrls = m_mediaStunUrls;
+            }
             // R-IOS-13 / R-R3-49: the AM Mod Monitor's readings, appended
             // after remoteIqVersion by StationCapabilities::toUpdates().
             caps.txModMonitorVersion = txModMonitorVersion();

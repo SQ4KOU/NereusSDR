@@ -661,9 +661,16 @@ password = base64(HMAC-SHA1(secret, username)) standard base64, with padding
 - **Why IPv4 first.** The pinned libjuice uses only the first STUN server
   it is given. A peer on an IPv4-only network behind NAT needs a
   server-reflexive candidate from an IPv4 STUN server, or it has nothing
-  but its private address to offer; a peer with IPv6 usually has a
-  global IPv6 host candidate already, which needs no STUN at all. So the
-  IPv4-only name goes first in `stun`, and the TURN list keeps the same
+  but its private address to offer. A peer with IPv6 usually has a global
+  IPv6 host candidate already, but that address alone does not make a
+  path: behind a stateful IPv6 firewall (most home routers) an inbound
+  check reaches the peer only after the peer's own check has opened the
+  firewall toward the other end, and a STUN binding from that same socket
+  keeps the pinhole and tells each end the other's address is live. So a
+  NereusSDR end uses the STUN server on every media connection, the first
+  one included, and never assumes a global IPv6 host needs none (the Core
+  passes its STUN servers to its devices in `mediaStunUrls`, the station
+  link document section 6.3). The IPv4-only name goes first in `stun`, and the TURN list keeps the same
   order so every list the service sends reads the same way. The service's
   built-in defaults, `rendezvous/server/rendezvous.conf.sample` and what
   `rendezvous/deploy/setup-server.sh` writes all list them in this order

@@ -9,6 +9,12 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29  J.J. Boyd / KG4VCF  The direct media ladder: the hello
+//                                    declares mediaDirect 1; media takes
+//                                    the Core's STUN (mediaStunServer), and
+//                                    mediaDirectIceConfiguration makes a
+//                                    direct-only replacement. AI-assisted
+//                                    via Anthropic Claude Code.
 //   2026-09-29  J.J. Boyd / KG4VCF  The older-Core reason for the 2 m band
 //                                    no longer says "yet". AI-assisted via
 //                                    Anthropic Claude Code.
@@ -726,6 +732,10 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
     // HL2 port part 2: this window shows why the Core's transmit is held
     // off (radio's txInhibitReason; txInhibitReasonVersion 1).
     m_declaredFeatures.insert(QByteArrayLiteral("txInhibitReason"), 1);
+    // The direct media ladder: this window takes the Core's STUN list
+    // (mediaStunUrls) and asks for a direct-only media replacement
+    // (mediaDirectVersion 1).
+    m_declaredFeatures.insert(QByteArrayLiteral("mediaDirect"), 1);
     m_settingsBackupReplyTimer = new QTimer(this);
     m_settingsBackupReplyTimer->setSingleShot(true);
     connect(m_settingsBackupReplyTimer, &QTimer::timeout, this, [this]() {
@@ -1212,7 +1222,36 @@ std::optional<IceConfiguration> StationClient::mediaTunnelIceConfiguration()
     if (!m_mediaTunnel) {
         return std::nullopt;
     }
-    return MediaTunnel::iceFor(m_mediaTunnel);
+    return MediaTunnel::iceFor(m_mediaTunnel, mediaStunServer());
+}
+
+std::optional<IceServerAddress> StationClient::mediaStunServer() const
+{
+    // The direct media ladder (link section 21): the Core's own STUN list
+    // (mediaStunUrls) first. libjuice has no TLS, so only a stun: entry is
+    // usable.
+    for (const QString& url : m_capabilities.mediaStunUrls) {
+        if (auto stun = IceConfiguration::parseStunUrl(url)) {
+            return stun;
+        }
+    }
+    // Then the STUN server of this session's connection through the
+    // service, and failing that the last one a session through the service
+    // used. Kept in memory only, never saved.
+    if (const auto ice = sessionIceConfiguration(); ice && ice->stunServer()) {
+        m_lastServiceStun = ice->stunServer();
+    }
+    return m_lastServiceStun;
+}
+
+bool StationClient::mediaDirectAvailable() const
+{
+    return m_handshakeComplete && m_capabilities.mediaDirectVersion >= 1 && mediaAvailable();
+}
+
+IceConfiguration StationClient::mediaDirectIceConfiguration() const
+{
+    return MediaTunnel::directIceFor(mediaStunServer());
 }
 
 SwitchableTransport* StationClient::sessionTransport() const

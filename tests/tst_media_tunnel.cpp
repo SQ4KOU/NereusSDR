@@ -18,6 +18,11 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29: the direct media ladder: STUN in the first and direct-only
+//               configurations, media moving from the tunnel to a direct
+//               path, and one stall tick of slack in the stall test's lower
+//               bound. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//               Code.
 //   2026-09-27: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
@@ -44,6 +49,7 @@
 #include "fakes/RemoteAudioSessionHarness.h"
 #include "fakes/LoopbackTransport.h"
 #include "core/session/MediaTunnel.h"
+#include "core/session/PathRacer.h"
 #include "core/session/CandidateSourceLease.h"
 #include "core/session/SessionTransport.h"
 #include "gui/PanadapterStack.h"
@@ -82,7 +88,7 @@ private slots:
         WebSocketTransport control(clientSocket, 4096);
         auto tunnel = MediaTunnel::create(&control);
         QVERIFY(tunnel);
-        IceConfiguration ice = MediaTunnel::iceFor(tunnel);
+        IceConfiguration ice = MediaTunnel::iceFor(tunnel, std::nullopt);
         const QString id = QStringLiteral("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
         auto source = ice.makeCandidateSource(IceConfiguration::kMediaLane, id);
         QVERIFY(source);
@@ -113,7 +119,7 @@ private slots:
         local.linkTo(&remote);
         auto tunnel = MediaTunnel::create(&local);
         QVERIFY(tunnel);
-        IceConfiguration ice = MediaTunnel::iceFor(tunnel);
+        IceConfiguration ice = MediaTunnel::iceFor(tunnel, std::nullopt);
         QVERIFY(!ice.makeCandidateSource(IceConfiguration::kMediaLane,
                                          QStringLiteral("00000000-0000-0000-0000-000000000000")));
         QVERIFY(!ice.makeCandidateSource(IceConfiguration::kMediaLane,
@@ -214,6 +220,51 @@ private slots:
         second->stop();
     }
 
+    // The direct media ladder (rendezvous section "Direct media"): the
+    // first media connection gathers from the Core's STUN server as well as
+    // its host addresses, with the tunnel as its lowest-priority candidate
+    // and no relay.
+    void theFirstMediaConfigurationHasStunAndTheTunnel()
+    {
+        Test::LoopbackTransport local(QStringLiteral("local"));
+        Test::LoopbackTransport remote(QStringLiteral("remote"));
+        local.linkTo(&remote);
+        auto tunnel = MediaTunnel::create(&local);
+        QVERIFY(tunnel);
+        const IceServerAddress stun{QStringLiteral("stun.example.test"), 3478};
+        const IceConfiguration ice = MediaTunnel::iceFor(tunnel, stun);
+        QCOMPARE(ice.stunServer(), std::optional<IceServerAddress>(stun));
+        QVERIFY(ice.hasCandidateSourceFactory());
+        QVERIFY(ice.makeCandidateSource(IceConfiguration::kMediaLane,
+                                        QStringLiteral("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")));
+        QVERIFY(ice.mediaRouting());
+        QVERIFY(!ice.relayAllowed());
+        QVERIFY(ice.relayKnown());
+        QVERIFY(ice.relayServers().isEmpty());
+        // With no STUN server known, as before: host candidates and the
+        // tunnel.
+        const IceConfiguration bare = MediaTunnel::iceFor(tunnel, std::nullopt);
+        QVERIFY(!bare.stunServer());
+        QVERIFY(bare.hasCandidateSourceFactory());
+    }
+
+    // A direct-only replacement: STUN and host candidates, no tunnel and no
+    // relay, so ICE can only nominate a direct pair.
+    void theDirectOnlyConfigurationHasStunAndNoCandidateSource()
+    {
+        const IceServerAddress stun{QStringLiteral("stun.example.test"), 19302};
+        const IceConfiguration ice = MediaTunnel::directIceFor(stun);
+        QCOMPARE(ice.stunServer(), std::optional<IceServerAddress>(stun));
+        QVERIFY(!ice.hasCandidateSourceFactory());
+        QVERIFY(!ice.makeCandidateSource(IceConfiguration::kMediaLane,
+                                         QStringLiteral("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")));
+        QVERIFY(!ice.mediaRouting());
+        QVERIFY(!ice.relayAllowed());
+        QVERIFY(ice.relayKnown());
+        QVERIFY(ice.relayServers().isEmpty());
+        QVERIFY(!MediaTunnel::directIceFor(std::nullopt).stunServer());
+    }
+
     void cleanup()
     {
         IceConfiguration::setOnlyLoopbackShimCandidatesForTest(false);
@@ -287,6 +338,47 @@ private slots:
         h.client.disconnectFromStation(QStringLiteral("test complete"));
     }
 
+    // The direct media ladder: media that settled on the tunnel moves to a
+    // direct-only connection (host pairs, no tunnel) at the schedule's
+    // step once UDP works, and audio keeps playing across the move.
+    void mediaOnTheTunnelMovesToADirectPath()
+    {
+        IceConfiguration::setOnlyLoopbackShimCandidatesForTest(true);
+        Test::RemoteAudioSessionHarness h;
+        RemoteMediaController remoteMedia(&h.client, &h.remote, nullptr);
+        DaemonMediaController daemonMedia(&h.server, &h.station);
+        QTimer source;
+        source.setInterval(10);
+        QObject::connect(&source, &QTimer::timeout, &source, [&h] { h.feedMixedTone(); });
+        QTimer speaker;
+        speaker.setInterval(10);
+        QObject::connect(&speaker, &QTimer::timeout, &speaker, [&h] { h.remoteBus->render(480); });
+        source.start();
+        speaker.start();
+        h.connectSession();
+        QVERIFY(h.client.mediaDirectAvailable());
+        QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.audioStatus().state
+                                     == RemoteAudioStatus::State::Playing, 20000);
+        // On the tunnel, the first step is armed.
+        QTRY_COMPARE_WITH_TIMEOUT(remoteMedia.directUpgradeDelayMs(),
+                                  PathRacer::kUpgradeRetryMs[0], 5000);
+        const QString oldId = remoteMedia.mediaConnectionId();
+        // UDP works from here on; the step runs now instead of in 5 s.
+        IceConfiguration::setOnlyLoopbackShimCandidatesForTest(false);
+        remoteMedia.runDirectUpgradeStep();
+        QVERIFY(remoteMedia.replacingConnection());
+        QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.mediaConnectionId() != oldId, 20000);
+        QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.audioStatus().state
+                                     == RemoteAudioStatus::State::Playing, 5000);
+        // Off the tunnel: nothing more is scheduled, and audio stops
+        // riding the session's link.
+        QTRY_COMPARE_WITH_TIMEOUT(remoteMedia.directUpgradeDelayMs(), -1, 5000);
+        BinaryCount atCore(h.stationLink);
+        QTest::qWait(2000);
+        QVERIFY2(atCore.messages < 10, qPrintable(QString::number(atCore.messages)));
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
     // A silent tunnel requests session recovery within a few seconds. The
     // in-process link has no address to redial, so the fixture supplies the
     // next link after the production recovery controller closes the first.
@@ -346,7 +438,13 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(!recovery.isEmpty(), 10000);
         const qint64 found = silence.elapsed();
         qInfo("A stalled tunnel found after %lld ms", static_cast<long long>(found));
-        QVERIFY2(found >= RemoteMediaController::kMediaStallMs && found <= 5000,
+        // The window's stall clock starts at the last audio packet it took,
+        // which can be a little before `silence` started: the last packets
+        // are read when the event loop gets to them, and on a loaded computer
+        // that was 20 ms early (2980 ms found, load average 34). One stall
+        // tick (500 ms) of slack below the window keeps the check on the
+        // rule (never well before kMediaStallMs) without timing the loop.
+        QVERIFY2(found >= RemoteMediaController::kMediaStallMs - 500 && found <= 5000,
                  qPrintable(QString::number(found)));
         QTRY_COMPARE_WITH_TIMEOUT(ended.size(), 1, 5000);
         const int framesBeforeReconnect = frames.size();

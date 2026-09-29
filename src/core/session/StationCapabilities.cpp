@@ -7,6 +7,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29: the direct media ladder: mediaDirectVersion and
+//               mediaStunUrls, after coreBuildInfo. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 //   2026-09-29: The Core's TCI server settings (JJ's ruling of 2026-09-28,
 //               stationTciSettingsVersion 1). J.J. Boyd (KG4VCF), AI-assisted
 //               via Anthropic Claude Code.
@@ -159,6 +162,7 @@
 
 #include "core/BoardCapabilities.h"
 #include <QHostAddress>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonParseError>
@@ -226,6 +230,15 @@ MirrorUpdate intEntry(const char* name, qint64 value)
 MirrorUpdate boolEntry(const char* name, bool value)
 {
     return MirrorUpdate{ 0, QByteArray(name), MirrorWireKind::Bool, QVariant(value) };
+}
+
+// The direct media ladder: a STUN URL mediaStunUrls may carry. Never TURN,
+// and nothing that could hold a credential or a token.
+bool isMediaStunUrl(const QString& url)
+{
+    return (url.startsWith(QLatin1String("stun:")) || url.startsWith(QLatin1String("stuns:")))
+        && url.size() <= StationCapabilities::kMaxMediaStunUrlBytes
+        && !url.contains(QLatin1Char('@')) && !url.contains(QLatin1Char('?'));
 }
 
 } // namespace
@@ -456,6 +469,20 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
         const QByteArray json = coreBuildInfo->toJson();
         if (!json.isEmpty()) updates.append(stringEntry("coreBuildInfo", QString::fromUtf8(json)));
     }
+    // The direct media ladder: last, only for a peer that declared
+    // mediaDirect; an older peer's descriptor is unchanged.
+    if (mediaDirectVersion > 0) {
+        updates.append(intEntry("mediaDirectVersion", mediaDirectVersion));
+        QJsonArray urls;
+        for (const QString& url : mediaStunUrls) {
+            if (isMediaStunUrl(url) && urls.size() < kMaxMediaStunUrls) {
+                urls.append(url);
+            }
+        }
+        updates.append(stringEntry(
+            "mediaStunUrls",
+            QString::fromUtf8(QJsonDocument(urls).toJson(QJsonDocument::Compact))));
+    }
     return updates;
 }
 
@@ -469,8 +496,33 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
     std::optional<DisplayBudgetReason> reason;
     int buildInfoEntries = 0;
     std::optional<CoreBuildInfo> buildInfo;
+    int mediaDirectEntries = 0;
+    int mediaStunEntries = 0;
     for (const MirrorUpdate& u : updates) {
-        if (u.name == "coreBuildInfo") {
+        if (u.name == "mediaDirectVersion") {
+            // The direct media ladder: one entry, an Int64 of 1 or more.
+            if (++mediaDirectEntries == 1 && u.ordinal == 0 && u.kind == MirrorWireKind::Int64
+                && u.value.typeId() == QMetaType::LongLong) {
+                const qlonglong version = u.value.toLongLong();
+                caps.mediaDirectVersion = version > 0 && version <= 65535
+                    ? static_cast<int>(version) : 0;
+            }
+        } else if (u.name == "mediaStunUrls") {
+            if (++mediaStunEntries == 1 && u.ordinal == 0 && u.kind == MirrorWireKind::Utf8
+                && u.value.typeId() == QMetaType::QString && u.value.toString().size() <= 4096) {
+                const QJsonDocument document =
+                    QJsonDocument::fromJson(u.value.toString().toUtf8());
+                const QJsonArray urls = document.isArray() ? document.array() : QJsonArray{};
+                for (const QJsonValue& url : urls) {
+                    if (caps.mediaStunUrls.size() >= kMaxMediaStunUrls) {
+                        break;
+                    }
+                    if (url.isString() && isMediaStunUrl(url.toString())) {
+                        caps.mediaStunUrls.append(url.toString());
+                    }
+                }
+            }
+        } else if (u.name == "coreBuildInfo") {
             ++buildInfoEntries;
             if (buildInfoEntries == 1 && u.ordinal == 0 && u.kind == MirrorWireKind::Utf8
                 && u.value.typeId() == QMetaType::QString) {

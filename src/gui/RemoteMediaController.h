@@ -3,6 +3,12 @@
 // no-port-check: NereusSDR-original. Remote daemon R3 receive display wiring.
 //
 // Modification history (NereusSDR):
+//   2026-09-29: the direct media ladder: upgradeToDirectConnection (a
+//               direct-only replace while media rides the tunnel, on the
+//               PathRacer::kUpgradeRetryMs steps, never keyed or with VOX
+//               armed) and the no-packets fallback
+//               (kDirectMediaSilenceFallbackMs back to the tunnel).
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-25: iPhone app plan Task 36 (R-IOS-13): the microphone uplink.
 //               The window captures the microphone chosen in Audio > Devices
 //               through the capture helper and sends it on the media
@@ -425,6 +431,23 @@ public slots:
     /// no ready media, a Core without mediaReplaceVersion, one already
     /// under way, or this window keyed, VOX armed or the Core on the air.
     bool replaceConnection();
+    /// The direct media ladder: asks a Core with mediaDirectVersion for a
+    /// direct-only replacement (STUN and host candidates, no tunnel or
+    /// relay; the replace names "mediaDirectVersion": 1). False as for
+    /// replaceConnection, and also while this window is keyed, has VOX
+    /// armed or the Core is on the air. A refused one is not retried until
+    /// the next step of its schedule.
+    bool upgradeToDirectConnection();
+    /// The direct media ladder: the delay of the next direct-only replace
+    /// armed while media rides the tunnel (a PathRacer::kUpgradeRetryMs
+    /// step), or -1 when none is armed.
+    int directUpgradeDelayMs() const;
+    /// The direct media ladder: one step of the direct-only schedule (what
+    /// its timer runs; public so tests drive it without waiting).
+    void runDirectUpgradeStep();
+    /// The direct media ladder: the no-packets fallback's check (what the
+    /// stall timer runs; public so tests drive it with an injected clock).
+    void checkMediaSilence();
 
 public:
     /// iPhone app plan Task 29 fix wave (review Important 1): media follows
@@ -443,6 +466,11 @@ public:
     /// (recoveryRequested), rather than after ICE's 30 s consent check.
     static constexpr int kMediaStallMs = 3000;
     static constexpr int kMaxReplaceRearms = 3;
+    /// The direct media ladder: on a direct path (not the tunnel or a
+    /// relay), no audio or display packet for this long while control still
+    /// runs moves media back to a connection that includes the tunnel (the
+    /// normal replace), and the direct-only schedule starts over.
+    static constexpr int kDirectMediaSilenceFallbackMs = 3000;
     bool replacePending() const;
     /// iPhone app plan Task 29: the media connection's id now, and whether
     /// a replacement is under way (for the window's diagnostics and tests).
@@ -567,6 +595,8 @@ private:
     void receiveReplacementControl(const QJsonObject& payload);
     void promoteReplacement();
     void dropReplacement(const QString& why);
+    bool startReplacement(bool direct);
+    void updateDirectUpgrade(bool viaTunnel);
     void markReplacePending();
     void tryPendingReplace();
     std::optional<IceConfiguration> mediaIceConfiguration();

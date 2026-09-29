@@ -78,6 +78,9 @@
 //   2026-09-27: Task 29 step 2b (R-IOS-16): the candidate source factory,
 //               one source per connection and lane, gated on the relay.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29: the direct media ladder: setStunServer, so a media
+//               connection's own settings carry the Core's STUN server.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/RendezvousWire.h"
@@ -273,6 +276,9 @@ public:
     bool mediaRouting() const { return m_mediaRouting; }
 
     std::optional<IceServerAddress> stunServer() const { return m_stun; }
+    /// The direct media ladder: the STUN server a media connection gathers
+    /// its server-reflexive candidate from (none: host candidates only).
+    void setStunServer(std::optional<IceServerAddress> stun) { m_stun = std::move(stun); }
     QList<IceRelayServer> relayServers() const { return m_relays; }
     bool relayAllowed() const { return m_relayAllowed; }
     /// When the relay credentials arrived: gathering may start.

@@ -10,6 +10,9 @@
 //   2026-09-27: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-29: the direct media ladder: iceFor with the Core's STUN
+//               server, and directIceFor. J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MediaTunnel.h"
@@ -101,13 +104,24 @@ std::shared_ptr<MediaTunnel> MediaTunnel::create(SessionTransport* transport)
     return std::shared_ptr<MediaTunnel>(tunnel, [](MediaTunnel* gone) { gone->deleteLater(); });
 }
 
-IceConfiguration MediaTunnel::iceFor(std::shared_ptr<MediaTunnel> tunnel)
+IceConfiguration MediaTunnel::directIceFor(std::optional<IceServerAddress> stun)
 {
-    // No STUN, and no relay (so none is gathered or taken): host candidates
-    // and the tunnel.
+    // No relay (so none is gathered or taken) and no candidate source: host
+    // candidates and the STUN server's reflexive one only.
     IceConfiguration ice = IceConfiguration::throughRendezvous(
         {}, /*relayAllowed=*/false, IceConfiguration::localAddressFamilies(), HostFamilies{});
     ice.setRelay(std::nullopt, 1);
+    ice.setStunServer(std::move(stun));
+    ice.setMediaRouting(false);
+    return ice;
+}
+
+IceConfiguration MediaTunnel::iceFor(std::shared_ptr<MediaTunnel> tunnel,
+                                     std::optional<IceServerAddress> stun)
+{
+    // The direct media ladder: host candidates, the STUN server's reflexive
+    // one when known, and the tunnel last; no relay.
+    IceConfiguration ice = directIceFor(std::move(stun));
     ice.setCandidateSourceFactory(
         [tunnel](int lane, const QString& connectionId,
                  bool) -> std::shared_ptr<IceConfiguration::CandidateSource> {

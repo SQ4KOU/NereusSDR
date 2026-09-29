@@ -4,6 +4,11 @@
 // no-port-check: NereusSDR-original. See DaemonMediaController.h.
 //
 // Modification history (NereusSDR):
+//   2026-09-29: the direct media ladder: a replace may carry
+//               "mediaDirectVersion": 1 (STUN and host candidates, no
+//               tunnel or relay); the older relay-leg refusal judges the
+//               connection in use. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 //   2026-09-29: iPhone app plan Task 23 (R-IOS-09, audioQualityVersion 1):
 //               a device's own Opus bitrate. J.J. Boyd (KG4VCF), AI-assisted
 //               via Anthropic Claude Code.
@@ -1725,7 +1730,14 @@ bool DaemonMediaController::handleStart(const QJsonObject& control)
     // Task 29 step 2b: over the media tunnel when the window declared it.
     m_startTunnel = declaresMediaTunnel;
     m_startRelayRouting = declaresRelayRouting;
-    peer->setIceConfiguration(mediaIceConfiguration());
+    {
+        const auto startIce = mediaIceConfiguration();
+        // Direct media ladder: what a later replacement judges an older
+        // relay leg by is how the connection in use was made.
+        m_currentRouted = startIce && startIce->mediaRouting();
+        m_replacementRouted = false;
+        peer->setIceConfiguration(startIce);
+    }
     if (!peer->start(IMediaTransport::Role::Offerer, connectionId,
                      m_audioTargetBitrate, offerLossless, declaresReceiverAudio,
                      declaresHeadphonesMix, declaresRemoteTx, declaresIq)) {
@@ -1939,9 +1951,27 @@ std::optional<IceConfiguration> DaemonMediaController::mediaIceConfiguration()
 
 bool DaemonMediaController::handleReplace(const QJsonObject& control)
 {
-    if (!m_server || !m_server->mediaReplaceAvailable(m_epoch)
-        || !exactKeys(control, {"op", "connectionId", "replaces"})
-        || !canonicalConnectionId(control.value(QStringLiteral("connectionId")))
+    if (!m_server || !m_server->mediaReplaceAvailable(m_epoch)) {
+        return false;
+    }
+    // Direct media ladder: a device the Core told mediaDirectVersion 1 may
+    // add "mediaDirectVersion": 1 to ask for a replacement without the
+    // tunnel or a relay (STUN and host candidates only). Every other shape
+    // stays the exact three fields.
+    const bool direct = control.contains(QStringLiteral("mediaDirectVersion"));
+    if (direct) {
+        quint32 version = 0;
+        if (!exactKeys(control, {"op", "connectionId", "replaces", "mediaDirectVersion"})
+            || !m_server->mediaDirectAvailable(m_epoch)
+            || !exactUnsigned(control.value(QStringLiteral("mediaDirectVersion")), version,
+                              /*nonzero=*/true)
+            || version != 1) {
+            return false;
+        }
+    } else if (!exactKeys(control, {"op", "connectionId", "replaces"})) {
+        return false;
+    }
+    if (!canonicalConnectionId(control.value(QStringLiteral("connectionId")))
         || !canonicalConnectionId(control.value(QStringLiteral("replaces")))) {
         return false;
     }
@@ -1956,9 +1986,18 @@ bool DaemonMediaController::handleReplace(const QJsonObject& control)
         return refuse(QStringLiteral(
             "The Core did not move audio and display: that connection is not the current one."));
     }
-    if (!m_startRelayRouting) {
+    std::optional<IceConfiguration> nextIce;
+    if (direct) {
+        nextIce = m_server->mediaDirectIceConfiguration();
+    } else {
+        nextIce = mediaIceConfiguration();
+    }
+    // An older relay leg (a connection made without media routing that runs
+    // through the loopback shim) cannot move to a connection that does not
+    // route media either. Judged by the connection in use, not by what the
+    // media start declared: a tunnel start routes media over the tunnel.
+    if (!m_currentRouted) {
         const auto path = m_peer->selectedPath();
-        const auto nextIce = mediaIceConfiguration();
         if (path && path->viaLoopbackShim() && (!nextIce || !nextIce->mediaRouting())) {
             return refuse(QStringLiteral(
                 "This older relay media path cannot move while it is still in use."));
@@ -2026,7 +2065,8 @@ bool DaemonMediaController::handleReplace(const QJsonObject& control)
             m_micReceiver->submit(rewriteRtpSsrc(packet, m_micSsrcRewrite));
         }
     });
-    peer->setIceConfiguration(mediaIceConfiguration());
+    m_replacementRouted = nextIce && nextIce->mediaRouting();
+    peer->setIceConfiguration(nextIce);
     if (!peer->start(IMediaTransport::Role::Offerer, connectionId, m_audioTargetBitrate,
                      m_startOfferedLossless, m_receiverAudioNegotiated,
                      m_headphonesMixNegotiated, m_startMicLine, m_iqNegotiated)) {
@@ -2106,6 +2146,7 @@ void DaemonMediaController::finishReplacement()
     m_peer = std::move(m_replacement);
     m_replacementId.clear();
     m_replacementReady = false;
+    m_currentRouted = std::exchange(m_replacementRouted, false);
     MediaPeer* const peer = m_peer.get();
     const QString connectionId = peer->connectionId();
     wireCurrentPeer(peer, connectionId);

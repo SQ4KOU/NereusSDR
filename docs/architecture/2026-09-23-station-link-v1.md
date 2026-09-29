@@ -862,6 +862,15 @@ Core holds transmit off. A peer that declares it at minor 11 is sent
 for, with neither, and shows its general transmit inhibit wording. The
 station does not declare it; the desktop's remote window does.
 
+**`mediaDirect` 1** (the direct media ladder): the client moves media off
+the media tunnel onto a direct connection. A peer with media that declares
+it at minor 11 is sent `mediaDirectVersion` and `mediaStunUrls` (section
+6.3), and the Core takes the `mediaDirectVersion` field of the media
+`replace` operation (the remote media control document, "Replacing the
+media connection"); a peer that does not sees exactly the wire it was built
+for, with neither, and its `replace` keeps its three fields. The station
+does not declare it; the desktop's remote window does.
+
 **`sessionHolder` 1** (iPhone app plan Task 71; the several-devices
 design, ruling 10.1): the Core admits up to four devices at once (section
 5.1). A client declares it only together with `deviceAuth` 1 or later, and
@@ -1030,6 +1039,7 @@ change shows as surface drift and as a change to this table.
 | `paProfileVersion` | 1 |
 | `radeStatusVersion` | 1 |
 | `txInhibitReasonVersion` | 1 |
+| `mediaDirectVersion` | 1 |
 
 <!-- /surface -->
 
@@ -1931,6 +1941,22 @@ new `capabilities` when only the refusal changes (for example from
 "Transmit is changing hands." to "<holder> has the transmitter."). An older window that reads the flag without
 declaring `remoteTx` therefore never sees it true.
 
+**The direct media ladder.** A client with media at agreed minor 11 that
+declared `mediaDirect` 1 (section 6.1) is sent two more entries, after
+`coreBuildInfo` (after the last entry before it when that is absent):
+`mediaDirectVersion`, an `i64`, 1 on every Core that has it, and
+`mediaStunUrls`, a `utf8` compact JSON array of the Core's STUN servers
+(the ones its rendezvous gave it; `[]` when it has none). Only `stun:` and
+`stuns:` URLs ever appear: never a TURN server, a credential or a token (a
+URL carrying `@` or `?` is dropped). The Core sends `capabilities` again
+when the list changes. A client uses the list for the ICE of its first
+media connection and of a direct replace, falls back to the last STUN
+server its rendezvous gave it when the list is empty or absent, and never
+stores it. At `mediaDirectVersion` 1 the Core takes the media `replace`
+operation with `mediaDirectVersion` 1: a direct-only connection that
+gathers STUN and host candidates and neither the media tunnel nor the
+relay. A peer that did not declare the feature is sent neither entry.
+
 **Core executable identity.** A client at agreed minor 11 may declare
 `coreBuildInfo` 1. After authentication, a Core with a known product version
 appends one optional `coreBuildInfo` utf8 capability after all existing
@@ -2150,6 +2176,8 @@ older window sees only the values it was built for.
 | 96 | `radeStatusVersion` | `i64` |
 | 97 | `txInhibitReasonVersion` | `i64` |
 | 98 | `coreBuildInfo` | `utf8` |
+| 99 | `mediaDirectVersion` | `i64` |
+| 100 | `mediaStunUrls` | `utf8` |
 
 <!-- /surface -->
 
@@ -5785,7 +5813,7 @@ Client to station:
 | `keyframe` | `remoteMediaVersion` | `connectionId`, `contextGeneration`, `endpointId`, `op` | none | none |
 | `monitor-audio` | `txMonitorAudioVersion` | `connectionId`, `op`, `revision`, `route` | none | none |
 | `receiver-audio` | `receiverAudioVersion` | `connectionId`, `enabled`, `op`, `profile`, `revision`, `sliceId` | none | none |
-| `replace` | `mediaReplaceVersion` | `connectionId`, `op`, `replaces` | none | none |
+| `replace` | `mediaReplaceVersion` | `connectionId`, `op`, `replaces` | `mediaDirectVersion` with mediaDirectVersion | none |
 | `start` | `remoteMediaVersion` | `connectionId`, `op` | `audioProfileVersion` with audioProfileVersion; `headphonesMixVersion` with headphonesMixVersion; `mediaRelayRoutingVersion` with mediaRelayRoutingVersion; `mediaTunnelVersion` with mediaTunnelVersion; `miniDisplayVersion` with miniDisplayVersion; `receiverAudioVersion` with receiverAudioVersion; `remoteIqVersion` with remoteIqVersion; `remoteTxVersion` with remoteTxVersion; `txMonitorAudioVersion` with txMonitorAudioVersion | none |
 | `subscribe` | `remoteMediaVersion` | `centreHz`, `connectionId`, `endpointId`, `fftSize`, `fps`, `framesPerLine`, `maxDbm`, `minDbm`, `op`, `pixels`, `revision`, `sliceId`, `spanHz`, `tier`, `trace`, `waterfall`, `wideSpanFactor`, `windowType` | `activePeakHold` with displayExtrasVersion; `averageTimeMs` with displayExtrasVersion; `calibrationOffsetDb` with displayExtrasVersion; `decimation` with spectrumGrantVersion; `displayRole` with miniDisplayVersion; `extendedView` with remoteWidebandDisplayVersion; `noiseFloor` with displayExtrasVersion; `normalize` with displayExtrasVersion; `peakBlobs` with displayExtrasVersion; `waterfallAverageTimeMs` with displayExtrasVersion; `waterfallLevels` with displayExtrasVersion | `activePeakHold`: {enabled, fallDbPerSec, holdMs, onTx}; `noiseFloor`: {enabled, fastAttack, shiftDb}; `peakBlobs`: {count, fallDbPerSec, holdMs, insideOnly}; `trace`: {averageAlpha, averageMode, detector}; `waterfall`: {averageAlpha, averageMode, detector}; `waterfallLevels`: {highDbm, lowDbm, mode, offsetDb} |
 | `unsubscribe` | `remoteMediaVersion` | `connectionId`, `endpointId`, `op` | `revision` with remoteDisplayBudgetVersion | none |

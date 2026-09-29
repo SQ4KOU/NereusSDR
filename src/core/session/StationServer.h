@@ -181,6 +181,10 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29: the direct media ladder: the Core's STUN server for media
+//               (setMediaStun, mediaStunUrls) and the direct-only replace
+//               (mediaDirectVersion). J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 //   2026-09-29: The Core's TCI server settings (JJ's ruling of 2026-09-28,
 //               stationTciSettingsVersion 1). J.J. Boyd (KG4VCF), AI-assisted
 //               via Anthropic Claude Code.
@@ -1202,6 +1206,25 @@ public:
     /// minor 11 and was told mediaReplaceVersion 1, so it may send
     /// `replace`.
     bool mediaReplaceAvailable(quint64 epoch) const;
+    /// The direct media ladder (link section "Direct media"): the STUN
+    /// servers the rendezvous hello gave this Core (only `stun:` and
+    /// `stuns:` URLs are kept; never TURN, credentials or tokens), and
+    /// what their names resolved to. Every media connection gathers from
+    /// the chosen one, the tunnel's included. A change is told again to
+    /// every session that was told mediaStunUrls.
+    void setMediaStun(const QStringList& urls, const HostFamilies& families = {});
+    QStringList mediaStunUrls() const { return m_mediaStunUrls; }
+    /// The STUN server a media connection uses (none: host candidates).
+    std::optional<IceServerAddress> mediaStunServer() const;
+    /// 1 on every Core of this build: told, with mediaStunUrls, to a peer
+    /// with media whose hello declared `mediaDirect` 1.
+    int mediaDirectVersion() const { return 1; }
+    /// The session with media `epoch` was told mediaDirectVersion 1, so a
+    /// `replace` may carry `mediaDirectVersion` 1.
+    bool mediaDirectAvailable(quint64 epoch) const;
+    /// A direct-only replacement's ICE settings: host candidates and the
+    /// STUN server, no relay and no tunnel.
+    IceConfiguration mediaDirectIceConfiguration() const;
     /// iPhone app plan Task 29: whether this Core allows the relay
     /// (nereusd.conf `relay`), told to every device as `relayAllowed`.
     /// Default true, the setting's default; DaemonApp sets it.
@@ -2455,6 +2478,9 @@ private:
     int m_authDeadlineMs = kDefaultAuthDeadlineMs;
     // iPhone app plan Task 29.
     bool m_relayAllowed = true;
+    // The direct media ladder: the rendezvous hello's STUN servers.
+    QStringList m_mediaStunUrls;
+    HostFamilies m_mediaStunFamilies;
     int m_pathTicketLifetimeMs = kPathTicketLifetimeMs;
     int m_pathSwitchDeadlineMs = 0;
     int m_sessionsMoved = 0;

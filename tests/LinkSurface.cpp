@@ -12,6 +12,12 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29  J.J. Boyd / KG4VCF  The direct media ladder: the capture
+//                                    declares mediaDirect, so
+//                                    mediaDirectVersion and mediaStunUrls
+//                                    are captured, and the GUI's replace
+//                                    may carry mediaDirectVersion.
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-29  J.J. Boyd / KG4VCF  RADE status: the capture declares
 //                                    radeStatus, so radeStatusVersion and
 //                                    the slice's radeSynced and
@@ -626,7 +632,10 @@ std::optional<QList<QByteArray>> liveSessionWire(
                                   {"paProfiles", 1},
                                   // RADE status: each slice's radeSynced
                                   // and radeFreqOffsetHz.
-                                  {"radeStatus", 1}})));
+                                  {"radeStatus", 1},
+                                  // The direct media ladder:
+                                  // mediaDirectVersion and mediaStunUrls.
+                                  {"mediaDirect", 1}})));
     clientEnd->sendText(SessionMessages::encode(SessionMessages::authRequest({}, block)));
 
     // The loopback delivers on later event-loop turns, as a socket would.
@@ -692,6 +701,10 @@ QJsonArray captureCapabilities()
     caps.radeStatusVersion = 1;
     // HL2 port part 2: sent to a peer that declared txInhibitReason.
     caps.txInhibitReasonVersion = 1;
+    // The direct media ladder: sent to a peer with media that declared
+    // mediaDirect.
+    caps.mediaDirectVersion = 1;
+    caps.mediaStunUrls = {QStringLiteral("stun:stun.example.test:3478")};
 
     // The values come from a live station with every feature a Core can
     // switch on: media, telemetry, an enforced display budget with its
@@ -709,6 +722,9 @@ QJsonArray captureCapabilities()
             server.setDisplayBudgetEnforcementEnabled(true);
             server.setDisplayBudgetLimits(DisplayBudgetLimits{1, 1, 1},
                                           DisplayBudgetReason::CoreBusy);
+            // The direct media ladder: the Core's STUN, as its rendezvous
+            // hello names it (a reserved example name, never a real one).
+            server.setMediaStun({QStringLiteral("stun:stun.example.test:3478")});
         },
         &error);
     QHash<QString, QJsonObject> live;
@@ -1270,9 +1286,13 @@ QJsonObject guiToCoreOps()
                declaredOp(QStringLiteral("audioClockVersion"),
                           peer + QStringList{QStringLiteral("id"), QStringLiteral("t0")}));
     // iPhone app plan Task 29: DaemonMediaController.cpp handleReplace.
+    // The direct media ladder: mediaDirectVersion 1 asks for the
+    // direct-only connection, only from a Core that sent mediaDirectVersion.
     ops.insert(QStringLiteral("replace"),
                declaredOp(QStringLiteral("mediaReplaceVersion"),
-                          peer + QStringList{QStringLiteral("replaces")}));
+                          peer + QStringList{QStringLiteral("replaces")}, {
+        {QStringLiteral("mediaDirectVersion"), {QStringLiteral("mediaDirectVersion")}},
+    }));
     return ops;
 }
 
