@@ -7,6 +7,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29 - RADE status: radeStatusVersion, after radioModelsVersion,
+//                only for a peer that declared radeStatus. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-08-08  J.J. Boyd / KG4VCF  Remote daemon R2 Task 18: capability
 //                                    descriptor codec. AI-assisted
 //                                    transformation via Anthropic Claude
@@ -393,6 +396,11 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
         if (radioModelsEntry) {
             updates.append(intEntry("radioModelsVersion", radioModelsVersion));
         }
+        // RADE status: each slice's radeSynced and radeFreqOffsetHz, only
+        // for a peer that declared radeStatus.
+        if (radeStatusVersion > 0) {
+            updates.append(intEntry("radeStatusVersion", radeStatusVersion));
+        }
     }
     if (coreBuildInfo) {
         const QByteArray json = coreBuildInfo->toJson();
@@ -627,7 +635,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                    || u.name == "band2mVersion"
                    || u.name == "diversityPatternVersion"
                    || u.name == "logCategoryListVersion"
-                   || u.name == "radioModelsVersion") {
+                   || u.name == "radioModelsVersion"
+                   || u.name == "radeStatusVersion") {
             // R-R3-47 / R-R3-22 / R-R3-48: sent in the same block as the
             // four above.
             caps.radioIdentityEntries = true;
@@ -657,6 +666,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                     caps.diversityPatternVersion = version;
                 } else if (u.name == "logCategoryListVersion") {
                     caps.logCategoryListVersion = version;
+                } else if (u.name == "radeStatusVersion") {
+                    caps.radeStatusVersion = version;
                 } else if (u.name == "radioModelsVersion") {
                     caps.radioModelsEntry = true;
                     caps.radioModelsVersion = version;

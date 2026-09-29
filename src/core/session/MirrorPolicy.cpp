@@ -6,6 +6,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29 - RADE status: SliceModel radeSynced and radeFreqOffsetHz
+//                 Outbound, gated on radeStatus (radeStatusVersion 1).
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-08-05  J.J. Boyd / KG4VCF  Remote daemon R2 Task 7: mirror
 //                                    direction table. AI-assisted
 //                                    transformation via Anthropic Claude
@@ -227,7 +230,7 @@ namespace {
 // WRITE. Listing them keeps the table total, so the guard can name a
 // newly added property instead of silently accepting it.
 const MirrorPolicy::Entry kEntries[] = {
-    // ---- SliceModel (151 entries) ----
+    // ---- SliceModel (153 entries) ----
     { "SliceModel", "frequency", MirrorDirection::Bidirectional },
     { "SliceModel", "dspMode", MirrorDirection::Bidirectional },
     { "SliceModel", "filterLow", MirrorDirection::Bidirectional },
@@ -426,6 +429,11 @@ const MirrorPolicy::Entry kEntries[] = {
     // Diversity dialog's sensitivity pattern, read-only; only to a peer that
     // declared diversityPattern (StationServer::fitPeerOnlyProperties).
     { "SliceModel", "diversityPattern", MirrorDirection::Outbound },
+    // RADE status (radeStatusVersion 1): the RADE decoder's sync and
+    // frequency offset, read-only; only to a peer that declared radeStatus
+    // (StationServer::fitPeerOnlyProperties).
+    { "SliceModel", "radeSynced", MirrorDirection::Outbound },
+    { "SliceModel", "radeFreqOffsetHz", MirrorDirection::Outbound },
 
     // ---- TransmitModel (87 entries) ----
     // iPhone app plan Task 35 (R-IOS-13): MOX and TUNE travel from the
@@ -1120,6 +1128,11 @@ const QList<MirrorPolicy::FeatureGate>& MirrorPolicy::featureGates()
         // categories with their labels, to a peer that declared
         // logCategoryList 1 (StationServer::fitPeerOnlyProperties).
         {"RadioModel", "logCategoryList", "logCategoryList", 1},
+        // RADE status (radeStatusVersion 1): each slice's RADE decoder
+        // sync and frequency offset, to a peer that declared radeStatus 1
+        // (StationServer::fitPeerOnlyProperties).
+        {"SliceModel", "radeSynced", "radeStatus", 1},
+        {"SliceModel", "radeFreqOffsetHz", "radeStatus", 1},
     };
     return gates;
 }

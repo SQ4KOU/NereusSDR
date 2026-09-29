@@ -32,6 +32,12 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29  J.J. Boyd / KG4VCF  RADE status: radeStatusVersion 1 and
+//                                    each slice's radeSynced and
+//                                    radeFreqOffsetHz only to a peer that
+//                                    declared radeStatus 1
+//                                    (fitPeerOnlyProperties). AI-assisted
+//                                    via Anthropic Claude Code.
 //   2026-08-08  J.J. Boyd / KG4VCF  Remote daemon R2 Task 18: the daemon
 //                                    half of the wss session. AI-assisted
 //                                    transformation via Anthropic Claude
@@ -1168,6 +1174,9 @@ constexpr PeerOnlyProperty kPeerOnlyProperties[] = {
     {"SliceModel", "slice:", true, "diversityPattern", "diversityPattern"},
     // The Support dialog's categories with labels (logCategoryListVersion 1).
     {"RadioModel", "radio", false, "logCategoryList", "logCategoryList"},
+    // The RADE decoder's sync and frequency offset (radeStatusVersion 1).
+    {"SliceModel", "slice:", true, "radeSynced", "radeStatus"},
+    {"SliceModel", "slice:", true, "radeFreqOffsetHz", "radeStatus"},
 };
 
 // Phone wire batch: record fields that go only to a peer at
@@ -10384,6 +10393,10 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
                 caps.radioModelsEntry = true;
                 caps.radioModelsVersion = stationRadiosVersion() >= 1 ? 1 : 0;
             }
+            // RADE status: each slice's radeSynced and radeFreqOffsetHz,
+            // for a peer that declared radeStatus 1.
+            caps.radeStatusVersion =
+                peerGetsFeatureProperties(transport, QByteArrayLiteral("radeStatus")) ? 1 : 0;
             if (peerDeclares(transport, QByteArrayLiteral("remoteTx"), 1)) {
                 caps.remoteTxEntry = true;
                 caps.remoteTxVersion = remoteTxVersion();

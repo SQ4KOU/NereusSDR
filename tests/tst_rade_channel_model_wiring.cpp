@@ -35,17 +35,27 @@
 //                 contract under test was established by the I5 plan
 //                 spec + the existing I1 RadeChannel signal surface.
 //                 AI tooling: Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  RADE status for the phone's VFO
+//                 flag: the slice's radeSynced and radeFreqOffsetHz follow
+//                 the channel, clear when the channel goes and when the
+//                 slice leaves RADE, are read-only and outbound, and go
+//                 only to a peer that declared radeStatus. AI tooling:
+//                 Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
 #include <QSignalSpy>
 
 #include "core/RadeChannel.h"
+#include "core/session/MirrorPolicy.h"
 #include "models/RadioModel.h"
 #include "models/RxDecodeModel.h"
 #include "models/SliceModel.h"
 
+#include <QMetaProperty>
+
 #include <cmath>
+#include <memory>
 
 using namespace NereusSDR;
 
@@ -66,6 +76,9 @@ public:
     }
     void emitSyncChangedForTest(bool synced) {
         emit syncChanged(synced);
+    }
+    void emitFreqOffsetChangedForTest(float hz) {
+        emit freqOffsetChanged(hz);
     }
     void emitRxTextDecodedForTest(const QString& callsign,
                                   const QString& grid) {
@@ -98,6 +111,12 @@ private slots:
     void wiringWithNullChannelIsNoOp();
     // Phase 3R K4: TX modem output plumbing.
     void txModemReadyEmissionDoesNotCrash();
+    // RADE status on the slice for the phone's VFO flag.
+    void sliceRadeSyncedFollowsChannel();
+    void sliceRadeSyncedClearsWhenChannelGoes();
+    void sliceRadeFreqOffsetFollowsChannel();
+    void sliceRadeSyncedClearsOnLeavingRade();
+    void radeStatusPropertiesAreReadOnlyAndGated();
 };
 
 void TestRadeChannelModelWiring::wireRadeChannelConnectsSnrToSlice()
@@ -287,6 +306,126 @@ void TestRadeChannelModelWiring::txModemReadyEmissionDoesNotCrash()
     // is in place.  The full I/Q route to RadioConnection::sendTxIq
     // lands at K-bench time.
     QVERIFY(true);
+}
+
+// The desktop flag shows the filled sync dot while the decoder reports
+// sync and the hollow one when it loses it (VfoWidget::setRadeSynced);
+// the slice carries the same decoder state for a remote flag.
+void TestRadeChannelModelWiring::sliceRadeSyncedFollowsChannel()
+{
+    RadioModel model;
+    const int sliceId = model.addSlice();
+    SliceModel* slice = model.sliceById(sliceId);
+    QVERIFY(slice != nullptr);
+    QCOMPARE(slice->radeSynced(), false);
+
+    TestableRadeChannel channel;
+    model.wireRadeChannel(sliceId, &channel, slice);
+    QSignalSpy spy(slice, &SliceModel::radeSyncedChanged);
+
+    channel.emitSyncChangedForTest(true);
+    QCOMPARE(slice->radeSynced(), true);
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(spy.at(0).at(0).toBool(), true);
+
+    channel.emitSyncChangedForTest(true);
+    QCOMPARE(spy.count(), 1);
+
+    channel.emitSyncChangedForTest(false);
+    QCOMPARE(slice->radeSynced(), false);
+    QCOMPARE(spy.count(), 2);
+    QCOMPARE(spy.at(1).at(0).toBool(), false);
+}
+
+// A new channel starts unsynced (RadeChannel::m_synced false) and reports
+// its own first lock, whatever the previous channel last said.
+void TestRadeChannelModelWiring::sliceRadeSyncedClearsWhenChannelGoes()
+{
+    RadioModel model;
+    const int sliceId = model.addSlice();
+    SliceModel* slice = model.sliceById(sliceId);
+    QVERIFY(slice != nullptr);
+
+    auto first = std::make_unique<TestableRadeChannel>();
+    model.wireRadeChannel(sliceId, first.get(), slice);
+    first->emitSyncChangedForTest(true);
+    QCOMPARE(slice->radeSynced(), true);
+
+    first.reset();
+    QCOMPARE(slice->radeSynced(), false);
+
+    TestableRadeChannel second;
+    model.wireRadeChannel(sliceId, &second, slice);
+    second.emitSyncChangedForTest(true);
+    QCOMPARE(slice->radeSynced(), true);
+}
+
+// The desktop flag appends the decoder's offset after the SNR
+// (VfoWidget::setRadeFreqOffset); the slice carries the same value in Hz,
+// sign included.
+void TestRadeChannelModelWiring::sliceRadeFreqOffsetFollowsChannel()
+{
+    RadioModel model;
+    const int sliceId = model.addSlice();
+    SliceModel* slice = model.sliceById(sliceId);
+    QVERIFY(slice != nullptr);
+    QCOMPARE(slice->radeFreqOffsetHz(), 0.0);
+
+    TestableRadeChannel channel;
+    model.wireRadeChannel(sliceId, &channel, slice);
+    QSignalSpy spy(slice, &SliceModel::radeFreqOffsetHzChanged);
+
+    channel.emitFreqOffsetChangedForTest(38.5f);
+    QCOMPARE(slice->radeFreqOffsetHz(), 38.5);
+    QCOMPARE(spy.count(), 1);
+
+    channel.emitFreqOffsetChangedForTest(38.5f);
+    QCOMPARE(spy.count(), 1);
+
+    channel.emitFreqOffsetChangedForTest(-12.25f);
+    QCOMPARE(slice->radeFreqOffsetHz(), -12.25);
+    QCOMPARE(spy.count(), 2);
+}
+
+// The desktop flag drops its RADE state when the slice leaves RADE
+// (VfoWidget::setRadeActive(false)); the RADE channel is destroyed on
+// the same change.
+void TestRadeChannelModelWiring::sliceRadeSyncedClearsOnLeavingRade()
+{
+    SliceModel slice(0);
+    slice.setDspMode(DSPMode::RADE_U);
+    slice.setRadeSynced(true);
+    QCOMPARE(slice.radeSynced(), true);
+
+    slice.setDspMode(DSPMode::RADE_L);
+    QCOMPARE(slice.radeSynced(), false);
+
+    slice.setRadeSynced(true);
+    slice.setDspMode(DSPMode::USB);
+    QCOMPARE(slice.radeSynced(), false);
+}
+
+void TestRadeChannelModelWiring::radeStatusPropertiesAreReadOnlyAndGated()
+{
+    const QMetaObject& meta = SliceModel::staticMetaObject;
+    for (const char* name : {"radeSynced", "radeFreqOffsetHz"}) {
+        const int index = meta.indexOfProperty(name);
+        QVERIFY2(index >= 0, name);
+        const QMetaProperty property = meta.property(index);
+        QVERIFY2(!property.isWritable(), name);
+        QVERIFY2(property.hasNotifySignal(), name);
+        QCOMPARE(MirrorPolicy::directionFor(QByteArrayLiteral("SliceModel"), name),
+                 MirrorDirection::Outbound);
+        QVERIFY2(MirrorPolicy::hasExplicitEntry(QByteArrayLiteral("SliceModel"), name), name);
+        const MirrorPolicy::FeatureGate* gate =
+            MirrorPolicy::featureGateFor(QByteArrayLiteral("SliceModel"), name);
+        QVERIFY2(gate != nullptr, name);
+        QCOMPARE(QByteArray(gate->feature), QByteArrayLiteral("radeStatus"));
+    }
+    // Declared last, after diversityPattern, so every earlier property
+    // keeps its wire ordinal.
+    QVERIFY(meta.indexOfProperty("radeSynced") > meta.indexOfProperty("diversityPattern"));
+    QVERIFY(meta.indexOfProperty("radeFreqOffsetHz") > meta.indexOfProperty("radeSynced"));
 }
 
 QTEST_GUILESS_MAIN(TestRadeChannelModelWiring)

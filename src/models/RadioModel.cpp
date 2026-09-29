@@ -14,6 +14,10 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29 - RADE status on the slice: wireRadeChannel sets the slice's
+//                 radeSynced and radeFreqOffsetHz from its channel, and
+//                 clears radeSynced when the channel goes. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-28 - RADE end-of-over callsigns: an operator's release in RADE
 //                 sends FreeDV's end-of-over frame with the station callsign
 //                 before the radio unkeys (startRadeEndOfOverTail,
@@ -13116,6 +13120,21 @@ void RadioModel::wireRadeChannel(int sliceId, RadeChannel* channel,
             [this, sliceId](float hz) {
                 emit radeFreqOffsetChanged(sliceId, hz);
             });
+
+    // RADE status for a remote VFO flag (radeStatusVersion 1): the slice
+    // carries the sync and offset this channel reports, the readings the
+    // desktop flag shows. Taken from the channel itself rather than from
+    // onRadeSyncChanged, whose per-slice memory outlives the channel: a
+    // replacement channel starts unsynced and reports its own first lock.
+    // The slice is the context, so a removed slice drops the connections.
+    connect(channel, &RadeChannel::syncChanged, slice,
+            &SliceModel::setRadeSynced);
+    connect(channel, &RadeChannel::freqOffsetChanged, slice,
+            [slice](float hz) {
+                slice->setRadeFreqOffsetHz(static_cast<double>(hz));
+            });
+    connect(channel, &QObject::destroyed, slice,
+            [slice]() { slice->setRadeSynced(false); });
 
     // Return decoded RADE speech through RxDspWorker so AudioEngine has one
     // serialized producer for ordinary and RADE RX blocks. The QPointers and

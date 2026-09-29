@@ -59,6 +59,8 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29 - RADE status: radeStatusVersion. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 //   2026-08-08  J.J. Boyd / KG4VCF  Remote daemon R2 Task 18: capability
 //                                    descriptor. AI-assisted
 //                                    transformation via Anthropic Claude
@@ -304,6 +306,12 @@ struct StationCapabilities {
     /// and records are today's.
     bool radioModelsEntry = false;
     int radioModelsVersion = 0;
+    /// RADE status: 1 means every slice carries `radeSynced` and
+    /// `radeFreqOffsetHz`, the RADE decoder's sync and frequency offset the
+    /// VFO flag shows. Sent after radioModelsVersion, only to a peer at
+    /// minor 11 whose hello declared radeStatus 1, on a Core with a radio
+    /// model; any other peer's capabilities and slices are today's.
+    int radeStatusVersion = 0;
     /// R-R3-47 / R-R3-22: 1 means the Core mirrors its Power Genius XL
     /// status as the read-only `amplifier` object. Sent after
     /// radioHardwareVersion in the same minor-11 block. 0: a window shows
