@@ -27,6 +27,12 @@
 //                 moved, so the Core applies the TX EQ curve itself.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //                 Code.
+//   2026-09-28 - R-IOS-13 / R-R3-49: loadFromJson reads through
+//                 ParaEqCurve::readCurveJson, the parser the Core uses:
+//                 a missing field is Json.NET's default (0 or false) as in
+//                 Thetis, and a point that is not an object fails the
+//                 load. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 
 /*  ucParametricEq.cs
@@ -2548,34 +2554,15 @@ QString ParametricEqWidget::saveToJson() const {
 // drag.  We match that behavior verbatim -- callers wanting drag-safe loads
 // must gate at the call site.
 bool ParametricEqWidget::loadFromJson(const QString& json) {
-    if (json.trimmed().isEmpty()) return false;
-
-    QJsonParseError perr;
-    QJsonDocument   doc = QJsonDocument::fromJson(json.toUtf8(), &perr);
-    if (perr.error != QJsonParseError::NoError) return false;
-    if (!doc.isObject()) return false;
-
-    QJsonObject root = doc.object();
-    if (!root.contains(QStringLiteral("points"))) return false;
-    QJsonValue ptsVal = root.value(QStringLiteral("points"));
-    if (!ptsVal.isArray()) return false;
-    QJsonArray pts = ptsVal.toArray();
-    if (pts.size() < 2) return false;
-
-    int    bandCount = root.value(QStringLiteral("band_count")).toInt(0);
-    if (bandCount < 2) bandCount = pts.size();
-
-    if (bandCount < 2)         return false;
-    if (bandCount > 256)       return false;
-    if (bandCount != pts.size()) return false;
-
-    double newFreqMin = root.value(QStringLiteral("frequency_min_hz")).toDouble(
-                         std::numeric_limits<double>::quiet_NaN());
-    double newFreqMax = root.value(QStringLiteral("frequency_max_hz")).toDouble(
-                         std::numeric_limits<double>::quiet_NaN());
-    if (std::isnan(newFreqMin) || std::isinf(newFreqMin)) return false;
-    if (std::isnan(newFreqMax) || std::isinf(newFreqMax)) return false;
-    if (newFreqMax <= newFreqMin) return false;
+    // R-IOS-13 / R-R3-49: the deserialise-and-check block (cs:1490-1515)
+    // is ParaEqCurve::readCurveJson, the parser the Core uses too, so the
+    // two never disagree about which values load or what a missing field
+    // means (Json.NET's default, 0 or false; cs:220-252).
+    ParaEqCurve::CurveJson state;
+    if (!ParaEqCurve::readCurveJson(json, state)) return false;
+    const int bandCount = state.bandCount;
+    const double newFreqMin = state.frequencyMinHz;
+    const double newFreqMax = state.frequencyMaxHz;
 
     bool anyChanged = false;
 
@@ -2595,9 +2582,8 @@ bool ParametricEqWidget::loadFromJson(const QString& json) {
     double oldFreqMin = m_frequencyMinHz;
     double oldFreqMax = m_frequencyMaxHz;
 
-    m_parametricEq    = root.value(QStringLiteral("parametric_eq")).toBool(false);
-    m_globalGainDb    = clamp(root.value(QStringLiteral("global_gain_db")).toDouble(0.0),
-                              m_dbMin, m_dbMax);
+    m_parametricEq    = state.parametricEq;
+    m_globalGainDb    = clamp(state.globalGainDb, m_dbMin, m_dbMax);
     m_frequencyMinHz  = newFreqMin;
     m_frequencyMaxHz  = newFreqMax;
 
@@ -2608,17 +2594,15 @@ bool ParametricEqWidget::loadFromJson(const QString& json) {
 
     for (int i = 0; i < m_points.size(); ++i) {
         EqPoint& p = m_points[i];
-        if (i >= pts.size()) break;
-        if (!pts.at(i).isObject()) continue;
-        QJsonObject jp = pts.at(i).toObject();
+        const auto k = static_cast<std::size_t>(i);
 
         double oldF = p.frequencyHz;
         double oldG = p.gainDb;
         double oldQ = p.q;
 
-        double jpFreq = jp.value(QStringLiteral("frequency_hz")).toDouble(p.frequencyHz);
-        double jpGain = jp.value(QStringLiteral("gain_db")).toDouble(p.gainDb);
-        double jpQ    = jp.value(QStringLiteral("q")).toDouble(p.q);
+        const double jpFreq = state.f[k];
+        const double jpGain = state.g[k];
+        const double jpQ    = state.q[k];
 
         if (isFrequencyLockedIndex(i)) {
             p.frequencyHz = getLockedFrequencyForIndex(i);

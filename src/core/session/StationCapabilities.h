@@ -159,6 +159,9 @@
 //   2026-09-27 - R-IOS-13 / R-R3-49: txModMonitorVersion, the AM Mod
 //                Monitor's readings. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-28 - R-IOS-13 / R-R3-49: txEqCurveVersion, the read-only TX
+//                EQ curve on `transmit`. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -238,6 +241,12 @@ struct StationCapabilities {
     /// capabilities are today's.
     bool vaxEntry = false;
     int vaxVersion = 0;
+    /// R-IOS-13 / R-R3-49: 1 means `transmit` carries txEqCurve, the TX EQ
+    /// parametric curve the Core derives from txEqParaEqData as documented,
+    /// read-only JSON. Sent at minor 11 only to a peer whose hello declared
+    /// txEqCurve 1, after radioAntennaRowsVersion; that peer alone gets the
+    /// property. 0 (absent): the peer sees today's wire.
+    int txEqCurveVersion = 0;
     /// R-R3-47 / R-R3-22: 1 means the Core mirrors its Power Genius XL
     /// status as the read-only `amplifier` object. Sent after
     /// radioHardwareVersion in the same minor-11 block. 0: a window shows

@@ -426,6 +426,11 @@
             "value": 1
         },
         {
+            "kind": "i64",
+            "name": "txEqCurveVersion",
+            "value": 1
+        },
+        {
             "kind": "utf8",
             "name": "coreBuildInfo",
             "value": "{\"productVersion\":\"0.5.2\",\"sourceTag\":\"link-surface@fixture\"}"
@@ -7127,6 +7132,12 @@
                     "kind": "bool",
                     "name": "micMuted",
                     "ordinal": 86
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "txEqCurve",
+                    "ordinal": 87
                 }
             ]
         },

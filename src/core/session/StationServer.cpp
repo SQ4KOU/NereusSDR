@@ -631,6 +631,12 @@
 //               times a second while a peer subscribes. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-28: R-IOS-13 / R-R3-49: txEqCurveVersion 1 and transmit's
+//               read-only txEqCurve (the TX EQ parametric curve derived
+//               from txEqParaEqData) only to a peer at minor 11 whose hello
+//               declared txEqCurve 1; every other peer's schema, snapshot
+//               and deltas stay as they were. J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -6436,7 +6442,10 @@ QList<SessionPropertyResult> StationServer::applyPropertyWrite(
         // A write's side effects can change nnrLimit (turning NNR off or
         // choosing a model clears it), so they are fitted to this peer too.
         SessionMessage delta = SessionMessages::delta(message.objectKey, corrections);
-        if (fitNnrLimitToPeer(delta, m_peers.value(transport).agreedMinor)) {
+        // R-IOS-13 / R-R3-49: a txEqParaEqData write moves txEqCurve too,
+        // which only a peer that declared it is sent.
+        if (fitNnrLimitToPeer(delta, m_peers.value(transport).agreedMinor)
+            && fitTxEqCurveToPeer(transport, delta)) {
             send(transport, delta);
         }
     }
@@ -7080,7 +7089,7 @@ void StationServer::sendToPeer(SessionTransport* transport, const SessionMessage
     }
     // iPhone app Task 14: the pairing code only to a connection signed in
     // with a paired device's key.
-    const SessionMessage message = withPairingCodeFor(transport, original);
+    SessionMessage message = withPairingCodeFor(transport, original);
     // iPhone app Task 73 (ruling 5.6): a device's own slices, and markers
     // for the others to a view with the feature.
     if (!ownershipAllows(transport, message)) {
@@ -7090,6 +7099,11 @@ void StationServer::sendToPeer(SessionTransport* transport, const SessionMessage
     case SessionMessageKind::Schema:
     case SessionMessageKind::ObjectCreate:
     case SessionMessageKind::Delta: {
+        // R-IOS-13 / R-R3-49: transmit's txEqCurve only to a peer that
+        // declared it; every other peer gets today's transmit.
+        if (!fitTxEqCurveToPeer(transport, message)) {
+            return;
+        }
         const auto peer = m_peers.constFind(transport);
         const quint16 minor = peer != m_peers.cend() ? peer->agreedMinor
                                                      : kSessionProtocolMinor;
@@ -7213,6 +7227,50 @@ void StationServer::sendToPeer(SessionTransport* transport, const SessionMessage
     default:
         transport->sendText(SessionMessages::encode(message));
         return;
+    }
+}
+
+// ── The read-only TX EQ curve (R-IOS-13, R-R3-49) ───────────────────────
+
+bool StationServer::peerGetsTxEqCurve(SessionTransport* transport) const
+{
+    const auto peer = m_peers.constFind(transport);
+    return peer != m_peers.cend() && !m_radioModel.isNull()
+        && peer->agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && peerDeclares(transport, QByteArrayLiteral("txEqCurve"), 1);
+}
+
+bool StationServer::fitTxEqCurveToPeer(SessionTransport* transport,
+                                       SessionMessage& message) const
+{
+    static const QByteArray kCurve = QByteArrayLiteral("txEqCurve");
+    const bool transmit = message.kind == SessionMessageKind::Schema
+        ? message.className == "TransmitModel"
+        : message.objectKey == QByteArray(kTransmitKey);
+    if (!transmit || peerGetsTxEqCurve(transport)) {
+        return true;
+    }
+    switch (message.kind) {
+    case SessionMessageKind::Schema:
+        message.fields.removeIf([](const SessionSchemaField& field) {
+            return field.name == kCurve;
+        });
+        return true;
+    case SessionMessageKind::ObjectCreate:
+        message.updates.removeIf([](const MirrorUpdate& update) {
+            return update.name == kCurve;
+        });
+        return true;
+    case SessionMessageKind::Delta: {
+        const qsizetype before = message.updates.size();
+        message.updates.removeIf([](const MirrorUpdate& update) {
+            return update.name == kCurve;
+        });
+        // A delta that carried only the curve is not sent at all.
+        return before == 0 || !message.updates.isEmpty();
+    }
+    default:
+        return true;
     }
 }
 
@@ -9726,6 +9784,9 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
                 && m_radioModel->alexAntennaFacade()->isBound()
                 && !currentMac.isEmpty()
                 && AppSettings::normalizedRadioMac(currentMac) == currentMac ? 1 : 0;
+            // R-IOS-13 / R-R3-49: transmit's read-only txEqCurve, to a peer
+            // that declared txEqCurve 1.
+            caps.txEqCurveVersion = peerGetsTxEqCurve(transport) ? 1 : 0;
             // R-R3-47 / R-R3-22: the Tuner Genius's own settings.
             caps.remoteTgxlControlVersion = tgxlControlVersion();
             // iPhone app Task 12 (R-IOS-08): device sign-in by key, last.

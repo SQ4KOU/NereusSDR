@@ -48,6 +48,13 @@
 //  17. closeEvent hides the dialog instead of destroying it
 //      (keeps the singleton alive for fast re-show).
 //
+// R-IOS-13 / R-R3-49 (2026-09-28, J.J. Boyd (KG4VCF), AI-assisted via
+// Anthropic Claude Code):
+//  18. transmit.txEqCurve equals the parametric panel for every factory
+//      profile, a custom curve, an out-of-order curve and odd values
+//      (unrounded, missing fields, out of range); an unreadable
+//      value is "unavailable" while the panel shows the Core's fallback.
+//
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -55,6 +62,9 @@
 #include <QButtonGroup>
 #include <QCheckBox>
 #include <QCloseEvent>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QComboBox>
 #include <QPushButton>
 #include <QRadioButton>
@@ -64,6 +74,8 @@
 #include <QStackedWidget>
 
 #include "core/AppSettings.h"
+#include "core/MicProfileManager.h"
+#include "core/ParaEqCurve.h"
 #include "core/ParaEqEnvelope.h"
 #include "gui/applets/TxEqDialog.h"
 #include "gui/widgets/ParametricEqWidget.h"
@@ -71,6 +83,56 @@
 #include "models/TransmitModel.h"
 
 using namespace NereusSDR;
+
+namespace {
+
+// A custom five-point curve with Q factors off, as the dialog's widget
+// saves one (values already at the panel's rounding).
+QString customCurveJson()
+{
+    QJsonArray pts;
+    const double f[] = {80.0, 400.0, 1250.5, 2200.0, 3100.0};
+    const double g[] = {-8.5, 2.0, 0.0, 6.5, -3.0};
+    const double q[] = {1.25, 3.0, 4.0, 2.5, 6.0};
+    for (int i = 0; i < 5; ++i) {
+        pts.append(QJsonObject{{QStringLiteral("frequency_hz"), f[i]},
+                               {QStringLiteral("gain_db"), g[i]},
+                               {QStringLiteral("q"), q[i]}});
+    }
+    const QJsonObject root{{QStringLiteral("band_count"), 5},
+                           {QStringLiteral("parametric_eq"), false},
+                           {QStringLiteral("global_gain_db"), -1.5},
+                           {QStringLiteral("frequency_min_hz"), 80.0},
+                           {QStringLiteral("frequency_max_hz"), 3100.0},
+                           {QStringLiteral("points"), pts}};
+    return QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Indented));
+}
+
+QJsonObject curveOf(const TransmitModel& tx)
+{
+    return QJsonDocument::fromJson(tx.txEqCurve().toUtf8()).object();
+}
+
+// The curve's every field against what the widget holds and draws.
+void compareToWidget(const QJsonObject& curve, const ParametricEqWidget* w)
+{
+    QVERIFY(w);
+    QCOMPARE(curve.value(QStringLiteral("parametric")).toBool(), w->parametricEq());
+    QCOMPARE(curve.value(QStringLiteral("preampDb")).toDouble(), w->globalGainDb());
+    QCOMPARE(curve.value(QStringLiteral("minHz")).toDouble(), w->frequencyMinHz());
+    QCOMPARE(curve.value(QStringLiteral("maxHz")).toDouble(), w->frequencyMaxHz());
+    const QJsonArray points = curve.value(QStringLiteral("points")).toArray();
+    QCOMPARE(points.size(), w->points().size());
+    for (int i = 0; i < points.size(); ++i) {
+        const QJsonObject p = points.at(i).toObject();
+        const ParametricEqWidget::EqPoint& e = w->points().at(i);
+        QCOMPARE(p.value(QStringLiteral("frequencyHz")).toDouble(), e.frequencyHz);
+        QCOMPARE(p.value(QStringLiteral("gainDb")).toDouble(), e.gainDb);
+        QCOMPARE(p.value(QStringLiteral("q")).toDouble(), e.q);
+    }
+}
+
+} // namespace
 
 class TestTxEqDialog : public QObject {
     Q_OBJECT
@@ -354,12 +416,15 @@ private slots:
         QVERIFY(w);
         QVERIFY(dlg.findChild<ParametricEqWidget*>(
                    QStringLiteral("TxEqParametricWidget")));
-        // Defaults match Thetis ucParametricEq1 widget property block
-        // at eqform.cs:928-967 [v2.10.3.13].
+        // Limits match Thetis ucParametricEq1 widget property block
+        // at eqform.cs:928-967 [v2.10.3.13]. The range is the curve the
+        // model's empty txEqParaEqData stands for: GetDefaults' 0 to 4000
+        // Hz, as Thetis's ParaEQTXData setter loads it
+        // (eqform.cs:3312-3317 [v2.10.3.15]), not the designer's 2700.
         QCOMPARE(w->dbMin(),         -24.0);
         QCOMPARE(w->dbMax(),          24.0);
         QCOMPARE(w->frequencyMinHz(),  0.0);
-        QCOMPARE(w->frequencyMaxHz(), 2700.0);
+        QCOMPARE(w->frequencyMaxHz(), 4000.0);
         QCOMPARE(w->qMin(),            0.2);
         QCOMPARE(w->qMax(),           20.0);
         QCOMPARE(w->bandCount(),      10);
@@ -543,6 +608,192 @@ private slots:
 
         tx.setTxEqParaEqData(blob);
         QCOMPARE(w->globalGainDb(), 7.0);
+    }
+
+    // ── 18. R-IOS-13 / R-R3-49: the curve on the link is the curve the
+    //        dialog shows (transmit.txEqCurve, ParaEqCurve::txEqCurveJson)
+    //        for every factory profile, a custom curve, an out-of-order
+    //        curve, and says "unavailable" where the panel falls back.
+    void curveMatchesDialogForEveryFactoryProfile()
+    {
+        RadioModel rm;
+        TxEqDialog dlg(&rm);
+        TransmitModel& tx = rm.transmitModel();
+        ParametricEqWidget* w = dlg.parametricWidget();
+        QVERIFY(w);
+
+        MicProfileManager mgr;
+        mgr.setMacAddress(QStringLiteral("aa:bb:cc:dd:ee:18"));
+        mgr.load();
+        const QStringList names = mgr.profileNames();
+        QVERIFY(names.size() >= 22);
+        for (const QString& name : names) {
+            // A custom curve first, so each profile's value has to move
+            // the dialog.
+            tx.setTxEqParaEqData(ParaEqEnvelope::encode(customCurveJson()));
+            QVERIFY(mgr.setActiveProfile(name, &tx));
+            // Every factory profile saves an empty TXParaEQData
+            // (database.cs AddTXProfileTable [v2.10.3.15]).
+            QCOMPARE(tx.txEqParaEqData(), QString());
+            const QJsonObject curve = curveOf(tx);
+            QCOMPARE(curve.value(QStringLiteral("state")).toString(), QStringLiteral("default"));
+            compareToWidget(curve, w);
+            if (QTest::currentTestFailed()) {
+                qWarning() << "profile" << name;
+                return;
+            }
+        }
+    }
+
+    void curveMatchesDialogForACustomCurve()
+    {
+        RadioModel rm;
+        TxEqDialog dlg(&rm);
+        TransmitModel& tx = rm.transmitModel();
+        tx.setTxEqParaEqData(ParaEqEnvelope::encode(customCurveJson()));
+        const QJsonObject curve = curveOf(tx);
+        QCOMPARE(curve.value(QStringLiteral("state")).toString(), QStringLiteral("saved"));
+        QCOMPARE(curve.value(QStringLiteral("points")).toArray().size(), 5);
+        compareToWidget(curve, dlg.parametricWidget());
+        // The panel's controls follow the loaded curve (setParaEQData).
+        QCOMPARE(dlg.findChild<QSpinBox*>(QStringLiteral("TxEqParaLowSpin"))->value(), 80);
+        QCOMPARE(dlg.findChild<QSpinBox*>(QStringLiteral("TxEqParaHighSpin"))->value(), 3100);
+        QCOMPARE(dlg.findChild<QRadioButton*>(QStringLiteral("TxEqParaBands5Radio"))->isChecked(),
+                 true);
+        QCOMPARE(dlg.findChild<QCheckBox*>(QStringLiteral("TxEqParaUseQFactorsChk"))->isChecked(),
+                 false);
+        // Loading moved nothing back into the model.
+        QCOMPARE(tx.txEqParaEqData(), ParaEqEnvelope::encode(customCurveJson()));
+    }
+
+    void curveMatchesDialogForAnOutOfOrderCurve()
+    {
+        RadioModel rm;
+        TxEqDialog dlg(&rm);
+        TransmitModel& tx = rm.transmitModel();
+        // Saved out of order, two points 2 Hz apart, an 18-band count:
+        // the panel sorts and spaces them (enforceOrdering).
+        QJsonArray pts;
+        for (int i = 0; i < 18; ++i) {
+            const double f = i == 5 ? 902.0 : i == 6 ? 900.0 : 150.0 * i;
+            pts.append(QJsonObject{{QStringLiteral("frequency_hz"), f},
+                                   {QStringLiteral("gain_db"), (i % 5) - 2.0},
+                                   {QStringLiteral("q"), 1.0 + i}});
+        }
+        const QJsonObject root{{QStringLiteral("band_count"), 18},
+                               {QStringLiteral("parametric_eq"), true},
+                               {QStringLiteral("global_gain_db"), 1.5},
+                               {QStringLiteral("frequency_min_hz"), 0.0},
+                               {QStringLiteral("frequency_max_hz"), 2550.0},
+                               {QStringLiteral("points"), pts}};
+        tx.setTxEqParaEqData(ParaEqEnvelope::encode(
+            QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact))));
+        const QJsonObject curve = curveOf(tx);
+        QCOMPARE(curve.value(QStringLiteral("state")).toString(), QStringLiteral("saved"));
+        const QJsonArray shown = curve.value(QStringLiteral("points")).toArray();
+        QCOMPARE(shown.at(5).toObject().value(QStringLiteral("frequencyHz")).toDouble(), 900.0);
+        QCOMPARE(shown.at(6).toObject().value(QStringLiteral("frequencyHz")).toDouble(), 905.0);
+        compareToWidget(curve, dlg.parametricWidget());
+        QCOMPARE(dlg.findChild<QRadioButton*>(QStringLiteral("TxEqParaBands18Radio"))->isChecked(),
+                 true);
+    }
+
+    // Odd saved values: the panel and the Core's curve read them by one
+    // parser (ParaEqCurve), so they agree on rounding, missing fields and
+    // out-of-range points. Each value is loaded after a different curve,
+    // so nothing is left over from the widget's earlier state.
+    void curveMatchesDialogForOddValues()
+    {
+        RadioModel rm;
+        TxEqDialog dlg(&rm);
+        TransmitModel& tx = rm.transmitModel();
+        const QString odd[] = {
+            // Unrounded: PointsFromJson rounds F to 0.001 Hz, G and the
+            // preamp to 0.1 dB, Q to 0.01.
+            QStringLiteral(R"({"band_count":5,"parametric_eq":true,"global_gain_db":2.345,)"
+                           R"("frequency_min_hz":20.00049,"frequency_max_hz":3333.3333,)"
+                           R"("points":[{"frequency_hz":20,"gain_db":1.26,"q":7.777},)"
+                           R"({"frequency_hz":500.0004,"gain_db":-3.14159,"q":1.234},)"
+                           R"({"frequency_hz":1234.5678,"gain_db":0.05,"q":2.005},)"
+                           R"({"frequency_hz":2000.0006,"gain_db":0.15,"q":3.335},)"
+                           R"({"frequency_hz":3333,"gain_db":-0.25,"q":9.999}]})"),
+            // Missing fields: no frequency_min_hz (0), parametric_eq,
+            // band_count or global_gain_db; a point with only a frequency.
+            QStringLiteral(R"({"frequency_max_hz":1800,)"
+                           R"("points":[{"frequency_hz":100,"gain_db":3,"q":2},)"
+                           R"({"frequency_hz":700},)"
+                           R"({"gain_db":-5,"q":4},)"
+                           R"({"frequency_hz":1800,"gain_db":1,"q":1}]})"),
+            // Out of range: a point above the range, one below, gains and
+            // Qs past the panel's limits, the preamp too.
+            QStringLiteral(R"({"band_count":5,"parametric_eq":true,"global_gain_db":50,)"
+                           R"("frequency_min_hz":100,"frequency_max_hz":2600,)"
+                           R"("points":[{"frequency_hz":100,"gain_db":40,"q":0},)"
+                           R"({"frequency_hz":9000,"gain_db":-40,"q":99},)"
+                           R"({"frequency_hz":-50,"gain_db":12,"q":0.1},)"
+                           R"({"frequency_hz":1300,"gain_db":24.04,"q":20.004},)"
+                           R"({"frequency_hz":2600,"gain_db":-24.06,"q":0.199}]})"),
+            // A range wholly above the panel's previous one.
+            QStringLiteral(R"({"band_count":3,"parametric_eq":true,"global_gain_db":0,)"
+                           R"("frequency_min_hz":5000,"frequency_max_hz":9000,)"
+                           R"("points":[{"frequency_hz":5000,"gain_db":1,"q":1},)"
+                           R"({"frequency_hz":7000,"gain_db":2,"q":2},)"
+                           R"({"frequency_hz":9000,"gain_db":3,"q":3}]})"),
+        };
+        for (const QString& json : odd) {
+            tx.setTxEqParaEqData(ParaEqEnvelope::encode(customCurveJson()));
+            tx.setTxEqParaEqData(ParaEqEnvelope::encode(json));
+            const QJsonObject curve = curveOf(tx);
+            QCOMPARE(curve.value(QStringLiteral("state")).toString(), QStringLiteral("saved"));
+            compareToWidget(curve, dlg.parametricWidget());
+            if (QTest::currentTestFailed()) {
+                qWarning() << json;
+                return;
+            }
+        }
+        // Spot checks on the last three, worked from PointsFromJson.
+        tx.setTxEqParaEqData(ParaEqEnvelope::encode(odd[0]));
+        QJsonObject c = curveOf(tx);
+        QCOMPARE(c.value(QStringLiteral("preampDb")).toDouble(), 2.3);
+        QCOMPARE(c.value(QStringLiteral("minHz")).toDouble(), 20.0);
+        QCOMPARE(c.value(QStringLiteral("points")).toArray().at(1).toObject()
+                     .value(QStringLiteral("gainDb")).toDouble(), -3.1);
+        tx.setTxEqParaEqData(ParaEqEnvelope::encode(odd[1]));
+        c = curveOf(tx);
+        QCOMPARE(c.value(QStringLiteral("minHz")).toDouble(), 0.0);
+        QCOMPARE(c.value(QStringLiteral("parametric")).toBool(), false);
+        // The point with no frequency reads 0 Hz and sorts second, moved
+        // to 5 Hz; the one with only a frequency (700 Hz) is third, gain
+        // 0 and Q 0 clamped to 0.2.
+        QCOMPARE(c.value(QStringLiteral("points")).toArray().at(1).toObject()
+                     .value(QStringLiteral("frequencyHz")).toDouble(), 5.0);
+        QCOMPARE(c.value(QStringLiteral("points")).toArray().at(2).toObject()
+                     .value(QStringLiteral("q")).toDouble(), 0.2);
+        tx.setTxEqParaEqData(ParaEqEnvelope::encode(odd[2]));
+        c = curveOf(tx);
+        QCOMPARE(c.value(QStringLiteral("preampDb")).toDouble(), 24.0);
+        QCOMPARE(c.value(QStringLiteral("points")).toArray().at(0).toObject()
+                     .value(QStringLiteral("gainDb")).toDouble(), 24.0);
+        QCOMPARE(dlg.parametricWidget()->frequencyMinHz(), 100.0);
+        tx.setTxEqParaEqData(ParaEqEnvelope::encode(odd[3]));
+        QCOMPARE(dlg.parametricWidget()->frequencyMinHz(), 5000.0);
+        QCOMPARE(dlg.parametricWidget()->frequencyMaxHz(), 9000.0);
+    }
+
+    void unreadableCurveIsUnavailableAndDialogShowsTheCoresFallback()
+    {
+        RadioModel rm;
+        TxEqDialog dlg(&rm);
+        TransmitModel& tx = rm.transmitModel();
+        tx.setTxEqParaEqData(ParaEqEnvelope::encode(customCurveJson()));
+        tx.setTxEqParaEqData(QStringLiteral("not a curve"));
+        QCOMPARE(tx.txEqCurve(), QStringLiteral("{\"state\":\"unavailable\"}"));
+        // The panel shows what the Core applies in its place, Thetis's
+        // GetDefaults (eqform.cs:3312-3315 [v2.10.3.15]), not the
+        // previous curve.
+        compareToWidget(QJsonDocument::fromJson(
+                            ParaEqCurve::txEqCurveJson(QString()).toUtf8()).object(),
+                        dlg.parametricWidget());
     }
 
     // ── 17. closeEvent hides instead of destroying ──────────────────

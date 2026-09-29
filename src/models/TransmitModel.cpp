@@ -269,6 +269,10 @@
 //                 header below complete the GPL attribution.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //                 Code.
+//   2026-09-28 - R-IOS-13 / R-R3-49: txEqCurve, the read-only curve
+//                 derived from txEqParaEqData (ParaEqCurve::txEqCurveJson)
+//                 whenever the blob changes. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "TransmitModel.h"
@@ -359,6 +363,10 @@ TransmitModel::TransmitModel(QObject* parent)
     //   tunePower_by_band = new int[(int)Band.LAST];
     //   for (int i = 0; i < (int)Band.LAST; i++) tunePower_by_band[i] = 50;
     m_tunePowerByBand.fill(50);
+
+    // R-IOS-13 / R-R3-49: txEqCurve for the empty blob a new model starts
+    // with (the flat curve Thetis applies in its place).
+    m_txEqCurve = ParaEqCurve::txEqCurveJson(m_txEqParaEqData);
 
     // Initialise per-band normal-mode power to 50W (#167 Phase 3A).
     // From Thetis console.cs:1813-1814 [v2.10.3.13]:
@@ -3352,6 +3360,12 @@ void TransmitModel::setTxEqParaEqData(const QString& data)
     m_txEqParaEqData = data;
     persistOne(QStringLiteral("TXParaEQData"), data);
     emit txEqParaEqDataChanged(data);
+    // R-IOS-13 / R-R3-49: the read-only curve follows the blob.
+    const QString curve = ParaEqCurve::txEqCurveJson(data);
+    if (curve != m_txEqCurve) {
+        m_txEqCurve = curve;
+        emit txEqCurveChanged(m_txEqCurve);
+    }
 }
 
 // ── R-R3-49 (parity Task 4): the Legacy EQ box and the link's arrays ─────

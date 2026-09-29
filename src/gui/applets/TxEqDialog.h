@@ -67,6 +67,13 @@
 //                 Core); a remote window's settings gate greys it with
 //                 the reason. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-28 - R-IOS-13 / R-R3-49: a blank or unreadable
+//                 txEqParaEqData shows Thetis's GetDefaults curve (the
+//                 one the Core applies) instead of keeping the panel's
+//                 previous points, and a load sets the band count,
+//                 low/high and Use Q Factors controls as setParaEQData
+//                 does (eqform.cs:3312-3368 [v2.10.3.15]). J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -255,6 +262,10 @@ private slots:
     // this, the next user edit would overwrite the just-loaded curve
     // (Codex P1 #2 on PR #159).
     void syncParametricFromModel();
+    // Thetis setParaEQData's control half: band count buttons, low/high
+    // limits, Use Q Factors and the selected band's maximum follow the
+    // widget after a load (R-IOS-13 / R-R3-49).
+    void syncParametricControlsFromWidget();
 
 protected:
     // Hide-on-close per Thetis frmCFCConfig.cs:477-482 [v2.10.3.13]
