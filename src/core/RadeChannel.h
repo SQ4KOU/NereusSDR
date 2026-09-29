@@ -304,6 +304,12 @@ public slots:
     // from carrying across PTT transitions. Body lands at I3.
     void resetTx();
 
+public:
+    // RADE end-of-over callsigns: resetTx's flush (speech and feature
+    // accumulators, the 8 -> 24 kHz resampler, the end-of-over flag)
+    // without counting as the operator's Reset vocoder. Run at every unkey.
+    void dropTxAudio();
+
 signals:
     // Decoded speech, 24 kHz stereo int16, ready for the speaker bus.
     void rxSpeechReady(const QByteArray& pcm);

@@ -823,6 +823,14 @@ void RadeChannel::txEncode(const QByteArray& speechSamples)
 // fully reallocates the encoder anyway).
 void RadeChannel::resetTx()
 {
+    dropTxAudio();
+    ++m_resetTxCountForTest;  // R-R3-49 (parity Task 3): test seam only
+}
+
+// NereusSDR: the flush resetTx does, without counting as the Reset vocoder
+// action; RadioModel runs it at every unkey and after an end-of-over tail.
+void RadeChannel::dropTxAudio()
+{
     m_txAccum.clear();
     m_txFeatAccum.clear();
     m_radeTxCallCount = 0;
@@ -832,7 +840,6 @@ void RadeChannel::resetTx()
     if (m_up8to24) {
         m_up8to24->clear();
     }
-    ++m_resetTxCountForTest;  // R-R3-49 (parity Task 3): test seam only
 }
 
 int RadeChannel::endOfOverSamples8k() const

@@ -1233,9 +1233,12 @@ void MoxController::setMox(bool on)
         // still keyed, and phase 1 follows it. Never under TX inhibit, the
         // PA trip or receive-only: those unkeys stop transmit at once.
         if (m_endOfOverTail && !transmitBlocked() && m_endOfOverTail()) {
-            advanceState(MoxState::TxToRxInFlight);
+            // The tail is on before stateChanged, so a subscriber of the
+            // state change (RemoteKeying, the transmit state) already sees
+            // it.
             m_waitingForEndOfOverTail = true;
             m_endOfOverTailTimer.start();
+            advanceState(MoxState::TxToRxInFlight);
             emit endOfOverTailChanged(true);
             return;
         }

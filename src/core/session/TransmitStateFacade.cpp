@@ -370,9 +370,9 @@ void TransmitState::refreshState()
     const int txSliceId = arbiter != nullptr ? arbiter->txBoundSliceId() : -1;
     const RadioModel::KeyedBy keyedBy = m_model->keyedBy();
     // RADE end-of-over callsigns (review Minor 3): keyedBy clears at the
-    // release, but the radio stays on the air through the TX to RX walk and
-    // an end-of-over tail. Until it is back in receive, who keyed stays the
-    // one this key had.
+    // release, but the radio stays on the air through an end-of-over tail.
+    // During the tail who keyed stays the one this key had. (Only then: the
+    // ordinary TX to RX handover keeps its recorded wire behaviour.)
     if (!keyed) {
         m_heldKeyedByName.clear();
         m_heldKeyedByKind.clear();
@@ -382,14 +382,14 @@ void TransmitState::refreshState()
         m_heldKeyedByKind = keyedBy.deviceKind;
         m_heldKeyedTrigger = keyedBy.trigger;
     }
-    const bool held = keyedBy.isEmpty();
+    const bool ending = m_model->endOfOverTailActive();
+    const bool held = keyedBy.isEmpty() && ending;
     // Who keyed, only while keyed (keyedBy is empty while unkeyed).
     const QString name = !keyed ? QString() : held ? m_heldKeyedByName : keyedBy.deviceName;
     const QString kind = !keyed ? QString() : held ? m_heldKeyedByKind : keyedBy.deviceKind;
     const QString trigger = !keyed ? QString()
         : QString::fromLatin1(held ? m_heldKeyedTrigger : keyedBy.trigger);
     const qint64 since = keyed ? m_keyedSinceMs : 0;
-    const bool ending = m_model->endOfOverTailActive();
     if (keyed && !keyedBy.isEmpty()) {
         m_lastKeyedByName = keyedBy.deviceName;
         m_lastKeyedByKind = keyedBy.deviceKind;

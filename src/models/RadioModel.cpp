@@ -6713,7 +6713,7 @@ void RadioModel::dropRadeTxAudio()
     if (m_wdspEngine != nullptr) {
         if (SliceModel* const txSlice = txBoundSlice()) {
             if (RadeChannel* const channel = m_wdspEngine->radeChannel(txSlice->sliceIndex())) {
-                channel->resetTx();
+                channel->dropTxAudio();
             }
         }
     }
@@ -6767,7 +6767,7 @@ void RadioModel::onEndOfOverTailChanged(bool active)
                 if (RadeChannel* const channel =
                         m_wdspEngine->radeChannel(txSlice->sliceIndex())) {
                     if (channel->endOfOverQueued()) {
-                        channel->resetTx();
+                        channel->dropTxAudio();
                     }
                 }
             }
