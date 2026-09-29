@@ -28,17 +28,54 @@
 //                                    answer, and one named wait for the
 //                                    session tests' nothing-happens checks.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  NEREUS_TRY_COMPARE waits on floating
+//                                    point values the way QCOMPARE compares
+//                                    them (qFuzzyCompare, and qFuzzyIsNull
+//                                    near zero), so a wait no longer runs
+//                                    to its timeout on a value QCOMPARE
+//                                    passes. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include <QCoreApplication>
 #include <QTest>
+#include <QtNumeric>
 
 #include <algorithm>
+#include <cmath>
+#include <type_traits>
 
 #include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
 
 namespace NereusSDR::Test {
+
+/// Whether QCOMPARE(actual, expected) would pass: floating point values
+/// compare as QCOMPARE compares them (infinities by sign, NaN with NaN,
+/// qFuzzyCompare, and qFuzzyIsNull when the expected value is zero or
+/// subnormal); everything else with ==.
+template <typename Actual, typename Expected>
+bool comparesAsQCompare(const Actual& actual, const Expected& expected)
+{
+    if constexpr (std::is_floating_point_v<Actual> && std::is_floating_point_v<Expected>) {
+        using Value = std::common_type_t<Actual, Expected>;
+        const Value a = static_cast<Value>(actual);
+        const Value e = static_cast<Value>(expected);
+        switch (std::fpclassify(e)) {
+        case FP_INFINITE:
+            return std::isinf(a) && std::signbit(a) == std::signbit(e);
+        case FP_NAN:
+            return std::isnan(a);
+        case FP_ZERO:
+        case FP_SUBNORMAL:
+            return qFuzzyIsNull(a);
+        default:
+            return qFuzzyIsNull(e) ? qFuzzyIsNull(a) : qFuzzyCompare(a, e);
+        }
+    } else {
+        return static_cast<bool>(actual == expected);
+    }
+}
 
 #define NEREUS_TRY_VERIFY_WITH_TIMEOUT(expr, timeoutMs)                                   \
     do {                                                                                  \
@@ -56,8 +93,9 @@ namespace NereusSDR::Test {
 
 #define NEREUS_TRY_COMPARE_WITH_TIMEOUT(actual, expected, timeoutMs)                      \
     do {                                                                                  \
-        (void)QTest::qWaitFor([&]() { return static_cast<bool>((actual) == (expected)); },\
-                              (timeoutMs));                                               \
+        (void)QTest::qWaitFor(                                                            \
+            [&]() { return NereusSDR::Test::comparesAsQCompare((actual), (expected)); },  \
+            (timeoutMs));                                                                 \
         QCOMPARE(actual, expected);                                                       \
     } while (false)
 
