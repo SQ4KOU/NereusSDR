@@ -2392,10 +2392,11 @@ private slots:
                  qPrintable(evidence));
         // Once the delay is back, on-time audio is not skipped: the jitter
         // of the steady stretch is no standing excess. Load findings 2: a
-        // receive-worker stall now arms shedding, and the backlog it leaves
-        // is shed, rightly, whenever it comes; so this holds, as the delay's
-        // return below does, only for a worker that kept waking.
-        if (telemetry.maxWorkerWakeGapMs < 50.0) {
+        // receive-worker stall (a wake gap over AudioJitterBuffer::kStallNs)
+        // now arms shedding, and the backlog it leaves is shed, rightly,
+        // whenever it comes; so this holds for a run without one (a 49 ms
+        // gap in the last 3 s at load 149 shed one interval there).
+        if (telemetry.maxWorkerWakeGapMs * 1e6 <= double(AudioJitterBuffer::kStallNs)) {
             QVERIFY2(telemetry.skippedIntervals == skippedBeforeLast3s, qPrintable(evidence));
         }
         // The first stall's packets came in late and deepened the hold.
