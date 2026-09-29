@@ -643,6 +643,10 @@
 //               Core's ExtendedTransmit setting, changed only with transmit
 //               permission and off the air; transmitSettingsVersion 11.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29: scoped review: setOtherDeviceHoldsRefusal, so a hosting
+//               desktop's own Extended waits while another device holds
+//               transmit. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -1879,6 +1883,18 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
         });
         connect(m_transmitHolder.get(), &TransmitHolder::changed, m_radioModel,
                 &RadioModel::retryOwedAmpRestore);
+        // Scoped review (addendum G-42): a hosting desktop's own window
+        // waits, as every other device does, while another device holds
+        // transmit before changing Extended transmit.
+        m_radioModel->setOtherDeviceHoldsRefusal([this]() {
+            const std::optional<TransmitHolder::Holder> holder = m_transmitHolder->holder();
+            if (!holder || holder->deviceId == KeyerIdentity::kStationDeviceId) {
+                return QString();
+            }
+            return TxRefusals::otherDeviceHolds(holder->name).text;
+        });
+        connect(m_transmitHolder.get(), &TransmitHolder::changed, m_radioModel,
+                &RadioModel::reportTransmitHolderChanged);
         connect(m_remoteKeying.get(), &RemoteKeying::pendingKeyEnded, m_radioModel,
                 &RadioModel::retryOwedAmpRestore);
         // Task 77 fix round 4: a device's tunerTune that ended without
@@ -2796,6 +2812,7 @@ StationServer::~StationServer()
         m_radioModel->moxController()->setOtherDeviceHolds({});
         // Task 77 fix round 2: the amplifier's pending-key probe asks it too.
         m_radioModel->setAmpKeyPendingProbe({});
+        m_radioModel->setOtherDeviceHoldsRefusal({});
     }
     // Parity Task 32: MON back on the Core's own outputs, as without a
     // station server.

@@ -3117,6 +3117,18 @@ public:
     // settling): the Core's session server installs it. Unset: none.
     using AmpKeyPendingFn = std::function<bool()>;
     void setAmpKeyPendingProbe(AmpKeyPendingFn probe) { m_ampKeyPending = std::move(probe); }
+    /// Scoped review (addendum G-42): the sentence for "another device
+    /// holds transmit" on a Core, empty while none does (or on a desktop
+    /// with no session server). The session server installs it and tells
+    /// the pages when the holder changes (transmitHolderChanged). A Core's
+    /// own window reads it before changing a setting the Core takes only
+    /// from the holder, such as Extended transmit.
+    using OtherDeviceHoldsRefusalFn = std::function<QString()>;
+    void setOtherDeviceHoldsRefusal(OtherDeviceHoldsRefusalFn probe)
+    { m_otherDeviceHoldsRefusal = std::move(probe); }
+    QString otherDeviceHoldsRefusal() const
+    { return m_otherDeviceHoldsRefusal ? m_otherDeviceHoldsRefusal() : QString(); }
+    void reportTransmitHolderChanged() { emit transmitHolderChanged(); }
     /// The amplifier is changing over: from any operate=0 or operate=1
     /// written to it (PgxlConnection::operateCommanded) until its status
     /// reports the commanded state. Always false with no Power Genius
@@ -4898,6 +4910,9 @@ signals:
     /// this model's own settings: a local window's edit, or a device's
     /// edit the Core took. A remote window hears stationSettingChanged.
     void transmitGateSettingChanged(const QString& key);
+    /// Scoped review (addendum G-42): who holds transmit on this Core
+    /// changed (otherDeviceHoldsRefusal may read differently).
+    void transmitHolderChanged();
     /// R-R3-22 fix wave: see reportStationCommandFinished. The one
     /// per-command result signal: the amp applets' pending requests and
     /// the TCI switch's request wait both match their own id here (an
@@ -7281,6 +7296,7 @@ private:
     /// Task 77 fix round 2: the amplifier may be switched now.
     bool ampSwitchAllowed() const;
     AmpKeyPendingFn m_ampKeyPending;
+    OtherDeviceHoldsRefusalFn m_otherDeviceHoldsRefusal;
     /// The unconfirmed operate command (true: operate=1), and when it was
     /// written. Empty while the amplifier is not changing over.
     std::optional<bool> m_ampCommandedOperate;

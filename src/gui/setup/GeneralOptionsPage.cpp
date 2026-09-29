@@ -3,6 +3,8 @@
 // 2026-09-28: Extended is the Core's ExtendedTransmit setting (addendum
 // G-42); the old per-computer ExtendedTxAllowed is ignored. J.J. Boyd
 // (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-29: a hosting desktop's Extended waits while another device
+// holds transmit. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 // src/gui/setup/GeneralOptionsPage.cpp  (NereusSDR)
 // =================================================================
@@ -230,6 +232,8 @@ GeneralOptionsPage::GeneralOptionsPage(RadioModel* model, QWidget* parent)
         };
         connect(model, &RadioModel::stationSettingChanged, this, follow);
         connect(model, &RadioModel::transmitGateSettingChanged, this, follow);
+        connect(model, &RadioModel::transmitHolderChanged, this,
+                [this]() { refreshExtendedAvailability(); });
     }
     if (auto* proxy = dynamic_cast<SettingsProxy*>(AppSettings::instance().remoteBackend())) {
         connect(proxy, &SettingsProxy::valueRejected, this,
@@ -336,7 +340,11 @@ bool GeneralOptionsPage::extendedEditAvailable()
 {
     const RadioModel* radio = model();
     if (!radio || !m_regionSettingsAvailable) { return false; }
-    if (radio->ownsLocalDsp()) { return !radio->stationOnAirRefusal(nullptr); }
+    // Scoped review: a desktop hosting the Core waits, as the Core's other
+    // devices do, while another device holds transmit.
+    if (radio->ownsLocalDsp()) {
+        return !radio->stationOnAirRefusal(nullptr) && radio->otherDeviceHoldsRefusal().isEmpty();
+    }
     const IStationLink* link = radio->stationLink();
     // The Core takes the change only from a device it permits to transmit,
     // so without that the box is disabled rather than refused after a tick.
@@ -369,6 +377,8 @@ void GeneralOptionsPage::refreshExtendedAvailability()
         reason = !m_regionSettingsAvailable && !m_regionSettingsReason.isEmpty()
             ? m_regionSettingsReason
             : onAir ? RadioModel::onAirReason()
+            : radio && radio->ownsLocalDsp() && !radio->otherDeviceHoldsRefusal().isEmpty()
+              ? radio->otherDeviceHoldsRefusal()
             : olderCore ? tr("This Core does not have Extended transmit. Update the Core to use it.")
             : notPermitted ? link->transmitPermissionReason()
             : tr("Extended transmit is not available on this Core.");
