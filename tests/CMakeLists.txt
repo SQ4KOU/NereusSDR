@@ -8128,6 +8128,11 @@ nereus_add_test(tst_station_pairing
 add_dependencies(tst_station_pairing nereus_pairing_peer)
 target_compile_definitions(tst_station_pairing PRIVATE
     NEREUS_PAIRING_PEER="$<TARGET_FILE:nereus_pairing_peer>")
+# Load findings 3: about 13 s on a quiet machine, past the 120 s limit in a
+# loaded full run; three entries of the same binary (the limit is not
+# raised; groups in the test's main()).
+nereus_split_test(tst_station_pairing
+    ENV NEREUS_STATION_PAIRING_GROUP GROUPS code peer)
 
 # iPhone app Task 17 (R-IOS-08): the Core's read-only status page on
 # loopback (the code only while unclaimed, nothing for a peer elsewhere, 404
