@@ -26,6 +26,7 @@
 #include "core/BoardCapabilities.h"
 #include "core/StepAttenuatorController.h"
 #include "gui/setup/GeneralOptionsPage.h"
+#include "models/Band.h"
 #include "models/RadioModel.h"
 
 using namespace NereusSDR;
@@ -131,13 +132,45 @@ private slots:
         QCOMPARE(ctrl->attenuatorDb(), 5);
         ctrl->setRx2Attenuation(3);
         QCOMPARE(spin->value(), 3);
-        QVERIFY(!enable->isEnabled());
+        // RX2's own enable (Thetis chkRX2StepAtt, _rx2_step_att_enabled).
+        QVERIFY(enable->isEnabled());
         QVERIFY(enable->isChecked());
-        QVERIFY(!enable->toolTip().isEmpty());
-        // Step attenuator off: the value is not in use.
-        ctrl->setStepAttEnabled(false);
+        QCOMPARE(enable->property("nereusSetupId").toString(),
+                 QStringLiteral("general.options.rx2StepAttEnable"));
+        ctrl->setAdcRouting(0, 1, Band::Band20m, false);  // RX2 on its own ADC
+        enable->click();
+        QVERIFY(!ctrl->rx2StepAttEnabled());
+        QVERIFY(ctrl->stepAttEnabled());
         QVERIFY(!spin->isEnabled());
-        QVERIFY(!enable->isChecked());
+        ctrl->setRx2StepAttEnabled(true);
+        QVERIFY(enable->isChecked());
+        QVERIFY(spin->isEnabled());
+
+        // Auto Attenuate RX2: its own Enable, Undo and Hold, as Thetis's
+        // chkAutoATTRx2, chkAutoAttUndoRX2 and nudAutoAttHoldRX2 (no mode).
+        auto* rx2Auto = page->findChild<QGroupBox*>(QStringLiteral("grpAutoAttRx2"));
+        QVERIFY(rx2Auto);
+        QVERIFY(rx2Auto->isEnabled());
+        QVERIFY(rx2Auto->findChildren<QComboBox*>().isEmpty());
+        QCheckBox* autoEnable = nullptr;
+        QCheckBox* autoUndo = nullptr;
+        for (QCheckBox* c : rx2Auto->findChildren<QCheckBox*>()) {
+            if (c->text() == QStringLiteral("Enable")) { autoEnable = c; }
+            if (c->text() == QStringLiteral("Undo")) { autoUndo = c; }
+        }
+        auto* hold = rx2Auto->findChild<QSpinBox*>();
+        QVERIFY(autoEnable && autoUndo && hold);
+        autoEnable->click();
+        QVERIFY(ctrl->rx2AutoAttEnabled());
+        QVERIFY(!ctrl->autoAttEnabled());
+        QVERIFY(autoUndo->isEnabled());
+        autoUndo->click();
+        QVERIFY(ctrl->rx2AutoAttUndo());
+        QVERIFY(hold->isEnabled());
+        hold->setValue(8);
+        QCOMPARE(ctrl->rx2AutoUndoDelaySec(), 8);
+        ctrl->setRx2AutoAttEnabled(false);
+        QVERIFY(!autoEnable->isChecked());
         delete page;
     }
 
@@ -152,7 +185,12 @@ private slots:
         QVERIFY(spin->isVisibleTo(page));
         QVERIFY(!spin->isEnabled());
         QVERIFY(!spin->toolTip().isEmpty());
-        // Auto Attenuate RX2 is shown too, disabled: RX1's settings run both.
+        auto* rx2Enable = page->findChild<QCheckBox*>(QStringLiteral("chkRx2StepAttEnable"));
+        QVERIFY(rx2Enable);
+        QVERIFY(rx2Enable->isVisibleTo(page));
+        QVERIFY(!rx2Enable->isEnabled());
+        QVERIFY(!rx2Enable->toolTip().isEmpty());
+        // Auto Attenuate RX2 is shown too, disabled: there is no RX2 ADC.
         auto* rx2Auto = page->findChild<QGroupBox*>(QStringLiteral("grpAutoAttRx2"));
         QVERIFY(rx2Auto);
         QVERIFY(rx2Auto->isVisibleTo(page));
@@ -259,6 +297,7 @@ private slots:
     void rx2RowAndAutoAttRx2AreShownDisabled()
     {
         RadioModel model;
+        model.setBoardForTest(HPSDRHW::HermesLite);
         auto* page = makePageWithController(model, /*enabled=*/true,
                                             /*dB=*/5, this);
 

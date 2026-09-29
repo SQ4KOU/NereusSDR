@@ -555,6 +555,7 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
             for (int s = 0; s < sections.size(); ++s) {
                 QJsonObject section = sections.at(s).toObject();
                 QJsonArray controls = section.value(QStringLiteral("controls")).toArray();
+                bool removedSecondAdc = false;
                 for (int c = 0; c < controls.size(); ++c) {
                     QJsonObject control = controls.at(c).toObject();
                     const QString boardGate = control.value(QStringLiteral("gate"))
@@ -570,6 +571,7 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                     if (boardGate == QLatin1String("attenuator.secondAdc")
                         && !(caps.attenuator.present && caps.adcCount >= 2)) {
                         controls.removeAt(c--);
+                        removedSecondAdc = true;
                         continue;
                     }
                     if (control.value(QStringLiteral("rangeSource")).toString()
@@ -580,6 +582,12 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                         control.remove(QStringLiteral("rangeSource"));
                         controls[c] = control;
                     }
+                }
+                // A section left empty by the second-ADC gate (RX2 Auto
+                // Attenuate on a one-ADC radio) goes too.
+                if (removedSecondAdc && controls.isEmpty()) {
+                    sections.removeAt(s--);
+                    continue;
                 }
                 section.insert(QStringLiteral("controls"), controls);
                 sections[s] = section;

@@ -181,7 +181,6 @@ private:
     // R-R3-46 / R-R3-11: the RX2 row (the other ADC's own attenuator):
     // value, and enabled or disabled with its reason.
     void refreshRx2StepAtt();
-    static QString autoAttRx2Reason();
     void applyRadioHardwareAvailability();
 
     // Task 16: Receive Only follows the model; a radio with no transmitter

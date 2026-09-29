@@ -32,6 +32,8 @@
 
 #include <QtTest/QtTest>
 
+#include <QCheckBox>
+#include <QGroupBox>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 
@@ -49,6 +51,7 @@
 #include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
 #include "core/settings/SettingsProxy.h"
+#include "gui/setup/GeneralOptionsPage.h"
 #include "models/Band.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -403,6 +406,37 @@ private slots:
         controller->setAdcRouting(0, -1, Band::Band40m, false);
         QTRY_COMPARE(remote->rx2SliceMask(), 0);
         QCOMPARE(remote->attenuationDbForSlice(1), 20);
+    }
+
+    // R-R3-46 / R-R3-11: a remote window's Setup > General > Options sets
+    // RX2's own enable and auto-attenuate on the Core (two-ADC radio).
+    void remoteSetupSetsRx2OnTheCore()
+    {
+        auto s = join(HPSDRHW::Angelia, QStringLiteral("02:00:00:00:46:08"));
+        QVERIFY(s != nullptr);
+        StepAttenuatorController* controller = s->controller();
+        controller->setAdcRouting(0, 1, Band::Band40m, false, 1u << 1);
+        // MainWindow tells the object the Core takes this window's edits.
+        s->remote()->setWindowAvailability(true, QString());
+        GeneralOptionsPage page(s->window.get());
+        auto* enable = page.findChild<QCheckBox*>(QStringLiteral("chkRx2StepAttEnable"));
+        auto* rx2Auto = page.findChild<QGroupBox*>(QStringLiteral("grpAutoAttRx2"));
+        QVERIFY(enable && rx2Auto);
+        QTRY_VERIFY2(enable->isEnabled(), qPrintable(enable->toolTip()));
+        QTRY_VERIFY(rx2Auto->isEnabled());
+        QVERIFY(enable->isChecked());
+        enable->click();
+        QTRY_VERIFY(!controller->rx2StepAttEnabled());
+        QVERIFY(controller->stepAttEnabled());
+        QCheckBox* autoEnable = nullptr;
+        for (QCheckBox* c : rx2Auto->findChildren<QCheckBox*>()) {
+            if (c->text() == QStringLiteral("Enable")) { autoEnable = c; }
+        }
+        QVERIFY(autoEnable);
+        autoEnable->click();
+        QTRY_VERIFY(controller->rx2AutoAttEnabled());
+        controller->setRx2AutoAttEnabled(false);
+        QTRY_VERIFY(!autoEnable->isChecked());
     }
 
     // R-R3-46 / R-R3-11: a peer whose hello did not declare adcAttenuators
