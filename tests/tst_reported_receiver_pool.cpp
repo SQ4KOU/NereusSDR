@@ -28,6 +28,10 @@
 //                stream pool, BoardCapsTable::effectiveReceiverCount. J.J.
 //                Boyd (KG4VCF), with AI-assisted implementation via
 //                Anthropic Claude Code.
+//   2026-09-29 - The HL2's receiver count is discovery byte 19 (mi0bot),
+//                checked against the bench capture's reply. J.J. Boyd
+//                (KG4VCF), with AI-assisted implementation via Anthropic
+//                Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -78,6 +82,18 @@ QByteArray p1Reply(quint8 boardByte, int reportedReceivers)
     b[10] = char(boardByte);
     b[20] = char(reportedReceivers);
     return b;
+}
+
+// The HL2's discovery reply as captured on the bench
+// (docs/protocols/openhpsdr-protocol1-capture-reference.md section 2.2):
+// byte 19 is 0x04, the HL2's receiver count, and byte 20 is 0x45.
+QByteArray hl2CapturedReply()
+{
+    return QByteArray::fromHex(
+        "effe02001cc0a213dd4a060000000000"
+        "00000004450200000000000303ef0000"
+        "00000000801646365e83000000000000"
+        "000000000000000000000000");
 }
 
 RadioInfo parsedP2(HPSDRHW board, int reported)
@@ -161,10 +177,38 @@ private slots:
         QCOMPARE(none.reportedReceivers, 0);
         QCOMPARE(none.maxReceivers, RadioInfo::maxReceiversForBoard(HPSDRHW::Saturn));
 
+        // Protocol 1 boards other than the HL2 carry the count in byte 20,
+        // as Thetis reads it.
         RadioInfo p1;
-        QVERIFY(RadioDiscovery::parseP1Reply(p1Reply(6, 4),
+        QVERIFY(RadioDiscovery::parseP1Reply(p1Reply(1, 4),
                                              QHostAddress(QStringLiteral("192.168.1.21")), p1));
+        QCOMPARE(p1.boardType, HPSDRHW::Hermes);
         QCOMPARE(p1.reportedReceivers, 4);
+        QCOMPARE(p1.maxReceivers, 4);
+
+        // The HL2 carries it in byte 19, as mi0bot reads it; byte 20 (0x45,
+        // 69) is not a receiver count.
+        const QByteArray hl2 = hl2CapturedReply();
+        QCOMPARE(hl2.size(), 60);
+        QCOMPARE(quint8(hl2[19]), quint8(0x04));
+        QCOMPARE(quint8(hl2[20]), quint8(0x45));
+        RadioInfo hl2Info;
+        QVERIFY(RadioDiscovery::parseP1Reply(hl2, QHostAddress(QStringLiteral("192.168.1.123")),
+                                             hl2Info));
+        QCOMPARE(hl2Info.boardType, HPSDRHW::HermesLite);
+        QCOMPARE(hl2Info.reportedReceivers, 4);
+        QCOMPARE(hl2Info.maxReceivers, 4);
+
+        // An HL2 reply reporting 0 keeps the board's own count.
+        QByteArray hl2None = hl2;
+        hl2None[19] = char(0);
+        RadioInfo hl2NoneInfo;
+        QVERIFY(RadioDiscovery::parseP1Reply(hl2None,
+                                             QHostAddress(QStringLiteral("192.168.1.123")),
+                                             hl2NoneInfo));
+        QCOMPARE(hl2NoneInfo.reportedReceivers, 0);
+        QCOMPARE(hl2NoneInfo.maxReceivers,
+                 RadioInfo::maxReceiversForBoard(HPSDRHW::HermesLite));
 
         // A radio typed in by hand or restored from the saved list has
         // reported nothing.
