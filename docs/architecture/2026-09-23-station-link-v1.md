@@ -805,6 +805,32 @@ nothing sees exactly the wire it was built for. A client never sends a
 message kind or verb the station has not advertised, in `features` or in
 its capabilities.
 
+**`band2m` 1** (R-IOS-26, R-R3-49; JJ's ruling 2026-09-28): the client
+knows 2 m as a band of its own. Band numbers on the link are the desktop's
+`Band` values: 0 160 m to 10 6 m, 11 GEN, 12 WWV, 13 XVTR, 14 to 26 the
+short-wave broadcast bands, and 27 2 m (144.0 to 148.0 MHz, both ends
+included, as Thetis's band tables have it). 2 m was added after every
+existing band, so no number moved. A peer that declares `band2m` 1 at
+minor 11 is sent `band2mVersion` 1 (section 6.3) and the link as this
+document describes it. Any other peer sees exactly the wire it was built
+for (section 17), in which 2 m is part of GEN: every band number that
+would be 27 reads 11 (a slice's and a marker's `band`, `rxFilter0Band`,
+`rxFilter1Band`, `bandOutputsBand`, a `band` key in any record, notice,
+confirmation, device list or other JSON the Core sends), the catalogue's
+`bands` and Setup's antenna rows leave 2 m out, the per-band watts maps
+leave out `2m`, and the three per-band antenna lists carry 14 entries.
+The Core takes the 14-entry lists and 14-key maps such a peer writes, and
+keeps its 2 m value. `BandLinkFit::forPeerWithout2m` (`BandLinkFit.h`)
+does the fitting; `tst_band_link_fit` holds it to this paragraph. The
+desktop declares `band2m` 1. It never sends band 27, a 2 m antenna entry
+or a `2m` watts key to a Core without `band2mVersion` 1
+(`BandLinkFit::forStationWithout2m`); its 2 m band button is greyed with
+"This Core does not have the 2 m band yet. Updating the Core adds it."
+Existing settings are not moved: a value an operator saved for GEN while
+tuned to 2 m stays GEN's, and 2 m starts from its own defaults (the band
+stack seed 144.200 MHz USB, Thetis clsBandStackManager.cs:2160
+[v2.10.3.15]).
+
 ### 6.2 The two-key feature gate
 
 A feature is available only when both keys hold: the agreed minor is at
@@ -914,6 +940,7 @@ change shows as surface drift and as a change to this table.
 | `radioAntennaRowsVersion` | 1 |
 | `vaxVersion` | 1 |
 | `txEqCurveVersion` | 1 |
+| `band2mVersion` | 1 |
 
 <!-- /surface -->
 
@@ -1039,6 +1066,14 @@ When a feature is off, its version is 0:
   the feature is sent neither this entry nor the property. An app on a
   Core that sends no entry shows the curve disabled with "This Core does
   not send the TX EQ curve. Updating the Core may help."
+- `band2mVersion`: optional and appended last, after
+  `txEqCurveVersion` (after `radioAntennaRowsVersion` when the others are
+  absent), only at agreed minor 11 for a peer that
+  declared `band2m` 1 (section 6.1). 1: the Core sends 2 m as band 27, the
+  catalogue's `bands` with its 2 m button, the per-band watts maps with
+  `2m` and the per-band antenna lists with 15 entries, and takes band 27
+  in `slice.selectBand`, `setAlexRxAntenna`, `setAlexTxAntenna` and their
+  `ForRadio` forms. A peer sent no entry sees 2 m as GEN.
 - `remotePgxlControlVersion`, `remoteRfKitControlVersion`,
   `remoteTgxlControlVersion`: sent only at agreed minor 11, and 0 unless
   the Core owns its accessories. `remotePgxlControlVersion` 3 adds the
@@ -1796,7 +1831,8 @@ older window sees only the values it was built for.
 | 84 | `radioAntennaRowsVersion` | `i64` |
 | 85 | `vaxVersion` | `i64` |
 | 86 | `txEqCurveVersion` | `i64` |
-| 87 | `coreBuildInfo` | `utf8` |
+| 87 | `band2mVersion` | `i64` |
+| 88 | `coreBuildInfo` | `utf8` |
 
 <!-- /surface -->
 
@@ -2110,7 +2146,7 @@ An enum property lists the values its domain allows.
 | 8 | `filterLow` | `i64` | outbound |  |
 | 9 | `filterHigh` | `i64` | outbound |  |
 | 10 | `txSlice` | `bool` | outbound |  |
-| 11 | `band` | `enum` | outbound | 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26 |
+| 11 | `band` | `enum` | outbound | 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27 |
 | 12 | `streamIndex` | `i64` | outbound |  |
 | 13 | `psPaused` | `bool` | outbound |  |
 
@@ -2132,7 +2168,7 @@ An enum property lists the values its domain allows.
 | 11 | `active` | `bool` | outbound |  |
 | 12 | `txSlice` | `bool` | outbound |  |
 | 13 | `sliceIndex` | `i64` | constantSnapshot |  |
-| 14 | `band` | `enum` | outbound | 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26 |
+| 14 | `band` | `enum` | outbound | 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27 |
 | 15 | `signalStrengthDbm` | `f64` | outbound |  |
 | 16 | `signalPeakDbm` | `f64` | outbound |  |
 | 17 | `signalAverageDbm` | `f64` | outbound |  |
@@ -2911,11 +2947,13 @@ Notes on the keys:
   name and its getter's type. `tuneDrivePowerSource` becomes two-way.
   `powerByBandJson` and `tunePowerByBandJson` (utf8) are the per-band power
   and tune power in whole watts, a compact JSON object keyed by the app's
-  band key for the 14 bands (`160m`, `80m`, `60m`, `40m`, `30m`, `20m`,
-  `17m`, `15m`, `12m`, `10m`, `6m`, `GEN`, `WWV`, `XVTR`); the Core writes
-  its keys in its own order, and a window reads it as an object. A write
-  carries all 14 bands, each a whole number from 0 to 100 W (tune power 0
-  to 99 on a Hermes Lite 2); a map with a band missing, a key that is not
+  band key for the 15 bands (`160m`, `80m`, `60m`, `40m`, `30m`, `20m`,
+  `17m`, `15m`, `12m`, `10m`, `6m`, `GEN`, `WWV`, `XVTR`, `2m`); the Core
+  writes its keys in its own order, and a window reads it as an object. A
+  peer without `band2mVersion` 1 is sent the 14 without `2m` (section
+  6.1). A write carries all 15 bands, or the 14 without `2m` (2 m then
+  keeps its value), each a whole number from 0 to 100 W (tune power 0
+  to 99 on a Hermes Lite 2); a map with another band missing, a key that is not
   a band, or a value that is not a whole number or is out of range is
   refused whole and changes nothing. A map the Core takes reads back as
   the same object in the Core's key order, and is accepted.
@@ -3191,10 +3229,10 @@ filter cut from 100 to 10000 Hz.", "Choose an anti-VOX gain from -60 to 60
 dB.", "Choose a tone frequency from -20000 to 20000 Hz.", "Choose a
 two-tone level from -96 to 0 dB.", "Choose a two-tone power from 0 to 100
 percent.", "Choose a second tone delay from 0 to 1000 ms.", and a band map
-refused whole: "Choose a power from 0 to 100 W for each of the 14 bands.",
-"Choose a tune power from 0 to 100 W for each of the 14 bands."; a Hermes
+refused whole: "Choose a power from 0 to 100 W for each band.",
+"Choose a tune power from 0 to 100 W for each band."; a Hermes
 Lite 2 says "Choose a tune power from 0 to 99." and "Choose a tune power
-from 0 to 99 for each of the 14 bands."), `stepAtt`'s `attOnTxEnabled`,
+from 0 to 99 for each band."), `stepAtt`'s `attOnTxEnabled`,
 `attOnTxValue` and `forceAttWhenPsOff` on a receive-only station from a
 peer not offered `transmitSettingsVersion` (the receive-only reason) or
 while its radio is on the air (the on-air reason), and `attOnTxValue`
@@ -3635,7 +3673,7 @@ app detects each by its presence, as it does `board`'s `transmit`,
 | `display` | Setup > Display's FFT, rendering and waterfall controls (below) |
 | `noiseReduction` | The VFO flag's noise-reduction quick controls, slot by slot (below) |
 | `board` | The radio (below) |
-| `bands` | `[{id, label}]`: the desktop's per-pan BAND grid, in its order (160, 80, 60, 40, 30, 20, 17, 15, 12, 10, 6, WWV); `id` is the band as `slice.selectBand` takes it (0 for 160 m to 10 for 6 m, 12 for WWV) and `label` is the button's text. The desktop draws its grid from the same table, so the two cannot differ |
+| `bands` | `[{id, label}]`: the desktop's per-pan BAND grid, in its order (160, 80, 60, 40, 30, 20, 17, 15, 12, 10, 6, 2, WWV); `id` is the band as `slice.selectBand` takes it (0 for 160 m to 10 for 6 m, 27 for 2 m, 12 for WWV) and `label` is the button's text; 2 m follows 6 m (R-IOS-26), and a peer without `band2mVersion` 1 is sent the grid without it (section 6.1). The desktop draws its grid from the same table, so the two cannot differ |
 | `bandPlans` | `[{id, name, default, active, segments: [{lowHz, highHz, label, licence, lowestClass, colour}], spots: [{hz, label}]}]`: every bundled plan, `id` its file's name (`arrl-us`), `default` true on ARRL (US) alone, `active` true on the Core's own plan alone (the plan settings `BandPlanName` names; a Core from before `active` sends none, and an app then reads `BandPlanName`); `spots` are the plan's marked frequencies, as its file lists them, `hz` the frequency in whole hertz and `label` the file's text (the desktop's strip draws each as a dot, without its label); `licence` lists the licence classes (`E,G`), empty for a beacon or no transmit; `lowestClass` is the lowest class the segment allows, as the desktop's band-plan strip names it after the label (`PHONE General`): `Tech` when `licence` holds T, else `General` when it holds G, `Extra` when it is exactly `E`, and empty otherwise |
 | `palettes` | `[{id, name, stops: [{at, colour}]}]`: the waterfall palettes, `id` the desktop's palette number, `at` from 0 to 1 to three places, lowest first. The Custom palette is each computer's own and is not listed |
 | `sliceColours` | `[colour]`: slice A's colour first, one for each slice the radio allows |
@@ -3838,9 +3876,9 @@ the Core keeps:
 
 | Stream | Capacity | Record |
 | --- | --- | --- |
-| `spots` | 500 | One spot the Core holds (its SpotModel: the station sources' spots, and FreeDV Reporter's once the Core runs it), `id` its index: `timeUtc` (string, ISO 8601 UTC), `frequencyHz` (number, whole Hz), `call`, `mode`, `source` (the source's label: `Cluster`, `RBN`, `POTA`, `PSK`, `FreeDV`), `spotter`, `comment` (strings), `band` (number, the Band as the catalogue's `bands` numbers it, 11 for GEN), `dxccColour` (string, `#rrggbb`, empty when the Core does not colour it) and `dxccPriority` (number: 4 a new DXCC entity, 3 a new band, 2 a new mode, 1 worked before, 0 not known or colouring off); with `recordStreamVersion` 2, `resolvedMode` (number, the slice's `dspMode` value 0 to 13 a click on the spot selects, as the desktop resolves it: `CWU` 4 or `CWL` 3 for CW by the 10 MHz rule, `USB` 1, `LSB` 0, `DIGU` 7, `DIGL` 9, `AM` 6, `SAM` 10, `FM` 5 (NFM too), `RADE_U` 12 or `RADE_L` 13 for a FreeDV spot; absent when the resolver has none: the spot or its comment names a mode it does not map, or names none and the spot is below 1.8 MHz or in a band's digital segment, whose inferred `DIGU` the resolver's table does not map) |
+| `spots` | 500 | One spot the Core holds (its SpotModel: the station sources' spots, and FreeDV Reporter's once the Core runs it), `id` its index: `timeUtc` (string, ISO 8601 UTC), `frequencyHz` (number, whole Hz), `call`, `mode`, `source` (the source's label: `Cluster`, `RBN`, `POTA`, `PSK`, `FreeDV`), `spotter`, `comment` (strings), `band` (number, the Band as the catalogue's `bands` numbers it: 11 for GEN, 27 for 2 m; a peer without `band2mVersion` 1 reads 11 for 2 m, section 6.1), `dxccColour` (string, `#rrggbb`, empty when the Core does not colour it) and `dxccPriority` (number: 4 a new DXCC entity, 3 a new band, 2 a new mode, 1 worked before, 0 not known or colouring off); with `recordStreamVersion` 2, `resolvedMode` (number, the slice's `dspMode` value 0 to 13 a click on the spot selects, as the desktop resolves it: `CWU` 4 or `CWL` 3 for CW by the 10 MHz rule, `USB` 1, `LSB` 0, `DIGU` 7, `DIGL` 9, `AM` 6, `SAM` 10, `FM` 5 (NFM too), `RADE_U` 12 or `RADE_L` 13 for a FreeDV spot; absent when the resolver has none: the spot or its comment names a mode it does not map, or names none and the spot is below 1.8 MHz or in a band's digital segment, whose inferred `DIGU` the resolver's table does not map) |
 | `spotConsole:<source>` | 200 | One console line of a station source (`dxCluster`, `rbn`, `pota`, `pskReporter`, and with `stationFreedvVersion` 1 `freedvReporter`), `id` a rising number: `line` (string). A command typed from any device shows as `> <command>` |
-| `freedvStations` | 1000 | With `stationFreedvVersion` 1: one station FreeDV Reporter lists, as the Core hears it, `id` its FreeDV Reporter session id: the FreeDV Reporter dialog's 14 columns, `callsign`, `gridSquare` (strings), `distanceKm` and `headingDeg` (numbers, from the Core's own grid square; 0 with `headingCardinal` empty while either grid square is not known), `headingCardinal` (string, `N` to `NNW`), `version` (string), `frequencyHz` (number, whole Hz, 0 not known), `txMode` (string), `status` (string: `Active`, `TX` or `RX Only`), `userMessage` (string), `lastTxUtc` (string, ISO 8601 UTC, empty when never), `lastRxCallsign`, `lastRxMode` (strings), `snrDb` (number, -99 not known) and `lastUpdateUtc` (string, ISO 8601 UTC, empty when not known); then `transmitting` (boolean), `receivingFrom` (string: whom its latest receive report heard, the last callsign it named, while that report stands; empty once a frequency change clears it), `messageChangedAtMs` (number, the Core's clock in ms since the epoch when `userMessage` last changed, 0 never) and `lastRxUtc` (string, ISO 8601 UTC, when its latest receive report came, empty when none stands); with `stationFreedvVersion` 2, `band` (number, the Band as the `spots` record numbers it: 0 160 m, 1 80 m, 2 60 m, 3 40 m, 4 30 m, 5 20 m, 6 17 m, 7 15 m, 8 12 m, 9 10 m, 10 6 m, 11 GEN for a frequency outside those bands, 2 m included, 12 WWV within 5 kHz of 2.5, 5, 10, 15, 20 or 25 MHz; each band's edges belong to it; absent while `frequencyHz` is 0). The list starts again (a reset) each time the Core's connection to FreeDV Reporter connects or ends |
+| `freedvStations` | 1000 | With `stationFreedvVersion` 1: one station FreeDV Reporter lists, as the Core hears it, `id` its FreeDV Reporter session id: the FreeDV Reporter dialog's 14 columns, `callsign`, `gridSquare` (strings), `distanceKm` and `headingDeg` (numbers, from the Core's own grid square; 0 with `headingCardinal` empty while either grid square is not known), `headingCardinal` (string, `N` to `NNW`), `version` (string), `frequencyHz` (number, whole Hz, 0 not known), `txMode` (string), `status` (string: `Active`, `TX` or `RX Only`), `userMessage` (string), `lastTxUtc` (string, ISO 8601 UTC, empty when never), `lastRxCallsign`, `lastRxMode` (strings), `snrDb` (number, -99 not known) and `lastUpdateUtc` (string, ISO 8601 UTC, empty when not known); then `transmitting` (boolean), `receivingFrom` (string: whom its latest receive report heard, the last callsign it named, while that report stands; empty once a frequency change clears it), `messageChangedAtMs` (number, the Core's clock in ms since the epoch when `userMessage` last changed, 0 never) and `lastRxUtc` (string, ISO 8601 UTC, when its latest receive report came, empty when none stands); with `stationFreedvVersion` 2, `band` (number, the Band as the `spots` record numbers it: 0 160 m, 1 80 m, 2 60 m, 3 40 m, 4 30 m, 5 20 m, 6 17 m, 7 15 m, 8 12 m, 9 10 m, 10 6 m, 11 GEN for a frequency outside those bands, 12 WWV within 5 kHz of 2.5, 5, 10, 15, 20 or 25 MHz, 27 2 m (144 to 148 MHz; a peer without `band2mVersion` 1 reads 11, section 6.1); each band's edges belong to it; absent while `frequencyHz` is 0). The list starts again (a reset) each time the Core's connection to FreeDV Reporter connects or ends |
 | `coreLog` | 200 | With `supportBundleVersion` 1: one line of the Core's log as its log file has it (`[HH:mm:ss.zzz] INF: text`, addresses already shortened), `id` its number in the Core's log (rising): `line` (string). Keys, tokens and pairing codes are removed as the support bundle removes them. The Core reads its log every 250 ms while a peer follows the stream, and only then; its first backlog is the newest lines at the first subscribe |
 | `txCfcCompression` | 1 | With `txReadingsVersion` 1: the CFC display, one record, `id` `"0"`, replaced each time the Core reads new data: `atMs` (number, when the Core read it, in milliseconds on its own monotonic clock) and `binsDbTenths` (string: the 1025 values of the CFC compression display, each rounded to a tenth of a dB, as little-endian int16 tenths, in base64). Bin `i` is `i * 48000 / 1024` Hz; a chart draws the bins over its own frequency range as the local CFC dialog does (Thetis's frmCFCConfig `timerTick`: `binsPerHz` = 1025 / 48000). The Core reads the display every 50 ms, Thetis's interval, only while at least one peer subscribes and its radio is on the air with CFC on, and sends a record only when WDSP says new data is ready |
 | `stationRadios` | 64 | With `stationRadiosVersion` 1: one radio the Core can see, the Core's radio first, `id` its MAC in upper case: `id` and `mac` (strings, the same), `name` (string, as the radio reports itself), `model` (number, the `hpsdrModel` the Core runs it as: its saved override, else its board's), `address` (string, its IP address, empty when not known), `protocol` (number, 1 or 2) and `inUse` (boolean, true for the Core's radio). The list is what the Core's last scan found, with the Core's radio; a radio stays listed after it drops off until a scan misses it |

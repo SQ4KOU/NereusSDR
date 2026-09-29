@@ -133,7 +133,10 @@ QJsonObject expectedAntennaRowsTable(bool tx, HPSDRModel model)
         }
     }
     QJsonArray rows;
-    for (int band = 0; band < AlexAntennaFacade::kBandCount; ++band) {
+    // One row per entry of the antenna lists, in their order: 160m .. XVTR,
+    // then 2 m (R-IOS-26). A row carries its band's number (2 m is 27).
+    for (int slot = 0; slot < AlexAntennaFacade::kBandCount; ++slot) {
+        const int band = static_cast<int>(bandFromPerBandStateSlot(slot));
         const QString label = bandLabel(static_cast<Band>(band));
         QJsonArray cells;
         for (const QJsonValue& rawColumn : columns) {

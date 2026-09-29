@@ -37,6 +37,8 @@
 //                 Thetis Display.TXAttenuatorOffset, set with every TX step
 //                 attenuation this controller applies. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - 2 m as its own band (R-IOS-26, R-R3-49). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -606,11 +608,12 @@ private:
     // Thetis default: 31 dB per band (console.cs:1810 [v2.10.3.13]):
     //   setTXstepAttenuatorForBand((Band)i, 31);
     // NereusSDR default: 0 (no TX ATT until user configures it).
-    // Per-band TX ATT spans HF amateur + GEN/WWV/XVTR only.  SWL bands
+    // Per-band TX ATT spans HF amateur + GEN/WWV/XVTR and 2 m.  SWL bands
     // (Band::SwlFirst..SwlLast, Phase 3L extension) inherit ham-band
     // values — the HL2 ATT chip is a single hardware register regardless
-    // of the SWL slice you tune to.  Sized at Band::SwlFirst (=14).
-    std::array<int, static_cast<size_t>(Band::SwlFirst)> m_txAttByBand{};
+    // of the SWL slice you tune to.  Sized by the per-band state slots
+    // (15: 160m .. XVTR and 2 m, Band.h).
+    std::array<int, static_cast<size_t>(kPerBandStateCount)> m_txAttByBand{};  // per-band state slots, 2 m at 14
 
     // MOX state mirror — set by onMoxHardwareFlipped().  Auto-att (Classic +
     // Adaptive) reads this to skip overload-driven ATT bumps during TX, since

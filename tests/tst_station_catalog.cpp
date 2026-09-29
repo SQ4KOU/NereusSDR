@@ -215,7 +215,10 @@ StationCatalog::Inputs inputsFor(HPSDRModel model, ProtocolVersion protocol,
 }
 
 // The desktop's values for `model`, from the headers its widgets read.
-void checkDesktopValues(const QJsonObject& catalog, HPSDRModel model, ProtocolVersion protocol)
+// `knows2m` false: the catalogue as a peer that did not declare band2m
+// reads it (R-IOS-26, station link section 6.1), the grid without 2 m.
+void checkDesktopValues(const QJsonObject& catalog, HPSDRModel model, ProtocolVersion protocol,
+                        bool knows2m = true)
 {
     using namespace ControlRanges;
     const BoardCapabilities& caps = BoardCapsTable::forModel(model);
@@ -226,13 +229,19 @@ void checkDesktopValues(const QJsonObject& catalog, HPSDRModel model, ProtocolVe
     // Bands: the desktop's per-pan BAND grid (kBandGrid), in its order, each
     // with its Band value and its button's text.
     const QJsonArray bands = catalog.value(QStringLiteral("bands")).toArray();
-    QCOMPARE(bands.size(), kBandGridCount);
-    for (int i = 0; i < kBandGridCount; ++i) {
+    QList<const BandGridEntry*> grid;
+    for (const BandGridEntry& entry : kBandGrid) {
+        if (knows2m || entry.band != Band::Band2m) {
+            grid.append(&entry);
+        }
+    }
+    QCOMPARE(bands.size(), grid.size());
+    for (int i = 0; i < grid.size(); ++i) {
         const QJsonObject band = bands.at(i).toObject();
         QCOMPARE(band.keys(), (QStringList{QStringLiteral("id"), QStringLiteral("label")}));
-        QCOMPARE(band.value(QStringLiteral("id")).toInt(), static_cast<int>(kBandGrid[i].band));
+        QCOMPARE(band.value(QStringLiteral("id")).toInt(), static_cast<int>(grid.at(i)->band));
         QCOMPARE(band.value(QStringLiteral("label")).toString(),
-                 QString::fromLatin1(kBandGrid[i].label));
+                 QString::fromLatin1(grid.at(i)->label));
     }
 
     // Modes: DSPMode 0 to 13 with SliceModel's names.
@@ -686,8 +695,8 @@ private slots:
     void init() { AppSettings::instance().clear(); }
     void cleanup() { AppSettings::instance().clear(); }
 
-    // The grid the desktop draws, in the order it draws it: 160 to 6 m, then
-    // WWV, each id the Band enum's value.
+    // The grid the desktop draws, in the order it draws it: 160 to 6 m, 2 m
+    // (R-IOS-26), then WWV, each id the Band enum's value.
     void theBandsAreTheDesktopsGrid()
     {
         BandPlanManager plans;
@@ -706,13 +715,15 @@ private slots:
                                       QStringLiteral("30"), QStringLiteral("20"),
                                       QStringLiteral("17"), QStringLiteral("15"),
                                       QStringLiteral("12"), QStringLiteral("10"),
-                                      QStringLiteral("6"), QStringLiteral("WWV")}));
+                                      QStringLiteral("6"), QStringLiteral("2"),
+                                      QStringLiteral("WWV")}));
         QCOMPARE(ids, (QList<int>{static_cast<int>(Band::Band160m), static_cast<int>(Band::Band80m),
                                   static_cast<int>(Band::Band60m), static_cast<int>(Band::Band40m),
                                   static_cast<int>(Band::Band30m), static_cast<int>(Band::Band20m),
                                   static_cast<int>(Band::Band17m), static_cast<int>(Band::Band15m),
                                   static_cast<int>(Band::Band12m), static_cast<int>(Band::Band10m),
-                                  static_cast<int>(Band::Band6m), static_cast<int>(Band::WWV)}));
+                                  static_cast<int>(Band::Band6m), static_cast<int>(Band::Band2m),
+                                  static_cast<int>(Band::WWV)}));
         QCOMPARE(ids.first(), 0);
         QCOMPARE(ids.last(), 12);
     }
@@ -724,11 +735,13 @@ private slots:
         const QJsonObject hl2 = catalogInFixture(QStringLiteral("catalog-hermes-lite-2.json"));
         QVERIFY2(!g2.isEmpty(), "the G2 catalogue fixture has no catalogue");
         QVERIFY2(!hl2.isEmpty(), "the HL2 catalogue fixture has no catalogue");
-        checkDesktopValues(g2, HPSDRModel::ANAN_G2, ProtocolVersion::Protocol2);
+        // The fixtures' clients did not declare band2m: their catalogue is
+        // the grid without 2 m, as the Core sends an older app.
+        checkDesktopValues(g2, HPSDRModel::ANAN_G2, ProtocolVersion::Protocol2, false);
         if (QTest::currentTestFailed()) {
             return;
         }
-        checkDesktopValues(hl2, HPSDRModel::HERMESLITE, ProtocolVersion::Protocol1);
+        checkDesktopValues(hl2, HPSDRModel::HERMESLITE, ProtocolVersion::Protocol1, false);
     }
 
     // ...and differ exactly where the radios do: the board, the RF power

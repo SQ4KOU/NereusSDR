@@ -7,8 +7,16 @@
 
 namespace {
 const QString kMac = QStringLiteral("AA:BB:CC:DD:EE:01");
+// A phone that knows 2 m (R-IOS-26): 15-entry lists, band 27 in the verbs.
 const QHash<QByteArray, int> kRows{{"deviceAuth", 1}, {"sessionHolder", 1},
-                                   {"radioAntennaRows", 1}};
+                                   {"radioAntennaRows", 1}, {"band2m", 1}};
+// A phone built before 2 m: the 14 entries without 2 m's.
+const QHash<QByteArray, int> kRowsWithout2m{{"deviceAuth", 1}, {"sessionHolder", 1},
+                                            {"radioAntennaRows", 1}};
+QString without2m(const QString& list)
+{
+    return list.left(list.lastIndexOf(QLatin1Char(',')));
+}
 QList<MirrorUpdate> rxArgs(const QString& mac, Band band, int antenna, bool rxOnly = false)
 {
     return {utf8("mac", mac), int64("band", static_cast<int>(band)), int64("antenna", antenna),
@@ -55,6 +63,12 @@ private slots:
         QVERIFY(core.invoke(first, "setAlexRxAntennaForRadio",
                             rxArgs(kMac, Band::Band40m, 2, true)).value("accepted").toBool());
         QCOMPARE(core.model->alexController().rxOnlyAnt(Band::Band40m), 2);
+        // 2 m has antennas of its own (band 27, R-IOS-26).
+        QVERIFY(core.invoke(first, "setAlexRxAntennaForRadio",
+                            rxArgs(kMac, Band::Band2m, 3)).value("accepted").toBool());
+        QCOMPARE(core.model->alexController().rxAnt(Band::Band2m), 3);
+        QCOMPARE(core.model->alexController().rxAnt(Band::GEN), 1);
+        QVERIFY(core.model->alexAntennaFacade()->rxAntennas().endsWith(QStringLiteral(",3")));
         QVERIFY(core.invoke(first, "setAlexTxAntennaForRadio",
                             txArgs(kMac, Band::Band40m, 3)).value("accepted").toBool());
         QCOMPARE(core.model->alexController().txAnt(Band::Band40m), 3);
@@ -68,19 +82,24 @@ private slots:
                              txArgs(kMac, Band::Band40m, 2)).value("accepted").toBool());
         QCOMPARE(core.model->alexController().txAnt(Band::Band40m), 1);
 
-        auto* second = core.signIn(b, kRows);
+        // A phone built before 2 m reads the lists without 2 m's entry.
+        auto* second = core.signIn(b, kRowsWithout2m);
         QVERIFY(admitted(second));
         QCOMPARE(capability(second->received(), QStringLiteral("radioAntennaRowsVersion")),
                  std::optional<qint64>(1));
+        QCOMPARE(capability(second->received(), QStringLiteral("band2mVersion")), std::nullopt);
         QCOMPARE(latest(second->received(), QStringLiteral("alexAntennas"),
                         QStringLiteral("rxAntennas")).toString(),
-                 core.model->alexAntennaFacade()->rxAntennas());
+                 without2m(core.model->alexAntennaFacade()->rxAntennas()));
         QCOMPARE(latest(second->received(), QStringLiteral("alexAntennas"),
                         QStringLiteral("rxOnlyAntennas")).toString(),
-                 core.model->alexAntennaFacade()->rxOnlyAntennas());
+                 without2m(core.model->alexAntennaFacade()->rxOnlyAntennas()));
         QCOMPARE(latest(second->received(), QStringLiteral("alexAntennas"),
                         QStringLiteral("txAntennas")).toString(),
-                 core.model->alexAntennaFacade()->txAntennas());
+                 without2m(core.model->alexAntennaFacade()->txAntennas()));
+        // The phone that knows 2 m was offered it.
+        QCOMPARE(capability(first->received(), QStringLiteral("band2mVersion")),
+                 std::optional<qint64>(1));
         const int capabilitiesBefore = ofType(first->received(), QStringLiteral("capabilities")).size();
         core.model->setConnectionStateForTest(ConnectionState::Disconnected);
         QTRY_VERIFY(ofType(first->received(), QStringLiteral("capabilities")).size()

@@ -23,6 +23,8 @@
 // Modification history (NereusSDR):
 //   2026-04-23 — New file for NereusSDR by J.J. Boyd (KG4VCF), with
 //                 AI-assisted transformation via Anthropic Claude Code.
+//   2026-09-28 - 2 m seed (R-IOS-26, R-R3-49). J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -91,6 +93,9 @@ BandSeed seedFor(Band b)
         case Band::Band10m:  return { Band::Band10m,  28305000.0,  DSPMode::USB, true };
         // From Thetis clsBandStackManager.cs:2155 [v2.10.3.13]
         case Band::Band6m:   return { Band::Band6m,   50125000.0,  DSPMode::USB, true };
+        // From Thetis clsBandStackManager.cs:2160 [v2.10.3.15] -
+        // first voice entry of the "2M" list: "2M", "USB", "F6", 144.200000.
+        case Band::Band2m:   return { Band::Band2m,  144200000.0,  DSPMode::USB, true };
         // From Thetis clsBandStackManager.cs:2165 [v2.10.3.13] —
         // 10 MHz is mid-list of 5 WWV entries and most commonly usable.
         // Thetis uses synchronous AM (SAM), not plain AM.

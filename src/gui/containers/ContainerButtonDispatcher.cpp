@@ -46,6 +46,8 @@
 //                                    DisplayDuplex setting through its
 //                                    hooks. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-28 - 2 m as its own band (R-IOS-26, R-R3-49). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "gui/containers/ContainerButtonDispatcher.h"
@@ -55,6 +57,7 @@
 #include "core/MoxController.h"
 #include "core/SliceOwnership.h"
 #include "core/TwoToneController.h"
+#include "core/session/IStationLink.h"
 #include "core/session/PureSignalSessionFacade.h"
 #include "gui/SpectrumWidget.h"
 #include "gui/containers/ContainerWidget.h"
@@ -446,6 +449,14 @@ void ContainerButtonDispatcher::applyBand(BandButtonItem* item, int rxSource) co
     if (!item) { return; }
     applySliceAvailability(item, rxSource);
     SliceModel* slice = sliceFor(rxSource);
+    // R-IOS-26: a remote window's 2 m button, disabled with the reason
+    // when its Core does not have the 2 m band.
+    if (slice && m_model->stationLink() != nullptr) {
+        const QString reason = m_model->stationLink()->band2mUnavailableReason();
+        if (!reason.isEmpty()) {
+            item->setButtonAvailable(uiIndexFromBand(Band::Band2m), false, reason);
+        }
+    }
     item->setActiveBand(slice ? uiIndexFromBand(bandFromFrequency(slice->frequency())) : -1);
 }
 

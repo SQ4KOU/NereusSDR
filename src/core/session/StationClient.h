@@ -372,6 +372,8 @@
 //               pairingAvailable() and requestDeviceAdmin() for the This
 //               Core page. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //               Claude Code.
+//   2026-09-28 - 2 m as its own band (R-IOS-26, R-R3-49). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QAbstractSocket>
@@ -1139,6 +1141,12 @@ public:
     CommandOutcome requestActiveSlice(int sliceId) override;
     // Parity Task 18 (B3.1): slice.selectBand for a named slice.
     bool bandSelectAvailable() const override;
+    /// R-IOS-26 / R-R3-49: the Core knows 2 m as its own band
+    /// (band2mVersion 1 at minor 11). Without it a 2 m band button, menu
+    /// entry or antenna row cannot reach the Core, and says why.
+    bool station2mAvailable() const;
+    static QString station2mUnavailableReason();
+    QString band2mUnavailableReason() const override;
     CommandOutcome requestSelectBand(int sliceId, int band) override;
     CommandOutcome requestSliceSampleRate(int sliceId, int rateHz) override;
     CommandOutcome requestStreamCtunPinned(int sliceId, bool pinned) override;

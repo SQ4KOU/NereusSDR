@@ -35,6 +35,8 @@
 //   2026-09-24 - R-R3-49 (parity Task 2): DrivePowerSource (the tune
 //                drive source on `transmit`). J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - Band::Band2m (R-IOS-26, R-R3-49). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorEnumDomain.h"
@@ -190,7 +192,10 @@ const DomainTable& table()
                             Band::WWV, Band::XVTR, Band::Band120m, Band::Band90m,
                             Band::Band61m, Band::Band49m, Band::Band41m, Band::Band31m,
                             Band::Band25m, Band::Band22m, Band::Band19m, Band::Band16m,
-                            Band::Band14m, Band::Band13m, Band::Band11m });
+                            Band::Band14m, Band::Band13m, Band::Band11m,
+                            // 2 m (R-IOS-26, R-R3-49): the Core sends it only
+                            // to a peer that declares band2m (BandLinkFit.h).
+                            Band::Band2m });
 
         return t;
     }();

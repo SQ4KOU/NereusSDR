@@ -327,6 +327,30 @@ private slots:
         }
     }
 
+    void aTwoMetreSpotCarriesBandTwentySeven()
+    {
+        // 2 m is its own band (JJ's ruling 2026-09-28): its number is 27,
+        // appended after every band that existed before, so no existing
+        // spot's band number moves. Either side of 2 m stays GEN (11).
+        SpotData spot;
+        spot.callsign = QStringLiteral("W1AW");
+        spot.mode = QStringLiteral("FT8");
+        spot.source = QStringLiteral("PSK");
+        spot.timestamp = QDateTime(QDate(2026, 9, 28), QTime(12, 0), QTimeZone::UTC);
+        spot.rxFreqMhz = 144.174;
+        QCOMPARE(SpotSourceHost::spotRecordFields(spot, nullptr).value("band").toInt(), 27);
+        spot.rxFreqMhz = 144.0;
+        QCOMPARE(SpotSourceHost::spotRecordFields(spot, nullptr).value("band").toInt(), 27);
+        spot.rxFreqMhz = 148.0;
+        QCOMPARE(SpotSourceHost::spotRecordFields(spot, nullptr).value("band").toInt(), 27);
+        spot.rxFreqMhz = 143.999;
+        QCOMPARE(SpotSourceHost::spotRecordFields(spot, nullptr).value("band").toInt(), 11);
+        spot.rxFreqMhz = 148.001;
+        QCOMPARE(SpotSourceHost::spotRecordFields(spot, nullptr).value("band").toInt(), 11);
+        spot.rxFreqMhz = 50.313;
+        QCOMPARE(SpotSourceHost::spotRecordFields(spot, nullptr).value("band").toInt(), 10);
+    }
+
     void theListenersAreThisComputersAndTheRestTheCores()
     {
         for (const char* key : {"WsjtxPort", "WsjtxAddress", "WsjtxAutoStart",

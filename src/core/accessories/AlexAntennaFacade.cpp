@@ -29,6 +29,8 @@
 //                                    setTxAntForBand and the TX band edit
 //                                    sender. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-28 - 2 m as its own band (R-IOS-26, R-R3-49). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/accessories/AlexAntennaFacade.h"
@@ -49,7 +51,7 @@ constexpr int kRxOnlyFirst = 0;
 
 QString malformedListReason()
 {
-    return QStringLiteral("The Core keeps one antenna for each of its 14 bands.");
+    return QStringLiteral("The Core keeps one antenna for each of its bands.");
 }
 
 QString antennaRangeReason()
@@ -180,13 +182,16 @@ QString AlexAntennaFacade::encode(const BandList& list)
 
 bool AlexAntennaFacade::decode(const QString& text, int lo, int hi, BandList* out, bool* clamped)
 {
+    // 15 entries, one per per-band state slot (160m .. XVTR, then 2 m), or
+    // the 14 without 2 m from a peer built before it (BandLinkFit.h): 2 m
+    // then keeps the value `out` holds.
     const QStringList parts = text.split(QLatin1Char(','));
-    if (parts.size() != kBandCount) {
+    if (parts.size() != kBandCount && parts.size() != kBandCount - 1) {
         return false;
     }
-    BandList parsed{};
+    BandList parsed = *out;
     bool moved = false;
-    for (int b = 0; b < kBandCount; ++b) {
+    for (int b = 0; b < parts.size(); ++b) {
         bool ok = false;
         const int value = parts.at(b).trimmed().toInt(&ok);
         if (!ok) {
@@ -209,20 +214,20 @@ QString AlexAntennaFacade::txAntennas() const { return encode(m_values.txAnt); }
 
 int AlexAntennaFacade::rxAnt(Band band) const
 {
-    const int b = static_cast<int>(band);
+    const int b = perBandStateSlot(band);
     return (b >= 0 && b < kBandCount) ? m_values.rxAnt[static_cast<std::size_t>(b)] : kAntFirst;
 }
 
 int AlexAntennaFacade::rxOnlyAnt(Band band) const
 {
-    const int b = static_cast<int>(band);
+    const int b = perBandStateSlot(band);
     return (b >= 0 && b < kBandCount) ? m_values.rxOnlyAnt[static_cast<std::size_t>(b)]
                                       : kRxOnlyFirst;
 }
 
 int AlexAntennaFacade::txAnt(Band band) const
 {
-    const int b = static_cast<int>(band);
+    const int b = perBandStateSlot(band);
     return (b >= 0 && b < kBandCount) ? m_values.txAnt[static_cast<std::size_t>(b)] : kAntFirst;
 }
 
@@ -233,7 +238,7 @@ bool AlexAntennaFacade::applyRemoteProperty(const QByteArray& property, const QV
     }
     Values next = m_values;
     if (property == "txAntennas") {
-        BandList list{};
+        BandList list = m_values.txAnt;
         if (!decode(value.toString(), kAntFirst, kAntLast, &list, nullptr)) {
             return true;  // ours, but not a list we can show: keep the last one
         }
@@ -284,7 +289,7 @@ void AlexAntennaFacade::setRxAntennas(const QString& list)
     if (!beginEdit("rxAntennas")) {
         return;
     }
-    BandList parsed{};
+    BandList parsed = m_values.rxAnt;
     bool clamped = false;
     if (!decode(list, kAntFirst, kAntLast, &parsed, &clamped)) {
         settle("rxAntennas", malformedListReason());
@@ -296,8 +301,8 @@ void AlexAntennaFacade::setRxAntennas(const QString& list)
     if (AlexController* c = m_controller.data()) {
         for (int b = 0; b < kBandCount; ++b) {
             const int want = parsed[static_cast<std::size_t>(b)];
-            if (c->rxAnt(Band(b)) != want) {
-                c->setRxAnt(Band(b), want);
+            if (c->rxAnt(bandFromPerBandStateSlot(b)) != want) {
+                c->setRxAnt(bandFromPerBandStateSlot(b), want);
             }
         }
         refresh();
@@ -313,7 +318,7 @@ void AlexAntennaFacade::setRxOnlyAntennas(const QString& list)
     if (!beginEdit("rxOnlyAntennas")) {
         return;
     }
-    BandList parsed{};
+    BandList parsed = m_values.rxOnlyAnt;
     bool clamped = false;
     if (!decode(list, kRxOnlyFirst, kAntLast, &parsed, &clamped)) {
         settle("rxOnlyAntennas", malformedListReason());
@@ -325,8 +330,8 @@ void AlexAntennaFacade::setRxOnlyAntennas(const QString& list)
     if (AlexController* c = m_controller.data()) {
         for (int b = 0; b < kBandCount; ++b) {
             const int want = parsed[static_cast<std::size_t>(b)];
-            if (c->rxOnlyAnt(Band(b)) != want) {
-                c->setRxOnlyAnt(Band(b), want);
+            if (c->rxOnlyAnt(bandFromPerBandStateSlot(b)) != want) {
+                c->setRxOnlyAnt(bandFromPerBandStateSlot(b), want);
             }
         }
         refresh();
@@ -372,7 +377,7 @@ void AlexAntennaFacade::setTxAntennas(const QString& list)
     if (!beginEdit("txAntennas")) {
         return;
     }
-    BandList parsed{};
+    BandList parsed = m_values.txAnt;
     bool clamped = false;
     if (!decode(list, kAntFirst, kAntLast, &parsed, &clamped)) {
         settle("txAntennas", malformedListReason());
@@ -387,9 +392,9 @@ void AlexAntennaFacade::setTxAntennas(const QString& list)
         bool kept = false;
         for (int b = 0; b < kBandCount; ++b) {
             const int want = parsed[static_cast<std::size_t>(b)];
-            if (c->txAnt(Band(b)) != want) {
-                c->setTxAnt(Band(b), want);
-                kept = kept || c->txAnt(Band(b)) != want;
+            if (c->txAnt(bandFromPerBandStateSlot(b)) != want) {
+                c->setTxAnt(bandFromPerBandStateSlot(b), want);
+                kept = kept || c->txAnt(bandFromPerBandStateSlot(b)) != want;
             }
         }
         if (kept && !clamped) {
@@ -481,7 +486,7 @@ void AlexAntennaFacade::setRxOutOverride(bool on)
 QString AlexAntennaFacade::setRxAntForBand(Band band, int antenna)
 {
     AlexController* c = m_controller.data();
-    const int b = static_cast<int>(band);
+    const int b = perBandStateSlot(band);
     if (!c) {
         return QStringLiteral("The Core has no antenna settings ready.");
     }
@@ -502,7 +507,7 @@ QString AlexAntennaFacade::setRxAntForBand(Band band, int antenna)
 QString AlexAntennaFacade::setRxOnlyAntForBand(Band band, int antenna)
 {
     AlexController* c = m_controller.data();
-    const int b = static_cast<int>(band);
+    const int b = perBandStateSlot(band);
     if (!c) {
         return QStringLiteral("The Core has no antenna settings ready.");
     }
@@ -523,7 +528,7 @@ QString AlexAntennaFacade::setRxOnlyAntForBand(Band band, int antenna)
 QString AlexAntennaFacade::setTxAntForBand(Band band, int antenna)
 {
     AlexController* c = m_controller.data();
-    const int b = static_cast<int>(band);
+    const int b = perBandStateSlot(band);
     if (!c) {
         return QStringLiteral("The Core has no antenna settings ready.");
     }
@@ -609,7 +614,7 @@ bool AlexAntennaFacade::sendTxBandEdit(Band band, int ant)
 
 void AlexAntennaFacade::setRxAnt(Band band, int ant)
 {
-    const int b = static_cast<int>(band);
+    const int b = perBandStateSlot(band);
     if (b < 0 || b >= kBandCount) {
         return;
     }
@@ -623,7 +628,7 @@ void AlexAntennaFacade::setRxAnt(Band band, int ant)
 
 void AlexAntennaFacade::setRxOnlyAnt(Band band, int ant)
 {
-    const int b = static_cast<int>(band);
+    const int b = perBandStateSlot(band);
     if (b < 0 || b >= kBandCount) {
         return;
     }
@@ -637,7 +642,7 @@ void AlexAntennaFacade::setRxOnlyAnt(Band band, int ant)
 
 void AlexAntennaFacade::setTxAnt(Band band, int ant)
 {
-    const int b = static_cast<int>(band);
+    const int b = perBandStateSlot(band);
     if (b < 0 || b >= kBandCount) {
         return;
     }
@@ -660,9 +665,9 @@ void AlexAntennaFacade::refresh()
     Values next;
     for (int b = 0; b < kBandCount; ++b) {
         const auto i = static_cast<std::size_t>(b);
-        next.rxAnt[i] = c->rxAnt(Band(b));
-        next.rxOnlyAnt[i] = c->rxOnlyAnt(Band(b));
-        next.txAnt[i] = c->txAnt(Band(b));
+        next.rxAnt[i] = c->rxAnt(bandFromPerBandStateSlot(b));
+        next.rxOnlyAnt[i] = c->rxOnlyAnt(bandFromPerBandStateSlot(b));
+        next.txAnt[i] = c->txAnt(bandFromPerBandStateSlot(b));
     }
     next.useTxAntForRx = c->useTxAntForRx();
     next.blockTxAnt2 = c->blockTxAnt2();

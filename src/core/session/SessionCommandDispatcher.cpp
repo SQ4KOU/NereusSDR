@@ -233,6 +233,8 @@
 //               (txModMonitorVersion 1), answered by the station server
 //               beside the record streams. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-28 - 2 m as its own band (R-IOS-26, R-R3-49). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -859,8 +861,10 @@ QString SessionCommandDispatcher::radioAntennaRowRefusal(const SessionMessage& i
                    || rxOnly.typeId() != QMetaType::Bool))) {
         return QStringLiteral("The Core could not read this request.");
     }
-    if (band < 0 || band >= AlexAntennaFacade::kBandCount) {
-        return QStringLiteral("The Core keeps antennas for 14 bands.");
+    // A band number: 160m .. XVTR (0-13) or 2 m (27, R-IOS-26).
+    if (band < 0 || band >= static_cast<int>(Band::Count)
+        || !hasPerBandState(static_cast<Band>(band))) {
+        return QStringLiteral("The Core keeps antennas for 160 m to 6 m, 2 m, GEN, WWV and XVTR.");
     }
     // The shared-setting classifier reads this row before the facade's
     // setter. Reject an unusable port here so no other device is asked to
@@ -3451,9 +3455,11 @@ void SessionCommandDispatcher::handleSetAlexRxAntenna(const SessionMessage& invo
                    QStringLiteral("The Core has no antenna settings ready."), {});
         return;
     }
-    if (band < 0 || band >= AlexAntennaFacade::kBandCount) {
+    // A band number: 160m .. XVTR (0-13) or 2 m (27, R-IOS-26).
+    if (band < 0 || band >= static_cast<int>(Band::Count)
+        || !hasPerBandState(static_cast<Band>(band))) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
-                   QStringLiteral("The Core keeps antennas for 14 bands."), {});
+                   QStringLiteral("The Core keeps antennas for 160 m to 6 m, 2 m, GEN, WWV and XVTR."), {});
         return;
     }
     const bool receiveOnly = rxOnly.toBool();
@@ -3489,9 +3495,11 @@ void SessionCommandDispatcher::handleSetAlexTxAntenna(const SessionMessage& invo
                    QStringLiteral("The Core has no antenna settings ready."), {});
         return;
     }
-    if (band < 0 || band >= AlexAntennaFacade::kBandCount) {
+    // A band number: 160m .. XVTR (0-13) or 2 m (27, R-IOS-26).
+    if (band < 0 || band >= static_cast<int>(Band::Count)
+        || !hasPerBandState(static_cast<Band>(band))) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
-                   QStringLiteral("The Core keeps antennas for 14 bands."), {});
+                   QStringLiteral("The Core keeps antennas for 160 m to 6 m, 2 m, GEN, WWV and XVTR."), {});
         return;
     }
     const QString reason = alex->setTxAntForBand(Band(band), antenna);

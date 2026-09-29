@@ -21,6 +21,10 @@
 //                 window's), and applyStationGridSetting re-reads a band's
 //                 dB max and min when the setting changes. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - 2 m reads and writes XVTR's grid slot, as Thetis's
+//                 per-band switch does (R-IOS-26, R-R3-49). J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.
 // =================================================================
 
 //=================================================================
@@ -93,6 +97,17 @@ namespace {
 constexpr int kThetisDefaultDbMax = -40;
 constexpr int kThetisDefaultDbMin = -140;
 constexpr int kDefaultGridStep    = 10;  // NereusSDR divergence (§10).
+
+// The grid slot a band reads and writes. Thetis keeps no display grid of
+// its own for 2 m: its per-band switch sends B2M, like every band without a
+// case, to the XVTR values.
+// From Thetis console.cs:9337-9339 [v2.10.3.15]:
+//   default:
+//       SetupForm.DisplayGridMin = DisplayGridMinXVTR;
+//       Display.SpectrumGridMin = (int)DisplayGridMinXVTR;
+// and console.cs:9474-9476 for DisplayGridMaxXVTR. The rest of the slot
+// (Clarity floor, noise floor estimate, 3D depth) follows the grid.
+Band gridSlot(Band b) { return b == Band::Band2m ? Band::XVTR : b; }
 
 QString gridMaxKey(Band b)      { return QStringLiteral("DisplayGridMax_") + bandKeyName(b); }
 QString gridMinKey(Band b)      { return QStringLiteral("DisplayGridMin_") + bandKeyName(b); }
@@ -222,18 +237,20 @@ void PanadapterModel::setBand(Band b)
 
 BandGridSettings PanadapterModel::perBandGrid(Band b) const
 {
+    b = gridSlot(b);
     return m_perBandGrid.value(b, BandGridSettings{ -40, -140 });
 }
 
 void PanadapterModel::setPerBandDbMax(Band b, int dbMax)
 {
+    b = gridSlot(b);
     BandGridSettings& slot = m_perBandGrid[b];  // constructor seeded all 14
     if (slot.dbMax == dbMax) {
         return;
     }
     slot.dbMax = dbMax;
     saveBandGridToSettings(b);
-    if (b == m_band) {
+    if (b == gridSlot(m_band)) {
         setdBmCeiling(dbMax);
     }
     shareWithOtherModels(this, [b, dbMax](PanadapterModel* pan) { pan->setPerBandDbMax(b, dbMax); });
@@ -241,13 +258,14 @@ void PanadapterModel::setPerBandDbMax(Band b, int dbMax)
 
 void PanadapterModel::setPerBandDbMin(Band b, int dbMin)
 {
+    b = gridSlot(b);
     BandGridSettings& slot = m_perBandGrid[b];
     if (slot.dbMin == dbMin) {
         return;
     }
     slot.dbMin = dbMin;
     saveBandGridToSettings(b);
-    if (b == m_band) {
+    if (b == gridSlot(m_band)) {
         setdBmFloor(dbMin);
     }
     shareWithOtherModels(this, [b, dbMin](PanadapterModel* pan) { pan->setPerBandDbMin(b, dbMin); });
@@ -255,11 +273,13 @@ void PanadapterModel::setPerBandDbMin(Band b, int dbMin)
 
 float PanadapterModel::clarityFloor(Band b) const
 {
+    b = gridSlot(b);
     return m_perBandGrid.value(b).clarityFloor;
 }
 
 void PanadapterModel::setClarityFloor(Band b, float floor)
 {
+    b = gridSlot(b);
     BandGridSettings& slot = m_perBandGrid[b];
     if ((!qIsNaN(floor) && !qIsNaN(slot.clarityFloor) && qFuzzyCompare(slot.clarityFloor, floor)) ||
         (qIsNaN(floor) && qIsNaN(slot.clarityFloor))) {
@@ -272,12 +292,14 @@ void PanadapterModel::setClarityFloor(Band b, float floor)
 // NereusSDR-original — no Thetis equivalent.
 float PanadapterModel::bandNFEstimate(Band b) const
 {
+    b = gridSlot(b);
     return m_perBandGrid.value(b).bandNFEstimate;
 }
 
 // NereusSDR-original — no Thetis equivalent.
 void PanadapterModel::setBandNFEstimate(Band b, float nf)
 {
+    b = gridSlot(b);
     BandGridSettings& slot = m_perBandGrid[b];
     if ((!qIsNaN(nf) && !qIsNaN(slot.bandNFEstimate) && qFuzzyCompare(slot.bandNFEstimate, nf)) ||
         (qIsNaN(nf) && qIsNaN(slot.bandNFEstimate))) {
@@ -293,6 +315,7 @@ void PanadapterModel::setBandNFEstimate(Band b, float nf)
 // Plan Task 14).
 int PanadapterModel::dss3DFloorDepthForBand(Band b) const
 {
+    b = gridSlot(b);
     return m_perBandGrid.value(b, BandGridSettings{ kThetisDefaultDbMax, kThetisDefaultDbMin })
         .dss3DFloorDepth;
 }
@@ -305,6 +328,7 @@ int PanadapterModel::dss3DFloorDepthForBand(Band b) const
 // setBandNFEstimate() pattern above.
 void PanadapterModel::setDss3DFloorDepthForBand(Band b, int depth)
 {
+    b = gridSlot(b);
     BandGridSettings& slot = m_perBandGrid[b];
     if (slot.dss3DFloorDepth == depth) {
         return;
@@ -329,6 +353,7 @@ void PanadapterModel::setGridStep(int step)
 
 void PanadapterModel::applyBandGrid(Band b)
 {
+    b = gridSlot(b);
     const BandGridSettings s = m_perBandGrid.value(b, BandGridSettings{ kThetisDefaultDbMax, kThetisDefaultDbMin });
     setdBmCeiling(s.dbMax);
     setdBmFloor(s.dbMin);

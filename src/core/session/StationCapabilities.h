@@ -162,6 +162,8 @@
 //   2026-09-28 - R-IOS-13 / R-R3-49: txEqCurveVersion, the read-only TX
 //                EQ curve on `transmit`. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-28 - R-IOS-26 / R-R3-49: band2mVersion, 2 m as its own band.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -247,6 +249,12 @@ struct StationCapabilities {
     /// txEqCurve 1, after radioAntennaRowsVersion; that peer alone gets the
     /// property. 0 (absent): the peer sees today's wire.
     int txEqCurveVersion = 0;
+    /// R-IOS-26 / R-R3-49: 1 means the Core knows 2 m as its own band
+    /// (Band 27, BandLinkFit.h) and sends it to this peer. Optional and
+    /// last at minor 11, for a peer that declared band2m 1. 0: the Core
+    /// sends 2 m as GEN and the per-band lists without it, and a window
+    /// sends neither band 27 nor a 2 m list entry.
+    int band2mVersion = 0;
     /// R-R3-47 / R-R3-22: 1 means the Core mirrors its Power Genius XL
     /// status as the read-only `amplifier` object. Sent after
     /// radioHardwareVersion in the same minor-11 block. 0: a window shows

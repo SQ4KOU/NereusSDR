@@ -167,6 +167,8 @@
 //                                    device verbs (deviceAdminAvailable,
 //                                    pairingAvailable, requestDeviceAdmin).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - 2 m as its own band (R-IOS-26, R-R3-49). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QString>
@@ -226,6 +228,9 @@ public:
     /// memory, exactly as a band button at the Core does. The defaults
     /// refuse, for links that did not negotiate it.
     virtual bool bandSelectAvailable() const { return false; }
+    /// R-IOS-26 / R-R3-49: the Core knows 2 m as its own band. Empty when
+    /// it does; otherwise the plain reason a 2 m control cannot reach it.
+    virtual QString band2mUnavailableReason() const { return {}; }
     virtual CommandOutcome requestSelectBand(int /*sliceId*/, int /*band*/)
     { return { false, QStringLiteral("This Core cannot change bands for this app. Updating the Core may help.") }; }
 

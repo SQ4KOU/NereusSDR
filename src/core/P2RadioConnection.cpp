@@ -85,6 +85,8 @@
 //                 buffer, which sheds a standing excess only in silence; the key-on cushion is the
 //                 radio's target lead plus one frame (16.25 ms, was 20 ms), so no standing 5 ms
 //                 stays in the ring. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - 2 m as its own band (R-IOS-26, R-R3-49). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -3463,7 +3465,11 @@ CodecContext P2RadioConnection::buildCodecContext() const
     // explicitly handles XVTR with a known LO offset, revisit this gate.
     {
         const Band txBand = bandFromFrequency(static_cast<double>(m_tx[0].frequency));
-        const bool txInBand = (txBand != Band::GEN && txBand != Band::WWV);
+        // 2 m (R-IOS-26) stays out of band here, as it was while 2 m fell
+        // into GEN: Thetis's IsOKToTX takes HF rows only and 2 m is a VHF
+        // row, so no drive goes out on 2 m.
+        const bool txInBand = (txBand != Band::GEN && txBand != Band::WWV
+                               && txBand != Band::Band2m);
         ctx.p2DriveLevel = txInBand ? m_tx[0].driveLevel : 0;
     }
     ctx.p2TxPa           = m_tx[0].pa;
@@ -3804,7 +3810,11 @@ void P2RadioConnection::composeCmdHighPriorityLegacy(char buf[kBufLen]) const
     // explicitly handles XVTR with a known LO offset, revisit this gate.
     {
         const Band txBand = bandFromFrequency(static_cast<double>(m_tx[0].frequency));
-        const bool txInBand = (txBand != Band::GEN && txBand != Band::WWV);
+        // 2 m (R-IOS-26) stays out of band here, as it was while 2 m fell
+        // into GEN: Thetis's IsOKToTX takes HF rows only and 2 m is a VHF
+        // row, so no drive goes out on 2 m.
+        const bool txInBand = (txBand != Band::GEN && txBand != Band::WWV
+                               && txBand != Band::Band2m);
         buf[345] = static_cast<char>(txInBand ? m_tx[0].driveLevel : 0);
     }
 

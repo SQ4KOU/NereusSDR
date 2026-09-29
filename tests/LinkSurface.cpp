@@ -542,7 +542,8 @@ std::optional<QList<QByteArray>> liveSessionWire(
     // and sessionHolder (iPhone app Task 71), so `connectedDevices` and
     // sessionHolderVersion are too; and remoteTx (iPhone app plan Task 34),
     // so remoteTxVersion is; and vax (iPhone app plan Task 25), so the
-    // `vax` object and vaxVersion are.
+    // `vax` object and vaxVersion are; and band2m (R-IOS-26), so
+    // band2mVersion is.
     clientEnd->sendText(SessionMessages::encode(SessionMessages::hello(
         kSessionProtocolMajor, kSessionProtocolMinor, 0, QStringLiteral("link-surface"),
         {kSessionProtocolMajor}, {{"deviceAuth", 1}, {"sessionHolder", 1}, {"remoteTx", 1},
@@ -551,7 +552,7 @@ std::optional<QList<QByteArray>> liveSessionWire(
                                   {"setupDescription", 1}, {"miniDisplay", 1},
                                   {"radioAntennaRows", 1},
                                   // iPhone app plan Task 25: the `vax` object.
-                                  {"vax", 1}, {"txEqCurve", 1}})));
+                                  {"vax", 1}, {"txEqCurve", 1}, {"band2m", 1}})));
     clientEnd->sendText(SessionMessages::encode(SessionMessages::authRequest({}, block)));
 
     // The loopback delivers on later event-loop turns, as a socket would.
@@ -592,6 +593,8 @@ QJsonArray captureCapabilities()
     caps.vaxEntry = true;
     // R-IOS-13 / R-R3-49: sent to a peer that declared txEqCurve.
     caps.txEqCurveVersion = 1;
+    // R-IOS-26 / R-R3-49: sent to a peer that declared band2m.
+    caps.band2mVersion = 1;
 
     // The values come from a live station with every feature a Core can
     // switch on: media, telemetry, an enforced display budget with its

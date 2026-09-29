@@ -319,6 +319,8 @@ private slots:
         QHash<QByteArray, int> features = kHolder;
         features.insert("setupDescription", 6);
         features.insert("radioAntennaRows", 1);
+        // A phone that knows 2 m (R-IOS-26): the 15 rows the Core validates.
+        features.insert("band2m", 1);
         auto* app = core.signIn(phone, features);
         QVERIFY(admitted(app));
         const auto hasRows = [app] {
@@ -399,6 +401,16 @@ private slots:
         const QString tableDescription = latest(app->received(), QStringLiteral("setup"),
                                                  QStringLiteral("hardware")).toString();
         QVERIFY(tableDescription.contains(QStringLiteral("hardware.antenna.txRows")));
+        // This phone did not declare band2m (R-IOS-26): it is sent the 14
+        // rows it was built for, without 2 m (station link section 6.1).
+        {
+            const QJsonArray controls = QJsonDocument::fromJson(tableDescription.toUtf8())
+                .object().value("pages").toArray().first().toObject()
+                .value("sections").toArray().first().toObject().value("controls").toArray();
+            const QJsonArray rows = controls.last().toObject().value("rows").toArray();
+            QCOMPARE(rows.size(), 14);
+            QCOMPARE(rows.last().toObject().value("band"), QJsonValue(13));
+        }
         const int capabilityCount = ofType(app->received(), QStringLiteral("capabilities")).size();
         core.model->setConnectionStateForTest(ConnectionState::Disconnected);
         core.model->currentRadioChanged(core.model->currentRadioInfo());
@@ -447,6 +459,8 @@ private slots:
         QHash<QByteArray, int> features = kHolder;
         features.insert("setupDescription", 6);
         features.insert("radioAntennaRows", 1);
+        // A phone that knows 2 m (R-IOS-26): the 15 rows the Core validates.
+        features.insert("band2m", 1);
         auto* first = core.signIn(a, features);
         QVERIFY(admitted(first));
         QCOMPARE(capability(first->received(), QStringLiteral("setupDescriptionVersion")),
@@ -774,7 +788,7 @@ private slots:
         LoopbackTransport* app = core.signIn(settingsPhone, features);
         QVERIFY(admitted(app));
         QCOMPARE(capability(app->received(), QStringLiteral("transmitSettingsVersion")),
-                 std::optional<qint64>(9));
+                 std::optional<qint64>(10));
         const QJsonObject pa = QJsonDocument::fromJson(latest(app->received(),
             QStringLiteral("setup"), QStringLiteral("pa")).toString().toUtf8()).object();
         QCOMPARE(pa.value("pages").toArray().size(), 2);
@@ -950,7 +964,7 @@ private slots:
         LoopbackTransport* app = core.signIn(phone, features);
         QVERIFY(admitted(app));
         QCOMPARE(capability(app->received(), QStringLiteral("transmitSettingsVersion")),
-                 std::optional<qint64>(9));
+                 std::optional<qint64>(10));
         const QJsonObject pa = QJsonDocument::fromJson(latest(app->received(),
             QStringLiteral("setup"), QStringLiteral("pa")).toString().toUtf8()).object();
         const QJsonArray power = pa.value("pages").toArray().last().toObject()

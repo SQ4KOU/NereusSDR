@@ -22,6 +22,8 @@
 //                 transmit half writes the Core and follows whether the Core
 //                 takes it. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code.
+//   2026-09-28 - 2 m as its own band (R-IOS-26, R-R3-49). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -213,7 +215,7 @@ private:
     // Per-band TX antenna: one QButtonGroup of 3 QRadioButton per row.
     // Indexed by band int (0..13).  HF amateur + GEN/WWV/XVTR only;
     // SWL bands (Phase 3L extension) inherit ham antenna routing.
-    static constexpr int kBandCount = static_cast<int>(Band::SwlFirst);  // 14
+    static constexpr int kBandCount = kPerBandStateCount;  // 15: per-band state slots, 2 m at 14
 
     std::array<QButtonGroup*, kBandCount> m_txGroups{};
     // [band][ant-1] where ant-1 in [0,2]

@@ -460,7 +460,7 @@ private slots:
         row("gap 10 to 6 m", 40000000, b(Band::GEN));
         row("6 m low edge", 50000000, b(Band::Band6m));
         row("6 m high edge", 54000000, b(Band::Band6m));
-        row("2 m", 144500000, b(Band::GEN));
+        row("2 m", 144500000, b(Band::Band2m));
     }
 
     void aStationsRecordCarriesTheDesktopsBand()
